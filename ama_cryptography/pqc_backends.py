@@ -801,9 +801,23 @@ def _setup_secp256k1_ctypes(lib: ctypes.CDLL) -> bool:
             ctypes.c_char_p,  # public_key[64] (X||Y, no 0x04 prefix)
         ]
         lib.ama_secp256k1_ecdsa_verify.restype = ctypes.c_int
+
+        lib.ama_secp256k1_ecdsa_verify_ex.argtypes = [
+            ctypes.c_char_p,  # signature (DER)
+            ctypes.c_size_t,  # signature_len
+            ctypes.c_char_p,  # message[32] (digest)
+            ctypes.c_char_p,  # public_key[64] (X||Y, no 0x04 prefix)
+            ctypes.c_uint32,  # flags (AMA_SECP256K1_ECDSA_*)
+        ]
+        lib.ama_secp256k1_ecdsa_verify_ex.restype = ctypes.c_int
         return True
     except AttributeError:
         return False
+
+
+# ECDSA verification policy flags (mirror include/ama_cryptography.h).
+AMA_SECP256K1_ECDSA_VERIFY_STRICT = 0
+AMA_SECP256K1_ECDSA_ALLOW_HIGH_S = 1
 
 
 # X25519 native availability
@@ -3828,15 +3842,28 @@ def native_secp256k1_ecdsa_sign(message_digest: bytes, privkey: bytes) -> bytes:
     return bytes(sig_buf.raw[: sig_len.value])
 
 
-def native_secp256k1_ecdsa_verify(signature: bytes, message_digest: bytes, pubkey: bytes) -> bool:
+def native_secp256k1_ecdsa_verify(
+    signature: bytes,
+    message_digest: bytes,
+    pubkey: bytes,
+    *,
+    allow_high_s: bool = False,
+) -> bool:
     """
     Verify a DER-encoded ECDSA signature over secp256k1.
 
-    Strict: only canonical DER is accepted (minimal lengths, minimal
-    INTEGERs, no trailing bytes), ``r`` and ``s`` must lie in [1, n-1]
-    rather than being reduced into range, and a high ``s`` is rejected.
-    Each of those is a malleability control — without them a second,
+    Strict by default: only canonical DER is accepted (minimal lengths,
+    minimal INTEGERs, no trailing bytes), ``r`` and ``s`` must lie in
+    [1, n-1] rather than being reduced into range, the public-key
+    coordinates must be canonical field elements (< p), and a high ``s`` is
+    rejected. Each is a malleability control — without them a second,
     distinct byte string would verify for the same message.
+
+    Set ``allow_high_s=True`` ONLY to verify conformant third-party X9.62
+    signatures that do not follow the low-``s`` convention. It relaxes the
+    low-``s`` rejection and nothing else — the DER, range, and canonical
+    public-key checks are unconditional in both modes. Prefer the strict
+    default whenever you control the signer.
 
     Verification is variable time by design; every input is public.
 
@@ -3845,9 +3872,10 @@ def native_secp256k1_ecdsa_verify(signature: bytes, message_digest: bytes, pubke
         message_digest: 32-byte digest.
         pubkey: 64-byte uncompressed public key, X||Y big-endian,
             WITHOUT the SEC 1 ``0x04`` prefix.
+        allow_high_s: Accept the high-``s`` malleability twin (X9.62 interop).
 
     Returns:
-        True if the signature is valid, False otherwise.
+        True if the signature is valid under the selected policy, False otherwise.
 
     Raises:
         ValueError: If the digest or public key has the wrong length.
@@ -3864,9 +3892,10 @@ def native_secp256k1_ecdsa_verify(signature: bytes, message_digest: bytes, pubke
     if _native_lib is None or not _SECP256K1_NATIVE_AVAILABLE:
         raise RuntimeError("secp256k1 native backend not available. " + _INSTALL_HINT)
 
+    flags = AMA_SECP256K1_ECDSA_ALLOW_HIGH_S if allow_high_s else AMA_SECP256K1_ECDSA_VERIFY_STRICT
     rc = int(
-        _native_lib.ama_secp256k1_ecdsa_verify(
-            bytes(signature), len(signature), bytes(message_digest), bytes(pubkey)
+        _native_lib.ama_secp256k1_ecdsa_verify_ex(
+            bytes(signature), len(signature), bytes(message_digest), bytes(pubkey), flags
         )
     )
     return rc == 0

@@ -134,7 +134,9 @@ jobs:
       github.event_name != 'schedule' ||
       github.event.schedule == '0 2 * * 0'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # The weekly schedule run does a high-N reading (see the run step) and needs
+    # more wall-clock than a PR run; 40 min covers build + the 30-min test cap.
+    timeout-minutes: ${{ (github.event_name == 'schedule' && 40) || 20 }}
     steps:
       - name: Checkout code
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
@@ -158,13 +160,19 @@ jobs:
 
       - name: Run dudect tests (all functions incl. PQC)
         env:
-          MEASUREMENTS: ${{ github.event.inputs.measurements || '100000' }}
+          # workflow_dispatch input wins; the weekly schedule run uses a high-N
+          # reading (a cleaner Welch t on the heavy PQC + secp256k1 ECDSA-sign
+          # lanes than a noisy PR run affords); PR runs stay at 100k for speed.
+          MEASUREMENTS: ${{ github.event.inputs.measurements || (github.event_name == 'schedule' && '500000') || '100000' }}
         run: |
           # Best-effort priority elevation — see `dudect-utility` for rationale.
           NICE_PREFIX=""
           if nice -n -10 true 2>/dev/null; then NICE_PREFIX="nice -n -10"; fi
+          # Give the high-N scheduled reading more wall-clock than a PR run.
+          DUDECT_TIMEOUT=600
+          if [ "${{ github.event_name }}" = "schedule" ]; then DUDECT_TIMEOUT=1800; fi
           taskset -c 0 $NICE_PREFIX \
-            ./build/bin/test_dudect --measurements "$MEASUREMENTS" --timeout 600
+            ./build/bin/test_dudect --measurements "$MEASUREMENTS" --timeout "$DUDECT_TIMEOUT"
 
   dudect-legacy-harnesses:
     name: dudect - Legacy Harnesses (tools/constant_time)

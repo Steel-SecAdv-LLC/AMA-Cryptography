@@ -1133,6 +1133,50 @@ static void secp256k1_point_mul_ladder(secp256k1_jac *result,
     *result = R0;
 }
 
+/**
+ * Variable-time joint scalar multiplication R = u1*A + u2*B (Shamir's trick).
+ *
+ * Used only by ECDSA verification, which is variable time by design — every
+ * input (public key, signature, message) is public — so a data-dependent
+ * double-and-add over the two scalars' bits is sound here and is not permitted
+ * on the signing path.  A single interleaved loop shares the 256 doublings
+ * between the two terms and adds a precomputed table entry per step, instead of
+ * running two independent 256-step ladders and then adding: it roughly halves
+ * the point-operation count of `2 * secp256k1_point_mul_ladder + jac_add`.
+ *
+ * Table (Jacobian):  T[0]=O, T[1]=A, T[2]=B, T[3]=A+B, indexed by
+ * (bit_u1 | bit_u2<<1).  All edge cases (accumulator == +/- a table entry,
+ * either scalar zero) are handled by the general `secp256k1_jac_add` /
+ * `secp256k1_jac_double`, exactly as the ladder relies on them.  Correctness is
+ * cross-checked against the two-ladder reference by the AMA_TESTING_MODE
+ * differential in tests/c/test_secp256k1.c and by the full Wycheproof ECDSA
+ * corpus.
+ */
+static void secp256k1_point_mul_shamir(secp256k1_jac *result,
+                                        const uint8_t u1[32], const secp256k1_aff *A,
+                                        const uint8_t u2[32], const secp256k1_aff *B) {
+    secp256k1_jac T[4];
+    secp256k1_jac R;
+    int i, j;
+
+    secp256k1_jac_set_infinity(&T[0]);
+    secp256k1_jac_from_affine(&T[1], A);
+    secp256k1_jac_from_affine(&T[2], B);
+    secp256k1_jac_add(&T[3], &T[1], &T[2]);   /* A + B */
+
+    secp256k1_jac_set_infinity(&R);
+    for (i = 0; i < 32; i++) {
+        uint8_t b1 = u1[i], b2 = u2[i]; /* big-endian: [0] is MSB */
+        for (j = 7; j >= 0; j--) {
+            int idx = ((b1 >> j) & 1) | (((b2 >> j) & 1) << 1);
+            secp256k1_jac_double(&R, &R);
+            if (idx)
+                secp256k1_jac_add(&R, &R, &T[idx]);
+        }
+    }
+    *result = R;
+}
+
 /* ============================================================================
  * SECP256K1 GENERATOR POINT
  * ============================================================================ */
@@ -1817,13 +1861,14 @@ done:
     return rc;
 }
 
-AMA_API ama_error_t ama_secp256k1_ecdsa_verify(const uint8_t *signature, size_t signature_len,
-                                               const uint8_t message[32],
-                                               const uint8_t public_key[64]) {
+AMA_API ama_error_t ama_secp256k1_ecdsa_verify_ex(const uint8_t *signature, size_t signature_len,
+                                                  const uint8_t message[32],
+                                                  const uint8_t public_key[64],
+                                                  uint32_t flags) {
     uint8_t r_bytes[32], s_bytes[32];
     secp256k1_sc r_sc, s_sc, z, w, u1, u2;
     secp256k1_aff Q, G;
-    secp256k1_jac P1, P2, Rj;
+    secp256k1_jac Rj;
     secp256k1_aff Raff;
     uint8_t x_bytes[32];
     secp256k1_sc xr;
@@ -1843,8 +1888,14 @@ AMA_API ama_error_t ama_secp256k1_ecdsa_verify(const uint8_t *signature, size_t 
     if (!sc_from_bytes(&s_sc, s_bytes) || sc_is_zero(&s_sc))
         return AMA_ERROR_VERIFY_FAILED;
 
-    /* Low-s policy: reject the high representative outright. */
-    if (sc_is_high(&s_sc))
+    /* Low-s policy.  Default (strict): reject the high representative, closing
+     * the (r, n - s) malleability twin.  A caller that must verify conformant
+     * third-party X9.62 signatures (which permit either representative) can opt
+     * out with AMA_SECP256K1_ECDSA_ALLOW_HIGH_S.  Only malleability acceptance
+     * is selectable here — the [1, n-1] range check above and the canonical-
+     * pubkey check below are never relaxed, so an out-of-range r/s or an
+     * out-of-field coordinate is rejected in either mode. */
+    if (!(flags & AMA_SECP256K1_ECDSA_ALLOW_HIGH_S) && sc_is_high(&s_sc))
         return AMA_ERROR_VERIFY_FAILED;
 
     /* Public-key coordinates must be canonical field elements in [0, p).  A
@@ -1889,14 +1940,13 @@ AMA_API ama_error_t ama_secp256k1_ecdsa_verify(const uint8_t *signature, size_t 
     secp256k1_fe_from_bytes(&G.x, SECP256K1_GX_BYTES);
     secp256k1_fe_from_bytes(&G.y, SECP256K1_GY_BYTES);
 
+    /* R = u1*G + u2*Q via Shamir's trick (variable time — all inputs public). */
     {
         uint8_t u1b[32], u2b[32];
         sc_to_bytes(u1b, &u1);
         sc_to_bytes(u2b, &u2);
-        secp256k1_point_mul_ladder(&P1, u1b, &G);
-        secp256k1_point_mul_ladder(&P2, u2b, &Q);
+        secp256k1_point_mul_shamir(&Rj, u1b, &G, u2b, &Q);
     }
-    secp256k1_jac_add(&Rj, &P1, &P2);
     if (secp256k1_jac_is_infinity(&Rj))
         return AMA_ERROR_VERIFY_FAILED;
 
@@ -1907,6 +1957,15 @@ AMA_API ama_error_t ama_secp256k1_ecdsa_verify(const uint8_t *signature, size_t 
     if (memcmp(xr.v, r_sc.v, sizeof(xr.v)) != 0)
         return AMA_ERROR_VERIFY_FAILED;
     return AMA_SUCCESS;
+}
+
+/* Strict verification (the default policy): rejects high-s.  Thin wrapper over
+ * ama_secp256k1_ecdsa_verify_ex so the ABI-stable entry point is unchanged. */
+AMA_API ama_error_t ama_secp256k1_ecdsa_verify(const uint8_t *signature, size_t signature_len,
+                                               const uint8_t message[32],
+                                               const uint8_t public_key[64]) {
+    return ama_secp256k1_ecdsa_verify_ex(signature, signature_len, message, public_key,
+                                         AMA_SECP256K1_ECDSA_VERIFY_STRICT);
 }
 
 #ifdef AMA_TESTING_MODE
@@ -1923,5 +1982,55 @@ AMA_API ama_error_t ama_secp256k1_ecdsa_verify(const uint8_t *signature, size_t 
 int ama_secp256k1_test_fe_bytes_canonical(const uint8_t b[32]);
 int ama_secp256k1_test_fe_bytes_canonical(const uint8_t b[32]) {
     return secp256k1_fe_bytes_canonical(b);
+}
+
+/* Test-only differential exports: compute R = u1*G + u2*Q by (a) the Shamir's-
+ * trick joint multiply that ECDSA verification now uses, and (b) the previous
+ * two-independent-ladders reference.  tests/c/test_secp256k1.c asserts the two
+ * agree over the boundary lattice and thousands of random (u1, u2, Q), so the
+ * verify-path optimization is proven equivalent to the code it replaced.  Both
+ * write R.x (big-endian) to out_rx and return 1 iff R is the point at infinity
+ * (out_rx undefined in that case).  Not exposed in any public header. */
+static int secp256k1_test_joint_rx(const secp256k1_jac *R, uint8_t out_rx[32]) {
+    secp256k1_aff aff;
+    if (secp256k1_jac_is_infinity(R))
+        return 1;
+    secp256k1_jac_to_affine(&aff, R);
+    secp256k1_fe_to_bytes(out_rx, &aff.x);
+    return 0;
+}
+
+int ama_secp256k1_test_joint_shamir(const uint8_t u1[32], const uint8_t u2[32],
+                                    const uint8_t qx[32], const uint8_t qy[32],
+                                    uint8_t out_rx[32]);
+int ama_secp256k1_test_joint_shamir(const uint8_t u1[32], const uint8_t u2[32],
+                                    const uint8_t qx[32], const uint8_t qy[32],
+                                    uint8_t out_rx[32]) {
+    secp256k1_aff G, Q;
+    secp256k1_jac R;
+    secp256k1_fe_from_bytes(&G.x, SECP256K1_GX_BYTES);
+    secp256k1_fe_from_bytes(&G.y, SECP256K1_GY_BYTES);
+    secp256k1_fe_from_bytes(&Q.x, qx);
+    secp256k1_fe_from_bytes(&Q.y, qy);
+    secp256k1_point_mul_shamir(&R, u1, &G, u2, &Q);
+    return secp256k1_test_joint_rx(&R, out_rx);
+}
+
+int ama_secp256k1_test_joint_ladder(const uint8_t u1[32], const uint8_t u2[32],
+                                    const uint8_t qx[32], const uint8_t qy[32],
+                                    uint8_t out_rx[32]);
+int ama_secp256k1_test_joint_ladder(const uint8_t u1[32], const uint8_t u2[32],
+                                    const uint8_t qx[32], const uint8_t qy[32],
+                                    uint8_t out_rx[32]) {
+    secp256k1_aff G, Q;
+    secp256k1_jac P1, P2, R;
+    secp256k1_fe_from_bytes(&G.x, SECP256K1_GX_BYTES);
+    secp256k1_fe_from_bytes(&G.y, SECP256K1_GY_BYTES);
+    secp256k1_fe_from_bytes(&Q.x, qx);
+    secp256k1_fe_from_bytes(&Q.y, qy);
+    secp256k1_point_mul_ladder(&P1, u1, &G);
+    secp256k1_point_mul_ladder(&P2, u2, &Q);
+    secp256k1_jac_add(&R, &P1, &P2);
+    return secp256k1_test_joint_rx(&R, out_rx);
 }
 #endif

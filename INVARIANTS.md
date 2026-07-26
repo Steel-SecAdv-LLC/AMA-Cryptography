@@ -928,6 +928,14 @@ representative (`s <= (n-1)/2`), and `ama_secp256k1_ecdsa_verify` must reject
 a high `s`, an `r` or `s` outside `[1, n-1]`, and any signature that is not
 minimal DER.
 
+The high-`s` rejection — and only that — is caller-selectable through
+`ama_secp256k1_ecdsa_verify_ex(..., flags)`: the strict default
+(`ama_secp256k1_ecdsa_verify`) rejects it; `AMA_SECP256K1_ECDSA_ALLOW_HIGH_S`
+accepts it for conformant third-party X9.62 interop. The range and minimal-DER
+requirements are never relaxed by any flag, and the signing path always emits
+low-`s` regardless. Strict is the default precisely because it keeps a
+signature a unique identifier for its (key, message) pair.
+
 **Why.** ECDSA's verification equation is symmetric in the sign of `s`: for
 every valid `(r, s)`, the pair `(r, n - s)` also verifies. That is signature
 malleability — the same defect class as INVARIANT-26 — and it is reachable by

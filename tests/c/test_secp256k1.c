@@ -77,6 +77,49 @@ static void be32(uint8_t out[32], uint32_t n) {
  * distinguish a canonical-gate rejection from a curve/sig rejection. */
 extern int ama_secp256k1_test_fe_bytes_canonical(const uint8_t b[32]);
 
+/* AMA_TESTING_MODE-only differential exports from src/c/ama_secp256k1.c: the
+ * Shamir's-trick joint multiply that ECDSA verify now uses vs. the previous
+ * two-ladder reference. Both compute R = u1*G + u2*Q and return R.x (or 1 if
+ * R is infinity). Test 11 asserts they agree, proving the verify-path
+ * optimization is equivalent to the code it replaced. */
+extern int ama_secp256k1_test_joint_shamir(const uint8_t u1[32], const uint8_t u2[32],
+                                            const uint8_t qx[32], const uint8_t qy[32],
+                                            uint8_t out_rx[32]);
+extern int ama_secp256k1_test_joint_ladder(const uint8_t u1[32], const uint8_t u2[32],
+                                            const uint8_t qx[32], const uint8_t qy[32],
+                                            uint8_t out_rx[32]);
+
+/* Deterministic xorshift64 for the differential's random inputs (reproducible;
+ * this is a test input generator, not a cryptographic RNG). */
+static uint64_t _xs_state = 0x9E3779B97F4A7C15ULL;
+static uint64_t _xs_next(void) {
+    uint64_t x = _xs_state;
+    x ^= x << 13;
+    x ^= x >> 7;
+    x ^= x << 17;
+    _xs_state = x;
+    return x;
+}
+static void _xs_fill(uint8_t *buf, int n) {
+    int i;
+    for (i = 0; i < n; i++)
+        buf[i] = (uint8_t)(_xs_next() >> ((i & 7) * 8));
+}
+
+/* One differential case: R = u1*G + u2*Q via both methods must match, where Q
+ * is a valid curve point. Returns 1 on agreement, 0 on mismatch. */
+static int _joint_agrees(const uint8_t u1[32], const uint8_t u2[32],
+                         const uint8_t qx[32], const uint8_t qy[32]) {
+    uint8_t rx_s[32], rx_l[32];
+    int inf_s = ama_secp256k1_test_joint_shamir(u1, u2, qx, qy, rx_s);
+    int inf_l = ama_secp256k1_test_joint_ladder(u1, u2, qx, qy, rx_l);
+    if (inf_s != inf_l)
+        return 0;
+    if (inf_s)          /* both infinity — R.x is undefined, agreement holds */
+        return 1;
+    return memcmp(rx_s, rx_l, 32) == 0;
+}
+
 /* secp256k1 field prime p and its neighbours, big-endian.
  * p = 2^256 - 2^32 - 977 = FFFF...FFFE FFFFFC2F. */
 static const uint8_t FE_P[32] = {
@@ -236,6 +279,57 @@ int main(void) {
                     "canonical: p+1 is NOT canonical");
         TEST_ASSERT(ama_secp256k1_test_fe_bytes_canonical(FE_ALL_FF) == 0,
                     "canonical: 2^256-1 is NOT canonical");
+    }
+
+    /* Test 11: Shamir's-trick joint multiply (the ECDSA verify optimization)
+     * must equal the two-ladder reference for R = u1*G + u2*Q over the boundary
+     * lattice and thousands of random cases with a valid curve point Q. */
+    {
+        uint8_t qx[32], qy[32], u1[32], u2[32], kbytes[32];
+        int c, ok, trials;
+
+        /* A fixed valid Q = 5*G for the boundary set. */
+        be32(kbytes, 5);
+        rc = ama_secp256k1_point_mul(kbytes, Gx, Gy, qx, qy);
+        TEST_ASSERT(rc == AMA_SUCCESS, "joint: derive boundary Q = 5*G");
+
+        /* Boundary (u1, u2) pairs: zeros, ones, all-FF, and mixes exercise the
+         * infinity accumulator, single-term paths, and both-term adds. */
+        {
+            static const uint8_t Z[32] = { 0 };
+            static const uint8_t ONE[32] = {
+                0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1
+            };
+            static const uint8_t FF[32] = {
+                0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,
+                0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF
+            };
+            const uint8_t *B[3]; int a, b;
+            B[0] = Z; B[1] = ONE; B[2] = FF;
+            ok = 1;
+            for (a = 0; a < 3 && ok; a++)
+                for (b = 0; b < 3 && ok; b++)
+                    ok = _joint_agrees(B[a], B[b], qx, qy);
+            TEST_ASSERT(ok, "joint: Shamir == ladder on the boundary lattice");
+        }
+
+        /* Random differential: fresh (u1, u2) and a fresh valid Q = k*G each
+         * iteration. Any divergence in the optimized joint multiply is caught. */
+        trials = 2000;
+        ok = 1;
+        for (c = 0; c < trials && ok; c++) {
+            _xs_fill(kbytes, 32);
+            /* point_mul rejects a zero scalar; a random 32-byte value is
+             * essentially never zero, and the rare reject is simply skipped. */
+            if (ama_secp256k1_point_mul(kbytes, Gx, Gy, qx, qy) != AMA_SUCCESS)
+                continue;
+            _xs_fill(u1, 32);
+            _xs_fill(u2, 32);
+            ok = _joint_agrees(u1, u2, qx, qy);
+            if (!ok)
+                fprintf(stderr, "  joint mismatch at random trial %d\n", c);
+        }
+        TEST_ASSERT(ok, "joint: Shamir == ladder over 2000 random (u1,u2,Q)");
     }
 
     printf("\n===========================================\n");

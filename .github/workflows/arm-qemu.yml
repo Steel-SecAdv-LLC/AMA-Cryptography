@@ -1,0 +1,96 @@
+# Copyright (C) 2025-2026 Steel Security Advisors LLC
+# SPDX-License-Identifier: Apache-2.0
+#
+# AArch64 functional coverage without ARM hardware.
+#
+# Cross-compiles the library + C test suite to aarch64-linux-gnu and runs every
+# ctest case under QEMU user-mode emulation. This exercises the portable-C and
+# NEON code paths as real AArch64 machine code — the fe51 Ed25519 path, the
+# uint128 field arithmetic, the secp256k1 ECDSA scalar/field code, and the NEON
+# equivalence tests that are skipped on x86 runners entirely.
+#
+# Scope note: QEMU user-mode is a translator, not a cycle-accurate model, so
+# this job asserts CORRECTNESS on ARM, not performance. Performance baselines
+# come from the real ubuntu-24.04-arm runner in benchmark-regression.
+name: ARM (QEMU) Cross-Test
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/c/**"
+      - "include/**"
+      - "tests/c/**"
+      - "CMakeLists.txt"
+      - "cmake/toolchains/**"
+      - ".github/workflows/arm-qemu.yml"
+  pull_request:
+    paths:
+      - "src/c/**"
+      - "include/**"
+      - "tests/c/**"
+      - "CMakeLists.txt"
+      - "cmake/toolchains/**"
+      - ".github/workflows/arm-qemu.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  arm-qemu-ctest:
+    name: AArch64 cross-compile + QEMU ctest
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+
+      - name: Install AArch64 cross toolchain + QEMU
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build \
+            gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev-arm64-cross \
+            qemu-user-static
+
+      - name: Configure (aarch64 toolchain)
+        run: |
+          cmake -S . -B build-arm -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/aarch64-linux-gnu.cmake \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DAMA_BUILD_TESTS=ON \
+            -DAMA_USE_NATIVE_PQC=ON \
+            -DAMA_AES_CONSTTIME=ON \
+            -DAMA_BUILD_EXAMPLES=OFF \
+            -DAMA_BUILD_FUZZ=OFF \
+            -DAMA_ENABLE_LTO=OFF
+
+      - name: Build (aarch64)
+        run: cmake --build build-arm -j"$(nproc)"
+
+      - name: Test (ctest under QEMU user-mode)
+        run: ctest --test-dir build-arm --output-on-failure -j"$(nproc)"
+
+  arm-qemu-gate:
+    name: ARM QEMU Gate
+    # Single aggregating status check for this workflow (see the matching gate
+    # in ci.yml). if: always() so it resolves to a definitive red/green even
+    # when the worker job fails, instead of sitting "waiting for status".
+    if: always()
+    needs:
+      - arm-qemu-ctest
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Fail unless the AArch64 job succeeded
+        # STRICT. skipped/cancelled also fail: on this workflow they can only
+        # mean the dependency failed or a future if: drifted so it silently
+        # stopped running.
+        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'skipped') || contains(needs.*.result, 'cancelled') }}
+        run: |
+          echo "::error::ARM QEMU Gate failed — the AArch64 cross-test job did not succeed."
+          echo "Dependency results: ${{ join(needs.*.result, ', ') }}"
+          exit 1
+      - name: AArch64 cross-test succeeded
+        run: echo "ARM QEMU Gate passed — AArch64 ctest is green under QEMU."

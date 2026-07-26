@@ -1232,6 +1232,50 @@ AMA_API ama_error_t ama_secp256k1_ecdsa_verify(
     const uint8_t public_key[64]
 );
 
+/**
+ * @name ECDSA verification policy flags (for ama_secp256k1_ecdsa_verify_ex)
+ * @{
+ */
+/** Strict policy (the `ama_secp256k1_ecdsa_verify` default): reject high `s`. */
+#define AMA_SECP256K1_ECDSA_VERIFY_STRICT   0u
+/**
+ * Accept high `s` (the non-canonical malleability twin `n - s`). Set this ONLY
+ * to verify conformant third-party X9.62 signatures that do not follow the
+ * low-`s` convention. Range (`r, s in [1, n-1]`) and canonical public-key
+ * (`Qx, Qy < p`) checks are NOT relaxed by this flag — only the low-`s`
+ * malleability rejection is. Prefer the strict default whenever you control
+ * the signer, so a signature stays a unique identifier for its (key, message).
+ */
+#define AMA_SECP256K1_ECDSA_ALLOW_HIGH_S    1u
+/** @} */
+
+/**
+ * @brief Verify a DER-encoded ECDSA signature with an explicit policy.
+ *
+ * Identical to `ama_secp256k1_ecdsa_verify` except the low-`s` policy is
+ * caller-selected via `flags`. `flags == AMA_SECP256K1_ECDSA_VERIFY_STRICT`
+ * (0) reproduces `ama_secp256k1_ecdsa_verify` exactly. Unknown flag bits are
+ * ignored (forward-compatible). All other checks — strict DER, `r, s` range,
+ * canonical `Qx`/`Qy`, curve membership — are unconditional and identical to
+ * the strict entry point.
+ *
+ * @param signature      DER-encoded signature.
+ * @param signature_len  Length of `signature` in bytes; bounds every read.
+ * @param message        Exactly 32 bytes: the message digest.
+ * @param public_key     Exactly 64 bytes: the uncompressed affine point X||Y.
+ * @param flags          Bitwise-OR of AMA_SECP256K1_ECDSA_* policy flags.
+ * @return AMA_SUCCESS when the signature is valid under `flags`,
+ *         AMA_ERROR_VERIFY_FAILED when it is not,
+ *         AMA_ERROR_INVALID_PARAM on a NULL argument.
+ */
+AMA_API ama_error_t ama_secp256k1_ecdsa_verify_ex(
+    const uint8_t *signature,
+    size_t signature_len,
+    const uint8_t message[32],
+    const uint8_t public_key[64],
+    uint32_t flags
+);
+
 /* ============================================================================
  * X25519 KEY EXCHANGE (RFC 7748)
  * ============================================================================ */

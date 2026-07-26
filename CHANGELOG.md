@@ -91,6 +91,44 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   fails the test), and their underlying checks (`tools/check_headers.py` for one,
   `ruff` / `black` for the other) are driven end-to-end on deliberately bad
   fixtures.
+- **Caller-selectable ECDSA verification policy — `ama_secp256k1_ecdsa_verify_ex`.**
+  The strict default (`ama_secp256k1_ecdsa_verify`) is unchanged and rejects
+  high-`s`. The new `_ex` entry point takes a `flags` word;
+  `AMA_SECP256K1_ECDSA_ALLOW_HIGH_S` verifies conformant third-party X9.62
+  signatures that do not follow the low-`s` convention. Only the low-`s`
+  malleability decision is selectable — the strict DER, `r, s` range, and
+  canonical public-key checks are unconditional in both modes. Exposed in Python
+  as `native_secp256k1_ecdsa_verify(..., allow_high_s=True)`. Pinned by
+  `tests/test_secp256k1_ecdsa_low_s_policy.py` (strict rejects the twin, opt-in
+  accepts it, opt-in relaxes nothing else). See INVARIANT-28.
+- **ECDSA verification is ~2.8× faster.** Verification's two independent 256-step
+  Montgomery ladders (`u1*G` then `u2*Q`, then a final add) are replaced by a
+  single interleaved Shamir's-trick joint multiply (`secp256k1_point_mul_shamir`).
+  Verification is variable time by design — every input is public — so this
+  data-dependent double-and-add is sound (and is NOT used on the signing path).
+  Measured ~1,124 → ~3,134 ops/sec on the dev host; the gated baseline is raised
+  so a revert to the two-ladder path fails the benchmark gate. Proven equivalent
+  to the code it replaced by an `AMA_TESTING_MODE` differential in
+  `tests/c/test_secp256k1.c` (Shamir vs. two-ladder over the boundary lattice +
+  2,000 random `(u1, u2, Q)`, on x86-64 and AArch64) and by the full 476-vector
+  Wycheproof ECDSA corpus (0 failures).
+- **AArch64 functional CI without ARM hardware — `.github/workflows/arm-qemu.yml`.**
+  Cross-compiles the library + C test suite to `aarch64-linux-gnu` (toolchain
+  file `cmake/toolchains/aarch64-linux-gnu.cmake`) and runs every ctest case
+  under QEMU user-mode. Executes the portable-C, `uint128`, fe51 and NEON paths
+  as real AArch64 machine code — including the NEON-equivalence tests that skip
+  on x86 runners entirely (54/54 pass under QEMU). Correctness only; performance
+  baselines still come from the real `ubuntu-24.04-arm` runner.
+- **ECDSA/DER fuzz coverage.** `fuzz/fuzz_secp256k1.c` now drives the strict DER
+  parser and `ama_secp256k1_ecdsa_{sign,verify,verify_ex}` with attacker-
+  controlled bytes (the parser is the classic fuzz target — previously only
+  `pubkey_from_privkey` / `point_mul` were fuzzed). 719k executions under
+  libFuzzer + ASan + UBSan, zero crashes.
+- **Scheduled provenance + high-N constant-time CI.**
+  `.github/workflows/corpus-provenance.yml` verifies the vendored corpus against
+  upstream C2SP/wycheproof monthly and on any corpus-touching PR; the weekly
+  `dudect` run now takes a high-N (500k-measurement) reading of the ECDSA-sign
+  and PQC lanes for a cleaner Welch t than a noisy PR run affords.
 - **`tools/check_headers.py`** — canonical license-header normalizer with
   `--check` / `--apply`, an explicit exemption list carrying a reason per
   entry, and `tests/test_headers.py` (22 tests) that builds synthetic trees
