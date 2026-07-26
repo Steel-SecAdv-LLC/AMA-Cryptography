@@ -597,11 +597,42 @@ jobs:
           cp docs/compliance/sbom-c-library.json release-assets/
           ls -la release-assets/
 
+      # IMMUTABLE RELEASES: assets freeze at publish, so every asset must be
+      # attached while the release is still a draft.  At the pinned v3.0.1 this
+      # holds without further configuration, and the ordering is worth stating
+      # because it is the whole reason this step is safe:
+      #
+      #   * createRelease()  — `draft = prerelease === true ? input_draft : true`,
+      #                        so a NON-prerelease is always created as a draft.
+      #   * updateRelease()  — passes `draft: existingRelease.draft`, i.e. it
+      #                        preserves the draft state rather than publishing
+      #                        early, so reusing a hand-written draft is safe.
+      #   * main.ts          — release() -> upload every file -> finalizeRelease(),
+      #                        and only finalizeRelease() sets `draft: false`.
+      #
+      # Nothing else may attach assets to the release: the provenance job sets
+      # `upload-assets: false` and the sign job sets
+      # `release-signing-artifacts: false`, so this step is the single writer
+      # and nothing can race the freeze.
+      #
+      # RELEASE-DAY WORKFLOW.  A maintainer may hand-write the release notes as
+      # a GitHub draft BEFORE pushing the tag (a draft does not create the tag,
+      # so it does not trigger this workflow).  This step then finds that draft
+      # by tag name, uploads the assets into it, and publishes it.  Two inputs
+      # below exist to keep that hand-written draft intact — both would
+      # otherwise silently overwrite it, which is only discoverable on release
+      # day, the exact failure class INVARIANT-25 exists to prevent.
       - name: Create GitHub Release
         uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b  # v3.0.1
         with:
           tag_name: ${{ github.ref_name }}
-          name: ${{ github.ref_name }}
+          # `name:` is deliberately NOT set.  When updating an existing release
+          # the action resolves `input_name || existingRelease.name || tag`, so
+          # passing `${{ github.ref_name }}` here would replace a hand-written
+          # release title with the bare tag ("v3.4.0").  Omitting it preserves
+          # the draft's title, and on the create path the action already falls
+          # back to `input_name || tag` — the identical bare-tag title this
+          # previously set explicitly, so nothing regresses when no draft exists.
           body: |
             AMA Cryptography ${{ needs.preflight.outputs.version }}
 
@@ -624,5 +655,23 @@ jobs:
 
             See the full release notes in CHANGELOG.md.
           files: release-assets/*
-          draft: false
+          # Without this the action resolves the body as
+          # `workflowBody || existingReleaseBody` — the workflow body wins, and
+          # a hand-written draft's release notes are destroyed.  With it, an
+          # existing body is kept and the verification block above is appended
+          # to it (`existingReleaseBody + "\n" + workflowBody`).  The condition
+          # requires BOTH bodies to be non-empty, so a tag pushed with no
+          # pre-existing draft still gets the workflow body verbatim.
+          append_body: true
+          # Draft the PRERELEASE case only.  A non-prerelease resolves to false
+          # and is published by finalizeRelease() once the assets are attached
+          # (the v3.4.0 path).  A prerelease must stay a draft instead: the
+          # action only auto-drafts non-prereleases, so a published `-rc` would
+          # be frozen by immutable releases before its assets uploaded and the
+          # job would die on "Cannot upload assets to an immutable release".
+          # This mirrors the guidance in the action's own `draft` input docs.
+          # Consequence: a prerelease is left as a draft for a maintainer to
+          # publish by hand, and it fires `release.published` rather than
+          # `release.prereleased`.
+          draft: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-alpha') || contains(github.ref_name, '-beta') }}
           prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-alpha') || contains(github.ref_name, '-beta') }}
