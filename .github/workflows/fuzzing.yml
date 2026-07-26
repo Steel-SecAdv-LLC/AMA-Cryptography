@@ -40,6 +40,11 @@ jobs:
           - fuzz_aes_gcm
           - fuzz_hkdf
           - fuzz_consttime
+          # Agent-instance binding (INVARIANT-30): the only surface in the
+          # tree that parses a structured record and turns it into a policy
+          # verdict, so it is fuzzed for fail-closed behaviour, not just for
+          # memory safety.  Core (non-PQC) — needs SHA3/HMAC/HKDF only.
+          - fuzz_agent_binding
 
     steps:
       - name: Checkout code
@@ -67,13 +72,34 @@ jobs:
       - name: Run fuzzer (${{ matrix.target }})
         env:
           FUZZ_DURATION: ${{ github.event.inputs.fuzz_duration || '60' }}
+        # Seeds the corpus from fuzz/seed_corpus/<target>/ and loads
+        # fuzz/dictionaries/<target>.dict when they exist.  Before this, the
+        # run started from an EMPTY corpus with no dictionary, so both trees
+        # were carried in the repository but never reached the fuzzer — every
+        # run rediscovered basic structure from zero inside its 60s budget.
+        # `validate-fuzz-dictionaries` (below) guarantees the dict actually
+        # parses, because libFuzzer discards a whole dictionary on the first
+        # malformed line and only warns.
         run: |
+          set -euo pipefail
           mkdir -p corpus/${{ matrix.target }}
           mkdir -p artifacts/${{ matrix.target }}
+          if [ -d "fuzz/seed_corpus/${{ matrix.target }}" ]; then
+            cp -r fuzz/seed_corpus/${{ matrix.target }}/. corpus/${{ matrix.target }}/
+            echo "Seeded corpus with $(ls -1 corpus/${{ matrix.target }} | wc -l) input(s)."
+          else
+            echo "No seed corpus for ${{ matrix.target }} — starting cold."
+          fi
+          DICT_ARG=""
+          if [ -f "fuzz/dictionaries/${{ matrix.target }}.dict" ]; then
+            DICT_ARG="-dict=fuzz/dictionaries/${{ matrix.target }}.dict"
+            echo "Using dictionary fuzz/dictionaries/${{ matrix.target }}.dict"
+          fi
           echo "Fuzzing ${{ matrix.target }} for ${FUZZ_DURATION}s..."
           ./build-fuzz/bin/${{ matrix.target }} \
             -max_total_time=${FUZZ_DURATION} \
             -max_len=4096 \
+            ${DICT_ARG} \
             -artifact_prefix=artifacts/${{ matrix.target }}/ \
             corpus/${{ matrix.target }}/
 
@@ -84,6 +110,56 @@ jobs:
           name: fuzz-crashes-${{ matrix.target }}
           path: artifacts/${{ matrix.target }}/
           retention-days: 30
+
+  # ---------------------------------------------------------------------
+  # Dictionary validity gate
+  # ---------------------------------------------------------------------
+  # libFuzzer's ParseDictionaryFile aborts on the FIRST malformed line and
+  # then runs with NO dictionary at all, printing only a one-line notice that
+  # is easy to miss in a 60-second fuzz log.  A single `kw=""` entry therefore
+  # silently disables every other keyword in that file.  Three dictionaries in
+  # this repository were in exactly that state (fuzz_sha3, fuzz_hkdf,
+  # fuzz_argon2) and had been since they were added.
+  #
+  # This job parses every dictionary with a real libFuzzer binary and fails
+  # closed on any rejection, so a malformed dictionary can never again degrade
+  # fuzzing quality without failing the build.
+  validate-fuzz-dictionaries:
+    name: Validate fuzz dictionaries (fail-closed)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+
+      - name: Install dependencies
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
+          sudo apt-get update
+          sudo apt-get install -y cmake clang libclang-rt-18-dev
+
+      - name: Build one fuzz target (dictionary parser host)
+        run: |
+          cmake -B build-fuzz -DAMA_BUILD_FUZZ=ON \
+            -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+            -DAMA_USE_NATIVE_PQC=ON
+          cmake --build build-fuzz --target fuzz_sha3 -j$(nproc)
+
+      - name: Every dictionary must parse
+        run: |
+          set -uo pipefail
+          rc=0
+          for d in fuzz/dictionaries/*.dict; do
+            # -runs=0 loads the dictionary, then exits without fuzzing.
+            out=$(./build-fuzz/bin/fuzz_sha3 -dict="$d" -runs=0 2>&1 || true)
+            if echo "$out" | grep -q "ParseDictionaryFile"; then
+              echo "::error file=$d::libFuzzer rejected this dictionary — the WHOLE file is discarded at runtime. $(echo "$out" | grep ParseDictionaryFile | head -1)"
+              rc=1
+            else
+              echo "ok: $d"
+            fi
+          done
+          exit $rc
 
   fuzz-pqc:
     name: Fuzz PQC Primitives (${{ matrix.target }})
@@ -129,13 +205,28 @@ jobs:
       - name: Run fuzzer (${{ matrix.target }})
         env:
           FUZZ_DURATION: ${{ github.event.inputs.fuzz_duration || '60' }}
+        # Same seed-corpus + dictionary wiring as the core lane above; see the
+        # comment there for why both were previously unused at runtime.
         run: |
+          set -euo pipefail
           mkdir -p corpus/${{ matrix.target }}
           mkdir -p artifacts/${{ matrix.target }}
+          if [ -d "fuzz/seed_corpus/${{ matrix.target }}" ]; then
+            cp -r fuzz/seed_corpus/${{ matrix.target }}/. corpus/${{ matrix.target }}/
+            echo "Seeded corpus with $(ls -1 corpus/${{ matrix.target }} | wc -l) input(s)."
+          else
+            echo "No seed corpus for ${{ matrix.target }} — starting cold."
+          fi
+          DICT_ARG=""
+          if [ -f "fuzz/dictionaries/${{ matrix.target }}.dict" ]; then
+            DICT_ARG="-dict=fuzz/dictionaries/${{ matrix.target }}.dict"
+            echo "Using dictionary fuzz/dictionaries/${{ matrix.target }}.dict"
+          fi
           echo "Fuzzing ${{ matrix.target }} for ${FUZZ_DURATION}s..."
           ./build-fuzz/bin/${{ matrix.target }} \
             -max_total_time=${FUZZ_DURATION} \
             -max_len=4096 \
+            ${DICT_ARG} \
             -artifact_prefix=artifacts/${{ matrix.target }}/ \
             corpus/${{ matrix.target }}/
 
@@ -219,6 +310,7 @@ jobs:
       - fuzz-core
       - fuzz-pqc
       - fuzz-consttime-aes
+      - validate-fuzz-dictionaries
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:

@@ -117,8 +117,30 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   post-authorization capability escalation and cross-binding separation.
 - **dudect lane `Agent binding check`** in `tests/c/test_dudect.c`, registered
   strict. Accepted and refused bindings take the same structural path, so any
-  class separation is a real leak in the verdict; measured `t = +0.17` at
-  200k measurements.
+  class separation is a real leak in the verdict; measured `t = +0.81` at
+  200k measurements, against a `|t| < 4.5` gate.
+- **libFuzzer target `fuzz_agent_binding`** (`fuzz/fuzz_agent_binding.c`) with
+  a seed corpus and dictionary. Every other primitive in `fuzz/` had a
+  harness; the binding layer is the newest attack surface and the only one
+  whose refusal is a *policy* decision rather than an arithmetic one, so it is
+  fuzzed for security properties, not merely for memory safety. The harness
+  builds records from raw fuzz bytes — including out-of-range lifetimes,
+  undefined capability bits and a non-zero reserved byte — and traps on:
+  acceptance of a malformed record; acceptance of a restricted record with no
+  usable authority key or no ethical profile; a non-deterministic verdict,
+  encoding, context or derivation; two distinct bindings sharing an encoding;
+  a write through an undersized encode buffer; key material derived for a
+  refused binding; a partial write into `okm` on refusal; and acceptance of a
+  tampered authorization tag. `info_len` is driven across the 256-byte
+  stack/heap boundary in `ama_hkdf_agent_bound()`. Classified as a *core*
+  (non-PQC) target, so it also builds and runs under
+  `AMA_USE_NATIVE_PQC=OFF`. 1,697,905 executions under ASan+UBSan: no crashes,
+  no leaks.
+- **`validate-fuzz-dictionaries` CI job** (fail-closed, gated). libFuzzer's
+  `ParseDictionaryFile` aborts on the first malformed line and then runs with
+  **no dictionary at all**, printing only a one-line notice inside a 60-second
+  fuzz log. This job loads every dictionary with a real libFuzzer binary and
+  fails the build on any rejection.
 
 ### Changed
 
@@ -131,17 +153,68 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ### Fixed
 
+- **All four CodeQL (GitHub Advanced Security) alerts raised by this branch,
+  resolved at source — none dismissed or suppressed**, per the standing policy
+  in `.github/codeql/codeql-config.yml`:
+  - `cpp/constant-comparison` in `ama_hkdf_agent_bound()`. Two overflow guards
+    were written where only one can ever fire: after the `u32be`
+    representability check bounds `info_len` to 2^32-1, the follow-up
+    `info_len > SIZE_MAX - sizeof(prefix)` is unreachable on LP64 — a guard
+    that reads as protection but is dead code. The binding limit is now
+    selected at preprocessing time (`AMA_AGENT_BOUND_INFO_MAX`), leaving one
+    genuinely reachable comparison on **both** ABIs. No coverage was removed:
+    the ILP32 wrap guard is preserved by the `#else` arm, where it is the real
+    bound (`SIZE_MAX - 92`, so `prefix + info` lands exactly on `SIZE_MAX`).
+    The `prefix` array is now sized from the same constant, so the two cannot
+    drift apart.
+  - `py/catch-base-exception` in the concurrency test — a worker caught
+    `BaseException`, which would swallow `KeyboardInterrupt`/`SystemExit` and
+    record a Ctrl-C during a 128-thread run as a "monitor error". Narrowed to
+    `Exception`.
+  - `py/import-and-import-from` — a test imported `ama_cryptography.monitoring`
+    both as a module and via `from ... import`. Replaced with pytest's
+    dotted-string `monkeypatch.setattr` targets, already the house style in
+    that file.
+  - `py/unused-global-variable` on `CYTHON_DETECTOR_KERNELS`. The underlying
+    defect was an API-surface inconsistency, not an unused variable: the five
+    public names this branch adds (`VolumeSpike`, `VolumeSpikeDetector`,
+    `NoteArtifactSignal`, `NoteArtifactDetector`, `CYTHON_DETECTOR_KERNELS`)
+    are re-exported by `ama_cryptography.monitor` and documented in
+    `MONITORING.md`, but were missing from the defining module's `__all__`, so
+    `from ama_cryptography.monitoring import *` silently omitted them. All
+    five are now declared.
+- **Fuzzing dictionaries and seed corpora were never reaching the fuzzer.**
+  `fuzz/dictionaries/` (13 files) and `fuzz/seed_corpus/` (14 directories)
+  were carried in the repository but the workflow passed neither: it created
+  an **empty** corpus directory and no `-dict`, so every run rediscovered
+  basic input structure from zero inside its 60-second budget. Both lanes now
+  seed the corpus from `fuzz/seed_corpus/<target>/` and load
+  `fuzz/dictionaries/<target>.dict` when present.
+- **Three fuzzing dictionaries were silently disabled in full.**
+  `fuzz_sha3.dict`, `fuzz_hkdf.dict` and `fuzz_argon2.dict` each contained an
+  empty token (`""` / `kw=""`). libFuzzer rejects that line and then discards
+  the **entire** dictionary, so every other keyword in those files was inert.
+  Removed the empty entries (the empty input needs no dictionary entry — it is
+  reachable from the empty test case) and added the fail-closed
+  `validate-fuzz-dictionaries` gate so this cannot recur.
+- **`build-*/` is now gitignored as a pattern.** The list of explicit build
+  directories had to be extended by hand for each new configuration, and
+  `build-nopqc/` — created by the documented `AMA_USE_NATIVE_PQC=OFF` guard —
+  was untracked but not ignored. No tracked path lives under a `build-*/`
+  directory.
 - **`-DAMA_USE_NATIVE_PQC=OFF` no longer fails to build.** ON is and remains
   the default, and it is the only configuration `setup.py` builds
   (INVARIANT-7 forbids a cryptographic fallback), but OFF is a supported CMake
-  configuration for downstream packagers and had rotted: the **shared library
-  itself** failed to link on four undefined symbols, because
+  configuration for downstream packagers and had rotted:
   `src/c/dispatch/ama_dispatch.c` declared and called the Kyber/Dilithium
   scalar NTT references (`ama_kyber_ntt_generic_ref` and friends) while the
   translation units defining them sit in the `AMA_USE_NATIVE_PQC` source
-  group. The externs and the four autotune slots that use them are now gated
-  to match; the dispatch slots stay NULL-checked either way, so a PQC-less
-  build simply never benchmarks them.
+  group. The observable failure is toolchain-dependent: on Linux the shared
+  library links with those symbols left undefined (no `-Wl,--no-undefined`)
+  and every **executable** linking it fails instead; on macOS/Windows the
+  shared-library link itself fails. The externs and the four autotune slots
+  that use them are now gated to match; the dispatch slots stay NULL-checked
+  either way, so a PQC-less build simply never benchmarks them.
 
   Three executables that call PQC entry points directly — `example_kem`,
   `example_sign_verify` and `benchmark_c_raw` — are gated on the same option

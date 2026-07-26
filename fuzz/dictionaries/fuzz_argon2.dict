@@ -1,7 +1,10 @@
 # Argon2id fuzzing dictionary
 
-# Common password patterns
-kw_empty=""
+# Common password patterns.
+# NOTE: no empty-string entry here — libFuzzer's ParseDictionaryFile rejects
+# `kw=""` and discards the ENTIRE dictionary on the first malformed line, so
+# one empty token silently disables every keyword below it.  The empty
+# password is reachable from the empty test case without a dictionary entry.
 kw_short="pass"
 kw_common="password"
 

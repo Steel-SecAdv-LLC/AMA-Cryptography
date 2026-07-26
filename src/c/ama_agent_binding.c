@@ -132,6 +132,34 @@ typedef char ama_agent_encoding_width_check[
     (AMA_AGENT_ENC_COMPUTED_BYTES == AMA_AGENT_BINDING_ENCODED_BYTES) ? 1 : -1];
 #endif
 
+/* Width of the HKDF info prefix built by ama_hkdf_agent_bound():
+ * enc(b) || u32be(info_len). */
+#define AMA_AGENT_BOUND_PREFIX_BYTES ((size_t)AMA_AGENT_BINDING_ENCODED_BYTES + 4u)
+
+/* Upper bound on the caller-supplied `info` length.  Two independent
+ * constraints apply:
+ *
+ *   (a) representability — the u32be length prefix cannot encode a length
+ *       above 2^32-1; and
+ *   (b) arithmetic — AMA_AGENT_BOUND_PREFIX_BYTES + info_len must not wrap
+ *       size_t.
+ *
+ * Exactly one of them binds on any given ABI: on LP64 (a) is far tighter
+ * (2^32-1 against SIZE_MAX-92); on ILP32 (b) is, and (a) is unreachable
+ * because size_t cannot exceed 2^32-1 in the first place.  Writing both as
+ * runtime tests therefore always leaves one that can never fire — a guard
+ * that reads as protection but is dead code, which is what CodeQL's
+ * cpp/constant-comparison reports.
+ *
+ * Selecting the binding limit at preprocessing time leaves ONE genuinely
+ * reachable runtime comparison on both ABIs.  No coverage is lost: the ILP32
+ * wrap guard is preserved by the #else arm, not deleted. */
+#if SIZE_MAX > 0xFFFFFFFFu
+#define AMA_AGENT_BOUND_INFO_MAX ((size_t)0xFFFFFFFFu)
+#else
+#define AMA_AGENT_BOUND_INFO_MAX ((size_t)(SIZE_MAX - AMA_AGENT_BOUND_PREFIX_BYTES))
+#endif
+
 /**
  * Write enc(b) into @p out.  Caller guarantees capacity; structural validity
  * is the caller's business too (both public entry points check first).
@@ -385,8 +413,10 @@ AMA_API ama_error_t ama_hkdf_agent_bound(
 ) {
     /* enc(b) || u32be(info_len) || info.  The 4-byte length prefix keeps the
      * concatenation injective: without it, a caller-chosen `info` could be
-     * made to imitate a different binding's trailing bytes. */
-    uint8_t prefix[AMA_AGENT_BINDING_ENCODED_BYTES + 4];
+     * made to imitate a different binding's trailing bytes.  Sized from the
+     * same constant the overflow bound is derived from, so the two cannot
+     * drift apart. */
+    uint8_t prefix[AMA_AGENT_BOUND_PREFIX_BYTES];
     uint8_t stack_info[256];
     uint8_t* joined = NULL;
     int joined_on_heap = 0;
@@ -399,15 +429,8 @@ AMA_API ama_error_t ama_hkdf_agent_bound(
     if (!info && info_len > 0) {
         return AMA_ERROR_INVALID_PARAM;
     }
-    /* The u32be length prefix cannot represent an info longer than 2^32-1.
-     * Guarded only where size_t can actually exceed that: on ILP32 the
-     * comparison is tautologically false and -Wtype-limits says so. */
-#if SIZE_MAX > 0xFFFFFFFFu
-    if (info_len > 0xFFFFFFFFu) {
-        return AMA_ERROR_OVERFLOW;
-    }
-#endif
-    if (info_len > SIZE_MAX - sizeof(prefix)) {
+    /* One reachable bound on both ABIs — see AMA_AGENT_BOUND_INFO_MAX. */
+    if (info_len > AMA_AGENT_BOUND_INFO_MAX) {
         return AMA_ERROR_OVERFLOW;
     }
 

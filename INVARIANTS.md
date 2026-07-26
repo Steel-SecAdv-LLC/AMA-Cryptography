@@ -1095,6 +1095,17 @@ claim is measured by the `Agent binding check` lane in
 `tests/c/test_dudect.c`, which is registered strict (`is_info_only = 0`) and
 therefore fails CI on |t| >= 4.5.
 
+`fuzz/fuzz_agent_binding.c` attacks the same invariant from the other
+direction. Where the tests above assert the policy on *chosen* records, the
+fuzzer builds records from arbitrary bytes — out-of-range lifetimes, undefined
+capability bits, a non-zero reserved byte — and traps if a restricted record is
+ever accepted without a usable authority key and a non-zero ethical profile,
+if key material is derived for a refused binding, if a refusal writes into the
+caller's output buffer, or if a tampered authorization tag verifies. It also
+drives `info_len` across the 256-byte stack/heap boundary inside
+`ama_hkdf_agent_bound()`. This is a *core* (non-PQC) fuzz target, so it runs
+in both configurations.
+
 The binding layer calls only SHA3-256 / HMAC-SHA3-256 / HKDF, so it carries no
 `AMA_USE_NATIVE_PQC` dependency: `test_agent_binding` builds and passes in both
 the default (PQC on) and the PQC-off configurations, and the

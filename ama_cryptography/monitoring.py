@@ -491,6 +491,18 @@ __all__ = [
     "RecursionPatternMonitor",
     "RefactoringAnalyzer",
     "AmaCryptographyMonitor",
+    # Agentic-abuse detectors (INVARIANT-30).  These are re-exported by
+    # ama_cryptography.monitor and referenced by MONITORING.md, so they are
+    # public surface and belong in the defining module's __all__ too —
+    # otherwise `from ... import *` silently omits them and the kernel flag
+    # reads as dead module state.
+    "VolumeSpike",
+    "VolumeSpikeDetector",
+    "NoteArtifactSignal",
+    "NoteArtifactDetector",
+    #: Which detector kernel path is active (compiled Cython vs pure-Python
+    #: twin).  Documented in MONITORING.md and asserted by the test suite.
+    "CYTHON_DETECTOR_KERNELS",
     "high_resolution_timer",
     "create_monitor",
 ]

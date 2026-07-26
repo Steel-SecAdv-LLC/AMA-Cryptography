@@ -206,7 +206,7 @@ class TestHighConcurrencyAgenticLoad:
         monitor = create_monitor(detect_volume_spikes=True, detect_note_artifacts=True)
         assert monitor.volume is not None
 
-        errors: list[BaseException] = []
+        errors: list[Exception] = []
 
         def worker(idx: int) -> None:
             try:
@@ -216,7 +216,11 @@ class TestHighConcurrencyAgenticLoad:
                         key_fingerprint=(idx * 1000 + i).to_bytes(8, "big"),
                     )
                     monitor.monitor_crypto_operation("dilithium_sign", 0.5 + i * 1e-4)
-            except BaseException as exc:  # pragma: no cover - failure path
+            # Exception, not BaseException: this records a monitor failure for
+            # the assertion below, and must not swallow KeyboardInterrupt or
+            # SystemExit — a Ctrl-C during a 128-thread run has to propagate
+            # and tear the pool down, not be collected as a "monitor error".
+            except Exception as exc:  # pragma: no cover - failure path
                 errors.append(exc)
 
         with ThreadPoolExecutor(max_workers=THREADS) as pool:

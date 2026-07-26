@@ -1,0 +1,49 @@
+# Agent-instance binding (INVARIANT-30) fuzzing dictionary.
+#
+# The harness reads a fixed 100-byte header (control, lifetime, capabilities,
+# reserved, instance_id[32], ethical_profile[32], authorization[32]) followed
+# by authority-key || info.  These tokens steer the fuzzer at the *policy*
+# boundary — the byte values that flip a record between "unrestricted" and
+# "requires operator authorization" — rather than at random noise.
+
+# ---- lifetime values (ama_agent_lifetime_t) --------------------------------
+kw_lifetime_ephemeral="\x00"
+kw_lifetime_session="\x01"
+kw_lifetime_persistent="\x02"
+# First value outside the defined enum — must be refused as malformed.
+kw_lifetime_out_of_range="\x03"
+
+# ---- capability bits (AMA_AGENT_CAP_*) -------------------------------------
+kw_cap_none="\x00"
+kw_cap_data_sign="\x01"
+kw_cap_key_exchange="\x02"
+kw_cap_persistence="\x04"
+kw_cap_self_replicate="\x08"
+kw_cap_delegate="\x10"
+# Restricted mask (persistence|self_replicate|delegate) and the full known mask.
+kw_cap_restricted_mask="\x1c"
+kw_cap_known_mask="\x1f"
+# First undefined bit — must be refused.
+kw_cap_undefined_bit="\x20"
+kw_cap_all_bits="\xff"
+
+# ---- version / reserved ----------------------------------------------------
+kw_version_v1="\x01"
+kw_version_zero="\x00"
+kw_reserved_nonzero="\x01"
+
+# ---- 32-byte field fillers -------------------------------------------------
+# All-zero profile = "absent", the value the policy refuses for restricted
+# bindings; all-zero tag = "unauthorized".
+kw_zero32="\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+kw_ff32="\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff"
+
+# ---- domain-separation label the encoding is built from --------------------
+kw_bind_label="AMA-AGENT-BIND-v1"
+kw_label_len="\x11"
+kw_field_len="\x20"
+
+# ---- info strings that appear in real callers ------------------------------
+# NOTE: no empty-string entry — libFuzzer's ParseDictionaryFile rejects `kw=""`
+# and discards the ENTIRE dictionary on the first malformed line.
+kw_info_session="session"

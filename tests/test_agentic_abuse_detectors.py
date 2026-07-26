@@ -723,17 +723,21 @@ class TestKernelEquivalence:
 
     def test_detector_agrees_with_the_fallback_path(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Force the pure-Python path and re-run the whole corpus decision."""
-        import ama_cryptography.monitoring as monitoring
-
+        # Dotted-string targets rather than a second `import
+        # ama_cryptography.monitoring as monitoring`: this module is already
+        # bound via `from ama_cryptography.monitoring import ...` at the top,
+        # and importing it both ways is the ambiguity CodeQL's
+        # py/import-and-import-from reports.  The string form is also the
+        # house style already used elsewhere in this file.
         cy_detector = NoteArtifactDetector()
-        monkeypatch.setattr(monitoring, "_CY_TOKEN_COUNTS", None)
+        monkeypatch.setattr("ama_cryptography.monitoring._CY_TOKEN_COUNTS", None)
         # The marker tables are cached, and the cached entry carries the
         # packed arrays built while the kernel was available.  Clear the cache
         # so the fallback instance is built the way it would be in a source
         # checkout: no packed arrays at all.  (inspect() guards on both
         # `_packed` and the module symbol, so a stale cache would still take
         # the right branch — this makes the test exercise the real shape.)
-        monkeypatch.setattr(monitoring, "_MARKER_TABLE_CACHE", {})
+        monkeypatch.setattr("ama_cryptography.monitoring._MARKER_TABLE_CACHE", {})
         py_detector = NoteArtifactDetector()
         assert py_detector._packed is None
 
