@@ -432,20 +432,20 @@ def _flip_sig_body_byte(hexstr: str) -> str:
     canonical signature.
     """
     raw = bytearray.fromhex(hexstr)
-    try:
-        if len(raw) >= 8 and raw[0] == 0x30 and raw[2] == 0x02:
-            r_len = raw[3]
-            s_tag = 4 + r_len
-            if raw[s_tag] == 0x02:
-                s_len = raw[s_tag + 1]
-                s_start = s_tag + 2
-                s_end = s_start + s_len
-                if 0 < s_len and s_end <= len(raw):
-                    raw[s_end - 1] ^= 0x01  # low bit of the last byte of s
-                    return raw.hex()
-    except IndexError:
-        pass
-    raw[-1] ^= 0x01
+    # Walk 30 <seqlen> 02 <rlen> <r...> 02 <slen> <s...> with explicit bounds
+    # checks (no exception-driven control flow) and XOR the low bit of the last
+    # byte of s. Any input that does not fit that layout falls through to the
+    # final-byte fallback below — still inside s for any canonical signature.
+    if len(raw) >= 8 and raw[0] == 0x30 and raw[2] == 0x02:
+        s_tag = 4 + raw[3]  # the "02 <slen>" of s begins just after r's value
+        if s_tag + 1 < len(raw) and raw[s_tag] == 0x02:
+            s_len = raw[s_tag + 1]
+            s_end = s_tag + 2 + s_len
+            if 0 < s_len and s_end <= len(raw):
+                raw[s_end - 1] ^= 0x01  # low bit of the last byte of s
+                return raw.hex()
+    if raw:
+        raw[-1] ^= 0x01
     return raw.hex()
 
 
