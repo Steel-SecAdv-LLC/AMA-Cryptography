@@ -597,11 +597,52 @@ jobs:
           cp docs/compliance/sbom-c-library.json release-assets/
           ls -la release-assets/
 
+      # IMMUTABLE RELEASES: assets freeze at publish, so every asset must be
+      # attached while the release is still a draft.  At the pinned v3.0.1 this
+      # holds without further configuration, and the ordering is worth stating
+      # because it is the whole reason this step is safe:
+      #
+      #   * createRelease()  — `draft = prerelease === true ? input_draft : true`,
+      #                        so a NON-prerelease is always created as a draft.
+      #   * updateRelease()  — passes `draft: existingRelease.draft`, i.e. it
+      #                        preserves the draft state rather than publishing
+      #                        early, so reusing a hand-written draft is safe.
+      #   * main.ts          — release() -> upload every file -> finalizeRelease(),
+      #                        and only finalizeRelease() sets `draft: false`.
+      #
+      # Nothing else may attach assets to the release: the provenance job sets
+      # `upload-assets: false` and the sign job sets
+      # `release-signing-artifacts: false`, so this step is the single writer
+      # and nothing can race the freeze.
+      #
+      # DO NOT HAND-CREATE A DRAFT RELEASE FOR THE TAG BEFOREHAND.  The action
+      # locates an existing release with findTagFromReleases() -> getReleaseByTag(),
+      # i.e. `GET /releases/tags/{tag}`, which GitHub documents as "Get a
+      # PUBLISHED release with the specified tag".  A draft has no git tag, so
+      # that call 404s, the action falls through to createRelease(), and the
+      # repository ends up with two releases for one tag: the orphaned draft and
+      # the one this workflow just made.  This step must own release creation.
+      #
+      # Long-form release notes are applied by EDITING THE PUBLISHED RELEASE
+      # afterwards.  Immutable releases freeze the tag and the assets only — the
+      # title and notes stay editable — so the write-up can land after publish
+      # without weakening anything this pipeline guarantees.
+      #
+      # The two inputs below then protect that hand-edited text if this workflow
+      # is ever re-run for the same tag (a re-run finds the now-published
+      # release and takes the update path).  Without them a re-run silently
+      # resets the title to the bare tag and overwrites the notes.
       - name: Create GitHub Release
         uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b  # v3.0.1
         with:
           tag_name: ${{ github.ref_name }}
-          name: ${{ github.ref_name }}
+          # `name:` is deliberately NOT set.  On the update path the action
+          # resolves `input_name || existingRelease.name || tag`, so passing
+          # `${{ github.ref_name }}` would reset a hand-edited release title
+          # back to the bare tag ("v3.4.0") on any re-run.  Omitting it keeps
+          # the edited title.  On the create path the action already falls back
+          # to `input_name || tag` — the identical bare-tag title this
+          # previously set explicitly — so a first run is unchanged.
           body: |
             AMA Cryptography ${{ needs.preflight.outputs.version }}
 
@@ -624,5 +665,24 @@ jobs:
 
             See the full release notes in CHANGELOG.md.
           files: release-assets/*
-          draft: false
+          # Protects hand-edited release notes across a re-run.  On the update
+          # path the body otherwise resolves as
+          # `workflowBody || existingReleaseBody` — the workflow body wins and
+          # the edited notes are destroyed.  With this set, the existing body is
+          # kept and the verification block above is appended to it
+          # (`existingReleaseBody + "\n" + workflowBody`).  createRelease() does
+          # not consult this input at all, so a first run is unchanged and still
+          # gets the workflow body verbatim.
+          append_body: true
+          # Draft the PRERELEASE case only.  A non-prerelease resolves to false
+          # and is published by finalizeRelease() once the assets are attached
+          # (the v3.4.0 path).  A prerelease must stay a draft instead: the
+          # action only auto-drafts non-prereleases, so a published `-rc` would
+          # be frozen by immutable releases before its assets uploaded and the
+          # job would die on "Cannot upload assets to an immutable release".
+          # This mirrors the guidance in the action's own `draft` input docs.
+          # Consequence: a prerelease is left as a draft for a maintainer to
+          # publish by hand, and it fires `release.published` rather than
+          # `release.prereleased`.
+          draft: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-alpha') || contains(github.ref_name, '-beta') }}
           prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-alpha') || contains(github.ref_name, '-beta') }}
