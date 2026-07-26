@@ -1,18 +1,6 @@
 #!/usr/bin/env python3
-# Copyright 2025-2026 Steel Security Advisors LLC
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
+# Copyright (C) 2025-2026 Steel Security Advisors LLC
+# SPDX-License-Identifier: Apache-2.0
 """
 AMA Cryptography - Post-Quantum Cryptography Backends
 ==========================================================
@@ -797,9 +785,39 @@ def _setup_secp256k1_ctypes(lib: ctypes.CDLL) -> bool:
             ctypes.c_char_p,  # compressed_pubkey[33]
         ]
         lib.ama_secp256k1_pubkey_from_privkey.restype = ctypes.c_int
+
+        lib.ama_secp256k1_ecdsa_sign.argtypes = [
+            ctypes.c_char_p,  # signature (out, >= 72 bytes)
+            ctypes.POINTER(ctypes.c_size_t),  # signature_len (out)
+            ctypes.c_char_p,  # message[32] (digest)
+            ctypes.c_char_p,  # private_key[32]
+        ]
+        lib.ama_secp256k1_ecdsa_sign.restype = ctypes.c_int
+
+        lib.ama_secp256k1_ecdsa_verify.argtypes = [
+            ctypes.c_char_p,  # signature (DER)
+            ctypes.c_size_t,  # signature_len
+            ctypes.c_char_p,  # message[32] (digest)
+            ctypes.c_char_p,  # public_key[64] (X||Y, no 0x04 prefix)
+        ]
+        lib.ama_secp256k1_ecdsa_verify.restype = ctypes.c_int
+
+        lib.ama_secp256k1_ecdsa_verify_ex.argtypes = [
+            ctypes.c_char_p,  # signature (DER)
+            ctypes.c_size_t,  # signature_len
+            ctypes.c_char_p,  # message[32] (digest)
+            ctypes.c_char_p,  # public_key[64] (X||Y, no 0x04 prefix)
+            ctypes.c_uint32,  # flags (AMA_SECP256K1_ECDSA_*)
+        ]
+        lib.ama_secp256k1_ecdsa_verify_ex.restype = ctypes.c_int
         return True
     except AttributeError:
         return False
+
+
+# ECDSA verification policy flags (mirror include/ama_cryptography.h).
+AMA_SECP256K1_ECDSA_VERIFY_STRICT = 0
+AMA_SECP256K1_ECDSA_ALLOW_HIGH_S = 1
 
 
 # X25519 native availability
@@ -3777,6 +3795,110 @@ def native_secp256k1_pubkey_from_privkey(privkey: bytes) -> bytes:
         raise RuntimeError(f"secp256k1 pubkey derivation failed (rc={rc})")
 
     return bytes(pubkey_buf)
+
+
+SECP256K1_ECDSA_MAX_SIG_BYTES = 72
+SECP256K1_UNCOMPRESSED_PUBKEY_BYTES = 64
+
+
+def native_secp256k1_ecdsa_sign(message_digest: bytes, privkey: bytes) -> bytes:
+    """
+    Sign a 32-byte message digest with ECDSA over secp256k1.
+
+    Deterministic per RFC 6979 (HMAC-SHA-256): no randomness is consumed
+    and the same inputs always produce the same signature. The emitted
+    ``s`` is always the canonical low representative (``s <= (n-1)/2``),
+    so a signature is a unique identifier for a (key, digest) pair —
+    see ``native_secp256k1_ecdsa_verify`` for the matching policy.
+
+    Args:
+        message_digest: 32-byte digest. This function does NOT hash;
+            pass a digest, not a message.
+        privkey: 32-byte secp256k1 private key, big-endian, in [1, n-1].
+
+    Returns:
+        DER-encoded signature (8..72 bytes).
+
+    Raises:
+        ValueError: If either input has the wrong length.
+        RuntimeError: If the native library is unavailable or the private
+            key is out of range.
+    """
+    if len(message_digest) != 32:
+        raise ValueError(f"Message digest must be 32 bytes, got {len(message_digest)}")
+    if len(privkey) != SECP256K1_PRIVKEY_BYTES:
+        raise ValueError(f"Private key must be {SECP256K1_PRIVKEY_BYTES} bytes, got {len(privkey)}")
+
+    if _native_lib is None or not _SECP256K1_NATIVE_AVAILABLE:
+        raise RuntimeError("secp256k1 native backend not available. " + _INSTALL_HINT)
+
+    sig_buf = ctypes.create_string_buffer(SECP256K1_ECDSA_MAX_SIG_BYTES)
+    sig_len = ctypes.c_size_t(0)
+    rc = _native_lib.ama_secp256k1_ecdsa_sign(
+        sig_buf, ctypes.byref(sig_len), bytes(message_digest), bytes(privkey)
+    )
+    if rc != 0:
+        raise RuntimeError(f"secp256k1 ECDSA signing failed (rc={rc})")
+    return bytes(sig_buf.raw[: sig_len.value])
+
+
+def native_secp256k1_ecdsa_verify(
+    signature: bytes,
+    message_digest: bytes,
+    pubkey: bytes,
+    *,
+    allow_high_s: bool = False,
+) -> bool:
+    """
+    Verify a DER-encoded ECDSA signature over secp256k1.
+
+    Strict by default: only canonical DER is accepted (minimal lengths,
+    minimal INTEGERs, no trailing bytes), ``r`` and ``s`` must lie in
+    [1, n-1] rather than being reduced into range, the public-key
+    coordinates must be canonical field elements (< p), and a high ``s`` is
+    rejected. Each is a malleability control — without them a second,
+    distinct byte string would verify for the same message.
+
+    Set ``allow_high_s=True`` ONLY to verify conformant third-party X9.62
+    signatures that do not follow the low-``s`` convention. It relaxes the
+    low-``s`` rejection and nothing else — the DER, range, and canonical
+    public-key checks are unconditional in both modes. Prefer the strict
+    default whenever you control the signer.
+
+    Verification is variable time by design; every input is public.
+
+    Args:
+        signature: DER-encoded signature.
+        message_digest: 32-byte digest.
+        pubkey: 64-byte uncompressed public key, X||Y big-endian,
+            WITHOUT the SEC 1 ``0x04`` prefix.
+        allow_high_s: Accept the high-``s`` malleability twin (X9.62 interop).
+
+    Returns:
+        True if the signature is valid under the selected policy, False otherwise.
+
+    Raises:
+        ValueError: If the digest or public key has the wrong length.
+        RuntimeError: If the native library is unavailable.
+    """
+    if len(message_digest) != 32:
+        raise ValueError(f"Message digest must be 32 bytes, got {len(message_digest)}")
+    if len(pubkey) != SECP256K1_UNCOMPRESSED_PUBKEY_BYTES:
+        raise ValueError(
+            f"Public key must be {SECP256K1_UNCOMPRESSED_PUBKEY_BYTES} bytes "
+            f"(X||Y, no 0x04 prefix), got {len(pubkey)}"
+        )
+
+    if _native_lib is None or not _SECP256K1_NATIVE_AVAILABLE:
+        raise RuntimeError("secp256k1 native backend not available. " + _INSTALL_HINT)
+
+    flags = AMA_SECP256K1_ECDSA_ALLOW_HIGH_S if allow_high_s else AMA_SECP256K1_ECDSA_VERIFY_STRICT
+    rc = int(
+        _native_lib.ama_secp256k1_ecdsa_verify_ex(
+            bytes(signature), len(signature), bytes(message_digest), bytes(pubkey), flags
+        )
+    )
+    return rc == 0
 
 
 # ============================================================================

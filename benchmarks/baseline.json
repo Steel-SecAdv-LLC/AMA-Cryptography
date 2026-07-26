@@ -101,6 +101,22 @@
       "tolerance_percent": 35,
       "tier": "microbenchmark"
     },
+    "secp256k1_ecdsa_sign": {
+      "description": "secp256k1 ECDSA signing (native C, RFC 6979 deterministic nonce)",
+      "metric": "operations_per_second",
+      "baseline_value": 1370,
+      "unit": "ops/sec",
+      "tolerance_percent": 40,
+      "tier": "microbenchmark"
+    },
+    "secp256k1_ecdsa_verify": {
+      "description": "secp256k1 ECDSA verification (native C, Shamir's-trick joint multiply, low-s + canonical-pubkey policy)",
+      "metric": "operations_per_second",
+      "baseline_value": 2000,
+      "unit": "ops/sec",
+      "tolerance_percent": 40,
+      "tier": "microbenchmark"
+    },
     "hkdf_derive": {
       "description": "HKDF-SHA3-256 key derivation (3 keys)",
       "metric": "operations_per_second",

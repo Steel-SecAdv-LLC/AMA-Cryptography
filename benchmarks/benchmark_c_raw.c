@@ -1,3 +1,5 @@
+/* Copyright (C) 2025-2026 Steel Security Advisors LLC */
+/* SPDX-License-Identifier: Apache-2.0 */
 /* POSIX feature test macro — must precede all #includes.
  * 200809L (POSIX.1-2008) covers clock_gettime, gmtime_r, ctime_r.
  * The earlier 199309L only guaranteed clock_gettime and caused
@@ -8,9 +10,6 @@
 #endif
 
 /*
- * Copyright 2025-2026 Steel Security Advisors LLC
- * Licensed under the Apache License, Version 2.0
- *
  * Raw C Benchmark Harness for AMA Cryptography
  * ==============================================
  *
@@ -1175,6 +1174,75 @@ static bench_result_t bench_secp256k1_pubkey(int iters, int warmup) {
     return compute_stats("secp256k1 pubkey", g_samples, iters);
 }
 
+/* --- secp256k1 ECDSA sign (RFC 6979) ---
+ *
+ * The deterministic signing path: RFC 6979 HMAC-SHA-256 nonce derivation,
+ * a base-point Montgomery ladder for k*G, and a Fermat inversion mod n.
+ * This is what a wallet calls to authorize a transaction; the pubkey ladder
+ * above is only the key-import half of the cost. */
+static bench_result_t bench_secp256k1_ecdsa_sign(int iters, int warmup) {
+    uint8_t privkey[32];
+    uint8_t digest[32];
+    uint8_t sig[AMA_SECP256K1_ECDSA_MAX_SIG_LEN];
+    size_t sig_len = 0;
+
+    for (int i = 0; i < 32; i++) {
+        privkey[i] = (uint8_t)(i + 1);       /* scalar in [1, N-1] */
+        digest[i] = (uint8_t)(0x20 + i);
+    }
+
+    for (int i = 0; i < warmup; i++)
+        ama_secp256k1_ecdsa_sign(sig, &sig_len, digest, privkey);
+
+    for (int i = 0; i < iters; i++) {
+        double t0 = now_ns();
+        ama_secp256k1_ecdsa_sign(sig, &sig_len, digest, privkey);
+        g_samples[i] = now_ns() - t0;
+    }
+    return compute_stats("secp256k1 ecdsa sign", g_samples, iters);
+}
+
+/* --- secp256k1 ECDSA verify ---
+ *
+ * Two scalar multiplications (u1*G + u2*Q), the canonical-pubkey and curve
+ * checks, and the low-s policy check. Verification is variable time by design
+ * (every input is public). */
+static bench_result_t bench_secp256k1_ecdsa_verify(int iters, int warmup) {
+    /* secp256k1 generator G (SEC 2 §2.4.1, big-endian). */
+    static const uint8_t Gx[32] = {
+        0x79,0xBE,0x66,0x7E,0xF9,0xDC,0xBB,0xAC,0x55,0xA0,0x62,0x95,0xCE,0x87,0x0B,0x07,
+        0x02,0x9B,0xFC,0xDB,0x2D,0xCE,0x28,0xD9,0x59,0xF2,0x81,0x5B,0x16,0xF8,0x17,0x98
+    };
+    static const uint8_t Gy[32] = {
+        0x48,0x3A,0xDA,0x77,0x26,0xA3,0xC4,0x65,0x5D,0xA4,0xFB,0xFC,0x0E,0x11,0x08,0xA8,
+        0xFD,0x17,0xB4,0x48,0xA6,0x85,0x54,0x19,0x9C,0x47,0xD0,0x8F,0xFB,0x10,0xD4,0xB8
+    };
+    uint8_t privkey[32], qx[32], qy[32], pub64[64], digest[32];
+    uint8_t sig[AMA_SECP256K1_ECDSA_MAX_SIG_LEN];
+    size_t sig_len = 0;
+
+    for (int i = 0; i < 32; i++) {
+        privkey[i] = (uint8_t)(i + 1);
+        digest[i] = (uint8_t)(0x20 + i);
+    }
+    /* Derive the 64-byte uncompressed public key (X||Y) and one signature to
+     * verify repeatedly. */
+    ama_secp256k1_point_mul(privkey, Gx, Gy, qx, qy);
+    memcpy(pub64, qx, 32);
+    memcpy(pub64 + 32, qy, 32);
+    ama_secp256k1_ecdsa_sign(sig, &sig_len, digest, privkey);
+
+    for (int i = 0; i < warmup; i++)
+        ama_secp256k1_ecdsa_verify(sig, sig_len, digest, pub64);
+
+    for (int i = 0; i < iters; i++) {
+        double t0 = now_ns();
+        ama_secp256k1_ecdsa_verify(sig, sig_len, digest, pub64);
+        g_samples[i] = now_ns() - t0;
+    }
+    return compute_stats("secp256k1 ecdsa verify", g_samples, iters);
+}
+
 /* --- FROST 2-of-3 (RFC 9591) ---
  *
  * Three rows for the per-round per-signer cost in a 2-of-3 FROST
@@ -1507,6 +1575,8 @@ int main(int argc, char **argv) {
 
     /* --- secp256k1 (constant-time Montgomery ladder) --- */
     results[n++] = bench_secp256k1_pubkey(iters_med, warmup);
+    results[n++] = bench_secp256k1_ecdsa_sign(iters_med, warmup);
+    results[n++] = bench_secp256k1_ecdsa_verify(iters_med, warmup);
 
     /* --- FROST 2-of-3 (RFC 9591) --- */
     results[n++] = bench_frost_round1_commit(iters_med, warmup);

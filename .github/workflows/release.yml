@@ -1,3 +1,5 @@
+# Copyright (C) 2025-2026 Steel Security Advisors LLC
+# SPDX-License-Identifier: Apache-2.0
 name: Release — Build, Sign, and Publish
 
 # Tagged-release pipeline for ama-cryptography (audit Issue 1).
@@ -455,7 +457,24 @@ jobs:
     # PyPI.  Copilot review #322: restrict to `refs/tags/v*`.  The
     # workflow_dispatch dry-run path still exercises the entire
     # build/sign/provenance flow — it just stops before the upload.
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    #
+    # PyPI publishing is OPT-IN, gated on the repository variable
+    # AMA_PUBLISH_TO_PYPI. Distributing through PyPI is a deliberate
+    # operational choice, not a precondition for cutting a release: this
+    # project also ships via git tags, GitHub Release assets and a private
+    # index (see README "Distribution Channels"). Before this gate, a tag
+    # pushed without a configured trusted publisher failed here AND took
+    # github-release down with it, so the project could not produce a
+    # GitHub Release at all without first committing to PyPI.
+    #
+    # Set the variable to 'true' (Settings -> Secrets and variables ->
+    # Actions -> Variables) once the PyPI trusted publisher and the `pypi`
+    # environment both exist. Leaving it unset skips publishing; the skip is
+    # stated in the release notes rather than passing silently.
+    if: >-
+      github.event_name == 'push'
+      && startsWith(github.ref, 'refs/tags/v')
+      && vars.AMA_PUBLISH_TO_PYPI == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment:
@@ -503,7 +522,34 @@ jobs:
     # advertising and a credibility hit.  Sequencing via `needs` makes
     # the release announcement strictly downstream of the PyPI upload.
     needs: [preflight, sign, provenance, publish-pypi]
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    #
+    # The original guard was a bare `needs: [... publish-pypi]`, which is
+    # correct about the hazard (never announce a PyPI upload that failed) but
+    # conflates two different outcomes. `needs` treats SKIPPED the same as
+    # FAILED, so with PyPI publishing opt-in (see publish-pypi above) a
+    # deliberately unconfigured PyPI would silently suppress the GitHub
+    # Release too — no assets, no signatures, no provenance published, for a
+    # tag that built everything successfully.
+    #
+    # This condition keeps the safety property and drops the conflation:
+    #   * publish-pypi FAILED   -> no release  (the original hazard)
+    #   * publish-pypi SKIPPED  -> release proceeds, notes say PyPI was skipped
+    #   * sign / provenance not successful -> no release, unconditionally
+    #
+    # Bracket indexing, not dot notation: `needs.publish-pypi.result` asks an
+    # expression grammar in which `-` is also subtraction to read a hyphenated
+    # job id as a single identifier.  No other workflow here dereferences a
+    # hyphenated job name, so there is no in-repo evidence the dot form is
+    # safe, and this file only ever executes on a tag push — the one place a
+    # wrong guess is discovered at the worst moment.  `needs['publish-pypi']`
+    # is unambiguous under any reading.
+    if: >-
+      !cancelled()
+      && github.event_name == 'push'
+      && startsWith(github.ref, 'refs/tags/v')
+      && needs.sign.result == 'success'
+      && needs.provenance.result == 'success'
+      && needs['publish-pypi'].result != 'failure'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -516,6 +562,26 @@ jobs:
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
           path: artefacts
+
+      - name: Resolve the PyPI line for the release notes
+        id: pypi_line
+        # Computed in a step rather than inline in the release body.  The
+        # inline form needed a multi-line ${{ }} expression inside a `|` block
+        # scalar — syntax that nothing in CI would ever exercise, because this
+        # workflow only runs on a tag push.  That is the same class of defect
+        # (invisible until release day) that INVARIANT-25 exists to catch, so
+        # it does not belong in the fix for it.  A shell conditional over a
+        # single simple expression is testable by reading it.
+        env:
+          PYPI_RESULT: ${{ needs['publish-pypi'].result }}
+        run: |
+          if [ "$PYPI_RESULT" = "success" ]; then
+            line="published via Trusted Publishing (no long-lived token)."
+          else
+            line="not published — PyPI distribution is not enabled for this repository. Install from this release's assets, a git tag, or the private index (see README, Distribution Channels)."
+          fi
+          echo "line=$line" >> "$GITHUB_OUTPUT"
+          echo "PyPI publish result: ${PYPI_RESULT:-<none>}"
 
       - name: Aggregate release assets
         run: |
@@ -542,7 +608,7 @@ jobs:
             * Wheels signed via sigstore (keyless, OIDC-bound).
             * SLSA v1 provenance attestations attached.
             * Python SBOM + C-library SBOM (CycloneDX) attached.
-            * Published to PyPI via Trusted Publishing (no long-lived token).
+            * PyPI: ${{ steps.pypi_line.outputs.line }}
 
             Verify with:
 

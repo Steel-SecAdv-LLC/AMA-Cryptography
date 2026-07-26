@@ -1,7 +1,7 @@
 # Security Design Notes — Original Constructions
 
-**Version:** 3.1.0 + Unreleased
-**Date:** 2026-05-16
+**Version:** 3.4.0
+**Date:** 2026-07-25
 **Classification:** Public
 **Maintainer:** Steel Security Advisors LLC
 

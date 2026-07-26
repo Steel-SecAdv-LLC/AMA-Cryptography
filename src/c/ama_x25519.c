@@ -1,19 +1,5 @@
-/**
- * Copyright 2025-2026 Steel Security Advisors LLC
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-
+/* Copyright (C) 2025-2026 Steel Security Advisors LLC */
+/* SPDX-License-Identifier: Apache-2.0 */
 /**
  * @file ama_x25519.c
  * @brief X25519 Diffie-Hellman key exchange (RFC 7748)
@@ -174,6 +160,68 @@ AMA_API int ama_x25519_mulx_last_used_get(void) {
 #  define AMA_X25519_LADDER_LINKAGE static
 #endif
 
+/* ============================================================================
+ * Non-canonical u-coordinate handling (RFC 7748 §5) — INVARIANT-27
+ * ============================================================================
+ *
+ * RFC 7748 §5 `decodeUCoordinate` masks bit 255 of the received u-coordinate
+ * and stops there, so the decoded integer can land anywhere in [0, 2^255).
+ * Since p = 2^255 - 19, that leaves 19 values — [p, 2^255) — which are
+ * *representable* but not *canonical*: each names a field element that also
+ * has a smaller encoding.  The RFC then does arithmetic mod p, so the value
+ * such an encoding denotes is unambiguously `u mod p`.
+ *
+ * The three field paths in this file each masked bit 255 and never reduced,
+ * so a u in that band was consumed unreduced and produced a shared secret
+ * that no other implementation computes.  Wycheproof x25519 tc88 is exactly
+ * this case: its u is p + 3, and every reference implementation (ref10,
+ * curve25519-donna, libsodium) derives the secret for u = 3.
+ *
+ * Wycheproof classes the case `acceptable` — the RFC does not *require* the
+ * reduction — so this is an interoperability decision rather than a break.
+ * It is decided in favour of reducing, because the alternative is worse than
+ * it looks: two peers that agree on a public key would derive different
+ * shared secrets, and the handshake fails with no diagnosable cause.  The
+ * cost is one conditional subtraction of p.
+ *
+ * Constant time.  The subtraction is performed unconditionally and the
+ * result selected with an arithmetic mask, so there is no branch and no
+ * memory access that depends on the value.  (The u-coordinate is a public
+ * input, so this is a property we keep rather than one we need here.)
+ *
+ * Applied to the 32-byte encoding rather than inside `fe64_frombytes` /
+ * `fe51_frombytes`, because those helpers are shared with Ed25519, whose
+ * point decoding has its own canonicality rule (RFC 8032 §5.1.3 rejects a
+ * non-canonical y outright instead of reducing it).  Reducing there would
+ * silently change signature verification semantics.
+ */
+static void x25519_canonicalize_u(uint8_t out[32], const uint8_t in[32]) {
+    uint8_t  masked[32];
+    uint8_t  reduced[32];
+    uint16_t borrow = 0;
+    uint8_t  keep;
+    int      i;
+
+    memcpy(masked, in, 32);
+    masked[31] &= 0x7f; /* RFC 7748 §5: ignore the unused top bit. */
+
+    /* reduced = masked - p, computed unconditionally.  p = 2^255 - 19, so
+     * its little-endian bytes are ED FF FF ... FF 7F. */
+    for (i = 0; i < 32; i++) {
+        uint16_t pi = (i == 0) ? 0xed : (i == 31 ? 0x7f : 0xff);
+        uint16_t d  = (uint16_t)(masked[i] - pi - borrow);
+        reduced[i]  = (uint8_t)(d & 0xff);
+        borrow      = (uint16_t)((d >> 8) & 1);
+    }
+
+    /* borrow == 1  =>  masked < p  =>  it is already canonical, keep it.
+     * borrow == 0  =>  masked >= p =>  take the reduced value.
+     * One subtraction suffices: after masking, masked < 2^255 = p + 19. */
+    keep = (uint8_t)(0u - (uint8_t)borrow); /* 0xff when keeping, 0x00 otherwise */
+    for (i = 0; i < 32; i++)
+        out[i] = (uint8_t)((masked[i] & keep) | (reduced[i] & (uint8_t)~keep));
+}
+
 #if defined(AMA_X25519_FIELD_FE64)
 
 /* ============================================================================
@@ -252,6 +300,7 @@ void x25519_scalarmult_fe64_with_ops(uint8_t q[32],
                                      fe64_mul_fn mul,
                                      fe64_sq_fn  sq) {
     uint8_t z[32];
+    uint8_t u[32];
     fe64 x1, x2, z2, x3, z3;
     fe64 A, AA, B, BB, E, C, D, DA, CB, t0, t1;
     unsigned int swap = 0;
@@ -263,8 +312,10 @@ void x25519_scalarmult_fe64_with_ops(uint8_t q[32],
     z[31] &= 127;
     z[31] |= 64;
 
-    /* Decode u-coordinate of base point (clears bit 255 inside) */
-    fe64_frombytes(x1, p);
+    /* Decode u-coordinate: canonicalize first (mask bit 255 and reduce
+     * mod p — see x25519_canonicalize_u above), then load. */
+    x25519_canonicalize_u(u, p);
+    fe64_frombytes(x1, u);
 
     /* Ladder initial state */
     fe64_1(x2);
@@ -403,6 +454,7 @@ AMA_X25519_LADDER_LINKAGE void x25519_scalarmult(uint8_t q[32],
 AMA_X25519_LADDER_LINKAGE void x25519_scalarmult(uint8_t q[32], const uint8_t n[32],
                               const uint8_t p[32]) {
     uint8_t z[32];
+    uint8_t u[32];
     fe51 x1, x2, z2, x3, z3;
     fe51 A, AA, B, BB, E, C, D, DA, CB, t0, t1;
     unsigned int swap = 0;
@@ -414,8 +466,10 @@ AMA_X25519_LADDER_LINKAGE void x25519_scalarmult(uint8_t q[32], const uint8_t n[
     z[31] &= 127;
     z[31] |= 64;
 
-    /* Decode u-coordinate of base point (clears bit 255 inside) */
-    fe51_frombytes(x1, p);
+    /* Decode u-coordinate: canonicalize first (mask bit 255 and reduce
+     * mod p — see x25519_canonicalize_u above), then load. */
+    x25519_canonicalize_u(u, p);
+    fe51_frombytes(x1, u);
 
     /* Ladder initial state */
     fe51_1(x2);
@@ -605,6 +659,7 @@ static void pack25519(uint8_t o[32], const gf n) {
 AMA_X25519_LADDER_LINKAGE void x25519_scalarmult(uint8_t q[32], const uint8_t n[32],
                               const uint8_t p[32]) {
     uint8_t z[32];
+    uint8_t u[32];
     gf x, a, b, c, d, e, f;
     int64_t r;
     int i;
@@ -614,7 +669,8 @@ AMA_X25519_LADDER_LINKAGE void x25519_scalarmult(uint8_t q[32], const uint8_t n[
     z[31] &= 127;
     z[31] |= 64;
 
-    unpack25519(x, p);
+    x25519_canonicalize_u(u, p);
+    unpack25519(x, u);
 
     for (i = 0; i < 16; i++) {
         b[i] = x[i];

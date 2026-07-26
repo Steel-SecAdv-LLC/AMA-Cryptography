@@ -1,23 +1,9 @@
-/**
- * Copyright 2025-2026 Steel Security Advisors LLC
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-
+/* Copyright (C) 2025-2026 Steel Security Advisors LLC */
+/* SPDX-License-Identifier: Apache-2.0 */
 /**
  * @file ama_cryptography.h
  * @brief AMA Cryptography - Core C API for Post-Quantum Cryptography
- * @version 3.1.0
+ * @version 3.4.0
  * @author Andrew E. A., Steel Security Advisors LLC
  * @date 2026-04-25
  *
@@ -716,6 +702,47 @@ AMA_API ama_error_t ama_hkdf_sha512(
  * ED25519 STANDALONE API
  * ============================================================================ */
 
+/* ----------------------------------------------------------------------------
+ * Ed25519 fixed-length buffer contract  (applies to every declaration below)
+ *
+ * The Ed25519 entry points take their key and signature arguments as sized
+ * array parameters — `signature[64]`, `public_key[32]`, `secret_key[64]`.
+ * In C that notation is NOT a guarantee and NOT a constraint. A sized array
+ * parameter decays to a plain pointer at the ABI boundary, so:
+ *
+ *   - the compiler does not check the argument's length,
+ *   - `sizeof` inside the function yields the size of a pointer,
+ *   - there is no length parameter, so no runtime validation is possible.
+ *
+ * The size in the declaration is documentation of what the callee will read
+ * or write. It is the CALLER's obligation to satisfy it. Concretely:
+ *
+ *   TOO FEW BYTES  — undefined behaviour. The function reads (or writes)
+ *                    the full declared width regardless, running off the end
+ *                    of the caller's buffer. There is no error return for
+ *                    this case because the overrun has already happened by
+ *                    the time anything could detect it.
+ *
+ *   TOO MANY BYTES — silently ignored, NOT rejected. Passing a 65-byte
+ *                    signature yields a verdict computed over the first 64
+ *                    bytes and AMA_SUCCESS if those 64 verify. The trailing
+ *                    byte is never examined. A caller that treats the whole
+ *                    buffer as "the signature that verified" is therefore
+ *                    working from a different byte string than the one that
+ *                    was actually checked — the same class of confusion the
+ *                    RFC 8032 canonical-S rule exists to prevent.
+ *
+ * The Python layer (`ama_cryptography.pqc_backends`) rejects wrong lengths
+ * before calling in, so this contract binds C consumers specifically.
+ *
+ * Callers holding variable-length input MUST check the length themselves
+ * before calling, e.g.
+ *
+ *     if (sig_len != 64) return REJECT;
+ *     ama_ed25519_verify(sig, msg, msg_len, pk);
+ *
+ * ---------------------------------------------------------------------------- */
+
 /**
  * @brief Generate Ed25519 keypair
  *
@@ -723,9 +750,16 @@ AMA_API ama_error_t ama_hkdf_sha512(
  * seed data in secret_key[0..31] before calling. The function will compute
  * the public key and store it in both public_key and secret_key[32..63].
  *
- * @param public_key Output: 32-byte public key
- * @param secret_key Input/Output: 64-byte buffer (seed in, seed||pk out)
+ * @param public_key Output. Caller MUST supply exactly 32 writable bytes;
+ *                   all 32 are written. No length parameter, no validation.
+ * @param secret_key Input/Output. Caller MUST supply exactly 64 writable
+ *                   bytes, with the 32-byte seed already in [0..31]; bytes
+ *                   [32..63] are overwritten with the public key. No length
+ *                   parameter, no validation.
  * @return AMA_SUCCESS or error code
+ *
+ * See the fixed-length buffer contract above: a short buffer is undefined
+ * behaviour, and a longer one has its excess ignored rather than rejected.
  */
 AMA_API ama_error_t ama_ed25519_keypair(uint8_t public_key[32], uint8_t secret_key[64]);
 
@@ -735,11 +769,22 @@ AMA_API ama_error_t ama_ed25519_keypair(uint8_t public_key[32], uint8_t secret_k
  * Creates an Ed25519 signature for a message using the secret key.
  * Implements RFC 8032 Ed25519 (pure EdDSA).
  *
- * @param signature Output: 64-byte signature
- * @param message Message to sign
- * @param message_len Length of message
- * @param secret_key 64-byte secret key (seed || public_key)
+ * @param signature   Output. Caller MUST supply exactly 64 writable bytes;
+ *                     all 64 are written. There is no output-length
+ *                     parameter — an Ed25519 signature is always 64 bytes —
+ *                     and no way for this function to detect a shorter
+ *                     buffer before overrunning it.
+ * @param message      Message to sign. Bounded by `message_len`, which IS
+ *                     checked; a zero-length message is valid.
+ * @param message_len  Length of `message` in bytes.
+ * @param secret_key   Caller MUST supply exactly 64 readable bytes, laid
+ *                     out as seed(32) || public_key(32) — the form
+ *                     `ama_ed25519_keypair` produces. No length parameter,
+ *                     no validation. Passing only the 32-byte seed reads 32
+ *                     bytes past the end of the buffer.
  * @return AMA_SUCCESS or error code
+ *
+ * See the fixed-length buffer contract above.
  */
 AMA_API ama_error_t ama_ed25519_sign(
     uint8_t signature[64],
@@ -754,11 +799,26 @@ AMA_API ama_error_t ama_ed25519_sign(
  * Verifies an Ed25519 signature on a message.
  * Implements RFC 8032 Ed25519 verification.
  *
- * @param signature 64-byte signature
- * @param message Message to verify
- * @param message_len Length of message
- * @param public_key 32-byte public key
+ * @param signature    Caller MUST supply exactly 64 readable bytes. There
+ *                      is no length parameter and no runtime length check.
+ *                      Fewer than 64 readable bytes is undefined behaviour
+ *                      (out-of-bounds read). MORE than 64 is not an error:
+ *                      the verdict is computed over the first 64 bytes and
+ *                      the remainder is ignored, so a caller passing a
+ *                      65-byte buffer can receive AMA_SUCCESS for a string
+ *                      that was never fully examined. Check the length
+ *                      yourself before calling.
+ * @param message       Message to verify. Bounded by `message_len`, which
+ *                      IS checked.
+ * @param message_len   Length of `message` in bytes.
+ * @param public_key    Caller MUST supply exactly 32 readable bytes. Same
+ *                      terms as `signature`: no length parameter, short is
+ *                      undefined behaviour, long is ignored not rejected.
  * @return AMA_SUCCESS if valid, AMA_ERROR_VERIFY_FAILED if invalid
+ *
+ * See the fixed-length buffer contract above. Note that a rejected
+ * signature and a malformed-length signature are NOT distinguishable
+ * through this API — the latter is not detected at all.
  */
 AMA_API ama_error_t ama_ed25519_verify(
     const uint8_t signature[64],
@@ -773,10 +833,23 @@ AMA_API ama_error_t ama_ed25519_verify(
  * Each entry contains a message, signature, and public key to verify.
  */
 typedef struct {
-    const uint8_t *message;     /**< Message bytes */
-    size_t         message_len; /**< Length of message */
-    const uint8_t *signature;   /**< 64-byte Ed25519 signature */
-    const uint8_t *public_key;  /**< 32-byte Ed25519 public key */
+    /** Message bytes. Bounded by `message_len`, which IS checked. */
+    const uint8_t *message;
+    /** Length of `message` in bytes. */
+    size_t         message_len;
+    /**
+     * Ed25519 signature. MUST point at exactly 64 readable bytes.
+     *
+     * These two fields are plain pointers with no accompanying length,
+     * so the same contract as `ama_ed25519_verify` applies and is if
+     * anything easier to get wrong here: nothing in the struct records
+     * how long the buffers are. Fewer than 64 readable bytes is
+     * undefined behaviour; more than 64 is ignored, not rejected.
+     */
+    const uint8_t *signature;
+    /** Ed25519 public key. MUST point at exactly 32 readable bytes. Same
+     *  terms as `signature` above. */
+    const uint8_t *public_key;
 } ama_ed25519_batch_entry;
 
 /**
@@ -788,9 +861,16 @@ typedef struct {
  * This is intentionally non-constant-time (vartime) because verification
  * scalars are public. This is safe and documented.
  *
- * @param entries   Array of batch entries to verify
- * @param count     Number of entries
- * @param results   Output: array of int (1=valid, 0=invalid), must be >= count
+ * @param entries   Array of `count` batch entries. Each entry's
+ *                  `signature` and `public_key` must satisfy the
+ *                  fixed-length contract documented on the struct above;
+ *                  none of it is checked here.
+ * @param count     Number of entries in `entries`, and the minimum number
+ *                  of `int` slots in `results`.
+ * @param results   Output: caller MUST supply at least `count` writable
+ *                  `int` slots. Exactly `count` are written (1=valid,
+ *                  0=invalid). There is no capacity parameter, so a
+ *                  short array is undefined behaviour.
  * @return AMA_SUCCESS if all verified, AMA_ERROR_VERIFY_FAILED if any failed,
  *         AMA_ERROR_INVALID_PARAM if entries or results is NULL
  */
@@ -1039,6 +1119,163 @@ AMA_API ama_error_t ama_secp256k1_pubkey_from_privkey(
     uint8_t compressed_pubkey[33]
 );
 
+/**
+ * Maximum length of a DER-encoded secp256k1 ECDSA signature, in bytes.
+ *
+ * 2 (SEQUENCE tag + length) + 2 * (2 (INTEGER tag + length) + 33 (a
+ * 32-byte value plus a leading zero when its top bit is set)) = 72.
+ * The encoding is variable length: `ama_secp256k1_ecdsa_sign` writes
+ * between 8 and 72 bytes and reports the exact count.
+ */
+#define AMA_SECP256K1_ECDSA_MAX_SIG_LEN 72
+
+/**
+ * @brief Sign a 32-byte message digest with ECDSA over secp256k1
+ *
+ * Deterministic per RFC 6979 §3.2 using HMAC-SHA-256: the nonce is
+ * derived from the private key and the digest, so signing consumes no
+ * randomness and the same inputs always produce the same signature.
+ * This removes the single most destructive ECDSA failure mode — a
+ * repeated or biased nonce discloses the private key outright.
+ *
+ * **Low-s policy.** For every valid `(r, s)` the pair `(r, n - s)` also
+ * verifies, so a signature is not by itself a unique identifier. This
+ * function always emits the canonical low representative
+ * (`s <= (n-1)/2`), and `ama_secp256k1_ecdsa_verify` rejects the high
+ * one. That is stricter than X9.62 requires, and it is deliberate: it
+ * is the same malleability class as the Ed25519 non-canonical-`S`
+ * defect (RFC 8032 §5.1.7), and callers routinely treat signature bytes
+ * as an identity.
+ *
+ * Constant time with respect to `private_key` and the derived nonce.
+ *
+ * **Length contract.** There is no length parameter for `message` or
+ * `private_key`, and no runtime length validation is possible: the
+ * array sizes below decay to pointers at the ABI boundary. The caller
+ * MUST supply exactly 32 readable bytes for each. Supplying fewer is
+ * undefined behaviour (an out-of-bounds read); supplying more is not an
+ * error but the excess is ignored, not rejected.
+ *
+ * @param signature      Output buffer, at least
+ *                       AMA_SECP256K1_ECDSA_MAX_SIG_LEN bytes. The
+ *                       caller MUST provide that much space; the
+ *                       function does not know the buffer's size and
+ *                       cannot check it.
+ * @param signature_len  Output: number of bytes actually written
+ *                       (8..AMA_SECP256K1_ECDSA_MAX_SIG_LEN).
+ * @param message        Exactly 32 bytes: the message *digest*, not the
+ *                       message. This function does not hash its input.
+ * @param private_key    Exactly 32 bytes, big-endian, in [1, n-1].
+ * @return AMA_SUCCESS, or AMA_ERROR_INVALID_PARAM on a NULL argument or
+ *         a private key outside [1, n-1].
+ */
+AMA_API ama_error_t ama_secp256k1_ecdsa_sign(
+    uint8_t *signature,
+    size_t *signature_len,
+    const uint8_t message[32],
+    const uint8_t private_key[32]
+);
+
+/**
+ * @brief Verify a DER-encoded ECDSA signature over secp256k1
+ *
+ * **Strict DER.** Only the canonical encoding is accepted:
+ * `30 <len> 02 <rlen> <r> 02 <slen> <s>` with short-form lengths,
+ * minimal INTEGER encodings, no superfluous leading zero, no negative
+ * INTEGER, and no trailing bytes. Non-minimal lengths, indefinite
+ * length, and appended data are all rejected rather than tolerated.
+ *
+ * **Range and low-s.** `r` and `s` must each lie in `[1, n-1]`. A value
+ * `>= n` is rejected rather than reduced — reducing would let a second,
+ * distinct byte string verify for the same message. High `s` is
+ * rejected for the same reason (see `ama_secp256k1_ecdsa_sign`).
+ *
+ * **Canonical public key.** The `Qx` and `Qy` coordinates must each be a
+ * canonical field element in `[0, p)`. A coordinate `>= p` is rejected,
+ * not silently reduced modulo `p` — the same input-canonicalization stance
+ * the range check above takes for `r`/`s` and Ed25519 takes for `S`. This
+ * is the deliberate policy analogue of the X25519 non-canonical-`u`
+ * decision, resolved here toward rejection (a signature must not verify
+ * under a second, non-canonical encoding of the same key) rather than the
+ * reduction X25519 uses (two peers must derive one shared secret). Pinned
+ * by `tests/test_secp256k1_ecdsa_noncanonical_pubkey.py`; see INVARIANT-29.
+ *
+ * **Variable time by design.** Every input is public — the public key,
+ * the signature, and the message digest — so verification does not
+ * carry a constant-time obligation and does not claim one. This matches
+ * what `ama_ed25519_batch_verify` states for the same reason.
+ *
+ * **Length contract.** `signature_len` bounds `signature` and IS
+ * checked. `message` and `public_key` have no length parameter and no
+ * runtime length validation: the caller MUST supply exactly 32 and
+ * exactly 64 readable bytes respectively. Fewer is undefined behaviour;
+ * more is ignored rather than rejected.
+ *
+ * @param signature      DER-encoded signature.
+ * @param signature_len  Length of `signature` in bytes. Bounds every
+ *                       read from that buffer.
+ * @param message        Exactly 32 bytes: the message digest.
+ * @param public_key     Exactly 64 bytes: the uncompressed affine point
+ *                       as X||Y, big-endian, WITHOUT the SEC 1 `0x04`
+ *                       prefix. Each coordinate must be a canonical field
+ *                       element in `[0, p)` (a coordinate `>= p` is
+ *                       rejected), and the point is verified to satisfy the
+ *                       curve equation `y^2 = x^3 + 7`.
+ * @return AMA_SUCCESS when the signature is valid,
+ *         AMA_ERROR_VERIFY_FAILED when it is not,
+ *         AMA_ERROR_INVALID_PARAM on a NULL argument.
+ */
+AMA_API ama_error_t ama_secp256k1_ecdsa_verify(
+    const uint8_t *signature,
+    size_t signature_len,
+    const uint8_t message[32],
+    const uint8_t public_key[64]
+);
+
+/**
+ * @name ECDSA verification policy flags (for ama_secp256k1_ecdsa_verify_ex)
+ * @{
+ */
+/** Strict policy (the `ama_secp256k1_ecdsa_verify` default): reject high `s`. */
+#define AMA_SECP256K1_ECDSA_VERIFY_STRICT   0u
+/**
+ * Accept high `s` (the non-canonical malleability twin `n - s`). Set this ONLY
+ * to verify conformant third-party X9.62 signatures that do not follow the
+ * low-`s` convention. Range (`r, s in [1, n-1]`) and canonical public-key
+ * (`Qx, Qy < p`) checks are NOT relaxed by this flag — only the low-`s`
+ * malleability rejection is. Prefer the strict default whenever you control
+ * the signer, so a signature stays a unique identifier for its (key, message).
+ */
+#define AMA_SECP256K1_ECDSA_ALLOW_HIGH_S    1u
+/** @} */
+
+/**
+ * @brief Verify a DER-encoded ECDSA signature with an explicit policy.
+ *
+ * Identical to `ama_secp256k1_ecdsa_verify` except the low-`s` policy is
+ * caller-selected via `flags`. `flags == AMA_SECP256K1_ECDSA_VERIFY_STRICT`
+ * (0) reproduces `ama_secp256k1_ecdsa_verify` exactly. Unknown flag bits are
+ * ignored (forward-compatible). All other checks — strict DER, `r, s` range,
+ * canonical `Qx`/`Qy`, curve membership — are unconditional and identical to
+ * the strict entry point.
+ *
+ * @param signature      DER-encoded signature.
+ * @param signature_len  Length of `signature` in bytes; bounds every read.
+ * @param message        Exactly 32 bytes: the message digest.
+ * @param public_key     Exactly 64 bytes: the uncompressed affine point X||Y.
+ * @param flags          Bitwise-OR of AMA_SECP256K1_ECDSA_* policy flags.
+ * @return AMA_SUCCESS when the signature is valid under `flags`,
+ *         AMA_ERROR_VERIFY_FAILED when it is not,
+ *         AMA_ERROR_INVALID_PARAM on a NULL argument.
+ */
+AMA_API ama_error_t ama_secp256k1_ecdsa_verify_ex(
+    const uint8_t *signature,
+    size_t signature_len,
+    const uint8_t message[32],
+    const uint8_t public_key[64],
+    uint32_t flags
+);
+
 /* ============================================================================
  * X25519 KEY EXCHANGE (RFC 7748)
  * ============================================================================ */
@@ -1065,6 +1302,20 @@ AMA_API ama_error_t ama_x25519_keypair(
  *
  * Computes shared_secret = X25519(our_secret_key, their_public_key).
  * Returns AMA_ERROR_CRYPTO if result is all-zero (low-order point rejection).
+ *
+ * **Non-canonical u-coordinate.** RFC 7748 §5 masks bit 255 of the peer's
+ * u-coordinate and then works modulo p = 2^255 - 19, which leaves 19
+ * encodings — the values in [p, 2^255) — that are representable but not
+ * canonical.  This library REDUCES such a u modulo p before the ladder, so
+ * the shared secret is the one every reference implementation (ref10,
+ * curve25519-donna, libsodium) computes for the reduced value: the
+ * Wycheproof x25519 tc88 input `p + 3`, for instance, is treated as `3`.
+ * RFC 7748 permits either reducing or consuming the value unreduced;
+ * reducing is chosen deliberately, so two peers that agree on a public key
+ * can never derive different secrets.  The reduction is constant time (one
+ * unconditional conditional subtraction of p) and is applied on every field
+ * path and in `ama_x25519_scalarmult_batch`.  Pinned by
+ * tests/test_x25519_canonical_u.py; see INVARIANT-27.
  *
  * @param shared_secret Output: 32-byte shared secret
  * @param our_secret_key Our 32-byte secret key
@@ -1107,7 +1358,9 @@ AMA_API ama_error_t ama_x25519_key_exchange(
  * batch result.
  *
  * Standards reference: RFC 7748 §5 (clamp + scalar mult) and §6.1
- * (low-order rejection).
+ * (low-order rejection).  Each `points[k]` u-coordinate is reduced modulo
+ * p = 2^255 - 19 if non-canonical, exactly as `ama_x25519_key_exchange`
+ * documents.
  *
  * @param out      Output: count × 32-byte shared-secret slots
  * @param scalars  Input:  count × 32-byte secret keys (pre-clamping)

@@ -1,3 +1,5 @@
+# Copyright (C) 2025-2026 Steel Security Advisors LLC
+# SPDX-License-Identifier: Apache-2.0
 name: CI - Testing and Code Quality
 
 on:
@@ -207,6 +209,22 @@ jobs:
       run: |
         python -m pytest tests/ -v --tb=short --no-cov
 
+    - name: "Wycheproof corpus (vendored, offline, fail-closed)"
+      # Google's Project Wycheproof is a corpus of the cases that *break*
+      # implementations. Running it against this library for the first time
+      # found a real Ed25519 malleability defect (RFC 8032 §5.1.7) in under a
+      # minute — and then a second divergence in X25519 non-canonical
+      # u-coordinate handling. Neither had any standing gate; this is it.
+      #
+      # The corpus is vendored under wycheproof_vectors/ and pinned by
+      # manifest.json (upstream commit, per-file SHA-256, per-file vector
+      # count), so nothing is fetched at test time and a swapped vector file
+      # fails before a single vector runs. Every one of the 2,733 vectors
+      # lands in a named bucket with an asserted count — there is no silent
+      # skip, and an unrunnable vector is a red build with a reason.
+      run: |
+        python wycheproof_vectors/run_wycheproof.py
+
     - name: Run demonstration
       env:
         PYTHONUTF8: "1"
@@ -303,6 +321,19 @@ jobs:
     - name: "INVARIANT-13: Suppression hygiene check"
       run: |
         python tools/check_suppression_hygiene.py
+
+    - name: "Uniform license headers (SPDX)"
+      # The tree carried five different header shapes at once — a two-line
+      # Apache note, the full thirteen-line boilerplate block, a bare SPDX
+      # tag on four files, a one-off "Apache License 2.0" spelling, and the
+      # C block-comment forms of each.  No machine license scanner could
+      # read that reliably and a new file could pick any shape.  This gate
+      # pins the canonical two-line header with the *registered* SPDX
+      # identifier (`Apache-2.0`; `Apache 2.0` is not a valid identifier).
+      # Detection and normalization are both pinned by tests/test_headers.py,
+      # so the gate cannot silently degrade into a no-op.
+      run: |
+        python tools/check_headers.py --check
 
   docs-build:
     # Run sphinx-build with -W on every PR / push so any docstring-format
@@ -683,6 +714,84 @@ jobs:
       if: steps.cpu.outputs.have_avx512 == '1'
       run: ctest --test-dir build -R test_sha3_avx512_kat --output-on-failure
 
+  ed25519-backend-differential:
+    name: Ed25519 backend differential (donna vs fe51)
+    # WHY THIS JOB EXISTS
+    #
+    # This repository ships TWO Ed25519 implementations and picks between them
+    # at configure time (CMakeLists.txt removes src/c/ama_ed25519.c from the
+    # source list and substitutes src/c/ed25519_donna_shim.c whenever
+    # AMA_ED25519_ASSEMBLY is ON, which is the default on x86-64):
+    #
+    #   * ed25519-donna  — x86-64 assembly, what every x86-64 lane builds
+    #   * fe51           — the portable path in ama_ed25519.c
+    #
+    # Until this job existed, no CI lane ever built fe51 on x86-64. It was
+    # exercised only incidentally on the ubuntu-24.04-arm runners, and nothing
+    # anywhere compared the two against each other.
+    #
+    # That is not a theoretical gap. INVARIANT-26 fixed an RFC 8032 §5.1.7
+    # canonical-S defect that was present in BOTH backends but for DIFFERENT
+    # reasons — donna's `RS[63] & 224` test was too weak, while fe51 had no
+    # range check at all — so a fix written against one could easily have left
+    # the other broken. Two implementations of one public API that nothing
+    # compares will drift; the only question is when it is noticed.
+    #
+    # This job builds both on the same runner and asserts they return the same
+    # verdict for every signature in a shared corpus. It is a differential
+    # test, not a KAT: it does not care which answer is right, only that the
+    # two backends cannot disagree without failing the build.
+    runs-on: ubuntu-latest
+    # Two full CMake builds of the native library plus a C test run.  Measured
+    # at roughly 4 minutes locally; 30 leaves headroom for a cold runner
+    # without letting a genuinely hung build sit for an hour.
+    timeout-minutes: 30
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+
+    - name: Set up Python
+      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+      with:
+        python-version: "3.11"
+
+    - name: Install build toolchain
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential cmake
+
+    - name: Build donna backend (x86-64 default)
+      run: |
+        cmake -S . -B build-donna \
+          -DAMA_ED25519_ASSEMBLY=ON \
+          -DAMA_USE_NATIVE_PQC=ON \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DAMA_BUILD_TESTS=ON \
+          -DAMA_BUILD_EXAMPLES=OFF
+        cmake --build build-donna -j"$(nproc)"
+
+    - name: Build fe51 backend (portable path, never built on x86-64 before)
+      run: |
+        cmake -S . -B build-fe51 \
+          -DAMA_ED25519_ASSEMBLY=OFF \
+          -DAMA_USE_NATIVE_PQC=ON \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DAMA_BUILD_TESTS=ON \
+          -DAMA_BUILD_EXAMPLES=OFF
+        cmake --build build-fe51 -j"$(nproc)"
+
+    - name: Run the C test suite against the fe51 backend
+      # The donna backend's C tests already run in ci-build-test.yml on every
+      # x86-64 lane. This is the half that had no coverage.
+      working-directory: build-fe51
+      run: ctest --output-on-failure
+
+    - name: Differential — both backends must agree on every signature
+      run: |
+        python tools/check_ed25519_backend_parity.py \
+          --donna build-donna/lib/libama_cryptography.so \
+          --fe51  build-fe51/lib/libama_cryptography.so
+
   ci-gate:
     name: CI Gate
     # Single aggregating status check for this workflow. Branch protection
@@ -705,19 +814,21 @@ jobs:
       - benchmark-regression
       - constant-time-check
       - test-avx512
+      - ed25519-backend-differential
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
-    - name: Fail if any required job did not succeed
-      # Fail only on a genuine 'failure'. 'skipped' is tolerated (an upstream
-      # failure that skips a dependent is already caught via that upstream job's
-      # own 'failure'), and 'cancelled' is tolerated because — with this repo's
-      # concurrency: cancel-in-progress — it only appears on a run superseded by
-      # a newer push (the latest run governs branch protection) or a manual
-      # abort (never merged). Matrix jobs are fail-fast:false and timeouts
-      # report as 'failure', so 'cancelled' never masks a real job problem on
-      # the authoritative head-commit run.
-      if: ${{ contains(needs.*.result, 'failure') }}
+    - name: Fail unless every required job succeeded
+      # STRICT. Every job in this workflow runs unconditionally — none carries a
+      # job-level `if:` — so on the authoritative head-commit run each MUST be
+      # `success`. `skipped` now fails the gate too: on this workflow it can only
+      # mean a `needs:` dependency failed (already red) or a future job's `if:`
+      # drifted so it silently stopped running — exactly the gap a lenient gate
+      # hides. `cancelled` also fails, but only ever appears on a run superseded
+      # by a newer push or a manual abort, neither of which gates the latest head
+      # commit that branch protection evaluates. Matrix jobs are fail-fast:false
+      # and timeouts report as `failure`.
+      if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'skipped') || contains(needs.*.result, 'cancelled') }}
       run: |
         echo "::error::CI Gate failed — a required job did not succeed."
         echo "Dependency results: ${{ join(needs.*.result, ', ') }}"

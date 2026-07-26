@@ -1,3 +1,5 @@
+# Copyright (C) 2025-2026 Steel Security Advisors LLC
+# SPDX-License-Identifier: Apache-2.0
 """
 Unit tests for tools/check_version_consistency.py.
 
@@ -10,6 +12,7 @@ default safety-net assertion is durable).
 from __future__ import annotations
 
 import importlib.util
+import re
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -52,6 +55,109 @@ def test_github_invariants_file_is_pointer() -> None:
         pointer.read_text(encoding="utf-8")
         == "# AMA Cryptography invariants\n\nCanonical copy: ../INVARIANTS.md\n"
     )
+
+
+def _match_header(tool_module: ModuleType, text: str) -> tuple[str, str] | None:
+    """First (version, trailing-qualifier) pair any doc-header pattern finds."""
+    for pat in tool_module.DOC_HEADER_PATTERNS:
+        m = pat.search(text)
+        if m:
+            return m.group(1), m.group(2).strip()
+    return None
+
+
+@pytest.mark.parametrize(
+    ("header", "expected"),
+    [
+        ("**Version:** 3.4.0", ("3.4.0", "")),
+        ("**Document Version:** 3.4.0", ("3.4.0", "")),
+        ("| Version | 3.4.0 |", ("3.4.0", "")),
+        ("| Document Version | 3.4.0 |", ("3.4.0", "")),
+        ("**Project Release:** 3.4.0", ("3.4.0", "")),
+        # The shape that escaped the scan entirely: a version header with a
+        # trailing qualifier matched no pattern, so docs/DESIGN_NOTES.md and
+        # docs/METRICS_REPORT.md sat on 3.1.0 across three releases while the
+        # script reported "All declarations agree".
+        ("**Version:** 3.1.0 + Unreleased", ("3.1.0", "+ Unreleased")),
+        ("| Version | 3.1.0 + Unreleased |", ("3.1.0", "+ Unreleased")),
+    ],
+)
+def test_doc_header_shapes_are_matched(
+    tool_module: ModuleType, header: str, expected: tuple[str, str]
+) -> None:
+    """Every document-header shape in the tree must be *seen* by the scan.
+    A shape that matches no pattern is reported as neither stale nor
+    checked, which is the failure mode that let two documents drift."""
+    assert _match_header(tool_module, header) == expected
+
+
+def test_project_release_header_is_covered(tool_module: ModuleType) -> None:
+    """CODE_OF_CONDUCT.md declares the release as `**Project Release:**`
+    rather than `**Version:**`. It carried 3.0.0 through three releases
+    because no pattern reached it."""
+    coc = (REPO_ROOT / "CODE_OF_CONDUCT.md").read_text(encoding="utf-8")
+    found = tool_module.DOC_HEADER_PATTERNS[2].search(coc)
+    assert found is not None, "Project Release header is no longer being scanned"
+
+
+def test_wiki_footer_badge_is_covered() -> None:
+    """The wiki footer renders on every wiki page and carries a release
+    badge in prose, so the *.md header scan cannot see it. It is checked
+    by name; this pins that the text the check greps for still exists."""
+    footer = (REPO_ROOT / "wiki" / "_Footer.md").read_text(encoding="utf-8")
+    assert re.search(r"Not externally audited\s*·\s*v\d+\.\d+\.\d+", footer), (
+        "wiki/_Footer.md release badge changed shape — "
+        "tools/check_version_consistency.py greps for it by name"
+    )
+
+
+def test_package_docstring_version_agrees_with_dunder(tool_module: ModuleType) -> None:
+    """The package module docstring's ``Version:`` field must match the
+    authoritative ``__version__`` in the same file.  This is the exact
+    self-contradiction that shipped: docstring on 3.1.0, ``__version__``
+    on 3.4.0, and the checker reported agreement because it only read the
+    dunder."""
+    init = (REPO_ROOT / "ama_cryptography" / "__init__.py").read_text(encoding="utf-8")
+    doc = re.search(tool_module.PACKAGE_DOCSTRING_VERSION_RE, init, re.M)
+    dunder = re.search(r'^__version__\s*=\s*"([^"]+)"', init, re.M)
+    assert doc is not None, "docstring Version field no longer matched — pattern drifted"
+    assert dunder is not None
+    doc_v, dunder_v = doc.group(1), dunder.group(1)
+    assert doc_v == dunder_v, f"docstring Version {doc_v!r} != __version__ {dunder_v!r}"
+
+
+def test_header_doxygen_version_agrees_with_macro(tool_module: ModuleType) -> None:
+    """The public header's Doxygen ``@version`` tag must match its
+    ``AMA_CRYPTOGRAPHY_VERSION_STRING`` macro — the second half of the
+    same self-contradiction, on the C side."""
+    hdr = (REPO_ROOT / "include" / "ama_cryptography.h").read_text(encoding="utf-8")
+    tag = re.search(tool_module.HEADER_DOXYGEN_VERSION_RE, hdr, re.M)
+    macro = re.search(r'AMA_CRYPTOGRAPHY_VERSION_STRING\s+"([^"]+)"', hdr)
+    assert tag is not None, "@version tag no longer matched — pattern drifted"
+    assert macro is not None
+    assert tag.group(1) == macro.group(1), f"@version {tag.group(1)!r} != macro {macro.group(1)!r}"
+
+
+def test_new_canonical_checks_catch_a_mismatch(tool_module: ModuleType) -> None:
+    """The two new patterns must actually *see* a stale value so main()
+    can flag it — a pattern that matches nothing would silently restore
+    the original blind spot."""
+    doc = re.search(tool_module.PACKAGE_DOCSTRING_VERSION_RE, "Version: 3.1.0\n", re.M)
+    tag = re.search(tool_module.HEADER_DOXYGEN_VERSION_RE, " * @version 3.1.0\n", re.M)
+    assert doc is not None and doc.group(1) == "3.1.0"
+    assert tag is not None and tag.group(1) == "3.1.0"
+
+
+def test_main_covers_the_two_canonical_in_file_declarations(
+    tool_module: ModuleType, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """End-to-end: main() runs green on the real tree AND its output shows
+    the two previously-uncovered declarations are now checked."""
+    rc = tool_module.main()
+    out = capsys.readouterr().out
+    assert rc == 0, "version consistency check failed on the real tree"
+    assert "ama_cryptography/__init__.py docstring Version field" in out
+    assert "include/ama_cryptography.h @version tag" in out
 
 
 def test_synthetic_c_file_is_flagged(tool_module: ModuleType, tmp_path: Path) -> None:
@@ -147,3 +253,31 @@ def test_standalone_titlecase_version_identifier_is_flagged(
     f.write_text('#define Version "2.0.0"\n')
     hits = tool_module.scan_c_sources_for_version_literals(src_dir)
     assert any("2.0.0" in hit for hit in hits), f"Version was not flagged: {hits}"
+
+
+def test_declared_version_scan_covers_the_tree(tool_module: ModuleType) -> None:
+    """Every ``__version__``, docstring ``Version:`` and ``@version`` across the
+    shipped Python and C trees is found and equals the canonical version. This
+    is the whole-tree sweep the file-by-file checks are not — thirteen module
+    stamps sat on 3.0.0 for four releases before it existed."""
+    init = (REPO_ROOT / "ama_cryptography" / "__init__.py").read_text(encoding="utf-8")
+    m = re.search(r'^__version__\s*=\s*"([^"]+)"', init, re.M)
+    assert m is not None
+    canonical = m.group(1)
+    stamps = tool_module.scan_declared_versions(REPO_ROOT)
+    assert stamps, "scan found no version stamps — it is not looking where it should"
+    stale = [(rel, ln, label, val) for rel, ln, label, val in stamps if val != canonical]
+    assert stale == [], f"stale version stamps: {stale}"
+
+
+def test_declared_version_scan_flags_a_stale_stamp(tool_module: ModuleType, tmp_path: Path) -> None:
+    """A synthetic module carrying an old ``__version__`` and docstring
+    ``Version:`` under a mocked tree must be flagged — the scan must actually
+    detect drift, not walk quietly. Both stamp kinds are exercised."""
+    pkg = tmp_path / "ama_cryptography"
+    pkg.mkdir()
+    (pkg / "stale.py").write_text('"""m\n\nVersion: 3.0.0\n"""\n__version__ = "3.0.0"\n')
+    stamps = tool_module.scan_declared_versions(tmp_path)
+    seen = {(label, val) for _rel, _ln, label, val in stamps}
+    assert ("__version__", "3.0.0") in seen
+    assert ("Version:", "3.0.0") in seen

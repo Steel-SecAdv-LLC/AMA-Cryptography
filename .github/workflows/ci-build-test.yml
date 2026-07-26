@@ -1,3 +1,5 @@
+# Copyright (C) 2025-2026 Steel Security Advisors LLC
+# SPDX-License-Identifier: Apache-2.0
 name: CI - Build and Test
 
 on:
@@ -470,7 +472,8 @@ jobs:
   # so a build/runtime regression here is a customer-visible regression
   # and must block merge. Transient Docker Hub auth/rate-limit failures
   # are mitigated in-job via:
-  #   * Pre-pulling the BuildKit image with 5 retries + exponential backoff
+  #   * Pre-pulling the BuildKit image with 8 retries + capped exponential
+  #     backoff (~340s of tolerance)
   #   * Optional Docker Hub login (gated on both DOCKERHUB_USERNAME and
   #     DOCKERHUB_TOKEN being set, so a half-configured fork degrades
   #     cleanly rather than failing noisily)
@@ -494,20 +497,72 @@ jobs:
         run: |
           # Pre-pull the BuildKit image used by setup-buildx-action to
           # survive transient Docker Hub outages (504, network timeouts).
+          #
+          # Widened from 5 attempts / ~150s to 8 attempts / ~340s after
+          # Docker Hub timeouts blocked PR #370 three times in one day.
+          # The backoff is capped rather than doubling without bound: past
+          # ~90s per gap the extra wait buys little and the job's 20-minute
+          # timeout starts to bind.
+          #
+          # This is a retry, not a bypass. If the image genuinely cannot be
+          # fetched the job still proceeds to buildx setup and fails there
+          # on a real error. Do NOT add continue-on-error here (INVARIANT-2)
+          # — the smoke tests below exercise the exact path a downstream
+          # consumer hits on `docker pull`, so silencing this job hides a
+          # customer-visible regression.
           IMAGE="moby/buildkit:buildx-stable-1"
-          for attempt in 1 2 3 4 5; do
-            echo "Attempt ${attempt}/5: pulling ${IMAGE}..."
-            if docker pull "${IMAGE}"; then
-              echo "Successfully pulled ${IMAGE}"
+          # Try the mirror BEFORE Docker Hub on each attempt. mirror.gcr.io is
+          # a pull-through cache that serves library and official images
+          # without a token, so it is not subject to Docker Hub's
+          # unauthenticated rate limit — which is the actual failure mode this
+          # ladder exists for. Retagging makes the pulled image satisfy
+          # setup-buildx-action's reference either way.
+          MIRROR="mirror.gcr.io/moby/buildkit:buildx-stable-1"
+          BACKOFF="10 20 40 60 60 60 90"
+          attempt=1
+          for delay in ${BACKOFF} final; do
+            echo "Attempt ${attempt}/8: pulling ${IMAGE} via mirror..."
+            if docker pull "${MIRROR}"; then
+              docker tag "${MIRROR}" "${IMAGE}"
+              echo "Successfully pulled ${IMAGE} from the mirror on attempt ${attempt}"
               exit 0
             fi
-            echo "Pull failed, waiting $((attempt * 10))s before retry..."
-            sleep $((attempt * 10))
+            echo "Mirror miss; falling back to Docker Hub for attempt ${attempt}..."
+            if docker pull "${IMAGE}"; then
+              echo "Successfully pulled ${IMAGE} from Docker Hub on attempt ${attempt}"
+              exit 0
+            fi
+            if [ "${delay}" = "final" ]; then
+              break
+            fi
+            echo "Pull failed, waiting ${delay}s before retry..."
+            sleep "${delay}"
+            attempt=$((attempt + 1))
           done
-          echo "::warning::All 5 pull attempts for ${IMAGE} failed; buildx setup will retry internally"
+          echo "::warning::All 8 pull attempts for ${IMAGE} failed over ~340s; buildx setup will retry internally"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c  # v4
+        with:
+          # The base-image pulls (ubuntu:22.04, alpine:3.18) happen INSIDE the
+          # BuildKit container, which does not share the runner's local image
+          # cache — so the host-side pre-pull above cannot cover them, and
+          # they were the part of this job still exposed to unauthenticated
+          # Docker Hub. Docker Hub timeouts blocked PR #370 three times in one
+          # day, all of them here.
+          #
+          # Routing docker.io through mirror.gcr.io takes those pulls off the
+          # unauthenticated Docker Hub path entirely. This is a parameter of an
+          # action already in use, not a new dependency.
+          #
+          # Strictly additive: BuildKit falls back to the source registry when
+          # a mirror does not have an image or does not answer, so this cannot
+          # make a pull fail that would otherwise have succeeded. It also does
+          # not weaken the gate — the images are content-addressed, so a mirror
+          # cannot serve different bytes under the same digest.
+          buildkitd-config-inline: |
+            [registry."docker.io"]
+              mirrors = ["mirror.gcr.io"]
 
       - name: Log in to Docker Hub (optional, avoids rate limits)
         # Gate on BOTH secrets: a half-configured fork (e.g. username
@@ -566,14 +621,17 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
-      - name: Fail if any required job did not succeed
-        # Fail only on a genuine 'failure'; 'skipped' and 'cancelled' are
-        # tolerated. With concurrency: cancel-in-progress, 'cancelled' only
-        # appears on a run superseded by a newer push (the latest run governs
-        # branch protection) or a manual abort. Matrix jobs are fail-fast:false
-        # and timeouts report as 'failure', so this never masks a real problem
-        # on the authoritative head-commit run.
-        if: ${{ contains(needs.*.result, 'failure') }}
+      - name: Fail unless every required job succeeded
+        # STRICT. Every job in this workflow runs unconditionally — none carries
+        # a job-level `if:` — so on the authoritative head-commit run each MUST
+        # be `success`. `skipped` now fails the gate too: on this workflow it can
+        # only mean a `needs:` dependency failed (already red) or a future job's
+        # `if:` drifted so it silently stopped running — exactly the gap a
+        # lenient gate hides. `cancelled` also fails, but only ever appears on a
+        # run superseded by a newer push or a manual abort, neither of which
+        # gates the latest head commit. Matrix jobs are fail-fast:false and
+        # timeouts report as `failure`.
+        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'skipped') || contains(needs.*.result, 'cancelled') }}
         run: |
           echo "::error::Build and Test Gate failed — a required job did not succeed."
           echo "Dependency results: ${{ join(needs.*.result, ', ') }}"

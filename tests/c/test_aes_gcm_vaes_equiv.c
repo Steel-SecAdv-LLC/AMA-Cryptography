@@ -1,7 +1,6 @@
+/* Copyright (C) 2025-2026 Steel Security Advisors LLC */
+/* SPDX-License-Identifier: Apache-2.0 */
 /**
- * Copyright 2025-2026 Steel Security Advisors LLC
- * Licensed under the Apache License, Version 2.0
- *
  * @file test_aes_gcm_vaes_equiv.c
  * @brief Byte-for-byte equivalence test for the dispatch-resolved
  *        AES-256-GCM path against the AVX2 AES-NI reference path

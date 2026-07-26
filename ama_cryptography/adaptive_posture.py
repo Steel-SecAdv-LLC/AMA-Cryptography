@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
-# Copyright 2025-2026 Steel Security Advisors LLC
-# Licensed under the Apache License, Version 2.0
-
+# Copyright (C) 2025-2026 Steel Security Advisors LLC
+# SPDX-License-Identifier: Apache-2.0
 """
 AMA Cryptography - Adaptive Cryptographic Posture System
 ============================================================
@@ -20,7 +19,7 @@ based on real-time anomaly signals from the 3R monitoring system.
 
 Organization: Steel Security Advisors LLC
 Author/Inventor: Andrew E. A.
-Version: 3.0.0
+Version: 3.4.0
 """
 
 import logging

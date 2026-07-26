@@ -1,7 +1,6 @@
+/* Copyright (C) 2025-2026 Steel Security Advisors LLC */
+/* SPDX-License-Identifier: Apache-2.0 */
 /**
- * Copyright 2025-2026 Steel Security Advisors LLC
- * Licensed under the Apache License, Version 2.0
- *
  * @file ama_sha3_x4_avx512.c
  * @brief AVX-512 4-way Keccak-f[1600] permutation for SHAKE/SHA3 batching
  *

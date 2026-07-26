@@ -1,3 +1,5 @@
+# Copyright (C) 2025-2026 Steel Security Advisors LLC
+# SPDX-License-Identifier: Apache-2.0
 name: CI - dudect Constant-Time Verification
 
 # RULESET / REQUIRED-CHECKS NOTE
@@ -132,7 +134,9 @@ jobs:
       github.event_name != 'schedule' ||
       github.event.schedule == '0 2 * * 0'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # The weekly schedule run does a high-N reading (see the run step) and needs
+    # more wall-clock than a PR run; 40 min covers build + the 30-min test cap.
+    timeout-minutes: ${{ (github.event_name == 'schedule' && 40) || 20 }}
     steps:
       - name: Checkout code
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
@@ -156,13 +160,19 @@ jobs:
 
       - name: Run dudect tests (all functions incl. PQC)
         env:
-          MEASUREMENTS: ${{ github.event.inputs.measurements || '100000' }}
+          # workflow_dispatch input wins; the weekly schedule run uses a high-N
+          # reading (a cleaner Welch t on the heavy PQC + secp256k1 ECDSA-sign
+          # lanes than a noisy PR run affords); PR runs stay at 100k for speed.
+          MEASUREMENTS: ${{ github.event.inputs.measurements || (github.event_name == 'schedule' && '500000') || '100000' }}
         run: |
           # Best-effort priority elevation — see `dudect-utility` for rationale.
           NICE_PREFIX=""
           if nice -n -10 true 2>/dev/null; then NICE_PREFIX="nice -n -10"; fi
+          # Give the high-N scheduled reading more wall-clock than a PR run.
+          DUDECT_TIMEOUT=600
+          if [ "${{ github.event_name }}" = "schedule" ]; then DUDECT_TIMEOUT=1800; fi
           taskset -c 0 $NICE_PREFIX \
-            ./build/bin/test_dudect --measurements "$MEASUREMENTS" --timeout 600
+            ./build/bin/test_dudect --measurements "$MEASUREMENTS" --timeout "$DUDECT_TIMEOUT"
 
   dudect-legacy-harnesses:
     name: dudect - Legacy Harnesses (tools/constant_time)
@@ -436,3 +446,102 @@ jobs:
           if nice -n -10 true 2>/dev/null; then NICE_PREFIX="nice -n -10"; fi
           taskset -c 0 $NICE_PREFIX \
             ./build/bin/test_dudect --measurements "$MEASUREMENTS" --timeout 900
+
+  dudect-gate:
+    name: Constant-Time Gate
+    # Single aggregating status check for this workflow, matching the
+    # `ci-gate` pattern in ci.yml. Branch protection should require ONLY this
+    # context instead of the individual job names, so adding or renaming a job
+    # updates this needs: list under code review rather than drifting the
+    # branch-protection config out of sync.
+    #
+    # if: always() so the gate resolves to a definitive red/green even when a
+    # dependency fails, rather than reporting `skipped` and leaving the PR
+    # stuck "waiting for status".
+    if: always()
+    needs:
+      - dudect-utility
+      - dudect-pqc
+      - dudect-legacy-harnesses
+      - dudect-x25519-avx2-batch
+      - dudect-simd-sweep
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+    - name: Fail unless every job reached the state this trigger requires
+      # A gate that simply demands `success` from all five jobs would be red
+      # on every pull request, because all five carry schedule-scoping `if:`
+      # conditions and `dudect-simd-sweep` is skipped on PRs BY DESIGN. A gate
+      # that tolerates `skipped` unconditionally has the opposite problem: a
+      # job that silently stopped running would report green.
+      #
+      # So this gate does neither. It re-derives each job's own trigger
+      # condition and asserts the job reached the state that condition
+      # implies:
+      #
+      #   should run  -> result MUST be `success`  (a skip here is a silent gap)
+      #   should skip -> result MUST be `skipped`  (a run here is condition drift)
+      #
+      # That is strictly stronger than both alternatives: `skipped` can never
+      # report green for a job that was supposed to execute, and the gate also
+      # catches a job whose `if:` was loosened without review.
+      #
+      # The conditions below MUST mirror the `if:` on each job above. They are
+      # duplicated because GitHub Actions offers no way to reference another
+      # job's condition; the duplication is the cost of checking it at all.
+      env:
+        EVENT:    ${{ github.event_name }}
+        SCHEDULE: ${{ github.event.schedule }}
+        R_UTILITY: ${{ needs.dudect-utility.result }}
+        R_PQC:     ${{ needs.dudect-pqc.result }}
+        R_LEGACY:  ${{ needs.dudect-legacy-harnesses.result }}
+        R_X25519:  ${{ needs.dudect-x25519-avx2-batch.result }}
+        R_SWEEP:   ${{ needs.dudect-simd-sweep.result }}
+      run: |
+        set -euo pipefail
+        rc=0
+
+        # The four legacy lanes: everything except a non-weekly schedule.
+        if [ "${EVENT}" != "schedule" ] || [ "${SCHEDULE}" = "0 2 * * 0" ]; then
+          legacy_expected="success"
+        else
+          legacy_expected="skipped"
+        fi
+
+        # The SIMD sweep: the nightly schedule, or an operator dispatch.
+        if { [ "${EVENT}" = "schedule" ] && [ "${SCHEDULE}" = "30 3 * * *" ]; } \
+           || [ "${EVENT}" = "workflow_dispatch" ]; then
+          sweep_expected="success"
+        else
+          sweep_expected="skipped"
+        fi
+
+        check() {
+          job="$1"; actual="$2"; expected="$3"
+          if [ "${actual}" = "${expected}" ]; then
+            echo "  OK    ${job}: ${actual} (expected ${expected})"
+            return 0
+          fi
+          if [ "${expected}" = "success" ] && [ "${actual}" = "skipped" ]; then
+            echo "::error::${job} was SKIPPED but this trigger requires it to run."
+          elif [ "${expected}" = "skipped" ]; then
+            echo "::error::${job} ran (${actual}) but this trigger should skip it — its \`if:\` condition drifted."
+          else
+            echo "::error::${job} did not succeed: ${actual}"
+          fi
+          rc=1
+        }
+
+        echo "event=${EVENT} schedule='${SCHEDULE}'"
+        echo "expected: legacy lanes=${legacy_expected}, simd sweep=${sweep_expected}"
+        check dudect-utility            "${R_UTILITY}" "${legacy_expected}"
+        check dudect-pqc                "${R_PQC}"     "${legacy_expected}"
+        check dudect-legacy-harnesses   "${R_LEGACY}"  "${legacy_expected}"
+        check dudect-x25519-avx2-batch  "${R_X25519}"  "${legacy_expected}"
+        check dudect-simd-sweep         "${R_SWEEP}"   "${sweep_expected}"
+
+        if [ "${rc}" -ne 0 ]; then
+          echo "::error::Constant-Time Gate failed."
+          exit 1
+        fi
+        echo "Constant-Time Gate passed — every job reached the state this trigger requires."

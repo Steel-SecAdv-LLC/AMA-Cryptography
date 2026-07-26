@@ -1,5 +1,5 @@
-# Copyright 2025-2026 Steel Security Advisors LLC
-# Licensed under the Apache License, Version 2.0
+# Copyright (C) 2025-2026 Steel Security Advisors LLC
+# SPDX-License-Identifier: Apache-2.0
 #
 # Multi-stage Docker build for AMA Cryptography
 # Optimized for production deployment with minimal attack surface

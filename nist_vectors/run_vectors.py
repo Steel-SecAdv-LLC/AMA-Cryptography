@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright (C) 2025-2026 Steel Security Advisors LLC
+# SPDX-License-Identifier: Apache-2.0
 """Run NIST ACVP test vectors against the AMA Cryptography native C library.
 
 Rules:

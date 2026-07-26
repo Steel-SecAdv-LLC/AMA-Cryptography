@@ -1,3 +1,5 @@
+# Copyright (C) 2025-2026 Steel Security Advisors LLC
+# SPDX-License-Identifier: Apache-2.0
 [build-system]
 # Build-time dependencies (PEP 518).  These versions are floors enforced
 # by setup.py's preflight check (D-9).

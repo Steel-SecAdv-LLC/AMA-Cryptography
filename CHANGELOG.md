@@ -17,9 +17,328 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ---
 
-## [Unreleased]
-
 ## [3.4.0] - 2026-07-25
+
+### Added
+
+- **The Wycheproof corpus is now vendored and gating.** `wycheproof_vectors/`
+  carries 12 files / **2,733 vectors** from C2SP/wycheproof @ `b61843a9`,
+  pinned by `manifest.json` (upstream commit, per-file SHA-256, per-file
+  vector count). `run_wycheproof.py` verifies all three before running, so an
+  edited or swapped corpus file fails before a single vector executes and
+  vectors disappearing is itself a build failure. Nothing is fetched at test
+  time. Gated in `ci.yml`, fail-closed, on every PR.
+
+  Every vector lands in exactly one bucket and the counts are asserted:
+  2,382 pass, 31 `acceptable`, 248 out-of-scope, 72 policy-divergence, 0 fail.
+  There is no blanket "ignore acceptable" bucket and no silent skip — each of
+  the three policy tables names a rule, states its reason in prose, and pins
+  an exact count, so a corpus refresh or a behaviour change goes red rather
+  than being absorbed.
+- **ECDSA over secp256k1 — `ama_secp256k1_ecdsa_sign` / `_verify`.** There was
+  previously no ECDSA in the C layer at all, so 476 Wycheproof vectors had
+  nothing to run against. Written in-house on the existing field and group
+  arithmetic: RFC 6979 deterministic nonces via AMA's own HMAC-SHA-256 (no RNG
+  on the signing path), with the §2.3.4 `bits2octets` reduction applied — the
+  message digest is reduced mod `n` before it seeds the HMAC-DRBG — so the
+  derived nonce and the whole signature are **byte-for-byte identical to
+  libsecp256k1 and trezor-crypto for every digest, in range or out** (see the
+  Fixed entry below for the divergence this closed). Montgomery scalar
+  arithmetic mod `n`, Fermat inversion over the public exponent `n-2`, strict
+  DER, a low-`s` policy, and **rejection of a public-key coordinate `>= p`**
+  rather than silent reduction (INVARIANT-29). Signing's constant-time behaviour
+  w.r.t. the key and nonce is now **empirically measured** by a dudect
+  fixed-vs-random harness, not asserted by inspection; verification is variable
+  time by design and says so. Exposed through `pqc_backends` following the
+  existing `_setup_secp256k1_ctypes` pattern.
+- **Empirical constant-time measurement for ECDSA signing.** A dudect
+  fixed-vs-random lane in `tests/c/test_dudect.c` exercises
+  `ama_secp256k1_ecdsa_sign` (a fixed key/nonce vs. a fresh random key/nonce
+  each iteration), closing the "read, didn't measure" gap on the ECDSA-specific
+  scalar arithmetic mod `n` (`sc_mont_mul` / `sc_inv` / `sc_mul` / `sc_add` /
+  `sc_negate`) and the RFC 6979 HMAC-DRBG loop. Runs in the `dudect-pqc` CI
+  job; the Welch t-statistic is printed every run and an rc mismatch hard-fails
+  regardless of the info-only classification.
+- **Gated ECDSA sign/verify throughput benchmarks.** `secp256k1 ecdsa sign` and
+  `ecdsa verify` are added to the C reporting harness (`benchmark_c_raw.c`) and,
+  as **hard-gated** core entries, to `benchmark_runner.py` with baselines in
+  `baseline.json` / `arm-baseline.json`, so a regression in the signing or
+  verification path fails the build rather than only warning. The
+  pubkey-ladder-only coverage was insufficient.
+- **Wycheproof ECDSA tripwire now exercises curve-math rejection.** The
+  hollow-driver tripwire for the ECDSA schema flips a byte *inside* `s` (leaving
+  the DER framing valid) instead of the `SEQUENCE` tag, so it proves the driver
+  reaches the signature-math check, not only DER parsing. Pinned by a new
+  assertion in `tests/test_wycheproof_gate.py`.
+- **Full-corpus Ed25519 batch verification coverage.**
+  `tests/test_ed25519_batch_verify.py` now runs the entire vendored Wycheproof
+  `ed25519_test.json` (150 vectors) through the batch path — 138 well-formed
+  entries batched, 12 malformed-length rejected — asserting the batch verdict
+  matches both the corpus and the single-signature path element-wise, including
+  the non-canonical-`S` rejection the donna batch wrapper re-applies. Previously
+  only the RFC 8032 + canonical-`S` subset was exercised on the batch path.
+- **`tools/refresh_wycheproof_corpus.py`** — verifies the vendored corpus
+  against upstream C2SP/wycheproof at the pinned commit (per-file SHA-256 +
+  vector count, byte-for-byte) and regenerates `manifest.json` on a refresh. Its
+  offline half is a fail-closed provenance check in CI
+  (`tests/test_wycheproof_corpus_provenance.py`), which also tests the failure
+  direction; the upstream-bytes half is an opt-in network test.
+- **`tests/test_ci_gate_negative.py`** — negative controls proving both strict
+  merge gates *reject* bad input, not merely that a green run passes good input.
+  The `CI Gate` and `Build and Test Gate` aggregation expressions are parsed
+  from the workflow YAML and shown to go red on any `failure` / `skipped` /
+  `cancelled` (the literal set pinned to exactly those three, so a weakened gate
+  fails the test), and their underlying checks (`tools/check_headers.py` for one,
+  `ruff` / `black` for the other) are driven end-to-end on deliberately bad
+  fixtures.
+- **Caller-selectable ECDSA verification policy — `ama_secp256k1_ecdsa_verify_ex`.**
+  The strict default (`ama_secp256k1_ecdsa_verify`) is unchanged and rejects
+  high-`s`. The new `_ex` entry point takes a `flags` word;
+  `AMA_SECP256K1_ECDSA_ALLOW_HIGH_S` verifies conformant third-party X9.62
+  signatures that do not follow the low-`s` convention. Only the low-`s`
+  malleability decision is selectable — the strict DER, `r, s` range, and
+  canonical public-key checks are unconditional in both modes. Exposed in Python
+  as `native_secp256k1_ecdsa_verify(..., allow_high_s=True)`. Pinned by
+  `tests/test_secp256k1_ecdsa_low_s_policy.py` (strict rejects the twin, opt-in
+  accepts it, opt-in relaxes nothing else). See INVARIANT-28.
+- **ECDSA verification is ~2.8× faster.** Verification's two independent 256-step
+  Montgomery ladders (`u1*G` then `u2*Q`, then a final add) are replaced by a
+  single interleaved Shamir's-trick joint multiply (`secp256k1_point_mul_shamir`).
+  Verification is variable time by design — every input is public — so this
+  data-dependent double-and-add is sound (and is NOT used on the signing path).
+  Measured ~1,124 → ~3,134 ops/sec on the dev host; the gated baseline is raised
+  so a revert to the two-ladder path fails the benchmark gate. Proven equivalent
+  to the code it replaced by an `AMA_TESTING_MODE` differential in
+  `tests/c/test_secp256k1.c` (Shamir vs. two-ladder over the boundary lattice +
+  2,000 random `(u1, u2, Q)`, on x86-64 and AArch64) and by the full 476-vector
+  Wycheproof ECDSA corpus (0 failures).
+- **AArch64 functional CI without ARM hardware — `.github/workflows/arm-qemu.yml`.**
+  Cross-compiles the library + C test suite to `aarch64-linux-gnu` (toolchain
+  file `cmake/toolchains/aarch64-linux-gnu.cmake`) and runs every ctest case
+  under QEMU user-mode. Executes the portable-C, `uint128`, fe51 and NEON paths
+  as real AArch64 machine code — including the NEON-equivalence tests that skip
+  on x86 runners entirely (54/54 pass under QEMU). Correctness only; performance
+  baselines still come from the real `ubuntu-24.04-arm` runner.
+- **ECDSA/DER fuzz coverage.** `fuzz/fuzz_secp256k1.c` now drives the strict DER
+  parser and `ama_secp256k1_ecdsa_{sign,verify,verify_ex}` with attacker-
+  controlled bytes (the parser is the classic fuzz target — previously only
+  `pubkey_from_privkey` / `point_mul` were fuzzed). 719k executions under
+  libFuzzer + ASan + UBSan, zero crashes.
+- **Scheduled provenance + high-N constant-time CI.**
+  `.github/workflows/corpus-provenance.yml` verifies the vendored corpus against
+  upstream C2SP/wycheproof monthly and on any corpus-touching PR; the weekly
+  `dudect` run now takes a high-N (500k-measurement) reading of the ECDSA-sign
+  and PQC lanes for a cleaner Welch t than a noisy PR run affords.
+- **`tools/check_headers.py`** — canonical license-header normalizer with
+  `--check` / `--apply`, an explicit exemption list carrying a reason per
+  entry, and `tests/test_headers.py` (22 tests) that builds synthetic trees
+  carrying each stale header shape and asserts the scanner flags them.
+- **`tests/c/test_ed25519_canonical_s.c`** — the C-level canonical-S pin that
+  did not exist. Covers `S = s + L`, the `L-1` / `L` / `L+1` boundaries, and
+  the `[L, 2^253)` band donna's high-bit test could not see, across both the
+  single-verify and batch paths, built against whichever backend CMake
+  selected. Verified to FAIL against a build with the check removed (3 of 40
+  assertions, on both backends).
+- **`tests/test_secp256k1_ecdsa.py`** (32) and
+  **`tests/test_x25519_canonical_u.py`** (11).
+- **Aggregating gate jobs** for `acvp_validation.yml`, `fuzzing.yml` and
+  `security.yml` — strict, so any result other than `success` fails and a
+  `skipped` or `cancelled` job cannot report green.
+
+  `dudect.yml` gets a **context-aware** gate instead, because all five of its
+  jobs carry schedule-scoping `if:` conditions and `dudect-simd-sweep` is
+  skipped on pull requests by design: a plain strict gate would be red on
+  every PR, and one that tolerated `skipped` would let a job that silently
+  stopped running report green. The gate re-derives each job's own trigger
+  condition and asserts the job reached the state that condition implies —
+  `should run -> success`, `should skip -> skipped`. That is stronger than
+  either alternative: a job skipped when it should have run fails the gate,
+  and so does a job that ran when it should not have (`if:` drift). The
+  branch logic is exercised across all five trigger contexts and six failure
+  modes.
+
+- **`src/c/internal/ama_ed25519_canonical.h`** — RFC 8032 canonical-scalar
+  check shared by both Ed25519 backends. Header-only by necessity:
+  CMakeLists.txt swaps one backend source for the other, so a shared `.c`
+  would compile into only one configuration and could regress silently in the
+  other. Not claimed as constant time — `S` is public — and the file says so
+  rather than implying a security property it does not provide.
+- **`tests/test_ed25519_canonical_s.py`** — regression pin for the above.
+  Marks explicitly which assertions are true regression pins (`S + L`) and
+  which are boundary documentation that passed before the fix too, rather
+  than implying uniform coverage.
+
+### Fixed
+
+- **X25519 consumed non-canonical u-coordinates unreduced (INVARIANT-27).**
+  RFC 7748 §5 masks bit 255 and stops, leaving 19 values in `[p, 2^255)` that
+  are representable but not canonical. All three field paths masked and never
+  reduced, so Wycheproof `x25519` **tc88** (u = `p + 3`) produced a shared
+  secret no other implementation computes. Now canonicalized once in
+  `x25519_canonicalize_u()` — one constant-time conditional subtraction of `p`
+  — and applied to all three ladders. Decided in favour of reducing because
+  the failure mode is silent: two peers agreeing on a public key would derive
+  different secrets and the handshake would fail with nothing to point at.
+  Not done inside `fe51_frombytes` / `fe64_frombytes`, which are shared with
+  Ed25519, whose point decoding must *reject* a non-canonical `y` rather than
+  reduce it.
+- **`INVARIANTS.md` documented a mitigation that did not exist.** INVARIANT-2
+  recorded a "documented exception" stating the Docker build job used
+  `continue-on-error: true`. It never did, and the comment above the job
+  explicitly forbids re-adding one. The false exemption invited someone to
+  "restore" it on the next flake, silencing a customer-visible gate. Replaced
+  with the mitigations that are actually present, and the two benign
+  `setup-python` uses of `continue-on-error` are now named so a grep cannot
+  make the document look wrong again. INVARIANT-3's blanket "no `2>/dev/null`"
+  was likewise stricter than the tree and is now scoped to substantive steps
+  rather than capability probes.
+- **`static-analysis-gate` did not gate three of its own jobs.**
+  `memory-sanitizer`, `thread-sanitizer` and `valgrind-memcheck` were absent
+  from its `needs:`, so a genuine MSAN/TSAN/Valgrind failure on a scheduled
+  run left the gate green. Now listed.
+- **`tools/check_version_consistency.py` missed three declaration shapes.** A
+  version header with a trailing qualifier (`**Version:** 3.1.0 + Unreleased`,
+  which is what `docs/DESIGN_NOTES.md` and `docs/METRICS_REPORT.md` both
+  said) matched no pattern, so it was reported as neither stale nor checked
+  and two documents sat three releases behind while the script printed "All
+  declarations agree". `**Project Release:**` was not a recognised shape
+  either, and the wiki footer's release badge is prose the `*.md` header scan
+  cannot see. 17 headers checked before, 20 now, plus two named files. A
+  trailing qualifier is now a finding in its own right.
+
+- **Ed25519 signature malleability — RFC 8032 §5.1.7 canonical-S check was
+  missing from both backends (INVARIANT-26).** Found by running Google's
+  Project Wycheproof corpus against the library for the first time:
+  `tc63` (*checking malleability*) and `tc85` (*Signature with S just above
+  the bound*) both verified as **valid** when both must be rejected.
+
+  RFC 8032 §5.1.7 requires the verifier to decode `S` in the range
+  `0 <= S < L` and treat an out-of-range `S` as invalid. Neither backend did:
+  - the vendored **ed25519-donna** path (x86-64 default) tested only
+    `RS[63] & 224`, rejecting `S >= 2^253`; `L` sits just above `2^252`, so
+    the band `L <= S < 2^253` — exactly where `S + L` lands — passed;
+  - the portable **fe51** path (`ama_ed25519.c`, ARM and non-x86) had no
+    range check, and its scalar-multiply reduces mod `L` internally, so `S`
+    and `S + L` yield the identical point.
+
+  **Impact:** given any valid `(R, S)`, an attacker with no access to the
+  private key can emit `(R, S + L)` — a distinct 64-byte string that also
+  verifies. Anything treating signature bytes as an identity (deduplication
+  caches, replay windows, content addressing, transaction ids) can be shown
+  two "different" signatures for one authenticated message. The signing key is
+  not compromised; the uniqueness property callers assume is.
+
+  Fixed at three sites via a shared header-only check
+  (`src/c/internal/ama_ed25519_canonical.h`): `ama_ed25519_verify` in each
+  backend, plus the donna **batch** wrapper. The third site is not redundant —
+  donna's batch routine calls its own `ed25519_sign_open` rather than
+  `ama_ed25519_verify`, so without it batch verification accepted signatures
+  that single verification rejected.
+
+  Verified against a deliberately unpatched build: `S + L` verified **True**
+  before and **False** after, honest signatures verifying throughout. Both
+  backends were configured and built separately (`-DAMA_ED25519_ASSEMBLY=OFF`
+  forces fe51) and each passes **150/150** Wycheproof Ed25519 vectors.
+
+- **secp256k1 RFC 6979 nonce omitted the `bits2octets` reduction — a silent
+  interop break for any digest `>= n`.** Found by differentially testing the
+  *signing* path — which Wycheproof, being verify-only, never exercises —
+  against a from-scratch RFC 6979 reference and against trezor-crypto. RFC 6979
+  §2.3.4 reduces the message digest modulo `n` (`bits2octets`) before it seeds
+  the HMAC-DRBG; libsecp256k1 does the same (its nonce function feeds the
+  reduced `msgmod32`). The C used the raw digest, so for any digest `>= n` the
+  derived nonce — and therefore the whole signature — diverged from RFC 6979,
+  libsecp256k1 and trezor-crypto. Unreachable by hashing a message
+  (~2⁻¹²⁸), but reachable through the raw-digest API — a silent interop break.
+  Fixed with one conditional subtraction of `n` in `rfc6979_nonce`; AMA now
+  reproduces trezor-crypto's secp256k1 signatures **byte-for-byte for every
+  digest, in range or out**. Pinned by `tests/test_secp256k1_ecdsa_rfc6979.py`,
+  which anchors the signing path to RFC 6979's own P-256 A.2.5 DRBG output, to
+  trezor's secp256k1 `k` and signature vectors (one with a digest `>= n`, the
+  regression guard that fails against the unreduced code and passes against the
+  fix), and to a 200-case byte-identical differential.
+
+- **secp256k1 ECDSA verify silently reduced non-canonical public-key
+  coordinates (INVARIANT-29).** `ama_secp256k1_ecdsa_verify` loaded `Qx` / `Qy`
+  without a range check, so a coordinate `>= p` was reduced modulo `p` by the
+  field arithmetic before the curve-membership test rather than rejected — a
+  second, non-canonical byte encoding of a key that would otherwise verify, the
+  same input-malleability class as the `r` / `s >= n` and Ed25519 `S >= L`
+  checks this library already enforces. Wycheproof ships no out-of-field-point
+  ECDSA vectors, so this was invisible to the corpus. Verification now rejects a
+  coordinate `>= p` outright (`secp256k1_fe_bytes_canonical`) — the deliberate
+  rejection analogue of the X25519 non-canonical-`u` *reduction* decision
+  (INVARIANT-27). Covered by `tests/test_secp256k1_ecdsa_noncanonical_pubkey.py`
+  and, isolated from the curve/signature checks via an `AMA_TESTING_MODE`
+  predicate export, by `tests/c/test_secp256k1.c`.
+
+- **A property test asserted something false about AES-GCM.**
+  `test_ciphertext_is_not_plaintext` required `ct != pt` for plaintexts as
+  short as one byte. GCM is CTR mode — `ct = pt XOR keystream` — so `ct == pt`
+  whenever the keystream prefix is zero, with probability 2^-8n. Hypothesis
+  found `plaintext=b"\x00"`. The assertion was wrong, not the cipher: a
+  keystream that could never emit a zero byte at a given position would be a
+  *defect*. Split into `test_ciphertext_preserves_length` (deterministic, all
+  sizes) and `test_ciphertext_differs_from_plaintext` (>= 16 bytes, false-
+  failure probability 2^-128), with the reasoning recorded in both.
+
+### Changed
+
+- **One canonical license header, repo-wide.** The tree carried five shapes at
+  once — a two-line Apache note (146 files), the same in C block-comment form
+  (135), the full 13-line boilerplate block (38), a bare SPDX tag on four
+  files, and a one-off "Apache License 2.0" spelling. No machine license
+  scanner could read that. All 339 headed files now carry
+  `Copyright (C) 2025-2026 …` + `SPDX-License-Identifier: Apache-2.0`, with
+  the C block-comment equivalent for `.c`/`.h`. The identifier is the
+  registered SPDX id (`Apache-2.0`; `Apache 2.0` is not one and does not
+  parse), the licence remains Apache-2.0 to match the root `LICENSE`, and the
+  2025-2026 term is unchanged. Enforced in CI.
+- **Ed25519 header now states a fixed-length buffer contract.**
+  `signature[64]` / `public_key[32]` / `secret_key[64]` decay to pointers at
+  the ABI boundary: the compiler does not check them and there is no length
+  parameter to validate. The header now says so explicitly — a short buffer is
+  undefined behaviour, and a longer one has its excess **ignored rather than
+  rejected**, so a caller can receive `AMA_SUCCESS` for a byte string that was
+  never fully examined. Applied to `ama_ed25519_sign`, `_verify`, `_keypair`
+  and the `ama_ed25519_batch_entry` fields, which have the identical exposure.
+- **`tests/c/test_ed25519_verify_equiv.c` case D.3 renamed and re-commented.**
+  It reads like malleability coverage and is not: it rejects because
+  `[l]B = identity` fails the *group equation*, which it did against the
+  unpatched code too. The repository carried an apparent test for this defect
+  for as long as the defect existed. It now says what it proves, and points at
+  the case that actually requires the range check.
+- **Docker Hub is no longer on the critical path for an unauthenticated
+  pull.** `docker.io` is routed through `mirror.gcr.io` via
+  `buildkitd-config-inline` on `setup-buildx-action` — a parameter of an
+  action already in use, not a new dependency. This is what actually matters:
+  the base-image pulls (`ubuntu:22.04`, `alpine:3.18`) happen *inside* the
+  BuildKit container, which does not share the runner's image cache, so the
+  host-side pre-pull could never cover them, and they were where all three of
+  this PR's Docker Hub timeouts landed. Strictly additive — BuildKit falls
+  back to the source registry when a mirror lacks an image — and it cannot
+  weaken the gate, since images are content-addressed. The pre-pull ladder is
+  also widened from 5 attempts / ~150s to 8 / ~340s and tries the mirror
+  first. Still fail-closed: a real build or smoke-test regression is still a
+  red job, and no `continue-on-error` was added.
+
+### Known coverage limits (stated, not silently dropped)
+
+- Wycheproof has **no** ML-KEM / ML-DSA / SLH-DSA vectors — it is classical
+  only. PQC coverage remains ACVP's job; nothing here validates it.
+- `ama_ed25519_verify` still takes `const uint8_t signature[64]` with no
+  length parameter — that cannot be fixed without an ABI break — but it is no
+  longer undocumented: the header now states the fixed-length contract in
+  full, including that a longer buffer has its excess ignored rather than
+  rejected. C consumers must still enforce the length themselves.
+- AES-GCM: 248 of the 316 Wycheproof AES-GCM vectors are out of scope, because
+  AMA ships AES-256-GCM with a 96-bit IV only. They are claimed by two named,
+  counted policies rather than skipped, so the boundary is visible.
+- ECDSA: verification rejects high-`s` signatures that plain X9.62 accepts.
+  This is deliberate anti-malleability hardening, but it means AMA will reject
+  third-party secp256k1 signatures that do not follow the low-`s` convention.
+  All 72 such Wycheproof vectors are declared as a policy divergence.
+
 
 ### Fixed
 

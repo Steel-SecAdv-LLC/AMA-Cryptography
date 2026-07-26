@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
-# Copyright 2025-2026 Steel Security Advisors LLC
-# Licensed under the Apache License, Version 2.0
-
+# Copyright (C) 2025-2026 Steel Security Advisors LLC
+# SPDX-License-Identifier: Apache-2.0
 """
 Tests for the public quick_hmac / quick_hkdf dispatchers (crypto_api) and the
 pqc_backends.__all__ surface that external consumers (e.g. Mercury) import.

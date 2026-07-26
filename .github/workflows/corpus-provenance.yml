@@ -1,0 +1,63 @@
+# Copyright (C) 2025-2026 Steel Security Advisors LLC
+# SPDX-License-Identifier: Apache-2.0
+#
+# Wycheproof corpus provenance: proves the vendored offline corpus is still
+# byte-for-byte upstream's at the pinned commit.
+#
+# The per-PR CI already runs the OFFLINE half (vendored files match manifest)
+# via tests/test_wycheproof_corpus_provenance.py. This workflow adds the ONLINE
+# half — fetching from C2SP/wycheproof and comparing bytes — which needs network
+# and so runs on a monthly schedule (drift watch) and whenever a PR actually
+# touches the corpus or its tooling (validating a refresh against upstream).
+name: Wycheproof Corpus Provenance
+
+on:
+  schedule:
+    # 1st of each month, 06:00 UTC — upstream drift / silent-modification watch.
+    - cron: '0 6 1 * *'
+  pull_request:
+    paths:
+      - "wycheproof_vectors/**"
+      - "tools/refresh_wycheproof_corpus.py"
+      - ".github/workflows/corpus-provenance.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  provenance:
+    name: Verify corpus against upstream
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+        with:
+          python-version: "3.12"
+
+      - name: Offline integrity (vendored corpus vs manifest)
+        run: python tools/refresh_wycheproof_corpus.py --offline
+
+      - name: Upstream provenance (vendored bytes vs C2SP/wycheproof @ pinned commit)
+        run: python tools/refresh_wycheproof_corpus.py --verify
+
+  corpus-provenance-gate:
+    name: Corpus Provenance Gate
+    # if: always() so it resolves to a definitive red/green even when the worker
+    # job fails, instead of sitting "waiting for status".
+    if: always()
+    needs:
+      - provenance
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Fail unless provenance verified
+        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'skipped') || contains(needs.*.result, 'cancelled') }}
+        run: |
+          echo "::error::Corpus Provenance Gate failed — the vendored corpus did not verify against upstream."
+          echo "Dependency results: ${{ join(needs.*.result, ', ') }}"
+          exit 1
+      - name: Provenance verified
+        run: echo "Corpus Provenance Gate passed — vendored corpus matches upstream."

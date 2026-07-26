@@ -1,7 +1,6 @@
+/* Copyright (C) 2025-2026 Steel Security Advisors LLC */
+/* SPDX-License-Identifier: Apache-2.0 */
 /**
- * Copyright 2025-2026 Steel Security Advisors LLC
- * Licensed under the Apache License, Version 2.0
- *
  * Equivalence test for the Ed25519 signed 4-bit window comb
  * (ge25519_scalarmult_base_comb_signed) against the variable-base wNAF
  * reference (ge25519_scalarmult, exposed via ama_ed25519_scalarmult_public).

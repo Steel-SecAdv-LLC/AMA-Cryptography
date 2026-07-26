@@ -1,5 +1,5 @@
-# Copyright 2025-2026 Steel Security Advisors LLC
-# Licensed under the Apache License, Version 2.0
+# Copyright (C) 2025-2026 Steel Security Advisors LLC
+# SPDX-License-Identifier: Apache-2.0
 """INVARIANT-7 uniform call-time enforcement regression test — legacy_compat.
 
 Context

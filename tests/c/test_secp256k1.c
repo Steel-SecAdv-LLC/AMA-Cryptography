@@ -1,7 +1,6 @@
+/* Copyright (C) 2025-2026 Steel Security Advisors LLC */
+/* SPDX-License-Identifier: Apache-2.0 */
 /**
- * Copyright 2025-2026 Steel Security Advisors LLC
- * Licensed under the Apache License, Version 2.0
- *
  * Unit tests for secp256k1 scalar multiplication and BIP32 pubkey derivation.
  *
  * Validates:
@@ -71,6 +70,76 @@ static void be32(uint8_t out[32], uint32_t n) {
     out[31] = (uint8_t)(n      );
 }
 
+/* AMA_TESTING_MODE-only export from src/c/ama_secp256k1.c.  Forward-declared
+ * here so the ECDSA public-key canonicality gate (INVARIANT-29) can be
+ * exercised in isolation from the curve-membership and signature checks —
+ * see the definition's comment for why the full-verify path cannot
+ * distinguish a canonical-gate rejection from a curve/sig rejection. */
+extern int ama_secp256k1_test_fe_bytes_canonical(const uint8_t b[32]);
+
+/* AMA_TESTING_MODE-only differential exports from src/c/ama_secp256k1.c: the
+ * Shamir's-trick joint multiply that ECDSA verify now uses vs. the previous
+ * two-ladder reference. Both compute R = u1*G + u2*Q and return R.x (or 1 if
+ * R is infinity). Test 11 asserts they agree, proving the verify-path
+ * optimization is equivalent to the code it replaced. */
+extern int ama_secp256k1_test_joint_shamir(const uint8_t u1[32], const uint8_t u2[32],
+                                            const uint8_t qx[32], const uint8_t qy[32],
+                                            uint8_t out_rx[32]);
+extern int ama_secp256k1_test_joint_ladder(const uint8_t u1[32], const uint8_t u2[32],
+                                            const uint8_t qx[32], const uint8_t qy[32],
+                                            uint8_t out_rx[32]);
+
+/* Deterministic xorshift64 for the differential's random inputs (reproducible;
+ * this is a test input generator, not a cryptographic RNG). */
+static uint64_t _xs_state = 0x9E3779B97F4A7C15ULL;
+static uint64_t _xs_next(void) {
+    uint64_t x = _xs_state;
+    x ^= x << 13;
+    x ^= x >> 7;
+    x ^= x << 17;
+    _xs_state = x;
+    return x;
+}
+static void _xs_fill(uint8_t *buf, int n) {
+    int i;
+    for (i = 0; i < n; i++)
+        buf[i] = (uint8_t)(_xs_next() >> ((i & 7) * 8));
+}
+
+/* One differential case: R = u1*G + u2*Q via both methods must match, where Q
+ * is a valid curve point. Returns 1 on agreement, 0 on mismatch. */
+static int _joint_agrees(const uint8_t u1[32], const uint8_t u2[32],
+                         const uint8_t qx[32], const uint8_t qy[32]) {
+    uint8_t rx_s[32], rx_l[32];
+    int inf_s = ama_secp256k1_test_joint_shamir(u1, u2, qx, qy, rx_s);
+    int inf_l = ama_secp256k1_test_joint_ladder(u1, u2, qx, qy, rx_l);
+    if (inf_s != inf_l)
+        return 0;
+    if (inf_s)          /* both infinity — R.x is undefined, agreement holds */
+        return 1;
+    return memcmp(rx_s, rx_l, 32) == 0;
+}
+
+/* secp256k1 field prime p and its neighbours, big-endian.
+ * p = 2^256 - 2^32 - 977 = FFFF...FFFE FFFFFC2F. */
+static const uint8_t FE_P[32] = {
+    0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,
+    0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFE,0xFF,0xFF,0xFC,0x2F
+};
+static const uint8_t FE_P_MINUS_1[32] = {
+    0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,
+    0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFE,0xFF,0xFF,0xFC,0x2E
+};
+static const uint8_t FE_P_PLUS_1[32] = {
+    0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,
+    0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFE,0xFF,0xFF,0xFC,0x30
+};
+static const uint8_t FE_ALL_FF[32] = {
+    0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,
+    0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF
+};
+static const uint8_t FE_ZERO[32] = { 0 };
+
 int main(void) {
     ama_error_t rc;
     uint8_t out_x[32], out_y[32];
@@ -138,6 +207,130 @@ int main(void) {
     TEST_ASSERT(rc == AMA_ERROR_INVALID_PARAM, "NULL privkey rejected");
     rc = ama_secp256k1_pubkey_from_privkey(privkey, NULL);
     TEST_ASSERT(rc == AMA_ERROR_INVALID_PARAM, "NULL output buffer rejected");
+
+    /* Test 8: ECDSA sign -> verify round-trip (RFC 6979 deterministic). */
+    {
+        uint8_t qx[32], qy[32], pub64[64];
+        uint8_t msg[32];
+        uint8_t sig[AMA_SECP256K1_ECDSA_MAX_SIG_LEN];
+        uint8_t sig2[AMA_SECP256K1_ECDSA_MAX_SIG_LEN];
+        size_t sig_len = 0, sig2_len = 0;
+        int i;
+
+        be32(privkey, 7);
+        rc = ama_secp256k1_point_mul(privkey, Gx, Gy, qx, qy);
+        TEST_ASSERT(rc == AMA_SUCCESS, "ecdsa: derive pubkey 7*G");
+        memcpy(pub64, qx, 32);
+        memcpy(pub64 + 32, qy, 32);
+        for (i = 0; i < 32; i++) msg[i] = (uint8_t)(0x10 + i);
+
+        rc = ama_secp256k1_ecdsa_sign(sig, &sig_len, msg, privkey);
+        TEST_ASSERT(rc == AMA_SUCCESS, "ecdsa: sign succeeds");
+        TEST_ASSERT(sig_len >= 8 && sig_len <= AMA_SECP256K1_ECDSA_MAX_SIG_LEN,
+                    "ecdsa: signature length within DER bounds");
+        rc = ama_secp256k1_ecdsa_verify(sig, sig_len, msg, pub64);
+        TEST_ASSERT(rc == AMA_SUCCESS, "ecdsa: verify accepts the valid signature");
+
+        rc = ama_secp256k1_ecdsa_sign(sig2, &sig2_len, msg, privkey);
+        TEST_ASSERT(rc == AMA_SUCCESS && sig2_len == sig_len &&
+                    memcmp(sig, sig2, sig_len) == 0,
+                    "ecdsa: RFC 6979 signing is deterministic (identical bytes)");
+
+        /* Test 9: a public-key coordinate >= p is REJECTED, not silently
+         * reduced.  Restore pub64 between probes so exactly one coordinate is
+         * out of field at a time.  (An out-of-field coordinate cannot be
+         * combined with a *valid* signature for the reduced point without an
+         * ECDLP/forgery, so this asserts the policy through the full-verify
+         * path; the canonical gate itself is isolated in Test 10.) */
+        {
+            uint8_t bad[64];
+
+            memcpy(bad, pub64, 64); memcpy(bad, FE_P, 32);
+            TEST_ASSERT(ama_secp256k1_ecdsa_verify(sig, sig_len, msg, bad) ==
+                        AMA_ERROR_VERIFY_FAILED, "ecdsa: Qx == p rejected");
+            memcpy(bad, pub64, 64); memcpy(bad, FE_P_PLUS_1, 32);
+            TEST_ASSERT(ama_secp256k1_ecdsa_verify(sig, sig_len, msg, bad) ==
+                        AMA_ERROR_VERIFY_FAILED, "ecdsa: Qx == p+1 rejected");
+            memcpy(bad, pub64, 64); memcpy(bad, FE_ALL_FF, 32);
+            TEST_ASSERT(ama_secp256k1_ecdsa_verify(sig, sig_len, msg, bad) ==
+                        AMA_ERROR_VERIFY_FAILED, "ecdsa: Qx == 2^256-1 rejected");
+            memcpy(bad, pub64, 64); memcpy(bad + 32, FE_P, 32);
+            TEST_ASSERT(ama_secp256k1_ecdsa_verify(sig, sig_len, msg, bad) ==
+                        AMA_ERROR_VERIFY_FAILED, "ecdsa: Qy == p rejected");
+            memcpy(bad, pub64, 64); memcpy(bad + 32, FE_ALL_FF, 32);
+            TEST_ASSERT(ama_secp256k1_ecdsa_verify(sig, sig_len, msg, bad) ==
+                        AMA_ERROR_VERIFY_FAILED, "ecdsa: Qy == 2^256-1 rejected");
+        }
+
+        /* Test 10: the [0, p) canonicality gate in isolation (INVARIANT-29).
+         * Distinguishes a canonical-gate rejection from curve/sig rejection,
+         * which the full-verify path in Test 9 cannot. */
+        TEST_ASSERT(ama_secp256k1_test_fe_bytes_canonical(qx) == 1,
+                    "canonical: real Qx (< p) is canonical");
+        TEST_ASSERT(ama_secp256k1_test_fe_bytes_canonical(qy) == 1,
+                    "canonical: real Qy (< p) is canonical");
+        TEST_ASSERT(ama_secp256k1_test_fe_bytes_canonical(FE_ZERO) == 1,
+                    "canonical: 0 is canonical");
+        TEST_ASSERT(ama_secp256k1_test_fe_bytes_canonical(FE_P_MINUS_1) == 1,
+                    "canonical: p-1 is canonical (upper boundary)");
+        TEST_ASSERT(ama_secp256k1_test_fe_bytes_canonical(FE_P) == 0,
+                    "canonical: p is NOT canonical (lower rejection boundary)");
+        TEST_ASSERT(ama_secp256k1_test_fe_bytes_canonical(FE_P_PLUS_1) == 0,
+                    "canonical: p+1 is NOT canonical");
+        TEST_ASSERT(ama_secp256k1_test_fe_bytes_canonical(FE_ALL_FF) == 0,
+                    "canonical: 2^256-1 is NOT canonical");
+    }
+
+    /* Test 11: Shamir's-trick joint multiply (the ECDSA verify optimization)
+     * must equal the two-ladder reference for R = u1*G + u2*Q over the boundary
+     * lattice and thousands of random cases with a valid curve point Q. */
+    {
+        uint8_t qx[32], qy[32], u1[32], u2[32], kbytes[32];
+        int c, ok, trials;
+
+        /* A fixed valid Q = 5*G for the boundary set. */
+        be32(kbytes, 5);
+        rc = ama_secp256k1_point_mul(kbytes, Gx, Gy, qx, qy);
+        TEST_ASSERT(rc == AMA_SUCCESS, "joint: derive boundary Q = 5*G");
+
+        /* Boundary (u1, u2) pairs: zeros, ones, all-FF, and mixes exercise the
+         * infinity accumulator, single-term paths, and both-term adds. */
+        {
+            static const uint8_t Z[32] = { 0 };
+            static const uint8_t ONE[32] = {
+                0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1
+            };
+            static const uint8_t FF[32] = {
+                0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,
+                0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF
+            };
+            const uint8_t *B[3]; int a, b;
+            B[0] = Z; B[1] = ONE; B[2] = FF;
+            ok = 1;
+            for (a = 0; a < 3 && ok; a++)
+                for (b = 0; b < 3 && ok; b++)
+                    ok = _joint_agrees(B[a], B[b], qx, qy);
+            TEST_ASSERT(ok, "joint: Shamir == ladder on the boundary lattice");
+        }
+
+        /* Random differential: fresh (u1, u2) and a fresh valid Q = k*G each
+         * iteration. Any divergence in the optimized joint multiply is caught. */
+        trials = 2000;
+        ok = 1;
+        for (c = 0; c < trials && ok; c++) {
+            _xs_fill(kbytes, 32);
+            /* point_mul rejects a zero scalar; a random 32-byte value is
+             * essentially never zero, and the rare reject is simply skipped. */
+            if (ama_secp256k1_point_mul(kbytes, Gx, Gy, qx, qy) != AMA_SUCCESS)
+                continue;
+            _xs_fill(u1, 32);
+            _xs_fill(u2, 32);
+            ok = _joint_agrees(u1, u2, qx, qy);
+            if (!ok)
+                fprintf(stderr, "  joint mismatch at random trial %d\n", c);
+        }
+        TEST_ASSERT(ok, "joint: Shamir == ladder over 2000 random (u1,u2,Q)");
+    }
 
     printf("\n===========================================\n");
     printf("All secp256k1 tests passed ✓\n");

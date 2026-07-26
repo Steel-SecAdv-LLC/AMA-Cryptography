@@ -1,7 +1,6 @@
+/* Copyright (C) 2025-2026 Steel Security Advisors LLC */
+/* SPDX-License-Identifier: Apache-2.0 */
 /**
- * Copyright 2025-2026 Steel Security Advisors LLC
- * Licensed under the Apache License, Version 2.0
- *
  * @file test_aes_gcm_neon_equiv.c
  * @brief Byte-for-byte equivalence test for the NEON AES-256-GCM
  *        kernels (ama_aes256_gcm_{encrypt,decrypt}_neon) against the

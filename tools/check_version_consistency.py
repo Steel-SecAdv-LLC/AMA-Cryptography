@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
-# Copyright 2025-2026 Steel Security Advisors LLC
-# Licensed under the Apache License, Version 2.0
-
+# Copyright (C) 2025-2026 Steel Security Advisors LLC
+# SPDX-License-Identifier: Apache-2.0
 """
 Verify that the AMA Cryptography version string matches in every file that
 declares it.  Run as part of CI to block releases where one version was
@@ -61,6 +60,30 @@ _C_VERSION_IDENT_RE = re.compile(
     r"\b[A-Za-z_][A-Za-z0-9_]*[Vv][Ee][Rr][Ss][Ii][Oo][Nn]\w*\b"
     r"|\b[Vv][Ee][Rr][Ss][Ii][Oo][Nn]\b"
 )
+
+
+# Document-header shapes that declare the package version.  Group 1 is the
+# version; group 2 is whatever trailed it on the same line, which is a
+# finding in its own right — see the commentary at the use site in main().
+# Module-level so tests/test_version_consistency.py can exercise them
+# directly rather than only through a whole-tree run.
+DOC_HEADER_PATTERNS = [
+    re.compile(r"^\|\s*(?:Document )?Version\s*\|\s*(\d+\.\d+\.\d+)([^|]*)\|$", re.M),
+    re.compile(r"^\*\*(?:Document )?Version:\*\*\s*(\d+\.\d+\.\d+)(.*)$", re.M),
+    re.compile(r"^\*\*Project Release:\*\*\s*(\d+\.\d+\.\d+)(.*)$", re.M),
+]
+
+# Second, in-file version declarations that live ALONGSIDE the authoritative
+# ``__version__`` / ``AMA_CRYPTOGRAPHY_VERSION_STRING`` in the very same file
+# and must agree with it.  These were the blind spot: the package's own module
+# docstring carried ``Version: 3.1.0`` while ``__version__`` was ``3.4.0`` a
+# few lines below, and the public header's Doxygen ``@version`` tag sat on
+# ``3.1.0`` while its macro was ``3.4.0`` — each canonical file contradicting
+# itself while this script reported agreement, because it only ever read the
+# one authoritative declaration per file.  Module-level (like
+# ``DOC_HEADER_PATTERNS``) so tests can exercise the extraction directly.
+PACKAGE_DOCSTRING_VERSION_RE = r"^Version:\s*(\d+\.\d+\.\d+)"
+HEADER_DOXYGEN_VERSION_RE = r"^\s*\*\s*@version\s+(\d+\.\d+\.\d+)"
 
 
 def scan_c_sources_for_version_literals(root: Path) -> list[str]:
@@ -145,6 +168,54 @@ def scan_c_sources_for_version_literals(root: Path) -> list[str]:
     return hits
 
 
+_PY_DUNDER_RE = re.compile(r'^__version__\s*=\s*["\'](\d+\.\d+\.\d+)["\']', re.M)
+_PY_DOCSTRING_RE = re.compile(r"^Version:\s*(\d+\.\d+\.\d+)\s*$", re.M)
+_C_ATVERSION_RE = re.compile(r"@version\s+(\d+\.\d+\.\d+)")
+
+
+def scan_declared_versions(repo: Path) -> list[tuple[str, int, str, str]]:
+    """Find EVERY version declaration across the shipped Python and C trees.
+
+    Covers ``__version__ = "X"`` and module-docstring ``Version: X`` under
+    ``ama_cryptography/`` and ``tools/``, plus Doxygen ``@version X`` under
+    ``src/c/`` and ``include/``.  Each must equal the canonical package
+    version.  This is what stops a *per-module* stamp from silently drifting:
+    thirteen files sat on ``3.0.0`` across four releases — a stamp the earlier,
+    file-by-file checks never looked at — while this script reported "All
+    declarations agree".  Returns ``(relpath, lineno, label, value)`` tuples;
+    ``main()`` flags any whose value is not canonical.
+
+    Vendored third-party trees are skipped: their version tags describe the
+    upstream project, not this library (the same exemption
+    ``tools/check_headers.py`` applies).
+    """
+    found: list[tuple[str, int, str, str]] = []
+
+    def _skip(path: Path) -> bool:
+        return any(p in {"__pycache__", "build", "vendor"} for p in path.parts)
+
+    for root in (repo / "ama_cryptography", repo / "tools"):
+        for path in sorted(root.rglob("*.py")):
+            if _skip(path):
+                continue
+            text = path.read_text(encoding="utf-8")
+            rel = str(path.relative_to(repo))
+            for pat, label in ((_PY_DUNDER_RE, "__version__"), (_PY_DOCSTRING_RE, "Version:")):
+                for m in pat.finditer(text):
+                    found.append((rel, text[: m.start()].count("\n") + 1, label, m.group(1)))
+
+    for root in (repo / "src" / "c", repo / "include"):
+        for path in sorted(root.rglob("*")):
+            if path.suffix not in (".c", ".h") or not path.is_file() or _skip(path):
+                continue
+            text = path.read_text(encoding="utf-8")
+            rel = str(path.relative_to(repo))
+            for m in _C_ATVERSION_RE.finditer(text):
+                found.append((rel, text[: m.start()].count("\n") + 1, "@version", m.group(1)))
+
+    return found
+
+
 def extract(file: str, pattern: str) -> str | None:
     """Return the single capture group from `pattern`, or None if not found.
 
@@ -174,6 +245,27 @@ def main() -> int:
 
     # (file, regex-with-one-capture-group, description)
     checks = [
+        (
+            # The package's own module docstring carries a `Version:` field in
+            # its Organization/Author/Version block, a SECOND declaration from
+            # the authoritative `__version__` a few lines below.  Nothing
+            # compared them, so the docstring sat on 3.1.0 while `__version__`
+            # was 3.4.0 — the canonical package file contradicting itself while
+            # this script reported "All declarations agree".
+            "ama_cryptography/__init__.py",
+            PACKAGE_DOCSTRING_VERSION_RE,
+            "ama_cryptography/__init__.py docstring Version field",
+        ),
+        (
+            # The main public C header opens with a Doxygen file block whose
+            # `@version` tag is a second version declaration from the
+            # AMA_CRYPTOGRAPHY_VERSION_STRING macro checked below.  It sat on
+            # 3.1.0 while the macro was 3.4.0 — the header disagreeing with
+            # itself, invisible to a scan that only read the macro.
+            "include/ama_cryptography.h",
+            HEADER_DOXYGEN_VERSION_RE,
+            "include/ama_cryptography.h @version tag",
+        ),
         ("setup.py", r'^VERSION\s*=\s*"([^"]+)"', "setup.py VERSION literal"),
         ("pyproject.toml", r'^version\s*=\s*"([^"]+)"', "pyproject.toml [project].version"),
         (
@@ -230,6 +322,16 @@ def main() -> int:
             r'^\s*LABEL\s+org\.opencontainers\.image\.version\s*=\s*"([^"]+)"',
             "docker/Dockerfile.c-api LABEL org.opencontainers.image.version",
         ),
+        (
+            # Release badge in the wiki footer, rendered on EVERY wiki page.
+            # It is prose rather than a header field, so the *.md header
+            # scan below cannot see it — and it sat on v3.0.0 across three
+            # releases, making the most-viewed surface in the project the
+            # most out of date. Named explicitly for that reason.
+            "wiki/_Footer.md",
+            r"Not externally audited\s*·\s*v(\d+\.\d+\.\d+)",
+            "wiki/_Footer.md release badge",
+        ),
     ]
 
     failures: list[str] = []
@@ -258,10 +360,17 @@ def main() -> int:
     # Historical rows (revision-history tables, CHANGELOG entries) are not
     # matched because they are not header fields — the patterns are anchored
     # to the document-header shapes only.
-    doc_header_pats = [
-        re.compile(r"^\|\s*(?:Document )?Version\s*\|\s*(\d+\.\d+\.\d+)\s*\|$", re.M),
-        re.compile(r"^\*\*(?:Document )?Version:\*\*\s*(\d+\.\d+\.\d+)\s*$", re.M),
-    ]
+    #
+    # The trailing group is captured rather than anchored away.  The
+    # previous ``\s*$`` anchor meant a header carrying a *qualifier* —
+    # ``**Version:** 3.1.0 + Unreleased``, which is what
+    # docs/DESIGN_NOTES.md and docs/METRICS_REPORT.md both said — matched
+    # no pattern at all and was therefore reported as neither stale nor
+    # checked.  Two documents sat three releases behind while this script
+    # printed "All declarations agree".  A qualifier is now a finding in
+    # its own right: a version header states one version, not a version
+    # and a mood.
+    doc_header_pats = DOC_HEADER_PATTERNS
     doc_checked = 0
     doc_stale: list[str] = []
     for md in sorted(REPO.rglob("*.md")):
@@ -286,10 +395,15 @@ def main() -> int:
         for pat in doc_header_pats:
             for m in pat.finditer(text):
                 doc_checked += 1
+                rel = md.relative_to(REPO)
                 if m.group(1) != canonical:
-                    rel = md.relative_to(REPO)
                     doc_stale.append(
                         f"{rel}: header version {m.group(1)!r} != canonical {canonical!r}"
+                    )
+                elif m.group(2).strip():
+                    doc_stale.append(
+                        f"{rel}: header version carries the trailing qualifier "
+                        f"{m.group(2).strip()!r} — state one version, not a version and a mood"
                     )
     if doc_stale:
         failures.append(f"  - documentation version headers ({len(doc_stale)} stale):")
@@ -328,6 +442,23 @@ def main() -> int:
             failures.append(f"      {hit}")
     else:
         print("OK    src/c/ embedded-version-literal scan: 0 hits")
+
+    # Every declared version stamp across the Python and C trees — the whole-
+    # tree sweep that the file-by-file checks above cannot be, so a per-module
+    # `__version__` / docstring `Version:` / Doxygen `@version` cannot drift
+    # unnoticed the way thirteen of them did (all stuck on 3.0.0).
+    stamps = scan_declared_versions(REPO)
+    stamp_offenders = [
+        f"{rel}:{ln}: {label} = {val!r} != canonical {canonical!r}"
+        for rel, ln, label, val in stamps
+        if val != canonical
+    ]
+    if stamp_offenders:
+        failures.append(f"  - declared version stamps out of sync ({len(stamp_offenders)}):")
+        for row in stamp_offenders:
+            failures.append(f"      {row}")
+    else:
+        print(f"OK    declared version stamps ({len(stamps)} checked)          = {canonical}")
 
     if failures:
         print(

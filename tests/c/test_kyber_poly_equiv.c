@@ -1,7 +1,6 @@
+/* Copyright (C) 2025-2026 Steel Security Advisors LLC */
+/* SPDX-License-Identifier: Apache-2.0 */
 /**
- * Copyright 2025-2026 Steel Security Advisors LLC
- * Licensed under the Apache License, Version 2.0
- *
  * @file test_kyber_poly_equiv.c
  * @brief Cross-implementation equivalence test for the ML-KEM-1024
  *        `kyber_poly_add` / `kyber_poly_sub` / `kyber_poly_reduce`

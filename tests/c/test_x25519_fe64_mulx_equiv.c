@@ -1,7 +1,6 @@
+/* Copyright (C) 2025-2026 Steel Security Advisors LLC */
+/* SPDX-License-Identifier: Apache-2.0 */
 /**
- * Copyright 2025-2026 Steel Security Advisors LLC
- * Licensed under the Apache License, Version 2.0
- *
  * @file tests/c/test_x25519_fe64_mulx_equiv.c
  * @brief MULX+ADX kernel vs pure-C fe64 schoolbook byte-equivalence
  * @date 2026-04-26

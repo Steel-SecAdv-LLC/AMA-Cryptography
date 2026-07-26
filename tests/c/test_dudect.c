@@ -1,10 +1,9 @@
+/* Copyright (C) 2025-2026 Steel Security Advisors LLC */
+/* SPDX-License-Identifier: Apache-2.0 */
 /* Enable POSIX APIs (alarm, signal) */
 #define _POSIX_C_SOURCE 200809L
 
 /**
- * Copyright 2025-2026 Steel Security Advisors LLC
- * Licensed under the Apache License, Version 2.0
- *
  * Empirical Constant-Time Verification using dudect
  * ==================================================
  *
@@ -779,6 +778,101 @@ static double test_secp256k1_scalarmult(int iterations) {
                 "  FAIL: secp256k1 scalar multiplication rc mismatches: %d "
                 "(both classes use valid scalars in [1, n-1]; AMA_SUCCESS "
                 "expected for both)\n",
+                rc_mismatches);
+        dudect_print_result(&ctx);
+        return DUDECT_FATAL_SENTINEL;
+    }
+
+    dudect_print_result(&ctx);
+    return dudect_get_t(&ctx);
+}
+
+/* -----------------------------------------------------------------------
+ * Test: secp256k1 ECDSA sign (RFC 6979) — signing time must not depend on
+ *       the private key or on the RFC 6979 nonce derived from it.
+ *
+ * Fixed-vs-random dudect (Reparaz, Balasch & Verbauwhede 2016, §3) — the
+ * canonical construction for a deterministic signer:
+ *   Class 0 (fixed):  one fixed private key + one fixed 32-byte digest, so
+ *                     RFC 6979 derives the SAME nonce every iteration.
+ *   Class 1 (random): a fresh random private key + fresh random digest each
+ *                     iteration, so the derived nonce is random too.
+ * A signer whose time depends on the secret scalar or the nonce — a leaky
+ * early-exit in the Fermat inversion `sc_inv`, a nonce-value-dependent
+ * HMAC-DRBG retry in `rfc6979_nonce`, a branch in the low-s `sc_negate`, or a
+ * non-constant-time `sc_mont_mul` / `sc_mul` / `sc_add` — separates the two
+ * timing distributions and Welch's t crosses DUDECT_T_THRESHOLD (4.5). This
+ * is the empirical measurement that closes the "read, didn't measure" gap for
+ * the ECDSA-specific scalar arithmetic mod n.
+ *
+ * Registered info-only for the same shared-runner-noise reason as the
+ * ML-DSA-65 / SLH-DSA sign lanes and the secp256k1 scalar-mult lane above:
+ * one signature runs a full 256-step base-point ladder plus a 256-bit Fermat
+ * inversion (hundreds of µs), so a single CI reading can be dominated by
+ * scheduler noise. The t-value is still computed and printed on every run,
+ * and an rc mismatch still hard-fails through the fatal sentinel regardless
+ * of info-only. Reproduce a clean local reading with
+ *   taskset -c 0 nice -n -20 ./test_dudect --measurements 200000
+ * ----------------------------------------------------------------------- */
+static double test_secp256k1_ecdsa_sign(int iterations) {
+    dudect_ctx_t ctx;
+    dudect_ctx_init(&ctx, "secp256k1 ECDSA sign (RFC 6979)");
+
+    /* Fixed class: a valid private key in [1, n-1] and a fixed digest. */
+    static const uint8_t d_fixed[32] = {
+        0x01,0x23,0x45,0x67,0x89,0xAB,0xCD,0xEF,
+        0xFE,0xDC,0xBA,0x98,0x76,0x54,0x32,0x10,
+        0x0F,0x1E,0x2D,0x3C,0x4B,0x5A,0x69,0x78,
+        0x87,0x96,0xA5,0xB4,0xC3,0xD2,0xE1,0xF0
+    };
+    static const uint8_t msg_fixed[32] = {
+        0xAA,0xBB,0xCC,0xDD,0xEE,0xFF,0x00,0x11,
+        0x22,0x33,0x44,0x55,0x66,0x77,0x88,0x99,
+        0x11,0x22,0x33,0x44,0x55,0x66,0x77,0x88,
+        0x99,0xAA,0xBB,0xCC,0xDD,0xEE,0xFF,0x00
+    };
+
+    uint8_t d_rand[32], msg_rand[32];
+    uint8_t sig[AMA_SECP256K1_ECDSA_MAX_SIG_LEN];
+    size_t sig_len = 0;
+
+    /* Both classes must succeed — a rejected sign would stop witnessing the
+     * scalar arithmetic under test while still producing a clean t-value. */
+    int rc_mismatches = 0;
+
+    for (int i = 0; i < iterations && !g_timeout_hit; i++) {
+        int class_idx = rand() & 1;
+        const uint8_t *d, *m;
+
+        if (class_idx) {
+            /* Random valid key in [1, n-1]: clearing the top bit keeps it
+             * below n (< 2^255 < n) and an odd last byte keeps it non-zero.
+             * Generated OUTSIDE the timed region so only signing is measured. */
+            random_bytes(d_rand, sizeof(d_rand));
+            d_rand[0]  &= 0x7F;
+            d_rand[31] |= 0x01;
+            random_bytes(msg_rand, sizeof(msg_rand));
+            d = d_rand;
+            m = msg_rand;
+        } else {
+            d = d_fixed;
+            m = msg_fixed;
+        }
+
+        uint64_t start = dudect_get_time_ns();
+        volatile ama_error_t rc =
+            ama_secp256k1_ecdsa_sign(sig, &sig_len, m, d);
+        uint64_t end = dudect_get_time_ns();
+
+        if (rc != AMA_SUCCESS) rc_mismatches++;
+
+        dudect_record(&ctx, class_idx, (double)(end - start));
+    }
+
+    if (rc_mismatches > 0) {
+        fprintf(stderr,
+                "  FAIL: secp256k1 ECDSA sign rc mismatches: %d (both classes "
+                "use valid keys in [1, n-1]; AMA_SUCCESS expected for both)\n",
                 rc_mismatches);
         dudect_print_result(&ctx);
         return DUDECT_FATAL_SENTINEL;
@@ -1581,6 +1675,16 @@ static int run_all_tests(int iterations, test_result_t *results, int *num_result
     DUDECT_REGISTER_LANE(results, idx,
         "secp256k1 scalar multiplication",
         test_secp256k1_scalarmult(iterations), 1);
+    /* ECDSA signing over the same curve.  Exercises the ECDSA-specific
+     * scalar arithmetic mod n (sc_mont_mul / sc_inv / sc_mul / sc_add /
+     * sc_negate) and the RFC 6979 HMAC-DRBG nonce loop that the pubkey
+     * ladder lane does not touch.  Info-only for the same heavy-primitive
+     * CI-noise reason (full ladder + Fermat inversion per signature); the
+     * t-value is printed every run and rc mismatch hard-fails via the fatal
+     * sentinel. */
+    DUDECT_REGISTER_LANE(results, idx,
+        "secp256k1 ECDSA sign (RFC 6979)",
+        test_secp256k1_ecdsa_sign(iterations), 1);
 
     printf("\n--- Post-Quantum Cryptography ---\n");
     DUDECT_REGISTER_LANE(results, idx,

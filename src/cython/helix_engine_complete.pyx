@@ -1,3 +1,5 @@
+# Copyright (C) 2025-2026 Steel Security Advisors LLC
+# SPDX-License-Identifier: Apache-2.0
 # cython: language_level=3
 # cython: boundscheck=False
 # cython: wraparound=False
@@ -7,9 +9,6 @@
 # cython: optimize.use_switch=True
 
 """
-Copyright 2025-2026 Steel Security Advisors LLC
-Licensed under the Apache License, Version 2.0
-
 AMA Cryptography Complete Double-Helix Engine (Cython)
 =====================================================
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# Copyright 2025-2026 Steel Security Advisors LLC
-# Licensed under the Apache License, Version 2.0
+# Copyright (C) 2025-2026 Steel Security Advisors LLC
+# SPDX-License-Identifier: Apache-2.0
 """
 AMA Cryptography Exception Classes
 ==================================
@@ -11,7 +11,7 @@ All modules should import exceptions from this module to ensure consistency.
 Organization: Steel Security Advisors LLC
 Author/Inventor: Andrew E. A.
 Date: 2026-04-17
-Version: 3.0.0
+Version: 3.4.0
 """
 
 

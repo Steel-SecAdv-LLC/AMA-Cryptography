@@ -1,18 +1,6 @@
 #!/usr/bin/env python3
-# Copyright 2025-2026 Steel Security Advisors LLC
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
+# Copyright (C) 2025-2026 Steel Security Advisors LLC
+# SPDX-License-Identifier: Apache-2.0
 """
 AMA Cryptography: 3R Runtime Anomaly Monitoring System
 ==========================================================
@@ -39,7 +27,7 @@ Organization: Steel Security Advisors LLC
 Author/Inventor: Andrew E. A.
 Contact: steel.sa.llc@gmail.com
 Date: 2026-04-17
-Version: 3.0.0
+Version: 3.4.0
 Project: AMA Cryptography 3R Runtime Monitoring
 
 AI Co-Architects:
@@ -228,7 +216,7 @@ class IncrementalStats:
         self.M2 = 0.0
 
 
-__version__ = "3.0.0"
+__version__ = "3.4.0"
 __all__ = [
     "IncrementalStats",
     "EWMAStats",

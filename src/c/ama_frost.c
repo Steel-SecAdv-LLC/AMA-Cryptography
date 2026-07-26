@@ -1,10 +1,9 @@
+/* Copyright (C) 2025-2026 Steel Security Advisors LLC */
+/* SPDX-License-Identifier: Apache-2.0 */
 /**
- * Copyright 2025-2026 Steel Security Advisors LLC
- * Licensed under the Apache License, Version 2.0
- *
  * @file ama_frost.c
  * @brief FROST Threshold Ed25519 Signatures — RFC 9591
- * @version 3.0.0
+ * @version 3.4.0
  * @date 2026-04-17
  *
  * Production-ready implementation of FROST (Flexible Round-Optimized
