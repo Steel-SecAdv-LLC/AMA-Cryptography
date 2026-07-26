@@ -504,26 +504,77 @@ class TestLateralProbeSimulation:
         pivot_anomalies = self._feed(monitor, "kem_probe", [9.0] * 8)
         assert pivot_anomalies, "sudden external-key activity produced no anomaly"
 
+    # -- surrogate-data machinery -----------------------------------------
+    #
+    # A resonance ratio measured from wall-clock timings is the maximum of N
+    # noisy periodogram bins, so its VALUE depends on how noisy the runner is,
+    # not on the code under test.  Comparing it against a fixed bar therefore
+    # tests the machine: the same assertion that read ~4 on Linux read 13.3 on
+    # a macOS runner and failed.
+    #
+    # The property actually being claimed is "these timings carry no periodic
+    # TEMPORAL structure".  The standard way to test that on noisy real data is
+    # a surrogate-data test: shuffle the series, which destroys temporal
+    # structure while preserving the exact value distribution (and therefore the
+    # noise level), and compare.  A series with no structure scores like its own
+    # shuffles; a deliberate probe towers over them.  Both sides of the
+    # comparison come from the same machine and the same samples, so runner
+    # noise cancels instead of deciding the outcome.
+    #
+    # Measured: HD derivation 4.04 vs a 3.90 ceiling (1.04x — indistinguishable
+    # from its own shuffle); period-2 probe 63.00 vs 6.03 (10.45x).
+
     @staticmethod
-    def _probe_resonance_ratio(window: int, samples: int) -> float:
-        """Reference ratio for a deliberate period-2 reconnaissance loop."""
+    def _ratio_for(series: list[float], window: int = 64) -> float:
+        """Resonance ratio of `series` on a fresh monitor."""
         monitor = ResonanceTimingMonitor(window_size=window)
-        for i in range(samples):
-            monitor.record_timing("probe", 1.0 if i % 2 == 0 else 2.0)
-        return float(monitor.detect_resonance("probe")["resonance_ratio"])
+        for value in series:
+            monitor.record_timing("series", value)
+        return float(monitor.detect_resonance("series")["resonance_ratio"])
+
+    @staticmethod
+    def _shuffled(series: list[float], run: int) -> list[float]:
+        """Deterministic Fisher-Yates shuffle (SHAKE256-driven).
+
+        Destroys temporal ordering, preserves the multiset of values — so the
+        surrogate carries the same noise as the original with none of its
+        structure.
+        """
+        out = list(series)
+        n = len(out)
+        raw = hashlib.shake_256(b"resonance-surrogate-%d" % run).digest(4 * n)
+        for i in range(n - 1, 0, -1):
+            j = int.from_bytes(raw[4 * i : 4 * i + 4], "big") % (i + 1)
+            out[i], out[j] = out[j], out[i]
+        return out
+
+    @classmethod
+    def _surrogate_ceiling(cls, series: list[float], runs: int = 9) -> float:
+        """Highest resonance ratio reached by any shuffle of `series`.
+
+        The same-machine, same-data noise floor for "no temporal structure".
+        """
+        return max(cls._ratio_for(cls._shuffled(series, run)) for run in range(runs))
+
+    #: A series must clear its own surrogate ceiling by this factor before its
+    #: periodicity counts as real structure rather than noise.  Measured
+    #: headroom on both sides is large: legitimate work sits at ~1.0x, a
+    #: deliberate period-2 probe at ~10x.
+    STRUCTURE_FACTOR = 2.0
 
     def test_legitimate_hd_derivation_does_not_resonate(self) -> None:
-        """Real BIP32 derivation over a real tree: no probe-like line.
+        """Real BIP32 derivation over a real tree carries no probe-like line.
 
-        Asserted as a SEPARATION, not against the monitor's own 3.0 flag.
-        Wall-clock timings of a sub-millisecond operation on a shared runner
-        carry scheduler noise, and the maximum of N noisy periodogram bins has
-        expectation ~ln(N) — so a bare `has_resonance is False` on measured
-        data is a coin flip and would be a flaky assertion dressed up as a
-        security property.  The property that is actually true and actually
-        useful is that a deliberate probe's line stands an order of magnitude
-        above anything legitimate derivation produces; measured separation is
-        ~14x, and 5x is asserted.
+        Judged against the derivation's OWN surrogates rather than a fixed bar
+        (see the surrogate-data note above).  A fixed bar measures the runner:
+        the raw ratio is ~4 on Linux and was 13.3 on a macOS runner, where the
+        old `hd_ratio * 5 < probe_ratio` form failed on scheduler noise alone
+        while the underlying claim — no periodic structure — was still true.
+
+        The probe is carried through the same comparison as a POSITIVE CONTROL,
+        so the test also proves it can still see structure when structure is
+        there.  Without that, a resonance engine that returned a constant would
+        pass the negative case silently.
         """
         from ama_cryptography.key_management import HDKeyDerivation
 
@@ -531,23 +582,39 @@ class TestLateralProbeSimulation:
         monitor = ResonanceTimingMonitor(window_size=64)
 
         critical: list[object] = []
+        timings: list[float] = []
         for account in range(4):
             for index in range(24):
                 start = time.perf_counter_ns()
                 hd.derive_key(purpose=44, account=account, index=index)
                 elapsed_ms = (time.perf_counter_ns() - start) / 1e6
+                timings.append(elapsed_ms)
                 anomaly = monitor.record_timing("hd_derive", elapsed_ms)
                 if anomaly is not None and anomaly.severity == "critical":
                     critical.append(anomaly)
 
         hd_ratio = float(monitor.detect_resonance("hd_derive")["resonance_ratio"])
-        probe_ratio = self._probe_resonance_ratio(window=64, samples=96)
+        hd_ceiling = self._surrogate_ceiling(timings)
 
-        assert probe_ratio > 20.0, "reconnaissance probe reference is too weak"
-        assert hd_ratio * 5.0 < probe_ratio, (
-            f"legitimate HD derivation resonates comparably to a reconnaissance "
-            f"probe (hd={hd_ratio:.2f}, probe={probe_ratio:.2f})"
+        # Negative case: real derivation is indistinguishable from its own
+        # shuffles, i.e. whatever periodogram peak it shows is the value
+        # distribution's noise, not temporal structure.
+        assert hd_ratio < hd_ceiling * self.STRUCTURE_FACTOR, (
+            f"legitimate HD derivation shows periodic temporal structure: "
+            f"ratio={hd_ratio:.2f} against its own surrogate ceiling "
+            f"{hd_ceiling:.2f} (factor {hd_ratio / hd_ceiling:.2f}x)"
         )
+
+        # Positive control: a deliberate period-2 probe must tower over its own
+        # surrogates under the identical comparison.
+        probe = [1.0 if i % 2 == 0 else 2.0 for i in range(len(timings))]
+        probe_ratio = self._ratio_for(probe)
+        probe_ceiling = self._surrogate_ceiling(probe)
+        assert probe_ratio > probe_ceiling * self.STRUCTURE_FACTOR, (
+            f"resonance detection lost its teeth: a period-2 probe scored "
+            f"{probe_ratio:.2f} against a surrogate ceiling of {probe_ceiling:.2f}"
+        )
+
         assert critical == [], f"HD derivation produced critical anomalies: {critical}"
 
     def test_scheduled_key_rotation_does_not_resonate(self) -> None:
@@ -559,17 +626,22 @@ class TestLateralProbeSimulation:
         manager = KeyRotationManager(rotation_period=timedelta(days=1))
         monitor = ResonanceTimingMonitor(window_size=64)
 
+        timings: list[float] = []
         for i in range(96):
             start = time.perf_counter_ns()
             manager.register_key(f"rotating-key-{i}", "signing")
             elapsed_ms = (time.perf_counter_ns() - start) / 1e6
+            timings.append(elapsed_ms)
             monitor.record_timing("key_register", elapsed_ms)
 
+        # Same surrogate comparison as the HD test — a fixed bar here would be
+        # measuring the runner's scheduler, not the rotation workload.
         rotation_ratio = float(monitor.detect_resonance("key_register")["resonance_ratio"])
-        probe_ratio = self._probe_resonance_ratio(window=64, samples=96)
-        assert rotation_ratio * 5.0 < probe_ratio, (
-            f"scheduled key rotation resonates comparably to a reconnaissance "
-            f"probe (rotation={rotation_ratio:.2f}, probe={probe_ratio:.2f})"
+        rotation_ceiling = self._surrogate_ceiling(timings)
+        assert rotation_ratio < rotation_ceiling * self.STRUCTURE_FACTOR, (
+            f"scheduled key rotation shows periodic temporal structure: "
+            f"ratio={rotation_ratio:.2f} against its own surrogate ceiling "
+            f"{rotation_ceiling:.2f} (factor {rotation_ratio / rotation_ceiling:.2f}x)"
         )
 
     def test_volume_detector_ignores_hd_derivation_fan_out(self) -> None:

@@ -162,6 +162,36 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ### Fixed
 
+- **Two latent RST defects in `monitoring.py` docstrings that failed the
+  `-W` Sphinx build.** `EWMAStats.get_mad` and `EWMAStats.is_anomaly_mad`
+  wrote absolute-value bars as bare `|x - median|`. To docutils that is a
+  *substitution reference*, so each raised `ERROR: Undefined substitution
+  referenced` and the docs job (which treats warnings as errors) failed. The
+  defects were pre-existing and latent — `monitoring.py` had never been in the
+  Sphinx toctree — and adding `docs/api/monitoring.rst` exposed them. Both are
+  now inline literals, and the `-W` build succeeds with zero content problems.
+- **Two resonance tests were measuring the runner, not the workload.**
+  `test_legitimate_hd_derivation_does_not_resonate` and
+  `test_scheduled_key_rotation_does_not_resonate` compared a resonance ratio
+  computed from **wall-clock timings** against a fixed bar
+  (`ratio * 5 < probe_ratio`). That ratio is the maximum of N noisy
+  periodogram bins, so its value tracks scheduler noise: the same assertion
+  read ~4 on Linux and 13.3 on a macOS runner, where it failed — while the
+  claim it encodes ("legitimate work carries no periodic structure") was still
+  true.
+
+  Both now use a **surrogate-data test**: the measured series is compared
+  against deterministic shuffles of *itself*, which destroy temporal ordering
+  while preserving the exact value distribution, and therefore the noise. A
+  series with no structure scores like its own shuffles; a deliberate probe
+  towers over them. Both sides come from the same machine and the same
+  samples, so runner noise cancels instead of deciding the outcome. Measured:
+  HD derivation 4.04 against a 3.90 surrogate ceiling (1.04x — indistinguishable
+  from its own shuffle) versus a period-2 probe at 63.00 against 6.03 (10.45x).
+  The probe is now also carried through the identical comparison as a
+  **positive control**, so the test proves it can still see structure when
+  structure is present — without it, a resonance engine that returned a
+  constant would pass the negative case silently.
 - **All four CodeQL (GitHub Advanced Security) alerts raised by this branch,
   resolved at source — none dismissed or suppressed**, per the standing policy
   in `.github/codeql/codeql-config.yml`:

@@ -612,7 +612,11 @@ class EWMAStats:
         Calculate Median Absolute Deviation (MAD) from recent values.
 
         MAD is a robust measure of variability that is resistant to outliers.
-        It's defined as: MAD = median(|x_i - median(x)|)
+        It's defined as: ``MAD = median(|x_i - median(x)|)``
+
+        (Written as an inline literal: bare ``|...|`` is an RST substitution
+        reference to docutils, not absolute-value bars, and Sphinx fails the
+        docs build on the undefined substitution.)
 
         Returns:
             MAD value, or 0.0 if insufficient data
@@ -630,7 +634,7 @@ class EWMAStats:
         """
         Check if value is anomaly using MAD-based detection.
 
-        Uses modified Z-score: |x - median| / (1.4826 * MAD) > threshold
+        Uses modified Z-score: ``|x - median| / (1.4826 * MAD) > threshold``
 
         The constant 1.4826 makes MAD consistent with standard deviation
         for normally distributed data.
