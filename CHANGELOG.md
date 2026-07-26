@@ -76,12 +76,23 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   `tests/test_agentic_abuse_detectors.py` re-runs that sweep so the number
   stays honest as the corpus grows. Advisory only — it never blocks a
   signature.
-- **Optional monitor hooks.** `AmaCryptographyMonitor.record_operation_event()`
-  and `.inspect_signed_payload()`, enabled by
-  `create_monitor(detect_volume_spikes=..., detect_note_artifacts=...)`. Both
-  default to **off** and return `None` immediately when disabled, so no
-  existing call path pays for them and the security-report shape is unchanged
-  for existing consumers.
+- **Monitor hooks, on by default.** `AmaCryptographyMonitor.record_operation_event()`
+  and `.inspect_signed_payload()`. Both detectors are constructed by default,
+  matching `AmaCryptographyMonitor`'s existing stated posture that
+  production-ready anomaly detection ships out of the box — an operator should
+  not have to opt in to a protection. Measured cost: ~2.5 µs to construct both
+  detectors (marker tables are built once and shared across instances), ~1.3 µs
+  per `record_operation_event()`, ~6.7 µs to reject a 3309-byte ML-DSA
+  signature. Passing `detect_volume_spikes=False, detect_note_artifacts=False`
+  drops the detector objects and restores the previous security-report shape
+  exactly.
+
+  `create_crypto_package()` now records the volume signal at the three sites it
+  already instrumented for timing (primary signature, SPHINCS+ signature,
+  ML-KEM encapsulation), so the protection is live without any wiring. Nothing
+  was pushed into the providers; the hot primitives are untouched. The key
+  fingerprint is a slice of the **public** key — no hashing is added to a
+  signing path.
 - **Compiled 3R detector kernels.** `volume_spike_scores` and
   `token_family_counts` in `src/cython/math_engine.pyx` — an EWMA-Anscombe
   pass and a single-pass tokenising unigram+bigram scan with binary-searched
@@ -108,8 +119,34 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 - `ama_error_t` gained `AMA_ERROR_ETHICAL_BINDING = -9`. Appended, so no
   existing error code changed value.
-- `create_monitor()` and `AmaCryptographyMonitor.__init__()` gained two
-  keyword-only-in-practice flags, both defaulting to `False`.
+- `create_monitor()` and `AmaCryptographyMonitor.__init__()` gained
+  `detect_volume_spikes` and `detect_note_artifacts`, both defaulting to
+  `True`. `get_security_report()` consequently gains a `volume_baselines`
+  key by default; pass both flags as `False` for the previous shape.
+
+### Fixed
+
+- **`-DAMA_USE_NATIVE_PQC=OFF` no longer fails to build.** ON is and remains
+  the default, and it is the only configuration `setup.py` builds
+  (INVARIANT-7 forbids a cryptographic fallback), but OFF is a supported CMake
+  configuration for downstream packagers and had rotted: the **shared library
+  itself** failed to link on four undefined symbols, because
+  `src/c/dispatch/ama_dispatch.c` declared and called the Kyber/Dilithium
+  scalar NTT references (`ama_kyber_ntt_generic_ref` and friends) while the
+  translation units defining them sit in the `AMA_USE_NATIVE_PQC` source
+  group. The externs and the four autotune slots that use them are now gated
+  to match; the dispatch slots stay NULL-checked either way, so a PQC-less
+  build simply never benchmarks them.
+
+  Three executables that call PQC entry points directly — `example_kem`,
+  `example_sign_verify` and `benchmark_c_raw` — are gated on the same option
+  (the C test suite already was). With native PQC off the tree now builds
+  clean and 26/26 C tests pass, including `test_agent_binding`, which needs
+  no PQC symbol.
+
+  A new fail-closed `ci-build-test.yml` job builds and tests that
+  configuration on every PR, and asserts the CMake default is still `ON`, so
+  the cell cannot silently rot again.
 
 ---
 

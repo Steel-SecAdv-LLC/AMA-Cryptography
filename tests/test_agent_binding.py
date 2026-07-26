@@ -285,6 +285,48 @@ class TestSelfReplicationBinding:
         # differ before a single byte of the message is hashed.
         assert len(note) > 0
 
+    def test_context_binds_a_real_ml_dsa_signature_end_to_end(self) -> None:
+        """The signature context is not just a distinct string — it changes
+        the ML-DSA verdict.
+
+        This is the property the `ctx` argument exists for: a signature made
+        under one binding's context must not verify under another's.  Uses the
+        real native ML-DSA-65 sign/verify-with-context path, so it exercises
+        the full chain from binding to signature.
+        """
+        pytest.importorskip("ama_cryptography.pqc_backends")
+        from ama_cryptography.pqc_backends import (
+            DILITHIUM_AVAILABLE,
+            dilithium_sign_ctx,
+            dilithium_verify_ctx,
+            generate_dilithium_keypair,
+        )
+
+        if not DILITHIUM_AVAILABLE:
+            pytest.skip("native ML-DSA-65 backend not built")
+
+        note = b"Handover: persist the seed, reconnect via the staging relay."
+        kp = generate_dilithium_keypair()
+
+        agent_binding = ephemeral()
+        successor_binding = AgentBinding(
+            instance_id=INSTANCE_ID,
+            lifetime=AgentLifetime.PERSISTENT,
+            capabilities=AgentCapability.SELF_REPLICATE,
+            ethical_profile_hash=PROFILE,
+        )
+        successor_binding.authorize(AUTHORITY_KEY)
+
+        agent_ctx = agent_binding.signing_context()
+        successor_ctx = successor_binding.signing_context(AUTHORITY_KEY)
+
+        # A note the agent could actually sign (ephemeral context)...
+        sig = dilithium_sign_ctx(note, kp.secret_key, agent_ctx)
+        assert dilithium_verify_ctx(note, sig, kp.public_key, agent_ctx) is True
+        # ...does NOT verify as a successor-authorizing signature, because the
+        # successor verifies under a different, operator-gated context.
+        assert dilithium_verify_ctx(note, sig, kp.public_key, successor_ctx) is False
+
 
 class TestTamperResistance:
     """Post-hoc relabelling of a binding must not launder capabilities."""

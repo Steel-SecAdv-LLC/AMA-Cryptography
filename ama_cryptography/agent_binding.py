@@ -246,9 +246,12 @@ if ctypes.sizeof(_CAgentBinding) != 4 + 3 * 32:
 
 def _require_native() -> Any:
     if not AGENT_BINDING_AVAILABLE:
+        # The binding layer depends only on SHA3/HMAC/HKDF, so it is present in
+        # both the default (native PQC) and the PQC-off build — a missing
+        # symbol means the native library was not built at all.
         raise EthicalBindingError(
             "AGENT_BINDING_UNAVAILABLE: native agent-binding layer not built. "
-            "Build: cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
+            "Build: cmake -B build && cmake --build build"
         )
     return _lib
 

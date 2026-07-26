@@ -28,7 +28,7 @@ Two opt-in detectors extend the Resonance and Recursion components for agentic-a
 | VolumeSpikeDetector | Operation-burst detection | Anscombe-transformed statistical detection of KEM/signature bursts with ephemeral-key churn |
 | NoteArtifactDetector | Signed-payload structure | Surfaces payloads shaped like instructions for a later agent instance |
 
-Both default to **off**; see [Agentic Abuse Detectors](#agentic-abuse-detectors-opt-in).
+Both are **on by default**; see [Agentic Abuse Detectors](#agentic-abuse-detectors).
 
 **Design Philosophy**: The 3R Mechanism follows a strict observe-analyze-alert paradigm. It never automatically modifies cryptographic code, ensuring that all security-critical changes require human review and approval.
 
@@ -138,17 +138,45 @@ Both default to **off**; see [Agentic Abuse Detectors](#agentic-abuse-detectors-
 
 ---
 
-### Agentic Abuse Detectors (opt-in)
+### Agentic Abuse Detectors
 
 Added in response to the July 2026 autonomous-agent sandbox escape, in which an
 evaluation agent moved laterally, reached the open internet, and left signed
-notes intended for future versions of itself. Both detectors are **disabled by
-default** and return `None` immediately when off — no existing call path pays
-for them.
+notes intended for future versions of itself.
+
+Both detectors are **on by default**, matching this module's existing posture
+that production-ready anomaly detection ships out of the box. A deployment gets
+the protection with no opt-in step:
 
 ```python
-monitor = create_monitor(detect_volume_spikes=True, detect_note_artifacts=True)
+monitor = create_monitor()            # both detectors active
 ```
+
+Opting out drops the detector objects entirely and restores the
+pre-INVARIANT-30 security-report shape:
+
+```python
+monitor = create_monitor(detect_volume_spikes=False, detect_note_artifacts=False)
+```
+
+**Cost of "on by default"** (measured on this repository's CI-class hardware):
+
+| Item | Cost |
+|------|------|
+| Constructing both detectors | ~2.5 µs, once per monitor (marker tables are built once and shared) |
+| `record_operation_event()` | ~1.3 µs enabled, ~0.2 µs when disabled |
+| `inspect()` on a 3309-byte ML-DSA signature | ~6.7 µs (rejected by the printable-ratio gate before tokenising) |
+
+Against an ML-DSA-65 signature at ~200 µs these are sub-percent. The
+`benchmarks/benchmark_runner.py` suite stays within its 10% regression
+threshold on all 19 benchmarks with the detectors active.
+
+**Where they are wired**: `create_crypto_package()` records the volume signal
+at the three sites it already instrumented for timing (primary signature,
+SPHINCS+ signature, ML-KEM encapsulation). Nothing was pushed down into the
+providers, so the hot primitives are untouched and no new call path takes a
+lock. The key fingerprint passed there is a slice of the **public** key — no
+hashing is added to a signing path and no secret material reaches the monitor.
 
 #### VolumeSpikeDetector
 
@@ -337,16 +365,16 @@ monitor = AmaCryptographyMonitor(alert_retention=1000)
 - `ResonanceTimingMonitor`: Timing analysis
 - `RecursionPatternMonitor`: Pattern analysis  
 - `RefactoringAnalyzer`: Code complexity
-- `VolumeSpikeDetector`: Operation-burst detection (opt-in)
-- `NoteArtifactDetector`: Note-like signed-payload detection (opt-in)
+- `VolumeSpikeDetector`: Operation-burst detection (on by default)
+- `NoteArtifactDetector`: Note-like signed-payload detection (on by default)
 
 **Key Methods**:
 - `monitor_crypto_operation(operation, duration_ms)`
 - `record_package_signing(metadata)`
 - `get_security_report()`
 - `analyze_codebase(directory)`
-- `record_operation_event(operation, key_fingerprint=None)` (opt-in)
-- `inspect_signed_payload(payload, label=...)` (opt-in)
+- `record_operation_event(operation, key_fingerprint=None)`
+- `inspect_signed_payload(payload, label=...)`
 
 See inline documentation in `tools/monitoring/ama_cryptography_monitor.py` for complete API details.
 
@@ -401,7 +429,7 @@ controller.respond()  # Key rotation, algorithm switching based on level
 | 2.0.0 | 2026-03-08 | Adaptive posture integration, weighted scoring model, Phase 2 primitives support |
 | 2.1.0 | 2026-03-25 | Hand-written SIMD dispatch coverage, dashboard/chart overhaul |
 | 2.1.5 | 2026-04-17 | Documentation version alignment, comprehensive monitoring test coverage |
-| 2.2.0 | 2026-07-26 | Agentic-abuse detectors: VolumeSpikeDetector, NoteArtifactDetector, opt-in monitor hooks |
+| 2.2.0 | 2026-07-26 | Agentic-abuse detectors: VolumeSpikeDetector, NoteArtifactDetector, on by default |
 
 ---
 

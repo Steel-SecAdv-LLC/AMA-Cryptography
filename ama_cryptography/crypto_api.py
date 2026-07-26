@@ -2378,6 +2378,19 @@ def _acquire_timestamp(
         ) from e
 
 
+def _public_key_fingerprint(public_key: bytes) -> bytes:
+    """First 8 bytes of a public key, for volume-detector churn accounting.
+
+    Public keys are public, so no hashing is needed and none is done — this
+    must not add a digest to a signing path.  The detector only ever compares
+    fingerprints for equality within a one-second bucket, so an 8-byte prefix
+    of an already-uniform key is sufficient to tell "a fresh identity per
+    operation" from "a hot loop over one key".  Never called with secret key
+    material.
+    """
+    return bytes(public_key[:8])
+
+
 def create_crypto_package(
     content: bytes,
     config: Optional[CryptoPackageConfig] = None,
@@ -2522,6 +2535,15 @@ def create_crypto_package(
     primary_signature = primary_crypto.sign(content, primary_keypair.secret_key)
     _sign_ns = time.perf_counter_ns() - _t0
     _monitor.monitor_crypto_operation("sign", _sign_ns / 1_000_000)
+    # INVARIANT-30 companion signal.  Wired at the sites that are already
+    # instrumented rather than pushed down into the providers, so no new call
+    # path acquires a lock and the hot primitives stay untouched.  The
+    # fingerprint is a slice of the PUBLIC key — it lets the detector tell
+    # ephemeral-identity-per-artifact churn from a hot loop over one key.
+    _monitor.record_operation_event(
+        f"{config.signature_algorithm.name.lower()}_sign",
+        key_fingerprint=_public_key_fingerprint(primary_keypair.public_key),
+    )
     keypairs[config.signature_algorithm.name] = primary_keypair
 
     # Optional add-on: SPHINCS+ secondary signature
@@ -2540,6 +2562,10 @@ def create_crypto_package(
         )
         _sphincs_ns = time.perf_counter_ns() - _t0
         _monitor.monitor_crypto_operation("sphincs_sign", _sphincs_ns / 1_000_000)
+        _monitor.record_operation_event(
+            "sphincs_sign",
+            key_fingerprint=_public_key_fingerprint(sphincs_keypair.public_key),
+        )
         keypairs["SPHINCS_256F"] = sphincs_keypair
 
     # ========================================================================
@@ -2574,6 +2600,10 @@ def create_crypto_package(
         encapsulated = kyber_provider.encapsulate(kyber_keypair.public_key)
         _encaps_ns = time.perf_counter_ns() - _t0
         _monitor.monitor_crypto_operation("encrypt", _encaps_ns / 1_000_000)
+        _monitor.record_operation_event(
+            "kyber_encaps",
+            key_fingerprint=_public_key_fingerprint(kyber_keypair.public_key),
+        )
         kem_ciphertext = encapsulated.ciphertext
         kem_shared_secret = encapsulated.shared_secret
         keypairs["KYBER_1024"] = kyber_keypair

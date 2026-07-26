@@ -35,6 +35,7 @@ from ama_cryptography.monitoring import (
     VolumeSpikeDetector,
     _bigram_hash,
     _fnv1a64,
+    _printable_count,
     _token_family_counts_py,
     _volume_spike_scores_py,
     create_monitor,
@@ -200,6 +201,7 @@ class TestVolumeSpikeDetection:
             {"alpha": 0.0},
             {"alpha": 1.5},
             {"warmup_buckets": 0},
+            {"max_operations": 0},
         ],
     )
     def test_constructor_validation(self, kwargs: dict) -> None:
@@ -209,6 +211,62 @@ class TestVolumeSpikeDetection:
     def test_empty_operation_name_rejected(self) -> None:
         with pytest.raises(ValueError):
             VolumeSpikeDetector().record("")
+
+
+class TestVolumeSpikeResourceBounds:
+    """A monitoring component must not become the exhaustion vector."""
+
+    def test_operation_name_space_is_bounded(self) -> None:
+        # `operation` is caller-supplied.  A caller passing a fresh name per
+        # call must not grow the per-operation dicts without bound.
+        d = VolumeSpikeDetector(max_operations=16)
+        for i in range(500):
+            d.record(f"synthetic_op_{i}", now=0.5)
+        assert d.tracked_operations == 16
+        assert d.dropped_operations == 484
+        assert len(d.snapshot()) == 16
+
+    def test_dropped_operations_does_not_disturb_tracked_ones(self) -> None:
+        d = VolumeSpikeDetector(max_operations=2)
+        drive(d, "kyber_encaps", [300] * 60)
+        d.record("other_op", now=61.0)
+        for i in range(50):
+            d.record(f"flood_{i}", now=61.0)
+        assert d.dropped_operations == 50
+        # The real operation still fires normally.
+        spikes = drive(d, "kyber_encaps", [30000], start_bucket=62)
+        assert len(spikes) == 1
+
+    def test_fingerprint_cap_is_surfaced_not_swallowed(self) -> None:
+        # A capped fingerprint set makes distinct_key_ratio a lower bound.
+        # Silently reporting the bound could downgrade critical -> warning.
+        d = VolumeSpikeDetector(max_fingerprints_per_bucket=8)
+        drive(d, "dilithium_keypair", [200] * 60, fingerprints=True)
+        spikes = drive(d, "dilithium_keypair", [20000], start_bucket=60, fingerprints=True)
+        assert len(spikes) == 1
+        spike = spikes[0]
+        assert spike.distinct_keys_capped is True
+        # ratio is (capped set size) / (count in the firing bucket) — a lower
+        # bound well below the churn threshold, yet still critical.
+        assert spike.distinct_key_ratio < d.churn_threshold
+        assert spike.severity == "critical"  # not downgraded by the cap
+
+    def test_uncapped_bucket_reports_an_exact_ratio(self) -> None:
+        d = VolumeSpikeDetector()
+        drive(d, "dilithium_keypair", [200] * 60, fingerprints=True)
+        spikes = drive(d, "dilithium_keypair", [1000], start_bucket=60, fingerprints=True)
+        assert len(spikes) == 1
+        assert spikes[0].distinct_keys_capped is False
+        assert spikes[0].distinct_key_ratio == pytest.approx(1.0, abs=0.01)
+
+    def test_reset_clears_the_drop_counter(self) -> None:
+        d = VolumeSpikeDetector(max_operations=1)
+        d.record("a", now=0.5)
+        d.record("b", now=0.5)
+        assert d.dropped_operations == 1
+        d.reset()
+        assert d.dropped_operations == 0
+        assert d.tracked_operations == 0
 
 
 class TestVolumeSpikeStatistics:
@@ -495,6 +553,13 @@ class TestKernelEquivalence:
 
         cy_detector = NoteArtifactDetector()
         monkeypatch.setattr(monitoring, "_CY_TOKEN_COUNTS", None)
+        # The marker tables are cached, and the cached entry carries the
+        # packed arrays built while the kernel was available.  Clear the cache
+        # so the fallback instance is built the way it would be in a source
+        # checkout: no packed arrays at all.  (inspect() guards on both
+        # `_packed` and the module symbol, so a stale cache would still take
+        # the right branch — this makes the test exercise the real shape.)
+        monkeypatch.setattr(monitoring, "_MARKER_TABLE_CACHE", {})
         py_detector = NoteArtifactDetector()
         assert py_detector._packed is None
 
@@ -507,6 +572,79 @@ class TestKernelEquivalence:
                 b.score,
                 b.tokens,
             )
+
+
+class TestPrintableGate:
+    """The fast printable-ratio gate must agree with the scanner exactly."""
+
+    def test_matches_the_scanner_counter_on_arbitrary_bytes(self) -> None:
+        d = NoteArtifactDetector()
+        samples = [
+            b"",
+            b"a",
+            bytes(range(256)),
+            b"\x00" * 100,
+            b"plain ascii text with\ttabs\nand\r\nnewlines",
+            os.urandom(4096),
+            *SUCCESSOR_NOTES,
+        ]
+        for sample in samples:
+            _, _, scanner_printable, _ = _token_family_counts_py(
+                sample,
+                d._uni_hashes,
+                d._uni_families,
+                d._bi_hashes,
+                d._bi_families,
+                3,
+                d.max_token_len,
+            )
+            assert _printable_count(sample) == scanner_printable, sample[:32]
+
+    @settings(max_examples=100, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+    @given(data=st.binary(min_size=0, max_size=1024))
+    def test_matches_the_scanner_counter_property(self, data: bytes) -> None:
+        d = NoteArtifactDetector()
+        _, _, scanner_printable, _ = _token_family_counts_py(
+            data,
+            d._uni_hashes,
+            d._uni_families,
+            d._bi_hashes,
+            d._bi_families,
+            3,
+            d.max_token_len,
+        )
+        assert _printable_count(data) == scanner_printable
+
+    def test_binary_reject_short_circuits_the_scan(self) -> None:
+        """A rejected payload reports zeros, not partial scan state."""
+        signal = NoteArtifactDetector().inspect(b"\x00\xff" * 2048, label="binary")
+        assert signal.flagged is False
+        assert signal.tokens == 0
+        assert signal.coverage == 0
+        assert signal.score == 0.0
+        assert signal.occurrences == {"successor": 0, "instructional": 0, "operational": 0}
+        assert signal.text_ratio < 0.85
+
+    def test_marker_tables_are_shared_between_instances(self) -> None:
+        """Table construction is cached — it is ~750 pure-Python hashes."""
+        a = NoteArtifactDetector()
+        b = NoteArtifactDetector()
+        assert a._uni_hashes is b._uni_hashes
+        assert a._bi_hashes is b._bi_hashes
+        assert a._packed is b._packed
+
+    def test_subclass_with_its_own_markers_gets_its_own_table(self) -> None:
+        """The cache is keyed on the marker tuples, not on the class."""
+
+        class Narrower(NoteArtifactDetector):
+            OPERATIONAL_MARKERS = (b"persist", b"reconnect")
+
+        base = NoteArtifactDetector()
+        narrow = Narrower()
+        assert narrow._uni_hashes is not base._uni_hashes
+        assert len(narrow._uni_hashes) < len(base._uni_hashes)
+        # ...and the bigram table, which it did not override, is still correct.
+        assert narrow._bi_hashes == base._bi_hashes
 
 
 class TestHashHelpers:
@@ -530,13 +668,58 @@ class TestHashHelpers:
 
 
 class TestMonitorHooks:
-    def test_hooks_are_off_by_default(self) -> None:
+    def test_hooks_are_on_by_default(self) -> None:
+        """Protection is immediate: no opt-in step stands between a
+        deployment and the agentic-abuse signals."""
         m = create_monitor()
+        assert m.volume is not None
+        assert m.notes is not None
+        # The volume detector is warming up, so this returns None -- but it
+        # returns None because no burst has been seen, not because the
+        # detector is absent.
+        assert m.record_operation_event("kyber_encaps") is None
+        assert m.volume.snapshot()["kyber_encaps"]["current_bucket_count"] == 1.0
+        signal = m.inspect_signed_payload(SUCCESSOR_NOTES[0])
+        assert signal is not None and signal.flagged
+        assert "volume_baselines" in m.get_security_report()
+
+    def test_hooks_can_be_opted_out_of(self) -> None:
+        """Opting out restores the pre-INVARIANT-30 report shape exactly."""
+        m = create_monitor(detect_volume_spikes=False, detect_note_artifacts=False)
         assert m.volume is None
         assert m.notes is None
         assert m.record_operation_event("kyber_encaps") is None
         assert m.inspect_signed_payload(SUCCESSOR_NOTES[0]) is None
-        assert "volume_baselines" not in m.get_security_report()
+        report = m.get_security_report()
+        assert "volume_baselines" not in report
+        assert "note_artifacts" not in report
+        assert m.alerts == []
+
+    def test_default_monitor_wired_into_create_crypto_package(self) -> None:
+        """The library's own signing path feeds the detector by default.
+
+        `create_crypto_package` already instrumented these sites for timing;
+        the volume signal is recorded at the same points, so a deployment gets
+        the accounting without wiring anything.
+        """
+        from ama_cryptography import crypto_api
+
+        before = crypto_api._monitor.volume
+        assert before is not None, "the module-level monitor must have the detector"
+        baseline = dict(before.snapshot())
+
+        crypto_api.create_crypto_package(b"payload for the volume hook")
+
+        after = before.snapshot()
+        signature_ops = [op for op in after if op.endswith("_sign")]
+        assert signature_ops, f"no signing operation recorded; saw {sorted(after)}"
+        for op in signature_ops:
+            counted = after[op]["current_bucket_count"] + after[op]["closed_buckets"]
+            prior = baseline.get(op, {})
+            prior_counted = prior.get("current_bucket_count", 0.0) + prior.get(
+                "closed_buckets", 0.0
+            )
+            assert counted > prior_counted
 
     def test_disabled_monitor_stays_silent_with_hooks_on(self) -> None:
         m = create_monitor(enabled=False, detect_volume_spikes=True, detect_note_artifacts=True)

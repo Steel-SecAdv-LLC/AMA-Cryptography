@@ -1095,6 +1095,11 @@ claim is measured by the `Agent binding check` lane in
 `tests/c/test_dudect.c`, which is registered strict (`is_info_only = 0`) and
 therefore fails CI on |t| >= 4.5.
 
+The binding layer calls only SHA3-256 / HMAC-SHA3-256 / HKDF, so it carries no
+`AMA_USE_NATIVE_PQC` dependency: `test_agent_binding` builds and passes in both
+the default (PQC on) and the PQC-off configurations, and the
+`ci-build-test.yml` configuration-guard job proves it on every PR.
+
 ---
 
 _Maintained by Steel Security Advisors LLC._

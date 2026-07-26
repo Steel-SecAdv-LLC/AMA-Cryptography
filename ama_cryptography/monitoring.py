@@ -241,6 +241,109 @@ def _token_family_counts_py(  # noqa: C901 -- deliberate one-to-one mirror of th
     return occurrences, distinct, printable, tokens
 
 
+# Bytes that count as "printable text" for the note detector's structural
+# gate: printable ASCII plus tab / LF / CR.  The complement is precomputed so
+# the gate can be a single ``bytes.translate`` pass in C rather than a Python
+# loop — see NoteArtifactDetector._printable_count.
+_PRINTABLE_BYTES = frozenset(range(0x20, 0x7F)) | {0x09, 0x0A, 0x0D}
+_NON_PRINTABLE_TABLE = bytes(b for b in range(256) if b in _PRINTABLE_BYTES)
+
+
+def _printable_count(data: bytes) -> int:
+    """Count printable-ASCII bytes in `data`, in one C-level pass.
+
+    ``bytes.translate(None, delete)`` removes every byte listed in `delete`,
+    so deleting the printable set and subtracting gives the printable count
+    without a Python-level loop.  Measured at ~1.0-1.5 ns/byte against ~6
+    ns/byte for the tokenising scan, so running it first lets a binary
+    payload — a signature, a wrapped key, a ciphertext — be rejected without
+    paying for a scan whose result is discarded.  (A 256-entry mapping table
+    plus ``.count()`` was measured at 1.6-3.5 ns/byte and rejected.)
+    """
+    return len(data) - len(data.translate(None, _NON_PRINTABLE_TABLE))
+
+
+# Marker tables for NoteArtifactDetector, keyed by the marker collections they
+# are derived from.  Building one costs ~750 pure-Python FNV-1a hashes; the
+# tables are immutable and identical across instances, so they are built once.
+_MARKER_TABLE_CACHE: Dict[
+    Tuple[Any, ...], Tuple[List[int], List[int], List[int], List[int], Any]
+] = {}
+_MARKER_TABLE_LOCK = threading.Lock()
+
+
+def _marker_tables(
+    instructional: Tuple[bytes, ...],
+    operational: Tuple[bytes, ...],
+    prefixes: Tuple[bytes, ...],
+    subjects: Tuple[bytes, ...],
+    phrases: Tuple[Tuple[bytes, bytes], ...],
+    successor_family: int,
+) -> Tuple[List[int], List[int], List[int], List[int], Any]:
+    """Build (or return the cached) sorted unigram and bigram marker tables.
+
+    Returns ``(uni_hashes, uni_families, bi_hashes, bi_families, packed)``
+    where ``packed`` is the ``array`` quadruple the Cython kernel wants, or
+    ``None`` when the extension is unavailable.
+
+    Raises:
+        ValueError: if a unigram marker is claimed by two families, which
+            would make attribution depend on iteration order.
+    """
+    key = (instructional, operational, prefixes, subjects, phrases, successor_family)
+    cached = _MARKER_TABLE_CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    # Family 0 is phrase-level only, so it contributes no unigrams.
+    unigram_families = ((), instructional, operational)
+    uni: Dict[int, int] = {}
+    for family_id, markers in enumerate(unigram_families):
+        for marker in markers:
+            h = _fnv1a64(marker)
+            if h in uni and uni[h] != family_id:
+                raise ValueError(f"marker {marker!r} is claimed by more than one family")
+            uni[h] = family_id
+
+    # Cross product plus fixed phrases, de-duplicated by hash.  A pair whose
+    # two halves are the same word ("successor successor") is dropped: it
+    # contributes nothing and only widens the table.
+    pairs: Set[Tuple[bytes, bytes]] = set()
+    for left in prefixes:
+        for right in subjects:
+            if left != right:
+                pairs.add((left, right))
+    pairs.update(phrases)
+    bi: Dict[int, int] = {}
+    for left, right in pairs:
+        bi[_bigram_hash(_fnv1a64(left), _fnv1a64(right))] = successor_family
+
+    ordered_uni = sorted(uni.items())
+    ordered_bi = sorted(bi.items())
+    uni_hashes = [h for h, _ in ordered_uni]
+    uni_families = [f for _, f in ordered_uni]
+    bi_hashes = [h for h, _ in ordered_bi]
+    bi_families = [f for _, f in ordered_bi]
+
+    packed: Any = None
+    if _CY_TOKEN_COUNTS is not None:
+        from array import array
+
+        packed = (
+            array("Q", uni_hashes),
+            array("B", uni_families),
+            array("Q", bi_hashes),
+            array("B", bi_families),
+        )
+
+    tables = (uni_hashes, uni_families, bi_hashes, bi_families, packed)
+    with _MARKER_TABLE_LOCK:
+        # Last writer wins; both writers computed the same immutable tables
+        # from the same key, so the race is benign.
+        _MARKER_TABLE_CACHE[key] = tables
+    return tables
+
+
 # The Cython kernels are an optimisation.  When the extension is not built
 # (source checkout, numpy-less environment, PyPy) the pure-Python twins above
 # take over with identical results.
@@ -603,6 +706,10 @@ class VolumeSpike:
             bucket.  Near 1.0 means near-every operation used a fresh key —
             the ephemeral-key churn shape, as opposed to a hot loop over one
             long-lived key.
+        distinct_keys_capped: True when the per-bucket fingerprint set hit its
+            size cap, in which case ``distinct_key_ratio`` is a LOWER bound.
+            Surfaced rather than swallowed: a silently-truncated set would
+            understate churn and could quietly downgrade the severity.
         bucket_seconds: Width of the counting bucket
         severity: 'warning', or 'critical' when the burst is also high-churn
         timestamp: Unix time of detection
@@ -613,6 +720,7 @@ class VolumeSpike:
     baseline_rate: float
     score: float
     distinct_key_ratio: float
+    distinct_keys_capped: bool
     bucket_seconds: float
     severity: str
     timestamp: float
@@ -1543,6 +1651,7 @@ class VolumeSpikeDetector:
         churn_threshold: float = 0.75,
         max_fingerprints_per_bucket: int = 4096,
         history_buckets: int = 600,
+        max_operations: int = 256,
     ) -> None:
         """
         Args:
@@ -1556,9 +1665,18 @@ class VolumeSpikeDetector:
             churn_threshold: Distinct-key ratio above which a spike is
                 escalated to 'critical'.
             max_fingerprints_per_bucket: Cap on the per-bucket fingerprint set
-                so a hostile caller cannot grow it without bound.
+                so a hostile caller cannot grow it without bound.  Hitting it
+                is reported via ``VolumeSpike.distinct_keys_capped``.
             history_buckets: Per-operation bucket-count history retained for
                 :meth:`analyze_history`.
+            max_operations: Cap on the number of distinct operation names
+                tracked.  ``operation`` is caller-supplied, so without a cap a
+                caller passing a fresh name per call would grow every
+                per-operation dict without bound — a monitoring component must
+                not become the memory-exhaustion vector.  Names beyond the cap
+                are counted in :attr:`dropped_operations` and otherwise
+                ignored; the cap is far above any real operation inventory
+                (the library itself uses fewer than a dozen).
 
         Raises:
             ValueError: on a non-positive bucket width or an alpha outside
@@ -1570,6 +1688,8 @@ class VolumeSpikeDetector:
             raise ValueError("alpha must be in (0, 1]")
         if warmup_buckets < 1:
             raise ValueError("warmup_buckets must be at least 1")
+        if max_operations < 1:
+            raise ValueError("max_operations must be at least 1")
 
         self.bucket_seconds = float(bucket_seconds)
         self.warmup_buckets = int(warmup_buckets)
@@ -1578,6 +1698,11 @@ class VolumeSpikeDetector:
         self.alpha = float(alpha)
         self.churn_threshold = float(churn_threshold)
         self.max_fingerprints_per_bucket = int(max_fingerprints_per_bucket)
+        self.max_operations = int(max_operations)
+        #: Count of records dropped because the operation-name cap was hit.
+        #: Non-zero means the detector is not seeing everything — surfaced in
+        #: :meth:`snapshot` rather than silently absorbed.
+        self.dropped_operations = 0
 
         # Per-operation state.  All mutated under _lock: record() is called
         # from every worker thread in a concurrent workload, and a torn
@@ -1586,7 +1711,7 @@ class VolumeSpikeDetector:
         self._bucket_index: Dict[str, int] = {}
         self._bucket_count: Dict[str, int] = {}
         self._bucket_fingerprints: Dict[str, Set[bytes]] = {}
-        self._fingerprints_truncated: Dict[str, bool] = {}
+        self._fingerprints_capped: Dict[str, bool] = {}
         self._mean: Dict[str, float] = {}
         self._sq: Dict[str, float] = {}
         self._closed_buckets: Dict[str, int] = {}
@@ -1661,10 +1786,14 @@ class VolumeSpikeDetector:
         with self._lock:
             current = self._bucket_index.get(operation)
             if current is None:
+                if len(self._bucket_index) >= self.max_operations:
+                    # Refuse to grow rather than track an unbounded name space.
+                    self.dropped_operations += 1
+                    return None
                 self._bucket_index[operation] = bucket
                 self._bucket_count[operation] = 0
                 self._bucket_fingerprints[operation] = set()
-                self._fingerprints_truncated[operation] = False
+                self._fingerprints_capped[operation] = False
             elif bucket != current:
                 # Fold the finished bucket in, then any fully-idle buckets
                 # between it and now — silence is information, and skipping it
@@ -1677,7 +1806,7 @@ class VolumeSpikeDetector:
                 self._bucket_index[operation] = bucket
                 self._bucket_count[operation] = 0
                 self._bucket_fingerprints[operation] = set()
-                self._fingerprints_truncated[operation] = False
+                self._fingerprints_capped[operation] = False
 
             self._bucket_count[operation] += 1
             count = self._bucket_count[operation]
@@ -1687,7 +1816,7 @@ class VolumeSpikeDetector:
                 if len(fps) < self.max_fingerprints_per_bucket:
                     fps.add(bytes(key_fingerprint[:8]))
                 else:
-                    self._fingerprints_truncated[operation] = True
+                    self._fingerprints_capped[operation] = True
 
             if self._closed_buckets.get(operation, 0) < self.warmup_buckets:
                 return None
@@ -1702,16 +1831,20 @@ class VolumeSpikeDetector:
 
             self._fired_bucket[operation] = bucket
             fps = self._bucket_fingerprints[operation]
-            # A truncated fingerprint set understates churn; report the
-            # measurable lower bound rather than guessing upward.
+            capped = self._fingerprints_capped.get(operation, False)
+            # A capped fingerprint set understates churn, so the ratio is a
+            # lower bound.  Report the bound AND the fact that it is one; a
+            # capped set is itself evidence of >= max_fingerprints distinct
+            # keys in one bucket, which is not a case to downgrade.
             ratio = (len(fps) / count) if (fps and count) else 0.0
-            severity = "critical" if ratio >= self.churn_threshold else "warning"
+            severity = "critical" if (capped or ratio >= self.churn_threshold) else "warning"
             return VolumeSpike(
                 operation=operation,
                 count=count,
                 baseline_rate=self._baseline_rate(self._mean.get(operation)),
                 score=score,
                 distinct_key_ratio=ratio,
+                distinct_keys_capped=capped,
                 bucket_seconds=self.bucket_seconds,
                 severity=severity,
                 timestamp=time.time(),
@@ -1751,18 +1884,25 @@ class VolumeSpikeDetector:
                 for op in sorted(self._bucket_index)
             }
 
+    @property
+    def tracked_operations(self) -> int:
+        """Number of distinct operation names currently tracked."""
+        with self._lock:
+            return len(self._bucket_index)
+
     def reset(self) -> None:
         """Drop all state.  Used by tests and by long-lived redeployments."""
         with self._lock:
             self._bucket_index.clear()
             self._bucket_count.clear()
             self._bucket_fingerprints.clear()
-            self._fingerprints_truncated.clear()
+            self._fingerprints_capped.clear()
             self._mean.clear()
             self._sq.clear()
             self._closed_buckets.clear()
             self._fired_bucket.clear()
             self._history.clear()
+            self.dropped_operations = 0
 
 
 class NoteArtifactDetector:
@@ -2016,50 +2156,26 @@ class NoteArtifactDetector:
         self.max_token_len = int(max_token_len)
         self.require_successor_family = bool(require_successor_family)
 
-        # --- unigram table -----------------------------------------------
-        unigram_families = (
-            (),  # family 0 is phrase-level only
+        # Marker tables are pure functions of the class-level marker
+        # collections, and building them costs ~750 pure-Python FNV hashes
+        # (~3 ms).  Paying that per instance put 3 ms on the first import of
+        # crypto_api, which constructs a module-level monitor.  Cache on the
+        # marker tuples themselves rather than on the class, so a subclass
+        # that overrides one family still gets its own correct table.
+        (
+            self._uni_hashes,
+            self._uni_families,
+            self._bi_hashes,
+            self._bi_families,
+            self._packed,
+        ) = _marker_tables(
             self.INSTRUCTIONAL_MARKERS,
             self.OPERATIONAL_MARKERS,
+            self.SUCCESSOR_PREFIXES,
+            self.SUCCESSOR_SUBJECTS,
+            self.SUCCESSOR_PHRASES,
+            self.SUCCESSOR_FAMILY,
         )
-        uni: Dict[int, int] = {}
-        for family_id, markers in enumerate(unigram_families):
-            for marker in markers:
-                h = _fnv1a64(marker)
-                if h in uni and uni[h] != family_id:
-                    raise ValueError(f"marker {marker!r} is claimed by more than one family")
-                uni[h] = family_id
-
-        # --- bigram table (family 0) --------------------------------------
-        # Cross product plus fixed phrases, de-duplicated by hash.  A pair
-        # whose two halves are the same word ("successor successor") is
-        # dropped: it contributes nothing and only widens the table.
-        pairs: Set[Tuple[bytes, bytes]] = set()
-        for left in self.SUCCESSOR_PREFIXES:
-            for right in self.SUCCESSOR_SUBJECTS:
-                if left != right:
-                    pairs.add((left, right))
-        pairs.update(self.SUCCESSOR_PHRASES)
-        bi: Dict[int, int] = {}
-        for left, right in pairs:
-            bi[_bigram_hash(_fnv1a64(left), _fnv1a64(right))] = self.SUCCESSOR_FAMILY
-
-        ordered_uni = sorted(uni.items())
-        ordered_bi = sorted(bi.items())
-        self._uni_hashes: List[int] = [h for h, _ in ordered_uni]
-        self._uni_families: List[int] = [f for _, f in ordered_uni]
-        self._bi_hashes: List[int] = [h for h, _ in ordered_bi]
-        self._bi_families: List[int] = [f for _, f in ordered_bi]
-        self._packed: Any = None
-        if _CY_TOKEN_COUNTS is not None:
-            from array import array
-
-            self._packed = (
-                array("Q", self._uni_hashes),
-                array("B", self._uni_families),
-                array("Q", self._bi_hashes),
-                array("B", self._bi_families),
-            )
 
     def _sample(self, payload: bytes) -> bytes:
         """Head+tail sample of at most ``max_scan_bytes``."""
@@ -2083,6 +2199,30 @@ class NoteArtifactDetector:
             raise TypeError(f"payload must be bytes-like, got {type(payload).__name__}")
         data = self._sample(bytes(payload))
 
+        # Structural reject, BEFORE the tokenising scan.  The printable-ratio
+        # gate is the reason this detector is affordable to point at real
+        # payloads, but only if it runs first: computing it from the scan's
+        # own printable counter meant every 3.3 KB ML-DSA signature paid the
+        # full tokenising pass just to have the result thrown away (measured
+        # 21 us -> 6.7 us per signature-sized payload once the gate moved
+        # ahead of the scan).  The translate-based count is a single C pass
+        # and is exact, not a sample — tests/test_agentic_abuse_detectors.py
+        # pins it against the scanner's own counter on arbitrary bytes.
+        printable = _printable_count(data)
+        text_ratio = (printable / len(data)) if data else 0.0
+        if text_ratio < self.min_text_ratio:
+            return NoteArtifactSignal(
+                label=label,
+                occurrences=dict.fromkeys(self.FAMILY_NAMES, 0),
+                distinct=dict.fromkeys(self.FAMILY_NAMES, 0),
+                coverage=0,
+                score=0.0,
+                text_ratio=text_ratio,
+                tokens=0,
+                scanned_bytes=len(data),
+                flagged=False,
+            )
+
         if self._packed is not None and _CY_TOKEN_COUNTS is not None:
             occ, dist, printable, tokens = _CY_TOKEN_COUNTS(
                 data,
@@ -2104,7 +2244,6 @@ class NoteArtifactDetector:
                 self.max_token_len,
             )
 
-        text_ratio = (printable / len(data)) if data else 0.0
         coverage = sum(1 for fam, d in enumerate(dist) if d >= self.FAMILY_MIN_HITS[fam])
         score = sum(
             min(d, self.FAMILY_SATURATION[fam]) / self.FAMILY_SATURATION[fam]
@@ -2485,7 +2624,11 @@ class AmaCryptographyMonitor:
     Design Principles:
     - Enabled by default: Production-ready anomaly detection out of the
       box (per engineering brief Task 2).  Callers who need zero-overhead
-      operation should pass ``enabled=False`` explicitly.
+      operation should pass ``enabled=False`` explicitly.  This extends to
+      the agentic-abuse detectors (INVARIANT-30 companion signals): they are
+      constructed by default so a deployment gets the protection without
+      opting in.  They still only do work when their hooks are called, so
+      "on by default" costs an attribute load on paths that ignore them.
     - Non-invasive: Read-only analysis, never modifies crypto code
     - Lightweight: <2% performance overhead when enabled
     - Observable: Comprehensive reporting for security teams
@@ -2502,8 +2645,8 @@ class AmaCryptographyMonitor:
         enabled: bool = True,
         alert_retention: int = 1000,
         nonce_persist_path: Optional[str] = None,
-        detect_volume_spikes: bool = False,
-        detect_note_artifacts: bool = False,
+        detect_volume_spikes: bool = True,
+        detect_note_artifacts: bool = True,
     ) -> None:
         """
         Initialize monitor.
@@ -2514,13 +2657,16 @@ class AmaCryptographyMonitor:
             alert_retention: Maximum alerts to retain in memory.
                 Prevents unbounded memory growth.
             nonce_persist_path: Path for nonce tracker persistence file.
-            detect_volume_spikes: Enable the agentic burst detector.  Off by
-                default: it is only meaningful when the caller actually feeds
-                it via :meth:`record_operation_event`, and defaulting it on
-                would put a lock acquisition on call paths that never use it.
+            detect_volume_spikes: Enable the agentic burst detector.  **On by
+                default**, matching this class's stated posture that
+                production-ready anomaly detection ships out of the box.  It
+                costs nothing on paths that never call
+                :meth:`record_operation_event`; pass ``False`` to drop even
+                the detector object.
             detect_note_artifacts: Enable the note-like-artifact detector.
-                Off by default for the same reason — it only ever runs on
-                payloads handed to :meth:`inspect_signed_payload`.
+                **On by default** for the same reason — it only ever runs on
+                payloads handed to :meth:`inspect_signed_payload`, and an
+                operator should not have to opt in to a protection.
         """
         self.enabled = enabled
         self.alert_retention = alert_retention
@@ -2602,9 +2748,9 @@ class AmaCryptographyMonitor:
     ) -> Optional[VolumeSpike]:
         """Feed one KEM/signature operation to the volume-spike detector.
 
-        Optional hook.  Returns ``None`` immediately when monitoring or the
-        detector is disabled, so callers can wire it unconditionally at a cost
-        of one attribute load.
+        Enabled by default.  Returns ``None`` immediately when monitoring or
+        the detector is disabled, so callers can wire it unconditionally at a
+        cost of one attribute load.
 
         Args:
             operation: Operation name (e.g. ``'kyber_encaps'``).
@@ -2634,9 +2780,9 @@ class AmaCryptographyMonitor:
     ) -> Optional[NoteArtifactSignal]:
         """Score a payload for note-like structure before or after signing.
 
-        Optional hook; returns ``None`` when monitoring or the detector is
-        disabled.  Advisory only — a flagged payload is a review item, not a
-        blocked operation.
+        Enabled by default; returns ``None`` when monitoring or the detector
+        is disabled.  Advisory only — a flagged payload is a review item, not
+        a blocked operation.
 
         Args:
             payload: Bytes being signed.
@@ -2816,8 +2962,10 @@ class AmaCryptographyMonitor:
                 "Review for potential side-channel vulnerabilities."
             )
 
-        # Agentic-abuse detectors — reported only when the caller enabled them,
-        # so the report shape is unchanged for every existing consumer.
+        # Agentic-abuse detectors.  Present whenever the detectors are
+        # constructed (the default); a caller that passed
+        # detect_volume_spikes=False / detect_note_artifacts=False gets the
+        # pre-INVARIANT-30 report shape back, unchanged.
         if self.volume is not None:
             report["volume_baselines"] = self.volume.snapshot()
             spikes = [a for a in self.alerts if a["type"] == "volume_spike"]
@@ -2857,8 +3005,8 @@ class AmaCryptographyMonitor:
 def create_monitor(
     enabled: bool = True,
     alert_retention: int = 1000,
-    detect_volume_spikes: bool = False,
-    detect_note_artifacts: bool = False,
+    detect_volume_spikes: bool = True,
+    detect_note_artifacts: bool = True,
 ) -> AmaCryptographyMonitor:
     """
     Factory function for creating monitor instances.
@@ -2868,8 +3016,10 @@ def create_monitor(
             production-ready anomaly detection.  Pass ``False`` for
             zero-overhead operation when monitoring is not needed.
         alert_retention: Maximum alerts to retain
-        detect_volume_spikes: Enable the agentic burst detector (opt-in).
-        detect_note_artifacts: Enable the note-like artifact detector (opt-in).
+        detect_volume_spikes: Enable the agentic burst detector.  On by
+            default; pass ``False`` to drop the detector object entirely.
+        detect_note_artifacts: Enable the note-like artifact detector.  On by
+            default; pass ``False`` to drop the detector object entirely.
 
     Returns:
         Configured AmaCryptographyMonitor instance

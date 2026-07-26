@@ -135,6 +135,69 @@ jobs:
         # job log.
         run: cd build && ctest --output-on-failure --verbose
 
+  # ---------------------------------------------------------------------
+  # AMA_USE_NATIVE_PQC=OFF configuration guard
+  # ---------------------------------------------------------------------
+  # ON is and remains the default (top-level CMakeLists.txt) and the only
+  # configuration setup.py will build — INVARIANT-7 forbids a cryptographic
+  # fallback, so the shipped wheel always carries the native PQC backends.
+  # OFF is nonetheless a supported CMake configuration for downstream
+  # packagers who take PQC from elsewhere, and it is exactly the kind of
+  # cell that silently rots when nothing builds it: before this job existed,
+  # `-DAMA_USE_NATIVE_PQC=OFF` failed to link the SHARED LIBRARY ITSELF on
+  # four undefined NTT reference symbols, plus three PQC-only executables.
+  #
+  # One lane is enough — the failure mode is "a source group referenced a
+  # symbol from a gated source group", which is compiler- and OS-independent.
+  # Fail-closed: no continue-on-error, and ctest runs so the subset of tests
+  # that survive the gate (including test_agent_binding, which needs no PQC
+  # symbol) is proven to still pass, not merely to compile.
+  c-library-no-native-pqc:
+    name: C Library (AMA_USE_NATIVE_PQC=OFF configuration guard)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+
+      - name: Install dependencies
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
+          sudo apt-get update
+          sudo apt-get install -y cmake gcc-13 g++-13
+
+      - name: Configure CMake (native PQC disabled)
+        run: |
+          cmake -B build-nopqc \
+            -DCMAKE_C_COMPILER=gcc-13 \
+            -DCMAKE_CXX_COMPILER=g++-13 \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DAMA_USE_NATIVE_PQC=OFF \
+            -DAMA_BUILD_SHARED=ON \
+            -DAMA_BUILD_STATIC=ON \
+            -DAMA_BUILD_TESTS=ON \
+            -DAMA_BUILD_EXAMPLES=ON
+
+      - name: Build
+        run: cmake --build build-nopqc --config Release -j4
+
+      - name: Test
+        run: cd build-nopqc && ctest --output-on-failure
+
+      - name: Assert the default is still ON
+        # A regression that flipped the default would make the job above
+        # green for the wrong reason (it would be testing the default path
+        # twice).  Read the option line straight out of CMakeLists.txt.
+        shell: bash
+        run: |
+          set -o pipefail
+          if ! grep -qE '^option\(AMA_USE_NATIVE_PQC .* ON\)$' CMakeLists.txt; then
+            echo "::error::AMA_USE_NATIVE_PQC no longer defaults to ON in CMakeLists.txt"
+            grep -n 'option(AMA_USE_NATIVE_PQC' CMakeLists.txt || true
+            exit 1
+          fi
+          echo "AMA_USE_NATIVE_PQC default is ON."
+
   # Python Package Build and Test
   python-package:
     name: Python ${{ matrix.python-version }} on ${{ matrix.os }}

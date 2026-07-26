@@ -115,6 +115,23 @@ static uint32_t ct_requires_authorization_mask(const ama_agent_binding_t* b) {
 /* Canonical encoding                                                         */
 /* ========================================================================== */
 
+/* The encoding width is the sum of fixed-size components.  Assert it at
+ * compile time rather than checking at runtime: a mismatch would silently
+ * re-key every deployment, and there is no sensible thing to do about it once
+ * the program is running. */
+#define AMA_AGENT_ENC_COMPUTED_BYTES                                          \
+    (1u + (unsigned)sizeof(AMA_AGENT_BIND_LABEL) + 4u                         \
+     + 1u + AMA_AGENT_INSTANCE_ID_BYTES                                       \
+     + 1u + AMA_ETHICAL_PROFILE_BYTES)
+
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+_Static_assert(AMA_AGENT_ENC_COMPUTED_BYTES == AMA_AGENT_BINDING_ENCODED_BYTES,
+               "AMA_AGENT_BINDING_ENCODED_BYTES disagrees with encode_unchecked()");
+#else
+typedef char ama_agent_encoding_width_check[
+    (AMA_AGENT_ENC_COMPUTED_BYTES == AMA_AGENT_BINDING_ENCODED_BYTES) ? 1 : -1];
+#endif
+
 /**
  * Write enc(b) into @p out.  Caller guarantees capacity; structural validity
  * is the caller's business too (both public entry points check first).
@@ -139,14 +156,9 @@ static void encode_unchecked(const ama_agent_binding_t* b, uint8_t* out) {
     memcpy(out + off, b->ethical_profile, AMA_ETHICAL_PROFILE_BYTES);
     off += AMA_ETHICAL_PROFILE_BYTES;
 
-    /* Compile-time-ish assertion that the width in the header is the width we
-     * actually write; a mismatch would silently change every derived key. */
-    if (off != (size_t)AMA_AGENT_BINDING_ENCODED_BYTES) {
-        /* Unreachable: all components above are fixed-width constants.  Kept
-         * as a hard stop rather than an assert so a miscompiled build zeroes
-         * the buffer instead of emitting a short encoding. */
-        ama_secure_memzero(out, (size_t)AMA_AGENT_BINDING_ENCODED_BYTES);
-    }
+    /* Width is pinned by the _Static_assert above; `off` is only consumed
+     * here so the arithmetic stays visible to a reader following the layout. */
+    (void)off;
 }
 
 AMA_API ama_error_t ama_agent_binding_encode(
@@ -387,11 +399,14 @@ AMA_API ama_error_t ama_hkdf_agent_bound(
     if (!info && info_len > 0) {
         return AMA_ERROR_INVALID_PARAM;
     }
-    /* RFC 5869 §2.3 bound, mirrored from ama_hkdf() so an over-long request is
-     * refused before the binding check runs any HMAC. */
+    /* The u32be length prefix cannot represent an info longer than 2^32-1.
+     * Guarded only where size_t can actually exceed that: on ILP32 the
+     * comparison is tautologically false and -Wtype-limits says so. */
+#if SIZE_MAX > 0xFFFFFFFFu
     if (info_len > 0xFFFFFFFFu) {
         return AMA_ERROR_OVERFLOW;
     }
+#endif
     if (info_len > SIZE_MAX - sizeof(prefix)) {
         return AMA_ERROR_OVERFLOW;
     }

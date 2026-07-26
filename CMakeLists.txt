@@ -737,8 +737,12 @@ if(AMA_BUILD_TESTS)
 endif()
 
 # Raw C benchmark harness (POSIX timing — Linux/macOS only).
-# Requires at least one library target to link against.
-if(NOT WIN32 AND (AMA_BUILD_STATIC OR AMA_BUILD_SHARED))
+# Requires at least one library target to link against, and AMA_USE_NATIVE_PQC:
+# it benchmarks ML-KEM / ML-DSA / SLH-DSA / X25519 / secp256k1 / FROST /
+# Argon2id / ChaCha20-Poly1305 directly, all of which live in the
+# AMA_USE_NATIVE_PQC source group.  Without the gate an
+# AMA_USE_NATIVE_PQC=OFF build fails at link time on this target.
+if(NOT WIN32 AND AMA_USE_NATIVE_PQC AND (AMA_BUILD_STATIC OR AMA_BUILD_SHARED))
     add_executable(benchmark_c_raw benchmarks/benchmark_c_raw.c)
     target_compile_definitions(benchmark_c_raw PRIVATE _POSIX_C_SOURCE=200809L)
     target_link_libraries(benchmark_c_raw PRIVATE
