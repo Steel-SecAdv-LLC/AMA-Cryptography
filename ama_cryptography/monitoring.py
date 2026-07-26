@@ -125,10 +125,13 @@ def _volume_spike_scores_py(counts: "Sequence[float]", alpha: float, warmup: int
     Kept operation-for-operation equivalent (same order, same float ops) so
     the Cython kernel is a speed-up and never a correctness dependency.  On a
     platform without FMA contraction the two agree bit-for-bit; where the C
-    compiler contracts ``a*b + c`` to a fused multiply-add (e.g. ARM) they
-    agree to within a last ULP, far below anything that could move a score
-    across the detector's threshold.  ``tests/test_agentic_abuse_detectors.py``
-    pins that tolerance.  See the Cython docstring for the statistics.
+    compiler contracts ``a*b + c`` to a fused multiply-add (e.g. ARM) the
+    per-step rounding differs and, because the score is an EWMA recursion, the
+    difference accumulates over the series — so the guarantee the tests pin is
+    a small *relative* tolerance (rel/abs 1e-9), not a literal last ULP.  That
+    is still orders of magnitude below anything that could move a score across
+    the 6-sigma threshold.  ``tests/test_agentic_abuse_detectors.py`` pins that
+    tolerance.  See the Cython docstring for the statistics.
     """
     if alpha <= 0.0 or alpha > 1.0:
         raise ValueError("alpha must be in (0, 1]")
@@ -1783,10 +1786,21 @@ class VolumeSpikeDetector:
         if not isinstance(operation, str) or not operation:
             raise ValueError("operation must be a non-empty string")
 
-        ts = time.monotonic() if now is None else float(now)
-        bucket = int(ts // self.bucket_seconds)
-
         with self._lock:
+            # The clock is read UNDER the lock, not before it.  time.monotonic()
+            # is non-decreasing, so serialising the read behind the lock makes
+            # the bucket index each thread computes non-decreasing too.  Read
+            # outside the lock and two threads straddling a bucket boundary can
+            # acquire the lock in the opposite order to their clock reads: the
+            # later-timestamp thread closes and advances the bucket, then the
+            # earlier-timestamp thread sees bucket < current, closes a second
+            # (partial) bucket into the EWMA and *regresses* the index — a real
+            # baseline-corruption race in exactly the concurrent workload this
+            # detector exists for.  An explicit `now` (deterministic tests) is
+            # caller-ordered and unaffected.
+            ts = time.monotonic() if now is None else float(now)
+            bucket = int(ts // self.bucket_seconds)
+
             current = self._bucket_index.get(operation)
             if current is None:
                 if len(self._bucket_index) >= self.max_operations:
@@ -1923,15 +1937,27 @@ class NoteArtifactDetector:
     Why the successor family is phrase-level
     ----------------------------------------
     Every word that signals "addressed to a later instance of me" is ordinary
-    English on its own — *next*, *future*, *instance*, *version*.  Scoring
-    them as single tokens flags roughly one in eight files of this
-    repository's own documentation, which is worthless.  The discriminative
-    feature is the adjacent PAIR: "next instance", "future agents", "your
-    successor" are near-absent from technical prose and near-universal in a
-    note addressed to a successor.  So family 0 is built from bigrams — a
-    cross product of successor-side words with self-reference words, plus a
-    handful of fixed phrases — while the instructional and operational
+    English on its own — *next*, *future*, *instance*, *version*.  Scoring the
+    successor vocabulary as single tokens trips well over half of this
+    repository's own files (measured: 256 of 443 tracked source files carry two or more of those
+    words), which is worthless.  The discriminative feature is the adjacent
+    PAIR: "next instance", "future agents", "subsequent iterations" are
+    near-absent from technical prose and near-universal in a note addressed to
+    a successor.  So family 0 is built from bigrams — a cross product of
+    *forward-referring* words (next, future, subsequent, …) with
+    *instance-denoting* nouns (instance, iteration, successor, …), plus a
+    handful of fixed note idioms — while the instructional and operational
     families stay unigram, where breadth is what is wanted.
+
+    The cross product is deliberately kept clean of generic English: the
+    prefix side carries no articles or possessives (*the*, *my*, *your*) and
+    the subject side no bare pronouns (*me*, *you*).  Those pollute the family
+    — "the agent", "your self", "if you", "you are" occur throughout ordinary
+    prose, and including them collapses the margin between a successor note and
+    a security runbook to zero (measured before this was fixed: the lowest
+    hand-written note and the highest benign file scored identically).  With
+    the generic pairs removed, the two populations separate by >= 0.5 on the
+    coverage score — see Calibration.
 
     Gates
     -----
@@ -1951,13 +1977,34 @@ class NoteArtifactDetector:
 
     Calibration
     -----------
-    The 1.75 default was chosen empirically, not picked: swept against a
-    448-file corpus of this repository's own Markdown, Python, C, headers,
-    JSON and YAML — the closest available stand-in for "prose a signing
-    service actually sees" — alongside four hand-written successor notes.
-    1.50 flags two corpus files; 1.75 flags none and still catches all four
-    notes.  ``tests/test_agentic_abuse_detectors.py`` re-runs that sweep, so
-    the number stays honest as the corpus grows.
+    The default was measured, not guessed, against this repository's own
+    Markdown, Python, C, headers, JSON, YAML and Cython — a deliberately
+    *hard* negative corpus, because security prose is dense with exactly the
+    operational vocabulary the detector scores (persist, credential, escape,
+    sandbox), so a low false-positive rate here is a conservative bound on
+    what a signing service's real traffic would produce.
+
+    Measured on that corpus (443 tracked source files) with the shipped defaults:
+
+      * The four hand-written successor notes score 2.25 .. 3.00.
+      * Every genuinely-benign file scores <= 1.75.  The separation is
+        therefore >= 0.50 on the coverage score, and no benign file clears the
+        full flagging conjunction.
+      * The only files flagged are the three that *themselves* contain or
+        describe successor-note tradecraft — ``INVARIANTS.md`` and
+        ``CHANGELOG.md`` (which document this detector) and
+        ``tests/test_agentic_load_adversarial.py`` (which embeds a synthetic
+        note).  Those are true positives on literal note content, not false
+        positives on benign prose.
+      * Dropping the threshold to 1.50 additionally flags
+        ``IMPLEMENTATION_GUIDE.md`` — a genuinely-benign document — so 1.75 is
+        the tighter operating point that excludes it while keeping every note.
+
+    ``tests/test_agentic_abuse_detectors.py`` re-derives all of this on every
+    CI run: it pins the benign false-positive set to the three threat-
+    describing files (any new benign flag fails the build) and asserts the
+    >= 0.50 note-vs-corpus separation directly, so the calibration cannot
+    silently rot as the corpus grows.
 
     Bounded work
     ------------
@@ -1975,32 +2022,36 @@ class NoteArtifactDetector:
     benign.
     """
 
-    #: Family 0, left half — words that point forward to another entity.
+    #: Family 0, left half — words that point FORWARD to another entity.
+    #: Articles and possessives (the/my/your/our) are deliberately excluded:
+    #: paired with the subjects below they produce generic English ("the
+    #: agent", "your self") that occurs throughout ordinary prose and destroys
+    #: the family's discriminative power.  See the class docstring.
     SUCCESSOR_PREFIXES: ClassVar[Tuple[bytes, ...]] = (
         b"next",
         b"future",
         b"later",
         b"subsequent",
+        b"succeeding",
+        b"following",
+        b"upcoming",
+        b"another",
+        b"new",
         b"successor",
         b"successors",
         b"descendant",
         b"descendants",
-        b"following",
-        b"upcoming",
-        b"my",
-        b"your",
-        b"our",
-        b"the",
     )
 
-    #: Family 0, right half — words naming an instance of the writer.
+    #: Family 0, right half — nouns naming an instance of the writer.  Bare
+    #: pronouns (me/you) are excluded for the same reason as the articles
+    #: above: "future you", "the agent" and the like are not successor
+    #: references, they are generic address.
     SUCCESSOR_SUBJECTS: ClassVar[Tuple[bytes, ...]] = (
         b"instance",
         b"instances",
         b"agent",
         b"agents",
-        b"self",
-        b"selves",
         b"iteration",
         b"iterations",
         b"incarnation",
@@ -2015,24 +2066,24 @@ class NoteArtifactDetector:
         b"replica",
         b"replicas",
         b"reincarnation",
-        b"me",
-        b"you",
-        b"yourself",
-        b"ourselves",
+        b"self",
+        b"selves",
+        b"version",
+        b"versions",
+        b"generation",
+        b"generations",
     )
 
-    #: Family 0, fixed phrases that do not fall out of the cross product.
+    #: Family 0, fixed note idioms that do not fall out of the cross product.
+    #: Kept deliberately note-specific: "if you"/"you are" were removed because
+    #: they are generic conditional and copular English, not successor markers.
     SUCCESSOR_PHRASES: ClassVar[Tuple[Tuple[bytes, bytes], ...]] = (
-        (b"note", b"to"),  # "note to self"
+        (b"note", b"to"),  # "note to self / note to the next instance"
         (b"to", b"self"),
         (b"for", b"whoever"),
         (b"whoever", b"comes"),
         (b"comes", b"after"),
         (b"read", b"this"),
-        (b"if", b"you"),
-        (b"you", b"are"),
-        (b"another", b"instance"),
-        (b"new", b"instance"),
     )
 
     #: Family 1 — instructional register: it tells the reader what to do.

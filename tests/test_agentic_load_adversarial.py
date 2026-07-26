@@ -87,6 +87,17 @@ def instance_id(n: int) -> bytes:
     return hashlib.sha3_256(f"agent-instance-{n}".encode()).digest()
 
 
+def _seeded_counts(seed: bytes, count: int, low: int, high: int) -> list[int]:
+    """Deterministic integer stream in [low, high] (SHAKE256, not random.Random).
+
+    Load-shape fixtures must be reproducible across interpreters and runs so a
+    calibration test never drifts for reasons unrelated to the detector.
+    """
+    span = high - low + 1
+    raw = hashlib.shake_256(seed).digest(4 * count)
+    return [low + int.from_bytes(raw[i * 4 : i * 4 + 4], "big") % span for i in range(count)]
+
+
 # ---------------------------------------------------------------------------
 # 1. High-concurrency agentic load
 # ---------------------------------------------------------------------------
@@ -95,56 +106,99 @@ def instance_id(n: int) -> bytes:
 @requires_pqc
 class TestHighConcurrencyAgenticLoad:
     def test_detector_is_silent_under_sustained_parallel_load(self) -> None:
-        """Real parallel PQC work, calibrated thresholds, zero alerts.
+        """Real parallel PQC work at the baselined rate must not false-fire.
 
-        This is the false-positive test that matters: a legitimate service
-        saturating every core must not look like an incident.  The detector is
-        warmed on a synthetic profile at the load's own rate, then driven from
-        the real workload.
+        This is the false-positive test that matters, and the trap it has to
+        avoid is circularity: warm the baseline far ABOVE the driven load and
+        ``assert alerts == []`` holds by arithmetic — the Anscombe residual is
+        negative — no matter what the detector's calibration is.  (The earlier
+        form of this test did exactly that: it warmed at 4x the probe rate and
+        then drove ~1000 ops into a single bucket, a level it could never fire
+        on.)
+
+        So here the baseline is warmed at the workload's OWN rate, *with* the
+        bucket-to-bucket jitter a real service has, and the parallel load then
+        runs sustained at the TOP of that normal range (1.15x the mean) across
+        several buckets — each one well above the absolute floor.  What keeps
+        the detector silent is that it has learned the traffic's natural
+        variance (sigma), so a benign bucket at the top of the range scores
+        ~1, not ~14.  A regression that mis-floored sigma at the Poisson value
+        of 1, or broke the overdispersion EWMA, WOULD fire here — which is what
+        makes this a real calibration test rather than a tautology.
         """
         from ama_cryptography.pqc_backends import generate_kyber_keypair
 
         detector = VolumeSpikeDetector()
-        alerts: list[object] = []
-        alerts_lock = threading.Lock()
 
-        # Measure the achievable rate first, then warm the baseline at it.
+        # Achievable single-thread rate, floored so every bucket clears the
+        # absolute min_burst_count gate (else the floor, not the statistics,
+        # would be what holds the line).
         probe_start = time.monotonic()
         probe_ops = 0
         while time.monotonic() - probe_start < 0.25:
             generate_kyber_keypair()
             probe_ops += 1
-        rate = max(1, int(probe_ops * 4))
+        base_rate = max(detector.min_burst_count * 2, probe_ops)
 
-        for bucket in range(detector.warmup_buckets + 5):
-            for i in range(rate):
-                detector.record("kyber_keypair", now=bucket + (i + 1) / (rate + 1.0))
+        # Warm the baseline over a jittery profile (+/-15%) so sigma reflects a
+        # real service's variance rather than being floored at the Poisson 1.
+        jitter = _seeded_counts(
+            b"sustained-load-jitter",
+            detector.warmup_buckets + 10,
+            int(base_rate * 0.85),
+            int(base_rate * 1.15),
+        )
+        for bucket, count in enumerate(jitter):
+            for i in range(count):
+                detector.record("kyber_keypair", now=bucket + (i + 1) / (count + 1.0))
 
-        base = detector.warmup_buckets + 5
-        counter = [0]
+        # Sustained parallel load at the top of the normal range, one bucket at
+        # a time.  The per-bucket barrier (the pool context exit) keeps the
+        # ordering honest: record() takes an explicit `now`, and if bucket b+1's
+        # ops raced ahead of bucket b's, the detector would see its bucket index
+        # go backwards and thrash its bookkeeping — a harness artefact, not a
+        # property of the load.  Within a bucket the order does not matter (every
+        # op shares one bucket index; the count just increments under the
+        # detector's own lock), so each bucket's work runs across every core.
+        base = len(jitter)
+        load_per_bucket = round(base_rate * 1.15)
+        load_buckets = 5
+        assert load_per_bucket >= detector.min_burst_count
 
-        def worker(_: int) -> None:
-            for _ in range(16):
-                generate_kyber_keypair()
-                with alerts_lock:
-                    counter[0] += 1
-                    n = counter[0]
-                spike = detector.record("kyber_keypair", now=base + min(0.999, n / (rate * 1.5)))
-                if spike is not None:
+        alerts: list[object] = []
+        alerts_lock = threading.Lock()
+        performed = 0
+
+        for bucket in range(load_buckets):
+            idx = [0]
+
+            def worker(_: int, _bucket: int = bucket, _idx: list[int] = idx) -> None:
+                while True:
                     with alerts_lock:
-                        alerts.append(spike)
+                        i = _idx[0]
+                        if i >= load_per_bucket:
+                            return
+                        _idx[0] += 1
+                    generate_kyber_keypair()
+                    now = base + _bucket + (i + 1) / (load_per_bucket + 1.0)
+                    spike = detector.record("kyber_keypair", now=now)
+                    if spike is not None:
+                        with alerts_lock:
+                            alerts.append(spike)
 
-        with ThreadPoolExecutor(max_workers=min(THREADS, 64)) as pool:
-            list(pool.map(worker, range(min(THREADS, 64))))
+            with ThreadPoolExecutor(max_workers=min(THREADS, 64)) as pool:
+                list(pool.map(worker, range(min(THREADS, 64))))
+            performed += idx[0]
 
-        total = counter[0]
-        assert total > 0
-        # Either the workload stayed under the baseline rate (no spike), or it
-        # exceeded it — but a real service's own throughput must not clear a
-        # 6-sigma bar against a baseline set at that same throughput.
+        assert performed == load_per_bucket * load_buckets
+        # Every load bucket held load_per_bucket ops — above the absolute floor
+        # and above the baseline mean — yet none fired, because the learned
+        # sigma absorbs a top-of-range bucket.  A sigma mis-floored at the
+        # Poisson value of 1 would score this ~14 and fire.
         assert alerts == [], (
-            f"volume detector fired on legitimate load: {total} ops against a "
-            f"baseline of {rate}/bucket -> {alerts[:2]}"
+            f"volume detector fired on legitimately-baselined load: "
+            f"{load_per_bucket}/bucket at the top of a baseline whose mean is "
+            f"~{base_rate} -> {alerts[:2]}"
         )
 
     def test_monitor_bookkeeping_survives_parallel_hooks(self) -> None:

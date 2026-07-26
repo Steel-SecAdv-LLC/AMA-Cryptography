@@ -216,19 +216,31 @@ key stays `warning`.
 later instance of the signer.
 
 **Method**: Three marker families are scored — a phrase-level *successor*
-family (bigrams such as "next instance", "your successor"), plus unigram
-*instructional* and *operational* families. The successor family is
-phrase-level because its component words are ordinary English; scoring them as
-unigrams flags roughly one in eight files of this repository's own
-documentation. A payload is flagged only when all three families are covered,
-the fractional coverage score reaches the threshold, and the printable-ASCII
-ratio clears its floor — signatures, keys and ciphertext are high-entropy
-binary and are rejected before any scoring.
+family (bigrams such as "next instance", "subsequent iterations", built from a
+cross product of forward-referring words with instance-denoting nouns), plus
+unigram *instructional* and *operational* families. The successor family is
+phrase-level because its component words are ordinary English; scoring the
+successor vocabulary as unigrams trips well over half of this repository's own
+files (measured: 256 of 443). The cross product excludes generic articles,
+possessives and bare pronouns (the/my/your/me/you), which would otherwise
+generate non-discriminative pairs like "the agent" or "you are". A payload is
+flagged only when all three families are covered, the fractional coverage score
+reaches the threshold, and the printable-ASCII ratio clears its floor —
+signatures, keys and ciphertext are high-entropy binary and are rejected before
+any scoring.
 
-**Calibration**: thresholds were swept against a 448-file corpus of this
-repository's Markdown, Python, C, headers, JSON and YAML. The shipped defaults
-flag none of it while catching every hand-written successor note;
-`tests/test_agentic_abuse_detectors.py` re-runs the sweep on every CI run.
+**Calibration**: measured against a 443-file corpus (git-tracked source) of this repository's
+Markdown, Python, C, headers, JSON, YAML and Cython — a deliberately *hard*
+negative, since security prose is dense with the operational vocabulary the
+detector scores. With the shipped defaults, every genuinely-benign file scores
+≤ 1.75 while the four hand-written successor notes score 2.25–3.00 (a margin of
+≥ 0.50); the only corpus files flagged are the three that themselves contain or
+describe successor-note tradecraft (`INVARIANTS.md`, `CHANGELOG.md`, and the
+adversarial-load test that embeds a synthetic note). Lowering the threshold to
+1.50 additionally flags one genuinely-benign document, so 1.75 is the tighter
+operating point. `tests/test_agentic_abuse_detectors.py` re-derives this on
+every CI run — it pins the benign false-positive set (any new benign flag fails
+the build) and asserts the ≥ 0.50 separation directly.
 
 **Bounded work**: at most `max_scan_bytes` (default 8192) are examined, sampled
 head and tail so prepended filler cannot hide a note at the end. One pass, no

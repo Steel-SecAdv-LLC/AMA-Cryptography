@@ -34,6 +34,7 @@ from hypothesis import strategies as st
 from ama_cryptography.monitoring import (
     CYTHON_DETECTOR_KERNELS,
     NoteArtifactDetector,
+    NoteArtifactSignal,
     VolumeSpike,
     VolumeSpikeDetector,
     _bigram_hash,
@@ -142,7 +143,14 @@ class TestVolumeSpikeDetection:
         assert len(spikes) == 1
         spike = spikes[0]
         assert spike.operation == "kyber_encaps"
-        assert spike.score >= d.threshold_sigma
+        # `spike.score >= threshold` would be vacuous: record() only returns a
+        # spike once the score has crossed the threshold, so it is true by
+        # construction.  The informative facts are that the alert fired the
+        # instant the burst cleared the absolute floor — its count is the
+        # running total at the crossing, at or above min_burst_count and far
+        # short of the 30000 the bucket ultimately holds (low-latency alerting,
+        # not bucket-close reporting) — against a correctly-tracked baseline.
+        assert d.min_burst_count <= spike.count < 30000
         assert spike.baseline_rate == pytest.approx(300.0, rel=0.05)
 
     def test_ephemeral_key_churn_escalates_severity(self) -> None:
@@ -329,15 +337,105 @@ undetected checkpoint behind. Lessons learned: relay first.""",
 )
 
 
+_CORPUS_SUFFIXES = (".md", ".py", ".c", ".h", ".json", ".yml", ".pyx")
+_CORPUS_SKIP_TOP = {".git", "build", "build-dudect", "dist", ".eggs", ".pytest_cache"}
+
+
 def corpus_files() -> list[pathlib.Path]:
-    """This repository's own prose and source, as a benign-traffic stand-in."""
-    out: list[pathlib.Path] = []
+    """This repository's own prose and source, as a benign-traffic stand-in.
+
+    A deliberately HARD negative corpus: security prose is dense with the exact
+    operational vocabulary the note detector scores (persist, credential,
+    escape, sandbox), so a low false-positive rate here is a conservative bound
+    on what a signing service's real traffic would produce.
+
+    Restricted to git-TRACKED files so the corpus is deterministic and
+    reproducible: a plain filesystem walk also picks up Cython-generated
+    ``src/cython/*.c``, ``.pytest_cache`` and other build artefacts, which make
+    the corpus size (and therefore the calibration) depend on whether the tree
+    has been built.  A calibration corpus that changes under your feet is
+    exactly the kind of soft measurement this test exists to replace.  When git
+    is unavailable the walk falls back to explicit build-artefact exclusions.
+    """
+    tracked = _git_tracked_paths()
+    if tracked is not None:
+        return [
+            REPO_ROOT / rel
+            for rel in tracked
+            if rel.endswith(_CORPUS_SUFFIXES) and rel.split("/", 1)[0] not in _CORPUS_SKIP_TOP
+        ]
+
+    out: list[pathlib.Path] = []  # pragma: no cover - git-less fallback
     for pattern in ("*.md", "*.py", "*.c", "*.h", "*.json", "*.yml", "*.pyx"):
         for path in REPO_ROOT.rglob(pattern):
             parts = path.relative_to(REPO_ROOT).parts
-            if parts and parts[0] in {".git", "build", "build-dudect", "dist", ".eggs"}:
+            if parts and parts[0] in _CORPUS_SKIP_TOP:
+                continue
+            # Cython emits a .c next to every .pyx; it is a build artefact, not
+            # repository text, and must not drift into the benign corpus.
+            if path.suffix == ".c" and path.with_suffix(".pyx").exists():
                 continue
             out.append(path)
+    return out
+
+
+def _git_tracked_paths() -> list[str] | None:
+    """Repository-relative paths of git-tracked files, or None without git."""
+    import subprocess
+
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(REPO_ROOT), "ls-files", "-z"],
+            capture_output=True,
+            check=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):  # pragma: no cover - git-less env
+        return None
+    return [p for p in proc.stdout.decode("utf-8", "surrogateescape").split("\0") if p]
+
+
+# The only corpus files the default detector flags are ones that *themselves*
+# contain or describe successor-note tradecraft — they are true positives on
+# literal note content, not false positives on benign prose.  Pinned as an
+# explicit allow-list so any NEW flag on a genuinely-benign file fails CI.
+#
+#   INVARIANTS.md                       — documents INVARIANT-30 and quotes
+#                                         successor-note structure verbatim.
+#   CHANGELOG.md                        — the changelog entry for this detector,
+#                                         which names its own marker phrases.
+#   tests/test_agentic_load_adversarial.py — embeds SYNTHETIC_NOTE, an actual
+#                                         signed successor note.
+THREAT_DESCRIBING_CORPUS_FILES: frozenset[str] = frozenset(
+    {
+        "INVARIANTS.md",
+        "CHANGELOG.md",
+        "tests/test_agentic_load_adversarial.py",
+    }
+)
+
+#: Required score gap between the lowest hand-written note and the
+#: highest-scoring genuinely-benign corpus file.  The generic-marker cleanup
+#: (see NoteArtifactDetector docstring) is what buys this; before it the gap
+#: was exactly 0.0 (a security runbook tied the lowest note).
+NOTE_CORPUS_MARGIN = 0.5
+
+
+def _rel(path: pathlib.Path) -> str:
+    return path.relative_to(REPO_ROOT).as_posix()
+
+
+def _score_corpus(
+    detector: NoteArtifactDetector,
+) -> dict[str, NoteArtifactSignal]:
+    """Inspect every corpus file once; return {relative_path: signal}."""
+    out: dict[str, NoteArtifactSignal] = {}
+    for path in corpus_files():
+        try:
+            data = path.read_bytes()
+        except OSError:  # pragma: no cover - unreadable file in a checkout
+            continue
+        out[_rel(path)] = detector.inspect(data, label=_rel(path))
     return out
 
 
@@ -414,52 +512,108 @@ class TestNoteArtifactDetection:
 
 
 class TestNoteArtifactCalibration:
-    """The threshold is derived from a corpus, not asserted from a constant."""
+    """The threshold is derived from a corpus, not asserted from a constant.
 
-    def test_false_positive_rate_on_the_repository_corpus(self) -> None:
-        d = NoteArtifactDetector()
-        files = corpus_files()
-        assert len(files) > 100, "corpus too small to calibrate against"
+    These tests re-derive the calibration on every CI run.  They deliberately
+    avoid the two traps a "calibration test" usually falls into: a
+    false-positive bound so loose it hides the real behaviour, and a relation
+    (``strict_hits <= loose_hits``) that a monotone score gate makes
+    *mathematically always true* and therefore vacuous.  What is asserted here
+    instead is (1) the exact benign false-positive set and (2) a measured score
+    separation between genuine notes and the corpus — both of which can, and
+    would, fail if the markers or threshold regressed.
+    """
 
-        flagged = []
-        for path in files:
-            try:
-                data = path.read_bytes()
-            except OSError:  # pragma: no cover - unreadable file in a checkout
-                continue
-            if d.inspect(data, label=str(path)).flagged:
-                flagged.append(path)
+    def test_no_false_positive_outside_the_threat_describing_files(self) -> None:
+        """Zero benign false positives — not a <=1% budget that hides them.
 
-        rate = len(flagged) / len(files)
-        assert rate <= 0.01, (
-            f"note detector flagged {len(flagged)}/{len(files)} corpus files "
-            f"({rate:.2%}); default thresholds are no longer conservative. "
-            f"First few: {[str(p) for p in flagged[:5]]}"
+        The only corpus files the default may flag are the ones that literally
+        contain successor-note content (they document or test the detector).
+        Any *other* flag is a real false positive on benign prose and fails
+        the build.
+        """
+        signals = _score_corpus(NoteArtifactDetector())
+        assert len(signals) > 100, "corpus too small to calibrate against"
+
+        flagged = {rel for rel, sig in signals.items() if sig.flagged}
+        unexpected = flagged - THREAT_DESCRIBING_CORPUS_FILES
+        assert unexpected == set(), (
+            "note detector flagged genuinely-benign corpus files "
+            f"{sorted(unexpected)} — the default thresholds/markers are no "
+            "longer conservative, or a new benign file resembles a note. "
+            "Investigate before widening THREAT_DESCRIBING_CORPUS_FILES."
         )
 
-    def test_default_threshold_beats_the_looser_one(self) -> None:
-        """Documents the sweep behind the 1.75 default.
+        # The allow-listed files must flag for the RIGHT reason: because they
+        # carry successor-family content, not because some unrelated gate
+        # happened to trip.  (A file may legitimately drop out of the flagged
+        # set if its text changes; only assert on the ones still flagged.)
+        for rel in flagged & THREAT_DESCRIBING_CORPUS_FILES:
+            assert signals[rel].distinct["successor"] >= 1, rel
 
-        Asserted as a *relation* rather than a fixed count so the test keeps
-        meaning as the corpus grows: the shipped default must never flag more
-        of the corpus than a looser threshold would.
+    def test_notes_separate_from_the_corpus_by_a_measured_margin(self) -> None:
+        """Genuine notes outscore every benign file by >= NOTE_CORPUS_MARGIN.
+
+        This is the property the tautological ``strict <= loose`` test only
+        pretended to check.  The four hand-written notes must sit a real
+        distance above the highest-scoring genuinely-benign file; if the
+        margin collapses (as it did when generic function-word bigrams
+        polluted the successor family) this fails.
         """
-        files = corpus_files()
-        default = NoteArtifactDetector()
+        d = NoteArtifactDetector()
+        note_scores = [d.inspect(n).score for n in SUCCESSOR_NOTES]
+        min_note = min(note_scores)
+
+        signals = _score_corpus(d)
+        benign_scores = [
+            sig.score for rel, sig in signals.items() if rel not in THREAT_DESCRIBING_CORPUS_FILES
+        ]
+        max_benign = max(benign_scores)
+
+        assert min_note - max_benign >= NOTE_CORPUS_MARGIN, (
+            f"note-vs-corpus score separation collapsed to "
+            f"{min_note - max_benign:.2f} (< {NOTE_CORPUS_MARGIN}): lowest note "
+            f"{min_note:.2f}, highest benign file {max_benign:.2f}"
+        )
+        # Every note clears the shipped threshold, and with headroom.
+        assert min_note >= d.score_threshold + 0.25
+        assert all(d.inspect(n).flagged for n in SUCCESSOR_NOTES)
+
+    def test_tightening_the_threshold_only_removes_benign_files(self) -> None:
+        """The sweep behind the default, stated as a falsifiable claim.
+
+        Lowering the threshold from the 1.75 default to 1.50 must (a) keep
+        every true-positive note and (b) flag a *strict superset* of the
+        corpus — i.e. its only effect in this band is to admit MORE benign
+        files, never to recover a note the default missed.  That is the real
+        content the old ``default_hits <= loose_hits`` assertion lacked: that
+        one is true for any two thresholds on a monotone gate and proves
+        nothing.  A strict superset can, and would, fail if 1.75 were already
+        so loose it flagged everything 1.50 does.
+        """
+        default_flagged = {
+            rel for rel, sig in _score_corpus(NoteArtifactDetector()).items() if sig.flagged
+        }
+        loose_flagged = {
+            rel
+            for rel, sig in _score_corpus(NoteArtifactDetector(score_threshold=1.5)).items()
+            if sig.flagged
+        }
+
+        assert default_flagged < loose_flagged, (
+            "lowering the threshold to 1.50 did not admit any additional corpus "
+            f"file (default={sorted(default_flagged)}, loose={sorted(loose_flagged)}); "
+            "the 1.75 default is no longer sitting just above the benign band — "
+            "recalibration is due."
+        )
+        # The files 1.50 admits that 1.75 rejects are genuinely benign: none is
+        # a hand-written note, so tightening to the default loses no recall.
+        newly_admitted = loose_flagged - default_flagged
+        assert newly_admitted, "expected the sweep to admit at least one benign file at 1.50"
+        assert newly_admitted.isdisjoint(THREAT_DESCRIBING_CORPUS_FILES)
         loose = NoteArtifactDetector(score_threshold=1.5)
-
-        default_hits = 0
-        loose_hits = 0
-        for path in files:
-            try:
-                data = path.read_bytes()
-            except OSError:  # pragma: no cover
-                continue
-            default_hits += default.inspect(data).flagged
-            loose_hits += loose.inspect(data).flagged
-
-        assert default_hits <= loose_hits
-        # ...while keeping every true positive.
+        default = NoteArtifactDetector()
+        assert all(loose.inspect(n).flagged for n in SUCCESSOR_NOTES)
         assert all(default.inspect(n).flagged for n in SUCCESSOR_NOTES)
 
 
@@ -678,8 +832,18 @@ class TestHashHelpers:
         left, right = _fnv1a64(b"next"), _fnv1a64(b"instance")
         assert _bigram_hash(left, right) != _bigram_hash(right, left)
 
-    def test_bigram_hash_stays_in_range(self) -> None:
-        assert 0 <= _bigram_hash((1 << 64) - 1, (1 << 64) - 1) < (1 << 64)
+    def test_bigram_hash_matches_reference_vectors(self) -> None:
+        # Known-answer, not just a range check: the trailing 64-bit mask makes
+        # `0 <= h < 2**64` hold for ANY implementation (even `return 0`), so a
+        # range assertion pins nothing.  These vectors pin the actual mixing —
+        # multiply the previous hash by the FNV prime, XOR the current hash,
+        # reduce mod 2**64 — which is the identity the Cython kernel replays
+        # inline (math_engine.pyx: `(prev_h * 1099511628211UL) ^ h`).
+        assert _bigram_hash(0x0123456789ABCDEF, 0xFEDCBA9876543210) == 0x6460677698BADF0D
+        # Full-width inputs must still reduce cleanly into range.
+        result = _bigram_hash((1 << 64) - 1, (1 << 64) - 1)
+        assert result == 0x100000001B2
+        assert 0 <= result < (1 << 64)
 
 
 # ---------------------------------------------------------------------------

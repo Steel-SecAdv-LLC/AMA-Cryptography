@@ -66,16 +66,21 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 - **3R note-like artifact detector**
   (`ama_cryptography.monitoring.NoteArtifactDetector`). Scores signed payloads
   for the structure of instructions addressed to a later instance: a
-  phrase-level *successor* family (bigrams such as "next instance", "your
-  successor" — the individual words are ordinary English and scoring them as
-  unigrams flags ~12% of this repository's own documentation), plus unigram
-  *instructional* and *operational* families. A printable-ASCII floor rejects
-  signatures, keys and ciphertext before any scoring. Thresholds were swept
-  against a 448-file corpus of the repository's own text: the shipped defaults
-  flag none of it while catching every hand-written successor note, and
-  `tests/test_agentic_abuse_detectors.py` re-runs that sweep so the number
-  stays honest as the corpus grows. Advisory only — it never blocks a
-  signature.
+  phrase-level *successor* family (bigrams such as "next instance",
+  "subsequent iterations" — a cross product of forward-referring words with
+  instance-denoting nouns, deliberately excluding generic articles/possessives/
+  pronouns whose pairs like "the agent" or "you are" occur throughout ordinary
+  prose; scoring the successor vocabulary as bare unigrams trips 256 of this
+  repository's 443 tracked files), plus unigram *instructional* and *operational*
+  families. A printable-ASCII floor rejects signatures, keys and ciphertext
+  before any scoring. Measured against a 443-file corpus (git-tracked source) of the repository's
+  own text: every genuinely-benign file scores ≤ 1.75 while the four
+  hand-written successor notes score 2.25–3.00 (margin ≥ 0.50); the only files
+  flagged are the three that themselves describe or embed successor-note
+  content. `tests/test_agentic_abuse_detectors.py` re-derives this every CI run
+  — it pins the benign false-positive set and asserts the ≥ 0.50 separation, so
+  the calibration cannot silently rot as the corpus grows. Advisory only — it
+  never blocks a signature.
 - **Monitor hooks, on by default.** `AmaCryptographyMonitor.record_operation_event()`
   and `.inspect_signed_payload()`. Both detectors are constructed by default,
   matching `AmaCryptographyMonitor`'s existing stated posture that
