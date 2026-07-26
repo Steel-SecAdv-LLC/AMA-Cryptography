@@ -5,7 +5,7 @@
 | Property | Value |
 |----------|-------|
 | Applies to Release | 3.4.0 |
-| Last Updated | 2026-07-25 |
+| Last Updated | 2026-07-26 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -17,7 +17,7 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ---
 
-## [Unreleased]
+## [3.4.0] - 2026-07-25
 
 ### Added
 
@@ -91,6 +91,15 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   signature. Passing `detect_volume_spikes=False, detect_note_artifacts=False`
   drops the detector objects and restores the previous security-report shape
   exactly.
+
+  `NoteArtifactDetector.inspect()` costs the scan budget, not the payload: the
+  head/tail sample is sliced from the caller's buffer *before* it is
+  materialised. Copying first made an inspection scale with payload size for
+  the mutable/view types — `bytes()` on a 32 MB `bytearray` is a ~38 ms copy to
+  examine 8 KB — whereas `bytes` input was already a CPython no-op. Cost is now
+  flat (~32–38 µs from 1 MB to 64 MB). `inspect()` and
+  `inspect_signed_payload()` now declare `bytes | bytearray | memoryview`,
+  which is the input set the runtime check has always accepted.
 
   `create_crypto_package()` now records the volume signal at the three sites it
   already instrumented for timing (primary signature, SPHINCS+ signature,
@@ -225,10 +234,6 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   A new fail-closed `ci-build-test.yml` job builds and tests that
   configuration on every PR, and asserts the CMake default is still `ON`, so
   the cell cannot silently rot again.
-
----
-
-## [3.4.0] - 2026-07-25
 
 ### Added
 

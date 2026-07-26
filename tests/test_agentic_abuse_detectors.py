@@ -25,7 +25,7 @@ import hashlib
 import importlib
 import os
 import pathlib
-from typing import Any
+from typing import Any, Callable
 
 import pytest
 from hypothesis import HealthCheck, given, settings
@@ -476,6 +476,48 @@ class TestNoteArtifactDetection:
         d = NoteArtifactDetector(max_scan_bytes=1024)
         signal = d.inspect(b"x" * 500_000)
         assert signal.scanned_bytes <= 1025  # budget + the join byte
+
+    @pytest.mark.parametrize("wrap", [bytes, bytearray, memoryview])
+    def test_all_buffer_types_agree_and_respect_the_budget(
+        self, wrap: Callable[[bytes], object]
+    ) -> None:
+        """bytes / bytearray / memoryview must give identical signals.
+
+        Also pins the cost model: the sample is taken by slicing the caller's
+        buffer, so only ``max_scan_bytes`` is ever materialised.  Copying the
+        whole payload first is a real cost for the mutable/view types —
+        ``bytes(bytearray_of_32MB)`` is a 32 MB copy — and inspecting a large
+        signed blob must not pay it to look at 8 KB.
+        """
+        note = SUCCESSOR_NOTES[0]
+        payload = b"A" * 200_000 + note  # note sits in the tail
+        d = NoteArtifactDetector()
+        signal = d.inspect(wrap(payload))  # type: ignore[arg-type]  # parametrised over the accepted buffer types (DET-002)
+        reference = d.inspect(payload)
+        assert (signal.flagged, signal.score, signal.tokens, signal.scanned_bytes) == (
+            reference.flagged,
+            reference.score,
+            reference.tokens,
+            reference.scanned_bytes,
+        )
+        # Head+tail sampling: the note in the tail is still found...
+        assert signal.flagged is True
+        # ...and only the budget (plus the one-byte join) was scanned.
+        assert signal.scanned_bytes <= d.max_scan_bytes + 1
+
+    def test_non_contiguous_memoryview_is_measured_in_bytes(self) -> None:
+        """A multi-byte-itemsize view must not be sliced by element.
+
+        ``memoryview(...).cast()`` in ``_sample`` normalises the view so the
+        scan budget and the head/tail offsets are counted in bytes whatever the
+        caller hands in.
+        """
+        import array
+
+        d = NoteArtifactDetector(max_scan_bytes=256)
+        wide = memoryview(array.array("I", range(4096)))  # itemsize 4
+        signal = d.inspect(wide)
+        assert signal.scanned_bytes <= d.max_scan_bytes + 1
 
     def test_successor_family_can_be_disabled(self) -> None:
         strict = NoteArtifactDetector()

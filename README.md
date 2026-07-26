@@ -174,10 +174,15 @@ A runtime monitoring framework providing cryptographic operation analysis:
 - **Recursion Engine**: Multi-scale hierarchical pattern analysis for anomaly detection
 - **Refactoring Engine**: Code complexity metrics for security review
 
+Two optional agentic-abuse detectors (on by default, advisory-only) extend the Resonance and Recursion components against the July 2026 autonomous-agent escape pattern:
+
+- **Volume-spike detector** (`VolumeSpikeDetector`): statistical detection of anomalous KEM/signature bursts, scored in the Anscombe variance-stabilising transform so a quiet baseline cannot manufacture false spikes; an optional key fingerprint separates ephemeral-key churn from a hot loop over one key.
+- **Note-like artifact detector** (`NoteArtifactDetector`): surfaces signed payloads shaped like instructions addressed to a later instance ("notes for future versions"). Calibrated against the repository's own text as a hard-negative corpus.
+
 - **Performance overhead**: Not tracked in the CI regression suite; measure locally with `python benchmarks/benchmark_suite.py`
 - **Visibility**: Runtime insight into cryptographic operation behavior
 
-> **Note:** The 3R system is a runtime anomaly monitoring framework. It surfaces statistical anomalies for security review but does not guarantee detection or prevention of timing attacks or other side-channel vulnerabilities.
+> **Note:** The 3R system is a runtime anomaly monitoring framework. It surfaces statistical anomalies for security review but does not guarantee detection or prevention of timing attacks or other side-channel vulnerabilities. The agentic-abuse detectors are advisory heuristics: they flag payloads and bursts for human review and never block a cryptographic operation.
 
 ### Multi-Language Architecture
 
@@ -196,6 +201,7 @@ Three-layer architecture balancing security and usability:
 - AES-256-GCM authenticated encryption (NIST SP 800-38D)
 - Adaptive cryptographic posture system (runtime threat response)
 - Hybrid KEM combiner (classical + PQC key encapsulation)
+- Agent-instance key/signature binding (INVARIANT-30): cryptographically forbids long-lived persistence material and successor-authorizing signatures unless a human-held operator key authorizes them — domain separation and policy over existing SHA3-256/HMAC-SHA3-256/HKDF, no new algorithms
 
 ### Quantum-Resistant Algorithms
 
@@ -891,7 +897,7 @@ The test suite includes:
 - Edge case testing for error handling
 - Performance regression tests with tiered tolerances
 - NIST ACVP vector validation (1,215 vectors across 12 algorithm functions — 815 AFT + 400 SHA-3 MCT; see [CSRC_ALIGN_REPORT.md](docs/compliance/CSRC_ALIGN_REPORT.md))
-- Fuzz harnesses for 13 C targets (`fuzz/`): AES-GCM, Argon2, ChaCha20-Poly1305, consttime, Dilithium, Ed25519, FROST, HKDF, Kyber, secp256k1, SHA3, SPHINCS+, X25519
+- Fuzz harnesses for 14 C targets (`fuzz/`): AES-GCM, agent-binding, Argon2, ChaCha20-Poly1305, consttime, Dilithium, Ed25519, FROST, HKDF, Kyber, secp256k1, SHA3, SPHINCS+, X25519. The agent-binding harness asserts security properties (fail-closed policy, no derivation for a refused binding, tampered tags rejected), not merely absence of crashes.
 - Empirical constant-time verification via [dudect](docs/constant-time-testing.md) (Welch's t-test on execution times)
 - [OSS-Fuzz](docs/oss-fuzz-onboarding.md) onboarding preparation for continuous 24/7 fuzzing
 
@@ -928,7 +934,7 @@ GitHub Actions automatically tests:
 | CI - Build & Test | `ci-build-test.yml` | Full C library build and C test suite |
 | Security | `security.yml` | pip-audit, bandit, Semgrep, secret scanning |
 | Static Analysis | `static-analysis.yml` | CodeQL analysis |
-| Fuzzing | `fuzzing.yml` | C fuzz harnesses (13 targets) |
+| Fuzzing | `fuzzing.yml` | C fuzz harnesses (14 targets) + dictionary-validity gate |
 | dudect | `dudect.yml` | Empirical constant-time verification |
 | Auto Docs | `auto-docs.yml` | Auto-generate documentation via PR |
 | Wiki Sync | `wiki-sync.yml` | Auto-sync wiki/ to GitHub Wiki |

@@ -600,6 +600,46 @@ The architecture supports optional HSM integration for master secret storage:
 | Non-repudiation | Digital signatures + RFC 3161 | Cryptographic proof |
 | Forward secrecy | Key rotation | Configurable interval |
 | Ethical binding | HKDF context integration | Cryptographic binding |
+| Agent-instance containment | Agent-instance binding (INVARIANT-30) | Operator-authorized; fail-closed, constant-time |
+
+### Agent-Instance Binding (INVARIANT-30)
+
+Extends the HKDF domain-separation and Omni-Code ethical-binding architecture
+above to the *agent* dimension. Where the existing ethical binding ties material
+to a package context, an agent-instance binding ties it to a named agent
+instance, a declared lifetime, and a capability set:
+
+```
+enc(b) = 0x11 || "AMA-AGENT-BIND-v1"
+       || version || lifetime || capabilities || reserved
+       || 0x20 || instance_id[32] || 0x20 || ethical_profile[32]     (88 bytes)
+
+HKDF info      := enc(b) || u32be(info_len) || info      (ama_hkdf_agent_bound)
+signature ctx  := SHA3-256(0x02 || enc(b))               (ama_agent_binding_context)
+authorization  := HMAC-SHA3-256(K_auth, 0x01 || enc(b))  (operator-held K_auth)
+```
+
+The two sub-domain tags (`0x01` authorization, `0x02` signature context) keep an
+authorization tag from ever being replayable as a signature context. Because
+`enc(b)` is folded into the KDF and the signature context, material derived
+under one binding is cryptographically unrelated to the same input under any
+other — an agent cannot relabel ephemeral material as persistent after the
+fact; it would have to derive it again, which is the call the policy refuses.
+
+Policy: any lifetime other than `EPHEMERAL`, or any capability in
+`{PERSISTENCE, SELF_REPLICATE, DELEGATE}`, requires a non-zero ethical-profile
+hash **and** an authorization tag verifying under the operator's key. The check
+is fail-closed and constant-time (single arithmetic exit; the HMAC is computed
+even when no key is supplied), so neither *whether* nor *which* clause refused
+is observable by timing. No new algorithm is introduced — the layer is domain
+separation and policy over SHA3-256 / HMAC-SHA3-256 / HKDF, preserving
+INVARIANT-1.
+
+**Layering:** `src/c/ama_agent_binding.c` (policy + encoding, native) →
+`ama_cryptography/agent_binding.py` (thin ctypes surface, input validation) →
+optional advisory detectors in `ama_cryptography/monitoring.py`. The native
+layer depends only on SHA3/HMAC/HKDF, so it is present in both the default and
+the `AMA_USE_NATIVE_PQC=OFF` build.
 
 ### Combined Security Analysis
 

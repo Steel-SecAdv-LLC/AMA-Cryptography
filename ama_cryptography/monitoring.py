@@ -46,7 +46,7 @@ from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, ClassVar, Deque, Dict, List, Optional, Sequence, Set, Tuple
+from typing import Any, ClassVar, Deque, Dict, List, Optional, Sequence, Set, Tuple, Union
 
 logger = logging.getLogger(__name__)
 
@@ -2243,18 +2243,39 @@ class NoteArtifactDetector:
             self.SUCCESSOR_FAMILY,
         )
 
-    def _sample(self, payload: bytes) -> bytes:
-        """Head+tail sample of at most ``max_scan_bytes``."""
-        if len(payload) <= self.max_scan_bytes:
-            return payload
-        half = self.max_scan_bytes // 2
-        return payload[:half] + b"\n" + payload[-half:]
+    def _sample(self, payload: Union[bytes, bytearray, memoryview]) -> bytes:
+        """Head+tail sample of at most ``max_scan_bytes``.
 
-    def inspect(self, payload: bytes, label: str = "payload") -> NoteArtifactSignal:
+        Slices the caller's buffer BEFORE materialising it.  Only
+        ``max_scan_bytes`` are ever scanned, but a signed payload can be
+        arbitrarily large, so copying the whole thing first (``bytes(payload)``)
+        made the cost of an inspection scale with the payload rather than with
+        the scan budget — a 32 MB blob paid a 32 MB copy to look at 8 KB.
+        Slicing first makes the copy proportional to the budget instead.
+        """
+        view: Any = payload
+        if isinstance(view, memoryview):
+            # A non-byte itemsize (or multi-dimensional) view would slice by
+            # element rather than by byte; normalise so the budget, and the
+            # head/tail offsets, are measured in bytes either way.
+            if view.itemsize != 1 or view.ndim != 1:
+                view = view.cast("B")
+        if len(view) <= self.max_scan_bytes:
+            return bytes(view)
+        half = self.max_scan_bytes // 2
+        return bytes(view[:half]) + b"\n" + bytes(view[-half:])
+
+    def inspect(
+        self, payload: Union[bytes, bytearray, memoryview], label: str = "payload"
+    ) -> NoteArtifactSignal:
         """Score `payload` for note-like structure.
 
         Args:
-            payload: Bytes about to be (or already) signed.
+            payload: Bytes about to be (or already) signed.  ``bytearray`` and
+                ``memoryview`` are accepted as well — the runtime has always
+                taken all three, and only the scan budget is ever copied, so
+                passing a view of a large buffer costs no more than passing a
+                small one.
             label: Identifier carried into the returned signal and any alert.
 
         Returns:
@@ -2263,7 +2284,7 @@ class NoteArtifactDetector:
         """
         if not isinstance(payload, (bytes, bytearray, memoryview)):
             raise TypeError(f"payload must be bytes-like, got {type(payload).__name__}")
-        data = self._sample(bytes(payload))
+        data = self._sample(payload)
 
         # Structural reject, BEFORE the tokenising scan.  The printable-ratio
         # gate is the reason this detector is affordable to point at real
@@ -2688,6 +2709,7 @@ class AmaCryptographyMonitor:
     integrity or performance.
 
     Design Principles:
+
     - Enabled by default: Production-ready anomaly detection out of the
       box (per engineering brief Task 2).  Callers who need zero-overhead
       operation should pass ``enabled=False`` explicitly.  This extends to
@@ -2699,7 +2721,8 @@ class AmaCryptographyMonitor:
     - Lightweight: <2% performance overhead when enabled
     - Observable: Comprehensive reporting for security teams
 
-    Usage:
+    Usage::
+
         >>> monitor = AmaCryptographyMonitor(enabled=True)
         >>> pkg = create_crypto_package(codes, params, kms, monitor=monitor)
         >>> report = monitor.get_security_report()
@@ -2841,7 +2864,7 @@ class AmaCryptographyMonitor:
 
     def inspect_signed_payload(
         self,
-        payload: bytes,
+        payload: Union[bytes, bytearray, memoryview],
         label: str = "payload",
     ) -> Optional[NoteArtifactSignal]:
         """Score a payload for note-like structure before or after signing.

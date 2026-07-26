@@ -166,6 +166,7 @@ monitor = create_monitor(detect_volume_spikes=False, detect_note_artifacts=False
 | Constructing both detectors | ~2.5 µs, once per monitor (marker tables are built once and shared) |
 | `record_operation_event()` | ~1.3 µs enabled, ~0.2 µs when disabled |
 | `inspect()` on a 3309-byte ML-DSA signature | ~6.7 µs (rejected by the printable-ratio gate before tokenising) |
+| `inspect()` on a large payload | Bounded by `max_scan_bytes`, not by payload size — the head/tail sample is sliced from the caller's buffer before it is materialised, so a 32 MB `bytearray` or `memoryview` costs the same as a small one |
 
 Against an ML-DSA-65 signature at ~200 µs these are sub-percent. The
 `benchmarks/benchmark_runner.py` suite stays within its 10% regression
@@ -259,6 +260,28 @@ Both detectors are backed by Cython kernels in `src/cython/math_engine.pyx`
 `ama_cryptography/monitoring.py`. Equivalence is pinned by property-based
 tests, so the compiled extension is an optimisation and never a correctness
 dependency. `monitoring.CYTHON_DETECTOR_KERNELS` reports which path is active.
+
+`token_family_counts` is pure integer work and is asserted **exactly**.
+`volume_spike_scores` is an EWMA recursion, so on FMA targets (ARM) the
+per-step rounding differs from Python's and accumulates across the series; the
+tests pin a small relative tolerance (1e-9) there, bit-for-bit only where the
+target has no FMA contraction. Either way the difference is orders of magnitude
+below anything that could move a score across the 6-sigma threshold.
+
+#### How the detectors are verified
+
+| Aspect | Verification |
+|--------|--------------|
+| Quiescence (no false positives) | `tests/test_agentic_abuse_detectors.py` — steady load, jittery load, gradual ramp, small absolute burst, pre-warmup burst, and idle gaps all assert **zero** alerts |
+| Note-detector calibration | Re-derived every CI run against the repository's own git-tracked source as a hard-negative corpus: the benign false-positive set is pinned (any new benign flag fails the build) and the note-vs-corpus score separation is asserted directly |
+| Kernel equivalence | Property-based (Hypothesis) equivalence of the Cython kernels against their pure-Python twins on arbitrary bytes |
+| Concurrency | `tests/test_agentic_load_adversarial.py` drives real parallel ML-KEM/ML-DSA work through the monitor; the volume detector's clock is read under its lock so per-operation bucket indices are non-decreasing |
+| Agentic scenarios | High-concurrency ephemeral load, future-version note simulation, lateral-probe simulation, and fail-closed-under-parallel-load, end to end against the real primitives |
+
+The binding these detectors accompany is verified separately — byte-KAT C test,
+strict dudect constant-time lane, and `fuzz/fuzz_agent_binding.c`, which asserts
+fail-closed policy properties rather than merely the absence of crashes. See
+[INVARIANTS.md](INVARIANTS.md) (INVARIANT-30).
 
 ---
 

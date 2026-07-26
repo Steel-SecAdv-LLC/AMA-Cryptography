@@ -139,6 +139,72 @@ ama_hkdf(
 );
 ```
 
+### Agent-Bound HKDF (INVARIANT-30)
+
+Binds derived material to a named agent instance. Non-`EPHEMERAL` lifetimes and
+restricted capabilities (`PERSISTENCE`, `SELF_REPLICATE`, `DELEGATE`) require an
+operator-held authority key; otherwise the call refuses and writes nothing.
+
+```c
+typedef struct {
+    uint8_t version;      // AMA_AGENT_BINDING_VERSION
+    uint8_t lifetime;     // ama_agent_lifetime_t (EPHEMERAL/SESSION/PERSISTENT)
+    uint8_t capabilities; // bitmask of AMA_AGENT_CAP_*
+    uint8_t reserved;     // MUST be zero
+    uint8_t instance_id[32];
+    uint8_t ethical_profile[32];  // all-zero = absent
+    uint8_t authorization[32];    // all-zero = unauthorized
+} ama_agent_binding_t;
+
+ama_error_t ama_agent_binding_init(ama_agent_binding_t *b,
+                                   ama_agent_lifetime_t lifetime,
+                                   uint8_t capabilities,
+                                   const uint8_t instance_id[32],
+                                   const uint8_t *ethical_profile);  // or NULL
+
+ama_error_t ama_agent_binding_authorize(ama_agent_binding_t *b,      // operator-side
+                                        const uint8_t *authority_key,
+                                        size_t key_len);             // >= 32
+
+ama_error_t ama_agent_binding_check(const ama_agent_binding_t *b,    // constant-time
+                                    const uint8_t *authority_key,
+                                    size_t key_len);
+
+ama_error_t ama_agent_binding_context(const ama_agent_binding_t *b,  // ML-DSA/SLH-DSA ctx
+                                      const uint8_t *authority_key,
+                                      size_t key_len,
+                                      uint8_t out_ctx[32]);
+
+ama_error_t ama_hkdf_agent_bound(const ama_agent_binding_t *b,
+                                 const uint8_t *authority_key, size_t key_len,
+                                 const uint8_t *salt, size_t salt_len,
+                                 const uint8_t *ikm,  size_t ikm_len,
+                                 const uint8_t *info, size_t info_len,
+                                 uint8_t *okm, size_t okm_len);
+```
+
+**Example — ordinary ephemeral use needs no authority key:**
+```c
+ama_agent_binding_t b;
+uint8_t session_key[32];
+
+ama_agent_binding_init(&b, AMA_AGENT_LIFETIME_EPHEMERAL,
+                       AMA_AGENT_CAP_DATA_SIGN, instance_id, NULL);
+
+if (ama_hkdf_agent_bound(&b, NULL, 0,
+                         NULL, 0,
+                         ikm, sizeof(ikm),
+                         (const uint8_t *)"session", 7,
+                         session_key, sizeof(session_key)) != AMA_SUCCESS) {
+    /* refused: no bytes written */
+}
+```
+
+Requesting `AMA_AGENT_CAP_PERSISTENCE` (or any non-`EPHEMERAL` lifetime) without
+a verifying `authorization` tag returns `AMA_ERROR_ETHICAL_BINDING` and writes
+nothing. The layer needs only SHA3/HMAC/HKDF, so it is available in the
+`AMA_USE_NATIVE_PQC=OFF` build as well.
+
 ---
 
 ## Digital Signatures
@@ -386,16 +452,27 @@ void ama_consttime_copy(void *dst, const void *src, size_t len, int condition);
 
 ## Error Codes
 
+The canonical definition is the `ama_error_t` enum in
+[`include/ama_cryptography.h`](https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/include/ama_cryptography.h):
+
 ```c
-#define AMA_OK              0   // Success
-#define AMA_ERR_INVALID    -1   // Invalid parameter
-#define AMA_ERR_AUTH_FAILED -2  // Authentication tag mismatch
-#define AMA_ERR_KEYGEN     -3   // Key generation failure
-#define AMA_ERR_SIGN       -4   // Signing failure
-#define AMA_ERR_VERIFY     -5   // Verification failure
-#define AMA_ERR_RANDOM     -6   // RNG failure
-#define AMA_ERR_OVERFLOW   -7   // Buffer overflow prevented
+typedef enum {
+    AMA_SUCCESS               =  0,
+    AMA_ERROR_INVALID_PARAM   = -1,  // NULL pointer, bad length, out-of-range argument
+    AMA_ERROR_MEMORY          = -2,  // Allocation failure
+    AMA_ERROR_CRYPTO          = -3,  // Primitive-level failure
+    AMA_ERROR_VERIFY_FAILED   = -4,  // Signature or authentication tag rejected
+    AMA_ERROR_NOT_IMPLEMENTED = -5,  // Entry point compiled out of this build
+    AMA_ERROR_TIMING_ATTACK   = -6,  // Timing-guard tripped
+    AMA_ERROR_SIDE_CHANNEL    = -7,  // Side-channel guard tripped
+    AMA_ERROR_OVERFLOW        = -8,  // Arithmetic/buffer overflow prevented
+    AMA_ERROR_ETHICAL_BINDING = -9   // Agent-instance binding policy refused (INVARIANT-30)
+} ama_error_t;
 ```
+
+`AMA_ERROR_ETHICAL_BINDING` is deliberately distinct from
+`AMA_ERROR_INVALID_PARAM`: the arguments were well-formed, the *policy* refused.
+New codes are appended, so existing values never change.
 
 ---
 
