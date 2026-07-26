@@ -305,6 +305,45 @@ static void secp256k1_fe_to_bytes(uint8_t b[32], const secp256k1_fe *a) {
     }
 }
 
+/* secp256k1 field prime p as four 64-bit words, most-significant word first.
+ * p = 2^256 - 2^32 - 977 = FFFFFFFF...FFFFFFFE FFFFFC2F. */
+static const uint64_t SECP256K1_P_WORDS_BE[4] = {
+    0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
+    0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFEFFFFFC2FULL
+};
+
+/**
+ * Return 1 when the 32-byte big-endian value is a canonical field element
+ * (strictly less than p), 0 otherwise (value >= p).
+ *
+ * ECDSA verification uses this to REJECT a public-key coordinate that is
+ * greater than or equal to p rather than silently reducing it.  A coordinate
+ * >= p is only representable in the 19-value band [p, 2^256) — 977 + 2^32
+ * distinct encodings — and every one of them is a second, non-canonical byte
+ * string for the reduced point that the unreduced field arithmetic would
+ * otherwise accept.  Rejecting it closes the same input-malleability class as
+ * the r/s >= n range check in this file and the Ed25519 S >= L check in
+ * internal/ama_ed25519_canonical.h: a valid signature must not verify under a
+ * second, distinct public-key encoding.  This is deliberately stricter than a
+ * reduce-then-check policy, and mirrors libsecp256k1's `secp256k1_fe_set_b32`
+ * overflow rejection.  Verification is variable time by design — the public
+ * key is public — so a data-dependent early return here carries no timing
+ * obligation.
+ */
+static int secp256k1_fe_bytes_canonical(const uint8_t b[32]) {
+    int i;
+    for (i = 0; i < 4; i++) {
+        const uint8_t *p = b + i * 8;
+        uint64_t w = ((uint64_t)p[0] << 56) | ((uint64_t)p[1] << 48) |
+                     ((uint64_t)p[2] << 40) | ((uint64_t)p[3] << 32) |
+                     ((uint64_t)p[4] << 24) | ((uint64_t)p[5] << 16) |
+                     ((uint64_t)p[6] << 8)  | (uint64_t)p[7];
+        if (w < SECP256K1_P_WORDS_BE[i]) return 1; /* strictly below p */
+        if (w > SECP256K1_P_WORDS_BE[i]) return 0; /* strictly above p */
+    }
+    return 0; /* exactly equal to p — not a canonical [0, p) element */
+}
+
 /**
  * Field addition: r = a + b (mod p).
  * Result may not be fully reduced.
@@ -1808,6 +1847,17 @@ AMA_API ama_error_t ama_secp256k1_ecdsa_verify(const uint8_t *signature, size_t 
     if (sc_is_high(&s_sc))
         return AMA_ERROR_VERIFY_FAILED;
 
+    /* Public-key coordinates must be canonical field elements in [0, p).  A
+     * coordinate >= p is a non-canonical encoding of the reduced point; it is
+     * rejected outright rather than silently reduced, so a signature can never
+     * verify under a second, distinct public-key byte string (see
+     * secp256k1_fe_bytes_canonical).  Wycheproof ships no out-of-field-point
+     * ECDSA vectors, so this path is covered by tests/test_secp256k1_ecdsa_
+     * noncanonical_pubkey.py and tests/c/test_secp256k1_ecdsa.c instead. */
+    if (!secp256k1_fe_bytes_canonical(public_key) ||
+        !secp256k1_fe_bytes_canonical(public_key + 32))
+        return AMA_ERROR_VERIFY_FAILED;
+
     /* Public key must be a point on the curve, and not the identity. */
     secp256k1_fe_from_bytes(&Q.x, public_key);
     secp256k1_fe_from_bytes(&Q.y, public_key + 32);
@@ -1858,3 +1908,20 @@ AMA_API ama_error_t ama_secp256k1_ecdsa_verify(const uint8_t *signature, size_t 
         return AMA_ERROR_VERIFY_FAILED;
     return AMA_SUCCESS;
 }
+
+#ifdef AMA_TESTING_MODE
+/* Test-only export of the ECDSA public-key coordinate canonicality predicate
+ * so tests/c/test_secp256k1.c can exercise the [0, p) field-element gate
+ * (INVARIANT-29) directly and in isolation from the curve-membership and
+ * signature checks — the full-verify path cannot distinguish a canonical-gate
+ * rejection from a curve/sig rejection, because producing a valid signature
+ * for a public key whose coordinate lies in the tiny reduced image
+ * [0, 2^32 + 977) would require an ECDLP solution or an ECDSA forgery.
+ * Not exposed in any public header — visible only to AMA_TESTING_MODE builds
+ * of the test static library.  Returns 1 when the 32-byte big-endian value is
+ * a canonical field element (strictly < p), 0 otherwise (value >= p). */
+int ama_secp256k1_test_fe_bytes_canonical(const uint8_t b[32]);
+int ama_secp256k1_test_fe_bytes_canonical(const uint8_t b[32]) {
+    return secp256k1_fe_bytes_canonical(b);
+}
+#endif

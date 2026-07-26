@@ -70,6 +70,33 @@ static void be32(uint8_t out[32], uint32_t n) {
     out[31] = (uint8_t)(n      );
 }
 
+/* AMA_TESTING_MODE-only export from src/c/ama_secp256k1.c.  Forward-declared
+ * here so the ECDSA public-key canonicality gate (INVARIANT-29) can be
+ * exercised in isolation from the curve-membership and signature checks —
+ * see the definition's comment for why the full-verify path cannot
+ * distinguish a canonical-gate rejection from a curve/sig rejection. */
+extern int ama_secp256k1_test_fe_bytes_canonical(const uint8_t b[32]);
+
+/* secp256k1 field prime p and its neighbours, big-endian.
+ * p = 2^256 - 2^32 - 977 = FFFF...FFFE FFFFFC2F. */
+static const uint8_t FE_P[32] = {
+    0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,
+    0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFE,0xFF,0xFF,0xFC,0x2F
+};
+static const uint8_t FE_P_MINUS_1[32] = {
+    0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,
+    0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFE,0xFF,0xFF,0xFC,0x2E
+};
+static const uint8_t FE_P_PLUS_1[32] = {
+    0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,
+    0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFE,0xFF,0xFF,0xFC,0x30
+};
+static const uint8_t FE_ALL_FF[32] = {
+    0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,
+    0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF
+};
+static const uint8_t FE_ZERO[32] = { 0 };
+
 int main(void) {
     ama_error_t rc;
     uint8_t out_x[32], out_y[32];
@@ -137,6 +164,79 @@ int main(void) {
     TEST_ASSERT(rc == AMA_ERROR_INVALID_PARAM, "NULL privkey rejected");
     rc = ama_secp256k1_pubkey_from_privkey(privkey, NULL);
     TEST_ASSERT(rc == AMA_ERROR_INVALID_PARAM, "NULL output buffer rejected");
+
+    /* Test 8: ECDSA sign -> verify round-trip (RFC 6979 deterministic). */
+    {
+        uint8_t qx[32], qy[32], pub64[64];
+        uint8_t msg[32];
+        uint8_t sig[AMA_SECP256K1_ECDSA_MAX_SIG_LEN];
+        uint8_t sig2[AMA_SECP256K1_ECDSA_MAX_SIG_LEN];
+        size_t sig_len = 0, sig2_len = 0;
+        int i;
+
+        be32(privkey, 7);
+        rc = ama_secp256k1_point_mul(privkey, Gx, Gy, qx, qy);
+        TEST_ASSERT(rc == AMA_SUCCESS, "ecdsa: derive pubkey 7*G");
+        memcpy(pub64, qx, 32);
+        memcpy(pub64 + 32, qy, 32);
+        for (i = 0; i < 32; i++) msg[i] = (uint8_t)(0x10 + i);
+
+        rc = ama_secp256k1_ecdsa_sign(sig, &sig_len, msg, privkey);
+        TEST_ASSERT(rc == AMA_SUCCESS, "ecdsa: sign succeeds");
+        TEST_ASSERT(sig_len >= 8 && sig_len <= AMA_SECP256K1_ECDSA_MAX_SIG_LEN,
+                    "ecdsa: signature length within DER bounds");
+        rc = ama_secp256k1_ecdsa_verify(sig, sig_len, msg, pub64);
+        TEST_ASSERT(rc == AMA_SUCCESS, "ecdsa: verify accepts the valid signature");
+
+        rc = ama_secp256k1_ecdsa_sign(sig2, &sig2_len, msg, privkey);
+        TEST_ASSERT(rc == AMA_SUCCESS && sig2_len == sig_len &&
+                    memcmp(sig, sig2, sig_len) == 0,
+                    "ecdsa: RFC 6979 signing is deterministic (identical bytes)");
+
+        /* Test 9: a public-key coordinate >= p is REJECTED, not silently
+         * reduced.  Restore pub64 between probes so exactly one coordinate is
+         * out of field at a time.  (An out-of-field coordinate cannot be
+         * combined with a *valid* signature for the reduced point without an
+         * ECDLP/forgery, so this asserts the policy through the full-verify
+         * path; the canonical gate itself is isolated in Test 10.) */
+        {
+            uint8_t bad[64];
+
+            memcpy(bad, pub64, 64); memcpy(bad, FE_P, 32);
+            TEST_ASSERT(ama_secp256k1_ecdsa_verify(sig, sig_len, msg, bad) ==
+                        AMA_ERROR_VERIFY_FAILED, "ecdsa: Qx == p rejected");
+            memcpy(bad, pub64, 64); memcpy(bad, FE_P_PLUS_1, 32);
+            TEST_ASSERT(ama_secp256k1_ecdsa_verify(sig, sig_len, msg, bad) ==
+                        AMA_ERROR_VERIFY_FAILED, "ecdsa: Qx == p+1 rejected");
+            memcpy(bad, pub64, 64); memcpy(bad, FE_ALL_FF, 32);
+            TEST_ASSERT(ama_secp256k1_ecdsa_verify(sig, sig_len, msg, bad) ==
+                        AMA_ERROR_VERIFY_FAILED, "ecdsa: Qx == 2^256-1 rejected");
+            memcpy(bad, pub64, 64); memcpy(bad + 32, FE_P, 32);
+            TEST_ASSERT(ama_secp256k1_ecdsa_verify(sig, sig_len, msg, bad) ==
+                        AMA_ERROR_VERIFY_FAILED, "ecdsa: Qy == p rejected");
+            memcpy(bad, pub64, 64); memcpy(bad + 32, FE_ALL_FF, 32);
+            TEST_ASSERT(ama_secp256k1_ecdsa_verify(sig, sig_len, msg, bad) ==
+                        AMA_ERROR_VERIFY_FAILED, "ecdsa: Qy == 2^256-1 rejected");
+        }
+
+        /* Test 10: the [0, p) canonicality gate in isolation (INVARIANT-29).
+         * Distinguishes a canonical-gate rejection from curve/sig rejection,
+         * which the full-verify path in Test 9 cannot. */
+        TEST_ASSERT(ama_secp256k1_test_fe_bytes_canonical(qx) == 1,
+                    "canonical: real Qx (< p) is canonical");
+        TEST_ASSERT(ama_secp256k1_test_fe_bytes_canonical(qy) == 1,
+                    "canonical: real Qy (< p) is canonical");
+        TEST_ASSERT(ama_secp256k1_test_fe_bytes_canonical(FE_ZERO) == 1,
+                    "canonical: 0 is canonical");
+        TEST_ASSERT(ama_secp256k1_test_fe_bytes_canonical(FE_P_MINUS_1) == 1,
+                    "canonical: p-1 is canonical (upper boundary)");
+        TEST_ASSERT(ama_secp256k1_test_fe_bytes_canonical(FE_P) == 0,
+                    "canonical: p is NOT canonical (lower rejection boundary)");
+        TEST_ASSERT(ama_secp256k1_test_fe_bytes_canonical(FE_P_PLUS_1) == 0,
+                    "canonical: p+1 is NOT canonical");
+        TEST_ASSERT(ama_secp256k1_test_fe_bytes_canonical(FE_ALL_FF) == 0,
+                    "canonical: 2^256-1 is NOT canonical");
+    }
 
     printf("\n===========================================\n");
     printf("All secp256k1 tests passed ✓\n");

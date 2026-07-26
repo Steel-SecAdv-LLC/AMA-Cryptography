@@ -50,6 +50,35 @@ total, so vectors disappearing from the corpus is itself a build failure.
 | Retrieved | 2026-07-25 |
 | Upstream license | Apache-2.0 |
 
+## Verifying provenance and refreshing the pin
+
+`tools/refresh_wycheproof_corpus.py` is the other half of the manifest
+contract — it re-derives the recorded provenance from upstream so the
+pin can be *checked*, not just *trusted*, and regenerates the manifest
+when the pin is advanced.
+
+```sh
+# Offline: every vendored file's SHA-256 + vector count matches the
+# manifest (deterministic, no network). This is the check the CI test
+# tests/test_wycheproof_corpus_provenance.py runs on every build.
+python tools/refresh_wycheproof_corpus.py --offline
+
+# Full: also fetch each file from C2SP/wycheproof at the pinned commit
+# and confirm the vendored bytes are byte-identical to upstream.
+python tools/refresh_wycheproof_corpus.py --verify
+
+# Advance the pin: re-vendor from a new upstream commit and rewrite
+# manifest.json (digests, counts, totals, the upstream block).
+python tools/refresh_wycheproof_corpus.py --refresh --commit <sha>
+```
+
+A refresh deliberately does **not** touch this README's counts or the
+runner's policy `expected` counts — those are re-reviewed by hand and
+then re-verified with `--verify`, so a corpus change can never silently
+absorb a behaviour change. The offline provenance check is automated and
+fail-closed in CI; the upstream-bytes check is also exposed as an opt-in
+test (`AMA_WYCHEPROOF_ONLINE=1 pytest tests/test_wycheproof_corpus_provenance.py`).
+
 The vendored JSON under `vectors/` is upstream's work, redistributed
 under Apache-2.0 — the same license this repository uses. It carries no
 AMA copyright header (JSON has no comment syntax, and the files are kept

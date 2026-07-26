@@ -17,6 +17,10 @@ AI Co-Architects: Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+from typing import TypedDict
+
 import pytest
 
 from ama_cryptography.pqc_backends import _native_lib
@@ -379,6 +383,147 @@ class TestBatchVerifyCtypes:
 
         assert len(results) == 5
         assert all(results)
+
+
+# ---------------------------------------------------------------------------
+# 3f. Full Project Wycheproof ed25519 corpus through the batch path
+# ---------------------------------------------------------------------------
+
+_ED25519_WYCHEPROOF_PATH = (
+    Path(__file__).resolve().parent.parent / "wycheproof_vectors" / "vectors" / "ed25519_test.json"
+)
+
+
+class _Ed25519Case(TypedDict):
+    tcId: int
+    msg: bytes
+    sig: bytes
+    pk: bytes
+    result: str
+    flags: list[str]
+    expect: bool
+
+
+def _load_ed25519_wycheproof_cases() -> list[_Ed25519Case]:
+    """Flatten ed25519_test.json into per-case records, keeping the group's
+    public key with each case (the pk lives on the group, msg/sig/result on the
+    case). The ed25519 corpus carries only `valid`/`invalid` — no `acceptable`
+    — so the expected verdict is simply ``result == "valid"``."""
+    data = json.loads(_ED25519_WYCHEPROOF_PATH.read_text(encoding="utf-8"))
+    cases: list[_Ed25519Case] = []
+    for group in data["testGroups"]:
+        pk = bytes.fromhex(group["publicKey"]["pk"])
+        for tc in group["tests"]:
+            cases.append(
+                {
+                    "tcId": int(tc["tcId"]),
+                    "msg": bytes.fromhex(tc["msg"]),
+                    "sig": bytes.fromhex(tc["sig"]),
+                    "pk": pk,
+                    "result": str(tc["result"]),
+                    "flags": list(tc.get("flags", [])),
+                    "expect": tc["result"] == "valid",
+                }
+            )
+    return cases
+
+
+class TestBatchVerifyWycheproofFullCorpus:
+    """Drive the entire vendored C2SP/Wycheproof ``ed25519_test.json`` (150
+    vectors across 77 groups) through ``ama_ed25519_batch_verify`` — the donna
+    Bos-Carter multi-scalar routine plus the per-entry canonical-S override in
+    ``ed25519_donna_shim.c`` — not only the RFC 8032 + canonical-S subset the
+    rest of this file covers. The single-signature path already runs this corpus
+    in ``wycheproof_vectors/run_wycheproof.py``; these tests hold the batch path
+    to the same verdicts.
+    """
+
+    def test_corpus_shape_is_as_pinned(self) -> None:
+        """Pin the well-formed / malformed split so a corpus refresh that
+        changes it surfaces here (all malformed-length sigs are `invalid`)."""
+        cases = _load_ed25519_wycheproof_cases()
+        assert len(cases) == 150, "manifest pins 150 ed25519 vectors"
+        assert all(
+            c["result"] in ("valid", "invalid") for c in cases
+        ), "the ed25519 corpus has no `acceptable` cases"
+        well_formed = [c for c in cases if len(c["sig"]) == 64]
+        malformed = [c for c in cases if len(c["sig"]) != 64]
+        assert len(well_formed) == 138
+        assert len(malformed) == 12
+        assert all(
+            c["result"] == "invalid" for c in malformed
+        ), "every non-64-byte signature vector is scored invalid"
+
+    def test_full_corpus_batch_matches_expected(self) -> None:
+        """Every well-formed (64-byte-signature) vector's batch verdict matches
+        the corpus: `valid` accepts, `invalid` rejects — 0 disagreements."""
+        from ama_cryptography.pqc_backends import native_ed25519_batch_verify
+
+        cases = [c for c in _load_ed25519_wycheproof_cases() if len(c["sig"]) == 64]
+        entries = [(c["msg"], c["sig"], c["pk"]) for c in cases]
+        results = native_ed25519_batch_verify(entries)
+
+        assert len(results) == len(cases)
+        mismatches = [
+            (c["tcId"], c["result"], list(c["flags"]), bool(r))
+            for c, r in zip(cases, results)
+            if bool(r) != c["expect"]
+        ]
+        assert not mismatches, f"batch verdict disagreed with the corpus for: {mismatches}"
+
+    def test_full_corpus_batch_agrees_with_single(self) -> None:
+        """The batch path and the single-signature path must return identical
+        verdicts for every well-formed vector — the two-APIs-agree guarantee,
+        generalized from the canonical-S subset to the whole corpus."""
+        from ama_cryptography.pqc_backends import (
+            native_ed25519_batch_verify,
+            native_ed25519_verify,
+        )
+
+        cases = [c for c in _load_ed25519_wycheproof_cases() if len(c["sig"]) == 64]
+        entries = [(c["msg"], c["sig"], c["pk"]) for c in cases]
+        batch = native_ed25519_batch_verify(entries)
+
+        disagree = []
+        for c, b in zip(cases, batch):
+            single = native_ed25519_verify(c["sig"], c["msg"], c["pk"])
+            if bool(b) != bool(single):
+                disagree.append((c["tcId"], bool(single), bool(b)))
+        assert not disagree, f"batch and single verify disagreed (tcId, single, batch): {disagree}"
+
+    def test_malformed_length_signatures_rejected_by_batch(self) -> None:
+        """The 12 non-64-byte signatures are all `invalid`; the batch API
+        rejects them by raising on the length contract — the same rejection the
+        single path reaches by catching the length error."""
+        from ama_cryptography.pqc_backends import native_ed25519_batch_verify
+
+        malformed = [c for c in _load_ed25519_wycheproof_cases() if len(c["sig"]) != 64]
+        assert malformed, "expected some malformed-length signature vectors"
+        for c in malformed:
+            assert c["expect"] is False
+            with pytest.raises(ValueError):
+                native_ed25519_batch_verify([(c["msg"], c["sig"], c["pk"])])
+
+    def test_signature_malleability_cases_rejected_in_batch(self) -> None:
+        """The non-canonical-S (`SignatureMalleability`) vectors must be rejected
+        on the batch path too — the guarantee is only real if the donna batch
+        wrapper re-applies the canonical-S check its own `ed25519_sign_open`
+        does not (ed25519_donna_shim.c)."""
+        from ama_cryptography.pqc_backends import native_ed25519_batch_verify
+
+        mal = [
+            c
+            for c in _load_ed25519_wycheproof_cases()
+            if len(c["sig"]) == 64 and "SignatureMalleability" in c["flags"]
+        ]
+        assert mal, "expected SignatureMalleability vectors in the corpus"
+        assert all(c["result"] == "invalid" for c in mal)
+
+        entries = [(c["msg"], c["sig"], c["pk"]) for c in mal]
+        results = native_ed25519_batch_verify(entries)
+        assert all(
+            r is False for r in results
+        ), "non-canonical-S signatures must be rejected on the batch path"
 
 
 # NOTE: Cython batch verify tests live in tests/test_ed25519_batch_verify_cython.py

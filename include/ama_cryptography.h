@@ -1190,6 +1190,16 @@ AMA_API ama_error_t ama_secp256k1_ecdsa_sign(
  * distinct byte string verify for the same message. High `s` is
  * rejected for the same reason (see `ama_secp256k1_ecdsa_sign`).
  *
+ * **Canonical public key.** The `Qx` and `Qy` coordinates must each be a
+ * canonical field element in `[0, p)`. A coordinate `>= p` is rejected,
+ * not silently reduced modulo `p` — the same input-canonicalization stance
+ * the range check above takes for `r`/`s` and Ed25519 takes for `S`. This
+ * is the deliberate policy analogue of the X25519 non-canonical-`u`
+ * decision, resolved here toward rejection (a signature must not verify
+ * under a second, non-canonical encoding of the same key) rather than the
+ * reduction X25519 uses (two peers must derive one shared secret). Pinned
+ * by `tests/test_secp256k1_ecdsa_noncanonical_pubkey.py`; see INVARIANT-29.
+ *
  * **Variable time by design.** Every input is public — the public key,
  * the signature, and the message digest — so verification does not
  * carry a constant-time obligation and does not claim one. This matches
@@ -1207,7 +1217,10 @@ AMA_API ama_error_t ama_secp256k1_ecdsa_sign(
  * @param message        Exactly 32 bytes: the message digest.
  * @param public_key     Exactly 64 bytes: the uncompressed affine point
  *                       as X||Y, big-endian, WITHOUT the SEC 1 `0x04`
- *                       prefix. Verified to satisfy the curve equation.
+ *                       prefix. Each coordinate must be a canonical field
+ *                       element in `[0, p)` (a coordinate `>= p` is
+ *                       rejected), and the point is verified to satisfy the
+ *                       curve equation `y^2 = x^3 + 7`.
  * @return AMA_SUCCESS when the signature is valid,
  *         AMA_ERROR_VERIFY_FAILED when it is not,
  *         AMA_ERROR_INVALID_PARAM on a NULL argument.

@@ -491,12 +491,89 @@ def run_x25519_batch4_benchmark(iterations: int = 100) -> Optional[float]:
         return None
 
 
+# secp256k1 field prime p — used to decompress a SEC1 compressed public key
+# (0x02/0x03 || X, what native_secp256k1_pubkey_from_privkey returns) into the
+# 64-byte X||Y form ama_secp256k1_ecdsa_verify expects.
+_SECP256K1_P = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F
+_SECP256K1_BENCH_PRIVKEY = bytes.fromhex(
+    "0123456789abcdeffedcba98765432100f1e2d3c4b5a69788796a5b4c3d2e1f0"
+)
+_SECP256K1_BENCH_DIGEST = bytes(range(1, 33))
+
+
+def _secp256k1_uncompressed_pubkey(privkey: bytes) -> bytes:
+    """Return the 64-byte uncompressed (X||Y) public key for ``privkey``.
+
+    The native pubkey export is 33-byte SEC1 *compressed*; recover Y from X via
+    the curve equation (secp256k1's p ≡ 3 mod 4, so the modular square root is a
+    single exponentiation) and pick the parity the compression prefix encodes.
+    """
+    from ama_cryptography.pqc_backends import native_secp256k1_pubkey_from_privkey
+
+    compressed = native_secp256k1_pubkey_from_privkey(privkey)
+    prefix, x_bytes = compressed[0], compressed[1:]
+    x = int.from_bytes(x_bytes, "big")
+    alpha = (pow(x, 3, _SECP256K1_P) + 7) % _SECP256K1_P
+    y = pow(alpha, (_SECP256K1_P + 1) // 4, _SECP256K1_P)
+    if (y & 1) != (prefix & 1):
+        y = _SECP256K1_P - y
+    return x_bytes + y.to_bytes(32, "big")
+
+
+def run_secp256k1_ecdsa_sign_benchmark(iterations: int = 100) -> Optional[float]:
+    """Benchmark secp256k1 ECDSA signing (RFC 6979 deterministic) via native C."""
+    try:
+        from ama_cryptography.pqc_backends import (
+            _SECP256K1_NATIVE_AVAILABLE,
+            native_secp256k1_ecdsa_sign,
+        )
+
+        if not _SECP256K1_NATIVE_AVAILABLE:
+            return None
+
+        # Probe once — surfaces any availability error before timing.
+        native_secp256k1_ecdsa_sign(_SECP256K1_BENCH_DIGEST, _SECP256K1_BENCH_PRIVKEY)
+
+        def operation() -> None:
+            native_secp256k1_ecdsa_sign(_SECP256K1_BENCH_DIGEST, _SECP256K1_BENCH_PRIVKEY)
+
+        return benchmark_operation(operation, iterations, warmup=5)
+    except Exception:
+        return None
+
+
+def run_secp256k1_ecdsa_verify_benchmark(iterations: int = 100) -> Optional[float]:
+    """Benchmark secp256k1 ECDSA verification via native C library."""
+    try:
+        from ama_cryptography.pqc_backends import (
+            _SECP256K1_NATIVE_AVAILABLE,
+            native_secp256k1_ecdsa_sign,
+            native_secp256k1_ecdsa_verify,
+        )
+
+        if not _SECP256K1_NATIVE_AVAILABLE:
+            return None
+
+        signature = native_secp256k1_ecdsa_sign(_SECP256K1_BENCH_DIGEST, _SECP256K1_BENCH_PRIVKEY)
+        pubkey = _secp256k1_uncompressed_pubkey(_SECP256K1_BENCH_PRIVKEY)
+
+        # Probe once — confirms the fixture verifies before timing.
+        native_secp256k1_ecdsa_verify(signature, _SECP256K1_BENCH_DIGEST, pubkey)
+
+        def operation() -> None:
+            native_secp256k1_ecdsa_verify(signature, _SECP256K1_BENCH_DIGEST, pubkey)
+
+        return benchmark_operation(operation, iterations, warmup=5)
+    except Exception:
+        return None
+
+
 def run_all_benchmarks(baseline: Dict[str, Any], verbose: bool = False) -> List[BenchmarkResult]:
     """Run all benchmarks and compare against baseline."""
     results = []
     threshold = baseline["thresholds"]["regression_threshold_percent"]
 
-    benchmark_functions: dict[str, Callable[[], float]] = {
+    benchmark_functions: dict[str, Callable[[], Optional[float]]] = {
         "ama_sha3_256_hash": run_sha3_256_benchmark,
         "hmac_sha3_256": run_hmac_sha3_256_benchmark,
         "ed25519_keygen": run_ed25519_keygen_benchmark,
@@ -505,6 +582,16 @@ def run_all_benchmarks(baseline: Dict[str, Any], verbose: bool = False) -> List[
         "hkdf_derive": run_hkdf_derive_benchmark,
         "full_package_create": run_full_package_create_benchmark,
         "full_package_verify": run_full_package_verify_benchmark,
+        # secp256k1 ECDSA sign/verify are HARD-gated (core, not the soft PQC
+        # loop): the signing path (RFC 6979 nonce + base-point ladder + Fermat
+        # inversion mod n) and the verify path (two scalar mults + canonical-
+        # pubkey + curve checks). A regression in the ECDSA-specific scalar
+        # arithmetic fails the build, not merely warns — the pubkey ladder the C
+        # reporting harness covered is not enough. They return None only on a
+        # build without native secp256k1 (never the benchmark CI job, which is
+        # AMA_USE_NATIVE_PQC=ON); the None-skip below handles that gracefully.
+        "secp256k1_ecdsa_sign": run_secp256k1_ecdsa_sign_benchmark,
+        "secp256k1_ecdsa_verify": run_secp256k1_ecdsa_verify_benchmark,
     }
 
     pqc_benchmark_functions: dict[str, Callable[[], Optional[float]]] = {
@@ -533,6 +620,16 @@ def run_all_benchmarks(baseline: Dict[str, Any], verbose: bool = False) -> List[
             print(f"Running {name}...", end=" ", flush=True)
 
         ops_per_sec = func()
+        # A core benchmark whose primitive is genuinely absent from this build
+        # (returns None) is skipped rather than crashing the run. The shipped
+        # core benchmarks never return None; this only spares an ECDSA/secp256k1
+        # entry on a non-native-PQC build. In the benchmark CI job (always
+        # AMA_USE_NATIVE_PQC=ON) the number is present and hard-gated below.
+        if ops_per_sec is None:
+            if verbose:
+                print("SKIPPED (primitive not available in this build)")
+            continue
+
         baseline_value = config["baseline_value"]
         tolerance = config.get("tolerance_percent", threshold)
 

@@ -968,5 +968,45 @@ rule. All 476 Wycheproof ECDSA vectors run on every PR; 308/308 of the
 
 ---
 
+## INVARIANT-29 — ECDSA Public-Key Coordinates Must Be Canonical Field Elements
+
+**Statement.** `ama_secp256k1_ecdsa_verify` must reject a public key whose `Qx`
+or `Qy` coordinate is not a canonical field element in `[0, p)`. A coordinate
+`>= p` is rejected, never reduced modulo `p` before the curve-membership check.
+
+**Why.** This is the same input-canonicalization class as the `r, s ∈ [1, n-1]`
+range check of INVARIANT-28 and the `0 <= S < L` check of INVARIANT-26: a
+coordinate `>= p` is a second, non-canonical byte encoding of the reduced point,
+and unreduced field arithmetic would otherwise accept it — letting one signature
+verify under two distinct public-key encodings. Rejecting it keeps a signature
+bound to a single public-key byte string.
+
+It is the deliberate policy analogue of INVARIANT-27's X25519 non-canonical-`u`
+decision, resolved the other way: X25519 *reduces* (two peers must agree on one
+shared secret), whereas an ECDSA verification key is *rejected* (a signature
+must not verify under a second encoding of the key). For secp256k1 the
+non-canonical band `[p, 2^256)` holds only `2^32 + 977` representable values, so
+this is a narrow but real defense-in-depth gate — and it matches libsecp256k1's
+own rejection of `secp256k1_fe_set_b32` overflow.
+
+**Enforcement.** In `src/c/ama_secp256k1.c`, `secp256k1_fe_bytes_canonical()`
+compares the 32-byte big-endian coordinate against `p` and returns 0 for any
+value `>= p`; `ama_secp256k1_ecdsa_verify` calls it on both `Qx` and `Qy` before
+the curve equation is evaluated, returning `AMA_ERROR_VERIFY_FAILED` on a
+non-canonical coordinate. Verification is variable time by design (the public
+key is public), so the data-dependent early return carries no timing obligation.
+
+**Verification.** `tests/test_secp256k1_ecdsa_noncanonical_pubkey.py` drives the
+policy through the Python binding (`Qx`/`Qy` in `{p, p+1, 2^256-1}` rejected, a
+canonical key accepted). `tests/c/test_secp256k1.c` isolates the predicate from
+the curve/signature checks via the `AMA_TESTING_MODE` export
+`ama_secp256k1_test_fe_bytes_canonical` (Test 10: `p-1` / `0` / real coordinates
+canonical; `p` / `p+1` / `2^256-1` not). The full-verify path cannot make that
+distinction, because a valid signature for a public key in the tiny reduced
+image would require an ECDLP solution or an ECDSA forgery — so the isolated
+predicate test is the one that proves the gate fires.
+
+---
+
 _Maintained by Steel Security Advisors LLC._
 _Last updated: 2026-07-25_

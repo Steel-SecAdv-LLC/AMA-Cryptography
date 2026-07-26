@@ -68,6 +68,68 @@ def test_every_driven_schema_has_a_tripwire_field() -> None:
     assert set(w.DRIVERS) == set(w.DRIVER_TRIPWIRE)
 
 
+def test_ecdsa_tripwire_flips_inside_s_not_the_der_tag(corpora: dict[str, Any]) -> None:
+    """The ECDSA tripwire must exercise *curve-math* rejection, not DER-parse
+    rejection: it corrupts a byte inside the ``s`` integer while leaving the DER
+    framing (SEQUENCE tag, lengths, ``r``) intact. Prove all four properties on
+    a real corpus signature: (a) byte 0 stays 0x30 and ``r`` is untouched,
+    (b) the flipped signature still parses as DER and its ``s`` changed,
+    (c) exactly one byte — inside ``s`` — differs, and (d) a correct driver
+    rejects it with ``verify=False`` (the R.x check), never a parse exception."""
+    fname = "ecdsa_secp256k1_sha256_test.json"
+    data = corpora[fname]
+    schema = data["schema"]
+    driver = w.DRIVERS[schema]
+
+    probe: tuple[dict[str, Any], dict[str, Any]] | None = None
+    for raw_group in data["testGroups"]:
+        group = dict(raw_group, _schema=schema)
+        for test in group["tests"]:
+            if test.get("result") == "valid" and test.get("sig"):
+                ok, _ = driver(w.Case(file=fname, group=group, test=test))
+                if ok:
+                    probe = (group, test)
+                    break
+        if probe is not None:
+            break
+    assert probe is not None, "no passing `valid` ECDSA vector found to probe the tripwire"
+    group, test = probe
+
+    orig = bytes.fromhex(str(test["sig"]))
+    flipped = bytes.fromhex(w._flip_sig_body_byte(str(test["sig"])))
+
+    # (a) DER framing intact: same length, SEQUENCE tag + all of r untouched.
+    assert len(flipped) == len(orig)
+    assert flipped[0] == 0x30 == orig[0], "the SEQUENCE tag must NOT be the byte that flips"
+    r_len = orig[3]
+    assert flipped[: 4 + r_len] == orig[: 4 + r_len], "r (tag/len/value) must be untouched"
+    s_tag = 4 + r_len
+    assert flipped[s_tag] == orig[s_tag] == 0x02, "s INTEGER tag must be untouched"
+    assert flipped[s_tag + 1] == orig[s_tag + 1], "s length must be untouched"
+
+    # (b) still valid DER, and s actually changed.
+    s_orig = w._der_s_value(orig)
+    s_flipped = w._der_s_value(flipped)
+    assert (
+        s_orig is not None and s_flipped is not None
+    ), "flipped signature must remain parseable DER"
+    assert s_flipped != s_orig, "the s value must actually change"
+
+    # (c) exactly one byte differs, and it lies inside s's value.
+    diffs = [i for i in range(len(orig)) if orig[i] != flipped[i]]
+    assert len(diffs) == 1, f"exactly one byte should change, got {diffs}"
+    s_start, s_end = s_tag + 2, s_tag + 2 + orig[s_tag + 1]
+    assert s_start <= diffs[0] < s_end, "the changed byte must lie inside the s integer"
+
+    # (d) a correct driver rejects it via the curve-math check, not a parse error.
+    corrupted = dict(test, sig=flipped.hex())
+    ok_bad, detail = driver(w.Case(file=fname, group=group, test=corrupted))
+    assert ok_bad is False, f"the corrupted signature must fail verification: {detail}"
+    assert (
+        "rejected:" not in detail
+    ), f"rejection must be curve-math (verify=False), not a DER-parse exception: {detail}"
+
+
 def test_reverse_coverage_flags_an_unlisted_vector_file() -> None:
     """A vector file on disk but absent from the manifest is a red gate, not a
     silently un-run file. Simulated by dropping one entry from the manifest so

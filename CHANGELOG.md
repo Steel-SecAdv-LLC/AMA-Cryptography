@@ -39,11 +39,58 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   previously no ECDSA in the C layer at all, so 476 Wycheproof vectors had
   nothing to run against. Written in-house on the existing field and group
   arithmetic: RFC 6979 deterministic nonces via AMA's own HMAC-SHA-256 (no RNG
-  on the signing path, reproducible signatures), Montgomery scalar arithmetic
-  mod `n`, Fermat inversion over the public exponent `n-2`, and strict DER.
-  Signing is constant time w.r.t. the key and nonce; verification is variable
+  on the signing path), with the §2.3.4 `bits2octets` reduction applied — the
+  message digest is reduced mod `n` before it seeds the HMAC-DRBG — so the
+  derived nonce and the whole signature are **byte-for-byte identical to
+  libsecp256k1 and trezor-crypto for every digest, in range or out** (see the
+  Fixed entry below for the divergence this closed). Montgomery scalar
+  arithmetic mod `n`, Fermat inversion over the public exponent `n-2`, strict
+  DER, a low-`s` policy, and **rejection of a public-key coordinate `>= p`**
+  rather than silent reduction (INVARIANT-29). Signing's constant-time behaviour
+  w.r.t. the key and nonce is now **empirically measured** by a dudect
+  fixed-vs-random harness, not asserted by inspection; verification is variable
   time by design and says so. Exposed through `pqc_backends` following the
   existing `_setup_secp256k1_ctypes` pattern.
+- **Empirical constant-time measurement for ECDSA signing.** A dudect
+  fixed-vs-random lane in `tests/c/test_dudect.c` exercises
+  `ama_secp256k1_ecdsa_sign` (a fixed key/nonce vs. a fresh random key/nonce
+  each iteration), closing the "read, didn't measure" gap on the ECDSA-specific
+  scalar arithmetic mod `n` (`sc_mont_mul` / `sc_inv` / `sc_mul` / `sc_add` /
+  `sc_negate`) and the RFC 6979 HMAC-DRBG loop. Runs in the `dudect-pqc` CI
+  job; the Welch t-statistic is printed every run and an rc mismatch hard-fails
+  regardless of the info-only classification.
+- **Gated ECDSA sign/verify throughput benchmarks.** `secp256k1 ecdsa sign` and
+  `ecdsa verify` are added to the C reporting harness (`benchmark_c_raw.c`) and,
+  as **hard-gated** core entries, to `benchmark_runner.py` with baselines in
+  `baseline.json` / `arm-baseline.json`, so a regression in the signing or
+  verification path fails the build rather than only warning. The
+  pubkey-ladder-only coverage was insufficient.
+- **Wycheproof ECDSA tripwire now exercises curve-math rejection.** The
+  hollow-driver tripwire for the ECDSA schema flips a byte *inside* `s` (leaving
+  the DER framing valid) instead of the `SEQUENCE` tag, so it proves the driver
+  reaches the signature-math check, not only DER parsing. Pinned by a new
+  assertion in `tests/test_wycheproof_gate.py`.
+- **Full-corpus Ed25519 batch verification coverage.**
+  `tests/test_ed25519_batch_verify.py` now runs the entire vendored Wycheproof
+  `ed25519_test.json` (150 vectors) through the batch path — 138 well-formed
+  entries batched, 12 malformed-length rejected — asserting the batch verdict
+  matches both the corpus and the single-signature path element-wise, including
+  the non-canonical-`S` rejection the donna batch wrapper re-applies. Previously
+  only the RFC 8032 + canonical-`S` subset was exercised on the batch path.
+- **`tools/refresh_wycheproof_corpus.py`** — verifies the vendored corpus
+  against upstream C2SP/wycheproof at the pinned commit (per-file SHA-256 +
+  vector count, byte-for-byte) and regenerates `manifest.json` on a refresh. Its
+  offline half is a fail-closed provenance check in CI
+  (`tests/test_wycheproof_corpus_provenance.py`), which also tests the failure
+  direction; the upstream-bytes half is an opt-in network test.
+- **`tests/test_ci_gate_negative.py`** — negative controls proving both strict
+  merge gates *reject* bad input, not merely that a green run passes good input.
+  The `CI Gate` and `Build and Test Gate` aggregation expressions are parsed
+  from the workflow YAML and shown to go red on any `failure` / `skipped` /
+  `cancelled` (the literal set pinned to exactly those three, so a weakened gate
+  fails the test), and their underlying checks (`tools/check_headers.py` for one,
+  `ruff` / `black` for the other) are driven end-to-end on deliberately bad
+  fixtures.
 - **`tools/check_headers.py`** — canonical license-header normalizer with
   `--check` / `--apply`, an explicit exemption list carrying a reason per
   entry, and `tests/test_headers.py` (22 tests) that builds synthetic trees
@@ -154,6 +201,38 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   before and **False** after, honest signatures verifying throughout. Both
   backends were configured and built separately (`-DAMA_ED25519_ASSEMBLY=OFF`
   forces fe51) and each passes **150/150** Wycheproof Ed25519 vectors.
+
+- **secp256k1 RFC 6979 nonce omitted the `bits2octets` reduction — a silent
+  interop break for any digest `>= n`.** Found by differentially testing the
+  *signing* path — which Wycheproof, being verify-only, never exercises —
+  against a from-scratch RFC 6979 reference and against trezor-crypto. RFC 6979
+  §2.3.4 reduces the message digest modulo `n` (`bits2octets`) before it seeds
+  the HMAC-DRBG; libsecp256k1 does the same (its nonce function feeds the
+  reduced `msgmod32`). The C used the raw digest, so for any digest `>= n` the
+  derived nonce — and therefore the whole signature — diverged from RFC 6979,
+  libsecp256k1 and trezor-crypto. Unreachable by hashing a message
+  (~2⁻¹²⁸), but reachable through the raw-digest API — a silent interop break.
+  Fixed with one conditional subtraction of `n` in `rfc6979_nonce`; AMA now
+  reproduces trezor-crypto's secp256k1 signatures **byte-for-byte for every
+  digest, in range or out**. Pinned by `tests/test_secp256k1_ecdsa_rfc6979.py`,
+  which anchors the signing path to RFC 6979's own P-256 A.2.5 DRBG output, to
+  trezor's secp256k1 `k` and signature vectors (one with a digest `>= n`, the
+  regression guard that fails against the unreduced code and passes against the
+  fix), and to a 200-case byte-identical differential.
+
+- **secp256k1 ECDSA verify silently reduced non-canonical public-key
+  coordinates (INVARIANT-29).** `ama_secp256k1_ecdsa_verify` loaded `Qx` / `Qy`
+  without a range check, so a coordinate `>= p` was reduced modulo `p` by the
+  field arithmetic before the curve-membership test rather than rejected — a
+  second, non-canonical byte encoding of a key that would otherwise verify, the
+  same input-malleability class as the `r` / `s >= n` and Ed25519 `S >= L`
+  checks this library already enforces. Wycheproof ships no out-of-field-point
+  ECDSA vectors, so this was invisible to the corpus. Verification now rejects a
+  coordinate `>= p` outright (`secp256k1_fe_bytes_canonical`) — the deliberate
+  rejection analogue of the X25519 non-canonical-`u` *reduction* decision
+  (INVARIANT-27). Covered by `tests/test_secp256k1_ecdsa_noncanonical_pubkey.py`
+  and, isolated from the curve/signature checks via an `AMA_TESTING_MODE`
+  predicate export, by `tests/c/test_secp256k1.c`.
 
 - **A property test asserted something false about AES-GCM.**
   `test_ciphertext_is_not_plaintext` required `ct != pt` for plaintexts as

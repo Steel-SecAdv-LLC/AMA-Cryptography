@@ -393,6 +393,15 @@ DRIVERS: dict[str, Callable[[Case], tuple[bool, str]]] = {
 # hollow one returns the same verdict for both and fails the gate by name.
 # The flipped byte is chosen to avoid the X25519 clamp (byte 0 of the *peer*
 # key, which is not masked), so the change always propagates.
+#
+# ECDSA is the one family where flipping byte 0 would be too weak. Byte 0 of a
+# DER `sig` is the SEQUENCE tag (0x30); flipping it only proves the C parser
+# rejects *malformed DER*, which the encoding-abuse vectors already cover. To
+# prove the ECDSA driver reaches the *curve-math* check, its corruption flips a
+# byte inside the `s` integer and leaves the DER framing valid, so the signature
+# still parses and is rejected because R.x mod n no longer equals r (see
+# _flip_sig_body_byte). DRIVER_TRIPWIRE_CORRUPT holds that per-schema override;
+# every other schema uses the default whole-value _flip_first_byte.
 DRIVER_TRIPWIRE: dict[str, str] = {
     "eddsa_verify_schema_v1.json": "sig",
     "xdh_comp_schema_v1.json": "public",
@@ -407,6 +416,43 @@ def _flip_first_byte(hexstr: str) -> str:
     raw = bytearray.fromhex(hexstr)
     raw[0] ^= 0x01
     return raw.hex()
+
+
+def _flip_sig_body_byte(hexstr: str) -> str:
+    """Flip a byte *inside* the ECDSA ``s`` integer of a DER signature,
+    leaving the SEQUENCE tag, all lengths, the INTEGER tags, and ``r`` intact.
+
+    Structure walked: ``30 <seqlen> 02 <rlen> <r...> 02 <slen> <s...>``. The
+    corruption XORs the low bit of the *last* byte of ``s`` — the value stays a
+    minimal, positive, low-``s`` encoding, so the strict C parser accepts the
+    DER and the rejection can only come from the curve-math check (the recomputed
+    ``R.x mod n`` no longer equals ``r``). That is the whole point: it exercises
+    signature-math rejection, not DER-parse rejection. Falls back to flipping the
+    final byte if the structure will not walk — still inside ``s`` for any
+    canonical signature.
+    """
+    raw = bytearray.fromhex(hexstr)
+    try:
+        if len(raw) >= 8 and raw[0] == 0x30 and raw[2] == 0x02:
+            r_len = raw[3]
+            s_tag = 4 + r_len
+            if raw[s_tag] == 0x02:
+                s_len = raw[s_tag + 1]
+                s_start = s_tag + 2
+                s_end = s_start + s_len
+                if 0 < s_len and s_end <= len(raw):
+                    raw[s_end - 1] ^= 0x01  # low bit of the last byte of s
+                    return raw.hex()
+    except IndexError:
+        pass
+    raw[-1] ^= 0x01
+    return raw.hex()
+
+
+# Per-schema corruption override; schemas absent here use _flip_first_byte.
+DRIVER_TRIPWIRE_CORRUPT: dict[str, Callable[[str], str]] = {
+    "ecdsa_verify_schema_v1.json": _flip_sig_body_byte,
+}
 
 
 def driver_tripwires(corpora: dict[str, Any], only: str | None = None) -> list[str]:
@@ -451,8 +497,9 @@ def driver_tripwires(corpora: dict[str, Any], only: str | None = None) -> list[s
             continue
 
         group, test = probe
+        corrupt = DRIVER_TRIPWIRE_CORRUPT.get(schema, _flip_first_byte)
         corrupted = dict(test)
-        corrupted[field] = _flip_first_byte(str(test[field]))
+        corrupted[field] = corrupt(str(test[field]))
         ok_bad, detail_bad = driver(Case(file=name, group=group, test=corrupted))
         if ok_bad:
             problems.append(
