@@ -430,6 +430,12 @@ set(AMA_SOURCES
     src/c/ama_consttime.c
     src/c/ama_sha3.c
     src/c/ama_hkdf.c
+    # Agent-instance binding (INVARIANT-30): domain separation + fail-closed
+    # capability policy over SHA3-256 / HMAC-SHA3-256 / HKDF.  No new
+    # algorithms and no new dependencies.  It references no PQC symbol, so it
+    # belongs in the unconditional list next to ama_hkdf.c rather than in the
+    # AMA_USE_NATIVE_PQC block below.
+    src/c/ama_agent_binding.c
     # SHA-2 primitives and their HMAC keyed constructions.  These are NOT
     # PQC-specific: the always-built ama_hkdf.c defines the public HKDF-SHA-2
     # variants (ama_hkdf_sha256/384/512) which call ama_hmac_sha256 /

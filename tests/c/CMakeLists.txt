@@ -102,6 +102,11 @@ if(AMA_ENABLE_AVX512 AND AMA_ENABLE_SIMD AND AMA_ENABLE_AVX2 AND CMAKE_SYSTEM_PR
     set_tests_properties(test_sha3_avx512_kat PROPERTIES SKIP_RETURN_CODE 77)
 endif()
 add_ama_test(test_hkdf test_hkdf.c)
+# INVARIANT-30 — agent-instance binding: canonical-encoding KAT, fail-closed
+# capability policy, and cross-binding domain separation.  Built
+# unconditionally, like test_hkdf above: the binding layer calls only
+# SHA3-256 / HMAC-SHA3-256 / HKDF, so it needs no PQC-gated symbol.
+add_ama_test(test_agent_binding test_agent_binding.c)
 add_ama_test(test_ed25519 test_ed25519.c)
 
 # RFC 8032 5.1.7 canonical-S enforcement (INVARIANT-26).  Built

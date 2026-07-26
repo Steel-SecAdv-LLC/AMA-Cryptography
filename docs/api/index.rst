@@ -13,6 +13,7 @@ and add it to the toctree below.
    :caption: Modules
 
    adaptive_posture
+   agent_binding
    crypto_api
    double_helix_engine
    equations

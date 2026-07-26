@@ -1025,6 +1025,95 @@ static double test_hmac_verify(int iterations) {
     return dudect_get_t(&ctx);
 }
 
+/* -----------------------------------------------------------------------
+ * Test 9b: Agent-instance binding check — the policy verdict must not be
+ * readable from the clock.
+ *
+ * Class 0: An authorized PERSISTENT/SELF_REPLICATE binding whose tag verifies
+ *          (ama_agent_binding_check returns AMA_SUCCESS).
+ * Class 1: The same binding with one tag bit flipped (returns
+ *          AMA_ERROR_ETHICAL_BINDING).
+ *
+ * This is the lane that matters for the threat model: an agent probing the
+ * binding boundary should not be able to tell "profile accepted, tag wrong"
+ * from "accepted" and walk the tag space one clause at a time.  The
+ * implementation computes the HMAC unconditionally and combines every policy
+ * predicate into one mask, so the two classes should be indistinguishable.
+ *
+ * Both classes take the SAME structural path (well-formed record, restricted
+ * capabilities, non-zero profile, valid key) — the only difference is the tag
+ * bytes, so any class delta is a real leak in the verdict path rather than a
+ * structural artefact.  Binding pointer-select happens outside the timer,
+ * matching the pattern used by the other verify lanes.
+ *
+ * Per-class rc validation is inverted here relative to the other lanes: this
+ * lane EXPECTS a refusal in class 1, so a mismatch means the policy itself
+ * regressed (accepting a bad tag, or rejecting a good one) — a fatal fault
+ * regardless of the timing result.
+ * ----------------------------------------------------------------------- */
+static double test_agent_binding_check(int iterations) {
+    dudect_ctx_t ctx;
+    dudect_ctx_init(&ctx, "agent binding check (verdict-independent)");
+
+    ama_agent_binding_t good, bad;
+    uint8_t instance_id[AMA_AGENT_INSTANCE_ID_BYTES];
+    uint8_t profile[AMA_ETHICAL_PROFILE_BYTES];
+    uint8_t authority_key[32];
+
+    random_bytes(instance_id, sizeof(instance_id));
+    random_bytes(profile, sizeof(profile));
+    random_bytes(authority_key, sizeof(authority_key));
+
+    if (ama_agent_binding_init(&good, AMA_AGENT_LIFETIME_PERSISTENT,
+                               (uint8_t)(AMA_AGENT_CAP_DATA_SIGN |
+                                         AMA_AGENT_CAP_PERSISTENCE |
+                                         AMA_AGENT_CAP_SELF_REPLICATE),
+                               instance_id, profile) != AMA_SUCCESS ||
+        ama_agent_binding_authorize(&good, authority_key,
+                                    sizeof(authority_key)) != AMA_SUCCESS) {
+        fprintf(stderr,
+                "  FAIL: agent-binding dudect setup failed; "
+                "check lane never executed\n");
+        dudect_print_result(&ctx);
+        return DUDECT_FATAL_SENTINEL;
+    }
+
+    memcpy(&bad, &good, sizeof(bad));
+    bad.authorization[0] ^= 0x01;
+
+    int rc_mismatches = 0;
+
+    for (int i = 0; i < iterations && !g_timeout_hit; i++) {
+        int class_idx = rand() & 1;
+        /* Pointer-select OUTSIDE the timing region. */
+        const ama_agent_binding_t *b = class_idx ? &bad : &good;
+
+        uint64_t start = dudect_get_time_ns();
+        volatile ama_error_t rc =
+            ama_agent_binding_check(b, authority_key, sizeof(authority_key));
+        uint64_t end = dudect_get_time_ns();
+
+        if (rc != (class_idx ? AMA_ERROR_ETHICAL_BINDING : AMA_SUCCESS)) {
+            rc_mismatches++;
+        }
+
+        dudect_record(&ctx, class_idx, (double)(end - start));
+    }
+
+    if (rc_mismatches > 0) {
+        fprintf(stderr,
+                "  FAIL: agent binding check verdict mismatches: %d "
+                "(class 0 must return AMA_SUCCESS, class 1 must return "
+                "AMA_ERROR_ETHICAL_BINDING)\n",
+                rc_mismatches);
+        dudect_print_result(&ctx);
+        return DUDECT_FATAL_SENTINEL;
+    }
+
+    dudect_print_result(&ctx);
+    return dudect_get_t(&ctx);
+}
+
 #ifdef AMA_USE_NATIVE_PQC
 
 /* -----------------------------------------------------------------------
@@ -1533,8 +1622,8 @@ typedef struct {
 } test_result_t;
 
 /* Upper bound on the number of lanes `run_all_tests` registers.
- * Counted by hand: utility(5) + primitives(7) + classical-kex(2) +
- * threshold(3) + PQC(3) = 20.  Reserve 32 to give 12 lanes of
+ * Counted by hand: utility(5) + primitives(8) + classical-kex(2) +
+ * threshold(3) + PQC(3) = 21.  Reserve 32 to give 11 lanes of
  * headroom for future additions without silently overflowing the
  * fixed-size results array.  Bumping this constant is the only place
  * a lane addition needs to be capacity-checked. */
@@ -1632,6 +1721,13 @@ static int run_all_tests(int iterations, test_result_t *results, int *num_result
     DUDECT_REGISTER_LANE(results, idx,
         "HMAC-SHA3-256 verify",
         test_hmac_verify(iterations), 0);
+    /* Strict: both classes are structurally identical well-formed restricted
+     * bindings checked under a valid authority key, so the only thing that can
+     * separate them is the verdict itself.  See header comment on
+     * test_agent_binding_check(). */
+    DUDECT_REGISTER_LANE(results, idx,
+        "Agent binding check",
+        test_agent_binding_check(iterations), 0);
 
 #ifdef AMA_USE_NATIVE_PQC
     printf("\n--- Classical (key exchange) ---\n");

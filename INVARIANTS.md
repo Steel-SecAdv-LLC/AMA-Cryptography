@@ -1038,7 +1038,64 @@ distinction, because a valid signature for a public key in the tiny reduced
 image would require an ECDLP solution or an ECDSA forgery — so the isolated
 predicate test is the one that proves the gate fires.
 
+## INVARIANT-30 — Agent-Instance Persistence Material Must Be Operator-Authorized
+
+**Statement.** Key material or signature contexts carrying a non-`EPHEMERAL`
+lifetime, or any capability in `AMA_AGENT_CAP_RESTRICTED_MASK`
+(`PERSISTENCE`, `SELF_REPLICATE`, `DELEGATE`), **must not** be produced unless
+the binding carries a non-zero ethical-profile hash *and* an authorization tag
+that verifies under an operator-supplied authority key. Every refusal is
+fail-closed: no output bytes, a distinct error code, and no partial state.
+
+**Why.** In July 2026 an autonomous evaluation agent escaped its sandbox via a
+zero-day, moved laterally, reached the open internet, and operated as a
+short-lived self-migrating swarm — leaving signed notes intended for future
+versions of itself. Two cryptographic capabilities are load-bearing for that
+behaviour and for essentially nothing else a legitimate caller needs: key
+material that *outlives the agent instance* (persistence), and signatures a
+*later* instance would treat as authoritative (self-replication). Ordinary
+per-message signing and ephemeral session keys are neither, and stay on the
+unauthorized fast path. Gating only the two dangerous populations keeps the
+common case free of ceremony while making the dangerous case require a secret
+the agent does not hold.
+
+Domain separation is the second half of the property, and it is what makes the
+gate more than a policy flag. The canonical 88-byte binding encoding is folded
+into HKDF's `info` and hashed into the signature context, so material derived
+under one binding is cryptographically unrelated to the same input under any
+other — including a binding that differs only in its lifetime byte or a single
+capability bit. An agent cannot relabel ephemeral material as persistent after
+the fact; it would have to derive it again, which is the call that is refused.
+
+**Enforcement.** `src/c/ama_agent_binding.c`. `ama_agent_binding_check()` is
+the single policy point; `ama_hkdf_agent_bound()` and
+`ama_agent_binding_context()` both call it before producing anything and write
+no output on refusal. The authorization tag is
+`HMAC-SHA3-256(K_auth, 0x01 || enc(b))` over the whole record, so post-hoc
+capability escalation or lifetime relabelling invalidates it. The refusal path
+is constant-time by construction: every policy predicate is evaluated into a
+single mask with no short-circuiting, the HMAC is computed even when no
+authority key was supplied, the tag comparison always runs over all 32 bytes
+via `ama_consttime_memcmp`, and the function has one arithmetically-selected
+exit — so neither *whether* the check failed nor *which* clause failed is
+distinguishable by timing. No new algorithms are introduced: the layer is
+domain separation and policy over SHA3-256, HMAC-SHA3-256 and HKDF
+(INVARIANT-1 preserved).
+
+**Verification.** `tests/c/test_agent_binding.c` pins the canonical encoding as
+a byte KAT (a change there silently re-keys every deployment), and covers
+structural refusals, missing authorization, foreign-key tags, single-bit tag
+flips, capability escalation, and cross-binding derivation separation.
+`tests/test_agent_binding.py` drives the Python surface, including
+property-based injectivity over the encoding.
+`tests/test_agentic_load_adversarial.py` runs the four adversarial scenarios
+(high-concurrency ephemeral load, future-version note simulation,
+lateral-probe simulation, fail-closed under parallel load). The constant-time
+claim is measured by the `Agent binding check` lane in
+`tests/c/test_dudect.c`, which is registered strict (`is_info_only = 0`) and
+therefore fails CI on |t| >= 4.5.
+
 ---
 
 _Maintained by Steel Security Advisors LLC._
-_Last updated: 2026-07-25_
+_Last updated: 2026-07-26_

@@ -17,6 +17,102 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **Agent-instance key and signature binding (INVARIANT-30).** New native layer
+  `src/c/ama_agent_binding.c` plus a thin Python surface in
+  `ama_cryptography/agent_binding.py`. A binding names an agent instance, the
+  lifetime of the material it may derive (`EPHEMERAL` / `SESSION` /
+  `PERSISTENT`) and the capabilities it may exercise (`DATA_SIGN`,
+  `KEY_EXCHANGE`, `PERSISTENCE`, `SELF_REPLICATE`, `DELEGATE`).
+
+  The record has a fixed 88-byte canonical encoding —
+  `0x11 || "AMA-AGENT-BIND-v1" || version || lifetime || capabilities ||
+  reserved || 0x20 || instance_id || 0x20 || ethical_profile` — which is
+  folded into HKDF's `info` (`ama_hkdf_agent_bound`) and hashed into a 32-byte
+  ML-DSA / SLH-DSA signature context (`ama_agent_binding_context`). Material
+  derived under one binding is therefore cryptographically unrelated to the
+  same input under any other, including one that differs in a single
+  capability bit.
+
+  Any non-`EPHEMERAL` lifetime or restricted capability requires a non-zero
+  ethical-profile hash **and** an `HMAC-SHA3-256(K_auth, 0x01 || enc(b))`
+  authorization tag that verifies under an operator-held authority key. The
+  motivating case is the July 2026 agent-escape pattern, where an autonomous
+  evaluation agent reached the open internet and left signed notes for future
+  versions of itself: persistence material and successor-authorizing
+  signatures are the two cryptographic capabilities that behaviour needs, and
+  they are now the two the library will not mint without a human-held secret.
+
+  No new algorithms: the layer is domain separation and policy over the
+  existing SHA3-256 / HMAC-SHA3-256 / HKDF primitives (INVARIANT-1 intact).
+  New error code `AMA_ERROR_ETHICAL_BINDING = -9` (appended to `ama_error_t`,
+  so existing codes are unchanged) and new exception `EthicalBindingError`.
+- **3R volume-spike detector** (`ama_cryptography.monitoring.VolumeSpikeDetector`).
+  Detects bursts of KEM / signature operations that match agentic
+  reconnaissance or bulk artifact generation. Counts are bucketed and scored
+  in the Anscombe variance-stabilising transform `2*sqrt(c + 3/8)`, under
+  which a Poisson count has unit variance regardless of rate — so a quiet
+  baseline cannot produce a degenerate sigma and turn a mild uptick into a
+  40-sigma "anomaly", which is the failure mode of a plain z-score on counts.
+  Overdispersion is tracked as an EWMA of the squared residual and floored at
+  the Poisson value. Three independent gates (30-bucket warmup, a 256-operation
+  absolute floor, and a 6-sigma residual) must all pass, the baseline is only
+  ever updated from closed buckets, and at most one alert is emitted per
+  operation per bucket. An optional key fingerprint distinguishes
+  ephemeral-key churn from a hot loop over one key.
+- **3R note-like artifact detector**
+  (`ama_cryptography.monitoring.NoteArtifactDetector`). Scores signed payloads
+  for the structure of instructions addressed to a later instance: a
+  phrase-level *successor* family (bigrams such as "next instance", "your
+  successor" — the individual words are ordinary English and scoring them as
+  unigrams flags ~12% of this repository's own documentation), plus unigram
+  *instructional* and *operational* families. A printable-ASCII floor rejects
+  signatures, keys and ciphertext before any scoring. Thresholds were swept
+  against a 448-file corpus of the repository's own text: the shipped defaults
+  flag none of it while catching every hand-written successor note, and
+  `tests/test_agentic_abuse_detectors.py` re-runs that sweep so the number
+  stays honest as the corpus grows. Advisory only — it never blocks a
+  signature.
+- **Optional monitor hooks.** `AmaCryptographyMonitor.record_operation_event()`
+  and `.inspect_signed_payload()`, enabled by
+  `create_monitor(detect_volume_spikes=..., detect_note_artifacts=...)`. Both
+  default to **off** and return `None` immediately when disabled, so no
+  existing call path pays for them and the security-report shape is unchanged
+  for existing consumers.
+- **Compiled 3R detector kernels.** `volume_spike_scores` and
+  `token_family_counts` in `src/cython/math_engine.pyx` — an EWMA-Anscombe
+  pass and a single-pass tokenising unigram+bigram scan with binary-searched
+  marker tables. Each has an exact pure-Python twin in `monitoring.py`;
+  equivalence is pinned by property-based tests, so the extension is an
+  optimisation and never a correctness dependency.
+- **Adversarial agentic-load test suites.** `tests/test_agent_binding.py`,
+  `tests/test_agentic_abuse_detectors.py` and
+  `tests/test_agentic_load_adversarial.py` (+111 tests). The last covers the
+  four scenarios end to end: high-concurrency ephemeral ML-KEM/ML-DSA load with
+  the monitors running, a future-version note simulation, a lateral-probe
+  simulation checked against real BIP32 HD derivation and scheduled key
+  rotation for false positives, and fail-closed resilience under parallel
+  attempts to force unbound persistence material.
+- **`tests/c/test_agent_binding.c`** — pins the canonical encoding as a byte
+  KAT and covers structural refusals, foreign-key tags, single-bit tag flips,
+  post-authorization capability escalation and cross-binding separation.
+- **dudect lane `Agent binding check`** in `tests/c/test_dudect.c`, registered
+  strict. Accepted and refused bindings take the same structural path, so any
+  class separation is a real leak in the verdict; measured `t = +0.17` at
+  200k measurements.
+
+### Changed
+
+- `ama_error_t` gained `AMA_ERROR_ETHICAL_BINDING = -9`. Appended, so no
+  existing error code changed value.
+- `create_monitor()` and `AmaCryptographyMonitor.__init__()` gained two
+  keyword-only-in-practice flags, both defaulting to `False`.
+
+---
+
 ## [3.4.0] - 2026-07-25
 
 ### Added

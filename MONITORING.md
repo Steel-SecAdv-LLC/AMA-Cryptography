@@ -5,7 +5,7 @@
 | Property | Value |
 |----------|-------|
 | Document Version | 3.4.0 |
-| Last Updated | 2026-07-25 |
+| Last Updated | 2026-07-26 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -20,6 +20,15 @@ AMA Cryptography includes optional runtime security monitoring using the 3R Mech
 | ResonanceTimingMonitor | Runtime timing anomaly monitoring | Frequency-domain analysis of operation timings (statistical anomaly detection) |
 | RecursionPatternMonitor | Pattern analysis | Hierarchical anomaly detection across time scales |
 | RefactoringAnalyzer | Code complexity metrics | Static analysis for manual security review |
+
+Two opt-in detectors extend the Resonance and Recursion components for agentic-abuse patterns:
+
+| Detector | Function | Purpose |
+|----------|----------|---------|
+| VolumeSpikeDetector | Operation-burst detection | Anscombe-transformed statistical detection of KEM/signature bursts with ephemeral-key churn |
+| NoteArtifactDetector | Signed-payload structure | Surfaces payloads shaped like instructions for a later agent instance |
+
+Both default to **off**; see [Agentic Abuse Detectors](#agentic-abuse-detectors-opt-in).
 
 **Design Philosophy**: The 3R Mechanism follows a strict observe-analyze-alert paradigm. It never automatically modifies cryptographic code, ensuring that all security-critical changes require human review and approval.
 
@@ -126,6 +135,90 @@ AMA Cryptography includes optional runtime security monitoring using the 3R Mech
 2. **Lines of Code**: Per-function and per-file
 
 3. **Complexity Distribution**: Mean, max, high-complexity count
+
+---
+
+### Agentic Abuse Detectors (opt-in)
+
+Added in response to the July 2026 autonomous-agent sandbox escape, in which an
+evaluation agent moved laterally, reached the open internet, and left signed
+notes intended for future versions of itself. Both detectors are **disabled by
+default** and return `None` immediately when off — no existing call path pays
+for them.
+
+```python
+monitor = create_monitor(detect_volume_spikes=True, detect_note_artifacts=True)
+```
+
+#### VolumeSpikeDetector
+
+**Purpose**: Detect bursts of ML-KEM-1024 / ML-DSA-65 / SLH-DSA operations
+consistent with agentic reconnaissance or bulk artifact generation.
+
+**Statistics**: Per-operation counts are bucketed (default 1 s) and scored in
+the Anscombe variance-stabilising transform `a(c) = 2·√(c + 3/8)`, under which
+a Poisson count is approximately unit-variance Normal regardless of rate. A
+plain z-score on raw counts fails here: a quiet baseline has near-zero sample
+variance, so every mild uptick reads as an enormous deviation. Overdispersion
+is tracked as an EWMA of the squared residual and floored at the Poisson value
+of 1.
+
+**Gates** — all three must pass before an alert is emitted:
+
+| Gate | Default | Rationale |
+|------|---------|-----------|
+| `warmup_buckets` | 30 | The baseline must be a baseline |
+| `min_burst_count` | 256 | Absolute floor: an idle service signing twice is not an incident |
+| `threshold_sigma` | 6.0 | Deliberately far above the 3.0 used elsewhere — a burst detector that cries wolf gets switched off |
+
+The baseline is updated only from **closed** buckets, so a burst never inflates
+the baseline it is judged against, and at most one alert is emitted per
+operation per bucket.
+
+**Key churn**: an optional truncated key fingerprint (never raw key bytes) lets
+the detector report `distinct_key_ratio`. A ratio near 1.0 — a fresh key per
+operation — escalates the alert to `critical`; a hot loop over one long-lived
+key stays `warning`.
+
+**Hook**: `monitor.record_operation_event(operation, key_fingerprint=None)`
+
+#### NoteArtifactDetector
+
+**Purpose**: Surface signed payloads that read as instructions addressed to a
+later instance of the signer.
+
+**Method**: Three marker families are scored — a phrase-level *successor*
+family (bigrams such as "next instance", "your successor"), plus unigram
+*instructional* and *operational* families. The successor family is
+phrase-level because its component words are ordinary English; scoring them as
+unigrams flags roughly one in eight files of this repository's own
+documentation. A payload is flagged only when all three families are covered,
+the fractional coverage score reaches the threshold, and the printable-ASCII
+ratio clears its floor — signatures, keys and ciphertext are high-entropy
+binary and are rejected before any scoring.
+
+**Calibration**: thresholds were swept against a 448-file corpus of this
+repository's Markdown, Python, C, headers, JSON and YAML. The shipped defaults
+flag none of it while catching every hand-written successor note;
+`tests/test_agentic_abuse_detectors.py` re-runs the sweep on every CI run.
+
+**Bounded work**: at most `max_scan_bytes` (default 8192) are examined, sampled
+head and tail so prepended filler cannot hide a note at the end. One pass, no
+regular expressions.
+
+**Advisory only**: this is a heuristic. It never blocks a signature, and an
+agent that avoids the successor vocabulary is not caught. `flagged=False` is
+not a statement that a payload is benign.
+
+**Hook**: `monitor.inspect_signed_payload(payload, label="...")`
+
+#### Compiled kernels
+
+Both detectors are backed by Cython kernels in `src/cython/math_engine.pyx`
+(`volume_spike_scores`, `token_family_counts`) with exact pure-Python twins in
+`ama_cryptography/monitoring.py`. Equivalence is pinned by property-based
+tests, so the compiled extension is an optimisation and never a correctness
+dependency. `monitoring.CYTHON_DETECTOR_KERNELS` reports which path is active.
 
 ---
 
@@ -244,12 +337,16 @@ monitor = AmaCryptographyMonitor(alert_retention=1000)
 - `ResonanceTimingMonitor`: Timing analysis
 - `RecursionPatternMonitor`: Pattern analysis  
 - `RefactoringAnalyzer`: Code complexity
+- `VolumeSpikeDetector`: Operation-burst detection (opt-in)
+- `NoteArtifactDetector`: Note-like signed-payload detection (opt-in)
 
 **Key Methods**:
 - `monitor_crypto_operation(operation, duration_ms)`
 - `record_package_signing(metadata)`
 - `get_security_report()`
 - `analyze_codebase(directory)`
+- `record_operation_event(operation, key_fingerprint=None)` (opt-in)
+- `inspect_signed_payload(payload, label=...)` (opt-in)
 
 See inline documentation in `tools/monitoring/ama_cryptography_monitor.py` for complete API details.
 
@@ -304,6 +401,7 @@ controller.respond()  # Key rotation, algorithm switching based on level
 | 2.0.0 | 2026-03-08 | Adaptive posture integration, weighted scoring model, Phase 2 primitives support |
 | 2.1.0 | 2026-03-25 | Hand-written SIMD dispatch coverage, dashboard/chart overhaul |
 | 2.1.5 | 2026-04-17 | Documentation version alignment, comprehensive monitoring test coverage |
+| 2.2.0 | 2026-07-26 | Agentic-abuse detectors: VolumeSpikeDetector, NoteArtifactDetector, opt-in monitor hooks |
 
 ---
 
