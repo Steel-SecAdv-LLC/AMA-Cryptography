@@ -86,6 +86,19 @@ Both are **on by default**; see [Agentic Abuse Detectors](#agentic-abuse-detecto
 - `window_size`: FFT sample window (default: 100)
 - `max_history`: Memory limit per operation (default: 10,000)
 
+**Measured detection envelope** (`tests/test_agentic_load_adversarial.py`, synthetic series, 96 samples in a 64-sample window). Periodicity is scored against *surrogates* of the same series — deterministic shuffles, which destroy temporal ordering while preserving the exact value multiset — so the figure below is a ratio to the series' own noise floor, not an absolute score. A ratio of 2.0 is the discrimination bar; sweeping 400 independent aperiodic series put the null distribution at median 0.65 / p99 1.49 / max 1.87, so nothing without real structure reaches it.
+
+| Input | Ratio to own noise floor | Seen? |
+|---|---|---|
+| Period-2 probe (alternating cost) | 10.2x | Yes |
+| Sinusoidal cadence, periods 2–24 | 3.7x–5.8x | Yes |
+| Period-2 at SNR 0.5 (amplitude 0.25 vs ±0.5 jitter) | 3.2x | Yes |
+| Period-2 at SNR 0.3 (amplitude 0.15) | 1.8x | **No** |
+| Period-2 at SNR 0.1 (amplitude 0.05) | 0.6x | **No** |
+| Aperiodic jitter (no structure) | 0.6x | No (correct) |
+
+Read that as a floor, not a guarantee: a periodic component quieter than roughly a third of the ambient jitter is not distinguishable from noise. Square waves whose period does not divide the window leak across bins and score lower for that reason alone (a period-24 square reads 1.8x). Wall-clock timings of sub-millisecond operations on a shared/virtualised host routinely carry their own periodic structure — cache warm-up, allocator growth, scheduler quanta — so a raw resonance score from such a host is not on its own evidence of an attack.
+
 **Performance**: <0.5% overhead per monitored operation
 
 ---

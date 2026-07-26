@@ -160,6 +160,26 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   `True`. `get_security_report()` consequently gains a `volume_baselines`
   key by default; pass both flags as `False` for the previous shape.
 
+### Added
+
+- **A measured detection envelope for `ResonanceTimingMonitor`**, in
+  `MONITORING.md` and pinned by
+  `test_resonance_holds_across_cadences_and_under_noise`. Separating one probe
+  shape from aperiodic traffic would still pass for an engine that only ever
+  looked at the Nyquist bin, and said nothing about whether the signal
+  survives a real workload's jitter — both matter, because a reconnaissance
+  loop runs at whatever cadence the attacker chose and runs alongside ordinary
+  traffic. Two floors are now asserted deterministically: a sinusoidal cadence
+  is caught at **every period from 2 to 24 samples** (3.7x-5.8x over its own
+  surrogate ceiling), and a period-2 component stays visible when buried in
+  aperiodic jitter at a **signal-to-noise ratio of 0.5** (3.2x). Where the
+  floor actually lies is documented rather than implied: the same component
+  fades to 1.8x at SNR 0.3 and 0.6x at SNR 0.1, so a probe quieter than
+  roughly a third of the ambient jitter is not seen. The 2.0 discrimination
+  bar is likewise justified from data instead of chosen — a sweep of 400
+  independent aperiodic series puts the null distribution at median 0.65,
+  p99 1.49, max 1.87.
+
 ### Fixed
 
 - **Two latent RST defects in `monitoring.py` docstrings that failed the
@@ -170,28 +190,49 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   defects were pre-existing and latent — `monitoring.py` had never been in the
   Sphinx toctree — and adding `docs/api/monitoring.rst` exposed them. Both are
   now inline literals, and the `-W` build succeeds with zero content problems.
-- **Two resonance tests were measuring the runner, not the workload.**
-  `test_legitimate_hd_derivation_does_not_resonate` and
-  `test_scheduled_key_rotation_does_not_resonate` compared a resonance ratio
-  computed from **wall-clock timings** against a fixed bar
-  (`ratio * 5 < probe_ratio`). That ratio is the maximum of N noisy
-  periodogram bins, so its value tracks scheduler noise: the same assertion
-  read ~4 on Linux and 13.3 on a macOS runner, where it failed — while the
-  claim it encodes ("legitimate work carries no periodic structure") was still
-  true.
+- **The resonance discrimination claim was asserted on an unsound
+  instrument.** `test_legitimate_hd_derivation_does_not_resonate` and
+  `test_scheduled_key_rotation_does_not_resonate` computed a resonance ratio
+  from **wall-clock timings of sub-millisecond operations on a shared CI
+  runner** and required it to stay low. Two things were wrong with that, and
+  the second is the interesting one:
 
-  Both now use a **surrogate-data test**: the measured series is compared
-  against deterministic shuffles of *itself*, which destroy temporal ordering
-  while preserving the exact value distribution, and therefore the noise. A
-  series with no structure scores like its own shuffles; a deliberate probe
-  towers over them. Both sides come from the same machine and the same
-  samples, so runner noise cancels instead of deciding the outcome. Measured:
-  HD derivation 4.04 against a 3.90 surrogate ceiling (1.04x — indistinguishable
-  from its own shuffle) versus a period-2 probe at 63.00 against 6.03 (10.45x).
-  The probe is now also carried through the identical comparison as a
-  **positive control**, so the test proves it can still see structure when
-  structure is present — without it, a resonance engine that returned a
-  constant would pass the negative case silently.
+  1. The ratio is the maximum of N noisy periodogram bins, so against a fixed
+     bar it tracks scheduler noise — the same assertion read ~4 on Linux and
+     13.3 on macOS.
+  2. Replacing the fixed bar with a **surrogate-data comparison** (the series
+     against deterministic shuffles of itself, which destroy temporal ordering
+     while preserving the value multiset, hence the noise) removed the
+     machine-noise dependence correctly — and then found exactly what it was
+     built to find. Real workloads on real machines *do* carry periodic timing
+     structure. HD derivation scored 2.91x over its own surrogate ceiling on
+     macOS because the first derivation under each account pays a cache warm-up
+     (~2.3x measured) and the harness marched 4 accounts x 24 indices in
+     lockstep — a period-24 line the harness itself created. Key registration
+     scored 2.10x on Windows for the same class of reason, allocator behaviour
+     as the key table grows.
+
+  So "legitimate work never resonates" is not a true statement about real
+  wall-clock timings, and no threshold makes it one. The claim is now asserted
+  where it can be measured honestly.
+  `test_resonance_separates_probe_from_legitimate_traffic` drives the detector
+  with **synthetic, deterministic sequences** — no clock is read — and holds it
+  to a three-way assertion: a
+  period-2 reconnaissance probe must clear its own surrogate ceiling
+  (measured 10.21x, bar 2.0), SHAKE256-driven aperiodic traffic at the same
+  mean must not (measured 0.58x, worst of 24 independent seeds 1.16x, bar
+  2.0), and the probe must outrank legitimate traffic by 3x (measured 20.0x).
+  The surrogate comparison runs in **both** directions, so a resonance engine
+  that returned a constant, or one that flagged everything, fails one of the
+  three.
+
+  The two real-workload tests keep running real BIP32 derivation and a real
+  rotation schedule through the monitor, and now assert what is genuinely
+  robust across platforms: legitimate work never reaches a **CRITICAL**
+  anomaly (the severity that would page a human), the monitor ingests the
+  timings rather than silently dropping them, and the manager's bookkeeping is
+  correct across the whole schedule.
+
 - **All four CodeQL (GitHub Advanced Security) alerts raised by this branch,
   resolved at source — none dismissed or suppressed**, per the standing policy
   in `.github/codeql/codeql-config.yml`:

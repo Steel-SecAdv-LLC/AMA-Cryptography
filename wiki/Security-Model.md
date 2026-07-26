@@ -38,7 +38,7 @@ Documentation for AMA Cryptography's security properties, threat model, side-cha
 
 - Not a general-purpose TLS/transport security library
 - Not a replacement for HSM in high-security environments
-- 3R monitoring flags statistical anomalies but does not prevent attacks
+- 3R monitoring flags statistical anomalies but does not prevent attacks. Its timing component has a measured floor rather than an open-ended promise: a periodic probe quieter than roughly a third of the ambient jitter is not distinguishable from noise (envelope table in [`MONITORING.md`](https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/MONITORING.md#resonancetimingmonitor-runtime-timing-anomaly-monitoring))
 - AES-GCM default build uses constant-time bitsliced S-box (`AMA_AES_CONSTTIME=ON`); explicitly disabling it reverts to table-based AES which is cache-timing vulnerable
 - Not certified under FIPS 140-2/3
 
