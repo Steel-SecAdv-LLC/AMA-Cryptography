@@ -145,7 +145,7 @@ class TestConstruction:
             ({"instance_id": INSTANCE_ID, "capabilities": 0x80}, ValueError),
         ],
     )
-    def test_boundary_validation(self, kwargs: dict, exc: type) -> None:
+    def test_boundary_validation(self, kwargs: dict[str, Any], exc: type) -> None:
         with pytest.raises(exc):
             AgentBinding(**kwargs)
 

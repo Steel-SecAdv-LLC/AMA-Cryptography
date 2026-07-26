@@ -122,10 +122,13 @@ def _fnv1a64(token: bytes) -> int:
 def _volume_spike_scores_py(counts: "Sequence[float]", alpha: float, warmup: int) -> List[float]:
     """Pure-Python twin of ``math_engine.volume_spike_scores``.
 
-    Kept byte-for-byte equivalent (same operation order, same float ops) so
-    the Cython kernel is a speed-up and never a correctness dependency —
-    ``tests/test_agentic_abuse_detectors.py`` asserts the two agree exactly.
-    See the Cython docstring for the statistics.
+    Kept operation-for-operation equivalent (same order, same float ops) so
+    the Cython kernel is a speed-up and never a correctness dependency.  On a
+    platform without FMA contraction the two agree bit-for-bit; where the C
+    compiler contracts ``a*b + c`` to a fused multiply-add (e.g. ARM) they
+    agree to within a last ULP, far below anything that could move a score
+    across the detector's threshold.  ``tests/test_agentic_abuse_detectors.py``
+    pins that tolerance.  See the Cython docstring for the statistics.
     """
     if alpha <= 0.0 or alpha > 1.0:
         raise ValueError("alpha must be in (0, 1]")

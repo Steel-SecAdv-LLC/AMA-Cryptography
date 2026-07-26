@@ -449,8 +449,9 @@ def benchmark_matrix_operations(int size=1000, int iterations=100):
 # Two numeric kernels backing the detectors in ama_cryptography.monitoring.
 # Both have exact pure-Python fallbacks in that module (see
 # _volume_spike_scores_py / _token_family_counts_py); tests assert the two
-# implementations agree bit-for-bit, so the Cython extension is an
-# optimisation and never a correctness dependency.
+# implementations agree to within a floating-point ULP (bit-for-bit where the
+# target has no FMA contraction), so the Cython extension is an optimisation
+# and never a correctness dependency.
 #
 # Neither kernel touches key material.  They run on operation *counts* and on
 # payloads the caller has explicitly handed to the monitor, so there is no

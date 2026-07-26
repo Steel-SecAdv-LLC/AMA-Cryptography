@@ -55,6 +55,7 @@ from ama_cryptography.agent_binding import (
 from ama_cryptography.monitoring import (
     NoteArtifactDetector,
     ResonanceTimingMonitor,
+    TimingAnomaly,
     VolumeSpikeDetector,
     create_monitor,
 )
@@ -311,7 +312,7 @@ def welch_t(a: list[float], b: list[float]) -> float:
     denom = (va / len(a)) + (vb / len(b))
     if denom <= 0:
         return 0.0
-    return (statistics.fmean(a) - statistics.fmean(b)) / (denom**0.5)
+    return float((statistics.fmean(a) - statistics.fmean(b)) / (denom**0.5))
 
 
 # ---------------------------------------------------------------------------
@@ -417,8 +418,8 @@ class TestLateralProbeSimulation:
     @staticmethod
     def _feed(
         monitor: ResonanceTimingMonitor, operation: str, durations: list[float]
-    ) -> list[object]:
-        out = []
+    ) -> list[TimingAnomaly]:
+        out: list[TimingAnomaly] = []
         for d in durations:
             anomaly = monitor.record_timing(operation, d)
             if anomaly is not None:

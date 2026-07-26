@@ -22,8 +22,10 @@ tests pin them together so the extension stays an optimisation.
 from __future__ import annotations
 
 import hashlib
+import importlib
 import os
 import pathlib
+from typing import Any
 
 import pytest
 from hypothesis import HealthCheck, given, settings
@@ -32,6 +34,7 @@ from hypothesis import strategies as st
 from ama_cryptography.monitoring import (
     CYTHON_DETECTOR_KERNELS,
     NoteArtifactDetector,
+    VolumeSpike,
     VolumeSpikeDetector,
     _bigram_hash,
     _fnv1a64,
@@ -63,9 +66,9 @@ def drive(
     per_bucket: list[int],
     start_bucket: int = 0,
     fingerprints: bool = False,
-) -> list[object]:
+) -> list[VolumeSpike]:
     """Feed a per-bucket count profile at deterministic timestamps."""
-    spikes = []
+    spikes: list[VolumeSpike] = []
     counter = 0
     for offset, count in enumerate(per_bucket):
         base = (start_bucket + offset) * detector.bucket_seconds
@@ -204,7 +207,7 @@ class TestVolumeSpikeDetection:
             {"max_operations": 0},
         ],
     )
-    def test_constructor_validation(self, kwargs: dict) -> None:
+    def test_constructor_validation(self, kwargs: dict[str, Any]) -> None:
         with pytest.raises(ValueError):
             VolumeSpikeDetector(**kwargs)
 
@@ -394,7 +397,7 @@ class TestNoteArtifactDetection:
             {"min_text_ratio": 1.5},
         ],
     )
-    def test_constructor_validation(self, kwargs: dict) -> None:
+    def test_constructor_validation(self, kwargs: dict[str, Any]) -> None:
         with pytest.raises(ValueError):
             NoteArtifactDetector(**kwargs)
 
@@ -469,21 +472,36 @@ class TestNoteArtifactCalibration:
 class TestKernelEquivalence:
     """The Cython kernels must be indistinguishable from their Python twins."""
 
-    def test_volume_scores_match_exactly(self) -> None:
+    def test_volume_scores_agree_to_floating_point_tolerance(self) -> None:
+        # The Cython kernel and the Python twin run the same operations in the
+        # same order, but the C compiler may contract ``a*b + c`` to a single
+        # fused-multiply-add (one rounding) where Python rounds twice — this
+        # happens on ARM/Apple-Silicon, where FMA is baseline, and not on x86
+        # without FMA target flags.  So the two agree to within a last-ULP
+        # tolerance, not bit-for-bit across platforms.  A last-ULP difference
+        # cannot move a score across the 6-sigma threshold, so tolerance is
+        # the correct contract here; ``token_family_counts`` below is pure
+        # integer work and IS asserted exactly.
         from array import array
 
-        from ama_cryptography.math_engine import volume_spike_scores
+        volume_spike_scores = importlib.import_module(
+            "ama_cryptography.math_engine"
+        ).volume_spike_scores
 
         for alpha in (0.01, 0.05, 0.2, 1.0):
             counts = seeded_ints(f"kernel-equiv-{alpha}".encode(), 400, 0, 5000)
             cy = list(volume_spike_scores(array("d", [float(c) for c in counts]), alpha, 30))
             py = _volume_spike_scores_py([float(c) for c in counts], alpha, 30)
-            assert cy == py
+            assert len(cy) == len(py)
+            for c_val, p_val in zip(cy, py):
+                assert c_val == pytest.approx(p_val, rel=1e-9, abs=1e-9)
 
     def test_token_counts_match_exactly(self) -> None:
         from array import array
 
-        from ama_cryptography.math_engine import token_family_counts
+        token_family_counts = importlib.import_module(
+            "ama_cryptography.math_engine"
+        ).token_family_counts
 
         d = NoteArtifactDetector()
         uni_h = array("Q", d._uni_hashes)
@@ -522,7 +540,9 @@ class TestKernelEquivalence:
     def test_token_counts_match_on_arbitrary_bytes(self, data: bytes) -> None:
         from array import array
 
-        from ama_cryptography.math_engine import token_family_counts
+        token_family_counts = importlib.import_module(
+            "ama_cryptography.math_engine"
+        ).token_family_counts
 
         d = NoteArtifactDetector()
         cy = token_family_counts(
@@ -547,7 +567,7 @@ class TestKernelEquivalence:
         assert tuple(cy[1]) == tuple(py[1])
         assert (cy[2], cy[3]) == (py[2], py[3])
 
-    def test_detector_agrees_with_the_fallback_path(self, monkeypatch) -> None:
+    def test_detector_agrees_with_the_fallback_path(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Force the pure-Python path and re-run the whole corpus decision."""
         import ama_cryptography.monitoring as monitoring
 
@@ -742,7 +762,7 @@ class TestMonitorHooks:
         assert signal is not None and signal.flagged is False
         assert m.alerts == []
 
-    def test_volume_hook_records_an_alert(self, monkeypatch) -> None:
+    def test_volume_hook_records_an_alert(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # The hook reads the real clock; drive a synthetic one so the burst is
         # guaranteed to land inside a single bucket regardless of host speed.
         clock = {"t": 0.0}
