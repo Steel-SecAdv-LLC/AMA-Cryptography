@@ -772,8 +772,9 @@ passing.
 
 **Statement.** Every runner label named in `.github/workflows/**` must be a
 GitHub-hosted image that currently exists, every embedded `python -c` payload
-must compile, and every command string destined for `cmd.exe` must use quoting
-`cmd.exe` actually honours.
+must compile, every command string destined for `cmd.exe` must use quoting
+`cmd.exe` actually honours, and every release-creating step must be safe under
+immutable releases and under a re-run for a tag already published.
 
 **Why.** `release.yml` triggers on `push: tags: ['v*']` and nothing else, so a
 defect inside it is invisible until a release is attempted. Three shipped that
@@ -795,13 +796,36 @@ way, each independently sufficient to produce a release with no artefacts:
 
 All three are decidable without running anything.
 
+A fourth class was added after v3.4.0, when immutable releases were enabled on
+this repository. Immutable releases freeze a release's tag and assets at
+publish; the title and notes stay editable. Three properties of the
+`softprops/action-gh-release` step follow from that, none of which fail until a
+tag is pushed:
+
+4. **Release text destroyed, or a prerelease frozen before upload.** `name:`
+   overwrote a hand-edited release title, because `updateRelease` resolves
+   `input_name || existingRelease.name || tag`. `body:` without
+   `append_body: true` overwrote hand-edited notes, because the body resolves
+   as `workflowBody || existingReleaseBody`. And a prerelease with assets was
+   never drafted — `createRelease` computes
+   `draft = prerelease === true ? input_draft === true : true`, so only a
+   *non*-prerelease drafts automatically — leaving a published `-rc` whose
+   assets freeze before the upload, which then fails with *Cannot upload assets
+   to an immutable release*.
+
 **Enforcement.** `tools/check_workflow_commands.py` runs in CI on every PR. It
 resolves `runs-on:` through `strategy.matrix` (including `include:` entries),
 compiles every extracted `python -c` payload after applying the shell's own
-double-quote unescaping, and rejects POSIX single-quoting in `*_WINDOWS`
-cibuildwheel variables and `shell: cmd` steps. Both directions are pinned by
-`tests/test_workflow_command_checks.py`, which replays all three historical
-defects and asserts the legitimate shapes do not false-positive.
+double-quote unescaping, rejects POSIX single-quoting in `*_WINDOWS`
+cibuildwheel variables and `shell: cmd` steps, and checks every step using a
+release-creating action for the three properties above. A `${{ ... }}`
+expression counts as neither true nor false there: a step that drives `draft:`
+from the same condition as `prerelease:` has handled the case, and the checker
+does not second-guess a value it cannot evaluate. Both directions are pinned by
+`tests/test_workflow_command_checks.py`, which replays all four historical
+defect classes — including the pre-fix `release.yml` step reproducing all three
+release-publishing findings at once — and asserts the legitimate shapes do not
+false-positive.
 
 **Unresolved is not verified.** A label the checker cannot resolve statically
 (an `inputs.*` expression, a matrix it cannot expand) is reported separately

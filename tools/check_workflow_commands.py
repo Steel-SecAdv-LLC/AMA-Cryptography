@@ -35,6 +35,12 @@ own sufficient to produce a release with zero binary artefacts:
    as part of the requirement and every Windows wheel job died on
    ``Invalid requirement: "'cmake"``.
 
+4. **Release-publishing inputs incompatible with immutable releases.**  Three
+   defects in one step, all invisible until a tag was pushed: a ``name:`` that
+   reset a hand-edited release title, a ``body:`` that destroyed hand-edited
+   release notes, and a prerelease that published before its assets uploaded.
+   See :func:`check_release_publishing` for the mechanics.
+
 Each is a *latent outage*, not a style issue, and each is decidable without
 running anything.  This checker decides them on the pull request that
 introduces them.
@@ -59,6 +65,12 @@ What is checked
     Command strings that are Windows-specific by construction — the
     ``*_WINDOWS`` cibuildwheel variables, and ``run:`` steps declaring
     ``shell: cmd`` — must not use POSIX single-quoting around arguments.
+
+``release publishing``
+    Steps using ``softprops/action-gh-release`` must not silently overwrite
+    release text a maintainer edited by hand, and must not publish a
+    prerelease before its assets have uploaded.  The rules are derived from
+    the action's own resolution logic; see :func:`check_release_publishing`.
 
 Known limitation, stated plainly
 --------------------------------
@@ -133,6 +145,14 @@ RETIRED_LABELS: dict[str, str] = {
     "windows-2019": "windows-2025 or windows-latest",
     "windows-2016": "windows-2025 or windows-latest",
 }
+
+#: Actions that create or update a GitHub Release.  The step-security fork is
+#: a documented drop-in for softprops with the same input names, so the same
+#: resolution logic — and the same defects — apply to it.
+RELEASE_ACTIONS: tuple[str, ...] = (
+    "softprops/action-gh-release",
+    "step-security/action-gh-release",
+)
 
 #: Environment keys whose value is executed by ``cmd.exe`` on the runner.
 WINDOWS_COMMAND_KEYS: tuple[str, ...] = (
@@ -217,6 +237,7 @@ class Report:
     labels_unresolved: list[str] = field(default_factory=list)
     payloads_checked: int = 0
     windows_commands_checked: int = 0
+    release_steps_checked: int = 0
 
     @property
     def ok(self) -> bool:
@@ -230,6 +251,36 @@ def _iter_jobs(document: Any) -> Iterator[tuple[str, dict[str, Any]]]:
         for job_id, job in jobs.items():
             if isinstance(job, dict):
                 yield str(job_id), job
+
+
+def _iter_steps(document: Any) -> Iterator[tuple[str, int, dict[str, Any]]]:
+    """Yield ``(job_id, step_index, step)`` for every step in every job."""
+    for job_id, job in _iter_jobs(document):
+        steps = job.get("steps")
+        if not isinstance(steps, list):
+            continue
+        for index, step in enumerate(steps):
+            if isinstance(step, dict):
+                yield job_id, index, step
+
+
+def _is_literal_true(value: Any) -> bool:
+    """True only for a value YAML resolves to a definite ``true``.
+
+    A ``${{ ... }}`` expression is deliberately neither true nor false here:
+    its value is decided on the runner, so the checker must not pretend to
+    know it.
+    """
+    if value is True:
+        return True
+    return isinstance(value, str) and value.strip().lower() == "true"
+
+
+def _is_literal_false(value: Any) -> bool:
+    """True only for a value YAML resolves to a definite ``false``."""
+    if value is False:
+        return True
+    return isinstance(value, str) and value.strip().lower() == "false"
 
 
 def _matrix_values(job: dict[str, Any], key: str) -> Optional[list[str]]:
@@ -477,6 +528,121 @@ def check_shell_parseable(path: Path, document: Any, report: Report) -> None:
             )
 
 
+def check_release_publishing(path: Path, document: Any, report: Report) -> None:
+    """Release-creating steps must be safe under immutable releases and re-runs.
+
+    Immutable releases freeze a release's tag and assets at publish time; the
+    title and notes stay editable.  That makes the intended flow *publish via
+    the workflow, then edit the text by hand* — and it makes two of this
+    action's inputs destructive, because a workflow re-run for the same tag
+    takes the action's ``updateRelease`` path and overwrites what was edited.
+
+    All three rules below are read off the action's own resolution logic
+    rather than its documentation:
+
+    ``name``
+        ``updateRelease`` resolves ``input_name || existingRelease.name ||
+        tag``.  Passing a name therefore replaces a hand-edited title with
+        whatever the workflow hardcodes.  Omitting it is not a regression for
+        a first run: ``createRelease`` already falls back to ``input_name ||
+        tag``, which is the bare tag either way.
+
+    ``body`` / ``body_path`` without ``append_body``
+        The body resolves as ``workflowBody || existingReleaseBody`` unless
+        ``append_body`` is set, in which case an existing body is preserved
+        and the workflow's text is appended to it.  Without the flag a re-run
+        silently destroys the release notes.  ``createRelease`` never consults
+        ``append_body``, so setting it costs a first run nothing.
+
+    ``prerelease`` without ``draft``
+        ``createRelease`` computes ``draft = prerelease === true ?
+        input_draft === true : true`` — only a *non*-prerelease is drafted
+        automatically.  A prerelease is therefore published immediately, its
+        assets freeze, and the upload that follows fails with *Cannot upload
+        assets to an immutable release*.  Checked only when the step actually
+        uploads ``files``: with no assets there is nothing for the freeze to
+        catch.
+
+    An expression (``${{ ... }}``) counts as neither true nor false.  A step
+    that drives ``draft`` from the same expression as ``prerelease`` has
+    handled the case, and this checker does not second-guess a value it
+    cannot evaluate.
+    """
+    for job_id, index, step in _iter_steps(document):
+        uses = step.get("uses")
+        if not isinstance(uses, str):
+            continue
+        if not any(action in uses for action in RELEASE_ACTIONS):
+            continue
+
+        inputs = step.get("with")
+        if not isinstance(inputs, dict):
+            inputs = {}
+        report.release_steps_checked += 1
+        location = f"job '{job_id}' step [{index}]"
+
+        if "name" in inputs:
+            report.findings.append(
+                Finding(
+                    workflow=path.name,
+                    location=location,
+                    message=(
+                        "release step sets `name:`, which resets a hand-edited release "
+                        "title on any re-run for the same tag"
+                    ),
+                    remedy=(
+                        "omit `name:`.  updateRelease resolves `input_name || "
+                        "existingRelease.name || tag`, so a hardcoded name wins over the "
+                        "edited title; createRelease already defaults to the tag, so a "
+                        "first run is unchanged."
+                    ),
+                )
+            )
+
+        has_body = "body" in inputs or "body_path" in inputs
+        if has_body and not _is_literal_true(inputs.get("append_body")):
+            report.findings.append(
+                Finding(
+                    workflow=path.name,
+                    location=location,
+                    message=(
+                        "release step sets `body:`/`body_path:` without `append_body: true`, "
+                        "which destroys hand-edited release notes on any re-run for the "
+                        "same tag"
+                    ),
+                    remedy=(
+                        "add `append_body: true`.  The body otherwise resolves as "
+                        "`workflowBody || existingReleaseBody` and the workflow text wins.  "
+                        "createRelease never consults append_body, so a first run still "
+                        "gets the workflow body verbatim."
+                    ),
+                )
+            )
+
+        prerelease = inputs.get("prerelease")
+        may_be_prerelease = "prerelease" in inputs and not _is_literal_false(prerelease)
+        draft = inputs.get("draft")
+        draft_never_true = "draft" not in inputs or _is_literal_false(draft)
+        if "files" in inputs and may_be_prerelease and draft_never_true:
+            report.findings.append(
+                Finding(
+                    workflow=path.name,
+                    location=location,
+                    message=(
+                        "release step can publish a prerelease with assets but never drafts "
+                        "it, so under immutable releases the assets freeze before they upload"
+                    ),
+                    remedy=(
+                        "drive `draft:` from the same condition as `prerelease:`.  "
+                        "createRelease computes `draft = prerelease === true ? input_draft "
+                        "=== true : true`, so only a non-prerelease is drafted "
+                        "automatically; a published prerelease fails the upload with "
+                        "'Cannot upload assets to an immutable release'."
+                    ),
+                )
+            )
+
+
 def sweep(workflows_dir: Path) -> Report:
     """Run every check across every workflow file."""
     report = Report()
@@ -498,6 +664,7 @@ def sweep(workflows_dir: Path) -> Report:
         check_inline_python(path, document, report)
         check_windows_quoting(path, document, report)
         check_shell_parseable(path, document, report)
+        check_release_publishing(path, document, report)
     return report
 
 
@@ -518,7 +685,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     print(
         f"Checked {report.labels_checked} runner label(s), "
         f"{report.payloads_checked} inline python payload(s), "
-        f"{report.windows_commands_checked} Windows command string(s)."
+        f"{report.windows_commands_checked} Windows command string(s), "
+        f"{report.release_steps_checked} release-publishing step(s)."
     )
     if report.labels_unresolved:
         # Reported, never counted as verified.  Silence here would read as
