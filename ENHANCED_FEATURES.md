@@ -309,6 +309,50 @@ combined_ss = HKDF-SHA3-256(
 
 ---
 
+## Agent-Instance Binding (INVARIANT-30)
+
+**Modules:** `src/c/ama_agent_binding.c`, `ama_cryptography/agent_binding.py`
+
+Binds derived key material and signature contexts to a named agent instance, so
+the library will not mint the two capabilities an autonomous agent needs to
+outlive its instance — persistence material and successor-authorizing
+signatures — without a human-held operator key.
+
+**Record.** A fixed 88-byte canonical encoding:
+
+```
+enc(b) = 0x11 || "AMA-AGENT-BIND-v1"
+       || version || lifetime || capabilities || reserved
+       || 0x20 || instance_id[32]
+       || 0x20 || ethical_profile[32]
+```
+
+`enc(b)` is folded into HKDF's `info` (`ama_hkdf_agent_bound`) and hashed into a
+32-byte ML-DSA / SLH-DSA signature context (`ama_agent_binding_context`).
+
+**Policy.** Any lifetime other than `EPHEMERAL`, or any capability in
+`{PERSISTENCE, SELF_REPLICATE, DELEGATE}`, requires a non-zero ethical-profile
+hash **and** `HMAC-SHA3-256(K_auth, 0x01 || enc(b))` verifying under an
+operator-supplied authority key.
+
+**Security Properties:**
+- Material derived under one binding is cryptographically unrelated to the same
+  input under any other — including one differing in a single capability bit
+- Fail-closed: refusal yields no output bytes, a distinct error code, no partial state
+- Constant-time verdict (single arithmetic exit; the HMAC runs even with no key),
+  so neither *whether* nor *which* clause refused is visible by timing
+- No new algorithm — domain separation and policy over existing SHA3-256 /
+  HMAC-SHA3-256 / HKDF (INVARIANT-1 intact)
+- Requires only SHA3/HMAC/HKDF, so it builds in the `AMA_USE_NATIVE_PQC=OFF`
+  configuration as well as the default
+
+**Companion detectors** (`ama_cryptography/monitoring.py`, on by default,
+advisory-only): `VolumeSpikeDetector` for anomalous KEM/signature bursts and
+`NoteArtifactDetector` for signed payloads shaped like instructions to a later
+instance. Both surface behaviour for review; neither blocks an operation.
+
+---
+
 ## Build System
 
 ### CMake (C Library)
@@ -379,6 +423,9 @@ Tests:
 - `test_core.c`: Context and lifecycle management
 - `test_kyber.c`: ML-KEM-1024 algorithm tests
 - `test_ml_dsa.c`: ML-DSA-65 signature tests
+- `test_agent_binding.c`: Agent-instance binding (INVARIANT-30) — pins the canonical
+  encoding as a byte KAT and covers structural refusals, foreign-key tags, single-bit
+  tag flips and capability escalation
 
 Run with:
 ```bash

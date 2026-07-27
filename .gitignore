@@ -257,6 +257,15 @@ build-on/
 build-dudect/
 build-warn/
 
+# Catch-all for CMake build variants.  The explicit entries above are kept for
+# documentation value (each names the job or workflow that creates it), but a
+# new configuration should not be able to leak build artefacts into a commit
+# just because nobody remembered to extend this list — `build-nopqc/` (the
+# AMA_USE_NATIVE_PQC=OFF configuration guard) and `build-codeql/` (the CodeQL
+# tracing build) were both untracked-but-not-ignored before this pattern.
+# No tracked path lives under a `build-*/` directory, so this is safe.
+build-*/
+
 # Cross-compile aarch64 build dir (local-only)
 build-arm/
 build-aarch64/

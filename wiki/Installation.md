@@ -111,7 +111,12 @@ pip install .
 
 ### With Optional Extras
 
+The complete set of extras declared in `pyproject.toml`:
+
 ```bash
+# Cython + NumPy build/runtime support for the math layer
+pip install -e ".[math]"
+
 # Full monitoring stack (NumPy + SciPy for 3R engine)
 pip install -e ".[monitoring]"
 
@@ -121,8 +126,8 @@ pip install -e ".[legacy]"
 # Hardware Security Module (HSM) support
 pip install -e ".[hsm]"
 
-# Libsodium secure memory bindings
-pip install -e ".[secure-memory]"
+# Comparative benchmarking against external reference implementations
+pip install -e ".[benchmark]"
 
 # Development tools (pytest, black, ruff, mypy, coverage)
 pip install -e ".[dev]"
@@ -131,8 +136,21 @@ pip install -e ".[dev]"
 pip install -e ".[docs]"
 
 # Everything at once
-pip install -e ".[monitoring,legacy,hsm,secure-memory,dev]"
+pip install -e ".[all]"
 ```
+
+> **Secure memory needs no extra.** `ama_cryptography.secure_memory` is
+> dependency-free: it uses only the Python standard library, and reaches
+> `ama_consttime_memcmp` / `mlock` / `VirtualLock` through the native C library
+> you already built in Step 2, falling back to pure Python when that library is
+> absent. There is deliberately **no libsodium binding** — INVARIANT-1 forbids
+> third-party cryptographic dependencies, libsodium included.
+
+> **Extras are not validated by pip.** An extra a distribution does not declare
+> is *ignored*: pip prints a warning, installs without it, and exits 0. Copy
+> these names exactly — a misspelling produces a silently incomplete install
+> rather than an error. The names above are enforced against `pyproject.toml`
+> in CI by `tools/check_documented_extras.py` (INVARIANT-32).
 
 ---
 

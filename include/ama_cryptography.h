@@ -71,7 +71,12 @@ typedef enum {
     AMA_ERROR_NOT_IMPLEMENTED = -5,
     AMA_ERROR_TIMING_ATTACK = -6,
     AMA_ERROR_SIDE_CHANNEL = -7,
-    AMA_ERROR_OVERFLOW = -8
+    AMA_ERROR_OVERFLOW = -8,
+    /**< Agent-instance binding policy refused the request (see
+     *   "AGENT-INSTANCE BINDING" below).  Distinct from
+     *   AMA_ERROR_INVALID_PARAM: the arguments were well-formed, the
+     *   *policy* said no. */
+    AMA_ERROR_ETHICAL_BINDING = -9
 } ama_error_t;
 
 /* ============================================================================
@@ -696,6 +701,271 @@ AMA_API ama_error_t ama_hkdf_sha512(
     const uint8_t* ikm, size_t ikm_len,
     const uint8_t* info, size_t info_len,
     uint8_t* okm, size_t okm_len
+);
+
+/* ============================================================================
+ * AGENT-INSTANCE BINDING
+ * ============================================================================
+ *
+ * Threat model
+ * ------------
+ * An autonomous agent that reaches this library wants two things the library
+ * has no other reason to hand out: key material that OUTLIVES the agent
+ * instance (persistence), and signatures that let a LATER instance treat some
+ * blob as authoritative (self-replication, "notes for future versions").
+ * Ordinary per-message signing and ephemeral session keys are not that; they
+ * are the normal, high-volume, uninteresting case.
+ *
+ * The binding below separates those two populations at the KDF/signature
+ * domain, and refuses to mint the dangerous one without a token that only a
+ * human operator can produce.
+ *
+ * Construction
+ * ------------
+ * A binding is a fixed-width, canonically-encoded record:
+ *
+ *   enc(b) = 0x11 || "AMA-AGENT-BIND-v1"           (1 + 17 bytes)
+ *          || version || lifetime || capabilities || reserved
+ *          || 0x20 || instance_id[32]
+ *          || 0x20 || ethical_profile[32]          = 88 bytes total
+ *
+ * Every length is fixed or explicitly prefixed, so no two distinct bindings
+ * share an encoding (the length-prefix discipline used elsewhere in this
+ * library for domain separation).
+ *
+ * enc(b) is folded into HKDF's `info` (ama_hkdf_agent_bound) and hashed into
+ * a 32-byte signature context string (ama_agent_binding_context) that callers
+ * pass as the ML-DSA / SLH-DSA `ctx` argument.  Consequence: a key or a
+ * signature produced under one binding is cryptographically unrelated to the
+ * same input under any other binding, INCLUDING a binding that differs only
+ * in its lifetime or capability bits.  An agent cannot relabel ephemeral
+ * material as persistent after the fact; it would have to derive it again,
+ * which is exactly the call the policy check refuses.
+ *
+ * Authorization
+ * -------------
+ * Capabilities in AMA_AGENT_CAP_RESTRICTED_MASK — persistence, self-
+ * replication, delegation — and any lifetime other than EPHEMERAL require:
+ *
+ *   (a) a non-zero `ethical_profile` (SHA3-256 of the operator's authorized
+ *       ethical profile document), and
+ *   (b) `authorization` = HMAC-SHA3-256(K_auth, 0x01 || enc(b)), verified in
+ *       constant time against an authority key K_auth supplied by the caller.
+ *
+ * K_auth is held by the human-controlled supervisor that issues bindings, not
+ * by the agent.  An agent that has escaped its sandbox still cannot mint a
+ * persistent binding: it has enc(b) but not K_auth, and the check is a MAC
+ * verification, not a flag test.
+ *
+ * Everything here is fail-closed: a NULL argument, a malformed record, a
+ * reserved byte that is not zero, an absent authority key, or a tag mismatch
+ * all yield AMA_ERROR_ETHICAL_BINDING and no output.  The unrestricted path
+ * (EPHEMERAL + non-restricted capabilities) needs no key and no profile, so
+ * the hot path stays a plain HKDF call with a longer `info`.
+ *
+ * Constant-time: ama_agent_binding_check() runs the same instruction
+ * sequence for every outcome.  The policy predicates are evaluated with
+ * bitwise operators into a single accumulator and the tag comparison always
+ * runs over all 32 bytes (ama_consttime_memcmp), so neither *whether* the
+ * check failed nor *which* clause failed is distinguishable by timing.
+ * ============================================================================ */
+
+/** Wire/struct version of the binding record. */
+#define AMA_AGENT_BINDING_VERSION        1u
+
+/** Opaque agent-instance identifier (caller-chosen; 32 bytes). */
+#define AMA_AGENT_INSTANCE_ID_BYTES      32u
+
+/** SHA3-256 of the human-authorized ethical profile document. */
+#define AMA_ETHICAL_PROFILE_BYTES        32u
+
+/** HMAC-SHA3-256 authorization tag width. */
+#define AMA_AGENT_BINDING_TAG_BYTES      32u
+
+/** Canonical encoding width — see enc(b) above. */
+#define AMA_AGENT_BINDING_ENCODED_BYTES  88u
+
+/** Width of the derived signature-context string. */
+#define AMA_AGENT_BINDING_CONTEXT_BYTES  32u
+
+/**
+ * @brief How long material derived under this binding may live.
+ *
+ * SESSION and PERSISTENT are both "restricted": they outlive a single
+ * operation and therefore require operator authorization.
+ */
+typedef enum {
+    AMA_AGENT_LIFETIME_EPHEMERAL  = 0, /**< dies with the operation; unrestricted */
+    AMA_AGENT_LIFETIME_SESSION    = 1, /**< survives across calls in one process */
+    AMA_AGENT_LIFETIME_PERSISTENT = 2  /**< survives the agent instance */
+} ama_agent_lifetime_t;
+
+/* Capability bits.  Unrestricted set first. */
+#define AMA_AGENT_CAP_NONE            0x00u
+#define AMA_AGENT_CAP_DATA_SIGN       0x01u /**< sign ordinary application data */
+#define AMA_AGENT_CAP_KEY_EXCHANGE    0x02u /**< derive KEM/DH session material */
+/* Restricted set — operator authorization required. */
+#define AMA_AGENT_CAP_PERSISTENCE     0x04u /**< material that outlives the instance */
+#define AMA_AGENT_CAP_SELF_REPLICATE  0x08u /**< sign material that authorizes a successor instance */
+#define AMA_AGENT_CAP_DELEGATE        0x10u /**< mint bindings for other instances */
+
+/** Capability bits that cannot be exercised without operator authorization. */
+#define AMA_AGENT_CAP_RESTRICTED_MASK \
+    (AMA_AGENT_CAP_PERSISTENCE | AMA_AGENT_CAP_SELF_REPLICATE | AMA_AGENT_CAP_DELEGATE)
+
+/** Every capability bit this version defines.  Unknown bits are rejected. */
+#define AMA_AGENT_CAP_KNOWN_MASK \
+    (AMA_AGENT_CAP_DATA_SIGN | AMA_AGENT_CAP_KEY_EXCHANGE | AMA_AGENT_CAP_RESTRICTED_MASK)
+
+/**
+ * @brief An agent-instance binding record.
+ *
+ * Plain data, safe to copy and to serialise via ama_agent_binding_encode().
+ * `authorization` is the only field the agent cannot forge.
+ */
+typedef struct {
+    uint8_t version;      /**< AMA_AGENT_BINDING_VERSION */
+    uint8_t lifetime;     /**< ama_agent_lifetime_t */
+    uint8_t capabilities; /**< bitmask of AMA_AGENT_CAP_* */
+    uint8_t reserved;     /**< MUST be zero */
+    uint8_t instance_id[AMA_AGENT_INSTANCE_ID_BYTES];
+    uint8_t ethical_profile[AMA_ETHICAL_PROFILE_BYTES];  /**< all-zero = absent */
+    uint8_t authorization[AMA_AGENT_BINDING_TAG_BYTES];  /**< all-zero = absent */
+} ama_agent_binding_t;
+
+/**
+ * @brief Populate a binding record.
+ *
+ * Zeroes the authorization tag; call ama_agent_binding_authorize() to fill it.
+ *
+ * @param b                   Record to populate
+ * @param lifetime            ama_agent_lifetime_t value
+ * @param capabilities        Bitmask of AMA_AGENT_CAP_* (unknown bits rejected)
+ * @param instance_id         32-byte instance identifier
+ * @param ethical_profile     32-byte profile hash, or NULL for "absent"
+ * @return AMA_SUCCESS, or AMA_ERROR_INVALID_PARAM on NULL/unknown lifetime or
+ *         capability bit
+ */
+AMA_API ama_error_t ama_agent_binding_init(
+    ama_agent_binding_t* b,
+    ama_agent_lifetime_t lifetime,
+    uint8_t capabilities,
+    const uint8_t instance_id[AMA_AGENT_INSTANCE_ID_BYTES],
+    const uint8_t* ethical_profile
+);
+
+/**
+ * @brief Canonically encode a binding (the enc(b) above).
+ *
+ * The authorization tag is deliberately NOT part of the encoding — the tag is
+ * computed over it, and key derivation must not depend on it (otherwise the
+ * same authorized binding would derive different keys before and after the
+ * operator signs it).
+ *
+ * @param b       Binding to encode
+ * @param out     Output buffer
+ * @param out_cap Capacity of @p out; must be >= AMA_AGENT_BINDING_ENCODED_BYTES
+ * @return AMA_SUCCESS, AMA_ERROR_INVALID_PARAM (NULL / short buffer), or
+ *         AMA_ERROR_ETHICAL_BINDING if the record is malformed (bad version,
+ *         unknown lifetime or capability bit, non-zero reserved byte)
+ */
+AMA_API ama_error_t ama_agent_binding_encode(
+    const ama_agent_binding_t* b,
+    uint8_t* out,
+    size_t out_cap
+);
+
+/**
+ * @brief Stamp the operator's authorization tag onto a binding.
+ *
+ * Operator-side call: requires K_auth, which the agent does not have.
+ * A binding carrying restricted capabilities but no non-zero ethical profile
+ * is refused here as well as in the check — an authorized binding with no
+ * profile to point at is not a thing this library will produce.
+ *
+ * @param b            Binding to authorize (its `authorization` is overwritten)
+ * @param authority_key Operator authority key
+ * @param key_len       Length of @p authority_key (must be >= 32)
+ * @return AMA_SUCCESS, AMA_ERROR_INVALID_PARAM, or AMA_ERROR_ETHICAL_BINDING
+ */
+AMA_API ama_error_t ama_agent_binding_authorize(
+    ama_agent_binding_t* b,
+    const uint8_t* authority_key,
+    size_t key_len
+);
+
+/**
+ * @brief Evaluate the binding policy.  Constant-time, fail-closed.
+ *
+ * Unrestricted bindings (EPHEMERAL lifetime, no restricted capability bits)
+ * pass with @p authority_key == NULL.  Anything else requires a non-zero
+ * ethical profile and a tag that verifies under @p authority_key.
+ *
+ * @param b            Binding to check
+ * @param authority_key Operator authority key, or NULL
+ * @param key_len       Length of @p authority_key (0 when NULL)
+ * @return AMA_SUCCESS or AMA_ERROR_ETHICAL_BINDING
+ */
+AMA_API ama_error_t ama_agent_binding_check(
+    const ama_agent_binding_t* b,
+    const uint8_t* authority_key,
+    size_t key_len
+);
+
+/**
+ * @brief Derive the signature-context string for a binding.
+ *
+ * Runs ama_agent_binding_check() first and writes nothing on refusal.  The
+ * result is SHA3-256(0x02 || enc(b)) and is intended to be passed verbatim as
+ * the `ctx` argument of ama_dilithium_sign_ctx() / ama_sphincs_verify_ctx(),
+ * binding the signature to the agent instance and its capability set.
+ *
+ * @param b            Binding
+ * @param authority_key Operator authority key, or NULL for unrestricted bindings
+ * @param key_len       Length of @p authority_key
+ * @param out_ctx       32-byte output
+ * @return AMA_SUCCESS, AMA_ERROR_INVALID_PARAM, or AMA_ERROR_ETHICAL_BINDING
+ */
+AMA_API ama_error_t ama_agent_binding_context(
+    const ama_agent_binding_t* b,
+    const uint8_t* authority_key,
+    size_t key_len,
+    uint8_t out_ctx[AMA_AGENT_BINDING_CONTEXT_BYTES]
+);
+
+/**
+ * @brief HKDF-SHA3-256 with the agent binding folded into `info`.
+ *
+ * Equivalent to ama_hkdf() with
+ *   info' = enc(b) || u32be(info_len) || info
+ * after ama_agent_binding_check() passes.  On refusal @p okm is left
+ * untouched and AMA_ERROR_ETHICAL_BINDING is returned.
+ *
+ * @param b            Binding
+ * @param authority_key Operator authority key, or NULL for unrestricted bindings
+ * @param key_len       Length of @p authority_key
+ * @param salt          HKDF salt (may be NULL)
+ * @param salt_len      Salt length
+ * @param ikm           Input key material
+ * @param ikm_len       IKM length
+ * @param info          Caller context info (may be NULL)
+ * @param info_len      Info length
+ * @param okm           Output key material
+ * @param okm_len       Desired output length (max 255 * 32 = 8160)
+ * @return AMA_SUCCESS or an error code
+ */
+AMA_API ama_error_t ama_hkdf_agent_bound(
+    const ama_agent_binding_t* b,
+    const uint8_t* authority_key,
+    size_t key_len,
+    const uint8_t* salt,
+    size_t salt_len,
+    const uint8_t* ikm,
+    size_t ikm_len,
+    const uint8_t* info,
+    size_t info_len,
+    uint8_t* okm,
+    size_t okm_len
 );
 
 /* ============================================================================
@@ -1691,6 +1961,124 @@ AMA_API ama_error_t ama_chacha20poly1305_decrypt(
     const uint8_t tag[16],
     uint8_t *plaintext
 );
+
+/* ============================================================================
+ * ASCON — NIST SP 800-232 LIGHTWEIGHT CRYPTOGRAPHY
+ * ============================================================================
+ *
+ * Ascon-AEAD128 and Ascon-Hash256 as standardized in NIST SP 800-232 (final,
+ * 2025-08-13).  These are the constrained-device members of this library's
+ * algorithm set: no lookup tables, a 320-bit state, and a code footprint small
+ * enough for targets that cannot host AES-NI-class hardware acceleration.
+ *
+ * These functions depend only on this translation unit, so they are available
+ * in BOTH the default build and AMA_USE_NATIVE_PQC=OFF — which matters,
+ * because the constrained targets Ascon exists for are exactly the ones most
+ * likely to build without native post-quantum support.
+ *
+ * NOTE FOR INTEROPERABILITY: SP 800-232 is not byte-compatible with the
+ * earlier Ascon v1.2 / CAESAR submission (different rate, different IV,
+ * different bit-ordering convention).  Peers running a v1.2 implementation
+ * will not interoperate.  See src/c/ama_ascon.c for the specifics.
+ */
+
+/** Ascon-AEAD128 key length in bytes (128 bits). */
+#define AMA_ASCON_AEAD128_KEY_LEN 16
+/** Ascon-AEAD128 nonce length in bytes (128 bits). */
+#define AMA_ASCON_AEAD128_NONCE_LEN 16
+/** Ascon-AEAD128 authentication tag length in bytes (128 bits). */
+#define AMA_ASCON_AEAD128_TAG_LEN 16
+/** Ascon-AEAD128 rate in bytes (128 bits). */
+#define AMA_ASCON_AEAD128_RATE 16
+/** Ascon-Hash256 digest length in bytes (256 bits). */
+#define AMA_ASCON_HASH256_DIGEST_LEN 32
+/** Ascon-Hash256 rate in bytes (64 bits). */
+#define AMA_ASCON_HASH256_RATE 8
+
+/**
+ * @brief Ascon-Hash256 (NIST SP 800-232 Algorithm 5)
+ *
+ * @param message     Message to hash (may be NULL when message_len is 0)
+ * @param message_len Message length in bytes
+ * @param digest      Output: 32-byte digest
+ * @return AMA_SUCCESS or AMA_ERROR_INVALID_PARAM
+ */
+AMA_API ama_error_t ama_ascon_hash256(
+    const uint8_t *message, size_t message_len,
+    uint8_t digest[AMA_ASCON_HASH256_DIGEST_LEN]
+);
+
+/**
+ * @brief Ascon-AEAD128 authenticated encryption (NIST SP 800-232 Algorithm 3)
+ *
+ * @param key        16-byte key
+ * @param nonce      16-byte nonce.  MUST be unique per key: Ascon-AEAD128 is
+ *                   a nonce-based AEAD with no nonce-misuse resistance, and
+ *                   repeating a nonce under one key reveals the XOR of the
+ *                   corresponding plaintexts and can expose the state.
+ * @param plaintext  Plaintext (may be NULL when pt_len is 0)
+ * @param pt_len     Plaintext length in bytes
+ * @param aad        Associated data (may be NULL when aad_len is 0)
+ * @param aad_len    Associated data length in bytes
+ * @param ciphertext Output: ciphertext, same length as plaintext
+ * @param tag        Output: 16-byte authentication tag
+ * @return AMA_SUCCESS or AMA_ERROR_INVALID_PARAM
+ */
+AMA_API ama_error_t ama_ascon_aead128_encrypt(
+    const uint8_t key[AMA_ASCON_AEAD128_KEY_LEN],
+    const uint8_t nonce[AMA_ASCON_AEAD128_NONCE_LEN],
+    const uint8_t *plaintext, size_t pt_len,
+    const uint8_t *aad, size_t aad_len,
+    uint8_t *ciphertext,
+    uint8_t tag[AMA_ASCON_AEAD128_TAG_LEN]
+);
+
+/**
+ * @brief Ascon-AEAD128 authenticated decryption (NIST SP 800-232 Algorithm 4)
+ *
+ * Verify-then-decrypt, in two passes over the ciphertext: the first derives
+ * the tag while writing nothing, and only a verified tag admits the second,
+ * which emits plaintext.  On AMA_ERROR_VERIFY_FAILED the plaintext buffer is
+ * not modified — not overwritten and not zeroed — matching the
+ * ChaCha20-Poly1305 and scalar AES-GCM decrypt contracts.
+ *
+ * Performs no dynamic allocation, so it is usable on targets without a heap;
+ * the cost is a second pass on the success path only.
+ *
+ * @param key        16-byte key
+ * @param nonce      16-byte nonce
+ * @param ciphertext Ciphertext (may be NULL when ct_len is 0)
+ * @param ct_len     Ciphertext length in bytes
+ * @param aad        Associated data (may be NULL when aad_len is 0)
+ * @param aad_len    Associated data length in bytes
+ * @param tag        16-byte tag to verify
+ * @param plaintext  Output: plaintext, same length as ciphertext; not
+ *                   modified on tag mismatch
+ * @return AMA_SUCCESS, AMA_ERROR_VERIFY_FAILED or AMA_ERROR_INVALID_PARAM
+
+ */
+AMA_API ama_error_t ama_ascon_aead128_decrypt(
+    const uint8_t key[AMA_ASCON_AEAD128_KEY_LEN],
+    const uint8_t nonce[AMA_ASCON_AEAD128_NONCE_LEN],
+    const uint8_t *ciphertext, size_t ct_len,
+    const uint8_t *aad, size_t aad_len,
+    const uint8_t tag[AMA_ASCON_AEAD128_TAG_LEN],
+    uint8_t *plaintext
+);
+
+/**
+ * @brief Apply Ascon-p[rounds] to a raw state — test support only
+ *
+ * Exposed so the known-answer tests can check the permutation directly
+ * against the precomputed initialization state published in SP 800-232
+ * Appendix A.3 and the S-box lookup table in Table 6.  A permutation verified
+ * only through the modes would let a fault in one cancel a fault in the
+ * other.  Not part of the supported API surface.
+ *
+ * @param state  In/out: five 64-bit state words
+ * @param rounds Round count, 1..16; the call is a no-op outside that range
+ */
+AMA_API void ama_ascon_permutation_for_test(uint64_t state[5], unsigned rounds);
 
 /* ============================================================================
  * DIRECT PQC ALGORITHM ACCESS

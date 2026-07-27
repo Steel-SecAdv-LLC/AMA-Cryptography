@@ -3,7 +3,11 @@
 # Zero salt/IKM (32 bytes)
 kw_zeros="\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
 
-# Common info strings
-kw_info_empty=""
+# Common info strings.
+# NOTE: no empty-string entry here.  libFuzzer's ParseDictionaryFile rejects
+# `kw=""` and, on the first malformed line, discards the ENTIRE dictionary —
+# so a single empty token silently disables every other keyword in this file.
+# The empty input needs no dictionary entry in any case: libFuzzer reaches it
+# from the empty test case directly.
 kw_info_test="test"
 kw_info_derive="derive"

@@ -52,6 +52,43 @@ AMA Cryptography implements defense-in-depth with multiple independent security 
 - **SLH-DSA-SHA2-256f and SLH-DSA-SHAKE-128s Hash-Based Signatures** (NIST FIPS 205)
 - **Adaptive Cryptographic Posture System** (runtime threat-level response)
 - **Hybrid KEM Combiner** (IND-CCA2 binding construction per Bindel et al.)
+- **Agent-Instance Key/Signature Binding** (INVARIANT-30) — see below
+
+### Agent-Instance Binding (INVARIANT-30)
+
+An autonomous agent driving this library needs two cryptographic capabilities
+to outlive its own instance: key material that persists, and signatures a later
+instance would treat as authoritative. Ordinary per-message signing and
+ephemeral session keys are neither.
+
+A binding names an agent instance, the lifetime of the material it may derive
+(`EPHEMERAL` / `SESSION` / `PERSISTENT`), and the capabilities it may exercise
+(`DATA_SIGN`, `KEY_EXCHANGE`, `PERSISTENCE`, `SELF_REPLICATE`, `DELEGATE`). Any
+non-`EPHEMERAL` lifetime or restricted capability requires a non-zero
+ethical-profile hash **and** an `HMAC-SHA3-256` authorization tag verifying
+under an operator-held authority key. The canonical 88-byte encoding is folded
+into HKDF's `info` and into the ML-DSA / SLH-DSA signature context, so material
+derived under one binding is cryptographically unrelated to the same input under
+any other — including one differing in a single capability bit.
+
+This is domain separation and policy over the existing SHA3-256 /
+HMAC-SHA3-256 / HKDF primitives; **no new algorithm is introduced**
+(INVARIANT-1 intact). Refusal is fail-closed: no output bytes, a distinct error
+code (`AMA_ERROR_ETHICAL_BINDING` / `EthicalBindingError`), and no partial
+state. The policy check is constant-time — verified by a strict dudect lane —
+so neither *whether* nor *which* clause refused is observable by timing.
+
+**Operational guidance.** Hold the authority key outside the reach of any agent
+that calls the library (an HSM, a separate supervisor process, or an operator
+workstation). The binding constrains derivations made *through* it: route
+persistence-material derivation through a binding to realise the protection. It
+is not a sandbox and does not restrain code that never calls this library.
+
+Two advisory 3R detectors (`VolumeSpikeDetector`, `NoteArtifactDetector`, both
+on by default) surface the corresponding runtime behaviour — operation bursts
+and signed payloads shaped like instructions for a successor — for human
+review. They never block an operation, and a negative result is not a statement
+that a payload is benign.
 
 ### Performance — Framing
 

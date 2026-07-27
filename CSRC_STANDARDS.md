@@ -24,6 +24,8 @@ algorithms with shipping code are listed — no aspirational entries.
 | SHA-256 | FIPS 180-4 | SHA-256 (256-bit digest) | Final | https://csrc.nist.gov/pubs/fips/180-4/upd1/final |
 | HMAC-SHA-256 | FIPS 198-1 | HMAC with SHA-256 (key ≤ block size 64 B) | Final | https://csrc.nist.gov/pubs/fips/198-1/final |
 | AES-256-GCM | NIST SP 800-38D | AES-256 key (256-bit), 96-bit nonce, 128-bit tag | Final | https://csrc.nist.gov/pubs/sp/800/38/d/final |
+| Ascon-AEAD128 | NIST SP 800-232 | 128-bit key, 128-bit nonce, 128-bit tag, rate 128 / capacity 192 | Final | https://csrc.nist.gov/pubs/sp/800/232/final |
+| Ascon-Hash256 | NIST SP 800-232 | 256-bit digest, rate 64 / capacity 256 | Final | https://csrc.nist.gov/pubs/sp/800/232/final |
 | ML-KEM-1024 (Kyber-1024) | FIPS 203 | ML-KEM-1024 (k=4, n=256, q=3329) | Final | https://csrc.nist.gov/pubs/fips/203/final |
 | ML-DSA-65 (Dilithium3) | FIPS 204 | ML-DSA-65 (k=6, l=5, η=4, γ₁=2¹⁹) | Final | https://csrc.nist.gov/pubs/fips/204/final |
 | SLH-DSA-SHA2-256f (SPHINCS+-256f) | FIPS 205 | SLH-DSA-SHA2-256f (n=32, h=68, d=17, w=16, fast) | Final | https://csrc.nist.gov/pubs/fips/205/final |

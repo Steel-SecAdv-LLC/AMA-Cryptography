@@ -440,3 +440,258 @@ def benchmark_matrix_operations(int size=1000, int iterations=100):
         'size': size,
         'iterations': iterations
     }
+
+
+# ============================================================================
+# 3R AGENTIC-ABUSE DETECTOR KERNELS
+# ============================================================================
+#
+# Two numeric kernels backing the detectors in ama_cryptography.monitoring.
+# Both have exact pure-Python fallbacks in that module (see
+# _volume_spike_scores_py / _token_family_counts_py).  token_family_counts is
+# pure integer work and the tests pin it EXACTLY; volume_spike_scores is an
+# EWMA recursion, so on FMA targets (ARM) the per-step rounding differs from
+# Python's and accumulates over the series — the tests pin it to a small
+# relative tolerance (1e-9), bit-for-bit only where the target has no FMA
+# contraction.  Either way the Cython extension is an optimisation and never a
+# correctness dependency.
+#
+# Neither kernel touches key material.  They run on operation *counts* and on
+# payloads the caller has explicitly handed to the monitor, so there is no
+# constant-time obligation here and none is claimed.
+
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+def volume_spike_scores(counts, double alpha, int warmup):
+    """
+    EWMA residual scores over a per-bucket operation-count series.
+
+    Counts of independent events are Poisson-ish, and a Gaussian z-score on
+    raw counts misbehaves at low rates: the variance moves with the mean, so a
+    quiet baseline produces a near-zero sigma and every mild uptick reads as a
+    huge deviation.  That is precisely the false-positive mode a burst
+    detector must not have.
+
+    We therefore work in the Anscombe variance-stabilising transform
+
+        a(c) = 2 * sqrt(c + 3/8)
+
+    under which a Poisson(lambda) count is approximately Normal with unit
+    variance and mean 2*sqrt(lambda), independent of lambda.  The score of
+    bucket i is then simply
+
+        (a(c_i) - m_i) / sigma_i
+
+    where m_i is the EWMA of a() over the *preceding* buckets and sigma_i is
+    max(1, sqrt(EWMA of squared residual)).  The floor of 1 is the Poisson
+    value: real traffic is overdispersed relative to Poisson, so sigma may
+    rise above it, but never below — which keeps the detector from becoming
+    hair-triggered on unusually regular workloads.
+
+    Each bucket is scored against the baseline as it stood BEFORE that bucket,
+    so a burst cannot inflate the baseline it is being judged against.
+
+    Args:
+        counts:  sequence of per-bucket counts (non-negative)
+        alpha:   EWMA smoothing factor in (0, 1]
+        warmup:  number of leading buckets used for baseline only; their
+                 scores are reported as 0.0
+
+    Returns:
+        list of float scores, one per input bucket
+    """
+    cdef Py_ssize_t n = len(counts)
+    cdef Py_ssize_t i
+    cdef double a, resid, sigma, var_est
+    cdef double mean_est = 0.0
+    cdef double sq_est = 1.0
+    cdef list out = [0.0] * n
+
+    if alpha <= 0.0 or alpha > 1.0:
+        raise ValueError("alpha must be in (0, 1]")
+    if n == 0:
+        return out
+
+    for i in range(n):
+        a = 2.0 * sqrt(<double>counts[i] + 0.375)
+        if i == 0:
+            mean_est = a
+            sq_est = 1.0
+            out[i] = 0.0
+            continue
+
+        resid = a - mean_est
+        var_est = sq_est
+        sigma = sqrt(var_est)
+        if sigma < 1.0:
+            sigma = 1.0
+
+        if i >= warmup:
+            out[i] = resid / sigma
+        else:
+            out[i] = 0.0
+
+        # Update the baseline AFTER scoring, from this bucket.
+        mean_est = mean_est + alpha * resid
+        sq_est = (1.0 - alpha) * sq_est + alpha * resid * resid
+
+    return out
+
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+def token_family_counts(const unsigned char[::1] data,
+                        const uint64_t[::1] uni_hashes,
+                        const uint8_t[::1] uni_families,
+                        const uint64_t[::1] bi_hashes,
+                        const uint8_t[::1] bi_families,
+                        int num_families,
+                        int max_token_len):
+    """
+    Single-pass tokenising scan for note-like artefacts.
+
+    Splits `data` on non-alphanumeric bytes, lowercases ASCII in flight, and
+    FNV-1a-64 hashes each token.  Every token is looked up in a sorted unigram
+    table, and every adjacent token PAIR in a sorted bigram table, by binary
+    search.  One pass, no allocation per token, no regular expressions.
+
+    The bigram table is what makes the caller's successor family usable: the
+    words that signal "this is addressed to a later instance of me" are all
+    individually ordinary English ("next", "future", "instance"), and scoring
+    them as unigrams flags a large fraction of ordinary documentation.  The
+    adjacent pair is the discriminative feature.
+
+    Bigram hashes are derived from the two token hashes as
+
+        h_bigram = (h_prev * FNV_PRIME) XOR h_current
+
+    so no second pass over the token bytes is needed.  The Python twin in
+    ama_cryptography.monitoring computes the identical mix.
+
+    Reports per family both the total occurrence count and the number of
+    DISTINCT markers matched.  The distinct count is what the detector scores
+    on: repeating one word fifty times says much less about a payload than
+    matching five different markers once each.
+
+    Also returns the count of printable-ASCII bytes: signatures, keys and
+    ciphertext are high-entropy binary, so a low printable ratio is the cheap
+    structural reject that keeps this detector off the hot path's back.
+
+    Args:
+        data:          bytes to scan
+        uni_hashes:    FNV-1a-64 hashes of single-token markers, SORTED ascending
+        uni_families:  family id per entry of uni_hashes (parallel array)
+        bi_hashes:     mixed hashes of two-token markers, SORTED ascending
+        bi_families:   family id per entry of bi_hashes (parallel array)
+        num_families:  number of families (ids are 0..num_families-1)
+        max_token_len: tokens longer than this are skipped, not truncated
+
+    Returns:
+        (per-family occurrences, per-family distinct markers, printable bytes,
+         token count)
+    """
+    cdef Py_ssize_t n = data.shape[0]
+    cdef Py_ssize_t mu = uni_hashes.shape[0]
+    cdef Py_ssize_t mb = bi_hashes.shape[0]
+    cdef Py_ssize_t i, lo, hi, mid
+    cdef unsigned char c
+    cdef uint64_t h = 0
+    cdef uint64_t prev_h = 0
+    cdef uint64_t target
+    cdef int have_prev = 0
+    cdef int tok_len = 0
+    cdef int printable = 0
+    cdef int tokens = 0
+    cdef int in_token = 0
+    cdef int usable
+    cdef list families = [0] * num_families
+    cdef list distinct = [0] * num_families
+    cdef bytearray seen_uni_buf
+    cdef bytearray seen_bi_buf
+    cdef unsigned char[::1] seen_uni
+    cdef unsigned char[::1] seen_bi
+
+    if uni_families.shape[0] != mu:
+        raise ValueError("uni_hashes and uni_families must be the same length")
+    if bi_families.shape[0] != mb:
+        raise ValueError("bi_hashes and bi_families must be the same length")
+    if num_families <= 0:
+        raise ValueError("num_families must be positive")
+
+    seen_uni_buf = bytearray(mu if mu > 0 else 1)
+    seen_bi_buf = bytearray(mb if mb > 0 else 1)
+    seen_uni = seen_uni_buf
+    seen_bi = seen_bi_buf
+
+    i = 0
+    while i <= n:
+        if i < n:
+            c = data[i]
+            # Printable ASCII plus the three whitespace bytes that appear in
+            # real prose.  Everything else counts against the text ratio.
+            if (c >= 0x20 and c < 0x7F) or c == 0x09 or c == 0x0A or c == 0x0D:
+                printable += 1
+            if c >= 0x41 and c <= 0x5A:
+                c = c + 32          # ASCII fold to lowercase
+            if (c >= 0x61 and c <= 0x7A) or (c >= 0x30 and c <= 0x39):
+                if in_token == 0:
+                    in_token = 1
+                    h = 14695981039346656037UL   # FNV-1a-64 offset basis
+                    tok_len = 0
+                h = (h ^ <uint64_t>c) * 1099511628211UL
+                tok_len += 1
+                i += 1
+                continue
+
+        # Token boundary (or end of input).
+        if in_token != 0:
+            in_token = 0
+            tokens += 1
+            # An over-long token (base64 blob, hex digest) is not a word; it
+            # also breaks the bigram chain so it cannot bridge two real words
+            # that were never adjacent.
+            usable = 1 if tok_len <= max_token_len else 0
+
+            if usable != 0 and mu > 0:
+                target = h
+                lo = 0
+                hi = mu - 1
+                while lo <= hi:
+                    mid = (lo + hi) >> 1
+                    if uni_hashes[mid] < target:
+                        lo = mid + 1
+                    elif uni_hashes[mid] > target:
+                        hi = mid - 1
+                    else:
+                        families[<int>uni_families[mid]] += 1
+                        if seen_uni[mid] == 0:
+                            seen_uni[mid] = 1
+                            distinct[<int>uni_families[mid]] += 1
+                        break
+
+            if usable != 0 and have_prev != 0 and mb > 0:
+                target = (prev_h * 1099511628211UL) ^ h
+                lo = 0
+                hi = mb - 1
+                while lo <= hi:
+                    mid = (lo + hi) >> 1
+                    if bi_hashes[mid] < target:
+                        lo = mid + 1
+                    elif bi_hashes[mid] > target:
+                        hi = mid - 1
+                    else:
+                        families[<int>bi_families[mid]] += 1
+                        if seen_bi[mid] == 0:
+                            seen_bi[mid] = 1
+                            distinct[<int>bi_families[mid]] += 1
+                        break
+
+            if usable != 0:
+                prev_h = h
+                have_prev = 1
+            else:
+                have_prev = 0
+        i += 1
+
+    return families, distinct, printable, tokens

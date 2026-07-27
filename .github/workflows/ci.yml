@@ -30,7 +30,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-        python-version: ["3.10", "3.11", "3.12", "3.13"]
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
         include:
           # ARM64 (AArch64) runners — GitHub-hosted ubuntu arm64
           - os: ubuntu-24.04-arm
@@ -450,6 +450,53 @@ jobs:
       # pinned by tests/test_workflow_command_checks.py.
       run: |
         python tools/check_workflow_commands.py
+
+    - name: "INVARIANT-31: Verify every pull-request job is reachable from its gate"
+      # Branch protection requires the aggregating gate context of each
+      # workflow, not the individual job names. A job missing from its gate's
+      # `needs:` therefore still runs, still shows its own red X on the pull
+      # request, and still cannot block the merge — "all required checks
+      # passed" stays true next to a visibly failing job.
+      #
+      # `c-library-no-native-pqc` was exactly that: the guard for the
+      # AMA_USE_NATIVE_PQC=OFF build, absent from ci-build-test.yml's gate
+      # while commit f3dd0c2 had to repair that very configuration after it
+      # broke undetected. Every gate comment in this repository asserts that
+      # each job in the workflow must be green; this check is what makes that
+      # true. Both directions are pinned by tests/test_gate_coverage.py.
+      run: |
+        python tools/check_gate_coverage.py
+
+    - name: "INVARIANT-32: Verify documented install extras are declared"
+      # pip does not fail on an extra a distribution does not provide — it
+      # warns, installs WITHOUT it, and exits 0. A stale name in an install
+      # instruction therefore yields an incomplete install and a success
+      # message, surfacing much later as an ImportError from a subsystem the
+      # reader believes they enabled.
+      #
+      # wiki/Installation.md — published to the public wiki by wiki-sync.yml —
+      # shipped `pip install -e ".[secure-memory]"`, described as "libsodium
+      # secure memory bindings", in its own "Everything at once" line. No such
+      # extra ever existed, secure_memory is stdlib-only, and INVARIANT-1
+      # forbids libsodium outright. Both directions are pinned by
+      # tests/test_documented_extras.py.
+      run: |
+        python tools/check_documented_extras.py
+
+    - name: "INVARIANT-33: Verify every fuzz harness is registered everywhere"
+      # A fuzz harness is registered in three independent lists: the CMake
+      # target lists, the fuzzing.yml job matrix, and oss-fuzz/build.sh.
+      # Nothing tied them together, and they had drifted: fuzz_agent_binding
+      # was added to CMake and to the CI matrix when the agent-binding layer
+      # landed, and never to build.sh — so OSS-Fuzz never built it. build.sh
+      # skips a missing target with a warning and exits 0, which is why the
+      # omission stayed invisible.
+      #
+      # A harness nobody runs is indistinguishable from one that finds
+      # nothing. Both directions are pinned by
+      # tests/test_fuzz_target_registration.py.
+      run: |
+        python tools/check_fuzz_target_registration.py
 
     - name: "INVARIANT-23: Secret scan (in-house)"
       # tools/check_secrets.py is written in house rather than adopting a

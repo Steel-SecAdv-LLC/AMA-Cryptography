@@ -5,7 +5,7 @@
 | Property | Value |
 |----------|-------|
 | Applies to Release | 3.4.0 |
-| Last Updated | 2026-07-25 |
+| Last Updated | 2026-07-26 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -18,6 +18,409 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 ---
 
 ## [3.4.0] - 2026-07-25
+
+### Added
+
+- **Agent-instance key and signature binding (INVARIANT-30).** New native layer
+  `src/c/ama_agent_binding.c` plus a thin Python surface in
+  `ama_cryptography/agent_binding.py`. A binding names an agent instance, the
+  lifetime of the material it may derive (`EPHEMERAL` / `SESSION` /
+  `PERSISTENT`) and the capabilities it may exercise (`DATA_SIGN`,
+  `KEY_EXCHANGE`, `PERSISTENCE`, `SELF_REPLICATE`, `DELEGATE`).
+
+  The record has a fixed 88-byte canonical encoding —
+  `0x11 || "AMA-AGENT-BIND-v1" || version || lifetime || capabilities ||
+  reserved || 0x20 || instance_id || 0x20 || ethical_profile` — which is
+  folded into HKDF's `info` (`ama_hkdf_agent_bound`) and hashed into a 32-byte
+  ML-DSA / SLH-DSA signature context (`ama_agent_binding_context`). Material
+  derived under one binding is therefore cryptographically unrelated to the
+  same input under any other, including one that differs in a single
+  capability bit.
+
+  Any non-`EPHEMERAL` lifetime or restricted capability requires a non-zero
+  ethical-profile hash **and** an `HMAC-SHA3-256(K_auth, 0x01 || enc(b))`
+  authorization tag that verifies under an operator-held authority key. The
+  motivating case is the July 2026 agent-escape pattern, where an autonomous
+  evaluation agent reached the open internet and left signed notes for future
+  versions of itself: persistence material and successor-authorizing
+  signatures are the two cryptographic capabilities that behaviour needs, and
+  they are now the two the library will not mint without a human-held secret.
+
+  No new algorithms: the layer is domain separation and policy over the
+  existing SHA3-256 / HMAC-SHA3-256 / HKDF primitives (INVARIANT-1 intact).
+  New error code `AMA_ERROR_ETHICAL_BINDING = -9` (appended to `ama_error_t`,
+  so existing codes are unchanged) and new exception `EthicalBindingError`.
+- **3R volume-spike detector** (`ama_cryptography.monitoring.VolumeSpikeDetector`).
+  Detects bursts of KEM / signature operations that match agentic
+  reconnaissance or bulk artifact generation. Counts are bucketed and scored
+  in the Anscombe variance-stabilising transform `2*sqrt(c + 3/8)`, under
+  which a Poisson count has unit variance regardless of rate — so a quiet
+  baseline cannot produce a degenerate sigma and turn a mild uptick into a
+  40-sigma "anomaly", which is the failure mode of a plain z-score on counts.
+  Overdispersion is tracked as an EWMA of the squared residual and floored at
+  the Poisson value. Three independent gates (30-bucket warmup, a 256-operation
+  absolute floor, and a 6-sigma residual) must all pass, the baseline is only
+  ever updated from closed buckets, and at most one alert is emitted per
+  operation per bucket. An optional key fingerprint distinguishes
+  ephemeral-key churn from a hot loop over one key.
+- **3R note-like artifact detector**
+  (`ama_cryptography.monitoring.NoteArtifactDetector`). Scores signed payloads
+  for the structure of instructions addressed to a later instance: a
+  phrase-level *successor* family (bigrams such as "next instance",
+  "subsequent iterations" — a cross product of forward-referring words with
+  instance-denoting nouns, deliberately excluding generic articles/possessives/
+  pronouns whose pairs like "the agent" or "you are" occur throughout ordinary
+  prose; scoring the successor vocabulary as bare unigrams trips 256 of this
+  repository's 443 tracked files), plus unigram *instructional* and *operational*
+  families. A printable-ASCII floor rejects signatures, keys and ciphertext
+  before any scoring. Measured against a 443-file corpus (git-tracked source) of the repository's
+  own text: every genuinely-benign file scores ≤ 1.75 while the four
+  hand-written successor notes score 2.25–3.00 (margin ≥ 0.50); the files
+  flagged are a subset of the three that themselves describe or embed
+  successor-note content (which of them trip depends on their current text).
+  `tests/test_agentic_abuse_detectors.py` re-derives this every CI run
+  — it pins the benign false-positive set and asserts the ≥ 0.50 separation, so
+  the calibration cannot silently rot as the corpus grows. Advisory only — it
+  never blocks a signature.
+- **Monitor hooks, on by default.** `AmaCryptographyMonitor.record_operation_event()`
+  and `.inspect_signed_payload()`. Both detectors are constructed by default,
+  matching `AmaCryptographyMonitor`'s existing stated posture that
+  production-ready anomaly detection ships out of the box — an operator should
+  not have to opt in to a protection. Measured cost: ~2.5 µs to construct both
+  detectors (marker tables are built once and shared across instances), ~1.3 µs
+  per `record_operation_event()`, ~6.7 µs to reject a 3309-byte ML-DSA
+  signature. Passing `detect_volume_spikes=False, detect_note_artifacts=False`
+  drops the detector objects and restores the previous security-report shape
+  exactly.
+
+  `NoteArtifactDetector.inspect()` costs the scan budget, not the payload: the
+  head/tail sample is sliced from the caller's buffer *before* it is
+  materialised. Copying first made an inspection scale with payload size for
+  the mutable/view types — `bytes()` on a 32 MB `bytearray` is a ~38 ms copy to
+  examine 8 KB — whereas `bytes` input was already a CPython no-op. Cost is now
+  flat (~32–38 µs from 1 MB to 64 MB). `inspect()` and
+  `inspect_signed_payload()` now declare `bytes | bytearray | memoryview`,
+  which is the input set the runtime check has always accepted.
+
+  `create_crypto_package()` now records the volume signal at the three sites it
+  already instrumented for timing (primary signature, SPHINCS+ signature,
+  ML-KEM encapsulation), so the protection is live without any wiring. Nothing
+  was pushed into the providers; the hot primitives are untouched. The key
+  fingerprint is a slice of the **public** key — no hashing is added to a
+  signing path.
+- **Compiled 3R detector kernels.** `volume_spike_scores` and
+  `token_family_counts` in `src/cython/math_engine.pyx` — an EWMA-Anscombe
+  pass and a single-pass tokenising unigram+bigram scan with binary-searched
+  marker tables. Each has an exact pure-Python twin in `monitoring.py`;
+  equivalence is pinned by property-based tests, so the extension is an
+  optimisation and never a correctness dependency.
+- **Adversarial agentic-load test suites.** `tests/test_agent_binding.py`,
+  `tests/test_agentic_abuse_detectors.py` and
+  `tests/test_agentic_load_adversarial.py` (+111 tests). The last covers the
+  four scenarios end to end: high-concurrency ephemeral ML-KEM/ML-DSA load with
+  the monitors running, a future-version note simulation, a lateral-probe
+  simulation checked against real BIP32 HD derivation and scheduled key
+  rotation for false positives, and fail-closed resilience under parallel
+  attempts to force unbound persistence material.
+- **`tests/c/test_agent_binding.c`** — pins the canonical encoding as a byte
+  KAT and covers structural refusals, foreign-key tags, single-bit tag flips,
+  post-authorization capability escalation and cross-binding separation.
+- **dudect lane `Agent binding check`** in `tests/c/test_dudect.c`, registered
+  strict. Accepted and refused bindings take the same structural path, so any
+  class separation is a real leak in the verdict; measured `t = +0.81` at
+  200k measurements, against a `|t| < 4.5` gate.
+- **libFuzzer target `fuzz_agent_binding`** (`fuzz/fuzz_agent_binding.c`) with
+  a seed corpus and dictionary. Every other primitive in `fuzz/` had a
+  harness; the binding layer is the newest attack surface and the only one
+  whose refusal is a *policy* decision rather than an arithmetic one, so it is
+  fuzzed for security properties, not merely for memory safety. The harness
+  builds records from raw fuzz bytes — including out-of-range lifetimes,
+  undefined capability bits and a non-zero reserved byte — and traps on:
+  acceptance of a malformed record; acceptance of a restricted record with no
+  usable authority key or no ethical profile; a non-deterministic verdict,
+  encoding, context or derivation; two distinct bindings sharing an encoding;
+  a write through an undersized encode buffer; key material derived for a
+  refused binding; a partial write into `okm` on refusal; and acceptance of a
+  tampered authorization tag. `info_len` is driven across the 256-byte
+  stack/heap boundary in `ama_hkdf_agent_bound()`. Classified as a *core*
+  (non-PQC) target, so it also builds and runs under
+  `AMA_USE_NATIVE_PQC=OFF`. 1,697,905 executions under ASan+UBSan: no crashes,
+  no leaks.
+- **`validate-fuzz-dictionaries` CI job** (fail-closed, gated). libFuzzer's
+  `ParseDictionaryFile` aborts on the first malformed line and then runs with
+  **no dictionary at all**, printing only a one-line notice inside a 60-second
+  fuzz log. This job loads every dictionary with a real libFuzzer binary and
+  fails the build on any rejection.
+- **Ascon-AEAD128 and Ascon-Hash256 (NIST SP 800-232).** Native
+  `src/c/ama_ascon.c` plus a Python surface in `ama_cryptography/ascon.py`.
+  Ascon is the only NIST-standardized lightweight AEAD (SP 800-232 finalized
+  2025-08-13) and is the constrained-device member of this library's algorithm
+  set: a 320-bit state, no lookup tables anywhere, and a footprint suited to
+  targets that cannot host AES-NI-class acceleration.
+
+  It **replaces nothing**. AES-256-GCM and ChaCha20-Poly1305 remain the
+  default AEADs and SHA3-256 the default hash; on any host with AES-NI or
+  ARMv8 crypto extensions both incumbents are faster. This is additive
+  coverage for constrained targets, not a performance change. Rationale,
+  costs and reversal conditions are recorded in
+  `docs/decisions/0001-adopt-ascon.md` per the *Preserve and evolve
+  primitives* rule.
+
+  Self-contained — it references no other primitive and no PQC symbol — so it
+  lives in the unconditional source list and is present under
+  `AMA_USE_NATIVE_PQC=OFF` as well as the default build. That is deliberate:
+  the devices Ascon exists for are the ones most likely to build without
+  native post-quantum support.
+
+  Decryption is **verify-then-decrypt in two passes with no dynamic
+  allocation**: pass one derives the tag while writing nothing, and only a
+  verified tag admits pass two. On `AMA_ERROR_VERIFY_FAILED` the caller's
+  buffer is untouched — not overwritten, not zeroed — the same contract
+  `ama_chacha20poly1305_decrypt` and the scalar AES-GCM path provide. A heap
+  scratch buffer would have made this single-pass and was rejected: `malloc`
+  is frequently unavailable or forbidden on Ascon's target devices, and the
+  trade removes `AMA_ERROR_MEMORY` from the decrypt contract entirely. The
+  cost is a second pass on the success path only; encryption is unaffected.
+
+  **Interoperability warning, stated in three places** (C header, module
+  docstring, decision log): SP 800-232 is *not* byte-compatible with Ascon
+  v1.2 / CAESAR. Different rate (128 vs 64 bits), different IV, and a reversed
+  bit-ordering convention that makes the domain-separation constant
+  `0x8000000000000000` rather than `1`. A v1.2-derived implementation
+  round-trips against itself while producing non-standard tags on every
+  message carrying associated data.
+
+  Verified in layers, so a fault in the permutation cannot be cancelled by a
+  compensating fault in a mode: the bitsliced S-box against the SP 800-232
+  Table 6 lookup representation (32/32 inputs); `Ascon-p[12]` against the
+  precomputed initialization state published in Appendix A.3 (exact, all five
+  words); then **1089/1089** Ascon-AEAD128 vectors (encrypt *and* decrypt) and
+  **1025/1025** Ascon-Hash256 vectors, swept in both C and Python. dudect:
+  tag verify **t = +1.94**, encrypt **t = +0.20**, hash **t = +0.49** at 20k
+  measurements (gate |t| < 4.5), Overall PASS. `fuzz/fuzz_ascon.c` asserts
+  security properties rather than absence of crashes — round-trip fidelity,
+  tag-forgery rejection, associated-data binding including the empty-AD guard,
+  the fail-closed contract, and hash determinism — clean over 170,905
+  executions under ASan+UBSan.
+- **Python 3.14 support.** `cp314-*` added to the wheel matrix, and 3.14 added
+  to the `ci.yml` and `ci-build-test.yml` test matrices in the same change.
+  The equality is the point: `requires-python` carries no upper bound, so a
+  3.14 user was already being dropped into a from-source build needing a full
+  toolchain, and shipping a wheel for an interpreter no lane exercises would
+  have replaced that with an untested binary.
+- **INVARIANT-33 — every fuzz harness must be registered everywhere.** New
+  `tools/check_fuzz_target_registration.py`, run in `ci.yml`'s `code-quality`
+  job. A harness is registered in three independent lists — the CMake targets,
+  the `fuzzing.yml` matrix, and `oss-fuzz/build.sh` — and nothing tied them
+  together. They had drifted: `fuzz_agent_binding` reached CMake and CI but
+  never `build.sh`, so **OSS-Fuzz never built it**, invisibly, because
+  `build.sh` skips a missing target with a warning and exits 0. Now fixed for
+  both `fuzz_agent_binding` and `fuzz_ascon`, and enforced. A deliberate,
+  commented-out matrix exclusion (`fuzz_sphincs`, too slow for CI) is
+  distinguished from silent drift.
+- **INVARIANT-31 — every pull-request job must be reachable from its gate.**
+  New `tools/check_gate_coverage.py`, run in `ci.yml`'s `code-quality` job.
+  Branch protection here requires each workflow's aggregating gate context, so
+  a job missing from that gate's `needs:` still runs and still shows a red X —
+  and still cannot block the merge, because the context is never evaluated.
+  The checker also requires every gate to carry `if: always()` (without it a
+  failed dependency leaves the gate `skipped`, and a required context that
+  reports `skipped` never resolves) and reports `needs:` entries naming jobs
+  that do not exist. Single-job workflows and workflows that never trigger on
+  `pull_request` are exempt by construction.
+- **INVARIANT-32 — documented install commands must resolve.** New
+  `tools/check_documented_extras.py`, run in the same job. `pip` does not fail
+  on an extra a distribution does not provide: it warns, installs without it,
+  and exits 0, so a stale name in an install instruction yields an incomplete
+  install and a success message. Every extra named in a `pip install` command
+  across README, wiki and docs is now matched against
+  `[project.optional-dependencies]` under PEP 685 normalisation.
+  `CHANGELOG.md` is excluded so historical entries stay readable.
+
+### Fixed (availability and CI gating)
+
+- **`c-library-no-native-pqc` gated nothing.** The job guarding the
+  `AMA_USE_NATIVE_PQC=OFF` build — the configuration used by consumers who
+  take the library without native post-quantum support — ran on every pull
+  request but was absent from `ci-build-test.yml`'s `ci-gate` `needs:`, so it
+  could not block a merge. That is the same configuration this release had to
+  repair after it broke undetected. Now wired in, and INVARIANT-31 prevents
+  recurrence.
+- **The public wiki advertised an extra that does not exist, for a dependency
+  the project forbids.** `wiki/Installation.md` offered an install for
+  `secure-memory`, described as *"Libsodium secure memory bindings"*, and
+  included it in the *"Everything at once"* line. No such extra has ever been
+  declared, so pip silently installed without it.
+  `ama_cryptography.secure_memory` is in fact dependency-free — standard
+  library plus the native C library built in the preceding step — and
+  INVARIANT-1 prohibits libsodium by name, so the page advertised a forbidden
+  third-party cryptographic dependency for a module that needs none. The page
+  now lists the eight declared extras, states that secure memory needs no
+  extra, and warns that pip does not validate extra names.
+- **`pip install ama-cryptography` was documented as a working command.** The
+  project is not published on PyPI and the name is **unregistered** (the JSON
+  API returns 404), yet README section 3 presented the command in a bare code
+  block and `docs/index.rst` carried it into the published Sphinx docs. Both
+  now state the channel is unavailable and warn that, because the name is
+  unclaimed, any package appearing under it is not published by Steel Security
+  Advisors LLC and must not be trusted as this library. README records the
+  operator steps to open the channel — registering the name first, which
+  closes the squatting exposure whether or not publishing is ever enabled.
+
+### Changed
+
+- `ama_error_t` gained `AMA_ERROR_ETHICAL_BINDING = -9`. Appended, so no
+  existing error code changed value.
+- `create_monitor()` and `AmaCryptographyMonitor.__init__()` gained
+  `detect_volume_spikes` and `detect_note_artifacts`, both defaulting to
+  `True`. `get_security_report()` consequently gains a `volume_baselines`
+  key by default; pass both flags as `False` for the previous shape.
+
+### Added
+
+- **A measured detection envelope for `ResonanceTimingMonitor`**, in
+  `MONITORING.md` and pinned by
+  `test_resonance_holds_across_cadences_and_under_noise`. Separating one probe
+  shape from aperiodic traffic would still pass for an engine that only ever
+  looked at the Nyquist bin, and said nothing about whether the signal
+  survives a real workload's jitter — both matter, because a reconnaissance
+  loop runs at whatever cadence the attacker chose and runs alongside ordinary
+  traffic. Two floors are now asserted deterministically: a sinusoidal cadence
+  is caught at **every period from 2 to 24 samples** (3.7x-5.8x over its own
+  surrogate ceiling), and a period-2 component stays visible when buried in
+  aperiodic jitter at a **signal-to-noise ratio of 0.5** (3.2x). Where the
+  floor actually lies is documented rather than implied: the same component
+  fades to 1.8x at SNR 0.3 and 0.6x at SNR 0.1, so a probe quieter than
+  roughly a third of the ambient jitter is not seen. The 2.0 discrimination
+  bar is likewise justified from data instead of chosen — a sweep of 400
+  independent aperiodic series puts the null distribution at median 0.65,
+  p99 1.49, max 1.87.
+
+### Fixed
+
+- **Two latent RST defects in `monitoring.py` docstrings that failed the
+  `-W` Sphinx build.** `EWMAStats.get_mad` and `EWMAStats.is_anomaly_mad`
+  wrote absolute-value bars as bare `|x - median|`. To docutils that is a
+  *substitution reference*, so each raised `ERROR: Undefined substitution
+  referenced` and the docs job (which treats warnings as errors) failed. The
+  defects were pre-existing and latent — `monitoring.py` had never been in the
+  Sphinx toctree — and adding `docs/api/monitoring.rst` exposed them. Both are
+  now inline literals, and the `-W` build succeeds with zero content problems.
+- **The resonance discrimination claim was asserted on an unsound
+  instrument.** `test_legitimate_hd_derivation_does_not_resonate` and
+  `test_scheduled_key_rotation_does_not_resonate` computed a resonance ratio
+  from **wall-clock timings of sub-millisecond operations on a shared CI
+  runner** and required it to stay low. Two things were wrong with that, and
+  the second is the interesting one:
+
+  1. The ratio is the maximum of N noisy periodogram bins, so against a fixed
+     bar it tracks scheduler noise — the same assertion read ~4 on Linux and
+     13.3 on macOS.
+  2. Replacing the fixed bar with a **surrogate-data comparison** (the series
+     against deterministic shuffles of itself, which destroy temporal ordering
+     while preserving the value multiset, hence the noise) removed the
+     machine-noise dependence correctly — and then found exactly what it was
+     built to find. Real workloads on real machines *do* carry periodic timing
+     structure. HD derivation scored 2.91x over its own surrogate ceiling on
+     macOS because the first derivation under each account pays a cache warm-up
+     (~2.3x measured) and the harness marched 4 accounts x 24 indices in
+     lockstep — a period-24 line the harness itself created. Key registration
+     scored 2.10x on Windows for the same class of reason, allocator behaviour
+     as the key table grows.
+
+  So "legitimate work never resonates" is not a true statement about real
+  wall-clock timings, and no threshold makes it one. The claim is now asserted
+  where it can be measured honestly.
+  `test_resonance_separates_probe_from_legitimate_traffic` drives the detector
+  with **synthetic, deterministic sequences** — no clock is read — and holds it
+  to a three-way assertion: a
+  period-2 reconnaissance probe must clear its own surrogate ceiling
+  (measured 10.21x, bar 2.0), SHAKE256-driven aperiodic traffic at the same
+  mean must not (measured 0.58x, worst of 24 independent seeds 1.16x, bar
+  2.0), and the probe must outrank legitimate traffic by 3x (measured 20.0x).
+  The surrogate comparison runs in **both** directions, so a resonance engine
+  that returned a constant, or one that flagged everything, fails one of the
+  three.
+
+  The two real-workload tests keep running real BIP32 derivation and a real
+  rotation schedule through the monitor, and now assert what is genuinely
+  robust across platforms: legitimate work never reaches a **CRITICAL**
+  anomaly (the severity that would page a human), the monitor ingests the
+  timings rather than silently dropping them, and the manager's bookkeeping is
+  correct across the whole schedule.
+
+- **All four CodeQL (GitHub Advanced Security) alerts raised by this branch,
+  resolved at source — none dismissed or suppressed**, per the standing policy
+  in `.github/codeql/codeql-config.yml`:
+  - `cpp/constant-comparison` in `ama_hkdf_agent_bound()`. Two overflow guards
+    were written where only one can ever fire: after the `u32be`
+    representability check bounds `info_len` to 2^32-1, the follow-up
+    `info_len > SIZE_MAX - sizeof(prefix)` is unreachable on LP64 — a guard
+    that reads as protection but is dead code. The binding limit is now
+    selected at preprocessing time (`AMA_AGENT_BOUND_INFO_MAX`), leaving one
+    genuinely reachable comparison on **both** ABIs. No coverage was removed:
+    the ILP32 wrap guard is preserved by the `#else` arm, where it is the real
+    bound (`SIZE_MAX - 92`, so `prefix + info` lands exactly on `SIZE_MAX`).
+    The `prefix` array is now sized from the same constant, so the two cannot
+    drift apart.
+  - `py/catch-base-exception` in the concurrency test — a worker caught
+    `BaseException`, which would swallow `KeyboardInterrupt`/`SystemExit` and
+    record a Ctrl-C during a 128-thread run as a "monitor error". Narrowed to
+    `Exception`.
+  - `py/import-and-import-from` — a test imported `ama_cryptography.monitoring`
+    both as a module and via `from ... import`. Replaced with pytest's
+    dotted-string `monkeypatch.setattr` targets, already the house style in
+    that file.
+  - `py/unused-global-variable` on `CYTHON_DETECTOR_KERNELS`. The underlying
+    defect was an API-surface inconsistency, not an unused variable: the five
+    public names this branch adds (`VolumeSpike`, `VolumeSpikeDetector`,
+    `NoteArtifactSignal`, `NoteArtifactDetector`, `CYTHON_DETECTOR_KERNELS`)
+    are re-exported by `ama_cryptography.monitor` and documented in
+    `MONITORING.md`, but were missing from the defining module's `__all__`, so
+    `from ama_cryptography.monitoring import *` silently omitted them. All
+    five are now declared.
+- **Fuzzing dictionaries and seed corpora were never reaching the fuzzer.**
+  `fuzz/dictionaries/` (13 files) and `fuzz/seed_corpus/` (14 directories)
+  were carried in the repository but the workflow passed neither: it created
+  an **empty** corpus directory and no `-dict`, so every run rediscovered
+  basic input structure from zero inside its 60-second budget. Both lanes now
+  seed the corpus from `fuzz/seed_corpus/<target>/` and load
+  `fuzz/dictionaries/<target>.dict` when present.
+- **Three fuzzing dictionaries were silently disabled in full.**
+  `fuzz_sha3.dict`, `fuzz_hkdf.dict` and `fuzz_argon2.dict` each contained an
+  empty token (`""` / `kw=""`). libFuzzer rejects that line and then discards
+  the **entire** dictionary, so every other keyword in those files was inert.
+  Removed the empty entries (the empty input needs no dictionary entry — it is
+  reachable from the empty test case) and added the fail-closed
+  `validate-fuzz-dictionaries` gate so this cannot recur.
+- **`build-*/` is now gitignored as a pattern.** The list of explicit build
+  directories had to be extended by hand for each new configuration, and
+  `build-nopqc/` — created by the documented `AMA_USE_NATIVE_PQC=OFF` guard —
+  was untracked but not ignored. No tracked path lives under a `build-*/`
+  directory.
+- **`-DAMA_USE_NATIVE_PQC=OFF` no longer fails to build.** ON is and remains
+  the default, and it is the only configuration `setup.py` builds
+  (INVARIANT-7 forbids a cryptographic fallback), but OFF is a supported CMake
+  configuration for downstream packagers and had rotted:
+  `src/c/dispatch/ama_dispatch.c` declared and called the Kyber/Dilithium
+  scalar NTT references (`ama_kyber_ntt_generic_ref` and friends) while the
+  translation units defining them sit in the `AMA_USE_NATIVE_PQC` source
+  group. The observable failure is toolchain-dependent: on Linux the shared
+  library links with those symbols left undefined (no `-Wl,--no-undefined`)
+  and every **executable** linking it fails instead; on macOS/Windows the
+  shared-library link itself fails. The externs and the four autotune slots
+  that use them are now gated to match; the dispatch slots stay NULL-checked
+  either way, so a PQC-less build simply never benchmarks them.
+
+  Three executables that call PQC entry points directly — `example_kem`,
+  `example_sign_verify` and `benchmark_c_raw` — are gated on the same option
+  (the C test suite already was). With native PQC off the tree now builds
+  clean and 26/26 C tests pass, including `test_agent_binding`, which needs
+  no PQC symbol.
+
+  A new fail-closed `ci-build-test.yml` job builds and tests that
+  configuration on every PR, and asserts the CMake default is still `ON`, so
+  the cell cannot silently rot again.
 
 ### Added
 

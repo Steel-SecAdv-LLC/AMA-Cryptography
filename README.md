@@ -174,10 +174,15 @@ A runtime monitoring framework providing cryptographic operation analysis:
 - **Recursion Engine**: Multi-scale hierarchical pattern analysis for anomaly detection
 - **Refactoring Engine**: Code complexity metrics for security review
 
+Two optional agentic-abuse detectors (on by default, advisory-only) extend the Resonance and Recursion components against the July 2026 autonomous-agent escape pattern:
+
+- **Volume-spike detector** (`VolumeSpikeDetector`): statistical detection of anomalous KEM/signature bursts, scored in the Anscombe variance-stabilising transform so a quiet baseline cannot manufacture false spikes; an optional key fingerprint separates ephemeral-key churn from a hot loop over one key.
+- **Note-like artifact detector** (`NoteArtifactDetector`): surfaces signed payloads shaped like instructions addressed to a later instance ("notes for future versions"). Calibrated against the repository's own text as a hard-negative corpus.
+
 - **Performance overhead**: Not tracked in the CI regression suite; measure locally with `python benchmarks/benchmark_suite.py`
 - **Visibility**: Runtime insight into cryptographic operation behavior
 
-> **Note:** The 3R system is a runtime anomaly monitoring framework. It surfaces statistical anomalies for security review but does not guarantee detection or prevention of timing attacks or other side-channel vulnerabilities.
+> **Note:** The 3R system is a runtime anomaly monitoring framework. It surfaces statistical anomalies for security review but does not guarantee detection or prevention of timing attacks or other side-channel vulnerabilities. The agentic-abuse detectors are advisory heuristics: they flag payloads and bursts for human review and never block a cryptographic operation.
 
 ### Multi-Language Architecture
 
@@ -196,6 +201,7 @@ Three-layer architecture balancing security and usability:
 - AES-256-GCM authenticated encryption (NIST SP 800-38D)
 - Adaptive cryptographic posture system (runtime threat response)
 - Hybrid KEM combiner (classical + PQC key encapsulation)
+- Agent-instance key/signature binding (INVARIANT-30): cryptographically forbids long-lived persistence material and successor-authorizing signatures unless a human-held operator key authorizes them — domain separation and policy over existing SHA3-256/HMAC-SHA3-256/HKDF, no new algorithms
 
 ### Quantum-Resistant Algorithms
 
@@ -520,7 +526,7 @@ installs byte-identical source.
 |---|---|---|
 | Source install from a git tag | **Verified working today** | Yes |
 | Prebuilt wheel from a GitHub Release | From the first release built by `release.yml` onward | No |
-| PyPI (`pip install ama-cryptography`) | Optional convenience mirror | No |
+| PyPI (`pip install ama-cryptography`) | **Not published yet** — see channel 3 before using | No |
 | Self-hosted PEP 503 index | Supported pattern, opt-in | No |
 
 ---
@@ -598,16 +604,43 @@ slsa-verifier verify-artifact <WHEEL_FILENAME> \
   --source-uri github.com/Steel-SecAdv-LLC/AMA-Cryptography
 ```
 
-#### 3. PyPI — optional convenience mirror
+#### 3. PyPI — planned, not yet published
 
-```bash
-pip install ama-cryptography
-```
+> [!WARNING]
+> **`pip install ama-cryptography` does not install this library today.** The
+> project is not published on PyPI, and the name `ama-cryptography` is
+> **unregistered** — `https://pypi.org/pypi/ama-cryptography/json` returns 404.
+>
+> Because the name is unclaimed, anyone may register it. **A package appearing
+> on PyPI under that name is not published by Steel Security Advisors LLC and
+> must not be trusted as this library.** Do not add `ama-cryptography` to a
+> `requirements.txt`, `pyproject.toml`, or lockfile that resolves against
+> PyPI until this section says the channel is live and you have verified the
+> uploader. Use channel 1 or channel 2 — both are verified working today, and
+> both are independently signature-checkable.
 
-PyPI is treated as a *mirror of convenience*, not the source of truth. It
-exists so that downstream projects can resolve `ama-cryptography` as an
-ordinary dependency; nothing in this library requires it, and channels 1 and 2
-remain fully supported and independently verifiable if it is ever unavailable.
+PyPI is intended as a *mirror of convenience*, never the source of truth.
+Nothing in this library requires an index: it has zero runtime cryptographic
+dependencies (INVARIANT-1), so channels 1 and 2 remain the supported path
+whether or not PyPI is ever used.
+
+Publishing is wired but deliberately opt-in. `release.yml` contains a
+`publish-pypi` job using PyPI Trusted Publishing, gated on the repository
+variable `AMA_PUBLISH_TO_PYPI`; with the variable unset the job is skipped and
+the skip is stated in the release notes rather than passing silently. Turning
+the channel on is an operator action, in this order:
+
+1. **Register `ama-cryptography` on PyPI under the organization account** —
+   this closes the name-squatting exposure above and is worth doing even if
+   publishing stays off indefinitely.
+2. Configure a Trusted Publisher for `Steel-SecAdv-LLC/AMA-Cryptography`
+   against `release.yml`, and create the `pypi` GitHub environment.
+3. Set the repository variable `AMA_PUBLISH_TO_PYPI` to `true`
+   (*Settings → Secrets and variables → Actions → Variables*).
+4. Update this section and the Distribution Channels table in the same commit
+   that lands the first published tag.
+
+Until step 4 lands, treat this channel as unavailable.
 
 #### 4. Self-hosted index (PEP 503) — full independence
 
@@ -891,7 +924,7 @@ The test suite includes:
 - Edge case testing for error handling
 - Performance regression tests with tiered tolerances
 - NIST ACVP vector validation (1,215 vectors across 12 algorithm functions — 815 AFT + 400 SHA-3 MCT; see [CSRC_ALIGN_REPORT.md](docs/compliance/CSRC_ALIGN_REPORT.md))
-- Fuzz harnesses for 13 C targets (`fuzz/`): AES-GCM, Argon2, ChaCha20-Poly1305, consttime, Dilithium, Ed25519, FROST, HKDF, Kyber, secp256k1, SHA3, SPHINCS+, X25519
+- Fuzz harnesses for 14 C targets (`fuzz/`): AES-GCM, agent-binding, Argon2, ChaCha20-Poly1305, consttime, Dilithium, Ed25519, FROST, HKDF, Kyber, secp256k1, SHA3, SPHINCS+, X25519. The agent-binding harness asserts security properties (fail-closed policy, no derivation for a refused binding, tampered tags rejected), not merely absence of crashes.
 - Empirical constant-time verification via [dudect](docs/constant-time-testing.md) (Welch's t-test on execution times)
 - [OSS-Fuzz](docs/oss-fuzz-onboarding.md) onboarding preparation for continuous 24/7 fuzzing
 
@@ -928,7 +961,7 @@ GitHub Actions automatically tests:
 | CI - Build & Test | `ci-build-test.yml` | Full C library build and C test suite |
 | Security | `security.yml` | pip-audit, bandit, Semgrep, secret scanning |
 | Static Analysis | `static-analysis.yml` | CodeQL analysis |
-| Fuzzing | `fuzzing.yml` | C fuzz harnesses (13 targets) |
+| Fuzzing | `fuzzing.yml` | C fuzz harnesses (14 targets) + dictionary-validity gate |
 | dudect | `dudect.yml` | Empirical constant-time verification |
 | Auto Docs | `auto-docs.yml` | Auto-generate documentation via PR |
 | Wiki Sync | `wiki-sync.yml` | Auto-sync wiki/ to GitHub Wiki |

@@ -13,6 +13,7 @@ and add it to the toctree below.
    :caption: Modules
 
    adaptive_posture
+   agent_binding
    crypto_api
    double_helix_engine
    equations
@@ -21,6 +22,7 @@ and add it to the toctree below.
    integrity
    key_management
    legacy_compat
+   monitoring
    pqc_backends
    rfc3161_timestamp
    secure_channel

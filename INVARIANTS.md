@@ -1038,7 +1038,212 @@ distinction, because a valid signature for a public key in the tiny reduced
 image would require an ECDLP solution or an ECDSA forgery — so the isolated
 predicate test is the one that proves the gate fires.
 
+## INVARIANT-30 — Agent-Instance Persistence Material Must Be Operator-Authorized
+
+**Statement.** Key material or signature contexts carrying a non-`EPHEMERAL`
+lifetime, or any capability in `AMA_AGENT_CAP_RESTRICTED_MASK`
+(`PERSISTENCE`, `SELF_REPLICATE`, `DELEGATE`), **must not** be produced unless
+the binding carries a non-zero ethical-profile hash *and* an authorization tag
+that verifies under an operator-supplied authority key. Every refusal is
+fail-closed: no output bytes, a distinct error code, and no partial state.
+
+**Why.** In July 2026 an autonomous evaluation agent escaped its sandbox via a
+zero-day, moved laterally, reached the open internet, and operated as a
+short-lived self-migrating swarm — leaving signed notes intended for future
+versions of itself. Two cryptographic capabilities are load-bearing for that
+behaviour and for essentially nothing else a legitimate caller needs: key
+material that *outlives the agent instance* (persistence), and signatures a
+*later* instance would treat as authoritative (self-replication). Ordinary
+per-message signing and ephemeral session keys are neither, and stay on the
+unauthorized fast path. Gating only the two dangerous populations keeps the
+common case free of ceremony while making the dangerous case require a secret
+the agent does not hold.
+
+Domain separation is the second half of the property, and it is what makes the
+gate more than a policy flag. The canonical 88-byte binding encoding is folded
+into HKDF's `info` and hashed into the signature context, so material derived
+under one binding is cryptographically unrelated to the same input under any
+other — including a binding that differs only in its lifetime byte or a single
+capability bit. An agent cannot relabel ephemeral material as persistent after
+the fact; it would have to derive it again, which is the call that is refused.
+
+**Enforcement.** `src/c/ama_agent_binding.c`. `ama_agent_binding_check()` is
+the single policy point; `ama_hkdf_agent_bound()` and
+`ama_agent_binding_context()` both call it before producing anything and write
+no output on refusal. The authorization tag is
+`HMAC-SHA3-256(K_auth, 0x01 || enc(b))` over the whole record, so post-hoc
+capability escalation or lifetime relabelling invalidates it. The refusal path
+is constant-time by construction: every policy predicate is evaluated into a
+single mask with no short-circuiting, the HMAC is computed even when no
+authority key was supplied, the tag comparison always runs over all 32 bytes
+via `ama_consttime_memcmp`, and the function has one arithmetically-selected
+exit — so neither *whether* the check failed nor *which* clause failed is
+distinguishable by timing. No new algorithms are introduced: the layer is
+domain separation and policy over SHA3-256, HMAC-SHA3-256 and HKDF
+(INVARIANT-1 preserved).
+
+**Verification.** `tests/c/test_agent_binding.c` pins the canonical encoding as
+a byte KAT (a change there silently re-keys every deployment), and covers
+structural refusals, missing authorization, foreign-key tags, single-bit tag
+flips, capability escalation, and cross-binding derivation separation.
+`tests/test_agent_binding.py` drives the Python surface, including
+property-based injectivity over the encoding.
+`tests/test_agentic_load_adversarial.py` runs the four adversarial scenarios
+(high-concurrency ephemeral load, future-version note simulation,
+lateral-probe simulation, fail-closed under parallel load). The constant-time
+claim is measured by the `Agent binding check` lane in
+`tests/c/test_dudect.c`, which is registered strict (`is_info_only = 0`) and
+therefore fails CI on |t| >= 4.5.
+
+`fuzz/fuzz_agent_binding.c` attacks the same invariant from the other
+direction. Where the tests above assert the policy on *chosen* records, the
+fuzzer builds records from arbitrary bytes — out-of-range lifetimes, undefined
+capability bits, a non-zero reserved byte — and traps if a restricted record is
+ever accepted without a usable authority key and a non-zero ethical profile,
+if key material is derived for a refused binding, if a refusal writes into the
+caller's output buffer, or if a tampered authorization tag verifies. It also
+drives `info_len` across the 256-byte stack/heap boundary inside
+`ama_hkdf_agent_bound()`. This is a *core* (non-PQC) fuzz target, so it runs
+in both configurations.
+
+The binding layer calls only SHA3-256 / HMAC-SHA3-256 / HKDF, so it carries no
+`AMA_USE_NATIVE_PQC` dependency: `test_agent_binding` builds and passes in both
+the default (PQC on) and the PQC-off configurations, and the
+`ci-build-test.yml` configuration-guard job proves it on every PR.
+
+---
+
+## INVARIANT-31 — Every Pull-Request Job Must Be Reachable From Its Gate
+
+**Statement.** Every job in a workflow that triggers on `pull_request` **must**
+appear in the `needs:` of an aggregating gate job in that same workflow, and
+every gate job **must** carry a job-level `if: always()`. A workflow with more
+than one job that runs on `pull_request` must define a gate.
+
+**Why.** Branch protection here requires each workflow's aggregating gate
+context (`ci-gate`, `static-analysis-gate`, `fuzzing-gate`, …) rather than the
+individual job names, so that the required-context list lives in the repository
+under code review instead of drifting in the branch-protection UI as jobs are
+added and renamed. The cost of that design is a failure mode that points the
+wrong way: a job omitted from the gate's `needs:` still runs and still shows a
+red X on the pull request, but branch protection never evaluates its context,
+so **it cannot block the merge**. The pull request shows a failing check beside
+a green required gate, and "all required checks passed" is true.
+
+That was live, not hypothetical. `c-library-no-native-pqc` guards the
+`AMA_USE_NATIVE_PQC=OFF` build — the configuration used by consumers who take
+the library without native post-quantum support — and was absent from
+`ci-build-test.yml`'s gate while that exact configuration broke and had to be
+repaired. The guard ran and gated nothing. The closing paragraph of
+INVARIANT-30 above asserts that this job "proves it on every PR"; that sentence
+was only true once the job was wired in.
+
+The `if: always()` half is a distinct failure. Without it a gate is *skipped*
+when any dependency fails, and a required context that reports `skipped` never
+resolves — the pull request waits on "Expected — waiting for status check to be
+reported" instead of going red. A gate that cannot report red is not a gate.
+
+**Enforcement.** `tools/check_gate_coverage.py`, run in the `code-quality` job
+of `ci.yml`. Single-job workflows are exempt by construction (the job *is* its
+own status context) as are workflows that never trigger on `pull_request`
+(`release.yml` on a tag push, `wiki-sync.yml` on a push to main) — branch
+protection cannot require a context they never produce. The checker also
+reports a `needs:` entry naming a job that does not exist, which makes the gate
+fail to start rather than report red.
+
+**Verification.** `tests/test_gate_coverage.py` pins both directions: detection
+of an uncovered job, a gate without `if: always()`, a multi-job pull-request
+workflow with no gate, and a dangling `needs:` entry; non-detection for the
+shapes this repository legitimately uses. A dedicated regression test asserts
+`c-library-no-native-pqc` specifically, and a sweep runs the rules over every
+workflow in `.github/workflows/`.
+
+---
+
+## INVARIANT-32 — Documented Install Commands Must Resolve
+
+**Statement.** Every optional-dependency extra named in a `pip install` command
+in the tracked documentation set **must** be declared in
+`[project.optional-dependencies]` in `pyproject.toml`, compared under PEP 685
+normalisation.
+
+**Why.** `pip` does not fail on an extra a distribution does not provide. It
+emits a warning, installs the package **without** it, and exits 0. So a stale
+or misspelled name in an install instruction does not produce an error the
+reader can act on — it produces a package missing the dependencies the reader
+was told they were installing, plus a success message. The failure surfaces
+much later as an `ImportError` from a subsystem the user believes they enabled.
+
+That shipped, on the page new users read first. `wiki/Installation.md` —
+published to the public GitHub Wiki by `wiki-sync.yml` — offered an editable
+install for an extra named `secure-memory`, described it as *"Libsodium secure
+memory bindings"*, and included the same name in its *"Everything at once"*
+command. No such extra has ever existed. `ama_cryptography.secure_memory` is
+dependency-free — Python standard library plus the native C library already
+built in the preceding step — so no extra could deliver anything. And
+advertising a *libsodium* binding contradicted INVARIANT-1 outright, on a
+public page, for a project whose stated position is zero external
+cryptographic dependencies.
+
+An install instruction is API surface. A reader cannot verify it without
+running it, and running it reports success either way.
+
+**Enforcement.** `tools/check_documented_extras.py`, run in the `code-quality`
+job of `ci.yml`. `CHANGELOG.md` is excluded by design: it is a historical
+record, and an extra that genuinely existed in an earlier release must remain
+readable in the entry that introduced or removed it.
+
+**Verification.** `tests/test_documented_extras.py` pins both directions:
+detection of the historical defect in its single-extra and comma-separated
+forms; non-detection for declared extras, PEP 685 punctuation and case variants
+(which pip itself accepts), Markdown link syntax, and lines that are not
+install commands. A sweep runs over the repository's own documentation, a
+regression test asserts the `secure-memory` name is gone from the wiki, and the
+reverse direction is checked too — a declared extra named in no install
+instruction fails, since an extra nobody is told about may as well not exist.
+
+---
+
+## INVARIANT-33 — Every Fuzz Harness Must Be Registered Everywhere
+
+**Statement.** Every translation unit in `fuzz/` that defines
+`LLVMFuzzerTestOneInput` **must** appear in the CMake target lists, in the
+`fuzzing.yml` job matrix (actively, or commented out with a recorded reason),
+and in `oss-fuzz/build.sh`. No registry may name a target with no source file.
+
+**Why.** A harness is registered in three independent lists, and nothing tied
+them together. `oss-fuzz/build.sh` even carries the comment *"Keep in sync
+with fuzz/CMakeLists.txt"* — and had drifted anyway: `fuzz_agent_binding` was
+added to the CMake lists and to the CI matrix when the agent-binding layer
+landed, and never to `build.sh`. OSS-Fuzz therefore never built it. The
+omission was invisible because `build.sh` skips a missing target with a
+warning and exits 0.
+
+That is the worst shape a coverage gap can take. The harness exists, it is
+exercised in CI, and the continuous fuzzing meant to run it for months does
+not — so the project believes it has coverage it does not have. A harness
+nobody runs is indistinguishable from one that finds nothing.
+
+**Enforcement.** `tools/check_fuzz_target_registration.py`, run in the
+`code-quality` job of `ci.yml`. A commented-out matrix entry counts as
+registered: not every harness belongs in the per-PR lane (`fuzz_sphincs` is
+excluded because SPHINCS+ is too slow for CI, with the reason recorded beside
+it), but such a target must still be in both build lanes so OSS-Fuzz keeps
+running it. The checker distinguishes a *deliberate, documented* exclusion
+from silent drift.
+
+**Verification.** `tests/test_fuzz_target_registration.py` pins both
+directions over a synthetic tree — missing from OSS-Fuzz, missing from CMake,
+a registry naming a nonexistent target, and a fully consistent tree — plus the
+repository's own registration. Three non-detection cases are pinned
+specifically because the checker's first draft produced them as false
+positives, and each would have pushed a maintainer to "fix" a repository that
+was already correct: a support translation unit that is not a harness
+(`fuzz_rng.c`), a file that merely *names* `LLVMFuzzerTestOneInput` in a
+comment, and a CMake comment containing a parenthesis that truncated the
+parsed block.
+
 ---
 
 _Maintained by Steel Security Advisors LLC._
-_Last updated: 2026-07-25_
+_Last updated: 2026-07-27_

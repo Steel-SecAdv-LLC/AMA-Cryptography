@@ -115,11 +115,22 @@
  * the SIMD slot pointer when the SIMD path regresses past the 10 %
  * hysteresis band.  Signatures match ama_kyber_ntt_fn /
  * ama_dilithium_ntt_fn so the dispatched and reference forms are
- * interchangeable at the call site. */
+ * interchangeable at the call site.
+ *
+ * Gated on AMA_USE_NATIVE_PQC because the two translation units that
+ * DEFINE these symbols (ama_kyber.c, ama_dilithium.c) are themselves in
+ * the AMA_USE_NATIVE_PQC source group in the top-level CMakeLists.txt.
+ * Declaring them unconditionally made an AMA_USE_NATIVE_PQC=OFF build
+ * fail at link time on the library itself — the four autotune call sites
+ * below are the only references, and they are gated to match.  The
+ * corresponding dispatch slots stay NULL-checked either way, so a
+ * PQC-less build simply never benchmarks them. */
+#ifdef AMA_USE_NATIVE_PQC
 extern void ama_kyber_ntt_generic_ref(int16_t poly[256], const int16_t zetas[128]);
 extern void ama_kyber_invntt_generic_ref(int16_t poly[256], const int16_t zetas[128]);
 extern void ama_dilithium_ntt_generic_ref(int32_t poly[256], const int32_t zetas[256]);
 extern void ama_dilithium_invntt_generic_ref(int32_t poly[256], const int32_t zetas[256]);
+#endif
 
 /* ============================================================================
  * Platform once-primitive (mirrors ama_cpuid.c — INVARIANT-15 compliant)
@@ -1767,6 +1778,12 @@ static void dispatch_init_internal(void) {
             v.keccak_x4_generic_ns = generic_best;
         }
 
+#ifdef AMA_USE_NATIVE_PQC
+        /* Slots 3-6 benchmark the Kyber/Dilithium NTT kernels against the
+         * scalar references in ama_kyber.c / ama_dilithium.c.  Those TUs are
+         * only linked when AMA_USE_NATIVE_PQC is on, so the whole group is
+         * gated — see the extern block at the top of this file. */
+
         /* ----- Slot 3: kyber_ntt (forward NTT) ------------------------
          * `poly_seed` is the immutable input domain; `poly_scratch` is
          * memcpy-restored before each NTT call so 4000 in-place
@@ -1843,6 +1860,7 @@ static void dispatch_init_internal(void) {
             v.dilithium_invntt_simd_ns    = simd_best;
             v.dilithium_invntt_generic_ns = generic_best;
         }
+#endif /* AMA_USE_NATIVE_PQC */
     } /* end of bench block (cache miss + autotune enabled) */
 
     if (!autotune_disabled) {

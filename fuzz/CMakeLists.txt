@@ -20,6 +20,14 @@ set(FUZZ_CORE_TARGETS
     fuzz_aes_gcm
     fuzz_hkdf
     fuzz_consttime
+    # Agent-instance binding (INVARIANT-30).  Core, not PQC: the layer needs
+    # only SHA3-256 / HMAC-SHA3-256 / HKDF, so it builds and fuzzes in the
+    # AMA_USE_NATIVE_PQC=OFF configuration too.
+    fuzz_agent_binding
+    # Ascon (NIST SP 800-232).  Core, not PQC: ama_ascon.c depends on no other
+    # primitive in this library, so it fuzzes in the AMA_USE_NATIVE_PQC=OFF
+    # configuration too — which is the configuration its target devices use.
+    fuzz_ascon
 )
 
 # PQC fuzz targets — only when AMA_USE_NATIVE_PQC is ON

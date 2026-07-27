@@ -10,7 +10,7 @@ Documentation for AMA Cryptography's security properties, threat model, side-cha
 |----------|-------|
 | Audit Status | Community-tested; **not externally audited** |
 | Version | 3.4.0 |
-| Last Updated | 2026-07-25 |
+| Last Updated | 2026-07-26 |
 | Responsible Disclosure | steel.sa.llc@gmail.com |
 
 > **Production Disclaimer:** This is a self-assessed cryptographic implementation without third-party audit. Production use **requires**:
@@ -38,7 +38,7 @@ Documentation for AMA Cryptography's security properties, threat model, side-cha
 
 - Not a general-purpose TLS/transport security library
 - Not a replacement for HSM in high-security environments
-- 3R monitoring flags statistical anomalies but does not prevent attacks
+- 3R monitoring flags statistical anomalies but does not prevent attacks. Its timing component has a measured floor rather than an open-ended promise: a periodic probe quieter than roughly a third of the ambient jitter is not distinguishable from noise (envelope table in [`MONITORING.md`](https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/MONITORING.md#resonancetimingmonitor-runtime-timing-anomaly-monitoring))
 - AES-GCM default build uses constant-time bitsliced S-box (`AMA_AES_CONSTTIME=ON`); explicitly disabling it reverts to table-based AES which is cache-timing vulnerable
 - Not certified under FIPS 140-2/3
 
@@ -57,6 +57,25 @@ The system is designed to be secure against:
 | **Network adversary** | Full network interception (MITM) | Signature verification, RFC 3161 timestamps |
 | **Offline dictionary attacker** | GPU/ASIC password cracking | Argon2id memory-hard KDF |
 | **Harvest Now, Decrypt Later** | Storing today's data to decrypt after quantum computers exist | Quantum-resistant encryption |
+| **Autonomous agent abusing the API** | An in-process agent driving the library to mint persistence material or successor-authorizing signatures ("notes for future versions") | Agent-instance binding (INVARIANT-30) refuses non-ephemeral / restricted derivations without an operator-held authority key; 3R volume-spike + note-artifact detectors surface the behaviour |
+
+### Agent-Instance Binding (INVARIANT-30)
+
+Modelled on the July 2026 autonomous-agent sandbox escape, where an evaluation
+agent reached the open internet and left signed notes for future versions of
+itself. A binding names an agent instance, the lifetime of material it may
+derive (`EPHEMERAL` / `SESSION` / `PERSISTENT`), and the capabilities it may
+exercise (`DATA_SIGN`, `KEY_EXCHANGE`, `PERSISTENCE`, `SELF_REPLICATE`,
+`DELEGATE`). Any non-`EPHEMERAL` lifetime or restricted capability requires a
+non-zero ethical-profile hash **and** an `HMAC-SHA3-256` authorization tag that
+verifies under an operator-held authority key — a MAC check, not a flag test,
+evaluated in constant time and fail-closed (no output, distinct error code, no
+partial state). The binding is domain separation and policy over the existing
+SHA3-256 / HMAC-SHA3-256 / HKDF primitives; it adds no new algorithm. Its limit
+is stated plainly: it constrains derivations that *opt into* a binding, so its
+value is realised when a deployment routes persistence-material derivation
+through it. It is verified by a byte-KAT C test, an end-to-end adversarial
+suite, a strict dudect constant-time lane, and a dedicated libFuzzer harness.
 
 ### Out-of-Scope Threats
 
@@ -130,9 +149,17 @@ Sensitive material handling:
 
 ## Supported Versions
 
+Mirrors [`SECURITY.md`](https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/SECURITY.md),
+which is authoritative.
+
 | Version | Security Support |
 |---------|-----------------|
-| 2.1.x | ✓ Active (security updates provided) |
+| 3.4.x | ✓ Active (security updates provided) |
+| 3.3.x | ✗ Superseded by v3.4 (no public API removals) |
+| 3.2.x | ✗ Superseded by v3.3 (no public API removals) |
+| 3.1.x | ✗ Superseded by v3.2 (no public API removals) |
+| 3.0.x | ✗ Superseded by v3.1 (no public API removals) |
+| 2.1.x | ✗ Superseded by v3.0 (`legacy_compat` Argon2id shim available for one-shot migration) |
 | 2.0.x | ✗ End-of-life (superseded by 2.1) |
 | 1.0.x | ✗ End-of-life (superseded by 2.0) |
 

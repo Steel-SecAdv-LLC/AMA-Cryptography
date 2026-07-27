@@ -15,6 +15,8 @@ Complete Python API reference for `ama_cryptography`. All modules, classes, func
 | [`hybrid_combiner`](#hybrid_combiner) | Hybrid classical + PQC KEM |
 | [`adaptive_posture`](#adaptive_posture) | Runtime threat response |
 | [`rfc3161_timestamp`](#rfc3161_timestamp) | RFC 3161 trusted timestamps |
+| [`agent_binding`](#agent_binding) | Agent-instance key/signature binding (INVARIANT-30) |
+| [`monitoring`](#monitoring) | 3R runtime monitoring + agentic-abuse detectors |
 | [`exceptions`](#exceptions) | Exception hierarchy |
 
 ---
@@ -664,6 +666,72 @@ valid: bool = verify_timestamp(
 Online mode requires the optional `rfc3161ng` package; mock and disabled
 modes are always available for testing. `TimestampUnavailableError` is
 raised if online mode is requested without the dependency.
+
+---
+
+## `agent_binding`
+
+Agent-instance key and signature binding (INVARIANT-30). A binding cryptographically
+forbids long-lived persistence material and successor-authorizing signatures unless a
+human-held operator key authorizes them. Domain separation and policy over the existing
+SHA3-256 / HMAC-SHA3-256 / HKDF primitives — no new algorithm.
+
+```python
+import os
+from ama_cryptography.agent_binding import (
+    AgentBinding, AgentLifetime, AgentCapability, EthicalBindingError,
+)
+
+# Ordinary ephemeral use needs no operator key and no ethical profile.
+b = AgentBinding(instance_id=os.urandom(32),
+                 capabilities=AgentCapability.DATA_SIGN)
+session_key = b.derive_key(ikm, 32, info=b"session")     # HKDF, binding folded into info
+ctx = b.signing_context()                                # 32-byte ML-DSA / SLH-DSA ctx
+
+# Persistence / self-replication require the operator.
+p = AgentBinding(instance_id=iid,
+                 lifetime=AgentLifetime.PERSISTENT,
+                 capabilities=AgentCapability.PERSISTENCE,
+                 ethical_profile_hash=sha3_256(profile_document))
+p.authorize(authority_key)                               # operator-side; needs K_auth
+root = p.derive_key(ikm, 32, authority_key=authority_key)
+# Without authorize(), derive_key() raises EthicalBindingError and writes nothing.
+```
+
+Refusal is fail-closed: no output bytes, a distinct error (`EthicalBindingError` /
+`AMA_ERROR_ETHICAL_BINDING`), and no partial state. The policy check is constant-time
+(verified by a strict dudect lane) and the native surface is fuzzed for its security
+properties, not merely for memory safety.
+
+---
+
+## `monitoring`
+
+The 3R runtime monitor (`AmaCryptographyMonitor`, `create_monitor()`) plus two optional
+agentic-abuse detectors, on by default and advisory-only.
+
+```python
+from ama_cryptography.monitoring import (
+    create_monitor, VolumeSpikeDetector, NoteArtifactDetector,
+)
+
+m = create_monitor()                                     # both detectors active
+m.record_operation_event("kyber_encaps", key_fingerprint=fp)   # feeds the volume detector
+signal = m.inspect_signed_payload(payload, label="note")       # scores for note-like structure
+# Opt out entirely:
+m = create_monitor(detect_volume_spikes=False, detect_note_artifacts=False)
+```
+
+- **`VolumeSpikeDetector`** — anomalous KEM/signature bursts, scored in the Anscombe
+  variance-stabilising transform (a quiet baseline cannot manufacture false spikes).
+  Three gates (warmup, an absolute floor, a 6-sigma residual) must all pass; an optional
+  key fingerprint separates ephemeral-key churn from a hot loop over one key.
+- **`NoteArtifactDetector`** — signed payloads shaped like instructions addressed to a
+  later instance. Calibrated against the repository's own text as a hard-negative corpus;
+  advisory (it never blocks a signature).
+
+Both are backed by Cython kernels with exact pure-Python twins, so the compiled extension
+is an optimisation and never a correctness dependency.
 
 ---
 

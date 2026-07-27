@@ -135,6 +135,84 @@ jobs:
         # job log.
         run: cd build && ctest --output-on-failure --verbose
 
+  # ---------------------------------------------------------------------
+  # AMA_USE_NATIVE_PQC=OFF configuration guard
+  # ---------------------------------------------------------------------
+  # ON is and remains the default (top-level CMakeLists.txt) and the only
+  # configuration setup.py will build — INVARIANT-7 forbids a cryptographic
+  # fallback, so the shipped wheel always carries the native PQC backends.
+  # OFF is nonetheless a supported CMake configuration for downstream
+  # packagers who take PQC from elsewhere, and it is exactly the kind of
+  # cell that silently rots when nothing builds it: before this job existed,
+  # `-DAMA_USE_NATIVE_PQC=OFF` left dispatch code referencing four Kyber/
+  # Dilithium NTT reference symbols defined only in the gated PQC source
+  # group.
+  #
+  # The observable failure is toolchain-dependent, and the guard catches it
+  # either way.  On this Linux lane GNU ld does NOT set --no-undefined on the
+  # shared library, so libama_cryptography.so links with those four symbols
+  # left UNDEFINED; what actually fails is every EXECUTABLE that links it —
+  # the always-built test binaries and the non-PQC examples — with
+  # "undefined reference to ama_dilithium_ntt_generic_ref". On macOS/Windows
+  # the shared-library link itself would fail. The build step below fails on
+  # the first of these, and the ctest step then proves the tests that survive
+  # the gate (including test_agent_binding, which needs no PQC symbol) still
+  # pass rather than merely compile.  Fail-closed: no continue-on-error.
+  c-library-no-native-pqc:
+    name: C Library (AMA_USE_NATIVE_PQC=OFF configuration guard)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+
+      - name: Install dependencies
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
+          sudo apt-get update
+          sudo apt-get install -y cmake gcc-13 g++-13
+
+      - name: Configure CMake (native PQC disabled)
+        run: |
+          cmake -B build-nopqc \
+            -DCMAKE_C_COMPILER=gcc-13 \
+            -DCMAKE_CXX_COMPILER=g++-13 \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DAMA_USE_NATIVE_PQC=OFF \
+            -DAMA_BUILD_SHARED=ON \
+            -DAMA_BUILD_STATIC=ON \
+            -DAMA_BUILD_TESTS=ON \
+            -DAMA_BUILD_EXAMPLES=ON
+
+      - name: Build
+        run: cmake --build build-nopqc --config Release -j4
+
+      - name: Test
+        run: cd build-nopqc && ctest --output-on-failure
+
+      - name: Assert the default is still ON
+        # A regression that flipped the default would make the job above green
+        # for the wrong reason (it would test the default path twice).  Assert
+        # CMake's RESOLVED value from a default configure (no -D override), not
+        # a regex over the source line: a source regex both false-passes on a
+        # trailing '... ON)' comment and false-fails on CMake-valid ON spellings
+        # (TRUE / 1 / lowercase on).  This reads the value CMake actually
+        # computed, so it is immune to how the option line is written.
+        shell: bash
+        run: |
+          set -o pipefail
+          cmake -B build-default-probe \
+            -DCMAKE_C_COMPILER=gcc-13 \
+            -DCMAKE_CXX_COMPILER=g++-13 \
+            -DCMAKE_BUILD_TYPE=Release >/dev/null
+          resolved=$(cmake -LA -N build-default-probe | grep '^AMA_USE_NATIVE_PQC:' || true)
+          echo "resolved default: ${resolved:-<absent>}"
+          if [ "$resolved" != "AMA_USE_NATIVE_PQC:BOOL=ON" ]; then
+            echo "::error::AMA_USE_NATIVE_PQC no longer defaults to ON (resolved: ${resolved:-<absent>})"
+            exit 1
+          fi
+          echo "AMA_USE_NATIVE_PQC default is ON."
+
   # Python Package Build and Test
   python-package:
     name: Python ${{ matrix.python-version }} on ${{ matrix.os }}
@@ -144,7 +222,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        python-version: ['3.10', '3.11', '3.12', '3.13']
+        python-version: ['3.10', '3.11', '3.12', '3.13', '3.14']
 
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
@@ -610,9 +688,19 @@ jobs:
     # in ci.yml). `needs:` is workflow-local, so this gate covers only the jobs
     # defined in ci-build-test.yml. Branch protection should require this
     # context instead of the individual job names.
+    #
+    # This list must name EVERY other job in this workflow. A job absent from
+    # it still runs and still reports its own red X, but branch protection
+    # only evaluates the gate context — so an absent job cannot block a merge.
+    # `c-library-no-native-pqc` was exactly that: it guards the
+    # AMA_USE_NATIVE_PQC=OFF configuration, the build that commit f3dd0c2 on
+    # this branch had to repair after it broke undetected. It ran green-or-red
+    # into the void while the gate stayed green. tools/check_gate_coverage.py
+    # (INVARIANT-31) now fails the PR that omits a job here.
     if: always()
     needs:
       - c-library
+      - c-library-no-native-pqc
       - python-package
       - lint
       - security

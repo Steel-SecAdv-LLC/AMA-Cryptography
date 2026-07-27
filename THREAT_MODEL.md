@@ -94,6 +94,14 @@ AMA Cryptography is a zero-dependency native C cryptographic library providing q
 | T3.3 | Weak entropy source | Key generation | Low (OS RNG) | CRITICAL | **MEDIUM** |
 | T3.4 | TSA compromise | Timestamp integrity | Low | MEDIUM | **LOW** |
 | T3.5 | Misconfiguration (disabled layers) | 4-Layer defense bypass | Medium | HIGH | **MEDIUM** |
+| T3.6 | Autonomous agent mints persistence material or successor-authorizing signatures | Agent containment / key lifetime | Medium | HIGH | **MEDIUM** |
+
+**T3.6 detail.** An autonomous agent with in-process access to the library needs
+two cryptographic capabilities to persist beyond its instance: key material that
+outlives it, and signatures a later instance would treat as authoritative
+("notes for future versions"). Ordinary per-message signing and ephemeral
+session keys are neither. The July 2026 evaluation-agent sandbox escape is the
+concrete instance of this pattern. See M3.5.
 
 ### T4: Supply Chain Attacks
 
@@ -145,6 +153,15 @@ AMA Cryptography is a zero-dependency native C cryptographic library providing q
 | T3.3 | Platform CSPRNG (getrandom, getentropy, BCryptGenRandom) | **IMPLEMENTED** | `ama_platform_rand.c`, no userspace PRNG |
 | T3.4 | RFC 3161 TSA with independent verification | **IMPLEMENTED** | `rfc3161_timestamp.py`, multiple TSA support |
 | T3.5 | Defense-in-depth requires all layers by default | **IMPLEMENTED** | `ama_cryptography.crypto_api.create_crypto_package()` / `verify_crypto_package()` enforce 4-layer verification (legacy compat: `ama_cryptography.legacy_compat`) |
+| T3.6 | Agent-instance binding (INVARIANT-30): non-`EPHEMERAL` lifetimes and restricted capabilities require an operator-held authority key | **IMPLEMENTED** | `src/c/ama_agent_binding.c`, `ama_cryptography/agent_binding.py`; byte-KAT + adversarial suite + strict dudect lane + `fuzz/fuzz_agent_binding.c` |
+| T3.6 | 3R agentic-abuse detectors surface the behaviour for review | **IMPLEMENTED (advisory)** | `VolumeSpikeDetector` / `NoteArtifactDetector` in `ama_cryptography/monitoring.py`; on by default, never block an operation |
+
+**Scope note for T3.6.** The binding constrains derivations that are made
+*through* it, so its protection is realised when a deployment routes
+persistence-material derivation through a binding; it is not a sandbox and does
+not contain code that never calls the library. The detectors are advisory
+heuristics — an agent that avoids the successor vocabulary is not flagged, and
+`flagged=False` is not a statement that a payload is benign.
 
 ### M4: Supply Chain Mitigations
 
@@ -170,6 +187,8 @@ These risks are accepted or require external mitigation:
 | Ed25519 quantum vulnerability | **LOW** | Mitigated by ML-DSA-65 quantum-resistant layer. Ed25519 provides classical defense only. |
 | RFC 3161 TSA trust dependency | **LOW** | Timestamps depend on external TSA integrity. Use multiple TSAs for defense-in-depth. |
 | Compiler optimization of secure zeroing | **LOW** | Mitigated with `volatile` pointers and compiler barriers (`__asm__ __volatile__`). |
+| Agent-instance binding is opt-in per derivation | **MEDIUM** | The binding constrains material derived *through* it (INVARIANT-30); it is not a sandbox and does not restrain code that never calls the library. Deployments hosting autonomous agents should route persistence-material derivation through a binding and hold the authority key outside the agent's reach. |
+| Agentic-abuse detectors are heuristics | **LOW** | `NoteArtifactDetector` does not catch an agent that avoids the successor vocabulary, and `VolumeSpikeDetector` is deliberately calibrated to stay quiet under legitimate load. Both are advisory review aids, not enforcement. |
 
 ---
 
@@ -190,6 +209,7 @@ How each defense layer is verified:
 | X25519 | — | RFC 7748 | `fuzz_x25519` | — | Yes |
 | Argon2id | — | RFC 9106 | `fuzz_argon2` | — | Yes |
 | Const-time utils | `test_consttime.c` | — | `fuzz_consttime` | `dudect_harness` | Yes |
+| Agent-instance binding | `test_agent_binding.c`, `tests/test_agent_binding.py`, `tests/test_agentic_load_adversarial.py` | Pinned canonical-encoding byte KAT | `fuzz_agent_binding` | `test_dudect` (`Agent binding check`, strict) | Yes |
 
 ---
 

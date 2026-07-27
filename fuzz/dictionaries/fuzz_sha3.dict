@@ -1,8 +1,11 @@
 # SHA3 fuzzing dictionary
 # Common input patterns for hash functions
 
-# Empty and single-byte inputs
-""
+# Single-byte inputs.
+# NOTE: no empty-string entry — libFuzzer's ParseDictionaryFile rejects an
+# empty token and discards the ENTIRE dictionary on the first malformed line,
+# so one `""` silently disables every pattern below it.  The empty input is
+# reachable from the empty test case without a dictionary entry.
 "\x00"
 "\xff"
 
