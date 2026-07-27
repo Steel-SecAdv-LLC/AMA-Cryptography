@@ -6,8 +6,9 @@
 **Rule invoked:** *Preserve and evolve primitives* — a primitive addition,
 replacement, or removal requires a decision log recording the compatibility
 impact, security rationale, and measured evidence.
-**Supersedes:** the interim position in `docs/AUDIT_DIRECTIVE.md` §3.1, which
-recorded Ascon as recommended-but-deferred.
+**Supersedes:** an earlier interim position that recorded Ascon as
+recommended-but-deferred to a later milestone; the repository owner directed
+that it land in `3.4.0` instead.
 
 ---
 
@@ -42,8 +43,8 @@ FIPS 202/203/204/205, SP 800-56C, SP 800-90A — and Ascon is the **only**
 NIST-standardized lightweight AEAD. It belongs in `CSRC_STANDARDS.md` on the
 same footing as the rest.
 
-**It closes a gap the project had already committed to.** `AUDIT_DIRECTIVE.md`
-§5.2 names Cortex-M as a benchmark tier while the library shipped only
+**It closes a gap the project had already committed to.** The project's
+benchmark tiers name Cortex-M as a target while the library shipped only
 AES-256-GCM and ChaCha20-Poly1305 — both designed for application processors.
 AES-GCM without AES-NI needs either large tables (a cache-timing surface) or
 the bitsliced path in `ama_aes_bitsliced.c` (constant-time, but slower and
