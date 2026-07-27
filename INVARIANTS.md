@@ -1113,5 +1113,96 @@ the default (PQC on) and the PQC-off configurations, and the
 
 ---
 
+## INVARIANT-31 — Every Pull-Request Job Must Be Reachable From Its Gate
+
+**Statement.** Every job in a workflow that triggers on `pull_request` **must**
+appear in the `needs:` of an aggregating gate job in that same workflow, and
+every gate job **must** carry a job-level `if: always()`. A workflow with more
+than one job that runs on `pull_request` must define a gate.
+
+**Why.** Branch protection here requires each workflow's aggregating gate
+context (`ci-gate`, `static-analysis-gate`, `fuzzing-gate`, …) rather than the
+individual job names, so that the required-context list lives in the repository
+under code review instead of drifting in the branch-protection UI as jobs are
+added and renamed. The cost of that design is a failure mode that points the
+wrong way: a job omitted from the gate's `needs:` still runs and still shows a
+red X on the pull request, but branch protection never evaluates its context,
+so **it cannot block the merge**. The pull request shows a failing check beside
+a green required gate, and "all required checks passed" is true.
+
+That was live, not hypothetical. `c-library-no-native-pqc` guards the
+`AMA_USE_NATIVE_PQC=OFF` build — the configuration used by consumers who take
+the library without native post-quantum support — and was absent from
+`ci-build-test.yml`'s gate while that exact configuration broke and had to be
+repaired. The guard ran and gated nothing. The closing paragraph of
+INVARIANT-30 above asserts that this job "proves it on every PR"; that sentence
+was only true once the job was wired in.
+
+The `if: always()` half is a distinct failure. Without it a gate is *skipped*
+when any dependency fails, and a required context that reports `skipped` never
+resolves — the pull request waits on "Expected — waiting for status check to be
+reported" instead of going red. A gate that cannot report red is not a gate.
+
+**Enforcement.** `tools/check_gate_coverage.py`, run in the `code-quality` job
+of `ci.yml`. Single-job workflows are exempt by construction (the job *is* its
+own status context) as are workflows that never trigger on `pull_request`
+(`release.yml` on a tag push, `wiki-sync.yml` on a push to main) — branch
+protection cannot require a context they never produce. The checker also
+reports a `needs:` entry naming a job that does not exist, which makes the gate
+fail to start rather than report red.
+
+**Verification.** `tests/test_gate_coverage.py` pins both directions: detection
+of an uncovered job, a gate without `if: always()`, a multi-job pull-request
+workflow with no gate, and a dangling `needs:` entry; non-detection for the
+shapes this repository legitimately uses. A dedicated regression test asserts
+`c-library-no-native-pqc` specifically, and a sweep runs the rules over every
+workflow in `.github/workflows/`.
+
+---
+
+## INVARIANT-32 — Documented Install Commands Must Resolve
+
+**Statement.** Every optional-dependency extra named in a `pip install` command
+in the tracked documentation set **must** be declared in
+`[project.optional-dependencies]` in `pyproject.toml`, compared under PEP 685
+normalisation.
+
+**Why.** `pip` does not fail on an extra a distribution does not provide. It
+emits a warning, installs the package **without** it, and exits 0. So a stale
+or misspelled name in an install instruction does not produce an error the
+reader can act on — it produces a package missing the dependencies the reader
+was told they were installing, plus a success message. The failure surfaces
+much later as an `ImportError` from a subsystem the user believes they enabled.
+
+That shipped, on the page new users read first. `wiki/Installation.md` —
+published to the public GitHub Wiki by `wiki-sync.yml` — offered an editable
+install for an extra named `secure-memory`, described it as *"Libsodium secure
+memory bindings"*, and included the same name in its *"Everything at once"*
+command. No such extra has ever existed. `ama_cryptography.secure_memory` is
+dependency-free — Python standard library plus the native C library already
+built in the preceding step — so no extra could deliver anything. And
+advertising a *libsodium* binding contradicted INVARIANT-1 outright, on a
+public page, for a project whose stated position is zero external
+cryptographic dependencies.
+
+An install instruction is API surface. A reader cannot verify it without
+running it, and running it reports success either way.
+
+**Enforcement.** `tools/check_documented_extras.py`, run in the `code-quality`
+job of `ci.yml`. `CHANGELOG.md` is excluded by design: it is a historical
+record, and an extra that genuinely existed in an earlier release must remain
+readable in the entry that introduced or removed it.
+
+**Verification.** `tests/test_documented_extras.py` pins both directions:
+detection of the historical defect in its single-extra and comma-separated
+forms; non-detection for declared extras, PEP 685 punctuation and case variants
+(which pip itself accepts), Markdown link syntax, and lines that are not
+install commands. A sweep runs over the repository's own documentation, a
+regression test asserts the `secure-memory` name is gone from the wiki, and the
+reverse direction is checked too — a declared extra named in no install
+instruction fails, since an extra nobody is told about may as well not exist.
+
+---
+
 _Maintained by Steel Security Advisors LLC._
-_Last updated: 2026-07-26_
+_Last updated: 2026-07-27_

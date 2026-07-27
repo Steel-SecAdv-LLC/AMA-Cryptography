@@ -688,9 +688,19 @@ jobs:
     # in ci.yml). `needs:` is workflow-local, so this gate covers only the jobs
     # defined in ci-build-test.yml. Branch protection should require this
     # context instead of the individual job names.
+    #
+    # This list must name EVERY other job in this workflow. A job absent from
+    # it still runs and still reports its own red X, but branch protection
+    # only evaluates the gate context — so an absent job cannot block a merge.
+    # `c-library-no-native-pqc` was exactly that: it guards the
+    # AMA_USE_NATIVE_PQC=OFF configuration, the build that commit f3dd0c2 on
+    # this branch had to repair after it broke undetected. It ran green-or-red
+    # into the void while the gate stayed green. tools/check_gate_coverage.py
+    # (INVARIANT-31) now fails the PR that omits a job here.
     if: always()
     needs:
       - c-library
+      - c-library-no-native-pqc
       - python-package
       - lint
       - security

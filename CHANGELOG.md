@@ -150,6 +150,54 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   **no dictionary at all**, printing only a one-line notice inside a 60-second
   fuzz log. This job loads every dictionary with a real libFuzzer binary and
   fails the build on any rejection.
+- **INVARIANT-31 — every pull-request job must be reachable from its gate.**
+  New `tools/check_gate_coverage.py`, run in `ci.yml`'s `code-quality` job.
+  Branch protection here requires each workflow's aggregating gate context, so
+  a job missing from that gate's `needs:` still runs and still shows a red X —
+  and still cannot block the merge, because the context is never evaluated.
+  The checker also requires every gate to carry `if: always()` (without it a
+  failed dependency leaves the gate `skipped`, and a required context that
+  reports `skipped` never resolves) and reports `needs:` entries naming jobs
+  that do not exist. Single-job workflows and workflows that never trigger on
+  `pull_request` are exempt by construction.
+- **INVARIANT-32 — documented install commands must resolve.** New
+  `tools/check_documented_extras.py`, run in the same job. `pip` does not fail
+  on an extra a distribution does not provide: it warns, installs without it,
+  and exits 0, so a stale name in an install instruction yields an incomplete
+  install and a success message. Every extra named in a `pip install` command
+  across README, wiki and docs is now matched against
+  `[project.optional-dependencies]` under PEP 685 normalisation.
+  `CHANGELOG.md` is excluded so historical entries stay readable.
+
+### Fixed (availability and CI gating)
+
+- **`c-library-no-native-pqc` gated nothing.** The job guarding the
+  `AMA_USE_NATIVE_PQC=OFF` build — the configuration used by consumers who
+  take the library without native post-quantum support — ran on every pull
+  request but was absent from `ci-build-test.yml`'s `ci-gate` `needs:`, so it
+  could not block a merge. That is the same configuration this release had to
+  repair after it broke undetected. Now wired in, and INVARIANT-31 prevents
+  recurrence.
+- **The public wiki advertised an extra that does not exist, for a dependency
+  the project forbids.** `wiki/Installation.md` offered an install for
+  `secure-memory`, described as *"Libsodium secure memory bindings"*, and
+  included it in the *"Everything at once"* line. No such extra has ever been
+  declared, so pip silently installed without it.
+  `ama_cryptography.secure_memory` is in fact dependency-free — standard
+  library plus the native C library built in the preceding step — and
+  INVARIANT-1 prohibits libsodium by name, so the page advertised a forbidden
+  third-party cryptographic dependency for a module that needs none. The page
+  now lists the eight declared extras, states that secure memory needs no
+  extra, and warns that pip does not validate extra names.
+- **`pip install ama-cryptography` was documented as a working command.** The
+  project is not published on PyPI and the name is **unregistered** (the JSON
+  API returns 404), yet README section 3 presented the command in a bare code
+  block and `docs/index.rst` carried it into the published Sphinx docs. Both
+  now state the channel is unavailable and warn that, because the name is
+  unclaimed, any package appearing under it is not published by Steel Security
+  Advisors LLC and must not be trusted as this library. README records the
+  operator steps to open the channel — registering the name first, which
+  closes the squatting exposure whether or not publishing is ever enabled.
 
 ### Changed
 

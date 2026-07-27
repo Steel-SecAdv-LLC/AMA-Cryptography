@@ -526,7 +526,7 @@ installs byte-identical source.
 |---|---|---|
 | Source install from a git tag | **Verified working today** | Yes |
 | Prebuilt wheel from a GitHub Release | From the first release built by `release.yml` onward | No |
-| PyPI (`pip install ama-cryptography`) | Optional convenience mirror | No |
+| PyPI (`pip install ama-cryptography`) | **Not published yet** — see channel 3 before using | No |
 | Self-hosted PEP 503 index | Supported pattern, opt-in | No |
 
 ---
@@ -604,16 +604,43 @@ slsa-verifier verify-artifact <WHEEL_FILENAME> \
   --source-uri github.com/Steel-SecAdv-LLC/AMA-Cryptography
 ```
 
-#### 3. PyPI — optional convenience mirror
+#### 3. PyPI — planned, not yet published
 
-```bash
-pip install ama-cryptography
-```
+> [!WARNING]
+> **`pip install ama-cryptography` does not install this library today.** The
+> project is not published on PyPI, and the name `ama-cryptography` is
+> **unregistered** — `https://pypi.org/pypi/ama-cryptography/json` returns 404.
+>
+> Because the name is unclaimed, anyone may register it. **A package appearing
+> on PyPI under that name is not published by Steel Security Advisors LLC and
+> must not be trusted as this library.** Do not add `ama-cryptography` to a
+> `requirements.txt`, `pyproject.toml`, or lockfile that resolves against
+> PyPI until this section says the channel is live and you have verified the
+> uploader. Use channel 1 or channel 2 — both are verified working today, and
+> both are independently signature-checkable.
 
-PyPI is treated as a *mirror of convenience*, not the source of truth. It
-exists so that downstream projects can resolve `ama-cryptography` as an
-ordinary dependency; nothing in this library requires it, and channels 1 and 2
-remain fully supported and independently verifiable if it is ever unavailable.
+PyPI is intended as a *mirror of convenience*, never the source of truth.
+Nothing in this library requires an index: it has zero runtime cryptographic
+dependencies (INVARIANT-1), so channels 1 and 2 remain the supported path
+whether or not PyPI is ever used.
+
+Publishing is wired but deliberately opt-in. `release.yml` contains a
+`publish-pypi` job using PyPI Trusted Publishing, gated on the repository
+variable `AMA_PUBLISH_TO_PYPI`; with the variable unset the job is skipped and
+the skip is stated in the release notes rather than passing silently. Turning
+the channel on is an operator action, in this order:
+
+1. **Register `ama-cryptography` on PyPI under the organization account** —
+   this closes the name-squatting exposure above and is worth doing even if
+   publishing stays off indefinitely.
+2. Configure a Trusted Publisher for `Steel-SecAdv-LLC/AMA-Cryptography`
+   against `release.yml`, and create the `pypi` GitHub environment.
+3. Set the repository variable `AMA_PUBLISH_TO_PYPI` to `true`
+   (*Settings → Secrets and variables → Actions → Variables*).
+4. Update this section and the Distribution Channels table in the same commit
+   that lands the first published tag.
+
+Until step 4 lands, treat this channel as unavailable.
 
 #### 4. Self-hosted index (PEP 503) — full independence
 

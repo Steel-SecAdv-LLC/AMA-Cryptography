@@ -79,16 +79,28 @@ Getting Started
 Installation
 ~~~~~~~~~~~~
 
+Install from a git tag — the primary channel, reproducible and index-free:
+
 .. code-block:: bash
 
-   # Install from source
+   pip install "git+https://github.com/Steel-SecAdv-LLC/AMA-Cryptography.git@v3.4.0"
+
+Or build and install the C library from a source checkout:
+
+.. code-block:: bash
+
    git clone https://github.com/Steel-SecAdv-LLC/AMA-Cryptography.git
    cd AMA-Cryptography
    make all
    sudo make install
 
-   # Or with pip (when available)
-   pip install ama-cryptography
+.. warning::
+
+   ``pip install ama-cryptography`` does **not** install this library. The
+   project is not published on PyPI and the name is unregistered, so a package
+   appearing under it is not ours. Use a git tag or a signed wheel from a
+   GitHub Release — see the README section *Distribution Channels* for the
+   verification steps.
 
 Quick Example
 ~~~~~~~~~~~~~
