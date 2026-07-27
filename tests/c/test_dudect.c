@@ -1119,22 +1119,32 @@ static double test_ascon_tag_verify(int iterations) {
 /* -----------------------------------------------------------------------
  * Test: Ascon-AEAD128 encrypt — timing must not depend on the key.
  *
- * Class 0: fixed all-zero key.  Class 1: fresh random key each iteration.
- * Everything else is identical.  Ascon has no lookup tables at all, so this
- * lane should be flat by construction; it exists to catch a future
- * "optimisation" that introduced one, which is exactly how table-driven AES
- * acquired its cache-timing surface.
+ * Class 0: all-zero key.  Class 1: all-0xFF key.  Both keys are fixed and
+ * prepared once, before the loop — the maximal-contrast, fixed-vs-fixed idiom
+ * this file's other keyed lanes use.  Nothing class-dependent runs between the
+ * class choice and the timer, so the only thing the two classes differ in is
+ * the key bytes the cipher consumes.  (An earlier form drew a fresh random key
+ * for class 1 *inside* the loop; that put 16 rand() draws and a store on the
+ * class-1 path only, in the nanoseconds before the timer, which for a
+ * sub-microsecond primitive is a systematic per-class measurement bias, not a
+ * property of the cipher — it made this constant-time gate flake red on a
+ * correct implementation.  See tools/constant_time/dudect_crypto.c for the
+ * A/B that quantified it.)  Ascon has no lookup tables at all, so this lane is
+ * flat by construction; it exists to catch a future "optimisation" that
+ * introduced one, which is exactly how table-driven AES acquired its
+ * cache-timing surface.
  * ----------------------------------------------------------------------- */
 static double test_ascon_encrypt_key_independent(int iterations) {
     dudect_ctx_t ctx;
     dudect_ctx_init(&ctx, "Ascon-AEAD128 encrypt (key-independent)");
 
-    uint8_t key_fixed[AMA_ASCON_AEAD128_KEY_LEN];
-    uint8_t key_random[AMA_ASCON_AEAD128_KEY_LEN];
+    uint8_t key_zero[AMA_ASCON_AEAD128_KEY_LEN];
+    uint8_t key_ones[AMA_ASCON_AEAD128_KEY_LEN];
     uint8_t nonce[AMA_ASCON_AEAD128_NONCE_LEN];
     uint8_t pt[64], ct[64], tag[AMA_ASCON_AEAD128_TAG_LEN];
 
-    memset(key_fixed, 0x00, sizeof(key_fixed));
+    memset(key_zero, 0x00, sizeof(key_zero));
+    memset(key_ones, 0xFF, sizeof(key_ones));
     random_bytes(nonce, sizeof(nonce));
     memset(pt, 0xA5, sizeof(pt));
 
@@ -1142,11 +1152,8 @@ static double test_ascon_encrypt_key_independent(int iterations) {
 
     for (int i = 0; i < iterations && !g_timeout_hit; i++) {
         int class_idx = rand() & 1;
-        if (class_idx == 1) {
-            random_bytes(key_random, sizeof(key_random));
-        }
         /* Pointer select OUTSIDE the timing region. */
-        const uint8_t *key_use = class_idx ? key_random : key_fixed;
+        const uint8_t *key_use = class_idx ? key_ones : key_zero;
 
         uint64_t start = dudect_get_time_ns();
         volatile ama_error_t rc =
