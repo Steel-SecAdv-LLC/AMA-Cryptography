@@ -16,10 +16,17 @@ that corpus cannot:
   byte-for-byte — including the RFC 6979 nonce, which is re-derived here from
   the RFC's own HMAC_DRBG construction. Wycheproof only checks *verification*;
   this is what pins *signing*.
-* **Policy.** Signing always emits low-``s``; verification accepts either
-  representative by default and rejects the high twin under
-  ``require_low_s``. That split is INVARIANT-34 and is the reason these curves
-  interoperate at all.
+* **Policy.** Signing emits RFC 6979's ``s`` verbatim by default and
+  verification accepts either representative, so these curves interoperate.
+  Low-``s`` is opt-in on *both* halves and is only a security property when
+  both are set — asserted here as a truth table over the four combinations
+  (INVARIANT-34).
+* **RFC 6979 conformance.** The RFC's own Appendix A.2.5/A.2.6/A.2.7 vectors
+  are vendored under ``tests/kat/rfc6979/`` and replayed. An earlier revision
+  of this module could not have caught their absence, because its reference
+  normalised ``s`` the same way the C code did — the two agreed by
+  construction. That is why the reference now takes the policy as a
+  parameter.
 * **Negative space.** Non-canonical coordinates, off-curve points, the
   identity, out-of-range scalars, wrong digest widths, malformed DER, and
   cross-curve confusion.
@@ -183,7 +190,15 @@ def _rfc6979_k(x: int, digest: bytes, n: int, qlen: int, hashname: str, nbytes: 
         V = prf(K, V)
 
 
-def _ref_sign(name: str, digest: bytes, d: int) -> tuple[int, int]:
+def _ref_sign(name: str, digest: bytes, d: int, *, low_s: bool = False) -> tuple[int, int]:
+    """RFC 6979 + FIPS 186-5 ECDSA, straight from the specifications.
+
+    ``low_s`` is a *parameter*, not a baked-in assumption. An earlier revision
+    of this file normalised unconditionally to match what the C code did — so
+    the two agreed by construction and the reference could not have caught the
+    fact that neither reproduced RFC 6979's own published vectors. A reference
+    that shares the implementation's assumptions is not a reference.
+    """
     c = CURVES[name]
     p, n, nb = c["p"], c["n"], c["nbytes"]
     qlen = n.bit_length()
@@ -192,7 +207,7 @@ def _ref_sign(name: str, digest: bytes, d: int) -> tuple[int, int]:
     r = point[0] % n
     e = _bits2int(digest, qlen) % n
     s = pow(k, -1, n) * (e + r * d) % n
-    if s > (n - 1) // 2:  # AMA always emits the low representative
+    if low_s and s > (n - 1) // 2:
         s = n - s
     return r, s
 
@@ -268,18 +283,20 @@ def test_keypair_generation_is_valid_and_varied(name: str) -> None:
 # ECDSA against the RFC 6979 reference
 # ---------------------------------------------------------------------------
 @pytest.mark.parametrize("name", CURVE_NAMES)
-def test_ecdsa_matches_rfc6979_reference(name: str) -> None:
+@pytest.mark.parametrize("low_s", [False, True])
+def test_ecdsa_matches_rfc6979_reference(name: str, low_s: bool) -> None:
+    """Both signing policies must match the reference under the same policy."""
     nb = CURVES[name]["nbytes"]
     n = CURVES[name]["n"]
     for i in range(3):
         d = secrets.randbelow(n - 1) + 1
         priv = d.to_bytes(nb, "big")
         digest = _digest(name, b"ama-nistp-%s-%d" % (name.encode(), i))
-        raw = pb.native_nistp_ecdsa_sign(name, digest, priv, raw=True)
+        raw = pb.native_nistp_ecdsa_sign(name, digest, priv, raw=True, low_s=low_s)
         r_got = int.from_bytes(raw[:nb], "big")
         s_got = int.from_bytes(raw[nb:], "big")
-        assert (r_got, s_got) == _ref_sign(name, digest, d), (
-            f"{name}: signature diverged from the RFC 6979 reference"
+        assert (r_got, s_got) == _ref_sign(name, digest, d, low_s=low_s), (
+            f"{name}: signature diverged from the RFC 6979 reference (low_s={low_s})"
         )
 
 
@@ -320,8 +337,18 @@ def test_hedged_signing_differs_but_verifies(name: str) -> None:
     assert h1 != det and h1 != h2, "hedged signing produced a deterministic signature"
     assert pb.native_nistp_ecdsa_verify(name, h1, digest, pub)
     assert pb.native_nistp_ecdsa_verify(name, h2, digest, pub)
-    with pytest.raises(ValueError):
-        pb.native_nistp_ecdsa_sign(name, digest, priv, raw=True, hedged=True)
+
+    # Every combination of {deterministic, hedged} x {DER, raw} x {RFC s,
+    # low s} is reachable. The previous API made hedged+raw raise purely
+    # because the fourth entry point had not been written.
+    for raw_form in (False, True):
+        for low in (False, True):
+            sig = pb.native_nistp_ecdsa_sign(
+                name, digest, priv, raw=raw_form, hedged=True, low_s=low
+            )
+            assert pb.native_nistp_ecdsa_verify(
+                name, sig, digest, pub, raw=raw_form, require_low_s=low
+            )
 
 
 @pytest.mark.parametrize("name", CURVE_NAMES)
@@ -346,40 +373,191 @@ def test_unsupported_digest_widths_rejected(name: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# INVARIANT-34: low-s on signing, X9.62 by default on verification
+# RFC 6979's own published vectors
+# ---------------------------------------------------------------------------
+RFC6979_KAT = REPO_ROOT / "tests" / "kat" / "rfc6979" / "ecdsa_prime_curves.kat"
+
+
+def _load_rfc6979_vectors() -> list[dict[str, str]]:
+    records: list[dict[str, str]] = []
+    current: dict[str, str] = {}
+    for line in RFC6979_KAT.read_text().splitlines():
+        line = line.strip()
+        if not line:
+            if current:
+                records.append(current)
+                current = {}
+            continue
+        key, _, value = line.partition("=")
+        current[key.strip()] = value.strip()
+    if current:
+        records.append(current)
+    return records
+
+
+def test_rfc6979_published_vectors() -> None:
+    """Replay RFC 6979 Appendix A.2.5 / A.2.6 / A.2.7 verbatim.
+
+    This is the gate that the earlier low-`s`-by-default signer failed: `r`
+    matched on every vector, and `s` was negated on every vector whose natural
+    value happened to be high — roughly half of them — while the header still
+    advertised "deterministic per RFC 6979".
+
+    Nothing here is derived from AMA. The private key, the public key and both
+    signature components are the RFC's own printed values.
+    """
+    assert RFC6979_KAT.is_file(), f"missing vendored RFC 6979 corpus: {RFC6979_KAT}"
+    records = _load_rfc6979_vectors()
+    assert records, "empty RFC 6979 corpus"
+
+    hashes = {"SHA-256": "sha256", "SHA-384": "sha384", "SHA-512": "sha512"}
+    seen_curves: set[str] = set()
+    high_s_seen = 0
+
+    for rec in records:
+        curve = rec["curve"]
+        nb = CURVES[curve]["nbytes"]
+        n = CURVES[curve]["n"]
+        priv = bytes.fromhex(rec["x"])
+
+        # The RFC prints the public key too; deriving it is a second,
+        # independent check on the scalar multiplication.
+        assert pb.native_nistp_pubkey_from_privkey(curve, priv) == bytes.fromhex(
+            rec["ux"] + rec["uy"]
+        ), f"{curve}: public key does not match RFC 6979"
+
+        digest = hashlib.new(hashes[rec["hash"]], rec["msg"].encode()).digest()
+        expected = bytes.fromhex(rec["r"] + rec["s"])
+        got = pb.native_nistp_ecdsa_sign(curve, digest, priv, raw=True)
+        assert got == expected, (
+            f"{curve}/{rec['hash']}/{rec['msg']}: signature does not match "
+            "RFC 6979's published value"
+        )
+
+        # ...and the RFC's signature must verify under the default policy.
+        pub = bytes.fromhex(rec["ux"] + rec["uy"])
+        assert pb.native_nistp_ecdsa_verify(curve, expected, digest, pub, raw=True)
+
+        if int.from_bytes(bytes.fromhex(rec["s"]), "big") > (n - 1) // 2:
+            high_s_seen += 1
+        seen_curves.add(curve)
+        assert len(expected) == 2 * nb
+
+    assert seen_curves == set(CURVE_NAMES), f"corpus covers only {sorted(seen_curves)}"
+    assert high_s_seen > 0, (
+        "no RFC vector in the corpus has a high `s` — this test can no longer "
+        "detect a signer that normalises silently"
+    )
+
+
+def test_rfc6979_vectors_reject_low_s_normalisation() -> None:
+    """The opt-in normalisation must visibly break RFC conformance.
+
+    Stated as a test so the trade-off is a fact in CI rather than a claim in a
+    docstring: `low_s=True` is X9.62-valid and RFC 6979-nonconformant, and a
+    future change that made it the default again would fail here.
+    """
+    hashes = {"SHA-256": "sha256", "SHA-384": "sha384", "SHA-512": "sha512"}
+    diverged = 0
+    for rec in _load_rfc6979_vectors():
+        curve = rec["curve"]
+        n = CURVES[curve]["n"]
+        if int.from_bytes(bytes.fromhex(rec["s"]), "big") <= (n - 1) // 2:
+            continue  # already low; normalisation is a no-op
+        digest = hashlib.new(hashes[rec["hash"]], rec["msg"].encode()).digest()
+        priv = bytes.fromhex(rec["x"])
+        got = pb.native_nistp_ecdsa_sign(curve, digest, priv, raw=True, low_s=True)
+        assert got != bytes.fromhex(rec["r"] + rec["s"])
+        diverged += 1
+    assert diverged > 0
+
+
+# ---------------------------------------------------------------------------
+# INVARIANT-34: low-s is a property of the sign/verify pair
 # ---------------------------------------------------------------------------
 @pytest.mark.parametrize("name", CURVE_NAMES)
-def test_signing_always_emits_low_s(name: str) -> None:
+def test_low_s_is_opt_in_and_default_is_rfc6979_verbatim(name: str) -> None:
+    """The default must NOT normalise; ``low_s=True`` must.
+
+    Over enough signatures the default has to produce at least one high ``s``
+    — if it never did, it would be silently normalising and the RFC 6979
+    conformance claim would be false. ``low_s=True`` must never produce one,
+    and must agree with the default wherever the default was already low.
+    """
     nb, n = CURVES[name]["nbytes"], CURVES[name]["n"]
-    for i in range(6):
+    half = (n - 1) // 2
+    saw_high = False
+
+    for i in range(24):
         priv, _ = pb.native_nistp_keypair(name)
-        raw = pb.native_nistp_ecdsa_sign(name, _digest(name, b"low-s-%d" % i), priv, raw=True)
-        s = int.from_bytes(raw[nb:], "big")
-        assert s <= (n - 1) // 2, f"{name}: signer emitted a high s"
+        digest = _digest(name, b"low-s-%d" % i)
+        default = pb.native_nistp_ecdsa_sign(name, digest, priv, raw=True)
+        normalised = pb.native_nistp_ecdsa_sign(name, digest, priv, raw=True, low_s=True)
+
+        s_default = int.from_bytes(default[nb:], "big")
+        s_low = int.from_bytes(normalised[nb:], "big")
+
+        assert default[:nb] == normalised[:nb], "normalisation must not change r"
+        assert s_low <= half, f"{name}: low_s=True emitted a high s"
+        if s_default > half:
+            saw_high = True
+            assert s_low == n - s_default, "low_s must be exactly the negation"
+        else:
+            assert s_low == s_default, "low_s must be a no-op when s is already low"
+
+    assert saw_high, (
+        f"{name}: 24 signatures with no high s — the default is normalising "
+        "silently, which breaks RFC 6979 conformance"
+    )
 
 
 @pytest.mark.parametrize("name", CURVE_NAMES)
-def test_high_s_twin_accepted_by_default_rejected_when_strict(name: str) -> None:
-    """The malleability twin verifies under X9.62 and not under the strict flag.
+def test_low_s_is_a_property_of_the_sign_verify_pair(name: str) -> None:
+    """INVARIANT-34: neither half of low-`s` means anything without the other.
 
-    Accepting it by default is what makes these curves usable against TLS,
-    X.509, JWS and WebAuthn signers; the strict mode is there for callers who
-    own both ends. Both directions are asserted so neither can silently drift.
+    Asserted as a truth table over the four combinations, because the failure
+    this replaces was exactly a mismatched pair that looked correct from
+    either side alone:
+
+    | signer      | verifier    | own sig | high twin |
+    |-------------|-------------|---------|-----------|
+    | RFC 6979    | permissive  | accept  | accept    |  <- default; malleable
+    | RFC 6979    | strict      | varies  | varies    |  <- incoherent
+    | low_s       | permissive  | accept  | accept    |  <- normalisation buys nothing
+    | low_s       | strict      | accept  | REJECT    |  <- the real property
     """
     nb, n = CURVES[name]["nbytes"], CURVES[name]["n"]
+    half = (n - 1) // 2
     priv, pub = pb.native_nistp_keypair(name)
     digest = _digest(name, b"malleability")
-    raw = pb.native_nistp_ecdsa_sign(name, digest, priv, raw=True)
-    r = raw[:nb]
-    s = int.from_bytes(raw[nb:], "big")
-    twin = r + (n - s).to_bytes(nb, "big")
 
-    assert pb.native_nistp_ecdsa_verify(name, raw, digest, pub, raw=True)
-    assert pb.native_nistp_ecdsa_verify(name, twin, digest, pub, raw=True)
-    assert pb.native_nistp_ecdsa_verify(name, raw, digest, pub, raw=True, require_low_s=True)
-    assert not pb.native_nistp_ecdsa_verify(
-        name, twin, digest, pub, raw=True, require_low_s=True
+    def twin_of(sig: bytes) -> bytes:
+        s = int.from_bytes(sig[nb:], "big")
+        return sig[:nb] + (n - s).to_bytes(nb, "big")
+
+    conformant = pb.native_nistp_ecdsa_sign(name, digest, priv, raw=True)
+    normalised = pb.native_nistp_ecdsa_sign(name, digest, priv, raw=True, low_s=True)
+
+    # Permissive verification accepts both representatives of both signatures.
+    for sig in (conformant, normalised):
+        assert pb.native_nistp_ecdsa_verify(name, sig, digest, pub, raw=True)
+        assert pb.native_nistp_ecdsa_verify(name, twin_of(sig), digest, pub, raw=True)
+
+    # The matched pair — and only the matched pair — rejects the twin while
+    # still accepting the signer's own output.
+    assert pb.native_nistp_ecdsa_verify(
+        name, normalised, digest, pub, raw=True, require_low_s=True
     )
+    assert not pb.native_nistp_ecdsa_verify(
+        name, twin_of(normalised), digest, pub, raw=True, require_low_s=True
+    )
+
+    # The mismatched pair is incoherent: a strict verifier rejects a
+    # conformant signer's own signature whenever `s` came out high.
+    if int.from_bytes(conformant[nb:], "big") > half:
+        assert not pb.native_nistp_ecdsa_verify(
+            name, conformant, digest, pub, raw=True, require_low_s=True
+        )
 
 
 @pytest.mark.parametrize("name", CURVE_NAMES)

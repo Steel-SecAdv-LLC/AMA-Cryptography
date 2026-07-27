@@ -1663,12 +1663,18 @@ AMA_API ama_error_t ama_secp256k1_pubkey_decompress(
 /**
  * @brief NIST prime-curve selector.
  *
- * Numeric values are stable and form part of the AMA ABI.
+ * Numeric values are stable and form part of the AMA ABI.  They are the curve
+ * bit-sizes rather than a dense 0..2 index, for the reason INVARIANT-35 gives:
+ * 0 is what an uninitialised or forgotten field holds, and a dense index makes
+ * that value silently mean "P-256".  With this numbering, 0 names nothing and
+ * is refused.  The values also do not collide with ama_ml_kem_param_set_t or
+ * ama_ml_dsa_param_set_t, so a call routed to the wrong family is rejected
+ * rather than resolved.
  */
 typedef enum {
-    AMA_NIST_CURVE_P256 = 0,  /**< NIST P-256 / secp256r1 / prime256v1 */
-    AMA_NIST_CURVE_P384 = 1,  /**< NIST P-384 / secp384r1 */
-    AMA_NIST_CURVE_P521 = 2   /**< NIST P-521 / secp521r1 */
+    AMA_NIST_CURVE_P256 = 256,  /**< NIST P-256 / secp256r1 / prime256v1 */
+    AMA_NIST_CURVE_P384 = 384,  /**< NIST P-384 / secp384r1 */
+    AMA_NIST_CURVE_P521 = 521   /**< NIST P-521 / secp521r1 */
 } ama_nist_curve_t;
 
 /** Largest field/scalar octet width across the supported curves (P-521). */
@@ -1677,6 +1683,43 @@ typedef enum {
 #define AMA_NISTP_MAX_PUBKEY_BYTES 132
 /** Largest DER ECDSA signature: P-521, long-form SEQUENCE length. */
 #define AMA_NISTP_MAX_SIG_LEN 141
+
+/**
+ * @name ECDSA signing policy flags (for the _ex signing entry points)
+ *
+ * Low-`s` is a property of a sign/verify *pair*. Setting
+ * AMA_NISTP_ECDSA_SIGN_LOW_S without the matching
+ * AMA_NISTP_ECDSA_REQUIRE_LOW_S on the verifier buys nothing — the high twin
+ * of the resulting signature still verifies — and costs RFC 6979 conformance.
+ * Set both, or neither. See INVARIANT-34.
+ * @{
+ */
+/**
+ * Default: deterministic, and `s` emitted exactly as RFC 6979 produces it.
+ *
+ * This is what makes `ama_nistp_ecdsa_sign` reproduce RFC 6979's own
+ * Appendix A.2.5 / A.2.6 / A.2.7 vectors byte-for-byte.
+ */
+#define AMA_NISTP_ECDSA_SIGN_DEFAULT  0u
+/**
+ * Emit the low-`s` representative (negate when `s > (n-1)/2`).
+ *
+ * Still X9.62-conformant, but no longer RFC 6979-conformant: roughly half of
+ * all signatures will differ from the value the RFC specifies. Use only when
+ * the verifier is also set to AMA_NISTP_ECDSA_REQUIRE_LOW_S.
+ */
+#define AMA_NISTP_ECDSA_SIGN_LOW_S    1u
+/**
+ * Mix 32 fresh CSPRNG octets into the RFC 6979 nonce DRBG as "additional
+ * data" (RFC 6979 §3.6).
+ *
+ * The nonce stays safe if the RNG is broken (it degrades to the deterministic
+ * case) and the deterministic path is hardened against fault injection.
+ * Signatures are no longer reproducible, so this cannot be checked against
+ * the RFC vectors — that is what the deterministic default is for.
+ */
+#define AMA_NISTP_ECDSA_SIGN_HEDGED   2u
+/** @} */
 
 /**
  * @name ECDSA verification policy flags (for the _ex entry points)
@@ -1801,8 +1844,11 @@ AMA_API ama_error_t ama_nistp_ecdh(ama_nist_curve_t curve,
  * @brief Deterministic ECDSA signature (RFC 6979), DER-encoded.
  *
  * No randomness is consumed and identical inputs always produce an identical
- * signature.  The emitted `s` is always the low representative, so an
- * AMA-produced signature is never malleable.
+ * signature. `s` is emitted exactly as RFC 6979 specifies it, so this
+ * reproduces the RFC's own Appendix A.2.5 / A.2.6 / A.2.7 vectors
+ * byte-for-byte — pinned by tests/kat/rfc6979/ecdsa_prime_curves.kat.
+ *
+ * Equivalent to ama_nistp_ecdsa_sign_ex(..., AMA_NISTP_ECDSA_SIGN_DEFAULT).
  *
  * @param digest       Digest to sign. This function does NOT hash.
  * @param digest_len   32, 48 or 64. Any other width is rejected.
@@ -1830,16 +1876,33 @@ AMA_API ama_error_t ama_nistp_ecdsa_sign_raw(ama_nist_curve_t curve,
 /**
  * @brief Hedged deterministic ECDSA signature (RFC 6979 §3.6), DER-encoded.
  *
- * Mixes 32 fresh CSPRNG octets into the nonce DRBG as "additional data". The
- * nonce stays safe if the RNG is broken (it degrades to the deterministic
- * case) and stays safe under fault injection against the deterministic path.
- * Signatures are therefore NOT reproducible — use ama_nistp_ecdsa_sign when
+ * Equivalent to ama_nistp_ecdsa_sign_ex(..., AMA_NISTP_ECDSA_SIGN_HEDGED).
+ * Signatures are NOT reproducible — use ama_nistp_ecdsa_sign when
  * reproducibility is the requirement.
  */
 AMA_API ama_error_t ama_nistp_ecdsa_sign_hedged(ama_nist_curve_t curve,
                                                 const uint8_t *digest, size_t digest_len,
                                                 const uint8_t *private_key,
                                                 uint8_t *signature, size_t *signature_len);
+
+/**
+ * @brief ECDSA signature with an explicit AMA_NISTP_ECDSA_SIGN_* policy, DER.
+ *
+ * Every combination of {deterministic, hedged} x {RFC 6979 `s`, low `s`} is
+ * reachable through this one entry point. Unknown flag bits are rejected with
+ * AMA_ERROR_INVALID_PARAM rather than ignored.
+ */
+AMA_API ama_error_t ama_nistp_ecdsa_sign_ex(ama_nist_curve_t curve,
+                                            const uint8_t *digest, size_t digest_len,
+                                            const uint8_t *private_key,
+                                            uint8_t *signature, size_t *signature_len,
+                                            uint32_t flags);
+
+/** @brief As ama_nistp_ecdsa_sign_ex, emitting fixed-width `r || s`. */
+AMA_API ama_error_t ama_nistp_ecdsa_sign_raw_ex(ama_nist_curve_t curve,
+                                                const uint8_t *digest, size_t digest_len,
+                                                const uint8_t *private_key,
+                                                uint8_t *signature, uint32_t flags);
 
 /**
  * @brief Verify a DER-encoded ECDSA signature (default X9.62 policy).

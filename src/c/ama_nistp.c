@@ -42,16 +42,27 @@
  *   public.  This matches `ama_secp256k1_ecdsa_verify` and
  *   `ama_ed25519_batch_verify`.
  *
- * Malleability posture (INVARIANT-34).  Signing always emits the low-`s`
- * representative, so AMA-produced signatures are never malleable.
- * Verification accepts either representative *by default*, because that is
- * what X9.62 / FIPS 186-5 / TLS / JWS / WebAuthn / X.509 require and the
- * entire point of these curves here is interoperating with them; a caller
- * that controls both ends can demand the canonical form with
- * `AMA_NISTP_ECDSA_REQUIRE_LOW_S`.  The checks that do *not* cost interop —
- * minimal DER, `r, s` strictly in `[1, n-1]` rather than reduced, and
- * public-key coordinates strictly in `[0, p)` — are unconditional in both
- * modes, exactly as INVARIANT-28/29 require for secp256k1.
+ * Malleability posture (INVARIANT-34).  Low-`s` is a property of a
+ * sign/verify *pair*, not of either half, and both halves are off by default
+ * on these curves:
+ *
+ *   - Signing emits RFC 6979's `s` verbatim, so `ama_nistp_ecdsa_sign`
+ *     reproduces the RFC's own Appendix A.2.5/A.2.6/A.2.7 vectors exactly.
+ *     `AMA_NISTP_ECDSA_SIGN_LOW_S` opts in to normalisation.
+ *   - Verification accepts either representative, because that is what
+ *     X9.62 / FIPS 186-5 / TLS / JWS / WebAuthn / X.509 require and the entire
+ *     point of these curves here is interoperating with them.
+ *     `AMA_NISTP_ECDSA_REQUIRE_LOW_S` opts in to rejection.
+ *
+ * Normalising while verifying permissively — which this file did before —
+ * prevents nothing: the twin of an AMA signature still verifies under AMA.
+ * It only costs RFC 6979 conformance.  A caller who controls both ends sets
+ * both flags and gets the real property.
+ *
+ * The checks that do *not* cost interop — minimal DER, `r, s` strictly in
+ * `[1, n-1]` rather than reduced, and public-key coordinates strictly in
+ * `[0, p)` — are unconditional in every mode, exactly as INVARIANT-28/29
+ * require for secp256k1.
  */
 
 #include "../include/ama_cryptography.h"
@@ -1466,7 +1477,7 @@ static ama_error_t nistp_ecdsa_sign_core(const nistp_curve *c,
                                          const uint8_t *digest, size_t digest_len,
                                          const uint8_t *private_key,
                                          const uint8_t *extra, size_t extra_len,
-                                         uint8_t *r_out, uint8_t *s_out) {
+                                         int low_s, uint8_t *r_out, uint8_t *s_out) {
     unsigned nl = c->nlimbs;
     uint64_t d[AMA_NISTP_MAX_LIMBS], k[AMA_NISTP_MAX_LIMBS], z[AMA_NISTP_MAX_LIMBS];
     uint64_t dm[AMA_NISTP_MAX_LIMBS], km[AMA_NISTP_MAX_LIMBS], zm[AMA_NISTP_MAX_LIMBS];
@@ -1525,10 +1536,20 @@ static ama_error_t nistp_ecdsa_sign_core(const nistp_curve *c,
         goto done;
     }
 
-    /* Emit the low-`s` representative unconditionally (INVARIANT-34): still
-     * X9.62-conformant, and it means AMA never produces a malleable
-     * signature even though it accepts third-party ones. */
-    if (nistp_scalar_is_high(ss, c)) {
+    /* Low-`s` normalisation is OPT-IN (INVARIANT-34).
+     *
+     * The default emits RFC 6979's `s` verbatim, because that is what the RFC
+     * specifies and what its own published vectors contain — normalising here
+     * by default made this function fail RFC 6979 Appendix A.2.5/A.2.6/A.2.7
+     * on every vector whose natural `s` happens to be high, roughly half of
+     * them, while still calling itself "deterministic per RFC 6979".
+     *
+     * Normalising is only a *security* property when it is paired with a
+     * verifier that rejects the high twin.  Paired with the X9.62-conformant
+     * verifier that these curves need in order to interoperate, it prevents
+     * nothing — the twin of an AMA signature still verifies under AMA — and
+     * costs conformance.  So the caller asks for the pair or neither. */
+    if (low_s && nistp_scalar_is_high(ss, c)) {
         uint64_t zero[AMA_NISTP_MAX_LIMBS];
         memset(zero, 0, sizeof(zero));
         nistp_mod_sub(ss, zero, ss, c->n, nl);
@@ -1558,23 +1579,62 @@ done:
     return rc;
 }
 
-AMA_API ama_error_t ama_nistp_ecdsa_sign_raw(ama_nist_curve_t curve,
-                                             const uint8_t *digest, size_t digest_len,
-                                             const uint8_t *private_key,
-                                             uint8_t *signature) {
+/**
+ * Shared signing body for every public entry point.
+ *
+ * `flags` is the single place the two independent choices live — hedged vs.
+ * deterministic, and low-`s` vs. RFC 6979 verbatim.  Folding them into one
+ * argument rather than a matrix of `_hedged` / `_low_s` / `_hedged_low_s`
+ * entry points is what keeps every combination reachable; the previous shape
+ * made hedged+raw unreachable purely because nobody had written the fourth
+ * function.
+ */
+static ama_error_t nistp_sign_dispatch(const nistp_curve *c,
+                                       const uint8_t *digest, size_t digest_len,
+                                       const uint8_t *private_key,
+                                       uint32_t flags,
+                                       uint8_t *r_out, uint8_t *s_out) {
+    uint8_t entropy[32];
+    const uint8_t *extra = NULL;
+    size_t extra_len = 0;
+    ama_error_t rc;
+
+    if (flags & ~(AMA_NISTP_ECDSA_SIGN_LOW_S | AMA_NISTP_ECDSA_SIGN_HEDGED))
+        return AMA_ERROR_INVALID_PARAM;   /* unknown flag bits are rejected */
+
+    if (flags & AMA_NISTP_ECDSA_SIGN_HEDGED) {
+        if (ama_randombytes(entropy, sizeof(entropy)) != AMA_SUCCESS)
+            return AMA_ERROR_CRYPTO;
+        extra = entropy;
+        extra_len = sizeof(entropy);
+    }
+
+    rc = nistp_ecdsa_sign_core(c, digest, digest_len, private_key,
+                               extra, extra_len,
+                               (flags & AMA_NISTP_ECDSA_SIGN_LOW_S) ? 1 : 0,
+                               r_out, s_out);
+    ama_secure_memzero(entropy, sizeof(entropy));
+    return rc;
+}
+
+AMA_API ama_error_t ama_nistp_ecdsa_sign_raw_ex(ama_nist_curve_t curve,
+                                                const uint8_t *digest, size_t digest_len,
+                                                const uint8_t *private_key,
+                                                uint8_t *signature, uint32_t flags) {
     const nistp_curve *c = nistp_lookup(curve);
     if (!c || !digest || !private_key || !signature)
         return AMA_ERROR_INVALID_PARAM;
     if (!nistp_digest_len_ok(digest_len))
         return AMA_ERROR_INVALID_PARAM;
-    return nistp_ecdsa_sign_core(c, digest, digest_len, private_key, NULL, 0,
-                                 signature, signature + c->nbytes);
+    return nistp_sign_dispatch(c, digest, digest_len, private_key, flags,
+                               signature, signature + c->nbytes);
 }
 
-AMA_API ama_error_t ama_nistp_ecdsa_sign(ama_nist_curve_t curve,
-                                         const uint8_t *digest, size_t digest_len,
-                                         const uint8_t *private_key,
-                                         uint8_t *signature, size_t *signature_len) {
+AMA_API ama_error_t ama_nistp_ecdsa_sign_ex(ama_nist_curve_t curve,
+                                            const uint8_t *digest, size_t digest_len,
+                                            const uint8_t *private_key,
+                                            uint8_t *signature, size_t *signature_len,
+                                            uint32_t flags) {
     const nistp_curve *c = nistp_lookup(curve);
     uint8_t r[66], s[66];
     ama_error_t rc;
@@ -1584,7 +1644,7 @@ AMA_API ama_error_t ama_nistp_ecdsa_sign(ama_nist_curve_t curve,
     if (!nistp_digest_len_ok(digest_len))
         return AMA_ERROR_INVALID_PARAM;
 
-    rc = nistp_ecdsa_sign_core(c, digest, digest_len, private_key, NULL, 0, r, s);
+    rc = nistp_sign_dispatch(c, digest, digest_len, private_key, flags, r, s);
     if (rc == AMA_SUCCESS)
         *signature_len = nistp_der_encode(signature, r, s, c->nbytes);
 
@@ -1593,30 +1653,30 @@ AMA_API ama_error_t ama_nistp_ecdsa_sign(ama_nist_curve_t curve,
     return rc;
 }
 
+AMA_API ama_error_t ama_nistp_ecdsa_sign_raw(ama_nist_curve_t curve,
+                                             const uint8_t *digest, size_t digest_len,
+                                             const uint8_t *private_key,
+                                             uint8_t *signature) {
+    return ama_nistp_ecdsa_sign_raw_ex(curve, digest, digest_len, private_key,
+                                       signature, AMA_NISTP_ECDSA_SIGN_DEFAULT);
+}
+
+AMA_API ama_error_t ama_nistp_ecdsa_sign(ama_nist_curve_t curve,
+                                         const uint8_t *digest, size_t digest_len,
+                                         const uint8_t *private_key,
+                                         uint8_t *signature, size_t *signature_len) {
+    return ama_nistp_ecdsa_sign_ex(curve, digest, digest_len, private_key,
+                                   signature, signature_len,
+                                   AMA_NISTP_ECDSA_SIGN_DEFAULT);
+}
+
 AMA_API ama_error_t ama_nistp_ecdsa_sign_hedged(ama_nist_curve_t curve,
                                                 const uint8_t *digest, size_t digest_len,
                                                 const uint8_t *private_key,
                                                 uint8_t *signature, size_t *signature_len) {
-    const nistp_curve *c = nistp_lookup(curve);
-    uint8_t r[66], s[66], extra[32];
-    ama_error_t rc;
-
-    if (!c || !digest || !private_key || !signature || !signature_len)
-        return AMA_ERROR_INVALID_PARAM;
-    if (!nistp_digest_len_ok(digest_len))
-        return AMA_ERROR_INVALID_PARAM;
-    if (ama_randombytes(extra, sizeof(extra)) != AMA_SUCCESS)
-        return AMA_ERROR_CRYPTO;
-
-    rc = nistp_ecdsa_sign_core(c, digest, digest_len, private_key,
-                               extra, sizeof(extra), r, s);
-    if (rc == AMA_SUCCESS)
-        *signature_len = nistp_der_encode(signature, r, s, c->nbytes);
-
-    ama_secure_memzero(r, sizeof(r));
-    ama_secure_memzero(s, sizeof(s));
-    ama_secure_memzero(extra, sizeof(extra));
-    return rc;
+    return ama_nistp_ecdsa_sign_ex(curve, digest, digest_len, private_key,
+                                   signature, signature_len,
+                                   AMA_NISTP_ECDSA_SIGN_HEDGED);
 }
 
 /** Shared verification body over already-extracted fixed-width r and s. */

@@ -70,15 +70,23 @@ P-256 would be the worst possible failure mode.
 
 ## Malleability posture (INVARIANT-34)
 
-Signing **always** emits the low-`s` representative, so an AMA-produced
-signature is never malleable.
+Low-`s` is a property of the **sign/verify pair**, and both halves are off by
+default here.
 
-Verification accepts **either** representative by default. That is a deliberate
-divergence from the secp256k1 default (INVARIANT-28), and it is the whole point:
-X9.62, FIPS 186-5, TLS, X.509, JWS and WebAuthn all permit either `s`, and none
-of their signers normalise. A strict-by-default verifier here would reject
-conformant third-party signatures — which is precisely the adoption blocker this
-work exists to remove.
+Signing emits RFC 6979's `s` verbatim, so `ama_nistp_ecdsa_sign` reproduces the
+RFC's own Appendix A.2.5/A.2.6/A.2.7 vectors byte-for-byte. Verification accepts
+either representative, because X9.62, FIPS 186-5, TLS, X.509, JWS and WebAuthn
+all permit either `s` and essentially none of their signers normalise — a
+strict-by-default verifier would reject conformant third-party signatures,
+which is precisely the adoption blocker this work exists to remove.
+
+`AMA_NISTP_ECDSA_SIGN_LOW_S` and `AMA_NISTP_ECDSA_REQUIRE_LOW_S` turn both
+halves on together. Setting only one is incoherent, and the first version of
+this file did exactly that: it normalised on the signer while verifying
+permissively. That combination prevents nothing — the twin of an AMA signature
+still verified under AMA — and cost RFC 6979 conformance on roughly half of all
+signatures while the header still claimed the RFC's name. See INVARIANT-34 for
+the full account.
 
 Everything that costs no interoperability stays unconditional in both modes:
 
@@ -89,8 +97,8 @@ Everything that costs no interoperability stays unconditional in both modes:
 * public-key coordinates strictly in `[0, p)` — the INVARIANT-29 rule;
 * the point on the curve and not the identity.
 
-Callers who control both ends can demand the canonical form with
-`require_low_s=True` (`AMA_NISTP_ECDSA_REQUIRE_LOW_S` in C).
+Callers who control both ends set `low_s=True` on the signer **and**
+`require_low_s=True` on the verifier.
 
 ## Implementation
 
@@ -158,12 +166,21 @@ behaviour and can be added under the existing differential test.
 | Gate | What it proves |
 |---|---|
 | `wycheproof_vectors/` — 1530 vectors across `ecdsa_secp256r1_sha256`, `ecdsa_secp384r1_sha384`, `ecdsa_secp521r1_sha512` | adversarial verification: encoding abuse, edge-case signatures, invalid points. **0 failures, 0 policy exceptions** |
-| `tests/test_nistp_curves.py` — 85 tests | signing agrees byte-for-byte with an independent pure-Python RFC 6979 reference built from the SP 800-186 parameters; low-`s`/X9.62 policy in both directions; nonce non-repetition; ECDH against the reference; invalid-curve rejection; the full negative space |
+| `tests/kat/rfc6979/ecdsa_prime_curves.kat` | all 18 in-scope vectors from RFC 6979 Appendix A.2.5/A.2.6/A.2.7 — the specification's own answer key, replayed including its printed public keys |
+| `tests/test_nistp_curves.py` — 90 tests | signing agrees byte-for-byte with a pure-Python reference derived **from the specification only**, under both signing policies; the four-way low-`s` truth table; nonce non-repetition; ECDH against the reference; invalid-curve rejection; the full negative space |
+| `tests/test_selector_strictness.py` — 41 tests | INVARIANT-35: every selector refuses every unrecognised value rather than resolving a neighbour |
 | `tests/c/test_nistp.c` | the hardcoded Montgomery constants re-derived from `p` and `n` alone; the windowed scalar multiplier against a naive double-and-add reference over the boundary lattice |
 
-The Wycheproof suites cover *verification* only. The Python reference is what
-pins *signing* — including the nonce, which is re-derived from RFC 6979's own
-HMAC_DRBG construction rather than from this implementation.
+The Wycheproof suites cover *verification* only; RFC 6979's vectors and the
+Python reference are what pin *signing*.
+
+A note on how that reference must be written, learned the hard way: the first
+version of it normalised `s` because the C code did, so the two agreed by
+construction and neither was checked against the RFC. **A reference must be
+derived from the specification only, never from the implementation it checks.**
+`_ref_sign` now takes the signing policy as a parameter rather than baking one
+in, and the RFC's own vectors sit behind it as the thing neither implementation
+can talk its way out of.
 
 ## Deliberately not implemented
 

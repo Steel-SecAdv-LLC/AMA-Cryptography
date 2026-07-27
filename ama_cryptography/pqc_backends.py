@@ -38,12 +38,14 @@ from typing import Any, Callable, Optional, Union, cast
 
 from ama_cryptography._finalizer_health import record_finalizer_error
 from ama_cryptography.exceptions import (
+    NativeBackendUnavailableError,
     PQCUnavailableError,
     QuantumSignatureUnavailableError,
     SecurityWarning,
 )
 
 __all__ = [
+    "NativeBackendUnavailableError",
     "PQCUnavailableError",
     "QuantumSignatureUnavailableError",
     "KyberUnavailableError",
@@ -1025,9 +1027,14 @@ def _setup_ml_dsa_ctypes(lib: ctypes.CDLL) -> bool:
 _NISTP_NATIVE_AVAILABLE = False
 
 # Curve selectors — must match ama_nist_curve_t in include/ama_cryptography.h.
-NISTP_CURVE_P256 = 0
-NISTP_CURVE_P384 = 1
-NISTP_CURVE_P521 = 2
+#
+# The curve bit-sizes, not a dense 0..2 index: 0 is what an uninitialised or
+# forgotten field holds, and a dense index would make that silently mean
+# "P-256" (INVARIANT-35). These also do not collide with the ML-KEM or ML-DSA
+# selector values, so a call routed to the wrong family is refused.
+NISTP_CURVE_P256 = 256
+NISTP_CURVE_P384 = 384
+NISTP_CURVE_P521 = 521
 
 # Canonical name -> selector.  The aliases are the names these curves actually
 # travel under in the ecosystems this support exists for: SEC 1 / OpenSSL
@@ -1057,7 +1064,16 @@ NISTP_DEFAULT_HASH: dict = {
     NISTP_CURVE_P521: "sha512",
 }
 
-# ECDSA verification policy flags (mirror include/ama_cryptography.h).
+# ECDSA policy flags (mirror include/ama_cryptography.h).
+#
+# Low-`s` is a property of the sign/verify *pair*. Setting the signing flag
+# without the matching verification flag buys nothing — the high twin of the
+# resulting signature still verifies — and costs RFC 6979 conformance. See
+# INVARIANT-34.
+AMA_NISTP_ECDSA_SIGN_DEFAULT = 0
+AMA_NISTP_ECDSA_SIGN_LOW_S = 1
+AMA_NISTP_ECDSA_SIGN_HEDGED = 2
+
 AMA_NISTP_ECDSA_VERIFY_DEFAULT = 0
 AMA_NISTP_ECDSA_REQUIRE_LOW_S = 1
 
@@ -1135,6 +1151,17 @@ def _setup_nistp_ctypes(lib: ctypes.CDLL) -> bool:
         lib.ama_nistp_ecdsa_sign_hedged.argtypes = lib.ama_nistp_ecdsa_sign.argtypes
         lib.ama_nistp_ecdsa_sign_hedged.restype = ctypes.c_int
 
+        lib.ama_nistp_ecdsa_sign_ex.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,  # digest
+            ctypes.c_size_t,  # digest_len
+            ctypes.c_char_p,  # private_key
+            ctypes.c_char_p,  # signature (out, DER)
+            ctypes.POINTER(ctypes.c_size_t),  # signature_len (out)
+            ctypes.c_uint32,  # flags (AMA_NISTP_ECDSA_SIGN_*)
+        ]
+        lib.ama_nistp_ecdsa_sign_ex.restype = ctypes.c_int
+
         lib.ama_nistp_ecdsa_sign_raw.argtypes = [
             ctypes.c_int,
             ctypes.c_char_p,  # digest
@@ -1143,6 +1170,16 @@ def _setup_nistp_ctypes(lib: ctypes.CDLL) -> bool:
             ctypes.c_char_p,  # signature (out, r||s)
         ]
         lib.ama_nistp_ecdsa_sign_raw.restype = ctypes.c_int
+
+        lib.ama_nistp_ecdsa_sign_raw_ex.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,  # digest
+            ctypes.c_size_t,  # digest_len
+            ctypes.c_char_p,  # private_key
+            ctypes.c_char_p,  # signature (out, r||s)
+            ctypes.c_uint32,  # flags (AMA_NISTP_ECDSA_SIGN_*)
+        ]
+        lib.ama_nistp_ecdsa_sign_raw_ex.restype = ctypes.c_int
 
         lib.ama_nistp_ecdsa_verify_ex.argtypes = [
             ctypes.c_int,
@@ -2976,7 +3013,7 @@ def native_ed25519_keypair() -> tuple:
     import secrets as _secrets
 
     if _native_lib is None or not _ED25519_NATIVE_AVAILABLE:
-        raise RuntimeError("Ed25519 native backend not available. " + _INSTALL_HINT)
+        raise NativeBackendUnavailableError("Ed25519 native backend not available. " + _INSTALL_HINT)
 
     pk_buf = ctypes.create_string_buffer(ED25519_PUBLIC_KEY_BYTES)
     sk_buf = ctypes.create_string_buffer(ED25519_SECRET_KEY_BYTES)
@@ -3013,7 +3050,7 @@ def native_ed25519_keypair_from_seed(seed: bytes) -> tuple:
         raise ValueError(f"Ed25519 seed must be 32 bytes, got {len(seed)}")
 
     if _native_lib is None or not _ED25519_NATIVE_AVAILABLE:
-        raise RuntimeError("Ed25519 native backend not available. " + _INSTALL_HINT)
+        raise NativeBackendUnavailableError("Ed25519 native backend not available. " + _INSTALL_HINT)
 
     pk_buf = ctypes.create_string_buffer(ED25519_PUBLIC_KEY_BYTES)
     sk_buf = ctypes.create_string_buffer(ED25519_SECRET_KEY_BYTES)
@@ -3057,7 +3094,7 @@ def native_ed25519_sign(message: bytes, secret_key: Union[bytes, bytearray]) -> 
         return sig_result
 
     if _native_lib is None or not _ED25519_NATIVE_AVAILABLE:
-        raise RuntimeError("Ed25519 native backend not available. " + _INSTALL_HINT)
+        raise NativeBackendUnavailableError("Ed25519 native backend not available. " + _INSTALL_HINT)
 
     sig_buf = ctypes.create_string_buffer(ED25519_SIGNATURE_BYTES)
     # INVARIANT-6: use mutable ctypes buffer to avoid non-wipeable bytes() copy
@@ -3148,7 +3185,7 @@ def native_ed25519_verify(signature: bytes, message: bytes, public_key: bytes) -
         return verify_result
 
     if _native_lib is None or not _ED25519_NATIVE_AVAILABLE:
-        raise RuntimeError("Ed25519 native backend not available. " + _INSTALL_HINT)
+        raise NativeBackendUnavailableError("Ed25519 native backend not available. " + _INSTALL_HINT)
 
     rc: int = _native_lib.ama_ed25519_verify(
         signature, message, ctypes.c_size_t(len(message)), public_key
@@ -3179,7 +3216,7 @@ def native_ed25519_batch_verify(
         ValueError: If any entry has invalid lengths
     """
     if _native_lib is None or not _ED25519_NATIVE_AVAILABLE:
-        raise RuntimeError("Ed25519 native backend not available. " + _INSTALL_HINT)
+        raise NativeBackendUnavailableError("Ed25519 native backend not available. " + _INSTALL_HINT)
 
     count = len(entries)
     if count == 0:
@@ -3256,7 +3293,7 @@ def native_aes256_gcm_encrypt(
         ValueError: If key or nonce has incorrect length
     """
     if _native_lib is None or not _AES_GCM_NATIVE_AVAILABLE:
-        raise RuntimeError("AES-256-GCM native backend not available. " + _INSTALL_HINT)
+        raise NativeBackendUnavailableError("AES-256-GCM native backend not available. " + _INSTALL_HINT)
 
     if len(key) != AES256_KEY_BYTES:
         raise ValueError(f"AES-256 key must be {AES256_KEY_BYTES} bytes, got {len(key)}")
@@ -3319,7 +3356,7 @@ def native_aes256_gcm_decrypt(
             authentication tag verification fails
     """
     if _native_lib is None or not _AES_GCM_NATIVE_AVAILABLE:
-        raise RuntimeError("AES-256-GCM native backend not available. " + _INSTALL_HINT)
+        raise NativeBackendUnavailableError("AES-256-GCM native backend not available. " + _INSTALL_HINT)
 
     if len(key) != AES256_KEY_BYTES:
         raise ValueError(f"AES-256 key must be {AES256_KEY_BYTES} bytes, got {len(key)}")
@@ -3408,7 +3445,7 @@ def native_hkdf(
         return hkdf_result
 
     if _native_lib is None or not _HKDF_NATIVE_AVAILABLE:
-        raise RuntimeError("HKDF native backend not available. " + _INSTALL_HINT)
+        raise NativeBackendUnavailableError("HKDF native backend not available. " + _INSTALL_HINT)
 
     okm_buf = ctypes.create_string_buffer(length)
 
@@ -3453,7 +3490,7 @@ def _native_hkdf_sha2(
     if length > max_len:
         raise ValueError(f"HKDF output length must be <= {max_len}, got {length}")
     if _native_lib is None or not _HKDF_SHA2_NATIVE_AVAILABLE:
-        raise RuntimeError("HKDF-SHA-2 native backend not available. " + _INSTALL_HINT)
+        raise NativeBackendUnavailableError("HKDF-SHA-2 native backend not available. " + _INSTALL_HINT)
 
     okm_buf = ctypes.create_string_buffer(length)
     salt_len = len(salt) if salt else 0
@@ -3591,7 +3628,7 @@ def native_sha3_256(data: bytes) -> bytes:
             raise RuntimeError(f"Cython SHA3-256 panic: {exc}") from exc
 
     if _native_lib is None or not _SHA3_256_NATIVE_AVAILABLE:
-        raise RuntimeError("SHA3-256 native backend not available. " + _INSTALL_HINT)
+        raise NativeBackendUnavailableError("SHA3-256 native backend not available. " + _INSTALL_HINT)
 
     out_buf = ctypes.create_string_buffer(32)
 
@@ -3623,7 +3660,7 @@ def native_sha256(data: bytes) -> bytes:
         RuntimeError: If the native library / ama_sha256 symbol is unavailable.
     """
     if _native_lib is None or not _SHA256_NATIVE_AVAILABLE:
-        raise RuntimeError("SHA-256 native backend not available. " + _INSTALL_HINT)
+        raise NativeBackendUnavailableError("SHA-256 native backend not available. " + _INSTALL_HINT)
 
     out_buf = ctypes.create_string_buffer(32)
     # C signature is OUTPUT-FIRST: ama_sha256(out, in, inlen).  Do NOT reorder
@@ -3650,7 +3687,7 @@ def native_sha3_512(data: bytes) -> bytes:
         RuntimeError: If the native backend is not available.
     """
     if _native_lib is None or not _SHA3_EXT_NATIVE_AVAILABLE:
-        raise RuntimeError("SHA3-512 native backend not available. " + _INSTALL_HINT)
+        raise NativeBackendUnavailableError("SHA3-512 native backend not available. " + _INSTALL_HINT)
 
     out_buf = ctypes.create_string_buffer(64)
     rc = _native_lib.ama_sha3_512(data, ctypes.c_size_t(len(data)), out_buf)
@@ -3664,7 +3701,7 @@ def _native_shake(fn_name: str, data: bytes, length: int) -> bytes:
     if length < 0:
         raise ValueError(f"SHAKE output length must be >= 0, got {length}")
     if _native_lib is None or not _SHA3_EXT_NATIVE_AVAILABLE:
-        raise RuntimeError("SHAKE native backend not available. " + _INSTALL_HINT)
+        raise NativeBackendUnavailableError("SHAKE native backend not available. " + _INSTALL_HINT)
     # Zero-length squeeze matches hashlib.shake_*.digest(0) == b"".  The C
     # kernel rejects a NULL output pointer, so short-circuit here.
     if length == 0:
@@ -3738,7 +3775,7 @@ def native_hmac_sha3_256(key: bytes, msg: bytes) -> bytes:
         RuntimeError: If native library is not available
     """
     if _native_lib is None or not _HMAC_SHA3_256_NATIVE_AVAILABLE:
-        raise RuntimeError("HMAC-SHA3-256 native backend not available. " + _INSTALL_HINT)
+        raise NativeBackendUnavailableError("HMAC-SHA3-256 native backend not available. " + _INSTALL_HINT)
 
     out_buf = ctypes.create_string_buffer(32)
 
@@ -3773,7 +3810,7 @@ def native_hmac_sha512(key: bytes, msg: bytes) -> bytes:
         RuntimeError: If native library is not available
     """
     if _native_lib is None or not _HMAC_SHA512_NATIVE_AVAILABLE:
-        raise RuntimeError("HMAC-SHA-512 native backend not available. " + _INSTALL_HINT)
+        raise NativeBackendUnavailableError("HMAC-SHA-512 native backend not available. " + _INSTALL_HINT)
 
     out_buf = ctypes.create_string_buffer(64)
 
@@ -3818,7 +3855,7 @@ def native_hmac_sha384(key: bytes, msg: bytes) -> bytes:
                       ama_hmac_sha384 symbol was not bound at module init.
     """
     if _native_lib is None or not _HMAC_SHA384_NATIVE_AVAILABLE:
-        raise RuntimeError("HMAC-SHA-384 native backend not available. " + _INSTALL_HINT)
+        raise NativeBackendUnavailableError("HMAC-SHA-384 native backend not available. " + _INSTALL_HINT)
 
     out_buf = ctypes.create_string_buffer(48)
 
@@ -3874,7 +3911,7 @@ def native_hmac_sha256(key: bytes, msg: bytes) -> bytes:
                       init (older AMA build without the v3.2.0 wiring).
     """
     if _native_lib is None or not _HMAC_SHA256_NATIVE_AVAILABLE:
-        raise RuntimeError("HMAC-SHA-256 native backend not available. " + _INSTALL_HINT)
+        raise NativeBackendUnavailableError("HMAC-SHA-256 native backend not available. " + _INSTALL_HINT)
 
     out_buf = ctypes.create_string_buffer(32)
 
@@ -3919,7 +3956,7 @@ def native_hmac_sha256_2(key: bytes, msg1: bytes, msg2: bytes) -> bytes:
                       ama_hmac_sha256_2 symbol was not bound.
     """
     if _native_lib is None or not _HMAC_SHA256_NATIVE_AVAILABLE:
-        raise RuntimeError("HMAC-SHA-256 native backend not available. " + _INSTALL_HINT)
+        raise NativeBackendUnavailableError("HMAC-SHA-256 native backend not available. " + _INSTALL_HINT)
 
     out_buf = ctypes.create_string_buffer(32)
 
@@ -3983,7 +4020,7 @@ def hmac_sha3_256(key: bytes, msg: bytes) -> bytes:
             Cython extension nor native C library found).
     """
     if not HMAC_SHA3_256_AVAILABLE:
-        raise RuntimeError("HMAC-SHA3-256 backend not available. " + _INSTALL_HINT)
+        raise NativeBackendUnavailableError("HMAC-SHA3-256 backend not available. " + _INSTALL_HINT)
     if _cy_hmac_fn is not None:
         try:
             return _cy_hmac_fn(key, msg)
@@ -4150,7 +4187,7 @@ def native_secp256k1_pubkey_from_privkey(privkey: bytes) -> bytes:
         raise ValueError(f"Private key must be {SECP256K1_PRIVKEY_BYTES} bytes, got {len(privkey)}")
 
     if _native_lib is None or not _SECP256K1_NATIVE_AVAILABLE:
-        raise RuntimeError("secp256k1 native backend not available. " + _INSTALL_HINT)
+        raise NativeBackendUnavailableError("secp256k1 native backend not available. " + _INSTALL_HINT)
 
     pubkey_buf = ctypes.create_string_buffer(SECP256K1_PUBKEY_BYTES)
     rc = _native_lib.ama_secp256k1_pubkey_from_privkey(privkey, pubkey_buf)
@@ -4193,7 +4230,7 @@ def native_secp256k1_ecdsa_sign(message_digest: bytes, privkey: bytes) -> bytes:
         raise ValueError(f"Private key must be {SECP256K1_PRIVKEY_BYTES} bytes, got {len(privkey)}")
 
     if _native_lib is None or not _SECP256K1_NATIVE_AVAILABLE:
-        raise RuntimeError("secp256k1 native backend not available. " + _INSTALL_HINT)
+        raise NativeBackendUnavailableError("secp256k1 native backend not available. " + _INSTALL_HINT)
 
     sig_buf = ctypes.create_string_buffer(SECP256K1_ECDSA_MAX_SIG_BYTES)
     sig_len = ctypes.c_size_t(0)
@@ -4253,7 +4290,7 @@ def native_secp256k1_ecdsa_verify(
         )
 
     if _native_lib is None or not _SECP256K1_NATIVE_AVAILABLE:
-        raise RuntimeError("secp256k1 native backend not available. " + _INSTALL_HINT)
+        raise NativeBackendUnavailableError("secp256k1 native backend not available. " + _INSTALL_HINT)
 
     flags = AMA_SECP256K1_ECDSA_ALLOW_HIGH_S if allow_high_s else AMA_SECP256K1_ECDSA_VERIFY_STRICT
     rc = int(
@@ -4308,11 +4345,13 @@ def _ml_dsa_id(ps: Union[int, str]) -> int:
 
 
 def _ml_kem_require_native() -> None:
+    """INVARIANT-7: refuse rather than substitute anything."""
     if _native_lib is None or not _ML_KEM_NATIVE_AVAILABLE:
         raise PQCUnavailableError("ML-KEM native backend not available. " + _INSTALL_HINT)
 
 
 def _ml_dsa_require_native() -> None:
+    """INVARIANT-7: refuse rather than substitute anything."""
     if _native_lib is None or not _ML_DSA_NATIVE_AVAILABLE:
         raise PQCUnavailableError("ML-DSA native backend not available. " + _INSTALL_HINT)
 
@@ -4590,8 +4629,11 @@ def _nistp_curve_id(curve: Union[int, str]) -> int:
 
 
 def _nistp_require_native() -> None:
+    """INVARIANT-7: refuse rather than substitute anything."""
     if _native_lib is None or not _NISTP_NATIVE_AVAILABLE:
-        raise RuntimeError("NIST prime-curve native backend not available. " + _INSTALL_HINT)
+        raise NativeBackendUnavailableError(
+            "NIST prime-curve native backend not available. " + _INSTALL_HINT
+        )
 
 
 def _nistp_check_digest(digest: bytes) -> None:
@@ -4622,7 +4664,8 @@ def native_nistp_keypair(curve: Union[int, str]) -> tuple:
 
     Raises:
         ValueError: If the curve is unknown.
-        RuntimeError: If the native library is unavailable or the CSPRNG failed.
+        NativeBackendUnavailableError: If the native library is unavailable.
+        RuntimeError: If the CSPRNG failed.
     """
     cid = _nistp_curve_id(curve)
     _nistp_require_native()
@@ -4753,15 +4796,14 @@ def native_nistp_ecdsa_sign(
     *,
     raw: bool = False,
     hedged: bool = False,
+    low_s: bool = False,
 ) -> bytes:
     """
     Sign a digest with ECDSA over a NIST prime curve.
 
-    Deterministic per RFC 6979 by default: no randomness is consumed and
-    identical inputs always produce an identical signature. The emitted ``s``
-    is always the low representative, so an AMA-produced signature is never
-    malleable — even though verification accepts either representative for
-    interoperability (see ``native_nistp_ecdsa_verify``).
+    Deterministic per RFC 6979 by default, and *conformant* to it: ``s`` is
+    emitted exactly as the RFC produces it, so this reproduces RFC 6979's own
+    Appendix A.2.5 / A.2.6 / A.2.7 vectors byte-for-byte.
 
     Args:
         curve: Curve selector or name.
@@ -4773,13 +4815,19 @@ def native_nistp_ecdsa_sign(
         hedged: Mix 32 fresh CSPRNG bytes into the nonce DRBG per RFC 6979
             §3.6. Keeps the nonce safe if the RNG is broken *and* hardens the
             deterministic path against fault injection — at the cost of
-            reproducibility. Cannot be combined with ``raw``.
+            reproducibility.
+        low_s: Emit the low-``s`` representative. This is X9.62-conformant but
+            NOT RFC 6979-conformant: roughly half of all signatures will differ
+            from the value the RFC specifies. It is a security property only
+            when paired with ``require_low_s=True`` verification — on its own
+            the high twin of the signature still verifies. Set both or neither
+            (INVARIANT-34).
 
     Returns:
         DER signature (8..141 bytes) or ``2 * field_bytes`` raw bytes.
 
     Raises:
-        ValueError: On a wrong length or an unsupported combination.
+        ValueError: On a wrong length or an unsupported digest width.
         RuntimeError: If the native library is unavailable or signing failed.
     """
     cid = _nistp_curve_id(curve)
@@ -4787,16 +4835,18 @@ def native_nistp_ecdsa_sign(
     _nistp_check_digest(message_digest)
     if len(privkey) != nb:
         raise ValueError(f"Private key must be {nb} bytes, got {len(privkey)}")
-    if raw and hedged:
-        raise ValueError(
-            "hedged signing emits DER only; convert with native_nistp_sig_der_to_raw"
-        )
     _nistp_require_native()
+
+    flags = AMA_NISTP_ECDSA_SIGN_DEFAULT
+    if low_s:
+        flags |= AMA_NISTP_ECDSA_SIGN_LOW_S
+    if hedged:
+        flags |= AMA_NISTP_ECDSA_SIGN_HEDGED
 
     if raw:
         out = ctypes.create_string_buffer(2 * nb)
-        rc = _native_lib.ama_nistp_ecdsa_sign_raw(
-            cid, bytes(message_digest), len(message_digest), bytes(privkey), out
+        rc = _native_lib.ama_nistp_ecdsa_sign_raw_ex(
+            cid, bytes(message_digest), len(message_digest), bytes(privkey), out, flags
         )
         if rc != 0:
             raise RuntimeError(f"NIST curve ECDSA signing failed (rc={rc})")
@@ -4804,18 +4854,14 @@ def native_nistp_ecdsa_sign(
 
     out = ctypes.create_string_buffer(NISTP_MAX_SIG_LEN)
     out_len = ctypes.c_size_t(0)
-    fn = (
-        _native_lib.ama_nistp_ecdsa_sign_hedged
-        if hedged
-        else _native_lib.ama_nistp_ecdsa_sign
-    )
-    rc = fn(
+    rc = _native_lib.ama_nistp_ecdsa_sign_ex(
         cid,
         bytes(message_digest),
         len(message_digest),
         bytes(privkey),
         out,
         ctypes.byref(out_len),
+        flags,
     )
     if rc != 0:
         raise RuntimeError(f"NIST curve ECDSA signing failed (rc={rc})")
@@ -4843,8 +4889,13 @@ def native_nistp_ecdsa_verify(
     High ``s`` is *accepted* by default. That is a deliberate divergence from
     the secp256k1 default (INVARIANT-28) and is what makes these curves usable
     against TLS, X.509, JWS and WebAuthn signers, none of which normalise
-    ``s``. Set ``require_low_s=True`` when you control the signer and want a
-    signature to be a unique identifier for its (key, digest) pair. See
+    ``s``.
+
+    ``require_low_s=True`` rejects the high twin, making a signature a unique
+    identifier for its (key, digest) pair — but only in combination with
+    ``low_s=True`` on the signer. Either flag alone is incoherent: a strict
+    verifier with a conformant signer rejects half of its own signatures, and
+    a normalising signer with a permissive verifier prevents nothing. See
     INVARIANT-34.
 
     Verification is variable time by design; every input is public.
@@ -4946,7 +4997,7 @@ def native_x25519_keypair() -> tuple:
         RuntimeError: If native library is not available
     """
     if _native_lib is None or not _X25519_NATIVE_AVAILABLE:
-        raise RuntimeError("X25519 native backend not available. " + _INSTALL_HINT)
+        raise NativeBackendUnavailableError("X25519 native backend not available. " + _INSTALL_HINT)
 
     pk_buf = ctypes.create_string_buffer(X25519_KEY_BYTES)
     sk_buf = ctypes.create_string_buffer(X25519_KEY_BYTES)
@@ -4973,7 +5024,7 @@ def native_x25519_key_exchange(our_secret_key: bytes, their_public_key: bytes) -
         RuntimeError: On low-order point or native library unavailable
     """
     if _native_lib is None or not _X25519_NATIVE_AVAILABLE:
-        raise RuntimeError("X25519 native backend not available. " + _INSTALL_HINT)
+        raise NativeBackendUnavailableError("X25519 native backend not available. " + _INSTALL_HINT)
 
     if len(our_secret_key) != 32:
         raise ValueError(f"X25519 secret key must be 32 bytes, got {len(our_secret_key)}")
@@ -5019,7 +5070,7 @@ def native_x25519_scalarmult_batch(scalars: list[bytes], points: list[bytes]) ->
         RuntimeError: On low-order rejection or native backend unavailable.
     """
     if _native_lib is None or not _X25519_NATIVE_AVAILABLE:
-        raise RuntimeError("X25519 native backend not available. " + _INSTALL_HINT)
+        raise NativeBackendUnavailableError("X25519 native backend not available. " + _INSTALL_HINT)
     if not hasattr(_native_lib, "ama_x25519_scalarmult_batch"):
         raise RuntimeError(
             "ama_x25519_scalarmult_batch is not exported by the loaded native "
@@ -5151,7 +5202,7 @@ def native_argon2id(
         RuntimeError: If native library is not available
     """
     if _native_lib is None or not _ARGON2_NATIVE_AVAILABLE:
-        raise RuntimeError("Argon2id native backend not available. " + _INSTALL_HINT)
+        raise NativeBackendUnavailableError("Argon2id native backend not available. " + _INSTALL_HINT)
 
     _UINT32_MAX = 0xFFFFFFFF
     if len(salt) < 8:
@@ -5239,7 +5290,7 @@ def native_argon2id_legacy(
             :func:`native_argon2id`).
     """
     if _native_lib is None or not _ARGON2_NATIVE_AVAILABLE:
-        raise RuntimeError("Argon2id native backend not available. " + _INSTALL_HINT)
+        raise NativeBackendUnavailableError("Argon2id native backend not available. " + _INSTALL_HINT)
     if not hasattr(_native_lib, "ama_argon2id_legacy"):
         raise RuntimeError(
             "ama_argon2id_legacy() is not exported by the loaded native "
@@ -5341,7 +5392,7 @@ def native_argon2id_legacy_verify(
             :func:`native_argon2id`).
     """
     if _native_lib is None or not _ARGON2_NATIVE_AVAILABLE:
-        raise RuntimeError("Argon2id native backend not available. " + _INSTALL_HINT)
+        raise NativeBackendUnavailableError("Argon2id native backend not available. " + _INSTALL_HINT)
     if not hasattr(_native_lib, "ama_argon2id_legacy_verify"):
         raise RuntimeError(
             "ama_argon2id_legacy_verify() is not exported by the loaded native "
@@ -5413,7 +5464,7 @@ def native_chacha20poly1305_encrypt(
         (ciphertext, tag) — ciphertext same length as plaintext, 16-byte tag
     """
     if _native_lib is None or not _CHACHA20_POLY1305_NATIVE_AVAILABLE:
-        raise RuntimeError("ChaCha20-Poly1305 native backend not available. " + _INSTALL_HINT)
+        raise NativeBackendUnavailableError("ChaCha20-Poly1305 native backend not available. " + _INSTALL_HINT)
 
     if len(key) != 32:
         raise ValueError(f"ChaCha20-Poly1305 key must be 32 bytes, got {len(key)}")
@@ -5465,7 +5516,7 @@ def native_chacha20poly1305_decrypt(
             buffer is returned, so caller-visible behaviour is unchanged.
     """
     if _native_lib is None or not _CHACHA20_POLY1305_NATIVE_AVAILABLE:
-        raise RuntimeError("ChaCha20-Poly1305 native backend not available. " + _INSTALL_HINT)
+        raise NativeBackendUnavailableError("ChaCha20-Poly1305 native backend not available. " + _INSTALL_HINT)
 
     if len(key) != 32:
         raise ValueError(f"ChaCha20-Poly1305 key must be 32 bytes, got {len(key)}")
@@ -5514,7 +5565,7 @@ def native_kyber_keypair_from_seed(d: bytes, z: bytes) -> tuple:
         (public_key, secret_key)
     """
     if _native_lib is None or not _DETERMINISTIC_KEYGEN_AVAILABLE:
-        raise RuntimeError("Deterministic keygen not available. " + _INSTALL_HINT)
+        raise NativeBackendUnavailableError("Deterministic keygen not available. " + _INSTALL_HINT)
 
     if len(d) != 32:
         raise ValueError(f"Kyber seed d must be 32 bytes, got {len(d)}")
@@ -5542,7 +5593,7 @@ def native_dilithium_keypair_from_seed(xi: bytes) -> tuple:
         (public_key, secret_key)
     """
     if _native_lib is None or not _DETERMINISTIC_KEYGEN_AVAILABLE:
-        raise RuntimeError("Deterministic keygen not available. " + _INSTALL_HINT)
+        raise NativeBackendUnavailableError("Deterministic keygen not available. " + _INSTALL_HINT)
 
     if len(xi) != 32:
         raise ValueError(f"Dilithium seed xi must be 32 bytes, got {len(xi)}")
@@ -5583,7 +5634,7 @@ def frost_keygen_trusted_dealer(
         where each share is 64 bytes (32 secret + 32 public).
     """
     if not _FROST_AVAILABLE or _native_lib is None:
-        raise RuntimeError("FROST native library not available")
+        raise NativeBackendUnavailableError("FROST native library not available")
     if threshold < 2 or num_participants < threshold:
         raise ValueError("Require threshold >= 2 and num_participants >= threshold")
     if num_participants > 255:
@@ -5626,7 +5677,7 @@ def frost_round1_commit(participant_share: bytes) -> tuple:
         commitment is PUBLIC (64 bytes).
     """
     if not _FROST_AVAILABLE or _native_lib is None:
-        raise RuntimeError("FROST native library not available")
+        raise NativeBackendUnavailableError("FROST native library not available")
     if len(participant_share) != FROST_SHARE_BYTES:
         raise ValueError(f"participant_share must be {FROST_SHARE_BYTES} bytes")
 
@@ -5666,7 +5717,7 @@ def frost_round2_sign(
         32-byte signature share.
     """
     if not _FROST_AVAILABLE or _native_lib is None:
-        raise RuntimeError("FROST native library not available")
+        raise NativeBackendUnavailableError("FROST native library not available")
     if not (2 <= num_signers <= 255):
         raise ValueError("num_signers must be in [2, 255]")
     if len(participant_share) != FROST_SHARE_BYTES:
@@ -5724,7 +5775,7 @@ def frost_aggregate(
         64-byte Ed25519-format signature (R || z).
     """
     if not _FROST_AVAILABLE or _native_lib is None:
-        raise RuntimeError("FROST native library not available")
+        raise NativeBackendUnavailableError("FROST native library not available")
     if not (2 <= num_signers <= 255):
         raise ValueError("num_signers must be in [2, 255]")
     if len(sig_shares) != num_signers * FROST_SIG_SHARE_BYTES:

@@ -20,11 +20,28 @@ skipping it.
 | `fips204/` | `ml_dsa_44.kat`, `ml_dsa_87.kat` | [NIST ACVP-Server](https://github.com/usnistgov/ACVP-Server) `gen-val/json-files/ML-DSA-{keyGen,sigGen}-FIPS204/internalProjection.json` | `master` @ 2026-07-27 |
 | `fips205/` | see `fips205/README.md` | NIST ACVP-Server, SLH-DSA-FIPS205 | `v1.1.0.42` |
 | `ascon/` | see `ascon/README.md` | NIST SP 800-232 | — |
+| `rfc6979/` | `ecdsa_prime_curves.kat` | RFC 6979 Appendix A.2.5 / A.2.6 / A.2.7 | [RFC 6979](https://www.rfc-editor.org/rfc/rfc6979.txt) |
 | `ml_dsa/`, `ml_kem/` | `*.rsp` | Round-3 CRYSTALS reference KATs (pre-FIPS) | — |
 
 The `.rsp` files under `ml_dsa/` and `ml_kem/` predate FIPS 203/204 and are kept
 for historical comparison only; they are **not** the conformance gate. The
 `.kat` files under `fips203/` and `fips204/` are.
+
+### `rfc6979/ecdsa_prime_curves.kat`
+
+The specification's own answer key, transcribed from the RFC text. Each record
+carries `curve`, the private key `x`, the RFC's printed public key `ux`/`uy`,
+the `hash` and `msg` the RFC used, and the expected `r`/`s`.
+
+Only the SHA-256 / SHA-384 / SHA-512 vectors are kept — AMA accepts 32/48/64
+octet digests and does not implement SHA-1 or SHA-224, so those 12 vectors are
+deliberately dropped rather than silently mis-driven. 18 remain, 6 per curve.
+
+This corpus exists because a signer can reproduce an *implementation's* idea of
+RFC 6979 while failing the RFC itself. It caught exactly that: an earlier
+revision normalised `s` to the low representative, matched `r` on every vector,
+and diverged on `s` for every vector whose natural value was high — while the
+header advertised "deterministic per RFC 6979". See INVARIANT-34.
 
 ## Format
 

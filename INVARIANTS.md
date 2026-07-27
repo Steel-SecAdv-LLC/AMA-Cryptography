@@ -1245,67 +1245,150 @@ parsed block.
 
 ---
 
-## INVARIANT-34 — ECDSA Low-`s` Policy Is Per-Curve and Declared
+## INVARIANT-34 — Low-`s` Is a Property of the Sign/Verify Pair
 
-**Statement.** Every AMA ECDSA signer, on every curve, emits only the low
-representative (`s <= (n-1)/2`). Verification policy is **per curve** and each
-choice is stated in the header, in the tests, and here:
+**Statement.** Low-`s` normalisation and high-`s` rejection are **two halves of
+one control**. A curve's default must set both or neither, and any API that
+exposes them must expose both.
 
-- **secp256k1** rejects a high `s` by default (INVARIANT-28), selectable via
-  `ama_secp256k1_ecdsa_verify_ex(..., AMA_SECP256K1_ECDSA_ALLOW_HIGH_S)`.
-- **P-256 / P-384 / P-521** accept either representative by default, and reject
-  the high twin only under `AMA_NISTP_ECDSA_REQUIRE_LOW_S`.
+- **secp256k1** sets both by default: `ama_secp256k1_ecdsa_sign` emits only the
+  low representative and `ama_secp256k1_ecdsa_verify` rejects the high twin
+  (INVARIANT-28). `AMA_SECP256K1_ECDSA_ALLOW_HIGH_S` relaxes the verifier for
+  third-party X9.62 interop.
+- **P-256 / P-384 / P-521** set neither by default: `ama_nistp_ecdsa_sign`
+  emits RFC 6979's `s` verbatim and `ama_nistp_ecdsa_verify` accepts either
+  representative. `AMA_NISTP_ECDSA_SIGN_LOW_S` and
+  `AMA_NISTP_ECDSA_REQUIRE_LOW_S` turn both halves on together.
 
-The checks that cost no interoperability are unconditional on both curves and
-in both modes: minimal DER only, `r` and `s` strictly in `[1, n-1]` rather than
+The checks that cost no interoperability are unconditional on every curve in
+every mode: minimal DER only, `r` and `s` strictly in `[1, n-1]` rather than
 reduced into range, and public-key coordinates strictly in `[0, p)`.
 
-**Why.** The two curves live in different worlds, and a single global policy is
-wrong for one of them.
+**Why.** Normalisation on its own prevents nothing. If the verifier accepts
+both representatives, then given any AMA signature `(r, s)` anyone can emit
+`(r, n - s)` and AMA itself will accept it. The signature is malleable
+regardless of what the signer chose. Normalisation only becomes a security
+property when the verifier refuses the twin — the pair is the control, and
+either half alone is a costume.
 
-secp256k1 signatures are identifiers. A blockchain transaction is addressed by
-its signature bytes, so accepting `(r, n - s)` means one transaction has two
-identities — the malleability class that INVARIANT-26 and INVARIANT-28 exist to
-close. AMA controls the signer in every path where it produces secp256k1
-signatures, so strict is free.
+This is not hypothetical: it is the defect this invariant was rewritten to fix.
+The first version of the NIST prime-curve support normalised on the signer and
+verified permissively — the one combination with no security benefit — and paid
+for it in conformance. `ama_nistp_ecdsa_sign` advertised itself as
+"deterministic per RFC 6979" while failing RFC 6979's own Appendix A.2.5 /
+A.2.6 / A.2.7 vectors on every case whose natural `s` came out high, roughly
+half of them. `r` matched everywhere, so the nonce derivation was right and the
+divergence was invisible to every test that existed.
 
-The NIST prime curves exist here for the opposite reason: to verify signatures
-AMA did *not* produce. X9.62, FIPS 186-5, RFC 3279, TLS, X.509, JWS and WebAuthn
-all permit either `s`, and essentially none of their signers normalise. A
-strict-by-default verifier would reject conformant third-party signatures — it
-would not be "more secure", it would be non-interoperable, defeating the entire
-purpose of adding the curves.
+It was invisible for a second, worse reason. The "independent" pure-Python
+reference in `tests/test_nistp_curves.py` normalised too, because it was
+written alongside the C code rather than from the specification. Two
+implementations that share an assumption do not check each other. **A reference
+must be derived from the specification only, never from the implementation it
+checks** — that rule is the durable lesson here, and it is why `_ref_sign` now
+takes the policy as a parameter instead of baking one in.
 
-The asymmetry is therefore a deliberate decision about *what each curve is for*,
-not an oversight or a weakening. Making it an invariant is what stops a future
-change from "harmonising" the two defaults in either direction without
-re-reading this reasoning.
+The per-curve defaults then follow from what each curve is *for*. secp256k1
+signatures are identifiers — a blockchain transaction is addressed by its
+signature bytes, so two valid encodings means two identities, and AMA controls
+both ends, so strict is free. The NIST prime curves exist here to interoperate
+with signers AMA did not write: X9.62, FIPS 186-5, RFC 3279, TLS, X.509, JWS
+and WebAuthn all permit either `s` and essentially none of their signers
+normalise, so a strict default would reject conformant signatures — not "more
+secure", just non-interoperable, defeating the reason the curves were added.
 
-**Enforcement.** In `src/c/ama_nistp.c`, `nistp_ecdsa_sign_core()` negates a
-high `s` unconditionally before encoding, and `nistp_ecdsa_verify_rs()` rejects
-one only when `AMA_NISTP_ECDSA_REQUIRE_LOW_S` is set. The range and
-canonical-coordinate gates (`nistp_scalar_load`, `nistp_load_point`) and the
-strict DER parser (`nistp_der_parse`) are outside the flag entirely.
-`ama_secp256k1.c` is unchanged.
+**Enforcement.** In `src/c/ama_nistp.c`, `nistp_ecdsa_sign_core()` takes
+`low_s` as a parameter and `nistp_sign_dispatch()` derives it from
+`AMA_NISTP_ECDSA_SIGN_LOW_S`; unknown flag bits are rejected rather than
+ignored. `nistp_ecdsa_verify_rs()` rejects a high `s` only under
+`AMA_NISTP_ECDSA_REQUIRE_LOW_S`. The range, canonical-coordinate and strict-DER
+gates sit outside both flags. `src/c/ama_secp256k1.c` is unchanged.
 
 **Wycheproof consequence, declared.** The secp256k1 divergence policy
-`ecdsa/high-s-rejected` in `wycheproof_vectors/run_wycheproof.py` claims exactly
-72 vectors and is scoped to `ecdsa_secp256k1_sha256_test.json` by filename. The
-three NIST prime-curve suites — 1530 vectors — need **no** divergence policy at
-all, and pass with zero exceptions. That asymmetry in the gate output is the
-visible evidence for this invariant: if someone made the NIST default strict, a
-new uncounted divergence bucket would appear and the gate would go red.
+`ecdsa/high-s-rejected` claims exactly 72 vectors and is scoped by filename.
+The three NIST prime-curve suites — 1530 vectors — need no divergence policy at
+all and pass with zero exceptions. That asymmetry in the gate output is the
+visible evidence for this invariant: making the NIST default strict would
+create a new uncounted divergence bucket and turn the gate red.
 
-**Timing posture.** Signing is constant time with respect to the private key and
-the RFC 6979 nonce on both curves. Verification is variable time by design on
-both — every input is public.
+**Timing posture.** Signing is constant time with respect to the private key
+and the RFC 6979 nonce on both curves; the normalisation is a conditional
+negation of a value that is about to be published. Verification is variable
+time by design on both — every input is public.
 
-**Verification.** `tests/test_nistp_curves.py::
-test_high_s_twin_accepted_by_default_rejected_when_strict` asserts *both*
-directions on all three prime curves: the twin verifies by default and does not
-verify under `require_low_s`. `test_signing_always_emits_low_s` asserts the
-signer half over freshly generated keys.
+**Verification.**
+`tests/test_nistp_curves.py::test_rfc6979_published_vectors` replays all 18
+in-scope vectors from RFC 6979 Appendix A.2.5/A.2.6/A.2.7 (vendored under
+`tests/kat/rfc6979/`), asserting the RFC's own public key and both signature
+components, and fails if the corpus ever stops containing a high-`s` case —
+without one it could no longer detect silent normalisation.
+`test_rfc6979_vectors_reject_low_s_normalisation` pins the opposite direction,
+so the trade-off is a fact in CI rather than a claim in a docstring.
+`test_low_s_is_opt_in_and_default_is_rfc6979_verbatim` requires the default to
+produce at least one high `s` over 24 signatures.
+`test_low_s_is_a_property_of_the_sign_verify_pair` asserts the four-way truth
+table directly. `test_ecdsa_matches_rfc6979_reference` runs the
+specification-derived reference under *both* policies.
 `tests/test_secp256k1_ecdsa_low_s_policy.py` holds the secp256k1 half unchanged.
+
+---
+
+## INVARIANT-35 — A Selector Must Never Resolve Weaker Than It Was Asked
+
+**Statement.** Any argument that names an algorithm, curve, parameter set or
+security level **must** resolve to exactly what was named or fail. It must
+never fall back to a default, round to a neighbour, or return a plausible
+answer for an input it did not recognise.
+
+Concretely, for every selector in the library:
+
+- an unrecognised value raises (Python) or returns `NULL` / `0` (C);
+- a size or capability query for an unrecognised value returns `0` or `NULL`,
+  never the size of some other parameter set;
+- no selector has a "default" branch that maps unknown input onto a real
+  choice.
+
+**Why.** INVARIANT-7 covers the *availability* axis: no backend, no operation.
+This is the *selection* axis, and nothing covered it until the library grew
+enough parameter sets for it to matter. As of the NIST prime curves and the
+FIPS 203/204 parameter-set work there are nine selectable levels across three
+families, plus SLH-DSA's two — an integer or a string away from each other.
+
+The failure this prevents is quiet and total. A selector that maps an
+unrecognised `"ML-KEM-192"` onto ML-KEM-512, or a mistyped curve id onto
+P-256, produces working code, valid signatures and successful handshakes at a
+security level nobody chose and no test asserts. Unlike a missing backend, it
+never surfaces: the caller believes it asked for category 5 and got category 1,
+and every downstream artefact is well-formed. A downgrade that reports success
+is worse than a hard failure, because only the hard failure gets fixed.
+
+The rule is deliberately absolute rather than "must not resolve *weaker*". A
+selector cannot know which direction is weaker for a given caller — P-521 is
+not simply "stronger" than P-256 for someone whose peer only speaks P-256 —
+and a rule that requires that judgement invites a fallback that argues it got
+the direction right. Resolve exactly, or refuse.
+
+**Enforcement.** In C: `nistp_lookup()`, `kyber_params_for()`,
+`dil_params_for()` and `slhdsa_params_for()` each end in `default: return NULL`
+and every public size/name query propagates that as `0` / `NULL`. In Python:
+`_param_set_id()` (shared by `_ml_kem_id` / `_ml_dsa_id`) and
+`_nistp_curve_id()` raise `ValueError` on any unrecognised value, and reject
+`bool` explicitly — `True` is an `int` in Python and would otherwise index a
+selector table.
+
+Name aliases are permitted and are not a violation: `"secp256r1"`,
+`"prime256v1"` and `"P-256"` denote the same curve, and `"Dilithium3"` denotes
+ML-DSA-65. An alias resolves to the thing it names. What is forbidden is
+resolving something that names *nothing*.
+
+**Verification.** `tests/test_selector_strictness.py` enumerates every selector
+in the library and drives each with the same battery of unrecognised inputs —
+neighbouring-but-invalid integers, plausible-but-wrong names, `bool`, `None`,
+negative values, and the empty string — asserting a raise every time. It also
+asserts the C side returns `0` / `NULL` rather than another set's answer, and
+that the alias tables resolve only to sets that actually exist. Adding a
+selector without adding it to that enumeration fails the test, because the test
+derives its list from the modules rather than from a hand-written literal.
 
 ---
 

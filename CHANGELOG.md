@@ -19,7 +19,68 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ## [Unreleased]
 
+### Fixed
+
+- **`ama_nistp_ecdsa_sign` did not conform to RFC 6979.** The signer normalised
+  `s` to the low representative unconditionally, so it failed RFC 6979's own
+  Appendix A.2.5 / A.2.6 / A.2.7 vectors on every case whose natural `s` came
+  out high — roughly half of them — while the header advertised "deterministic
+  per RFC 6979". `r` matched everywhere, so the nonce derivation was correct and
+  the divergence was invisible to every test that existed.
+
+  It was invisible for a second reason worth recording: the "independent"
+  pure-Python reference in `tests/test_nistp_curves.py` normalised too, because
+  it was written alongside the C code rather than from the specification. Two
+  implementations that share an assumption do not check each other. `_ref_sign`
+  now takes the signing policy as a parameter, and RFC 6979's own 18 in-scope
+  vectors are vendored under `tests/kat/rfc6979/` and replayed on every run —
+  including the RFC's printed public keys — so neither implementation can talk
+  its way out of the specification again.
+
+  Signing now emits RFC 6979's `s` verbatim. Low-`s` is opt-in via
+  `AMA_NISTP_ECDSA_SIGN_LOW_S` / `low_s=True`.
+
+### Changed
+
+- **INVARIANT-34 rewritten around the sign/verify pair.** Low-`s` normalisation
+  and high-`s` rejection are two halves of one control: with a permissive
+  verifier, normalising on the signer prevents nothing (the twin of an AMA
+  signature still verifies under AMA) and costs conformance. The NIST prime
+  curves now default to neither half; secp256k1 keeps both (INVARIANT-28,
+  unchanged). `tests/test_nistp_curves.py::test_low_s_is_a_property_of_the_sign_verify_pair`
+  asserts the four-way truth table directly.
+
+- **New `ama_nistp_ecdsa_sign_ex` / `_sign_raw_ex` with policy flags.** Every
+  combination of {deterministic, hedged} x {DER, raw} x {RFC 6979 `s`, low `s`}
+  is now reachable through one entry point; unknown flag bits are rejected
+  rather than ignored. The previous API made hedged+raw raise purely because a
+  fourth function had not been written.
+
+- **`ama_nist_curve_t` renumbered to 256 / 384 / 521** (was 0 / 1 / 2). A dense
+  index made `0` — the value an uninitialised or forgotten field holds — mean
+  "P-256". Found by the new INVARIANT-35 suite on its first run. The values also
+  no longer collide with `ama_ml_kem_param_set_t` or `ama_ml_dsa_param_set_t`,
+  so a call routed to the wrong family is refused rather than resolved. This is
+  a source-and-ABI change to an API that has not shipped in a release.
+
+- **`NativeBackendUnavailableError`** is now the single type for "the native
+  backend is not present", replacing 36 bare `RuntimeError` raises across
+  `pqc_backends.py`. `PQCUnavailableError` is now a subclass, so every existing
+  `except PQCUnavailableError` and `except RuntimeError` handler is unaffected.
+
 ### Added
+
+- **INVARIANT-35 — a selector must never resolve weaker than it was asked.**
+  INVARIANT-7 governs the availability axis (no backend, no operation); nothing
+  governed the *selection* axis until the library grew nine selectable security
+  levels across three families. A selector that maps an unrecognised value onto
+  a neighbour produces working code, valid signatures and successful handshakes
+  at a level nobody chose, and never surfaces. Enforced by
+  `tests/test_selector_strictness.py` (41 tests), which derives its list of
+  selectors from the modules rather than a hand-written literal, drives each
+  with plausible near-misses including every *other* family's valid values, and
+  asserts the C side returns `0` / `NULL` rather than another set's size.
+
 
 - **NIST prime curves P-256 / P-384 / P-521 — ECDSA and ECDH.** New native
   implementation `src/c/ama_nistp.c` (curve parameters from SP 800-186, ECDSA

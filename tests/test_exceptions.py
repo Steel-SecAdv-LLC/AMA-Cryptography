@@ -195,6 +195,7 @@ class TestModuleExports:
         expected = {
             "AmaCryptographyError",
             "SecurityWarning",
+            "NativeBackendUnavailableError",
             "PQCUnavailableError",
             "QuantumSignatureUnavailableError",
             "QuantumSignatureRequiredError",
@@ -206,6 +207,33 @@ class TestModuleExports:
             "AmaHSMUnavailableError",
         }
         assert set(mod.__all__) == expected
+
+    def test_native_backend_error_hierarchy_is_backward_compatible(self) -> None:
+        """``NativeBackendUnavailableError`` widens; it must not narrow.
+
+        It was introduced so the NIST prime curves, secp256k1 and the classical
+        primitives stop raising a bare ``RuntimeError`` for the same condition
+        the PQC surface had a type for. Inserting it *above*
+        ``PQCUnavailableError`` means every pre-existing handler shape keeps
+        working — which is the property worth pinning, not the name.
+        """
+        from ama_cryptography import exceptions as mod
+
+        assert issubclass(mod.PQCUnavailableError, mod.NativeBackendUnavailableError)
+        assert issubclass(mod.NativeBackendUnavailableError, mod.AmaCryptographyError)
+        assert issubclass(mod.NativeBackendUnavailableError, RuntimeError)
+        # QuantumSignatureUnavailableError sits under PQCUnavailableError and
+        # must therefore still be catchable as every ancestor.
+        assert issubclass(
+            mod.QuantumSignatureUnavailableError, mod.NativeBackendUnavailableError
+        )
+        for handler in (mod.PQCUnavailableError, RuntimeError, mod.AmaCryptographyError):
+            try:
+                raise mod.PQCUnavailableError("backend missing")
+            except handler:
+                pass
+            else:  # pragma: no cover - the except above always fires
+                raise AssertionError(f"{handler.__name__} no longer catches")
 
     def test_all_exports_are_classes(self) -> None:
         from ama_cryptography import exceptions as mod

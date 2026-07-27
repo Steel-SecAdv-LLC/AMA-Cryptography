@@ -47,16 +47,38 @@ class AmaCryptographyError(Exception):
     pass
 
 
-class PQCUnavailableError(AmaCryptographyError, RuntimeError):
+class NativeBackendUnavailableError(AmaCryptographyError, RuntimeError):
+    """
+    Raised when an operation needs the native C backend and it is not present.
+
+    This is INVARIANT-7's failure mode expressed as a type: the library refuses
+    to operate rather than substituting anything. It is not specific to
+    post-quantum work — the NIST prime curves, secp256k1 and the classical
+    primitives raise it for the same reason.
+
+    ``PQCUnavailableError`` is a subclass, so existing ``except
+    PQCUnavailableError`` sites keep working and ``except RuntimeError``
+    continues to catch every case. Catch this class when the question is
+    "is the native library present", and the subclass when the answer needs
+    to distinguish which family was asked for.
+
+    To resolve, build the native C library:
+        cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build
+    """
+
+    pass
+
+
+class PQCUnavailableError(NativeBackendUnavailableError):
     """
     Raised when post-quantum cryptography is required but unavailable.
 
     This exception indicates that a PQC operation was requested but the
     native C backend is not available.
 
-    Inherits from AmaCryptographyError (catch-all root) and RuntimeError
-    (backward compatibility with existing tests and code that expects this
-    exception hierarchy).
+    Inherits from NativeBackendUnavailableError (and transitively from
+    AmaCryptographyError and RuntimeError), so every pre-existing handler
+    shape keeps working unchanged.
 
     To resolve, build the native C library:
         cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build
@@ -157,6 +179,7 @@ class AmaHSMUnavailableError(AmaCryptographyError, RuntimeError):
 __all__ = [
     "AmaCryptographyError",
     "SecurityWarning",
+    "NativeBackendUnavailableError",
     "PQCUnavailableError",
     "QuantumSignatureUnavailableError",
     "QuantumSignatureRequiredError",
