@@ -98,9 +98,12 @@ from __future__ import annotations
 
 import base64
 import binascii
+import contextlib
 import hashlib
 import json
+import os
 import re
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any, Union
 
@@ -120,21 +123,27 @@ from ama_cryptography.exceptions import KeyFormatError, UnsupportedKeyFormatErro
 
 __all__ = [
     "ALGORITHMS",
+    "CONVENTIONAL_PUBLIC_KEY",
+    "PQ_CONSISTENCY_ENV",
     "PrivateKey",
     "PublicKey",
+    "conventional_include_public_key",
     "cose_to_private_key",
     "cose_to_public_key",
     "decode_pem",
     "encode_pem",
+    "get_pq_import_consistency",
     "jwk_thumbprint",
     "jwk_to_private_key",
     "jwk_to_public_key",
     "load_pkcs8",
     "load_spki",
+    "pq_import_consistency",
     "private_key_to_cose",
     "private_key_to_jwk",
     "public_key_to_cose",
     "public_key_to_jwk",
+    "set_pq_import_consistency",
 ]
 
 
@@ -281,6 +290,119 @@ _PKCS8_V1 = 0
 _PKCS8_V2 = 1
 
 
+# ---------------------------------------------------------------------------
+# Import policy — PQ consistency checking
+# ---------------------------------------------------------------------------
+#: Environment variable that sets the process-wide default. Accepts ``0``/``1``,
+#: ``off``/``on``, ``false``/``true``, ``no``/``yes`` (case-insensitive). Read
+#: once at import; anything unrecognised is a hard error rather than a silent
+#: fallback, because "the flag was misspelled so the check quietly stayed on"
+#: and "…quietly went off" are both worse than a startup failure.
+PQ_CONSISTENCY_ENV = "AMA_KEY_IMPORT_PQ_CONSISTENCY"
+
+_TRUE = {"1", "on", "true", "yes"}
+_FALSE = {"0", "off", "false", "no"}
+
+
+def _initial_pq_consistency() -> bool:
+    raw = os.environ.get(PQ_CONSISTENCY_ENV)
+    if raw is None:
+        return True
+    value = raw.strip().lower()
+    if value in _TRUE:
+        return True
+    if value in _FALSE:
+        return False
+    raise KeyFormatError(
+        f"{PQ_CONSISTENCY_ENV}={raw!r} is not a recognised boolean; expected one "
+        f"of {sorted(_TRUE | _FALSE)}"
+    )
+
+
+_PQ_CONSISTENCY_DEFAULT = _initial_pq_consistency()
+
+
+def get_pq_import_consistency() -> bool:
+    """Whether ML-DSA/ML-KEM consistency checks run on the import path.
+
+    See :func:`set_pq_import_consistency` for what the checks are, what they
+    cost, and what turning them off does and does not give up.
+    """
+    return _PQ_CONSISTENCY_DEFAULT
+
+
+def set_pq_import_consistency(enabled: bool) -> bool:
+    """Set the process-wide default. Returns the previous value.
+
+    **The default is enabled, and that is the right setting for almost every
+    caller.** This exists because the checks are not free and the import path is
+    reachable by whoever supplies a key file:
+
+    * An ``expandedKey``-only ML-DSA key is checked by re-expanding the matrix
+      ``A`` and recomputing ``t0``, the public key and ``tr`` — a full key
+      generation's worth of work.
+    * An ``expandedKey``-only ML-KEM key is checked by recomputing ``H(ek)``
+      *and* running an encapsulate/decapsulate round trip.
+    * A ``both``-arm key is checked by expanding its seed and comparing.
+
+    Measured costs are in ``docs/KEY_FORMATS.md``; ``benchmarks/keyformat_import.py``
+    is what produces them. Roughly, importing an ML-DSA-87 ``expandedKey`` key
+    costs about the same as generating one, which is three orders of magnitude
+    more than parsing the DER around it. Anywhere key import is attacker-reachable
+    and unauthenticated — a public endpoint that accepts uploaded keys, say — that
+    ratio is a denial-of-service lever, and rate-limiting the endpoint is usually
+    the better answer than disabling the check. Turning it off is for the case
+    where the same keys are re-imported constantly from a store that already
+    validated them.
+
+    What stays true with the checks off:
+
+    * Every structural check still runs — DER strictness, the ``CHOICE`` arm,
+      lengths, the algorithm OID. This flag governs *cryptographic* consistency
+      only.
+    * ML-KEM still recovers its encapsulation key, because FIPS 203 §7.1 embeds
+      ``ek`` verbatim in ``dk``; extracting it is a slice. If the file *also*
+      carries a public key, the two are still required to be equal — that
+      comparison is free.
+    * A ``seed``-arm key is still expanded, because that is how the key is
+      decoded at all, not a check.
+
+    What is given up:
+
+    * ML-DSA no longer derives a public key at import, so
+      :attr:`PrivateKey.public_key` is ``None`` and :meth:`PrivateKey.public`
+      runs the full check on first use instead. The cost moves; it does not
+      vanish.
+    * The RFC 9881 §8.2 / draft-ietf-lamps-kyber-certificates §C.4.1 negative
+      vectors are no longer rejected at import. RFC 9881 §8.2 says an
+      inconsistent key MUST be rejected as malformed, so a deployment that
+      disables this is making a conformance decision, not a tuning one. For
+      ML-KEM in particular the failure is *silent*: implicit rejection is
+      designed not to raise, so a mutated ``dk_PKE`` simply derives a shared
+      secret the sender never had.
+    """
+    global _PQ_CONSISTENCY_DEFAULT
+    previous = _PQ_CONSISTENCY_DEFAULT
+    _PQ_CONSISTENCY_DEFAULT = bool(enabled)
+    return previous
+
+
+@contextlib.contextmanager
+def pq_import_consistency(enabled: bool) -> Iterator[None]:
+    """Scope a policy change to a block, restoring the previous value after.
+
+    Preferred over :func:`set_pq_import_consistency` for the same reason a
+    context manager is preferred to a global flip anywhere else: a disabled
+    security check that is never re-enabled is the failure mode, and this shape
+    makes the disabled region visible in the source.
+    """
+    previous = set_pq_import_consistency(enabled)
+    try:
+        yield
+    finally:
+        set_pq_import_consistency(previous)
+
+
 def _require_public(key: object) -> None:
     """Refuse anything that is not a ``PublicKey`` at a public encoder's door.
 
@@ -415,18 +537,28 @@ class PrivateKey:
         """Encode as an unencrypted PKCS#8 ``OneAsymmetricKey`` (RFC 5958).
 
         Args:
-            include_public_key: Whether to carry the public half.
-                ``None`` (the default) selects the *conventional* answer for
-                the algorithm, which is what every reference encoder emits and
-                therefore what interoperates most widely: for the EC curves,
-                yes — inside RFC 5915 ``ECPrivateKey``, matching OpenSSL; for
-                Ed25519/X25519, no — matching OpenSSL and RFC 8410 §10.3's
-                first example; for ML-DSA/ML-KEM, no — matching RFC 9881
-                Appendix C. ``True`` and ``False`` override that in either
-                direction, and both are exercised in the test suite. Note that
-                for the OKP and PQ algorithms, carrying the public key means
-                the RFC 5958 ``[1] publicKey`` field, which raises the version
-                to v2; older parsers are known to reject v2.
+            include_public_key: Whether to carry the public half. ``True`` and
+                ``False`` say so outright; both are exercised in the test suite.
+
+                ``None`` (the default) means **"whatever this algorithm's
+                ecosystem conventionally emits"**, which is deliberately not a
+                single answer across algorithms: byte equality with what
+                reference encoders produce is the property this module exists
+                to have, and a uniform default would break it for one group or
+                the other. Because that makes ``None`` a parameter with more
+                than one behaviour, the resolved answer is enumerated in
+                :data:`CONVENTIONAL_PUBLIC_KEY` and available from
+                :func:`conventional_include_public_key` rather than left to be
+                inferred — for the EC curves, yes, inside RFC 5915
+                ``ECPrivateKey``, as RFC 9500 §2.3's own keys do; for
+                Ed25519/X25519, no, matching RFC 8410 §10.3's first example; for
+                ML-DSA/ML-KEM, no, matching RFC 9881 Appendix C.
+
+                Note that for the OKP and PQ algorithms, carrying the public
+                key means the RFC 5958 ``[1] publicKey`` field, which raises the
+                version to v2; older parsers are known to reject v2. For the EC
+                curves it does not, because the public key goes inside
+                ``ECPrivateKey`` where RFC 5915 already allows it.
             pq_format: Which arm of the ML-DSA/ML-KEM private-key ``CHOICE``
                 to emit — ``"seed"``, ``"expandedKey"``, ``"both"``, or
                 ``"auto"``. ``"auto"`` emits the seed form when a seed is
@@ -601,7 +733,37 @@ def load_spki(data: Union[bytes, str]) -> PublicKey:
         raise KeyFormatError(
             f"{alg.name} public key must be {alg.public_bytes} bytes, got {len(payload)}"
         )
+    _validate_pq_public(alg, payload)
     return PublicKey(alg.name, payload)
+
+
+def _validate_pq_public(alg: _Alg, public: bytes) -> None:
+    """FIPS 203 §7.2 input validation for an imported ML-KEM encapsulation key.
+
+    The EC curves have had import-time validation since this module was written,
+    because an unvalidated point is the invalid-curve attack. ML-KEM has an
+    analogue, less dramatic but just as silent: §7.2 requires the **modulus
+    check** — every 12-bit coefficient of ``t_hat`` below ``q = 3329`` — and 767
+    of every 4096 encodable values fail it. A key that fails is one every
+    conformant peer rejects, so encapsulating to it yields a shared secret
+    nobody else derives, and ML-KEM's implicit rejection guarantees nothing
+    raises. Import is where it is visible.
+
+    ML-DSA has no counterpart: FIPS 204's ``pkDecode`` puts no range constraint
+    on ``t1`` (the 10-bit packing is onto), so every byte string of the right
+    length names a public key. Checking the length is the whole type check, and
+    it has already happened by the time this is called.
+    """
+    if alg.pq_family != "ml-kem":
+        return
+    if not _pb.native_ml_kem_pubkey_check(alg.pq_set, public):
+        raise KeyFormatError(
+            f"{alg.name} encapsulation key fails the FIPS 203 §7.2 modulus "
+            "check: a coefficient is not below q. A conformant peer rejects "
+            "this key, so encapsulating to it would derive a shared secret "
+            "nobody else derives — and implicit rejection means nothing would "
+            "report it."
+        )
 
 
 def _decode_sec1_point(alg: _Alg, point: bytes) -> bytes:
@@ -645,9 +807,48 @@ def _decode_sec1_point(alg: _Alg, point: bytes) -> bytes:
 # PKCS#8 — OneAsymmetricKey (RFC 5958)
 # ---------------------------------------------------------------------------
 # The conventional `include_public_key` answer per algorithm kind — see
-# PrivateKey.to_pkcs8. These are the forms OpenSSL and the RFCs' own examples
-# emit, so they are what a third-party parser is most likely to accept.
+# PrivateKey.to_pkcs8. These are the forms the RFCs' own worked examples carry,
+# so they are what a third-party parser is most likely to accept.
 _CONVENTIONAL_PUBLIC = {"ec": True, "okp": False, "pq": False}
+
+#: What ``include_public_key=None`` resolves to, stated per algorithm.
+#:
+#: ``None`` means "the conventional encoding for this algorithm", which is a
+#: parameter with more than one default behaviour — defensible, because byte
+#: equality with what reference encoders emit is the whole point of this module,
+#: but not something a future maintainer should have to infer from a `kind`
+#: lookup three functions away. So it is enumerated, exported, and tested:
+#:
+#: ===================  =====  ==========================================
+#: Algorithm            None   Why
+#: ===================  =====  ==========================================
+#: P-256/384/521        True   inside RFC 5915 ``ECPrivateKey``, the form
+#: secp256k1            True   RFC 9500 §2.3's own keys use
+#: Ed25519, X25519      False  RFC 8410 §10.3's first example
+#: ML-DSA-44/65/87      False  RFC 9881 Appendix C
+#: ML-KEM-512/768/1024  False  draft-ietf-lamps-kyber-certificates App. C
+#: ===================  =====  ==========================================
+#:
+#: Derived from the registry rather than transcribed, so an algorithm added to
+#: ``ALGORITHMS`` cannot be missing from here;
+#: ``test_the_conventional_table_covers_every_algorithm`` pins that both ways.
+CONVENTIONAL_PUBLIC_KEY: dict[str, bool] = {
+    name: _CONVENTIONAL_PUBLIC[alg.kind] for name, alg in ALGORITHMS.items()
+}
+
+
+def conventional_include_public_key(algorithm: str) -> bool:
+    """Resolve ``include_public_key=None`` for ``algorithm``.
+
+    Exported so a caller who needs to know what the default will do can ask,
+    rather than encoding twice and comparing lengths.
+
+    Raises:
+        KeyFormatError: if ``algorithm`` is not one this library implements
+            (INVARIANT-35 — a selector must never resolve to a neighbour).
+    """
+    _lookup(algorithm)
+    return CONVENTIONAL_PUBLIC_KEY[algorithm]
 
 _PQ_FORMATS = ("auto", "seed", "expandedKey", "both")
 
@@ -717,12 +918,27 @@ def _encode_pkcs8(
     )
 
 
-def load_pkcs8(data: Union[bytes, str]) -> PrivateKey:
+def load_pkcs8(
+    data: Union[bytes, str], *, verify_pq_consistency: bool | None = None
+) -> PrivateKey:
     """Parse a PKCS#8 OneAsymmetricKey, in DER or strict PEM.
 
     The encrypted form (``EncryptedPrivateKeyInfo``) is not supported and is
     reported as such rather than failing obscurely.
+
+    Args:
+        verify_pq_consistency: Whether to run the ML-DSA/ML-KEM cryptographic
+            consistency checks on this call. ``None`` (the default) uses the
+            process-wide policy, which is itself enabled unless
+            ``AMA_KEY_IMPORT_PQ_CONSISTENCY`` or
+            :func:`set_pq_import_consistency` says otherwise. Ignored for the
+            classical algorithms, whose derivation is both cheap and required
+            to produce a public key at all. See
+            :func:`set_pq_import_consistency` for what the checks are, what
+            they cost, and precisely what is given up by skipping them.
     """
+    if verify_pq_consistency is None:
+        verify_pq_consistency = _PQ_CONSISTENCY_DEFAULT
     der = _as_der(data, "PRIVATE KEY")
     outer = DerReader(der)
     seq = outer.read_sequence()
@@ -768,6 +984,28 @@ def load_pkcs8(data: Union[bytes, str]) -> PrivateKey:
             raise KeyFormatError(f"unexpected PKCS#8 field with tag 0x{tag:02X}")
     seq.finish()
 
+    # RFC 5958 §2 ties the version to the presence of the publicKey field:
+    # "If publicKey is present, then version is set to v2 else version is set
+    # to v1." Both directions are enforced, because accepting either mismatch
+    # means one key has two valid encodings — the malleability defect class this
+    # module's strictness exists to close, and the same reasoning as the
+    # minimal-length and minimal-INTEGER rules in `_asn1`.
+    #
+    # Note this is about the *outer* [1] publicKey only. An EC key carries its
+    # public half inside RFC 5915 ECPrivateKey, which RFC 5958 does not see and
+    # which correctly leaves the version at v1 — which is what RFC 9500 §2.3's
+    # keys and the rest of the vendored corpus contain.
+    if (outer_public is not None) != (version == _PKCS8_V2):
+        if outer_public is None:
+            raise KeyFormatError(
+                "PKCS#8 version is v2 but no [1] publicKey is present; RFC 5958 §2 "
+                "sets v2 if and only if publicKey is present"
+            )
+        raise KeyFormatError(
+            "PKCS#8 carries a [1] publicKey but the version is v1; RFC 5958 §2 "
+            "requires v2 when publicKey is present"
+        )
+
     if alg.kind == "ec":
         secret, embedded = _parse_ec_private_key(inner_bytes, alg)
         public = embedded or outer_public
@@ -782,20 +1020,86 @@ def load_pkcs8(data: Union[bytes, str]) -> PrivateKey:
             )
         public = outer_public
     else:
-        secret, public, seed = _parse_pq_private_key(inner_bytes, alg)
-        public = public or outer_public
+        secret, derived, seed = _parse_pq_private_key(
+            inner_bytes, alg, verify_pq_consistency
+        )
 
-    if public is not None:
-        _check_public_matches(alg, secret, public)
-    elif alg.kind == "pq":
-        # An expandedKey-only PQ key carries no public half to check against,
-        # so nothing above has looked at its internal consistency. Do it here:
-        # RFC 9881 §8.2 and its Appendix C.4 vectors are about exactly this
-        # case, and a key that fails is one whose signatures verify under no
-        # public key at all (ML-DSA) or that silently derives the wrong shared
-        # secret (ML-KEM).
-        public = _derive_public(alg, secret)
+    if alg.kind != "pq":
+        public = public or outer_public
+        if public is not None:
+            _check_public_matches(alg, secret, public)
+        return PrivateKey(alg.name, secret, public, seed)
+
+    if verify_pq_consistency:
+        if derived is None:
+            # An expandedKey-only PQ key carries no public half to check
+            # against, so nothing above has looked at its internal consistency.
+            # Do it here: RFC 9881 §8.2 and its Appendix C.4 vectors are about
+            # exactly this case, and a key that fails is one whose signatures
+            # verify under no public key at all (ML-DSA) or that silently
+            # derives the wrong shared secret (ML-KEM).
+            derived = _derive_public(alg, secret)
+        # `derived` is now known to correspond to `secret` — it came out of the
+        # same keygen, or out of the check above. A public key the *file*
+        # carries is therefore checked by comparing bytes, not by deriving a
+        # second time: the previous shape re-ran the full expansion here, so a
+        # seed-form key paid for two key generations to learn one fact.
+        if outer_public is not None and outer_public != derived:
+            raise KeyFormatError(
+                f"{alg.name} key file is inconsistent: the private key does not "
+                "correspond to the public key it carries"
+            )
+        return PrivateKey(alg.name, secret, derived, seed)
+
+    # Policy says skip the cryptographic checks. `derived` is None here by
+    # construction: with checks off, _parse_pq_private_key returns no derived
+    # public key for the expandedKey and both arms, and the seed arm's expansion
+    # is decoding rather than checking.
+    public = derived if derived is not None else outer_public
+
+    # Two things still hold, both for free — see set_pq_import_consistency for
+    # the full contract.
+    #
+    # 1. FIPS 203 §7.1 lays dk out as `dk_PKE || ek || H(ek) || z`, so ML-KEM's
+    #    encapsulation key is present verbatim and needs no recomputation. A
+    #    key still imports with a usable public half.
+    # 2. If the file *also* carries a public key, it must equal that embedded
+    #    one. Comparing two byte strings costs nothing and still catches a file
+    #    assembled from two different keys.
+    #
+    # ML-DSA has no such shortcut — rho/s1/s2 determine the public key only by
+    # recomputing it — so its public half stays None and PrivateKey.public()
+    # derives (and checks) on first use.
+    if alg.pq_family == "ml-kem":
+        embedded = _ml_kem_embedded_public_key(alg, secret)
+        if public is not None and public != embedded:
+            raise KeyFormatError(
+                f"{alg.name} key file is inconsistent: the public key it carries "
+                "is not the encapsulation key embedded in its own decapsulation key"
+            )
+        public = embedded
+    else:
+        public = None
     return PrivateKey(alg.name, secret, public, seed)
+
+
+def _ml_kem_embedded_public_key(alg: _Alg, secret: bytes) -> bytes:
+    """Slice ``ek`` out of an ML-KEM ``dk`` (FIPS 203 §7.1).
+
+    ``dk = dk_PKE || ek || H(ek) || z``, and the trailing two fields are 32
+    octets each, so the offset follows from the registry's own sizes rather
+    than a second transcription of ``384k``. ``test_registry_sizes_agree_with_
+    the_native_backend`` already pins those sizes against the C library.
+    """
+    offset = alg.private_bytes - alg.public_bytes - 64
+    if offset < 0:  # pragma: no cover - the registry is checked against the backend
+        raise KeyFormatError(f"{alg.name} key sizes are inconsistent")
+    embedded = secret[offset : offset + alg.public_bytes]
+    # Cheap enough to stay on even when the expensive checks are off: this is a
+    # scan of 256k coefficients, not an encapsulation. With the checks *on* the
+    # pairwise round trip covers it, because encapsulation performs §7.2 itself.
+    _validate_pq_public(alg, embedded)
+    return embedded
 
 
 def _read_implicit_bit_string(reader: DerReader, alg: _Alg) -> bytes:
@@ -812,6 +1116,7 @@ def _read_implicit_bit_string(reader: DerReader, alg: _Alg) -> bytes:
         raise KeyFormatError(
             f"{alg.name} public key must be {alg.public_bytes} bytes, got {len(payload)}"
         )
+    _validate_pq_public(alg, payload)
     return payload
 
 
@@ -851,7 +1156,7 @@ def _parse_ec_private_key(inner: bytes, alg: _Alg) -> tuple[bytes, bytes | None]
 
 
 def _parse_pq_private_key(
-    inner: bytes, alg: _Alg
+    inner: bytes, alg: _Alg, verify_consistency: bool = True
 ) -> tuple[bytes, bytes | None, bytes | None]:
     """Parse the ML-DSA / ML-KEM private-key CHOICE (RFC 9881 §6).
 
@@ -865,9 +1170,14 @@ def _parse_pq_private_key(
 
     The seed arm is genuinely supported: it is expanded through the
     deterministic keygen entry point, so importing a seed yields a working key
-    rather than an opaque blob. When both arms are present they are required to
-    agree — RFC 9881 §8.2 makes that check a SHOULD and says an inconsistent
-    key MUST be rejected as malformed.
+    rather than an opaque blob. That expansion is unconditional and is *not*
+    governed by ``verify_consistency``: with only a seed on hand there is no
+    expanded key to return without it, so it is decoding rather than checking.
+
+    When both arms are present they are required to agree — RFC 9881 §8.2 makes
+    that check a SHOULD and says an inconsistent key MUST be rejected as
+    malformed. That one *is* governed by ``verify_consistency``, because the
+    ``expandedKey`` is usable on its own.
     """
     reader = DerReader(inner)
     tag = reader.peek_tag()
@@ -897,6 +1207,17 @@ def _parse_pq_private_key(
         seed = seq.read_octet_string()
         expanded = seq.read_octet_string()
         seq.finish()
+        if len(seed) != alg.pq_seed_bytes:
+            raise KeyFormatError(
+                f"{alg.name} seed must be {alg.pq_seed_bytes} bytes, got {len(seed)}"
+            )
+        if len(expanded) != alg.private_bytes:
+            raise KeyFormatError(
+                f"{alg.name} expanded key must be {alg.private_bytes} bytes, "
+                f"got {len(expanded)}"
+            )
+        if not verify_consistency:
+            return expanded, None, seed
         from_seed, public = _expand_pq_seed(alg, seed)
         if from_seed != expanded:
             raise KeyFormatError(

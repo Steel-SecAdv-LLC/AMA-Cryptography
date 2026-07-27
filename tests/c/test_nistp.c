@@ -50,6 +50,7 @@ int ama_nistp_test_generator(ama_nist_curve_t curve, uint8_t *out);
 /* Test-only exports from the PQC parameter blocks. */
 int ama_ml_kem_test_params_selfcheck(void);
 int ama_ml_dsa_test_params_selfcheck(void);
+int ama_ml_dsa_test_matrix_row_equiv(void);
 
 static int g_failures = 0;
 
@@ -335,6 +336,16 @@ static void test_pqc_parameter_tables(void) {
     CHECK(ama_ml_dsa_param_set_name((ama_ml_dsa_param_set_t)7) == NULL,
           "unknown ML-DSA set got a name");
     printf("      every row re-derives from its primitive parameters\n");
+
+    /* Row-wise expansion of A must be byte-identical to whole-matrix
+     * expansion. dil_pubkey_from_sk uses the row-wise form so its frame stays
+     * bounded on the parser-reachable path; the public API cannot tell the two
+     * apart, because a divergence would just produce a different — but
+     * internally consistent — public key that every self-round-trip accepts. */
+    rc = ama_ml_dsa_test_matrix_row_equiv();
+    CHECK(rc == 0, "ML-DSA row-wise matrix expansion diverges at parameter row %d",
+          rc - 1);
+    printf("      row-wise matrix expansion is byte-identical to whole-matrix\n");
 }
 
 int main(void) {

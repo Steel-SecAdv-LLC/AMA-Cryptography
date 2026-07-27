@@ -945,6 +945,13 @@ def _setup_ml_kem_ctypes(lib: ctypes.CDLL) -> bool:
         ]
         lib.ama_ml_kem_privkey_check.restype = ctypes.c_int
 
+        lib.ama_ml_kem_pubkey_check.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+        ]
+        lib.ama_ml_kem_pubkey_check.restype = ctypes.c_int
+
         lib.ama_ml_kem_encapsulate.argtypes = [
             ctypes.c_int,
             ctypes.c_char_p,
@@ -4567,6 +4574,45 @@ def native_ml_kem_privkey_check(ps: Union[int, str], secret_key: bytes) -> bool:
     _ml_kem_require_native()
     rc = _native_lib.ama_ml_kem_privkey_check(
         pid, bytes(secret_key), ctypes.c_size_t(sz["secret_key"])
+    )
+    return bool(rc == 0)
+
+
+def native_ml_kem_pubkey_check(ps: Union[int, str], public_key: bytes) -> bool:
+    """
+    Whether an ML-KEM encapsulation key passes FIPS 203 §7.2 input validation.
+
+    §7.2 mandates two checks before an encapsulation key may be used: the type
+    check (length) and the **modulus check** — every 12-bit coefficient of
+    ``t_hat`` must be below ``q = 3329``, equivalently
+    ``ByteEncode_12(ByteDecode_12(ek))`` must reproduce ``ek``.
+
+    The modulus check is the one implementations skip, and skipping it is not
+    cosmetic: a conformant peer rejects an out-of-range key, so encapsulating to
+    one produces a shared secret nobody else derives — and ML-KEM's implicit
+    rejection is designed to fail silently, so nothing raises. 767 of every 4096
+    encodable values are out of range, so a flipped bit in a real key has about
+    a one-in-five chance of producing exactly this.
+
+    :func:`native_ml_kem_encapsulate` performs both checks itself; this is for
+    the import path, where a key should be refused rather than stored.
+
+    Returns ``False`` for an out-of-range key rather than raising, so a caller
+    validating untrusted material does not have to catch.
+
+    Raises:
+        ValueError: On a wrong key length or an unknown parameter set — those
+            are caller errors, not verdicts.
+    """
+    pid = _ml_kem_id(ps)
+    sz = ML_KEM_SIZES[pid]
+    if len(public_key) != sz["public_key"]:
+        raise ValueError(
+            f"ML-KEM-{pid} public key must be {sz['public_key']} bytes, got {len(public_key)}"
+        )
+    _ml_kem_require_native()
+    rc = _native_lib.ama_ml_kem_pubkey_check(
+        pid, bytes(public_key), ctypes.c_size_t(sz["public_key"])
     )
     return bool(rc == 0)
 

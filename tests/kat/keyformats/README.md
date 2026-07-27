@@ -28,13 +28,28 @@ way.
 | `lamps_ml_kem.json` | [draft-ietf-lamps-kyber-certificates-11](https://www.ietf.org/archive/id/draft-ietf-lamps-kyber-certificates-11.txt) Appendix C | draft -11, 22 July 2025 |
 | `rfc8410_okp.json` | [RFC 8410](https://www.rfc-editor.org/rfc/rfc8410.txt) §10 | RFC 8410, August 2018 |
 | `jose_cose.json` | [RFC 8037](https://www.rfc-editor.org/rfc/rfc8037.txt) Appendix A; [RFC 8152](https://www.rfc-editor.org/rfc/rfc8152.txt) Appendix C.7.1 | RFC 8037, January 2017; RFC 8152, July 2017 |
-| `openssl/` | OpenSSL 3.0.13 (30 Jan 2024) | generated once; see `openssl/PROVENANCE.txt` |
+| `rfc9500_ec.json` | [RFC 9500](https://www.rfc-editor.org/rfc/rfc9500.txt) §2.3 | RFC 9500, December 2023 |
 
-The first four are **the specifications' own answer keys** — published by the
-standards bodies precisely so an implementer needs no second party to check
-against. `openssl/` is different in kind and is there for one reason: RFC 5915
-and RFC 5480 publish no worked examples for EC PKCS#8 or SPKI, so for those
-curves a second implementation's output is the only available cross-check.
+Every one of these is **a specification's own answer key** — published by a
+standards body precisely so an implementer needs no second party to check
+against. Nothing in this corpus is the output of another cryptographic product,
+and nothing is meant to be.
+
+RFC 9500 is the newest arrival and closed the one real gap. RFC 5915 defines
+`ECPrivateKey` and publishes no example of it; RFC 5480 does the same for the
+SPKI side. RFC 9500 — "Standard Public Key Cryptography (PKCS) Test Keys",
+December 2023 — exists to supply exactly that kind of missing vector, and its
+§2.3 prints P-256, P-384 and P-521 keys in the RFC 5915 `ECPrivateKey` form AMA
+embeds inside PKCS#8.
+
+Where a document still publishes nothing, the substitute is
+[`tests/ref_keyformat.py`](../../ref_keyformat.py): a second encoder for these
+structures, transcribed from the RFCs' own ASN.1 with the text quoted inline. It
+is AMA's work, it imports nothing from `ama_cryptography`, and it is built
+declaratively so it shares no control flow with the production encoder — because
+two implementations that share an assumption do not check each other. It is
+itself anchored against RFC 9500 §2.3 and RFC 8410 §10.1 before it is used as an
+authority anywhere else.
 
 `jose_cose.json` is transcribed from running text rather than parsed, because
 those two appendices publish their examples as a JSON object and as CBOR
@@ -106,11 +121,29 @@ implementation that routes a coordinate through a big integer instead of
 fixed-width octets silently drops it and produces a 65-byte value that is a
 different key.
 
-### `openssl/` — 12 files
+### `rfc9500_ec.json` — 3 records
 
-PKCS#8 and SPKI for each of P-256, P-384, P-521, secp256k1, Ed25519 and X25519.
-`test_openssl_corpus_covers_every_classical_algorithm` asserts the set matches
-the library's, so a curve cannot be added without a cross-check.
+The IETF's own P-256, P-384 and P-521 private keys, as RFC 5915 `ECPrivateKey`.
+
+Each carries `[0] parameters` and `[1] publicKey`, which makes it three vectors
+in one. The `[0]` must be *accepted* — a standalone EC key file carries the
+curve OID, and third-party files do too — and must then be *omitted* on
+re-encoding, because RFC 5915 §3 says the field should not be repeated where the
+enclosing structure already names the curve. Re-emitting it would produce a file
+naming the curve twice, which is the shape that lets two parsers disagree about
+which name wins.
+
+The P-521 record doubles as a width vector: its scalar begins `0x01` in a
+66-octet field, so an encoder that routed it through a big integer would emit a
+shorter `OCTET STRING` that is still valid DER and is a different key.
+
+### Coverage beyond the published vectors
+
+The vendored records cover the keys the documents happened to print. Every
+algorithm, in both directions and under both `include_public_key` settings, is
+covered against `tests/ref_keyformat.py` instead — including the three RFC 9881
+§6 `CHOICE` arms and the fixed-width edge cases (a scalar or coordinate with
+leading zero octets), which are *constructed* rather than waited for.
 
 ## Refreshing
 
@@ -119,7 +152,7 @@ python3 tools/build_keyformat_corpus.py --specs    # re-derive from the RFCs
 python3 tools/build_keyformat_corpus.py --verify   # offline re-parse
 ```
 
-`--openssl` regenerates the independent sample, but note that key generation is
-random: it **replaces** the corpus rather than reproducing it. Only run it if
-you intend to swap the sample, and record the new OpenSSL version in the table
-above in the same commit.
+Both are reproducible: every record is extracted from a published document, so
+`--specs` re-derives byte-identical files. `--verify-upstream` re-extracts from
+the documents and compares record for record; it runs on a monthly schedule and
+on any pull request touching this corpus (`.github/workflows/corpus-provenance.yml`).

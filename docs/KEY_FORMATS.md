@@ -39,7 +39,7 @@ pub, priv = native_nistp_keypair("P-256")
 private = PrivateKey("P-256", priv, pub)
 public = PublicKey("P-256", pub)
 
-open("key.pem", "w").write(private.to_pem())      # PKCS#8, OpenSSL-compatible
+open("key.pem", "w").write(private.to_pem())      # PKCS#8, RFC 5958
 open("key.pub", "w").write(public.to_pem())       # SPKI
 
 jwk = public.to_jwk()                             # RFC 7518 / 8037
@@ -100,8 +100,8 @@ form this algorithm's ecosystem actually emits":
 
 | Kind | Default | Matches |
 |---|---|---|
-| EC | public key inside `ECPrivateKey` | OpenSSL |
-| Ed25519 / X25519 | no public key, v1 | OpenSSL, RFC 8410 §10.3 first example |
+| EC | public key inside `ECPrivateKey` | RFC 5915 §3; RFC 9500 §2.3 |
+| Ed25519 / X25519 | no public key, v1 | RFC 8410 §10.3 first example |
 | ML-DSA / ML-KEM | no public key, v1 | RFC 9881 Appendix C |
 
 `True` and `False` override it in either direction and both are tested. The
@@ -178,7 +178,8 @@ bounds.
 | draft-ietf-lamps-kyber-certificates-11 Appendix C — 16 vectors | the same for ML-KEM, with four inconsistent keys |
 | RFC 8410 §10 — 3 vectors | Ed25519 SPKI and both PKCS#8 forms, including the one with a PKCS#8 attribute and a primitive `[1] publicKey` |
 | RFC 8037 Appendix A / RFC 8152 Appendix C.7.1 | Ed25519 JWK, the RFC 7638 thumbprint *and its canonical input string*, P-256 and P-521 `COSE_Key` |
-| `tests/kat/keyformats/openssl/` — 12 files | EC and OKP PKCS#8/SPKI produced by a second implementation, for which no RFC publishes examples |
+| `tests/kat/keyformats/rfc9500_ec.json` — 3 records | the IETF's own P-256/P-384/P-521 `ECPrivateKey`, the structure RFC 5915 defines without an example |
+| `tests/ref_keyformat.py` | a second encoder transcribed from the RFCs' ASN.1 — AMA's own, importing nothing from `ama_cryptography` — covering every algorithm and option, anchored against RFC 9500 §2.3 and RFC 8410 §10.1 |
 |  `tests/test_key_formats.py` — 301 tests | the above in both directions, plus the negative space |
 
 Two things about that table are deliberate.

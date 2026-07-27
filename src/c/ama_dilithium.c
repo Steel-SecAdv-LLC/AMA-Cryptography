@@ -1469,25 +1469,21 @@ static int dil_rej_uniform_from_stream(dil_poly *a,
  * rate blocks at a 0.1 % rejection rate, but is preserved for
  * correctness across all possible (rho, nonce) inputs.
  */
-static void dil_expand_matrix(dil_poly *mat,
-                               const uint8_t rho[DIL_SEEDBYTES],
-                               const dil_params *P) {
-    const unsigned int total = P->k * P->l;
+static void dil_sample_uniform_n(dil_poly *out,
+                                  const uint16_t *nonces,
+                                  unsigned int count,
+                                  const uint8_t rho[DIL_SEEDBYTES]) {
     const size_t kInitialBlocks = 5;   /* matches scalar dil_poly_uniform stream */
     unsigned int flat = 0;
 
-    while (flat + 4 <= total) {
+    while (flat + 4 <= count) {
         uint8_t bufs[4][DIL_SEEDBYTES + 2];
-        dil_poly *polys[4];
 
         for (int lane = 0; lane < 4; lane++) {
-            unsigned int f = flat + (unsigned int)lane;
-            unsigned int i = f / P->l, j = f % P->l;
-            uint16_t nonce = (uint16_t)((i << 8) + j);
+            uint16_t nonce = nonces[flat + (unsigned int)lane];
             memcpy(bufs[lane], rho, DIL_SEEDBYTES);
             bufs[lane][DIL_SEEDBYTES]     = (uint8_t)(nonce & 0xFF);
             bufs[lane][DIL_SEEDBYTES + 1] = (uint8_t)(nonce >> 8);
-            polys[lane] = &mat[(size_t)i * P->l + j];
         }
 
         ama_shake128_x4_ctx ctx;
@@ -1502,29 +1498,70 @@ static void dil_expand_matrix(dil_poly *mat,
             streams[0], streams[1], streams[2], streams[3], kInitialBlocks);
 
         for (int lane = 0; lane < 4; lane++) {
-            int ok = dil_rej_uniform_from_stream(polys[lane],
+            unsigned int f = flat + (unsigned int)lane;
+            int ok = dil_rej_uniform_from_stream(&out[f],
                                                   streams[lane],
                                                   AMA_SHAKE128_X4_RATE * kInitialBlocks);
             if (!ok) {
                 /* Rare fallback (<1e-30 probability for 5 blocks at 0.1% reject):
                  * redo this single poly via the scalar path, which has its own
                  * incremental re-squeeze loop. */
-                unsigned int f = flat + (unsigned int)lane;
-                unsigned int i = f / P->l, j = f % P->l;
-                dil_poly_uniform(polys[lane], rho, (uint16_t)((i << 8) + j));
+                dil_poly_uniform(&out[f], rho, nonces[f]);
             }
         }
 
         flat += 4;
     }
 
-    /* Trailing 0..3 polys: use the scalar path directly.  k*l is 16, 30 and
-     * 56 for ML-DSA-44/-65/-87, so this runs 0, 2 and 0 times respectively. */
-    while (flat < total) {
-        unsigned int i = flat / P->l, j = flat % P->l;
-        dil_poly_uniform(&mat[(size_t)i * P->l + j], rho, (uint16_t)((i << 8) + j));
+    /* Trailing 0..3 polys: use the scalar path directly. */
+    while (flat < count) {
+        dil_poly_uniform(&out[flat], rho, nonces[flat]);
         flat++;
     }
+}
+
+static void dil_expand_matrix(dil_poly *mat,
+                               const uint8_t rho[DIL_SEEDBYTES],
+                               const dil_params *P) {
+    uint16_t nonces[DIL_K_MAX * DIL_L_MAX];
+    const unsigned int total = P->k * P->l;
+    unsigned int f;
+
+    /* Flat index f maps to A[i][j] with i = f / l, j = f % l — the same layout
+     * mat[] itself uses — so sampling in flat order fills the matrix in place.
+     * k*l is 16, 30 and 56 for ML-DSA-44/-65/-87, so the trailing scalar tail
+     * runs 0, 2 and 0 times respectively. */
+    for (f = 0; f < total; ++f) {
+        nonces[f] = (uint16_t)(((f / P->l) << 8) + (f % P->l));
+    }
+    dil_sample_uniform_n(mat, nonces, total, rho);
+}
+
+/**
+ * Expand a single row of A — the low-stack alternative to dil_expand_matrix.
+ *
+ * The full matrix is 56 polynomials at ML-DSA-87, which is 57 KB of automatic
+ * storage on its own.  A caller that consumes A one row at a time (t = A*s1 is
+ * exactly that shape) needs only `l` of them, so it can hold 7 KB instead —
+ * see the frame budget documented on dil_pubkey_from_sk.
+ *
+ * Byte-for-byte identical to the corresponding slice of dil_expand_matrix: the
+ * SHAKE-128 stream for A[i][j] depends only on (rho, nonce), and the nonce is
+ * (i << 8) + j regardless of how the samples are grouped into x4 batches.
+ * tests/c/test_dilithium_matrix_row_equiv.c asserts that against the whole-
+ * matrix expansion for every parameter set rather than leaving it as a claim.
+ */
+static void dil_expand_matrix_row(dil_poly *row,
+                                   const uint8_t rho[DIL_SEEDBYTES],
+                                   unsigned int i,
+                                   const dil_params *P) {
+    uint16_t nonces[DIL_L_MAX];
+    unsigned int j;
+
+    for (j = 0; j < P->l; ++j) {
+        nonces[j] = (uint16_t)((i << 8) + j);
+    }
+    dil_sample_uniform_n(row, nonces, P->l, rho);
 }
 
 #ifdef AMA_TESTING_MODE
@@ -1682,7 +1719,51 @@ static ama_error_t dil_keygen_internal(const dil_params *P,
  * pass/fail on data the caller supplied, so this is not on a secret-dependent
  * timing path in the sense the signer is; it is nevertheless written without
  * early exits so that a partial failure does not narrow down which field
- * disagreed.
+ * disagreed.  `sk_bad` and `diff` are accumulated across the whole key and only
+ * read at the end for that reason — this function never returns early on a
+ * data-dependent condition.
+ *
+ * Bounded stack — the reason this does not simply reuse the keygen body
+ * ---------------------------------------------------------------------
+ * Keygen and sign hold the entire k x l matrix A plus five or six length-k
+ * vectors in automatic storage.  At ML-DSA-87 that is 56 + ~40 polynomials,
+ * about 110 KB, which is fine for those two: they are called by an application
+ * that decided to make a key or a signature.
+ *
+ * This function is different in kind, because it is reachable **from a file
+ * parser**.  `ama_cryptography.key_formats.load_pkcs8` calls it on every
+ * `expandedKey`-only ML-DSA key it imports, so the frame size is chosen by
+ * whoever hands you a key file.  110 KB is more than the default thread stack
+ * on musl (128 KB total) once anything else is on it, and more than most
+ * embedded RTOS task stacks; a parser that overflows the stack on a
+ * well-formed input is a denial of service at best.
+ *
+ * So the matrix is expanded **one row at a time** and every length-k vector is
+ * replaced by a single working polynomial, giving a frame of:
+ *
+ *     mat_row   l polys   <=  7 * 1024 =  7168 B
+ *     s1hat     l polys   <=  7 * 1024 =  7168 B
+ *     acc, tmp, t0_i, t1_i   4 * 1024  =  4096 B
+ *     pk                                =  2592 B
+ *     tr                                =    64 B
+ *     ------------------------------------------
+ *     total                             ~= 21 KB
+ *
+ * a little over five times smaller than the keygen shape, and — because every
+ * array is sized at DIL_*_MAX rather than at the runtime parameter set — a
+ * bound that does not depend on which parameter set the key file names.
+ *
+ * This is measured, not asserted: `tests/c/test_pq_parser_stack.c` runs the
+ * call on a painted, caller-supplied thread stack and reports the real
+ * high-water mark over the whole call chain, against the budget stated there
+ * (`AMA_PQ_PARSER_STACK_BUDGET`). On the pre-rewrite implementation it read
+ * 123,608 bytes; it now reads 29,400.
+ *
+ * Row-wise expansion costs some SHAKE-128 x4 batching efficiency (a row of 5
+ * batches as 4 + 1 rather than joining the next row), which is the right trade
+ * on a validation path and is measured in docs/KEY_FORMATS.md.
+ * `ama_ml_dsa_test_matrix_row_equiv` (exercised by tests/c/test_nistp.c) pins
+ * the byte-identity of the two expansions.
  *
  * @param public_key  May be NULL to check without emitting the public key.
  * @return AMA_SUCCESS if the key is internally consistent;
@@ -1693,9 +1774,9 @@ static ama_error_t dil_keygen_internal(const dil_params *P,
 static ama_error_t dil_pubkey_from_sk(const dil_params *P,
                                       const uint8_t *secret_key,
                                       uint8_t *public_key) {
-    dil_poly mat[DIL_K_MAX * DIL_L_MAX];
-    dil_polyvecl s1, s1hat;
-    dil_polyveck s2, t, t0, t1, t0_stored;
+    dil_poly mat_row[DIL_L_MAX];
+    dil_polyvecl s1hat;
+    dil_poly acc, tmp, t0_i, t1_i;
     uint8_t pk[AMA_ML_DSA_87_PUBLIC_KEY_BYTES];
     uint8_t tr[DIL_TRBYTES];
     const uint8_t *rho, *tr_stored;
@@ -1716,69 +1797,150 @@ static ama_error_t dil_pubkey_from_sk(const dil_params *P,
     eta_off = 2 * DIL_SEEDBYTES + DIL_TRBYTES;
     t0_off = eta_off + (size_t)(P->l + P->k) * P->polyeta_packedbytes;
 
+    /* s1 is unpacked straight into the NTT working vector: the time-domain
+     * copy the keygen body keeps is never read again here. */
     for (i = 0; i < P->l; ++i) {
-        sk_bad |= dil_polyeta_unpack(&s1.vec[i],
+        sk_bad |= dil_polyeta_unpack(&s1hat.vec[i],
             secret_key + eta_off + i * P->polyeta_packedbytes, P);
     }
-    for (i = 0; i < P->k; ++i) {
-        sk_bad |= dil_polyeta_unpack(&s2.vec[i],
-            secret_key + eta_off + (P->l + i) * P->polyeta_packedbytes, P);
-    }
-    if (sk_bad) {
-        rc = AMA_ERROR_INVALID_PARAM;
-        goto done;
-    }
-    for (i = 0; i < P->k; ++i) {
-        dil_polyt0_unpack(&t0_stored.vec[i],
-            secret_key + t0_off + i * DIL_POLYT0_PACKEDBYTES);
-    }
-
-    /* t = A*s1 + s2, then Power2Round into (t1, t0) — the keygen chain. */
-    dil_expand_matrix(mat, rho, P);
-    s1hat = s1;
     dil_polyvecl_ntt(&s1hat, P->l);
-    dil_polyvec_matrix_pointwise(&t, mat, &s1hat, P);
-    dil_polyveck_invntt(&t, P->k);
-    dil_polyveck_add(&t, &t, &s2, P->k);
-    dil_polyveck_reduce(&t, P->k);
-    dil_polyveck_caddq(&t, P->k);
-    dil_polyveck_power2round(&t1, &t0, &t, P->k);
 
     memcpy(pk, rho, DIL_SEEDBYTES);
-    for (i = 0; i < P->k; ++i) {
-        dil_polyt1_pack(pk + DIL_SEEDBYTES + i * DIL_POLYT1_PACKEDBYTES, &t1.vec[i]);
-    }
-    ama_shake256(pk, P->pk_bytes, tr, DIL_TRBYTES);
 
-    /* t0 and tr must both agree with what the key carries. */
+    /* t = A*s1 + s2, then Power2Round into (t1, t0) — the keygen chain, taken
+     * one row of A at a time so neither A nor any length-k vector is ever
+     * materialised in full.  An out-of-range s1/s2 coefficient leaves values in
+     * [-11, 4] (see dil_polyeta_unpack), so the arithmetic below stays in range
+     * and `sk_bad` can be decided after the loop instead of inside it. */
     for (i = 0; i < P->k; ++i) {
+        dil_expand_matrix_row(mat_row, rho, i, P);
+        dil_poly_pointwise_montgomery(&acc, &mat_row[0], &s1hat.vec[0]);
+        for (j = 1; j < P->l; ++j) {
+            dil_poly_pointwise_montgomery(&tmp, &mat_row[j], &s1hat.vec[j]);
+            dil_poly_add(&acc, &acc, &tmp);
+        }
+        dil_poly_invntt(&acc);
+
+        sk_bad |= dil_polyeta_unpack(&tmp,
+            secret_key + eta_off + (P->l + i) * P->polyeta_packedbytes, P);
+        dil_poly_add(&acc, &acc, &tmp);
+        dil_poly_reduce(&acc);
+        dil_poly_caddq(&acc);
+
         for (j = 0; j < DIL_N; ++j) {
-            diff |= t0.vec[i].coeffs[j] ^ t0_stored.vec[i].coeffs[j];
+            t1_i.coeffs[j] = dil_power2round(&t0_i.coeffs[j], acc.coeffs[j]);
+        }
+        dil_polyt1_pack(pk + DIL_SEEDBYTES + i * DIL_POLYT1_PACKEDBYTES, &t1_i);
+
+        /* The stored t0 for this row, compared in place rather than collected. */
+        dil_polyt0_unpack(&tmp, secret_key + t0_off + i * DIL_POLYT0_PACKEDBYTES);
+        for (j = 0; j < DIL_N; ++j) {
+            diff |= t0_i.coeffs[j] ^ tmp.coeffs[j];
         }
     }
-    if (diff != 0 || ama_consttime_memcmp(tr, tr_stored, DIL_TRBYTES) != 0) {
-        rc = AMA_ERROR_VERIFY_FAILED;
-        goto done;
-    }
 
-    if (public_key) {
+    ama_shake256(pk, P->pk_bytes, tr, DIL_TRBYTES);
+
+    /* Precedence matches the pre-row-wise implementation: an out-of-range
+     * coefficient is a malformed key (INVALID_PARAM), and only a well-formed
+     * key can go on to disagree with itself (VERIFY_FAILED). */
+    if (sk_bad) {
+        rc = AMA_ERROR_INVALID_PARAM;
+    } else if (diff != 0 || ama_consttime_memcmp(tr, tr_stored, DIL_TRBYTES) != 0) {
+        rc = AMA_ERROR_VERIFY_FAILED;
+    } else if (public_key) {
         memcpy(public_key, pk, P->pk_bytes);
     }
 
-done:
-    ama_secure_memzero(&s1, sizeof(s1));
     ama_secure_memzero(&s1hat, sizeof(s1hat));
-    ama_secure_memzero(&s2, sizeof(s2));
-    ama_secure_memzero(&t, sizeof(t));
-    ama_secure_memzero(&t0, sizeof(t0));
-    ama_secure_memzero(&t0_stored, sizeof(t0_stored));
+    ama_secure_memzero(&acc, sizeof(acc));
+    ama_secure_memzero(&tmp, sizeof(tmp));
+    ama_secure_memzero(&t0_i, sizeof(t0_i));
+    ama_secure_memzero(&t1_i, sizeof(t1_i));
     ama_secure_memzero(pk, sizeof(pk));
     ama_secure_memzero(tr, sizeof(tr));
     return rc;
 }
 
+/**
+ * mu = H(tr || prefix || M, 64) — FIPS 204 Algorithm 7 line 6 / Algorithm 8
+ * line 7, with the §5.2 context prefix absorbed in place when there is one.
+ *
+ * Streamed through the incremental SHAKE-256 interface rather than assembled in
+ * one buffer. The buffer version allocated `TRBYTES + message_len` on the heap,
+ * copied the whole message into it, hashed, scrubbed and freed — so signing an
+ * n-byte message needed 2n bytes of live memory and n bytes of extra copying,
+ * on a path an attacker can drive with a message of their choosing. Four such
+ * allocations existed across this file; none remain.
+ *
+ * The digest is byte-identical either way: SHAKE-256 absorption is a stream, so
+ * absorbing three pieces and absorbing their concatenation are the same
+ * operation. tests/test_pqc_param_sets.py and the ACVP corpora pin that
+ * against NIST's own vectors in both the plain and context forms.
+ */
+static ama_error_t dil_hash_mu(const uint8_t *tr,
+                               const uint8_t *prefix, size_t prefix_len,
+                               const uint8_t *message, size_t message_len,
+                               uint8_t mu[DIL_CRHBYTES]) {
+    ama_sha3_ctx ctx;
+    ama_error_t rc;
+
+    rc = ama_shake256_inc_init(&ctx);
+    if (rc == AMA_SUCCESS) {
+        rc = ama_shake256_inc_absorb(&ctx, tr, DIL_TRBYTES);
+    }
+    if (rc == AMA_SUCCESS && prefix_len) {
+        rc = ama_shake256_inc_absorb(&ctx, prefix, prefix_len);
+    }
+    if (rc == AMA_SUCCESS && message_len) {
+        rc = ama_shake256_inc_absorb(&ctx, message, message_len);
+    }
+    if (rc == AMA_SUCCESS) {
+        rc = ama_shake256_inc_finalize(&ctx);
+    }
+    if (rc == AMA_SUCCESS) {
+        rc = ama_shake256_inc_squeeze(&ctx, mu, DIL_CRHBYTES);
+    }
+    /* The absorbed state is a function of the message and of tr; neither is a
+     * long-term secret, but the state is scrubbed on every path regardless
+     * because a Keccak state left on the stack is the shape a later overread
+     * finds. */
+    ama_secure_memzero(&ctx, sizeof(ctx));
+    return rc;
+}
+
+/**
+ * The FIPS 204 §5.2 external/pure context prefix,
+ * `0x00 || IntegerToBytes(|ctx|, 1) || ctx`.
+ *
+ * Built into a fixed 257-octet automatic buffer — `ctx_len` is capped at 255 by
+ * the specification, so the bound is structural and needs no allocation. This
+ * replaces `dil_wrap_ctx`, which malloc'd `2 + ctx_len + message_len` and
+ * copied the entire message in order to prepend two octets to it.
+ */
+#define DIL_CTX_PREFIX_MAX (2u + 255u)
+
+static ama_error_t dil_build_ctx_prefix(const uint8_t *ctx, size_t ctx_len,
+                                        uint8_t prefix[DIL_CTX_PREFIX_MAX],
+                                        size_t *prefix_len) {
+    if (ctx_len > 255) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+    if (ctx_len && !ctx) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+    prefix[0] = 0x00;
+    prefix[1] = (uint8_t)ctx_len;
+    if (ctx_len) {
+        memcpy(prefix + 2, ctx, ctx_len);
+    }
+    *prefix_len = 2 + ctx_len;
+    return AMA_SUCCESS;
+}
+
 static ama_error_t dil_sign_internal(const dil_params *P,
                                      uint8_t *signature, size_t *signature_len,
+                                     const uint8_t *prefix, size_t prefix_len,
                                      const uint8_t *message, size_t message_len,
                                      const uint8_t *secret_key) {
     uint8_t *rho, *key, *tr;
@@ -1853,21 +2015,13 @@ static ama_error_t dil_sign_internal(const dil_params *P,
     dil_polyveck t0hat = t0;
     dil_polyveck_ntt(&t0hat, P->k);
 
-    /* Compute mu = H(tr || M) */
+    /* mu = H(tr || prefix || M) — streamed, no allocation. */
     {
-        /* Guard against integer overflow in allocation size */
-        if (message_len > SIZE_MAX - DIL_TRBYTES) {
-            return AMA_ERROR_INVALID_PARAM;
+        ama_error_t mu_rc = dil_hash_mu(tr, prefix, prefix_len,
+                                        message, message_len, mu);
+        if (mu_rc != AMA_SUCCESS) {
+            return mu_rc;
         }
-        uint8_t *mu_input = (uint8_t *)malloc(DIL_TRBYTES + message_len);
-        if (!mu_input) {
-            return AMA_ERROR_MEMORY;
-        }
-        memcpy(mu_input, tr, DIL_TRBYTES);
-        memcpy(mu_input + DIL_TRBYTES, message, message_len);
-        ama_shake256(mu_input, DIL_TRBYTES + message_len, mu, DIL_CRHBYTES);
-        ama_secure_memzero(mu_input, DIL_TRBYTES + message_len);
-        free(mu_input);
     }
 
     /*
@@ -2060,6 +2214,7 @@ static ama_error_t dil_sign_internal(const dil_params *P,
  * @return AMA_SUCCESS if valid, AMA_ERROR_VERIFY_FAILED if invalid
  */
 static ama_error_t dil_verify_internal(const dil_params *P,
+                                       const uint8_t *prefix, size_t prefix_len,
                                        const uint8_t *message, size_t message_len,
                                        const uint8_t *signature, size_t signature_len,
                                        const uint8_t *public_key) {
@@ -2130,21 +2285,13 @@ static ama_error_t dil_verify_internal(const dil_params *P,
     /* Compute tr = H(pk) */
     ama_shake256(public_key, P->pk_bytes, tr, DIL_TRBYTES);
 
-    /* Compute mu = H(tr || M) */
+    /* mu = H(tr || prefix || M) — streamed, no allocation. */
     {
-        /* Guard against integer overflow in allocation size */
-        if (message_len > SIZE_MAX - DIL_TRBYTES) {
-            return AMA_ERROR_VERIFY_FAILED;
+        ama_error_t mu_rc = dil_hash_mu(tr, prefix, prefix_len,
+                                        message, message_len, mu);
+        if (mu_rc != AMA_SUCCESS) {
+            return mu_rc;
         }
-        uint8_t *mu_input = (uint8_t *)malloc(DIL_TRBYTES + message_len);
-        if (!mu_input) {
-            return AMA_ERROR_MEMORY;
-        }
-        memcpy(mu_input, tr, DIL_TRBYTES);
-        memcpy(mu_input + DIL_TRBYTES, message, message_len);
-        ama_shake256(mu_input, DIL_TRBYTES + message_len, mu, DIL_CRHBYTES);
-        ama_secure_memzero(mu_input, DIL_TRBYTES + message_len);
-        free(mu_input);
     }
 
     /* Compute challenge polynomial c from c_tilde */
@@ -2176,27 +2323,27 @@ static ama_error_t dil_verify_internal(const dil_params *P,
     /* Use hints to recover w1 */
     dil_polyveck_use_hint(&w1prime, &w1prime, hint, P);
 
-    /* Recompute c_tilde' = H(mu || w1') */
+    /* Recompute c_tilde' = H(mu || w1').
+     *
+     * Both halves are bounded by the parameter table — 64 octets of mu and at
+     * most DIL_K_MAX * DIL_POLYW1_PACKEDBYTES_MAX (1536) of packed w1 — so this
+     * never needed the heap at all. It malloc'd anyway, on a path reachable by
+     * anyone who can present a signature, which turned an allocator failure
+     * into a verification failure of a valid signature. */
     {
-        uint8_t w1_packed[DIL_K_MAX * DIL_POLYW1_PACKEDBYTES_MAX];
-        uint8_t *challenge_input;
+        uint8_t challenge_input[DIL_CRHBYTES +
+                                DIL_K_MAX * DIL_POLYW1_PACKEDBYTES_MAX];
         const size_t w1_len = (size_t)P->k * P->polyw1_packedbytes;
-        size_t challenge_len = DIL_CRHBYTES + w1_len;
+        const size_t challenge_len = DIL_CRHBYTES + w1_len;
 
-        for (i = 0; i < P->k; ++i) {
-            dil_polyw1_pack(w1_packed + i * P->polyw1_packedbytes,
-                           &w1prime.vec[i], P);
-        }
-
-        challenge_input = (uint8_t *)malloc(challenge_len);
-        if (!challenge_input) {
-            return AMA_ERROR_MEMORY;
-        }
         memcpy(challenge_input, mu, DIL_CRHBYTES);
-        memcpy(challenge_input + DIL_CRHBYTES, w1_packed, w1_len);
+        for (i = 0; i < P->k; ++i) {
+            dil_polyw1_pack(challenge_input + DIL_CRHBYTES +
+                                i * P->polyw1_packedbytes,
+                            &w1prime.vec[i], P);
+        }
         ama_shake256(challenge_input, challenge_len, c_tilde2, P->ctildebytes);
-        ama_secure_memzero(challenge_input, challenge_len);
-        free(challenge_input);
+        ama_secure_memzero(challenge_input, sizeof(challenge_input));
     }
 
     /* Verify c_tilde == c_tilde2 (constant-time comparison) */
@@ -2282,7 +2429,8 @@ AMA_API ama_error_t ama_ml_dsa_sign(ama_ml_dsa_param_set_t ps,
                                     const uint8_t *secret_key) {
     const dil_params *P = dil_params_for(ps);
     if (!P) return AMA_ERROR_INVALID_PARAM;
-    return dil_sign_internal(P, signature, signature_len, message, message_len, secret_key);
+    return dil_sign_internal(P, signature, signature_len, NULL, 0,
+                             message, message_len, secret_key);
 }
 
 AMA_API ama_error_t ama_ml_dsa_verify(ama_ml_dsa_param_set_t ps,
@@ -2291,41 +2439,8 @@ AMA_API ama_error_t ama_ml_dsa_verify(ama_ml_dsa_param_set_t ps,
                                       const uint8_t *public_key) {
     const dil_params *P = dil_params_for(ps);
     if (!P) return AMA_ERROR_INVALID_PARAM;
-    return dil_verify_internal(P, message, message_len, signature, signature_len, public_key);
-}
-
-/**
- * Apply the FIPS 204 §5.2 external/pure context wrapper
- * M' = 0x00 || IntegerToBytes(|ctx|, 1) || ctx || M.
- *
- * Shared by the parameterised and legacy context entry points so the two can
- * never disagree about the domain separator.  The caller owns `out` and must
- * free it; `*out_len` is set on success.
- */
-static ama_error_t dil_wrap_ctx(const uint8_t *message, size_t message_len,
-                                const uint8_t *ctx, size_t ctx_len,
-                                uint8_t **out, size_t *out_len) {
-    uint8_t *buf;
-
-    if (ctx_len > 255) {
-        return AMA_ERROR_INVALID_PARAM;
-    }
-    if (message_len > SIZE_MAX - 2 - ctx_len) {
-        return AMA_ERROR_INVALID_PARAM;
-    }
-    buf = (uint8_t *)malloc(2 + ctx_len + message_len);
-    if (!buf) {
-        return AMA_ERROR_MEMORY;
-    }
-    buf[0] = 0x00;
-    buf[1] = (uint8_t)ctx_len;
-    if (ctx_len) {
-        memcpy(buf + 2, ctx, ctx_len);
-    }
-    memcpy(buf + 2 + ctx_len, message, message_len);
-    *out = buf;
-    *out_len = 2 + ctx_len + message_len;
-    return AMA_SUCCESS;
+    return dil_verify_internal(P, NULL, 0, message, message_len,
+                               signature, signature_len, public_key);
 }
 
 AMA_API ama_error_t ama_ml_dsa_sign_ctx(ama_ml_dsa_param_set_t ps,
@@ -2334,23 +2449,20 @@ AMA_API ama_error_t ama_ml_dsa_sign_ctx(ama_ml_dsa_param_set_t ps,
                                         const uint8_t *ctx, size_t ctx_len,
                                         const uint8_t *secret_key) {
     const dil_params *P = dil_params_for(ps);
-    uint8_t *wrapped = NULL;
-    size_t wrapped_len = 0;
+    uint8_t prefix[DIL_CTX_PREFIX_MAX];
+    size_t prefix_len = 0;
     ama_error_t rc;
 
     if (!P || !message || !signature || !signature_len || !secret_key) {
         return AMA_ERROR_INVALID_PARAM;
     }
-    if (ctx_len && !ctx) {
-        return AMA_ERROR_INVALID_PARAM;
-    }
-    rc = dil_wrap_ctx(message, message_len, ctx, ctx_len, &wrapped, &wrapped_len);
+    rc = dil_build_ctx_prefix(ctx, ctx_len, prefix, &prefix_len);
     if (rc != AMA_SUCCESS) {
         return rc;
     }
-    rc = dil_sign_internal(P, signature, signature_len, wrapped, wrapped_len, secret_key);
-    ama_secure_memzero(wrapped, wrapped_len);
-    free(wrapped);
+    rc = dil_sign_internal(P, signature, signature_len, prefix, prefix_len,
+                           message, message_len, secret_key);
+    ama_secure_memzero(prefix, sizeof(prefix));
     return rc;
 }
 
@@ -2360,23 +2472,20 @@ AMA_API ama_error_t ama_ml_dsa_verify_ctx(ama_ml_dsa_param_set_t ps,
                                           const uint8_t *signature, size_t signature_len,
                                           const uint8_t *public_key) {
     const dil_params *P = dil_params_for(ps);
-    uint8_t *wrapped = NULL;
-    size_t wrapped_len = 0;
+    uint8_t prefix[DIL_CTX_PREFIX_MAX];
+    size_t prefix_len = 0;
     ama_error_t rc;
 
     if (!P || !message || !signature || !public_key) {
         return AMA_ERROR_INVALID_PARAM;
     }
-    if (ctx_len && !ctx) {
-        return AMA_ERROR_INVALID_PARAM;
-    }
-    rc = dil_wrap_ctx(message, message_len, ctx, ctx_len, &wrapped, &wrapped_len);
+    rc = dil_build_ctx_prefix(ctx, ctx_len, prefix, &prefix_len);
     if (rc != AMA_SUCCESS) {
         return rc;
     }
-    rc = dil_verify_internal(P, wrapped, wrapped_len, signature, signature_len, public_key);
-    ama_secure_memzero(wrapped, wrapped_len);
-    free(wrapped);
+    rc = dil_verify_internal(P, prefix, prefix_len, message, message_len,
+                             signature, signature_len, public_key);
+    ama_secure_memzero(prefix, sizeof(prefix));
     return rc;
 }
 
@@ -2453,6 +2562,49 @@ int ama_ml_dsa_test_params_selfcheck(void) {
         if (P->sig_bytes != P->ctildebytes + (size_t)P->l * polyz + P->omega + P->k)
             return (int)(1 + idx);
         if (dil_params_for(P->ps) != P) return (int)(1 + idx);
+    }
+    return 0;
+}
+
+/**
+ * Test-only: assert that row-wise matrix expansion is byte-identical to the
+ * whole-matrix expansion, for every parameter set.
+ *
+ * `dil_pubkey_from_sk` expands A one row at a time so its frame stays bounded
+ * on a parser-reachable path (see the commentary there). That is only safe
+ * because the SHAKE-128 stream for A[i][j] depends solely on (rho, nonce) and
+ * not on how the samples were grouped into x4 batches — a property the public
+ * API cannot distinguish, since a divergence would simply produce a different
+ * (but internally consistent) public key and every self-round-trip would still
+ * pass. The ML-DSA KATs would catch it, but only as "ML-DSA is wrong"; this
+ * names it.
+ *
+ * Returns 0 on success, or 1 + the index of the first parameter set that
+ * disagreed.
+ */
+int ama_ml_dsa_test_matrix_row_equiv(void);
+int ama_ml_dsa_test_matrix_row_equiv(void) {
+    static dil_poly mat[DIL_K_MAX * DIL_L_MAX];
+    static dil_poly row[DIL_L_MAX];
+    uint8_t rho[DIL_SEEDBYTES];
+    unsigned idx, i, j, c;
+
+    for (i = 0; i < DIL_SEEDBYTES; i++) {
+        rho[i] = (uint8_t)(0x11 * (i + 1));
+    }
+    for (idx = 0; idx < 3; idx++) {
+        const dil_params *P = &DIL_PARAM_SETS[idx];
+        dil_expand_matrix(mat, rho, P);
+        for (i = 0; i < P->k; i++) {
+            dil_expand_matrix_row(row, rho, i, P);
+            for (j = 0; j < P->l; j++) {
+                for (c = 0; c < DIL_N; c++) {
+                    if (row[j].coeffs[c] != mat[(size_t)i * P->l + j].coeffs[c]) {
+                        return (int)(1 + idx);
+                    }
+                }
+            }
+        }
     }
     return 0;
 }

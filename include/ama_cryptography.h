@@ -2814,6 +2814,12 @@ AMA_API ama_error_t ama_ml_kem_keypair_from_seed(ama_ml_kem_param_set_t ps,
  * an encapsulate/decapsulate round trip must agree on the shared secret.
  * draft-ietf-lamps-kyber-certificates Appendix C.4.1 ships a vector for each.
  *
+ * **Deterministic: this call consumes no entropy.** The round trip encapsulates
+ * under a fixed internal message rather than a random one, so the result is a
+ * pure function of `sk`. It is reachable from a key-file parser, it has to be
+ * usable as a KAT, and a FIPS 140-3 self-test cannot depend on the RNG it may
+ * run before. `ama_ml_kem_encapsulate` is unaffected and remains randomised.
+ *
  * @param pk  Output, `ama_ml_kem_public_key_bytes(ps)` octets.
  * @return AMA_SUCCESS; AMA_ERROR_INVALID_PARAM on a NULL argument, unknown
  *         parameter set, or wrong `sk_len`/`pk_len`; AMA_ERROR_VERIFY_FAILED
@@ -2829,10 +2835,36 @@ AMA_API ama_error_t ama_ml_kem_pubkey_from_privkey(ama_ml_kem_param_set_t ps,
  *        discarding the recovered encapsulation key.
  *
  * Identical checks and return values to `ama_ml_kem_pubkey_from_privkey`,
- * for callers that only want the verdict.
+ * for callers that only want the verdict — including its determinism: this
+ * call consumes no entropy.
  */
 AMA_API ama_error_t ama_ml_kem_privkey_check(ama_ml_kem_param_set_t ps,
                                              const uint8_t *sk, size_t sk_len);
+
+/**
+ * @brief FIPS 203 §7.2 input validation for an ML-KEM encapsulation key.
+ *
+ * Two checks, both required by §7.2 before `ek` may be used:
+ *
+ *  - **type check**: `|ek| = 384k + 32`;
+ *  - **modulus check**: every 12-bit coefficient of `t_hat` is below
+ *    `q = 3329`, equivalently `ByteEncode_12(ByteDecode_12(ek))` reproduces
+ *    `ek`.
+ *
+ * `ama_ml_kem_encapsulate` performs both itself, so a caller encapsulating does
+ * not need to call this first. It is exported for the *import* path: a key
+ * parser that accepts an out-of-range encapsulation key hands the application a
+ * key every conformant peer will reject, and because ML-KEM's implicit
+ * rejection is designed to fail silently the divergence surfaces nowhere.
+ *
+ * Not constant time — an encapsulation key is public by definition.
+ *
+ * @return AMA_SUCCESS if valid; AMA_ERROR_INVALID_PARAM on NULL, an unknown
+ *         parameter set, or the wrong length; AMA_ERROR_VERIFY_FAILED if a
+ *         coefficient is out of range.
+ */
+AMA_API ama_error_t ama_ml_kem_pubkey_check(ama_ml_kem_param_set_t ps,
+                                            const uint8_t *pk, size_t pk_len);
 
 /**
  * @brief ML-KEM encapsulation (FIPS 203 Algorithm 17).

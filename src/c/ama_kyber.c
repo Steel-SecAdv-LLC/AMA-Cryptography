@@ -151,6 +151,11 @@ static void poly_compress(uint8_t* r, const poly* a, int bits);
 static void poly_decompress(poly* r, const uint8_t* a, int bits);
 static void poly_tobytes(uint8_t* r, const poly* a);
 static void poly_frombytes(poly* r, const uint8_t* a);
+/* FIPS 203 §7.2 encapsulation-key input validation.  Defined beside the other
+ * key-checking entry points below, but used by kyber_encapsulate_internal
+ * above it, so it is declared here. */
+static ama_error_t kyber_pubkey_check(const kyber_params* P,
+                                      const uint8_t* ek, size_t ek_len);
 static int16_t montgomery_reduce(int32_t a);
 static int16_t coeff_normalize(int16_t a);
 static void poly_tomont(poly* r);
@@ -865,12 +870,23 @@ static void kyber_cpapke_enc(uint8_t *ct, const uint8_t *m,
 #endif
 
 /**
- * ML-KEM encapsulation (FIPS 203 Algorithm 17).
+ * ML-KEM encapsulation (FIPS 203 Algorithm 17, over `ML-KEM.Encaps_internal`).
+ *
+ * One body serves both the random and the deterministic entry points, matching
+ * `kyber_keypair_internal`'s `d`/`z` idiom above: pass `m_in` to encapsulate
+ * under a caller-chosen message (FIPS 203 Algorithm 17 takes `m` as an input;
+ * it is Algorithm 20 that draws it), or NULL to draw it from the CSPRNG. Two
+ * near-identical copies is exactly the shape where a fix lands in one and not
+ * the other, so there is one.
+ *
+ * The deterministic arm exists for `kyber_pubkey_from_sk`'s pairwise check,
+ * which must not consume entropy — see the commentary there.
  */
 static ama_error_t kyber_encapsulate_internal(
     const kyber_params* P,
     const uint8_t* public_key,
     size_t public_key_len,
+    const uint8_t* m_in,
     uint8_t* ciphertext,
     size_t* ciphertext_len,
     uint8_t* shared_secret,
@@ -889,15 +905,30 @@ static ama_error_t kyber_encapsulate_internal(
         uint8_t m[32], kr[64];
         ama_error_t err;
 
+        /* FIPS 203 §7.2 input validation, which the specification places
+         * *before* encapsulation rather than leaving to the caller.  Without
+         * it, an encapsulation key with an out-of-range coefficient — which
+         * every conformant peer rejects — is silently encapsulated to, and the
+         * two sides end up holding different shared secrets with nothing
+         * raised anywhere.  See kyber_pubkey_check. */
+        err = kyber_pubkey_check(P, public_key, public_key_len);
+        if (err != AMA_SUCCESS) {
+            return err;
+        }
+
         if (*ciphertext_len < P->ct_bytes) {
             *ciphertext_len = P->ct_bytes;
             return AMA_ERROR_INVALID_PARAM;
         }
 
-        /* Generate random message m */
-        err = kyber_randombytes(m, 32);
-        if (err != AMA_SUCCESS) {
-            return err;
+        /* Message m: supplied by the caller, or drawn from the CSPRNG. */
+        if (m_in) {
+            memcpy(m, m_in, 32);
+        } else {
+            err = kyber_randombytes(m, 32);
+            if (err != AMA_SUCCESS) {
+                return err;
+            }
         }
 
         /* (K, r) = G(m || H(pk)) per FIPS 203 Algorithm 17
@@ -1951,12 +1982,37 @@ AMA_API ama_error_t ama_ml_kem_keypair_from_seed(ama_ml_kem_param_set_t ps,
  *     cannot see.  This is the same operation FIPS 140-3 requires as a
  *     key-pair consistency test.
  *
+ * **This predicate consumes no entropy.**  The pairwise check encapsulates
+ * under the fixed message `KYBER_PCT_M` rather than a random one, so it is a
+ * pure function of the key it is handed.  That is not a nicety:
+ *
+ *  - It is reachable from a *file parser* (`load_pkcs8` of an `expandedKey`-only
+ *    ML-KEM key), so with a random `m` anyone who can hand you a key file could
+ *    draw 32 bytes from the CSPRNG per import.
+ *  - A validation predicate that is not reproducible cannot be a KAT, and a
+ *    FIPS 140-3 self-test that depends on the RNG cannot run before the RNG's
+ *    own health checks have.
+ *  - A non-deterministic checker turns any latent failure into a flake.
+ *
+ * The fixed `m` costs nothing in soundness.  `m` is an *input* to Algorithm 17;
+ * the check's power comes from the round trip agreeing, and a `dk_PKE` mutation
+ * that survives decapsulation of a correctly-formed ciphertext for one `m`
+ * survives it for essentially all of them (decapsulation failure is a property
+ * of the key, not of the message).  Nothing derived from `m` leaves this
+ * function: the ciphertext and both shared secrets are scrubbed before return.
+ *
  * @param public_key  May be NULL to check without emitting the encapsulation
  *                    key.  When non-NULL it must have room for `pk_bytes`.
  * @return AMA_SUCCESS if consistent; AMA_ERROR_INVALID_PARAM for a NULL or
  *         wrong-length argument; AMA_ERROR_VERIFY_FAILED if the embedded
  *         digest is wrong or the pair does not round-trip.
  */
+/* The fixed pairwise-check message.  ASCII so that it is visibly a domain
+ * constant rather than key material, and zero-padded to the 32 octets FIPS 203
+ * Algorithm 17 requires.  Never used for a real encapsulation: `m` reaches this
+ * value only through `kyber_pubkey_from_sk`, whose outputs are all scrubbed. */
+static const uint8_t KYBER_PCT_M[32] = "AMA ML-KEM pairwise check v1";
+
 static ama_error_t kyber_pubkey_from_sk(const kyber_params *P,
                                         const uint8_t *secret_key, size_t sk_len,
                                         uint8_t *public_key, size_t pk_len) {
@@ -1986,7 +2042,7 @@ static ama_error_t kyber_pubkey_from_sk(const kyber_params *P,
     }
     ama_secure_memzero(h_computed, sizeof(h_computed));
 
-    rc = kyber_encapsulate_internal(P, ek, P->pk_bytes, ct, &ct_len,
+    rc = kyber_encapsulate_internal(P, ek, P->pk_bytes, KYBER_PCT_M, ct, &ct_len,
                                     ss_enc, sizeof(ss_enc));
     if (rc == AMA_SUCCESS) {
         rc = kyber_decapsulate_internal(P, ct, ct_len, secret_key, sk_len,
@@ -2026,13 +2082,79 @@ AMA_API ama_error_t ama_ml_kem_privkey_check(ama_ml_kem_param_set_t ps,
     return kyber_pubkey_from_sk(P, sk, sk_len, NULL, 0);
 }
 
+/**
+ * FIPS 203 §7.2 input validation for an encapsulation key.
+ *
+ * §7.2 requires *two* checks before `ek` is used, and the second one is the one
+ * implementations skip:
+ *
+ *  1. **Type check** — `|ek| = 384k + 32`.
+ *  2. **Modulus check** — `ByteEncode_12(ByteDecode_12(ek_hat))` must reproduce
+ *     `ek_hat` exactly.  `ByteDecode_12` reduces mod q (Algorithm 13 takes
+ *     `m = q` at `d = 12`), so re-encoding differs precisely when some 12-bit
+ *     field holds a value `>= q`.  The check is therefore "every one of the
+ *     256k coefficients is in [0, q)", which is what this computes directly
+ *     rather than by round-tripping a buffer.
+ *
+ * Why it matters, stated concretely: 4096 - 3329 = 767 of every 4096 encodable
+ * values are out of range, so a *random* byte string of the right length has a
+ * vanishing probability of passing, while a single flipped bit in a real key
+ * has about a 1-in-5 chance of pushing its coefficient out of range.  A
+ * conformant peer rejects such a key; AMA accepted it, encapsulated to it, and
+ * derived a shared secret nobody else would derive.  Because ML-KEM's implicit
+ * rejection is designed to fail silently, the two parties then simply hold
+ * different secrets — the same class of invisible failure that
+ * `kyber_pubkey_from_sk`'s pairwise check exists to catch, reachable by anyone
+ * who can hand you an encapsulation key.
+ *
+ * Not constant time, and deliberately so: `ek` is public by definition.
+ *
+ * @return AMA_SUCCESS if `ek` is a valid encapsulation key;
+ *         AMA_ERROR_INVALID_PARAM on a NULL pointer, unknown parameter set, or
+ *         wrong length (the type check); AMA_ERROR_VERIFY_FAILED if a
+ *         coefficient is out of range (the modulus check).
+ */
+static ama_error_t kyber_pubkey_check(const kyber_params *P,
+                                      const uint8_t *ek, size_t ek_len) {
+    unsigned int i, j;
+
+    if (!P || !ek) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+    if (ek_len != P->pk_bytes) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+    /* `ek = ByteEncode_12(t_hat) || rho`: k polynomials of 384 octets, then the
+     * 32-octet seed, which carries no constraint. */
+    for (i = 0; i < P->k; i++) {
+        const uint8_t *a = ek + (size_t)i * 384u;
+        for (j = 0; j < KYBER_N / 2; j++) {
+            uint16_t c0 = (uint16_t)(((uint16_t)a[3*j] |
+                                      ((uint16_t)a[3*j + 1] << 8)) & 0xFFF);
+            uint16_t c1 = (uint16_t)(((uint16_t)(a[3*j + 1] >> 4) |
+                                      ((uint16_t)a[3*j + 2] << 4)) & 0xFFF);
+            if (c0 >= KYBER_Q || c1 >= KYBER_Q) {
+                return AMA_ERROR_VERIFY_FAILED;
+            }
+        }
+    }
+    return AMA_SUCCESS;
+}
+
+AMA_API ama_error_t ama_ml_kem_pubkey_check(ama_ml_kem_param_set_t ps,
+                                            const uint8_t *pk, size_t pk_len) {
+    const kyber_params *P = kyber_params_for(ps);
+    if (!P) return AMA_ERROR_INVALID_PARAM;
+    return kyber_pubkey_check(P, pk, pk_len);
+}
+
 AMA_API ama_error_t ama_ml_kem_encapsulate(ama_ml_kem_param_set_t ps,
                                            const uint8_t *pk, size_t pk_len,
                                            uint8_t *ct, size_t *ct_len,
                                            uint8_t *ss, size_t ss_len) {
     const kyber_params *P = kyber_params_for(ps);
     if (!P) return AMA_ERROR_INVALID_PARAM;
-    return kyber_encapsulate_internal(P, pk, pk_len, ct, ct_len, ss, ss_len);
+    return kyber_encapsulate_internal(P, pk, pk_len, NULL, ct, ct_len, ss, ss_len);
 }
 
 AMA_API ama_error_t ama_ml_kem_decapsulate(ama_ml_kem_param_set_t ps,

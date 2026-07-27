@@ -236,6 +236,29 @@ if(AMA_USE_NATIVE_PQC)
                        "(native AES-256 DRBG symbols not exported)")
     endif()
 
+    # The PQ private-key consistency predicates must consume no entropy.
+    # Both are reachable from the key-file parser (load_pkcs8 of an
+    # expandedKey-only key), so a CSPRNG draw there is an attacker-triggered
+    # entropy drain, an un-KAT-able predicate, and a FIPS 140-3 self-test that
+    # depends on the very RNG whose health checks may not have run.  The test
+    # poisons the randombytes hook (counts and fails) and requires the checks
+    # to pass anyway — and to still reject a corrupted key, so "no entropy
+    # consumed" cannot be bought by not checking.
+    add_ama_test(test_pq_privkey_check_determinism test_pq_privkey_check_determinism.c)
+
+    # Stack high-water mark of the parser-reachable PQ validation entry points.
+    # load_pkcs8 calls these on every expandedKey-only key it imports, so their
+    # frame size is chosen by whoever supplies the key file.  The ML-DSA one
+    # held ~110 KB (the whole k x l matrix plus five length-k vectors) before
+    # the row-wise rewrite — more than musl's entire 128 KB default thread
+    # stack.  Measures the real high-water mark over the whole call chain on a
+    # painted, caller-supplied thread stack, and holds it under a stated
+    # budget.  SKIPs (77) where POSIX thread stacks are unavailable.
+    add_ama_test(test_pq_parser_stack test_pq_parser_stack.c)
+    set_tests_properties(test_pq_parser_stack PROPERTIES SKIP_RETURN_CODE 77)
+    find_package(Threads REQUIRED)
+    target_link_libraries(test_pq_parser_stack Threads::Threads)
+
     # Kyber debug / CPA isolation tests (run manually or via ctest)
     add_ama_test(test_kyber_debug test_kyber_debug.c)
     add_ama_test(test_kyber_cpa test_kyber_cpa.c)

@@ -28,6 +28,7 @@ tests pin that behavior so the regression cannot silently come back.
 
 from __future__ import annotations
 
+import importlib.util
 import os
 from pathlib import Path
 from typing import Any
@@ -43,6 +44,27 @@ from tests.conftest import _is_backend_skip
 # ``pytester`` fixture is resolvable.  Scoped to this module so the rest of
 # the test suite is unaffected.
 pytest_plugins = ["pytester"]
+
+
+def _inner_pytest_args() -> tuple[str, ...]:
+    """Arguments for the ``pytester`` subprocess runs below.
+
+    ``--no-cov`` is a ``pytest-cov`` option, so passing it unconditionally made
+    every subprocess run die with ``error: unrecognized arguments: --no-cov``
+    and exit code 4 wherever ``pytest-cov`` is absent — which pytester then
+    reports as ``ValueError: Pytest terminal summary report not found``, an
+    error that says nothing about what these tests actually pin. ``pytest-cov``
+    is in ``requirements-dev.txt`` but not in ``requirements.txt``, so a
+    contributor running the suite against a plain install saw three failures
+    unrelated to their change.
+
+    It is still passed when the plugin *is* installed: a caller who exports
+    coverage options in ``PYTEST_ADDOPTS`` would otherwise have the inner run
+    inherit them and write a second, partial coverage file over the outer run's.
+    """
+    if importlib.util.find_spec("pytest_cov") is None:
+        return ("-v", "-p", "no:cacheprovider")
+    return ("-v", "--no-cov", "-p", "no:cacheprovider")
 
 
 class _FakeMarker:
@@ -148,7 +170,7 @@ def test_dual_skipif_pyca_trigger_stays_a_skip_not_a_failure(
             def test_pyca_only_skip_does_not_become_backend_failure(self):
                 raise AssertionError("must not run")
         """)
-    result = isolated_conftest.runpytest_subprocess("-v", "--no-cov", "-p", "no:cacheprovider")
+    result = isolated_conftest.runpytest_subprocess(*_inner_pytest_args())
     result.assert_outcomes(skipped=1, failed=0, errors=0, passed=0)
 
 
@@ -174,7 +196,7 @@ def test_backend_skipif_with_truthy_condition_does_become_failure(
             def test_should_have_been_a_loud_failure(self):
                 raise AssertionError("must not run")
         """)
-    result = isolated_conftest.runpytest_subprocess("-v", "--no-cov", "-p", "no:cacheprovider")
+    result = isolated_conftest.runpytest_subprocess(*_inner_pytest_args())
     # A skipif-skip happens in the setup phase; when the hook flips
     # ``rep.outcome = "failed"`` that setup-phase outcome is reported by
     # pytest as an "error" (rather than a "failed") in the summary line —
@@ -204,5 +226,5 @@ def test_backend_skipif_without_ci_env_stays_a_skip(
             def test_should_skip_outside_ci(self):
                 raise AssertionError("must not run")
         """)
-    result = isolated_conftest.runpytest_subprocess("-v", "--no-cov", "-p", "no:cacheprovider")
+    result = isolated_conftest.runpytest_subprocess(*_inner_pytest_args())
     result.assert_outcomes(skipped=1, failed=0, errors=0, passed=0)

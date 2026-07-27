@@ -1,15 +1,22 @@
 # Copyright (C) 2025-2026 Steel Security Advisors LLC
 # SPDX-License-Identifier: Apache-2.0
 #
-# Wycheproof corpus provenance: proves the vendored offline corpus is still
-# byte-for-byte upstream's at the pinned commit.
+# Vendored-corpus provenance: proves each vendored offline corpus is still what
+# its upstream source publishes.
 #
-# The per-PR CI already runs the OFFLINE half (vendored files match manifest)
-# via tests/test_wycheproof_corpus_provenance.py. This workflow adds the ONLINE
-# half — fetching from C2SP/wycheproof and comparing bytes — which needs network
-# and so runs on a monthly schedule (drift watch) and whenever a PR actually
-# touches the corpus or its tooling (validating a refresh against upstream).
-name: Wycheproof Corpus Provenance
+# Two corpora, same contract:
+#
+#   * wycheproof_vectors/ — byte-for-byte C2SP/wycheproof at the pinned commit.
+#   * tests/kat/keyformats/ — the records extracted from RFC 9881, RFC 8410 and
+#     draft-ietf-lamps-kyber-certificates at the revisions each file records.
+#
+# The per-PR CI already runs both OFFLINE halves — via
+# tests/test_wycheproof_corpus_provenance.py and
+# tests/test_keyformat_corpus_provenance.py, plus the CLI in ci.yml's
+# code-quality job. This workflow adds the ONLINE halves, which need network and
+# so run on a monthly schedule (drift watch) and whenever a PR actually touches
+# a corpus or its tooling (validating a refresh against upstream).
+name: Vendored Corpus Provenance
 
 on:
   schedule:
@@ -19,6 +26,8 @@ on:
     paths:
       - "wycheproof_vectors/**"
       - "tools/refresh_wycheproof_corpus.py"
+      - "tests/kat/keyformats/**"
+      - "tools/build_keyformat_corpus.py"
       - ".github/workflows/corpus-provenance.yml"
   workflow_dispatch:
 
@@ -43,6 +52,28 @@ jobs:
       - name: Upstream provenance (vendored bytes vs C2SP/wycheproof @ pinned commit)
         run: python tools/refresh_wycheproof_corpus.py --verify
 
+  keyformat-provenance:
+    name: Verify key-format corpus against its source documents
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+        with:
+          python-version: "3.12"
+
+      - name: Offline integrity (structure, provenance, PEM shape, negative corpus)
+        run: python tools/build_keyformat_corpus.py --verify
+
+      - name: Upstream provenance (records vs RFC 9881 / 8410 / lamps-kyber-certificates)
+        # Re-extracts every record from the document each corpus file names in
+        # its own `source` block and requires them to match record-for-record.
+        # Without this the vendored bytes are only self-consistent: a corpus
+        # that never matched the RFC, or one an errata revision has moved on
+        # from, verifies clean offline forever.
+        run: python tools/build_keyformat_corpus.py --verify-upstream
+
   corpus-provenance-gate:
     name: Corpus Provenance Gate
     # if: always() so it resolves to a definitive red/green even when the worker
@@ -50,6 +81,7 @@ jobs:
     if: always()
     needs:
       - provenance
+      - keyformat-provenance
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:

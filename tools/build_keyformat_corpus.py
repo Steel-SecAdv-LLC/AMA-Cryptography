@@ -9,43 +9,50 @@ re-derives that corpus from the documents it came from, so a reviewer can prove
 the vendored bytes are the specifications' own, and can regenerate them when a
 document is revised.
 
-Two kinds of source, and the difference matters:
+One kind of source, and only one: **the standards bodies' own answer keys**.
+RFC 9881 Appendix C, draft-ietf-lamps-kyber-certificates Appendix C, RFC 8410
+§10, RFC 8037 Appendix A, RFC 8152 Appendix C.7 and RFC 9500 §2.3 all publish
+worked examples — vectors published so an implementer needs no second party to
+check against. They are fetched from ``rfc-editor.org`` / ``ietf.org``, parsed
+out of the running text, and written as JSON.
 
-**Specification answer keys** (``--specs``). RFC 9881 Appendix C,
-draft-ietf-lamps-kyber-certificates Appendix C, RFC 8410 §10, RFC 8037
-Appendix A and RFC 8152 Appendix C.7 all publish worked examples. These are not
-"some other implementation's output" — they are the standards bodies' own
-answer keys, published so an implementer needs no second party to check against.
-They are fetched from ``rfc-editor.org`` / ``ietf.org``, parsed out of the
-running text, and written as JSON.
+This corpus deliberately contains **no output from any other cryptographic
+product**. Where a specification publishes no vector, the substitute is a
+reference encoder written from the specification's own ASN.1 text
+(``tests/ref_keyformat.py``), which is AMA's work and stands on the document
+rather than on another implementation's behaviour. RFC 5915 and RFC 5480 were
+long the gap here, and RFC 9500 — "Standard Public Key Cryptography (PKCS) Test
+Keys", December 2023 — closed it: its §2.3 prints P-256/P-384/P-521 keys in
+exactly the RFC 5915 ``ECPrivateKey`` form AMA embeds in PKCS#8.
 
-**Independent-implementation output** (``--openssl``). RFC 5915 and RFC 5480
-publish no worked examples for EC PKCS#8 or SPKI, so for those the substitute is
-key files produced by a second implementation. Regenerating this half produces
-*different keys* every time — key generation is random — so the vendored files
-are generated once and then frozen. Pass ``--openssl`` only to produce a fresh
-independent sample when re-verifying by hand; do not commit the result unless
-you intend to replace the corpus, and record the new OpenSSL version in
-``tests/kat/keyformats/README.md`` in the same commit.
+Nothing here is a runtime dependency. These are checked-in data consumed by CI,
+exactly as ``wycheproof_vectors/`` is.
 
-Neither half is a runtime dependency. Nothing AMA ships links OpenSSL or reads
-these files; they are checked-in data consumed by CI, exactly as
-``wycheproof_vectors/`` is.
+Where this runs
+---------------
+``--verify`` is not a command a reviewer has to remember. It is driven on every
+pull request from two directions: ``tests/test_keyformat_corpus_provenance.py``
+calls :func:`verify_offline` directly (and pins each failure direction, so the
+check cannot decay into one that always passes), and the ``code-quality`` job in
+``ci.yml`` runs the CLI. ``--verify-upstream`` needs the network, so it runs
+where the Wycheproof corpus's equivalent does: ``corpus-provenance.yml``, on a
+monthly drift watch and on any pull request that touches the corpus or this
+tool.
 
 Usage::
 
-    python3 tools/build_keyformat_corpus.py --specs      # refresh from RFCs
-    python3 tools/build_keyformat_corpus.py --openssl    # fresh EC/OKP sample
-    python3 tools/build_keyformat_corpus.py --verify     # offline: re-parse only
+    python3 tools/build_keyformat_corpus.py --specs           # refresh from RFCs
+    python3 tools/build_keyformat_corpus.py --verify          # offline: re-parse only
+    python3 tools/build_keyformat_corpus.py --verify-upstream # online: vs. the documents
 """
 
 from __future__ import annotations
 
 import argparse
 import base64
+import binascii
 import json
 import re
-import subprocess
 import sys
 import urllib.request
 from pathlib import Path
@@ -70,20 +77,11 @@ SOURCES = {
         "title": "RFC 8410 (Ed25519/X25519 in X.509), Section 10",
         "revision": "RFC 8410, August 2018",
     },
-}
-
-# The OpenSSL half: algorithm -> (openssl genpkey arguments, AMA algorithm name).
-OPENSSL_KEYS = {
-    "P-256": (["-algorithm", "EC", "-pkeyopt", "ec_paramgen_curve:prime256v1",
-               "-pkeyopt", "ec_param_enc:named_curve"], "prime256v1"),
-    "P-384": (["-algorithm", "EC", "-pkeyopt", "ec_paramgen_curve:secp384r1",
-               "-pkeyopt", "ec_param_enc:named_curve"], "secp384r1"),
-    "P-521": (["-algorithm", "EC", "-pkeyopt", "ec_paramgen_curve:secp521r1",
-               "-pkeyopt", "ec_param_enc:named_curve"], "secp521r1"),
-    "secp256k1": (["-algorithm", "EC", "-pkeyopt", "ec_paramgen_curve:secp256k1",
-                   "-pkeyopt", "ec_param_enc:named_curve"], "secp256k1"),
-    "Ed25519": (["-algorithm", "ED25519"], "ED25519"),
-    "X25519": (["-algorithm", "X25519"], "X25519"),
+    "rfc9500_ec.json": {
+        "url": "https://www.rfc-editor.org/rfc/rfc9500.txt",
+        "title": "RFC 9500 (Standard Public Key Cryptography Test Keys), Section 2.3",
+        "revision": "RFC 9500, December 2023",
+    },
 }
 
 
@@ -291,54 +289,223 @@ JOSE_COSE = {
 }
 
 
-def build_openssl(out_dir: Path) -> None:
-    version = subprocess.run(
-        ["openssl", "version"], capture_output=True, text=True, check=True
-    ).stdout.strip()
-    out_dir.mkdir(parents=True, exist_ok=True)
-    for name, (args, _curve) in OPENSSL_KEYS.items():
-        priv = out_dir / f"{name}.key.pem"
-        subprocess.run(
-            ["openssl", "genpkey", *args, "-out", str(priv)],
-            capture_output=True, check=True,
-        )
-        subprocess.run(
-            ["openssl", "pkey", "-in", str(priv), "-pubout", "-out",
-             str(out_dir / f"{name}.pub.pem")],
-            capture_output=True, check=True,
-        )
-    (out_dir / "PROVENANCE.txt").write_text(
-        f"Generated by tools/build_keyformat_corpus.py --openssl using {version}.\n"
-        "Key generation is random, so regenerating replaces the sample rather\n"
-        "than reproducing it. These files are development-time evidence only:\n"
-        "nothing AMA ships links or invokes OpenSSL.\n"
-    )
-    print(f"wrote {len(OPENSSL_KEYS) * 2} files to {out_dir} using {version}")
+#: RFC 9500 §2.3 publishes three EC keys, identified by the length of the
+#: ``ECPrivateKey`` DER rather than by any label the document carries, because
+#: the document identifies them only in prose. The lengths are structural: the
+#: RFC 5915 encoding of a curve's key is a fixed size for that curve.
+RFC9500_EC_BY_LENGTH = {121: "P-256", 167: "P-384", 223: "P-521"}
 
 
-def verify_offline() -> int:
-    """Re-parse everything vendored, without the network."""
-    problems = 0
-    for path in sorted(CORPUS.glob("*.json")):
-        data = json.loads(path.read_text())
-        for record in data["records"]:
+def build_rfc9500_ec() -> dict:
+    """RFC 9500 §2.3 — the IETF's own EC test keys.
+
+    This is the answer key that was thought not to exist. RFC 5915 defines
+    ``ECPrivateKey`` and publishes no example of it; RFC 5480 does the same for
+    the SPKI side. RFC 9500 (December 2023) was written precisely to fill that
+    kind of gap — "Standard Public Key Cryptography (PKCS) Test Keys" — and its
+    §2.3 prints P-256, P-384 and P-521 private keys as ``EC PRIVATE KEY`` PEM,
+    which *is* an RFC 5915 ``ECPrivateKey``: the exact structure AMA places
+    inside the PKCS#8 ``privateKey`` OCTET STRING.
+
+    So the EC half of this corpus is a standards-body answer key like every
+    other half, rather than a second vendor's output. The section is quoted in
+    the record so a reviewer can go and read it.
+    """
+    meta = SOURCES["rfc9500_ec.json"]
+    blocks = extract_pem_blocks(fetch(meta["url"]))
+    records = []
+    for block in blocks:
+        if block["label"] != "EC PRIVATE KEY":
+            continue
+        der = base64.b64decode(block["pem_b64"], validate=True)
+        curve = RFC9500_EC_BY_LENGTH.get(len(der))
+        if curve is None:
+            raise ValueError(
+                f"RFC 9500 §2.3 EC key of {len(der)} octets does not match any "
+                f"known curve; expected one of {sorted(RFC9500_EC_BY_LENGTH)}"
+            )
+        records.append({
+            "section": block["section"],
+            "label": block["label"],
+            "algorithm": curve,
+            "pem_b64": block["pem_b64"],
+        })
+    if len(records) != len(RFC9500_EC_BY_LENGTH):
+        raise ValueError(
+            f"expected {len(RFC9500_EC_BY_LENGTH)} EC keys in RFC 9500 §2.3, "
+            f"found {len(records)}"
+        )
+    return {"source": meta, "records": records}
+
+
+# Every JSON corpus this tool writes, and what it must contain to be doing its
+# job. ``needs_negative`` marks the two PQ corpora, whose value is *entirely* in
+# the deliberately-inconsistent keys: if the extractor mis-sections a heading
+# the negative half empties itself and every gate that consumes it goes vacuous
+# while still reporting green. That failure has happened once already (see
+# ``extract_pem_blocks``), so it is asserted rather than assumed.
+EXPECTED_JSON = {
+    "rfc9881_ml_dsa.json": {"needs_negative": True},
+    "lamps_ml_kem.json": {"needs_negative": True},
+    "rfc8410_okp.json": {"needs_negative": False},
+    "rfc9500_ec.json": {"needs_negative": False},
+    "jose_cose.json": {"needs_negative": False},
+}
+
+def verify_offline(corpus: Path = CORPUS) -> list[str]:
+    """Re-check everything vendored, without the network.
+
+    Returns a list of human-readable problems — empty means the corpus is
+    internally sound. Structured as a list rather than a printed count so the
+    same function backs both the CLI and ``tests/test_keyformat_corpus_provenance.py``;
+    a verifier only a human can run is a verifier that does not run.
+
+    Four classes of check, each one a failure this corpus can actually have:
+
+    1. **Presence.** Every file this tool writes must exist. A corpus file that
+       silently disappears turns its whole test group into a collection error
+       at best and a skip at worst.
+    2. **Provenance.** Every record set must carry a ``source`` naming the exact
+       document revision the bytes came from. Vendored cryptographic vectors
+       whose origin is not recorded cannot be re-derived or audited.
+    3. **Shape.** Every ``pem_b64`` must be valid, non-empty base64 whose first
+       octet opens a DER SEQUENCE, and every record carrying PEM bytes must name
+       its label.
+    4. **Non-vacuity.** The two PQ corpora must retain both valid and
+       deliberately-inconsistent records.
+    """
+    problems: list[str] = []
+
+    for filename, spec in sorted(EXPECTED_JSON.items()):
+        path = corpus / filename
+        if not path.is_file():
+            problems.append(
+                f"{filename}: missing from {corpus} — regenerate with "
+                "tools/build_keyformat_corpus.py --specs"
+            )
+            continue
+        try:
+            data = json.loads(path.read_text())
+        except json.JSONDecodeError as exc:
+            problems.append(f"{filename}: not valid JSON: {exc}")
+            continue
+
+        source = data.get("source")
+        if not isinstance(source, dict):
+            problems.append(f"{filename}: has no 'source' block naming its origin document")
+            source = {}
+        for field in ("title", "revision"):
+            if not str(source.get(field, "")).strip():
+                problems.append(
+                    f"{filename}: source.{field} is missing or empty — a vendored "
+                    "vector whose source revision is not recorded cannot be re-derived"
+                )
+
+        records = data.get("records")
+        if not isinstance(records, list) or not records:
+            problems.append(f"{filename}: 'records' is missing or empty")
+            continue
+
+        kinds: set[str] = set()
+        for index, record in enumerate(records):
+            where = f"{filename}: record {index} ({record.get('section', '?')})"
+            kinds.add(str(record.get("kind", "")))
             if "pem_b64" not in record:
                 continue  # a JWK/COSE record, checked by the test suite itself
+            if not str(record.get("label", "")).strip():
+                problems.append(f"{where}: has PEM bytes but no label")
             try:
                 der = base64.b64decode(record["pem_b64"], validate=True)
-            except Exception as exc:
-                print(f"{path.name}: {record.get('section')}: bad base64: {exc}")
-                problems += 1
+            except (ValueError, binascii.Error) as exc:
+                problems.append(f"{where}: bad base64: {exc}")
                 continue
             if not der:
-                print(f"{path.name}: {record.get('section')}: empty body")
-                problems += 1
-        print(f"{path.name}: {len(data['records'])} records, source={data['source']['revision']}")
-    for path in sorted((CORPUS / "openssl").glob("*.pem")):
-        if not path.read_text().startswith("-----BEGIN "):
-            print(f"{path.name}: not a PEM block")
-            problems += 1
-    print(f"{'FAIL' if problems else 'OK'}: {problems} problem(s)")
+                problems.append(f"{where}: empty body")
+            elif der[0] != 0x30:
+                # Every vendored record is a DER SEQUENCE (SPKI or PKCS#8).
+                # A body that decodes but does not start a SEQUENCE is page
+                # furniture that survived extraction, not a key.
+                problems.append(
+                    f"{where}: does not begin with a DER SEQUENCE (0x30); first "
+                    f"octet is 0x{der[0]:02X}"
+                )
+
+        if spec["needs_negative"] and "inconsistent" not in kinds:
+            problems.append(
+                f"{filename}: carries no 'inconsistent' records. The negative half "
+                "of this corpus is what proves the consistency checks fire at all; "
+                "without it every gate over it passes vacuously."
+            )
+
+    return problems
+
+
+def verify_upstream(corpus: Path = CORPUS) -> list[str]:
+    """Provenance: the vendored records are still what the documents publish.
+
+    Needs the network. This is the half that proves the bytes are the standards
+    bodies' own rather than merely self-consistent — re-derive each corpus from
+    the document named in its own ``source`` block and require the vendored
+    records to match record-for-record.
+
+    ``jose_cose.json`` is deliberately out of scope: RFC 8037 Appendix A and
+    RFC 8152 Appendix C.7.1 publish their examples as prose, so that file is a
+    hand transcription with nothing to re-extract. The test suite checks it the
+    other way — it re-derives the public key from the private one and the
+    thumbprint from the members, so a transcription error cannot pass.
+    """
+    problems: list[str] = []
+    builders = {
+        "rfc9881_ml_dsa.json": lambda: build_pq("rfc9881_ml_dsa.json"),
+        "lamps_ml_kem.json": lambda: build_pq("lamps_ml_kem.json"),
+        "rfc8410_okp.json": build_okp,
+        "rfc9500_ec.json": build_rfc9500_ec,
+    }
+    for filename, builder in sorted(builders.items()):
+        path = corpus / filename
+        if not path.is_file():
+            problems.append(f"{filename}: missing; cannot compare against upstream")
+            continue
+        vendored = json.loads(path.read_text())
+        try:
+            fresh = builder()
+        except Exception as exc:  # noqa: BLE001 -- any fetch/parse failure is a finding, reported not raised
+            problems.append(f"{filename}: could not re-derive ({type(exc).__name__}: {exc})")
+            continue
+        if vendored.get("source", {}).get("revision") != fresh["source"]["revision"]:
+            problems.append(
+                f"{filename}: vendored source revision "
+                f"{vendored.get('source', {}).get('revision')!r} != "
+                f"{fresh['source']['revision']!r}"
+            )
+        old = {(r["section"], r["label"], r["pem_b64"]) for r in vendored["records"]}
+        new = {(r["section"], r["label"], r["pem_b64"]) for r in fresh["records"]}
+        for section, label, _ in sorted(old - new):
+            problems.append(
+                f"{filename}: vendored record {section!r} ({label}) is not in the "
+                "upstream document at this revision"
+            )
+        for section, label, _ in sorted(new - old):
+            problems.append(
+                f"{filename}: upstream publishes {section!r} ({label}) and the "
+                "vendored corpus does not carry it"
+            )
+    return problems
+
+
+def report_offline(corpus: Path = CORPUS) -> int:
+    """CLI wrapper around :func:`verify_offline` — prints, returns an exit code."""
+    problems = verify_offline(corpus)
+    for filename in sorted(EXPECTED_JSON):
+        path = corpus / filename
+        if not path.is_file():
+            continue
+        data = json.loads(path.read_text())
+        revision = data.get("source", {}).get("revision", "<unrecorded>")
+        print(f"{filename}: {len(data.get('records', []))} records, source={revision}")
+    for problem in problems:
+        print(f"  PROBLEM: {problem}")
+    print(f"{'FAIL' if problems else 'OK'}: {len(problems)} problem(s)")
     return 1 if problems else 0
 
 
@@ -346,12 +513,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--specs", action="store_true",
                         help="refresh the RFC/I-D answer keys from upstream")
-    parser.add_argument("--openssl", action="store_true",
-                        help="generate a fresh independent EC/OKP sample (replaces it)")
     parser.add_argument("--verify", action="store_true",
                         help="offline: re-parse the vendored corpus")
+    parser.add_argument("--verify-upstream", action="store_true",
+                        help="online: re-derive from the source documents and compare")
     args = parser.parse_args()
-    if not (args.specs or args.openssl or args.verify):
+    if not (args.specs or args.verify or args.verify_upstream):
         args.verify = True
 
     if args.specs:
@@ -363,15 +530,24 @@ def main() -> int:
         data = build_okp()
         (CORPUS / "rfc8410_okp.json").write_text(json.dumps(data, indent=1) + "\n")
         print(f"wrote rfc8410_okp.json: {len(data['records'])} records")
+        data = build_rfc9500_ec()
+        (CORPUS / "rfc9500_ec.json").write_text(json.dumps(data, indent=1) + "\n")
+        print(f"wrote rfc9500_ec.json: {len(data['records'])} records")
         (CORPUS / "jose_cose.json").write_text(json.dumps(JOSE_COSE, indent=1) + "\n")
         print(f"wrote jose_cose.json: {len(JOSE_COSE['records'])} records")
 
-    if args.openssl:
-        build_openssl(CORPUS / "openssl")
-
+    status = 0
     if args.verify:
-        return verify_offline()
-    return 0
+        status |= report_offline()
+
+    if args.verify_upstream:
+        problems = verify_upstream()
+        for problem in problems:
+            print(f"  PROBLEM: {problem}")
+        print(f"upstream: {'FAIL' if problems else 'OK'}: {len(problems)} problem(s)")
+        status |= 1 if problems else 0
+
+    return status
 
 
 if __name__ == "__main__":

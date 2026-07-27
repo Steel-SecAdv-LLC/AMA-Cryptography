@@ -29,15 +29,23 @@ RFC 8410 §10                                  Ed25519 SPKI and both PKCS#8
 RFC 8037 Appendix A                           Ed25519 JWK, and the RFC 7638
                                               thumbprint of it
 RFC 8152 Appendix C.7.1                       P-256 and P-521 ``COSE_Key``
-``tests/kat/keyformats/openssl/``             EC and OKP PKCS#8/SPKI produced
-                                              by a second implementation, for
-                                              which no RFC publishes examples
+RFC 9500 §2.3                                 the IETF's own P-256/P-384/P-521
+                                              ``ECPrivateKey`` — the structure
+                                              RFC 5915 defines without an
+                                              example
 ============================================  ===============================
 
 Every one of those is checked **both ways**: the vendored bytes must parse to
 the right key, and re-encoding that key must reproduce the vendored bytes
 exactly. One direction alone would miss a decoder and encoder that are wrong in
 the same way.
+
+What the documents do not print — every algorithm, every option, every width —
+is covered against ``tests/ref_keyformat.py``, a second encoder transcribed from
+the RFCs' own ASN.1. It is AMA's work, it imports nothing from
+``ama_cryptography``, and it is itself anchored against RFC 9500 §2.3 and
+RFC 8410 §10.1 before it is trusted anywhere else. No other cryptographic
+product's output appears in this suite.
 
 The negative half is the larger one. A key parser is a parser fed hostile input
 by definition — anyone who can hand you a key file reaches it — so malformed,
@@ -60,6 +68,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+import tests.ref_keyformat as ref  # noqa: E402 -- same (KF-003)
 import ama_cryptography.key_formats as kf  # noqa: E402 -- import follows the repo-root sys.path insert above (KF-003)
 import ama_cryptography.pqc_backends as pb  # noqa: E402 -- same (KF-003)
 from ama_cryptography._asn1 import (  # noqa: E402 -- same (KF-003)
@@ -150,6 +159,40 @@ def make_key(name: str) -> tuple[kf.PublicKey, kf.PrivateKey]:
     else:
         public, secret = pb.native_ml_kem_keypair(alg.pq_param_set)
     return kf.PublicKey(name, public), kf.PrivateKey(name, secret, public)
+
+
+def _public_from_scalar(name: str, scalar: bytes) -> bytes:
+    """The public key for a chosen EC scalar, via the native backend.
+
+    Only used to build the constructed edge cases below; the *encoding* they
+    check is still compared against the specification-derived reference.
+    """
+    if name == "secp256k1":
+        return pb.native_secp256k1_pubkey_decompress(
+            pb.native_secp256k1_pubkey_from_privkey(scalar)
+        )
+    return pb.native_nistp_pubkey_from_privkey(kf.ALGORITHMS[name].curve, scalar)
+
+
+def make_seeded_pq_key(name: str, filler: int = 0x5A) -> kf.PrivateKey:
+    """A PQ key that *carries its seed*, which ``make_key`` deliberately does not.
+
+    ``make_key`` goes through the randomised keygen entry points, so the seed is
+    consumed inside the C library and never surfaces — the same situation as a
+    key imported from an ``expandedKey``-only file. Anything exercising the
+    ``seed`` or ``both`` arms needs a key whose seed is known, so it is built
+    from a fixed one here. Deterministic, so a failure reproduces.
+    """
+    alg = kf.ALGORITHMS[name]
+    assert alg.kind == "pq", name
+    seed = bytes((filler + i) & 0xFF for i in range(alg.pq_seed_bytes))
+    if alg.pq_family == "ml-dsa":
+        public, secret = pb.native_ml_dsa_keypair_from_seed(alg.pq_param_set, seed)
+    else:
+        public, secret = pb.native_ml_kem_keypair_from_seed(
+            alg.pq_param_set, seed[:32], seed[32:]
+        )
+    return kf.PrivateKey(name, secret, public, seed)
 
 
 # ===========================================================================
@@ -329,42 +372,347 @@ def test_rfc8410_attributes_are_not_reemitted() -> None:
 
 
 # ===========================================================================
-# 3. A second implementation — EC and OKP, where no RFC publishes examples
+# 3. RFC 9500 §2.3 — the IETF's own EC keys, and a reference encoder
 # ===========================================================================
-OPENSSL_DIR = CORPUS / "openssl"
-OPENSSL_ALGORITHMS = sorted(p.name[: -len(".key.pem")] for p in OPENSSL_DIR.glob("*.key.pem"))
+# RFC 5915 defines ECPrivateKey and publishes no example of it; RFC 5480 does
+# the same for the SPKI side. That gap is why this section used to hold key
+# files produced by another cryptographic product. It no longer does, and it
+# does not need to:
+#
+#   * RFC 9500 ("Standard Public Key Cryptography (PKCS) Test Keys", December
+#     2023) §2.3 publishes P-256, P-384 and P-521 keys as `EC PRIVATE KEY` PEM,
+#     which *is* an RFC 5915 ECPrivateKey — the exact structure AMA places
+#     inside the PKCS#8 privateKey OCTET STRING. A standards-body answer key,
+#     like every other corpus here.
+#   * `tests/ref_keyformat.py` is a second encoder for these structures,
+#     transcribed from the RFCs' own ASN.1 with the text quoted inline. It is
+#     AMA's work, it imports nothing from `ama_cryptography`, and it is built
+#     declaratively so it shares no control flow with the production encoder.
+#
+# The second point carries the lesson PR #378 learned the hard way on RFC 6979:
+# two implementations that share an assumption do not check each other. A
+# reference derived from the specification, in a different shape, is the
+# defence; a reference derived from the implementation is theatre.
+RFC9500 = _load("rfc9500_ec.json")["records"]
+RFC9500_ALGORITHMS = sorted(r["algorithm"] for r in RFC9500)
 
 
-def test_openssl_corpus_covers_every_classical_algorithm() -> None:
+def _rfc9500(name: str) -> dict[str, Any]:
+    return next(r for r in RFC9500 if r["algorithm"] == name)
+
+
+def test_rfc9500_covers_the_nist_curves() -> None:
     """A curve silently missing from the corpus would go unchecked."""
-    assert OPENSSL_ALGORITHMS == CLASSICAL, (
-        f"the independent-implementation corpus covers {OPENSSL_ALGORITHMS}, "
-        f"but this library implements {CLASSICAL}"
-    )
+    assert RFC9500_ALGORITHMS == ["P-256", "P-384", "P-521"], RFC9500_ALGORITHMS
 
 
-@pytest.mark.parametrize("name", OPENSSL_ALGORITHMS)
-def test_independent_implementation_keys_parse_and_reencode(name: str) -> None:
-    """Bytes from another implementation parse, and AMA reproduces them exactly.
+def _rfc9500_wrapped(name: str) -> bytes:
+    """RFC 9500's standalone ECPrivateKey inside a PKCS#8 OneAsymmetricKey.
 
-    RFC 5915 and RFC 5480 publish no worked examples, so for the EC curves this
-    is the only evidence that AMA's DER is what the ecosystem actually emits —
-    the right OID, the named-curve parameter present, the ``ECPrivateKey``
-    version, the SEC 1 prefix, and the ``[1] publicKey`` where OpenSSL puts it.
+    The RFC prints the bare SEC 1 form, so the RFC 5958 §2 wrapper is built
+    around it here — with the OID and version RFC 5480 and RFC 5958 specify —
+    to reach AMA's PKCS#8 entry point.
     """
-    private_pem = (OPENSSL_DIR / f"{name}.key.pem").read_text()
-    public_pem = (OPENSSL_DIR / f"{name}.pub.pem").read_text()
-
-    private = kf.load_pkcs8(private_pem)
-    public = kf.load_spki(public_pem)
-    assert private.algorithm == name
-    assert public.algorithm == name
-    assert private.public().key == public.key, (
-        "the public key derived from the imported secret disagrees with the "
-        "one the same implementation published for it"
+    alg = kf.ALGORITHMS[name]
+    return der_sequence(
+        der_integer(0),
+        der_sequence(oid_from_string(alg.oid), oid_from_string(alg.curve_oid)),
+        der_octet_string(_der(_rfc9500(name))),
     )
-    assert private.to_pem().strip() == private_pem.strip()
-    assert public.to_pem().strip() == public_pem.strip()
+
+
+@pytest.mark.parametrize("name", RFC9500_ALGORITHMS)
+def test_the_reference_encoder_reproduces_rfc9500_exactly(name: str) -> None:
+    """The reference is checked against the document before anything is checked
+    against the reference.
+
+    Two encoders that agree could both be wrong. RFC 9500 §2.3's DER is an
+    answer key neither AMA nor this reference wrote, so reproducing it octet for
+    octet — including the ``[0] parameters`` a standalone ECPrivateKey carries
+    and the constructed ``[1] publicKey`` — is what earns the reference the
+    right to be an authority in the tests that follow.
+    """
+    published = _der(_rfc9500(name))
+    private = kf.load_pkcs8(_rfc9500_wrapped(name))
+    assert private.public_key is not None
+    rebuilt = ref.encode(
+        ref.ec_private_key(name, private.key, private.public_key, include_parameters=True)
+    )
+    assert rebuilt == published, (
+        "the specification-derived reference does not reproduce RFC 9500's own "
+        "bytes; it cannot be used as an authority until it does"
+    )
+
+
+@pytest.mark.parametrize("name", RFC9500_ALGORITHMS)
+def test_rfc9500_ec_private_keys_parse_and_reencode(name: str) -> None:
+    """The RFC's own key material, imported and re-emitted.
+
+    Two directions, and they check different things:
+
+    * The RFC's ``[0] parameters`` must be *accepted* — a standalone
+      ECPrivateKey carries the curve OID, and third-party files do too.
+    * AMA's own output must then omit it, because RFC 5915 §3 says the field
+      SHOULD be omitted "in a context where the curve is already known, such as
+      within a PrivateKeyInfo". Re-emitting it would produce a file naming the
+      curve twice — the shape that lets two parsers disagree about which one
+      wins, and which ``test_ec_key_naming_two_different_curves_is_refused``
+      exists for.
+
+    So the re-encoding is compared against the reference's *wrapped* form, not
+    against the RFC's standalone bytes: byte equality with the wrong structure
+    would be the wrong thing to assert.
+    """
+    alg = kf.ALGORITHMS[name]
+    private = kf.load_pkcs8(_rfc9500_wrapped(name))
+    assert private.algorithm == name
+    assert len(private.key) == alg.field_bytes
+    assert private.public_key is not None
+
+    # The public key the RFC prints must be the one the RFC's own scalar
+    # derives to — the document checking itself, and AMA against both.
+    assert private.derive_public_key().key == private.public_key
+
+    assert private.to_pkcs8() == ref.pkcs8(
+        name, private.key, public_key=private.public_key, include_public_key=True
+    )
+    assert kf.load_pkcs8(private.to_pkcs8()).key == private.key
+
+
+@pytest.mark.parametrize("name", RFC9500_ALGORITHMS)
+def test_rfc9500_scalar_widths_are_the_curves_own(name: str) -> None:
+    """RFC 9500's P-521 scalar begins 0x01 in a 66-octet field, so it is also a
+    width vector: an encoder that dropped leading octets would shorten it."""
+    alg = kf.ALGORITHMS[name]
+    published = _der(_rfc9500(name))
+    private = kf.load_pkcs8(_rfc9500_wrapped(name))
+    assert len(private.key) == alg.field_bytes
+    assert private.key in published, "the scalar was not carried through verbatim"
+
+
+@pytest.mark.parametrize("name", RFC9500_ALGORITHMS)
+def test_rfc9500_public_keys_round_trip_through_spki(name: str) -> None:
+    private = kf.load_pkcs8(
+        der_sequence(
+            der_integer(0),
+            der_sequence(oid_from_string(kf.ALGORITHMS[name].oid),
+                         oid_from_string(kf.ALGORITHMS[name].curve_oid)),
+            der_octet_string(_der(_rfc9500(name))),
+        )
+    )
+    public = private.public()
+    assert kf.load_spki(public.to_spki()) == public
+    assert kf.load_spki(public.to_pem()) == public
+
+
+# --- The reference encoder, over every algorithm and every option ------------
+@pytest.mark.parametrize("name", ALL_ALGORITHMS)
+def test_spki_matches_the_reference_encoder(name: str) -> None:
+    """AMA's SPKI is what the RFCs' ASN.1 says it should be.
+
+    Covers what the vendored vectors cannot: every algorithm, not the handful
+    any document happened to print.
+    """
+    public, _ = make_key(name)
+    assert public.to_spki() == ref.spki(name, public.key)
+    assert public.to_pem() == ref.pem(ref.spki(name, public.key), "PUBLIC KEY")
+
+
+@pytest.mark.parametrize("name", ALL_ALGORITHMS)
+@pytest.mark.parametrize("include_public_key", [False, True])
+def test_pkcs8_matches_the_reference_encoder(name: str, include_public_key: bool) -> None:
+    """Both settings of ``include_public_key``, against the specification.
+
+    The two families put the public half in *different fields* — RFC 5915's
+    ``[1]`` inside ECPrivateKey for EC, RFC 5958's ``[1]`` on the outer
+    SEQUENCE for everything else — and only the second raises the version to
+    v2. An encoder that conflates them produces a file that parses, carries the
+    right key, and is not what the document describes.
+    """
+    public, private = make_key(name)
+    expected = ref.pkcs8(
+        name, private.key,
+        public_key=public.key,
+        include_public_key=include_public_key,
+        pq_arm="expandedKey",
+    )
+    assert private.to_pkcs8(include_public_key=include_public_key) == expected
+
+
+@pytest.mark.parametrize("name", PQ_ALGORITHMS)
+@pytest.mark.parametrize("arm", ["seed", "expandedKey", "both"])
+def test_the_pq_choice_arms_match_the_reference_encoder(name: str, arm: str) -> None:
+    """RFC 9881 §6's three arms, each encoded independently from the ASN.1.
+
+    The ``seed`` arm is the one worth a second opinion: ``[0]`` is IMPLICIT and
+    therefore *primitive* (0x80), so the seed octets follow the header with no
+    inner OCTET STRING. An encoder that emits the constructed 0xA0 has produced
+    a different CHOICE that some parsers still accept.
+    """
+    private = make_seeded_pq_key(name)
+    assert private.seed is not None
+    expected = ref.pkcs8(
+        name, private.key, seed=private.seed, pq_arm=arm, public_key=private.public_key,
+    )
+    assert private.to_pkcs8(pq_format=arm) == expected
+    assert kf.load_pkcs8(expected).key == private.key
+
+
+def test_the_reference_encoder_is_independent_of_the_production_one() -> None:
+    """The property that makes the comparison worth anything.
+
+    A reference that imports the encoder it checks agrees with it by
+    construction. Asserted rather than trusted, because the import that breaks
+    this is one line and would be invisible in review.
+    """
+    import ast
+
+    source = (REPO_ROOT / "tests" / "ref_keyformat.py").read_text()
+    imported: set[str] = set()
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Import):
+            imported.update(a.name.split(".")[0] for a in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported.add(node.module.split(".")[0])
+    assert "ama_cryptography" not in imported, (
+        f"tests/ref_keyformat.py imports ama_cryptography ({sorted(imported)}); it "
+        "must stand on the RFC text alone"
+    )
+    assert imported <= {"__future__", "typing", "base64"}, sorted(imported)
+    assert ref.CURVE_OID["P-256"] == "1.2.840.10045.3.1.7"
+    # Both encoders must agree on the OIDs *and* have derived them separately:
+    # the reference builds arcs from the dotted string per X.690 §8.19.
+    for algorithm, dotted in ref.ALGORITHM_OID.items():
+        assert kf.ALGORITHMS[algorithm].oid == dotted
+    for curve, dotted in ref.CURVE_OID.items():
+        assert kf.ALGORITHMS[curve].curve_oid == dotted
+
+
+def test_the_reference_encoder_reproduces_a_published_spki() -> None:
+    """A second document anchoring the reference, on the SPKI side this time.
+
+    RFC 9500 anchors ECPrivateKey; RFC 8410 §10.1's SPKI anchors the
+    SubjectPublicKeyInfo wrapper and the absent-not-NULL parameters rule.
+    """
+    record = next(r for r in RFC8410 if r["label"] == "PUBLIC KEY")
+    published = _der(record)
+    parsed = kf.load_spki(published)
+    assert ref.spki("Ed25519", parsed.key) == published
+
+
+# --- Edge cases: fixed-width fields holding short numbers --------------------
+# The encodings that break implementations are the ones where a fixed-width
+# field holds a number with leading zero octets, because the natural way to get
+# it wrong — route the value through a big integer and back — produces a
+# *shorter* field that is still well-formed DER and still parses, as a
+# different key.
+#
+# These are *constructed* rather than sampled. Waiting for a random key to have
+# the property means about 1 P-521 key in 512 for the scalar case, and a corpus
+# built by generating keys until one turns up is neither deterministic nor able
+# to reach the awkward combinations at all. Constructing the scalar and
+# deriving the point with AMA's own primitives gives an exact, reproducible
+# case, and the reference encoder — which pads from the RFC 5915 rule rather
+# than from AMA's code — is what says whether the encoding is right.
+_LEADING_ZERO_SCALARS = {
+    # A scalar whose big-endian encoding needs one leading zero octet at the
+    # curve's fixed width, and one that needs many. Both are valid private keys
+    # (any value in [1, n-1] is), and both are far below the field width.
+    "one_zero_octet": lambda width: (1 << (8 * width - 9)) | 1,
+    "many_zero_octets": lambda width: 0x1234,
+}
+
+
+@pytest.mark.parametrize("name", EC_ALGORITHMS)
+@pytest.mark.parametrize("shape", sorted(_LEADING_ZERO_SCALARS))
+def test_a_scalar_with_leading_zero_octets_keeps_its_width(name: str, shape: str) -> None:
+    """RFC 5915 §3 fixes ``privateKey`` at the base-point-order width.
+
+    A big-integer round trip emits a shorter OCTET STRING, which is valid DER,
+    parses cleanly, and is a different key.
+    """
+    alg = kf.ALGORITHMS[name]
+    width = alg.field_bytes
+    scalar = _LEADING_ZERO_SCALARS[shape](width).to_bytes(width, "big")
+    assert scalar[0] == 0x00, "the constructed scalar has no leading zero octet"
+
+    public = kf.PublicKey(name, _public_from_scalar(name, scalar))
+    private = kf.PrivateKey(name, scalar, public.key)
+
+    encoded = private.to_pkcs8()
+    assert encoded == ref.pkcs8(name, scalar, public_key=public.key,
+                                include_public_key=True)
+    reparsed = kf.load_pkcs8(encoded)
+    assert reparsed.key == scalar, "the scalar did not survive the round trip"
+    assert len(reparsed.key) == width, (
+        f"{name}: the scalar came back {len(reparsed.key)} octets wide, not {width} — "
+        "a leading zero was dropped somewhere"
+    )
+    # The JWK 'd' member is fixed width too (RFC 7518 §6.2.2.1).
+    d = private.to_jwk()["d"]
+    assert len(base64.urlsafe_b64decode(d + "=" * (-len(d) % 4))) == width
+
+
+@pytest.mark.parametrize("name", EC_ALGORITHMS)
+def test_a_coordinate_with_a_leading_zero_octet_keeps_its_width(name: str) -> None:
+    """The same hazard on the public half — SEC 1, JWK and COSE all fix the width.
+
+    RFC 8152 Appendix C.7.1's P-521 key is vendored precisely because its ``x``
+    begins with a zero octet; this extends that coverage to every curve and to
+    both coordinates, by searching AMA's own keygen for one rather than waiting
+    for it to appear.
+    """
+    alg = kf.ALGORITHMS[name]
+    half = alg.field_bytes
+    found = None
+    for _ in range(4000):
+        public, private = make_key(name)
+        if public.key[0] == 0x00 or public.key[half] == 0x00:
+            found = (public, private)
+            break
+    if found is None:  # pragma: no cover - about 1 in 128 per attempt
+        pytest.skip(f"no {name} key with a zero coordinate octet in 4000 tries")
+    public, private = found
+
+    assert public.to_spki() == ref.spki(name, public.key)
+    assert kf.load_spki(public.to_spki()) == public
+
+    jwk = public.to_jwk()
+    for member in ("x", "y"):
+        raw = base64.urlsafe_b64decode(jwk[member] + "=" * (-len(jwk[member]) % 4))
+        assert len(raw) == half, (
+            f"{name}: JWK '{member}' is {len(raw)} octets, not the mandatory {half}"
+        )
+    assert kf.jwk_to_public_key(jwk) == public
+
+    decoded = cbor_decode_canonical(public.to_cose())
+    assert len(decoded[-2]) == half and len(decoded[-3]) == half
+    assert kf.cose_to_public_key(public.to_cose()) == public
+
+
+@pytest.mark.parametrize("name", EC_ALGORITHMS)
+def test_a_shortened_coordinate_is_refused(name: str) -> None:
+    """The failure the width rules exist to prevent, produced deliberately."""
+    alg = kf.ALGORITHMS[name]
+    half = alg.field_bytes
+    public, _ = make_key(name)
+    jwk = dict(public.to_jwk())
+    for member in ("x", "y"):
+        raw = base64.urlsafe_b64decode(jwk[member] + "=" * (-len(jwk[member]) % 4))
+        short = dict(jwk)
+        short[member] = base64.urlsafe_b64encode(raw[1:]).rstrip(b"=").decode()
+        with pytest.raises(KeyFormatError, match="bytes"):
+            kf.jwk_to_public_key(short)
+    point = b"\x04" + public.key
+    for cut in (1, 1 + half):
+        with pytest.raises(KeyFormatError):
+            kf.load_spki(
+                der_sequence(
+                    der_sequence(oid_from_string(alg.oid),
+                                 oid_from_string(alg.curve_oid)),
+                    der_bit_string(point[:cut] + point[cut + 1:]),
+                )
+            )
 
 
 # ===========================================================================
@@ -605,13 +953,88 @@ def test_a_public_cose_key_is_refused_by_the_private_parser_and_vice_versa() -> 
         kf.cose_to_public_key(private.to_cose())
 
 
-def test_a_private_key_never_leaks_into_a_public_encoding() -> None:
-    """Belt and braces: the secret octets must not appear in any public form."""
-    for name in CLASSICAL:
-        public, private = make_key(name)
-        for encoded in (public.to_spki(), public.to_cose(),
-                        public.to_pem().encode(), json.dumps(public.to_jwk()).encode()):
-            assert private.key not in encoded, f"{name}: secret found in a public encoding"
+def _public_encodings(public: kf.PublicKey) -> list[tuple[str, bytes]]:
+    """Every public form this module can emit for ``public``.
+
+    Built by asking the algorithm what it supports rather than by listing the
+    classical ones, so a format gaining PQ support is covered the day it does.
+    """
+    forms: list[tuple[str, bytes]] = [
+        ("spki", public.to_spki()),
+        ("pem", public.to_pem().encode()),
+    ]
+    try:
+        forms.append(("jwk", json.dumps(public.to_jwk()).encode()))
+        forms.append(("cose", public.to_cose()))
+    except UnsupportedKeyFormatError:
+        pass  # ML-DSA/ML-KEM have no standardised JWK or COSE encoding
+    return forms
+
+
+@pytest.mark.parametrize("name", ALL_ALGORITHMS)
+def test_a_private_key_never_leaks_into_a_public_encoding(name: str) -> None:
+    """Belt and braces: no secret octets in any public form, for any algorithm.
+
+    Extended from the classical algorithms to all twelve. The PQ ones are the
+    interesting case now that a private key may carry a ``seed``: the seed is a
+    *second* piece of secret material with its own field, and it is the one that
+    matters most — RFC 9881 §8.1 makes expansion one-way, so 32 leaked octets
+    reconstruct the entire 4896-octet ML-DSA-87 key, while the expanded key
+    yields nothing about the seed. A leak check that looked only at ``.key``
+    would have watched the less valuable of the two.
+    """
+    public, private = make_key(name)
+    seeded = make_seeded_pq_key(name) if kf.ALGORITHMS[name].kind == "pq" else None
+
+    for key in (private, seeded):
+        if key is None:
+            continue
+        secrets: list[tuple[str, bytes]] = [("key", key.key)]
+        if key.seed is not None:
+            secrets.append(("seed", key.seed))
+        for form, encoded in _public_encodings(key.public()):
+            for label, secret in secrets:
+                assert secret not in encoded, (
+                    f"{name}: private.{label} appears verbatim in the {form} "
+                    "encoding of its own public key"
+                )
+
+
+@pytest.mark.parametrize("name", PQ_ALGORITHMS)
+def test_a_pq_seed_never_leaks_into_a_public_encoding(name: str) -> None:
+    """The seed, specifically, and against a key that definitely has one.
+
+    ``make_key`` goes through randomised keygen, so ``seed`` is ``None`` and the
+    check above would pass vacuously for the field that matters. This builds a
+    key from a known seed so there is something to look for, and asserts the
+    setup rather than assuming it.
+    """
+    private = make_seeded_pq_key(name)
+    assert private.seed is not None and len(private.seed) == kf.ALGORITHMS[name].pq_seed_bytes
+    public = private.public()
+    for form, encoded in _public_encodings(public):
+        assert private.seed not in encoded, f"{name}: the seed leaked into {form}"
+    # And it is not merely absent from the public encoding — it is absent from
+    # the public *key material*, which is what a caller might copy elsewhere.
+    assert private.seed not in public.key
+
+
+@pytest.mark.parametrize("name", PQ_ALGORITHMS)
+def test_the_expanded_private_key_form_does_not_carry_the_seed(name: str) -> None:
+    """``pq_format='expandedKey'`` must not smuggle the seed into the output.
+
+    The two arms exist so a caller can choose which secret to write down. A
+    caller who asks for the expanded form has decided not to persist the seed —
+    RFC 9881 §8.1's one-way property is the whole point — and an encoder that
+    included it anyway would silently defeat that choice.
+    """
+    private = make_seeded_pq_key(name)
+    assert private.seed is not None
+    expanded = private.to_pkcs8(pq_format="expandedKey")
+    assert private.seed not in expanded, f"{name}: the seed leaked into the expanded form"
+    reparsed = kf.load_pkcs8(expanded)
+    assert reparsed.seed is None, f"{name}: an expandedKey-only file produced a seed"
+    assert reparsed.key == private.key
 
 
 # ===========================================================================
@@ -810,6 +1233,57 @@ def test_ec_private_key_with_the_wrong_version_is_refused() -> None:
     )
     with pytest.raises(KeyFormatError, match="version must be 1"):
         kf.load_pkcs8(der)
+
+
+def _with_pkcs8_version(der: bytes, value: int) -> bytes:
+    """Rewrite the ``version`` INTEGER of a PKCS#8 blob, leaving all else alone.
+
+    ``version`` is the first element of the outer SEQUENCE, always encoded as
+    ``02 01 vv``, so the only thing to compute is how long the outer length
+    field is.
+    """
+    length_octet = der[1]
+    header = 2 if length_octet < 0x80 else 2 + (length_octet & 0x7F)
+    assert der[header : header + 2] == b"\x02\x01", "unexpected PKCS#8 layout"
+    out = bytearray(der)
+    out[header + 2] = value
+    return bytes(out)
+
+
+@pytest.mark.parametrize("name", ALL_ALGORITHMS)
+def test_the_pkcs8_version_must_agree_with_the_publickey_field(name: str) -> None:
+    """RFC 5958 §2: v2 if and only if ``publicKey`` is present.
+
+    Found by ``test_every_structural_octet_is_refused_when_corrupted``: flipping
+    the version octet from 0 to 1 on a key with no ``[1] publicKey`` was
+    accepted, so one key had two valid encodings. That is the malleability
+    defect class — the same reason this module refuses non-minimal lengths and
+    non-canonical CBOR — reachable by anyone who can hand you a key file.
+
+    Both directions are checked. The EC case is the one worth stating: its
+    public half lives inside RFC 5915 ``ECPrivateKey``, which RFC 5958 does not
+    see, so the conventional EC encoding correctly stays at v1 *while carrying a
+    public key*. A rule written as "carries a public key at all ⇒ v2" would
+    reject RFC 9500 §2.3's own keys.
+    """
+    _, private = make_key(name)
+    conventional = private.to_pkcs8()
+    assert kf.load_pkcs8(conventional).key == private.key
+
+    # v2 with no outer publicKey — the case that used to be accepted.
+    with pytest.raises(KeyFormatError, match=r"no \[1\] publicKey"):
+        kf.load_pkcs8(_with_pkcs8_version(conventional, 1))
+
+    if kf.ALGORITHMS[name].kind == "ec":
+        # EC has no *outer* publicKey form to build the converse from: RFC 5915
+        # puts it inside ECPrivateKey, and `include_public_key=True` is already
+        # the conventional setting.
+        return
+    # The converse: an outer publicKey with the version left at v1.
+    with_public = private.to_pkcs8(include_public_key=True)
+    assert kf.load_pkcs8(with_public).public_key == private.public().key
+    with pytest.raises(KeyFormatError, match="requires v2"):
+        kf.load_pkcs8(_with_pkcs8_version(with_public, 0))
 
 
 def test_pkcs8_with_an_unsupported_version_is_refused() -> None:
@@ -1169,6 +1643,298 @@ def test_every_exported_name_exists() -> None:
 
 
 # ===========================================================================
+# 8b. `include_public_key=None` — one parameter, several defaults, stated
+# ===========================================================================
+# `None` means "the conventional encoding for this algorithm", which is what
+# keeps AMA's output byte-identical to the reference encoders. That is worth
+# having, but it makes one parameter mean different things depending on
+# algorithm, so the resolved answer is a published table rather than something
+# a maintainer has to infer from a `kind` lookup three functions away. These
+# tests are what stop the table and the encoder from drifting apart.
+def test_the_conventional_table_covers_every_algorithm() -> None:
+    assert set(kf.CONVENTIONAL_PUBLIC_KEY) == set(kf.ALGORITHMS)
+
+
+@pytest.mark.parametrize(
+    "name,expected",
+    [
+        # Inside RFC 5915 ECPrivateKey — the form RFC 9500 §2.3's keys use.
+        ("P-256", True), ("P-384", True), ("P-521", True), ("secp256k1", True),
+        # RFC 8410 §10.3's first example.
+        ("Ed25519", False), ("X25519", False),
+        # RFC 9881 Appendix C.
+        ("ML-DSA-44", False), ("ML-DSA-65", False), ("ML-DSA-87", False),
+        # draft-ietf-lamps-kyber-certificates Appendix C.
+        ("ML-KEM-512", False), ("ML-KEM-768", False), ("ML-KEM-1024", False),
+    ],
+)
+def test_the_conventional_answer_is_what_the_documents_say(name: str, expected: bool) -> None:
+    """Transcribed from the documents, not from the implementation.
+
+    Written out per algorithm on purpose. Deriving the expectation from
+    ``ALGORITHMS[name].kind`` would restate the implementation and pass however
+    the implementation changed.
+    """
+    assert kf.conventional_include_public_key(name) is expected
+    assert kf.CONVENTIONAL_PUBLIC_KEY[name] is expected
+
+
+@pytest.mark.parametrize("name", ALL_ALGORITHMS)
+def test_none_encodes_exactly_as_the_conventional_explicit_value(name: str) -> None:
+    """``None`` is not a fourth behaviour: it is one of ``True``/``False``.
+
+    Byte equality, not "produces a parseable key" — the whole point of the
+    per-algorithm default is that the output matches a reference encoder's.
+    """
+    _, private = make_key(name)
+    conventional = kf.conventional_include_public_key(name)
+    assert private.to_pkcs8() == private.to_pkcs8(include_public_key=conventional)
+    assert private.to_pkcs8() != private.to_pkcs8(include_public_key=not conventional), (
+        f"{name}: the two settings produce identical bytes, so the flag does nothing"
+    )
+
+
+@pytest.mark.parametrize("name", ALL_ALGORITHMS)
+def test_the_conventional_answer_matches_what_the_encoder_emitted(name: str) -> None:
+    """Close the loop: the table has to describe the DER, not just claim to.
+
+    Read the encoded key back and ask whether a public half is present, rather
+    than trusting the flag that produced it.
+    """
+    _, private = make_key(name)
+    reparsed = kf.load_pkcs8(private.to_pkcs8())
+    carries_public = _pkcs8_carries_a_public_key(private.to_pkcs8(), kf.ALGORITHMS[name])
+    assert carries_public is kf.conventional_include_public_key(name)
+    assert reparsed.key == private.key
+
+
+def _pkcs8_carries_a_public_key(der: bytes, alg: Any) -> bool:
+    """Whether this PKCS#8 blob actually carries a public key, read from the DER.
+
+    Two places it can live, and they are not interchangeable: RFC 5958's
+    ``[1] publicKey`` on the outer SEQUENCE (which raises the version to v2),
+    and RFC 5915's ``[1]`` inside ``ECPrivateKey`` (which does not).
+    """
+    from ama_cryptography._asn1 import DerReader
+
+    outer = DerReader(der)
+    seq = outer.read_sequence()
+    outer.finish()
+    version = seq.read_integer()
+    seq.read_sequence()          # AlgorithmIdentifier
+    inner = seq.read_octet_string()
+    outer_public = False
+    while (tag := seq.peek_tag()) is not None:
+        if tag in (0xA1, 0x81):
+            outer_public = True
+        seq.read_tagged(1 if tag in (0xA1, 0x81) else 0,
+                        constructed=bool(tag & 0x20))
+    seq.finish()
+    if outer_public:
+        assert version == 1, "an outer [1] publicKey must raise the version to v2"
+        return True
+    if alg.kind != "ec":
+        assert version == 0, "no public key, so the version must stay v1"
+        return False
+    ec = DerReader(inner).read_sequence()
+    ec.read_integer()
+    ec.read_octet_string()
+    while (tag := ec.peek_tag()) is not None:
+        if tag == 0xA1:
+            return True
+        ec.read_tagged(0)
+    return False
+
+
+def test_an_unknown_algorithm_has_no_conventional_answer() -> None:
+    """INVARIANT-35 again: never resolve an unrecognised selector."""
+    for name in ("P-224", "ed25519", "", "ML-DSA-45"):
+        with pytest.raises(KeyFormatError, match="unknown algorithm"):
+            kf.conventional_include_public_key(name)
+
+
+# ===========================================================================
+# 8c. PQ import-consistency policy
+# ===========================================================================
+# The checks are correct and default to on. They are also *expensive* and sit
+# on a parser path, so there is a documented way to turn them off — and every
+# claim made about what stays true with them off is tested here, because an
+# undocumented or untested escape hatch is worse than none.
+def test_the_policy_defaults_to_enabled() -> None:
+    assert kf.get_pq_import_consistency() is True
+
+
+def test_the_policy_context_manager_restores_the_previous_value() -> None:
+    assert kf.get_pq_import_consistency() is True
+    with kf.pq_import_consistency(False):
+        assert kf.get_pq_import_consistency() is False
+    assert kf.get_pq_import_consistency() is True
+    # …including when the body raises, which is the case a bare setter loses.
+    with pytest.raises(RuntimeError):
+        with kf.pq_import_consistency(False):
+            raise RuntimeError("boom")
+    assert kf.get_pq_import_consistency() is True
+
+
+def test_the_environment_variable_is_parsed_strictly(monkeypatch: Any) -> None:
+    """A misspelled flag must not silently pick a policy in either direction."""
+    for value in ("1", "on", "TRUE", "Yes"):
+        monkeypatch.setenv(kf.PQ_CONSISTENCY_ENV, value)
+        assert kf._initial_pq_consistency() is True, value
+    for value in ("0", "off", "FALSE", "no"):
+        monkeypatch.setenv(kf.PQ_CONSISTENCY_ENV, value)
+        assert kf._initial_pq_consistency() is False, value
+    monkeypatch.delenv(kf.PQ_CONSISTENCY_ENV, raising=False)
+    assert kf._initial_pq_consistency() is True
+    for value in ("", "maybe", "2", "disabled"):
+        monkeypatch.setenv(kf.PQ_CONSISTENCY_ENV, value)
+        with pytest.raises(KeyFormatError, match="not a recognised boolean"):
+            kf._initial_pq_consistency()
+
+
+@pytest.mark.parametrize("record", ML_DSA_BAD + ML_KEM_BAD,
+                         ids=_ids(ML_DSA_BAD + ML_KEM_BAD))
+def test_the_specifications_bad_keys_are_rejected_under_the_default_policy(
+    record: dict[str, Any]
+) -> None:
+    """Restates the corpus gate with the policy named, so that if the default
+    ever flips the failure says which decision caused it."""
+    assert kf.get_pq_import_consistency() is True
+    with pytest.raises(KeyFormatError):
+        kf.load_pkcs8(_pem(record))
+
+
+@pytest.mark.parametrize("name", PQ_ALGORITHMS)
+def test_disabling_the_checks_still_imports_a_usable_key(name: str) -> None:
+    """The private key must be identical either way — the policy governs
+    checking, never decoding."""
+    private = make_seeded_pq_key(name)
+    for pq_format in ("expandedKey", "both", "seed"):
+        encoded = private.to_pkcs8(pq_format=pq_format)
+        strict = kf.load_pkcs8(encoded, verify_pq_consistency=True)
+        relaxed = kf.load_pkcs8(encoded, verify_pq_consistency=False)
+        assert relaxed.key == strict.key == private.key
+        assert relaxed.seed == strict.seed
+        # And the public key is still recoverable, whether it was carried at
+        # import (ML-KEM, from the FIPS 203 §7.1 layout) or derived on first
+        # use (ML-DSA).
+        assert relaxed.public().key == private.public().key
+
+
+@pytest.mark.parametrize("name", [n for n in PQ_ALGORITHMS if n.startswith("ML-KEM")])
+def test_ml_kem_recovers_its_public_key_without_the_expensive_check(name: str) -> None:
+    """FIPS 203 §7.1 embeds ``ek`` verbatim in ``dk``, so the cheap path is not
+    a degradation for ML-KEM — the public key is exact, not approximate."""
+    _, private = make_key(name)
+    encoded = private.to_pkcs8(pq_format="expandedKey")
+    relaxed = kf.load_pkcs8(encoded, verify_pq_consistency=False)
+    assert relaxed.public_key == private.public_key
+
+
+@pytest.mark.parametrize("name", [n for n in PQ_ALGORITHMS if n.startswith("ML-DSA")])
+def test_ml_dsa_defers_rather_than_skipping_when_the_checks_are_off(name: str) -> None:
+    """ML-DSA has no embedded public key, so the cost moves to first use rather
+    than disappearing — and the check still runs there."""
+    _, private = make_key(name)
+    encoded = private.to_pkcs8(pq_format="expandedKey")
+    relaxed = kf.load_pkcs8(encoded, verify_pq_consistency=False)
+    assert relaxed.public_key is None
+    assert relaxed.public().key == private.public().key
+
+
+def test_a_carried_public_key_is_still_cross_checked_with_the_policy_off() -> None:
+    """The free half of the check does not go away.
+
+    A file assembled from two different ML-KEM keys is caught by comparing the
+    carried public key with the one embedded in ``dk`` — no expansion, no
+    encapsulation, just bytes.
+    """
+    _, private = make_key("ML-KEM-768")
+    _, other = make_key("ML-KEM-768")
+    alg = kf.ALGORITHMS["ML-KEM-768"]
+    der = der_sequence(
+        der_integer(1),
+        der_sequence(oid_from_string(alg.oid)),
+        der_octet_string(der_octet_string(private.key)),
+        der_tagged(1, b"\x00" + other.public_key, constructed=False),
+    )
+    for policy in (True, False):
+        with pytest.raises(KeyFormatError, match="inconsistent"):
+            kf.load_pkcs8(der, verify_pq_consistency=policy)
+
+
+def test_structural_checks_are_unaffected_by_the_policy() -> None:
+    """The policy governs cryptographic consistency only. Lengths, the CHOICE
+    arm and the DER around them are still refused with it off."""
+    alg = kf.ALGORITHMS["ML-DSA-44"]
+    too_short = der_sequence(
+        der_integer(0),
+        der_sequence(oid_from_string(alg.oid)),
+        der_octet_string(der_octet_string(b"\x00" * (alg.private_bytes - 1))),
+    )
+    bad_seed = der_sequence(
+        der_integer(0),
+        der_sequence(oid_from_string(alg.oid)),
+        der_octet_string(der_tagged(0, b"\x00" * 31, constructed=False)),
+    )
+    bad_arm = der_sequence(
+        der_integer(0),
+        der_sequence(oid_from_string(alg.oid)),
+        der_octet_string(der_tagged(3, b"\x00" * 32, constructed=False)),
+    )
+    for der in (too_short, bad_seed, bad_arm):
+        with pytest.raises(KeyFormatError):
+            kf.load_pkcs8(der, verify_pq_consistency=False)
+
+
+def test_a_both_arm_key_with_a_mismatched_seed_is_caught_only_when_checking() -> None:
+    """Names the trade explicitly, in both directions.
+
+    RFC 9881 §8.2 requires this key to be rejected as malformed, so turning the
+    policy off is a conformance decision. The test states which behaviour goes
+    with which setting rather than only asserting the safe one.
+    """
+    private = make_seeded_pq_key("ML-DSA-44", 0x10)
+    other = make_seeded_pq_key("ML-DSA-44", 0x90)
+    assert private.seed is not None and other.seed is not None
+    alg = kf.ALGORITHMS["ML-DSA-44"]
+    der = der_sequence(
+        der_integer(0),
+        der_sequence(oid_from_string(alg.oid)),
+        der_octet_string(der_sequence(der_octet_string(other.seed),
+                                      der_octet_string(private.key))),
+    )
+    with pytest.raises(KeyFormatError, match="does not expand"):
+        kf.load_pkcs8(der, verify_pq_consistency=True)
+    relaxed = kf.load_pkcs8(der, verify_pq_consistency=False)
+    assert relaxed.key == private.key
+
+
+def test_the_process_wide_policy_is_honoured_by_load_pkcs8() -> None:
+    """The per-call argument defaults to the process-wide setting, not to True.
+
+    A deployment that sets the policy once must not find every call site
+    quietly overriding it.
+    """
+    private = make_seeded_pq_key("ML-DSA-44", 0x10)
+    other = make_seeded_pq_key("ML-DSA-44", 0x90)
+    assert other.seed is not None
+    alg = kf.ALGORITHMS["ML-DSA-44"]
+    der = der_sequence(
+        der_integer(0),
+        der_sequence(oid_from_string(alg.oid)),
+        der_octet_string(der_sequence(der_octet_string(other.seed),
+                                      der_octet_string(private.key))),
+    )
+    with pytest.raises(KeyFormatError):
+        kf.load_pkcs8(der)
+    with kf.pq_import_consistency(False):
+        assert kf.load_pkcs8(der).key == private.key
+    with pytest.raises(KeyFormatError):
+        kf.load_pkcs8(der)
+
+
+# ===========================================================================
 # 9. Mutation robustness
 # ===========================================================================
 # A key parser is fed hostile input by definition — anyone who can hand you a
@@ -1209,13 +1975,69 @@ def _mutations(data: bytes, count: int) -> list[bytes]:
     return out
 
 
-@pytest.mark.parametrize("name", ["Ed25519", "P-256", "P-521", "ML-DSA-44", "ML-KEM-512"])
+def _key_material_window(
+    name: str, which: str, public: kf.PublicKey, private: kf.PrivateKey, encoded: bytes
+) -> range:
+    """The byte range of ``encoded`` that holds key material rather than structure.
+
+    Everything outside it is tag, length, version, OID or the SEC 1 prefix — the
+    *structure* the parser is supposed to be strict about. Located by searching
+    for the material rather than by a hand-written offset table, so it stays
+    correct as encodings change.
+    """
+    alg = kf.ALGORITHMS[name]
+    if which == "spki":
+        material = (b"\x04" + public.key) if alg.kind == "ec" else public.key
+    else:
+        material = private.key
+    offset = encoded.find(material)
+    assert offset >= 0, f"{name}/{which}: could not locate the key material"
+    return range(offset, offset + len(material))
+
+
+# Algorithms whose *every* mutation must be refused, and why it is structural
+# rather than a lucky observation: an EC public key is validated for curve
+# membership on import (INVARIANT-29), and a random perturbation of a valid
+# point is on the curve with probability about 2**-|field|. Any mutation either
+# breaks the DER or moves the point off the curve, so the count is exactly zero
+# and is asserted as exactly zero — a weaker bound would not notice the
+# invalid-curve gate being removed.
+_MUTATION_TOTAL_REFUSAL = set(EC_ALGORITHMS)
+
+
+@pytest.mark.parametrize("name", ALL_ALGORITHMS)
 @pytest.mark.parametrize("which", ["spki", "pkcs8"])
 def test_mutated_der_is_refused_cleanly(name: str, which: str) -> None:
-    """A mutated key file yields a valid key or a KeyFormatError — never anything else."""
+    """A mutated key file yields a valid key or a KeyFormatError — never anything
+    else — and what "valid" is allowed to mean is pinned four ways.
+
+    The original form of this test ended at ``assert accepted < 120``, which
+    only fails if the parser accepts *almost everything*. A parser that accepted
+    every mutation but one would have passed it. What follows are the properties
+    that actually characterise a strict parser, each one falsifiable:
+
+    1. **No length-changing input is ever accepted.** Truncation must fail the
+       DER length, and extension must fail the no-trailing-data rule. This is
+       what makes "the encoding ends where it says it ends" a tested property
+       rather than a claim in a docstring.
+    2. **Canonicality.** Every accepted input must re-encode to *itself*, byte
+       for byte. This is the property the module docstring is about: "a
+       permissive parser means two byte strings decode to the same key, which is
+       the same defect class as signature malleability". Two encodings of one
+       key is precisely a violation of this, and nothing else in the suite would
+       catch it.
+    3. **Localisation.** An accepted mutation must differ from the original only
+       inside the key-material window — every tag, length, version and OID octet
+       must be byte-identical — *unless* it parsed as a different algorithm,
+       which is the one legitimate way a structural edit can succeed (see
+       ``test_an_oid_edit_that_names_another_algorithm_is_accepted_as_that_one``).
+    4. **Exact counts where they are structural.** For the EC curves the answer
+       is zero, and zero is asserted.
+    """
     public, private = make_key(name)
     original = public.to_spki() if which == "spki" else private.to_pkcs8()
     load = kf.load_spki if which == "spki" else kf.load_pkcs8
+    window = _key_material_window(name, which, public, private, original)
 
     accepted = 0
     for mutated in _mutations(original, 120):
@@ -1230,15 +2052,220 @@ def test_mutated_der_is_refused_cleanly(name: str, which: str) -> None:
                 f"{name}/{which}: a mutated key file raised "
                 f"{type(exc).__name__} instead of KeyFormatError: {exc}"
             )
-        # If it was accepted, it must be a coherent key: re-encoding it and
-        # parsing that back has to land in the same place.
         accepted += 1
-        assert load(key.to_spki() if which == "spki" else key.to_pkcs8()) == key
-    # A mutation that lands in a semantically free field (an ML-DSA K, an
-    # ML-KEM z) legitimately parses, so acceptance is not itself a failure —
-    # but a parser that accepted *everything* would pass the loop above
-    # vacuously, and that is worth knowing.
-    assert accepted < 120, f"{name}/{which}: every mutation was accepted"
+        reencoded = key.to_spki() if which == "spki" else key.to_pkcs8()
+
+        # (1) length
+        assert len(mutated) == len(original), (
+            f"{name}/{which}: a {'truncated' if len(mutated) < len(original) else 'extended'} "
+            "encoding was accepted — the DER length or the no-trailing-data rule is not enforced"
+        )
+        # (2) canonicality — the accepted bytes are the only encoding of this key
+        assert reencoded == mutated, (
+            f"{name}/{which}: an accepted encoding does not re-encode to itself, so "
+            "two distinct byte strings decode to one key — the malleability defect class"
+        )
+        assert load(reencoded) == key
+        # (3) localisation
+        outside = [i for i in range(len(original)) if mutated[i] != original[i]
+                   and i not in window]
+        if outside:
+            assert key.algorithm != name, (
+                f"{name}/{which}: structural octets {outside} were changed and the "
+                f"result still parsed as {name} — tag, length, version and OID "
+                "corruption must be refused"
+            )
+
+    # (4) exact count where it is structurally determined
+    if name in _MUTATION_TOTAL_REFUSAL:
+        assert accepted == 0, (
+            f"{name}/{which}: {accepted} mutation(s) were accepted. Every EC public "
+            "key is checked for curve membership on import, and a perturbed point is "
+            "on the curve with negligible probability — a non-zero count here means "
+            "that validation is no longer running"
+        )
+    else:
+        # For the OKP and PQ algorithms, acceptance is expected: every 32-octet
+        # string is a valid Ed25519/X25519 public key, every ML-DSA public key
+        # is a valid packing, and the ML-DSA `K` and ML-KEM `z` fields are
+        # semantically free. So the interesting bound is the other one — the
+        # parser must reject *something*, and specifically it must reject every
+        # length change, which is at least half of what `_mutations` produces.
+        assert accepted < 120, f"{name}/{which}: every mutation was accepted"
+
+
+@pytest.mark.parametrize("name", ALL_ALGORITHMS)
+@pytest.mark.parametrize("which", ["spki", "pkcs8"])
+def test_every_structural_octet_is_refused_when_corrupted(name: str, which: str) -> None:
+    """The converse of the sweep, done exhaustively rather than by sampling.
+
+    Every byte outside the key-material window is structure: an ASN.1 tag, a
+    length, the PKCS#8 version, an algorithm or curve OID, the SEC 1 prefix, the
+    BIT STRING unused-bits octet. Each one is corrupted with four different
+    values and the result must be refused — or, in the single legitimate case,
+    must announce that it is now a *different algorithm*.
+
+    Sampling 120 random mutations does not establish this: with a 1500-octet
+    ML-DSA key file, the ~20 structural octets are hit a handful of times at
+    most, so a whole class of corruption could go unexercised for years.
+    """
+    public, private = make_key(name)
+    original = public.to_spki() if which == "spki" else private.to_pkcs8()
+    load = kf.load_spki if which == "spki" else kf.load_pkcs8
+    window = _key_material_window(name, which, public, private, original)
+
+    structural = [i for i in range(len(original)) if i not in window]
+    assert structural, f"{name}/{which}: no structural octets — the window is wrong"
+
+    reclassified: set[str] = set()
+    for index in structural:
+        for replacement in (0x00, 0xFF, original[index] ^ 0x01, original[index] ^ 0x80):
+            if replacement == original[index]:
+                continue
+            corrupted = bytearray(original)
+            corrupted[index] = replacement
+            try:
+                key = load(bytes(corrupted))
+            except KeyFormatError:
+                continue
+            except Exception as exc:
+                pytest.fail(
+                    f"{name}/{which}: corrupting structural octet {index} to "
+                    f"0x{replacement:02X} raised {type(exc).__name__} instead of "
+                    f"KeyFormatError: {exc}"
+                )
+            # Accepted. The only defensible reason is that the octet was part of
+            # an algorithm OID and now names a different algorithm this library
+            # also implements — the encoding says what it is, and the parser
+            # believed it. Anything else is structural corruption slipping past.
+            assert key.algorithm != name, (
+                f"{name}/{which}: structural octet {index} changed to "
+                f"0x{replacement:02X} and the file still parsed as {name}"
+            )
+            assert (key.to_spki() if which == "spki" else key.to_pkcs8()) == bytes(
+                corrupted
+            ), f"{name}/{which}: reclassified key does not re-encode to its own bytes"
+            reclassified.add(key.algorithm)
+
+    # Ed25519 and X25519 differ in a single OID octet and share a key width, so
+    # that pair is the only substitution that can legitimately turn one valid
+    # file into another. (These four probe values do not happen to produce it —
+    # 0x70 and 0x6E differ in two bits —
+    # ``test_an_oid_edit_that_names_another_algorithm_is_accepted_as_that_one``
+    # exercises it directly. The bound is written as a permitted *set* rather
+    # than a count so it stays honest either way.)
+    twin = {"Ed25519": {"X25519"}, "X25519": {"Ed25519"}}.get(name, set())
+    assert reclassified <= twin, (
+        f"{name}/{which}: a structural edit produced a valid {sorted(reclassified - twin)} "
+        "key. Only the Ed25519/X25519 OID pair should be reachable that way"
+    )
+
+
+def test_an_oid_edit_that_names_another_algorithm_is_accepted_as_that_one() -> None:
+    """The one structural edit that legitimately survives, made explicit.
+
+    ``id-Ed25519`` is ``1.3.101.112`` and ``id-X25519`` is ``1.3.101.110``: one
+    octet apart, and both keys are 32 octets. So flipping that octet in an
+    Ed25519 SPKI produces a *well-formed X25519 SPKI*, and refusing it would be
+    wrong — the encoding names the algorithm, and this one names X25519.
+
+    Written out rather than left as a hole in the sweep above, because "the
+    parser accepted a file with a corrupted OID" is exactly the sentence that
+    should require a stated reason.
+    """
+    public, _ = make_key("Ed25519")
+    ed_spki = public.to_spki()
+    x_spki = kf.PublicKey("X25519", public.key).to_spki()
+
+    differing = [i for i in range(len(ed_spki)) if ed_spki[i] != x_spki[i]]
+    assert differing == [len(differing) - 1 + differing[0]] or len(differing) == 1, (
+        "the Ed25519 and X25519 SPKI encodings should differ in exactly the OID "
+        f"octet; they differ at {differing}"
+    )
+    assert kf.load_spki(x_spki).algorithm == "X25519"
+    assert kf.load_spki(ed_spki).algorithm == "Ed25519"
+    assert kf.load_spki(x_spki).key == public.key
+
+
+@pytest.mark.parametrize("name", PQ_ALGORITHMS)
+def test_pq_choice_arm_tags_are_the_only_ones_accepted(name: str) -> None:
+    """RFC 9881 §6 selects the private-key arm by tag — ``0x80``, ``0x04``,
+    ``0x30`` — "rather than any other heuristic like length". Every other tag
+    must be refused, including the ones that are valid ASN.1 in their own right.
+    """
+    alg = kf.ALGORITHMS[name]
+    private = make_seeded_pq_key(name)
+    assert private.seed is not None
+    bodies = {
+        0x80: der_tagged(0, private.seed, constructed=False),
+        0x04: der_octet_string(private.key),
+        0x30: der_sequence(der_octet_string(private.seed),
+                           der_octet_string(private.key)),
+    }
+    for tag, body in bodies.items():
+        der = der_sequence(der_integer(0), der_sequence(oid_from_string(alg.oid)),
+                           der_octet_string(body))
+        assert kf.load_pkcs8(der).key == private.key, f"{name}: arm 0x{tag:02X} rejected"
+        # The same body under a different tag must not be salvaged by length.
+        for other in (0x81, 0x82, 0x05, 0x0C, 0x31, 0xA0):
+            mangled = bytearray(body)
+            mangled[0] = other
+            bad = der_sequence(der_integer(0), der_sequence(oid_from_string(alg.oid)),
+                               der_octet_string(bytes(mangled)))
+            with pytest.raises(KeyFormatError):
+                kf.load_pkcs8(bad)
+
+
+@pytest.mark.parametrize("name", ["ML-KEM-512", "ML-KEM-768", "ML-KEM-1024"])
+def test_an_out_of_range_encapsulation_key_coefficient_is_refused(name: str) -> None:
+    """FIPS 203 §7.2's modulus check, at the import boundary.
+
+    ``ek = ByteEncode_12(t_hat) || rho``; §7.2 requires every 12-bit coefficient
+    to be below ``q = 3329``. 767 of every 4096 encodable values are not, so a
+    single flipped bit in a real key has roughly a one-in-five chance of
+    producing one. A conformant peer refuses such a key, so encapsulating to it
+    derives a shared secret nobody else derives — and because ML-KEM's implicit
+    rejection is designed to fail silently, nothing anywhere reports it. Import
+    is the only place it is visible.
+
+    This is the check the mutation sweep above found missing.
+    """
+    public, _ = make_key(name)
+    # 0xFFF is the largest 12-bit value and is far above q. The first coefficient
+    # occupies the low 12 bits of octets 0..1.
+    body = bytearray(public.key)
+    body[0] = 0xFF
+    body[1] |= 0x0F
+    assert not pb.native_ml_kem_pubkey_check(kf.ALGORITHMS[name].pq_param_set, bytes(body))
+
+    alg = kf.ALGORITHMS[name]
+    spki = der_sequence(der_sequence(oid_from_string(alg.oid)),
+                        der_bit_string(bytes(body)))
+    with pytest.raises(KeyFormatError, match="modulus check"):
+        kf.load_spki(spki)
+    # …and the honest key still passes, so the check is not simply refusing
+    # everything.
+    assert pb.native_ml_kem_pubkey_check(alg.pq_param_set, public.key)
+    assert kf.load_spki(public.to_spki()) == public
+
+
+@pytest.mark.parametrize("name", ["ML-KEM-512", "ML-KEM-768", "ML-KEM-1024"])
+def test_encapsulation_refuses_an_out_of_range_key(name: str) -> None:
+    """§7.2 places the modulus check *before* encapsulation, not on the caller.
+
+    A library that validates on import but not in ``Encaps`` protects only the
+    callers who went through its own parser.
+    """
+    public, _ = make_key(name)
+    ps = kf.ALGORITHMS[name].pq_param_set
+    body = bytearray(public.key)
+    body[0] = 0xFF
+    body[1] |= 0x0F
+    with pytest.raises(RuntimeError):
+        pb.native_ml_kem_encapsulate(ps, bytes(body))
+    # The unmodified key encapsulates and decapsulates as usual.
+    ciphertext, shared = pb.native_ml_kem_encapsulate(ps, public.key)
+    assert len(shared) == 32 and len(ciphertext) > 0
 
 
 @pytest.mark.parametrize("which", ["jwk", "cose"])
