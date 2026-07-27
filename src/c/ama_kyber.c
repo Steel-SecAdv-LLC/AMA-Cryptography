@@ -1926,6 +1926,106 @@ AMA_API ama_error_t ama_ml_kem_keypair_from_seed(ama_ml_kem_param_set_t ps,
     return kyber_keygen_internal(P, pk, pk_len, sk, sk_len, d, z);
 }
 
+/**
+ * Recover the encapsulation key embedded in an ML-KEM decapsulation key, and
+ * check the decapsulation key's internal consistency while doing it.
+ *
+ * FIPS 203 §7.1 lays the decapsulation key out as
+ * `dk_PKE || ek || H(ek) || z`, so the encapsulation key is present verbatim
+ * and needs no recomputation — but three of those four fields are mutually
+ * redundant, and a key whose fields disagree is one that decapsulates to a
+ * shared secret the sender never derived.  Because ML-KEM's implicit rejection
+ * (Algorithm 18 line 8) is *designed* to fail silently, that mismatch produces
+ * no error anywhere downstream: the two parties simply hold different secrets
+ * and the failure surfaces as an unexplained protocol error much later.  This
+ * is the only place it can be caught.
+ *
+ * Two checks, matching the two failure shapes that
+ * draft-ietf-lamps-kyber-certificates Appendix C.4.1 ships vectors for:
+ *
+ *  1. `H(ek)` must be SHA3-256 of the embedded `ek`.  Catches a mutated
+ *     digest field (example 3), and is cheap enough to be unconditional.
+ *  2. A pairwise consistency check — encapsulate to `ek`, decapsulate with
+ *     `dk`, require the two shared secrets to agree.  Catches a mutated
+ *     `dk_PKE` that left a correct digest behind (example 2), which check 1
+ *     cannot see.  This is the same operation FIPS 140-3 requires as a
+ *     key-pair consistency test.
+ *
+ * @param public_key  May be NULL to check without emitting the encapsulation
+ *                    key.  When non-NULL it must have room for `pk_bytes`.
+ * @return AMA_SUCCESS if consistent; AMA_ERROR_INVALID_PARAM for a NULL or
+ *         wrong-length argument; AMA_ERROR_VERIFY_FAILED if the embedded
+ *         digest is wrong or the pair does not round-trip.
+ */
+static ama_error_t kyber_pubkey_from_sk(const kyber_params *P,
+                                        const uint8_t *secret_key, size_t sk_len,
+                                        uint8_t *public_key, size_t pk_len) {
+    const uint8_t *ek, *h_stored;
+    uint8_t h_computed[32];
+    uint8_t ct[AMA_ML_KEM_MAX_CIPHERTEXT_BYTES];
+    uint8_t ss_enc[AMA_ML_KEM_SHARED_SECRET_BYTES];
+    uint8_t ss_dec[AMA_ML_KEM_SHARED_SECRET_BYTES];
+    size_t ct_len = sizeof(ct);
+    ama_error_t rc;
+    int mismatch;
+
+    if (!P || !secret_key || sk_len != P->sk_bytes) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+    if (public_key && pk_len < P->pk_bytes) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+
+    ek = secret_key + KYBER_T_BYTES(P);
+    h_stored = ek + P->pk_bytes;
+
+    ama_sha3_256(ek, P->pk_bytes, h_computed);
+    if (ama_consttime_memcmp(h_computed, h_stored, 32) != 0) {
+        ama_secure_memzero(h_computed, sizeof(h_computed));
+        return AMA_ERROR_VERIFY_FAILED;
+    }
+    ama_secure_memzero(h_computed, sizeof(h_computed));
+
+    rc = kyber_encapsulate_internal(P, ek, P->pk_bytes, ct, &ct_len,
+                                    ss_enc, sizeof(ss_enc));
+    if (rc == AMA_SUCCESS) {
+        rc = kyber_decapsulate_internal(P, ct, ct_len, secret_key, sk_len,
+                                        ss_dec, sizeof(ss_dec));
+    }
+    if (rc != AMA_SUCCESS) {
+        ama_secure_memzero(ss_enc, sizeof(ss_enc));
+        ama_secure_memzero(ss_dec, sizeof(ss_dec));
+        return rc;
+    }
+
+    mismatch = ama_consttime_memcmp(ss_enc, ss_dec, sizeof(ss_enc));
+    ama_secure_memzero(ss_enc, sizeof(ss_enc));
+    ama_secure_memzero(ss_dec, sizeof(ss_dec));
+    if (mismatch != 0) {
+        return AMA_ERROR_VERIFY_FAILED;
+    }
+
+    if (public_key) {
+        memcpy(public_key, ek, P->pk_bytes);
+    }
+    return AMA_SUCCESS;
+}
+
+AMA_API ama_error_t ama_ml_kem_pubkey_from_privkey(ama_ml_kem_param_set_t ps,
+                                                   const uint8_t *sk, size_t sk_len,
+                                                   uint8_t *pk, size_t pk_len) {
+    const kyber_params *P = kyber_params_for(ps);
+    if (!P || !pk) return AMA_ERROR_INVALID_PARAM;
+    return kyber_pubkey_from_sk(P, sk, sk_len, pk, pk_len);
+}
+
+AMA_API ama_error_t ama_ml_kem_privkey_check(ama_ml_kem_param_set_t ps,
+                                             const uint8_t *sk, size_t sk_len) {
+    const kyber_params *P = kyber_params_for(ps);
+    if (!P) return AMA_ERROR_INVALID_PARAM;
+    return kyber_pubkey_from_sk(P, sk, sk_len, NULL, 0);
+}
+
 AMA_API ama_error_t ama_ml_kem_encapsulate(ama_ml_kem_param_set_t ps,
                                            const uint8_t *pk, size_t pk_len,
                                            uint8_t *ct, size_t *ct_len,

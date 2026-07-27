@@ -162,6 +162,41 @@ class CryptoModuleError(AmaCryptographyError, RuntimeError):
     pass
 
 
+class KeyFormatError(AmaCryptographyError, ValueError):
+    """
+    Raised when an interoperability key encoding cannot be parsed or produced.
+
+    Covers PKCS#8, SPKI, PEM, JWK and COSE_Key handling in
+    ``ama_cryptography.key_formats``: malformed or non-minimal DER,
+    non-deterministic CBOR, a truncated or over-long key, a structure whose
+    declared algorithm does not match its contents, a JWK whose ``crv`` and
+    coordinate widths disagree, and so on.
+
+    Inherits from ``ValueError`` as well as the AMA root because a bad encoding
+    *is* a bad value, and callers parsing untrusted key material routinely
+    already guard with ``except ValueError``. A parse failure must never be
+    absorbed: it means the caller does not have the key it thinks it has.
+    """
+
+    pass
+
+
+class UnsupportedKeyFormatError(KeyFormatError):
+    """
+    Raised when an encoding is well-formed but names an algorithm, curve or
+    representation this library deliberately does not implement.
+
+    Distinct from ``KeyFormatError`` on purpose. "I cannot parse this" and "I
+    parsed this and will not pretend to support it" are different facts, and
+    conflating them is how a library ends up quietly emitting a non-standard
+    encoding for an algorithm whose standard is unfinished — which is exactly
+    why ML-DSA and ML-KEM raise this for JWK and COSE. See the limitations
+    table in ``ama_cryptography.key_formats``.
+    """
+
+    pass
+
+
 class AmaHSMUnavailableError(AmaCryptographyError, RuntimeError):
     """Raised when an HSM operation is requested but PyKCS11 is not installed.
 
@@ -188,5 +223,7 @@ __all__ = [
     "SignatureVerificationError",
     "IntegrityError",
     "CryptoModuleError",
+    "KeyFormatError",
+    "UnsupportedKeyFormatError",
     "AmaHSMUnavailableError",
 ]

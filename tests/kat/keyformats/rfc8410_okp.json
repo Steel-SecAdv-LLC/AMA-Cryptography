@@ -1,0 +1,27 @@
+{
+ "source": {
+  "url": "https://www.rfc-editor.org/rfc/rfc8410.txt",
+  "title": "RFC 8410 (Ed25519/X25519 in X.509), Section 10",
+  "revision": "RFC 8410, August 2018"
+ },
+ "records": [
+  {
+   "section": "10.1.  Example Ed25519 Public Key",
+   "label": "PUBLIC KEY",
+   "algorithm": "Ed25519",
+   "pem_b64": "MCowBQYDK2VwAyEAGb9ECWmEzf6FQbrBZ9w7lshQhqowtrbLDFw4rXAxZuE="
+  },
+  {
+   "section": "10.3.  Examples of Ed25519 Private Key",
+   "label": "PRIVATE KEY",
+   "algorithm": "Ed25519",
+   "pem_b64": "MC4CAQAwBQYDK2VwBCIEINTuctv5E1hK1bbY8fdp+K06/nwoy/HU++CXqI9EdVhC"
+  },
+  {
+   "section": "10.3.  Examples of Ed25519 Private Key",
+   "label": "PRIVATE KEY",
+   "algorithm": "Ed25519",
+   "pem_b64": "MHICAQEwBQYDK2VwBCIEINTuctv5E1hK1bbY8fdp+K06/nwoy/HU++CXqI9EdVhCoB8wHQYKKoZIhvcNAQkJFDEPDA1DdXJkbGUgQ2hhaXJzgSEAGb9ECWmEzf6FQbrBZ9w7lshQhqowtrbLDFw4rXAxZuE="
+  }
+ ]
+}

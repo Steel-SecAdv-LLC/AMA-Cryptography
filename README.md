@@ -251,6 +251,7 @@ NIST-standardized post-quantum algorithms:
 | NIST P-256 / P-384 / P-521 | **Full** | Full | ECDSA + ECDH; TLS/X.509/JOSE/COSE/WebAuthn interop ([docs](docs/NIST_PRIME_CURVES.md)) |
 | FROST Threshold Ed25519 (RFC 9591) | **Full** | Full | Threshold signing (`ama_frost_*`) |
 | Hybrid (Ed25519 + ML-DSA-65) | N/A | Full | Integrated |
+| Key formats — PKCS#8 / SPKI / PEM / JWK / COSE_Key | N/A | **Full** | All 12 algorithms; `ama_cryptography.key_formats` ([docs](docs/KEY_FORMATS.md)) |
 
 **Legend:**
 - **Full**: Complete native C implementation with constant-time operations.

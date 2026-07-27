@@ -390,3 +390,132 @@ def test_legacy_dilithium_wrapper_is_ml_dsa_65() -> None:
     assert pb.dilithium_verify(
         msg, pb.native_ml_dsa_sign(pb.ML_DSA_65, msg, bytes(kp.secret_key)), kp.public_key
     )
+
+
+# ---------------------------------------------------------------------------
+# Private-key consistency checking
+# ---------------------------------------------------------------------------
+# An expanded ML-DSA or ML-KEM private key is internally redundant, and a key
+# whose fields disagree is one that signs nothing verifiable or silently derives
+# the wrong shared secret. `ama_ml_{dsa,kem}_privkey_check` is what makes that
+# visible; RFC 9881 §8.2 and draft-ietf-lamps-kyber-certificates §C.4.1 publish
+# the negative vectors, and tests/test_key_formats.py replays them through the
+# PKCS#8 importer. These tests pin the backend surface itself — both the verdict
+# form and the derive form — so neither can quietly stop checking.
+
+
+@pytest.mark.parametrize("ps", pb.ML_DSA_PARAM_SETS)
+def test_ml_dsa_privkey_check_accepts_a_real_key(ps: int) -> None:
+    public, secret = pb.native_ml_dsa_keypair(ps)
+    assert pb.native_ml_dsa_privkey_check(ps, secret)
+    assert pb.native_ml_dsa_pubkey_from_privkey(ps, secret) == public
+
+
+@pytest.mark.parametrize("ps", pb.ML_DSA_PARAM_SETS)
+@pytest.mark.parametrize("field", ["rho", "tr", "s1", "t0"])
+def test_ml_dsa_privkey_check_rejects_a_mutated_field(ps: int, field: str) -> None:
+    """Flipping one bit in any load-bearing field must be caught.
+
+    ``sk = rho || K || tr || s1 || s2 || t0``. Mutating ``rho`` changes the
+    matrix A and therefore both ``t0`` and ``tr``; mutating ``tr`` or ``t0``
+    breaks the stored copy directly; mutating ``s1`` changes the key those
+    vectors imply. ``K`` is deliberately absent — it is the signing seed and is
+    unconstrained by the rest of the key, so a check that claimed to catch it
+    would be claiming something false.
+    """
+    _, secret = pb.native_ml_dsa_keypair(ps)
+    sizes = pb.ML_DSA_SIZES[ps]
+    offsets = {"rho": 0, "tr": 64, "s1": 128, "t0": sizes["secret_key"] - 1}
+    mutated = bytearray(secret)
+    mutated[offsets[field]] ^= 0x01
+    assert not pb.native_ml_dsa_privkey_check(ps, bytes(mutated)), (
+        f"a one-bit change to {field} went undetected"
+    )
+    with pytest.raises(ValueError, match="inconsistent"):
+        pb.native_ml_dsa_pubkey_from_privkey(ps, bytes(mutated))
+
+
+@pytest.mark.parametrize("ps", pb.ML_DSA_PARAM_SETS)
+def test_ml_dsa_rejects_out_of_range_secret_coefficients(ps: int) -> None:
+    """FIPS 204 Algorithm 25: s1/s2 coefficients outside [-eta, eta] are invalid.
+
+    The packing is not surjective onto its bit width — eta = 2 stores three bits
+    for a five-value range — so an all-ones s1 region decodes to coefficients
+    the specification forbids. Accepting them would let a malformed key into the
+    signer, where it produces signatures nothing verifies and drives the
+    rejection loop off its calibrated bounds.
+    """
+    _, secret = pb.native_ml_dsa_keypair(ps)
+    mutated = bytearray(secret)
+    mutated[128:160] = b"\xff" * 32
+    assert not pb.native_ml_dsa_privkey_check(ps, bytes(mutated))
+    # The signer must refuse it too, not merely the importer.
+    with pytest.raises(ValueError):
+        pb.native_ml_dsa_sign(ps, b"m", bytes(mutated))
+
+
+@pytest.mark.parametrize("ps", pb.ML_KEM_PARAM_SETS)
+def test_ml_kem_privkey_check_accepts_a_real_key(ps: int) -> None:
+    public, secret = pb.native_ml_kem_keypair(ps)
+    assert pb.native_ml_kem_privkey_check(ps, secret)
+    assert pb.native_ml_kem_pubkey_from_privkey(ps, secret) == public
+
+
+@pytest.mark.parametrize("ps", pb.ML_KEM_PARAM_SETS)
+@pytest.mark.parametrize("field", ["dk_pke", "ek", "h_ek"])
+def test_ml_kem_privkey_check_rejects_a_mutated_field(ps: int, field: str) -> None:
+    """``dk = dk_PKE || ek || H(ek) || z``; three of the four are redundant.
+
+    ``H(ek)`` is caught by recomputing the digest. ``dk_PKE`` leaves the digest
+    correct and is caught only by the pairwise round trip — which is the whole
+    reason both checks exist. ``ek`` breaks the digest. ``z`` is absent for the
+    same reason ML-DSA's ``K`` is: it is the implicit-rejection secret and
+    nothing else in the key constrains it.
+    """
+    _, secret = pb.native_ml_kem_keypair(ps)
+    sizes = pb.ML_KEM_SIZES[ps]
+    t_bytes = sizes["secret_key"] - sizes["public_key"] - 64
+    offsets = {"dk_pke": 0, "ek": t_bytes, "h_ek": t_bytes + sizes["public_key"]}
+    mutated = bytearray(secret)
+    mutated[offsets[field]] ^= 0x01
+    assert not pb.native_ml_kem_privkey_check(ps, bytes(mutated)), (
+        f"a one-bit change to {field} went undetected"
+    )
+    with pytest.raises(ValueError, match="inconsistent"):
+        pb.native_ml_kem_pubkey_from_privkey(ps, bytes(mutated))
+
+
+@pytest.mark.parametrize("ps", pb.ML_KEM_PARAM_SETS)
+def test_ml_kem_implicit_rejection_hides_a_mismatched_key(ps: int) -> None:
+    """Why the pairwise check is not optional.
+
+    FIPS 203 Algorithm 18 line 8 makes decapsulation with a wrong key return a
+    *derived* secret rather than an error, by design. So a mutated ``dk_PKE``
+    raises nothing anywhere downstream — the two parties simply hold different
+    secrets, and the failure surfaces as an unexplained protocol error much
+    later. This asserts that silence, which is what makes the import-time check
+    the only place it can be caught.
+    """
+    public, secret = pb.native_ml_kem_keypair(ps)
+    ciphertext, shared = pb.native_ml_kem_encapsulate(ps, public)
+    mutated = bytearray(secret)
+    mutated[0] ^= 0x01
+    other = pb.native_ml_kem_decapsulate(ps, ciphertext, bytes(mutated))
+    assert other != shared, "the mutation had no effect at all"
+    assert len(other) == len(shared), "decapsulation errored instead of failing silently"
+
+
+@pytest.mark.parametrize("ps", pb.ML_DSA_PARAM_SETS)
+def test_ml_dsa_privkey_check_rejects_a_wrong_length_key(ps: int) -> None:
+    _, secret = pb.native_ml_dsa_keypair(ps)
+    for bad in (secret[:-1], secret + b"\x00"):
+        with pytest.raises(ValueError, match="must be"):
+            pb.native_ml_dsa_privkey_check(ps, bad)
+
+
+@pytest.mark.parametrize("ps", pb.ML_KEM_PARAM_SETS)
+def test_ml_kem_privkey_check_rejects_a_wrong_length_key(ps: int) -> None:
+    _, secret = pb.native_ml_kem_keypair(ps)
+    for bad in (secret[:-1], secret + b"\x00"):
+        with pytest.raises(ValueError, match="must be"):
+            pb.native_ml_kem_privkey_check(ps, bad)

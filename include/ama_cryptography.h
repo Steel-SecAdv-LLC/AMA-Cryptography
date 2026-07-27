@@ -2680,6 +2680,42 @@ AMA_API ama_error_t ama_ml_dsa_keypair_from_seed(ama_ml_dsa_param_set_t ps,
                                                  uint8_t *secret_key);
 
 /**
+ * @brief Recompute the public key from an expanded ML-DSA private key, and
+ *        verify that private key's internal consistency.
+ *
+ * The expanded key `rho || K || tr || s1 || s2 || t0` is redundant: rho, s1 and
+ * s2 determine t = A*s1 + s2, hence t0, hence the public key rho || t1, hence
+ * tr = H(rho || t1). This recomputes that chain and requires the stored t0 and
+ * tr to agree with it.
+ *
+ * Needed to import a PKCS#8 private key carrying only the `expandedKey` arm
+ * (RFC 9881 §6), which has no public key to read. RFC 9881 §8.2 identifies the
+ * two failure shapes this catches and Appendix C.4 ships vectors for both — a
+ * mismatched tr, and s1/s2 whose implied t has different low bits than the
+ * stored t0 — noting that implementations which skip the check detect neither.
+ *
+ * @param secret_key `ama_ml_dsa_secret_key_bytes(ps)` octets.
+ * @param public_key Output, `ama_ml_dsa_public_key_bytes(ps)` octets.
+ * @return AMA_SUCCESS; AMA_ERROR_INVALID_PARAM on a NULL argument, an unknown
+ *         parameter set, or an s1/s2 coefficient outside [-eta, eta] (FIPS 204
+ *         Algorithm 25); AMA_ERROR_VERIFY_FAILED if t0 or tr disagrees, in
+ *         which case nothing is written to `public_key`.
+ */
+AMA_API ama_error_t ama_ml_dsa_pubkey_from_privkey(ama_ml_dsa_param_set_t ps,
+                                                   const uint8_t *secret_key,
+                                                   uint8_t *public_key);
+
+/**
+ * @brief Verify an expanded ML-DSA private key's internal consistency,
+ *        discarding the recomputed public key.
+ *
+ * Identical checks and return values to `ama_ml_dsa_pubkey_from_privkey`,
+ * for callers that only want the verdict.
+ */
+AMA_API ama_error_t ama_ml_dsa_privkey_check(ama_ml_dsa_param_set_t ps,
+                                             const uint8_t *secret_key);
+
+/**
  * @brief ML-DSA signing, "internal interface" (no context wrapper).
  *
  * @param signature_len In: capacity. Out: octets written. If the capacity is
@@ -2764,6 +2800,39 @@ AMA_API ama_error_t ama_ml_kem_keypair_from_seed(ama_ml_kem_param_set_t ps,
                                                  const uint8_t z[32],
                                                  uint8_t *pk, size_t pk_len,
                                                  uint8_t *sk, size_t sk_len);
+
+/**
+ * @brief Recover the encapsulation key from an ML-KEM decapsulation key, and
+ *        verify that decapsulation key's internal consistency.
+ *
+ * FIPS 203 §7.1 lays `dk` out as `dk_PKE || ek || H(ek) || z`, so `ek` is
+ * present verbatim — but three of those fields are mutually redundant, and a
+ * `dk` whose fields disagree decapsulates to a secret the sender never
+ * derived. ML-KEM's implicit rejection is designed to fail *silently*, so that
+ * mismatch raises no error anywhere downstream; this is the only place it is
+ * visible. Two checks run: `H(ek)` must be SHA3-256 of the embedded `ek`, and
+ * an encapsulate/decapsulate round trip must agree on the shared secret.
+ * draft-ietf-lamps-kyber-certificates Appendix C.4.1 ships a vector for each.
+ *
+ * @param pk  Output, `ama_ml_kem_public_key_bytes(ps)` octets.
+ * @return AMA_SUCCESS; AMA_ERROR_INVALID_PARAM on a NULL argument, unknown
+ *         parameter set, or wrong `sk_len`/`pk_len`; AMA_ERROR_VERIFY_FAILED
+ *         if the embedded digest is wrong or the pair does not round-trip, in
+ *         which case nothing is written to `pk`.
+ */
+AMA_API ama_error_t ama_ml_kem_pubkey_from_privkey(ama_ml_kem_param_set_t ps,
+                                                   const uint8_t *sk, size_t sk_len,
+                                                   uint8_t *pk, size_t pk_len);
+
+/**
+ * @brief Verify an ML-KEM decapsulation key's internal consistency,
+ *        discarding the recovered encapsulation key.
+ *
+ * Identical checks and return values to `ama_ml_kem_pubkey_from_privkey`,
+ * for callers that only want the verdict.
+ */
+AMA_API ama_error_t ama_ml_kem_privkey_check(ama_ml_kem_param_set_t ps,
+                                             const uint8_t *sk, size_t sk_len);
 
 /**
  * @brief ML-KEM encapsulation (FIPS 203 Algorithm 17).

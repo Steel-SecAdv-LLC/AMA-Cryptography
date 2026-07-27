@@ -812,12 +812,22 @@ def _setup_secp256k1_ctypes(lib: ctypes.CDLL) -> bool:
             ctypes.c_uint32,  # flags (AMA_SECP256K1_ECDSA_*)
         ]
         lib.ama_secp256k1_ecdsa_verify_ex.restype = ctypes.c_int
+
+        lib.ama_secp256k1_pubkey_decompress.argtypes = [
+            ctypes.c_char_p,  # compressed[33]
+            ctypes.c_char_p,  # uncompressed[64] (out, X||Y, no prefix)
+        ]
+        lib.ama_secp256k1_pubkey_decompress.restype = ctypes.c_int
         return True
     except AttributeError:
         return False
 
 
 # ECDSA verification policy flags (mirror include/ama_cryptography.h).
+# Error codes from include/ama_cryptography.h, for the cases where a wrapper
+# has to tell "you passed something invalid" apart from "the operation failed".
+AMA_ERROR_INVALID_PARAM = -1
+
 AMA_SECP256K1_ECDSA_VERIFY_STRICT = 0
 AMA_SECP256K1_ECDSA_ALLOW_HIGH_S = 1
 
@@ -919,6 +929,22 @@ def _setup_ml_kem_ctypes(lib: ctypes.CDLL) -> bool:
         ]
         lib.ama_ml_kem_keypair_from_seed.restype = ctypes.c_int
 
+        lib.ama_ml_kem_pubkey_from_privkey.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,  # sk
+            ctypes.c_size_t,
+            ctypes.c_char_p,  # pk (out)
+            ctypes.c_size_t,
+        ]
+        lib.ama_ml_kem_pubkey_from_privkey.restype = ctypes.c_int
+
+        lib.ama_ml_kem_privkey_check.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+        ]
+        lib.ama_ml_kem_privkey_check.restype = ctypes.c_int
+
         lib.ama_ml_kem_encapsulate.argtypes = [
             ctypes.c_int,
             ctypes.c_char_p,
@@ -970,6 +996,16 @@ def _setup_ml_dsa_ctypes(lib: ctypes.CDLL) -> bool:
             ctypes.c_char_p,
         ]
         lib.ama_ml_dsa_keypair_from_seed.restype = ctypes.c_int
+
+        lib.ama_ml_dsa_pubkey_from_privkey.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,  # secret_key
+            ctypes.c_char_p,  # public_key (out)
+        ]
+        lib.ama_ml_dsa_pubkey_from_privkey.restype = ctypes.c_int
+
+        lib.ama_ml_dsa_privkey_check.argtypes = [ctypes.c_int, ctypes.c_char_p]
+        lib.ama_ml_dsa_privkey_check.restype = ctypes.c_int
 
         lib.ama_ml_dsa_sign.argtypes = [
             ctypes.c_int,
@@ -4201,6 +4237,56 @@ SECP256K1_ECDSA_MAX_SIG_BYTES = 72
 SECP256K1_UNCOMPRESSED_PUBKEY_BYTES = 64
 
 
+def native_secp256k1_pubkey_decompress(compressed: bytes) -> bytes:
+    """
+    Recover ``X || Y`` from a compressed SEC 1 secp256k1 public key.
+
+    The inverse of :func:`native_secp256k1_pubkey_from_privkey`'s output form.
+    Compressed points are what X.509, JWK-adjacent tooling and most wire
+    protocols carry, while every AMA secp256k1 entry point consumes the
+    64-octet uncompressed form; without this, a caller holding a compressed
+    point has to reimplement a square root over the field to use it.
+
+    The native routine proves the recovered root: an X that is not on the
+    curve yields a Y whose square does not match ``x^3 + 7``, and the call is
+    refused rather than returning a point that is not on the curve. A
+    non-canonical X (``>= p``) is refused for the same reason as everywhere
+    else in AMA (INVARIANT-29).
+
+    Every input is public, so this is variable time by design.
+
+    Args:
+        compressed: 33 octets, ``0x02``/``0x03`` prefix followed by
+            big-endian X.
+
+    Returns:
+        64 octets, ``X || Y`` big-endian with no SEC 1 prefix.
+
+    Raises:
+        ValueError: If the input is not 33 octets, carries a prefix other
+            than ``0x02``/``0x03``, has a non-canonical X, or names an X that
+            is not on the curve.
+        NativeBackendUnavailableError: If the native library is not available.
+    """
+    if len(compressed) != SECP256K1_PUBKEY_BYTES:
+        raise ValueError(
+            f"Compressed public key must be {SECP256K1_PUBKEY_BYTES} bytes, got {len(compressed)}"
+        )
+
+    if _native_lib is None or not _SECP256K1_NATIVE_AVAILABLE:
+        raise NativeBackendUnavailableError("secp256k1 native backend not available. " + _INSTALL_HINT)
+
+    out = ctypes.create_string_buffer(SECP256K1_UNCOMPRESSED_PUBKEY_BYTES)
+    rc = _native_lib.ama_secp256k1_pubkey_decompress(bytes(compressed), out)
+    if rc != 0:
+        raise ValueError(
+            "secp256k1 point decompression failed: bad prefix, non-canonical X, "
+            f"or X not on the curve (rc={rc})"
+        )
+
+    return bytes(out.raw[:SECP256K1_UNCOMPRESSED_PUBKEY_BYTES])
+
+
 def native_secp256k1_ecdsa_sign(message_digest: bytes, privkey: bytes) -> bytes:
     """
     Sign a 32-byte message digest with ECDSA over secp256k1.
@@ -4420,6 +4506,71 @@ def native_ml_kem_keypair_from_seed(ps: Union[int, str], d: bytes, z: bytes) -> 
     return bytes(pk.raw[: sz["public_key"]]), bytes(sk.raw[: sz["secret_key"]])
 
 
+def native_ml_kem_pubkey_from_privkey(ps: Union[int, str], secret_key: bytes) -> bytes:
+    """
+    Recover the encapsulation key from an ML-KEM decapsulation key, verifying
+    the decapsulation key's internal consistency.
+
+    FIPS 203 §7.1 lays ``dk`` out as ``dk_PKE || ek || H(ek) || z``, so ``ek``
+    is embedded verbatim — but the fields are mutually redundant, and a ``dk``
+    whose fields disagree decapsulates to a shared secret the sender never
+    derived. ML-KEM's implicit rejection is *designed* to fail silently, so
+    that mismatch raises no error anywhere downstream; it is only visible here.
+    Two checks run: ``H(ek)`` must be SHA3-256 of the embedded ``ek``, and an
+    encapsulate/decapsulate round trip must agree.
+
+    Needed to import a PKCS#8 private key carrying only the ``expandedKey``
+    arm, which has no public key to read.
+
+    Raises:
+        ValueError: On a wrong key length, an unknown parameter set, or a key
+            whose embedded digest or key pair is inconsistent.
+    """
+    pid = _ml_kem_id(ps)
+    sz = ML_KEM_SIZES[pid]
+    if len(secret_key) != sz["secret_key"]:
+        raise ValueError(
+            f"ML-KEM-{pid} secret key must be {sz['secret_key']} bytes, got {len(secret_key)}"
+        )
+    _ml_kem_require_native()
+    pk = ctypes.create_string_buffer(sz["public_key"])
+    rc = _native_lib.ama_ml_kem_pubkey_from_privkey(
+        pid, bytes(secret_key), ctypes.c_size_t(sz["secret_key"]),
+        pk, ctypes.c_size_t(sz["public_key"])
+    )
+    if rc != 0:
+        raise ValueError(
+            f"ML-KEM-{pid} decapsulation key is internally inconsistent: the "
+            f"embedded H(ek) or the key pair itself does not check out (rc={rc})"
+        )
+    return bytes(pk.raw[: sz["public_key"]])
+
+
+def native_ml_kem_privkey_check(ps: Union[int, str], secret_key: bytes) -> bool:
+    """
+    Whether an ML-KEM decapsulation key is internally consistent.
+
+    The verdict form of :func:`native_ml_kem_pubkey_from_privkey`; identical
+    checks. Returns ``False`` rather than raising for an inconsistent key, so a
+    caller validating untrusted material does not have to catch.
+
+    Raises:
+        ValueError: On a wrong key length or an unknown parameter set — those
+            are caller errors, not verdicts.
+    """
+    pid = _ml_kem_id(ps)
+    sz = ML_KEM_SIZES[pid]
+    if len(secret_key) != sz["secret_key"]:
+        raise ValueError(
+            f"ML-KEM-{pid} secret key must be {sz['secret_key']} bytes, got {len(secret_key)}"
+        )
+    _ml_kem_require_native()
+    rc = _native_lib.ama_ml_kem_privkey_check(
+        pid, bytes(secret_key), ctypes.c_size_t(sz["secret_key"])
+    )
+    return bool(rc == 0)
+
+
 def native_ml_kem_encapsulate(ps: Union[int, str], public_key: bytes) -> tuple:
     """
     ML-KEM encapsulation (FIPS 203 Algorithm 17).
@@ -4518,6 +4669,68 @@ def native_ml_dsa_keypair_from_seed(ps: Union[int, str], xi: bytes) -> tuple:
     return bytes(pk.raw[: sz["public_key"]]), bytes(sk.raw[: sz["secret_key"]])
 
 
+def native_ml_dsa_pubkey_from_privkey(ps: Union[int, str], secret_key: bytes) -> bytes:
+    """
+    Recompute the public key from an expanded ML-DSA private key, verifying
+    that private key's internal consistency.
+
+    The expanded key ``rho || K || tr || s1 || s2 || t0`` is redundant: rho, s1
+    and s2 determine ``t = A*s1 + s2``, hence ``t0``, hence the public key
+    ``rho || t1``, hence ``tr = H(rho || t1)``. This recomputes that chain and
+    requires the stored ``t0`` and ``tr`` to agree with it.
+
+    Needed to import a PKCS#8 private key carrying only the ``expandedKey``
+    arm, which has no public key to read. RFC 9881 §8.2 names the two failures
+    this catches and Appendix C.4 ships a vector for each — a mismatched
+    ``tr``, and ``s1``/``s2`` whose implied ``t`` has different low bits than
+    the stored ``t0`` — noting that implementations which skip the check
+    detect neither.
+
+    Raises:
+        ValueError: On a wrong key length, an unknown parameter set, an
+            ``s1``/``s2`` coefficient outside ``[-eta, eta]`` (FIPS 204
+            Algorithm 25), or a ``t0``/``tr`` disagreement.
+    """
+    pid = _ml_dsa_id(ps)
+    sz = ML_DSA_SIZES[pid]
+    if len(secret_key) != sz["secret_key"]:
+        raise ValueError(
+            f"ML-DSA-{pid} secret key must be {sz['secret_key']} bytes, got {len(secret_key)}"
+        )
+    _ml_dsa_require_native()
+    pk = ctypes.create_string_buffer(sz["public_key"])
+    rc = _native_lib.ama_ml_dsa_pubkey_from_privkey(pid, bytes(secret_key), pk)
+    if rc != 0:
+        raise ValueError(
+            f"ML-DSA-{pid} private key is internally inconsistent: its s1/s2 are "
+            f"out of range, or the t0/tr it carries do not match the key those "
+            f"vectors imply (rc={rc})"
+        )
+    return bytes(pk.raw[: sz["public_key"]])
+
+
+def native_ml_dsa_privkey_check(ps: Union[int, str], secret_key: bytes) -> bool:
+    """
+    Whether an expanded ML-DSA private key is internally consistent.
+
+    The verdict form of :func:`native_ml_dsa_pubkey_from_privkey`; identical
+    checks. Returns ``False`` rather than raising for an inconsistent key, so a
+    caller validating untrusted material does not have to catch.
+
+    Raises:
+        ValueError: On a wrong key length or an unknown parameter set — those
+            are caller errors, not verdicts.
+    """
+    pid = _ml_dsa_id(ps)
+    sz = ML_DSA_SIZES[pid]
+    if len(secret_key) != sz["secret_key"]:
+        raise ValueError(
+            f"ML-DSA-{pid} secret key must be {sz['secret_key']} bytes, got {len(secret_key)}"
+        )
+    _ml_dsa_require_native()
+    return bool(_native_lib.ama_ml_dsa_privkey_check(pid, bytes(secret_key)) == 0)
+
+
 def native_ml_dsa_sign(
     ps: Union[int, str],
     message: bytes,
@@ -4559,6 +4772,16 @@ def native_ml_dsa_sign(
         rc = _native_lib.ama_ml_dsa_sign_ctx(
             pid, sig, ctypes.byref(sig_len), bytes(message), ctypes.c_size_t(len(message)),
             bytes(ctx), ctypes.c_size_t(len(ctx)), bytes(secret_key)
+        )
+    if rc == AMA_ERROR_INVALID_PARAM:
+        # The signer applies FIPS 204 Algorithm 25's range gate to s1/s2, so a
+        # secret key of the right length can still be refused here. That is a
+        # property of the key the caller passed, not a failure of the operation,
+        # and every other bad-input refusal in this module is a ValueError.
+        raise ValueError(
+            "ML-DSA signing refused the secret key: its s1/s2 carry a "
+            "coefficient outside [-eta, eta] (FIPS 204 Algorithm 25), so it is "
+            "not a well-formed private key"
         )
     if rc != 0:
         raise RuntimeError(f"ML-DSA signing failed (rc={rc})")

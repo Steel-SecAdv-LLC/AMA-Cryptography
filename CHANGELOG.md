@@ -21,6 +21,32 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ### Fixed
 
+- **ML-DSA accepted private keys FIPS 204 forbids.** `skDecode` (FIPS 204
+  Algorithm 25) requires every `s1`/`s2` coefficient to be in `[-eta, eta]` and
+  the key rejected otherwise. The unpacking is not surjective onto its bit
+  width — eta = 2 stores a five-value range in three bits, decoding to
+  `[-5, 2]`; eta = 4 stores a nine-value range in four, decoding to
+  `[-11, 4]` — so a malformed or hostile key decoded to coefficients the
+  specification forbids and `ama_ml_dsa_sign` signed with it, producing
+  signatures nothing verifies and driving the rejection loop off its calibrated
+  bounds. The range gate is now applied, accumulated branchlessly across the
+  whole key so the refusal does not reveal which polynomial carried the
+  offending coefficient, and `native_ml_dsa_sign` reports it as a `ValueError`
+  (a property of the key you passed) rather than a `RuntimeError`.
+
+- **`ama_secp256k1_pubkey_decompress` was unreachable from Python.** The C
+  function and its header declaration existed; no ctypes binding or wrapper
+  did, so nothing outside the C API could call it. Now wired as
+  `native_secp256k1_pubkey_decompress`.
+
+- **secp256k1 uncompressed points were not validated on import.** A SEC 1
+  `0x04 || X || Y` point taken from an SPKI or PKCS#8 structure had its length
+  checked and nothing else — neither curve membership nor coordinate
+  canonicality. Accepting a point that is on no curve is the invalid-curve
+  attack. Validation now runs on both the compressed and uncompressed paths,
+  and the NIST-curve decoder's refusals surface as `KeyFormatError` rather than
+  leaking the backend's `ValueError` through the format layer.
+
 - **`ama_nistp_ecdsa_sign` did not conform to RFC 6979.** The signer normalised
   `s` to the low representative unconditionally, so it failed RFC 6979's own
   Appendix A.2.5 / A.2.6 / A.2.7 vectors on every case whose natural `s` came
@@ -84,6 +110,57 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   `except PQCUnavailableError` and `except RuntimeError` handler is unaffected.
 
 ### Added
+
+- **Key interoperability formats — PKCS#8, SPKI, PEM, JWK and COSE_Key**
+  (`ama_cryptography.key_formats`, with the strict DER and deterministic-CBOR
+  codecs in `ama_cryptography._asn1`). AMA's key handling was in-house only:
+  opaque octet strings with AMA-defined layouts, fine inside AMA and useless
+  everywhere else. This is the boundary layer that lets an AMA key reach an
+  X.509 certificate request, a TLS stack, a JOSE token, a COSE message, a
+  WebAuthn credential or a PKCS#11 object. All twelve algorithms — Ed25519,
+  X25519, P-256/384/521, secp256k1, ML-DSA-44/65/87, ML-KEM-512/768/1024 — get
+  SPKI, PKCS#8 and PEM; the six classical ones also get JWK (with RFC 7638
+  thumbprints) and COSE_Key. See `docs/KEY_FORMATS.md`.
+
+  Correctness here is measured against the specifications' own answer keys
+  rather than against AMA itself, because a round trip through one's own
+  encoder proves only self-consistency: a wrong OID, an absent-versus-NULL
+  `parameters` mistake or a misidentified `CHOICE` arm round-trips perfectly
+  and interoperates with nothing. Vendored under `tests/kat/keyformats/`:
+  RFC 9881 Appendix C (15 ML-DSA vectors), draft-ietf-lamps-kyber-certificates-11
+  Appendix C (16 ML-KEM vectors), RFC 8410 §10, RFC 8037 Appendix A, RFC 8152
+  Appendix C.7.1, plus EC and OKP key files from a second implementation for the
+  curves no RFC publishes examples for. Every record is checked in **both**
+  directions — parse to the right key, and re-encode to the same bytes — which
+  is what a self-round-trip cannot see. 301 tests.
+
+  The RFC 9881 vectors are also a FIPS 203/204 key-generation KAT as a side
+  effect: the RFC derives its examples from a single seed, so parsing a `seed`
+  record runs AMA's `KeyGen_internal` and compares against the RFC's own
+  expanded key across all six parameter sets.
+
+- **ML-DSA and ML-KEM private-key consistency checking**
+  (`ama_ml_dsa_pubkey_from_privkey`, `ama_ml_dsa_privkey_check`,
+  `ama_ml_kem_pubkey_from_privkey`, `ama_ml_kem_privkey_check`, and the
+  `native_*` wrappers). An expanded post-quantum private key is internally
+  redundant, and a key whose fields disagree signs nothing verifiable or
+  silently derives the wrong shared secret. ML-DSA's `rho`, `s1` and `s2`
+  determine `t0` and the public key and therefore `tr`, all of which are now
+  recomputed and required to agree; ML-KEM's `H(ek)` is recomputed **and** a
+  pairwise encapsulate/decapsulate round trip must succeed.
+
+  Both halves of the ML-KEM check are load-bearing. FIPS 203's implicit
+  rejection is *designed* to fail silently, so a decapsulation key with a
+  mutated `dk_PKE` and a correct digest raises nothing anywhere downstream —
+  the two parties simply hold different secrets and the failure surfaces as an
+  unexplained protocol error much later. Import time is the only place it is
+  visible. RFC 9881 §8.2 and the ML-KEM draft's §C.4.1 publish seven
+  deliberately inconsistent keys between them, all seven of which are in the
+  test suite; RFC 9881 notes that implementations which skip the `tr`/`t0`
+  check detect two of them not at all.
+
+  This also makes `expandedKey`-only PKCS#8 import work: such a file carries no
+  public key, so recomputing it is what makes the key usable.
 
 - **INVARIANT-35 — a selector must never resolve weaker than it was asked.**
   INVARIANT-7 governs the availability axis (no backend, no operation); nothing

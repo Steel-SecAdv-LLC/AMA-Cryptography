@@ -597,8 +597,20 @@ static void dil_polyeta_pack(uint8_t *r, const dil_poly *a, const dil_params *P)
 
 /**
  * Unpack a polynomial with coefficients in [-eta, eta].
+ *
+ * The packing is not surjective onto its bit width: eta = 2 stores `eta - c` in
+ * 3 bits, so the decodable range is [-5, 2] while the legal range is [-2, 2];
+ * eta = 4 stores it in 4 bits, decoding to [-11, 4] against a legal [-4, 4].
+ * FIPS 204 Algorithm 25 (skDecode) is explicit that a coefficient outside
+ * [-eta, eta] makes the secret key invalid and the decode must return
+ * "invalid".  Silently accepting one lets a malformed or hostile private key
+ * into the signer, where it produces signatures nothing verifies and drives the
+ * rejection loop off its calibrated bounds.
+ *
+ * @return 0 if every coefficient is in [-eta, eta], -1 otherwise.  On -1 the
+ *         contents of *r are unspecified and must not be used.
  */
-static void dil_polyeta_unpack(dil_poly *r, const uint8_t *a, const dil_params *P) {
+static int dil_polyeta_unpack(dil_poly *r, const uint8_t *a, const dil_params *P) {
     unsigned int i;
 
     if (P->eta == 2) {
@@ -621,14 +633,25 @@ static void dil_polyeta_unpack(dil_poly *r, const uint8_t *a, const dil_params *
             r->coeffs[8*i + 6] = P->eta - r->coeffs[8*i + 6];
             r->coeffs[8*i + 7] = P->eta - r->coeffs[8*i + 7];
         }
-        return;
+    } else {
+        for (i = 0; i < DIL_N / 2; ++i) {
+            r->coeffs[2*i + 0] = (int32_t)(a[i] & 0x0F);
+            r->coeffs[2*i + 1] = (int32_t)(a[i] >> 4);
+            r->coeffs[2*i + 0] = P->eta - r->coeffs[2*i + 0];
+            r->coeffs[2*i + 1] = P->eta - r->coeffs[2*i + 1];
+        }
     }
 
-    for (i = 0; i < DIL_N / 2; ++i) {
-        r->coeffs[2*i + 0] = (int32_t)(a[i] & 0x0F);
-        r->coeffs[2*i + 1] = (int32_t)(a[i] >> 4);
-        r->coeffs[2*i + 0] = P->eta - r->coeffs[2*i + 0];
-        r->coeffs[2*i + 1] = P->eta - r->coeffs[2*i + 1];
+    /* skDecode's range gate.  Accumulated with a branchless OR rather than an
+     * early return: the coefficients of a secret vector are secret, and a loop
+     * that exits at the first out-of-range value leaks its index. */
+    {
+        int32_t bad = 0;
+        for (i = 0; i < DIL_N; ++i) {
+            bad |= (P->eta - r->coeffs[i]) >> 31;              /* c >  eta */
+            bad |= (r->coeffs[i] + (int32_t)P->eta) >> 31;     /* c < -eta */
+        }
+        return bad ? -1 : 0;
     }
 }
 
@@ -1634,6 +1657,126 @@ static ama_error_t dil_keygen_internal(const dil_params *P,
     return AMA_SUCCESS;
 }
 
+/**
+ * Recompute the public key from an expanded ML-DSA private key, and check the
+ * private key's internal consistency while doing it.
+ *
+ * The expanded key `rho || K || tr || s1 || s2 || t0` is redundant: rho, s1 and
+ * s2 already determine t = A*s1 + s2, and therefore both t0 and the public key
+ * rho || t1, and therefore tr = H(rho || t1).  Recomputing that chain is the
+ * only way to tell a genuine expanded key from one whose fields disagree.
+ *
+ * Two things depend on this being available:
+ *
+ *  - importing a private key that carries only `expandedKey` (RFC 9881 §6).
+ *    RFC 9881 §8.2 names exactly the two failures this catches, and Appendix
+ *    C.4 ships the vectors: a key whose tr does not match its public key, and
+ *    a key whose s1/s2 imply a t whose low bits are not the stored t0.  The
+ *    RFC observes that implementations which "neglect to check consistency of
+ *    tr and t_0" do not detect either.  Both are exercised in
+ *    tests/test_key_formats.py.
+ *  - deriving the public half of a key that arrived without one, which is what
+ *    lets an expandedKey-only PKCS#8 file produce a usable keypair at all.
+ *
+ * Every input is a private key the caller already holds, and the answer is
+ * pass/fail on data the caller supplied, so this is not on a secret-dependent
+ * timing path in the sense the signer is; it is nevertheless written without
+ * early exits so that a partial failure does not narrow down which field
+ * disagreed.
+ *
+ * @param public_key  May be NULL to check without emitting the public key.
+ * @return AMA_SUCCESS if the key is internally consistent;
+ *         AMA_ERROR_INVALID_PARAM for a NULL/short argument or an out-of-range
+ *         s1/s2 coefficient; AMA_ERROR_VERIFY_FAILED if the recomputed t0 or
+ *         tr disagrees with the key's own.
+ */
+static ama_error_t dil_pubkey_from_sk(const dil_params *P,
+                                      const uint8_t *secret_key,
+                                      uint8_t *public_key) {
+    dil_poly mat[DIL_K_MAX * DIL_L_MAX];
+    dil_polyvecl s1, s1hat;
+    dil_polyveck s2, t, t0, t1, t0_stored;
+    uint8_t pk[AMA_ML_DSA_87_PUBLIC_KEY_BYTES];
+    uint8_t tr[DIL_TRBYTES];
+    const uint8_t *rho, *tr_stored;
+    size_t eta_off, t0_off;
+    unsigned int i, j;
+    int32_t diff = 0;
+    int sk_bad = 0;
+    ama_error_t rc = AMA_SUCCESS;
+
+    if (!P || !secret_key) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+
+    dil_cached_dt = ama_get_dispatch_table();
+
+    rho = secret_key;
+    tr_stored = secret_key + 2 * DIL_SEEDBYTES;
+    eta_off = 2 * DIL_SEEDBYTES + DIL_TRBYTES;
+    t0_off = eta_off + (size_t)(P->l + P->k) * P->polyeta_packedbytes;
+
+    for (i = 0; i < P->l; ++i) {
+        sk_bad |= dil_polyeta_unpack(&s1.vec[i],
+            secret_key + eta_off + i * P->polyeta_packedbytes, P);
+    }
+    for (i = 0; i < P->k; ++i) {
+        sk_bad |= dil_polyeta_unpack(&s2.vec[i],
+            secret_key + eta_off + (P->l + i) * P->polyeta_packedbytes, P);
+    }
+    if (sk_bad) {
+        rc = AMA_ERROR_INVALID_PARAM;
+        goto done;
+    }
+    for (i = 0; i < P->k; ++i) {
+        dil_polyt0_unpack(&t0_stored.vec[i],
+            secret_key + t0_off + i * DIL_POLYT0_PACKEDBYTES);
+    }
+
+    /* t = A*s1 + s2, then Power2Round into (t1, t0) — the keygen chain. */
+    dil_expand_matrix(mat, rho, P);
+    s1hat = s1;
+    dil_polyvecl_ntt(&s1hat, P->l);
+    dil_polyvec_matrix_pointwise(&t, mat, &s1hat, P);
+    dil_polyveck_invntt(&t, P->k);
+    dil_polyveck_add(&t, &t, &s2, P->k);
+    dil_polyveck_reduce(&t, P->k);
+    dil_polyveck_caddq(&t, P->k);
+    dil_polyveck_power2round(&t1, &t0, &t, P->k);
+
+    memcpy(pk, rho, DIL_SEEDBYTES);
+    for (i = 0; i < P->k; ++i) {
+        dil_polyt1_pack(pk + DIL_SEEDBYTES + i * DIL_POLYT1_PACKEDBYTES, &t1.vec[i]);
+    }
+    ama_shake256(pk, P->pk_bytes, tr, DIL_TRBYTES);
+
+    /* t0 and tr must both agree with what the key carries. */
+    for (i = 0; i < P->k; ++i) {
+        for (j = 0; j < DIL_N; ++j) {
+            diff |= t0.vec[i].coeffs[j] ^ t0_stored.vec[i].coeffs[j];
+        }
+    }
+    if (diff != 0 || ama_consttime_memcmp(tr, tr_stored, DIL_TRBYTES) != 0) {
+        rc = AMA_ERROR_VERIFY_FAILED;
+        goto done;
+    }
+
+    if (public_key) {
+        memcpy(public_key, pk, P->pk_bytes);
+    }
+
+done:
+    ama_secure_memzero(&s1, sizeof(s1));
+    ama_secure_memzero(&s1hat, sizeof(s1hat));
+    ama_secure_memzero(&s2, sizeof(s2));
+    ama_secure_memzero(&t, sizeof(t));
+    ama_secure_memzero(&t0, sizeof(t0));
+    ama_secure_memzero(&t0_stored, sizeof(t0_stored));
+    ama_secure_memzero(pk, sizeof(pk));
+    ama_secure_memzero(tr, sizeof(tr));
+    return rc;
+}
+
 static ama_error_t dil_sign_internal(const dil_params *P,
                                      uint8_t *signature, size_t *signature_len,
                                      const uint8_t *message, size_t message_len,
@@ -1674,13 +1817,25 @@ static ama_error_t dil_sign_internal(const dil_params *P,
 
     eta_off = 2 * DIL_SEEDBYTES + DIL_TRBYTES;
     t0_off = eta_off + (size_t)(P->l + P->k) * P->polyeta_packedbytes;
-    for (i = 0; i < P->l; ++i) {
-        dil_polyeta_unpack(&s1.vec[i],
-            secret_key + eta_off + i * P->polyeta_packedbytes, P);
-    }
-    for (i = 0; i < P->k; ++i) {
-        dil_polyeta_unpack(&s2.vec[i],
-            secret_key + eta_off + (P->l + i) * P->polyeta_packedbytes, P);
+    {
+        /* skDecode (FIPS 204 Algorithm 25) rejects a secret vector with a
+         * coefficient outside [-eta, eta].  Accumulated across the whole key
+         * before branching so the refusal does not reveal which polynomial
+         * carried the offending coefficient. */
+        int sk_bad = 0;
+        for (i = 0; i < P->l; ++i) {
+            sk_bad |= dil_polyeta_unpack(&s1.vec[i],
+                secret_key + eta_off + i * P->polyeta_packedbytes, P);
+        }
+        for (i = 0; i < P->k; ++i) {
+            sk_bad |= dil_polyeta_unpack(&s2.vec[i],
+                secret_key + eta_off + (P->l + i) * P->polyeta_packedbytes, P);
+        }
+        if (sk_bad) {
+            ama_secure_memzero(&s1, sizeof(s1));
+            ama_secure_memzero(&s2, sizeof(s2));
+            return AMA_ERROR_INVALID_PARAM;
+        }
     }
     for (i = 0; i < P->k; ++i) {
         dil_polyt0_unpack(&t0.vec[i],
@@ -2104,6 +2259,21 @@ AMA_API ama_error_t ama_ml_dsa_keypair_from_seed(ama_ml_dsa_param_set_t ps,
     const dil_params *P = dil_params_for(ps);
     if (!P || !xi) return AMA_ERROR_INVALID_PARAM;
     return dil_keygen_internal(P, xi, public_key, secret_key);
+}
+
+AMA_API ama_error_t ama_ml_dsa_pubkey_from_privkey(ama_ml_dsa_param_set_t ps,
+                                                   const uint8_t *secret_key,
+                                                   uint8_t *public_key) {
+    const dil_params *P = dil_params_for(ps);
+    if (!P || !secret_key || !public_key) return AMA_ERROR_INVALID_PARAM;
+    return dil_pubkey_from_sk(P, secret_key, public_key);
+}
+
+AMA_API ama_error_t ama_ml_dsa_privkey_check(ama_ml_dsa_param_set_t ps,
+                                             const uint8_t *secret_key) {
+    const dil_params *P = dil_params_for(ps);
+    if (!P || !secret_key) return AMA_ERROR_INVALID_PARAM;
+    return dil_pubkey_from_sk(P, secret_key, NULL);
 }
 
 AMA_API ama_error_t ama_ml_dsa_sign(ama_ml_dsa_param_set_t ps,

@@ -204,6 +204,8 @@ class TestModuleExports:
             "SignatureVerificationError",
             "IntegrityError",
             "CryptoModuleError",
+            "KeyFormatError",
+            "UnsupportedKeyFormatError",
             "AmaHSMUnavailableError",
         }
         assert set(mod.__all__) == expected
