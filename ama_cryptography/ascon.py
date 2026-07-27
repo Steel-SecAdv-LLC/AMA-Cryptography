@@ -94,8 +94,12 @@ AEAD128_NONCE_BYTES = 16
 AEAD128_TAG_BYTES = 16
 HASH256_DIGEST_BYTES = 32
 
+# Only the codes this surface actually branches on are mirrored here.  A code
+# the module never inspects (INVALID_PARAM, MEMORY) is dead in Python —
+# argument validation happens in _as_bytes before the boundary, so the native
+# layer never returns INVALID_PARAM to a comparison here — and CodeQL's
+# py/unused-global-variable rightly flags an unused mirror.
 _AMA_SUCCESS = 0
-_AMA_ERROR_INVALID_PARAM = -1
 _AMA_ERROR_VERIFY_FAILED = -4
 
 _BufferInput = Union[bytes, bytearray, memoryview]
