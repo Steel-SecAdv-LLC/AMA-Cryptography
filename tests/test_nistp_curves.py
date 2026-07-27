@@ -45,6 +45,7 @@ import hmac
 import secrets
 import sys
 from pathlib import Path
+from typing import Any, Optional
 
 import pytest
 
@@ -62,7 +63,7 @@ pytestmark = pytest.mark.skipif(
 # ---------------------------------------------------------------------------
 # SP 800-186 curve parameters, typed out independently of the C table
 # ---------------------------------------------------------------------------
-CURVES: dict[str, dict] = {
+CURVES: dict[str, dict[str, Any]] = {
     "P-256": {
         "p": 0xFFFFFFFF00000001000000000000000000000000FFFFFFFFFFFFFFFFFFFFFFFF,
         "n": 0xFFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551,
@@ -75,23 +76,28 @@ CURVES: dict[str, dict] = {
     "P-384": {
         "p": int(
             "fffffffffffffffffffffffffffffffffffffffffffffffff"
-            "ffffffffffffffeffffffff0000000000000000ffffffff", 16
+            "ffffffffffffffeffffffff0000000000000000ffffffff",
+            16,
         ),
         "n": int(
             "ffffffffffffffffffffffffffffffffffffffffffffffffc"
-            "7634d81f4372ddf581a0db248b0a77aecec196accc52973", 16
+            "7634d81f4372ddf581a0db248b0a77aecec196accc52973",
+            16,
         ),
         "b": int(
             "b3312fa7e23ee7e4988e056be3f82d19181d9c6efe8141120"
-            "314088f5013875ac656398d8a2ed19d2a85c8edd3ec2aef", 16
+            "314088f5013875ac656398d8a2ed19d2a85c8edd3ec2aef",
+            16,
         ),
         "gx": int(
             "aa87ca22be8b05378eb1c71ef320ad746e1d3b628ba79b985"
-            "9f741e082542a385502f25dbf55296c3a545e3872760ab7", 16
+            "9f741e082542a385502f25dbf55296c3a545e3872760ab7",
+            16,
         ),
         "gy": int(
             "3617de4a96262c6f5d9e98bf9292dc29f8f41dbd289a147ce"
-            "9da3113b5f0b8c00a60b1ce1d7e819d7a431d7c90ea0e5f", 16
+            "9da3113b5f0b8c00a60b1ce1d7e819d7a431d7c90ea0e5f",
+            16,
         ),
         "nbytes": 48,
         "hash": "sha384",
@@ -132,7 +138,10 @@ CURVE_NAMES = tuple(CURVES)
 # ---------------------------------------------------------------------------
 # Pure-Python reference: affine short Weierstrass with a = -3
 # ---------------------------------------------------------------------------
-def _add(pt_a, pt_b, p):
+_Point = Optional[tuple[int, int]]
+
+
+def _add(pt_a: _Point, pt_b: _Point, p: int) -> _Point:
     if pt_a is None:
         return pt_b
     if pt_b is None:
@@ -148,7 +157,7 @@ def _add(pt_a, pt_b, p):
     return (x3, (lam * (x1 - x3) - y1) % p)
 
 
-def _mul(k, pt, p):
+def _mul(k: int, pt: _Point, p: int) -> _Point:
     acc = None
     for bit in bin(k)[2:]:
         acc = _add(acc, acc, p)
@@ -204,6 +213,8 @@ def _ref_sign(name: str, digest: bytes, d: int, *, low_s: bool = False) -> tuple
     qlen = n.bit_length()
     k = _rfc6979_k(d, digest, n, qlen, c["hash"], nb)
     point = _mul(k, (c["gx"], c["gy"]), p)
+    # kG is the point at infinity only for k = 0, which RFC 6979 never yields.
+    assert point is not None, "RFC 6979 nonce produced the point at infinity"
     r = point[0] % n
     e = _bits2int(digest, qlen) % n
     s = pow(k, -1, n) * (e + r * d) % n
@@ -215,6 +226,7 @@ def _ref_sign(name: str, digest: bytes, d: int, *, low_s: bool = False) -> tuple
 def _pub(name: str, d: int) -> bytes:
     c = CURVES[name]
     pt = _mul(d, (c["gx"], c["gy"]), c["p"])
+    assert pt is not None, f"{name}: scalar {d} produced the point at infinity"
     return pt[0].to_bytes(c["nbytes"], "big") + pt[1].to_bytes(c["nbytes"], "big")
 
 
@@ -303,9 +315,9 @@ def test_ecdsa_matches_rfc6979_reference(name: str, low_s: bool) -> None:
         raw = pb.native_nistp_ecdsa_sign(name, digest, priv, raw=True, low_s=low_s)
         r_got = int.from_bytes(raw[:nb], "big")
         s_got = int.from_bytes(raw[nb:], "big")
-        assert (r_got, s_got) == _ref_sign(name, digest, d, low_s=low_s), (
-            f"{name}: signature diverged from the RFC 6979 reference (low_s={low_s})"
-        )
+        assert (r_got, s_got) == _ref_sign(
+            name, digest, d, low_s=low_s
+        ), f"{name}: signature diverged from the RFC 6979 reference (low_s={low_s})"
 
 
 @pytest.mark.parametrize("name", CURVE_NAMES)
@@ -376,8 +388,9 @@ def test_unsupported_digest_widths_rejected(name: str) -> None:
         with pytest.raises(ValueError):
             pb.native_nistp_ecdsa_sign(name, b"\x00" * bad, priv)
         with pytest.raises(ValueError):
-            pb.native_nistp_ecdsa_verify(name, b"\x30\x06\x02\x01\x01\x02\x01\x01",
-                                         b"\x00" * bad, pub)
+            pb.native_nistp_ecdsa_verify(
+                name, b"\x30\x06\x02\x01\x01\x02\x01\x01", b"\x00" * bad, pub
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -541,7 +554,8 @@ def test_low_s_is_a_property_of_the_sign_verify_pair(name: str) -> None:
 
     def twin_of(sig: bytes) -> bytes:
         s = int.from_bytes(sig[nb:], "big")
-        return sig[:nb] + (n - s).to_bytes(nb, "big")
+        twin: bytes = sig[:nb] + (n - s).to_bytes(nb, "big")
+        return twin
 
     conformant = pb.native_nistp_ecdsa_sign(name, digest, priv, raw=True)
     normalised = pb.native_nistp_ecdsa_sign(name, digest, priv, raw=True, low_s=True)
@@ -553,9 +567,7 @@ def test_low_s_is_a_property_of_the_sign_verify_pair(name: str) -> None:
 
     # The matched pair — and only the matched pair — rejects the twin while
     # still accepting the signer's own output.
-    assert pb.native_nistp_ecdsa_verify(
-        name, normalised, digest, pub, raw=True, require_low_s=True
-    )
+    assert pb.native_nistp_ecdsa_verify(name, normalised, digest, pub, raw=True, require_low_s=True)
     assert not pb.native_nistp_ecdsa_verify(
         name, twin_of(normalised), digest, pub, raw=True, require_low_s=True
     )
@@ -723,10 +735,10 @@ def test_sec1_decoding_rejects_malformed_points(name: str) -> None:
     bad_inputs = [
         b"",
         b"\x04",
-        b"\x00" + compressed[1:],           # unknown prefix
-        b"\x05" + compressed[1:],           # unknown prefix
-        compressed[:-1],                    # truncated
-        compressed + b"\x00",               # over-long
+        b"\x00" + compressed[1:],  # unknown prefix
+        b"\x05" + compressed[1:],  # unknown prefix
+        compressed[:-1],  # truncated
+        compressed + b"\x00",  # over-long
         bytes([compressed[0]]) + p.to_bytes(nb, "big"),  # non-canonical x
     ]
     for bad in bad_inputs:
@@ -770,6 +782,7 @@ def test_ecdh_agrees_and_matches_reference(name: str) -> None:
         da = int.from_bytes(priv_a, "big")
         db = int.from_bytes(priv_b, "big")
         expected = _mul(da * db % n, (c["gx"], c["gy"]), p)
+        assert expected is not None, "da*db is a multiple of the group order"
         assert z_ab == expected[0].to_bytes(nb, "big")
 
 

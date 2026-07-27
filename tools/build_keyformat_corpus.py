@@ -91,7 +91,12 @@ SOURCES = {
 
 
 def fetch(url: str) -> str:
-    with urllib.request.urlopen(url, timeout=120) as response:  # noqa: S310 -- fixed https URLs from the SOURCES table, not caller input (KFC-001)
+    # The suppression sits on the `urlopen` line, not on the closing `as
+    # response:` line — that is where ruff anchors S310, and a trailing
+    # comment on the wrong line of a wrapped call silently disarms it.
+    with urllib.request.urlopen(  # noqa: S310 -- fixed https URLs from SOURCES (KFC-001)
+        url, timeout=120
+    ) as response:
         return response.read().decode("utf-8", "replace")
 
 
@@ -138,7 +143,7 @@ def extract_pem_blocks(text: str) -> list[dict]:
         ):
             section = stripped
         if stripped.startswith("-----BEGIN "):
-            label = stripped[len("-----BEGIN "):].rstrip("-").strip()
+            label = stripped[len("-----BEGIN ") :].rstrip("-").strip()
             body: list[str] = []
             i += 1
             while i < len(lines) and not lines[i].strip().startswith("-----END"):
@@ -181,13 +186,15 @@ def build_pq(filename: str) -> dict:
         if block["label"] == "CERTIFICATE":
             continue  # certificates are out of this module's scope
         kind, arm = classify_pq(block["section"], block["label"])
-        records.append({
-            "section": block["section"],
-            "label": block["label"],
-            "kind": kind,
-            "arm": arm,
-            "pem_b64": block["pem_b64"],
-        })
+        records.append(
+            {
+                "section": block["section"],
+                "label": block["label"],
+                "kind": kind,
+                "arm": arm,
+                "pem_b64": block["pem_b64"],
+            }
+        )
     return {"source": meta, "records": records}
 
 
@@ -205,12 +212,14 @@ def build_okp() -> dict:
     for block in blocks:
         if not block["section"].startswith("10.") or block["label"] == "CERTIFICATE":
             continue
-        records.append({
-            "section": block["section"],
-            "label": block["label"],
-            "algorithm": "Ed25519",
-            "pem_b64": block["pem_b64"],
-        })
+        records.append(
+            {
+                "section": block["section"],
+                "label": block["label"],
+                "algorithm": "Ed25519",
+                "pem_b64": block["pem_b64"],
+            }
+        )
     return {"source": meta, "records": records}
 
 
@@ -244,12 +253,10 @@ JOSE_COSE = {
             "d_hex": "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60",
             "x_hex": "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
             # RFC 8037 A.3.
-            "thumbprint_sha256_hex":
-                "90facafea9b1556698540f70c0117a22ea37bd5cf3ed3c47093c1707282b4b89",
+            "thumbprint_sha256_hex": "90facafea9b1556698540f70c0117a22ea37bd5cf3ed3c47093c1707282b4b89",
             "thumbprint_b64u": "kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k",
-            "thumbprint_input":
-                '{"crv":"Ed25519","kty":"OKP",'
-                '"x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"}',
+            "thumbprint_input": '{"crv":"Ed25519","kty":"OKP",'
+            '"x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"}',
         },
         {
             "section": "RFC 8037 A.2",
@@ -284,11 +291,11 @@ JOSE_COSE = {
             # 66 octets with a leading zero — the width case a naive
             # big-integer round trip silently shortens.
             "x_hex": "0072992cb3ac08ecf3e5c63dedec0d51a8c1f79ef2f82f94f3c737bf5de79866"
-                     "71eac625fe8257bbd0394644caaa3aaf8f27a4585fbbcad0f2457620085e5c8"
-                     "f42ad",
+            "71eac625fe8257bbd0394644caaa3aaf8f27a4585fbbcad0f2457620085e5c8"
+            "f42ad",
             "y_hex": "01dca6947bce88bc5790485ac97427342bc35f887d86d65a089377e247e60baa"
-                     "55e4e8501e2ada5724ac51d6909008033ebc10ac999b9d7f5cc2519f3fe1ea1"
-                     "d9475",
+            "55e4e8501e2ada5724ac51d6909008033ebc10ac999b9d7f5cc2519f3fe1ea1"
+            "d9475",
         },
     ],
 }
@@ -329,12 +336,14 @@ def build_rfc9500_ec() -> dict:
                 f"RFC 9500 §2.3 EC key of {len(der)} octets does not match any "
                 f"known curve; expected one of {sorted(RFC9500_EC_BY_LENGTH)}"
             )
-        records.append({
-            "section": block["section"],
-            "label": block["label"],
-            "algorithm": curve,
-            "pem_b64": block["pem_b64"],
-        })
+        records.append(
+            {
+                "section": block["section"],
+                "label": block["label"],
+                "algorithm": curve,
+                "pem_b64": block["pem_b64"],
+            }
+        )
     if len(records) != len(RFC9500_EC_BY_LENGTH):
         raise ValueError(
             f"expected {len(RFC9500_EC_BY_LENGTH)} EC keys in RFC 9500 §2.3, "
@@ -357,6 +366,7 @@ EXPECTED_JSON = {
     "rfc8554_hss_lms.json": {"needs_negative": False},
     "jose_cose.json": {"needs_negative": False},
 }
+
 
 def verify_offline(corpus: Path = CORPUS) -> list[str]:
     """Re-check everything vendored, without the network.
@@ -479,8 +489,8 @@ def _appendix_f_hex(lines: list[str]) -> str:
         line = raw.strip()
         if not line or line.startswith("-"):
             continue
-        line = re.sub(r"\|.*\|\s*$", "", line)   # ASCII gutter
-        line = re.sub(r"#.*$", "", line)         # parameter-set comment
+        line = re.sub(r"\|.*\|\s*$", "", line)  # ASCII gutter
+        line = re.sub(r"#.*$", "", line)  # parameter-set comment
         tokens = line.split()
         run: list[str] = []
         for token in reversed(tokens):
@@ -510,8 +520,11 @@ def build_rfc8554_hss_lms() -> dict:
     lines = strip_page_furniture(fetch(meta["url"])).split("\n")
 
     start = next(
-        (i for i, line in enumerate(lines)
-         if line.startswith("Appendix F.") and "Test Cases" in line and i > 300),
+        (
+            i
+            for i, line in enumerate(lines)
+            if line.startswith("Appendix F.") and "Test Cases" in line and i > 300
+        ),
         None,
     )
     if start is None:
@@ -543,13 +556,15 @@ def build_rfc8554_hss_lms() -> dict:
         value = _appendix_f_hex(body)
         if not value:
             raise ValueError(f"Test Case {case} {kind}: no hexadecimal value extracted")
-        records.append({
-            "section": f"Appendix F, Test Case {case}",
-            "case": int(case),
-            "kind": kind.lower().replace(" ", "_"),
-            "hex": value,
-            "bytes": len(value) // 2,
-        })
+        records.append(
+            {
+                "section": f"Appendix F, Test Case {case}",
+                "case": int(case),
+                "kind": kind.lower().replace(" ", "_"),
+                "hex": value,
+                "bytes": len(value) // 2,
+            }
+        )
 
     # Structural self-check: the extractor is what could be wrong here, and a
     # mis-assembled vector is worse than a missing one because it looks usable.
@@ -599,7 +614,7 @@ def verify_upstream(corpus: Path = CORPUS) -> list[str]:
         vendored = json.loads(path.read_text())
         try:
             fresh = builder()
-        except Exception as exc:  # noqa: BLE001 -- any fetch/parse failure is a finding, reported not raised
+        except Exception as exc:  # any fetch/parse failure is a finding, reported not raised
             problems.append(f"{filename}: could not re-derive ({type(exc).__name__}: {exc})")
             continue
         if vendored.get("source", {}).get("revision") != fresh["source"]["revision"]:
@@ -608,6 +623,7 @@ def verify_upstream(corpus: Path = CORPUS) -> list[str]:
                 f"{vendored.get('source', {}).get('revision')!r} != "
                 f"{fresh['source']['revision']!r}"
             )
+
         def _key(record: dict) -> tuple:
             # RFC 8554's appendix publishes labelled hexadecimal rather than
             # PEM, so its records carry `hex`/`kind` where the others carry
@@ -651,12 +667,17 @@ def report_offline(corpus: Path = CORPUS) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--specs", action="store_true",
-                        help="refresh the RFC/I-D answer keys from upstream")
-    parser.add_argument("--verify", action="store_true",
-                        help="offline: re-parse the vendored corpus")
-    parser.add_argument("--verify-upstream", action="store_true",
-                        help="online: re-derive from the source documents and compare")
+    parser.add_argument(
+        "--specs", action="store_true", help="refresh the RFC/I-D answer keys from upstream"
+    )
+    parser.add_argument(
+        "--verify", action="store_true", help="offline: re-parse the vendored corpus"
+    )
+    parser.add_argument(
+        "--verify-upstream",
+        action="store_true",
+        help="online: re-derive from the source documents and compare",
+    )
     args = parser.parse_args()
     if not (args.specs or args.verify or args.verify_upstream):
         args.verify = True

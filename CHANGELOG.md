@@ -59,8 +59,17 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ### Fixed — parser defects found by the new fuzz harness
 
-`fuzz/python/fuzz_key_formats.py` (see INVARIANT-33) found five real defects on
+`fuzz/python/fuzz_key_formats.py` (see INVARIANT-33) found six real defects on
 its first campaigns. Each is pinned by a named regression test.
+
+- **A PEM footer glued to the last base64 line was accepted.** `_PEM_RE` spelled
+  the body `[A-Za-z0-9+/=\n]*`, which does not require the newline before
+  `-----END`; RFC 7468 §3's ABNF does, since `strictbase64line` and
+  `strictbase64finl` both end in an `eol`. A file ending
+  `…Fo7GS-----END PUBLIC KEY-----` parsed to a perfectly good key that then
+  re-encoded to different bytes — one key, two textual encodings, the same
+  malleability class as the two PEM defects below. The body is now matched as
+  zero or more newline-terminated lines.
 
 - **`UnicodeDecodeError` escaped the format layer.** `_as_der` decoded
   PEM-supplied-as-bytes with `"ascii"`/`strict`; a non-ASCII octet raised a
@@ -108,6 +117,52 @@ its first campaigns. Each is pinned by a named regression test.
   `--no-cov` was passed unconditionally to a `pytester` subprocess where
   `pytest-cov` may be absent, which pytest reports as a usage error. The suite
   is now fully green.
+
+### Fixed — gates that could not do their job
+
+- **The Bandit severity gate read the wrong tally, and could not pass.** Both
+  `security.yml` and `ci-build-test.yml` ran
+  `grep -E '^\s*(Medium|High):\s*[1-9]'` over Bandit's *text* report. That
+  report prints two tallies under the same labels, both indented — one by
+  severity, one by confidence — so the pattern matched the confidence block.
+  With seven Low-severity findings in the tree (six of them Medium-confidence)
+  the gate fired on a run whose severity tally read `Medium: 0, High: 0` and
+  whose findings list said "No issues identified". It was not too permissive;
+  it was unreadable, and an unreadable red gate is one people learn to route
+  around.
+
+  Replaced with `tools/check_bandit_severity.py`, which reads the JSON report
+  and applies the documented policy — block at severity ≥ MEDIUM *and*
+  confidence ≥ MEDIUM — to the fields rather than to a rendering of them. It
+  fails closed on a missing, malformed, error-carrying, empty or pre-filtered
+  report, cross-checking `results` against `metrics._totals` so a report that
+  was pruned before it arrived cannot read as a clean tree. Findings above the
+  severity floor but below the confidence floor are printed rather than
+  dropped. `tests/test_bandit_severity_gate.py` (26 tests) drives the
+  rejection direction for every one of those conditions, including the exact
+  Low-severity/Medium-confidence shape that broke the old gate, and pins both
+  workflows to invoking the tool on an unfiltered report.
+
+- **The seven findings the old gate could not describe are gone.** Six were
+  Bandit B105 false positives on the FIPS 203/204 size tables, where the dict
+  key `secret_key` reads to its hardcoded-credential heuristic as a password;
+  the rows are now built through a documented `_sizes(...)` helper, with the
+  same mapping at runtime and no suppression. The seventh was a real (if
+  latent) defect: `key_formats.py` used a bare `assert` to guarantee an EC
+  registry entry has a curve OID, and `python -O` strips asserts — under which
+  the entry would have been indexed under `None` and every EC import would have
+  failed to resolve its curve, silently and only in optimised builds. It now
+  raises.
+
+- **The C-constant transcription gate silently checked nothing on Windows.**
+  `tools/check_version_consistency.py` keyed its alias table by
+  `ama_cryptography/ascon.py` but built the lookup key with
+  `str(Path.relative_to(...))`, which yields `ama_cryptography\ascon.py` on
+  Windows. Every alias lookup missed, so the aliased Ascon and agent-binding
+  constants went unchecked on the Windows runners while the gate still printed
+  a clean result. Paths are now normalised through `repo_relative`, which is
+  driven with a `PureWindowsPath` so the regression test runs everywhere
+  rather than only where the bug reproduced.
 
 ### Changed — performance and memory
 

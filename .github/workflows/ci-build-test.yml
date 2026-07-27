@@ -423,19 +423,20 @@ jobs:
       # finding fails the build.  Justified suppressions must carry an
       # inline `# nosec` with a tracking ID, validated by
       # tools/check_suppression_hygiene.py per INVARIANT-13.
-      - name: Security scan (bandit, fail on Medium+)
-        run: |
-          bandit -r ama_cryptography/ \
-            --severity-level medium \
-            --confidence-level medium \
-            --exit-zero \
-            > bandit-medium-plus.txt
-          echo "=== Bandit Medium/High findings ==="
-          cat bandit-medium-plus.txt
-          if grep -E '^\s*(Medium|High):\s*[1-9]' bandit-medium-plus.txt; then
-            echo "::error::Bandit reports unjustified Medium/High findings — see report above."
-            exit 1
-          fi
+      #
+      # The report is deliberately unfiltered — no `--severity-level` /
+      # `--confidence-level` — because the gate cross-checks `results`
+      # against `metrics._totals` to prove nothing was pruned before it
+      # looked, and applies the thresholds itself.  It reads JSON rather
+      # than grepping the text report, which prints a by-severity and a
+      # by-confidence tally under the same labels; the previous
+      # `grep -E '^\s*(Medium|High):\s*[1-9]'` matched the confidence
+      # one and fired on a tree with zero Medium+ severity findings.
+      - name: Security scan (bandit, unfiltered JSON report)
+        run: bandit -r ama_cryptography/ -f json -o bandit-report.json --exit-zero
+
+      - name: Bandit severity gate (fail on Medium+)
+        run: python3 tools/check_bandit_severity.py bandit-report.json
 
   # Benchmark Regression Detection (Wheel Install)
   # Required job — fails the workflow on detected regression.

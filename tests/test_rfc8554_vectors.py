@@ -93,9 +93,7 @@ def test_the_public_key_has_the_size_the_structure_implies(case: int) -> None:
         (2, 3860),
     ],
 )
-def test_the_signature_has_the_size_its_parameter_sets_imply(
-    case: int, expected: int
-) -> None:
+def test_the_signature_has_the_size_its_parameter_sets_imply(case: int, expected: int) -> None:
     """The size is re-derived above from the parameter sets, not asserted from
     the extraction. That distinction caught a real extractor bug: the block for
     case 1's signature originally ran on into "Test Case 2 Private Key" and
@@ -105,12 +103,11 @@ def test_the_signature_has_the_size_its_parameter_sets_imply(
     assert _record(case, "signature")["bytes"] == expected
 
 
-@pytest.mark.parametrize("record", RECORDS,
-                         ids=[f"case{r['case']}-{r['kind']}" for r in RECORDS])
+@pytest.mark.parametrize("record", RECORDS, ids=[f"case{r['case']}-{r['kind']}" for r in RECORDS])
 def test_every_value_is_well_formed_hexadecimal(record: dict[str, Any]) -> None:
     value = record["hex"]
     assert len(value) % 2 == 0, "an odd-length hex string cannot be octets"
-    decoded = bytes.fromhex(value)          # raises on any non-hex character
+    decoded = bytes.fromhex(value)  # raises on any non-hex character
     assert len(decoded) == record["bytes"], "the recorded length disagrees with the value"
 
 

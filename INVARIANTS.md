@@ -75,6 +75,21 @@ step in `ci.yml` and `ci-build-test.yml`, each followed by a retry step gated
 on `steps.setup-python.outcome == 'failure'`. Neither is a security gate and
 a genuine failure still fails at the retry.
 
+**A gate must also be legible, and this is not a stylistic point.** The Bandit
+severity gate spent its life red for a reason that did not exist: it grepped
+`^\s*(Medium|High):\s*[1-9]` over Bandit's text report, which prints a
+by-severity and a by-confidence tally under the same labels and the same
+indentation, so it matched the confidence one. A gate whose failure message
+names a condition nobody can reproduce gets routed around, and that is a
+fail-open outcome arrived at through a fail-closed mechanism. Gates over tool
+output **must** therefore read a structured format where the tool emits one —
+`tools/check_bandit_severity.py` consumes Bandit's JSON — and **must** fail
+closed on a report that is missing, malformed, error-carrying, empty, or
+pre-filtered, since none of those establishes that the tree is clean.
+`tests/test_bandit_severity_gate.py` demonstrates the rejection direction for
+each of those conditions; a gate with no negative control has not been shown
+to be a gate at all.
+
 ## INVARIANT-3 — Observable Failure States
 
 - No bare `except …: pass` that swallows security-relevant errors.

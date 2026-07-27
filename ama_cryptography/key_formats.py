@@ -203,62 +203,130 @@ class _Alg:
 # SEC 2 for the EC named curves.
 ALGORITHMS: dict[str, _Alg] = {
     "Ed25519": _Alg(
-        name="Ed25519", kind="okp", oid="1.3.101.112",
-        public_bytes=32, private_bytes=32, okp_crv="Ed25519", cose_crv=6,
+        name="Ed25519",
+        kind="okp",
+        oid="1.3.101.112",
+        public_bytes=32,
+        private_bytes=32,
+        okp_crv="Ed25519",
+        cose_crv=6,
     ),
     "X25519": _Alg(
-        name="X25519", kind="okp", oid="1.3.101.110",
-        public_bytes=32, private_bytes=32, okp_crv="X25519", cose_crv=4,
+        name="X25519",
+        kind="okp",
+        oid="1.3.101.110",
+        public_bytes=32,
+        private_bytes=32,
+        okp_crv="X25519",
+        cose_crv=4,
     ),
     "P-256": _Alg(
-        name="P-256", kind="ec", oid="1.2.840.10045.2.1",
-        public_bytes=64, private_bytes=32, curve="P-256", field_bytes=32,
-        curve_oid="1.2.840.10045.3.1.7", jwk_crv="P-256", cose_crv=1,
+        name="P-256",
+        kind="ec",
+        oid="1.2.840.10045.2.1",
+        public_bytes=64,
+        private_bytes=32,
+        curve="P-256",
+        field_bytes=32,
+        curve_oid="1.2.840.10045.3.1.7",
+        jwk_crv="P-256",
+        cose_crv=1,
     ),
     "P-384": _Alg(
-        name="P-384", kind="ec", oid="1.2.840.10045.2.1",
-        public_bytes=96, private_bytes=48, curve="P-384", field_bytes=48,
-        curve_oid="1.3.132.0.34", jwk_crv="P-384", cose_crv=2,
+        name="P-384",
+        kind="ec",
+        oid="1.2.840.10045.2.1",
+        public_bytes=96,
+        private_bytes=48,
+        curve="P-384",
+        field_bytes=48,
+        curve_oid="1.3.132.0.34",
+        jwk_crv="P-384",
+        cose_crv=2,
     ),
     "P-521": _Alg(
-        name="P-521", kind="ec", oid="1.2.840.10045.2.1",
-        public_bytes=132, private_bytes=66, curve="P-521", field_bytes=66,
-        curve_oid="1.3.132.0.35", jwk_crv="P-521", cose_crv=3,
+        name="P-521",
+        kind="ec",
+        oid="1.2.840.10045.2.1",
+        public_bytes=132,
+        private_bytes=66,
+        curve="P-521",
+        field_bytes=66,
+        curve_oid="1.3.132.0.35",
+        jwk_crv="P-521",
+        cose_crv=3,
     ),
     "secp256k1": _Alg(
-        name="secp256k1", kind="ec", oid="1.2.840.10045.2.1",
-        public_bytes=64, private_bytes=32, curve="secp256k1", field_bytes=32,
-        curve_oid="1.3.132.0.10", jwk_crv="secp256k1", cose_crv=8,
+        name="secp256k1",
+        kind="ec",
+        oid="1.2.840.10045.2.1",
+        public_bytes=64,
+        private_bytes=32,
+        curve="secp256k1",
+        field_bytes=32,
+        curve_oid="1.3.132.0.10",
+        jwk_crv="secp256k1",
+        cose_crv=8,
     ),
     "ML-DSA-44": _Alg(
-        name="ML-DSA-44", kind="pq", oid="2.16.840.1.101.3.4.3.17",
-        public_bytes=1312, private_bytes=2560,
-        pq_family="ml-dsa", pq_param_set=44, pq_seed_bytes=32,
+        name="ML-DSA-44",
+        kind="pq",
+        oid="2.16.840.1.101.3.4.3.17",
+        public_bytes=1312,
+        private_bytes=2560,
+        pq_family="ml-dsa",
+        pq_param_set=44,
+        pq_seed_bytes=32,
     ),
     "ML-DSA-65": _Alg(
-        name="ML-DSA-65", kind="pq", oid="2.16.840.1.101.3.4.3.18",
-        public_bytes=1952, private_bytes=4032,
-        pq_family="ml-dsa", pq_param_set=65, pq_seed_bytes=32,
+        name="ML-DSA-65",
+        kind="pq",
+        oid="2.16.840.1.101.3.4.3.18",
+        public_bytes=1952,
+        private_bytes=4032,
+        pq_family="ml-dsa",
+        pq_param_set=65,
+        pq_seed_bytes=32,
     ),
     "ML-DSA-87": _Alg(
-        name="ML-DSA-87", kind="pq", oid="2.16.840.1.101.3.4.3.19",
-        public_bytes=2592, private_bytes=4896,
-        pq_family="ml-dsa", pq_param_set=87, pq_seed_bytes=32,
+        name="ML-DSA-87",
+        kind="pq",
+        oid="2.16.840.1.101.3.4.3.19",
+        public_bytes=2592,
+        private_bytes=4896,
+        pq_family="ml-dsa",
+        pq_param_set=87,
+        pq_seed_bytes=32,
     ),
     "ML-KEM-512": _Alg(
-        name="ML-KEM-512", kind="pq", oid="2.16.840.1.101.3.4.4.1",
-        public_bytes=800, private_bytes=1632,
-        pq_family="ml-kem", pq_param_set=512, pq_seed_bytes=64,
+        name="ML-KEM-512",
+        kind="pq",
+        oid="2.16.840.1.101.3.4.4.1",
+        public_bytes=800,
+        private_bytes=1632,
+        pq_family="ml-kem",
+        pq_param_set=512,
+        pq_seed_bytes=64,
     ),
     "ML-KEM-768": _Alg(
-        name="ML-KEM-768", kind="pq", oid="2.16.840.1.101.3.4.4.2",
-        public_bytes=1184, private_bytes=2400,
-        pq_family="ml-kem", pq_param_set=768, pq_seed_bytes=64,
+        name="ML-KEM-768",
+        kind="pq",
+        oid="2.16.840.1.101.3.4.4.2",
+        public_bytes=1184,
+        private_bytes=2400,
+        pq_family="ml-kem",
+        pq_param_set=768,
+        pq_seed_bytes=64,
     ),
     "ML-KEM-1024": _Alg(
-        name="ML-KEM-1024", kind="pq", oid="2.16.840.1.101.3.4.4.3",
-        public_bytes=1568, private_bytes=3168,
-        pq_family="ml-kem", pq_param_set=1024, pq_seed_bytes=64,
+        name="ML-KEM-1024",
+        kind="pq",
+        oid="2.16.840.1.101.3.4.4.3",
+        public_bytes=1568,
+        private_bytes=3168,
+        pq_family="ml-kem",
+        pq_param_set=1024,
+        pq_seed_bytes=64,
     ),
 }
 
@@ -266,7 +334,12 @@ _BY_OID: dict[str, _Alg] = {}
 _BY_CURVE_OID: dict[str, _Alg] = {}
 for _alg in ALGORITHMS.values():
     if _alg.kind == "ec":
-        assert _alg.curve_oid is not None
+        # Not an `assert`: `python -O` strips those, and an EC entry with no
+        # curve OID would then be indexed under `None`, so every EC import
+        # would fail to resolve its curve — silently, and in optimised builds
+        # only. A registry this wrong should refuse to load.
+        if _alg.curve_oid is None:
+            raise RuntimeError(f"{_alg.name} is an EC algorithm with no curve OID")
         _BY_CURVE_OID[_alg.curve_oid] = _alg
     else:
         _BY_OID[_alg.oid] = _alg
@@ -573,9 +646,7 @@ class PrivateKey:
                 downgrading to the expanded form would be a lie about the
                 format the caller requested.
         """
-        return _encode_pkcs8(
-            self, include_public_key=include_public_key, pq_format=pq_format
-        )
+        return _encode_pkcs8(self, include_public_key=include_public_key, pq_format=pq_format)
 
     def to_pem(
         self,
@@ -621,9 +692,7 @@ def _derive_public(alg: _Alg, secret: bytes) -> bytes:
                 return _pb.native_secp256k1_pubkey_decompress(compressed)
             return _pb.native_nistp_pubkey_from_privkey(alg.ec_curve, secret)
         except (ValueError, RuntimeError) as exc:
-            raise KeyFormatError(
-                f"{alg.name} private key is not usable: {exc}"
-            ) from None
+            raise KeyFormatError(f"{alg.name} private key is not usable: {exc}") from None
     # ML-DSA and ML-KEM both recompute the public key from the expanded secret
     # key *and* verify the secret key's internal consistency while doing it —
     # see the two native entry points for what each checks and why. An
@@ -640,8 +709,19 @@ def _derive_public(alg: _Alg, secret: bytes) -> bytes:
 # ---------------------------------------------------------------------------
 # PEM (RFC 7468, strict)
 # ---------------------------------------------------------------------------
+# RFC 7468 §3's ABNF is `strictbase64text = *strictbase64line strictbase64finl`
+# where *both* line productions end in `eol` — so the newline before `-----END`
+# is required, not optional. Spelling the body as "zero or more newline-
+# terminated lines" enforces that; `[A-Za-z0-9+/=\n]*` did not, and accepted a
+# file whose last base64 line was glued directly to the footer:
+#
+#     ...DpTAgqnXmlf37FN6D9YW04BLgpdFo7GS-----END PUBLIC KEY-----
+#
+# That parsed to a perfectly good key which then re-encoded to *different*
+# bytes — one key with two textual encodings, the malleability class the rest
+# of this module refuses. Found by fuzz/python/fuzz_key_formats.py.
 _PEM_RE = re.compile(
-    r"^-----BEGIN (?P<label>[A-Z0-9 ]+)-----\n(?P<body>[A-Za-z0-9+/=\n]*)"
+    r"^-----BEGIN (?P<label>[A-Z0-9 ]+)-----\n(?P<body>(?:[A-Za-z0-9+/=]*\n)*)"
     r"-----END (?P=label)-----\n?$"
 )
 
@@ -693,7 +773,7 @@ def decode_pem(text: str, expected_label: str | None = None) -> tuple[str, bytes
     # Found by fuzz/python/fuzz_key_formats.py after 18.1 million executions.
     lines = match.group("body").split("\n")
     if lines and lines[-1] == "":
-        lines = lines[:-1]          # the trailing newline before -----END
+        lines = lines[:-1]  # the trailing newline before -----END
     if not lines or not any(lines):
         # No base64 at all, however it was spelled — checked before the line
         # widths so the diagnostic names the real problem rather than reporting
@@ -923,6 +1003,7 @@ def conventional_include_public_key(algorithm: str) -> bool:
     _lookup(algorithm)
     return CONVENTIONAL_PUBLIC_KEY[algorithm]
 
+
 _PQ_FORMATS = ("auto", "seed", "expandedKey", "both")
 
 
@@ -952,9 +1033,7 @@ def _encode_pq_private_key(key: PrivateKey, alg: _Alg, pq_format: str) -> bytes:
     return der_sequence(der_octet_string(seed), der_octet_string(key.key))
 
 
-def _encode_pkcs8(
-    key: PrivateKey, *, include_public_key: bool | None, pq_format: str
-) -> bytes:
+def _encode_pkcs8(key: PrivateKey, *, include_public_key: bool | None, pq_format: str) -> bytes:
     alg = _lookup(key.algorithm)
     if include_public_key is None:
         include_public_key = _CONVENTIONAL_PUBLIC[alg.kind]
@@ -991,9 +1070,78 @@ def _encode_pkcs8(
     )
 
 
-def load_pkcs8(
-    data: Union[bytes, str], *, verify_pq_consistency: bool | None = None
-) -> PrivateKey:
+def _read_pkcs8_algorithm(seq: DerReader) -> tuple[int, _Alg]:
+    """The version and AlgorithmIdentifier at the head of a OneAsymmetricKey.
+
+    Split out of :func:`load_pkcs8` so the OID-to-registry lookup — the step
+    that decides how every later field is interpreted — reads as one thing.
+    """
+    version = seq.read_integer()
+    if version not in (_PKCS8_V1, _PKCS8_V2):
+        raise KeyFormatError(f"unsupported PKCS#8 version {version}")
+
+    alg_id = seq.read_sequence()
+    oid = alg_id.read_oid()
+
+    if oid == "1.2.840.10045.2.1":
+        if alg_id.peek_tag() is None:
+            raise KeyFormatError("id-ecPublicKey requires a named-curve parameter")
+        curve_oid = alg_id.read_oid()
+        alg_id.finish()
+        ec_alg = _BY_CURVE_OID.get(curve_oid)
+        if ec_alg is None:
+            raise UnsupportedKeyFormatError(f"EC curve OID {curve_oid} is not implemented")
+        return version, ec_alg
+
+    alg = _BY_OID.get(oid)
+    if alg is None:
+        raise UnsupportedKeyFormatError(f"algorithm OID {oid} is not implemented")
+    if alg_id.peek_tag() is not None:
+        raise KeyFormatError(f"{alg.name} AlgorithmIdentifier must have absent parameters")
+    alg_id.finish()
+    return version, alg
+
+
+def _read_pkcs8_trailer(seq: DerReader, alg: _Alg, version: int) -> bytes | None:
+    """The optional ``[0]`` attributes and ``[1]`` publicKey, plus RFC 5958 §2.
+
+    RFC 5958 §2 ties the version to the presence of the publicKey field: "If
+    publicKey is present, then version is set to v2 else version is set to v1."
+    Both directions are enforced, because accepting either mismatch means one
+    key has two valid encodings — the malleability defect class this module's
+    strictness exists to close, and the same reasoning as the minimal-length
+    and minimal-INTEGER rules in ``_asn1``.
+
+    Note this is about the *outer* ``[1]`` publicKey only. An EC key carries
+    its public half inside RFC 5915 ECPrivateKey, which RFC 5958 does not see
+    and which correctly leaves the version at v1 — which is what RFC 9500
+    §2.3's keys and the rest of the vendored corpus contain.
+    """
+    outer_public: bytes | None = None
+    while (tag := seq.peek_tag()) is not None:
+        if tag == 0xA0:
+            seq.read_tagged(0)  # attributes: accepted for interop, not consumed
+        elif tag in (0xA1, 0x81):
+            body = seq.read_tagged(1, constructed=bool(tag & 0x20))
+            outer_public = _read_implicit_bit_string(body, alg)
+        else:
+            raise KeyFormatError(f"unexpected PKCS#8 field with tag 0x{tag:02X}")
+    seq.finish()
+
+    if (outer_public is not None) != (version == _PKCS8_V2):
+        if outer_public is None:
+            raise KeyFormatError(
+                "PKCS#8 version is v2 but no [1] publicKey is present; RFC 5958 §2 "
+                "sets v2 if and only if publicKey is present"
+            )
+        raise KeyFormatError(
+            "PKCS#8 carries a [1] publicKey but the version is v1; RFC 5958 §2 "
+            "requires v2 when publicKey is present"
+        )
+    return outer_public
+
+
+def load_pkcs8(data: Union[bytes, str], *, verify_pq_consistency: bool | None = None) -> PrivateKey:
     """Parse a PKCS#8 OneAsymmetricKey, in DER or strict PEM.
 
     The encrypted form (``EncryptedPrivateKeyInfo``) is not supported and is
@@ -1017,92 +1165,43 @@ def load_pkcs8(
     seq = outer.read_sequence()
     outer.finish()
 
-    version = seq.read_integer()
-    if version not in (_PKCS8_V1, _PKCS8_V2):
-        raise KeyFormatError(f"unsupported PKCS#8 version {version}")
-
-    alg_id = seq.read_sequence()
-    oid = alg_id.read_oid()
-
-    if oid == "1.2.840.10045.2.1":
-        if alg_id.peek_tag() is None:
-            raise KeyFormatError("id-ecPublicKey requires a named-curve parameter")
-        curve_oid = alg_id.read_oid()
-        alg_id.finish()
-        alg = _BY_CURVE_OID.get(curve_oid)
-        if alg is None:
-            raise UnsupportedKeyFormatError(f"EC curve OID {curve_oid} is not implemented")
-    else:
-        alg = _BY_OID.get(oid)
-        if alg is None:
-            raise UnsupportedKeyFormatError(f"algorithm OID {oid} is not implemented")
-        if alg_id.peek_tag() is not None:
-            raise KeyFormatError(
-                f"{alg.name} AlgorithmIdentifier must have absent parameters"
-            )
-        alg_id.finish()
-
+    version, alg = _read_pkcs8_algorithm(seq)
     inner_bytes = seq.read_octet_string()
-    outer_public: bytes | None = None
-    seed: bytes | None = None
+    outer_public = _read_pkcs8_trailer(seq, alg, version)
 
-    # Optional [0] attributes (parsed and discarded) and [1] publicKey.
-    while (tag := seq.peek_tag()) is not None:
-        if tag == 0xA0:
-            seq.read_tagged(0)  # attributes: accepted for interop, not consumed
-        elif tag in (0xA1, 0x81):
-            body = seq.read_tagged(1, constructed=bool(tag & 0x20))
-            outer_public = _read_implicit_bit_string(body, alg)
-        else:
-            raise KeyFormatError(f"unexpected PKCS#8 field with tag 0x{tag:02X}")
-    seq.finish()
-
-    # RFC 5958 §2 ties the version to the presence of the publicKey field:
-    # "If publicKey is present, then version is set to v2 else version is set
-    # to v1." Both directions are enforced, because accepting either mismatch
-    # means one key has two valid encodings — the malleability defect class this
-    # module's strictness exists to close, and the same reasoning as the
-    # minimal-length and minimal-INTEGER rules in `_asn1`.
-    #
-    # Note this is about the *outer* [1] publicKey only. An EC key carries its
-    # public half inside RFC 5915 ECPrivateKey, which RFC 5958 does not see and
-    # which correctly leaves the version at v1 — which is what RFC 9500 §2.3's
-    # keys and the rest of the vendored corpus contain.
-    if (outer_public is not None) != (version == _PKCS8_V2):
-        if outer_public is None:
-            raise KeyFormatError(
-                "PKCS#8 version is v2 but no [1] publicKey is present; RFC 5958 §2 "
-                "sets v2 if and only if publicKey is present"
-            )
-        raise KeyFormatError(
-            "PKCS#8 carries a [1] publicKey but the version is v1; RFC 5958 §2 "
-            "requires v2 when publicKey is present"
-        )
+    if alg.kind == "pq":
+        secret, derived, seed = _parse_pq_private_key(inner_bytes, alg, verify_pq_consistency)
+        return _finish_pq_import(alg, secret, derived, seed, outer_public, verify_pq_consistency)
 
     if alg.kind == "ec":
         secret, embedded = _parse_ec_private_key(inner_bytes, alg)
         public = embedded or outer_public
-    elif alg.kind == "okp":
+    else:
         reader = DerReader(inner_bytes)
         secret = reader.read_octet_string()
         reader.finish()
         if len(secret) != alg.private_bytes:
             raise KeyFormatError(
-                f"{alg.name} private key must be {alg.private_bytes} bytes, "
-                f"got {len(secret)}"
+                f"{alg.name} private key must be {alg.private_bytes} bytes, " f"got {len(secret)}"
             )
         public = outer_public
-    else:
-        secret, derived, seed = _parse_pq_private_key(
-            inner_bytes, alg, verify_pq_consistency
-        )
 
-    if alg.kind != "pq":
-        public = public or outer_public
-        if public is not None:
-            _check_public_matches(alg, secret, public)
-        return PrivateKey(alg.name, secret, public, seed)
+    public = public or outer_public
+    if public is not None:
+        _check_public_matches(alg, secret, public)
+    return PrivateKey(alg.name, secret, public, None)
 
+
+def _finish_pq_import(
+    alg: _Alg,
+    secret: bytes,
+    derived: bytes | None,
+    seed: bytes | None,
+    outer_public: bytes | None,
+    verify_pq_consistency: bool,
+) -> PrivateKey:
+    """Reconcile an ML-DSA/ML-KEM private key with whatever public half it came
+    with, under the consistency policy in force."""
     if verify_pq_consistency:
         if derived is None:
             # An expandedKey-only PQ key carries no public half to check
@@ -1177,7 +1276,9 @@ def _ml_kem_embedded_public_key(alg: _Alg, secret: bytes) -> bytes:
 
 def _read_implicit_bit_string(reader: DerReader, alg: _Alg) -> bytes:
     """Read the [1] publicKey field, which is an IMPLICIT BIT STRING."""
-    raw = reader._buf[reader._pos : reader._end]  # noqa: SLF001 -- implicit tagging strips the BIT STRING header, so the octets must be read directly (KF-001)
+    raw = reader._buf[
+        reader._pos : reader._end
+    ]  # noqa: SLF001 -- implicit tagging strips the BIT STRING header, so the octets must be read directly (KF-001)
     if not raw:
         raise KeyFormatError("empty PKCS#8 publicKey field")
     if raw[0] != 0x00:
@@ -1259,7 +1360,9 @@ def _parse_pq_private_key(
 
     if tag == 0x80:  # [0] IMPLICIT seed — the tag replaces the OCTET STRING's
         body = reader.read_tagged(0, constructed=False)
-        seed = body._buf[body._pos : body._end]  # noqa: SLF001 -- IMPLICIT [0] OCTET STRING carries no inner header (KF-002)
+        seed = body._buf[
+            body._pos : body._end
+        ]  # noqa: SLF001 -- IMPLICIT [0] OCTET STRING carries no inner header (KF-002)
         reader.finish()
         expanded, public = _expand_pq_seed(alg, seed)
         return expanded, public, seed
@@ -1304,15 +1407,11 @@ def _parse_pq_private_key(
 
 def _expand_pq_seed(alg: _Alg, seed: bytes) -> tuple[bytes, bytes]:
     if len(seed) != alg.pq_seed_bytes:
-        raise KeyFormatError(
-            f"{alg.name} seed must be {alg.pq_seed_bytes} bytes, got {len(seed)}"
-        )
+        raise KeyFormatError(f"{alg.name} seed must be {alg.pq_seed_bytes} bytes, got {len(seed)}")
     if alg.pq_family == "ml-dsa":
         public, secret = _pb.native_ml_dsa_keypair_from_seed(alg.pq_set, seed)
     else:
-        public, secret = _pb.native_ml_kem_keypair_from_seed(
-            alg.pq_set, seed[:32], seed[32:]
-        )
+        public, secret = _pb.native_ml_kem_keypair_from_seed(alg.pq_set, seed[:32], seed[32:])
     return secret, public
 
 
@@ -1348,9 +1447,7 @@ def _as_der(data: Union[bytes, str], label: str) -> bytes:
             try:
                 text = raw.decode("ascii", "strict")
             except UnicodeDecodeError as exc:
-                raise KeyFormatError(
-                    f"PEM text must be ASCII (RFC 7468 §2): {exc}"
-                ) from None
+                raise KeyFormatError(f"PEM text must be ASCII (RFC 7468 §2): {exc}") from None
             return decode_pem(text, label)[1]
         return raw
     raise KeyFormatError(f"expected bytes or a PEM string, got {type(data).__name__}")
@@ -1367,9 +1464,7 @@ def _unb64u(value: str, field: str) -> bytes:
     if not isinstance(value, str):
         raise KeyFormatError(f"JWK member {field!r} must be a string")
     if value != value.strip() or "=" in value or "+" in value or "/" in value:
-        raise KeyFormatError(
-            f"JWK member {field!r} is not unpadded base64url (RFC 7515 §2)"
-        )
+        raise KeyFormatError(f"JWK member {field!r} is not unpadded base64url (RFC 7515 §2)")
     padding = "=" * (-len(value) % 4)
     try:
         return base64.urlsafe_b64decode(value + padding)
@@ -1416,9 +1511,7 @@ def jwk_to_public_key(jwk: Union[dict[str, Any], str]) -> PublicKey:
     """Parse a JWK public key, rejecting one that carries a private member."""
     obj = _load_jwk(jwk)
     if "d" in obj:
-        raise KeyFormatError(
-            "this JWK carries a private key member 'd'; use jwk_to_private_key"
-        )
+        raise KeyFormatError("this JWK carries a private key member 'd'; use jwk_to_private_key")
     alg, members = _jwk_algorithm(obj)
     return PublicKey(alg.name, _jwk_public_bytes(alg, obj, members))
 
@@ -1432,9 +1525,7 @@ def jwk_to_private_key(jwk: Union[dict[str, Any], str]) -> PrivateKey:
     secret = _unb64u(obj["d"], "d")
     expected = alg.private_bytes if alg.kind == "okp" else alg.field_bytes
     if len(secret) != expected:
-        raise KeyFormatError(
-            f"{alg.name} JWK 'd' must be {expected} bytes, got {len(secret)}"
-        )
+        raise KeyFormatError(f"{alg.name} JWK 'd' must be {expected} bytes, got {len(secret)}")
     public = _jwk_public_bytes(alg, obj, members)
     _check_public_matches(alg, secret, public)
     return PrivateKey(alg.name, secret, public)
@@ -1507,9 +1598,7 @@ def _validate_ec_public(alg: _Alg, public: bytes) -> None:
         # produces a different answer and is rejected.
         prefix = bytes([0x02 | (public[-1] & 1)])
         try:
-            recovered = _pb.native_secp256k1_pubkey_decompress(
-                prefix + public[: alg.field_bytes]
-            )
+            recovered = _pb.native_secp256k1_pubkey_decompress(prefix + public[: alg.field_bytes])
         except ValueError as exc:
             raise KeyFormatError(f"invalid secp256k1 public key: {exc}") from None
         if recovered != public:
@@ -1556,13 +1645,16 @@ def public_key_to_cose(key: PublicKey) -> bytes:
     _require_jwk_support(alg, "COSE")
     if alg.kind == "okp":
         return cbor_encode_canonical(
-            {_COSE_LBL_KTY: _COSE_KTY_OKP, _COSE_LBL_CRV: alg.cose_crv,
-             _COSE_LBL_X: key.key}
+            {_COSE_LBL_KTY: _COSE_KTY_OKP, _COSE_LBL_CRV: alg.cose_crv, _COSE_LBL_X: key.key}
         )
     half = alg.field_bytes
     return cbor_encode_canonical(
-        {_COSE_LBL_KTY: _COSE_KTY_EC2, _COSE_LBL_CRV: alg.cose_crv,
-         _COSE_LBL_X: key.key[:half], _COSE_LBL_Y: key.key[half:]}
+        {
+            _COSE_LBL_KTY: _COSE_KTY_EC2,
+            _COSE_LBL_CRV: alg.cose_crv,
+            _COSE_LBL_X: key.key[:half],
+            _COSE_LBL_Y: key.key[half:],
+        }
     )
 
 

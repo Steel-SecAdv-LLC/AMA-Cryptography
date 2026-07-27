@@ -56,17 +56,19 @@ def _derive_ed25519(secret: bytes) -> bytes:
     # Re-deriving from the seed proves the tail is not merely *some* 32 bytes.
     public, _ = pb.native_ed25519_keypair_from_seed(secret[:32])
     assert public == secret[32:], "Ed25519 secret key tail is not its public key"
-    return public
+    derived: bytes = public
+    return derived
 
 
 def _derive_nistp(secret: bytes, curve: Any) -> bytes:
-    return pb.native_nistp_pubkey_from_privkey(curve, secret)
+    public: bytes = pb.native_nistp_pubkey_from_privkey(curve, secret)
+    return public
 
 
 # Each entry: a zero-argument constructor, and a way to recompute the public
 # key from the secret. If the constructor's first element is not what the
 # derivation produces, the ordering is wrong.
-KEYPAIRS: dict[str, tuple[Callable[[], tuple], Callable[[bytes], bytes]]] = {
+KEYPAIRS: dict[str, tuple[Callable[[], tuple[Any, ...]], Callable[[bytes], bytes]]] = {
     "native_x25519_keypair": (pb.native_x25519_keypair, _derive_x25519),
     "native_ed25519_keypair": (pb.native_ed25519_keypair, _derive_ed25519),
     "native_nistp_keypair/P-256": (
@@ -162,17 +164,15 @@ def test_every_keypair_function_is_covered() -> None:
     covered |= {"native_ml_kem_keypair", "native_ml_dsa_keypair"}
     # ``generate_*_keypair`` return dataclasses with named fields rather than
     # tuples, so they cannot be unpacked in the wrong order by construction.
-    dataclass_returning = {
-        name for name in discovered if name.startswith("generate_")
-    }
+    dataclass_returning = {name for name in discovered if name.startswith("generate_")}
     # ``*_from_seed`` variants are covered transitively: they share the return
     # statement of the function they mirror.
     seeded = {name for name in discovered if name.endswith("_from_seed")}
 
     uncovered = discovered - covered - dataclass_returning - seeded
-    assert not uncovered, (
-        f"keypair function(s) with an unasserted return order: {sorted(uncovered)}"
-    )
+    assert (
+        not uncovered
+    ), f"keypair function(s) with an unasserted return order: {sorted(uncovered)}"
 
 
 def test_dataclass_keypairs_use_named_fields() -> None:

@@ -35,13 +35,28 @@ from __future__ import annotations
 import ast
 import re
 import sys
-from pathlib import Path
+from pathlib import Path, PurePath
 
 REPO = Path(__file__).resolve().parent.parent
 
 
 def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
+
+
+def repo_relative(path: PurePath, repo: PurePath) -> str:
+    """``path`` relative to ``repo``, in POSIX form on every platform.
+
+    ``str(Path.relative_to(...))`` yields ``ama_cryptography\\ascon.py`` on
+    Windows and ``ama_cryptography/ascon.py`` everywhere else.  That difference
+    is not cosmetic here: the string is used as half of the lookup key into
+    :data:`C_CONSTANT_ALIASES`, whose keys are written with forward slashes, so
+    on Windows every alias lookup missed and the aliased constants went
+    unchecked while the gate still reported success.  It is also what a reviewer
+    greps out of a CI log, and a path that changes shape with the runner is a
+    path you cannot grep for.  Normalise once, here.
+    """
+    return path.relative_to(repo).as_posix()
 
 
 _C_VERSION_LITERAL_RE = re.compile(r'"\d+\.\d+\.\d+"')
@@ -158,12 +173,14 @@ def scan_c_sources_for_version_literals(root: Path) -> list[str]:
             # Falls through to `relative_to(root.parent)` for callers
             # passing a `root` outside the repo (e.g. tmp paths from
             # the unit tests). (Copilot Review 2026-04-27.)
+            # `repo_relative` also normalises the separator, so the reported
+            # path reads the same on a Windows runner as on a Linux one.
             if REPO in path.parents or path == REPO:
-                rel = path.relative_to(REPO)
+                rel = repo_relative(path, REPO)
             elif root.parent in path.parents or path == root.parent:
-                rel = path.relative_to(root.parent)
+                rel = repo_relative(path, root.parent)
             else:
-                rel = path
+                rel = path.as_posix()
             hits.append(f"{rel}:{i + 1}: {original_lines[i].strip()}")
 
     return hits
@@ -200,7 +217,7 @@ def scan_declared_versions(repo: Path) -> list[tuple[str, int, str, str]]:
             if _skip(path):
                 continue
             text = path.read_text(encoding="utf-8")
-            rel = str(path.relative_to(repo))
+            rel = repo_relative(path, repo)
             for pat, label in ((_PY_DUNDER_RE, "__version__"), (_PY_DOCSTRING_RE, "Version:")):
                 for m in pat.finditer(text):
                     found.append((rel, text[: m.start()].count("\n") + 1, label, m.group(1)))
@@ -210,7 +227,7 @@ def scan_declared_versions(repo: Path) -> list[tuple[str, int, str, str]]:
             if path.suffix not in (".c", ".h") or not path.is_file() or _skip(path):
                 continue
             text = path.read_text(encoding="utf-8")
-            rel = str(path.relative_to(repo))
+            rel = repo_relative(path, repo)
             for m in _C_ATVERSION_RE.finditer(text):
                 found.append((rel, text[: m.start()].count("\n") + 1, "@version", m.group(1)))
 
@@ -250,8 +267,10 @@ C_CONSTANT_ALIASES = {
     ("ama_cryptography/ascon.py", "AEAD128_NONCE_BYTES"): "AMA_ASCON_AEAD128_NONCE_LEN",
     ("ama_cryptography/ascon.py", "AEAD128_TAG_BYTES"): "AMA_ASCON_AEAD128_TAG_LEN",
     ("ama_cryptography/ascon.py", "HASH256_DIGEST_BYTES"): "AMA_ASCON_HASH256_DIGEST_LEN",
-    ("ama_cryptography/agent_binding.py", "SIGNATURE_CONTEXT_BYTES"):
-        "AMA_AGENT_BINDING_CONTEXT_BYTES",
+    (
+        "ama_cryptography/agent_binding.py",
+        "SIGNATURE_CONTEXT_BYTES",
+    ): "AMA_AGENT_BINDING_CONTEXT_BYTES",
 }
 
 #: Non-vacuity floor for the transcription scan. 53 mirrors resolve today; the
@@ -262,9 +281,7 @@ _MIN_C_CONSTANT_TRANSCRIPTIONS = 40
 _C_DEFINE_RE = re.compile(
     r"^\s*#\s*define\s+(AMA_[A-Za-z0-9_]+)\s+(0[xX][0-9a-fA-F]+|-?\d+)[uUlL]*\s*$", re.M
 )
-_C_ENUM_RE = re.compile(
-    r"^\s*(AMA_[A-Za-z0-9_]+)\s*=\s*(0[xX][0-9a-fA-F]+|-?\d+)\s*[,}]", re.M
-)
+_C_ENUM_RE = re.compile(r"^\s*(AMA_[A-Za-z0-9_]+)\s*=\s*(0[xX][0-9a-fA-F]+|-?\d+)\s*[,}]", re.M)
 
 
 def parse_c_constants(header: Path) -> dict[str, int]:
@@ -292,8 +309,11 @@ def _int_literal(node: ast.expr) -> int | None:
     ``True``/``False`` are `int` subclasses in Python and are excluded: a flag
     is not a transcription of a C constant.
     """
-    if isinstance(node, ast.Constant) and isinstance(node.value, int) \
-            and not isinstance(node.value, bool):
+    if (
+        isinstance(node, ast.Constant)
+        and isinstance(node.value, int)
+        and not isinstance(node.value, bool)
+    ):
         return node.value
     if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
         inner = _int_literal(node.operand)
@@ -307,8 +327,11 @@ def _python_int_constants(path: Path) -> list[tuple[int, str, int]]:
 
     def walk(node: ast.AST) -> None:
         for child in ast.iter_child_nodes(node):
-            if isinstance(child, ast.Assign) and len(child.targets) == 1 \
-                    and isinstance(child.targets[0], ast.Name):
+            if (
+                isinstance(child, ast.Assign)
+                and len(child.targets) == 1
+                and isinstance(child.targets[0], ast.Name)
+            ):
                 value = _int_literal(child.value)
                 if value is not None:
                     out.append((child.lineno, child.targets[0].id, value))
@@ -319,9 +342,7 @@ def _python_int_constants(path: Path) -> list[tuple[int, str, int]]:
     return out
 
 
-def scan_c_constant_transcriptions(
-    repo: Path, header: Path | None = None
-) -> tuple[list[str], int]:
+def scan_c_constant_transcriptions(repo: Path, header: Path | None = None) -> tuple[list[str], int]:
     """Check every Python mirror of a C header constant.
 
     Returns ``(problems, checked)`` — the second value is what makes this gate
@@ -342,7 +363,7 @@ def scan_c_constant_transcriptions(
     for path in sorted(package.rglob("*.py")):
         if any(part in {"__pycache__", "build", "vendor"} for part in path.parts):
             continue
-        rel = str(path.relative_to(repo))
+        rel = repo_relative(path, repo)
         for lineno, name, value in _python_int_constants(path):
             bare = name.lstrip("_")
             candidates = [

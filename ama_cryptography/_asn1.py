@@ -214,9 +214,7 @@ class DerReader:
         self._need(2)
         tag = self._buf[self._pos]
         if expected is not None and tag != expected:
-            raise KeyFormatError(
-                f"expected DER tag 0x{expected:02X}, found 0x{tag:02X}"
-            )
+            raise KeyFormatError(f"expected DER tag 0x{expected:02X}, found 0x{tag:02X}")
         if tag & 0x1F == 0x1F:
             raise KeyFormatError("high-tag-number form is not accepted")
         length_octet = self._buf[self._pos + 1]
@@ -314,9 +312,7 @@ class DerReader:
 
     def finish(self) -> None:
         if self.remaining:
-            raise KeyFormatError(
-                f"{self.remaining} trailing octet(s) after the DER structure"
-            )
+            raise KeyFormatError(f"{self.remaining} trailing octet(s) after the DER structure")
 
 
 # ---------------------------------------------------------------------------
@@ -466,7 +462,5 @@ def cbor_decode_canonical(data: bytes) -> Any:
     reader = _CborReader(data)
     value = reader.decode()
     if reader.pos != len(data):
-        raise KeyFormatError(
-            f"{len(data) - reader.pos} trailing octet(s) after the CBOR item"
-        )
+        raise KeyFormatError(f"{len(data) - reader.pos} trailing octet(s) after the CBOR item")
     return value

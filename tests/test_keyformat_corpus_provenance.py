@@ -65,9 +65,7 @@ def scratch(tmp_path: Path) -> Path:
 # ---------------------------------------------------------------------------
 def test_vendored_corpus_verifies_offline(tool: ModuleType) -> None:
     problems = tool.verify_offline()
-    assert problems == [], "the vendored key-format corpus did not verify:\n" + "\n".join(
-        problems
-    )
+    assert problems == [], "the vendored key-format corpus did not verify:\n" + "\n".join(problems)
 
 
 def test_the_scratch_copy_also_verifies_clean(tool: ModuleType, scratch: Path) -> None:
@@ -90,11 +88,11 @@ def test_the_cli_entry_point_agrees_with_the_library_one(
 # ---------------------------------------------------------------------------
 # Failure directions — one per class of problem the verifier claims to catch
 # ---------------------------------------------------------------------------
-@pytest.mark.parametrize("filename", sorted(("rfc9881_ml_dsa.json", "lamps_ml_kem.json",
-                                             "rfc8410_okp.json", "jose_cose.json")))
-def test_a_missing_corpus_file_is_caught(
-    tool: ModuleType, scratch: Path, filename: str
-) -> None:
+@pytest.mark.parametrize(
+    "filename",
+    sorted(("rfc9881_ml_dsa.json", "lamps_ml_kem.json", "rfc8410_okp.json", "jose_cose.json")),
+)
+def test_a_missing_corpus_file_is_caught(tool: ModuleType, scratch: Path, filename: str) -> None:
     (scratch / filename).unlink()
     problems = tool.verify_offline(scratch)
     assert any(filename in p and "missing" in p for p in problems), problems
@@ -197,9 +195,9 @@ def test_the_corpus_contains_no_third_party_key_material(tool: ModuleType) -> No
     for filename in tool.EXPECTED_JSON:
         data = json.loads((CORPUS / filename).read_text())
         url = data["source"].get("url", "")
-        assert any(host in url for host in ("rfc-editor.org", "ietf.org")), (
-            f"{filename} claims a source outside the RFC/IETF archives: {url!r}"
-        )
+        assert any(
+            host in url for host in ("rfc-editor.org", "ietf.org")
+        ), f"{filename} claims a source outside the RFC/IETF archives: {url!r}"
     strays = [p.name for p in CORPUS.iterdir() if p.is_dir()]
     assert strays == [], (
         f"unexpected subdirectories in the corpus: {strays}. Every record lives "

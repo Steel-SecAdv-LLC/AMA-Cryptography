@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
@@ -104,10 +105,13 @@ def test_unknown_parameter_sets_are_rejected() -> None:
     """An unrecognised set must raise, never silently pick a neighbour."""
     for bad in (0, 256, 1023, 45, 66, "ML-KEM-1023", "Kyber", True):
         with pytest.raises(ValueError):
-            pb._ml_kem_id(bad)  # type: ignore[arg-type]  # deliberately wrong type/value — this test asserts the parameter-set boundary check fires (PQCPS-002)
+            # Deliberately wrong type/value: this asserts the parameter-set
+            # boundary check fires (PQCPS-002).
+            pb._ml_kem_id(cast(Any, bad))
     for bad in (0, 43, 88, "ML-DSA-46", "Dilithium", True):
         with pytest.raises(ValueError):
-            pb._ml_dsa_id(bad)  # type: ignore[arg-type]  # deliberately wrong type/value — this test asserts the parameter-set boundary check fires (PQCPS-003)
+            # Same (PQCPS-003).
+            pb._ml_dsa_id(cast(Any, bad))
 
 
 def test_parameter_set_aliases_resolve() -> None:
@@ -345,12 +349,8 @@ def test_ml_dsa_known_answer_vectors(ps: int, filename: str) -> None:
             msg = bytes.fromhex(rec["msg"]) if rec["msg"] else b""
             ctx = bytes.fromhex(rec["ctx"]) if rec.get("ctx") else b""
             mode = rec["sigmode"]
-            sig = pb.native_ml_dsa_sign(
-                ps, msg, sk, ctx=None if mode == "internal" else ctx
-            )
-            assert sig == bytes.fromhex(rec["sig"]), (
-                f"ML-DSA {mode} signature diverged from KAT"
-            )
+            sig = pb.native_ml_dsa_sign(ps, msg, sk, ctx=None if mode == "internal" else ctx)
+            assert sig == bytes.fromhex(rec["sig"]), f"ML-DSA {mode} signature diverged from KAT"
             siggen_checked += 1
 
     assert keygen_checked > 0 and siggen_checked > 0, "KAT file exercised nothing"
@@ -428,9 +428,9 @@ def test_ml_dsa_privkey_check_rejects_a_mutated_field(ps: int, field: str) -> No
     offsets = {"rho": 0, "tr": 64, "s1": 128, "t0": sizes["secret_key"] - 1}
     mutated = bytearray(secret)
     mutated[offsets[field]] ^= 0x01
-    assert not pb.native_ml_dsa_privkey_check(ps, bytes(mutated)), (
-        f"a one-bit change to {field} went undetected"
-    )
+    assert not pb.native_ml_dsa_privkey_check(
+        ps, bytes(mutated)
+    ), f"a one-bit change to {field} went undetected"
     with pytest.raises(ValueError, match="inconsistent"):
         pb.native_ml_dsa_pubkey_from_privkey(ps, bytes(mutated))
 
@@ -478,9 +478,9 @@ def test_ml_kem_privkey_check_rejects_a_mutated_field(ps: int, field: str) -> No
     offsets = {"dk_pke": 0, "ek": t_bytes, "h_ek": t_bytes + sizes["public_key"]}
     mutated = bytearray(secret)
     mutated[offsets[field]] ^= 0x01
-    assert not pb.native_ml_kem_privkey_check(ps, bytes(mutated)), (
-        f"a one-bit change to {field} went undetected"
-    )
+    assert not pb.native_ml_kem_privkey_check(
+        ps, bytes(mutated)
+    ), f"a one-bit change to {field} went undetected"
     with pytest.raises(ValueError, match="inconsistent"):
         pb.native_ml_kem_pubkey_from_privkey(ps, bytes(mutated))
 

@@ -60,9 +60,7 @@ _TEST_COUNT_RE = re.compile(r"`(tests/[A-Za-z0-9_/]+\.py)`\s*[—-]\s*(\d+)\s+te
 _RECORD_COUNT_RE = re.compile(r"`([A-Za-z0-9_./-]+\.json)`\s*[—-]\s*(\d+)\s+records\b")
 
 #: `wycheproof_vectors/` — 1530 vectors across `a`, `b`, `c`
-_WYCHEPROOF_RE = re.compile(
-    r"`wycheproof_vectors/`\s*[—-]\s*(\d+)\s+vectors\s+across\s+([^|]+)"
-)
+_WYCHEPROOF_RE = re.compile(r"`wycheproof_vectors/`\s*[—-]\s*(\d+)\s+vectors\s+across\s+([^|]+)")
 _BACKTICKED = re.compile(r"`([A-Za-z0-9_.-]+)`")
 
 
@@ -90,9 +88,20 @@ def collect_test_count(repo: Path, relative: str) -> int | None:
     the collected number the documentation is quoting.
     """
     result = subprocess.run(
-        [sys.executable, "-m", "pytest", relative, "--collect-only", "-q",
-         "-p", "no:cacheprovider"],
-        cwd=repo, capture_output=True, text=True, check=False,
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            relative,
+            "--collect-only",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+        ],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=False,
     )
     match = re.search(r"^(\d+)\s+tests? collected", result.stdout, re.M)
     if match:
@@ -148,9 +157,7 @@ def check_record_counts(repo: Path) -> list[str]:
                 problems.append(f"{doc}: {name} has no 'records' array")
                 continue
             if len(records) != claimed:
-                problems.append(
-                    f"{doc}: says {name} has {claimed} records; it has {len(records)}"
-                )
+                problems.append(f"{doc}: says {name} has {claimed} records; it has {len(records)}")
     return problems
 
 
@@ -180,8 +187,7 @@ def check_wycheproof_counts(repo: Path) -> list[str]:
                 entry = files.get(key)
                 if entry is None:
                     problems.append(
-                        f"{doc}: names Wycheproof corpus {key}, which the manifest "
-                        "does not list"
+                        f"{doc}: names Wycheproof corpus {key}, which the manifest " "does not list"
                     )
                     total = -1
                     break

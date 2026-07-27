@@ -226,9 +226,7 @@ class TestModuleExports:
         assert issubclass(mod.NativeBackendUnavailableError, RuntimeError)
         # QuantumSignatureUnavailableError sits under PQCUnavailableError and
         # must therefore still be catchable as every ancestor.
-        assert issubclass(
-            mod.QuantumSignatureUnavailableError, mod.NativeBackendUnavailableError
-        )
+        assert issubclass(mod.QuantumSignatureUnavailableError, mod.NativeBackendUnavailableError)
         for handler in (mod.PQCUnavailableError, RuntimeError, mod.AmaCryptographyError):
             try:
                 raise mod.PQCUnavailableError("backend missing")

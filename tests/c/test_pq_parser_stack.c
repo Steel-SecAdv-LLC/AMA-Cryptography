@@ -36,6 +36,17 @@
  * rather than passing tautologically.
  */
 
+/* Feature-test macros, and they must precede every #include.
+ *
+ * `pthread_attr_setstack` is POSIX-2001 and `MAP_ANONYMOUS` is a BSD extension,
+ * so glibc hides both behind these unless asked. This repository compiles with
+ * a strict `-std=c11` rather than `-std=gnu11`, under which the implicit
+ * feature-test defaults do not include them — the file built under one
+ * toolchain's defaults and failed under clang's with "call to undeclared
+ * function 'pthread_attr_setstack'". */
+#define _POSIX_C_SOURCE 200809L
+#define _DEFAULT_SOURCE 1
+
 #include "ama_cryptography.h"
 
 #include <stdint.h>

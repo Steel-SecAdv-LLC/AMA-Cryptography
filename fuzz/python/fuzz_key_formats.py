@@ -98,7 +98,7 @@ MAX_SECONDS_PER_INPUT = 5.0
 MAX_INPUT_BYTES = 16384
 
 
-class Finding(Exception):
+class FindingError(Exception):
     """A contract violation, carrying the input that produced it."""
 
     def __init__(self, message: str, data: bytes, target: str) -> None:
@@ -110,22 +110,22 @@ class Finding(Exception):
 # ---------------------------------------------------------------------------
 # Targets — one per parser entry point
 # ---------------------------------------------------------------------------
-def _check_canonical(key: Any, data: bytes, encode: Callable[[Any], bytes],
-                     target: str) -> None:
+def _check_canonical(key: Any, data: bytes, encode: Callable[[Any], bytes], target: str) -> None:
     """An accepted input must be the only encoding of the key it decoded to."""
     try:
         reencoded = encode(key)
     except ALLOWED:
         # Re-encoding a key the parser just accepted must not fail. If it does,
         # the parser accepted something its own encoder cannot express.
-        raise Finding(
+        raise FindingError(
             f"{target}: accepted an input whose key cannot be re-encoded", data, target
         ) from None
     if reencoded != data:
-        raise Finding(
+        raise FindingError(
             f"{target}: accepted a non-canonical encoding — the key re-encodes to "
             f"{len(reencoded)} bytes that differ from the {len(data)} accepted",
-            data, target,
+            data,
+            target,
         )
 
 
@@ -140,9 +140,7 @@ def target_spki(data: bytes) -> None:
     key = kf.load_spki(data)
     if data.startswith(PEM_PREFIX):
         if key.to_pem().encode().strip() != data.strip():
-            raise Finding(
-                "load_spki: accepted a non-canonical PEM", data, "load_spki"
-            )
+            raise FindingError("load_spki: accepted a non-canonical PEM", data, "load_spki")
         return
     _check_canonical(key, data, lambda k: k.to_spki(), "load_spki")
 
@@ -233,25 +231,27 @@ def target_pkcs8(data: bytes) -> None:
             except ALLOWED:
                 continue  # e.g. a seed arm asked for on a key with no seed
     if not forms:
-        raise Finding(
+        raise FindingError(
             "load_pkcs8: accepted an input whose key cannot be re-encoded at all",
-            data, "load_pkcs8",
+            data,
+            "load_pkcs8",
         )
     try:
         candidate = _strip_pkcs8_attributes(data)
     except (IndexError, ValueError):
         candidate = data
     if candidate not in forms:
-        raise Finding(
+        raise FindingError(
             "load_pkcs8: accepted an encoding its own encoder never emits — "
             f"{len(data)} bytes accepted, none of the {len(forms)} legitimate "
             f"forms ({sorted({len(f) for f in forms})} bytes) match it, even "
             "after removing the [0] attributes this module documents as dropped",
-            data, "load_pkcs8",
+            data,
+            "load_pkcs8",
         )
     # And the accepted bytes must survive a second pass unchanged.
     if kf.load_pkcs8(data).key != key.key:
-        raise Finding("load_pkcs8: not idempotent", data, "load_pkcs8")
+        raise FindingError("load_pkcs8: not idempotent", data, "load_pkcs8")
 
 
 def target_pem_public(data: bytes) -> None:
@@ -260,7 +260,7 @@ def target_pem_public(data: bytes) -> None:
     if key.to_pem().encode() != data:
         # PEM carries a trailing newline the input may lack; compare normalised.
         if key.to_pem().strip().encode() != data.strip():
-            raise Finding("load_spki(PEM): non-canonical PEM accepted", data, "pem")
+            raise FindingError("load_spki(PEM): non-canonical PEM accepted", data, "pem")
 
 
 def target_pem_private(data: bytes) -> None:
@@ -282,10 +282,11 @@ def target_cose_public(data: bytes) -> None:
     decoded = cbor_decode_canonical(data)
     consumed = {k: v for k, v in decoded.items() if k in _COSE_EMITTED_LABELS}
     if cbor_encode_canonical(consumed) != key.to_cose():
-        raise Finding(
+        raise FindingError(
             "cose_to_public_key: the labels the encoder emits do not round-trip — "
             "something other than an unconsumed label differs",
-            data, "cose_to_public_key",
+            data,
+            "cose_to_public_key",
         )
 
 
@@ -298,7 +299,7 @@ def target_cbor(data: bytes) -> None:
     RFC 8949 §4.2.1 is what makes a COSE_Key have exactly one encoding."""
     obj = cbor_decode_canonical(data)
     if cbor_encode_canonical(obj) != data:
-        raise Finding(
+        raise FindingError(
             "cbor_decode_canonical accepted a non-deterministic encoding", data, "cbor"
         )
 
@@ -330,31 +331,34 @@ TARGETS: dict[str, Callable[[bytes], None]] = {
 
 
 def run_one(target: str, data: bytes) -> None:
-    """Drive one target and enforce the contract. Raises ``Finding`` on failure."""
+    """Drive one target and enforce the contract. Raises ``FindingError`` on failure."""
     started = time.monotonic()
     try:
         TARGETS[target](data)
-    except Finding:
+    except FindingError:
         raise
     except ALLOWED:
         pass
     except RecursionError as exc:
-        raise Finding(
+        raise FindingError(
             f"{target}: recursion limit reached ({exc}) — a nested structure drove "
             "the parser off the stack rather than being refused",
-            data, target,
+            data,
+            target,
         ) from None
-    except Exception as exc:  # noqa: BLE001 -- classifying *any* escape is the point
-        raise Finding(
+    except Exception as exc:  # classifying *any* escape is the point
+        raise FindingError(
             f"{target}: raised {type(exc).__name__} instead of KeyFormatError: {exc}",
-            data, target,
+            data,
+            target,
         ) from None
     elapsed = time.monotonic() - started
     if elapsed > MAX_SECONDS_PER_INPUT:
-        raise Finding(
+        raise FindingError(
             f"{target}: took {elapsed:.1f}s on a {len(data)}-byte input, over the "
             f"{MAX_SECONDS_PER_INPUT}s ceiling",
-            data, target,
+            data,
+            target,
         )
 
 
@@ -410,9 +414,7 @@ def _generated_keys() -> list[tuple[str, bytes]]:
             if alg.pq_family == "ml-dsa":
                 pk2, sk2 = pb.native_ml_dsa_keypair_from_seed(alg.pq_set, seed)
             else:
-                pk2, sk2 = pb.native_ml_kem_keypair_from_seed(
-                    alg.pq_set, seed[:32], seed[32:]
-                )
+                pk2, sk2 = pb.native_ml_kem_keypair_from_seed(alg.pq_set, seed[:32], seed[32:])
             seeded = kf.PrivateKey(name, sk2, pk2, seed)
             for arm in ("seed", "expandedKey", "both"):
                 seeds.append(("pkcs8", seeded.to_pkcs8(pq_format=arm)))
@@ -462,6 +464,7 @@ def build_seed_corpus(extra_dir: Path | None = None) -> list[tuple[str, bytes]]:
 #: ASN.1 tags and CBOR initial bytes worth substituting. A random byte reaches
 #: these one time in 256; a dictionary reaches them on demand. This is the same
 #: reasoning behind `fuzz/dictionaries/*.dict` for the C lane.
+# fmt: off
 INTERESTING_OCTETS = bytes([
     0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x0C,  # ASN.1 universal tags
     0x30, 0x31,                                       # SEQUENCE, SET
@@ -472,8 +475,98 @@ INTERESTING_OCTETS = bytes([
     0x20, 0x40, 0x60, 0xA0, 0xC0, 0xE0,               # CBOR major types
     0x18, 0x19, 0x1A, 0x1B,                           # CBOR argument widths
 ])
+# fmt: on
 
 _LENGTH_DELTAS = (-2, -1, 1, 2, 127, 128, 255)
+
+
+# Each mutator edits `buf` in place and must never raise; `mutate` picks one
+# uniformly. Keeping them as separate named functions rather than one long
+# `elif` chain means a new mutation is a new entry in `_MUTATORS`, and each one
+# can be read (and, above, explained) on its own.
+
+
+def _m_bit_flip(rng: random.Random, buf: bytearray, pool: list[bytes]) -> None:
+    buf[rng.randrange(len(buf))] ^= 1 << rng.randrange(8)
+
+
+def _m_interesting_octet(rng: random.Random, buf: bytearray, pool: list[bytes]) -> None:
+    buf[rng.randrange(len(buf))] = rng.choice(INTERESTING_OCTETS)
+
+
+def _m_truncate(rng: random.Random, buf: bytearray, pool: list[bytes]) -> None:
+    del buf[rng.randrange(1, len(buf) + 1) :]
+
+
+def _m_extend(rng: random.Random, buf: bytearray, pool: list[bytes]) -> None:
+    buf.extend(bytes(rng.randrange(256) for _ in range(rng.randrange(1, 16))))
+
+
+def _m_length_nudge(rng: random.Random, buf: bytearray, pool: list[bytes]) -> None:
+    # The second octet of a DER TLV is the start of the length, and the octet
+    # after a long-form count is where a mismatch is most damaging.
+    index = 1 if len(buf) > 1 and rng.random() < 0.5 else rng.randrange(len(buf))
+    buf[index] = (buf[index] + rng.choice(_LENGTH_DELTAS)) & 0xFF
+
+
+def _m_splice(rng: random.Random, buf: bytearray, pool: list[bytes]) -> None:
+    other = rng.choice(pool) if pool else bytes(buf)
+    if other:
+        cut = rng.randrange(len(buf) + 1)
+        take = other[: rng.randrange(1, min(len(other), 64) + 1)]
+        buf[cut:cut] = take
+
+
+def _m_delete_run(rng: random.Random, buf: bytearray, pool: list[bytes]) -> None:
+    start = rng.randrange(len(buf))
+    del buf[start : start + rng.randrange(1, 9)]
+
+
+def _m_duplicate_run(rng: random.Random, buf: bytearray, pool: list[bytes]) -> None:
+    start = rng.randrange(len(buf))
+    run = bytes(buf[start : start + rng.randrange(1, 17)])
+    buf[start:start] = run
+
+
+def _m_saturate_run(rng: random.Random, buf: bytearray, pool: list[bytes]) -> None:
+    start = rng.randrange(len(buf))
+    fill = 0x00 if rng.random() < 0.5 else 0xFF
+    for i in range(start, min(start + rng.randrange(1, 17), len(buf))):
+        buf[i] = fill
+
+
+def _m_nest(rng: random.Random, buf: bytearray, pool: list[bytes]) -> None:
+    """Wrap the input in extra SEQUENCE headers.
+
+    A parser that recurses without a depth bound dies here rather than in
+    production.
+    """
+    for _ in range(rng.randrange(1, 40)):
+        if len(buf) > MAX_INPUT_BYTES:
+            break
+        length = len(buf)
+        header = bytearray([0x30])
+        if length < 0x80:
+            header.append(length)
+        else:
+            body = length.to_bytes((length.bit_length() + 7) // 8, "big")
+            header.append(0x80 | len(body))
+            header.extend(body)
+        buf[:0] = header
+
+
+_MUTATORS = (
+    _m_bit_flip,
+    _m_interesting_octet,
+    _m_truncate,
+    _m_extend,
+    _m_length_nudge,
+    _m_splice,
+    _m_delete_run,
+    _m_duplicate_run,
+    _m_saturate_run,
+    _m_nest,
+)
 
 
 def mutate(rng: random.Random, data: bytes, pool: list[bytes]) -> bytes:
@@ -481,63 +574,14 @@ def mutate(rng: random.Random, data: bytes, pool: list[bytes]) -> bytes:
     if not data:
         return bytes(rng.randrange(256) for _ in range(rng.randrange(1, 32)))
     buf = bytearray(data)
-    choice = rng.randrange(10)
-
-    if choice == 0:                                  # bit flip
-        buf[rng.randrange(len(buf))] ^= 1 << rng.randrange(8)
-    elif choice == 1:                                # interesting octet
-        buf[rng.randrange(len(buf))] = rng.choice(INTERESTING_OCTETS)
-    elif choice == 2:                                # truncate
-        del buf[rng.randrange(1, len(buf) + 1):]
-    elif choice == 3:                                # extend
-        buf.extend(bytes(rng.randrange(256) for _ in range(rng.randrange(1, 16))))
-    elif choice == 4:                                # length-field nudge
-        # The second octet of a DER TLV is the start of the length, and the
-        # octet after a long-form count is where a mismatch is most damaging.
-        index = 1 if len(buf) > 1 and rng.random() < 0.5 else rng.randrange(len(buf))
-        buf[index] = (buf[index] + rng.choice(_LENGTH_DELTAS)) & 0xFF
-    elif choice == 5:                                # splice from another seed
-        other = rng.choice(pool) if pool else bytes(buf)
-        if other:
-            cut = rng.randrange(len(buf) + 1)
-            take = other[: rng.randrange(1, min(len(other), 64) + 1)]
-            buf[cut:cut] = take
-    elif choice == 6:                                # delete a run
-        start = rng.randrange(len(buf))
-        del buf[start : start + rng.randrange(1, 9)]
-    elif choice == 7:                                # duplicate a run
-        start = rng.randrange(len(buf))
-        run = bytes(buf[start : start + rng.randrange(1, 17)])
-        buf[start:start] = run
-    elif choice == 8:                                # zero or saturate a run
-        start = rng.randrange(len(buf))
-        fill = 0x00 if rng.random() < 0.5 else 0xFF
-        for i in range(start, min(start + rng.randrange(1, 17), len(buf))):
-            buf[i] = fill
-    else:                                            # nested-structure probe
-        # Wrap the input in extra SEQUENCE headers. A parser that recurses
-        # without a depth bound dies here rather than in production.
-        depth = rng.randrange(1, 40)
-        for _ in range(depth):
-            if len(buf) > MAX_INPUT_BYTES:
-                break
-            length = len(buf)
-            header = bytearray([0x30])
-            if length < 0x80:
-                header.append(length)
-            else:
-                body = length.to_bytes((length.bit_length() + 7) // 8, "big")
-                header.append(0x80 | len(body))
-                header.extend(body)
-            buf[:0] = header
-
+    rng.choice(_MUTATORS)(rng, buf, pool)
     return bytes(buf[:MAX_INPUT_BYTES])
 
 
 # ---------------------------------------------------------------------------
 # Drivers
 # ---------------------------------------------------------------------------
-def _write_artifact(directory: Path, finding: Finding) -> Path:
+def _write_artifact(directory: Path, finding: FindingError) -> Path:
     directory.mkdir(parents=True, exist_ok=True)
     digest = hashlib.sha256(finding.data).hexdigest()[:16]
     path = directory / f"crash-{finding.target}-{digest}.bin"
@@ -545,8 +589,7 @@ def _write_artifact(directory: Path, finding: Finding) -> Path:
     return path
 
 
-def run_campaign(seconds: float, seed: int, artifact_dir: Path,
-                 corpus_dir: Path | None) -> int:
+def run_campaign(seconds: float, seed: int, artifact_dir: Path, corpus_dir: Path | None) -> int:
     rng = random.Random(seed)  # noqa: S311 -- deterministic fuzz-input generation, not key material
     seeds = build_seed_corpus(corpus_dir)
     pool = [data for _, data in seeds]
@@ -574,7 +617,7 @@ def run_campaign(seconds: float, seed: int, artifact_dir: Path,
             executed += 1
             if rng.random() < 0.02 and len(pool) < 4000:
                 pool.append(data)  # keep some mutants as future bases
-    except Finding as finding:
+    except FindingError as finding:
         path = _write_artifact(artifact_dir, finding)
         print(f"\nFINDING after {executed} executions: {finding}")
         print(f"  input written to {path}")
@@ -591,7 +634,7 @@ def run_input(path: Path) -> int:
     for target in TARGETS:
         try:
             run_one(target, data)
-        except Finding as finding:
+        except FindingError as finding:
             print(f"FINDING: {finding}")
             failures += 1
     if failures:
@@ -609,8 +652,10 @@ def run_atheris(argv: list[str]) -> int:  # pragma: no cover - optional engine
     try:
         import atheris
     except ImportError:
-        print("atheris is not installed; run without --atheris for the built-in engine",
-              file=sys.stderr)
+        print(
+            "atheris is not installed; run without --atheris for the built-in engine",
+            file=sys.stderr,
+        )
         return 2
 
     seeds = build_seed_corpus(None)
@@ -622,7 +667,7 @@ def run_atheris(argv: list[str]) -> int:  # pragma: no cover - optional engine
         target = targets[raw[0] % len(targets)]
         try:
             run_one(target, raw[1:])
-        except Finding as finding:
+        except FindingError as finding:
             raise AssertionError(str(finding)) from None
 
     with atheris.instrument_imports():
@@ -634,18 +679,33 @@ def run_atheris(argv: list[str]) -> int:  # pragma: no cover - optional engine
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--seconds", type=float, default=60.0,
-                        help="wall-clock budget for the mutation pass")
-    parser.add_argument("--seed", type=int, default=0x9881_C4,
-                        help="RNG seed; a finding reproduces from this alone")
-    parser.add_argument("--artifact-dir", type=Path, default=Path("artifacts/python-parsers"),
-                        help="where a failing input is written")
-    parser.add_argument("--corpus-dir", type=Path, default=None,
-                        help="extra seed inputs (e.g. previously saved crashes)")
-    parser.add_argument("--input", type=Path, default=None,
-                        help="replay a single file against every target and exit")
-    parser.add_argument("--atheris", action="store_true",
-                        help="use Atheris for coverage guidance, if installed")
+    parser.add_argument(
+        "--seconds", type=float, default=60.0, help="wall-clock budget for the mutation pass"
+    )
+    parser.add_argument(
+        "--seed", type=int, default=0x9881_C4, help="RNG seed; a finding reproduces from this alone"
+    )
+    parser.add_argument(
+        "--artifact-dir",
+        type=Path,
+        default=Path("artifacts/python-parsers"),
+        help="where a failing input is written",
+    )
+    parser.add_argument(
+        "--corpus-dir",
+        type=Path,
+        default=None,
+        help="extra seed inputs (e.g. previously saved crashes)",
+    )
+    parser.add_argument(
+        "--input",
+        type=Path,
+        default=None,
+        help="replay a single file against every target and exit",
+    )
+    parser.add_argument(
+        "--atheris", action="store_true", help="use Atheris for coverage guidance, if installed"
+    )
     args, rest = parser.parse_known_args(argv)
 
     if args.input is not None:

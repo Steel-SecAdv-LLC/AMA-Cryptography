@@ -77,10 +77,7 @@ def test_every_coverage_entry_names_a_real_corpus(entry: dict[str, Any]) -> None
 #: directly re-derivable. The composite entries (Wycheproof plus an RFC corpus)
 #: have their counts checked by ``tools/check_documented_counts.py`` against the
 #: Wycheproof manifest instead.
-_SINGLE_KAT = [
-    e for e in COVERAGE
-    if e["corpus"].endswith(".kat") and " + " not in e["corpus"]
-]
+_SINGLE_KAT = [e for e in COVERAGE if e["corpus"].endswith(".kat") and " + " not in e["corpus"]]
 
 
 @pytest.mark.parametrize("entry", _SINGLE_KAT, ids=[e["name"] for e in _SINGLE_KAT])
@@ -114,15 +111,11 @@ def test_every_gate_names_a_test_that_exists(entry: dict[str, Any]) -> None:
         assert path.is_file(), f"{entry['name']}: gate module {module} does not exist"
         if test_name:
             source = path.read_text()
-            assert f"def {test_name}" in source, (
-                f"{entry['name']}: {module} has no {test_name}"
-            )
+            assert f"def {test_name}" in source, f"{entry['name']}: {module} has no {test_name}"
 
 
 @pytest.mark.parametrize("entry", COVERAGE, ids=[e["name"] for e in COVERAGE])
-def test_nothing_in_the_coverage_map_claims_acvp_attestation(
-    entry: dict[str, Any]
-) -> None:
+def test_nothing_in_the_coverage_map_claims_acvp_attestation(entry: dict[str, Any]) -> None:
     """The load-bearing honesty check.
 
     Every entry here is validated but *not* ACVP-attested, and each must say why.
@@ -135,9 +128,9 @@ def test_nothing_in_the_coverage_map_claims_acvp_attestation(
         "Promote it into `algorithms` with an immutable ref, or leave the flag "
         "false."
     )
-    assert entry["reason_not_attested"].strip(), (
-        f"{entry['name']}: no reason given for not being attested"
-    )
+    assert entry[
+        "reason_not_attested"
+    ].strip(), f"{entry['name']}: no reason given for not being attested"
 
 
 def test_every_implemented_pq_parameter_set_appears_somewhere() -> None:
@@ -149,12 +142,10 @@ def test_every_implemented_pq_parameter_set_appears_somewhere() -> None:
     import ama_cryptography.key_formats as kf
 
     described = " ".join(
-        [a["parameter_set"] for a in DATA["algorithms"]]
-        + [e["parameter_set"] for e in COVERAGE]
+        [a["parameter_set"] for a in DATA["algorithms"]] + [e["parameter_set"] for e in COVERAGE]
     )
     missing = [
-        name for name, alg in kf.ALGORITHMS.items()
-        if alg.kind == "pq" and name not in described
+        name for name, alg in kf.ALGORITHMS.items() if alg.kind == "pq" and name not in described
     ]
     assert not missing, (
         f"the compliance attestation describes no coverage for {missing}. Every "

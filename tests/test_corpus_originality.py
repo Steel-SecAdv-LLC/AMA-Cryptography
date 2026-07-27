@@ -88,9 +88,7 @@ def test_every_corpus_file_cites_an_rfc(tool: ModuleType) -> None:
 # ---------------------------------------------------------------------------
 # Failure directions
 # ---------------------------------------------------------------------------
-def test_a_subprocess_invocation_of_openssl_is_caught(
-    tool: ModuleType, tmp_path: Path
-) -> None:
+def test_a_subprocess_invocation_of_openssl_is_caught(tool: ModuleType, tmp_path: Path) -> None:
     """The exact shape the removed generator used."""
     (tmp_path / "tools").mkdir()
     (tmp_path / "tools" / "gen.py").write_text(
@@ -134,26 +132,35 @@ def test_a_corpus_file_citing_a_non_standards_source_is_caught(
 ) -> None:
     corpus = tmp_path / "keyformats"
     corpus.mkdir()
-    (corpus / "vendor.json").write_text(json.dumps({
-        "source": {"url": "https://example.com/keys", "title": "t", "revision": "r"},
-        "records": [],
-    }))
+    (corpus / "vendor.json").write_text(
+        json.dumps(
+            {
+                "source": {"url": "https://example.com/keys", "title": "t", "revision": "r"},
+                "records": [],
+            }
+        )
+    )
     problems = tool.scan_corpus_sources(corpus)
     assert any("not a standards-body archive" in p for p in problems), problems
 
 
-def test_a_directory_of_key_files_in_the_corpus_is_caught(
-    tool: ModuleType, tmp_path: Path
-) -> None:
+def test_a_directory_of_key_files_in_the_corpus_is_caught(tool: ModuleType, tmp_path: Path) -> None:
     """How the third-party material was carried, so it is caught structurally
     and not only by the URL check."""
     corpus = tmp_path / "keyformats"
     (corpus / "somevendor").mkdir(parents=True)
-    (corpus / "ok.json").write_text(json.dumps({
-        "source": {"url": "https://www.rfc-editor.org/rfc/rfc9500.txt",
-                   "title": "t", "revision": "r"},
-        "records": [],
-    }))
+    (corpus / "ok.json").write_text(
+        json.dumps(
+            {
+                "source": {
+                    "url": "https://www.rfc-editor.org/rfc/rfc9500.txt",
+                    "title": "t",
+                    "revision": "r",
+                },
+                "records": [],
+            }
+        )
+    )
     # Deliberately *not* a literal PEM header: the check under test keys off
     # the directory, not the contents, and a real header here would be a finding
     # for tools/check_secrets.py (INVARIANT-23) in this very file.

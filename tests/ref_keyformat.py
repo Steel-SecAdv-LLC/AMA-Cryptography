@@ -208,8 +208,10 @@ def algorithm_identifier(algorithm: str) -> Node:
       say the same — absent.
     """
     if algorithm in CURVE_OID:
-        return (SEQUENCE, [object_identifier(ID_EC_PUBLIC_KEY),
-                           object_identifier(CURVE_OID[algorithm])])
+        return (
+            SEQUENCE,
+            [object_identifier(ID_EC_PUBLIC_KEY), object_identifier(CURVE_OID[algorithm])],
+        )
     return (SEQUENCE, [object_identifier(ALGORITHM_OID[algorithm])])
 
 
@@ -289,8 +291,7 @@ def ec_private_key(
         raise ValueError(f"{algorithm} scalar is {len(scalar)} octets, wider than {width}")
     children: list[Node] = [integer(1), octet_string(scalar.rjust(width, b"\x00"))]
     if include_parameters:
-        children.append(context(0, [object_identifier(CURVE_OID[algorithm])],
-                                constructed=True))
+        children.append(context(0, [object_identifier(CURVE_OID[algorithm])], constructed=True))
     if public_key is not None:
         children.append(context(1, [bit_string(b"\x04" + public_key)], constructed=True))
     return (SEQUENCE, children)
@@ -373,12 +374,17 @@ def pkcs8(
         extra = [context(1, b"\x00" + public_key, constructed=False)]
         version = V2
 
-    return encode((SEQUENCE, [
-        integer(version),
-        algorithm_identifier(algorithm),
-        octet_string(inner),
-        *extra,
-    ]))
+    return encode(
+        (
+            SEQUENCE,
+            [
+                integer(version),
+                algorithm_identifier(algorithm),
+                octet_string(inner),
+                *extra,
+            ],
+        )
+    )
 
 
 # ---------------------------------------------------------------------------

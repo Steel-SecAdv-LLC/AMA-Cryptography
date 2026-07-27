@@ -22,6 +22,7 @@ import importlib.util
 import sys
 from pathlib import Path
 from types import ModuleType
+from typing import Any
 
 import pytest
 
@@ -30,12 +31,11 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 import ama_cryptography.pqc_backends as pb  # noqa: E402 -- import follows the repo-root sys.path insert above (PFH-001)
+from ama_cryptography._asn1 import oid_from_string  # noqa: E402 -- same (PFH-001)
 
 HARNESS_PATH = REPO_ROOT / "fuzz" / "python" / "fuzz_key_formats.py"
 
-pytestmark = pytest.mark.skipif(
-    pb._native_lib is None, reason="native library not built"
-)
+pytestmark = pytest.mark.skipif(pb._native_lib is None, reason="native library not built")
 
 
 def _load() -> ModuleType:
@@ -60,9 +60,7 @@ def test_a_short_campaign_passes(harness: ModuleType, tmp_path: Path) -> None:
     assert harness.run_campaign(2.0, 0x9881_C4, tmp_path, None) == 0
 
 
-def test_the_seed_corpus_is_built_and_covers_every_algorithm(
-    harness: ModuleType
-) -> None:
+def test_the_seed_corpus_is_built_and_covers_every_algorithm(harness: ModuleType) -> None:
     """A fuzzer starting from an empty corpus spends its budget rediscovering
     that a key file begins with 0x30 — the defect the C lane had before its seed
     corpora were wired up."""
@@ -78,29 +76,38 @@ def test_the_seed_corpus_is_built_and_covers_every_algorithm(
     blob = b"".join(data for _, data in seeds)
     for name in kf.ALGORITHMS:
         alg = kf.ALGORITHMS[name]
-        oid_marker = kf.oid_from_string(alg.curve_oid if alg.kind == "ec" else alg.oid)
+        oid_text = alg.curve_oid if alg.kind == "ec" else alg.oid
+        assert oid_text is not None, name
+        oid_marker = oid_from_string(oid_text)
         assert oid_marker in blob, f"{name} contributes no seed"
 
 
 def test_every_target_is_reachable(harness: ModuleType) -> None:
     """A target absent from ``TARGETS`` is never driven, however good it is."""
     assert set(harness.TARGETS) >= {
-        "spki", "pkcs8", "pem_public", "pem_private",
-        "cose_public", "cose_private", "cbor",
-        "jwk_public", "jwk_private", "thumbprint",
+        "spki",
+        "pkcs8",
+        "pem_public",
+        "pem_private",
+        "cose_public",
+        "cose_private",
+        "cbor",
+        "jwk_public",
+        "jwk_private",
+        "thumbprint",
     }
     for name, fn in harness.TARGETS.items():
         assert callable(fn), name
 
 
-def test_the_mutator_never_raises_and_respects_the_size_cap(
-    harness: ModuleType
-) -> None:
+def test_the_mutator_never_raises_and_respects_the_size_cap(harness: ModuleType) -> None:
     """A mutator that throws stops the campaign at the first awkward input, and
     a mutator that grows without bound turns the fuzzer into a memory test."""
     import random
 
-    rng = random.Random(1234)
+    # A fixed seed is the point: a mutator bug found here has to be
+    # reproducible, and the bytes never reach a key or a nonce.
+    rng = random.Random(1234)  # noqa: S311 -- fuzz-input generation, not key material (PFH-003)
     pool = [b"", b"\x30\x03\x02\x01\x00", bytes(range(256))]
     for _ in range(5000):
         out = harness.mutate(rng, rng.choice(pool), pool)
@@ -115,11 +122,12 @@ def test_an_unexpected_exception_is_a_finding(
     harness: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The contract that found the UnicodeDecodeError and the TypeError."""
+
     def explode(_data: bytes) -> None:
         raise ZeroDivisionError("not a KeyFormatError")
 
     monkeypatch.setitem(harness.TARGETS, "spki", explode)
-    with pytest.raises(harness.Finding, match="ZeroDivisionError"):
+    with pytest.raises(harness.FindingError, match="ZeroDivisionError"):
         harness.run_one("spki", b"anything")
 
 
@@ -142,13 +150,11 @@ def test_a_non_canonical_acceptance_is_a_finding(
 
     # A parser that accepted a second encoding of the same key must be caught.
     monkeypatch.setattr(kf, "load_spki", lambda _data: public)
-    with pytest.raises(harness.Finding, match="non-canonical"):
+    with pytest.raises(harness.FindingError, match="non-canonical"):
         harness.run_one("spki", spki + b"\x00")
 
 
-def test_a_slow_parse_is_a_finding(
-    harness: ModuleType, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_a_slow_parse_is_a_finding(harness: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
     """A quadratic blowup on a crafted length field should be attributable, not
     a CI timeout nobody explains."""
     import time
@@ -157,7 +163,7 @@ def test_a_slow_parse_is_a_finding(
         time.sleep(harness.MAX_SECONDS_PER_INPUT + 0.2)
 
     monkeypatch.setitem(harness.TARGETS, "cbor", crawl)
-    with pytest.raises(harness.Finding, match="ceiling"):
+    with pytest.raises(harness.FindingError, match="ceiling"):
         harness.run_one("cbor", b"\xa0")
 
 
@@ -166,6 +172,7 @@ def test_a_finding_writes_a_reproducible_artifact(
 ) -> None:
     """A campaign that found something must leave the input behind; a report
     without the bytes is not reproducible."""
+
     def explode(_data: bytes) -> None:
         raise RuntimeError("boom")
 
@@ -203,7 +210,10 @@ def test_the_attribute_and_label_exemptions_are_narrow(harness: ModuleType) -> N
     assert stripped == plain, stripped.hex()
 
 
-def _make_ed25519():  # type: ignore[no-untyped-def] -- annotating the two-tuple of key_formats dataclasses would force a module-scope import, before the native-library skipif runs (PFH-002)
+def _make_ed25519() -> tuple[Any, Any]:
+    # `Any` on purpose: naming the key_formats dataclasses here would force a
+    # module-scope import, which has to happen after the native-library
+    # skipif runs (PFH-002).
     import ama_cryptography.key_formats as kf
 
     public, secret = pb.native_ed25519_keypair()

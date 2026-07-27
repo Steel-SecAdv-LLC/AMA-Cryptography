@@ -64,52 +64,40 @@ jobs:
         pip-audit --strict --desc --requirement requirements-lock.txt
 
     # Bandit FAIL-CLOSED (INVARIANT-2 / INVARIANT-13 / audit Issue 8):
-    # the previous `bandit -l` flagged Medium+ findings to stdout but
-    # never failed the job.  We now run bandit twice:
-    #   1. JSON report — uploaded as the artefact below.  Includes a
-    #      `--baseline` flag if a pre-classified ignore list is published
-    #      at .github/bandit-baseline.json.
-    #   2. Severity gate — `--severity-level medium` fails the job on
-    #      any Medium/High not justified inline via `# nosec`.  The
-    #      `# nosec` justifications are themselves gated by
+    # the original `bandit -l` flagged Medium+ findings to stdout but
+    # never failed the job.  One unfiltered JSON scan now feeds both the
+    # uploaded artefact and the gate:
+    #   1. Scan — `--exit-zero` keeps it strictly diagnostic, so the
+    #      emit step cannot short-circuit the gate with a different
+    #      (looser) threshold than the documented policy (Copilot
+    #      review #322).  No `--severity-level` / `--confidence-level`:
+    #      the report must stay unfiltered, because the gate
+    #      cross-checks `results` against `metrics._totals` to prove
+    #      nothing was dropped before it looked.
+    #   2. Gate — tools/check_bandit_severity.py fails the job on any
+    #      finding at severity >= MEDIUM and confidence >= MEDIUM that
+    #      is not justified inline via `# nosec`.  The `# nosec`
+    #      justifications are themselves gated by
     #      tools/check_suppression_hygiene.py (INVARIANT-13), so the
     #      two checks combine to give us: "every Medium+ finding either
     #      passes a code-review approved nosec with tracking ID, or
     #      the build breaks."
-    - name: Run Bandit security linter (JSON report, non-blocking)
-      # `--exit-zero` makes this step strictly diagnostic — it writes
-      # the JSON artefact for downstream tooling and uploads.  The
-      # severity gate below is the actual fail-closed enforcement.
-      # Without `--exit-zero` this step exits non-zero on any Low+
-      # finding, which would short-circuit the Medium+ gate and turn
-      # the JSON-emit step itself into an enforcement layer with a
-      # different (looser) threshold than the documented policy
-      # (Copilot review #322).
+    #
+    # The gate reads JSON rather than grepping Bandit's text report.
+    # The text report prints two same-labelled tallies — one by
+    # severity, one by confidence — and the old
+    # `grep -E '^\s*(Medium|High):\s*[1-9]'` matched the *confidence*
+    # block.  With seven Low-severity findings here (six of them
+    # Medium-confidence) it fired on a run whose severity tally was
+    # `Medium: 0, High: 0`, so this job could not go green and the
+    # error it printed named a condition that did not exist.  See the
+    # module docstring of tools/check_bandit_severity.py.
+    - name: Run Bandit security linter (unfiltered JSON report)
       run: |
-        bandit -r ama_cryptography/ -f json -o bandit-report.json -l --exit-zero
+        bandit -r ama_cryptography/ -f json -o bandit-report.json --exit-zero
 
-    - name: Run Bandit security linter (severity gate, fail-closed)
-      run: |
-        bandit -r ama_cryptography/ \
-          --severity-level medium \
-          --confidence-level medium \
-          --exit-zero \
-          > bandit-medium-plus.txt
-        # Emit the high/medium findings to the job log for reviewer
-        # visibility, then count nosec-unjustified findings — exit
-        # non-zero if any exist.  We do not use bandit's native exit
-        # code here because the `-l` (low) baseline above already
-        # captures the same scope under a different cutoff; this is
-        # the dedicated medium+ enforcement pass.
-        echo "=== Bandit Medium/High findings (fail-closed below this threshold) ==="
-        cat bandit-medium-plus.txt
-        # `bandit-medium-plus.txt` reports the totals on a line like
-        # "Total issues (by severity):".  A clean run shows
-        # "Medium: 0" and "High: 0"; anything else fails.
-        if grep -E '^\s*(Medium|High):\s*[1-9]' bandit-medium-plus.txt; then
-          echo "::error::Bandit reports unjustified Medium/High findings — see report above and either fix or justify inline per INVARIANT-13."
-          exit 1
-        fi
+    - name: Bandit severity gate (fail-closed)
+      run: python3 tools/check_bandit_severity.py bandit-report.json
 
     - name: Upload security reports
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
@@ -118,7 +106,6 @@ jobs:
         name: security-reports
         path: |
           bandit-report.json
-          bandit-medium-plus.txt
         retention-days: 90
 
   # INVARIANT-11: SBOM generation is required for release tags.

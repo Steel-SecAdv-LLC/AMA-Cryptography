@@ -60,7 +60,7 @@ import hashlib
 import json
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -68,9 +68,9 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-import tests.ref_keyformat as ref  # noqa: E402 -- same (KF-003)
 import ama_cryptography.key_formats as kf  # noqa: E402 -- import follows the repo-root sys.path insert above (KF-003)
 import ama_cryptography.pqc_backends as pb  # noqa: E402 -- same (KF-003)
+import tests.ref_keyformat as ref  # noqa: E402 -- same (KF-003)
 from ama_cryptography._asn1 import (  # noqa: E402 -- same (KF-003)
     cbor_decode_canonical,
     cbor_encode_canonical,
@@ -102,7 +102,8 @@ def _load(name: str) -> dict[str, Any]:
         "missing file must fail rather than silently skip. Regenerate with "
         "tools/build_keyformat_corpus.py --specs"
     )
-    return json.loads(path.read_text())
+    loaded: dict[str, Any] = json.loads(path.read_text())
+    return loaded
 
 
 def _pem(record: dict[str, Any]) -> str:
@@ -114,10 +115,7 @@ def _der(record: dict[str, Any]) -> bytes:
 
 
 def _pq_records(name: str, kind: str, label: str) -> list[dict[str, Any]]:
-    return [
-        r for r in _load(name)["records"]
-        if r["kind"] == kind and r["label"] == label
-    ]
+    return [r for r in _load(name)["records"] if r["kind"] == kind and r["label"] == label]
 
 
 def _ids(records: list[dict[str, Any]]) -> list[str]:
@@ -137,6 +135,41 @@ EC_ALGORITHMS = [n for n in ALL_ALGORITHMS if kf.ALGORITHMS[n].kind == "ec"]
 PQ_ALGORITHMS = [n for n in ALL_ALGORITHMS if kf.ALGORITHMS[n].kind == "pq"]
 
 
+# One dataclass describes three kinds of algorithm, so every kind-specific
+# field on `_Alg` is Optional and `mypy --strict` rejects passing one straight
+# to a backend entry point that wants a concrete type. These state the
+# invariant *once*, where it can be read, instead of scattering two dozen
+# inline narrowings through the tests — and if the registry ever grows an
+# entry that violates it, the assertion names the algorithm.
+def _param_set(alg: kf._Alg) -> int:
+    assert alg.pq_param_set is not None, f"{alg.name} is not a PQ algorithm"
+    return alg.pq_param_set
+
+
+def _curve(alg: kf._Alg) -> str:
+    assert alg.curve is not None, f"{alg.name} is not an EC algorithm"
+    return alg.curve
+
+
+def _curve_oid(alg: kf._Alg) -> str:
+    assert alg.curve_oid is not None, f"{alg.name} has no curve OID"
+    return alg.curve_oid
+
+
+def _reencode(key: kf.PublicKey | kf.PrivateKey, which: str) -> bytes:
+    """Re-encode a parsed key in the form it was parsed from.
+
+    ``which`` decides the type, but only ``isinstance`` narrows it, and a
+    mismatch between the two would mean the parser returned the wrong kind of
+    key — worth asserting rather than casting away.
+    """
+    if which == "spki":
+        assert isinstance(key, kf.PublicKey), which
+        return key.to_spki()
+    assert isinstance(key, kf.PrivateKey), which
+    return key.to_pkcs8()
+
+
 def make_key(name: str) -> tuple[kf.PublicKey, kf.PrivateKey]:
     """A freshly generated key pair in AMA's native representation."""
     alg = kf.ALGORITHMS[name]
@@ -153,11 +186,11 @@ def make_key(name: str) -> tuple[kf.PublicKey, kf.PrivateKey]:
             pb.native_secp256k1_pubkey_from_privkey(secret)
         )
     elif alg.kind == "ec":
-        public, secret = pb.native_nistp_keypair(alg.curve)
+        public, secret = pb.native_nistp_keypair(_curve(alg))
     elif alg.pq_family == "ml-dsa":
-        public, secret = pb.native_ml_dsa_keypair(alg.pq_param_set)
+        public, secret = pb.native_ml_dsa_keypair(_param_set(alg))
     else:
-        public, secret = pb.native_ml_kem_keypair(alg.pq_param_set)
+        public, secret = pb.native_ml_kem_keypair(_param_set(alg))
     return kf.PublicKey(name, public), kf.PrivateKey(name, secret, public)
 
 
@@ -171,7 +204,7 @@ def _public_from_scalar(name: str, scalar: bytes) -> bytes:
         return pb.native_secp256k1_pubkey_decompress(
             pb.native_secp256k1_pubkey_from_privkey(scalar)
         )
-    return pb.native_nistp_pubkey_from_privkey(kf.ALGORITHMS[name].curve, scalar)
+    return pb.native_nistp_pubkey_from_privkey(_curve(kf.ALGORITHMS[name]), scalar)
 
 
 def make_seeded_pq_key(name: str, filler: int = 0x5A) -> kf.PrivateKey:
@@ -187,19 +220,18 @@ def make_seeded_pq_key(name: str, filler: int = 0x5A) -> kf.PrivateKey:
     assert alg.kind == "pq", name
     seed = bytes((filler + i) & 0xFF for i in range(alg.pq_seed_bytes))
     if alg.pq_family == "ml-dsa":
-        public, secret = pb.native_ml_dsa_keypair_from_seed(alg.pq_param_set, seed)
+        public, secret = pb.native_ml_dsa_keypair_from_seed(_param_set(alg), seed)
     else:
-        public, secret = pb.native_ml_kem_keypair_from_seed(
-            alg.pq_param_set, seed[:32], seed[32:]
-        )
+        public, secret = pb.native_ml_kem_keypair_from_seed(_param_set(alg), seed[:32], seed[32:])
     return kf.PrivateKey(name, secret, public, seed)
 
 
 # ===========================================================================
 # 1. The specifications' answer keys — ML-DSA and ML-KEM
 # ===========================================================================
-@pytest.mark.parametrize("record", ML_DSA_VALID_PRIV + ML_KEM_VALID_PRIV,
-                         ids=_ids(ML_DSA_VALID_PRIV + ML_KEM_VALID_PRIV))
+@pytest.mark.parametrize(
+    "record", ML_DSA_VALID_PRIV + ML_KEM_VALID_PRIV, ids=_ids(ML_DSA_VALID_PRIV + ML_KEM_VALID_PRIV)
+)
 def test_pq_private_key_vectors_parse(record: dict[str, Any]) -> None:
     """Every published private key parses, in every CHOICE arm.
 
@@ -219,8 +251,9 @@ def test_pq_private_key_vectors_parse(record: dict[str, Any]) -> None:
     assert (key.seed is not None) == (record["arm"] in ("seed", "both"))
 
 
-@pytest.mark.parametrize("record", ML_DSA_VALID_PRIV + ML_KEM_VALID_PRIV,
-                         ids=_ids(ML_DSA_VALID_PRIV + ML_KEM_VALID_PRIV))
+@pytest.mark.parametrize(
+    "record", ML_DSA_VALID_PRIV + ML_KEM_VALID_PRIV, ids=_ids(ML_DSA_VALID_PRIV + ML_KEM_VALID_PRIV)
+)
 def test_pq_private_key_vectors_reencode_exactly(record: dict[str, Any]) -> None:
     """Re-encoding a published key reproduces its bytes.
 
@@ -231,8 +264,9 @@ def test_pq_private_key_vectors_reencode_exactly(record: dict[str, Any]) -> None
     assert key.to_pkcs8(pq_format=record["arm"]) == _der(record)
 
 
-@pytest.mark.parametrize("record", ML_DSA_VALID_PRIV + ML_KEM_VALID_PRIV,
-                         ids=_ids(ML_DSA_VALID_PRIV + ML_KEM_VALID_PRIV))
+@pytest.mark.parametrize(
+    "record", ML_DSA_VALID_PRIV + ML_KEM_VALID_PRIV, ids=_ids(ML_DSA_VALID_PRIV + ML_KEM_VALID_PRIV)
+)
 def test_pq_seed_survives_a_round_trip(record: dict[str, Any]) -> None:
     """A seed-carrying key must not degrade to the expanded form.
 
@@ -250,9 +284,11 @@ def test_pq_seed_survives_a_round_trip(record: dict[str, Any]) -> None:
         assert key.to_pkcs8() == _der(record)
 
 
-@pytest.mark.parametrize("record", ML_DSA_VALID_PUB + ML_KEM_VALID_PUB,
-                         ids=[r["section"][:20] + str(i)
-                              for i, r in enumerate(ML_DSA_VALID_PUB + ML_KEM_VALID_PUB)])
+@pytest.mark.parametrize(
+    "record",
+    ML_DSA_VALID_PUB + ML_KEM_VALID_PUB,
+    ids=[r["section"][:20] + str(i) for i, r in enumerate(ML_DSA_VALID_PUB + ML_KEM_VALID_PUB)],
+)
 def test_pq_public_key_vectors_round_trip(record: dict[str, Any]) -> None:
     """Published SPKI parses and re-encodes byte-for-byte."""
     key = kf.load_spki(_pem(record))
@@ -283,8 +319,9 @@ def test_pq_seed_and_expanded_forms_describe_the_same_key() -> None:
             )
 
 
-@pytest.mark.parametrize("record", ML_DSA_BAD + ML_KEM_BAD,
-                         ids=[f"bad{i}" for i in range(len(ML_DSA_BAD + ML_KEM_BAD))])
+@pytest.mark.parametrize(
+    "record", ML_DSA_BAD + ML_KEM_BAD, ids=[f"bad{i}" for i in range(len(ML_DSA_BAD + ML_KEM_BAD))]
+)
 def test_pq_inconsistent_private_keys_are_rejected(record: dict[str, Any]) -> None:
     """The specifications' deliberately-bad keys must not import.
 
@@ -416,7 +453,7 @@ def _rfc9500_wrapped(name: str) -> bytes:
     alg = kf.ALGORITHMS[name]
     return der_sequence(
         der_integer(0),
-        der_sequence(oid_from_string(alg.oid), oid_from_string(alg.curve_oid)),
+        der_sequence(oid_from_string(alg.oid), oid_from_string(_curve_oid(alg))),
         der_octet_string(_der(_rfc9500(name))),
     )
 
@@ -495,8 +532,10 @@ def test_rfc9500_public_keys_round_trip_through_spki(name: str) -> None:
     private = kf.load_pkcs8(
         der_sequence(
             der_integer(0),
-            der_sequence(oid_from_string(kf.ALGORITHMS[name].oid),
-                         oid_from_string(kf.ALGORITHMS[name].curve_oid)),
+            der_sequence(
+                oid_from_string(kf.ALGORITHMS[name].oid),
+                oid_from_string(_curve_oid(kf.ALGORITHMS[name])),
+            ),
             der_octet_string(_der(_rfc9500(name))),
         )
     )
@@ -531,7 +570,8 @@ def test_pkcs8_matches_the_reference_encoder(name: str, include_public_key: bool
     """
     public, private = make_key(name)
     expected = ref.pkcs8(
-        name, private.key,
+        name,
+        private.key,
         public_key=public.key,
         include_public_key=include_public_key,
         pq_arm="expandedKey",
@@ -552,7 +592,11 @@ def test_the_pq_choice_arms_match_the_reference_encoder(name: str, arm: str) -> 
     private = make_seeded_pq_key(name)
     assert private.seed is not None
     expected = ref.pkcs8(
-        name, private.key, seed=private.seed, pq_arm=arm, public_key=private.public_key,
+        name,
+        private.key,
+        seed=private.seed,
+        pq_arm=arm,
+        public_key=private.public_key,
     )
     assert private.to_pkcs8(pq_format=arm) == expected
     assert kf.load_pkcs8(expected).key == private.key
@@ -640,8 +684,7 @@ def test_a_scalar_with_leading_zero_octets_keeps_its_width(name: str, shape: str
     private = kf.PrivateKey(name, scalar, public.key)
 
     encoded = private.to_pkcs8()
-    assert encoded == ref.pkcs8(name, scalar, public_key=public.key,
-                                include_public_key=True)
+    assert encoded == ref.pkcs8(name, scalar, public_key=public.key, include_public_key=True)
     reparsed = kf.load_pkcs8(encoded)
     assert reparsed.key == scalar, "the scalar did not survive the round trip"
     assert len(reparsed.key) == width, (
@@ -680,9 +723,9 @@ def test_a_coordinate_with_a_leading_zero_octet_keeps_its_width(name: str) -> No
     jwk = public.to_jwk()
     for member in ("x", "y"):
         raw = base64.urlsafe_b64decode(jwk[member] + "=" * (-len(jwk[member]) % 4))
-        assert len(raw) == half, (
-            f"{name}: JWK '{member}' is {len(raw)} octets, not the mandatory {half}"
-        )
+        assert (
+            len(raw) == half
+        ), f"{name}: JWK '{member}' is {len(raw)} octets, not the mandatory {half}"
     assert kf.jwk_to_public_key(jwk) == public
 
     decoded = cbor_decode_canonical(public.to_cose())
@@ -708,9 +751,8 @@ def test_a_shortened_coordinate_is_refused(name: str) -> None:
         with pytest.raises(KeyFormatError):
             kf.load_spki(
                 der_sequence(
-                    der_sequence(oid_from_string(alg.oid),
-                                 oid_from_string(alg.curve_oid)),
-                    der_bit_string(point[:cut] + point[cut + 1:]),
+                    der_sequence(oid_from_string(alg.oid), oid_from_string(_curve_oid(alg))),
+                    der_bit_string(point[:cut] + point[cut + 1 :]),
                 )
             )
 
@@ -770,7 +812,8 @@ def test_thumbprint_ignores_the_private_member() -> None:
 
 
 @pytest.mark.parametrize(
-    "record", [r for r in JOSE_COSE if r["format"] == "cose"],
+    "record",
+    [r for r in JOSE_COSE if r["format"] == "cose"],
     ids=[r["algorithm"] for r in JOSE_COSE if r["format"] == "cose"],
 )
 def test_rfc8152_cose_key_vectors(record: dict[str, Any]) -> None:
@@ -827,8 +870,7 @@ def test_pkcs8_round_trip(name: str, include_public_key: bool | None) -> None:
     decoded = kf.load_pkcs8(encoded)
     assert decoded.algorithm == name
     assert decoded.key == private.key
-    if include_public_key or (include_public_key is None
-                              and kf.ALGORITHMS[name].kind == "ec"):
+    if include_public_key or (include_public_key is None and kf.ALGORITHMS[name].kind == "ec"):
         assert decoded.public_key == private.public_key
     assert kf.load_pkcs8(kf.encode_pem(encoded, "PRIVATE KEY")).key == private.key
 
@@ -879,11 +921,9 @@ def test_pq_seed_form_is_functional_end_to_end(name: str) -> None:
     alg = kf.ALGORITHMS[name]
     seed = bytes(range(32)) if alg.pq_seed_bytes == 32 else bytes(range(64))
     if alg.pq_family == "ml-dsa":
-        public, secret = pb.native_ml_dsa_keypair_from_seed(alg.pq_param_set, seed)
+        public, secret = pb.native_ml_dsa_keypair_from_seed(_param_set(alg), seed)
     else:
-        public, secret = pb.native_ml_kem_keypair_from_seed(
-            alg.pq_param_set, seed[:32], seed[32:]
-        )
+        public, secret = pb.native_ml_kem_keypair_from_seed(_param_set(alg), seed[:32], seed[32:])
     private = kf.PrivateKey(name, secret, public, seed)
     encoded = private.to_pkcs8()  # auto -> seed form
     assert len(encoded) < 200, "the seed form should be compact, not expanded"
@@ -891,16 +931,11 @@ def test_pq_seed_form_is_functional_end_to_end(name: str) -> None:
     reloaded = kf.load_pkcs8(encoded)
     assert reloaded.key == secret
     if alg.pq_family == "ml-dsa":
-        signature = pb.native_ml_dsa_sign(alg.pq_param_set, b"m", reloaded.key)
-        assert pb.native_ml_dsa_verify(alg.pq_param_set, b"m", signature,
-                                       reloaded.public().key)
+        signature = pb.native_ml_dsa_sign(_param_set(alg), b"m", reloaded.key)
+        assert pb.native_ml_dsa_verify(_param_set(alg), b"m", signature, reloaded.public().key)
     else:
-        ciphertext, shared = pb.native_ml_kem_encapsulate(
-            alg.pq_param_set, reloaded.public().key
-        )
-        assert pb.native_ml_kem_decapsulate(
-            alg.pq_param_set, ciphertext, reloaded.key
-        ) == shared
+        ciphertext, shared = pb.native_ml_kem_encapsulate(_param_set(alg), reloaded.public().key)
+        assert pb.native_ml_kem_decapsulate(_param_set(alg), ciphertext, reloaded.key) == shared
 
 
 # ===========================================================================
@@ -918,7 +953,11 @@ def test_public_and_private_keys_are_distinct_types() -> None:
     public, private = make_key("Ed25519")
     assert not hasattr(public, "to_pkcs8")
     assert not hasattr(private, "to_spki")
-    assert public != private
+    # Widened deliberately: mypy can prove these two types never compare equal,
+    # and that proof is exactly the property under test. The runtime check stays
+    # because `__eq__` is dataclass-generated and a future shared base would
+    # silently make them comparable again.
+    assert public != cast(object, private)
 
 
 @pytest.mark.parametrize("name", ["Ed25519", "X25519", "P-256"])
@@ -934,7 +973,7 @@ def test_a_private_key_cannot_be_encoded_as_a_public_one(name: str) -> None:
     _, private = make_key(name)
     for encode in (kf.public_key_to_jwk, kf.public_key_to_cose, kf._encode_spki):
         with pytest.raises(KeyFormatError, match="expected a PublicKey"):
-            encode(private)  # type: ignore[arg-type] -- asserting the runtime guard (KF-004)
+            encode(private)  # type: ignore[arg-type]  # asserting the runtime guard (KF-004)
 
 
 def test_a_public_jwk_is_refused_by_the_private_parser_and_vice_versa() -> None:
@@ -983,7 +1022,7 @@ def test_a_private_key_never_leaks_into_a_public_encoding(name: str) -> None:
     yields nothing about the seed. A leak check that looked only at ``.key``
     would have watched the less valuable of the two.
     """
-    public, private = make_key(name)
+    _public, private = make_key(name)
     seeded = make_seeded_pq_key(name) if kf.ALGORITHMS[name].kind == "pq" else None
 
     for key in (private, seeded):
@@ -1141,7 +1180,7 @@ def test_ec_point_not_on_the_curve_is_refused(name: str) -> None:
     """
     alg = kf.ALGORITHMS[name]
     der = der_sequence(
-        der_sequence(oid_from_string(alg.oid), oid_from_string(alg.curve_oid)),
+        der_sequence(oid_from_string(alg.oid), oid_from_string(_curve_oid(alg))),
         der_bit_string(b"\x04" + b"\x01" * (2 * alg.field_bytes)),
     )
     with pytest.raises(KeyFormatError):
@@ -1153,7 +1192,7 @@ def test_ec_point_at_infinity_is_refused(name: str) -> None:
     """SEC 1 encodes the identity as a single ``0x00``; it is not a public key."""
     alg = kf.ALGORITHMS[name]
     der = der_sequence(
-        der_sequence(oid_from_string(alg.oid), oid_from_string(alg.curve_oid)),
+        der_sequence(oid_from_string(alg.oid), oid_from_string(_curve_oid(alg))),
         der_bit_string(b"\x00"),
     )
     with pytest.raises(KeyFormatError):
@@ -1169,7 +1208,7 @@ def test_ec_coordinate_at_or_above_the_field_prime_is_refused(name: str) -> None
     """
     alg = kf.ALGORITHMS[name]
     der = der_sequence(
-        der_sequence(oid_from_string(alg.oid), oid_from_string(alg.curve_oid)),
+        der_sequence(oid_from_string(alg.oid), oid_from_string(_curve_oid(alg))),
         der_bit_string(b"\x04" + b"\xff" * (2 * alg.field_bytes)),
     )
     with pytest.raises(KeyFormatError):
@@ -1190,11 +1229,11 @@ def test_ec_key_file_whose_halves_disagree_is_refused(name: str) -> None:
     inner = der_sequence(
         der_integer(1),
         der_octet_string(private.key),
-        der_tagged(1, der_bit_string(b"\x04" + other.public_key)),
+        der_tagged(1, der_bit_string(b"\x04" + other.public().key)),
     )
     der = der_sequence(
         der_integer(0),
-        der_sequence(oid_from_string(alg.oid), oid_from_string(alg.curve_oid)),
+        der_sequence(oid_from_string(alg.oid), oid_from_string(_curve_oid(alg))),
         der_octet_string(inner),
     )
     with pytest.raises(KeyFormatError, match="inconsistent"):
@@ -1214,8 +1253,7 @@ def test_ec_key_naming_two_different_curves_is_refused() -> None:
     )
     der = der_sequence(
         der_integer(0),
-        der_sequence(oid_from_string("1.2.840.10045.2.1"),
-                     oid_from_string("1.2.840.10045.3.1.7")),
+        der_sequence(oid_from_string("1.2.840.10045.2.1"), oid_from_string("1.2.840.10045.3.1.7")),
         der_octet_string(inner),
     )
     with pytest.raises(KeyFormatError, match="two different curves"):
@@ -1227,8 +1265,7 @@ def test_ec_private_key_with_the_wrong_version_is_refused() -> None:
     inner = der_sequence(der_integer(2), der_octet_string(private.key))
     der = der_sequence(
         der_integer(0),
-        der_sequence(oid_from_string("1.2.840.10045.2.1"),
-                     oid_from_string("1.2.840.10045.3.1.7")),
+        der_sequence(oid_from_string("1.2.840.10045.2.1"), oid_from_string("1.2.840.10045.3.1.7")),
         der_octet_string(inner),
     )
     with pytest.raises(KeyFormatError, match="version must be 1"):
@@ -1317,8 +1354,7 @@ def test_pq_seed_of_the_wrong_length_is_refused(name: str) -> None:
     der = der_sequence(
         der_integer(0),
         der_sequence(oid_from_string(alg.oid)),
-        der_octet_string(der_tagged(0, b"\x00" * (alg.pq_seed_bytes // 2),
-                                    constructed=False)),
+        der_octet_string(der_tagged(0, b"\x00" * (alg.pq_seed_bytes // 2), constructed=False)),
     )
     with pytest.raises(KeyFormatError, match="seed must be"):
         kf.load_pkcs8(der)
@@ -1361,10 +1397,12 @@ def test_pq_jwk_and_cose_are_refused_with_a_reason(name: str) -> None:
     tell "not yet standardised" from "you passed the wrong thing".
     """
     public, private = make_key(name)
-    for call in (lambda: kf.public_key_to_jwk(public),
-                 lambda: kf.private_key_to_jwk(private),
-                 lambda: kf.public_key_to_cose(public),
-                 lambda: kf.private_key_to_cose(private)):
+    for call in (
+        lambda: kf.public_key_to_jwk(public),
+        lambda: kf.private_key_to_jwk(private),
+        lambda: kf.public_key_to_cose(public),
+        lambda: kf.private_key_to_cose(private),
+    ):
         with pytest.raises(UnsupportedKeyFormatError, match="no standardised"):
             call()
 
@@ -1472,8 +1510,9 @@ def test_cose_key_that_is_not_a_map_is_refused() -> None:
 
 def test_cose_key_with_an_unimplemented_curve_is_refused() -> None:
     with pytest.raises(UnsupportedKeyFormatError, match="EC2 curve"):
-        kf.cose_to_public_key(cbor_encode_canonical({1: 2, -1: 99, -2: b"\x00" * 32,
-                                                     -3: b"\x00" * 32}))
+        kf.cose_to_public_key(
+            cbor_encode_canonical({1: 2, -1: 99, -2: b"\x00" * 32, -3: b"\x00" * 32})
+        )
     with pytest.raises(UnsupportedKeyFormatError, match="OKP curve"):
         kf.cose_to_public_key(cbor_encode_canonical({1: 1, -1: 99, -2: b"\x00" * 32}))
 
@@ -1589,7 +1628,7 @@ def test_pem_lines_are_64_characters() -> None:
 def test_a_non_bytes_non_string_input_is_refused() -> None:
     for value in (None, 42, ["not", "a", "key"], {"also": "not"}):
         with pytest.raises(KeyFormatError, match="expected bytes or a PEM string"):
-            kf.load_spki(value)  # type: ignore[arg-type] -- asserting the runtime guard (KF-004)
+            kf.load_spki(value)  # type: ignore[arg-type]  # asserting the runtime guard (KF-004)
 
 
 def test_bytes_holding_pem_text_are_accepted() -> None:
@@ -1659,13 +1698,21 @@ def test_the_conventional_table_covers_every_algorithm() -> None:
     "name,expected",
     [
         # Inside RFC 5915 ECPrivateKey — the form RFC 9500 §2.3's keys use.
-        ("P-256", True), ("P-384", True), ("P-521", True), ("secp256k1", True),
+        ("P-256", True),
+        ("P-384", True),
+        ("P-521", True),
+        ("secp256k1", True),
         # RFC 8410 §10.3's first example.
-        ("Ed25519", False), ("X25519", False),
+        ("Ed25519", False),
+        ("X25519", False),
         # RFC 9881 Appendix C.
-        ("ML-DSA-44", False), ("ML-DSA-65", False), ("ML-DSA-87", False),
+        ("ML-DSA-44", False),
+        ("ML-DSA-65", False),
+        ("ML-DSA-87", False),
         # draft-ietf-lamps-kyber-certificates Appendix C.
-        ("ML-KEM-512", False), ("ML-KEM-768", False), ("ML-KEM-1024", False),
+        ("ML-KEM-512", False),
+        ("ML-KEM-768", False),
+        ("ML-KEM-1024", False),
     ],
 )
 def test_the_conventional_answer_is_what_the_documents_say(name: str, expected: bool) -> None:
@@ -1689,9 +1736,9 @@ def test_none_encodes_exactly_as_the_conventional_explicit_value(name: str) -> N
     _, private = make_key(name)
     conventional = kf.conventional_include_public_key(name)
     assert private.to_pkcs8() == private.to_pkcs8(include_public_key=conventional)
-    assert private.to_pkcs8() != private.to_pkcs8(include_public_key=not conventional), (
-        f"{name}: the two settings produce identical bytes, so the flag does nothing"
-    )
+    assert private.to_pkcs8() != private.to_pkcs8(
+        include_public_key=not conventional
+    ), f"{name}: the two settings produce identical bytes, so the flag does nothing"
 
 
 @pytest.mark.parametrize("name", ALL_ALGORITHMS)
@@ -1721,14 +1768,13 @@ def _pkcs8_carries_a_public_key(der: bytes, alg: Any) -> bool:
     seq = outer.read_sequence()
     outer.finish()
     version = seq.read_integer()
-    seq.read_sequence()          # AlgorithmIdentifier
+    seq.read_sequence()  # AlgorithmIdentifier
     inner = seq.read_octet_string()
     outer_public = False
     while (tag := seq.peek_tag()) is not None:
         if tag in (0xA1, 0x81):
             outer_public = True
-        seq.read_tagged(1 if tag in (0xA1, 0x81) else 0,
-                        constructed=bool(tag & 0x20))
+        seq.read_tagged(1 if tag in (0xA1, 0x81) else 0, constructed=bool(tag & 0x20))
     seq.finish()
     if outer_public:
         assert version == 1, "an outer [1] publicKey must raise the version to v2"
@@ -1792,10 +1838,9 @@ def test_the_environment_variable_is_parsed_strictly(monkeypatch: Any) -> None:
             kf._initial_pq_consistency()
 
 
-@pytest.mark.parametrize("record", ML_DSA_BAD + ML_KEM_BAD,
-                         ids=_ids(ML_DSA_BAD + ML_KEM_BAD))
+@pytest.mark.parametrize("record", ML_DSA_BAD + ML_KEM_BAD, ids=_ids(ML_DSA_BAD + ML_KEM_BAD))
 def test_the_specifications_bad_keys_are_rejected_under_the_default_policy(
-    record: dict[str, Any]
+    record: dict[str, Any],
 ) -> None:
     """Restates the corpus gate with the policy named, so that if the default
     ever flips the failure says which decision caused it."""
@@ -1856,7 +1901,7 @@ def test_a_carried_public_key_is_still_cross_checked_with_the_policy_off() -> No
         der_integer(1),
         der_sequence(oid_from_string(alg.oid)),
         der_octet_string(der_octet_string(private.key)),
-        der_tagged(1, b"\x00" + other.public_key, constructed=False),
+        der_tagged(1, b"\x00" + other.public().key, constructed=False),
     )
     for policy in (True, False):
         with pytest.raises(KeyFormatError, match="inconsistent"):
@@ -1901,8 +1946,7 @@ def test_a_both_arm_key_with_a_mismatched_seed_is_caught_only_when_checking() ->
     der = der_sequence(
         der_integer(0),
         der_sequence(oid_from_string(alg.oid)),
-        der_octet_string(der_sequence(der_octet_string(other.seed),
-                                      der_octet_string(private.key))),
+        der_octet_string(der_sequence(der_octet_string(other.seed), der_octet_string(private.key))),
     )
     with pytest.raises(KeyFormatError, match="does not expand"):
         kf.load_pkcs8(der, verify_pq_consistency=True)
@@ -1923,8 +1967,7 @@ def test_the_process_wide_policy_is_honoured_by_load_pkcs8() -> None:
     der = der_sequence(
         der_integer(0),
         der_sequence(oid_from_string(alg.oid)),
-        der_octet_string(der_sequence(der_octet_string(other.seed),
-                                      der_octet_string(private.key))),
+        der_octet_string(der_sequence(der_octet_string(other.seed), der_octet_string(private.key))),
     )
     with pytest.raises(KeyFormatError):
         kf.load_pkcs8(der)
@@ -2014,7 +2057,7 @@ def test_an_out_of_range_ec_scalar_in_a_key_file_raises_keyformaterror(name: str
         inner = der_sequence(der_integer(1), der_octet_string(scalar))
         der = der_sequence(
             der_integer(0),
-            der_sequence(oid_from_string(alg.oid), oid_from_string(alg.curve_oid)),
+            der_sequence(oid_from_string(alg.oid), oid_from_string(_curve_oid(alg))),
             der_octet_string(inner),
         )
         # No public key carried, so nothing forces a derivation at import…
@@ -2035,7 +2078,7 @@ def test_an_out_of_range_ec_scalar_in_a_key_file_raises_keyformaterror(name: str
     )
     der = der_sequence(
         der_integer(0),
-        der_sequence(oid_from_string(alg.oid), oid_from_string(alg.curve_oid)),
+        der_sequence(oid_from_string(alg.oid), oid_from_string(_curve_oid(alg))),
         der_octet_string(inner),
     )
     with pytest.raises(KeyFormatError):
@@ -2045,9 +2088,9 @@ def test_an_out_of_range_ec_scalar_in_a_key_file_raises_keyformaterror(name: str
 @pytest.mark.parametrize(
     "mangle",
     [
-        pytest.param(lambda b: [""] + b, id="blank-line-after-header"),
-        pytest.param(lambda b: b[:1] + [""] + b[1:], id="blank-line-in-the-middle"),
-        pytest.param(lambda b: [b[0][:32], b[0][32:]] + b[1:], id="short-first-line"),
+        pytest.param(lambda b: ["", *b], id="blank-line-after-header"),
+        pytest.param(lambda b: [*b[:1], "", *b[1:]], id="blank-line-in-the-middle"),
+        pytest.param(lambda b: [b[0][:32], b[0][32:], *b[1:]], id="short-first-line"),
         pytest.param(lambda b: ["".join(b)], id="one-long-line"),
     ],
 )
@@ -2060,19 +2103,51 @@ def test_pem_lines_must_be_exactly_64_characters(mangle: Any) -> None:
     malleability class as the padding-bit hole, reached a different way. Found
     by the fuzz harness after 18.1 million executions.
     """
-    public, _ = make_key("ML-DSA-44")   # long enough to have many body lines
+    public, _ = make_key("ML-DSA-44")  # long enough to have many body lines
     pem = public.to_pem()
     assert kf.load_spki(pem) == public
     body = [ln for ln in pem.splitlines() if not ln.startswith("-----")]
     assert len(body) > 4 and all(len(ln) == 64 for ln in body[:-1])
 
     rebuilt = (
-        "-----BEGIN PUBLIC KEY-----\n"
-        + "\n".join(mangle(body))
-        + "\n-----END PUBLIC KEY-----\n"
+        "-----BEGIN PUBLIC KEY-----\n" + "\n".join(mangle(body)) + "\n-----END PUBLIC KEY-----\n"
     )
     with pytest.raises(KeyFormatError, match="RFC 7468"):
         kf.load_spki(rebuilt)
+
+
+def test_pem_footer_must_start_its_own_line() -> None:
+    """RFC 7468 §3: every base64 line, the last one included, ends in an ``eol``.
+
+    The body pattern was ``[A-Za-z0-9+/=\\n]*``, which does not require that
+    final newline, so a file whose last base64 line ran straight into the
+    footer parsed to a perfectly good key::
+
+        ...DpTAgqnXmlf37FN6D9YW04BLgpdFo7GS-----END PUBLIC KEY-----
+
+    It then re-encoded to different bytes. One key, two textual encodings —
+    the malleability class this module refuses in DER lengths, in INTEGERs and
+    in CBOR. Found by the fuzz harness.
+    """
+    public, _ = make_key("P-384")
+    pem = public.to_pem()
+    assert kf.load_spki(pem) == public
+
+    glued = pem.replace("\n-----END PUBLIC KEY-----", "-----END PUBLIC KEY-----")
+    assert glued != pem and "GS" not in glued[:30]  # the mangling landed
+    with pytest.raises(KeyFormatError, match="RFC 7468"):
+        kf.load_spki(glued)
+
+    # The same hole on a private key, and via the PKCS#8 parser.
+    _, private = make_key("P-384")
+    priv_pem = private.to_pem()
+    glued_priv = priv_pem.replace("\n-----END PRIVATE KEY-----", "-----END PRIVATE KEY-----")
+    with pytest.raises(KeyFormatError, match="RFC 7468"):
+        kf.load_pkcs8(glued_priv)
+
+    # Non-vacuity: the well-formed form the mangling was derived from still
+    # parses, so the test is not merely rejecting a broken fixture.
+    assert kf.load_pkcs8(priv_pem).key == private.key
 
 
 def test_pem_with_non_zero_base64_padding_bits_is_refused() -> None:
@@ -2094,13 +2169,13 @@ def test_pem_with_non_zero_base64_padding_bits_is_refused() -> None:
     alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
     index = len(body) - 2
     flipped = alphabet[alphabet.index(body[index]) ^ 0b000001]
-    mangled = body[:index] + flipped + body[index + 1:]
-    assert base64.b64decode(mangled) == base64.b64decode(body), (
-        "the two bodies must decode to the same octets, or this tests nothing"
-    )
+    mangled = body[:index] + flipped + body[index + 1 :]
+    assert base64.b64decode(mangled) == base64.b64decode(
+        body
+    ), "the two bodies must decode to the same octets, or this tests nothing"
     assert mangled != body
 
-    lines = [mangled[i:i + 64] for i in range(0, len(mangled), 64)]
+    lines = [mangled[i : i + 64] for i in range(0, len(mangled), 64)]
     rebuilt = "-----BEGIN PUBLIC KEY-----\n" + "\n".join(lines) + "\n-----END PUBLIC KEY-----\n"
     with pytest.raises(KeyFormatError, match="non-canonical base64"):
         kf.load_spki(rebuilt)
@@ -2153,7 +2228,10 @@ def _mutations(data: bytes, count: int) -> list[bytes]:
     """Deterministic single-edit mutations: flip, truncate, extend, splice."""
     import random
 
-    rng = random.Random(_MUTATION_SEED ^ len(data))  # noqa: S311 -- deterministic test-input generation, not key material (KF-006)
+    # The suppression below must sit on the offending line, and black reflows
+    # a wrapped call out from under a trailing comment. Keep this one line.
+    seed = _MUTATION_SEED ^ len(data)
+    rng = random.Random(seed)  # noqa: S311 -- deterministic test input, not key material (KF-006)
     out = []
     for _ in range(count):
         buf = bytearray(data)
@@ -2161,7 +2239,7 @@ def _mutations(data: bytes, count: int) -> list[bytes]:
         if choice == 0:
             buf[rng.randrange(len(buf))] ^= 1 << rng.randrange(8)
         elif choice == 1:
-            del buf[rng.randrange(len(buf)):]
+            del buf[rng.randrange(len(buf)) :]
         elif choice == 2:
             buf.extend(bytes([rng.randrange(256) for _ in range(rng.randrange(1, 8))]))
         else:
@@ -2249,7 +2327,7 @@ def test_mutated_der_is_refused_cleanly(name: str, which: str) -> None:
                 f"{type(exc).__name__} instead of KeyFormatError: {exc}"
             )
         accepted += 1
-        reencoded = key.to_spki() if which == "spki" else key.to_pkcs8()
+        reencoded = _reencode(key, which)
 
         # (1) length
         assert len(mutated) == len(original), (
@@ -2263,8 +2341,7 @@ def test_mutated_der_is_refused_cleanly(name: str, which: str) -> None:
         )
         assert load(reencoded) == key
         # (3) localisation
-        outside = [i for i in range(len(original)) if mutated[i] != original[i]
-                   and i not in window]
+        outside = [i for i in range(len(original)) if mutated[i] != original[i] and i not in window]
         if outside:
             assert key.algorithm != name, (
                 f"{name}/{which}: structural octets {outside} were changed and the "
@@ -2338,7 +2415,7 @@ def test_every_structural_octet_is_refused_when_corrupted(name: str, which: str)
                 f"{name}/{which}: structural octet {index} changed to "
                 f"0x{replacement:02X} and the file still parsed as {name}"
             )
-            assert (key.to_spki() if which == "spki" else key.to_pkcs8()) == bytes(
+            assert _reencode(key, which) == bytes(
                 corrupted
             ), f"{name}/{which}: reclassified key does not re-encode to its own bytes"
             reclassified.add(key.algorithm)
@@ -2395,19 +2472,22 @@ def test_pq_choice_arm_tags_are_the_only_ones_accepted(name: str) -> None:
     bodies = {
         0x80: der_tagged(0, private.seed, constructed=False),
         0x04: der_octet_string(private.key),
-        0x30: der_sequence(der_octet_string(private.seed),
-                           der_octet_string(private.key)),
+        0x30: der_sequence(der_octet_string(private.seed), der_octet_string(private.key)),
     }
     for tag, body in bodies.items():
-        der = der_sequence(der_integer(0), der_sequence(oid_from_string(alg.oid)),
-                           der_octet_string(body))
+        der = der_sequence(
+            der_integer(0), der_sequence(oid_from_string(alg.oid)), der_octet_string(body)
+        )
         assert kf.load_pkcs8(der).key == private.key, f"{name}: arm 0x{tag:02X} rejected"
         # The same body under a different tag must not be salvaged by length.
         for other in (0x81, 0x82, 0x05, 0x0C, 0x31, 0xA0):
             mangled = bytearray(body)
             mangled[0] = other
-            bad = der_sequence(der_integer(0), der_sequence(oid_from_string(alg.oid)),
-                               der_octet_string(bytes(mangled)))
+            bad = der_sequence(
+                der_integer(0),
+                der_sequence(oid_from_string(alg.oid)),
+                der_octet_string(bytes(mangled)),
+            )
             with pytest.raises(KeyFormatError):
                 kf.load_pkcs8(bad)
 
@@ -2432,16 +2512,15 @@ def test_an_out_of_range_encapsulation_key_coefficient_is_refused(name: str) -> 
     body = bytearray(public.key)
     body[0] = 0xFF
     body[1] |= 0x0F
-    assert not pb.native_ml_kem_pubkey_check(kf.ALGORITHMS[name].pq_param_set, bytes(body))
+    assert not pb.native_ml_kem_pubkey_check(_param_set(kf.ALGORITHMS[name]), bytes(body))
 
     alg = kf.ALGORITHMS[name]
-    spki = der_sequence(der_sequence(oid_from_string(alg.oid)),
-                        der_bit_string(bytes(body)))
+    spki = der_sequence(der_sequence(oid_from_string(alg.oid)), der_bit_string(bytes(body)))
     with pytest.raises(KeyFormatError, match="modulus check"):
         kf.load_spki(spki)
     # …and the honest key still passes, so the check is not simply refusing
     # everything.
-    assert pb.native_ml_kem_pubkey_check(alg.pq_param_set, public.key)
+    assert pb.native_ml_kem_pubkey_check(_param_set(alg), public.key)
     assert kf.load_spki(public.to_spki()) == public
 
 
@@ -2453,7 +2532,7 @@ def test_encapsulation_refuses_an_out_of_range_key(name: str) -> None:
     callers who went through its own parser.
     """
     public, _ = make_key(name)
-    ps = kf.ALGORITHMS[name].pq_param_set
+    ps = _param_set(kf.ALGORITHMS[name])
     body = bytearray(public.key)
     body[0] = 0xFF
     body[1] |= 0x0F

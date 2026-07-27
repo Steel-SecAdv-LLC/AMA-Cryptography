@@ -44,20 +44,21 @@ import ama_cryptography.pqc_backends as pb  # noqa: E402 -- import follows the r
 # Inputs no selector may accept. Each is a shape that has produced a real
 # silent-downgrade bug in some library somewhere.
 BAD_INPUTS: tuple[Any, ...] = (
-    None,           # missing configuration read as a default
-    True,           # bool is an int subclass: indexes position 1
-    False,          # ...and position 0
-    -1,             # negative index wraps in some languages
-    0,              # the classic "unset" sentinel
-    "",             # empty config value
-    "default",      # a word that invites a fallback branch
-    3.0,            # float that equals a valid int
-    b"P-256",       # bytes where str was meant
-    (),             # wrong container type
+    None,  # missing configuration read as a default
+    True,  # bool is an int subclass: indexes position 1
+    False,  # ...and position 0
+    -1,  # negative index wraps in some languages
+    0,  # the classic "unset" sentinel
+    "",  # empty config value
+    "default",  # a word that invites a fallback branch
+    3.0,  # float that equals a valid int
+    b"P-256",  # bytes where str was meant
+    (),  # wrong container type
 )
 
 # Values that look like a real selector but name nothing. These are the
 # dangerous ones: a fallback branch would map them onto a neighbour.
+# fmt: off
 NEAR_MISSES: dict[str, tuple[Any, ...]] = {
     "curve": ("P-192", "P-224", "P-256 ", "p-256", "secp256k1", "Ed25519",
               "prime256v2", 1, 2, 3, 192, 224, 255, 257, 383, 385, 520, 522,
@@ -72,6 +73,7 @@ NEAR_MISSES: dict[str, tuple[Any, ...]] = {
                # every other family's valid values: a mis-routed call
                256, 384, 521, 512, 768, 1024),
 }
+# fmt: on
 
 # The selectors under test, derived from the module rather than hand-listed.
 SELECTORS: dict[str, Callable[[Any], int]] = {
@@ -97,9 +99,9 @@ def test_every_selector_is_covered() -> None:
     # `_param_set_id` is the shared implementation the others delegate to; it
     # takes explicit tables rather than being a selector in its own right.
     discovered.discard("_param_set_id")
-    assert discovered == covered, (
-        f"selector(s) not driven by this module: {sorted(discovered - covered)}"
-    )
+    assert (
+        discovered == covered
+    ), f"selector(s) not driven by this module: {sorted(discovered - covered)}"
 
 
 @pytest.mark.parametrize("kind", sorted(SELECTORS))
@@ -202,8 +204,7 @@ def test_native_size_queries_refuse_unknown_selectors() -> None:
             if value in valid:
                 continue
             assert fn(value) == 0, (
-                f"{fn_name}({value}) returned a non-zero size for an "
-                "unrecognised selector"
+                f"{fn_name}({value}) returned a non-zero size for an " "unrecognised selector"
             )
 
     for fn_name in name_fns:
@@ -220,8 +221,7 @@ def test_native_size_queries_refuse_unknown_selectors() -> None:
             if value in valid:
                 continue
             assert fn(value) is None, (
-                f"{fn_name}({value}) named a parameter set for an "
-                "unrecognised selector"
+                f"{fn_name}({value}) named a parameter set for an " "unrecognised selector"
             )
 
 
@@ -234,12 +234,20 @@ def test_native_operations_refuse_unknown_selectors() -> None:
     out_len = ctypes.c_size_t(8192)
 
     for bad in (0, 1, 7, 99, 4096):
-        assert lib.ama_ml_kem_keypair(
-            bad, buf, ctypes.c_size_t(8192), buf, ctypes.c_size_t(8192)
-        ) != 0
+        assert (
+            lib.ama_ml_kem_keypair(bad, buf, ctypes.c_size_t(8192), buf, ctypes.c_size_t(8192)) != 0
+        )
         assert lib.ama_ml_dsa_keypair(bad, buf, buf) != 0
         assert lib.ama_nistp_keypair(bad, buf, buf) != 0
-        assert lib.ama_ml_kem_encapsulate(
-            bad, buf, ctypes.c_size_t(8192), buf, ctypes.byref(out_len),
-            buf, ctypes.c_size_t(32)
-        ) != 0
+        assert (
+            lib.ama_ml_kem_encapsulate(
+                bad,
+                buf,
+                ctypes.c_size_t(8192),
+                buf,
+                ctypes.byref(out_len),
+                buf,
+                ctypes.c_size_t(32),
+            )
+            != 0
+        )

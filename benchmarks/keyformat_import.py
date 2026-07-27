@@ -96,9 +96,7 @@ def _sample_key(name: str) -> kf.PrivateKey:
         if alg.pq_family == "ml-dsa":
             public, secret = pb.native_ml_dsa_keypair_from_seed(alg.pq_set, seed)
         else:
-            public, secret = pb.native_ml_kem_keypair_from_seed(
-                alg.pq_set, seed[:32], seed[32:]
-            )
+            public, secret = pb.native_ml_kem_keypair_from_seed(alg.pq_set, seed[:32], seed[32:])
         return kf.PrivateKey(name, secret, public, seed)
     if name == "Ed25519":
         public, secret = pb.native_ed25519_keypair()
@@ -129,19 +127,19 @@ def measure(repeats: int) -> list[dict[str, Any]]:
         for form in forms:
             encoded = private.to_pkcs8(pq_format=form)
             checked = _time(lambda e=encoded: kf.load_pkcs8(e), repeats)
-            parse = _time(
-                lambda e=encoded: kf.load_pkcs8(e, verify_pq_consistency=False), repeats
+            parse = _time(lambda e=encoded: kf.load_pkcs8(e, verify_pq_consistency=False), repeats)
+            rows.append(
+                {
+                    "algorithm": name,
+                    "kind": alg.kind,
+                    "form": form,
+                    "bytes": len(encoded),
+                    "parse_ms": round(parse, 4),
+                    "checked_ms": round(checked, 4),
+                    "ratio": round(checked / parse, 1) if parse > 0 else None,
+                    "keygen_ms": round(keygen_ms, 4),
+                }
             )
-            rows.append({
-                "algorithm": name,
-                "kind": alg.kind,
-                "form": form,
-                "bytes": len(encoded),
-                "parse_ms": round(parse, 4),
-                "checked_ms": round(checked, 4),
-                "ratio": round(checked / parse, 1) if parse > 0 else None,
-                "keygen_ms": round(keygen_ms, 4),
-            })
     return rows
 
 

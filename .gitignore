@@ -266,6 +266,12 @@ build-warn/
 # No tracked path lives under a `build-*/` directory, so this is safe.
 build-*/
 
+# Fuzzing crash artefacts. Both the C harnesses (`-artifact_prefix`) and the
+# Python one (`--artifact-dir`) drop reproducers here; CI uploads the directory
+# as a job artefact. A crash input belongs in a regression test with the fix
+# beside it, never checked in loose.
+artifacts/
+
 # Cross-compile aarch64 build dir (local-only)
 build-arm/
 build-aarch64/

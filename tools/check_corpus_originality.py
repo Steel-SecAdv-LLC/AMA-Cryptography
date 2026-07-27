@@ -155,12 +155,11 @@ def scan_for_binary_invocations(repo: Path = REPO) -> list[str]:
                     continue
                 target = node.func
                 name = (
-                    target.attr if isinstance(target, ast.Attribute)
-                    else target.id if isinstance(target, ast.Name)
-                    else ""
+                    target.attr
+                    if isinstance(target, ast.Attribute)
+                    else target.id if isinstance(target, ast.Name) else ""
                 )
-                if name not in {"run", "Popen", "call", "check_call",
-                                "check_output", "system"}:
+                if name not in {"run", "Popen", "call", "check_call", "check_output", "system"}:
                     continue
                 for text in _literal_strings(node):
                     match = _BINARY_RE.search(text)
@@ -213,8 +212,10 @@ def scan_corpus_sources(corpus: Path = KEYFORMAT_CORPUS) -> list[str]:
 def check_reference_encoder(path: Path = REFERENCE_ENCODER) -> list[str]:
     """The reference must stand on the specification, not on the code it checks."""
     if not path.is_file():
-        return [f"{_rel(path)} is missing; it is what replaced the "
-                "third-party corpus and the tests depend on it"]
+        return [
+            f"{_rel(path)} is missing; it is what replaced the "
+            "third-party corpus and the tests depend on it"
+        ]
     imported: set[str] = set()
     for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
         if isinstance(node, ast.Import):
@@ -232,8 +233,7 @@ def check_reference_encoder(path: Path = REFERENCE_ENCODER) -> list[str]:
 
 def main() -> int:
     sections = (
-        ("external cryptographic binaries in tests/ and tools/",
-         scan_for_binary_invocations()),
+        ("external cryptographic binaries in tests/ and tools/", scan_for_binary_invocations()),
         ("vendored corpus provenance", scan_corpus_sources()),
         ("reference-encoder independence", check_reference_encoder()),
     )
@@ -242,15 +242,20 @@ def main() -> int:
         if not problems:
             print(f"OK    {title}")
     if failures:
-        print("\nFAIL: INVARIANT-36 — a third-party cryptographic implementation "
-              "is in the validation path.", file=sys.stderr)
+        print(
+            "\nFAIL: INVARIANT-36 — a third-party cryptographic implementation "
+            "is in the validation path.",
+            file=sys.stderr,
+        )
         for title, problems in failures:
             print(f"  {title}:", file=sys.stderr)
             for problem in problems:
                 print(f"    - {problem}", file=sys.stderr)
         return 1
-    print("\nINVARIANT-36 holds: AMA is checked against specifications and its own "
-          "reference encoder, not against another implementation.")
+    print(
+        "\nINVARIANT-36 holds: AMA is checked against specifications and its own "
+        "reference encoder, not against another implementation."
+    )
     return 0
 
 
