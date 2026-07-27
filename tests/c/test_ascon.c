@@ -458,6 +458,54 @@ static void test_parameter_validation(void) {
           == AMA_SUCCESS, "empty plaintext rejected");
 }
 
+/*
+ * The empty input carried on a NULL pointer, end to end.
+ *
+ * Validation accepts (NULL, 0) for message, plaintext and ciphertext, so the
+ * final-partial-block step — which runs even for an empty input, because
+ * pad() is still absorbed — forms base+0 on a null base.  That is undefined
+ * behaviour (C17 6.5.6p8) and UBSan traps it, so each accepted NULL/0 form
+ * needs a case here.  Asserting equality against the same call made with a
+ * real buffer keeps this from degrading into a mere "did not crash" test:
+ * the NULL path must compute the identical digest and tag.
+ */
+static void test_empty_inputs_on_null_pointers(void) {
+    uint8_t key[16] = { 0 }, nonce[16] = { 0 };
+    uint8_t tag_null[16] = { 0 }, tag_buf[16] = { 0 };
+    uint8_t digest_null[32] = { 0 }, digest_buf[32] = { 0 };
+    uint8_t scratch[16] = { 0 };
+
+    printf("Test: empty inputs on NULL pointers\n");
+
+    CHECK(ama_ascon_hash256(NULL, 0, digest_null) == AMA_SUCCESS,
+          "hash256 of the empty message on a NULL pointer failed");
+    CHECK(ama_ascon_hash256(scratch, 0, digest_buf) == AMA_SUCCESS,
+          "hash256 of the empty message on a real buffer failed");
+    CHECK(memcmp(digest_null, digest_buf, sizeof(digest_null)) == 0,
+          "empty-message digest differs between NULL and real buffer");
+
+    /* Empty plaintext AND a NULL ciphertext sink: nothing is written, so the
+     * API accepts it, and the tag must match the buffered form. */
+    CHECK(ama_ascon_aead128_encrypt(key, nonce, NULL, 0, NULL, 0,
+                                    NULL, tag_null) == AMA_SUCCESS,
+          "empty encrypt with NULL ciphertext rejected");
+    CHECK(ama_ascon_aead128_encrypt(key, nonce, scratch, 0, NULL, 0,
+                                    scratch, tag_buf) == AMA_SUCCESS,
+          "empty encrypt with real buffers rejected");
+    CHECK(memcmp(tag_null, tag_buf, sizeof(tag_null)) == 0,
+          "empty-plaintext tag differs between NULL and real buffer");
+
+    /* And the matching decrypt: the tag from the empty encrypt must verify
+     * when the ciphertext and plaintext are both NULL at zero length. */
+    CHECK(ama_ascon_aead128_decrypt(key, nonce, NULL, 0, NULL, 0,
+                                    tag_null, NULL) == AMA_SUCCESS,
+          "empty decrypt with NULL buffers rejected a valid tag");
+    tag_null[0] ^= 0x01;
+    CHECK(ama_ascon_aead128_decrypt(key, nonce, NULL, 0, NULL, 0,
+                                    tag_null, NULL) == AMA_ERROR_VERIFY_FAILED,
+          "empty decrypt accepted a forged tag");
+}
+
 static void test_empty_inputs(void) {
     /* SP 800-232 vector 1: empty plaintext, empty AD. */
     const uint8_t key[16] = { 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
@@ -498,6 +546,7 @@ int main(void) {
     test_nonce_reuse_is_visible();
     test_parameter_validation();
     test_empty_inputs();
+    test_empty_inputs_on_null_pointers();
 
     printf("\n%d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

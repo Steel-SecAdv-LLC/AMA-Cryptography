@@ -51,8 +51,15 @@ DISPATCH_DIR = ../../src/c/dispatch
 # resolves to the scalar SHA-256 core — sufficient for the harness, which does
 # not measure SHA-256 timing (the authoritative HW-kernel byte-identity check
 # is tests/c/test_sha256_dispatch_equiv.c under the full CMake build).
+#
+# ama_ascon.c backs the three Ascon lanes in dudect_crypto.c (tag compare,
+# encrypt, hash).  A harness that references a primitive and a Makefile that
+# does not compile it is a link error, not a skipped lane — which is what this
+# list is for.  Ascon is self-contained (no PQC symbol, no dispatch slot), so
+# it adds nothing else to the link.
 CRYPTO_SRCS = $(SRC_DIR)/ama_consttime.c \
               $(SRC_DIR)/ama_core.c \
+              $(SRC_DIR)/ama_ascon.c \
               $(SRC_DIR)/ama_sha3.c \
               $(SRC_DIR)/ama_sha256.c \
               $(SRC_DIR)/ama_hmac_sha256.c \

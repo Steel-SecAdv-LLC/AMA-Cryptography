@@ -213,6 +213,31 @@ static inline void ama_ascon_store_partial(uint8_t *p, uint64_t v, size_t n) {
     }
 }
 
+/*
+ * Offset a caller buffer that the API permits to be NULL when its length is
+ * zero.
+ *
+ * Adding to a null pointer is undefined even when the offset is zero
+ * (C17 6.5.6p8), and hash256/encrypt/decrypt all accept (NULL, 0) for an
+ * empty message, plaintext or ciphertext.  The final-partial-block step runs
+ * unconditionally — it must, because pad() is absorbed even for an empty
+ * input — so it forms base+i on exactly that path.  Routing those four call
+ * sites through these helpers keeps the empty case defined.
+ *
+ * The branch is on pointer nullness, which is a public property of the call,
+ * never on key material or a length derived from it, so the constant-time
+ * argument for the tag and payload paths is unaffected.  The per-block loops
+ * do not use these: a NULL base with a non-zero length is already rejected,
+ * so a loop that executes at all has a non-NULL base and pays nothing.
+ */
+static inline const uint8_t *ama_ascon_at(const uint8_t *base, size_t off) {
+    return (base == NULL) ? NULL : base + off;
+}
+
+static inline uint8_t *ama_ascon_at_mut(uint8_t *base, size_t off) {
+    return (base == NULL) ? NULL : base + off;
+}
+
 /**
  * pad() for a partial block held in one word (Algorithm 2, Appendix A.2).
  *
@@ -270,7 +295,7 @@ AMA_API ama_error_t ama_ascon_hash256(
     }
     {
         const size_t rem = message_len - i;
-        s.x[0] ^= ama_ascon_load_partial(message + i, rem);
+        s.x[0] ^= ama_ascon_load_partial(ama_ascon_at(message, i), rem);
         s.x[0] ^= ama_ascon_pad(rem);
     }
 
@@ -399,9 +424,10 @@ AMA_API ama_error_t ama_ascon_aead128_encrypt(
     {
         const size_t rem = pt_len - i;
         if (rem < 8) {
-            s.x[0] ^= ama_ascon_load_partial(plaintext + i, rem);
+            s.x[0] ^= ama_ascon_load_partial(ama_ascon_at(plaintext, i), rem);
             s.x[0] ^= ama_ascon_pad(rem);
-            ama_ascon_store_partial(ciphertext + i, s.x[0], rem);
+            ama_ascon_store_partial(ama_ascon_at_mut(ciphertext, i),
+                                    s.x[0], rem);
         } else {
             s.x[0] ^= ama_ascon_load64(plaintext + i);
             s.x[1] ^= ama_ascon_load_partial(plaintext + i + 8, rem - 8);
@@ -456,7 +482,8 @@ static void ama_ascon_aead_absorb_ct(
          * ciphertext and XOR the padding bit in at byte offset l. */
         const size_t rem = ct_len - i;
         if (rem < 8) {
-            const uint64_t c0 = ama_ascon_load_partial(ciphertext + i, rem);
+            const uint64_t c0 =
+                ama_ascon_load_partial(ama_ascon_at(ciphertext, i), rem);
             if (plaintext != NULL) {
                 ama_ascon_store_partial(plaintext + i, s->x[0] ^ c0, rem);
             }
