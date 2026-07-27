@@ -248,9 +248,11 @@ Markdown, Python, C, headers, JSON, YAML and Cython — a deliberately *hard*
 negative, since security prose is dense with the operational vocabulary the
 detector scores. With the shipped defaults, every genuinely-benign file scores
 ≤ 1.75 while the four hand-written successor notes score 2.25–3.00 (a margin of
-≥ 0.50); the only corpus files flagged are the three that themselves contain or
-describe successor-note tradecraft (`INVARIANTS.md`, `CHANGELOG.md`, and the
-adversarial-load test that embeds a synthetic note). Lowering the threshold to
+≥ 0.50); the corpus files flagged are a subset of the three that themselves
+contain or describe successor-note tradecraft (`INVARIANTS.md`, `CHANGELOG.md`,
+and the adversarial-load test that embeds a synthetic note) — which of them
+trip depends on their current text, so the calibration test asserts the flagged
+set is a subset of these three rather than requiring all three. Lowering the threshold to
 1.50 additionally flags one genuinely-benign document, so 1.75 is the tighter
 operating point. `tests/test_agentic_abuse_detectors.py` re-derives this on
 every CI run — it pins the benign false-positive set (any new benign flag fails

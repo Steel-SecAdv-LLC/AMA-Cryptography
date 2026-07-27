@@ -38,11 +38,15 @@
  *      ama_secure_alloc(), which is exactly where a length-handling bug would
  *      live.
  *
- * Build (standalone):
- *   clang -fsanitize=fuzzer,address,undefined -O1 -g -I../include \
- *         fuzz_agent_binding.c ../src/c/ama_agent_binding.c \
- *         ../src/c/ama_hkdf.c ../src/c/ama_hmac.c ../src/c/ama_sha3.c \
- *         ../src/c/ama_consttime.c ../src/c/ama_core.c -o fuzz_agent_binding
+ * Build: use the canonical CMake target `fuzz_agent_binding` (see
+ * fuzz/CMakeLists.txt), which is also what oss-fuzz/build.sh drives. It
+ * compiles the whole src/c core with libFuzzer + ASan/UBSan instrumentation,
+ * which is exactly what this harness needs. A hand-listed set of translation
+ * units is deliberately not given here: it drifts silently as the library's
+ * internal dependencies change (this harness transitively pulls in HKDF,
+ * HMAC-SHA3, HMAC-SHA2, SHA3, the runtime dispatch table, secure-memory and
+ * the constant-time core), and an under-instrumented standalone build would
+ * miss exactly the memory-safety and UB defects it exists to find.
  */
 
 #include "ama_cryptography.h"

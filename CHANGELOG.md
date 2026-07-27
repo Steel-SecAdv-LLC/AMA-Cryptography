@@ -75,9 +75,10 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   families. A printable-ASCII floor rejects signatures, keys and ciphertext
   before any scoring. Measured against a 443-file corpus (git-tracked source) of the repository's
   own text: every genuinely-benign file scores ≤ 1.75 while the four
-  hand-written successor notes score 2.25–3.00 (margin ≥ 0.50); the only files
-  flagged are the three that themselves describe or embed successor-note
-  content. `tests/test_agentic_abuse_detectors.py` re-derives this every CI run
+  hand-written successor notes score 2.25–3.00 (margin ≥ 0.50); the files
+  flagged are a subset of the three that themselves describe or embed
+  successor-note content (which of them trip depends on their current text).
+  `tests/test_agentic_abuse_detectors.py` re-derives this every CI run
   — it pins the benign false-positive set and asserts the ≥ 0.50 separation, so
   the calibration cannot silently rot as the corpus grows. Advisory only — it
   never blocks a signature.

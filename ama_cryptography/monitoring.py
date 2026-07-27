@@ -2006,12 +2006,16 @@ class NoteArtifactDetector:
       * Every genuinely-benign file scores <= 1.75.  The separation is
         therefore >= 0.50 on the coverage score, and no benign file clears the
         full flagging conjunction.
-      * The only files flagged are the three that *themselves* contain or
-        describe successor-note tradecraft — ``INVARIANTS.md`` and
+      * The files flagged are a subset of the three that *themselves* contain
+        or describe successor-note tradecraft — ``INVARIANTS.md`` and
         ``CHANGELOG.md`` (which document this detector) and
         ``tests/test_agentic_load_adversarial.py`` (which embeds a synthetic
-        note).  Those are true positives on literal note content, not false
-        positives on benign prose.
+        note).  They are true positives on literal note content, not false
+        positives on benign prose.  Which of the three trip depends on their
+        current text: as of this writing ``CHANGELOG.md`` and the test file
+        flag while ``INVARIANTS.md`` sits just below the successor gate, so the
+        calibration test asserts the flagged set is a *subset* of these three
+        rather than requiring all three to fire.
       * Dropping the threshold to 1.50 additionally flags
         ``IMPLEMENTATION_GUIDE.md`` — a genuinely-benign document — so 1.75 is
         the tighter operating point that excludes it while keeping every note.

@@ -154,7 +154,7 @@ Verification is layered, because a mode-level KAT alone cannot distinguish
 | Ascon-Hash256 | Full published KAT corpus | **1025 / 1025** |
 | Ascon-AEAD128 | Full published KAT corpus, encrypt **and** decrypt round-trip | **1089 / 1089** |
 | Python surface | Same two corpora driven through the ctypes boundary | 1025 / 1025 and 1089 / 1089 |
-| C suite | `tests/c/test_ascon.c`, including all 128 single-bit tag forgeries and the fail-closed contract | 246 checks, 0 failures |
+| C suite | `tests/c/test_ascon.c`, including all 128 single-bit tag forgeries and the fail-closed contract | 254 checks, 0 failures |
 | Build configurations | Full C suite, `AMA_USE_NATIVE_PQC=OFF` and `=ON` | 27/27 and 55/55 |
 | Compiler | `-Wall -Wextra -Wpedantic` | 0 warnings from `ama_ascon.c` |
 

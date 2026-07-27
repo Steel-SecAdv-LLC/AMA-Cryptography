@@ -612,6 +612,13 @@ class TestNoteArtifactCalibration:
         ]
         max_benign = max(benign_scores)
 
+        # The margin sits at exactly NOTE_CORPUS_MARGIN in the current corpus
+        # (highest benign == the 1.75 score_threshold; lowest note 2.25), i.e.
+        # there is no *continuous* headroom.  It is nonetheless robust because
+        # the coverage score is quantised to 0.25 steps and no benign file
+        # currently lands on the 2.00 rung between them — a benign file would
+        # have to climb two whole rungs, not drift, to breach the bound.  The
+        # real slack lives in the min_note >= threshold + 0.25 assertion below.
         assert min_note - max_benign >= NOTE_CORPUS_MARGIN, (
             f"note-vs-corpus score separation collapsed to "
             f"{min_note - max_benign:.2f} (< {NOTE_CORPUS_MARGIN}): lowest note "
