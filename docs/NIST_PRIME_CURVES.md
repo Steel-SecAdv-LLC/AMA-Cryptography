@@ -35,14 +35,14 @@ from ama_cryptography.pqc_backends import (
 )
 import hashlib
 
-priv, pub = native_nistp_keypair("P-256")
+pub, priv = native_nistp_keypair("P-256")   # public FIRST, as everywhere in AMA
 digest = hashlib.sha256(b"message").digest()
 
 der = native_nistp_ecdsa_sign("P-256", digest, priv)              # X.509 / TLS
 raw = native_nistp_ecdsa_sign("P-256", digest, priv, raw=True)    # JWS / COSE
 assert native_nistp_ecdsa_verify("P-256", der, digest, pub)
 
-peer_priv, peer_pub = native_nistp_keypair("P-256")
+peer_pub, _peer_priv = native_nistp_keypair("P-256")
 z = native_nistp_ecdh("P-256", priv, peer_pub)   # raw x-coordinate: feed to a KDF
 ```
 
@@ -63,6 +63,11 @@ P-256 would be the worst possible failure mode.
   `native_nistp_sig_der_to_raw` and `_raw_to_der` convert, re-validating range
   and encoding in both directions so a conversion cannot launder a malformed
   component into a well-formed one.
+* Keypair functions return `(public, secret)` — public first, matching every
+  other keypair function in AMA. `tests/test_keypair_conventions.py` asserts
+  that ordering behaviourally across the whole library, by re-deriving the
+  public key from the secret; an earlier revision of `native_nistp_keypair`
+  had it reversed, which is one copy-paste away from publishing a private key.
 * These functions never hash. Pass a digest of 32, 48 or 64 octets. The width
   also selects the RFC 6979 HMAC, as the RFC prescribes. A digest wider than the
   group order is truncated per FIPS 186-5, so signing a SHA-512 digest under

@@ -4660,7 +4660,16 @@ def native_nistp_keypair(curve: Union[int, str]) -> tuple:
         curve: Curve selector or name.
 
     Returns:
-        ``(private_key, public_key)`` as bytes.
+        ``(public_key, private_key)`` as bytes — public FIRST, matching every
+        other keypair function in this module (``native_x25519_keypair``,
+        ``native_ed25519_keypair``, ``native_ml_kem_keypair``, ...).
+
+        The ordering is uniform on purpose. An earlier revision of this
+        function returned ``(private_key, public_key)``, which meant a caller
+        moving between two AMA keypair calls in the same file could land a
+        private key in the variable they were about to publish. The convention
+        is asserted across every keypair function by
+        ``tests/test_keypair_conventions.py`` so it cannot drift again.
 
     Raises:
         ValueError: If the curve is unknown.
@@ -4675,7 +4684,7 @@ def native_nistp_keypair(curve: Union[int, str]) -> tuple:
     rc = _native_lib.ama_nistp_keypair(cid, priv, pub)
     if rc != 0:
         raise RuntimeError(f"NIST curve keypair generation failed (rc={rc})")
-    return bytes(priv.raw[:nb]), bytes(pub.raw[: 2 * nb])
+    return bytes(pub.raw[: 2 * nb]), bytes(priv.raw[:nb])
 
 
 def native_nistp_pubkey_from_privkey(curve: Union[int, str], privkey: bytes) -> bytes:

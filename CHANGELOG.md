@@ -56,6 +56,21 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   rather than ignored. The previous API made hedged+raw raise purely because a
   fourth function had not been written.
 
+- **`native_nistp_keypair` now returns `(public_key, private_key)`** — public
+  first, matching every other keypair function in the library. It was written
+  returning `(private_key, public_key)`, the reverse of
+  `native_x25519_keypair`, `native_ed25519_keypair`, `native_ml_kem_keypair`
+  and `native_ml_dsa_keypair`. In a file where both appear, a copy-pasted
+  `pub, priv = ...` lands a private key in the variable about to be published,
+  and nothing — types, linter, or any behavioural test — notices, because both
+  values are opaque bytes and the code runs. Found by nearly making the mistake
+  while writing the key-format layer.
+
+  `tests/test_keypair_conventions.py` now asserts the ordering *behaviourally*
+  for every keypair function it discovers, by re-deriving the public key from
+  the secret and requiring a match. Docstrings were not enough: the
+  inconsistent function documented its wrong order accurately.
+
 - **`ama_nist_curve_t` renumbered to 256 / 384 / 521** (was 0 / 1 / 2). A dense
   index made `0` — the value an uninitialised or forgotten field holds — mean
   "P-256". Found by the new INVARIANT-35 suite on its first run. The values also

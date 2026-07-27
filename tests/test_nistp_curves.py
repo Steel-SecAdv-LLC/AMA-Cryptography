@@ -269,7 +269,7 @@ def test_out_of_range_private_keys_rejected(name: str) -> None:
 def test_keypair_generation_is_valid_and_varied(name: str) -> None:
     seen = set()
     for _ in range(4):
-        priv, pub = pb.native_nistp_keypair(name)
+        pub, priv = pb.native_nistp_keypair(name)
         assert len(priv) == CURVES[name]["nbytes"]
         assert len(pub) == 2 * CURVES[name]["nbytes"]
         assert 1 <= int.from_bytes(priv, "big") < CURVES[name]["n"]
@@ -302,7 +302,7 @@ def test_ecdsa_matches_rfc6979_reference(name: str, low_s: bool) -> None:
 
 @pytest.mark.parametrize("name", CURVE_NAMES)
 def test_ecdsa_is_deterministic(name: str) -> None:
-    priv, pub = pb.native_nistp_keypair(name)
+    pub, priv = pb.native_nistp_keypair(name)
     digest = _digest(name, b"determinism")
     first = pb.native_nistp_ecdsa_sign(name, digest, priv)
     assert first == pb.native_nistp_ecdsa_sign(name, digest, priv)
@@ -317,8 +317,8 @@ def test_nonce_does_not_repeat_across_messages_or_keys(name: str) -> None:
     outright, so this is the single most destructive ECDSA failure mode.
     """
     nb = CURVES[name]["nbytes"]
-    priv_a, _ = pb.native_nistp_keypair(name)
-    priv_b, _ = pb.native_nistp_keypair(name)
+    _, priv_a = pb.native_nistp_keypair(name)
+    _, priv_b = pb.native_nistp_keypair(name)
     rs = set()
     for priv in (priv_a, priv_b):
         for msg in (b"m0", b"m1", b"m2"):
@@ -329,7 +329,7 @@ def test_nonce_does_not_repeat_across_messages_or_keys(name: str) -> None:
 
 @pytest.mark.parametrize("name", CURVE_NAMES)
 def test_hedged_signing_differs_but_verifies(name: str) -> None:
-    priv, pub = pb.native_nistp_keypair(name)
+    pub, priv = pb.native_nistp_keypair(name)
     digest = _digest(name, b"hedged")
     det = pb.native_nistp_ecdsa_sign(name, digest, priv)
     h1 = pb.native_nistp_ecdsa_sign(name, digest, priv, hedged=True)
@@ -355,7 +355,7 @@ def test_hedged_signing_differs_but_verifies(name: str) -> None:
 @pytest.mark.parametrize("digest_len", [32, 48, 64])
 def test_every_supported_digest_width_works(name: str, digest_len: int) -> None:
     """FIPS 186-5 truncation makes any of the three widths well defined."""
-    priv, pub = pb.native_nistp_keypair(name)
+    pub, priv = pb.native_nistp_keypair(name)
     digest = secrets.token_bytes(digest_len)
     sig = pb.native_nistp_ecdsa_sign(name, digest, priv)
     assert pb.native_nistp_ecdsa_verify(name, sig, digest, pub)
@@ -363,7 +363,7 @@ def test_every_supported_digest_width_works(name: str, digest_len: int) -> None:
 
 @pytest.mark.parametrize("name", CURVE_NAMES)
 def test_unsupported_digest_widths_rejected(name: str) -> None:
-    priv, pub = pb.native_nistp_keypair(name)
+    pub, priv = pb.native_nistp_keypair(name)
     for bad in (0, 20, 31, 33, 65):
         with pytest.raises(ValueError):
             pb.native_nistp_ecdsa_sign(name, b"\x00" * bad, priv)
@@ -489,7 +489,7 @@ def test_low_s_is_opt_in_and_default_is_rfc6979_verbatim(name: str) -> None:
     saw_high = False
 
     for i in range(24):
-        priv, _ = pb.native_nistp_keypair(name)
+        _, priv = pb.native_nistp_keypair(name)
         digest = _digest(name, b"low-s-%d" % i)
         default = pb.native_nistp_ecdsa_sign(name, digest, priv, raw=True)
         normalised = pb.native_nistp_ecdsa_sign(name, digest, priv, raw=True, low_s=True)
@@ -528,7 +528,7 @@ def test_low_s_is_a_property_of_the_sign_verify_pair(name: str) -> None:
     """
     nb, n = CURVES[name]["nbytes"], CURVES[name]["n"]
     half = (n - 1) // 2
-    priv, pub = pb.native_nistp_keypair(name)
+    pub, priv = pb.native_nistp_keypair(name)
     digest = _digest(name, b"malleability")
 
     def twin_of(sig: bytes) -> bytes:
@@ -564,7 +564,7 @@ def test_low_s_is_a_property_of_the_sign_verify_pair(name: str) -> None:
 def test_out_of_range_signature_components_rejected(name: str) -> None:
     """``r`` or ``s`` >= n must be rejected, never reduced into range."""
     nb, n = CURVES[name]["nbytes"], CURVES[name]["n"]
-    priv, pub = pb.native_nistp_keypair(name)
+    pub, priv = pb.native_nistp_keypair(name)
     digest = _digest(name, b"range")
     raw = pb.native_nistp_ecdsa_sign(name, digest, priv, raw=True)
     r = int.from_bytes(raw[:nb], "big")
@@ -582,7 +582,7 @@ def test_out_of_range_signature_components_rejected(name: str) -> None:
 # ---------------------------------------------------------------------------
 @pytest.mark.parametrize("name", CURVE_NAMES)
 def test_der_and_raw_are_the_same_signature(name: str) -> None:
-    priv, pub = pb.native_nistp_keypair(name)
+    pub, priv = pb.native_nistp_keypair(name)
     digest = _digest(name, b"encodings")
     der = pb.native_nistp_ecdsa_sign(name, digest, priv)
     raw = pb.native_nistp_ecdsa_sign(name, digest, priv, raw=True)
@@ -597,7 +597,7 @@ def test_der_and_raw_are_the_same_signature(name: str) -> None:
 @pytest.mark.parametrize("name", CURVE_NAMES)
 def test_der_is_minimal_and_strictly_parsed(name: str) -> None:
     """Only minimal DER is accepted — the encoding-malleability control."""
-    priv, pub = pb.native_nistp_keypair(name)
+    pub, priv = pb.native_nistp_keypair(name)
     digest = _digest(name, b"strict der")
     der = bytearray(pb.native_nistp_ecdsa_sign(name, digest, priv))
 
@@ -623,7 +623,7 @@ def test_p521_der_uses_long_form_length_when_needed() -> None:
     This is the case the secp256k1 parser cannot express, and getting it wrong
     produces signatures no other implementation reads.
     """
-    priv, pub = pb.native_nistp_keypair("P-521")
+    pub, priv = pb.native_nistp_keypair("P-521")
     der = pb.native_nistp_ecdsa_sign("P-521", _digest("P-521", b"long form"), priv)
     assert der[0] == 0x30
     assert der[1] == 0x81, "P-521 SEQUENCE length must use the one-octet long form"
@@ -648,7 +648,7 @@ def test_raw_conversion_rejects_bad_lengths(name: str) -> None:
 def test_non_canonical_and_off_curve_keys_rejected(name: str) -> None:
     c = CURVES[name]
     nb, p = c["nbytes"], c["p"]
-    _priv, pub = pb.native_nistp_keypair(name)
+    pub, _priv = pb.native_nistp_keypair(name)
     x, y = pub[:nb], pub[nb:]
 
     assert pb.native_nistp_pubkey_validate(name, pub)
@@ -676,7 +676,7 @@ def test_non_canonical_and_off_curve_keys_rejected(name: str) -> None:
 @pytest.mark.parametrize("name", CURVE_NAMES)
 def test_verification_rejects_invalid_public_keys(name: str) -> None:
     nb = CURVES[name]["nbytes"]
-    priv, pub = pb.native_nistp_keypair(name)
+    pub, priv = pb.native_nistp_keypair(name)
     digest = _digest(name, b"bad key")
     sig = pb.native_nistp_ecdsa_sign(name, digest, priv)
 
@@ -693,7 +693,7 @@ def test_verification_rejects_invalid_public_keys(name: str) -> None:
 def test_sec1_encoding_roundtrips(name: str) -> None:
     nb = CURVES[name]["nbytes"]
     for _ in range(3):
-        _, pub = pb.native_nistp_keypair(name)
+        pub, _ = pb.native_nistp_keypair(name)
         uncompressed = pb.native_nistp_point_encode(name, pub)
         compressed = pb.native_nistp_point_encode(name, pub, compressed=True)
 
@@ -709,7 +709,7 @@ def test_sec1_encoding_roundtrips(name: str) -> None:
 def test_sec1_decoding_rejects_malformed_points(name: str) -> None:
     c = CURVES[name]
     nb, p = c["nbytes"], c["p"]
-    _, pub = pb.native_nistp_keypair(name)
+    pub, _ = pb.native_nistp_keypair(name)
     compressed = pb.native_nistp_point_encode(name, pub, compressed=True)
 
     bad_inputs = [
@@ -752,8 +752,8 @@ def test_ecdh_agrees_and_matches_reference(name: str) -> None:
     c = CURVES[name]
     nb, p, n = c["nbytes"], c["p"], c["n"]
     for _ in range(2):
-        priv_a, pub_a = pb.native_nistp_keypair(name)
-        priv_b, pub_b = pb.native_nistp_keypair(name)
+        pub_a, priv_a = pb.native_nistp_keypair(name)
+        pub_b, priv_b = pb.native_nistp_keypair(name)
         z_ab = pb.native_nistp_ecdh(name, priv_a, pub_b)
         z_ba = pb.native_nistp_ecdh(name, priv_b, pub_a)
         assert z_ab == z_ba
@@ -775,8 +775,8 @@ def test_ecdh_rejects_invalid_peer_keys(name: str) -> None:
     """
     c = CURVES[name]
     nb, p = c["nbytes"], c["p"]
-    priv, _ = pb.native_nistp_keypair(name)
-    _, peer = pb.native_nistp_keypair(name)
+    _, priv = pb.native_nistp_keypair(name)
+    peer, _ = pb.native_nistp_keypair(name)
 
     off_curve = bytearray(peer)
     off_curve[-1] ^= 0x01
@@ -799,7 +799,7 @@ def test_ecdh_rejects_invalid_peer_keys(name: str) -> None:
 @pytest.mark.parametrize("name", CURVE_NAMES)
 def test_ecdh_rejects_out_of_range_private_scalar(name: str) -> None:
     n, nb = CURVES[name]["n"], CURVES[name]["nbytes"]
-    _, peer = pb.native_nistp_keypair(name)
+    peer, _ = pb.native_nistp_keypair(name)
     for bad in (0, n):
         with pytest.raises(RuntimeError):
             pb.native_nistp_ecdh(name, bad.to_bytes(nb, "big"), peer)
@@ -810,8 +810,8 @@ def test_ecdh_rejects_out_of_range_private_scalar(name: str) -> None:
 # ---------------------------------------------------------------------------
 def test_keys_and_signatures_do_not_cross_curves() -> None:
     """A P-256 key must not be usable as a P-384 key, and vice versa."""
-    priv256, pub256 = pb.native_nistp_keypair("P-256")
-    _priv384, pub384 = pb.native_nistp_keypair("P-384")
+    pub256, priv256 = pb.native_nistp_keypair("P-256")
+    pub384, _priv384 = pb.native_nistp_keypair("P-384")
     digest = hashlib.sha256(b"cross").digest()
 
     sig256 = pb.native_nistp_ecdsa_sign("P-256", digest, priv256)
