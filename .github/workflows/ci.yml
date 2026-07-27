@@ -30,7 +30,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-        python-version: ["3.10", "3.11", "3.12", "3.13"]
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
         include:
           # ARM64 (AArch64) runners — GitHub-hosted ubuntu arm64
           - os: ubuntu-24.04-arm
@@ -482,6 +482,21 @@ jobs:
       # tests/test_documented_extras.py.
       run: |
         python tools/check_documented_extras.py
+
+    - name: "INVARIANT-33: Verify every fuzz harness is registered everywhere"
+      # A fuzz harness is registered in three independent lists: the CMake
+      # target lists, the fuzzing.yml job matrix, and oss-fuzz/build.sh.
+      # Nothing tied them together, and they had drifted: fuzz_agent_binding
+      # was added to CMake and to the CI matrix when the agent-binding layer
+      # landed, and never to build.sh — so OSS-Fuzz never built it. build.sh
+      # skips a missing target with a warning and exits 0, which is why the
+      # omission stayed invisible.
+      #
+      # A harness nobody runs is indistinguishable from one that finds
+      # nothing. Both directions are pinned by
+      # tests/test_fuzz_target_registration.py.
+      run: |
+        python tools/check_fuzz_target_registration.py
 
     - name: "INVARIANT-23: Secret scan (in-house)"
       # tools/check_secrets.py is written in house rather than adopting a

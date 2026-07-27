@@ -150,6 +150,73 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   **no dictionary at all**, printing only a one-line notice inside a 60-second
   fuzz log. This job loads every dictionary with a real libFuzzer binary and
   fails the build on any rejection.
+- **Ascon-AEAD128 and Ascon-Hash256 (NIST SP 800-232).** Native
+  `src/c/ama_ascon.c` plus a Python surface in `ama_cryptography/ascon.py`.
+  Ascon is the only NIST-standardized lightweight AEAD (SP 800-232 finalized
+  2025-08-13) and is the constrained-device member of this library's algorithm
+  set: a 320-bit state, no lookup tables anywhere, and a footprint suited to
+  targets that cannot host AES-NI-class acceleration.
+
+  It **replaces nothing**. AES-256-GCM and ChaCha20-Poly1305 remain the
+  default AEADs and SHA3-256 the default hash; on any host with AES-NI or
+  ARMv8 crypto extensions both incumbents are faster. This is additive
+  coverage for constrained targets, not a performance change. Rationale,
+  costs and reversal conditions are recorded in
+  `docs/decisions/0001-adopt-ascon.md` per the *Preserve and evolve
+  primitives* rule.
+
+  Self-contained — it references no other primitive and no PQC symbol — so it
+  lives in the unconditional source list and is present under
+  `AMA_USE_NATIVE_PQC=OFF` as well as the default build. That is deliberate:
+  the devices Ascon exists for are the ones most likely to build without
+  native post-quantum support.
+
+  Decryption is **verify-then-decrypt in two passes with no dynamic
+  allocation**: pass one derives the tag while writing nothing, and only a
+  verified tag admits pass two. On `AMA_ERROR_VERIFY_FAILED` the caller's
+  buffer is untouched — not overwritten, not zeroed — the same contract
+  `ama_chacha20poly1305_decrypt` and the scalar AES-GCM path provide. A heap
+  scratch buffer would have made this single-pass and was rejected: `malloc`
+  is frequently unavailable or forbidden on Ascon's target devices, and the
+  trade removes `AMA_ERROR_MEMORY` from the decrypt contract entirely. The
+  cost is a second pass on the success path only; encryption is unaffected.
+
+  **Interoperability warning, stated in three places** (C header, module
+  docstring, decision log): SP 800-232 is *not* byte-compatible with Ascon
+  v1.2 / CAESAR. Different rate (128 vs 64 bits), different IV, and a reversed
+  bit-ordering convention that makes the domain-separation constant
+  `0x8000000000000000` rather than `1`. A v1.2-derived implementation
+  round-trips against itself while producing non-standard tags on every
+  message carrying associated data.
+
+  Verified in layers, so a fault in the permutation cannot be cancelled by a
+  compensating fault in a mode: the bitsliced S-box against the SP 800-232
+  Table 6 lookup representation (32/32 inputs); `Ascon-p[12]` against the
+  precomputed initialization state published in Appendix A.3 (exact, all five
+  words); then **1089/1089** Ascon-AEAD128 vectors (encrypt *and* decrypt) and
+  **1025/1025** Ascon-Hash256 vectors, swept in both C and Python. dudect:
+  tag verify **t = +1.94**, encrypt **t = +0.20**, hash **t = +0.49** at 20k
+  measurements (gate |t| < 4.5), Overall PASS. `fuzz/fuzz_ascon.c` asserts
+  security properties rather than absence of crashes — round-trip fidelity,
+  tag-forgery rejection, associated-data binding including the empty-AD guard,
+  the fail-closed contract, and hash determinism — clean over 170,905
+  executions under ASan+UBSan.
+- **Python 3.14 support.** `cp314-*` added to the wheel matrix, and 3.14 added
+  to the `ci.yml` and `ci-build-test.yml` test matrices in the same change.
+  The equality is the point: `requires-python` carries no upper bound, so a
+  3.14 user was already being dropped into a from-source build needing a full
+  toolchain, and shipping a wheel for an interpreter no lane exercises would
+  have replaced that with an untested binary.
+- **INVARIANT-33 — every fuzz harness must be registered everywhere.** New
+  `tools/check_fuzz_target_registration.py`, run in `ci.yml`'s `code-quality`
+  job. A harness is registered in three independent lists — the CMake targets,
+  the `fuzzing.yml` matrix, and `oss-fuzz/build.sh` — and nothing tied them
+  together. They had drifted: `fuzz_agent_binding` reached CMake and CI but
+  never `build.sh`, so **OSS-Fuzz never built it**, invisibly, because
+  `build.sh` skips a missing target with a warning and exits 0. Now fixed for
+  both `fuzz_agent_binding` and `fuzz_ascon`, and enforced. A deliberate,
+  commented-out matrix exclusion (`fuzz_sphincs`, too slow for CI) is
+  distinguished from silent drift.
 - **INVARIANT-31 — every pull-request job must be reachable from its gate.**
   New `tools/check_gate_coverage.py`, run in `ci.yml`'s `code-quality` job.
   Branch protection here requires each workflow's aggregating gate context, so

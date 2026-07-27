@@ -218,11 +218,15 @@ jobs:
         env:
           # PYTHON VERSION MATRIX:
           # Build for the same Python range the test workflows already
-          # cover (3.10–3.13).  Skip PyPy and 32-bit musllinux variants;
-          # the native build under setup.py CMakeBuild is x86-64 / arm64
-          # only, and the ctypes shims in ama_cryptography/ don't gain
-          # anything from PyPy's tracing JIT.
-          CIBW_BUILD: "cp310-* cp311-* cp312-* cp313-*"
+          # cover (3.10–3.14).  That equality is the point: a wheel for an
+          # interpreter no CI lane exercises ships untested, so cp314 was
+          # added to ci.yml and ci-build-test.yml in the same commit as
+          # this line. Keep the three in step.
+          #
+          # Skip PyPy and 32-bit musllinux variants; the native build under
+          # setup.py CMakeBuild is x86-64 / arm64 only, and the ctypes shims
+          # in ama_cryptography/ don't gain anything from PyPy's tracing JIT.
+          CIBW_BUILD: "cp310-* cp311-* cp312-* cp313-* cp314-*"
           CIBW_SKIP: "pp* *_i686 *_ppc64le *_s390x *-musllinux_*"
           CIBW_ARCHS_LINUX: "auto64"
           CIBW_ARCHS_MACOS: "auto64"

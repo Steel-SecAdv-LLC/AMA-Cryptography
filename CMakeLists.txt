@@ -436,6 +436,13 @@ set(AMA_SOURCES
     # belongs in the unconditional list next to ama_hkdf.c rather than in the
     # AMA_USE_NATIVE_PQC block below.
     src/c/ama_agent_binding.c
+    # Ascon-AEAD128 + Ascon-Hash256 (NIST SP 800-232).  Self-contained: it
+    # references no PQC symbol and no other primitive in this library, so it
+    # belongs in the unconditional list.  That is deliberate rather than
+    # incidental — the constrained targets Ascon exists for are the ones most
+    # likely to build with AMA_USE_NATIVE_PQC=OFF, and an Ascon that vanished
+    # in that configuration would miss its own use case.
+    src/c/ama_ascon.c
     # SHA-2 primitives and their HMAC keyed constructions.  These are NOT
     # PQC-specific: the always-built ama_hkdf.c defines the public HKDF-SHA-2
     # variants (ama_hkdf_sha256/384/512) which call ama_hmac_sha256 /

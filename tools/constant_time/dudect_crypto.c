@@ -334,6 +334,112 @@ static double test_sha3_256(int iterations) {
 }
 
 /* -------------------------------------------------------------------
+ * Ascon (NIST SP 800-232)
+ * -------------------------------------------------------------------
+ * Ascon has no lookup tables at all — the 5-bit S-box is evaluated
+ * bitsliced across the five 64-bit state words — so unlike table-driven
+ * AES there is no cache-timing surface to begin with.  These lanes are
+ * here to prove that claim on the shipped binary rather than to assert
+ * it from the design, and to catch a future "optimisation" that
+ * introduced a table or a secret-dependent branch.
+ * ------------------------------------------------------------------- */
+
+static double test_ascon_aead_encrypt(int iterations) {
+    ttest_ctx_t ctx;
+    ttest_init(&ctx);
+
+    /* Fixed-vs-random key, identical everything else: the classic dudect
+     * setup for a keyed primitive.  Class 0 uses an all-zero key, class 1 a
+     * fresh random key each iteration. */
+    uint8_t key0[16], key1[16];
+    uint8_t nonce[16], pt[64], ct[64], tag[16];
+    memset(key0, 0x00, sizeof key0);
+    memset(nonce, 0x5A, sizeof nonce);
+    memset(pt, 0xA5, sizeof pt);
+
+    printf("  Testing Ascon-AEAD128 encrypt (%d iterations)...\n", iterations);
+
+    for (int i = 0; i < iterations; i++) {
+        int class_idx = rand() & 1;
+        if (class_idx == 1) {
+            random_bytes(key1, sizeof key1);
+        }
+
+        uint64_t start = get_time_ns();
+        ama_ascon_aead128_encrypt(class_idx == 0 ? key0 : key1, nonce,
+                                  pt, sizeof pt, NULL, 0, ct, tag);
+        uint64_t end = get_time_ns();
+
+        ttest_update(&ctx, class_idx, (double)(end - start));
+    }
+
+    return ttest_compute(&ctx);
+}
+
+static double test_ascon_tag_compare(int iterations) {
+    ttest_ctx_t ctx;
+    ttest_init(&ctx);
+
+    /* The side-channel-bearing measurement: does the time to REJECT a forged
+     * tag depend on how much of the tag was correct?  Class 0 flips the first
+     * byte, class 1 the last.  A memcmp-based verifier separates these
+     * immediately; ama_consttime_memcmp must not. */
+    uint8_t key[16], nonce[16], pt[64], ct[64], tag[16];
+    uint8_t forged_first[16], forged_last[16], out[64];
+    memset(key, 0x11, sizeof key);
+    memset(nonce, 0x22, sizeof nonce);
+    memset(pt, 0x33, sizeof pt);
+
+    ama_ascon_aead128_encrypt(key, nonce, pt, sizeof pt, NULL, 0, ct, tag);
+    memcpy(forged_first, tag, sizeof tag);
+    memcpy(forged_last, tag, sizeof tag);
+    forged_first[0] ^= 0x01;
+    forged_last[15] ^= 0x01;
+
+    printf("  Testing Ascon-AEAD128 tag compare (%d iterations)...\n",
+           iterations);
+
+    for (int i = 0; i < iterations; i++) {
+        int class_idx = rand() & 1;
+
+        uint64_t start = get_time_ns();
+        ama_ascon_aead128_decrypt(key, nonce, ct, sizeof ct, NULL, 0,
+                                  class_idx == 0 ? forged_first : forged_last,
+                                  out);
+        uint64_t end = get_time_ns();
+
+        ttest_update(&ctx, class_idx, (double)(end - start));
+    }
+
+    return ttest_compute(&ctx);
+}
+
+static double test_ascon_hash256(int iterations) {
+    ttest_ctx_t ctx;
+    ttest_init(&ctx);
+
+    uint8_t input0[64], input1[64];  /* Eight full Ascon-Hash256 rate blocks */
+    uint8_t digest[32];
+    memset(input0, 0x00, sizeof input0);
+    memset(input1, 0xFF, sizeof input1);
+
+    printf("  Testing Ascon-Hash256 (%d iterations)...\n", iterations);
+
+    for (int i = 0; i < iterations; i++) {
+        int class_idx = rand() & 1;
+
+        uint64_t start = get_time_ns();
+        ama_ascon_hash256(class_idx == 0 ? input0 : input1,
+                          sizeof input0, digest);
+        uint64_t end = get_time_ns();
+
+        ttest_update(&ctx, class_idx, (double)(end - start));
+    }
+
+    return ttest_compute(&ctx);
+}
+
+/* -------------------------------------------------------------------
  * Reporting
  * ------------------------------------------------------------------- */
 static void print_result(const char *name, double t_value) {
@@ -358,6 +464,9 @@ static int run_round(int iterations, int round_num) {
     double t_aes_decbr   = test_aes_gcm_decrypt_branch(iterations);
     double t_hkdf        = test_hkdf(iterations);
     double t_sha3        = test_sha3_256(iterations);
+    double t_ascon_enc   = test_ascon_aead_encrypt(iterations);
+    double t_ascon_tag   = test_ascon_tag_compare(iterations);
+    double t_ascon_hash  = test_ascon_hash256(iterations);
 
     printf("\n  Results (round %d):\n", round_num);
     print_result      ("Ed25519 sign           ", t_ed25519);
@@ -366,6 +475,9 @@ static int run_round(int iterations, int round_num) {
     print_result_info ("AES-GCM decrypt branch ", t_aes_decbr);
     print_result      ("HKDF-SHA3-256          ", t_hkdf);
     print_result      ("SHA3-256               ", t_sha3);
+    print_result      ("Ascon-AEAD128 encrypt  ", t_ascon_enc);
+    print_result      ("Ascon-AEAD128 tag cmp  ", t_ascon_tag);
+    print_result      ("Ascon-Hash256          ", t_ascon_hash);
 
     /* The AES-GCM "decrypt branch" test is informational by design — the
      * decrypt path skips CTR-mode plaintext recovery on tag failure (which
@@ -376,7 +488,10 @@ static int run_round(int iterations, int round_num) {
                    (fabs(t_aes_enc)    < T_THRESHOLD) &&
                    (fabs(t_aes_tagcmp) < T_THRESHOLD) &&
                    (fabs(t_hkdf)       < T_THRESHOLD) &&
-                   (fabs(t_sha3)       < T_THRESHOLD);
+                   (fabs(t_sha3)       < T_THRESHOLD) &&
+                   (fabs(t_ascon_enc)  < T_THRESHOLD) &&
+                   (fabs(t_ascon_tag)  < T_THRESHOLD) &&
+                   (fabs(t_ascon_hash) < T_THRESHOLD);
 
     printf("  Round %d: %s\n", round_num, all_pass ? "PASS" : "WARN");
     return all_pass;

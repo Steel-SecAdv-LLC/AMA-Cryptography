@@ -107,6 +107,14 @@ add_ama_test(test_hkdf test_hkdf.c)
 # unconditionally, like test_hkdf above: the binding layer calls only
 # SHA3-256 / HMAC-SHA3-256 / HKDF, so it needs no PQC-gated symbol.
 add_ama_test(test_agent_binding test_agent_binding.c)
+# Ascon (NIST SP 800-232).  Reads the vendored KAT corpus from
+# tests/kat/ascon/, so it needs the source tree as its working directory —
+# same arrangement as test_kat.  Ascon is in the unconditional source list,
+# so this test runs in the AMA_USE_NATIVE_PQC=OFF configuration too.
+add_executable(test_ascon test_ascon.c)
+target_link_libraries(test_ascon ama_cryptography_test)
+add_test(NAME test_ascon COMMAND test_ascon
+         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 add_ama_test(test_ed25519 test_ed25519.c)
 
 # RFC 8032 5.1.7 canonical-S enforcement (INVARIANT-26).  Built

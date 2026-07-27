@@ -45,6 +45,12 @@ jobs:
           # verdict, so it is fuzzed for fail-closed behaviour, not just for
           # memory safety.  Core (non-PQC) — needs SHA3/HMAC/HKDF only.
           - fuzz_agent_binding
+          # Ascon (NIST SP 800-232).  Asserts security properties rather than
+          # absence of crashes: round-trip fidelity, tag-forgery rejection,
+          # associated-data binding (including the empty-AD guard), the
+          # fail-closed contract, and hash determinism.  Core (non-PQC) —
+          # ama_ascon.c depends on no other primitive in this library.
+          - fuzz_ascon
 
     steps:
       - name: Checkout code

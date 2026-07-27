@@ -1963,6 +1963,124 @@ AMA_API ama_error_t ama_chacha20poly1305_decrypt(
 );
 
 /* ============================================================================
+ * ASCON — NIST SP 800-232 LIGHTWEIGHT CRYPTOGRAPHY
+ * ============================================================================
+ *
+ * Ascon-AEAD128 and Ascon-Hash256 as standardized in NIST SP 800-232 (final,
+ * 2025-08-13).  These are the constrained-device members of this library's
+ * algorithm set: no lookup tables, a 320-bit state, and a code footprint small
+ * enough for targets that cannot host AES-NI-class hardware acceleration.
+ *
+ * These functions depend only on this translation unit, so they are available
+ * in BOTH the default build and AMA_USE_NATIVE_PQC=OFF — which matters,
+ * because the constrained targets Ascon exists for are exactly the ones most
+ * likely to build without native post-quantum support.
+ *
+ * NOTE FOR INTEROPERABILITY: SP 800-232 is not byte-compatible with the
+ * earlier Ascon v1.2 / CAESAR submission (different rate, different IV,
+ * different bit-ordering convention).  Peers running a v1.2 implementation
+ * will not interoperate.  See src/c/ama_ascon.c for the specifics.
+ */
+
+/** Ascon-AEAD128 key length in bytes (128 bits). */
+#define AMA_ASCON_AEAD128_KEY_LEN 16
+/** Ascon-AEAD128 nonce length in bytes (128 bits). */
+#define AMA_ASCON_AEAD128_NONCE_LEN 16
+/** Ascon-AEAD128 authentication tag length in bytes (128 bits). */
+#define AMA_ASCON_AEAD128_TAG_LEN 16
+/** Ascon-AEAD128 rate in bytes (128 bits). */
+#define AMA_ASCON_AEAD128_RATE 16
+/** Ascon-Hash256 digest length in bytes (256 bits). */
+#define AMA_ASCON_HASH256_DIGEST_LEN 32
+/** Ascon-Hash256 rate in bytes (64 bits). */
+#define AMA_ASCON_HASH256_RATE 8
+
+/**
+ * @brief Ascon-Hash256 (NIST SP 800-232 Algorithm 5)
+ *
+ * @param message     Message to hash (may be NULL when message_len is 0)
+ * @param message_len Message length in bytes
+ * @param digest      Output: 32-byte digest
+ * @return AMA_SUCCESS or AMA_ERROR_INVALID_PARAM
+ */
+AMA_API ama_error_t ama_ascon_hash256(
+    const uint8_t *message, size_t message_len,
+    uint8_t digest[AMA_ASCON_HASH256_DIGEST_LEN]
+);
+
+/**
+ * @brief Ascon-AEAD128 authenticated encryption (NIST SP 800-232 Algorithm 3)
+ *
+ * @param key        16-byte key
+ * @param nonce      16-byte nonce.  MUST be unique per key: Ascon-AEAD128 is
+ *                   a nonce-based AEAD with no nonce-misuse resistance, and
+ *                   repeating a nonce under one key reveals the XOR of the
+ *                   corresponding plaintexts and can expose the state.
+ * @param plaintext  Plaintext (may be NULL when pt_len is 0)
+ * @param pt_len     Plaintext length in bytes
+ * @param aad        Associated data (may be NULL when aad_len is 0)
+ * @param aad_len    Associated data length in bytes
+ * @param ciphertext Output: ciphertext, same length as plaintext
+ * @param tag        Output: 16-byte authentication tag
+ * @return AMA_SUCCESS or AMA_ERROR_INVALID_PARAM
+ */
+AMA_API ama_error_t ama_ascon_aead128_encrypt(
+    const uint8_t key[AMA_ASCON_AEAD128_KEY_LEN],
+    const uint8_t nonce[AMA_ASCON_AEAD128_NONCE_LEN],
+    const uint8_t *plaintext, size_t pt_len,
+    const uint8_t *aad, size_t aad_len,
+    uint8_t *ciphertext,
+    uint8_t tag[AMA_ASCON_AEAD128_TAG_LEN]
+);
+
+/**
+ * @brief Ascon-AEAD128 authenticated decryption (NIST SP 800-232 Algorithm 4)
+ *
+ * Verify-then-decrypt, in two passes over the ciphertext: the first derives
+ * the tag while writing nothing, and only a verified tag admits the second,
+ * which emits plaintext.  On AMA_ERROR_VERIFY_FAILED the plaintext buffer is
+ * not modified — not overwritten and not zeroed — matching the
+ * ChaCha20-Poly1305 and scalar AES-GCM decrypt contracts.
+ *
+ * Performs no dynamic allocation, so it is usable on targets without a heap;
+ * the cost is a second pass on the success path only.
+ *
+ * @param key        16-byte key
+ * @param nonce      16-byte nonce
+ * @param ciphertext Ciphertext (may be NULL when ct_len is 0)
+ * @param ct_len     Ciphertext length in bytes
+ * @param aad        Associated data (may be NULL when aad_len is 0)
+ * @param aad_len    Associated data length in bytes
+ * @param tag        16-byte tag to verify
+ * @param plaintext  Output: plaintext, same length as ciphertext; not
+ *                   modified on tag mismatch
+ * @return AMA_SUCCESS, AMA_ERROR_VERIFY_FAILED or AMA_ERROR_INVALID_PARAM
+
+ */
+AMA_API ama_error_t ama_ascon_aead128_decrypt(
+    const uint8_t key[AMA_ASCON_AEAD128_KEY_LEN],
+    const uint8_t nonce[AMA_ASCON_AEAD128_NONCE_LEN],
+    const uint8_t *ciphertext, size_t ct_len,
+    const uint8_t *aad, size_t aad_len,
+    const uint8_t tag[AMA_ASCON_AEAD128_TAG_LEN],
+    uint8_t *plaintext
+);
+
+/**
+ * @brief Apply Ascon-p[rounds] to a raw state — test support only
+ *
+ * Exposed so the known-answer tests can check the permutation directly
+ * against the precomputed initialization state published in SP 800-232
+ * Appendix A.3 and the S-box lookup table in Table 6.  A permutation verified
+ * only through the modes would let a fault in one cancel a fault in the
+ * other.  Not part of the supported API surface.
+ *
+ * @param state  In/out: five 64-bit state words
+ * @param rounds Round count, 1..16; the call is a no-op outside that range
+ */
+AMA_API void ama_ascon_permutation_for_test(uint64_t state[5], unsigned rounds);
+
+/* ============================================================================
  * DIRECT PQC ALGORITHM ACCESS
  * ============================================================================ */
 

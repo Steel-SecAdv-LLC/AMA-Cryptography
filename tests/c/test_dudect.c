@@ -1026,6 +1026,195 @@ static double test_hmac_verify(int iterations) {
 }
 
 /* -----------------------------------------------------------------------
+ * Test: Ascon-AEAD128 tag verify — the *position* of a forgery must not be
+ * readable from the clock.
+ *
+ * Class 0: forged tag differing in byte 0.
+ * Class 1: forged tag differing in byte 15.
+ * Both return AMA_ERROR_VERIFY_FAILED.
+ *
+ * Why both classes are forgeries, rather than the usual good-vs-bad pair:
+ * ama_ascon_aead128_decrypt is verify-then-decrypt in two passes, so an
+ * ACCEPTED tag does roughly twice the work of a rejected one — a structural
+ * wall-clock delta by construction, exactly the artefact the
+ * ChaCha20-Poly1305 lane above documents having been bitten by.  Timing
+ * good against bad here would measure that design decision, not a leak, and
+ * the accept/reject outcome is already public via the return code anyway.
+ *
+ * What an attacker actually wants is to walk the tag space one byte at a
+ * time, learning how much of a guessed tag was correct.  That is precisely
+ * what ama_consttime_memcmp must hide, and it is what these two classes
+ * isolate: identical inputs, identical code path, identical number of
+ * passes, differing only in where the tag mismatches.
+ *
+ * Non-empty ciphertext is deliberate — unlike the ChaCha lane, both classes
+ * here execute the same single pass over it, so it adds no structural delta
+ * and does exercise the real absorb path.
+ * ----------------------------------------------------------------------- */
+static double test_ascon_tag_verify(int iterations) {
+    dudect_ctx_t ctx;
+    dudect_ctx_init(&ctx, "Ascon-AEAD128 tag verify (forgery position)");
+
+    uint8_t key[AMA_ASCON_AEAD128_KEY_LEN];
+    uint8_t nonce[AMA_ASCON_AEAD128_NONCE_LEN];
+    uint8_t aad[32];
+    uint8_t pt[64], ct[64], out[64];
+    uint8_t tag_good[AMA_ASCON_AEAD128_TAG_LEN];
+    uint8_t tag_first[AMA_ASCON_AEAD128_TAG_LEN];
+    uint8_t tag_last[AMA_ASCON_AEAD128_TAG_LEN];
+
+    random_bytes(key, sizeof(key));
+    random_bytes(nonce, sizeof(nonce));
+    random_bytes(aad, sizeof(aad));
+    random_bytes(pt, sizeof(pt));
+
+    if (ama_ascon_aead128_encrypt(key, nonce, pt, sizeof(pt),
+                                  aad, sizeof(aad),
+                                  ct, tag_good) != AMA_SUCCESS) {
+        fprintf(stderr,
+                "  FAIL: Ascon dudect setup encrypt failed; "
+                "tag-verify lane never executed\n");
+        dudect_print_result(&ctx);
+        return DUDECT_FATAL_SENTINEL;
+    }
+
+    memcpy(tag_first, tag_good, sizeof(tag_good));
+    memcpy(tag_last, tag_good, sizeof(tag_good));
+    tag_first[0] ^= 0x01;
+    tag_last[AMA_ASCON_AEAD128_TAG_LEN - 1] ^= 0x01;
+
+    /* Both classes MUST be refused.  If a regression made either verify,
+     * both classes would time the same path and the lane would report a
+     * clean t while testifying to nothing. */
+    int rc_mismatches = 0;
+
+    for (int i = 0; i < iterations && !g_timeout_hit; i++) {
+        int class_idx = rand() & 1;
+        /* Pointer select OUTSIDE the timing region. */
+        const uint8_t *tag_use = class_idx ? tag_last : tag_first;
+
+        uint64_t start = dudect_get_time_ns();
+        volatile ama_error_t rc =
+            ama_ascon_aead128_decrypt(key, nonce, ct, sizeof(ct),
+                                      aad, sizeof(aad), tag_use, out);
+        uint64_t end = dudect_get_time_ns();
+
+        if (rc != AMA_ERROR_VERIFY_FAILED) rc_mismatches++;
+
+        dudect_record(&ctx, class_idx, (double)(end - start));
+    }
+
+    if (rc_mismatches != 0) {
+        fprintf(stderr,
+                "  FAIL: Ascon tag-verify lane saw %d non-refusal(s); "
+                "a forged tag was accepted\n", rc_mismatches);
+        dudect_print_result(&ctx);
+        return DUDECT_FATAL_SENTINEL;
+    }
+
+    dudect_print_result(&ctx);
+    return dudect_get_t(&ctx);
+}
+
+/* -----------------------------------------------------------------------
+ * Test: Ascon-AEAD128 encrypt — timing must not depend on the key.
+ *
+ * Class 0: fixed all-zero key.  Class 1: fresh random key each iteration.
+ * Everything else is identical.  Ascon has no lookup tables at all, so this
+ * lane should be flat by construction; it exists to catch a future
+ * "optimisation" that introduced one, which is exactly how table-driven AES
+ * acquired its cache-timing surface.
+ * ----------------------------------------------------------------------- */
+static double test_ascon_encrypt_key_independent(int iterations) {
+    dudect_ctx_t ctx;
+    dudect_ctx_init(&ctx, "Ascon-AEAD128 encrypt (key-independent)");
+
+    uint8_t key_fixed[AMA_ASCON_AEAD128_KEY_LEN];
+    uint8_t key_random[AMA_ASCON_AEAD128_KEY_LEN];
+    uint8_t nonce[AMA_ASCON_AEAD128_NONCE_LEN];
+    uint8_t pt[64], ct[64], tag[AMA_ASCON_AEAD128_TAG_LEN];
+
+    memset(key_fixed, 0x00, sizeof(key_fixed));
+    random_bytes(nonce, sizeof(nonce));
+    memset(pt, 0xA5, sizeof(pt));
+
+    int rc_failures = 0;
+
+    for (int i = 0; i < iterations && !g_timeout_hit; i++) {
+        int class_idx = rand() & 1;
+        if (class_idx == 1) {
+            random_bytes(key_random, sizeof(key_random));
+        }
+        /* Pointer select OUTSIDE the timing region. */
+        const uint8_t *key_use = class_idx ? key_random : key_fixed;
+
+        uint64_t start = dudect_get_time_ns();
+        volatile ama_error_t rc =
+            ama_ascon_aead128_encrypt(key_use, nonce, pt, sizeof(pt),
+                                      NULL, 0, ct, tag);
+        uint64_t end = dudect_get_time_ns();
+
+        if (rc != AMA_SUCCESS) rc_failures++;
+
+        dudect_record(&ctx, class_idx, (double)(end - start));
+    }
+
+    if (rc_failures != 0) {
+        fprintf(stderr,
+                "  FAIL: Ascon encrypt lane saw %d failure(s)\n", rc_failures);
+        dudect_print_result(&ctx);
+        return DUDECT_FATAL_SENTINEL;
+    }
+
+    dudect_print_result(&ctx);
+    return dudect_get_t(&ctx);
+}
+
+/* -----------------------------------------------------------------------
+ * Test: Ascon-Hash256 — timing must not depend on the message content.
+ *
+ * Class 0: all-zero input.  Class 1: all-ones input.  Same length, so the
+ * block count is identical and only the absorbed values differ.
+ * ----------------------------------------------------------------------- */
+static double test_ascon_hash256_input_independent(int iterations) {
+    dudect_ctx_t ctx;
+    dudect_ctx_init(&ctx, "Ascon-Hash256 (input-independent)");
+
+    uint8_t input_zero[64], input_ones[64];
+    uint8_t digest[AMA_ASCON_HASH256_DIGEST_LEN];
+
+    memset(input_zero, 0x00, sizeof(input_zero));
+    memset(input_ones, 0xFF, sizeof(input_ones));
+
+    int rc_failures = 0;
+
+    for (int i = 0; i < iterations && !g_timeout_hit; i++) {
+        int class_idx = rand() & 1;
+        /* Pointer select OUTSIDE the timing region. */
+        const uint8_t *in = class_idx ? input_ones : input_zero;
+
+        uint64_t start = dudect_get_time_ns();
+        volatile ama_error_t rc =
+            ama_ascon_hash256(in, sizeof(input_zero), digest);
+        uint64_t end = dudect_get_time_ns();
+
+        if (rc != AMA_SUCCESS) rc_failures++;
+
+        dudect_record(&ctx, class_idx, (double)(end - start));
+    }
+
+    if (rc_failures != 0) {
+        fprintf(stderr,
+                "  FAIL: Ascon-Hash256 lane saw %d failure(s)\n", rc_failures);
+        dudect_print_result(&ctx);
+        return DUDECT_FATAL_SENTINEL;
+    }
+
+    dudect_print_result(&ctx);
+    return dudect_get_t(&ctx);
+}
+
+/* -----------------------------------------------------------------------
  * Test 9b: Agent-instance binding check — the policy verdict must not be
  * readable from the clock.
  *
@@ -1622,8 +1811,8 @@ typedef struct {
 } test_result_t;
 
 /* Upper bound on the number of lanes `run_all_tests` registers.
- * Counted by hand: utility(5) + primitives(8) + classical-kex(2) +
- * threshold(3) + PQC(3) = 21.  Reserve 32 to give 11 lanes of
+ * Counted by hand: utility(5) + primitives(8) + ascon(3) +
+ * classical-kex(2) + threshold(3) + PQC(3) = 24.  Reserve 32 to give 8 lanes of
  * headroom for future additions without silently overflowing the
  * fixed-size results array.  Bumping this constant is the only place
  * a lane addition needs to be capacity-checked. */
@@ -1704,6 +1893,21 @@ static int run_all_tests(int iterations, test_result_t *results, int *num_result
     DUDECT_REGISTER_LANE(results, idx,
         "ChaCha20-Poly1305 tag verify",
         test_chacha20poly1305_tag_verify(iterations), 0);
+    /* Ascon (NIST SP 800-232).  All three are strict.  The tag lane times
+     * two FORGERIES differing only in mismatch position rather than the
+     * usual good-vs-bad pair, because ama_ascon_aead128_decrypt is
+     * verify-then-decrypt: an accepted tag does a second pass, which is a
+     * structural delta by design and not a leak.  See the header comment on
+     * test_ascon_tag_verify(). */
+    DUDECT_REGISTER_LANE(results, idx,
+        "Ascon-AEAD128 tag verify",
+        test_ascon_tag_verify(iterations), 0);
+    DUDECT_REGISTER_LANE(results, idx,
+        "Ascon-AEAD128 encrypt",
+        test_ascon_encrypt_key_independent(iterations), 0);
+    DUDECT_REGISTER_LANE(results, idx,
+        "Ascon-Hash256",
+        test_ascon_hash256_input_independent(iterations), 0);
     DUDECT_REGISTER_LANE(results, idx,
         "Argon2id legacy verify",
         test_argon2id_legacy_verify(iterations), 0);

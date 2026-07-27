@@ -1204,5 +1204,46 @@ instruction fails, since an extra nobody is told about may as well not exist.
 
 ---
 
+## INVARIANT-33 — Every Fuzz Harness Must Be Registered Everywhere
+
+**Statement.** Every translation unit in `fuzz/` that defines
+`LLVMFuzzerTestOneInput` **must** appear in the CMake target lists, in the
+`fuzzing.yml` job matrix (actively, or commented out with a recorded reason),
+and in `oss-fuzz/build.sh`. No registry may name a target with no source file.
+
+**Why.** A harness is registered in three independent lists, and nothing tied
+them together. `oss-fuzz/build.sh` even carries the comment *"Keep in sync
+with fuzz/CMakeLists.txt"* — and had drifted anyway: `fuzz_agent_binding` was
+added to the CMake lists and to the CI matrix when the agent-binding layer
+landed, and never to `build.sh`. OSS-Fuzz therefore never built it. The
+omission was invisible because `build.sh` skips a missing target with a
+warning and exits 0.
+
+That is the worst shape a coverage gap can take. The harness exists, it is
+exercised in CI, and the continuous fuzzing meant to run it for months does
+not — so the project believes it has coverage it does not have. A harness
+nobody runs is indistinguishable from one that finds nothing.
+
+**Enforcement.** `tools/check_fuzz_target_registration.py`, run in the
+`code-quality` job of `ci.yml`. A commented-out matrix entry counts as
+registered: not every harness belongs in the per-PR lane (`fuzz_sphincs` is
+excluded because SPHINCS+ is too slow for CI, with the reason recorded beside
+it), but such a target must still be in both build lanes so OSS-Fuzz keeps
+running it. The checker distinguishes a *deliberate, documented* exclusion
+from silent drift.
+
+**Verification.** `tests/test_fuzz_target_registration.py` pins both
+directions over a synthetic tree — missing from OSS-Fuzz, missing from CMake,
+a registry naming a nonexistent target, and a fully consistent tree — plus the
+repository's own registration. Three non-detection cases are pinned
+specifically because the checker's first draft produced them as false
+positives, and each would have pushed a maintainer to "fix" a repository that
+was already correct: a support translation unit that is not a harness
+(`fuzz_rng.c`), a file that merely *names* `LLVMFuzzerTestOneInput` in a
+comment, and a CMake comment containing a parenthesis that truncated the
+parsed block.
+
+---
+
 _Maintained by Steel Security Advisors LLC._
 _Last updated: 2026-07-27_
