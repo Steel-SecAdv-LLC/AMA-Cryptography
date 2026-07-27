@@ -1211,6 +1211,11 @@ instruction fails, since an extra nobody is told about may as well not exist.
 `fuzzing.yml` job matrix (actively, or commented out with a recorded reason),
 and in `oss-fuzz/build.sh`. No registry may name a target with no source file.
 
+Every Python harness under `fuzz/python/` **must** be run by `fuzzing.yml`.
+Those are not libFuzzer targets, so they have one registry rather than three,
+and the same rule applies: a harness that exists and is never run is
+indistinguishable from one that finds nothing.
+
 **Why.** A harness is registered in three independent lists, and nothing tied
 them together. `oss-fuzz/build.sh` even carries the comment *"Keep in sync
 with fuzz/CMakeLists.txt"* — and had drifted anyway: `fuzz_agent_binding` was
@@ -1232,6 +1237,43 @@ it), but such a target must still be in both build lanes so OSS-Fuzz keeps
 running it. The checker distinguishes a *deliberate, documented* exclusion
 from silent drift.
 
+**The Python lane, and why it exists.** `ama_cryptography/_asn1.py` and
+`key_formats.py` are hostile-input parsers in exactly the sense the fifteen C
+harnesses are — anyone who can hand you a key file reaches them — and they had
+no harness at all. What they had was a deterministic mutation sweep inside
+pytest: 120 fixed mutations per algorithm from one seed, which explores the same
+neighbourhood on every run for ever. That is worth having and it is not fuzzing,
+so it was kept and `fuzz/python/fuzz_key_formats.py` was added beside it.
+
+The harness is AMA's own — its generator, mutator and seed corpus are in the
+file — so the lane depends on no third-party fuzzing engine (INVARIANT-36).
+Atheris is supported via `--atheris` when it happens to be installed,
+deliberately as a bonus rather than as the lane.
+
+It earned its place immediately. Five real parser defects on its first
+campaigns, each one an input reaching a layer not written for it:
+
+1. `UnicodeDecodeError` out of `_as_der`, on PEM-as-bytes containing a
+   non-ASCII octet — a `ValueError` subclass, so `except KeyFormatError` at the
+   boundary was not sufficient.
+2. `TypeError: unhashable type` out of `_cose_algorithm`, from a nested CBOR map
+   used as a `crv` value. The JSON side already carried this fix; the CBOR side
+   did not.
+3. Strict-RFC-7468 PEM accepting a trailing `0x1F`, because Python's
+   `str.strip()` counts U+001C–U+001F, U+0085 and U+00A0 as whitespace and
+   RFC 7468 does not.
+4. Non-canonical base64 accepted: `b64decode(validate=True)` checks the
+   alphabet, not the padding bits, so `…Of3N=` and `…Of3M=` decoded to one key.
+   Found after 7.5 million executions.
+5. An out-of-range EC private scalar in a key file raising `RuntimeError` past
+   the format layer — which in turn surfaced that `secp256k1` accepted a scalar
+   at or above the group order where the NIST curves refused it, so one library
+   was strict on one curve and lax on another. Found after 17.8 million
+   executions.
+
+Each is pinned by a named regression test in `tests/test_key_formats.py`, so
+pytest catches a recurrence without waiting for a campaign to rediscover it.
+
 **Verification.** `tests/test_fuzz_target_registration.py` pins both
 directions over a synthetic tree — missing from OSS-Fuzz, missing from CMake,
 a registry naming a nonexistent target, and a fully consistent tree — plus the
@@ -1242,6 +1284,14 @@ was already correct: a support translation unit that is not a harness
 (`fuzz_rng.c`), a file that merely *names* `LLVMFuzzerTestOneInput` in a
 comment, and a CMake comment containing a parenthesis that truncated the
 parsed block.
+
+`tests/test_python_fuzz_harness.py` does the same for the Python lane, and for a
+reason specific to it: the harness runs for a time budget in `fuzzing.yml`, so
+nothing in the ordinary suite would notice if its contract check broke — it
+would run its millions of executions and report success for ever. So the suite
+drives it in-process and violates each contract it claims (an unexpected
+exception, a non-canonical acceptance, a slow parse, a missing artifact) to
+confirm each is still caught.
 
 ---
 

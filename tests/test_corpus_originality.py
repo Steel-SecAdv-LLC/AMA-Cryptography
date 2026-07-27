@@ -154,7 +154,10 @@ def test_a_directory_of_key_files_in_the_corpus_is_caught(
                    "title": "t", "revision": "r"},
         "records": [],
     }))
-    (corpus / "somevendor" / "P-256.key.pem").write_text("-----BEGIN PRIVATE KEY-----\n")
+    # Deliberately *not* a literal PEM header: the check under test keys off
+    # the directory, not the contents, and a real header here would be a finding
+    # for tools/check_secrets.py (INVARIANT-23) in this very file.
+    (corpus / "somevendor" / "P-256.key.pem").write_text("placeholder\n")
     problems = tool.scan_corpus_sources(corpus)
     assert any("unexpected directory" in p for p in problems), problems
 

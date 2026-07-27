@@ -4234,6 +4234,14 @@ def native_secp256k1_pubkey_from_privkey(privkey: bytes) -> bytes:
 
     pubkey_buf = ctypes.create_string_buffer(SECP256K1_PUBKEY_BYTES)
     rc = _native_lib.ama_secp256k1_pubkey_from_privkey(privkey, pubkey_buf)
+    if rc == AMA_ERROR_INVALID_PARAM:
+        # A property of the input, not an internal failure — see the matching
+        # note on native_nistp_pubkey_from_privkey. SEC 1 §3.2.1 requires a
+        # private key in [1, n-1]; the native side now checks both ends.
+        raise ValueError(
+            "secp256k1 private scalar is out of range: a private key must be in "
+            "[1, n-1], and this one is zero or at least the group order"
+        )
     if rc != 0:
         raise RuntimeError(f"secp256k1 pubkey derivation failed (rc={rc})")
 
@@ -4961,9 +4969,15 @@ def native_nistp_pubkey_from_privkey(curve: Union[int, str], privkey: bytes) -> 
     Derive the X||Y public key for an existing private scalar.
 
     Raises:
-        ValueError: If the curve is unknown or the key length is wrong.
-        RuntimeError: If the native library is unavailable or the scalar is
-            zero or >= n.
+        ValueError: If the curve is unknown, the key length is wrong, or the
+            scalar is not a valid private key (zero, or >= n). All three are
+            properties of the *input*, which matters because this is reachable
+            from the key-file parser: ``load_pkcs8`` turns a ``ValueError`` here
+            into a ``KeyFormatError``, and previously could not, because an
+            out-of-range scalar arrived as a ``RuntimeError`` and escaped the
+            format layer entirely. Found by fuzz/python/fuzz_key_formats.py.
+        RuntimeError: If the native library is unavailable, or on an internal
+            failure that is not attributable to the arguments.
     """
     cid = _nistp_curve_id(curve)
     nb = NISTP_FIELD_BYTES[cid]
@@ -4972,6 +4986,11 @@ def native_nistp_pubkey_from_privkey(curve: Union[int, str], privkey: bytes) -> 
     _nistp_require_native()
     pub = ctypes.create_string_buffer(2 * nb)
     rc = _native_lib.ama_nistp_pubkey_from_privkey(cid, bytes(privkey), pub)
+    if rc == AMA_ERROR_INVALID_PARAM:
+        raise ValueError(
+            "NIST curve private scalar is out of range: a private key must be in "
+            "[1, n-1], and this one is zero or at least the group order"
+        )
     if rc != 0:
         raise RuntimeError(f"NIST curve public-key derivation failed (rc={rc})")
     return bytes(pub.raw[: 2 * nb])

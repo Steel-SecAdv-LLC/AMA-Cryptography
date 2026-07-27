@@ -125,6 +125,39 @@ bodies of subtle carry code; one generic, uniformly constant-time kernel is the
 defensible trade at this stage. The cost is measured below and stated honestly
 rather than hidden.
 
+### Fixed-base comb for the generator
+
+The generator is a public constant, so the doublings its scalar multiplication
+performs can be done once at start-up instead of on every call — and doublings
+are where the time went: the variable-base multiplier runs 132 windows × 4
+doublings on P-521, and 528 doublings is most of a 2 ms operation.
+
+`nistp_scalar_mul_generator` splits the scalar into four blocks and precomputes
+every subset sum of the block-aligned multiples `2^(e·j)·G`. One pass over `e`
+bit positions then does *one* doubling and *one* addition each: 131 and 131 on
+P-521, against 528 and 132.
+
+**Four blocks, not eight.** A comb's table has `2^blocks` entries and must be
+read with a full linear scan to keep the access trace independent of the
+scalar — the same requirement, for the same reason, as the variable-base
+window. Doubling the block count halves the iterations and doubles the
+per-iteration scan, so the win flattens while the constant-time cost grows.
+Sixteen entries also keeps the scan *identical in shape* to the one already
+reviewed, and the table at 3.5 KB per curve stays in L1 where a 56 KB one would
+not.
+
+**The generator only.** ECDH multiplies a peer-supplied point and keeps the
+variable-base multiplier: precomputing for a base that changes every call buys
+nothing, and a table built from attacker-supplied input is a surface this does
+not need. The measurements below show exactly that split — every fixed-base
+operation moves, ECDH and verification do not.
+
+The comb is checked against the same naive double-and-add reference as the
+windowed path, over the same boundary lattice, in `tests/c/test_nistp.c` — not
+against the multiplier it replaced. A divergence would produce a public key that
+is internally consistent and wrong: every self-round-trip would pass, and the
+first thing to notice would be a peer.
+
 Point arithmetic is Jacobian with the `a = −3` doubling formula. The addition
 resolves **every** exceptional case branchlessly — either operand at infinity,
 `P == Q`, `P == −Q` — by computing all candidates and selecting with masks. That
@@ -151,20 +184,47 @@ Verification is variable time by design — every input is public. This matches
 
 ### Measured cost
 
-Single core, x86-64, `-O3 -flto`, generic Montgomery path:
+Single core, x86-64, `-O3 -flto`, generic Montgomery path. Median of 60 runs,
+measured before and after the fixed-base comb on the same machine in the same
+session:
 
-| Curve | Sign | Verify |
-|---|---|---|
-| P-256 | ~0.37 ms | ~0.54 ms |
-| P-384 | ~0.90 ms | ~1.38 ms |
-| P-521 | ~2.24 ms | ~3.57 ms |
+| Curve | Operation | Before | After | Change |
+|---|---|---:|---:|---:|
+| P-256 | keygen | 0.334 ms | 0.183 ms | **1.83×** |
+| P-256 | public key from private | 0.335 ms | 0.178 ms | **1.88×** |
+| P-256 | sign | 0.377 ms | 0.217 ms | **1.74×** |
+| P-256 | verify | 0.559 ms | 0.545 ms | — |
+| P-256 | ECDH | 0.340 ms | 0.338 ms | — |
+| P-384 | keygen | 0.811 ms | 0.467 ms | **1.74×** |
+| P-384 | sign | 0.874 ms | 0.537 ms | **1.63×** |
+| P-384 | verify | 1.360 ms | 1.376 ms | — |
+| P-384 | ECDH | 0.798 ms | 0.803 ms | — |
+| P-521 | keygen | 2.014 ms | 1.189 ms | **1.69×** |
+| P-521 | sign | 2.244 ms | 1.398 ms | **1.61×** |
+| P-521 | verify | 3.570 ms | 3.661 ms | — |
+| P-521 | ECDH | 2.047 ms | 2.038 ms | — |
 
-This is several times slower than a curve-specialised implementation with a
-precomputed generator table and Solinas reduction. It is stated rather than
-elided: the correctness and constant-time properties came first, and the two
-obvious next steps — a precomputed comb for the fixed generator, and per-curve
-Solinas reduction for P-256 — are additive optimisations that change no
-behaviour and can be added under the existing differential test.
+The shape of that table is the point. Every operation whose base is the fixed
+generator — key generation, public-key derivation, the `k·G` in signing — moves
+by 1.6–1.9×. Verification (Shamir's trick over two public points) and ECDH
+(a peer-supplied base) do not move at all, which is what confirms the change is
+scoped where it was meant to be rather than perturbing the field arithmetic.
+
+Still slower than a curve-specialised implementation, and still stated rather
+than elided. What remains, with an honest note on each:
+
+* **Per-curve Solinas reduction.** The largest remaining win and the largest
+  remaining audit surface: three separate bodies of subtle carry code against
+  one generic kernel that is uniformly constant-time today. It needs its own
+  differential campaign against the Montgomery path, which the existing
+  `test_nistp` harness is the right place for.
+* **Scalar blinding and coordinate randomisation.** Both consume entropy, and
+  `ama_nistp_pubkey_from_privkey` is reachable from the *key-file parser* — the
+  same path where `ama_ml_kem_privkey_check` was made deterministic in this
+  branch precisely because a validation predicate must not draw from the CSPRNG.
+  So these belong on the signing path, where a per-signature draw is already
+  happening, and not on derivation. That is a design decision to make
+  deliberately rather than a line to add.
 
 ## Validation
 

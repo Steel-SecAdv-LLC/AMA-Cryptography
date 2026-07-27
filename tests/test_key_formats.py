@@ -1935,6 +1935,169 @@ def test_the_process_wide_policy_is_honoured_by_load_pkcs8() -> None:
 
 
 # ===========================================================================
+# 8d. Defects found by fuzz/python/fuzz_key_formats.py
+# ===========================================================================
+# Each of these was a live parser defect on this branch, found by the harness
+# and pinned here so pytest catches a regression without waiting for a fuzz
+# campaign to rediscover it. All four are the same shape: an input reaches a
+# layer that was not written for it, and the failure escapes as something the
+# caller cannot catch, or as a second encoding of one key.
+def test_pem_bytes_with_a_non_ascii_octet_raise_keyformaterror() -> None:
+    """``_as_der`` decoded PEM-as-bytes with ``"ascii"``/``strict``.
+
+    ``UnicodeDecodeError`` is a ``ValueError``, not a ``KeyFormatError``, so a
+    file beginning with a PEM header and containing one non-ASCII octet escaped
+    the format layer entirely. ``except KeyFormatError`` at the boundary is
+    supposed to be sufficient; here it was not.
+    """
+    public, _ = make_key("Ed25519")
+    good = public.to_pem().encode()
+    assert kf.load_spki(good) == public
+    for position in (10, len(good) // 2, len(good) - 2):
+        corrupted = bytearray(good)
+        corrupted[position] = 0xDB
+        with pytest.raises(KeyFormatError):
+            kf.load_spki(bytes(corrupted))
+        with pytest.raises(KeyFormatError):
+            kf.load_pkcs8(bytes(corrupted))
+
+
+def test_a_cose_curve_label_that_is_not_an_integer_is_refused() -> None:
+    """``_cose_algorithm`` looked ``crv`` up in a dict without checking its type.
+
+    A COSE_Key is decoded CBOR, so ``crv`` can be a nested map or array — both
+    unhashable in Python, so the lookup raised ``TypeError: unhashable type``.
+    The JSON side already carried this fix; the CBOR side did not.
+    """
+    public, _ = make_key("P-256")
+    for crv in ({1: 2}, [1, 2], b"P-256", "P-256", True, None):
+        decoded = cbor_decode_canonical(public.to_cose())
+        decoded[-1] = crv
+        with pytest.raises((KeyFormatError, UnsupportedKeyFormatError)):
+            kf.cose_to_public_key(cbor_encode_canonical(decoded))
+
+
+@pytest.mark.parametrize("trailing", ["\x1f", "\x1c", "\x0b", "\x0c", "\x85", "\xa0"])
+def test_pem_with_a_unicode_whitespace_suffix_is_refused(trailing: str) -> None:
+    """``str.strip()`` is Unicode-aware and RFC 7468 is not.
+
+    Python counts U+001C..U+001F, U+000B, U+000C, U+0085, U+00A0 and several
+    Unicode spaces as whitespace. None of them is whitespace in RFC 7468, which
+    is defined over printable ASCII plus CR and LF — so a key file with an
+    unexplained trailing octet was silently salvaged by a parser whose stated
+    position is that it does not salvage such files.
+    """
+    public, _ = make_key("Ed25519")
+    pem = public.to_pem()
+    assert kf.load_spki(pem) == public
+    with pytest.raises(KeyFormatError, match="RFC 7468"):
+        kf.load_spki(pem + trailing)
+    with pytest.raises(KeyFormatError, match="RFC 7468"):
+        kf.decode_pem(trailing + pem)
+    # The characters RFC 7468 *does* allow around a block still work.
+    for allowed in (" ", "\t", "\r\n", "\n"):
+        assert kf.load_spki(allowed + pem + allowed) == public
+
+
+@pytest.mark.parametrize("name", EC_ALGORITHMS)
+def test_an_out_of_range_ec_scalar_in_a_key_file_raises_keyformaterror(name: str) -> None:
+    """A private scalar of zero, or at or above the group order.
+
+    Both are constructible key files, and both made the native derivation
+    refuse — correctly — with a ``RuntimeError`` that escaped the format layer.
+    ``except KeyFormatError`` around a key import has to be sufficient; here it
+    was not. Found by the fuzz harness after 17.8 million executions.
+    """
+    alg = kf.ALGORITHMS[name]
+    width = alg.field_bytes
+    for scalar in (b"\x00" * width, b"\xff" * width):
+        inner = der_sequence(der_integer(1), der_octet_string(scalar))
+        der = der_sequence(
+            der_integer(0),
+            der_sequence(oid_from_string(alg.oid), oid_from_string(alg.curve_oid)),
+            der_octet_string(inner),
+        )
+        # No public key carried, so nothing forces a derivation at import…
+        imported = kf.load_pkcs8(der)
+        assert imported.key == scalar
+        # …but asking for one must fail cleanly rather than escaping the layer.
+        with pytest.raises(KeyFormatError, match="not usable"):
+            imported.public()
+        with pytest.raises(KeyFormatError, match="not usable"):
+            imported.derive_public_key()
+
+    # And with a public key carried, the cross-check must refuse it at import.
+    public, _ = make_key(name)
+    inner = der_sequence(
+        der_integer(1),
+        der_octet_string(b"\x00" * width),
+        der_tagged(1, der_bit_string(b"\x04" + public.key)),
+    )
+    der = der_sequence(
+        der_integer(0),
+        der_sequence(oid_from_string(alg.oid), oid_from_string(alg.curve_oid)),
+        der_octet_string(inner),
+    )
+    with pytest.raises(KeyFormatError):
+        kf.load_pkcs8(der)
+
+
+def test_pem_with_non_zero_base64_padding_bits_is_refused() -> None:
+    """RFC 4648 §3.5: "the pad bits MUST be set to zero".
+
+    Python's ``b64decode(validate=True)`` checks the alphabet and ignores the
+    padding bits, so ``...Of3N=`` and ``...Of3M=`` decoded to the same octets —
+    one key with many encodings, the defect this module refuses everywhere
+    else. Found by the fuzz harness after 7.5 million executions.
+    """
+    public, _ = make_key("Ed25519")
+    pem = public.to_pem()
+    assert kf.load_spki(pem) == public
+
+    body = "".join(line for line in pem.splitlines() if not line.startswith("-----"))
+    assert body.endswith("=")
+    # The character before the pad carries the significant bits; the rest of its
+    # six are padding and must be zero. Flip one of those.
+    alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+    index = len(body) - 2
+    flipped = alphabet[alphabet.index(body[index]) ^ 0b000001]
+    mangled = body[:index] + flipped + body[index + 1:]
+    assert base64.b64decode(mangled) == base64.b64decode(body), (
+        "the two bodies must decode to the same octets, or this tests nothing"
+    )
+    assert mangled != body
+
+    lines = [mangled[i:i + 64] for i in range(0, len(mangled), 64)]
+    rebuilt = "-----BEGIN PUBLIC KEY-----\n" + "\n".join(lines) + "\n-----END PUBLIC KEY-----\n"
+    with pytest.raises(KeyFormatError, match="non-canonical base64"):
+        kf.load_spki(rebuilt)
+    with pytest.raises(KeyFormatError, match="non-canonical base64"):
+        kf.decode_pem(rebuilt)
+
+
+def test_an_okp_cose_key_carrying_the_ec2_y_member_is_refused() -> None:
+    """A COSE_Key is an open map, but ``y`` (-3) is not an unknown label.
+
+    RFC 9053 §7 assigns ``y`` to the EC2 key type only. An OKP key carrying one
+    does not have "a label we do not use", it contradicts its own ``kty`` — and
+    accepting it gave one X25519 key two encodings, while inviting a reader that
+    keys off ``-3`` to see an EC2 key where AMA sees an OKP one.
+    """
+    public, _ = make_key("X25519")
+    decoded = cbor_decode_canonical(public.to_cose())
+    assert -3 not in decoded
+    decoded[-3] = b"\x00" * 32
+    with pytest.raises(KeyFormatError, match="contradicts its own"):
+        kf.cose_to_public_key(cbor_encode_canonical(decoded))
+    # Labels that really are unknown must still be tolerated — a WebAuthn
+    # credential public key always carries `alg`.
+    tolerated = cbor_decode_canonical(public.to_cose())
+    tolerated[2] = b"key-identifier"
+    tolerated[3] = -8
+    assert kf.cose_to_public_key(cbor_encode_canonical(tolerated)) == public
+
+
+# ===========================================================================
 # 9. Mutation robustness
 # ===========================================================================
 # A key parser is fed hostile input by definition — anyone who can hand you a

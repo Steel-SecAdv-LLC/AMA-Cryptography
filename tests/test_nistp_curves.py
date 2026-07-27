@@ -256,11 +256,19 @@ def test_pubkey_matches_reference(name: str) -> None:
 @pytest.mark.parametrize("name", CURVE_NAMES)
 def test_out_of_range_private_keys_rejected(name: str) -> None:
     n, nb = CURVES[name]["n"], CURVES[name]["nbytes"]
+    # ValueError, not RuntimeError: an out-of-range scalar is a property of the
+    # *input*, and this function is reachable from the key-file parser, which
+    # turns a ValueError into a KeyFormatError. Under the old classification a
+    # key file carrying a zero or oversized scalar raised a RuntimeError that
+    # escaped `load_pkcs8` entirely — `except KeyFormatError` at the boundary was
+    # not sufficient. Found by fuzz/python/fuzz_key_formats.py.
     for bad in (0, n, n + 1, (1 << (nb * 8)) - 1):
         if bad.bit_length() > nb * 8:
             continue
-        with pytest.raises(RuntimeError):
+        with pytest.raises(ValueError, match="out of range"):
             pb.native_nistp_pubkey_from_privkey(name, bad.to_bytes(nb, "big"))
+    # n - 1 is the largest legal private key and must still work.
+    assert pb.native_nistp_pubkey_from_privkey(name, (n - 1).to_bytes(nb, "big"))
     with pytest.raises(ValueError):
         pb.native_nistp_pubkey_from_privkey(name, b"\x01" * (nb - 1))
 

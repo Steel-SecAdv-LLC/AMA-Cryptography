@@ -440,10 +440,26 @@ class TestSecp256k1Validation:
         with pytest.raises(ValueError, match="32 bytes"):
             pq.native_secp256k1_pubkey_from_privkey(b"\x01" * 16)
 
-    def test_zero_privkey_raises(self) -> None:
-        # All-zero private key is invalid for secp256k1
-        with pytest.raises(RuntimeError):
-            pq.native_secp256k1_pubkey_from_privkey(b"\x00" * 32)
+    def test_out_of_range_privkey_raises(self) -> None:
+        """SEC 1 §3.2.1: a private key is an integer in [1, n-1].
+
+        Both ends, and the upper one was not checked — a scalar at or above the
+        group order derives the same public key as `d mod n`, so two distinct
+        key files were indistinguishable from outside. `ama_nistp_pubkey_from_
+        privkey` had always refused this for the NIST curves; secp256k1 refused
+        only zero, so one library was strict on one curve and lax on another.
+
+        ValueError rather than RuntimeError for the same reason as the NIST
+        curves: it is a property of the input, and the key-file parser converts
+        it to a KeyFormatError. Found by fuzz/python/fuzz_key_formats.py.
+        """
+        n = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
+        for bad in (0, n, n + 1, (1 << 256) - 1):
+            with pytest.raises(ValueError, match="out of range"):
+                pq.native_secp256k1_pubkey_from_privkey(bad.to_bytes(32, "big"))
+        # The boundary values that are legal must still work.
+        assert pq.native_secp256k1_pubkey_from_privkey((1).to_bytes(32, "big"))
+        assert pq.native_secp256k1_pubkey_from_privkey((n - 1).to_bytes(32, "big"))
 
 
 # ---------------------------------------------------------------------------

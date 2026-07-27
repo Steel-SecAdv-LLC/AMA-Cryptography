@@ -106,8 +106,78 @@ form this algorithm's ecosystem actually emits":
 
 `True` and `False` override it in either direction and both are tested. The
 point of the default is that AMA's output is byte-identical to what a reference
-encoder produces, which is verified against the vendored corpus rather than
-asserted here.
+encoder produces, which is verified against the vendored corpus and against
+`tests/ref_keyformat.py` rather than asserted here.
+
+Because `None` therefore means different things for different algorithms, the
+resolved answer is published rather than left to be inferred:
+`key_formats.CONVENTIONAL_PUBLIC_KEY` is the table, and
+`conventional_include_public_key(algorithm)` answers for one algorithm.
+`test_none_encodes_exactly_as_the_conventional_explicit_value` asserts, for
+every algorithm, that `None` produces bytes identical to the explicit setting it
+stands for — and *different* bytes from the other one, so the flag is never a
+no-op.
+
+Note the two families put the public half in different fields. EC uses
+RFC 5915's `[1]` inside `ECPrivateKey`, which RFC 5958 never sees, so the
+version stays v1. Everything else uses RFC 5958's own `[1] publicKey` on the
+outer `SEQUENCE`, which raises the version to v2 — and RFC 5958 §2 ties those
+together in both directions ("if publicKey is present, then version is set to v2
+else version is set to v1"), which this parser now enforces. Accepting a v2 with
+no public key gave one key two valid encodings.
+
+### The cost of importing a key
+
+PQ consistency checking on import is a documented policy, `enabled` by default,
+switchable per call (`load_pkcs8(..., verify_pq_consistency=False)`), per block
+(`with key_formats.pq_import_consistency(False):`) or per process
+(`AMA_KEY_IMPORT_PQ_CONSISTENCY=0`). It defaults to enabled because the checks
+are what reject the RFC 9881 §8.2 and lamps-kyber §C.4.1 negative vectors, and
+because an ML-KEM inconsistency is *designed* to fail silently.
+
+It is a policy rather than a constant because the checks are not free and the
+import path is reachable by whoever supplies a key file. Measured on one core,
+x86-64, `-O3 -flto`, by `benchmarks/keyformat_import.py` — the same standard as
+the curve measurements in `docs/NIST_PRIME_CURVES.md`:
+
+| Algorithm | Form | Parse only | Checked (default) | Ratio | Keygen, for scale |
+|---|---|---:|---:|---:|---:|
+| ML-DSA-44 | `expandedKey` | 0.011 ms | 0.099 ms | 8.9× | 0.118 ms |
+| ML-DSA-65 | `expandedKey` | 0.011 ms | 0.155 ms | 13.7× | 0.192 ms |
+| ML-DSA-87 | `expandedKey` | 0.011 ms | 0.287 ms | 26.0× | 0.274 ms |
+| ML-KEM-512 | `expandedKey` | 0.018 ms | 0.127 ms | 7.0× | 0.044 ms |
+| ML-KEM-768 | `expandedKey` | 0.019 ms | 0.204 ms | 10.9× | 0.077 ms |
+| ML-KEM-1024 | `expandedKey` | 0.022 ms | 0.291 ms | 13.3× | 0.116 ms |
+| ML-DSA-87 | `seed` | 0.266 ms | 0.262 ms | 1.0× | 0.274 ms |
+| ML-KEM-1024 | `both` | 0.021 ms | 0.127 ms | 6.0× | 0.116 ms |
+
+Read the ratio column as the denial-of-service lever: an `expandedKey`-only
+ML-DSA-87 import costs about what *generating* a key costs, and 26× what parsing
+the DER around it costs. The `seed` form shows a ratio of 1.0 because expanding
+a seed is how the key is decoded at all — not a check, and so not governed by
+the policy.
+
+Two things stay true with the checks off, both free:
+
+* ML-KEM still recovers its encapsulation key, because FIPS 203 §7.1 embeds `ek`
+  verbatim in `dk`; extracting it is a slice, and it is still validated against
+  the §7.2 modulus check. If the file also carries a public key, the two are
+  still required to be equal.
+* Every structural check still runs — DER strictness, the `CHOICE` arm, lengths,
+  the OID. The policy governs *cryptographic* consistency only.
+
+What is given up is stated plainly: ML-DSA no longer derives a public key at
+import (the cost moves to first use, where `PrivateKey.public()` runs the full
+check), and the specifications' negative vectors are no longer rejected at
+import. RFC 9881 §8.2 requires an inconsistent key to be rejected as malformed,
+so disabling this is a conformance decision, not a tuning one.
+
+For scale, note what the table does *not* show: the EC curves cost far more on
+this path than the PQ ones, because deriving a public key from a scalar is a
+scalar multiplication. P-521 import is 1.23 ms against ML-DSA-87's 0.287 ms, and
+that cost is not governed by this policy because for EC the derivation *is* the
+key. It is the reason the fixed-base comb described in
+`docs/NIST_PRIME_CURVES.md` was worth doing.
 
 ### Every algorithm is real
 
@@ -180,7 +250,14 @@ bounds.
 | RFC 8037 Appendix A / RFC 8152 Appendix C.7.1 | Ed25519 JWK, the RFC 7638 thumbprint *and its canonical input string*, P-256 and P-521 `COSE_Key` |
 | `tests/kat/keyformats/rfc9500_ec.json` — 3 records | the IETF's own P-256/P-384/P-521 `ECPrivateKey`, the structure RFC 5915 defines without an example |
 | `tests/ref_keyformat.py` | a second encoder transcribed from the RFCs' ASN.1 — AMA's own, importing nothing from `ama_cryptography` — covering every algorithm and option, anchored against RFC 9500 §2.3 and RFC 8410 §10.1 |
-|  `tests/test_key_formats.py` — 301 tests | the above in both directions, plus the negative space |
+| `tests/test_key_formats.py` — 543 tests | the above in both directions, plus the negative space |
+| `fuzz/python/fuzz_key_formats.py` | continuous hostile input across all ten parser entry points, run per PR by `fuzzing.yml` (INVARIANT-33) |
+
+The counts above are not decoration and they are not taken on trust:
+`tools/check_documented_counts.py` re-derives each one — pytest's own collection
+count, the corpus files' `records` arrays, the Wycheproof manifest — and fails
+CI when a documented number stops being true. A number nobody checks is worse
+than no number, because a reader takes it as evidence.
 
 Two things about that table are deliberate.
 

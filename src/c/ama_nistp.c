@@ -767,6 +767,158 @@ static void nistp_scalar_mul(nistp_jac *out, const uint8_t *k,
     ama_secure_memzero(&sel, sizeof(sel));
 }
 
+/* ============================================================================
+ * FIXED-BASE COMB FOR THE GENERATOR
+ * ============================================================================ */
+
+/**
+ * The generator is a *public constant*, so the doublings its scalar
+ * multiplication performs can be done once, at start-up, instead of on every
+ * call.  That is the whole idea here, and it is where the time goes:
+ * `nistp_scalar_mul` on P-521 runs 132 windows x 4 doublings = 528 doublings
+ * plus 132 additions, and 528 doublings is most of a 2.1 ms operation.
+ *
+ * The comb splits the scalar into `NISTP_COMB_BLOCKS` equal blocks and
+ * precomputes every subset sum of the block-aligned multiples
+ * `2^(e*j) * G`.  Then one pass over `e` bit positions does *one* doubling and
+ * *one* addition each:
+ *
+ *     acc = 0
+ *     for t = e-1 down to 0:
+ *         acc = 2*acc
+ *         digit = bit(k, t) | bit(k, t+e)<<1 | ... | bit(k, t+3e)<<3
+ *         acc = acc + T[digit]
+ *
+ * At P-521 that is 131 doublings and 131 additions against 528 and 132 — the
+ * doubling count falls by 4x, which is the operation the profile is made of.
+ *
+ * **Four blocks, deliberately, and not eight.**  A comb's table has 2^blocks
+ * entries, and the table must be read with a *full linear scan* to keep the
+ * memory-access trace independent of the scalar (the same requirement, and the
+ * same reason, as in `nistp_scalar_mul`).  Doubling the block count halves the
+ * iterations and doubles the per-iteration scan, so the win flattens quickly
+ * while the constant-time scan cost grows without bound.  Sixteen entries also
+ * keeps the scan *identical in shape* to the one already reviewed for the
+ * variable-base path, and the table at 3.5 KB per curve fits comfortably in
+ * L1 — an 8-block table would be 56 KB per curve and would not.
+ *
+ * **Only the generator.**  ECDH multiplies a *peer-supplied* point and keeps
+ * `nistp_scalar_mul`: precomputing for a base that changes every call buys
+ * nothing, and a table built from attacker-supplied input is a surface this
+ * does not need.
+ *
+ * Initialised once per curve, on first use, and never mutated afterwards.  The
+ * table holds only public data — multiples of the standard generator — so the
+ * benign race two threads can run on first use writes identical bytes.
+ */
+#define NISTP_COMB_BLOCKS  4
+#define NISTP_COMB_SIZE    (1u << NISTP_COMB_BLOCKS)
+
+typedef struct {
+    nistp_jac table[NISTP_COMB_SIZE];
+    unsigned  block_bits;   /**< `e`: bits per block, ceil(qbits / blocks) */
+    int       ready;
+} nistp_comb;
+
+static nistp_comb NISTP_COMBS[3];
+
+/** The generator in Jacobian/Montgomery form. */
+static void nistp_generator(nistp_jac *g, const nistp_curve *c) {
+    nistp_to_mont(g->X, c->gx, c->rr_p, c->p, c->p0inv, c->nlimbs);
+    nistp_to_mont(g->Y, c->gy, c->rr_p, c->p, c->p0inv, c->nlimbs);
+    nistp_mont_one(g->Z, c->rr_p, c->p, c->p0inv, c->nlimbs);
+}
+
+/**
+ * Build the comb table: `T[i] = sum over set bits j of i` of `2^(e*j) * G`.
+ *
+ * Built from repeated doubling of the generator only — no scalar
+ * multiplication, so this cannot depend on the very routine it accelerates.
+ */
+static void nistp_comb_build(nistp_comb *comb, const nistp_curve *c) {
+    nistp_jac base[NISTP_COMB_BLOCKS];
+    unsigned e, i, j, b;
+
+    /* `e` covers the scalar's full width: a scalar is `nbytes` octets and the
+     * caller is not required to have reduced it, so the comb must span every
+     * bit those octets can hold, not just `qbits`. */
+    e = (c->nbytes * 8u + NISTP_COMB_BLOCKS - 1u) / NISTP_COMB_BLOCKS;
+    comb->block_bits = e;
+
+    nistp_generator(&base[0], c);
+    for (j = 1; j < NISTP_COMB_BLOCKS; j++) {
+        base[j] = base[j - 1];
+        for (b = 0; b < e; b++)
+            nistp_jac_double(&base[j], &base[j], c);
+    }
+
+    nistp_jac_set_infinity(&comb->table[0]);
+    for (i = 1; i < NISTP_COMB_SIZE; i++) {
+        /* Lowest set bit of `i`, added to the entry for `i` without it. */
+        unsigned low = 0;
+        while (!((i >> low) & 1u))
+            low++;
+        nistp_jac_add(&comb->table[i], &comb->table[i & ~(1u << low)],
+                      &base[low], c);
+    }
+    comb->ready = 1;
+}
+
+/**
+ * Constant-time R = k * G using the comb.
+ *
+ * The scalar is read a bit at a time at fixed indices, so nothing about the
+ * access pattern depends on its value; the table read is the same full linear
+ * scan as the variable-base multiplier's.
+ */
+static void nistp_scalar_mul_generator(nistp_jac *out, const uint8_t *k,
+                                       const nistp_curve *c) {
+    nistp_comb *comb = &NISTP_COMBS[(unsigned)(c - &NISTP_CURVES[0])];
+    nistp_jac acc, sel;
+    unsigned nl = c->nlimbs;
+    unsigned nbits = c->nbytes * 8u;
+    unsigned e, i, limb;
+    int t;
+
+    if (!comb->ready)
+        nistp_comb_build(comb, c);
+    e = comb->block_bits;
+
+    nistp_jac_set_infinity(&acc);
+    for (t = (int)e - 1; t >= 0; t--) {
+        uint64_t digit = 0;
+
+        nistp_jac_double(&acc, &acc, c);
+
+        for (i = 0; i < NISTP_COMB_BLOCKS; i++) {
+            unsigned bit_index = (unsigned)t + i * e;
+            uint64_t bit = 0;
+            if (bit_index < nbits) {
+                /* `k` is big-endian: bit 0 is the low bit of the last octet. */
+                unsigned byte_index = c->nbytes - 1u - (bit_index >> 3);
+                bit = (uint64_t)((k[byte_index] >> (bit_index & 7u)) & 1u);
+            }
+            digit |= bit << i;
+        }
+
+        memset(&sel, 0, sizeof(sel));
+        for (i = 0; i < NISTP_COMB_SIZE; i++) {
+            uint64_t mask = nistp_mask64((uint64_t)i ^ digit);  /* 0 when equal */
+            mask = ~mask;                                        /* all-ones when equal */
+            for (limb = 0; limb < nl; limb++) {
+                sel.X[limb] |= comb->table[i].X[limb] & mask;
+                sel.Y[limb] |= comb->table[i].Y[limb] & mask;
+                sel.Z[limb] |= comb->table[i].Z[limb] & mask;
+            }
+        }
+        nistp_jac_add(&acc, &acc, &sel, c);
+    }
+
+    *out = acc;
+    ama_secure_memzero(&acc, sizeof(acc));
+    ama_secure_memzero(&sel, sizeof(sel));
+}
+
 /**
  * Variable-time R = u1*A + u2*B (Shamir's trick).
  *
@@ -1197,7 +1349,7 @@ AMA_API ama_error_t ama_nistp_pubkey_from_privkey(ama_nist_curve_t curve,
     uint64_t d[AMA_NISTP_MAX_LIMBS];
     uint64_t x[AMA_NISTP_MAX_LIMBS], y[AMA_NISTP_MAX_LIMBS];
     uint64_t xs[AMA_NISTP_MAX_LIMBS], ys[AMA_NISTP_MAX_LIMBS];
-    nistp_jac G, Q;
+    nistp_jac Q;
     ama_error_t rc = AMA_ERROR_INVALID_PARAM;
 
     if (!c || !private_key || !public_key)
@@ -1205,11 +1357,9 @@ AMA_API ama_error_t ama_nistp_pubkey_from_privkey(ama_nist_curve_t curve,
     if (!nistp_scalar_load(d, private_key, c) || nistp_is_zero(d, c->nlimbs))
         return AMA_ERROR_INVALID_PARAM;
 
-    nistp_to_mont(G.X, c->gx, c->rr_p, c->p, c->p0inv, c->nlimbs);
-    nistp_to_mont(G.Y, c->gy, c->rr_p, c->p, c->p0inv, c->nlimbs);
-    nistp_mont_one(G.Z, c->rr_p, c->p, c->p0inv, c->nlimbs);
-
-    nistp_scalar_mul(&Q, private_key, &G, c);
+    /* Fixed base: the comb skips the doublings entirely (see
+     * nistp_scalar_mul_generator).  Same result, same constant-time posture. */
+    nistp_scalar_mul_generator(&Q, private_key, c);
     if (!nistp_jac_to_affine(x, y, &Q, c)) {
         rc = AMA_ERROR_CRYPTO;
         goto done;
@@ -1485,7 +1635,7 @@ static ama_error_t nistp_ecdsa_sign_core(const nistp_curve *c,
     uint64_t rs[AMA_NISTP_MAX_LIMBS], ss[AMA_NISTP_MAX_LIMBS];
     uint64_t x[AMA_NISTP_MAX_LIMBS], y[AMA_NISTP_MAX_LIMBS], xs[AMA_NISTP_MAX_LIMBS];
     uint8_t k_bytes[66], x_bytes[66];
-    nistp_jac G, R;
+    nistp_jac R;
     ama_error_t rc = AMA_ERROR_INVALID_PARAM;
 
     if (!nistp_scalar_load(d, private_key, c) || nistp_is_zero(d, nl))
@@ -1499,10 +1649,8 @@ static ama_error_t nistp_ecdsa_sign_core(const nistp_curve *c,
         goto done;
     }
 
-    nistp_to_mont(G.X, c->gx, c->rr_p, c->p, c->p0inv, nl);
-    nistp_to_mont(G.Y, c->gy, c->rr_p, c->p, c->p0inv, nl);
-    nistp_mont_one(G.Z, c->rr_p, c->p, c->p0inv, nl);
-    nistp_scalar_mul(&R, k_bytes, &G, c);
+    /* R = k*G on the fixed generator — the comb path. */
+    nistp_scalar_mul_generator(&R, k_bytes, c);
     if (!nistp_jac_to_affine(x, y, &R, c)) {
         rc = AMA_ERROR_CRYPTO;
         goto done;
@@ -1963,6 +2111,37 @@ int ama_nistp_test_scalar_mul_win(ama_nist_curve_t curve, const uint8_t *scalar,
     nistp_scalar_mul(&acc, scalar, &P, c);
     if (!nistp_jac_to_affine(x, y, &acc, c))
         return 0;
+    nistp_from_mont(xs, x, c->p, c->p0inv, c->nlimbs);
+    nistp_from_mont(ys, y, c->p, c->p0inv, c->nlimbs);
+    nistp_to_bytes(out, xs, c->nbytes);
+    nistp_to_bytes(out + c->nbytes, ys, c->nbytes);
+    return 1;
+}
+
+/**
+ * Fixed-base comb multiplication of the *generator*, same output contract.
+ *
+ * Exported separately from `..._scalar_mul_win` because the two take different
+ * paths through the file and only this one uses the precomputed table. A
+ * divergence between them would produce a public key that is internally
+ * consistent and wrong — every self-round-trip would still pass, signatures
+ * would verify against the wrong public key, and the first thing to notice
+ * would be a peer.
+ */
+int ama_nistp_test_scalar_mul_comb(ama_nist_curve_t curve, const uint8_t *scalar,
+                                   uint8_t *out);
+int ama_nistp_test_scalar_mul_comb(ama_nist_curve_t curve, const uint8_t *scalar,
+                                   uint8_t *out) {
+    const nistp_curve *c = nistp_lookup(curve);
+    uint64_t x[AMA_NISTP_MAX_LIMBS], y[AMA_NISTP_MAX_LIMBS];
+    uint64_t xs[AMA_NISTP_MAX_LIMBS], ys[AMA_NISTP_MAX_LIMBS];
+    nistp_jac acc;
+
+    if (!c)
+        return 0;
+    nistp_scalar_mul_generator(&acc, scalar, c);
+    if (!nistp_jac_to_affine(x, y, &acc, c))
+        return 0;   /* k = 0 mod n: the identity has no affine form */
     nistp_from_mont(xs, x, c->p, c->p0inv, c->nlimbs);
     nistp_from_mont(ys, y, c->p, c->p0inv, c->nlimbs);
     nistp_to_bytes(out, xs, c->nbytes);

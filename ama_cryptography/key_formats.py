@@ -596,17 +596,34 @@ class PrivateKey:
 
 
 def _derive_public(alg: _Alg, secret: bytes) -> bytes:
-    """Recompute a public key from a secret using the native backend only."""
+    """Recompute a public key from a secret using the native backend only.
+
+    Every backend refusal becomes a ``KeyFormatError``, because at this layer it
+    is a property of the *file* rather than of the call. That is the whole
+    contract of this module's error handling: ``except KeyFormatError`` around a
+    key import has to be sufficient.
+
+    It was not. An EC private key whose scalar is zero or at least the group
+    order — a perfectly constructible key file — reached
+    ``native_nistp_pubkey_from_privkey``, which raised ``RuntimeError``, which
+    escaped ``load_pkcs8`` entirely. Found by fuzz/python/fuzz_key_formats.py
+    after 17.8 million executions.
+    """
     if alg.kind == "okp":
         if alg.name == "Ed25519":
             public, _ = _pb.native_ed25519_keypair_from_seed(secret)
             return bytes(public)
         return _pb.native_x25519_key_exchange(secret, bytes([9]) + b"\x00" * 31)
     if alg.kind == "ec":
-        if alg.name == "secp256k1":
-            compressed = _pb.native_secp256k1_pubkey_from_privkey(secret)
-            return _pb.native_secp256k1_pubkey_decompress(compressed)
-        return _pb.native_nistp_pubkey_from_privkey(alg.ec_curve, secret)
+        try:
+            if alg.name == "secp256k1":
+                compressed = _pb.native_secp256k1_pubkey_from_privkey(secret)
+                return _pb.native_secp256k1_pubkey_decompress(compressed)
+            return _pb.native_nistp_pubkey_from_privkey(alg.ec_curve, secret)
+        except (ValueError, RuntimeError) as exc:
+            raise KeyFormatError(
+                f"{alg.name} private key is not usable: {exc}"
+            ) from None
     # ML-DSA and ML-KEM both recompute the public key from the expanded secret
     # key *and* verify the secret key's internal consistency while doing it —
     # see the two native entry points for what each checks and why. An
@@ -644,7 +661,19 @@ def decode_pem(text: str, expected_label: str | None = None) -> tuple[str, bytes
     mismatched labels. A key file with unexplained bytes around it is one a
     caller should look at, not one this layer should quietly salvage.
     """
-    normalised = text.replace("\r\n", "\n").strip() + "\n"
+    # `str.strip()` with no argument was wrong here, and quietly so. Python's
+    # notion of whitespace is Unicode's: it includes U+001C..U+001F (the file,
+    # group, record and unit separators), U+000B, U+000C, U+0085, U+00A0 and
+    # several Unicode space characters. None of those is whitespace in
+    # RFC 7468, which is defined over a printable-ASCII alphabet plus CR and LF.
+    # So a key file with a trailing 0x1F — or a NO-BREAK SPACE, or a LINE
+    # SEPARATOR — was silently accepted by a parser whose stated position is
+    # that "a key file with unexplained bytes around it is one a caller should
+    # look at, not one this layer should quietly salvage".
+    #
+    # Stripping exactly the four characters RFC 7468 allows to surround a block
+    # closes that. Found by fuzz/python/fuzz_key_formats.py.
+    normalised = text.replace("\r\n", "\n").strip(" \t\r\n") + "\n"
     match = _PEM_RE.match(normalised)
     if not match:
         raise KeyFormatError("not a single strict RFC 7468 PEM block")
@@ -656,12 +685,32 @@ def decode_pem(text: str, expected_label: str | None = None) -> tuple[str, bytes
     for line in body.split("\n")[:-1]:
         if len(line) > 64:
             raise KeyFormatError("PEM line exceeds 64 characters")
+    joined = "".join(body.split("\n"))
     try:
-        der = base64.b64decode("".join(body.split("\n")), validate=True)
+        der = base64.b64decode(joined, validate=True)
     except (ValueError, binascii.Error) as exc:
         raise KeyFormatError(f"invalid base64 in PEM body: {exc}") from None
     if not der:
         raise KeyFormatError("empty PEM body")
+    # `validate=True` checks the *alphabet*, not the padding bits. RFC 4648
+    # §3.5: "the pad bits MUST be set to zero by conforming encoders" — and
+    # Python's decoder ignores them, so `...Of3N=` and `...Of3M=` decode to the
+    # same octets. That is one key with many encodings, which is the defect this
+    # module refuses everywhere else: non-minimal DER lengths, non-minimal
+    # INTEGERs, non-deterministic CBOR. A PEM file is no different, and a
+    # thumbprint or a fingerprint taken over the file rather than the key would
+    # disagree across two encodings of one key.
+    #
+    # Re-encoding and comparing is the whole rule: base64 encoding is a
+    # function, so the only string that survives is the one a conforming encoder
+    # would have produced. Found by fuzz/python/fuzz_key_formats.py after 7.5
+    # million executions.
+    if base64.b64encode(der).decode("ascii") != joined:
+        raise KeyFormatError(
+            "non-canonical base64 in PEM body: the padding bits are not zero, or "
+            "the padding is misplaced (RFC 4648 §3.5). One key must have one "
+            "encoding."
+        )
     return label, der
 
 
@@ -1263,7 +1312,22 @@ def _as_der(data: Union[bytes, str], label: str) -> bytes:
     if isinstance(data, (bytes, bytearray, memoryview)):
         raw = bytes(data)
         if raw[:5] == b"-----":
-            return decode_pem(raw.decode("ascii", "strict"), label)[1]
+            # A caller who read a key file in binary mode gets the same answer
+            # as one who read it as text. But `bytes.decode("ascii")` raises
+            # UnicodeDecodeError — a ValueError subclass, not a KeyFormatError —
+            # so a file that begins with a PEM header and then contains a
+            # non-ASCII octet escaped this layer entirely. Anything a caller
+            # cannot reasonably catch is a defect here, not an edge case: the
+            # whole point of a single error type is that `except KeyFormatError`
+            # is sufficient at the boundary. Found by
+            # fuzz/python/fuzz_key_formats.py.
+            try:
+                text = raw.decode("ascii", "strict")
+            except UnicodeDecodeError as exc:
+                raise KeyFormatError(
+                    f"PEM text must be ASCII (RFC 7468 §2): {exc}"
+                ) from None
+            return decode_pem(text, label)[1]
         return raw
     raise KeyFormatError(f"expected bytes or a PEM string, got {type(data).__name__}")
 
@@ -1527,6 +1591,19 @@ def _load_cose(data: bytes) -> dict[Any, Any]:
 def _cose_algorithm(obj: dict[Any, Any]) -> _Alg:
     kty = obj.get(_COSE_LBL_KTY)
     crv = obj.get(_COSE_LBL_CRV)
+    # A COSE_Key is decoded CBOR, so `crv` can be any CBOR value — including a
+    # nested map or array, which are *unhashable* in Python and made the
+    # dictionary lookup below raise `TypeError: unhashable type: 'dict'`. That
+    # escaped the format layer entirely: a caller doing `except KeyFormatError`
+    # around a key import got a TypeError instead, from a byte string an
+    # attacker chose. Only an integer names a COSE curve; anything else is "not
+    # implemented" rather than a lookup against a value that cannot be a key.
+    #
+    # `_jwk_algorithm` already carried this fix for the JSON side, where `crv`
+    # can be any JSON type. The CBOR side did not — the same defect, one format
+    # over. Found by fuzz/python/fuzz_key_formats.py.
+    if isinstance(crv, bool) or not isinstance(crv, int):
+        crv = None
     if kty == _COSE_KTY_OKP:
         alg = _COSE_OKP_TO_ALG.get(crv)
         if alg is None:
@@ -1554,6 +1631,23 @@ def _cose_public_bytes(alg: _Alg, obj: dict[Any, Any]) -> bytes:
         return raw
 
     if alg.kind == "okp":
+        # A COSE_Key is an open map and a label this module does not consume —
+        # `kid`, `alg` — must not make it unparseable. `y` (-3) is different in
+        # kind: RFC 9053 §7 assigns it to the EC2 key type only, and an OKP key
+        # has no y coordinate at all. Its presence does not mean "a label we do
+        # not use", it means the file claims one key type and carries another's
+        # material.
+        #
+        # Accepting it and dropping it gave one X25519 key two encodings — the
+        # malleability class this module's strictness exists to close — and
+        # invited a reader that keys off -3 rather than off kty to see an EC2
+        # key where AMA sees an OKP one. Found by
+        # fuzz/python/fuzz_key_formats.py.
+        if _COSE_LBL_Y in obj:
+            raise KeyFormatError(
+                f"{alg.name} is an OKP key, but this COSE_Key carries the EC2 "
+                "'y' member (-3); the map contradicts its own 'kty'"
+            )
         return member(_COSE_LBL_X, alg.public_bytes)
     public = member(_COSE_LBL_X, alg.field_bytes) + member(_COSE_LBL_Y, alg.field_bytes)
     _validate_ec_public(alg, public)

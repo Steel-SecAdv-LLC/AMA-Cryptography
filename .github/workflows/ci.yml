@@ -498,6 +498,20 @@ jobs:
       run: |
         python tools/check_fuzz_target_registration.py
 
+    - name: "Verify every count the documentation pins"
+      # docs/KEY_FORMATS.md said "tests/test_key_formats.py — 301 tests". True
+      # when written, checked by nothing, so the only question was how long
+      # until it stopped being true — and it had: the real number is 539. A
+      # documented count that has quietly gone wrong is worse than no count,
+      # because a reader takes it as evidence and a maintainer as a baseline.
+      #
+      # Rather than deleting the numbers (they say something useful), they are
+      # re-derived: pytest's own collection count, the corpus files' `records`
+      # arrays, and the Wycheproof manifest. Same class of duplication as the
+      # version strings check_version_consistency.py polices, same fix.
+      run: |
+        python tools/check_documented_counts.py
+
     - name: "INVARIANT-36: No third-party cryptographic implementation in the validation path"
       # AMA is built from standardised primitives and its own code, and ships
       # linking no other cryptographic library. That held for what the library

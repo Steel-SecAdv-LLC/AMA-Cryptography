@@ -45,6 +45,8 @@ int ama_nistp_test_scalar_mul_ref(ama_nist_curve_t curve, const uint8_t *scalar,
                                   const uint8_t *point, uint8_t *out);
 int ama_nistp_test_scalar_mul_win(ama_nist_curve_t curve, const uint8_t *scalar,
                                   const uint8_t *point, uint8_t *out);
+int ama_nistp_test_scalar_mul_comb(ama_nist_curve_t curve, const uint8_t *scalar,
+                                   uint8_t *out);
 int ama_nistp_test_generator(ama_nist_curve_t curve, uint8_t *out);
 
 /* Test-only exports from the PQC parameter blocks. */
@@ -166,7 +168,7 @@ static void test_scalar_mul_differential(void) {
     int idx;
     uint32_t rng = 0x9E3779B9u;   /* fixed seed: the test must be reproducible */
 
-    printf("  [2] windowed scalar mul vs. double-and-add reference\n");
+    printf("  [2] windowed + comb scalar mul vs. double-and-add reference\n");
     for (idx = 0; idx < 3; idx++) {
         ama_nist_curve_t curve = curves[idx];
         size_t nb = ama_nistp_field_bytes(curve);
@@ -174,6 +176,7 @@ static void test_scalar_mul_differential(void) {
         uint8_t scalar[AMA_NISTP_MAX_FIELD_BYTES];
         uint8_t out_ref[AMA_NISTP_MAX_PUBKEY_BYTES];
         uint8_t out_win[AMA_NISTP_MAX_PUBKEY_BYTES];
+        uint8_t out_comb[AMA_NISTP_MAX_PUBKEY_BYTES];
         unsigned trial;
         int agreed = 0;
 
@@ -207,6 +210,25 @@ static void test_scalar_mul_differential(void) {
             ok_win = ama_nistp_test_scalar_mul_win(curve, scalar, g, out_win);
             CHECK(ok_ref == ok_win, "%s trial %u: infinity disagreement",
                   ama_nistp_curve_name(curve), trial);
+            /* The fixed-base comb takes a different path through the file — a
+             * precomputed table of block-aligned generator multiples instead of
+             * per-call doublings — and is what keygen, ECDSA signing and
+             * public-key derivation actually use. A divergence would produce a
+             * public key that is internally consistent and wrong: every
+             * self-round-trip would pass, and the first thing to notice would
+             * be a peer. So it is checked against the same naive reference,
+             * over the same boundary lattice, rather than against the windowed
+             * path it replaced. */
+            {
+                int ok_comb = ama_nistp_test_scalar_mul_comb(curve, scalar, out_comb);
+                CHECK(ok_ref == ok_comb, "%s trial %u: comb infinity disagreement",
+                      ama_nistp_curve_name(curve), trial);
+                if (ok_ref && ok_comb) {
+                    CHECK(memcmp(out_ref, out_comb, 2 * nb) == 0,
+                          "%s trial %u: comb result differs from reference",
+                          ama_nistp_curve_name(curve), trial);
+                }
+            }
             if (ok_ref && ok_win) {
                 CHECK(memcmp(out_ref, out_win, 2 * nb) == 0,
                       "%s trial %u: windowed result differs from reference",
