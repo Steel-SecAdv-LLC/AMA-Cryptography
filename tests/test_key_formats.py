@@ -2042,6 +2042,39 @@ def test_an_out_of_range_ec_scalar_in_a_key_file_raises_keyformaterror(name: str
         kf.load_pkcs8(der)
 
 
+@pytest.mark.parametrize(
+    "mangle",
+    [
+        pytest.param(lambda b: [""] + b, id="blank-line-after-header"),
+        pytest.param(lambda b: b[:1] + [""] + b[1:], id="blank-line-in-the-middle"),
+        pytest.param(lambda b: [b[0][:32], b[0][32:]] + b[1:], id="short-first-line"),
+        pytest.param(lambda b: ["".join(b)], id="one-long-line"),
+    ],
+)
+def test_pem_lines_must_be_exactly_64_characters(mangle: Any) -> None:
+    """RFC 7468 §2: "exactly 64 characters except for the final line".
+
+    Only the *maximum* was checked, so a short line — including an empty one —
+    was accepted, and joining the lines discarded it. A blank line after the
+    BEGIN header therefore gave one key a second valid encoding: the same
+    malleability class as the padding-bit hole, reached a different way. Found
+    by the fuzz harness after 18.1 million executions.
+    """
+    public, _ = make_key("ML-DSA-44")   # long enough to have many body lines
+    pem = public.to_pem()
+    assert kf.load_spki(pem) == public
+    body = [ln for ln in pem.splitlines() if not ln.startswith("-----")]
+    assert len(body) > 4 and all(len(ln) == 64 for ln in body[:-1])
+
+    rebuilt = (
+        "-----BEGIN PUBLIC KEY-----\n"
+        + "\n".join(mangle(body))
+        + "\n-----END PUBLIC KEY-----\n"
+    )
+    with pytest.raises(KeyFormatError, match="RFC 7468"):
+        kf.load_spki(rebuilt)
+
+
 def test_pem_with_non_zero_base64_padding_bits_is_refused() -> None:
     """RFC 4648 §3.5: "the pad bits MUST be set to zero".
 

@@ -250,7 +250,7 @@ bounds.
 | RFC 8037 Appendix A / RFC 8152 Appendix C.7.1 | Ed25519 JWK, the RFC 7638 thumbprint *and its canonical input string*, P-256 and P-521 `COSE_Key` |
 | `tests/kat/keyformats/rfc9500_ec.json` — 3 records | the IETF's own P-256/P-384/P-521 `ECPrivateKey`, the structure RFC 5915 defines without an example |
 | `tests/ref_keyformat.py` | a second encoder transcribed from the RFCs' ASN.1 — AMA's own, importing nothing from `ama_cryptography` — covering every algorithm and option, anchored against RFC 9500 §2.3 and RFC 8410 §10.1 |
-| `tests/test_key_formats.py` — 543 tests | the above in both directions, plus the negative space |
+| `tests/test_key_formats.py` — 547 tests | the above in both directions, plus the negative space |
 | `fuzz/python/fuzz_key_formats.py` | continuous hostile input across all ten parser entry points, run per PR by `fuzzing.yml` (INVARIANT-33) |
 
 The counts above are not decoration and they are not taken on trust:

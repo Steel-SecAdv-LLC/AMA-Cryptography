@@ -681,11 +681,35 @@ def decode_pem(text: str, expected_label: str | None = None) -> tuple[str, bytes
     if expected_label is not None and label != expected_label:
         raise KeyFormatError(f"expected PEM label {expected_label!r}, found {label!r}")
 
-    body = match.group("body")
-    for line in body.split("\n")[:-1]:
-        if len(line) > 64:
-            raise KeyFormatError("PEM line exceeds 64 characters")
-    joined = "".join(body.split("\n"))
+    # RFC 7468 §2's line structure, enforced in full rather than only as an
+    # upper bound. The generator "MUST wrap the base64-encoded lines so that
+    # each line consists of exactly 64 characters except for the final line",
+    # so every line but the last is exactly 64 and the last is 1..64.
+    #
+    # Only the maximum was checked, which let a *short* line through — including
+    # an empty one. A blank line after the BEGIN header produced a second valid
+    # encoding of the same key, because joining the lines discards it: the same
+    # malleability class as the padding-bit hole below, reached a different way.
+    # Found by fuzz/python/fuzz_key_formats.py after 18.1 million executions.
+    lines = match.group("body").split("\n")
+    if lines and lines[-1] == "":
+        lines = lines[:-1]          # the trailing newline before -----END
+    if not lines or not any(lines):
+        # No base64 at all, however it was spelled — checked before the line
+        # widths so the diagnostic names the real problem rather than reporting
+        # a zero-length final line.
+        raise KeyFormatError("empty PEM body")
+    for line in lines[:-1]:
+        if len(line) != 64:
+            raise KeyFormatError(
+                f"PEM line is {len(line)} characters; RFC 7468 §2 requires exactly "
+                "64 on every line but the last. One key must have one encoding."
+            )
+    if not 1 <= len(lines[-1]) <= 64:
+        raise KeyFormatError(
+            f"final PEM line is {len(lines[-1])} characters; RFC 7468 §2 allows 1 to 64"
+        )
+    joined = "".join(lines)
     try:
         der = base64.b64decode(joined, validate=True)
     except (ValueError, binascii.Error) as exc:

@@ -29,6 +29,7 @@ way.
 | `rfc8410_okp.json` | [RFC 8410](https://www.rfc-editor.org/rfc/rfc8410.txt) §10 | RFC 8410, August 2018 |
 | `jose_cose.json` | [RFC 8037](https://www.rfc-editor.org/rfc/rfc8037.txt) Appendix A; [RFC 8152](https://www.rfc-editor.org/rfc/rfc8152.txt) Appendix C.7.1 | RFC 8037, January 2017; RFC 8152, July 2017 |
 | `rfc9500_ec.json` | [RFC 9500](https://www.rfc-editor.org/rfc/rfc9500.txt) §2.3 | RFC 9500, December 2023 |
+| `rfc8554_hss_lms.json` | [RFC 8554](https://www.rfc-editor.org/rfc/rfc8554.txt) Appendix F | RFC 8554, April 2019 |
 
 Every one of these is **a specification's own answer key** — published by a
 standards body precisely so an implementer needs no second party to check
@@ -136,6 +137,29 @@ which name wins.
 The P-521 record doubles as a width vector: its scalar begins `0x01` in a
 66-octet field, so an encoder that routed it through a big integer would emit a
 shorter `OCTET STRING` that is still valid DER and is a different key.
+
+### `rfc8554_hss_lms.json` — 6 records
+
+RFC 8554 Appendix F's two complete HSS/LMS test cases: a public key, a message
+and a signature each.
+
+**AMA does not implement HSS/LMS.** This corpus asserts nothing about AMA's
+behaviour; it is the answer key for that work, vendored so it is a checked-in,
+verifiable artefact rather than a claim that an extraction exists somewhere.
+`tests/test_rfc8554_vectors.py` validates it structurally — the sizes re-derived
+from the parameter sets each case names, the registry values read back out of
+the assembled key, and the messages' ASCII recovered — and asserts that nothing
+in the package claims to implement LMS or XMSS, so the corpus cannot quietly
+acquire a meaning it does not have.
+
+That structural validation is not ceremony: the first extraction ran case 1's
+signature block on into "Test Case 2 Private Key" and picked up 96 octets of
+SEED/I, producing a 2740-octet "signature" that looked entirely plausible. The
+size derivation is what caught it.
+
+SP 800-208's approved parameter sets and its §6.2 derivation are **not** here.
+The published PDF did not yield reliable text, and guessing an approved
+parameter set is exactly the speculative standards work this repository refuses.
 
 ### Coverage beyond the published vectors
 

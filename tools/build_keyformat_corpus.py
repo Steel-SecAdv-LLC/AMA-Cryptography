@@ -82,6 +82,11 @@ SOURCES = {
         "title": "RFC 9500 (Standard Public Key Cryptography Test Keys), Section 2.3",
         "revision": "RFC 9500, December 2023",
     },
+    "rfc8554_hss_lms.json": {
+        "url": "https://www.rfc-editor.org/rfc/rfc8554.txt",
+        "title": "RFC 8554 (Leighton-Micali Hash-Based Signatures), Appendix F",
+        "revision": "RFC 8554, April 2019",
+    },
 }
 
 
@@ -349,6 +354,7 @@ EXPECTED_JSON = {
     "lamps_ml_kem.json": {"needs_negative": True},
     "rfc8410_okp.json": {"needs_negative": False},
     "rfc9500_ec.json": {"needs_negative": False},
+    "rfc8554_hss_lms.json": {"needs_negative": False},
     "jose_cose.json": {"needs_negative": False},
 }
 
@@ -440,6 +446,129 @@ def verify_offline(corpus: Path = CORPUS) -> list[str]:
     return problems
 
 
+#: Expected sizes for RFC 8554 Appendix F, derived from the structures rather
+#: than copied from a claim. An HSS public key is `u32 levels || LMS public key`
+#: and an LMS public key is `u32 type || u32 otstype || I[16] || K[32]`, so 60
+#: octets for a two-level tree. The signature sizes follow from the parameter
+#: sets each test case names and are asserted rather than assumed, because a
+#: vector whose size is wrong is one the extractor mis-assembled.
+RFC8554_PUBLIC_KEY_BYTES = 60
+RFC8554_SIGNATURE_BYTES = (2644, 3860)
+
+_HEX_RE = re.compile(r"\A(?:[0-9a-f]{2})+\Z")
+
+
+def _appendix_f_hex(lines: list[str]) -> str:
+    """Concatenate the hexadecimal values in one Appendix F block.
+
+    RFC 8554 Appendix F states the rule this implements: "the concatenation of
+    all of the values within a public key or signature produces that public key
+    or signature, and values that do not fit within a single line are listed
+    across successive lines".
+
+    The lines carry three kinds of decoration that are not values — an ASCII
+    gutter (``|The powers not d|``), a parameter-set comment
+    (``# LMOTS_SHA256_N32_W8``) and rules of dashes — plus a label column whose
+    entries include ``I`` and ``K``. Rather than trying to recognise labels,
+    this takes the *trailing run of even-length hexadecimal tokens*: a label is
+    either not hex (``levels``, ``Message``, ``q``) or is a single character and
+    therefore odd-length (``I``, ``K``, ``C``).
+    """
+    out: list[str] = []
+    for raw in lines:
+        line = raw.strip()
+        if not line or line.startswith("-"):
+            continue
+        line = re.sub(r"\|.*\|\s*$", "", line)   # ASCII gutter
+        line = re.sub(r"#.*$", "", line)         # parameter-set comment
+        tokens = line.split()
+        run: list[str] = []
+        for token in reversed(tokens):
+            if _HEX_RE.match(token):
+                run.append(token)
+            else:
+                break
+        out.extend(reversed(run))
+    return "".join(out)
+
+
+def build_rfc8554_hss_lms() -> dict:
+    """RFC 8554 Appendix F — the HSS/LMS answer key.
+
+    Vendored so that the reference for any future LMS work is a checked-in,
+    verifiable artefact rather than a claim. Nothing in AMA implements HSS/LMS
+    today; this is the specification's own test data, extracted through exactly
+    the same provenance path as every other corpus here and subject to the same
+    ``--verify`` and ``--verify-upstream`` gates.
+
+    Deliberately *only* what RFC 8554 publishes. SP 800-208's approved parameter
+    sets and its §6.2 key-derivation method are **not** here: the published PDF
+    did not yield reliable text, and guessing an approved parameter set is
+    exactly the kind of speculative standards work this repository refuses.
+    """
+    meta = SOURCES["rfc8554_hss_lms.json"]
+    lines = strip_page_furniture(fetch(meta["url"])).split("\n")
+
+    start = next(
+        (i for i, line in enumerate(lines)
+         if line.startswith("Appendix F.") and "Test Cases" in line and i > 300),
+        None,
+    )
+    if start is None:
+        raise ValueError("RFC 8554 Appendix F heading not found")
+
+    # Any "Test Case N <something>" heading ends the previous block. Matching
+    # only the three kinds wanted would let "Test Case 2 Private Key" fall
+    # *inside* Test Case 1's signature — which it did, adding exactly the 96
+    # octets of two SEED/I pairs and producing a 2740-octet "signature" that
+    # still looked plausible. The size assertion below is what caught it.
+    heading = re.compile(r"^\s{3}Test Case (\d+) (.+?)\s*$")
+    wanted = {"Public Key", "Message", "Signature"}
+    blocks: dict[tuple[str, str], list[str]] = {}
+    current: tuple[str, str] | None = None
+    for line in lines[start:]:
+        match = heading.match(line)
+        if match:
+            current = (match.group(1), match.group(2)) if match.group(2) in wanted else None
+            if current is not None:
+                blocks[current] = []
+            continue
+        if line.startswith("Acknowledgements") or line.startswith("Authors' Addresses"):
+            current = None
+        if current is not None:
+            blocks[current].append(line)
+
+    records = []
+    for (case, kind), body in sorted(blocks.items(), key=lambda kv: (int(kv[0][0]), kv[0][1])):
+        value = _appendix_f_hex(body)
+        if not value:
+            raise ValueError(f"Test Case {case} {kind}: no hexadecimal value extracted")
+        records.append({
+            "section": f"Appendix F, Test Case {case}",
+            "case": int(case),
+            "kind": kind.lower().replace(" ", "_"),
+            "hex": value,
+            "bytes": len(value) // 2,
+        })
+
+    # Structural self-check: the extractor is what could be wrong here, and a
+    # mis-assembled vector is worse than a missing one because it looks usable.
+    for record in records:
+        if record["kind"] == "public_key" and record["bytes"] != RFC8554_PUBLIC_KEY_BYTES:
+            raise ValueError(
+                f"Test Case {record['case']} public key is {record['bytes']} octets, "
+                f"expected {RFC8554_PUBLIC_KEY_BYTES}"
+            )
+        if record["kind"] == "signature" and record["bytes"] not in RFC8554_SIGNATURE_BYTES:
+            raise ValueError(
+                f"Test Case {record['case']} signature is {record['bytes']} octets, "
+                f"expected one of {RFC8554_SIGNATURE_BYTES}"
+            )
+    if not records:
+        raise ValueError("RFC 8554 Appendix F produced no records")
+    return {"source": meta, "records": records}
+
+
 def verify_upstream(corpus: Path = CORPUS) -> list[str]:
     """Provenance: the vendored records are still what the documents publish.
 
@@ -460,6 +589,7 @@ def verify_upstream(corpus: Path = CORPUS) -> list[str]:
         "lamps_ml_kem.json": lambda: build_pq("lamps_ml_kem.json"),
         "rfc8410_okp.json": build_okp,
         "rfc9500_ec.json": build_rfc9500_ec,
+        "rfc8554_hss_lms.json": build_rfc8554_hss_lms,
     }
     for filename, builder in sorted(builders.items()):
         path = corpus / filename
@@ -478,8 +608,18 @@ def verify_upstream(corpus: Path = CORPUS) -> list[str]:
                 f"{vendored.get('source', {}).get('revision')!r} != "
                 f"{fresh['source']['revision']!r}"
             )
-        old = {(r["section"], r["label"], r["pem_b64"]) for r in vendored["records"]}
-        new = {(r["section"], r["label"], r["pem_b64"]) for r in fresh["records"]}
+        def _key(record: dict) -> tuple:
+            # RFC 8554's appendix publishes labelled hexadecimal rather than
+            # PEM, so its records carry `hex`/`kind` where the others carry
+            # `pem_b64`/`label`. One comparison covers both.
+            return (
+                record["section"],
+                record.get("label", record.get("kind", "")),
+                record.get("pem_b64", record.get("hex", "")),
+            )
+
+        old = {_key(r) for r in vendored["records"]}
+        new = {_key(r) for r in fresh["records"]}
         for section, label, _ in sorted(old - new):
             problems.append(
                 f"{filename}: vendored record {section!r} ({label}) is not in the "
@@ -533,6 +673,9 @@ def main() -> int:
         data = build_rfc9500_ec()
         (CORPUS / "rfc9500_ec.json").write_text(json.dumps(data, indent=1) + "\n")
         print(f"wrote rfc9500_ec.json: {len(data['records'])} records")
+        data = build_rfc8554_hss_lms()
+        (CORPUS / "rfc8554_hss_lms.json").write_text(json.dumps(data, indent=1) + "\n")
+        print(f"wrote rfc8554_hss_lms.json: {len(data['records'])} records")
         (CORPUS / "jose_cose.json").write_text(json.dumps(JOSE_COSE, indent=1) + "\n")
         print(f"wrote jose_cose.json: {len(JOSE_COSE['records'])} records")
 
