@@ -135,10 +135,30 @@ TLS deployment negotiates it. It is *additive* coverage for constrained
 targets, and the decision log must record it as such rather than as a
 performance or interoperability win.
 
-**Disposition.** Recommended for adoption as a separate PR against a v3.5.0
-milestone, carrying its own decision log per the *Preserve and evolve
-primitives* rule, with Ascon-AEAD128 and Ascon-Hash256 as the minimum viable
-scope and the XOF variants following. Do not add it under this directive.
+**Disposition — SUPERSEDED, and Ascon is now in scope.** The paragraphs above
+recorded the original deferral. That call was reversed by the repository
+owner, who directed that Ascon land in this PR rather than a later milestone,
+and it has: **Ascon-AEAD128 and Ascon-Hash256 ship in `3.4.0`**.
+
+- Implementation: `src/c/ama_ascon.c`, `ama_cryptography/ascon.py`
+- Decision log: `docs/decisions/0001-adopt-ascon.md` (records the
+  compatibility impact, the honest case against, the measured evidence, and
+  the conditions that would reverse the decision, per the *Preserve and evolve
+  primitives* rule)
+- Verification: `tests/c/test_ascon.c`, `tests/test_ascon.py`,
+  `fuzz/fuzz_ascon.c`, three dudect lanes, and the vendored KAT corpora in
+  `tests/kat/ascon/`
+- Inventory: `CSRC_STANDARDS.md`
+
+Ascon-XOF128 and Ascon-CXOF128 remain out of scope; they share the
+permutation now in the tree, so adding them later is incremental rather than
+foundational.
+
+The reasoning above is retained rather than deleted because it is the record
+of *why* the deferral was proposed and what the costs are — all of which
+remain true. Ascon is not faster than the incumbent AEADs on 64-bit hosts and
+does not replace them. Anyone reading this section should read the decision
+log before assuming otherwise.
 
 ---
 
