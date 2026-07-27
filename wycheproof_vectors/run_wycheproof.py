@@ -97,6 +97,7 @@ from ama_cryptography.pqc_backends import (  # noqa: E402
     native_hmac_sha256,
     native_hmac_sha384,
     native_hmac_sha512,
+    native_nistp_ecdsa_verify,
     native_secp256k1_ecdsa_verify,
     native_x25519_key_exchange,
 )
@@ -348,15 +349,50 @@ def _der_s_value(sig: bytes) -> int | None:
         return None
 
 
+# Wycheproof curve name -> (AMA verifier, field octets).  secp256k1 goes to
+# the dedicated curve implementation; the three NIST prime curves go to the
+# generic one.  A curve absent from this table is a hard failure rather than a
+# silent skip: a vendored suite with no driver would otherwise read as "no
+# failures" while testing nothing.
+_ECDSA_CURVES: dict[str, int] = {
+    "secp256k1": 32,
+    "secp256r1": 32,
+    "secp384r1": 48,
+    "secp521r1": 66,
+}
+
+# Wycheproof `sha` label -> hashlib name.  ECDSA truncates a digest wider than
+# the group order per FIPS 186-5, so the pairing need not be the curve's
+# "natural" one; the group says which hash produced `msg`'s digest and we use
+# exactly that.
+_ECDSA_HASHES: dict[str, str] = {
+    "SHA-256": "sha256",
+    "SHA-384": "sha384",
+    "SHA-512": "sha512",
+}
+
+
 def drive_ecdsa_verify(c: Case) -> tuple[bool, str]:
     import hashlib
 
+    curve = c.group["publicKey"]["curve"]
+    field = _ECDSA_CURVES.get(curve)
+    if field is None:
+        return False, f"no ECDSA driver for curve {curve!r}"
+    sha = _ECDSA_HASHES.get(c.group["sha"])
+    if sha is None:
+        return False, f"no ECDSA driver for hash {c.group['sha']!r}"
+
     pub = bytes.fromhex(c.group["publicKey"]["uncompressed"])
-    if pub[:1] != b"\x04" or len(pub) != 65:
+    if pub[:1] != b"\x04" or len(pub) != 1 + 2 * field:
         return False, "public key is not an uncompressed SEC 1 point"
-    digest = hashlib.sha256(c.hexf("msg")).digest()
+    digest = hashlib.new(sha, c.hexf("msg")).digest()
+
     try:
-        ok = native_secp256k1_ecdsa_verify(c.hexf("sig"), digest, pub[1:])
+        if curve == "secp256k1":
+            ok = native_secp256k1_ecdsa_verify(c.hexf("sig"), digest, pub[1:])
+        else:
+            ok = native_nistp_ecdsa_verify(curve, c.hexf("sig"), digest, pub[1:])
     except Exception as exc:
         ok, detail = False, f"rejected: {type(exc).__name__}"
     else:

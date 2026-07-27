@@ -820,6 +820,366 @@ AMA_SECP256K1_ECDSA_VERIFY_STRICT = 0
 AMA_SECP256K1_ECDSA_ALLOW_HIGH_S = 1
 
 
+# ============================================================================
+# ML-KEM / ML-DSA PARAMETER SETS (FIPS 203 / FIPS 204)
+#
+# AMA shipped ML-KEM-1024 and ML-DSA-65 only. Both C implementations are now
+# parameter-driven, and these bindings expose every set. The pre-existing
+# `generate_kyber_keypair` / `dilithium_sign` wrappers further down are
+# untouched and still mean ML-KEM-1024 / ML-DSA-65 exactly as before.
+# ============================================================================
+
+_ML_KEM_NATIVE_AVAILABLE = False
+_ML_DSA_NATIVE_AVAILABLE = False
+
+# Selectors — must match ama_ml_kem_param_set_t / ama_ml_dsa_param_set_t.
+ML_KEM_512 = 512
+ML_KEM_768 = 768
+ML_KEM_1024 = 1024
+ML_DSA_44 = 44
+ML_DSA_65 = 65
+ML_DSA_87 = 87
+
+ML_KEM_PARAM_SETS: tuple = (ML_KEM_512, ML_KEM_768, ML_KEM_1024)
+ML_DSA_PARAM_SETS: tuple = (ML_DSA_44, ML_DSA_65, ML_DSA_87)
+
+# Accepted spellings, so callers arriving from an OID, a JWK ``alg`` or a
+# config file do not have to normalise first. An unrecognised name raises
+# rather than defaulting — silently selecting the wrong security level is the
+# worst failure mode a parameter-set API can have.
+ML_KEM_BY_NAME: dict = {
+    "ML-KEM-512": ML_KEM_512,
+    "ML-KEM-768": ML_KEM_768,
+    "ML-KEM-1024": ML_KEM_1024,
+    "Kyber512": ML_KEM_512,
+    "Kyber768": ML_KEM_768,
+    "Kyber1024": ML_KEM_1024,
+}
+ML_DSA_BY_NAME: dict = {
+    "ML-DSA-44": ML_DSA_44,
+    "ML-DSA-65": ML_DSA_65,
+    "ML-DSA-87": ML_DSA_87,
+    "Dilithium2": ML_DSA_44,
+    "Dilithium3": ML_DSA_65,
+    "Dilithium5": ML_DSA_87,
+}
+
+# FIPS 203 Table 3 / FIPS 204 Table 2. Mirrored here so a caller can size a
+# buffer without a native call; the values are cross-checked against the
+# library's own size queries by tests/test_pqc_param_sets.py, so drift between
+# this table and the C parameter block fails a test rather than truncating a key.
+ML_KEM_SIZES: dict = {
+    ML_KEM_512: {"public_key": 800, "secret_key": 1632, "ciphertext": 768},
+    ML_KEM_768: {"public_key": 1184, "secret_key": 2400, "ciphertext": 1088},
+    ML_KEM_1024: {"public_key": 1568, "secret_key": 3168, "ciphertext": 1568},
+}
+ML_DSA_SIZES: dict = {
+    ML_DSA_44: {"public_key": 1312, "secret_key": 2560, "signature": 2420},
+    ML_DSA_65: {"public_key": 1952, "secret_key": 4032, "signature": 3309},
+    ML_DSA_87: {"public_key": 2592, "secret_key": 4896, "signature": 4627},
+}
+
+ML_KEM_SHARED_SECRET_BYTES = 32
+
+
+def _setup_ml_kem_ctypes(lib: ctypes.CDLL) -> bool:
+    """Configure ctypes for the parameter-driven ML-KEM entry points."""
+    try:
+        for name in (
+            "ama_ml_kem_public_key_bytes",
+            "ama_ml_kem_secret_key_bytes",
+            "ama_ml_kem_ciphertext_bytes",
+        ):
+            fn = getattr(lib, name)
+            fn.argtypes = [ctypes.c_int]
+            fn.restype = ctypes.c_size_t
+
+        lib.ama_ml_kem_param_set_name.argtypes = [ctypes.c_int]
+        lib.ama_ml_kem_param_set_name.restype = ctypes.c_char_p
+
+        lib.ama_ml_kem_keypair.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+        ]
+        lib.ama_ml_kem_keypair.restype = ctypes.c_int
+
+        lib.ama_ml_kem_keypair_from_seed.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,  # d[32]
+            ctypes.c_char_p,  # z[32]
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+        ]
+        lib.ama_ml_kem_keypair_from_seed.restype = ctypes.c_int
+
+        lib.ama_ml_kem_encapsulate.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+            ctypes.POINTER(ctypes.c_size_t),
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+        ]
+        lib.ama_ml_kem_encapsulate.restype = ctypes.c_int
+
+        lib.ama_ml_kem_decapsulate.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+        ]
+        lib.ama_ml_kem_decapsulate.restype = ctypes.c_int
+        return True
+    except AttributeError:
+        return False
+
+
+def _setup_ml_dsa_ctypes(lib: ctypes.CDLL) -> bool:
+    """Configure ctypes for the parameter-driven ML-DSA entry points."""
+    try:
+        for name in (
+            "ama_ml_dsa_public_key_bytes",
+            "ama_ml_dsa_secret_key_bytes",
+            "ama_ml_dsa_signature_bytes",
+        ):
+            fn = getattr(lib, name)
+            fn.argtypes = [ctypes.c_int]
+            fn.restype = ctypes.c_size_t
+
+        lib.ama_ml_dsa_param_set_name.argtypes = [ctypes.c_int]
+        lib.ama_ml_dsa_param_set_name.restype = ctypes.c_char_p
+
+        lib.ama_ml_dsa_keypair.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_char_p]
+        lib.ama_ml_dsa_keypair.restype = ctypes.c_int
+
+        lib.ama_ml_dsa_keypair_from_seed.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,  # xi[32]
+            ctypes.c_char_p,
+            ctypes.c_char_p,
+        ]
+        lib.ama_ml_dsa_keypair_from_seed.restype = ctypes.c_int
+
+        lib.ama_ml_dsa_sign.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.POINTER(ctypes.c_size_t),
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+        ]
+        lib.ama_ml_dsa_sign.restype = ctypes.c_int
+
+        lib.ama_ml_dsa_verify.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+        ]
+        lib.ama_ml_dsa_verify.restype = ctypes.c_int
+
+        lib.ama_ml_dsa_sign_ctx.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.POINTER(ctypes.c_size_t),
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+        ]
+        lib.ama_ml_dsa_sign_ctx.restype = ctypes.c_int
+
+        lib.ama_ml_dsa_verify_ctx.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+        ]
+        lib.ama_ml_dsa_verify_ctx.restype = ctypes.c_int
+        return True
+    except AttributeError:
+        return False
+
+
+# ============================================================================
+# NIST PRIME CURVES — P-256 / P-384 / P-521
+# ============================================================================
+
+# Native availability for the NIST prime curves (src/c/ama_nistp.c).
+_NISTP_NATIVE_AVAILABLE = False
+
+# Curve selectors — must match ama_nist_curve_t in include/ama_cryptography.h.
+NISTP_CURVE_P256 = 0
+NISTP_CURVE_P384 = 1
+NISTP_CURVE_P521 = 2
+
+# Canonical name -> selector.  The aliases are the names these curves actually
+# travel under in the ecosystems this support exists for: SEC 1 / OpenSSL
+# ("secp256r1", "prime256v1"), JOSE RFC 7518 §6.2.1.1 ("P-256"), and COSE
+# RFC 9053 §7.1 (numeric, handled in ama_cryptography.key_formats).
+NISTP_CURVES_BY_NAME: dict = {
+    "P-256": NISTP_CURVE_P256,
+    "P-384": NISTP_CURVE_P384,
+    "P-521": NISTP_CURVE_P521,
+    "secp256r1": NISTP_CURVE_P256,
+    "secp384r1": NISTP_CURVE_P384,
+    "secp521r1": NISTP_CURVE_P521,
+    "prime256v1": NISTP_CURVE_P256,
+}
+
+# Field/scalar octet widths, indexed by selector.
+NISTP_FIELD_BYTES: dict = {
+    NISTP_CURVE_P256: 32,
+    NISTP_CURVE_P384: 48,
+    NISTP_CURVE_P521: 66,
+}
+
+# The hash each curve is paired with by FIPS 186-5 / RFC 5480 practice.
+NISTP_DEFAULT_HASH: dict = {
+    NISTP_CURVE_P256: "sha256",
+    NISTP_CURVE_P384: "sha384",
+    NISTP_CURVE_P521: "sha512",
+}
+
+# ECDSA verification policy flags (mirror include/ama_cryptography.h).
+AMA_NISTP_ECDSA_VERIFY_DEFAULT = 0
+AMA_NISTP_ECDSA_REQUIRE_LOW_S = 1
+
+# Longest DER signature across the supported curves (P-521, long-form length).
+NISTP_MAX_SIG_LEN = 141
+
+
+def _setup_nistp_ctypes(lib: ctypes.CDLL) -> bool:
+    """Configure ctypes for the NIST prime-curve functions."""
+    try:
+        lib.ama_nistp_field_bytes.argtypes = [ctypes.c_int]
+        lib.ama_nistp_field_bytes.restype = ctypes.c_size_t
+
+        lib.ama_nistp_pubkey_bytes.argtypes = [ctypes.c_int]
+        lib.ama_nistp_pubkey_bytes.restype = ctypes.c_size_t
+
+        lib.ama_nistp_sig_der_max_len.argtypes = [ctypes.c_int]
+        lib.ama_nistp_sig_der_max_len.restype = ctypes.c_size_t
+
+        lib.ama_nistp_curve_name.argtypes = [ctypes.c_int]
+        lib.ama_nistp_curve_name.restype = ctypes.c_char_p
+
+        lib.ama_nistp_keypair.argtypes = [
+            ctypes.c_int,  # curve
+            ctypes.c_char_p,  # private_key (out)
+            ctypes.c_char_p,  # public_key (out)
+        ]
+        lib.ama_nistp_keypair.restype = ctypes.c_int
+
+        lib.ama_nistp_pubkey_from_privkey.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,  # private_key
+            ctypes.c_char_p,  # public_key (out)
+        ]
+        lib.ama_nistp_pubkey_from_privkey.restype = ctypes.c_int
+
+        lib.ama_nistp_pubkey_validate.argtypes = [ctypes.c_int, ctypes.c_char_p]
+        lib.ama_nistp_pubkey_validate.restype = ctypes.c_int
+
+        lib.ama_nistp_point_encode.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,  # public_key (X||Y)
+            ctypes.c_int,  # compressed
+            ctypes.c_char_p,  # out
+            ctypes.POINTER(ctypes.c_size_t),  # out_len
+        ]
+        lib.ama_nistp_point_encode.restype = ctypes.c_int
+
+        lib.ama_nistp_point_decode.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,  # in (SEC 1 prefixed)
+            ctypes.c_size_t,  # in_len
+            ctypes.c_char_p,  # public_key (out, X||Y)
+        ]
+        lib.ama_nistp_point_decode.restype = ctypes.c_int
+
+        lib.ama_nistp_ecdh.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,  # private_key
+            ctypes.c_char_p,  # peer_public_key (X||Y)
+            ctypes.c_char_p,  # shared_secret (out)
+        ]
+        lib.ama_nistp_ecdh.restype = ctypes.c_int
+
+        lib.ama_nistp_ecdsa_sign.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,  # digest
+            ctypes.c_size_t,  # digest_len
+            ctypes.c_char_p,  # private_key
+            ctypes.c_char_p,  # signature (out, DER)
+            ctypes.POINTER(ctypes.c_size_t),  # signature_len (out)
+        ]
+        lib.ama_nistp_ecdsa_sign.restype = ctypes.c_int
+
+        lib.ama_nistp_ecdsa_sign_hedged.argtypes = lib.ama_nistp_ecdsa_sign.argtypes
+        lib.ama_nistp_ecdsa_sign_hedged.restype = ctypes.c_int
+
+        lib.ama_nistp_ecdsa_sign_raw.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,  # digest
+            ctypes.c_size_t,  # digest_len
+            ctypes.c_char_p,  # private_key
+            ctypes.c_char_p,  # signature (out, r||s)
+        ]
+        lib.ama_nistp_ecdsa_sign_raw.restype = ctypes.c_int
+
+        lib.ama_nistp_ecdsa_verify_ex.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,  # digest
+            ctypes.c_size_t,  # digest_len
+            ctypes.c_char_p,  # public_key
+            ctypes.c_char_p,  # signature (DER)
+            ctypes.c_size_t,  # signature_len
+            ctypes.c_uint32,  # flags
+        ]
+        lib.ama_nistp_ecdsa_verify_ex.restype = ctypes.c_int
+
+        lib.ama_nistp_ecdsa_verify_raw_ex.argtypes = lib.ama_nistp_ecdsa_verify_ex.argtypes
+        lib.ama_nistp_ecdsa_verify_raw_ex.restype = ctypes.c_int
+
+        lib.ama_nistp_sig_der_to_raw.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,  # der
+            ctypes.c_size_t,  # der_len
+            ctypes.c_char_p,  # raw (out)
+            ctypes.POINTER(ctypes.c_size_t),  # raw_len (out)
+        ]
+        lib.ama_nistp_sig_der_to_raw.restype = ctypes.c_int
+
+        lib.ama_nistp_sig_raw_to_der.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,  # raw
+            ctypes.c_size_t,  # raw_len
+            ctypes.c_char_p,  # der (out)
+            ctypes.POINTER(ctypes.c_size_t),  # der_len (out)
+        ]
+        lib.ama_nistp_sig_raw_to_der.restype = ctypes.c_int
+        return True
+    except AttributeError:
+        return False
+
+
 # X25519 native availability
 _X25519_NATIVE_AVAILABLE = False
 
@@ -1130,6 +1490,9 @@ if _native_lib is not None:
     _HMAC_SHA384_NATIVE_AVAILABLE = _setup_hmac_sha384_ctypes(_native_lib)
     _HMAC_SHA256_NATIVE_AVAILABLE = _setup_hmac_sha256_ctypes(_native_lib)
     _SECP256K1_NATIVE_AVAILABLE = _setup_secp256k1_ctypes(_native_lib)
+    _NISTP_NATIVE_AVAILABLE = _setup_nistp_ctypes(_native_lib)
+    _ML_KEM_NATIVE_AVAILABLE = _setup_ml_kem_ctypes(_native_lib)
+    _ML_DSA_NATIVE_AVAILABLE = _setup_ml_dsa_ctypes(_native_lib)
     _X25519_NATIVE_AVAILABLE = _setup_x25519_ctypes(_native_lib)
     _ARGON2_NATIVE_AVAILABLE = _setup_argon2_ctypes(_native_lib)
     _CHACHA20_POLY1305_NATIVE_AVAILABLE = _setup_chacha20poly1305_ctypes(_native_lib)
@@ -3899,6 +4262,672 @@ def native_secp256k1_ecdsa_verify(
         )
     )
     return rc == 0
+
+
+# ============================================================================
+# NIST PRIME CURVE NATIVE WRAPPERS (P-256 / P-384 / P-521)
+#
+# ECDSA per FIPS 186-5 with RFC 6979 deterministic nonces, ECDH per
+# SP 800-56A §5.7.1.2.  These are the curves TLS, X.509, JOSE/JWT, COSE,
+# WebAuthn/FIDO2, CNSA 1.0 and most enterprise HSM fleets actually speak; the
+# in-repo Curve25519 and secp256k1 support does not reach any of them.
+#
+# Conventions shared by every function below:
+#   * ``curve`` is one of NISTP_CURVE_P256 / _P384 / _P521, or any name in
+#     NISTP_CURVES_BY_NAME.
+#   * A private key is ``NISTP_FIELD_BYTES[curve]`` big-endian bytes.
+#   * A public key is ``2 * NISTP_FIELD_BYTES[curve]`` bytes, X||Y, with no
+#     SEC 1 prefix octet (same shape as the secp256k1 wrappers above).
+#   * These functions never hash. Pass a digest of 32, 48 or 64 bytes; its
+#     width also selects the RFC 6979 HMAC, exactly as the RFC requires.
+# ============================================================================
+
+
+def _param_set_id(value: Union[int, str], by_name: dict, valid: tuple, family: str) -> int:
+    """Normalise a parameter-set selector or name to its ABI integer."""
+    if isinstance(value, bool):  # bool is an int subclass; never a parameter set
+        raise ValueError(f"Invalid {family} parameter set: {value!r}")
+    if isinstance(value, int):
+        if value not in valid:
+            raise ValueError(f"Unknown {family} parameter set: {value!r}; expected one of {valid}")
+        return value
+    try:
+        return int(by_name[value])
+    except KeyError:
+        raise ValueError(
+            f"Unknown {family} parameter set {value!r}; expected one of {sorted(by_name)}"
+        ) from None
+
+
+def _ml_kem_id(ps: Union[int, str]) -> int:
+    return _param_set_id(ps, ML_KEM_BY_NAME, ML_KEM_PARAM_SETS, "ML-KEM")
+
+
+def _ml_dsa_id(ps: Union[int, str]) -> int:
+    return _param_set_id(ps, ML_DSA_BY_NAME, ML_DSA_PARAM_SETS, "ML-DSA")
+
+
+def _ml_kem_require_native() -> None:
+    if _native_lib is None or not _ML_KEM_NATIVE_AVAILABLE:
+        raise PQCUnavailableError("ML-KEM native backend not available. " + _INSTALL_HINT)
+
+
+def _ml_dsa_require_native() -> None:
+    if _native_lib is None or not _ML_DSA_NATIVE_AVAILABLE:
+        raise PQCUnavailableError("ML-DSA native backend not available. " + _INSTALL_HINT)
+
+
+def ml_kem_sizes(ps: Union[int, str]) -> dict:
+    """Public-key / secret-key / ciphertext octet widths for an ML-KEM set."""
+    return dict(ML_KEM_SIZES[_ml_kem_id(ps)])
+
+
+def ml_dsa_sizes(ps: Union[int, str]) -> dict:
+    """Public-key / secret-key / signature octet widths for an ML-DSA set."""
+    return dict(ML_DSA_SIZES[_ml_dsa_id(ps)])
+
+
+def native_ml_kem_keypair(ps: Union[int, str]) -> tuple:
+    """
+    Generate an ML-KEM keypair for any FIPS 203 parameter set.
+
+    Args:
+        ps: ``ML_KEM_512`` / ``768`` / ``1024``, or a name in ``ML_KEM_BY_NAME``.
+
+    Returns:
+        ``(public_key, secret_key)`` as bytes.
+
+    Raises:
+        ValueError: If the parameter set is unknown.
+        PQCUnavailableError: If the native backend is unavailable.
+        RuntimeError: If key generation failed.
+    """
+    pid = _ml_kem_id(ps)
+    _ml_kem_require_native()
+    sz = ML_KEM_SIZES[pid]
+    pk = ctypes.create_string_buffer(sz["public_key"])
+    sk = ctypes.create_string_buffer(sz["secret_key"])
+    rc = _native_lib.ama_ml_kem_keypair(
+        pid, pk, ctypes.c_size_t(sz["public_key"]), sk, ctypes.c_size_t(sz["secret_key"])
+    )
+    if rc != 0:
+        raise RuntimeError(f"ML-KEM keypair generation failed (rc={rc})")
+    return bytes(pk.raw[: sz["public_key"]]), bytes(sk.raw[: sz["secret_key"]])
+
+
+def native_ml_kem_keypair_from_seed(ps: Union[int, str], d: bytes, z: bytes) -> tuple:
+    """
+    Deterministic ML-KEM keypair from the (d, z) seed pair (FIPS 203 §7.1).
+
+    This is the KAT entry point and the one a PKCS#8 ``seed`` private key needs:
+    ``d || z`` is 64 octets and expands to the full key.
+
+    Raises:
+        ValueError: If a seed is not exactly 32 bytes, or the set is unknown.
+    """
+    pid = _ml_kem_id(ps)
+    if len(d) != 32 or len(z) != 32:
+        raise ValueError(f"ML-KEM seeds must be 32 bytes each, got d={len(d)}, z={len(z)}")
+    _ml_kem_require_native()
+    sz = ML_KEM_SIZES[pid]
+    pk = ctypes.create_string_buffer(sz["public_key"])
+    sk = ctypes.create_string_buffer(sz["secret_key"])
+    rc = _native_lib.ama_ml_kem_keypair_from_seed(
+        pid, bytes(d), bytes(z),
+        pk, ctypes.c_size_t(sz["public_key"]), sk, ctypes.c_size_t(sz["secret_key"])
+    )
+    if rc != 0:
+        raise RuntimeError(f"ML-KEM deterministic keypair failed (rc={rc})")
+    return bytes(pk.raw[: sz["public_key"]]), bytes(sk.raw[: sz["secret_key"]])
+
+
+def native_ml_kem_encapsulate(ps: Union[int, str], public_key: bytes) -> tuple:
+    """
+    ML-KEM encapsulation (FIPS 203 Algorithm 17).
+
+    Returns:
+        ``(ciphertext, shared_secret)``; the shared secret is 32 bytes for
+        every parameter set.
+
+    Raises:
+        ValueError: If the public key has the wrong length for ``ps``.
+    """
+    pid = _ml_kem_id(ps)
+    sz = ML_KEM_SIZES[pid]
+    if len(public_key) != sz["public_key"]:
+        raise ValueError(
+            f"ML-KEM-{pid} public key must be {sz['public_key']} bytes, got {len(public_key)}"
+        )
+    _ml_kem_require_native()
+    ct = ctypes.create_string_buffer(sz["ciphertext"])
+    ct_len = ctypes.c_size_t(sz["ciphertext"])
+    ss = ctypes.create_string_buffer(ML_KEM_SHARED_SECRET_BYTES)
+    rc = _native_lib.ama_ml_kem_encapsulate(
+        pid, bytes(public_key), ctypes.c_size_t(len(public_key)),
+        ct, ctypes.byref(ct_len), ss, ctypes.c_size_t(ML_KEM_SHARED_SECRET_BYTES)
+    )
+    if rc != 0:
+        raise RuntimeError(f"ML-KEM encapsulation failed (rc={rc})")
+    return bytes(ct.raw[: ct_len.value]), bytes(ss.raw[:ML_KEM_SHARED_SECRET_BYTES])
+
+
+def native_ml_kem_decapsulate(
+    ps: Union[int, str], ciphertext: bytes, secret_key: Union[bytes, bytearray]
+) -> bytes:
+    """
+    ML-KEM decapsulation (FIPS 203 Algorithm 18).
+
+    A malformed ciphertext does NOT raise: FIPS 203 mandates implicit
+    rejection, so decapsulation returns a deterministic pseudorandom secret
+    that differs from the sender's. Treating a mismatch as an error here would
+    reintroduce the very oracle implicit rejection exists to close. Only a
+    wrong *length* is an error, because that is a caller bug rather than an
+    attacker-supplied ciphertext.
+    """
+    pid = _ml_kem_id(ps)
+    sz = ML_KEM_SIZES[pid]
+    if len(ciphertext) != sz["ciphertext"]:
+        raise ValueError(
+            f"ML-KEM-{pid} ciphertext must be {sz['ciphertext']} bytes, got {len(ciphertext)}"
+        )
+    if len(secret_key) != sz["secret_key"]:
+        raise ValueError(
+            f"ML-KEM-{pid} secret key must be {sz['secret_key']} bytes, got {len(secret_key)}"
+        )
+    _ml_kem_require_native()
+    ss = ctypes.create_string_buffer(ML_KEM_SHARED_SECRET_BYTES)
+    rc = _native_lib.ama_ml_kem_decapsulate(
+        pid, bytes(ciphertext), ctypes.c_size_t(len(ciphertext)),
+        bytes(secret_key), ctypes.c_size_t(len(secret_key)),
+        ss, ctypes.c_size_t(ML_KEM_SHARED_SECRET_BYTES)
+    )
+    if rc != 0:
+        raise RuntimeError(f"ML-KEM decapsulation failed (rc={rc})")
+    return bytes(ss.raw[:ML_KEM_SHARED_SECRET_BYTES])
+
+
+def native_ml_dsa_keypair(ps: Union[int, str]) -> tuple:
+    """Generate an ML-DSA keypair for any FIPS 204 parameter set."""
+    pid = _ml_dsa_id(ps)
+    _ml_dsa_require_native()
+    sz = ML_DSA_SIZES[pid]
+    pk = ctypes.create_string_buffer(sz["public_key"])
+    sk = ctypes.create_string_buffer(sz["secret_key"])
+    rc = _native_lib.ama_ml_dsa_keypair(pid, pk, sk)
+    if rc != 0:
+        raise RuntimeError(f"ML-DSA keypair generation failed (rc={rc})")
+    return bytes(pk.raw[: sz["public_key"]]), bytes(sk.raw[: sz["secret_key"]])
+
+
+def native_ml_dsa_keypair_from_seed(ps: Union[int, str], xi: bytes) -> tuple:
+    """
+    Deterministic ML-DSA keypair from the 32-octet seed xi (FIPS 204 §5.1).
+
+    Raises:
+        ValueError: If the seed is not exactly 32 bytes, or the set is unknown.
+    """
+    pid = _ml_dsa_id(ps)
+    if len(xi) != 32:
+        raise ValueError(f"ML-DSA seed must be 32 bytes, got {len(xi)}")
+    _ml_dsa_require_native()
+    sz = ML_DSA_SIZES[pid]
+    pk = ctypes.create_string_buffer(sz["public_key"])
+    sk = ctypes.create_string_buffer(sz["secret_key"])
+    rc = _native_lib.ama_ml_dsa_keypair_from_seed(pid, bytes(xi), pk, sk)
+    if rc != 0:
+        raise RuntimeError(f"ML-DSA deterministic keypair failed (rc={rc})")
+    return bytes(pk.raw[: sz["public_key"]]), bytes(sk.raw[: sz["secret_key"]])
+
+
+def native_ml_dsa_sign(
+    ps: Union[int, str],
+    message: bytes,
+    secret_key: Union[bytes, bytearray],
+    *,
+    ctx: Optional[bytes] = None,
+) -> bytes:
+    """
+    Sign with ML-DSA (FIPS 204), deterministic variant (rnd = 0^256).
+
+    Args:
+        ctx: When not None, applies the FIPS 204 §5.2 external/pure context
+            wrapper ``0x00 || len(ctx) || ctx || M``. ``ctx=b""`` is the
+            empty-context *external* form and is NOT the same signature as
+            ``ctx=None`` (the internal interface) — they are different
+            domains, which is the entire point of the wrapper.
+
+    Raises:
+        ValueError: On a wrong key length or a context longer than 255 bytes.
+    """
+    pid = _ml_dsa_id(ps)
+    sz = ML_DSA_SIZES[pid]
+    if len(secret_key) != sz["secret_key"]:
+        raise ValueError(
+            f"ML-DSA-{pid} secret key must be {sz['secret_key']} bytes, got {len(secret_key)}"
+        )
+    if ctx is not None and len(ctx) > 255:
+        raise ValueError(f"ML-DSA context must be at most 255 bytes, got {len(ctx)}")
+    _ml_dsa_require_native()
+
+    sig = ctypes.create_string_buffer(sz["signature"])
+    sig_len = ctypes.c_size_t(sz["signature"])
+    if ctx is None:
+        rc = _native_lib.ama_ml_dsa_sign(
+            pid, sig, ctypes.byref(sig_len), bytes(message), ctypes.c_size_t(len(message)),
+            bytes(secret_key)
+        )
+    else:
+        rc = _native_lib.ama_ml_dsa_sign_ctx(
+            pid, sig, ctypes.byref(sig_len), bytes(message), ctypes.c_size_t(len(message)),
+            bytes(ctx), ctypes.c_size_t(len(ctx)), bytes(secret_key)
+        )
+    if rc != 0:
+        raise RuntimeError(f"ML-DSA signing failed (rc={rc})")
+    return bytes(sig.raw[: sig_len.value])
+
+
+def native_ml_dsa_verify(
+    ps: Union[int, str],
+    message: bytes,
+    signature: bytes,
+    public_key: bytes,
+    *,
+    ctx: Optional[bytes] = None,
+) -> bool:
+    """
+    Verify an ML-DSA signature (FIPS 204).
+
+    ``ctx`` must match what the signer used: ``None`` for the internal
+    interface, or the same context octets for the external/pure form.
+
+    Returns:
+        True if valid. A wrong-length signature or public key returns False
+        rather than raising — those are just invalid signatures.
+    """
+    pid = _ml_dsa_id(ps)
+    sz = ML_DSA_SIZES[pid]
+    if len(public_key) != sz["public_key"] or len(signature) != sz["signature"]:
+        return False
+    if ctx is not None and len(ctx) > 255:
+        return False
+    _ml_dsa_require_native()
+
+    if ctx is None:
+        rc = _native_lib.ama_ml_dsa_verify(
+            pid, bytes(message), ctypes.c_size_t(len(message)),
+            bytes(signature), ctypes.c_size_t(len(signature)), bytes(public_key)
+        )
+    else:
+        rc = _native_lib.ama_ml_dsa_verify_ctx(
+            pid, bytes(message), ctypes.c_size_t(len(message)),
+            bytes(ctx), ctypes.c_size_t(len(ctx)),
+            bytes(signature), ctypes.c_size_t(len(signature)), bytes(public_key)
+        )
+    return int(rc) == 0
+
+
+def _nistp_curve_id(curve: Union[int, str]) -> int:
+    """Normalise a curve selector or name to its ABI integer.
+
+    Accepting the SEC 1 / OpenSSL aliases alongside the JOSE names is
+    deliberate: callers arrive here from ASN.1 OIDs, JWK ``crv`` values and
+    config files, and silently mapping an unknown name to P-256 would be the
+    worst possible failure mode. Anything unrecognised raises.
+    """
+    if isinstance(curve, bool):  # bool is an int subclass; never a curve id
+        raise ValueError(f"Invalid NIST curve selector: {curve!r}")
+    if isinstance(curve, int):
+        if curve not in NISTP_FIELD_BYTES:
+            raise ValueError(f"Unknown NIST curve selector: {curve!r}")
+        return curve
+    try:
+        return int(NISTP_CURVES_BY_NAME[curve])
+    except KeyError:
+        raise ValueError(
+            f"Unknown NIST curve name {curve!r}; "
+            f"expected one of {sorted(NISTP_CURVES_BY_NAME)}"
+        ) from None
+
+
+def _nistp_require_native() -> None:
+    if _native_lib is None or not _NISTP_NATIVE_AVAILABLE:
+        raise RuntimeError("NIST prime-curve native backend not available. " + _INSTALL_HINT)
+
+
+def _nistp_check_digest(digest: bytes) -> None:
+    if len(digest) not in (32, 48, 64):
+        raise ValueError(
+            f"Digest must be 32, 48 or 64 bytes (SHA-256/384/512), got {len(digest)}"
+        )
+
+
+def nistp_field_bytes(curve: Union[int, str]) -> int:
+    """Octet width of a private key / field element for ``curve``."""
+    return int(NISTP_FIELD_BYTES[_nistp_curve_id(curve)])
+
+
+def native_nistp_keypair(curve: Union[int, str]) -> tuple:
+    """
+    Generate a fresh NIST prime-curve keypair from the platform CSPRNG.
+
+    The private scalar is drawn by rejection sampling into [1, n-1], so its
+    distribution is exactly uniform — it is not a wide random value reduced
+    mod n, which would be measurably biased for P-521.
+
+    Args:
+        curve: Curve selector or name.
+
+    Returns:
+        ``(private_key, public_key)`` as bytes.
+
+    Raises:
+        ValueError: If the curve is unknown.
+        RuntimeError: If the native library is unavailable or the CSPRNG failed.
+    """
+    cid = _nistp_curve_id(curve)
+    _nistp_require_native()
+    nb = NISTP_FIELD_BYTES[cid]
+    priv = ctypes.create_string_buffer(nb)
+    pub = ctypes.create_string_buffer(2 * nb)
+    rc = _native_lib.ama_nistp_keypair(cid, priv, pub)
+    if rc != 0:
+        raise RuntimeError(f"NIST curve keypair generation failed (rc={rc})")
+    return bytes(priv.raw[:nb]), bytes(pub.raw[: 2 * nb])
+
+
+def native_nistp_pubkey_from_privkey(curve: Union[int, str], privkey: bytes) -> bytes:
+    """
+    Derive the X||Y public key for an existing private scalar.
+
+    Raises:
+        ValueError: If the curve is unknown or the key length is wrong.
+        RuntimeError: If the native library is unavailable or the scalar is
+            zero or >= n.
+    """
+    cid = _nistp_curve_id(curve)
+    nb = NISTP_FIELD_BYTES[cid]
+    if len(privkey) != nb:
+        raise ValueError(f"Private key must be {nb} bytes for this curve, got {len(privkey)}")
+    _nistp_require_native()
+    pub = ctypes.create_string_buffer(2 * nb)
+    rc = _native_lib.ama_nistp_pubkey_from_privkey(cid, bytes(privkey), pub)
+    if rc != 0:
+        raise RuntimeError(f"NIST curve public-key derivation failed (rc={rc})")
+    return bytes(pub.raw[: 2 * nb])
+
+
+def native_nistp_pubkey_validate(curve: Union[int, str], pubkey: bytes) -> bool:
+    """
+    Full public-key validation: canonical coordinates in [0, p), on the curve,
+    not the identity.
+
+    All three curves have cofactor 1 and prime order, so this is exactly
+    "member of the prime-order group". Returns False rather than raising for a
+    wrong-length key, because a wrong length is just another invalid key.
+    """
+    cid = _nistp_curve_id(curve)
+    nb = NISTP_FIELD_BYTES[cid]
+    if len(pubkey) != 2 * nb:
+        return False
+    _nistp_require_native()
+    return int(_native_lib.ama_nistp_pubkey_validate(cid, bytes(pubkey))) == 0
+
+
+def native_nistp_point_encode(
+    curve: Union[int, str], pubkey: bytes, *, compressed: bool = False
+) -> bytes:
+    """Encode an X||Y public key as a prefixed SEC 1 point."""
+    cid = _nistp_curve_id(curve)
+    nb = NISTP_FIELD_BYTES[cid]
+    if len(pubkey) != 2 * nb:
+        raise ValueError(f"Public key must be {2 * nb} bytes (X||Y), got {len(pubkey)}")
+    _nistp_require_native()
+    out = ctypes.create_string_buffer(2 * nb + 1)
+    out_len = ctypes.c_size_t(0)
+    rc = _native_lib.ama_nistp_point_encode(
+        cid, bytes(pubkey), 1 if compressed else 0, out, ctypes.byref(out_len)
+    )
+    if rc != 0:
+        raise ValueError(f"Point encoding rejected the public key (rc={rc})")
+    return bytes(out.raw[: out_len.value])
+
+
+def native_nistp_point_decode(curve: Union[int, str], point: bytes) -> bytes:
+    """
+    Decode a prefixed SEC 1 point (0x04 uncompressed, 0x02/0x03 compressed)
+    into X||Y.
+
+    Decompression recovers ``y`` as a modular square root and then proves it
+    by squaring, so an ``x`` that is not on the curve is rejected instead of
+    yielding an off-curve point. The result is fully validated before return.
+
+    Raises:
+        ValueError: On any malformed, off-curve, or non-canonical input.
+    """
+    cid = _nistp_curve_id(curve)
+    nb = NISTP_FIELD_BYTES[cid]
+    _nistp_require_native()
+    out = ctypes.create_string_buffer(2 * nb)
+    rc = _native_lib.ama_nistp_point_decode(cid, bytes(point), len(point), out)
+    if rc != 0:
+        raise ValueError(f"Invalid SEC 1 point encoding (rc={rc})")
+    return bytes(out.raw[: 2 * nb])
+
+
+def native_nistp_ecdh(curve: Union[int, str], privkey: bytes, peer_pubkey: bytes) -> bytes:
+    """
+    ECDH shared secret (SP 800-56A §5.7.1.2 ECC CDH, cofactor 1).
+
+    The peer key is fully validated *before* the private scalar touches it.
+    That check is the invalid-curve defence: without it, a peer that submits a
+    point on a different, smooth-order curve recovers the private key from a
+    handful of exchanges.
+
+    The return value is the raw x-coordinate ("Z" in SP 800-56A). It is key
+    *material*, not a key — run it through a KDF (``native_hkdf_sha256`` and
+    friends) before using it.
+
+    Raises:
+        ValueError: If a length is wrong.
+        RuntimeError: If the native library is unavailable, the private scalar
+            is out of range, or the peer key fails validation.
+    """
+    cid = _nistp_curve_id(curve)
+    nb = NISTP_FIELD_BYTES[cid]
+    if len(privkey) != nb:
+        raise ValueError(f"Private key must be {nb} bytes, got {len(privkey)}")
+    if len(peer_pubkey) != 2 * nb:
+        raise ValueError(f"Peer public key must be {2 * nb} bytes (X||Y), got {len(peer_pubkey)}")
+    _nistp_require_native()
+    out = ctypes.create_string_buffer(nb)
+    rc = _native_lib.ama_nistp_ecdh(cid, bytes(privkey), bytes(peer_pubkey), out)
+    if rc != 0:
+        raise RuntimeError(f"NIST curve ECDH failed (rc={rc})")
+    return bytes(out.raw[:nb])
+
+
+def native_nistp_ecdsa_sign(
+    curve: Union[int, str],
+    message_digest: bytes,
+    privkey: bytes,
+    *,
+    raw: bool = False,
+    hedged: bool = False,
+) -> bytes:
+    """
+    Sign a digest with ECDSA over a NIST prime curve.
+
+    Deterministic per RFC 6979 by default: no randomness is consumed and
+    identical inputs always produce an identical signature. The emitted ``s``
+    is always the low representative, so an AMA-produced signature is never
+    malleable — even though verification accepts either representative for
+    interoperability (see ``native_nistp_ecdsa_verify``).
+
+    Args:
+        curve: Curve selector or name.
+        message_digest: 32, 48 or 64 bytes. This function does NOT hash.
+            The width also selects the RFC 6979 HMAC (SHA-256/384/512).
+        privkey: Private scalar, big-endian, in [1, n-1].
+        raw: Emit fixed-width ``r || s`` (JWS RFC 7515 §3.4 / COSE / WebAuthn)
+            instead of DER (X.509 / TLS / PKCS#11).
+        hedged: Mix 32 fresh CSPRNG bytes into the nonce DRBG per RFC 6979
+            §3.6. Keeps the nonce safe if the RNG is broken *and* hardens the
+            deterministic path against fault injection — at the cost of
+            reproducibility. Cannot be combined with ``raw``.
+
+    Returns:
+        DER signature (8..141 bytes) or ``2 * field_bytes`` raw bytes.
+
+    Raises:
+        ValueError: On a wrong length or an unsupported combination.
+        RuntimeError: If the native library is unavailable or signing failed.
+    """
+    cid = _nistp_curve_id(curve)
+    nb = NISTP_FIELD_BYTES[cid]
+    _nistp_check_digest(message_digest)
+    if len(privkey) != nb:
+        raise ValueError(f"Private key must be {nb} bytes, got {len(privkey)}")
+    if raw and hedged:
+        raise ValueError(
+            "hedged signing emits DER only; convert with native_nistp_sig_der_to_raw"
+        )
+    _nistp_require_native()
+
+    if raw:
+        out = ctypes.create_string_buffer(2 * nb)
+        rc = _native_lib.ama_nistp_ecdsa_sign_raw(
+            cid, bytes(message_digest), len(message_digest), bytes(privkey), out
+        )
+        if rc != 0:
+            raise RuntimeError(f"NIST curve ECDSA signing failed (rc={rc})")
+        return bytes(out.raw[: 2 * nb])
+
+    out = ctypes.create_string_buffer(NISTP_MAX_SIG_LEN)
+    out_len = ctypes.c_size_t(0)
+    fn = (
+        _native_lib.ama_nistp_ecdsa_sign_hedged
+        if hedged
+        else _native_lib.ama_nistp_ecdsa_sign
+    )
+    rc = fn(
+        cid,
+        bytes(message_digest),
+        len(message_digest),
+        bytes(privkey),
+        out,
+        ctypes.byref(out_len),
+    )
+    if rc != 0:
+        raise RuntimeError(f"NIST curve ECDSA signing failed (rc={rc})")
+    return bytes(out.raw[: out_len.value])
+
+
+def native_nistp_ecdsa_verify(
+    curve: Union[int, str],
+    signature: bytes,
+    message_digest: bytes,
+    pubkey: bytes,
+    *,
+    raw: bool = False,
+    require_low_s: bool = False,
+) -> bool:
+    """
+    Verify an ECDSA signature over a NIST prime curve.
+
+    Unconditional in every mode: minimal DER only (short form, or the single
+    long-form octet where a P-521 body genuinely exceeds 127 octets), minimal
+    INTEGERs, no trailing bytes; ``r`` and ``s`` strictly in [1, n-1] rather
+    than reduced into range; public-key coordinates strictly in [0, p); and the
+    point on the curve and not the identity.
+
+    High ``s`` is *accepted* by default. That is a deliberate divergence from
+    the secp256k1 default (INVARIANT-28) and is what makes these curves usable
+    against TLS, X.509, JWS and WebAuthn signers, none of which normalise
+    ``s``. Set ``require_low_s=True`` when you control the signer and want a
+    signature to be a unique identifier for its (key, digest) pair. See
+    INVARIANT-34.
+
+    Verification is variable time by design; every input is public.
+
+    Args:
+        raw: Interpret ``signature`` as fixed-width ``r || s``.
+        require_low_s: Reject the high-``s`` malleability twin.
+
+    Returns:
+        True if the signature is valid under the selected policy.
+
+    Raises:
+        ValueError: If the digest or public key has the wrong length.
+        RuntimeError: If the native library is unavailable.
+    """
+    cid = _nistp_curve_id(curve)
+    nb = NISTP_FIELD_BYTES[cid]
+    _nistp_check_digest(message_digest)
+    if len(pubkey) != 2 * nb:
+        raise ValueError(f"Public key must be {2 * nb} bytes (X||Y), got {len(pubkey)}")
+    _nistp_require_native()
+
+    flags = AMA_NISTP_ECDSA_REQUIRE_LOW_S if require_low_s else AMA_NISTP_ECDSA_VERIFY_DEFAULT
+    fn = (
+        _native_lib.ama_nistp_ecdsa_verify_raw_ex
+        if raw
+        else _native_lib.ama_nistp_ecdsa_verify_ex
+    )
+    rc = int(
+        fn(
+            cid,
+            bytes(message_digest),
+            len(message_digest),
+            bytes(pubkey),
+            bytes(signature),
+            len(signature),
+            flags,
+        )
+    )
+    return rc == 0
+
+
+def native_nistp_sig_der_to_raw(curve: Union[int, str], der: bytes) -> bytes:
+    """
+    Convert a DER ECDSA signature to fixed-width ``r || s``.
+
+    Re-applies the strict DER rules and the [1, n-1] range check, so the
+    conversion cannot launder an out-of-range or sloppily encoded component
+    into a well-formed one.
+
+    Raises:
+        ValueError: If the DER is not minimal or a component is out of range.
+    """
+    cid = _nistp_curve_id(curve)
+    nb = NISTP_FIELD_BYTES[cid]
+    _nistp_require_native()
+    out = ctypes.create_string_buffer(2 * nb)
+    out_len = ctypes.c_size_t(0)
+    rc = _native_lib.ama_nistp_sig_der_to_raw(
+        cid, bytes(der), len(der), out, ctypes.byref(out_len)
+    )
+    if rc != 0:
+        raise ValueError(f"Invalid DER ECDSA signature (rc={rc})")
+    return bytes(out.raw[: out_len.value])
+
+
+def native_nistp_sig_raw_to_der(curve: Union[int, str], raw: bytes) -> bytes:
+    """
+    Convert a fixed-width ``r || s`` ECDSA signature to minimal DER.
+
+    Raises:
+        ValueError: If the length is wrong or a component is out of range.
+    """
+    cid = _nistp_curve_id(curve)
+    _nistp_require_native()
+    out = ctypes.create_string_buffer(NISTP_MAX_SIG_LEN)
+    out_len = ctypes.c_size_t(0)
+    rc = _native_lib.ama_nistp_sig_raw_to_der(
+        cid, bytes(raw), len(raw), out, ctypes.byref(out_len)
+    )
+    if rc != 0:
+        raise ValueError(f"Invalid raw ECDSA signature (rc={rc})")
+    return bytes(out.raw[: out_len.value])
 
 
 # ============================================================================

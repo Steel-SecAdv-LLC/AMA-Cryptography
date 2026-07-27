@@ -482,6 +482,12 @@ if(AMA_USE_NATIVE_PQC)
         src/c/ama_dilithium.c
         src/c/ama_slhdsa.c
         src/c/ama_secp256k1.c
+        # NIST prime curves P-256/384/521 (ECDSA + ECDH).  Depends on the
+        # HMAC-SHA-2 family for RFC 6979 and on ama_platform_rand.c for
+        # keygen and the hedged signer, so it belongs in this block rather
+        # than the unconditional list — ama_platform_rand.c is only added
+        # here.  It references no PQC symbol otherwise.
+        src/c/ama_nistp.c
         src/c/ama_frost.c
         src/c/ama_x25519.c
         src/c/ama_argon2.c

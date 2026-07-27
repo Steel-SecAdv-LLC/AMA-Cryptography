@@ -56,14 +56,34 @@ extern ama_error_t ama_shake128(const uint8_t* input, size_t input_len,
 extern ama_error_t ama_shake256(const uint8_t* input, size_t input_len,
                                  uint8_t* output, size_t output_len);
 
-/* Kyber-1024 parameters */
+/* ============================================================================
+ * ML-KEM PARAMETER SETS (FIPS 203 Table 2)
+ *
+ * `n` and `q` are fixed for every ML-KEM parameter set — the ring
+ * Z_q[X]/(X^256 + 1) and therefore the whole NTT layer, the Montgomery/Barrett
+ * reduction constants, and the zeta table are shared verbatim across
+ * ML-KEM-512/768/1024.  What varies is the module rank `k`, the CBD parameter
+ * `eta1` for the secret/error vectors, and the ciphertext compression widths
+ * `du`/`dv`.
+ *
+ * Those five numbers are therefore a *runtime* parameter block rather than
+ * three copies of the implementation.  Duplicating ~1900 lines per parameter
+ * set would triple the audit surface, triple the places a reduction-bound
+ * argument has to be re-checked, and guarantee the three copies drift.
+ * Array sizing uses KYBER_K_MAX so the stack footprint is the ML-KEM-1024
+ * footprint for every set; that is a deliberate trade of a few KiB of stack
+ * for one body of code.
+ * ============================================================================ */
+
 #define KYBER_N 256
 #define KYBER_Q 3329
-#define KYBER_K 4
-#define KYBER_ETA1 2
-#define KYBER_ETA2 2
-#define KYBER_DU 11
-#define KYBER_DV 5
+
+/** Largest module rank across the supported parameter sets (ML-KEM-1024). */
+#define KYBER_K_MAX 4
+/** Largest CBD parameter across the supported sets (eta1 = 3 for ML-KEM-512). */
+#define KYBER_ETA_MAX 3
+/** Largest CBD noise buffer: eta * n / 4 = 3 * 256 / 4. */
+#define KYBER_NOISE_BYTES_MAX (KYBER_ETA_MAX * KYBER_N / 4)
 
 /* Polynomial ring: R = Z_q[X]/(X^256 + 1) */
 
@@ -72,8 +92,53 @@ typedef struct {
 } poly;
 
 typedef struct {
-    poly vec[KYBER_K];
+    poly vec[KYBER_K_MAX];
 } polyvec;
+
+/**
+ * One ML-KEM parameter set.
+ *
+ * The three byte-length fields are derived, not independent: they are
+ * `384k + 32`, `768k + 96` and `32*(du*k + dv)` respectively.  They are
+ * materialised here so every length check is a single comparison against a
+ * named constant, and `kyber_params_selfcheck()` (AMA_TESTING_MODE) asserts
+ * they agree with the formulas so a mistyped table entry cannot ship.
+ */
+typedef struct {
+    ama_ml_kem_param_set_t ps;
+    const char *name;
+    unsigned    k;
+    unsigned    eta1;
+    unsigned    eta2;
+    unsigned    du;
+    unsigned    dv;
+    size_t      pk_bytes;
+    size_t      sk_bytes;
+    size_t      ct_bytes;
+} kyber_params;
+
+static const kyber_params KYBER_PARAM_SETS[3] = {
+    /* ps                  name           k eta1 eta2 du dv    pk    sk    ct */
+    { AMA_ML_KEM_512,  "ML-KEM-512",  2,  3,   2, 10, 4,  800, 1632,  768 },
+    { AMA_ML_KEM_768,  "ML-KEM-768",  3,  2,   2, 10, 4, 1184, 2400, 1088 },
+    { AMA_ML_KEM_1024, "ML-KEM-1024", 4,  2,   2, 11, 5, 1568, 3168, 1568 }
+};
+
+static const kyber_params *kyber_params_for(ama_ml_kem_param_set_t ps) {
+    switch (ps) {
+        case AMA_ML_KEM_512:  return &KYBER_PARAM_SETS[0];
+        case AMA_ML_KEM_768:  return &KYBER_PARAM_SETS[1];
+        case AMA_ML_KEM_1024: return &KYBER_PARAM_SETS[2];
+        default:              return NULL;
+    }
+}
+
+/** Octets of a compressed polyvec `u` for this parameter set. */
+#define KYBER_U_BYTES(P) ((size_t)(P)->k * (KYBER_N * (size_t)(P)->du / 8))
+/** Octets of the compressed polynomial `v` for this parameter set. */
+#define KYBER_V_BYTES(P) ((size_t)(KYBER_N * (size_t)(P)->dv / 8))
+/** Offset of rho inside a packed public key (and of pk inside a secret key). */
+#define KYBER_T_BYTES(P) ((size_t)(P)->k * 384u)
 
 /* Forward declarations */
 static void poly_add(poly* r, const poly* a, const poly* b);
@@ -114,30 +179,30 @@ typedef struct {
  * ============================================================================ */
 
 /* Polyvec operations for native KEM */
-static void polyvec_ntt(polyvec* r) {
+static void polyvec_ntt(polyvec* r, unsigned int k) {
     unsigned int i;
-    for (i = 0; i < KYBER_K; i++) {
+    for (i = 0; i < k; i++) {
         poly_ntt(&r->vec[i]);
     }
 }
 
-static void polyvec_invntt(polyvec* r) {
+static void polyvec_invntt(polyvec* r, unsigned int k) {
     unsigned int i;
-    for (i = 0; i < KYBER_K; i++) {
+    for (i = 0; i < k; i++) {
         poly_invntt(&r->vec[i]);
     }
 }
 
-static void polyvec_add(polyvec* r, const polyvec* a, const polyvec* b) {
+static void polyvec_add(polyvec* r, const polyvec* a, const polyvec* b, unsigned int k) {
     unsigned int i;
-    for (i = 0; i < KYBER_K; i++) {
+    for (i = 0; i < k; i++) {
         poly_add(&r->vec[i], &a->vec[i], &b->vec[i]);
     }
 }
 
-static void polyvec_reduce(polyvec* r) {
+static void polyvec_reduce(polyvec* r, unsigned int k) {
     unsigned int i;
-    for (i = 0; i < KYBER_K; i++) {
+    for (i = 0; i < k; i++) {
         poly_reduce(&r->vec[i]);
     }
 }
@@ -151,10 +216,12 @@ static void polyvec_reduce(polyvec* r) {
  *   secret material.)
  *
  *   The trailing poly_reduce(r) (Barrett) is load-bearing and CANNOT be
- *   removed.  After accumulating K=4 basemul outputs, each in (-2q, 2q)
+ *   removed.  After accumulating k basemul outputs, each in (-2q, 2q)
  *   (basemul sums two montgomery_reduce outputs each in (-q, q)), the
- *   running sum is in (-8q, 8q) ≈ (-26632, 26632) — still fitting
- *   int16_t but outside the [-q/2, q/2] domain that poly_tomont /
+ *   running sum is in (-2kq, 2kq).  The worst case across the supported
+ *   parameter sets is k = KYBER_K_MAX = 4, giving (-8q, 8q)
+ *   ≈ (-26632, 26632) — still fitting int16_t but outside the
+ *   [-q/2, q/2] domain that poly_tomont /
  *   poly_invntt / polyvec_tobytes expect.  Removing it would silently
  *   corrupt NTT-domain coefficients and would be detected by the KAT
  *   suite, but only after producing wrong ciphertexts on encaps.
@@ -171,12 +238,12 @@ static void polyvec_reduce(polyvec* r) {
  *   The generic-C reduction layout is already algorithmically minimal
  *   at q=3329 / int16 coefficients.
  */
-static void polyvec_basemul_acc(poly* r, const polyvec* a, const polyvec* b) {
+static void polyvec_basemul_acc(poly* r, const polyvec* a, const polyvec* b, unsigned int k) {
     unsigned int i;
     poly t;
 
     poly_basemul(r, &a->vec[0], &b->vec[0]);
-    for (i = 1; i < KYBER_K; i++) {
+    for (i = 1; i < k; i++) {
         poly_basemul(&t, &a->vec[i], &b->vec[i]);
         poly_add(r, r, &t);
     }
@@ -186,9 +253,9 @@ static void polyvec_basemul_acc(poly* r, const polyvec* a, const polyvec* b) {
 /**
  * Serialize polyvec to bytes
  */
-static void polyvec_tobytes(uint8_t* r, const polyvec* a) {
+static void polyvec_tobytes(uint8_t* r, const polyvec* a, unsigned int k) {
     unsigned int i;
-    for (i = 0; i < KYBER_K; i++) {
+    for (i = 0; i < k; i++) {
         poly_tobytes(r + i * 384, &a->vec[i]);
     }
 }
@@ -196,30 +263,33 @@ static void polyvec_tobytes(uint8_t* r, const polyvec* a) {
 /**
  * Deserialize bytes to polyvec
  */
-static void polyvec_frombytes(polyvec* r, const uint8_t* a) {
+static void polyvec_frombytes(polyvec* r, const uint8_t* a, unsigned int k) {
     unsigned int i;
-    for (i = 0; i < KYBER_K; i++) {
+    for (i = 0; i < k; i++) {
         poly_frombytes(&r->vec[i], a + i * 384);
     }
 }
 
 /**
- * Compress polyvec (du = 11 bits per coefficient for Kyber-1024)
+ * Compress polyvec at the parameter set's `du` (10 bits for ML-KEM-512/768,
+ * 11 for ML-KEM-1024).
  */
-static void polyvec_compress(uint8_t* r, const polyvec* a) {
+static void polyvec_compress(uint8_t* r, const polyvec* a, const kyber_params* P) {
     unsigned int i;
-    for (i = 0; i < KYBER_K; i++) {
-        poly_compress(r + i * (KYBER_N * KYBER_DU / 8), &a->vec[i], KYBER_DU);
+    const size_t stride = (size_t)KYBER_N * P->du / 8u;
+    for (i = 0; i < P->k; i++) {
+        poly_compress(r + i * stride, &a->vec[i], (int)P->du);
     }
 }
 
 /**
- * Decompress polyvec
+ * Decompress polyvec at the parameter set's `du`.
  */
-static void polyvec_decompress(polyvec* r, const uint8_t* a) {
+static void polyvec_decompress(polyvec* r, const uint8_t* a, const kyber_params* P) {
     unsigned int i;
-    for (i = 0; i < KYBER_K; i++) {
-        poly_decompress(&r->vec[i], a + i * (KYBER_N * KYBER_DU / 8), KYBER_DU);
+    const size_t stride = (size_t)KYBER_N * P->du / 8u;
+    for (i = 0; i < P->k; i++) {
+        poly_decompress(&r->vec[i], a + i * stride, (int)P->du);
     }
 }
 
@@ -295,88 +365,129 @@ static int kyber_rej_uniform_from_stream(poly *a,
  * groups of 4 with no trailing scalar work.  The initial 4-block
  * squeeze (672 bytes per lane) matches the scalar stream[672].
  */
-static void kyber_gen_matrix(polyvec mat[KYBER_K], const uint8_t seed[32], int transposed) {
-    const unsigned int total = KYBER_K * KYBER_K;
-    const size_t kInitialBlocks = 4;   /* matches scalar kyber_poly_uniform stream[672] */
-    unsigned int flat = 0;
+/**
+ * Flush one batch of exactly four matrix entries through the 4-way SHAKE128
+ * kernel.  Split out of kyber_gen_matrix so the caller's loop carries nothing
+ * but the (i, j) matrix indices — which is what lets both a reader and the
+ * optimiser see that `mat[i].vec[j]` is in bounds.
+ */
+static void kyber_gen_matrix_flush4(uint8_t bufs[4][34],
+                                    poly *polys[4],
+                                    uint8_t xy[4][2],
+                                    const uint8_t seed[32]) {
+    /* 4 blocks matches the scalar kyber_poly_uniform stream[672] budget. */
+    const size_t kInitialBlocks = 4;
+    ama_shake128_x4_ctx ctx;
+    uint8_t streams[4][AMA_SHAKE128_X4_RATE * 4];
+    int lane;
 
-    while (flat + 4 <= total) {
-        uint8_t bufs[4][34];
-        poly *polys[4];
-        uint8_t xy[4][2];  /* keep (x, y) for fallback path */
+    ama_shake128_x4_absorb_once(&ctx,
+        bufs[0], 34, bufs[1], 34, bufs[2], 34, bufs[3], 34);
+    ama_shake128_x4_squeezeblocks(&ctx,
+        streams[0], streams[1], streams[2], streams[3], kInitialBlocks);
 
-        for (int lane = 0; lane < 4; lane++) {
-            unsigned int f = flat + (unsigned int)lane;
-            unsigned int i = f / KYBER_K, j = f % KYBER_K;
+    for (lane = 0; lane < 4; lane++) {
+        int ok = kyber_rej_uniform_from_stream(polys[lane],
+                                               streams[lane],
+                                               AMA_SHAKE128_X4_RATE * kInitialBlocks);
+        if (!ok) {
+            /* Scalar fallback (effectively unreachable: ML-KEM's ~18.7 %
+             * rejection rate over 448 candidates per 4 blocks gives expected
+             * accepts >> 256, matching the scalar reference's one-shot
+             * squeeze budget exactly). */
+            kyber_poly_uniform(polys[lane], seed, xy[lane][0], xy[lane][1]);
+        }
+    }
+}
+
+/**
+ * Expand the seed into the k x k matrix A (or its transpose), in the NTT
+ * domain, per FIPS 203 Algorithm 13 §4.2.2.
+ *
+ * Iteration is over the matrix indices (i, j) directly rather than over a
+ * flattened counter with a division.  That is not cosmetic: with a flattened
+ * `i = flat / k`, GCC could not bound `i` once `k` became a runtime value and
+ * emitted -Waggressive-loop-optimizations "iteration 4 invokes undefined
+ * behavior" against `mat[i]` on the constprop clone.  Iterating `i < P->k`
+ * with the precondition below makes the bound structural, so the warning is
+ * gone because the property is now provable rather than because it was
+ * suppressed.
+ *
+ * Entries are batched four at a time through the 4-way SHAKE128 kernel.
+ * k*k is 4, 9 and 16 for ML-KEM-512/-768/-1024, so ML-KEM-768 finishes with
+ * one entry on the scalar path — byte-identical output either way, since both
+ * paths absorb the same 34-octet seed||x||y and apply the same rejection
+ * sampling.
+ */
+static void kyber_gen_matrix(polyvec *mat, const uint8_t seed[32],
+                             int transposed, const kyber_params* P) {
+    uint8_t bufs[4][34];
+    poly *polys[4];
+    uint8_t xy[4][2];
+    unsigned int i, j, pending = 0;
+
+    /* Precondition, not a fallback: a parameter block with k outside
+     * [1, KYBER_K_MAX] would overflow `polyvec`, and every shipped row is
+     * checked against this bound by ama_ml_kem_test_params_selfcheck(). */
+    if (P->k == 0u || P->k > KYBER_K_MAX) {
+        return;
+    }
+
+    for (i = 0; i < P->k; i++) {
+        for (j = 0; j < P->k; j++) {
             uint8_t x = transposed ? (uint8_t)i : (uint8_t)j;
             uint8_t y = transposed ? (uint8_t)j : (uint8_t)i;
-            memcpy(bufs[lane], seed, 32);
-            bufs[lane][32] = x;
-            bufs[lane][33] = y;
-            xy[lane][0] = x;
-            xy[lane][1] = y;
-            polys[lane] = &mat[i].vec[j];
-        }
 
-        ama_shake128_x4_ctx ctx;
-        ama_shake128_x4_absorb_once(&ctx,
-            bufs[0], 34, bufs[1], 34, bufs[2], 34, bufs[3], 34);
+            memcpy(bufs[pending], seed, 32);
+            bufs[pending][32] = x;
+            bufs[pending][33] = y;
+            xy[pending][0] = x;
+            xy[pending][1] = y;
+            polys[pending] = &mat[i].vec[j];
 
-        uint8_t streams[4][AMA_SHAKE128_X4_RATE * 4];
-        ama_shake128_x4_squeezeblocks(&ctx,
-            streams[0], streams[1], streams[2], streams[3], kInitialBlocks);
-
-        for (int lane = 0; lane < 4; lane++) {
-            int ok = kyber_rej_uniform_from_stream(polys[lane],
-                                                    streams[lane],
-                                                    AMA_SHAKE128_X4_RATE * kInitialBlocks);
-            if (!ok) {
-                /* Scalar fallback (effectively unreachable: Kyber's ~18.7 %
-                 * rejection rate and 448 candidates per 4 blocks gives
-                 * expected accepts >> 256, matching the scalar reference's
-                 * one-shot squeeze budget exactly). */
-                kyber_poly_uniform(polys[lane], seed, xy[lane][0], xy[lane][1]);
+            if (++pending == 4u) {
+                kyber_gen_matrix_flush4(bufs, polys, xy, seed);
+                pending = 0;
             }
         }
-
-        flat += 4;
     }
 
-    /* Trailing 0..3 polys — only reachable for parameter sets where
-     * KYBER_K * KYBER_K is not a multiple of 4.  For KYBER_K = 4
-     * (the only value this file currently supports) the first loop
-     * consumes all 16 polys exactly, so the block below is dead code.
-     *
-     * The #if guard is not just a micro-optimisation: leaving the
-     * trailing loop unguarded tripped GCC's
-     * -Waggressive-loop-optimizations on the `kyber_gen_matrix.constprop`
-     * clone, which speculatively unrolled to 4 iterations and
-     * (mis)concluded that iteration 4 would index mat[4] OOB.  The
-     * warning was a loop-bound-visibility artefact, not a §5.3
-     * sampling error — once the block is preprocessed out for K=4
-     * the warning vanishes.
-     *
-     * Compiling with a future parameter set whose K*K is not a
-     * multiple of 4 re-enables this block automatically; the
-     * _Static_assert immediately below catches any attempt to reach
-     * this path with an unaudited rejection-sampling budget. */
-#if (KYBER_K * KYBER_K) % 4 != 0
-    _Static_assert(0,
-        "kyber_gen_matrix trailing loop: audit the rejection-sampling "
-        "budget before enabling this path for KYBER_K values where "
-        "K*K is not a multiple of 4 (see kyber_poly_uniform stream[672])");
-    while (flat < total) {
-        unsigned int i = flat / KYBER_K, j = flat % KYBER_K;
-        if (transposed) {
-            kyber_poly_uniform(&mat[i].vec[j], seed, (uint8_t)i, (uint8_t)j);
-        } else {
-            kyber_poly_uniform(&mat[i].vec[j], seed, (uint8_t)j, (uint8_t)i);
+    /* Trailing 0..3 entries — reached only by ML-KEM-768 (k*k = 9). */
+    for (i = 0; i < pending; i++) {
+        kyber_poly_uniform(polys[i], seed, xy[i][0], xy[i][1]);
+    }
+}
+
+/**
+ * Sample noise polynomial with CBD, eta = 3 (FIPS 203 Algorithm 8).
+ *
+ * Only ML-KEM-512 uses eta1 = 3.  Three bits per coefficient half means the
+ * natural unit is 3 octets -> 4 coefficients, so this cannot reuse the
+ * 32-bit-word trick the eta = 2 path uses, and there is no SIMD kernel for
+ * it in the dispatch table (adding one would be a separate, measured
+ * change — see docs/DESIGN_NOTES.md).  Consumes eta*n/4 = 192 octets.
+ */
+static void kyber_poly_cbd3(poly* r, const uint8_t* buf) {
+    unsigned int i, j;
+    uint32_t t, d;
+    int16_t a, b;
+
+    for (i = 0; i < KYBER_N / 4; i++) {
+        /* Load 3 octets little-endian -> 24 bits -> 4 coefficients. */
+        t = (uint32_t)buf[3 * i] |
+            ((uint32_t)buf[3 * i + 1] << 8) |
+            ((uint32_t)buf[3 * i + 2] << 16);
+
+        d = t & 0x00249249u;
+        d += (t >> 1) & 0x00249249u;
+        d += (t >> 2) & 0x00249249u;
+
+        for (j = 0; j < 4; j++) {
+            a = (int16_t)((d >> (6 * j + 0)) & 0x7);
+            b = (int16_t)((d >> (6 * j + 3)) & 0x7);
+            r->coeffs[4 * i + j] = (int16_t)(a - b);
         }
-        flat++;
     }
-#else
-    (void)flat; /* loop already reached total in the 4-way batch above */
-#endif
 }
 
 /**
@@ -414,29 +525,31 @@ static void kyber_poly_cbd_eta(poly* r, const uint8_t* buf) {
 }
 
 /**
- * Sample noise vector using SHAKE256 and CBD.
+ * Sample a noise vector with CBD at a given eta (FIPS 203 Algorithm 8 via
+ * SamplePolyCBD over a SHAKE256 stream).
  *
- * For KYBER_K = 4 the four SHAKE256 streams are batched through
- * ama_shake256_x4_absorb_once / squeezeblocks in exactly one group of
- * 4 (no scalar tail).  Each lane's 128-byte noise buffer is then fed
- * to kyber_poly_cbd_eta(), which now dispatches to ama_kyber_cbd2_avx2
- * on AVX2 hardware.
+ * `eta` is passed explicitly rather than read from the parameter block
+ * because the same routine samples both the eta1 vectors (s, e, r, e1) and
+ * — via kyber_cbd_poly() below — the eta2 polynomial e2, and for ML-KEM-512
+ * those differ (eta1 = 3, eta2 = 2).  Conflating them was the single most
+ * likely way to get ML-KEM-512 subtly wrong, so the caller always says which
+ * one it means.
  *
- * Byte-for-byte identical to the previous scalar loop; see
- * tests/c/test_sha3_x4.c (SHAKE256 equivalence) and
- * tests/c/test_kyber_cbd2_equiv.c (CBD2 equivalence).
- *
- * KYBER_ETA1 * KYBER_N / 4 = 128 bytes fits inside one SHAKE256 rate
- * block (136 bytes), so the inner call to ama_shake256_x4_squeezeblocks
- * requests exactly 1 block per lane and we use the first 128 bytes.
+ * The 4-way SHAKE256 batch is taken only when the parameter set has exactly
+ * four lanes to fill *and* the per-lane noise fits in one rate block. That is
+ * ML-KEM-1024 and nothing else: ML-KEM-768 has three lanes and ML-KEM-512
+ * needs 192 octets (eta1 = 3), which exceeds the 136-octet SHAKE256 rate.
+ * Both fall to the scalar loop, whose output is byte-identical by
+ * construction — the batch and the scalar path absorb the same 33-octet
+ * seed||nonce and squeeze the same stream. tests/c/test_kyber_cbd2_equiv.c
+ * and the FIPS 203 KATs for all three sets pin that equality.
  */
-static void kyber_gennoise(polyvec* r, const uint8_t seed[32], uint8_t nonce) {
-    const size_t kNoiseBytes = (size_t)(KYBER_ETA1 * KYBER_N / 4);  /* 128 */
-    _Static_assert(KYBER_ETA1 * KYBER_N / 4 <= AMA_SHAKE256_X4_RATE,
-                   "kyber_gennoise assumes noise fits in one SHAKE256 block");
+static void kyber_gennoise(polyvec* r, const uint8_t seed[32], uint8_t nonce,
+                           unsigned int k, unsigned int eta) {
+    const size_t noise_bytes = (size_t)eta * KYBER_N / 4u;
     unsigned int i;
 
-    if (KYBER_K == 4) {
+    if (k == 4 && noise_bytes <= AMA_SHAKE256_X4_RATE) {
         uint8_t bufs[4][34];
         for (i = 0; i < 4; i++) {
             memcpy(bufs[i], seed, 32);
@@ -458,17 +571,42 @@ static void kyber_gennoise(polyvec* r, const uint8_t seed[32], uint8_t nonce) {
         return;
     }
 
-    /* Fallback scalar path for other parameter sets (unused at KYBER_K=4). */
-    uint8_t buf[34];
-    uint8_t stream[KYBER_ETA1 * KYBER_N / 4];
-    for (i = 0; i < KYBER_K; i++) {
-        memcpy(buf, seed, 32);
-        buf[32] = nonce + (uint8_t)i;
-        buf[33] = 0;
-        ama_shake256(buf, 33, stream, sizeof(stream));
-        kyber_poly_cbd_eta(&r->vec[i], stream);
+    /* Scalar path — ML-KEM-512 and ML-KEM-768. */
+    {
+        uint8_t buf[34];
+        uint8_t stream[KYBER_NOISE_BYTES_MAX];
+        for (i = 0; i < k; i++) {
+            memcpy(buf, seed, 32);
+            buf[32] = nonce + (uint8_t)i;
+            buf[33] = 0;
+            ama_shake256(buf, 33, stream, noise_bytes);
+            if (eta == 3) {
+                kyber_poly_cbd3(&r->vec[i], stream);
+            } else {
+                kyber_poly_cbd_eta(&r->vec[i], stream);
+            }
+        }
+        ama_secure_memzero(stream, sizeof(stream));
     }
-    (void)kNoiseBytes;
+}
+
+/**
+ * Sample a single CBD noise polynomial (the e2 term of CPAPKE.Enc).
+ */
+static void kyber_cbd_poly(poly* r, const uint8_t seed[32], uint8_t nonce, unsigned int eta) {
+    const size_t noise_bytes = (size_t)eta * KYBER_N / 4u;
+    uint8_t buf[33];
+    uint8_t stream[KYBER_NOISE_BYTES_MAX];
+
+    memcpy(buf, seed, 32);
+    buf[32] = nonce;
+    ama_shake256(buf, 33, stream, noise_bytes);
+    if (eta == 3) {
+        kyber_poly_cbd3(r, stream);
+    } else {
+        kyber_poly_cbd_eta(r, stream);
+    }
+    ama_secure_memzero(stream, sizeof(stream));
 }
 
 #ifdef AMA_TESTING_MODE
@@ -504,38 +642,57 @@ static ama_error_t kyber_randombytes(uint8_t* buf, size_t len) {
  * @param secret_key_len Length of secret key buffer
  * @return AMA_SUCCESS or error code
  */
-static ama_error_t kyber_keypair_generate(
-    uint8_t* public_key,
-    size_t public_key_len,
-    uint8_t* secret_key,
-    size_t secret_key_len
-) {
-    if (public_key_len < AMA_KYBER_1024_PUBLIC_KEY_BYTES ||
-        secret_key_len < AMA_KYBER_1024_SECRET_KEY_BYTES) {
+/**
+ * ML-KEM key generation (FIPS 203 Algorithm 16 `ML-KEM.KeyGen_internal`).
+ *
+ * One body serves both the random and the deterministic entry points: pass
+ * `d` and `z` to reproduce a KAT vector, or NULL for both to draw them from
+ * the CSPRNG.  The two used to be separate near-identical functions, which is
+ * exactly the shape where a fix lands in one copy and not the other.
+ *
+ * `d` and `z` are either both NULL or both non-NULL; a caller that supplies
+ * one and not the other is rejected rather than half-seeded.
+ */
+static ama_error_t kyber_keygen_internal(const kyber_params* P,
+                                         uint8_t* public_key, size_t public_key_len,
+                                         uint8_t* secret_key, size_t secret_key_len,
+                                         const uint8_t* d_in, const uint8_t* z_in) {
+    if (!P || !public_key || !secret_key) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+    if ((d_in == NULL) != (z_in == NULL)) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+    if (public_key_len < P->pk_bytes || secret_key_len < P->sk_bytes) {
         return AMA_ERROR_INVALID_PARAM;
     }
 
 #ifdef AMA_USE_NATIVE_PQC
     {
-        /* Native Kyber-1024 key generation (NIST FIPS 203, Algorithm 15) */
         uint8_t d[32], buf[64];
         uint8_t *rho, *sigma;
-        polyvec a[KYBER_K], s, e, pkpv;
+        polyvec a[KYBER_K_MAX], s, e, pkpv;
+        const size_t t_bytes = KYBER_T_BYTES(P);
         unsigned int i;
         ama_error_t err;
 
-        /* Generate random seed d */
-        err = kyber_randombytes(d, 32);
-        if (err != AMA_SUCCESS) {
-            return err;
+        if (d_in) {
+            memcpy(d, d_in, 32);
+        } else {
+            err = kyber_randombytes(d, 32);
+            if (err != AMA_SUCCESS) {
+                return err;
+            }
         }
 
-        /* G(d || byte(k)) = (rho, sigma) per FIPS 203 Algorithm 15
-         * G = SHA3-512, k = KYBER_K = 4 for Kyber-1024 */
+        /* G(d || byte(k)) = (rho, sigma) per FIPS 203 Algorithm 16.
+         * The domain-separating `k` octet is what keeps the same `d` from
+         * producing related keys across parameter sets — it is the reason
+         * this byte is `P->k` and not a constant. */
         {
             uint8_t g_input[33];
             memcpy(g_input, d, 32);
-            g_input[32] = (uint8_t)KYBER_K;
+            g_input[32] = (uint8_t)P->k;
             ama_sha3_512(g_input, 33, buf);
             ama_secure_memzero(g_input, sizeof(g_input));
         }
@@ -543,63 +700,65 @@ static ama_error_t kyber_keypair_generate(
         sigma = buf + 32;
 
         /* Generate matrix A from rho (in NTT domain) */
-        kyber_gen_matrix(a, rho, 0);
+        kyber_gen_matrix(a, rho, 0, P);
 
         /* Sample secret vector s and error vector e from CBD, then NTT.
          *
          * Pipelined for L1-residency: each polyvec is NTT'd immediately
-         * after sampling, before the next 4-way SHAKE256 batch is
+         * after sampling, before the next SHAKE256 batch is
          * absorbed/squeezed.  Working set per phase is one polyvec
-         * (~2 KiB) instead of two (~4 KiB) — keeps the just-sampled
-         * coefficients hot through the NTT butterflies.  Output is
-         * byte-identical to the previous sample-all-then-NTT-all
-         * layout because NTT acts on each polynomial independently
-         * (no cross-poly dependencies inside polyvec_ntt). */
-        kyber_gennoise(&s, sigma, 0);
-        polyvec_ntt(&s);
-        kyber_gennoise(&e, sigma, (uint8_t)KYBER_K);
-        polyvec_ntt(&e);
+         * instead of two — keeps the just-sampled coefficients hot through
+         * the NTT butterflies.  Output is byte-identical to a
+         * sample-all-then-NTT-all layout because NTT acts on each
+         * polynomial independently. */
+        kyber_gennoise(&s, sigma, 0, P->k, P->eta1);
+        polyvec_ntt(&s, P->k);
+        kyber_gennoise(&e, sigma, (uint8_t)P->k, P->k, P->eta1);
+        polyvec_ntt(&e, P->k);
 
         /* Compute t = A*s + e (in NTT domain).
          * basemul output has implicit R^{-1} Montgomery factor.
          * poly_tomont compensates by multiplying by R, so the
          * result is in the same domain as NTT(e) for correct addition. */
-        for (i = 0; i < KYBER_K; i++) {
-            polyvec_basemul_acc(&pkpv.vec[i], &a[i], &s);
+        for (i = 0; i < P->k; i++) {
+            polyvec_basemul_acc(&pkpv.vec[i], &a[i], &s, P->k);
             poly_tomont(&pkpv.vec[i]);
             poly_add(&pkpv.vec[i], &pkpv.vec[i], &e.vec[i]);
         }
-        polyvec_reduce(&pkpv);
+        polyvec_reduce(&pkpv, P->k);
 
         /* Pack public key: pk = (t || rho) */
-        polyvec_tobytes(public_key, &pkpv);
-        memcpy(public_key + KYBER_K * 384, rho, 32);
+        polyvec_tobytes(public_key, &pkpv, P->k);
+        memcpy(public_key + t_bytes, rho, 32);
 
         /* Pack secret key: sk = (s || pk || H(pk) || z) */
-        polyvec_reduce(&s);  /* Reduce NTT(s) before serialization — coeff_normalize
-                                only handles [-q, 2q-1], but NTT output can exceed this */
-        polyvec_tobytes(secret_key, &s);
-        memcpy(secret_key + KYBER_K * 384, public_key, AMA_KYBER_1024_PUBLIC_KEY_BYTES);
+        polyvec_reduce(&s, P->k);  /* Reduce NTT(s) before serialization —
+                                      coeff_normalize only handles [-q, 2q-1],
+                                      but NTT output can exceed this */
+        polyvec_tobytes(secret_key, &s, P->k);
+        memcpy(secret_key + t_bytes, public_key, P->pk_bytes);
 
         /* H(pk) */
-        ama_sha3_256(public_key, AMA_KYBER_1024_PUBLIC_KEY_BYTES,
-                     secret_key + KYBER_K * 384 + AMA_KYBER_1024_PUBLIC_KEY_BYTES);
+        ama_sha3_256(public_key, P->pk_bytes, secret_key + t_bytes + P->pk_bytes);
 
-        /* Random z for implicit rejection */
-        err = kyber_randombytes(
-            secret_key + KYBER_K * 384 + AMA_KYBER_1024_PUBLIC_KEY_BYTES + 32, 32);
-        if (err != AMA_SUCCESS) {
-            /* Late-error path: even though we have not yet written the
-             * final sk byte, the NTT-domain s vector and the (rho,sigma)
-             * seed in `buf` are already populated.  Scrub before
-             * returning so the secret state never survives the error
-             * path on the caller's stack. */
-            ama_secure_memzero(d, sizeof(d));
-            ama_secure_memzero(buf, sizeof(buf));
-            ama_secure_memzero(&s, sizeof(s));
-            ama_secure_memzero(&e, sizeof(e));
-            ama_secure_memzero(&pkpv, sizeof(pkpv));
-            return err;
+        /* z for implicit rejection */
+        if (z_in) {
+            memcpy(secret_key + t_bytes + P->pk_bytes + 32, z_in, 32);
+        } else {
+            err = kyber_randombytes(secret_key + t_bytes + P->pk_bytes + 32, 32);
+            if (err != AMA_SUCCESS) {
+                /* Late-error path: the NTT-domain s vector and the
+                 * (rho, sigma) seed in `buf` are already populated.  Scrub
+                 * before returning so the secret state never survives the
+                 * error path on the caller's stack. */
+                ama_secure_memzero(d, sizeof(d));
+                ama_secure_memzero(buf, sizeof(buf));
+                ama_secure_memzero(&s, sizeof(s));
+                ama_secure_memzero(&e, sizeof(e));
+                ama_secure_memzero(&pkpv, sizeof(pkpv));
+                ama_secure_memzero(secret_key, P->sk_bytes);
+                return err;
+            }
         }
 
         /* Scrub sensitive data */
@@ -613,6 +772,8 @@ static ama_error_t kyber_keypair_generate(
 #else
     (void)public_key;
     (void)secret_key;
+    (void)d_in;
+    (void)z_in;
     return AMA_ERROR_NOT_IMPLEMENTED;
 #endif
 }
@@ -627,49 +788,51 @@ static ama_error_t kyber_keypair_generate(
  * ============================================================================ */
 #ifdef AMA_USE_NATIVE_PQC
 static void kyber_cpapke_enc(uint8_t *ct, const uint8_t *m,
-                              const uint8_t *pk, const uint8_t *coins) {
-    polyvec a[KYBER_K], sp, ep, pkpv, bp;
+                              const uint8_t *pk, const uint8_t *coins,
+                              const kyber_params* P) {
+    polyvec a[KYBER_K_MAX], sp, ep, pkpv, bp;
     poly v, epp, mp_poly;
     unsigned int i;
     const uint8_t *rho;
 
     /* Extract rho from public key */
-    rho = pk + KYBER_K * 384;
+    rho = pk + KYBER_T_BYTES(P);
 
     /* Decode public key */
-    polyvec_frombytes(&pkpv, pk);
+    polyvec_frombytes(&pkpv, pk, P->k);
 
     /* Generate matrix A^T from rho */
-    kyber_gen_matrix(a, rho, 1);
+    kyber_gen_matrix(a, rho, 1, P);
 
     /* Sample r, e1, e2 from coins.  NTT r immediately after sampling
      * so r's coefficients stay L1-resident through the NTT butterflies
      * (r is the only sampled polyvec used in the NTT domain in this
      * function — e1 and e2 are added in the coefficient domain after
-     * invntt below, so they are intentionally NOT NTT'd here).  Output
-     * is byte-identical to the previous sample-all-then-NTT layout. */
-    kyber_gennoise(&sp, coins, 0);
-    polyvec_ntt(&sp);
-    kyber_gennoise(&ep, coins, (uint8_t)KYBER_K);
-    {
-        uint8_t noise_buf[33];
-        uint8_t noise_stream[KYBER_ETA2 * KYBER_N / 4];
-        memcpy(noise_buf, coins, 32);
-        noise_buf[32] = 2 * (uint8_t)KYBER_K;
-        ama_shake256(noise_buf, 33, noise_stream, sizeof(noise_stream));
-        kyber_poly_cbd_eta(&epp, noise_stream);
-    }
+     * invntt below, so they are intentionally NOT NTT'd here).
+     *
+     * Note the eta split, which FIPS 203 Algorithm 14 (K-PKE.Encrypt) is
+     * explicit about and which is easy to get wrong: `y` (here `sp`) is
+     * sampled with eta1, while BOTH error terms `e1` (here `ep`) and `e2`
+     * (here `epp`) are sampled with eta2.  The three coincide for ML-KEM-768
+     * and ML-KEM-1024 (eta1 = eta2 = 2), so a single-eta implementation looks
+     * correct until ML-KEM-512 (eta1 = 3, eta2 = 2) — where it silently
+     * produces a ciphertext no other implementation decapsulates.  The
+     * vendored Wycheproof ML-KEM-512 corpus is what pins this. */
+    kyber_gennoise(&sp, coins, 0, P->k, P->eta1);
+    polyvec_ntt(&sp, P->k);
+    kyber_gennoise(&ep, coins, (uint8_t)P->k, P->k, P->eta2);
+    kyber_cbd_poly(&epp, coins, (uint8_t)(2u * P->k), P->eta2);
 
     /* Compute u = A^T * r + e1 */
-    for (i = 0; i < KYBER_K; i++) {
-        polyvec_basemul_acc(&bp.vec[i], &a[i], &sp);
+    for (i = 0; i < P->k; i++) {
+        polyvec_basemul_acc(&bp.vec[i], &a[i], &sp, P->k);
     }
-    polyvec_invntt(&bp);
-    polyvec_add(&bp, &bp, &ep);
-    polyvec_reduce(&bp);
+    polyvec_invntt(&bp, P->k);
+    polyvec_add(&bp, &bp, &ep, P->k);
+    polyvec_reduce(&bp, P->k);
 
     /* Compute v = t^T * r + e2 + Decompress(m, 1) */
-    polyvec_basemul_acc(&v, &pkpv, &sp);
+    polyvec_basemul_acc(&v, &pkpv, &sp, P->k);
     poly_invntt(&v);
     poly_add(&v, &v, &epp);
 
@@ -686,25 +849,26 @@ static void kyber_cpapke_enc(uint8_t *ct, const uint8_t *m,
     poly_reduce(&v);
 
     /* Compress and pack ciphertext */
-    polyvec_compress(ct, &bp);
-    poly_compress(ct + KYBER_K * (KYBER_N * KYBER_DU / 8), &v, KYBER_DV);
+    polyvec_compress(ct, &bp, P);
+    poly_compress(ct + KYBER_U_BYTES(P), &v, (int)P->dv);
+
+    /* The CPA encryption is re-run on the decapsulation path with the
+     * recovered message, so its intermediates are secret-key-derived there.
+     * Scrub them here rather than relying on each caller. */
+    ama_secure_memzero(&sp, sizeof(sp));
+    ama_secure_memzero(&ep, sizeof(ep));
+    ama_secure_memzero(&epp, sizeof(epp));
+    ama_secure_memzero(&bp, sizeof(bp));
+    ama_secure_memzero(&v, sizeof(v));
+    ama_secure_memzero(&mp_poly, sizeof(mp_poly));
 }
 #endif
 
 /**
- * Encapsulate shared secret
- *
- * Native ML-KEM-1024 implementation (FIPS 203 compliant).
- *
- * @param public_key Recipient's public key (1568 bytes)
- * @param public_key_len Length of public key
- * @param ciphertext Output buffer for ciphertext (1568 bytes)
- * @param ciphertext_len Pointer to ciphertext length (in/out)
- * @param shared_secret Output buffer for shared secret (32 bytes)
- * @param shared_secret_len Length of shared secret buffer
- * @return AMA_SUCCESS or error code
+ * ML-KEM encapsulation (FIPS 203 Algorithm 17).
  */
-static ama_error_t kyber_encapsulate(
+static ama_error_t kyber_encapsulate_internal(
+    const kyber_params* P,
     const uint8_t* public_key,
     size_t public_key_len,
     uint8_t* ciphertext,
@@ -712,19 +876,21 @@ static ama_error_t kyber_encapsulate(
     uint8_t* shared_secret,
     size_t shared_secret_len
 ) {
-    if (public_key_len != AMA_KYBER_1024_PUBLIC_KEY_BYTES ||
-        shared_secret_len != AMA_KYBER_1024_SHARED_SECRET_BYTES) {
+    if (!P || !public_key || !ciphertext || !ciphertext_len || !shared_secret) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+    if (public_key_len != P->pk_bytes ||
+        shared_secret_len != AMA_ML_KEM_SHARED_SECRET_BYTES) {
         return AMA_ERROR_INVALID_PARAM;
     }
 
 #ifdef AMA_USE_NATIVE_PQC
     {
-        /* Native Kyber-1024 encapsulation (NIST FIPS 203, Algorithm 17) */
         uint8_t m[32], kr[64];
         ama_error_t err;
 
-        if (*ciphertext_len < AMA_KYBER_1024_CIPHERTEXT_BYTES) {
-            *ciphertext_len = AMA_KYBER_1024_CIPHERTEXT_BYTES;
+        if (*ciphertext_len < P->ct_bytes) {
+            *ciphertext_len = P->ct_bytes;
             return AMA_ERROR_INVALID_PARAM;
         }
 
@@ -739,7 +905,7 @@ static ama_error_t kyber_encapsulate(
         {
             uint8_t pk_hash[32];
             uint8_t g_input[64];
-            ama_sha3_256(public_key, AMA_KYBER_1024_PUBLIC_KEY_BYTES, pk_hash);
+            ama_sha3_256(public_key, P->pk_bytes, pk_hash);
             memcpy(g_input, m, 32);
             memcpy(g_input + 32, pk_hash, 32);
             ama_sha3_512(g_input, 64, kr);
@@ -747,12 +913,12 @@ static ama_error_t kyber_encapsulate(
         }
 
         /* Deterministic CPA encryption with m and coins r = kr+32 */
-        kyber_cpapke_enc(ciphertext, m, public_key, kr + 32);
+        kyber_cpapke_enc(ciphertext, m, public_key, kr + 32, P);
 
         /* Shared secret = first 32 bytes of kr (= K) */
         memcpy(shared_secret, kr, 32);
 
-        *ciphertext_len = AMA_KYBER_1024_CIPHERTEXT_BYTES;
+        *ciphertext_len = P->ct_bytes;
 
         /* Scrub sensitive data */
         ama_secure_memzero(m, sizeof(m));
@@ -770,22 +936,15 @@ static ama_error_t kyber_encapsulate(
 }
 
 /**
- * Decapsulate shared secret
+ * ML-KEM decapsulation (FIPS 203 Algorithm 18).
  *
- * Native ML-KEM-1024 implementation (FIPS 203 compliant).
- *
- * Uses implicit rejection for IND-CCA2 security: returns a deterministic
- * but random-looking value if decapsulation fails.
- *
- * @param ciphertext Ciphertext to decapsulate (1568 bytes)
- * @param ciphertext_len Length of ciphertext
- * @param secret_key Recipient's secret key (3168 bytes)
- * @param secret_key_len Length of secret key
- * @param shared_secret Output buffer for shared secret (32 bytes)
- * @param shared_secret_len Length of shared secret buffer
- * @return AMA_SUCCESS or error code
+ * Implicit rejection is unconditional and constant time: both the honest
+ * shared secret and the rejection value H(z || ct) are always computed, and
+ * the choice between them is a masked copy.  A branch here would leak whether
+ * the ciphertext was well formed, which is the entire IND-CCA2 property.
  */
-static ama_error_t kyber_decapsulate(
+static ama_error_t kyber_decapsulate_internal(
+    const kyber_params* P,
     const uint8_t* ciphertext,
     size_t ciphertext_len,
     const uint8_t* secret_key,
@@ -793,20 +952,21 @@ static ama_error_t kyber_decapsulate(
     uint8_t* shared_secret,
     size_t shared_secret_len
 ) {
-    if (ciphertext_len != AMA_KYBER_1024_CIPHERTEXT_BYTES ||
-        secret_key_len != AMA_KYBER_1024_SECRET_KEY_BYTES ||
-        shared_secret_len != AMA_KYBER_1024_SHARED_SECRET_BYTES) {
+    if (!P || !ciphertext || !secret_key || !shared_secret) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+    if (ciphertext_len != P->ct_bytes ||
+        secret_key_len != P->sk_bytes ||
+        shared_secret_len != AMA_ML_KEM_SHARED_SECRET_BYTES) {
         return AMA_ERROR_INVALID_PARAM;
     }
 
 #ifdef AMA_USE_NATIVE_PQC
     {
-        /* Native Kyber-1024 decapsulation (NIST FIPS 203, Algorithm 18) */
-        /* Uses implicit rejection for IND-CCA2 security */
         polyvec bp, skpv;
         poly v, mp;
         uint8_t m[32], kr[64];
-        uint8_t ct_cmp[AMA_KYBER_1024_CIPHERTEXT_BYTES];
+        uint8_t ct_cmp[AMA_ML_KEM_MAX_CIPHERTEXT_BYTES];
         const uint8_t *pk;
         const uint8_t *h_pk;
         const uint8_t *z;
@@ -814,18 +974,18 @@ static ama_error_t kyber_decapsulate(
         int fail;
 
         /* Parse secret key: s || pk || H(pk) || z */
-        polyvec_frombytes(&skpv, secret_key);
-        pk = secret_key + KYBER_K * 384;
-        h_pk = pk + AMA_KYBER_1024_PUBLIC_KEY_BYTES;
+        polyvec_frombytes(&skpv, secret_key, P->k);
+        pk = secret_key + KYBER_T_BYTES(P);
+        h_pk = pk + P->pk_bytes;
         z = h_pk + 32;
 
         /* Decompress ciphertext */
-        polyvec_decompress(&bp, ciphertext);
-        poly_decompress(&v, ciphertext + KYBER_K * (KYBER_N * KYBER_DU / 8), KYBER_DV);
+        polyvec_decompress(&bp, ciphertext, P);
+        poly_decompress(&v, ciphertext + KYBER_U_BYTES(P), (int)P->dv);
 
         /* Compute s^T * u (inner product in NTT domain) */
-        polyvec_ntt(&bp);
-        polyvec_basemul_acc(&mp, &skpv, &bp);
+        polyvec_ntt(&bp, P->k);
+        polyvec_basemul_acc(&mp, &skpv, &bp, P->k);
         poly_invntt(&mp);
 
         /* Compute v - s^T * u to recover message */
@@ -846,8 +1006,7 @@ static ama_error_t kyber_decapsulate(
             }
         }
 
-        /* Re-derive (K, r) = G(m || H(pk)) per FIPS 203 Algorithm 18
-         * G = SHA3-512 */
+        /* Re-derive (K, r) = G(m || H(pk)) per FIPS 203 Algorithm 18 */
         {
             uint8_t g_input[64];
             memcpy(g_input, m, 32);
@@ -859,10 +1018,10 @@ static ama_error_t kyber_decapsulate(
         /* Re-encrypt with recovered m and derived coins r = kr+32.
          * This is the core of the FO transform: if the recovered message
          * is correct, re-encryption produces the same ciphertext. */
-        kyber_cpapke_enc(ct_cmp, m, pk, kr + 32);
+        kyber_cpapke_enc(ct_cmp, m, pk, kr + 32, P);
 
         /* Constant-time comparison of ciphertexts */
-        fail = ama_consttime_memcmp(ciphertext, ct_cmp, AMA_KYBER_1024_CIPHERTEXT_BYTES);
+        fail = ama_consttime_memcmp(ciphertext, ct_cmp, P->ct_bytes);
 
         /* Compute BOTH outcomes, then select in constant time.
          * This prevents timing side-channels from leaking whether
@@ -872,12 +1031,11 @@ static ama_error_t kyber_decapsulate(
              * Stack-allocated to avoid a malloc failure path that would
              * leak the decapsulation outcome (IND-CCA2 side-channel). */
             uint8_t ss_reject[32];
-            uint8_t rej_input[32 + AMA_KYBER_1024_CIPHERTEXT_BYTES];
+            uint8_t rej_input[32 + AMA_ML_KEM_MAX_CIPHERTEXT_BYTES];
             memcpy(rej_input, z, 32);
-            memcpy(rej_input + 32, ciphertext, AMA_KYBER_1024_CIPHERTEXT_BYTES);
-            ama_shake256(rej_input, 32 + AMA_KYBER_1024_CIPHERTEXT_BYTES,
-                        ss_reject, 32);
-            ama_secure_memzero(rej_input, 32 + AMA_KYBER_1024_CIPHERTEXT_BYTES);
+            memcpy(rej_input + 32, ciphertext, P->ct_bytes);
+            ama_shake256(rej_input, 32 + P->ct_bytes, ss_reject, 32);
+            ama_secure_memzero(rej_input, sizeof(rej_input));
 
             /* Start with the valid shared secret (kr), then conditionally
              * overwrite with the rejection value if ciphertexts didn't match.
@@ -891,20 +1049,16 @@ static ama_error_t kyber_decapsulate(
 
         /* Scrub sensitive data.
          *
-         * INVARIANT-12: the decap success path leaves recoverable
-         * secret material on the stack — the secret key polyvec
-         * (`skpv`), the recovered message polynomial (`mp`), the
-         * decompressed ciphertext (`bp`, `v`), and the re-encrypted
-         * ciphertext used by the FO comparator (`ct_cmp`).  All
-         * of these are derivable from the secret key once seen,
-         * so they must be scrubbed alongside `m` and `kr` before
-         * return.  Without this, a stack-snapshot attacker (or a
-         * later miscompilation that doesn't reuse the slots) could
-         * recover the secret. */
+         * INVARIANT-12: the decap success path leaves recoverable secret
+         * material on the stack — the secret key polyvec (`skpv`), the
+         * recovered message polynomial (`mp`), the decompressed ciphertext
+         * (`bp`, `v`), and the re-encrypted ciphertext used by the FO
+         * comparator (`ct_cmp`).  All are derivable from the secret key
+         * once seen, so they are scrubbed alongside `m` and `kr`. */
         ama_secure_memzero(m, sizeof(m));
         ama_secure_memzero(kr, sizeof(kr));
-        ama_secure_memzero(&skpv, sizeof(skpv));
         ama_secure_memzero(&bp, sizeof(bp));
+        ama_secure_memzero(&skpv, sizeof(skpv));
         ama_secure_memzero(&v, sizeof(v));
         ama_secure_memzero(&mp, sizeof(mp));
         ama_secure_memzero(ct_cmp, sizeof(ct_cmp));
@@ -946,6 +1100,21 @@ static ama_error_t kyber_decapsulate(
  * ============================================================================ */
 #ifdef AMA_KYBER_BUILD_DIAGNOSTICS
 #include <stdio.h>
+
+/* The diagnostics below are ML-KEM-1024-specific by construction: every
+ * buffer in them is sized with AMA_ML_KEM_1024_* and every printed expectation
+ * was derived for k = 4.  Rather than pretend they are parameter-generic,
+ * they keep the old compile-time names as local aliases for the ML-KEM-1024
+ * values, scoped to this block and #undef'd at its end.  A future diagnostic
+ * for another parameter set gets its own aliases; nothing outside this block
+ * can see these names, so the runtime parameter block stays the single source
+ * of truth for the shipped code paths. */
+#define KYBER_K    4
+#define KYBER_ETA1 2
+#define KYBER_ETA2 2
+#define KYBER_DU   11
+#define KYBER_DV   5
+#define KYBER_DIAG_P (kyber_params_for(AMA_ML_KEM_1024))
 
 /**
  * Debug: test NTT -> INVNTT roundtrip and polynomial arithmetic correctness.
@@ -1002,7 +1171,7 @@ int ama_kyber_debug_ntt_roundtrip(void) {
            coeff_normalize(result.coeffs[6]), coeff_normalize(result.coeffs[7]));
     printf("  Expected: [0, 1, 0, 0, ...]\n");
 
-    /* Test 0c: polyvec_basemul_acc (inner product) test
+    /* Test 0c: polyvec_basemul_acc (inner product, KYBER_K) test
      * s = ([1,0,...], [0,...], [0,...], [0,...])
      * u = ([3,0,...], [0,...], [0,...], [0,...])
      * s^T * u should = 3 */
@@ -1016,10 +1185,10 @@ int ama_kyber_debug_ntt_roundtrip(void) {
         uv.vec[0].coeffs[0] = 3;
 
         /* NTT both */
-        polyvec_ntt(&sv);
-        polyvec_ntt(&uv);
+        polyvec_ntt(&sv, KYBER_K);
+        polyvec_ntt(&uv, KYBER_K);
 
-        polyvec_basemul_acc(&ip, &sv, &uv);
+        polyvec_basemul_acc(&ip, &sv, &uv, KYBER_K);
         poly_invntt(&ip);
 
         printf("  s^T*u[0..3]: %d %d %d %d (expected: 3 0 0 0)\n",
@@ -1045,24 +1214,24 @@ int ama_kyber_debug_ntt_roundtrip(void) {
         /* s = ([1,0,...], [0,...], [0,...], [0,...]) */
         memset(&sv, 0, sizeof(sv));  // PUBLIC-DATA: sv (diag) — AMA_KYBER_BUILD_DIAGNOSTICS — encapsulation test vector
         sv.vec[0].coeffs[0] = 1;
-        polyvec_ntt(&sv);
+        polyvec_ntt(&sv, KYBER_K);
 
         /* e = zero */
         memset(&ev, 0, sizeof(ev));  // PUBLIC-DATA: ev (diag) — AMA_KYBER_BUILD_DIAGNOSTICS — encapsulation test vector
-        polyvec_ntt(&ev);
+        polyvec_ntt(&ev, KYBER_K);
 
         /* t = A*s + e (in NTT domain) */
         for (ii = 0; ii < KYBER_K; ii++) {
-            polyvec_basemul_acc(&pkpv_test.vec[ii], &A[ii], &sv);
+            polyvec_basemul_acc(&pkpv_test.vec[ii], &A[ii], &sv, KYBER_K);
             poly_tomont(&pkpv_test.vec[ii]);
             poly_add(&pkpv_test.vec[ii], &pkpv_test.vec[ii], &ev.vec[ii]);
         }
-        polyvec_reduce(&pkpv_test);
+        polyvec_reduce(&pkpv_test, KYBER_K);
 
         /* r = ([2,0,...], [0,...], ...) */
         memset(&sp_test, 0, sizeof(sp_test));  // PUBLIC-DATA: sp_test (diag) — AMA_KYBER_BUILD_DIAGNOSTICS — secret-portion test vector
         sp_test.vec[0].coeffs[0] = 2;
-        polyvec_ntt(&sp_test);
+        polyvec_ntt(&sp_test, KYBER_K);
 
         /* e1 = 0, e2 = 0 */
         memset(&ep_test, 0, sizeof(ep_test));  // PUBLIC-DATA: ep_test (diag) — AMA_KYBER_BUILD_DIAGNOSTICS — error-portion test vector
@@ -1071,11 +1240,11 @@ int ama_kyber_debug_ntt_roundtrip(void) {
         /* u = INVNTT(A^T * r) + e1 */
         /* For A=I, A^T=I, so A^T*r = r. u should = [2,0,...] in vec[0] */
         for (ii = 0; ii < KYBER_K; ii++) {
-            polyvec_basemul_acc(&bp_test.vec[ii], &A[ii], &sp_test);
+            polyvec_basemul_acc(&bp_test.vec[ii], &A[ii], &sp_test, KYBER_K);
         }
-        polyvec_invntt(&bp_test);
-        polyvec_add(&bp_test, &bp_test, &ep_test);
-        polyvec_reduce(&bp_test);
+        polyvec_invntt(&bp_test, KYBER_K);
+        polyvec_add(&bp_test, &bp_test, &ep_test, KYBER_K);
+        polyvec_reduce(&bp_test, KYBER_K);
 
         printf("  u[0][0..3]: %d %d %d %d (expected: 2 0 0 0)\n",
                coeff_normalize(bp_test.vec[0].coeffs[0]),
@@ -1086,7 +1255,7 @@ int ama_kyber_debug_ntt_roundtrip(void) {
         /* v = INVNTT(t^T * r) + e2 + m */
         /* t = s = [1,0,...] in vec[0], r = [2,0,...] in vec[0]
          * t^T * r = 1*2 = 2 (constant poly). v should = [2+msg_coeff,0,...] */
-        polyvec_basemul_acc(&v_test, &pkpv_test, &sp_test);
+        polyvec_basemul_acc(&v_test, &pkpv_test, &sp_test, KYBER_K);
         poly_invntt(&v_test);
         poly_add(&v_test, &v_test, &epp_test);
 
@@ -1102,8 +1271,8 @@ int ama_kyber_debug_ntt_roundtrip(void) {
                coeff_normalize(v_test.coeffs[3]));
 
         /* Decrypt: s^T * u */
-        polyvec_ntt(&bp_test);
-        polyvec_basemul_acc(&stu_test, &sv, &bp_test);
+        polyvec_ntt(&bp_test, KYBER_K);
+        polyvec_basemul_acc(&stu_test, &sv, &bp_test, KYBER_K);
         poly_invntt(&stu_test);
 
         printf("  s^T*u[0..3]: %d %d %d %d (expected: 2 0 0 0)\n",
@@ -1257,24 +1426,24 @@ int ama_kyber_debug_ntt_roundtrip(void) {
         s_man.vec[1].coeffs[0] = 2;
         s_man.vec[2].coeffs[1] = 1;
         s_man.vec[3].coeffs[0] = -1;
-        polyvec_ntt(&s_man);
+        polyvec_ntt(&s_man, KYBER_K);
 
         /* e = zero for simplicity */
         memset(&e_man, 0, sizeof(e_man));  // PUBLIC-DATA: e_man (diag) — AMA_KYBER_BUILD_DIAGNOSTICS — manual test vector
-        polyvec_ntt(&e_man);
+        polyvec_ntt(&e_man, KYBER_K);
 
         /* t = A*s + e (NTT domain) */
         for (ii = 0; ii < KYBER_K; ii++) {
-            polyvec_basemul_acc(&t_man.vec[ii], &A_man[ii], &s_man);
+            polyvec_basemul_acc(&t_man.vec[ii], &A_man[ii], &s_man, KYBER_K);
             poly_tomont(&t_man.vec[ii]);
             poly_add(&t_man.vec[ii], &t_man.vec[ii], &e_man.vec[ii]);
         }
-        polyvec_reduce(&t_man);
+        polyvec_reduce(&t_man, KYBER_K);
 
         /* r = ([1, 0, ...], [0, ...], [0, ...], [0, ...]) */
         memset(&sp_man, 0, sizeof(sp_man));  // PUBLIC-DATA: sp_man (diag) — AMA_KYBER_BUILD_DIAGNOSTICS — manual test vector
         sp_man.vec[0].coeffs[0] = 1;
-        polyvec_ntt(&sp_man);
+        polyvec_ntt(&sp_man, KYBER_K);
 
         /* e1 = 0, e2 = 0 */
         memset(&ep_man, 0, sizeof(ep_man));  // PUBLIC-DATA: ep_man (diag) — AMA_KYBER_BUILD_DIAGNOSTICS — manual test vector
@@ -1288,13 +1457,13 @@ int ama_kyber_debug_ntt_roundtrip(void) {
                 memcpy(&A_T[ii].vec[jj], &A_man[jj].vec[ii], sizeof(poly));
 
         for (ii = 0; ii < KYBER_K; ii++) {
-            polyvec_basemul_acc(&bp_man.vec[ii], &A_T[ii], &sp_man);
+            polyvec_basemul_acc(&bp_man.vec[ii], &A_T[ii], &sp_man, KYBER_K);
         }
-        polyvec_invntt(&bp_man);
-        polyvec_add(&bp_man, &bp_man, &ep_man);
-        polyvec_reduce(&bp_man);
+        polyvec_invntt(&bp_man, KYBER_K);
+        polyvec_add(&bp_man, &bp_man, &ep_man, KYBER_K);
+        polyvec_reduce(&bp_man, KYBER_K);
 
-        polyvec_basemul_acc(&v_man, &t_man, &sp_man);
+        polyvec_basemul_acc(&v_man, &t_man, &sp_man, KYBER_K);
         poly_invntt(&v_man);
         poly_add(&v_man, &v_man, &epp_man);
 
@@ -1312,8 +1481,8 @@ int ama_kyber_debug_ntt_roundtrip(void) {
         poly_reduce(&v_man);
 
         /* Decrypt: s^T * u */
-        polyvec_ntt(&bp_man);
-        polyvec_basemul_acc(&stu_man, &s_man, &bp_man);
+        polyvec_ntt(&bp_man, KYBER_K);
+        polyvec_basemul_acc(&stu_man, &s_man, &bp_man, KYBER_K);
         poly_invntt(&stu_man);
 
         poly_sub(&stu_man, &v_man, &stu_man);
@@ -1354,23 +1523,24 @@ int ama_kyber_debug_ntt_roundtrip(void) {
         polyvec A3[KYBER_K], s3, t3, as3;
         const uint8_t *rho3;
 
-        ama_error_t rc3 = kyber_keypair_generate(pk3, sizeof(pk3), sk3, sizeof(sk3));
+        ama_error_t rc3 = kyber_keygen_internal(KYBER_DIAG_P, pk3, sizeof(pk3),
+                                                sk3, sizeof(sk3), NULL, NULL);
         if (rc3 != AMA_SUCCESS) { printf("    keygen failed\n"); }
 
         rho3 = pk3 + KYBER_K * 384;
-        polyvec_frombytes(&t3, pk3);     /* t_hat from pk */
-        polyvec_frombytes(&s3, sk3);     /* s_hat from sk */
+        polyvec_frombytes(&t3, pk3, KYBER_K);     /* t_hat from pk */
+        polyvec_frombytes(&s3, sk3, KYBER_K);     /* s_hat from sk */
 
         /* Regenerate A */
-        kyber_gen_matrix(A3, rho3, 0);
+        kyber_gen_matrix(A3, rho3, 0, KYBER_DIAG_P);
 
         /* Recompute A*s */
         unsigned int ki;
         for (ki = 0; ki < KYBER_K; ki++) {
-            polyvec_basemul_acc(&as3.vec[ki], &A3[ki], &s3);
+            polyvec_basemul_acc(&as3.vec[ki], &A3[ki], &s3, KYBER_K);
             poly_tomont(&as3.vec[ki]);
         }
-        polyvec_reduce(&as3);
+        polyvec_reduce(&as3, KYBER_K);
 
         /* Compare as3 with t3 (they should differ only by NTT(e)) */
         /* But we can't check NTT(e) directly. Instead test the full roundtrip: */
@@ -1381,7 +1551,7 @@ int ama_kyber_debug_ntt_roundtrip(void) {
         memset(msg3, 0xAB, 32);
         memset(&sp3, 0, sizeof(sp3));  // PUBLIC-DATA: sp3 (diag) — AMA_KYBER_BUILD_DIAGNOSTICS — round-3 test vector
         sp3.vec[0].coeffs[0] = 1; /* Simple r */
-        polyvec_ntt(&sp3);
+        polyvec_ntt(&sp3, KYBER_K);
         memset(&ep3, 0, sizeof(ep3));  // PUBLIC-DATA: ep3 (diag) — AMA_KYBER_BUILD_DIAGNOSTICS — round-3 test vector
         memset(&epp3, 0, sizeof(epp3));  // PUBLIC-DATA: epp3 (diag) — AMA_KYBER_BUILD_DIAGNOSTICS — round-3 test vector
 
@@ -1395,10 +1565,10 @@ int ama_kyber_debug_ntt_roundtrip(void) {
 
         /* u = INVNTT(A^T * r) */
         for (ki = 0; ki < KYBER_K; ki++) {
-            polyvec_basemul_acc(&bp3.vec[ki], &A3T[ki], &sp3);
+            polyvec_basemul_acc(&bp3.vec[ki], &A3T[ki], &sp3, KYBER_K);
         }
-        polyvec_invntt(&bp3);
-        polyvec_reduce(&bp3);
+        polyvec_invntt(&bp3, KYBER_K);
+        polyvec_reduce(&bp3, KYBER_K);
 
         printf("    u[0][0..3]: %d %d %d %d\n",
                coeff_normalize(bp3.vec[0].coeffs[0]),
@@ -1407,7 +1577,7 @@ int ama_kyber_debug_ntt_roundtrip(void) {
                coeff_normalize(bp3.vec[0].coeffs[3]));
 
         /* v = INVNTT(t^T * r) + msg */
-        polyvec_basemul_acc(&v3, &t3, &sp3);
+        polyvec_basemul_acc(&v3, &t3, &sp3, KYBER_K);
         poly_invntt(&v3);
         memset(&mp3, 0, sizeof(mp3));  // PUBLIC-DATA: mp3 (diag) — AMA_KYBER_BUILD_DIAGNOSTICS — round-3 message polynomial test
         for (ki = 0; ki < 32; ki++) {
@@ -1419,8 +1589,8 @@ int ama_kyber_debug_ntt_roundtrip(void) {
         poly_reduce(&v3);
 
         /* Decrypt: s^T * u */
-        polyvec_ntt(&bp3);
-        polyvec_basemul_acc(&stu3, &s3, &bp3);
+        polyvec_ntt(&bp3, KYBER_K);
+        polyvec_basemul_acc(&stu3, &s3, &bp3, KYBER_K);
         poly_invntt(&stu3);
         poly_sub(&stu3, &v3, &stu3);
         poly_reduce(&stu3);
@@ -1458,21 +1628,21 @@ int ama_kyber_debug_ntt_roundtrip(void) {
         polyvec A2[KYBER_K], s_hat, t_hat, as_hat;
         const uint8_t *rho2;
 
-        ama_error_t rc2 = kyber_keypair_generate(pk2, sizeof(pk2), sk2, sizeof(sk2));
+        ama_error_t rc2 = kyber_keygen_internal(KYBER_DIAG_P, pk2, sizeof(pk2), sk2, sizeof(sk2), NULL, NULL);
         if (rc2 != AMA_SUCCESS) { printf("    keygen failed\n"); return 1; }
 
         rho2 = pk2 + KYBER_K * 384;
-        polyvec_frombytes(&t_hat, pk2);
-        polyvec_frombytes(&s_hat, sk2);
-        kyber_gen_matrix(A2, rho2, 0);  /* Non-transposed A */
+        polyvec_frombytes(&t_hat, pk2, KYBER_K);
+        polyvec_frombytes(&s_hat, sk2, KYBER_K);
+        kyber_gen_matrix(A2, rho2, 0, KYBER_DIAG_P);  /* Non-transposed A */
 
         /* Compute A*s in NTT domain */
         unsigned int ki;
         for (ki = 0; ki < KYBER_K; ki++) {
-            polyvec_basemul_acc(&as_hat.vec[ki], &A2[ki], &s_hat);
+            polyvec_basemul_acc(&as_hat.vec[ki], &A2[ki], &s_hat, KYBER_K);
             poly_tomont(&as_hat.vec[ki]);
         }
-        polyvec_reduce(&as_hat);
+        polyvec_reduce(&as_hat, KYBER_K);
 
         /* e_hat = t_hat - A*s (in NTT domain) */
         polyvec e_hat;
@@ -1481,7 +1651,7 @@ int ama_kyber_debug_ntt_roundtrip(void) {
         }
 
         /* INVNTT(e_hat) should give e with small coefficients [-2,2] */
-        polyvec_invntt(&e_hat);
+        polyvec_invntt(&e_hat, KYBER_K);
         int max_e = 0;
         for (ki = 0; ki < KYBER_K; ki++) {
             for (int ci = 0; ci < KYBER_N; ci++) {
@@ -1544,7 +1714,7 @@ int ama_kyber_debug_cpa_roundtrip(void) {
     const uint8_t *rho;
 
     /* Generate keypair */
-    ama_error_t rc = kyber_keypair_generate(pk, sizeof(pk), sk, sizeof(sk));
+    ama_error_t rc = kyber_keygen_internal(KYBER_DIAG_P, pk, sizeof(pk), sk, sizeof(sk), NULL, NULL);
     if (rc != AMA_SUCCESS) { printf("  CPA: keygen failed\n"); return 1; }
 
     /* === Test 1: Inline CPA encrypt/decrypt WITHOUT compression === */
@@ -1561,15 +1731,15 @@ int ama_kyber_debug_cpa_roundtrip(void) {
 
         /* Parse keys */
         rho = pk + KYBER_K * 384;
-        polyvec_frombytes(&pkpv, pk);
-        polyvec_frombytes(&skpv, sk);
+        polyvec_frombytes(&pkpv, pk, KYBER_K);
+        polyvec_frombytes(&skpv, sk, KYBER_K);
 
         /* Generate matrix A^T */
-        kyber_gen_matrix(a, rho, 1);
+        kyber_gen_matrix(a, rho, 1, KYBER_DIAG_P);
 
         /* Sample r, e1, e2 from coins */
-        kyber_gennoise(&sp, coins, 0);
-        kyber_gennoise(&ep, coins, (uint8_t)KYBER_K);
+        kyber_gennoise(&sp, coins, 0, KYBER_K, KYBER_ETA1);
+        kyber_gennoise(&ep, coins, (uint8_t)KYBER_K, KYBER_K, KYBER_ETA1);
         {
             uint8_t noise_buf[33];
             uint8_t noise_stream[KYBER_ETA2 * KYBER_N / 4];
@@ -1580,18 +1750,18 @@ int ama_kyber_debug_cpa_roundtrip(void) {
         }
 
         /* NTT(r) */
-        polyvec_ntt(&sp);
+        polyvec_ntt(&sp, KYBER_K);
 
         /* Compute u = INVNTT(A^T * r) + e1 */
         for (i = 0; i < KYBER_K; i++) {
-            polyvec_basemul_acc(&bp_enc.vec[i], &a[i], &sp);
+            polyvec_basemul_acc(&bp_enc.vec[i], &a[i], &sp, KYBER_K);
         }
-        polyvec_invntt(&bp_enc);
-        polyvec_add(&bp_enc, &bp_enc, &ep);
-        polyvec_reduce(&bp_enc);
+        polyvec_invntt(&bp_enc, KYBER_K);
+        polyvec_add(&bp_enc, &bp_enc, &ep, KYBER_K);
+        polyvec_reduce(&bp_enc, KYBER_K);
 
         /* Compute v = INVNTT(t^T * r) + e2 + m_poly */
-        polyvec_basemul_acc(&v_poly, &pkpv, &sp);
+        polyvec_basemul_acc(&v_poly, &pkpv, &sp, KYBER_K);
         poly_invntt(&v_poly);
         poly_add(&v_poly, &v_poly, &epp);
 
@@ -1608,8 +1778,8 @@ int ama_kyber_debug_cpa_roundtrip(void) {
 
         /* --- Now decrypt (no compression) --- */
         /* Compute s^T * u: NTT(u), basemul(s, NTT(u)), INVNTT */
-        polyvec_ntt(&bp_enc);
-        polyvec_basemul_acc(&stu_poly, &skpv, &bp_enc);
+        polyvec_ntt(&bp_enc, KYBER_K);
+        polyvec_basemul_acc(&stu_poly, &skpv, &bp_enc, KYBER_K);
         poly_invntt(&stu_poly);
 
         /* v - s^T * u */
@@ -1657,14 +1827,14 @@ int ama_kyber_debug_cpa_roundtrip(void) {
         memset(m_orig, 0xAB, 32);
         memset(coins, 0xCD, 32);
 
-        polyvec_frombytes(&skpv, sk);
-        kyber_cpapke_enc(ct, m_orig, pk, coins);
+        polyvec_frombytes(&skpv, sk, KYBER_K);
+        kyber_cpapke_enc(ct, m_orig, pk, coins, KYBER_DIAG_P);
 
-        polyvec_decompress(&bp, ct);
+        polyvec_decompress(&bp, ct, KYBER_DIAG_P);
         poly_decompress(&v, ct + KYBER_K * (KYBER_N * KYBER_DU / 8), KYBER_DV);
 
-        polyvec_ntt(&bp);
-        polyvec_basemul_acc(&mp, &skpv, &bp);
+        polyvec_ntt(&bp, KYBER_K);
+        polyvec_basemul_acc(&mp, &skpv, &bp, KYBER_K);
         poly_invntt(&mp);
 
         poly_sub(&mp, &v, &mp);
@@ -1701,10 +1871,81 @@ int ama_kyber_debug_cpa_roundtrip(void) {
 #endif
 }
 
+#undef KYBER_K
+#undef KYBER_ETA1
+#undef KYBER_ETA2
+#undef KYBER_DU
+#undef KYBER_DV
+#undef KYBER_DIAG_P
 #endif /* AMA_KYBER_BUILD_DIAGNOSTICS - end of debug/test functions */
 
 /* ============================================================================
- * PUBLIC WRAPPERS FOR CORE DISPATCH
+ * PUBLIC API — PARAMETER-DRIVEN (ML-KEM-512 / -768 / -1024)
+ *
+ * The legacy `ama_kyber_*` entry points below are preserved as thin wrappers
+ * pinned to ML-KEM-1024.  They are the ABI every existing caller and every
+ * existing test uses, and pinning them keeps that behaviour bit-exact: adding
+ * parameter sets must not change what an existing call does.
+ * ============================================================================ */
+
+AMA_API size_t ama_ml_kem_public_key_bytes(ama_ml_kem_param_set_t ps) {
+    const kyber_params *P = kyber_params_for(ps);
+    return P ? P->pk_bytes : 0u;
+}
+
+AMA_API size_t ama_ml_kem_secret_key_bytes(ama_ml_kem_param_set_t ps) {
+    const kyber_params *P = kyber_params_for(ps);
+    return P ? P->sk_bytes : 0u;
+}
+
+AMA_API size_t ama_ml_kem_ciphertext_bytes(ama_ml_kem_param_set_t ps) {
+    const kyber_params *P = kyber_params_for(ps);
+    return P ? P->ct_bytes : 0u;
+}
+
+AMA_API const char *ama_ml_kem_param_set_name(ama_ml_kem_param_set_t ps) {
+    const kyber_params *P = kyber_params_for(ps);
+    return P ? P->name : NULL;
+}
+
+AMA_API ama_error_t ama_ml_kem_keypair(ama_ml_kem_param_set_t ps,
+                                       uint8_t *pk, size_t pk_len,
+                                       uint8_t *sk, size_t sk_len) {
+    const kyber_params *P = kyber_params_for(ps);
+    if (!P) return AMA_ERROR_INVALID_PARAM;
+    return kyber_keygen_internal(P, pk, pk_len, sk, sk_len, NULL, NULL);
+}
+
+AMA_API ama_error_t ama_ml_kem_keypair_from_seed(ama_ml_kem_param_set_t ps,
+                                                 const uint8_t d[32],
+                                                 const uint8_t z[32],
+                                                 uint8_t *pk, size_t pk_len,
+                                                 uint8_t *sk, size_t sk_len) {
+    const kyber_params *P = kyber_params_for(ps);
+    if (!P || !d || !z) return AMA_ERROR_INVALID_PARAM;
+    return kyber_keygen_internal(P, pk, pk_len, sk, sk_len, d, z);
+}
+
+AMA_API ama_error_t ama_ml_kem_encapsulate(ama_ml_kem_param_set_t ps,
+                                           const uint8_t *pk, size_t pk_len,
+                                           uint8_t *ct, size_t *ct_len,
+                                           uint8_t *ss, size_t ss_len) {
+    const kyber_params *P = kyber_params_for(ps);
+    if (!P) return AMA_ERROR_INVALID_PARAM;
+    return kyber_encapsulate_internal(P, pk, pk_len, ct, ct_len, ss, ss_len);
+}
+
+AMA_API ama_error_t ama_ml_kem_decapsulate(ama_ml_kem_param_set_t ps,
+                                           const uint8_t *ct, size_t ct_len,
+                                           const uint8_t *sk, size_t sk_len,
+                                           uint8_t *ss, size_t ss_len) {
+    const kyber_params *P = kyber_params_for(ps);
+    if (!P) return AMA_ERROR_INVALID_PARAM;
+    return kyber_decapsulate_internal(P, ct, ct_len, sk, sk_len, ss, ss_len);
+}
+
+/* ============================================================================
+ * LEGACY ML-KEM-1024 ENTRY POINTS (unchanged ABI)
  * ============================================================================ */
 
 /**
@@ -1712,14 +1953,11 @@ int ama_kyber_debug_cpa_roundtrip(void) {
  */
 AMA_API ama_error_t ama_kyber_keypair(uint8_t* pk, size_t pk_len,
                                uint8_t* sk, size_t sk_len) {
-    return kyber_keypair_generate(pk, pk_len, sk, sk_len);
+    return ama_ml_kem_keypair(AMA_ML_KEM_1024, pk, pk_len, sk, sk_len);
 }
 
 /**
  * Deterministic Kyber-1024 keypair from seed (for KAT testing).
- *
- * Generates a Kyber keypair deterministically from provided seed values,
- * bypassing the random number generator entirely.
  *
  * @param d    Seed for key generation (32 bytes)
  * @param z    Seed for implicit rejection (32 bytes)
@@ -1731,73 +1969,9 @@ AMA_API ama_error_t ama_kyber_keypair_from_seed(
     const uint8_t d[32], const uint8_t z[32],
     uint8_t *pk, uint8_t *sk)
 {
-#ifdef AMA_USE_NATIVE_PQC
-    uint8_t buf[64];
-    uint8_t *rho, *sigma;
-    polyvec a[KYBER_K], s, e, pkpv;
-    unsigned int i;
-
-    if (!d || !z || !pk || !sk) {
-        return AMA_ERROR_INVALID_PARAM;
-    }
-
-    /* G(d || byte(k)) = (rho, sigma) per FIPS 203 Algorithm 15 */
-    {
-        uint8_t g_input[33];
-        memcpy(g_input, d, 32);
-        g_input[32] = (uint8_t)KYBER_K;
-        ama_sha3_512(g_input, 33, buf);
-        ama_secure_memzero(g_input, sizeof(g_input));
-    }
-    rho = buf;
-    sigma = buf + 32;
-
-    /* Generate matrix A from rho (in NTT domain) */
-    kyber_gen_matrix(a, rho, 0);
-
-    /* Sample secret/error vectors from CBD and NTT each polyvec
-     * immediately after sampling — see the matching commentary in
-     * kyber_keypair_generate().  Byte-identical to the previous
-     * sample-all-then-NTT-all layout. */
-    kyber_gennoise(&s, sigma, 0);
-    polyvec_ntt(&s);
-    kyber_gennoise(&e, sigma, (uint8_t)KYBER_K);
-    polyvec_ntt(&e);
-
-    /* Compute t = A*s + e (in NTT domain) */
-    for (i = 0; i < KYBER_K; i++) {
-        polyvec_basemul_acc(&pkpv.vec[i], &a[i], &s);
-        poly_tomont(&pkpv.vec[i]);
-        poly_add(&pkpv.vec[i], &pkpv.vec[i], &e.vec[i]);
-    }
-    polyvec_reduce(&pkpv);
-
-    /* Pack public key: pk = (t || rho) */
-    polyvec_tobytes(pk, &pkpv);
-    memcpy(pk + KYBER_K * 384, rho, 32);
-
-    /* Pack secret key: sk = (s || pk || H(pk) || z) */
-    polyvec_reduce(&s);
-    polyvec_tobytes(sk, &s);
-    memcpy(sk + KYBER_K * 384, pk, AMA_KYBER_1024_PUBLIC_KEY_BYTES);
-
-    /* H(pk) */
-    ama_sha3_256(pk, AMA_KYBER_1024_PUBLIC_KEY_BYTES,
-                 sk + KYBER_K * 384 + AMA_KYBER_1024_PUBLIC_KEY_BYTES);
-
-    /* z for implicit rejection (provided by caller) */
-    memcpy(sk + KYBER_K * 384 + AMA_KYBER_1024_PUBLIC_KEY_BYTES + 32, z, 32);
-
-    /* Scrub sensitive data */
-    ama_secure_memzero(buf, sizeof(buf));
-    ama_secure_memzero(&s, sizeof(s));
-    ama_secure_memzero(&e, sizeof(e));
-
-    return AMA_SUCCESS;
-#else
-    (void)d; (void)z; (void)pk; (void)sk;
-    return AMA_ERROR_NOT_IMPLEMENTED;
-#endif
+    return ama_ml_kem_keypair_from_seed(AMA_ML_KEM_1024, d, z,
+                                        pk, AMA_ML_KEM_1024_PUBLIC_KEY_BYTES,
+                                        sk, AMA_ML_KEM_1024_SECRET_KEY_BYTES);
 }
 
 /**
@@ -1806,7 +1980,7 @@ AMA_API ama_error_t ama_kyber_keypair_from_seed(
 AMA_API ama_error_t ama_kyber_encapsulate(const uint8_t* pk, size_t pk_len,
                                    uint8_t* ct, size_t* ct_len,
                                    uint8_t* ss, size_t ss_len) {
-    return kyber_encapsulate(pk, pk_len, ct, ct_len, ss, ss_len);
+    return ama_ml_kem_encapsulate(AMA_ML_KEM_1024, pk, pk_len, ct, ct_len, ss, ss_len);
 }
 
 /**
@@ -1815,8 +1989,33 @@ AMA_API ama_error_t ama_kyber_encapsulate(const uint8_t* pk, size_t pk_len,
 AMA_API ama_error_t ama_kyber_decapsulate(const uint8_t* ct, size_t ct_len,
                                    const uint8_t* sk, size_t sk_len,
                                    uint8_t* ss, size_t ss_len) {
-    return kyber_decapsulate(ct, ct_len, sk, sk_len, ss, ss_len);
+    return ama_ml_kem_decapsulate(AMA_ML_KEM_1024, ct, ct_len, sk, sk_len, ss, ss_len);
 }
+
+#ifdef AMA_TESTING_MODE
+/**
+ * Test-only: assert the derived byte lengths in KYBER_PARAM_SETS agree with
+ * the FIPS 203 formulas (pk = 384k+32, sk = 768k+96, ct = 32(du*k+dv)).
+ *
+ * A mistyped table entry is otherwise invisible until a KAT fails at a length
+ * nobody expected; this turns it into a named test failure.  Returns 0 on
+ * success, or 1 + the index of the first bad row.
+ */
+int ama_ml_kem_test_params_selfcheck(void);
+int ama_ml_kem_test_params_selfcheck(void) {
+    unsigned idx;
+    for (idx = 0; idx < 3; idx++) {
+        const kyber_params *P = &KYBER_PARAM_SETS[idx];
+        if (P->pk_bytes != 384u * P->k + 32u) return (int)(1 + idx);
+        if (P->sk_bytes != 768u * P->k + 96u) return (int)(1 + idx);
+        if (P->ct_bytes != 32u * (P->du * P->k + P->dv)) return (int)(1 + idx);
+        if (P->k > KYBER_K_MAX) return (int)(1 + idx);
+        if (P->eta1 > KYBER_ETA_MAX || P->eta2 > KYBER_ETA_MAX) return (int)(1 + idx);
+        if (kyber_params_for(P->ps) != P) return (int)(1 + idx);
+    }
+    return 0;
+}
+#endif
 
 /* ============================================================================
  * POLYNOMIAL ARITHMETIC - COMPLETE IMPLEMENTATION

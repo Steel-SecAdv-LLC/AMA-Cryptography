@@ -201,6 +201,14 @@ if(AMA_USE_NATIVE_PQC)
     # when native PQC is enabled — see the top-level CMakeLists.txt).
     add_ama_test(test_secp256k1 test_secp256k1.c)
     add_ama_test(test_frost test_frost.c)
+    # NIST prime curves (src/c/ama_nistp.c) plus the FIPS 203/204 parameter
+    # tables.  Covers the three things the Python suite and the Wycheproof
+    # corpus structurally cannot reach: the hardcoded Montgomery constants
+    # re-derived from p and n, the windowed scalar multiplication against a
+    # naive double-and-add reference, and the derived byte lengths in the
+    # ML-KEM / ML-DSA parameter blocks.  All three use AMA_TESTING_MODE-only
+    # exports that appear in no public header.
+    add_ama_test(test_nistp test_nistp.c)
 endif()
 
 # Constant-time bitsliced AES-256 (NIST SP 800-38A §F.1.5 KAT).

@@ -30,7 +30,10 @@ This document provides an overview of the cryptographic algorithms used in AMA C
 | X25519 | Key Exchange | 128-bit classical | RFC 7748 | Native C (`ama_x25519.c`) | Hybrid KEM |
 | ChaCha20-Poly1305 | Authenticated Encryption | 256-bit | RFC 8439 | Native C (`ama_chacha20poly1305.c`) | Alternative AEAD |
 | Argon2id | Password Hashing | Memory-hard | RFC 9106 | Native C (`ama_argon2.c`) | Key Derivation |
-| secp256k1 | Elliptic Curve | 128-bit classical | SEC 2 | Native C (`ama_secp256k1.c`) | HD Key Derivation |
+| secp256k1 | Elliptic Curve | 128-bit classical | SEC 2 | Native C (`ama_secp256k1.c`) | HD Key Derivation, ECDSA |
+| NIST P-256 | ECDSA + ECDH | 128-bit classical | FIPS 186-5 / SP 800-186 / SP 800-56A | Native C (`ama_nistp.c`) | TLS, X.509, JOSE (ES256), COSE, WebAuthn |
+| NIST P-384 | ECDSA + ECDH | 192-bit classical | FIPS 186-5 / SP 800-186 / SP 800-56A | Native C (`ama_nistp.c`) | TLS, X.509, JOSE (ES384), CNSA 1.0 |
+| NIST P-521 | ECDSA + ECDH | 256-bit classical | FIPS 186-5 / SP 800-186 / SP 800-56A | Native C (`ama_nistp.c`) | TLS, X.509, JOSE (ES512) |
 
 ## Post-Quantum Cryptography (PQC)
 
@@ -288,6 +291,7 @@ All cryptographic primitives are implemented natively in C with zero external de
 | `ama_chacha20poly1305.c` | ChaCha20-Poly1305 AEAD | RFC 8439 |
 | `ama_argon2.c` | Argon2id password hashing | RFC 9106 |
 | `ama_secp256k1.c` | secp256k1 curve operations | SEC 2 |
+| `ama_nistp.c` | NIST P-256/P-384/P-521 ECDSA + ECDH | FIPS 186-5, SP 800-186, SP 800-56A, RFC 6979, SEC 1 |
 | `ama_aes_bitsliced.c` | Bitsliced AES S-box | — (optional) |
 
 ### Constant-Time Operations

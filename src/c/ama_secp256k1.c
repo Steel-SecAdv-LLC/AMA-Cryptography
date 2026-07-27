@@ -1959,6 +1959,96 @@ AMA_API ama_error_t ama_secp256k1_ecdsa_verify_ex(const uint8_t *signature, size
     return AMA_SUCCESS;
 }
 
+/* ============================================================================
+ * SEC 1 POINT DECOMPRESSION
+ *
+ * Added so the key-interoperability layer (ama_cryptography.key_formats) can
+ * import a compressed secp256k1 public key — the form Bitcoin, Ethereum and
+ * most SPKI encodings of this curve actually use — without doing elliptic
+ * curve arithmetic in Python, which INVARIANT-7 forbids.  Without it, a
+ * compressed secp256k1 SPKI or COSE key would be a dead branch in the format
+ * layer: parseable but unusable.
+ *
+ * Every input is public (it is a public key), so a plain square-and-multiply
+ * over the fixed, public exponent (p+1)/4 is sound here and carries no
+ * timing obligation.
+ * ============================================================================ */
+
+/* (p + 1) / 4 = 2^254 - 2^30 - 244, big-endian.  p = 3 (mod 4), so
+ * a^((p+1)/4) is a square root of a whenever one exists. */
+static const uint8_t SECP256K1_SQRT_EXP[32] = {
+    0x3F, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+    0xFF, 0xFF, 0xFF, 0xFF, 0xBF, 0xFF, 0xFF, 0x0C
+};
+
+static void secp256k1_fe_sqrt(secp256k1_fe *r, const secp256k1_fe *a) {
+    secp256k1_fe acc = SECP256K1_FE_ONE;
+    int i, j;
+
+    for (i = 0; i < 32; i++) {
+        for (j = 7; j >= 0; j--) {
+            secp256k1_fe_sqr(&acc, &acc);
+            if ((SECP256K1_SQRT_EXP[i] >> j) & 1)
+                secp256k1_fe_mul(&acc, &acc, a);
+        }
+    }
+    *r = acc;
+}
+
+AMA_API ama_error_t ama_secp256k1_pubkey_decompress(const uint8_t compressed[33],
+                                                    uint8_t uncompressed[64]) {
+    secp256k1_fe x, y, y2, rhs, t, seven;
+    uint8_t y_bytes[32];
+    int want_odd;
+
+    if (!compressed || !uncompressed)
+        return AMA_ERROR_INVALID_PARAM;
+    if (compressed[0] != 0x02 && compressed[0] != 0x03)
+        return AMA_ERROR_INVALID_PARAM;
+    if (!secp256k1_fe_bytes_canonical(compressed + 1))
+        return AMA_ERROR_INVALID_PARAM;
+
+    want_odd = compressed[0] & 1;
+    secp256k1_fe_from_bytes(&x, compressed + 1);
+
+    /* rhs = x^3 + 7 */
+    secp256k1_fe_sqr(&t, &x);
+    secp256k1_fe_mul(&rhs, &t, &x);
+    seven = SECP256K1_FE_ZERO;
+    seven.v[0] = 7;
+    secp256k1_fe_add(&rhs, &rhs, &seven);
+    secp256k1_fe_normalize(&rhs);
+
+    secp256k1_fe_sqrt(&y, &rhs);
+
+    /* Prove the root: an x that is not on the curve yields a y whose square
+     * is not rhs, and it is rejected rather than returned as a bogus point. */
+    secp256k1_fe_sqr(&y2, &y);
+    secp256k1_fe_normalize(&y2);
+    {
+        uint8_t a[32], b[32];
+        secp256k1_fe_to_bytes(a, &y2);
+        secp256k1_fe_to_bytes(b, &rhs);
+        if (memcmp(a, b, 32) != 0)
+            return AMA_ERROR_INVALID_PARAM;
+    }
+
+    secp256k1_fe_normalize(&y);
+    secp256k1_fe_to_bytes(y_bytes, &y);
+    if ((y_bytes[31] & 1) != want_odd) {
+        secp256k1_fe neg;
+        secp256k1_fe_sub(&neg, &SECP256K1_FE_ZERO, &y);
+        secp256k1_fe_normalize(&neg);
+        secp256k1_fe_to_bytes(y_bytes, &neg);
+    }
+
+    memcpy(uncompressed, compressed + 1, 32);
+    memcpy(uncompressed + 32, y_bytes, 32);
+    return AMA_SUCCESS;
+}
+
 /* Strict verification (the default policy): rejects high-s.  Thin wrapper over
  * ama_secp256k1_ecdsa_verify_ex so the ABI-stable entry point is unchanged. */
 AMA_API ama_error_t ama_secp256k1_ecdsa_verify(const uint8_t *signature, size_t signature_len,

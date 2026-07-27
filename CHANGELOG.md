@@ -5,7 +5,7 @@
 | Property | Value |
 |----------|-------|
 | Applies to Release | 3.4.0 |
-| Last Updated | 2026-07-26 |
+| Last Updated | 2026-07-27 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -14,6 +14,132 @@
 ## Overview
 
 All notable changes to AMA Cryptography will be documented in this file. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+---
+
+## [Unreleased]
+
+### Added
+
+- **NIST prime curves P-256 / P-384 / P-521 — ECDSA and ECDH.** New native
+  implementation `src/c/ama_nistp.c` (curve parameters from SP 800-186, ECDSA
+  from FIPS 186-5, ECDH from SP 800-56A §5.7.1.2, deterministic nonces from
+  RFC 6979, point encodings from SEC 1 v2), the `ama_nistp_*` C surface, and
+  the `native_nistp_*` Python surface. Zero external crypto dependencies
+  (INVARIANT-1): the only primitives consumed are AMA's own HMAC-SHA-256/384/512
+  and the platform CSPRNG.
+
+  This was the library's single largest interoperability gap. Curve25519 and
+  secp256k1 between them reach neither TLS, X.509, JOSE/JWT, COSE,
+  WebAuthn/FIDO2, CNSA 1.0, nor the PKCS#11 HSM fleets — every one of which is
+  gated on the NIST prime curves.
+
+  Covered: key generation (rejection-sampled into `[1, n-1]`, so the
+  distribution is exactly uniform rather than a biased reduction), public-key
+  derivation, full public-key validation, ECDH, deterministic ECDSA signing,
+  RFC 6979 §3.6 hedged signing, verification, SEC 1 point encode/decode
+  including compression, and DER ↔ fixed-width `r || s` conversion for the
+  JWS/COSE/WebAuthn wire form. Signatures are available in both DER (X.509,
+  TLS, PKCS#11) and raw (JWS RFC 7515 §3.4, COSE RFC 8152 §8.1) encodings.
+
+  One implementation serves all three curves: they are all short Weierstrass
+  with `a = -3` and cofactor 1, so the arithmetic is generic over a limb count
+  and the curve is a `const` parameter block. Constant time on every
+  secret-dependent path — a fixed 4-bit window whose table is read with a full
+  constant-time linear scan, and a point addition that resolves every
+  exceptional case (infinity, `P == Q`, `P == -Q`) branchlessly with masks.
+  Verification is variable time by design; every input is public.
+
+  Measured cost on x86-64: sign/verify ~0.37/0.54 ms (P-256), ~0.90/1.38 ms
+  (P-384), ~2.24/3.57 ms (P-521). This is several times slower than a
+  curve-specialised implementation with a precomputed generator comb and
+  Solinas reduction; that is stated rather than elided, and both optimisations
+  are additive under the existing differential test. See
+  `docs/NIST_PRIME_CURVES.md`.
+
+- **INVARIANT-34 — ECDSA low-`s` policy is per-curve and declared.** Every AMA
+  signer emits only the low representative on every curve. Verification policy
+  differs deliberately: secp256k1 rejects a high `s` by default (INVARIANT-28,
+  unchanged), while the NIST prime curves accept either representative by
+  default because X9.62 / FIPS 186-5 / TLS / X.509 / JWS / WebAuthn all permit
+  either and essentially none of their signers normalise. `require_low_s` /
+  `AMA_NISTP_ECDSA_REQUIRE_LOW_S` opts in to the strict form. The checks that
+  cost no interoperability — minimal DER, `r, s` strictly in `[1, n-1]` rather
+  than reduced, and public-key coordinates strictly in `[0, p)` — remain
+  unconditional on both curves and in both modes.
+
+- **ML-KEM-512 and ML-KEM-768 (FIPS 203).** `src/c/ama_kyber.c` is now
+  parameter-driven across all three FIPS 203 sets rather than hardcoded to
+  ML-KEM-1024, via the `ama_ml_kem_*` C surface and the `native_ml_kem_*`
+  Python surface. `n`, `q`, the NTT and every reduction constant are identical
+  across ML-KEM; only the module rank `k`, the CBD parameter `eta1` and the
+  compression widths `du`/`dv` differ, so those five values became a runtime
+  parameter block instead of three copies of a 1900-line implementation.
+  Adds the CBD-3 sampler ML-KEM-512 needs (`eta1 = 3`), and generalises the
+  4-way SHAKE batching, which previously assumed exactly four lanes.
+
+- **ML-DSA-44 and ML-DSA-87 (FIPS 204).** `src/c/ama_dilithium.c` is likewise
+  parameter-driven across all three FIPS 204 sets, via `ama_ml_dsa_*` and
+  `native_ml_dsa_*`. Adds the alternate bit-packings the other sets require —
+  3-bit `eta = 2` key packing, 18-bit `gamma1 = 2^17` mask packing, 6-bit
+  `gamma2 = (q-1)/88` commitment packing — and the mod-5 folding that
+  `eta = 2` rejection sampling uses. Key generation and signing are now
+  single-bodied across the random/deterministic and internal/context variants,
+  removing four near-duplicate implementations.
+
+- **1530 new Wycheproof vectors.** `ecdsa_secp256r1_sha256_test.json`,
+  `ecdsa_secp384r1_sha384_test.json` and `ecdsa_secp521r1_sha512_test.json`
+  vendored at the pinned upstream commit, and the ECDSA driver in
+  `wycheproof_vectors/run_wycheproof.py` generalised to dispatch on the group's
+  curve and hash rather than assuming secp256k1/SHA-256. The corpus is now 4263
+  vectors across 15 files. All 1530 new vectors pass with **zero failures and
+  zero policy exceptions** — the NIST suites need no divergence bucket, which
+  is itself the visible evidence for INVARIANT-34.
+
+- **New known-answer corpora.** `tests/kat/fips203/ml_kem_{512,768}.kat` and
+  `tests/kat/fips204/ml_dsa_{44,87}.kat`, with provenance and format recorded
+  in the new `tests/kat/README.md`. ML-DSA-44/87 are byte-exact against NIST
+  ACVP-Server `ML-DSA-keyGen-FIPS204` (75/75) and the deterministic
+  `ML-DSA-sigGen-FIPS204` groups for both the internal and external/pure
+  interfaces (90/90). ML-KEM-512/768/1024 are 193/193 each against the
+  vendored Wycheproof ML-KEM corpora.
+
+- **`ama_secp256k1_pubkey_decompress`.** Recovers `y` from a compressed SEC 1
+  secp256k1 point and *proves* the root by squaring, so an off-curve `x` is
+  rejected rather than yielding an off-curve point. Non-canonical `x` (`>= p`)
+  is rejected, never reduced (INVARIANT-29).
+
+- **New test suites.** `tests/test_nistp_curves.py` (85 tests, including a
+  pure-Python RFC 6979 + affine-arithmetic reference that the C signer must
+  match byte-for-byte), `tests/test_pqc_param_sets.py` (40 tests), and
+  `tests/c/test_nistp.c` (re-derives the hardcoded Montgomery constants from
+  `p` and `n` alone, and differentials the windowed scalar multiplier against a
+  naive double-and-add reference).
+
+### Fixed
+
+- **ML-KEM `e1` was sampled with the wrong CBD parameter.** `kyber_cpapke_enc`
+  sampled the `e1` error vector with `eta1`; FIPS 203 Algorithm 14 specifies
+  `eta2` for *both* error terms and `eta1` only for `y`. The three coincide for
+  ML-KEM-768 and ML-KEM-1024 (`eta1 = eta2 = 2`), so the shipped ML-KEM-1024
+  path was never affected and its KATs never moved — but the defect would have
+  made ML-KEM-512 (`eta1 = 3`) produce ciphertexts no other implementation
+  decapsulates. Caught by the vendored Wycheproof ML-KEM-512 corpus on its
+  first run.
+
+### Changed
+
+- `ama_kyber_*` and `ama_dilithium_*` are now thin wrappers pinned to
+  ML-KEM-1024 and ML-DSA-65 respectively. The ABI and the byte-level behaviour
+  are unchanged, and `tests/test_pqc_param_sets.py` asserts both directions of
+  interoperation between the legacy and parameter-driven surfaces so the two
+  cannot drift.
+- `kyber_gen_matrix` iterates the matrix indices directly instead of a
+  flattened counter with a division. This is not cosmetic: with `k` a runtime
+  value GCC could no longer bound the index and emitted
+  `-Waggressive-loop-optimizations` against `mat[i]`. Iterating `i < k` under an
+  explicit precondition makes the bound structural, so the warning is gone
+  because the property is now provable rather than suppressed.
 
 ---
 

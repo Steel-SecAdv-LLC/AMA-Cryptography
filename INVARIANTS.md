@@ -1245,5 +1245,69 @@ parsed block.
 
 ---
 
+## INVARIANT-34 — ECDSA Low-`s` Policy Is Per-Curve and Declared
+
+**Statement.** Every AMA ECDSA signer, on every curve, emits only the low
+representative (`s <= (n-1)/2`). Verification policy is **per curve** and each
+choice is stated in the header, in the tests, and here:
+
+- **secp256k1** rejects a high `s` by default (INVARIANT-28), selectable via
+  `ama_secp256k1_ecdsa_verify_ex(..., AMA_SECP256K1_ECDSA_ALLOW_HIGH_S)`.
+- **P-256 / P-384 / P-521** accept either representative by default, and reject
+  the high twin only under `AMA_NISTP_ECDSA_REQUIRE_LOW_S`.
+
+The checks that cost no interoperability are unconditional on both curves and
+in both modes: minimal DER only, `r` and `s` strictly in `[1, n-1]` rather than
+reduced into range, and public-key coordinates strictly in `[0, p)`.
+
+**Why.** The two curves live in different worlds, and a single global policy is
+wrong for one of them.
+
+secp256k1 signatures are identifiers. A blockchain transaction is addressed by
+its signature bytes, so accepting `(r, n - s)` means one transaction has two
+identities — the malleability class that INVARIANT-26 and INVARIANT-28 exist to
+close. AMA controls the signer in every path where it produces secp256k1
+signatures, so strict is free.
+
+The NIST prime curves exist here for the opposite reason: to verify signatures
+AMA did *not* produce. X9.62, FIPS 186-5, RFC 3279, TLS, X.509, JWS and WebAuthn
+all permit either `s`, and essentially none of their signers normalise. A
+strict-by-default verifier would reject conformant third-party signatures — it
+would not be "more secure", it would be non-interoperable, defeating the entire
+purpose of adding the curves.
+
+The asymmetry is therefore a deliberate decision about *what each curve is for*,
+not an oversight or a weakening. Making it an invariant is what stops a future
+change from "harmonising" the two defaults in either direction without
+re-reading this reasoning.
+
+**Enforcement.** In `src/c/ama_nistp.c`, `nistp_ecdsa_sign_core()` negates a
+high `s` unconditionally before encoding, and `nistp_ecdsa_verify_rs()` rejects
+one only when `AMA_NISTP_ECDSA_REQUIRE_LOW_S` is set. The range and
+canonical-coordinate gates (`nistp_scalar_load`, `nistp_load_point`) and the
+strict DER parser (`nistp_der_parse`) are outside the flag entirely.
+`ama_secp256k1.c` is unchanged.
+
+**Wycheproof consequence, declared.** The secp256k1 divergence policy
+`ecdsa/high-s-rejected` in `wycheproof_vectors/run_wycheproof.py` claims exactly
+72 vectors and is scoped to `ecdsa_secp256k1_sha256_test.json` by filename. The
+three NIST prime-curve suites — 1530 vectors — need **no** divergence policy at
+all, and pass with zero exceptions. That asymmetry in the gate output is the
+visible evidence for this invariant: if someone made the NIST default strict, a
+new uncounted divergence bucket would appear and the gate would go red.
+
+**Timing posture.** Signing is constant time with respect to the private key and
+the RFC 6979 nonce on both curves. Verification is variable time by design on
+both — every input is public.
+
+**Verification.** `tests/test_nistp_curves.py::
+test_high_s_twin_accepted_by_default_rejected_when_strict` asserts *both*
+directions on all three prime curves: the twin verifies by default and does not
+verify under `require_low_s`. `test_signing_always_emits_low_s` asserts the
+signer half over freshly generated keys.
+`tests/test_secp256k1_ecdsa_low_s_policy.py` holds the secp256k1 half unchanged.
+
+---
+
 _Maintained by Steel Security Advisors LLC._
 _Last updated: 2026-07-27_
