@@ -715,6 +715,13 @@ def test_a_coordinate_with_a_leading_zero_octet_keeps_its_width(name: str) -> No
             break
     if found is None:  # pragma: no cover - about 1 in 128 per attempt
         pytest.skip(f"no {name} key with a zero coordinate octet in 4000 tries")
+    # `pytest.skip` is `NoReturn`, so this narrowing is redundant at runtime —
+    # but only a type-checker that can *see* pytest knows that. `pytest.*` is
+    # under `ignore_missing_imports`, so in a lint environment without pytest
+    # installed it degrades to `Any`, the guard above stops narrowing, and the
+    # unpack below becomes "None object is not iterable". Spelled out so the
+    # file type-checks the same either way.
+    assert found is not None
     public, private = found
 
     assert public.to_spki() == ref.spki(name, public.key)

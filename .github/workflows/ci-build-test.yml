@@ -374,8 +374,14 @@ jobs:
           # toolchain and pre-commit (no unpinned ruff, no mypy 1.x/2.x split).
           # types-PyYAML keeps tools/check_workflow_commands.py inside
           # `mypy --strict`; tests/ imports it, so mypy follows into it.
+          # pytest is pinned here even though this job runs no tests:
+          # `pytest.*` is under `ignore_missing_imports`, so without it
+          # `mypy --strict tests/` types every pytest call as `Any` and its
+          # verdict changes with whether pytest happens to be installed.
+          # See the longer note in ci.yml::code-quality.
           pip install "black==26.5.1" "ruff==0.15.20" "mypy==2.1.0" \
-                      "PyYAML==6.0.3" "types-PyYAML==6.0.12.20260724"
+                      "PyYAML==6.0.3" "types-PyYAML==6.0.12.20260724" \
+                      "pytest==9.1.1"
 
       - name: Lint (ruff)
         run: ruff check .

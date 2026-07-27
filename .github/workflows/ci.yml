@@ -302,8 +302,29 @@ jobs:
         # types-PyYAML keeps tools/check_workflow_commands.py and its tests
         # inside `mypy --strict` rather than behind an ignore_missing_imports
         # override; tests/ imports the tool, so mypy follows into it.
+        # pytest is pinned here even though this job runs no tests. Two gates
+        # need it and both failed silently without it:
+        #
+        #  * `mypy --strict tests/`. `pytest.*` sits under
+        #    `ignore_missing_imports`, so with pytest absent every `pytest.skip`,
+        #    `pytest.raises` and `@pytest.mark.*` degrades to `Any` — the test
+        #    tree is nominally type-checked while most of what it does is
+        #    invisible. It also makes the verdict depend on the environment:
+        #    `pytest.skip` is `NoReturn`, so a `if x is None: pytest.skip(...)`
+        #    guard narrows `x` where pytest is installed (every developer
+        #    machine) and does not narrow it here. That divergence is how a
+        #    green local `mypy --strict` reached a red CI.
+        #  * `tools/check_documented_counts.py`, which re-derives the test
+        #    counts the documentation pins by running pytest's own collection.
+        #    Without pytest it collects nothing, and "nothing" is reported as
+        #    drift because a count that cannot be verified must not read as a
+        #    count that is correct.
+        #
+        # Collection needs no native library and no editable install — verified
+        # against a pristine checkout — so this stays a fast, tool-only job.
         pip install "black==26.5.1" "ruff==0.15.20" "mypy==2.1.0" \
-                    "PyYAML==6.0.3" "types-PyYAML==6.0.12.20260724"
+                    "PyYAML==6.0.3" "types-PyYAML==6.0.12.20260724" \
+                    "pytest==9.1.1"
 
     - name: Lint with ruff
       run: |
@@ -387,7 +408,14 @@ jobs:
         # PyYAML is pinned to the requirements-lock.txt version because
         # tools/check_workflow_commands.py (INVARIANT-25) runs in this job and
         # parses the workflow files structurally.
-        pip install pip-audit bandit "PyYAML==6.0.3"
+        # pytest is pinned here for tools/check_documented_counts.py, which
+        # re-derives the test counts the documentation pins by running
+        # pytest's own collection. Without pytest it collects nothing and
+        # reports that as drift — correct (a count that cannot be verified
+        # must not read as a count that is right) but the message then names
+        # the documentation rather than the missing dependency. Collection
+        # needs no native library and no editable install.
+        pip install pip-audit bandit "PyYAML==6.0.3" "pytest==9.1.1"
 
     - name: Audit dependencies (strict, lock-file scoped)
       # Scope the audit to requirements-lock.txt — this project's pinned

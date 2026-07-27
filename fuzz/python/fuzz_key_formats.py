@@ -338,6 +338,13 @@ def run_one(target: str, data: bytes) -> None:
     except FindingError:
         raise
     except ALLOWED:
+        # The contract's success case, and the reason this is not a bug: a
+        # parser handed hostile input is *supposed* to reject it with
+        # KeyFormatError or UnsupportedKeyFormatError. Those two are the whole
+        # permitted vocabulary, so catching them and moving on is the harness
+        # observing correct behaviour, not swallowing an error. Every other
+        # exception type falls through to the clauses below and becomes a
+        # finding.
         pass
     except RecursionError as exc:
         raise FindingError(
