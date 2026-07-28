@@ -2637,6 +2637,11 @@ def test_a_malformed_oid_string_raises_key_format_error(dotted: str) -> None:
         ("map chain", b"\xa1\x01" * 5000 + b"\x00"),
         ("array then map", b"\x81" * 500 + b"\xa1\x01" * 500 + b"\x00"),
     ],
+    # Explicit ids. pytest derives an id from the parameter value otherwise, and
+    # these values are 10 kB of repeated escapes — which lands in the node id,
+    # which lands in `PYTEST_CURRENT_TEST`, which Windows refuses above 32,767
+    # characters. The tests passed; the *teardown* raised.
+    ids=["array-chain", "map-chain", "array-then-map"],
 )
 def test_deeply_nested_cbor_raises_key_format_error(label: str, payload: bytes) -> None:
     """``RecursionError`` is not in this module's contract.

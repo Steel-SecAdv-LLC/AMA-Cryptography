@@ -137,7 +137,13 @@ from .equations import (
     verify_mathematical_foundations,
 )
 from .exceptions import (
+    KeyFormatError as KeyFormatError,
+)
+from .exceptions import (
     QuantumSignatureRequiredError as QuantumSignatureRequiredError,
+)
+from .exceptions import (
+    UnsupportedKeyFormatError as UnsupportedKeyFormatError,
 )
 
 # crypto_api exports are lazy-loaded to avoid side-effect warnings at
@@ -166,11 +172,9 @@ _KEY_FORMAT_EXPORTS = frozenset(
     {
         "ALGORITHMS",
         "CONVENTIONAL_PUBLIC_KEY",
-        "KeyFormatError",
         "PQ_CONSISTENCY_ENV",
         "PrivateKey",
         "PublicKey",
-        "UnsupportedKeyFormatError",
         "conventional_include_public_key",
         "cose_to_private_key",
         "cose_to_public_key",
@@ -191,6 +195,20 @@ _KEY_FORMAT_EXPORTS = frozenset(
     }
 )
 
+# Every name in the two lazy sets above is bound again here, under
+# ``TYPE_CHECKING``, and the binding must be exhaustive.
+#
+# PEP 562 makes ``__getattr__`` invisible to anything that does not run the
+# module: mypy, IDEs, and static analysers see ``__all__`` promising a name and
+# no definition producing it. The consequence is not cosmetic — a name reachable
+# only through ``__getattr__`` is typed ``Any``, so every call through it is
+# silently unchecked, and "go to definition" lands nowhere. This block was
+# previously partial (13 of 31 names), which is the worst of both: the covered
+# names type-checked and the rest quietly did not, with nothing marking the
+# boundary.
+#
+# ``tests/test_lazy_exports.py`` holds the three declarations to each other, so
+# adding an export to one and forgetting the others fails rather than degrading.
 if TYPE_CHECKING:
     from .crypto_api import (
         AlgorithmType as AlgorithmType,
@@ -220,16 +238,64 @@ if TYPE_CHECKING:
         CONVENTIONAL_PUBLIC_KEY as CONVENTIONAL_PUBLIC_KEY,
     )
     from .key_formats import (
+        PQ_CONSISTENCY_ENV as PQ_CONSISTENCY_ENV,
+    )
+    from .key_formats import (
         PrivateKey as PrivateKey,
     )
     from .key_formats import (
         PublicKey as PublicKey,
     )
     from .key_formats import (
+        conventional_include_public_key as conventional_include_public_key,
+    )
+    from .key_formats import (
+        cose_to_private_key as cose_to_private_key,
+    )
+    from .key_formats import (
+        cose_to_public_key as cose_to_public_key,
+    )
+    from .key_formats import (
+        decode_pem as decode_pem,
+    )
+    from .key_formats import (
+        encode_pem as encode_pem,
+    )
+    from .key_formats import (
+        get_pq_import_consistency as get_pq_import_consistency,
+    )
+    from .key_formats import (
+        jwk_thumbprint as jwk_thumbprint,
+    )
+    from .key_formats import (
+        jwk_to_private_key as jwk_to_private_key,
+    )
+    from .key_formats import (
+        jwk_to_public_key as jwk_to_public_key,
+    )
+    from .key_formats import (
         load_pkcs8 as load_pkcs8,
     )
     from .key_formats import (
         load_spki as load_spki,
+    )
+    from .key_formats import (
+        pq_import_consistency as pq_import_consistency,
+    )
+    from .key_formats import (
+        private_key_to_cose as private_key_to_cose,
+    )
+    from .key_formats import (
+        private_key_to_jwk as private_key_to_jwk,
+    )
+    from .key_formats import (
+        public_key_to_cose as public_key_to_cose,
+    )
+    from .key_formats import (
+        public_key_to_jwk as public_key_to_jwk,
+    )
+    from .key_formats import (
+        set_pq_import_consistency as set_pq_import_consistency,
     )
 
 
@@ -241,10 +307,7 @@ def __getattr__(name: str) -> Any:
         globals()[name] = val
         return val
     if name in _KEY_FORMAT_EXPORTS:
-        if name in ("KeyFormatError", "UnsupportedKeyFormatError"):
-            mod = _importlib.import_module("ama_cryptography.exceptions")
-        else:
-            mod = _importlib.import_module("ama_cryptography.key_formats")
+        mod = _importlib.import_module("ama_cryptography.key_formats")
         val = getattr(mod, name)
         globals()[name] = val
         return val

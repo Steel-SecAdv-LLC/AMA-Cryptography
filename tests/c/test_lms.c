@@ -68,6 +68,18 @@ typedef struct {
     size_t len;
 } blob;
 
+/* Bounds on what this harness will read and decode.
+ *
+ * Every length below originates in a *file*, and a length taken from a file is
+ * an unbounded length until something bounds it — even in a test, where the
+ * file is one this repository ships. The corpus is ~15 KB and its largest
+ * record is a 3,860-octet signature, so these are two orders of magnitude of
+ * headroom and still a bound. Without them the harness is one truncated write
+ * away from a multi-gigabyte allocation, and it would be reporting that as a
+ * malloc failure rather than as the corrupt corpus it is. */
+#define CORPUS_MAX_BYTES (1u * 1024u * 1024u)
+#define RECORD_MAX_BYTES (64u * 1024u)
+
 static char *g_corpus;
 
 static char *read_whole_file(const char *path) {
@@ -82,7 +94,7 @@ static char *read_whole_file(const char *path) {
         return NULL;
     }
     size = ftell(f);
-    if (size <= 0) {
+    if (size <= 0 || (unsigned long)size > CORPUS_MAX_BYTES) {
         fclose(f);
         return NULL;
     }
@@ -170,7 +182,7 @@ static blob corpus_record(int want_case, const char *want_kind) {
         if (end == NULL)
             break;
         nhex = (size_t)(end - hex);
-        if (nhex % 2u != 0u)
+        if (nhex % 2u != 0u || nhex / 2u > RECORD_MAX_BYTES)
             break;
         out.len = nhex / 2u;
         out.data = (uint8_t *)malloc(out.len == 0 ? 1u : out.len);

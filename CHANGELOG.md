@@ -156,6 +156,36 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   namespace.** The branch's flagship interoperability API had no `__all__`
   entry and no lazy loader.
 
+- **…and the lazy loader that fixed it exported eighteen names no type
+  checker could see.** PEP 562's `__getattr__` is invisible to anything that
+  does not execute the module, so a lazily exported name needs a second,
+  static binding under `if TYPE_CHECKING:` for mypy, IDEs, and static
+  analysers to resolve it. That block covered 13 of 31 names. The other
+  eighteen — `jwk_thumbprint`, `encode_pem`, both COSE and both JWK
+  converters, the PQ-consistency controls, and the rest — resolved to `Any`
+  at every call site, which is not a weaker check but no check: mypy cannot
+  verify a call whose target it cannot resolve, and `--strict` says nothing,
+  because from its side nothing is wrong. Nineteen public functions were
+  documented, tested, and silently unchecked wherever a caller used them.
+  All 31 are now statically bound, and `ama_cryptography.jwk_thumbprint`
+  type-checks as `(dict[str, Any] | str, *, hash_name: str) -> bytes`.
+
+  `KeyFormatError` and `UnsupportedKeyFormatError` were a second fault in the
+  same wiring: listed among the *key-format* exports but resolved by a
+  special case in `__getattr__` from `ama_cryptography.exceptions` — a module
+  imported eagerly a hundred lines earlier, so the lazy entries were dead
+  code pointing at the wrong module. Both are now plain eager imports and the
+  special case is gone.
+
+  `tests/test_lazy_exports.py` holds the three declarations — the lazy sets,
+  the `TYPE_CHECKING` block, and `__all__` — to each other, reading them out
+  of the source with `ast` rather than from the imported module, since the
+  property under test is what a reader sees *without* running anything. It
+  also pins the reason the indirection exists: `import ama_cryptography` must
+  not pull in `crypto_api` or `key_formats`. The existing
+  `tests/test_lazy_imports.py` checked only the runtime half, which is why a
+  name could resolve perfectly and still be invisible to every tool.
+
 ### Changed — validation provenance
 
 - **Removed OpenSSL from the validation path.** `tests/kat/keyformats/openssl/`
