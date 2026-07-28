@@ -74,8 +74,8 @@ from ama_cryptography.pqc_backends import (
     native_hkdf,
 )
 from ama_cryptography.rfc3161_timestamp import (
-    build_timestamp_request,
-    parse_timestamp_response,
+    TimestampError,
+    request_timestamp_exchange,
     verify_token_binding,
 )
 from ama_cryptography.secure_memory import constant_time_compare
@@ -455,42 +455,36 @@ def get_rfc3161_timestamp(data: bytes, tsa_url: Optional[str] = None) -> Optiona
         _logger.warning("Invalid TSA URL scheme '%s', must be https", parsed_url.scheme)
         return None
 
+    if parsed_url.hostname is None:
+        _logger.warning("Invalid TSA URL host")
+        return None
+
     try:
-        # AMA's own DER encoder, not `openssl ts -query`. See the RFC 3161
-        # §2.4.1 transcription in rfc3161_timestamp.py for why: INVARIANT-1
-        # forbids the core package calling a third-party cryptographic
-        # implementation at runtime, and shelling out also made the function
-        # depend on an `openssl` binary being installed and on PATH.
-        tsq = build_timestamp_request(hashlib.sha256(data).digest(), "sha256")
-
-        if parsed_url.hostname is None:
-            _logger.warning("Invalid TSA URL host")
-            return None
-
-        path = parsed_url.path or "/"
-        if parsed_url.query:
-            path = f"{path}?{parsed_url.query}"
-
-        conn = http.client.HTTPSConnection(parsed_url.hostname, parsed_url.port, timeout=10)
-        try:
-            conn.request(
-                "POST", path, body=tsq, headers={"Content-Type": "application/timestamp-query"}
-            )
-            response = conn.getresponse()
-            if response.status < 200 or response.status >= 300:
-                raise RuntimeError(f"TSA returned HTTP status {response.status}")
-            tsr = response.read()
-        finally:
-            conn.close()
-
-        # RFC 3161 §2.4.2 puts the TSA's verdict in PKIStatusInfo, ahead of the
-        # optional token. Nothing used to look at it, so a *rejection* was
-        # returned in the same shape as a granted timestamp and stored as one.
-        # `parse_timestamp_response` raises unless the request was granted and
-        # a token is actually present; the full response is still what this
-        # legacy API returns, so stored packages keep their existing format.
-        parse_timestamp_response(tsr)
-        return tsr
+        # AMA's own RFC 3161 client, not `openssl ts -query` and not a
+        # third-party library: INVARIANT-1 forbids the core package calling a
+        # third-party cryptographic implementation at runtime, and shelling out
+        # also made the function depend on an `openssl` binary being installed
+        # and on PATH.
+        #
+        # `request_timestamp_token` does the whole protocol and every check the
+        # protocol requires: a bounded read (an unbounded `response.read()` let
+        # one TSA reply allocate arbitrary memory before any validity check
+        # ran), the PKIStatusInfo verdict, a fresh 64-bit nonce and its echo —
+        # without which a captured token for the same imprint is
+        # indistinguishable from a fresh one — and, RFC 3161 §2.4.2, that the
+        # token returned actually binds the digest that was submitted.
+        #
+        # The verbatim response is what this legacy API has always returned and
+        # what `CryptoPackage.timestamp_token` stores, so the stored format is
+        # unchanged; `verify_token_binding` accepts either shape.
+        response, _token = request_timestamp_exchange(
+            hashlib.sha256(data).digest(),
+            "sha256",
+            tsa_url,
+            nonce=secrets.randbits(64),
+            cert_req=True,
+        )
+        return response
 
     except Exception as e:
         _logger.error("RFC 3161 timestamp request failed: %s", e)
@@ -517,7 +511,27 @@ def _looks_like_der_sequence(data: bytes) -> bool:
 def verify_rfc3161_timestamp(
     data: bytes, timestamp_token: bytes, tsa_cert_path: Optional[str] = None
 ) -> bool:
-    """Verify RFC 3161 timestamp token cryptographically.
+    """Check that an RFC 3161 token's message imprint is the digest of *data*.
+
+    .. warning::
+        **This is the binding half of RFC 3161 verification, not the whole of
+        it, and this docstring used to claim otherwise.** It answers "is this
+        token about this data" (RFC 3161 §2.4.2 messageImprint). It does *not*
+        verify the TSA's signature over the ``TSTInfo`` and it does not
+        validate a certificate chain: both need CMS ``SignerInfo`` processing
+        and X.509 path validation, which AMA does not implement.
+
+        A caller who needs third-party attestation — the actual point of a
+        timestamp — must not read a ``True`` here as that attestation. The
+        result reaches :func:`verify_crypto_package` under the key
+        ``rfc3161_binding`` for exactly that reason.
+
+    What *is* now enforced, so that a token nobody issued cannot reach the
+    binding check at all: the token must be a CMS ``SignedData`` whose
+    ``digestAlgorithms`` and ``signerInfos`` sets are non-empty. Without that,
+    anyone could build an unsigned ``ContentInfo`` offline with a
+    ``messageImprint`` of their choosing and this function returned ``True``
+    for it (see ``extract_tst_info``).
 
     INVARIANT-7 call-time enforcement: refuses to operate without the
     native backend loaded, matching the import-time contract.
@@ -547,6 +561,20 @@ def verify_rfc3161_timestamp(
 
     try:
         return verify_token_binding(data, timestamp_token)
+    except TimestampError:
+        # A malformed token, or one whose messageImprint names a hash AMA does
+        # not implement (SHA-1 is RFC 3161's original and still common), is a
+        # *failed verification* of an attacker-mutable field — `timestamp_token`
+        # is covered by neither the package HMAC nor either signature. Raising
+        # here meant one bad byte in that field destroyed the whole
+        # `verify_crypto_package` call, so a caller could not even learn that
+        # the content hash, the HMAC and both signatures had passed.
+        #
+        # RuntimeError is kept below for the case it was written for: the
+        # verification machinery itself being unavailable, which genuinely is
+        # "verification never ran" rather than "verification failed".
+        _logger.warning("RFC 3161 token did not verify", exc_info=True)
+        return False
     except Exception as e:
         _logger.error("RFC 3161 timestamp verification error: %s", e)
         raise RuntimeError(
@@ -563,7 +591,11 @@ def _verify_rfc3161_token(
         return None
 
     try:
-        timestamp_token = base64.b64decode(timestamp_token_b64)
+        # validate=True: without it b64decode silently *discards* non-alphabet
+        # characters, so many distinct stored strings decode to one token and
+        # any equality, dedup or audit comparison over the serialised field is
+        # defeatable while verification still passes.
+        timestamp_token = base64.b64decode(timestamp_token_b64, validate=True)
     except Exception as e:
         raise ValueError(f"Failed to decode base64 timestamp token: {e}") from e
     return verify_rfc3161_timestamp(content_hash, timestamp_token)
@@ -1047,6 +1079,19 @@ def verify_crypto_package(
         "ed25519": False,
         "dilithium": None,
         "timestamp": False,
+        # Named for what it is. This value is the RFC 3161 §2.4.2
+        # message-imprint *binding* — "is this token about this data" — and
+        # not a verification of the TSA's signature, which AMA does not
+        # implement. Under the old name a caller reading `results["rfc3161"]`
+        # reasonably took it for third-party time attestation, and a token
+        # anybody could build offline satisfied it. Both halves are fixed: the
+        # name says what was checked, and `extract_tst_info` now refuses a
+        # SignedData that nothing signed.
+        #
+        # `rfc3161` is kept alongside it, with the same value, so existing
+        # callers do not start raising KeyError inside a verification routine —
+        # a loud failure here would be worse than a precisely documented one.
+        "rfc3161_binding": None,
         "rfc3161": None,
     }
 
@@ -1084,7 +1129,9 @@ def verify_crypto_package(
 
         results["timestamp"] = _verify_timestamp_value(package.timestamp)
 
-        results["rfc3161"] = _verify_rfc3161_token(computed_hash, package.timestamp_token)
+        binding = _verify_rfc3161_token(computed_hash, package.timestamp_token)
+        results["rfc3161_binding"] = binding
+        results["rfc3161"] = binding
 
     except QuantumSignatureRequiredError:
         raise

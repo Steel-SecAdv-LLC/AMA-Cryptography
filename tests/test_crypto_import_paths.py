@@ -99,6 +99,62 @@ FAKE_SIGNATURE = b"S" * 3309  # 3309 bytes for ML-DSA-65 signature
 # ============================================================================
 
 
+def _granted_response(digest: bytes, nonce: int) -> bytes:
+    """A granted ``TimeStampResp`` whose token binds ``digest`` and echoes ``nonce``.
+
+    The client now checks three things the old opaque fixture could not
+    express: that the TSA granted the request, that the token echoes the nonce
+    that was sent, and — RFC 3161 §2.4.2 — that the token's ``messageImprint``
+    is the digest that was submitted rather than some other one. A fixture that
+    a conformant client would reject is not a fixture.
+    """
+    from ama_cryptography._asn1 import (
+        der_integer,
+        der_null,
+        der_octet_string,
+        der_sequence,
+        der_tagged,
+        oid_from_string,
+    )
+
+    tst_info = der_sequence(
+        der_integer(1),  # version
+        oid_from_string("1.2.3.4.5"),  # policy
+        der_sequence(  # messageImprint
+            der_sequence(oid_from_string("2.16.840.1.101.3.4.2.1"), der_null()),
+            der_octet_string(digest),
+        ),
+        der_integer(42),  # serialNumber
+        b"\x18\x0f20260101000000Z",  # genTime
+        der_integer(nonce),  # nonce — echoed, per RFC 3161 §2.4.2
+    )
+    signer_info = der_sequence(
+        der_integer(1),
+        der_sequence(der_sequence(), der_integer(1)),
+        der_sequence(oid_from_string("2.16.840.1.101.3.4.2.1"), der_null()),
+        der_sequence(oid_from_string("1.2.840.113549.1.1.1"), der_null()),
+        der_octet_string(b"\x00" * 32),
+    )
+
+    def _der_set(*elements: bytes) -> bytes:
+        body = b"".join(elements)
+        return bytes([0x31, len(body)]) + body if len(body) < 0x80 else (
+            bytes([0x31, 0x81, len(body)]) + body
+        )
+
+    signed_data = der_sequence(
+        der_integer(3),
+        _der_set(der_sequence(oid_from_string("2.16.840.1.101.3.4.2.1"), der_null())),
+        der_sequence(
+            oid_from_string("1.2.840.113549.1.9.16.1.4"),
+            der_tagged(0, der_octet_string(tst_info)),
+        ),
+        _der_set(signer_info),
+    )
+    token = der_sequence(oid_from_string("1.2.840.113549.1.7.2"), der_tagged(0, signed_data))
+    return der_sequence(der_sequence(der_integer(0)), token)
+
+
 class TestRFC3161SuccessPath:
     """Tests for RFC 3161 timestamp success paths."""
 
@@ -117,43 +173,47 @@ class TestRFC3161SuccessPath:
         """
         import hashlib
 
-        from ama_cryptography._asn1 import DerReader, der_integer, der_sequence
+        from ama_cryptography._asn1 import DerReader
 
         payload = b"data"
-        # A minimal granted TimeStampResp; the token body is opaque here
-        # because this test is about the request and the transport.
-        token = der_sequence(der_integer(7))
-        response = der_sequence(der_sequence(der_integer(0)), token)
+        digest = hashlib.sha256(payload).digest()
 
         mock_response = MagicMock(status=200)
-        mock_response.read.return_value = response
+        mock_response.getheader.return_value = None
         mock_conn = mock_https_conn.return_value
         mock_conn.getresponse.return_value = mock_response
+
+        # The response has to be built from the nonce the client actually sent,
+        # because the client now checks the echo — so post the request first,
+        # read the nonce out of it, and answer with a matching token.
+        posted: dict[str, bytes] = {}
+
+        def _capture(method: str, path: str, body: bytes = b"", headers: Any = None) -> None:
+            posted["body"] = body
+            req = DerReader(body).read_sequence()
+            assert req.read_integer() == 1, "TimeStampReq version must be v1"
+            imprint = req.read_sequence()
+            algorithm = imprint.read_sequence()
+            assert algorithm.read_oid() == "2.16.840.1.101.3.4.2.1", "must name SHA-256"
+            algorithm.read_null()
+            assert (
+                imprint.read_octet_string() == digest
+            ), "hashedMessage must be the digest of the caller's data"
+            nonce = req.read_integer()
+            mock_response.read.return_value = _granted_response(digest, nonce)
+
+        mock_conn.request.side_effect = _capture
 
         tsr = dgs.get_rfc3161_timestamp(payload, "https://tsa.example.com")
 
         # The legacy API returns the whole response, unchanged.
-        assert tsr == response
+        assert tsr == mock_response.read.return_value
 
         mock_https_conn.assert_called_once_with("tsa.example.com", None, timeout=10)
         call = mock_conn.request.call_args
         assert call.args[0] == "POST" and call.args[1] == "/"
         assert call.kwargs["headers"] == {"Content-Type": "application/timestamp-query"}
         mock_conn.close.assert_called_once()
-
-        # Decode the posted TimeStampReq and check every field the RFC fixes.
-        req = DerReader(call.kwargs["body"]).read_sequence()
-        assert req.read_integer() == 1, "TimeStampReq version must be v1"
-        imprint = req.read_sequence()
-        algorithm = imprint.read_sequence()
-        assert algorithm.read_oid() == "2.16.840.1.101.3.4.2.1", "must name SHA-256"
-        algorithm.read_null()
-        assert (
-            imprint.read_octet_string() == hashlib.sha256(payload).digest()
-        ), "hashedMessage must be the digest of the caller's data"
-        # certReq is DEFAULT FALSE and X.690 §11.5 forbids encoding a DEFAULT
-        # in DER, so nothing may follow.
-        assert req.peek_tag() is None, "no field may follow messageImprint here"
 
     def test_rfc3161_builds_the_request_without_any_subprocess(self) -> None:
         """No child process, at all, on the timestamp path.
@@ -163,14 +223,29 @@ class TestRFC3161SuccessPath:
         """
         import subprocess
 
+        import hashlib
+
+        from ama_cryptography._asn1 import DerReader
+
+        digest = hashlib.sha256(b"data").digest()
         with patch.object(subprocess, "run") as mock_run:
             with patch("http.client.HTTPSConnection") as mock_https_conn:
-                from ama_cryptography._asn1 import der_integer, der_sequence
-
-                response = der_sequence(der_sequence(der_integer(0)), der_integer(7))
                 mock_response = MagicMock(status=200)
-                mock_response.read.return_value = response
-                mock_https_conn.return_value.getresponse.return_value = mock_response
+                mock_response.getheader.return_value = None
+                mock_conn = mock_https_conn.return_value
+                mock_conn.getresponse.return_value = mock_response
+
+                def _capture(
+                    method: str, path: str, body: bytes = b"", headers: Any = None
+                ) -> None:
+                    req = DerReader(body).read_sequence()
+                    req.read_integer()
+                    req.read_sequence()
+                    mock_response.read.return_value = _granted_response(
+                        digest, req.read_integer()
+                    )
+
+                mock_conn.request.side_effect = _capture
                 dgs.get_rfc3161_timestamp(b"data", "https://tsa.example.com")
 
         mock_run.assert_not_called()

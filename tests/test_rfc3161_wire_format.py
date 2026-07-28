@@ -52,6 +52,8 @@ DATA = b"the quick brown fox"
 #: RFC 5652 §5.1 / RFC 3161 §2.4.2.
 OID_SIGNED_DATA = "1.2.840.113549.1.7.2"
 OID_CT_TSTINFO = "1.2.840.113549.1.9.16.1.4"
+OID_RSA_ENCRYPTION = "1.2.840.113549.1.1.1"
+SHA256_OID = "2.16.840.1.101.3.4.2.1"
 
 
 def make_tst_info(digest: bytes, hash_oid: str, policy: str = "1.2.3.4.5") -> bytes:
@@ -67,18 +69,43 @@ def make_tst_info(digest: bytes, hash_oid: str, policy: str = "1.2.3.4.5") -> by
     )
 
 
-def make_token(tst_info: bytes) -> bytes:
-    """Wrap a TSTInfo as a CMS ContentInfo/SignedData, per RFC 5652 §5.1.
+#: A structurally complete but cryptographically meaningless SignerInfo.
+#:
+#: These tests are about the *binding*, and `verify_token_binding` documents
+#: that it does not verify a signature — so the signature value here is
+#: nonsense on purpose. What it must not be is *absent*: `extract_tst_info`
+#: refuses a SignedData whose `digestAlgorithms` or `signerInfos` set is empty,
+#: because such a structure is one anybody can build offline, and the earlier
+#: fixture built exactly that. A fixture that a real verifier would reject is
+#: not a fixture, it is a false negative waiting to be discovered.
+def _signer_info() -> bytes:
+    return der_sequence(
+        der_integer(1),  # CMSVersion
+        der_sequence(  # SignerIdentifier: issuerAndSerialNumber
+            der_sequence(),  # issuer Name (empty RDNSequence)
+            der_integer(1),  # serialNumber
+        ),
+        der_sequence(oid_from_string(SHA256_OID), der_null()),  # digestAlgorithm
+        der_sequence(oid_from_string(OID_RSA_ENCRYPTION), der_null()),  # signatureAlgorithm
+        der_octet_string(b"\x00" * 32),  # signature — not checked, see above
+    )
 
-    The signature machinery is deliberately empty: these tests are about the
-    *binding*, and `verify_token_binding` documents that it does not verify a
-    signature. A fixture carrying a fake signature would imply otherwise.
-    """
+
+def _der_set(*elements: bytes) -> bytes:
+    body = b"".join(elements)
+    if len(body) < 0x80:
+        return bytes([0x31, len(body)]) + body
+    length = len(body).to_bytes((len(body).bit_length() + 7) // 8, "big")
+    return bytes([0x31, 0x80 | len(length)]) + length + body
+
+
+def make_token(tst_info: bytes) -> bytes:
+    """Wrap a TSTInfo as a CMS ContentInfo/SignedData, per RFC 5652 §5.1."""
     signed_data = der_sequence(
         der_integer(3),
-        b"\x31\x00",  # digestAlgorithms SET
+        _der_set(der_sequence(oid_from_string(SHA256_OID), der_null())),  # digestAlgorithms
         der_sequence(oid_from_string(OID_CT_TSTINFO), der_tagged(0, der_octet_string(tst_info))),
-        b"\x31\x00",  # signerInfos SET
+        _der_set(_signer_info()),  # signerInfos
     )
     return der_sequence(oid_from_string(OID_SIGNED_DATA), der_tagged(0, signed_data))
 
@@ -259,11 +286,11 @@ def test_a_token_that_is_not_signed_data_is_refused() -> None:
 def test_a_token_encapsulating_something_other_than_tstinfo_is_refused() -> None:
     signed_data = der_sequence(
         der_integer(3),
-        b"\x31\x00",
+        _der_set(der_sequence(oid_from_string(SHA256_OID), der_null())),
         der_sequence(
             oid_from_string("1.2.840.113549.1.7.1"), der_tagged(0, der_octet_string(b"x"))
         ),
-        b"\x31\x00",
+        _der_set(_signer_info()),
     )
     token = der_sequence(oid_from_string(OID_SIGNED_DATA), der_tagged(0, signed_data))
     with pytest.raises(TimestampError, match="does not encapsulate a TSTInfo"):
@@ -273,9 +300,9 @@ def test_a_token_encapsulating_something_other_than_tstinfo_is_refused() -> None
 def test_a_token_with_no_econtent_attests_to_nothing() -> None:
     signed_data = der_sequence(
         der_integer(3),
-        b"\x31\x00",
+        _der_set(der_sequence(oid_from_string(SHA256_OID), der_null())),
         der_sequence(oid_from_string(OID_CT_TSTINFO)),
-        b"\x31\x00",
+        _der_set(_signer_info()),
     )
     token = der_sequence(oid_from_string(OID_SIGNED_DATA), der_tagged(0, signed_data))
     with pytest.raises(TimestampError, match="attests to nothing"):

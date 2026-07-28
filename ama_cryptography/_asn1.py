@@ -294,6 +294,18 @@ class DerReader:
         self._pos = end
         return DerReader(self._buf, start, end)
 
+    def read_set(self) -> DerReader:
+        """Read a SET (or SET OF) and return a reader over its contents.
+
+        Needed by the RFC 5652 ``SignedData`` descent in
+        ``rfc3161_timestamp.extract_tst_info``, which has to distinguish an
+        *empty* ``signerInfos`` — a token nobody signed — from a populated one.
+        ``skip_any`` cannot tell those apart.
+        """
+        _, start, end = self._read_header(TAG_SET)
+        self._pos = end
+        return DerReader(self._buf, start, end)
+
     def read_tagged(self, number: int, *, constructed: bool = True) -> DerReader:
         tag = 0x80 | number | (0x20 if constructed else 0x00)
         _, start, end = self._read_header(tag)

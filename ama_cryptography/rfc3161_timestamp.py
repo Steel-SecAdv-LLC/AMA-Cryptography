@@ -27,8 +27,10 @@ Use Cases:
 """
 
 import hashlib
+import http.client
 import logging
 import os as _os_mod
+import secrets
 import struct
 import threading
 import time
@@ -36,17 +38,23 @@ import warnings
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Callable, Dict, Generator, Optional
+from urllib.parse import urlparse
 
 _logger = logging.getLogger(__name__)
 
-# Try to import rfc3161ng for RFC 3161 timestamp support
-try:
-    from rfc3161ng import RemoteTimestamper
-
-    RFC3161_AVAILABLE = True
-except ImportError:
-    RFC3161_AVAILABLE = False
-    RemoteTimestamper = None
+# RFC 3161 is implemented in this module, on AMA's own DER codec — see the wire
+# format section below. `rfc3161ng` used to be imported here and to perform the
+# whole online protocol, which INVARIANT-1 forbids for the core package: it is a
+# third-party cryptographic implementation, and it was not declared as an
+# optional extra in pyproject.toml, so the invariant's carve-out never covered
+# it. The practical effect was an incoherent module — the *documented* public
+# online path raised `TimestampUnavailableError` in a default install, while a
+# complete, tested RFC 3161 client sat unused a few hundred lines below it.
+#
+# `RFC3161_AVAILABLE` is kept and is now unconditionally True: the capability no
+# longer depends on anything being installed. Existing `if RFC3161_AVAILABLE:`
+# call sites keep working and simply stop being a gate.
+RFC3161_AVAILABLE = True
 
 
 from ama_cryptography._asn1 import (
@@ -172,7 +180,7 @@ def build_timestamp_request(
     return der_sequence(*elements)
 
 
-def parse_timestamp_response(response: bytes) -> bytes:
+def parse_timestamp_response(response: bytes, *, expected_nonce: Optional[int] = None) -> bytes:
     """Return the ``timeStampToken`` from an RFC 3161 §2.4.2 ``TimeStampResp``.
 
     The previous implementation returned the TSA's response verbatim without
@@ -189,10 +197,21 @@ def parse_timestamp_response(response: bytes) -> bytes:
             statusString  PKIFreeText     OPTIONAL,
             failInfo      PKIFailureInfo  OPTIONAL }
 
+    Args:
+        response: The DER ``TimeStampResp`` as received.
+        expected_nonce: If given, the nonce that was sent in the
+            ``TimeStampReq``. RFC 3161 §2.4.2 requires the TSA to echo it into
+            the ``TSTInfo``, and checking the echo is the only way a client can
+            tell a fresh response from a replayed one — a caching proxy, a
+            rolled-back TSA or a hostile operator can otherwise answer today's
+            request with last year's token for the same imprint, and nothing
+            downstream can see it.
+
     Raises:
         TimestampError: the response is not a well-formed ``TimeStampResp``,
-            the TSA did not grant the request, or it granted one and sent no
-            token. Every one of those is "you do not have a timestamp", and
+            the TSA did not grant the request, it granted one and sent no
+            token, or ``expected_nonce`` was given and the token does not echo
+            it. Every one of those is "you do not have a timestamp", and
             none of them may be returned as if it were one.
     """
     try:
@@ -201,23 +220,57 @@ def parse_timestamp_response(response: bytes) -> bytes:
         outer.finish()
         status_info = body.read_sequence()
         status = status_info.read_integer()
+
+        # RFC 3161 §2.4.2 makes PKIStatus an enumeration of 0..5, so anything
+        # else is malformed and is rejected *before* it is formatted into a
+        # message. Formatting first was itself an escape: since CPython 3.11
+        # `str(int)` refuses a value whose decimal form exceeds
+        # `sys.int_max_str_digits`, so a ~2 kB PKIStatus INTEGER made the error
+        # path raise `ValueError` past this function's documented
+        # `TimestampError` boundary — from data supplied by a network peer.
+        # Same defect, same fix, as `_asn1.oid_to_string`'s arc bound.
+        if status not in _PKI_STATUS_NAMES:
+            raise TimestampError(
+                "TSA response carries a PKIStatus outside RFC 3161 §2.4.2's "
+                "0..5 enumeration"
+            )
+
+        if status not in (PKI_STATUS_GRANTED, PKI_STATUS_GRANTED_WITH_MODS):
+            name = _PKI_STATUS_NAMES[status]
+            raise TimestampError(
+                f"TSA did not grant the timestamp: PKIStatus {status} ({name}). "
+                "No token was issued."
+            )
+
+        # PKIStatusInfo's remaining fields are optional and not needed here; the
+        # token is the next element of the outer SEQUENCE.
+        if body.peek_tag() is None:
+            raise TimestampError(
+                f"TSA reported PKIStatus {status} ({_PKI_STATUS_NAMES[status]}) but sent no "
+                "timeStampToken"
+            )
+        token = body.read_any_raw()
+        # RFC 3161 §2.4.2 defines TimeStampResp as exactly two fields. Anything
+        # after the token is a second encoding of the same response — the
+        # legacy API stores the whole response, so without this an unbounded
+        # family of byte-distinct packages carry one timestamp. `outer.finish()`
+        # above rejects trailing data *after* the SEQUENCE; this rejects it
+        # inside.
+        body.finish()
+    except TimestampError:
+        raise
     except Exception as exc:
         raise TimestampError(f"TSA response is not a well-formed TimeStampResp: {exc}") from None
 
-    if status not in (PKI_STATUS_GRANTED, PKI_STATUS_GRANTED_WITH_MODS):
-        name = _PKI_STATUS_NAMES.get(status, "unrecognised")
-        raise TimestampError(
-            f"TSA did not grant the timestamp: PKIStatus {status} ({name}). " "No token was issued."
-        )
-
-    # PKIStatusInfo's remaining fields are optional and not needed here; the
-    # token is the next element of the outer SEQUENCE.
-    if body.peek_tag() is None:
-        raise TimestampError(
-            f"TSA reported PKIStatus {status} ({_PKI_STATUS_NAMES[status]}) but sent no "
-            "timeStampToken"
-        )
-    token = body.read_any_raw()
+    if expected_nonce is not None:
+        echoed = tst_info_nonce(extract_tst_info(token))
+        if echoed != expected_nonce:
+            raise TimestampError(
+                "TSA response does not echo the request's nonce "
+                f"(sent {expected_nonce}, token carries "
+                f"{'none' if echoed is None else echoed}). RFC 3161 §2.4.2 makes the "
+                "echo the client's only way to tell a fresh response from a replayed one."
+            )
     return token
 
 
@@ -274,7 +327,20 @@ def extract_tst_info(token: bytes) -> bytes:
             )
         signed_data = outer.read_tagged(0).read_sequence()
         signed_data.read_integer()  # CMSVersion
-        signed_data.skip_any()  # digestAlgorithms SET
+        digest_algorithms = signed_data.read_set()
+        # RFC 5652 §5.1: `digestAlgorithms` is the set of digests the signers
+        # used, so an empty one means nothing signed this. A token whose
+        # `signerInfos` is likewise empty is not a TSA token at all — it is a
+        # container anybody can build offline. AMA does not verify the TSA's
+        # signature (see `verify_token_binding`), which makes it all the more
+        # important that a structure carrying *no* signature is refused
+        # outright rather than passed on to a binding check that would answer
+        # "yes, this token is about your data" about a token nobody issued.
+        if digest_algorithms.peek_tag() is None:
+            raise TimestampError(
+                "token's SignedData carries an empty digestAlgorithms set, so nothing "
+                "signed it (RFC 5652 §5.1)"
+            )
         encap = signed_data.read_sequence()
         econtent_type = encap.read_oid()
         if econtent_type != _OID_CT_TSTINFO:
@@ -283,11 +349,218 @@ def extract_tst_info(token: bytes) -> bytes:
             )
         if encap.peek_tag() is None:
             raise TimestampError("token carries no eContent, so it attests to nothing")
-        return encap.read_tagged(0).read_octet_string()
+        tst_info = encap.read_tagged(0).read_octet_string()
+
+        # `certificates [0]` and `crls [1]` are OPTIONAL and skipped; what
+        # follows them is the mandatory `signerInfos SET`.
+        while signed_data.peek_tag() in (0xA0, 0xA1):
+            signed_data.skip_any()
+        if signed_data.peek_tag() is None:
+            raise TimestampError(
+                "token's SignedData has no signerInfos field (RFC 5652 §5.1)"
+            )
+        signer_infos = signed_data.read_set()
+        if signer_infos.peek_tag() is None:
+            raise TimestampError(
+                "token's SignedData carries an empty signerInfos set: no TSA signed it. "
+                "RFC 3161 §2.4.2 requires exactly one signer"
+            )
+        return tst_info
     except TimestampError:
         raise
     except Exception as exc:
         raise TimestampError(f"malformed RFC 3161 token: {exc}") from None
+
+
+#: Largest TimeStampResp this client will read from a TSA.
+#:
+#: A TimeStampResp is a few kilobytes. `response.read()` with no argument reads
+#: whatever Content-Length the peer declares, and the peer is a network peer —
+#: the default is a public TSA — so one reply could make the signing process
+#: allocate arbitrary memory *before* a single validity check ran. 256 KiB is
+#: two orders of magnitude above any real token and still bounded.
+_MAX_TSR_BYTES = 256 * 1024
+
+#: How long to wait on the TSA, in seconds.
+_TSA_TIMEOUT = 10
+
+
+def request_timestamp_token(
+    digest: bytes,
+    hash_name: str,
+    tsa_url: str,
+    *,
+    nonce: Optional[int] = None,
+    cert_req: bool = True,
+) -> bytes:
+    """Obtain an RFC 3161 timestamp token for ``digest`` from ``tsa_url``.
+
+    The whole protocol on AMA's own codec: encode the ``TimeStampReq``, POST it
+    over HTTPS, decode the ``TimeStampResp``, check the TSA granted it, check
+    the nonce echo, and check that the token it returned actually binds the
+    digest that was asked about.
+
+    That last check is the one most clients omit. RFC 3161 §2.4.2 requires it —
+    especially for ``grantedWithMods``, which this accepts — and without it a
+    token attesting to *unrelated* data is accepted, stored, and only found to
+    be wrong at some later verification, by which point the artefact is on disk
+    and the TSA interaction is unrepeatable.
+
+    ``cert_req`` defaults to True so the TSA embeds its signing certificate and
+    the token is self-contained. AMA does not verify the TSA signature today
+    (see :func:`verify_token_binding`); a token archived *without* the
+    certificate can never have it verified later either, because by then the
+    TSA's certificate may have rotated and no longer be published — which
+    defeats the long-term-archival use case the timestamp exists for.
+
+    Args:
+        digest: The message digest to be timestamped.
+        hash_name: The algorithm that produced it, from :data:`TSA_HASH_OIDS`.
+        tsa_url: An ``https://`` TSA endpoint.
+        nonce: Optional 64-bit nonce; the response must echo it.
+        cert_req: Ask the TSA to include its signing certificate.
+
+    Returns:
+        The DER ``timeStampToken`` (not the whole response). Callers that need
+        the response verbatim — the legacy ``CryptoPackage`` stores it — use
+        :func:`request_timestamp_exchange`, which returns both.
+
+    Raises:
+        TimestampError: on any transport, protocol or binding failure.
+        ValueError: if ``tsa_url`` is not an ``https://`` URL.
+    """
+    return request_timestamp_exchange(
+        digest, hash_name, tsa_url, nonce=nonce, cert_req=cert_req
+    )[1]
+
+
+def request_timestamp_exchange(
+    digest: bytes,
+    hash_name: str,
+    tsa_url: str,
+    *,
+    nonce: Optional[int] = None,
+    cert_req: bool = True,
+) -> "tuple[bytes, bytes]":
+    """As :func:`request_timestamp_token`, returning ``(response, token)``.
+
+    The verbatim ``TimeStampResp`` is what the legacy ``CryptoPackage`` format
+    stores, so it is kept available rather than reconstructed; every check
+    :func:`request_timestamp_token` performs has already run by the time this
+    returns.
+    """
+    parsed = urlparse(tsa_url)
+    if parsed.scheme != "https" or not parsed.hostname:
+        raise ValueError(f"TSA URL must be https with a host, got {tsa_url!r}")
+
+    request = build_timestamp_request(digest, hash_name, nonce=nonce, cert_req=cert_req)
+
+    path = parsed.path or "/"
+    if parsed.query:
+        path = f"{path}?{parsed.query}"
+
+    conn = http.client.HTTPSConnection(parsed.hostname, parsed.port, timeout=_TSA_TIMEOUT)
+    try:
+        conn.request(
+            "POST", path, body=request, headers={"Content-Type": "application/timestamp-query"}
+        )
+        response = conn.getresponse()
+        if response.status < 200 or response.status >= 300:
+            raise TimestampError(f"TSA returned HTTP status {response.status}")
+        declared = response.getheader("Content-Length")
+        if declared is not None:
+            try:
+                if int(declared) > _MAX_TSR_BYTES:
+                    raise TimestampError(
+                        f"TSA declared a {declared}-byte response; the limit is "
+                        f"{_MAX_TSR_BYTES}"
+                    )
+            except ValueError:
+                raise TimestampError("TSA sent a malformed Content-Length") from None
+        # Read one octet past the cap so an over-long body is detected rather
+        # than silently truncated into something that might still parse.
+        raw = response.read(_MAX_TSR_BYTES + 1)
+        if len(raw) > _MAX_TSR_BYTES:
+            raise TimestampError(
+                f"TSA response exceeds the {_MAX_TSR_BYTES}-byte limit"
+            )
+    except TimestampError:
+        raise
+    except OSError as exc:
+        raise TimestampError(f"TSA request to {tsa_url} failed: {exc}") from None
+    finally:
+        conn.close()
+
+    token = parse_timestamp_response(raw, expected_nonce=nonce)
+
+    # RFC 3161 §2.4.2: the token must attest to the imprint that was sent.
+    tst_info = extract_tst_info(token)
+    if _tst_info_imprint(tst_info) != (TSA_HASH_OIDS[hash_name], digest):
+        raise TimestampError(
+            "TSA returned a token whose messageImprint is not the digest that was "
+            "submitted; it attests to something else"
+        )
+    return raw, token
+
+
+def _tst_info_imprint(tst_info: bytes) -> "tuple[str, bytes]":
+    """The ``(hashAlgorithm OID, hashedMessage)`` pair a ``TSTInfo`` carries."""
+    try:
+        info = DerReader(tst_info).read_sequence()
+        info.read_integer()  # version
+        info.read_oid()  # policy
+        imprint = info.read_sequence()
+        algorithm = imprint.read_sequence()
+        digest_oid = algorithm.read_oid()
+        hashed = imprint.read_octet_string()
+    except Exception as exc:
+        raise TimestampError(f"malformed TSTInfo in RFC 3161 token: {exc}") from None
+    return digest_oid, hashed
+
+
+def tst_info_nonce(tst_info: bytes) -> Optional[int]:
+    """The ``nonce`` an RFC 3161 ``TSTInfo`` echoes back, or ``None``.
+
+    RFC 3161 §2.4.2::
+
+        TSTInfo ::= SEQUENCE  {
+           version        INTEGER { v1(1) },
+           policy         TSAPolicyId,
+           messageImprint MessageImprint,
+           serialNumber   INTEGER,
+           genTime        GeneralizedTime,
+           accuracy       Accuracy                 OPTIONAL,
+           ordering       BOOLEAN                  DEFAULT FALSE,
+           nonce          INTEGER                  OPTIONAL,
+           tsa            [0] GeneralName          OPTIONAL,
+           extensions     [1] IMPLICIT Extensions  OPTIONAL  }
+
+    The nonce is the client's only means of binding a response to the request
+    it answers; without it a captured token for the same imprint is
+    indistinguishable from a fresh one. It is optional in the grammar and the
+    optional fields before it are of several types, so this walks positionally
+    to ``genTime`` and then takes the first INTEGER that follows — ``accuracy``
+    is a SEQUENCE and ``ordering`` a BOOLEAN, so neither can be mistaken for it.
+
+    Raises:
+        TimestampError: the input is not a well-formed ``TSTInfo``.
+    """
+    try:
+        info = DerReader(tst_info).read_sequence()
+        info.read_integer()  # version
+        info.read_oid()  # policy
+        info.skip_any()  # messageImprint
+        info.read_integer()  # serialNumber
+        info.skip_any()  # genTime
+        if info.peek_tag() == 0x30:  # accuracy
+            info.skip_any()
+        if info.peek_tag() == 0x01:  # ordering BOOLEAN
+            info.skip_any()
+        if info.peek_tag() == 0x02:  # nonce
+            return int(info.read_integer())
+        return None
+    except Exception as exc:
+        raise TimestampError(f"malformed TSTInfo in RFC 3161 token: {exc}") from None
 
 
 def verify_token_binding(data: bytes, token: bytes) -> bool:
@@ -635,10 +908,19 @@ def get_timestamp(
         )
 
     # ---- Online mode ----
-    if not RFC3161_AVAILABLE:
-        raise TimestampUnavailableError(
-            "RFC3161_UNAVAILABLE: rfc3161ng library not installed. "
-            "Install with: pip install rfc3161ng"
+    # `certificate_file` asked for the TSA's signing certificate to be pinned
+    # and its signature verified. AMA implements neither CMS SignerInfo
+    # processing nor X.509 path validation, so it refuses rather than accepting
+    # the argument and quietly doing something weaker — the same posture, and
+    # the same reasoning, as `legacy_compat.verify_rfc3161_timestamp`'s
+    # `tsa_cert_path`.
+    if certificate_file is not None:
+        raise TimestampError(
+            "certificate_file requests verification of the TSA's signing certificate. "
+            "AMA implements neither CMS SignerInfo verification nor X.509 path "
+            "validation and will not report a weaker check as though it were this one. "
+            "Call without certificate_file for the RFC 3161 §2.4.2 message-imprint "
+            "binding, and see verify_token_binding for exactly what that establishes."
         )
 
     # Use FreeTSA as default public TSA
@@ -650,34 +932,19 @@ def get_timestamp(
             category=UserWarning,
         )
 
-    # Create timestamper and request timestamp
-    try:
-        timestamper = RemoteTimestamper(
-            tsa_url,
-            certificate=certificate_file,
-            hashname=hash_algorithm.replace("-", ""),  # 'sha3256' format
-        )
-
-        # Request timestamp token
-        timestamp_token = timestamper(data=data)
-
-        if timestamp_token is None:
-            raise TimestampError(
-                f"Failed to obtain timestamp from {tsa_url}. "
-                "TSA server may be unavailable or rejected the request."
-            )
-
-        return TimestampResult(
-            token=timestamp_token,
-            tsa_url=tsa_url,
-            hash_algorithm=hash_algorithm,
-            data_hash=data_hash,
-        )
-
-    except Exception as e:
-        if isinstance(e, (TimestampUnavailableError, TimestampError, ValueError)):
-            raise
-        raise TimestampError(f"Timestamp request failed: {str(e)}") from e
+    # A fresh 64-bit nonce per request, echoed back by the TSA into the TSTInfo.
+    # RFC 3161 §2.4.2 makes the echo the client's only way to tell a fresh
+    # response from a replayed one; `request_timestamp_token` checks it.
+    nonce = secrets.randbits(64)
+    token = request_timestamp_token(
+        data_hash, hash_algorithm, tsa_url, nonce=nonce, cert_req=True
+    )
+    return TimestampResult(
+        token=token,
+        tsa_url=tsa_url,
+        hash_algorithm=hash_algorithm,
+        data_hash=data_hash,
+    )
 
 
 def _compute_data_hash(data: bytes, algorithm: str) -> Optional[bytes]:
@@ -756,32 +1023,25 @@ def verify_timestamp(
             return False
 
     # ---- Online (real RFC 3161) verification ----
-    if not RFC3161_AVAILABLE:
-        raise TimestampUnavailableError(
-            "RFC3161_UNAVAILABLE: rfc3161ng library not installed. "
-            "Install with: pip install rfc3161ng"
+    #
+    # This performs the RFC 3161 §2.4.2 *message-imprint binding* check, and
+    # says so. It does not verify the TSA's signature over the TSTInfo and does
+    # not validate a certificate chain; `verify_token_binding`'s docstring
+    # states precisely what that does and does not establish, and
+    # `certificate_file` is refused rather than silently ignored so a caller
+    # who asked for the stronger check is not told they got it.
+    if certificate_file is not None:
+        raise TimestampError(
+            "certificate_file requests verification of the TSA's signing certificate. "
+            "AMA implements neither CMS SignerInfo verification nor X.509 path "
+            "validation and will not report a weaker check as though it were this one."
         )
 
     try:
         computed_hash = _compute_data_hash(data, timestamp_result.hash_algorithm)
         if computed_hash is None or computed_hash != timestamp_result.data_hash:
             return False
-
-        # Create timestamper for verification
-        timestamper = RemoteTimestamper(
-            timestamp_result.tsa_url,
-            certificate=certificate_file,
-            hashname=timestamp_result.hash_algorithm.replace("-", ""),
-        )
-
-        # Verify timestamp token
-        is_valid = timestamper.check(
-            timestamp_result.token,
-            data=data,
-        )
-
-        return bool(is_valid)
-
+        return verify_token_binding(data, timestamp_result.token)
     except Exception as exc:
         _logger.error("RFC 3161 timestamp verification failed: %s", exc)
         return False
@@ -795,4 +1055,16 @@ __all__ = [
     "TimestampUnavailableError",
     "TimestampError",
     "RFC3161_AVAILABLE",
+    # The RFC 3161 codec itself. It was reachable only from the deprecated
+    # `legacy_compat` surface and exported from nowhere, which is how the
+    # module came to keep a third-party client for the protocol it already
+    # implements.
+    "TSA_HASH_OIDS",
+    "build_timestamp_request",
+    "parse_timestamp_response",
+    "request_timestamp_token",
+    "request_timestamp_exchange",
+    "extract_tst_info",
+    "tst_info_nonce",
+    "verify_token_binding",
 ]
