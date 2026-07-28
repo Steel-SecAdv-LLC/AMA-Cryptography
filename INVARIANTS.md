@@ -1173,7 +1173,7 @@ when any dependency fails, and a required context that reports `skipped` never
 resolves — the pull request waits on "Expected — waiting for status check to be
 reported" instead of going red. A gate that cannot report red is not a gate.
 
-**Enforcement.** `tools/check_gate_coverage.py`, run in the `code-quality` job
+**Enforcement.** `tools/check_gate_coverage.py`, run in the `security-checks` job
 of `ci.yml`. Single-job workflows are exempt by construction (the job *is* its
 own status context) as are workflows that never trigger on `pull_request`
 (`release.yml` on a tag push, `wiki-sync.yml` on a push to main) — branch
@@ -1218,7 +1218,7 @@ cryptographic dependencies.
 An install instruction is API surface. A reader cannot verify it without
 running it, and running it reports success either way.
 
-**Enforcement.** `tools/check_documented_extras.py`, run in the `code-quality`
+**Enforcement.** `tools/check_documented_extras.py`, run in the `security-checks`
 job of `ci.yml`. `CHANGELOG.md` is excluded by design: it is a historical
 record, and an extra that genuinely existed in an earlier release must remain
 readable in the entry that introduced or removed it.
@@ -1260,7 +1260,7 @@ not — so the project believes it has coverage it does not have. A harness
 nobody runs is indistinguishable from one that finds nothing.
 
 **Enforcement.** `tools/check_fuzz_target_registration.py`, run in the
-`code-quality` job of `ci.yml`. A commented-out matrix entry counts as
+`security-checks` job of `ci.yml`. A commented-out matrix entry counts as
 registered: not every harness belongs in the per-PR lane (`fuzz_sphincs` is
 excluded because SPHINCS+ is too slow for CI, with the reason recorded beside
 it), but such a target must still be in both build lanes so OSS-Fuzz keeps

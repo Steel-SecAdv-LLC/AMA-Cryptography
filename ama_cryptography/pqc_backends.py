@@ -4672,28 +4672,49 @@ def ml_dsa_sizes(ps: Union[int, str]) -> dict:
 # ---------------------------------------------------------------------------
 # INVARIANT-6 helpers for the ctypes boundary
 # ---------------------------------------------------------------------------
-def _wipeable(secret: Union[bytes, bytearray]) -> "ctypes.Array":
-    """A secret input in a buffer that can be zeroed on the way out.
+def _borrow(secret: _BufferInput) -> Any:
+    """A ctypes-compatible view of an input secret, without copying it.
 
-    ``bytes(secret_key)`` passed straight to a foreign call leaves an
-    immutable, non-wipeable copy of the private key on the Python heap for the
-    garbage collector to release whenever it likes — even when the caller
-    obeyed INVARIANT-6 and held the key in a ``bytearray``. The older wrappers
-    in this module (``slhdsa_sign``, ``native_ed25519_sign``, ``dilithium_*``)
-    have always routed inputs through a mutable ctypes buffer for exactly that
-    reason; the ML-KEM / ML-DSA / NIST-P bindings did not, and this is that
-    idiom named once instead of open-coded twenty times.
+    ``ctypes.c_char_p`` takes ``bytes`` directly, so for an immutable caller
+    there is nothing to do and nothing new to wipe. For a ``bytearray`` — the
+    storage INVARIANT-6 asks callers to use precisely so they *can* wipe — this
+    borrows the buffer in place with ``from_buffer`` rather than copying it.
 
-    A transient ``bytes`` still exists for the duration of the copy — CPython
-    offers no way to hand a foreign function a buffer without materialising
-    one — but it is not what the wrapper *retains*.
+    This is the non-context-manager sibling of :func:`_c_buffer_view`, which
+    the AEAD wrappers already use; the flat form suits the ``try``/``finally``
+    shape these wrappers need for their *output* buffers. The borrow is
+    released when the returned object is collected, which is at latest when the
+    wrapper returns.
+
+    Deliberately not a copy-then-wipe helper. Copying to wipe the copy leaves
+    the transient ``bytes`` that had to be made to get there — the exact
+    un-wipeable object the exercise exists to avoid — and for a ``bytearray``
+    caller it is strictly worse than passing the key straight through.
     """
-    raw = bytes(secret)
-    return ctypes.create_string_buffer(raw, len(raw))
+    if isinstance(secret, bytes):
+        return secret
+    view = memoryview(secret)
+    if view.readonly or view.ndim != 1 or view.itemsize != 1:
+        return view.tobytes()
+    return (ctypes.c_char * view.nbytes).from_buffer(view)
 
 
-def _wipe(*buffers: "Optional[ctypes.Array]") -> None:
-    """Zero every buffer given. Safe on ``None`` so it can sit in a ``finally``."""
+def _wipe(*buffers: Any) -> None:
+    """Zero every buffer given. Safe on ``None`` so it can sit in a ``finally``.
+
+    For *output* buffers only — ones this module allocated and filled with a
+    secret the C side produced. The ML-KEM / ML-DSA / NIST-P wrappers dropped
+    those while still populated: a fresh secret key, a decapsulated shared
+    secret, an ECDH ``Z``. The older wrappers in this file have always
+    ``memset`` them in a ``finally``, and this is that idiom named once instead
+    of open-coded at every site.
+
+    *Input* secrets go through :func:`_c_buffer_view` instead, which borrows a
+    ``bytearray`` in place rather than copying it. A wipe-the-copy helper for
+    inputs is worse than useless: the copy it wipes is the second one, and the
+    transient it had to make to get there is the un-wipeable ``bytes`` the
+    exercise was supposed to avoid.
+    """
     for buf in buffers:
         if buf is not None:
             ctypes.memset(buf, 0, ctypes.sizeof(buf))
@@ -4747,8 +4768,8 @@ def native_ml_kem_keypair_from_seed(ps: Union[int, str], d: bytes, z: bytes) -> 
     sz = ML_KEM_SIZES[pid]
     pk = ctypes.create_string_buffer(sz["public_key"])
     sk = ctypes.create_string_buffer(sz["secret_key"])
-    d_buf = _wipeable(d)
-    z_buf = _wipeable(z)
+    d_buf = _borrow(d)
+    z_buf = _borrow(z)
     try:
         rc = _native_lib.ama_ml_kem_keypair_from_seed(
             pid,
@@ -4763,7 +4784,7 @@ def native_ml_kem_keypair_from_seed(ps: Union[int, str], d: bytes, z: bytes) -> 
             raise RuntimeError(f"ML-KEM deterministic keypair failed (rc={rc})")
         return bytes(pk.raw[: sz["public_key"]]), bytes(sk.raw[: sz["secret_key"]])
     finally:
-        _wipe(sk, d_buf, z_buf)
+        _wipe(sk)
 
 
 def native_ml_kem_pubkey_from_privkey(ps: Union[int, str], secret_key: bytes) -> bytes:
@@ -4794,17 +4815,14 @@ def native_ml_kem_pubkey_from_privkey(ps: Union[int, str], secret_key: bytes) ->
         )
     _ml_kem_require_native()
     pk = ctypes.create_string_buffer(sz["public_key"])
-    sk_buf = _wipeable(secret_key)
-    try:
-        rc = _native_lib.ama_ml_kem_pubkey_from_privkey(
-            pid,
-            sk_buf,
-            ctypes.c_size_t(sz["secret_key"]),
-            pk,
-            ctypes.c_size_t(sz["public_key"]),
-        )
-    finally:
-        _wipe(sk_buf)
+    sk_buf = _borrow(secret_key)
+    rc = _native_lib.ama_ml_kem_pubkey_from_privkey(
+        pid,
+        sk_buf,
+        ctypes.c_size_t(sz["secret_key"]),
+        pk,
+        ctypes.c_size_t(sz["public_key"]),
+    )
     if rc != 0:
         raise ValueError(
             f"ML-KEM-{pid} decapsulation key is internally inconsistent: the "
@@ -4832,11 +4850,8 @@ def native_ml_kem_privkey_check(ps: Union[int, str], secret_key: bytes) -> bool:
             f"ML-KEM-{pid} secret key must be {sz['secret_key']} bytes, got {len(secret_key)}"
         )
     _ml_kem_require_native()
-    sk_buf = _wipeable(secret_key)
-    try:
-        rc = _native_lib.ama_ml_kem_privkey_check(pid, sk_buf, ctypes.c_size_t(sz["secret_key"]))
-    finally:
-        _wipe(sk_buf)
+    sk_buf = _borrow(secret_key)
+    rc = _native_lib.ama_ml_kem_privkey_check(pid, sk_buf, ctypes.c_size_t(sz["secret_key"]))
     return bool(rc == 0)
 
 
@@ -4942,7 +4957,7 @@ def native_ml_kem_decapsulate(
         )
     _ml_kem_require_native()
     ss = ctypes.create_string_buffer(ML_KEM_SHARED_SECRET_BYTES)
-    sk_buf = _wipeable(secret_key)
+    sk_buf = _borrow(secret_key)
     try:
         rc = _native_lib.ama_ml_kem_decapsulate(
             pid,
@@ -4957,7 +4972,7 @@ def native_ml_kem_decapsulate(
             raise RuntimeError(f"ML-KEM decapsulation failed (rc={rc})")
         return bytes(ss.raw[:ML_KEM_SHARED_SECRET_BYTES])
     finally:
-        _wipe(ss, sk_buf)
+        _wipe(ss)
 
 
 def native_ml_dsa_keypair(ps: Union[int, str]) -> tuple:
@@ -4990,14 +5005,14 @@ def native_ml_dsa_keypair_from_seed(ps: Union[int, str], xi: bytes) -> tuple:
     sz = ML_DSA_SIZES[pid]
     pk = ctypes.create_string_buffer(sz["public_key"])
     sk = ctypes.create_string_buffer(sz["secret_key"])
-    xi_buf = _wipeable(xi)
+    xi_buf = _borrow(xi)
     try:
         rc = _native_lib.ama_ml_dsa_keypair_from_seed(pid, xi_buf, pk, sk)
         if rc != 0:
             raise RuntimeError(f"ML-DSA deterministic keypair failed (rc={rc})")
         return bytes(pk.raw[: sz["public_key"]]), bytes(sk.raw[: sz["secret_key"]])
     finally:
-        _wipe(sk, xi_buf)
+        _wipe(sk)
 
 
 def native_ml_dsa_pubkey_from_privkey(ps: Union[int, str], secret_key: bytes) -> bytes:
@@ -5030,11 +5045,8 @@ def native_ml_dsa_pubkey_from_privkey(ps: Union[int, str], secret_key: bytes) ->
         )
     _ml_dsa_require_native()
     pk = ctypes.create_string_buffer(sz["public_key"])
-    sk_buf = _wipeable(secret_key)
-    try:
-        rc = _native_lib.ama_ml_dsa_pubkey_from_privkey(pid, sk_buf, pk)
-    finally:
-        _wipe(sk_buf)
+    sk_buf = _borrow(secret_key)
+    rc = _native_lib.ama_ml_dsa_pubkey_from_privkey(pid, sk_buf, pk)
     if rc != 0:
         raise ValueError(
             f"ML-DSA-{pid} private key is internally inconsistent: its s1/s2 are "
@@ -5063,11 +5075,8 @@ def native_ml_dsa_privkey_check(ps: Union[int, str], secret_key: bytes) -> bool:
             f"ML-DSA-{pid} secret key must be {sz['secret_key']} bytes, got {len(secret_key)}"
         )
     _ml_dsa_require_native()
-    sk_buf = _wipeable(secret_key)
-    try:
-        return bool(_native_lib.ama_ml_dsa_privkey_check(pid, sk_buf) == 0)
-    finally:
-        _wipe(sk_buf)
+    sk_buf = _borrow(secret_key)
+    return bool(_native_lib.ama_ml_dsa_privkey_check(pid, sk_buf) == 0)
 
 
 def native_ml_dsa_sign(
@@ -5102,30 +5111,27 @@ def native_ml_dsa_sign(
 
     sig = ctypes.create_string_buffer(sz["signature"])
     sig_len = ctypes.c_size_t(sz["signature"])
-    sk_buf = _wipeable(secret_key)
-    try:
-        if ctx is None:
-            rc = _native_lib.ama_ml_dsa_sign(
-                pid,
-                sig,
-                ctypes.byref(sig_len),
-                bytes(message),
-                ctypes.c_size_t(len(message)),
-                sk_buf,
-            )
-        else:
-            rc = _native_lib.ama_ml_dsa_sign_ctx(
-                pid,
-                sig,
-                ctypes.byref(sig_len),
-                bytes(message),
-                ctypes.c_size_t(len(message)),
-                bytes(ctx),
-                ctypes.c_size_t(len(ctx)),
-                sk_buf,
-            )
-    finally:
-        _wipe(sk_buf)
+    sk_buf = _borrow(secret_key)
+    if ctx is None:
+        rc = _native_lib.ama_ml_dsa_sign(
+            pid,
+            sig,
+            ctypes.byref(sig_len),
+            bytes(message),
+            ctypes.c_size_t(len(message)),
+            sk_buf,
+        )
+    else:
+        rc = _native_lib.ama_ml_dsa_sign_ctx(
+            pid,
+            sig,
+            ctypes.byref(sig_len),
+            bytes(message),
+            ctypes.c_size_t(len(message)),
+            bytes(ctx),
+            ctypes.c_size_t(len(ctx)),
+            sk_buf,
+        )
     if rc == AMA_ERROR_INVALID_PARAM:
         # The signer applies FIPS 204 Algorithm 25's range gate to s1/s2, so a
         # secret key of the right length can still be refused here. That is a
@@ -5314,11 +5320,8 @@ def native_nistp_pubkey_from_privkey(curve: Union[int, str], privkey: bytes) -> 
         raise ValueError(f"Private key must be {nb} bytes for this curve, got {len(privkey)}")
     _nistp_require_native()
     pub = ctypes.create_string_buffer(2 * nb)
-    priv_buf = _wipeable(privkey)
-    try:
-        rc = _native_lib.ama_nistp_pubkey_from_privkey(cid, priv_buf, pub)
-    finally:
-        _wipe(priv_buf)
+    priv_buf = _borrow(privkey)
+    rc = _native_lib.ama_nistp_pubkey_from_privkey(cid, priv_buf, pub)
     if rc == AMA_ERROR_INVALID_PARAM:
         raise ValueError(
             "NIST curve private scalar is out of range: a private key must be in "
@@ -5419,7 +5422,7 @@ def native_nistp_ecdh(curve: Union[int, str], privkey: bytes, peer_pubkey: bytes
         raise ValueError(f"Peer public key must be {2 * nb} bytes (X||Y), got {len(peer_pubkey)}")
     _nistp_require_native()
     out = ctypes.create_string_buffer(nb)
-    priv_buf = _wipeable(privkey)
+    priv_buf = _borrow(privkey)
     try:
         rc = _native_lib.ama_nistp_ecdh(cid, priv_buf, bytes(peer_pubkey), out)
         if rc == AMA_ERROR_INVALID_PARAM:
@@ -5437,7 +5440,7 @@ def native_nistp_ecdh(curve: Union[int, str], privkey: bytes, peer_pubkey: bytes
             raise RuntimeError(f"NIST curve ECDH failed (rc={rc})")
         return bytes(out.raw[:nb])
     finally:
-        _wipe(out, priv_buf)
+        _wipe(out)
 
 
 def native_nistp_ecdsa_sign(
@@ -5494,33 +5497,30 @@ def native_nistp_ecdsa_sign(
     if hedged:
         flags |= AMA_NISTP_ECDSA_SIGN_HEDGED
 
-    priv_buf = _wipeable(privkey)
-    try:
-        if raw:
-            out = ctypes.create_string_buffer(2 * nb)
-            rc = _native_lib.ama_nistp_ecdsa_sign_raw_ex(
-                cid, bytes(message_digest), len(message_digest), priv_buf, out, flags
-            )
-            if rc != 0:
-                raise RuntimeError(f"NIST curve ECDSA signing failed (rc={rc})")
-            return bytes(out.raw[: 2 * nb])
-
-        out = ctypes.create_string_buffer(NISTP_MAX_SIG_LEN)
-        out_len = ctypes.c_size_t(0)
-        rc = _native_lib.ama_nistp_ecdsa_sign_ex(
-            cid,
-            bytes(message_digest),
-            len(message_digest),
-            priv_buf,
-            out,
-            ctypes.byref(out_len),
-            flags,
+    priv_buf = _borrow(privkey)
+    if raw:
+        out = ctypes.create_string_buffer(2 * nb)
+        rc = _native_lib.ama_nistp_ecdsa_sign_raw_ex(
+            cid, bytes(message_digest), len(message_digest), priv_buf, out, flags
         )
         if rc != 0:
             raise RuntimeError(f"NIST curve ECDSA signing failed (rc={rc})")
-        return bytes(out.raw[: out_len.value])
-    finally:
-        _wipe(priv_buf)
+        return bytes(out.raw[: 2 * nb])
+
+    out = ctypes.create_string_buffer(NISTP_MAX_SIG_LEN)
+    out_len = ctypes.c_size_t(0)
+    rc = _native_lib.ama_nistp_ecdsa_sign_ex(
+        cid,
+        bytes(message_digest),
+        len(message_digest),
+        priv_buf,
+        out,
+        ctypes.byref(out_len),
+        flags,
+    )
+    if rc != 0:
+        raise RuntimeError(f"NIST curve ECDSA signing failed (rc={rc})")
+    return bytes(out.raw[: out_len.value])
 
 
 def native_nistp_ecdsa_verify(

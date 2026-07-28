@@ -33,8 +33,10 @@ Where this runs
 ``--verify`` is not a command a reviewer has to remember. It is driven on every
 pull request from two directions: ``tests/test_keyformat_corpus_provenance.py``
 calls :func:`verify_offline` directly (and pins each failure direction, so the
-check cannot decay into one that always passes), and the ``code-quality`` job in
-``ci.yml`` runs the CLI. ``--verify-upstream`` needs the network, so it runs
+check cannot decay into one that always passes), and the ``security-checks`` job
+in ``ci.yml`` runs the CLI. (It said ``code-quality``, which sent a reviewer
+following the docstring to confirm the gate is wired to the wrong job, where
+they found nothing.) ``--verify-upstream`` needs the network, so it runs
 where the Wycheproof corpus's equivalent does: ``corpus-provenance.yml``, on a
 monthly drift watch and on any pull request that touches the corpus or this
 tool.

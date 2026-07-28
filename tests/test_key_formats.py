@@ -68,6 +68,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+import ama_cryptography._asn1 as _asn1  # noqa: E402 -- same (KF-003)
 import ama_cryptography.key_formats as kf  # noqa: E402 -- import follows the repo-root sys.path insert above (KF-003)
 import ama_cryptography.pqc_backends as pb  # noqa: E402 -- same (KF-003)
 import tests.ref_keyformat as ref  # noqa: E402 -- same (KF-003)
@@ -2582,3 +2583,83 @@ def test_mutated_jwk_and_cose_are_refused_cleanly(which: str) -> None:
                 f"{which}: mutated input raised {type(exc).__name__} instead of "
                 f"KeyFormatError: {exc!r}"
             )
+
+
+# ---------------------------------------------------------------------------
+# OID codec symmetry
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "dotted",
+    [
+        "0.0",
+        "1.2",
+        "1.2.840.113549.1.1.1",
+        "2.16.840.1.101.3.4.2.1",
+        "2.48",  # the first value whose subidentifier needs two octets
+        "2.175",
+        "2.999.1",  # the experimental arc
+        "1.3.6.1.4.1.4294967295",  # a 32-bit arc
+    ],
+)
+def test_the_oid_codec_round_trips(dotted: str) -> None:
+    """``oid_from_string`` must be able to re-encode everything
+    ``oid_to_string`` decodes.
+
+    It could not: the first *subidentifier* (``40*arc1 + arc2``) was written as
+    a single octet, so every OID with ``arc1 == 2`` and ``arc2 >= 176`` — the
+    whole ``2.999.*`` experimental arc — raised a bare
+    ``ValueError: byte must be in range(0, 256)``, outside the module's stated
+    ``KeyFormatError`` contract, from a function in ``__all__``.
+    """
+    encoded = _asn1.oid_from_string(dotted)
+    assert encoded[0] == 0x06
+    assert _asn1.oid_to_string(encoded[2:]) == dotted
+
+
+@pytest.mark.parametrize(
+    "dotted",
+    ["", "1", "3.0", "0.40", "1.40", "1.-2", "1.2.x", "2." + "9" * 400],
+)
+def test_a_malformed_oid_string_raises_key_format_error(dotted: str) -> None:
+    """Every rejection surfaces as KeyFormatError — including the oversized
+    one, which the encoder now bounds the same way the decoder does."""
+    with pytest.raises(KeyFormatError):
+        _asn1.oid_from_string(dotted)
+
+
+# ---------------------------------------------------------------------------
+# CBOR nesting
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    ("label", "payload"),
+    [
+        ("array chain", b"\x81" * 10000 + b"\x00"),
+        ("map chain", b"\xa1\x01" * 5000 + b"\x00"),
+        ("array then map", b"\x81" * 500 + b"\xa1\x01" * 500 + b"\x00"),
+    ],
+)
+def test_deeply_nested_cbor_raises_key_format_error(label: str, payload: bytes) -> None:
+    """``RecursionError`` is not in this module's contract.
+
+    ``0x81`` (array of one) buys an attacker a stack frame per input octet, so
+    a few hundred octets of COSE_Key drove the interpreter off its recursion
+    limit — past the ``KeyFormatError`` boundary ``cose_to_public_key`` and
+    ``cose_to_private_key`` promise, and on a small thread stack past the
+    interpreter entirely.
+
+    The repository's splice-based fuzzer cannot reach this shape: it mutates a
+    seed corpus of *key encodings*, and no key encoding contains a thousand
+    nested arrays. So it gets an explicit test rather than being left to a
+    generator that structurally cannot generate it.
+    """
+    with pytest.raises(KeyFormatError):
+        cbor_decode_canonical(payload)
+    with pytest.raises(KeyFormatError):
+        kf.cose_to_public_key(payload)
+
+
+def test_a_flat_cose_key_still_decodes() -> None:
+    """Non-vacuity: the depth limit must not reject the shape it exists for."""
+    _pub, priv = pb.native_nistp_keypair("P-256")
+    key = kf.PublicKey("P-256", pb.native_nistp_pubkey_from_privkey("P-256", priv))
+    assert kf.cose_to_public_key(key.to_cose()).key == key.key

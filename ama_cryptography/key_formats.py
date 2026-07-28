@@ -83,7 +83,9 @@ All three arms of the RFC 9881 §6 ``CHOICE`` — ``seed``, ``expandedKey`` and
   imports as a working key rather than an opaque blob.
 * A seed that arrives is **kept** on the ``PrivateKey`` and re-emitted in the
   form it arrived in. Expansion is one-way (RFC 9881 §8.1), so dropping it
-  would irreversibly downgrade a 34-octet key file into a multi-kilobyte one.
+  would irreversibly downgrade a 54-octet key file into a multi-kilobyte one
+  (54 for ML-DSA, 86 for ML-KEM, whose seed is ``d || z``; 34 is the bare
+  ``[0] IMPLICIT`` seed TLV, not a key file, and is what this said before).
 * A ``both`` key is checked: the seed must expand to the supplied
   ``expandedKey`` or the key is rejected as malformed (RFC 9881 §8.2).
 * An ``expandedKey``-only key is checked too, which is the part implementations
@@ -598,8 +600,9 @@ class PrivateKey:
     It is kept because expansion is one-way: RFC 9881 §8.1 is explicit that
     "once a full key is expanded from seed and the seed discarded, the seed
     cannot be recreated, even if the full expanded private key is available".
-    Dropping it on import would silently downgrade a 34-octet seed-form key
-    file into a multi-kilobyte expanded one on the next write, irreversibly —
+    Dropping it on import would silently downgrade a 54-octet seed-form key
+    file — 86 for ML-KEM — into a multi-kilobyte expanded one on the next
+    write, irreversibly —
     so a key that arrives with a seed keeps it, and re-encodes in the form it
     arrived in.
     """

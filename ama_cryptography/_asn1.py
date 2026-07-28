@@ -135,8 +135,30 @@ def der_tagged(number: int, body: bytes, *, constructed: bool = True) -> bytes:
     return _tlv(tag, body)
 
 
+def _base128(value: int) -> bytes:
+    """One base-128 subidentifier, continuation bits set on all but the last."""
+    chunk = bytearray([value & 0x7F])
+    value >>= 7
+    while value:
+        chunk.append((value & 0x7F) | 0x80)
+        value >>= 7
+    return bytes(reversed(chunk))
+
+
 def oid_from_string(dotted: str) -> bytes:
-    """Encode a dotted OID string as a DER OBJECT IDENTIFIER."""
+    """Encode a dotted OID string as a DER OBJECT IDENTIFIER.
+
+    The first *subidentifier* is ``40 * arc1 + arc2`` and is encoded in the
+    same base-128 continuation form as every other one. It used to be written
+    as ``bytearray([arcs[0] * 40 + arcs[1]])``, which assumes that value always
+    fits in a single octet — X.690 §8.19.4 puts no such bound on ``arc2`` when
+    ``arc1 == 2``, and the validation directly above deliberately permits it.
+    So every OID in the ``2.999.*`` experimental arc, and anything else with
+    ``arc1 == 2`` and ``arc2 >= 176``, raised a raw
+    ``ValueError: byte must be in range(0, 256)`` — outside this module's
+    stated contract, and leaving the codec asymmetric: ``oid_to_string``
+    decodes those and the encoder could not take them back.
+    """
     try:
         arcs = [int(part) for part in dotted.split(".")]
     except ValueError:
@@ -146,14 +168,14 @@ def oid_from_string(dotted: str) -> bytes:
     if any(a < 0 for a in arcs):
         raise KeyFormatError(f"OID {dotted!r} has a negative arc")
 
-    body = bytearray([arcs[0] * 40 + arcs[1]])
+    body = bytearray(_base128(arcs[0] * 40 + arcs[1]))
     for arc in arcs[2:]:
-        chunk = bytearray([arc & 0x7F])
-        arc >>= 7
-        while arc:
-            chunk.append((arc & 0x7F) | 0x80)
-            arc >>= 7
-        body.extend(reversed(chunk))
+        body.extend(_base128(arc))
+    if len(body) > _OID_MAX_BODY:
+        raise KeyFormatError(
+            f"OID {dotted!r} encodes to {len(body)} octets, over the "
+            f"{_OID_MAX_BODY}-octet limit this codec accepts"
+        )
     return _tlv(TAG_OID, bytes(body))
 
 
@@ -381,10 +403,14 @@ _CBOR_MAP = 5
 #: Deepest CBOR nesting this decoder will follow.
 #:
 #: A COSE_Key (RFC 9052 §7) is a map whose values are integers, byte strings
-#: and text strings — depth 1. Four leaves room for a future structure without
-#: leaving the recursion open, which it was: `0x81` (array of one) buys one
-#: stack frame per input octet, so a few hundred octets produced a
-#: ``RecursionError`` outside this module's exception contract.
+#: and text strings — one level of nesting. Four leaves room for a future
+#: structure without leaving the recursion open, which it was: `0x81` (array of
+#: one) buys one stack frame per input octet, so a few hundred octets produced
+#: a ``RecursionError`` outside this module's exception contract.
+#:
+#: Counted so the name is true: the outermost item is depth 0, and a value at
+#: depth ``_CBOR_MAX_DEPTH`` is refused — four levels, not six. `depth >` rather
+#: than `>=` made the constant read a level looser than it said.
 _CBOR_MAX_DEPTH = 4
 
 
@@ -490,7 +516,7 @@ class _CborReader:
         A COSE_Key is a flat map of scalars and byte strings, so the limit
         rejects the whole class rather than merely surviving it.
         """
-        if depth > _CBOR_MAX_DEPTH:
+        if depth >= _CBOR_MAX_DEPTH:
             raise KeyFormatError(f"CBOR nesting deeper than {_CBOR_MAX_DEPTH} levels")
         major, value = self._head()
         if major == _CBOR_UINT:

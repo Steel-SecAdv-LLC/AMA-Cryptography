@@ -828,16 +828,19 @@ static void kyber_cpapke_enc(uint8_t *ct, const uint8_t *m,
      * (here `epp`) are sampled with eta2.  The three coincide for ML-KEM-768
      * and ML-KEM-1024 (eta1 = eta2 = 2), so a single-eta implementation looks
      * correct until ML-KEM-512 (eta1 = 3, eta2 = 2) — where it silently
-     * produces a ciphertext no other implementation decapsulates.  The
-     * FIPS 203 ML-KEM-512 KAT corpus (tests/kat/fips203/ml_kem_512.kat,
-     * replayed by tests/test_pqc_param_sets.py::test_ml_kem_known_answer_
-     * vectors) is what pins this: its ct/ss pairs drive the FO re-encryption
-     * and therefore this function at eta1 = 3.
+     * produces a ciphertext no other implementation decapsulates.  What pins
+     * this is `tests/kat/fips203/ml_kem_512.kat` — the vendored Wycheproof
+     * ML-KEM-512 corpus (C2SP/wycheproof `testvectors_v1/mlkem_512_test.json`,
+     * provenance in tests/kat/README.md), replayed by
+     * `tests/test_pqc_param_sets.py::test_ml_kem_known_answer_vectors`.  Its
+     * ct/ss pairs drive the FO re-encryption and therefore this function at
+     * eta1 = 3.
      *
-     * Not Wycheproof, which this comment used to cite: Wycheproof publishes no
-     * ML-KEM vectors at all, and wycheproof_vectors/README.md says so. A
-     * dangling citation for a stated conformance property is worse than none
-     * in a repository whose case rests on auditable provenance. */
+     * The path is named because the corpus does not live under
+     * `wycheproof_vectors/`: that directory carries the classical suites only,
+     * and its README says so in as many words.  "The vendored Wycheproof
+     * ML-KEM-512 corpus" alone sent a reader there, found nothing, and read as
+     * a dangling citation for a stated conformance property. */
     kyber_gennoise(&sp, coins, 0, P->k, P->eta1);
     polyvec_ntt(&sp, P->k);
     kyber_gennoise(&ep, coins, (uint8_t)P->k, P->k, P->eta2);
