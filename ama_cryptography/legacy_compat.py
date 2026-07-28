@@ -39,10 +39,11 @@ import secrets
 import struct
 import sys
 import time
+import warnings
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, TypeVar, Union, overload
 from urllib.parse import urlparse
 
 if TYPE_CHECKING:
@@ -433,12 +434,21 @@ def ed25519_verify(message: bytes, signature: bytes, public_key: bytes) -> bool:
 
 
 # ============================================================================
-# RFC 3161 TRUSTED TIMESTAMPING
+# RFC 3161 TIMESTAMPING — BINDING ONLY, NOT TSA ATTESTATION (INVARIANT-37)
 # ============================================================================
 
 
 def get_rfc3161_timestamp(data: bytes, tsa_url: Optional[str] = None) -> Optional[bytes]:
-    """Get RFC 3161 trusted timestamp for data.
+    """Request an RFC 3161 timestamp token for *data* from a TSA.
+
+    .. warning::
+        The token this returns is **not** verified by AMA beyond the RFC 3161
+        §2.4.2 message-imprint binding, the ``PKIStatusInfo`` verdict and the
+        nonce echo. AMA verifies neither the TSA's CMS ``SignerInfo`` signature
+        nor its certificate chain, so possession of a token — this one or any
+        other — is not evidence that a trusted authority issued it, and its
+        ``genTime`` is unauthenticated. The word "trusted" was in this
+        docstring's summary line for a long time and did not belong there.
 
     Returns RFC 3161 timestamp token (DER-encoded), or None for non-HTTPS
     URL schemes.  Raises RuntimeError on TSA request failure.
@@ -535,8 +545,26 @@ def verify_rfc3161_timestamp(
     INVARIANT-7 call-time enforcement: refuses to operate without the
     native backend loaded, matching the import-time contract.
 
+    Args:
+        data: The data the token is supposed to be about.
+        timestamp_token: A DER RFC 3161 token, or a whole ``TimeStampResp``.
+        tsa_cert_path: **Refused, not honoured.** Anything other than ``None``
+            raises :class:`RuntimeError`. The argument asked for X.509 chain
+            validation of the TSA's signing certificate against that anchor;
+            AMA implements neither CMS ``SignerInfo`` processing nor X.509 path
+            validation, so returning the binding check's verdict instead would
+            answer a weaker question while appearing to answer this one
+            (INVARIANT-37). It is kept in the signature so a call site written
+            against the old contract fails loudly rather than losing the
+            request.
+
+    Returns:
+        ``True`` if the token's message imprint is the digest of ``data``.
+        This is the binding, not attestation — see the warning above.
+
     NOTE: This is the LEGACY API taking raw ``bytes``, NOT the same as
-    ``rfc3161_timestamp.verify_timestamp()`` which takes ``TimestampResult``.
+    ``rfc3161_timestamp.verify_timestamp_binding()`` which takes a
+    ``TimestampResult``.
     """
     _enforce_invariant7_lc()
     if not _looks_like_der_sequence(timestamp_token):
@@ -1036,6 +1064,105 @@ def _verify_dilithium_with_policy(
     return result
 
 
+#: The result key that names what is actually checked.
+_RFC3161_BINDING_KEY = "rfc3161_binding"
+
+#: The pre-INVARIANT-37 name, kept for callers that already read it.
+_LEGACY_RFC3161_KEY = "rfc3161"
+
+#: Whether the one-time log line for the legacy key has been emitted.
+_legacy_rfc3161_key_logged = False
+
+_T = TypeVar("_T")
+
+
+def _warn_legacy_rfc3161_key(stacklevel: int) -> None:
+    """Announce that ``results["rfc3161"]`` is a binding check, not attestation.
+
+    Two channels, because one of them does not reach anybody on its own.
+    ``DeprecationWarning`` is the correct *category* — this is an API name
+    being retired — but Python hides it outside ``__main__`` by default and
+    this repository's own ``filterwarnings`` ignores it, so a warning alone
+    would be a mechanism that satisfies a reviewer and reaches no operator.
+    The paired one-time ``logging`` record at WARNING is what an application
+    with ordinary logging configuration actually sees. Once per process, since
+    the misread is a property of the code, not of the loop it runs in.
+    """
+    global _legacy_rfc3161_key_logged
+    message = (
+        'verify_crypto_package results key "rfc3161" is deprecated and misnamed: '
+        "its value is the RFC 3161 §2.4.2 message-imprint *binding* — whether the "
+        "token refers to this data — and not verification of the TSA's signature or "
+        "certificate, neither of which AMA implements. Read "
+        '"rfc3161_binding" instead, and do not treat it as third-party time '
+        "attestation."
+    )
+    warnings.warn(message, DeprecationWarning, stacklevel=stacklevel)
+    if not _legacy_rfc3161_key_logged:
+        _legacy_rfc3161_key_logged = True
+        _logger.warning("%s", message)
+
+
+class _VerificationResults(Dict[str, Optional[bool]]):
+    """The mapping :func:`verify_crypto_package` returns.
+
+    A ``dict`` in every respect but one: reading the legacy ``"rfc3161"`` key
+    says what that value is. It is a ``dict`` subclass rather than a wrapper so
+    that ``isinstance(results, dict)``, JSON serialisation, unpacking and every
+    existing consumer keep working unchanged — a verification routine is the
+    last place to introduce a new failure mode in the name of clarity.
+
+    **Why the key still exists at all.** Renaming it to ``rfc3161_binding``
+    without keeping an alias would raise ``KeyError`` inside callers' own
+    verification code, which is a worse failure than the one being fixed.
+    Keeping it silently was the other half of the same problem: the rename was
+    the honest part, and publishing the identical value under the old name
+    undid it for every caller who never read the changelog. So the alias stays,
+    carries the same value, and no longer arrives without comment.
+
+    **What this does not catch, stated rather than implied.** Only
+    ``__getitem__`` and :meth:`get` are instrumented. ``dict(results)``,
+    ``{**results}``, ``results.items()``, ``results.values()`` and
+    ``json.dumps(results)`` read the underlying storage through CPython's own
+    fast paths and will not warn. That is deliberate on both counts: those
+    operations copy or serialise the mapping rather than *read a verdict out of
+    it*, which is the misread this exists to interrupt; and the only way to
+    force them through ``__getitem__`` is to override ``keys()`` so CPython
+    falls off ``dict_merge``'s fast path — an implementation detail of one
+    interpreter, load-bearing and invisible, which is not a thing this
+    repository is willing to depend on. ``tools/check_verification_claim_honesty.py``
+    covers the copies from the other side, by ensuring no documentation or
+    docstring in the tree teaches the legacy key in the first place.
+    """
+
+    __slots__ = ()
+
+    def __getitem__(self, key: str) -> Optional[bool]:
+        if key == _LEGACY_RFC3161_KEY:
+            # 1 = this frame, 2 = __getitem__'s caller, i.e. the subscript site.
+            _warn_legacy_rfc3161_key(stacklevel=3)
+        return super().__getitem__(key)
+
+    # These three overloads mirror ``dict.get``'s in typeshed exactly, down to
+    # the ``default: None = ...`` on the first. Anything narrower is a Liskov
+    # violation under ``mypy --strict`` — a subclass that quietly refused an
+    # arbitrary default would be a real behaviour change smuggled in by a
+    # warning shim.
+    @overload
+    def get(self, key: str, default: None = ..., /) -> Optional[bool]: ...
+
+    @overload
+    def get(self, key: str, default: Optional[bool], /) -> Optional[bool]: ...
+
+    @overload
+    def get(self, key: str, default: _T, /) -> Union[Optional[bool], _T]: ...
+
+    def get(self, key: str, default: Any = None, /) -> Any:
+        if key == _LEGACY_RFC3161_KEY:
+            _warn_legacy_rfc3161_key(stacklevel=3)
+        return super().get(key, default)
+
+
 def verify_crypto_package(
     codes: str,
     helix_params: List[Tuple[float, float]],
@@ -1060,10 +1187,31 @@ def verify_crypto_package(
         the package originated from a holder of that shared secret.  Treat
         ``results["hmac"]`` (and a matching ``content_hash``) as the authenticity
         gate; do not rely on the signature layers alone for provenance.
+
+    Returns:
+        A mapping from check name to verdict (``True`` / ``False``, or ``None``
+        where the check did not apply):
+
+        - ``content_hash`` — the canonical content hash recomputes.
+        - ``hmac`` — the keyed tag verifies under ``hmac_key``. This is the
+          authenticity gate; see the warning above.
+        - ``ed25519``, ``dilithium`` — signature validity against the public
+          keys carried inside the package.
+        - ``timestamp`` — the package's own recorded time is well-formed and
+          within policy. This is AMA's own field, unrelated to RFC 3161.
+        - ``rfc3161_binding`` — the RFC 3161 §2.4.2 message-imprint binding:
+          whether the stored token *refers to this data*. **Not** third-party
+          time attestation. AMA verifies neither the TSA's CMS ``SignerInfo``
+          signature nor its certificate chain, so a token an attacker built
+          offline over your content satisfies this key with any ``genTime``
+          they chose. Meaningful only when the token's origin is established
+          by a separate control (INVARIANT-37).
+        - ``rfc3161`` — **deprecated alias** of ``rfc3161_binding``, same
+          value. Reading it emits a :class:`DeprecationWarning`, because the
+          bare name reads as attestation and that is the misread this key
+          caused. Use ``rfc3161_binding``.
     """
     _enforce_invariant7_lc()
-    import warnings
-
     warnings.warn(
         "legacy_compat.verify_crypto_package is deprecated. "
         "Use ama_cryptography.crypto_api.verify_crypto_package instead.",
@@ -1072,27 +1220,26 @@ def verify_crypto_package(
     )
     if require_quantum_signatures is None:
         require_quantum_signatures = DILITHIUM_AVAILABLE
-    results: Dict[str, Optional[bool]] = {
-        "content_hash": False,
-        "hmac": False,
-        "ed25519": False,
-        "dilithium": None,
-        "timestamp": False,
-        # Named for what it is. This value is the RFC 3161 §2.4.2
-        # message-imprint *binding* — "is this token about this data" — and
-        # not a verification of the TSA's signature, which AMA does not
-        # implement. Under the old name a caller reading `results["rfc3161"]`
-        # reasonably took it for third-party time attestation, and a token
-        # anybody could build offline satisfied it. Both halves are fixed: the
-        # name says what was checked, and `extract_tst_info` now refuses a
-        # SignedData that nothing signed.
-        #
-        # `rfc3161` is kept alongside it, with the same value, so existing
-        # callers do not start raising KeyError inside a verification routine —
-        # a loud failure here would be worse than a precisely documented one.
-        "rfc3161_binding": None,
-        "rfc3161": None,
-    }
+    # Named for what it is. This value is the RFC 3161 §2.4.2 message-imprint
+    # *binding* — "is this token about this data" — and not a verification of
+    # the TSA's signature, which AMA does not implement. Under the old name a
+    # caller reading the deprecated `results["rfc3161"]` reasonably took it as
+    # time attestation, and a token anybody could build offline satisfied it.
+    # Three halves of that are now fixed: the name says what was checked,
+    # `extract_tst_info` refuses a SignedData that nothing signed, and
+    # `_VerificationResults` makes the retained legacy key announce itself
+    # instead of handing back the same value under the misleading name.
+    results: _VerificationResults = _VerificationResults(
+        {
+            "content_hash": False,
+            "hmac": False,
+            "ed25519": False,
+            "dilithium": None,
+            "timestamp": False,
+            _RFC3161_BINDING_KEY: None,
+            _LEGACY_RFC3161_KEY: None,
+        }
+    )
 
     try:
         pkg_hash_ver = getattr(package, "hash_format_version", HASH_FORMAT_V1)
@@ -1129,8 +1276,11 @@ def verify_crypto_package(
         results["timestamp"] = _verify_timestamp_value(package.timestamp)
 
         binding = _verify_rfc3161_token(computed_hash, package.timestamp_token)
-        results["rfc3161_binding"] = binding
-        results["rfc3161"] = binding
+        results[_RFC3161_BINDING_KEY] = binding
+        # Written, not read: __setitem__ is not instrumented, so populating the
+        # retained alias here does not fire its own deprecation warning at the
+        # one call site that is entitled to use it.
+        results[_LEGACY_RFC3161_KEY] = binding
 
     except QuantumSignatureRequiredError:
         raise

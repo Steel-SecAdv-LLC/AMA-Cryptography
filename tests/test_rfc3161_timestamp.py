@@ -488,11 +488,25 @@ class TestModuleAttributes:
 
         expected = {
             "get_timestamp",
+            # The binding check under a name that matches it, plus the
+            # deprecated alias it replaces (INVARIANT-37).
+            "verify_timestamp_binding",
             "verify_timestamp",
+            # The same verdict as a record that names what was *not* checked.
+            "describe_token_verification",
+            "TokenVerification",
+            # The single source of truth for which checks AMA performs. The
+            # INVARIANT-37 gate, TokenVerification and the honesty tests all
+            # read this table rather than restating its facts.
+            "RFC3161_CAPABILITIES",
             "TimestampResult",
             "TimestampUnavailableError",
             "TimestampError",
             "RFC3161_AVAILABLE",
+            # Exported because the documented mock-mode example needs it:
+            # creating and honouring a mock token are both gated to a testing
+            # context, so a caller following the README must be able to open it.
+            "allow_mock_tsa",
             # The codec is now exported too: it was reachable only from the
             # deprecated legacy surface, which is how the module came to keep a
             # third-party client for a protocol it already implements.

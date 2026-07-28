@@ -156,7 +156,7 @@ See [Use Cases by Sector](#use-cases-by-sector-) for detailed scenarios.
 | Component | Purpose |
 |-----------|---------|
 | 5. HKDF-SHA3-256 | Key derivation ensuring cryptographic key independence |
-| 6. RFC 3161 Timestamping | Third-party temporal proof of existence (optional) |
+| 6. RFC 3161 Timestamping | Timestamp tokens, verified for §2.4.2 message-imprint binding only — not third-party attestation (optional) |
 
 Canonical encoding serves as the input normalization step, ensuring deterministic serialization before cryptographic operations.
 
@@ -387,7 +387,7 @@ NIST-standardized post-quantum algorithms:
 - **Transaction Throughput**: Sub-millisecond Ed25519 verification (~21k ops/sec via ctypes on canonical bench, 2026-04-25); ML-DSA-65 adds quantum resistance at higher latency (~336µs sign, ~132µs verify — Python API via ctypes, canonical bench host; see Performance Metrics section for methodology).
 - **Cross-Chain Bridges**: Hybrid signing (Ed25519 + ML-DSA-65) for backward compatibility and quantum resistance.
 - **NFT Provenance**: Quantum-resistant signatures designed for long-term validity.
-- **Timestamp Verification**: RFC 3161 trusted timestamping with quantum resistance.
+- **Timestamp Binding**: RFC 3161 tokens bound to content by the §2.4.2 message imprint. AMA does not verify the TSA's signature or certificate chain, so the token's issuer must be trusted through a separate control.
 
 </details>
 
@@ -778,25 +778,44 @@ python setup.py install
 ### External Dependencies
 
 **RFC 3161 Timestamps (Optional)**:
-RFC 3161 trusted timestamping supports three operating modes via the `tsa_mode` parameter:
+RFC 3161 timestamping supports three operating modes via the `tsa_mode` parameter:
 
 | Mode | Description | Network Required |
 |------|-------------|-----------------|
 | `"online"` | Contact a real TSA server (default) | Yes |
-| `"mock"` | Self-signed mock tokens for testing/offline use | No |
+| `"mock"` | HMAC-keyed mock tokens, honoured only inside a testing context | No |
 | `"disabled"` | Skip timestamping, return empty token | No |
 
-Online mode requires the `rfc3161ng` package (`pip install rfc3161ng`). If not installed, `TimestampUnavailableError` is raised.
+RFC 3161 is implemented in-tree on AMA's own DER codec and requires no third-party package. The `rfc3161ng` dependency was removed under INVARIANT-1; `RFC3161_AVAILABLE` is unconditionally `True`.
+
+> **What a verified token does and does not establish.** AMA verifies the RFC 3161 §2.4.2 *message-imprint binding* — that a token refers to this data — plus the `PKIStatusInfo` verdict and the TSA's nonce echo. It does **not** verify the TSA's CMS `SignerInfo` signature and does **not** validate the TSA certificate chain, so a token that binds your data is not evidence that a trusted authority issued it, and `TSTInfo.genTime` is unauthenticated. The binding check is meaningful only when the token's origin is established by a separate control. See [INVARIANT-37](INVARIANTS.md#invariant-37--a-verification-api-must-not-name-or-document-a-check-it-does-not-perform).
 
 ```python
-from ama_cryptography.rfc3161_timestamp import get_timestamp, verify_timestamp
+from ama_cryptography.rfc3161_timestamp import (
+    allow_mock_tsa,
+    describe_token_verification,
+    get_timestamp,
+    verify_timestamp_binding,
+)
 
-# Mock mode for testing (no network required)
-result = get_timestamp(b"document data", tsa_mode="mock")
-assert verify_timestamp(b"document data", result)
+# Mock mode for testing (no network required). Mock tokens carry their own
+# HMAC key, so both creating and honouring one is gated to a testing context.
+with allow_mock_tsa():
+    result = get_timestamp(b"document data", tsa_mode="mock")
+    assert verify_timestamp_binding(b"document data", result)
 
 # Disabled mode (skip timestamping)
 result = get_timestamp(b"document data", tsa_mode="disabled")
+```
+
+For a record of what a check did *not* establish — for an audit log or a
+compliance profile — use `describe_token_verification`, whose result cannot be
+collapsed into a single truthy value:
+
+```python
+record = describe_token_verification(b"document data", token)
+record.binding_verified          # True
+sorted(record.not_verified)      # ['gen_time', 'tsa_certificate_chain', 'tsa_signature']
 ```
 
 The online timestamp feature contacts external TSA (Time Stamping Authority) servers. Default: FreeTSA (https://freetsa.org/tsr). Commercial TSAs (DigiCert, GlobalSign) are recommended for production use.
@@ -1402,7 +1421,7 @@ AMA Cryptography integrates ethical principles directly into cryptographic opera
 |--------|-------|----------------|
 | **Omniscient** | Wisdom | Complete verification, multi-dimensional detection, data validation |
 | **Omnipotent** | Agency | Maximum strength, secure key generation, real-time protection |
-| **Omnidirectional** | Geography | Multi-layer defense, temporal integrity, attack surface coverage |
+| **Omnidirectional** | Geography | Multi-layer defense, temporal binding (not temporal integrity — RFC 3161 `genTime` is unauthenticated), attack surface coverage |
 | **Omnibenevolent** | Integrity | Ethical foundation, mathematical correctness, hybrid security |
 
 The ethical integration achieves:

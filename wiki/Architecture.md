@@ -122,7 +122,7 @@ flowchart BT
     L2["Layer 2: HMAC-SHA3-256 Authentication (RFC 2104)"]:::blue --> L3
     L3["Layer 3: Ed25519 Classical Signature (RFC 8032)"]:::black --> L4
     L4["Layer 4: ML-DSA-65 Quantum-Resistant Signature (FIPS 204)"]:::gold --> S2
-    S2["Supporting: RFC 3161 Trusted Timestamp (optional)"]:::blue
+    S2["Supporting: RFC 3161 binding, not attestation (optional)"]:::blue
 
     S1["Supporting: HKDF-SHA3-256 Key Derivation (RFC 5869)"]:::blue -.->|derives keys| L2
     S1 -.->|derives keys| L3
@@ -156,8 +156,8 @@ Lattice-based signature (≈3,309 bytes) resistant to all known quantum attacks.
 **HKDF-SHA3-256 Key Derivation:**
 Derives independent cryptographic keys from a single master secret, ensuring key independence across operations. A supporting primitive, not an independent defense layer.
 
-**RFC 3161 Trusted Timestamp:**
-Optional third-party timestamp providing temporal proof of existence at a specific time. Proves when a package was created, not who created it.
+**RFC 3161 Timestamp Binding (not attestation):**
+Optional RFC 3161 timestamp. AMA verifies the §2.4.2 message-imprint binding — that a token refers to this data — and does **not** verify the TSA's CMS `SignerInfo` signature or validate its certificate chain. It therefore proves neither *when* a package was created nor *who* created it: only that a given token and a given payload go together. `TSTInfo.genTime` is unauthenticated, and forging an acceptable token requires no key. Meaningful only when the token's origin is established by a separate control.
 
 ---
 
@@ -302,7 +302,7 @@ See [Key Management](Key-Management) for full details.
 | Confidentiality | AES-256-GCM, ChaCha20-Poly1305, Hybrid KEM |
 | Integrity | SHA3-256 + HMAC-SHA3-256 |
 | Authentication | Ed25519 + ML-DSA-65 |
-| Non-repudiation | RFC 3161 trusted timestamps |
+| Non-repudiation | Ed25519 + ML-DSA-65 signatures (RFC 3161 contributes none — no TSA signature is verified) |
 | Key Independence | HKDF domain-separated derivation |
 | Quantum Resistance | ML-DSA-65 (FIPS 204), ML-KEM-1024 (FIPS 203) |
 | Side-Channel | Constant-time comparisons, optional bitsliced AES |
@@ -325,7 +325,7 @@ See [Key Management](Key-Management) for full details.
 | RFC 8032 | Ed25519 | `ama_ed25519.c` |
 | RFC 8439 | ChaCha20-Poly1305 | `ama_chacha20poly1305.c` |
 | RFC 9106 | Argon2id | `ama_argon2.c` |
-| RFC 3161 | Trusted Timestamps | `rfc3161_timestamp.py` |
+| RFC 3161 | Timestamp wire format + §2.4.2 binding (partial: no SignerInfo/X.509 verification) | `rfc3161_timestamp.py` |
 
 ---
 

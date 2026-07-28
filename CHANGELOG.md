@@ -19,6 +19,121 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ## [Unreleased]
 
+### Fixed — the library documented a verification it does not perform (INVARIANT-37)
+
+AMA implements the RFC 3161 wire format and the §2.4.2 message-imprint binding.
+It verifies neither the TSA's CMS `SignerInfo` signature nor its certificate
+chain. **The repository asserted the opposite in more than fifty places.**
+
+This began as a review of one reviewer question — whether `verify_token_binding`
+should stay in `legacy_compat` — and the answer was that the function was fine
+and its surroundings were not.
+
+- **`ARCHITECTURE.md`** told readers step 6 of the verification flow was "Verify
+  TSA signature and time bounds". Neither happens.
+- **`THREAT_MODEL.md`** falsely recorded "RFC 3161 TSA with independent
+  verification" as **IMPLEMENTED**, citing `rfc3161_timestamp.py` as evidence.
+  That is the row an auditor reads to conclude T3.4 is closed.
+- **`AMA_CRYPTOGRAPHY_ETHICAL_PILLARS.md`** carried a "Mathematical Proof" for
+  Temporal Integrity whose security statement was **inverted**: "Requires TSA
+  private key compromise to forge". Forging a token AMA accepts requires no key,
+  no compromise and no privileged position — the adversary builds a CMS
+  `SignedData` offline over the target's own content with any `genTime` they
+  like. The same document multiplied a timestamp "detection dimension" into a
+  `P(detect) ≥ 0.999999999` bound; against an adaptive adversary that dimension's
+  detection rate is 0, so the figure was inflated by three orders of magnitude
+  and is now `≥ 0.999999` over the two dimensions that survive.
+- **`wiki/Security-Model.md`** scored AMA ✓ and OpenSSL ✗ on RFC 3161 — on the
+  single axis where `openssl ts -verify` does the work and AMA does not — listed
+  RFC 3161 as a mitigation against a full-MITM adversary (a MITM on the TSA path
+  substitutes a self-built token and the check still passes), and asked operators
+  to tick "RFC 3161 timestamp configured with a trusted TSA", which changes
+  nothing an attacker must defeat.
+- **`SECURITY.md`** listed RFC 3161 as an independent defence-in-depth layer and
+  made a trusted TSA a **REQUIRED** production control.
+- **`rfc3161_timestamp.py`'s own module docstring** opened with the retired,
+  never-true claim "Third-party attestation: Independent verification by TSA",
+  and wrongly claimed long-term validity
+  "via SPHINCS+", which no TSA uses and AMA would not check if one did.
+- **`README.md`'s documented mock-mode example was broken**, not merely
+  mis-worded: `get_timestamp(tsa_mode="mock")` opens `allow_mock_tsa()` as a
+  scoped context manager that exits before returning, so the following
+  `assert verify_timestamp(...)` evaluated `False`. Verified against `main`.
+- **`crypto_api.py`** still told operators to run `pip install rfc3161ng`, which is not
+  a dependency any more: INVARIANT-1 forbids that third-party implementation and
+  this release removed it —
+  and `verify_crypto_package` never verified the stored timestamp token while
+  saying it verifies "any optional add-ons".
+
+None of it was written dishonestly. It was written by people who knew what a
+timestamp is *for*, describing a feature named after the thing it does not do.
+Every false statement was "qualified" somewhere else in the repository, and none
+of the qualifications were where the reader's eye was.
+
+**API changes.** All backwards compatible.
+
+- `rfc3161_timestamp.verify_timestamp_binding()` is the new name for the check;
+  `verify_timestamp()` is a deprecated alias with identical behaviour and a
+  `DeprecationWarning`. `verify_token_binding()` deliberately still returns a
+  bare `bool`: every call site is `if verify...(...)`, and a dataclass is always
+  truthy, so widening the return type would have turned each of those into an
+  unconditional pass — an honesty fix that failed open.
+- `describe_token_verification()` returns a `TokenVerification` record for
+  callers who must *store* what was not checked. It raises `TypeError` on
+  `bool()`, so it cannot collapse into the truthy `if` just described.
+- `verify_crypto_package`'s results mapping now emits a `DeprecationWarning` when
+  the deprecated `results["rfc3161"]` key is read. The key and its value are
+  unchanged — renaming it to `rfc3161_binding` without an alias would raise
+  `KeyError` inside callers' verification code, and keeping it *silent* was the
+  other half of the original problem. It remains a `dict` subclass, so
+  `isinstance`, unpacking and JSON serialisation are unaffected.
+- `certificate_file` is gone from `verify_timestamp_binding`'s signature
+  entirely: an argument whose only behaviour is to raise does not belong in the
+  function people are meant to call. It is retained, still raising, on the
+  deprecated surfaces so old call sites fail loudly.
+
+**Enforcement — `RFC3161_CAPABILITIES` and INVARIANT-37.**
+
+The claims are not corrected by hand and left to drift. `RFC3161_CAPABILITIES`
+is a single declaration of which checks AMA performs, read by three independent
+consumers: `TokenVerification.not_verified` derives from it, so an audit record
+cannot claim more than the code does; `tools/check_verification_claim_honesty.py`
+reads it to decide which documentation claims are false; and
+`tests/test_rfc3161_api_honesty.py` drives the behaviour and asserts it matches.
+
+The gate is deliberately **not** a phrase denylist, which would freeze today's
+limitation into CI and begin rejecting claims once they became true. A claim is
+forbidden *because its capability is `False`*, so implementing CMS `SignerInfo`
+verification and flipping one table entry permits the corresponding
+documentation in the same commit, with no gate edit and no stale prohibition. A
+claim must also be negated **on the line that makes it** — a disclaimer three
+paragraphs away did not prevent a single one of the fifty.
+
+The gate found its own bug before it found anything else: the pattern for the
+phrase this entry will not repeat ended `(?:stamp|-stamp|stamping)?\b`, which
+cannot match its own plural — the group takes `stamp`, the `\b` demands a boundary before the
+`s`, and every backtrack fails identically. It missed the most common phrasing
+of the most common false claim in the tree and reported success. Its own negative
+controls caught that, and fixing it immediately surfaced two more live instances.
+
+- New: `tools/check_verification_claim_honesty.py`, run in `ci.yml`'s
+  `security-checks` job; `tests/test_verification_claim_honesty_gate.py` (46
+  tests, both directions including the near-misses that must not fire);
+  `tests/test_rfc3161_api_honesty.py` (18 tests). The load-bearing one builds a
+  token in-process with no key and no TSA, signature octets zeroed and `genTime`
+  at the epoch, and requires the binding check to accept it — the fact every
+  removed claim was denying — with a companion requiring the same check to still
+  reject a different payload.
+- `THREAT_MODEL.md` gains **T3.7** (forged or substituted token), rated MEDIUM
+  with High likelihood, because the live threat is strictly weaker than the TSA
+  compromise the register previously modelled. T3.4's mitigation status drops
+  from IMPLEMENTED to PARTIAL.
+- `ARCHITECTURE.md` gains **§ Scope: RFC 3161 attestation is not implemented**,
+  scoping what closing the gap requires — CMS `SignerInfo` processing including
+  the RFC 5652 §5.4 `signedAttrs` re-encoding, RFC 5280 §6 path validation with
+  EKU `id-kp-timeStamping`, a trust-anchor store defaulting to refusal, and
+  revocation or an explicit refusal to check it.
+
 ### Added — HSS/LMS signature verification (RFC 8554)
 
 - **`src/c/ama_lms.c`** implements the complete RFC 8554 registry — LM-OTS
@@ -4323,7 +4438,7 @@ After upgrading to v2.0:
 - Ed25519 digital signatures (RFC 8032)
 - CRYSTALS-Dilithium quantum-resistant signatures (NIST FIPS 204)
 - HKDF key derivation (RFC 5869, NIST SP 800-108)
-- RFC 3161 trusted timestamps
+- RFC 3161 timestamps — wire format and §2.4.2 message-imprint binding. (Erratum, 3.4.1: this entry read "trusted timestamps". AMA has never verified the TSA's signature or certificate chain, so the token is not attestation. Corrected in place rather than left standing, because a changelog is read as a record of what shipped. See INVARIANT-37.)
 
 ### Added
 - Apache License 2.0 with proper headers and NOTICE file

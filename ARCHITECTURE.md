@@ -135,7 +135,7 @@ AMA Cryptography is designed as a standalone cryptographic library. Any Python o
 | Hash-Based Signature | SLH-DSA-SHAKE-128s | NIST FIPS 205 | NIST L1 | **Full** (ama_slhdsa.c) |
 | Authenticated Encryption | AES-256-GCM | NIST SP 800-38D | 256-bit key, 128-bit security | **Full** (ama_aes_gcm.c) |
 | Key Derivation | HKDF-SHA3-256 | RFC 5869 | 256-bit derived keys | **Full** (ama_hkdf.c) |
-| Timestamping | RFC 3161 TSA | RFC 3161 | Third-party attestation | Python API only |
+| Timestamping | RFC 3161 TSA | RFC 3161 | §2.4.2 message-imprint binding only — not attestation ([INVARIANT-37](INVARIANTS.md#invariant-37--a-verification-api-must-not-claim-a-check-it-does-not-perform)) | Python API only |
 | Key Exchange | X25519 | RFC 7748 | 128-bit classical security | **Full** (ama_x25519.c) |
 | Alternative AEAD | ChaCha20-Poly1305 | RFC 8439 | 256-bit key, 128-bit security | **Full** (ama_chacha20poly1305.c) |
 | Password Hashing | Argon2id | RFC 9106 | Memory-hard KDF | **Full** (ama_argon2.c) |
@@ -182,7 +182,7 @@ Infrastructure:
 The system implements multiple independent security layers, applied sequentially. Core cryptographic operations (the defense layers an attacker must defeat) are distinguished from supporting infrastructure:
 
 ```
-  Supporting: RFC 3161 Trusted Timestamp (optional)
+  Supporting: RFC 3161 timestamp binding, not attestation (optional)
               |
     Layer 4: ML-DSA-65 Quantum-Resistant Signature
               |
@@ -213,7 +213,13 @@ The system implements multiple independent security layers, applied sequentially
 
 **HKDF-SHA3-256 Key Derivation**: Derives independent cryptographic keys from a single master secret, ensuring key independence across Layers 2-4. A supporting primitive, not an independent defense layer.
 
-**RFC 3161 Trusted Timestamp**: Optional third-party timestamp providing temporal proof of existence at a specific time. Proves when a package was created, not who created it.
+**RFC 3161 Timestamp Binding**: Optional. AMA implements the RFC 3161 wire format on its own DER codec and verifies the §2.4.2 *message-imprint binding* — that a token refers to this data — plus the `PKIStatusInfo` verdict and the TSA's nonce echo.
+
+It does **not** verify the TSA's CMS `SignerInfo` signature and does **not** validate the TSA certificate chain; neither is implemented anywhere in AMA. A token that binds your data is therefore not evidence that a trusted authority issued it — anyone who can hand you a token can construct one over your data bearing any `genTime` they choose, with no key and no privileged position — and `TSTInfo.genTime` is unauthenticated. This layer proves neither *when* a package was created nor *who* created it; it establishes only that a given token and a given payload go together.
+
+The binding check is sound, and is the right check, when trust in the token's **origin** is established by a separate control: a token received over an authenticated channel, or one re-checked after being validated out of band. It establishes nothing on its own.
+
+The authoritative machine-readable statement of this boundary is `ama_cryptography.rfc3161_timestamp.RFC3161_CAPABILITIES`; it is enforced against this and every other document by [INVARIANT-37](INVARIANTS.md#invariant-37--a-verification-api-must-not-claim-a-check-it-does-not-perform). See [Scope: RFC 3161 attestation](#scope-rfc-3161-attestation-is-not-implemented) for what closing the gap would require.
 
 ### Key Sizes and Parameters
 
@@ -254,7 +260,7 @@ The system defines 4 ethical pillars, each governing a triad of three sub-proper
 
 **Pillar 3: Omnidirectional — Triad of Geography (Defense-in-Depth)**
 - Multi-layer defense: Security presence across all cryptographic layers
-- Temporal integrity: Trusted timestamping via RFC 3161
+- Temporal binding: RFC 3161 tokens bound to content by the §2.4.2 message imprint (not temporal *integrity* — `genTime` is unauthenticated; see INVARIANT-37)
 - Attack surface coverage: Classical, quantum, concatenation, forgery defense
 
 **Pillar 4: Omnibenevolent — Triad of Integrity (Ethical Constraints)**
@@ -497,9 +503,12 @@ Security: IND-CCA2 secure if either component KEM remains unbroken. Uses native 
    - Extract public key from package
    - Verify signature over content_hash
    
-6. Timestamp Verification (if present)
+6. Timestamp Binding Check (if present)
    - Parse RFC 3161 timestamp token
-   - Verify TSA signature and time bounds
+   - Recompute the message imprint and compare in constant time (§2.4.2)
+   - The TSA signature and certificate chain are NOT verified, and genTime
+     is NOT evaluated: a passing check means the token refers to this data,
+     not that a trusted authority issued it (INVARIANT-37)
    
 7. Result Aggregation
    - Return verification status for each layer
@@ -586,7 +595,7 @@ The architecture supports optional HSM integration for master secret storage:
 
 **Out-of-Scope Threats**:
 - Physical access to execution environment
-- Compromise of trusted timestamp authorities
+- TSA compromise is not the relevant timestamp threat here: AMA verifies no TSA signature, so a forged token needs no compromise at all (THREAT_MODEL.md T3.7)
 - Denial of service attacks
 - Social engineering attacks
 - Implementation bugs in underlying cryptographic libraries
@@ -597,7 +606,7 @@ The architecture supports optional HSM integration for master secret storage:
 |----------|-----------|-----------------|
 | Integrity | SHA3-256 + HMAC | 128-bit |
 | Authenticity | Ed25519 + ML-DSA-65 | 128-bit classical, 192-bit quantum |
-| Non-repudiation | Digital signatures + RFC 3161 | Cryptographic proof |
+| Non-repudiation | Digital signatures (Ed25519 + ML-DSA-65) | Cryptographic proof. RFC 3161 contributes **nothing** here: no TSA signature is verified, so a token is not attributable to any authority ([INVARIANT-37](INVARIANTS.md#invariant-37--a-verification-api-must-not-claim-a-check-it-does-not-perform)) |
 | Forward secrecy | Key rotation | Configurable interval |
 | Ethical binding | HKDF context integration | Cryptographic binding |
 | Agent-instance containment | Agent-instance binding (INVARIANT-30) | Operator-authorized; fail-closed, constant-time |
@@ -645,9 +654,27 @@ the `AMA_USE_NATIVE_PQC=OFF` build.
 
 **Security Bound:** Overall security is bounded by the weakest cryptographic layer, not the sum of all layers. The system provides approximately 128-bit classical security (from Ed25519/HMAC) and approximately 192-bit quantum security (from ML-DSA-65/Dilithium) when all layers are enforced.
 
-**Defense-in-Depth Benefit:** While security is bounded by the weakest layer, the defense-in-depth architecture ensures that even if one layer is compromised (e.g., a future break in Ed25519), other layers continue to provide protection. Package authenticity is protected by four independent cryptographic operations — content hashing, keyed authentication, classical signature, and quantum-resistant signature — supported by independent key derivation and optional third-party timestamping.
+**Defense-in-Depth Benefit:** While security is bounded by the weakest layer, the defense-in-depth architecture ensures that even if one layer is compromised (e.g., a future break in Ed25519), other layers continue to provide protection. Package authenticity is protected by four independent cryptographic operations — content hashing, keyed authentication, classical signature, and quantum-resistant signature — supported by independent key derivation. The optional RFC 3161 timestamp is **not** a fifth independent operation: it is a binding check an adversary satisfies unaided (see below), so it must not be counted toward this bound.
 
 See [SECURITY.md](SECURITY.md) for detailed security proofs and the formal security bound statement.
+
+### Scope: RFC 3161 attestation is not implemented
+
+This is recorded as a scoped gap rather than described as a delivered property, because the difference is the whole of the layer's value.
+
+**What is missing.** A timestamp exists to let a third party attest that data existed at a time. That attestation is carried entirely by the TSA's CMS `SignerInfo` signature over the `TSTInfo`, and by the validation of the certificate that signed it. AMA implements neither, so it implements the RFC 3161 *format* and the *binding*, and none of the *attestation*.
+
+**What that costs, precisely.** Forging a token AMA accepts requires no key, no compromise and no privileged network position — only the ability to hand the verifier a token. An adversary builds a CMS `SignedData` offline whose `messageImprint` is the digest of your content and whose `genTime` is whatever they choose. `extract_tst_info` requires the structure to carry a signer, so the forgery must be well-formed; nothing checks that the signer is real. This is strictly weaker than the "TSA compromise" threat the threat model used to be written around, and it is why [THREAT_MODEL.md](THREAT_MODEL.md) now carries a separate row for it.
+
+**Why it is not closed in this change.** It needs three things AMA does not have, and each is a component rather than a function: CMS `SignerInfo` processing (RFC 5652 §5.3, including the `signedAttrs` `messageDigest` and `contentType` binding, without which a signature over the wrong bytes verifies); X.509 path validation (RFC 5280 §6, the full algorithm — name chaining, validity windows, basic constraints, key usage, EKU `id-kp-timeStamping`, and revocation), which is a documented exclusion for this release; and a trust store with a policy for what anchors a deployment accepts. Shipping a partial version of any of them would produce something that passes a happy-path test and reports success against a certificate it never really validated — the same failure mode this section exists to retire.
+
+**What closing it requires,** so it can be scheduled rather than guessed at:
+
+- CMS `SignerInfo` verification: `signedAttrs` canonical re-encoding (RFC 5652 §5.4 — the SET OF must be re-encoded with its implicit tag replaced, a detail that silently invalidates otherwise-correct implementations), the `messageDigest` and `contentType` attribute bindings, and signature verification under the algorithms real TSAs use (RSASSA-PKCS1-v1_5, RSASSA-PSS and ECDSA over the NIST curves — the last of which this PR now provides).
+- X.509 certificate parsing and RFC 5280 §6 path validation, including EKU `id-kp-timeStamping` (RFC 3161 §2.3 requires it, and a TSA certificate accepted without it is a general-purpose certificate being trusted for time).
+- A trust-anchor store and an explicit policy surface, defaulting to refusal rather than to a bundled anchor set.
+- Revocation (CRL or OCSP), or an explicit, documented refusal to check it — a timestamp verified against a revoked TSA certificate is the case the whole control exists for.
+- Only then: `RFC3161_CAPABILITIES["tsa_signature"]` and `["tsa_certificate_chain"]` flip to `True`, which is the single edit that permits every claim this document currently withholds. [INVARIANT-37](INVARIANTS.md#invariant-37--a-verification-api-must-not-claim-a-check-it-does-not-perform)'s gate reads that table, so the documentation and the code cannot be updated out of step in either direction.
 
 ### Security Assumptions
 
@@ -886,7 +913,7 @@ Cryptographic implementations are validated against:
 | RFC 7748 | X25519 Key Exchange | Algorithm implemented | — |
 | RFC 8439 | ChaCha20-Poly1305 AEAD | Algorithm implemented | — |
 | RFC 9106 | Argon2 Password Hashing | Algorithm implemented | — |
-| RFC 3161 | Time-Stamp Protocol | Optional, implemented when enabled | — |
+| RFC 3161 | Time-Stamp Protocol | **Partial** — §2.4.1/§2.4.2 wire format and message-imprint binding implemented; CMS `SignerInfo` signature verification and X.509 path validation **not** implemented | RFC 3161 §2.4.1/§2.4.2 wire-format tests |
 
 > **Note:** "Algorithm implemented" means the library implements the algorithms as specified in the referenced standards and passes Known Answer Tests (KATs) against official NIST test vectors. This is NOT a CAVP/CMVP validation claim. This implementation has not been submitted for CMVP validation and is not FIPS 140-3 certified.
 

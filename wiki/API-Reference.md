@@ -14,7 +14,7 @@ Complete Python API reference for `ama_cryptography`. All modules, classes, func
 | [`secure_memory`](#secure_memory) | Secure memory operations |
 | [`hybrid_combiner`](#hybrid_combiner) | Hybrid classical + PQC KEM |
 | [`adaptive_posture`](#adaptive_posture) | Runtime threat response |
-| [`rfc3161_timestamp`](#rfc3161_timestamp) | RFC 3161 trusted timestamps |
+| [`rfc3161_timestamp`](#rfc3161_timestamp) | RFC 3161 timestamps — wire format + §2.4.2 message-imprint binding (not TSA attestation) |
 | [`agent_binding`](#agent_binding) | Agent-instance key/signature binding (INVARIANT-30) |
 | [`monitoring`](#monitoring) | 3R runtime monitoring + agentic-abuse detectors |
 | [`exceptions`](#exceptions) | Exception hierarchy |
@@ -629,32 +629,58 @@ if evaluation.action != PostureAction.NONE:
 
 ## `rfc3161_timestamp`
 
+> **What a passing check establishes.** AMA verifies the RFC 3161 §2.4.2
+> *message-imprint binding* — that a token refers to this data — plus the
+> `PKIStatusInfo` verdict and the TSA's nonce echo. It verifies **no** TSA
+> signature and **no** certificate chain, so a token that binds your data is
+> not evidence that a trusted authority issued it, and `TSTInfo.genTime` is
+> unauthenticated. `RFC3161_CAPABILITIES` is the machine-readable statement of
+> this boundary; [INVARIANT-37](https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/INVARIANTS.md)
+> enforces it against every document in the repository.
+
 ```python
 from ama_cryptography.rfc3161_timestamp import (
+    allow_mock_tsa,
+    describe_token_verification,
     get_timestamp,
-    verify_timestamp,
+    verify_timestamp_binding,
+    RFC3161_CAPABILITIES,
+    TokenVerification,
     TimestampResult,
     TimestampError,
     TimestampUnavailableError,
     RFC3161_AVAILABLE,
 )
 
-# Request a trusted timestamp.
+# Request a timestamp token.
 # tsa_mode ∈ {"online", "mock", "disabled"}.
 result: TimestampResult = get_timestamp(
     data: bytes,
     tsa_url: str | None = None,                 # defaults to FreeTSA in "online"
     hash_algorithm: str = "sha3-256",
-    certificate_file: str | None = None,
+    certificate_file: str | None = None,        # REFUSED — raises TimestampError
     tsa_mode: str = "online",
 )
 
-# Verify a previously obtained timestamp token against the original data.
-valid: bool = verify_timestamp(
+# Check that a previously obtained token binds the original data.
+binds: bool = verify_timestamp_binding(
     data: bytes,
     timestamp_result: TimestampResult,
-    certificate_file: str | None = None,
 )
+
+# The same verdict as a record, for an audit trail or compliance profile.
+# TokenVerification raises TypeError on bool(), so it cannot collapse into
+# an "if" that silently reports an unverified token as verified.
+record: TokenVerification = describe_token_verification(data: bytes, token: bytes)
+record.binding_verified      # bool
+record.signature_verified    # always False — not implemented
+record.chain_verified        # always False — not implemented
+record.not_verified          # frozenset: {"tsa_signature",
+                             #             "tsa_certificate_chain", "gen_time"}
+
+# Deprecated: same check, but the name claims attestation AMA does not perform.
+# Emits DeprecationWarning; certificate_file raises.
+valid: bool = verify_timestamp(data, timestamp_result, certificate_file=None)
 
 # TimestampResult fields (frozen dataclass):
 #   token:          bytes   — DER-encoded RFC 3161 token
@@ -663,9 +689,18 @@ valid: bool = verify_timestamp(
 #   data_hash:      bytes   — imprint actually sent to the TSA
 ```
 
-Online mode requires the optional `rfc3161ng` package; mock and disabled
-modes are always available for testing. `TimestampUnavailableError` is
-raised if online mode is requested without the dependency.
+RFC 3161 is implemented in-tree on AMA's own DER codec and requires no
+third-party package: the `rfc3161ng` dependency was removed under INVARIANT-1
+and `RFC3161_AVAILABLE` is unconditionally `True`. Mock tokens carry their own
+HMAC key, so both creating and honouring one is gated to a testing context —
+open it with `allow_mock_tsa()`.
+
+`certificate_file` (here and on `verify_timestamp`) and
+`legacy_compat.verify_rfc3161_timestamp`'s `tsa_cert_path` all **raise**. They
+request X.509 chain validation of the TSA's signing certificate, which AMA does
+not implement; refusing is the only honest answer, and returning the binding
+check's verdict instead would answer a weaker question while appearing to
+answer that one.
 
 ---
 

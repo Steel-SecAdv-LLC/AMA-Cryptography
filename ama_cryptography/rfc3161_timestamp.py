@@ -11,19 +11,46 @@ from RFC 3161 compliant Time-Stamp Authorities (TSAs).
 Standard: RFC 3161 - Internet X.509 Public Key Infrastructure Time-Stamp Protocol (TSP)
 Reference: https://www.rfc-editor.org/rfc/rfc3161
 
-Security Properties:
---------------------
-1. Non-repudiation: Proves data existed at a specific time
-2. Third-party attestation: Independent verification by TSA
-3. Cryptographic binding: Timestamp is cryptographically bound to data hash
-4. Long-term validity: Uses long-term signature algorithms (e.g., SPHINCS+)
+What this module establishes, and what it does not (INVARIANT-37):
+------------------------------------------------------------------
+**Established.** AMA encodes and decodes the RFC 3161 wire format on its own
+DER codec, and verifies the *message-imprint binding* of §2.4.2: that a
+token's ``TSTInfo.messageImprint`` is the digest of the data in hand, under
+the digest algorithm the token itself names. The online client additionally
+checks the §2.4.2 ``PKIStatusInfo`` verdict and requires the TSA to echo a
+fresh 64-bit nonce, so a replayed response for the same imprint is
+distinguishable from a fresh one.
+
+**Not established.** AMA does **not** verify the TSA's CMS ``SignerInfo``
+signature over the ``TSTInfo``, and does **not** perform X.509 path validation
+of the TSA's signing certificate. Neither is implemented anywhere in this
+library.
+
+The consequence is worth one blunt sentence, because every API here is shaped
+around it: *a token that binds your data is not evidence that a trusted
+authority issued it.* Anyone who can hand you a token can construct one over
+your data bearing any ``genTime`` they choose; ``extract_tst_info`` refuses a
+``SignedData`` that nothing signed, which raises the cost of that forgery but
+does not close it, because no signature is checked. ``TSTInfo.genTime`` is
+therefore unauthenticated data and is not exposed as a trusted time.
+
+The binding check is sound, and it is the right check, when trust in the
+token's *origin* is established elsewhere — a token received over an
+authenticated channel, or one re-checked after being validated out of band.
+It establishes nothing on its own.
+
+Every name in this module is chosen against that boundary, and arguments that
+ask for the checks AMA does not implement (``certificate_file``) raise rather
+than resolving to the weaker one. :func:`describe_token_verification` returns
+that boundary as data, for callers that must record what was and was not
+checked.
 
 Use Cases:
 ----------
-- Legal documents requiring proof of existence
-- Code signing with verifiable creation time
-- Audit logs with tamper-evident timestamps
-- Long-term archival with time attestation
+- Re-checking a stored token whose issuer was validated out of band
+- Binding an archived artefact to a token received over an authenticated channel
+- Audit logs where the token's provenance is carried by a separate control
+  (the ``hmac`` layer of a crypto package, a signed transport, a trusted store)
 """
 
 import hashlib
@@ -37,7 +64,8 @@ import time
 import warnings
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Callable, Dict, Generator, Optional
+from types import MappingProxyType
+from typing import Callable, Dict, Generator, Literal, Mapping, NoReturn, Optional
 from urllib.parse import urlparse
 
 _logger = logging.getLogger(__name__)
@@ -593,6 +621,16 @@ def verify_token_binding(data: bytes, token: bytes) -> bool:
     token that is well-formed but describes different data is a verification
     failure, not an error. Anything that stops the check from running raises,
     so "verification failed" is never confused with "verification never ran".
+
+    Returning a bare ``bool`` rather than a result object is also deliberate,
+    and was reconsidered under INVARIANT-37. The name already carries the
+    scope — this is ``verify_token_binding``, not ``verify_token`` — and every
+    call site in and outside this repository is ``if verify_token_binding(...)``.
+    A dataclass is always truthy, so widening the return type here would turn
+    each of those checks into an unconditional pass: an honesty change that
+    failed open. Callers who need the negative space as data have
+    :func:`describe_token_verification`, whose result deliberately cannot be
+    used in a boolean context at all.
     """
     tst_info = extract_tst_info(token)
     try:
@@ -621,6 +659,133 @@ def verify_token_binding(data: bytes, token: bytes) -> bool:
     for a, b in zip(computed, hashed):
         diff |= a ^ b
     return diff == 0
+
+
+#: What RFC 3161 verification this library performs — the single source of
+#: truth, and the only place the answer is written down.
+#:
+#: Three independent consumers read this table, which is the point of it
+#: existing rather than the facts being restated in each:
+#:
+#: * :func:`describe_token_verification` builds its record from it, so a
+#:   caller's audit trail cannot disagree with the implementation.
+#: * ``tools/check_verification_claim_honesty.py`` (INVARIANT-37) reads it to
+#:   decide which documentation claims are false. A claim is forbidden
+#:   *because* its capability is ``False`` here — not because a reviewer once
+#:   added its wording to a denylist. Implementing a check and flipping its
+#:   entry to ``True`` therefore permits the corresponding claims in the same
+#:   commit, with no gate edit and no stale prohibition left behind.
+#: * ``tests/test_rfc3161_api_honesty.py`` drives the behaviour and asserts it
+#:   matches, so the table cannot become aspirational.
+#:
+#: Adding a key here without teaching the gate what claims it governs is a
+#: test failure, so the table cannot silently outgrow its enforcement either.
+RFC3161_CAPABILITIES: Mapping[str, bool] = MappingProxyType(
+    {
+        # --- performed ---
+        #: §2.4.2 messageImprint == H(data), constant time, under the digest
+        #: algorithm the token itself names.
+        "message_imprint_binding": True,
+        #: §2.4.2 PKIStatusInfo — a non-granted status, or a granted one
+        #: carrying no token, is refused rather than stored as a timestamp.
+        "pki_status": True,
+        #: The TSA must echo the client's fresh 64-bit nonce, so a replayed
+        #: response for the same imprint is distinguishable from a fresh one.
+        "nonce_echo": True,
+        #: The token must be a CMS SignedData with non-empty digestAlgorithms
+        #: and signerInfos sets — i.e. *something* signed it. This raises the
+        #: cost of an offline forgery; it does not check the signature.
+        "signer_present": True,
+        # --- NOT performed; nothing in AMA implements any of these ---
+        #: CMS SignerInfo signature over the TSTInfo (RFC 5652 §5.3).
+        "tsa_signature": False,
+        #: X.509 path validation of the TSA's signing certificate (RFC 5280).
+        "tsa_certificate_chain": False,
+        #: A trustworthy time. TSTInfo.genTime is authenticated exactly to the
+        #: extent the signature over the TSTInfo has been checked, and it has
+        #: not been, so genTime is attacker-chosen data.
+        "gen_time": False,
+    }
+)
+
+
+@dataclass(frozen=True)
+class TokenVerification:
+    """What was, and was not, checked about an RFC 3161 token.
+
+    :func:`verify_token_binding` answers one boolean question and is named for
+    it. This type exists for the caller who has to *record* the answer — a
+    compliance profile, an audit log, a policy engine — where "binding held"
+    and "the TSA was verified" must not be able to collapse into one field.
+
+    ``signature_verified`` and ``chain_verified`` are typed ``Literal[False]``
+    rather than ``bool`` deliberately. AMA implements neither check, so today
+    no value other than ``False`` is constructible, and the type is the
+    tripwire: implementing CMS ``SignerInfo`` verification later cannot ship
+    without widening this annotation, which is a diff a reviewer sees.
+
+    The instance is **not usable in a boolean context** — ``__bool__`` raises.
+    A frozen dataclass is always truthy, so ``if describe_token_verification(
+    ...):`` would be an unconditional pass; that is precisely the fail-open
+    misread this type exists to prevent, and it is refused rather than
+    documented.
+    """
+
+    binding_verified: bool
+    signature_verified: Literal[False] = False
+    chain_verified: Literal[False] = False
+
+    @property
+    def not_verified(self) -> frozenset[str]:
+        """The named properties this result does **not** establish.
+
+        Derived from the fields rather than stored alongside them, so the list
+        cannot drift out of agreement with the booleans it describes.
+
+        Read from :data:`RFC3161_CAPABILITIES` rather than restated here, so
+        an audit record produced by this type cannot claim more than the
+        library implements. ``gen_time`` appears in it because
+        ``TSTInfo.genTime`` carries no integrity of its own: it is trustworthy
+        exactly to the extent that the signature over the ``TSTInfo`` has been
+        checked, and it has not been.
+        """
+        return frozenset(name for name, performed in RFC3161_CAPABILITIES.items() if not performed)
+
+    def __bool__(self) -> NoReturn:
+        raise TypeError(
+            "TokenVerification has no truth value, by design. `if result:` on a "
+            "dataclass is always True, which would report an unverified token as "
+            "verified — the exact fail-open misread this type exists to prevent. "
+            "Test the property you mean: result.binding_verified. Note that "
+            "binding_verified is not TSA attestation; see result.not_verified."
+        )
+
+
+def describe_token_verification(data: bytes, token: bytes) -> TokenVerification:
+    """The RFC 3161 binding verdict for *token* over *data*, as a record.
+
+    Same check as :func:`verify_token_binding`, same failure semantics — a
+    well-formed token describing different data yields
+    ``binding_verified=False``; anything that stops the check from running
+    raises :class:`TimestampError`, so "verification failed" is never confused
+    with "verification never ran".
+
+    The difference is what comes back. :func:`verify_token_binding` returns the
+    answer to one question; this returns the answer *together with the
+    questions that were not asked*, so a caller storing a verification record
+    cannot write down "verified" without also writing down what that excludes::
+
+        >>> record = describe_token_verification(payload, token)
+        >>> record.binding_verified
+        True
+        >>> sorted(record.not_verified)
+        ['gen_time', 'tsa_certificate_chain', 'tsa_signature']
+
+    Raises:
+        TimestampError: The token is malformed, carries no signer, or names a
+            digest algorithm AMA does not implement.
+    """
+    return TokenVerification(binding_verified=verify_token_binding(data, token))
 
 
 class TimestampUnavailableError(AmaCryptographyError):
@@ -868,7 +1033,15 @@ def get_timestamp(
         hash_algorithm: Hash algorithm to use (``'sha256'``, ``'sha3-256'``,
             ``'sha512'``). Default: ``'sha3-256'`` (consistent with AMA
             Cryptography).
-        certificate_file: Optional path to TSA certificate for verification.
+        certificate_file: **Refused, not honoured.** Passing anything other
+            than ``None`` raises :class:`TimestampError`. The argument asked
+            for the TSA's signing certificate to be pinned and its signature
+            verified; AMA implements neither CMS ``SignerInfo`` verification
+            nor X.509 path validation, and will not accept an argument whose
+            only possible effect would be to make a caller believe it got a
+            check that never ran (INVARIANT-37). It is kept in the signature
+            solely so that call sites written against the old contract fail
+            loudly instead of silently losing the request.
         tsa_mode: Operating mode for timestamping. One of:
 
             - ``"online"`` (default): contact a real TSA server.
@@ -882,9 +1055,16 @@ def get_timestamp(
         and ``token=b""``.  Never returns ``None``.
 
     Raises:
-        TimestampUnavailableError: If rfc3161ng library not installed (online mode).
-        TimestampError: If timestamp request fails.
+        TimestampError: If the timestamp request fails, or if
+            ``certificate_file`` is supplied (see above).
         ValueError: If ``hash_algorithm`` or ``tsa_mode`` is not supported.
+
+    Note:
+        This function does not raise :class:`TimestampUnavailableError` any
+        more and no longer depends on anything being installed. RFC 3161 is
+        implemented in this module on AMA's own DER codec; the third-party
+        ``rfc3161ng`` client it used to require was removed under INVARIANT-1,
+        and ``RFC3161_AVAILABLE`` is unconditionally ``True``.
 
     Example:
         >>> result = get_timestamp(b"Important document")
@@ -1000,29 +1180,46 @@ def _compute_data_hash(data: bytes, algorithm: str) -> Optional[bytes]:
     return func(data).digest()
 
 
-def verify_timestamp(
+def verify_timestamp_binding(
     data: bytes,
     timestamp_result: TimestampResult,
-    certificate_file: Optional[str] = None,
 ) -> bool:
-    """
-    Verify RFC 3161 timestamp token against data.
+    """Whether *timestamp_result* binds *data* — and nothing beyond that.
 
-    Verification Process:
-    ---------------------
-    1. Recompute hash of data using specified algorithm
-    2. Parse timestamp token (ASN.1 DER) -- or verify mock / disabled token
-    3. Verify timestamp signature
-    4. Check hash in token matches computed hash
-    5. Validate TSA certificate chain (if certificate_file provided)
+    .. warning::
+        **This is the binding half of RFC 3161 verification, not the whole of
+        it.** A ``True`` says the token's ``messageImprint`` is the digest of
+        ``data``. It does *not* say a trustworthy authority issued the token,
+        because AMA verifies neither the TSA's CMS ``SignerInfo`` signature nor
+        its certificate chain. Do not read this result as third-party time
+        attestation; ``TSTInfo.genTime`` is unauthenticated. See the module
+        docstring, and :func:`describe_token_verification` if you need that
+        boundary as data rather than as prose.
+
+    What is actually checked, in order:
+
+    1. The stored ``data_hash`` is recomputed from ``data`` under
+       ``timestamp_result.hash_algorithm`` and must match — so a
+       ``TimestampResult`` captured for one payload cannot validate another.
+    2. A ``"disabled"`` result (empty token) stops there: there is no token to
+       bind, and step 1 is the whole of what such a result can assert.
+    3. A MockTSA-format token is honoured only inside a testing context and
+       refused everywhere else — its HMAC key ships inside the token, so
+       outside a test it is a forgery primitive, not a verification path.
+    4. A real token goes to :func:`verify_token_binding` for the RFC 3161
+       §2.4.2 message-imprint check.
 
     Args:
-        data: Original data that was timestamped
-        timestamp_result: TimestampResult from get_timestamp()
-        certificate_file: Optional path to TSA certificate for chain validation
+        data: Original data that was timestamped.
+        timestamp_result: TimestampResult from :func:`get_timestamp`.
 
     Returns:
-        True if timestamp is valid, False otherwise
+        ``True`` if the message-imprint binding holds, ``False`` otherwise.
+        A ``bool`` is deliberately kept rather than a richer object: every
+        existing call site is ``if verify_timestamp(...)``, and any always-
+        truthy return value would silently turn those checks into
+        unconditional passes — an honesty change that failed open would be
+        worse than the wording it replaced.
 
     Example:
         >>> # Load timestamp from file
@@ -1034,8 +1231,8 @@ def verify_timestamp(
         ...     hash_algorithm='sha3-256',
         ...     data_hash=b'...'
         ... )
-        >>> is_valid = verify_timestamp(b"Important document", result)
-        >>> print(f"Timestamp valid: {is_valid}")
+        >>> binds = verify_timestamp_binding(b"Important document", result)
+        >>> print(f"Token binds this data: {binds}")
     """
     # ---- Disabled tokens: still verify data integrity (S2 fix) ----
     # Even when timestamping is disabled, the data_hash stored in the
@@ -1077,18 +1274,14 @@ def verify_timestamp(
     # ---- Online (real RFC 3161) verification ----
     #
     # This performs the RFC 3161 §2.4.2 *message-imprint binding* check, and
-    # says so. It does not verify the TSA's signature over the TSTInfo and does
-    # not validate a certificate chain; `verify_token_binding`'s docstring
-    # states precisely what that does and does not establish, and
-    # `certificate_file` is refused rather than silently ignored so a caller
-    # who asked for the stronger check is not told they got it.
-    if certificate_file is not None:
-        raise TimestampError(
-            "certificate_file requests verification of the TSA's signing certificate. "
-            "AMA implements neither CMS SignerInfo verification nor X.509 path "
-            "validation and will not report a weaker check as though it were this one."
-        )
-
+    # the function's name says so. It does not verify the TSA's signature over
+    # the TSTInfo and does not validate a certificate chain;
+    # `verify_token_binding`'s docstring states precisely what that does and
+    # does not establish. There is no `certificate_file` parameter here at all:
+    # an argument whose only possible behaviour is to raise does not belong in
+    # the signature of the function people are meant to call (INVARIANT-37).
+    # The deprecated `verify_timestamp` below keeps it, solely so call sites
+    # written against the old contract fail loudly.
     try:
         computed_hash = _compute_data_hash(data, timestamp_result.hash_algorithm)
         if computed_hash is None or computed_hash != timestamp_result.data_hash:
@@ -1099,14 +1292,81 @@ def verify_timestamp(
         return False
 
 
+def verify_timestamp(
+    data: bytes,
+    timestamp_result: TimestampResult,
+    certificate_file: Optional[str] = None,
+) -> bool:
+    """Deprecated alias for :func:`verify_timestamp_binding`.
+
+    .. deprecated::
+        Use :func:`verify_timestamp_binding`. The old name claimed more than
+        the function does: "verify timestamp" reads as third-party time
+        attestation, and this has only ever checked the RFC 3161 §2.4.2
+        message-imprint binding. Its docstring made that worse by listing two
+        steps AMA has never implemented: signature verification of the token
+        was step 3, and chain validation of the TSA certificate was step 5.
+        Neither ran; both read as promises.
+
+    The return value is unchanged and the checks are unchanged — this is a
+    rename, not a behaviour change, so an existing ``if verify_timestamp(...)``
+    keeps meaning exactly what it meant.
+
+    Args:
+        data: Original data that was timestamped.
+        timestamp_result: TimestampResult from :func:`get_timestamp`.
+        certificate_file: **Refused, not honoured.** Anything other than
+            ``None`` raises :class:`TimestampError`. Retained only on this
+            deprecated surface so a call site written against the old contract
+            fails loudly rather than losing the request;
+            :func:`verify_timestamp_binding` does not accept it at all.
+
+    Returns:
+        ``True`` if the message-imprint binding holds, ``False`` otherwise.
+
+    Raises:
+        TimestampError: If ``certificate_file`` is supplied.
+    """
+    warnings.warn(
+        "rfc3161_timestamp.verify_timestamp is deprecated: the name claims TSA "
+        "attestation that AMA does not perform. Use verify_timestamp_binding, "
+        "which is the same check under a name that matches it, or "
+        "describe_token_verification for a record of what was and was not "
+        "checked.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    if certificate_file is not None:
+        raise TimestampError(
+            "certificate_file requests verification of the TSA's signing certificate. "
+            "AMA implements neither CMS SignerInfo verification nor X.509 path "
+            "validation and will not report a weaker check as though it were this one."
+        )
+    return verify_timestamp_binding(data, timestamp_result)
+
+
 # Public API
 __all__ = [
     "get_timestamp",
+    # The binding check under a name that matches it. `verify_timestamp` is the
+    # deprecated alias and stays exported so existing imports keep resolving.
+    "verify_timestamp_binding",
     "verify_timestamp",
+    # The same verdict as a record, for callers that must store what was *not*
+    # checked alongside what was.
+    "describe_token_verification",
+    "TokenVerification",
+    # The capability table INVARIANT-37's gate, the record type and the tests
+    # all read. Exported so downstream policy code can assert against it too.
+    "RFC3161_CAPABILITIES",
     "TimestampResult",
     "TimestampUnavailableError",
     "TimestampError",
     "RFC3161_AVAILABLE",
+    # Exported because the documented mock-mode example needs it: creating a
+    # mock token and honouring one are both gated to a testing context, so a
+    # caller following the README has to be able to open that context.
+    "allow_mock_tsa",
     # The RFC 3161 codec itself. It was reachable only from the deprecated
     # `legacy_compat` surface and exported from nowhere, which is how the
     # module came to keep a third-party client for the protocol it already

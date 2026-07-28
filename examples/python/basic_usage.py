@@ -184,7 +184,9 @@ def example_3_data_protection():
         helix_params=data_params,
         kms=kms,
         author="Data Owner",
-        use_rfc3161=False,  # Set True for trusted timestamp
+        use_rfc3161=False,  # True requests an RFC 3161 token. AMA verifies the
+        # §2.4.2 message-imprint binding only — not the TSA's signature or
+        # certificate chain — so it is not third-party attestation.
     )
 
     print("\nPackage created:")

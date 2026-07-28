@@ -5,10 +5,12 @@
 Offline tests for the RFC 3161 timestamp module.
 
 Covers TimestampResult fields, hash algorithm validation, mock mode,
-disabled mode, TimestampUnavailableError, verify_timestamp with
+disabled mode, RFC 3161 availability, verify_timestamp with
 matching and mismatched data, and default TSA URL.
 
-All tests run without network access or the rfc3161ng library.
+All tests run without network access. RFC 3161 is implemented in-tree on
+AMA's own DER codec; the third-party ``rfc3161ng`` client was removed under
+INVARIANT-1 and there is no configuration in which it is present.
 """
 
 import hashlib
@@ -18,7 +20,6 @@ import pytest
 from ama_cryptography.rfc3161_timestamp import (
     RFC3161_AVAILABLE,
     TimestampResult,
-    TimestampUnavailableError,
     allow_mock_tsa,
     get_timestamp,
     verify_timestamp,
@@ -116,15 +117,21 @@ class TestDisabledMode:
         assert result.tsa_url == "disabled"
 
 
-class TestTimestampUnavailable:
-    """Tests for TimestampUnavailableError."""
+class TestRfc3161Availability:
+    """RFC 3161 has no optional dependency and no availability gate."""
 
-    @pytest.mark.skipif(RFC3161_AVAILABLE, reason="rfc3161ng is installed")
-    def test_online_mode_raises_when_rfc3161ng_missing(self) -> None:
-        """Online mode must raise TimestampUnavailableError when rfc3161ng
-        is not installed."""
-        with pytest.raises(TimestampUnavailableError):
-            get_timestamp(b"data", tsa_mode="online")
+    def test_rfc3161_is_unconditionally_available(self) -> None:
+        """RFC 3161 has no optional dependency, so the gate is always open.
+
+        This class used to hold ``test_online_mode_raises_when_rfc3161ng_missing``,
+        skipped under ``skipif(RFC3161_AVAILABLE)``. Once ``rfc3161ng`` was
+        removed and ``RFC3161_AVAILABLE`` became unconditionally ``True``, that
+        condition was permanently satisfied: the test could never run and never
+        fail, so the class contributed no evidence while still reporting as
+        covered. A test that cannot fail is not a test — it is replaced with the
+        assertion that actually holds now.
+        """
+        assert RFC3161_AVAILABLE is True
 
     def test_invalid_tsa_mode_raises(self) -> None:
         """An invalid tsa_mode must raise ValueError."""
@@ -216,9 +223,12 @@ class TestDefaultTSAUrl:
     def test_default_tsa_url_is_https(self) -> None:
         """The default TSA URL hard-coded in the source module must use HTTPS.
 
-        We inspect the source code directly because when rfc3161ng is not
-        installed the function raises TimestampUnavailableError before
-        the warning that contains the URL is emitted.
+        The source is inspected rather than the warning observed, because
+        reaching the warning would mean contacting a TSA and these tests are
+        offline by construction. (The original reason given here — that
+        ``rfc3161ng`` might be missing and the function would raise
+        ``TimestampUnavailableError`` first — stopped being true when that
+        dependency was removed.)
         """
         import inspect
 

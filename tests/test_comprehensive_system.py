@@ -33,6 +33,7 @@ import secrets
 import subprocess
 import sys
 import tempfile
+import warnings
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -477,7 +478,7 @@ class TestCryptoPackageWithRFC3161:
             kms.hmac_key,
             require_quantum_signatures=False,
         )
-        assert results["rfc3161"] is None
+        assert results["rfc3161_binding"] is None
 
     def test_verify_rfc3161_token_helper_returns_none_for_none_token(self) -> None:
         """Test _verify_rfc3161_token returns None for None token."""
@@ -493,7 +494,17 @@ class TestCryptoPackageWithRFC3161:
         assert result is False
 
     def test_verify_results_include_rfc3161_key(self, kms: Any) -> None:
-        """Test that verification results include rfc3161 key."""
+        """The binding key is present, and the retained legacy alias announces itself.
+
+        ``rfc3161_binding`` is the key that names what is actually checked.
+        ``rfc3161`` is kept so existing callers do not start raising KeyError
+        inside a verification routine, but reading it emits a
+        ``DeprecationWarning`` — the bare name reads as third-party time
+        attestation, which is the misreading that motivated the rename
+        (INVARIANT-37). Both halves are asserted here: dropping the warning
+        would restore the silent misread, and dropping the key would break
+        callers.
+        """
         pkg = create_crypto_package(
             MASTER_CODES, MASTER_HELIX_PARAMS, kms, "test", use_rfc3161=False
         )
@@ -504,7 +515,23 @@ class TestCryptoPackageWithRFC3161:
             kms.hmac_key,
             require_quantum_signatures=False,
         )
+        assert "rfc3161_binding" in results
+        # Membership does not yield a verdict, so it is deliberately quiet.
         assert "rfc3161" in results
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            legacy = results["rfc3161"]  # deprecated on purpose: see below
+        assert legacy == results["rfc3161_binding"]
+        assert any(issubclass(w.category, DeprecationWarning) for w in caught), (
+            "reading the legacy rfc3161 key must announce that it is a binding "
+            "check and not TSA attestation"
+        )
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            _ = results["rfc3161_binding"]
+        assert not caught, "the correctly-named key must not warn"
 
 
 class TestEthicalVectorIntegration:

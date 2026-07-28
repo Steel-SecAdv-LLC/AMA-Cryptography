@@ -93,6 +93,7 @@ AMA Cryptography is a zero-dependency native C cryptographic library providing q
 | T3.2 | Nonce reuse in AES-GCM | Confidentiality | Low (random nonce) | CRITICAL | **MEDIUM** |
 | T3.3 | Weak entropy source | Key generation | Low (OS RNG) | CRITICAL | **MEDIUM** |
 | T3.4 | TSA compromise | Timestamp integrity | Low | MEDIUM | **LOW** |
+| T3.7 | Forged or substituted RFC 3161 token | Timestamp integrity | **High** (no attacker capability required beyond supplying a token) | MEDIUM | **MEDIUM** |
 | T3.5 | Misconfiguration (disabled layers) | 4-Layer defense bypass | Medium | HIGH | **MEDIUM** |
 | T3.6 | Autonomous agent mints persistence material or successor-authorizing signatures | Agent containment / key lifetime | Medium | HIGH | **MEDIUM** |
 
@@ -151,7 +152,8 @@ concrete instance of this pattern. See M3.5.
 | T3.1 | Secure memory zeroing prevents post-use leakage | **IMPLEMENTED** | `ama_secure_memzero()` on all key material |
 | T3.2 | 96-bit random nonce from OS CSPRNG | **IMPLEMENTED** | `ama_platform_rand.c` (getrandom/BCrypt) |
 | T3.3 | Platform CSPRNG (getrandom, getentropy, BCryptGenRandom) | **IMPLEMENTED** | `ama_platform_rand.c`, no userspace PRNG |
-| T3.4 | RFC 3161 TSA with independent verification | **IMPLEMENTED** | `rfc3161_timestamp.py`, multiple TSA support |
+| T3.4 | RFC 3161 §2.4.2 message-imprint binding, `PKIStatusInfo` verdict, TSA nonce echo | **PARTIAL** | `rfc3161_timestamp.py`. The binding half only. **Independent verification is NOT implemented**: AMA verifies neither the TSA's CMS `SignerInfo` signature (RFC 5652 §5.3) nor its certificate chain (RFC 5280 §6), so T3.4 is not mitigated by this library — see T3.7 and INVARIANT-37 |
+| T3.7 | Token must be a CMS `SignedData` carrying a signer; `certificate_file` / `tsa_cert_path` refuse rather than answering a weaker question | **PARTIAL (structural only)** | `extract_tst_info()` rejects empty `digestAlgorithms` / `signerInfos`, raising the cost of an offline forgery without closing it. Residual mitigation is out of scope for the library: establish the token's origin through an authenticated channel or out-of-band validation |
 | T3.5 | Defense-in-depth requires all layers by default | **IMPLEMENTED** | `ama_cryptography.crypto_api.create_crypto_package()` / `verify_crypto_package()` enforce 4-layer verification (legacy compat: `ama_cryptography.legacy_compat`) |
 | T3.6 | Agent-instance binding (INVARIANT-30): non-`EPHEMERAL` lifetimes and restricted capabilities require an operator-held authority key | **IMPLEMENTED** | `src/c/ama_agent_binding.c`, `ama_cryptography/agent_binding.py`; byte-KAT + adversarial suite + strict dudect lane + `fuzz/fuzz_agent_binding.c` |
 | T3.6 | 3R agentic-abuse detectors surface the behaviour for review | **IMPLEMENTED (advisory)** | `VolumeSpikeDetector` / `NoteArtifactDetector` in `ama_cryptography/monitoring.py`; on by default, never block an operation |
@@ -185,7 +187,7 @@ These risks are accepted or require external mitigation:
 | No third-party security audit | **MEDIUM** | Self-assessed. Recommended before high-value production deployment. |
 | PQC algorithm maturity | **LOW** | ML-DSA-65 and ML-KEM-1024 are NIST-standardized (FIPS 203/204) but have limited deployment history. |
 | Ed25519 quantum vulnerability | **LOW** | Mitigated by ML-DSA-65 quantum-resistant layer. Ed25519 provides classical defense only. |
-| RFC 3161 TSA trust dependency | **LOW** | Timestamps depend on external TSA integrity. Use multiple TSAs for defense-in-depth. |
+| RFC 3161 attestation not implemented | **MEDIUM** | AMA verifies the §2.4.2 message-imprint binding only — no CMS `SignerInfo` signature verification, no X.509 path validation. A token is therefore not attributable to any authority and its `genTime` is attacker-chosen; forging one AMA accepts needs no key and no privileged position (T3.7). Multiple TSAs add availability redundancy, not trust redundancy. Deployments that rely on timestamps must establish token origin outside the library. Scoped for closure in [ARCHITECTURE.md § Scope: RFC 3161 attestation is not implemented](ARCHITECTURE.md#scope-rfc-3161-attestation-is-not-implemented); enforced meanwhile by INVARIANT-37. |
 | Compiler optimization of secure zeroing | **LOW** | Mitigated with `volatile` pointers and compiler barriers (`__asm__ __volatile__`). |
 | Agent-instance binding is opt-in per derivation | **MEDIUM** | The binding constrains material derived *through* it (INVARIANT-30); it is not a sandbox and does not restrain code that never calls the library. Deployments hosting autonomous agents should route persistence-material derivation through a binding and hold the authority key outside the agent's reach. |
 | Agentic-abuse detectors are heuristics | **LOW** | `NoteArtifactDetector` does not catch an agent that avoids the successor vocabulary, and `VolumeSpikeDetector` is deliberately calibrated to stay quiet under legitimate load. Both are advisory review aids, not enforcement. |

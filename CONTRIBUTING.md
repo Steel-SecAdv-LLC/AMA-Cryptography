@@ -164,7 +164,7 @@ All contributions must maintain compliance with:
 | RFC 2104 | 1997 | Mandatory | HMAC |
 | RFC 5869 | 2010 | Mandatory | HKDF |
 | RFC 8032 | 2017 | Mandatory | EdDSA (Ed25519) |
-| RFC 3161 | 2001 | Mandatory | Time-Stamp Protocol |
+| RFC 3161 | 2001 | Partial | Time-Stamp Protocol — §2.4.1/§2.4.2 wire format and message-imprint binding only; CMS `SignerInfo` verification and X.509 path validation not implemented (INVARIANT-37) |
 | RFC 7748 | 2016 | Mandatory | Elliptic Curves for Security (X25519) |
 | RFC 8439 | 2018 | Mandatory | ChaCha20-Poly1305 AEAD |
 | RFC 9106 | 2021 | Mandatory | Argon2 Memory-Hard Function |

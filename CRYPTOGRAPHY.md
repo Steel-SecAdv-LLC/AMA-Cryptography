@@ -252,7 +252,7 @@ AMA Cryptography applies four independent cryptographic layers, matching the `am
 **Optional Add-ons (not core layers):**
 - **Canonical Encoding** — Deterministic length-prefixed input normalization (prevents concatenation attacks)
 - **SLH-DSA / ML-KEM-1024** — Additional post-quantum signature and KEM schemes
-- **RFC 3161 Timestamp** — Third-party temporal proof of existence
+- **RFC 3161 Timestamp** — Token bound to content by the §2.4.2 message imprint. Not third-party attestation and not proof of existence: AMA verifies no TSA signature, so `genTime` is unauthenticated (INVARIANT-37)
 
 **Security Bound:** Overall security is bounded by the weakest core layer (~128-bit classical, ~192-bit quantum when ML-DSA-65 is enforced). Defense-in-depth ensures continued protection if any single layer is compromised. See [SECURITY.md](SECURITY.md) for detailed analysis.
 
@@ -261,14 +261,13 @@ AMA Cryptography applies four independent cryptographic layers, matching the `am
 The optional RFC 3161 timestamp add-on uses **SHA-256** instead of SHA3-256 for the TSA request. This is a deliberate design choice for interoperability:
 
 - Most RFC 3161 TSA services (FreeTSA, DigiCert, GlobalSign) do not support SHA3-256
-- The timestamp token provides proof-of-existence at a specific time
 - The SHA-256 hash is only used for the TSA request, not for package integrity
 - Package integrity is protected by SHA3-256 across all 4 core layers
 
 This does not weaken security because:
-1. The timestamp proves when the package existed, not its integrity
-2. Package integrity is independently verified by SHA3-256, HMAC, and signatures
-3. SHA-256 remains secure for collision resistance (no practical attacks)
+1. The message imprint's only job is to bind a token to a payload. Collision resistance is the property that matters for it, and SHA-256 has it — no practical attack exists.
+2. Package integrity is independently verified by SHA3-256, HMAC, and signatures, none of which depend on the timestamp.
+3. The timestamp contributes no security bound to weaken. AMA verifies the §2.4.2 binding only and no TSA signature, so the token establishes nothing about *when* the package existed in the first place (INVARIANT-37) — the choice of digest here cannot degrade an assurance that was never claimed.
 
 ## Implementation Notes
 

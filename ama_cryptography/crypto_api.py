@@ -200,10 +200,15 @@ try:
         get_timestamp,
     )
 except ImportError:
+    # Not "the optional dependency is missing" any more: RFC 3161 is a
+    # first-party module in this same package, implemented on AMA's own DER
+    # codec, and the third-party `rfc3161ng` client was removed under
+    # INVARIANT-1. Reaching this branch means the in-tree module failed to
+    # import, i.e. a broken installation — not a supported configuration.
     RFC3161_AVAILABLE = False
-    TimestampUnavailableError = Exception  # type: ignore[misc,assignment]  # optional RFC3161 not installed, Exception fallback (CA-001)
-    TimestampError = Exception  # type: ignore[misc,assignment]  # optional RFC3161 not installed, Exception fallback (CA-002)
-    get_timestamp = None  # type: ignore[assignment]  # optional RFC3161 not installed, None stub (CA-003)
+    TimestampUnavailableError = Exception  # type: ignore[misc,assignment]  # in-tree RFC 3161 module failed to import, Exception fallback (CA-001)
+    TimestampError = Exception  # type: ignore[misc,assignment]  # in-tree RFC 3161 module failed to import, Exception fallback (CA-002)
+    get_timestamp = None  # type: ignore[assignment]  # in-tree RFC 3161 module failed to import, None stub (CA-003)
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -2243,7 +2248,11 @@ class CryptoPackageResult:
     Optional add-ons (not counted as core layers):
         - SPHINCS+-256f secondary signature (NIST FIPS 205)
         - ML-KEM-1024 key encapsulation (NIST FIPS 203)
-        - RFC 3161 trusted timestamping
+        - RFC 3161 timestamp token — stored, not verified here, and not
+          third-party attestation. AMA verifies the §2.4.2 message-imprint
+          binding only; it does not verify the TSA's CMS ``SignerInfo``
+          signature or validate its certificate chain, so ``TSTInfo.genTime``
+          is unauthenticated (INVARIANT-37).
 
     Attributes:
         content_hash: SHA3-256 hash of the content (hex) [Layer 1]
@@ -2353,9 +2362,18 @@ def _acquire_timestamp(
 
     # Online mode
     if not RFC3161_AVAILABLE:
+        # Unreachable in a working installation: `RFC3161_AVAILABLE` is
+        # unconditionally True in `ama_cryptography.rfc3161_timestamp`, which
+        # is a first-party module. This branch survives only for the case that
+        # module fails to import at all. It used to say "pip install
+        # rfc3161ng", which by the time this PR removed that dependency was
+        # instructing the operator to install a third-party cryptographic
+        # implementation that INVARIANT-1 forbids the core package from using.
         raise TimestampUnavailableError(
-            "RFC3161_UNAVAILABLE: rfc3161ng library not installed. "
-            "Install with: pip install rfc3161ng"
+            "RFC3161_UNAVAILABLE: ama_cryptography.rfc3161_timestamp failed to import. "
+            "RFC 3161 is implemented in-tree on AMA's own DER codec and needs nothing "
+            "installed, so this indicates a damaged installation rather than a missing "
+            "dependency. Reinstall the package."
         )
     try:
         result = get_timestamp(
@@ -2418,7 +2436,9 @@ def create_crypto_package(
     Optional add-ons (not core layers):
         - SPHINCS+-256f secondary signature (NIST FIPS 205)
         - ML-KEM-1024 key encapsulation (NIST FIPS 203)
-        - RFC 3161 trusted timestamping (online, mock, or disabled)
+        - RFC 3161 timestamp token (online, mock, or disabled) — acquired and
+          stored. Not third-party attestation: see
+          :class:`CryptoPackageResult` and INVARIANT-37.
 
     Args:
         content: The content to sign/protect (bytes)
@@ -2433,8 +2453,7 @@ def create_crypto_package(
         PQCUnavailableError: If required PQC algorithm is not available
         KyberUnavailableError: If Kyber is requested but not available
         SphincsUnavailableError: If SPHINCS+ is requested but not available
-        TimestampUnavailableError: If RFC 3161 is requested but library not installed
-        TimestampError: If timestamp request fails
+        TimestampError: If the timestamp request fails
 
     Example:
         >>> # Basic usage with hybrid signatures and 4-layer defense
@@ -2665,6 +2684,17 @@ def verify_crypto_package(
 
     - SPHINCS+ secondary signature (if present)
     - KEM shared secret (if present and keypair available)
+
+    **Not verified here, stated so it is not assumed:** the RFC 3161
+    ``timestamp`` token that :func:`create_crypto_package` may have stored on
+    the package is *not* checked by this function, and no result key reports on
+    it. ``all_valid`` is therefore silent about the timestamp — it is neither
+    an assertion that the token is good nor that one is present. To check a
+    token, call :func:`ama_cryptography.rfc3161_timestamp.verify_timestamp_binding`
+    (or :func:`~ama_cryptography.rfc3161_timestamp.describe_token_verification`)
+    explicitly, and read INVARIANT-37 first: AMA verifies the RFC 3161 §2.4.2
+    message-imprint binding only, never the TSA's signature or certificate
+    chain, so no result it can return is third-party time attestation.
 
     Args:
         content: Original content that was signed.

@@ -1574,5 +1574,145 @@ flagged.
 
 ---
 
+## INVARIANT-37 — A Verification API Must Not Claim a Check It Does Not Perform
+
+**Statement.** A function whose name begins `verify_`, a result key, a
+parameter, a docstring, or any document in this repository, **must not**
+assert a verification that the implementation does not carry out. Where a
+check is not implemented, three things follow and all three are enforced:
+
+- the **name** must scope itself to what is actually checked
+  (`verify_token_binding`, not `verify_token`);
+- an argument requesting the unimplemented check must **raise**, never resolve
+  to the weaker one;
+- the boundary must be **published as data**, not only as prose, so the
+  documentation can be checked against the code rather than against a reviewer's
+  memory.
+
+The canonical instance is RFC 3161.
+`ama_cryptography.rfc3161_timestamp.RFC3161_CAPABILITIES` is the single source
+of truth: `message_imprint_binding`, `pki_status`, `nonce_echo` and
+`signer_present` are performed; `tsa_signature`, `tsa_certificate_chain` and
+`gen_time` are not.
+
+**Why.** By the time anyone checked, this repository asserted the opposite of
+its own implementation in more than fifty places.
+
+`ARCHITECTURE.md`'s verification flow wrongly listed "Verify TSA signature and
+time bounds" as step 6 of 7; no such step exists. `THREAT_MODEL.md` falsely
+recorded the retired claim "RFC 3161 TSA with independent verification" as
+**IMPLEMENTED** — the row an auditor reads to conclude a threat is closed. `wiki/Security-Model.md`
+scored AMA ✓ against OpenSSL ✗ on RFC 3161, inverted on the single axis where
+OpenSSL does the work and AMA does not. The `rfc3161_timestamp` module
+docstring opened with the retired claim "Third-party attestation: Independent
+verification by TSA". `AMA_CRYPTOGRAPHY_ETHICAL_PILLARS.md` carried a
+"Mathematical Proof" whose security statement was exactly backwards. It
+wrongly said forgery "Requires TSA private key compromise" — when in truth
+forging a token AMA accepts needs no key, no compromise and no privileged
+position: the
+adversary builds a CMS `SignedData` offline over the target's own content, with
+whatever `genTime` suits them. The same document multiplied a timestamp
+"detection dimension" into a `P(detect) ≥ 0.999999999` bound; against an
+adaptive adversary that dimension's detection rate is 0, and the bound was
+inflated by three orders of magnitude.
+
+None of it was written dishonestly. It was written by people who knew what a
+timestamp is *for*, describing a feature named after the thing it does not do.
+That is the failure this invariant addresses: not lying, but the absence of
+anything that would notice. Every one of those statements was "qualified"
+somewhere else in the repository, and none of the qualifications were where the
+reader's eye was.
+
+The reason it matters more than an ordinary documentation defect is that these
+particular sentences are load-bearing. A threat-model row marked IMPLEMENTED
+closes a risk. `SECURITY.md` wrongly made "REQUIRED: use RFC 3161 trusted
+timestamp authorities" a production control, telling an operator they had
+bought attributable time, which they had not, and the
+control they configure in response changes nothing an attacker must defeat.
+Documentation that overstates a security property is a vulnerability in the
+deployment, not a typo in a file.
+
+**Why the gate is driven by a capability table.** The obvious enforcement is a
+denylist of forbidden phrases, and it would be wrong in a specific, expensive
+way: it freezes today's limitation into CI. The day CMS `SignerInfo`
+verification lands, a phrase denylist begins rejecting claims that have become
+*true*, and the remedy depends on somebody remembering to edit a gate — which
+is the same species of memory this invariant exists because nobody had.
+
+So the prohibitions are **derived**. `tools/check_verification_claim_honesty.py`
+reads `RFC3161_CAPABILITIES` and forbids a claim *because its capability is
+`False`*. Implementing a check and flipping one entry to `True` permits the
+corresponding documentation in the same commit, with no gate edit and no
+prohibition left standing after it stopped being true. The same table is what
+`TokenVerification.not_verified` reports at runtime, so an audit record cannot
+claim more than the library does, and what the behavioural tests drive — the
+code, the runtime record, the tests and the documentation are four consumers of
+one declaration rather than four restatements of one belief.
+
+**The same-line rule.** A claim must be negated on the line that makes it. This
+is deliberate and it is the lesson of the fifty: a disclaimer three paragraphs
+away, or in another file, or in a docstring the reader is not looking at, did
+not prevent a single one of them.
+
+**Enforcement.** `tools/check_verification_claim_honesty.py`, run in the
+`security-checks` job of `ci.yml`. Five checks:
+
+1. **No claim of an unperformed check.** For every `False` capability, the claim
+   patterns bound to it must not appear un-negated in `ama_cryptography/`,
+   `tools/`, `tests/`, `examples/`, `docs/`, `wiki/`, `benchmarks/`, `fuzz/` or
+   root Markdown. Generic assurance vocabulary ("independent verification") is
+   scoped to lines that are about timestamping, so a true statement about
+   side-channel review of the C code is not a finding — a gate that fires on
+   those is one people learn to route around, which is the failure mode
+   INVARIANT-2 already records.
+2. **The misnamed result key is not taught.** No `results["rfc3161"]` in any
+   document or docstring. The key is retained in code and now warns when read;
+   a copy-pasteable example teaching it would undo that.
+3. **A refusing argument is documented as refusing.** `certificate_file` and
+   `tsa_cert_path` must be described as raising.
+4. **No instruction to install `rfc3161ng`**, removed under INVARIANT-1.
+5. **The table cannot outgrow its enforcement.** Every `False` capability must
+   have claim patterns bound to it; every pattern must name a real capability;
+   the scan's exemption list must stay exactly the two self-referential files
+   (the checker, which states the forbidden claims in order to forbid them, and
+   its test, which states them in order to require rejection).
+
+The table is read with `ast` rather than by importing the module, so the gate
+runs in a lint job with nothing built.
+
+**Verification.** `tests/test_verification_claim_honesty_gate.py` — 46 tests —
+pins both directions: the repository as it stands, plus a reproduction of every
+violation class and, equally, the near-misses that must **not** fire. It also
+pins `test_flipping_a_capability_to_true_permits_its_claims`, which is the
+property the design rests on, and `test_ast_parsed_table_equals_the_imported_one`,
+so the gate's reading of the table and everyone else's cannot drift.
+
+That suite has already earned its place. An early version of the pattern for
+the phrase this section will not repeat ended `(?:stamp|-stamp|stamping)?\b`,
+which cannot match its own plural: the group takes `stamp`, the `\b` demands a
+boundary before the `s`, and every backtrack fails identically. The gate missed
+the most common phrasing of the most common false claim in the tree and
+reported success. Its own negative controls found that, and fixing the pattern
+immediately surfaced two further live instances.
+
+`tests/test_rfc3161_api_honesty.py` — 18 tests — drives the behaviour the table
+describes, so the table cannot become aspirational. The load-bearing one is
+`test_a_token_with_a_nonsense_signature_still_satisfies_the_binding`: it builds
+a token in-process, with no key and no TSA, whose signature octets are zeros
+and whose `genTime` is the epoch, and requires the binding check to accept it.
+It is an uncomfortable assertion to write down, which is why it belongs in the
+suite — it is the fact every claim removed under this invariant was denying.
+Its companion requires the same check to still reject a different payload, so
+"accepts a forgery" cannot be satisfied by a check that accepts everything.
+
+**Scope.** The invariant is general; the capability table and claim patterns
+currently cover RFC 3161, because that is where the defect was found and where
+AMA ships a feature whose headline purpose is unimplemented. A future
+verification surface with an unimplemented half is expected to declare its own
+table and bind its own patterns. What closing the RFC 3161 gap requires is
+scoped in [ARCHITECTURE.md § Scope: RFC 3161 attestation is not implemented](ARCHITECTURE.md#scope-rfc-3161-attestation-is-not-implemented).
+
+---
+
 _Maintained by Steel Security Advisors LLC._
-_Last updated: 2026-07-27_
+_Last updated: 2026-07-28_

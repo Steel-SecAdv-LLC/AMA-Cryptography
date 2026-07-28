@@ -558,6 +558,36 @@ jobs:
       run: |
         python tools/check_corpus_originality.py
 
+    - name: "INVARIANT-37: No claimed verification check that is not performed"
+      # AMA implements the RFC 3161 wire format and the §2.4.2 message-imprint
+      # binding. It verifies neither the TSA's CMS SignerInfo signature nor its
+      # certificate chain. By the time anyone checked, the repository asserted
+      # the opposite in more than fifty places — including a THREAT_MODEL.md row
+      # marked IMPLEMENTED against "independent verification", a comparison
+      # table scoring AMA above OpenSSL on the one axis where OpenSSL does the
+      # work, and an ethical-pillars "proof" whose security statement was
+      # inverted ("requires TSA private key compromise to forge", when forging a
+      # token AMA accepts requires no key at all).
+      #
+      # None of it was dishonest. It was written by people describing a feature
+      # named after the thing it does not do, and nothing existed that would
+      # notice. Documentation that overstates a security property is a
+      # vulnerability in the deployment, not a typo in a file: a REQUIRED line
+      # in SECURITY.md makes an operator configure a control that changes
+      # nothing an attacker must defeat.
+      #
+      # The gate is driven by ama_cryptography.rfc3161_timestamp's
+      # RFC3161_CAPABILITIES table rather than a phrase denylist, deliberately.
+      # A denylist would freeze today's limitation into CI and start rejecting
+      # claims once they became true. Here, implementing a check and flipping
+      # one table entry permits its documentation in the same commit — no gate
+      # edit, no stale prohibition. Both directions are pinned by
+      # tests/test_verification_claim_honesty_gate.py, whose negative controls
+      # have already caught this gate silently missing the plural form of the
+      # most common false claim in the tree.
+      run: |
+        python tools/check_verification_claim_honesty.py
+
     - name: "Verify the vendored key-format conformance corpus"
       # tests/kat/keyformats/ is the only evidence that AMA's key encodings
       # match the specifications rather than merely themselves, and
