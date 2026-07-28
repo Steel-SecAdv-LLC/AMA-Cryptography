@@ -558,13 +558,10 @@ int main(int argc, char *argv[]) {
         int n = run_round(iterations, round, lanes);
         dudect_rounds_add(&rounds, lanes, n);
 
-        int clean = 1;
-        for (int i = 0; i < n; i++) {
-            if (!lanes[i].is_info_only && fabs(lanes[i].t_value) >= T_THRESHOLD)
-                clean = 0;
-        }
-        /* A clean round settles it: no lane can then have tripped them all. */
-        if (clean)
+        /* Stop early only while nothing has tripped — see dudect_rounds.h:
+         * under a majority rule a clean round settles nothing once a lane has
+         * already tripped. */
+        if (!dudect_rounds_any_failure(&rounds))
             break;
         if (round < MAX_ROUNDS)
             printf("\nRe-running: a real leak reproduces every round, noise moves.\n");
@@ -586,9 +583,9 @@ int main(int argc, char *argv[]) {
         printf("      proven by test 3a (\"AES-GCM tag compare\"), which IS counted.\n");
     } else {
         printf("Overall: FAIL - the following lane(s) were over the threshold in "
-               "every one of %d round(s):\n", rounds.rounds_run);
+               "a majority of %d round(s):\n", rounds.rounds_run);
         dudect_rounds_print_failures(&rounds);
-        printf("\nA lane over the threshold in only some rounds is reported NOISE\n");
+        printf("\nA lane over the threshold in a minority of rounds is reported NOISE\n");
         printf("above and does not fail the run.\n");
     }
     printf("=======================================================\n");

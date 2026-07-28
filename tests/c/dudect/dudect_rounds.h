@@ -22,11 +22,12 @@
  * these gates is indistinguishable in the log from a real finding, which is
  * the property that makes a real finding get waved through.
  *
- * The rule here is the one those messages already promised: **a lane must
- * exceed the threshold in every round to count as a failure.**  A leak
- * reproduces — its t-statistic grows with measurements and the same lane trips
- * every time.  Noise moves.  The per-lane threshold is untouched, so this
- * removes false alarms rather than sensitivity.
+ * The rule here is the one those messages already promised, at the tighter of
+ * the two readings: **a lane must exceed the threshold in a majority of rounds
+ * to count as a failure.**  A leak reproduces — its t-statistic grows with
+ * measurements and the same lane trips most or all of the time.  Noise moves.
+ * The per-lane threshold is untouched, so this removes false alarms rather
+ * than sensitivity.
  *
  * Two of the three harnesses also discarded their per-lane t-values between
  * rounds (`run_round` returned a bool), so the summary could not show whether
@@ -39,20 +40,34 @@
  * all three at once.
  *
  * ============================================================================
- * THE TRADE-OFF, STATED
+ * WHY MAJORITY AND NOT ALL
  * ============================================================================
  *
- * Requiring *all* rounds rather than a majority means a marginal lane sitting
- * right at the threshold — tripping, say, two rounds in three — is reported
- * NOISE rather than FAIL.  That is the deliberate reading of "reproduces every
- * round", and it is why the summary prints the ratio next to every lane: a
- * lane drifting toward the threshold is visible in the log before it becomes a
- * failure, rather than arriving as a surprise.  Tightening to a majority is a
- * one-line change in `dudect_lane_failed`, and the self-test is written so
- * that making it means updating a named case.
+ * "Every round" and "most rounds" both rule out the one-off, and the choice
+ * between them only matters for a lane sitting right at the threshold.  Under
+ * an all-rounds rule such a lane — tripping two rounds in three — is reported
+ * as noise and the run goes green.  That is the wrong way to be wrong: a
+ * primitive drifting toward a real leak is exactly the finding this gate exists
+ * to surface, and one within-threshold round is a thin reason to discard two
+ * over-threshold ones.  A majority keeps the property that made the change
+ * worth making (a single trip never fails the build) while refusing to sit on
+ * repeated evidence.
+ *
+ * The summary still prints the ratio beside every lane, so a 1/3 is visible as
+ * a `NOISE` row rather than vanishing.  Nothing is hidden; the difference is
+ * only where the build stops.
+ *
+ * This interacts with the early exit, and the interaction is easy to get
+ * wrong.  Under an all-rounds rule, stopping at the first clean round is
+ * always safe.  Under a majority it is not: a lane that tripped round 1 and is
+ * clean in round 2 sits at 1/2, but had round 3 run and tripped it would be
+ * 2/3 — a failure the early exit would have skipped.  So the loop stops early
+ * only while *nothing* has tripped at all (`dudect_rounds_any_failure`), which
+ * keeps the one-round fast path for a healthy run and forces the full schedule
+ * precisely when the extra evidence is what decides the verdict.
  *
  * A lane flagged `fatal` — a setup failure or a per-class return-code mismatch
- * — is exempt from the all-rounds rule and from info-only suppression.  It is
+ * — is exempt from the majority rule and from info-only suppression.  It is
  * not a timing measurement, so retrying it proves nothing and one occurrence
  * is conclusive: the lane never witnessed its invariant.
  */
@@ -153,14 +168,18 @@ static inline void dudect_rounds_add(dudect_rounds_t *r,
     r->rounds_run++;
 }
 
-/** A lane fails only if it is strict and tripped in EVERY round, or ever
- *  reported a harness fault. */
+/** A lane fails only if it is strict and tripped in a MAJORITY of rounds, or
+ *  ever reported a harness fault.
+ *
+ *  Strictly more than half, so a 3-round schedule fails at 2/3 and 3/3 and
+ *  passes at 1/3; a single round fails at 1/1.  Integer arithmetic on both
+ *  sides — no floating-point midpoint to argue about. */
 static inline int dudect_lane_failed(const dudect_lane_evidence_t *lane, int rounds_run) {
     if (lane->fatal)
         return 1;
     if (rounds_run <= 0)
         return 0;
-    return !lane->is_info_only && lane->rounds_failed == rounds_run;
+    return !lane->is_info_only && (lane->rounds_failed * 2 > rounds_run);
 }
 
 /** 1 iff no lane failed under the rule above. */
@@ -170,6 +189,27 @@ static inline int dudect_rounds_passed(const dudect_rounds_t *r) {
             return 0;
     }
     return 1;
+}
+
+/**
+ * 1 iff any lane that *could* fail has tripped at least once so far.
+ *
+ * This is the early-exit predicate, and it is deliberately not "was the last
+ * round clean".  Under a majority rule a clean round does not settle anything
+ * once something has already tripped: a lane at 1/2 becomes a 2/3 failure if
+ * the third round trips it, and stopping at two rounds would skip that.  While
+ * this returns 0 nothing has tripped at all, so no further round can produce a
+ * majority over the rounds already run and the loop may stop — which is the
+ * common healthy case, still costing one round.
+ */
+static inline int dudect_rounds_any_failure(const dudect_rounds_t *r) {
+    for (int i = 0; i < r->num_lanes; i++) {
+        if (r->lanes[i].fatal)
+            return 1;
+        if (!r->lanes[i].is_info_only && r->lanes[i].rounds_failed > 0)
+            return 1;
+    }
+    return 0;
 }
 
 /** Per-lane worst |t|, failed/run ratio, and status. */
@@ -187,11 +227,12 @@ static inline void dudect_rounds_print_summary(const dudect_rounds_t *r) {
             status = "PASS";
         else if (lane->is_info_only)
             status = "INFO";
-        else if (lane->rounds_failed == r->rounds_run)
+        else if (dudect_lane_failed(lane, r->rounds_run))
             status = "FAIL";
         else
-            /* Over the threshold, but not every round: by construction that is
-             * noise. Saying so is more useful than hiding it. */
+            /* Over the threshold, but in a minority of rounds. Printed rather
+             * than hidden: a lane drifting toward the threshold should be
+             * visible in the log before it becomes a failure. */
             status = "NOISE";
 
         char rounds[16];
@@ -210,8 +251,9 @@ static inline void dudect_rounds_print_failures(const dudect_rounds_t *r) {
             printf("  - %s: harness fault (setup failure or per-class rc mismatch)\n",
                    lane->name);
         else
-            printf("  - %s: |t| reached %.4f, threshold %.1f, in all %d round(s)\n",
-                   lane->name, fabs(lane->worst_t), r->threshold, r->rounds_run);
+            printf("  - %s: |t| reached %.4f (threshold %.1f) in %d of %d round(s)\n",
+                   lane->name, fabs(lane->worst_t), r->threshold,
+                   lane->rounds_failed, r->rounds_run);
     }
 }
 
@@ -237,13 +279,26 @@ static inline int dudect_rounds_self_test(void) {
     int ok = 1;
     printf("dudect verdict self-check\n\n");
 
-    /* name, is_info_only, rounds_failed, fatal, worst_t */
+    /* name, is_info_only, rounds_failed, fatal, worst_t
+     *
+     * The majority boundary is the load-bearing part: 2/3 fails and 1/3 does
+     * not.  Both sides of it are named so that moving the rule again means
+     * editing a case that says what it decides, rather than watching a number
+     * change. */
     ok &= dudect_rounds_case("strict lane over threshold in 3/3 rounds -> FAIL",
                              (dudect_lane_evidence_t){"strict", 0, 3, 0, 9.0}, 3, 1);
-    ok &= dudect_rounds_case("strict lane over threshold in 2/3 rounds -> pass",
-                             (dudect_lane_evidence_t){"strict", 0, 2, 0, 9.0}, 3, 0);
-    ok &= dudect_rounds_case("strict lane over threshold in 1/3 rounds -> pass",
+    ok &= dudect_rounds_case("strict lane over threshold in 2/3 rounds -> FAIL (majority)",
+                             (dudect_lane_evidence_t){"strict", 0, 2, 0, 9.0}, 3, 1);
+    ok &= dudect_rounds_case("strict lane over threshold in 1/3 rounds -> pass (minority)",
                              (dudect_lane_evidence_t){"strict", 0, 1, 0, 9.0}, 3, 0);
+    ok &= dudect_rounds_case("strict lane over threshold in 2/2 rounds -> FAIL",
+                             (dudect_lane_evidence_t){"strict", 0, 2, 0, 9.0}, 2, 1);
+    ok &= dudect_rounds_case("strict lane over threshold in 1/2 rounds -> pass (tie, not majority)",
+                             (dudect_lane_evidence_t){"strict", 0, 1, 0, 9.0}, 2, 0);
+    ok &= dudect_rounds_case("strict lane over threshold in 2/4 rounds -> pass (tie, not majority)",
+                             (dudect_lane_evidence_t){"strict", 0, 2, 0, 9.0}, 4, 0);
+    ok &= dudect_rounds_case("strict lane over threshold in 3/4 rounds -> FAIL",
+                             (dudect_lane_evidence_t){"strict", 0, 3, 0, 9.0}, 4, 1);
     ok &= dudect_rounds_case("strict lane within threshold every round -> pass",
                              (dudect_lane_evidence_t){"strict", 0, 0, 0, 1.2}, 3, 0);
     ok &= dudect_rounds_case("info lane over threshold in 3/3 rounds -> pass",
@@ -286,6 +341,41 @@ static inline int dudect_rounds_self_test(void) {
     printf("  %-58s %s\n", "the same lane over threshold in every round -> FAIL",
            consistent ? "ok" : "MISMATCH");
     ok &= consistent;
+
+    /* The three-round case the majority rule exists for: a lane that trips
+     * twice and is clean once. Under an all-rounds rule this went green. */
+    dudect_rounds_t m;
+    dudect_rounds_init(&m, 4.5);
+    dudect_lane_result_t maj1[1] = {{"a", 9.0, 0, 0}};
+    dudect_lane_result_t maj2[1] = {{"a", 1.0, 0, 0}};
+    dudect_lane_result_t maj3[1] = {{"a", 8.0, 0, 0}};
+    dudect_rounds_add(&m, maj1, 1);
+    dudect_rounds_add(&m, maj2, 1);
+    dudect_rounds_add(&m, maj3, 1);
+    int majority = (m.lanes[0].rounds_failed == 2 && m.rounds_run == 3 &&
+                    !dudect_rounds_passed(&m));
+    printf("  %-58s %s\n", "one lane over threshold in 2 of 3 rounds -> FAIL",
+           majority ? "ok" : "MISMATCH");
+    ok &= majority;
+
+    /* The early-exit predicate. It is load-bearing under a majority rule: the
+     * loop may only stop while nothing has tripped, because a lane at 1/2
+     * becomes a 2/3 failure if the third round trips it. */
+    dudect_rounds_t e;
+    dudect_rounds_init(&e, 4.5);
+    dudect_lane_result_t clean[2] = {{"a", 1.0, 0, 0}, {"info", 900.0, 1, 0}};
+    dudect_rounds_add(&e, clean, 2);
+    int quiet = !dudect_rounds_any_failure(&e);
+    printf("  %-58s %s\n", "only an info lane tripped -> early exit still allowed",
+           quiet ? "ok" : "MISMATCH");
+    ok &= quiet;
+
+    dudect_lane_result_t tripped[2] = {{"a", 9.0, 0, 0}, {"info", 1.0, 1, 0}};
+    dudect_rounds_add(&e, tripped, 2);
+    int busy = dudect_rounds_any_failure(&e);
+    printf("  %-58s %s\n", "a strict lane tripped -> early exit refused",
+           busy ? "ok" : "MISMATCH");
+    ok &= busy;
 
     printf("\n%s\n", ok ? "verdict self-check: PASS" : "verdict self-check: FAIL");
     return ok ? 0 : 1;

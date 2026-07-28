@@ -46,21 +46,34 @@ It fired on this branch, on a commit that changed two Python files and no C at
 all: the only genuine failure in the final round was `ama_consttime_memcmp` at
 |t| = 8.04, on a function that had passed the same job minutes earlier.
 
-- **A lane must now exceed the threshold in every round to count** — which is
-  exactly what the retry already claimed to be doing. A leak reproduces: its
-  t-statistic grows with measurements and the same lane trips every time. Noise
-  moves. The per-lane threshold is untouched and a genuinely leaking lane still
-  fails, so this removes false alarms rather than sensitivity. A harness fault
-  (setup failure, per-class rc mismatch) is exempt and still conclusive on one
-  occurrence — it is not a timing measurement.
+- **A lane must now exceed the threshold in a majority of rounds to count** —
+  which is what the retry already claimed to be doing. A leak reproduces: its
+  t-statistic grows with measurements and the same lane trips most or all of
+  the time. Noise moves. The per-lane threshold is untouched and a genuinely
+  leaking lane still fails, so this removes false alarms rather than
+  sensitivity. A harness fault (setup failure, per-class rc mismatch) is exempt
+  and still conclusive on one occurrence — it is not a timing measurement.
+
+  Majority rather than *all* rounds, deliberately: the two differ only for a
+  lane sitting right at the threshold, and under an all-rounds rule such a lane
+  — tripping two rounds in three — goes green. That is the wrong way to be
+  wrong. A primitive drifting toward a real leak is the finding this gate
+  exists to surface, and one within-threshold round is a thin reason to discard
+  two over-threshold ones.
+
+  This changes when the early exit is safe, and the interaction is easy to miss.
+  Stopping at the first clean round is always sound under an all-rounds rule; it
+  is not under a majority, because a lane at 1/2 becomes a 2/3 failure if a
+  third round trips it. The loop now stops early only while *nothing* has
+  tripped, which keeps the one-round fast path for a healthy run and forces the
+  full schedule exactly when the extra evidence decides the verdict.
 - **The summary reports the evidence, not the last round.** `results[]` was
   overwritten each round, so the table showed only round 3 and a reader could
   not tell a reproducible finding from a one-off. Every lane now carries its
   worst |t| and a `failed/run` ratio, and a lane over the threshold in some but
-  not all rounds is reported `NOISE` — visible, and not a failure. The
-  all-rounds rule is the deliberate reading of "reproduces every round"; the
-  printed ratio is what makes a lane drifting toward the threshold visible
-  before it becomes a failure.
+  not a majority of rounds is reported `NOISE` — visible, and not a failure.
+  Nothing is hidden by the majority rule; the ratio is printed either way and
+  the difference is only where the build stops.
 - **The per-round line no longer prints a verdict it cannot reach.**
   `dudect_print_result` had no access to a lane's info-only flag, so
   `ML-DSA-65 sign` (rejection sampling) and `secp256k1 ECDSA sign` (RFC 6979
@@ -69,14 +82,16 @@ all: the only genuine failure in the final round was `ama_consttime_memcmp` at
   tool whose whole job is to make one real report legible. The line now states
   what was measured — `within threshold` / `OVER THRESHOLD` — and the summary
   remains the authority.
-- **The verdict rule is now itself tested.** `test_dudect --self-test` drives
-  the classification with synthetic evidence in both directions (3/3 fails, 2/3
-  and 1/3 do not, info-only never fails on timing, a fatal sentinel always
-  fails, and a different lane each round fails nothing), registered as the
-  ctest case `test_dudect_verdict` and run ahead of every measurement pass in
-  `dudect.yml`. It is deterministic and takes milliseconds. Re-introducing the
-  old rule makes it report exactly the three misclassifications that rule made
-  — which is the check that was missing when the behaviour went unnoticed.
+- **The verdict rule is now itself tested.** `--self-test` drives the
+  classification with synthetic evidence in both directions — both sides of the
+  majority boundary (3/3, 2/3 and 3/4 fail; 1/3, 1/2 and 2/4 do not), info-only
+  never failing on timing however consistent, a fatal sentinel always failing, a
+  different lane each round failing nothing, and the early-exit predicate
+  refusing to stop once a strict lane has tripped. Registered as the ctest case
+  `test_dudect_verdict` and run ahead of every measurement pass in `dudect.yml`.
+  Deterministic, milliseconds. Re-introducing the all-rounds rule makes it name
+  exactly the three cases that rule gets wrong — which is the check that was
+  missing when the original behaviour went unnoticed.
 
 ### Fixed — one OID had seven spellings
 

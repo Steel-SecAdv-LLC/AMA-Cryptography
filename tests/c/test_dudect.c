@@ -2088,7 +2088,7 @@ int main(int argc, char *argv[]) {
         printf("\n=== Round %d/%d ===\n", round, MAX_ROUNDS);
         g_timeout_hit = 0;
 
-        int round_clean = run_all_tests(g_measurements, results, &num_results);
+        run_all_tests(g_measurements, results, &num_results);
         for (int i = 0; i < num_results; i++) {
             round_lanes[i].name         = results[i].name;
             round_lanes[i].is_info_only = results[i].is_info_only;
@@ -2099,9 +2099,11 @@ int main(int argc, char *argv[]) {
         }
         dudect_rounds_add(&rounds, round_lanes, num_results);
 
-        /* A clean round settles it: every lane was within threshold at least
-         * once, so no lane can have failed all of them. */
-        if (round_clean)
+        /* Stop early only while nothing has tripped. Under a majority rule a
+         * clean round settles nothing once a lane has already tripped: at 1/2
+         * it is not yet a failure, but a third round that trips it makes 2/3
+         * one. The healthy case still costs a single round. */
+        if (!dudect_rounds_any_failure(&rounds))
             break;
 
         if (round < MAX_ROUNDS) {
@@ -2128,10 +2130,10 @@ int main(int argc, char *argv[]) {
     if (passed) {
         printf("Overall: PASS - No unexpected constant-time violations detected\n");
     } else {
-        printf("Overall: FAIL - the following lane(s) failed in every one of "
-               "%d round(s):\n", rounds.rounds_run);
+        printf("Overall: FAIL - the following lane(s) were over the threshold in "
+               "a majority of %d round(s):\n", rounds.rounds_run);
         dudect_rounds_print_failures(&rounds);
-        printf("\nA lane over the threshold in only some rounds is reported NOISE\n");
+        printf("\nA lane over the threshold in a minority of rounds is reported NOISE\n");
         printf("above and does not fail the run. Reproduce a real finding on quiet\n");
         printf("hardware: taskset -c 0 nice -n -20 ./test_dudect --measurements 10000000\n");
     }
