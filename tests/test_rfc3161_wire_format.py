@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import hashlib
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -404,7 +405,7 @@ def test_a_drip_feeding_tsa_hits_the_total_deadline(monkeypatch: pytest.MonkeyPa
     from ama_cryptography import rfc3161_timestamp as ts
 
     clock = [1000.0]
-    monkeypatch.setattr(ts.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
     response = _DripResponse(clock, per_read_seconds=1.0)
     deadline = clock[0] + ts._TSA_TOTAL_DEADLINE
 
@@ -419,7 +420,7 @@ def test_a_prompt_response_is_returned_whole(monkeypatch: pytest.MonkeyPatch) ->
     """The deadline must not truncate a healthy multi-chunk transfer."""
     from ama_cryptography import rfc3161_timestamp as ts
 
-    monkeypatch.setattr(ts.time, "monotonic", lambda: 0.0)
+    monkeypatch.setattr(time, "monotonic", lambda: 0.0)
     body = bytes(range(256)) * 40  # 10 240 octets
     response = _FiniteResponse(body, chunk=1024)
     assert ts._read_bounded(response, ts._MAX_TSR_BYTES, 30.0) == body
@@ -429,7 +430,7 @@ def test_an_over_long_body_is_detected_not_truncated(monkeypatch: pytest.MonkeyP
     """Reading one octet past the cap is what distinguishes the two."""
     from ama_cryptography import rfc3161_timestamp as ts
 
-    monkeypatch.setattr(ts.time, "monotonic", lambda: 0.0)
+    monkeypatch.setattr(time, "monotonic", lambda: 0.0)
     limit = 4096
     response = _FiniteResponse(b"A" * (limit + 500), chunk=512)
     raw = ts._read_bounded(response, limit, 30.0)

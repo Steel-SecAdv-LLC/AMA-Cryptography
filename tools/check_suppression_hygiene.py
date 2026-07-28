@@ -165,8 +165,11 @@ def main() -> int:
     # repository's security policy. A suppression there silences a static
     # analyser inside the enforcement layer, which is the last place an
     # unexplained one belongs, and it was the only tree where they went
-    # unpoliced. Two bare ``# noqa: S310`` markers were sitting in the corpus
+    # unpoliced. Two bare ``noqa: S310`` markers were sitting in the corpus
     # fetchers when the scan was widened: no reason, no tracking ID, over
+    # (the leading hash is omitted above deliberately — ruff parses a real
+    # directive out of prose that spells one, which is the same false-positive
+    # class ``effective_suppressions`` exists to avoid)
     # ``urllib`` calls that accepted ``file:`` and ``ftp:`` URLs. They now
     # check the scheme, so the suppression states a fact.
     targets = (
