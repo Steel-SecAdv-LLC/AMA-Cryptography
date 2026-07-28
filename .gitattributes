@@ -1,8 +1,34 @@
+# Byte-identical checkouts on every platform.
+#
+# This repository measures its own checked-out bytes in several places: the
+# Wycheproof corpus is SHA-256-pinned per file, the key-format corpus is
+# checked against its source RFCs, the reproducible-build gate compares
+# artefact digests, and the note-artifact detector's calibration samples a
+# fixed 8 KiB window of each tracked file.  Every one of those is a function
+# of the exact bytes on disk.
+#
+# Git's default on Windows (``core.autocrlf=true``) rewrites LF to CRLF on
+# checkout, so the working tree stops matching the committed blob: digests
+# change, and a byte-offset window over a file larger than the window slides
+# by one octet per preceding line.  That is not hypothetical — it failed all
+# ten Windows CI jobs, because a 38 KiB document's 8 KiB head/tail sample no
+# longer contained the same text it does on Linux and macOS.
+#
+# ``-text`` for everything disables both the clean and the smudge filter, so
+# the working tree is the committed blob on every platform, and neither the
+# gates nor a contributor's local run depends on how their git is configured.
+# Line endings become a property of what is committed, which
+# ``tools/check_line_endings.py`` then enforces directly.
+* -text
+
 # Vendored Wycheproof corpus is hash-pinned by wycheproof_vectors/manifest.json
-# (per-file SHA-256).  The runner hashes the raw checked-out bytes, so any
-# end-of-line conversion changes the digest and fails the gate on platforms
-# whose checkout default is CRLF (Windows).  Mark the corpus and its manifest
-# as non-text so git performs no smudge/clean EOL translation and the working
-# tree is byte-identical to the committed blob on every platform.
+# (per-file SHA-256).  Covered by the blanket rule above; kept explicit so the
+# pinning requirement stays visible at the paths it applies to.
 /wycheproof_vectors/vectors/*.json -text
 /wycheproof_vectors/manifest.json -text
+
+# Fuzzer seed corpora are opaque octets chosen to reach particular code paths.
+# Two of them legitimately contain CRLF as *data*.  ``binary`` additionally
+# suppresses textual diff and merge handling, which is meaningless for them
+# and would present an octet change as a line change.
+/fuzz/seed_corpus/** binary

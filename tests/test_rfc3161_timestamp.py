@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import hashlib
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -39,6 +39,7 @@ from ama_cryptography.rfc3161_timestamp import (
     verify_timestamp,
     verify_token_binding,
 )
+from tests._http_response_mock import make_response
 
 #: Every transport test posts here; the socket is mocked, nothing leaves.
 TSA = "https://tsa.example.com"
@@ -189,14 +190,20 @@ class _MockTSA:
         self.request_body: bytes = b""
 
     def install(self, mock_conn_cls: Any) -> None:
-        response = MagicMock(status=self.http_status)
-        response.getheader.return_value = self.content_length
+        # ``make_response`` gives a ``read`` that honours its length argument
+        # and reports EOF, as ``http.client.HTTPResponse.read`` does. The
+        # client reads the body in bounded chunks against a total deadline so
+        # a TSA cannot hold the process on a socket, and a mock that returns
+        # the whole body for every call would never terminate that loop.
+        response, reply = make_response(status=self.http_status, content_length=self.content_length)
         conn = mock_conn_cls.return_value
         conn.getresponse.return_value = response
 
+        # ``body`` is the client's keyword for the posted request; keep the
+        # name so the side effect stays call-compatible with the real API.
         def _request(method: str, path: str, body: bytes = b"", headers: Any = None) -> None:
             self.request_body = body
-            response.read.return_value = self._answer(body)
+            reply.set(self._answer(body))
 
         conn.request.side_effect = _request
 

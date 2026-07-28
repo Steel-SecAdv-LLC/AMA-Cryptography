@@ -294,6 +294,80 @@ def test_reading_the_legacy_result_key_warns_and_the_correct_one_does_not() -> N
     assert any(issubclass(w.category, DeprecationWarning) for w in caught)
 
 
+def test_the_one_time_log_line_is_emitted_exactly_once_under_concurrency() -> None:
+    """ "Once per process" must be a property of the latch, not of luck.
+
+    The warning ships on two channels because ``DeprecationWarning`` alone
+    reaches nobody: the paired ``logging`` record at WARNING is what an
+    application with ordinary logging configuration actually sees, and it is
+    emitted once so its presence means "this deployment reads the legacy key"
+    rather than "this deployment read it *n* times".
+
+    The idiom this replaced — ``global _flag`` guarded by ``if not _flag`` —
+    could not make that claim: two threads reading a verdict concurrently can
+    both observe ``False`` before either stores ``True``. Thirty-two threads
+    released together is enough to hit that window routinely on the old shape.
+    """
+    import threading
+
+    from ama_cryptography.legacy_compat import _OnceLatch
+
+    latch = _OnceLatch()
+    start = threading.Barrier(32)
+    tripped: list[bool] = []
+    guard = threading.Lock()
+
+    def contend() -> None:
+        start.wait(timeout=30)
+        result = latch.trip()
+        with guard:
+            tripped.append(result)
+
+    threads = [threading.Thread(target=contend) for _ in range(32)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=30)
+
+    assert len(tripped) == 32, "a contending thread did not finish"
+    assert sum(tripped) == 1, f"the latch tripped {sum(tripped)} times, not once"
+    assert latch.trip() is False, "a latch must stay latched"
+
+
+def test_the_legacy_key_logs_once_however_often_it_is_read(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Reading the alias repeatedly warns every time but logs only the first."""
+    import logging
+
+    from ama_cryptography import legacy_compat
+    from ama_cryptography.legacy_compat import _OnceLatch, _VerificationResults
+
+    results: Any = _VerificationResults({"rfc3161_binding": True, "rfc3161": True})
+
+    # A fresh latch, so the assertion holds regardless of what else in the
+    # session has already read the alias — and restored afterwards, so this
+    # test does not hand a tripped latch to the next one.
+    previous = legacy_compat._legacy_rfc3161_key_log
+    legacy_compat._legacy_rfc3161_key_log = _OnceLatch()
+    try:
+        with caplog.at_level(logging.WARNING, logger=legacy_compat.__name__):
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                for _ in range(5):
+                    assert results["rfc3161"] is True  # deprecated alias, on purpose
+                    assert results.get("rfc3161") is True  # deprecated alias, on purpose
+    finally:
+        legacy_compat._legacy_rfc3161_key_log = previous
+
+    deprecations = [w for w in caught if issubclass(w.category, DeprecationWarning)]
+    assert len(deprecations) == 10, "every read must carry the warning"
+
+    records = [r for r in caplog.records if "rfc3161_binding" in r.getMessage()]
+    assert len(records) == 1, f"expected one log record, got {len(records)}"
+    assert records[0].levelno == logging.WARNING
+
+
 def test_the_results_mapping_is_still_a_dict() -> None:
     """Nothing about a verification routine should start failing over a rename."""
     from ama_cryptography.legacy_compat import _VerificationResults

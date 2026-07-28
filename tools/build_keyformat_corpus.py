@@ -93,10 +93,20 @@ SOURCES = {
 
 
 def fetch(url: str) -> str:
+    """Retrieve one source document over HTTPS.
+
+    The scheme is checked rather than asserted.  ``urllib`` also opens ``file:``
+    and ``ftp:``, so a URL that did not come from ``SOURCES`` could have a local
+    file's contents extracted into the corpus and then compared against itself.
+    INVARIANT-36 requires every corpus source to be an IETF document; this is
+    the half of that requirement which holds at fetch time.
+    """
+    if not url.startswith("https://"):
+        raise ValueError(f"refusing a non-HTTPS corpus source URL: {url!r}")
     # The suppression sits on the `urlopen` line, not on the closing `as
     # response:` line — that is where ruff anchors S310, and a trailing
     # comment on the wrong line of a wrapped call silently disarms it.
-    with urllib.request.urlopen(  # noqa: S310 -- fixed https URLs from SOURCES (KFC-001)
+    with urllib.request.urlopen(  # noqa: S310 -- https enforced directly above (KFC-001)
         url, timeout=120
     ) as response:
         return response.read().decode("utf-8", "replace")

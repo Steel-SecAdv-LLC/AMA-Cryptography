@@ -434,6 +434,29 @@ of justification:
 fail if a suppression is missing a justification, missing a tracking ID, or
 appears in a forbidden directory.
 
+**Scope.** `tools/check_suppression_hygiene.py` covers `ama_cryptography/`,
+`tests/` **and `tools/`**. `tools/` was outside it until someone noticed what
+lives there: the gate scripts themselves. A suppression in that tree silences a
+static analyser *inside the layer that enforces this invariant*, which is the
+last place an unexplained one belongs. Widening the scan found two bare
+`# noqa: S310` markers — no reason, no tracking ID — over `urllib` calls in the
+corpus fetchers that accepted `file:` and `ftp:` URLs; both now check the
+scheme, so the suppression states a fact rather than a hope.
+
+Widening it also required the scanner to become precise about what a
+suppression *is*. It had been collecting the line numbers carrying a comment
+and then matching over the whole raw line, which put string literals back in
+scope, and it made no distinction between a marker and prose describing one —
+so the checkers' own documentation of their subject matter was reported as
+eight unjustified suppressions. It now reads the comment token's text, and only
+where the comment is *trailing*: `bandit`, `ruff` and `mypy` all anchor a
+suppression to the line of the finding, so a full-line comment suppresses
+nothing. mypy's file-level `# type: ignore` is the one standalone form that is
+real, and it is kept in scope explicitly. The set of suppressions policed in
+`ama_cryptography/` and `tests/` is unchanged by this — 96 before and after —
+so the precision gain removed false positives only. Both directions are pinned
+by `tests/test_invariant_upgrades.py::TestSuppressionScanPrecision`.
+
 ## INVARIANT-14 — CVE Ignore-List Hygiene
 
 Every `--ignore-vuln` flag in CI workflows **must** have an accompanying comment
@@ -1695,7 +1718,7 @@ the most common phrasing of the most common false claim in the tree and
 reported success. Its own negative controls found that, and fixing the pattern
 immediately surfaced two further live instances.
 
-`tests/test_rfc3161_api_honesty.py` — 18 tests — drives the behaviour the table
+`tests/test_rfc3161_api_honesty.py` — 20 tests — drives the behaviour the table
 describes, so the table cannot become aspirational. The load-bearing one is
 `test_a_token_with_a_nonsense_signature_still_satisfies_the_binding`: it builds
 a token in-process, with no key and no TSA, whose signature octets are zeros

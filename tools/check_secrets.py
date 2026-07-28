@@ -49,7 +49,7 @@ from __future__ import annotations
 import argparse
 import math
 import re
-import subprocess  # nosec B404 - fixed argv git invocation, no shell, see _tracked_files
+import subprocess  # nosec B404 -- fixed-argv git invocation only, see _tracked_files (SEC-001)
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -375,7 +375,7 @@ def _tracked_files(repo_root: Path, staged_only: bool) -> list[Path]:
         else ["git", "ls-files"]
     )
     try:
-        out = subprocess.run(  # nosec B603 - fixed argv, no shell, trusted binary
+        out = subprocess.run(  # nosec B603 -- fixed argv, no shell, trusted git binary (SEC-002)
             args,
             cwd=str(repo_root),
             capture_output=True,

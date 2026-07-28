@@ -21,11 +21,12 @@ AI Co-Architects:
 
 import base64
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
 import ama_cryptography.legacy_compat as dgs
+from tests._http_response_mock import make_response
 
 # ============================================================================
 # CRYPTO_AVAILABLE=False TESTS
@@ -180,8 +181,9 @@ class TestRFC3161SuccessPath:
         payload = b"data"
         digest = hashlib.sha256(payload).digest()
 
-        mock_response = MagicMock(status=200)
-        mock_response.getheader.return_value = None
+        # A faithful HTTPResponse.read (honours `amt`, reports EOF) — the
+        # client reads its body in bounded chunks against a total deadline.
+        mock_response, reply = make_response()
         mock_conn = mock_https_conn.return_value
         mock_conn.getresponse.return_value = mock_response
 
@@ -202,14 +204,16 @@ class TestRFC3161SuccessPath:
                 imprint.read_octet_string() == digest
             ), "hashedMessage must be the digest of the caller's data"
             nonce = req.read_integer()
-            mock_response.read.return_value = _granted_response(digest, nonce)
+            answer = _granted_response(digest, nonce)
+            posted["answer"] = answer
+            reply.set(answer)
 
         mock_conn.request.side_effect = _capture
 
         tsr = dgs.get_rfc3161_timestamp(payload, "https://tsa.example.com")
 
         # The legacy API returns the whole response, unchanged.
-        assert tsr == mock_response.read.return_value
+        assert tsr == posted["answer"]
 
         mock_https_conn.assert_called_once_with("tsa.example.com", None, timeout=10)
         call = mock_conn.request.call_args
@@ -231,8 +235,7 @@ class TestRFC3161SuccessPath:
         digest = hashlib.sha256(b"data").digest()
         with patch.object(subprocess, "run") as mock_run:
             with patch("http.client.HTTPSConnection") as mock_https_conn:
-                mock_response = MagicMock(status=200)
-                mock_response.getheader.return_value = None
+                mock_response, reply = make_response()
                 mock_conn = mock_https_conn.return_value
                 mock_conn.getresponse.return_value = mock_response
 
@@ -242,7 +245,7 @@ class TestRFC3161SuccessPath:
                     req = DerReader(body).read_sequence()
                     req.read_integer()
                     req.read_sequence()
-                    mock_response.read.return_value = _granted_response(digest, req.read_integer())
+                    reply.set(_granted_response(digest, req.read_integer()))
 
                 mock_conn.request.side_effect = _capture
                 dgs.get_rfc3161_timestamp(b"data", "https://tsa.example.com")

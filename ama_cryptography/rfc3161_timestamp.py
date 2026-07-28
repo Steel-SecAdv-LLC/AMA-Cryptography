@@ -65,7 +65,7 @@ import warnings
 from contextlib import contextmanager
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Callable, Dict, Generator, Literal, Mapping, NoReturn, Optional
+from typing import Any, Callable, Dict, Generator, Literal, Mapping, NoReturn, Optional
 from urllib.parse import urlparse
 
 _logger = logging.getLogger(__name__)
@@ -424,8 +424,57 @@ _MAX_TSR_BYTES = 256 * 1024
 #: terminating ContentInfo check.
 _MAX_TSR_UNWRAP = 2
 
-#: How long to wait on the TSA, in seconds.
+#: How long to wait on any single socket operation, in seconds.
 _TSA_TIMEOUT = 10
+
+#: How long the whole exchange may take, in seconds.
+#:
+#: A socket timeout bounds one ``recv``, not the transfer. It is rearmed by
+#: every byte that arrives, so a peer sending one octet every nine seconds
+#: never trips it — and with a 256 KiB ceiling that is a signing process parked
+#: on a socket for roughly three weeks. The per-operation timeout is the wrong
+#: instrument for that and no value of it is the right one; the transfer needs
+#: a deadline of its own.
+#:
+#: The peer here is a network peer by construction (the default is a public
+#: TSA), so "the TSA is slow" and "the TSA is holding the pipeline open" are
+#: the same observation from inside the process. Thirty seconds is ample for a
+#: few-kilobyte token over any real link and turns an indefinite hang into a
+#: ``TimestampError`` the caller can act on.
+_TSA_TOTAL_DEADLINE = 30
+
+
+def _read_bounded(response: Any, limit: int, deadline: float) -> bytes:
+    """Read at most ``limit + 1`` octets from ``response``, honouring ``deadline``.
+
+    One octet past the cap on purpose: an over-long body is then *detected*
+    rather than silently truncated into a prefix that might still parse as a
+    shorter, different token.
+
+    ``deadline`` is an absolute :func:`time.monotonic` value — monotonic
+    because a wall-clock jump (NTP step, suspend/resume) must not either abort
+    a healthy transfer or extend a stalled one.
+    """
+    chunks: list[bytes] = []
+    total = 0
+    while total <= limit:
+        if time.monotonic() >= deadline:
+            raise TimestampError(
+                f"TSA response did not complete within {_TSA_TOTAL_DEADLINE}s "
+                f"({total} octet(s) received)"
+            )
+        chunk = response.read(min(_TSA_READ_CHUNK, limit + 1 - total))
+        if not chunk:
+            break
+        chunks.append(chunk)
+        total += len(chunk)
+    return b"".join(chunks)
+
+
+#: Read granularity. Small enough that the deadline is checked often on a slow
+#: link, large enough that a healthy few-kilobyte token arrives in one or two
+#: iterations.
+_TSA_READ_CHUNK = 64 * 1024
 
 
 def request_timestamp_token(
@@ -500,6 +549,9 @@ def request_timestamp_exchange(
     if parsed.query:
         path = f"{path}?{parsed.query}"
 
+    # Armed before the connection is made, so a peer cannot spend the budget on
+    # a slow TLS handshake and still get a full transfer window afterwards.
+    deadline = time.monotonic() + _TSA_TOTAL_DEADLINE
     conn = http.client.HTTPSConnection(parsed.hostname, parsed.port, timeout=_TSA_TIMEOUT)
     try:
         conn.request(
@@ -518,9 +570,7 @@ def request_timestamp_exchange(
                     )
             except ValueError:
                 raise TimestampError("TSA sent a malformed Content-Length") from None
-        # Read one octet past the cap so an over-long body is detected rather
-        # than silently truncated into something that might still parse.
-        raw = response.read(_MAX_TSR_BYTES + 1)
+        raw = _read_bounded(response, _MAX_TSR_BYTES, deadline)
         if len(raw) > _MAX_TSR_BYTES:
             raise TimestampError(f"TSA response exceeds the {_MAX_TSR_BYTES}-byte limit")
     except TimestampError:

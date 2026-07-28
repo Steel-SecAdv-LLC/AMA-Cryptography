@@ -19,6 +19,117 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ## [Unreleased]
 
+### Fixed — the checkout was not byte-identical across platforms
+
+All ten Windows CI jobs failed on
+`test_tightening_the_threshold_only_removes_benign_files`, reporting that the
+note detector's 1.75 default "is no longer sitting just above the benign band —
+recalibration is due". The detector, the threshold and the document were all
+correct. **The two platforms were reading different files.**
+
+Git's default on Windows (`core.autocrlf=true`) rewrites LF to CRLF on
+checkout, so the working tree stops matching the committed blob.
+`NoteArtifactDetector` scans at most 8 KiB, sampling head and tail of anything
+larger — so for a 38 KiB document, *which* text is scored depends on the byte
+offsets of everything before it. `IMPLEMENTATION_GUIDE.md` scored 1.50 on Linux
+and 1.25 on Windows because 1,343 line terminators had each grown an octet and
+slid a marker out of the sampled tail. The calibration then could not hold.
+
+The same assumption is load-bearing elsewhere and was equally undefended: the
+Wycheproof corpus is SHA-256-pinned per file, the key-format corpus is checked
+against structural record sizes, and the reproducible-build gate compares
+artefact digests. `.gitattributes` already carried `-text` for the Wycheproof
+corpus, for exactly this reason, on exactly two paths.
+
+- **`.gitattributes` now marks the whole tree `-text`**, disabling both the
+  clean and the smudge filter, so the working tree *is* the committed blob on
+  every platform and no gate depends on how a contributor's git is configured.
+  Fuzzer seed corpora are marked `binary`; two of them carry CRLF as data.
+- **`tools/check_line_endings.py` (new gate, wired into `ci.yml`)** keeps that
+  true from both sides. It resolves the effective attribute through git's own
+  matcher rather than grepping `.gitattributes` — which a comment would satisfy
+  — and it inspects the **index**, not the working tree: with conversion off,
+  git no longer normalises on commit either, so a contributor's CRLF would now
+  be committed verbatim and skew the same gates on *every* platform at once, a
+  strictly worse outcome than the one being fixed. Both directions are pinned
+  by `tests/test_line_endings_gate.py` against synthetic records, because
+  committing a CRLF blob to prove the gate notices CRLF blobs would be the
+  drift the gate exists to prevent.
+- **The calibration is now a property of the corpus text**, normalising line
+  endings as it reads, so it holds under any checkout configuration including
+  one predating the attribute. The detector itself deliberately does *not*
+  normalise: it scores the payload it is handed, and a note that arrives with
+  CRLF is still a note.
+  `test_calibration_does_not_depend_on_the_checkout_line_endings` compares the
+  full `{path: score}` mapping rather than the flagged set — a flagged-set
+  comparison passes while scores drift right up to the moment one crosses a
+  threshold, and would have gone green on the very corpus that was failing.
+
+### Fixed — a TSA could hold the signing process on a socket indefinitely
+
+`request_timestamp_exchange` set a 10-second socket timeout and read the
+response body in one call. A socket timeout bounds one `recv`, not the
+transfer: it is rearmed by every byte that arrives, so a peer sending one octet
+every nine seconds never trips it — and against the 256 KiB ceiling that is a
+signing process parked on a socket for roughly three weeks. The peer is a
+network peer by construction (the default is a public TSA), so "the TSA is
+slow" and "the TSA is holding the pipeline open" are the same observation from
+inside the process.
+
+The transfer now has a deadline of its own (`_TSA_TOTAL_DEADLINE`, 30s), armed
+before the connection is made so a slow handshake cannot buy a full transfer
+window afterwards, and measured on `time.monotonic` so an NTP step neither
+aborts a healthy transfer nor extends a stalled one. The body is read in
+bounded chunks, still one octet past the cap so an over-long response is
+*detected* rather than silently truncated into a prefix that might parse as a
+shorter token.
+
+Three test sites had mocked the TSA response with
+`mock_response.read.return_value = body` — an object that returns the whole
+body for every call however few octets were asked for, and never signals EOF.
+That is not a response; it is an infinite stream, and it is why the unbounded
+read looked fine. The contract now lives in one place
+(`tests/_http_response_mock.py`) and matches `http.client.HTTPResponse.read`.
+
+### Fixed — the four open CodeQL alerts, at what they pointed at
+
+- **`_legacy_rfc3161_key_logged` reported as an unused global.** The
+  `global _flag` / `if not _flag: _flag = True` one-shot idiom is dead *within
+  the call that performs the store*, which is what the analyser saw — and it is
+  also not thread-safe: two threads reading a verdict concurrently can both
+  observe `False` before either stores `True`, so the docstring's "once per
+  process" was a claim the mechanism did not make. Replaced by `_OnceLatch`, a
+  double-checked latch that takes no lock on the fast path and is contended at
+  most once per process. `test_the_one_time_log_line_is_emitted_exactly_once_under_concurrency`
+  releases 32 threads on a barrier and requires exactly one to latch.
+- **Three "statement has no effect" on `@overload` bodies.** `...` in a `.py`
+  file is an expression statement whose value is discarded; it is exempt in
+  `.pyi` stubs, and these signatures cannot move to one because they must stay
+  beside the implementation they constrain. The bodies are now docstrings — the
+  other body Python treats as declarative — which say what each overload means
+  instead of standing in for a body.
+
+### Changed — INVARIANT-13 now covers the gates themselves
+
+`tools/check_suppression_hygiene.py` scanned `ama_cryptography/` and `tests/`
+but not `tools/` — the tree holding the gate scripts, where a silenced static
+analyser sits *inside* the layer that enforces this repository's security
+policy. Widening it found two bare `# noqa: S310` markers with no reason and no
+tracking ID, over `urllib` calls in the corpus fetchers that accepted `file:`
+and `ftp:` URLs; both now check the scheme first, so the suppression states a
+fact.
+
+Widening also required the scanner to stop confusing prose *about* a
+suppression with a suppression: it had been matching over the whole raw line
+(putting string literals back in scope, which tokenizing was supposed to rule
+out) and made no distinction for full-line comments, which `bandit`, `ruff` and
+`mypy` all ignore because they anchor to the line of the finding. The checkers'
+own documentation of their subject matter was reported as eight unjustified
+suppressions. It now reads comment tokens, and only trailing ones, keeping
+mypy's file-level `# type: ignore` explicitly. The set policed in
+`ama_cryptography/` and `tests/` is unchanged — 96 before and after — so the
+precision gain removed false positives only.
+
 ### Fixed — the library documented a verification it does not perform (INVARIANT-37)
 
 AMA implements the RFC 3161 wire format and the §2.4.2 message-imprint binding.

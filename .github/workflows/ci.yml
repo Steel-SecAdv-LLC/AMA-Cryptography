@@ -638,6 +638,34 @@ jobs:
       run: |
         python tools/check_fdopen_safety.py
 
+    - name: Checkout byte-identity (line endings)
+      # Several controls in this repository measure octets rather than meaning:
+      # the Wycheproof corpus is SHA-256-pinned per file, the key-format corpus
+      # is checked against structural record sizes, the reproducible-build gate
+      # compares artefact digests, and NoteArtifactDetector samples a fixed
+      # 8 KiB head-and-tail window of each tracked file.  All of them silently
+      # assume the working tree is the committed blob.
+      #
+      # Git's default on Windows (core.autocrlf=true) breaks that assumption on
+      # checkout, and it is not a theoretical concern: it failed all ten Windows
+      # jobs on this branch.  IMPLEMENTATION_GUIDE.md scored 1.50 on Linux and
+      # 1.25 on Windows because 1,343 line terminators had each grown a byte,
+      # sliding the 8 KiB window past a marker — so the threshold-sweep
+      # calibration could not hold on a detector, document and threshold that
+      # were all correct.  The failure named none of that; it named a
+      # recalibration that was not due.
+      #
+      # `* -text` in .gitattributes disables both filters so the tree is
+      # byte-identical everywhere.  This gate keeps that true from both sides:
+      # the effective attribute is resolved through git's own matcher (grepping
+      # .gitattributes would be satisfied by a comment), and the *index* is
+      # inspected rather than the working tree, because with conversion off a
+      # contributor's CRLF is now committed verbatim and would skew the same
+      # gates on every platform at once.  Both directions are pinned by
+      # tests/test_line_endings_gate.py.
+      run: |
+        python tools/check_line_endings.py
+
   benchmark-regression:
     name: Benchmark Regression Detection (${{ matrix.runner_cpu_class }})
     # x86_64 entry uses ubuntu-latest; arm64 entry uses ubuntu-24.04-arm

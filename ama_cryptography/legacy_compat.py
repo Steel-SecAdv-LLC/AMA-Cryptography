@@ -38,6 +38,7 @@ import os
 import secrets
 import struct
 import sys
+import threading
 import time
 import warnings
 from dataclasses import asdict, dataclass, field
@@ -1070,8 +1071,49 @@ _RFC3161_BINDING_KEY = "rfc3161_binding"
 #: The pre-INVARIANT-37 name, kept for callers that already read it.
 _LEGACY_RFC3161_KEY = "rfc3161"
 
-#: Whether the one-time log line for the legacy key has been emitted.
-_legacy_rfc3161_key_logged = False
+
+class _OnceLatch:
+    """A one-shot latch: :meth:`trip` returns ``True`` exactly once per process.
+
+    Replaces the ``global _flag`` / ``if not _flag: _flag = True`` idiom this
+    used to be, for two reasons.
+
+    The idiom is not thread-safe.  Two threads reading a verdict concurrently
+    can both observe ``False`` before either stores ``True``, so the docstring's
+    "once per process" was a claim the mechanism did not make — and a warning
+    that can be emitted twice is a warning whose count means nothing to whoever
+    is grepping the log.
+
+    It is also unreadable to static analysis: the store is dead *within the
+    call that performs it*, so a dataflow analyser reports the assignment as
+    having no effect.  CodeQL did (alert 582).  Suppressing that would have
+    left the thread-safety defect in place under a comment saying it was fine.
+
+    The fast path takes no lock: once ``_tripped`` is set it is never cleared,
+    so a racing reader can only observe a stale ``False``, take the lock, and
+    re-check.  The lock is therefore contended at most once per process, on a
+    path that already calls :func:`warnings.warn`.
+    """
+
+    __slots__ = ("_lock", "_tripped")
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._tripped = False
+
+    def trip(self) -> bool:
+        """Latch, returning ``True`` only for the caller that latched it."""
+        if self._tripped:
+            return False
+        with self._lock:
+            if self._tripped:
+                return False
+            self._tripped = True
+            return True
+
+
+#: Latches when the one-time log line for the legacy key has been emitted.
+_legacy_rfc3161_key_log = _OnceLatch()
 
 _T = TypeVar("_T")
 
@@ -1088,7 +1130,6 @@ def _warn_legacy_rfc3161_key(stacklevel: int) -> None:
     with ordinary logging configuration actually sees. Once per process, since
     the misread is a property of the code, not of the loop it runs in.
     """
-    global _legacy_rfc3161_key_logged
     message = (
         'verify_crypto_package results key "rfc3161" is deprecated and misnamed: '
         "its value is the RFC 3161 §2.4.2 message-imprint *binding* — whether the "
@@ -1098,8 +1139,7 @@ def _warn_legacy_rfc3161_key(stacklevel: int) -> None:
         "attestation."
     )
     warnings.warn(message, DeprecationWarning, stacklevel=stacklevel)
-    if not _legacy_rfc3161_key_logged:
-        _legacy_rfc3161_key_logged = True
+    if _legacy_rfc3161_key_log.trip():
         _logger.warning("%s", message)
 
 
@@ -1148,14 +1188,27 @@ class _VerificationResults(Dict[str, Optional[bool]]):
     # violation under ``mypy --strict`` — a subclass that quietly refused an
     # arbitrary default would be a real behaviour change smuggled in by a
     # warning shim.
+    #
+    # The bodies are docstrings rather than the customary ``...``. An overload
+    # body is never executed, so both are equivalent at runtime — but ``...``
+    # in a ``.py`` file is an expression statement whose value is discarded,
+    # which dataflow analysis reports as a statement with no effect (CodeQL
+    # alerts 579-581). Ellipsis is exempted in ``.pyi`` stubs, and these
+    # signatures cannot move to one: they must stay beside the implementation
+    # they constrain. A docstring is the other body Python treats as
+    # declarative, it is exempt for the same reason, and it says what each
+    # overload means instead of standing in for a body.
     @overload
-    def get(self, key: str, default: None = ..., /) -> Optional[bool]: ...
+    def get(self, key: str, default: None = ..., /) -> Optional[bool]:
+        """Read ``key``, or ``None`` when it is absent."""
 
     @overload
-    def get(self, key: str, default: Optional[bool], /) -> Optional[bool]: ...
+    def get(self, key: str, default: Optional[bool], /) -> Optional[bool]:
+        """Read ``key``, or a tri-state default when it is absent."""
 
     @overload
-    def get(self, key: str, default: _T, /) -> Union[Optional[bool], _T]: ...
+    def get(self, key: str, default: _T, /) -> Union[Optional[bool], _T]:
+        """Read ``key``, or an arbitrary default when it is absent."""
 
     def get(self, key: str, default: Any = None, /) -> Any:
         if key == _LEGACY_RFC3161_KEY:

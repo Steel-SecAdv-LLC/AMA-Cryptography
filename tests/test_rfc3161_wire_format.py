@@ -353,3 +353,95 @@ def test_the_legacy_verifier_agrees_with_the_binding_check() -> None:
     token = make_token(make_tst_info(hashlib.sha256(DATA).digest(), TSA_HASH_OIDS["sha256"]))
     assert verify_rfc3161_timestamp(DATA, token) is True
     assert verify_rfc3161_timestamp(b"other", token) is False
+
+
+# ---------------------------------------------------------------------------
+# Transport: the response body is bounded in size *and* in time
+# ---------------------------------------------------------------------------
+class _DripResponse:
+    """An HTTP response that never finishes, one octet at a time.
+
+    Models the peer a socket timeout cannot catch: every ``read`` returns data,
+    so the per-operation timer is rearmed forever and the transfer itself is
+    what never terminates.  ``time.monotonic`` is not slept through — the clock
+    is advanced by the harness — so the test costs nothing to run.
+    """
+
+    def __init__(self, clock: list[float], per_read_seconds: float = 1.0) -> None:
+        self._clock = clock
+        self._per_read = per_read_seconds
+        self.reads = 0
+
+    def read(self, amount: int) -> bytes:
+        self.reads += 1
+        self._clock[0] += self._per_read
+        return b"\x00"
+
+
+class _FiniteResponse:
+    """A well-behaved peer that delivers ``body`` across several reads."""
+
+    def __init__(self, body: bytes, chunk: int) -> None:
+        self._body = body
+        self._chunk = chunk
+        self._pos = 0
+
+    def read(self, amount: int) -> bytes:
+        take = min(self._chunk, amount, len(self._body) - self._pos)
+        out = self._body[self._pos : self._pos + take]
+        self._pos += take
+        return out
+
+
+def test_a_drip_feeding_tsa_hits_the_total_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A socket timeout bounds one recv; it does not bound the transfer.
+
+    Without a deadline of its own, a peer sending one octet per nine seconds
+    never trips a ten-second socket timeout, and the 256 KiB ceiling puts the
+    worst case at roughly three weeks with the signing process parked on the
+    socket the whole time.
+    """
+    from ama_cryptography import rfc3161_timestamp as ts
+
+    clock = [1000.0]
+    monkeypatch.setattr(ts.time, "monotonic", lambda: clock[0])
+    response = _DripResponse(clock, per_read_seconds=1.0)
+    deadline = clock[0] + ts._TSA_TOTAL_DEADLINE
+
+    with pytest.raises(TimestampError, match="did not complete within"):
+        ts._read_bounded(response, ts._MAX_TSR_BYTES, deadline)
+
+    # It gave up on the deadline, not after draining 256 KiB one octet at a time.
+    assert response.reads <= int(ts._TSA_TOTAL_DEADLINE) + 1
+
+
+def test_a_prompt_response_is_returned_whole(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The deadline must not truncate a healthy multi-chunk transfer."""
+    from ama_cryptography import rfc3161_timestamp as ts
+
+    monkeypatch.setattr(ts.time, "monotonic", lambda: 0.0)
+    body = bytes(range(256)) * 40  # 10 240 octets
+    response = _FiniteResponse(body, chunk=1024)
+    assert ts._read_bounded(response, ts._MAX_TSR_BYTES, 30.0) == body
+
+
+def test_an_over_long_body_is_detected_not_truncated(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Reading one octet past the cap is what distinguishes the two."""
+    from ama_cryptography import rfc3161_timestamp as ts
+
+    monkeypatch.setattr(ts.time, "monotonic", lambda: 0.0)
+    limit = 4096
+    response = _FiniteResponse(b"A" * (limit + 500), chunk=512)
+    raw = ts._read_bounded(response, limit, 30.0)
+    assert len(raw) == limit + 1, "an over-long body must be observable, not silently cut to size"
+
+
+def test_the_deadline_is_monotonic_not_wall_clock() -> None:
+    """A clock step must not abort a healthy transfer or extend a stalled one."""
+    import inspect
+
+    from ama_cryptography import rfc3161_timestamp as ts
+
+    source = inspect.getsource(ts._read_bounded) + inspect.getsource(ts.request_timestamp_exchange)
+    assert "time.monotonic()" in source
+    assert "time.time()" not in source
