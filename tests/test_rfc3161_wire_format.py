@@ -309,6 +309,27 @@ def test_a_token_with_no_econtent_attests_to_nothing() -> None:
         extract_tst_info(token)
 
 
+def test_a_response_that_nests_timestampresp_is_bounded_not_recursed() -> None:
+    """A TimeStampResp nested inside a TimeStampResp ... must hit a depth bound.
+
+    ``extract_tst_info`` recognises a status envelope by its first inner element
+    being a SEQUENCE (PKIStatusInfo) rather than a ContentInfo's contentType
+    OID, and unwraps it. A structure that keeps that shape at every level used
+    to recurse once per layer, so a few dozen levels drove ``RecursionError``
+    straight past the ``TimestampError`` boundary the module otherwise
+    guarantees — the DoS class it bounds for CBOR and OIDs. It is now refused by
+    ``_MAX_TSR_UNWRAP`` instead.
+    """
+    granted_status = der_sequence(der_integer(0))
+    # The innermost value keeps the "looks like a response" shape, so the unwrap
+    # never terminates on a ContentInfo and must terminate on the depth bound.
+    nested = der_sequence(granted_status, granted_status)
+    for _ in range(64):
+        nested = der_sequence(granted_status, nested)
+    with pytest.raises(TimestampError, match="nests more than"):
+        extract_tst_info(nested)
+
+
 # ---------------------------------------------------------------------------
 # The legacy API's contract, and what it now refuses to pretend
 # ---------------------------------------------------------------------------

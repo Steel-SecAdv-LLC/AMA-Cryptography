@@ -739,10 +739,19 @@ def _derive_public(alg: _Alg, secret: bytes) -> bytes:
     after 17.8 million executions.
     """
     if alg.kind == "okp":
-        if alg.name == "Ed25519":
-            public, _ = _pb.native_ed25519_keypair_from_seed(secret)
-            return bytes(public)
-        return _pb.native_x25519_key_exchange(secret, bytes([9]) + b"\x00" * 31)
+        # Wrapped for the same reason as the EC and PQ arms below: a backend
+        # refusal here is a property of the key file, so it must surface as a
+        # KeyFormatError rather than a bare ValueError/RuntimeError escaping the
+        # module's documented boundary. 32-octet inputs are accepted by both
+        # kernels today, so this is defence in depth against a future backend
+        # that validates the seed harder — not a reproduced escape.
+        try:
+            if alg.name == "Ed25519":
+                public, _ = _pb.native_ed25519_keypair_from_seed(secret)
+                return bytes(public)
+            return _pb.native_x25519_key_exchange(secret, bytes([9]) + b"\x00" * 31)
+        except (ValueError, RuntimeError) as exc:
+            raise KeyFormatError(f"{alg.name} private key is not usable: {exc}") from None
     if alg.kind == "ec":
         try:
             if alg.name == "secp256k1":
@@ -1692,10 +1701,22 @@ def _load_jwk(jwk: Union[dict[str, Any], str]) -> dict[str, Any]:
     if isinstance(jwk, str):
         try:
             obj = json.loads(jwk, object_pairs_hook=_reject_duplicate_members)
-        except json.JSONDecodeError as exc:
-            raise KeyFormatError(f"invalid JWK JSON: {exc}") from None
+        except KeyFormatError:
+            # Raised by _reject_duplicate_members; keep its specific message
+            # rather than re-wrapping it below (KeyFormatError is a ValueError).
+            raise
         except RecursionError:
             raise KeyFormatError("JWK JSON is nested too deeply") from None
+        except ValueError as exc:
+            # json.JSONDecodeError is a ValueError subclass — and so is the bare
+            # ValueError CPython raises when an integer literal in the document
+            # exceeds sys.get_int_max_str_digits() (default 4300; a member need
+            # not even be used). Both are malformed input, and neither may
+            # escape this module's KeyFormatError boundary, which a caller
+            # catches to mean "bad key file". A deployment that raises the digit
+            # limit would otherwise turn an over-long literal into attacker-
+            # controlled bignum work during the parse.
+            raise KeyFormatError(f"invalid JWK JSON: {exc}") from None
     else:
         obj = jwk
     if not isinstance(obj, dict):

@@ -5685,6 +5685,12 @@ def native_lms_pubkey_params(pubkey: bytes) -> dict:
             resolved onto a neighbour (INVARIANT-35).
     """
     _lms_require_native()
+    if len(pubkey) != AMA_LMS_PUBKEY_LEN:
+        # An LMS public key is exactly u32(type) || u32(otstype) || I(16) ||
+        # T[1](n=32) = 56 octets (RFC 8554 §5.3). Reject a wrong length at the
+        # boundary with a legible message rather than letting the native rc
+        # collapse every structural problem into one opaque code.
+        raise ValueError(f"LMS public key must be {AMA_LMS_PUBKEY_LEN} bytes, got {len(pubkey)}")
     lms_type = ctypes.c_uint32(0)
     ots_type = ctypes.c_uint32(0)
     h = ctypes.c_uint32(0)
@@ -5699,11 +5705,31 @@ def native_lms_pubkey_params(pubkey: bytes) -> dict:
     )
     if rc != 0:
         raise ValueError(f"Not a valid LMS public key (rc={rc})")
+    lms_typecode = lms_type.value
+    lmots_typecode = ots_type.value
+    tree_height = h.value
+    winternitz_w = w.value
+    # Defence in depth against a C<->Python table drift: the height and
+    # Winternitz width the native tables just reported must match the RFC 8554
+    # registry transcribed here (Tables 1 and 2). A disagreement means one side
+    # mapped a typecode onto the wrong parameter -- exactly the neighbour-
+    # resolution failure INVARIANT-35 exists to prevent -- so refuse rather than
+    # return a value the two halves do not agree on.
+    if LMS_TREE_HEIGHT.get(lms_typecode) != tree_height:
+        raise ValueError(
+            f"LMS typecode {lms_typecode} reported height {tree_height}, "
+            "which disagrees with the RFC 8554 Table 2 registry"
+        )
+    if LMOTS_WINTERNITZ_W.get(lmots_typecode) != winternitz_w:
+        raise ValueError(
+            f"LM-OTS typecode {lmots_typecode} reported width {winternitz_w}, "
+            "which disagrees with the RFC 8554 Table 1 registry"
+        )
     return {
-        "lms_type": lms_type.value,
-        "lmots_type": ots_type.value,
-        "h": h.value,
-        "w": w.value,
+        "lms_type": lms_typecode,
+        "lmots_type": lmots_typecode,
+        "h": tree_height,
+        "w": winternitz_w,
     }
 
 
@@ -5731,11 +5757,22 @@ def native_hss_pubkey_levels(pubkey: bytes) -> int:
             ``AMA_HSS_MAX_LEVELS``.
     """
     _lms_require_native()
+    if len(pubkey) != AMA_HSS_PUBKEY_LEN:
+        # An HSS public key is u32(L) || LMS_public_key = 4 + 56 = 60 octets
+        # (RFC 8554 §6.1). Anything else cannot name a level count.
+        raise ValueError(f"HSS public key must be {AMA_HSS_PUBKEY_LEN} bytes, got {len(pubkey)}")
     levels = ctypes.c_uint32(0)
     rc = _native_lib.ama_hss_pubkey_levels(bytes(pubkey), len(pubkey), ctypes.byref(levels))
     if rc != 0:
         raise ValueError(f"Not a valid HSS public key (rc={rc})")
-    return int(levels.value)
+    level_count = int(levels.value)
+    # RFC 8554 §6.1 bounds L to [1, 8]; AMA_HSS_MAX_LEVELS pins the upper end.
+    # The native walker already enforces this before returning rc==0, so a value
+    # outside the range here means the native ABI and this wrapper have drifted.
+    # Refuse rather than hand back a level count the format does not permit.
+    if not 1 <= level_count <= AMA_HSS_MAX_LEVELS:
+        raise ValueError(f"HSS level count {level_count} outside [1, {AMA_HSS_MAX_LEVELS}]")
+    return level_count
 
 
 def native_lms_verify(message: bytes, signature: bytes, pubkey: bytes) -> bool:
@@ -5757,6 +5794,9 @@ def native_lms_verify(message: bytes, signature: bytes, pubkey: bytes) -> bool:
             error; a bad signature is an answer.
     """
     _lms_require_native()
+    if len(pubkey) != AMA_LMS_PUBKEY_LEN:
+        # A malformed key is a caller error, distinct from a failed signature.
+        raise ValueError(f"LMS public key must be {AMA_LMS_PUBKEY_LEN} bytes, got {len(pubkey)}")
     rc = _native_lib.ama_lms_verify(
         bytes(message), len(message), bytes(signature), len(signature), bytes(pubkey), len(pubkey)
     )
@@ -5788,6 +5828,9 @@ def native_hss_verify(message: bytes, signature: bytes, pubkey: bytes) -> bool:
         ValueError: If the *public key* is malformed.
     """
     _lms_require_native()
+    if len(pubkey) != AMA_HSS_PUBKEY_LEN:
+        # A malformed key is a caller error, distinct from a failed signature.
+        raise ValueError(f"HSS public key must be {AMA_HSS_PUBKEY_LEN} bytes, got {len(pubkey)}")
     rc = _native_lib.ama_hss_verify(
         bytes(message), len(message), bytes(signature), len(signature), bytes(pubkey), len(pubkey)
     )

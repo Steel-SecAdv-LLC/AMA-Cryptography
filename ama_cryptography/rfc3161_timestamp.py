@@ -311,13 +311,23 @@ def extract_tst_info(token: bytes) -> bytes:
         TimestampError: the input is not a well-formed RFC 3161 token.
     """
     try:
-        probe = DerReader(token)
-        outer = probe.read_sequence()
-        first = outer.peek_tag()
         # A TimeStampResp opens with PKIStatusInfo (a SEQUENCE); a ContentInfo
-        # opens with the contentType OID.
-        if first == 0x30:
-            return extract_tst_info(parse_timestamp_response(token))
+        # opens with the contentType OID. Unwrap any response envelope first,
+        # under a hard bound: recursing on each layer let a token that nests
+        # TimeStampResp structures drive RecursionError straight past this
+        # function's TimestampError boundary — the DoS class this module bounds
+        # elsewhere (_CBOR_MAX_DEPTH, _OID_MAX_BODY). A real token needs at most
+        # one unwrap.
+        for _ in range(_MAX_TSR_UNWRAP):
+            outer = DerReader(token).read_sequence()
+            if outer.peek_tag() != 0x30:
+                break
+            token = parse_timestamp_response(token)
+        else:
+            raise TimestampError(
+                f"timestamp response nests more than {_MAX_TSR_UNWRAP - 1} level(s), "
+                "which no RFC 3161 token does"
+            )
         content_type = outer.read_oid()
         if content_type != _OID_SIGNED_DATA:
             raise TimestampError(
@@ -377,6 +387,14 @@ def extract_tst_info(token: bytes) -> bytes:
 #: allocate arbitrary memory *before* a single validity check ran. 256 KiB is
 #: two orders of magnitude above any real token and still bounded.
 _MAX_TSR_BYTES = 256 * 1024
+
+#: Maximum number of TimeStampResp envelopes ``extract_tst_info`` will unwrap
+#: before it reaches a ContentInfo. A real token is either bare (0 unwraps) or a
+#: single response wrapping one token (1 unwrap); anything deeper is a crafted
+#: structure whose only purpose is to drive unbounded recursion, so it is
+#: refused rather than followed. Two allows the single legitimate unwrap and its
+#: terminating ContentInfo check.
+_MAX_TSR_UNWRAP = 2
 
 #: How long to wait on the TSA, in seconds.
 _TSA_TIMEOUT = 10
@@ -752,7 +770,17 @@ class MockTSA:
 
     @staticmethod
     def verify(token: bytes, data_hash: bytes) -> bool:
-        """Verify a mock timestamp token against *data_hash*."""
+        """Verify a mock timestamp token against *data_hash*.
+
+        Gated on the same testing-context flag as :meth:`timestamp`. A mock
+        token is self-authenticating -- its HMAC key (the embedded nonce) ships
+        inside the token -- so this cannot tell a token the process produced
+        from one an attacker fabricated. Verification is therefore only
+        meaningful, and only permitted, inside a testing context; gating
+        creation but not verification would let a forged mock token be honoured
+        wherever verification runs.
+        """
+        MockTSA._check_allowed()
         try:
             if not token.startswith(_MOCK_MAGIC):
                 return False
@@ -795,6 +823,24 @@ class MockTSA:
 def _is_mock_token(token: bytes) -> bool:
     """Return True if *token* was produced by :class:`MockTSA`."""
     return token[:16] == _MOCK_MAGIC
+
+
+def _mock_tsa_enabled() -> bool:
+    """Non-raising counterpart to :meth:`MockTSA._check_allowed`.
+
+    ``verify_timestamp`` uses this to decide whether the mock path may run at
+    all, rather than letting ``_is_mock_token``'s format check alone route an
+    attacker-supplied token into the self-authenticating mock verifier. Returns
+    ``True`` only inside a testing context: the thread-local flag set by
+    :func:`allow_mock_tsa` / ``get_timestamp(tsa_mode="mock")``, or the
+    module-level ``_MOCK_TSA_ALLOWED`` a test fixture set. The global read is
+    taken under ``_MOCK_TSA_LOCK`` to match ``_check_allowed``'s visibility
+    guarantee.
+    """
+    if getattr(_mock_tsa_local, "allowed", False):
+        return True
+    with _MOCK_TSA_LOCK:
+        return _MOCK_TSA_ALLOWED
 
 
 def get_timestamp(
@@ -942,14 +988,13 @@ def _compute_data_hash(data: bytes, algorithm: str) -> Optional[bytes]:
     """Compute a hash of *data* using the named *algorithm*.
 
     Returns the digest bytes, or ``None`` if the algorithm is not supported.
+
+    Backed by the module-level ``_HASH_FUNCS`` so this covers exactly the six
+    algorithms ``TSA_HASH_OIDS`` / ``verify_token_binding`` accept. A local
+    subset here previously rejected an otherwise-valid ``sha384`` / ``sha3-384``
+    token before the binding check ran.
     """
-    _hash_funcs: Dict[str, Callable[[bytes], hashlib._Hash]] = {
-        "sha256": hashlib.sha256,
-        "sha3-256": hashlib.sha3_256,
-        "sha512": hashlib.sha512,
-        "sha3-512": hashlib.sha3_512,
-    }
-    func = _hash_funcs.get(algorithm)
+    func = _HASH_FUNCS.get(algorithm)
     if func is None:
         return None
     return func(data).digest()
@@ -1002,8 +1047,24 @@ def verify_timestamp(
             return False
         return computed_hash == timestamp_result.data_hash
 
-    # ---- Mock token path (does not require rfc3161ng) ----
+    # ---- Mock token path (test contexts only) ----
+    #
+    # A MockTSA token is self-authenticating: its HMAC key (the nonce) ships
+    # inside the token, so MockTSA.verify cannot distinguish a token this
+    # process produced from one an attacker fabricated. Honouring a mock-format
+    # token on the production verification path would therefore let anyone forge
+    # a "valid" timestamp -- with any genTime -- for any data, since the caller
+    # supplies the whole TimestampResult. Mock *creation* is already gated to a
+    # testing context; verification is gated the same way here, or the gate on
+    # creation prevents nothing. Outside a testing context a mock-format token
+    # is refused, never verified.
     if _is_mock_token(timestamp_result.token):
+        if not _mock_tsa_enabled():
+            _logger.warning(
+                "Refusing a MockTSA-format timestamp token outside a testing "
+                "context: mock verification is not a production trust path."
+            )
+            return False
         try:
             computed_hash = _compute_data_hash(data, timestamp_result.hash_algorithm)
             if computed_hash is None or computed_hash != timestamp_result.data_hash:

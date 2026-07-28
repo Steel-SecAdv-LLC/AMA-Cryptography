@@ -1478,6 +1478,30 @@ def test_jwk_with_a_non_string_member_is_refused() -> None:
         kf.jwk_to_public_key(jwk)
 
 
+def test_jwk_with_an_over_long_integer_literal_is_refused() -> None:
+    """A giant integer literal must not escape the KeyFormatError boundary.
+
+    CPython caps integer<->string conversion at ``sys.get_int_max_str_digits()``
+    (default 4300) and raises a *bare* ``ValueError`` -- not a
+    ``json.JSONDecodeError`` -- while parsing a longer literal, even one in a
+    member the JWK never uses. That ValueError is a sibling of, not a subclass
+    of, ``KeyFormatError``, so a caller catching the module's documented
+    boundary would not have caught it. Both string and bytes entry points must
+    convert it to ``KeyFormatError``.
+    """
+    # The literal lands in json.loads, which every JWK entry point reaches
+    # through _load_jwk (a bytes input is UTF-8 decoded to the same string
+    # first), so the string form covers all three.
+    over_long = "9" * (sys.get_int_max_str_digits() + 1)
+    jwk_str = '{"kty":"EC","crv":"P-256","x":"AAAA","y":"AAAA","spurious":' + over_long + "}"
+    with pytest.raises(KeyFormatError):
+        kf.jwk_to_public_key(jwk_str)
+    with pytest.raises(KeyFormatError):
+        kf.jwk_to_private_key(jwk_str)
+    with pytest.raises(KeyFormatError):
+        kf.jwk_thumbprint(jwk_str)
+
+
 def test_jwk_that_is_not_an_object_is_refused() -> None:
     for value in ("[]", '"a string"', "42", "null"):
         with pytest.raises(KeyFormatError, match="must be a JSON object"):

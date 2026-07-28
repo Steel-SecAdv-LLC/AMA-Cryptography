@@ -19,6 +19,7 @@ from ama_cryptography.rfc3161_timestamp import (
     RFC3161_AVAILABLE,
     TimestampResult,
     TimestampUnavailableError,
+    allow_mock_tsa,
     get_timestamp,
     verify_timestamp,
 )
@@ -135,11 +136,17 @@ class TestVerifyTimestamp:
     """Tests for verify_timestamp()."""
 
     def test_verify_matching_data(self) -> None:
-        """verify_timestamp must return True for matching data."""
+        """verify_timestamp must return True for matching data.
+
+        A mock token is only a trust path inside a testing context, so the
+        verify runs under ``allow_mock_tsa`` — outside it, a mock-format token
+        is refused (see ``test_mock_token_refused_outside_testing_context``).
+        """
         data = b"important document"
         result = get_timestamp(data, tsa_mode="mock", hash_algorithm="sha3-256")
         assert result is not None
-        assert verify_timestamp(data, result) is True
+        with allow_mock_tsa():
+            assert verify_timestamp(data, result) is True
 
     def test_verify_mismatched_data(self) -> None:
         """verify_timestamp must return False when data does not match."""
@@ -153,7 +160,48 @@ class TestVerifyTimestamp:
             hash_algorithm=result.hash_algorithm,
             data_hash=b"\x00" * 32,
         )
-        assert verify_timestamp(data, tampered) is False
+        with allow_mock_tsa():
+            assert verify_timestamp(data, tampered) is False
+
+    def test_mock_token_refused_outside_testing_context(self) -> None:
+        """A MockTSA-format token must not verify on the production path.
+
+        Mock tokens are self-authenticating (the HMAC key ships inside the
+        token), so honouring one outside a testing context would let anyone
+        forge a "valid" timestamp for any data by supplying the whole
+        ``TimestampResult``. The forged token below carries a correct HMAC and
+        an attacker-chosen ``genTime`` of epoch 0, and its stored ``data_hash``
+        matches the data — the exact shape a real mock round trip has — yet with
+        mock mode disabled ``verify_timestamp`` refuses it.
+        """
+        import struct
+
+        from ama_cryptography import rfc3161_timestamp as ts_mod
+
+        data = b"attacker-chosen document"
+        digest = hashlib.sha3_256(data).digest()
+        algo = b"sha3-256"
+        payload = (
+            ts_mod._MOCK_MAGIC
+            + struct.pack(">I", len(algo))
+            + algo
+            + struct.pack(">d", 0.0)
+            + digest
+        )
+        nonce = b"\x00" * 32
+        forged = payload + ts_mod._hmac_sha256(nonce, payload) + nonce
+        result = TimestampResult(
+            token=forged,
+            tsa_url="https://freetsa.org/tsr",
+            hash_algorithm="sha3-256",
+            data_hash=digest,
+        )
+
+        assert ts_mod._MOCK_TSA_ALLOWED is False
+        assert verify_timestamp(data, result) is False
+        # The same forged token is honoured only when a testing context opts in.
+        with allow_mock_tsa():
+            assert verify_timestamp(data, result) is True
 
     def test_verify_disabled_token_valid_with_matching_data(self) -> None:
         """Disabled tokens should verify as True when data matches."""

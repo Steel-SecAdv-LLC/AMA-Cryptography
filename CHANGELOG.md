@@ -186,6 +186,70 @@ All notable changes to AMA Cryptography will be documented in this file. The for
   `tests/test_lazy_imports.py` checked only the runtime half, which is why a
   name could resolve perfectly and still be invisible to every tool.
 
+### Fixed — a further audit round (PR #378 completion pass)
+
+- **A forged MockTSA token verified on the production timestamp path.**
+  `verify_timestamp` routed any token whose 16-byte magic prefix matched
+  `MockTSA`'s straight into `MockTSA.verify`, on nothing but that prefix. A mock
+  token is self-authenticating — its HMAC key (the nonce) ships inside the token
+  — so the verifier cannot tell a token the process produced from one an
+  attacker fabricated. Mock *creation* was already gated to a testing context
+  (`MockTSA.timestamp` calls `_check_allowed`), but *verification* was not, so a
+  hand-built token carrying an attacker-chosen `genTime` and a matching
+  `data_hash` made `verify_timestamp` return `True` in a normal production
+  install where mock mode is never enabled — a full RFC 3161 bypass. The mock
+  path now runs only inside a testing context (`_mock_tsa_enabled()`), and
+  `MockTSA.verify` gained the same `_check_allowed()` gate as `MockTSA.timestamp`
+  so the class is uniformly test-only.
+  `tests/test_rfc3161_offline.py::test_mock_token_refused_outside_testing_context`
+  pins it by verifying a correctly-HMAC'd forgery is refused with mock mode off
+  and accepted only under `allow_mock_tsa()`.
+
+- **An over-long JSON integer literal escaped the key-format error boundary.**
+  CPython caps integer↔string conversion at `sys.get_int_max_str_digits()`
+  (default 4300) and raises a *bare* `ValueError` — not a `json.JSONDecodeError`
+  — while parsing a longer literal, even one in a JWK member that is never used.
+  That `ValueError` is a sibling of, not a subclass of, `KeyFormatError`, so a
+  caller catching this module's documented boundary around a key import did not
+  catch it; it escaped `jwk_to_public_key`, `jwk_to_private_key` and
+  `jwk_thumbprint`. The same defect class the module already closed for OIDs
+  (`_OID_MAX_BODY`) had been missed on the JSON path. `_load_jwk` now converts it
+  to `KeyFormatError` while preserving a duplicate-member `KeyFormatError`
+  unchanged. Pinned by
+  `tests/test_key_formats.py::test_jwk_with_an_over_long_integer_literal_is_refused`.
+
+- **`extract_tst_info` recursed once per response envelope, unbounded.** A
+  `TimeStampResp` wraps its token in a `PKIStatusInfo` envelope, which
+  `extract_tst_info` unwrapped by recursing. A structure that keeps that shape at
+  every level — a few bytes each, well under the 256 KiB response cap — drove
+  `RecursionError` straight past the `TimestampError` boundary the function
+  otherwise guarantees, a stack/CPU DoS reachable from a malicious TSA or any
+  untrusted `.tsr`. This is the DoS class the module already bounds for CBOR
+  (`_CBOR_MAX_DEPTH`) and OIDs. Unwrapping is now bounded by `_MAX_TSR_UNWRAP`
+  (a real token needs at most one unwrap). Pinned by
+  `tests/test_rfc3161_wire_format.py::test_a_response_that_nests_timestampresp_is_bounded_not_recursed`.
+
+- **The HSS/LMS length and registry constants were declared but never enforced.**
+  `AMA_LMS_PUBKEY_LEN`, `AMA_HSS_PUBKEY_LEN`, `AMA_HSS_MAX_LEVELS`,
+  `LMOTS_WINTERNITZ_W` and `LMS_TREE_HEIGHT` documented the wire sizes and the
+  RFC 8554 registry but were read only by tests, so the wrappers passed a
+  wrong-length key straight to the native call and let it collapse every
+  structural problem into one opaque return code (the five open
+  `py/unused-global-variable` CodeQL alerts). The verify wrappers now reject a
+  wrong-length public key at the boundary with a legible message, and
+  `native_lms_pubkey_params` cross-checks the height and Winternitz width the
+  native tables report against the registry transcribed in Python — a C↔Python
+  transcription guard in the spirit of INVARIANT-35. Resolved at the source, per
+  the repository's standing policy of not dismissing alerts in the Security UI.
+
+- **Consistency touch-ups.** `_compute_data_hash` used a local four-algorithm
+  subset and so rejected an otherwise-valid `sha384`/`sha3-384` token before the
+  binding check ran; it now uses the module's canonical six-algorithm
+  `_HASH_FUNCS`, matching `TSA_HASH_OIDS` and `verify_token_binding`. And
+  `_derive_public`'s OKP arm gained the same backend-refusal→`KeyFormatError`
+  wrapper its EC and PQ arms already had, so the function's stated contract holds
+  on every arm.
+
 ### Changed — validation provenance
 
 - **Removed OpenSSL from the validation path.** `tests/kat/keyformats/openssl/`
