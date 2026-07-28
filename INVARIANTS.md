@@ -20,6 +20,21 @@ such packages for opt-in interop or comparison use, but the core
 No pre-built external cryptographic libraries (libsodium, OpenSSL, liboqs,
 etc.) may be linked.
 
+**Nor invoked.** "Must not import or call" covers a subprocess as squarely as an
+import: shelling out to `openssl` is a competing implementation performing a
+cryptographic operation inside AMA at runtime, and it adds an undeclared
+dependency on that binary being installed. `ama_cryptography/legacy_compat.py`
+did exactly that for RFC 3161 timestamping until the `TimeStampReq` encoder and
+the `TimeStampResp` / `TSTInfo` decoder were written against RFC 3161 §2.4.1 and
+§2.4.2 using AMA's own DER codec. `tools/check_corpus_originality.py` scans
+`ama_cryptography/` for such invocations (INVARIANT-36), so the rule is enforced
+rather than asserted.
+
+Naming another implementation is not calling it. Curve aliases such as
+`prime256v1` are wire-format spellings AMA must *accept*, and a comment
+crediting where an approach came from is scholarship; the check works on the AST
+so neither trips it.
+
 Python stdlib modules (`hashlib`, `os`, `secrets`) are permitted for
 non-primitive operations (OS entropy, hashing). They **must NOT** be used as a
 substitute for AMA's own implementations of HMAC, memory zeroing, or core

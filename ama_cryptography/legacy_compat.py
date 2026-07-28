@@ -38,7 +38,6 @@ import logging
 import os
 import secrets
 import struct
-import subprocess  # nosec B404 -- only wraps trusted external tools (openssl, rfc3161); no user-controlled args (LC-001)
 import sys
 import time
 from dataclasses import asdict, dataclass, field
@@ -73,6 +72,11 @@ from ama_cryptography.pqc_backends import (
     native_ed25519_sign,
     native_ed25519_verify,
     native_hkdf,
+)
+from ama_cryptography.rfc3161_timestamp import (
+    build_timestamp_request,
+    parse_timestamp_response,
+    verify_token_binding,
 )
 from ama_cryptography.secure_memory import constant_time_compare
 
@@ -452,17 +456,13 @@ def get_rfc3161_timestamp(data: bytes, tsa_url: Optional[str] = None) -> Optiona
         return None
 
     try:
-        cmd_query = ["openssl", "ts", "-query", "-data", "-", "-sha256", "-no_nonce"]
+        # AMA's own DER encoder, not `openssl ts -query`. See the RFC 3161
+        # §2.4.1 transcription in rfc3161_timestamp.py for why: INVARIANT-1
+        # forbids the core package calling a third-party cryptographic
+        # implementation at runtime, and shelling out also made the function
+        # depend on an `openssl` binary being installed and on PATH.
+        tsq = build_timestamp_request(hashlib.sha256(data).digest(), "sha256")
 
-        proc = subprocess.run(
-            cmd_query, input=data, capture_output=True, timeout=10
-        )  # nosec B603 -- hardcoded cmd, no shell=True, timeout set (LC-002)
-
-        if proc.returncode != 0:
-            _logger.warning("OpenSSL ts-query failed: %s", proc.stderr.decode())
-            return None
-
-        tsq = proc.stdout
         if parsed_url.hostname is None:
             _logger.warning("Invalid TSA URL host")
             return None
@@ -483,6 +483,13 @@ def get_rfc3161_timestamp(data: bytes, tsa_url: Optional[str] = None) -> Optiona
         finally:
             conn.close()
 
+        # RFC 3161 §2.4.2 puts the TSA's verdict in PKIStatusInfo, ahead of the
+        # optional token. Nothing used to look at it, so a *rejection* was
+        # returned in the same shape as a granted timestamp and stored as one.
+        # `parse_timestamp_response` raises unless the request was granted and
+        # a token is actually present; the full response is still what this
+        # legacy API returns, so stored packages keep their existing format.
+        parse_timestamp_response(tsr)
         return tsr
 
     except Exception as e:
@@ -494,7 +501,7 @@ def get_rfc3161_timestamp(data: bytes, tsa_url: Optional[str] = None) -> Optiona
 
 
 def _looks_like_der_sequence(data: bytes) -> bool:
-    """Minimal DER SEQUENCE envelope check before invoking OpenSSL."""
+    """Minimal DER SEQUENCE envelope check: a cheap reject before parsing."""
     if len(data) < 2 or data[0] != 0x30:
         return False
     length_octet = data[1]
@@ -521,65 +528,31 @@ def verify_rfc3161_timestamp(
     _enforce_invariant7_lc()
     if not _looks_like_der_sequence(timestamp_token):
         return False
-    import os
-    import shutil
-    import tempfile
 
-    tmp_dir = tempfile.mkdtemp(prefix="ama_rfc3161_")
-    os.chmod(tmp_dir, 0o700)
-
-    # Custom opener that preserves the flags `open()` selected for "wb"
-    # (notably O_BINARY on Windows) and OR-s in O_EXCL + restrictive 0o600
-    # mode. The fresh tmp_dir makes a pre-existing file impossible, but
-    # O_EXCL is kept as a defense-in-depth race guard; the explicit mode
-    # prevents a creation umask wider than 0o077.
-    def _excl_opener(path: str, flags: int) -> int:
-        return os.open(path, flags | os.O_CREAT | os.O_EXCL, 0o600)
+    if tsa_cert_path is not None:
+        # Refusing is the only honest answer. `tsa_cert_path` asked for X.509
+        # chain validation against that anchor; AMA implements neither CMS
+        # SignerInfo processing nor X.509 path validation, so it cannot do it.
+        # Returning the binding check's verdict instead would answer a
+        # different, weaker question while looking like it answered this one.
+        raise RuntimeError(
+            "tsa_cert_path requests X.509 chain validation of the TSA's signing "
+            "certificate. AMA does not implement CMS signature verification or "
+            "X.509 path validation, and will not report a weaker check as if it "
+            "were this one. Call without tsa_cert_path for the RFC 3161 §2.4.2 "
+            "message-imprint binding check, and see "
+            "ama_cryptography.rfc3161_timestamp.verify_token_binding for exactly "
+            "what that does and does not establish."
+        )
 
     try:
-        tsr_path = os.path.join(tmp_dir, "timestamp.tsr")
-        with open(tsr_path, "wb", opener=_excl_opener) as tsr_f:
-            tsr_f.write(timestamp_token)
-
-        data_path = os.path.join(tmp_dir, "data.dat")
-        with open(data_path, "wb", opener=_excl_opener) as dat_f:
-            dat_f.write(data)
-
-        cmd_verify = [
-            "openssl",
-            "ts",
-            "-verify",
-            "-data",
-            data_path,
-            "-in",
-            tsr_path,
-        ]
-
-        if tsa_cert_path:
-            cmd_verify.extend(["-CAfile", tsa_cert_path])
-        else:
-            cmd_verify.append("-no_check_time")
-
-        proc = subprocess.run(
-            cmd_verify, capture_output=True, timeout=10
-        )  # nosec B603 -- hardcoded cmd, no shell=True, timeout set (LC-004)
-
-        if proc.returncode == 0:
-            return True
-        else:
-            stderr = proc.stderr.decode() if proc.stderr else ""
-            if "Verification: OK" in stderr or "Verification: OK" in proc.stdout.decode():
-                return True
-            return False
-
+        return verify_token_binding(data, timestamp_token)
     except Exception as e:
         _logger.error("RFC 3161 timestamp verification error: %s", e)
         raise RuntimeError(
             f"RFC 3161 timestamp verification encountered an error: {e}. "
             "Cannot distinguish 'verification failed' from 'verification never ran'."
         ) from e
-    finally:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 def _verify_rfc3161_token(

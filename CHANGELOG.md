@@ -118,6 +118,49 @@ its first campaigns. Each is pinned by a named regression test.
   `pytest-cov` may be absent, which pytest reports as a usage error. The suite
   is now fully green.
 
+### Changed — OpenSSL removed from the shipped package
+
+- **`legacy_compat.py` shelled out to the `openssl` binary at runtime.** Two
+  calls: `openssl ts -query` built the RFC 3161 timestamp request, and
+  `openssl ts -verify` checked a token. INVARIANT-1 says the core package "must
+  not import or call" a third-party cryptographic implementation, and a
+  subprocess is a call — a competing implementation performing a cryptographic
+  operation inside AMA, plus an undeclared dependency on that binary being
+  installed and on `PATH`. Pre-existing on `main`; found while verifying that
+  the key-format corpus removal had actually closed the originality question.
+
+  RFC 3161 specifies the request completely, so AMA now encodes it.
+  `rfc3161_timestamp.py` gained `build_timestamp_request` (§2.4.1
+  `TimeStampReq`), `parse_timestamp_response` (§2.4.2 `TimeStampResp`),
+  `extract_tst_info` (RFC 5652 §5.1 CMS `ContentInfo`/`SignedData` down to the
+  encapsulated `TSTInfo`) and `verify_token_binding`, all on AMA's own DER
+  codec — the one this PR built and hardened. `tests/test_rfc3161_wire_format.py`
+  (38 tests) asserts against the RFC's ASN.1 field by field, not against any
+  implementation's bytes. The `subprocess` import and its three `nosec`
+  markers are gone from the module.
+
+- **A TSA *rejection* was stored as though it were a timestamp.** Nothing read
+  `PKIStatusInfo`, so the response came back verbatim whatever it said. RFC 3161
+  §2.4.2 puts the verdict ahead of the optional token; a non-granted status, or
+  a granted one carrying no token, now raises. The legacy API still returns the
+  whole response, so stored packages keep their format.
+
+- **Chain validation is refused rather than silently downgraded.**
+  `verify_rfc3161_timestamp(..., tsa_cert_path=...)` asked for X.509 path
+  validation of the TSA's signing certificate. AMA implements neither CMS
+  `SignerInfo` processing nor X.509 path validation — X.509 is a documented
+  exclusion for this PR — so that call now raises instead of answering with the
+  message-imprint binding check, which is a different and weaker question.
+  Without `tsa_cert_path` it performs the RFC 3161 §2.4.2 binding check, in
+  constant time, under the digest algorithm the token itself names, and says
+  plainly in its docstring that this is not third-party attestation.
+
+- **INVARIANT-36's gate now scans `ama_cryptography/`.** It covered `tests/` and
+  `tools/` and recorded `legacy_compat.py` as an explicit exception. The
+  exception is removed rather than reworded, and the shipped package — which
+  carries the strongest form of the rule — is inside the scan, with a
+  reintroduction test and a live-tree assertion.
+
 ### Fixed — gates that could not do their job
 
 - **The Bandit severity gate read the wrong tally, and could not pass.** Both

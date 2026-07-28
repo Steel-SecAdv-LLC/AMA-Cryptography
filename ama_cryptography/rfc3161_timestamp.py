@@ -49,7 +49,294 @@ except ImportError:
     RemoteTimestamper = None
 
 
+from ama_cryptography._asn1 import (
+    DerReader,
+    der_integer,
+    der_null,
+    der_octet_string,
+    der_sequence,
+    oid_from_string,
+)
 from ama_cryptography.exceptions import AmaCryptographyError
+
+# ---------------------------------------------------------------------------
+# RFC 3161 wire format, encoded and decoded by AMA
+# ---------------------------------------------------------------------------
+# INVARIANT-1 is explicit that the core package "must not import or call"
+# third-party cryptographic packages at runtime. `legacy_compat` nonetheless
+# shelled out to the `openssl` binary to build its TimeStampReq — a competing
+# implementation performing a cryptographic-protocol operation inside AMA's own
+# shipped tree, and a hard dependency on that binary being installed. The
+# request is a page of ASN.1 that RFC 3161 fully specifies, so AMA encodes it
+# with its own DER codec instead.
+#
+# RFC 3161 §2.4.1:
+#
+#     TimeStampReq ::= SEQUENCE  {
+#        version                  INTEGER  { v1(1) },
+#        messageImprint           MessageImprint,
+#        reqPolicy                TSAPolicyId              OPTIONAL,
+#        nonce                    INTEGER                  OPTIONAL,
+#        certReq                  BOOLEAN                  DEFAULT FALSE,
+#        extensions               [0] IMPLICIT Extensions  OPTIONAL  }
+#
+#     MessageImprint ::= SEQUENCE  {
+#          hashAlgorithm                AlgorithmIdentifier,
+#          hashedMessage                OCTET STRING  }
+#
+# `certReq` is omitted rather than encoded FALSE: X.690 §11.5 forbids encoding a
+# DEFAULT value in DER, and this module emits DER.
+
+#: NIST hash OIDs, from the CSOR arc these algorithms are registered under
+#: (2.16.840.1.101.3.4.2). The SHA-3 entries are the ones AMA prefers; a TSA
+#: that does not support them rejects the request with a PKIStatus this module
+#: now reads, rather than the caller receiving a rejection shaped like a token.
+TSA_HASH_OIDS: Dict[str, str] = {
+    "sha256": "2.16.840.1.101.3.4.2.1",
+    "sha384": "2.16.840.1.101.3.4.2.2",
+    "sha512": "2.16.840.1.101.3.4.2.3",
+    "sha3-256": "2.16.840.1.101.3.4.2.8",
+    "sha3-384": "2.16.840.1.101.3.4.2.9",
+    "sha3-512": "2.16.840.1.101.3.4.2.10",
+}
+
+#: Digest length each algorithm must produce, so a mismatched hash cannot be
+#: encoded into a request that then fails opaquely at the TSA.
+_TSA_HASH_BYTES: Dict[str, int] = {
+    "sha256": 32,
+    "sha384": 48,
+    "sha512": 64,
+    "sha3-256": 32,
+    "sha3-384": 48,
+    "sha3-512": 64,
+}
+
+#: RFC 3161 §2.4.2 PKIStatus values. 0 and 1 are the two that carry a token.
+PKI_STATUS_GRANTED = 0
+PKI_STATUS_GRANTED_WITH_MODS = 1
+_PKI_STATUS_NAMES = {
+    0: "granted",
+    1: "grantedWithMods",
+    2: "rejection",
+    3: "waiting",
+    4: "revocationWarning",
+    5: "revocationNotification",
+}
+
+
+def build_timestamp_request(
+    data_hash: bytes,
+    hash_algorithm: str = "sha256",
+    *,
+    nonce: Optional[int] = None,
+    cert_req: bool = False,
+) -> bytes:
+    """DER-encode an RFC 3161 §2.4.1 ``TimeStampReq`` for ``data_hash``.
+
+    Args:
+        data_hash: The digest of the data being timestamped — *not* the data.
+        hash_algorithm: Which digest produced it; must be a key of
+            :data:`TSA_HASH_OIDS`, and its length must match.
+        nonce: Optional RFC 3161 nonce. A TSA echoes it back, which lets a
+            caller detect a replayed response. Omitted when ``None``.
+        cert_req: Ask the TSA to include its signing certificate in the token.
+
+    Raises:
+        ValueError: unknown algorithm, or a digest whose length does not match
+            the algorithm named. Both mean the caller has already made a
+            mistake, and encoding the request anyway would surface it as an
+            opaque TSA rejection much later.
+    """
+    oid = TSA_HASH_OIDS.get(hash_algorithm)
+    if oid is None:
+        raise ValueError(
+            f"Unsupported hash algorithm for RFC 3161: {hash_algorithm!r}. "
+            f"Supported: {sorted(TSA_HASH_OIDS)}"
+        )
+    expected = _TSA_HASH_BYTES[hash_algorithm]
+    if len(data_hash) != expected:
+        raise ValueError(f"{hash_algorithm} digest must be {expected} bytes, got {len(data_hash)}")
+    if nonce is not None and nonce < 0:
+        raise ValueError("RFC 3161 nonce must be a non-negative integer")
+
+    message_imprint = der_sequence(
+        der_sequence(oid_from_string(oid), der_null()),
+        der_octet_string(data_hash),
+    )
+    elements = [der_integer(1), message_imprint]
+    if nonce is not None:
+        elements.append(der_integer(nonce))
+    if cert_req:
+        # BOOLEAN TRUE. Encoded only when TRUE — see the DEFAULT note above.
+        elements.append(b"\x01\x01\xff")
+    return der_sequence(*elements)
+
+
+def parse_timestamp_response(response: bytes) -> bytes:
+    """Return the ``timeStampToken`` from an RFC 3161 §2.4.2 ``TimeStampResp``.
+
+    The previous implementation returned the TSA's response verbatim without
+    ever looking at it, so a *rejection* was handed back to the caller in the
+    same shape as a granted token and stored as though it were one. RFC 3161
+    §2.4.2 puts the verdict in ``PKIStatusInfo``, ahead of the optional token::
+
+        TimeStampResp ::= SEQUENCE  {
+           status                  PKIStatusInfo,
+           timeStampToken          TimeStampToken     OPTIONAL  }
+
+        PKIStatusInfo ::= SEQUENCE {
+            status        PKIStatus,
+            statusString  PKIFreeText     OPTIONAL,
+            failInfo      PKIFailureInfo  OPTIONAL }
+
+    Raises:
+        TimestampError: the response is not a well-formed ``TimeStampResp``,
+            the TSA did not grant the request, or it granted one and sent no
+            token. Every one of those is "you do not have a timestamp", and
+            none of them may be returned as if it were one.
+    """
+    try:
+        outer = DerReader(response)
+        body = outer.read_sequence()
+        outer.finish()
+        status_info = body.read_sequence()
+        status = status_info.read_integer()
+    except Exception as exc:
+        raise TimestampError(f"TSA response is not a well-formed TimeStampResp: {exc}") from None
+
+    if status not in (PKI_STATUS_GRANTED, PKI_STATUS_GRANTED_WITH_MODS):
+        name = _PKI_STATUS_NAMES.get(status, "unrecognised")
+        raise TimestampError(
+            f"TSA did not grant the timestamp: PKIStatus {status} ({name}). " "No token was issued."
+        )
+
+    # PKIStatusInfo's remaining fields are optional and not needed here; the
+    # token is the next element of the outer SEQUENCE.
+    if body.peek_tag() is None:
+        raise TimestampError(
+            f"TSA reported PKIStatus {status} ({_PKI_STATUS_NAMES[status]}) but sent no "
+            "timeStampToken"
+        )
+    token = body.read_any_raw()
+    return token
+
+
+#: RFC 5652 §5.1 / RFC 3161 §2.4.2 content-type OIDs.
+_OID_SIGNED_DATA = "1.2.840.113549.1.7.2"
+_OID_CT_TSTINFO = "1.2.840.113549.1.9.16.1.4"
+
+#: Reverse of :data:`TSA_HASH_OIDS`, for reading a token's messageImprint.
+_HASH_BY_OID = {oid: name for name, oid in TSA_HASH_OIDS.items()}
+
+_HASH_FUNCS: Dict[str, Callable[[bytes], "hashlib._Hash"]] = {
+    "sha256": hashlib.sha256,
+    "sha384": hashlib.sha384,
+    "sha512": hashlib.sha512,
+    "sha3-256": hashlib.sha3_256,
+    "sha3-384": hashlib.sha3_384,
+    "sha3-512": hashlib.sha3_512,
+}
+
+
+def extract_tst_info(token: bytes) -> bytes:
+    """The DER ``TSTInfo`` inside an RFC 3161 token, or inside a whole response.
+
+    A ``TimeStampToken`` is a CMS ``ContentInfo`` wrapping ``SignedData``
+    (RFC 5652 §5.1), whose ``encapContentInfo`` carries the ``TSTInfo`` as an
+    OCTET STRING::
+
+        ContentInfo ::= SEQUENCE { contentType OID, content [0] EXPLICIT ANY }
+        SignedData  ::= SEQUENCE { version, digestAlgorithms SET,
+                                   encapContentInfo, [0] certificates OPTIONAL,
+                                   [1] crls OPTIONAL, signerInfos SET }
+        EncapsulatedContentInfo ::= SEQUENCE {
+            eContentType OID, eContent [0] EXPLICIT OCTET STRING OPTIONAL }
+
+    Accepts either a bare token or a full ``TimeStampResp``, because the legacy
+    API stores the response and callers have both shapes on disk.
+
+    Raises:
+        TimestampError: the input is not a well-formed RFC 3161 token.
+    """
+    try:
+        probe = DerReader(token)
+        outer = probe.read_sequence()
+        first = outer.peek_tag()
+        # A TimeStampResp opens with PKIStatusInfo (a SEQUENCE); a ContentInfo
+        # opens with the contentType OID.
+        if first == 0x30:
+            return extract_tst_info(parse_timestamp_response(token))
+        content_type = outer.read_oid()
+        if content_type != _OID_SIGNED_DATA:
+            raise TimestampError(
+                f"not a CMS SignedData: contentType is {content_type}, expected "
+                f"{_OID_SIGNED_DATA}"
+            )
+        signed_data = outer.read_tagged(0).read_sequence()
+        signed_data.read_integer()  # CMSVersion
+        signed_data.skip_any()  # digestAlgorithms SET
+        encap = signed_data.read_sequence()
+        econtent_type = encap.read_oid()
+        if econtent_type != _OID_CT_TSTINFO:
+            raise TimestampError(
+                f"token does not encapsulate a TSTInfo: eContentType is {econtent_type}"
+            )
+        if encap.peek_tag() is None:
+            raise TimestampError("token carries no eContent, so it attests to nothing")
+        return encap.read_tagged(0).read_octet_string()
+    except TimestampError:
+        raise
+    except Exception as exc:
+        raise TimestampError(f"malformed RFC 3161 token: {exc}") from None
+
+
+def verify_token_binding(data: bytes, token: bytes) -> bool:
+    """Whether ``token``'s ``messageImprint`` is the digest of ``data``.
+
+    .. warning::
+        This is the *binding* half of RFC 3161 verification, not the whole of
+        it. It answers "is this token about this data", by recomputing the
+        digest under the algorithm the token names and comparing it in constant
+        time to ``TSTInfo.messageImprint.hashedMessage`` (RFC 3161 §2.4.2).
+
+        It does **not** verify the TSA's signature over the ``TSTInfo``, and it
+        does not validate a certificate chain. Both need CMS ``SignerInfo``
+        processing and X.509 path validation, which AMA does not implement.
+        A caller who needs third-party attestation — the actual point of a
+        timestamp — must not treat a ``True`` here as that attestation.
+
+    Returning ``False`` rather than raising for a *mismatch* is deliberate: a
+    token that is well-formed but describes different data is a verification
+    failure, not an error. Anything that stops the check from running raises,
+    so "verification failed" is never confused with "verification never ran".
+    """
+    tst_info = extract_tst_info(token)
+    try:
+        info = DerReader(tst_info).read_sequence()
+        info.read_integer()  # version
+        info.read_oid()  # policy
+        imprint = info.read_sequence()  # messageImprint
+        algorithm = imprint.read_sequence()
+        digest_oid = algorithm.read_oid()
+        hashed = imprint.read_octet_string()
+    except Exception as exc:
+        raise TimestampError(f"malformed TSTInfo in RFC 3161 token: {exc}") from None
+
+    name = _HASH_BY_OID.get(digest_oid)
+    if name is None:
+        raise TimestampError(
+            f"token's messageImprint uses hash OID {digest_oid}, which AMA does not "
+            "implement; the binding cannot be checked"
+        )
+    computed = _HASH_FUNCS[name](data).digest()
+    if len(computed) != len(hashed):
+        return False
+    # Constant-time: the comparison operand is attacker-supplied, and a length
+    # or early-exit signal on a digest comparison is a habit worth not having.
+    diff = 0
+    for a, b in zip(computed, hashed):
+        diff |= a ^ b
+    return diff == 0
 
 
 class TimestampUnavailableError(AmaCryptographyError):

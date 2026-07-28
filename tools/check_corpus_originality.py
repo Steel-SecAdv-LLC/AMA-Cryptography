@@ -38,7 +38,12 @@ What is checked
 ---------------
 1. **No test or development tool invokes an external cryptographic binary.**
    ``openssl``, ``gpg``, ``certtool``, ``pkcs11-tool`` and friends, in any
-   ``subprocess`` call or shell string under ``tests/`` or ``tools/``.
+   ``subprocess`` call or shell string under ``ama_cryptography/``,
+   ``tests/`` or ``tools/``. The shipped package is scanned first and for
+   the strongest reason: INVARIANT-1 says the core package "must not
+   import or call" a third-party cryptographic implementation *at
+   runtime*, which is a stronger claim than anything about how AMA is
+   checked.
 2. **Every vendored key-format record names a standards-body source.** The
    ``source.url`` of each corpus file must be on ``rfc-editor.org`` or
    ``ietf.org``.
@@ -53,11 +58,18 @@ What is deliberately *not* checked
   not another implementation's key output presented as ground truth. Their
   provenance has its own gates (``tools/refresh_wycheproof_corpus.py`` and
   ``.github/workflows/corpus-provenance.yml``).
-* ``ama_cryptography/legacy_compat.py``, which shells out to ``openssl ts`` for
-  RFC 3161 timestamping. That is a shipped interop feature with its own history
-  and its own removal decision to make; it is named here so that it is a
-  *recorded* exception rather than an oversight, and it is outside this
-  checker's scope by construction (it scans ``tests/`` and ``tools/`` only).
+* Naming a competing implementation. Curve aliases like ``prime256v1`` are
+  wire-format spellings AMA must *accept*; a comment crediting where an
+  approach came from is scholarship. Only an invocation is a violation, and
+  the check works on the AST so prose cannot trip it.
+
+``ama_cryptography/legacy_compat.py`` used to be a recorded exception here:
+it shelled out to ``openssl ts`` to build and verify RFC 3161 timestamps.
+That was an INVARIANT-1 violation in the shipped tree, and it is gone —
+``rfc3161_timestamp.py`` now encodes the ``TimeStampReq`` and decodes the
+``TimeStampResp``/``TSTInfo`` with AMA's own DER codec. The exception is
+removed rather than reworded, and the package is inside the scan so it
+cannot come back quietly.
 
 Exit code:
     0  no third-party cryptographic implementation in the validation path
@@ -93,9 +105,10 @@ CRYPTO_BINARIES = (
 #: Hosts a vendored answer key may come from: the RFC archive and the IETF's.
 STANDARDS_HOSTS = ("rfc-editor.org", "ietf.org")
 
-#: Trees scanned for invocations. `ama_cryptography/` is excluded on purpose —
-#: see "What is deliberately not checked" above.
-SCAN_ROOTS = ("tests", "tools")
+#: Trees scanned for invocations. `ama_cryptography/` is the shipped package
+#: and carries the strongest form of the rule (INVARIANT-1: no third-party
+#: cryptographic implementation called at runtime), so it is scanned first.
+SCAN_ROOTS = ("ama_cryptography", "tests", "tools")
 
 KEYFORMAT_CORPUS = REPO / "tests" / "kat" / "keyformats"
 REFERENCE_ENCODER = REPO / "tests" / "ref_keyformat.py"
@@ -233,7 +246,10 @@ def check_reference_encoder(path: Path = REFERENCE_ENCODER) -> list[str]:
 
 def main() -> int:
     sections = (
-        ("external cryptographic binaries in tests/ and tools/", scan_for_binary_invocations()),
+        (
+            "external cryptographic binaries in " + "/, ".join(SCAN_ROOTS) + "/",
+            scan_for_binary_invocations(),
+        ),
         ("vendored corpus provenance", scan_corpus_sources()),
         ("reference-encoder independence", check_reference_encoder()),
     )

@@ -230,18 +230,28 @@ class TestRFC3161Timestamp:
         """Test timestamp with empty data and invalid TSA URL returns None."""
         assert get_rfc3161_timestamp(b"", "http://invalid.tsa.url/") is None
 
-    @patch("subprocess.run")
-    def test_timestamp_openssl_failure(self, mock_run: Any) -> None:
-        """Test handling of OpenSSL command failure."""
-        mock_run.return_value = MagicMock(returncode=1, stderr=b"OpenSSL error")
-        result = get_rfc3161_timestamp(b"test_data")
-        assert result is None
-
-    @patch("subprocess.run")
     @patch("http.client.HTTPSConnection")
-    def test_timestamp_network_failure_raises(self, mock_https_conn: Any, mock_run: Any) -> None:
+    def test_timestamp_rejection_is_not_returned_as_a_token(self, mock_https_conn: Any) -> None:
+        """A TSA *rejection* must not come back shaped like a timestamp.
+
+        RFC 3161 §2.4.2 puts the verdict in PKIStatusInfo, ahead of the
+        optional token. The former implementation returned the TSA's response
+        verbatim without ever reading it, so a PKIStatus 2 (rejection) was
+        handed to the caller and stored as though it were a granted token.
+        """
+        from ama_cryptography._asn1 import der_integer, der_sequence
+
+        rejection = der_sequence(der_sequence(der_integer(2)))
+        mock_response = MagicMock(status=200)
+        mock_response.read.return_value = rejection
+        mock_https_conn.return_value.getresponse.return_value = mock_response
+
+        with pytest.raises(RuntimeError, match="timestamps are a security layer"):
+            get_rfc3161_timestamp(b"test_data")
+
+    @patch("http.client.HTTPSConnection")
+    def test_timestamp_network_failure_raises(self, mock_https_conn: Any) -> None:
         """Test that network failure raises RuntimeError (fail-loud)."""
-        mock_run.return_value = MagicMock(returncode=0, stdout=b"query_data")
         mock_https_conn.side_effect = Exception("Network error")
         with pytest.raises(RuntimeError, match="timestamps are a security layer"):
             get_rfc3161_timestamp(b"test_data")

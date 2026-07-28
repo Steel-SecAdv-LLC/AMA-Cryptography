@@ -112,6 +112,35 @@ def test_other_cryptographic_binaries_are_caught(
     assert any(binary in p for p in problems), problems
 
 
+def test_the_shipped_package_is_in_scope(tool: ModuleType, tmp_path: Path) -> None:
+    """INVARIANT-1's strongest clause is about the shipped package, not the tests.
+
+    ``legacy_compat.py`` shelled out to ``openssl ts`` to build and verify
+    RFC 3161 timestamps — a competing implementation performing a cryptographic
+    operation inside AMA at *runtime*, which is what INVARIANT-1 forbids in as
+    many words. The scan originally covered ``tests/`` and ``tools/`` only and
+    recorded that as an exception in its docstring. The exception is gone and
+    so is the blind spot; this is what keeps it gone.
+    """
+    assert "ama_cryptography" in tool.SCAN_ROOTS, (
+        "the shipped package must be scanned — it carries the strongest form of " "the rule"
+    )
+    (tmp_path / "ama_cryptography").mkdir()
+    (tmp_path / "ama_cryptography" / "legacy_compat.py").write_text(
+        "import subprocess\n"
+        'subprocess.run(["openssl", "ts", "-query", "-data", "-"], capture_output=True)\n'
+    )
+    problems = tool.scan_for_binary_invocations(tmp_path)
+    assert any("openssl" in p and "legacy_compat.py" in p for p in problems), problems
+
+
+def test_the_real_package_invokes_no_cryptographic_binary(tool: ModuleType) -> None:
+    """The live tree, not a fixture. This is the assertion that would have
+    failed before the RFC 3161 work and must never fail again."""
+    problems = [p for p in tool.scan_for_binary_invocations() if "ama_cryptography" in p]
+    assert problems == [], problems
+
+
 def test_a_mention_in_prose_is_not_a_finding(tool: ModuleType, tmp_path: Path) -> None:
     """This tree is full of "replaces OpenSSL X" comments — they are originality
     *claims*, and flagging them would make the gate un-satisfiable and push a
