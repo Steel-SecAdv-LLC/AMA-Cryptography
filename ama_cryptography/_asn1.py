@@ -158,15 +158,43 @@ def oid_from_string(dotted: str) -> bytes:
     ``ValueError: byte must be in range(0, 256)`` — outside this module's
     stated contract, and leaving the codec asymmetric: ``oid_to_string``
     decodes those and the encoder could not take them back.
+
+    **Each arc must be a canonical decimal string.** ``int()`` is a lenient
+    parser: it accepts surrounding whitespace, a leading ``+``, leading zeros
+    and — since PEP 515 — underscore digit separators. So
+    ``"1.2.840.113549"``, ``"1.02.840.113549"``, ``" 1.2.840.113549"``,
+    ``"1.+2.840.113549"`` and ``"1.2.840.113_549"`` all encoded to the *same*
+    OBJECT IDENTIFIER. That is the defect this module refuses everywhere else,
+    arriving through the text side instead of the octet side: many spellings of
+    one value, in a codec whose whole contract is that there is exactly one.
+
+    It is worth closing on its own terms even though today's only callers pass
+    literals from the algorithm registry, because the shape it invites is a
+    policy bypass. Any allowlist, denylist or equality check keyed on the
+    *dotted string* — a configured set of permitted signature OIDs, say — sees
+    ``"1.2.840.113_549"`` as a different entry from ``"1.2.840.113549"`` while
+    the encoder maps both onto the same octets. The comparison and the encoding
+    would disagree, and the encoding is the one that decides what is signed.
     """
-    try:
-        arcs = [int(part) for part in dotted.split(".")]
-    except ValueError:
-        raise KeyFormatError(f"malformed OID {dotted!r}") from None
+    parts = dotted.split(".")
+    for part in parts:
+        # A canonical arc is one or more ASCII digits with no redundant leading
+        # zero. ``str.isdigit`` is Unicode-aware and would admit e.g. Devanagari
+        # digits, which ``int()`` also accepts — so the alphabet is checked
+        # explicitly rather than by character class.
+        if not part or any(c not in "0123456789" for c in part):
+            raise KeyFormatError(
+                f"OID {dotted!r} has a non-canonical arc {part!r}: each arc must be "
+                "one or more ASCII digits, with no sign, whitespace or separator"
+            )
+        if len(part) > 1 and part[0] == "0":
+            raise KeyFormatError(
+                f"OID {dotted!r} has a non-canonical arc {part!r}: a leading zero is "
+                "a second spelling of the same value"
+            )
+    arcs = [int(part) for part in parts]
     if len(arcs) < 2 or arcs[0] > 2 or (arcs[0] < 2 and arcs[1] >= 40):
         raise KeyFormatError(f"OID {dotted!r} has invalid leading arcs")
-    if any(a < 0 for a in arcs):
-        raise KeyFormatError(f"OID {dotted!r} has a negative arc")
 
     body = bytearray(_base128(arcs[0] * 40 + arcs[1]))
     for arc in arcs[2:]:

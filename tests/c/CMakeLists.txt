@@ -480,5 +480,13 @@ if(AMA_ENABLE_DUDECT)
     set_target_properties(test_dudect PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
     )
+    # The measurement pass is deliberately not a ctest test: it takes minutes
+    # and its result depends on how quiet the machine is.  Its *verdict rule*
+    # is neither, so that is registered — it decides whether this gate can
+    # block a merge, and it is the half that cannot be exercised by running the
+    # suite (reproducing "the same lane trips in every round" on demand would
+    # require a real leak).  Driven with synthetic evidence in both directions,
+    # deterministic, milliseconds.
+    add_test(NAME test_dudect_verdict COMMAND test_dudect --self-test)
     message(STATUS "dudect: Empirical constant-time verification tests enabled")
 endif()

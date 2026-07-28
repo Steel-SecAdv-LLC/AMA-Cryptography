@@ -2651,6 +2651,66 @@ def test_a_malformed_oid_string_raises_key_format_error(dotted: str) -> None:
         _asn1.oid_from_string(dotted)
 
 
+@pytest.mark.parametrize(
+    ("dotted", "why"),
+    [
+        ("1.02.840.113549", "leading zero"),
+        ("1.2.840.0113549", "leading zero, deeper arc"),
+        (" 1.2.840.113549", "leading whitespace"),
+        ("1.2.840.113549 ", "trailing whitespace"),
+        ("1.2.840.113549\n", "trailing newline"),
+        ("1.\t2.840.113549", "interior whitespace"),
+        ("+1.2.840.113549", "explicit plus sign"),
+        ("1.+2.840.113549", "explicit plus sign, deeper arc"),
+        ("1.2.840.113_549", "PEP 515 underscore separator"),
+        ("1.٢.840.113549", "non-ASCII decimal digit"),
+        ("1..2", "empty arc"),
+        (".1.2", "empty leading arc"),
+        ("1.2.", "empty trailing arc"),
+    ],
+)
+def test_a_non_canonical_oid_spelling_is_refused(dotted: str, why: str) -> None:
+    """One OID, one dotted string. ``int()`` did not agree.
+
+    Every spelling here encoded to *the same* OBJECT IDENTIFIER as
+    ``"1.2.840.113549"``, because ``int()`` is a lenient parser: it accepts
+    surrounding whitespace, a leading ``+``, redundant leading zeros, any
+    Unicode decimal digit, and — since PEP 515 — underscore separators. That is
+    exactly the many-spellings-of-one-value defect this module refuses on the
+    octet side (non-minimal DER lengths, non-minimal INTEGERs, non-deterministic
+    CBOR), reached through the text side instead.
+
+    The shape it invites is a policy bypass rather than a cosmetic one: an
+    allowlist keyed on the dotted string reads ``"1.2.840.113_549"`` as a
+    different entry from ``"1.2.840.113549"`` while the encoder maps both onto
+    the same octets — so the comparison and the encoding disagree, and the
+    encoding is what ends up signed.
+    """
+    with pytest.raises(KeyFormatError, match="non-canonical arc"):
+        _asn1.oid_from_string(dotted)
+
+
+def test_the_oid_codec_is_a_bijection_over_the_reachable_space() -> None:
+    """Decode-then-encode and encode-then-decode are both the identity.
+
+    Asserted over the boundaries rather than a handful of literals: the three
+    legal values of ``arc1``, the ``arc2`` values either side of every encoding
+    step (39/40, 47/48, 175/176), and tails that cross the base-128 boundaries.
+    """
+    checked = 0
+    for arc1 in (0, 1, 2):
+        for arc2 in (0, 1, 39, 40, 47, 48, 175, 176, 999, 4000):
+            if arc1 < 2 and arc2 >= 40:
+                continue  # not a legal OID; refused by the leading-arc check
+            for tail in ([], [0], [1], [127], [128], [16383], [16384], [1, 0, 113549]):
+                dotted = ".".join(str(a) for a in [arc1, arc2, *tail])
+                encoded = _asn1.oid_from_string(dotted)
+                assert _asn1.oid_to_string(encoded[2:]) == dotted, dotted
+                assert _asn1.oid_from_string(_asn1.oid_to_string(encoded[2:])) == encoded, dotted
+                checked += 1
+    assert checked > 100, "the sweep stopped covering the boundary cases"
+
+
 # ---------------------------------------------------------------------------
 # CBOR nesting
 # ---------------------------------------------------------------------------

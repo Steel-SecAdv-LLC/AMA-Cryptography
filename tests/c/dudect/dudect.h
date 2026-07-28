@@ -154,14 +154,29 @@ static inline double dudect_get_t(dudect_ctx_t *ctx) {
     return dudect_ttest_compute(&ctx->ttest);
 }
 
-/* Print result for a single test */
+/* Print the measurement for a single lane.
+ *
+ * This reports a *measurement*, not a verdict, and the wording says so.  It
+ * used to print "FAIL - potential leakage" for any |t| over the threshold —
+ * but whether a lane over the threshold is a failure depends on two things
+ * this function cannot see: whether the lane is registered info-only (ML-DSA
+ * signing is rejection-sampled and secp256k1's RFC 6979 nonce derivation
+ * retries, so both are expected to vary and are classified INFO by the
+ * summary), and whether it exceeded the threshold in every round or just one.
+ *
+ * The result was that a completely healthy run printed two lines reading
+ * "FAIL - potential leakage" every single time, in a tool whose entire job is
+ * to make one real leakage report legible.  Alarms that always fire are alarms
+ * nobody reads.  The summary is the authority on PASS/INFO/FAIL; this line
+ * states what was measured.
+ */
 static inline void dudect_print_result(dudect_ctx_t *ctx) {
     double t = dudect_ttest_compute(&ctx->ttest);
-    int passed = fabs(t) < DUDECT_T_THRESHOLD;
+    int within = fabs(t) < DUDECT_T_THRESHOLD;
     printf("  %-35s t = %+8.4f  [%s]  (%ld measurements)\n",
            ctx->name,
            t,
-           passed ? "PASS" : "FAIL - potential leakage",
+           within ? "within threshold" : "OVER THRESHOLD",
            (long)ctx->total_measurements);
 }
 

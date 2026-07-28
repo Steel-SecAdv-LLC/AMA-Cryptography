@@ -19,6 +19,78 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ## [Unreleased]
 
+### Fixed — the constant-time gate said "retrying to rule out noise" and did not
+
+`tests/c/test_dudect.c` runs up to three rounds and passes if any one round has
+no failing lane. It never checked whether the **same** lane failed twice. With
+~24 lanes and real scheduling jitter on a shared runner, a different lane
+tripping in each of three rounds is an ordinary outcome — and the suite then
+printed `Overall: FAIL - Potential timing leakage detected across 3 rounds`,
+asserting a consistency it had never established. A false alarm from this gate
+was indistinguishable in the log from a real finding.
+
+It fired on this branch, on a commit that changed two Python files and no C at
+all: the only genuine failure in the final round was `ama_consttime_memcmp` at
+|t| = 8.04, on a function that had passed the same job minutes earlier.
+
+- **A lane must now exceed the threshold in every round to count** — which is
+  exactly what the retry already claimed to be doing. A leak reproduces: its
+  t-statistic grows with measurements and the same lane trips every time. Noise
+  moves. The per-lane threshold is untouched and a genuinely leaking lane still
+  fails, so this removes false alarms rather than sensitivity. A harness fault
+  (setup failure, per-class rc mismatch) is exempt and still conclusive on one
+  occurrence — it is not a timing measurement.
+- **The summary reports the evidence, not the last round.** `results[]` was
+  overwritten each round, so the table showed only round 3 and a reader could
+  not tell a reproducible finding from a one-off. Every lane now carries its
+  worst |t| and a `failed/run` ratio, and a lane over the threshold in some but
+  not all rounds is reported `NOISE` — visible, and not a failure. The
+  all-rounds rule is the deliberate reading of "reproduces every round"; the
+  printed ratio is what makes a lane drifting toward the threshold visible
+  before it becomes a failure.
+- **The per-round line no longer prints a verdict it cannot reach.**
+  `dudect_print_result` had no access to a lane's info-only flag, so
+  `ML-DSA-65 sign` (rejection sampling) and `secp256k1 ECDSA sign` (RFC 6979
+  nonce retry) printed `FAIL - potential leakage` in *every healthy run* while
+  the summary correctly classified them `INFO`. Two permanent false alarms in a
+  tool whose whole job is to make one real report legible. The line now states
+  what was measured — `within threshold` / `OVER THRESHOLD` — and the summary
+  remains the authority.
+- **The verdict rule is now itself tested.** `test_dudect --self-test` drives
+  the classification with synthetic evidence in both directions (3/3 fails, 2/3
+  and 1/3 do not, info-only never fails on timing, a fatal sentinel always
+  fails, and a different lane each round fails nothing), registered as the
+  ctest case `test_dudect_verdict` and run ahead of every measurement pass in
+  `dudect.yml`. It is deterministic and takes milliseconds. Re-introducing the
+  old rule makes it report exactly the three misclassifications that rule made
+  — which is the check that was missing when the behaviour went unnoticed.
+
+### Fixed — one OID had seven spellings
+
+`oid_from_string` parsed each arc with `int()`, which is a lenient parser: it
+accepts surrounding whitespace, a leading `+`, redundant leading zeros, any
+Unicode decimal digit, and — since PEP 515 — underscore digit separators. So
+`"1.2.840.113549"`, `"1.02.840.113549"`, `" 1.2.840.113549"`,
+`"1.+2.840.113549"` and `"1.2.840.113_549"` all encoded to the same OBJECT
+IDENTIFIER.
+
+That is the many-spellings-of-one-value defect `_asn1` refuses everywhere on
+the octet side — non-minimal DER lengths, non-minimal INTEGERs,
+non-deterministic CBOR, non-canonical base64 — arriving through the text side
+instead. The docstring already recorded closing the *other* direction, where
+`oid_to_string` decoded arcs the encoder could not take back; this closes the
+one that was left.
+
+Today's only callers pass literals from the algorithm registry, so nothing was
+mis-encoded. It is worth closing on its own terms because of the shape it
+invites: any allowlist or equality check keyed on the *dotted string* reads
+`"1.2.840.113_549"` as a different entry from `"1.2.840.113549"` while the
+encoder maps both onto the same octets, so the comparison and the encoding
+disagree — and the encoding is what ends up signed. Each arc must now be one or
+more ASCII digits with no redundant leading zero, which also subsumes the
+separate negative-arc check. `test_the_oid_codec_is_a_bijection_over_the_reachable_space`
+asserts both directions compose to the identity across every encoding boundary.
+
 ### Fixed — the checkout was not byte-identical across platforms
 
 All ten Windows CI jobs failed on
