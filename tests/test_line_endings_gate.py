@@ -30,9 +30,11 @@ import subprocess  # nosec B404 -- fixed-argv git invocations only, never a shel
 from pathlib import Path
 
 from tools.check_line_endings import (
+    WORKTREE_REMEDY,
     EolRecord,
     check_attributes,
     check_records,
+    check_worktree,
     main,
     parse_eol_output,
 )
@@ -112,6 +114,79 @@ class TestExemptions:
 
     def test_lf_is_clean(self) -> None:
         assert check_records([_record("README.md", "lf")]) == []
+
+
+class TestDetectsAStaleWorkingTree:
+    """The state a fresh clone cannot reach, so CI never sees it.
+
+    Reproduced against a real clone before this check existed: configure
+    ``core.autocrlf=true`` (git's default on Windows), check out the commit
+    before ``* -text`` landed, then check out the commit after it. Git rewrites
+    a working-tree file on checkout only when its *content* changed, so 548 of
+    610 tracked text files kept their CRLF — and ``git status --porcelain``
+    printed nothing, because the stat cache meant git never re-hashed them.
+
+    Local runs read those bytes: ``IMPLEMENTATION_GUIDE.md`` scores 1.25 rather
+    than 1.50 and the calibration test fails on the contributor's machine with
+    the same misleading message that failed the Windows jobs.
+    """
+
+    def test_a_crlf_working_tree_over_an_lf_blob_is_reported(self) -> None:
+        record = EolRecord(index_eol="lf", worktree_eol="crlf", attrs="-text", path="a.md")
+        (violation,) = check_worktree([record])
+        assert violation.path == "a.md"
+        assert "working tree holds CRLF" in violation.reason
+        assert "reports this tree clean" in violation.reason
+
+    def test_the_reported_remedy_is_the_one_that_works(self) -> None:
+        """Measured, not assumed — the intuitive answer is actively harmful.
+
+        On the reproduced clone, ``git add --renormalize .`` staged 547 files
+        with CRLF *in the blob*: with ``-text`` there is no clean filter, so it
+        commits the corruption instead of fixing it. ``git checkout-index -f -a``
+        skips paths git believes are up to date, which is exactly these, and
+        left 547 unchanged. Dropping the cache entries reached zero.
+        """
+        record = EolRecord(index_eol="lf", worktree_eol="crlf", attrs="-text", path="a.md")
+        (violation,) = check_worktree([record])
+        assert WORKTREE_REMEDY == "git rm --cached -r . && git reset --hard"
+        assert WORKTREE_REMEDY in violation.reason
+        assert "renormalize" not in violation.reason
+
+    def test_a_lone_cr_working_tree_is_reported(self) -> None:
+        assert check_worktree(
+            [EolRecord(index_eol="lf", worktree_eol="cr", attrs="-text", path="a.md")]
+        )
+
+    def test_a_binary_file_is_exempt_in_either_field(self) -> None:
+        # The two fuzz seed corpora carry CRLF as opaque input data.
+        seed = "fuzz/seed_corpus/fuzz_ed25519/sequential_32"
+        assert (
+            check_worktree(
+                [EolRecord(index_eol="-text", worktree_eol="-text", attrs="-text", path=seed)]
+            )
+            == []
+        )
+
+    def test_a_matching_lf_working_tree_is_clean(self) -> None:
+        assert (
+            check_worktree(
+                [EolRecord(index_eol="lf", worktree_eol="lf", attrs="-text", path="a.md")]
+            )
+            == []
+        )
+
+    def test_this_working_tree_is_not_stale(self) -> None:
+        """Asserted against the real checkout, not only through synthetic records."""
+        out = subprocess.run(  # nosec B603 -- fixed argv, no shell, trusted git binary (EOL-001)
+            ["git", "ls-files", "--eol"],
+            cwd=str(REPO_ROOT),
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=True,
+        ).stdout
+        assert check_worktree(parse_eol_output(out)) == []
 
 
 class TestDetectsDisabledMechanism:

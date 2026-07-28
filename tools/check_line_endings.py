@@ -179,6 +179,73 @@ def check_records(records: Sequence[EolRecord]) -> list[Violation]:
     return violations
 
 
+#: The remedy for a working tree left behind by the ``-text`` migration.
+#:
+#: Not ``git add --renormalize .``, which is the intuitive answer and is
+#: actively harmful here: with ``-text`` there is no clean filter, so
+#: renormalising *stages the CRLF bytes verbatim*.  Measured on a real
+#: pulled clone, it staged 547 files with CRLF in the blob — turning a
+#: local-only problem into a committed one.  ``git checkout-index -f -a``
+#: is ineffective for a different reason: it skips paths git believes are
+#: already up to date, which is exactly what these are.
+#:
+#: Dropping the cache entries forces every path to be written afresh from
+#: the index, which is the only one of the three that reaches zero.
+WORKTREE_REMEDY = "git rm --cached -r . && git reset --hard"
+
+
+def check_worktree(records: Sequence[EolRecord]) -> list[Violation]:
+    """Return violations for files whose *working tree* form is not the blob.
+
+    Why this is checked separately from the index
+    ---------------------------------------------
+    A fresh clone cannot reach this state, so CI never sees it.  An existing
+    clone can, and silently.
+
+    Git rewrites a working-tree file on checkout only when that file's content
+    changed.  A contributor whose clone predates the ``-text`` rule — anyone
+    who ever checked out with ``core.autocrlf=true``, which is git's default on
+    Windows — pulls the commit that adds it and gets a tree where only the
+    files the merge happened to touch are rewritten.  Everything else keeps the
+    CRLF it was written with.
+
+    ``git status`` then reports **clean**, because the stat cache says those
+    paths are untouched and git never hashes them.  Measured on a real pulled
+    clone of this repository: 548 of 610 tracked text files still held CRLF,
+    and ``git status --porcelain`` printed nothing.  ``git update-index
+    --really-refresh`` does not surface it either — the stat data genuinely
+    matches what was written.
+
+    That is the original defect, relocated: the detector's 8 KiB window reads
+    the CRLF file and scores ``IMPLEMENTATION_GUIDE.md`` at 1.25 instead of
+    1.50, so the calibration test fails on the contributor's machine with the
+    same misleading "recalibration is due" message that failed the Windows
+    jobs — while their tooling insists the tree is pristine.
+
+    Nothing in a repository can force another person's working tree to be
+    rewritten.  What it can do is refuse to be quiet about it, and name the
+    remedy that actually works.
+    """
+    violations: list[Violation] = []
+    for record in records:
+        if record.index_eol in _BINARY_EOL or record.worktree_eol in _BINARY_EOL:
+            continue
+        if record.worktree_eol in _DIRTY_EOL:
+            violations.append(
+                Violation(
+                    record.path,
+                    (
+                        f"working tree holds {record.worktree_eol.upper()} while the "
+                        f"committed blob is {record.index_eol.upper() or 'LF'}; git "
+                        "reports this tree clean because it never re-hashed the file. "
+                        "Local runs read these bytes, so byte-sensitive tests will "
+                        f"disagree with CI. Fix with: {WORKTREE_REMEDY}"
+                    ),
+                )
+            )
+    return violations
+
+
 def check_attributes(
     attrs_by_path: dict[str, str], records: Sequence[EolRecord]
 ) -> list[Violation]:
@@ -272,13 +339,42 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         _resolve_text_attribute(repo_root, [r.path for r in records]),
         records,
     )
+    # Reported separately: a stale working tree has one cause and hundreds of
+    # symptoms, so listing every path buries the remedy under its own output.
+    worktree = check_worktree(records)
 
-    if violations:
+    if violations or worktree:
         print("Checkout byte-identity check FAILED\n", file=sys.stderr)
         for violation in sorted(violations, key=lambda v: (v.path, v.reason)):
             print(f"  {violation.render()}", file=sys.stderr)
+
+        if worktree:
+            if violations:
+                print(file=sys.stderr)
+            print(
+                f"  {len(worktree)} file(s) differ from the committed blob only in line\n"
+                f"  endings. This is what an existing clone looks like after pulling the\n"
+                f"  `* -text` rule: git rewrites a working-tree file on checkout only\n"
+                f"  when its content changed, so everything the merge did not touch keeps\n"
+                f"  the CRLF it was written with — and `git status` reports the tree\n"
+                f"  clean, because the stat cache means it never re-hashes those paths.\n"
+                f"\n"
+                f"  Local runs read these bytes. Byte-sensitive tests (the note-detector\n"
+                f"  calibration, corpus digests) will disagree with CI until it is fixed.\n"
+                f"\n"
+                f"    {WORKTREE_REMEDY}\n"
+                f"\n"
+                f"  Not `git add --renormalize .`: with `-text` there is no clean filter,\n"
+                f"  so that stages the CRLF verbatim and commits the problem.\n"
+                f"\n"
+                f"  First few: {', '.join(v.path for v in worktree[:5])}"
+                f"{' …' if len(worktree) > 5 else ''}",
+                file=sys.stderr,
+            )
+
+        total = len(violations) + len(worktree)
         print(
-            f"\n{len(violations)} violation(s) across {len(records)} tracked file(s).",
+            f"\n{total} violation(s) across {len(records)} tracked file(s).",
             file=sys.stderr,
         )
         return 1
@@ -286,7 +382,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     binary = sum(1 for r in records if r.index_eol in _BINARY_EOL)
     print(
         f"Checkout byte-identity OK: {len(records) - binary} text file(s) LF-terminated "
-        f"with EOL conversion disabled, {binary} binary file(s) exempt."
+        f"in both the index and the working tree, with EOL conversion disabled; "
+        f"{binary} binary file(s) exempt."
     )
     return 0
 

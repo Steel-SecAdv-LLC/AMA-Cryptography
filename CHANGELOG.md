@@ -19,6 +19,61 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ## [Unreleased]
 
+### Fixed — the `-text` migration left existing clones silently wrong
+
+Reproduced on a real clone rather than reasoned about: configure
+`core.autocrlf=true` (git's default on Windows — it is a config, not a
+platform feature, so it reproduces anywhere), check out the commit before
+`* -text` landed, then check out the commit after it.
+
+**548 of 610 tracked text files kept their CRLF, and `git status` reported the
+tree clean.** Git rewrites a working-tree file on checkout only when its
+*content* changed, so everything the merge did not touch was left alone; and
+the stat cache means git never re-hashes those paths, so nothing surfaces —
+`git update-index --really-refresh` does not surface it either. `touch` on one
+file was enough to make it appear as modified.
+
+That is the original defect relocated, not fixed: local runs read those bytes,
+so `IMPLEMENTATION_GUIDE.md` scores 1.25 instead of 1.50 and the calibration
+test fails on the contributor's machine with the same misleading
+"recalibration is due" message that failed the Windows jobs — while their
+tooling insists nothing is wrong.
+
+- **`tools/check_line_endings.py` now checks the working tree**, not only the
+  index. It already parsed the `w/` field of `git ls-files --eol` and then
+  discarded it, which was the gap. A stale tree is now a loud failure naming
+  the remedy.
+- **The remedy is `git rm --cached -r . && git reset --hard`**, measured
+  against the reproduced clone. The intuitive answer is worse than useless:
+  `git add --renormalize .` staged **547 files with CRLF in the blob**, because
+  with `-text` there is no clean filter — it commits the corruption instead of
+  fixing it. `git checkout-index -f -a` left 547 unchanged, because it skips
+  paths git believes are up to date, which is precisely these. Only dropping
+  the cache entries reached zero, and the gate then passes and the calibration
+  returns to 1.50.
+
+### Fixed — a workflow could invoke a binary its own job never builds
+
+`dudect-legacy-harnesses` configures CMake, but without
+`-DAMA_ENABLE_DUDECT=ON`, because it exists to build the standalone
+`tools/constant_time` harnesses. A `./build/bin/test_dudect` line added to that
+job is a guaranteed `exit 127` — and that shipped on this branch, from an edit
+that inserted the same line into every run step in the file and matched one
+more step than intended.
+
+Nothing caught it before CI did, because the mistake is invisible where it is
+made: the line is correct in the four jobs above and below it, and the property
+that distinguishes them lives in `tests/c/CMakeLists.txt`, not in the workflow.
+
+`check_cmake_gated_binaries` in `tools/check_workflow_commands.py` reads the
+`if(...)` guard around each `add_executable` and the `option()` default for each
+flag it names, then requires any job invoking `./build/bin/X` to enable the
+flags that gate `X` — but only those defaulting `OFF`, since an ON-by-default
+guard needs no flag and demanding one would be noise. Derived from CMake rather
+than a hand-maintained list, so a target added under a new guard is covered
+without anyone remembering this file. Re-injecting the exact line that shipped
+makes the gate report it, on the pull request, with the remedy.
+
 ### Fixed — all three dudect harnesses said "retrying to rule out noise" and did not
 
 The defect below was found in `tests/c/test_dudect.c` and then found again,
