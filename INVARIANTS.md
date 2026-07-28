@@ -1538,19 +1538,30 @@ implementers to run — the same category as a specification's worked example, a
 they keep their own provenance gates (INVARIANT-24's sibling machinery in
 `.github/workflows/corpus-provenance.yml`).
 
-One recorded exception sits outside this invariant's scope:
-`ama_cryptography/legacy_compat.py` shells out to `openssl ts` for RFC 3161
-timestamping. That is a shipped interop feature, not a validation path, and
-removing it is a separate decision with its own compatibility cost. It is named
-here so it is a recorded exception rather than an oversight.
+**No exceptions are recorded.** One used to be — `ama_cryptography/legacy_compat.py`
+shelling out to `openssl ts` for RFC 3161 timestamping, described here as "a
+shipped interop feature, not a validation path". It is gone: AMA encodes and
+decodes RFC 3161 on its own DER codec, `rfc3161_timestamp.py` no longer imports
+`rfc3161ng` either, and the gate below scans `ama_cryptography/` precisely so
+neither can return. An invariant register that still names a removed exception
+is worse than one that names none, because a reader takes it as current.
 
-**Enforcement.** `tools/check_corpus_originality.py`, run in the `code-quality`
-job of `ci.yml`. Three checks: no `subprocess` call under `tests/` or `tools/`
-invokes a cryptographic binary (AST-based, so the many "replaces OpenSSL X"
-comments are not findings — flagging those would make the gate un-satisfiable
-and push a maintainer to delete accurate documentation); every corpus file's
-`source.url` is on `rfc-editor.org` or `ietf.org`; and `tests/ref_keyformat.py`
-imports nothing from `ama_cryptography`.
+**Enforcement.** `tools/check_corpus_originality.py`, run in the
+`security-checks` job of `ci.yml`. Three checks:
+
+1. No process-spawning call under `ama_cryptography/`, `tests/` or `tools/`
+   invokes a cryptographic binary. AST-based, so the many "replaces OpenSSL X"
+   comments are not findings — flagging those would make the gate
+   un-satisfiable and push a maintainer to delete accurate documentation. The
+   callee set covers `subprocess.run`/`Popen`/`call`/`check_call`/
+   `check_output`/`getoutput`/`getstatusoutput`, `os.system`/`popen`, and the
+   `exec*`/`spawn*`/`posix_spawn*` families; string constants bound to a name
+   elsewhere in the file are resolved before matching, because
+   `CMD = ["openssl", ...]; subprocess.run(CMD)` is how the removed generator
+   actually spelled it and a gate that would not catch the code it exists to
+   prevent returning is not a gate.
+2. Every corpus file's `source.url` is on `rfc-editor.org` or `ietf.org`.
+3. `tests/ref_keyformat.py` imports nothing from `ama_cryptography`.
 
 **Verification.** `tests/test_corpus_originality.py` pins both directions —
 the repository as it stands, plus a reproduction of each violation: a

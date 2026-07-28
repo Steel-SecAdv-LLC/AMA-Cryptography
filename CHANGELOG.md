@@ -19,6 +19,143 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ## [Unreleased]
 
+### Added — HSS/LMS signature verification (RFC 8554)
+
+- **`src/c/ama_lms.c`** implements the complete RFC 8554 registry — LM-OTS
+  typecodes 1–4 (`w` = 1/2/4/8) and LMS typecodes 5–9 (`h` = 5/10/15/20/25),
+  all SHA-256 — as `ama_lms_verify`, `ama_hss_verify`,
+  `ama_lms_signature_length`, `ama_lms_pubkey_params` and
+  `ama_hss_pubkey_levels`, with Python bindings under the same names.
+
+  **Verification only, permanently until a state manager exists.** RFC 8554
+  §5.4.1 puts the whole of LMS's security in the one-time leaf index being
+  durably reserved *before* a signature is released: a signer that loses that
+  race can, after a crash, sign twice under one LM-OTS key, and two signatures
+  under one LM-OTS key yield a forged third. That guarantee lives in a durable
+  state manager tested against interrupted writes, not in the arithmetic, so
+  shipping the signing maths without one would produce something that passes
+  every vector and is catastrophically unsafe in exactly the circumstance it
+  exists to survive. `ama_lms_signing_available()` reports the absence rather
+  than leaving a caller to find a missing symbol, and
+  `tests/test_rfc8554_vectors.py` pins the whole HSS/LMS surface as an exact
+  inventory so a signer cannot appear without someone arguing for it.
+
+  Verification holds no secret, keeps no state, and cannot be made unsafe by
+  being called twice — and it is the half with the interoperability value:
+  HSS/LMS is deployed overwhelmingly as a firmware and software-update
+  signature, one offline signer against a very large verifier population.
+
+  Stack use is O(1) — about 200 bytes of automatics regardless of parameter
+  set. The obvious implementation materialises `z[0..p-1]`, 8,480 bytes for
+  `w = 1`; the Kc hash is streamed instead. The Merkle path is read in place.
+  Hash count is bounded by the typecode rather than by the input, and HSS
+  levels are bounded by `AMA_HSS_MAX_LEVELS` (RFC 8554 §6 states no bound of
+  its own).
+
+  Built unconditionally, not under `AMA_USE_NATIVE_PQC`: the constrained
+  firmware-verification targets this exists for are the ones most likely to
+  build with native PQC off.
+
+- **RFC 8554 Appendix F is now an answer key rather than an artefact.** The
+  corpus was vendored in this branch and asserted nothing about AMA. Both
+  published test cases verify end to end; every field is shown to be
+  load-bearing by corruption sweep; the single-tree verifier and the
+  signature-length walker are exercised independently of the HSS path; and
+  truncation, trailing data, wrong level counts, unknown typecodes and an
+  out-of-range leaf index are all refused. `tests/c/test_lms.c` (73 checks)
+  reads the same corpus rather than transcribing it.
+
+  SP 800-208's additional parameter sets remain excluded, unchanged: the
+  published PDF did not yield reliable text, and guessing an approved parameter
+  set is the speculative standards work this repository refuses.
+
+### Fixed — defects found by a follow-up audit of this branch
+
+- **ML-DSA signature malleability (FIPS 204 Algorithm 21).** `dil_verify_internal`
+  checked the hint's cumulative counts and its trailing zero padding but not
+  the rule that indices within each polynomial are strictly increasing —
+  the rule the reference implementation annotates "for strong unforgeability".
+  `dil_polyveck_use_hint` is order-insensitive, so every permutation of a
+  polynomial's index run was a distinct byte string that verified for the same
+  message under the same key: a randomly sampled ML-DSA-65 signature has eight
+  indices in one polynomial, i.e. 40,320 encodings of one signature. A break of
+  SUF-CMA, and of anything treating a signature encoding as an identity — dedup
+  caches, replay tables, audit-log equality. Present on `main` as well; this
+  branch extended it to all three parameter sets.
+
+- **ML-DSA private-key residue.** `ama_ml_dsa_sign` left the time-domain `s2`
+  and `t0` on the stack, in a scrub list whose comment described itself as
+  exhaustive. With the public key those are a complete private key:
+  `t = t1·2^d + t0`, `rho` regenerates `A`, and `A·s1 = t − s2` solves for
+  `s1`. The three drifting copies of that list are now one macro used at all
+  three exits, including the `dil_hash_mu` failure return, which scrubbed
+  nothing at all. The batched 4-way SHAKE samplers likewise left the ML-DSA
+  masking vector `y` and the ML-KEM CBD noise unscrubbed while the scalar arms
+  they replace scrubbed theirs.
+
+- **Data race on the NIST-curve generator comb tables.** Built under a plain
+  `int ready` flag — the pattern INVARIANT-15 names and prohibits. The builder
+  reads the table back as it fills it, so threads race on reads and writes
+  rather than on identical bytes, and the tables live in BSS where a Jacobian
+  point with `Z` still zero *is* the point at infinity: a torn read is a wrong
+  public key, not recognisable corruption. ThreadSanitizer reports twelve races
+  before and none after. The once-primitive moved out of `ama_cpuid.c` into
+  `src/c/internal/ama_once.h`, because an invariant every module is bound by
+  has to be reachable by every module.
+
+- **Key-format parser canonicality.** JWK members were decoded without checking
+  the alphabet or the pad bits, so one key had unboundedly many JWK encodings
+  and unboundedly many RFC 7638 thumbprints. CBOR recursion was unbounded (a
+  few hundred octets raised `RecursionError` past the `KeyFormatError`
+  boundary). A ~3 kB OBJECT IDENTIFIER raised `ValueError` from
+  `int.__str__`'s digit limit, and `oid_to_string` mis-read a multi-byte first
+  subidentifier and accepted a truncated OID as valid. PKCS#8 accepted the
+  constructed `[1] publicKey` tag as well as the primitive one; both trailer
+  loops accepted their OPTIONALs in any order and any multiplicity; an EC key
+  naming two *different* public keys was accepted with the outer one discarded
+  unchecked; duplicate JWK members were resolved last-wins where other JOSE
+  stacks resolve first-wins. `PrivateKey.__repr__` printed the key and the seed.
+
+- **`pq_import_consistency` was a process-global flag wearing a context
+  manager's clothes.** One thread's `with` block disabled the RFC 9881 §8.2
+  check for every other thread, and two interleaved blocks left it off
+  permanently with no region open. Now a `ContextVar` with token-based reset.
+
+- **RFC 3161: a locally forged, unsigned token verified.** Replacing
+  `openssl ts -verify` with a message-imprint binding check left the API's
+  language and result key unchanged, so a 125-byte unsigned CMS ContentInfo
+  built offline — with a `genTime` of the forger's choosing — dropped into
+  `CryptoPackage.timestamp_token` (a field covered by neither the HMAC nor
+  either signature) made `verify_crypto_package` report `rfc3161: True`.
+  `extract_tst_info` now refuses a `SignedData` whose `digestAlgorithms` or
+  `signerInfos` set is empty, and the result is reported as `rfc3161_binding`,
+  which is what is actually checked (`rfc3161` remains, same value, so no
+  caller starts raising `KeyError` inside a verification routine). A malformed
+  token now returns False rather than destroying the whole verification call.
+  The TSA response read is bounded. A fresh nonce is sent and its echo
+  required. `certReq` is requested so archived tokens are self-contained. The
+  token is checked to bind the digest that was submitted.
+
+- **`rfc3161_timestamp.py` still imported and called `rfc3161ng`** — an
+  undeclared third-party cryptographic dependency — for both of its exported
+  functions, while a complete RFC 3161 client sat unexported a few hundred
+  lines below. The online path is now AMA's own codec end to end.
+
+- **Four CI gates could not fail as intended.** INVARIANT-36's binary scan
+  missed `CMD = ["openssl", ...]; subprocess.run(CMD)` — the exact spelling the
+  removed generator used — as well as `os.popen` and the `exec*`/`spawn*`
+  families. INVARIANT-33's Python fuzz lane was satisfied by a *comment* naming
+  the harness. `build_keyformat_corpus.py --verify` examined the contents of
+  four corpora out of six. `--atheris` built a seed corpus and discarded it.
+
+- **Nineteen ctypes secret buffers were never zeroised**, and every private-key
+  input crossed as `bytes(...)` — the immutable, non-wipeable copy the module's
+  own INVARIANT-6 comment names as the thing to avoid.
+
+- **`ama_cryptography.key_formats` was unreachable from the package
+  namespace.** The branch's flagship interoperability API had no `__all__`
+  entry and no lazy loader.
+
 ### Changed — validation provenance
 
 - **Removed OpenSSL from the validation path.** `tests/kat/keyformats/openssl/`

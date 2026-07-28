@@ -32,23 +32,40 @@ The two dashes are not gaps in the implementation — see
 ## Using it
 
 ```python
-from ama_cryptography.key_formats import PrivateKey, PublicKey, load_pkcs8, load_spki
+from pathlib import Path
+
+from ama_cryptography.key_formats import (
+    PrivateKey,
+    PublicKey,
+    jwk_thumbprint,
+    load_pkcs8,
+    load_spki,
+)
 from ama_cryptography.pqc_backends import native_nistp_keypair
 
 pub, priv = native_nistp_keypair("P-256")
 private = PrivateKey("P-256", priv, pub)
 public = PublicKey("P-256", pub)
 
-open("key.pem", "w").write(private.to_pem())      # PKCS#8, RFC 5958
-open("key.pub", "w").write(public.to_pem())       # SPKI
+Path("key.pem").write_text(private.to_pem())      # PKCS#8, RFC 5958
+Path("key.pub").write_text(public.to_pem())       # SPKI
 
 jwk = public.to_jwk()                             # RFC 7518 / 8037
 thumbprint = jwk_thumbprint(jwk)                  # RFC 7638
 cose = public.to_cose()                           # RFC 9052, deterministic CBOR
 
-reloaded = load_pkcs8(open("key.pem").read())     # DER or strict PEM
+reloaded = load_pkcs8(Path("key.pem").read_text())   # DER or strict PEM
 assert reloaded.public().key == public.key
+assert load_spki(Path("key.pub").read_text()).key == public.key
 ```
+
+Every name above is also re-exported from the package itself
+(`from ama_cryptography import load_pkcs8`), lazily, so importing
+`ama_cryptography` does not pull the native backend in for callers who never
+touch a key file.
+
+`tests/test_documented_examples.py` runs this block verbatim, so a snippet that
+has drifted is a failing test rather than a new user's first error.
 
 `load_spki` and `load_pkcs8` accept DER bytes, a PEM string, or bytes holding
 PEM text — a file read in binary mode is the common case and works.
@@ -223,6 +240,16 @@ the only place it is visible.
 Both checks are exposed on the backend as well:
 
 ```python
+# doc-example: not runnable — a signature sketch, not a program. `sk` stands
+# for a key the reader already has, and tests/test_documented_examples.py skips
+# blocks carrying this marker rather than pretending to execute them.
+from ama_cryptography.pqc_backends import (
+    native_ml_dsa_privkey_check,
+    native_ml_dsa_pubkey_from_privkey,
+    native_ml_kem_privkey_check,
+    native_ml_kem_pubkey_from_privkey,
+)
+
 native_ml_dsa_pubkey_from_privkey(65, sk)   # public key, or ValueError
 native_ml_dsa_privkey_check(65, sk)         # the verdict alone
 native_ml_kem_pubkey_from_privkey(768, sk)
