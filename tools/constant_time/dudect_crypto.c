@@ -29,6 +29,7 @@
 #include <time.h>
 
 #include "ama_cryptography.h"
+#include "dudect_rounds.h"
 
 #define DEFAULT_ITERATIONS 100000
 #define T_THRESHOLD 4.5
@@ -470,7 +471,10 @@ static void print_result_info(const char *name, double t_value) {
     printf("    %s: t = %.4f [INFORMATIONAL]\n", name, t_value);
 }
 
-static int run_round(int iterations, int round_num) {
+/* Lane order is fixed across rounds: dudect_rounds_add compares names as well
+ * as indices, so a reordering aborts rather than attributing one lane's
+ * measurement to another. */
+static int run_round(int iterations, int round_num, dudect_lane_result_t *lanes) {
     printf("\n--- Round %d ---\n", round_num);
 
     double t_ed25519     = test_ed25519_sign(iterations);
@@ -499,21 +503,37 @@ static int run_round(int iterations, int round_num) {
      * is the correct security behavior; never release plaintext from a
      * forged ciphertext).  The tag-compare test (test 3a) is the actual
      * side-channel-bearing measurement and IS counted in pass/fail. */
-    int all_pass = (fabs(t_ed25519)    < T_THRESHOLD) &&
-                   (fabs(t_aes_enc)    < T_THRESHOLD) &&
-                   (fabs(t_aes_tagcmp) < T_THRESHOLD) &&
-                   (fabs(t_hkdf)       < T_THRESHOLD) &&
-                   (fabs(t_sha3)       < T_THRESHOLD) &&
-                   (fabs(t_ascon_enc)  < T_THRESHOLD) &&
-                   (fabs(t_ascon_tag)  < T_THRESHOLD) &&
-                   (fabs(t_ascon_hash) < T_THRESHOLD);
+    int n = 0;
+    lanes[n++] = (dudect_lane_result_t){"Ed25519 sign",           t_ed25519,    0, 0};
+    lanes[n++] = (dudect_lane_result_t){"AES-GCM encrypt",        t_aes_enc,    0, 0};
+    lanes[n++] = (dudect_lane_result_t){"AES-GCM tag compare",    t_aes_tagcmp, 0, 0};
+    lanes[n++] = (dudect_lane_result_t){"AES-GCM decrypt branch", t_aes_decbr,  1, 0};
+    lanes[n++] = (dudect_lane_result_t){"HKDF-SHA3-256",          t_hkdf,       0, 0};
+    lanes[n++] = (dudect_lane_result_t){"SHA3-256",               t_sha3,       0, 0};
+    lanes[n++] = (dudect_lane_result_t){"Ascon-AEAD128 encrypt",  t_ascon_enc,  0, 0};
+    lanes[n++] = (dudect_lane_result_t){"Ascon-AEAD128 tag cmp",  t_ascon_tag,  0, 0};
+    lanes[n++] = (dudect_lane_result_t){"Ascon-Hash256",          t_ascon_hash, 0, 0};
 
-    printf("  Round %d: %s\n", round_num, all_pass ? "PASS" : "WARN");
-    return all_pass;
+    int all_pass = 1;
+    for (int i = 0; i < n; i++) {
+        if (!lanes[i].is_info_only && fabs(lanes[i].t_value) >= T_THRESHOLD)
+            all_pass = 0;
+    }
+    printf("  Round %d: %s\n", round_num, all_pass ? "within threshold" : "OVER THRESHOLD");
+    return n;
 }
 
 int main(int argc, char *argv[]) {
     int iterations = DEFAULT_ITERATIONS;
+
+    /* The verdict rule decides whether this gate can block a merge, and a
+     * measurement pass cannot exercise it. Driven with synthetic evidence
+     * instead — see tests/c/dudect/dudect_rounds.h. */
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--self-test") == 0)
+            return dudect_rounds_self_test();
+    }
+
     if (argc > 1) {
         iterations = atoi(argv[1]);
         if (iterations < 1000) iterations = 1000;
@@ -530,15 +550,31 @@ int main(int argc, char *argv[]) {
     printf("Threshold:   |t| < %.1f (99.999%% confidence)\n", T_THRESHOLD);
     printf("Iterations:  %d per test, up to %d rounds\n", iterations, MAX_ROUNDS);
 
-    int passed = 0;
+    dudect_lane_result_t lanes[DUDECT_ROUNDS_MAX_LANES];
+    dudect_rounds_t rounds;
+    dudect_rounds_init(&rounds, T_THRESHOLD);
+
     for (int round = 1; round <= MAX_ROUNDS; round++) {
-        if (run_round(iterations, round)) {
-            passed = 1;
-            break;
+        int n = run_round(iterations, round, lanes);
+        dudect_rounds_add(&rounds, lanes, n);
+
+        int clean = 1;
+        for (int i = 0; i < n; i++) {
+            if (!lanes[i].is_info_only && fabs(lanes[i].t_value) >= T_THRESHOLD)
+                clean = 0;
         }
+        /* A clean round settles it: no lane can then have tripped them all. */
+        if (clean)
+            break;
         if (round < MAX_ROUNDS)
-            printf("\nRetrying to rule out environmental noise...\n");
+            printf("\nRe-running: a real leak reproduces every round, noise moves.\n");
     }
+
+    int passed = dudect_rounds_passed(&rounds);
+
+    printf("\n=======================================================\n");
+    printf("Summary (%d round%s):\n", rounds.rounds_run, rounds.rounds_run == 1 ? "" : "s");
+    dudect_rounds_print_summary(&rounds);
 
     printf("\n=======================================================\n");
     if (passed) {
@@ -549,7 +585,11 @@ int main(int argc, char *argv[]) {
         printf("      The constant-time guarantee for tag forgery resistance is\n");
         printf("      proven by test 3a (\"AES-GCM tag compare\"), which IS counted.\n");
     } else {
-        printf("Overall: FAIL - Potential timing leakage detected across %d rounds\n", MAX_ROUNDS);
+        printf("Overall: FAIL - the following lane(s) were over the threshold in "
+               "every one of %d round(s):\n", rounds.rounds_run);
+        dudect_rounds_print_failures(&rounds);
+        printf("\nA lane over the threshold in only some rounds is reported NOISE\n");
+        printf("above and does not fail the run.\n");
     }
     printf("=======================================================\n");
 

@@ -39,6 +39,7 @@
 
 #define DUDECT_IMPLEMENTATION
 #include "dudect/dudect.h"
+#include "dudect/dudect_rounds.h"
 
 /* -----------------------------------------------------------------------
  * Configuration
@@ -2035,205 +2036,6 @@ static int run_all_tests(int iterations, test_result_t *results, int *num_result
 }
 
 /* -----------------------------------------------------------------------
- * Cross-round evidence
- *
- * The retry loop announced "Retrying to rule out noise..." and then did not
- * rule out noise.  It passed when *any single round* had zero failing lanes
- * and failed otherwise — without ever checking whether the *same* lane failed
- * twice.  With ~24 lanes and a per-lane false-positive rate of 1e-5 against
- * real scheduling jitter on a shared runner, a different lane tripping in each
- * of three rounds is an ordinary outcome, and the suite reported "Potential
- * timing leakage detected across 3 rounds" — asserting a consistency it had
- * never established.  That is what a false alarm from this gate looks like,
- * and it is indistinguishable in the log from a real finding.
- *
- * A leak reproduces: the t-statistic grows with measurements and the same lane
- * trips every round.  Noise moves.  So a lane now has to exceed the threshold
- * in *every* round to count, which is exactly what the retry already claimed
- * to be doing.  The per-lane threshold is untouched, and a genuinely leaking
- * lane still fails — the change removes false alarms, not sensitivity.
- *
- * A fatal sentinel (setup failure or per-class rc mismatch) is exempt: it is
- * not a timing measurement, so retrying it proves nothing and one occurrence
- * is conclusive.
- *
- * The trade-off, stated rather than buried: requiring *all* rounds rather than
- * a majority means a marginal lane sitting right at the threshold — tripping,
- * say, two rounds in three — is reported NOISE instead of FAIL.  That is the
- * deliberate reading of "reproduces every round", and it is why the summary
- * prints the ratio (`2/3`) next to every lane rather than only a verdict: a
- * lane drifting toward the threshold is visible in the log before it becomes a
- * failure, instead of arriving as a surprise. Tightening this to a majority is
- * a one-line change in lane_is_failure, and the self-check below is written so
- * that doing it deliberately means updating a named case.
- * ----------------------------------------------------------------------- */
-
-typedef struct {
-    const char *name;
-    int    is_info_only;
-    int    rounds_failed; /* rounds in which |t| >= threshold */
-    int    fatal;         /* saw the harness-fault sentinel at least once */
-    double worst_t;       /* signed t of the largest |t| observed */
-} lane_evidence_t;
-
-/* Fold one round's results into the running evidence.  Lanes are registered in
- * a fixed order by run_all_tests, so index identity is stable; the name is
- * compared anyway so a future reordering is caught rather than mis-attributed. */
-static void accumulate_round(lane_evidence_t *evidence, int *num_lanes,
-                             const test_result_t *results, int num_results) {
-    if (*num_lanes == 0) {
-        for (int i = 0; i < num_results; i++) {
-            evidence[i].name         = results[i].name;
-            evidence[i].is_info_only = results[i].is_info_only;
-            evidence[i].rounds_failed = 0;
-            evidence[i].fatal         = 0;
-            evidence[i].worst_t       = 0.0;
-        }
-        *num_lanes = num_results;
-    } else if (num_results != *num_lanes) {
-        fprintf(stderr, "  FATAL: lane count changed between rounds (%d -> %d)\n",
-                *num_lanes, num_results);
-        abort();
-    }
-
-    for (int i = 0; i < num_results; i++) {
-        if (strcmp(evidence[i].name, results[i].name) != 0) {
-            fprintf(stderr, "  FATAL: lane %d changed identity between rounds "
-                            "('%s' -> '%s')\n",
-                    i, evidence[i].name, results[i].name);
-            abort();
-        }
-        double t = results[i].t_value;
-        if (is_fatal_result(t)) {
-            evidence[i].fatal = 1;
-            evidence[i].rounds_failed++;
-        } else {
-            if (fabs(t) >= DUDECT_T_THRESHOLD)
-                evidence[i].rounds_failed++;
-            if (fabs(t) > fabs(evidence[i].worst_t))
-                evidence[i].worst_t = t;
-        }
-    }
-}
-
-/* A lane fails only if it is strict and exceeded the threshold in every round,
- * or if it ever reported a harness fault. */
-static int lane_is_failure(const lane_evidence_t *lane, int rounds_run) {
-    if (lane->fatal)
-        return 1;
-    return !lane->is_info_only && lane->rounds_failed == rounds_run;
-}
-
-static void print_summary(const lane_evidence_t *evidence, int num_lanes, int rounds_run) {
-    printf("\n  %-35s  %10s  %8s  %8s\n", "Function", "worst |t|", "rounds", "Status");
-    printf("  %-35s  %10s  %8s  %8s\n",
-           "-----------------------------------",
-           "----------",
-           "--------",
-           "--------");
-
-    for (int i = 0; i < num_lanes; i++) {
-        const lane_evidence_t *lane = &evidence[i];
-        const char *status;
-        if (lane->fatal) {
-            /* Setup failure or per-class rc mismatch — overrides
-             * is_info_only because a lane that did not witness its
-             * invariant is a real defect, not a timing-noise artefact. */
-            status = "FAIL";
-        } else if (lane->rounds_failed == 0) {
-            status = "PASS";
-        } else if (lane->is_info_only) {
-            status = "INFO";
-        } else if (lane->rounds_failed == rounds_run) {
-            status = "FAIL";
-        } else {
-            /* Over the threshold, but not in every round: by construction
-             * that is noise, and saying so is more useful than hiding it. */
-            status = "NOISE";
-        }
-
-        char rounds[16];
-        snprintf(rounds, sizeof(rounds), "%d/%d", lane->rounds_failed, rounds_run);
-        printf("  %-35s  %+10.4f  %8s  %8s\n",
-               lane->name, lane->worst_t, rounds, status);
-    }
-}
-
-/* -----------------------------------------------------------------------
- * Verdict self-check (`--self-test`)
- *
- * The classification above decides whether this gate can block a merge, and it
- * is the part that cannot be exercised by running the suite: reproducing "the
- * same lane trips in all three rounds" on demand would require a real leak, and
- * reproducing "a different lane each round" would require controlling the
- * runner's scheduler.  So the rule is driven directly with synthetic evidence,
- * in both directions — the standard this repository holds its other gates to,
- * and the reason this one's previous behaviour went unnoticed.
- *
- * Deterministic, no timing, milliseconds.  Runs ahead of the measurement pass
- * in CI so a broken verdict rule fails loudly rather than silently passing
- * everything.
- * ----------------------------------------------------------------------- */
-
-static int selftest_case(const char *what, lane_evidence_t lane, int rounds_run, int want) {
-    int got = lane_is_failure(&lane, rounds_run);
-    printf("  %-58s %s\n", what, got == want ? "ok" : "MISMATCH");
-    return got == want;
-}
-
-static int run_verdict_self_test(void) {
-    int ok = 1;
-    printf("dudect verdict self-check\n\n");
-
-    /* Strict lane, over threshold in every round: a leak reproduces. */
-    ok &= selftest_case("strict lane over threshold in 3/3 rounds -> FAIL",
-                        (lane_evidence_t){"strict", 0, 3, 0, 9.0}, 3, 1);
-    /* Strict lane over threshold in some rounds: that is noise, and treating
-     * it as a failure is the false alarm this self-check exists to prevent. */
-    ok &= selftest_case("strict lane over threshold in 2/3 rounds -> pass",
-                        (lane_evidence_t){"strict", 0, 2, 0, 9.0}, 3, 0);
-    ok &= selftest_case("strict lane over threshold in 1/3 rounds -> pass",
-                        (lane_evidence_t){"strict", 0, 1, 0, 9.0}, 3, 0);
-    ok &= selftest_case("strict lane within threshold every round -> pass",
-                        (lane_evidence_t){"strict", 0, 0, 0, 1.2}, 3, 0);
-    /* Info-only lanes never fail on timing alone, however consistently. */
-    ok &= selftest_case("info lane over threshold in 3/3 rounds -> pass",
-                        (lane_evidence_t){"info", 1, 3, 0, 3800.0}, 3, 0);
-    /* A harness fault is not a timing measurement: one occurrence is
-     * conclusive, and it overrides info-only. */
-    ok &= selftest_case("fatal harness fault seen once in 3 rounds -> FAIL",
-                        (lane_evidence_t){"strict", 0, 1, 1, 0.0}, 3, 1);
-    ok &= selftest_case("fatal harness fault on an info lane -> FAIL",
-                        (lane_evidence_t){"info", 1, 1, 1, 0.0}, 3, 1);
-    /* Single-round runs (an early clean break) must not be read as 0/0. */
-    ok &= selftest_case("strict lane over threshold in 1/1 round -> FAIL",
-                        (lane_evidence_t){"strict", 0, 1, 0, 9.0}, 1, 1);
-
-    /* accumulate_round must fold rounds, not overwrite them. */
-    lane_evidence_t evidence[DUDECT_MAX_LANES];
-    int num_lanes = 0;
-    test_result_t r1[2] = {{"a", 9.0, 0}, {"b", 0.5, 0}};
-    test_result_t r2[2] = {{"a", 0.4, 0}, {"b", 7.0, 0}};
-    accumulate_round(evidence, &num_lanes, r1, 2);
-    accumulate_round(evidence, &num_lanes, r2, 2);
-    int folded = (num_lanes == 2 && evidence[0].rounds_failed == 1 &&
-                  evidence[1].rounds_failed == 1 && !lane_is_failure(&evidence[0], 2) &&
-                  !lane_is_failure(&evidence[1], 2));
-    printf("  %-58s %s\n",
-           "a different lane over threshold each round -> neither fails",
-           folded ? "ok" : "MISMATCH");
-    ok &= folded;
-
-    /* The worst |t| is retained across rounds, not the last one. */
-    int worst = fabs(evidence[0].worst_t - 9.0) < 1e-9;
-    printf("  %-58s %s\n", "worst |t| is kept across rounds", worst ? "ok" : "MISMATCH");
-    ok &= worst;
-
-    printf("\n%s\n", ok ? "verdict self-check: PASS" : "verdict self-check: FAIL");
-    return ok ? 0 : 1;
-}
-
-/* -----------------------------------------------------------------------
  * Main
  * ----------------------------------------------------------------------- */
 int main(int argc, char *argv[]) {
@@ -2241,7 +2043,7 @@ int main(int argc, char *argv[]) {
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--self-test") == 0)
-            return run_verdict_self_test();
+            return dudect_rounds_self_test();
     }
 
     /* Parse arguments */
@@ -2276,18 +2078,26 @@ int main(int argc, char *argv[]) {
     }
 
     test_result_t results[DUDECT_MAX_LANES];
-    lane_evidence_t evidence[DUDECT_MAX_LANES];
+    dudect_lane_result_t round_lanes[DUDECT_MAX_LANES];
+    dudect_rounds_t rounds;
     int num_results = 0;
-    int num_lanes = 0;
-    int rounds_run = 0;
+
+    dudect_rounds_init(&rounds, DUDECT_T_THRESHOLD);
 
     for (int round = 1; round <= MAX_ROUNDS; round++) {
         printf("\n=== Round %d/%d ===\n", round, MAX_ROUNDS);
         g_timeout_hit = 0;
 
         int round_clean = run_all_tests(g_measurements, results, &num_results);
-        accumulate_round(evidence, &num_lanes, results, num_results);
-        rounds_run++;
+        for (int i = 0; i < num_results; i++) {
+            round_lanes[i].name         = results[i].name;
+            round_lanes[i].is_info_only = results[i].is_info_only;
+            round_lanes[i].is_fatal     = is_fatal_result(results[i].t_value);
+            /* The fatal sentinel is not a measurement; keep it out of worst_t
+             * so a harness fault cannot masquerade as a giant t-statistic. */
+            round_lanes[i].t_value      = round_lanes[i].is_fatal ? 0.0 : results[i].t_value;
+        }
+        dudect_rounds_add(&rounds, round_lanes, num_results);
 
         /* A clean round settles it: every lane was within threshold at least
          * once, so no lane can have failed all of them. */
@@ -2297,7 +2107,7 @@ int main(int argc, char *argv[]) {
         if (round < MAX_ROUNDS) {
             int over = 0;
             for (int i = 0; i < num_results; i++) {
-                if (is_fatal_result(results[i].t_value) ||
+                if (round_lanes[i].is_fatal ||
                     (!results[i].is_info_only &&
                      fabs(results[i].t_value) >= DUDECT_T_THRESHOLD))
                     over++;
@@ -2308,32 +2118,19 @@ int main(int argc, char *argv[]) {
     }
 
     /* Verdict from the accumulated evidence, not from the last round alone. */
-    int passed = 1;
-    for (int i = 0; i < num_lanes; i++) {
-        if (lane_is_failure(&evidence[i], rounds_run))
-            passed = 0;
-    }
+    int passed = dudect_rounds_passed(&rounds);
 
     printf("\n=======================================================\n");
-    printf("Summary (%d round%s):\n", rounds_run, rounds_run == 1 ? "" : "s");
-    print_summary(evidence, num_lanes, rounds_run);
+    printf("Summary (%d round%s):\n", rounds.rounds_run, rounds.rounds_run == 1 ? "" : "s");
+    dudect_rounds_print_summary(&rounds);
 
     printf("\n=======================================================\n");
     if (passed) {
         printf("Overall: PASS - No unexpected constant-time violations detected\n");
     } else {
         printf("Overall: FAIL - the following lane(s) failed in every one of "
-               "%d round(s):\n", rounds_run);
-        for (int i = 0; i < num_lanes; i++) {
-            if (!lane_is_failure(&evidence[i], rounds_run))
-                continue;
-            if (evidence[i].fatal)
-                printf("  - %s: harness fault (setup failure or per-class rc mismatch)\n",
-                       evidence[i].name);
-            else
-                printf("  - %s: |t| reached %.4f, threshold %.1f\n",
-                       evidence[i].name, fabs(evidence[i].worst_t), DUDECT_T_THRESHOLD);
-        }
+               "%d round(s):\n", rounds.rounds_run);
+        dudect_rounds_print_failures(&rounds);
         printf("\nA lane over the threshold in only some rounds is reported NOISE\n");
         printf("above and does not fail the run. Reproduce a real finding on quiet\n");
         printf("hardware: taskset -c 0 nice -n -20 ./test_dudect --measurements 10000000\n");

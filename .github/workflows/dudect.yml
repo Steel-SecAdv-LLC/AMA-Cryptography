@@ -213,13 +213,14 @@ jobs:
         run: |
           cd tools/constant_time
           make clean && make all
+          # This job builds the standalone tools/constant_time harnesses; it
+          # never builds build/bin/test_dudect, so the self-test is invoked on
+          # the binaries that exist here. All three harnesses share the verdict
+          # rule in tests/c/dudect/dudect_rounds.h, so this checks the same
+          # code the CMake suite checks — from the build that actually runs it.
+          ./dudect_harness --self-test
+          ./dudect_crypto --self-test
           # Best-effort priority elevation — see `dudect-utility` for rationale.
-          # The verdict rule decides whether this gate can block a merge, and
-          # a measurement pass cannot exercise it: reproducing "the same lane
-          # trips in every round" on demand would need a real leak. Drive it
-          # with synthetic evidence first — deterministic, milliseconds — so a
-          # broken rule fails loudly instead of silently passing everything.
-          ./build/bin/test_dudect --self-test
           NICE_PREFIX=""
           if nice -n -10 true 2>/dev/null; then NICE_PREFIX="nice -n -10"; fi
           echo "=== Utility function timing analysis ==="

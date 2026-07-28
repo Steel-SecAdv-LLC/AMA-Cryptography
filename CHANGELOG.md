@@ -19,7 +19,20 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ## [Unreleased]
 
-### Fixed — the constant-time gate said "retrying to rule out noise" and did not
+### Fixed — all three dudect harnesses said "retrying to rule out noise" and did not
+
+The defect below was found in `tests/c/test_dudect.c` and then found again,
+unchanged, in `tools/constant_time/dudect_crypto.c` and
+`tools/constant_time/dudect_harness.c`. All three ran the same multi-round loop
+and all three got the same thing wrong, so the rule now lives once, in
+`tests/c/dudect/dudect_rounds.h`, and all three include it. Three copies of a
+security gate's decision rule is how the copies drift apart, and the shared
+self-test now covers every harness at once.
+
+The two legacy harnesses additionally discarded their per-lane t-values between
+rounds — `run_round` returned a bool — so their summaries could not show whether
+a finding reproduced, which is the one fact a reader needs. They now carry the
+same evidence table as the CMake suite, and both accept `--self-test`.
 
 `tests/c/test_dudect.c` runs up to three rounds and passes if any one round has
 no failing lane. It never checked whether the **same** lane failed twice. With
