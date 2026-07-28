@@ -2496,6 +2496,142 @@ AMA_API ama_error_t ama_ascon_aead128_decrypt(
 AMA_API void ama_ascon_permutation_for_test(uint64_t state[5], unsigned rounds);
 
 /* ============================================================================
+ * HSS / LMS — RFC 8554 hash-based signature VERIFICATION
+ *
+ * Verification only, and deliberately so.  LMS is a *stateful* scheme: RFC 8554
+ * §5.4.1 requires the one-time leaf index to be durably reserved before a
+ * signature is released, and a signer that loses that race produces two
+ * signatures under one LM-OTS key, from which a third can be forged.  That
+ * guarantee lives in a durable state manager, not in the arithmetic, so the
+ * signing half is withheld until such a manager exists and has been tested
+ * against interrupted writes rather than happy paths.  `ama_lms_signing_
+ * available()` reports that in as many words instead of leaving a caller to
+ * discover a missing symbol.
+ *
+ * Verification holds no secret, keeps no state, and cannot be made unsafe by
+ * being called twice — and it is the half with the interoperability value,
+ * since HSS/LMS is deployed overwhelmingly as a firmware/software-update
+ * signature with one offline signer and a very large verifier population.
+ *
+ * Parameter sets: the complete RFC 8554 registry (LM-OTS typecodes 1..4,
+ * w = 1/2/4/8; LMS typecodes 5..9, h = 5/10/15/20/25), all SHA-256.
+ * SP 800-208's additional SHA-256/192 and SHAKE256 sets are not implemented;
+ * an unrecognised typecode is refused, never resolved onto a neighbour
+ * (INVARIANT-35).
+ * ============================================================================ */
+
+/** LMS public key: u32(lms_type) || u32(ots_type) || I[16] || T[1][32] = 56. */
+#define AMA_LMS_PUBKEY_LEN 56
+/** HSS public key: u32(L) || lms_public_key = 60. */
+#define AMA_HSS_PUBKEY_LEN 60
+
+/**
+ * Maximum HSS levels AMA will verify.
+ *
+ * RFC 8554 §6 does not itself bound L.  AMA bounds it so that verification
+ * cost is a constant rather than a function of an attacker-chosen field, and
+ * refuses a larger L explicitly instead of walking it.  Eight is the largest
+ * value any deployed HSS profile uses.
+ */
+#define AMA_HSS_MAX_LEVELS 8
+
+/**
+ * @brief Report whether this build can *produce* HSS/LMS signatures.
+ *
+ * Always 0 in the current library.  Present so that "AMA does not sign with
+ * LMS" is an answerable question rather than a link error.
+ *
+ * @return 0 — signing is not implemented (see the section comment above).
+ */
+AMA_API int ama_lms_signing_available(void);
+
+/**
+ * @brief Report the parameter set an LMS public key names.
+ *
+ * @param pubkey     LMS public key (AMA_LMS_PUBKEY_LEN bytes).
+ * @param pubkey_len Its length.
+ * @param lms_type   Optional out: LMS typecode (5..9).
+ * @param lmots_type Optional out: LM-OTS typecode (1..4).
+ * @param h          Optional out: tree height.
+ * @param w          Optional out: Winternitz width.
+ * @return AMA_SUCCESS, or AMA_ERROR_INVALID_PARAM if the key is malformed or
+ *         names a typecode this library does not implement.
+ */
+AMA_API ama_error_t ama_lms_pubkey_params(
+    const uint8_t *pubkey, size_t pubkey_len,
+    uint32_t *lms_type, uint32_t *lmots_type,
+    uint32_t *h, uint32_t *w
+);
+
+/**
+ * @brief Exact length of the LMS signature at the head of a buffer.
+ *
+ * An LMS signature is self-describing but variable-length, and HSS
+ * concatenates several of them, so a caller splitting a buffer needs this.
+ *
+ * @param signature     Buffer whose head is an LMS signature.
+ * @param signature_len Bytes available.
+ * @return The signature's exact length, or 0 if the head is not a
+ *         structurally valid LMS signature that fits in `signature_len`.
+ */
+AMA_API size_t ama_lms_signature_length(
+    const uint8_t *signature, size_t signature_len
+);
+
+/**
+ * @brief Verify a single-tree LMS signature (RFC 8554 §5.4.2, Algorithm 6).
+ *
+ * @param message       Signed message (may be NULL iff message_len is 0).
+ * @param message_len   Its length.
+ * @param signature     LMS signature; must be consumed exactly.
+ * @param signature_len Its length.
+ * @param pubkey        LMS public key (AMA_LMS_PUBKEY_LEN bytes).
+ * @param pubkey_len    Its length.
+ * @return AMA_SUCCESS if valid, AMA_ERROR_VERIFY_FAILED if not,
+ *         AMA_ERROR_INVALID_PARAM if the *public key* is malformed.
+ */
+AMA_API ama_error_t ama_lms_verify(
+    const uint8_t *message, size_t message_len,
+    const uint8_t *signature, size_t signature_len,
+    const uint8_t *pubkey, size_t pubkey_len
+);
+
+/**
+ * @brief Report the number of levels an HSS public key commits to.
+ *
+ * @param pubkey     HSS public key (AMA_HSS_PUBKEY_LEN bytes).
+ * @param pubkey_len Its length.
+ * @param levels     Out: L, in [1, AMA_HSS_MAX_LEVELS].
+ * @return AMA_SUCCESS or AMA_ERROR_INVALID_PARAM.
+ */
+AMA_API ama_error_t ama_hss_pubkey_levels(
+    const uint8_t *pubkey, size_t pubkey_len, uint32_t *levels
+);
+
+/**
+ * @brief Verify a hierarchical HSS signature (RFC 8554 §6.3).
+ *
+ * Walks the chain of signed public keys from the root committed to by
+ * `pubkey` down to the tree that signed `message`.  Every intermediate
+ * signature must verify, the level count must match the public key's L, and
+ * the buffer must be consumed exactly.
+ *
+ * @param message       Signed message (may be NULL iff message_len is 0).
+ * @param message_len   Its length.
+ * @param signature     HSS signature.
+ * @param signature_len Its length.
+ * @param pubkey        HSS public key (AMA_HSS_PUBKEY_LEN bytes).
+ * @param pubkey_len    Its length.
+ * @return AMA_SUCCESS if valid, AMA_ERROR_VERIFY_FAILED if not,
+ *         AMA_ERROR_INVALID_PARAM if the *public key* is malformed.
+ */
+AMA_API ama_error_t ama_hss_verify(
+    const uint8_t *message, size_t message_len,
+    const uint8_t *signature, size_t signature_len,
+    const uint8_t *pubkey, size_t pubkey_len
+);
+
+/* ============================================================================
  * DIRECT PQC ALGORITHM ACCESS
  * ============================================================================ */
 
@@ -2721,6 +2857,28 @@ AMA_API ama_error_t ama_ml_dsa_privkey_check(ama_ml_dsa_param_set_t ps,
  * @param signature_len In: capacity. Out: octets written. If the capacity is
  *                      too small, `*signature_len` is set to the required size
  *                      and AMA_ERROR_INVALID_PARAM is returned.
+ */
+/**
+ * @brief ML-DSA signing, "internal interface" (no context wrapper).
+ *
+ * **Stack requirement.** Signing holds the whole k x l matrix A across the
+ * rejection loop, so its measured whole-call-chain high-water mark is about
+ * **150 KB**, the same for every parameter set. That is more than musl's
+ * 128 KB default thread stack: a thread created with the default attributes
+ * on a musl target — or an embedded task with a comparable budget — must be
+ * given a larger stack before calling this.
+ *
+ * The figure is stated rather than reduced because A is consumed once per
+ * rejection attempt (4-5 per signature on average), so re-expanding it row by
+ * row to save the 57 KB would multiply the dominant cost of signing several
+ * times over, on the one ML-DSA path where the parameter set is chosen by the
+ * key holder rather than by an attacker. `ama_ml_dsa_keypair` (61 KB) and
+ * `ama_ml_dsa_verify` (58 KB) *do* expand A row-wise, because verification is
+ * driven by whoever supplies the signature and has to fit a small stack.
+ *
+ * All three figures are measured, not asserted:
+ * `tests/c/test_pq_parser_stack.c` runs each on a painted, caller-supplied
+ * thread stack and holds it under a stated budget.
  */
 AMA_API ama_error_t ama_ml_dsa_sign(ama_ml_dsa_param_set_t ps,
                                     uint8_t *signature, size_t *signature_len,

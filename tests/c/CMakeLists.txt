@@ -115,6 +115,15 @@ add_executable(test_ascon test_ascon.c)
 target_link_libraries(test_ascon ama_cryptography_test)
 add_test(NAME test_ascon COMMAND test_ascon
          WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+# HSS/LMS verification (RFC 8554).  Reads the vendored Appendix F corpus from
+# tests/kat/keyformats/ rather than transcribing it, so — like test_ascon and
+# test_kat — it needs the source tree as its working directory.  LMS is in the
+# unconditional source list (it consumes only SHA-256), so this runs in the
+# AMA_USE_NATIVE_PQC=OFF configuration too.
+add_executable(test_lms test_lms.c)
+target_link_libraries(test_lms ama_cryptography_test)
+add_test(NAME test_lms COMMAND test_lms
+         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 add_ama_test(test_ed25519 test_ed25519.c)
 
 # RFC 8032 5.1.7 canonical-S enforcement (INVARIANT-26).  Built

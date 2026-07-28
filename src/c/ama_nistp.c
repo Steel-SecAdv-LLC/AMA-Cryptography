@@ -68,6 +68,7 @@
 #include "../include/ama_cryptography.h"
 #include "ama_hmac_sha256.h"
 #include "ama_platform_rand.h"
+#include "internal/ama_once.h"
 
 #include <stdint.h>
 #include <string.h>
@@ -807,9 +808,28 @@ static void nistp_scalar_mul(nistp_jac *out, const uint8_t *k,
  * nothing, and a table built from attacker-supplied input is a surface this
  * does not need.
  *
- * Initialised once per curve, on first use, and never mutated afterwards.  The
- * table holds only public data — multiples of the standard generator — so the
- * benign race two threads can run on first use writes identical bytes.
+ * **Initialised through the platform once-primitive, per curve.**  It used to
+ * be a plain `int ready` flag with a comment calling the race benign because
+ * "the table holds only public data, so two threads write identical bytes".
+ * That reasoning was wrong twice over, and INVARIANT-15 prohibits the pattern
+ * outright for exactly these reasons:
+ *
+ *   - `nistp_comb_build` does not only *write* the table, it *reads it back*:
+ *     entry `i` is built by adding to entry `i & ~(1<<low)`.  So two threads
+ *     racing produce read/write races on the table, not write/write races on
+ *     identical bytes, and a partially written entry is not garbage — the
+ *     table lives in BSS, and a Jacobian point whose `Z` limbs are still zero
+ *     *is* the point at infinity.  A wrong-but-well-formed answer.
+ *   - Even for genuinely identical bytes, a plain flag supplies no
+ *     happens-before edge.  On a weakly-ordered target — AArch64 and POWER are
+ *     both supported here — a third thread can observe `ready == 1` before the
+ *     table stores are visible and multiply against an entry that reads as
+ *     infinity, yielding a silently wrong public key or a wrong `r`.  Nothing
+ *     reports it; the first thing to notice would be a peer.
+ *
+ * `pthread_once` / `InitOnceExecuteOnce` gives both exactly-once execution and
+ * the visibility guarantee.  After the once-call returns, the table is
+ * immutable for the life of the process, so the hot path is a plain read.
  */
 #define NISTP_COMB_BLOCKS  4
 #define NISTP_COMB_SIZE    (1u << NISTP_COMB_BLOCKS)
@@ -817,10 +837,16 @@ static void nistp_scalar_mul(nistp_jac *out, const uint8_t *k,
 typedef struct {
     nistp_jac table[NISTP_COMB_SIZE];
     unsigned  block_bits;   /**< `e`: bits per block, ceil(qbits / blocks) */
-    int       ready;
 } nistp_comb;
 
 static nistp_comb NISTP_COMBS[3];
+
+/* One flag per curve: a caller that only ever uses P-256 should not pay for
+ * P-521's table, and a shared flag would force all three to be built together.
+ * The trampolines exist because the once-primitive takes `void (*)(void)`. */
+static AMA_ONCE_FLAG NISTP_COMB_ONCE[3] = {
+    AMA_ONCE_FLAG_INIT, AMA_ONCE_FLAG_INIT, AMA_ONCE_FLAG_INIT
+};
 
 /** The generator in Jacobian/Montgomery form. */
 static void nistp_generator(nistp_jac *g, const nistp_curve *c) {
@@ -861,8 +887,17 @@ static void nistp_comb_build(nistp_comb *comb, const nistp_curve *c) {
         nistp_jac_add(&comb->table[i], &comb->table[i & ~(1u << low)],
                       &base[low], c);
     }
-    comb->ready = 1;
 }
+
+/* Once-trampolines. `NISTP_CURVES` is indexed 0/1/2 for P-256/P-384/P-521 and
+ * `NISTP_COMBS` is parallel to it, so each of these builds exactly one. */
+static void nistp_comb_build_0(void) { nistp_comb_build(&NISTP_COMBS[0], &NISTP_CURVES[0]); }
+static void nistp_comb_build_1(void) { nistp_comb_build(&NISTP_COMBS[1], &NISTP_CURVES[1]); }
+static void nistp_comb_build_2(void) { nistp_comb_build(&NISTP_COMBS[2], &NISTP_CURVES[2]); }
+
+static void (*const NISTP_COMB_BUILDERS[3])(void) = {
+    nistp_comb_build_0, nistp_comb_build_1, nistp_comb_build_2
+};
 
 /**
  * Constant-time R = k * G using the comb.
@@ -873,15 +908,15 @@ static void nistp_comb_build(nistp_comb *comb, const nistp_curve *c) {
  */
 static void nistp_scalar_mul_generator(nistp_jac *out, const uint8_t *k,
                                        const nistp_curve *c) {
-    nistp_comb *comb = &NISTP_COMBS[(unsigned)(c - &NISTP_CURVES[0])];
+    unsigned idx = (unsigned)(c - &NISTP_CURVES[0]);
+    nistp_comb *comb = &NISTP_COMBS[idx];
     nistp_jac acc, sel;
     unsigned nl = c->nlimbs;
     unsigned nbits = c->nbytes * 8u;
     unsigned e, i, limb;
     int t;
 
-    if (!comb->ready)
-        nistp_comb_build(comb, c);
+    AMA_CALL_ONCE(NISTP_COMB_ONCE[idx], NISTP_COMB_BUILDERS[idx]);
     e = comb->block_bits;
 
     nistp_jac_set_infinity(&acc);
@@ -1476,9 +1511,18 @@ AMA_API ama_error_t ama_nistp_point_decode(ama_nist_curve_t curve,
     nl = c->nlimbs;
 
     if (in_len == (size_t)c->nbytes * 2u + 1u && in[0] == 0x04) {
+        /* Route through `done:` rather than returning here.  The header
+         * promises "the output buffer is zeroed" on rejection, and the
+         * compressed branch below honours it via the shared exit — this branch
+         * returned early and left the caller holding 2*field_bytes of
+         * attacker-chosen octets that are not a point on the curve.  A caller
+         * that treats an all-zero buffer as "not populated", or that logs the
+         * buffer on the error path, was handed exactly what it was told it
+         * would not be. */
         memcpy(public_key, in + 1, (size_t)c->nbytes * 2u);
-        return ama_nistp_pubkey_validate(curve, public_key) == AMA_SUCCESS
-                   ? AMA_SUCCESS : AMA_ERROR_INVALID_PARAM;
+        rc = ama_nistp_pubkey_validate(curve, public_key) == AMA_SUCCESS
+                 ? AMA_SUCCESS : AMA_ERROR_INVALID_PARAM;
+        goto done;
     }
     if (in_len != (size_t)c->nbytes + 1u || (in[0] != 0x02 && in[0] != 0x03))
         return AMA_ERROR_INVALID_PARAM;
@@ -1751,8 +1795,17 @@ static ama_error_t nistp_sign_dispatch(const nistp_curve *c,
         return AMA_ERROR_INVALID_PARAM;   /* unknown flag bits are rejected */
 
     if (flags & AMA_NISTP_ECDSA_SIGN_HEDGED) {
-        if (ama_randombytes(entropy, sizeof(entropy)) != AMA_SUCCESS)
+        if (ama_randombytes(entropy, sizeof(entropy)) != AMA_SUCCESS) {
+            /* `ama_randombytes` is not all-or-nothing: the getrandom(2) and
+             * getentropy(3) paths both loop, advancing the offset, and can
+             * return an error after earlier iterations have already written
+             * CSPRNG output into the buffer.  Returning without the scrub left
+             * up to 31 live entropy octets in the frame — the one error return
+             * in this path that missed the scrub the file header claims for
+             * "every exit path". */
+            ama_secure_memzero(entropy, sizeof(entropy));
             return AMA_ERROR_CRYPTO;
+        }
         extra = entropy;
         extra_len = sizeof(entropy);
     }
@@ -1842,6 +1895,22 @@ static ama_error_t nistp_ecdsa_verify_rs(const nistp_curve *c,
     uint64_t vx[AMA_NISTP_MAX_LIMBS];
     uint8_t u1b[66], u2b[66], x_bytes[66];
     nistp_jac G, Q, R;
+
+    /* Unknown policy bits are rejected, symmetrically with the signer.
+     *
+     * `nistp_sign_dispatch` has always refused a flag word it does not
+     * understand; the verifier silently discarded every bit but bit 0. So the
+     * two halves of one documented policy pair behaved oppositely on the same
+     * malformed input, and a caller that set a mistyped or future-version
+     * strictness bit got AMA_SUCCESS from the *permissive* default while
+     * believing it had asked for — and received — the strict one. That is
+     * INVARIANT-35's failure applied to the policy word instead of the curve
+     * selector: a selection nobody made, resolved silently to a neighbour.
+     *
+     * AMA_ERROR_INVALID_PARAM rather than AMA_ERROR_VERIFY_FAILED: the
+     * signature has not been judged, the *request* is malformed. */
+    if (flags & ~AMA_NISTP_ECDSA_REQUIRE_LOW_S)
+        return AMA_ERROR_INVALID_PARAM;
 
     /* r and s must already be in [1, n-1] — never reduced into range: a value
      * >= n is a second byte string that would otherwise verify. */

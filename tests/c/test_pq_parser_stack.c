@@ -32,6 +32,18 @@
  * layer — not just the one frame, which is the number that actually matters for
  * a parser.
  *
+ * The same harness now also measures the three ML-DSA *operation* entry
+ * points, under their own budget. Verification is at least as
+ * attacker-reachable as key import — anyone who can present a signature
+ * reaches it — and it, like keygen, held the whole k x l matrix A on the stack
+ * for every parameter set, so ML-DSA-44 paid ML-DSA-87's 57 KB. Both now
+ * expand A one row at a time. Signing keeps the whole matrix, because it uses
+ * A once per rejection attempt and re-expanding it 4-5 times per signature is
+ * a large constant cost on the one path where the parameter set is chosen by
+ * the key holder rather than by an attacker; its frame is therefore *measured
+ * and stated* rather than reduced, and AMA_ML_DSA_SIGN_STACK_BUDGET is what
+ * stops it drifting further.
+ *
  * POSIX only. Returns 77 (CTest SKIP) where the technique is unavailable
  * rather than passing tautologically.
  */
@@ -71,6 +83,20 @@ int main(void) {
  * property it protects is real. */
 #define AMA_PQ_PARSER_STACK_BUDGET (48u * 1024u)
 
+/* Budget for ML-DSA keygen and verification. Both expand A row-wise, so they
+ * sit well under musl's 128 KB default thread stack with room for a caller's
+ * own frames below them. */
+#define AMA_ML_DSA_OP_STACK_BUDGET (80u * 1024u)
+
+/* Budget for ML-DSA signing, which holds the whole matrix A across the
+ * rejection loop. Stated at the measured figure plus headroom rather than
+ * pretended away: a caller running ML-DSA signing on a thread with a small
+ * stack needs to size it accordingly, and `include/ama_cryptography.h` says so
+ * beside the signing entry points. This number existing is the point — it is
+ * what turns "it segfaults on musl" into a documented requirement with a
+ * regression gate. */
+#define AMA_ML_DSA_SIGN_STACK_BUDGET (176u * 1024u)
+
 /* Stack region for the measured thread. Large enough that an unbounded
  * implementation does not fault before it can be measured — the point is to
  * report a number, not to crash. */
@@ -78,11 +104,17 @@ int main(void) {
 #define PAINT UINT64_C(0xA5A5A5A5A5A5A5A5)
 
 typedef struct {
-    int kind;          /* 0 = baseline, 1 = ML-DSA, 2 = ML-KEM */
+    int kind;          /* 0 = baseline, 1 = ML-DSA parser, 2 = ML-KEM parser,
+                        * 3 = ML-DSA keygen, 4 = ML-DSA sign, 5 = ML-DSA verify */
     int param_set;
     const uint8_t *sk;
+    const uint8_t *pk;
     uint8_t *pk_out;
     size_t pk_len;
+    uint8_t *sig;
+    size_t sig_len;
+    const uint8_t *msg;
+    size_t msg_len;
     ama_error_t rc;
 } job_t;
 
@@ -98,6 +130,20 @@ static void *run_job(void *arg) {
                 (ama_ml_kem_param_set_t)job->param_set, job->sk,
                 ama_ml_kem_secret_key_bytes((ama_ml_kem_param_set_t)job->param_set),
                 job->pk_out, job->pk_len);
+            break;
+        case 3:
+            job->rc = ama_ml_dsa_keypair((ama_ml_dsa_param_set_t)job->param_set,
+                                         job->pk_out, (uint8_t *)job->sk);
+            break;
+        case 4:
+            job->rc = ama_ml_dsa_sign((ama_ml_dsa_param_set_t)job->param_set,
+                                      job->sig, &job->sig_len,
+                                      job->msg, job->msg_len, job->sk);
+            break;
+        case 5:
+            job->rc = ama_ml_dsa_verify((ama_ml_dsa_param_set_t)job->param_set,
+                                        job->msg, job->msg_len,
+                                        job->sig, job->sig_len, job->pk);
             break;
         default:
             job->rc = AMA_SUCCESS;
@@ -253,6 +299,125 @@ int main(void) {
 
     printf("worst case: %zu bytes; budget: %u bytes\n",
            worst, (unsigned)AMA_PQ_PARSER_STACK_BUDGET);
+
+    /* ---------------------------------------------------------------------
+     * The three ML-DSA operations, under their own budgets.
+     * ------------------------------------------------------------------- */
+    {
+        static uint8_t sig[AMA_ML_DSA_MAX_SIGNATURE_BYTES];
+        static const uint8_t msg[32] = {
+            'A', 'M', 'A', ' ', 'M', 'L', '-', 'D', 'S', 'A', ' ', 's', 't', 'a',
+            'c', 'k', ' ', 'b', 'u', 'd', 'g', 'e', 't', ' ', 'p', 'r', 'o', 'b',
+            'e', '.', '.', '.'
+        };
+        size_t op_worst = 0, sign_worst = 0;
+
+        for (i = 0; i < sizeof(dsa_sets) / sizeof(dsa_sets[0]); i++) {
+            job_t job;
+            size_t used;
+            const char *name = ama_ml_dsa_param_set_name(dsa_sets[i]);
+
+            /* keygen */
+            memset(&job, 0, sizeof(job));
+            job.kind = 3;
+            job.param_set = (int)dsa_sets[i];
+            job.sk = dsa_sk;
+            job.pk_out = dsa_pk;
+            used = measure(&job);
+            if (used == (size_t)-1) {
+                return fail("measurement harness");
+            }
+            if (job.rc != AMA_SUCCESS) {
+                return fail("ML-DSA keygen did not succeed under measurement");
+            }
+            used = used > baseline ? used - baseline : 0;
+            printf("  %-12s ama_ml_dsa_keypair:             %6zu bytes of stack\n",
+                   name, used);
+            if (used > op_worst) {
+                op_worst = used;
+            }
+
+            /* sign */
+            memset(&job, 0, sizeof(job));
+            job.kind = 4;
+            job.param_set = (int)dsa_sets[i];
+            job.sk = dsa_sk;
+            job.sig = sig;
+            job.sig_len = sizeof(sig);
+            job.msg = msg;
+            job.msg_len = sizeof(msg);
+            used = measure(&job);
+            if (used == (size_t)-1) {
+                return fail("measurement harness");
+            }
+            if (job.rc != AMA_SUCCESS) {
+                return fail("ML-DSA sign did not succeed under measurement");
+            }
+            used = used > baseline ? used - baseline : 0;
+            printf("  %-12s ama_ml_dsa_sign:                %6zu bytes of stack\n",
+                   name, used);
+            if (used > sign_worst) {
+                sign_worst = used;
+            }
+
+            /* verify — the signature just produced, so a wrong answer here is
+             * a failure and not merely a measurement. */
+            {
+                size_t produced = job.sig_len;
+                memset(&job, 0, sizeof(job));
+                job.kind = 5;
+                job.param_set = (int)dsa_sets[i];
+                job.pk = dsa_pk;
+                job.sig = sig;
+                job.sig_len = produced;
+                job.msg = msg;
+                job.msg_len = sizeof(msg);
+                used = measure(&job);
+            }
+            if (used == (size_t)-1) {
+                return fail("measurement harness");
+            }
+            if (job.rc != AMA_SUCCESS) {
+                return fail("ML-DSA verify rejected a signature it had just produced");
+            }
+            used = used > baseline ? used - baseline : 0;
+            printf("  %-12s ama_ml_dsa_verify:              %6zu bytes of stack\n",
+                   name, used);
+            if (used > op_worst) {
+                op_worst = used;
+            }
+        }
+
+        printf("ML-DSA keygen/verify worst: %zu bytes; budget: %u bytes\n",
+               op_worst, (unsigned)AMA_ML_DSA_OP_STACK_BUDGET);
+        printf("ML-DSA sign worst:          %zu bytes; budget: %u bytes\n",
+               sign_worst, (unsigned)AMA_ML_DSA_SIGN_STACK_BUDGET);
+        if (op_worst > AMA_ML_DSA_OP_STACK_BUDGET) {
+            printf("FAIL: ML-DSA keygen or verification exceeds its stack budget. "
+                   "Verification is driven by whoever supplies the signature, so "
+                   "its frame has to fit a small thread stack.\n");
+            return 1;
+        }
+        if (sign_worst > AMA_ML_DSA_SIGN_STACK_BUDGET) {
+            printf("FAIL: ML-DSA signing exceeds its stated stack budget. If this "
+                   "is a deliberate change, the figure in "
+                   "include/ama_cryptography.h has to move with it.\n");
+            return 1;
+        }
+        if (op_worst < 4096 || sign_worst < 4096) {
+            printf("FAIL: an ML-DSA operation measured implausibly small — the "
+                   "measurement is not measuring anything\n");
+            return 1;
+        }
+        /* Signing genuinely is the largest of the three; if it ever stops
+         * being, the budgets above have gone stale in the other direction. */
+        if (sign_worst <= op_worst) {
+            printf("FAIL: signing no longer dominates keygen/verify (%zu vs %zu) — "
+                   "the budgets need revisiting\n", sign_worst, op_worst);
+            return 1;
+        }
+    }
+
     if (worst > AMA_PQ_PARSER_STACK_BUDGET) {
         printf("FAIL: a parser-reachable PQ validation entry point exceeds the "
                "stated stack budget. This path is reached from load_pkcs8, so "

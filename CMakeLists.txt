@@ -457,6 +457,13 @@ set(AMA_SOURCES
     src/c/ama_sha256_ni.c
     src/c/ama_hmac_sha256.c
     src/c/ama_hmac_sha384.c
+    # HSS/LMS verification (RFC 8554).  Consumes only SHA-256, holds no secret
+    # and keeps no state, so it belongs in the unconditional list: the
+    # firmware-update verifiers this exists for are exactly the constrained
+    # targets most likely to build with AMA_USE_NATIVE_PQC=OFF, and an
+    # HSS verifier that vanished in that configuration would miss its own use
+    # case.  Signing is deliberately absent — see the file header.
+    src/c/ama_lms.c
     src/c/ama_ed25519.c
     src/c/ama_aes_gcm.c
     src/c/ama_cpuid.c

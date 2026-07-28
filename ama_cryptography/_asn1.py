@@ -157,28 +157,69 @@ def oid_from_string(dotted: str) -> bytes:
     return _tlv(TAG_OID, bytes(body))
 
 
+#: Largest OBJECT IDENTIFIER body this decoder will look at.
+#:
+#: Not a style preference — a bound. The arcs below accumulate into a Python
+#: ``int``, and since CPython 3.11 ``str(int)`` refuses a value whose decimal
+#: form exceeds ``sys.int_max_str_digits`` (4300 by default). A ~3 kB OID body
+#: therefore made ``oid_to_string`` raise ``ValueError`` *past* the
+#: ``KeyFormatError`` boundary that ``load_spki`` / ``load_pkcs8`` promise, and
+#: a longer one turns the shift-accumulate loop into quadratic bignum work on
+#: attacker-chosen input. No registered OID comes close: the longest in general
+#: use is around 30 octets.
+_OID_MAX_BODY = 128
+
+#: Largest number of octets one subidentifier may occupy. 12 continuation
+#: octets carry 84 bits, which is more than any registered arc and far below
+#: the point where the accumulated integer becomes expensive.
+_OID_MAX_ARC_OCTETS = 12
+
+
 def oid_to_string(body: bytes) -> str:
-    """Decode an OBJECT IDENTIFIER *body* (no tag/length) to dotted form."""
+    """Decode an OBJECT IDENTIFIER *body* (no tag/length) to dotted form.
+
+    X.690 §8.19: the body is a sequence of base-128 subidentifiers, and the
+    *first* subidentifier encodes ``40 * arc1 + arc2``. That first
+    subidentifier uses the same continuation form as every other one — which
+    the previous version of this function did not do. It read ``body[0]`` as a
+    complete octet, so ``b"\\xff"`` (a continuation octet with nothing
+    following it, i.e. a truncated OID) decoded happily to ``"2.175"``, and any
+    OID whose first subidentifier legitimately needs two octets (arc1 = 2 with
+    arc2 >= 48, e.g. the ``2.999`` experimental arc) decoded to the wrong
+    value.
+    """
     if not body:
         raise KeyFormatError("empty OBJECT IDENTIFIER")
-    first = body[0]
-    arcs = [min(first // 40, 2)]
-    arcs.append(first - arcs[0] * 40)
+    if len(body) > _OID_MAX_BODY:
+        raise KeyFormatError(
+            f"OBJECT IDENTIFIER body of {len(body)} octets exceeds the "
+            f"{_OID_MAX_BODY}-octet limit"
+        )
+
+    subids: list[int] = []
     value = 0
-    started = False
-    for octet in body[1:]:
-        if not started and octet == 0x80:
-            # A continuation octet of 0x80 at the start of an arc is a
-            # non-minimal encoding: it contributes no bits.
+    octets_in_arc = 0
+    for octet in body:
+        if octets_in_arc == 0 and octet == 0x80:
+            # A leading continuation octet of 0x80 contributes no bits, so it
+            # is a second encoding of the same arc.
             raise KeyFormatError("non-minimal OID arc encoding")
-        started = True
+        octets_in_arc += 1
+        if octets_in_arc > _OID_MAX_ARC_OCTETS:
+            raise KeyFormatError("OID subidentifier is implausibly large")
         value = (value << 7) | (octet & 0x7F)
         if not octet & 0x80:
-            arcs.append(value)
+            subids.append(value)
             value = 0
-            started = False
-    if started:
+            octets_in_arc = 0
+    if octets_in_arc:
         raise KeyFormatError("truncated OBJECT IDENTIFIER")
+
+    # X.690 §8.19.4: split the first subidentifier back into its two arcs.
+    # arc1 is 0, 1 or 2; only under arc1 = 2 is arc2 unbounded.
+    first = subids[0]
+    arc1 = min(first // 40, 2)
+    arcs = [arc1, first - arc1 * 40, *subids[1:]]
     return ".".join(str(a) for a in arcs)
 
 
@@ -325,6 +366,15 @@ _CBOR_TEXT = 3
 _CBOR_ARRAY = 4
 _CBOR_MAP = 5
 
+#: Deepest CBOR nesting this decoder will follow.
+#:
+#: A COSE_Key (RFC 9052 §7) is a map whose values are integers, byte strings
+#: and text strings — depth 1. Four leaves room for a future structure without
+#: leaving the recursion open, which it was: `0x81` (array of one) buys one
+#: stack frame per input octet, so a few hundred octets produced a
+#: ``RecursionError`` outside this module's exception contract.
+_CBOR_MAX_DEPTH = 4
+
 
 def _cbor_head(major: int, value: int) -> bytes:
     """Shortest-form head, as core deterministic encoding requires."""
@@ -417,7 +467,19 @@ class _CborReader:
             raise KeyFormatError("indefinite-length CBOR is not deterministic")
         raise KeyFormatError(f"reserved CBOR additional information {extra}")
 
-    def decode(self) -> Any:
+    def decode(self, depth: int = 0) -> Any:
+        """Decode one CBOR item.
+
+        ``depth`` bounds nesting. Without it, ``0x81`` (array of one) costs an
+        attacker a single octet per stack frame, so a few hundred octets of
+        input drove a ``RecursionError`` straight past the ``KeyFormatError``
+        boundary that ``cose_to_public_key`` / ``cose_to_private_key`` promise
+        — and on a thread with a small stack, past the interpreter entirely.
+        A COSE_Key is a flat map of scalars and byte strings, so the limit
+        rejects the whole class rather than merely surviving it.
+        """
+        if depth > _CBOR_MAX_DEPTH:
+            raise KeyFormatError(f"CBOR nesting deeper than {_CBOR_MAX_DEPTH} levels")
         major, value = self._head()
         if major == _CBOR_UINT:
             return value
@@ -437,13 +499,21 @@ class _CborReader:
             except UnicodeDecodeError:
                 raise KeyFormatError("invalid UTF-8 in CBOR text string") from None
         if major == _CBOR_ARRAY:
-            return [self.decode() for _ in range(value)]
+            # `value` is bounded by the head, but an 8-byte head can declare
+            # 2^64 elements; `_need(1)` inside the first `decode` is what stops
+            # the list comprehension from being asked to preallocate. Check the
+            # declared count against the octets that remain before entering it,
+            # since every element costs at least one octet.
+            self._need(value)
+            return [self.decode(depth + 1) for _ in range(value)]
         if major == _CBOR_MAP:
+            # Every pair costs at least two octets.
+            self._need(2 * value)
             mapping: dict[Any, Any] = {}
             previous: bytes | None = None
             for _ in range(value):
                 key_start = self._pos
-                key = self.decode()
+                key = self.decode(depth + 1)
                 key_bytes = self._buf[key_start : self._pos]
                 if previous is not None and key_bytes <= previous:
                     raise KeyFormatError(
@@ -452,7 +522,7 @@ class _CborReader:
                 previous = key_bytes
                 if isinstance(key, (list, dict)):
                     raise KeyFormatError("non-scalar CBOR map key")
-                mapping[key] = self.decode()
+                mapping[key] = self.decode(depth + 1)
             return mapping
         raise KeyFormatError(f"unsupported CBOR major type {major}")
 

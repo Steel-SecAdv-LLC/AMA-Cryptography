@@ -1009,6 +1009,12 @@ static void dil_poly_uniform_eta(dil_poly *a, const uint8_t seed[DIL_CRHBYTES],
             }
         }
     }
+    /* `stream` is the RejBoundedPoly input for s1/s2 and `buf` carries
+     * rhoprime; `shake_ctx` still holds the absorbed state.  All three are
+     * secret-derived (INVARIANT-12). */
+    ama_secure_memzero(stream, sizeof(stream));
+    ama_secure_memzero(buf, sizeof(buf));
+    ama_secure_memzero(&shake_ctx, sizeof(shake_ctx));
 }
 
 /**
@@ -1103,6 +1109,11 @@ static void dil_polyvec_uniform_eta(dil_poly *polys, unsigned int count,
             }
         }
 
+        /* `streams` is the RejBoundedPoly input for s1/s2 and `bufs` carries
+         * rhoprime — both secret-derived, neither previously scrubbed
+         * (INVARIANT-12). */
+        ama_secure_memzero(streams, sizeof(streams));
+        ama_secure_memzero(bufs, sizeof(bufs));
         idx += 4;
     }
 
@@ -1129,6 +1140,11 @@ static void dil_poly_uniform_gamma1(dil_poly *a, const uint8_t seed[DIL_CRHBYTES
 
     ama_shake256(buf, DIL_CRHBYTES + 2, stream, P->polyz_packedbytes);
     dil_polyz_unpack(a, stream, P);
+    /* `stream` is the packed masking vector y and `buf` carries rhoprime
+     * (INVARIANT-12). y is the ephemeral whose disclosure, with the emitted
+     * z = y + c*s1 and the public c, hands over s1. */
+    ama_secure_memzero(stream, sizeof(stream));
+    ama_secure_memzero(buf, sizeof(buf));
 }
 
 /**
@@ -1180,6 +1196,13 @@ static void dil_polyvecl_uniform_gamma1(dil_polyvecl *y,
             dil_polyz_unpack(&y->vec[idx + (unsigned int)lane], streams[lane], P);
         }
 
+        /* `streams` *is* the packed masking vector y for four lanes, which is
+         * the single most sensitive ephemeral in ML-DSA: y together with the
+         * emitted z = y + c*s1 and the public c yields c*s1 and hence s1.
+         * `dil_sign_internal` scrubs its own copy of y; this one was missed
+         * (INVARIANT-12). */
+        ama_secure_memzero(streams, sizeof(streams));
+        ama_secure_memzero(bufs, sizeof(bufs));
         idx += 4;
     }
 
@@ -1564,6 +1587,50 @@ static void dil_expand_matrix_row(dil_poly *row,
     dil_sample_uniform_n(row, nonces, P->l, rho);
 }
 
+/**
+ * w = A*v with A expanded one row at a time — the low-stack form of
+ * `dil_expand_matrix` + `dil_polyvec_matrix_pointwise`.
+ *
+ * Every consumer of A in this file uses it strictly row-wise, so materialising
+ * all `k*l` polynomials only ever cost stack.  At ML-DSA-87 that is 56 KB of
+ * automatic storage in a single frame, and — because `mat` is dimensioned
+ * `[DIL_K_MAX * DIL_L_MAX]` rather than at the runtime `k*l` — ML-DSA-44 paid
+ * it too, for a matrix a quarter that size.  One row is 7 KB.
+ *
+ * This matters most on the *verification* path, which is driven by whoever
+ * supplies the signature and is the one an embedded or musl-default 128 KB
+ * thread stack has to survive.  It is the same argument, and the same fix,
+ * that `dil_pubkey_from_sk` already carries; `tests/c/test_pq_parser_stack.c`
+ * now measures all of keygen, sign and verify against a stated budget so the
+ * figure cannot drift back.
+ *
+ * Byte-identical to the two-step form: `dil_expand_matrix_row` samples with
+ * exactly the nonces `dil_expand_matrix` assigns to the same row, and the
+ * accumulation order is unchanged.  `test_nistp.c` pins the row/whole-matrix
+ * equality directly.
+ */
+static void dil_matrix_pointwise_rowwise(dil_polyveck *w,
+                                          const uint8_t rho[DIL_SEEDBYTES],
+                                          const dil_polyvecl *v,
+                                          const dil_params *P) {
+    dil_poly row[DIL_L_MAX];
+    dil_poly t;
+    unsigned int i, j;
+
+    for (i = 0; i < P->k; ++i) {
+        dil_expand_matrix_row(row, rho, i, P);
+        dil_poly_pointwise_montgomery(&w->vec[i], &row[0], &v->vec[0]);
+        for (j = 1; j < P->l; ++j) {
+            dil_poly_pointwise_montgomery(&t, &row[j], &v->vec[j]);
+            dil_poly_add(&w->vec[i], &w->vec[i], &t);
+        }
+    }
+    /* A is public (it is expanded from the public rho), so this is hygiene
+     * rather than a secrecy requirement — but `t` held A[i][j] * v[j] with a
+     * secret v on the keygen and signing paths. */
+    ama_secure_memzero(&t, sizeof(t));
+}
+
 #ifdef AMA_TESTING_MODE
 /**
  * Random bytes hook for KAT testing.
@@ -1595,7 +1662,6 @@ static ama_error_t dil_keygen_internal(const dil_params *P,
                                        uint8_t *public_key, uint8_t *secret_key) {
     uint8_t seedbuf[2 * DIL_SEEDBYTES + DIL_CRHBYTES];
     uint8_t *rho, *rhoprime, *key;
-    dil_poly mat[DIL_K_MAX * DIL_L_MAX];
     dil_polyvecl s1, s1hat;
     dil_polyveck s2, t1, t0, t;
     uint8_t tr[DIL_TRBYTES];
@@ -1634,18 +1700,16 @@ static ama_error_t dil_keygen_internal(const dil_params *P,
     rhoprime = rho + DIL_SEEDBYTES;
     key = rhoprime + DIL_CRHBYTES;
 
-    /* Expand matrix A from rho */
-    dil_expand_matrix(mat, rho, P);
-
     /* Sample secret vectors s1 (nonces 0..l-1) and s2 (nonces l..l+k-1) in
      * contiguous batched passes over the shared rhoprime seed. */
     dil_polyvec_uniform_eta(&s1.vec[0], P->l, rhoprime, 0, P);
     dil_polyvec_uniform_eta(&s2.vec[0], P->k, rhoprime, (uint16_t)P->l, P);
 
-    /* Compute t = A*s1 + s2 */
+    /* Compute t = A*s1 + s2, expanding A one row at a time — A is used exactly
+     * once here, so holding all 56 polynomials only ever cost 57 KB of frame. */
     s1hat = s1;
     dil_polyvecl_ntt(&s1hat, P->l);
-    dil_polyvec_matrix_pointwise(&t, mat, &s1hat, P);
+    dil_matrix_pointwise_rowwise(&t, rho, &s1hat, P);
     dil_polyveck_invntt(&t, P->k);
     dil_polyveck_add(&t, &t, &s2, P->k);
     dil_polyveck_reduce(&t, P->k);
@@ -1938,6 +2002,41 @@ static ama_error_t dil_build_ctx_prefix(const uint8_t *ctx, size_t ctx_len,
     return AMA_SUCCESS;
 }
 
+/**
+ * The complete signing-intermediate scrub (INVARIANT-12), in one place.
+ *
+ * It was written out three times — success, rejection-cap bail-out, and (not
+ * at all) the `dil_hash_mu` failure return — and the three copies had drifted:
+ * **`s2` and `t0` appeared in none of them**, while the comment beside the
+ * success copy presented its list as exhaustive.
+ *
+ * That omission is not a partial leak.  `t0` plus the public `t1` gives
+ * `t = t1*2^d + t0` exactly, `rho` regenerates `A`, and then `A*s1 = t - s2`
+ * with the leaked `s2` determines `s1` from an over-determined system (k >= l)
+ * solved independently at each NTT coordinate.  s2 + t0 + the public key *is*
+ * an ML-DSA private key, left in the frame of a function whose contract says
+ * it clears everything derivable from the secret.
+ *
+ * One macro, three call sites, and a new intermediate has exactly one list to
+ * be added to.
+ */
+#define DIL_SIGN_SCRUB()                                                       \
+    do {                                                                       \
+        ama_secure_memzero(&s1, sizeof(s1));                                   \
+        ama_secure_memzero(&s2, sizeof(s2));                                   \
+        ama_secure_memzero(&t0, sizeof(t0));                                   \
+        ama_secure_memzero(&y, sizeof(y));                                     \
+        ama_secure_memzero(&yhat, sizeof(yhat));                               \
+        ama_secure_memzero(&cs2, sizeof(cs2));                                 \
+        ama_secure_memzero(&ct0, sizeof(ct0));                                 \
+        ama_secure_memzero(&cp, sizeof(cp));                                   \
+        ama_secure_memzero(&w0, sizeof(w0));                                   \
+        ama_secure_memzero(&w1, sizeof(w1));                                   \
+        ama_secure_memzero(mu, sizeof(mu));                                    \
+        ama_secure_memzero(rhoprime, sizeof(rhoprime));                        \
+        ama_secure_memzero(hashbuf, sizeof(hashbuf));                          \
+    } while (0)
+
 static ama_error_t dil_sign_internal(const dil_params *P,
                                      uint8_t *signature, size_t *signature_len,
                                      const uint8_t *prefix, size_t prefix_len,
@@ -1950,6 +2049,10 @@ static ama_error_t dil_sign_internal(const dil_params *P,
     uint8_t hashbuf[DIL_SEEDBYTES + DIL_RNDBYTES + DIL_CRHBYTES];
     dil_poly mat[DIL_K_MAX * DIL_L_MAX];
     dil_polyvecl s1, y, z;
+    /* `yhat` is declared here rather than beside its first use so that its
+     * stack slot is in scope at *every* exit — including the `dil_hash_mu`
+     * failure return, which precedes the rejection loop. */
+    dil_polyvecl yhat;
     dil_polyveck s2, t0, w1, w0, ct0, cs2;
     dil_poly cp;
     uint8_t hint[DIL_OMEGA_MAX + DIL_K_MAX];
@@ -2007,19 +2110,26 @@ static ama_error_t dil_sign_internal(const dil_params *P,
     /* Expand A from rho */
     dil_expand_matrix(mat, rho, P);
 
-    /* Transform s1 and s2 to NTT domain */
-    dil_polyvecl s1hat = s1;
-    dil_polyvecl_ntt(&s1hat, P->l);
-    dil_polyveck s2hat = s2;
-    dil_polyveck_ntt(&s2hat, P->k);
-    dil_polyveck t0hat = t0;
-    dil_polyveck_ntt(&t0hat, P->k);
+    /* Transform s1, s2 and t0 to the NTT domain, IN PLACE.
+     *
+     * The time-domain copies are dead the moment their transform exists —
+     * nothing below this point reads them — so the three separate `*hat`
+     * vectors were 23.5 KB of frame holding a second copy of the secret key
+     * that also had to be scrubbed.  From here on `s1`, `s2` and `t0` hold
+     * NTT-domain values. */
+    dil_polyvecl_ntt(&s1, P->l);
+    dil_polyveck_ntt(&s2, P->k);
+    dil_polyveck_ntt(&t0, P->k);
 
     /* mu = H(tr || prefix || M) — streamed, no allocation. */
     {
         ama_error_t mu_rc = dil_hash_mu(tr, prefix, prefix_len,
                                         message, message_len, mu);
         if (mu_rc != AMA_SUCCESS) {
+            /* s1, s2 and t0 are already unpacked at this point, so this
+             * return had to scrub too — it was the one signing exit that
+             * scrubbed nothing at all. */
+            DIL_SIGN_SCRUB();
             return mu_rc;
         }
     }
@@ -2049,27 +2159,13 @@ static ama_error_t dil_sign_internal(const dil_params *P,
     reject = 1;
     unsigned int attempts = 0;
     const unsigned int MAX_SIGN_ATTEMPTS = 1000;
-    /* yhat hoisted out of the loop so its stack slot is visible at the
-     * success/error exits and can be scrubbed.  The previous in-loop
+    /* `yhat` is hoisted to the top of the function (see its declaration) so
+     * its stack slot is visible at every exit and can be scrubbed.  An in-loop
      * declaration left the last iteration's NTT(y) on the stack with no
      * subsequent overwrite — recoverable from a stack snapshot. */
-    dil_polyvecl yhat;
     while (reject) {
         if (++attempts > MAX_SIGN_ATTEMPTS) {
-            ama_secure_memzero(&s1, sizeof(s1));
-            ama_secure_memzero(&s1hat, sizeof(s1hat));
-            ama_secure_memzero(&s2hat, sizeof(s2hat));
-            ama_secure_memzero(&t0hat, sizeof(t0hat));
-            ama_secure_memzero(&y, sizeof(y));
-            ama_secure_memzero(&yhat, sizeof(yhat));
-            ama_secure_memzero(&cs2, sizeof(cs2));
-            ama_secure_memzero(&ct0, sizeof(ct0));
-            ama_secure_memzero(&cp, sizeof(cp));
-            ama_secure_memzero(&w0, sizeof(w0));
-            ama_secure_memzero(&w1, sizeof(w1));
-            ama_secure_memzero(mu, sizeof(mu));
-            ama_secure_memzero(rhoprime, sizeof(rhoprime));
-            ama_secure_memzero(hashbuf, sizeof(hashbuf));
+            DIL_SIGN_SCRUB();
             return AMA_ERROR_CRYPTO;
         }
         /* Sample y from [-gamma1+1, gamma1] — per-attempt batched through
@@ -2114,7 +2210,7 @@ static ama_error_t dil_sign_internal(const dil_params *P,
 
         /* Compute z = y + c*s1 */
         for (i = 0; i < P->l; ++i) {
-            dil_poly_pointwise_montgomery(&z.vec[i], &cp, &s1hat.vec[i]);
+            dil_poly_pointwise_montgomery(&z.vec[i], &cp, &s1.vec[i]);
             dil_poly_invntt(&z.vec[i]);
             dil_poly_add(&z.vec[i], &z.vec[i], &y.vec[i]);
             dil_poly_reduce(&z.vec[i]);
@@ -2126,7 +2222,7 @@ static ama_error_t dil_sign_internal(const dil_params *P,
 
         /* Compute w0 - c*s2 */
         for (i = 0; i < P->k; ++i) {
-            dil_poly_pointwise_montgomery(&cs2.vec[i], &cp, &s2hat.vec[i]);
+            dil_poly_pointwise_montgomery(&cs2.vec[i], &cp, &s2.vec[i]);
             dil_poly_invntt(&cs2.vec[i]);
         }
         dil_polyveck_sub(&w0, &w0, &cs2, P->k);
@@ -2138,7 +2234,7 @@ static ama_error_t dil_sign_internal(const dil_params *P,
 
         /* Compute c*t0 */
         for (i = 0; i < P->k; ++i) {
-            dil_poly_pointwise_montgomery(&ct0.vec[i], &cp, &t0hat.vec[i]);
+            dil_poly_pointwise_montgomery(&ct0.vec[i], &cp, &t0.vec[i]);
             dil_poly_invntt(&ct0.vec[i]);
             dil_poly_reduce(&ct0.vec[i]);
         }
@@ -2173,30 +2269,10 @@ static ama_error_t dil_sign_internal(const dil_params *P,
 
     /* Scrub sensitive data.
      *
-     * INVARIANT-12: the success path leaves recoverable signing
-     * intermediates on the stack — the NTT-domain ephemeral mask
-     * (`y`, `yhat`), the c*s2 and c*t0 products used to enforce the
-     * gamma2/beta norm bounds (`cs2`, `ct0`), the NTT-domain unpacked
-     * t0 portion of the secret key (`t0hat`), the challenge polynomial
-     * (`cp`), and the high/low decomposition of A*NTT(y) (`w0`, `w1`).
-     * Each is derivable from the secret key and the message-bound nonce
-     * `rhoprime`, so they must be scrubbed alongside the previously
-     * cleared (`s1`, `s1hat`, `s2hat`, `mu`, `rhoprime`, `hashbuf`)
-     * fields before return. */
-    ama_secure_memzero(&s1, sizeof(s1));
-    ama_secure_memzero(&s1hat, sizeof(s1hat));
-    ama_secure_memzero(&s2hat, sizeof(s2hat));
-    ama_secure_memzero(&t0hat, sizeof(t0hat));
-    ama_secure_memzero(&y, sizeof(y));
-    ama_secure_memzero(&yhat, sizeof(yhat));
-    ama_secure_memzero(&cs2, sizeof(cs2));
-    ama_secure_memzero(&ct0, sizeof(ct0));
-    ama_secure_memzero(&cp, sizeof(cp));
-    ama_secure_memzero(&w0, sizeof(w0));
-    ama_secure_memzero(&w1, sizeof(w1));
-    ama_secure_memzero(mu, sizeof(mu));
-    ama_secure_memzero(rhoprime, sizeof(rhoprime));
-    ama_secure_memzero(hashbuf, sizeof(hashbuf));
+     * INVARIANT-12: every signing intermediate is scrubbed on every exit —
+     * see DIL_SIGN_SCRUB above for the inventory and for what the previous
+     * enumeration left behind. */
+    DIL_SIGN_SCRUB();
 
     return AMA_SUCCESS;
 }
@@ -2222,7 +2298,6 @@ static ama_error_t dil_verify_internal(const dil_params *P,
     uint8_t mu[DIL_CRHBYTES];
     uint8_t c_tilde[DIL_CTILDEBYTES_MAX];
     uint8_t c_tilde2[DIL_CTILDEBYTES_MAX];
-    dil_poly mat[DIL_K_MAX * DIL_L_MAX];
     dil_polyvecl z;
     dil_polyveck t1, w1prime, h_vec;
     dil_poly cp;
@@ -2257,13 +2332,45 @@ static ama_error_t dil_verify_internal(const dil_params *P,
     memcpy(hint, signature + P->ctildebytes + (size_t)P->l * P->polyz_packedbytes,
            P->omega + P->k);
 
-    /* Verify hint encoding */
+    /* Verify hint encoding — FIPS 204 Algorithm 21 (HintBitUnpack).
+     *
+     * Three rules, and the third one was missing.
+     *
+     *   1. The cumulative counts `y[omega + i]` are non-decreasing and never
+     *      exceed omega.
+     *   2. Every octet past the last count is zero, so the unused tail of the
+     *      hint array carries no second encoding.
+     *   3. **Within each polynomial's slice the indices are strictly
+     *      increasing.**  Algorithm 21 states it as `if y[j-1] >= y[j] then
+     *      return falsum`, and the reference implementation notes beside it
+     *      that the ordering exists "for strong unforgeability".
+     *
+     * Rule 3 is not a formality.  `dil_polyveck_use_hint` sets
+     * `hint_flags[i][y[j]] = 1` for each index in the slice, so the *set* of
+     * indices determines w1 and the *order* does not.  Without the check, any
+     * permutation of a polynomial's indices is a distinct byte string that
+     * verifies for the same message under the same key — signature
+     * malleability, and a break of SUF-CMA rather than of EUF-CMA.  With eight
+     * indices in one polynomial, as a randomly sampled ML-DSA-65 signature
+     * routinely has, that is 8! = 40,320 valid encodings of one signature.
+     * Reproduced on the first randomly generated signature; pinned by
+     * `test_a_permuted_hint_is_refused` in tests/test_pqc_param_sets.py.
+     *
+     * Every input here is public (it is a signature), so the loop's data
+     * dependence is not a timing concern — the same posture as the rest of
+     * verification. */
     {
         unsigned int prev = 0;
         for (i = 0; i < P->k; ++i) {
             unsigned int limit = hint[P->omega + i];
+            unsigned int j;
             if (limit < prev || limit > P->omega) {
                 return AMA_ERROR_VERIFY_FAILED;
+            }
+            for (j = prev + 1; j < limit; ++j) {
+                if (hint[j] <= hint[j - 1]) {
+                    return AMA_ERROR_VERIFY_FAILED;
+                }
             }
             prev = limit;
         }
@@ -2278,9 +2385,6 @@ static ama_error_t dil_verify_internal(const dil_params *P,
     if (dil_polyvecl_chknorm(&z, P->gamma1 - P->beta, P->l)) {
         return AMA_ERROR_VERIFY_FAILED;
     }
-
-    /* Expand A from rho */
-    dil_expand_matrix(mat, rho, P);
 
     /* Compute tr = H(pk) */
     ama_shake256(public_key, P->pk_bytes, tr, DIL_TRBYTES);
@@ -2298,10 +2402,17 @@ static ama_error_t dil_verify_internal(const dil_params *P,
     dil_poly_challenge(&cp, c_tilde, P);
     dil_poly_ntt(&cp);
 
-    /* Compute w1' = A*NTT(z) - c*NTT(t1*2^d) in NTT domain */
+    /* Compute w1' = A*NTT(z) - c*NTT(t1*2^d) in NTT domain.
+     *
+     * A is expanded one row at a time.  Verification is the most
+     * attacker-reachable entry point in the module — anyone who can hand you a
+     * signature reaches it — so it is the one that has to survive a small
+     * thread stack.  Holding the whole 56-polynomial matrix put the frame at
+     * ~101 KB, on the wrong side of musl's 128 KB default once anything else
+     * was below it. */
     dil_polyvecl zhat = z;
     dil_polyvecl_ntt(&zhat, P->l);
-    dil_polyvec_matrix_pointwise(&w1prime, mat, &zhat, P);
+    dil_matrix_pointwise_rowwise(&w1prime, rho, &zhat, P);
 
     /* Compute c * t1 * 2^d */
     for (i = 0; i < P->k; ++i) {

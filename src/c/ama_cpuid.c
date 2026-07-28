@@ -35,36 +35,11 @@
  *   - Windows (MSVC):       InitOnceExecuteOnce  (Vista+, synchapi.h)
  * ============================================================================ */
 
-#if defined(_MSC_VER)
-    /* Windows: InitOnceExecuteOnce (available since Vista / Server 2008) */
-    #define WIN32_LEAN_AND_MEAN
-    #include <windows.h>
-
-    #define AMA_ONCE_FLAG          INIT_ONCE
-    #define AMA_ONCE_FLAG_INIT     INIT_ONCE_STATIC_INIT
-
-    typedef void (*ama_once_fn)(void);
-
-    static BOOL CALLBACK ama_once_trampoline(PINIT_ONCE once, PVOID param, PVOID *ctx) {
-        (void)once; (void)ctx;
-        ((ama_once_fn)param)();
-        return TRUE;
-    }
-
-    #define AMA_CALL_ONCE(flag, fn) \
-        InitOnceExecuteOnce(&(flag), ama_once_trampoline, (PVOID)(fn), NULL)
-
-#else
-    /* POSIX (Linux, macOS, BSDs): pthread_once */
-    #include <pthread.h>
-
-    #define AMA_ONCE_FLAG          pthread_once_t
-    #define AMA_ONCE_FLAG_INIT     PTHREAD_ONCE_INIT
-
-    #define AMA_CALL_ONCE(flag, fn) \
-        pthread_once(&(flag), (fn))
-
-#endif
+/* The primitive itself lives in internal/ama_once.h so that every module
+ * INVARIANT-15 binds can reach it.  It was defined here and nowhere else,
+ * which is how ama_nistp.c ended up open-coding a plain `int ready` flag for
+ * its generator comb tables. */
+#include "internal/ama_once.h"
 
 /* ============================================================================
  * x86 CPUID Detection

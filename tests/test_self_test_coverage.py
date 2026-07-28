@@ -174,14 +174,31 @@ class TestModuleIntegrity:
             assert not passed
             assert "mismatch" in detail.lower()
 
-    def test_update_integrity_digest_returns_hex(self) -> None:
-        """update_integrity_digest returns a hex string."""
+    def test_update_integrity_digest_returns_hex(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """update_integrity_digest returns a hex string.
+
+        The digest file is redirected to a throwaway path first, exactly as
+        ``tests/test_self_test_branches.py`` does. ``update_integrity_digest``
+        *writes*, and this test used to write the real, tracked
+        ``ama_cryptography/_integrity_digest.txt`` — so simply running the test
+        suite after editing any module rewrote a versioned file, silently
+        desynchronising it from the signed ``INTEGRITY_DIGEST_HEX`` in
+        ``_integrity_signature.py`` and turning the *next* run's integrity
+        check into a cascade of unrelated-looking failures.
+        """
+        import ama_cryptography._self_test as st
         from ama_cryptography._self_test import update_integrity_digest
+
+        fake = tmp_path / "_integrity_digest.txt"
+        monkeypatch.setattr(st, "_INTEGRITY_DIGEST_FILE", fake)
 
         digest = update_integrity_digest()
         assert isinstance(digest, str)
         assert len(digest) == 64  # SHA3-256 hex = 64 chars
         int(digest, 16)  # Should be valid hex
+        assert fake.read_text(encoding="utf-8").strip() == digest
 
     def test_compute_module_digest_deterministic(self) -> None:
         """_compute_module_digest is deterministic."""

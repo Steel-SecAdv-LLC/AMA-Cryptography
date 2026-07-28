@@ -99,12 +99,13 @@ from __future__ import annotations
 import base64
 import binascii
 import contextlib
+import contextvars
 import hashlib
 import json
 import os
 import re
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Union
 
 import ama_cryptography.pqc_backends as _pb
@@ -392,7 +393,31 @@ def _initial_pq_consistency() -> bool:
     )
 
 
-_PQ_CONSISTENCY_DEFAULT = _initial_pq_consistency()
+#: The policy, held in a :class:`~contextvars.ContextVar` rather than a module
+#: global.
+#:
+#: A plain global made :func:`pq_import_consistency` a *process-wide* switch
+#: wearing a context manager's clothes. Two concrete failures followed, and
+#: both are security failures rather than tidiness ones:
+#:
+#: * **Blast radius.** ``with pq_import_consistency(False):`` around a batch
+#:   import in one thread disabled the RFC 9881 §8.2 check for every other
+#:   thread for the duration — including a request handler importing an
+#:   attacker-supplied key. The docstring promised a scoped region; the
+#:   implementation scoped only in time.
+#: * **Permanent disablement.** Two overlapping regions restore in the wrong
+#:   order. Thread A saves ``True`` and sets ``False``; thread B saves
+#:   ``False`` and sets ``True``; A exits and restores ``True``; B exits and
+#:   restores ``False``. The check is now off with no region open, for the
+#:   life of the process, with nothing to see in the source.
+#:
+#: A ContextVar is per-thread *and* per-asyncio-task, and its token-based reset
+#: is exact rather than a save/restore race. The initial value is read from the
+#: environment once at import, which is what "per process" meant and still
+#: means.
+_pq_consistency: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "ama_pq_import_consistency", default=_initial_pq_consistency()
+)
 
 
 def get_pq_import_consistency() -> bool:
@@ -401,11 +426,17 @@ def get_pq_import_consistency() -> bool:
     See :func:`set_pq_import_consistency` for what the checks are, what they
     cost, and what turning them off does and does not give up.
     """
-    return _PQ_CONSISTENCY_DEFAULT
+    return _pq_consistency.get()
 
 
 def set_pq_import_consistency(enabled: bool) -> bool:
-    """Set the process-wide default. Returns the previous value.
+    """Set the policy for the current context. Returns the previous value.
+
+    "Current context" is the calling thread, and within an asyncio program the
+    calling task — see :data:`_pq_consistency`. A thread that never calls this
+    sees the value the environment set at import, so this is still the shape a
+    single-threaded program experiences as "the process-wide default", without
+    one thread being able to disable a security check for another.
 
     **The default is enabled, and that is the right setting for almost every
     caller.** This exists because the checks are not free and the import path is
@@ -454,9 +485,8 @@ def set_pq_import_consistency(enabled: bool) -> bool:
       designed not to raise, so a mutated ``dk_PKE`` simply derives a shared
       secret the sender never had.
     """
-    global _PQ_CONSISTENCY_DEFAULT
-    previous = _PQ_CONSISTENCY_DEFAULT
-    _PQ_CONSISTENCY_DEFAULT = bool(enabled)
+    previous = _pq_consistency.get()
+    _pq_consistency.set(bool(enabled))
     return previous
 
 
@@ -468,12 +498,17 @@ def pq_import_consistency(enabled: bool) -> Iterator[None]:
     context manager is preferred to a global flip anywhere else: a disabled
     security check that is never re-enabled is the failure mode, and this shape
     makes the disabled region visible in the source.
+
+    The restore uses the ContextVar's token rather than a saved value, so
+    nested and overlapping regions unwind exactly — a save/restore pair can
+    leave the check permanently off when two of them interleave, which is the
+    defect this shape had before.
     """
-    previous = set_pq_import_consistency(enabled)
+    token = _pq_consistency.set(bool(enabled))
     try:
         yield
     finally:
-        set_pq_import_consistency(previous)
+        _pq_consistency.reset(token)
 
 
 def _require_public(key: object) -> None:
@@ -566,9 +601,25 @@ class PrivateKey:
     """
 
     algorithm: str
-    key: bytes
+    key: bytes = field(repr=False)
     public_key: bytes | None = None
-    seed: bytes | None = None
+    seed: bytes | None = field(default=None, repr=False)
+
+    def __repr__(self) -> str:
+        """Redacted. The default dataclass ``__repr__`` printed ``key`` and
+        ``seed`` in full, and a private key reaches ``repr()`` on paths nobody
+        writes on purpose: a logged traceback with locals, ``logging.debug
+        ("%r", k)``, a failed pytest assertion, a crash reporter, an
+        interactive session. For a seeded ML-DSA-87 key the ``seed`` is the
+        *more* valuable of the two — 32 octets that reconstruct the whole
+        4896-octet key.
+        """
+        return (
+            f"PrivateKey(algorithm={self.algorithm!r}, "
+            f"key=<{len(self.key)} octets redacted>, "
+            f"public_key={'set' if self.public_key is not None else 'absent'}, "
+            f"seed={'<redacted>' if self.seed is not None else 'absent'})"
+        )
 
     def __post_init__(self) -> None:
         alg = _lookup(self.algorithm)
@@ -1117,15 +1168,29 @@ def _read_pkcs8_trailer(seq: DerReader, alg: _Alg, version: int) -> bytes | None
     and which correctly leaves the version at v1 — which is what RFC 9500
     §2.3's keys and the rest of the vendored corpus contain.
     """
+    # Read the two OPTIONALs in the order the SEQUENCE declares them, each at
+    # most once. The previous shape was a `while` dispatching on the tag, which
+    # accepted `[1]` before `[0]` and accepted either field repeated — neither
+    # is DER, and both give one key several encodings. X.690 §8.9.1: the
+    # components of a SEQUENCE appear in the order of the type definition.
     outer_public: bytes | None = None
-    while (tag := seq.peek_tag()) is not None:
-        if tag == 0xA0:
-            seq.read_tagged(0)  # attributes: accepted for interop, not consumed
-        elif tag in (0xA1, 0x81):
-            body = seq.read_tagged(1, constructed=bool(tag & 0x20))
-            outer_public = _read_implicit_bit_string(body, alg)
-        else:
-            raise KeyFormatError(f"unexpected PKCS#8 field with tag 0x{tag:02X}")
+    if seq.peek_tag() == 0xA0:
+        seq.read_tagged(0)  # attributes: accepted for interop, not consumed
+    tag = seq.peek_tag()
+    if tag == 0x81:
+        body = seq.read_tagged(1, constructed=False)
+        outer_public = _read_implicit_bit_string(body, alg)
+    elif tag == 0xA1:
+        # `[1] IMPLICIT BIT STRING` is a primitive type, and X.690 §10.2 makes
+        # the primitive form mandatory in DER for any type whose value is not
+        # a constructed one. Accepting 0xA1 as well as 0x81 gave the same key
+        # two encodings — read identically, so nothing downstream could tell.
+        raise KeyFormatError(
+            "PKCS#8 [1] publicKey is encoded constructed (0xA1); X.690 §10.2 "
+            "requires the primitive form (0x81) in DER"
+        )
+    elif tag is not None:
+        raise KeyFormatError(f"unexpected PKCS#8 field with tag 0x{tag:02X}")
     seq.finish()
 
     if (outer_public is not None) != (version == _PKCS8_V2):
@@ -1159,7 +1224,7 @@ def load_pkcs8(data: Union[bytes, str], *, verify_pq_consistency: bool | None = 
             they cost, and precisely what is given up by skipping them.
     """
     if verify_pq_consistency is None:
-        verify_pq_consistency = _PQ_CONSISTENCY_DEFAULT
+        verify_pq_consistency = _pq_consistency.get()
     der = _as_der(data, "PRIVATE KEY")
     outer = DerReader(der)
     seq = outer.read_sequence()
@@ -1175,6 +1240,18 @@ def load_pkcs8(data: Union[bytes, str], *, verify_pq_consistency: bool | None = 
 
     if alg.kind == "ec":
         secret, embedded = _parse_ec_private_key(inner_bytes, alg)
+        # An EC key can carry a public half in two places: inside RFC 5915
+        # `ECPrivateKey [1]`, and in the outer RFC 5958 `[1] publicKey`. When
+        # both are present they must be the same key. Preferring the embedded
+        # one and discarding the outer meant a file that named two *different*
+        # points was accepted, with `_check_public_matches` run against only
+        # one of them — so the encoding a peer reading the outer field would
+        # use was never checked against the private key at all.
+        if embedded is not None and outer_public is not None and embedded != outer_public:
+            raise KeyFormatError(
+                f"{alg.name} key file is inconsistent: the public key inside "
+                "ECPrivateKey and the outer PKCS#8 [1] publicKey are different points"
+            )
         public = embedded or outer_public
     else:
         reader = DerReader(inner_bytes)
@@ -1223,10 +1300,24 @@ def _finish_pq_import(
             )
         return PrivateKey(alg.name, secret, derived, seed)
 
-    # Policy says skip the cryptographic checks. `derived` is None here by
-    # construction: with checks off, _parse_pq_private_key returns no derived
-    # public key for the expandedKey and both arms, and the seed arm's expansion
-    # is decoding rather than checking.
+    # Policy says skip the cryptographic checks.
+    #
+    # `derived` is NOT always None here. The RFC 9881 seed arm expands
+    # unconditionally — with only a seed on hand there is no expanded key to
+    # return without expanding, so it is decoding rather than checking — and
+    # that expansion yields a public key that is *known* to correspond to the
+    # secret. Treating it as absent (the previous comment asserted "derived is
+    # None here by construction") discarded a fact already paid for, and worse,
+    # let `derived` shadow `outer_public` so a seed-form key whose outer
+    # publicKey named a *different* key was accepted without comparison.
+    #
+    # Compare first, then keep. Neither costs anything: the comparison is two
+    # byte strings, and the derivation already happened.
+    if derived is not None and outer_public is not None and derived != outer_public:
+        raise KeyFormatError(
+            f"{alg.name} key file is inconsistent: the private key does not "
+            "correspond to the public key it carries"
+        )
     public = derived if derived is not None else outer_public
 
     # Two things still hold, both for free — see set_pq_import_consistency for
@@ -1240,8 +1331,8 @@ def _finish_pq_import(
     #    assembled from two different keys.
     #
     # ML-DSA has no such shortcut — rho/s1/s2 determine the public key only by
-    # recomputing it — so its public half stays None and PrivateKey.public()
-    # derives (and checks) on first use.
+    # recomputing it — so unless the seed arm already produced one, its public
+    # half stays None and PrivateKey.public() derives (and checks) on first use.
     if alg.pq_family == "ml-kem":
         embedded = _ml_kem_embedded_public_key(alg, secret)
         if public is not None and public != embedded:
@@ -1250,7 +1341,10 @@ def _finish_pq_import(
                 "is not the encapsulation key embedded in its own decapsulation key"
             )
         public = embedded
-    else:
+    elif derived is None:
+        # An expandedKey-only ML-DSA key with checks off: `outer_public` is
+        # unverified, so it must not be presented as this key's public half —
+        # PrivateKey.public() would hand back a value nothing has checked.
         public = None
     return PrivateKey(alg.name, secret, public, seed)
 
@@ -1308,23 +1402,29 @@ def _parse_ec_private_key(inner: bytes, alg: _Alg) -> tuple[bytes, bytes | None]
             f"{alg.name} private key must be {alg.field_bytes} bytes, got {len(secret)}"
         )
 
+    # RFC 5915 §3 declares `parameters [0]` before `publicKey [1]`, and each is
+    # OPTIONAL — meaning at most once, in that order. Read them positionally
+    # rather than dispatching in a loop: the loop accepted `[1] [0]`, and
+    # accepted either field twice with the last occurrence winning, so one key
+    # had several DER encodings and a file could name two different curves with
+    # only the second one checked.
     public: bytes | None = None
-    while (tag := seq.peek_tag()) is not None:
-        if tag == 0xA0:
-            params = seq.read_tagged(0)
-            curve_oid = params.read_oid()
-            params.finish()
-            if curve_oid != alg.ec_curve_oid:
-                raise KeyFormatError(
-                    "ECPrivateKey named curve disagrees with the "
-                    "AlgorithmIdentifier — the key names two different curves"
-                )
-        elif tag == 0xA1:
-            body = seq.read_tagged(1)
-            public = _decode_sec1_point(alg, body.read_bit_string())
-            body.finish()
-        else:
-            raise KeyFormatError(f"unexpected ECPrivateKey field tag 0x{tag:02X}")
+    if seq.peek_tag() == 0xA0:
+        params = seq.read_tagged(0)
+        curve_oid = params.read_oid()
+        params.finish()
+        if curve_oid != alg.ec_curve_oid:
+            raise KeyFormatError(
+                "ECPrivateKey named curve disagrees with the "
+                "AlgorithmIdentifier — the key names two different curves"
+            )
+    tag = seq.peek_tag()
+    if tag == 0xA1:
+        body = seq.read_tagged(1)
+        public = _decode_sec1_point(alg, body.read_bit_string())
+        body.finish()
+    elif tag is not None:
+        raise KeyFormatError(f"unexpected ECPrivateKey field tag 0x{tag:02X}")
     seq.finish()
     return secret, public
 
@@ -1461,15 +1561,39 @@ def _b64u(data: bytes) -> str:
 
 
 def _unb64u(value: str, field: str) -> bytes:
+    """Decode one unpadded base64url JWK member, canonically.
+
+    ``base64.urlsafe_b64decode`` without ``validate=True`` *discards* every
+    character outside the alphabet, and even with it, ``validate`` checks the
+    alphabet and not the trailing pad bits. Both holes give one key more than
+    one JWK encoding — and therefore more than one RFC 7638 thumbprint, which
+    is the value the whole point of a thumbprint is that it is unique:
+
+      * ``"AAA…!!!…AAA"`` decoded to the same octets as ``"AAA…AAA"``;
+      * ``"…AAA"`` and ``"…AAB"`` both decoded to the same 32 zero octets,
+        because the final character carries only four significant bits.
+
+    Base64url encoding is a *function*, so the complete rule is to re-encode
+    and require the input back. That is the same rule ``decode_pem`` already
+    applies to PEM bodies (RFC 4648 §3.5), applied here for the same reason.
+    """
     if not isinstance(value, str):
         raise KeyFormatError(f"JWK member {field!r} must be a string")
     if value != value.strip() or "=" in value or "+" in value or "/" in value:
         raise KeyFormatError(f"JWK member {field!r} is not unpadded base64url (RFC 7515 §2)")
     padding = "=" * (-len(value) % 4)
     try:
-        return base64.urlsafe_b64decode(value + padding)
+        # `urlsafe_b64decode` has no `validate` parameter; `b64decode` with
+        # `altchars` is the same alphabet with the alphabet check available.
+        raw = base64.b64decode(value + padding, altchars=b"-_", validate=True)
     except (ValueError, binascii.Error) as exc:
         raise KeyFormatError(f"JWK member {field!r} is not valid base64url: {exc}") from None
+    if _b64u(raw) != value:
+        raise KeyFormatError(
+            f"JWK member {field!r} is not canonically encoded: it re-encodes to a "
+            "different string (RFC 4648 §3.5 requires the unused pad bits to be zero)"
+        )
+    return raw
 
 
 def _require_jwk_support(alg: _Alg, fmt: str) -> None:
@@ -1531,12 +1655,40 @@ def jwk_to_private_key(jwk: Union[dict[str, Any], str]) -> PrivateKey:
     return PrivateKey(alg.name, secret, public)
 
 
+def _reject_duplicate_members(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """``object_pairs_hook`` that refuses a repeated JSON member name.
+
+    RFC 8259 §4 leaves duplicate names undefined, and implementations split on
+    it: Python and Go keep the *last*, several JavaScript and Java stacks keep
+    the *first*. So ``{"x":"<attacker>","x":"<victim>"}`` is one JSON text that
+    two conforming JOSE stacks read as two different keys — a thumbprint
+    computed on one side that does not describe the key used on the other.
+    Refusing costs nothing: no conforming producer emits a duplicate.
+    """
+    seen: dict[str, Any] = {}
+    for name, value in pairs:
+        if name in seen:
+            raise KeyFormatError(f"duplicate JWK member {name!r} (RFC 8259 §4)")
+        seen[name] = value
+    return seen
+
+
 def _load_jwk(jwk: Union[dict[str, Any], str]) -> dict[str, Any]:
+    if isinstance(jwk, (bytes, bytearray, memoryview)):
+        # json.loads accepts bytes, but only UTF-8/16/32; anything else raises
+        # UnicodeDecodeError, which is not in this module's contract. Decode
+        # here so the failure is a KeyFormatError like every other one.
+        try:
+            jwk = bytes(jwk).decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise KeyFormatError(f"JWK is not valid UTF-8: {exc}") from None
     if isinstance(jwk, str):
         try:
-            obj = json.loads(jwk)
+            obj = json.loads(jwk, object_pairs_hook=_reject_duplicate_members)
         except json.JSONDecodeError as exc:
             raise KeyFormatError(f"invalid JWK JSON: {exc}") from None
+        except RecursionError:
+            raise KeyFormatError("JWK JSON is nested too deeply") from None
     else:
         obj = jwk
     if not isinstance(obj, dict):
@@ -1621,16 +1773,33 @@ def jwk_thumbprint(jwk: Union[dict[str, Any], str], *, hash_name: str = "sha256"
     """
     obj = _load_jwk(jwk)
     alg, members = _jwk_algorithm(obj)
-    required = ("crv", *members, "kty") if alg.kind else ()
+    # `alg.kind` is one of "okp" / "ec" / "pq" and is never empty, so the
+    # former `if alg.kind else ()` guard could not take its else arm — and if
+    # it somehow had, the thumbprint would have been computed over `{}`, the
+    # same value for every key. Required members are unconditional.
+    required = ("crv", *members, "kty")
     canonical = {name: obj[name] for name in sorted(required) if name in obj}
     missing = set(required) - set(canonical)
     if missing:
         raise KeyFormatError(f"JWK is missing thumbprint members {sorted(missing)}")
+    # Every member the thumbprint covers must be exactly the string a
+    # conforming encoder would have produced; otherwise one key has several
+    # thumbprints. _unb64u enforces that for the base64url members.
+    for name in members:
+        _unb64u(canonical[name], name)
     payload = json.dumps(canonical, separators=(",", ":"), sort_keys=True).encode("utf-8")
     try:
         digest = hashlib.new(hash_name)
-    except ValueError:
+    except (ValueError, TypeError):
         raise KeyFormatError(f"unknown hash {hash_name!r} for a JWK thumbprint") from None
+    if digest.digest_size == 0:
+        # SHAKE and friends need an output length, so `.digest()` would raise
+        # TypeError past this function's contract. A thumbprint has no length
+        # to supply, so an XOF is simply not a thumbprint hash.
+        raise KeyFormatError(
+            f"{hash_name!r} is an extendable-output function and has no fixed-size "
+            "digest; RFC 7638 thumbprints need a fixed-length hash"
+        )
     digest.update(payload)
     return digest.digest()
 
@@ -1698,7 +1867,13 @@ def cose_to_private_key(data: bytes) -> PrivateKey:
 
 
 def _load_cose(data: bytes) -> dict[Any, Any]:
-    obj = cbor_decode_canonical(data)
+    # A COSE_Key is octets, not text. `_asn1`'s reader slices and compares the
+    # buffer directly, so a `str` argument reaches it and fails with a TypeError
+    # from inside the CBOR head parser — outside this module's contract. Same
+    # guard, and the same reason, as `_as_der`'s.
+    if not isinstance(data, (bytes, bytearray, memoryview)):
+        raise KeyFormatError(f"a COSE_Key must be bytes, got {type(data).__name__}")
+    obj = cbor_decode_canonical(bytes(data))
     if not isinstance(obj, dict):
         raise KeyFormatError("a COSE_Key must be a CBOR map")
     return obj

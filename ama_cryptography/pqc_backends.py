@@ -1275,6 +1275,96 @@ def _setup_nistp_ctypes(lib: ctypes.CDLL) -> bool:
         return False
 
 
+# ============================================================================
+# HSS / LMS — RFC 8554 (verification only; see the wrapper section below)
+# ============================================================================
+
+# Native availability for the HSS/LMS verifier (src/c/ama_lms.c).
+_LMS_NATIVE_AVAILABLE = False
+
+# Transcribed from include/ama_cryptography.h; the identical spelling is what
+# lets tools/check_version_consistency.py check the transcription rather than
+# trust it.
+AMA_LMS_PUBKEY_LEN = 56
+AMA_HSS_PUBKEY_LEN = 60
+AMA_HSS_MAX_LEVELS = 8
+
+# RFC 8554 IANA registry. Named rather than numeric at the call site because a
+# selector that resolves to a neighbour is the failure INVARIANT-35 exists to
+# prevent, and a bare `4` next to a bare `5` in two different registries is
+# exactly how that happens.
+AMA_LMOTS_SHA256_N32_W1 = 1
+AMA_LMOTS_SHA256_N32_W2 = 2
+AMA_LMOTS_SHA256_N32_W4 = 3
+AMA_LMOTS_SHA256_N32_W8 = 4
+
+AMA_LMS_SHA256_M32_H5 = 5
+AMA_LMS_SHA256_M32_H10 = 6
+AMA_LMS_SHA256_M32_H15 = 7
+AMA_LMS_SHA256_M32_H20 = 8
+AMA_LMS_SHA256_M32_H25 = 9
+
+#: Winternitz width by LM-OTS typecode (RFC 8554 Table 1).
+LMOTS_WINTERNITZ_W: dict = {
+    AMA_LMOTS_SHA256_N32_W1: 1,
+    AMA_LMOTS_SHA256_N32_W2: 2,
+    AMA_LMOTS_SHA256_N32_W4: 4,
+    AMA_LMOTS_SHA256_N32_W8: 8,
+}
+
+#: Tree height by LMS typecode (RFC 8554 Table 2).
+LMS_TREE_HEIGHT: dict = {
+    AMA_LMS_SHA256_M32_H5: 5,
+    AMA_LMS_SHA256_M32_H10: 10,
+    AMA_LMS_SHA256_M32_H15: 15,
+    AMA_LMS_SHA256_M32_H20: 20,
+    AMA_LMS_SHA256_M32_H25: 25,
+}
+
+
+def _setup_lms_ctypes(lib: ctypes.CDLL) -> bool:
+    """Configure ctypes for the HSS/LMS verification functions."""
+    try:
+        lib.ama_lms_signing_available.argtypes = []
+        lib.ama_lms_signing_available.restype = ctypes.c_int
+
+        lib.ama_lms_pubkey_params.argtypes = [
+            ctypes.c_char_p,  # pubkey
+            ctypes.c_size_t,  # pubkey_len
+            ctypes.POINTER(ctypes.c_uint32),  # lms_type (out)
+            ctypes.POINTER(ctypes.c_uint32),  # lmots_type (out)
+            ctypes.POINTER(ctypes.c_uint32),  # h (out)
+            ctypes.POINTER(ctypes.c_uint32),  # w (out)
+        ]
+        lib.ama_lms_pubkey_params.restype = ctypes.c_int
+
+        lib.ama_lms_signature_length.argtypes = [ctypes.c_char_p, ctypes.c_size_t]
+        lib.ama_lms_signature_length.restype = ctypes.c_size_t
+
+        lib.ama_lms_verify.argtypes = [
+            ctypes.c_char_p,  # message
+            ctypes.c_size_t,  # message_len
+            ctypes.c_char_p,  # signature
+            ctypes.c_size_t,  # signature_len
+            ctypes.c_char_p,  # pubkey
+            ctypes.c_size_t,  # pubkey_len
+        ]
+        lib.ama_lms_verify.restype = ctypes.c_int
+
+        lib.ama_hss_pubkey_levels.argtypes = [
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.POINTER(ctypes.c_uint32),
+        ]
+        lib.ama_hss_pubkey_levels.restype = ctypes.c_int
+
+        lib.ama_hss_verify.argtypes = lib.ama_lms_verify.argtypes
+        lib.ama_hss_verify.restype = ctypes.c_int
+        return True
+    except AttributeError:
+        return False
+
+
 # X25519 native availability
 _X25519_NATIVE_AVAILABLE = False
 
@@ -1586,6 +1676,7 @@ if _native_lib is not None:
     _HMAC_SHA256_NATIVE_AVAILABLE = _setup_hmac_sha256_ctypes(_native_lib)
     _SECP256K1_NATIVE_AVAILABLE = _setup_secp256k1_ctypes(_native_lib)
     _NISTP_NATIVE_AVAILABLE = _setup_nistp_ctypes(_native_lib)
+    _LMS_NATIVE_AVAILABLE = _setup_lms_ctypes(_native_lib)
     _ML_KEM_NATIVE_AVAILABLE = _setup_ml_kem_ctypes(_native_lib)
     _ML_DSA_NATIVE_AVAILABLE = _setup_ml_dsa_ctypes(_native_lib)
     _X25519_NATIVE_AVAILABLE = _setup_x25519_ctypes(_native_lib)
@@ -5356,6 +5447,176 @@ def native_nistp_sig_raw_to_der(curve: Union[int, str], raw: bytes) -> bytes:
     if rc != 0:
         raise ValueError(f"Invalid raw ECDSA signature (rc={rc})")
     return bytes(out.raw[: out_len.value])
+
+
+# ============================================================================
+# HSS / LMS NATIVE WRAPPERS — RFC 8554 VERIFICATION
+#
+# Verification only. LMS is a stateful scheme and RFC 8554 §5.4.1 makes the
+# one-time leaf index the whole of its security: a signer that releases a
+# signature before durably reserving the index can, after a crash, sign twice
+# under one LM-OTS key, and two signatures under one LM-OTS key yield a forged
+# third. That guarantee lives in a durable state manager, not in the maths, so
+# the signing half is withheld until such a manager exists and has been tested
+# against interrupted writes. `lms_signing_available()` answers that question
+# directly rather than leaving a caller to discover a missing name.
+#
+# Verification holds no secret and keeps no state, so it cannot be misused by
+# being called twice — and it is the half with the interoperability value:
+# HSS/LMS is deployed overwhelmingly as a firmware-update signature, one
+# offline signer against a very large verifier population.
+# ============================================================================
+
+
+def _lms_require_native() -> None:
+    """INVARIANT-7: refuse rather than substitute anything."""
+    if _native_lib is None or not _LMS_NATIVE_AVAILABLE:
+        raise NativeBackendUnavailableError(
+            "HSS/LMS native backend not available. " + _INSTALL_HINT
+        )
+
+
+def lms_signing_available() -> bool:
+    """
+    Whether this build can *produce* HSS/LMS signatures.
+
+    Always ``False``. See the section comment above for why that is a decision
+    rather than an omission. Pinned by ``tests/test_rfc8554_vectors.py``.
+    """
+    if _native_lib is None or not _LMS_NATIVE_AVAILABLE:
+        return False
+    return bool(_native_lib.ama_lms_signing_available())
+
+
+def native_lms_pubkey_params(pubkey: bytes) -> dict:
+    """
+    Report the parameter set an LMS public key names.
+
+    Args:
+        pubkey: A 56-byte LMS public key (``AMA_LMS_PUBKEY_LEN``). This is the
+            *inner* key; an HSS public key is four bytes of ``L`` followed by
+            one of these.
+
+    Returns:
+        ``{"lms_type", "lmots_type", "h", "w"}``.
+
+    Raises:
+        ValueError: If the key is malformed or names a typecode this library
+            does not implement. An unrecognised typecode is refused, never
+            resolved onto a neighbour (INVARIANT-35).
+    """
+    _lms_require_native()
+    lms_type = ctypes.c_uint32(0)
+    ots_type = ctypes.c_uint32(0)
+    h = ctypes.c_uint32(0)
+    w = ctypes.c_uint32(0)
+    rc = _native_lib.ama_lms_pubkey_params(
+        bytes(pubkey),
+        len(pubkey),
+        ctypes.byref(lms_type),
+        ctypes.byref(ots_type),
+        ctypes.byref(h),
+        ctypes.byref(w),
+    )
+    if rc != 0:
+        raise ValueError(f"Not a valid LMS public key (rc={rc})")
+    return {
+        "lms_type": lms_type.value,
+        "lmots_type": ots_type.value,
+        "h": h.value,
+        "w": w.value,
+    }
+
+
+def native_lms_signature_length(signature: bytes) -> int:
+    """
+    Exact length of the LMS signature at the head of ``signature``.
+
+    An LMS signature is self-describing but variable-length and HSS
+    concatenates several, so splitting a buffer needs this.
+
+    Returns:
+        The length, or ``0`` if the head is not a structurally valid LMS
+        signature that fits in the buffer.
+    """
+    _lms_require_native()
+    return int(_native_lib.ama_lms_signature_length(bytes(signature), len(signature)))
+
+
+def native_hss_pubkey_levels(pubkey: bytes) -> int:
+    """
+    The number of LMS levels an HSS public key commits to.
+
+    Raises:
+        ValueError: If the key is malformed, or names more levels than
+            ``AMA_HSS_MAX_LEVELS``.
+    """
+    _lms_require_native()
+    levels = ctypes.c_uint32(0)
+    rc = _native_lib.ama_hss_pubkey_levels(bytes(pubkey), len(pubkey), ctypes.byref(levels))
+    if rc != 0:
+        raise ValueError(f"Not a valid HSS public key (rc={rc})")
+    return int(levels.value)
+
+
+def native_lms_verify(message: bytes, signature: bytes, pubkey: bytes) -> bool:
+    """
+    Verify a single-tree LMS signature (RFC 8554 §5.4.2, Algorithm 6).
+
+    Args:
+        message: The signed message.
+        signature: The LMS signature. Must be consumed exactly — trailing data
+            is rejected, because two byte strings that both verify for one
+            message is signature malleability.
+        pubkey: A 56-byte LMS public key.
+
+    Returns:
+        ``True`` if the signature is valid, ``False`` if it is not.
+
+    Raises:
+        ValueError: If the *public key* is malformed. A bad key is a caller
+            error; a bad signature is an answer.
+    """
+    _lms_require_native()
+    rc = _native_lib.ama_lms_verify(
+        bytes(message), len(message), bytes(signature), len(signature), bytes(pubkey), len(pubkey)
+    )
+    if rc == 0:
+        return True
+    if rc == AMA_ERROR_INVALID_PARAM:
+        raise ValueError("Not a valid LMS public key")
+    return False
+
+
+def native_hss_verify(message: bytes, signature: bytes, pubkey: bytes) -> bool:
+    """
+    Verify a hierarchical HSS signature (RFC 8554 §6.3).
+
+    Walks the chain of signed public keys from the root the public key commits
+    to down to the tree that signed ``message``. Every intermediate signature
+    must verify, the level count must match, and the buffer must be consumed
+    exactly.
+
+    Args:
+        message: The signed message.
+        signature: The HSS signature.
+        pubkey: A 60-byte HSS public key (``AMA_HSS_PUBKEY_LEN``).
+
+    Returns:
+        ``True`` if the signature is valid, ``False`` if it is not.
+
+    Raises:
+        ValueError: If the *public key* is malformed.
+    """
+    _lms_require_native()
+    rc = _native_lib.ama_hss_verify(
+        bytes(message), len(message), bytes(signature), len(signature), bytes(pubkey), len(pubkey)
+    )
+    if rc == 0:
+        return True
+    if rc == AMA_ERROR_INVALID_PARAM:
+        raise ValueError("Not a valid HSS public key")
+    return False
 
 
 # ============================================================================

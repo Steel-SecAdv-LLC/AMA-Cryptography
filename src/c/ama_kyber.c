@@ -573,6 +573,13 @@ static void kyber_gennoise(polyvec* r, const uint8_t seed[32], uint8_t nonce,
         for (i = 0; i < 4; i++) {
             kyber_poly_cbd_eta(&r->vec[i], streams[i]);
         }
+        /* The CBD input *is* the secret vector s (and e, from which s follows
+         * given the public t = A*s + e and A), and `bufs` carries sigma.  The
+         * scalar arm below has always scrubbed its equivalents; the batched
+         * arm did not, so widening the SIMD path quietly widened the residue.
+         * INVARIANT-12 applies to both arms of one function. */
+        ama_secure_memzero(streams, sizeof(streams));
+        ama_secure_memzero(bufs, sizeof(bufs));
         return;
     }
 
