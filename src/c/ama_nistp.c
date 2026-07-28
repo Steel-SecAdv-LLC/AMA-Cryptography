@@ -1290,7 +1290,9 @@ static int nistp_der_parse(const uint8_t *sig, size_t sig_len,
 
     if (sig[1] & 0x80u) {
         if (sig[1] != 0x81u) return 0;       /* only one long-form octet is ever needed */
-        if (sig_len < 3) return 0;
+        /* No `sig_len < 3` check: the `sig_len < 8` above already guarantees
+         * three octets, so it was dead code — the shortest DER signature is
+         * `30 06 02 01 xx 02 01 yy`, eight octets. */
         seq_len = sig[2];
         if (seq_len < 0x80u) return 0;       /* non-minimal long form */
         hdr = 3;

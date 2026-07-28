@@ -222,3 +222,99 @@ def test_main_refuses_outside_the_repository_root(
 
     monkeypatch.chdir(tmp_path)
     assert main() == 1
+
+
+# ---------------------------------------------------------------------------
+# The Python lane
+#
+# The C lane has always stripped comments and matched a strict matrix entry.
+# The Python lane matched the raw text of fuzzing.yml, so a *prose comment*
+# naming the harness satisfied the registry — the harness could have been
+# deleted, or its step disabled, and the gate stayed green. That is precisely
+# the state this module exists to make impossible: "a harness that exists and
+# is never run is indistinguishable from one that finds nothing."
+# ---------------------------------------------------------------------------
+def _python_lane(tmp_path: Path, *, harness_body: str, workflow_yaml: str) -> Path:
+    # One fully-registered C harness so the C lane is clean and the only thing
+    # the assertions can be reacting to is the Python lane.
+    root = _tree(
+        tmp_path, harnesses=["fuzz_a"], cmake=["fuzz_a"], workflow=["fuzz_a"], ossfuzz=["fuzz_a"]
+    )
+    (root / "fuzz" / "python").mkdir()
+    (root / "fuzz" / "python" / "fuzz_thing.py").write_text(harness_body, encoding="utf-8")
+    (root / ".github" / "workflows" / "fuzzing.yml").write_text(
+        _C_MATRIX + workflow_yaml, encoding="utf-8"
+    )
+    return root
+
+
+#: The C matrix the audit also reads out of fuzzing.yml, kept out of the way of
+#: the Python-lane fixtures below.
+_C_MATRIX = (
+    "jobs:\n"
+    "  fuzz:\n"
+    "    strategy:\n"
+    "      matrix:\n"
+    "        target:\n"
+    "          - fuzz_a\n"
+)
+
+
+_RUN_STEP = (
+    "  python-fuzz:\n"
+    "    steps:\n"
+    "      - run: python3 fuzz/python/fuzz_thing.py --seconds 60\n"
+)
+_COMMENT_ONLY = (
+    "  python-fuzz:\n"
+    "    steps:\n"
+    "      # fuzz/python/fuzz_thing.py is where the parsers are fuzzed\n"
+    "      - run: echo nothing\n"
+)
+_DISABLED_STEP = (
+    "  python-fuzz:\n"
+    "    steps:\n"
+    "      - if: false\n"
+    "        run: python3 fuzz/python/fuzz_thing.py --seconds 60\n"
+)
+
+_MAIN_SHAPE = "def main(argv=None):\n    return 0\n"
+_ATHERIS_SHAPE = (
+    "import atheris\n"
+    "def TestOneInput(data):\n"
+    "    pass\n"
+    'if __name__ == "__main__":\n'
+    "    atheris.Setup([], TestOneInput)\n"
+)
+
+
+def test_a_python_harness_named_only_in_a_comment_is_not_registered(tmp_path: Path) -> None:
+    root = _python_lane(tmp_path, harness_body=_MAIN_SHAPE, workflow_yaml=_COMMENT_ONLY)
+    problems = audit(root)
+    assert any("fuzz_thing" in p for p in problems), problems
+
+
+def test_a_python_harness_behind_if_false_is_not_registered(tmp_path: Path) -> None:
+    root = _python_lane(tmp_path, harness_body=_MAIN_SHAPE, workflow_yaml=_DISABLED_STEP)
+    problems = audit(root)
+    assert any("fuzz_thing" in p for p in problems), problems
+
+
+def test_a_python_harness_that_is_actually_run_is_registered(tmp_path: Path) -> None:
+    root = _python_lane(tmp_path, harness_body=_MAIN_SHAPE, workflow_yaml=_RUN_STEP)
+    assert audit(root) == []
+
+
+def test_an_atheris_shaped_harness_is_recognised(tmp_path: Path) -> None:
+    """`def TestOneInput(...)` + `atheris.Setup(...)` is how every Atheris
+    example is written, and it defined neither `main` nor `TARGETS` — so a new
+    harness in that shape was classified as a helper and its absence from the
+    workflow was never reported."""
+    root = _python_lane(tmp_path, harness_body=_ATHERIS_SHAPE, workflow_yaml=_COMMENT_ONLY)
+    problems = audit(root)
+    assert any("fuzz_thing" in p for p in problems), problems
+
+    second = tmp_path / "second"
+    second.mkdir()
+    root2 = _python_lane(second, harness_body=_ATHERIS_SHAPE, workflow_yaml=_RUN_STEP)
+    assert audit(root2) == []

@@ -85,7 +85,21 @@ _ENTRY_POINT_RE = re.compile(
 #: registered in the CMake or OSS-Fuzz lanes; they have one registry, the
 #: workflow, and this is what ties them to it.
 PYTHON_FUZZ_DIR = Path("fuzz/python")
-_PY_HARNESS_RE = re.compile(r"^\s*(?:def\s+main\s*\(|TARGETS\s*[:=])", re.M)
+#: What makes a file in `fuzz/python/` a harness rather than a helper.
+#:
+#: The first two shapes are AMA's own (`TARGETS` table, `main()` entry point);
+#: the last three are the ordinary libFuzzer/Atheris spellings. A new harness
+#: written as `def TestOneInput(data)` plus `atheris.Setup(...)` — the shape
+#: every Atheris example uses — matched none of the original two, so it would
+#: have been classified as a helper and its absence from the workflow would
+#: never have been reported. The registry has to recognise the harnesses people
+#: actually write, not only the ones already in the tree.
+_PY_HARNESS_RE = re.compile(
+    r"^\s*(?:def\s+main\s*\(|TARGETS\s*[:=])"
+    r"|^\s*def\s+(?:TestOneInput|LLVMFuzzerTestOneInput)\s*\("
+    r"|atheris\.Setup\s*\(",
+    re.M,
+)
 
 
 def _sources(root: Path) -> set[str]:
@@ -129,14 +143,55 @@ def _python_sources(root: Path) -> set[str]:
 
 
 def _workflow_python_targets(root: Path) -> set[str]:
-    """Python harnesses named in the workflow, however they are invoked.
+    """Python harnesses the workflow actually *runs*.
 
-    Matched against the whole file rather than a matrix block, because the
-    Python lane runs the script by path (``python3 fuzz/python/<name>.py``)
+    Matched against ``run:`` payloads rather than the whole file, because the
+    Python lane invokes the script by path (``python3 fuzz/python/<name>.py``)
     rather than through a target matrix.
+
+    Two disciplines the C lane already had and this one did not:
+
+    * **Comments are stripped first.** ``fuzzing.yml`` carries a prose comment
+      mentioning ``fuzz/python/fuzz_key_formats.py``, and that comment alone
+      satisfied the registry — so the harness could have been deleted, or its
+      step disabled, and the gate stayed green. The module's own thesis is that
+      "a harness that exists and is never run is indistinguishable from one
+      that finds nothing"; a comment is not a run.
+    * **Only enabled steps count.** A step behind ``if: false`` does not run,
+      so naming a harness there must not register it.
     """
-    text = (root / WORKFLOW_PATH).read_text(encoding="utf-8")
-    return set(re.findall(r"fuzz/python/(fuzz_[a-z0-9_]+)\.py", text))
+    import yaml
+
+    path = root / WORKFLOW_PATH
+    text = path.read_text(encoding="utf-8")
+    pattern = re.compile(r"fuzz/python/(fuzz_[a-z0-9_]+)\.py")
+
+    try:
+        document = yaml.safe_load(text)
+    except yaml.YAMLError:  # pragma: no cover - a broken workflow fails elsewhere
+        document = None
+
+    if isinstance(document, dict):
+        found: set[str] = set()
+        for job in (document.get("jobs") or {}).values():
+            if not isinstance(job, dict):
+                continue
+            if str(job.get("if", "")).strip().lower() in {"false", "${{ false }}"}:
+                continue
+            for step in job.get("steps") or []:
+                if not isinstance(step, dict):
+                    continue
+                if str(step.get("if", "")).strip().lower() in {"false", "${{ false }}"}:
+                    continue
+                run = step.get("run")
+                if isinstance(run, str):
+                    found.update(pattern.findall(_strip_comments(run, "#")))
+        return found
+
+    # Fall back to the textual scan if the workflow will not parse, but strip
+    # comments even then — the whole point is that prose must not register a
+    # harness.
+    return set(pattern.findall(_strip_comments(text, "#")))
 
 
 def _strip_comments(text: str, marker: str) -> str:

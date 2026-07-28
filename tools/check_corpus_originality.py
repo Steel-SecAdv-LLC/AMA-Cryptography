@@ -129,16 +129,104 @@ def _rel(path: Path) -> str:
         return str(path)
 
 
-def _literal_strings(node: ast.AST) -> list[str]:
-    """Every string constant inside an expression tree.
+#: Every way of starting a process that this checker recognises.
+#:
+#: ``system`` was already here — i.e. the intent to cover ``os``'s shell-out
+#: helpers was explicit — but ``popen`` was not, and neither were
+#: ``getoutput``/``getstatusoutput`` or the ``exec*``/``spawn*`` family. A
+#: one-line ``os.popen("openssl ...")`` shim walked past a gate whose whole
+#: purpose is to stop exactly that.
+_SPAWN_NAMES = frozenset(
+    {
+        "run",
+        "Popen",
+        "call",
+        "check_call",
+        "check_output",
+        "system",
+        "popen",
+        "getoutput",
+        "getstatusoutput",
+        "execl",
+        "execle",
+        "execlp",
+        "execlpe",
+        "execv",
+        "execve",
+        "execvp",
+        "execvpe",
+        "spawnl",
+        "spawnle",
+        "spawnlp",
+        "spawnlpe",
+        "spawnv",
+        "spawnve",
+        "spawnvp",
+        "spawnvpe",
+        "posix_spawn",
+        "posix_spawnp",
+        "create_subprocess_exec",
+        "create_subprocess_shell",
+    }
+)
 
-    Covers ``["openssl", "genpkey"]``, ``"openssl genpkey"`` and the elements of
-    a starred list, which is how the removed generator actually spelled it.
+
+def _module_string_constants(tree: ast.AST) -> dict[str, list[str]]:
+    """Module- and function-level ``NAME = "..."`` / ``NAME = [...]`` bindings.
+
+    Without this the scan sees only strings written *lexically inside* the
+    call, so::
+
+        CMD = ["openssl", "genpkey", ...]
+        subprocess.run(CMD, check=True)
+
+    passed cleanly — and that is not a hypothetical spelling, it is the one the
+    removed generator actually used (``cmd_query = ["openssl", "ts", ...]``
+    then ``subprocess.run(cmd_query, ...)``). A gate that would not have caught
+    the code it exists to prevent returning is not a gate.
+
+    A flat, whole-file table rather than real scope analysis: the question is
+    "does a crypto binary name reach a spawn call", and a name bound anywhere
+    in the file is close enough to answer it conservatively.
+    """
+    table: dict[str, list[str]] = {}
+    for node in ast.walk(tree):
+        targets: list[ast.expr] = []
+        if isinstance(node, ast.Assign):
+            targets = list(node.targets)
+            value: ast.expr | None = node.value
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            targets = [node.target]
+            value = node.value
+        else:
+            continue
+        strings = [
+            child.value
+            for child in ast.walk(value)
+            if isinstance(child, ast.Constant) and isinstance(child.value, str)
+        ]
+        if not strings:
+            continue
+        for target in targets:
+            if isinstance(target, ast.Name):
+                table.setdefault(target.id, []).extend(strings)
+    return table
+
+
+def _literal_strings(node: ast.AST, bindings: dict[str, list[str]] | None = None) -> list[str]:
+    """Every string constant reachable from an expression tree.
+
+    Covers ``["openssl", "genpkey"]``, ``"openssl genpkey"``, the elements of a
+    starred list — which is how the removed generator actually spelled it — and,
+    when ``bindings`` is supplied, any ``ast.Name`` bound to a string or a list
+    of strings elsewhere in the same file.
     """
     out: list[str] = []
     for child in ast.walk(node):
         if isinstance(child, ast.Constant) and isinstance(child.value, str):
             out.append(child.value)
+        elif bindings is not None and isinstance(child, ast.Name):
+            out.extend(bindings.get(child.id, ()))
     return out
 
 
@@ -163,6 +251,7 @@ def scan_for_binary_invocations(repo: Path = REPO) -> list[str]:
             except (SyntaxError, UnicodeDecodeError) as exc:  # pragma: no cover
                 problems.append(f"{rel}: could not parse ({exc})")
                 continue
+            bindings = _module_string_constants(tree)
             for node in ast.walk(tree):
                 if not isinstance(node, ast.Call):
                     continue
@@ -172,9 +261,9 @@ def scan_for_binary_invocations(repo: Path = REPO) -> list[str]:
                     if isinstance(target, ast.Attribute)
                     else target.id if isinstance(target, ast.Name) else ""
                 )
-                if name not in {"run", "Popen", "call", "check_call", "check_output", "system"}:
+                if name not in _SPAWN_NAMES:
                     continue
-                for text in _literal_strings(node):
+                for text in _literal_strings(node, bindings):
                     match = _BINARY_RE.search(text)
                     if match:
                         problems.append(

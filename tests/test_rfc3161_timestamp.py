@@ -215,9 +215,7 @@ class _MockTSA:
             digest = self.override_digest
         elements = [der_sequence(der_integer(self.status))]
         if self.include_token:
-            elements.append(
-                make_token(digest, hash_oid, nonce if self.echo_nonce else None)
-            )
+            elements.append(make_token(digest, hash_oid, nonce if self.echo_nonce else None))
         return der_sequence(*elements)
 
 
@@ -247,7 +245,7 @@ class TestGetTimestamp:
         this one.
         """
         with pytest.raises(TimestampError, match="certificate_file"):
-            get_timestamp(b"data", tsa_url=TSA, certificate_file="/tmp/tsa.pem")
+            get_timestamp(b"data", tsa_url=TSA, certificate_file="tsa-signing-cert.pem")
 
     def test_default_tsa_url_emits_warning(self) -> None:
         tsa = _MockTSA()
@@ -410,7 +408,7 @@ class TestVerifyTimestamp:
 
     def test_certificate_file_is_refused_rather_than_ignored(self) -> None:
         with pytest.raises(TimestampError, match="certificate_file"):
-            verify_timestamp(b"doc", self._result(b"doc"), certificate_file="/tmp/tsa.pem")
+            verify_timestamp(b"doc", self._result(b"doc"), certificate_file="tsa-signing-cert.pem")
 
     def test_hash_mismatch_returns_false(self) -> None:
         result = TimestampResult(
@@ -422,9 +420,7 @@ class TestVerifyTimestamp:
         assert verify_timestamp(b"real data", result) is False
 
     def test_unsupported_algorithm_returns_false(self) -> None:
-        result = TimestampResult(
-            token=b"tok", tsa_url=TSA, hash_algorithm="md5", data_hash=b"h"
-        )
+        result = TimestampResult(token=b"tok", tsa_url=TSA, hash_algorithm="md5", data_hash=b"h")
         assert verify_timestamp(b"data", result) is False
 
     @pytest.mark.parametrize("algo", ["sha256", "sha3-256", "sha512", "sha3-512"])
@@ -469,9 +465,7 @@ class TestVerifyTimestamp:
             ),
             b"\x31\x00",
         )
-        forged = der_sequence(
-            oid_from_string("1.2.840.113549.1.7.2"), der_tagged(0, signed_data)
-        )
+        forged = der_sequence(oid_from_string("1.2.840.113549.1.7.2"), der_tagged(0, signed_data))
         result = TimestampResult(
             token=forged, tsa_url=TSA, hash_algorithm="sha256", data_hash=digest
         )

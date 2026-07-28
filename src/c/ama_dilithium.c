@@ -1820,8 +1820,15 @@ static ama_error_t dil_keygen_internal(const dil_params *P,
  * This is measured, not asserted: `tests/c/test_pq_parser_stack.c` runs the
  * call on a painted, caller-supplied thread stack and reports the real
  * high-water mark over the whole call chain, against the budget stated there
- * (`AMA_PQ_PARSER_STACK_BUDGET`). On the pre-rewrite implementation it read
- * 123,608 bytes; it now reads 29,400.
+ * (`AMA_PQ_PARSER_STACK_BUDGET`, 48 KB). On the pre-rewrite implementation it
+ * read 123,608 bytes; the harness now reports **26,400** for this function
+ * across all three ML-DSA sets.
+ *
+ * The worst case on that parser path is not this function, though, and the
+ * previous version of this comment pointed a reader away from it:
+ * `ama_ml_kem_pubkey_from_privkey` is reached from the same `load_pkcs8` and
+ * measures **33,632** bytes. Anyone optimising the import path should start
+ * there.
  *
  * Row-wise expansion costs some SHAKE-128 x4 batching efficiency (a row of 5
  * batches as 4 + 1 rather than joining the next row), which is the right trade

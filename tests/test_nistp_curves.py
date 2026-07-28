@@ -799,16 +799,23 @@ def test_ecdh_rejects_invalid_peer_keys(name: str) -> None:
     _, priv = pb.native_nistp_keypair(name)
     peer, _ = pb.native_nistp_keypair(name)
 
+    # ValueError, not RuntimeError: every one of these is a property of the
+    # *input*, and this is the ECDH entry point an attacker's key reaches. The
+    # module's rule everywhere else — `native_nistp_pubkey_from_privkey`,
+    # `native_ml_dsa_sign`, the EC parsers — is that a bad argument is a
+    # ValueError and a RuntimeError means the backend itself failed. ECDH was
+    # the exception, which made "the peer sent a bad point" indistinguishable
+    # from "the library broke".
     off_curve = bytearray(peer)
     off_curve[-1] ^= 0x01
-    with pytest.raises(RuntimeError):
+    with pytest.raises(ValueError):
         pb.native_nistp_ecdh(name, priv, bytes(off_curve))
 
-    with pytest.raises(RuntimeError):
+    with pytest.raises(ValueError):
         pb.native_nistp_ecdh(name, priv, b"\x00" * (2 * nb))  # identity
 
     non_canonical = p.to_bytes(nb, "big") + peer[nb:]
-    with pytest.raises(RuntimeError):
+    with pytest.raises(ValueError):
         pb.native_nistp_ecdh(name, priv, non_canonical)
 
     with pytest.raises(ValueError):
@@ -822,7 +829,7 @@ def test_ecdh_rejects_out_of_range_private_scalar(name: str) -> None:
     n, nb = CURVES[name]["n"], CURVES[name]["nbytes"]
     peer, _ = pb.native_nistp_keypair(name)
     for bad in (0, n):
-        with pytest.raises(RuntimeError):
+        with pytest.raises(ValueError):
             pb.native_nistp_ecdh(name, bad.to_bytes(nb, "big"), peer)
 
 
@@ -860,3 +867,41 @@ def test_curve_aliases_resolve() -> None:
     assert pb._nistp_curve_id("secp384r1") == pb.NISTP_CURVE_P384
     assert pb._nistp_curve_id("secp521r1") == pb.NISTP_CURVE_P521
     assert pb._nistp_curve_id(pb.NISTP_CURVE_P521) == pb.NISTP_CURVE_P521
+
+
+# ---------------------------------------------------------------------------
+# The curve/hash pairing
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    ("name", "hash_name", "digest_bytes"),
+    [("P-256", "sha256", 32), ("P-384", "sha384", 48), ("P-521", "sha512", 64)],
+)
+def test_the_default_hash_matches_the_curve_it_is_paired_with(
+    name: str, hash_name: str, digest_bytes: int
+) -> None:
+    """FIPS 186-5 / RFC 5480 practice, and what JOSE spells ES256/384/512.
+
+    Checked against the *digest the signer actually accepts and the curve's
+    field width*, not against a second copy of the table — a table checked
+    against a copy of itself proves nothing. `NISTP_DEFAULT_HASH` existed with
+    no reader at all until `nistp_default_hash()` was added; an unread table is
+    one that stops being true without anyone noticing, and choosing the wrong
+    hash is invisible: a SHA-256 digest signed under P-521 verifies fine and
+    interoperates with nothing expecting ES512.
+    """
+    assert pb.nistp_default_hash(name) == hash_name
+    assert hashlib.new(hash_name).digest_size == digest_bytes
+    # The pairing FIPS 186-5 §6.4 expresses: the digest is as wide as the
+    # field, capped by the widest SHA-2 there is — P-521's 66-octet field takes
+    # SHA-512 because nothing wider exists.
+    assert digest_bytes == min(CURVES[name]["nbytes"], 64)
+
+    pub, priv = pb.native_nistp_keypair(name)
+    digest = hashlib.new(hash_name, b"pairing").digest()
+    sig = pb.native_nistp_ecdsa_sign(name, digest, priv)
+    assert pb.native_nistp_ecdsa_verify(name, sig, digest, pub)
+
+
+def test_the_default_hash_rejects_an_unknown_curve() -> None:
+    with pytest.raises(ValueError):
+        pb.nistp_default_hash("P-192")

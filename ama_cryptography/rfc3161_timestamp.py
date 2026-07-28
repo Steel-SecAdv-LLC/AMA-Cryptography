@@ -231,8 +231,7 @@ def parse_timestamp_response(response: bytes, *, expected_nonce: Optional[int] =
         # Same defect, same fix, as `_asn1.oid_to_string`'s arc bound.
         if status not in _PKI_STATUS_NAMES:
             raise TimestampError(
-                "TSA response carries a PKIStatus outside RFC 3161 §2.4.2's "
-                "0..5 enumeration"
+                "TSA response carries a PKIStatus outside RFC 3161 §2.4.2's " "0..5 enumeration"
             )
 
         if status not in (PKI_STATUS_GRANTED, PKI_STATUS_GRANTED_WITH_MODS):
@@ -356,9 +355,7 @@ def extract_tst_info(token: bytes) -> bytes:
         while signed_data.peek_tag() in (0xA0, 0xA1):
             signed_data.skip_any()
         if signed_data.peek_tag() is None:
-            raise TimestampError(
-                "token's SignedData has no signerInfos field (RFC 5652 §5.1)"
-            )
+            raise TimestampError("token's SignedData has no signerInfos field (RFC 5652 §5.1)")
         signer_infos = signed_data.read_set()
         if signer_infos.peek_tag() is None:
             raise TimestampError(
@@ -429,9 +426,7 @@ def request_timestamp_token(
         TimestampError: on any transport, protocol or binding failure.
         ValueError: if ``tsa_url`` is not an ``https://`` URL.
     """
-    return request_timestamp_exchange(
-        digest, hash_name, tsa_url, nonce=nonce, cert_req=cert_req
-    )[1]
+    return request_timestamp_exchange(digest, hash_name, tsa_url, nonce=nonce, cert_req=cert_req)[1]
 
 
 def request_timestamp_exchange(
@@ -481,9 +476,7 @@ def request_timestamp_exchange(
         # than silently truncated into something that might still parse.
         raw = response.read(_MAX_TSR_BYTES + 1)
         if len(raw) > _MAX_TSR_BYTES:
-            raise TimestampError(
-                f"TSA response exceeds the {_MAX_TSR_BYTES}-byte limit"
-            )
+            raise TimestampError(f"TSA response exceeds the {_MAX_TSR_BYTES}-byte limit")
     except TimestampError:
         raise
     except OSError as exc:
@@ -936,9 +929,7 @@ def get_timestamp(
     # RFC 3161 §2.4.2 makes the echo the client's only way to tell a fresh
     # response from a replayed one; `request_timestamp_token` checks it.
     nonce = secrets.randbits(64)
-    token = request_timestamp_token(
-        data_hash, hash_algorithm, tsa_url, nonce=nonce, cert_req=True
-    )
+    token = request_timestamp_token(data_hash, hash_algorithm, tsa_url, nonce=nonce, cert_req=True)
     return TimestampResult(
         token=token,
         tsa_url=tsa_url,

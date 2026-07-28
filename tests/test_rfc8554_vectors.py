@@ -265,7 +265,7 @@ def test_every_signature_region_is_checked(case: int) -> None:
     sig = _octets(case, "signature")
     pub = _octets(case, "public_key")
     stride = max(1, len(sig) // 48)
-    for offset in list(range(0, len(sig), stride)) + [len(sig) - 1]:
+    for offset in [*range(0, len(sig), stride), len(sig) - 1]:
         mutated = bytearray(sig)
         mutated[offset] ^= 0x01
         assert not backends.native_hss_verify(
@@ -495,6 +495,7 @@ def test_ama_does_not_offer_to_sign_with_lms() -> None:
         "AMA_LMS_SHA256_M32_H5",
         "LMOTS_WINTERNITZ_W",
         "LMS_TREE_HEIGHT",
+        "LMS_NATIVE_AVAILABLE",
         "_LMS_NATIVE_AVAILABLE",
         "_lms_require_native",
         "_setup_lms_ctypes",

@@ -1707,6 +1707,16 @@ SHA3_256_NATIVE_AVAILABLE: bool = _SHA3_256_NATIVE_AVAILABLE
 HMAC_SHA3_256_AVAILABLE: bool = _HMAC_SHA3_256_NATIVE_AVAILABLE
 HMAC_SHA3_256_BACKEND: Optional[str] = "native" if _HMAC_SHA3_256_NATIVE_AVAILABLE else None
 
+# Public mirrors for the families added alongside the parameter-set work. Every
+# pre-existing family has one; without these the only way to ask "is the
+# NIST-P backend present?" was to read a module-private underscore name or to
+# call a function and catch — which is asking by side effect.
+ML_KEM_NATIVE_AVAILABLE: bool = _ML_KEM_NATIVE_AVAILABLE
+ML_DSA_NATIVE_AVAILABLE: bool = _ML_DSA_NATIVE_AVAILABLE
+NISTP_NATIVE_AVAILABLE: bool = _NISTP_NATIVE_AVAILABLE
+LMS_NATIVE_AVAILABLE: bool = _LMS_NATIVE_AVAILABLE
+SECP256K1_NATIVE_AVAILABLE: bool = _SECP256K1_NATIVE_AVAILABLE
+
 # =============================================================================
 # SECURITY WARNINGS AND CONSTANT-TIME ENFORCEMENT
 # =============================================================================
@@ -2078,6 +2088,52 @@ def get_pqc_backend_info() -> dict:
                     else None
                 ),
             },
+        },
+        # Everything below is driven off the registry tables rather than
+        # written out, so a new parameter set cannot be added without appearing
+        # here. `get_pqc_backend_info` is documented as covering "all
+        # algorithms" and enumerated exactly three of them, which meant it
+        # reported none of the six PQ parameter sets this branch reaches, none
+        # of the three NIST prime curves, and not HSS/LMS.
+        "parameter_sets": {
+            "ml_kem": {
+                f"ML-KEM-{pid}": {
+                    "available": ML_KEM_NATIVE_AVAILABLE,
+                    "backend": "native" if ML_KEM_NATIVE_AVAILABLE else None,
+                    "key_sizes": dict(sizes) if ML_KEM_NATIVE_AVAILABLE else None,
+                }
+                for pid, sizes in sorted(ML_KEM_SIZES.items())
+            },
+            "ml_dsa": {
+                f"ML-DSA-{pid}": {
+                    "available": ML_DSA_NATIVE_AVAILABLE,
+                    "backend": "native" if ML_DSA_NATIVE_AVAILABLE else None,
+                    "key_sizes": dict(sizes) if ML_DSA_NATIVE_AVAILABLE else None,
+                }
+                for pid, sizes in sorted(ML_DSA_SIZES.items())
+            },
+            "nist_prime_curves": {
+                f"P-{cid}": {
+                    "available": NISTP_NATIVE_AVAILABLE,
+                    "backend": "native" if NISTP_NATIVE_AVAILABLE else None,
+                    "field_bytes": nb,
+                    "default_hash": NISTP_DEFAULT_HASH[cid],
+                }
+                for cid, nb in sorted(NISTP_FIELD_BYTES.items())
+            },
+        },
+        "HSS-LMS": {
+            "available": LMS_NATIVE_AVAILABLE,
+            "backend": "native" if LMS_NATIVE_AVAILABLE else None,
+            # Stated here rather than left to be discovered: LMS is stateful,
+            # and AMA implements only the half that holds no state.
+            "operations": ["verify"] if LMS_NATIVE_AVAILABLE else [],
+            "description": "RFC 8554 HSS/LMS verification (signing not implemented)",
+        },
+        "secp256k1": {
+            "available": SECP256K1_NATIVE_AVAILABLE,
+            "backend": "native" if SECP256K1_NATIVE_AVAILABLE else None,
+            "description": "SEC 2 secp256k1 ECDSA, low-`s` by default (INVARIANT-28)",
         },
         "SHA3-256": {
             "available": SHA3_256_NATIVE_AVAILABLE,
@@ -4613,6 +4669,36 @@ def ml_dsa_sizes(ps: Union[int, str]) -> dict:
     return dict(ML_DSA_SIZES[_ml_dsa_id(ps)])
 
 
+# ---------------------------------------------------------------------------
+# INVARIANT-6 helpers for the ctypes boundary
+# ---------------------------------------------------------------------------
+def _wipeable(secret: Union[bytes, bytearray]) -> "ctypes.Array":
+    """A secret input in a buffer that can be zeroed on the way out.
+
+    ``bytes(secret_key)`` passed straight to a foreign call leaves an
+    immutable, non-wipeable copy of the private key on the Python heap for the
+    garbage collector to release whenever it likes — even when the caller
+    obeyed INVARIANT-6 and held the key in a ``bytearray``. The older wrappers
+    in this module (``slhdsa_sign``, ``native_ed25519_sign``, ``dilithium_*``)
+    have always routed inputs through a mutable ctypes buffer for exactly that
+    reason; the ML-KEM / ML-DSA / NIST-P bindings did not, and this is that
+    idiom named once instead of open-coded twenty times.
+
+    A transient ``bytes`` still exists for the duration of the copy — CPython
+    offers no way to hand a foreign function a buffer without materialising
+    one — but it is not what the wrapper *retains*.
+    """
+    raw = bytes(secret)
+    return ctypes.create_string_buffer(raw, len(raw))
+
+
+def _wipe(*buffers: "Optional[ctypes.Array]") -> None:
+    """Zero every buffer given. Safe on ``None`` so it can sit in a ``finally``."""
+    for buf in buffers:
+        if buf is not None:
+            ctypes.memset(buf, 0, ctypes.sizeof(buf))
+
+
 def native_ml_kem_keypair(ps: Union[int, str]) -> tuple:
     """
     Generate an ML-KEM keypair for any FIPS 203 parameter set.
@@ -4633,12 +4719,15 @@ def native_ml_kem_keypair(ps: Union[int, str]) -> tuple:
     sz = ML_KEM_SIZES[pid]
     pk = ctypes.create_string_buffer(sz["public_key"])
     sk = ctypes.create_string_buffer(sz["secret_key"])
-    rc = _native_lib.ama_ml_kem_keypair(
-        pid, pk, ctypes.c_size_t(sz["public_key"]), sk, ctypes.c_size_t(sz["secret_key"])
-    )
-    if rc != 0:
-        raise RuntimeError(f"ML-KEM keypair generation failed (rc={rc})")
-    return bytes(pk.raw[: sz["public_key"]]), bytes(sk.raw[: sz["secret_key"]])
+    try:
+        rc = _native_lib.ama_ml_kem_keypair(
+            pid, pk, ctypes.c_size_t(sz["public_key"]), sk, ctypes.c_size_t(sz["secret_key"])
+        )
+        if rc != 0:
+            raise RuntimeError(f"ML-KEM keypair generation failed (rc={rc})")
+        return bytes(pk.raw[: sz["public_key"]]), bytes(sk.raw[: sz["secret_key"]])
+    finally:
+        _wipe(sk)
 
 
 def native_ml_kem_keypair_from_seed(ps: Union[int, str], d: bytes, z: bytes) -> tuple:
@@ -4658,18 +4747,23 @@ def native_ml_kem_keypair_from_seed(ps: Union[int, str], d: bytes, z: bytes) -> 
     sz = ML_KEM_SIZES[pid]
     pk = ctypes.create_string_buffer(sz["public_key"])
     sk = ctypes.create_string_buffer(sz["secret_key"])
-    rc = _native_lib.ama_ml_kem_keypair_from_seed(
-        pid,
-        bytes(d),
-        bytes(z),
-        pk,
-        ctypes.c_size_t(sz["public_key"]),
-        sk,
-        ctypes.c_size_t(sz["secret_key"]),
-    )
-    if rc != 0:
-        raise RuntimeError(f"ML-KEM deterministic keypair failed (rc={rc})")
-    return bytes(pk.raw[: sz["public_key"]]), bytes(sk.raw[: sz["secret_key"]])
+    d_buf = _wipeable(d)
+    z_buf = _wipeable(z)
+    try:
+        rc = _native_lib.ama_ml_kem_keypair_from_seed(
+            pid,
+            d_buf,
+            z_buf,
+            pk,
+            ctypes.c_size_t(sz["public_key"]),
+            sk,
+            ctypes.c_size_t(sz["secret_key"]),
+        )
+        if rc != 0:
+            raise RuntimeError(f"ML-KEM deterministic keypair failed (rc={rc})")
+        return bytes(pk.raw[: sz["public_key"]]), bytes(sk.raw[: sz["secret_key"]])
+    finally:
+        _wipe(sk, d_buf, z_buf)
 
 
 def native_ml_kem_pubkey_from_privkey(ps: Union[int, str], secret_key: bytes) -> bytes:
@@ -4700,13 +4794,17 @@ def native_ml_kem_pubkey_from_privkey(ps: Union[int, str], secret_key: bytes) ->
         )
     _ml_kem_require_native()
     pk = ctypes.create_string_buffer(sz["public_key"])
-    rc = _native_lib.ama_ml_kem_pubkey_from_privkey(
-        pid,
-        bytes(secret_key),
-        ctypes.c_size_t(sz["secret_key"]),
-        pk,
-        ctypes.c_size_t(sz["public_key"]),
-    )
+    sk_buf = _wipeable(secret_key)
+    try:
+        rc = _native_lib.ama_ml_kem_pubkey_from_privkey(
+            pid,
+            sk_buf,
+            ctypes.c_size_t(sz["secret_key"]),
+            pk,
+            ctypes.c_size_t(sz["public_key"]),
+        )
+    finally:
+        _wipe(sk_buf)
     if rc != 0:
         raise ValueError(
             f"ML-KEM-{pid} decapsulation key is internally inconsistent: the "
@@ -4734,9 +4832,11 @@ def native_ml_kem_privkey_check(ps: Union[int, str], secret_key: bytes) -> bool:
             f"ML-KEM-{pid} secret key must be {sz['secret_key']} bytes, got {len(secret_key)}"
         )
     _ml_kem_require_native()
-    rc = _native_lib.ama_ml_kem_privkey_check(
-        pid, bytes(secret_key), ctypes.c_size_t(sz["secret_key"])
-    )
+    sk_buf = _wipeable(secret_key)
+    try:
+        rc = _native_lib.ama_ml_kem_privkey_check(pid, sk_buf, ctypes.c_size_t(sz["secret_key"]))
+    finally:
+        _wipe(sk_buf)
     return bool(rc == 0)
 
 
@@ -4800,18 +4900,21 @@ def native_ml_kem_encapsulate(ps: Union[int, str], public_key: bytes) -> tuple:
     ct = ctypes.create_string_buffer(sz["ciphertext"])
     ct_len = ctypes.c_size_t(sz["ciphertext"])
     ss = ctypes.create_string_buffer(ML_KEM_SHARED_SECRET_BYTES)
-    rc = _native_lib.ama_ml_kem_encapsulate(
-        pid,
-        bytes(public_key),
-        ctypes.c_size_t(len(public_key)),
-        ct,
-        ctypes.byref(ct_len),
-        ss,
-        ctypes.c_size_t(ML_KEM_SHARED_SECRET_BYTES),
-    )
-    if rc != 0:
-        raise RuntimeError(f"ML-KEM encapsulation failed (rc={rc})")
-    return bytes(ct.raw[: ct_len.value]), bytes(ss.raw[:ML_KEM_SHARED_SECRET_BYTES])
+    try:
+        rc = _native_lib.ama_ml_kem_encapsulate(
+            pid,
+            bytes(public_key),
+            ctypes.c_size_t(len(public_key)),
+            ct,
+            ctypes.byref(ct_len),
+            ss,
+            ctypes.c_size_t(ML_KEM_SHARED_SECRET_BYTES),
+        )
+        if rc != 0:
+            raise RuntimeError(f"ML-KEM encapsulation failed (rc={rc})")
+        return bytes(ct.raw[: ct_len.value]), bytes(ss.raw[:ML_KEM_SHARED_SECRET_BYTES])
+    finally:
+        _wipe(ss)
 
 
 def native_ml_kem_decapsulate(
@@ -4839,18 +4942,22 @@ def native_ml_kem_decapsulate(
         )
     _ml_kem_require_native()
     ss = ctypes.create_string_buffer(ML_KEM_SHARED_SECRET_BYTES)
-    rc = _native_lib.ama_ml_kem_decapsulate(
-        pid,
-        bytes(ciphertext),
-        ctypes.c_size_t(len(ciphertext)),
-        bytes(secret_key),
-        ctypes.c_size_t(len(secret_key)),
-        ss,
-        ctypes.c_size_t(ML_KEM_SHARED_SECRET_BYTES),
-    )
-    if rc != 0:
-        raise RuntimeError(f"ML-KEM decapsulation failed (rc={rc})")
-    return bytes(ss.raw[:ML_KEM_SHARED_SECRET_BYTES])
+    sk_buf = _wipeable(secret_key)
+    try:
+        rc = _native_lib.ama_ml_kem_decapsulate(
+            pid,
+            bytes(ciphertext),
+            ctypes.c_size_t(len(ciphertext)),
+            sk_buf,
+            ctypes.c_size_t(len(secret_key)),
+            ss,
+            ctypes.c_size_t(ML_KEM_SHARED_SECRET_BYTES),
+        )
+        if rc != 0:
+            raise RuntimeError(f"ML-KEM decapsulation failed (rc={rc})")
+        return bytes(ss.raw[:ML_KEM_SHARED_SECRET_BYTES])
+    finally:
+        _wipe(ss, sk_buf)
 
 
 def native_ml_dsa_keypair(ps: Union[int, str]) -> tuple:
@@ -4860,10 +4967,13 @@ def native_ml_dsa_keypair(ps: Union[int, str]) -> tuple:
     sz = ML_DSA_SIZES[pid]
     pk = ctypes.create_string_buffer(sz["public_key"])
     sk = ctypes.create_string_buffer(sz["secret_key"])
-    rc = _native_lib.ama_ml_dsa_keypair(pid, pk, sk)
-    if rc != 0:
-        raise RuntimeError(f"ML-DSA keypair generation failed (rc={rc})")
-    return bytes(pk.raw[: sz["public_key"]]), bytes(sk.raw[: sz["secret_key"]])
+    try:
+        rc = _native_lib.ama_ml_dsa_keypair(pid, pk, sk)
+        if rc != 0:
+            raise RuntimeError(f"ML-DSA keypair generation failed (rc={rc})")
+        return bytes(pk.raw[: sz["public_key"]]), bytes(sk.raw[: sz["secret_key"]])
+    finally:
+        _wipe(sk)
 
 
 def native_ml_dsa_keypair_from_seed(ps: Union[int, str], xi: bytes) -> tuple:
@@ -4880,10 +4990,14 @@ def native_ml_dsa_keypair_from_seed(ps: Union[int, str], xi: bytes) -> tuple:
     sz = ML_DSA_SIZES[pid]
     pk = ctypes.create_string_buffer(sz["public_key"])
     sk = ctypes.create_string_buffer(sz["secret_key"])
-    rc = _native_lib.ama_ml_dsa_keypair_from_seed(pid, bytes(xi), pk, sk)
-    if rc != 0:
-        raise RuntimeError(f"ML-DSA deterministic keypair failed (rc={rc})")
-    return bytes(pk.raw[: sz["public_key"]]), bytes(sk.raw[: sz["secret_key"]])
+    xi_buf = _wipeable(xi)
+    try:
+        rc = _native_lib.ama_ml_dsa_keypair_from_seed(pid, xi_buf, pk, sk)
+        if rc != 0:
+            raise RuntimeError(f"ML-DSA deterministic keypair failed (rc={rc})")
+        return bytes(pk.raw[: sz["public_key"]]), bytes(sk.raw[: sz["secret_key"]])
+    finally:
+        _wipe(sk, xi_buf)
 
 
 def native_ml_dsa_pubkey_from_privkey(ps: Union[int, str], secret_key: bytes) -> bytes:
@@ -4916,7 +5030,11 @@ def native_ml_dsa_pubkey_from_privkey(ps: Union[int, str], secret_key: bytes) ->
         )
     _ml_dsa_require_native()
     pk = ctypes.create_string_buffer(sz["public_key"])
-    rc = _native_lib.ama_ml_dsa_pubkey_from_privkey(pid, bytes(secret_key), pk)
+    sk_buf = _wipeable(secret_key)
+    try:
+        rc = _native_lib.ama_ml_dsa_pubkey_from_privkey(pid, sk_buf, pk)
+    finally:
+        _wipe(sk_buf)
     if rc != 0:
         raise ValueError(
             f"ML-DSA-{pid} private key is internally inconsistent: its s1/s2 are "
@@ -4945,7 +5063,11 @@ def native_ml_dsa_privkey_check(ps: Union[int, str], secret_key: bytes) -> bool:
             f"ML-DSA-{pid} secret key must be {sz['secret_key']} bytes, got {len(secret_key)}"
         )
     _ml_dsa_require_native()
-    return bool(_native_lib.ama_ml_dsa_privkey_check(pid, bytes(secret_key)) == 0)
+    sk_buf = _wipeable(secret_key)
+    try:
+        return bool(_native_lib.ama_ml_dsa_privkey_check(pid, sk_buf) == 0)
+    finally:
+        _wipe(sk_buf)
 
 
 def native_ml_dsa_sign(
@@ -4980,26 +5102,30 @@ def native_ml_dsa_sign(
 
     sig = ctypes.create_string_buffer(sz["signature"])
     sig_len = ctypes.c_size_t(sz["signature"])
-    if ctx is None:
-        rc = _native_lib.ama_ml_dsa_sign(
-            pid,
-            sig,
-            ctypes.byref(sig_len),
-            bytes(message),
-            ctypes.c_size_t(len(message)),
-            bytes(secret_key),
-        )
-    else:
-        rc = _native_lib.ama_ml_dsa_sign_ctx(
-            pid,
-            sig,
-            ctypes.byref(sig_len),
-            bytes(message),
-            ctypes.c_size_t(len(message)),
-            bytes(ctx),
-            ctypes.c_size_t(len(ctx)),
-            bytes(secret_key),
-        )
+    sk_buf = _wipeable(secret_key)
+    try:
+        if ctx is None:
+            rc = _native_lib.ama_ml_dsa_sign(
+                pid,
+                sig,
+                ctypes.byref(sig_len),
+                bytes(message),
+                ctypes.c_size_t(len(message)),
+                sk_buf,
+            )
+        else:
+            rc = _native_lib.ama_ml_dsa_sign_ctx(
+                pid,
+                sig,
+                ctypes.byref(sig_len),
+                bytes(message),
+                ctypes.c_size_t(len(message)),
+                bytes(ctx),
+                ctypes.c_size_t(len(ctx)),
+                sk_buf,
+            )
+    finally:
+        _wipe(sk_buf)
     if rc == AMA_ERROR_INVALID_PARAM:
         # The signer applies FIPS 204 Algorithm 25's range gate to s1/s2, so a
         # secret key of the right length can still be refused here. That is a
@@ -5035,11 +5161,14 @@ def native_ml_dsa_verify(
     """
     pid = _ml_dsa_id(ps)
     sz = ML_DSA_SIZES[pid]
+    # INVARIANT-7 first: with no backend loaded, `False` would read as "the
+    # library checked this signature and it is invalid" when nothing checked
+    # anything. Refusing is the only honest answer.
+    _ml_dsa_require_native()
     if len(public_key) != sz["public_key"] or len(signature) != sz["signature"]:
         return False
     if ctx is not None and len(ctx) > 255:
         return False
-    _ml_dsa_require_native()
 
     if ctx is None:
         rc = _native_lib.ama_ml_dsa_verify(
@@ -5094,6 +5223,24 @@ def _nistp_require_native() -> None:
         )
 
 
+def nistp_default_hash(curve: Union[int, str]) -> str:
+    """The hash FIPS 186-5 / RFC 5480 practice pairs with ``curve``.
+
+    P-256 with SHA-256, P-384 with SHA-384, P-521 with SHA-512 — the pairing
+    JOSE spells ``ES256``/``ES384``/``ES512`` and COSE reuses. ``ama_nistp_*``
+    hashes nothing itself (it takes a digest), so a caller has to choose, and
+    choosing wrong is not an error anything reports: a SHA-256 digest signed
+    under P-521 verifies perfectly and interoperates with nothing that expects
+    ``ES512``.
+
+    ``NISTP_DEFAULT_HASH`` was added as the table for this and then read by
+    nothing, which is how a table stops being true. This is its one reader, and
+    ``tests/test_nistp_curves.py`` checks the pairing against the digest widths
+    the signer accepts rather than against a second copy of the table.
+    """
+    return str(NISTP_DEFAULT_HASH[_nistp_curve_id(curve)])
+
+
 def _nistp_check_digest(digest: bytes) -> None:
     if len(digest) not in (32, 48, 64):
         raise ValueError(f"Digest must be 32, 48 or 64 bytes (SHA-256/384/512), got {len(digest)}")
@@ -5137,10 +5284,13 @@ def native_nistp_keypair(curve: Union[int, str]) -> tuple:
     nb = NISTP_FIELD_BYTES[cid]
     priv = ctypes.create_string_buffer(nb)
     pub = ctypes.create_string_buffer(2 * nb)
-    rc = _native_lib.ama_nistp_keypair(cid, priv, pub)
-    if rc != 0:
-        raise RuntimeError(f"NIST curve keypair generation failed (rc={rc})")
-    return bytes(pub.raw[: 2 * nb]), bytes(priv.raw[:nb])
+    try:
+        rc = _native_lib.ama_nistp_keypair(cid, priv, pub)
+        if rc != 0:
+            raise RuntimeError(f"NIST curve keypair generation failed (rc={rc})")
+        return bytes(pub.raw[: 2 * nb]), bytes(priv.raw[:nb])
+    finally:
+        _wipe(priv)
 
 
 def native_nistp_pubkey_from_privkey(curve: Union[int, str], privkey: bytes) -> bytes:
@@ -5164,7 +5314,11 @@ def native_nistp_pubkey_from_privkey(curve: Union[int, str], privkey: bytes) -> 
         raise ValueError(f"Private key must be {nb} bytes for this curve, got {len(privkey)}")
     _nistp_require_native()
     pub = ctypes.create_string_buffer(2 * nb)
-    rc = _native_lib.ama_nistp_pubkey_from_privkey(cid, bytes(privkey), pub)
+    priv_buf = _wipeable(privkey)
+    try:
+        rc = _native_lib.ama_nistp_pubkey_from_privkey(cid, priv_buf, pub)
+    finally:
+        _wipe(priv_buf)
     if rc == AMA_ERROR_INVALID_PARAM:
         raise ValueError(
             "NIST curve private scalar is out of range: a private key must be in "
@@ -5186,9 +5340,10 @@ def native_nistp_pubkey_validate(curve: Union[int, str], pubkey: bytes) -> bool:
     """
     cid = _nistp_curve_id(curve)
     nb = NISTP_FIELD_BYTES[cid]
+    # INVARIANT-7 first — see native_ml_dsa_verify for why the order matters.
+    _nistp_require_native()
     if len(pubkey) != 2 * nb:
         return False
-    _nistp_require_native()
     return int(_native_lib.ama_nistp_pubkey_validate(cid, bytes(pubkey))) == 0
 
 
@@ -5247,9 +5402,14 @@ def native_nistp_ecdh(curve: Union[int, str], privkey: bytes, peer_pubkey: bytes
     friends) before using it.
 
     Raises:
-        ValueError: If a length is wrong.
-        RuntimeError: If the native library is unavailable, the private scalar
-            is out of range, or the peer key fails validation.
+        ValueError: If a length is wrong, the peer key is not a valid point of
+            the prime-order group, or the private scalar is outside [1, n-1].
+            All three are properties of the *arguments*, and this is the entry
+            point an attacker-supplied key reaches; classifying them as
+            RuntimeError made "the peer sent a bad point" indistinguishable
+            from "the backend broke".
+        RuntimeError: If the native library is unavailable, or on an internal
+            failure not attributable to the arguments.
     """
     cid = _nistp_curve_id(curve)
     nb = NISTP_FIELD_BYTES[cid]
@@ -5259,10 +5419,25 @@ def native_nistp_ecdh(curve: Union[int, str], privkey: bytes, peer_pubkey: bytes
         raise ValueError(f"Peer public key must be {2 * nb} bytes (X||Y), got {len(peer_pubkey)}")
     _nistp_require_native()
     out = ctypes.create_string_buffer(nb)
-    rc = _native_lib.ama_nistp_ecdh(cid, bytes(privkey), bytes(peer_pubkey), out)
-    if rc != 0:
-        raise RuntimeError(f"NIST curve ECDH failed (rc={rc})")
-    return bytes(out.raw[:nb])
+    priv_buf = _wipeable(privkey)
+    try:
+        rc = _native_lib.ama_nistp_ecdh(cid, priv_buf, bytes(peer_pubkey), out)
+        if rc == AMA_ERROR_INVALID_PARAM:
+            # The peer key failed validation, or the private scalar is out of
+            # range. Both are properties of the arguments, and this is the one
+            # ECDH entry point an attacker's key reaches — a RuntimeError here
+            # is indistinguishable from "the backend broke", which is exactly
+            # the confusion the rest of this module refuses to create.
+            raise ValueError(
+                "NIST curve ECDH refused its inputs: the peer public key is not a "
+                "valid point of the prime-order group, or the private scalar is "
+                "not in [1, n-1]"
+            )
+        if rc != 0:
+            raise RuntimeError(f"NIST curve ECDH failed (rc={rc})")
+        return bytes(out.raw[:nb])
+    finally:
+        _wipe(out, priv_buf)
 
 
 def native_nistp_ecdsa_sign(
@@ -5319,29 +5494,33 @@ def native_nistp_ecdsa_sign(
     if hedged:
         flags |= AMA_NISTP_ECDSA_SIGN_HEDGED
 
-    if raw:
-        out = ctypes.create_string_buffer(2 * nb)
-        rc = _native_lib.ama_nistp_ecdsa_sign_raw_ex(
-            cid, bytes(message_digest), len(message_digest), bytes(privkey), out, flags
+    priv_buf = _wipeable(privkey)
+    try:
+        if raw:
+            out = ctypes.create_string_buffer(2 * nb)
+            rc = _native_lib.ama_nistp_ecdsa_sign_raw_ex(
+                cid, bytes(message_digest), len(message_digest), priv_buf, out, flags
+            )
+            if rc != 0:
+                raise RuntimeError(f"NIST curve ECDSA signing failed (rc={rc})")
+            return bytes(out.raw[: 2 * nb])
+
+        out = ctypes.create_string_buffer(NISTP_MAX_SIG_LEN)
+        out_len = ctypes.c_size_t(0)
+        rc = _native_lib.ama_nistp_ecdsa_sign_ex(
+            cid,
+            bytes(message_digest),
+            len(message_digest),
+            priv_buf,
+            out,
+            ctypes.byref(out_len),
+            flags,
         )
         if rc != 0:
             raise RuntimeError(f"NIST curve ECDSA signing failed (rc={rc})")
-        return bytes(out.raw[: 2 * nb])
-
-    out = ctypes.create_string_buffer(NISTP_MAX_SIG_LEN)
-    out_len = ctypes.c_size_t(0)
-    rc = _native_lib.ama_nistp_ecdsa_sign_ex(
-        cid,
-        bytes(message_digest),
-        len(message_digest),
-        bytes(privkey),
-        out,
-        ctypes.byref(out_len),
-        flags,
-    )
-    if rc != 0:
-        raise RuntimeError(f"NIST curve ECDSA signing failed (rc={rc})")
-    return bytes(out.raw[: out_len.value])
+        return bytes(out.raw[: out_len.value])
+    finally:
+        _wipe(priv_buf)
 
 
 def native_nistp_ecdsa_verify(
@@ -5710,7 +5889,7 @@ def native_x25519_scalarmult_batch(scalars: list[bytes], points: list[bytes]) ->
     if _native_lib is None or not _X25519_NATIVE_AVAILABLE:
         raise NativeBackendUnavailableError("X25519 native backend not available. " + _INSTALL_HINT)
     if not hasattr(_native_lib, "ama_x25519_scalarmult_batch"):
-        raise RuntimeError(
+        raise NativeBackendUnavailableError(
             "ama_x25519_scalarmult_batch is not exported by the loaded native "
             "library — rebuild against a newer libama_cryptography. " + _INSTALL_HINT
         )
@@ -5934,7 +6113,7 @@ def native_argon2id_legacy(
             "Argon2id native backend not available. " + _INSTALL_HINT
         )
     if not hasattr(_native_lib, "ama_argon2id_legacy"):
-        raise RuntimeError(
+        raise NativeBackendUnavailableError(
             "ama_argon2id_legacy() is not exported by the loaded native "
             "library — rebuild against a native library that exports "
             "``ama_argon2id_legacy`` to enable the pre-shim migration path."
@@ -6038,7 +6217,7 @@ def native_argon2id_legacy_verify(
             "Argon2id native backend not available. " + _INSTALL_HINT
         )
     if not hasattr(_native_lib, "ama_argon2id_legacy_verify"):
-        raise RuntimeError(
+        raise NativeBackendUnavailableError(
             "ama_argon2id_legacy_verify() is not exported by the loaded native "
             "library — rebuild against a native library that exports "
             "``ama_argon2id_legacy_verify`` to enable the pre-shim "

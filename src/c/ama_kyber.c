@@ -829,7 +829,15 @@ static void kyber_cpapke_enc(uint8_t *ct, const uint8_t *m,
      * and ML-KEM-1024 (eta1 = eta2 = 2), so a single-eta implementation looks
      * correct until ML-KEM-512 (eta1 = 3, eta2 = 2) — where it silently
      * produces a ciphertext no other implementation decapsulates.  The
-     * vendored Wycheproof ML-KEM-512 corpus is what pins this. */
+     * FIPS 203 ML-KEM-512 KAT corpus (tests/kat/fips203/ml_kem_512.kat,
+     * replayed by tests/test_pqc_param_sets.py::test_ml_kem_known_answer_
+     * vectors) is what pins this: its ct/ss pairs drive the FO re-encryption
+     * and therefore this function at eta1 = 3.
+     *
+     * Not Wycheproof, which this comment used to cite: Wycheproof publishes no
+     * ML-KEM vectors at all, and wycheproof_vectors/README.md says so. A
+     * dangling citation for a stated conformance property is worse than none
+     * in a repository whose case rests on auditable provenance. */
     kyber_gennoise(&sp, coins, 0, P->k, P->eta1);
     polyvec_ntt(&sp, P->k);
     kyber_gennoise(&ep, coins, (uint8_t)P->k, P->k, P->eta2);
@@ -1240,7 +1248,7 @@ int ama_kyber_debug_ntt_roundtrip(void) {
         polyvec A[KYBER_K], sv, ev, pkpv_test;
         polyvec sp_test, ep_test, bp_test;
         poly epp_test, v_test, stu_test, mp_test;
-        unsigned int ii, jj;
+        unsigned int ii;
 
         /* A = identity matrix (in NTT domain) */
         memset(A, 0, sizeof(A));  // PUBLIC-DATA: A (diag) — AMA_KYBER_BUILD_DIAGNOSTICS — test matrix

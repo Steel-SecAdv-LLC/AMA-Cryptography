@@ -66,6 +66,7 @@ import hashlib
 import json
 import random
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Any, Callable
@@ -665,7 +666,6 @@ def run_atheris(argv: list[str]) -> int:  # pragma: no cover - optional engine
         )
         return 2
 
-    seeds = build_seed_corpus(None)
     targets = list(TARGETS)
 
     def one(raw: bytes) -> None:
@@ -677,9 +677,28 @@ def run_atheris(argv: list[str]) -> int:  # pragma: no cover - optional engine
         except FindingError as finding:
             raise AssertionError(str(finding)) from None
 
+    # Write the seed corpus somewhere libFuzzer can actually read it, and hand
+    # it to Setup. Previously `build_seed_corpus(None)` was computed, printed
+    # as "seeded with N inputs", and then used for nothing at all — the Atheris
+    # run started cold, which is exactly the failure the module docstring says
+    # the seed corpus exists to prevent ("a fuzzer from an empty corpus spends
+    # its whole budget rediscovering that a key file begins with 0x30").
+    seed_dir = Path(tempfile.mkdtemp(prefix="ama-fuzz-seeds-"))
+    seeds = build_seed_corpus(None)
+    for index, blob in enumerate(seeds):
+        (seed_dir / f"seed-{index:04d}").write_bytes(blob)
+    print(f"seeded with {len(seeds)} inputs in {seed_dir}")
+
+    # argv[0] is the program name by libFuzzer/sys.argv convention and Setup
+    # discards it. `argv` here is the *unrecognised* remainder from
+    # parse_known_args, which has no program name, so the first real libFuzzer
+    # flag the user passed was being silently eaten.
+    forwarded = [sys.argv[0]]
+    forwarded.extend(a for a in argv if a != "--atheris")
+    forwarded.append(str(seed_dir))
+
     with atheris.instrument_imports():
-        atheris.Setup([a for a in argv if a != "--atheris"], one)
-    print(f"seeded with {len(seeds)} inputs")
+        atheris.Setup(forwarded, one)
     atheris.Fuzz()
     return 0
 

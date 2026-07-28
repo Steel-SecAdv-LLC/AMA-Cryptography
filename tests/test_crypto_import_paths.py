@@ -138,8 +138,10 @@ def _granted_response(digest: bytes, nonce: int) -> bytes:
 
     def _der_set(*elements: bytes) -> bytes:
         body = b"".join(elements)
-        return bytes([0x31, len(body)]) + body if len(body) < 0x80 else (
-            bytes([0x31, 0x81, len(body)]) + body
+        return (
+            bytes([0x31, len(body)]) + body
+            if len(body) < 0x80
+            else (bytes([0x31, 0x81, len(body)]) + body)
         )
 
     signed_data = der_sequence(
@@ -221,9 +223,8 @@ class TestRFC3161SuccessPath:
         The point of the change is that AMA stopped shelling out to a competing
         implementation; a regression would most likely reintroduce exactly that.
         """
-        import subprocess
-
         import hashlib
+        import subprocess
 
         from ama_cryptography._asn1 import DerReader
 
@@ -241,9 +242,7 @@ class TestRFC3161SuccessPath:
                     req = DerReader(body).read_sequence()
                     req.read_integer()
                     req.read_sequence()
-                    mock_response.read.return_value = _granted_response(
-                        digest, req.read_integer()
-                    )
+                    mock_response.read.return_value = _granted_response(digest, req.read_integer())
 
                 mock_conn.request.side_effect = _capture
                 dgs.get_rfc3161_timestamp(b"data", "https://tsa.example.com")

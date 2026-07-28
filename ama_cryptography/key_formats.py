@@ -415,8 +415,12 @@ def _initial_pq_consistency() -> bool:
 #: is exact rather than a save/restore race. The initial value is read from the
 #: environment once at import, which is what "per process" meant and still
 #: means.
+#: Read once, at import, so the ContextVar default is a plain immutable bool
+#: rather than a call the linter has to reason about.
+_PQ_CONSISTENCY_INITIAL: bool = _initial_pq_consistency()
+
 _pq_consistency: contextvars.ContextVar[bool] = contextvars.ContextVar(
-    "ama_pq_import_consistency", default=_initial_pq_consistency()
+    "ama_pq_import_consistency", default=_PQ_CONSISTENCY_INITIAL
 )
 
 
@@ -1772,8 +1776,8 @@ def jwk_thumbprint(jwk: Union[dict[str, Any], str], *, hash_name: str = "sha256"
     key and its public half.
     """
     obj = _load_jwk(jwk)
-    alg, members = _jwk_algorithm(obj)
-    # `alg.kind` is one of "okp" / "ec" / "pq" and is never empty, so the
+    _alg, members = _jwk_algorithm(obj)
+    # `_alg.kind` is one of "okp" / "ec" / "pq" and is never empty, so the
     # former `if alg.kind else ()` guard could not take its else arm — and if
     # it somehow had, the thumbprint would have been computed over `{}`, the
     # same value for every key. Required members are unconditional.

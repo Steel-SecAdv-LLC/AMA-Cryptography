@@ -563,10 +563,16 @@ jobs:
       # match the specifications rather than merely themselves, and
       # tools/build_keyformat_corpus.py is the tool that re-derives it. Its
       # offline half checks what the test suite structurally cannot: that every
-      # corpus file is present, that each records the exact document revision
-      # it was extracted from, that the OpenSSL half is strict RFC 7468 in
-      # matched .key/.pub pairs, and that the deliberately-inconsistent PQ
+      # corpus file is present and carries the exact record count it should,
+      # that each records the document revision it was extracted from, that
+      # every PEM record is base64 opening a DER SEQUENCE, that every hex
+      # record has the size its RFC structure implies, that every JOSE/COSE
+      # record carries its members, and that the deliberately-inconsistent PQ
       # records still exist.
+      #
+      # (There is no "OpenSSL half" any more — removing it is what INVARIANT-36
+      # is about, and the step three lines above enforces its absence. This
+      # comment described that half for a while after it was gone.)
       #
       # That last one is the reason this is a gate rather than a convenience.
       # The extractor once relabelled RFC 9881 Appendix C.4's inconsistent keys

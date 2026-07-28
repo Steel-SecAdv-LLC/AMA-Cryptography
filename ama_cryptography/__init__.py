@@ -154,6 +154,43 @@ _CRYPTO_API_EXPORTS = frozenset(
     }
 )
 
+# key_formats exports are lazy-loaded for the same reason, and because
+# importing it eagerly would pull the native backend in on `import
+# ama_cryptography` for every caller, most of whom never touch a key file.
+#
+# Wired up here because the whole point of the module is interoperability, and
+# an interoperability API you cannot reach from the package namespace is one
+# nobody finds: `ama_cryptography.load_pkcs8` did not exist, and neither did
+# `from ama_cryptography import key_formats` as anything the package declared.
+_KEY_FORMAT_EXPORTS = frozenset(
+    {
+        "ALGORITHMS",
+        "CONVENTIONAL_PUBLIC_KEY",
+        "KeyFormatError",
+        "PQ_CONSISTENCY_ENV",
+        "PrivateKey",
+        "PublicKey",
+        "UnsupportedKeyFormatError",
+        "conventional_include_public_key",
+        "cose_to_private_key",
+        "cose_to_public_key",
+        "decode_pem",
+        "encode_pem",
+        "get_pq_import_consistency",
+        "jwk_thumbprint",
+        "jwk_to_private_key",
+        "jwk_to_public_key",
+        "load_pkcs8",
+        "load_spki",
+        "pq_import_consistency",
+        "private_key_to_cose",
+        "private_key_to_jwk",
+        "public_key_to_cose",
+        "public_key_to_jwk",
+        "set_pq_import_consistency",
+    }
+)
+
 if TYPE_CHECKING:
     from .crypto_api import (
         AlgorithmType as AlgorithmType,
@@ -176,13 +213,39 @@ if TYPE_CHECKING:
     from .crypto_api import (
         verify_crypto_package as verify_crypto_package,
     )
+    from .key_formats import (
+        ALGORITHMS as ALGORITHMS,
+    )
+    from .key_formats import (
+        CONVENTIONAL_PUBLIC_KEY as CONVENTIONAL_PUBLIC_KEY,
+    )
+    from .key_formats import (
+        PrivateKey as PrivateKey,
+    )
+    from .key_formats import (
+        PublicKey as PublicKey,
+    )
+    from .key_formats import (
+        load_pkcs8 as load_pkcs8,
+    )
+    from .key_formats import (
+        load_spki as load_spki,
+    )
 
 
 def __getattr__(name: str) -> Any:
-    """Lazy-load crypto_api symbols on first access."""
+    """Lazy-load crypto_api and key_formats symbols on first access."""
     if name in _CRYPTO_API_EXPORTS:
         mod = _importlib.import_module("ama_cryptography.crypto_api")
         val: Any = getattr(mod, name)
+        globals()[name] = val
+        return val
+    if name in _KEY_FORMAT_EXPORTS:
+        if name in ("KeyFormatError", "UnsupportedKeyFormatError"):
+            mod = _importlib.import_module("ama_cryptography.exceptions")
+        else:
+            mod = _importlib.import_module("ama_cryptography.key_formats")
+        val = getattr(mod, name)
         globals()[name] = val
         return val
     raise AttributeError(f"module 'ama_cryptography' has no attribute {name!r}")
@@ -232,4 +295,30 @@ __all__ = [
     "initialize_ethical_matrix",
     "verify_mathematical_foundations",
     "AmaEquationEngine",
+    # Key interoperability formats (ama_cryptography.key_formats), lazily
+    # loaded — see _KEY_FORMAT_EXPORTS.
+    "ALGORITHMS",
+    "CONVENTIONAL_PUBLIC_KEY",
+    "KeyFormatError",
+    "PQ_CONSISTENCY_ENV",
+    "PrivateKey",
+    "PublicKey",
+    "UnsupportedKeyFormatError",
+    "conventional_include_public_key",
+    "cose_to_private_key",
+    "cose_to_public_key",
+    "decode_pem",
+    "encode_pem",
+    "get_pq_import_consistency",
+    "jwk_thumbprint",
+    "jwk_to_private_key",
+    "jwk_to_public_key",
+    "load_pkcs8",
+    "load_spki",
+    "pq_import_consistency",
+    "private_key_to_cose",
+    "private_key_to_jwk",
+    "public_key_to_cose",
+    "public_key_to_jwk",
+    "set_pq_import_consistency",
 ]

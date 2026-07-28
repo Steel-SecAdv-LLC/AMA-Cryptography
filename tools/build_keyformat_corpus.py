@@ -358,14 +358,87 @@ def build_rfc9500_ec() -> dict:
 # the negative half empties itself and every gate that consumes it goes vacuous
 # while still reporting green. That failure has happened once already (see
 # ``extract_pem_blocks``), so it is asserted rather than assumed.
+#: Every vendored corpus, with what the offline gate must be able to prove
+#: about it without the network.
+#:
+#: ``records`` is the exact count the file must carry. Without it a corpus can
+#: be gutted to a single record and the gate still reports OK — "records is a
+#: non-empty list" is satisfied by one — which is the same class of silent
+#: weakening as a test whose assertions were deleted.
+#:
+#: ``payload`` says which field carries the vector, because "no ``pem_b64``, so
+#: skip the record entirely" left *two whole files* — the RFC 8554 corpus and
+#: the JOSE/COSE corpus — with their contents unexamined by the per-PR gate,
+#: while the tool's own docstring advertised shape checking.
 EXPECTED_JSON = {
-    "rfc9881_ml_dsa.json": {"needs_negative": True},
-    "lamps_ml_kem.json": {"needs_negative": True},
-    "rfc8410_okp.json": {"needs_negative": False},
-    "rfc9500_ec.json": {"needs_negative": False},
-    "rfc8554_hss_lms.json": {"needs_negative": False},
-    "jose_cose.json": {"needs_negative": False},
+    "rfc9881_ml_dsa.json": {"needs_negative": True, "payload": "pem_b64", "records": 15},
+    "lamps_ml_kem.json": {"needs_negative": True, "payload": "pem_b64", "records": 16},
+    "rfc8410_okp.json": {"needs_negative": False, "payload": "pem_b64", "records": 3},
+    "rfc9500_ec.json": {"needs_negative": False, "payload": "pem_b64", "records": 3},
+    "rfc8554_hss_lms.json": {"needs_negative": False, "payload": "hex", "records": 6},
+    "jose_cose.json": {"needs_negative": False, "payload": "jose", "records": 4},
 }
+
+
+def _verify_hex_record(where: str, filename: str, record: dict) -> list[str]:
+    """Check a hex-valued corpus record (RFC 8554 Appendix F).
+
+    The structural sizes are already known to this module — they are asserted
+    on the ``--specs`` build path — but that path needs the network and runs on
+    a monthly cron, so the per-PR gate never applied them. It does now.
+    """
+    problems: list[str] = []
+    value = record.get("hex")
+    if not isinstance(value, str) or not value:
+        return [f"{where}: has no 'hex' payload"]
+    if not _HEX_RE.match(value):
+        return [f"{where}: 'hex' is not an even-length lowercase hex string"]
+    declared = record.get("bytes")
+    if declared != len(value) // 2:
+        problems.append(f"{where}: declares {declared} bytes but carries {len(value) // 2}")
+    if filename == "rfc8554_hss_lms.json":
+        kind = record.get("kind")
+        size = len(value) // 2
+        if kind == "public_key" and size != RFC8554_PUBLIC_KEY_BYTES:
+            problems.append(
+                f"{where}: public key is {size} octets, expected " f"{RFC8554_PUBLIC_KEY_BYTES}"
+            )
+        if kind == "signature" and size not in RFC8554_SIGNATURE_BYTES:
+            problems.append(
+                f"{where}: signature is {size} octets, expected one of "
+                f"{RFC8554_SIGNATURE_BYTES}"
+            )
+        if record.get("case") not in (1, 2):
+            problems.append(f"{where}: 'case' is not one of the RFC's two test cases")
+        if kind not in ("public_key", "message", "signature"):
+            problems.append(f"{where}: unrecognised kind {kind!r}")
+    return problems
+
+
+def _verify_jose_record(where: str, record: dict) -> list[str]:
+    """Check a JWK/COSE corpus record (RFC 8037 / RFC 8152 worked examples)."""
+    problems: list[str] = []
+    fmt = record.get("format")
+    if fmt not in ("jwk", "cose"):
+        return [f"{where}: 'format' is {fmt!r}, expected 'jwk' or 'cose'"]
+    if fmt == "jwk":
+        jwk = record.get("jwk")
+        if not isinstance(jwk, dict) or "kty" not in jwk:
+            problems.append(f"{where}: 'jwk' is missing or has no 'kty' member")
+    else:
+        # RFC 8152 C.7.1's EC2 keys are recorded as their coordinates plus the
+        # COSE label map, which is what the encoder is checked against; there is
+        # no single hex blob to compare.
+        labels = record.get("cose_labels")
+        if not isinstance(labels, dict) or not labels:
+            problems.append(f"{where}: COSE record carries no 'cose_labels' map")
+        for member in ("x_hex", "y_hex"):
+            value = record.get(member)
+            if not isinstance(value, str) or not _HEX_RE.match(value or ""):
+                problems.append(f"{where}: COSE record's {member} is missing or not hex")
+    if not str(record.get("algorithm", "")).strip():
+        problems.append(f"{where}: has no 'algorithm'")
+    return problems
 
 
 def verify_offline(corpus: Path = CORPUS) -> list[str]:
@@ -422,12 +495,34 @@ def verify_offline(corpus: Path = CORPUS) -> list[str]:
             problems.append(f"{filename}: 'records' is missing or empty")
             continue
 
+        expected_records = spec.get("records")
+        if expected_records is not None and len(records) != expected_records:
+            problems.append(
+                f"{filename}: carries {len(records)} records, expected "
+                f"{expected_records}. A corpus that has quietly shrunk still "
+                "passes every gate written as 'records is non-empty'."
+            )
+
+        payload = spec.get("payload", "pem_b64")
         kinds: set[str] = set()
         for index, record in enumerate(records):
             where = f"{filename}: record {index} ({record.get('section', '?')})"
             kinds.add(str(record.get("kind", "")))
+
+            if payload == "hex":
+                problems.extend(_verify_hex_record(where, filename, record))
+                continue
+            if payload == "jose":
+                problems.extend(_verify_jose_record(where, record))
+                continue
+
             if "pem_b64" not in record:
-                continue  # a JWK/COSE record, checked by the test suite itself
+                problems.append(
+                    f"{where}: carries no 'pem_b64' payload, but {filename} is a "
+                    "PEM corpus. A record with no vector in it is one the gate "
+                    "cannot check."
+                )
+                continue
             if not str(record.get("label", "")).strip():
                 problems.append(f"{where}: has PEM bytes but no label")
             try:

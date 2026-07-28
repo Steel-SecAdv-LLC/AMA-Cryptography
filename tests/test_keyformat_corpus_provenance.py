@@ -203,3 +203,70 @@ def test_the_corpus_contains_no_third_party_key_material(tool: ModuleType) -> No
         f"unexpected subdirectories in the corpus: {strays}. Every record lives "
         "in a JSON file naming the document it came from."
     )
+
+
+# ---------------------------------------------------------------------------
+# Non-PEM corpora
+#
+# `verify_offline` used to `continue` on any record without a `pem_b64` field,
+# which meant two whole files — the RFC 8554 Appendix F corpus and the
+# JOSE/COSE corpus — had their contents examined by nothing on the per-PR path.
+# The tool already *knew* the right structural answers for RFC 8554; they lived
+# only on the `--specs` build path, which needs the network and runs monthly.
+# ---------------------------------------------------------------------------
+def _corpus_copy(tmp_path: Path) -> Path:
+    target = tmp_path / "keyformats"
+    shutil.copytree(CORPUS, target)
+    return target
+
+
+def test_a_gutted_hex_corpus_is_caught(tool: ModuleType, tmp_path: Path) -> None:
+    corpus = _corpus_copy(tmp_path)
+    assert tool.verify_offline(corpus) == []
+
+    path = corpus / "rfc8554_hss_lms.json"
+    data = json.loads(path.read_text())
+    data["records"] = data["records"][:1]
+    path.write_text(json.dumps(data))
+    problems = tool.verify_offline(corpus)
+    assert any("carries 1 records" in p for p in problems), problems
+
+
+def test_a_truncated_hex_vector_is_caught(tool: ModuleType, tmp_path: Path) -> None:
+    """A vector whose size does not match its parameter set is one the
+    extractor mis-assembled — and it looks entirely usable."""
+    corpus = _corpus_copy(tmp_path)
+    path = corpus / "rfc8554_hss_lms.json"
+    data = json.loads(path.read_text())
+    for record in data["records"]:
+        if record["kind"] == "signature":
+            record["hex"] = record["hex"][:200]
+            record["bytes"] = 100
+            break
+    path.write_text(json.dumps(data))
+    problems = tool.verify_offline(corpus)
+    assert any("expected one of" in p for p in problems), problems
+
+
+def test_a_declared_length_that_disagrees_with_the_value_is_caught(
+    tool: ModuleType, tmp_path: Path
+) -> None:
+    corpus = _corpus_copy(tmp_path)
+    path = corpus / "rfc8554_hss_lms.json"
+    data = json.loads(path.read_text())
+    data["records"][0]["bytes"] = 1
+    path.write_text(json.dumps(data))
+    problems = tool.verify_offline(corpus)
+    assert any("declares 1 bytes" in p for p in problems), problems
+
+
+def test_a_jose_record_stripped_of_its_members_is_caught(tool: ModuleType, tmp_path: Path) -> None:
+    corpus = _corpus_copy(tmp_path)
+    path = corpus / "jose_cose.json"
+    data = json.loads(path.read_text())
+    for record in data["records"]:
+        record.pop("jwk", None)
+        record.pop("cose_labels", None)
+    path.write_text(json.dumps(data))
+    problems = tool.verify_offline(corpus)
+    assert len(problems) >= 2, problems

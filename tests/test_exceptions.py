@@ -227,13 +227,18 @@ class TestModuleExports:
         # QuantumSignatureUnavailableError sits under PQCUnavailableError and
         # must therefore still be catchable as every ancestor.
         assert issubclass(mod.QuantumSignatureUnavailableError, mod.NativeBackendUnavailableError)
+        # Behavioural, not just structural: raise and catch through each
+        # ancestor. Expressed as "did the except arm run" rather than as a
+        # try/except/else, because the `else` arm of a try whose body always
+        # raises is unreachable by construction — dead code that reads as a
+        # check, which is exactly what a reader (and CodeQL) flags.
         for handler in (mod.PQCUnavailableError, RuntimeError, mod.AmaCryptographyError):
+            caught = False
             try:
                 raise mod.PQCUnavailableError("backend missing")
             except handler:
-                pass
-            else:  # pragma: no cover - the except above always fires
-                raise AssertionError(f"{handler.__name__} no longer catches")
+                caught = True
+            assert caught, f"{handler.__name__} no longer catches PQCUnavailableError"
 
     def test_all_exports_are_classes(self) -> None:
         from ama_cryptography import exceptions as mod

@@ -215,3 +215,66 @@ def test_a_missing_reference_encoder_is_a_failure(tool: ModuleType, tmp_path: Pa
     """Fail closed: the reference is what replaced the third-party corpus, so
     its absence must not read as everything being fine."""
     assert tool.check_reference_encoder(tmp_path / "gone.py") != []
+
+
+# ---------------------------------------------------------------------------
+# Evasion shapes the scan used to miss
+#
+# Every one of these passed cleanly before, including — the one that matters —
+# the exact spelling the *removed* code used: `cmd_query = ["openssl", "ts",
+# ...]` assigned to a local and then handed to `subprocess.run`. A gate that
+# would not have caught the code it exists to prevent returning is not a gate,
+# so each shape gets a named negative control here.
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    ("label", "source"),
+    [
+        (
+            "list bound to a name — the shape the removed generator used",
+            'import subprocess\nCMD = ["openssl", "genpkey", "-algorithm", "ed25519"]\n'
+            "subprocess.run(CMD, check=True)\n",
+        ),
+        (
+            "os.popen — the sibling of os.system, which was already covered",
+            'import os\nos.popen("openssl genpkey -algorithm ed25519")\n',
+        ),
+        (
+            "subprocess.getoutput",
+            'import subprocess\nsubprocess.getoutput("openssl version")\n',
+        ),
+        (
+            "os.execvp",
+            'import os\nos.execvp("openssl", ["openssl", "version"])\n',
+        ),
+        (
+            "a command string bound to a name and shelled out",
+            'import os\nCMD = "openssl ts -query -data f -sha256"\nos.system(CMD)\n',
+        ),
+    ],
+)
+def test_indirect_invocations_are_caught(
+    tool: ModuleType, tmp_path: Path, label: str, source: str
+) -> None:
+    (tmp_path / "ama_cryptography").mkdir()
+    (tmp_path / "ama_cryptography" / "sneaky.py").write_text(source)
+    problems = tool.scan_for_binary_invocations(tmp_path)
+    assert any("openssl" in p for p in problems), f"{label}: {problems}"
+
+
+def test_a_binary_name_that_only_appears_in_a_docstring_is_still_not_a_finding(
+    tool: ModuleType, tmp_path: Path
+) -> None:
+    """The relaxation must not swing the other way.
+
+    Resolving name bindings widens what the scan sees, so it has to keep *not*
+    firing on the many comments in this repository of the form "replaces
+    OpenSSL X" — including one bound to a module-level string.
+    """
+    (tmp_path / "ama_cryptography").mkdir()
+    (tmp_path / "ama_cryptography" / "prose.py").write_text(
+        "import subprocess\n"
+        'NOTE = "this replaces the openssl ts -query call"\n'
+        '"""Module docstring mentioning openssl and gpg."""\n'
+        'subprocess.run(["python3", "-c", "pass"], check=True)\n'
+    )
+    assert tool.scan_for_binary_invocations(tmp_path) == []
