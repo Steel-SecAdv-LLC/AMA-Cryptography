@@ -293,3 +293,37 @@ Hamming-weight split of `|t| = 1.03`, against dudect's leakage threshold of 4.5.
 2,600 ops/s under the rule above. Both sit well below the post-change
 measurement, so the gate now protects the optimisation: reverting the comb would
 drop signing to roughly 2,545 ops/s raw C and trip the floor.
+
+### 3. AVX-512 4-way Keccak: measured, and off by default on purpose
+
+`AMA_ENABLE_AVX512` gates the in-house 4-way Keccak kernel and defaults to
+`OFF` for the five reasons in `docs/AVX512_KECCAK_ADR.md`. It had no measured
+throughput figure attached, so the cost of leaving it off was not visible to
+anyone deciding whether to turn it on.
+
+Measured on this host (AVX-512F present), min-of-3 back-to-back runs of
+`benchmark_c_raw`, same source, same compiler, only the flag differing:
+
+| operation | AVX-512 OFF | AVX-512 ON | |
+|---|---|---|---|
+| ML-KEM-1024 Encaps | 104.33 us | **85.64 us** | 1.22x |
+| ML-KEM-1024 KeyGen | 107.11 us | **87.82 us** | 1.22x |
+| ML-KEM-1024 Decaps | 118.14 us | **101.21 us** | 1.17x |
+| ML-DSA-65 Sign | 208.15 us | **180.60 us** | 1.15x |
+| ML-DSA-65 Verify | 139.81 us | **118.88 us** | 1.18x |
+| ML-DSA-65 KeyGen | 167.48 us | **142.69 us** | 1.17x |
+
+Both lattice schemes expand their matrix through the 4-way SHAKE call sites, so
+the kernel lands on every ML-KEM and ML-DSA operation rather than on hashing
+alone. The ADR's reasoning for the default is unchanged — this records what the
+default costs on hardware that could use it, so the trade is made with a number
+rather than an intuition.
+
+**Not the whole gap.** Against the widely published amd64 reference figures for
+these schemes, ML-KEM-1024 remains roughly 2x off even with the kernel on,
+while every elliptic-curve operation in the tree is at or better than its
+reference figure. Kyber's core — NTT, inverse NTT, pointwise multiply — is
+already dispatched (`dt->kyber_ntt`), so the remaining distance is not a
+missing SIMD path and wants a profile before anyone guesses at it. Those
+reference figures are literature values, not measurements taken here; running
+SUPERCOP on this host is the way to turn that comparison into evidence.
