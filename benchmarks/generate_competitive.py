@@ -254,19 +254,32 @@ def render(c: dict[str, Any], q: dict[str, Any]) -> str:
     # without it and attribute the difference to the implementations.
     host = c.get("host") or {}
     if host:
-        feats = [k for k in ("aes_ni", "pclmulqdq", "vaes", "vpclmulqdq",
-                             "avx2", "avx512f", "sha_ni", "bmi2", "adx")
-                 if host.get(k)]
-        absent = [k for k in ("vaes", "vpclmulqdq", "sha_ni")
-                  if not host.get(k)]
+        feats = [
+            k
+            for k in (
+                "aes_ni",
+                "pclmulqdq",
+                "vaes",
+                "vpclmulqdq",
+                "avx2",
+                "avx512f",
+                "sha_ni",
+                "bmi2",
+                "adx",
+            )
+            if host.get(k)
+        ]
+        absent = [k for k in ("vaes", "vpclmulqdq", "sha_ni") if not host.get(k)]
         host_line = html.escape(host.get("cpu", "unknown"))
         host_line += " · " + ", ".join(feats)
         if absent:
             host_line += " · <b>absent:</b> " + ", ".join(absent)
     else:
-        host_line = ("host not recorded — this artefact predates host capture; "
-                     "peer AES-GCM figures are not comparable across hosts "
-                     "with different VAES support")
+        host_line = (
+            "host not recorded — this artefact predates host capture; "
+            "peer AES-GCM figures are not comparable across hosts "
+            "with different VAES support"
+        )
 
     # ── standing rows ──
     rows = []

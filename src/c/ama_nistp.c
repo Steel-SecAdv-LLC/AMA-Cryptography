@@ -389,12 +389,29 @@ static inline int nistp_use_mulx4(void) {
 }
 #endif /* AMA_HAVE_NISTP_MONT_MULX_IMPL */
 
+/* Portable "inline this even at -O0" marker.
+ *
+ * The point of `nistp_mont_mul_body` is that the 4-limb wrapper below
+ * instantiates it with a *literal* limb count, so both loops unroll.  That
+ * only happens if the body is actually inlined, which is a request no
+ * standard C spelling can make — hence the per-compiler form.  MSVC spells
+ * it `__forceinline` and rejects `__attribute__` outright; this file is in
+ * the unconditional source list, so an unguarded GNU attribute here breaks
+ * every MSVC build.  Same split as include/ama_uint128.h. */
+#if defined(__GNUC__) || defined(__clang__)
+#define AMA_NISTP_ALWAYS_INLINE static inline __attribute__((always_inline))
+#elif defined(_MSC_VER)
+#define AMA_NISTP_ALWAYS_INLINE static __forceinline
+#else
+#define AMA_NISTP_ALWAYS_INLINE static inline
+#endif
+
 /* Body of the CIOS multiply, always_inline so the two wrappers below can
  * instantiate it with the limb count as a literal.  The 4-limb wrapper is
  * what P-256 reaches on a host without ADX (and what every non-x86 host
  * reaches), and constant-folding `nl` there lets the compiler unroll both
  * loops: measured 102 cycles against 178 for the runtime-`nl` form. */
-static inline __attribute__((always_inline))
+AMA_NISTP_ALWAYS_INLINE
 void nistp_mont_mul_body(uint64_t *r, const uint64_t *a, const uint64_t *b,
                          const uint64_t *m, uint64_t m0inv, unsigned nl) {
     uint64_t t[AMA_NISTP_MAX_LIMBS + 2];
