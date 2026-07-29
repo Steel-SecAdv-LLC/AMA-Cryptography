@@ -19,6 +19,41 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ## [Unreleased]
 
+### Added — competitive positioning and standardized-metric benchmark pages
+
+The benchmark surface reported ops/sec and nothing else. Ops/sec does not
+survive a change of clock speed and says nothing about where the library stands
+against the implementations a reader is actually choosing between, so
+`benchmarks/competitive.html` adds both.
+
+- **Head-to-head against libsodium (PyNaCl 1.6.2) and OpenSSL
+  (`cryptography` 49.0.0)** on the same host, in the same process, at matching
+  parameter sets, via the existing `benchmarks/comparative_benchmark.py`.
+  Wins *and* losses are plotted: Ed25519 verify runs **3.04x** OpenSSL and
+  **1.43x** libsodium, ML-DSA-65 sign **2.22x** OpenSSL, ML-DSA-65 verify
+  **1.51x**; ML-KEM-1024 encapsulation runs **2.81x slower** than OpenSSL and
+  bulk AES-GCM **4.91x slower** at 64 KiB.
+- **The AES-GCM gap is labelled as the posture it is.** This CPU exposes
+  AES-NI and OpenSSL uses it; AMA defaults to constant-time bitsliced AES
+  (INVARIANT-20), which never indexes a table with key-dependent data. The page
+  states the cost of that property rather than omitting the comparison.
+- **INVARIANT-36 checked before building, not after.** That invariant forbids
+  another implementation's *output as ground truth for correctness*; its own
+  scope paragraph excludes published vector suites, and a speed reference is
+  likewise not an answer key. The peer libraries appear only in the
+  benchmark extra, exactly as `comparative_benchmark.py` already documented.
+- **Cycles/byte and MB/s**, the metrics eBACS and Crypto++ report, computed
+  from the raw C harness so no FFI overhead is counted: AES-256-GCM **3.68
+  cyc/B** (762 MB/s), ChaCha20-Poly1305 **7.42 cyc/B**, SHA3-256 **14.81
+  cyc/B**, HMAC-SHA3-256 **19.92 cyc/B**, at a measured 2.80264 GHz. Plus a
+  message-size scalability sweep showing where per-call setup amortises.
+
+One measurement was discarded rather than published: ML-DSA-65 signing against
+a single fixed message measured **4.57x** OpenSSL, but ML-DSA signing is
+rejection-sampled and its cost depends on the message. Re-measured over 256
+distinct random messages it is **2.22x**. The higher number was an artefact of
+the harness, and the page says so where it reports the lower one.
+
 ### Fixed — two documents named an algorithm `ama_ed25519.c` has never contained
 
 `CONSTANT_TIME_VERIFICATION.md` and `THREAT_MODEL.md` (control T2.2) both

@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AMA Cryptography 3.4.0 — Competitive Position &amp; Performance</title>
+<style>
+  .viz-root {
+    color-scheme: light;
+    --surface-1:#fcfcfb; --plane:#f9f9f7; --text-primary:#0b0b0b; --text-secondary:#52514e;
+    --muted:#898781; --grid:#e1e0d9; --axis:#c3c2b7; --border:rgba(11,11,11,.10);
+    --good-ink:#006300; --critical:#d03b3b; --warning:#fab219;
+    --s1:#2a78d6; --s2:#eb6834; --s3:#1baf7a; --s4:#eda100; --s5:#e87ba4;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) .viz-root {
+      color-scheme: dark;
+      --surface-1:#1a1a19; --plane:#0d0d0d; --text-primary:#fff; --text-secondary:#c3c2b7;
+      --muted:#898781; --grid:#2c2c2a; --axis:#383835; --border:rgba(255,255,255,.10);
+      --good-ink:#0ca30c; --critical:#d03b3b; --warning:#fab219;
+      --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#c98500; --s5:#d55181;
+    }
+  }
+  :root[data-theme="dark"] .viz-root {
+    color-scheme: dark;
+    --surface-1:#1a1a19; --plane:#0d0d0d; --text-primary:#fff; --text-secondary:#c3c2b7;
+    --muted:#898781; --grid:#2c2c2a; --axis:#383835; --border:rgba(255,255,255,.10);
+    --good-ink:#0ca30c; --critical:#d03b3b; --warning:#fab219;
+    --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#c98500; --s5:#d55181;
+  }
+  *{box-sizing:border-box} body{margin:0}
+  .viz-root{background:var(--plane);color:var(--text-primary);
+    font:15px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif;padding:32px 20px 64px}
+  .wrap{max-width:1180px;margin:0 auto}
+  .eyebrow{font-size:12px;letter-spacing:.09em;text-transform:uppercase;color:var(--muted);font-weight:600}
+  h1{font-size:30px;line-height:1.2;margin:6px 0 8px;font-weight:650;letter-spacing:-.01em}
+  .sub{color:var(--text-secondary);max-width:76ch;margin:0}
+  .card{background:var(--surface-1);border:1px solid var(--border);border-radius:12px;padding:20px 22px;margin-top:22px}
+  .card>h2{font-size:18px;margin:0 0 4px;font-weight:620;letter-spacing:-.005em}
+  .card>.note{color:var(--text-secondary);font-size:13.5px;margin:0 0 18px;max-width:84ch}
+  .legend{display:flex;flex-wrap:wrap;gap:16px;margin:0 0 18px;padding:0;list-style:none}
+  .legend li{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--text-secondary)}
+  .sw{width:11px;height:11px;border-radius:3px;flex:none}
+
+  /* grouped bars */
+  .grp{display:grid;grid-template-columns:186px 1fr;gap:14px;align-items:center;margin-bottom:14px}
+  .grp .name{font-size:13px;color:var(--text-secondary);text-align:right}
+  .bars{display:flex;flex-direction:column;gap:4px}
+  .b{height:18px;border-radius:0 4px 4px 0;display:flex;align-items:center;justify-content:flex-end;
+     padding-right:8px;min-width:3px;position:relative}
+  .b .v{font-size:11.5px;font-weight:600;color:#fff;font-variant-numeric:tabular-nums;white-space:nowrap}
+  .b .v.out{color:var(--text-primary);position:absolute;left:calc(100% + 8px)}
+  .p1{background:var(--s1)}.p2{background:var(--s2)}.p3{background:var(--s3)}
+
+  /* ratio (diverging around 1.0) */
+  .rr{display:grid;grid-template-columns:200px 1fr 84px;gap:12px;align-items:center;margin-bottom:7px}
+  .rr .name{font-size:13px;color:var(--text-secondary);text-align:right}
+  .axisline{position:relative;height:22px;background:linear-gradient(var(--grid),var(--grid)) no-repeat center/1px 100%}
+  .rbar{position:absolute;top:2px;height:18px;border-radius:3px}
+  .rlab{font-size:12.5px;font-weight:650;font-variant-numeric:tabular-nums}
+  /* Distinct names for fill vs ink: reusing one class for both put the bar's
+     background behind the ratio label. */
+  .rbar.win{background:var(--s3)} .rbar.lose{background:var(--s2)}
+  .rlab.ink-win{color:var(--good-ink)} .rlab.ink-lose{color:var(--s2)}
+
+  .tablewrap{overflow-x:auto;margin-top:8px}
+  table{border-collapse:collapse;width:100%;font-size:13px;min-width:640px;color:var(--text-primary)}
+  th,td{text-align:right;padding:7px 10px;border-bottom:1px solid var(--grid);font-variant-numeric:tabular-nums;color:inherit}
+  th:first-child,td:first-child{text-align:left;font-variant-numeric:normal}
+  thead th{color:var(--muted)!important;font-weight:600;font-size:11.5px;text-transform:uppercase;letter-spacing:.05em;border-bottom:1px solid var(--axis)}
+  .axisnote{font-size:11.5px;color:var(--muted);margin-top:14px}
+  .callout{border-left:3px solid var(--warning);background:color-mix(in srgb,var(--warning) 8%,transparent);
+    padding:12px 16px;border-radius:0 8px 8px 0;margin:16px 0 0;font-size:13.5px;color:var(--text-secondary)}
+  .callout strong{color:var(--text-primary)}
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.93em}
+  footer{margin-top:30px;font-size:12px;color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="viz-root"><div class="wrap">
+
+<header>
+  <div class="eyebrow">AMA Cryptography · v3.4.0 · Intel Xeon @ 2.80 GHz (AES-NI, AVX2, AVX-512F, PCLMULQDQ, BMI2, ADX)</div>
+  <h1>Competitive position &amp; standardized performance</h1>
+  <p class="sub">
+    Head-to-head against <strong>libsodium</strong> (via PyNaCl 1.6.2) and <strong>OpenSSL</strong>
+    (via <code>cryptography</code> 49.0.0), same host, same process, same parameter sets. Peer libraries are
+    benchmark-only comparison targets and are not linked into the production library; INVARIANT-36 forbids a
+    peer implementation as a <em>correctness</em> answer key, which this is not — it is a speed reference only.
+    Wins and losses are both shown.
+  </p>
+</header>
+
+<!-- ============ 1. COMPETITIVE ============ -->
+<section class="card">
+  <h2>1 · Where AMA stands against libsodium and OpenSSL</h2>
+  <p class="note">
+    Ratio of AMA throughput to the peer's, log-scaled around parity. Right of the centre line
+    AMA is faster; left, the peer is. Every bar is labelled, so nothing is read from colour or
+    length alone.
+  </p>
+  <div id="ratios"></div>
+  <p class="axisnote">
+    Ed25519 and AES-GCM measured through each library's Python binding
+    (<code>benchmarks/comparative_benchmark.py</code>); ML-DSA/ML-KEM measured directly against
+    <code>cryptography.hazmat.primitives.asymmetric.mldsa</code>/<code>mlkem</code> at matching
+    parameter sets. ML-DSA signing is rejection-sampled, so its cost depends on the message: these
+    figures use 256 distinct random messages. A single fixed message measured 4.57× — that number
+    would have been an artefact, and is not used.
+  </p>
+
+  <div class="callout">
+    <strong>The AES-GCM gap is a deliberate security choice, not a deficiency.</strong>
+    This CPU exposes AES-NI, and OpenSSL uses it. AMA ships a <em>constant-time bitsliced</em> AES as the
+    default (INVARIANT-20: “Constant-Time AES Must Remain the Default”), which never indexes a lookup
+    table with key-dependent data and so is immune to the cache-timing attack class that broke
+    table-driven AES. Table-based AES exists behind <code>AMA_AES_TABLE_INSECURE</code> and is
+    opt-in, off, and named to be hard to enable by accident. The throughput cost of that choice is
+    the bar you see; it is the price of the property, and it is stated rather than hidden.
+  </div>
+</section>
+
+<section class="card">
+  <h2>Absolute throughput behind those ratios</h2>
+  <ul class="legend">
+    <li><span class="sw" style="background:var(--s1)"></span>AMA Cryptography</li>
+    <li><span class="sw" style="background:var(--s2)"></span>libsodium (PyNaCl)</li>
+    <li><span class="sw" style="background:var(--s3)"></span>OpenSSL (cryptography)</li>
+  </ul>
+  <div id="abs"></div>
+  <p class="axisnote">Operations per second, log axis. Absent bars mean the peer does not expose that primitive.</p>
+</section>
+
+<!-- ============ 2. PERFORMANCE ============ -->
+<section class="card">
+  <h2>2 · Standardized performance — cycles per byte</h2>
+  <p class="note">
+    <strong>Cycles/byte is the metric eBACS and Crypto++ report</strong>, because it is the one that
+    survives a change of clock speed: it isolates implementation efficiency from how fast the machine
+    happens to run. Lower is better. Measured on the raw C harness
+    (<code>build/bin/benchmark_c_raw</code>), so no FFI overhead is counted, at a measured 2.80264 GHz.
+  </p>
+  <div id="cpb"></div>
+  <p class="axisnote">
+    cycles/byte = clock ÷ (bytes ÷ second). Bulk figures are taken at 16–64 KiB where the per-call
+    setup cost has amortised; the short-message rows are shown separately below because at 32 bytes a
+    sponge's fixed permutation dominates and the ratio says more about call overhead than about the
+    primitive.
+  </p>
+</section>
+
+<section class="card">
+  <h2>Throughput and scalability by message size</h2>
+  <p class="note">
+    The same primitives as bulk throughput in MB/s, swept across message size. The curve shape is the
+    point: AEAD throughput climbs with message size until the per-call setup is amortised, then
+    flattens — the plateau is the primitive's real speed, and the left-hand rise is the cost of
+    calling it.
+  </p>
+  <div id="scal"></div>
+</section>
+
+<section class="card">
+  <h2>All measurements</h2>
+  <div class="tablewrap"><table id="tbl">
+    <thead><tr><th>Operation</th><th>Class</th><th>AMA</th><th>Peer</th><th>Peer name</th><th>Ratio</th></tr></thead>
+    <tbody></tbody>
+  </table></div>
+  <div class="tablewrap"><table id="tbl2">
+    <thead><tr><th>Primitive (raw C)</th><th>Size</th><th>MB/s</th><th>cycles/byte</th><th>µs/op</th></tr></thead>
+    <tbody></tbody>
+  </table></div>
+</section>
+
+<footer>
+  Measured 2026-07-29 · Intel Xeon @ 2.80 GHz, 4 cores, Linux x86-64, gcc 13.3, Python 3.11.15 ·
+  Reproduce: <code>python benchmarks/comparative_benchmark.py</code> and <code>./build/bin/benchmark_c_raw</code>.
+  Absolute numbers are host-dependent; ratios on one host are the portable part.
+</footer>
+
+</div></div>
+<script>
+const RATIOS = [
+  {op:"Ed25519 Verify",      peer:"OpenSSL",   ama:19755, p:6498,  cls:"Signature"},
+  {op:"Ed25519 Sign",        peer:"OpenSSL",   ama:52020, p:22745, cls:"Signature"},
+  {op:"ML-DSA-65 Sign",      peer:"OpenSSL",   ama:2100,  p:947,   cls:"PQC signature"},
+  {op:"ML-DSA-65 Verify",    peer:"OpenSSL",   ama:6131,  p:4053,  cls:"PQC signature"},
+  {op:"Ed25519 Sign",        peer:"libsodium", ama:52020, p:32977, cls:"Signature"},
+  {op:"Ed25519 KeyGen",      peer:"libsodium", ama:52388, p:36637, cls:"Signature"},
+  {op:"Ed25519 Verify",      peer:"libsodium", ama:19755, p:13778, cls:"Signature"},
+  {op:"ML-DSA-65 KeyGen",    peer:"OpenSSL",   ama:2907,  p:3847,  cls:"PQC signature"},
+  {op:"ML-KEM-1024 KeyGen",  peer:"OpenSSL",   ama:3909,  p:5302,  cls:"PQC KEM"},
+  {op:"ML-KEM-1024 Decap",   peer:"OpenSSL",   ama:7634,  p:16325, cls:"PQC KEM"},
+  {op:"ML-KEM-1024 Encap",   peer:"OpenSSL",   ama:8402,  p:23607, cls:"PQC KEM"},
+  {op:"AES-256-GCM 64 KiB",  peer:"OpenSSL",   ama:9876,  p:48473, cls:"AEAD"},
+  {op:"AES-256-GCM 1 KiB",   peer:"OpenSSL",   ama:103985,p:741425,cls:"AEAD"},
+];
+const ABS = [
+  {op:"Ed25519 KeyGen",     ama:52388, sod:36637, ssl:null},
+  {op:"Ed25519 Sign",       ama:52020, sod:32977, ssl:22745},
+  {op:"Ed25519 Verify",     ama:19755, sod:13778, ssl:6498},
+  {op:"ML-DSA-65 Sign",     ama:2100,  sod:null,  ssl:947},
+  {op:"ML-DSA-65 Verify",   ama:6131,  sod:null,  ssl:4053},
+  {op:"ML-KEM-1024 Encap",  ama:8402,  sod:null,  ssl:23607},
+  {op:"ML-KEM-1024 Decap",  ama:7634,  sod:null,  ssl:16325},
+];
+const CPB = [
+  {op:"AES-256-GCM",        size:"64 KiB", cpb:3.68, mbps:762.3},
+  {op:"AES-256-GCM",        size:"16 KiB", cpb:3.68, mbps:762.3},
+  {op:"ChaCha20-Poly1305",  size:"4 KiB",  cpb:7.42, mbps:378.0},
+  {op:"ChaCha20-Poly1305",  size:"64 KiB", cpb:8.26, mbps:339.5},
+  {op:"SHA3-256",           size:"1 KiB",  cpb:14.81,mbps:189.2},
+  {op:"HMAC-SHA3-256",      size:"1 KiB",  cpb:19.92,mbps:140.7},
+  {op:"SHA3-512",           size:"1 KiB",  cpb:24.62,mbps:113.8},
+];
+const SCAL = {
+  "AES-256-GCM":       [[1024,660.2],[4096,717.6],[16384,762.3],[65536,762.3]],
+  "ChaCha20-Poly1305": [[256,182.2],[1024,333.4],[4096,378.0],[65536,339.5]],
+};
+const RAWC = [
+  ["AES-256-GCM Enc","1 KiB",660.2,4.25,1.262],["AES-256-GCM Enc","4 KiB",717.6,3.91,3.900],
+  ["AES-256-GCM Enc","16 KiB",762.3,3.68,14.946],["AES-256-GCM Enc","64 KiB",762.3,3.68,58.241],
+  ["ChaCha20-Poly1305 Enc","256 B",182.2,15.38,1.213],["ChaCha20-Poly1305 Enc","1 KiB",333.4,8.41,2.272],
+  ["ChaCha20-Poly1305 Enc","4 KiB",378.0,7.42,8.107],["ChaCha20-Poly1305 Enc","64 KiB",339.5,8.26,123.952],
+  ["SHA3-256","1 KiB",189.2,14.81,3.839],["SHA3-512","1 KiB",113.8,24.62,6.963],
+  ["HMAC-SHA3-256","1 KiB",140.7,19.92,5.699],["SHA3-256","32 B",41.6,67.35,0.587],
+];
+const el=(t,c,x)=>{const e=document.createElement(t);if(c)e.className=c;if(x!==undefined)e.textContent=x;return e};
+const fmt=n=>n>=1000?Math.round(n).toLocaleString():n.toFixed(n<10?2:0);
+
+/* ---- ratio chart: log-diverging around parity ---- */
+const rw=document.getElementById("ratios");
+const rs=RATIOS.map(r=>({...r,ratio:r.ama/r.p})).sort((a,b)=>b.ratio-a.ratio);
+const maxL=Math.max(...rs.map(r=>Math.abs(Math.log10(r.ratio))));
+rs.forEach(r=>{
+  const row=el("div","rr");
+  row.append(el("div","name",`${r.op} vs ${r.peer}`));
+  const ax=el("div","axisline");
+  const L=Math.log10(r.ratio), frac=Math.abs(L)/maxL*48; // 48% each side
+  const bar=el("div","rbar "+(r.ratio>=1?"win":"lose"));
+  if(r.ratio>=1){bar.style.left="50%";bar.style.width=frac+"%";}
+  else{bar.style.right="50%";bar.style.width=frac+"%";}
+  ax.append(bar); row.append(ax);
+  const lab=el("div","rlab "+(r.ratio>=1?"ink-win":"ink-lose"),
+    r.ratio>=1?`${r.ratio.toFixed(2)}× faster`:`${(1/r.ratio).toFixed(2)}× slower`);
+  row.append(lab); rw.append(row);
+});
+
+/* ---- absolute grouped bars, log ---- */
+const aw=document.getElementById("abs");
+const allv=ABS.flatMap(r=>[r.ama,r.sod,r.ssl]).filter(Boolean);
+const lo=Math.log10(Math.min(...allv)*.7), hi=Math.log10(Math.max(...allv)*1.15);
+const pc=v=>Math.max(2,((Math.log10(v)-lo)/(hi-lo))*100);
+ABS.forEach(r=>{
+  const g=el("div","grp"); g.append(el("div","name",r.op));
+  const bars=el("div","bars");
+  [["p1",r.ama,"AMA"],["p2",r.sod,"libsodium"],["p3",r.ssl,"OpenSSL"]].forEach(([c,v])=>{
+    if(v==null)return;
+    const b=el("div","b "+c); const w=pc(v); b.style.width=w+"%";
+    b.append(el("span","v"+(w<20?" out":""),fmt(v)));
+    bars.append(b);
+  });
+  g.append(bars); aw.append(g);
+});
+
+/* ---- cycles/byte (lower better) ---- */
+const cw=document.getElementById("cpb");
+const cmax=Math.max(...CPB.map(c=>c.cpb));
+CPB.forEach(c=>{
+  const g=el("div","grp");
+  g.append(el("div","name",`${c.op} · ${c.size}`));
+  const bars=el("div","bars");
+  const b=el("div","b p1"); const w=c.cpb/cmax*100; b.style.width=w+"%";
+  b.append(el("span","v"+(w<26?" out":""),`${c.cpb.toFixed(2)} cyc/B · ${c.mbps.toFixed(0)} MB/s`));
+  bars.append(b); g.append(bars); cw.append(g);
+});
+
+/* ---- scalability ---- */
+const sw=document.getElementById("scal");
+Object.entries(SCAL).forEach(([name,pts],i)=>{
+  const h=el("div"); h.style.cssText="font-size:13px;font-weight:600;margin:14px 0 8px";
+  h.textContent=name; sw.append(h);
+  const mx=Math.max(...pts.map(p=>p[1]));
+  pts.forEach(([sz,mb])=>{
+    const g=el("div","grp");
+    g.append(el("div","name",sz>=1024?`${sz/1024} KiB`:`${sz} B`));
+    const bars=el("div","bars");
+    const b=el("div","b "+(i?"p3":"p1")); const w=mb/mx*100; b.style.width=w+"%";
+    b.append(el("span","v"+(w<24?" out":""),`${mb.toFixed(1)} MB/s`));
+    bars.append(b); g.append(bars); sw.append(g);
+  });
+});
+
+/* ---- tables ---- */
+const tb=document.querySelector("#tbl tbody");
+rs.forEach(r=>{
+  const tr=el("tr");
+  tr.append(el("td",null,r.op),el("td",null,r.cls),el("td",null,fmt(r.ama)),
+            el("td",null,fmt(r.p)),el("td",null,r.peer));
+  const t=el("td",null,r.ratio>=1?`${r.ratio.toFixed(2)}× faster`:`${(1/r.ratio).toFixed(2)}× slower`);
+  t.style.color=r.ratio>=1?"var(--good-ink)":"var(--s2)"; t.style.fontWeight="600";
+  tr.append(t); tb.append(tr);
+});
+const tb2=document.querySelector("#tbl2 tbody");
+RAWC.forEach(r=>{
+  const tr=el("tr");
+  r.forEach((v,i)=>tr.append(el("td",null,typeof v==="number"?(i===4?v.toFixed(3):v.toFixed(2)):v)));
+  tb2.append(tr);
+});
+</script>
+</body>
+</html>
