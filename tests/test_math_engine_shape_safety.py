@@ -22,18 +22,25 @@ If the extension is not built (source checkout without the accelerator), the
 whole module is skipped, exactly like ``test_smoke_import``.
 """
 
-import importlib
-
 import pytest
 
 np = pytest.importorskip("numpy")
 
 
 def _engine():
-    try:
-        return importlib.import_module("ama_cryptography.math_engine")
-    except ImportError as e:  # pragma: no cover - exercised only without the ext
-        pytest.skip(f"math_engine not built (Cython extension): {e}")
+    """Return the compiled math_engine, skipping the module if it is absent.
+
+    `pytest.importorskip` rather than a try/except around `importlib`: the
+    latter mixed an explicit `return` in the `try` with an implicit fall-through
+    `return None` in the `except`, because static analysis cannot know
+    `pytest.skip` never returns (CodeQL py/mixed-returns). One explicit return
+    makes the contract legible to a reader and to the analyser without needing
+    a suppression, and it matches how `numpy` is already imported above.
+    """
+    return pytest.importorskip(
+        "ama_cryptography.math_engine",
+        reason="math_engine not built (Cython extension)",
+    )
 
 
 def test_matrix_vector_multiply_rejects_length_mismatch() -> None:
