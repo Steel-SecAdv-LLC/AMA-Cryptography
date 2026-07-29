@@ -41,12 +41,104 @@ nothing regenerates an orphan on the next run, and the module docstring records
 what was dropped and why. Restoring any of them means restoring the function
 **and** adding the document reference that justifies it.
 
-Six charts remain, each referenced: `benchmark_report.png`,
-`performance_dashboard.png`, `defense_layers.png`, `test_coverage.png`,
-`ethical_binding.png`, `quantum_comparison.png`. All six SVGs under
-`benchmarks/charts/` are referenced by the README chart table and were left
-alone. Verified after the change: every `assets/…` and `benchmarks/charts/…`
-path appearing in any Markdown file resolves to a file that exists.
+Five charts remain, each referenced: `performance_dashboard.png`,
+`defense_layers.png`, `test_coverage.png`, `ethical_binding.png`,
+`quantum_comparison.png`. (`benchmark_report.png` also survived this pass; it
+was retired separately — see *Changed — the two benchmark dashboards are now
+one* below.) All six SVGs under `benchmarks/charts/` are referenced by the
+README chart table and were left alone. Verified after the change: every
+`assets/…` and `benchmarks/charts/…` path appearing in any Markdown file
+resolves to a file that exists.
+
+### Changed — the two benchmark dashboards are now one
+
+`assets/performance_dashboard.png` and `assets/benchmark_report.png` were
+adjacent in the README's benchmark section and drew from the same three JSON
+artefacts, so most of what they showed was the same measurement rendered twice:
+throughput, signature latency, key generation, regression margin, and the run
+summary all appeared in both. A reader comparing them had no way to tell which
+was authoritative, and every regeneration wrote ~430 KB of near-duplicate
+raster into git history.
+
+`performance_dashboard` was kept as the base because on each overlapping panel
+it is the better rendering, not because it was the larger file:
+
+- **Throughput** — one log-axis bar chart spanning the full 710 → 1.7 M ops/s
+  range, versus `benchmark_report`'s split into separate Top-8 and Bottom-8
+  panels, which discards the cross-scale comparison that motivates the chart.
+- **Signature latency** — bars with ±σ error bars, versus a 3-point scatter
+  that shows no dispersion at all.
+- **Regression** — measured value against its actual floor, versus a derived
+  "% improvement" that hides both operands.
+
+Three `benchmark_report` panels had no counterpart and were ported in rather
+than dropped: **Performance by Category**, **Ethical Integration Overhead**
+(read from `ethical_integration.ethical_overhead.overhead_pct`), and **NIST
+FIPS Standard Compliance**. The grid went 3×3 → 3×4; the empty twelfth cell
+that the old 3×3 layout carried is now filled, so the merged image has twelve
+populated panels and no blank space.
+
+One panel was replaced outright while merging. "Hybrid Crypto Performance"
+plotted all 31 rows of the comparative dataset against a 6-colour palette —
+unreadable, and unbounded in a fixed-size cell as the dataset grows. It is now
+**Ed25519 vs Peer Libraries**, a bounded three-way comparison that degrades to
+an explanatory placeholder when the gitignored comparative JSON is absent,
+instead of raising.
+
+`create_benchmark_report()` was deleted with the image — 297 lines out of
+`generate_dashboards.py`'s 1,073 — so nothing regenerates the retired file, and the stale
+`DASHBOARD 2: Benchmark Report` section banner now names the function it
+actually precedes.
+
+### Removed — three panels drew hardcoded literals when their measurement was missing
+
+Merging the dashboards surfaced this. `tools/generate_dashboards.py` read four
+inputs; three of them —`benchmarks/regression_results.json`,
+`benchmarks/validation_results.json`, `benchmarks/comparative_benchmark_results.json`
+— are **gitignored transients**, and the module substituted a hardcoded literal
+block whenever one was absent. On a clean checkout that was every run, so the
+shipped image asserted numbers no measurement produced:
+
+- **`Claimed vs Measured Latency` could not fail.** The validation fallback set
+  `documented_value == measured_value` on all eight claims, so the panel drew a
+  flawless diagonal *by construction*. A validation chart incapable of showing a
+  discrepancy validates nothing. Against the real artefact the picture is
+  different and actually informative — every claim is met, with margin: HKDF is
+  measured at **0.0046 ms** against a documented **0.06 ms**, Ed25519 sign
+  **0.019 ms** against **0.26 ms**, ML-DSA-65 keygen **0.25 ms** against
+  **0.85 ms**.
+- **`Regression: Measured vs Baseline` drew a floor the gate does not use.** Its
+  `_baseline_ops` literals predated the slow-runner recalibration recorded
+  earlier in this release, so the panel showed margin against retired numbers.
+  It now reads the same `benchmarks/baseline.json` values the gate enforces —
+  19 benchmarks, 19 passing.
+- **The comparative fallback described a cross-library comparison with no peer
+  in it**: six AMA-only rows, lacking the `implementation` field the real runner
+  emits, which the merged peer panel would have raised `KeyError` on.
+
+All three fallbacks are gone. Each panel now renders the command that produces
+its artefact instead, and the summary tile prints `not run` rather than a
+tally. A missing measurement is a legible gap; a fabricated one is a false
+claim, and this generator was making three of them into a committed PNG.
+
+Two rendering defects went with them, both only visible once real data replaced
+the literals:
+
+- The validation scatter was on a **linear** axis while its claims span three
+  decades (0.005 ms to 0.85 ms), collapsing seven of eight points into the
+  origin. It is now log–log, with the passing region shaded, so each point's
+  ratio to its own claim reads as a constant vertical distance.
+- Panel labels were derived mechanically — `name.replace("_", "\n")` turned
+  `ama_sha3_256_hash` into a four-line tower that collided with its neighbour,
+  and `name.split("_")[0]` labelled both `ed25519_sign` and `ed25519_verify` as
+  "ed25519". Both panels now use explicit display names with a two-line
+  fallback for keys added later, and the scatter's labels alternate across four
+  offset slots by rank along the x axis so neighbouring points cannot stack.
+
+The committed `assets/performance_dashboard.png` was regenerated from all four
+real artefacts. Both code paths were exercised: with the artefacts present
+(twelve populated panels) and with all three absent (three placeholder panels,
+exit 0, no traceback).
 
 ### Added — competitive positioning and standardized-metric benchmark pages
 
@@ -102,8 +194,9 @@ paths are variable-time **by design** — every scalar on the verify path,
 
 ### Fixed — the dashboard image generator could not run, and drew four defects when it did
 
-`assets/performance_dashboard.png` and `assets/benchmark_report.png` are
-embedded in the README. Both were frozen at **v2.1.5** against a 3.4.0 library
+`assets/performance_dashboard.png` and `assets/benchmark_report.png` were both
+embedded in the README when this was found (the second was retired later in the
+same cycle — see above). Both were frozen at **v2.1.5** against a 3.4.0 library
 because `tools/generate_dashboards.py` aborted on a `FileNotFoundError`: it
 hard-requires `benchmark_results.json` at the repo root, which is a gitignored
 transient produced by `benchmarks/benchmark_suite.py`, so a fresh checkout could

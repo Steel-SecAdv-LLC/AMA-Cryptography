@@ -402,11 +402,7 @@ NIST-standardized post-quantum algorithms:
 
 ![Performance Dashboard](assets/performance_dashboard.png)
 
-*Multi-panel performance dashboard showing cryptographic throughput, signature latency, scalability, key generation speed, multi-layer breakdown, regression analysis, validation claims, and hybrid performance — all from real benchmark data.*
-
-![Benchmark Report](assets/benchmark_report.png)
-
-*Comprehensive benchmark report with latency distribution, sign vs verify analysis, category performance, top/bottom operations, ethical overhead, regression improvement, NIST algorithm implementation status, and summary statistics.*
+*Twelve-panel performance dashboard: operation throughput (log axis), performance by category, signature latency with ±σ error bars, package scalability, key-generation speed, the 4-layer package time breakdown, measured-vs-regression-floor margins, claimed-vs-measured latency, Ed25519 against peer libraries, ethical-integration overhead, NIST FIPS implementation status, and a run summary. Every panel is regenerated from `benchmarks/benchmark-results.json`, `regression-report.json`, and `validation-report.json` by `tools/generate_dashboards.py` — no hand-entered figures.*
 
 ### ML-DSA-65 (Post-Quantum Digital Signatures — FIPS 204)
 
