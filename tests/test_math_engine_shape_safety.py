@@ -22,12 +22,15 @@ If the extension is not built (source checkout without the accelerator), the
 whole module is skipped, exactly like ``test_smoke_import``.
 """
 
+from types import ModuleType
+from typing import cast
+
 import pytest
 
 np = pytest.importorskip("numpy")
 
 
-def _engine():
+def _engine() -> ModuleType:
     """Return the compiled math_engine, skipping the module if it is absent.
 
     `pytest.importorskip` rather than a try/except around `importlib`: the
@@ -36,10 +39,19 @@ def _engine():
     `pytest.skip` never returns (CodeQL py/mixed-returns). One explicit return
     makes the contract legible to a reader and to the analyser without needing
     a suppression, and it matches how `numpy` is already imported above.
+
+    The `cast` is there because `pytest.importorskip` is stubbed as returning
+    `Any`, and `mypy --strict` enables `warn_return_any`. Returning `Any`
+    outright would silence the warning by discarding the type for every caller;
+    the cast keeps `ModuleType` at the call sites and states the one thing the
+    stub leaves imprecise — importorskip either returns a module or raises.
     """
-    return pytest.importorskip(
-        "ama_cryptography.math_engine",
-        reason="math_engine not built (Cython extension)",
+    return cast(
+        ModuleType,
+        pytest.importorskip(
+            "ama_cryptography.math_engine",
+            reason="math_engine not built (Cython extension)",
+        ),
     )
 
 
