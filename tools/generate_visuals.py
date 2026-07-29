@@ -32,6 +32,16 @@ plt.rcParams["font.family"] = "DejaVu Sans"
 plt.rcParams["font.size"] = 11
 
 REPO_ROOT = Path(__file__).parent.parent
+
+# Version read from the package, not written here. This footer used to carry a
+# hardcoded "v3.0.0" against a 3.4.0 library — the same defect that froze the
+# dashboard PNGs at v2.1.5 — so a regenerated chart asserted a version it had
+# no way to know had moved.
+_PKG_VERSION = re.search(
+    r'^__version__\s*=\s*"([^"]+)"',
+    (REPO_ROOT / "ama_cryptography" / "__init__.py").read_text(encoding="utf-8"),
+    re.M,
+).group(1)
 ASSETS_DIR = REPO_ROOT / "assets"
 ASSETS_DIR.mkdir(exist_ok=True)
 
@@ -729,7 +739,7 @@ def create_test_coverage():
     fig.text(
         0.5,
         -0.06,
-        f"v3.0.0 | Chart: {total_tests} test functions across "
+        f"v{_PKG_VERSION} | Chart: {total_tests} test functions across "
         f"{n_files} test_*.py files "
         "(scanned live at chart-generation time by "
         "_count_test_functions_by_category(); excludes conftest.py). "

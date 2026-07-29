@@ -64,6 +64,20 @@ data and exposed four defects in the generator itself:
   readable from 0.1 % to 94.9 % and each share is stated as a number rather than
   estimated from an angle.
 
+### Fixed — every generated image asserted a version it could not know
+
+The hardcoded-version defect was not confined to `tools/generate_dashboards.py`.
+`tools/generate_visuals.py` stamped `v3.0.0` into the `test_coverage.png`
+footer against a 3.4.0 package, so all seven remaining `assets/*.png` — the
+coverage chart, ethical binding, quantum comparison, monitoring overhead,
+package performance, performance comparison, and defense layers — carried a
+stale version the moment the package moved. Both generators now read
+`__version__` from `ama_cryptography/__init__.py`, and all nine images under
+`assets/` have been regenerated and inspected. The coverage chart's counts are
+scanned live and check out against the tree: 2,206 test functions across 125
+`test_*.py` files (distinct from the 4,138 collected tests, which include
+parametrised expansions).
+
 ### Changed — the signature chart moved to a log axis
 
 `benchmarks/generate_charts.py` plotted the signature family on a linear axis.
