@@ -19,6 +19,35 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ## [Unreleased]
 
+### Removed — three generated charts no document referenced
+
+`assets/performance_comparison.png`, `assets/package_performance.png` and
+`assets/monitoring_overhead.png` were regenerated on every
+`tools/generate_visuals.py` run and referenced by **no** document in the
+repository — not the README, not the wiki, not `docs/`. They were reachable
+only by opening the assets directory directly, while costing build time and
+~450 KB of git history on every regeneration.
+
+`performance_comparison.png` was worse than merely unused: it charted
+Python-via-ctypes as **20 % faster than raw C**, which cannot happen. Its own
+footnote explains why — the raw-C series came from a hardcoded
+`RAW_C_MEDIANS_US` snapshot while the ctypes series loaded live from
+`phase0_baseline_results.json`, so the two halves of a single comparison
+described different hosts at different times. An unreferenced chart that also
+states an impossible result is not an asset.
+
+The generator functions were removed with the files rather than left behind, so
+nothing regenerates an orphan on the next run, and the module docstring records
+what was dropped and why. Restoring any of them means restoring the function
+**and** adding the document reference that justifies it.
+
+Six charts remain, each referenced: `benchmark_report.png`,
+`performance_dashboard.png`, `defense_layers.png`, `test_coverage.png`,
+`ethical_binding.png`, `quantum_comparison.png`. All six SVGs under
+`benchmarks/charts/` are referenced by the README chart table and were left
+alone. Verified after the change: every `assets/…` and `benchmarks/charts/…`
+path appearing in any Markdown file resolves to a file that exists.
+
 ### Added — competitive positioning and standardized-metric benchmark pages
 
 The benchmark surface reported ops/sec and nothing else. Ops/sec does not
