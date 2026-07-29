@@ -13,7 +13,14 @@
  *
  * Security properties:
  * - Constant-time field arithmetic (5-limb 52-bit representation)
- * - Constant-time Montgomery ladder scalar multiplication
+ * - Constant-time scalar multiplication, in two shapes:
+ *     * fixed base (public-key derivation, the ECDSA signing nonce k*G) —
+ *       a 4-block precomputed comb read by masked full-table scan
+ *       (`secp256k1_point_mul_generator`)
+ *     * variable base (caller-supplied point, `ama_secp256k1_point_mul`) —
+ *       a Montgomery ladder (`secp256k1_point_mul_ladder`)
+ *   ECDSA *verification* is variable-time by design and uses Shamir's trick;
+ *   every input on that path is public.
  * - No secret-dependent branching or memory access
  * - Proper cleanup of sensitive intermediates
  *

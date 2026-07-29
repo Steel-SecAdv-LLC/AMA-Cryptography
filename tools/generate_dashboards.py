@@ -14,6 +14,9 @@ Outputs:
 """
 
 import json
+import os
+import platform
+import re
 from pathlib import Path
 
 import matplotlib
@@ -31,6 +34,19 @@ BENCH_FILE = ROOT / "benchmark_results.json"
 REGRESSION_FILE = ROOT / "benchmarks" / "regression_results.json"
 VALIDATION_FILE = ROOT / "benchmarks" / "validation_results.json"
 COMPARATIVE_FILE = ROOT / "benchmarks" / "comparative_benchmark_results.json"
+
+
+# ── Host / package facts, derived rather than hardcoded ────────────────
+# These were literals ("v3.0.0", "v2.0", "Python: 3.11.14",
+# "Linux x86_64, 4 cores"), so every regenerated image asserted the version
+# and host of whoever last edited this file. A dashboard that misstates the
+# version it describes is worse than one with no version on it.
+_PKG_VERSION = re.search(
+    r'__version__\s*=\s*"([^"]+)"',
+    (ROOT / "ama_cryptography" / "__init__.py").read_text(encoding="utf-8"),
+).group(1)
+_PY_VERSION = platform.python_version()
+_PLATFORM = f"{platform.system()} {platform.machine()}, {os.cpu_count()} cores"
 
 
 # ── Load benchmark data ────────────────────────────────────────────────
@@ -198,7 +214,7 @@ plt.rcParams.update(
 def create_performance_dashboard():
     fig, axes = plt.subplots(3, 3, figsize=(18, 13))
     fig.suptitle(
-        "AMA Cryptography v3.0.0 \u2014 Performance Dashboard",
+        f"AMA Cryptography v{_PKG_VERSION} \u2014 Performance Dashboard",
         fontsize=18,
         fontweight="bold",
         color="#ffffff",
@@ -359,19 +375,32 @@ def create_performance_dashboard():
         ops["dilithium_sign"]["mean_ms"],
         keygen["hkdf_derivation"]["mean_ms"],
     ]
-    pie_colors = ["#00d2ff", "#4d96ff", "#7b2ff7", "#ff6b6b", "#6bcb77"]
-    wedges, texts, autotexts = ax.pie(
-        layer_ms,
-        labels=layer_names,
-        colors=pie_colors,
-        autopct="%1.1f%%",
-        startangle=140,
-        pctdistance=0.8,
-        textprops={"fontsize": 7, "color": TEXT_COLOR},
-    )
-    for t in autotexts:
-        t.set_fontsize(6.5)
-        t.set_color("#ffffff")
+    # A horizontal bar on a log axis, not a pie. One layer takes ~95% of the
+    # time, so as a pie the other four collapse into slivers whose leader
+    # labels land on top of each other — which is exactly what this panel used
+    # to render. Bars keep every layer readable and let the share be stated as
+    # a number instead of estimated from an angle.
+    layer_colors = ["#00d2ff", "#4d96ff", "#7b2ff7", "#ff6b6b", "#6bcb77"]
+    total_ms = sum(layer_ms)
+    order = sorted(range(len(layer_ms)), key=lambda i: layer_ms[i])
+    o_names = [layer_names[i] for i in order]
+    o_ms = [layer_ms[i] for i in order]
+    o_colors = [layer_colors[i] for i in order]
+    bars = ax.barh(o_names, o_ms, color=o_colors, edgecolor="none", height=0.62)
+    ax.set_xscale("log")
+    ax.set_xlabel("Mean time per operation (ms, log)", fontsize=8)
+    ax.set_xlim(min(o_ms) * 0.5, max(o_ms) * 6.0)
+    ax.tick_params(axis="y", labelsize=7.5)
+    ax.tick_params(axis="x", labelsize=7)
+    for bar, val in zip(bars, o_ms):
+        ax.text(
+            bar.get_width() * 1.12,
+            bar.get_y() + bar.get_height() / 2,
+            f"{val:.3f} ms  ({val / total_ms * 100:.1f}%)",
+            va="center",
+            fontsize=6.8,
+            color=TEXT_COLOR,
+        )
     ax.set_title("4-Layer Package Time Breakdown", fontsize=10, fontweight="bold", pad=8)
 
     # ── Panel 6: Regression vs Baseline (mid-right) ───────────────────
@@ -456,9 +485,12 @@ def create_performance_dashboard():
     # Draw summary box
     metrics_text = (
         "AMA CRYPTOGRAPHY  BENCHMARK RESULTS\n"
-        "=" * 42 + "\n\n"
-        f"  Platform:        Linux x86_64, 4 cores\n"
-        f"  Python:          3.11.14\n"
+        # The `+` is load-bearing: without it the adjacent string literals
+        # concatenate at compile time and `* 42` repeats the whole title
+        # forty-two times instead of drawing a 42-character rule.
+        + "=" * 42 + "\n\n"
+        f"  Platform:        {_PLATFORM}\n"
+        f"  Python:          {_PY_VERSION}\n"
         f"  PQC Backend:     Native C (ML-DSA-65)\n"
         f"  Duration:        {bench['benchmark_duration_sec']:.2f}s\n\n"
         f"  SHA3-256:        {ops['sha3_256']['ops_per_sec']:>12,.0f} ops/s\n"
@@ -499,7 +531,7 @@ def create_performance_dashboard():
 def create_benchmark_report():
     fig, axes = plt.subplots(3, 3, figsize=(18, 13))
     fig.suptitle(
-        "AMA Cryptography v3.0.0 \u2014 Cryptographic Benchmark Report",
+        f"AMA Cryptography v{_PKG_VERSION} \u2014 Cryptographic Benchmark Report",
         fontsize=18,
         fontweight="bold",
         color="#ffffff",
@@ -751,8 +783,9 @@ def create_benchmark_report():
     # Collect all ops/sec for summary stats
     all_throughputs = list(all_ops_data.values())
     summary_text = (
-        "AMA CRYPTOGRAPHY  v2.0\n"
-        "=" * 42 + "\n\n"
+        f"AMA CRYPTOGRAPHY  v{_PKG_VERSION}\n"
+        # See the note on the same construct above: the `+` is load-bearing.
+        + "=" * 42 + "\n\n"
         f"  Total Benchmarks:     {len(all_ops_data)}\n"
         f"  Regression Passed:    {regression['summary']['passed']}/{regression['summary']['total']}\n"
         f"  Validation Passed:    {validation['summary']['passed']}/{validation['summary']['total']}\n\n"

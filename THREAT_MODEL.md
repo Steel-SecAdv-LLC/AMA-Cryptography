@@ -136,7 +136,7 @@ concrete instance of this pattern. See M3.5.
 | T2.1 | Constant-time AES S-box (full-table scan) | **IMPLEMENTED** | `ama_aes_bitsliced.c`, `-DAMA_AES_CONSTTIME=ON` |
 | T2.1 | Hardware AES-NI (no table access) | **RECOMMENDED** | Application-level; not in this library |
 | T2.2 | Ed25519 verify uses public scalar (non-secret) | **BY DESIGN** | Verification scalar = H(R,A,M), public |
-| T2.2 | Ed25519 sign uses constant-time scalar mul | **IMPLEMENTED** | `ama_ed25519.c`, Montgomery ladder |
+| T2.2 | Ed25519 sign uses constant-time scalar mul | **IMPLEMENTED** | `ama_ed25519.c`, `ge25519_scalarmult_base_comb_signed()` — 32-table signed 4-bit-window base-point comb, masked full-table reads |
 | T2.3 | Secure memory zeroing on all sensitive buffers | **IMPLEMENTED** | `ama_secure_memzero()`, volatile+barrier |
 | T2.3 | Cleanup on all exit paths (including error) | **IMPLEMENTED** | Audited: all `free()` preceded by zeroing |
 | T2.4 | Static analysis (cppcheck, clang-analyzer, CodeQL) | **IMPLEMENTED** | `.github/workflows/static-analysis.yml` |

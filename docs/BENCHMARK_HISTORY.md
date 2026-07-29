@@ -192,3 +192,104 @@ The five new families are not yet wired into the CI regression-detection
 runner (`benchmarks/benchmark_runner.py`); they extend the **raw-C
 harness output surface** and the visualisation surface
 (`benchmarks/generate_charts.py`) only.
+
+---
+
+## 2026-07-29: secp256k1 fixed-base comb + baseline validity-window enforcement
+
+Two changes here touch `baseline_value` entries, so both are recorded per
+"The guard" above.
+
+### 1. Why the floors moved: the window was never enforced
+
+Both baseline files declare `metadata.applies_through_release`. A repo-wide
+search found that field **only inside the two JSON files and the prose
+describing them** — never in a gate, a workflow, or the runner. The floors were
+measured against v2.1.2 and declared valid through v3.0.0 while the library
+shipped 3.4.0, and the regression job kept reporting PASS: `benchmark-report.md`
+was recording "regressions" of -642 % and -1806 % as passes.
+
+Measured sensitivity against the old floors, before any change:
+
+| entry | measured / floor | regression needed before the gate fires |
+|---|---|---|
+| crypto package create | 18.7x | 95 % |
+| ML-DSA-65 sign | 11.3x | 91 % |
+| HMAC-SHA3-256 | 9.4x | 89 % |
+| SHA3-256 (1 KiB) | 8.4x | 88 % |
+| AES-256-GCM (1 KiB) | 0.65x | already below its floor |
+
+`tests/test_benchmark_baseline_freshness.py` now enforces the window on
+`(major, minor)` — patch bumps are tolerated, since a z-bump carries no
+performance intent — and names the remedy when it fires.
+
+**Recalibration rule**, applied to `benchmarks/baseline.json` only:
+
+    new_floor = max(existing_floor, 0.65 * min(measured, canonical))
+
+* `0.65` is this project's own documented convention (35 % headroom).
+* `min(measured, canonical)` caps each floor by the committed canonical-host
+  numbers in `benchmark-report.md`, so a host that is fast on one primitive
+  cannot push a floor above what the canonical runner delivers. This is what
+  keeps ML-DSA-65 signing honest: the measuring host reported 3,561 ops/s
+  against a canonical 1,104, and the cap took 1,104.
+* `max(existing_floor, …)` means **no floor was lowered**. Where the measuring
+  host is slower than canonical — AES-GCM and X25519, both SIMD-availability
+  dependent — the existing floor simply stands.
+
+Together those two clamps make the result robust to the measuring host's
+run-to-run variance in both directions: the cap absorbs high outliers, the
+never-lower rule absorbs low ones. Variance on that host was substantial and is
+recorded here rather than hidden — AES-GCM measured 152,935 then 97,130 ops/s
+across two consecutive runs, and ML-DSA-65 sign 3,561 then 1,463.
+
+**Runner:** container, Linux x86-64, 4 cores, gcc 13.3, Python 3.11.15, native
+C backend. Commands: `python benchmarks/benchmark_runner.py` and
+`./build/bin/benchmark_c_raw`.
+
+**Not authoritative for AArch64.** `benchmarks/arm-baseline.json` had its window
+extended to 3.4.0 but **no floor value changed**, because recalibrating it needs
+the `ubuntu-24.04-arm` runner. That gate is therefore exactly as strong (and
+exactly as loose) as it was; the carry-forward is recorded in that file's
+`baseline_change_log` so it is auditable rather than silent.
+
+**AES-256-GCM is flagged, not adjusted.** Its floor was already above the
+measuring host's throughput *before* any change here, so it clears the gate only
+on the 40 % tolerance. That wants a canonical-runner measurement, not a floor
+edit, and no floor edit was made.
+
+### 2. secp256k1 fixed-base comb (algorithm change, affects two floors)
+
+`ama_secp256k1.c` used the generic Montgomery ladder for *every* scalar
+multiplication, including the two whose base point is the compile-time
+generator: public-key derivation and the ECDSA signing nonce `R = k*G`. The
+ladder spends one addition **and** one doubling per scalar bit because it must
+not branch — correct for a caller-supplied base, pure waste for a constant.
+`ama_nistp.c` already solved this with a comb, which gave a same-host control:
+secp256k1 `d*G` cost 351.93 µs against 138.16 µs for the equivalent P-256
+operation, even though secp256k1's prime reduces *faster* than P-256's.
+
+A 4-block comb (16 entries, ~1.9 KB, L1-resident) replaces 256 doublings and
+256 additions with 64 of each:
+
+| raw-C operation | before | after | |
+|---|---|---|---|
+| secp256k1 pubkey | 354.97 µs / 2,817 ops/s | **83.36 µs / 11,997 ops/s** | 4.26x |
+| secp256k1 ECDSA sign | 392.94 µs / 2,545 ops/s | **125.54 µs / 7,966 ops/s** | 3.13x |
+| secp256k1 ECDSA verify | 282.45 µs / 3,540 ops/s | 274.98 µs / 3,637 ops/s | unchanged, as intended |
+
+Verification is deliberately untouched: it is variable-time by design and
+already uses Shamir's trick.
+
+This supersedes the `secp256k1 pubkey` row in the 2026-05 sandbox table above
+(`~329 µs / ~3,000 ops/s`), which measured the ladder. That row is left in place
+because this file is an append-only record; it is historical, not current.
+
+Constant-time preserved (INVARIANT-12), verified rather than asserted: Welch's
+t-test over 60,000 samples gives fixed-vs-random `|t| = 0.29` and a
+Hamming-weight split of `|t| = 1.03`, against dudect's leakage threshold of 4.5.
+
+`secp256k1_ecdsa_sign` and `secp256k1_ecdsa_verify` floors rise to 1,900 and
+2,600 ops/s under the rule above. Both sit well below the post-change
+measurement, so the gate now protects the optimisation: reverting the comb would
+drop signing to roughly 2,545 ops/s raw C and trip the floor.

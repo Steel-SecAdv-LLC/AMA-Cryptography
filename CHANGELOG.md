@@ -19,6 +19,61 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ## [Unreleased]
 
+### Fixed — two documents named an algorithm `ama_ed25519.c` has never contained
+
+`CONSTANT_TIME_VERIFICATION.md` and `THREAT_MODEL.md` (control T2.2) both
+attributed Ed25519's constant-time scalar multiplication to a **Montgomery
+ladder**. `src/c/ama_ed25519.c` contains zero occurrences of the word: signing
+and key generation use `ge25519_scalarmult_base_comb_signed()`, a 32-table
+signed 4-bit-window base-point comb read by masked full-table scan; the
+variable-base `ge25519_scalarmult()` is double-and-add; verification is
+`ge25519_double_scalarmult_vartime()` (width-5 wNAF + Shamir's trick).
+
+In a document whose entire purpose is to record *how* constant-time is achieved,
+naming the wrong construct sends an auditor looking for code that does not
+exist and offers no way to notice the claim was never true. Both now name the
+actual routine, and `CONSTANT_TIME_VERIFICATION.md` additionally states which
+paths are variable-time **by design** — every scalar on the verify path,
+`H(R,A,M)`, is public.
+
+### Fixed — the dashboard image generator could not run, and drew four defects when it did
+
+`assets/performance_dashboard.png` and `assets/benchmark_report.png` are
+embedded in the README. Both were frozen at **v2.1.5** against a 3.4.0 library
+because `tools/generate_dashboards.py` aborted on a `FileNotFoundError`: it
+hard-requires `benchmark_results.json` at the repo root, which is a gitignored
+transient produced by `benchmarks/benchmark_suite.py`, so a fresh checkout could
+never regenerate the images. Running the real two-step pipeline refreshed the
+data and exposed four defects in the generator itself:
+
+- **An operator-precedence bug repeated the panel title 42 times.** Adjacent
+  string literals concatenate at compile time *before* `*` binds, so
+  `"AMA CRYPTOGRAPHY  BENCHMARK RESULTS\n" "=" * 42` repeated the whole 36-character
+  title instead of drawing a 42-character rule — the wall of
+  `=AMA CRYPTOGRAPHY  BENCHMARK RESULTS` visible in both shipped PNGs. Both
+  sites now have the load-bearing `+`, with a comment saying why it is there.
+- **The version was a hardcoded literal** — `v3.0.0` in two titles, `v2.0` in a
+  third, against a 3.4.0 package. Now read from `ama_cryptography/__init__.py`,
+  so a regenerated image cannot misstate the version it describes.
+- **Host facts were hardcoded too** (`Python: 3.11.14`, `Linux x86_64, 4 cores`),
+  asserting the machine of whoever last edited the file. Now derived from
+  `platform` and `os.cpu_count()`.
+- **The 4-layer time breakdown was a pie chart** in which one slice takes 94.9 %
+  and the other four collapse to slivers whose leader labels landed on top of
+  each other. It is now a horizontal bar on a log axis, so every layer is
+  readable from 0.1 % to 94.9 % and each share is stated as a number rather than
+  estimated from an angle.
+
+### Changed — the signature chart moved to a log axis
+
+`benchmarks/generate_charts.py` plotted the signature family on a linear axis.
+That already compressed the slow end, and the secp256k1 comb made it worse by
+moving one bar from 3,038 to 11,997 ops/s — a 32x range in which ML-DSA-65
+signing (373 ops/s) rendered as an unreadable stub. It now uses the log axis the
+generator's own `PQC_SIGN_LATENCY` chart already documents the reasoning for,
+with multiplicative label offsets so nothing clips. The `secp256k1 pubkey`
+anchor is re-measured and its comment no longer describes a Montgomery ladder.
+
 ### Fixed — the benchmark regression gate could not fail
 
 `benchmarks/baseline.json` and `benchmarks/arm-baseline.json` both declare
