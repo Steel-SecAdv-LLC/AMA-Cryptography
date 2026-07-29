@@ -130,6 +130,74 @@ static double measure_freq_hz() {
 
 static double FREQ = 0;
 
+// ── Host identity ─────────────────────────────────────────────────────────
+//
+// A clock speed alone does not identify the machine a row was measured on,
+// and for this table that is not a cosmetic gap. The peer AES-GCM figures
+// move by roughly 4x depending on whether the host implements VAES +
+// VPCLMULQDQ: an implementation with a 512-bit AES-GCM kernel reaches ~0.2
+// cycles/byte where the same source on a host without those instructions
+// reaches ~0.79. Comparing a number measured on one against a number
+// measured on the other, with only "measured clock 2.8 GHz" printed beside
+// them, silently attributes a 4x ISA difference to the implementations.
+//
+// So the JSON records the CPU brand string and the feature bits that decide
+// which kernel each library selects. Nothing here is used to gate AMA's own
+// dispatch; this is provenance for the artifact.
+struct HostInfo {
+    char brand[64];
+    int aes_ni, pclmulqdq, vaes, vpclmulqdq;
+    int avx2, avx512f, sha_ni, bmi2, adx;
+};
+
+static HostInfo probe_host() {
+    HostInfo h;
+    memset(&h, 0, sizeof(h));
+    snprintf(h.brand, sizeof(h.brand), "unknown");
+#if defined(__x86_64__)
+    unsigned int r[4];
+    // Brand string: CPUID leaves 0x80000002..0x80000004, 16 bytes each.
+    __asm__ __volatile__("cpuid" : "=a"(r[0]), "=b"(r[1]), "=c"(r[2]), "=d"(r[3])
+                         : "a"(0x80000000u), "c"(0));
+    if (r[0] >= 0x80000004u) {
+        char b[49];
+        for (unsigned leaf = 0; leaf < 3; leaf++) {
+            __asm__ __volatile__("cpuid" : "=a"(r[0]), "=b"(r[1]), "=c"(r[2]), "=d"(r[3])
+                                 : "a"(0x80000002u + leaf), "c"(0));
+            memcpy(b + leaf * 16 + 0,  &r[0], 4);
+            memcpy(b + leaf * 16 + 4,  &r[1], 4);
+            memcpy(b + leaf * 16 + 8,  &r[2], 4);
+            memcpy(b + leaf * 16 + 12, &r[3], 4);
+        }
+        b[48] = '\0';
+        // Collapse runs of spaces so the JSON string is tidy.
+        char* w = h.brand; const char* rd = b; int sp = 0; size_t cap = sizeof(h.brand) - 1;
+        while (*rd == ' ') rd++;
+        for (; *rd && (size_t)(w - h.brand) < cap; rd++) {
+            if (*rd == ' ') { sp = 1; continue; }
+            if (sp && w != h.brand) *w++ = ' ';
+            sp = 0;
+            if ((size_t)(w - h.brand) < cap) *w++ = *rd;
+        }
+        *w = '\0';
+    }
+    __asm__ __volatile__("cpuid" : "=a"(r[0]), "=b"(r[1]), "=c"(r[2]), "=d"(r[3])
+                         : "a"(1u), "c"(0));
+    h.aes_ni     = (r[2] >> 25) & 1;
+    h.pclmulqdq  = (r[2] >> 1)  & 1;
+    __asm__ __volatile__("cpuid" : "=a"(r[0]), "=b"(r[1]), "=c"(r[2]), "=d"(r[3])
+                         : "a"(7u), "c"(0));
+    h.avx2       = (r[1] >> 5)  & 1;
+    h.bmi2       = (r[1] >> 8)  & 1;
+    h.avx512f    = (r[1] >> 16) & 1;
+    h.adx        = (r[1] >> 19) & 1;
+    h.sha_ni     = (r[1] >> 29) & 1;
+    h.vaes       = (r[2] >> 9)  & 1;
+    h.vpclmulqdq = (r[2] >> 10) & 1;
+#endif
+    return h;
+}
+
 // ── Result rows ───────────────────────────────────────────────────────────
 struct Row {
     std::string prim, lib, unit;
@@ -707,7 +775,16 @@ int main(int argc, char** argv) {
     // JSON for the report generator.
     FILE* j = fopen("multi_library_results.json", "w");
     if (j) {
+        HostInfo h = probe_host();
         fprintf(j, "{\n  \"freq_hz\": %.1f,\n  \"message_bytes\": %zu,\n", FREQ, N);
+        fprintf(j, "  \"host\": {\n");
+        fprintf(j, "    \"cpu\": \"%s\",\n", h.brand);
+        fprintf(j, "    \"note\": \"Feature bits are recorded because they decide which kernel each library selects; peer AES-GCM in particular moves ~4x with VAES+VPCLMULQDQ. Rows from hosts with different feature sets are not directly comparable.\",\n");
+        fprintf(j, "    \"aes_ni\": %d, \"pclmulqdq\": %d, \"vaes\": %d, \"vpclmulqdq\": %d,\n",
+                h.aes_ni, h.pclmulqdq, h.vaes, h.vpclmulqdq);
+        fprintf(j, "    \"avx2\": %d, \"avx512f\": %d, \"sha_ni\": %d, \"bmi2\": %d, \"adx\": %d\n",
+                h.avx2, h.avx512f, h.sha_ni, h.bmi2, h.adx);
+        fprintf(j, "  },\n");
         fprintf(j, "  \"libraries_compiled\": [\"AMA\"");
 #ifdef HAVE_OPENSSL
         fprintf(j, ", \"OpenSSL\"");

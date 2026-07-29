@@ -42,6 +42,17 @@ extern void ama_x25519_fe64_mul_mulx(uint64_t h[4], const uint64_t f[4],
                                      const uint64_t g[4]);
 extern void ama_x25519_fe64_sq_mulx(uint64_t h[4], const uint64_t f[4]);
 
+/* Two-stage composition of the kernel's building blocks, exported only
+ * under AMA_TESTING_MODE (the test library is built with it).  Used as a
+ * second oracle: the production entry points fuse the multiply/square
+ * and reduction into one asm block, and these keep the two stages
+ * separate, so a divergence introduced while editing either asm block
+ * shows up as fused-vs-two-stage disagreement even if both somehow
+ * agreed with a mis-tabulated pure-C expectation. */
+extern void ama_x25519_fe64_mul_mulx_twostage(uint64_t h[4], const uint64_t f[4],
+                                              const uint64_t g[4]);
+extern void ama_x25519_fe64_sq_mulx_twostage(uint64_t h[4], const uint64_t f[4]);
+
 /* Pull in the pure-C reference. fe64.h is header-only and the
  * functions are `static inline`, so just including it gives us the
  * reference symbols privately. */
@@ -78,9 +89,10 @@ int main(void) {
 
     uint64_t rng = 0xC25519BABE2026ULL;
     uint8_t a_bytes[32], b_bytes[32];
-    uint8_t out_purec[32], out_mulx[32];
+    uint8_t out_purec[32], out_mulx[32], out_two[32];
     int mul_mismatches = 0;
     int sq_mismatches  = 0;
+    int fused_vs_twostage_mismatches = 0;
 
     printf("X25519 fe64 MULX+ADX vs pure-C byte-equivalence\n");
     printf("  vectors:  %d\n", N_VECTORS);
@@ -91,16 +103,18 @@ int main(void) {
         fill_random(a_bytes, 32, &rng);
         fill_random(b_bytes, 32, &rng);
 
-        fe64 a, b, h_purec, h_mulx;
+        fe64 a, b, h_purec, h_mulx, h_two;
         fe64_frombytes(a, a_bytes);
         fe64_frombytes(b, b_bytes);
 
         /* --- multiplication --- */
         fe64_mul(h_purec, a, b);
         ama_x25519_fe64_mul_mulx(h_mulx, a, b);
+        ama_x25519_fe64_mul_mulx_twostage(h_two, a, b);
 
         fe64_tobytes(out_purec, h_purec);
         fe64_tobytes(out_mulx,  h_mulx);
+        fe64_tobytes(out_two,   h_two);
 
         if (memcmp(out_purec, out_mulx, 32) != 0) {
             mul_mismatches++;
@@ -112,13 +126,25 @@ int main(void) {
                 hexdump("MULX+ADX: ", out_mulx);
             }
         }
+        if (memcmp(out_mulx, out_two, 32) != 0) {
+            fused_vs_twostage_mismatches++;
+            if (fused_vs_twostage_mismatches <= 4) {
+                fprintf(stderr, "  MUL FUSED-vs-TWOSTAGE MISMATCH on vector %d\n", i);
+                hexdump("a:        ", a_bytes);
+                hexdump("b:        ", b_bytes);
+                hexdump("fused:    ", out_mulx);
+                hexdump("twostage: ", out_two);
+            }
+        }
 
         /* --- squaring --- */
         fe64_sq(h_purec, a);
         ama_x25519_fe64_sq_mulx(h_mulx, a);
+        ama_x25519_fe64_sq_mulx_twostage(h_two, a);
 
         fe64_tobytes(out_purec, h_purec);
         fe64_tobytes(out_mulx,  h_mulx);
+        fe64_tobytes(out_two,   h_two);
 
         if (memcmp(out_purec, out_mulx, 32) != 0) {
             sq_mismatches++;
@@ -129,19 +155,32 @@ int main(void) {
                 hexdump("MULX+ADX: ", out_mulx);
             }
         }
+        if (memcmp(out_mulx, out_two, 32) != 0) {
+            fused_vs_twostage_mismatches++;
+            if (fused_vs_twostage_mismatches <= 4) {
+                fprintf(stderr, "  SQ  FUSED-vs-TWOSTAGE MISMATCH on vector %d\n", i);
+                hexdump("a:        ", a_bytes);
+                hexdump("fused:    ", out_mulx);
+                hexdump("twostage: ", out_two);
+            }
+        }
     }
 
-    if (mul_mismatches != 0 || sq_mismatches != 0) {
+    if (mul_mismatches != 0 || sq_mismatches != 0 ||
+        fused_vs_twostage_mismatches != 0) {
         fprintf(stderr,
-                "\nFAIL: %d mul mismatches, %d sq mismatches across "
-                "%d vectors. The MULX+ADX kernel diverged from the "
-                "pure-C fe64 reference.\n",
-                mul_mismatches, sq_mismatches, N_VECTORS);
+                "\nFAIL: %d mul mismatches, %d sq mismatches, %d "
+                "fused-vs-two-stage mismatches across %d vectors. The "
+                "MULX+ADX kernel diverged from the pure-C fe64 reference "
+                "or from its own two-stage building blocks.\n",
+                mul_mismatches, sq_mismatches,
+                fused_vs_twostage_mismatches, N_VECTORS);
         return 1;
     }
 
-    printf("\nPASS: %d / %d vectors byte-identical between MULX+ADX "
-           "kernel and pure-C fe64 reference (mul + sq).\n",
+    printf("\nPASS: %d / %d vectors byte-identical: fused MULX+ADX kernel "
+           "vs pure-C fe64 reference and vs two-stage composition "
+           "(mul + sq).\n",
            N_VECTORS, N_VECTORS);
     return 0;
 }

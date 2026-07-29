@@ -249,6 +249,44 @@ static int detect_sve2(void) { return 0; }
 /* Forward declaration: generic keccak_f1600 from ama_sha3.c */
 extern void ama_keccak_f1600_generic(uint64_t state[25]);
 
+#ifdef AMA_HAVE_KECCAK_BMI_IMPL
+/* Forward declaration: BMI1/BMI2 build of the same permutation source
+ * (src/c/x86/ama_keccak_f1600_bmi.c).  Gated by
+ * ama_cpuid_has_keccak_bmi(). */
+extern void ama_keccak_f1600_bmi(uint64_t state[25]);
+#endif
+
+/* The scalar Keccak kernel this host will actually run.
+ *
+ * Every other reference to "the generic Keccak permutation" in this
+ * file must go through here rather than naming ama_keccak_f1600_generic
+ * directly, because on a BMI host the honest scalar baseline is the BMI
+ * build.  Three places depend on that:
+ *
+ *   - the initial dispatch_table wiring, and the AMA_DISPATCH_ONLY
+ *     reset, which must not silently downgrade the host;
+ *   - the auto-tune bench, whose whole job is "is the SIMD kernel
+ *     faster than what we would otherwise run?" — measuring against a
+ *     kernel the host would never execute answers a different question
+ *     and can keep a SIMD kernel that is in fact the slower choice;
+ *   - the auto-tune revert, which must land on the same kernel the
+ *     bench used as its baseline.
+ *
+ * Resolved once, inside dispatch_init_internal(), before any of those
+ * three read it. */
+static ama_keccak_f1600_fn keccak_scalar_baseline = ama_keccak_f1600_generic;
+
+/* Resolve the scalar baseline.  Called at the top of the kernel-wiring
+ * block; safe to call more than once (idempotent, no allocation). */
+static void resolve_keccak_scalar_baseline(void) {
+    keccak_scalar_baseline = ama_keccak_f1600_generic;
+#ifdef AMA_HAVE_KECCAK_BMI_IMPL
+    if (ama_cpuid_has_keccak_bmi()) {
+        keccak_scalar_baseline = ama_keccak_f1600_bmi;
+    }
+#endif
+}
+
 /* Forward declaration: generic 4-way keccak_f1600 from ama_sha3.c.
  * Invokes the single-state dispatch pointer four times, so it
  * automatically benefits from AVX2/NEON single-state acceleration
@@ -415,7 +453,7 @@ static apply_dispatch_only_result_t apply_dispatch_only(
     const ama_dispatch_table_t saved = dispatch_table;
 
     memset(&dispatch_table, 0, sizeof(dispatch_table));  // PUBLIC-DATA: dispatch_table — scrub dispatch state before AMA_DISPATCH_ONLY rewires it (PUBLIC global state — CPU feature info + function pointers, no secrets)
-    dispatch_table.keccak_f1600    = ama_keccak_f1600_generic;
+    dispatch_table.keccak_f1600    = keccak_scalar_baseline;
     dispatch_table.keccak_f1600_x4 = ama_keccak_f1600_x4_generic;
 
 #ifdef AMA_HAVE_AVX512_IMPL
@@ -961,13 +999,19 @@ static int dispatch_cache_open_dir(const char *dirpath) {
 
 static void dispatch_cache_fingerprint(char *out, size_t outlen) {
     int avx2 = 0, avx512f = 0, avx512kc = 0, aesni = 0, pclmul = 0;
-    int vaes = 0, arm_aes = 0, arm_pmull = 0;
+    int vaes = 0, arm_aes = 0, arm_pmull = 0, kbmi = 0;
 #if defined(__x86_64__) || defined(_M_X64)
     avx2     = ama_has_avx2();
     avx512f  = ama_has_avx512f();
     avx512kc = ama_cpuid_has_avx512_keccak();
     aesni    = ama_has_aes_ni();
     pclmul   = ama_has_pclmulqdq();
+    /* Part of the key because it selects the scalar Keccak baseline the
+     * keccak auto-tune verdict was measured against.  A verdict cached
+     * on a host without BMI compared the SIMD kernel to the portable
+     * permutation; replaying it on a BMI host would answer the wrong
+     * question, and vice versa. */
+    kbmi     = ama_cpuid_has_keccak_bmi();
 #if !defined(_MSC_VER)
     vaes     = ama_cpuid_has_vaes_aesgcm();
 #endif
@@ -985,7 +1029,7 @@ static void dispatch_cache_fingerprint(char *out, size_t outlen) {
         "v1|%s|sha3=%d|kyber=%d|dilithium=%d|aes_gcm=%d|chacha20=%d|argon2=%d|"
         "x25519=%d|ed25519=%d|sphincs=%d|"
         "avx2=%d|avx512f=%d|avx512kc=%d|aesni=%d|pclmul=%d|vaes=%d|"
-        "arm_aes=%d|arm_pmull=%d",
+        "kbmi=%d|arm_aes=%d|arm_pmull=%d",
         dispatch_info.arch_name ? dispatch_info.arch_name : "unknown",
         (int)dispatch_info.sha3, (int)dispatch_info.kyber,
         (int)dispatch_info.dilithium, (int)dispatch_info.aes_gcm,
@@ -993,7 +1037,7 @@ static void dispatch_cache_fingerprint(char *out, size_t outlen) {
         (int)dispatch_info.x25519, (int)dispatch_info.ed25519,
         (int)dispatch_info.sphincs,
         avx2, avx512f, avx512kc, aesni, pclmul, vaes,
-        arm_aes, arm_pmull);
+        kbmi, arm_aes, arm_pmull);
 }
 
 /* Strip trailing newline / CR.  No allocation. */
@@ -1303,7 +1347,8 @@ static void dispatch_init_internal(void) {
      * different internal zetas layout).
      * ==================================================================== */
 
-    dispatch_table.keccak_f1600      = ama_keccak_f1600_generic;
+    resolve_keccak_scalar_baseline();
+    dispatch_table.keccak_f1600      = keccak_scalar_baseline;
     dispatch_table.keccak_f1600_x4   = ama_keccak_f1600_x4_generic;
     dispatch_table.sha3_256          = NULL;  /* dispatched via keccak_f1600 */
     dispatch_table.kyber_ntt         = NULL;  /* NULL = caller uses inline generic */
@@ -1726,13 +1771,13 @@ static void dispatch_init_internal(void) {
 
     if (!autotune_disabled && !cache_hit) {
         /* ----- Slot 1: keccak_f1600 (single-state permutation) ------- */
-        if (dispatch_table.keccak_f1600 != ama_keccak_f1600_generic) {
+        if (dispatch_table.keccak_f1600 != keccak_scalar_baseline) {
             uint64_t state[25];
             memset(state, 0x42, sizeof(state));  // PUBLIC-DATA: state — bench scratch buffer (PUBLIC; KAT-irrelevant 0x42 fill)
 
             int64_t generic_best = -1, simd_best = -1;
             dispatch_bench_keccak_single(
-                ama_keccak_f1600_generic, dispatch_table.keccak_f1600,
+                keccak_scalar_baseline, dispatch_table.keccak_f1600,
                 state,
                 /*warmup=*/200, /*trials=*/5, /*iters=*/2000,
                 &generic_best, &simd_best);
@@ -1871,7 +1916,7 @@ static void dispatch_init_internal(void) {
             if (pre_sve2_keccak != dispatch_table.keccak_f1600) {
                 dispatch_table.keccak_f1600 = pre_sve2_keccak;
             } else {
-                dispatch_table.keccak_f1600 = ama_keccak_f1600_generic;
+                dispatch_table.keccak_f1600 = keccak_scalar_baseline;
             }
             /* sha3_256 — SVE2 wrapper calls ama_keccak_f1600_sve2 directly */
             if (pre_sve2_sha3_256 != dispatch_table.sha3_256) {
@@ -1937,7 +1982,10 @@ static void dispatch_init_internal(void) {
     if (dispatch_verbose()) {
         fprintf(stderr, "[AMA Dispatch] keccak_f1600 -> %s\n",
                 dispatch_table.keccak_f1600 == ama_keccak_f1600_generic
-                    ? "generic" : "SIMD");
+                    ? "generic (portable scalar)"
+                    : (dispatch_table.keccak_f1600 == keccak_scalar_baseline
+                        ? "scalar (BMI1/BMI2)"
+                        : "SIMD"));
         fprintf(stderr, "[AMA Dispatch] kyber_ntt    -> %s\n",
                 dispatch_table.kyber_ntt ? "SIMD" : "generic (inline)");
         fprintf(stderr, "[AMA Dispatch] kyber_poly_* -> %s\n",

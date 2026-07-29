@@ -106,6 +106,7 @@ static int has_avx512_zmm_state_cached = 0;
  * from the same `detect_x86_features()` one-shot probe as the legacy
  * fields above (INVARIANT-15 unchanged: same once-primitive, no
  * reordering, no new call sites in dispatch_init_internal()). */
+static int has_bmi1_cached = 0;
 static int has_bmi2_cached = 0;
 static int has_adx_cached = 0;
 /* Intel SHA Extensions (SHA-NI): CPUID.(EAX=7,ECX=0):EBX[29].  Gates the
@@ -205,6 +206,7 @@ static void detect_x86_features(void) {
     has_pclmulqdq_cached = (info[2] >> 1) & 1;
     int osxsave = (info[2] >> 27) & 1;
     /* Leaf 7, sub-leaf 0:
+     *   EBX bit 3  — BMI1         (ANDN — Keccak-f[1600] chi step)
      *   EBX bit 5  — AVX2
      *   EBX bit 8  — BMI2         (PR D — MULX, X25519 fe64 MULX+ADX kernel)
      *   EBX bit 16 — AVX-512F
@@ -214,6 +216,7 @@ static void detect_x86_features(void) {
      *   ECX bit 10 — VPCLMULQDQ   (PR A — independent of AVX-512) */
     __cpuidex(info, 7, 0);
     has_avx2_cached       = (info[1] >> 5)  & 1;
+    has_bmi1_cached       = (info[1] >> 3)  & 1;
     has_bmi2_cached       = (info[1] >> 8)  & 1;
     has_avx512f_cached    = (info[1] >> 16) & 1;
     has_adx_cached        = (info[1] >> 19) & 1;
@@ -236,6 +239,7 @@ static void detect_x86_features(void) {
         osxsave              = (ecx >> 27) & 1;
     }
     /* CPUID leaf 7, sub-leaf 0:
+     *   EBX bit 3  — BMI1         (ANDN — Keccak-f[1600] chi step)
      *   EBX bit 5  — AVX2
      *   EBX bit 8  — BMI2         (PR D — MULX, X25519 fe64 MULX+ADX kernel)
      *   EBX bit 16 — AVX-512F
@@ -246,6 +250,7 @@ static void detect_x86_features(void) {
      * Only read XCR0 when OSXSAVE is set; otherwise XGETBV #UDs. */
     if (__get_cpuid_count(7, 0, &eax, &ebx, &ecx, &edx)) {
         has_avx2_cached       = (ebx >> 5)  & 1;
+        has_bmi1_cached       = (ebx >> 3)  & 1;
         has_bmi2_cached       = (ebx >> 8)  & 1;
         has_avx512f_cached    = (ebx >> 16) & 1;
         has_adx_cached        = (ebx >> 19) & 1;
@@ -386,6 +391,12 @@ int ama_cpuid_has_vaes_aesgcm(void) {
         && ama_has_pclmulqdq();
 }
 
+int ama_has_bmi1(void) {
+    AMA_CALL_ONCE(cpuid_once, detect_x86_features);
+    /* ANDN / BLSR / TZCNT touch GPRs only; no XCR0 SIMD-state gate. */
+    return has_bmi1_cached;
+}
+
 int ama_has_bmi2(void) {
     AMA_CALL_ONCE(cpuid_once, detect_x86_features);
     /* MULX touches GPRs only; no XCR0 SIMD-state gate is required. */
@@ -428,6 +439,33 @@ int ama_cpuid_has_x25519_mulx(void) {
      * pure-C fe64 schoolbook (or fe51, on a host where fe64 was forced
      * off via -DAMA_X25519_FORCE_FE51). */
     return ama_has_bmi2() && ama_has_adx();
+}
+
+int ama_cpuid_has_keccak_bmi(void) {
+    /* Gate for the BMI-compiled Keccak-f[1600] permutation
+     * (src/c/x86/ama_keccak_f1600_bmi.c).  That translation unit is the
+     * same C as the portable permutation, recompiled with -mbmi -mbmi2,
+     * so what the gate really guards is the instruction set the compiler
+     * was allowed to select from:
+     *
+     *   BMI1 — ANDN.  The chi step evaluates `(~b) & c` twenty-five
+     *          times per round; ANDN does it in one instruction instead
+     *          of NOT + AND.  This is the whole measured win.
+     *   BMI2 — RORX, a three-operand rotate that neither reads nor
+     *          writes the flags, so the rotations in rho and theta stop
+     *          competing for the flag register with everything else in
+     *          flight.  Smaller than the ANDN effect but the same sign.
+     *
+     * Both are plain general-purpose-register instructions: no XCR0
+     * save-area gate, no frequency licence, no transition penalty.  That
+     * is why this kernel is selected on the CPUID bit alone and is not
+     * subject to the SIMD auto-tune bench the AVX2 / NEON / SVE2 Keccak
+     * kernels go through — there is no downside case for it to detect.
+     *
+     * Both bits are gated explicitly rather than assuming BMI1 implies
+     * BMI2: the ISA documents them as independent, and the compiler is
+     * given both flags, so it may emit either family. */
+    return ama_has_bmi1() && ama_has_bmi2();
 }
 
 int ama_has_arm_aes(void) { return 0; }
@@ -531,9 +569,11 @@ int ama_cpuid_has_avx512_keccak(void) { return 0; }
 int ama_has_vaes(void) { return 0; }
 int ama_has_vpclmulqdq(void) { return 0; }
 int ama_cpuid_has_vaes_aesgcm(void) { return 0; }
+int ama_has_bmi1(void) { return 0; }
 int ama_has_bmi2(void) { return 0; }
 int ama_has_adx(void) { return 0; }
 int ama_cpuid_has_x25519_mulx(void) { return 0; }
+int ama_cpuid_has_keccak_bmi(void) { return 0; }
 
 int ama_has_arm_aes(void) {
     AMA_CALL_ONCE(arm_once, detect_arm_features);
@@ -588,9 +628,11 @@ int ama_cpuid_has_avx512_keccak(void) { return 0; }
 int ama_has_vaes(void) { return 0; }
 int ama_has_vpclmulqdq(void) { return 0; }
 int ama_cpuid_has_vaes_aesgcm(void) { return 0; }
+int ama_has_bmi1(void) { return 0; }
 int ama_has_bmi2(void) { return 0; }
 int ama_has_adx(void) { return 0; }
 int ama_cpuid_has_x25519_mulx(void) { return 0; }
+int ama_cpuid_has_keccak_bmi(void) { return 0; }
 int ama_has_sha_ni(void) { return 0; }
 int ama_has_arm_aes(void) { return 0; }
 int ama_has_arm_pmull(void) { return 0; }

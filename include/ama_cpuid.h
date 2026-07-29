@@ -204,6 +204,22 @@ int ama_cpuid_has_avx512_keccak(void);
  * ============================================================================ */
 
 /**
+ * @brief Check for x86 BMI1 (ANDN, BLSR, TZCNT) support.
+ *
+ * CPUID.(EAX=7,ECX=0):EBX[3].  ANDN computes `(~a) & b` in a single
+ * instruction.  Keccak-f[1600]'s chi step evaluates exactly that shape
+ * 25 times per round, 600 times per permutation, so a build allowed to
+ * emit ANDN saves one instruction per evaluation over NOT + AND.
+ *
+ * No XCR0 gate is required: BMI1 instructions are general-purpose and
+ * touch no SIMD save area.
+ *
+ * @return 1 if BMI1 is reported by CPUID, 0 otherwise.  Cached after
+ *         first call.
+ */
+int ama_has_bmi1(void);
+
+/**
  * @brief Check for x86 BMI2 (MULX, et al.) support.
  *
  * CPUID.(EAX=7,ECX=0):EBX[8].  MULX is the single-instruction
@@ -262,6 +278,29 @@ int ama_has_adx(void);
  * the MULX+ADCX/ADOX micro-optimisation.
  */
 int ama_cpuid_has_x25519_mulx(void);
+
+/**
+ * @brief Bundle check: BMI1 + BMI2 gate for the BMI Keccak-f[1600] kernel.
+ *
+ * Gates `ama_keccak_f1600_bmi` (src/c/x86/ama_keccak_f1600_bmi.c),
+ * which is the *same* permutation source as the portable one — the
+ * shared round macros in src/c/internal/ama_keccak_round.h — compiled
+ * with `-mbmi -mbmi2`.  The win comes from the instruction selection
+ * those flags unlock: ANDN for chi's `(~b) & c`, RORX for the flag-free
+ * rotations in theta and rho.
+ *
+ * Unlike the AVX2 / AVX-512 / NEON / SVE2 Keccak kernels, this one is
+ * not put through the dispatcher's auto-tune bench.  Those kernels can
+ * lose to scalar code on a given host (vector-unit licence-based
+ * downclocking, narrow ports, emulated lanes), which is exactly what
+ * the bench exists to catch.  A BMI build cannot: it is the identical
+ * instruction schedule with two instruction pairs fused, on
+ * general-purpose registers, with no frequency or transition penalty.
+ *
+ * @return 1 when both BMI1 and BMI2 are reported by CPUID, 0 otherwise.
+ *         Always 0 on non-x86 targets.
+ */
+int ama_cpuid_has_keccak_bmi(void);
 
 /**
  * @brief Check for Intel SHA Extensions (SHA-NI) support.

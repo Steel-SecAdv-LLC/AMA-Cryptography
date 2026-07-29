@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright (C) 2025-2026 Steel Security Advisors LLC
+# SPDX-License-Identifier: Apache-2.0
 """PQC head-to-head: AMA vs OpenSSL 4.0.1 (via `cryptography` 49.0.0).
 
 Only implementation pair on this host that both expose ML-KEM-1024 and

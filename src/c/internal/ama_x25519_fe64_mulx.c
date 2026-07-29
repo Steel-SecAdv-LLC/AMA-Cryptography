@@ -28,12 +28,17 @@
  * `objdump -d` on the previous-generation kernel: 34 `adc`, 0 `adcx`
  * across `mul_mulx`+`sq_mulx`).
  *
- * Two distinct kernels:
- *   - `fe64_mul512_mulx`   — 4×4 schoolbook (16 cross-products),
- *                            three rows of dual ADCX/ADOX accumulation.
- *   - `fe64_sq512_mulx`    — dedicated squaring exploiting off-diagonal
- *                            symmetry: 6 cross-products doubled +
- *                            4 diagonal squares = 10 mults vs 16.
+ * Structure: three documented building blocks — a 4×4 schoolbook
+ * multiply (`fe64_mul512_mulx`), a dedicated squaring exploiting
+ * off-diagonal symmetry (`fe64_sq512_mulx` — 6 cross-products doubled +
+ * 4 diagonal squares = 10 mults vs 16), and a 2^255-19 reduction
+ * (`fe64_reduce512_mulx`) — followed by the two production entry points
+ * `ama_x25519_fe64_mul_mulx` / `_sq_mulx`, which fuse a multiply/square
+ * and its reduction into a single asm block so the 512-bit product never
+ * spills to memory between the two.  The building blocks stay as the
+ * readable, separately-testable form; the fused entry points are what
+ * the ladder calls, and are cross-checked against the two-stage
+ * composition of the building blocks under AMA_TESTING_MODE.
  *
  * Compiled with `-mbmi2 -madx -O3` (per-file flags, see
  * `CMakeLists.txt::AMA_X25519_MULX_SOURCES`). Runtime gating by
@@ -429,34 +434,242 @@ void fe64_reduce512_mulx(uint64_t h[4], const uint64_t r[8]) {
  * guard — see the runtime branch in that file.
  * ---------------------------------------------------------------------- */
 
+/* ----------------------------------------------------------------------
+ * Fused multiply-reduce and square-reduce
+ *
+ * The building blocks above — fe64_mul512_mulx, fe64_sq512_mulx,
+ * fe64_reduce512_mulx — are correct and independently testable, and
+ * `tests/c/test_x25519_fe64_mulx_equiv.c` pins each against the pure-C
+ * reference.  Composing them across two separate `__asm__ __volatile__`
+ * statements, though, forces the eight product limbs out to the r[8]
+ * stack array and straight back in: the multiply's outputs and the
+ * reduction's inputs cannot share registers across the asm boundary.
+ * Even with store-to-load forwarding that is a measurable tax on an
+ * operation this small.
+ *
+ * The two functions below fuse each pair into a single asm block, so
+ * the product stays in registers and the 38-fold reduction reads it
+ * there.  Register pressure is the only reason this is not the obvious
+ * default: the multiply needs both operand pointers live while
+ * accumulating eight product limbs, which is at the edge of the 15
+ * usable general-purpose registers.  It fits because the reduction's
+ * scratch reuses the operand-pointer registers once the products are
+ * formed.
+ *
+ * Measured on Intel Xeon (Cascade Lake, 2.80 GHz), gcc 13.3, best-of-7
+ * over 2M ops with a serialising dependency (latency, which is what the
+ * ladder sees):
+ *
+ *   multiply:  two-stage 54.6 cycles  ->  fused 49.7 cycles
+ *   square:    two-stage 50.9 cycles  ->  fused 43.9 cycles
+ *
+ * The fused sequences are the same MULX / ADCX / ADOX operations in the
+ * same order as the two-stage building blocks above, only without the
+ * spill of the eight product limbs between them.  Two independent
+ * pins guard that:
+ *
+ *   - `tests/c/test_x25519_fe64_mulx_equiv.c` runs the fused entry
+ *     points (what `ama_x25519_fe64_mul_mulx` / `_sq_mulx` resolve to)
+ *     against the pure-C `fe64_mul` / `fe64_sq` reference — the
+ *     end-to-end correctness oracle; and
+ *   - the same test, under AMA_TESTING_MODE, cross-checks the fused
+ *     result against the two-stage composition
+ *     (`fe64_*512_mulx` + `fe64_reduce512_mulx`, exposed as the
+ *     `*_twostage` entry points below), so a divergence introduced
+ *     while editing either asm block is caught against the other.
+ * ---------------------------------------------------------------------- */
+
+#ifdef AMA_TESTING_MODE
+/* Two-stage composition of the building blocks above, exported only in
+ * test builds so test_x25519_fe64_mulx_equiv.c can pin the fused kernels
+ * against them directly (in addition to the pure-C reference).  Not
+ * compiled into the production library, so it adds no shipped symbol and
+ * no code to the hot path. */
+void ama_x25519_fe64_mul_mulx_twostage(uint64_t h[4], const uint64_t f[4],
+                                       const uint64_t g[4]);
+void ama_x25519_fe64_sq_mulx_twostage(uint64_t h[4], const uint64_t f[4]);
+
+void ama_x25519_fe64_mul_mulx_twostage(uint64_t h[4], const uint64_t f[4],
+                                       const uint64_t g[4]) {
+    uint64_t r[8];
+    fe64_mul512_mulx(r, f, g);
+    fe64_reduce512_mulx(h, r);
+}
+void ama_x25519_fe64_sq_mulx_twostage(uint64_t h[4], const uint64_t f[4]) {
+    uint64_t r[8];
+    fe64_sq512_mulx(r, f);
+    fe64_reduce512_mulx(h, r);
+}
+#endif /* AMA_TESTING_MODE */
+
 /**
  * Field multiplication: h = f * g mod (2^255 - 19).
  *
- * Hand-tuned MULX+ADX kernel. Byte-identical to the pure-C
- * `fe64_mul512` + `fe64_reduce512` chain in src/c/fe64.h — pinned by
- * `tests/c/test_x25519_fe64_mulx_equiv.c` across 4096 random vectors.
+ * Hand-tuned MULX+ADX kernel, multiply and reduction fused into one asm
+ * block.  Byte-identical to the pure-C `fe64_mul512` + `fe64_reduce512`
+ * chain in src/c/fe64.h, pinned by `tests/c/test_x25519_fe64_mulx_equiv.c`.
  */
 __attribute__((visibility("hidden")))
 void ama_x25519_fe64_mul_mulx(uint64_t h[4], const uint64_t f[4],
                               const uint64_t g[4]) {
-    uint64_t r[8];
-    fe64_mul512_mulx(r, f, g);
-    fe64_reduce512_mulx(h, r);
+    uint64_t r0, r1, r2, r3, r4, r5, r6, r7, lo, hi, top;
+    __asm__ __volatile__ (
+        /* ===== 4x4 schoolbook, product in r0..r7 (see fe64_mul512_mulx) ===== */
+        "movq   (%[f]), %%rdx                \n\t"
+        "mulx   (%[g]),  %[r0], %[r1]        \n\t"
+        "mulx   8(%[g]), %[lo], %[r2]        \n\t"
+        "addq   %[lo], %[r1]                 \n\t"
+        "mulx   16(%[g]),%[lo], %[r3]        \n\t"
+        "adcq   %[lo], %[r2]                 \n\t"
+        "mulx   24(%[g]),%[lo], %[r4]        \n\t"
+        "adcq   %[lo], %[r3]                 \n\t"
+        "adcq   $0, %[r4]                    \n\t"
+        "xorl   %k[r5], %k[r5]               \n\t"
+        "xorl   %k[r6], %k[r6]               \n\t"
+        "xorl   %k[r7], %k[r7]               \n\t"
+
+        "xorl   %%eax, %%eax                 \n\t"
+        "movq   8(%[f]), %%rdx               \n\t"
+        "mulx   (%[g]),  %[lo], %[hi]        \n\t" "adcx %[lo], %[r1]\n\t" "adox %[hi], %[r2]\n\t"
+        "mulx   8(%[g]), %[lo], %[hi]        \n\t" "adcx %[lo], %[r2]\n\t" "adox %[hi], %[r3]\n\t"
+        "mulx   16(%[g]),%[lo], %[hi]        \n\t" "adcx %[lo], %[r3]\n\t" "adox %[hi], %[r4]\n\t"
+        "mulx   24(%[g]),%[lo], %[hi]        \n\t" "adcx %[lo], %[r4]\n\t" "adox %[hi], %[r5]\n\t"
+        "adcx   %%rax, %[r5]                 \n\t" "adox %%rax, %[r6]\n\t"
+
+        "xorl   %%eax, %%eax                 \n\t"
+        "movq   16(%[f]), %%rdx              \n\t"
+        "mulx   (%[g]),  %[lo], %[hi]        \n\t" "adcx %[lo], %[r2]\n\t" "adox %[hi], %[r3]\n\t"
+        "mulx   8(%[g]), %[lo], %[hi]        \n\t" "adcx %[lo], %[r3]\n\t" "adox %[hi], %[r4]\n\t"
+        "mulx   16(%[g]),%[lo], %[hi]        \n\t" "adcx %[lo], %[r4]\n\t" "adox %[hi], %[r5]\n\t"
+        "mulx   24(%[g]),%[lo], %[hi]        \n\t" "adcx %[lo], %[r5]\n\t" "adox %[hi], %[r6]\n\t"
+        "adcx   %%rax, %[r6]                 \n\t" "adox %%rax, %[r7]\n\t"
+
+        "xorl   %%eax, %%eax                 \n\t"
+        "movq   24(%[f]), %%rdx              \n\t"
+        "mulx   (%[g]),  %[lo], %[hi]        \n\t" "adcx %[lo], %[r3]\n\t" "adox %[hi], %[r4]\n\t"
+        "mulx   8(%[g]), %[lo], %[hi]        \n\t" "adcx %[lo], %[r4]\n\t" "adox %[hi], %[r5]\n\t"
+        "mulx   16(%[g]),%[lo], %[hi]        \n\t" "adcx %[lo], %[r5]\n\t" "adox %[hi], %[r6]\n\t"
+        "mulx   24(%[g]),%[lo], %[hi]        \n\t" "adcx %[lo], %[r6]\n\t" "adox %[hi], %[r7]\n\t"
+        "adcx   %%rax, %[r7]                 \n\t"
+
+        /* ===== fold: h = r0..r3 + 38 * r4..r7 (see fe64_reduce512_mulx) ===== */
+        "xorl   %k[top], %k[top]             \n\t"
+        "xorl   %%eax, %%eax                 \n\t"
+        "movq   $38, %%rdx                   \n\t"
+        "mulx   %[r4], %[lo], %[hi]          \n\t" "adcx %[lo], %[r0]\n\t" "adox %[hi], %[r1]\n\t"
+        "mulx   %[r5], %[lo], %[hi]          \n\t" "adcx %[lo], %[r1]\n\t" "adox %[hi], %[r2]\n\t"
+        "mulx   %[r6], %[lo], %[hi]          \n\t" "adcx %[lo], %[r2]\n\t" "adox %[hi], %[r3]\n\t"
+        "mulx   %[r7], %[lo], %[hi]          \n\t" "adcx %[lo], %[r3]\n\t" "adox %[hi], %[top]\n\t"
+        "adcx   %%rax, %[top]                \n\t"
+
+        "movq   %[top], %%rax                \n\t"
+        "movq   $38, %%rdx                   \n\t"
+        "mulx   %%rax, %[lo], %[hi]          \n\t"
+        "addq   %[lo], %[r0]                 \n\t"
+        "adcq   %[hi], %[r1]                 \n\t"
+        "adcq   $0,    %[r2]                 \n\t"
+        "adcq   $0,    %[r3]                 \n\t"
+
+        "setc   %%al                         \n\t"
+        "movzbl %%al, %%eax                  \n\t"
+        "imulq  $38, %%rax, %%rax            \n\t"
+        "addq   %%rax, %[r0]                 \n\t"
+        "adcq   $0,    %[r1]                 \n\t"
+        "adcq   $0,    %[r2]                 \n\t"
+        "adcq   $0,    %[r3]                 \n\t"
+
+        : [r0]"=&r"(r0), [r1]"=&r"(r1), [r2]"=&r"(r2), [r3]"=&r"(r3),
+          [r4]"=&r"(r4), [r5]"=&r"(r5), [r6]"=&r"(r6), [r7]"=&r"(r7),
+          [lo]"=&r"(lo), [hi]"=&r"(hi), [top]"=&r"(top)
+        : [f]"r"(f), [g]"r"(g)
+        : "rax", "rdx", "cc", "memory"
+    );
+    h[0] = r0; h[1] = r1; h[2] = r2; h[3] = r3;
 }
 
 /**
  * Field squaring: h = f^2 mod (2^255 - 19).
  *
- * Dedicated squaring kernel exploiting off-diagonal symmetry — 10
- * multiplications (6 cross + 4 squares) vs 16 for the full multiply.
- * Roughly half the Montgomery ladder is squarings, so ~37% fewer
- * 64×64 multiplies across the ladder body when this kernel is live.
+ * Dedicated squaring exploiting off-diagonal symmetry (6 cross-products
+ * doubled + 4 diagonal squares = 10 multiplies vs 16), with the
+ * reduction fused into the same asm block.  Byte-identical to the pure-C
+ * reference and to the two-stage `fe64_sq512_mulx` + `fe64_reduce512_mulx`
+ * composition.  Roughly half the Montgomery ladder is squarings, so this
+ * is on the critical path for most of X25519's runtime.
  */
 __attribute__((visibility("hidden")))
 void ama_x25519_fe64_sq_mulx(uint64_t h[4], const uint64_t f[4]) {
-    uint64_t r[8];
-    fe64_sq512_mulx(r, f);
-    fe64_reduce512_mulx(h, r);
+    uint64_t r0, r1, r2, r3, r4, r5, r6, r7, lo, hi, top;
+    __asm__ __volatile__ (
+        /* ===== off-diagonal products in r1..r6 (see fe64_sq512_mulx) ===== */
+        "movq   (%[f]),  %%rdx               \n\t"
+        "mulx   8(%[f]), %[r1], %[r2]        \n\t"
+        "mulx   16(%[f]),%[lo], %[r3]        \n\t" "addq %[lo], %[r2]\n\t"
+        "mulx   24(%[f]),%[lo], %[r4]        \n\t" "adcq %[lo], %[r3]\n\t" "adcq $0, %[r4]\n\t"
+        "xorl   %k[r5], %k[r5]               \n\t"
+        "xorl   %k[r6], %k[r6]               \n\t"
+
+        "xorl   %%eax, %%eax                 \n\t"
+        "movq   8(%[f]),  %%rdx              \n\t"
+        "mulx   16(%[f]), %[lo], %[hi]       \n\t" "adcx %[lo], %[r3]\n\t" "adox %[hi], %[r4]\n\t"
+        "mulx   24(%[f]), %[lo], %[hi]       \n\t" "adcx %[lo], %[r4]\n\t" "adox %[hi], %[r5]\n\t"
+        "adcx   %%rax, %[r5]                 \n\t" "adox %%rax, %[r6]\n\t"
+
+        "movq   16(%[f]), %%rdx              \n\t"
+        "mulx   24(%[f]), %[lo], %[hi]       \n\t" "addq %[lo], %[r5]\n\t" "adcq %[hi], %[r6]\n\t"
+
+        /* ===== double r1..r6 into r1..r7 ===== */
+        "xorl   %k[r0], %k[r0]               \n\t"
+        "xorl   %k[r7], %k[r7]               \n\t"
+        "xorl   %%eax, %%eax                 \n\t"
+        "adcx   %[r1], %[r1]                 \n\t"
+        "adcx   %[r2], %[r2]                 \n\t"
+        "adcx   %[r3], %[r3]                 \n\t"
+        "adcx   %[r4], %[r4]                 \n\t"
+        "adcx   %[r5], %[r5]                 \n\t"
+        "adcx   %[r6], %[r6]                 \n\t"
+        "adcx   %%rax, %[r7]                 \n\t"
+
+        /* ===== add the four diagonal squares ===== */
+        "xorl   %%eax, %%eax                 \n\t"
+        "movq   (%[f]),  %%rdx               \n\t" "mulx %%rdx, %[lo], %[hi]\n\t" "adcx %[lo], %[r0]\n\t" "adcx %[hi], %[r1]\n\t"
+        "movq   8(%[f]), %%rdx               \n\t" "mulx %%rdx, %[lo], %[hi]\n\t" "adcx %[lo], %[r2]\n\t" "adcx %[hi], %[r3]\n\t"
+        "movq   16(%[f]),%%rdx               \n\t" "mulx %%rdx, %[lo], %[hi]\n\t" "adcx %[lo], %[r4]\n\t" "adcx %[hi], %[r5]\n\t"
+        "movq   24(%[f]),%%rdx               \n\t" "mulx %%rdx, %[lo], %[hi]\n\t" "adcx %[lo], %[r6]\n\t" "adcx %[hi], %[r7]\n\t"
+
+        /* ===== fold: h = r0..r3 + 38 * r4..r7 ===== */
+        "xorl   %k[top], %k[top]             \n\t"
+        "xorl   %%eax, %%eax                 \n\t"
+        "movq   $38, %%rdx                   \n\t"
+        "mulx   %[r4], %[lo], %[hi]          \n\t" "adcx %[lo], %[r0]\n\t" "adox %[hi], %[r1]\n\t"
+        "mulx   %[r5], %[lo], %[hi]          \n\t" "adcx %[lo], %[r1]\n\t" "adox %[hi], %[r2]\n\t"
+        "mulx   %[r6], %[lo], %[hi]          \n\t" "adcx %[lo], %[r2]\n\t" "adox %[hi], %[r3]\n\t"
+        "mulx   %[r7], %[lo], %[hi]          \n\t" "adcx %[lo], %[r3]\n\t" "adox %[hi], %[top]\n\t"
+        "adcx   %%rax, %[top]                \n\t"
+
+        "movq   %[top], %%rax                \n\t"
+        "movq   $38, %%rdx                   \n\t"
+        "mulx   %%rax, %[lo], %[hi]          \n\t"
+        "addq   %[lo], %[r0]                 \n\t"
+        "adcq   %[hi], %[r1]                 \n\t"
+        "adcq   $0,    %[r2]                 \n\t"
+        "adcq   $0,    %[r3]                 \n\t"
+
+        "setc   %%al                         \n\t"
+        "movzbl %%al, %%eax                  \n\t"
+        "imulq  $38, %%rax, %%rax            \n\t"
+        "addq   %%rax, %[r0]                 \n\t"
+        "adcq   $0,    %[r1]                 \n\t"
+        "adcq   $0,    %[r2]                 \n\t"
+        "adcq   $0,    %[r3]                 \n\t"
+
+        : [r0]"=&r"(r0), [r1]"=&r"(r1), [r2]"=&r"(r2), [r3]"=&r"(r3),
+          [r4]"=&r"(r4), [r5]"=&r"(r5), [r6]"=&r"(r6), [r7]"=&r"(r7),
+          [lo]"=&r"(lo), [hi]"=&r"(hi), [top]"=&r"(top)
+        : [f]"r"(f)
+        : "rax", "rdx", "cc", "memory"
+    );
+    h[0] = r0; h[1] = r1; h[2] = r2; h[3] = r3;
 }
 
 #else  /* not x86-64 GCC/Clang — emit nothing, dispatch never selects this path */

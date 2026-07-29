@@ -245,6 +245,29 @@ def render(c: dict[str, Any], q: dict[str, Any]) -> str:
     gen = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     libs_in = c["libraries_compiled"]
 
+    # Host identity, read from the harness rather than assumed.
+    #
+    # This is load-bearing, not decoration: which AES-GCM kernel a library
+    # selects depends on VAES + VPCLMULQDQ, and that choice moves the peer
+    # figure by roughly 4x. A page that prints only a clock speed invites the
+    # reader to compare a row measured on a VAES host against one measured
+    # without it and attribute the difference to the implementations.
+    host = c.get("host") or {}
+    if host:
+        feats = [k for k in ("aes_ni", "pclmulqdq", "vaes", "vpclmulqdq",
+                             "avx2", "avx512f", "sha_ni", "bmi2", "adx")
+                 if host.get(k)]
+        absent = [k for k in ("vaes", "vpclmulqdq", "sha_ni")
+                  if not host.get(k)]
+        host_line = html.escape(host.get("cpu", "unknown"))
+        host_line += " · " + ", ".join(feats)
+        if absent:
+            host_line += " · <b>absent:</b> " + ", ".join(absent)
+    else:
+        host_line = ("host not recorded — this artefact predates host capture; "
+                     "peer AES-GCM figures are not comparable across hosts "
+                     "with different VAES support")
+
     # ── standing rows ──
     rows = []
     for s in st:
@@ -332,6 +355,7 @@ def render(c: dict[str, Any], q: dict[str, Any]) -> str:
     return TEMPLATE.format(
         gen=esc(gen),
         freq=f"{freq:.3f}",
+        host_line=host_line,
         msg=f"{msg:,}",
         nlibs=len(libs_in),
         vers=vers,
@@ -547,6 +571,15 @@ implements any of them is OpenSSL 4.0.1, reached through <code>cryptography</cod
 call overhead. It is a different measurement plane from the native C rows and is
 labelled as such rather than merged into them.
 </div>
+<div class="callout">
+<b>The post-quantum rows are also from a different host.</b>
+<code>benchmarks/pqc_results.json</code> was captured where <code>cryptography</code>
+49.0.0 (OpenSSL 4.0.1) was installed; the host this page's native rows were measured
+on carries 41.0.7, which exposes no ML-KEM or ML-DSA, so those rows cannot be
+re-measured here and were carried forward unchanged. They are unaffected by the
+symmetric and elliptic-curve kernel work recorded in the changelog, which touched
+no lattice code. Read them as a prior record, not as a measurement of this host.
+</div>
 <pre>python benchmarks/benchmark_suite.py
 g++ -O2 -std=c++17 -DHAVE_OPENSSL -DHAVE_SODIUM -DHAVE_WOLFSSL -DHAVE_BOTAN \\
     -DHAVE_NETTLE -DHAVE_GCRYPT -DHAVE_MBEDTLS -I/usr/include/botan-2 -Iinclude \\
@@ -559,6 +592,7 @@ python benchmarks/generate_competitive.py   # -> this page</pre>
 
 <p class="meta">
 Generated {gen} · message size {msg} bytes · measured clock {freq} GHz<br>
+Host: {host_line}<br>
 {vers}<br>
 Every figure on this page is read from <code>benchmarks/multi_library_results.json</code>
 and <code>benchmarks/pqc_results.json</code>. Nothing is hand-entered.

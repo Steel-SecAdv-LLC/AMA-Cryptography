@@ -66,6 +66,7 @@
  */
 
 #include "../include/ama_cryptography.h"
+#include "../include/ama_cpuid.h"
 #include "ama_hmac_sha256.h"
 #include "ama_platform_rand.h"
 #include "internal/ama_once.h"
@@ -359,8 +360,43 @@ static void nistp_to_bytes(uint8_t *out, const uint64_t *a, unsigned nbytes) {
  * Fully constant time: the inner loops are fixed-trip and the only data
  * dependence is arithmetic.
  */
-static void nistp_mont_mul(uint64_t *r, const uint64_t *a, const uint64_t *b,
-                           const uint64_t *m, uint64_t m0inv, unsigned nl) {
+#if defined(AMA_HAVE_NISTP_MONT_MULX_IMPL)
+/* Four-limb MULX+ADCX/ADOX Montgomery multiply — src/c/x86/ama_nistp_mont_mulx.c.
+ * Covers P-256's field and its scalar field, which between them account for
+ * every Montgomery multiply a P-256 signature or verification performs. */
+extern void ama_nistp_mont_mul4_mulx(uint64_t r[4], const uint64_t a[4],
+                                     const uint64_t b[4], const uint64_t m[4],
+                                     uint64_t m0inv);
+
+/* CPUID gate, resolved once.
+ *
+ * `ama_has_bmi2()` and `ama_has_adx()` are each a load-and-branch after
+ * their shared one-shot probe, but this predicate is consulted on the order
+ * of ten thousand times per verification, so it is worth collapsing to a
+ * single relaxed load.  The write is idempotent — every thread computes the
+ * same value from the same cached CPUID result — and a torn read is not
+ * possible for an aligned int, so no synchronisation is needed beyond the
+ * once-guard already inside the CPUID getters. */
+static int nistp_mulx_gate = -1;
+
+static inline int nistp_use_mulx4(void) {
+    int g = nistp_mulx_gate;
+    if (g < 0) {
+        g = (ama_has_bmi2() && ama_has_adx()) ? 1 : 0;
+        nistp_mulx_gate = g;
+    }
+    return g;
+}
+#endif /* AMA_HAVE_NISTP_MONT_MULX_IMPL */
+
+/* Body of the CIOS multiply, always_inline so the two wrappers below can
+ * instantiate it with the limb count as a literal.  The 4-limb wrapper is
+ * what P-256 reaches on a host without ADX (and what every non-x86 host
+ * reaches), and constant-folding `nl` there lets the compiler unroll both
+ * loops: measured 102 cycles against 178 for the runtime-`nl` form. */
+static inline __attribute__((always_inline))
+void nistp_mont_mul_body(uint64_t *r, const uint64_t *a, const uint64_t *b,
+                         const uint64_t *m, uint64_t m0inv, unsigned nl) {
     uint64_t t[AMA_NISTP_MAX_LIMBS + 2];
     unsigned i, j;
 
@@ -395,6 +431,21 @@ static void nistp_mont_mul(uint64_t *r, const uint64_t *a, const uint64_t *b,
     }
 
     nistp_cond_sub_mod(r, t, t[nl], m, nl);
+}
+
+static void nistp_mont_mul(uint64_t *r, const uint64_t *a, const uint64_t *b,
+                           const uint64_t *m, uint64_t m0inv, unsigned nl) {
+    if (nl == 4) {
+#if defined(AMA_HAVE_NISTP_MONT_MULX_IMPL)
+        if (nistp_use_mulx4()) {
+            ama_nistp_mont_mul4_mulx(r, a, b, m, m0inv);
+            return;
+        }
+#endif
+        nistp_mont_mul_body(r, a, b, m, m0inv, 4);
+        return;
+    }
+    nistp_mont_mul_body(r, a, b, m, m0inv, nl);
 }
 
 static void nistp_mont_sqr(uint64_t *r, const uint64_t *a,
@@ -955,32 +1006,153 @@ static void nistp_scalar_mul_generator(nistp_jac *out, const uint8_t *k,
 }
 
 /**
- * Variable-time R = u1*A + u2*B (Shamir's trick).
+ * R = P + Q where Q is affine (`madd-2007-bl`), VARIABLE TIME.
+ *
+ * Restricted and unsafe relative to `nistp_jac_add` in two deliberate ways,
+ * both of which are what make it cheaper:
+ *
+ *   - Q is affine, i.e. Z2 == 1.  Dropping Z2 removes Z2Z2, U1, S1 and the
+ *     Z2 term of Z3 from the chain: 7M + 4S instead of 11M + 5S.
+ *   - The exceptional cases branch instead of being computed and masked.
+ *     `nistp_jac_add` evaluates a full doubling on every call so that its
+ *     timing cannot depend on whether the inputs happened to coincide; here
+ *     the doubling is taken only when it is needed.
+ *
+ * That branching is why this must never be reachable from signing.  Its only
+ * caller is `nistp_shamir`, which ECDSA *verification* uses, where u1, u2, the
+ * public key and the signature are all public by definition — the same posture
+ * `ama_secp256k1.c` takes for its verify path.  Nothing secret reaches either
+ * argument.
+ *
+ * Per addition this is 11 field multiplications against 24 for the
+ * constant-time path (16 for add-2007-bl plus 8 for the unconditional
+ * doubling), and a P-256 verification performs roughly 192 of them.
+ */
+static void nistp_jac_add_affine_vartime(nistp_jac *r, const nistp_jac *p,
+                                         const uint64_t *qx, const uint64_t *qy,
+                                         const nistp_curve *c) {
+    const uint64_t *m = c->p;
+    uint64_t m0 = c->p0inv;
+    unsigned nl = c->nlimbs;
+    uint64_t z1z1[AMA_NISTP_MAX_LIMBS], u2[AMA_NISTP_MAX_LIMBS];
+    uint64_t s2[AMA_NISTP_MAX_LIMBS], h[AMA_NISTP_MAX_LIMBS];
+    uint64_t hh[AMA_NISTP_MAX_LIMBS], ii[AMA_NISTP_MAX_LIMBS];
+    uint64_t jj[AMA_NISTP_MAX_LIMBS], rr[AMA_NISTP_MAX_LIMBS];
+    uint64_t vv[AMA_NISTP_MAX_LIMBS], t0[AMA_NISTP_MAX_LIMBS];
+    nistp_jac out;
+
+    /* P at infinity: the sum is Q, lifted back to Jacobian with Z = 1. */
+    if (nistp_jac_is_infinity(p, nl)) {
+        memcpy(r->X, qx, sizeof(uint64_t) * nl);
+        memcpy(r->Y, qy, sizeof(uint64_t) * nl);
+        nistp_mont_one(r->Z, c->rr_p, m, m0, nl);
+        return;
+    }
+
+    nistp_mont_sqr(z1z1, p->Z, m, m0, nl);           /* Z1Z1 = Z1^2      */
+    nistp_mont_mul(u2, qx, z1z1, m, m0, nl);         /* U2 = X2*Z1Z1     */
+    nistp_mont_mul(t0, z1z1, p->Z, m, m0, nl);       /* Z1^3             */
+    nistp_mont_mul(s2, qy, t0, m, m0, nl);           /* S2 = Y2*Z1^3     */
+
+    nistp_mod_sub(h, u2, p->X, m, nl);               /* H = U2 - X1      */
+    nistp_mod_sub(rr, s2, p->Y, m, nl);              /* S2 - Y1          */
+
+    if (nistp_is_zero(h, nl)) {
+        /* Same x-coordinate: either P == Q (double) or P == -Q (infinity). */
+        if (nistp_is_zero(rr, nl))
+            nistp_jac_double(r, p, c);
+        else
+            nistp_jac_set_infinity(r);
+        return;
+    }
+
+    nistp_mod_add(rr, rr, rr, m, nl);                /* r = 2*(S2 - Y1)  */
+
+    nistp_mont_sqr(hh, h, m, m0, nl);                /* HH = H^2         */
+    nistp_mod_add(ii, hh, hh, m, nl);
+    nistp_mod_add(ii, ii, ii, m, nl);                /* I = 4*HH         */
+    nistp_mont_mul(jj, h, ii, m, m0, nl);            /* J = H*I          */
+    nistp_mont_mul(vv, p->X, ii, m, m0, nl);         /* V = X1*I         */
+
+    /* X3 = r^2 - J - 2*V */
+    nistp_mont_sqr(out.X, rr, m, m0, nl);
+    nistp_mod_sub(out.X, out.X, jj, m, nl);
+    nistp_mod_sub(out.X, out.X, vv, m, nl);
+    nistp_mod_sub(out.X, out.X, vv, m, nl);
+
+    /* Y3 = r*(V - X3) - 2*Y1*J */
+    nistp_mod_sub(t0, vv, out.X, m, nl);
+    nistp_mont_mul(out.Y, rr, t0, m, m0, nl);
+    nistp_mont_mul(t0, p->Y, jj, m, m0, nl);
+    nistp_mod_add(t0, t0, t0, m, nl);
+    nistp_mod_sub(out.Y, out.Y, t0, m, nl);
+
+    /* Z3 = (Z1 + H)^2 - Z1Z1 - HH */
+    nistp_mod_add(t0, p->Z, h, m, nl);
+    nistp_mont_sqr(out.Z, t0, m, m0, nl);
+    nistp_mod_sub(out.Z, out.Z, z1z1, m, nl);
+    nistp_mod_sub(out.Z, out.Z, hh, m, nl);
+
+    *r = out;
+}
+
+/**
+ * Variable-time R = u1*A + u2*B (Shamir's trick), A and B affine.
  *
  * Used only by ECDSA verification, where every input is public — the same
  * posture, and the same 2-bit interleaved table, as
  * `secp256k1_point_mul_shamir`.
+ *
+ * A and B arrive as affine Montgomery coordinates rather than Jacobian
+ * points.  That is not a convenience: it is the precondition that lets the
+ * inner loop use `nistp_jac_add_affine_vartime` (11 field multiplications)
+ * instead of the constant-time `nistp_jac_add` (24).  Taking them as
+ * coordinate pairs puts the precondition in the signature, where a future
+ * caller cannot quietly violate it by passing an unnormalised point.
+ *
+ * The third table entry A+B is computed once and normalised to affine so it
+ * can be used the same way; the single inversion that costs is repaid many
+ * times over across the ~192 additions the loop performs.  A+B is the one
+ * entry that can be the point at infinity (exactly when B == -A, which a
+ * crafted public key can arrange), so it carries a validity flag and its
+ * digit is skipped when it is unavailable — adding infinity is a no-op, so
+ * skipping is the correct result, not an approximation.
  */
 static void nistp_shamir(nistp_jac *out,
-                         const uint8_t *u1, const nistp_jac *A,
-                         const uint8_t *u2, const nistp_jac *B,
+                         const uint8_t *u1, const uint64_t *ax, const uint64_t *ay,
+                         const uint8_t *u2, const uint64_t *bx, const uint64_t *by,
                          const nistp_curve *c) {
-    nistp_jac t[4], acc;
+    unsigned nl = c->nlimbs;
+    uint64_t tx[4][AMA_NISTP_MAX_LIMBS], ty[4][AMA_NISTP_MAX_LIMBS];
+    int valid[4] = { 0, 1, 1, 0 };
+    nistp_jac acc, ja, jb, sum;
     unsigned i;
     int j;
 
-    nistp_jac_set_infinity(&t[0]);
-    t[1] = *A;
-    t[2] = *B;
-    nistp_jac_add(&t[3], A, B, c);
+    memcpy(tx[1], ax, sizeof(uint64_t) * nl);
+    memcpy(ty[1], ay, sizeof(uint64_t) * nl);
+    memcpy(tx[2], bx, sizeof(uint64_t) * nl);
+    memcpy(ty[2], by, sizeof(uint64_t) * nl);
+
+    /* t[3] = A + B, normalised to affine.  Built through the constant-time
+     * adder because it is a single operation whose cost does not matter and
+     * whose exceptional-case handling is already proven. */
+    memcpy(ja.X, ax, sizeof(uint64_t) * nl);
+    memcpy(ja.Y, ay, sizeof(uint64_t) * nl);
+    nistp_mont_one(ja.Z, c->rr_p, c->p, c->p0inv, nl);
+    memcpy(jb.X, bx, sizeof(uint64_t) * nl);
+    memcpy(jb.Y, by, sizeof(uint64_t) * nl);
+    nistp_mont_one(jb.Z, c->rr_p, c->p, c->p0inv, nl);
+    nistp_jac_add(&sum, &ja, &jb, c);
+    valid[3] = nistp_jac_to_affine(tx[3], ty[3], &sum, c);
 
     nistp_jac_set_infinity(&acc);
     for (i = 0; i < c->nbytes; i++) {
         for (j = 7; j >= 0; j--) {
             int idx = ((u1[i] >> j) & 1) | (((u2[i] >> j) & 1) << 1);
             nistp_jac_double(&acc, &acc, c);
-            if (idx)
-                nistp_jac_add(&acc, &acc, &t[idx], c);
+            if (idx && valid[idx])
+                nistp_jac_add_affine_vartime(&acc, &acc, tx[idx], ty[idx], c);
         }
     }
     *out = acc;
@@ -1947,7 +2119,7 @@ static ama_error_t nistp_ecdsa_verify_rs(const nistp_curve *c,
     memcpy(Q.Y, qy, sizeof(uint64_t) * nl);
     nistp_mont_one(Q.Z, c->rr_p, c->p, c->p0inv, nl);
 
-    nistp_shamir(&R, u1b, &G, u2b, &Q, c);
+    nistp_shamir(&R, u1b, G.X, G.Y, u2b, Q.X, Q.Y, c);
     if (!nistp_jac_to_affine(x, y, &R, c))
         return AMA_ERROR_VERIFY_FAILED;
 
@@ -2117,6 +2289,33 @@ int ama_nistp_test_modulus(int curve_index, uint64_t *p_out, uint64_t *n_out) {
     c = &NISTP_CURVES[curve_index];
     memcpy(p_out, c->p, sizeof(uint64_t) * c->nlimbs);
     memcpy(n_out, c->n, sizeof(uint64_t) * c->nlimbs);
+    return 1;
+}
+
+/**
+ * Reference Montgomery multiply for the MULX/ADX equivalence test.
+ *
+ * Deliberately routes through the *portable* CIOS body — not the
+ * dispatching nistp_mont_mul, which on an ADX host would call the very
+ * kernel under test and make the comparison tautological.  `use_n`
+ * selects the scalar modulus n and its n0inv; otherwise the field
+ * modulus p and p0inv.  Inputs and output are Montgomery-domain limb
+ * arrays of length c->nlimbs.  Returns 1 on success, 0 on a bad index.
+ */
+int ama_nistp_test_mont_mul(int curve_index, int use_n,
+                            const uint64_t a[], const uint64_t b[],
+                            uint64_t out[]);
+int ama_nistp_test_mont_mul(int curve_index, int use_n,
+                            const uint64_t a[], const uint64_t b[],
+                            uint64_t out[]) {
+    const nistp_curve *c;
+    if (curve_index < 0 || curve_index > 2)
+        return 0;
+    c = &NISTP_CURVES[curve_index];
+    nistp_mont_mul_body(out, a, b,
+                        use_n ? c->n : c->p,
+                        use_n ? c->n0inv : c->p0inv,
+                        c->nlimbs);
     return 1;
 }
 

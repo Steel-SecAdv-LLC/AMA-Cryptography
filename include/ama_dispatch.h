@@ -285,8 +285,8 @@ AMA_API const char *ama_aes_gcm_active_backend(void);
  * `kyber`, `dilithium`, `aes_gcm`, `chacha20`, `argon2`, `x25519`,
  * `ed25519`, `sphincs` — each 0=Generic, 1=AVX2, 2=AVX-512, 3=NEON,
  * 4=SVE2), and the runtime CPU-feature probe results (`avx2`,
- * `avx512f`, `avx512kc`, `aesni`, `pclmul`, `vaes`, `arm_aes`,
- * `arm_pmull`).  Key names match the emitted fingerprint string
+ * `avx512f`, `avx512kc`, `aesni`, `pclmul`, `vaes`, `kbmi`,
+ * `arm_aes`, `arm_pmull`).  Key names match the emitted fingerprint string
  * verbatim — see `dispatch_cache_fingerprint()` in
  * `src/c/dispatch/ama_dispatch.c`.  A kernel upgrade, microcode
  * change, or library version that re-wires which tier owns a slot

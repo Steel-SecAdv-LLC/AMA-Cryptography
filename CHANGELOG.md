@@ -19,6 +19,128 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ## [Unreleased]
 
+### Changed — five hot paths re-optimised, output byte-identical
+
+Five kernels were re-optimised. Every change preserves the algorithm and its
+constant-time properties; only the instruction schedule changes. Each is pinned
+to its prior behaviour by a byte-identity equivalence test, and the NIST ACVP
+and vendored Wycheproof corpora pass unchanged (1,530 ECDSA vectors across
+P-256/384/521, plus the AES-GCM, ChaCha20-Poly1305 and X25519 suites).
+
+**How these numbers were taken.** Earlier drafts of this entry quoted
+cycles/byte from separate runs and were wrong: this host's core boosts above
+its TSC rate, so a cycles/byte figure derived from the TSC moves between runs
+by more than the effects being measured. The figures below are instead
+**wall-clock microseconds, best-of-5, with the before and after binaries run
+alternately in the same session** against the same 64 KiB buffer, so
+frequency drift cancels rather than accumulating into the ratio. Host: Intel
+Xeon (Cascade Lake, 2.80 GHz TSC), gcc 13.3, library release flags. One host,
+one compiler — a record, not a portable guarantee.
+
+| operation | before | after | |
+|---|---|---|---|
+| AES-256-GCM encrypt, 64 KiB | 85.40 us | **20.58 us** | 4.15x |
+| SHA3-256, 64 KiB | 252.01 us | **149.36 us** | 1.69x |
+| P-256 ECDSA verify | 501.61 us | **245.70 us** | 2.04x |
+| P-256 ECDSA sign | 200.84 us | **136.22 us** | 1.47x |
+| ChaCha20-Poly1305 encrypt, 64 KiB | 91.30 us | **67.24 us** | 1.36x |
+| X25519 scalar multiplication | 59.24 us | **54.50 us** | 1.09x |
+
+- **AES-256-GCM — GHASH aggregation, register-resident counters, deferred
+  hashing.** The AES-NI/PCLMULQDQ kernel hashed each block with its own
+  multiply-and-reduce, forming an eight-deep dependency chain per group, and
+  round-tripped the CTR block through the stack for every increment — a
+  narrow-store/wide-load store-forwarding stall, eight of them serially ahead
+  of the AES they feed. GHASH now folds eight blocks under a single reduction
+  against an `H^1..H^8` power table (the 1-bit reflected-order correction and
+  the modular reduction are both linear over XOR, so one reduction over eight
+  accumulated products is exact, not an approximation); the counter is
+  incremented with `PADDD` on the byte-reversed block, which is precisely
+  SP 800-38D's inc32 wrap; the accumulator stays in the byte-swapped GHASH
+  domain for the whole message and crosses back once, for the tag; and each
+  group's GHASH is deferred one iteration so its carry-less multiplies overlap
+  the next group's AES on a different execution port.
+
+- **SHA3 / Keccak-f[1600] — named-local rounds plus a BMI build.** The
+  permutation held its 25 lanes in an array, so every round paid 25 loads and
+  25 stores it did not need, and staged rho+pi through a 25-lane `B[]` array.
+  The rounds now live in `src/c/internal/ama_keccak_round.h` as two
+  direction-alternating macros over named locals — twelve pairs cover all 24
+  rounds with no per-round copy and at most five staged lanes live. A second
+  translation unit (`src/c/x86/ama_keccak_f1600_bmi.c`) compiles the same
+  macros under `-mbmi -mbmi2`, where ANDN collapses chi's `(~b) & c` from two
+  instructions to one, 600 times per permutation. It is selected on a new
+  BMI1+BMI2 CPUID gate and is deliberately **not** put through the SIMD
+  auto-tune bench: that bench exists to catch vector kernels that lose to
+  scalar code, and an identical instruction schedule on general-purpose
+  registers has no such failure mode. New test `test_keccak_bmi_equiv` pins
+  the two builds against each other and both against the published
+  Keccak-f[1600] image of the all-zero state, so a defect shared by both
+  cannot pass by self-agreement.
+
+- **P-256 — a 4-limb Montgomery multiply, and a verify that stops paying for
+  constant time it does not need.** The CIOS multiply shared by
+  P-256/384/521 takes the limb count as a runtime parameter, so neither loop
+  unrolls and all 32 partial products chain through the single carry flag. It
+  is the dominant cost of both operations: 2,871 multiplies per signature,
+  7,441 per verification. `src/c/x86/ama_nistp_mont_mulx.c` adds a 4-limb
+  specialisation on MULX + ADCX/ADOX dual carry chains (178 -> 72 cycles),
+  covering P-256's field *and* its scalar field; P-384, P-521 and non-x86
+  hosts keep the generic path, which now also constant-folds its limb count
+  for the 4-limb case. Separately, ECDSA *verification* — where u1, u2, the
+  public key and the signature are public by definition — now uses a
+  variable-time mixed addition (11 field multiplications) in Shamir's trick
+  instead of the constant-time adder's 24, with the joint table normalised to
+  affine once. Signing is untouched and remains fully constant-time.
+
+- **ChaCha20-Poly1305 — register transpose and wider Poly1305 limbs.** The
+  AVX2 keystream de-interleave extracted each 32-bit word by storing a whole
+  YMM register to the stack and reloading one lane — 128 store-forwarding
+  stalls per 512-byte block. It is now a 24-shuffle register transpose. The
+  16- and 8-bit ChaCha rotations became `VPSHUFB` (they are byte
+  permutations; 160 of the 320 rotations in a block). Poly1305 gained a
+  radix-2^44 three-limb accumulator on targets with a native 64x64->128
+  multiply — 9 multiplies per block against 25 — keeping the radix-2^26 path
+  everywhere else, and absorbs whole runs of blocks with the accumulator in
+  registers.
+
+- **X25519 — fused multiply-reduce.** The MULX+ADX field multiply and its
+  2^255-19 reduction were separate `asm` statements, so the eight product
+  limbs spilled to a stack array and were immediately reloaded. Fusing each
+  pair into one block keeps the product in registers (multiply 55 -> 50
+  cycles, square 51 -> 45). The two-stage building blocks are retained and
+  exported under `AMA_TESTING_MODE` so `test_x25519_fe64_mulx_equiv` can pin
+  the fused kernels against both the pure-C reference and the two-stage
+  composition of their own parts.
+
+**What was not done, and why.** The AES-GCM figure is short of what a VAES +
+VPCLMULQDQ ZMM kernel would reach, and that kernel was not written: this host
+reports neither feature (recorded in `benchmarks/multi_library_results.json`
+under `host`), so such a kernel could not be executed, measured, or tested
+here. Writing an untestable AEAD kernel is the one thing this codebase should
+not do. The remaining P-256 distance is in the point layer — a wider
+fixed-base comb and Booth recoding for signing — which is a larger change than
+the field work and is not started rather than half-landed.
+
+### Added — host identity in the benchmark artefact
+
+`benchmarks/multi_library_results.json` recorded a measured clock and nothing
+else about the machine. That is not enough to read the table safely: whether a
+host implements VAES + VPCLMULQDQ decides which AES-GCM kernel a library
+selects, and that single fact moves peer AES-GCM by roughly 4x (~0.20
+cycles/byte with those instructions, ~0.79 without). Two artefacts captured on
+different hosts would appear directly comparable, and a reader would attribute
+an ISA difference to the implementations.
+
+The harness now records the CPU brand string and the feature bits that decide
+kernel selection (AES-NI, PCLMULQDQ, VAES, VPCLMULQDQ, AVX2, AVX-512F, SHA-NI,
+BMI2, ADX), and `benchmarks/competitive.html` prints them — including,
+explicitly, which of them are *absent*. The page also now states that its
+post-quantum rows come from a different host and a different measurement plane,
+because the `cryptography` build exposing ML-KEM/ML-DSA is not present on the
+host the native rows were measured on; those rows are carried forward unchanged
+and are unaffected by this work, which touched no lattice code.
+
 ### Removed — three generated charts no document referenced
 
 `assets/performance_comparison.png`, `assets/package_performance.png` and
