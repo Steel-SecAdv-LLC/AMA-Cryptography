@@ -331,7 +331,7 @@ typedef struct { __m128i c[8]; } gcm_ct8;
  * ciphertext blocks so the caller can hash them without re-reading
  * memory.
  */
-static inline __attribute__((always_inline))
+AMA_AVX2_ALWAYS_INLINE
 gcm_ct8 gcm_ctr_encrypt8(const uint8_t *src, uint8_t *dst,
                          const __m128i rk[15], __m128i *ctr) {
     __m128i c = *ctr;

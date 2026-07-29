@@ -63,6 +63,21 @@ extern "C" {
 #define AMA_MAYBE_UNUSED
 #endif
 
+/* Portable always-inline for the AVX2 TUs.  GCC/Clang spell it as an
+ * attribute; MSVC spells it `__forceinline` and rejects `__attribute__`
+ * outright, so a bare GNU attribute in a file that MSVC compiles
+ * (ama_aes_gcm_avx2.c is in the unconditional AVX2 source list on both
+ * toolchains — only the per-file `-mavx2 -maes -mpclmul` flags are
+ * gated `NOT MSVC`) breaks the Windows build.  Same per-compiler split
+ * that ama_nistp.c uses for AMA_NISTP_ALWAYS_INLINE. */
+#if defined(__GNUC__) || defined(__clang__)
+#define AMA_AVX2_ALWAYS_INLINE static inline __attribute__((always_inline))
+#elif defined(_MSC_VER)
+#define AMA_AVX2_ALWAYS_INLINE static __forceinline
+#else
+#define AMA_AVX2_ALWAYS_INLINE static inline
+#endif
+
 /* ============================================================================
  * SHA-3 / Keccak
  * ============================================================================ */

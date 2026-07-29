@@ -298,7 +298,6 @@ static void poly1305_init(poly1305_ctx *ctx, const uint8_t key[32]) {
     ctx->buf_len = 0;
 
     ama_secure_memzero(r_bytes, sizeof(r_bytes));
-    return;
 #else
     uint8_t r_bytes[16];
 
