@@ -160,10 +160,14 @@ def build(bench: dict[str, Any], rawc: list[dict[str, Any]], baseline: dict[str,
         "baselineMeta": baseline["metadata"],
     }
 
-    tmpl = (Path(__file__).resolve().parent / "_dashboard_template.html").read_text(encoding="utf-8")
-    return tmpl.replace("/*__DATA__*/", json.dumps(payload)).replace(
-        "__GENERATED__", html.escape(generated)
-    ).replace("__VERSION__", html.escape(version))
+    tmpl = (Path(__file__).resolve().parent / "_dashboard_template.html").read_text(
+        encoding="utf-8"
+    )
+    return (
+        tmpl.replace("/*__DATA__*/", json.dumps(payload))
+        .replace("__GENERATED__", html.escape(generated))
+        .replace("__VERSION__", html.escape(version))
+    )
 
 
 def main() -> int:

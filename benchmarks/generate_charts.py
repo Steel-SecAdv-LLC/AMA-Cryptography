@@ -261,7 +261,7 @@ def generate_charts(output_dir: str) -> None:
     for bar, val, lat in zip(bars, ops_vals, latencies):
         label = f"{val:,} ops/s ({lat:.3f} ms)" if val > 10 else f"{val} ops/s ({lat:.1f} ms)"
         ax.text(
-            bar.get_width() * 1.06,   # multiplicative offset: a log axis has no fixed gap
+            bar.get_width() * 1.06,  # multiplicative offset: a log axis has no fixed gap
             bar.get_y() + bar.get_height() / 2,
             label,
             va="center",
