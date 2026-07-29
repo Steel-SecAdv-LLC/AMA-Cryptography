@@ -106,7 +106,7 @@
  * bits (no bit beyond r[7]), so that OF residual is mathematically
  * zero. We discard it.
  * ---------------------------------------------------------------------- */
-static inline __attribute__((always_inline, hot))
+static inline __attribute__((always_inline, hot, unused))
 void fe64_mul512_mulx(uint64_t r[8], const uint64_t f[4],
                       const uint64_t g[4]) {
     uint64_t r0, r1, r2, r3, r4, r5, r6, r7;
@@ -224,7 +224,7 @@ void fe64_mul512_mulx(uint64_t r[8], const uint64_t f[4],
  * values (max position-3 sum is c02.hi + c03.lo + c12.lo), so the
  * 1-bit overflows from those adds always fit in the next limb up.
  * ---------------------------------------------------------------------- */
-static inline __attribute__((always_inline, hot))
+static inline __attribute__((always_inline, hot, unused))
 void fe64_sq512_mulx(uint64_t r[8], const uint64_t f[4]) {
     uint64_t r0, r1, r2, r3, r4, r5, r6, r7;
     uint64_t lo, hi;
@@ -348,7 +348,7 @@ void fe64_sq512_mulx(uint64_t r[8], const uint64_t f[4]) {
  * The post-condition matches `fe64_reduce512` in src/c/fe64.h: result is
  * in [0, 2*p), final canonicalisation is the surrounding fe64_tobytes.
  * ---------------------------------------------------------------------- */
-static inline __attribute__((always_inline, hot))
+static inline __attribute__((always_inline, hot, unused))
 void fe64_reduce512_mulx(uint64_t h[4], const uint64_t r[8]) {
     uint64_t h0, h1, h2, h3;
     uint64_t lo, hi, top;
@@ -512,7 +512,7 @@ void ama_x25519_fe64_sq_mulx_twostage(uint64_t h[4], const uint64_t f[4]) {
 __attribute__((visibility("hidden")))
 void ama_x25519_fe64_mul_mulx(uint64_t h[4], const uint64_t f[4],
                               const uint64_t g[4]) {
-    uint64_t r0, r1, r2, r3, r4, r5, r6, r7, lo, hi, top;
+    uint64_t r0, r1, r2, r3, r4, r5, r6, r7, lo, hi;
     __asm__ __volatile__ (
         /* ===== 4x4 schoolbook, product in r0..r7 (see fe64_mul512_mulx) ===== */
         "movq   (%[f]), %%rdx                \n\t"
@@ -553,16 +553,24 @@ void ama_x25519_fe64_mul_mulx(uint64_t h[4], const uint64_t f[4],
         "adcx   %%rax, %[r7]                 \n\t"
 
         /* ===== fold: h = r0..r3 + 38 * r4..r7 (see fe64_reduce512_mulx) ===== */
-        "xorl   %k[top], %k[top]             \n\t"
+        /* r4 is dead the instant its own MULX has read it, so it doubles as
+         * the carry-out limb instead of costing a further register.  That
+         * matters: with a frame pointer reserved (-fno-omit-frame-pointer,
+         * which the sanitiser and fuzz builds both set) only fourteen
+         * general-purpose registers remain, and a dedicated `top` pushed this
+         * block to fifteen — clang rejected it outright with "inline assembly
+         * requires more registers than available".  MOV does not write the
+         * flags, so zeroing r4 mid-chain leaves both CF and OF intact. */
         "xorl   %%eax, %%eax                 \n\t"
         "movq   $38, %%rdx                   \n\t"
         "mulx   %[r4], %[lo], %[hi]          \n\t" "adcx %[lo], %[r0]\n\t" "adox %[hi], %[r1]\n\t"
+        "movq   $0, %[r4]                    \n\t"
         "mulx   %[r5], %[lo], %[hi]          \n\t" "adcx %[lo], %[r1]\n\t" "adox %[hi], %[r2]\n\t"
         "mulx   %[r6], %[lo], %[hi]          \n\t" "adcx %[lo], %[r2]\n\t" "adox %[hi], %[r3]\n\t"
-        "mulx   %[r7], %[lo], %[hi]          \n\t" "adcx %[lo], %[r3]\n\t" "adox %[hi], %[top]\n\t"
-        "adcx   %%rax, %[top]                \n\t"
+        "mulx   %[r7], %[lo], %[hi]          \n\t" "adcx %[lo], %[r3]\n\t" "adox %[hi], %[r4]\n\t"
+        "adcx   %%rax, %[r4]                 \n\t"
 
-        "movq   %[top], %%rax                \n\t"
+        "movq   %[r4], %%rax                 \n\t"
         "movq   $38, %%rdx                   \n\t"
         "mulx   %%rax, %[lo], %[hi]          \n\t"
         "addq   %[lo], %[r0]                 \n\t"
@@ -580,7 +588,7 @@ void ama_x25519_fe64_mul_mulx(uint64_t h[4], const uint64_t f[4],
 
         : [r0]"=&r"(r0), [r1]"=&r"(r1), [r2]"=&r"(r2), [r3]"=&r"(r3),
           [r4]"=&r"(r4), [r5]"=&r"(r5), [r6]"=&r"(r6), [r7]"=&r"(r7),
-          [lo]"=&r"(lo), [hi]"=&r"(hi), [top]"=&r"(top)
+          [lo]"=&r"(lo), [hi]"=&r"(hi)
         : [f]"r"(f), [g]"r"(g)
         : "rax", "rdx", "cc", "memory"
     );
@@ -599,7 +607,7 @@ void ama_x25519_fe64_mul_mulx(uint64_t h[4], const uint64_t f[4],
  */
 __attribute__((visibility("hidden")))
 void ama_x25519_fe64_sq_mulx(uint64_t h[4], const uint64_t f[4]) {
-    uint64_t r0, r1, r2, r3, r4, r5, r6, r7, lo, hi, top;
+    uint64_t r0, r1, r2, r3, r4, r5, r6, r7, lo, hi;
     __asm__ __volatile__ (
         /* ===== off-diagonal products in r1..r6 (see fe64_sq512_mulx) ===== */
         "movq   (%[f]),  %%rdx               \n\t"
@@ -638,16 +646,24 @@ void ama_x25519_fe64_sq_mulx(uint64_t h[4], const uint64_t f[4]) {
         "movq   24(%[f]),%%rdx               \n\t" "mulx %%rdx, %[lo], %[hi]\n\t" "adcx %[lo], %[r6]\n\t" "adcx %[hi], %[r7]\n\t"
 
         /* ===== fold: h = r0..r3 + 38 * r4..r7 ===== */
-        "xorl   %k[top], %k[top]             \n\t"
+        /* r4 is dead the instant its own MULX has read it, so it doubles as
+         * the carry-out limb instead of costing a further register.  That
+         * matters: with a frame pointer reserved (-fno-omit-frame-pointer,
+         * which the sanitiser and fuzz builds both set) only fourteen
+         * general-purpose registers remain, and a dedicated `top` pushed this
+         * block to fifteen — clang rejected it outright with "inline assembly
+         * requires more registers than available".  MOV does not write the
+         * flags, so zeroing r4 mid-chain leaves both CF and OF intact. */
         "xorl   %%eax, %%eax                 \n\t"
         "movq   $38, %%rdx                   \n\t"
         "mulx   %[r4], %[lo], %[hi]          \n\t" "adcx %[lo], %[r0]\n\t" "adox %[hi], %[r1]\n\t"
+        "movq   $0, %[r4]                    \n\t"
         "mulx   %[r5], %[lo], %[hi]          \n\t" "adcx %[lo], %[r1]\n\t" "adox %[hi], %[r2]\n\t"
         "mulx   %[r6], %[lo], %[hi]          \n\t" "adcx %[lo], %[r2]\n\t" "adox %[hi], %[r3]\n\t"
-        "mulx   %[r7], %[lo], %[hi]          \n\t" "adcx %[lo], %[r3]\n\t" "adox %[hi], %[top]\n\t"
-        "adcx   %%rax, %[top]                \n\t"
+        "mulx   %[r7], %[lo], %[hi]          \n\t" "adcx %[lo], %[r3]\n\t" "adox %[hi], %[r4]\n\t"
+        "adcx   %%rax, %[r4]                 \n\t"
 
-        "movq   %[top], %%rax                \n\t"
+        "movq   %[r4], %%rax                 \n\t"
         "movq   $38, %%rdx                   \n\t"
         "mulx   %%rax, %[lo], %[hi]          \n\t"
         "addq   %[lo], %[r0]                 \n\t"
@@ -665,7 +681,7 @@ void ama_x25519_fe64_sq_mulx(uint64_t h[4], const uint64_t f[4]) {
 
         : [r0]"=&r"(r0), [r1]"=&r"(r1), [r2]"=&r"(r2), [r3]"=&r"(r3),
           [r4]"=&r"(r4), [r5]"=&r"(r5), [r6]"=&r"(r6), [r7]"=&r"(r7),
-          [lo]"=&r"(lo), [hi]"=&r"(hi), [top]"=&r"(top)
+          [lo]"=&r"(lo), [hi]"=&r"(hi)
         : [f]"r"(f)
         : "rax", "rdx", "cc", "memory"
     );
