@@ -30,6 +30,7 @@
 
 /* Include the constant-time header */
 #include "ama_cryptography.h"
+#include "dudect_rounds.h"
 
 /* Default number of iterations */
 #define DEFAULT_ITERATIONS 1000000
@@ -315,9 +316,13 @@ static void print_result(const char *name, double t_value) {
 }
 
 /**
- * Run a single round of all tests, return 1 if all pass, 0 otherwise.
+ * Run one round of every lane; fill `lanes` and return the lane count.
+ *
+ * Lane order is fixed across rounds — dudect_rounds_add compares names as well
+ * as indices, so a reordering aborts rather than attributing one lane's
+ * measurement to another.
  */
-static int run_round(int iterations, int round_num) {
+static int run_round(int iterations, int round_num, dudect_lane_result_t *lanes) {
     printf("--- Round %d ---\n", round_num);
 
     double t_memcmp = test_consttime_memcmp(iterations);
@@ -333,21 +338,37 @@ static int run_round(int iterations, int round_num) {
     print_result("ama_consttime_lookup ", t_lookup);
     print_result("ama_consttime_copy   ", t_copy);
 
-    int all_passed = (fabs(t_memcmp) < T_THRESHOLD) &&
-                     (fabs(t_swap) < T_THRESHOLD) &&
-                     (fabs(t_memzero) < T_THRESHOLD) &&
-                     (fabs(t_lookup) < T_THRESHOLD) &&
-                     (fabs(t_copy) < T_THRESHOLD);
+    int n = 0;
+    lanes[n++] = (dudect_lane_result_t){"ama_consttime_memcmp", t_memcmp,  0, 0};
+    lanes[n++] = (dudect_lane_result_t){"ama_consttime_swap",   t_swap,    0, 0};
+    lanes[n++] = (dudect_lane_result_t){"ama_secure_memzero",   t_memzero, 0, 0};
+    lanes[n++] = (dudect_lane_result_t){"ama_consttime_lookup", t_lookup,  0, 0};
+    lanes[n++] = (dudect_lane_result_t){"ama_consttime_copy",   t_copy,    0, 0};
 
-    printf("Round %d: %s\n\n", round_num, all_passed ? "PASS" : "WARN");
-    return all_passed;
+    int all_within = 1;
+    for (int i = 0; i < n; i++) {
+        if (fabs(lanes[i].t_value) >= T_THRESHOLD)
+            all_within = 0;
+    }
+    printf("Round %d: %s\n\n", round_num, all_within ? "within threshold" : "OVER THRESHOLD");
+    return n;
 }
 
-/* Number of rounds; pass if ANY round passes (reduces false positives in CI) */
+/* Rounds are re-run to separate a reproducible finding from runner noise; the
+ * verdict rule lives in dudect_rounds.h and is shared with the other two
+ * harnesses in this repository. */
 #define MAX_ROUNDS 3
 
 int main(int argc, char *argv[]) {
     int iterations = DEFAULT_ITERATIONS;
+
+    /* The verdict rule decides whether this gate can block a merge, and a
+     * measurement pass cannot exercise it. Driven with synthetic evidence
+     * instead — see tests/c/dudect/dudect_rounds.h. */
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--self-test") == 0)
+            return dudect_rounds_self_test();
+    }
 
     if (argc > 1) {
         iterations = atoi(argv[1]);
@@ -367,24 +388,39 @@ int main(int argc, char *argv[]) {
     printf("Threshold: |t| < %.1f (99.999%% confidence)\n", T_THRESHOLD);
     printf("Iterations: %d per test, up to %d rounds\n\n", iterations, MAX_ROUNDS);
 
-    int passed = 0;
+    dudect_lane_result_t lanes[DUDECT_ROUNDS_MAX_LANES];
+    dudect_rounds_t rounds;
+    dudect_rounds_init(&rounds, T_THRESHOLD);
+
     for (int round = 1; round <= MAX_ROUNDS; round++) {
-        if (run_round(iterations, round)) {
-            passed = 1;
+        int n = run_round(iterations, round, lanes);
+        dudect_rounds_add(&rounds, lanes, n);
+
+        /* Stop early only while nothing has tripped — see dudect_rounds.h:
+         * under a majority rule a clean round settles nothing once a lane has
+         * already tripped. */
+        if (!dudect_rounds_any_failure(&rounds))
             break;
-        }
         if (round < MAX_ROUNDS) {
-            printf("Retrying to rule out environmental noise...\n\n");
+            printf("Re-running: a real leak reproduces every round, noise moves.\n\n");
         }
     }
 
+    int passed = dudect_rounds_passed(&rounds);
+
     printf("=======================================================\n");
+    printf("Summary (%d round%s):\n", rounds.rounds_run, rounds.rounds_run == 1 ? "" : "s");
+    dudect_rounds_print_summary(&rounds);
+
+    printf("\n=======================================================\n");
     if (passed) {
         printf("Overall: PASS - No timing leakage detected\n");
     } else {
-        printf("Overall: FAIL - Potential timing leakage detected across %d rounds\n", MAX_ROUNDS);
-        printf("Note: If running in a shared CI environment, timing noise may\n");
-        printf("      cause false positives. Run locally to confirm.\n");
+        printf("Overall: FAIL - the following lane(s) were over the threshold in "
+               "a majority of %d round(s):\n", rounds.rounds_run);
+        dudect_rounds_print_failures(&rounds);
+        printf("\nA lane over the threshold in a minority of rounds is reported NOISE\n");
+        printf("above and does not fail the run.\n");
     }
     printf("=======================================================\n");
 

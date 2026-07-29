@@ -110,20 +110,29 @@ Therefore: Complete coverage is cryptographically necessary
 
 #### Sub-property 1.2: Multi-Dimensional Detection
 **Cryptographic Mapping:**
-- Timestamp verification (RFC 3161)
 - Structural integrity via length-prefixed encoding
 - Multi-signature validation (Ed25519 + Dilithium)
 
 **Mathematical Proof:**
 ```
-Let D = {temporal, structural, cryptographic} dimensions
+Let D = {structural, cryptographic} dimensions
 Anomaly detection probability:
 P(detect) = 1 - ∏(1 - Pᵢ) where Pᵢ = detection rate per dimension
 With Pᵢ ≥ 0.999 (SHA3-256 collision resistance):
-P(detect) ≥ 1 - (0.001)³ = 0.999999999
+P(detect) ≥ 1 - (0.001)² = 0.999999
 ```
 
-**Standard:** RFC 3161 (Time-Stamp Protocol)
+**Why the temporal dimension is excluded, and the exponent with it.** RFC 3161
+timestamp checking used to be counted here as a third dimension, giving
+`1 - (0.001)³`. A detection dimension has to be one an adversary cannot
+satisfy at will, and this one is not: AMA verifies the §2.4.2 message-imprint
+binding and no TSA signature, so an adversary who modifies content and supplies
+a matching self-built token passes the temporal check every time — its
+detection rate against an adaptive adversary is 0, not 0.999. Multiplying it in
+inflated the stated bound by three orders of magnitude. The corrected figure
+rests only on dimensions an adversary must actually defeat. See INVARIANT-37.
+
+**Standards:** NIST FIPS 202 (SHA-3), RFC 8032 (Ed25519), NIST FIPS 204 (ML-DSA)
 
 #### Sub-property 1.3: Complete Data Validation
 **Cryptographic Mapping:**
@@ -166,9 +175,11 @@ System security is bounded by the weakest layer:
 
 Package authenticity is protected by four independent cryptographic
 operations — content hashing, keyed authentication, classical signature,
-and quantum-resistant signature — supported by independent key derivation
-and optional third-party timestamping. Defense-in-depth ensures continued
-protection even if one layer is compromised.
+and quantum-resistant signature — supported by independent key derivation.
+The optional RFC 3161 timestamp is excluded from this bound: it is a
+binding check an adversary satisfies unaided (INVARIANT-37).
+Defense-in-depth ensures continued protection even if one layer is
+compromised.
 ```
 
 **Citation:**
@@ -245,23 +256,46 @@ Conclusion: Defense-in-depth provides exponential security improvement
 
 **Citation:** Schneier (1999) "Attack Trees" (defense-in-depth strategy)
 
-#### Sub-property 3.2: Temporal Integrity
+#### Sub-property 3.2: Temporal Binding (*not* Temporal Integrity)
+
+This sub-property is stated at the strength that is actually delivered. The
+claim it used to make — temporal *integrity*, established by a TSA signature —
+rested on a verification step AMA does not implement, and its security
+statement was inverted: forging a token AMA accepts requires no key at all.
+
 **Cryptographic Mapping:**
-- ISO 8601 timestamps (microsecond precision)
-- RFC 3161 TSA integration (third-party verification)
-- Temporal ordering guarantees
+- ISO 8601 timestamps (microsecond precision), self-asserted
+- RFC 3161 §2.4.2 message-imprint binding — token-to-payload only
+- Temporal ordering of AMA's own records
 
-**Mathematical Proof:**
+**What is established:**
 ```
-Timestamp T₁ < T₂ establishes causal ordering
-TSA signature S_TSA(T, H) binds:
-- Timestamp T to hash H
-- Verified by TSA public key
-- Provides non-repudiation of time
+For a token K and payload H:
+    binding(K, H) ⟺ K.TSTInfo.messageImprint == Hash(H)
 
-Security: Requires TSA private key compromise to forge
-TSA security assumption: ≥2¹²⁸ (RSA-3072 or equivalent)
+This is all AMA checks. It is a statement about which payload a token
+refers to. It is NOT a statement about time, about the token's issuer,
+or about when anything existed.
 ```
+
+**What is NOT established, and why:**
+```
+Attestation would require verifying S_TSA over the TSTInfo, i.e.
+CMS SignerInfo processing (RFC 5652 §5.3) plus X.509 path validation
+(RFC 5280 §6). AMA implements neither.
+
+Consequence — note the direction, because the previous text had it
+backwards: forging a token this library accepts requires NO private key
+and NO compromise of any TSA. An adversary builds a CMS SignedData
+offline whose messageImprint is Hash(H) and whose genTime is arbitrary.
+
+Therefore: TSTInfo.genTime is unauthenticated, no non-repudiation of
+time is provided, and no causal ordering claim may rest on a TSA.
+```
+
+Temporal integrity is **not** delivered by this library. A deployment can
+obtain it only by establishing the token's origin outside AMA. See INVARIANT-37 and
+[ARCHITECTURE.md § Scope: RFC 3161 attestation is not implemented](ARCHITECTURE.md#scope-rfc-3161-attestation-is-not-implemented).
 
 **Citation:**
 - RFC 3161 (Time-Stamp Protocol, Section 2.4)
@@ -312,11 +346,14 @@ Omnibenevolence constraint B enforces:
                purpose(o) ∉ {attack, deceive, harm}
 
 Cryptographic enforcement:
-- Audit trails via RFC 3161 timestamps
 - Public key distribution (transparency)
 - Author attribution in packages
+- Audit trails, whose *timestamps* are self-asserted: an RFC 3161 token
+  binds a trail entry to its payload but does not attribute it to a
+  clock, because no TSA signature is verified (INVARIANT-37)
 
-Verification: All operations are auditable and attributable
+Verification: Operations are auditable and attributable as to *content
+and author*; attribution as to *time* requires a control outside AMA
 ```
 
 #### Sub-property 4.2: Mathematical Correctness
@@ -580,13 +617,13 @@ def benchmark_ethical_integration(iterations: int = 1000) -> Dict[str, float]:
 | Pillar | Triad | Standard | Section | Status |
 |--------|-------|----------|---------|--------|
 | Omniscient | Wisdom | NIST FIPS 202 | 6.1 (SHA-3) | ✓ Full |
-| Omniscient | Wisdom | RFC 3161 | 2.4 (TSP) | ✓ Full |
+| Omniscient | Wisdom | RFC 3161 | 2.4 (TSP) | ◐ Partial — wire format + §2.4.2 binding; no SignerInfo/X.509 verification |
 | Omniscient | Wisdom | NIST FIPS 202 | 6.1 (Encoding) | ✓ Full |
 | Omnipotent | Agency | NIST FIPS 203/204/205 | PQC Standards | ✓ Full |
 | Omnipotent | Agency | RFC 5869 | 4 (HKDF) | ✓ Full |
 | Omnipotent | Agency | — | Performance | ✓ Verified |
 | Omnidirectional | Geography | — | Architecture | ✓ Design |
-| Omnidirectional | Geography | RFC 3161 | 2.4 (TSA) | ✓ Full |
+| Omnidirectional | Geography | RFC 3161 | 2.4 (TSA) | ◐ Partial — wire format + §2.4.2 binding; no SignerInfo/X.509 verification |
 | Omnidirectional | Geography | NIST SP 800-57 | 5.6.1 | ✓ Full |
 | Omnibenevolent | Integrity | — | Ethics | ✓ Design |
 | Omnibenevolent | Integrity | NIST SP 800-140 | Validation | ✓ Testing |

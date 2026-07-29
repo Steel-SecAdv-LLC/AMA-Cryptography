@@ -20,6 +20,21 @@ such packages for opt-in interop or comparison use, but the core
 No pre-built external cryptographic libraries (libsodium, OpenSSL, liboqs,
 etc.) may be linked.
 
+**Nor invoked.** "Must not import or call" covers a subprocess as squarely as an
+import: shelling out to `openssl` is a competing implementation performing a
+cryptographic operation inside AMA at runtime, and it adds an undeclared
+dependency on that binary being installed. `ama_cryptography/legacy_compat.py`
+did exactly that for RFC 3161 timestamping until the `TimeStampReq` encoder and
+the `TimeStampResp` / `TSTInfo` decoder were written against RFC 3161 §2.4.1 and
+§2.4.2 using AMA's own DER codec. `tools/check_corpus_originality.py` scans
+`ama_cryptography/` for such invocations (INVARIANT-36), so the rule is enforced
+rather than asserted.
+
+Naming another implementation is not calling it. Curve aliases such as
+`prime256v1` are wire-format spellings AMA must *accept*, and a comment
+crediting where an approach came from is scholarship; the check works on the AST
+so neither trips it.
+
 Python stdlib modules (`hashlib`, `os`, `secrets`) are permitted for
 non-primitive operations (OS entropy, hashing). They **must NOT** be used as a
 substitute for AMA's own implementations of HMAC, memory zeroing, or core
@@ -74,6 +89,21 @@ real build or smoke-test failure is still a red job.
 step in `ci.yml` and `ci-build-test.yml`, each followed by a retry step gated
 on `steps.setup-python.outcome == 'failure'`. Neither is a security gate and
 a genuine failure still fails at the retry.
+
+**A gate must also be legible, and this is not a stylistic point.** The Bandit
+severity gate spent its life red for a reason that did not exist: it grepped
+`^\s*(Medium|High):\s*[1-9]` over Bandit's text report, which prints a
+by-severity and a by-confidence tally under the same labels and the same
+indentation, so it matched the confidence one. A gate whose failure message
+names a condition nobody can reproduce gets routed around, and that is a
+fail-open outcome arrived at through a fail-closed mechanism. Gates over tool
+output **must** therefore read a structured format where the tool emits one —
+`tools/check_bandit_severity.py` consumes Bandit's JSON — and **must** fail
+closed on a report that is missing, malformed, error-carrying, empty, or
+pre-filtered, since none of those establishes that the tree is clean.
+`tests/test_bandit_severity_gate.py` demonstrates the rejection direction for
+each of those conditions; a gate with no negative control has not been shown
+to be a gate at all.
 
 ## INVARIANT-3 — Observable Failure States
 
@@ -403,6 +433,29 @@ of justification:
 **Enforcement:** CI scans the repository for suppression tokens and **must**
 fail if a suppression is missing a justification, missing a tracking ID, or
 appears in a forbidden directory.
+
+**Scope.** `tools/check_suppression_hygiene.py` covers `ama_cryptography/`,
+`tests/` **and `tools/`**. `tools/` was outside it until someone noticed what
+lives there: the gate scripts themselves. A suppression in that tree silences a
+static analyser *inside the layer that enforces this invariant*, which is the
+last place an unexplained one belongs. Widening the scan found two bare
+`# noqa: S310` markers — no reason, no tracking ID — over `urllib` calls in the
+corpus fetchers that accepted `file:` and `ftp:` URLs; both now check the
+scheme, so the suppression states a fact rather than a hope.
+
+Widening it also required the scanner to become precise about what a
+suppression *is*. It had been collecting the line numbers carrying a comment
+and then matching over the whole raw line, which put string literals back in
+scope, and it made no distinction between a marker and prose describing one —
+so the checkers' own documentation of their subject matter was reported as
+eight unjustified suppressions. It now reads the comment token's text, and only
+where the comment is *trailing*: `bandit`, `ruff` and `mypy` all anchor a
+suppression to the line of the finding, so a full-line comment suppresses
+nothing. mypy's file-level `# type: ignore` is the one standalone form that is
+real, and it is kept in scope explicitly. The set of suppressions policed in
+`ama_cryptography/` and `tests/` is unchanged by this — 96 before and after —
+so the precision gain removed false positives only. Both directions are pinned
+by `tests/test_invariant_upgrades.py::TestSuppressionScanPrecision`.
 
 ## INVARIANT-14 — CVE Ignore-List Hygiene
 
@@ -1143,7 +1196,7 @@ when any dependency fails, and a required context that reports `skipped` never
 resolves — the pull request waits on "Expected — waiting for status check to be
 reported" instead of going red. A gate that cannot report red is not a gate.
 
-**Enforcement.** `tools/check_gate_coverage.py`, run in the `code-quality` job
+**Enforcement.** `tools/check_gate_coverage.py`, run in the `security-checks` job
 of `ci.yml`. Single-job workflows are exempt by construction (the job *is* its
 own status context) as are workflows that never trigger on `pull_request`
 (`release.yml` on a tag push, `wiki-sync.yml` on a push to main) — branch
@@ -1188,7 +1241,7 @@ cryptographic dependencies.
 An install instruction is API surface. A reader cannot verify it without
 running it, and running it reports success either way.
 
-**Enforcement.** `tools/check_documented_extras.py`, run in the `code-quality`
+**Enforcement.** `tools/check_documented_extras.py`, run in the `security-checks`
 job of `ci.yml`. `CHANGELOG.md` is excluded by design: it is a historical
 record, and an extra that genuinely existed in an earlier release must remain
 readable in the entry that introduced or removed it.
@@ -1211,6 +1264,11 @@ instruction fails, since an extra nobody is told about may as well not exist.
 `fuzzing.yml` job matrix (actively, or commented out with a recorded reason),
 and in `oss-fuzz/build.sh`. No registry may name a target with no source file.
 
+Every Python harness under `fuzz/python/` **must** be run by `fuzzing.yml`.
+Those are not libFuzzer targets, so they have one registry rather than three,
+and the same rule applies: a harness that exists and is never run is
+indistinguishable from one that finds nothing.
+
 **Why.** A harness is registered in three independent lists, and nothing tied
 them together. `oss-fuzz/build.sh` even carries the comment *"Keep in sync
 with fuzz/CMakeLists.txt"* — and had drifted anyway: `fuzz_agent_binding` was
@@ -1225,12 +1283,49 @@ not — so the project believes it has coverage it does not have. A harness
 nobody runs is indistinguishable from one that finds nothing.
 
 **Enforcement.** `tools/check_fuzz_target_registration.py`, run in the
-`code-quality` job of `ci.yml`. A commented-out matrix entry counts as
+`security-checks` job of `ci.yml`. A commented-out matrix entry counts as
 registered: not every harness belongs in the per-PR lane (`fuzz_sphincs` is
 excluded because SPHINCS+ is too slow for CI, with the reason recorded beside
 it), but such a target must still be in both build lanes so OSS-Fuzz keeps
 running it. The checker distinguishes a *deliberate, documented* exclusion
 from silent drift.
+
+**The Python lane, and why it exists.** `ama_cryptography/_asn1.py` and
+`key_formats.py` are hostile-input parsers in exactly the sense the fifteen C
+harnesses are — anyone who can hand you a key file reaches them — and they had
+no harness at all. What they had was a deterministic mutation sweep inside
+pytest: 120 fixed mutations per algorithm from one seed, which explores the same
+neighbourhood on every run for ever. That is worth having and it is not fuzzing,
+so it was kept and `fuzz/python/fuzz_key_formats.py` was added beside it.
+
+The harness is AMA's own — its generator, mutator and seed corpus are in the
+file — so the lane depends on no third-party fuzzing engine (INVARIANT-36).
+Atheris is supported via `--atheris` when it happens to be installed,
+deliberately as a bonus rather than as the lane.
+
+It earned its place immediately. Five real parser defects on its first
+campaigns, each one an input reaching a layer not written for it:
+
+1. `UnicodeDecodeError` out of `_as_der`, on PEM-as-bytes containing a
+   non-ASCII octet — a `ValueError` subclass, so `except KeyFormatError` at the
+   boundary was not sufficient.
+2. `TypeError: unhashable type` out of `_cose_algorithm`, from a nested CBOR map
+   used as a `crv` value. The JSON side already carried this fix; the CBOR side
+   did not.
+3. Strict-RFC-7468 PEM accepting a trailing `0x1F`, because Python's
+   `str.strip()` counts U+001C–U+001F, U+0085 and U+00A0 as whitespace and
+   RFC 7468 does not.
+4. Non-canonical base64 accepted: `b64decode(validate=True)` checks the
+   alphabet, not the padding bits, so `…Of3N=` and `…Of3M=` decoded to one key.
+   Found after 7.5 million executions.
+5. An out-of-range EC private scalar in a key file raising `RuntimeError` past
+   the format layer — which in turn surfaced that `secp256k1` accepted a scalar
+   at or above the group order where the NIST curves refused it, so one library
+   was strict on one curve and lax on another. Found after 17.8 million
+   executions.
+
+Each is pinned by a named regression test in `tests/test_key_formats.py`, so
+pytest catches a recurrence without waiting for a campaign to rediscover it.
 
 **Verification.** `tests/test_fuzz_target_registration.py` pins both
 directions over a synthetic tree — missing from OSS-Fuzz, missing from CMake,
@@ -1243,7 +1338,404 @@ was already correct: a support translation unit that is not a harness
 comment, and a CMake comment containing a parenthesis that truncated the
 parsed block.
 
+`tests/test_python_fuzz_harness.py` does the same for the Python lane, and for a
+reason specific to it: the harness runs for a time budget in `fuzzing.yml`, so
+nothing in the ordinary suite would notice if its contract check broke — it
+would run its millions of executions and report success for ever. So the suite
+drives it in-process and violates each contract it claims (an unexpected
+exception, a non-canonical acceptance, a slow parse, a missing artifact) to
+confirm each is still caught.
+
+---
+
+## INVARIANT-34 — Low-`s` Is a Property of the Sign/Verify Pair
+
+**Statement.** Low-`s` normalisation and high-`s` rejection are **two halves of
+one control**. A curve's default must set both or neither, and any API that
+exposes them must expose both.
+
+- **secp256k1** sets both by default: `ama_secp256k1_ecdsa_sign` emits only the
+  low representative and `ama_secp256k1_ecdsa_verify` rejects the high twin
+  (INVARIANT-28). `AMA_SECP256K1_ECDSA_ALLOW_HIGH_S` relaxes the verifier for
+  third-party X9.62 interop.
+- **P-256 / P-384 / P-521** set neither by default: `ama_nistp_ecdsa_sign`
+  emits RFC 6979's `s` verbatim and `ama_nistp_ecdsa_verify` accepts either
+  representative. `AMA_NISTP_ECDSA_SIGN_LOW_S` and
+  `AMA_NISTP_ECDSA_REQUIRE_LOW_S` turn both halves on together.
+
+The checks that cost no interoperability are unconditional on every curve in
+every mode: minimal DER only, `r` and `s` strictly in `[1, n-1]` rather than
+reduced into range, and public-key coordinates strictly in `[0, p)`.
+
+**Why.** Normalisation on its own prevents nothing. If the verifier accepts
+both representatives, then given any AMA signature `(r, s)` anyone can emit
+`(r, n - s)` and AMA itself will accept it. The signature is malleable
+regardless of what the signer chose. Normalisation only becomes a security
+property when the verifier refuses the twin — the pair is the control, and
+either half alone is a costume.
+
+This is not hypothetical: it is the defect this invariant was rewritten to fix.
+The first version of the NIST prime-curve support normalised on the signer and
+verified permissively — the one combination with no security benefit — and paid
+for it in conformance. `ama_nistp_ecdsa_sign` advertised itself as
+"deterministic per RFC 6979" while failing RFC 6979's own Appendix A.2.5 /
+A.2.6 / A.2.7 vectors on every case whose natural `s` came out high, roughly
+half of them. `r` matched everywhere, so the nonce derivation was right and the
+divergence was invisible to every test that existed.
+
+It was invisible for a second, worse reason. The "independent" pure-Python
+reference in `tests/test_nistp_curves.py` normalised too, because it was
+written alongside the C code rather than from the specification. Two
+implementations that share an assumption do not check each other. **A reference
+must be derived from the specification only, never from the implementation it
+checks** — that rule is the durable lesson here, and it is why `_ref_sign` now
+takes the policy as a parameter instead of baking one in.
+
+The per-curve defaults then follow from what each curve is *for*. secp256k1
+signatures are identifiers — a blockchain transaction is addressed by its
+signature bytes, so two valid encodings means two identities, and AMA controls
+both ends, so strict is free. The NIST prime curves exist here to interoperate
+with signers AMA did not write: X9.62, FIPS 186-5, RFC 3279, TLS, X.509, JWS
+and WebAuthn all permit either `s` and essentially none of their signers
+normalise, so a strict default would reject conformant signatures — not "more
+secure", just non-interoperable, defeating the reason the curves were added.
+
+**Enforcement.** In `src/c/ama_nistp.c`, `nistp_ecdsa_sign_core()` takes
+`low_s` as a parameter and `nistp_sign_dispatch()` derives it from
+`AMA_NISTP_ECDSA_SIGN_LOW_S`; unknown flag bits are rejected rather than
+ignored. `nistp_ecdsa_verify_rs()` rejects a high `s` only under
+`AMA_NISTP_ECDSA_REQUIRE_LOW_S`. The range, canonical-coordinate and strict-DER
+gates sit outside both flags. `src/c/ama_secp256k1.c` is unchanged.
+
+**Wycheproof consequence, declared.** The secp256k1 divergence policy
+`ecdsa/high-s-rejected` claims exactly 72 vectors and is scoped by filename.
+The three NIST prime-curve suites — 1530 vectors — need no divergence policy at
+all and pass with zero exceptions. That asymmetry in the gate output is the
+visible evidence for this invariant: making the NIST default strict would
+create a new uncounted divergence bucket and turn the gate red.
+
+**Timing posture.** Signing is constant time with respect to the private key
+and the RFC 6979 nonce on both curves; the normalisation is a conditional
+negation of a value that is about to be published. Verification is variable
+time by design on both — every input is public.
+
+**Verification.**
+`tests/test_nistp_curves.py::test_rfc6979_published_vectors` replays all 18
+in-scope vectors from RFC 6979 Appendix A.2.5/A.2.6/A.2.7 (vendored under
+`tests/kat/rfc6979/`), asserting the RFC's own public key and both signature
+components, and fails if the corpus ever stops containing a high-`s` case —
+without one it could no longer detect silent normalisation.
+`test_rfc6979_vectors_reject_low_s_normalisation` pins the opposite direction,
+so the trade-off is a fact in CI rather than a claim in a docstring.
+`test_low_s_is_opt_in_and_default_is_rfc6979_verbatim` requires the default to
+produce at least one high `s` over 24 signatures.
+`test_low_s_is_a_property_of_the_sign_verify_pair` asserts the four-way truth
+table directly. `test_ecdsa_matches_rfc6979_reference` runs the
+specification-derived reference under *both* policies.
+`tests/test_secp256k1_ecdsa_low_s_policy.py` holds the secp256k1 half unchanged.
+
+---
+
+## INVARIANT-35 — A Selector Must Never Resolve Weaker Than It Was Asked
+
+**Statement.** Any argument that names an algorithm, curve, parameter set or
+security level **must** resolve to exactly what was named or fail. It must
+never fall back to a default, round to a neighbour, or return a plausible
+answer for an input it did not recognise.
+
+Concretely, for every selector in the library:
+
+- an unrecognised value raises (Python) or returns `NULL` / `0` (C);
+- a size or capability query for an unrecognised value returns `0` or `NULL`,
+  never the size of some other parameter set;
+- no selector has a "default" branch that maps unknown input onto a real
+  choice.
+
+**Why.** INVARIANT-7 covers the *availability* axis: no backend, no operation.
+This is the *selection* axis, and nothing covered it until the library grew
+enough parameter sets for it to matter. As of the NIST prime curves and the
+FIPS 203/204 parameter-set work there are nine selectable levels across three
+families, plus SLH-DSA's two — an integer or a string away from each other.
+
+The failure this prevents is quiet and total. A selector that maps an
+unrecognised `"ML-KEM-192"` onto ML-KEM-512, or a mistyped curve id onto
+P-256, produces working code, valid signatures and successful handshakes at a
+security level nobody chose and no test asserts. Unlike a missing backend, it
+never surfaces: the caller believes it asked for category 5 and got category 1,
+and every downstream artefact is well-formed. A downgrade that reports success
+is worse than a hard failure, because only the hard failure gets fixed.
+
+The rule is deliberately absolute rather than "must not resolve *weaker*". A
+selector cannot know which direction is weaker for a given caller — P-521 is
+not simply "stronger" than P-256 for someone whose peer only speaks P-256 —
+and a rule that requires that judgement invites a fallback that argues it got
+the direction right. Resolve exactly, or refuse.
+
+**Enforcement.** In C: `nistp_lookup()`, `kyber_params_for()`,
+`dil_params_for()` and `slhdsa_params_for()` each end in `default: return NULL`
+and every public size/name query propagates that as `0` / `NULL`. In Python:
+`_param_set_id()` (shared by `_ml_kem_id` / `_ml_dsa_id`) and
+`_nistp_curve_id()` raise `ValueError` on any unrecognised value, and reject
+`bool` explicitly — `True` is an `int` in Python and would otherwise index a
+selector table.
+
+Name aliases are permitted and are not a violation: `"secp256r1"`,
+`"prime256v1"` and `"P-256"` denote the same curve, and `"Dilithium3"` denotes
+ML-DSA-65. An alias resolves to the thing it names. What is forbidden is
+resolving something that names *nothing*.
+
+**Verification.** `tests/test_selector_strictness.py` enumerates every selector
+in the library and drives each with the same battery of unrecognised inputs —
+neighbouring-but-invalid integers, plausible-but-wrong names, `bool`, `None`,
+negative values, and the empty string — asserting a raise every time. It also
+asserts the C side returns `0` / `NULL` rather than another set's answer, and
+that the alias tables resolve only to sets that actually exist. Adding a
+selector without adding it to that enumeration fails the test, because the test
+derives its list from the modules rather than from a hand-written literal.
+
+---
+
+## INVARIANT-36 — AMA Is Not Measured Against Another Implementation
+
+**Statement.** No other cryptographic implementation's output may serve as an
+answer key for AMA's correctness, and no test or development tool may invoke
+another cryptographic binary. Where a specification publishes no worked example,
+the substitute is a reference derived **from the specification text**, written
+in this repository.
+
+**Why.** AMA's stated position is that it depends on no other cryptographic
+implementation: the README says "zero external crypto deps", `CMakeLists.txt`
+records that OpenSSL is "not used by AMA sources", and a dozen C files carry
+comments of the form "replaces OpenSSL `EVP_Digest`". All of that was true of
+what the library *runs*.
+
+It was not true of how the library was *checked*. `tests/kat/keyformats/`
+carried twelve PEM files generated by OpenSSL 3.0.13, vendored as the answer key
+for EC PKCS#8 and SPKI on the reasoning that RFC 5915 and RFC 5480 publish no
+worked examples. Nothing linked OpenSSL, nothing invoked it at build or test
+time, and the files were inert data — and a competing implementation's output
+was still the thing AMA's correctness was measured against, inside AMA's own
+repository.
+
+Two objections, one of principle and one of engineering. A project that depends
+on no other implementation should not depend on one to know whether it is right.
+And an answer key taken from an implementation inherits that implementation's
+opinions, including its bugs and its non-conformances, where a specification's
+worked example does not. This PR already learned the second lesson the hard way
+on RFC 6979: the "independent" pure-Python reference normalised `s` because the
+C code did, so the two agreed by construction while both diverged from the
+document (see INVARIANT-34). **Two implementations that share an assumption do
+not check each other** — and an implementation you did not write shares
+assumptions you cannot see.
+
+**What replaced it.** Two things, and between them the coverage is wider than
+what was removed:
+
+* **RFC 9500 §2.3** — "Standard Public Key Cryptography (PKCS) Test Keys",
+  December 2023 — publishes P-256, P-384 and P-521 private keys as RFC 5915
+  `ECPrivateKey`, which is exactly the structure AMA embeds inside PKCS#8. The
+  gap that justified the shortcut had been closed by the IETF; nobody had
+  looked. Vendored as `tests/kat/keyformats/rfc9500_ec.json` through the same
+  `--specs` path as every other corpus.
+* **`tests/ref_keyformat.py`** — a second encoder for SPKI, PKCS#8, RFC 5915
+  `ECPrivateKey` and the RFC 9881 §6 `CHOICE`, transcribed from the RFCs' own
+  ASN.1 with the text quoted inline. It imports nothing from
+  `ama_cryptography`, and it is *declarative* — encodings are nested
+  `(tag, content)` data fed to one generic serialiser — where the production
+  encoder is per-type writers called from per-algorithm branches. A shared
+  control-flow mistake has nowhere to hide when the two shapes have no control
+  flow in common. It is anchored against RFC 9500 §2.3 and RFC 8410 §10.1
+  before it is used as an authority anywhere else, because two encoders that
+  agree could still both be wrong.
+
+The vendored keys covered six algorithms in one encoding each. The reference
+covers all twelve, in both encodings, under both `include_public_key` settings
+and all three PQ `CHOICE` arms — plus constructed fixed-width edge cases (a
+scalar or coordinate with leading zero octets) that a sampled corpus reaches
+about once in 512 keys.
+
+**Scope.** This is about *implementation output as ground truth*, not about
+published test-vector suites. `wycheproof_vectors/` and the NIST ACVP corpora
+under `tests/kat/` are adversarial inputs with expected verdicts, published for
+implementers to run — the same category as a specification's worked example, and
+they keep their own provenance gates (INVARIANT-24's sibling machinery in
+`.github/workflows/corpus-provenance.yml`).
+
+**No exceptions are recorded.** One used to be — `ama_cryptography/legacy_compat.py`
+shelling out to `openssl ts` for RFC 3161 timestamping, described here as "a
+shipped interop feature, not a validation path". It is gone: AMA encodes and
+decodes RFC 3161 on its own DER codec, `rfc3161_timestamp.py` no longer imports
+`rfc3161ng` either, and the gate below scans `ama_cryptography/` precisely so
+neither can return. An invariant register that still names a removed exception
+is worse than one that names none, because a reader takes it as current.
+
+**Enforcement.** `tools/check_corpus_originality.py`, run in the
+`security-checks` job of `ci.yml`. Three checks:
+
+1. No process-spawning call under `ama_cryptography/`, `tests/` or `tools/`
+   invokes a cryptographic binary. AST-based, so the many "replaces OpenSSL X"
+   comments are not findings — flagging those would make the gate
+   un-satisfiable and push a maintainer to delete accurate documentation. The
+   callee set covers `subprocess.run`/`Popen`/`call`/`check_call`/
+   `check_output`/`getoutput`/`getstatusoutput`, `os.system`/`popen`, and the
+   `exec*`/`spawn*`/`posix_spawn*` families; string constants bound to a name
+   elsewhere in the file are resolved before matching, because
+   `CMD = ["openssl", ...]; subprocess.run(CMD)` is how the removed generator
+   actually spelled it and a gate that would not catch the code it exists to
+   prevent returning is not a gate.
+2. Every corpus file's `source.url` is on `rfc-editor.org` or `ietf.org`.
+3. `tests/ref_keyformat.py` imports nothing from `ama_cryptography`.
+
+**Verification.** `tests/test_corpus_originality.py` pins both directions —
+the repository as it stands, plus a reproduction of each violation: a
+`subprocess.run(["openssl", ...])`, four other cryptographic binaries, a corpus
+file citing a non-standards source, a directory of key files under the corpus
+(the exact shape the OpenSSL material was carried in), a reference encoder that
+imports the production one, and a missing reference encoder. The non-detection
+case is pinned too: a module full of prose mentioning OpenSSL must **not** be
+flagged.
+
+---
+
+## INVARIANT-37 — A Verification API Must Not Claim a Check It Does Not Perform
+
+**Statement.** A function whose name begins `verify_`, a result key, a
+parameter, a docstring, or any document in this repository, **must not**
+assert a verification that the implementation does not carry out. Where a
+check is not implemented, three things follow and all three are enforced:
+
+- the **name** must scope itself to what is actually checked
+  (`verify_token_binding`, not `verify_token`);
+- an argument requesting the unimplemented check must **raise**, never resolve
+  to the weaker one;
+- the boundary must be **published as data**, not only as prose, so the
+  documentation can be checked against the code rather than against a reviewer's
+  memory.
+
+The canonical instance is RFC 3161.
+`ama_cryptography.rfc3161_timestamp.RFC3161_CAPABILITIES` is the single source
+of truth: `message_imprint_binding`, `pki_status`, `nonce_echo` and
+`signer_present` are performed; `tsa_signature`, `tsa_certificate_chain` and
+`gen_time` are not.
+
+**Why.** By the time anyone checked, this repository asserted the opposite of
+its own implementation in more than fifty places.
+
+`ARCHITECTURE.md`'s verification flow wrongly listed "Verify TSA signature and
+time bounds" as step 6 of 7; no such step exists. `THREAT_MODEL.md` falsely
+recorded the retired claim "RFC 3161 TSA with independent verification" as
+**IMPLEMENTED** — the row an auditor reads to conclude a threat is closed. `wiki/Security-Model.md`
+scored AMA ✓ against OpenSSL ✗ on RFC 3161, inverted on the single axis where
+OpenSSL does the work and AMA does not. The `rfc3161_timestamp` module
+docstring opened with the retired claim "Third-party attestation: Independent
+verification by TSA". `AMA_CRYPTOGRAPHY_ETHICAL_PILLARS.md` carried a
+"Mathematical Proof" whose security statement was exactly backwards. It
+wrongly said forgery "Requires TSA private key compromise" — when in truth
+forging a token AMA accepts needs no key, no compromise and no privileged
+position: the
+adversary builds a CMS `SignedData` offline over the target's own content, with
+whatever `genTime` suits them. The same document multiplied a timestamp
+"detection dimension" into a `P(detect) ≥ 0.999999999` bound; against an
+adaptive adversary that dimension's detection rate is 0, and the bound was
+inflated by three orders of magnitude.
+
+None of it was written dishonestly. It was written by people who knew what a
+timestamp is *for*, describing a feature named after the thing it does not do.
+That is the failure this invariant addresses: not lying, but the absence of
+anything that would notice. Every one of those statements was "qualified"
+somewhere else in the repository, and none of the qualifications were where the
+reader's eye was.
+
+The reason it matters more than an ordinary documentation defect is that these
+particular sentences are load-bearing. A threat-model row marked IMPLEMENTED
+closes a risk. `SECURITY.md` wrongly made "REQUIRED: use RFC 3161 trusted
+timestamp authorities" a production control, telling an operator they had
+bought attributable time, which they had not, and the
+control they configure in response changes nothing an attacker must defeat.
+Documentation that overstates a security property is a vulnerability in the
+deployment, not a typo in a file.
+
+**Why the gate is driven by a capability table.** The obvious enforcement is a
+denylist of forbidden phrases, and it would be wrong in a specific, expensive
+way: it freezes today's limitation into CI. The day CMS `SignerInfo`
+verification lands, a phrase denylist begins rejecting claims that have become
+*true*, and the remedy depends on somebody remembering to edit a gate — which
+is the same species of memory this invariant exists because nobody had.
+
+So the prohibitions are **derived**. `tools/check_verification_claim_honesty.py`
+reads `RFC3161_CAPABILITIES` and forbids a claim *because its capability is
+`False`*. Implementing a check and flipping one entry to `True` permits the
+corresponding documentation in the same commit, with no gate edit and no
+prohibition left standing after it stopped being true. The same table is what
+`TokenVerification.not_verified` reports at runtime, so an audit record cannot
+claim more than the library does, and what the behavioural tests drive — the
+code, the runtime record, the tests and the documentation are four consumers of
+one declaration rather than four restatements of one belief.
+
+**The same-line rule.** A claim must be negated on the line that makes it. This
+is deliberate and it is the lesson of the fifty: a disclaimer three paragraphs
+away, or in another file, or in a docstring the reader is not looking at, did
+not prevent a single one of them.
+
+**Enforcement.** `tools/check_verification_claim_honesty.py`, run in the
+`security-checks` job of `ci.yml`. Five checks:
+
+1. **No claim of an unperformed check.** For every `False` capability, the claim
+   patterns bound to it must not appear un-negated in `ama_cryptography/`,
+   `tools/`, `tests/`, `examples/`, `docs/`, `wiki/`, `benchmarks/`, `fuzz/` or
+   root Markdown. Generic assurance vocabulary ("independent verification") is
+   scoped to lines that are about timestamping, so a true statement about
+   side-channel review of the C code is not a finding — a gate that fires on
+   those is one people learn to route around, which is the failure mode
+   INVARIANT-2 already records.
+2. **The misnamed result key is not taught.** No `results["rfc3161"]` in any
+   document or docstring. The key is retained in code and now warns when read;
+   a copy-pasteable example teaching it would undo that.
+3. **A refusing argument is documented as refusing.** `certificate_file` and
+   `tsa_cert_path` must be described as raising.
+4. **No instruction to install `rfc3161ng`**, removed under INVARIANT-1.
+5. **The table cannot outgrow its enforcement.** Every `False` capability must
+   have claim patterns bound to it; every pattern must name a real capability;
+   the scan's exemption list must stay exactly the two self-referential files
+   (the checker, which states the forbidden claims in order to forbid them, and
+   its test, which states them in order to require rejection).
+
+The table is read with `ast` rather than by importing the module, so the gate
+runs in a lint job with nothing built.
+
+**Verification.** `tests/test_verification_claim_honesty_gate.py` — 46 tests —
+pins both directions: the repository as it stands, plus a reproduction of every
+violation class and, equally, the near-misses that must **not** fire. It also
+pins `test_flipping_a_capability_to_true_permits_its_claims`, which is the
+property the design rests on, and `test_ast_parsed_table_equals_the_imported_one`,
+so the gate's reading of the table and everyone else's cannot drift.
+
+That suite has already earned its place. An early version of the pattern for
+the phrase this section will not repeat ended `(?:stamp|-stamp|stamping)?\b`,
+which cannot match its own plural: the group takes `stamp`, the `\b` demands a
+boundary before the `s`, and every backtrack fails identically. The gate missed
+the most common phrasing of the most common false claim in the tree and
+reported success. Its own negative controls found that, and fixing the pattern
+immediately surfaced two further live instances.
+
+`tests/test_rfc3161_api_honesty.py` — 20 tests — drives the behaviour the table
+describes, so the table cannot become aspirational. The load-bearing one is
+`test_a_token_with_a_nonsense_signature_still_satisfies_the_binding`: it builds
+a token in-process, with no key and no TSA, whose signature octets are zeros
+and whose `genTime` is the epoch, and requires the binding check to accept it.
+It is an uncomfortable assertion to write down, which is why it belongs in the
+suite — it is the fact every claim removed under this invariant was denying.
+Its companion requires the same check to still reject a different payload, so
+"accepts a forgery" cannot be satisfied by a check that accepts everything.
+
+**Scope.** The invariant is general; the capability table and claim patterns
+currently cover RFC 3161, because that is where the defect was found and where
+AMA ships a feature whose headline purpose is unimplemented. A future
+verification surface with an unimplemented half is expected to declare its own
+table and bind its own patterns. What closing the RFC 3161 gap requires is
+scoped in [ARCHITECTURE.md § Scope: RFC 3161 attestation is not implemented](ARCHITECTURE.md#scope-rfc-3161-attestation-is-not-implemented).
+
 ---
 
 _Maintained by Steel Security Advisors LLC._
-_Last updated: 2026-07-27_
+_Last updated: 2026-07-28_

@@ -27,6 +27,33 @@
       "sha256": "43db761c0a2eae71fb0755d355d5130e28ce64a5b07846cf27e7072082597a81",
       "testGroups": 109
     },
+    "ecdsa_secp256r1_sha256_test.json": {
+      "actualTests": 484,
+      "algorithm": "ECDSA",
+      "bytes": 327156,
+      "numberOfTests": 484,
+      "schema": "ecdsa_verify_schema_v1.json",
+      "sha256": "182db4f3e230f6f9fa9f800d2a614dede30284b8e8438bbfe1171905402e9332",
+      "testGroups": 113
+    },
+    "ecdsa_secp384r1_sha384_test.json": {
+      "actualTests": 504,
+      "algorithm": "ECDSA",
+      "bytes": 375442,
+      "numberOfTests": 504,
+      "schema": "ecdsa_verify_schema_v1.json",
+      "sha256": "8a5b3ae1760975143414811f13588c24d951d9d8c904195087ba327591dfe9cc",
+      "testGroups": 105
+    },
+    "ecdsa_secp521r1_sha512_test.json": {
+      "actualTests": 542,
+      "algorithm": "ECDSA",
+      "bytes": 455046,
+      "numberOfTests": 542,
+      "schema": "ecdsa_verify_schema_v1.json",
+      "sha256": "0fa3bb09a2319242253028b53d555fb8ec2081d891271321205cdaeabb3eef3e",
+      "testGroups": 108
+    },
     "ed25519_test.json": {
       "actualTests": 150,
       "algorithm": "EDDSA",
@@ -109,7 +136,7 @@
       "testGroups": 1
     }
   },
-  "totalVectors": 2733,
+  "totalVectors": 4263,
   "upstream": {
     "commit": "b61843a9a5115bb758134b6a1f5d5e502d445342",
     "license": "Apache-2.0",

@@ -109,10 +109,26 @@ def upstream_url(manifest: dict[str, Any], filename: str, commit: str) -> str:
 
 
 def fetch_bytes(url: str) -> bytes:
-    """Download raw bytes over HTTPS, honouring proxy + CA env vars."""
+    """Download raw bytes over HTTPS, honouring proxy + CA env vars.
+
+    The scheme is checked rather than assumed.  ``urllib`` also opens ``file:``
+    and ``ftp:``, so a URL reaching here from a manifest — the manifest being
+    the thing this tool exists to *re-derive*, not a trusted input — could
+    otherwise read a local path and have its contents vendored as "upstream".
+    An https-only guard is what makes the S310 suppression below a statement of
+    fact instead of a promise.
+    """
+    if not url.startswith("https://"):
+        raise ValueError(f"refusing a non-HTTPS corpus URL: {url!r}")
     ctx = ssl.create_default_context()
-    req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})  # noqa: S310
-    with urllib.request.urlopen(req, timeout=_HTTP_TIMEOUT, context=ctx) as resp:  # noqa: S310
+    req = urllib.request.Request(  # noqa: S310 -- https enforced directly above (WYC-001)
+        url, headers={"User-Agent": _USER_AGENT}
+    )
+    # The suppression anchors on the physical line ruff reports, which for a
+    # wrapped call is the one carrying the callee — not the closing `as resp:`.
+    with urllib.request.urlopen(  # noqa: S310 -- https enforced directly above (WYC-001)
+        req, timeout=_HTTP_TIMEOUT, context=ctx
+    ) as resp:
         return bytes(resp.read())
 
 

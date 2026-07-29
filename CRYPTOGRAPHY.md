@@ -30,7 +30,10 @@ This document provides an overview of the cryptographic algorithms used in AMA C
 | X25519 | Key Exchange | 128-bit classical | RFC 7748 | Native C (`ama_x25519.c`) | Hybrid KEM |
 | ChaCha20-Poly1305 | Authenticated Encryption | 256-bit | RFC 8439 | Native C (`ama_chacha20poly1305.c`) | Alternative AEAD |
 | Argon2id | Password Hashing | Memory-hard | RFC 9106 | Native C (`ama_argon2.c`) | Key Derivation |
-| secp256k1 | Elliptic Curve | 128-bit classical | SEC 2 | Native C (`ama_secp256k1.c`) | HD Key Derivation |
+| secp256k1 | Elliptic Curve | 128-bit classical | SEC 2 | Native C (`ama_secp256k1.c`) | HD Key Derivation, ECDSA |
+| NIST P-256 | ECDSA + ECDH | 128-bit classical | FIPS 186-5 / SP 800-186 / SP 800-56A | Native C (`ama_nistp.c`) | TLS, X.509, JOSE (ES256), COSE, WebAuthn |
+| NIST P-384 | ECDSA + ECDH | 192-bit classical | FIPS 186-5 / SP 800-186 / SP 800-56A | Native C (`ama_nistp.c`) | TLS, X.509, JOSE (ES384), CNSA 1.0 |
+| NIST P-521 | ECDSA + ECDH | 256-bit classical | FIPS 186-5 / SP 800-186 / SP 800-56A | Native C (`ama_nistp.c`) | TLS, X.509, JOSE (ES512) |
 
 ## Post-Quantum Cryptography (PQC)
 
@@ -249,7 +252,7 @@ AMA Cryptography applies four independent cryptographic layers, matching the `am
 **Optional Add-ons (not core layers):**
 - **Canonical Encoding** — Deterministic length-prefixed input normalization (prevents concatenation attacks)
 - **SLH-DSA / ML-KEM-1024** — Additional post-quantum signature and KEM schemes
-- **RFC 3161 Timestamp** — Third-party temporal proof of existence
+- **RFC 3161 Timestamp** — Token bound to content by the §2.4.2 message imprint. Not third-party attestation and not proof of existence: AMA verifies no TSA signature, so `genTime` is unauthenticated (INVARIANT-37)
 
 **Security Bound:** Overall security is bounded by the weakest core layer (~128-bit classical, ~192-bit quantum when ML-DSA-65 is enforced). Defense-in-depth ensures continued protection if any single layer is compromised. See [SECURITY.md](SECURITY.md) for detailed analysis.
 
@@ -258,14 +261,13 @@ AMA Cryptography applies four independent cryptographic layers, matching the `am
 The optional RFC 3161 timestamp add-on uses **SHA-256** instead of SHA3-256 for the TSA request. This is a deliberate design choice for interoperability:
 
 - Most RFC 3161 TSA services (FreeTSA, DigiCert, GlobalSign) do not support SHA3-256
-- The timestamp token provides proof-of-existence at a specific time
 - The SHA-256 hash is only used for the TSA request, not for package integrity
 - Package integrity is protected by SHA3-256 across all 4 core layers
 
 This does not weaken security because:
-1. The timestamp proves when the package existed, not its integrity
-2. Package integrity is independently verified by SHA3-256, HMAC, and signatures
-3. SHA-256 remains secure for collision resistance (no practical attacks)
+1. The message imprint's only job is to bind a token to a payload. Collision resistance is the property that matters for it, and SHA-256 has it — no practical attack exists.
+2. Package integrity is independently verified by SHA3-256, HMAC, and signatures, none of which depend on the timestamp.
+3. The timestamp contributes no security bound to weaken. AMA verifies the §2.4.2 binding only and no TSA signature, so the token establishes nothing about *when* the package existed in the first place (INVARIANT-37) — the choice of digest here cannot degrade an assurance that was never claimed.
 
 ## Implementation Notes
 
@@ -288,6 +290,7 @@ All cryptographic primitives are implemented natively in C with zero external de
 | `ama_chacha20poly1305.c` | ChaCha20-Poly1305 AEAD | RFC 8439 |
 | `ama_argon2.c` | Argon2id password hashing | RFC 9106 |
 | `ama_secp256k1.c` | secp256k1 curve operations | SEC 2 |
+| `ama_nistp.c` | NIST P-256/P-384/P-521 ECDSA + ECDH | FIPS 186-5, SP 800-186, SP 800-56A, RFC 6979, SEC 1 |
 | `ama_aes_bitsliced.c` | Bitsliced AES S-box | — (optional) |
 
 ### Constant-Time Operations

@@ -21,11 +21,12 @@ AI Co-Architects:
 
 import base64
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
 import ama_cryptography.legacy_compat as dgs
+from tests._http_response_mock import make_response
 
 # ============================================================================
 # CRYPTO_AVAILABLE=False TESTS
@@ -99,40 +100,157 @@ FAKE_SIGNATURE = b"S" * 3309  # 3309 bytes for ML-DSA-65 signature
 # ============================================================================
 
 
+def _granted_response(digest: bytes, nonce: int) -> bytes:
+    """A granted ``TimeStampResp`` whose token binds ``digest`` and echoes ``nonce``.
+
+    The client now checks three things the old opaque fixture could not
+    express: that the TSA granted the request, that the token echoes the nonce
+    that was sent, and — RFC 3161 §2.4.2 — that the token's ``messageImprint``
+    is the digest that was submitted rather than some other one. A fixture that
+    a conformant client would reject is not a fixture.
+    """
+    from ama_cryptography._asn1 import (
+        der_integer,
+        der_null,
+        der_octet_string,
+        der_sequence,
+        der_tagged,
+        oid_from_string,
+    )
+
+    tst_info = der_sequence(
+        der_integer(1),  # version
+        oid_from_string("1.2.3.4.5"),  # policy
+        der_sequence(  # messageImprint
+            der_sequence(oid_from_string("2.16.840.1.101.3.4.2.1"), der_null()),
+            der_octet_string(digest),
+        ),
+        der_integer(42),  # serialNumber
+        b"\x18\x0f20260101000000Z",  # genTime
+        der_integer(nonce),  # nonce — echoed, per RFC 3161 §2.4.2
+    )
+    signer_info = der_sequence(
+        der_integer(1),
+        der_sequence(der_sequence(), der_integer(1)),
+        der_sequence(oid_from_string("2.16.840.1.101.3.4.2.1"), der_null()),
+        der_sequence(oid_from_string("1.2.840.113549.1.1.1"), der_null()),
+        der_octet_string(b"\x00" * 32),
+    )
+
+    def _der_set(*elements: bytes) -> bytes:
+        body = b"".join(elements)
+        return (
+            bytes([0x31, len(body)]) + body
+            if len(body) < 0x80
+            else (bytes([0x31, 0x81, len(body)]) + body)
+        )
+
+    signed_data = der_sequence(
+        der_integer(3),
+        _der_set(der_sequence(oid_from_string("2.16.840.1.101.3.4.2.1"), der_null())),
+        der_sequence(
+            oid_from_string("1.2.840.113549.1.9.16.1.4"),
+            der_tagged(0, der_octet_string(tst_info)),
+        ),
+        _der_set(signer_info),
+    )
+    token = der_sequence(oid_from_string("1.2.840.113549.1.7.2"), der_tagged(0, signed_data))
+    return der_sequence(der_sequence(der_integer(0)), token)
+
+
 class TestRFC3161SuccessPath:
     """Tests for RFC 3161 timestamp success paths."""
 
     @patch("http.client.HTTPSConnection")
-    @patch("subprocess.run")
-    def test_rfc3161_success(self, mock_run: Any, mock_https_conn: Any) -> None:
-        """Test successful RFC 3161 timestamp retrieval."""
-        mock_run.return_value = MagicMock(returncode=0, stdout=b"TSQ_DATA")
-        mock_response = MagicMock(status=200)
-        mock_response.read.return_value = b"TSR_RESPONSE"
+    def test_rfc3161_success(self, mock_https_conn: Any) -> None:
+        """Successful retrieval, with the request checked against RFC 3161.
+
+        This used to assert ``subprocess.run`` invoked ``openssl`` — the shape
+        of the implementation rather than the shape of the protocol, and an
+        INVARIANT-1 violation besides ("the core package must not import or
+        call" a third-party cryptographic implementation at runtime). The
+        request is now built by AMA's own DER encoder, so the assertion is
+        against RFC 3161 §2.4.1's ASN.1: version v1, a MessageImprint naming
+        SHA-256 by its NIST OID, and the SHA-256 digest of exactly the bytes
+        the caller passed.
+        """
+        import hashlib
+
+        from ama_cryptography._asn1 import DerReader
+
+        payload = b"data"
+        digest = hashlib.sha256(payload).digest()
+
+        # A faithful HTTPResponse.read (honours `amt`, reports EOF) — the
+        # client reads its body in bounded chunks against a total deadline.
+        mock_response, reply = make_response()
         mock_conn = mock_https_conn.return_value
         mock_conn.getresponse.return_value = mock_response
 
-        tsr = dgs.get_rfc3161_timestamp(b"data", "https://tsa.example.com")
+        # The response has to be built from the nonce the client actually sent,
+        # because the client now checks the echo — so post the request first,
+        # read the nonce out of it, and answer with a matching token.
+        posted: dict[str, bytes] = {}
 
-        # Verify return value
-        assert tsr == b"TSR_RESPONSE"
+        def _capture(method: str, path: str, body: bytes = b"", headers: Any = None) -> None:
+            posted["body"] = body
+            req = DerReader(body).read_sequence()
+            assert req.read_integer() == 1, "TimeStampReq version must be v1"
+            imprint = req.read_sequence()
+            algorithm = imprint.read_sequence()
+            assert algorithm.read_oid() == "2.16.840.1.101.3.4.2.1", "must name SHA-256"
+            algorithm.read_null()
+            assert (
+                imprint.read_octet_string() == digest
+            ), "hashedMessage must be the digest of the caller's data"
+            nonce = req.read_integer()
+            answer = _granted_response(digest, nonce)
+            posted["answer"] = answer
+            reply.set(answer)
 
-        # Verify subprocess.run was called with expected signature
-        run_args, run_kwargs = mock_run.call_args
-        assert run_args[0][0] == "openssl", "subprocess.run must invoke openssl for RFC 3161"
-        assert (
-            run_kwargs.get("input") is not None
-        ), "TSQ bytes must be passed as input to subprocess.run"
+        mock_conn.request.side_effect = _capture
 
-        # Verify HTTPSConnection was called with the expected host.
+        tsr = dgs.get_rfc3161_timestamp(payload, "https://tsa.example.com")
+
+        # The legacy API returns the whole response, unchanged.
+        assert tsr == posted["answer"]
+
         mock_https_conn.assert_called_once_with("tsa.example.com", None, timeout=10)
-        mock_conn.request.assert_called_once_with(
-            "POST",
-            "/",
-            body=b"TSQ_DATA",
-            headers={"Content-Type": "application/timestamp-query"},
-        )
+        call = mock_conn.request.call_args
+        assert call.args[0] == "POST" and call.args[1] == "/"
+        assert call.kwargs["headers"] == {"Content-Type": "application/timestamp-query"}
         mock_conn.close.assert_called_once()
+
+    def test_rfc3161_builds_the_request_without_any_subprocess(self) -> None:
+        """No child process, at all, on the timestamp path.
+
+        The point of the change is that AMA stopped shelling out to a competing
+        implementation; a regression would most likely reintroduce exactly that.
+        """
+        import hashlib
+        import subprocess
+
+        from ama_cryptography._asn1 import DerReader
+
+        digest = hashlib.sha256(b"data").digest()
+        with patch.object(subprocess, "run") as mock_run:
+            with patch("http.client.HTTPSConnection") as mock_https_conn:
+                mock_response, reply = make_response()
+                mock_conn = mock_https_conn.return_value
+                mock_conn.getresponse.return_value = mock_response
+
+                def _capture(
+                    method: str, path: str, body: bytes = b"", headers: Any = None
+                ) -> None:
+                    req = DerReader(body).read_sequence()
+                    req.read_integer()
+                    req.read_sequence()
+                    reply.set(_granted_response(digest, req.read_integer()))
+
+                mock_conn.request.side_effect = _capture
+                dgs.get_rfc3161_timestamp(b"data", "https://tsa.example.com")
+
+        mock_run.assert_not_called()
 
     def test_rfc3161_rejects_http_url_before_network(self) -> None:
         """HTTP TSA URLs are rejected before subprocess or network calls."""

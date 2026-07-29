@@ -83,16 +83,79 @@ typedef enum {
  * KEY SIZES (bytes)
  * ============================================================================ */
 
-/* ML-DSA-65 (Dilithium3) - FIPS 204 */
+/* ML-DSA (FIPS 204) parameter set sizes, Table 2. */
+#define AMA_ML_DSA_44_PUBLIC_KEY_BYTES 1312
+#define AMA_ML_DSA_44_SECRET_KEY_BYTES 2560
+#define AMA_ML_DSA_44_SIGNATURE_BYTES  2420
+
 #define AMA_ML_DSA_65_PUBLIC_KEY_BYTES 1952
 #define AMA_ML_DSA_65_SECRET_KEY_BYTES 4032
-#define AMA_ML_DSA_65_SIGNATURE_BYTES 3309
+#define AMA_ML_DSA_65_SIGNATURE_BYTES  3309
+
+#define AMA_ML_DSA_87_PUBLIC_KEY_BYTES 2592
+#define AMA_ML_DSA_87_SECRET_KEY_BYTES 4896
+#define AMA_ML_DSA_87_SIGNATURE_BYTES  4627
+
+/** Largest key / signature across the supported sets (ML-DSA-87). */
+#define AMA_ML_DSA_MAX_PUBLIC_KEY_BYTES 2592
+#define AMA_ML_DSA_MAX_SECRET_KEY_BYTES 4896
+#define AMA_ML_DSA_MAX_SIGNATURE_BYTES  4627
+
+/**
+ * @brief FIPS 204 ML-DSA parameter set selector.
+ *
+ * Numeric values are stable and form part of the AMA ABI.  They are the
+ * FIPS 204 set numbers rather than a dense index, so a mis-passed integer is
+ * far more likely to be rejected than to select the wrong set.
+ */
+typedef enum {
+    AMA_ML_DSA_44 = 44,  /**< ML-DSA-44, NIST category 2 */
+    AMA_ML_DSA_65 = 65,  /**< ML-DSA-65, NIST category 3 */
+    AMA_ML_DSA_87 = 87   /**< ML-DSA-87, NIST category 5 */
+} ama_ml_dsa_param_set_t;
 
 /* Kyber-1024 */
 #define AMA_KYBER_1024_PUBLIC_KEY_BYTES 1568
 #define AMA_KYBER_1024_SECRET_KEY_BYTES 3168
 #define AMA_KYBER_1024_CIPHERTEXT_BYTES 1568
 #define AMA_KYBER_1024_SHARED_SECRET_BYTES 32
+
+/* ML-KEM (FIPS 203) parameter set sizes, Table 3.
+ *
+ * The AMA_KYBER_1024_* names above are the pre-3.5.0 spelling of the
+ * ML-KEM-1024 row and are retained verbatim for ABI and source compatibility;
+ * they are #define'd to the same values, not merely "equal by convention". */
+#define AMA_ML_KEM_512_PUBLIC_KEY_BYTES   800
+#define AMA_ML_KEM_512_SECRET_KEY_BYTES  1632
+#define AMA_ML_KEM_512_CIPHERTEXT_BYTES   768
+
+#define AMA_ML_KEM_768_PUBLIC_KEY_BYTES  1184
+#define AMA_ML_KEM_768_SECRET_KEY_BYTES  2400
+#define AMA_ML_KEM_768_CIPHERTEXT_BYTES  1088
+
+#define AMA_ML_KEM_1024_PUBLIC_KEY_BYTES 1568
+#define AMA_ML_KEM_1024_SECRET_KEY_BYTES 3168
+#define AMA_ML_KEM_1024_CIPHERTEXT_BYTES 1568
+
+/** The shared secret is 32 octets for every ML-KEM parameter set. */
+#define AMA_ML_KEM_SHARED_SECRET_BYTES     32
+/** Largest public key / ciphertext across the supported sets (ML-KEM-1024). */
+#define AMA_ML_KEM_MAX_PUBLIC_KEY_BYTES  1568
+#define AMA_ML_KEM_MAX_SECRET_KEY_BYTES  3168
+#define AMA_ML_KEM_MAX_CIPHERTEXT_BYTES  1568
+
+/**
+ * @brief FIPS 203 ML-KEM parameter set selector.
+ *
+ * Numeric values are stable and form part of the AMA ABI.  They are the
+ * security-category numbers rather than a dense index so that a mis-passed
+ * integer is far more likely to be rejected than to select the wrong set.
+ */
+typedef enum {
+    AMA_ML_KEM_512  = 512,   /**< ML-KEM-512,  NIST category 1 */
+    AMA_ML_KEM_768  = 768,   /**< ML-KEM-768,  NIST category 3 */
+    AMA_ML_KEM_1024 = 1024   /**< ML-KEM-1024, NIST category 5 */
+} ama_ml_kem_param_set_t;
 
 /* SPHINCS+-256f (legacy aliases for SLH-DSA-SHA2-256f-simple) */
 #define AMA_SPHINCS_256F_PUBLIC_KEY_BYTES 64
@@ -1546,6 +1609,358 @@ AMA_API ama_error_t ama_secp256k1_ecdsa_verify_ex(
     uint32_t flags
 );
 
+/**
+ * @brief Decompress a SEC 1 compressed secp256k1 public key.
+ *
+ * Recovers `y` from `x` as a modular square root and then proves it by
+ * squaring, so an `x` that is not on the curve is rejected rather than
+ * returned as an off-curve point. The `x` coordinate must be a canonical
+ * field element in `[0, p)` (INVARIANT-29); a value `>= p` is rejected, never
+ * reduced.
+ *
+ * Exists so `ama_cryptography.key_formats` can import the compressed form —
+ * which is what SPKI, COSE and the Bitcoin/Ethereum ecosystems actually carry
+ * for this curve — without performing elliptic-curve arithmetic in Python.
+ *
+ * Every input is public, so this is variable time by design.
+ *
+ * @param compressed   33 octets: 0x02/0x03 prefix followed by big-endian X.
+ * @param uncompressed Output: 64 octets, X || Y big-endian, no prefix — the
+ *                     form `ama_secp256k1_ecdsa_verify` consumes.
+ * @return AMA_SUCCESS, or AMA_ERROR_INVALID_PARAM for a bad prefix, a
+ *         non-canonical X, or an X that is not on the curve.
+ */
+AMA_API ama_error_t ama_secp256k1_pubkey_decompress(
+    const uint8_t compressed[33],
+    uint8_t uncompressed[64]
+);
+
+/* ============================================================================
+ * NIST PRIME CURVES — P-256 / P-384 / P-521 (ECDSA + ECDH)
+ *
+ * Curve parameters from SP 800-186, ECDSA from FIPS 186-5, ECDH from
+ * SP 800-56A §5.7.1.2 (cofactor 1), deterministic nonces from RFC 6979,
+ * point encodings from SEC 1 v2 §2.3.3.  Implemented in src/c/ama_nistp.c.
+ *
+ * Representation conventions, identical across the three curves:
+ *   - A private key is `ama_nistp_field_bytes(curve)` big-endian octets in
+ *     [1, n-1]:  32 (P-256), 48 (P-384), 66 (P-521).
+ *   - A public key is `2 * field_bytes` octets, X || Y big-endian, with NO
+ *     SEC 1 prefix octet — matching `ama_secp256k1_ecdsa_verify`'s 64-byte
+ *     form.  Use ama_nistp_point_encode / _decode to move to and from
+ *     prefixed SEC 1 (0x04 uncompressed, 0x02/0x03 compressed).
+ *   - A signature is either DER (X.509, TLS, PKCS#11) or fixed-width
+ *     `r || s` of `2 * field_bytes` octets (JWS RFC 7515 §3.4, COSE
+ *     RFC 8152 §8.1, WebAuthn).  Both are first-class here.
+ *
+ * Digest inputs are 32, 48 or 64 octets (SHA-256 / SHA-384 / SHA-512).  These
+ * functions never hash: pass a digest.  The digest width also selects the
+ * RFC 6979 HMAC, as the RFC prescribes.  A digest wider than the group order
+ * is truncated per FIPS 186-5 rather than folded, so signing a SHA-512 digest
+ * under P-256 is well defined and interoperable.
+ * ============================================================================ */
+
+/**
+ * @brief NIST prime-curve selector.
+ *
+ * Numeric values are stable and form part of the AMA ABI.  They are the curve
+ * bit-sizes rather than a dense 0..2 index, for the reason INVARIANT-35 gives:
+ * 0 is what an uninitialised or forgotten field holds, and a dense index makes
+ * that value silently mean "P-256".  With this numbering, 0 names nothing and
+ * is refused.  The values also do not collide with ama_ml_kem_param_set_t or
+ * ama_ml_dsa_param_set_t, so a call routed to the wrong family is rejected
+ * rather than resolved.
+ */
+typedef enum {
+    AMA_NIST_CURVE_P256 = 256,  /**< NIST P-256 / secp256r1 / prime256v1 */
+    AMA_NIST_CURVE_P384 = 384,  /**< NIST P-384 / secp384r1 */
+    AMA_NIST_CURVE_P521 = 521   /**< NIST P-521 / secp521r1 */
+} ama_nist_curve_t;
+
+/** Largest field/scalar octet width across the supported curves (P-521). */
+#define AMA_NISTP_MAX_FIELD_BYTES 66
+/** Largest public key: X || Y for P-521. */
+#define AMA_NISTP_MAX_PUBKEY_BYTES 132
+/** Largest DER ECDSA signature: P-521, long-form SEQUENCE length. */
+#define AMA_NISTP_MAX_SIG_LEN 141
+
+/**
+ * @name ECDSA signing policy flags (for the _ex signing entry points)
+ *
+ * Low-`s` is a property of a sign/verify *pair*. Setting
+ * AMA_NISTP_ECDSA_SIGN_LOW_S without the matching
+ * AMA_NISTP_ECDSA_REQUIRE_LOW_S on the verifier buys nothing — the high twin
+ * of the resulting signature still verifies — and costs RFC 6979 conformance.
+ * Set both, or neither. See INVARIANT-34.
+ * @{
+ */
+/**
+ * Default: deterministic, and `s` emitted exactly as RFC 6979 produces it.
+ *
+ * This is what makes `ama_nistp_ecdsa_sign` reproduce RFC 6979's own
+ * Appendix A.2.5 / A.2.6 / A.2.7 vectors byte-for-byte.
+ */
+#define AMA_NISTP_ECDSA_SIGN_DEFAULT  0u
+/**
+ * Emit the low-`s` representative (negate when `s > (n-1)/2`).
+ *
+ * Still X9.62-conformant, but no longer RFC 6979-conformant: roughly half of
+ * all signatures will differ from the value the RFC specifies. Use only when
+ * the verifier is also set to AMA_NISTP_ECDSA_REQUIRE_LOW_S.
+ */
+#define AMA_NISTP_ECDSA_SIGN_LOW_S    1u
+/**
+ * Mix 32 fresh CSPRNG octets into the RFC 6979 nonce DRBG as "additional
+ * data" (RFC 6979 §3.6).
+ *
+ * The nonce stays safe if the RNG is broken (it degrades to the deterministic
+ * case) and the deterministic path is hardened against fault injection.
+ * Signatures are no longer reproducible, so this cannot be checked against
+ * the RFC vectors — that is what the deterministic default is for.
+ */
+#define AMA_NISTP_ECDSA_SIGN_HEDGED   2u
+/** @} */
+
+/**
+ * @name ECDSA verification policy flags (for the _ex entry points)
+ * @{
+ */
+/**
+ * Default policy: accept either `s` representative.
+ *
+ * This is X9.62 / FIPS 186-5 / RFC 3279 behaviour and is required for
+ * interoperating with TLS, X.509, JWS and WebAuthn signers, none of which
+ * normalise `s`.  It is a deliberate divergence from the secp256k1 default
+ * (INVARIANT-28), declared and justified in INVARIANT-34: the checks that
+ * cost no interoperability — minimal DER, `r, s` strictly in [1, n-1], and
+ * public-key coordinates strictly in [0, p) — remain unconditional here, and
+ * AMA's own signer still emits only the low representative.
+ */
+#define AMA_NISTP_ECDSA_VERIFY_DEFAULT  0u
+/**
+ * Reject the high-`s` representative, making a signature a unique identifier
+ * for its (key, digest) pair.  Use this when you control the signer.
+ */
+#define AMA_NISTP_ECDSA_REQUIRE_LOW_S   1u
+/** @} */
+
+/** @brief Octet width of a field element / scalar; 0 for an unknown curve. */
+AMA_API size_t ama_nistp_field_bytes(ama_nist_curve_t curve);
+
+/** @brief Octet width of an X || Y public key; 0 for an unknown curve. */
+AMA_API size_t ama_nistp_pubkey_bytes(ama_nist_curve_t curve);
+
+/** @brief Upper bound on a DER ECDSA signature; 0 for an unknown curve. */
+AMA_API size_t ama_nistp_sig_der_max_len(ama_nist_curve_t curve);
+
+/** @brief Canonical curve name ("P-256"/"P-384"/"P-521"), or NULL. */
+AMA_API const char *ama_nistp_curve_name(ama_nist_curve_t curve);
+
+/**
+ * @brief Generate a fresh keypair from the platform CSPRNG.
+ *
+ * The private scalar is drawn by rejection sampling into [1, n-1] — not by
+ * reducing a wide random value — so the distribution is exactly uniform.
+ *
+ * @param curve        Curve selector.
+ * @param private_key  Output: `field_bytes` octets, big-endian.
+ * @param public_key   Output: `2 * field_bytes` octets, X || Y big-endian.
+ * @return AMA_SUCCESS, AMA_ERROR_INVALID_PARAM, or AMA_ERROR_CRYPTO if the
+ *         system CSPRNG failed.  On any failure the private key buffer is
+ *         zeroed before returning.
+ */
+AMA_API ama_error_t ama_nistp_keypair(ama_nist_curve_t curve,
+                                      uint8_t *private_key,
+                                      uint8_t *public_key);
+
+/**
+ * @brief Derive the public key for an existing private scalar.
+ * @return AMA_ERROR_INVALID_PARAM if the scalar is zero or >= n.
+ */
+AMA_API ama_error_t ama_nistp_pubkey_from_privkey(ama_nist_curve_t curve,
+                                                  const uint8_t *private_key,
+                                                  uint8_t *public_key);
+
+/**
+ * @brief Full public-key validation.
+ *
+ * Checks that both coordinates are canonical field elements in [0, p), that
+ * the point satisfies y^2 = x^3 - 3x + b, and that it is not the identity.
+ * All three curves have cofactor 1 and prime order, so this is exactly
+ * "a member of the prime-order group" — no order check is skipped.
+ *
+ * @return AMA_SUCCESS if the key is valid, AMA_ERROR_VERIFY_FAILED if not.
+ */
+AMA_API ama_error_t ama_nistp_pubkey_validate(ama_nist_curve_t curve,
+                                              const uint8_t *public_key);
+
+/**
+ * @brief Encode X || Y as a prefixed SEC 1 point.
+ *
+ * @param compressed Nonzero for 0x02/0x03 || X, zero for 0x04 || X || Y.
+ * @param out        Buffer of at least `2 * field_bytes + 1` octets.
+ * @param out_len    Output: octets written.
+ * @return AMA_ERROR_INVALID_PARAM if the point does not validate.
+ */
+AMA_API ama_error_t ama_nistp_point_encode(ama_nist_curve_t curve,
+                                           const uint8_t *public_key,
+                                           int compressed,
+                                           uint8_t *out, size_t *out_len);
+
+/**
+ * @brief Decode a prefixed SEC 1 point (compressed or uncompressed) to X || Y.
+ *
+ * Decompression recovers y as a modular square root and then *proves* it by
+ * squaring: an x-coordinate that is not on the curve is rejected rather than
+ * yielding a point off the curve.  The decoded point is validated in full
+ * before it is returned.
+ *
+ * @return AMA_ERROR_INVALID_PARAM on any malformed or off-curve input; the
+ *         output buffer is zeroed in that case.
+ */
+AMA_API ama_error_t ama_nistp_point_decode(ama_nist_curve_t curve,
+                                           const uint8_t *in, size_t in_len,
+                                           uint8_t *public_key);
+
+/**
+ * @brief ECDH shared secret (SP 800-56A §5.7.1.2 ECC CDH, cofactor 1).
+ *
+ * The peer key is fully validated *before* the private scalar touches it —
+ * this is the invalid-curve defence, and it is not optional. The output is
+ * the raw x-coordinate (`field_bytes` octets, "Z" in SP 800-56A); it is key
+ * material, not a key: run it through a KDF (`ama_hkdf_sha256` and friends)
+ * before use.
+ *
+ * @return AMA_ERROR_INVALID_PARAM if the private scalar is out of range or
+ *         the peer key fails validation; AMA_ERROR_CRYPTO if the result is
+ *         the identity.  The output buffer is zeroed on any failure.
+ */
+AMA_API ama_error_t ama_nistp_ecdh(ama_nist_curve_t curve,
+                                   const uint8_t *private_key,
+                                   const uint8_t *peer_public_key,
+                                   uint8_t *shared_secret);
+
+/**
+ * @brief Deterministic ECDSA signature (RFC 6979), DER-encoded.
+ *
+ * No randomness is consumed and identical inputs always produce an identical
+ * signature. `s` is emitted exactly as RFC 6979 specifies it, so this
+ * reproduces the RFC's own Appendix A.2.5 / A.2.6 / A.2.7 vectors
+ * byte-for-byte — pinned by tests/kat/rfc6979/ecdsa_prime_curves.kat.
+ *
+ * Equivalent to ama_nistp_ecdsa_sign_ex(..., AMA_NISTP_ECDSA_SIGN_DEFAULT).
+ *
+ * @param digest       Digest to sign. This function does NOT hash.
+ * @param digest_len   32, 48 or 64. Any other width is rejected.
+ * @param signature    Buffer of at least `ama_nistp_sig_der_max_len(curve)`.
+ * @param signature_len Output: octets written.
+ */
+AMA_API ama_error_t ama_nistp_ecdsa_sign(ama_nist_curve_t curve,
+                                         const uint8_t *digest, size_t digest_len,
+                                         const uint8_t *private_key,
+                                         uint8_t *signature, size_t *signature_len);
+
+/**
+ * @brief Deterministic ECDSA signature, fixed-width `r || s`.
+ *
+ * The JWS / COSE / WebAuthn wire form. Identical arithmetic to
+ * ama_nistp_ecdsa_sign; only the encoding differs.
+ *
+ * @param signature Buffer of exactly `2 * field_bytes` octets.
+ */
+AMA_API ama_error_t ama_nistp_ecdsa_sign_raw(ama_nist_curve_t curve,
+                                             const uint8_t *digest, size_t digest_len,
+                                             const uint8_t *private_key,
+                                             uint8_t *signature);
+
+/**
+ * @brief Hedged deterministic ECDSA signature (RFC 6979 §3.6), DER-encoded.
+ *
+ * Equivalent to ama_nistp_ecdsa_sign_ex(..., AMA_NISTP_ECDSA_SIGN_HEDGED).
+ * Signatures are NOT reproducible — use ama_nistp_ecdsa_sign when
+ * reproducibility is the requirement.
+ */
+AMA_API ama_error_t ama_nistp_ecdsa_sign_hedged(ama_nist_curve_t curve,
+                                                const uint8_t *digest, size_t digest_len,
+                                                const uint8_t *private_key,
+                                                uint8_t *signature, size_t *signature_len);
+
+/**
+ * @brief ECDSA signature with an explicit AMA_NISTP_ECDSA_SIGN_* policy, DER.
+ *
+ * Every combination of {deterministic, hedged} x {RFC 6979 `s`, low `s`} is
+ * reachable through this one entry point. Unknown flag bits are rejected with
+ * AMA_ERROR_INVALID_PARAM rather than ignored.
+ */
+AMA_API ama_error_t ama_nistp_ecdsa_sign_ex(ama_nist_curve_t curve,
+                                            const uint8_t *digest, size_t digest_len,
+                                            const uint8_t *private_key,
+                                            uint8_t *signature, size_t *signature_len,
+                                            uint32_t flags);
+
+/** @brief As ama_nistp_ecdsa_sign_ex, emitting fixed-width `r || s`. */
+AMA_API ama_error_t ama_nistp_ecdsa_sign_raw_ex(ama_nist_curve_t curve,
+                                                const uint8_t *digest, size_t digest_len,
+                                                const uint8_t *private_key,
+                                                uint8_t *signature, uint32_t flags);
+
+/**
+ * @brief Verify a DER-encoded ECDSA signature (default X9.62 policy).
+ *
+ * Unconditional checks in every mode: minimal DER only (short form, or the
+ * single long-form octet where the body genuinely exceeds 127 octets),
+ * minimal INTEGERs, no trailing bytes; `r` and `s` strictly in [1, n-1]
+ * rather than reduced into range; public-key coordinates strictly in [0, p);
+ * and the point on the curve and not the identity.
+ *
+ * Variable time by design — every input is public.
+ *
+ * @return AMA_SUCCESS if valid, AMA_ERROR_VERIFY_FAILED if not,
+ *         AMA_ERROR_INVALID_PARAM on a NULL pointer or bad digest width.
+ */
+AMA_API ama_error_t ama_nistp_ecdsa_verify(ama_nist_curve_t curve,
+                                           const uint8_t *digest, size_t digest_len,
+                                           const uint8_t *public_key,
+                                           const uint8_t *signature, size_t signature_len);
+
+/** @brief As ama_nistp_ecdsa_verify with an explicit AMA_NISTP_ECDSA_* policy. */
+AMA_API ama_error_t ama_nistp_ecdsa_verify_ex(ama_nist_curve_t curve,
+                                              const uint8_t *digest, size_t digest_len,
+                                              const uint8_t *public_key,
+                                              const uint8_t *signature, size_t signature_len,
+                                              uint32_t flags);
+
+/** @brief Verify a fixed-width `r || s` signature (default X9.62 policy). */
+AMA_API ama_error_t ama_nistp_ecdsa_verify_raw(ama_nist_curve_t curve,
+                                               const uint8_t *digest, size_t digest_len,
+                                               const uint8_t *public_key,
+                                               const uint8_t *signature,
+                                               size_t signature_len);
+
+/** @brief As ama_nistp_ecdsa_verify_raw with an explicit policy. */
+AMA_API ama_error_t ama_nistp_ecdsa_verify_raw_ex(ama_nist_curve_t curve,
+                                                  const uint8_t *digest, size_t digest_len,
+                                                  const uint8_t *public_key,
+                                                  const uint8_t *signature,
+                                                  size_t signature_len,
+                                                  uint32_t flags);
+
+/**
+ * @brief Convert a DER signature to fixed-width `r || s`.
+ *
+ * Re-applies the strict DER rules and the [1, n-1] range check, so a
+ * conversion cannot launder an out-of-range or sloppily encoded component
+ * into a well-formed one.
+ */
+AMA_API ama_error_t ama_nistp_sig_der_to_raw(ama_nist_curve_t curve,
+                                             const uint8_t *der, size_t der_len,
+                                             uint8_t *raw, size_t *raw_len);
+
+/** @brief Convert a fixed-width `r || s` signature to minimal DER. */
+AMA_API ama_error_t ama_nistp_sig_raw_to_der(ama_nist_curve_t curve,
+                                             const uint8_t *raw, size_t raw_len,
+                                             uint8_t *der, size_t *der_len);
+
 /* ============================================================================
  * X25519 KEY EXCHANGE (RFC 7748)
  * ============================================================================ */
@@ -2081,6 +2496,142 @@ AMA_API ama_error_t ama_ascon_aead128_decrypt(
 AMA_API void ama_ascon_permutation_for_test(uint64_t state[5], unsigned rounds);
 
 /* ============================================================================
+ * HSS / LMS — RFC 8554 hash-based signature VERIFICATION
+ *
+ * Verification only, and deliberately so.  LMS is a *stateful* scheme: RFC 8554
+ * §5.4.1 requires the one-time leaf index to be durably reserved before a
+ * signature is released, and a signer that loses that race produces two
+ * signatures under one LM-OTS key, from which a third can be forged.  That
+ * guarantee lives in a durable state manager, not in the arithmetic, so the
+ * signing half is withheld until such a manager exists and has been tested
+ * against interrupted writes rather than happy paths.  `ama_lms_signing_
+ * available()` reports that in as many words instead of leaving a caller to
+ * discover a missing symbol.
+ *
+ * Verification holds no secret, keeps no state, and cannot be made unsafe by
+ * being called twice — and it is the half with the interoperability value,
+ * since HSS/LMS is deployed overwhelmingly as a firmware/software-update
+ * signature with one offline signer and a very large verifier population.
+ *
+ * Parameter sets: the complete RFC 8554 registry (LM-OTS typecodes 1..4,
+ * w = 1/2/4/8; LMS typecodes 5..9, h = 5/10/15/20/25), all SHA-256.
+ * SP 800-208's additional SHA-256/192 and SHAKE256 sets are not implemented;
+ * an unrecognised typecode is refused, never resolved onto a neighbour
+ * (INVARIANT-35).
+ * ============================================================================ */
+
+/** LMS public key: u32(lms_type) || u32(ots_type) || I[16] || T[1][32] = 56. */
+#define AMA_LMS_PUBKEY_LEN 56
+/** HSS public key: u32(L) || lms_public_key = 60. */
+#define AMA_HSS_PUBKEY_LEN 60
+
+/**
+ * Maximum HSS levels AMA will verify.
+ *
+ * RFC 8554 §6 does not itself bound L.  AMA bounds it so that verification
+ * cost is a constant rather than a function of an attacker-chosen field, and
+ * refuses a larger L explicitly instead of walking it.  Eight is the largest
+ * value any deployed HSS profile uses.
+ */
+#define AMA_HSS_MAX_LEVELS 8
+
+/**
+ * @brief Report whether this build can *produce* HSS/LMS signatures.
+ *
+ * Always 0 in the current library.  Present so that "AMA does not sign with
+ * LMS" is an answerable question rather than a link error.
+ *
+ * @return 0 — signing is not implemented (see the section comment above).
+ */
+AMA_API int ama_lms_signing_available(void);
+
+/**
+ * @brief Report the parameter set an LMS public key names.
+ *
+ * @param pubkey     LMS public key (AMA_LMS_PUBKEY_LEN bytes).
+ * @param pubkey_len Its length.
+ * @param lms_type   Optional out: LMS typecode (5..9).
+ * @param lmots_type Optional out: LM-OTS typecode (1..4).
+ * @param h          Optional out: tree height.
+ * @param w          Optional out: Winternitz width.
+ * @return AMA_SUCCESS, or AMA_ERROR_INVALID_PARAM if the key is malformed or
+ *         names a typecode this library does not implement.
+ */
+AMA_API ama_error_t ama_lms_pubkey_params(
+    const uint8_t *pubkey, size_t pubkey_len,
+    uint32_t *lms_type, uint32_t *lmots_type,
+    uint32_t *h, uint32_t *w
+);
+
+/**
+ * @brief Exact length of the LMS signature at the head of a buffer.
+ *
+ * An LMS signature is self-describing but variable-length, and HSS
+ * concatenates several of them, so a caller splitting a buffer needs this.
+ *
+ * @param signature     Buffer whose head is an LMS signature.
+ * @param signature_len Bytes available.
+ * @return The signature's exact length, or 0 if the head is not a
+ *         structurally valid LMS signature that fits in `signature_len`.
+ */
+AMA_API size_t ama_lms_signature_length(
+    const uint8_t *signature, size_t signature_len
+);
+
+/**
+ * @brief Verify a single-tree LMS signature (RFC 8554 §5.4.2, Algorithm 6).
+ *
+ * @param message       Signed message (may be NULL iff message_len is 0).
+ * @param message_len   Its length.
+ * @param signature     LMS signature; must be consumed exactly.
+ * @param signature_len Its length.
+ * @param pubkey        LMS public key (AMA_LMS_PUBKEY_LEN bytes).
+ * @param pubkey_len    Its length.
+ * @return AMA_SUCCESS if valid, AMA_ERROR_VERIFY_FAILED if not,
+ *         AMA_ERROR_INVALID_PARAM if the *public key* is malformed.
+ */
+AMA_API ama_error_t ama_lms_verify(
+    const uint8_t *message, size_t message_len,
+    const uint8_t *signature, size_t signature_len,
+    const uint8_t *pubkey, size_t pubkey_len
+);
+
+/**
+ * @brief Report the number of levels an HSS public key commits to.
+ *
+ * @param pubkey     HSS public key (AMA_HSS_PUBKEY_LEN bytes).
+ * @param pubkey_len Its length.
+ * @param levels     Out: L, in [1, AMA_HSS_MAX_LEVELS].
+ * @return AMA_SUCCESS or AMA_ERROR_INVALID_PARAM.
+ */
+AMA_API ama_error_t ama_hss_pubkey_levels(
+    const uint8_t *pubkey, size_t pubkey_len, uint32_t *levels
+);
+
+/**
+ * @brief Verify a hierarchical HSS signature (RFC 8554 §6.3).
+ *
+ * Walks the chain of signed public keys from the root committed to by
+ * `pubkey` down to the tree that signed `message`.  Every intermediate
+ * signature must verify, the level count must match the public key's L, and
+ * the buffer must be consumed exactly.
+ *
+ * @param message       Signed message (may be NULL iff message_len is 0).
+ * @param message_len   Its length.
+ * @param signature     HSS signature.
+ * @param signature_len Its length.
+ * @param pubkey        HSS public key (AMA_HSS_PUBKEY_LEN bytes).
+ * @param pubkey_len    Its length.
+ * @return AMA_SUCCESS if valid, AMA_ERROR_VERIFY_FAILED if not,
+ *         AMA_ERROR_INVALID_PARAM if the *public key* is malformed.
+ */
+AMA_API ama_error_t ama_hss_verify(
+    const uint8_t *message, size_t message_len,
+    const uint8_t *signature, size_t signature_len,
+    const uint8_t *pubkey, size_t pubkey_len
+);
+
+/* ============================================================================
  * DIRECT PQC ALGORITHM ACCESS
  * ============================================================================ */
 
@@ -2222,6 +2773,281 @@ AMA_API ama_error_t ama_kyber_decapsulate(
     const uint8_t *sk, size_t sk_len,
     uint8_t *ss, size_t ss_len
 );
+
+/* ============================================================================
+ * ML-DSA (FIPS 204) — parameter-driven public API
+ *
+ * Supports ML-DSA-44, ML-DSA-65 and ML-DSA-87.  The `ama_dilithium_*` surface
+ * above is preserved as a thin, byte-identical wrapper pinned to ML-DSA-65;
+ * new code should use `ama_ml_dsa_*`.
+ *
+ * One implementation serves all three sets: `n`, `q`, `d`, the NTT and every
+ * reduction constant are identical across ML-DSA.  What differs is the matrix
+ * shape (k x l), `eta`, `tau`, `gamma1`, `gamma2`, `omega` and the
+ * commitment-hash width — a runtime parameter block in src/c/ama_dilithium.c.
+ *
+ * Signing is the FIPS 204 *deterministic* variant (rnd = 0^256), which is what
+ * NIST's deterministic ACVP sigGen groups exercise and what makes signatures
+ * reproducible for KAT replay.
+ * ============================================================================ */
+
+/** @brief Public-key octets for a parameter set; 0 for an unknown set. */
+AMA_API size_t ama_ml_dsa_public_key_bytes(ama_ml_dsa_param_set_t ps);
+/** @brief Secret-key octets for a parameter set; 0 for an unknown set. */
+AMA_API size_t ama_ml_dsa_secret_key_bytes(ama_ml_dsa_param_set_t ps);
+/** @brief Signature octets for a parameter set; 0 for an unknown set. */
+AMA_API size_t ama_ml_dsa_signature_bytes(ama_ml_dsa_param_set_t ps);
+/** @brief Canonical name ("ML-DSA-44" etc.), or NULL for an unknown set. */
+AMA_API const char *ama_ml_dsa_param_set_name(ama_ml_dsa_param_set_t ps);
+
+/** @brief Generate an ML-DSA keypair (FIPS 204 Algorithm 1). */
+AMA_API ama_error_t ama_ml_dsa_keypair(ama_ml_dsa_param_set_t ps,
+                                       uint8_t *public_key, uint8_t *secret_key);
+
+/**
+ * @brief Deterministic ML-DSA keypair from the 32-octet seed xi.
+ *
+ * Exposed for FIPS 204 KAT validation and for the PKCS#8 `seed` private-key
+ * form, which stores xi rather than the expanded key. Bypasses the RNG.
+ */
+AMA_API ama_error_t ama_ml_dsa_keypair_from_seed(ama_ml_dsa_param_set_t ps,
+                                                 const uint8_t xi[32],
+                                                 uint8_t *public_key,
+                                                 uint8_t *secret_key);
+
+/**
+ * @brief Recompute the public key from an expanded ML-DSA private key, and
+ *        verify that private key's internal consistency.
+ *
+ * The expanded key `rho || K || tr || s1 || s2 || t0` is redundant: rho, s1 and
+ * s2 determine t = A*s1 + s2, hence t0, hence the public key rho || t1, hence
+ * tr = H(rho || t1). This recomputes that chain and requires the stored t0 and
+ * tr to agree with it.
+ *
+ * Needed to import a PKCS#8 private key carrying only the `expandedKey` arm
+ * (RFC 9881 §6), which has no public key to read. RFC 9881 §8.2 identifies the
+ * two failure shapes this catches and Appendix C.4 ships vectors for both — a
+ * mismatched tr, and s1/s2 whose implied t has different low bits than the
+ * stored t0 — noting that implementations which skip the check detect neither.
+ *
+ * @param secret_key `ama_ml_dsa_secret_key_bytes(ps)` octets.
+ * @param public_key Output, `ama_ml_dsa_public_key_bytes(ps)` octets.
+ * @return AMA_SUCCESS; AMA_ERROR_INVALID_PARAM on a NULL argument, an unknown
+ *         parameter set, or an s1/s2 coefficient outside [-eta, eta] (FIPS 204
+ *         Algorithm 25); AMA_ERROR_VERIFY_FAILED if t0 or tr disagrees, in
+ *         which case nothing is written to `public_key`.
+ */
+AMA_API ama_error_t ama_ml_dsa_pubkey_from_privkey(ama_ml_dsa_param_set_t ps,
+                                                   const uint8_t *secret_key,
+                                                   uint8_t *public_key);
+
+/**
+ * @brief Verify an expanded ML-DSA private key's internal consistency,
+ *        discarding the recomputed public key.
+ *
+ * Identical checks and return values to `ama_ml_dsa_pubkey_from_privkey`,
+ * for callers that only want the verdict.
+ */
+AMA_API ama_error_t ama_ml_dsa_privkey_check(ama_ml_dsa_param_set_t ps,
+                                             const uint8_t *secret_key);
+
+/**
+ * @brief ML-DSA signing, "internal interface" (no context wrapper).
+ *
+ * @param signature_len In: capacity. Out: octets written. If the capacity is
+ *                      too small, `*signature_len` is set to the required size
+ *                      and AMA_ERROR_INVALID_PARAM is returned.
+ */
+/**
+ * @brief ML-DSA signing, "internal interface" (no context wrapper).
+ *
+ * **Stack requirement.** Signing holds the whole k x l matrix A across the
+ * rejection loop, so its measured whole-call-chain high-water mark is about
+ * **150 KB**, the same for every parameter set. That is more than musl's
+ * 128 KB default thread stack: a thread created with the default attributes
+ * on a musl target — or an embedded task with a comparable budget — must be
+ * given a larger stack before calling this.
+ *
+ * The figure is stated rather than reduced because A is consumed once per
+ * rejection attempt (4-5 per signature on average), so re-expanding it row by
+ * row to save the 57 KB would multiply the dominant cost of signing several
+ * times over, on the one ML-DSA path where the parameter set is chosen by the
+ * key holder rather than by an attacker. `ama_ml_dsa_keypair` (61 KB) and
+ * `ama_ml_dsa_verify` (58 KB) *do* expand A row-wise, because verification is
+ * driven by whoever supplies the signature and has to fit a small stack.
+ *
+ * All three figures are measured, not asserted:
+ * `tests/c/test_pq_parser_stack.c` runs each on a painted, caller-supplied
+ * thread stack and holds it under a stated budget.
+ */
+AMA_API ama_error_t ama_ml_dsa_sign(ama_ml_dsa_param_set_t ps,
+                                    uint8_t *signature, size_t *signature_len,
+                                    const uint8_t *message, size_t message_len,
+                                    const uint8_t *secret_key);
+
+/** @brief ML-DSA verification, "internal interface" (no context wrapper). */
+AMA_API ama_error_t ama_ml_dsa_verify(ama_ml_dsa_param_set_t ps,
+                                      const uint8_t *message, size_t message_len,
+                                      const uint8_t *signature, size_t signature_len,
+                                      const uint8_t *public_key);
+
+/**
+ * @brief ML-DSA signing with the FIPS 204 §5.2 external/pure context wrapper.
+ *
+ * Applies M' = 0x00 || IntegerToBytes(|ctx|, 1) || ctx || M. Pass
+ * `ctx = NULL, ctx_len = 0` for the empty-context form. Rejects `ctx_len > 255`.
+ */
+AMA_API ama_error_t ama_ml_dsa_sign_ctx(ama_ml_dsa_param_set_t ps,
+                                        uint8_t *signature, size_t *signature_len,
+                                        const uint8_t *message, size_t message_len,
+                                        const uint8_t *ctx, size_t ctx_len,
+                                        const uint8_t *secret_key);
+
+/** @brief ML-DSA verification with the FIPS 204 §5.2 context wrapper. */
+AMA_API ama_error_t ama_ml_dsa_verify_ctx(ama_ml_dsa_param_set_t ps,
+                                          const uint8_t *message, size_t message_len,
+                                          const uint8_t *ctx, size_t ctx_len,
+                                          const uint8_t *signature, size_t signature_len,
+                                          const uint8_t *public_key);
+
+/* ============================================================================
+ * ML-KEM (FIPS 203) — parameter-driven public API
+ *
+ * Supports ML-KEM-512, ML-KEM-768 and ML-KEM-1024.  The `ama_kyber_*` surface
+ * above is preserved as a thin, byte-identical wrapper pinned to ML-KEM-1024;
+ * new code should use `ama_ml_kem_*`.
+ *
+ * One implementation serves all three sets: `n`, `q`, the NTT and every
+ * reduction constant are identical across ML-KEM, and only the module rank
+ * `k`, the CBD parameter `eta1`, and the compression widths `du`/`dv` differ.
+ * Those five values are a runtime parameter block in src/c/ama_kyber.c.
+ * ============================================================================ */
+
+/** @brief Public-key octets for a parameter set; 0 for an unknown set. */
+AMA_API size_t ama_ml_kem_public_key_bytes(ama_ml_kem_param_set_t ps);
+/** @brief Secret-key octets for a parameter set; 0 for an unknown set. */
+AMA_API size_t ama_ml_kem_secret_key_bytes(ama_ml_kem_param_set_t ps);
+/** @brief Ciphertext octets for a parameter set; 0 for an unknown set. */
+AMA_API size_t ama_ml_kem_ciphertext_bytes(ama_ml_kem_param_set_t ps);
+/** @brief Canonical name ("ML-KEM-512" etc.), or NULL for an unknown set. */
+AMA_API const char *ama_ml_kem_param_set_name(ama_ml_kem_param_set_t ps);
+
+/**
+ * @brief Generate an ML-KEM keypair (FIPS 203 Algorithm 16).
+ *
+ * @param ps      Parameter set selector.
+ * @param pk      Output buffer, at least `ama_ml_kem_public_key_bytes(ps)`.
+ * @param pk_len  Capacity of `pk`.
+ * @param sk      Output buffer, at least `ama_ml_kem_secret_key_bytes(ps)`.
+ * @param sk_len  Capacity of `sk`.
+ * @return AMA_SUCCESS or an error code. The secret-key buffer is zeroed if
+ *         the CSPRNG fails partway through.
+ */
+AMA_API ama_error_t ama_ml_kem_keypair(ama_ml_kem_param_set_t ps,
+                                       uint8_t *pk, size_t pk_len,
+                                       uint8_t *sk, size_t sk_len);
+
+/**
+ * @brief Deterministic ML-KEM keypair from the (d, z) seed pair.
+ *
+ * Exposed for FIPS 203 KAT validation and for the PKCS#8 `seed` private-key
+ * form, which stores d || z rather than the expanded key. Bypasses the RNG.
+ */
+AMA_API ama_error_t ama_ml_kem_keypair_from_seed(ama_ml_kem_param_set_t ps,
+                                                 const uint8_t d[32],
+                                                 const uint8_t z[32],
+                                                 uint8_t *pk, size_t pk_len,
+                                                 uint8_t *sk, size_t sk_len);
+
+/**
+ * @brief Recover the encapsulation key from an ML-KEM decapsulation key, and
+ *        verify that decapsulation key's internal consistency.
+ *
+ * FIPS 203 §7.1 lays `dk` out as `dk_PKE || ek || H(ek) || z`, so `ek` is
+ * present verbatim — but three of those fields are mutually redundant, and a
+ * `dk` whose fields disagree decapsulates to a secret the sender never
+ * derived. ML-KEM's implicit rejection is designed to fail *silently*, so that
+ * mismatch raises no error anywhere downstream; this is the only place it is
+ * visible. Two checks run: `H(ek)` must be SHA3-256 of the embedded `ek`, and
+ * an encapsulate/decapsulate round trip must agree on the shared secret.
+ * draft-ietf-lamps-kyber-certificates Appendix C.4.1 ships a vector for each.
+ *
+ * **Deterministic: this call consumes no entropy.** The round trip encapsulates
+ * under a fixed internal message rather than a random one, so the result is a
+ * pure function of `sk`. It is reachable from a key-file parser, it has to be
+ * usable as a KAT, and a FIPS 140-3 self-test cannot depend on the RNG it may
+ * run before. `ama_ml_kem_encapsulate` is unaffected and remains randomised.
+ *
+ * @param pk  Output, `ama_ml_kem_public_key_bytes(ps)` octets.
+ * @return AMA_SUCCESS; AMA_ERROR_INVALID_PARAM on a NULL argument, unknown
+ *         parameter set, or wrong `sk_len`/`pk_len`; AMA_ERROR_VERIFY_FAILED
+ *         if the embedded digest is wrong or the pair does not round-trip, in
+ *         which case nothing is written to `pk`.
+ */
+AMA_API ama_error_t ama_ml_kem_pubkey_from_privkey(ama_ml_kem_param_set_t ps,
+                                                   const uint8_t *sk, size_t sk_len,
+                                                   uint8_t *pk, size_t pk_len);
+
+/**
+ * @brief Verify an ML-KEM decapsulation key's internal consistency,
+ *        discarding the recovered encapsulation key.
+ *
+ * Identical checks and return values to `ama_ml_kem_pubkey_from_privkey`,
+ * for callers that only want the verdict — including its determinism: this
+ * call consumes no entropy.
+ */
+AMA_API ama_error_t ama_ml_kem_privkey_check(ama_ml_kem_param_set_t ps,
+                                             const uint8_t *sk, size_t sk_len);
+
+/**
+ * @brief FIPS 203 §7.2 input validation for an ML-KEM encapsulation key.
+ *
+ * Two checks, both required by §7.2 before `ek` may be used:
+ *
+ *  - **type check**: `|ek| = 384k + 32`;
+ *  - **modulus check**: every 12-bit coefficient of `t_hat` is below
+ *    `q = 3329`, equivalently `ByteEncode_12(ByteDecode_12(ek))` reproduces
+ *    `ek`.
+ *
+ * `ama_ml_kem_encapsulate` performs both itself, so a caller encapsulating does
+ * not need to call this first. It is exported for the *import* path: a key
+ * parser that accepts an out-of-range encapsulation key hands the application a
+ * key every conformant peer will reject, and because ML-KEM's implicit
+ * rejection is designed to fail silently the divergence surfaces nowhere.
+ *
+ * Not constant time — an encapsulation key is public by definition.
+ *
+ * @return AMA_SUCCESS if valid; AMA_ERROR_INVALID_PARAM on NULL, an unknown
+ *         parameter set, or the wrong length; AMA_ERROR_VERIFY_FAILED if a
+ *         coefficient is out of range.
+ */
+AMA_API ama_error_t ama_ml_kem_pubkey_check(ama_ml_kem_param_set_t ps,
+                                            const uint8_t *pk, size_t pk_len);
+
+/**
+ * @brief ML-KEM encapsulation (FIPS 203 Algorithm 17).
+ *
+ * @param ct_len  In: capacity of `ct`. Out: octets written. If the capacity
+ *                is too small, `*ct_len` is set to the required size and
+ *                AMA_ERROR_INVALID_PARAM is returned.
+ * @param ss_len  Must be exactly AMA_ML_KEM_SHARED_SECRET_BYTES.
+ */
+AMA_API ama_error_t ama_ml_kem_encapsulate(ama_ml_kem_param_set_t ps,
+                                           const uint8_t *pk, size_t pk_len,
+                                           uint8_t *ct, size_t *ct_len,
+                                           uint8_t *ss, size_t ss_len);
+
+/**
+ * @brief ML-KEM decapsulation (FIPS 203 Algorithm 18).
+ *
+ * Implicit rejection is unconditional and constant time: a malformed
+ * ciphertext yields a deterministic pseudorandom secret rather than an error,
+ * and the code path taken does not depend on which case occurred.
+ */
+AMA_API ama_error_t ama_ml_kem_decapsulate(ama_ml_kem_param_set_t ps,
+                                           const uint8_t *ct, size_t ct_len,
+                                           const uint8_t *sk, size_t sk_len,
+                                           uint8_t *ss, size_t ss_len);
 
 /**
  * @brief Generate SPHINCS+-256f keypair

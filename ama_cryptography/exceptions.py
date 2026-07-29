@@ -47,16 +47,38 @@ class AmaCryptographyError(Exception):
     pass
 
 
-class PQCUnavailableError(AmaCryptographyError, RuntimeError):
+class NativeBackendUnavailableError(AmaCryptographyError, RuntimeError):
+    """
+    Raised when an operation needs the native C backend and it is not present.
+
+    This is INVARIANT-7's failure mode expressed as a type: the library refuses
+    to operate rather than substituting anything. It is not specific to
+    post-quantum work — the NIST prime curves, secp256k1 and the classical
+    primitives raise it for the same reason.
+
+    ``PQCUnavailableError`` is a subclass, so existing ``except
+    PQCUnavailableError`` sites keep working and ``except RuntimeError``
+    continues to catch every case. Catch this class when the question is
+    "is the native library present", and the subclass when the answer needs
+    to distinguish which family was asked for.
+
+    To resolve, build the native C library:
+        cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build
+    """
+
+    pass
+
+
+class PQCUnavailableError(NativeBackendUnavailableError):
     """
     Raised when post-quantum cryptography is required but unavailable.
 
     This exception indicates that a PQC operation was requested but the
     native C backend is not available.
 
-    Inherits from AmaCryptographyError (catch-all root) and RuntimeError
-    (backward compatibility with existing tests and code that expects this
-    exception hierarchy).
+    Inherits from NativeBackendUnavailableError (and transitively from
+    AmaCryptographyError and RuntimeError), so every pre-existing handler
+    shape keeps working unchanged.
 
     To resolve, build the native C library:
         cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build
@@ -140,6 +162,41 @@ class CryptoModuleError(AmaCryptographyError, RuntimeError):
     pass
 
 
+class KeyFormatError(AmaCryptographyError, ValueError):
+    """
+    Raised when an interoperability key encoding cannot be parsed or produced.
+
+    Covers PKCS#8, SPKI, PEM, JWK and COSE_Key handling in
+    ``ama_cryptography.key_formats``: malformed or non-minimal DER,
+    non-deterministic CBOR, a truncated or over-long key, a structure whose
+    declared algorithm does not match its contents, a JWK whose ``crv`` and
+    coordinate widths disagree, and so on.
+
+    Inherits from ``ValueError`` as well as the AMA root because a bad encoding
+    *is* a bad value, and callers parsing untrusted key material routinely
+    already guard with ``except ValueError``. A parse failure must never be
+    absorbed: it means the caller does not have the key it thinks it has.
+    """
+
+    pass
+
+
+class UnsupportedKeyFormatError(KeyFormatError):
+    """
+    Raised when an encoding is well-formed but names an algorithm, curve or
+    representation this library deliberately does not implement.
+
+    Distinct from ``KeyFormatError`` on purpose. "I cannot parse this" and "I
+    parsed this and will not pretend to support it" are different facts, and
+    conflating them is how a library ends up quietly emitting a non-standard
+    encoding for an algorithm whose standard is unfinished — which is exactly
+    why ML-DSA and ML-KEM raise this for JWK and COSE. See the limitations
+    table in ``ama_cryptography.key_formats``.
+    """
+
+    pass
+
+
 class AmaHSMUnavailableError(AmaCryptographyError, RuntimeError):
     """Raised when an HSM operation is requested but PyKCS11 is not installed.
 
@@ -157,6 +214,7 @@ class AmaHSMUnavailableError(AmaCryptographyError, RuntimeError):
 __all__ = [
     "AmaCryptographyError",
     "SecurityWarning",
+    "NativeBackendUnavailableError",
     "PQCUnavailableError",
     "QuantumSignatureUnavailableError",
     "QuantumSignatureRequiredError",
@@ -165,5 +223,7 @@ __all__ = [
     "SignatureVerificationError",
     "IntegrityError",
     "CryptoModuleError",
+    "KeyFormatError",
+    "UnsupportedKeyFormatError",
     "AmaHSMUnavailableError",
 ]

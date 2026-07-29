@@ -425,6 +425,36 @@ def _rel(path: pathlib.Path) -> str:
     return path.relative_to(REPO_ROOT).as_posix()
 
 
+def _corpus_bytes(data: bytes) -> bytes:
+    """Corpus text with the checkout's line-ending convention removed.
+
+    The detector scans at most ``max_scan_bytes`` (8 KiB by default), sampling
+    head and tail for anything larger.  For a file bigger than that window,
+    *which* text lands inside it is a function of every preceding byte — so a
+    line terminator that is one octet on one platform and two on another does
+    not merely re-encode the corpus, it changes which part of each large
+    document is scored at all.
+
+    That is a real failure and it was observed, not imagined: with
+    ``core.autocrlf=true`` (git's default on Windows) ``IMPLEMENTATION_GUIDE.md``
+    scores 1.50 on a LF checkout and 1.25 on a CRLF one, purely because 1,343
+    terminators grew a byte each and pushed a marker out of the sampled tail.
+    The 1.50-admits-one-more-file calibration below then cannot hold, and all
+    ten Windows CI jobs failed on a detector, document and threshold that were
+    all correct.
+
+    ``.gitattributes`` marks the tree ``-text`` so checkouts are byte-identical
+    everywhere, and ``tools/check_line_endings.py`` keeps it that way.  This
+    normalisation is the second half of that fix rather than a substitute for
+    it: it makes the calibration a property of the corpus's *content*, so it
+    holds under any checkout configuration, including one predating the
+    attribute.  The detector itself deliberately does **not** normalise — it
+    scores the payload it is handed, and a note that arrives with CRLF is still
+    a note.
+    """
+    return data.replace(b"\r\n", b"\n")
+
+
 def _score_corpus(
     detector: NoteArtifactDetector,
 ) -> dict[str, NoteArtifactSignal]:
@@ -435,7 +465,7 @@ def _score_corpus(
             data = path.read_bytes()
         except OSError:  # pragma: no cover - unreadable file in a checkout
             continue
-        out[_rel(path)] = detector.inspect(data, label=_rel(path))
+        out[_rel(path)] = detector.inspect(_corpus_bytes(data), label=_rel(path))
     return out
 
 
@@ -664,6 +694,57 @@ class TestNoteArtifactCalibration:
         default = NoteArtifactDetector()
         assert all(loose.inspect(n).flagged for n in SUCCESSOR_NOTES)
         assert all(default.inspect(n).flagged for n in SUCCESSOR_NOTES)
+
+    def test_calibration_does_not_depend_on_the_checkout_line_endings(self) -> None:
+        """The whole calibration must survive a CRLF checkout, byte for byte.
+
+        This is the defect that failed all ten Windows CI jobs on this branch,
+        pinned from the direction that actually reproduces it.  ``inspect``
+        samples an 8 KiB head-and-tail window, so for every corpus file larger
+        than that the *contents* of the window move when line terminators grow
+        from one octet to two — ``IMPLEMENTATION_GUIDE.md`` measured 1.50 under
+        LF and 1.25 under CRLF, which is a whole quantisation rung and enough
+        to break the threshold sweep above.
+
+        Asserting equality of the full ``{path: score}`` mapping rather than
+        just the flagged set is deliberate: a flagged-set comparison passes
+        while scores drift right up to the moment one crosses a threshold, and
+        would have gone green on the very corpus that was failing.
+        """
+        assert any(
+            len(path.read_bytes()) > NoteArtifactDetector().max_scan_bytes
+            for path in corpus_files()
+        ), "no corpus file exceeds the scan window — this test could not observe the defect"
+
+        detector = NoteArtifactDetector()
+        lf_scores: dict[str, float] = {}
+        crlf_scores: dict[str, float] = {}
+        for path in corpus_files():
+            try:
+                on_disk = path.read_bytes()
+            except OSError:  # pragma: no cover - unreadable file in a checkout
+                continue
+            rel = _rel(path)
+            # Both sides run through _corpus_bytes because that is the pipeline
+            # _score_corpus uses; the test therefore fails if the normalisation
+            # is weakened or removed, rather than merely restating it.
+            lf = on_disk.replace(b"\r\n", b"\n")
+            lf_scores[rel] = detector.inspect(_corpus_bytes(lf), label=rel).score
+            crlf_scores[rel] = detector.inspect(
+                _corpus_bytes(lf.replace(b"\n", b"\r\n")), label=rel
+            ).score
+
+        drifted = {
+            rel: (lf_scores[rel], crlf_scores[rel])
+            for rel in lf_scores
+            if lf_scores[rel] != crlf_scores[rel]
+        }
+        assert drifted == {}, (
+            "note-detector scores changed under a CRLF checkout for "
+            f"{sorted(drifted)} (LF vs CRLF: {drifted}); the calibration is "
+            "reading the checkout's line-ending convention rather than the "
+            "corpus text"
+        )
 
 
 # ---------------------------------------------------------------------------

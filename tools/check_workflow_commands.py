@@ -238,6 +238,7 @@ class Report:
     payloads_checked: int = 0
     windows_commands_checked: int = 0
     release_steps_checked: int = 0
+    gated_binaries_checked: int = 0
 
     @property
     def ok(self) -> bool:
@@ -643,6 +644,122 @@ def check_release_publishing(path: Path, document: Any, report: Report) -> None:
             )
 
 
+#: ``option(NAME "help" ON|OFF)`` in the top-level CMakeLists.
+_CMAKE_OPTION_RE = re.compile(r"^\s*option\(\s*(AMA_\w+)\s+\"[^\"]*\"\s+(ON|OFF)\s*\)", re.M)
+#: ``AMA_ENABLE_*`` identifiers appearing in an ``if(...)`` condition.
+_CMAKE_FLAG_RE = re.compile(r"\b(AMA_\w+)\b")
+#: A binary a workflow runs out of the CMake build tree.
+_BUILD_BIN_RE = re.compile(r"\./build/bin/([A-Za-z0-9_]+)")
+
+
+def cmake_option_defaults(cmakelists: Path) -> dict[str, str]:
+    """``{option_name: "ON"|"OFF"}`` from the top-level CMakeLists."""
+    try:
+        text = cmakelists.read_text(encoding="utf-8")
+    except OSError:
+        return {}
+    return {m.group(1): m.group(2) for m in _CMAKE_OPTION_RE.finditer(text)}
+
+
+def cmake_gated_targets(cmake_files: Sequence[Path]) -> dict[str, set[str]]:
+    """``{executable_name: {flags whose if() guards it}}``.
+
+    A deliberately small block-structured scan: track ``if(``/``endif(`` nesting,
+    remember the ``AMA_*`` identifiers named by each open condition, and attribute
+    them to every ``add_executable`` inside.  Derived from CMake rather than a
+    hand-maintained table, so a target added under a new guard is covered without
+    anyone remembering to update this file.
+    """
+    gated: dict[str, set[str]] = {}
+    for path in cmake_files:
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        stack: list[set[str]] = []
+        for line in text.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("if("):
+                stack.append(set(_CMAKE_FLAG_RE.findall(stripped)))
+            elif stripped.startswith("elseif("):
+                if stack:
+                    stack[-1] = set(_CMAKE_FLAG_RE.findall(stripped))
+            elif stripped.startswith("endif("):
+                if stack:
+                    stack.pop()
+            match = re.match(r"add_executable\(\s*([A-Za-z0-9_]+)", stripped)
+            if match:
+                flags: set[str] = set()
+                for frame in stack:
+                    flags |= frame
+                gated.setdefault(match.group(1), set()).update(flags)
+    return gated
+
+
+def check_cmake_gated_binaries(path: Path, document: Any, report: Report) -> None:
+    """Every ``./build/bin/X`` a job runs must be a target that job builds.
+
+    Why this exists
+    ---------------
+    ``dudect-legacy-harnesses`` configures CMake — but without
+    ``-DAMA_ENABLE_DUDECT=ON``, because it exists to build the standalone
+    ``tools/constant_time`` harnesses.  A ``./build/bin/test_dudect`` invocation
+    added to that job is therefore a guaranteed ``exit 127``, and that is not a
+    hypothetical: it shipped, on this branch, from an edit that inserted the same
+    line into every run step in the file and matched one more step than intended.
+
+    Nothing caught it before CI did, because the mistake is invisible at the
+    point it is made — the line is correct in the four jobs above and below it.
+    The property that distinguishes them is not in the workflow at all, it is in
+    ``tests/c/CMakeLists.txt``: the target sits inside ``if(AMA_ENABLE_DUDECT)``,
+    and that option defaults ``OFF``.
+
+    So the guard is read from CMake and matched against each job's own configure
+    flags.  Only options that default ``OFF`` are required explicitly; a target
+    behind an ON-by-default guard is built without anyone asking, and demanding
+    the flag would be noise.
+    """
+    repo_root = path.resolve().parent.parent.parent
+    defaults = cmake_option_defaults(repo_root / "CMakeLists.txt")
+    gated = cmake_gated_targets(sorted(repo_root.glob("tests/**/CMakeLists.txt")))
+
+    for job_id, job in _iter_jobs(document):
+        run_text = "\n".join(
+            step.get("run", "") or ""
+            for _, _, step in _iter_steps({"jobs": {job_id: job}})
+            if isinstance(step, dict)
+        )
+        if not run_text:
+            continue
+        for binary in sorted(set(_BUILD_BIN_RE.findall(run_text))):
+            required = {
+                flag
+                for flag in gated.get(binary, set())
+                # An ON-by-default guard needs no flag; an unknown identifier is
+                # not an option() and cannot be asserted about.
+                if defaults.get(flag) == "OFF"
+            }
+            missing = sorted(flag for flag in required if f"-D{flag}=ON" not in run_text)
+            report.gated_binaries_checked += 1
+            if missing:
+                report.findings.append(
+                    Finding(
+                        workflow=path.name,
+                        location=f"jobs.{job_id}",
+                        message=(
+                            f"runs ./build/bin/{binary}, which tests/c/CMakeLists.txt "
+                            f"builds only under {', '.join(missing)} (default OFF), "
+                            f"but this job's cmake configure does not enable it"
+                        ),
+                        remedy=(
+                            f"add -D{missing[0]}=ON to this job's cmake configure, or "
+                            f"invoke a binary this job actually builds. A job that runs "
+                            f"a binary it never built exits 127."
+                        ),
+                    )
+                )
+
+
 def sweep(workflows_dir: Path) -> Report:
     """Run every check across every workflow file."""
     report = Report()
@@ -665,6 +782,7 @@ def sweep(workflows_dir: Path) -> Report:
         check_windows_quoting(path, document, report)
         check_shell_parseable(path, document, report)
         check_release_publishing(path, document, report)
+        check_cmake_gated_binaries(path, document, report)
     return report
 
 
@@ -686,7 +804,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         f"Checked {report.labels_checked} runner label(s), "
         f"{report.payloads_checked} inline python payload(s), "
         f"{report.windows_commands_checked} Windows command string(s), "
-        f"{report.release_steps_checked} release-publishing step(s)."
+        f"{report.release_steps_checked} release-publishing step(s), "
+        f"{report.gated_binaries_checked} CMake-gated binary invocation(s)."
     )
     if report.labels_unresolved:
         # Reported, never counted as verified.  Silence here would read as

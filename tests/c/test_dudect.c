@@ -39,6 +39,7 @@
 
 #define DUDECT_IMPLEMENTATION
 #include "dudect/dudect.h"
+#include "dudect/dudect_rounds.h"
 
 /* -----------------------------------------------------------------------
  * Configuration
@@ -2034,42 +2035,16 @@ static int run_all_tests(int iterations, test_result_t *results, int *num_result
     return all_pass;
 }
 
-static void print_summary(test_result_t *results, int num_results) {
-    printf("\n  %-35s  %10s  %8s\n", "Function", "t-value", "Status");
-    printf("  %-35s  %10s  %8s\n",
-           "-----------------------------------",
-           "----------",
-           "--------");
-
-    for (int i = 0; i < num_results; i++) {
-        int fatal  = is_fatal_result(results[i].t_value);
-        int passed = !fatal && fabs(results[i].t_value) < DUDECT_T_THRESHOLD;
-        const char *status;
-        if (fatal) {
-            /* Setup failure or per-class rc mismatch — overrides
-             * is_info_only because a lane that did not witness its
-             * invariant is a real defect, not a timing-noise artefact. */
-            status = "FAIL";
-        } else if (passed) {
-            status = "PASS";
-        } else if (results[i].is_info_only) {
-            status = "INFO";
-        } else {
-            status = "FAIL";
-        }
-
-        printf("  %-35s  %+10.4f  %8s\n",
-               results[i].name,
-               results[i].t_value,
-               status);
-    }
-}
-
 /* -----------------------------------------------------------------------
  * Main
  * ----------------------------------------------------------------------- */
 int main(int argc, char *argv[]) {
     int timeout_sec = 0;
+
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--self-test") == 0)
+            return dudect_rounds_self_test();
+    }
 
     /* Parse arguments */
     for (int i = 1; i < argc; i++) {
@@ -2103,35 +2078,64 @@ int main(int argc, char *argv[]) {
     }
 
     test_result_t results[DUDECT_MAX_LANES];
+    dudect_lane_result_t round_lanes[DUDECT_MAX_LANES];
+    dudect_rounds_t rounds;
     int num_results = 0;
-    int passed = 0;
+
+    dudect_rounds_init(&rounds, DUDECT_T_THRESHOLD);
 
     for (int round = 1; round <= MAX_ROUNDS; round++) {
         printf("\n=== Round %d/%d ===\n", round, MAX_ROUNDS);
         g_timeout_hit = 0;
 
-        if (run_all_tests(g_measurements, results, &num_results)) {
-            passed = 1;
-            break;
+        run_all_tests(g_measurements, results, &num_results);
+        for (int i = 0; i < num_results; i++) {
+            round_lanes[i].name         = results[i].name;
+            round_lanes[i].is_info_only = results[i].is_info_only;
+            round_lanes[i].is_fatal     = is_fatal_result(results[i].t_value);
+            /* The fatal sentinel is not a measurement; keep it out of worst_t
+             * so a harness fault cannot masquerade as a giant t-statistic. */
+            round_lanes[i].t_value      = round_lanes[i].is_fatal ? 0.0 : results[i].t_value;
         }
+        dudect_rounds_add(&rounds, round_lanes, num_results);
+
+        /* Stop early only while nothing has tripped. Under a majority rule a
+         * clean round settles nothing once a lane has already tripped: at 1/2
+         * it is not yet a failure, but a third round that trips it makes 2/3
+         * one. The healthy case still costs a single round. */
+        if (!dudect_rounds_any_failure(&rounds))
+            break;
 
         if (round < MAX_ROUNDS) {
-            printf("\nSome tests showed timing variation. Retrying to rule out noise...\n");
+            int over = 0;
+            for (int i = 0; i < num_results; i++) {
+                if (round_lanes[i].is_fatal ||
+                    (!results[i].is_info_only &&
+                     fabs(results[i].t_value) >= DUDECT_T_THRESHOLD))
+                    over++;
+            }
+            printf("\n%d lane(s) over the threshold this round. Re-running: a real "
+                   "leak reproduces every round, noise moves.\n", over);
         }
     }
 
+    /* Verdict from the accumulated evidence, not from the last round alone. */
+    int passed = dudect_rounds_passed(&rounds);
+
     printf("\n=======================================================\n");
-    printf("Summary:\n");
-    print_summary(results, num_results);
+    printf("Summary (%d round%s):\n", rounds.rounds_run, rounds.rounds_run == 1 ? "" : "s");
+    dudect_rounds_print_summary(&rounds);
 
     printf("\n=======================================================\n");
     if (passed) {
         printf("Overall: PASS - No unexpected constant-time violations detected\n");
     } else {
-        printf("Overall: FAIL - Potential timing leakage detected across %d rounds\n", MAX_ROUNDS);
-        printf("\nNote: If running in a shared CI environment, timing noise may\n");
-        printf("      cause false positives. Reproduce locally on quiet hardware:\n");
-        printf("      taskset -c 0 nice -n -20 ./test_dudect --measurements 10000000\n");
+        printf("Overall: FAIL - the following lane(s) were over the threshold in "
+               "a majority of %d round(s):\n", rounds.rounds_run);
+        dudect_rounds_print_failures(&rounds);
+        printf("\nA lane over the threshold in a minority of rounds is reported NOISE\n");
+        printf("above and does not fail the run. Reproduce a real finding on quiet\n");
+        printf("hardware: taskset -c 0 nice -n -20 ./test_dudect --measurements 10000000\n");
     }
     printf("=======================================================\n");
 

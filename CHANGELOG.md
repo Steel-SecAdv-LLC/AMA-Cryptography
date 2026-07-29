@@ -5,7 +5,7 @@
 | Property | Value |
 |----------|-------|
 | Applies to Release | 3.4.0 |
-| Last Updated | 2026-07-26 |
+| Last Updated | 2026-07-27 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -14,6 +14,1154 @@
 ## Overview
 
 All notable changes to AMA Cryptography will be documented in this file. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+---
+
+## [Unreleased]
+
+### Fixed — the `-text` migration left existing clones silently wrong
+
+Reproduced on a real clone rather than reasoned about: configure
+`core.autocrlf=true` (git's default on Windows — it is a config, not a
+platform feature, so it reproduces anywhere), check out the commit before
+`* -text` landed, then check out the commit after it.
+
+**548 of 610 tracked text files kept their CRLF, and `git status` reported the
+tree clean.** Git rewrites a working-tree file on checkout only when its
+*content* changed, so everything the merge did not touch was left alone; and
+the stat cache means git never re-hashes those paths, so nothing surfaces —
+`git update-index --really-refresh` does not surface it either. `touch` on one
+file was enough to make it appear as modified.
+
+That is the original defect relocated, not fixed: local runs read those bytes,
+so `IMPLEMENTATION_GUIDE.md` scores 1.25 instead of 1.50 and the calibration
+test fails on the contributor's machine with the same misleading
+"recalibration is due" message that failed the Windows jobs — while their
+tooling insists nothing is wrong.
+
+- **`tools/check_line_endings.py` now checks the working tree**, not only the
+  index. It already parsed the `w/` field of `git ls-files --eol` and then
+  discarded it, which was the gap. A stale tree is now a loud failure naming
+  the remedy.
+- **The remedy is `git rm --cached -r . && git reset --hard`**, measured
+  against the reproduced clone. The intuitive answer is worse than useless:
+  `git add --renormalize .` staged **547 files with CRLF in the blob**, because
+  with `-text` there is no clean filter — it commits the corruption instead of
+  fixing it. `git checkout-index -f -a` left 547 unchanged, because it skips
+  paths git believes are up to date, which is precisely these. Only dropping
+  the cache entries reached zero, and the gate then passes and the calibration
+  returns to 1.50.
+
+### Fixed — a workflow could invoke a binary its own job never builds
+
+`dudect-legacy-harnesses` configures CMake, but without
+`-DAMA_ENABLE_DUDECT=ON`, because it exists to build the standalone
+`tools/constant_time` harnesses. A `./build/bin/test_dudect` line added to that
+job is a guaranteed `exit 127` — and that shipped on this branch, from an edit
+that inserted the same line into every run step in the file and matched one
+more step than intended.
+
+Nothing caught it before CI did, because the mistake is invisible where it is
+made: the line is correct in the four jobs above and below it, and the property
+that distinguishes them lives in `tests/c/CMakeLists.txt`, not in the workflow.
+
+`check_cmake_gated_binaries` in `tools/check_workflow_commands.py` reads the
+`if(...)` guard around each `add_executable` and the `option()` default for each
+flag it names, then requires any job invoking `./build/bin/X` to enable the
+flags that gate `X` — but only those defaulting `OFF`, since an ON-by-default
+guard needs no flag and demanding one would be noise. Derived from CMake rather
+than a hand-maintained list, so a target added under a new guard is covered
+without anyone remembering this file. Re-injecting the exact line that shipped
+makes the gate report it, on the pull request, with the remedy.
+
+### Fixed — all three dudect harnesses said "retrying to rule out noise" and did not
+
+The defect below was found in `tests/c/test_dudect.c` and then found again,
+unchanged, in `tools/constant_time/dudect_crypto.c` and
+`tools/constant_time/dudect_harness.c`. All three ran the same multi-round loop
+and all three got the same thing wrong, so the rule now lives once, in
+`tests/c/dudect/dudect_rounds.h`, and all three include it. Three copies of a
+security gate's decision rule is how the copies drift apart, and the shared
+self-test now covers every harness at once.
+
+The two legacy harnesses additionally discarded their per-lane t-values between
+rounds — `run_round` returned a bool — so their summaries could not show whether
+a finding reproduced, which is the one fact a reader needs. They now carry the
+same evidence table as the CMake suite, and both accept `--self-test`.
+
+`tests/c/test_dudect.c` runs up to three rounds and passes if any one round has
+no failing lane. It never checked whether the **same** lane failed twice. With
+~24 lanes and real scheduling jitter on a shared runner, a different lane
+tripping in each of three rounds is an ordinary outcome — and the suite then
+printed `Overall: FAIL - Potential timing leakage detected across 3 rounds`,
+asserting a consistency it had never established. A false alarm from this gate
+was indistinguishable in the log from a real finding.
+
+It fired on this branch, on a commit that changed two Python files and no C at
+all: the only genuine failure in the final round was `ama_consttime_memcmp` at
+|t| = 8.04, on a function that had passed the same job minutes earlier.
+
+- **A lane must now exceed the threshold in a majority of rounds to count** —
+  which is what the retry already claimed to be doing. A leak reproduces: its
+  t-statistic grows with measurements and the same lane trips most or all of
+  the time. Noise moves. The per-lane threshold is untouched and a genuinely
+  leaking lane still fails, so this removes false alarms rather than
+  sensitivity. A harness fault (setup failure, per-class rc mismatch) is exempt
+  and still conclusive on one occurrence — it is not a timing measurement.
+
+  Majority rather than *all* rounds, deliberately: the two differ only for a
+  lane sitting right at the threshold, and under an all-rounds rule such a lane
+  — tripping two rounds in three — goes green. That is the wrong way to be
+  wrong. A primitive drifting toward a real leak is the finding this gate
+  exists to surface, and one within-threshold round is a thin reason to discard
+  two over-threshold ones.
+
+  This changes when the early exit is safe, and the interaction is easy to miss.
+  Stopping at the first clean round is always sound under an all-rounds rule; it
+  is not under a majority, because a lane at 1/2 becomes a 2/3 failure if a
+  third round trips it. The loop now stops early only while *nothing* has
+  tripped, which keeps the one-round fast path for a healthy run and forces the
+  full schedule exactly when the extra evidence decides the verdict.
+- **The summary reports the evidence, not the last round.** `results[]` was
+  overwritten each round, so the table showed only round 3 and a reader could
+  not tell a reproducible finding from a one-off. Every lane now carries its
+  worst |t| and a `failed/run` ratio, and a lane over the threshold in some but
+  not a majority of rounds is reported `NOISE` — visible, and not a failure.
+  Nothing is hidden by the majority rule; the ratio is printed either way and
+  the difference is only where the build stops.
+- **The per-round line no longer prints a verdict it cannot reach.**
+  `dudect_print_result` had no access to a lane's info-only flag, so
+  `ML-DSA-65 sign` (rejection sampling) and `secp256k1 ECDSA sign` (RFC 6979
+  nonce retry) printed `FAIL - potential leakage` in *every healthy run* while
+  the summary correctly classified them `INFO`. Two permanent false alarms in a
+  tool whose whole job is to make one real report legible. The line now states
+  what was measured — `within threshold` / `OVER THRESHOLD` — and the summary
+  remains the authority.
+- **The verdict rule is now itself tested.** `--self-test` drives the
+  classification with synthetic evidence in both directions — both sides of the
+  majority boundary (3/3, 2/3 and 3/4 fail; 1/3, 1/2 and 2/4 do not), info-only
+  never failing on timing however consistent, a fatal sentinel always failing, a
+  different lane each round failing nothing, and the early-exit predicate
+  refusing to stop once a strict lane has tripped. Registered as the ctest case
+  `test_dudect_verdict` and run ahead of every measurement pass in `dudect.yml`.
+  Deterministic, milliseconds. Re-introducing the all-rounds rule makes it name
+  exactly the three cases that rule gets wrong — which is the check that was
+  missing when the original behaviour went unnoticed.
+
+### Fixed — one OID had seven spellings
+
+`oid_from_string` parsed each arc with `int()`, which is a lenient parser: it
+accepts surrounding whitespace, a leading `+`, redundant leading zeros, any
+Unicode decimal digit, and — since PEP 515 — underscore digit separators. So
+`"1.2.840.113549"`, `"1.02.840.113549"`, `" 1.2.840.113549"`,
+`"1.+2.840.113549"` and `"1.2.840.113_549"` all encoded to the same OBJECT
+IDENTIFIER.
+
+That is the many-spellings-of-one-value defect `_asn1` refuses everywhere on
+the octet side — non-minimal DER lengths, non-minimal INTEGERs,
+non-deterministic CBOR, non-canonical base64 — arriving through the text side
+instead. The docstring already recorded closing the *other* direction, where
+`oid_to_string` decoded arcs the encoder could not take back; this closes the
+one that was left.
+
+Today's only callers pass literals from the algorithm registry, so nothing was
+mis-encoded. It is worth closing on its own terms because of the shape it
+invites: any allowlist or equality check keyed on the *dotted string* reads
+`"1.2.840.113_549"` as a different entry from `"1.2.840.113549"` while the
+encoder maps both onto the same octets, so the comparison and the encoding
+disagree — and the encoding is what ends up signed. Each arc must now be one or
+more ASCII digits with no redundant leading zero, which also subsumes the
+separate negative-arc check. `test_the_oid_codec_is_a_bijection_over_the_reachable_space`
+asserts both directions compose to the identity across every encoding boundary.
+
+### Fixed — the checkout was not byte-identical across platforms
+
+All ten Windows CI jobs failed on
+`test_tightening_the_threshold_only_removes_benign_files`, reporting that the
+note detector's 1.75 default "is no longer sitting just above the benign band —
+recalibration is due". The detector, the threshold and the document were all
+correct. **The two platforms were reading different files.**
+
+Git's default on Windows (`core.autocrlf=true`) rewrites LF to CRLF on
+checkout, so the working tree stops matching the committed blob.
+`NoteArtifactDetector` scans at most 8 KiB, sampling head and tail of anything
+larger — so for a 38 KiB document, *which* text is scored depends on the byte
+offsets of everything before it. `IMPLEMENTATION_GUIDE.md` scored 1.50 on Linux
+and 1.25 on Windows because 1,343 line terminators had each grown an octet and
+slid a marker out of the sampled tail. The calibration then could not hold.
+
+The same assumption is load-bearing elsewhere and was equally undefended: the
+Wycheproof corpus is SHA-256-pinned per file, the key-format corpus is checked
+against structural record sizes, and the reproducible-build gate compares
+artefact digests. `.gitattributes` already carried `-text` for the Wycheproof
+corpus, for exactly this reason, on exactly two paths.
+
+- **`.gitattributes` now marks the whole tree `-text`**, disabling both the
+  clean and the smudge filter, so the working tree *is* the committed blob on
+  every platform and no gate depends on how a contributor's git is configured.
+  Fuzzer seed corpora are marked `binary`; two of them carry CRLF as data.
+- **`tools/check_line_endings.py` (new gate, wired into `ci.yml`)** keeps that
+  true from both sides. It resolves the effective attribute through git's own
+  matcher rather than grepping `.gitattributes` — which a comment would satisfy
+  — and it inspects the **index**, not the working tree: with conversion off,
+  git no longer normalises on commit either, so a contributor's CRLF would now
+  be committed verbatim and skew the same gates on *every* platform at once, a
+  strictly worse outcome than the one being fixed. Both directions are pinned
+  by `tests/test_line_endings_gate.py` against synthetic records, because
+  committing a CRLF blob to prove the gate notices CRLF blobs would be the
+  drift the gate exists to prevent.
+- **The calibration is now a property of the corpus text**, normalising line
+  endings as it reads, so it holds under any checkout configuration including
+  one predating the attribute. The detector itself deliberately does *not*
+  normalise: it scores the payload it is handed, and a note that arrives with
+  CRLF is still a note.
+  `test_calibration_does_not_depend_on_the_checkout_line_endings` compares the
+  full `{path: score}` mapping rather than the flagged set — a flagged-set
+  comparison passes while scores drift right up to the moment one crosses a
+  threshold, and would have gone green on the very corpus that was failing.
+
+### Fixed — a TSA could hold the signing process on a socket indefinitely
+
+`request_timestamp_exchange` set a 10-second socket timeout and read the
+response body in one call. A socket timeout bounds one `recv`, not the
+transfer: it is rearmed by every byte that arrives, so a peer sending one octet
+every nine seconds never trips it — and against the 256 KiB ceiling that is a
+signing process parked on a socket for roughly three weeks. The peer is a
+network peer by construction (the default is a public TSA), so "the TSA is
+slow" and "the TSA is holding the pipeline open" are the same observation from
+inside the process.
+
+The transfer now has a deadline of its own (`_TSA_TOTAL_DEADLINE`, 30s), armed
+before the connection is made so a slow handshake cannot buy a full transfer
+window afterwards, and measured on `time.monotonic` so an NTP step neither
+aborts a healthy transfer nor extends a stalled one. The body is read in
+bounded chunks, still one octet past the cap so an over-long response is
+*detected* rather than silently truncated into a prefix that might parse as a
+shorter token.
+
+Three test sites had mocked the TSA response with
+`mock_response.read.return_value = body` — an object that returns the whole
+body for every call however few octets were asked for, and never signals EOF.
+That is not a response; it is an infinite stream, and it is why the unbounded
+read looked fine. The contract now lives in one place
+(`tests/_http_response_mock.py`) and matches `http.client.HTTPResponse.read`.
+
+### Fixed — the four open CodeQL alerts, at what they pointed at
+
+- **`_legacy_rfc3161_key_logged` reported as an unused global.** The
+  `global _flag` / `if not _flag: _flag = True` one-shot idiom is dead *within
+  the call that performs the store*, which is what the analyser saw — and it is
+  also not thread-safe: two threads reading a verdict concurrently can both
+  observe `False` before either stores `True`, so the docstring's "once per
+  process" was a claim the mechanism did not make. Replaced by `_OnceLatch`, a
+  double-checked latch that takes no lock on the fast path and is contended at
+  most once per process. `test_the_one_time_log_line_is_emitted_exactly_once_under_concurrency`
+  releases 32 threads on a barrier and requires exactly one to latch.
+- **Three "statement has no effect" on `@overload` bodies.** `...` in a `.py`
+  file is an expression statement whose value is discarded; it is exempt in
+  `.pyi` stubs, and these signatures cannot move to one because they must stay
+  beside the implementation they constrain. The bodies are now docstrings — the
+  other body Python treats as declarative — which say what each overload means
+  instead of standing in for a body.
+
+### Changed — INVARIANT-13 now covers the gates themselves
+
+`tools/check_suppression_hygiene.py` scanned `ama_cryptography/` and `tests/`
+but not `tools/` — the tree holding the gate scripts, where a silenced static
+analyser sits *inside* the layer that enforces this repository's security
+policy. Widening it found two bare `# noqa: S310` markers with no reason and no
+tracking ID, over `urllib` calls in the corpus fetchers that accepted `file:`
+and `ftp:` URLs; both now check the scheme first, so the suppression states a
+fact.
+
+Widening also required the scanner to stop confusing prose *about* a
+suppression with a suppression: it had been matching over the whole raw line
+(putting string literals back in scope, which tokenizing was supposed to rule
+out) and made no distinction for full-line comments, which `bandit`, `ruff` and
+`mypy` all ignore because they anchor to the line of the finding. The checkers'
+own documentation of their subject matter was reported as eight unjustified
+suppressions. It now reads comment tokens, and only trailing ones, keeping
+mypy's file-level `# type: ignore` explicitly. The set policed in
+`ama_cryptography/` and `tests/` is unchanged — 96 before and after — so the
+precision gain removed false positives only.
+
+### Fixed — the library documented a verification it does not perform (INVARIANT-37)
+
+AMA implements the RFC 3161 wire format and the §2.4.2 message-imprint binding.
+It verifies neither the TSA's CMS `SignerInfo` signature nor its certificate
+chain. **The repository asserted the opposite in more than fifty places.**
+
+This began as a review of one reviewer question — whether `verify_token_binding`
+should stay in `legacy_compat` — and the answer was that the function was fine
+and its surroundings were not.
+
+- **`ARCHITECTURE.md`** told readers step 6 of the verification flow was "Verify
+  TSA signature and time bounds". Neither happens.
+- **`THREAT_MODEL.md`** falsely recorded "RFC 3161 TSA with independent
+  verification" as **IMPLEMENTED**, citing `rfc3161_timestamp.py` as evidence.
+  That is the row an auditor reads to conclude T3.4 is closed.
+- **`AMA_CRYPTOGRAPHY_ETHICAL_PILLARS.md`** carried a "Mathematical Proof" for
+  Temporal Integrity whose security statement was **inverted**: "Requires TSA
+  private key compromise to forge". Forging a token AMA accepts requires no key,
+  no compromise and no privileged position — the adversary builds a CMS
+  `SignedData` offline over the target's own content with any `genTime` they
+  like. The same document multiplied a timestamp "detection dimension" into a
+  `P(detect) ≥ 0.999999999` bound; against an adaptive adversary that dimension's
+  detection rate is 0, so the figure was inflated by three orders of magnitude
+  and is now `≥ 0.999999` over the two dimensions that survive.
+- **`wiki/Security-Model.md`** scored AMA ✓ and OpenSSL ✗ on RFC 3161 — on the
+  single axis where `openssl ts -verify` does the work and AMA does not — listed
+  RFC 3161 as a mitigation against a full-MITM adversary (a MITM on the TSA path
+  substitutes a self-built token and the check still passes), and asked operators
+  to tick "RFC 3161 timestamp configured with a trusted TSA", which changes
+  nothing an attacker must defeat.
+- **`SECURITY.md`** listed RFC 3161 as an independent defence-in-depth layer and
+  made a trusted TSA a **REQUIRED** production control.
+- **`rfc3161_timestamp.py`'s own module docstring** opened with the retired,
+  never-true claim "Third-party attestation: Independent verification by TSA",
+  and wrongly claimed long-term validity
+  "via SPHINCS+", which no TSA uses and AMA would not check if one did.
+- **`README.md`'s documented mock-mode example was broken**, not merely
+  mis-worded: `get_timestamp(tsa_mode="mock")` opens `allow_mock_tsa()` as a
+  scoped context manager that exits before returning, so the following
+  `assert verify_timestamp(...)` evaluated `False`. Verified against `main`.
+- **`crypto_api.py`** still told operators to run `pip install rfc3161ng`, which is not
+  a dependency any more: INVARIANT-1 forbids that third-party implementation and
+  this release removed it —
+  and `verify_crypto_package` never verified the stored timestamp token while
+  saying it verifies "any optional add-ons".
+
+None of it was written dishonestly. It was written by people who knew what a
+timestamp is *for*, describing a feature named after the thing it does not do.
+Every false statement was "qualified" somewhere else in the repository, and none
+of the qualifications were where the reader's eye was.
+
+**API changes.** All backwards compatible.
+
+- `rfc3161_timestamp.verify_timestamp_binding()` is the new name for the check;
+  `verify_timestamp()` is a deprecated alias with identical behaviour and a
+  `DeprecationWarning`. `verify_token_binding()` deliberately still returns a
+  bare `bool`: every call site is `if verify...(...)`, and a dataclass is always
+  truthy, so widening the return type would have turned each of those into an
+  unconditional pass — an honesty fix that failed open.
+- `describe_token_verification()` returns a `TokenVerification` record for
+  callers who must *store* what was not checked. It raises `TypeError` on
+  `bool()`, so it cannot collapse into the truthy `if` just described.
+- `verify_crypto_package`'s results mapping now emits a `DeprecationWarning` when
+  the deprecated `results["rfc3161"]` key is read. The key and its value are
+  unchanged — renaming it to `rfc3161_binding` without an alias would raise
+  `KeyError` inside callers' verification code, and keeping it *silent* was the
+  other half of the original problem. It remains a `dict` subclass, so
+  `isinstance`, unpacking and JSON serialisation are unaffected.
+- `certificate_file` is gone from `verify_timestamp_binding`'s signature
+  entirely: an argument whose only behaviour is to raise does not belong in the
+  function people are meant to call. It is retained, still raising, on the
+  deprecated surfaces so old call sites fail loudly.
+
+**Enforcement — `RFC3161_CAPABILITIES` and INVARIANT-37.**
+
+The claims are not corrected by hand and left to drift. `RFC3161_CAPABILITIES`
+is a single declaration of which checks AMA performs, read by three independent
+consumers: `TokenVerification.not_verified` derives from it, so an audit record
+cannot claim more than the code does; `tools/check_verification_claim_honesty.py`
+reads it to decide which documentation claims are false; and
+`tests/test_rfc3161_api_honesty.py` drives the behaviour and asserts it matches.
+
+The gate is deliberately **not** a phrase denylist, which would freeze today's
+limitation into CI and begin rejecting claims once they became true. A claim is
+forbidden *because its capability is `False`*, so implementing CMS `SignerInfo`
+verification and flipping one table entry permits the corresponding
+documentation in the same commit, with no gate edit and no stale prohibition. A
+claim must also be negated **on the line that makes it** — a disclaimer three
+paragraphs away did not prevent a single one of the fifty.
+
+The gate found its own bug before it found anything else: the pattern for the
+phrase this entry will not repeat ended `(?:stamp|-stamp|stamping)?\b`, which
+cannot match its own plural — the group takes `stamp`, the `\b` demands a boundary before the
+`s`, and every backtrack fails identically. It missed the most common phrasing
+of the most common false claim in the tree and reported success. Its own negative
+controls caught that, and fixing it immediately surfaced two more live instances.
+
+- New: `tools/check_verification_claim_honesty.py`, run in `ci.yml`'s
+  `security-checks` job; `tests/test_verification_claim_honesty_gate.py` (46
+  tests, both directions including the near-misses that must not fire);
+  `tests/test_rfc3161_api_honesty.py` (18 tests). The load-bearing one builds a
+  token in-process with no key and no TSA, signature octets zeroed and `genTime`
+  at the epoch, and requires the binding check to accept it — the fact every
+  removed claim was denying — with a companion requiring the same check to still
+  reject a different payload.
+- `THREAT_MODEL.md` gains **T3.7** (forged or substituted token), rated MEDIUM
+  with High likelihood, because the live threat is strictly weaker than the TSA
+  compromise the register previously modelled. T3.4's mitigation status drops
+  from IMPLEMENTED to PARTIAL.
+- `ARCHITECTURE.md` gains **§ Scope: RFC 3161 attestation is not implemented**,
+  scoping what closing the gap requires — CMS `SignerInfo` processing including
+  the RFC 5652 §5.4 `signedAttrs` re-encoding, RFC 5280 §6 path validation with
+  EKU `id-kp-timeStamping`, a trust-anchor store defaulting to refusal, and
+  revocation or an explicit refusal to check it.
+
+### Added — HSS/LMS signature verification (RFC 8554)
+
+- **`src/c/ama_lms.c`** implements the complete RFC 8554 registry — LM-OTS
+  typecodes 1–4 (`w` = 1/2/4/8) and LMS typecodes 5–9 (`h` = 5/10/15/20/25),
+  all SHA-256 — as `ama_lms_verify`, `ama_hss_verify`,
+  `ama_lms_signature_length`, `ama_lms_pubkey_params` and
+  `ama_hss_pubkey_levels`, with Python bindings under the same names.
+
+  **Verification only, permanently until a state manager exists.** RFC 8554
+  §5.4.1 puts the whole of LMS's security in the one-time leaf index being
+  durably reserved *before* a signature is released: a signer that loses that
+  race can, after a crash, sign twice under one LM-OTS key, and two signatures
+  under one LM-OTS key yield a forged third. That guarantee lives in a durable
+  state manager tested against interrupted writes, not in the arithmetic, so
+  shipping the signing maths without one would produce something that passes
+  every vector and is catastrophically unsafe in exactly the circumstance it
+  exists to survive. `ama_lms_signing_available()` reports the absence rather
+  than leaving a caller to find a missing symbol, and
+  `tests/test_rfc8554_vectors.py` pins the whole HSS/LMS surface as an exact
+  inventory so a signer cannot appear without someone arguing for it.
+
+  Verification holds no secret, keeps no state, and cannot be made unsafe by
+  being called twice — and it is the half with the interoperability value:
+  HSS/LMS is deployed overwhelmingly as a firmware and software-update
+  signature, one offline signer against a very large verifier population.
+
+  Stack use is O(1) — about 200 bytes of automatics regardless of parameter
+  set. The obvious implementation materialises `z[0..p-1]`, 8,480 bytes for
+  `w = 1`; the Kc hash is streamed instead. The Merkle path is read in place.
+  Hash count is bounded by the typecode rather than by the input, and HSS
+  levels are bounded by `AMA_HSS_MAX_LEVELS` (RFC 8554 §6 states no bound of
+  its own).
+
+  Built unconditionally, not under `AMA_USE_NATIVE_PQC`: the constrained
+  firmware-verification targets this exists for are the ones most likely to
+  build with native PQC off.
+
+- **RFC 8554 Appendix F is now an answer key rather than an artefact.** The
+  corpus was vendored in this branch and asserted nothing about AMA. Both
+  published test cases verify end to end; every field is shown to be
+  load-bearing by corruption sweep; the single-tree verifier and the
+  signature-length walker are exercised independently of the HSS path; and
+  truncation, trailing data, wrong level counts, unknown typecodes and an
+  out-of-range leaf index are all refused. `tests/c/test_lms.c` (73 checks)
+  reads the same corpus rather than transcribing it.
+
+  SP 800-208's additional parameter sets remain excluded, unchanged: the
+  published PDF did not yield reliable text, and guessing an approved parameter
+  set is the speculative standards work this repository refuses.
+
+### Fixed — defects found by a follow-up audit of this branch
+
+- **ML-DSA signature malleability (FIPS 204 Algorithm 21).** `dil_verify_internal`
+  checked the hint's cumulative counts and its trailing zero padding but not
+  the rule that indices within each polynomial are strictly increasing —
+  the rule the reference implementation annotates "for strong unforgeability".
+  `dil_polyveck_use_hint` is order-insensitive, so every permutation of a
+  polynomial's index run was a distinct byte string that verified for the same
+  message under the same key: a randomly sampled ML-DSA-65 signature has eight
+  indices in one polynomial, i.e. 40,320 encodings of one signature. A break of
+  SUF-CMA, and of anything treating a signature encoding as an identity — dedup
+  caches, replay tables, audit-log equality. Present on `main` as well; this
+  branch extended it to all three parameter sets.
+
+- **ML-DSA private-key residue.** `ama_ml_dsa_sign` left the time-domain `s2`
+  and `t0` on the stack, in a scrub list whose comment described itself as
+  exhaustive. With the public key those are a complete private key:
+  `t = t1·2^d + t0`, `rho` regenerates `A`, and `A·s1 = t − s2` solves for
+  `s1`. The three drifting copies of that list are now one macro used at all
+  three exits, including the `dil_hash_mu` failure return, which scrubbed
+  nothing at all. The batched 4-way SHAKE samplers likewise left the ML-DSA
+  masking vector `y` and the ML-KEM CBD noise unscrubbed while the scalar arms
+  they replace scrubbed theirs.
+
+- **Data race on the NIST-curve generator comb tables.** Built under a plain
+  `int ready` flag — the pattern INVARIANT-15 names and prohibits. The builder
+  reads the table back as it fills it, so threads race on reads and writes
+  rather than on identical bytes, and the tables live in BSS where a Jacobian
+  point with `Z` still zero *is* the point at infinity: a torn read is a wrong
+  public key, not recognisable corruption. ThreadSanitizer reports twelve races
+  before and none after. The once-primitive moved out of `ama_cpuid.c` into
+  `src/c/internal/ama_once.h`, because an invariant every module is bound by
+  has to be reachable by every module.
+
+- **Key-format parser canonicality.** JWK members were decoded without checking
+  the alphabet or the pad bits, so one key had unboundedly many JWK encodings
+  and unboundedly many RFC 7638 thumbprints. CBOR recursion was unbounded (a
+  few hundred octets raised `RecursionError` past the `KeyFormatError`
+  boundary). A ~3 kB OBJECT IDENTIFIER raised `ValueError` from
+  `int.__str__`'s digit limit, and `oid_to_string` mis-read a multi-byte first
+  subidentifier and accepted a truncated OID as valid. PKCS#8 accepted the
+  constructed `[1] publicKey` tag as well as the primitive one; both trailer
+  loops accepted their OPTIONALs in any order and any multiplicity; an EC key
+  naming two *different* public keys was accepted with the outer one discarded
+  unchecked; duplicate JWK members were resolved last-wins where other JOSE
+  stacks resolve first-wins. `PrivateKey.__repr__` printed the key and the seed.
+
+- **`pq_import_consistency` was a process-global flag wearing a context
+  manager's clothes.** One thread's `with` block disabled the RFC 9881 §8.2
+  check for every other thread, and two interleaved blocks left it off
+  permanently with no region open. Now a `ContextVar` with token-based reset.
+
+- **RFC 3161: a locally forged, unsigned token verified.** Replacing
+  `openssl ts -verify` with a message-imprint binding check left the API's
+  language and result key unchanged, so a 125-byte unsigned CMS ContentInfo
+  built offline — with a `genTime` of the forger's choosing — dropped into
+  `CryptoPackage.timestamp_token` (a field covered by neither the HMAC nor
+  either signature) made `verify_crypto_package` report `rfc3161: True`.
+  `extract_tst_info` now refuses a `SignedData` whose `digestAlgorithms` or
+  `signerInfos` set is empty, and the result is reported as `rfc3161_binding`,
+  which is what is actually checked (`rfc3161` remains, same value, so no
+  caller starts raising `KeyError` inside a verification routine). A malformed
+  token now returns False rather than destroying the whole verification call.
+  The TSA response read is bounded. A fresh nonce is sent and its echo
+  required. `certReq` is requested so archived tokens are self-contained. The
+  token is checked to bind the digest that was submitted.
+
+- **`rfc3161_timestamp.py` still imported and called `rfc3161ng`** — an
+  undeclared third-party cryptographic dependency — for both of its exported
+  functions, while a complete RFC 3161 client sat unexported a few hundred
+  lines below. The online path is now AMA's own codec end to end.
+
+- **Four CI gates could not fail as intended.** INVARIANT-36's binary scan
+  missed `CMD = ["openssl", ...]; subprocess.run(CMD)` — the exact spelling the
+  removed generator used — as well as `os.popen` and the `exec*`/`spawn*`
+  families. INVARIANT-33's Python fuzz lane was satisfied by a *comment* naming
+  the harness. `build_keyformat_corpus.py --verify` examined the contents of
+  four corpora out of six. `--atheris` built a seed corpus and discarded it.
+
+- **Nineteen ctypes secret buffers were never zeroised**, and every private-key
+  input crossed as `bytes(...)` — the immutable, non-wipeable copy the module's
+  own INVARIANT-6 comment names as the thing to avoid.
+
+- **`ama_cryptography.key_formats` was unreachable from the package
+  namespace.** The branch's flagship interoperability API had no `__all__`
+  entry and no lazy loader.
+
+- **…and the lazy loader that fixed it exported eighteen names no type
+  checker could see.** PEP 562's `__getattr__` is invisible to anything that
+  does not execute the module, so a lazily exported name needs a second,
+  static binding under `if TYPE_CHECKING:` for mypy, IDEs, and static
+  analysers to resolve it. That block covered 13 of 31 names. The other
+  eighteen — `jwk_thumbprint`, `encode_pem`, both COSE and both JWK
+  converters, the PQ-consistency controls, and the rest — resolved to `Any`
+  at every call site, which is not a weaker check but no check: mypy cannot
+  verify a call whose target it cannot resolve, and `--strict` says nothing,
+  because from its side nothing is wrong. Nineteen public functions were
+  documented, tested, and silently unchecked wherever a caller used them.
+  All 31 are now statically bound, and `ama_cryptography.jwk_thumbprint`
+  type-checks as `(dict[str, Any] | str, *, hash_name: str) -> bytes`.
+
+  `KeyFormatError` and `UnsupportedKeyFormatError` were a second fault in the
+  same wiring: listed among the *key-format* exports but resolved by a
+  special case in `__getattr__` from `ama_cryptography.exceptions` — a module
+  imported eagerly a hundred lines earlier, so the lazy entries were dead
+  code pointing at the wrong module. Both are now plain eager imports and the
+  special case is gone.
+
+  `tests/test_lazy_exports.py` holds the three declarations — the lazy sets,
+  the `TYPE_CHECKING` block, and `__all__` — to each other, reading them out
+  of the source with `ast` rather than from the imported module, since the
+  property under test is what a reader sees *without* running anything. It
+  also pins the reason the indirection exists: `import ama_cryptography` must
+  not pull in `crypto_api` or `key_formats`. The existing
+  `tests/test_lazy_imports.py` checked only the runtime half, which is why a
+  name could resolve perfectly and still be invisible to every tool.
+
+### Fixed — a further audit round (PR #378 completion pass)
+
+- **A forged MockTSA token verified on the production timestamp path.**
+  `verify_timestamp` routed any token whose 16-byte magic prefix matched
+  `MockTSA`'s straight into `MockTSA.verify`, on nothing but that prefix. A mock
+  token is self-authenticating — its HMAC key (the nonce) ships inside the token
+  — so the verifier cannot tell a token the process produced from one an
+  attacker fabricated. Mock *creation* was already gated to a testing context
+  (`MockTSA.timestamp` calls `_check_allowed`), but *verification* was not, so a
+  hand-built token carrying an attacker-chosen `genTime` and a matching
+  `data_hash` made `verify_timestamp` return `True` in a normal production
+  install where mock mode is never enabled — a full RFC 3161 bypass. The mock
+  path now runs only inside a testing context (`_mock_tsa_enabled()`), and
+  `MockTSA.verify` gained the same `_check_allowed()` gate as `MockTSA.timestamp`
+  so the class is uniformly test-only.
+  `tests/test_rfc3161_offline.py::test_mock_token_refused_outside_testing_context`
+  pins it by verifying a correctly-HMAC'd forgery is refused with mock mode off
+  and accepted only under `allow_mock_tsa()`.
+
+- **An over-long JSON integer literal escaped the key-format error boundary.**
+  CPython caps integer↔string conversion at `sys.get_int_max_str_digits()`
+  (default 4300) and raises a *bare* `ValueError` — not a `json.JSONDecodeError`
+  — while parsing a longer literal, even one in a JWK member that is never used.
+  That `ValueError` is a sibling of, not a subclass of, `KeyFormatError`, so a
+  caller catching this module's documented boundary around a key import did not
+  catch it; it escaped `jwk_to_public_key`, `jwk_to_private_key` and
+  `jwk_thumbprint`. The same defect class the module already closed for OIDs
+  (`_OID_MAX_BODY`) had been missed on the JSON path. `_load_jwk` now converts it
+  to `KeyFormatError` while preserving a duplicate-member `KeyFormatError`
+  unchanged. Pinned by
+  `tests/test_key_formats.py::test_jwk_with_an_over_long_integer_literal_is_refused`.
+
+- **`extract_tst_info` recursed once per response envelope, unbounded.** A
+  `TimeStampResp` wraps its token in a `PKIStatusInfo` envelope, which
+  `extract_tst_info` unwrapped by recursing. A structure that keeps that shape at
+  every level — a few bytes each, well under the 256 KiB response cap — drove
+  `RecursionError` straight past the `TimestampError` boundary the function
+  otherwise guarantees, a stack/CPU DoS reachable from a malicious TSA or any
+  untrusted `.tsr`. This is the DoS class the module already bounds for CBOR
+  (`_CBOR_MAX_DEPTH`) and OIDs. Unwrapping is now bounded by `_MAX_TSR_UNWRAP`
+  (a real token needs at most one unwrap). Pinned by
+  `tests/test_rfc3161_wire_format.py::test_a_response_that_nests_timestampresp_is_bounded_not_recursed`.
+
+- **The HSS/LMS length and registry constants were declared but never enforced.**
+  `AMA_LMS_PUBKEY_LEN`, `AMA_HSS_PUBKEY_LEN`, `AMA_HSS_MAX_LEVELS`,
+  `LMOTS_WINTERNITZ_W` and `LMS_TREE_HEIGHT` documented the wire sizes and the
+  RFC 8554 registry but were read only by tests, so the wrappers passed a
+  wrong-length key straight to the native call and let it collapse every
+  structural problem into one opaque return code (the five open
+  `py/unused-global-variable` CodeQL alerts). The verify wrappers now reject a
+  wrong-length public key at the boundary with a legible message, and
+  `native_lms_pubkey_params` cross-checks the height and Winternitz width the
+  native tables report against the registry transcribed in Python — a C↔Python
+  transcription guard in the spirit of INVARIANT-35. Resolved at the source, per
+  the repository's standing policy of not dismissing alerts in the Security UI.
+
+- **Consistency touch-ups.** `_compute_data_hash` used a local four-algorithm
+  subset and so rejected an otherwise-valid `sha384`/`sha3-384` token before the
+  binding check ran; it now uses the module's canonical six-algorithm
+  `_HASH_FUNCS`, matching `TSA_HASH_OIDS` and `verify_token_binding`. And
+  `_derive_public`'s OKP arm gained the same backend-refusal→`KeyFormatError`
+  wrapper its EC and PQ arms already had, so the function's stated contract holds
+  on every arm.
+
+### Changed — validation provenance
+
+- **Removed OpenSSL from the validation path.** `tests/kat/keyformats/openssl/`
+  carried twelve PEM files generated by OpenSSL 3.0.13, vendored as the answer
+  key for EC PKCS#8 and SPKI because RFC 5915 and RFC 5480 publish no worked
+  examples. Nothing linked or invoked OpenSSL — the files were inert data — and
+  a competing implementation's output was still the thing AMA's correctness was
+  measured against, inside AMA's own repository, in a project whose stated
+  position is that it depends on no other cryptographic implementation.
+
+  Replaced with two original sources that between them cover more:
+
+  - **RFC 9500 §2.3** ("Standard Public Key Cryptography (PKCS) Test Keys",
+    December 2023) publishes P-256, P-384 and P-521 keys as RFC 5915
+    `ECPrivateKey` — exactly the structure the gap was about. The IETF had
+    closed it; nobody had looked. Vendored as `tests/kat/keyformats/rfc9500_ec.json`
+    through the same `--specs` path as every other corpus.
+  - **`tests/ref_keyformat.py`**, a second encoder for SPKI, PKCS#8,
+    `ECPrivateKey` and the RFC 9881 §6 `CHOICE`, transcribed from the RFCs' own
+    ASN.1 with the text quoted inline. It imports nothing from
+    `ama_cryptography` and is declarative where the production encoder is
+    imperative, so a shared control-flow mistake has nowhere to hide. It is
+    anchored against RFC 9500 §2.3 and RFC 8410 §10.1 before it is trusted
+    anywhere else, because two encoders that agree could still both be wrong.
+
+  The removed corpus covered six algorithms in one encoding each. The reference
+  covers all twelve in both encodings, under both `include_public_key` settings
+  and all three PQ arms, plus constructed leading-zero-octet width cases that a
+  sampled corpus reaches about once in 512 keys.
+
+- **INVARIANT-36 added** — *AMA Is Not Measured Against Another Implementation*.
+  Enforced by `tools/check_corpus_originality.py` in the `code-quality` job: no
+  cryptographic binary invoked from `tests/` or `tools/`, every corpus source on
+  `rfc-editor.org` or `ietf.org`, and the reference encoder importing nothing
+  from the package it checks. Fourteen tests pin both directions, including the
+  non-detection case — this tree is full of accurate "replaces OpenSSL X"
+  comments and flagging those would make the gate un-satisfiable.
+
+### Fixed — parser defects found by the new fuzz harness
+
+`fuzz/python/fuzz_key_formats.py` (see INVARIANT-33) found six real defects on
+its first campaigns. Each is pinned by a named regression test.
+
+- **A PEM footer glued to the last base64 line was accepted.** `_PEM_RE` spelled
+  the body `[A-Za-z0-9+/=\n]*`, which does not require the newline before
+  `-----END`; RFC 7468 §3's ABNF does, since `strictbase64line` and
+  `strictbase64finl` both end in an `eol`. A file ending
+  `…Fo7GS-----END PUBLIC KEY-----` parsed to a perfectly good key that then
+  re-encoded to different bytes — one key, two textual encodings, the same
+  malleability class as the two PEM defects below. The body is now matched as
+  zero or more newline-terminated lines.
+
+- **`UnicodeDecodeError` escaped the format layer.** `_as_der` decoded
+  PEM-supplied-as-bytes with `"ascii"`/`strict`; a non-ASCII octet raised a
+  `ValueError` subclass rather than `KeyFormatError`, so `except KeyFormatError`
+  around a key import was not sufficient.
+- **`TypeError: unhashable type` from a CBOR map value.** `_cose_algorithm`
+  looked `crv` up in a dict without checking its type, and a COSE_Key is decoded
+  CBOR, so `crv` could be a nested map. The JSON side already carried this fix.
+- **Strict PEM accepted trailing control octets.** `str.strip()` is
+  Unicode-aware and counts U+001C–U+001F, U+000B, U+000C, U+0085 and U+00A0 as
+  whitespace; RFC 7468 is defined over printable ASCII plus CR and LF. Now
+  strips exactly the four characters the RFC allows.
+- **Non-canonical base64 accepted.** `b64decode(validate=True)` checks the
+  alphabet, not the padding bits, so `…Of3N=` and `…Of3M=` decoded to the same
+  key — one key with many encodings, the defect this module refuses everywhere
+  else. RFC 4648 §3.5 requires the pad bits to be zero; the body must now
+  re-encode to itself.
+- **An out-of-range EC private scalar raised `RuntimeError` past the parser.**
+  Reclassified as `ValueError` (a property of the input) and converted to
+  `KeyFormatError` at the format boundary. Investigating it surfaced a second
+  defect: **`ama_secp256k1_pubkey_from_privkey` accepted a scalar at or above
+  the group order**, where `ama_nistp_pubkey_from_privkey` had always refused
+  one — the same library strict on one curve and lax on another. SEC 1 §3.2.1
+  requires `[1, n-1]`; both ends are now checked, constant-time.
+
+### Fixed — other
+
+- **ML-KEM accepted encapsulation keys FIPS 203 §7.2 forbids.** The §7.2
+  *modulus check* — every 12-bit coefficient of `t_hat` below `q` — was not
+  implemented, so 767 of every 4096 encodable values passed. A conformant peer
+  rejects such a key, so encapsulating to it derives a shared secret nobody else
+  derives; because implicit rejection is designed to fail silently, nothing
+  anywhere reports it. New `ama_ml_kem_pubkey_check`, enforced inside
+  encapsulation (where §7.2 places it) and on import. Surfaced by the
+  strengthened parser mutation sweep.
+- **PKCS#8 v2 was accepted with no `publicKey` field.** RFC 5958 §2 sets v2 if
+  and only if `publicKey` is present; accepting either mismatch gave one key two
+  valid encodings. Both directions now enforced.
+- **`ama_ml_kem_privkey_check` consumed CSPRNG entropy on a parser-reachable
+  path.** It now encapsulates under a fixed message and is a pure function of
+  the key. `tests/c/test_pq_privkey_check_determinism.c` poisons the randombytes
+  hook and requires the check to pass anyway — and to still reject a corrupted
+  key, so "no entropy consumed" cannot be bought by not checking.
+- **`tests/test_conftest_backend_skip_scoping.py`'s three failures were real.**
+  `--no-cov` was passed unconditionally to a `pytester` subprocess where
+  `pytest-cov` may be absent, which pytest reports as a usage error. The suite
+  is now fully green.
+
+### Changed — OpenSSL removed from the shipped package
+
+- **`legacy_compat.py` shelled out to the `openssl` binary at runtime.** Two
+  calls: `openssl ts -query` built the RFC 3161 timestamp request, and
+  `openssl ts -verify` checked a token. INVARIANT-1 says the core package "must
+  not import or call" a third-party cryptographic implementation, and a
+  subprocess is a call — a competing implementation performing a cryptographic
+  operation inside AMA, plus an undeclared dependency on that binary being
+  installed and on `PATH`. Pre-existing on `main`; found while verifying that
+  the key-format corpus removal had actually closed the originality question.
+
+  RFC 3161 specifies the request completely, so AMA now encodes it.
+  `rfc3161_timestamp.py` gained `build_timestamp_request` (§2.4.1
+  `TimeStampReq`), `parse_timestamp_response` (§2.4.2 `TimeStampResp`),
+  `extract_tst_info` (RFC 5652 §5.1 CMS `ContentInfo`/`SignedData` down to the
+  encapsulated `TSTInfo`) and `verify_token_binding`, all on AMA's own DER
+  codec — the one this PR built and hardened. `tests/test_rfc3161_wire_format.py`
+  (38 tests) asserts against the RFC's ASN.1 field by field, not against any
+  implementation's bytes. The `subprocess` import and its three `nosec`
+  markers are gone from the module.
+
+- **A TSA *rejection* was stored as though it were a timestamp.** Nothing read
+  `PKIStatusInfo`, so the response came back verbatim whatever it said. RFC 3161
+  §2.4.2 puts the verdict ahead of the optional token; a non-granted status, or
+  a granted one carrying no token, now raises. The legacy API still returns the
+  whole response, so stored packages keep their format.
+
+- **Chain validation is refused rather than silently downgraded.**
+  `verify_rfc3161_timestamp(..., tsa_cert_path=...)` asked for X.509 path
+  validation of the TSA's signing certificate. AMA implements neither CMS
+  `SignerInfo` processing nor X.509 path validation — X.509 is a documented
+  exclusion for this PR — so that call now raises instead of answering with the
+  message-imprint binding check, which is a different and weaker question.
+  Without `tsa_cert_path` it performs the RFC 3161 §2.4.2 binding check, in
+  constant time, under the digest algorithm the token itself names, and says
+  plainly in its docstring that this is not third-party attestation.
+
+- **INVARIANT-36's gate now scans `ama_cryptography/`.** It covered `tests/` and
+  `tools/` and recorded `legacy_compat.py` as an explicit exception. The
+  exception is removed rather than reworded, and the shipped package — which
+  carries the strongest form of the rule — is inside the scan, with a
+  reintroduction test and a live-tree assertion.
+
+### Fixed — gates that could not do their job
+
+- **The Bandit severity gate read the wrong tally, and could not pass.** Both
+  `security.yml` and `ci-build-test.yml` ran
+  `grep -E '^\s*(Medium|High):\s*[1-9]'` over Bandit's *text* report. That
+  report prints two tallies under the same labels, both indented — one by
+  severity, one by confidence — so the pattern matched the confidence block.
+  With seven Low-severity findings in the tree (six of them Medium-confidence)
+  the gate fired on a run whose severity tally read `Medium: 0, High: 0` and
+  whose findings list said "No issues identified". It was not too permissive;
+  it was unreadable, and an unreadable red gate is one people learn to route
+  around.
+
+  Replaced with `tools/check_bandit_severity.py`, which reads the JSON report
+  and applies the documented policy — block at severity ≥ MEDIUM *and*
+  confidence ≥ MEDIUM — to the fields rather than to a rendering of them. It
+  fails closed on a missing, malformed, error-carrying, empty or pre-filtered
+  report, cross-checking `results` against `metrics._totals` so a report that
+  was pruned before it arrived cannot read as a clean tree. Findings above the
+  severity floor but below the confidence floor are printed rather than
+  dropped. `tests/test_bandit_severity_gate.py` (26 tests) drives the
+  rejection direction for every one of those conditions, including the exact
+  Low-severity/Medium-confidence shape that broke the old gate, and pins both
+  workflows to invoking the tool on an unfiltered report.
+
+- **The seven findings the old gate could not describe are gone.** Six were
+  Bandit B105 false positives on the FIPS 203/204 size tables, where the dict
+  key `secret_key` reads to its hardcoded-credential heuristic as a password;
+  the rows are now built through a documented `_sizes(...)` helper, with the
+  same mapping at runtime and no suppression. The seventh was a real (if
+  latent) defect: `key_formats.py` used a bare `assert` to guarantee an EC
+  registry entry has a curve OID, and `python -O` strips asserts — under which
+  the entry would have been indexed under `None` and every EC import would have
+  failed to resolve its curve, silently and only in optimised builds. It now
+  raises.
+
+- **The C-constant transcription gate silently checked nothing on Windows.**
+  `tools/check_version_consistency.py` keyed its alias table by
+  `ama_cryptography/ascon.py` but built the lookup key with
+  `str(Path.relative_to(...))`, which yields `ama_cryptography\ascon.py` on
+  Windows. Every alias lookup missed, so the aliased Ascon and agent-binding
+  constants went unchecked on the Windows runners while the gate still printed
+  a clean result. Paths are now normalised through `repo_relative`, which is
+  driven with a `PureWindowsPath` so the regression test runs everywhere
+  rather than only where the bug reproduced.
+
+### Changed — performance and memory
+
+- **Fixed-base comb for the NIST curve generator.** Key generation, public-key
+  derivation and the `k·G` in ECDSA signing are **1.6–1.9× faster** on all three
+  curves (P-521 keygen 2.014 ms → 1.189 ms; P-256 sign 0.377 ms → 0.217 ms).
+  ECDH and verification are unchanged, which is what confirms the change is
+  scoped to the fixed base. Four blocks rather than eight, deliberately: the
+  table must be read with a full linear scan to stay constant-time, so the win
+  flattens as the scan cost grows. Checked against the same naive
+  double-and-add reference as the windowed path, over the same boundary lattice.
+- **`dil_pubkey_from_sk` held ~110 KB on the stack** — the whole k×l matrix plus
+  five length-k vectors — on a path reached from `load_pkcs8`, so the frame size
+  was chosen by whoever supplied the key file. That is more than musl's entire
+  128 KB default thread stack. Row-wise matrix expansion brings it to 29,400
+  bytes, **measured** (123,608 before) by `tests/c/test_pq_parser_stack.c` on a
+  painted, caller-supplied thread stack.
+- **Four ML-DSA heap allocations of message-derived material removed.** `mu` is
+  streamed through incremental SHAKE-256 instead of assembling `tr || M` in a
+  buffer (so signing an n-byte message no longer needs 2n bytes of live memory
+  on an attacker-chosen length), the FIPS 204 §5.2 context prefix is a bounded
+  automatic buffer, and the verifier's challenge input never needed the heap at
+  all — it was bounded by the parameter table the whole time.
+
+### Added
+
+- **PQ import consistency checking is a documented policy**, defaulting to
+  enabled, switchable per call, per block or per process. With it off, ML-KEM
+  still recovers `ek` from the FIPS 203 §7.1 layout and still cross-checks a
+  carried public key; ML-DSA defers to first use. Measured cost data is in
+  `docs/KEY_FORMATS.md`, produced by `benchmarks/keyformat_import.py`.
+- **`tools/build_keyformat_corpus.py --verify` is connected.** Driven by
+  `tests/test_keyformat_corpus_provenance.py` (21 tests, each failure direction
+  pinned), by `ci.yml`, and by a new online half in `corpus-provenance.yml` that
+  re-extracts every record from the documents it claims to come from.
+- **`check_version_consistency.py` now pins Python transcriptions of C header
+  constants** — 58 of them, the class `AMA_ERROR_INVALID_PARAM = -1` belonged to.
+  A module comparing a return code against the wrong number silently stops
+  detecting the failure it was written to detect while every success-path test
+  still passes.
+- **`tools/check_documented_counts.py`** re-derives every count the
+  documentation pins. `docs/KEY_FORMATS.md` said "301 tests"; the real number
+  was 539 by the time anyone looked.
+- **`additional_validated_coverage` in `docs/compliance/acvp_attestation.json`**,
+  describing the six PQ parameter sets and three NIST curves validated in CI but
+  *not* part of the immutable 1,215-vector ACVP self-attestation — each with its
+  real source and the reason it is not attested. ML-KEM-512/768 are validated
+  against Wycheproof, which is not ACVP; ML-DSA-44/87 came from ACVP-Server's
+  mutable `master`. Merging them into the attestation proper would have claimed
+  ACVP validation that does not exist (INVARIANT-16).
+
+### Changed — tests
+
+- The parser mutation sweep's `assert accepted < 120` — which only fails if the
+  parser accepts almost everything — is replaced by four falsifiable properties:
+  no length-changing input is ever accepted; every accepted input re-encodes to
+  itself (canonicality); an accepted mutation differs from the original only
+  inside the key-material window unless it parsed as a different algorithm; and
+  the count is exactly zero for the EC curves. Every structural octet is now
+  also corrupted exhaustively with four values each, rather than sampled.
+- Secret-leakage coverage extended from `PrivateKey.key` on the six classical
+  algorithms to `key` **and** `seed` across all twelve. The seed is the more
+  valuable of the two: RFC 9881 §8.1 makes expansion one-way, so 32 leaked
+  octets reconstruct an entire 4,896-octet ML-DSA-87 key.
+- `include_public_key=None`'s per-algorithm meaning is enumerated
+  (`CONVENTIONAL_PUBLIC_KEY`), exported (`conventional_include_public_key`) and
+  tested: `None` must produce bytes identical to the explicit setting it stands
+  for, and different bytes from the other one, for every algorithm.
+
+
+### Fixed
+
+- **ML-DSA accepted private keys FIPS 204 forbids.** `skDecode` (FIPS 204
+  Algorithm 25) requires every `s1`/`s2` coefficient to be in `[-eta, eta]` and
+  the key rejected otherwise. The unpacking is not surjective onto its bit
+  width — eta = 2 stores a five-value range in three bits, decoding to
+  `[-5, 2]`; eta = 4 stores a nine-value range in four, decoding to
+  `[-11, 4]` — so a malformed or hostile key decoded to coefficients the
+  specification forbids and `ama_ml_dsa_sign` signed with it, producing
+  signatures nothing verifies and driving the rejection loop off its calibrated
+  bounds. The range gate is now applied, accumulated branchlessly across the
+  whole key so the refusal does not reveal which polynomial carried the
+  offending coefficient, and `native_ml_dsa_sign` reports it as a `ValueError`
+  (a property of the key you passed) rather than a `RuntimeError`.
+
+- **`ama_secp256k1_pubkey_decompress` was unreachable from Python.** The C
+  function and its header declaration existed; no ctypes binding or wrapper
+  did, so nothing outside the C API could call it. Now wired as
+  `native_secp256k1_pubkey_decompress`.
+
+- **secp256k1 uncompressed points were not validated on import.** A SEC 1
+  `0x04 || X || Y` point taken from an SPKI or PKCS#8 structure had its length
+  checked and nothing else — neither curve membership nor coordinate
+  canonicality. Accepting a point that is on no curve is the invalid-curve
+  attack. Validation now runs on both the compressed and uncompressed paths,
+  and the NIST-curve decoder's refusals surface as `KeyFormatError` rather than
+  leaking the backend's `ValueError` through the format layer.
+
+- **`ama_nistp_ecdsa_sign` did not conform to RFC 6979.** The signer normalised
+  `s` to the low representative unconditionally, so it failed RFC 6979's own
+  Appendix A.2.5 / A.2.6 / A.2.7 vectors on every case whose natural `s` came
+  out high — roughly half of them — while the header advertised "deterministic
+  per RFC 6979". `r` matched everywhere, so the nonce derivation was correct and
+  the divergence was invisible to every test that existed.
+
+  It was invisible for a second reason worth recording: the "independent"
+  pure-Python reference in `tests/test_nistp_curves.py` normalised too, because
+  it was written alongside the C code rather than from the specification. Two
+  implementations that share an assumption do not check each other. `_ref_sign`
+  now takes the signing policy as a parameter, and RFC 6979's own 18 in-scope
+  vectors are vendored under `tests/kat/rfc6979/` and replayed on every run —
+  including the RFC's printed public keys — so neither implementation can talk
+  its way out of the specification again.
+
+  Signing now emits RFC 6979's `s` verbatim. Low-`s` is opt-in via
+  `AMA_NISTP_ECDSA_SIGN_LOW_S` / `low_s=True`.
+
+### Changed
+
+- **INVARIANT-34 rewritten around the sign/verify pair.** Low-`s` normalisation
+  and high-`s` rejection are two halves of one control: with a permissive
+  verifier, normalising on the signer prevents nothing (the twin of an AMA
+  signature still verifies under AMA) and costs conformance. The NIST prime
+  curves now default to neither half; secp256k1 keeps both (INVARIANT-28,
+  unchanged). `tests/test_nistp_curves.py::test_low_s_is_a_property_of_the_sign_verify_pair`
+  asserts the four-way truth table directly.
+
+- **New `ama_nistp_ecdsa_sign_ex` / `_sign_raw_ex` with policy flags.** Every
+  combination of {deterministic, hedged} x {DER, raw} x {RFC 6979 `s`, low `s`}
+  is now reachable through one entry point; unknown flag bits are rejected
+  rather than ignored. The previous API made hedged+raw raise purely because a
+  fourth function had not been written.
+
+- **`native_nistp_keypair` now returns `(public_key, private_key)`** — public
+  first, matching every other keypair function in the library. It was written
+  returning `(private_key, public_key)`, the reverse of
+  `native_x25519_keypair`, `native_ed25519_keypair`, `native_ml_kem_keypair`
+  and `native_ml_dsa_keypair`. In a file where both appear, a copy-pasted
+  `pub, priv = ...` lands a private key in the variable about to be published,
+  and nothing — types, linter, or any behavioural test — notices, because both
+  values are opaque bytes and the code runs. Found by nearly making the mistake
+  while writing the key-format layer.
+
+  `tests/test_keypair_conventions.py` now asserts the ordering *behaviourally*
+  for every keypair function it discovers, by re-deriving the public key from
+  the secret and requiring a match. Docstrings were not enough: the
+  inconsistent function documented its wrong order accurately.
+
+- **`ama_nist_curve_t` renumbered to 256 / 384 / 521** (was 0 / 1 / 2). A dense
+  index made `0` — the value an uninitialised or forgotten field holds — mean
+  "P-256". Found by the new INVARIANT-35 suite on its first run. The values also
+  no longer collide with `ama_ml_kem_param_set_t` or `ama_ml_dsa_param_set_t`,
+  so a call routed to the wrong family is refused rather than resolved. This is
+  a source-and-ABI change to an API that has not shipped in a release.
+
+- **`NativeBackendUnavailableError`** is now the single type for "the native
+  backend is not present", replacing 36 bare `RuntimeError` raises across
+  `pqc_backends.py`. `PQCUnavailableError` is now a subclass, so every existing
+  `except PQCUnavailableError` and `except RuntimeError` handler is unaffected.
+
+### Added
+
+- **Key interoperability formats — PKCS#8, SPKI, PEM, JWK and COSE_Key**
+  (`ama_cryptography.key_formats`, with the strict DER and deterministic-CBOR
+  codecs in `ama_cryptography._asn1`). AMA's key handling was in-house only:
+  opaque octet strings with AMA-defined layouts, fine inside AMA and useless
+  everywhere else. This is the boundary layer that lets an AMA key reach an
+  X.509 certificate request, a TLS stack, a JOSE token, a COSE message, a
+  WebAuthn credential or a PKCS#11 object. All twelve algorithms — Ed25519,
+  X25519, P-256/384/521, secp256k1, ML-DSA-44/65/87, ML-KEM-512/768/1024 — get
+  SPKI, PKCS#8 and PEM; the six classical ones also get JWK (with RFC 7638
+  thumbprints) and COSE_Key. See `docs/KEY_FORMATS.md`.
+
+  Correctness here is measured against the specifications' own answer keys
+  rather than against AMA itself, because a round trip through one's own
+  encoder proves only self-consistency: a wrong OID, an absent-versus-NULL
+  `parameters` mistake or a misidentified `CHOICE` arm round-trips perfectly
+  and interoperates with nothing. Vendored under `tests/kat/keyformats/`:
+  RFC 9881 Appendix C (15 ML-DSA vectors), draft-ietf-lamps-kyber-certificates-11
+  Appendix C (16 ML-KEM vectors), RFC 8410 §10, RFC 8037 Appendix A, RFC 8152
+  Appendix C.7.1, plus EC and OKP key files from a second implementation for the
+  curves no RFC publishes examples for. Every record is checked in **both**
+  directions — parse to the right key, and re-encode to the same bytes — which
+  is what a self-round-trip cannot see. 301 tests.
+
+  The RFC 9881 vectors are also a FIPS 203/204 key-generation KAT as a side
+  effect: the RFC derives its examples from a single seed, so parsing a `seed`
+  record runs AMA's `KeyGen_internal` and compares against the RFC's own
+  expanded key across all six parameter sets.
+
+- **ML-DSA and ML-KEM private-key consistency checking**
+  (`ama_ml_dsa_pubkey_from_privkey`, `ama_ml_dsa_privkey_check`,
+  `ama_ml_kem_pubkey_from_privkey`, `ama_ml_kem_privkey_check`, and the
+  `native_*` wrappers). An expanded post-quantum private key is internally
+  redundant, and a key whose fields disagree signs nothing verifiable or
+  silently derives the wrong shared secret. ML-DSA's `rho`, `s1` and `s2`
+  determine `t0` and the public key and therefore `tr`, all of which are now
+  recomputed and required to agree; ML-KEM's `H(ek)` is recomputed **and** a
+  pairwise encapsulate/decapsulate round trip must succeed.
+
+  Both halves of the ML-KEM check are load-bearing. FIPS 203's implicit
+  rejection is *designed* to fail silently, so a decapsulation key with a
+  mutated `dk_PKE` and a correct digest raises nothing anywhere downstream —
+  the two parties simply hold different secrets and the failure surfaces as an
+  unexplained protocol error much later. Import time is the only place it is
+  visible. RFC 9881 §8.2 and the ML-KEM draft's §C.4.1 publish seven
+  deliberately inconsistent keys between them, all seven of which are in the
+  test suite; RFC 9881 notes that implementations which skip the `tr`/`t0`
+  check detect two of them not at all.
+
+  This also makes `expandedKey`-only PKCS#8 import work: such a file carries no
+  public key, so recomputing it is what makes the key usable.
+
+- **INVARIANT-35 — a selector must never resolve weaker than it was asked.**
+  INVARIANT-7 governs the availability axis (no backend, no operation); nothing
+  governed the *selection* axis until the library grew nine selectable security
+  levels across three families. A selector that maps an unrecognised value onto
+  a neighbour produces working code, valid signatures and successful handshakes
+  at a level nobody chose, and never surfaces. Enforced by
+  `tests/test_selector_strictness.py` (41 tests), which derives its list of
+  selectors from the modules rather than a hand-written literal, drives each
+  with plausible near-misses including every *other* family's valid values, and
+  asserts the C side returns `0` / `NULL` rather than another set's size.
+
+
+- **NIST prime curves P-256 / P-384 / P-521 — ECDSA and ECDH.** New native
+  implementation `src/c/ama_nistp.c` (curve parameters from SP 800-186, ECDSA
+  from FIPS 186-5, ECDH from SP 800-56A §5.7.1.2, deterministic nonces from
+  RFC 6979, point encodings from SEC 1 v2), the `ama_nistp_*` C surface, and
+  the `native_nistp_*` Python surface. Zero external crypto dependencies
+  (INVARIANT-1): the only primitives consumed are AMA's own HMAC-SHA-256/384/512
+  and the platform CSPRNG.
+
+  This was the library's single largest interoperability gap. Curve25519 and
+  secp256k1 between them reach neither TLS, X.509, JOSE/JWT, COSE,
+  WebAuthn/FIDO2, CNSA 1.0, nor the PKCS#11 HSM fleets — every one of which is
+  gated on the NIST prime curves.
+
+  Covered: key generation (rejection-sampled into `[1, n-1]`, so the
+  distribution is exactly uniform rather than a biased reduction), public-key
+  derivation, full public-key validation, ECDH, deterministic ECDSA signing,
+  RFC 6979 §3.6 hedged signing, verification, SEC 1 point encode/decode
+  including compression, and DER ↔ fixed-width `r || s` conversion for the
+  JWS/COSE/WebAuthn wire form. Signatures are available in both DER (X.509,
+  TLS, PKCS#11) and raw (JWS RFC 7515 §3.4, COSE RFC 8152 §8.1) encodings.
+
+  One implementation serves all three curves: they are all short Weierstrass
+  with `a = -3` and cofactor 1, so the arithmetic is generic over a limb count
+  and the curve is a `const` parameter block. Constant time on every
+  secret-dependent path — a fixed 4-bit window whose table is read with a full
+  constant-time linear scan, and a point addition that resolves every
+  exceptional case (infinity, `P == Q`, `P == -Q`) branchlessly with masks.
+  Verification is variable time by design; every input is public.
+
+  Measured cost on x86-64: sign/verify ~0.37/0.54 ms (P-256), ~0.90/1.38 ms
+  (P-384), ~2.24/3.57 ms (P-521). This is several times slower than a
+  curve-specialised implementation with a precomputed generator comb and
+  Solinas reduction; that is stated rather than elided, and both optimisations
+  are additive under the existing differential test. See
+  `docs/NIST_PRIME_CURVES.md`.
+
+- **INVARIANT-34 — ECDSA low-`s` policy is per-curve and declared.** Every AMA
+  signer emits only the low representative on every curve. Verification policy
+  differs deliberately: secp256k1 rejects a high `s` by default (INVARIANT-28,
+  unchanged), while the NIST prime curves accept either representative by
+  default because X9.62 / FIPS 186-5 / TLS / X.509 / JWS / WebAuthn all permit
+  either and essentially none of their signers normalise. `require_low_s` /
+  `AMA_NISTP_ECDSA_REQUIRE_LOW_S` opts in to the strict form. The checks that
+  cost no interoperability — minimal DER, `r, s` strictly in `[1, n-1]` rather
+  than reduced, and public-key coordinates strictly in `[0, p)` — remain
+  unconditional on both curves and in both modes.
+
+- **ML-KEM-512 and ML-KEM-768 (FIPS 203).** `src/c/ama_kyber.c` is now
+  parameter-driven across all three FIPS 203 sets rather than hardcoded to
+  ML-KEM-1024, via the `ama_ml_kem_*` C surface and the `native_ml_kem_*`
+  Python surface. `n`, `q`, the NTT and every reduction constant are identical
+  across ML-KEM; only the module rank `k`, the CBD parameter `eta1` and the
+  compression widths `du`/`dv` differ, so those five values became a runtime
+  parameter block instead of three copies of a 1900-line implementation.
+  Adds the CBD-3 sampler ML-KEM-512 needs (`eta1 = 3`), and generalises the
+  4-way SHAKE batching, which previously assumed exactly four lanes.
+
+- **ML-DSA-44 and ML-DSA-87 (FIPS 204).** `src/c/ama_dilithium.c` is likewise
+  parameter-driven across all three FIPS 204 sets, via `ama_ml_dsa_*` and
+  `native_ml_dsa_*`. Adds the alternate bit-packings the other sets require —
+  3-bit `eta = 2` key packing, 18-bit `gamma1 = 2^17` mask packing, 6-bit
+  `gamma2 = (q-1)/88` commitment packing — and the mod-5 folding that
+  `eta = 2` rejection sampling uses. Key generation and signing are now
+  single-bodied across the random/deterministic and internal/context variants,
+  removing four near-duplicate implementations.
+
+- **1530 new Wycheproof vectors.** `ecdsa_secp256r1_sha256_test.json`,
+  `ecdsa_secp384r1_sha384_test.json` and `ecdsa_secp521r1_sha512_test.json`
+  vendored at the pinned upstream commit, and the ECDSA driver in
+  `wycheproof_vectors/run_wycheproof.py` generalised to dispatch on the group's
+  curve and hash rather than assuming secp256k1/SHA-256. The corpus is now 4263
+  vectors across 15 files. All 1530 new vectors pass with **zero failures and
+  zero policy exceptions** — the NIST suites need no divergence bucket, which
+  is itself the visible evidence for INVARIANT-34.
+
+- **New known-answer corpora.** `tests/kat/fips203/ml_kem_{512,768}.kat` and
+  `tests/kat/fips204/ml_dsa_{44,87}.kat`, with provenance and format recorded
+  in the new `tests/kat/README.md`. ML-DSA-44/87 are byte-exact against NIST
+  ACVP-Server `ML-DSA-keyGen-FIPS204` (75/75) and the deterministic
+  `ML-DSA-sigGen-FIPS204` groups for both the internal and external/pure
+  interfaces (90/90). ML-KEM-512/768/1024 are 193/193 each against the
+  vendored Wycheproof ML-KEM corpora.
+
+- **`ama_secp256k1_pubkey_decompress`.** Recovers `y` from a compressed SEC 1
+  secp256k1 point and *proves* the root by squaring, so an off-curve `x` is
+  rejected rather than yielding an off-curve point. Non-canonical `x` (`>= p`)
+  is rejected, never reduced (INVARIANT-29).
+
+- **New test suites.** `tests/test_nistp_curves.py` (85 tests, including a
+  pure-Python RFC 6979 + affine-arithmetic reference that the C signer must
+  match byte-for-byte), `tests/test_pqc_param_sets.py` (40 tests), and
+  `tests/c/test_nistp.c` (re-derives the hardcoded Montgomery constants from
+  `p` and `n` alone, and differentials the windowed scalar multiplier against a
+  naive double-and-add reference).
+
+### Fixed
+
+- **ML-KEM `e1` was sampled with the wrong CBD parameter.** `kyber_cpapke_enc`
+  sampled the `e1` error vector with `eta1`; FIPS 203 Algorithm 14 specifies
+  `eta2` for *both* error terms and `eta1` only for `y`. The three coincide for
+  ML-KEM-768 and ML-KEM-1024 (`eta1 = eta2 = 2`), so the shipped ML-KEM-1024
+  path was never affected and its KATs never moved — but the defect would have
+  made ML-KEM-512 (`eta1 = 3`) produce ciphertexts no other implementation
+  decapsulates. Caught by the vendored Wycheproof ML-KEM-512 corpus on its
+  first run.
+
+### Changed
+
+- `ama_kyber_*` and `ama_dilithium_*` are now thin wrappers pinned to
+  ML-KEM-1024 and ML-DSA-65 respectively. The ABI and the byte-level behaviour
+  are unchanged, and `tests/test_pqc_param_sets.py` asserts both directions of
+  interoperation between the legacy and parameter-driven surfaces so the two
+  cannot drift.
+- `kyber_gen_matrix` iterates the matrix indices directly instead of a
+  flattened counter with a division. This is not cosmetic: with `k` a runtime
+  value GCC could no longer bound the index and emitted
+  `-Waggressive-loop-optimizations` against `mat[i]`. Iterating `i < k` under an
+  explicit precondition makes the bound structural, so the warning is gone
+  because the property is now provable rather than suppressed.
 
 ---
 
@@ -3556,7 +4704,7 @@ After upgrading to v2.0:
 - Ed25519 digital signatures (RFC 8032)
 - CRYSTALS-Dilithium quantum-resistant signatures (NIST FIPS 204)
 - HKDF key derivation (RFC 5869, NIST SP 800-108)
-- RFC 3161 trusted timestamps
+- RFC 3161 timestamps — wire format and §2.4.2 message-imprint binding. (Erratum, 3.4.1: this entry read "trusted timestamps". AMA has never verified the TSA's signature or certificate chain, so the token is not attestation. Corrected in place rather than left standing, because a changelog is read as a record of what shipped. See INVARIANT-37.)
 
 ### Added
 - Apache License 2.0 with proper headers and NOTICE file

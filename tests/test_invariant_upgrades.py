@@ -12,6 +12,7 @@ INVARIANT-3 (addendum): Finalizer Failures Must Be Observable
 from __future__ import annotations
 
 import gc
+import inspect
 import re
 import subprocess
 import sys
@@ -425,6 +426,92 @@ class TestSuppressionHygiene:
         assert (
             result.returncode == 0
         ), f"check_suppression_hygiene.py failed:\n{result.stdout}\n{result.stderr}"
+
+
+class TestSuppressionScanPrecision:
+    """What the checker treats as a suppression, in both directions.
+
+    The scan covers ``tools/`` as well as ``ama_cryptography/`` and ``tests/``:
+    ``tools/`` is where the gates live, so a static analyser silenced there is
+    silenced inside the layer that enforces this repository's security policy.
+
+    Widening it required the checker to stop confusing prose *about* a
+    suppression with a suppression. Both halves are asserted here — a checker
+    that under-reports has stopped working, and one that fires on its own
+    documentation gets routed around.
+    """
+
+    def test_a_trailing_marker_without_justification_is_reported(self) -> None:
+        from tools.check_suppression_hygiene import check_source
+
+        assert check_source("a.py", "import subprocess  # nosec B404\n")
+
+    def test_a_trailing_marker_without_a_tracking_id_is_reported(self) -> None:
+        from tools.check_suppression_hygiene import check_source
+
+        violations = check_source("a.py", "import subprocess  # nosec B404 -- fixed argv\n")
+        assert any("tracking ID" in v for v in violations)
+
+    def test_a_fully_justified_trailing_marker_is_accepted(self) -> None:
+        from tools.check_suppression_hygiene import check_source
+
+        assert (
+            check_source("a.py", "import subprocess  # nosec B404 -- fixed argv (AB-001)\n") == []
+        )
+
+    def test_prose_describing_a_marker_is_not_a_suppression(self) -> None:
+        """The false-positive class that widening to ``tools/`` exposed."""
+        from tools.check_suppression_hygiene import check_source
+
+        source = (
+            "# Justified findings carry an inline ``# nosec``, which is what\n"
+            "# ``# type: ignore`` and ``# noqa`` mean elsewhere.\n"
+            "x = 1\n"
+        )
+        assert check_source("a.py", source) == []
+
+    def test_a_marker_inside_a_string_literal_is_not_a_suppression(self) -> None:
+        """The scan used to regex the whole line, putting literals back in scope."""
+        from tools.check_suppression_hygiene import check_source
+
+        source = 'MESSAGE = "expected # nosec here"  # explains the message above\n'
+        assert check_source("a.py", source) == []
+
+    def test_a_file_level_type_ignore_is_still_in_scope(self) -> None:
+        """mypy's whole-file directive is standalone but real, so it is kept."""
+        from tools.check_suppression_hygiene import check_source
+
+        assert check_source("a.py", "# type: ignore\nx = 1\n")
+
+    def test_a_forbidden_directory_is_reported_regardless_of_justification(self) -> None:
+        from tools.check_suppression_hygiene import check_source
+
+        violations = check_source(
+            "ama_cryptography/backend/x.py", "import os  # nosec B404 -- reason (AB-001)\n"
+        )
+        assert any("forbidden" in v for v in violations)
+
+    def test_tools_is_actually_in_the_scanned_set(self) -> None:
+        """A coverage extension that did not extend coverage would pass silently."""
+        import tools.check_suppression_hygiene as gate
+
+        repo_root = Path(__file__).resolve().parent.parent
+        source = inspect.getsource(gate.main)
+        assert 'Path("tools")' in source, "tools/ dropped out of the scanned set"
+        assert (repo_root / "tools").is_dir()
+
+    def test_every_tools_suppression_carries_a_tracking_id(self) -> None:
+        """Asserted directly against the tree, not only through the checker."""
+        from tools.check_suppression_hygiene import _SUPPRESSION_RE, effective_suppressions
+
+        repo_root = Path(__file__).resolve().parent.parent
+        unjustified: list[str] = []
+        for py_file in sorted((repo_root / "tools").rglob("*.py")):
+            source = py_file.read_text(encoding="utf-8", errors="replace")
+            for lineno, comment in effective_suppressions(source):
+                if _SUPPRESSION_RE.search(comment) and not re.search(r"\([A-Z]+-\d+\)", comment):
+                    unjustified.append(f"{py_file.relative_to(repo_root)}:{lineno}")
+        assert unjustified == [], f"suppressions in tools/ without a tracking ID: {unjustified}"
 
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,27 @@
+{
+ "source": {
+  "url": "https://www.rfc-editor.org/rfc/rfc9500.txt",
+  "title": "RFC 9500 (Standard Public Key Cryptography Test Keys), Section 2.3",
+  "revision": "RFC 9500, December 2023"
+ },
+ "records": [
+  {
+   "section": "2.3.  ECDLP Keys",
+   "label": "EC PRIVATE KEY",
+   "algorithm": "P-256",
+   "pem_b64": "MHcCAQEEIObLW92AqkWunJXowVR2Z5/+yVPBaFHnEedDk5WJxk/BoAoGCCqGSM49AwEHoUQDQgAEQiVI+I+3gv+17KN0RFLHKh5Vj71vc75eSOkyMsxFxbFsTNEMTLjVuKFxOelIgsiZJXKZNCX0FBmrfpCkKklCcg=="
+  },
+  {
+   "section": "2.3.  ECDLP Keys",
+   "label": "EC PRIVATE KEY",
+   "algorithm": "P-384",
+   "pem_b64": "MIGkAgEBBDDiVjMo36v2gYhga5EyQoHB1YpEVkMbCdUQs1/syfMHyhgihG+iZxNxqagbrA41dJ2gBwYFK4EEACKhZANiAARbCQG4hSMpbrkZ1Q/6GpyzdLxNQJWGKCv+yhGx2VrbtUc0r1cL+CtyKM8ia89MJd28/jsaOtOUMO/3Y+HWjS4VHZFyC3eVtY2ms0Y5YTqPubWo2kjGdHEX+ZGehCTzfsg="
+  },
+  {
+   "section": "2.3.  ECDLP Keys",
+   "label": "EC PRIVATE KEY",
+   "algorithm": "P-521",
+   "pem_b64": "MIHcAgEBBEIB2STcygqIf42Zdno32HTmN6Esy0d9bghmU1ZpTWi3ZV5QaWOP3ntFyFQBPcd6NbGGVbhMlmpgIg1A+R7Z9RRYAuqgBwYFK4EEACOhgYkDgYYABAHQ/XJXqEx0f1YldcBzhdvr8vUr6lgIPbgv3RUx2KrjzIdf8C/3+i2iYNjrYtbS9dZJJ44yFzagYoy7swMItuYY2wD2KtIExkYDWbyBiriWG/Dw/A7FquikKBc85W8A3psVfB5cgsZPVi/K3vxKTCj200LPPvYW/ILTO3KFySHyvzb92A=="
+  }
+ ]
+}

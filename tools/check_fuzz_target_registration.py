@@ -20,6 +20,11 @@ A fuzz target is registered in three independent lists:
 * ``oss-fuzz/build.sh`` — ``FUZZ_TARGETS``, which decides what Google's
   OSS-Fuzz infrastructure builds and runs continuously.
 
+Python harnesses under ``fuzz/python/`` have one registry rather than three —
+they are not libFuzzer targets, so only the workflow runs them — and the same
+rule applies: a harness that exists and is never run is indistinguishable from
+one that finds nothing.
+
 Nothing tied them together.  ``oss-fuzz/build.sh`` even carries the comment
 "Keep in sync with fuzz/CMakeLists.txt" — and had drifted anyway:
 ``fuzz_agent_binding`` was added to the CMake lists and to the workflow matrix
@@ -70,6 +75,32 @@ _ENTRY_POINT_RE = re.compile(
     re.M,
 )
 
+#: Python harnesses live in fuzz/python/ and are their own lane.
+#:
+#: The DER, CBOR, JSON and PEM key parsers are hostile-input parsers in exactly
+#: the sense the fifteen C harnesses are — anyone who can hand you a key file
+#: reaches them — and they had no harness at all, only a fixed 120-mutation
+#: sweep inside pytest that explores the same neighbourhood on every run for
+#: ever. They are Python, so they cannot be libFuzzer targets and are not
+#: registered in the CMake or OSS-Fuzz lanes; they have one registry, the
+#: workflow, and this is what ties them to it.
+PYTHON_FUZZ_DIR = Path("fuzz/python")
+#: What makes a file in `fuzz/python/` a harness rather than a helper.
+#:
+#: The first two shapes are AMA's own (`TARGETS` table, `main()` entry point);
+#: the last three are the ordinary libFuzzer/Atheris spellings. A new harness
+#: written as `def TestOneInput(data)` plus `atheris.Setup(...)` — the shape
+#: every Atheris example uses — matched none of the original two, so it would
+#: have been classified as a helper and its absence from the workflow would
+#: never have been reported. The registry has to recognise the harnesses people
+#: actually write, not only the ones already in the tree.
+_PY_HARNESS_RE = re.compile(
+    r"^\s*(?:def\s+main\s*\(|TARGETS\s*[:=])"
+    r"|^\s*def\s+(?:TestOneInput|LLVMFuzzerTestOneInput)\s*\("
+    r"|atheris\.Setup\s*\(",
+    re.M,
+)
+
 
 def _sources(root: Path) -> set[str]:
     """Every fuzz harness that actually exists as a source file.
@@ -91,6 +122,76 @@ def _sources(root: Path) -> set[str]:
         if _ENTRY_POINT_RE.search(text):
             harnesses.add(path.stem)
     return harnesses
+
+
+def _python_sources(root: Path) -> set[str]:
+    """Every Python fuzz harness that exists.
+
+    Identified by shape rather than by filename alone — a module in this
+    directory that defines neither a ``TARGETS`` table nor a ``main`` entry
+    point is a helper, not a harness, and the same distinction the C side draws
+    for ``fuzz_rng.c`` applies here.
+    """
+    harnesses: set[str] = set()
+    directory = root / PYTHON_FUZZ_DIR
+    if not directory.is_dir():
+        return harnesses
+    for path in sorted(directory.glob("fuzz_*.py")):
+        if _PY_HARNESS_RE.search(path.read_text(encoding="utf-8")):
+            harnesses.add(path.stem)
+    return harnesses
+
+
+def _workflow_python_targets(root: Path) -> set[str]:
+    """Python harnesses the workflow actually *runs*.
+
+    Matched against ``run:`` payloads rather than the whole file, because the
+    Python lane invokes the script by path (``python3 fuzz/python/<name>.py``)
+    rather than through a target matrix.
+
+    Two disciplines the C lane already had and this one did not:
+
+    * **Comments are stripped first.** ``fuzzing.yml`` carries a prose comment
+      mentioning ``fuzz/python/fuzz_key_formats.py``, and that comment alone
+      satisfied the registry — so the harness could have been deleted, or its
+      step disabled, and the gate stayed green. The module's own thesis is that
+      "a harness that exists and is never run is indistinguishable from one
+      that finds nothing"; a comment is not a run.
+    * **Only enabled steps count.** A step behind ``if: false`` does not run,
+      so naming a harness there must not register it.
+    """
+    import yaml
+
+    path = root / WORKFLOW_PATH
+    text = path.read_text(encoding="utf-8")
+    pattern = re.compile(r"fuzz/python/(fuzz_[a-z0-9_]+)\.py")
+
+    try:
+        document = yaml.safe_load(text)
+    except yaml.YAMLError:  # pragma: no cover - a broken workflow fails elsewhere
+        document = None
+
+    if isinstance(document, dict):
+        found: set[str] = set()
+        for job in (document.get("jobs") or {}).values():
+            if not isinstance(job, dict):
+                continue
+            if str(job.get("if", "")).strip().lower() in {"false", "${{ false }}"}:
+                continue
+            for step in job.get("steps") or []:
+                if not isinstance(step, dict):
+                    continue
+                if str(step.get("if", "")).strip().lower() in {"false", "${{ false }}"}:
+                    continue
+                run = step.get("run")
+                if isinstance(run, str):
+                    found.update(pattern.findall(_strip_comments(run, "#")))
+        return found
+
+    # Fall back to the textual scan if the workflow will not parse, but strip
+    # comments even then — the whole point is that prose must not register a
+    # harness.
+    return set(pattern.findall(_strip_comments(text, "#")))
 
 
 def _strip_comments(text: str, marker: str) -> str:
@@ -170,6 +271,24 @@ def audit(root: Path = Path(".")) -> list[str]:
         failures.append("no fuzz_*.c sources found — is the path correct?")
         return failures
 
+    # The Python lane. Same invariant, one registry instead of three: a harness
+    # that exists and is never run is indistinguishable from one that finds
+    # nothing, whatever language it is written in.
+    python_sources = _python_sources(root)
+    python_registered = _workflow_python_targets(root)
+    missing_py = sorted(python_sources - python_registered)
+    if missing_py:
+        failures.append(
+            f".github/workflows/fuzzing.yml: {len(missing_py)} Python harness(es) "
+            f"exist in fuzz/python/ but are never run — {', '.join(missing_py)}."
+        )
+    unknown_py = sorted(python_registered - python_sources)
+    if unknown_py:
+        failures.append(
+            ".github/workflows/fuzzing.yml: runs Python harness(es) with no "
+            f"fuzz/python/<name>.py source — {', '.join(unknown_py)}."
+        )
+
     for name, registered in registries.items():
         missing = sorted(sources - registered)
         if missing:
@@ -199,7 +318,8 @@ def main() -> int:
     sources = _sources(root)
 
     print("INVARIANT-33: fuzz target registration")
-    print(f"  harnesses in fuzz/: {len(sources)}")
+    print(f"  C harnesses in fuzz/: {len(sources)}")
+    print(f"  Python harnesses in fuzz/python/: {len(_python_sources(root))}")
 
     if failures:
         print(f"  FAIL — {len(failures)} finding(s):\n")
@@ -207,7 +327,7 @@ def main() -> int:
             print(f"    ::error::{failure}\n")
         return 1
 
-    print("  PASS — every harness is registered in CMake, CI and OSS-Fuzz.")
+    print("  PASS — every harness is registered in every lane that must run it.")
     return 0
 
 

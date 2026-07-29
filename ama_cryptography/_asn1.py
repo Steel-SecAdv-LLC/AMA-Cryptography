@@ -1,0 +1,602 @@
+#!/usr/bin/env python3
+# Copyright (C) 2025-2026 Steel Security Advisors LLC
+# SPDX-License-Identifier: Apache-2.0
+"""
+Strict DER and canonical CBOR codecs for the key-interoperability layer.
+========================================================================
+
+These are *encoding* primitives, not cryptography. They touch key material but
+perform no cryptographic operation, so INVARIANT-7 does not apply to them: a
+Python DER parser is not a "fallback for a cryptographic primitive", it is the
+only sensible place for a byte-structure parser to live. What INVARIANT-7 does
+require, and what this module observes, is that nothing here ever computes a
+key, derives a secret, or decides whether a signature is valid — it moves
+opaque octet strings between container formats and refuses anything malformed.
+
+Why hand-rolled rather than a dependency
+----------------------------------------
+The same reason as the rest of the library (INVARIANT-1), plus one specific to
+parsers: a general-purpose ASN.1 library is permissive by design, because it
+has to read whatever the world produces. A key-import parser wants the
+opposite. Every relaxation is a place where two distinct byte strings decode to
+the same key, which is the same defect class as ECDSA signature malleability —
+and it is reachable by anyone who can hand you a key file.
+
+Strictness contract (DER)
+-------------------------
+This decoder accepts **only** DER, never the wider BER:
+
+* definite-length only; the indefinite-length marker ``0x80`` is rejected;
+* minimal length encoding — a length below 128 must use the short form, and a
+  long form must not carry leading zero octets;
+* INTEGERs must be minimally encoded, with no superfluous leading ``0x00`` and
+  no negative values where the grammar forbids them;
+* BIT STRINGs in the structures used here must have zero unused bits;
+* no trailing data after the outermost structure;
+* OBJECT IDENTIFIER arcs must be minimally encoded (no leading ``0x80``
+  continuation octet), and the first two arcs must be in range.
+
+Anything else raises ``KeyFormatError``. There is no lenient mode.
+
+Strictness contract (CBOR)
+--------------------------
+COSE keys are decoded under RFC 8949 §4.2.1 *core deterministic encoding*:
+
+* the shortest possible integer encoding for every head;
+* definite-length maps and arrays only;
+* map keys sorted by encoded bytewise order, and no duplicate keys;
+* no floats, tags, or indefinite-length strings in the accepted subset.
+
+A COSE_Key that is well-formed CBOR but not deterministically encoded is
+rejected, because two encodings of the same key would otherwise produce two
+distinct thumbprints.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from ama_cryptography.exceptions import KeyFormatError
+
+__all__ = [
+    "DerReader",
+    "cbor_decode_canonical",
+    "cbor_encode_canonical",
+    "der_bit_string",
+    "der_integer",
+    "der_null",
+    "der_octet_string",
+    "der_sequence",
+    "der_tagged",
+    "oid_from_string",
+    "oid_to_string",
+]
+
+# ASN.1 tag numbers used by the structures this package encodes.
+TAG_INTEGER = 0x02
+TAG_BIT_STRING = 0x03
+TAG_OCTET_STRING = 0x04
+TAG_NULL = 0x05
+TAG_OID = 0x06
+TAG_SEQUENCE = 0x30
+TAG_SET = 0x31
+
+
+# ---------------------------------------------------------------------------
+# DER encoding
+# ---------------------------------------------------------------------------
+def _der_len(n: int) -> bytes:
+    """Minimal DER length encoding."""
+    if n < 0x80:
+        return bytes([n])
+    body = n.to_bytes((n.bit_length() + 7) // 8, "big")
+    if len(body) > 0x7E:  # pragma: no cover - no key structure gets this large
+        raise KeyFormatError(f"length {n} too large to encode")
+    return bytes([0x80 | len(body)]) + body
+
+
+def _tlv(tag: int, body: bytes) -> bytes:
+    return bytes([tag]) + _der_len(len(body)) + body
+
+
+def der_integer(value: int) -> bytes:
+    """Encode a non-negative INTEGER with minimal length."""
+    if value < 0:
+        raise KeyFormatError("negative INTEGERs are not produced by this layer")
+    body = value.to_bytes(max(1, (value.bit_length() + 8) // 8), "big")
+    # Strip redundant leading zeros, keeping one when the high bit is set.
+    while len(body) > 1 and body[0] == 0x00 and not (body[1] & 0x80):
+        body = body[1:]
+    return _tlv(TAG_INTEGER, body)
+
+
+def der_octet_string(data: bytes) -> bytes:
+    return _tlv(TAG_OCTET_STRING, data)
+
+
+def der_bit_string(data: bytes) -> bytes:
+    """Encode a BIT STRING with zero unused bits (the only form used here)."""
+    return _tlv(TAG_BIT_STRING, b"\x00" + data)
+
+
+def der_null() -> bytes:
+    return b"\x05\x00"
+
+
+def der_sequence(*elements: bytes) -> bytes:
+    return _tlv(TAG_SEQUENCE, b"".join(elements))
+
+
+def der_tagged(number: int, body: bytes, *, constructed: bool = True) -> bytes:
+    """Encode a context-specific ``[number]`` tag."""
+    if not 0 <= number <= 30:
+        raise KeyFormatError(f"context tag {number} out of the supported range")
+    tag = 0x80 | number | (0x20 if constructed else 0x00)
+    return _tlv(tag, body)
+
+
+def _base128(value: int) -> bytes:
+    """One base-128 subidentifier, continuation bits set on all but the last."""
+    chunk = bytearray([value & 0x7F])
+    value >>= 7
+    while value:
+        chunk.append((value & 0x7F) | 0x80)
+        value >>= 7
+    return bytes(reversed(chunk))
+
+
+def oid_from_string(dotted: str) -> bytes:
+    """Encode a dotted OID string as a DER OBJECT IDENTIFIER.
+
+    The first *subidentifier* is ``40 * arc1 + arc2`` and is encoded in the
+    same base-128 continuation form as every other one. It used to be written
+    as ``bytearray([arcs[0] * 40 + arcs[1]])``, which assumes that value always
+    fits in a single octet — X.690 §8.19.4 puts no such bound on ``arc2`` when
+    ``arc1 == 2``, and the validation directly above deliberately permits it.
+    So every OID in the ``2.999.*`` experimental arc, and anything else with
+    ``arc1 == 2`` and ``arc2 >= 176``, raised a raw
+    ``ValueError: byte must be in range(0, 256)`` — outside this module's
+    stated contract, and leaving the codec asymmetric: ``oid_to_string``
+    decodes those and the encoder could not take them back.
+
+    **Each arc must be a canonical decimal string.** ``int()`` is a lenient
+    parser: it accepts surrounding whitespace, a leading ``+``, leading zeros
+    and — since PEP 515 — underscore digit separators. So
+    ``"1.2.840.113549"``, ``"1.02.840.113549"``, ``" 1.2.840.113549"``,
+    ``"1.+2.840.113549"`` and ``"1.2.840.113_549"`` all encoded to the *same*
+    OBJECT IDENTIFIER. That is the defect this module refuses everywhere else,
+    arriving through the text side instead of the octet side: many spellings of
+    one value, in a codec whose whole contract is that there is exactly one.
+
+    It is worth closing on its own terms even though today's only callers pass
+    literals from the algorithm registry, because the shape it invites is a
+    policy bypass. Any allowlist, denylist or equality check keyed on the
+    *dotted string* — a configured set of permitted signature OIDs, say — sees
+    ``"1.2.840.113_549"`` as a different entry from ``"1.2.840.113549"`` while
+    the encoder maps both onto the same octets. The comparison and the encoding
+    would disagree, and the encoding is the one that decides what is signed.
+    """
+    parts = dotted.split(".")
+    for part in parts:
+        # A canonical arc is one or more ASCII digits with no redundant leading
+        # zero. ``str.isdigit`` is Unicode-aware and would admit e.g. Devanagari
+        # digits, which ``int()`` also accepts — so the alphabet is checked
+        # explicitly rather than by character class.
+        if not part or any(c not in "0123456789" for c in part):
+            raise KeyFormatError(
+                f"OID {dotted!r} has a non-canonical arc {part!r}: each arc must be "
+                "one or more ASCII digits, with no sign, whitespace or separator"
+            )
+        if len(part) > 1 and part[0] == "0":
+            raise KeyFormatError(
+                f"OID {dotted!r} has a non-canonical arc {part!r}: a leading zero is "
+                "a second spelling of the same value"
+            )
+    arcs = [int(part) for part in parts]
+    if len(arcs) < 2 or arcs[0] > 2 or (arcs[0] < 2 and arcs[1] >= 40):
+        raise KeyFormatError(f"OID {dotted!r} has invalid leading arcs")
+
+    body = bytearray(_base128(arcs[0] * 40 + arcs[1]))
+    for arc in arcs[2:]:
+        body.extend(_base128(arc))
+    if len(body) > _OID_MAX_BODY:
+        raise KeyFormatError(
+            f"OID {dotted!r} encodes to {len(body)} octets, over the "
+            f"{_OID_MAX_BODY}-octet limit this codec accepts"
+        )
+    return _tlv(TAG_OID, bytes(body))
+
+
+#: Largest OBJECT IDENTIFIER body this decoder will look at.
+#:
+#: Not a style preference — a bound. The arcs below accumulate into a Python
+#: ``int``, and since CPython 3.11 ``str(int)`` refuses a value whose decimal
+#: form exceeds ``sys.int_max_str_digits`` (4300 by default). A ~3 kB OID body
+#: therefore made ``oid_to_string`` raise ``ValueError`` *past* the
+#: ``KeyFormatError`` boundary that ``load_spki`` / ``load_pkcs8`` promise, and
+#: a longer one turns the shift-accumulate loop into quadratic bignum work on
+#: attacker-chosen input. No registered OID comes close: the longest in general
+#: use is around 30 octets.
+_OID_MAX_BODY = 128
+
+#: Largest number of octets one subidentifier may occupy. 12 continuation
+#: octets carry 84 bits, which is more than any registered arc and far below
+#: the point where the accumulated integer becomes expensive.
+_OID_MAX_ARC_OCTETS = 12
+
+
+def oid_to_string(body: bytes) -> str:
+    """Decode an OBJECT IDENTIFIER *body* (no tag/length) to dotted form.
+
+    X.690 §8.19: the body is a sequence of base-128 subidentifiers, and the
+    *first* subidentifier encodes ``40 * arc1 + arc2``. That first
+    subidentifier uses the same continuation form as every other one — which
+    the previous version of this function did not do. It read ``body[0]`` as a
+    complete octet, so ``b"\\xff"`` (a continuation octet with nothing
+    following it, i.e. a truncated OID) decoded happily to ``"2.175"``, and any
+    OID whose first subidentifier legitimately needs two octets (arc1 = 2 with
+    arc2 >= 48, e.g. the ``2.999`` experimental arc) decoded to the wrong
+    value.
+    """
+    if not body:
+        raise KeyFormatError("empty OBJECT IDENTIFIER")
+    if len(body) > _OID_MAX_BODY:
+        raise KeyFormatError(
+            f"OBJECT IDENTIFIER body of {len(body)} octets exceeds the "
+            f"{_OID_MAX_BODY}-octet limit"
+        )
+
+    subids: list[int] = []
+    value = 0
+    octets_in_arc = 0
+    for octet in body:
+        if octets_in_arc == 0 and octet == 0x80:
+            # A leading continuation octet of 0x80 contributes no bits, so it
+            # is a second encoding of the same arc.
+            raise KeyFormatError("non-minimal OID arc encoding")
+        octets_in_arc += 1
+        if octets_in_arc > _OID_MAX_ARC_OCTETS:
+            raise KeyFormatError("OID subidentifier is implausibly large")
+        value = (value << 7) | (octet & 0x7F)
+        if not octet & 0x80:
+            subids.append(value)
+            value = 0
+            octets_in_arc = 0
+    if octets_in_arc:
+        raise KeyFormatError("truncated OBJECT IDENTIFIER")
+
+    # X.690 §8.19.4: split the first subidentifier back into its two arcs.
+    # arc1 is 0, 1 or 2; only under arc1 = 2 is arc2 unbounded.
+    first = subids[0]
+    arc1 = min(first // 40, 2)
+    arcs = [arc1, first - arc1 * 40, *subids[1:]]
+    return ".".join(str(a) for a in arcs)
+
+
+# ---------------------------------------------------------------------------
+# DER decoding
+# ---------------------------------------------------------------------------
+class DerReader:
+    """A strict, non-backtracking DER reader over a byte string.
+
+    Every accessor consumes exactly one TLV and validates it. ``finish()`` is
+    mandatory: a structure with trailing data is an error, not a partial
+    success, because trailing data is precisely how a second encoding of the
+    same key is smuggled past a parser.
+    """
+
+    __slots__ = ("_buf", "_end", "_pos")
+
+    def __init__(self, data: bytes, start: int = 0, end: int | None = None) -> None:
+        self._buf = data
+        self._pos = start
+        self._end = len(data) if end is None else end
+
+    @property
+    def remaining(self) -> int:
+        return self._end - self._pos
+
+    def _need(self, n: int) -> None:
+        if self.remaining < n:
+            raise KeyFormatError("truncated DER structure")
+
+    def _read_header(self, expected: int | None) -> tuple[int, int, int]:
+        """Return ``(tag, body_start, body_end)`` for the next TLV."""
+        self._need(2)
+        tag = self._buf[self._pos]
+        if expected is not None and tag != expected:
+            raise KeyFormatError(f"expected DER tag 0x{expected:02X}, found 0x{tag:02X}")
+        if tag & 0x1F == 0x1F:
+            raise KeyFormatError("high-tag-number form is not accepted")
+        length_octet = self._buf[self._pos + 1]
+        pos = self._pos + 2
+
+        if length_octet == 0x80:
+            raise KeyFormatError("indefinite-length encoding is BER, not DER")
+        if length_octet < 0x80:
+            length = length_octet
+        else:
+            count = length_octet & 0x7F
+            if count > 4:
+                raise KeyFormatError("DER length field is implausibly large")
+            if self._end - pos < count:
+                raise KeyFormatError("truncated DER length")
+            raw = self._buf[pos : pos + count]
+            if raw[0] == 0x00:
+                raise KeyFormatError("non-minimal DER length (leading zero)")
+            length = int.from_bytes(raw, "big")
+            if length < 0x80:
+                raise KeyFormatError("non-minimal DER length (long form for short value)")
+            pos += count
+
+        if self._end - pos < length:
+            raise KeyFormatError("DER length exceeds the available data")
+        return tag, pos, pos + length
+
+    def peek_tag(self) -> int | None:
+        """The next tag, or None at the end of this reader's extent."""
+        if self.remaining == 0:
+            return None
+        return self._buf[self._pos]
+
+    def read_sequence(self) -> DerReader:
+        _, start, end = self._read_header(TAG_SEQUENCE)
+        self._pos = end
+        return DerReader(self._buf, start, end)
+
+    def read_set(self) -> DerReader:
+        """Read a SET (or SET OF) and return a reader over its contents.
+
+        Needed by the RFC 5652 ``SignedData`` descent in
+        ``rfc3161_timestamp.extract_tst_info``, which has to distinguish an
+        *empty* ``signerInfos`` — a token nobody signed — from a populated one.
+        ``skip_any`` cannot tell those apart.
+        """
+        _, start, end = self._read_header(TAG_SET)
+        self._pos = end
+        return DerReader(self._buf, start, end)
+
+    def read_tagged(self, number: int, *, constructed: bool = True) -> DerReader:
+        tag = 0x80 | number | (0x20 if constructed else 0x00)
+        _, start, end = self._read_header(tag)
+        self._pos = end
+        return DerReader(self._buf, start, end)
+
+    def read_integer(self) -> int:
+        _, start, end = self._read_header(TAG_INTEGER)
+        body = self._buf[start:end]
+        if not body:
+            raise KeyFormatError("empty INTEGER")
+        if body[0] & 0x80:
+            raise KeyFormatError("negative INTEGER where a non-negative was required")
+        if len(body) > 1 and body[0] == 0x00 and not (body[1] & 0x80):
+            raise KeyFormatError("non-minimal INTEGER encoding")
+        self._pos = end
+        return int.from_bytes(body, "big")
+
+    def read_octet_string(self) -> bytes:
+        _, start, end = self._read_header(TAG_OCTET_STRING)
+        self._pos = end
+        return self._buf[start:end]
+
+    def read_bit_string(self) -> bytes:
+        _, start, end = self._read_header(TAG_BIT_STRING)
+        if end - start < 1:
+            raise KeyFormatError("empty BIT STRING")
+        unused = self._buf[start]
+        if unused != 0:
+            raise KeyFormatError(
+                f"BIT STRING has {unused} unused bits; this layer requires whole octets"
+            )
+        self._pos = end
+        return self._buf[start + 1 : end]
+
+    def read_oid(self) -> str:
+        _, start, end = self._read_header(TAG_OID)
+        self._pos = end
+        return oid_to_string(self._buf[start:end])
+
+    def read_null(self) -> None:
+        _, start, end = self._read_header(TAG_NULL)
+        if end != start:
+            raise KeyFormatError("NULL with a non-empty body")
+        self._pos = end
+
+    def read_any_raw(self) -> bytes:
+        """Consume one TLV and return its complete encoding."""
+        start_tlv = self._pos
+        _, _, end = self._read_header(None)
+        self._pos = end
+        return self._buf[start_tlv:end]
+
+    def skip_any(self) -> None:
+        _, _, end = self._read_header(None)
+        self._pos = end
+
+    def finish(self) -> None:
+        if self.remaining:
+            raise KeyFormatError(f"{self.remaining} trailing octet(s) after the DER structure")
+
+
+# ---------------------------------------------------------------------------
+# Canonical CBOR (RFC 8949 §4.2.1) — the subset COSE_Key needs
+# ---------------------------------------------------------------------------
+_CBOR_UINT = 0
+_CBOR_NEGINT = 1
+_CBOR_BYTES = 2
+_CBOR_TEXT = 3
+_CBOR_ARRAY = 4
+_CBOR_MAP = 5
+
+#: Deepest CBOR nesting this decoder will follow.
+#:
+#: A COSE_Key (RFC 9052 §7) is a map whose values are integers, byte strings
+#: and text strings — one level of nesting. Four leaves room for a future
+#: structure without leaving the recursion open, which it was: `0x81` (array of
+#: one) buys one stack frame per input octet, so a few hundred octets produced
+#: a ``RecursionError`` outside this module's exception contract.
+#:
+#: Counted so the name is true: the outermost item is depth 0, and a value at
+#: depth ``_CBOR_MAX_DEPTH`` is refused — four levels, not six. `depth >` rather
+#: than `>=` made the constant read a level looser than it said.
+_CBOR_MAX_DEPTH = 4
+
+
+def _cbor_head(major: int, value: int) -> bytes:
+    """Shortest-form head, as core deterministic encoding requires."""
+    if value < 24:
+        return bytes([(major << 5) | value])
+    if value < 0x100:
+        return bytes([(major << 5) | 24, value])
+    if value < 0x10000:
+        return bytes([(major << 5) | 25]) + value.to_bytes(2, "big")
+    if value < 0x100000000:
+        return bytes([(major << 5) | 26]) + value.to_bytes(4, "big")
+    if value < 0x10000000000000000:
+        return bytes([(major << 5) | 27]) + value.to_bytes(8, "big")
+    raise KeyFormatError("CBOR value exceeds 64 bits")
+
+
+def cbor_encode_canonical(value: Any) -> bytes:
+    """Encode under RFC 8949 core deterministic encoding.
+
+    Map keys are sorted by their *encoded bytes*, which is what makes a
+    COSE_Key thumbprint well defined: two orderings of the same key would
+    otherwise hash differently.
+    """
+    if isinstance(value, bool):
+        # bool is an int subclass; encoding True as 1 would be silent data loss.
+        raise KeyFormatError("booleans are not part of the accepted CBOR subset")
+    if isinstance(value, int):
+        if value >= 0:
+            return _cbor_head(_CBOR_UINT, value)
+        return _cbor_head(_CBOR_NEGINT, -value - 1)
+    if isinstance(value, bytes):
+        return _cbor_head(_CBOR_BYTES, len(value)) + value
+    if isinstance(value, str):
+        raw = value.encode("utf-8")
+        return _cbor_head(_CBOR_TEXT, len(raw)) + raw
+    if isinstance(value, (list, tuple)):
+        return _cbor_head(_CBOR_ARRAY, len(value)) + b"".join(
+            cbor_encode_canonical(v) for v in value
+        )
+    if isinstance(value, dict):
+        items = [(cbor_encode_canonical(k), cbor_encode_canonical(v)) for k, v in value.items()]
+        encoded_keys = [k for k, _ in items]
+        if len(set(encoded_keys)) != len(encoded_keys):
+            raise KeyFormatError("duplicate key in CBOR map")
+        items.sort(key=lambda kv: kv[0])
+        return _cbor_head(_CBOR_MAP, len(items)) + b"".join(k + v for k, v in items)
+    raise KeyFormatError(f"unsupported CBOR type {type(value).__name__}")
+
+
+class _CborReader:
+    __slots__ = ("_buf", "_pos")
+
+    def __init__(self, data: bytes) -> None:
+        self._buf = data
+        self._pos = 0
+
+    @property
+    def pos(self) -> int:
+        return self._pos
+
+    def _need(self, n: int) -> None:
+        if len(self._buf) - self._pos < n:
+            raise KeyFormatError("truncated CBOR")
+
+    def _head(self) -> tuple[int, int]:
+        self._need(1)
+        initial = self._buf[self._pos]
+        self._pos += 1
+        major, extra = initial >> 5, initial & 0x1F
+
+        if extra < 24:
+            return major, extra
+        if extra == 24:
+            self._need(1)
+            value = self._buf[self._pos]
+            self._pos += 1
+            if value < 24:
+                raise KeyFormatError("non-minimal CBOR head")
+            return major, value
+        if extra in (25, 26, 27):
+            width = 2 << (extra - 25)
+            self._need(width)
+            value = int.from_bytes(self._buf[self._pos : self._pos + width], "big")
+            self._pos += width
+            minimum = (24, 0x100, 0x10000, 0x100000000)[extra - 24]
+            if value < minimum:
+                raise KeyFormatError("non-minimal CBOR head")
+            return major, value
+        if extra == 31:
+            raise KeyFormatError("indefinite-length CBOR is not deterministic")
+        raise KeyFormatError(f"reserved CBOR additional information {extra}")
+
+    def decode(self, depth: int = 0) -> Any:
+        """Decode one CBOR item.
+
+        ``depth`` bounds nesting. Without it, ``0x81`` (array of one) costs an
+        attacker a single octet per stack frame, so a few hundred octets of
+        input drove a ``RecursionError`` straight past the ``KeyFormatError``
+        boundary that ``cose_to_public_key`` / ``cose_to_private_key`` promise
+        — and on a thread with a small stack, past the interpreter entirely.
+        A COSE_Key is a flat map of scalars and byte strings, so the limit
+        rejects the whole class rather than merely surviving it.
+        """
+        if depth >= _CBOR_MAX_DEPTH:
+            raise KeyFormatError(f"CBOR nesting deeper than {_CBOR_MAX_DEPTH} levels")
+        major, value = self._head()
+        if major == _CBOR_UINT:
+            return value
+        if major == _CBOR_NEGINT:
+            return -1 - value
+        if major == _CBOR_BYTES:
+            self._need(value)
+            out = self._buf[self._pos : self._pos + value]
+            self._pos += value
+            return out
+        if major == _CBOR_TEXT:
+            self._need(value)
+            raw = self._buf[self._pos : self._pos + value]
+            self._pos += value
+            try:
+                return raw.decode("utf-8")
+            except UnicodeDecodeError:
+                raise KeyFormatError("invalid UTF-8 in CBOR text string") from None
+        if major == _CBOR_ARRAY:
+            # `value` is bounded by the head, but an 8-byte head can declare
+            # 2^64 elements; `_need(1)` inside the first `decode` is what stops
+            # the list comprehension from being asked to preallocate. Check the
+            # declared count against the octets that remain before entering it,
+            # since every element costs at least one octet.
+            self._need(value)
+            return [self.decode(depth + 1) for _ in range(value)]
+        if major == _CBOR_MAP:
+            # Every pair costs at least two octets.
+            self._need(2 * value)
+            mapping: dict[Any, Any] = {}
+            previous: bytes | None = None
+            for _ in range(value):
+                key_start = self._pos
+                key = self.decode(depth + 1)
+                key_bytes = self._buf[key_start : self._pos]
+                if previous is not None and key_bytes <= previous:
+                    raise KeyFormatError(
+                        "CBOR map keys are not in canonical order (or are duplicated)"
+                    )
+                previous = key_bytes
+                if isinstance(key, (list, dict)):
+                    raise KeyFormatError("non-scalar CBOR map key")
+                mapping[key] = self.decode(depth + 1)
+            return mapping
+        raise KeyFormatError(f"unsupported CBOR major type {major}")
+
+
+def cbor_decode_canonical(data: bytes) -> Any:
+    """Decode one canonically-encoded CBOR item, rejecting trailing data."""
+    reader = _CborReader(data)
+    value = reader.decode()
+    if reader.pos != len(data):
+        raise KeyFormatError(f"{len(data) - reader.pos} trailing octet(s) after the CBOR item")
+    return value

@@ -9,6 +9,15 @@ on:
     branches: [ main, develop ]
   workflow_dispatch:
 
+# Least privilege, matching every other workflow in this directory. This file
+# was the one without a `permissions:` block, so its jobs — including the
+# `security` job that runs bandit, pip-audit and the Bandit severity gate —
+# inherited whatever the repository or organisation default is. Where that
+# default is "read and write", those jobs held write access to contents,
+# issues and packages for no reason at all.
+permissions:
+  contents: read
+
 # Collapse overlapping runs on the same ref; feature branches and PR
 # heads cancel in-flight runs, main is preserved.
 concurrency:
@@ -374,8 +383,14 @@ jobs:
           # toolchain and pre-commit (no unpinned ruff, no mypy 1.x/2.x split).
           # types-PyYAML keeps tools/check_workflow_commands.py inside
           # `mypy --strict`; tests/ imports it, so mypy follows into it.
+          # pytest is pinned here even though this job runs no tests:
+          # `pytest.*` is under `ignore_missing_imports`, so without it
+          # `mypy --strict tests/` types every pytest call as `Any` and its
+          # verdict changes with whether pytest happens to be installed.
+          # See the longer note in ci.yml::code-quality.
           pip install "black==26.5.1" "ruff==0.15.20" "mypy==2.1.0" \
-                      "PyYAML==6.0.3" "types-PyYAML==6.0.12.20260724"
+                      "PyYAML==6.0.3" "types-PyYAML==6.0.12.20260724" \
+                      "pytest==9.1.1"
 
       - name: Lint (ruff)
         run: ruff check .
@@ -423,19 +438,20 @@ jobs:
       # finding fails the build.  Justified suppressions must carry an
       # inline `# nosec` with a tracking ID, validated by
       # tools/check_suppression_hygiene.py per INVARIANT-13.
-      - name: Security scan (bandit, fail on Medium+)
-        run: |
-          bandit -r ama_cryptography/ \
-            --severity-level medium \
-            --confidence-level medium \
-            --exit-zero \
-            > bandit-medium-plus.txt
-          echo "=== Bandit Medium/High findings ==="
-          cat bandit-medium-plus.txt
-          if grep -E '^\s*(Medium|High):\s*[1-9]' bandit-medium-plus.txt; then
-            echo "::error::Bandit reports unjustified Medium/High findings — see report above."
-            exit 1
-          fi
+      #
+      # The report is deliberately unfiltered — no `--severity-level` /
+      # `--confidence-level` — because the gate cross-checks `results`
+      # against `metrics._totals` to prove nothing was pruned before it
+      # looked, and applies the thresholds itself.  It reads JSON rather
+      # than grepping the text report, which prints a by-severity and a
+      # by-confidence tally under the same labels; the previous
+      # `grep -E '^\s*(Medium|High):\s*[1-9]'` matched the confidence
+      # one and fired on a tree with zero Medium+ severity findings.
+      - name: Security scan (bandit, unfiltered JSON report)
+        run: bandit -r ama_cryptography/ -f json -o bandit-report.json --exit-zero
+
+      - name: Bandit severity gate (fail on Medium+)
+        run: python3 tools/check_bandit_severity.py bandit-report.json
 
   # Benchmark Regression Detection (Wheel Install)
   # Required job — fails the workflow on detected regression.

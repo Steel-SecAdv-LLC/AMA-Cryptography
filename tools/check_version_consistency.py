@@ -32,15 +32,31 @@ Exit code:
 
 from __future__ import annotations
 
+import ast
 import re
 import sys
-from pathlib import Path
+from pathlib import Path, PurePath
 
 REPO = Path(__file__).resolve().parent.parent
 
 
 def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
+
+
+def repo_relative(path: PurePath, repo: PurePath) -> str:
+    """``path`` relative to ``repo``, in POSIX form on every platform.
+
+    ``str(Path.relative_to(...))`` yields ``ama_cryptography\\ascon.py`` on
+    Windows and ``ama_cryptography/ascon.py`` everywhere else.  That difference
+    is not cosmetic here: the string is used as half of the lookup key into
+    :data:`C_CONSTANT_ALIASES`, whose keys are written with forward slashes, so
+    on Windows every alias lookup missed and the aliased constants went
+    unchecked while the gate still reported success.  It is also what a reviewer
+    greps out of a CI log, and a path that changes shape with the runner is a
+    path you cannot grep for.  Normalise once, here.
+    """
+    return path.relative_to(repo).as_posix()
 
 
 _C_VERSION_LITERAL_RE = re.compile(r'"\d+\.\d+\.\d+"')
@@ -157,12 +173,14 @@ def scan_c_sources_for_version_literals(root: Path) -> list[str]:
             # Falls through to `relative_to(root.parent)` for callers
             # passing a `root` outside the repo (e.g. tmp paths from
             # the unit tests). (Copilot Review 2026-04-27.)
+            # `repo_relative` also normalises the separator, so the reported
+            # path reads the same on a Windows runner as on a Linux one.
             if REPO in path.parents or path == REPO:
-                rel = path.relative_to(REPO)
+                rel = repo_relative(path, REPO)
             elif root.parent in path.parents or path == root.parent:
-                rel = path.relative_to(root.parent)
+                rel = repo_relative(path, root.parent)
             else:
-                rel = path
+                rel = path.as_posix()
             hits.append(f"{rel}:{i + 1}: {original_lines[i].strip()}")
 
     return hits
@@ -199,7 +217,7 @@ def scan_declared_versions(repo: Path) -> list[tuple[str, int, str, str]]:
             if _skip(path):
                 continue
             text = path.read_text(encoding="utf-8")
-            rel = str(path.relative_to(repo))
+            rel = repo_relative(path, repo)
             for pat, label in ((_PY_DUNDER_RE, "__version__"), (_PY_DOCSTRING_RE, "Version:")):
                 for m in pat.finditer(text):
                     found.append((rel, text[: m.start()].count("\n") + 1, label, m.group(1)))
@@ -209,11 +227,166 @@ def scan_declared_versions(repo: Path) -> list[tuple[str, int, str, str]]:
             if path.suffix not in (".c", ".h") or not path.is_file() or _skip(path):
                 continue
             text = path.read_text(encoding="utf-8")
-            rel = str(path.relative_to(repo))
+            rel = repo_relative(path, repo)
             for m in _C_ATVERSION_RE.finditer(text):
                 found.append((rel, text[: m.start()].count("\n") + 1, "@version", m.group(1)))
 
     return found
+
+
+# ---------------------------------------------------------------------------
+# C constant transcriptions
+# ---------------------------------------------------------------------------
+# The Python layer mirrors integer constants that are *defined* in
+# include/ama_cryptography.h: error codes, key and tag sizes, algorithm and
+# policy selectors. Each one is a second declaration of a value the C header
+# owns, which is the same duplication this script exists to police — a version
+# string is simply the one everybody notices when it drifts.
+#
+# Nothing checked these. `AMA_ERROR_INVALID_PARAM = -1` was transcribed into
+# `pqc_backends.py` with no gate at all, and the same value appears again in
+# `agent_binding.py`. Drift here is worse than a stale version badge: a Python
+# module comparing a return code against the wrong number silently stops
+# detecting the failure it was written to detect, and every test that exercises
+# only the success path still passes.
+#
+# Matching is mechanical rather than curated so a *new* mirror is covered the
+# day it is written: a module-level or class-level `NAME = <int>` in
+# ama_cryptography/ is checked whenever `NAME` (leading underscores stripped),
+# or `AMA_` + that name, is a constant the header defines. Names that do not
+# correspond to anything in the header are ignored — a Python-only constant is
+# not a transcription — except where C_CONSTANT_ALIASES says otherwise.
+
+# Deliberate name changes across the boundary. The header spells Ascon's sizes
+# `..._LEN` and prefixes them with the subsystem; the Python module drops the
+# prefix and says `..._BYTES`, matching its sibling modules. Mechanically
+# unrelatable, genuinely the same constant, and therefore worth pinning by hand
+# rather than leaving unchecked.
+C_CONSTANT_ALIASES = {
+    ("ama_cryptography/ascon.py", "AEAD128_KEY_BYTES"): "AMA_ASCON_AEAD128_KEY_LEN",
+    ("ama_cryptography/ascon.py", "AEAD128_NONCE_BYTES"): "AMA_ASCON_AEAD128_NONCE_LEN",
+    ("ama_cryptography/ascon.py", "AEAD128_TAG_BYTES"): "AMA_ASCON_AEAD128_TAG_LEN",
+    ("ama_cryptography/ascon.py", "HASH256_DIGEST_BYTES"): "AMA_ASCON_HASH256_DIGEST_LEN",
+    (
+        "ama_cryptography/agent_binding.py",
+        "SIGNATURE_CONTEXT_BYTES",
+    ): "AMA_AGENT_BINDING_CONTEXT_BYTES",
+}
+
+#: Non-vacuity floor for the transcription scan. 53 mirrors resolve today; the
+#: floor sits below that so ordinary churn does not trip it, while a rename that
+#: disconnects the name-matching rule does. See the use site in ``main()``.
+_MIN_C_CONSTANT_TRANSCRIPTIONS = 40
+
+_C_DEFINE_RE = re.compile(
+    r"^\s*#\s*define\s+(AMA_[A-Za-z0-9_]+)\s+(0[xX][0-9a-fA-F]+|-?\d+)[uUlL]*\s*$", re.M
+)
+_C_ENUM_RE = re.compile(r"^\s*(AMA_[A-Za-z0-9_]+)\s*=\s*(0[xX][0-9a-fA-F]+|-?\d+)\s*[,}]", re.M)
+
+
+def parse_c_constants(header: Path) -> dict[str, int]:
+    """Every integer constant the public header defines, by name.
+
+    Covers object-like ``#define``s and enumerator initialisers. Comments are
+    stripped first so a value mentioned in prose cannot be mistaken for a
+    definition; implicitly-numbered enumerators (``A, B, C``) are skipped
+    deliberately, because their values depend on position and a transcription
+    that got one wrong is a different bug from a transcription that drifted.
+    """
+    text = header.read_text(encoding="utf-8")
+    text = re.sub(r"/\*.*?\*/", lambda m: "\n" * m.group(0).count("\n"), text, flags=re.DOTALL)
+    text = re.sub(r"//.*", "", text)
+    found: dict[str, int] = {}
+    for pattern in (_C_DEFINE_RE, _C_ENUM_RE):
+        for match in pattern.finditer(text):
+            found[match.group(1)] = int(match.group(2), 0)
+    return found
+
+
+def _int_literal(node: ast.expr) -> int | None:
+    """The value of an integer literal, or None if this is not one.
+
+    ``True``/``False`` are `int` subclasses in Python and are excluded: a flag
+    is not a transcription of a C constant.
+    """
+    if (
+        isinstance(node, ast.Constant)
+        and isinstance(node.value, int)
+        and not isinstance(node.value, bool)
+    ):
+        return node.value
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
+        inner = _int_literal(node.operand)
+        return None if inner is None else -inner
+    return None
+
+
+def _python_int_constants(path: Path) -> list[tuple[int, str, int]]:
+    """``(lineno, name, value)`` for every module- or class-level int constant."""
+    out: list[tuple[int, str, int]] = []
+
+    def walk(node: ast.AST) -> None:
+        for child in ast.iter_child_nodes(node):
+            if (
+                isinstance(child, ast.Assign)
+                and len(child.targets) == 1
+                and isinstance(child.targets[0], ast.Name)
+            ):
+                value = _int_literal(child.value)
+                if value is not None:
+                    out.append((child.lineno, child.targets[0].id, value))
+            if isinstance(child, ast.ClassDef):
+                walk(child)
+
+    walk(ast.parse(path.read_text(encoding="utf-8")))
+    return out
+
+
+def scan_c_constant_transcriptions(repo: Path, header: Path | None = None) -> tuple[list[str], int]:
+    """Check every Python mirror of a C header constant.
+
+    Returns ``(problems, checked)`` — the second value is what makes this gate
+    self-auditing: if a refactor renames the constants so that nothing matches
+    any more, ``checked`` collapses to zero and ``main()`` reports that as a
+    failure rather than printing a reassuring "0 mismatches".
+    """
+    header = header or (repo / "include" / "ama_cryptography.h")
+    if not header.is_file():
+        return ([f"  - {header} is missing; cannot check C constant transcriptions"], 0)
+    c_constants = parse_c_constants(header)
+    if not c_constants:
+        return ([f"  - no integer constants parsed out of {header.name}"], 0)
+
+    problems: list[str] = []
+    checked = 0
+    package = repo / "ama_cryptography"
+    for path in sorted(package.rglob("*.py")):
+        if any(part in {"__pycache__", "build", "vendor"} for part in path.parts):
+            continue
+        rel = repo_relative(path, repo)
+        for lineno, name, value in _python_int_constants(path):
+            bare = name.lstrip("_")
+            candidates = [
+                C_CONSTANT_ALIASES.get((rel, name)),
+                bare if bare in c_constants else None,
+                f"AMA_{bare}" if f"AMA_{bare}" in c_constants else None,
+            ]
+            c_name = next((c for c in candidates if c), None)
+            if c_name is None:
+                continue
+            if c_name not in c_constants:
+                problems.append(
+                    f"      {rel}:{lineno}: {name} is aliased to {c_name}, which the "
+                    "header does not define"
+                )
+                continue
+            checked += 1
+            if value != c_constants[c_name]:
+                problems.append(
+                    f"      {rel}:{lineno}: {name} = {value} but "
+                    f"{c_name} = {c_constants[c_name]} in {header.name}"
+                )
+    return problems, checked
 
 
 def extract(file: str, pattern: str) -> str | None:
@@ -459,6 +632,30 @@ def main() -> int:
             failures.append(f"      {row}")
     else:
         print(f"OK    declared version stamps ({len(stamps)} checked)          = {canonical}")
+
+    # Python mirrors of C header constants — error codes, key sizes, selectors.
+    # `AMA_ERROR_INVALID_PARAM = -1` was transcribed into the Python layer with
+    # nothing checking it; a wrong error code makes a module stop detecting the
+    # failure it exists to detect, while every success-path test still passes.
+    const_problems, const_checked = scan_c_constant_transcriptions(REPO)
+    if const_problems:
+        failures.append(
+            f"  - Python constants disagree with include/ama_cryptography.h "
+            f"({len(const_problems)}):"
+        )
+        failures.extend(const_problems)
+    elif const_checked < _MIN_C_CONSTANT_TRANSCRIPTIONS:
+        # A gate that silently stops matching anything is worse than no gate,
+        # because it keeps reporting success. 53 mirrors exist today; the floor
+        # is set below that so ordinary churn does not trip it, but a rename
+        # that disconnects the scan does.
+        failures.append(
+            f"  - only {const_checked} C constant transcription(s) were matched, below "
+            f"the floor of {_MIN_C_CONSTANT_TRANSCRIPTIONS}. The name-matching rule has "
+            "probably stopped resolving; a check that matches nothing passes vacuously."
+        )
+    else:
+        print(f"OK    C constant transcriptions ({const_checked} checked)")
 
     if failures:
         print(

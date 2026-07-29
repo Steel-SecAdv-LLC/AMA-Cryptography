@@ -281,3 +281,219 @@ def test_declared_version_scan_flags_a_stale_stamp(tool_module: ModuleType, tmp_
     seen = {(label, val) for _rel, _ln, label, val in stamps}
     assert ("__version__", "3.0.0") in seen
     assert ("Version:", "3.0.0") in seen
+
+
+# ===========================================================================
+# C constant transcriptions
+# ===========================================================================
+# The Python layer mirrors integer constants the public C header owns — error
+# codes, key and tag sizes, algorithm and policy selectors. Every one is a
+# second declaration of a value defined elsewhere, which is the same
+# duplication this tool exists to police; a version string is just the one
+# anybody notices when it drifts.
+#
+# `AMA_ERROR_INVALID_PARAM = -1` reached `pqc_backends.py` with no gate at all.
+# Drift there is quieter than a stale version badge and worse: a module
+# comparing a return code against the wrong number stops detecting the failure
+# it was written to detect, and every success-path test still passes.
+def test_c_constants_parse_out_of_the_real_header(tool_module: ModuleType) -> None:
+    header = REPO_ROOT / "include" / "ama_cryptography.h"
+    constants = tool_module.parse_c_constants(header)
+    # Both definition shapes must be reached: an object-like #define and an
+    # enumerator. If either regex stops matching, the gate silently narrows.
+    assert constants["AMA_ML_DSA_65_PUBLIC_KEY_BYTES"] == 1952  # #define
+    assert constants["AMA_ERROR_INVALID_PARAM"] == -1  # enumerator
+    assert constants["AMA_SUCCESS"] == 0
+    assert constants["AMA_AGENT_CAP_DELEGATE"] == 0x10  # hex, u-suffixed
+    assert len(constants) > 80
+
+
+def test_the_repository_transcriptions_all_agree(tool_module: ModuleType) -> None:
+    """The anchor: every Python mirror equals its C definition, right now."""
+    problems, checked = tool_module.scan_c_constant_transcriptions(REPO_ROOT)
+    assert problems == [], "\n".join(problems)
+    assert (
+        checked >= tool_module._MIN_C_CONSTANT_TRANSCRIPTIONS
+    ), f"only {checked} transcriptions matched; the scan is not resolving names"
+
+
+def test_the_scan_catches_a_drifted_constant(tool_module: ModuleType, tmp_path: Path) -> None:
+    """Failure direction, on the exact constant that had no gate."""
+    header = tmp_path / "include" / "ama_cryptography.h"
+    header.parent.mkdir(parents=True)
+    header.write_text("typedef enum {\n    AMA_ERROR_INVALID_PARAM = -1,\n} ama_error_t;\n")
+    pkg = tmp_path / "ama_cryptography"
+    pkg.mkdir()
+    (pkg / "mirror.py").write_text("AMA_ERROR_INVALID_PARAM = -2\n")
+    problems, checked = tool_module.scan_c_constant_transcriptions(tmp_path, header)
+    assert checked == 1
+    assert any("AMA_ERROR_INVALID_PARAM" in p and "-2" in p for p in problems), problems
+
+
+def test_the_scan_matches_through_a_leading_underscore_and_a_dropped_prefix(
+    tool_module: ModuleType, tmp_path: Path
+) -> None:
+    """The two naming conventions the Python layer actually uses.
+
+    `_AMA_ERROR_VERIFY_FAILED` (private mirror, full name) and
+    `ED25519_PUBLIC_KEY_BYTES` (public constant, `AMA_` prefix dropped) must
+    both resolve, or half the mirrors in the package go unchecked while the
+    tool reports success.
+    """
+    header = tmp_path / "include" / "ama_cryptography.h"
+    header.parent.mkdir(parents=True)
+    header.write_text(
+        "typedef enum {\n    AMA_ERROR_VERIFY_FAILED = -4,\n} ama_error_t;\n"
+        "#define AMA_ED25519_PUBLIC_KEY_BYTES 32\n"
+    )
+    pkg = tmp_path / "ama_cryptography"
+    pkg.mkdir()
+    (pkg / "mirror.py").write_text("_AMA_ERROR_VERIFY_FAILED = -5\nED25519_PUBLIC_KEY_BYTES = 31\n")
+    problems, checked = tool_module.scan_c_constant_transcriptions(tmp_path, header)
+    assert checked == 2
+    assert len(problems) == 2, problems
+
+
+def test_the_scan_reaches_class_level_constants(tool_module: ModuleType, tmp_path: Path) -> None:
+    """`crypto_api.py` keeps its size constants inside a class, so a scan that
+    only walked module level would miss them entirely."""
+    header = tmp_path / "include" / "ama_cryptography.h"
+    header.parent.mkdir(parents=True)
+    header.write_text("#define AMA_ED25519_SIGNATURE_BYTES 64\n")
+    pkg = tmp_path / "ama_cryptography"
+    pkg.mkdir()
+    (pkg / "sizes.py").write_text("class Sizes:\n    ED25519_SIGNATURE_BYTES = 63\n")
+    problems, checked = tool_module.scan_c_constant_transcriptions(tmp_path, header)
+    assert checked == 1 and len(problems) == 1, (problems, checked)
+
+
+def test_unrelated_python_constants_are_not_flagged(
+    tool_module: ModuleType, tmp_path: Path
+) -> None:
+    """A Python-only constant is not a transcription. Matching one would make
+    the gate un-satisfiable and push a maintainer to rename working code."""
+    header = tmp_path / "include" / "ama_cryptography.h"
+    header.parent.mkdir(parents=True)
+    header.write_text("#define AMA_ED25519_SIGNATURE_BYTES 64\n")
+    pkg = tmp_path / "ama_cryptography"
+    pkg.mkdir()
+    (pkg / "local.py").write_text("_TIMING_ITERATIONS = 10000\nMAX_RETRIES = 3\nDEBUG = True\n")
+    problems, checked = tool_module.scan_c_constant_transcriptions(tmp_path, header)
+    assert (problems, checked) == ([], 0)
+
+
+def test_every_alias_names_a_constant_the_header_defines(tool_module: ModuleType) -> None:
+    """The hand-written alias table is itself a transcription and can rot.
+
+    An alias pointing at a constant the header no longer defines would silently
+    stop checking the Python constant it was added for.
+    """
+    constants = tool_module.parse_c_constants(REPO_ROOT / "include" / "ama_cryptography.h")
+    for (rel, name), c_name in tool_module.C_CONSTANT_ALIASES.items():
+        assert c_name in constants, f"{rel}:{name} aliases {c_name}, which is not in the header"
+        assert (REPO_ROOT / rel).is_file(), f"{rel} does not exist"
+
+
+def test_an_alias_pointing_at_nothing_is_reported(
+    tool_module: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    header = tmp_path / "include" / "ama_cryptography.h"
+    header.parent.mkdir(parents=True)
+    header.write_text("#define AMA_SOMETHING_ELSE 1\n")
+    pkg = tmp_path / "ama_cryptography"
+    pkg.mkdir()
+    (pkg / "aliased.py").write_text("LOCAL_NAME = 16\n")
+    monkeypatch.setattr(
+        tool_module,
+        "C_CONSTANT_ALIASES",
+        {("ama_cryptography/aliased.py", "LOCAL_NAME"): "AMA_GONE"},
+    )
+    problems, _ = tool_module.scan_c_constant_transcriptions(tmp_path, header)
+    assert any("AMA_GONE" in p and "does not define" in p for p in problems), problems
+
+
+def test_a_missing_header_is_a_failure_not_a_pass(tool_module: ModuleType, tmp_path: Path) -> None:
+    """Fail closed: no header means nothing was verified, which must not read
+    as everything being fine."""
+    problems, checked = tool_module.scan_c_constant_transcriptions(tmp_path, tmp_path / "nope.h")
+    assert checked == 0 and problems, (problems, checked)
+
+
+def test_repo_relative_is_posix_on_every_platform(tool_module: ModuleType) -> None:
+    """The alias-table lookup key must not change shape with the runner OS.
+
+    ``C_CONSTANT_ALIASES`` is keyed by ``ama_cryptography/ascon.py``.  With
+    ``str(Path.relative_to(...))`` the scan derived
+    ``ama_cryptography\\ascon.py`` on Windows, so every alias lookup missed:
+    the aliased Ascon and agent-binding constants went unchecked on the Windows
+    runners while the gate still printed a clean result, and the negative test
+    below reported no problem at all.
+
+    Driven through ``PureWindowsPath`` so this is a real regression test on
+    Linux too — a Windows-only reproduction is one nobody runs before pushing.
+    """
+    from pathlib import PurePosixPath, PureWindowsPath
+
+    win = tool_module.repo_relative(
+        PureWindowsPath(r"C:\src\repo\ama_cryptography\ascon.py"),
+        PureWindowsPath(r"C:\src\repo"),
+    )
+    assert win == "ama_cryptography/ascon.py", win
+
+    posix = tool_module.repo_relative(
+        PurePosixPath("/src/repo/ama_cryptography/ascon.py"), PurePosixPath("/src/repo")
+    )
+    assert posix == "ama_cryptography/ascon.py", posix
+    assert win == posix
+
+
+def test_alias_keys_are_written_in_the_form_the_scan_produces(
+    tool_module: ModuleType,
+) -> None:
+    """Both halves of the contract, pinned together.
+
+    ``repo_relative`` emits forward slashes; a hand-written key with a
+    backslash would therefore never match, and the constant it names would go
+    unchecked without anything failing.
+    """
+    for key in tool_module.C_CONSTANT_ALIASES:
+        rel = key[0]
+        assert "\\" not in rel, f"alias key {rel!r} is not in POSIX form"
+        assert not rel.startswith("/"), f"alias key {rel!r} is not repo-relative"
+
+
+def test_aliased_constants_are_actually_checked(tool_module: ModuleType) -> None:
+    """Non-vacuity for the alias table on the *real* tree.
+
+    ``test_an_alias_pointing_at_nothing_is_reported`` monkeypatches the table,
+    so it cannot notice that the shipped entries resolve to nothing.  This one
+    perturbs each real alias in turn and demands the scan complain: if the
+    lookup silently misses — as it did on Windows — no perturbation is
+    detected and this fails.
+    """
+    header = REPO_ROOT / "include" / "ama_cryptography.h"
+    for (rel, name), c_name in tool_module.C_CONSTANT_ALIASES.items():
+        real = tool_module.parse_c_constants(header)[c_name]
+        problems, checked = tool_module.scan_c_constant_transcriptions(REPO_ROOT, header)
+        assert checked > 0 and not problems, (problems, checked)
+        # Now claim the header says something else, and require the mismatch
+        # to surface against this alias specifically.
+        patched = dict(tool_module.parse_c_constants(header))
+        patched[c_name] = real + 1
+        problems = _scan_with_constants(tool_module, patched, header)
+        assert any(rel in p and name in p and c_name in p for p in problems), (
+            f"perturbing {c_name} did not surface through the {rel}:{name} alias",
+            problems,
+        )
+
+
+def _scan_with_constants(
+    tool_module: ModuleType, constants: dict[str, int], header: Path
+) -> list[str]:
+    """Run the transcription scan against a doctored view of the header."""
+    import unittest.mock
+
+    with unittest.mock.patch.object(tool_module, "parse_c_constants", lambda _h: constants):
+        problems, _ = tool_module.scan_c_constant_transcriptions(REPO_ROOT, header)
+    reported: list[str] = problems
+    return reported

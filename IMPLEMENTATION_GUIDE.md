@@ -17,12 +17,14 @@ Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
 
 Choose the appropriate verification profile for your use case:
 
-| Profile | Dilithium Required | RFC 3161 Required | Use Case |
-|---------|-------------------|-------------------|----------|
+| Profile | Dilithium Required | RFC 3161 Binding Required | Use Case |
+|---------|-------------------|---------------------------|----------|
 | **dev** | No | No | Local testing, prototyping |
 | **classical** | No | Optional | Legacy environments, pre-quantum systems |
 | **hybrid** | Yes | Optional | Typical production deployment |
 | **strict** | Yes | Yes | High-assurance, regulatory compliance |
+
+> The two "Required" columns are not comparable in strength. Dilithium's is signature verification. RFC 3161's is the §2.4.2 *message-imprint binding* — AMA verifies no TSA signature and no certificate chain, so an adversary who can supply a token satisfies it unaided ([INVARIANT-37](INVARIANTS.md#invariant-37--a-verification-api-must-not-claim-a-check-it-does-not-perform)). A `strict` profile therefore still requires the token's provenance to be established out of band.
 
 **Example: Strict profile verification**
 ```python
@@ -31,9 +33,15 @@ results = verify_crypto_package(codes, helix_params, pkg, hmac_key)
 # Strict profile: require all checks
 if not (results["content_hash"] and results["hmac"] and results["ed25519"]
         and results["dilithium"] is True and results["timestamp"]
-        and results["rfc3161"] is True):
+        and results["rfc3161_binding"] is True):
     raise ValueError("Package failed strict verification profile")
 ```
+
+`rfc3161_binding` establishes that the stored token refers to this package. It
+does **not** establish that a trusted authority issued it, so a strict profile
+must pair it with whatever control does. (The former key name `rfc3161` still
+works and returns the same value, but reading it emits a `DeprecationWarning`:
+the bare name read as attestation, which is exactly the misreading it caused.)
 
 **Note:** The default behavior requires quantum signatures when Dilithium libraries are available (`require_quantum_signatures=None`). Set `require_quantum_signatures=False` only for compatibility testing.
 

@@ -10,7 +10,7 @@ CC = gcc
 # build).  Without this flag the harness silently exercised the table-based
 # S-box reference path and produced misleading "[KNOWN - table-based]"
 # attribution for failures actually unrelated to the S-box.
-CFLAGS = -O2 -Wall -Wextra -I../../include -DAMA_AES_CONSTTIME=ON
+CFLAGS = -O2 -Wall -Wextra -I../../include -I../../tests/c/dudect -DAMA_AES_CONSTTIME=ON
 LDFLAGS = -lm -lpthread
 
 # Source directories

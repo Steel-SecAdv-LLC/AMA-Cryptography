@@ -254,16 +254,18 @@ Choose the verification profile appropriate for your deployment:
 | `dev` | None | Local testing, prototyping |
 | `classical` | Ed25519 only | Legacy environments |
 | `hybrid` | Ed25519 + ML-DSA-65 | Typical production |
-| `strict` | All layers + RFC 3161 | High-assurance, regulatory |
+| `strict` | All layers + RFC 3161 binding | High-assurance, regulatory |
 
 ```python
 # Strict profile: require all layers
 results = verify_crypto_package(codes, helix_params, pkg, hmac_key)
 if not (results["content_hash"] and results["hmac"]
         and results["ed25519"] and results["dilithium"] is True
-        and results["rfc3161"] is True):
+        and results["rfc3161_binding"] is True):
     raise ValueError("Package failed strict verification profile")
 ```
+
+`rfc3161_binding` establishes that the stored token refers to this package. It does **not** establish that a trusted authority issued it — AMA verifies no TSA signature and no certificate chain — so a `strict` profile must pair it with whatever control does establish the token's provenance. (The old key name `rfc3161` still returns the same value but emits a `DeprecationWarning` when read: the bare name read as attestation, which is the misreading it caused.)
 
 ---
 

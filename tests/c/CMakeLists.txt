@@ -115,6 +115,15 @@ add_executable(test_ascon test_ascon.c)
 target_link_libraries(test_ascon ama_cryptography_test)
 add_test(NAME test_ascon COMMAND test_ascon
          WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+# HSS/LMS verification (RFC 8554).  Reads the vendored Appendix F corpus from
+# tests/kat/keyformats/ rather than transcribing it, so — like test_ascon and
+# test_kat — it needs the source tree as its working directory.  LMS is in the
+# unconditional source list (it consumes only SHA-256), so this runs in the
+# AMA_USE_NATIVE_PQC=OFF configuration too.
+add_executable(test_lms test_lms.c)
+target_link_libraries(test_lms ama_cryptography_test)
+add_test(NAME test_lms COMMAND test_lms
+         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 add_ama_test(test_ed25519 test_ed25519.c)
 
 # RFC 8032 5.1.7 canonical-S enforcement (INVARIANT-26).  Built
@@ -201,6 +210,14 @@ if(AMA_USE_NATIVE_PQC)
     # when native PQC is enabled — see the top-level CMakeLists.txt).
     add_ama_test(test_secp256k1 test_secp256k1.c)
     add_ama_test(test_frost test_frost.c)
+    # NIST prime curves (src/c/ama_nistp.c) plus the FIPS 203/204 parameter
+    # tables.  Covers the three things the Python suite and the Wycheproof
+    # corpus structurally cannot reach: the hardcoded Montgomery constants
+    # re-derived from p and n, the windowed scalar multiplication against a
+    # naive double-and-add reference, and the derived byte lengths in the
+    # ML-KEM / ML-DSA parameter blocks.  All three use AMA_TESTING_MODE-only
+    # exports that appear in no public header.
+    add_ama_test(test_nistp test_nistp.c)
 endif()
 
 # Constant-time bitsliced AES-256 (NIST SP 800-38A §F.1.5 KAT).
@@ -227,6 +244,29 @@ if(AMA_USE_NATIVE_PQC)
         message(STATUS "AMA_AES_CONSTTIME=OFF — skipping test_kat "
                        "(native AES-256 DRBG symbols not exported)")
     endif()
+
+    # The PQ private-key consistency predicates must consume no entropy.
+    # Both are reachable from the key-file parser (load_pkcs8 of an
+    # expandedKey-only key), so a CSPRNG draw there is an attacker-triggered
+    # entropy drain, an un-KAT-able predicate, and a FIPS 140-3 self-test that
+    # depends on the very RNG whose health checks may not have run.  The test
+    # poisons the randombytes hook (counts and fails) and requires the checks
+    # to pass anyway — and to still reject a corrupted key, so "no entropy
+    # consumed" cannot be bought by not checking.
+    add_ama_test(test_pq_privkey_check_determinism test_pq_privkey_check_determinism.c)
+
+    # Stack high-water mark of the parser-reachable PQ validation entry points.
+    # load_pkcs8 calls these on every expandedKey-only key it imports, so their
+    # frame size is chosen by whoever supplies the key file.  The ML-DSA one
+    # held ~110 KB (the whole k x l matrix plus five length-k vectors) before
+    # the row-wise rewrite — more than musl's entire 128 KB default thread
+    # stack.  Measures the real high-water mark over the whole call chain on a
+    # painted, caller-supplied thread stack, and holds it under a stated
+    # budget.  SKIPs (77) where POSIX thread stacks are unavailable.
+    add_ama_test(test_pq_parser_stack test_pq_parser_stack.c)
+    set_tests_properties(test_pq_parser_stack PROPERTIES SKIP_RETURN_CODE 77)
+    find_package(Threads REQUIRED)
+    target_link_libraries(test_pq_parser_stack Threads::Threads)
 
     # Kyber debug / CPA isolation tests (run manually or via ctest)
     add_ama_test(test_kyber_debug test_kyber_debug.c)
@@ -440,5 +480,13 @@ if(AMA_ENABLE_DUDECT)
     set_target_properties(test_dudect PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
     )
+    # The measurement pass is deliberately not a ctest test: it takes minutes
+    # and its result depends on how quiet the machine is.  Its *verdict rule*
+    # is neither, so that is registered — it decides whether this gate can
+    # block a merge, and it is the half that cannot be exercised by running the
+    # suite (reproducing "the same lane trips in every round" on demand would
+    # require a real leak).  Driven with synthetic evidence in both directions,
+    # deterministic, milliseconds.
+    add_test(NAME test_dudect_verdict COMMAND test_dudect --self-test)
     message(STATUS "dudect: Empirical constant-time verification tests enabled")
 endif()

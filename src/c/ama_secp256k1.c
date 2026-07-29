@@ -1086,6 +1086,10 @@ static void secp256k1_jac_cswap(secp256k1_jac *a, secp256k1_jac *b, int conditio
 /**
  * Check if the scalar is zero (all bytes zero). Constant-time.
  */
+/* Defined beside the group order `SC_N` further down, declared here because
+ * `ama_secp256k1_pubkey_from_privkey` needs it and sits above that block. */
+static int secp256k1_scalar_below_n(const uint8_t s[32]);
+
 static int secp256k1_scalar_is_zero(const uint8_t s[32]) {
     uint8_t acc = 0;
     int i;
@@ -1279,8 +1283,21 @@ ama_error_t ama_secp256k1_pubkey_from_privkey(const uint8_t privkey[32],
         return AMA_ERROR_INVALID_PARAM;
     }
 
-    /* Check for zero private key */
-    if (secp256k1_scalar_is_zero(privkey)) {
+    /* SEC 1 §3.2.1: a private key is an integer in [1, n-1].  Both ends are
+     * checked, and the upper one was not.
+     *
+     * A scalar at or above the group order is not merely unusual: `d` and
+     * `d mod n` derive the *same* public key, so accepting it means two
+     * distinct private keys — two distinct key files — that are indistinguishable
+     * from outside, and a signer that behaves as though it holds the reduced
+     * one.  `ama_nistp_pubkey_from_privkey` has always refused this for the NIST
+     * curves; secp256k1 refused only zero, so the same library was strict on one
+     * curve and lax on another.
+     *
+     * Reached from the key-file parser (`load_pkcs8` of an EC key), so the input
+     * is chosen by whoever supplies the file.  Found by
+     * fuzz/python/fuzz_key_formats.py. */
+    if (secp256k1_scalar_is_zero(privkey) || !secp256k1_scalar_below_n(privkey)) {
         return AMA_ERROR_INVALID_PARAM;
     }
 
@@ -1387,6 +1404,40 @@ typedef struct {
 static const uint64_t SC_N[SC_LIMBS] = {
     0xBFD25E8CD0364141ULL, 0xBAAEDCE6AF48A03BULL, 0xFFFFFFFFFFFFFFFEULL, 0xFFFFFFFFFFFFFFFFULL
 };
+
+/**
+ * Constant-time `s < n` for a 32-octet big-endian scalar.
+ *
+ * Computes the borrow out of `s - n`: it is 1 exactly when `s < n`.  No branch
+ * and no early exit — a private key's magnitude is secret, and a comparison
+ * that returned as soon as it knew the answer would leak where the two values
+ * first differ.
+ */
+static int secp256k1_scalar_below_n(const uint8_t s[32]) {
+    uint64_t limbs[SC_LIMBS];
+    uint64_t borrow = 0;
+    int i;
+
+    /* Big-endian octets to little-endian limbs. */
+    for (i = 0; i < SC_LIMBS; i++) {
+        int j;
+        uint64_t v = 0;
+        for (j = 0; j < 8; j++) {
+            v = (v << 8) | (uint64_t)s[(SC_LIMBS - 1 - i) * 8 + j];
+        }
+        limbs[i] = v;
+    }
+
+    for (i = 0; i < SC_LIMBS; i++) {
+        uint64_t lhs = limbs[i];
+        uint64_t rhs = SC_N[i];
+        uint64_t diff = lhs - rhs - borrow;
+        /* Borrow out of (lhs - rhs - borrow), branchlessly. */
+        borrow = ((~lhs & rhs) | ((~(lhs ^ rhs)) & diff)) >> 63;
+    }
+    ama_secure_memzero(limbs, sizeof(limbs));
+    return (int)borrow;
+}
 
 /* -n^-1 mod 2^64, the Montgomery reduction constant. */
 static const uint64_t SC_N0_INV = 0x4B0DFF665588B13FULL;
@@ -1956,6 +2007,96 @@ AMA_API ama_error_t ama_secp256k1_ecdsa_verify_ex(const uint8_t *signature, size
 
     if (memcmp(xr.v, r_sc.v, sizeof(xr.v)) != 0)
         return AMA_ERROR_VERIFY_FAILED;
+    return AMA_SUCCESS;
+}
+
+/* ============================================================================
+ * SEC 1 POINT DECOMPRESSION
+ *
+ * Added so the key-interoperability layer (ama_cryptography.key_formats) can
+ * import a compressed secp256k1 public key — the form Bitcoin, Ethereum and
+ * most SPKI encodings of this curve actually use — without doing elliptic
+ * curve arithmetic in Python, which INVARIANT-7 forbids.  Without it, a
+ * compressed secp256k1 SPKI or COSE key would be a dead branch in the format
+ * layer: parseable but unusable.
+ *
+ * Every input is public (it is a public key), so a plain square-and-multiply
+ * over the fixed, public exponent (p+1)/4 is sound here and carries no
+ * timing obligation.
+ * ============================================================================ */
+
+/* (p + 1) / 4 = 2^254 - 2^30 - 244, big-endian.  p = 3 (mod 4), so
+ * a^((p+1)/4) is a square root of a whenever one exists. */
+static const uint8_t SECP256K1_SQRT_EXP[32] = {
+    0x3F, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+    0xFF, 0xFF, 0xFF, 0xFF, 0xBF, 0xFF, 0xFF, 0x0C
+};
+
+static void secp256k1_fe_sqrt(secp256k1_fe *r, const secp256k1_fe *a) {
+    secp256k1_fe acc = SECP256K1_FE_ONE;
+    int i, j;
+
+    for (i = 0; i < 32; i++) {
+        for (j = 7; j >= 0; j--) {
+            secp256k1_fe_sqr(&acc, &acc);
+            if ((SECP256K1_SQRT_EXP[i] >> j) & 1)
+                secp256k1_fe_mul(&acc, &acc, a);
+        }
+    }
+    *r = acc;
+}
+
+AMA_API ama_error_t ama_secp256k1_pubkey_decompress(const uint8_t compressed[33],
+                                                    uint8_t uncompressed[64]) {
+    secp256k1_fe x, y, y2, rhs, t, seven;
+    uint8_t y_bytes[32];
+    int want_odd;
+
+    if (!compressed || !uncompressed)
+        return AMA_ERROR_INVALID_PARAM;
+    if (compressed[0] != 0x02 && compressed[0] != 0x03)
+        return AMA_ERROR_INVALID_PARAM;
+    if (!secp256k1_fe_bytes_canonical(compressed + 1))
+        return AMA_ERROR_INVALID_PARAM;
+
+    want_odd = compressed[0] & 1;
+    secp256k1_fe_from_bytes(&x, compressed + 1);
+
+    /* rhs = x^3 + 7 */
+    secp256k1_fe_sqr(&t, &x);
+    secp256k1_fe_mul(&rhs, &t, &x);
+    seven = SECP256K1_FE_ZERO;
+    seven.v[0] = 7;
+    secp256k1_fe_add(&rhs, &rhs, &seven);
+    secp256k1_fe_normalize(&rhs);
+
+    secp256k1_fe_sqrt(&y, &rhs);
+
+    /* Prove the root: an x that is not on the curve yields a y whose square
+     * is not rhs, and it is rejected rather than returned as a bogus point. */
+    secp256k1_fe_sqr(&y2, &y);
+    secp256k1_fe_normalize(&y2);
+    {
+        uint8_t a[32], b[32];
+        secp256k1_fe_to_bytes(a, &y2);
+        secp256k1_fe_to_bytes(b, &rhs);
+        if (memcmp(a, b, 32) != 0)
+            return AMA_ERROR_INVALID_PARAM;
+    }
+
+    secp256k1_fe_normalize(&y);
+    secp256k1_fe_to_bytes(y_bytes, &y);
+    if ((y_bytes[31] & 1) != want_odd) {
+        secp256k1_fe neg;
+        secp256k1_fe_sub(&neg, &SECP256K1_FE_ZERO, &y);
+        secp256k1_fe_normalize(&neg);
+        secp256k1_fe_to_bytes(y_bytes, &neg);
+    }
+
+    memcpy(uncompressed, compressed + 1, 32);
+    memcpy(uncompressed + 32, y_bytes, 32);
     return AMA_SUCCESS;
 }
 

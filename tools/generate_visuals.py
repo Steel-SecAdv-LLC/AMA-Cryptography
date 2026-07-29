@@ -806,7 +806,7 @@ def create_ethical_binding_flow():
             "Defense-in-Depth",
             [
                 ("defense", "Multi-layer defense"),
-                ("temporal", "Temporal integrity"),
+                ("temporal", "Temporal binding"),  # not integrity: TSA genTime is unauthenticated
                 ("coverage", "Attack surface coverage"),
             ],
         ),

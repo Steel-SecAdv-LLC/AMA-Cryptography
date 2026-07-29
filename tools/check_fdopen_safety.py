@@ -45,7 +45,7 @@ from __future__ import annotations
 
 import argparse
 import ast
-import subprocess  # nosec B404 - fixed argv git invocation, no shell
+import subprocess  # nosec B404 -- fixed-argv git invocation only, never a shell (FDO-001)
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -168,7 +168,7 @@ def check_source(rel_path: str, source: str) -> list[Violation]:
 
 def _tracked_python_files(repo_root: Path) -> list[Path]:
     try:
-        out = subprocess.run(  # nosec B603 - fixed argv, no shell, trusted binary
+        out = subprocess.run(  # nosec B603 -- fixed argv, no shell, trusted git binary (FDO-002)
             ["git", "ls-files", "*.py"],
             cwd=str(repo_root),
             capture_output=True,

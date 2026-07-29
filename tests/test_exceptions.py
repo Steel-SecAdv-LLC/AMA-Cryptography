@@ -195,6 +195,7 @@ class TestModuleExports:
         expected = {
             "AmaCryptographyError",
             "SecurityWarning",
+            "NativeBackendUnavailableError",
             "PQCUnavailableError",
             "QuantumSignatureUnavailableError",
             "QuantumSignatureRequiredError",
@@ -203,9 +204,41 @@ class TestModuleExports:
             "SignatureVerificationError",
             "IntegrityError",
             "CryptoModuleError",
+            "KeyFormatError",
+            "UnsupportedKeyFormatError",
             "AmaHSMUnavailableError",
         }
         assert set(mod.__all__) == expected
+
+    def test_native_backend_error_hierarchy_is_backward_compatible(self) -> None:
+        """``NativeBackendUnavailableError`` widens; it must not narrow.
+
+        It was introduced so the NIST prime curves, secp256k1 and the classical
+        primitives stop raising a bare ``RuntimeError`` for the same condition
+        the PQC surface had a type for. Inserting it *above*
+        ``PQCUnavailableError`` means every pre-existing handler shape keeps
+        working — which is the property worth pinning, not the name.
+        """
+        from ama_cryptography import exceptions as mod
+
+        assert issubclass(mod.PQCUnavailableError, mod.NativeBackendUnavailableError)
+        assert issubclass(mod.NativeBackendUnavailableError, mod.AmaCryptographyError)
+        assert issubclass(mod.NativeBackendUnavailableError, RuntimeError)
+        # QuantumSignatureUnavailableError sits under PQCUnavailableError and
+        # must therefore still be catchable as every ancestor.
+        assert issubclass(mod.QuantumSignatureUnavailableError, mod.NativeBackendUnavailableError)
+        # Behavioural, not just structural: raise and catch through each
+        # ancestor. Expressed as "did the except arm run" rather than as a
+        # try/except/else, because the `else` arm of a try whose body always
+        # raises is unreachable by construction — dead code that reads as a
+        # check, which is exactly what a reader (and CodeQL) flags.
+        for handler in (mod.PQCUnavailableError, RuntimeError, mod.AmaCryptographyError):
+            caught = False
+            try:
+                raise mod.PQCUnavailableError("backend missing")
+            except handler:
+                caught = True
+            assert caught, f"{handler.__name__} no longer catches PQCUnavailableError"
 
     def test_all_exports_are_classes(self) -> None:
         from ama_cryptography import exceptions as mod

@@ -30,7 +30,7 @@ Documentation for AMA Cryptography's security properties, threat model, side-cha
 | **Data Integrity** | SHA3-256 | Any modification to signed data detected |
 | **Authentication** | HMAC-SHA3-256 + Ed25519 + ML-DSA-65 | Forged packages detected |
 | **Quantum Resistance** | ML-DSA-65 (FIPS 204) | Secure against Shor's algorithm |
-| **Non-repudiation** | RFC 3161 timestamps | Cryptographic proof of existence time |
+| **Non-repudiation** | Ed25519 + ML-DSA-65 signatures | Cryptographic proof of authorship. RFC 3161 contributes nothing: AMA verifies no TSA signature, so `genTime` is unauthenticated ([INVARIANT-37](https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/INVARIANTS.md)) |
 | **Key Independence** | HKDF domain separation | Compromise of one key doesn't compromise others |
 | **Memory Safety** | SecureBuffer, secure_memzero | Key material zeroed after use |
 
@@ -54,7 +54,7 @@ The system is designed to be secure against:
 |-----------|-----------|-----------|
 | **Classical adversary** | Classical computing resources | Ed25519 + ML-DSA-65 + all layers |
 | **Quantum adversary** | Cryptographically-relevant quantum computer (CRQC) | ML-DSA-65 + ML-KEM-1024 |
-| **Network adversary** | Full network interception (MITM) | Signature verification, RFC 3161 timestamps |
+| **Network adversary** | Full network interception (MITM) | Signature verification. **Not** RFC 3161: a MITM on the TSA path substitutes a self-built token with any `genTime` and the binding check still passes |
 | **Offline dictionary attacker** | GPU/ASIC password cracking | Argon2id memory-hard KDF |
 | **Harvest Now, Decrypt Later** | Storing today's data to decrypt after quantum computers exist | Quantum-resistant encryption |
 | **Autonomous agent abusing the API** | An in-process agent driving the library to mint persistence material or successor-authorizing signatures ("notes for future versions") | Agent-instance binding (INVARIANT-30) refuses non-ephemeral / restricted derivations without an operator-held authority key; 3R volume-spike + note-artifact detectors surface the behaviour |
@@ -200,7 +200,7 @@ Before deploying AMA Cryptography in production:
 - [ ] Independent security review by qualified cryptographers
 - [ ] Constant-time AES confirmed enabled (default `AMA_AES_CONSTTIME=ON`; verify in CMake output)
 - [ ] Key file permissions restricted (mode 0600, encrypted volume)
-- [ ] RFC 3161 timestamp configured with a trusted TSA
+- [ ] If timestamps are relied upon: the token's issuer is established **outside AMA** (authenticated channel to the TSA, or out-of-band validation before storage). Configuring a reputable TSA alone has no verification consequence — AMA checks the §2.4.2 binding only and accepts a forged token identically
 - [ ] Key rotation policy documented and automated
 - [ ] 3R monitoring alerts reviewed by security team
 - [ ] `PQCUnavailableError` handling tested (fallback behavior documented)
@@ -219,7 +219,7 @@ AMA Cryptography vs. peer implementations:
 | Hybrid classical+PQC | ✓ | ✗ | ✗ |
 | Runtime anomaly monitoring | ✓ 3R Framework | ✗ | ✗ |
 | Defense layers | 4 core + 2 supporting | 1-2 | 1-2 |
-| RFC 3161 timestamps | ✓ | ✗ | ✗ |
+| RFC 3161 timestamps | ◐ Wire format + §2.4.2 binding; no TSA signature or chain verification | ✓ Full verification (`openssl ts -verify`) | ✗ |
 | Zero-downtime key rotation | ✓ | ✗ | ✗ |
 | NIST FIPS 203/204/205 | ✓ | ✗ | Partial |
 | Audit status | Self-assessed | ✓ Audited | ✓ Audited |
@@ -235,7 +235,7 @@ AMA Cryptography vs. peer implementations:
 - [NIST FIPS 205](https://doi.org/10.6028/NIST.FIPS.205) — SLH-DSA (SPHINCS+)
 - [RFC 8032](https://tools.ietf.org/html/rfc8032) — Ed25519
 - [RFC 5869](https://tools.ietf.org/html/rfc5869) — HKDF
-- [RFC 3161](https://tools.ietf.org/html/rfc3161) — Trusted Timestamps
+- [RFC 3161](https://tools.ietf.org/html/rfc3161) — Time-Stamp Protocol (AMA implements the wire format and §2.4.2 binding; not TSA signature or chain verification)
 - [SECURITY.md](https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/SECURITY.md) — Self-assessment
 - [THREAT_MODEL.md](https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/THREAT_MODEL.md) — Detailed threat classification
 

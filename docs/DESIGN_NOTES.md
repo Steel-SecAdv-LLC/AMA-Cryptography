@@ -192,8 +192,12 @@ protected package:
 3. **Ed25519** classical signature (RFC 8032)
 4. **ML-DSA-65** post-quantum signature (FIPS 204)
 
-Plus supporting operations: HKDF-SHA3-256 key derivation (RFC 5869)
-and RFC 3161 trusted timestamping.
+Plus a supporting operation: HKDF-SHA3-256 key derivation (RFC 5869).
+
+The optional RFC 3161 timestamp is deliberately **excluded** from the security
+argument below. AMA verifies the §2.4.2 message-imprint binding and no TSA
+signature, so the token carries no adversarial resistance and must not appear
+in a bound (INVARIANT-37).
 
 The overall security argument is:
 

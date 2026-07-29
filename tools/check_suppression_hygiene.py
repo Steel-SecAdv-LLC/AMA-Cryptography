@@ -13,6 +13,7 @@ Usage (CI):
 
 from __future__ import annotations
 
+import io
 import os
 import re
 import sys
@@ -68,68 +69,114 @@ def _is_forbidden(filepath: str) -> bool:
     return False
 
 
-def _get_comment_lines(filepath: str) -> set[int]:
-    """Return the set of line numbers that contain real comments (via tokenize).
+def effective_suppressions(source: str) -> list[tuple[int, str]]:
+    """Return ``(lineno, comment_text)`` for comments that actually suppress.
 
-    This correctly handles triple-quoted strings, raw strings, and f-strings —
-    only ``tokenize.COMMENT`` tokens are returned, never string content.
+    Two filters, both of which the previous line-oriented scan lacked.
+
+    **Comment text, not the whole line.** The scan used to collect the line
+    *numbers* carrying a comment and then run the marker regex over the entire
+    raw line, which put every string literal on such a line back in scope — the
+    exact thing tokenizing was supposed to rule out. The comment token's own
+    text is used here instead.
+
+    **Trailing comments only.** ``bandit``, ``ruff`` and ``mypy`` all anchor a
+    suppression to the line of the finding, so a full-line comment suppresses
+    nothing; it is prose. That distinction never mattered while the scan
+    covered only ``ama_cryptography/`` and ``tests/``, where nothing discusses
+    markers in a comment. It matters immediately in ``tools/``, where the
+    checkers *document their own subject matter*: eight comments explaining
+    what a ``# nosec`` is were reported as unjustified suppressions the moment
+    that tree was included. A gate that fires on its own documentation is one
+    people learn to route around.
+
+    The single standalone form that is real — mypy's file-level
+    ``# type: ignore``, which must be the first line — is kept in scope
+    explicitly rather than lost to the rule.
     """
-    comment_lines: set[int] = set()
+    results: list[tuple[int, str]] = []
     try:
-        with open(filepath, "rb") as fh:
-            for tok in tokenize.tokenize(fh.readline):
-                if tok.type == tokenize.COMMENT:
-                    comment_lines.add(tok.start[0])
-    except (OSError, tokenize.TokenError, SyntaxError):
-        pass  # skip unreadable / unparseable files
-    return comment_lines
+        lines = source.splitlines()
+        readline = io.StringIO(source).readline
+        for tok in tokenize.generate_tokens(readline):
+            if tok.type != tokenize.COMMENT:
+                continue
+            lineno, col = tok.start
+            physical = lines[lineno - 1] if lineno - 1 < len(lines) else ""
+            trailing = bool(physical[:col].strip())
+            file_level_type_ignore = lineno == 1 and tok.string.strip().startswith("# type: ignore")
+            if trailing or file_level_type_ignore:
+                results.append((lineno, tok.string))
+    except (tokenize.TokenError, SyntaxError, IndentationError):
+        return results  # unparseable file: report what was seen before the error
+    return results
+
+
+def check_source(filepath: str, source: str) -> list[str]:
+    """Return violation messages for already-loaded Python ``source``."""
+    violations: list[str] = []
+    for lineno, comment in effective_suppressions(source):
+        for m in _SUPPRESSION_RE.finditer(comment):
+            tag = f"{filepath}:{lineno}"
+            if _is_forbidden(filepath):
+                violations.append(f"{tag}: suppression in forbidden directory")
+                break
+            rest = comment[m.end() :]
+            # nosemgrep strict form: require ":<rule_id>" so the
+            # marker targets a specific rule rather than blanket-
+            # suppressing every semgrep rule on the line.
+            if m.group(1) == "nosemgrep" and not _NOSEMGREP_STRICT_RE.match(rest):
+                violations.append(
+                    f"{tag}: suppression 'nosemgrep' missing rule id "
+                    f"(expected '# nosemgrep: <rule_id> -- justification (TAG-NNN)')"
+                )
+                continue
+            if not _JUSTIFICATION_RE.search(rest):
+                violations.append(
+                    f"{tag}: suppression '{m.group()}' missing justification "
+                    f"(expected em-dash, --, or # followed by reason and tracking ID)"
+                )
+            elif not _TRACKING_ID_RE.search(rest):
+                violations.append(
+                    f"{tag}: suppression '{m.group()}' missing tracking ID "
+                    f"(expected e.g. (KM-001))"
+                )
+    return violations
 
 
 def _scan_file(filepath: str) -> list[str]:
     """Return a list of violation messages for the given file."""
-    violations: list[str] = []
-    comment_lines = _get_comment_lines(filepath)
     try:
         with open(filepath, encoding="utf-8", errors="replace") as fh:
-            for lineno, line in enumerate(fh, 1):
-                if lineno not in comment_lines:
-                    continue
-                for m in _SUPPRESSION_RE.finditer(line):
-                    tag = f"{filepath}:{lineno}"
-                    if _is_forbidden(filepath):
-                        violations.append(f"{tag}: suppression in forbidden directory")
-                        break
-                    rest = line[m.end() :]
-                    # nosemgrep strict form: require ":<rule_id>" so the
-                    # marker targets a specific rule rather than blanket-
-                    # suppressing every semgrep rule on the line.
-                    if m.group(1) == "nosemgrep" and not _NOSEMGREP_STRICT_RE.match(rest):
-                        violations.append(
-                            f"{tag}: suppression 'nosemgrep' missing rule id "
-                            f"(expected '# nosemgrep: <rule_id> -- justification (TAG-NNN)')"
-                        )
-                        continue
-                    if not _JUSTIFICATION_RE.search(rest):
-                        violations.append(
-                            f"{tag}: suppression '{m.group()}' missing justification "
-                            f"(expected em-dash, --, or # followed by reason and tracking ID)"
-                        )
-                    elif not _TRACKING_ID_RE.search(rest):
-                        violations.append(
-                            f"{tag}: suppression '{m.group()}' missing tracking ID "
-                            f"(expected e.g. (KM-001))"
-                        )
+            source = fh.read()
     except (OSError, UnicodeDecodeError):
-        pass  # skip unreadable files
-    return violations
+        return []  # skip unreadable files
+    return check_source(filepath, source)
 
 
 def main() -> int:
     repo_root = Path(__file__).resolve().parent.parent
     os.chdir(repo_root)
 
-    # Collect all Python files under ama_cryptography/ and tests/
-    targets = list(Path("ama_cryptography").rglob("*.py")) + list(Path("tests").rglob("*.py"))
+    # Collect all Python files under ama_cryptography/, tests/ and tools/.
+    #
+    # ``tools/`` was outside the scan until it was noticed that it holds the
+    # gates themselves — the scripts whose whole purpose is to enforce this
+    # repository's security policy. A suppression there silences a static
+    # analyser inside the enforcement layer, which is the last place an
+    # unexplained one belongs, and it was the only tree where they went
+    # unpoliced. Two bare ``noqa: S310`` markers were sitting in the corpus
+    # fetchers when the scan was widened: no reason, no tracking ID, over
+    # (the leading hash is omitted above deliberately — ruff parses a real
+    # directive out of prose that spells one, which is the same false-positive
+    # class ``effective_suppressions`` exists to avoid)
+    # ``urllib`` calls that accepted ``file:`` and ``ftp:`` URLs. They now
+    # check the scheme, so the suppression states a fact.
+    targets = (
+        list(Path("ama_cryptography").rglob("*.py"))
+        + list(Path("tests").rglob("*.py"))
+        + list(Path("tools").rglob("*.py"))
+    )
 
     all_violations: list[str] = []
     for path in sorted(targets):

@@ -36,14 +36,14 @@ We actively maintain and provide security updates for the following versions:
 
 ## Security Features
 
-AMA Cryptography implements defense-in-depth with multiple independent security layers — four core cryptographic operations supported by key derivation and timestamping:
+AMA Cryptography implements defense-in-depth with multiple independent security layers — four core cryptographic operations supported by key derivation, plus an optional timestamp binding that is **not** an independent security layer (see item 6):
 
 1. **SHA3-256 Content Hashing** (NIST FIPS 202)
 2. **HMAC-SHA3-256 Authentication** (RFC 2104)
 3. **Ed25519 Digital Signatures** (RFC 8032, C11 atomics hardened)
 4. **ML-DSA-65 Quantum-Resistant Signatures** (NIST FIPS 204)
 5. **HKDF-SHA3-256 Key Derivation** (RFC 5869, NIST SP 800-108)
-6. **RFC 3161 Trusted Timestamps**
+6. **RFC 3161 Timestamp Binding** — *not an independent layer.* AMA verifies the §2.4.2 message-imprint binding only. It does not verify the TSA's CMS `SignerInfo` signature or validate its certificate chain, so an adversary who can supply a token satisfies this check unaided, with any `genTime` they choose, using no key. It contributes no adversarial resistance and must not be counted toward the security bound. See [INVARIANT-37](INVARIANTS.md#invariant-37--a-verification-api-must-not-claim-a-check-it-does-not-perform) and [ARCHITECTURE.md § Scope: RFC 3161 attestation is not implemented](ARCHITECTURE.md#scope-rfc-3161-attestation-is-not-implemented).
 
 ### Additional Cryptographic Capabilities
 
@@ -284,8 +284,8 @@ Users deploying AMA Cryptography in production should:
 ### Cryptographic Operations
 - **REQUIRED:** Build native PQC C library (`cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build`)
 - **REQUIRED:** Enable all cryptographic layers (no fallbacks in production)
-- **REQUIRED:** Use RFC 3161 trusted timestamp authorities
-- **RECOMMENDED:** Use multiple TSAs for redundancy
+- **REQUIRED (if timestamps are relied upon):** Establish the token's issuer through a control *outside* AMA — an authenticated channel to the TSA, or out-of-band validation of the token before it is stored. AMA verifies the RFC 3161 §2.4.2 message-imprint binding only; configuring a reputable TSA has no verification consequence here, because no TSA signature is checked and a forged token is accepted identically (INVARIANT-37).
+- **RECOMMENDED:** Use multiple TSAs for redundancy of *availability*. This is not redundancy of trust: AMA does not verify any of them.
 - **RECOMMENDED:** Verify all signatures before trusting package contents
 
 ### Dependency Management

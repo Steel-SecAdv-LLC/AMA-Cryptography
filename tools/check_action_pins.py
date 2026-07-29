@@ -55,7 +55,7 @@ from __future__ import annotations
 
 import argparse
 import re
-import subprocess  # nosec B404 - fixed argv git invocation, no shell
+import subprocess  # nosec B404 -- fixed-argv git invocation only, never a shell (PIN-001)
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Sequence
@@ -114,7 +114,7 @@ def list_remote_refs(base_repo: str, timeout: int = 60) -> Optional[dict[str, li
     comment impossible to verify.
     """
     try:
-        out = subprocess.run(  # nosec B603 - fixed argv, no shell, https URL built from repo slug
+        out = subprocess.run(  # nosec B603 -- fixed argv, no shell, https URL built from repo slug (PIN-002)
             ["git", "ls-remote", f"https://github.com/{base_repo}.git"],
             capture_output=True,
             text=True,

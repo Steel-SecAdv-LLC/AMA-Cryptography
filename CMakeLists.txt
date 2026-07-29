@@ -457,6 +457,13 @@ set(AMA_SOURCES
     src/c/ama_sha256_ni.c
     src/c/ama_hmac_sha256.c
     src/c/ama_hmac_sha384.c
+    # HSS/LMS verification (RFC 8554).  Consumes only SHA-256, holds no secret
+    # and keeps no state, so it belongs in the unconditional list: the
+    # firmware-update verifiers this exists for are exactly the constrained
+    # targets most likely to build with AMA_USE_NATIVE_PQC=OFF, and an
+    # HSS verifier that vanished in that configuration would miss its own use
+    # case.  Signing is deliberately absent — see the file header.
+    src/c/ama_lms.c
     src/c/ama_ed25519.c
     src/c/ama_aes_gcm.c
     src/c/ama_cpuid.c
@@ -482,6 +489,12 @@ if(AMA_USE_NATIVE_PQC)
         src/c/ama_dilithium.c
         src/c/ama_slhdsa.c
         src/c/ama_secp256k1.c
+        # NIST prime curves P-256/384/521 (ECDSA + ECDH).  Depends on the
+        # HMAC-SHA-2 family for RFC 6979 and on ama_platform_rand.c for
+        # keygen and the hedged signer, so it belongs in this block rather
+        # than the unconditional list — ama_platform_rand.c is only added
+        # here.  It references no PQC symbol otherwise.
+        src/c/ama_nistp.c
         src/c/ama_frost.c
         src/c/ama_x25519.c
         src/c/ama_argon2.c

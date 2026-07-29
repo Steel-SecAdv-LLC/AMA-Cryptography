@@ -244,6 +244,77 @@ jobs:
           path: artifacts/${{ matrix.target }}/
           retention-days: 30
 
+  # ---------------------------------------------------------------------
+  # Python parser lane
+  # ---------------------------------------------------------------------
+  # The DER, CBOR, JSON and PEM key parsers are hostile-input parsers in
+  # exactly the sense the fifteen C harnesses above are: anyone who can hand
+  # you a key file reaches them. They had no harness — only a fixed
+  # 120-mutation sweep inside pytest, which explores the same neighbourhood
+  # on every run for ever and is not fuzzing.
+  #
+  # The harness is AMA's own: its generator, mutator and seed corpus are in
+  # fuzz/python/fuzz_key_formats.py, so this lane depends on no third-party
+  # fuzzing engine. (Atheris is supported via --atheris when it happens to be
+  # installed, deliberately as a bonus rather than as the lane.)
+  #
+  # It found three real defects on its first campaigns: a UnicodeDecodeError
+  # leaking out of _as_der, a TypeError from an unhashable CBOR map value
+  # reaching a dict lookup in _cose_algorithm, and a strict-PEM parser that
+  # accepted trailing 0x1C-0x1F because Python's str.strip() counts them as
+  # whitespace and RFC 7468 does not.
+  fuzz-python-parsers:
+    name: Fuzz Python key parsers (DER / CBOR / JSON / PEM)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+        with:
+          python-version: "3.12"
+
+      - name: Install build dependencies
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential
+
+      - name: Build the native library
+        # The parsers call into the native backend for key derivation and the
+        # PQ consistency checks, so the harness needs a real library rather
+        # than a stub — fuzzing a parser whose validation is stubbed out
+        # exercises the DER layer and nothing behind it.
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DAMA_USE_NATIVE_PQC=ON \
+            -DAMA_BUILD_TESTS=OFF -DAMA_BUILD_EXAMPLES=OFF
+          cmake --build build -j$(nproc)
+
+      - name: Fuzz the key parsers
+        env:
+          FUZZ_DURATION: ${{ github.event.inputs.fuzz_duration || '60' }}
+        # Two campaigns from different seeds rather than one long run: the seed
+        # is the whole reproduction recipe for this engine, so two independent
+        # starting points cover more than twice the wall clock would.
+        run: |
+          set -euo pipefail
+          python3 fuzz/python/fuzz_key_formats.py \
+            --seconds "${FUZZ_DURATION}" \
+            --artifact-dir artifacts/python-parsers
+          python3 fuzz/python/fuzz_key_formats.py \
+            --seconds "${FUZZ_DURATION}" \
+            --seed 20260727 \
+            --artifact-dir artifacts/python-parsers
+
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: fuzz-crashes-python-parsers
+          path: artifacts/python-parsers/
+          retention-days: 30
+
   fuzz-consttime-aes:
     name: Fuzz AES-GCM (constant-time bitsliced backend)
     runs-on: ubuntu-latest
@@ -315,6 +386,7 @@ jobs:
     needs:
       - fuzz-core
       - fuzz-pqc
+      - fuzz-python-parsers
       - fuzz-consttime-aes
       - validate-fuzz-dictionaries
     runs-on: ubuntu-latest
