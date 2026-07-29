@@ -19,6 +19,38 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ## [Unreleased]
 
+### Fixed — the `math_engine` matrix/Lyapunov/helix kernels read out of bounds on a shape mismatch
+
+Proved on a running build rather than reasoned about: the four public numeric
+kernels in `src/cython/math_engine.pyx` — `matrix_vector_multiply`,
+`matrix_multiply`, `lyapunov_function_fast`, and `helix_evolution_step` —
+compile with `boundscheck=False` and `wraparound=False` and took the length of
+one array argument as the loop bound for indexing into another, with no check
+that the two agreed.
+
+A caller who passes mismatched shapes therefore does not get an error. With a
+small mismatch the kernel **silently reads past the end of the shorter array**
+and returns a value derived from adjacent heap memory:
+`lyapunov_function_fast(np.ones(8), np.zeros(4))` returned `8.0` instead of
+raising, having read `target[4..7]` out of bounds. With a large mismatch it
+**crashes the process** — `matrix_vector_multiply(np.ones((4, 4_000_000)),
+np.ones(1))` exits on `SIGSEGV`. Both are memory-unsafe behaviour in documented
+public functions of a cryptography library; the newer kernels in the same file
+(`token_family_counts`, `volume_spike_scores`) already validate their inputs at
+the boundary, so this was an inconsistency, not a policy.
+
+- **Each of the four kernels now validates its shape contract** before the
+  unchecked loops run and raises `ValueError` on a mismatch — the vector length
+  must equal the matrix column count; the inner matrix dimensions must agree;
+  `state` and `target` must be the same length; the `ethical_matrix` must be
+  square with dimension `len(state)`. The hot loops are unchanged, so there is
+  no throughput cost on correctly-shaped input.
+- **`tests/test_math_engine_shape_safety.py`** pins the contract: every kernel
+  now raises `ValueError` on the mismatched-shape cases that previously crashed
+  or read out of bounds, and still returns the correct result on matching
+  shapes. It is the negative-input twin of `test_smoke_import` and skips
+  cleanly when the Cython extension is not built.
+
 ### Fixed — the `-text` migration left existing clones silently wrong
 
 Reproduced on a real clone rather than reasoned about: configure
