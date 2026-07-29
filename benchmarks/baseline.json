@@ -1,7 +1,7 @@
 {
   "metadata": {
     "baseline_source_release": "2.1.2",
-    "applies_through_release": "3.0.0",
+    "applies_through_release": "3.4.0",
     "created": "2026-04-05T00:00:00Z",
     "description": "AMA Cryptography performance baseline for regression detection",
     "system": "GitHub Actions shared runner, Linux x86-64, Python 3.11",
@@ -11,31 +11,52 @@
       "description": "Published ops/sec figures for peer cryptographic libraries on comparable x86-64 hardware. These are context numbers for the `Peer Comparison` table in `benchmark-report.md`; the regression harness does not compare against them. When `benchmarks/comparative_benchmark.py` runs with `pynacl`/`oqs`/`cryptography` installed it produces live measurements that supersede these static references for that specific run.",
       "sources": {
         "libsodium_ed25519_keygen": {
-          "ops_per_sec_range": [40000, 60000],
+          "ops_per_sec_range": [
+            40000,
+            60000
+          ],
           "source": "libsodium 1.0.20 bench suite on Intel x86-64 with precomputed base-point table, https://doc.libsodium.org/advanced/ed25519"
         },
         "libsodium_ed25519_sign": {
-          "ops_per_sec_range": [50000, 80000],
+          "ops_per_sec_range": [
+            50000,
+            80000
+          ],
           "source": "libsodium 1.0.20 bench/ref10 on x86-64, https://bench.cr.yp.to/supercop.html (SUPERCOP ed25519/ref10, amd64)"
         },
         "libsodium_ed25519_verify": {
-          "ops_per_sec_range": [15000, 30000],
+          "ops_per_sec_range": [
+            15000,
+            30000
+          ],
           "source": "libsodium 1.0.20 on x86-64 (vartime verify), https://bench.cr.yp.to/supercop.html"
         },
         "liboqs_ml_dsa_65_sign": {
-          "ops_per_sec_range": [500, 1500],
+          "ops_per_sec_range": [
+            500,
+            1500
+          ],
           "source": "liboqs 0.10 on x86-64 reference implementation; https://openquantumsafe.org/benchmarking/"
         },
         "liboqs_ml_dsa_65_verify": {
-          "ops_per_sec_range": [4000, 9000],
+          "ops_per_sec_range": [
+            4000,
+            9000
+          ],
           "source": "liboqs 0.10 on x86-64 reference implementation; https://openquantumsafe.org/benchmarking/"
         },
         "liboqs_ml_kem_1024_encap": {
-          "ops_per_sec_range": [7000, 15000],
+          "ops_per_sec_range": [
+            7000,
+            15000
+          ],
           "source": "liboqs 0.10 on x86-64 reference implementation; https://openquantumsafe.org/benchmarking/"
         },
         "liboqs_ml_kem_1024_decap": {
-          "ops_per_sec_range": [6000, 13000],
+          "ops_per_sec_range": [
+            6000,
+            13000
+          ],
           "source": "liboqs 0.10 on x86-64 reference implementation; https://openquantumsafe.org/benchmarking/"
         }
       }
@@ -50,8 +71,23 @@
       },
       {
         "date": "2026-04-25",
-        "primitives": ["ama_sha3_256_hash", "hmac_sha3_256", "hkdf_derive", "full_package_create", "full_package_verify", "dilithium_sign", "dilithium_verify", "chacha20poly1305_encrypt", "x25519_scalarmult"],
+        "primitives": [
+          "ama_sha3_256_hash",
+          "hmac_sha3_256",
+          "hkdf_derive",
+          "full_package_create",
+          "full_package_verify",
+          "dilithium_sign",
+          "dilithium_verify",
+          "chacha20poly1305_encrypt",
+          "x25519_scalarmult"
+        ],
         "reason": "Re-floored after observing stable runner-variance on a slower contended sandbox host (3-run medians taken with build configured at -DAMA_ENABLE_AVX512=ON; AVX-512 SHA3 4-way kernel landed in this release). Each baseline set to ~65% of the slowest-runner stable median so even a contended GitHub-hosted shared runner clears the regression threshold without false positives; canonical Sapphire Rapids / Zen 4 hosts continue to clear by a wide negative-regression margin (faster than baseline). full_package_create tolerance bumped 50%→70% to absorb the GC-stall variance observed at 3-run min/max ratios > 2.5x. README, benchmark-report.md, and wiki/Performance-Benchmarks.md continue to publish the canonical-host throughput numbers — those are distinct from this regression floor, which is the worst-case-runner safety net. Source measurements: stable-medians captured 2026-04-25 across 30+ runs of validation_suite.py and 10+ runs of benchmark_runner.py; full_package_verify floor lowered 2044→700 to absorb the borderline 47–55% variance band. Source measurements: 3-run medians captured 2026-04-25, full transcript saved alongside benchmark-results.json on the consolidate branch."
+      },
+      {
+        "date": "2026-07-29",
+        "release": "3.4.0",
+        "change": "Re-floored every entry that had drifted. The floors were measured against v2.1.2 and declared valid through v3.0.0 while the library shipped 3.4.0, and nothing enforced that window, so the regression job was comparing today's code against four-release-old numbers: ML-DSA-65 signing carried 27.4x headroom and full-package creation 23.0x, meaning a 96% regression would still have reported PASS. New floors are 0.65 * min(measured, canonical benchmark-report.md), per the project's documented 35%-headroom convention, and no floor was lowered. secp256k1 signing additionally reflects the fixed-base comb landed in this branch (2,545 -> 7,966 ops/s raw C). Enforced going forward by tests/test_benchmark_baseline_freshness.py. Measured on: container, Linux x86-64, 4 cores, gcc 13, `python benchmarks/benchmark_runner.py` and `./build/bin/benchmark_c_raw`."
       }
     ]
   },
@@ -64,7 +100,7 @@
     "ama_sha3_256_hash": {
       "description": "AMA native C SHA3-256 hashing of 1KB data (FIPS 202, ctypes)",
       "metric": "operations_per_second",
-      "baseline_value": 31000,
+      "baseline_value": 140000,
       "unit": "ops/sec",
       "tolerance_percent": 35,
       "tier": "microbenchmark"
@@ -72,7 +108,7 @@
     "hmac_sha3_256": {
       "description": "HMAC-SHA3-256 authentication (native C via ctypes)",
       "metric": "operations_per_second",
-      "baseline_value": 19500,
+      "baseline_value": 96000,
       "unit": "ops/sec",
       "tolerance_percent": 40,
       "tier": "microbenchmark"
@@ -80,7 +116,7 @@
     "ed25519_keygen": {
       "description": "Ed25519 key pair generation (native C)",
       "metric": "operations_per_second",
-      "baseline_value": 10560,
+      "baseline_value": 31000,
       "unit": "ops/sec",
       "tolerance_percent": 35,
       "tier": "microbenchmark"
@@ -88,7 +124,7 @@
     "ed25519_sign": {
       "description": "Ed25519 signature generation (native C, expanded key)",
       "metric": "operations_per_second",
-      "baseline_value": 10430,
+      "baseline_value": 33000,
       "unit": "ops/sec",
       "tolerance_percent": 35,
       "tier": "microbenchmark"
@@ -96,7 +132,7 @@
     "ed25519_verify": {
       "description": "Ed25519 signature verification (native C)",
       "metric": "operations_per_second",
-      "baseline_value": 5113,
+      "baseline_value": 13000,
       "unit": "ops/sec",
       "tolerance_percent": 35,
       "tier": "microbenchmark"
@@ -104,7 +140,7 @@
     "secp256k1_ecdsa_sign": {
       "description": "secp256k1 ECDSA signing (native C, RFC 6979 deterministic nonce)",
       "metric": "operations_per_second",
-      "baseline_value": 1370,
+      "baseline_value": 1900,
       "unit": "ops/sec",
       "tolerance_percent": 40,
       "tier": "microbenchmark"
@@ -112,7 +148,7 @@
     "secp256k1_ecdsa_verify": {
       "description": "secp256k1 ECDSA verification (native C, Shamir's-trick joint multiply, low-s + canonical-pubkey policy)",
       "metric": "operations_per_second",
-      "baseline_value": 2000,
+      "baseline_value": 2600,
       "unit": "ops/sec",
       "tolerance_percent": 40,
       "tier": "microbenchmark"
@@ -120,7 +156,7 @@
     "hkdf_derive": {
       "description": "HKDF-SHA3-256 key derivation (3 keys)",
       "metric": "operations_per_second",
-      "baseline_value": 12500,
+      "baseline_value": 62000,
       "unit": "ops/sec",
       "tolerance_percent": 35,
       "tier": "microbenchmark"
@@ -128,7 +164,7 @@
     "full_package_create": {
       "description": "Complete crypto package creation (with PQC)",
       "metric": "operations_per_second",
-      "baseline_value": 200,
+      "baseline_value": 2400,
       "unit": "ops/sec",
       "tolerance_percent": 70,
       "tier": "complex_operation"
@@ -136,7 +172,7 @@
     "full_package_verify": {
       "description": "Complete crypto package verification (with PQC)",
       "metric": "operations_per_second",
-      "baseline_value": 700,
+      "baseline_value": 2600,
       "unit": "ops/sec",
       "tolerance_percent": 50,
       "tier": "complex_operation"
@@ -146,7 +182,7 @@
     "dilithium_keygen": {
       "description": "ML-DSA-65 (Dilithium) key pair generation (native C)",
       "metric": "operations_per_second",
-      "baseline_value": 1943,
+      "baseline_value": 2100,
       "unit": "ops/sec",
       "tolerance_percent": 40,
       "optional": true
@@ -154,7 +190,7 @@
     "dilithium_sign": {
       "description": "ML-DSA-65 (Dilithium) signature generation (native C)",
       "metric": "operations_per_second",
-      "baseline_value": 130,
+      "baseline_value": 710,
       "unit": "ops/sec",
       "tolerance_percent": 50,
       "optional": true
@@ -162,7 +198,7 @@
     "dilithium_verify": {
       "description": "ML-DSA-65 (Dilithium) signature verification (native C)",
       "metric": "operations_per_second",
-      "baseline_value": 900,
+      "baseline_value": 4600,
       "unit": "ops/sec",
       "tolerance_percent": 40,
       "optional": true
@@ -170,7 +206,7 @@
     "kyber_keygen": {
       "description": "ML-KEM-1024 (Kyber) key pair generation (native C)",
       "metric": "operations_per_second",
-      "baseline_value": 2200,
+      "baseline_value": 3400,
       "unit": "ops/sec",
       "tolerance_percent": 40,
       "optional": true
@@ -178,7 +214,7 @@
     "kyber_encapsulate": {
       "description": "ML-KEM-1024 (Kyber) encapsulation (native C)",
       "metric": "operations_per_second",
-      "baseline_value": 2400,
+      "baseline_value": 7500,
       "unit": "ops/sec",
       "tolerance_percent": 40,
       "optional": true
@@ -194,7 +230,7 @@
     "chacha20poly1305_encrypt": {
       "description": "ChaCha20-Poly1305 encryption of 1KB data (native C)",
       "metric": "operations_per_second",
-      "baseline_value": 32000,
+      "baseline_value": 130000,
       "unit": "ops/sec",
       "tolerance_percent": 40,
       "optional": true

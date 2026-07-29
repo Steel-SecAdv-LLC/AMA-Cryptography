@@ -19,6 +19,75 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ## [Unreleased]
 
+### Fixed — the benchmark regression gate could not fail
+
+`benchmarks/baseline.json` and `benchmarks/arm-baseline.json` both declare
+`metadata.applies_through_release`. Nothing read it: a repo-wide search found
+the field only inside the two JSON files and the prose describing them, never
+in a gate, a workflow, or the runner. The floors were measured against v2.1.2
+and declared valid through v3.0.0 while the library shipped 3.4.0, and the
+regression job kept reporting PASS — it could hardly do otherwise, with
+`benchmark-report.md` recording "regressions" of -642% and -1806% as passes.
+
+Measured against the old floors, the gate's actual sensitivity was:
+
+| entry | measured / floor | regression needed before the gate fires |
+|---|---|---|
+| crypto package create | 18.7x | 95% |
+| ML-DSA-65 sign | 11.3x | 91% |
+| HMAC-SHA3-256 | 9.4x | 89% |
+| AES-256-GCM | 0.65x | already below its floor |
+
+- **`tests/test_benchmark_baseline_freshness.py` enforces the window** the
+  metadata always claimed. When the package's minor version passes
+  `applies_through_release`, the suite fails and names the remedy. Patch
+  releases are deliberately tolerated — a z-bump carries no performance intent —
+  so the comparison is on `(major, minor)`.
+- **x86-64 floors re-calibrated** at `0.65 * min(measured, canonical)`, per the
+  project's own documented 35%-headroom convention. Capping by the canonical
+  `benchmark-report.md` numbers keeps a fast host from pushing a floor above
+  what the canonical runner delivers (this host measures ML-DSA-65 signing at
+  3,561 ops/s against a canonical 1,104; the cap takes 1,104). No floor was
+  lowered, so where this host is slower than canonical the existing floor
+  stands. That pairing is what makes the result robust to this host's
+  substantial run-to-run variance — the cap absorbs high outliers, the
+  never-lower rule absorbs low ones.
+- **AArch64 floors carried forward unverified and recorded as such** in
+  `arm-baseline.json`'s change log. Recalibrating them needs the
+  `ubuntu-24.04-arm` runner, which was not available; no floor value in that
+  file was changed, so the AArch64 gate is exactly as strong as it was, and the
+  carry-forward is auditable rather than silent.
+- **AES-256-GCM is flagged, not papered over.** Its floor was already above
+  this host's throughput before any change here, so it clears the gate only on
+  the 40% tolerance. That wants a canonical-runner measurement, not a floor
+  edit, and the dashboard says so.
+
+### Changed — the performance dashboard is generated from the measurements again
+
+`assets/performance_dashboard.png` was a rasterised matplotlib grid that had
+drifted in ways a PNG cannot signal: titled **v2.1.5** against a 3.4.0 library,
+overlapping axis and value labels, an ASCII summary panel that repeated its own
+title forty times, one empty grid cell, and a four-slice pie chart for a time
+breakdown.
+
+- **`benchmarks/generate_dashboard.py` + `_dashboard_template.html`** render a
+  self-contained HTML page from the JSON artefacts the repo already produces,
+  so the page cannot silently diverge from the run. Throughput spans three
+  orders of magnitude and is a log-axis horizontal bar rather than a pie or a
+  dual axis; the optimisation is a paired before/after; headline facts are stat
+  tiles, because a single number is not a chart.
+- **Colour is assigned by family in fixed slot order and validated, not
+  eyeballed** — worst adjacent CVD dE 9.1 light / 8.4 dark against a >= 8
+  target. Every bar carries a direct value label and every chart has a table
+  view, so nothing is encoded by colour alone; that table is also the required
+  relief for the three light-mode hues below 3:1 on the surface. Dark mode is a
+  selected set of steps for the dark surface, under both the OS media query and
+  an explicit theme toggle.
+- **Rendered and inspected, not assumed.** Screenshotting both themes caught a
+  real defect: with no DOCTYPE the page renders in quirks mode, where tables do
+  not inherit colour from their ancestors, so every cell fell back to black on
+  the dark surface at roughly 1.1:1. The table now names its colour explicitly.
+
 ### Performance — secp256k1 multiplied the *generator* with a generic ladder
 
 `ama_secp256k1.c` used `secp256k1_point_mul_ladder` for every scalar
