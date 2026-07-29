@@ -131,6 +131,52 @@
   <p class="axisnote">Operations per second, log axis. Absent bars mean the peer does not expose that primitive.</p>
 </section>
 
+<section class="card">
+  <h2>1b · The wider field — four libraries, one host, one process</h2>
+  <p class="note">
+    Two comparators is not a field. This is <strong>AMA vs wolfSSL vs Botan vs OpenSSL</strong>
+    on the primitives all four expose natively, measured in the same process with the same
+    buffers and best-of-5 rounds, reported in <strong>cycles/byte</strong> so the ranking does not
+    move with clock speed. Lower is better.
+  </p>
+  <div class="tablewrap"><table id="field">
+    <thead><tr><th>AES-256-GCM, 64 KiB</th><th>cycles/byte</th><th>MB/s</th><th>rank</th></tr></thead>
+    <tbody>
+      <tr><td>OpenSSL 3.0.13</td><td>0.266</td><td>10,529.5</td><td>1</td></tr>
+      <tr><td><strong>AMA Cryptography</strong></td><td><strong>2.815</strong></td><td><strong>995.5</strong></td><td><strong>2</strong></td></tr>
+      <tr><td>Botan 2.19.3</td><td>4.767</td><td>587.9</td><td>3</td></tr>
+      <tr><td>wolfSSL 5.6.6</td><td>24.419</td><td>114.8</td><td>4</td></tr>
+    </tbody>
+  </table></div>
+  <div class="tablewrap"><table id="field2">
+    <thead><tr><th>SHA3-256, 64 KiB</th><th>cycles/byte</th><th>MB/s</th><th>rank</th></tr></thead>
+    <tbody>
+      <tr><td>OpenSSL 3.0.13</td><td>6.966</td><td>402.3</td><td>1</td></tr>
+      <tr><td>Botan 2.19.3</td><td>8.249</td><td>339.8</td><td>2</td></tr>
+      <tr><td>wolfSSL 5.6.6</td><td>9.513</td><td>294.6</td><td>3</td></tr>
+      <tr><td><strong>AMA Cryptography</strong></td><td><strong>11.048</strong></td><td><strong>253.7</strong></td><td><strong>4</strong></td></tr>
+    </tbody>
+  </table></div>
+  <div class="callout">
+    <strong>What this changes.</strong> Against a field rather than a pair, AMA places
+    <strong>2nd of 4 on AES-GCM</strong> — ahead of Botan by 1.69x and wolfSSL by 8.7x, behind only
+    OpenSSL's AES-NI + VPCLMULQDQ path, and it gets there while refusing key-dependent table
+    lookups. On SHA3-256 it places 4th, but the whole field spans only 1.59x from first to last,
+    so "last" here is a narrow margin rather than a different class of implementation.
+    <br><br>
+    <strong>Read the wolfSSL AES row with care.</strong> 24.4 cycles/byte is far off what wolfSSL
+    achieves when built with AES-NI; this is Ubuntu's stock <code>libwolfssl-dev</code> 5.6.6, and
+    the number almost certainly reflects that package's build flags rather than the library's
+    capability. It is reported as measured and flagged rather than quietly used to flatter the
+    comparison.
+    <br><br>
+    <strong>Crypto++ is absent, not omitted silently.</strong> <code>wolfssl/options.h</code>
+    defines <code>byte</code>/<code>word32</code> macros that break
+    <code>crypto++/cryptlib.h</code> in the same translation unit. Adding it needs a separate
+    translation unit, which was not built here.
+  </div>
+</section>
+
 <!-- ============ 2. PERFORMANCE ============ -->
 <section class="card">
   <h2>2 · Standardized performance — cycles per byte</h2>

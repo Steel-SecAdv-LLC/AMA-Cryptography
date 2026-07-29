@@ -327,3 +327,61 @@ already dispatched (`dt->kyber_ntt`), so the remaining distance is not a
 missing SIMD path and wants a profile before anyone guesses at it. Those
 reference figures are literature values, not measurements taken here; running
 SUPERCOP on this host is the way to turn that comparison into evidence.
+
+### 4. Where AMA places against a field rather than a pair
+
+Two comparators is not a field. Measured in the same process, same buffers,
+best-of-5 rounds, on the primitives all four libraries expose natively
+(`benchmarks/multi_library_bench.cpp`), reported in cycles/byte so the ranking
+does not move with clock speed:
+
+| AES-256-GCM, 64 KiB | cycles/byte | MB/s |
+|---|---|---|
+| OpenSSL 3.0.13 | 0.266 | 10,529.5 |
+| **AMA Cryptography** | **2.815** | **995.5** |
+| Botan 2.19.3 | 4.767 | 587.9 |
+| wolfSSL 5.6.6 | 24.419 | 114.8 |
+
+| SHA3-256, 64 KiB | cycles/byte | MB/s |
+|---|---|---|
+| OpenSSL 3.0.13 | 6.966 | 402.3 |
+| Botan 2.19.3 | 8.249 | 339.8 |
+| wolfSSL 5.6.6 | 9.513 | 294.6 |
+| **AMA Cryptography** | **11.048** | **253.7** |
+
+AMA places **2nd of 4 on AES-GCM** — ahead of Botan by 1.69x and wolfSSL by
+8.7x, behind only OpenSSL's AES-NI + VPCLMULQDQ path — and it reaches that
+while refusing key-dependent table lookups (INVARIANT-20). On SHA3-256 it
+places 4th, but the field spans only 1.59x end to end, so last place here is a
+narrow margin rather than a different class of implementation.
+
+**Caveats, stated rather than buried.** The wolfSSL AES-GCM figure is far off
+what that library achieves when built with AES-NI; this is Ubuntu's stock
+`libwolfssl-dev` 5.6.6 and the number reflects that package's build flags, not
+the library's capability. Crypto++ is absent because `wolfssl/options.h`
+defines `byte`/`word32` macros that break `crypto++/cryptlib.h` in the same
+translation unit — it needs a separate TU, which was not built.
+
+### 5. The lattice gap is real, and it is not a missing kernel
+
+ML-KEM-1024 encapsulation costs ~72 us (~202,000 cycles) on this host against
+roughly 16-20 us for a fully vectorised AVX2 implementation of the same
+parameter set — a gap of about 4x. Two hypotheses were tested and **both were
+wrong**:
+
+* *"The 4-way Keccak is not wired."* It is. `ama_keccak_f1600_x4_avx2` is
+  selected natively (`ama_dispatch.c:1329`) and is covered by
+  `tests/c/test_keccak_equiv.c`.
+* *"Profiling shows 60% of encapsulation is scalar Keccak."* That profile was
+  an artefact. Valgrind masks CPUID, so the callgrind run selected the generic
+  4x-scalar fallback rather than the AVX2 kernel that a native run uses —
+  verified by comparing the resolved function pointer under both. **The figure
+  is withdrawn.**
+
+What is measured and stands: SIMD is engaged and contributes 1.28x
+(AVX2 on 71.96 us vs SIMD off 92.09 us), and AVX-512 contributes a further
+1.22x when enabled. The remaining distance is breadth of vectorisation —
+reference implementations vectorise rejection sampling, CBD, compression and
+the full NTT chain, where AMA vectorises a subset. Closing it is a
+vectorisation project measured in weeks, not a configuration change, and
+nothing here should be read as implying a quick fix exists.
