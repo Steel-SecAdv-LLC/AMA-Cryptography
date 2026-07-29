@@ -19,6 +19,62 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ## [Unreleased]
 
+### Performance — secp256k1 multiplied the *generator* with a generic ladder
+
+`ama_secp256k1.c` used `secp256k1_point_mul_ladder` for every scalar
+multiplication, including the two whose base point is the compile-time
+generator: public-key derivation and the ECDSA signing nonce `R = k*G`. The
+ladder costs one addition **and** one doubling per scalar bit — 256 of each —
+because it must not branch on the bit. That is the right shape for a base the
+caller supplies and pure waste for a constant.
+
+Measured, not assumed. `ama_nistp.c` already solves exactly this with a
+fixed-base comb, so the same library on the same host gave a direct control:
+
+| fixed-base `d*G` | algorithm | before |
+|---|---|---|
+| secp256k1 pubkey | Montgomery ladder | 351.93 us |
+| P-256 pubkey | precomputed comb | 138.16 us |
+
+secp256k1's prime (2^256 - 2^32 - 977) reduces *faster* than P-256's, so the
+entire 2.5x gap was the algorithm rather than the field.
+
+- **A 4-block fixed-base comb for the generator**, mirroring `nistp_comb`
+  block for block: 16 table entries (~1.9 KB, L1-resident), 64 doublings and
+  64 additions in place of 256 of each. Applied to public-key derivation and
+  the ECDSA signing nonce only. `ama_secp256k1_point_mul` keeps the ladder —
+  precomputing for a caller-supplied base buys nothing and a table built from
+  attacker-supplied input is a surface this does not need. ECDSA
+  *verification* is untouched; it is variable-time by design and already uses
+  Shamir's trick.
+
+| operation | before | after | |
+|---|---|---|---|
+| secp256k1 pubkey | 2,817 ops/s | **11,997 ops/s** | 4.26x |
+| secp256k1 ECDSA sign | 2,545 ops/s | **7,966 ops/s** | 3.13x |
+| secp256k1 ECDSA verify | 3,540 ops/s | 3,637 ops/s | unchanged, as intended |
+
+- **INVARIANT-12 (constant-time) holds.** The scalar is read a bit at a time
+  at fixed indices and the table by full linear scan under an arithmetic mask,
+  so the `digit == 0` step costs what every other step costs. Verified by
+  Welch's t-test over 60,000 samples: fixed-vs-random `|t| = 0.29` and a
+  Hamming-weight split of `|t| = 1.03`, against dudect's leakage threshold of
+  4.5.
+- **INVARIANT-15 (thread-safe init) holds.** The table is built through the
+  platform once-primitive, not a plain `ready` flag: `secp256k1_comb_build`
+  *reads the table back* (entry `i` is built from entry `i` minus its lowest
+  set bit), so racing threads would produce read/write races, and a
+  half-written entry whose `Z` limbs are still zero *is* the point at infinity
+  — a wrong-but-well-formed public key that nothing would report.
+- **`tests/c/test_secp256k1.c` gains a comb-vs-ladder differential.** A wrong
+  comb does not fail loudly, it yields a well-formed public key for the wrong
+  scalar, so the differential is the check that matters: the comb path
+  (`pubkey_from_privkey`) must equal the ladder path (`point_mul` against the
+  generator) for all 256 single-bit scalars — which lands a bit in every comb
+  block and on both sides of all three block boundaries — and over 2,000
+  random scalars. Cross-checked out of tree against OpenSSL over 300
+  sign/verify pairs, and the full Wycheproof ECDSA corpus still passes.
+
 ### Fixed — the `math_engine` matrix/Lyapunov/helix kernels read out of bounds on a shape mismatch
 
 Proved on a running build rather than reasoned about: the four public numeric

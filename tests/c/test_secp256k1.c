@@ -332,6 +332,58 @@ int main(void) {
         TEST_ASSERT(ok, "joint: Shamir == ladder over 2000 random (u1,u2,Q)");
     }
 
+    /* Test 12: the fixed-base comb (used by pubkey derivation and the ECDSA
+     * signing nonce) must equal the generic Montgomery ladder for every scalar.
+     *
+     * `ama_secp256k1_pubkey_from_privkey` takes the comb; feeding the generator
+     * to `ama_secp256k1_point_mul` takes the ladder. The two are then the same
+     * mathematical operation by different routes, so any disagreement is a comb
+     * defect. A wrong comb does not fail loudly — it yields a well-formed public
+     * key for the wrong scalar — so this differential is the check that matters.
+     *
+     * The single-bit sweep is the important half: it lands one scalar bit in
+     * every position, which exercises each of the four comb blocks and both
+     * sides of all three block boundaries. */
+    {
+        uint8_t d[32], pub33[33], lx[32], ly[32];
+        int c, ok = 1, i;
+
+        /* Every single-bit scalar: bit i set, all others clear. */
+        for (i = 0; i < 256 && ok; i++) {
+            memset(d, 0, 32);
+            d[31 - (i >> 3)] = (uint8_t)(1u << (i & 7));
+            if (ama_secp256k1_pubkey_from_privkey(d, pub33) != AMA_SUCCESS)
+                continue;               /* >= n is rejected by both, fine */
+            if (ama_secp256k1_point_mul(d, Gx, Gy, lx, ly) != AMA_SUCCESS) {
+                ok = 0;
+                fprintf(stderr, "  comb/ladder availability mismatch at bit %d\n", i);
+                break;
+            }
+            ok = (memcmp(pub33 + 1, lx, 32) == 0) &&
+                 ((pub33[0] & 1) == (ly[31] & 1));
+            if (!ok)
+                fprintf(stderr, "  comb mismatch at single-bit scalar %d\n", i);
+        }
+        TEST_ASSERT(ok, "comb: d*G == ladder for all 256 single-bit scalars");
+
+        /* Random differential over the full scalar range. */
+        ok = 1;
+        for (c = 0; c < 2000 && ok; c++) {
+            _xs_fill(d, 32);
+            d[0] &= 0x7F;                    /* keep comfortably below n */
+            if (d[31] == 0) d[31] = 1;       /* avoid the zero scalar */
+            if (ama_secp256k1_pubkey_from_privkey(d, pub33) != AMA_SUCCESS)
+                continue;
+            if (ama_secp256k1_point_mul(d, Gx, Gy, lx, ly) != AMA_SUCCESS)
+                continue;
+            ok = (memcmp(pub33 + 1, lx, 32) == 0) &&
+                 ((pub33[0] & 1) == (ly[31] & 1));
+            if (!ok)
+                fprintf(stderr, "  comb mismatch at random trial %d\n", c);
+        }
+        TEST_ASSERT(ok, "comb: d*G == ladder over 2000 random scalars");
+    }
+
     printf("\n===========================================\n");
     printf("All secp256k1 tests passed ✓\n");
     printf("===========================================\n");
