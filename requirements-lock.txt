@@ -27,14 +27,14 @@ pytest-benchmark==5.2.3
 pytest-cov==7.1.0
 pytest-timeout==2.4.0
 pytest-xdist==3.8.0
-hypothesis==6.156.1
-coverage==7.15.0
+hypothesis==6.163.0
+coverage==7.15.2
 
 # --- Linting & formatting ---
 black==26.5.1
-mypy==2.1.0
+mypy==2.3.0
 mypy_extensions==1.1.0
-ruff==0.15.20
+ruff==0.16.0
 
 # --- Security scanning ---
 bandit==1.9.4
@@ -53,7 +53,7 @@ iniconfig==2.3.0
 markdown-it-py==4.2.0
 mdurl==0.1.2
 pathspec==1.1.1
-platformdirs==4.10.0
+platformdirs==4.11.0
 pluggy==1.6.0
 py-cpuinfo==9.0.0
 # Pygments 2.20.0 includes the CVE-2026-4539 AdlLexer ReDoS fix.

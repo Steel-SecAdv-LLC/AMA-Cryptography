@@ -19,8 +19,8 @@
 requires = [
     "setuptools>=83.0.0",
     "wheel>=0.47.0",
-    "cmake>=4.3.4",
-    "Cython>=3.2.8",
+    "cmake>=4.4.0",
+    "Cython>=3.2.9",
     "numpy>=1.24.0",
 ]
 build-backend = "setuptools.build_meta"
@@ -82,7 +82,7 @@ math = [
     # Not required for core cryptographic operations.
     # Install with: pip install "ama-cryptography[math]"
     "numpy>=1.24.0,<3.0.0",
-    "Cython>=3.2.8",
+    "Cython>=3.2.9",
 ]
 monitoring = [
     # NumPy/SciPy for mathematical monitoring (equations, double_helix_engine)
@@ -148,13 +148,13 @@ dev = [
     "pytest-timeout>=2.1.0",
     "pytest-benchmark>=4.0.0",
     "pytest-xdist>=3.0.0",
-    "hypothesis>=6.156.1",
+    "hypothesis>=6.163.0",
     # Black 26.5.1 carries the GHSA-fc3w-v5rg-v7q6 fix and requires Python
     # 3.10+ — consistent with this project's requires-python >= 3.10 floor,
     # so no version guard is needed.
     "black>=26.5.1",
-    "ruff>=0.15.20",
-    "mypy>=2.1.0",
+    "ruff>=0.16.0",
+    "mypy>=2.3.0",
     "bandit>=1.7.0",
     # `safety` was removed in v3.2.0: it was a dev-deps inventory entry
     # that NO CI workflow ever invoked.  Vulnerability scanning is
@@ -170,7 +170,7 @@ dev = [
     # `safety` deletes the chain entirely rather than annotating an
     # ignore-list — INVARIANT-14 hygiene + INVARIANT-1 zero-runtime-dep
     # posture both improve.
-    "Cython>=3.2.8",
+    "Cython>=3.2.9",
     "numpy>=1.24.0",
     "scipy>=1.11.0",
 ]

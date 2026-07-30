@@ -8,7 +8,7 @@
 # Build dependencies (required for Cython extensions).
 # The project floor is Python 3.10 (requires-python >= 3.10), so these are
 # unconditional — no version-gated fallback rows for EOL interpreters.
-Cython>=3.2.8
+Cython>=3.2.9
 
 # NumPy for the optional math / monitoring extensions.
 numpy>=1.24.0
@@ -22,12 +22,12 @@ pytest-cov>=4.0.0
 pytest-timeout>=2.1.0
 pytest-benchmark>=4.0.0
 pytest-xdist>=3.0.0
-hypothesis>=6.156.1
+hypothesis>=6.163.0
 
 # Code Quality
 black>=26.5.1
-ruff>=0.15.20
-mypy>=2.1.0
+ruff>=0.16.0
+mypy>=2.3.0
 # PyYAML powers tools/check_workflow_commands.py (INVARIANT-25), which parses
 # .github/workflows/** structurally rather than by regex.  types-PyYAML keeps
 # that tool and its tests inside `mypy --strict` instead of behind an override.
