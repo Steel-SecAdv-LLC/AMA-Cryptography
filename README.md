@@ -39,7 +39,7 @@
 **Author/Inventor:** Andrew E. A.
 **Contact:** steel.sa.llc@gmail.com
 **License:** Apache License 2.0
-**Version:** 3.4.0
+**Version:** 3.5.0
 **AI Co-Architects:** Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
 
 ---
@@ -150,7 +150,7 @@ Long-lived persistence material and successor-authorising signatures are refused
 | Argon2id | Full | Full | RFC 9106; `out_len ≤ AMA_ARGON2ID_MAX_TAG_LEN` (1024). Legacy verify-only path (`ama_argon2id_legacy*`) for one-shot migration of hashes from AMA ≤ 2.1.5 |
 | Ed25519 | Full | Full | RFC 8032; INVARIANT-26 canonical-S enforced; INVARIANT-34 low-s paired sign/verify. Backend: vendored ed25519-donna x86-64 assembly by default (`AMA_ED25519_ASSEMBLY=ON` auto-set on x86-64 / MSVC x64); `-DAMA_ED25519_ASSEMBLY=OFF` selects the in-tree fe51 + signed-4-bit-window comb path |
 | X25519 | Full | Full | RFC 7748; field arithmetic dispatched fe64 (radix-2⁶⁴ on x86-64 GCC/Clang, promoted to a MULX+ADX asm kernel when CPUID reports BMI2 ∧ ADX) → fe51 (radix-2⁵¹, non-x86-64 64-bit) → gf16 (radix-2¹⁶, 32-bit and MSVC). u-coordinates canonicalised (INVARIANT-27); low-order outputs rejected (INVARIANT-21); batch API `ama_x25519_scalarmult_batch` available; opt-in AVX2 4-way ladder |
-| NIST P-256 / P-384 / P-521 | Full | Full | FIPS 186-5 ECDSA + SP 800-56A ECDH; TLS/X.509/JOSE/COSE/WebAuthn interop. P-256 4-limb Montgomery MULX+ADCX/ADOX kernel; P-384/P-521 use the generic multi-limb CIOS path constant-folded to their limb counts. Low-s + strict DER (INVARIANT-28); canonical field-element pubkey coordinates (INVARIANT-29). See [docs/NIST_PRIME_CURVES.md](docs/NIST_PRIME_CURVES.md) |
+| NIST P-256 / P-384 / P-521 | Full | Full | FIPS 186-5 ECDSA + SP 800-56A ECDH; TLS/X.509/JOSE/COSE/WebAuthn interop. P-256 4-limb Montgomery MULX+ADCX/ADOX kernel; P-384/P-521 use the generic multi-limb CIOS path constant-folded to their limb counts. Strict minimal-DER with `r`,`s` in `[1, n-1]` unconditional; RFC 6979 `s` emitted verbatim and either representative accepted by default, low-`s` opt-in via `AMA_NISTP_ECDSA_SIGN_LOW_S` / `AMA_NISTP_ECDSA_REQUIRE_LOW_S` (INVARIANT-34); canonical field-element pubkey coordinates (INVARIANT-29). See [docs/NIST_PRIME_CURVES.md](docs/NIST_PRIME_CURVES.md) |
 | secp256k1 | Full | Full | RFC 6979 deterministic ECDSA; fixed-base comb over the compile-time generator (4-block, 16 entries) — pubkey derivation and signing scalar multiplications use the comb; caller-supplied bases keep the constant-time Montgomery ladder |
 | ML-KEM-512 / -768 / -1024 | Full (native) | Full | FIPS 203; Fujisaki–Okamoto transform, IND-CCA2; NTT q=3329 |
 | ML-DSA-44 / -65 / -87 | Full (native) | Full | FIPS 204; NTT q=8380417; rejection sampling; constant-time |
@@ -190,7 +190,7 @@ Three layers, each carrying a specific concern:
 2. **Cython accelerators** (`src/cython/`) — direct FFI bindings for the hottest Python-facing primitives and the 3R monitoring math engine.
 3. **Python API** (`ama_cryptography/`) — algorithm-agnostic surface, key management, monitoring, ethical integration, key formats, hybrid combiner, session, secure channel.
 
-### C library inventory (v3.4.0)
+### C library inventory (v3.5.0)
 
 Top-level `src/c/*.c` — 27 translation units:
 
@@ -229,7 +229,7 @@ Additional C sources:
 
 ## Performance
 
-> **Reading the numbers below.** The regression floors checked into `benchmarks/baseline.json` (recalibrated 2026-07-29 under this PR — `applies_through_release = 3.4.0`) are conservative CI-runner floors, not throughput targets. The numbers in the table are the **measured throughput on this branch's sandbox host** — a container on Intel Xeon @ 2.80 GHz, 4 cores, gcc 13.3, native C backend via Python ctypes — captured in `benchmark-report.md` on 2026-07-29. Absolute numbers depend on silicon and dispatch selection; reproduce on your target before quoting externally.
+> **Reading the numbers below.** The regression floors checked into `benchmarks/baseline.json` (recalibrated 2026-07-29 under PR #379; window extended to `applies_through_release = 3.5.0` with floors unchanged, since 3.5.0 ships that same measured tree) are conservative CI-runner floors, not throughput targets. The numbers in the table are the **measured throughput on this branch's sandbox host** — a container on Intel Xeon @ 2.80 GHz, 4 cores, gcc 13.3, native C backend via Python ctypes — captured in `benchmark-report.md` on 2026-07-29. Absolute numbers depend on silicon and dispatch selection; reproduce on your target before quoting externally.
 
 ### Current measurements (native C via ctypes, 2026-07-29 sandbox)
 
@@ -332,7 +332,7 @@ AMA Cryptography is distributed from **its own repository first**. No package in
 Pin to a **tag**, never a branch. Every published tag is at <https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/tags>:
 
 ```bash
-pip install "git+https://github.com/Steel-SecAdv-LLC/AMA-Cryptography.git@v3.4.0"
+pip install "git+https://github.com/Steel-SecAdv-LLC/AMA-Cryptography.git@v3.5.0"
 ```
 
 Build toolchain required: a C11 compiler, `cmake ≥ 4.3.4`, `Cython ≥ 3.2.8`, `numpy ≥ 1.24.0`. Confirm the install landed and the native backends are live:
@@ -476,14 +476,14 @@ Mercury Agent and FINDΩYOU™ import this library on their runtime path — the
 **Pin by tag, no index required** (PEP 508 direct reference, valid in `requirements.txt` and in a `pyproject.toml` `dependencies` list):
 
 ```
-ama-cryptography @ git+https://github.com/Steel-SecAdv-LLC/AMA-Cryptography.git@v3.4.0
+ama-cryptography @ git+https://github.com/Steel-SecAdv-LLC/AMA-Cryptography.git@v3.5.0
 ```
 
 **Pin by wheel + hash**, once a release carries built artifacts (pip refuses anything whose hash does not match):
 
 ```
 # install with: pip install --require-hashes -r requirements.txt
-ama-cryptography @ https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/releases/download/v3.4.0/<WHEEL_FILENAME> \
+ama-cryptography @ https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/releases/download/v3.5.0/<WHEEL_FILENAME> \
     --hash=sha256:<DIGEST>
 ```
 
@@ -747,7 +747,7 @@ Copyright 2025-2026 Steel Security Advisors LLC. Licensed under the Apache Licen
 
 ### Third-party dependencies
 
-AMA Cryptography v3.4.0 has **zero runtime cryptographic dependencies**. Every primitive is implemented natively in C.
+AMA Cryptography v3.5.0 has **zero runtime cryptographic dependencies**. Every primitive is implemented natively in C.
 
 **Vendored, in-tree, public-domain:**
 - ed25519-donna assembly backend (Andrew Moon) — vendored under `src/c/vendor/ed25519-donna/`, compiled in-tree, enabled by default on x86-64 via `AMA_ED25519_ASSEMBLY=ON`.

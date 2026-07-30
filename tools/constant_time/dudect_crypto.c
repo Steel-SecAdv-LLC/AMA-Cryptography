@@ -102,12 +102,10 @@ static double test_ed25519_sign(int iterations) {
     for (int i = 0; i < iterations; i++) {
         random_bytes(msg, sizeof(msg));
         int class_idx = rand() & 1;
+        const uint8_t *sk = (class_idx == 0) ? sk0 : sk1;
 
         uint64_t start = get_time_ns();
-        if (class_idx == 0)
-            ama_ed25519_sign(sig, msg, sizeof(msg), sk0);
-        else
-            ama_ed25519_sign(sig, msg, sizeof(msg), sk1);
+        ama_ed25519_sign(sig, msg, sizeof(msg), sk);
         uint64_t end = get_time_ns();
 
         ttest_update(&ctx, class_idx, (double)(end - start));
@@ -139,12 +137,10 @@ static double test_aes_gcm_encrypt(int iterations) {
         random_bytes(nonce, sizeof(nonce));
         random_bytes(pt, sizeof(pt));
         int class_idx = rand() & 1;
+        const uint8_t *key = (class_idx == 0) ? key0 : key1;
 
         uint64_t start = get_time_ns();
-        if (class_idx == 0)
-            ama_aes256_gcm_encrypt(key0, nonce, pt, sizeof(pt), NULL, 0, ct, tag);
-        else
-            ama_aes256_gcm_encrypt(key1, nonce, pt, sizeof(pt), NULL, 0, ct, tag);
+        ama_aes256_gcm_encrypt(key, nonce, pt, sizeof(pt), NULL, 0, ct, tag);
         uint64_t end = get_time_ns();
 
         ttest_update(&ctx, class_idx, (double)(end - start));
@@ -248,12 +244,10 @@ static double test_aes_gcm_decrypt_branch(int iterations) {
 
     for (int i = 0; i < iterations; i++) {
         int class_idx = rand() & 1;
+        const uint8_t *probe_tag = (class_idx == 0) ? tag : bad_tag;
 
         uint64_t start = get_time_ns();
-        if (class_idx == 0)
-            ama_aes256_gcm_decrypt(key, nonce, ct, 64, NULL, 0, tag, out);
-        else
-            ama_aes256_gcm_decrypt(key, nonce, ct, 64, NULL, 0, bad_tag, out);
+        ama_aes256_gcm_decrypt(key, nonce, ct, 64, NULL, 0, probe_tag, out);
         uint64_t end = get_time_ns();
 
         ttest_update(&ctx, class_idx, (double)(end - start));
@@ -286,12 +280,10 @@ static double test_hkdf(int iterations) {
 
     for (int i = 0; i < iterations; i++) {
         int class_idx = rand() & 1;
+        const uint8_t *ikm = (class_idx == 0) ? ikm0 : ikm1;
 
         uint64_t start = get_time_ns();
-        if (class_idx == 0)
-            ama_hkdf(salt, 32, ikm0, 32, info, info_len, okm, 32);
-        else
-            ama_hkdf(salt, 32, ikm1, 32, info, info_len, okm, 32);
+        ama_hkdf(salt, 32, ikm, 32, info, info_len, okm, 32);
         uint64_t end = get_time_ns();
 
         ttest_update(&ctx, class_idx, (double)(end - start));
@@ -305,6 +297,27 @@ static double test_hkdf(int iterations) {
  *
  * Class 0: hash all-zero input
  * Class 1: hash all-0xFF input
+ *
+ * The input pointer is selected OUTSIDE the timing region — the
+ * pointer-select-out-of-timer pattern the CMake suite adopted after its
+ * FROST scalar-negate lane leaked at ~+5 sigma purely from a
+ * class-dependent `if (class_idx == 0)` inside the timer (see
+ * tests/c/test_dudect.c).  This lane had the same defect: gcc -O2 kept
+ * the class branch between the get_time_ns() calls and emitted two
+ * separate call sites, so the classes executed different control flow
+ * inside the measured window (taken vs not-taken conditional, distinct
+ * call/return addresses, a trailing jump on one path only).  For an
+ * operation this short — one Keccak-f[1600] plus the padding block, a
+ * few hundred ns — that front-end asymmetry is a few ns of systematic
+ * per-class bias, which at 50k samples reached t = 5-7 on the shared CI
+ * runner: over the 4.5 gate in every round of one process (fixed
+ * layout), absent on other hosts, the same layout-sensitive fingerprint
+ * as the Ascon-AEAD128 encrypt setup asymmetry above.  Keccak-f[1600]
+ * has no lookup tables and no data-dependent branches (ama_sha3.c), so
+ * the property can only be measured honestly over identical control
+ * flow.  The µs-scale lanes (Ed25519, AES-GCM, HKDF) sit far above this
+ * bias but use the same idiom, so no lane depends on its operation
+ * being slow enough to hide a measurement artifact.
  * ------------------------------------------------------------------- */
 static double test_sha3_256(int iterations) {
     ttest_ctx_t ctx;
@@ -320,12 +333,10 @@ static double test_sha3_256(int iterations) {
 
     for (int i = 0; i < iterations; i++) {
         int class_idx = rand() & 1;
+        const uint8_t *input = (class_idx == 0) ? input0 : input1;
 
         uint64_t start = get_time_ns();
-        if (class_idx == 0)
-            ama_sha3_256(input0, 136, hash);
-        else
-            ama_sha3_256(input1, 136, hash);
+        ama_sha3_256(input, 136, hash);
         uint64_t end = get_time_ns();
 
         ttest_update(&ctx, class_idx, (double)(end - start));

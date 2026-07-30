@@ -229,6 +229,21 @@ cdef class AmaEngineOptimized:
         cdef double noise_scale, purity_norm, lyap_grad, sigma, helix2_norm
         cdef double prob, scale, bound
 
+        # The evolution loops below run with bounds checking disabled and use
+        # self.state_dim as the loop bound while indexing the caller-supplied
+        # `state` (and the internal state_dim-sized matrices/vectors).  A shape
+        # mismatch is therefore an out-of-bounds read of `state`, not a clean
+        # error: a shorter array silently returns adjacent heap memory, a much
+        # shorter one crashes the process.  Reject it at the boundary, the same
+        # way math_engine.pyx validates its public kernels.
+        if state is None:
+            raise ValueError("state must not be None")
+        if state.shape[0] != self.state_dim:
+            raise ValueError(
+                "state length must equal state_dim "
+                f"({state.shape[0]} != {self.state_dim})"
+            )
+
         cdef double[:] helix1 = np.copy(state)
         cdef double[:] helix2 = np.zeros(self.state_dim, dtype=np.float64)
         cdef double[:] direction = np.zeros(self.state_dim, dtype=np.float64)
@@ -535,6 +550,11 @@ cdef class AmaEngineOptimized:
         if initial_state is None:
             state = np.random.randn(self.state_dim) * 0.1 * PHI_CUBED
         else:
+            if initial_state.shape[0] != self.state_dim:
+                raise ValueError(
+                    "initial_state length must equal state_dim "
+                    f"({initial_state.shape[0]} != {self.state_dim})"
+                )
             state = np.copy(initial_state)
 
         for t in range(max_steps):

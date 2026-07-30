@@ -16,7 +16,7 @@ enters an ERROR state and all cryptographic operations are refused.
 
 Organization: Steel Security Advisors LLC
 Author/Inventor: Andrew E. A.
-Version: 3.4.0
+Version: 3.5.0
 """
 
 import ctypes

@@ -4414,7 +4414,17 @@ def native_secp256k1_pubkey_from_privkey(privkey: bytes) -> bytes:
         privkey: 32-byte secp256k1 private key
 
     Returns:
-        33-byte compressed public key (0x02/0x03 prefix + X)
+        33-byte compressed public key (0x02/0x03 prefix + X).
+
+        Note the format boundary: this returns a *compressed* SEC 1 point, but
+        :func:`native_secp256k1_ecdsa_verify` (and the other secp256k1 entry
+        points) consume the 64-byte *uncompressed* ``X || Y`` form with no
+        prefix. Convert with :func:`native_secp256k1_pubkey_decompress`, which
+        also verifies the point is on the curve:
+
+            pub64 = native_secp256k1_pubkey_decompress(
+                native_secp256k1_pubkey_from_privkey(privkey)
+            )
 
     Raises:
         ValueError: If privkey is not 32 bytes
@@ -4572,7 +4582,11 @@ def native_secp256k1_ecdsa_verify(
         signature: DER-encoded signature.
         message_digest: 32-byte digest.
         pubkey: 64-byte uncompressed public key, X||Y big-endian,
-            WITHOUT the SEC 1 ``0x04`` prefix.
+            WITHOUT the SEC 1 ``0x04`` prefix. A 33-byte compressed point
+            (as returned by :func:`native_secp256k1_pubkey_from_privkey`) or a
+            65-byte ``0x04``-prefixed point is *not* accepted here; run it
+            through :func:`native_secp256k1_pubkey_decompress` (compressed) or
+            strip the leading ``0x04`` byte (uncompressed) first.
         allow_high_s: Accept the high-``s`` malleability twin (X9.62 interop).
 
     Returns:

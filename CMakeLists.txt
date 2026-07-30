@@ -3,7 +3,7 @@
 cmake_minimum_required(VERSION 3.15)
 
 project(AmaCryptography
-    VERSION 3.4.0
+    VERSION 3.5.0
     DESCRIPTION "Quantum-Resistant Cryptographic Protection System"
     LANGUAGES C CXX
 )
@@ -857,6 +857,21 @@ install(FILES ${CMAKE_BINARY_DIR}/ama_cryptography.pc
 )
 
 # Print configuration summary
+# Effective SIMD status for the configuration summary.  An option may be
+# requested (ON) yet compile no sources on a foreign target — NEON on x86-64,
+# SVE2 off ARMv9, AVX2/AVX-512 on ARM, or anything under AMA_ENABLE_SIMD=OFF.
+# Report what was actually built, keyed on the per-arch source lists populated
+# above, so the summary reflects the compiled state rather than the request.
+foreach(_simd AVX2 AVX512 NEON SVE2)
+    if(NOT AMA_ENABLE_${_simd})
+        set(_AMA_${_simd}_STATUS "OFF")
+    elseif(AMA_${_simd}_SOURCES)
+        set(_AMA_${_simd}_STATUS "ON")
+    else()
+        set(_AMA_${_simd}_STATUS "ON (requested; inactive on this target)")
+    endif()
+endforeach()
+
 message(STATUS "")
 message(STATUS "AMA Cryptography Configuration Summary")
 message(STATUS "=====================================")
@@ -871,10 +886,10 @@ message(STATUS "  Static library: ${AMA_BUILD_STATIC}")
 message(STATUS "  Tests:          ${AMA_BUILD_TESTS}")
 message(STATUS "  Examples:       ${AMA_BUILD_EXAMPLES}")
 message(STATUS "  SIMD:           ${AMA_ENABLE_SIMD}")
-message(STATUS "  AVX2:           ${AMA_ENABLE_AVX2}")
-message(STATUS "  AVX-512:        ${AMA_ENABLE_AVX512}")
-message(STATUS "  NEON:           ${AMA_ENABLE_NEON}")
-message(STATUS "  SVE2:           ${AMA_ENABLE_SVE2}")
+message(STATUS "  AVX2:           ${_AMA_AVX2_STATUS}")
+message(STATUS "  AVX-512:        ${_AMA_AVX512_STATUS}")
+message(STATUS "  NEON:           ${_AMA_NEON_STATUS}")
+message(STATUS "  SVE2:           ${_AMA_SVE2_STATUS}")
 message(STATUS "  Sanitizers:     ${AMA_ENABLE_SANITIZERS}")
 message(STATUS "  Fuzzing:        ${AMA_BUILD_FUZZ}")
 message(STATUS "  dudect:         ${AMA_ENABLE_DUDECT}")
