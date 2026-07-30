@@ -1149,7 +1149,7 @@ static bench_result_t bench_slhdsa_shake128s_verify(int iters, int warmup) {
 
 /* --- secp256k1 pubkey-from-privkey ---
  *
- * Constant-time Montgomery-ladder scalar multiplication on secp256k1
+ * Constant-time fixed-base comb scalar multiplication on secp256k1
  * (`ama_secp256k1_pubkey_from_privkey`, SEC1 compressed output). The
  * single-shot pubkey derivation is the dominant cost in BIP-340
  * Schnorr / ECDSA signing and is what production wallets call to
@@ -1159,7 +1159,7 @@ static bench_result_t bench_secp256k1_pubkey(int iters, int warmup) {
     uint8_t pubkey[33];
 
     /* Fill with a non-zero scalar in [1, N-1]. The library rejects 0
-     * and values >= N; using 0x01..0x20 keeps the ladder on the same
+     * and values >= N; using 0x01..0x20 keeps the comb on the same
      * code path every iteration. */
     for (int i = 0; i < 32; i++) privkey[i] = (uint8_t)(i + 1);
 
@@ -1177,9 +1177,9 @@ static bench_result_t bench_secp256k1_pubkey(int iters, int warmup) {
 /* --- secp256k1 ECDSA sign (RFC 6979) ---
  *
  * The deterministic signing path: RFC 6979 HMAC-SHA-256 nonce derivation,
- * a base-point Montgomery ladder for k*G, and a Fermat inversion mod n.
- * This is what a wallet calls to authorize a transaction; the pubkey ladder
- * above is only the key-import half of the cost. */
+ * a fixed-base comb for k*G, and a Fermat inversion mod n.
+ * This is what a wallet calls to authorize a transaction; the pubkey
+ * derivation above is only the key-import half of the cost. */
 static bench_result_t bench_secp256k1_ecdsa_sign(int iters, int warmup) {
     uint8_t privkey[32];
     uint8_t digest[32];
@@ -1573,7 +1573,8 @@ int main(int argc, char **argv) {
     results[n++] = bench_x25519_dh_mulx_off(iters_med, warmup);
     results[n++] = bench_x25519_dh_mulx_on(iters_med, warmup);
 
-    /* --- secp256k1 (constant-time Montgomery ladder) --- */
+    /* --- secp256k1 (constant-time; fixed-base comb for pubkey and the
+     * signing nonce, Shamir's trick for the variable-time verify) --- */
     results[n++] = bench_secp256k1_pubkey(iters_med, warmup);
     results[n++] = bench_secp256k1_ecdsa_sign(iters_med, warmup);
     results[n++] = bench_secp256k1_ecdsa_verify(iters_med, warmup);

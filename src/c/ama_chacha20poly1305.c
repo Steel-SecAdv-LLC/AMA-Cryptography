@@ -12,12 +12,15 @@
  * - ChaCha20 stream cipher: 256-bit key, 96-bit nonce, 32-bit counter
  * - Poly1305 one-time authenticator: 128-bit tag, constant-time
  * - No table lookups on secret data (immune to cache-timing attacks)
- * - Constant-time Poly1305 using 5x26-bit limb representation
+ * - Constant-time Poly1305; radix-2^44 where a native 64x64->128
+ *   multiply exists, radix-2^26 otherwise (see the limb-width note
+ *   above the context type)
  * - Conforms to RFC 8439 (supersedes RFC 7539)
  */
 
 #include "../include/ama_cryptography.h"
 #include "../include/ama_dispatch.h"
+#include "../include/ama_uint128.h"
 #include <string.h>
 #include <stdint.h>
 
@@ -196,8 +199,49 @@ static void chacha20_xor(const uint8_t key[32], uint32_t initial_counter,
  * 130-bit arithmetic. No secret-dependent branches.
  * ============================================================================ */
 
+/* Limb width selection.
+ *
+ * RFC 8439's accumulator is 130 bits.  Splitting it into five 26-bit
+ * limbs keeps every partial product inside a 64-bit type, which is what
+ * a strictly portable implementation needs — but it costs 25 multiplies
+ * per 16-byte block.  On any target with a native 64x64 -> 128 multiply
+ * the same accumulator splits into three limbs of 44/44/42 bits and the
+ * block costs 9 multiplies instead.
+ *
+ * `__SIZEOF_INT128__` is the right gate: it is defined by GCC and Clang
+ * exactly when `unsigned __int128` exists *and* lowers to a hardware
+ * widening multiply, which is every 64-bit target this library builds
+ * for.  MSVC and 32-bit targets keep the five-limb path.  The two paths
+ * are pinned against each other by the RFC 8439 vectors and the
+ * vendored Wycheproof chacha20_poly1305 corpus, both of which run
+ * whichever path the build selected.
+ */
+#if defined(__SIZEOF_INT128__) && (defined(__GNUC__) || defined(__clang__))
+#define AMA_POLY1305_LIMBS_64 1
+#endif
+
+#ifdef AMA_POLY1305_LIMBS_64
+
+/** 44-bit limb masks. h2 is the top limb and holds 42 bits (130 - 88). */
+#define POLY1305_M44 0x00000fffffffffffULL
+#define POLY1305_M42 0x000003ffffffffffULL
+
 /**
- * Poly1305 context for incremental MAC computation.
+ * Poly1305 context, radix-2^44 (three limbs).
+ */
+typedef struct {
+    uint64_t r[3];       /* Clamped r key in 44/44/42-bit limbs */
+    uint64_t rs[2];      /* r[1]*5 and r[2]*5, precomputed for reduction */
+    uint64_t h[3];       /* Accumulator in 44/44/42-bit limbs */
+    uint64_t pad[2];     /* s key (last 16 bytes of the OTK), little-endian */
+    uint8_t buf[16];     /* Partial block buffer */
+    size_t buf_len;      /* Bytes in partial block buffer */
+} poly1305_ctx;
+
+#else
+
+/**
+ * Poly1305 context for incremental MAC computation, radix-2^26.
  */
 typedef struct {
     uint32_t r[5];       /* Clamped r key in 26-bit limbs */
@@ -207,11 +251,54 @@ typedef struct {
     size_t buf_len;      /* Bytes in partial block buffer */
 } poly1305_ctx;
 
+#endif /* AMA_POLY1305_LIMBS_64 */
+
 /**
  * Initialize Poly1305 with a 32-byte one-time key.
  * First 16 bytes = r (clamped), last 16 bytes = s.
  */
 static void poly1305_init(poly1305_ctx *ctx, const uint8_t key[32]) {
+#ifdef AMA_POLY1305_LIMBS_64
+    uint8_t r_bytes[16];
+    uint64_t rlo, rhi;
+
+    memcpy(r_bytes, key, 16);
+
+    /* Clamp r (RFC 8439 Section 2.5.2) */
+    r_bytes[3]  &= 0x0f;
+    r_bytes[7]  &= 0x0f;
+    r_bytes[11] &= 0x0f;
+    r_bytes[15] &= 0x0f;
+    r_bytes[4]  &= 0xfc;
+    r_bytes[8]  &= 0xfc;
+    r_bytes[12] &= 0xfc;
+
+    rlo = (uint64_t)load32_le(r_bytes)      | ((uint64_t)load32_le(r_bytes + 4)  << 32);
+    rhi = (uint64_t)load32_le(r_bytes + 8)  | ((uint64_t)load32_le(r_bytes + 12) << 32);
+
+    ctx->r[0] = rlo & POLY1305_M44;
+    ctx->r[1] = ((rlo >> 44) | (rhi << 20)) & POLY1305_M44;
+    ctx->r[2] = (rhi >> 24) & POLY1305_M42;
+
+    /* Folding constants for the two product terms that land above the
+     * modulus.  With 44-bit limbs, h[1]*r[2] and h[2]*r[1] both sit at
+     * 2^132, and 2^132 = 4 * 2^130 == 4 * 5 == 20 (mod 2^130 - 5) — so
+     * the constant is 20, not the 5 that appears when limbs are aligned
+     * to 2^130 itself.  r is clamped below 2^124 and each limb below
+     * 2^44, so r[i]*20 stays well inside 64 bits. */
+    ctx->rs[0] = ctx->r[1] * 20;
+    ctx->rs[1] = ctx->r[2] * 20;
+
+    ctx->pad[0] = (uint64_t)load32_le(key + 16) | ((uint64_t)load32_le(key + 20) << 32);
+    ctx->pad[1] = (uint64_t)load32_le(key + 24) | ((uint64_t)load32_le(key + 28) << 32);
+
+    ctx->h[0] = 0;
+    ctx->h[1] = 0;
+    ctx->h[2] = 0;
+    ctx->buf_len = 0;
+
+    ama_secure_memzero(r_bytes, sizeof(r_bytes));
+#else
     uint8_t r_bytes[16];
 
     memcpy(r_bytes, key, 16);
@@ -250,16 +337,76 @@ static void poly1305_init(poly1305_ctx *ctx, const uint8_t key[32]) {
     ctx->h[3] = 0;
     ctx->h[4] = 0;
     ctx->buf_len = 0;
+#endif /* AMA_POLY1305_LIMBS_64 */
 }
 
 /**
- * Process a single 16-byte Poly1305 block.
- * hibit is 1 for normal blocks, 0 for the final partial block (already padded).
+ * Absorb `nblocks` consecutive 16-byte blocks.
  *
- * Accumulator update: h = ((h + msg) * r) mod (2^130 - 5)
+ * hibit is 1 for normal blocks and 0 for the final partial block, which
+ * the caller has already zero-padded and terminated with its own 0x01
+ * byte (RFC 8439 Section 2.5.1).  A partial block is therefore always
+ * absorbed on its own with nblocks == 1.
+ *
+ * Accumulator update per block: h = ((h + msg) * r) mod (2^130 - 5).
+ *
+ * The accumulator and key limbs are hoisted into locals across the whole
+ * run rather than round-tripped through `ctx` per block.  For a 64 KiB
+ * payload that is 4096 blocks, and the reload of five (or three) limbs
+ * per block is pure overhead on a value nothing outside this function
+ * can observe mid-run.
  */
-static void poly1305_block(poly1305_ctx *ctx, const uint8_t block[16],
-                           uint32_t hibit) {
+#ifdef AMA_POLY1305_LIMBS_64
+
+static void poly1305_blocks(poly1305_ctx *ctx, const uint8_t *m,
+                            size_t nblocks, uint32_t hibit) {
+    const uint64_t r0 = ctx->r[0], r1 = ctx->r[1], r2 = ctx->r[2];
+    const uint64_t s1 = ctx->rs[0], s2 = ctx->rs[1];
+    uint64_t h0 = ctx->h[0], h1 = ctx->h[1], h2 = ctx->h[2];
+    /* 2^128 sits at bit 40 of the top limb (128 - 44 - 44 = 40). */
+    const uint64_t hi = hibit ? (UINT64_C(1) << 40) : 0;
+
+    while (nblocks--) {
+        uint64_t t0 = (uint64_t)load32_le(m)     | ((uint64_t)load32_le(m + 4)  << 32);
+        uint64_t t1 = (uint64_t)load32_le(m + 8) | ((uint64_t)load32_le(m + 12) << 32);
+        m += 16;
+
+        h0 += t0 & POLY1305_M44;
+        h1 += ((t0 >> 44) | (t1 << 20)) & POLY1305_M44;
+        h2 += (t1 >> 24) + hi;
+
+        /* Schoolbook 3x3 with the 2^130 == 5 folding applied to the
+         * limbs that would land above the modulus. */
+        ama_uint128 d0 = AMA_U128_ADD(AMA_U128_ADD(
+                             AMA_MUL64(h0, r0), AMA_MUL64(h1, s2)), AMA_MUL64(h2, s1));
+        ama_uint128 d1 = AMA_U128_ADD(AMA_U128_ADD(
+                             AMA_MUL64(h0, r1), AMA_MUL64(h1, r0)), AMA_MUL64(h2, s2));
+        ama_uint128 d2 = AMA_U128_ADD(AMA_U128_ADD(
+                             AMA_MUL64(h0, r2), AMA_MUL64(h1, r1)), AMA_MUL64(h2, r0));
+
+        uint64_t c;
+        h0 = AMA_U128_LO(d0) & POLY1305_M44;
+        c  = AMA_U128_LO(AMA_U128_SHR(d0, 44));
+        d1 = AMA_U128_ADD64(d1, c);
+        h1 = AMA_U128_LO(d1) & POLY1305_M44;
+        c  = AMA_U128_LO(AMA_U128_SHR(d1, 44));
+        d2 = AMA_U128_ADD64(d2, c);
+        h2 = AMA_U128_LO(d2) & POLY1305_M42;
+        c  = AMA_U128_LO(AMA_U128_SHR(d2, 42));
+        h0 += c * 5;
+        c = h0 >> 44; h0 &= POLY1305_M44;
+        h1 += c;
+    }
+
+    ctx->h[0] = h0;
+    ctx->h[1] = h1;
+    ctx->h[2] = h2;
+}
+
+#else
+
+static void poly1305_blocks(poly1305_ctx *ctx, const uint8_t *m,
+                            size_t nblocks, uint32_t hibit) {
     uint32_t r0 = ctx->r[0], r1 = ctx->r[1], r2 = ctx->r[2];
     uint32_t r3 = ctx->r[3], r4 = ctx->r[4];
     uint32_t h0 = ctx->h[0], h1 = ctx->h[1], h2 = ctx->h[2];
@@ -271,45 +418,56 @@ static void poly1305_block(poly1305_ctx *ctx, const uint8_t block[16],
     uint32_t s3 = r3 * 5;
     uint32_t s4 = r4 * 5;
 
-    /* Add message block to accumulator */
-    uint32_t t0 = load32_le(block);
-    uint32_t t1 = load32_le(block + 4);
-    uint32_t t2 = load32_le(block + 8);
-    uint32_t t3 = load32_le(block + 12);
+    while (nblocks--) {
+        /* Add message block to accumulator */
+        uint32_t t0 = load32_le(m);
+        uint32_t t1 = load32_le(m + 4);
+        uint32_t t2 = load32_le(m + 8);
+        uint32_t t3 = load32_le(m + 12);
+        m += 16;
 
-    h0 += t0 & 0x03ffffff;
-    h1 += ((t0 >> 26) | (t1 << 6)) & 0x03ffffff;
-    h2 += ((t1 >> 20) | (t2 << 12)) & 0x03ffffff;
-    h3 += ((t2 >> 14) | (t3 << 18)) & 0x03ffffff;
-    h4 += (t3 >> 8) | (hibit << 24);
+        h0 += t0 & 0x03ffffff;
+        h1 += ((t0 >> 26) | (t1 << 6)) & 0x03ffffff;
+        h2 += ((t1 >> 20) | (t2 << 12)) & 0x03ffffff;
+        h3 += ((t2 >> 14) | (t3 << 18)) & 0x03ffffff;
+        h4 += (t3 >> 8) | (hibit << 24);
 
-    /* h *= r (mod 2^130 - 5), using the identity:
-     * (a * 2^130) mod (2^130 - 5) = a * 5 */
-    uint64_t d0 = (uint64_t)h0 * r0 + (uint64_t)h1 * s4 + (uint64_t)h2 * s3
-                + (uint64_t)h3 * s2 + (uint64_t)h4 * s1;
-    uint64_t d1 = (uint64_t)h0 * r1 + (uint64_t)h1 * r0 + (uint64_t)h2 * s4
-                + (uint64_t)h3 * s3 + (uint64_t)h4 * s2;
-    uint64_t d2 = (uint64_t)h0 * r2 + (uint64_t)h1 * r1 + (uint64_t)h2 * r0
-                + (uint64_t)h3 * s4 + (uint64_t)h4 * s3;
-    uint64_t d3 = (uint64_t)h0 * r3 + (uint64_t)h1 * r2 + (uint64_t)h2 * r1
-                + (uint64_t)h3 * r0 + (uint64_t)h4 * s4;
-    uint64_t d4 = (uint64_t)h0 * r4 + (uint64_t)h1 * r3 + (uint64_t)h2 * r2
-                + (uint64_t)h3 * r1 + (uint64_t)h4 * r0;
+        /* h *= r (mod 2^130 - 5), using the identity:
+         * (a * 2^130) mod (2^130 - 5) = a * 5 */
+        uint64_t d0 = (uint64_t)h0 * r0 + (uint64_t)h1 * s4 + (uint64_t)h2 * s3
+                    + (uint64_t)h3 * s2 + (uint64_t)h4 * s1;
+        uint64_t d1 = (uint64_t)h0 * r1 + (uint64_t)h1 * r0 + (uint64_t)h2 * s4
+                    + (uint64_t)h3 * s3 + (uint64_t)h4 * s2;
+        uint64_t d2 = (uint64_t)h0 * r2 + (uint64_t)h1 * r1 + (uint64_t)h2 * r0
+                    + (uint64_t)h3 * s4 + (uint64_t)h4 * s3;
+        uint64_t d3 = (uint64_t)h0 * r3 + (uint64_t)h1 * r2 + (uint64_t)h2 * r1
+                    + (uint64_t)h3 * r0 + (uint64_t)h4 * s4;
+        uint64_t d4 = (uint64_t)h0 * r4 + (uint64_t)h1 * r3 + (uint64_t)h2 * r2
+                    + (uint64_t)h3 * r1 + (uint64_t)h4 * r0;
 
-    /* Carry propagation */
-    uint32_t c;
-    c = (uint32_t)(d0 >> 26); h0 = (uint32_t)d0 & 0x03ffffff; d1 += c;
-    c = (uint32_t)(d1 >> 26); h1 = (uint32_t)d1 & 0x03ffffff; d2 += c;
-    c = (uint32_t)(d2 >> 26); h2 = (uint32_t)d2 & 0x03ffffff; d3 += c;
-    c = (uint32_t)(d3 >> 26); h3 = (uint32_t)d3 & 0x03ffffff; d4 += c;
-    c = (uint32_t)(d4 >> 26); h4 = (uint32_t)d4 & 0x03ffffff; h0 += c * 5;
-    c = h0 >> 26;             h0 &= 0x03ffffff;                h1 += c;
+        /* Carry propagation */
+        uint32_t c;
+        c = (uint32_t)(d0 >> 26); h0 = (uint32_t)d0 & 0x03ffffff; d1 += c;
+        c = (uint32_t)(d1 >> 26); h1 = (uint32_t)d1 & 0x03ffffff; d2 += c;
+        c = (uint32_t)(d2 >> 26); h2 = (uint32_t)d2 & 0x03ffffff; d3 += c;
+        c = (uint32_t)(d3 >> 26); h3 = (uint32_t)d3 & 0x03ffffff; d4 += c;
+        c = (uint32_t)(d4 >> 26); h4 = (uint32_t)d4 & 0x03ffffff; h0 += c * 5;
+        c = h0 >> 26;             h0 &= 0x03ffffff;                h1 += c;
+    }
 
     ctx->h[0] = h0;
     ctx->h[1] = h1;
     ctx->h[2] = h2;
     ctx->h[3] = h3;
     ctx->h[4] = h4;
+}
+
+#endif /* AMA_POLY1305_LIMBS_64 */
+
+/** Absorb exactly one block. */
+static void poly1305_block(poly1305_ctx *ctx, const uint8_t block[16],
+                           uint32_t hibit) {
+    poly1305_blocks(ctx, block, 1, hibit);
 }
 
 /**
@@ -333,10 +491,11 @@ static void poly1305_update(poly1305_ctx *ctx, const uint8_t *data,
     }
 
     /* Process full 16-byte blocks */
-    while (len >= 16) {
-        poly1305_block(ctx, data, 1);
-        data += 16;
-        len -= 16;
+    if (len >= 16) {
+        size_t nblocks = len / 16;
+        poly1305_blocks(ctx, data, nblocks, 1);
+        data += nblocks * 16;
+        len  -= nblocks * 16;
     }
 
     /* Buffer remaining bytes */
@@ -364,6 +523,54 @@ static void poly1305_final(poly1305_ctx *ctx, uint8_t tag[16]) {
         ama_secure_memzero(block, sizeof(block));
     }
 
+#ifdef AMA_POLY1305_LIMBS_64
+    {
+        uint64_t h0 = ctx->h[0], h1 = ctx->h[1], h2 = ctx->h[2];
+        uint64_t c;
+
+        /* Final carry chain: the block loop leaves h weakly reduced. */
+        c = h1 >> 44; h1 &= POLY1305_M44;
+        h2 += c; c = h2 >> 42; h2 &= POLY1305_M42;
+        h0 += c * 5; c = h0 >> 44; h0 &= POLY1305_M44;
+        h1 += c; c = h1 >> 44; h1 &= POLY1305_M44;
+        h2 += c; c = h2 >> 42; h2 &= POLY1305_M42;
+        h0 += c * 5; c = h0 >> 44; h0 &= POLY1305_M44;
+        h1 += c;
+
+        /* Mandatory conditional subtraction of p = 2^130 - 5
+         * (RFC 8439 Section 2.5.1).  Compute g = h + 5; if g overflows
+         * 2^130 then h >= p and g (mod 2^130) is the reduced value.
+         * Branchless: the borrow bit of `g2 - 2^130` selects. */
+        uint64_t g0 = h0 + 5;  c = g0 >> 44; g0 &= POLY1305_M44;
+        uint64_t g1 = h1 + c;  c = g1 >> 44; g1 &= POLY1305_M44;
+        uint64_t g2 = h2 + c - (UINT64_C(1) << 42);
+
+        /* g2's bit 63 is set exactly when the subtraction underflowed,
+         * i.e. when h < p and h must be kept. */
+        uint64_t mask = (uint64_t)0 - (g2 >> 63);   /* all ones => keep h */
+        h0 = (h0 & mask) | (g0 & ~mask);
+        h1 = (h1 & mask) | (g1 & ~mask);
+        h2 = (h2 & mask) | (g2 & ~mask);
+
+        /* Recombine the 44-bit limbs into two 64-bit words. */
+        uint64_t lo = (h0        | (h1 << 44));
+        uint64_t hi = ((h1 >> 20) | (h2 << 24));
+
+        /* tag = (h + s) mod 2^128 */
+        uint64_t t = lo + ctx->pad[0];
+        uint64_t carry = (t < lo) ? 1u : 0u;
+        uint64_t tag_lo = t;
+        uint64_t tag_hi = hi + ctx->pad[1] + carry;
+
+        store32_le(tag,       (uint32_t)tag_lo);
+        store32_le(tag + 4,   (uint32_t)(tag_lo >> 32));
+        store32_le(tag + 8,   (uint32_t)tag_hi);
+        store32_le(tag + 12,  (uint32_t)(tag_hi >> 32));
+
+        ama_secure_memzero(ctx, sizeof(*ctx));
+        return;
+    }
+#else
     /* Final reduction: fully reduce h mod 2^130 - 5 */
     uint32_t h0 = ctx->h[0], h1 = ctx->h[1], h2 = ctx->h[2];
     uint32_t h3 = ctx->h[3], h4 = ctx->h[4];
@@ -418,6 +625,7 @@ static void poly1305_final(poly1305_ctx *ctx, uint8_t tag[16]) {
 
     /* Scrub context */
     ama_secure_memzero(ctx, sizeof(*ctx));
+#endif /* AMA_POLY1305_LIMBS_64 */
 }
 
 /* ============================================================================

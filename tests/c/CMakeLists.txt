@@ -403,6 +403,27 @@ if(AMA_USE_NATIVE_PQC)
     add_test(NAME test_keccak_equiv COMMAND test_keccak_equiv)
     set_tests_properties(test_keccak_equiv PROPERTIES SKIP_RETURN_CODE 77)
 
+    # Keccak BMI-build parity.  ama_keccak_f1600_bmi is the same round
+    # macros as ama_keccak_f1600_generic recompiled under -mbmi -mbmi2,
+    # so any divergence is a miscompilation rather than a logic error.
+    # Pins them against each other and against the published
+    # all-zero-state permutation output, so a defect shared by both
+    # builds cannot pass by self-agreement.  SKIPs with 77 when the BMI
+    # kernel is not built or the host lacks BMI1+BMI2.
+    add_executable(test_keccak_bmi_equiv test_keccak_bmi_equiv.c)
+    target_link_libraries(test_keccak_bmi_equiv ama_cryptography_test)
+    add_test(NAME test_keccak_bmi_equiv COMMAND test_keccak_bmi_equiv)
+    set_tests_properties(test_keccak_bmi_equiv PROPERTIES SKIP_RETURN_CODE 77)
+
+    # P-256 4-limb MULX/ADX Montgomery multiply parity.  Pins the
+    # hand-written asm kernel against the portable CIOS body over
+    # boundary and random operands, for both P-256 moduli.  SKIPs with
+    # 77 when the kernel is not built or the host lacks BMI2+ADX.
+    add_executable(test_nistp_mont_mulx_equiv test_nistp_mont_mulx_equiv.c)
+    target_link_libraries(test_nistp_mont_mulx_equiv ama_cryptography_test)
+    add_test(NAME test_nistp_mont_mulx_equiv COMMAND test_nistp_mont_mulx_equiv)
+    set_tests_properties(test_nistp_mont_mulx_equiv PROPERTIES SKIP_RETURN_CODE 77)
+
     # SIMD-equivalence PR (2026-05) — wrapper-level SHA3 SIMD parity.
     # Uses the AMA_TESTING_MODE keccak force/restore hooks to swap the
     # dispatched Keccak permutation between SIMD and scalar mid-test,

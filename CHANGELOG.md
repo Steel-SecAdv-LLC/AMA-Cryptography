@@ -19,6 +19,511 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ## [Unreleased]
 
+### Changed — five hot paths re-optimised, output byte-identical
+
+Five kernels were re-optimised. Every change preserves the algorithm and its
+constant-time properties; only the instruction schedule changes. Each is pinned
+to its prior behaviour by a byte-identity equivalence test, and the NIST ACVP
+and vendored Wycheproof corpora pass unchanged (1,530 ECDSA vectors across
+P-256/384/521, plus the AES-GCM, ChaCha20-Poly1305 and X25519 suites).
+
+**How these numbers were taken.** Earlier drafts of this entry quoted
+cycles/byte from separate runs and were wrong: this host's core boosts above
+its TSC rate, so a cycles/byte figure derived from the TSC moves between runs
+by more than the effects being measured. The figures below are instead
+**wall-clock microseconds, best-of-5, with the before and after binaries run
+alternately in the same session** against the same 64 KiB buffer, so
+frequency drift cancels rather than accumulating into the ratio. Host: Intel
+Xeon (Cascade Lake, 2.80 GHz TSC), gcc 13.3, library release flags. One host,
+one compiler — a record, not a portable guarantee.
+
+| operation | before | after | |
+|---|---|---|---|
+| AES-256-GCM encrypt, 64 KiB | 85.40 us | **20.58 us** | 4.15x |
+| SHA3-256, 64 KiB | 252.01 us | **149.36 us** | 1.69x |
+| P-256 ECDSA verify | 501.61 us | **245.70 us** | 2.04x |
+| P-256 ECDSA sign | 200.84 us | **136.22 us** | 1.47x |
+| ChaCha20-Poly1305 encrypt, 64 KiB | 91.30 us | **67.24 us** | 1.36x |
+| X25519 scalar multiplication | 59.24 us | **54.50 us** | 1.09x |
+
+- **AES-256-GCM — GHASH aggregation, register-resident counters, deferred
+  hashing.** The AES-NI/PCLMULQDQ kernel hashed each block with its own
+  multiply-and-reduce, forming an eight-deep dependency chain per group, and
+  round-tripped the CTR block through the stack for every increment — a
+  narrow-store/wide-load store-forwarding stall, eight of them serially ahead
+  of the AES they feed. GHASH now folds eight blocks under a single reduction
+  against an `H^1..H^8` power table (the 1-bit reflected-order correction and
+  the modular reduction are both linear over XOR, so one reduction over eight
+  accumulated products is exact, not an approximation); the counter is
+  incremented with `PADDD` on the byte-reversed block, which is precisely
+  SP 800-38D's inc32 wrap; the accumulator stays in the byte-swapped GHASH
+  domain for the whole message and crosses back once, for the tag; and each
+  group's GHASH is deferred one iteration so its carry-less multiplies overlap
+  the next group's AES on a different execution port.
+
+- **SHA3 / Keccak-f[1600] — named-local rounds plus a BMI build.** The
+  permutation held its 25 lanes in an array, so every round paid 25 loads and
+  25 stores it did not need, and staged rho+pi through a 25-lane `B[]` array.
+  The rounds now live in `src/c/internal/ama_keccak_round.h` as two
+  direction-alternating macros over named locals — twelve pairs cover all 24
+  rounds with no per-round copy and at most five staged lanes live. A second
+  translation unit (`src/c/x86/ama_keccak_f1600_bmi.c`) compiles the same
+  macros under `-mbmi -mbmi2`, where ANDN collapses chi's `(~b) & c` from two
+  instructions to one, 600 times per permutation. It is selected on a new
+  BMI1+BMI2 CPUID gate and is deliberately **not** put through the SIMD
+  auto-tune bench: that bench exists to catch vector kernels that lose to
+  scalar code, and an identical instruction schedule on general-purpose
+  registers has no such failure mode. New test `test_keccak_bmi_equiv` pins
+  the two builds against each other and both against the published
+  Keccak-f[1600] image of the all-zero state, so a defect shared by both
+  cannot pass by self-agreement.
+
+- **P-256 — a 4-limb Montgomery multiply, and a verify that stops paying for
+  constant time it does not need.** The CIOS multiply shared by
+  P-256/384/521 takes the limb count as a runtime parameter, so neither loop
+  unrolls and all 32 partial products chain through the single carry flag. It
+  is the dominant cost of both operations: 2,871 multiplies per signature,
+  7,441 per verification. `src/c/x86/ama_nistp_mont_mulx.c` adds a 4-limb
+  specialisation on MULX + ADCX/ADOX dual carry chains (178 -> 72 cycles),
+  covering P-256's field *and* its scalar field; P-384, P-521 and non-x86
+  hosts keep the generic path, which now also constant-folds its limb count
+  for the 4-limb case. Separately, ECDSA *verification* — where u1, u2, the
+  public key and the signature are public by definition — now uses a
+  variable-time mixed addition (11 field multiplications) in Shamir's trick
+  instead of the constant-time adder's 24, with the joint table normalised to
+  affine once. Signing is untouched and remains fully constant-time.
+
+- **ChaCha20-Poly1305 — register transpose and wider Poly1305 limbs.** The
+  AVX2 keystream de-interleave extracted each 32-bit word by storing a whole
+  YMM register to the stack and reloading one lane — 128 store-forwarding
+  stalls per 512-byte block. It is now a 24-shuffle register transpose. The
+  16- and 8-bit ChaCha rotations became `VPSHUFB` (they are byte
+  permutations; 160 of the 320 rotations in a block). Poly1305 gained a
+  radix-2^44 three-limb accumulator on targets with a native 64x64->128
+  multiply — 9 multiplies per block against 25 — keeping the radix-2^26 path
+  everywhere else, and absorbs whole runs of blocks with the accumulator in
+  registers.
+
+- **X25519 — fused multiply-reduce.** The MULX+ADX field multiply and its
+  2^255-19 reduction were separate `asm` statements, so the eight product
+  limbs spilled to a stack array and were immediately reloaded. Fusing each
+  pair into one block keeps the product in registers (multiply 55 -> 50
+  cycles, square 51 -> 45). The two-stage building blocks are retained and
+  exported under `AMA_TESTING_MODE` so `test_x25519_fe64_mulx_equiv` can pin
+  the fused kernels against both the pure-C reference and the two-stage
+  composition of their own parts.
+
+**What was not done, and why.** The AES-GCM figure is short of what a VAES +
+VPCLMULQDQ ZMM kernel would reach, and that kernel was not written: this host
+reports neither feature (recorded in `benchmarks/multi_library_results.json`
+under `host`), so such a kernel could not be executed, measured, or tested
+here. Writing an untestable AEAD kernel is the one thing this codebase should
+not do. The remaining P-256 distance is in the point layer — a wider
+fixed-base comb and Booth recoding for signing — which is a larger change than
+the field work and is not started rather than half-landed.
+
+### Added — host identity in the benchmark artefact
+
+`benchmarks/multi_library_results.json` recorded a measured clock and nothing
+else about the machine. That is not enough to read the table safely: whether a
+host implements VAES + VPCLMULQDQ decides which AES-GCM kernel a library
+selects, and that single fact moves peer AES-GCM by roughly 4x (~0.20
+cycles/byte with those instructions, ~0.79 without). Two artefacts captured on
+different hosts would appear directly comparable, and a reader would attribute
+an ISA difference to the implementations.
+
+The harness now records the CPU brand string and the feature bits that decide
+kernel selection (AES-NI, PCLMULQDQ, VAES, VPCLMULQDQ, AVX2, AVX-512F, SHA-NI,
+BMI2, ADX), and `benchmarks/competitive.html` prints them — including,
+explicitly, which of them are *absent*. The page also now states that its
+post-quantum rows come from a different host and a different measurement plane,
+because the `cryptography` build exposing ML-KEM/ML-DSA is not present on the
+host the native rows were measured on; those rows are carried forward unchanged
+and are unaffected by this work, which touched no lattice code.
+
+### Removed — three generated charts no document referenced
+
+`assets/performance_comparison.png`, `assets/package_performance.png` and
+`assets/monitoring_overhead.png` were regenerated on every
+`tools/generate_visuals.py` run and referenced by **no** document in the
+repository — not the README, not the wiki, not `docs/`. They were reachable
+only by opening the assets directory directly, while costing build time and
+~450 KB of git history on every regeneration.
+
+`performance_comparison.png` was worse than merely unused: it charted
+Python-via-ctypes as **20 % faster than raw C**, which cannot happen. Its own
+footnote explains why — the raw-C series came from a hardcoded
+`RAW_C_MEDIANS_US` snapshot while the ctypes series loaded live from
+`phase0_baseline_results.json`, so the two halves of a single comparison
+described different hosts at different times. An unreferenced chart that also
+states an impossible result is not an asset.
+
+The generator functions were removed with the files rather than left behind, so
+nothing regenerates an orphan on the next run, and the module docstring records
+what was dropped and why. Restoring any of them means restoring the function
+**and** adding the document reference that justifies it.
+
+Five charts remain, each referenced: `performance_dashboard.png`,
+`defense_layers.png`, `test_coverage.png`, `ethical_binding.png`,
+`quantum_comparison.png`. (`benchmark_report.png` also survived this pass; it
+was retired separately — see *Changed — the two benchmark dashboards are now
+one* below.) All six SVGs under `benchmarks/charts/` are referenced by the
+README chart table and were left alone. Verified after the change: every
+`assets/…` and `benchmarks/charts/…` path appearing in any Markdown file
+resolves to a file that exists.
+
+### Changed — the two benchmark dashboards are now one
+
+`assets/performance_dashboard.png` and `assets/benchmark_report.png` were
+adjacent in the README's benchmark section and drew from the same three JSON
+artefacts, so most of what they showed was the same measurement rendered twice:
+throughput, signature latency, key generation, regression margin, and the run
+summary all appeared in both. A reader comparing them had no way to tell which
+was authoritative, and every regeneration wrote ~430 KB of near-duplicate
+raster into git history.
+
+`performance_dashboard` was kept as the base because on each overlapping panel
+it is the better rendering, not because it was the larger file:
+
+- **Throughput** — one log-axis bar chart spanning the full 710 → 1.7 M ops/s
+  range, versus `benchmark_report`'s split into separate Top-8 and Bottom-8
+  panels, which discards the cross-scale comparison that motivates the chart.
+- **Signature latency** — bars with ±σ error bars, versus a 3-point scatter
+  that shows no dispersion at all.
+- **Regression** — measured value against its actual floor, versus a derived
+  "% improvement" that hides both operands.
+
+Three `benchmark_report` panels had no counterpart and were ported in rather
+than dropped: **Performance by Category**, **Ethical Integration Overhead**
+(read from `ethical_integration.ethical_overhead.overhead_pct`), and **NIST
+FIPS Standard Compliance**. The grid went 3×3 → 3×4; the empty twelfth cell
+that the old 3×3 layout carried is now filled, so the merged image has twelve
+populated panels and no blank space.
+
+One panel was replaced outright while merging. "Hybrid Crypto Performance"
+plotted all 31 rows of the comparative dataset against a 6-colour palette —
+unreadable, and unbounded in a fixed-size cell as the dataset grows. It is now
+**Ed25519 vs Peer Libraries**, a bounded three-way comparison that degrades to
+an explanatory placeholder when the gitignored comparative JSON is absent,
+instead of raising.
+
+`create_benchmark_report()` was deleted with the image — 297 lines out of
+`generate_dashboards.py`'s 1,073 — so nothing regenerates the retired file, and the stale
+`DASHBOARD 2: Benchmark Report` section banner now names the function it
+actually precedes.
+
+### Removed — three panels drew hardcoded literals when their measurement was missing
+
+Merging the dashboards surfaced this. `tools/generate_dashboards.py` read four
+inputs; three of them —`benchmarks/regression_results.json`,
+`benchmarks/validation_results.json`, `benchmarks/comparative_benchmark_results.json`
+— are **gitignored transients**, and the module substituted a hardcoded literal
+block whenever one was absent. On a clean checkout that was every run, so the
+shipped image asserted numbers no measurement produced:
+
+- **`Claimed vs Measured Latency` could not fail.** The validation fallback set
+  `documented_value == measured_value` on all eight claims, so the panel drew a
+  flawless diagonal *by construction*. A validation chart incapable of showing a
+  discrepancy validates nothing. Against the real artefact the picture is
+  different and actually informative — every claim is met, with margin: HKDF is
+  measured at **0.0046 ms** against a documented **0.06 ms**, Ed25519 sign
+  **0.019 ms** against **0.26 ms**, ML-DSA-65 keygen **0.25 ms** against
+  **0.85 ms**.
+- **`Regression: Measured vs Baseline` drew a floor the gate does not use.** Its
+  `_baseline_ops` literals predated the slow-runner recalibration recorded
+  earlier in this release, so the panel showed margin against retired numbers.
+  It now reads the same `benchmarks/baseline.json` values the gate enforces —
+  19 benchmarks, 19 passing.
+- **The comparative fallback described a cross-library comparison with no peer
+  in it**: six AMA-only rows, lacking the `implementation` field the real runner
+  emits, which the merged peer panel would have raised `KeyError` on.
+
+All three fallbacks are gone. Each panel now renders the command that produces
+its artefact instead, and the summary tile prints `not run` rather than a
+tally. A missing measurement is a legible gap; a fabricated one is a false
+claim, and this generator was making three of them into a committed PNG.
+
+Two rendering defects went with them, both only visible once real data replaced
+the literals:
+
+- The validation scatter was on a **linear** axis while its claims span three
+  decades (0.005 ms to 0.85 ms), collapsing seven of eight points into the
+  origin. It is now log–log, with the passing region shaded, so each point's
+  ratio to its own claim reads as a constant vertical distance.
+- Panel labels were derived mechanically — `name.replace("_", "\n")` turned
+  `ama_sha3_256_hash` into a four-line tower that collided with its neighbour,
+  and `name.split("_")[0]` labelled both `ed25519_sign` and `ed25519_verify` as
+  "ed25519". Both panels now use explicit display names with a two-line
+  fallback for keys added later, and the scatter's labels alternate across four
+  offset slots by rank along the x axis so neighbouring points cannot stack.
+
+The committed `assets/performance_dashboard.png` was regenerated from all four
+real artefacts. Both code paths were exercised: with the artefacts present
+(twelve populated panels) and with all three absent (three placeholder panels,
+exit 0, no traceback).
+
+### Added — competitive positioning and standardized-metric benchmark pages
+
+The benchmark surface reported ops/sec and nothing else. Ops/sec does not
+survive a change of clock speed and says nothing about where the library stands
+against the implementations a reader is actually choosing between, so
+`benchmarks/competitive.html` adds both.
+
+- **Head-to-head against libsodium (PyNaCl 1.6.2) and OpenSSL
+  (`cryptography` 49.0.0)** on the same host, in the same process, at matching
+  parameter sets, via the existing `benchmarks/comparative_benchmark.py`.
+  Wins *and* losses are plotted: Ed25519 verify runs **3.04x** OpenSSL and
+  **1.43x** libsodium, ML-DSA-65 sign **2.22x** OpenSSL, ML-DSA-65 verify
+  **1.51x**; ML-KEM-1024 encapsulation runs **2.81x slower** than OpenSSL and
+  bulk AES-GCM **4.91x slower** at 64 KiB.
+- **The AES-GCM gap is labelled as the posture it is.** This CPU exposes
+  AES-NI and OpenSSL uses it; AMA defaults to constant-time bitsliced AES
+  (INVARIANT-20), which never indexes a table with key-dependent data. The page
+  states the cost of that property rather than omitting the comparison.
+- **INVARIANT-36 checked before building, not after.** That invariant forbids
+  another implementation's *output as ground truth for correctness*; its own
+  scope paragraph excludes published vector suites, and a speed reference is
+  likewise not an answer key. The peer libraries appear only in the
+  benchmark extra, exactly as `comparative_benchmark.py` already documented.
+- **Cycles/byte and MB/s**, the metrics eBACS and Crypto++ report, computed
+  from the raw C harness so no FFI overhead is counted: AES-256-GCM **3.68
+  cyc/B** (762 MB/s), ChaCha20-Poly1305 **7.42 cyc/B**, SHA3-256 **14.81
+  cyc/B**, HMAC-SHA3-256 **19.92 cyc/B**, at a measured 2.80264 GHz. Plus a
+  message-size scalability sweep showing where per-call setup amortises.
+
+One measurement was discarded rather than published: ML-DSA-65 signing against
+a single fixed message measured **4.57x** OpenSSL, but ML-DSA signing is
+rejection-sampled and its cost depends on the message. Re-measured over 256
+distinct random messages it is **2.22x**. The higher number was an artefact of
+the harness, and the page says so where it reports the lower one.
+
+### Fixed — two documents named an algorithm `ama_ed25519.c` has never contained
+
+`CONSTANT_TIME_VERIFICATION.md` and `THREAT_MODEL.md` (control T2.2) both
+attributed Ed25519's constant-time scalar multiplication to a **Montgomery
+ladder**. `src/c/ama_ed25519.c` contains zero occurrences of the word: signing
+and key generation use `ge25519_scalarmult_base_comb_signed()`, a 32-table
+signed 4-bit-window base-point comb read by masked full-table scan; the
+variable-base `ge25519_scalarmult()` is double-and-add; verification is
+`ge25519_double_scalarmult_vartime()` (width-5 wNAF + Shamir's trick).
+
+In a document whose entire purpose is to record *how* constant-time is achieved,
+naming the wrong construct sends an auditor looking for code that does not
+exist and offers no way to notice the claim was never true. Both now name the
+actual routine, and `CONSTANT_TIME_VERIFICATION.md` additionally states which
+paths are variable-time **by design** — every scalar on the verify path,
+`H(R,A,M)`, is public.
+
+### Fixed — the dashboard image generator could not run, and drew four defects when it did
+
+`assets/performance_dashboard.png` and `assets/benchmark_report.png` were both
+embedded in the README when this was found (the second was retired later in the
+same cycle — see above). Both were frozen at **v2.1.5** against a 3.4.0 library
+because `tools/generate_dashboards.py` aborted on a `FileNotFoundError`: it
+hard-requires `benchmark_results.json` at the repo root, which is a gitignored
+transient produced by `benchmarks/benchmark_suite.py`, so a fresh checkout could
+never regenerate the images. Running the real two-step pipeline refreshed the
+data and exposed four defects in the generator itself:
+
+- **An operator-precedence bug repeated the panel title 42 times.** Adjacent
+  string literals concatenate at compile time *before* `*` binds, so
+  `"AMA CRYPTOGRAPHY  BENCHMARK RESULTS\n" "=" * 42` repeated the whole 36-character
+  title instead of drawing a 42-character rule — the wall of
+  `=AMA CRYPTOGRAPHY  BENCHMARK RESULTS` visible in both shipped PNGs. Both
+  sites now have the load-bearing `+`, with a comment saying why it is there.
+- **The version was a hardcoded literal** — `v3.0.0` in two titles, `v2.0` in a
+  third, against a 3.4.0 package. Now read from `ama_cryptography/__init__.py`,
+  so a regenerated image cannot misstate the version it describes.
+- **Host facts were hardcoded too** (`Python: 3.11.14`, `Linux x86_64, 4 cores`),
+  asserting the machine of whoever last edited the file. Now derived from
+  `platform` and `os.cpu_count()`.
+- **The 4-layer time breakdown was a pie chart** in which one slice takes 94.9 %
+  and the other four collapse to slivers whose leader labels landed on top of
+  each other. It is now a horizontal bar on a log axis, so every layer is
+  readable from 0.1 % to 94.9 % and each share is stated as a number rather than
+  estimated from an angle.
+
+### Fixed — every generated image asserted a version it could not know
+
+The hardcoded-version defect was not confined to `tools/generate_dashboards.py`.
+`tools/generate_visuals.py` stamped `v3.0.0` into the `test_coverage.png`
+footer against a 3.4.0 package, so all seven remaining `assets/*.png` — the
+coverage chart, ethical binding, quantum comparison, monitoring overhead,
+package performance, performance comparison, and defense layers — carried a
+stale version the moment the package moved. Both generators now read
+`__version__` from `ama_cryptography/__init__.py`, and all nine images under
+`assets/` have been regenerated and inspected. The coverage chart's counts are
+scanned live and check out against the tree: 2,206 test functions across 125
+`test_*.py` files (distinct from the 4,138 collected tests, which include
+parametrised expansions).
+
+### Changed — the signature chart moved to a log axis
+
+`benchmarks/generate_charts.py` plotted the signature family on a linear axis.
+That already compressed the slow end, and the secp256k1 comb made it worse by
+moving one bar from 3,038 to 11,997 ops/s — a 32x range in which ML-DSA-65
+signing (373 ops/s) rendered as an unreadable stub. It now uses the log axis the
+generator's own `PQC_SIGN_LATENCY` chart already documents the reasoning for,
+with multiplicative label offsets so nothing clips. The `secp256k1 pubkey`
+anchor is re-measured and its comment no longer describes a Montgomery ladder.
+
+### Fixed — the benchmark regression gate could not fail
+
+`benchmarks/baseline.json` and `benchmarks/arm-baseline.json` both declare
+`metadata.applies_through_release`. Nothing read it: a repo-wide search found
+the field only inside the two JSON files and the prose describing them, never
+in a gate, a workflow, or the runner. The floors were measured against v2.1.2
+and declared valid through v3.0.0 while the library shipped 3.4.0, and the
+regression job kept reporting PASS — it could hardly do otherwise, with
+`benchmark-report.md` recording "regressions" of -642% and -1806% as passes.
+
+Measured against the old floors, the gate's actual sensitivity was:
+
+| entry | measured / floor | regression needed before the gate fires |
+|---|---|---|
+| crypto package create | 18.7x | 95% |
+| ML-DSA-65 sign | 11.3x | 91% |
+| HMAC-SHA3-256 | 9.4x | 89% |
+| AES-256-GCM | 0.65x | already below its floor |
+
+- **`tests/test_benchmark_baseline_freshness.py` enforces the window** the
+  metadata always claimed. When the package's minor version passes
+  `applies_through_release`, the suite fails and names the remedy. Patch
+  releases are deliberately tolerated — a z-bump carries no performance intent —
+  so the comparison is on `(major, minor)`.
+- **x86-64 floors re-calibrated** at `0.65 * min(measured, canonical)`, per the
+  project's own documented 35%-headroom convention. Capping by the canonical
+  `benchmark-report.md` numbers keeps a fast host from pushing a floor above
+  what the canonical runner delivers (this host measures ML-DSA-65 signing at
+  3,561 ops/s against a canonical 1,104; the cap takes 1,104). No floor was
+  lowered, so where this host is slower than canonical the existing floor
+  stands. That pairing is what makes the result robust to this host's
+  substantial run-to-run variance — the cap absorbs high outliers, the
+  never-lower rule absorbs low ones.
+- **AArch64 floors carried forward unverified and recorded as such** in
+  `arm-baseline.json`'s change log. Recalibrating them needs the
+  `ubuntu-24.04-arm` runner, which was not available; no floor value in that
+  file was changed, so the AArch64 gate is exactly as strong as it was, and the
+  carry-forward is auditable rather than silent.
+- **AES-256-GCM is flagged, not papered over.** Its floor was already above
+  this host's throughput before any change here, so it clears the gate only on
+  the 40% tolerance. That wants a canonical-runner measurement, not a floor
+  edit, and the dashboard says so.
+
+### Changed — the performance dashboard is generated from the measurements again
+
+`assets/performance_dashboard.png` was a rasterised matplotlib grid that had
+drifted in ways a PNG cannot signal: titled **v2.1.5** against a 3.4.0 library,
+overlapping axis and value labels, an ASCII summary panel that repeated its own
+title forty times, one empty grid cell, and a four-slice pie chart for a time
+breakdown.
+
+- **`benchmarks/generate_dashboard.py` + `_dashboard_template.html`** render a
+  self-contained HTML page from the JSON artefacts the repo already produces,
+  so the page cannot silently diverge from the run. Throughput spans three
+  orders of magnitude and is a log-axis horizontal bar rather than a pie or a
+  dual axis; the optimisation is a paired before/after; headline facts are stat
+  tiles, because a single number is not a chart.
+- **Colour is assigned by family in fixed slot order and validated, not
+  eyeballed** — worst adjacent CVD dE 9.1 light / 8.4 dark against a >= 8
+  target. Every bar carries a direct value label and every chart has a table
+  view, so nothing is encoded by colour alone; that table is also the required
+  relief for the three light-mode hues below 3:1 on the surface. Dark mode is a
+  selected set of steps for the dark surface, under both the OS media query and
+  an explicit theme toggle.
+- **Rendered and inspected, not assumed.** Screenshotting both themes caught a
+  real defect: with no DOCTYPE the page renders in quirks mode, where tables do
+  not inherit colour from their ancestors, so every cell fell back to black on
+  the dark surface at roughly 1.1:1. The table now names its colour explicitly.
+
+### Performance — secp256k1 multiplied the *generator* with a generic ladder
+
+`ama_secp256k1.c` used `secp256k1_point_mul_ladder` for every scalar
+multiplication, including the two whose base point is the compile-time
+generator: public-key derivation and the ECDSA signing nonce `R = k*G`. The
+ladder costs one addition **and** one doubling per scalar bit — 256 of each —
+because it must not branch on the bit. That is the right shape for a base the
+caller supplies and pure waste for a constant.
+
+Measured, not assumed. `ama_nistp.c` already solves exactly this with a
+fixed-base comb, so the same library on the same host gave a direct control:
+
+| fixed-base `d*G` | algorithm | before |
+|---|---|---|
+| secp256k1 pubkey | Montgomery ladder | 351.93 us |
+| P-256 pubkey | precomputed comb | 138.16 us |
+
+secp256k1's prime (2^256 - 2^32 - 977) reduces *faster* than P-256's, so the
+entire 2.5x gap was the algorithm rather than the field.
+
+- **A 4-block fixed-base comb for the generator**, mirroring `nistp_comb`
+  block for block: 16 table entries (~1.9 KB, L1-resident), 64 doublings and
+  64 additions in place of 256 of each. Applied to public-key derivation and
+  the ECDSA signing nonce only. `ama_secp256k1_point_mul` keeps the ladder —
+  precomputing for a caller-supplied base buys nothing and a table built from
+  attacker-supplied input is a surface this does not need. ECDSA
+  *verification* is untouched; it is variable-time by design and already uses
+  Shamir's trick.
+
+| operation | before | after | |
+|---|---|---|---|
+| secp256k1 pubkey | 2,817 ops/s | **11,997 ops/s** | 4.26x |
+| secp256k1 ECDSA sign | 2,545 ops/s | **7,966 ops/s** | 3.13x |
+| secp256k1 ECDSA verify | 3,540 ops/s | 3,637 ops/s | unchanged, as intended |
+
+- **INVARIANT-12 (constant-time) holds.** The scalar is read a bit at a time
+  at fixed indices and the table by full linear scan under an arithmetic mask,
+  so the `digit == 0` step costs what every other step costs. Verified by
+  Welch's t-test over 60,000 samples: fixed-vs-random `|t| = 0.29` and a
+  Hamming-weight split of `|t| = 1.03`, against dudect's leakage threshold of
+  4.5.
+- **INVARIANT-15 (thread-safe init) holds.** The table is built through the
+  platform once-primitive, not a plain `ready` flag: `secp256k1_comb_build`
+  *reads the table back* (entry `i` is built from entry `i` minus its lowest
+  set bit), so racing threads would produce read/write races, and a
+  half-written entry whose `Z` limbs are still zero *is* the point at infinity
+  — a wrong-but-well-formed public key that nothing would report.
+- **`tests/c/test_secp256k1.c` gains a comb-vs-ladder differential.** A wrong
+  comb does not fail loudly, it yields a well-formed public key for the wrong
+  scalar, so the differential is the check that matters: the comb path
+  (`pubkey_from_privkey`) must equal the ladder path (`point_mul` against the
+  generator) for all 256 single-bit scalars — which lands a bit in every comb
+  block and on both sides of all three block boundaries — and over 2,000
+  random scalars. Cross-checked out of tree against OpenSSL over 300
+  sign/verify pairs, and the full Wycheproof ECDSA corpus still passes.
+
+### Fixed — the `math_engine` matrix/Lyapunov/helix kernels read out of bounds on a shape mismatch
+
+Proved on a running build rather than reasoned about: the four public numeric
+kernels in `src/cython/math_engine.pyx` — `matrix_vector_multiply`,
+`matrix_multiply`, `lyapunov_function_fast`, and `helix_evolution_step` —
+compile with `boundscheck=False` and `wraparound=False` and took the length of
+one array argument as the loop bound for indexing into another, with no check
+that the two agreed.
+
+A caller who passes mismatched shapes therefore does not get an error. With a
+small mismatch the kernel **silently reads past the end of the shorter array**
+and returns a value derived from adjacent heap memory:
+`lyapunov_function_fast(np.ones(8), np.zeros(4))` returned `8.0` instead of
+raising, having read `target[4..7]` out of bounds. With a large mismatch it
+**crashes the process** — `matrix_vector_multiply(np.ones((4, 4_000_000)),
+np.ones(1))` exits on `SIGSEGV`. Both are memory-unsafe behaviour in documented
+public functions of a cryptography library; the newer kernels in the same file
+(`token_family_counts`, `volume_spike_scores`) already validate their inputs at
+the boundary, so this was an inconsistency, not a policy.
+
+- **Each of the four kernels now validates its shape contract** before the
+  unchecked loops run and raises `ValueError` on a mismatch — the vector length
+  must equal the matrix column count; the inner matrix dimensions must agree;
+  `state` and `target` must be the same length; the `ethical_matrix` must be
+  square with dimension `len(state)`. The hot loops are unchanged, so there is
+  no throughput cost on correctly-shaped input.
+- **`tests/test_math_engine_shape_safety.py`** pins the contract: every kernel
+  now raises `ValueError` on the mismatched-shape cases that previously crashed
+  or read out of bounds, and still returns the correct result on matching
+  shapes. It is the negative-input twin of `test_smoke_import` and skips
+  cleanly when the Cython extension is not built.
+
 ### Fixed — the `-text` migration left existing clones silently wrong
 
 Reproduced on a real clone rather than reasoned about: configure

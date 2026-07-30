@@ -344,6 +344,61 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64" AND NOT MSVC)
     message(STATUS "X25519: MULX+ADX fe64 kernel enabled (BMI2 + ADX, x86-64 GCC/Clang)")
 endif()
 
+# NIST prime-curve 4-limb Montgomery multiply, MULX+ADX (x86-64 GCC/Clang).
+#
+# Compiles src/c/x86/ama_nistp_mont_mulx.c with -mbmi2 -madx.  Defines
+# AMA_HAVE_NISTP_MONT_MULX_IMPL so src/c/ama_nistp.c can declare
+# ama_nistp_mont_mul4_mulx() and route the 4-limb case (P-256's field and
+# its scalar field) to it behind the same CPUID bundle gate the X25519
+# MULX kernel uses.
+#
+# Built unconditionally on x86-64 GCC/Clang for the same reason as the
+# X25519 MULX kernel above: MULX and ADCX/ADOX are general-purpose ISA
+# extensions rather than SIMD, and the runtime gate keeps the opcodes off
+# hosts that do not report them.
+#
+# MSVC: not built.  The kernel is GCC/Clang extended inline assembly.
+set(AMA_NISTP_MULX_SOURCES "")
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64" AND NOT MSVC)
+    set(AMA_NISTP_MULX_SOURCES
+        src/c/x86/ama_nistp_mont_mulx.c
+    )
+    set_source_files_properties(${AMA_NISTP_MULX_SOURCES} PROPERTIES
+        COMPILE_FLAGS "-mbmi2 -madx")
+    add_compile_definitions(AMA_HAVE_NISTP_MONT_MULX_IMPL)
+    message(STATUS "NIST P-curves: 4-limb Montgomery MULX+ADX kernel enabled")
+endif()
+
+# Keccak-f[1600] BMI1/BMI2 build (x86-64 / x86 GCC/Clang only).
+#
+# Compiles src/c/x86/ama_keccak_f1600_bmi.c with -mbmi -mbmi2.  The file
+# holds no logic of its own: it instantiates the same round macros
+# (src/c/internal/ama_keccak_round.h) as the portable permutation in
+# src/c/ama_sha3.c, under flags that let the compiler select ANDN for
+# chi's `(~b) & c` and RORX for the flag-free rotations.  Defines
+# AMA_HAVE_KECCAK_BMI_IMPL so the dispatcher can pick up the extern
+# declaration and gate it on ama_cpuid_has_keccak_bmi().
+#
+# Always built on x86 GCC/Clang regardless of AMA_ENABLE_SIMD, for the
+# same reason the MULX+ADX X25519 kernel above is: BMI1 and BMI2 are
+# general-purpose ISA extensions, not SIMD, and the runtime CPUID gate
+# keeps the opcodes off hosts that lack them.  Turning AMA_ENABLE_SIMD
+# off should disable vector paths, not integer instruction selection.
+#
+# MSVC: not built.  MSVC has no per-file switch that enables BMI1/BMI2
+# without also raising the whole /arch level, which would change code
+# generation for every other translation unit in the target.
+set(AMA_KECCAK_BMI_SOURCES "")
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64|i[3-6]86|x86" AND NOT MSVC)
+    set(AMA_KECCAK_BMI_SOURCES
+        src/c/x86/ama_keccak_f1600_bmi.c
+    )
+    set_source_files_properties(${AMA_KECCAK_BMI_SOURCES} PROPERTIES
+        COMPILE_FLAGS "-mbmi -mbmi2")
+    add_compile_definitions(AMA_HAVE_KECCAK_BMI_IMPL)
+    message(STATUS "SHA-3: Keccak-f[1600] BMI1/BMI2 kernel enabled (x86 GCC/Clang)")
+endif()
+
 # ARM NEON intrinsics (AArch64 only)
 if(AMA_ENABLE_SIMD AND AMA_ENABLE_NEON)
     if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64")
@@ -472,6 +527,8 @@ set(AMA_SOURCES
     ${AMA_AVX2_SOURCES}
     ${AMA_AVX512_SOURCES}
     ${AMA_X25519_MULX_SOURCES}
+    ${AMA_KECCAK_BMI_SOURCES}
+    ${AMA_NISTP_MULX_SOURCES}
     ${AMA_NEON_SOURCES}
     ${AMA_SVE2_SOURCES}
 )

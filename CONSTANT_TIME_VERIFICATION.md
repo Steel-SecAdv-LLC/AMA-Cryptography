@@ -204,8 +204,17 @@ The native C implementations provide constant-time operations:
 
 The native C Ed25519 implementation provides constant-time operations:
 
-- Constant-time scalar multiplication (Montgomery ladder)
-- No secret-dependent branches or memory accesses
+- Constant-time base-point scalar multiplication for keygen and signing:
+  `ge25519_scalarmult_base_comb_signed()`, a 32-table signed 4-bit-window comb
+  read by masked full-table scan, so the access trace is independent of the
+  secret scalar. (Not a Montgomery ladder — this file previously said "Montgomery
+  ladder", which named an algorithm `ama_ed25519.c` has never contained and sent
+  an auditor looking for the wrong construct.)
+- Verification uses `ge25519_double_scalarmult_vartime()` (width-5 wNAF +
+  Shamir's trick) and the variable-base `ge25519_scalarmult()` uses
+  double-and-add; both are variable-time **by design**, because every scalar on
+  the verify path — `H(R,A,M)` — is public.
+- No secret-dependent branches or memory accesses on the secret-scalar paths
 - Dedicated `fe25519_sq()` exploiting multiplication symmetry (~55 muls vs ~100)
 - C11 `_Atomic` with `memory_order_acquire`/`memory_order_release` for thread-safe base point initialization
 - Fallback to volatile for pre-C11 compilers (MSVC compatibility)

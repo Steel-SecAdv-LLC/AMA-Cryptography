@@ -237,6 +237,16 @@ def matrix_vector_multiply(
     cdef size_t i, j
     cdef double sum_val
 
+    # The inner loops run with bounds checking disabled for speed, so a shape
+    # mismatch here is an out-of-bounds read of `vector`, not a clean error:
+    # it silently returns adjacent heap memory or crashes the process.  Reject
+    # it at the boundary, exactly as token_family_counts validates its inputs.
+    if <size_t>vector.shape[0] != n:
+        raise ValueError(
+            "vector length must equal matrix.shape[1] "
+            f"({vector.shape[0]} != {n})"
+        )
+
     for i in range(m):
         sum_val = 0.0
         for j in range(n):
@@ -263,6 +273,13 @@ def matrix_multiply(
     cdef cnp.ndarray[cnp.float64_t, ndim=2] C = np.zeros((m, p), dtype=np.float64)
     cdef size_t i, j, k
     cdef double sum_val
+
+    # Inner loops run unchecked; a row-count mismatch would read past B.
+    if <size_t>B.shape[0] != n:
+        raise ValueError(
+            "A.shape[1] must equal B.shape[0] "
+            f"({n} != {B.shape[0]})"
+        )
 
     for i in range(m):
         for j in range(p):
@@ -293,6 +310,13 @@ def lyapunov_function_fast(
     cdef double result = 0.0
     cdef double diff
     cdef size_t i
+
+    # Unchecked loop below; a length mismatch reads past `target`.
+    if <size_t>target.shape[0] != n:
+        raise ValueError(
+            "state and target must be the same length "
+            f"({n} != {target.shape[0]})"
+        )
 
     for i in range(n):
         diff = state[i] - target[i]
@@ -326,6 +350,20 @@ def helix_evolution_step(
     cdef double norm = 0.0
     cdef size_t i, j
     cdef double diff, ethical_grad
+
+    # Unchecked loops below read target[i] and ethical_matrix[i, j] for
+    # i, j in [0, n); a shorter target or a non-(n, n) matrix is an
+    # out-of-bounds read.  Validate the contract at the boundary.
+    if <size_t>target.shape[0] != n:
+        raise ValueError(
+            "state and target must be the same length "
+            f"({n} != {target.shape[0]})"
+        )
+    if <size_t>ethical_matrix.shape[0] != n or <size_t>ethical_matrix.shape[1] != n:
+        raise ValueError(
+            "ethical_matrix must be square with dimension len(state) "
+            f"(({ethical_matrix.shape[0]}, {ethical_matrix.shape[1]}) != ({n}, {n}))"
+        )
 
     # Compute direction toward target
     for i in range(n):

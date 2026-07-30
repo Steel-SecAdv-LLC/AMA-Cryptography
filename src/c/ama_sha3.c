@@ -19,6 +19,7 @@
 #include "../include/ama_cryptography.h"
 #include "../include/ama_dispatch.h"
 #include "internal/ama_sha3_x4.h"
+#include "internal/ama_keccak_round.h"
 #include <string.h>
 #include <stdint.h>
 
@@ -44,8 +45,11 @@ void ama_keccak_f1600_generic(uint64_t state[KECCAK_STATE_SIZE]);
  * -Wmissing-prototypes quiet. */
 void ama_keccak_f1600_x4_generic(uint64_t states[4][25]);
 
-/* Round constants for Keccak-f[1600] */
-static const uint64_t keccak_rc[KECCAK_ROUNDS] = {
+/* FIPS 202 Table 1 round constants.  Externally visible (declared in
+ * internal/ama_keccak_round.h) so the CPUID-gated BMI build of the same
+ * round macros in src/c/x86/ama_keccak_f1600_bmi.c shares this one
+ * definition instead of carrying a second copy that could drift. */
+const uint64_t ama_keccak_round_constants[KECCAK_ROUNDS] = {
     0x0000000000000001ULL, 0x0000000000008082ULL,
     0x800000000000808aULL, 0x8000000080008000ULL,
     0x000000000000808bULL, 0x0000000080000001ULL,
@@ -62,10 +66,14 @@ static const uint64_t keccak_rc[KECCAK_ROUNDS] = {
 
 /*
  * Reference tables for Keccak rho and pi steps.
- * The optimized keccak_f1600() below fully unrolls rho+pi with compile-time
- * constant rotations (lines 136-160), so these arrays are not referenced at
- * runtime.  They are kept here as authoritative documentation of the
- * permutation constants defined in FIPS 202 Section 3.2.2 / 3.2.3.
+ *
+ * The permutation itself does not read these at runtime: the round
+ * macros in internal/ama_keccak_round.h were generated from them and
+ * carry the offsets as literal constants, which is what lets every
+ * rotation fold to a single ROL.  They are kept here as authoritative
+ * documentation of the constants defined in FIPS 202 Section 3.2.2 /
+ * 3.2.3, and as the values a reviewer checks the generated macros
+ * against.
  *
  * Rotation offsets for rho step:
  *   { 0,  1, 62, 28, 27,
@@ -83,120 +91,32 @@ static const uint64_t keccak_rc[KECCAK_ROUNDS] = {
  */
 
 /**
- * Rotate left operation (constant-time, branchless)
- * The mask handles n=0 without a branch: when n=0, both shifts produce
- * defined results because n is masked to [0,63].
- */
-static inline uint64_t rotl64(uint64_t x, unsigned int n) {
-    /* GCC/Clang recognize this pattern and emit a single ROL instruction */
-    return (x << (n & 63)) | (x >> ((64 - n) & 63));
-}
-
-/**
- * Keccak-f[1600] permutation — optimized for throughput.
- *
- * Optimizations applied:
- * - Pragma unroll on the 24-round loop
- * - Theta D[] computed without modulo (explicit indexing)
- * - Chi step unrolled to eliminate (x+1)%5 and (x+2)%5 modulo
- * - Rho+Pi combined with direct constant rotation offsets
- */
-/**
  * Generic (non-SIMD) Keccak-f[1600] — exported for dispatch table fallback.
+ *
+ * The 25 lanes live in named locals for the whole 24-round span (see
+ * internal/ama_keccak_round.h for why, and for the measured effect).
+ * The two round macros alternate direction, so twelve pairs cover all
+ * 24 rounds with the state ending back in the a## set — no per-round
+ * copy and no B[25] staging array.
+ *
+ * The pair loop is deliberately left rolled.  Fully unrolling all 24
+ * rounds measured within noise of the rolled form on x86-64 while
+ * costing roughly 12x the code size, which is a bad trade for a
+ * function called once per rate block in every SHA-3, SHAKE, KMAC and
+ * lattice-scheme XOF call site in the tree.
  */
 void ama_keccak_f1600_generic(uint64_t state[KECCAK_STATE_SIZE]) {
-    uint64_t C[5], D[5], B[25];
-    unsigned int round;
+    AMA_KECCAK_DECLARE_STATE;
+    unsigned int r;
 
-#if defined(__GNUC__) || defined(__clang__)
-    #pragma GCC unroll 24
-#endif
-    for (round = 0; round < KECCAK_ROUNDS; round++) {
-        /* Theta step — column parities */
-        C[0] = state[0] ^ state[5] ^ state[10] ^ state[15] ^ state[20];
-        C[1] = state[1] ^ state[6] ^ state[11] ^ state[16] ^ state[21];
-        C[2] = state[2] ^ state[7] ^ state[12] ^ state[17] ^ state[22];
-        C[3] = state[3] ^ state[8] ^ state[13] ^ state[18] ^ state[23];
-        C[4] = state[4] ^ state[9] ^ state[14] ^ state[19] ^ state[24];
+    AMA_KECCAK_LOAD_A(state);
 
-        /* Theta step — D values (no modulo) */
-        D[0] = C[4] ^ rotl64(C[1], 1);
-        D[1] = C[0] ^ rotl64(C[2], 1);
-        D[2] = C[1] ^ rotl64(C[3], 1);
-        D[3] = C[2] ^ rotl64(C[4], 1);
-        D[4] = C[3] ^ rotl64(C[0], 1);
-
-        state[ 0] ^= D[0]; state[ 1] ^= D[1]; state[ 2] ^= D[2]; state[ 3] ^= D[3]; state[ 4] ^= D[4];
-        state[ 5] ^= D[0]; state[ 6] ^= D[1]; state[ 7] ^= D[2]; state[ 8] ^= D[3]; state[ 9] ^= D[4];
-        state[10] ^= D[0]; state[11] ^= D[1]; state[12] ^= D[2]; state[13] ^= D[3]; state[14] ^= D[4];
-        state[15] ^= D[0]; state[16] ^= D[1]; state[17] ^= D[2]; state[18] ^= D[3]; state[19] ^= D[4];
-        state[20] ^= D[0]; state[21] ^= D[1]; state[22] ^= D[2]; state[23] ^= D[3]; state[24] ^= D[4];
-
-        /* Rho + Pi — fully unrolled with compile-time constant rotations.
-         * B[pi[i]] = rotl64(state[i], rho[i])
-         * pi = {0,10,20,5,15,16,1,11,21,6,7,17,2,12,22,23,8,18,3,13,14,24,9,19,4}
-         * rho = {0,1,62,28,27,36,44,6,55,20,3,10,43,25,39,41,45,15,21,8,18,2,61,56,14}
-         */
-        B[ 0] = rotl64(state[ 0],  0);
-        B[10] = rotl64(state[ 1],  1);
-        B[20] = rotl64(state[ 2], 62);
-        B[ 5] = rotl64(state[ 3], 28);
-        B[15] = rotl64(state[ 4], 27);
-        B[16] = rotl64(state[ 5], 36);
-        B[ 1] = rotl64(state[ 6], 44);
-        B[11] = rotl64(state[ 7],  6);
-        B[21] = rotl64(state[ 8], 55);
-        B[ 6] = rotl64(state[ 9], 20);
-        B[ 7] = rotl64(state[10],  3);
-        B[17] = rotl64(state[11], 10);
-        B[ 2] = rotl64(state[12], 43);
-        B[12] = rotl64(state[13], 25);
-        B[22] = rotl64(state[14], 39);
-        B[23] = rotl64(state[15], 41);
-        B[ 8] = rotl64(state[16], 45);
-        B[18] = rotl64(state[17], 15);
-        B[ 3] = rotl64(state[18], 21);
-        B[13] = rotl64(state[19],  8);
-        B[14] = rotl64(state[20], 18);
-        B[24] = rotl64(state[21],  2);
-        B[ 9] = rotl64(state[22], 61);
-        B[19] = rotl64(state[23], 56);
-        B[ 4] = rotl64(state[24], 14);
-
-        /* Chi step — unrolled to eliminate modulo in (x+1)%5 and (x+2)%5 */
-        state[ 0] = B[ 0] ^ ((~B[ 1]) & B[ 2]);
-        state[ 1] = B[ 1] ^ ((~B[ 2]) & B[ 3]);
-        state[ 2] = B[ 2] ^ ((~B[ 3]) & B[ 4]);
-        state[ 3] = B[ 3] ^ ((~B[ 4]) & B[ 0]);
-        state[ 4] = B[ 4] ^ ((~B[ 0]) & B[ 1]);
-
-        state[ 5] = B[ 5] ^ ((~B[ 6]) & B[ 7]);
-        state[ 6] = B[ 6] ^ ((~B[ 7]) & B[ 8]);
-        state[ 7] = B[ 7] ^ ((~B[ 8]) & B[ 9]);
-        state[ 8] = B[ 8] ^ ((~B[ 9]) & B[ 5]);
-        state[ 9] = B[ 9] ^ ((~B[ 5]) & B[ 6]);
-
-        state[10] = B[10] ^ ((~B[11]) & B[12]);
-        state[11] = B[11] ^ ((~B[12]) & B[13]);
-        state[12] = B[12] ^ ((~B[13]) & B[14]);
-        state[13] = B[13] ^ ((~B[14]) & B[10]);
-        state[14] = B[14] ^ ((~B[10]) & B[11]);
-
-        state[15] = B[15] ^ ((~B[16]) & B[17]);
-        state[16] = B[16] ^ ((~B[17]) & B[18]);
-        state[17] = B[17] ^ ((~B[18]) & B[19]);
-        state[18] = B[18] ^ ((~B[19]) & B[15]);
-        state[19] = B[19] ^ ((~B[15]) & B[16]);
-
-        state[20] = B[20] ^ ((~B[21]) & B[22]);
-        state[21] = B[21] ^ ((~B[22]) & B[23]);
-        state[22] = B[22] ^ ((~B[23]) & B[24]);
-        state[23] = B[23] ^ ((~B[24]) & B[20]);
-        state[24] = B[24] ^ ((~B[20]) & B[21]);
-
-        /* Iota step */
-        state[0] ^= keccak_rc[round];
+    for (r = 0; r < KECCAK_ROUNDS; r += 2) {
+        AMA_KECCAK_ROUND_A_TO_E(ama_keccak_round_constants[r]);
+        AMA_KECCAK_ROUND_E_TO_A(ama_keccak_round_constants[r + 1]);
     }
+
+    AMA_KECCAK_STORE_A(state);
 }
 
 /**

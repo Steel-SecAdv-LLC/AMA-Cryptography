@@ -192,3 +192,196 @@ The five new families are not yet wired into the CI regression-detection
 runner (`benchmarks/benchmark_runner.py`); they extend the **raw-C
 harness output surface** and the visualisation surface
 (`benchmarks/generate_charts.py`) only.
+
+---
+
+## 2026-07-29: secp256k1 fixed-base comb + baseline validity-window enforcement
+
+Two changes here touch `baseline_value` entries, so both are recorded per
+"The guard" above.
+
+### 1. Why the floors moved: the window was never enforced
+
+Both baseline files declare `metadata.applies_through_release`. A repo-wide
+search found that field **only inside the two JSON files and the prose
+describing them** — never in a gate, a workflow, or the runner. The floors were
+measured against v2.1.2 and declared valid through v3.0.0 while the library
+shipped 3.4.0, and the regression job kept reporting PASS: `benchmark-report.md`
+was recording "regressions" of -642 % and -1806 % as passes.
+
+Measured sensitivity against the old floors, before any change:
+
+| entry | measured / floor | regression needed before the gate fires |
+|---|---|---|
+| crypto package create | 18.7x | 95 % |
+| ML-DSA-65 sign | 11.3x | 91 % |
+| HMAC-SHA3-256 | 9.4x | 89 % |
+| SHA3-256 (1 KiB) | 8.4x | 88 % |
+| AES-256-GCM (1 KiB) | 0.65x | already below its floor |
+
+`tests/test_benchmark_baseline_freshness.py` now enforces the window on
+`(major, minor)` — patch bumps are tolerated, since a z-bump carries no
+performance intent — and names the remedy when it fires.
+
+**Recalibration rule**, applied to `benchmarks/baseline.json` only:
+
+    new_floor = max(existing_floor, 0.65 * min(measured, canonical))
+
+* `0.65` is this project's own documented convention (35 % headroom).
+* `min(measured, canonical)` caps each floor by the committed canonical-host
+  numbers in `benchmark-report.md`, so a host that is fast on one primitive
+  cannot push a floor above what the canonical runner delivers. This is what
+  keeps ML-DSA-65 signing honest: the measuring host reported 3,561 ops/s
+  against a canonical 1,104, and the cap took 1,104.
+* `max(existing_floor, …)` means **no floor was lowered**. Where the measuring
+  host is slower than canonical — AES-GCM and X25519, both SIMD-availability
+  dependent — the existing floor simply stands.
+
+Together those two clamps make the result robust to the measuring host's
+run-to-run variance in both directions: the cap absorbs high outliers, the
+never-lower rule absorbs low ones. Variance on that host was substantial and is
+recorded here rather than hidden — AES-GCM measured 152,935 then 97,130 ops/s
+across two consecutive runs, and ML-DSA-65 sign 3,561 then 1,463.
+
+**Runner:** container, Linux x86-64, 4 cores, gcc 13.3, Python 3.11.15, native
+C backend. Commands: `python benchmarks/benchmark_runner.py` and
+`./build/bin/benchmark_c_raw`.
+
+**Not authoritative for AArch64.** `benchmarks/arm-baseline.json` had its window
+extended to 3.4.0 but **no floor value changed**, because recalibrating it needs
+the `ubuntu-24.04-arm` runner. That gate is therefore exactly as strong (and
+exactly as loose) as it was; the carry-forward is recorded in that file's
+`baseline_change_log` so it is auditable rather than silent.
+
+**AES-256-GCM is flagged, not adjusted.** Its floor was already above the
+measuring host's throughput *before* any change here, so it clears the gate only
+on the 40 % tolerance. That wants a canonical-runner measurement, not a floor
+edit, and no floor edit was made.
+
+### 2. secp256k1 fixed-base comb (algorithm change, affects two floors)
+
+`ama_secp256k1.c` used the generic Montgomery ladder for *every* scalar
+multiplication, including the two whose base point is the compile-time
+generator: public-key derivation and the ECDSA signing nonce `R = k*G`. The
+ladder spends one addition **and** one doubling per scalar bit because it must
+not branch — correct for a caller-supplied base, pure waste for a constant.
+`ama_nistp.c` already solved this with a comb, which gave a same-host control:
+secp256k1 `d*G` cost 351.93 µs against 138.16 µs for the equivalent P-256
+operation, even though secp256k1's prime reduces *faster* than P-256's.
+
+A 4-block comb (16 entries, ~1.9 KB, L1-resident) replaces 256 doublings and
+256 additions with 64 of each:
+
+| raw-C operation | before | after | |
+|---|---|---|---|
+| secp256k1 pubkey | 354.97 µs / 2,817 ops/s | **83.36 µs / 11,997 ops/s** | 4.26x |
+| secp256k1 ECDSA sign | 392.94 µs / 2,545 ops/s | **125.54 µs / 7,966 ops/s** | 3.13x |
+| secp256k1 ECDSA verify | 282.45 µs / 3,540 ops/s | 274.98 µs / 3,637 ops/s | unchanged, as intended |
+
+Verification is deliberately untouched: it is variable-time by design and
+already uses Shamir's trick.
+
+This supersedes the `secp256k1 pubkey` row in the 2026-05 sandbox table above
+(`~329 µs / ~3,000 ops/s`), which measured the ladder. That row is left in place
+because this file is an append-only record; it is historical, not current.
+
+Constant-time preserved (INVARIANT-12), verified rather than asserted: Welch's
+t-test over 60,000 samples gives fixed-vs-random `|t| = 0.29` and a
+Hamming-weight split of `|t| = 1.03`, against dudect's leakage threshold of 4.5.
+
+`secp256k1_ecdsa_sign` and `secp256k1_ecdsa_verify` floors rise to 1,900 and
+2,600 ops/s under the rule above. Both sit well below the post-change
+measurement, so the gate now protects the optimisation: reverting the comb would
+drop signing to roughly 2,545 ops/s raw C and trip the floor.
+
+### 3. AVX-512 4-way Keccak: measured, and off by default on purpose
+
+`AMA_ENABLE_AVX512` gates the in-house 4-way Keccak kernel and defaults to
+`OFF` for the five reasons in `docs/AVX512_KECCAK_ADR.md`. It had no measured
+throughput figure attached, so the cost of leaving it off was not visible to
+anyone deciding whether to turn it on.
+
+Measured on this host (AVX-512F present), min-of-3 back-to-back runs of
+`benchmark_c_raw`, same source, same compiler, only the flag differing:
+
+| operation | AVX-512 OFF | AVX-512 ON | |
+|---|---|---|---|
+| ML-KEM-1024 Encaps | 104.33 us | **85.64 us** | 1.22x |
+| ML-KEM-1024 KeyGen | 107.11 us | **87.82 us** | 1.22x |
+| ML-KEM-1024 Decaps | 118.14 us | **101.21 us** | 1.17x |
+| ML-DSA-65 Sign | 208.15 us | **180.60 us** | 1.15x |
+| ML-DSA-65 Verify | 139.81 us | **118.88 us** | 1.18x |
+| ML-DSA-65 KeyGen | 167.48 us | **142.69 us** | 1.17x |
+
+Both lattice schemes expand their matrix through the 4-way SHAKE call sites, so
+the kernel lands on every ML-KEM and ML-DSA operation rather than on hashing
+alone. The ADR's reasoning for the default is unchanged — this records what the
+default costs on hardware that could use it, so the trade is made with a number
+rather than an intuition.
+
+**Not the whole gap.** Against the widely published amd64 reference figures for
+these schemes, ML-KEM-1024 remains roughly 2x off even with the kernel on,
+while every elliptic-curve operation in the tree is at or better than its
+reference figure. Kyber's core — NTT, inverse NTT, pointwise multiply — is
+already dispatched (`dt->kyber_ntt`), so the remaining distance is not a
+missing SIMD path and wants a profile before anyone guesses at it. Those
+reference figures are literature values, not measurements taken here; running
+SUPERCOP on this host is the way to turn that comparison into evidence.
+
+### 4. Where AMA places against a field rather than a pair
+
+Two comparators is not a field. Measured in the same process, same buffers,
+best-of-5 rounds, on the primitives all four libraries expose natively
+(`benchmarks/multi_library_bench.cpp`), reported in cycles/byte so the ranking
+does not move with clock speed:
+
+| AES-256-GCM, 64 KiB | cycles/byte | MB/s |
+|---|---|---|
+| OpenSSL 3.0.13 | 0.266 | 10,529.5 |
+| **AMA Cryptography** | **2.815** | **995.5** |
+| Botan 2.19.3 | 4.767 | 587.9 |
+| wolfSSL 5.6.6 | 24.419 | 114.8 |
+
+| SHA3-256, 64 KiB | cycles/byte | MB/s |
+|---|---|---|
+| OpenSSL 3.0.13 | 6.966 | 402.3 |
+| Botan 2.19.3 | 8.249 | 339.8 |
+| wolfSSL 5.6.6 | 9.513 | 294.6 |
+| **AMA Cryptography** | **11.048** | **253.7** |
+
+AMA places **2nd of 4 on AES-GCM** — ahead of Botan by 1.69x and wolfSSL by
+8.7x, behind only OpenSSL's AES-NI + VPCLMULQDQ path — and it reaches that
+while refusing key-dependent table lookups (INVARIANT-20). On SHA3-256 it
+places 4th, but the field spans only 1.59x end to end, so last place here is a
+narrow margin rather than a different class of implementation.
+
+**Caveats, stated rather than buried.** The wolfSSL AES-GCM figure is far off
+what that library achieves when built with AES-NI; this is Ubuntu's stock
+`libwolfssl-dev` 5.6.6 and the number reflects that package's build flags, not
+the library's capability. Crypto++ is absent because `wolfssl/options.h`
+defines `byte`/`word32` macros that break `crypto++/cryptlib.h` in the same
+translation unit — it needs a separate TU, which was not built.
+
+### 5. The lattice gap is real, and it is not a missing kernel
+
+ML-KEM-1024 encapsulation costs ~72 us (~202,000 cycles) on this host against
+roughly 16-20 us for a fully vectorised AVX2 implementation of the same
+parameter set — a gap of about 4x. Two hypotheses were tested and **both were
+wrong**:
+
+* *"The 4-way Keccak is not wired."* It is. `ama_keccak_f1600_x4_avx2` is
+  selected natively (`ama_dispatch.c:1329`) and is covered by
+  `tests/c/test_keccak_equiv.c`.
+* *"Profiling shows 60% of encapsulation is scalar Keccak."* That profile was
+  an artefact. Valgrind masks CPUID, so the callgrind run selected the generic
+  4x-scalar fallback rather than the AVX2 kernel that a native run uses —
+  verified by comparing the resolved function pointer under both. **The figure
+  is withdrawn.**
+
+What is measured and stands: SIMD is engaged and contributes 1.28x
+(AVX2 on 71.96 us vs SIMD off 92.09 us), and AVX-512 contributes a further
+1.22x when enabled. The remaining distance is breadth of vectorisation —
+reference implementations vectorise rejection sampling, CBD, compression and
+the full NTT chain, where AMA vectorises a subset. Closing it is a
+vectorisation project measured in weeks, not a configuration change, and
+nothing here should be read as implying a quick fix exists.

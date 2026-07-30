@@ -66,9 +66,14 @@ SIGNATURE_OPS = {
     # this one. Anchor: `benchmark_c_raw --json` rows added in 2026-05
     # (see docs/BENCHMARK_HISTORY.md "Benchmark coverage expansion").
     "SLH-DSA-SHAKE-128s Verify": {"ops_sec": 867, "latency_ms": 1.153},
-    # secp256k1 pubkey-from-privkey (constant-time Montgomery ladder).
-    # Anchor: `benchmark_c_raw --json` row `secp256k1 pubkey` added in 2026-05.
-    "secp256k1 pubkey": {"ops_sec": 3_038, "latency_ms": 0.329},
+    # secp256k1 pubkey-from-privkey. Constant-time *fixed-base comb* since
+    # 2026-07-29 — the generic Montgomery ladder previously used here spent one
+    # addition and one doubling per scalar bit against a compile-time generator.
+    # Anchor re-measured on the same sandbox class that produced the superseded
+    # 3,038 ops/s / 0.329 ms ladder figure, so the ratio is like-for-like:
+    # `./build/bin/benchmark_c_raw` row `secp256k1 pubkey`, 2026-07-29.
+    # See docs/BENCHMARK_HISTORY.md "2026-07-29".
+    "secp256k1 pubkey": {"ops_sec": 11_997, "latency_ms": 0.0834},
 }
 
 # Sign-latency comparison for the hash-based + lattice families.
@@ -237,7 +242,13 @@ def generate_charts(output_dir: str) -> None:
     latencies = [sig_ops[n]["latency_ms"] for n in names]
     colors = ["#00d2ff", "#4d96ff", "#ff6b6b", "#ff922b", "#6bcb77", "#845ef7"]
     bars = ax.barh(names, ops_vals, color=colors[: len(names)], edgecolor="none", height=0.6)
-    ax.set_xlabel("Operations/sec", fontsize=11)
+    # Log scale, for the same reason PQC_SIGN_LATENCY uses one: this family
+    # spans 373 ops/s (ML-DSA-65 Sign) to 11,997 (secp256k1 pubkey), a 32x
+    # range. On a linear axis the slowest bars collapse into an unreadable
+    # stub against the fastest — which is exactly what happened when the
+    # secp256k1 fixed-base comb moved that bar from 3,038 to 11,997.
+    ax.set_xscale("log")
+    ax.set_xlabel("Operations/sec (log scale)", fontsize=11)
     ax.set_title(
         "Signature Algorithm Performance",
         fontsize=14,
@@ -245,10 +256,12 @@ def generate_charts(output_dir: str) -> None:
         pad=12,
     )
     ax.xaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f"{x:,.0f}"))
+    # Headroom on the right so the widest label is not clipped by the axis.
+    ax.set_xlim(min(ops_vals) * 0.55, max(ops_vals) * 3.2)
     for bar, val, lat in zip(bars, ops_vals, latencies):
         label = f"{val:,} ops/s ({lat:.3f} ms)" if val > 10 else f"{val} ops/s ({lat:.1f} ms)"
         ax.text(
-            bar.get_width() + max(ops_vals) * 0.01,
+            bar.get_width() * 1.06,  # multiplicative offset: a log axis has no fixed gap
             bar.get_y() + bar.get_height() / 2,
             label,
             va="center",

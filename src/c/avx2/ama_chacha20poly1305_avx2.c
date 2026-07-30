@@ -33,12 +33,43 @@
 
 /* ============================================================================
  * AVX2 rotate left for 32-bit lanes
+ *
+ * The 16- and 8-bit rotations are byte permutations within each 32-bit
+ * lane, so VPSHUFB expresses them as a single shuffle-port uop instead of
+ * the shift/shift/or triple the generic form needs.  ChaCha20 performs
+ * 8 rotate-16 and 8 rotate-8 per double-round, i.e. 160 of the 320
+ * rotations in a 20-round block, so this halves the rotation uop count.
+ * The 12- and 7-bit rotations have no byte-aligned form and keep the
+ * shift/or sequence.
+ *
+ * Byte indices: a little-endian 32-bit word occupies bytes b0 b1 b2 b3
+ * with b0 least significant.  rotl32(v,16) = b2 b3 b0 b1 -> {2,3,0,1};
+ * rotl32(v,8) = b3 b0 b1 b2 -> {3,0,1,2}.  VPSHUFB indexes within each
+ * 128-bit lane, so the pattern repeats across both halves.
  * ============================================================================ */
 static inline __m256i rotl32_avx2(__m256i x, int n) {
     return _mm256_or_si256(
         _mm256_slli_epi32(x, n),
         _mm256_srli_epi32(x, 32 - n)
     );
+}
+
+static inline __m256i rotl32_16_avx2(__m256i x) {
+    const __m256i m = _mm256_setr_epi8(
+         2,  3,  0,  1,   6,  7,  4,  5,
+        10, 11,  8,  9,  14, 15, 12, 13,
+         2,  3,  0,  1,   6,  7,  4,  5,
+        10, 11,  8,  9,  14, 15, 12, 13);
+    return _mm256_shuffle_epi8(x, m);
+}
+
+static inline __m256i rotl32_8_avx2(__m256i x) {
+    const __m256i m = _mm256_setr_epi8(
+         3,  0,  1,  2,   7,  4,  5,  6,
+        11,  8,  9, 10,  15, 12, 13, 14,
+         3,  0,  1,  2,   7,  4,  5,  6,
+        11,  8,  9, 10,  15, 12, 13, 14);
+    return _mm256_shuffle_epi8(x, m);
 }
 
 /* ============================================================================
@@ -49,10 +80,57 @@ static inline __m256i rotl32_avx2(__m256i x, int n) {
  * ============================================================================ */
 static inline void chacha_qr_avx2(__m256i *a, __m256i *b,
                                    __m256i *c, __m256i *d) {
-    *a = _mm256_add_epi32(*a, *b); *d = rotl32_avx2(_mm256_xor_si256(*d, *a), 16);
+    *a = _mm256_add_epi32(*a, *b); *d = rotl32_16_avx2(_mm256_xor_si256(*d, *a));
     *c = _mm256_add_epi32(*c, *d); *b = rotl32_avx2(_mm256_xor_si256(*b, *c), 12);
-    *a = _mm256_add_epi32(*a, *b); *d = rotl32_avx2(_mm256_xor_si256(*d, *a), 8);
+    *a = _mm256_add_epi32(*a, *b); *d = rotl32_8_avx2(_mm256_xor_si256(*d, *a));
     *c = _mm256_add_epi32(*c, *d); *b = rotl32_avx2(_mm256_xor_si256(*b, *c), 7);
+}
+
+/* ============================================================================
+ * 8x8 32-bit transpose of eight YMM registers.
+ *
+ * Input:  r0..r7, where r_k holds word k of eight parallel ChaCha states,
+ *         lane j of r_k being state j's word k.
+ * Output: o0..o7, where o_j holds words 0..7 of state j — i.e. exactly
+ *         32 contiguous keystream bytes for one block, ready to store.
+ *
+ * Three stages, 24 shuffle uops total, no memory traffic:
+ *   unpack{lo,hi}_epi32 pairs adjacent rows,
+ *   unpack{lo,hi}_epi64 pairs adjacent row-pairs,
+ *   permute2x128 joins the low and high 128-bit halves.
+ * ============================================================================ */
+static inline void transpose8x32_avx2(
+    __m256i r0, __m256i r1, __m256i r2, __m256i r3,
+    __m256i r4, __m256i r5, __m256i r6, __m256i r7,
+    __m256i *o0, __m256i *o1, __m256i *o2, __m256i *o3,
+    __m256i *o4, __m256i *o5, __m256i *o6, __m256i *o7)
+{
+    __m256i t0 = _mm256_unpacklo_epi32(r0, r1);
+    __m256i t1 = _mm256_unpackhi_epi32(r0, r1);
+    __m256i t2 = _mm256_unpacklo_epi32(r2, r3);
+    __m256i t3 = _mm256_unpackhi_epi32(r2, r3);
+    __m256i t4 = _mm256_unpacklo_epi32(r4, r5);
+    __m256i t5 = _mm256_unpackhi_epi32(r4, r5);
+    __m256i t6 = _mm256_unpacklo_epi32(r6, r7);
+    __m256i t7 = _mm256_unpackhi_epi32(r6, r7);
+
+    __m256i u0 = _mm256_unpacklo_epi64(t0, t2);   /* rows 0..3, word idx 0 */
+    __m256i u1 = _mm256_unpackhi_epi64(t0, t2);   /* rows 0..3, word idx 1 */
+    __m256i u2 = _mm256_unpacklo_epi64(t1, t3);   /* rows 0..3, word idx 2 */
+    __m256i u3 = _mm256_unpackhi_epi64(t1, t3);   /* rows 0..3, word idx 3 */
+    __m256i u4 = _mm256_unpacklo_epi64(t4, t6);   /* rows 4..7, word idx 0 */
+    __m256i u5 = _mm256_unpackhi_epi64(t4, t6);   /* rows 4..7, word idx 1 */
+    __m256i u6 = _mm256_unpacklo_epi64(t5, t7);   /* rows 4..7, word idx 2 */
+    __m256i u7 = _mm256_unpackhi_epi64(t5, t7);   /* rows 4..7, word idx 3 */
+
+    *o0 = _mm256_permute2x128_si256(u0, u4, 0x20);
+    *o1 = _mm256_permute2x128_si256(u1, u5, 0x20);
+    *o2 = _mm256_permute2x128_si256(u2, u6, 0x20);
+    *o3 = _mm256_permute2x128_si256(u3, u7, 0x20);
+    *o4 = _mm256_permute2x128_si256(u0, u4, 0x31);
+    *o5 = _mm256_permute2x128_si256(u1, u5, 0x31);
+    *o6 = _mm256_permute2x128_si256(u2, u6, 0x31);
+    *o7 = _mm256_permute2x128_si256(u3, u7, 0x31);
 }
 
 /* ============================================================================
@@ -138,20 +216,45 @@ void ama_chacha20_block_x8_avx2(const uint8_t key[32],
     s12 = _mm256_add_epi32(s12, i12); s13 = _mm256_add_epi32(s13, i13);
     s14 = _mm256_add_epi32(s14, i14); s15 = _mm256_add_epi32(s15, i15);
 
-    /* De-interleave and store: extract each of the 8 instances' 64 bytes.
-     * The data is interleaved across YMM lanes; we need to extract
-     * individual 32-bit words from each lane index. */
-    __m256i rows[16] = {s0,s1,s2,s3,s4,s5,s6,s7,
-                        s8,s9,s10,s11,s12,s13,s14,s15};
-    for (int inst = 0; inst < 8; inst++) {
-        uint32_t block[16];
-        for (int row = 0; row < 16; row++) {
-            uint32_t tmp[8];
-            _mm256_storeu_si256((__m256i *)tmp, rows[row]);
-            block[row] = tmp[inst];
-        }
-        memcpy(out + inst * 64, block, 64);
-    }
+    /* De-interleave and store.
+     *
+     * The sixteen YMM registers hold the keystream transposed: s_k lane j
+     * is word k of block j.  Two 8x8 register transposes put each block's
+     * 64 bytes back into contiguous order — the low half (words 0..7) from
+     * s0..s7 and the high half (words 8..15) from s8..s15.
+     *
+     * ChaCha20 words are serialised little-endian (RFC 8439 Section 2.3);
+     * on every architecture this kernel compiles for the in-register
+     * representation is already little-endian, so the store needs no
+     * byte-swap.  x86-64 is the only target here (the whole TU is inside
+     * `#if defined(__x86_64__) || defined(_M_X64)`).
+     *
+     * Stores are unaligned: `out` is the caller's 512-byte keystream
+     * buffer with no alignment contract. */
+    __m256i lo0, lo1, lo2, lo3, lo4, lo5, lo6, lo7;
+    __m256i hi0, hi1, hi2, hi3, hi4, hi5, hi6, hi7;
+
+    transpose8x32_avx2(s0, s1, s2, s3, s4, s5, s6, s7,
+                       &lo0, &lo1, &lo2, &lo3, &lo4, &lo5, &lo6, &lo7);
+    transpose8x32_avx2(s8, s9, s10, s11, s12, s13, s14, s15,
+                       &hi0, &hi1, &hi2, &hi3, &hi4, &hi5, &hi6, &hi7);
+
+    _mm256_storeu_si256((__m256i *)(out +   0), lo0);
+    _mm256_storeu_si256((__m256i *)(out +  32), hi0);
+    _mm256_storeu_si256((__m256i *)(out +  64), lo1);
+    _mm256_storeu_si256((__m256i *)(out +  96), hi1);
+    _mm256_storeu_si256((__m256i *)(out + 128), lo2);
+    _mm256_storeu_si256((__m256i *)(out + 160), hi2);
+    _mm256_storeu_si256((__m256i *)(out + 192), lo3);
+    _mm256_storeu_si256((__m256i *)(out + 224), hi3);
+    _mm256_storeu_si256((__m256i *)(out + 256), lo4);
+    _mm256_storeu_si256((__m256i *)(out + 288), hi4);
+    _mm256_storeu_si256((__m256i *)(out + 320), lo5);
+    _mm256_storeu_si256((__m256i *)(out + 352), hi5);
+    _mm256_storeu_si256((__m256i *)(out + 384), lo6);
+    _mm256_storeu_si256((__m256i *)(out + 416), hi6);
+    _mm256_storeu_si256((__m256i *)(out + 448), lo7);
+    _mm256_storeu_si256((__m256i *)(out + 480), hi7);
 }
 
 /* ============================================================================
