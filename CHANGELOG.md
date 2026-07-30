@@ -64,6 +64,38 @@ scalar-negate lane leaked the same way: the class-dependent pointer is
 chosen before the timer starts, and the timed region contains nothing
 class-dependent but the data under test.
 
+### Fixed — the dudect AES-GCM tag-compare lane measured its two probe buffers' addresses, not just the compare
+
+`test_aes_gcm_tag_compare` in `tools/constant_time/dudect_crypto.c` gave each
+class its own probe buffer — `early_diff_tag` (mismatch at byte 0) and
+`late_diff_tag` (mismatch at byte 15) — and timed `ama_consttime_memcmp`
+against one or the other. Those buffers live at different addresses, and on
+some cache geometries one address is systematically costlier to read than the
+other (a cache-line split, a different set or page). That is a per-class
+timing difference with nothing to do with the compare — a measurement
+artifact — and on the shared CI runner it pushed `|t|` over the 4.5 gate,
+with a sign that varied run to run (the fingerprint of an artifact, not the
+fixed-sign asymmetry a real first-vs-last-byte leak would show). The compare
+itself is constant-time by construction: branch-free over volatile reads (see
+`ama_consttime.c`).
+
+The lane now uses the same pattern as the proven-stable utility lane in the
+sibling harness (`dudect_harness.c` `test_consttime_memcmp`, which reuses one
+fixed buffer pair and only flips a byte): a single reference and a single
+reused probe at fixed addresses, read identically by both classes every
+iteration. Only the probe's content differs per class, which a branch-free
+compare must ignore. The per-iteration prep is class-symmetric — both end
+bytes are stored unconditionally to their fixed addresses and only the stored
+value depends on the class — so no store-to-load-forwarding asymmetry or
+class-dependent branch feeds the timed region. This removes the address
+artifact by construction, on every microarchitecture rather than the ones a
+local run happens to exercise; the `-O2` disassembly confirms two
+unconditional symmetric stores and a timed region whose control flow and
+memory addresses are class-independent. A leaky early-exit comparator still
+diverges by class (it stops at byte 0 vs byte 15), so sensitivity to a real
+regression is preserved and in fact improves over the two-buffer form.
+Threshold, verdict rule, and lane inventory are unchanged.
+
 ### Changed — the CMake summary reports what was compiled, not what was requested
 
 The configuration summary printed the requested option state (`NEON: ON` on

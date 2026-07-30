@@ -169,19 +169,49 @@ static double test_aes_gcm_encrypt(int iterations) {
  *
  * Class 0: tag differs in the FIRST byte (worst case for memcmp)
  * Class 1: tag differs in the LAST  byte (best  case for memcmp)
+ *
+ * Measurement hygiene — one reused probe, not one buffer per class.
+ * -----------------------------------------------------------------
+ * The two classes must differ ONLY in the property under test — WHERE the
+ * mismatch is — and in nothing the compare's timing could legitimately
+ * depend on.  A buffer's ADDRESS is such a thing: two independent per-class
+ * probe buffers live at different addresses, and on some cache geometries
+ * one address is systematically costlier to read than the other (a
+ * cache-line split, a different set, a different page), so the classes'
+ * measured times differ for a reason that has nothing to do with the
+ * compare.  That per-class ADDRESS bias is a measurement artifact; on the
+ * shared CI runner it was large enough to push |t| over the gate (with a
+ * sign that varied run to run — the fingerprint of an artifact, not the
+ * fixed-sign asymmetry a real first-vs-last-byte leak would show).
+ *
+ * The fix is the pattern the proven-stable utility lane already uses
+ * (tools/constant_time/dudect_harness.c test_consttime_memcmp reuses one
+ * pair of fixed buffers and only flips a byte of one): a SINGLE reference
+ * and a SINGLE reused probe, at fixed addresses, read identically every
+ * iteration by both classes.  The only thing that varies per class is the
+ * VALUE at one probe byte, which a branch-free constant-time compare must
+ * ignore.  This removes the address artifact by construction — on every
+ * microarchitecture, not just the ones a local run happens to exercise —
+ * rather than by tuning a measurement.
+ *
+ * The per-iteration prep is kept class-symmetric so it cannot smuggle the
+ * bias back in: BOTH end bytes are stored unconditionally to their fixed
+ * addresses every iteration, and only the stored VALUE is class-dependent
+ * (class 0 flips byte 0, class 1 flips byte 15).  Same two store addresses,
+ * same control flow, both classes — so no store-to-load-forwarding
+ * asymmetry and no class-dependent branch feeds the timed region.  A leaky
+ * early-exit comparator still diverges by class (it stops at byte 0 vs byte
+ * 15), so sensitivity to a real regression is preserved; only the artifact
+ * is gone.
  * ------------------------------------------------------------------- */
 static double test_aes_gcm_tag_compare(int iterations) {
     ttest_ctx_t ctx;
     ttest_init(&ctx);
 
     uint8_t reference_tag[16];
-    uint8_t early_diff_tag[16];   /* differs at byte[0] */
-    uint8_t late_diff_tag[16];    /* differs at byte[15] */
+    uint8_t probe[16];            /* ONE reused probe, fixed address */
     random_bytes(reference_tag, 16);
-    memcpy(early_diff_tag, reference_tag, 16);
-    memcpy(late_diff_tag,  reference_tag, 16);
-    early_diff_tag[0]  ^= 0x01;
-    late_diff_tag[15]  ^= 0x01;
+    memcpy(probe, reference_tag, 16);
 
     /* Sink for the comparison result so the optimizer cannot dead-code
      * the call.  Using a volatile sink rather than e.g. printf keeps the
@@ -193,7 +223,15 @@ static double test_aes_gcm_tag_compare(int iterations) {
 
     for (int i = 0; i < iterations; i++) {
         int class_idx = rand() & 1;
-        const uint8_t *probe = (class_idx == 0) ? early_diff_tag : late_diff_tag;
+
+        /* Rebuild the probe OUTSIDE the timed region.  Both end bytes are
+         * written every iteration to their fixed addresses; only the value
+         * is class-dependent, so class 0 mismatches at byte 0, class 1 at
+         * byte 15, and bytes 1..14 always equal the reference.  Exactly one
+         * byte mismatches in either class (both are reject cases), and the
+         * two stores are address- and control-flow-identical across classes. */
+        probe[0]  = (uint8_t)(reference_tag[0]  ^ (class_idx == 0));
+        probe[15] = (uint8_t)(reference_tag[15] ^ (class_idx == 1));
 
         uint64_t start = get_time_ns();
         sink ^= ama_consttime_memcmp(reference_tag, probe, 16);
