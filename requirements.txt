@@ -17,10 +17,9 @@
 # them twice creates drift; this file exists only as a discoverability
 # breadcrumb for downstream tools that grep for requirements.txt.
 
-# Secure memory operations (OPTIONAL, recommended for high-security environments)
-# The secure_memory module uses the AMA native C backend or POSIX mlock/munlock.
-# Install with: pip install "ama-cryptography[secure-memory]"
-# pynacl>=1.5.0
+# Secure memory operations ship in the core package — no extra needed.
+# The secure_memory module uses the AMA native C backend or POSIX
+# mlock/munlock via ctypes; it has no third-party dependency.
 
 # HSM integration (OPTIONAL)
 # PKCS#11 support for hardware security modules.

@@ -64,6 +64,74 @@ scalar-negate lane leaked the same way: the class-dependent pointer is
 chosen before the timer starts, and the timed region contains nothing
 class-dependent but the data under test.
 
+### Fixed — the dudect AES-GCM tag-compare lane measured its two probe buffers' addresses, not just the compare
+
+`test_aes_gcm_tag_compare` in `tools/constant_time/dudect_crypto.c` gave each
+class its own probe buffer — `early_diff_tag` (mismatch at byte 0) and
+`late_diff_tag` (mismatch at byte 15) — and timed `ama_consttime_memcmp`
+against one or the other. Those buffers live at different addresses, and on
+some cache geometries one address is systematically costlier to read than the
+other (a cache-line split, a different set or page). That is a per-class
+timing difference with nothing to do with the compare — a measurement
+artifact — and on the shared CI runner it pushed `|t|` over the 4.5 gate,
+with a sign that varied run to run (the fingerprint of an artifact, not the
+fixed-sign asymmetry a real first-vs-last-byte leak would show). The compare
+itself is constant-time by construction: branch-free over volatile reads (see
+`ama_consttime.c`).
+
+The lane now uses the same pattern as the proven-stable utility lane in the
+sibling harness (`dudect_harness.c` `test_consttime_memcmp`, which reuses one
+fixed buffer pair and only flips a byte): a single reference and a single
+reused probe at fixed addresses, read identically by both classes every
+iteration. Only the probe's content differs per class, which a branch-free
+compare must ignore. The per-iteration prep is class-symmetric — both end
+bytes are stored unconditionally to their fixed addresses and only the stored
+value depends on the class — so no store-to-load-forwarding asymmetry or
+class-dependent branch feeds the timed region. This removes the address
+artifact by construction, on every microarchitecture rather than the ones a
+local run happens to exercise; the `-O2` disassembly confirms two
+unconditional symmetric stores and a timed region whose control flow and
+memory addresses are class-independent. A leaky early-exit comparator still
+diverges by class (it stops at byte 0 vs byte 15), so sensitivity to a real
+regression is preserved and in fact improves over the two-buffer form.
+Threshold, verdict rule, and lane inventory are unchanged.
+
+### Fixed — open CodeQL alerts on the test suite, at what they pointed at
+
+Six standing CodeQL alerts were resolved in code, without dismissals and
+without weakening any assertion:
+
+- Five `import`/`import from` mix notes — a module imported both as
+  `import M` and `from M import x` in the same file — were made
+  single-style: `tests/test_self_test_coverage.py` and
+  `tests/test_rfc8554_vectors.py` now reach the package/submodule object
+  through the `from ama_cryptography import _self_test as …` /
+  `import ama_cryptography` form the file already uses elsewhere;
+  `tests/test_invariant_upgrades.py` imports `check_suppression_hygiene`'s
+  `main` the same `from`-way as the rest of that file; and
+  `tests/test_key_formats.py` drops the `import ama_cryptography._asn1 as
+  _asn1` alias in favour of the `from ama_cryptography._asn1 import …` list
+  already present (adding `oid_to_string` to it and calling the OID helpers
+  by their bare names). Every module in the four files now has exactly one
+  import style — verified by an AST check that mirrors the CodeQL rule.
+- One "unreachable code" warning
+  (`tests/test_key_formats.py`) was a control-flow false positive: CodeQL
+  does not model that `pytest.raises(...)` swallows the exception, so it read
+  the post-exception restoration assertion — the entire point of that case —
+  as dead. Rewritten with an explicit `try/except` that asserts the same two
+  facts (the `RuntimeError` propagates out of the context manager, and the
+  value is restored afterward), which is a path static analysis can see is
+  reachable. Behaviour is unchanged, verified against the real context
+  manager.
+
+The seventh alert
+(`benchmarks/generate_competitive.py` "unused named argument in formatting
+call") is a verified false positive left unchanged: the `TEMPLATE.format(...)`
+call is a perfect bijection between its 18 keyword arguments and the template's
+replacement fields — confirmed by field enumeration, a raw brace count, and a
+clean runtime `format()` — at every revision of the file. Contorting correct,
+idiomatic code to silence a tool would be the debt this repository avoids.
+
 ### Changed — the CMake summary reports what was compiled, not what was requested
 
 The configuration summary printed the requested option state (`NEON: ON` on
@@ -1734,6 +1802,239 @@ its first campaigns. Each is pinned by a named regression test.
   `-Waggressive-loop-optimizations` against `mat[i]`. Iterating `i < k` under an
   explicit precondition makes the bound structural, so the warning is gone
   because the property is now provable rather than suppressed.
+
+### Fixed — the wiki's security-support matrix contradicted the SECURITY.md it calls authoritative
+
+`wiki/Security-Model.md` introduces its Supported Versions table as a mirror
+of SECURITY.md, "which is authoritative" — and then said `3.4.x | ✓ Active`
+with no 3.5.x row, while SECURITY.md had already rolled to 3.5.x-active /
+3.4.x-superseded. On a public page that self-declares to mirror the
+authoritative policy, that is a false security-support claim. The table now
+mirrors SECURITY.md row-for-row, and SECURITY.md's own Document History —
+which had silently stopped at 3.3.0 through two releases of matrix changes —
+gained its missing 3.4.0 and 3.5.0 rows.
+
+### Fixed — the SBOM shipped 11 components while src/c shipped 16, and nothing could notice
+
+`docs/compliance/sbom-c-library.json` still carried the component list
+inherited from the pre-generator heredoc: every primitive added after it —
+Ascon (3.4.0), FROST, agent binding, and this release's own HSS/LMS and NIST
+prime curves — was absent, while `generate_sbom.py --check` passed, because
+the check validates versions and purls of the components listed, never
+whether the list is complete. The manifest now names all 16 public-API
+primitives (with ML-KEM/ML-DSA descriptions covering their 3.5.0 parameter
+sets), and the generator refuses to run unless every top-level `src/c/*.c`
+is classified as either a component or one of eleven named internal-support
+TUs — verified to fail on an unclassified probe file — so the next new
+primitive fails CI until its SBOM decision is made. INVARIANT-11's release
+gate is now complete enough to be believed.
+
+### Fixed — the release notes would have claimed an asset the release does not attach
+
+`release.yml`'s generated GitHub-Release body said "Python SBOM + C-library
+SBOM (CycloneDX) attached." Only the C-library SBOM is ever aggregated into
+release assets; the Python SBOM is a per-commit `security.yml` artifact that
+a tag-triggered run cannot reach, and under immutable releases the missing
+asset could never be added after publish — the same false-advertising class
+the workflow already engineered around for PyPI. The body now claims exactly
+what is attached. In the same file: the operator runbook told the operator to
+tag `v3.4.0` (now `v3.5.0` — the very instruction this release's operator
+would consult), and a stage description said wheels cover Python 3.10–3.13
+while the matrix builds 3.10–3.14.
+
+### Fixed — the shipped docker-compose monitor service could not start
+
+`tools/monitoring/ama_cryptography_monitor_demo.py` imported
+`tools.monitoring.ama_cryptography_monitor` — a package path that exists in a
+repo checkout but not in the image, where the Dockerfile copies the demo as a
+loose file into `/app`. The `ama-monitor` service (default compose profile,
+`restart: unless-stopped`) crash-looped on `ModuleNotFoundError`; the same
+command failed from a repo checkout too, since script mode puts
+`tools/monitoring/`, not the repo root, on `sys.path`. The demo now imports
+`ama_cryptography.monitoring`, which the wheel ships; verified by running the
+demo from an isolated `/app`-equivalent directory through its monitoring
+phases.
+
+### Fixed — the ARM baseline's new window entry described a recalibration that never touched it
+
+The 3.5.0 window-extension entry added to `benchmarks/arm-baseline.json` was
+byte-identical to the x86-64 one — including "the floors describe exactly the
+code 3.5.0 ships" justified by the 2026-07-29 recalibration, which re-floored
+only the x86-64 file; the entry directly above it records these AArch64
+floors as CARRIED FORWARD UNVERIFIED with an open ACTION REQUIRED. The entry
+is rewritten to say what is true of this file: the window extension rests on
+the tree-delta argument alone, the floors remain the 2026-05-15 PR #305
+calibration (secp256k1 rows: PR #370), and the re-measure action item stands.
+Both files' provenance metadata is corrected in the same pass:
+`baseline_source_release` said 2.1.2 — describing no floor in either file
+since their re-floors — and `notes` opened with "measured against v2.1.2 …
+valid through v3.0.0"; the ARM file's notes were an x86 copy-paste down to
+"Sapphire Rapids / Zen 4 hosts". The freshness test prints
+`baseline_source_release` in its failure banner, so the first future window
+violation would have reported false provenance. No floor value changed, and
+historical change-log entries were left verbatim — corrections are recorded
+as new entries, not edits to the record.
+
+### Fixed — three dudect Ascon lanes still selected their class inside the timed region
+
+The measurement-hygiene fix above converted five lanes of
+`tools/constant_time/dudect_crypto.c` to the pointer-select-out-of-timer
+idiom and its comment claimed "no lane depends on its operation being slow
+enough to hide a measurement artifact" — but the three Ascon lanes still
+evaluated `class_idx == 0 ? a : b` between the `get_time_ns()` calls,
+resting on gcc choosing `cmov` rather than on the structural idiom the
+comment attributes to every lane. All three now hoist the class-selected
+pointer above the timer like the other six; disassembly shows every timed
+region branch-free (13/13/8 instructions, `cmov` before timer-open, single
+call site), `--self-test` passes, and a 20k-iteration run reports all strict
+lanes PASS (Ascon lanes |t| ≤ 1.25). The file header also promised "5 lanes"
+including a GHASH lane this harness has never had; it now lists the nine real
+lanes, informational lane marked as such.
+
+### Fixed — README claims that failed their own reproduction commands, and citation drift the citation test could not see
+
+The Ed25519 row cited INVARIANT-34 ("low-s paired sign/verify") — an
+ECDSA-only invariant that has never covered Ed25519, whose malleability
+control is the canonical-`S` check (INVARIANT-26, already cited in the same
+cell). The INVARIANT-37 deep link used an anchor that never existed at any
+commit ("must not name or document" vs the real "must not claim" heading);
+README was the only file repo-wide with the dead variant. The test-count
+claims (3,052 functions / 125 files) failed the reproduction commands printed
+beside them once this release's own new test file landed; "27 modules +
+`__init__` + `__main__`" implied 29 files where 27 exist; "60 C test
+binaries" counted a standalone benchmark and two helper TUs of a single test
+target; and "all 19 regression rows PASS with substantial headroom" was false
+for AES-256-GCM, which measures 35% below its deliberately retained 150,000
+floor and passes within its 40% tolerance — exactly as
+docs/BENCHMARK_HISTORY.md records ("flagged, not adjusted"). All corrected,
+counts re-derived from the commands at commit time.
+`tests/test_readme_invariant_citations.py`'s advertised broadening-detection
+is now implemented rather than claimed: positive containment asserts cannot
+see a section *grow*, so INVARIANT-28 gained negative anchors (`ama_nistp`,
+`P-256/384/521`, `NIST`) that genuinely fire on a prime-curve broadening, and
+a new test pins the Ed25519 row to INVARIANT-26 and away from INVARIANT-34.
+
+### Fixed — five pointers sent users of a runtime SecurityWarning to an empty section
+
+The Argon2id legacy-path `SecurityWarning` text, two `pqc_backends`
+docstrings/comments, an `ama_argon2.c` block comment, and the public-header
+docstring all said "See CHANGELOG.md [Unreleased] § BREAKING" — a section
+that has been empty since the 3.0.0 roll moved the migration recipe under
+`[3.0.0]`. All five now point at `[3.0.0] § BREAKING`. Also under
+INVARIANT-22: the nonce-counter file's owner was described as "the signing
+principal" in an encryption-only path — the vocabulary of a signing-counter
+context that never applied here — now "the encrypting principal", in both
+INVARIANTS.md and the `AESGCMProvider` docstring.
+
+### Changed — two compliance documents stopped asserting measurements they never made
+
+`docs/METRICS_REPORT.md` was restamped 3.5.0 by the version bump while every
+count described a 2026-05-16 tree ("14 fuzz targets" against the 16 that
+exist; LoC tables off 30–60%) — and its own rule, "if a documented count and
+this report disagree, the count is the bug," would have adjudicated against
+the accurate README. All tables are re-measured on the release tree via the
+report's own reproduction commands, dated, and logged.
+`docs/compliance/CSRC_ALIGN_REPORT.md` said "Version: 3.4.0" over a
+2026-05-16 audit date with an abstract still saying 3.0 — a stamp rolled
+without re-validation, which INVARIANT-16 prohibits. Rather than restamping
+again, the 2026-05-16 mappings were re-verified against the v3.5.0 tree and a
+re-validation addendum appended: six corrections recorded (a deleted
+`ama_sphincs.c` reference, drifted line refs, a stale "ML-KEM-512/768 not
+implemented" rationale among them), the post-audit primitives tabulated with
+their conformance gates re-executed (full Wycheproof corpus: 4,263 vectors,
+0 failures), and an explicit statement of what was NOT re-validated. The
+header now reads Version 3.5.0 / Original audit 2026-05-16 / Re-validated
+2026-07-30 — true because the work behind it was done.
+
+### Changed — the audit-time dependency closure is now actually closed
+
+`requirements-lock.txt` — scanned by `pip-audit --strict` in four workflows
+as "the audit-time dependency closure" — omitted eight packages its own pins
+require: `packaging` (black and pytest both require it unconditionally),
+mypy's `librt` and `ast_serialize`, and the build toolchain (`Cython`,
+`build`, `pyproject_hooks`, `setuptools`, `wheel`) that its documented
+regeneration recipe would have emitted. Derived, not guessed: clean venv,
+install lock+dev, `pip freeze --all`, fold the diff — zero version drift on
+every existing pin, eight additions, and the header now states the closure
+contract the file is held to and how to reproduce it.
+
+### Changed — benchmark artefacts now say where their numbers came from, and the wiki floor table shows the enforced floors
+
+`wiki/Performance-Benchmarks.md`'s auto-table claimed its floor column "is
+the value enforced by `benchmarks/baseline.json`" while showing
+pre-recalibration floors on 13 of 17 rows and omitting the gate's two
+secp256k1 entries: the table had not been regenerated since the re-floor, and
+`tools/update_docs.py` silently dropped any floor absent from the 2026-04-27
+results JSON. Regenerated — the floor column now shows the enforced values —
+and the generator now emits floor-only rows for gate entries missing from the
+results JSON, pointing at `benchmark-report.md` rather than presenting a
+partial table as the whole gate. The committed `dashboard.html` /
+`competitive.html` stamps ("3.4.0", generated 2026-07-29) are the true
+provenance of their measurement runs and are deliberately NOT restamped: an
+offline re-render would label data with a build that was never benchmarked —
+this pass briefly regenerated `competitive.html` that way and reverted it on
+realizing exactly that. `generate_competitive.py` now derives the AMA version
+from the package at render time (ending the hand-pinned stamp that survived
+the bump) and documents that regeneration is only valid alongside a
+measurement run on the host. README states all three artefacts' provenance,
+including that `benchmark-results.json` still carries the 2026-04-27 run and
+that the next canonical-host dual-output `benchmark_runner.py` run
+re-converges it with `benchmark-report.md` (2026-07-29).
+
+### Changed — the wiki caught up with what the library and its competitors actually ship
+
+`wiki/Home.md` claimed Python 3.10–3.13 (3.14 is in every CI matrix and the
+classifiers) beside an algorithm list frozen at the 3.3 feature set — it now
+lists the ML-KEM/ML-DSA parameter-set families, HSS/LMS verify, the NIST
+prime curves, FROST, Ascon, and a runtime-safeguards row.
+`wiki/Security-Model.md`'s competitive table said OpenSSL lacks PQC
+("✗ (3.x preview)" / "Partial") and that AMA "provides additional PQC
+capabilities not yet available in those libraries" — contradicted by this
+repository's own benchmarks, which measure OpenSSL 4.0.1 ML-DSA-65 and
+ML-KEM-1024 natively. The OpenSSL cells now state what OpenSSL ships
+(natively since 3.5, including SLH-DSA and TLS hybrid key-exchange groups), a
+swapped libsodium/OpenSSL RFC 3161 cell was corrected, and the note scopes
+AMA's genuine differentiators — hybrid classical+PQC binding in one API,
+runtime anomaly monitoring, agent-instance binding — instead of a PQC
+availability claim that is no longer true of the field.
+
+### Changed — the version checker can now see what it kept missing
+
+Every stale stamp this pass found lived in a blind spot of
+`check_version_consistency.py`. Two classes are now covered and both verified
+to fail on the defect they close: `docs/Doxyfile` `PROJECT_NUMBER` (sat on
+"2.0" across three major generations of generated C-API documentation) and
+`@vX.Y.Z` git-tag install pins in `docs/**/*.rst` (the Sphinx landing page
+shipped a `@v3.4.0` install command into 3.5.0 — the `*.md` sweep cannot see
+`.rst`). Smaller stamps from the same sweep: `requirements-dev.txt` dropped
+its frozen "2.0" title; `.pre-commit-config.yaml`'s bandit rev (1.7.8) caught
+up with the locked/CI bandit (1.9.4); `Dockerfile.alpine` gained the
+maintainer/description/version labels its siblings carry; `requirements.txt`
+stopped instructing `pip install "ama-cryptography[secure-memory]"` — an
+extra that has never existed (`secure_memory` ships in core, stdlib +
+native-library only); `generate_sbom.py`'s manifest comment pointed at a
+"dependency graph" in CSRC_ALIGN_REPORT.md that does not exist (now the
+standards-alignment table, which does); the CMake SIMD summary blames
+`AMA_ENABLE_SIMD=OFF` instead of "this target" when the master switch is the
+cause; and the Version History Summary's 3.0.0 row said 2026-04-25 against
+its own heading's 2026-04-27.
+
+### Release
+
+- **v3.5.0 mechanics**, finalized across the release PR and this close-out
+  pass: version bumped 3.4.0 → 3.5.0 across every
+  `check_version_consistency.py` site, plus the Doxyfile and Sphinx-pin sites
+  the checker now scans; `[Unreleased]` → `[3.5.0] - 2026-07-30` with the
+  empty `[Unreleased]` heading retained; benchmark validity windows extended
+  to 3.5.0 with floors untouched and provenance corrected;
+  `sbom-c-library.json` regenerated at 16 components under the new
+  completeness gate; SECURITY.md Supported Versions rolled (3.5.x active,
+  3.4.x superseded — no public API removals) and mirrored to the wiki, with
+  Document History brought current; `_integrity_digest.txt` /
+  `_integrity_signature.py` regenerated over the final sources
+  (INVARIANT-17). The `v3.5.0` tag is applied to the merge commit after
+  merge — `release.yml` runs on `v*` tag pushes only, and the tag must name
+  the exact tree every claim above was verified against.
 
 ---
 
@@ -5297,7 +5598,7 @@ After upgrading to v2.0:
 
 | Version | Date | Description |
 |---------|------|-------------|
-| 3.0.0 | 2026-04-25 | In-house AVX-512 4-way Keccak permutation kernel + ADR (opt-in, default OFF, first ZMM-class SIMD path); Argon2id RFC 9106 byte-identity (BREAKING — `legacy_compat` migration shim provided, deprecated from day one and slated for removal in 4.0.0); Argon2id `out_len` cap at `AMA_ARGON2ID_MAX_TAG_LEN` (1024 B); Tier-B PQC + Ed25519 verify-path SWE + VAES YMM AES-256-GCM + X25519 `fe51` + ChaCha20 AVX2 + Argon2 BlaMka G AVX2 paths cited end-to-end against fresh measurements; CPUID-gated AVX-512 KAT in CI; re-floored slow-runner regression baselines (30/30 pass); NIST ACVP self-attestation under continuous validation (1,215/1,215 pass with SHA-3 MCT); duplicate un-pinned const-time-crypto job removed from `fuzzing.yml` |
+| 3.0.0 | 2026-04-27 | In-house AVX-512 4-way Keccak permutation kernel + ADR (opt-in, default OFF, first ZMM-class SIMD path); Argon2id RFC 9106 byte-identity (BREAKING — `legacy_compat` migration shim provided, deprecated from day one and slated for removal in 4.0.0); Argon2id `out_len` cap at `AMA_ARGON2ID_MAX_TAG_LEN` (1024 B); Tier-B PQC + Ed25519 verify-path SWE + VAES YMM AES-256-GCM + X25519 `fe51` + ChaCha20 AVX2 + Argon2 BlaMka G AVX2 paths cited end-to-end against fresh measurements; CPUID-gated AVX-512 KAT in CI; re-floored slow-runner regression baselines (30/30 pass); NIST ACVP self-attestation under continuous validation (1,215/1,215 pass with SHA-3 MCT); duplicate un-pinned const-time-crypto job removed from `fuzzing.yml` |
 | 2.0.0 | 2026-03-07 | Zero-dependency native C, AES-256-GCM, adaptive posture, hybrid KEM combiner, Ed25519 atomics, Phase 2 primitives, CI hardening (PR #116: ruff, Semgrep, HMAC-SHA512, mypy --strict, CVE-2026-26007), FIPS 203/204/205 |
 | 1.0.0 | 2025-11-22 | First public open-source release (Apache 2.0) |
 

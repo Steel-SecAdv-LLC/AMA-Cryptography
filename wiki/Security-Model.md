@@ -10,7 +10,7 @@ Documentation for AMA Cryptography's security properties, threat model, side-cha
 |----------|-------|
 | Audit Status | Community-tested; **not externally audited** |
 | Version | 3.5.0 |
-| Last Updated | 2026-07-26 |
+| Last Updated | 2026-07-30 |
 | Responsible Disclosure | steel.sa.llc@gmail.com |
 
 > **Production Disclaimer:** This is a self-assessed cryptographic implementation without third-party audit. Production use **requires**:
@@ -120,14 +120,14 @@ The following operations are implemented in constant time:
 | Ed25519 signing | `ama_ed25519.c` with `fe25519_sq()` | ✓ Constant-time |
 | Ed25519 verification | Windowed scalar multiplication | ✓ Constant-time |
 | AES-256-GCM (default) | Bitsliced S-box (`AMA_AES_CONSTTIME=ON`) | ✓ Constant-time |
-| AES-256-GCM (opt-out) | Table-based S-box (`-DAMA_AES_CONSTTIME=OFF`) | ⚠ NOT constant-time |
+| AES-256-GCM (opt-out) | Table-based S-box (`-DAMA_AES_CONSTTIME=OFF -DAMA_AES_TABLE_INSECURE=ON`) | ⚠ NOT constant-time |
 | ML-DSA-65 | NTT operations | ✓ Constant-time |
 | ML-KEM-1024 | NTT + Fujisaki-Okamoto | ✓ Constant-time |
 | Key zeroing | `secure_memzero()` multi-pass | ✓ Compiler-resistant |
 
 ### AES Cache-Timing Warning
 
-The default AES-256-GCM build uses the constant-time bitsliced AES S-box (`AMA_AES_CONSTTIME=ON` since v2.1.2). If you explicitly disable it (`-DAMA_AES_CONSTTIME=OFF`), the build falls back to a 256-byte lookup table S-box that leaks information through cache-timing side-channels in **shared-tenant environments** (cloud VMs, containers with shared L1/L2 caches). A compile-time warning is emitted when the table-based path is selected.
+The default AES-256-GCM build uses the constant-time bitsliced AES S-box (`AMA_AES_CONSTTIME=ON` since v2.1.2). Disabling it takes two flags — `-DAMA_AES_CONSTTIME=OFF` alone is a CMake `FATAL_ERROR` unless `-DAMA_AES_TABLE_INSECURE=ON` is also passed to acknowledge the exposure (INVARIANT-20) — after which the build falls back to a 256-byte lookup table S-box that leaks information through cache-timing side-channels in **shared-tenant environments** (cloud VMs, containers with shared L1/L2 caches). A compile-time warning is emitted when the table-based path is selected.
 
 **Verify constant-time AES is enabled (default):**
 ```bash
@@ -154,14 +154,15 @@ which is authoritative.
 
 | Version | Security Support |
 |---------|-----------------|
-| 3.4.x | ✓ Active (security updates provided) |
+| 3.5.x | ✓ Active (development and security updates) |
+| 3.4.x | ✗ Superseded by v3.5 (no public API removals) |
 | 3.3.x | ✗ Superseded by v3.4 (no public API removals) |
 | 3.2.x | ✗ Superseded by v3.3 (no public API removals) |
 | 3.1.x | ✗ Superseded by v3.2 (no public API removals) |
 | 3.0.x | ✗ Superseded by v3.1 (no public API removals) |
 | 2.1.x | ✗ Superseded by v3.0 (`legacy_compat` Argon2id shim available for one-shot migration) |
-| 2.0.x | ✗ End-of-life (superseded by 2.1) |
-| 1.0.x | ✗ End-of-life (superseded by 2.0) |
+| 2.0.x | ✗ Superseded by v2.1 |
+| 1.0.x | ✗ Superseded by v2.0 |
 
 ---
 
@@ -215,16 +216,16 @@ AMA Cryptography vs. peer implementations:
 
 | Feature | AMA Cryptography | libsodium | OpenSSL |
 |---------|-----------------|-----------|---------|
-| Quantum-resistant signatures | ✓ ML-DSA-65 (FIPS 204) | ✗ | ✗ (3.x preview) |
-| Hybrid classical+PQC | ✓ | ✗ | ✗ |
+| Quantum-resistant signatures | ✓ ML-DSA-65 (FIPS 204) | ✗ | ✓ ML-DSA (native since 3.5; benchmarked here at 4.0.1) |
+| Hybrid classical+PQC | ✓ Single-API signature + KEM binding | ✗ | ◐ TLS hybrid key-exchange groups (e.g. X25519MLKEM768); no hybrid signature binding API |
 | Runtime anomaly monitoring | ✓ 3R Framework | ✗ | ✗ |
 | Defense layers | 4 core + 2 supporting | 1-2 | 1-2 |
-| RFC 3161 timestamps | ◐ Wire format + §2.4.2 binding; no TSA signature or chain verification | ✓ Full verification (`openssl ts -verify`) | ✗ |
+| RFC 3161 timestamps | ◐ Wire format + §2.4.2 binding; no TSA signature or chain verification | ✗ | ✓ Full verification (`openssl ts -verify`) |
 | Zero-downtime key rotation | ✓ | ✗ | ✗ |
-| NIST FIPS 203/204/205 | ✓ | ✗ | Partial |
+| NIST FIPS 203/204/205 | ✓ | ✗ | ✓ (3.5+: ML-KEM, ML-DSA, SLH-DSA) |
 | Audit status | Self-assessed | ✓ Audited | ✓ Audited |
 
-> **Note:** libsodium and OpenSSL are production-hardened, widely-audited libraries. AMA Cryptography provides additional PQC capabilities not yet available in those libraries, but has not undergone equivalent external audit.
+> **Note:** libsodium and OpenSSL are production-hardened, widely-audited libraries, and OpenSSL ships the NIST PQC standards (ML-KEM, ML-DSA, SLH-DSA) natively since 3.5. AMA's differentiators are hybrid classical+PQC binding in a single API, runtime anomaly monitoring (3R), and agent-instance binding — not PQC availability — and it has not undergone equivalent external audit.
 
 ---
 

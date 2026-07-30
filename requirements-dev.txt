@@ -1,4 +1,4 @@
-# Development and Testing Dependencies for AMA Cryptography 2.0
+# Development and Testing Dependencies for AMA Cryptography
 # Install with: pip install -r requirements-dev.txt
 #
 # ALL cryptographic operations provided natively by the C library (ZERO external deps).

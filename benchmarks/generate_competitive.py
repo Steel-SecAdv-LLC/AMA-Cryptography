@@ -53,10 +53,28 @@ from typing import Any
 REPO = Path(__file__).resolve().parent.parent
 BENCH = REPO / "benchmarks"
 
+
 # Library versions on the measurement host. Read from the JSON where the
-# harness records them; pinned here for the ones it does not carry.
+# harness records them; pinned here for the ones it does not carry.  The
+# AMA version is never pinned — it is read from the package at render
+# time (same as generate_dashboard.py), so a release bump cannot leave a
+# stale stamp baked into the artefact (the 3.5.0 release found exactly
+# that: a hand-pinned "3.4.0" here survived the bump).  The corollary:
+# REGENERATE ONLY ALONGSIDE A MEASUREMENT RUN ON THE HOST — the stamp
+# asserts the version of the build that was measured, so an offline
+# re-render against old result JSONs would claim a build that was never
+# benchmarked (the committed artefact keeps the run's true version).
+def _ama_version() -> str:
+    import re
+
+    return re.search(
+        r'__version__\s*=\s*"([^"]+)"',
+        (REPO / "ama_cryptography" / "__init__.py").read_text(encoding="utf-8"),
+    ).group(1)
+
+
 VERSIONS = {
-    "AMA": "3.4.0",
+    "AMA": _ama_version(),
     "OpenSSL": "3.0.13",
     "OpenSSL 4.0.1": "4.0.1 (via cryptography 49.0.0)",
     "libsodium": "1.0.18",

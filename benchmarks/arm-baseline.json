@@ -1,11 +1,11 @@
 {
   "metadata": {
-    "baseline_source_release": "2.1.2",
+    "baseline_source_release": "3.1.0",
     "applies_through_release": "3.5.0",
     "created": "2026-05-15T18:49:48Z",
     "description": "AArch64 (ubuntu-24.04-arm) populated baseline for regression detection. Values are conservative 65% floors from the first successful PR #305 AArch64 benchmark artifact; subsequent updates require line-item justification per benchmarks/check_baseline_justification.py.",
     "system": "GitHub Actions ubuntu-24.04-arm shared runner, Linux AArch64, Python 3.11",
-    "notes": "Baseline measured against v2.1.2 (see `baseline_source_release`) and remains valid through v3.0.0 — slow-runner regression floors recalibrated 2026-04-25 against 30-run stable medians (see `baseline_change_log`); canonical Sapphire Rapids / Zen 4 hosts continue to clear every floor by a wide margin. Earlier rounds adjusted for INVARIANT-7 call-time enforcement, SVE2 NTT fixes, and CI matrix expansion (Windows + ARM64). All baselines set to ~65% of measured performance to provide 35% regression headroom (50–70% on a few entries with documented variance). SHA3-256 dispatches through AVX2 Keccak (or AVX-512 4-way when `AMA_ENABLE_AVX512=ON` is set at build and the runtime gate passes — see `docs/AVX512_KECCAK_ADR.md`). Kyber NTT uses AVX2 for len>=16 layers. Ed25519 uses radix 2^51 field arithmetic (`fe51.h`) plus a base-point comb table on the sign path and a width-5 wNAF + Shamir's trick on the verify path. PQC benchmarks use the native C library.",
+    "notes": "AArch64 floors measured 2026-05-15 on the benchmark-regression job's ubuntu-24.04-arm runner (PR #305; the library then shipped 3.1.0 — see `baseline_source_release`), with the two secp256k1 floors added alongside the native secp256k1 implementation (PR #370). Floors set to ~65% of measured performance for 35% regression headroom, matching the x86-64 file's convention. These floors were NOT re-measured during the 2026-07-29 x86-64 recalibration (no AArch64 hardware was available); the 2026-07-29 change-log entry's ACTION REQUIRED to re-measure on the ubuntu-24.04-arm matrix runner still stands. SHA3 dispatches through the NEON Keccak path on this target; PQC benchmarks use the native C library.",
     "peer_references": {
       "description": "Published ops/sec figures for peer cryptographic libraries on comparable x86-64 hardware. These are context numbers for the `Peer Comparison` table in `benchmark-report.md`; the regression harness does not compare against them. When `benchmarks/comparative_benchmark.py` runs with `pynacl`/`oqs`/`cryptography` installed it produces live measurements that supersede these static references for that specific run.",
       "sources": {
@@ -167,7 +167,12 @@
       {
         "date": "2026-07-30",
         "release": "3.5.0",
-        "change": "WINDOW EXTENDED, FLOORS CARRIED FORWARD UNCHANGED. The 3.5.0 release tree differs from the 2026-07-29 recalibration tree (PR #379 head, merged as 66d2073) only by PR #380: documentation and docstring accuracy fixes, a shape guard in the unbuilt helix_engine_complete Cython accelerator, CMake configuration-summary reporting, a measurement-hygiene fix in the standalone tools/constant_time dudect harness, test formatting, CHANGELOG entries, and the version bump itself. No src/c kernel, dispatch path, or Python hot path changed, so no floor value in this file was re-measured or altered; the validity window moves to 3.5.0 because the floors describe exactly the code 3.5.0 ships."
+        "change": "WINDOW EXTENDED, FLOORS CARRIED FORWARD UNCHANGED. The tree-delta argument for extending the window to 3.5.0 is the same as for the x86-64 file — PR #380, the only change since 66d2073, touches no src/c kernel, dispatch path, or Python hot path — but unlike the x86-64 file these floors were NOT re-measured on 2026-07-29: they remain the 2026-05-15 ubuntu-24.04-arm calibration (PR #305; secp256k1 rows added by PR #370), carried forward exactly as the 2026-07-29 entry records, and that entry's ACTION REQUIRED to re-measure on the ubuntu-24.04-arm matrix runner still stands. No floor value in this file was re-measured or altered."
+      },
+      {
+        "date": "2026-07-30",
+        "release": "3.5.0",
+        "change": "PROVENANCE METADATA CORRECTED, NO FLOOR CHANGES. `baseline_source_release` said 2.1.2 and `notes` was an x86-64 copy-paste (‘Sapphire Rapids / Zen 4 hosts’, a 2026-04-25 recalibration this file never had); no floor in this file ever came from a v2.1.2 measurement — they date from the 2026-05-15 PR #305 ARM run (secp256k1 rows: PR #370). `baseline_source_release` now names 3.1.0, the release current at that measurement, and `notes` now describes this file. This also corrects the 2026-07-29 entry's ‘still calibrated against v2.1.2’ aside — historical entries are records and were left verbatim; the correction lives here."
       }
     ],
     "runner_cpu_class": "aarch64"

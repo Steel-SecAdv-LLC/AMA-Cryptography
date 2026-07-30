@@ -420,6 +420,43 @@ def _generate_benchmark_table() -> str:
             f"| {display}{optional} | {measured_cell} | {floor_cell} | {tol_cell} | {tier} |"
         )
 
+    # Gate entries with no row in the results JSON (a floor added after the
+    # committed run — e.g. the secp256k1 rows landed while the last published
+    # results JSON predated them).  Omitting them silently would present the
+    # table as the whole gate when it is not; they are emitted floor-only,
+    # with the measured cell pointing at the canonical markdown report until
+    # a newer results JSON is committed.
+    measured_names = {row.get("name") for row in rows}
+    missing = [name for name in floor_for if name not in measured_names]
+    if missing:
+        lines.append("")
+        lines.append(
+            "_Floors below were added to `benchmarks/baseline.json` after the "
+            f"{captured} results-JSON run; their measured values are in "
+            "[`benchmark-report.md`](https://github.com/Steel-SecAdv-LLC/"
+            "AMA-Cryptography/blob/main/benchmark-report.md) until the next "
+            "dual-output canonical-host run is committed._"
+        )
+        lines.append("")
+        lines.append(
+            "| Benchmark | Throughput (ops/sec) | Regression floor (ops/sec) | Tolerance | Tier |"
+        )
+        lines.append(
+            "|-----------|---------------------:|---------------------------:|----------:|------|"
+        )
+        for name in missing:
+            display = name.replace("_", " ").title()
+            floor_entry = floor_for[name]
+            floor_value = floor_entry.get("baseline_value")
+            floor_cell = f"{floor_value:,}" if isinstance(floor_value, (int, float)) else "—"
+            tol_value = floor_entry.get("tolerance_percent")
+            tol_cell = f"±{tol_value}%" if tol_value is not None else "—"
+            tier = floor_entry.get("tier", "microbenchmark")
+            optional = " *(optional)*" if floor_entry.get("optional") else ""
+            lines.append(
+                f"| {display}{optional} | see report | {floor_cell} | {tol_cell} | {tier} |"
+            )
+
     return "\n".join(lines)
 
 

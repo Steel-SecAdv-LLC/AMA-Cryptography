@@ -958,7 +958,7 @@ class AESGCMProvider:
     same key from one process is serialised consistently with the
     inter-process file lock.
 
-    The counter file must be writable only by the signing principal: the
+    The counter file must be writable only by the encrypting principal: the
     read-modify-write is atomic across processes, but a file-based counter
     cannot detect an offline rollback or deletion of its own state (see
     INVARIANT-22).

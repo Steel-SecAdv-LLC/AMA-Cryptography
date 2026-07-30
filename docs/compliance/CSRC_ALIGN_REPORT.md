@@ -1,7 +1,8 @@
 # CSRC Alignment Report — NIST ACVP Vector Validation
 
-**Version:** 3.4.0
-**Date:** 2026-05-16
+**Version:** 3.5.0
+**Original audit:** 2026-05-16
+**Re-validated:** 2026-07-30 (see the Re-validation Addendum at the end of this document)
 **Organization:** Steel Security Advisors LLC
 **Author:** Andrew E. A.
 
@@ -16,7 +17,9 @@
 ## Abstract
 
 This report documents the results of running official NIST test vectors against
-the AMA Cryptography library (version 3.0). The validation covers 12 algorithm
+the AMA Cryptography library (version 3.0.0 at the time of the vector runs; the
+standard-to-implementation mappings were re-verified against the v3.5.0 tree on
+2026-07-30 — see the Re-validation Addendum). The validation covers 12 algorithm
 functions across 6 NIST standards (FIPS 180-4, FIPS 198-1, FIPS 202, FIPS 203,
 FIPS 204, FIPS 205) and 1 NIST Special Publication (SP 800-38D).
 
@@ -445,3 +448,171 @@ continuous random number generator testing described in FIPS 140-3
 Section 4.9.2.
 
 > **Note:** This is a design-aligned implementation, not a CMVP-validated module. See Section 3 of `CSRC_STANDARDS.md` for full compliance status.
+
+---
+
+## Re-validation Addendum — v3.5.0 (2026-07-30)
+
+This addendum re-validates the 2026-05-16 report against the v3.5.0 tree
+(release commit `5977846`, 2026-07-30). The header's version stamp is rolled
+to 3.5.0 on the basis of the checks recorded here and only those checks —
+per INVARIANT-16 (Honest Compliance and Audit Claims, `INVARIANTS.md`), the
+version field of an attestation record names the tree the attestation was
+actually validated against, not the current release. The previous header
+(3.4.0 over the 2026-05-16 audit date) asserted a validation at 3.4.0 that
+was never performed; this addendum replaces that stamp with a re-validation
+that was.
+
+### Re-verification of the 2026-05-16 mappings
+
+Every file path, public API name, and standards reference in Sections 1–4 and
+Appendices A–B was re-checked against the v3.5.0 tree. The following hold
+unchanged:
+
+- **ACVP harness scope (§1.1, §1.4, §2.1).** `nist_vectors/run_vectors.py`
+  still tests exactly the 12 algorithm functions of the §2.1 table, including
+  the `_run_sha3_mct` / `_run_shake_mct` MCT runners described in §1.4.
+  Continuous validation remains wired in
+  `.github/workflows/acvp_validation.yml`. The §2.1 and §3.1 results tables
+  remain the record of the original runs and are unchanged by this addendum.
+- **Source-file inventory (§1.2).** `src/c/ama_kyber.c`,
+  `src/c/ama_dilithium.c`, `src/c/ama_slhdsa.c`, `src/c/internal/ama_sha2.h`,
+  `src/c/PROVENANCE.md`, and `src/c/ama_ed25519.c` +
+  `src/c/vendor/ed25519-donna/` (LICENSE preserved) are all present. The
+  no-external-PQC claim still holds: no liboqs, PQClean, or pq-crystals code
+  or dependency exists anywhere in the tree (the last vestigial liboqs
+  packaging reference was removed in #352, 2026-06-15).
+- **Public APIs cited in §2.2, §2.3, §2.7, §3.1.** `ama_dilithium_verify_ctx()`
+  (`src/c/ama_dilithium.c`), `ama_sphincs_verify_ctx()` (`src/c/ama_slhdsa.c`),
+  and `ama_hmac_sha3_256()` (`src/c/ama_hkdf.c`) are present and declared in
+  `include/ama_cryptography.h`; the Cython binding `cy_hmac_sha3_256`
+  (`src/cython/hmac_binding.pyx`) is present and consumed by
+  `ama_cryptography/pqc_backends.py`.
+- **Section 4 module surface.** `ama_cryptography/_self_test.py` retains
+  `module_status()`, `reset_module()`, `secure_token_bytes()`,
+  `pairwise_test_signature()`, `pairwise_test_kem()`, and `_run_self_tests()`;
+  `ama_cryptography/integrity.py` and `ama_cryptography/_integrity_digest.txt`
+  are present.
+- **Companion artifacts.** `ACVP_SELF_ATTESTATION.md`, `acvp_attestation.json`,
+  `CSRC_STANDARDS.md` Section 3, and `assets/performance_dashboard.png` are all
+  present at the paths this report cites.
+
+The following claims **no longer hold as written** and are corrected here
+(the report body above is left as the historical record):
+
+1. **§1.2's "`src/c/ama_{kyber,dilithium,sphincs}.c`" no longer resolves.**
+   `ama_sphincs.c` existed at the audit date but was deleted in v3.3.0 (#362)
+   when the two SLH-DSA-SHA2-256f signers were consolidated; SLH-DSA now
+   lives solely in `src/c/ama_slhdsa.c`. The substance of the mapping
+   (native, in-house SLH-DSA per FIPS 205) is unchanged.
+2. **`ama_slhdsa.c` also implements SLH-DSA-SHAKE-128s**, and has since
+   v3.1.0 (2026-05-03) — i.e. already at the original audit date — but the
+   report describes the file as SHA2-256f only. The SHAKE-128s path is pinned
+   byte-exact against vendored NIST ACVP SLH-DSA-sigGen-FIPS205 vectors
+   (`tests/kat/fips205/SLH-DSA-SHAKE-128s-sigGen-FIPS205.json`) and carries an
+   import-time POST KAT (`ama_cryptography/_post_kats/slh_dsa_shake_128s_sigver.json`)
+   not listed in the §4.1 KAT table. It remains outside the §2.1 ACVP-harness
+   results.
+3. **§1.4 item 3's rationale is stale.** "ML-KEM-512 and ML-KEM-768 parameter
+   sets are not implemented" was true on 2026-05-16 and is no longer true —
+   both are implemented as of v3.5.0, as are ML-DSA-44/-87 (table below). The
+   §2.1 "skipped" notes remain accurate as a record of the vector run as
+   performed: the ACVP harness itself still exercises ML-KEM-1024 and
+   ML-DSA-65 only.
+4. **§2.4's error-path description of `ama_hmac_sha512_3()` is superseded.**
+   The function now streams the pads and message segments through the shared
+   SHA-512 context, so the heap concatenation buffer — and with it the `-1`
+   (allocation) and `-2` (overflow) failure paths §2.4 describes — no longer
+   exists; the only outcome is `0`. The caller-side mappings are retained as
+   unreachable back-compat (`ama_hkdf.c`, now lines 40–43). The cited line
+   ranges have drifted: the function sits at `src/c/internal/ama_sha2.h:266`,
+   not `:199–212`. The fail-closed property §2.4 claims is preserved
+   vacuously — there is no longer a failure mode to close.
+5. **§4.2's regeneration command is now gated.**
+   `python -m ama_cryptography.integrity --update` is build-pipeline-only,
+   gated behind `AMA_BUILD_PIPELINE=1` (and has grown an `--sign` mode);
+   `--verify` is unchanged.
+6. **`src/c/PROVENANCE.md` (dated 2026-05-16) covers the four original
+   primitives only.** The post-audit native additions below carry per-file
+   provenance/spec headers in their own source files rather than
+   PROVENANCE.md entries.
+
+### Primitives added since the 2026-05-16 audit
+
+Inventoried from `git log --since=2026-05-16 -- src/c/`; each row was
+confirmed against the named source file, `include/ama_cryptography.h`,
+`INVARIANTS.md`, the README capabilities table, and its vendored vector
+corpus. The conformance suites named below were **re-executed on 2026-07-30**
+against the v3.5.0 native library (`libama_cryptography.so.3.5.0`); results
+are as stated, zero failures.
+
+| Addition | Standard(s) | Implementation | Release | Conformance evidence (re-run 2026-07-30) |
+|----------|-------------|----------------|---------|------------------------------------------|
+| Ascon-AEAD128 + Ascon-Hash256 | NIST SP 800-232 (final, 2025-08-13) | `src/c/ama_ascon.c` + `ama_cryptography/ascon.py` | 3.4.0 | Designers' reference KATs vendored per SP 800-232: 1,089 AEAD128 + 1,025 Hash256 vectors (`tests/kat/ascon/`); `tests/test_ascon.py` — **24 passed, 0 failed** |
+| HSS/LMS SigVer | RFC 8554; NIST SP 800-208 | `src/c/ama_lms.c` — verification only by design (`ama_lms_verify`, `ama_hss_verify`, `ama_lms_signature_length`, `ama_hss_pubkey_levels`); no keygen or signing is shipped (stateful-signature state hazard, RFC 8554 §5.4.1) | 3.5.0 | RFC 8554 Appendix F answer key (`tests/kat/keyformats/rfc8554_hss_lms.json`); `tests/test_rfc8554_vectors.py` — **47 passed, 0 failed** |
+| NIST P-256 / P-384 / P-521 ECDSA + ECDH | FIPS 186-5 (ECDSA); SP 800-186 (curves); SP 800-56A §5.7.1.2 (ECDH); RFC 6979 (deterministic nonces); SEC 1 (encoding) | `src/c/ama_nistp.c` (`ama_nistp_ecdsa_sign` / `_verify`, `ama_nistp_ecdh`); low-`s` policy per INVARIANT-34 | 3.5.0 | RFC 6979 Appendix A.2.5–A.2.7, 18 vectors (`tests/kat/rfc6979/ecdsa_prime_curves.kat`); `tests/test_nistp_curves.py` — **94 passed, 0 failed**; plus 1,530 Wycheproof ECDSA vectors across the three curves — **0 failures** |
+| ML-KEM-512 / ML-KEM-768 | FIPS 203 | `src/c/ama_kyber.c`, parameter-driven (`ama_ml_kem_*` over `ama_ml_kem_param_set_t`); ML-KEM-1024 unchanged | 3.5.0 | C2SP/wycheproof `mlkem_{512,768}_test.json` (pinned commit `b61843a`) vendored as `tests/kat/fips203/ml_kem_{512,768}.kat` — Wycheproof-derived, **not ACVP**; `tests/test_pqc_param_sets.py` — **79 passed, 0 failed** (suite shared with the ML-DSA row) |
+| ML-DSA-44 / ML-DSA-87 | FIPS 204 | `src/c/ama_dilithium.c`, parameter-driven (`ama_ml_dsa_*` over `ama_ml_dsa_param_set_t`); ML-DSA-65 unchanged | 3.5.0 | NIST ACVP-Server ML-DSA-{keyGen,sigGen}-FIPS204 `internalProjection.json` (master @ 2026-07-27) vendored as `tests/kat/fips204/ml_dsa_{44,87}.kat`; `tests/test_pqc_param_sets.py` — **79 passed, 0 failed** |
+| secp256k1 ECDSA | RFC 6979 (deterministic nonces); SEC 1 / SEC 2 (curve) | `ama_secp256k1_ecdsa_sign` / `_verify` in `src/c/ama_secp256k1.c` (the file predates the audit; its ECDSA surface is post-audit) | 3.4.0 | 476-vector Wycheproof `ecdsa_secp256k1_sha256_test.json` — **0 failures** |
+| HMAC-SHA-384 | FIPS 198-1 / RFC 2104, over FIPS 180-4 SHA-384 | `src/c/ama_hmac_sha384.c` (SHA-384 core shared from `src/c/internal/ama_sha2.h`) | 3.3.0 | 174-vector Wycheproof `hmac_sha384_test.json` — **0 failures** |
+
+The Wycheproof results above come from a full run of the vendored corpus on
+2026-07-30 (`wycheproof_vectors/run_wycheproof.py`, upstream C2SP/wycheproof
+commit `b61843a9a5115bb758134b6a1f5d5e502d445342`): 15 files, 4,263 vectors
+run, 3,912 pass, **0 fail**, with every remaining vector accounted for by a
+named policy bucket (out-of-scope key/IV sizes, RFC 7748-permitted low-order
+rejection, deliberate high-`s` rejection per INVARIANT-34).
+
+Post-audit native additions that are **not** new cryptographic primitives,
+listed for inventory completeness:
+
+- `src/c/ama_sha256_ni.c` (3.3.0) — x86 SHA-NI compression kernel for the
+  existing FIPS 180-4 SHA-256, selected by runtime dispatch;
+  equivalence-gated by `tests/c/test_sha256_dispatch_equiv.c`.
+- `src/c/ama_agent_binding.c` + `ama_cryptography/agent_binding.py` (3.4.0;
+  INVARIANT-30) — agent-instance key/signature binding built over the
+  existing ML-DSA / SLH-DSA context-string surface; a policy construction,
+  not a new NIST algorithm.
+- `ama_cryptography/key_formats.py` + `ama_cryptography/_asn1.py` (3.5.0) —
+  PKCS#8 / SPKI / PEM / JWK / COSE_Key import/export for 12 algorithms;
+  encoding interoperability, not cryptography.
+- Internal-only performance/infrastructure headers and kernels:
+  `src/c/internal/ama_keccak_round.h`, `src/c/internal/ama_once.h`,
+  `src/c/internal/ama_ed25519_canonical.h`,
+  `src/c/x86/ama_keccak_f1600_bmi.c`, `src/c/x86/ama_nistp_mont_mulx.c`.
+
+### Scope of this re-validation
+
+**What this addendum did:**
+
+1. Re-verified the existence and accuracy of every file path, API name, and
+   standards reference in Sections 1–4 and Appendices A–B against the v3.5.0
+   tree, recording the six corrections above.
+2. Inventoried everything added to the native layer since the 2026-05-16
+   audit from the git history and mapped each addition to its standard, with
+   each mapping confirmed in the source file itself.
+3. Re-executed the vendored conformance gates for the added primitives
+   (`tests/test_ascon.py`, `tests/test_rfc8554_vectors.py`,
+   `tests/test_nistp_curves.py`, `tests/test_pqc_param_sets.py`, and the full
+   Wycheproof corpus) on 2026-07-30. All pass with zero failures.
+
+**What this addendum did NOT do:**
+
+1. It did not re-run the §1–§3 ACVP harness (`nist_vectors/run_vectors.py`).
+   The 1,215-vector results in §2.1/§3.1 remain the record of the original
+   runs; continuous ACVP validation runs independently in
+   `.github/workflows/acvp_validation.yml`.
+2. It did not repeat any performance measurement. The §2.8 benchmark figures
+   and the §4.1 POST timing (<300 ms) are unchanged records of their original
+   measurement dates.
+3. It did not re-fetch the Appendix A vector-source URLs; they are re-stated
+   as cited, not re-downloaded.
+4. It adds no ACVP claims. The primitives in the table above are validated by
+   the vendored corpora named there — which for ML-KEM-512/768, Ascon,
+   HSS/LMS, the P-curves, secp256k1, and HMAC-SHA-384 are **not** ACVP vector
+   sets — and nothing in this addendum extends the §3.1 per-standard verdict
+   table.
+
+The CAVP disclaimer of §3.3 applies to this addendum in full: self-attested
+algorithm compliance, not a CAVP validation certificate, and no NIST
+endorsement.

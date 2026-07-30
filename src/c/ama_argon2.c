@@ -849,7 +849,7 @@ static ama_error_t ama_argon2id_core(
  *                                pre-2.1.5 tag against the legacy derivation
  *                                of the supplied inputs.
  *
- * See CHANGELOG.md [Unreleased] § BREAKING for the migration recipe.
+ * See CHANGELOG.md [3.0.0] § BREAKING for the migration recipe.
  * ============================================================================ */
 
 AMA_API ama_error_t ama_argon2id(

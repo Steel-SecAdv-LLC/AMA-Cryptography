@@ -36,7 +36,7 @@ from ama_cryptography.legacy_compat import (
     generate_key_management_system,
     verify_crypto_package,
 )
-from tools.monitoring.ama_cryptography_monitor import AmaCryptographyMonitor
+from ama_cryptography.monitoring import AmaCryptographyMonitor
 
 
 def print_section(title: str) -> None:

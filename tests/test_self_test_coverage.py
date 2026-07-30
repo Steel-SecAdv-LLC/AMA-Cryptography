@@ -188,13 +188,12 @@ class TestModuleIntegrity:
         ``_integrity_signature.py`` and turning the *next* run's integrity
         check into a cascade of unrelated-looking failures.
         """
-        import ama_cryptography._self_test as st
-        from ama_cryptography._self_test import update_integrity_digest
+        from ama_cryptography import _self_test as st
 
         fake = tmp_path / "_integrity_digest.txt"
         monkeypatch.setattr(st, "_INTEGRITY_DIGEST_FILE", fake)
 
-        digest = update_integrity_digest()
+        digest = st.update_integrity_digest()
         assert isinstance(digest, str)
         assert len(digest) == 64  # SHA3-256 hex = 64 chars
         int(digest, 16)  # Should be valid hex

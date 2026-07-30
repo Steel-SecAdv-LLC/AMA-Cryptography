@@ -505,6 +505,17 @@ def main() -> int:
             r"Not externally audited\s*·\s*v(\d+\.\d+\.\d+)",
             "wiki/_Footer.md release badge",
         ),
+        (
+            # Doxygen-branded C API documentation.  PROJECT_NUMBER is the
+            # version printed on every generated API page, and it is neither
+            # Markdown nor code, so no other scan in this script could see
+            # it.  It sat on "2.0" across three major generations while this
+            # script printed "All declarations agree" (found in the 3.5.0
+            # release polish).
+            "docs/Doxyfile",
+            r"^PROJECT_NUMBER\s*=\s*(\d+\.\d+(?:\.\d+)?)",
+            "docs/Doxyfile PROJECT_NUMBER",
+        ),
     ]
 
     failures: list[str] = []
@@ -516,6 +527,25 @@ def main() -> int:
             failures.append(f"  - {desc}: {found!r} != canonical {canonical!r} (in {file})")
         else:
             print(f"OK    {desc:<60s} = {found}")
+
+    # -------------------------------------------------------------------
+    # Git-tag install pins in Sphinx sources.
+    #
+    # The *.md sweep below cannot see docs/**/*.rst, so the Sphinx landing
+    # page shipped a `pip install ...@v3.4.0` command into the 3.5.0
+    # release while this script printed "All declarations agree".  Any
+    # `@vX.Y.Z` git-tag pin in an .rst under docs/ must name the canonical
+    # version — same contract as the README install pins (INVARIANT-32).
+    for rst in sorted((REPO / "docs").rglob("*.rst")):
+        text = _read(rst)
+        if not text:
+            continue
+        for m in re.finditer(r"@v(\d+\.\d+\.\d+)", text):
+            desc = f"{repo_relative(rst, REPO)} git-tag pin"
+            if m.group(1) != canonical:
+                failures.append(f"  - {desc}: @v{m.group(1)} != canonical {canonical!r}")
+            else:
+                print(f"OK    {desc:<60s} = {m.group(1)}")
 
     # -------------------------------------------------------------------
     # Documentation version headers.

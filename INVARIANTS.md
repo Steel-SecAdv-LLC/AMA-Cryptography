@@ -699,7 +699,7 @@ Required behavior:
   must not be silently enabled for production encryption.
 - Exceeding the configured per-key nonce safety limit must force re-keying or
   hard failure; it must not wrap, reset, or continue with a warning.
-- The persistence file must be writable only by the signing principal. The
+- The persistence file must be writable only by the encrypting principal. The
   read-modify-write is atomic across concurrent processes, but a file-based
   counter cannot detect an offline rollback or deletion of its own state; that
   protection is a deployment responsibility, not something the mechanism

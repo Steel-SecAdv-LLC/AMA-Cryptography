@@ -2273,7 +2273,7 @@ AMA_API ama_error_t ama_argon2id(
  * Reproduces the non-spec derivation shipped in AMA ≤ 2.1.5. **Do not** use
  * this for new password hashes — it is retained **only** so existing
  * deployments can verify stored hashes during the migration window
- * documented in ``CHANGELOG.md`` [Unreleased] § BREAKING. New derivations
+ * documented in ``CHANGELOG.md`` [3.0.0] § BREAKING. New derivations
  * must use :c:func:`ama_argon2id`.
  *
  * Typical migration flow:
