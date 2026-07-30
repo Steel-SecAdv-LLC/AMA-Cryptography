@@ -1,7 +1,7 @@
 {
   "metadata": {
     "baseline_source_release": "2.1.2",
-    "applies_through_release": "3.4.0",
+    "applies_through_release": "3.5.0",
     "created": "2026-04-05T00:00:00Z",
     "description": "AMA Cryptography performance baseline for regression detection",
     "system": "GitHub Actions shared runner, Linux x86-64, Python 3.11",
@@ -88,6 +88,11 @@
         "date": "2026-07-29",
         "release": "3.4.0",
         "change": "Re-floored every entry that had drifted. The floors were measured against v2.1.2 and declared valid through v3.0.0 while the library shipped 3.4.0, and nothing enforced that window, so the regression job was comparing today's code against four-release-old numbers: ML-DSA-65 signing carried 27.4x headroom and full-package creation 23.0x, meaning a 96% regression would still have reported PASS. New floors are 0.65 * min(measured, canonical benchmark-report.md), per the project's documented 35%-headroom convention, and no floor was lowered. secp256k1 signing additionally reflects the fixed-base comb landed in this branch (2,545 -> 7,966 ops/s raw C). Enforced going forward by tests/test_benchmark_baseline_freshness.py. Measured on: container, Linux x86-64, 4 cores, gcc 13, `python benchmarks/benchmark_runner.py` and `./build/bin/benchmark_c_raw`."
+      },
+      {
+        "date": "2026-07-30",
+        "release": "3.5.0",
+        "change": "WINDOW EXTENDED, FLOORS CARRIED FORWARD UNCHANGED. The 3.5.0 release tree differs from the 2026-07-29 recalibration tree (PR #379 head, merged as 66d2073) only by PR #380: documentation and docstring accuracy fixes, a shape guard in the unbuilt helix_engine_complete Cython accelerator, CMake configuration-summary reporting, a measurement-hygiene fix in the standalone tools/constant_time dudect harness, test formatting, CHANGELOG entries, and the version bump itself. No src/c kernel, dispatch path, or Python hot path changed, so no floor value in this file was re-measured or altered; the validity window moves to 3.5.0 because the floors describe exactly the code 3.5.0 ships."
       }
     ]
   },

@@ -4,8 +4,8 @@
 
 | Property | Value |
 |----------|-------|
-| Applies to Release | 3.4.0 |
-| Last Updated | 2026-07-27 |
+| Applies to Release | 3.5.0 |
+| Last Updated | 2026-07-30 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -18,6 +18,8 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 ---
 
 ## [Unreleased]
+
+## [3.5.0] - 2026-07-30
 
 ### Fixed — the README credited the NIST curves with a low-s policy they deliberately do not have
 

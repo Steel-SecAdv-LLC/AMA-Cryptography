@@ -39,7 +39,7 @@
 **Author/Inventor:** Andrew E. A.
 **Contact:** steel.sa.llc@gmail.com
 **License:** Apache License 2.0
-**Version:** 3.4.0
+**Version:** 3.5.0
 **AI Co-Architects:** Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
 
 ---
@@ -190,7 +190,7 @@ Three layers, each carrying a specific concern:
 2. **Cython accelerators** (`src/cython/`) — direct FFI bindings for the hottest Python-facing primitives and the 3R monitoring math engine.
 3. **Python API** (`ama_cryptography/`) — algorithm-agnostic surface, key management, monitoring, ethical integration, key formats, hybrid combiner, session, secure channel.
 
-### C library inventory (v3.4.0)
+### C library inventory (v3.5.0)
 
 Top-level `src/c/*.c` — 27 translation units:
 
@@ -229,7 +229,7 @@ Additional C sources:
 
 ## Performance
 
-> **Reading the numbers below.** The regression floors checked into `benchmarks/baseline.json` (recalibrated 2026-07-29 under this PR — `applies_through_release = 3.4.0`) are conservative CI-runner floors, not throughput targets. The numbers in the table are the **measured throughput on this branch's sandbox host** — a container on Intel Xeon @ 2.80 GHz, 4 cores, gcc 13.3, native C backend via Python ctypes — captured in `benchmark-report.md` on 2026-07-29. Absolute numbers depend on silicon and dispatch selection; reproduce on your target before quoting externally.
+> **Reading the numbers below.** The regression floors checked into `benchmarks/baseline.json` (recalibrated 2026-07-29 under PR #379; window extended to `applies_through_release = 3.5.0` with floors unchanged, since 3.5.0 ships that same measured tree) are conservative CI-runner floors, not throughput targets. The numbers in the table are the **measured throughput on this branch's sandbox host** — a container on Intel Xeon @ 2.80 GHz, 4 cores, gcc 13.3, native C backend via Python ctypes — captured in `benchmark-report.md` on 2026-07-29. Absolute numbers depend on silicon and dispatch selection; reproduce on your target before quoting externally.
 
 ### Current measurements (native C via ctypes, 2026-07-29 sandbox)
 
@@ -332,7 +332,7 @@ AMA Cryptography is distributed from **its own repository first**. No package in
 Pin to a **tag**, never a branch. Every published tag is at <https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/tags>:
 
 ```bash
-pip install "git+https://github.com/Steel-SecAdv-LLC/AMA-Cryptography.git@v3.4.0"
+pip install "git+https://github.com/Steel-SecAdv-LLC/AMA-Cryptography.git@v3.5.0"
 ```
 
 Build toolchain required: a C11 compiler, `cmake ≥ 4.3.4`, `Cython ≥ 3.2.8`, `numpy ≥ 1.24.0`. Confirm the install landed and the native backends are live:
@@ -476,14 +476,14 @@ Mercury Agent and FINDΩYOU™ import this library on their runtime path — the
 **Pin by tag, no index required** (PEP 508 direct reference, valid in `requirements.txt` and in a `pyproject.toml` `dependencies` list):
 
 ```
-ama-cryptography @ git+https://github.com/Steel-SecAdv-LLC/AMA-Cryptography.git@v3.4.0
+ama-cryptography @ git+https://github.com/Steel-SecAdv-LLC/AMA-Cryptography.git@v3.5.0
 ```
 
 **Pin by wheel + hash**, once a release carries built artifacts (pip refuses anything whose hash does not match):
 
 ```
 # install with: pip install --require-hashes -r requirements.txt
-ama-cryptography @ https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/releases/download/v3.4.0/<WHEEL_FILENAME> \
+ama-cryptography @ https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/releases/download/v3.5.0/<WHEEL_FILENAME> \
     --hash=sha256:<DIGEST>
 ```
 
@@ -747,7 +747,7 @@ Copyright 2025-2026 Steel Security Advisors LLC. Licensed under the Apache Licen
 
 ### Third-party dependencies
 
-AMA Cryptography v3.4.0 has **zero runtime cryptographic dependencies**. Every primitive is implemented natively in C.
+AMA Cryptography v3.5.0 has **zero runtime cryptographic dependencies**. Every primitive is implemented natively in C.
 
 **Vendored, in-tree, public-domain:**
 - ed25519-donna assembly backend (Andrew Moon) — vendored under `src/c/vendor/ed25519-donna/`, compiled in-tree, enabled by default on x86-64 via `AMA_ED25519_ASSEMBLY=ON`.

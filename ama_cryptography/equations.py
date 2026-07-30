@@ -32,7 +32,7 @@ Organization: Steel Security Advisors LLC
 Author/Inventor: Andrew E. A.
 Contact: steel.sa.llc@gmail.com
 Date: 2026-04-17
-Version: 3.4.0
+Version: 3.5.0
 
 AI Co-Architects:
     Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
@@ -58,7 +58,7 @@ from ama_cryptography._numeric import (
 # Configure module logger
 logger = logging.getLogger(__name__)
 
-__version__ = "3.4.0"
+__version__ = "3.5.0"
 __author__ = "Andrew E. A., Steel Security Advisors LLC"
 __all__ = [
     "PHI",
