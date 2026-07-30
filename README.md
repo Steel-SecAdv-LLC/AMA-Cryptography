@@ -1108,7 +1108,8 @@ two are not sourced from ACVP-Server). The current attestation is
 - **Full evidence report:** [`docs/compliance/CSRC_ALIGN_REPORT.md`](docs/compliance/CSRC_ALIGN_REPORT.md)
 - **Continuous validation:** [`.github/workflows/acvp_validation.yml`](.github/workflows/acvp_validation.yml) — runs on every push to `main` and weekly on Mondays; fails if any vector regresses.
 
-### Coverage Summary
+<details>
+<summary><strong>Coverage Summary — 1,215 / 1,215 ACVP vectors across 12 algorithm functions and 7 NIST standards (click to expand)</strong></summary>
 
 | Algorithm | NIST Standard | Vectors | Pass | Fail |
 |---|---|---:|---:|---:|
@@ -1128,6 +1129,8 @@ two are not sourced from ACVP-Server). The current attestation is
 
 Each SHA-3 family row = AFT byte-aligned count + 100 MCT vectors (1 tcId
 × 100 outer iterations per FIPS-202 MCT spec).
+
+</details>
 
 ### Reproduction
 
