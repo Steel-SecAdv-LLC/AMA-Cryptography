@@ -1601,7 +1601,7 @@ THIS SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND. THE AUTHORS AND 
 
 <div align="center">
 
-<img width="91" height="96" alt="image" src="https://github.com/user-attachments/assets/2927edad-4a60-4f48-868f-ea1371e1e1b0" />
+<img width="37" height="38" alt="image" src="https://github.com/user-attachments/assets/54941e8a-5b3f-4cf2-84cc-378bb89b524e" />
 
 </div>
 
