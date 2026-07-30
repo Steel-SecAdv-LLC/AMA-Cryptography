@@ -19,6 +19,71 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ## [Unreleased]
 
+### Fixed — the README credited the NIST curves with a low-s policy they deliberately do not have
+
+The NIST prime-curve row of the capabilities table said *"Low-s + strict DER
+(INVARIANT-28)"*. Both halves of the citation were wrong: INVARIANT-28 is
+secp256k1-scoped, and INVARIANT-34 deliberately has the NIST curves emit
+RFC 6979 `s` verbatim and accept either representative by default —
+empirically, about half of default signatures are high-s, and the malleated
+twin `(r, n − s)` verifies. Strict minimal-DER *is* enforced, so only the
+low-s wording and citation changed; the row now points at INVARIANT-34 and
+its opt-in strictness environment variables.
+`tests/test_readme_invariant_citations.py` pins the corrected claim
+semantically — its assertions are anchored to the INVARIANTS.md sections
+themselves, so broadening INVARIANT-28 to the prime curves or moving the
+NIST low-s policy surfaces the drift instead of freezing today's numbering
+into CI.
+
+### Fixed — `helix_engine_complete` kept the cross-argument OOB pattern `math_engine` had already closed
+
+`step()` and `converge()` in `src/cython/helix_engine_complete.pyx` took a
+caller-sized `state` but looped to `self.state_dim` under
+`boundscheck=False` — the exact shape-mismatch pattern fixed in
+`math_engine.pyx` below. Both entry points now validate the shape at the
+boundary and raise `ValueError`; matching shapes are unaffected. The module
+is built by no default configuration and used only by `examples/`, so the
+defect was latent rather than reachable from a shipped path.
+
+### Fixed — the legacy dudect crypto harness could measure its own branch predictor
+
+Five lanes of `tools/constant_time/dudect_crypto.c` selected their class
+inside the timed region with `if (class_idx == 0)` over two call sites per
+lane. gcc -O2 keeps that branch, so the two classes executed different
+control flow inside the measurement window — taken vs not-taken
+conditional, distinct call/return addresses, a trailing jump on one path
+only. On the SHA3-256 lane (a few hundred ns per call) that front-end
+asymmetry reached t = 5–7 at 50k samples on a shared CI runner — over the
+4.5 gate in every round of one process, absent on other hosts, while
+Keccak-f[1600] itself has no data-dependent branch or table to leak
+(`ama_sha3.c`). All five lanes now use the pointer-select-out-of-timer
+pattern the CMake suite (`tests/c/test_dudect.c`) adopted when its FROST
+scalar-negate lane leaked the same way: the class-dependent pointer is
+chosen before the timer starts, and the timed region contains nothing
+class-dependent but the data under test.
+
+### Changed — the CMake summary reports what was compiled, not what was requested
+
+The configuration summary printed the requested option state (`NEON: ON` on
+x86-64, with zero NEON objects in the build). Each SIMD line is now keyed
+on the per-arch source lists actually added and reports `ON`, `OFF`, or
+`ON (requested; inactive on this target)`.
+
+### Changed — two contracts documented where enforcement would be wrong, or impossible
+
+- The AES-GCM nonce counter file has no rollback or integrity protection,
+  and no file-based counter can self-detect a rewind. INVARIANT-22 and the
+  `AESGCMProvider` docstring now state the bounded residual risk — nonces
+  are drawn from the OS CSPRNG, so a rollback relaxes the 2³² birthday-bound
+  invocation cap rather than causing nonce reuse (THREAT_MODEL T3.2) —
+  instead of adding a false anti-rollback mechanism.
+- `combine()`'s fixed-width, length-prefix-free transcript (INVARIANT-19)
+  is now documented as the deliberate raw-primitive contract it is; a
+  length assertion would break the edge-case suite that pins it. The
+  secp256k1 docstrings in `pqc_backends.py` now chain the 33-byte
+  compressed derivation output to the 64-byte-raw verify input via
+  `native_secp256k1_pubkey_decompress`.
+
 ### Changed — five hot paths re-optimised, output byte-identical
 
 Five kernels were re-optimised. Every change preserves the algorithm and its

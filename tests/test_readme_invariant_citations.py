@@ -44,9 +44,7 @@ def _algorithm_row(name: str) -> str:
         cells = [c.strip() for c in stripped.strip("|").split("|")]
         if len(cells) >= 3 and cells[0] == name and cells[1] == "Full":
             return stripped
-    raise AssertionError(
-        f"no README capabilities-table row (| {name} | Full | ...) found"
-    )
+    raise AssertionError(f"no README capabilities-table row (| {name} | Full | ...) found")
 
 
 def _invariant_section(number: int) -> str:
@@ -66,6 +64,7 @@ def _invariant_section(number: int) -> str:
 # The source-of-truth anchors: verify the invariants still mean what the README
 # citations assume, so the assertions below are semantic, not string-frozen.
 # ---------------------------------------------------------------------------
+
 
 def test_invariant_28_is_secp256k1_scoped() -> None:
     """INVARIANT-28's default low-s guarantee is about secp256k1, not the NIST curves.
@@ -96,6 +95,7 @@ def test_invariant_34_is_the_nist_low_s_authority() -> None:
 # ---------------------------------------------------------------------------
 # The README claim itself.
 # ---------------------------------------------------------------------------
+
 
 def test_nist_curve_row_does_not_misattribute_low_s() -> None:
     """The NIST prime-curve row must not claim default low-s, nor cite INVARIANT-28.
@@ -128,9 +128,9 @@ def test_secp256k1_low_s_claim_not_weakened() -> None:
     """
     row = _algorithm_row("secp256k1")
     assert "RFC 6979" in row, "secp256k1 row no longer documents deterministic ECDSA"
-    assert "either representative" not in row, (
-        "secp256k1 row wrongly picked up the NIST curves' permissive-verify wording"
-    )
+    assert (
+        "either representative" not in row
+    ), "secp256k1 row wrongly picked up the NIST curves' permissive-verify wording"
 
 
 if __name__ == "__main__":
