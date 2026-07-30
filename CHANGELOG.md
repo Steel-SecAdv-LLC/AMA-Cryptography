@@ -96,6 +96,42 @@ diverges by class (it stops at byte 0 vs byte 15), so sensitivity to a real
 regression is preserved and in fact improves over the two-buffer form.
 Threshold, verdict rule, and lane inventory are unchanged.
 
+### Fixed — open CodeQL alerts on the test suite, at what they pointed at
+
+Six standing CodeQL alerts were resolved in code, without dismissals and
+without weakening any assertion:
+
+- Five `import`/`import from` mix notes — a module imported both as
+  `import M` and `from M import x` in the same file — were made
+  single-style: `tests/test_self_test_coverage.py` and
+  `tests/test_rfc8554_vectors.py` now reach the package/submodule object
+  through the `from ama_cryptography import _self_test as …` /
+  `import ama_cryptography` form the file already uses elsewhere;
+  `tests/test_invariant_upgrades.py` imports `check_suppression_hygiene`'s
+  `main` the same `from`-way as the rest of that file; and
+  `tests/test_key_formats.py` drops the `import ama_cryptography._asn1 as
+  _asn1` alias in favour of the `from ama_cryptography._asn1 import …` list
+  already present (adding `oid_to_string` to it and calling the OID helpers
+  by their bare names). Every module in the four files now has exactly one
+  import style — verified by an AST check that mirrors the CodeQL rule.
+- One "unreachable code" warning
+  (`tests/test_key_formats.py`) was a control-flow false positive: CodeQL
+  does not model that `pytest.raises(...)` swallows the exception, so it read
+  the post-exception restoration assertion — the entire point of that case —
+  as dead. Rewritten with an explicit `try/except` that asserts the same two
+  facts (the `RuntimeError` propagates out of the context manager, and the
+  value is restored afterward), which is a path static analysis can see is
+  reachable. Behaviour is unchanged, verified against the real context
+  manager.
+
+The seventh alert
+(`benchmarks/generate_competitive.py` "unused named argument in formatting
+call") is a verified false positive left unchanged: the `TEMPLATE.format(...)`
+call is a perfect bijection between its 18 keyword arguments and the template's
+replacement fields — confirmed by field enumeration, a raw brace count, and a
+clean runtime `format()` — at every revision of the file. Contorting correct,
+idiomatic code to silence a tool would be the debt this repository avoids.
+
 ### Changed — the CMake summary reports what was compiled, not what was requested
 
 The configuration summary printed the requested option state (`NEON: ON` on

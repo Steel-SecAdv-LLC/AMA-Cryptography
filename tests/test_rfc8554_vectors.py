@@ -54,7 +54,8 @@ from typing import Any
 
 import pytest
 
-from ama_cryptography import pqc_backends as backends
+import ama_cryptography
+import ama_cryptography.pqc_backends as backends
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CORPUS = REPO_ROOT / "tests" / "kat" / "keyformats" / "rfc8554_hss_lms.json"
@@ -471,8 +472,6 @@ def test_ama_does_not_offer_to_sign_with_lms() -> None:
     for it — and the argument has to include the durable state manager, because
     that is what the assertion is really guarding. See the module docstring.
     """
-    import ama_cryptography
-
     assert not backends.lms_signing_available()
 
     # An exact inventory rather than a keyword filter. A substring rule reads
@@ -527,8 +526,6 @@ def test_ama_does_not_claim_xmss() -> None:
     """XMSS (RFC 8391) is a different address scheme and a different checksum
     and shares no structure with LMS. Nothing here implements it, and no
     vectors for it are vendored, so nothing may claim it."""
-    import ama_cryptography
-
     for attribute in dir(ama_cryptography):
         assert "xmss" not in attribute.lower(), attribute
     for attribute in dir(backends):

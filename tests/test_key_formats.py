@@ -68,7 +68,6 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-import ama_cryptography._asn1 as _asn1  # noqa: E402 -- same (KF-003)
 import ama_cryptography.key_formats as kf  # noqa: E402 -- import follows the repo-root sys.path insert above (KF-003)
 import ama_cryptography.pqc_backends as pb  # noqa: E402 -- same (KF-003)
 import tests.ref_keyformat as ref  # noqa: E402 -- same (KF-003)
@@ -81,6 +80,7 @@ from ama_cryptography._asn1 import (  # noqa: E402 -- same (KF-003)
     der_sequence,
     der_tagged,
     oid_from_string,
+    oid_to_string,
 )
 from ama_cryptography.exceptions import (  # noqa: E402 -- same (KF-003)
     KeyFormatError,
@@ -1848,9 +1848,17 @@ def test_the_policy_context_manager_restores_the_previous_value() -> None:
         assert kf.get_pq_import_consistency() is False
     assert kf.get_pq_import_consistency() is True
     # …including when the body raises, which is the case a bare setter loses.
-    with pytest.raises(RuntimeError):
+    # try/except rather than pytest.raises so the post-exception restoration
+    # check is on a control-flow path static analysis can see is reachable —
+    # pytest.raises swallows the exception, which CodeQL does not model, and it
+    # flagged this assertion (the whole point of the case) as dead code.
+    raised = False
+    try:
         with kf.pq_import_consistency(False):
             raise RuntimeError("boom")
+    except RuntimeError:
+        raised = True
+    assert raised, "the RuntimeError must propagate out of the context manager"
     assert kf.get_pq_import_consistency() is True
 
 
@@ -2635,9 +2643,9 @@ def test_the_oid_codec_round_trips(dotted: str) -> None:
     ``ValueError: byte must be in range(0, 256)``, outside the module's stated
     ``KeyFormatError`` contract, from a function in ``__all__``.
     """
-    encoded = _asn1.oid_from_string(dotted)
+    encoded = oid_from_string(dotted)
     assert encoded[0] == 0x06
-    assert _asn1.oid_to_string(encoded[2:]) == dotted
+    assert oid_to_string(encoded[2:]) == dotted
 
 
 @pytest.mark.parametrize(
@@ -2648,7 +2656,7 @@ def test_a_malformed_oid_string_raises_key_format_error(dotted: str) -> None:
     """Every rejection surfaces as KeyFormatError — including the oversized
     one, which the encoder now bounds the same way the decoder does."""
     with pytest.raises(KeyFormatError):
-        _asn1.oid_from_string(dotted)
+        oid_from_string(dotted)
 
 
 @pytest.mark.parametrize(
@@ -2687,7 +2695,7 @@ def test_a_non_canonical_oid_spelling_is_refused(dotted: str, why: str) -> None:
     encoding is what ends up signed.
     """
     with pytest.raises(KeyFormatError, match="non-canonical arc"):
-        _asn1.oid_from_string(dotted)
+        oid_from_string(dotted)
 
 
 def test_the_oid_codec_is_a_bijection_over_the_reachable_space() -> None:
@@ -2704,9 +2712,9 @@ def test_the_oid_codec_is_a_bijection_over_the_reachable_space() -> None:
                 continue  # not a legal OID; refused by the leading-arc check
             for tail in ([], [0], [1], [127], [128], [16383], [16384], [1, 0, 113549]):
                 dotted = ".".join(str(a) for a in [arc1, arc2, *tail])
-                encoded = _asn1.oid_from_string(dotted)
-                assert _asn1.oid_to_string(encoded[2:]) == dotted, dotted
-                assert _asn1.oid_from_string(_asn1.oid_to_string(encoded[2:])) == encoded, dotted
+                encoded = oid_from_string(dotted)
+                assert oid_to_string(encoded[2:]) == dotted, dotted
+                assert oid_from_string(oid_to_string(encoded[2:])) == encoded, dotted
                 checked += 1
     assert checked > 100, "the sweep stopped covering the boundary cases"
 

@@ -493,10 +493,10 @@ class TestSuppressionScanPrecision:
 
     def test_tools_is_actually_in_the_scanned_set(self) -> None:
         """A coverage extension that did not extend coverage would pass silently."""
-        import tools.check_suppression_hygiene as gate
+        from tools.check_suppression_hygiene import main
 
         repo_root = Path(__file__).resolve().parent.parent
-        source = inspect.getsource(gate.main)
+        source = inspect.getsource(main)
         assert 'Path("tools")' in source, "tools/ dropped out of the scanned set"
         assert (repo_root / "tools").is_dir()
 
