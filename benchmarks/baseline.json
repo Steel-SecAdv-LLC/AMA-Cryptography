@@ -1,12 +1,12 @@
 {
   "metadata": {
-    "baseline_source_release": "2.1.2",
+    "baseline_source_release": "3.4.0",
     "applies_through_release": "3.5.0",
     "created": "2026-04-05T00:00:00Z",
     "description": "AMA Cryptography performance baseline for regression detection",
     "system": "GitHub Actions shared runner, Linux x86-64, Python 3.11",
     "runner_cpu_class": "x86_64",
-    "notes": "Baseline measured against v2.1.2 (see `baseline_source_release`) and remains valid through v3.0.0 — slow-runner regression floors recalibrated 2026-04-25 against 30-run stable medians (see `baseline_change_log`); canonical Sapphire Rapids / Zen 4 hosts continue to clear every floor by a wide margin. Earlier rounds adjusted for INVARIANT-7 call-time enforcement, SVE2 NTT fixes, and CI matrix expansion (Windows + ARM64). All baselines set to ~65% of measured performance to provide 35% regression headroom (50–70% on a few entries with documented variance). SHA3-256 dispatches through AVX2 Keccak (or AVX-512 4-way when `AMA_ENABLE_AVX512=ON` is set at build and the runtime gate passes — see `docs/AVX512_KECCAK_ADR.md`). Kyber NTT uses AVX2 for len>=16 layers. Ed25519 uses radix 2^51 field arithmetic (`fe51.h`) plus a base-point comb table on the sign path and a width-5 wNAF + Shamir's trick on the verify path. PQC benchmarks use the native C library.",
+    "notes": "Floors re-measured 2026-07-29 against the 3.4.0-era tree (PR #379 head, merged as 66d2073; see `baseline_source_release` and the 2026-07-29 `baseline_change_log` entry) and valid through the release named in `applies_through_release`; canonical Sapphire Rapids / Zen 4 hosts continue to clear every floor by a wide margin. Earlier rounds adjusted for INVARIANT-7 call-time enforcement, SVE2 NTT fixes, and CI matrix expansion (Windows + ARM64). All baselines set to ~65% of measured performance to provide 35% regression headroom (50–70% on a few entries with documented variance). SHA3-256 dispatches through AVX2 Keccak (or AVX-512 4-way when `AMA_ENABLE_AVX512=ON` is set at build and the runtime gate passes — see `docs/AVX512_KECCAK_ADR.md`). Kyber NTT uses AVX2 for len>=16 layers. Ed25519 uses radix 2^51 field arithmetic (`fe51.h`) plus a base-point comb table on the sign path and a width-5 wNAF + Shamir's trick on the verify path. PQC benchmarks use the native C library.",
     "peer_references": {
       "description": "Published ops/sec figures for peer cryptographic libraries on comparable x86-64 hardware. These are context numbers for the `Peer Comparison` table in `benchmark-report.md`; the regression harness does not compare against them. When `benchmarks/comparative_benchmark.py` runs with `pynacl`/`oqs`/`cryptography` installed it produces live measurements that supersede these static references for that specific run.",
       "sources": {
@@ -93,6 +93,11 @@
         "date": "2026-07-30",
         "release": "3.5.0",
         "change": "WINDOW EXTENDED, FLOORS CARRIED FORWARD UNCHANGED. The 3.5.0 release tree differs from the 2026-07-29 recalibration tree (PR #379 head, merged as 66d2073) only by PR #380: documentation and docstring accuracy fixes, a shape guard in the unbuilt helix_engine_complete Cython accelerator, CMake configuration-summary reporting, a measurement-hygiene fix in the standalone tools/constant_time dudect harness, test formatting, CHANGELOG entries, and the version bump itself. No src/c kernel, dispatch path, or Python hot path changed, so no floor value in this file was re-measured or altered; the validity window moves to 3.5.0 because the floors describe exactly the code 3.5.0 ships."
+      },
+      {
+        "date": "2026-07-30",
+        "release": "3.5.0",
+        "change": "PROVENANCE METADATA CORRECTED, NO FLOOR CHANGES. `baseline_source_release` (2.1.2) and the `notes` opening claim (‘measured against v2.1.2 … valid through v3.0.0’) still described the original 2026-02 calibration, three re-floors after it stopped being true — including in the failure banner test_benchmark_baseline_freshness.py prints, which would have reported false provenance on the first window violation. Both now name the 2026-07-29 recalibration this file's own change log records: source release 3.4.0, window per `applies_through_release`. Historical change-log entries are records and were left verbatim."
       }
     ]
   },

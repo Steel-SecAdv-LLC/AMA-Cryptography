@@ -1434,7 +1434,7 @@ def _setup_argon2_ctypes(lib: ctypes.CDLL) -> bool:
             ctypes.c_size_t,  # out_len
         ]
         lib.ama_argon2id.restype = ctypes.c_int
-        # Legacy-verify shim (CHANGELOG [Unreleased] § BREAKING). Optional —
+        # Legacy-verify shim (CHANGELOG [3.0.0] § BREAKING). Optional —
         # absence just means the legacy migration path is unavailable.
         if hasattr(lib, "ama_argon2id_legacy"):
             lib.ama_argon2id_legacy.argtypes = lib.ama_argon2id.argtypes
@@ -6208,7 +6208,7 @@ def native_argon2id_legacy(
         "native_argon2id_legacy() reproduces the pre-shim blake2b_long bug "
         "for read-only migration verification ONLY. Use native_argon2id() "
         "for any new hash; new deployments must not store tags derived by "
-        "this function. See CHANGELOG.md [Unreleased] § BREAKING.",
+        "this function. See CHANGELOG.md [3.0.0] § BREAKING.",
         SecurityWarning,
         stacklevel=2,
     )
@@ -6243,7 +6243,7 @@ def native_argon2id_legacy_verify(
     Constant-time verify a pre-shim Argon2id tag.
 
     Earlier AMA Cryptography builds shipped a ``blake2b_long``
-    loop-termination bug (see ``CHANGELOG.md`` [Unreleased] § BREAKING).
+    loop-termination bug (see ``CHANGELOG.md`` [3.0.0] § BREAKING).
     Stored hashes derived by those versions sit in a non-spec bit-space and
     will not verify against the post-fix :func:`native_argon2id`.  This
     helper reproduces the legacy derivation and compares against

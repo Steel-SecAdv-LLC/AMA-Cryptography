@@ -1,10 +1,17 @@
 # AMA-Cryptography pinned development dependencies
-# Generated: 2026-05-20
-# Python: 3.11.14
+# Generated: 2026-07-30
+# Python: 3.11.15
 # Platform: linux (x86_64)
 #
 # Reproduce with: pip install -r requirements-lock.txt
-# Update with:    pip install -r requirements-dev.txt && pip freeze > requirements-lock.txt
+#
+# This file is the complete closure of the pinned toolchain: a clean-venv
+# `pip install -r requirements-lock.txt -r requirements-dev.txt` followed by
+# `pip freeze --all` must resolve to exactly the pins below (plus pip itself).
+# CI runs `pip-audit --strict` against this file as the audit-time dependency
+# closure, so a transitive that is installed but unlisted is a hole in the
+# audit.  The curated sections are kept (a raw freeze loses the comments);
+# update by re-running the clean-venv freeze and folding the diff in.
 #
 # NOTE: The library itself has ZERO runtime dependencies.
 # These are development/testing/CI dependencies only.
@@ -46,12 +53,24 @@ bandit==1.9.4
 numpy==2.4.4
 scipy==1.17.1
 
+# --- Build toolchain ---
+# Emitted by the clean-venv freeze (requirements-dev.txt pins their floors);
+# in the pip-audit scope deliberately — build tooling is supply chain too.
+build==1.5.0
+Cython==3.2.9
+pyproject_hooks==1.2.0
+setuptools==83.0.0
+wheel==0.47.0
+
 # --- Transitive dependencies ---
+ast_serialize==0.6.0
 click==8.4.2
 execnet==2.1.2
 iniconfig==2.3.0
+librt==0.13.0
 markdown-it-py==4.2.0
 mdurl==0.1.2
+packaging==26.2
 pathspec==1.1.1
 platformdirs==4.10.0
 pluggy==1.6.0

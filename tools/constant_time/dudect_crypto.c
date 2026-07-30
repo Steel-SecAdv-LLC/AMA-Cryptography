@@ -7,11 +7,16 @@
  * Extends the base dudect harness to verify constant-time properties of
  * higher-level cryptographic operations:
  *
- *   1. Ed25519 signing:    secret key class 0 vs class 1
- *   2. AES-GCM encryption: key class 0 (zeros) vs class 1 (random)
- *   3. HKDF derivation:    IKM class 0 vs class 1
- *   4. GHASH:              AAD class 0 vs class 1
- *   5. AES-GCM tag verify: valid tag (class 0) vs invalid tag (class 1)
+ *   1. Ed25519 signing:          secret key class 0 vs class 1
+ *   2. AES-GCM encryption:       key class 0 (zeros) vs class 1 (0xFF)
+ *   3. AES-GCM tag compare:      forged-first-byte vs forged-last-byte
+ *   4. AES-GCM decrypt branch:   valid vs invalid tag (informational —
+ *                                the accept/reject paths legitimately differ)
+ *   5. HKDF derivation:          IKM class 0 vs class 1
+ *   6. SHA3-256:                 all-zero vs all-0xFF input
+ *   7. Ascon-AEAD128 encrypt:    key class 0 (zeros) vs class 1 (0xFF)
+ *   8. Ascon-AEAD128 tag cmp:    forged-first-byte vs forged-last-byte
+ *   9. Ascon-Hash256:            all-zero vs all-0xFF input
  *
  * Methodology: Welch's t-test on execution times (dudect, 2017).
  *   |t| < 4.5  =>  no detectable leakage at 99.999% confidence.
@@ -391,9 +396,10 @@ static double test_ascon_aead_encrypt(int iterations) {
 
     for (int i = 0; i < iterations; i++) {
         int class_idx = rand() & 1;
+        const uint8_t *key = (class_idx == 0) ? key0 : key1;
 
         uint64_t start = get_time_ns();
-        ama_ascon_aead128_encrypt(class_idx == 0 ? key0 : key1, nonce,
+        ama_ascon_aead128_encrypt(key, nonce,
                                   pt, sizeof pt, NULL, 0, ct, tag);
         uint64_t end = get_time_ns();
 
@@ -428,11 +434,11 @@ static double test_ascon_tag_compare(int iterations) {
 
     for (int i = 0; i < iterations; i++) {
         int class_idx = rand() & 1;
+        const uint8_t *probe = (class_idx == 0) ? forged_first : forged_last;
 
         uint64_t start = get_time_ns();
         ama_ascon_aead128_decrypt(key, nonce, ct, sizeof ct, NULL, 0,
-                                  class_idx == 0 ? forged_first : forged_last,
-                                  out);
+                                  probe, out);
         uint64_t end = get_time_ns();
 
         ttest_update(&ctx, class_idx, (double)(end - start));
@@ -454,10 +460,10 @@ static double test_ascon_hash256(int iterations) {
 
     for (int i = 0; i < iterations; i++) {
         int class_idx = rand() & 1;
+        const uint8_t *input = (class_idx == 0) ? input0 : input1;
 
         uint64_t start = get_time_ns();
-        ama_ascon_hash256(class_idx == 0 ? input0 : input1,
-                          sizeof input0, digest);
+        ama_ascon_hash256(input, sizeof input0, digest);
         uint64_t end = get_time_ns();
 
         ttest_update(&ctx, class_idx, (double)(end - start));

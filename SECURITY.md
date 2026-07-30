@@ -5,7 +5,7 @@
 | Property | Value |
 |----------|-------|
 | Document Version | 3.5.0 |
-| Last Updated | 2026-07-25 |
+| Last Updated | 2026-07-30 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -569,6 +569,8 @@ Non-compliance with these standards should be reported as a high-severity securi
 | 3.1.0 | 2026-05-14 | Security hygiene release documentation alignment for current consumers, v3.1.0 tag legitimacy, INVARIANT-14 CVE-ignore review, and no public API changes since v3.0.0 |
 | 3.2.0 | 2026-05-20 | Mercury Agent v1.7.0 alignment; per-slot SIMD auto-tune + file-based cross-process dispatch cache with dispatch-cache safety; NTT benchmark overflow guard; dudect CI hygiene; native HMAC-SHA-256 Python bindings; no breaking public API changes |
 | 3.3.0 | 2026-07-05 | Native one-shot SHA-256; documented public MAC/KDF surface (`quick_hmac` / `quick_hkdf`, native HMAC/HKDF SHA-2/3, `AmaCryptographyError` exception root); SLH-DSA-SHA2-256f signer consolidation; native-hashing purity in `crypto_api`; SLSA provenance permissions + CodeQL unused-static resolution |
+| 3.4.0 | 2026-07-25 | Support matrix rolled (3.4.x active); vendored Wycheproof gate; Ed25519 canonical-`S` enforcement (INVARIANT-26) and X25519 u-coordinate canonicalization (INVARIANT-27); agent-instance binding (INVARIANT-30) with 3R detectors; Ascon-AEAD128/Hash256 (SP 800-232) |
+| 3.5.0 | 2026-07-30 | Support matrix rolled (3.5.x active, 3.4.x superseded — no public API removals); INVARIANT-22 nonce-counter rollback residual risk documented; NIST P-256/384/521 ECDSA (FIPS 186-5, INVARIANT-34 low-`s` policy), ML-KEM/ML-DSA parameter sets, HSS/LMS verification enter the supported surface |
 
 ---
 

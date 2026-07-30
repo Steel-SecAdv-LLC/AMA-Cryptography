@@ -47,27 +47,94 @@ DEFAULT_OUTPUT = REPO / "docs" / "compliance" / "sbom-c-library.json"
 # leave a stale `"version": "X.Y.Z"` baked into the artefact.
 #
 # Keep this list in sync with the C sources under src/c/ that publish a
-# named library component to the SBOM consumer.  The eleven entries
-# below were inherited unchanged from the previous hardcoded heredoc
-# in security.yml; the only PR-level edits to this list should land
-# alongside a new C primitive (or the removal of one), and that PR
-# must also update the dependency graph in
+# named library component to the SBOM consumer: every top-level TU whose
+# capability is exposed through the public API (include/ama_cryptography.h)
+# is a component; TUs that only support those capabilities belong in
+# INTERNAL_SUPPORT below.  The split is enforced — render_sbom() refuses
+# to run if a top-level src/c/*.c file is in neither set, so a new
+# primitive cannot land without an SBOM decision (the eleven-entry list
+# inherited from the old security.yml heredoc silently missed every
+# primitive added after it: Ascon, FROST, agent binding, HSS/LMS, the
+# NIST prime curves — closed out in the 3.5.0 release).  A PR that edits
+# this list must also update the standards-alignment table in
 # ``docs/compliance/CSRC_ALIGN_REPORT.md``.  Order is alphabetical so
 # a diff between two SBOM revisions is easy to read.
 # ---------------------------------------------------------------------------
 C_COMPONENTS: list[tuple[str, str]] = [
     ("ama_aes_gcm", "AES-256-GCM AEAD (NIST SP 800-38D)"),
+    ("ama_agent_binding", "Agent-instance key/signature binding (INVARIANT-30)"),
     ("ama_argon2", "Argon2id password hashing (RFC 9106)"),
+    ("ama_ascon", "Ascon-AEAD128 AEAD and Ascon-Hash256 (NIST SP 800-232)"),
     ("ama_chacha20poly1305", "ChaCha20-Poly1305 AEAD (RFC 8439)"),
-    ("ama_dilithium", "ML-DSA-65 post-quantum signatures (NIST FIPS 204)"),
+    ("ama_dilithium", "ML-DSA-44/-65/-87 post-quantum signatures (NIST FIPS 204)"),
     ("ama_ed25519", "Ed25519 digital signatures (RFC 8032)"),
+    ("ama_frost", "FROST threshold Ed25519 signatures (RFC 9591)"),
     ("ama_hkdf", "HKDF-SHA3-256 key derivation (RFC 5869)"),
-    ("ama_kyber", "Kyber-1024 ML-KEM (NIST FIPS 203)"),
+    ("ama_kyber", "ML-KEM-512/-768/-1024 key encapsulation (NIST FIPS 203)"),
+    ("ama_lms", "HSS/LMS hash-based signature verification (RFC 8554)"),
+    ("ama_nistp", "ECDSA and ECDH over NIST P-256/P-384/P-521 (FIPS 186-5; RFC 6979 nonces)"),
     ("ama_secp256k1", "secp256k1 elliptic curve operations"),
     ("ama_sha3", "SHA3-256/512, SHAKE128/256 (NIST FIPS 202)"),
     ("ama_slhdsa", "SLH-DSA-SHA2-256f + SHAKE-128s (NIST FIPS 205); legacy ama_sphincs_* API"),
     ("ama_x25519", "X25519 ECDH key exchange (RFC 7748)"),
 ]
+
+# Top-level src/c TUs that implement or support the components above but
+# publish no capability of their own through include/ama_cryptography.h.
+# Every top-level src/c/*.c stem must appear in exactly one of the two
+# sets; render_sbom() enforces the partition.
+INTERNAL_SUPPORT: frozenset[str] = frozenset(
+    {
+        "ama_aes_bitsliced",  # constant-time AES backend of ama_aes_gcm
+        "ama_consttime",  # constant-time comparison/select helpers
+        "ama_core",  # library init / self-test plumbing
+        "ama_cpuid",  # CPU feature detection for dispatch
+        "ama_hmac_sha256",  # internal HMAC used by LMS / NIST-P paths
+        "ama_hmac_sha384",  # internal HMAC used by RFC 6979 (P-384)
+        "ama_platform_rand",  # OS CSPRNG shim
+        "ama_secure_memory",  # zeroization / locked-memory helpers
+        "ama_sha256",  # internal SHA-256 backing LMS / NIST-P / HMAC
+        "ama_sha256_ni",  # SHA-NI accelerated SHA-256 backend
+        "ed25519_donna_shim",  # vendored ed25519-donna glue
+    }
+)
+
+
+def check_component_completeness() -> None:
+    """Fail closed if src/c grows a TU the SBOM has not classified.
+
+    Scans top-level ``src/c/*.c`` (subdirectories — dispatch/, SIMD
+    kernels, vendor/ — are implementation detail of the top-level TUs)
+    and requires every stem to be either a named component or an entry
+    in INTERNAL_SUPPORT.  Runs in both generate and --check mode, so CI
+    rejects a new primitive whose SBOM classification was forgotten —
+    the failure mode that let Ascon, FROST, agent binding, HSS/LMS and
+    the NIST prime curves ship unlisted between 3.4.0 and 3.5.0.
+    """
+    component_names = {name for name, _ in C_COMPONENTS}
+    overlap = component_names & INTERNAL_SUPPORT
+    if overlap:
+        raise SystemExit(
+            "ERROR: tools/generate_sbom.py: listed as both component and "
+            f"internal support: {sorted(overlap)}"
+        )
+    on_disk = {p.stem for p in (REPO / "src" / "c").glob("*.c")}
+    unclassified = on_disk - component_names - INTERNAL_SUPPORT
+    missing = (component_names | INTERNAL_SUPPORT) - on_disk
+    problems = []
+    if unclassified:
+        problems.append(
+            f"src/c TU(s) with no SBOM classification: {sorted(unclassified)} "
+            "— add each to C_COMPONENTS (public capability) or "
+            "INTERNAL_SUPPORT (supporting TU) in tools/generate_sbom.py"
+        )
+    if missing:
+        problems.append(
+            f"SBOM entries with no src/c TU on disk: {sorted(missing)} "
+            "— remove them or restore the source file"
+        )
+    if problems:
+        raise SystemExit("ERROR: tools/generate_sbom.py: " + "; ".join(problems))
 
 
 def read_package_version() -> str:
@@ -98,6 +165,8 @@ def render_sbom(version: str) -> dict:
     able to compare with a committed artefact without managing a
     rolling cache of random UUIDs.
     """
+    check_component_completeness()
+
     deterministic_namespace = uuid.UUID("c1c7d2bc-1c1f-4e29-9b5a-c3a7e1f4b8d2")
     serial_uuid = uuid.uuid5(deterministic_namespace, f"ama-cryptography-c-library@{version}")
 

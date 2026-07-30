@@ -80,6 +80,16 @@ def test_invariant_28_is_secp256k1_scoped() -> None:
         "INVARIANT-28 no longer names the secp256k1 signer as the subject of its "
         "low-s guarantee; the README NIST-curve citation assumptions may be stale"
     )
+    # Containment alone cannot see the section *growing*: an additive broadening
+    # ("this invariant now also governs the prime curves") keeps every positive
+    # anchor true.  These are the tokens any prime-curve broadening would have
+    # to introduce — none appears in the section today.
+    for token in ("ama_nistp", "P-256", "P-384", "P-521", "NIST"):
+        assert token not in section, (
+            f"INVARIANT-28 now mentions {token!r}; its scope may have broadened "
+            "to the NIST prime curves — re-review the README NIST-row citation "
+            "(INVARIANT-34) as a deliberate change"
+        )
 
 
 def test_invariant_34_is_the_nist_low_s_authority() -> None:
@@ -117,6 +127,27 @@ def test_nist_curve_row_does_not_misattribute_low_s() -> None:
     # It must cite the correct invariant and keep the (accurate) strict-DER claim.
     assert "INVARIANT-34" in row, "NIST prime-curve row must cite INVARIANT-34 for its low-s policy"
     assert "DER" in row, "NIST prime-curve row dropped its (accurate) strict-DER claim"
+
+
+def test_ed25519_row_cites_its_own_malleability_control() -> None:
+    """The Ed25519 row's malleability citation is INVARIANT-26, not INVARIANT-34.
+
+    Low-`s` (``s`` vs ``n - s``) is an ECDSA concept; INVARIANT-34 names only the
+    ECDSA curves.  Ed25519's malleability control is the canonical-``S`` check
+    (``S < L``), which is INVARIANT-26.  Guards against the mis-citation class
+    the NIST-row fix addressed appearing one row up.
+    """
+    section = _invariant_section(34)
+    assert "Ed25519" not in section, (
+        "INVARIANT-34 now mentions Ed25519; if its scope genuinely grew, "
+        "re-review this pin as a deliberate change"
+    )
+    row = _algorithm_row("Ed25519")
+    assert "INVARIANT-26" in row, "Ed25519 row must cite INVARIANT-26 (canonical-S)"
+    assert "INVARIANT-34" not in row, (
+        "Ed25519 row cites INVARIANT-34, which covers the ECDSA sign/verify "
+        "pair, not Ed25519; the Ed25519 malleability control is INVARIANT-26"
+    )
 
 
 def test_secp256k1_low_s_claim_not_weakened() -> None:

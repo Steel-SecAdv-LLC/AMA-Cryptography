@@ -32,11 +32,27 @@
     },
     {
       "type": "library",
+      "name": "ama_agent_binding",
+      "version": "3.5.0",
+      "description": "Agent-instance key/signature binding (INVARIANT-30)",
+      "scope": "required",
+      "purl": "pkg:generic/ama_agent_binding@3.5.0"
+    },
+    {
+      "type": "library",
       "name": "ama_argon2",
       "version": "3.5.0",
       "description": "Argon2id password hashing (RFC 9106)",
       "scope": "required",
       "purl": "pkg:generic/ama_argon2@3.5.0"
+    },
+    {
+      "type": "library",
+      "name": "ama_ascon",
+      "version": "3.5.0",
+      "description": "Ascon-AEAD128 AEAD and Ascon-Hash256 (NIST SP 800-232)",
+      "scope": "required",
+      "purl": "pkg:generic/ama_ascon@3.5.0"
     },
     {
       "type": "library",
@@ -50,7 +66,7 @@
       "type": "library",
       "name": "ama_dilithium",
       "version": "3.5.0",
-      "description": "ML-DSA-65 post-quantum signatures (NIST FIPS 204)",
+      "description": "ML-DSA-44/-65/-87 post-quantum signatures (NIST FIPS 204)",
       "scope": "required",
       "purl": "pkg:generic/ama_dilithium@3.5.0"
     },
@@ -64,6 +80,14 @@
     },
     {
       "type": "library",
+      "name": "ama_frost",
+      "version": "3.5.0",
+      "description": "FROST threshold Ed25519 signatures (RFC 9591)",
+      "scope": "required",
+      "purl": "pkg:generic/ama_frost@3.5.0"
+    },
+    {
+      "type": "library",
       "name": "ama_hkdf",
       "version": "3.5.0",
       "description": "HKDF-SHA3-256 key derivation (RFC 5869)",
@@ -74,9 +98,25 @@
       "type": "library",
       "name": "ama_kyber",
       "version": "3.5.0",
-      "description": "Kyber-1024 ML-KEM (NIST FIPS 203)",
+      "description": "ML-KEM-512/-768/-1024 key encapsulation (NIST FIPS 203)",
       "scope": "required",
       "purl": "pkg:generic/ama_kyber@3.5.0"
+    },
+    {
+      "type": "library",
+      "name": "ama_lms",
+      "version": "3.5.0",
+      "description": "HSS/LMS hash-based signature verification (RFC 8554)",
+      "scope": "required",
+      "purl": "pkg:generic/ama_lms@3.5.0"
+    },
+    {
+      "type": "library",
+      "name": "ama_nistp",
+      "version": "3.5.0",
+      "description": "ECDSA and ECDH over NIST P-256/P-384/P-521 (FIPS 186-5; RFC 6979 nonces)",
+      "scope": "required",
+      "purl": "pkg:generic/ama_nistp@3.5.0"
     },
     {
       "type": "library",

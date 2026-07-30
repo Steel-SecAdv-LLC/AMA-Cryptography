@@ -25,7 +25,7 @@ name: Release — Build, Sign, and Publish
 #                        FAILS the release if anything drifted.
 #
 #   2. build-wheels    — cibuildwheel matrix across Linux/macOS/Windows
-#                        and Python 3.10–3.13.  Each wheel ships the
+#                        and Python 3.10–3.14.  Each wheel ships the
 #                        Ed25519-signed _integrity_signature.py
 #                        artefact via setup.py's AMA_BUILD_PIPELINE
 #                        hook.
@@ -78,8 +78,8 @@ name: Release — Build, Sign, and Publish
 #
 #   2. Tag only after the dry run is green:
 #
-#        $ git tag -s v3.4.0 -m "ama-cryptography 3.4.0"
-#        $ git push origin v3.4.0
+#        $ git tag -s v3.5.0 -m "ama-cryptography 3.5.0"
+#        $ git push origin v3.5.0
 #
 # All of stages 1-7 then run automatically.  A failure in any stage halts
 # the pipeline before the next; the published artefact is exactly the
@@ -652,7 +652,7 @@ jobs:
 
             * Wheels signed via sigstore (keyless, OIDC-bound).
             * SLSA v1 provenance attestations attached.
-            * Python SBOM + C-library SBOM (CycloneDX) attached.
+            * C-library SBOM (CycloneDX) attached; the Python SBOM is published per-commit by security.yml as the `sbom` workflow artifact.
             * PyPI: ${{ steps.pypi_line.outputs.line }}
 
             Verify with:
