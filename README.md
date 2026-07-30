@@ -1091,7 +1091,10 @@ The module implements technical controls aligned with FIPS 140-3 Security Level 
 
 ---
 
-## NIST Algorithm Compliance
+<a id="nist-algorithm-compliance"></a>
+
+<details>
+<summary><strong>NIST Algorithm Compliance</strong></summary>
 
 AMA Cryptography is continuously validated against official
 [NIST ACVP](https://github.com/usnistgov/ACVP-Server) Algorithm Functional
@@ -1108,8 +1111,7 @@ two are not sourced from ACVP-Server). The current attestation is
 - **Full evidence report:** [`docs/compliance/CSRC_ALIGN_REPORT.md`](docs/compliance/CSRC_ALIGN_REPORT.md)
 - **Continuous validation:** [`.github/workflows/acvp_validation.yml`](.github/workflows/acvp_validation.yml) — runs on every push to `main` and weekly on Mondays; fails if any vector regresses.
 
-<details>
-<summary><strong>Coverage Summary — 1,215 / 1,215 ACVP vectors across 12 algorithm functions and 7 NIST standards (click to expand)</strong></summary>
+### Coverage Summary
 
 | Algorithm | NIST Standard | Vectors | Pass | Fail |
 |---|---|---:|---:|---:|
@@ -1129,8 +1131,6 @@ two are not sourced from ACVP-Server). The current attestation is
 
 Each SHA-3 family row = AFT byte-aligned count + 100 MCT vectors (1 tcId
 × 100 outer iterations per FIPS-202 MCT spec).
-
-</details>
 
 ### Reproduction
 
@@ -1152,6 +1152,8 @@ Full reproduction instructions:
 > environments that require FIPS validation must obtain a formal CAVP/CMVP
 > validation through an accredited CST laboratory. See
 > [`docs/compliance/ACVP_SELF_ATTESTATION.md §7`](docs/compliance/ACVP_SELF_ATTESTATION.md#7-disclaimers).
+
+</details>
 
 ---
 
