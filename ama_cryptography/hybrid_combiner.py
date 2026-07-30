@@ -186,6 +186,24 @@ class HybridCombiner:
             info = label || component_count(2) || len(classical_pk) || classical_pk
                         || len(pqc_pk) || pqc_pk
             output = HKDF(salt, ikm, info, output_len)
+
+        Contract — this is the low-level transcript primitive.  It performs no
+        length validation *by design*: :meth:`encapsulate_hybrid` /
+        :meth:`decapsulate_hybrid` reject empty and over-long components before
+        calling it, and the edge-case suite pins that this method itself stays
+        permissive (empty, oversized, and mismatched inputs all return a valid
+        digest rather than raising).  The two shared secrets enter the IKM by
+        bare concatenation (``ikm = classical_ss || pqc_ss``), which is mandated
+        by INVARIANT-19 and is unambiguous *only* when each secret has a fixed
+        width: every KEM AMA pairs here emits a fixed-width secret (32 bytes for
+        both X25519 and ML-KEM), so the split point is well-defined for every
+        production caller.  The ciphertexts and public keys, which are *not*
+        fixed-width, are length-prefixed in ``salt`` and ``info`` precisely
+        because concatenation alone would be ambiguous for them.  A caller
+        wiring :meth:`combine` to variable-length secrets outside the two
+        wrappers owns fixing each secret's width — do not length-prefix the IKM
+        here, as that would change the transcript and break INVARIANT-19's
+        pinned vectors.
         """
         # SECURITY FIX (audit finding C6): Use length-prefixed encoding
         # for all variable-length components.  This prevents component
