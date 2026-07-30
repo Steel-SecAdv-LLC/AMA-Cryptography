@@ -554,7 +554,7 @@ Runs on:
 - Ubuntu (GCC, Clang)
 - macOS (GCC, Clang)
 - Windows (MSVC)
-- Python 3.10-3.13
+- Python 3.10-3.14
 
 Tests:
 - C library compilation and tests
@@ -727,7 +727,7 @@ python -c "from ama_cryptography.math_engine import benchmark_matrix_operations;
 
 | Component | Version | Notes |
 |-----------|---------|-------|
-| Python | 3.10-3.13 | Type hints support |
+| Python | 3.10-3.14 | Type hints support |
 | NumPy | 1.24+ | Optional (equations/monitoring) |
 | Cython | 0.29.30+ | Optional (for speedup) |
 | CMake | 3.15+ | C library build |

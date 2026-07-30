@@ -92,8 +92,8 @@ The system combines NIST-standardized post-quantum algorithms with a 3R runtime 
 - [NIST Algorithm Compliance](#nist-algorithm-compliance)
 - [Documentation](#documentation)
 - [Cross-Platform Support](#cross-platform-support)
-- [Build System](#build-system-)
-- [Mathematical Foundations](#mathematical-foundations-)
+- [Build System](#build-system)
+- [Mathematical Foundations](#mathematical-foundations)
 - [Contributing](#contributing)
 - [Unique Features](#unique-features)
 - [License](#license)
@@ -562,7 +562,7 @@ print('native Ed25519 + ML-KEM-1024 OK;',
 
 #### 2. Prebuilt wheel from a GitHub Release — no index, no toolchain
 
-`release.yml` builds wheels with `cibuildwheel` for CPython 3.10–3.13 across
+`release.yml` builds wheels with `cibuildwheel` for CPython 3.10–3.14 across
 Linux x86-64, Linux aarch64, macOS x86-64, macOS arm64 and Windows AMD64, and
 attaches them to the GitHub Release together with the sdist, sigstore bundles
 and SLSA v1 provenance.
@@ -940,7 +940,7 @@ The test suite includes:
 
 ![Test Suite Coverage](assets/test_coverage.png)
 
-*3,056 test functions across 126 Python test files plus 57 C test suites (60 translation units) covering core crypto and NIST KATs (including the new AVX-512 4-way Keccak KAT, fe51-vs-fe64 X25519 byte-equivalence, MULX+ADX equivalence, VAES AES-GCM equivalence, FROST threshold signing, Ed25519 Shamir verify and base-point comb equivalence, and Dilithium / Kyber sampling-equivalence pinning), PQC backends, key management, adaptive posture, hybrid combiner, memory security, fuzz harnesses, and performance/monitoring. See [docs/METRICS_REPORT.md](docs/METRICS_REPORT.md) for the authoritative count and reproduction command (`grep -rE "^\s*def test_" tests/ --include='*.py' | wc -l`).*
+*3,057 test functions across 126 Python test files plus 57 C test suites (60 translation units) covering core crypto and NIST KATs (including the new AVX-512 4-way Keccak KAT, fe51-vs-fe64 X25519 byte-equivalence, MULX+ADX equivalence, VAES AES-GCM equivalence, FROST threshold signing, Ed25519 Shamir verify and base-point comb equivalence, and Dilithium / Kyber sampling-equivalence pinning), PQC backends, key management, adaptive posture, hybrid combiner, memory security, fuzz harnesses, and performance/monitoring. See [docs/METRICS_REPORT.md](docs/METRICS_REPORT.md) for the authoritative count and reproduction command (`grep -rE "^\s*def test_" tests/ --include='*.py' | wc -l`).*
 
 </details>
 
@@ -952,7 +952,7 @@ GitHub Actions automatically tests:
 | Check | Description |
 |-------|-------------|
 | C library | GCC, Clang on Ubuntu/macOS |
-| Python package | Python 3.10-3.13 on Linux |
+| Python package | Python 3.10-3.14 on Linux |
 | Code quality | ruff (lint + import sorting), black, mypy --strict |
 | Security scanning | pip-audit, bandit, Semgrep, CodeQL static analysis |
 | Docker builds | Ubuntu + Alpine images |
@@ -1218,7 +1218,7 @@ Full reproduction instructions:
 
 ---
 
-## Build System 
+## Build System
 
 <details>
 <summary><strong>CMake (C Library with Native PQC)</strong></summary>
@@ -1327,7 +1327,7 @@ make install      # Install system-wide
 
 ---
 
-## Mathematical Foundations 
+## Mathematical Foundations
 
 <details>
 <summary><strong>Research and Innovation</strong></summary>
@@ -1563,7 +1563,7 @@ The human architect does not hold formal credentials in cryptography. The AI con
 
 - **Standards-based design:** Built on NIST FIPS 202/204, RFC 2104/5869/8032/3161—not custom cryptography
 - **Quantified claims:** All performance metrics are measured and reproducible (see [benchmarks/](benchmarks/))
-- **Rigorous testing:** 3,056 test functions across 126 Python files plus 57 C test suites, anchored in [docs/METRICS_REPORT.md](docs/METRICS_REPORT.md); CI includes security scanning, NIST ACVP validation (1,215/1,215 — 815 AFT + 400 SHA-3 MCT), and tiered benchmark-regression checks
+- **Rigorous testing:** 3,057 test functions across 126 Python files plus 57 C test suites, anchored in [docs/METRICS_REPORT.md](docs/METRICS_REPORT.md); CI includes security scanning, NIST ACVP validation (1,215/1,215 — 815 AFT + 400 SHA-3 MCT), and tiered benchmark-regression checks
 - **Regression detection:** Tiered benchmark tolerances calibrated for CI environments
 - **Transparent limitations:** Security analysis explicitly distinguishes self-assessed vs. audited claims
 - **Defense-in-depth:** Security bounded by weakest layer (~128-bit classical), not inflated aggregate claims
