@@ -66,15 +66,19 @@ name: Release — Build, Sign, and Publish
 #        gated on a tag push and cannot fire from a dispatch.)
 #
 #      This is not optional ceremony.  Everything below stage 1 runs ONLY
-#      on a tag push, so nothing else in CI ever executes it.  Four
+#      on a tag push, so nothing else in CI ever executes it.  Five
 #      independent release blockers reached production that way — a
 #      cibuildwheel pin to a nonexistent commit, a retired `macos-13`
-#      runner label, a `python -c` payload broken by YAML folding, and
-#      POSIX quoting handed to cmd.exe — and the v3.2.0 and v3.3.0
-#      releases both shipped with zero artefacts as a result.
-#      tools/check_workflow_commands.py now catches those three classes
-#      statically on every PR, but a dry run is the only thing that
-#      exercises the real matrix against the real runner fleet.
+#      runner label, a `python -c` payload broken by YAML folding,
+#      POSIX quoting handed to cmd.exe, and a cibuildwheel 3->4 bump that
+#      turned on delvewheel Windows repair by default (see
+#      CIBW_REPAIR_WHEEL_COMMAND_WINDOWS below) — and the v3.2.0, v3.3.0
+#      and v3.5.0 releases all shipped with zero artefacts as a result.
+#      tools/check_workflow_commands.py now catches the first four classes
+#      statically on every PR; the delvewheel default is a behavioural
+#      change in a dependency, not a command defect, so NO static check
+#      sees it — a dry run is the only thing that exercises the real repair
+#      step against the real matrix and runner fleet.
 #
 #   2. Tag only after the dry run is green:
 #
@@ -280,6 +284,46 @@ jobs:
           # by every modern pip.
           CIBW_MANYLINUX_X86_64_IMAGE: "manylinux_2_28"
           CIBW_MANYLINUX_AARCH64_IMAGE: "manylinux_2_28"
+          # WINDOWS WHEEL REPAIR: disabled on purpose.
+          #
+          # cibuildwheel 4.0 made `delvewheel repair` the DEFAULT Windows
+          # repair command (it did not run in 3.x — that is how v3.0.0–v3.4.0
+          # shipped working Windows wheels).  Bumping the pin from v3.2.0 to
+          # v4.1.1 in the pre-v3.5.0 dependency sweep silently turned it on,
+          # and it took the v3.5.0 release down: the five wheel jobs all BUILT
+          # green, then the Windows job died in the new repair step with
+          #     FileNotFoundError: Unable to find library: ama_cryptography.dll
+          # Because build-wheels failed, hash → provenance → sign →
+          # publish-pypi → github-release were all skipped, so the pushed
+          # v3.5.0 tag produced no GitHub Release at all.
+          #
+          # The DLL is not missing — it is already vendored INTO the wheel,
+          # next to the Cython .pyd bindings, by setup.py's
+          # CMakeBuild._copy_native_library_into_package (D-1).  delvewheel
+          # raises anyway: at its default settings it resolves each .pyd's
+          # `ama_cryptography.dll` import against PATH only (wheel_dirs=None in
+          # delvewheel/_wheel_repair.py), not the .pyd's own package directory,
+          # and the project's own DLL is on neither PATH.
+          #
+          # We must NOT "fix" this by letting delvewheel vendor + name-mangle
+          # the DLL.  The native library is loaded at runtime by FIXED name —
+          # `ama_cryptography.dll` / `libama_cryptography.dll` — through ctypes
+          # in ama_cryptography/pqc_backends.py::_find_native_library.  A
+          # delvewheel-mangled name (ama_cryptography-<hash>.dll) would patch
+          # the .pyd import tables but leave that ctypes-by-name load unable to
+          # find the library, silently dropping the entire native crypto
+          # backend to the pure-Python fallback.
+          #
+          # No repair is needed on Windows: the vendored DLL sits beside the
+          # .pyd files, so the loader resolves the .pyd import via
+          # LOAD_WITH_ALTERED_SEARCH_PATH (the module's own directory is
+          # searched first) and the ctypes path loads it by absolute path.
+          # An empty command skips repair on Windows only; Linux (auditwheel)
+          # and macOS (delocate) repair are untouched and still run.
+          # tools/check_workflow_commands.py already tracks
+          # CIBW_REPAIR_WHEEL_COMMAND_WINDOWS in WINDOWS_COMMAND_KEYS; an empty
+          # value has no payload or quoting for it to flag.
+          CIBW_REPAIR_WHEEL_COMMAND_WINDOWS: ""
           # TEST COMMAND: smoke-test the built wheel inside the throwaway
           # virtualenv cibuildwheel creates for it.  The full pytest suite
           # runs in ci-build-test.yml; this gate answers the narrower
