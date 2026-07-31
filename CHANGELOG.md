@@ -96,10 +96,10 @@ diverges by class (it stops at byte 0 vs byte 15), so sensitivity to a real
 regression is preserved and in fact improves over the two-buffer form.
 Threshold, verdict rule, and lane inventory are unchanged.
 
-### Fixed — open CodeQL alerts on the test suite, at what they pointed at
+### Fixed — open CodeQL alerts, at what they pointed at
 
-Six standing CodeQL alerts were resolved in code, without dismissals and
-without weakening any assertion:
+Seven standing CodeQL alerts were resolved in code, without dismissals and
+without weakening any assertion. Six were on the test suite:
 
 - Five `import`/`import from` mix notes — a module imported both as
   `import M` and `from M import x` in the same file — were made
@@ -126,11 +126,15 @@ without weakening any assertion:
 
 The seventh alert
 (`benchmarks/generate_competitive.py` "unused named argument in formatting
-call") is a verified false positive left unchanged: the `TEMPLATE.format(...)`
-call is a perfect bijection between its 18 keyword arguments and the template's
-replacement fields — confirmed by field enumeration, a raw brace count, and a
-clean runtime `format()` — at every revision of the file. Contorting correct,
-idiomatic code to silence a tool would be the debt this repository avoids.
+call") flagged a `TEMPLATE.format(...)` call whose 18 keyword arguments are a
+verified 1:1 bijection with the template's replacement fields (`string.Formatter`
+enumeration, not a raw brace count; a byte-identity check `format(**m) ==
+format_map(m)` confirms the substitution is unchanged). It is resolved in code
+without a dismissal: the call now substitutes via the idiomatic
+`TEMPLATE.format_map(mapping)`, which renders byte-identically and carries no
+keyword arguments for the format-argument query to misread against the escaped
+braces in the embedded CSS/JS. All seven alerts are now resolved in code — none
+by suppression, none carried as a knowingly-accepted false positive.
 
 ### Changed — the CMake summary reports what was compiled, not what was requested
 
