@@ -591,7 +591,7 @@ jobs:
           /opt/python/cp311-cp311/bin/pip install \
             'build>=1.0' \
             'setuptools>=83.0.0' 'wheel>=0.47.0' \
-            'cmake>=4.3.4' 'Cython>=3.2.8' 'numpy>=1.24.0'
+            'cmake>=4.4.0' 'Cython>=3.2.8' 'numpy>=1.24.0'
           # Front-load the manylinux Python on PATH so subsequent
           # steps see `python` / `pip` as the pinned 3.11 from the
           # base image (and not a stray host Python that GitHub's

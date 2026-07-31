@@ -365,7 +365,7 @@ skip-string-normalization = false
 # Static-analysis target = the project's minimum supported runtime.  The
 # project dropped Python 3.9 (requires-python >= 3.10; see the classifiers and
 # CI matrix), so 3.10 is now both the runtime floor and the type-analysis
-# floor.  This also satisfies mypy >= 2.0 (2.1.0 via the python-dependencies
+# floor.  This also satisfies mypy >= 2.0 (2.3.0 via the python-dependencies
 # group), which refuses python_version="3.9".
 python_version = "3.10"
 strict = true

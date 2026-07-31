@@ -42,7 +42,7 @@ from typing import Optional
 #     70.0.0 closes GHSA-cx63-2mw6-8hw5 and 78.1.1 closes PYSEC-2025-49; the
 #     floor is pinned at 83.0.0 to match pyproject.toml's [build-system].
 #   * wheel >= 0.47.0:        closes GHSA-8rrh-rw8j-w5fx.
-#   * cmake >= 4.3.4:         supply-chain floor (matches pyproject.toml's
+#   * cmake >= 4.4.0:         supply-chain floor (matches pyproject.toml's
 #     [build-system].requires).  CMakeLists.txt's cmake_minimum_required is
 #     3.15, but this higher floor is enforced for supply-chain security.
 #   * Cython >= 3.2.8:        floor for the math_engine extension's
@@ -64,7 +64,7 @@ _BUILD_REQS = {
     "setuptools": ((83, 0, 0), "AttributeError(install_layout) on bdist_wheel"),
     "wheel": ((0, 47, 0), "GHSA-8rrh-rw8j-w5fx"),
     "cmake": (
-        (4, 3, 4),
+        (4, 4, 0),
         "Dependabot supply-chain floor (pyproject.toml [build-system].requires);"
         " CMakeLists.txt cmake_minimum_required is 3.15 but this higher"
         " floor is enforced for supply-chain security",
@@ -100,7 +100,7 @@ def _parse_version(raw: str) -> tuple:
 
 _REMEDY = (
     "  python3 -m pip install --upgrade "
-    "'setuptools>=83.0.0' 'wheel>=0.47.0' 'cmake>=4.3.4' "
+    "'setuptools>=83.0.0' 'wheel>=0.47.0' 'cmake>=4.4.0' "
     "'Cython>=3.2.8' 'numpy>=1.24.0'\n"
 )
 

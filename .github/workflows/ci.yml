@@ -322,7 +322,7 @@ jobs:
         #
         # Collection needs no native library and no editable install — verified
         # against a pristine checkout — so this stays a fast, tool-only job.
-        pip install "black==26.5.1" "ruff==0.15.20" "mypy==2.1.0" \
+        pip install "black==26.5.1" "ruff==0.16.0" "mypy==2.3.0" \
                     "PyYAML==6.0.3" "types-PyYAML==6.0.12.20260724" \
                     "pytest==9.1.1"
 

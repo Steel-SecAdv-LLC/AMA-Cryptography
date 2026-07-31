@@ -388,7 +388,7 @@ jobs:
           # `mypy --strict tests/` types every pytest call as `Any` and its
           # verdict changes with whether pytest happens to be installed.
           # See the longer note in ci.yml::code-quality.
-          pip install "black==26.5.1" "ruff==0.15.20" "mypy==2.1.0" \
+          pip install "black==26.5.1" "ruff==0.16.0" "mypy==2.3.0" \
                       "PyYAML==6.0.3" "types-PyYAML==6.0.12.20260724" \
                       "pytest==9.1.1"
 
