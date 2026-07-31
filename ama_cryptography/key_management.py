@@ -35,6 +35,9 @@ from ama_cryptography.exceptions import (
     AmaHSMUnavailableError as AmaHSMUnavailableError,
 )
 from ama_cryptography.exceptions import (
+    KeyManagementError as KeyManagementError,
+)
+from ama_cryptography.exceptions import (
     SecurityWarning as SecurityWarning,
 )
 from ama_cryptography.pqc_backends import _HMAC_SHA512_NATIVE_AVAILABLE, native_hmac_sha512
@@ -173,6 +176,48 @@ logger = logging.getLogger(__name__)
 import importlib.util
 
 HSM_AVAILABLE: bool = importlib.util.find_spec("PyKCS11") is not None
+
+
+# ---------------------------------------------------------------------------
+# KDF policy floor.
+#
+# ``.kdf_metadata.json`` names the algorithm and cost used to turn the master
+# password into the storage key, and it is a plain unauthenticated file next
+# to the key material.  Anyone who can write it can name a cheaper derivation.
+# That does not expose keys already stored -- those were encrypted under a key
+# derived with the *old* parameters, so a swapped file simply fails to decrypt
+# them -- but it does govern every key written afterwards, and on a store that
+# is initialised but not yet populated the downgrade is completely silent.
+#
+# The parameters therefore cannot be trusted merely because they are on disk.
+# They are clamped from below here, on read, and refused rather than honoured
+# when they fall short.  This is the control that actually stops the
+# downgrade; binding them into the AEAD associated data (storage format v3,
+# see ``_kdf_binding``) is what makes an attempt *diagnosable* rather than an
+# opaque authentication failure.
+#
+# The floors match the values this class writes for new stores: OWASP 2024 for
+# PBKDF2-HMAC-SHA256 and the RFC 9106 second recommended option for Argon2id.
+MIN_PBKDF2_ITERATIONS = 600000
+MIN_ARGON2_T_COST = 3
+MIN_ARGON2_M_COST = 65536  # KiB, i.e. 64 MiB
+MIN_ARGON2_PARALLELISM = 1
+# Storage format version written by ``store_key``.  v3 binds the KDF
+# parameters into the AEAD associated data; v2 bound only ``key_id`` and is
+# still accepted on read so existing stores keep opening.
+STORAGE_FORMAT_VERSION = 3
+
+
+class KDFPolicyError(KeyManagementError):
+    """Raised when stored KDF parameters fall below the policy floor.
+
+    Carries the offending parameters so an operator can tell a genuine legacy
+    store from a tampered one.  Recoverable by re-opening the store with
+    ``allow_legacy_kdf=True`` and calling
+    :meth:`SecureKeyStorage.migrate_kdf`.
+    """
+
+    pass
 
 
 class KeyStatus(Enum):
@@ -610,14 +655,32 @@ class SecureKeyStorage:
         - Backward compatibility with legacy AES-CFB encrypted keys
     """
 
-    def __init__(self, storage_path: Path, master_password: Optional[str] = None) -> None:
+    def __init__(
+        self,
+        storage_path: Path,
+        master_password: Optional[str] = None,
+        allow_legacy_kdf: bool = False,
+    ) -> None:
         """
         Initialize secure storage
 
         Args:
             storage_path: Directory for key storage
             master_password: Master password for encryption
+            allow_legacy_kdf: Permit key derivation with parameters weaker
+                than the current policy floor.  ``.kdf_metadata.json`` is an
+                unauthenticated file in a directory the key owner does not
+                exclusively control on every platform, so the cost parameters
+                it names are attacker-influenced input.  With this False (the
+                default) parameters below the floor are refused instead of
+                honoured; set it True only to open an old store long enough to
+                call :meth:`migrate_kdf`.
+
+        Raises:
+            KDFPolicyError: If the stored KDF parameters are below the policy
+                floor and ``allow_legacy_kdf`` is False.
         """
+        self.allow_legacy_kdf = allow_legacy_kdf
         self.storage_path = Path(storage_path)
         # Create the key store 0o700 so key-id filenames are not enumerable and
         # the encrypted key files are not world-traversable.  ``mkdir(mode=...)``
@@ -640,6 +703,11 @@ class SecureKeyStorage:
         self.ARGON2_T_COST = 3  # iterations
         self.ARGON2_M_COST = 65536  # 64 MiB
         self.ARGON2_PARALLELISM = 4  # lanes
+        # Parameters actually used to derive ``self.encryption_key``.  Bound
+        # into the AEAD associated data of every key written by this instance
+        # (storage format v3) so a stored key records, tamper-evidently, the
+        # derivation cost it was protected with.
+        self.kdf_params: Dict[str, Any] = {}
 
         # Salt file with secure permissions
         self.salt_file = self.storage_path / ".salt"
@@ -652,8 +720,106 @@ class SecureKeyStorage:
             self.encryption_key = bytearray(secrets.token_bytes(32))
             self.salt: Optional[bytes] = None  # No salt needed for random key
 
+    def _enforce_kdf_policy(self, params: Dict[str, Any]) -> None:
+        """Refuse KDF parameters weaker than the policy floor.
+
+        ``params`` comes from ``.kdf_metadata.json``, which is unauthenticated
+        (see the module-level note on the floor).  Treat it as untrusted input
+        and fail closed unless the caller has explicitly opted into legacy
+        parameters in order to migrate.
+
+        Raises:
+            KDFPolicyError: If any parameter is below its floor.
+        """
+        algorithm = params.get("algorithm")
+        shortfalls: List[str] = []
+
+        if algorithm == "Argon2id":
+            if int(params.get("t_cost", 0)) < MIN_ARGON2_T_COST:
+                shortfalls.append(f"t_cost {params.get('t_cost')} < {MIN_ARGON2_T_COST}")
+            if int(params.get("m_cost", 0)) < MIN_ARGON2_M_COST:
+                shortfalls.append(f"m_cost {params.get('m_cost')} < {MIN_ARGON2_M_COST} KiB")
+            if int(params.get("parallelism", 0)) < MIN_ARGON2_PARALLELISM:
+                shortfalls.append(
+                    f"parallelism {params.get('parallelism')} < {MIN_ARGON2_PARALLELISM}"
+                )
+        else:
+            if int(params.get("iterations", 0)) < MIN_PBKDF2_ITERATIONS:
+                shortfalls.append(
+                    f"iterations {params.get('iterations')} < {MIN_PBKDF2_ITERATIONS}"
+                )
+
+        if not shortfalls:
+            return
+
+        detail = "; ".join(shortfalls)
+        if self.allow_legacy_kdf:
+            warnings.warn(
+                f"Key store at {self.storage_path} names KDF parameters below the "
+                f"policy floor ({detail}). Opening anyway because "
+                "allow_legacy_kdf=True. Call migrate_kdf() to re-encrypt at "
+                "current strength, then reopen without allow_legacy_kdf.",
+                SecurityWarning,
+                stacklevel=2,
+            )
+            return
+
+        raise KDFPolicyError(
+            f"Key store at {self.storage_path} names KDF parameters below the "
+            f"policy floor ({detail}). {self.metadata_file.name} is not "
+            "authenticated, so weak parameters may be a downgrade attempt rather "
+            "than a genuine legacy store. To open an old store and upgrade it, "
+            "pass allow_legacy_kdf=True and call migrate_kdf()."
+        )
+
+    def _kdf_binding(self) -> bytes:
+        """Canonical associated-data encoding of the active KDF parameters.
+
+        Bound into the AEAD of every key written in storage format v3.  The
+        parameters already influence the derived key, so a swapped
+        ``.kdf_metadata.json`` would break decryption regardless; what this
+        adds is *provenance*.  The key file records the cost it was written
+        under, that record cannot be edited without invalidating the tag, and
+        a mismatch reports which parameters changed instead of surfacing as an
+        unexplained authentication failure.
+
+        Sorted, separator-normalised JSON so the bytes are reproducible across
+        interpreters and dict insertion orders.
+        """
+        return json.dumps(self.kdf_params, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+    def _aad_for(self, key_id: str, storage_version: int, kdf_binding: bytes) -> bytes:
+        """Build the AEAD associated data for a stored key.
+
+        v2 bound ``key_id`` alone.  v3 additionally binds the storage format
+        version and the KDF parameters, length-prefixed so that no two
+        distinct (key_id, params) pairs can produce the same byte string by
+        shifting the boundary between them.
+        """
+        if storage_version < 3:
+            return key_id.encode("utf-8")
+        key_id_bytes = key_id.encode("utf-8")
+        return b"".join(
+            (
+                b"AMAKS\x03",
+                len(key_id_bytes).to_bytes(4, "big"),
+                key_id_bytes,
+                len(kdf_binding).to_bytes(4, "big"),
+                kdf_binding,
+            )
+        )
+
     def _derive_key_from_password(self, master_password: str) -> None:
-        """Derive encryption key from password with proper salt handling."""
+        """Derive encryption key from password with proper salt handling.
+
+        The parameters named by ``.kdf_metadata.json`` are passed through
+        :meth:`_enforce_kdf_policy` before any derivation happens, and the set
+        actually used is recorded in ``self.kdf_params`` for AEAD binding.
+
+        Raises:
+            KDFPolicyError: If the stored parameters are below the floor and
+                ``allow_legacy_kdf`` is False.
+        """
         # Check for existing salt (migration support)
         if self.salt_file.exists():
             with open(self.salt_file, "rb") as f:
@@ -732,6 +898,16 @@ class SecureKeyStorage:
                         _exc,
                     )
 
+            # Cost check BEFORE the derivation, so a downgraded file never
+            # gets to produce a usable key.
+            self.kdf_params = {
+                "algorithm": "Argon2id",
+                "t_cost": t_cost,
+                "m_cost": m_cost,
+                "parallelism": parallelism,
+            }
+            self._enforce_kdf_policy(self.kdf_params)
+
             try:
                 from ama_cryptography.pqc_backends import native_argon2id
 
@@ -752,6 +928,11 @@ class SecureKeyStorage:
                     "cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
                 ) from exc
         else:
+            self.kdf_params = {
+                "algorithm": "PBKDF2-HMAC-SHA256",
+                "iterations": int(iterations),
+            }
+            self._enforce_kdf_policy(self.kdf_params)
             self.encryption_key = bytearray(
                 hashlib.pbkdf2_hmac(
                     "sha256",
@@ -849,8 +1030,25 @@ class SecureKeyStorage:
             self.metadata_file.read_bytes() if self.metadata_file.exists() else None
         )
 
+        old_kdf_params = self.kdf_params
+
         self.encryption_key = new_encryption_key
         self.salt = new_salt
+        # Swap the recorded parameters over with the key, so the keys written
+        # below are bound to the parameters they are actually protected by
+        # rather than to the ones being migrated away from.
+        if use_argon2:
+            self.kdf_params = {
+                "algorithm": "Argon2id",
+                "t_cost": self.ARGON2_T_COST,
+                "m_cost": self.ARGON2_M_COST,
+                "parallelism": self.ARGON2_PARALLELISM,
+            }
+        else:
+            self.kdf_params = {
+                "algorithm": "PBKDF2-HMAC-SHA256",
+                "iterations": self.KDF_ITERATIONS,
+            }
 
         try:
             for key_id, (key_data, key_metadata) in old_keys.items():
@@ -894,12 +1092,32 @@ class SecureKeyStorage:
                     )
             self.encryption_key = old_key
             self.salt = old_salt
+            self.kdf_params = old_kdf_params
             raise
 
     @classmethod
-    def from_existing(cls, storage_path: Path, master_password: str) -> "SecureKeyStorage":
-        """Recover storage instance from existing salt file."""
+    def from_existing(
+        cls,
+        storage_path: Path,
+        master_password: str,
+        allow_legacy_kdf: bool = False,
+    ) -> "SecureKeyStorage":
+        """Recover storage instance from existing salt file.
+
+        Args:
+            storage_path: Directory holding ``.salt`` and the key files
+            master_password: Master password for encryption
+            allow_legacy_kdf: See :meth:`__init__`.  Defaults to False, so an
+                existing store whose metadata names sub-floor parameters is
+                refused rather than opened.
+
+        Raises:
+            KDFPolicyError: If the stored KDF parameters are below the policy
+                floor and ``allow_legacy_kdf`` is False.
+        """
         storage = cls.__new__(cls)
+        storage.allow_legacy_kdf = allow_legacy_kdf
+        storage.kdf_params = {}
         storage.storage_path = Path(storage_path)
         storage.KDF_VERSION = 3
         storage.KDF_ITERATIONS = 600000
@@ -955,12 +1173,16 @@ class SecureKeyStorage:
 
         nonce = secrets.token_bytes(12)  # 96-bit nonce for GCM (NIST recommended)
 
-        # Encrypt with key_id as associated data (binds ciphertext to key_id).
+        # Associated data binds the ciphertext to key_id and, from format v3,
+        # to the KDF parameters this instance derived its key with.  The
+        # recorded parameters are covered by the tag, so the provenance a
+        # reader sees cannot be edited independently of the ciphertext.
+        kdf_binding = self._kdf_binding()
+        aad = self._aad_for(key_id, STORAGE_FORMAT_VERSION, kdf_binding)
+
         # The native wrapper borrows this bytearray key through the buffer
         # protocol so the context manager can still wipe the only live copy.
-        ct, tag = native_aes256_gcm_encrypt(
-            self.encryption_key, nonce, key_data, key_id.encode("utf-8")
-        )
+        ct, tag = native_aes256_gcm_encrypt(self.encryption_key, nonce, key_data, aad)
         ciphertext = ct + tag  # Store as combined ct||tag for format compatibility
 
         storage_data = {
@@ -968,7 +1190,8 @@ class SecureKeyStorage:
             "ciphertext": base64.b64encode(ciphertext).decode("ascii"),
             "nonce": base64.b64encode(nonce).decode("ascii"),
             "algorithm": "AES-256-GCM",
-            "version": 2,  # Storage format version
+            "version": STORAGE_FORMAT_VERSION,  # Storage format version
+            "kdf_params": self.kdf_params,
             "metadata": metadata or {},
             "stored_at": datetime.now(timezone.utc).isoformat(),
         }
@@ -1020,11 +1243,38 @@ class SecureKeyStorage:
             ct = combined[:-16]
             tag = combined[-16:]
 
+            # Reconstruct the associated data this key was written with.  v2
+            # files bound key_id alone; v3 also binds the KDF parameters, and
+            # those are read back from the file rather than from the live
+            # instance so a key written under one derivation still opens when
+            # the store has since been migrated to another.
+            storage_version = int(storage_data.get("version", 2))
+            recorded_params = storage_data.get("kdf_params", {})
+            recorded_binding = json.dumps(
+                recorded_params, sort_keys=True, separators=(",", ":")
+            ).encode("utf-8")
+            aad = self._aad_for(key_id, storage_version, recorded_binding)
+
             # Decrypt with authentication (raises ValueError if tampered);
             # keep the wipeable bytearray key on the buffer-protocol path.
-            plaintext: bytes = native_aes256_gcm_decrypt(
-                self.encryption_key, nonce, ct, tag, key_id.encode("utf-8")
-            )
+            try:
+                plaintext: bytes = native_aes256_gcm_decrypt(
+                    self.encryption_key, nonce, ct, tag, aad
+                )
+            except ValueError:
+                # A parameter mismatch is the one authentication failure with
+                # a specific, actionable cause: the key was protected at a
+                # different cost than the one now in force.  Name it, rather
+                # than leaving the caller with a bare tamper error.
+                if storage_version >= 3 and recorded_params and recorded_params != self.kdf_params:
+                    raise KDFPolicyError(
+                        f"Key '{key_id}' was stored under KDF parameters "
+                        f"{recorded_params}, but this store derived its key with "
+                        f"{self.kdf_params}. Either {self.metadata_file.name} has "
+                        "changed since the key was written, or the key belongs to a "
+                        "different store. Nothing has been decrypted."
+                    ) from None
+                raise
             return plaintext
 
         elif algorithm == "AES-256-CFB":

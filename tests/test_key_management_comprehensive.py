@@ -15,6 +15,7 @@ Test Categories:
 - KeyMetadata: Data structure validation
 """
 
+import base64
 import json
 import os
 import secrets
@@ -727,14 +728,220 @@ class TestSecureKeyStorageLegacyKDF:
         with open(metadata_file, "w") as f:
             json.dump(v1_metadata, f)
 
-        # Initialize should warn about legacy parameters
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
+        # Opening is refused by default: the metadata naming those parameters
+        # is unauthenticated, so 100k iterations may be a downgrade rather
+        # than a genuine v1 store.
+        from ama_cryptography.key_management import KDFPolicyError
+
+        with pytest.raises(KDFPolicyError, match="iterations 100000 < 600000"):
             SecureKeyStorage(temp_storage_path, master_password=test_password)
 
-            assert len(w) == 1
-            assert issubclass(w[0].category, SecurityWarning)
-            assert "legacy KDF v1" in str(w[0].message)
+        # With the explicit opt-in the store opens and warns instead.
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            SecureKeyStorage(
+                temp_storage_path,
+                master_password=test_password,
+                allow_legacy_kdf=True,
+            )
+
+            messages = [str(x.message) for x in w]
+            assert all(issubclass(x.category, SecurityWarning) for x in w)
+            assert any("below the policy floor" in m for m in messages)
+            assert any("legacy KDF v1" in m for m in messages)
+
+    def test_legacy_store_upgrades_via_migrate(
+        self, temp_storage_path: Any, test_password: Any
+    ) -> None:
+        """A legacy store opened with the opt-in can be migrated and reopened.
+
+        This is the recovery path the refusal points callers at, so it has to
+        actually work end to end.
+        """
+        from ama_cryptography.key_management import KDFPolicyError
+
+        salt_file = temp_storage_path / ".salt"
+        with open(salt_file, "wb") as f:
+            f.write(secrets.token_bytes(32))
+        metadata_file = temp_storage_path / ".kdf_metadata.json"
+        with open(metadata_file, "w") as f:
+            json.dump(
+                {"version": 1, "algorithm": "PBKDF2-HMAC-SHA256", "iterations": 100000},
+                f,
+            )
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            legacy = SecureKeyStorage(
+                temp_storage_path,
+                master_password=test_password,
+                allow_legacy_kdf=True,
+            )
+            legacy.store_key("legacy-key", b"\x11" * 32)
+            assert legacy.migrate_kdf(test_password) is True
+
+        # After migration the store opens under the default policy, and the
+        # key stored before the migration is still readable.
+        upgraded = SecureKeyStorage(temp_storage_path, master_password=test_password)
+        assert upgraded.retrieve_key("legacy-key") == b"\x11" * 32
+
+        # And the refusal is genuinely gone, not merely suppressed.
+        try:
+            SecureKeyStorage(temp_storage_path, master_password=test_password)
+        except KDFPolicyError as exc:  # pragma: no cover - regression guard
+            raise AssertionError(f"migrated store still refused: {exc}") from exc
+
+
+class TestKDFMetadataIsUntrusted:
+    """`.kdf_metadata.json` is unauthenticated, so it is untrusted input.
+
+    Anyone who can write the key-store directory can name a cheaper
+    derivation in it. That does not expose keys already written -- those were
+    encrypted under a key derived with the old parameters -- but it governs
+    every key written afterwards, and on an initialised-but-empty store the
+    downgrade leaves no trace at all.
+    """
+
+    def _weaken(self, path: Any, **overrides: Any) -> dict[str, Any]:
+        metadata_file = path / ".kdf_metadata.json"
+        with open(metadata_file) as f:
+            metadata: dict[str, Any] = json.load(f)
+        metadata.update(overrides)
+        with open(metadata_file, "w") as f:
+            json.dump(metadata, f)
+        return metadata
+
+    def test_argon2_cost_downgrade_is_refused(
+        self, temp_storage_path: Any, test_password: Any
+    ) -> None:
+        """Rewriting m_cost downward is refused rather than honoured."""
+        from ama_cryptography.key_management import KDFPolicyError
+
+        storage = SecureKeyStorage(temp_storage_path, master_password=test_password)
+        if storage.kdf_params.get("algorithm") != "Argon2id":
+            pytest.skip("store did not select Argon2id")
+
+        self._weaken(temp_storage_path, m_cost=8)
+
+        with pytest.raises(KDFPolicyError, match="m_cost 8 <"):
+            SecureKeyStorage(temp_storage_path, master_password=test_password)
+
+    def test_algorithm_downgrade_to_weak_pbkdf2_is_refused(
+        self, temp_storage_path: Any, test_password: Any
+    ) -> None:
+        """Swapping Argon2id for cheap PBKDF2 is refused.
+
+        This is the concrete attack: the next key written would have been
+        protected by a 100k-iteration derivation instead of Argon2id.
+        """
+        from ama_cryptography.key_management import KDFPolicyError
+
+        SecureKeyStorage(temp_storage_path, master_password=test_password)
+        self._weaken(
+            temp_storage_path,
+            version=2,
+            algorithm="PBKDF2-HMAC-SHA256",
+            iterations=100000,
+        )
+
+        with pytest.raises(KDFPolicyError, match="iterations 100000 <"):
+            SecureKeyStorage(temp_storage_path, master_password=test_password)
+
+    def test_floor_is_checked_before_any_derivation(
+        self, temp_storage_path: Any, test_password: Any
+    ) -> None:
+        """No usable key is produced when the parameters are sub-floor."""
+        from ama_cryptography.key_management import KDFPolicyError
+
+        SecureKeyStorage(temp_storage_path, master_password=test_password)
+        self._weaken(temp_storage_path, t_cost=1, m_cost=8, parallelism=1)
+
+        try:
+            SecureKeyStorage(temp_storage_path, master_password=test_password)
+        except KDFPolicyError as exc:
+            # The failure names every shortfall at once, so one round trip
+            # tells an operator the whole story.
+            assert "t_cost 1 <" in str(exc)
+            assert "m_cost 8 <" in str(exc)
+        else:  # pragma: no cover - regression guard
+            raise AssertionError("sub-floor parameters were accepted")
+
+    def test_stored_key_records_its_kdf_parameters(
+        self, temp_storage_path: Any, test_password: Any
+    ) -> None:
+        """Format v3 writes the parameters a key was protected under."""
+        from ama_cryptography.key_management import STORAGE_FORMAT_VERSION
+
+        storage = SecureKeyStorage(temp_storage_path, master_password=test_password)
+        storage.store_key("provenance", b"\x42" * 32)
+
+        with open(temp_storage_path / "provenance.json") as f:
+            record = json.load(f)
+
+        assert record["version"] == STORAGE_FORMAT_VERSION
+        assert record["kdf_params"] == storage.kdf_params
+        assert storage.retrieve_key("provenance") == b"\x42" * 32
+
+    def test_recorded_parameters_are_covered_by_the_tag(
+        self, temp_storage_path: Any, test_password: Any
+    ) -> None:
+        """The recorded provenance cannot be edited independently.
+
+        Without the AAD binding, `kdf_params` would be a decorative field an
+        attacker could rewrite to make a weakly-protected key look strong.
+        """
+        storage = SecureKeyStorage(temp_storage_path, master_password=test_password)
+        storage.store_key("bound", b"\x37" * 32)
+
+        key_file = temp_storage_path / "bound.json"
+        with open(key_file) as f:
+            record = json.load(f)
+        record["kdf_params"] = {
+            "algorithm": "Argon2id",
+            "t_cost": 99,
+            "m_cost": 99,
+            "parallelism": 9,
+        }
+        with open(key_file, "w") as f:
+            json.dump(record, f)
+
+        from ama_cryptography.key_management import KDFPolicyError
+
+        # The edit breaks the tag, and because the recorded parameters differ
+        # from the live ones the failure is reported with its cause rather
+        # than as an unexplained authentication error.
+        with pytest.raises(KDFPolicyError, match="was stored under KDF parameters"):
+            storage.retrieve_key("bound")
+
+    def test_v2_key_files_still_open(self, temp_storage_path: Any, test_password: Any) -> None:
+        """Existing v2 records keep working.
+
+        v2 bound `key_id` alone. Those files predate this change and must not
+        be orphaned by it.
+        """
+        storage = SecureKeyStorage(temp_storage_path, master_password=test_password)
+
+        # Write a v2 record by hand, exactly as the previous format did.
+        from ama_cryptography.pqc_backends import native_aes256_gcm_encrypt
+
+        nonce = secrets.token_bytes(12)
+        ct, tag = native_aes256_gcm_encrypt(
+            storage.encryption_key, nonce, b"\x5a" * 32, b"legacy-record"
+        )
+        with open(temp_storage_path / "legacy-record.json", "w") as f:
+            json.dump(
+                {
+                    "key_id": "legacy-record",
+                    "ciphertext": base64.b64encode(ct + tag).decode("ascii"),
+                    "nonce": base64.b64encode(nonce).decode("ascii"),
+                    "algorithm": "AES-256-GCM",
+                    "version": 2,
+                    "metadata": {},
+                },
+                f,
+            )
+
+        assert storage.retrieve_key("legacy-record") == b"\x5a" * 32
 
 
 # =============================================================================
