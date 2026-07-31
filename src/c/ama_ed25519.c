@@ -245,6 +245,14 @@ static int ge25519_frombytes(ge25519_p3 *h, const uint8_t *s) {
     fe25519 u, v, v3, vxx, check;
     int x_sign = s[31] >> 7;
 
+    /* Reject non-canonical y before decoding.  fe25519_frombytes() reduces
+     * mod p, so the 19 encodings with y in [p, 2^255) would otherwise decode
+     * to the same point as their reduced form and give a key two valid byte
+     * representations.  See internal/ama_ed25519_canonical.h for why this
+     * diverges from ref10/libsodium.  Every call site funnels through here,
+     * so verification and the point helpers are covered alike. */
+    if (!ama_ed25519_point_y_is_canonical(s)) return -1;
+
     fe25519_frombytes(h->Y, s);
     fe25519_1(h->Z);
 

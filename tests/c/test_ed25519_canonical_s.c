@@ -207,6 +207,72 @@ int main(void) {
         }
     }
 
+    /* ---------------------------------------------------------------------
+     * Canonical y on a compressed point.
+     *
+     * fe25519_frombytes (and donna's unpack) reduce mod p, so each of the 19
+     * values y in [p, 2^255) decodes to the same point as y - p and gives a
+     * public key a second byte representation. That is encoding malleability
+     * rather than forgery, but it breaks the assumption that a key's bytes
+     * are its identity. ref10 and libsodium reduce here; rejecting is a
+     * deliberate divergence, so these pin the intended behaviour.
+     * ------------------------------------------------------------------- */
+    printf("\n=== Ed25519 canonical-y on compressed points ===\n");
+    {
+        /* p = 2^255 - 19, little-endian. */
+        uint8_t y[32];
+        int i;
+        int all_rejected = 1;
+        int all_accepted_below_p = 1;
+
+        for (i = 0; i < 19; i++) {
+            memset(y, 0xff, 32);
+            y[0] = (uint8_t)(0xed + i); /* p + i, no carry: 0xed + 18 = 0xff */
+            y[31] = 0x7f;
+            if (ama_ed25519_point_y_is_canonical(y) != 0) all_rejected = 0;
+        }
+        CHECK(all_rejected == 1, "RANGE all 19 y in [p, 2^255) are non-canonical");
+
+        /* p - 1 is the largest canonical y, and it must still be accepted. */
+        memset(y, 0xff, 32);
+        y[0] = 0xec;
+        y[31] = 0x7f;
+        CHECK(ama_ed25519_point_y_is_canonical(y) == 1, "RANGE y = p-1 is canonical");
+
+        /* The sign bit is not part of y: setting it must not change the
+         * verdict either way. */
+        y[31] = 0xff;
+        CHECK(ama_ed25519_point_y_is_canonical(y) == 1,
+              "RANGE y = p-1 with sign bit set is still canonical");
+        memset(y, 0xff, 32);
+        y[0] = 0xed;
+        y[31] = 0xff; /* p, sign bit set */
+        CHECK(ama_ed25519_point_y_is_canonical(y) == 0,
+              "RANGE y = p with sign bit set is still non-canonical");
+
+        memset(y, 0, 32);
+        CHECK(ama_ed25519_point_y_is_canonical(y) == 1, "RANGE y = 0 is canonical");
+
+        for (i = 0; i < 19; i++) {
+            memset(y, 0, 32);
+            y[0] = (uint8_t)i;
+            if (ama_ed25519_point_y_is_canonical(y) != 1) all_accepted_below_p = 0;
+        }
+        CHECK(all_accepted_below_p == 1, "RANGE small y values remain canonical");
+
+        /* Integration: a non-canonical public key is refused by verify on
+         * whichever backend is compiled in. */
+        memset(y, 0xff, 32);
+        y[0] = 0xed;
+        y[31] = 0x7f; /* y = p */
+        CHECK(ama_ed25519_verify(sig, msg, sizeof(msg), y) != AMA_SUCCESS,
+              "PIN   non-canonical public key y = p rejected (single)");
+        CHECK(!batch_accepts(sig, msg, sizeof(msg), y),
+              "PIN   non-canonical public key y = p rejected (batch)");
+        CHECK(ama_ed25519_verify(sig, msg, sizeof(msg), pk) == AMA_SUCCESS,
+              "SMOKE canonical public key still verifies after the y checks");
+    }
+
     printf("\n");
     if (failed) {
         printf("%d check(s) FAILED (%d passed)\n", failed, passed);
