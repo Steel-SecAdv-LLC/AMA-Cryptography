@@ -251,9 +251,44 @@ jobs:
           # AMA_KYBER_BUILD_DIAGNOSTICS is INTENTIONALLY left unset so the
           # production wheels ship without the ~600 lines of printf-emitting
           # Kyber debug code (audit Issue 7).
+          #
+          # INTEGRITY TRUST ANCHOR (optional, opt-in per repository).
+          # When the AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX *variable* and the
+          # AMA_INTEGRITY_SIGNING_SEED_HEX *secret* are both configured, the
+          # wheel is built with the anchor compiled into the native library
+          # (setup.py forwards it to CMake) and signed with the matching
+          # long-lived key, and AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR=1 makes the
+          # signer refuse to emit an unanchored artefact.  That combination is
+          # what makes a released wheel tamper-evident: the import-time check
+          # then requires the signature's public key to equal a value baked
+          # into the compiled .so, so re-signing edited .py files with an
+          # attacker-chosen key no longer verifies.
+          #
+          # When they are NOT configured, both expand to empty and the build
+          # behaves exactly as before — a per-build ephemeral signing key, an
+          # unanchored (still signed) artefact.  Releases therefore keep
+          # working on a fork or before the key is installed, rather than
+          # failing on a missing secret.  Run the "Integrity anchor check"
+          # workflow after installing the key to confirm the pair matches.
           CIBW_ENVIRONMENT: >-
             AMA_BUILD_PIPELINE=1
             CMAKE_BUILD_PARALLEL_LEVEL=4
+          # The three integrity variables are supplied through the step
+          # environment below and forwarded into the Linux build container by
+          # name, NOT interpolated into CIBW_ENVIRONMENT.  cibuildwheel echoes
+          # the CIBW_ENVIRONMENT string it applies, so embedding the signing
+          # seed there would print it into the build log and leave it to
+          # GitHub's log masking to redact.  Passing by name keeps the value
+          # out of the printed configuration entirely.  On macOS and Windows
+          # cibuildwheel builds in the host environment, so the step-level
+          # `env` below already reaches the build there.
+          CIBW_ENVIRONMENT_PASS_LINUX: >-
+            AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX
+            AMA_INTEGRITY_SIGNING_SEED_HEX
+            AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR
+          AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX: ${{ vars.AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX }}
+          AMA_INTEGRITY_SIGNING_SEED_HEX: ${{ secrets.AMA_INTEGRITY_SIGNING_SEED_HEX }}
+          AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR: ${{ vars.AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX != '' && '1' || '' }}
           # PRE-BUILD COMMANDS — install cmake + the cython/numpy build
           # deps that setup.py CMakeBuild needs.  cibuildwheel runs in
           # an isolated build env that only sees pyproject.toml's

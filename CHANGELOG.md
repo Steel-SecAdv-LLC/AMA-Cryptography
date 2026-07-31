@@ -19,6 +19,48 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ## [Unreleased]
 
+### Security — the integrity trust anchor never reached the compiled library, so it could not work
+
+`SECURITY.md` documented `AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX` as the way to
+make a release tamper-evident, `CMakeLists.txt` defined and validated the
+option, and `src/c/ama_core.c` exposed it through
+`ama_integrity_trust_anchor_pubkey_hex()` — but `setup.py`'s `cmake_args` never
+passed it, so no wheel ever had an anchor compiled in.
+
+That gap silently voided the mechanism. At runtime
+`_self_test._load_integrity_trust_anchor()` reads the anchor **only** from the
+native library; an anchor supplied through the environment is consulted at
+build time by `_build_sign` and then forgotten. A release could therefore set
+the anchor and still ship a wheel whose import-time check accepted any public
+key written into `_integrity_signature.py` — the self-signed bypass the check
+exists to prevent.
+
+`setup.py` now forwards the environment value into the CMake configure step.
+Verified end to end: with the anchor compiled in, signing with the matching
+seed reports "signed integrity verified (Ed25519, **trusted build pubkey**)",
+while tampering a `.py` file and re-signing with an attacker-chosen key is
+refused by the signer and fails verification. Without the environment variable
+the build is unchanged, so unanchored developer builds keep working.
+
+### Added — release wiring and an on-demand check for the integrity signing key
+
+`release.yml` now passes the `AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX` variable
+and `AMA_INTEGRITY_SIGNING_SEED_HEX` secret into the wheel build, and sets
+`AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR=1` **only when the anchor variable is
+non-empty**. Repositories and forks that have not installed a key expand both
+to empty and build exactly as before, with a per-build ephemeral key — a
+missing secret must not break a release.
+
+New `integrity-anchor-check` workflow (`workflow_dispatch`) confirms that the
+installed secret and variable are a matching Ed25519 pair. A mismatch is
+otherwise invisible until a tagged release fails deep inside the wheel build.
+The seed is passed only through the environment, never printed, and never
+placed on a command line; the job's output is the derived public key (public by
+definition) and a MATCH/MISMATCH verdict. Wrong-length input is diagnosed
+explicitly, including the common mistake of pasting the 64-byte secret key
+instead of its 32-byte seed. Derivation runs through AMA's own Ed25519 kernel,
+so a MATCH means the release signer will accept the pair.
+
 ### Security — FROST reported success when the CSPRNG failed, collapsing the threshold key
 
 `scalar_random()` in `src/c/ama_frost.c` discarded the return value of

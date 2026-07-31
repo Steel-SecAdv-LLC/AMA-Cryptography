@@ -416,10 +416,44 @@ A build is only tamper-evident against a write-capable adversary when
 library (`CMakeLists.txt`) so the embedded pubkey must match an anchor
 the attacker cannot rewrite by editing Python, and
 `AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR=1` forbids the unsigned fallback.
-**Neither is set by default, and the release workflow does not currently
-set them**, so stock and released wheels are in the unanchored state
-described above. Deployments that rely on import-time tamper detection
-must build with both.
+**Neither is set by default**, so a stock developer build is in the
+unanchored state described above.
+
+#### Installing the signing key (anchored releases)
+
+Generate the keypair with AMA's own Ed25519 kernel — no third-party
+crypto tool is needed, and using one would contradict INVARIANT-1:
+
+    umask 077
+    python3 -c "
+    from ama_cryptography.pqc_backends import native_ed25519_keypair
+    pk, sk = native_ed25519_keypair()
+    open('seed.txt','w').write(sk[:32].hex())
+    print('PUBLIC KEY:', pk.hex())
+    "
+
+`native_ed25519_keypair()` returns a 64-byte secret key that is
+`seed || public_key`; only the **32-byte seed** (`sk[:32]`) is the value
+to store. Both stored values are exactly 64 hex characters.
+
+Store them on the repository (Settings → Secrets and variables → Actions):
+
+| Value | Kind | Name |
+|---|---|---|
+| the seed | **Secret** | `AMA_INTEGRITY_SIGNING_SEED_HEX` |
+| the public key | **Variable** | `AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX` |
+
+Then delete `seed.txt` and keep a copy of the seed somewhere durable: the
+public half is compiled into published binaries, so the key cannot be
+rotated without invalidating the anchor those releases expect.
+
+Run the **Integrity anchor check** workflow (manual trigger) to confirm
+the two are a matching pair before tagging a release; a mismatch is
+otherwise only surfaced by a failing release build. `release.yml` picks
+both up automatically and sets `AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR=1`
+only when the anchor variable is non-empty, so forks and
+not-yet-configured repositories continue to build unanchored wheels
+rather than failing on a missing secret.
 
 #### `AMA_CRYPTO_LIB_PATH`
 

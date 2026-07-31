@@ -1,0 +1,126 @@
+# Copyright (C) 2025-2026 Steel Security Advisors LLC
+# SPDX-License-Identifier: Apache-2.0
+#
+# Verifies that the module-integrity signing key is correctly installed:
+# that the private seed in the AMA_INTEGRITY_SIGNING_SEED_HEX *secret* and the
+# public key in the AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX *variable* are a
+# matching Ed25519 pair.
+#
+# Why this exists.  Neither value is useful alone, and a mismatched pair is
+# invisible until a tagged release fails deep inside the wheel build with a
+# confusing "trust anchor mismatch".  This job answers the question on demand,
+# before the release, and answers it without disclosing anything: the seed is
+# never printed, and the only output is the derived public key (which is public
+# by definition) plus a MATCH / MISMATCH verdict.
+#
+# The derivation runs through AMA's own Ed25519 kernel — the same code path the
+# release signer uses (INVARIANT-1: no third-party crypto in this tree), so a
+# MATCH here means the release build will accept the pair.
+#
+# Manual trigger only: it costs a full native build and is needed only when the
+# key is first installed or rotated.
+name: Integrity anchor check
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-anchor:
+    name: Verify signing seed matches the trust anchor
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Install build dependencies
+        run: python -m pip install --upgrade pip 'cmake>=4.4.0' 'cython>=3.2.8' 'numpy>=1.24.0'
+
+      - name: Build the native library
+        run: |
+          cmake -B build -DAMA_USE_NATIVE_PQC=ON -DAMA_BUILD_TESTS=OFF -DAMA_BUILD_EXAMPLES=OFF
+          cmake --build build -j"$(nproc)" --target ama_cryptography_shared
+
+      - name: Check that both values are configured
+        env:
+          SEED: ${{ secrets.AMA_INTEGRITY_SIGNING_SEED_HEX }}
+          ANCHOR: ${{ vars.AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX }}
+        run: |
+          missing=0
+          if [ -z "$SEED" ]; then
+            echo "::error::Secret AMA_INTEGRITY_SIGNING_SEED_HEX is not set."
+            missing=1
+          fi
+          if [ -z "$ANCHOR" ]; then
+            echo "::error::Variable AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX is not set."
+            missing=1
+          fi
+          [ "$missing" -eq 0 ] || exit 1
+          echo "Both values are present."
+
+      - name: Derive the public key from the seed and compare
+        env:
+          # The seed is passed through the environment, never onto a command
+          # line (argv is world-readable via /proc on the runner) and never
+          # echoed.  GitHub masks the secret in logs regardless; this job also
+          # never asks for it to be printed.
+          SEED: ${{ secrets.AMA_INTEGRITY_SIGNING_SEED_HEX }}
+          ANCHOR: ${{ vars.AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX }}
+        run: |
+          python - <<'PY'
+          import os
+          import sys
+
+          seed_hex = os.environ["SEED"].strip().lower()
+          anchor_hex = os.environ["ANCHOR"].strip().lower()
+
+          # Shape checks first: these produce actionable errors instead of an
+          # opaque failure deep in the release build.
+          problems = []
+          if len(seed_hex) != 64:
+              problems.append(
+                  f"seed must be 64 hex characters (32 bytes), got {len(seed_hex)}. "
+                  "A common cause is pasting the 128-character 64-byte secret key "
+                  "instead of its first 32 bytes (the seed)."
+              )
+          if len(anchor_hex) != 64:
+              problems.append(
+                  f"anchor must be 64 hex characters (32 bytes), got {len(anchor_hex)}."
+              )
+          for name, value in (("seed", seed_hex), ("anchor", anchor_hex)):
+              try:
+                  bytes.fromhex(value)
+              except ValueError:
+                  problems.append(f"{name} is not valid hexadecimal.")
+          if problems:
+              for p in problems:
+                  print(f"::error::{p}")
+              sys.exit(1)
+
+          from ama_cryptography.pqc_backends import native_ed25519_keypair_from_seed
+
+          public_key, _secret_key = native_ed25519_keypair_from_seed(bytes.fromhex(seed_hex))
+          derived_hex = public_key.hex()
+
+          print(f"Public key derived from the secret seed : {derived_hex}")
+          print(f"Public key configured as the variable   : {anchor_hex}")
+
+          if derived_hex == anchor_hex:
+              print("MATCH — the signing seed and the trust anchor are a valid pair.")
+              print("Tagged releases will produce anchored, tamper-evident wheels.")
+          else:
+              print("::error::MISMATCH — the seed does not derive the configured anchor.")
+              print(
+                  "::error::Re-run the key generation and update BOTH values together; "
+                  "a seed and anchor from different keypairs will fail every release build."
+              )
+              sys.exit(1)
+          PY

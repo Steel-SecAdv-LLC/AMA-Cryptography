@@ -602,6 +602,23 @@ class CMakeBuild(build_ext):
             "-DAMA_USE_NATIVE_PQC=ON",
         ]
 
+        # Forward the integrity trust anchor into the native build.
+        #
+        # This is load-bearing, not a convenience: at runtime
+        # ``_self_test._load_integrity_trust_anchor()`` reads the anchor
+        # ONLY from the compiled library (via
+        # ``ama_integrity_trust_anchor_pubkey_hex()``).  An anchor supplied
+        # solely through the environment is consulted at *build* time by
+        # ``_build_sign`` and then forgotten, so without this forwarding a
+        # release could set the anchor variable and still ship a wheel whose
+        # import-time check accepts any public key placed in
+        # ``_integrity_signature.py``.  CMakeLists.txt validates the value
+        # (empty or exactly 64 hex characters) and fails the build otherwise,
+        # so a malformed anchor surfaces here rather than at import.
+        _anchor = os.environ.get("AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX", "").strip()
+        if _anchor:
+            cmake_args.append(f"-DAMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX={_anchor}")
+
         build_args = ["--config", "Debug" if DEBUG else "Release"]
 
         if platform.system() == "Windows":
