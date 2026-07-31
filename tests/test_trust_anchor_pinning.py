@@ -25,6 +25,7 @@ import pytest
 from ama_cryptography.crypto_api import (
     HybridKEMProvider,
     HybridSignatureProvider,
+    KeyPair,
     create_crypto_package,
     verify_crypto_package,
 )
@@ -129,7 +130,7 @@ class TestSecureChannelPinning:
     """``SecureChannelInitiator`` responder-signature-key pinning."""
 
     @staticmethod
-    def _responder_keys() -> tuple:
+    def _responder_keys() -> tuple[KeyPair, KeyPair]:
         kem = HybridKEMProvider().generate_keypair()
         sig = HybridSignatureProvider().generate_keypair()
         return kem, sig
@@ -159,7 +160,9 @@ class TestSecureChannelPinning:
         sig_provider = HybridSignatureProvider()
         attacker = sig_provider.generate_keypair()
         session_id = os.urandom(32)
-        transcript = initiator._handshake_hash + session_id
+        handshake_hash = initiator._handshake_hash
+        assert handshake_hash is not None, "create_handshake must set the transcript hash"
+        transcript = handshake_hash + session_id
         forged_sig = sig_provider.sign(transcript, attacker.secret_key)
 
         response = HandshakeResponse(
