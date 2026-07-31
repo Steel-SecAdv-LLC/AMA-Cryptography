@@ -273,7 +273,7 @@ except ImportError:  # pragma: no cover - preflight should have caught this
     np = None
 
 # Configuration
-VERSION = "3.5.0"
+VERSION = "4.0.0"
 USE_CYTHON = CYTHON_AVAILABLE and not os.getenv("AMA_NO_CYTHON")
 USE_C_EXTENSIONS = not os.getenv("AMA_NO_C_EXTENSIONS")
 DEBUG = bool(os.getenv("AMA_DEBUG"))

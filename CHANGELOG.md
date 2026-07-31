@@ -19,6 +19,92 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ## [Unreleased]
 
+### BREAKING — `verify_crypto_package` no longer reports `all_valid` without a trust anchor
+
+Every key `verify_crypto_package` needs to check a package travels inside that
+package: the signing public key in `package.keypairs`, the HMAC key in
+`package.hmac_key`, the Layer-4 master secret in
+`package.hkdf_master_secret`. Verifying a package against its own material
+establishes internal consistency and nothing more — an adversary can generate a
+keypair, call `create_crypto_package` over content of their choosing, and
+obtain a package whose every layer verifies.
+
+Through 3.x that produced `all_valid: True`, and the anchored mode had to be
+opted into with `expected_public_key`. The safe behaviour was therefore the one
+nobody selected by default. `key_pinned` is now part of the `all_valid`
+aggregate, so an unanchored call returns `all_valid: False`.
+
+**Migration.** Callers who wanted the old meaning — "these parts agree with
+each other" — read `core_valid`, which still covers Layers 1–4 and is
+unchanged. Callers who want an origin claim pass `expected_public_key`. There
+is no opt-out flag: one would reintroduce the same silent default under a new
+name.
+
+### BREAKING — key stores refuse KDF parameters below the policy floor
+
+`.kdf_metadata.json` names the algorithm and cost used to turn the master
+password into the storage key, and it is a plain unauthenticated file sitting
+next to the key material. Anyone who could write it could name a cheaper
+derivation — PBKDF2 at 100k iterations, or Argon2id with `m_cost` reduced to a
+few KiB — and `SecureKeyStorage` honoured it.
+
+That does not expose keys already stored: those were encrypted under a key
+derived with the *old* parameters, so a swapped file simply fails to decrypt
+them. It governs every key written *afterwards*, and on a store that is
+initialised but not yet populated the downgrade is completely silent.
+
+`SecureKeyStorage.__init__` and `from_existing` now clamp the stored
+parameters from below (`MIN_PBKDF2_ITERATIONS`, `MIN_ARGON2_T_COST`,
+`MIN_ARGON2_M_COST`, `MIN_ARGON2_PARALLELISM`) and raise the new
+`KDFPolicyError` rather than deriving a weak key.
+
+Storage format v3 additionally binds the KDF parameters into the AEAD
+associated data and records them in each key file. The parameters already
+influence the derived key, so this adds provenance rather than confidentiality:
+the recorded cost cannot be edited without invalidating the tag, and a mismatch
+is reported as a named `KDFPolicyError` instead of an unexplained
+authentication failure. Format v2 records are still read.
+
+**Migration.** A genuine legacy store opens with
+`SecureKeyStorage(path, password, allow_legacy_kdf=True)`, which warns instead
+of raising; call `migrate_kdf(password)` to re-encrypt at current strength,
+then reopen without the flag.
+
+### BREAKING — Ed25519 rejects non-canonical `y` in compressed points
+
+`fe25519_frombytes` (and donna's `ge25519_unpack_negative_vartime`) reduce mod
+p, so each of the 19 encodings with `y` in `[p, 2^255)` decoded to the same
+curve point as its reduced form. A public key could therefore have two valid
+byte representations, which breaks the assumption that a key's bytes are its
+identity — it matters wherever a key is fingerprinted, used as a map key, or
+compared bytewise for authorisation.
+
+This is encoding malleability, not signature forgery: `S < L` is enforced and a
+malleated `R` already fails the re-encode comparison. ref10 and libsodium
+reduce here rather than rejecting, so this is a deliberate divergence. Strictly
+fewer encodings are accepted; every encoding a conformant signer produces is
+unaffected. Enforced identically on both backends, via
+`ama_ed25519_point_y_is_canonical` in
+`src/c/internal/ama_ed25519_canonical.h`.
+
+### Security — `SecureSession.encrypt` never consulted the rekey state
+
+`needs_rekey()` existed but was a query no caller was obliged to make, so a
+session that never rekeyed kept drawing fresh random 96-bit nonces under one
+key for as long as it lived. Nonce reuse there is a birthday problem: after n
+encryptions the collision probability is about `n^2 / 2^97`, which at the 2^32
+invocations SP 800-38D allows for random nonces is roughly 2^-33.
+
+Auto-rekeying on send was not available as a fix — the AAD binds `rekey_epoch`,
+so a unilateral rekey desynchronises the peers, and the counters are not
+symmetric because `messages_since_rekey` advances on receive too.
+`MAX_ENCRYPTIONS_PER_EPOCH` (2^20) now caps encryptions under one
+`(key, epoch)` pair, checked before the nonce is drawn, and `encrypt` raises
+the new `RekeyRequiredError` on reaching it. That puts the collision
+probability at about 2^-57 while leaving three orders of magnitude of headroom
+above `REKEY_INTERVAL`. Crossing the soft threshold now logs one advisory per
+epoch. The bound binds the sender only: `decrypt` generates no nonces.
+
 ### Security — the integrity trust anchor never reached the compiled library, so it could not work
 
 `SECURITY.md` documented `AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX` as the way to

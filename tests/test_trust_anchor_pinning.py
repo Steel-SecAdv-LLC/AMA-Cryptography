@@ -43,15 +43,21 @@ FORGED_CONTENT = b"transfer 1000000 units to attacker"
 class TestCryptoPackagePinning:
     """``verify_crypto_package`` trust anchor."""
 
-    def test_unpinned_verifies_but_claims_no_authenticity(self) -> None:
-        """Without an anchor the package still verifies, but key_pinned is False."""
+    def test_unpinned_is_self_consistent_but_not_valid(self) -> None:
+        """Without an anchor the layers agree, but all_valid is False (4.0).
+
+        core_valid keeps the old meaning -- "these parts agree with each
+        other" -- and is the migration path for callers that only ever wanted
+        an integrity check.
+        """
         pkg = create_crypto_package(CONTENT)
         results = verify_crypto_package(CONTENT, pkg)
 
-        assert results["all_valid"] is True
         assert results["core_valid"] is True
-        # The honesty signal: no origin was established.
+        # The honesty signal: no origin was established...
         assert results["key_pinned"] is False
+        # ...and that now costs the aggregate, rather than being a footnote.
+        assert results["all_valid"] is False
 
     def test_pinned_with_correct_key_verifies_and_reports_pinned(self) -> None:
         pkg = create_crypto_package(CONTENT)
@@ -75,10 +81,13 @@ class TestCryptoPackagePinning:
 
         forged = create_crypto_package(FORGED_CONTENT)
 
-        # Unpinned: internally consistent, so it verifies — and says so honestly.
+        # Unpinned: internally consistent, so the layers agree — but since
+        # 4.0 that alone is not "valid", precisely because this forgery is
+        # indistinguishable from a genuine package at this level.
         unpinned = verify_crypto_package(FORGED_CONTENT, forged)
-        assert unpinned["all_valid"] is True
+        assert unpinned["core_valid"] is True
         assert unpinned["key_pinned"] is False
+        assert unpinned["all_valid"] is False
 
         # Pinned against the victim's real key: fails closed.
         pinned = verify_crypto_package(FORGED_CONTENT, forged, expected_public_key=victim_pk)
@@ -113,17 +122,30 @@ class TestCryptoPackagePinning:
             assert results["primary_signature"] is False
             assert results["all_valid"] is False
 
-    def test_key_pinned_is_reported_not_aggregated(self) -> None:
-        """key_pinned must never by itself flip all_valid.
+    def test_key_pinned_gates_all_valid_but_not_core_valid(self) -> None:
+        """key_pinned is aggregated into all_valid, and only into all_valid.
 
-        It reports which verification mode ran; folding it into the aggregate
-        would report "verification failed" for every existing caller that
-        never asked for an authenticity check.
+        The 4.0 split: all_valid is an origin claim and needs the anchor;
+        core_valid is the Layer 1-4 self-consistency result and does not.
+        Pinning must move the first and leave the second alone, so a caller
+        migrating from 3.x has somewhere accurate to go.
         """
         pkg = create_crypto_package(CONTENT)
-        results = verify_crypto_package(CONTENT, pkg)
-        assert results["key_pinned"] is False
-        assert results["all_valid"] is True
+        pk = pkg.keypairs["HYBRID_SIG"].public_key
+
+        unpinned = verify_crypto_package(CONTENT, pkg)
+        pinned = verify_crypto_package(CONTENT, pkg, expected_public_key=pk)
+
+        # Only the anchor differs between the two calls.
+        assert unpinned["key_pinned"] is False
+        assert pinned["key_pinned"] is True
+
+        assert unpinned["all_valid"] is False
+        assert pinned["all_valid"] is True
+
+        # core_valid is identical either way — the layers did the same work.
+        assert unpinned["core_valid"] is True
+        assert pinned["core_valid"] is True
 
 
 class TestSecureChannelPinning:

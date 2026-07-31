@@ -4,7 +4,7 @@
 
 | Property | Value |
 |----------|-------|
-| Document Version | 3.5.0 |
+| Document Version | 4.0.0 |
 | Last Updated | 2026-07-30 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
@@ -550,6 +550,57 @@ of logging and continuing with degraded nonce safety.
 The persisted counter path no longer keeps a dirty counter or batching
 interval: every successful reservation writes the `slot+1` high-water
 mark atomically, so there is no deferred flush state to lose on crash.
+
+### Secure-channel nonce budget per rekey epoch
+
+`SecureSession.encrypt()` draws a fresh random 96-bit nonce for every
+message, so nonce reuse within one `(key, rekey_epoch)` pair is a birthday
+problem rather than a counter overflow: after n encryptions the collision
+probability is about n² / 2⁹⁷.
+
+`MAX_ENCRYPTIONS_PER_EPOCH` (2²⁰) bounds it, checked *before* the nonce is
+drawn, and `encrypt()` raises `RekeyRequiredError` on reaching it. Recovery is
+the caller's: call `rekey()` on **both** peers, or close the session. The
+library deliberately does not rekey for you — the AEAD associated data binds
+`rekey_epoch`, so a unilateral rekey desynchronises the pair and every
+subsequent message fails authentication at the far end.
+
+Crossing the advisory `REKEY_INTERVAL` (1000 messages, counting both
+directions) logs one WARNING per epoch. The ceiling binds the sender only:
+`decrypt()` generates no nonces, so enforcing it on receive would break a peer
+running an older build without improving this side's margin.
+
+### Key-store KDF parameters are untrusted input
+
+`.kdf_metadata.json` names the algorithm and cost that turn the master
+password into the storage key, and it is an unauthenticated file in the key
+directory. Anyone who can write it can name a cheaper derivation.
+
+This does **not** expose keys already stored — those were encrypted under a key
+derived with the old parameters, so a swapped file simply fails to decrypt
+them. What it governs is every key written *afterwards*, and on a store that is
+initialised but not yet populated the downgrade leaves no trace at all.
+
+`SecureKeyStorage` therefore clamps the parameters from below on read and
+raises `KDFPolicyError` rather than deriving a weak key:
+
+| Parameter | Floor | Source |
+|---|---|---|
+| PBKDF2-HMAC-SHA256 iterations | 600,000 | OWASP 2024 |
+| Argon2id `t_cost` | 3 | RFC 9106 §4 |
+| Argon2id `m_cost` | 65536 KiB (64 MiB) | RFC 9106 §4 |
+| Argon2id `parallelism` | 1 | RFC 9106 §4 |
+
+Storage format v3 also binds the KDF parameters into the AEAD associated data
+and records them in each key file. The parameters already influence the derived
+key, so this adds *provenance*, not confidentiality: the recorded cost cannot
+be edited without invalidating the tag, and a mismatch is reported as a named
+`KDFPolicyError` rather than an unexplained authentication failure. Format v2
+records (which bound `key_id` alone) are still read.
+
+To open a genuine legacy store, pass `allow_legacy_kdf=True` — which warns
+instead of raising — then call `migrate_kdf(password)` to re-encrypt at current
+strength and reopen without the flag.
 
 ## Cryptographic Algorithm Security
 

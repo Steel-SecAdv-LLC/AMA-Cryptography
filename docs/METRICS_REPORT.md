@@ -1,6 +1,6 @@
 # AMA Cryptography — Verified Metrics Report
 
-**Version:** 3.5.0
+**Version:** 4.0.0
 **Measurement Date:** 2026-07-30 (static LoC / test-function counts); benchmark figures last refreshed separately
 **Last Reviewed:** 2026-07-30
 **Repository snapshot:** counts below were measured on this branch; re-run the reproduction commands after any rebase, squash, or large merge so the figures continue to match the shipped tree. If a documented count and this report disagree, the count is the bug.

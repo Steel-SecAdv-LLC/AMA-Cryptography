@@ -55,7 +55,8 @@ class TestCreateAndVerifyBasic:
         assert len(pkg.derived_keys) >= 1
         assert pkg.hmac_tag and pkg.hmac_key
 
-        verdict = verify_crypto_package(b"hello world", pkg)
+        pk = pkg.keypairs["HYBRID_SIG"].public_key
+        verdict = verify_crypto_package(b"hello world", pkg, expected_public_key=pk)
         assert verdict["content_hash"] is True
         assert verdict["hmac"] is True
         assert verdict["primary_signature"] is True
@@ -69,7 +70,8 @@ class TestCreateAndVerifyBasic:
         cfg = CryptoPackageConfig(num_derived_keys=5)
         pkg = create_crypto_package(b"payload", cfg)
         assert len(pkg.derived_keys) == 5
-        v = verify_crypto_package(b"payload", pkg)
+        pk = pkg.keypairs["HYBRID_SIG"].public_key
+        v = verify_crypto_package(b"payload", pkg, expected_public_key=pk)
         assert v["hkdf_keys"] is True
         assert v["all_valid"] is True
 
@@ -211,7 +213,7 @@ class TestCreateWithPreGeneratedKeypair:
         assert pkg.keypairs["ED25519"].public_key == kp.public_key
         assert pkg.keypairs["ED25519"].secret_key == kp.secret_key
         assert pkg.keypairs["ED25519"].metadata.get("source") == "pre-generated"
-        v = verify_crypto_package(b"payload", pkg)
+        v = verify_crypto_package(b"payload", pkg, expected_public_key=kp.public_key)
         assert v["all_valid"] is True
 
 
@@ -222,7 +224,8 @@ class TestSphincsAddOn:
         pkg = create_crypto_package(b"long-term data", cfg)
         assert pkg.sphincs_signature is not None
         assert "SPHINCS_256F" in pkg.keypairs
-        v = verify_crypto_package(b"long-term data", pkg)
+        pk = pkg.keypairs["HYBRID_SIG"].public_key
+        v = verify_crypto_package(b"long-term data", pkg, expected_public_key=pk)
         assert v.get("sphincs") is True
         assert v["all_valid"] is True
 
@@ -253,7 +256,8 @@ class TestKyberAddOn:
         assert pkg.kem_ciphertext is not None
         assert pkg.kem_shared_secret is not None
         assert "KYBER_1024" in pkg.keypairs
-        v = verify_crypto_package(b"ke payload", pkg)
+        pk = pkg.keypairs["HYBRID_SIG"].public_key
+        v = verify_crypto_package(b"ke payload", pkg, expected_public_key=pk)
         assert v.get("kem") is True
         assert v["all_valid"] is True
 

@@ -2768,27 +2768,40 @@ def verify_crypto_package(
     message-imprint binding only, never the TSA's signature or certificate
     chain, so no result it can return is third-party time attestation.
 
-    **Authenticity requires a trust anchor — read this before relying on
-    ``all_valid``.** Every key this function needs to check a package is
-    carried *by that package*: the signing public key lives in
-    ``package.keypairs``, the HMAC key in ``package.hmac_key``, and the
-    Layer-4 master secret in ``package.hkdf_master_secret``. Verifying a
-    package against its own material proves **integrity and internal
-    consistency only** — that the parts agree with each other and were not
-    corrupted in transit. It is *not* proof of origin: anyone can generate a
-    keypair, call :func:`create_crypto_package` over content of their
-    choosing, and obtain a package whose every layer verifies and whose
-    ``all_valid`` is True. ``all_valid`` therefore answers "is this package
-    self-consistent?", never "did the expected signer produce it?".
+    **Authenticity requires a trust anchor, and ``all_valid`` now demands
+    one.** Every key this function needs to check a package is carried *by
+    that package*: the signing public key lives in ``package.keypairs``, the
+    HMAC key in ``package.hmac_key``, and the Layer-4 master secret in
+    ``package.hkdf_master_secret``. Verifying a package against its own
+    material proves **integrity and internal consistency only** — that the
+    parts agree with each other and were not corrupted in transit. It is *not*
+    proof of origin: anyone can generate a keypair, call
+    :func:`create_crypto_package` over content of their choosing, and obtain a
+    package whose every layer verifies.
 
     To obtain authenticity, pass ``expected_public_key`` — a signing public
     key you obtained out of band (pinned in config, fetched from a directory
     you trust, or established at enrollment). It is compared in constant time
     against the package's embedded signing key; on mismatch the signature is
-    not evaluated and ``primary_signature`` is False, which forces
-    ``all_valid`` False. The ``key_pinned`` result key reports which mode ran,
-    so an auditor can distinguish the two programmatically (INVARIANT-37:
-    the boundary is published as data, not only as prose).
+    not evaluated and ``primary_signature`` is False.
+
+    .. versionchanged:: 4.0
+       ``all_valid`` is False unless ``expected_public_key`` was supplied and
+       matched. Through 3.x an unanchored call returned ``all_valid`` True,
+       which reported success for a check that could not distinguish the
+       expected signer from an attacker who had built their own package. The
+       safe mode was the one a caller had to opt into, so the default was
+       changed rather than documented harder.
+
+       **Migration.** If you were relying on the old meaning — "these parts
+       agree with each other" — read ``core_valid``, which is unchanged and
+       still covers Layers 1-4. If you want what ``all_valid`` now asserts,
+       supply the anchor. There is no flag to restore the old aggregate: it
+       would reintroduce the same silent default under a different name.
+
+    The ``key_pinned`` result key still reports which mode ran, so an auditor
+    can distinguish the two programmatically (INVARIANT-37: the boundary is
+    published as data, not only as prose).
 
     Note that Layers 1, 2 and 4 remain self-referential even when the
     signature is anchored — they are integrity checks, and only the anchored
@@ -2797,10 +2810,10 @@ def verify_crypto_package(
     Args:
         content: Original content that was signed.
         package: CryptoPackageResult to verify.
-        expected_public_key: Optional out-of-band signing public key to pin
-            the package against. When omitted, no authenticity claim is made
-            (``key_pinned`` is False). When supplied and mismatched, the
-            signature check fails closed.
+        expected_public_key: Out-of-band signing public key to pin the package
+            against. Optional in signature only: when omitted, no authenticity
+            claim is made (``key_pinned`` is False) and ``all_valid`` is False.
+            When supplied and mismatched, the signature check fails closed.
 
     Returns:
         Dictionary with a boolean for each layer plus ``all_valid``. Keys:
@@ -2812,17 +2825,18 @@ def verify_crypto_package(
         - ``sphincs``: (if present)
         - ``kem``: (if present)
         - ``key_pinned``: True iff ``expected_public_key`` was supplied and
-          matched the package's signing key. Reported, not aggregated.
-        - ``core_valid``: True iff Layers 1-4 passed
-        - ``all_valid``: True iff every executed check passed. Subject to the
-          authenticity note above — this is not an origin claim unless
-          ``key_pinned`` is also True.
+          matched the package's signing key.
+        - ``core_valid``: True iff Layers 1-4 passed. Self-consistency only;
+          unchanged in 4.0.
+        - ``all_valid``: True iff every executed check passed **and** the
+          package was anchored. An origin claim.
 
     Example:
         >>> result = create_crypto_package(b"Hello")
         >>> v = verify_crypto_package(b"Hello", result)
-        >>> assert v["all_valid"]        # integrity / self-consistency
-        >>> assert not v["key_pinned"]   # no authenticity claimed
+        >>> assert v["core_valid"]        # integrity / self-consistency
+        >>> assert not v["key_pinned"]    # no authenticity claimed
+        >>> assert not v["all_valid"]     # 4.0: unanchored is not "valid"
 
         Anchored verification, which is what proves origin::
 
@@ -2947,14 +2961,17 @@ def verify_crypto_package(
     # Core 4 layers: content_hash (L1), hmac (L2), primary_signature (L3),
     # hkdf_keys (L4).  Optional add-ons: sphincs, kem.
     # The 'primary' key is a backward-compat alias and excluded from aggregation.
-    # `key_pinned` is a REPORT of which verification mode ran, not a pass/fail
-    # layer, so it is excluded from the aggregates.  Folding it in would flip
-    # `all_valid` to False for every caller that does not pass an anchor, which
-    # would say "verification failed" when what actually happened is
-    # "authenticity was never claimed".  A failed anchor is already reflected in
-    # `primary_signature` (set False above), so it still forces `all_valid` False.
+    #
+    # `key_pinned` IS part of `all_valid` (4.0 change).  Every key this
+    # function needs to check a package travels inside the package, so without
+    # an out-of-band anchor the strongest available statement is "internally
+    # consistent" -- an adversary can generate a keypair, call
+    # create_crypto_package over content of their choosing, and produce a
+    # package whose every layer verifies.  Reporting all_valid True for that
+    # made the safe default the one nobody selected.  Callers who genuinely
+    # only want self-consistency read `core_valid`, which is unchanged.
     _core_keys = {"content_hash", "hmac", "primary_signature", "hkdf_keys"}
-    _aggregate_exclude = {"core_valid", "all_valid", "primary", "key_pinned"}
+    _aggregate_exclude = {"core_valid", "all_valid", "primary"}
     core_results = {k: v for k, v in results.items() if k in _core_keys}
     results["core_valid"] = all(core_results.values()) if core_results else False
     results["all_valid"] = all(v for k, v in results.items() if k not in _aggregate_exclude)
