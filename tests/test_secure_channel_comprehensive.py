@@ -700,6 +700,102 @@ class TestRekey:
         init_sess.rekey()
         assert init_sess.messages_since_rekey == 0
 
+    def test_rekey_resets_send_counter(
+        self,
+        established_session: tuple[SecureSession, SecureSession],
+    ) -> None:
+        """Rekey resets the per-epoch encryption budget."""
+        init_sess, _ = established_session
+        init_sess.sends_since_rekey = 500
+        init_sess.rekey()
+        assert init_sess.sends_since_rekey == 0
+
+    def test_encrypt_refuses_past_epoch_budget(
+        self,
+        established_session: tuple[SecureSession, SecureSession],
+    ) -> None:
+        """encrypt() fails closed once MAX_ENCRYPTIONS_PER_EPOCH is reached.
+
+        Regression guard: encrypt() previously never consulted the rekey
+        state at all, so a long-lived session kept drawing random 96-bit
+        nonces under one key indefinitely and the collision probability grew
+        without bound.
+        """
+        from ama_cryptography.secure_channel import (
+            MAX_ENCRYPTIONS_PER_EPOCH,
+            RekeyRequiredError,
+        )
+
+        init_sess, resp_sess = established_session
+
+        # One under the cap: still allowed, and still decryptable.
+        init_sess.sends_since_rekey = MAX_ENCRYPTIONS_PER_EPOCH - 1
+        msg = init_sess.encrypt(b"last one")
+        assert resp_sess.decrypt(msg) == b"last one"
+        assert init_sess.sends_since_rekey == MAX_ENCRYPTIONS_PER_EPOCH
+
+        # At the cap: refused.
+        with pytest.raises(RekeyRequiredError, match="per-epoch encryption limit"):
+            init_sess.encrypt(b"one too many")
+
+        # The refusal must not consume a sequence number or leave the
+        # session wedged — a rekey on both peers restores service.
+        seq_before = init_sess.send_seq
+        with pytest.raises(RekeyRequiredError):
+            init_sess.encrypt(b"still refused")
+        assert init_sess.send_seq == seq_before
+
+        init_sess.rekey()
+        resp_sess.rekey()
+        recovered = init_sess.encrypt(b"after rekey")
+        assert resp_sess.decrypt(recovered) == b"after rekey"
+
+    def test_decrypt_is_not_capped(
+        self,
+        established_session: tuple[SecureSession, SecureSession],
+    ) -> None:
+        """The budget binds the sender only.
+
+        Nonces are drawn in encrypt(), so the collision bound is a property
+        of the sending side. Rejecting on receive would break a peer running
+        an older build without making this side any safer.
+        """
+        from ama_cryptography.secure_channel import MAX_ENCRYPTIONS_PER_EPOCH
+
+        init_sess, resp_sess = established_session
+        msg = init_sess.encrypt(b"payload")
+
+        resp_sess.sends_since_rekey = MAX_ENCRYPTIONS_PER_EPOCH
+        assert resp_sess.decrypt(msg) == b"payload"
+
+    def test_soft_threshold_warns_once_per_epoch(
+        self,
+        established_session: tuple[SecureSession, SecureSession],
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Crossing REKEY_INTERVAL logs exactly one advisory per epoch."""
+        from ama_cryptography.secure_channel import REKEY_INTERVAL
+
+        init_sess, resp_sess = established_session
+        init_sess.messages_since_rekey = REKEY_INTERVAL - 1
+
+        with caplog.at_level("WARNING", logger="ama_cryptography.secure_channel"):
+            init_sess.encrypt(b"crosses the threshold")
+            init_sess.encrypt(b"already warned")
+            init_sess.encrypt(b"still warned")
+
+        advisories = [r for r in caplog.records if "without a rekey" in r.getMessage()]
+        assert len(advisories) == 1
+
+        # A rekey re-arms the latch for the next epoch.
+        caplog.clear()
+        init_sess.rekey()
+        resp_sess.rekey()
+        init_sess.messages_since_rekey = REKEY_INTERVAL - 1
+        with caplog.at_level("WARNING", logger="ama_cryptography.secure_channel"):
+            init_sess.encrypt(b"next epoch")
+        assert sum("without a rekey" in r.getMessage() for r in caplog.records) == 1
+
     def test_multiple_rekeys_preserve_communication(
         self,
         established_session: tuple[SecureSession, SecureSession],

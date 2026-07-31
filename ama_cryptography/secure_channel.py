@@ -91,7 +91,17 @@ SESSION_ID_BYTES = 32
 NONCE_BYTES = 12
 KEY_BYTES = 32
 TAG_BYTES = 16
-REKEY_INTERVAL = 1000  # Messages before mandatory rekey
+REKEY_INTERVAL = 1000  # Messages before a rekey is advised (soft threshold)
+# Hard ceiling on the number of AEAD *encryptions* performed under one
+# (key, rekey_epoch) pair.  ``encrypt`` draws a fresh 96-bit nonce from the
+# CSPRNG for every message, so nonce reuse is a birthday problem rather than a
+# counter overflow: after n encryptions the collision probability is about
+# n^2 / 2^97.  At the 2^32 invocation limit SP 800-38D sets for random nonces
+# that is ~2^-33, which is far too close for a key that may live for the whole
+# session TTL.  Capping at 2^20 puts it at ~2^-57 while still leaving three
+# orders of magnitude of headroom above REKEY_INTERVAL, so the ceiling is
+# unreachable for any caller that rekeys when advised to.
+MAX_ENCRYPTIONS_PER_EPOCH = 1 << 20
 MAX_MESSAGE_SIZE = 65535
 SESSION_TTL_SECONDS = 3600  # 1 hour default
 # DoS resistance cap for deserialized field lengths (signature, public key).
@@ -135,6 +145,21 @@ class ReplayError(ChannelError):
 
 class SessionExpiredError(ChannelError):
     """Raised when session TTL has elapsed."""
+
+    pass
+
+
+class RekeyRequiredError(ChannelError):
+    """Raised when a session has exhausted its per-epoch encryption budget.
+
+    ``SecureSession.encrypt`` refuses to draw another random nonce under the
+    current key once ``MAX_ENCRYPTIONS_PER_EPOCH`` is reached.  The session is
+    still usable: call :meth:`SecureSession.rekey` on *both* peers to start a
+    new epoch, or close the session.  Recovery is deliberately left to the
+    caller, because rekeying only one side desynchronises the pair — the AAD
+    binds ``rekey_epoch``, so a unilateral rekey makes every subsequent
+    message fail authentication at the peer.
+    """
 
     pass
 
@@ -455,6 +480,11 @@ class SecureSession:
         created_at: Session creation timestamp
         ttl_seconds: Session time-to-live
         messages_since_rekey: Counter for triggering automatic rekey
+        sends_since_rekey: Encryptions performed under the current epoch.
+            Distinct from ``messages_since_rekey``, which also counts
+            *received* messages: only encryptions draw a nonce, so only
+            encryptions bear on the nonce-collision bound enforced by
+            ``MAX_ENCRYPTIONS_PER_EPOCH``.
         rekey_epoch: Monotonic counter incremented on every successful
             rekey; bound into the AEAD AAD so a silent rekey failure
             (same key, different epoch) cannot enable tag forgery.
@@ -468,6 +498,7 @@ class SecureSession:
     created_at: float = field(default_factory=time.monotonic)
     ttl_seconds: float = SESSION_TTL_SECONDS
     messages_since_rekey: int = 0
+    sends_since_rekey: int = 0
     # SECURITY FIX: Track key generation/epoch to bind AAD to the current
     # key material.  Without this, a silent rekey failure could leave the
     # same key active across two epochs with overlapping sequence numbers,
@@ -493,6 +524,11 @@ class SecureSession:
         # surfaces as a deadlock at the bad call site rather than being
         # silently allowed.
         self._lock: LockType = threading.Lock()
+        # Latch for the once-per-epoch "rekey advised" warning.  Kept as a
+        # plain attribute rather than a dataclass field for the same reason
+        # as the lock: it is bookkeeping, not session state worth comparing
+        # or printing.  Reset by ``rekey()``.
+        self._rekey_warned: bool = False
         # Defensive type coercion: callers from older API paths might pass
         # ``bytes`` for send/recv keys.  We canonicalise to bytearray so
         # ``close()`` can wipe the live memory rather than rebind names.
@@ -506,8 +542,36 @@ class SecureSession:
         return (time.monotonic() - self.created_at) >= self.ttl_seconds
 
     def needs_rekey(self) -> bool:
-        """Check if session should be re-keyed based on message count."""
+        """Check if session should be re-keyed based on message count.
+
+        This is the *soft* threshold: it is advisory, and crossing it does
+        not stop the session.  The hard bound that ``encrypt`` enforces is
+        ``MAX_ENCRYPTIONS_PER_EPOCH``, three orders of magnitude higher.
+        """
         return self.messages_since_rekey >= REKEY_INTERVAL
+
+    def _warn_if_rekey_advised(self) -> None:
+        """Log once per epoch when the soft rekey threshold is crossed.
+
+        Called with the session lock held, from both ``encrypt`` and
+        ``decrypt``.  Before this existed, ``needs_rekey()`` was a query no
+        caller was obliged to make, so a session that never rekeyed gave no
+        signal at all until it hit the hard ceiling.  The latch keeps this to
+        one line per epoch rather than one per message.
+        """
+        if self._rekey_warned or not self.needs_rekey():
+            return
+        self._rekey_warned = True
+        logger.warning(
+            "Session %s has sent/received %d messages in epoch %d without a "
+            "rekey (advisory threshold %d). Call rekey() on both peers for "
+            "forward secrecy; encryption stops at %d.",
+            self.session_id.hex()[:16],
+            self.messages_since_rekey,
+            self.rekey_epoch,
+            REKEY_INTERVAL,
+            MAX_ENCRYPTIONS_PER_EPOCH,
+        )
 
     def encrypt(self, plaintext: bytes) -> ChannelMessage:
         """Encrypt plaintext and produce a framed ChannelMessage.
@@ -524,6 +588,7 @@ class SecureSession:
         Raises:
             SessionExpiredError: If session TTL has elapsed
             ChannelError: If session is not in ESTABLISHED state
+            RekeyRequiredError: If this epoch's encryption budget is spent
             ValueError: If plaintext exceeds MAX_MESSAGE_SIZE
         """
         if len(plaintext) > MAX_MESSAGE_SIZE:
@@ -540,6 +605,21 @@ class SecureSession:
             if self.is_expired():
                 self._state = ChannelState.CLOSED
                 raise SessionExpiredError("Session TTL expired")
+
+            # Nonce-reuse budget.  Checked BEFORE the nonce is drawn, so the
+            # message that would have exceeded the bound is never encrypted.
+            # This is the only place the bound can be enforced: ``decrypt``
+            # does not generate nonces, and rejecting on receive would break
+            # interoperability with a peer that has not yet been upgraded
+            # without improving this side's safety margin.
+            if self.sends_since_rekey >= MAX_ENCRYPTIONS_PER_EPOCH:
+                raise RekeyRequiredError(
+                    f"Session {self.session_id.hex()[:16]} reached the per-epoch "
+                    f"encryption limit ({MAX_ENCRYPTIONS_PER_EPOCH} messages in "
+                    f"epoch {self.rekey_epoch}). Call rekey() on both peers before "
+                    "sending again, or close the session. Continuing would erode "
+                    "the 96-bit random-nonce collision bound."
+                )
 
             nonce = secrets.token_bytes(NONCE_BYTES)
             # AAD binds ciphertext to session_id, rekey epoch, and sequence
@@ -567,6 +647,8 @@ class SecureSession:
 
             self.send_seq += 1
             self.messages_since_rekey += 1
+            self.sends_since_rekey += 1
+            self._warn_if_rekey_advised()
             return msg
 
     def decrypt(self, msg: ChannelMessage) -> bytes:
@@ -630,6 +712,7 @@ class SecureSession:
                 self._replay_window_base += 1
 
             self.messages_since_rekey += 1
+            self._warn_if_rekey_advised()
             return plaintext
 
     def rekey(self) -> None:
@@ -663,6 +746,8 @@ class SecureSession:
             self.send_key = new_send
             self.recv_key = new_recv
             self.messages_since_rekey = 0
+            self.sends_since_rekey = 0
+            self._rekey_warned = False
             self.rekey_epoch += 1
             logger.debug(
                 "Session %s re-keyed (epoch %d)",
