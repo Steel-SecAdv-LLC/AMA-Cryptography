@@ -77,10 +77,25 @@ AMA_API ama_error_t ama_secure_munlock(void *ptr, size_t len) {
 }
 
 /**
- * @brief Allocate a secure buffer with mlock and DONTDUMP.
+ * @brief Allocate a zeroed buffer and attempt to lock it into RAM.
  *
  * @param size  Number of bytes to allocate
- * @return Pointer to locked, zeroed memory, or NULL on failure
+ * @return Pointer to zeroed memory, or NULL on failure
+ *
+ * @warning The returned buffer is **not guaranteed to be locked**.  Locking
+ * is best-effort: `mlock()` fails when the allocation would exceed
+ * `RLIMIT_MEMLOCK`, which on many distributions defaults to as little as
+ * 64 KiB and is routinely hit.  The failure is deliberately non-fatal — a
+ * usable-but-swappable buffer beats refusing to allocate — but it means a
+ * caller MUST NOT treat this allocation as proof that the contents can never
+ * reach swap or a core dump.  Call ama_secure_mlock() directly and inspect
+ * its return value when the locked property is load-bearing; the Python
+ * binding surfaces the same distinction via `SecureBuffer.locked`.
+ *
+ * Buffers come from `malloc()` and are therefore not page-aligned, so the
+ * kernel locks (and, in ama_secure_free(), unlocks) whole pages that may be
+ * shared with neighbouring allocations.  Do not rely on the lock state of one
+ * allocation persisting independently of another's lifetime.
  */
 AMA_API void *ama_secure_alloc(size_t size) {
     if (size == 0) return NULL;
@@ -91,8 +106,10 @@ AMA_API void *ama_secure_alloc(size_t size) {
     /* Zero the buffer using existing ama_secure_memzero */
     ama_secure_memzero(ptr, size);
 
-    /* Lock in memory — best-effort; some systems limit mlock via ulimit.
-     * Failure is non-fatal: the buffer is usable but may be swapped. */
+    /* Lock in memory — best-effort; see the @warning above.  The status is
+     * intentionally discarded here and the contract documents that the
+     * buffer may be swappable, rather than claiming a guarantee the
+     * allocator cannot make. */
     (void)ama_secure_mlock(ptr, size);
 
     return ptr;

@@ -41,6 +41,25 @@ extern void ama_frost_test_scalar_negate(uint8_t neg[32], const uint8_t s[32]);
 extern void ama_frost_test_scalar_add(uint8_t c[32], const uint8_t a[32],
                                        const uint8_t b[32]);
 
+/* AMA_TESTING_MODE-only CSPRNG override from src/c/ama_frost.c.  Used by
+ * the fail-closed and nonce-hedging regression tests below. */
+extern ama_error_t (*ama_frost_randombytes_hook)(uint8_t *buf, size_t len);
+
+/* Simulates an entropy-source failure: reports failure AND leaves the
+ * buffer zeroed, which is the exact shape that previously collapsed the
+ * group secret to the known scalar 1. */
+static ama_error_t failing_randombytes(uint8_t *buf, size_t len) {
+    memset(buf, 0, len);
+    return AMA_ERROR_CRYPTO;
+}
+
+/* Simulates a degenerate but "successful" CSPRNG (e.g. a restored VM
+ * snapshot replaying the same bytes): always the same constant output. */
+static ama_error_t constant_randombytes(uint8_t *buf, size_t len) {
+    memset(buf, 0xA5, len);
+    return AMA_SUCCESS;
+}
+
 /* Run a single scalar_negate boundary check: assert
  * scalar_add(scalar_negate(x), x) == 0 (mod l). */
 static int check_negate_inverse(const uint8_t x[32], const char *label) {
@@ -275,6 +294,73 @@ int main(void) {
             0x88, 0x99, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x0F
         };
         if (check_negate_inverse(mid, "mid")) return 1;
+    }
+
+    /* Test 6: CSPRNG failure must fail closed (security regression).
+     *
+     * Before the fix, scalar_random() discarded ama_randombytes()'s return
+     * value and remapped an all-zero draw to the known scalar 1.  A failing
+     * entropy source therefore produced a group secret of 1 (group public
+     * key == the Ed25519 basepoint) and two identical signing nonces —
+     * i.e. full threshold-key compromise, reported as success.  Both entry
+     * points must now propagate the error instead. */
+    {
+        uint8_t gpk[32];
+        uint8_t shares[3 * 64];
+        uint8_t nonce_pair[64];
+        uint8_t commitment[64];
+
+        /* Produce a valid share first, with the real CSPRNG, so the
+         * round-1 check below exercises the nonce path rather than a
+         * malformed-input path. */
+        ama_error_t rc = ama_frost_keygen_trusted_dealer(2, 3, gpk, shares, NULL);
+        TEST_ASSERT(rc == AMA_SUCCESS, "keygen succeeds with a healthy CSPRNG");
+
+        ama_frost_randombytes_hook = failing_randombytes;
+
+        rc = ama_frost_keygen_trusted_dealer(2, 3, gpk, shares, NULL);
+        TEST_ASSERT(rc != AMA_SUCCESS,
+                    "keygen fails closed when the CSPRNG fails");
+
+        rc = ama_frost_round1_commit(nonce_pair, commitment, shares);
+        TEST_ASSERT(rc != AMA_SUCCESS,
+                    "round1 fails closed when the CSPRNG fails");
+
+        ama_frost_randombytes_hook = NULL;
+
+        rc = ama_frost_keygen_trusted_dealer(2, 3, gpk, shares, NULL);
+        TEST_ASSERT(rc == AMA_SUCCESS, "keygen recovers once the CSPRNG does");
+    }
+
+    /* Test 7: nonces are hedged with the secret share (security regression).
+     *
+     * A degenerate CSPRNG that returns a constant must NOT yield predictable
+     * or colliding nonces.  With the hedge, the hiding and binding nonces
+     * differ from each other (distinct domain-separation labels) and differ
+     * across participants (the share is an input), even though the random
+     * input is identical in every call. */
+    {
+        uint8_t gpk[32];
+        uint8_t shares[3 * 64];
+        uint8_t np_a[64], commit_a[64];
+        uint8_t np_b[64], commit_b[64];
+
+        ama_error_t rc = ama_frost_keygen_trusted_dealer(2, 3, gpk, shares, NULL);
+        TEST_ASSERT(rc == AMA_SUCCESS, "keygen for hedge test");
+
+        ama_frost_randombytes_hook = constant_randombytes;
+
+        rc = ama_frost_round1_commit(np_a, commit_a, shares);
+        TEST_ASSERT(rc == AMA_SUCCESS, "round1 succeeds under a constant CSPRNG");
+        rc = ama_frost_round1_commit(np_b, commit_b, shares + 64);
+        TEST_ASSERT(rc == AMA_SUCCESS, "round1 succeeds for a second share");
+
+        TEST_ASSERT(memcmp(np_a, np_a + 32, 32) != 0,
+                    "hiding and binding nonces differ under a constant CSPRNG");
+        TEST_ASSERT(memcmp(np_a, np_b, 64) != 0,
+                    "nonces differ across shares under a constant CSPRNG");
+
+        ama_frost_randombytes_hook = NULL;
     }
 
     printf("\n===========================================\n");

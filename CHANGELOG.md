@@ -19,6 +19,158 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ## [Unreleased]
 
+### Security — FROST reported success when the CSPRNG failed, collapsing the threshold key
+
+`scalar_random()` in `src/c/ama_frost.c` discarded the return value of
+`ama_randombytes()`. That function is not all-or-nothing: on failure it
+returns `AMA_ERROR_CRYPTO` and leaves the buffer uninitialised or partially
+written. The routine then reduced whatever was in the buffer and, via a
+constant-time "zero-to-one" remap, turned an all-zero draw into the *known*
+scalar 1. Every sibling keygen in the tree — `ama_nistp.c:1626`,
+`ama_nistp.c:1989`, `ama_x25519.c:777`, `ama_core.c:249` — checks that status
+and aborts, so this was a defect rather than a considered exception.
+
+With entropy unavailable (`getrandom` denied by seccomp, absent on pre-3.17
+kernels, or `/dev/urandom` missing in a minimal container) the trusted-dealer
+keygen therefore returned `AMA_SUCCESS` with a group secret of 1 — the group
+public key equals the Ed25519 basepoint and every participant share is a
+public value — and `ama_frost_round1_commit` produced two *identical* signing
+nonces. For a Schnorr-type scheme that discloses the secret share from the
+resulting partial signatures. Reproduced end to end through the public Python
+binding under a CSPRNG that fails the way the syscall actually fails.
+
+Both entry points now propagate the failure, the zero scalar is rejected
+instead of remapped, and a failed `scalar_random()` inside keygen scrubs the
+coefficients derived so far before returning.
+
+### Security — FROST signing nonces are now hedged with the secret share
+
+`ama_frost_round1_commit` took raw CSPRNG output as both nonces and
+explicitly discarded the participant's share (`(void)participant_share;`),
+leaving nonce secrecy wholly dependent on the RNG with no second line of
+defence — the single point of total failure that RFC 9591 `nonce_generate`
+and RFC 6979 §3.6 exist to remove. Each nonce is now derived as
+`SHA-512(label || random(32) || share_secret) mod l` with distinct
+domain-separation labels for the hiding and binding nonces, so an adversary
+who predicts or replays the CSPRNG still cannot predict a nonce without the
+share, and the two nonces of a round cannot collide with each other.
+
+The fresh CSPRNG draw remains mandatory and fail-closed; the hedge is
+defence-in-depth, not a licence to sign without entropy. This is deliberately
+*not* described as byte-exact RFC 9591 H3: this implementation's binding
+factor and challenge hashes do not prefix the RFC 9591
+`FROST-ED25519-SHA512-v1` context string, so claiming ciphersuite conformance
+for one input would be inaccurate.
+
+`tests/c/test_frost.c` gains a CSPRNG-failure hook
+(`ama_frost_randombytes_hook`, `AMA_TESTING_MODE` only, following the existing
+`ama_dilithium_randombytes_hook` pattern) and pins both properties: keygen and
+round 1 fail closed under a failing entropy source, and under a *constant*
+entropy source the two nonces still differ from each other and across
+participants.
+
+### Security — the scalar GHASH leaked the authentication subkey through its lookup table
+
+`src/c/ama_aes_gcm.c` multiplied in GF(2^128) with a 16-entry table
+`H_table[i] = q(i)·H` indexed by nibbles of the running accumulator, and
+asserted in its own comments that "All operations are constant-time in H" and
+that "H_table indices come from AAD/ciphertext bytes, which are non-secret".
+That assertion holds only for the first block. GHASH is
+`S_i = (S_{i-1} XOR X_i) · H`, so from the second block onward the value whose
+nibbles index the table is a function of the secret subkey `H = E_K(0^128)`.
+The table spans 256 bytes — four cache lines — so the access pattern leaked
+`H` to a co-resident Flush+Reload or Prime+Probe adversary, the same threat
+model this file already documents for the AES S-box. Recovering `H` yields
+universal forgery under a given nonce, so this was authentication-key
+recovery rather than a marginal side channel.
+
+The multiply is now the branch-free, table-free bitwise form of NIST SP
+800-38D Algorithm 1: 128 iterations that convert each accumulator bit into an
+all-ones/all-zeros mask and XOR a masked multiple of `H`, with the only
+reduction step being the already-branch-free `ghash_mul_x`. No lookup table
+exists and every array index is a loop counter.
+
+This costs roughly 6x the byte-operations of the table it replaces, confined
+to the fallback path: hosts with carry-less multiply (x86 PCLMULQDQ via the
+AVX2/VAES kernels, ARM PMULL via the NEON kernel) never execute this code.
+On the platforms that do, a constant-time tag is worth more than a faster
+leaky one, and AES is already bitsliced there. Bit-exactness is covered by the
+existing NIST SP 800-38D vectors and by `test_aes_gcm_vaes_equiv`, which
+differentially compares this path against the hardware kernel.
+
+### Security — `verify_crypto_package` had no trust anchor, so it could not detect a forgery
+
+Every key the function needed travelled inside the package it was checking:
+the signing public key in `package.keypairs`, the HMAC key in
+`package.hmac_key`, the Layer-4 master secret in `package.hkdf_master_secret`.
+Verifying a package against its own material proves internal consistency, not
+origin — an adversary could generate a keypair, call `create_crypto_package`
+over content of their choosing, and obtain a package whose every layer
+verified and whose `all_valid` was `True`, while the docstring advertised that
+Layer 2 "prevents forgery" and Layer 3 provides "non-repudiation".
+
+`verify_crypto_package` now takes an optional `expected_public_key`: an
+out-of-band signing key, compared in constant time against the package's
+embedded key, with the signature left unevaluated and `primary_signature` set
+`False` on mismatch (which forces `all_valid` `False`). A new `key_pinned`
+result key reports which mode ran, satisfying INVARIANT-37's requirement that
+such a boundary be published as data rather than prose, and the docstring now
+states plainly that `all_valid` answers "is this package self-consistent?"
+rather than "did the expected signer produce it?".
+
+`key_pinned` is reported but excluded from the `core_valid` / `all_valid`
+aggregates: folding it in would report "verification failed" for every
+existing caller that never asked for an authenticity check. Callers that pass
+no anchor keep their previous results exactly, so the change is backwards
+compatible.
+
+### Security — the Noise-NK initiator accepted any responder signature key
+
+`SecureChannelInitiator.complete_handshake` verified the responder's hybrid
+signature against `response.responder_public_key` — a key supplied by the peer
+in the same message — with nothing pinning it to a trust anchor. Any active
+party could mint a signature keypair, sign the transcript, and pass the check
+that the docstring described as "proving the Responder holds the static key".
+
+The constructor now accepts an optional `expected_responder_sig_pk`, compared
+in constant time before the signature is evaluated; a mismatch raises
+`HandshakeError`. The class docstring now records where the channel's
+authentication actually comes from: encapsulation to the *known* static KEM
+public key, which an attacker without the matching KEM private key cannot
+decapsulate — the signature adds authentication only once pinned. Session
+confidentiality was never affected.
+
+### Security — `AMA_CRYPTO_LIB_PATH` could steer the crypto backend of a set-uid process
+
+The variable selects the shared object providing every cryptographic
+primitive, is loaded with `ctypes.CDLL` before the power-on self-test can run
+(a shared object executes its constructors the moment it is mapped), and is
+not covered by the module-integrity digest, which hashes `.py` files only. The
+dynamic loader refuses to honour `LD_PRELOAD` / `LD_LIBRARY_PATH` in
+secure-execution mode for exactly this reason; honouring an override of our
+own there re-opened the hole the platform had closed.
+
+The override is now ignored, with a warning, when the process is running
+set-uid or set-gid (`os.getuid() != os.geteuid()` or the gid equivalent —
+glibc's `AT_SECURE` determination). Outside secure-execution mode it still
+works, since that is how developers point at an out-of-tree build, but it now
+logs at WARNING that the backend was overridden and that the override is not
+tamper-evident.
+
+### Fixed — `ama_secure_alloc` promised locked memory it cannot guarantee
+
+The doxygen contract read "@return Pointer to locked, zeroed memory", while
+the implementation discards the result of `ama_secure_mlock()` because
+`RLIMIT_MEMLOCK` defaults to as little as 64 KiB on common distributions and
+the failure is deliberately non-fatal. Callers reading the contract could
+conclude that key material provably never reaches swap or a core dump. The
+behaviour is unchanged — refusing to allocate would be worse — but the
+contract now states that locking is best-effort, points at
+`ama_secure_mlock()` (and the Python `SecureBuffer.locked`) for callers that
+need to fail closed, and records that `malloc`-backed buffers are not
+page-aligned, so the kernel locks and unlocks whole pages that may be shared
+with neighbouring allocations.
+
 ## [3.5.0] - 2026-07-30
 
 ### Fixed — the README credited the NIST curves with a low-s policy they deliberately do not have

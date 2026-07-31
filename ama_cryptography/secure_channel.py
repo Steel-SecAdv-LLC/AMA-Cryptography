@@ -718,24 +718,54 @@ class SecureChannelInitiator:
     The Initiator is anonymous (has no static key) and establishes a
     session with a Responder whose static KEM public key is known.
 
+    Where the authentication actually comes from:
+        Confidentiality and implicit authentication rest on the KEM.  The
+        session secret is encapsulated to ``responder_static_kem_pk``, so
+        only the holder of the matching KEM private key can derive the
+        session keys — an attacker without it cannot read or inject traffic.
+
+        The handshake signature does NOT add authentication unless it is
+        pinned.  ``HandshakeResponse.responder_public_key`` is supplied by
+        the peer, so an unpinned signature check verifies a message against
+        a key the sender chose: it proves self-consistency, not identity.
+        Pass ``expected_responder_sig_pk`` to pin the Responder's signature
+        key out of band and make that check meaningful; the constructor
+        argument is optional purely for backwards compatibility.
+
     Usage::
 
-        initiator = SecureChannelInitiator(responder_kem_public_key)
+        initiator = SecureChannelInitiator(
+            responder_kem_public_key,
+            expected_responder_sig_pk=responder_sig_public_key,  # recommended
+        )
         handshake_msg = initiator.create_handshake()
         # ... send handshake_msg to responder, receive response ...
         session = initiator.complete_handshake(response)
     """
 
-    def __init__(self, responder_static_kem_pk: bytes) -> None:
+    def __init__(
+        self,
+        responder_static_kem_pk: bytes,
+        expected_responder_sig_pk: Optional[bytes] = None,
+    ) -> None:
         """Initialize initiator with the Responder's known static KEM public key.
 
         Args:
             responder_static_kem_pk: Responder's hybrid KEM public key
                 (X25519 pub || Kyber-1024 pub)
+            expected_responder_sig_pk: Optional out-of-band pin for the
+                Responder's hybrid *signature* public key (Ed25519 pk ||
+                ML-DSA-65 pk).  When supplied, :meth:`complete_handshake`
+                requires the response to carry exactly this key before the
+                signature is checked.  When omitted, the signature is
+                verified against the key the Responder sends, which proves
+                only that the message was self-consistently signed — see the
+                class docstring.
         """
         from ama_cryptography.crypto_api import HybridKEMProvider
 
         self._responder_kem_pk = responder_static_kem_pk
+        self._expected_responder_sig_pk = expected_responder_sig_pk
         self._kem = HybridKEMProvider()
         self._state = ChannelState.INITIATOR_START
         self._shared_secret: Optional[bytes] = None
@@ -813,6 +843,23 @@ class SecureChannelInitiator:
         # Verify responder's hybrid signature over the handshake transcript
         if self._handshake_hash is None:
             raise HandshakeError("Handshake hash not established")
+
+        # Trust anchor.  `response.responder_public_key` is supplied by the
+        # peer, so verifying against it alone authenticates nothing: any
+        # party can mint a hybrid signature keypair, sign the transcript, and
+        # pass.  When the caller pinned the Responder's signature key, require
+        # an exact constant-time match before the signature is evaluated.
+        if self._expected_responder_sig_pk is not None:
+            from ama_cryptography.secure_memory import constant_time_compare
+
+            if not constant_time_compare(
+                response.responder_public_key, self._expected_responder_sig_pk
+            ):
+                raise HandshakeError(
+                    "Responder signature key does not match the pinned key "
+                    "(expected_responder_sig_pk)"
+                )
+
         transcript = self._handshake_hash + response.session_id
         if not sig_provider.verify(transcript, response.signature, response.responder_public_key):
             raise HandshakeError("Responder signature verification failed")

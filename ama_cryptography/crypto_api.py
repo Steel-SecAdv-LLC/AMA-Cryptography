@@ -2667,9 +2667,74 @@ def create_crypto_package(
     )
 
 
+def _verify_package_signature(
+    content: bytes,
+    package: CryptoPackageResult,
+    sig_alg: AlgorithmType,
+    sig_alg_name: str,
+    expected_public_key: Optional[bytes],
+) -> Tuple[bool, bool]:
+    """Verify a package's Layer-3 signature against a trust anchor.
+
+    The signing public key travels INSIDE the package, so a signature that
+    verifies against it proves only that the package is internally consistent
+    — never that it came from a particular signer.  An adversary can mint a
+    keypair, sign arbitrary content, and produce a package whose every layer
+    verifies.  ``expected_public_key`` supplies the out-of-band anchor that
+    turns this into an authenticity check.
+
+    Args:
+        content: Original content that was signed.
+        package: Package carrying the signature and its embedded public key.
+        sig_alg: Resolved signature algorithm.
+        sig_alg_name: Key under which the signing keypair is stored.
+        expected_public_key: Optional out-of-band anchor. When supplied and
+            mismatched, the signature is NOT evaluated at all (fail closed).
+
+    Returns:
+        ``(signature_valid, key_pinned)``. ``key_pinned`` is True only when an
+        anchor was supplied AND matched, so callers can distinguish an
+        authenticity check from a bare self-consistency check (INVARIANT-37).
+    """
+    if sig_alg_name not in package.keypairs:
+        return False, False
+
+    embedded_pk = package.keypairs[sig_alg_name].public_key
+
+    if expected_public_key is not None:
+        from ama_cryptography.secure_memory import constant_time_compare
+
+        if not constant_time_compare(embedded_pk, expected_public_key):
+            logger.error(
+                "Layer 3 trust anchor mismatch: package signing key does not "
+                "match expected_public_key — refusing to verify the signature."
+            )
+            return False, False
+        key_pinned = True
+    else:
+        key_pinned = False
+
+    try:
+        primary_crypto = AmaCryptography(algorithm=sig_alg)
+        _t0 = time.perf_counter_ns()
+        signature_valid = primary_crypto.verify(
+            content,
+            package.primary_signature.signature,
+            embedded_pk,
+        )
+        _verify_ns = time.perf_counter_ns() - _t0
+        _monitor.monitor_crypto_operation("verify", _verify_ns / 1_000_000)
+    except Exception as exc:
+        logger.error("Layer 3 signature verification error: %s", exc)
+        return False, key_pinned
+
+    return signature_valid, key_pinned
+
+
 def verify_crypto_package(
     content: bytes,
     package: CryptoPackageResult,
+    expected_public_key: Optional[bytes] = None,
 ) -> Dict[str, bool]:
     """
     Verify all 4 layers of a crypto package plus any optional add-ons.
@@ -2681,7 +2746,9 @@ def verify_crypto_package(
     - *Layer 2 — Keyed Authentication:* recompute HMAC-SHA3-256 with
       stored key and compare to stored tag.
     - *Layer 3 — Digital Signature:* verify primary signature
-      (Ed25519 + ML-DSA-65) against stored public key.
+      (Ed25519 + ML-DSA-65) against the signing public key, which is taken
+      from ``expected_public_key`` when supplied and otherwise from the
+      package itself (see the authenticity note below).
     - *Layer 4 — Key Independence:* re-derive keys from stored master
       secret, salt, and info; compare to stored derived keys.
 
@@ -2701,13 +2768,42 @@ def verify_crypto_package(
     message-imprint binding only, never the TSA's signature or certificate
     chain, so no result it can return is third-party time attestation.
 
+    **Authenticity requires a trust anchor — read this before relying on
+    ``all_valid``.** Every key this function needs to check a package is
+    carried *by that package*: the signing public key lives in
+    ``package.keypairs``, the HMAC key in ``package.hmac_key``, and the
+    Layer-4 master secret in ``package.hkdf_master_secret``. Verifying a
+    package against its own material proves **integrity and internal
+    consistency only** — that the parts agree with each other and were not
+    corrupted in transit. It is *not* proof of origin: anyone can generate a
+    keypair, call :func:`create_crypto_package` over content of their
+    choosing, and obtain a package whose every layer verifies and whose
+    ``all_valid`` is True. ``all_valid`` therefore answers "is this package
+    self-consistent?", never "did the expected signer produce it?".
+
+    To obtain authenticity, pass ``expected_public_key`` — a signing public
+    key you obtained out of band (pinned in config, fetched from a directory
+    you trust, or established at enrollment). It is compared in constant time
+    against the package's embedded signing key; on mismatch the signature is
+    not evaluated and ``primary_signature`` is False, which forces
+    ``all_valid`` False. The ``key_pinned`` result key reports which mode ran,
+    so an auditor can distinguish the two programmatically (INVARIANT-37:
+    the boundary is published as data, not only as prose).
+
+    Note that Layers 1, 2 and 4 remain self-referential even when the
+    signature is anchored — they are integrity checks, and only the anchored
+    Layer 3 signature carries origin.
+
     Args:
         content: Original content that was signed.
         package: CryptoPackageResult to verify.
+        expected_public_key: Optional out-of-band signing public key to pin
+            the package against. When omitted, no authenticity claim is made
+            (``key_pinned`` is False). When supplied and mismatched, the
+            signature check fails closed.
 
     Returns:
-        Dictionary with a boolean for each layer plus ``all_valid`` (True
-        only if every layer passes). Keys:
+        Dictionary with a boolean for each layer plus ``all_valid``. Keys:
 
         - ``content_hash``: Layer 1
         - ``hmac``: Layer 2
@@ -2715,12 +2811,24 @@ def verify_crypto_package(
         - ``hkdf_keys``: Layer 4
         - ``sphincs``: (if present)
         - ``kem``: (if present)
-        - ``all_valid``: True iff all checks passed
+        - ``key_pinned``: True iff ``expected_public_key`` was supplied and
+          matched the package's signing key. Reported, not aggregated.
+        - ``core_valid``: True iff Layers 1-4 passed
+        - ``all_valid``: True iff every executed check passed. Subject to the
+          authenticity note above — this is not an origin claim unless
+          ``key_pinned`` is also True.
 
     Example:
         >>> result = create_crypto_package(b"Hello")
         >>> v = verify_crypto_package(b"Hello", result)
-        >>> assert v["all_valid"]
+        >>> assert v["all_valid"]        # integrity / self-consistency
+        >>> assert not v["key_pinned"]   # no authenticity claimed
+
+        Anchored verification, which is what proves origin::
+
+        >>> pk = result.keypairs["HYBRID_SIG"].public_key  # obtained out of band
+        >>> v = verify_crypto_package(b"Hello", result, expected_public_key=pk)
+        >>> assert v["all_valid"] and v["key_pinned"]
     """
     _enforce_invariant7()
     _check_operational()
@@ -2753,22 +2861,11 @@ def verify_crypto_package(
     except KeyError:
         sig_alg = AlgorithmType.HYBRID_SIG
 
-    if sig_alg_name in package.keypairs:
-        try:
-            primary_crypto = AmaCryptography(algorithm=sig_alg)
-            _t0 = time.perf_counter_ns()
-            results["primary_signature"] = primary_crypto.verify(
-                content,
-                package.primary_signature.signature,
-                package.keypairs[sig_alg_name].public_key,
-            )
-            _verify_ns = time.perf_counter_ns() - _t0
-            _monitor.monitor_crypto_operation("verify", _verify_ns / 1_000_000)
-        except Exception as exc:
-            logger.error("Layer 3 signature verification error: %s", exc)
-            results["primary_signature"] = False
-    else:
-        results["primary_signature"] = False
+    signature_valid, key_pinned = _verify_package_signature(
+        content, package, sig_alg, sig_alg_name, expected_public_key
+    )
+    results["primary_signature"] = signature_valid
+    results["key_pinned"] = key_pinned
     # Backward compatibility: the key was previously named 'primary'.
     # Deprecated — will be removed in a future version.
     results["primary"] = results["primary_signature"]
@@ -2850,8 +2947,14 @@ def verify_crypto_package(
     # Core 4 layers: content_hash (L1), hmac (L2), primary_signature (L3),
     # hkdf_keys (L4).  Optional add-ons: sphincs, kem.
     # The 'primary' key is a backward-compat alias and excluded from aggregation.
+    # `key_pinned` is a REPORT of which verification mode ran, not a pass/fail
+    # layer, so it is excluded from the aggregates.  Folding it in would flip
+    # `all_valid` to False for every caller that does not pass an anchor, which
+    # would say "verification failed" when what actually happened is
+    # "authenticity was never claimed".  A failed anchor is already reflected in
+    # `primary_signature` (set False above), so it still forces `all_valid` False.
     _core_keys = {"content_hash", "hmac", "primary_signature", "hkdf_keys"}
-    _aggregate_exclude = {"core_valid", "all_valid", "primary"}
+    _aggregate_exclude = {"core_valid", "all_valid", "primary", "key_pinned"}
     core_results = {k: v for k, v in results.items() if k in _core_keys}
     results["core_valid"] = all(core_results.values()) if core_results else False
     results["all_valid"] = all(v for k, v in results.items() if k not in _aggregate_exclude)

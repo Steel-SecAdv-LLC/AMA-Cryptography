@@ -231,15 +231,63 @@ def _try_load_library(lib_path: Path) -> Optional[ctypes.CDLL]:
         return None
 
 
+def _in_secure_execution_mode() -> bool:
+    """True when the process runs with privileges its real user does not hold.
+
+    Mirrors glibc's ``AT_SECURE`` / ``issetugid()`` determination: a set-user-ID
+    or set-group-ID process is executing on behalf of a less-privileged caller,
+    so environment variables that caller controls must not be allowed to steer
+    code loading.  Returns False on platforms without POSIX uid/gid semantics
+    (e.g. Windows), where the concept does not apply.
+    """
+    try:
+        return os.getuid() != os.geteuid() or os.getgid() != os.getegid()
+    except AttributeError:  # pragma: no cover - non-POSIX platform
+        return False
+
+
 def _find_native_library() -> Optional[ctypes.CDLL]:
     """Locate and load the native ama_cryptography shared library."""
     lib_names = _get_lib_names()
     search_dirs = _get_search_dirs()
 
-    # AMA_CRYPTO_LIB_PATH override
+    # AMA_CRYPTO_LIB_PATH override.
+    #
+    # SECURITY: this variable selects the shared object that provides every
+    # cryptographic primitive, and a shared object executes its constructors
+    # the moment it is mapped — before any power-on self-test can run.  The
+    # dynamic loader refuses to honour LD_PRELOAD / LD_LIBRARY_PATH in
+    # secure-execution mode for exactly that reason; an override of our own
+    # must honour the same rule, or it becomes a way to reintroduce the
+    # loader-hijack the platform just prevented.  Under set-uid/set-gid the
+    # variable is therefore ignored, loudly.
+    #
+    # Outside secure-execution mode the override remains available (it is how
+    # developers point at an out-of-tree build), but it is logged at WARNING
+    # so that a substituted backend is visible in operational logs.  Note that
+    # the module-integrity digest covers the package's .py files only and
+    # never the native library, so this log line is the only signal that the
+    # backend was not the shipped one.
     override = os.getenv("AMA_CRYPTO_LIB_PATH")
+    if override and _in_secure_execution_mode():
+        logging.getLogger(__name__).warning(
+            "Ignoring AMA_CRYPTO_LIB_PATH=%r: the process is running in "
+            "secure-execution mode (set-uid/set-gid), where environment "
+            "variables from a less-privileged caller must not select the "
+            "cryptographic backend.",
+            override,
+        )
+        override = None
     if override:
         override_path = Path(override)
+        if override_path.is_file() or override_path.is_dir():
+            logging.getLogger(__name__).warning(
+                "Loading the native cryptographic backend from "
+                "AMA_CRYPTO_LIB_PATH=%r instead of the shipped library. The "
+                "module-integrity digest does not cover the native library, "
+                "so this override is not tamper-evident.",
+                override,
+            )
         if override_path.is_file():
             lib = _try_load_library(override_path)
             if lib is not None:

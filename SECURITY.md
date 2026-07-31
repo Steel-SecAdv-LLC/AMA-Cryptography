@@ -386,13 +386,66 @@ Both halves ship together in the AArch64-completeness PR (2026-05):
       makes a forgotten `AMA_BUILD_PIPELINE=1` in the release pipeline
       a hard failure instead of a silent posture downgrade.
 
+#### What the integrity check does and does not defend against
+
+State this plainly, because the distinction decides whether the mechanism
+is load-bearing for your deployment:
+
+- **Detected:** accidental corruption, partial or interrupted installs,
+  drift between the built wheel and the files on disk, and a tampered
+  `.py` file when the attacker cannot also rewrite the signature
+  artefact.
+- **NOT detected without a compiled trust anchor:** deliberate tampering
+  by anyone who can write to the installed package directory. The
+  verifying public key is read from
+  `ama_cryptography/_integrity_signature.py`, which sits beside the code
+  it attests. An attacker who edits a module can regenerate the digest,
+  sign it with a keypair of their own, and overwrite that artefact; the
+  check then passes. Deleting the artefact instead falls back to
+  `_integrity_digest.txt`, a plaintext file with no signature at all.
+  This is inherent to any self-contained self-check — the anchor is what
+  breaks the circularity.
+- **NOT covered at all:** the native shared library. The digest is
+  computed over the package's `.py` files only
+  (`_self_test._compute_module_digest`), so a substituted or patched
+  `libama_cryptography` is invisible to it. See the
+  `AMA_CRYPTO_LIB_PATH` note below.
+
+A build is only tamper-evident against a write-capable adversary when
+`AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX` is compiled into the native
+library (`CMakeLists.txt`) so the embedded pubkey must match an anchor
+the attacker cannot rewrite by editing Python, and
+`AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR=1` forbids the unsigned fallback.
+**Neither is set by default, and the release workflow does not currently
+set them**, so stock and released wheels are in the unanchored state
+described above. Deployments that rely on import-time tamper detection
+must build with both.
+
+#### `AMA_CRYPTO_LIB_PATH`
+
+This environment variable overrides the search for the native library and
+loads the named shared object directly. It is a developer convenience for
+pointing at an out-of-tree build, and it is a code-execution boundary: a
+shared object runs its constructors the moment it is mapped, before the
+power-on self-test executes, and the integrity digest does not cover it.
+Treat the ability to set it as equivalent to the ability to run code in
+the process.
+
+It is ignored, with a warning, when the process is running set-uid or
+set-gid, matching the dynamic loader's refusal to honour `LD_PRELOAD` and
+`LD_LIBRARY_PATH` in secure-execution mode. When it is honoured, the
+override is logged at WARNING so a substituted backend is visible in
+operational logs.
+
 End-to-end smoke test (from the AArch64-completeness PR's CI):
 
     AMA_BUILD_PIPELINE=1 python -m ama_cryptography.integrity --update --sign
     python -m ama_cryptography.integrity --verify   # → "OK (signed integrity verified, ...)"
-    # Now edit a .py file and re-import:
+    # Now edit a .py file and re-import WITHOUT re-running the signer:
     python -c "import ama_cryptography; ama_cryptography._self_test._run_self_tests()"
     # → ERROR state, all crypto operations refused
+    # (Re-running the signer over the edited tree makes the check pass again —
+    #  see "What the integrity check does and does not defend against" above.)
 
 Release-anchor smoke test:
 
