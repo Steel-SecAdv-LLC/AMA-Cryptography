@@ -1742,5 +1742,67 @@ scoped in [ARCHITECTURE.md § Scope: RFC 3161 attestation is not implemented](AR
 
 ---
 
+## INVARIANT-38 — Ed25519 Compressed Points Must Have a Canonical `y`
+
+**Statement.** Every Ed25519 point decode must reject a compressed encoding
+whose `y` coordinate, after masking bit 255, is not in `[0, p)` with
+`p = 2^255 - 19`. A `y >= p` is rejected, never reduced modulo `p` before the
+curve equation is solved.
+
+**Why.** RFC 8032 §5.1.3 requires exactly this: a non-canonical `y` is
+rejected, not reduced. INVARIANT-27 already stated the rule as the reason
+X25519's canonicalisation lives on the 32-byte encoding rather than inside the
+shared `fe51_frombytes` / `fe64_frombytes` helpers — "those helpers are shared
+with Ed25519, whose point decoding has the opposite rule". The statement was
+true of the specification and of the document; it was not true of the code.
+Both backends reduced. Nineteen values, `[p, 2^255)`, therefore decoded to the
+same curve point as their reduced counterpart, and a public key had two
+accepted byte encodings.
+
+This is the same input-canonicalization class as INVARIANT-26 (`0 <= S < L`),
+INVARIANT-28 (`r, s ∈ [1, n-1]`) and INVARIANT-29 (ECDSA `Qx`/`Qy` in
+`[0, p)`), and it is resolved the same way and for the same reason: a
+*verification key* must not admit a second encoding, because everything that
+treats the key as an identity — a fingerprint, a map key, a bytewise
+authorisation compare — is otherwise looking at two names for one key.
+
+It is the deliberate policy counterpart of INVARIANT-27, resolved the other
+way, and the split is the one the two RFCs draw. X25519 *reduces*, because two
+peers must agree on one shared secret and the failure mode of disagreeing is
+silent. Ed25519 *rejects*, because a signature must not verify under a second
+encoding of its key.
+
+**Not a forgery route on its own.** `S < L` (INVARIANT-26) is enforced and a
+malleated `R` fails the re-encode comparison in verify, so both
+signature-malleability paths were already closed. This closes the remaining
+public-key encoding malleability.
+
+**Enforcement.** `ama_ed25519_point_y_is_canonical()` in
+`src/c/internal/ama_ed25519_canonical.h` masks bit 255 and compares the 32-byte
+little-endian value against `p` using the same branch-free comparator as the
+`S < L` check (`ama_ed25519_lt_32`, factored out so the scalar and
+field-element predicates cannot drift apart). Both backends enforce it: the
+in-tree fe51 path inside `ge25519_frombytes()` in `src/c/ama_ed25519.c`, which
+every decode in that file funnels through, and the donna path at each call site
+in `src/c/ed25519_donna_shim.c` — verify plus the four point helpers — because
+`ge25519_unpack_negative_vartime()` belongs to the vendored tree and stays
+byte-for-byte unmodified. Both therefore accept exactly the same set of
+encodings, which the Ed25519 backend-differential job depends on.
+
+**Not a constant-time requirement.** The `y` coordinate arrives in a public
+key and is public. The comparison is branch-free regardless.
+
+**Verification.** `tests/c/test_ed25519_canonical_y.c`-style coverage lives in
+`tests/c/test_ed25519_canonical_s.c` alongside the `S < L` cases: the full
+19-value band, the `p-1` / `p` boundary, sign-bit independence in both
+directions, and integration assertions through single and batch verify.
+`tests/test_ed25519_canonical_y.py` drives the policy through the Python
+binding — the whole `[p, p+18]` band rejected, canonical keys accepted, and the
+sign bit shown not to affect the verdict — mirroring
+`tests/test_secp256k1_ecdsa_noncanonical_pubkey.py` for INVARIANT-29. The
+backend-differential job proves the two backends agree on every case.
+
+---
+
 _Maintained by Steel Security Advisors LLC._
-_Last updated: 2026-07-28_
+_Last updated: 2026-07-31_

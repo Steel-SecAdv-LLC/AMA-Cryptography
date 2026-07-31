@@ -551,7 +551,11 @@ The persisted counter path no longer keeps a dirty counter or batching
 interval: every successful reservation writes the `slot+1` high-water
 mark atomically, so there is no deferred flush state to lose on crash.
 
-### Secure-channel nonce budget per rekey epoch
+### Secure-channel nonce budget per rekey epoch (INVARIANT-22)
+
+INVARIANT-22 requires that exceeding a per-key nonce safety limit force
+re-keying or hard failure, never a wrap, reset, or warn-and-continue.
+`SecureSession` auto-generates a nonce per message and is therefore in scope.
 
 `SecureSession.encrypt()` draws a fresh random 96-bit nonce for every
 message, so nonce reuse within one `(key, rekey_epoch)` pair is a birthday

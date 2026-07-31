@@ -71,20 +71,26 @@ static inline int ama_ed25519_scalar_is_canonical(const uint8_t s[32]) {
 }
 
 /* 1 when a compressed Edwards point's y coordinate is canonical, i.e. the
- * low 255 bits encode an integer < p.
+ * low 255 bits encode an integer < p.  INVARIANT-38.
  *
- * The 19 values in [p, 2^255) each decode to the same curve point as their
- * reduced counterpart, so a point has 2 accepted encodings whenever
- * y >= p - 19. That is encoding malleability, not a forgery: a verifier that
- * reduces still recovers the same public key, and S < L plus the re-encode
- * comparison on R already close the signature-malleability routes. It matters
- * where a public key is treated as an identity -- fingerprinted, used as a map
- * key, compared bytewise for authorisation -- because two distinct byte
- * strings then denote one key.
+ * RFC 8032 5.1.3 requires a non-canonical y to be REJECTED, not reduced --
+ * the opposite of the X25519 rule in RFC 7748 5, where a u in the same band
+ * is reduced so two peers agree on one shared secret.  INVARIANT-27 records
+ * that split and states the Ed25519 side of it explicitly; this predicate is
+ * what makes the statement true of the code.  Before it, fe25519_frombytes
+ * (and donna's ge25519_unpack_negative_vartime) reduced mod p, so each of the
+ * 19 values in [p, 2^255) decoded to the same curve point as its reduced
+ * counterpart and a public key had two accepted encodings.
  *
- * ref10 and libsodium reduce rather than reject here, so enforcing this is a
- * deliberate divergence: strictly fewer encodings are accepted, and every
- * encoding a conformant signer produces is unaffected.
+ * This is the same input-canonicalization class as INVARIANT-26's 0 <= S < L
+ * and INVARIANT-29's ECDSA Qx/Qy in [0, p), and it is resolved the same way:
+ * a verification key must not admit a second byte encoding, because anything
+ * that treats the key as an identity -- a fingerprint, a map key, a bytewise
+ * authorisation compare -- is then looking at two names for one key.
+ *
+ * It is not a forgery route on its own: S < L is enforced and a malleated R
+ * fails the re-encode comparison, so both signature-malleability paths were
+ * already closed.
  *
  * The sign bit (bit 255) is masked off first -- it carries the sign of x, not
  * part of y. Public input, so constant time is not required, but the

@@ -70,24 +70,42 @@ authentication failure. Format v2 records are still read.
 of raising; call `migrate_kdf(password)` to re-encrypt at current strength,
 then reopen without the flag.
 
-### BREAKING — Ed25519 rejects non-canonical `y` in compressed points
+### BREAKING — Ed25519 rejects non-canonical `y` in compressed points (INVARIANT-38)
 
-`fe25519_frombytes` (and donna's `ge25519_unpack_negative_vartime`) reduce mod
-p, so each of the 19 encodings with `y` in `[p, 2^255)` decoded to the same
-curve point as its reduced form. A public key could therefore have two valid
-byte representations, which breaks the assumption that a key's bytes are its
-identity — it matters wherever a key is fingerprinted, used as a map key, or
-compared bytewise for authorisation.
+RFC 8032 §5.1.3 requires a compressed point whose `y` is not in `[0, p)` to be
+**rejected**, not reduced. INVARIANT-27 already recorded that rule — it is the
+stated reason X25519's canonicalisation sits on the 32-byte encoding rather
+than inside the `fe51_frombytes` / `fe64_frombytes` helpers the two curves
+share, "because those helpers are shared with Ed25519, whose point decoding has
+the opposite rule". The statement was true of the specification and true of the
+document; it was not true of the code.
 
-This is encoding malleability, not signature forgery: `S < L` is enforced and a
-malleated `R` already fails the re-encode comparison. ref10 and libsodium
-reduce here rather than rejecting, so this is a deliberate divergence. Strictly
-fewer encodings are accepted; every encoding a conformant signer produces is
-unaffected. Enforced identically on both backends, via
-`ama_ed25519_point_y_is_canonical` in
-`src/c/internal/ama_ed25519_canonical.h`.
+Both backends reduced. Each of the 19 encodings with `y` in `[p, 2^255)`
+therefore decoded to the same curve point as its reduced form, and a public key
+had two accepted byte representations — which breaks the assumption that a
+key's bytes are its identity, wherever a key is fingerprinted, used as a map
+key, or compared bytewise for authorisation.
 
-### Security — `SecureSession.encrypt` never consulted the rekey state
+This is not a forgery route on its own: `S < L` is enforced and a malleated `R`
+already fails the re-encode comparison, so both signature-malleability paths
+were closed. It is the same input-canonicalization class as INVARIANT-26,
+INVARIANT-28 and INVARIANT-29, resolved the same way, and the deliberate policy
+counterpart of INVARIANT-27 — X25519 reduces so two peers agree on one shared
+secret; Ed25519 rejects so a signature cannot verify under a second encoding of
+its key.
+
+Enforced identically on both backends via `ama_ed25519_point_y_is_canonical` in
+`src/c/internal/ama_ed25519_canonical.h`, so the backend-differential job still
+holds. Strictly narrowing: every encoding a conformant signer produces is
+unaffected.
+
+### Security — `SecureSession.encrypt` never consulted the rekey state (INVARIANT-22)
+
+INVARIANT-22 requires that "exceeding the configured per-key nonce safety limit
+must force re-keying or hard failure; it must not wrap, reset, or continue with
+a warning". `SecureSession` auto-generates a nonce per message and so falls
+inside that invariant's scope, and it did none of those three things — it
+simply continued.
 
 `needs_rekey()` existed but was a query no caller was obliged to make, so a
 session that never rekeyed kept drawing fresh random 96-bit nonces under one
