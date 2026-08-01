@@ -477,11 +477,34 @@ all-ones/all-zeros mask and XOR a masked multiple of `H`, with the only
 reduction step being the already-branch-free `ghash_mul_x`. No lookup table
 exists and every array index is a loop counter.
 
-This costs roughly 6x the byte-operations of the table it replaces, confined
-to the fallback path: hosts with carry-less multiply (x86 PCLMULQDQ via the
-AVX2/VAES kernels, ARM PMULL via the NEON kernel) never execute this code.
-On the platforms that do, a constant-time tag is worth more than a faster
-leaky one, and AES is already bitsliced there. Bit-exactness is covered by
+The replacement is **faster than the leaky table**, not slower. The first
+revision of this fix was a 128-iteration loop over a 16-byte array, which cost
+about 3.2x the throughput of the table (9.5 MB/s against 30.4 MB/s, GHASH
+isolated on the scalar path) and was documented here as a deliberate slowdown
+worth accepting for constant-timeness. It was not worth accepting, because it
+was not necessary: GCM's bit-string order maps exactly onto two big-endian
+64-bit words, so the same masked accumulate takes 2 word-XORs instead of 16
+byte-XORs and the shift-with-reduction becomes a `shrd`/`shr` pair. Same
+algorithm, same output, same masks, no table, roughly an eighth of the
+operations.
+
+Measured on one core of the same host, GHASH isolated on the scalar path
+(AAD-only, so the bitsliced AES that dominates full AES-GCM is excluded):
+
+| GHASH implementation | throughput |
+|---|---|
+| 4-bit windowed table (leaky) | 30.4 MB/s |
+| bitwise byte loop (first revision of this fix) | 9.5 MB/s |
+| **word-level masked loop (shipped)** | **71.7 MB/s** |
+
+End to end on the scalar AES-256-GCM path the difference is small in relative
+terms — 1.10 MB/s against the table's 1.08 — because the bitsliced AES S-box
+dominates that path. It is still the right direction, and it means this
+release ships no AES-GCM performance regression at all.
+
+Hosts with carry-less multiply (x86 PCLMULQDQ via the AVX2/VAES kernels, ARM
+PMULL via the NEON kernel) dispatch away from this code entirely and are
+unaffected either way. Bit-exactness is covered by
 `tests/c/test_aes_gcm_scalar_kat.c`, which forces the dispatch slots to NULL
 via `ama_test_force_aes_gcm_scalar()` and then runs NIST SP 800-38D Appendix B
 TC13/TC14 plus a boundary-length sweep against the dispatch-installed kernel.

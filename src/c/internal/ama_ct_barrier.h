@@ -88,4 +88,21 @@ static inline uint8_t ama_ct_value_barrier_u8(uint8_t v) {
 #endif
 }
 
+/**
+ * @brief 64-bit form of ama_ct_value_barrier_u8.
+ *
+ * Word-width selection masks need the same protection as byte-width ones,
+ * and want it more: a 64-bit masked accumulate is a bigger block for the
+ * optimizer to notice it can skip.
+ */
+static inline uint64_t ama_ct_value_barrier_u64(uint64_t v) {
+#if defined(__GNUC__) || defined(__clang__)
+    __asm__("" : "+r"(v));
+    return v;
+#else
+    volatile uint64_t opaque = v;
+    return opaque;
+#endif
+}
+
 #endif /* AMA_CT_BARRIER_H */
