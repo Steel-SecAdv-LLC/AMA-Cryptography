@@ -491,8 +491,16 @@ class SecureSession:
     """
 
     session_id: bytes
-    send_key: bytearray
-    recv_key: bytearray
+    # repr=False on both keys.  These are the live AES-256 session keys, and
+    # a dataclass repr reaches far more places than a deliberate print: a
+    # logger called with the session as an argument, an exception whose
+    # traceback shows local variables, `%r` in a debug message, a debugger
+    # watch window.  Any one of those wrote both keys out in full.
+    # `crypto_api.KeyPair.secret_key` already carries this marker for the same
+    # reason; SecureSession simply did not.  The keys stay ordinary fields —
+    # only their appearance in the generated repr changes.
+    send_key: bytearray = field(repr=False)
+    recv_key: bytearray = field(repr=False)
     send_seq: int = 0
     recv_seq: int = 0
     created_at: float = field(default_factory=time.monotonic)

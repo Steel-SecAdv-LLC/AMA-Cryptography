@@ -478,6 +478,50 @@ jobs:
           taskset -c 0 $NICE_PREFIX \
             ./build/bin/test_dudect --measurements "$MEASUREMENTS" --timeout 900
 
+  ghash-scalar-invariance:
+    # The scalar AES-GCM path is not measured by any lane above.  The
+    # `dudect-legacy-harnesses` AES-GCM lane varies the key — which varies the
+    # GHASH subkey H, exactly the right stimulus — but it calls the public
+    # entry point, and every x86-64 runner has PCLMULQDQ/VAES, so the
+    # dispatcher routes it to the SIMD kernel and the scalar GHASH is never
+    # executed.  Same blind spot the `dudect-x25519-avx2-batch` job exists to
+    # close, in the opposite direction: there the SIMD kernel went unsampled,
+    # here the fallback does.
+    #
+    # It runs on every trigger, unlike the schedule-scoped lanes above,
+    # because it is deterministic rather than statistical: callgrind counts
+    # retired instructions, so there is no significance threshold to reach and
+    # no quiet machine to wait for.  A few minutes on each PR buys a verdict
+    # that does not depend on runner load.
+    name: Scalar AES-GCM instruction-count invariance
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Install dependencies
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake valgrind
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Build the AMA_TESTING_MODE static library
+        # LTO off: the check reads instruction counts out of this archive, and
+        # link-time optimisation would let the driver's call site reshape the
+        # very code under measurement.
+        run: |
+          cmake -B build -DAMA_USE_NATIVE_PQC=ON -DAMA_BUILD_TESTS=ON -DAMA_ENABLE_LTO=OFF
+          cmake --build build -j"$(nproc)" --target ama_cryptography_test
+
+      - name: Instruction count must not depend on the key
+        run: python tools/check_ghash_constant_time.py --lib build/lib/libama_cryptography_test.a
+
   dudect-gate:
     name: Constant-Time Gate
     # Single aggregating status check for this workflow, matching the
@@ -496,6 +540,7 @@ jobs:
       - dudect-legacy-harnesses
       - dudect-x25519-avx2-batch
       - dudect-simd-sweep
+      - ghash-scalar-invariance
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
@@ -528,6 +573,7 @@ jobs:
         R_LEGACY:  ${{ needs.dudect-legacy-harnesses.result }}
         R_X25519:  ${{ needs.dudect-x25519-avx2-batch.result }}
         R_SWEEP:   ${{ needs.dudect-simd-sweep.result }}
+        R_GHASH:   ${{ needs['ghash-scalar-invariance'].result }}
       run: |
         set -euo pipefail
         rc=0
@@ -570,6 +616,9 @@ jobs:
         check dudect-legacy-harnesses   "${R_LEGACY}"  "${legacy_expected}"
         check dudect-x25519-avx2-batch  "${R_X25519}"  "${legacy_expected}"
         check dudect-simd-sweep         "${R_SWEEP}"   "${sweep_expected}"
+        # Unconditional job: it carries no `if:`, so the only acceptable
+        # result on every trigger is success.
+        check ghash-scalar-invariance   "${R_GHASH}"   "success"
 
         if [ "${rc}" -ne 0 ]; then
           echo "::error::Constant-Time Gate failed."

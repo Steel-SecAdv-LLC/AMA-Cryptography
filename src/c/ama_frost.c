@@ -178,9 +178,24 @@ static ama_error_t scalar_random(uint8_t s[32]) {
  * discloses the secret share outright, so the RNG becomes a single point
  * of total failure.  Mixing the share into the derivation follows the
  * same hedging principle as RFC 9591 `nonce_generate` (and RFC 6979 §3.6):
- * an adversary who can predict or replay the CSPRNG still cannot predict
- * the nonce without the share, and the two per-round nonces stay distinct
+ * an adversary who can predict the CSPRNG's output still cannot predict the
+ * nonce without the share, and the two per-round nonces stay distinct
  * because they use distinct domain-separation labels.
+ *
+ * WHAT THE HEDGE DOES NOT COVER.  State it plainly, because this failure is
+ * fatal rather than degrading: the construction defends against a
+ * *predictable* CSPRNG, not against a *repeating* one.  It is a pure
+ * function of (label, random_bytes, share_secret) and holds no state, so a
+ * participant handed the same random bytes twice emits the identical nonce
+ * both times -- a VM restored from a snapshot, a fork inheriting a buffered
+ * pool, two hosts re-seeded from one image.  Two partial signatures over
+ * different messages under one Schnorr nonce disclose the secret share by
+ * subtraction, so a replay is a full compromise of that participant, and no
+ * amount of hashing here can prevent it.  RFC 9591's own `nonce_generate`
+ * has the same property; only per-signature state (a counter, or binding the
+ * message in) would change it, and neither is available to this round-1 API,
+ * which runs before the message is known.  Snapshot-rollback safety is a
+ * deployment obligation, not a property of this function.
  *
  * This is deliberately NOT presented as byte-exact RFC 9591 H3: this
  * implementation's binding-factor and challenge hashes (see

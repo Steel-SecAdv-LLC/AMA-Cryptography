@@ -847,6 +847,76 @@ class TestKDFMetadataIsUntrusted:
         with pytest.raises(KDFPolicyError, match="iterations 100000 <"):
             SecureKeyStorage(temp_storage_path, master_password=test_password)
 
+    def test_algorithm_downgrade_to_at_floor_pbkdf2_is_refused(
+        self, temp_storage_path: Any, test_password: Any
+    ) -> None:
+        """The downgrade that clears every cost floor must still be refused.
+
+        The case above names PBKDF2 at 100k iterations, so the *iteration*
+        floor rejects it and the algorithm swap is never what does the work.
+        An attacker has no reason to be that careless: naming PBKDF2 at
+        exactly the 600k floor satisfies every per-parameter check while
+        discarding memory-hardness entirely — the property Argon2id is chosen
+        for, and the one that costs a GPU/ASIC attacker real money. A floor
+        that clamps costs within an algorithm but not across algorithms does
+        not stop the downgrade it exists to stop.
+
+        Regression: this passed silently before the algorithm floor, with only
+        a generic "legacy KDF" warning.
+        """
+        from ama_cryptography.key_management import MIN_PBKDF2_ITERATIONS, KDFPolicyError
+
+        storage = SecureKeyStorage(temp_storage_path, master_password=test_password)
+        if storage.kdf_params.get("algorithm") != "Argon2id":
+            pytest.skip("build has no native Argon2id, so PBKDF2 is legitimate here")
+
+        # Every per-parameter floor is satisfied; only the algorithm changed.
+        self._weaken(
+            temp_storage_path,
+            version=2,
+            algorithm="PBKDF2-HMAC-SHA256",
+            iterations=MIN_PBKDF2_ITERATIONS,
+        )
+
+        with pytest.raises(KDFPolicyError, match="weaker than the Argon2id"):
+            SecureKeyStorage(temp_storage_path, master_password=test_password)
+
+    def test_at_floor_pbkdf2_downgrade_is_recoverable(
+        self, temp_storage_path: Any, test_password: Any
+    ) -> None:
+        """The refusal is recoverable, and the honest store still opens.
+
+        Without this half, a floor that simply refused everything would also
+        pass the test above.
+        """
+        from ama_cryptography.key_management import MIN_PBKDF2_ITERATIONS
+
+        storage = SecureKeyStorage(temp_storage_path, master_password=test_password)
+        if storage.kdf_params.get("algorithm") != "Argon2id":
+            pytest.skip("build has no native Argon2id, so PBKDF2 is legitimate here")
+        storage.store_key("survivor", b"payload", {})
+        original = self._weaken(temp_storage_path)  # read back unmodified
+
+        self._weaken(
+            temp_storage_path,
+            version=2,
+            algorithm="PBKDF2-HMAC-SHA256",
+            iterations=MIN_PBKDF2_ITERATIONS,
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            legacy = SecureKeyStorage(
+                temp_storage_path, master_password=test_password, allow_legacy_kdf=True
+            )
+        assert legacy.kdf_params["algorithm"] == "PBKDF2-HMAC-SHA256"
+
+        # Restoring the genuine metadata reopens without the flag, and the key
+        # written under Argon2id is still readable.
+        self._weaken(temp_storage_path, **original)
+        reopened = SecureKeyStorage(temp_storage_path, master_password=test_password)
+        assert reopened.kdf_params["algorithm"] == "Argon2id"
+        assert reopened.retrieve_key("survivor") == b"payload"
+
     def test_floor_is_checked_before_any_derivation(
         self, temp_storage_path: Any, test_password: Any
     ) -> None:
@@ -1074,3 +1144,33 @@ class TestSecurityWarning:
         """SecurityWarning can be raised and caught."""
         with pytest.warns(SecurityWarning, match="test warning"):
             warnings.warn("test warning", SecurityWarning, stacklevel=2)
+
+
+class TestMigrateKdfPreservesEveryRecord:
+    """``migrate_kdf`` must carry every stored value across the rotation.
+
+    Regression: the collection loop used ``if key_data:``, so a zero-length
+    value — a tombstone, a placeholder provisioned before its material
+    arrives, an empty result from an upstream serializer — was skipped. The
+    salt and metadata rotated around it and that record was left encrypted
+    under a key the password no longer derives, unreadable forever, while
+    ``list_keys()`` kept reporting it. Nothing raised.
+    """
+
+    def test_zero_length_value_survives_migration(
+        self, temp_storage_path: Any, test_password: Any
+    ) -> None:
+        storage = SecureKeyStorage(temp_storage_path, master_password=test_password)
+        storage.store_key("normal", b"payload", {})
+        storage.store_key("sentinel", b"", {})
+        assert storage.retrieve_key("sentinel") == b""
+
+        assert storage.migrate_kdf(test_password) is True
+
+        reopened = SecureKeyStorage.from_existing(temp_storage_path, test_password)
+        assert sorted(reopened.list_keys()) == ["normal", "sentinel"]
+        # The ordinary value is the non-vacuity control: if migration were
+        # broken outright, this would fail too and the assertion below would
+        # not be evidence about zero-length handling specifically.
+        assert reopened.retrieve_key("normal") == b"payload"
+        assert reopened.retrieve_key("sentinel") == b""

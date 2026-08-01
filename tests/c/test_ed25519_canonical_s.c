@@ -260,8 +260,57 @@ int main(void) {
         }
         CHECK(all_accepted_below_p == 1, "RANGE small y values remain canonical");
 
-        /* Integration: a non-canonical public key is refused by verify on
-         * whichever backend is compiled in. */
+        /* Integration, stated so that it cannot pass vacuously.
+         *
+         * Feeding `y = p` to verify() and asserting rejection proves nothing:
+         * y = p is not the signer's key, so the signature fails on its own
+         * and the assertion holds with the canonical-y check deleted.  A
+         * non-vacuous test needs two encodings of the SAME point, one
+         * canonical and one not, and must show the canonical one is accepted.
+         *
+         * y = 0 is such a point.  The curve equation gives x^2 = -1 at y = 0,
+         * and -1 is a square mod p (p = 1 mod 4), so y = 0 decodes to a real
+         * point (the order-4 one).  Its non-canonical twin is y = p, which
+         * reduces to 0.  The decode-taking entry points are therefore the
+         * right probe: they report decode success directly, instead of
+         * folding it into a signature verdict that would fail anyway.
+         *
+         * The accept half is what makes the reject half meaningful — the two
+         * inputs denote one point, so canonicality is the only thing that can
+         * separate them.  Before INVARIANT-38 both were accepted. */
+        {
+            uint8_t y_zero[32];
+            uint8_t y_p[32];
+            uint8_t y_one[32];
+            uint8_t out[32];
+            uint8_t two[32];
+
+            memset(y_zero, 0, 32);              /* y = 0, canonical  */
+            memset(y_p, 0xff, 32);
+            y_p[0] = 0xed;
+            y_p[31] = 0x7f;                     /* y = p, same point */
+            memset(y_one, 0, 32);
+            y_one[0] = 1;                       /* y = 1, identity   */
+            memset(two, 0, 32);
+            two[0] = 2;
+
+            CHECK(ama_ed25519_point_add(out, y_zero, y_one) == AMA_SUCCESS,
+                  "SMOKE y = 0 decodes (non-vacuity control for y = p)");
+            CHECK(ama_ed25519_point_add(out, y_p, y_one) != AMA_SUCCESS,
+                  "PIN   y = p rejected by point_add though y = 0 is accepted");
+            CHECK(ama_ed25519_point_add(out, y_one, y_p) != AMA_SUCCESS,
+                  "PIN   point_add checks its second operand too");
+            CHECK(ama_ed25519_scalarmult_public(out, two, y_zero) == AMA_SUCCESS,
+                  "SMOKE y = 0 decodes in scalarmult_public");
+            CHECK(ama_ed25519_scalarmult_public(out, two, y_p) != AMA_SUCCESS,
+                  "PIN   y = p rejected by scalarmult_public");
+        }
+
+        /* Signature-path coverage.  These cannot be made non-vacuous the way
+         * the decode probes above are — no test can hold a private key whose
+         * public y is below 19 — so they are recorded as what they are: a
+         * check that the y predicate on the verify path does not reject
+         * honest keys, plus a smoke test that both APIs still agree. */
         memset(y, 0xff, 32);
         y[0] = 0xed;
         y[31] = 0x7f; /* y = p */
@@ -271,6 +320,8 @@ int main(void) {
               "PIN   non-canonical public key y = p rejected (batch)");
         CHECK(ama_ed25519_verify(sig, msg, sizeof(msg), pk) == AMA_SUCCESS,
               "SMOKE canonical public key still verifies after the y checks");
+        CHECK(batch_accepts(sig, msg, sizeof(msg), pk),
+              "SMOKE canonical public key still verifies in batch");
     }
 
     printf("\n");

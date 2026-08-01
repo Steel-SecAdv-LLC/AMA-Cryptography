@@ -443,6 +443,49 @@ typedef enum {
                                           * build does not satisfy it */
 } apply_dispatch_only_result_t;
 
+/* Canonical AMA_DISPATCH_ONLY slot inventory.
+ *
+ * Single source of truth for two things that used to be written out
+ * separately: the membership test below, and the slot list the
+ * UNRECOGNISED diagnostic prints.  It must stay in step with
+ * KNOWN_SLOTS[] in tests/c/test_dispatch_only_env.c and the foreach in
+ * tests/c/CMakeLists.txt, which is what the comment in that CMakeLists
+ * already promises.
+ *
+ * The inventory is deliberately architecture-INDEPENDENT.  Every branch
+ * in apply_dispatch_only() is wrapped in an #ifdef for the target that
+ * can host it, so on an x86-64 build the `aes-gcm-neon`, `chacha20-neon`,
+ * `sha3-neon`, `kyber-sve2` and `sha3-sve2` branches do not exist at all
+ * and the name falls through to the tail return.  Reporting that as
+ * UNRECOGNISED told the operator the name was wrong while the same
+ * sentence listed it under "Known slots", and it contradicted the enum's
+ * own definition — UNSUPPORTED is documented as covering exactly this
+ * case ("or the build did not compile the kernel").  Checking the name
+ * against this inventory before the tail return keeps the two outcomes
+ * meaning what they say.
+ */
+static const char *const AMA_DISPATCH_ONLY_SLOTS[] = {
+    "sha3-avx512x4",
+    "kyber-ntt-avx2",
+    "dilithium-ntt-avx2",
+    "chacha20-avx2x8",
+    "argon2-g-avx2",
+    "aes-gcm-neon",
+    "chacha20-neon",
+    "sha3-neon",
+    "kyber-sve2",
+    "sha3-sve2",
+    "x25519-avx2",
+    NULL,
+};
+
+static int dispatch_only_slot_is_known(const char *slot) {
+    for (const char *const *p = AMA_DISPATCH_ONLY_SLOTS; *p != NULL; ++p) {
+        if (strcmp(slot, *p) == 0) return 1;
+    }
+    return 0;
+}
+
 static apply_dispatch_only_result_t apply_dispatch_only(
         const char *slot, const char **resolved_label_out) {
     /* Save the wired state so we can selectively restore the
@@ -583,6 +626,15 @@ static apply_dispatch_only_result_t apply_dispatch_only(
      * so its address is observably used at the language level — but
      * if all branches are #ifdef'd out, the compiler can't see that. */
     (void)saved;
+
+    /* Reached only when no #ifdef'd branch above claimed the name.  A
+     * name that IS in the inventory therefore belongs to a kernel this
+     * build did not compile — an AArch64 slot on an x86-64 build, say —
+     * which is the UNSUPPORTED case, not the unknown-name case.  See the
+     * note on AMA_DISPATCH_ONLY_SLOTS above. */
+    if (dispatch_only_slot_is_known(slot)) {
+        return AMA_DISPATCH_ONLY_UNSUPPORTED;
+    }
 
     /* Slot name doesn't match any of our recognised entries (the
      * inventory the slot inventory in include/ama_dispatch.h
@@ -2036,15 +2088,22 @@ static void dispatch_init_internal(void) {
                         "every other slot is scalar fallback.\n", resolved);
                 break;
             case AMA_DISPATCH_ONLY_UNRECOGNISED:
+                /* Built from AMA_DISPATCH_ONLY_SLOTS rather than a
+                 * hand-written string so the advertised inventory and the
+                 * one apply_dispatch_only() tests against cannot disagree.
+                 * Still one diagnostic: no newline until the tail. */
                 fprintf(stderr,
                     "[AMA Dispatch] ERROR: AMA_DISPATCH_ONLY='%s' is not a "
-                    "recognised slot on this build.  Known slots: "
-                    "sha3-avx512x4, kyber-ntt-avx2, dilithium-ntt-avx2, "
-                    "chacha20-avx2x8, argon2-g-avx2, aes-gcm-neon, "
-                    "chacha20-neon, sha3-neon, kyber-sve2, sha3-sve2, "
-                    "x25519-avx2.  Dispatch left at scalar fallback; "
+                    "recognised slot name.  Known slots: ", only);
+                for (const char *const *p = AMA_DISPATCH_ONLY_SLOTS;
+                     *p != NULL; ++p) {
+                    fprintf(stderr, "%s%s", (p == AMA_DISPATCH_ONLY_SLOTS)
+                                            ? "" : ", ", *p);
+                }
+                fprintf(stderr,
+                    ".  Dispatch left at scalar fallback; "
                     "ama_dispatch_active_slot() will report "
-                    "\"all-default-dispatch\".\n", only);
+                    "\"all-default-dispatch\".\n");
                 break;
             case AMA_DISPATCH_ONLY_UNSUPPORTED:
                 fprintf(stderr,

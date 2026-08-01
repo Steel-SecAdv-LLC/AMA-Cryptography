@@ -734,6 +734,35 @@ class SecureKeyStorage:
         algorithm = params.get("algorithm")
         shortfalls: List[str] = []
 
+        # Algorithm downgrade, not just parameter downgrade.
+        #
+        # Clamping costs *within* an algorithm leaves the cheapest move on the
+        # board: name a different algorithm. ``.kdf_metadata.json`` carries a
+        # ``version`` field, and the branch that selects Argon2id keys off it,
+        # so deleting that one field re-routes derivation to PBKDF2 — and
+        # PBKDF2 at 600k iterations clears its own floor. The result passes
+        # every cost check while discarding memory-hardness entirely, which is
+        # the property that makes Argon2id worth using against GPU/ASIC
+        # cracking. The parameter floors above cannot see this: they only ever
+        # compare a number against the floor for whichever algorithm was named.
+        #
+        # So the algorithm is floored too. PBKDF2 is accepted only where it is
+        # the genuine best available — a build with no native Argon2id, which
+        # is what ``_derive_key_from_password`` itself falls back to when it
+        # creates a store. Where Argon2id *is* available, a store claiming
+        # PBKDF2 is either a real legacy store or a downgrade attempt, and
+        # nothing in the unauthenticated file distinguishes them. Both are
+        # handled the same way as sub-floor costs: refuse, and point at
+        # ``allow_legacy_kdf`` + ``migrate_kdf()``.
+        if algorithm != "Argon2id":
+            from ama_cryptography.pqc_backends import _ARGON2_NATIVE_AVAILABLE
+
+            if _ARGON2_NATIVE_AVAILABLE:
+                shortfalls.append(
+                    f"algorithm {algorithm!r} is weaker than the Argon2id this "
+                    "build supports (no memory-hardness)"
+                )
+
         if algorithm == "Argon2id":
             if int(params.get("t_cost", 0)) < MIN_ARGON2_T_COST:
                 shortfalls.append(f"t_cost {params.get('t_cost')} < {MIN_ARGON2_T_COST}")
@@ -968,7 +997,15 @@ class SecureKeyStorage:
                 continue
             key_id = key_file.stem
             key_data = self.retrieve_key(key_id)
-            if key_data:
+            # `is not None`, not truthiness.  A zero-length stored value —
+            # a tombstone, a placeholder provisioned before its material
+            # arrives, an empty result from an upstream serializer — is
+            # falsy, so `if key_data:` skipped it.  The migration then
+            # rotated the salt and metadata around it, leaving that record
+            # encrypted under a key the new password no longer derives:
+            # permanently unreadable, while list_keys() went on reporting it.
+            # Silent, and not recoverable once the old salt is gone.
+            if key_data is not None:
                 with open(key_file, "r") as f:
                     metadata = json.load(f).get("metadata", {})
                 old_keys[key_id] = (key_data, metadata)

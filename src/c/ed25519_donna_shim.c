@@ -271,8 +271,26 @@ ama_error_t ama_ed25519_batch_verify(
      * arithmetic runs over the inputs it was handed; the override below is
      * what decides the result.  S is public, so no timing property is at
      * stake in overriding rather than skipping. */
+    /* RFC 8032 §5.1.3 canonical-y enforcement (INVARIANT-38), applied per
+     * entry for exactly the reason spelled out above for canonical S.
+     *
+     * ama_ed25519_verify() gained this check, but donna's batch routine
+     * reaches ge25519_unpack_negative_vartime() through its own internal
+     * ed25519_sign_open(), so nothing added there reaches here.  Leaving it
+     * out would make batch verification accept a public-key encoding that
+     * single verification rejects — and would also split the two Ed25519
+     * backends, since the fe51 batch path (ama_ed25519.c) is a loop over
+     * ama_ed25519_verify() and therefore already enforces it.
+     *
+     * Only the 19 encodings with y in [p, 2^255) are affected, and a
+     * legitimate key can collide with one only if its y is below 19, so this
+     * is an encoding-uniqueness guarantee rather than a reachable forgery.
+     * That is the same standing INVARIANT-38 has on the single-signature
+     * path; the point is that both APIs enforce it, not that either is a
+     * break. */
     for (size_t i = 0; i < count; i++) {
-        if (!ama_ed25519_signature_s_is_canonical(entries[i].signature)) {
+        if (!ama_ed25519_signature_s_is_canonical(entries[i].signature) ||
+            !ama_ed25519_point_y_is_canonical(entries[i].public_key)) {
             results[i] = 0;
             ret = -1;
         }

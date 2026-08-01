@@ -53,8 +53,10 @@ static ama_error_t failing_randombytes(uint8_t *buf, size_t len) {
     return AMA_ERROR_CRYPTO;
 }
 
-/* Simulates a degenerate but "successful" CSPRNG (e.g. a restored VM
- * snapshot replaying the same bytes): always the same constant output. */
+/* Simulates a degenerate but "successful" CSPRNG: always the same constant
+ * output.  Read Test 7 for what this can and cannot demonstrate — in
+ * particular it is NOT a stand-in for snapshot rollback, which this
+ * construction does not defend against. */
 static ama_error_t constant_randombytes(uint8_t *buf, size_t len) {
     memset(buf, 0xA5, len);
     return AMA_SUCCESS;
@@ -334,11 +336,21 @@ int main(void) {
 
     /* Test 7: nonces are hedged with the secret share (security regression).
      *
-     * A degenerate CSPRNG that returns a constant must NOT yield predictable
-     * or colliding nonces.  With the hedge, the hiding and binding nonces
-     * differ from each other (distinct domain-separation labels) and differ
-     * across participants (the share is an input), even though the random
-     * input is identical in every call. */
+     * With the hedge, a constant CSPRNG still yields a hiding nonce distinct
+     * from its binding nonce (distinct domain-separation labels) and nonces
+     * distinct across participants (the share is an input), even though the
+     * random input is identical in every call.  Before the hedge the two
+     * nonces in a pair were both raw CSPRNG output and were therefore equal
+     * under this RNG — which is the disclosure the fix removes.
+     *
+     * SCOPE — what the constant RNG here does NOT show.  This is not a test
+     * that the hedge survives a *replaying* CSPRNG, because it does not: the
+     * derivation is a pure function of (label, random, share) with no state,
+     * so the same participant handed the same bytes twice emits the identical
+     * nonce.  Test 7b asserts exactly that, so the limitation is pinned as a
+     * known property rather than left to be discovered.  RFC 9591's
+     * `nonce_generate` behaves the same way; see the SCOPE note on
+     * nonce_generate() in src/c/ama_frost.c. */
     {
         uint8_t gpk[32];
         uint8_t shares[3 * 64];
@@ -359,6 +371,25 @@ int main(void) {
                     "hiding and binding nonces differ under a constant CSPRNG");
         TEST_ASSERT(memcmp(np_a, np_b, 64) != 0,
                     "nonces differ across shares under a constant CSPRNG");
+
+        /* Test 7b: the documented limit of the hedge, asserted rather than
+         * assumed.  Same share, same replayed bytes, two separate rounds ->
+         * the same nonce.  Two partial signatures over different messages
+         * under one Schnorr nonce disclose the share by subtraction, so any
+         * deployment that can roll back RNG state must prevent that itself.
+         * If a future change makes this derivation stateful, this assertion
+         * will fail and should be replaced by its opposite — deliberately,
+         * with the SCOPE notes updated to match. */
+        {
+            uint8_t np_repeat[64], commit_repeat[64];
+            rc = ama_frost_round1_commit(np_repeat, commit_repeat, shares);
+            TEST_ASSERT(rc == AMA_SUCCESS, "round1 repeats successfully");
+            TEST_ASSERT(memcmp(np_a, np_repeat, 64) == 0,
+                        "KNOWN LIMIT: a replayed CSPRNG repeats the nonce "
+                        "(stateless hedge; see nonce_generate SCOPE note)");
+            TEST_ASSERT(memcmp(commit_a, commit_repeat, 64) == 0,
+                        "KNOWN LIMIT: a replayed CSPRNG repeats the commitment");
+        }
 
         ama_frost_randombytes_hook = NULL;
     }

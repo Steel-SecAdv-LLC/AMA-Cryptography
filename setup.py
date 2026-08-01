@@ -615,9 +615,21 @@ class CMakeBuild(build_ext):
         # ``_integrity_signature.py``.  CMakeLists.txt validates the value
         # (empty or exactly 64 hex characters) and fails the build otherwise,
         # so a malformed anchor surfaces here rather than at import.
+        # Passed UNCONDITIONALLY, including when empty.  CMakeLists.txt
+        # declares the option as a CACHE STRING, so a value written into
+        # CMakeCache.txt by an earlier configure survives every later
+        # configure that does not overwrite it.  Appending the flag only when
+        # the variable was set therefore made anchoring sticky: build once
+        # with an anchor, unset the variable, rebuild in the same tree, and
+        # the "unanchored" artefact still carried the old anchor — silently,
+        # since nothing re-reads the environment to notice.  That is the wrong
+        # direction for an artefact whose whole purpose is to say who signed
+        # it, and it makes a build non-reproducible from its inputs.  Passing
+        # the empty string explicitly resets the cache entry; CMakeLists.txt
+        # validates "empty or exactly 64 hex characters", so empty is a
+        # first-class value and not a malformed one.
         _anchor = os.environ.get("AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX", "").strip()
-        if _anchor:
-            cmake_args.append(f"-DAMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX={_anchor}")
+        cmake_args.append(f"-DAMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX={_anchor}")
 
         build_args = ["--config", "Debug" if DEBUG else "Release"]
 

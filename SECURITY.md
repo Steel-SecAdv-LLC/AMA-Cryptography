@@ -5,7 +5,7 @@
 | Property | Value |
 |----------|-------|
 | Document Version | 4.0.0 |
-| Last Updated | 2026-07-30 |
+| Last Updated | 2026-08-01 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -23,7 +23,8 @@ We actively maintain and provide security updates for the following versions:
 
 | Version | Supported | Status |
 |---------|-----------|--------|
-| 3.5.x | Yes | Active development and security updates |
+| 4.0.x | Yes | Active development and security updates |
+| 3.5.x | No | Superseded by v4.0 (three breaking changes — see CHANGELOG `[4.0.0]`) |
 | 3.4.x | No | Superseded by v3.5; no public API removals |
 | 3.3.x | No | Superseded by v3.4; no public API removals |
 | 3.2.x | No | Superseded by v3.3; no public API removals |
@@ -574,6 +575,33 @@ directions) logs one WARNING per epoch. The ceiling binds the sender only:
 `decrypt()` generates no nonces, so enforcing it on receive would break a peer
 running an older build without improving this side's margin.
 
+### FROST nonce hedging — what it covers, and what it does not
+
+Round-1 nonces are derived as
+`SHA-512(label || random(32) || share_secret(32)) mod l`, so nonce secrecy does
+not rest on the CSPRNG alone: an adversary who can *predict* the RNG output
+still cannot compute the nonce without the participant's secret share. The two
+nonces in a pair use distinct domain-separation labels and therefore cannot
+collide with each other.
+
+**It does not protect against an RNG that repeats.** The derivation is a pure
+function of its three inputs and holds no state, so a participant handed the
+same random bytes twice emits the identical nonce — a VM restored from a
+snapshot, a fork inheriting a buffered pool, several hosts re-seeded from one
+image. Two partial signatures over different messages under one Schnorr nonce
+disclose that participant's secret share by subtraction, so an RNG replay is a
+full compromise of the share, and no amount of hashing inside the derivation
+can prevent it.
+
+RFC 9591's own `nonce_generate` has the same property. Only per-signature state
+would change it — a counter, or binding the message in — and neither is
+available to a round-1 API that runs before the message is known. **Preventing
+RNG-state rollback is therefore a deployment obligation**, not a property this
+library provides: do not snapshot-and-restore a signing host, and do not clone
+a VM image that has already signed. `tests/c/test_frost.c` pins the repeat
+behaviour as a known limit so it cannot be mistaken for a defect later, or
+quietly assumed away.
+
 ### Key-store KDF parameters are untrusted input
 
 `.kdf_metadata.json` names the algorithm and cost that turn the master
@@ -590,10 +618,21 @@ raises `KDFPolicyError` rather than deriving a weak key:
 
 | Parameter | Floor | Source |
 |---|---|---|
+| Algorithm | Argon2id, where the build provides it | this section |
 | PBKDF2-HMAC-SHA256 iterations | 600,000 | OWASP 2024 |
 | Argon2id `t_cost` | 3 | RFC 9106 §4 |
 | Argon2id `m_cost` | 65536 KiB (64 MiB) | RFC 9106 §4 |
 | Argon2id `parallelism` | 1 | RFC 9106 §4 |
+
+The algorithm row is load-bearing and not a formality. Clamping costs *within*
+an algorithm leaves the cheapest attack intact: name a different one. The
+metadata's `version` field selects the Argon2id branch, so deleting that single
+field re-routes derivation to PBKDF2 — and PBKDF2 at exactly 600,000 iterations
+satisfies every cost floor above while discarding memory-hardness entirely,
+which is the property Argon2id is chosen for and the one that costs a GPU or
+ASIC attacker real money. On a build with native Argon2id, metadata naming
+PBKDF2 is therefore refused. Builds without native Argon2id are unaffected,
+because PBKDF2 is what such a build legitimately creates stores with.
 
 Storage format v3 also binds the KDF parameters into the AEAD associated data
 and records them in each key file. The parameters already influence the derived

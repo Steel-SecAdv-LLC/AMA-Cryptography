@@ -1477,7 +1477,7 @@ and a rule that requires that judgement invites a fallback that argues it got
 the direction right. Resolve exactly, or refuse.
 
 **Enforcement.** In C: `nistp_lookup()`, `kyber_params_for()`,
-`dil_params_for()` and `slhdsa_params_for()` each end in `default: return NULL`
+`dil_params_for()` and `slh_lookup()` each end in `default: return NULL`
 and every public size/name query propagates that as `0` / `NULL`. In Python:
 `_param_set_id()` (shared by `_ml_kem_id` / `_ml_dsa_id`) and
 `_nistp_curve_id()` raise `ValueError` on any unrecognised value, and reject

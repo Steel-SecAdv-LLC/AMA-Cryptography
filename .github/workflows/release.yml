@@ -181,9 +181,36 @@ jobs:
         # exactly the same way security.yml::sbom does.
         run: python tools/generate_sbom.py --check
 
+  # Confirm the installed signing seed derives the configured trust anchor
+  # BEFORE anything expensive runs.  Without this gate a mismatched pair is
+  # first noticed by `_build_sign` inside cibuildwheel, i.e. after the whole
+  # matrix has compiled the native library on every platform — a ~40 minute
+  # round trip to learn that a repository variable is wrong.  Here it costs one
+  # ubuntu build.
+  #
+  # Skipped when no anchor is configured, which is the supported unanchored
+  # path (forks, and repositories before the key is installed); `build-wheels`
+  # below treats "skipped" as permission to proceed.  The check itself lives in
+  # integrity-anchor-check.yml so the dispatchable job and this gate cannot
+  # drift apart.
+  verify-anchor:
+    name: Verify the integrity trust anchor pair
+    needs: [preflight]
+    if: vars.AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX != ''
+    uses: ./.github/workflows/integrity-anchor-check.yml
+    secrets: inherit
+
   build-wheels:
     name: cibuildwheel ${{ matrix.os }}
-    needs: [preflight]
+    needs: [preflight, verify-anchor]
+    # `verify-anchor` is conditional, and a skipped dependency would otherwise
+    # skip this job too.  Accept success or skipped, refuse failure.  Bracket
+    # indexing for the hyphenated job id, for the reason documented on
+    # `github-release` below.
+    if: >-
+      !cancelled()
+      && needs.preflight.result == 'success'
+      && needs['verify-anchor'].result != 'failure'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     strategy:
@@ -212,12 +239,18 @@ jobs:
           python-version: "3.11"
 
       - name: Build wheels via cibuildwheel
-        # Real v3.2.0 commit, verified with
-        #   git ls-remote https://github.com/pypa/cibuildwheel.git refs/tags/v3.2.0^{}
-        # The previous pin (e9c4a96e…) did not exist in pypa/cibuildwheel at
-        # all — it matched neither the v3.2.0 tag object nor its commit — so
-        # every wheel job aborted with "Unable to resolve action … unable to
-        # find version".  That is why no release has ever produced artifacts.
+        # Real v4.1.1 commit, verified with
+        #   git ls-remote https://github.com/pypa/cibuildwheel.git refs/tags/v4.1.1
+        # (This block previously said v3.2.0 and quoted the v3.2.0^{} lookup,
+        # left behind when the pin was bumped; the SHA below is the v4.1.1 tag
+        # — 7c619ef… is v3.2.0^{} — and the trailing marker was already
+        # correct, which is why check_action_pins.py never flagged it.)
+        #
+        # Background, kept because it explains a real outage: an earlier pin
+        # (e9c4a96e…) did not exist in pypa/cibuildwheel at all — it matched
+        # neither the v3.2.0 tag object nor its commit — so every wheel job
+        # aborted with "Unable to resolve action … unable to find version".
+        # That is why no release before then produced artifacts.
         uses: pypa/cibuildwheel@4726cd35bb13f7bde50cf2761f2499ac7b3aa32c  # v4.1.1
         env:
           # PYTHON VERSION MATRIX:
@@ -275,13 +308,22 @@ jobs:
             CMAKE_BUILD_PARALLEL_LEVEL=4
           # The three integrity variables are supplied through the step
           # environment below and forwarded into the Linux build container by
-          # name, NOT interpolated into CIBW_ENVIRONMENT.  cibuildwheel echoes
-          # the CIBW_ENVIRONMENT string it applies, so embedding the signing
-          # seed there would print it into the build log and leave it to
-          # GitHub's log masking to redact.  Passing by name keeps the value
-          # out of the printed configuration entirely.  On macOS and Windows
-          # cibuildwheel builds in the host environment, so the step-level
-          # `env` below already reaches the build there.
+          # name, NOT interpolated into CIBW_ENVIRONMENT.
+          #
+          # What this does and does not buy, stated accurately: it keeps the
+          # seed out of the CIBW_ENVIRONMENT *string* — out of this file, and
+          # out of anything that echoes that option verbatim.  It does NOT
+          # keep it out of cibuildwheel's resolved build options; those merge
+          # the passed-through variables back in, so the value is present
+          # there either way, and GitHub's secret masking is what redacts it
+          # in the log.  (An earlier revision of this comment claimed the
+          # pass-by-name kept it out of the printed configuration entirely.
+          # It does not — checked against the resolver in the pinned 4.1.1.)
+          # The remaining benefit is real but narrow: one fewer place the
+          # literal seed is written.
+          #
+          # On macOS and Windows cibuildwheel builds in the host environment,
+          # so the step-level `env` below already reaches the build there.
           CIBW_ENVIRONMENT_PASS_LINUX: >-
             AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX
             AMA_INTEGRITY_SIGNING_SEED_HEX

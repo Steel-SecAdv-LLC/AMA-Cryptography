@@ -2291,19 +2291,78 @@ class CryptoPackageResult:
     keypairs: Dict[str, KeyPair]
     metadata: Dict[str, Any]
 
-    # Secret fields that must be stripped during serialization
-    _SECRET_FIELDS: ClassVar[frozenset[str]] = frozenset({"hmac_key", "hkdf_master_secret"})
+    # Secret fields that must be stripped during serialization.
+    #
+    # `keypairs` is deliberately NOT in this set: it has to survive
+    # serialization, because the verifying public keys live in it.  Its
+    # private half is removed separately — see `_redact_keypairs`.
+    _SECRET_FIELDS: ClassVar[frozenset[str]] = frozenset(
+        {
+            "hmac_key",
+            "hkdf_master_secret",
+            # The Layer-4 output keys, not only the master secret they come
+            # from.  Emitting these hands over the derived key material
+            # directly, which makes stripping the master secret pointless.
+            "derived_keys",
+            # The KEM's entire output, and named a secret in its own field
+            # name.
+            "kem_shared_secret",
+        }
+    )
+
+    #: Type-correct stand-ins for stripped fields when rebuilding from a
+    #: pickle.  A blanket ``b""`` would give ``derived_keys`` a ``bytes``
+    #: where the annotation promises ``List[bytes]``, so a caller iterating it
+    #: after a round-trip would silently get single bytes instead of keys.
+    _SECRET_FIELD_PLACEHOLDERS: ClassVar[Dict[str, Any]] = {
+        "hmac_key": b"",
+        "hkdf_master_secret": b"",
+        "derived_keys": [],
+        "kem_shared_secret": None,
+    }
+
+    @staticmethod
+    def _redact_keypairs(keypairs: Dict[str, KeyPair]) -> Dict[str, KeyPair]:
+        """Return the keypairs with every private half replaced by ``b""``.
+
+        ``KeyPair.secret_key`` is the most sensitive value in a package — for
+        the default hybrid signer, ~4 KB of Ed25519 + ML-DSA-65 private key.
+        It was passing through both serialization paths intact while they
+        advertised "stripping secret fields", so anything that wrote a package
+        to a log, a cache, a queue or a pickle file wrote the signing key out
+        with it.  ``KeyPair`` already marks the field ``repr=False`` for
+        exactly this reason; this applies the same rule to the paths that
+        actually leave the process.
+
+        The public half is preserved — it is what a verifier needs, and it is
+        public by construction.
+        """
+        from dataclasses import replace as _replace
+
+        return {name: _replace(kp, secret_key=b"") for name, kp in keypairs.items()}
 
     def to_dict(self, include_secrets: bool = False) -> Dict[str, Any]:
         """Serialize to a dictionary, stripping secret fields by default.
 
         Args:
-            include_secrets: If True, include hmac_key and hkdf_master_secret.
+            include_secrets: If True, include every field verbatim — the HMAC
+                key, the HKDF master secret and derived keys, the KEM shared
+                secret, and the private half of every keypair.  Use it only
+                when the destination is as trusted as the package itself.
                 Defaults to False for safe serialization.
 
         Returns:
-            Dictionary representation with secret fields omitted unless
-            *include_secrets* is True.
+            Dictionary representation.  Unless *include_secrets* is True the
+            fields in :attr:`_SECRET_FIELDS` are omitted entirely and
+            ``keypairs`` carries public keys only.
+
+        .. versionchanged:: 4.0
+           ``derived_keys``, ``kem_shared_secret`` and each
+           ``KeyPair.secret_key`` are now stripped as well.  Through 3.x only
+           ``hmac_key`` and ``hkdf_master_secret`` were, so the default —
+           documented as safe — emitted the package's private signing key.
+           Callers that genuinely need the full object pass
+           ``include_secrets=True``.
         """
         from dataclasses import fields as _fields
 
@@ -2311,21 +2370,34 @@ class CryptoPackageResult:
         for f in _fields(self):
             if not include_secrets and f.name in self._SECRET_FIELDS:
                 continue
-            result[f.name] = getattr(self, f.name)
+            value = getattr(self, f.name)
+            if not include_secrets and f.name == "keypairs":
+                value = self._redact_keypairs(value)
+            result[f.name] = value
         return result
 
     def __getstate__(self) -> Dict[str, Any]:
-        """Strip secret fields during pickling for safety."""
+        """Strip secret fields during pickling for safety.
+
+        A pickled package was already unusable for verification — ``hmac_key``
+        has always been stripped and Layer 2 cannot be checked without it — so
+        removing the rest costs no working flow.  Recovering secrets through a
+        pickle round-trip was never a supported behaviour; it was a leak.
+        """
         state = self.__dict__.copy()
         for key in self._SECRET_FIELDS:
             state.pop(key, None)
+        if "keypairs" in state:
+            state["keypairs"] = self._redact_keypairs(state["keypairs"])
         return state
 
     def __setstate__(self, state: Dict[str, Any]) -> None:
-        """Restore state from pickle, using empty bytes for stripped secrets."""
-        for key in self._SECRET_FIELDS:
+        """Restore state from pickle, substituting empties for stripped secrets."""
+        for key, placeholder in self._SECRET_FIELD_PLACEHOLDERS.items():
             if key not in state:
-                state[key] = b""
+                # Copy mutable placeholders so two restored instances never
+                # share one list.
+                state[key] = list(placeholder) if isinstance(placeholder, list) else placeholder
         self.__dict__.update(state)
 
 

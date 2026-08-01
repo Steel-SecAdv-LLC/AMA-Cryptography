@@ -1054,3 +1054,46 @@ class TestConcurrentEncryptDecrypt:
         for i, m in enumerate(msgs):
             pt = resp_sess.decrypt(m)
             assert pt == f"msg-{i}".encode()
+
+
+@skip_no_native
+class TestSessionReprDoesNotLeakKeys:
+    """The dataclass repr must not print the live AES-256 session keys.
+
+    Regression: ``SecureSession`` declared ``send_key`` / ``recv_key`` as
+    ordinary dataclass fields, so the generated ``__repr__`` rendered both in
+    full. That reaches far more places than a deliberate print — a logger
+    called with the session as an argument, a traceback showing locals, ``%r``
+    in a debug line. ``crypto_api.KeyPair.secret_key`` already carried
+    ``repr=False`` for the same reason.
+    """
+
+    def test_repr_omits_both_keys(
+        self,
+        established_session: tuple[SecureSession, SecureSession],
+    ) -> None:
+        init_sess, _ = established_session
+        text = repr(init_sess)
+
+        # Non-vacuity: the session really is holding key material, so its
+        # absence from the repr is suppression rather than an empty session.
+        assert len(init_sess.send_key) == 32
+        assert len(init_sess.recv_key) == 32
+
+        assert bytes(init_sess.send_key).hex() not in text
+        assert bytes(init_sess.recv_key).hex() not in text
+        assert "send_key" not in text
+        assert "recv_key" not in text
+
+        # Fields worth seeing in a log line are still there.
+        assert "send_seq" in text
+        assert "rekey_epoch" in text
+
+    def test_keys_remain_usable_after_repr_suppression(
+        self,
+        established_session: tuple[SecureSession, SecureSession],
+    ) -> None:
+        """repr=False changes presentation only, never the field itself."""
+        init_sess, resp_sess = established_session
+        repr(init_sess)
+        assert resp_sess.decrypt(init_sess.encrypt(b"still works")) == b"still works"

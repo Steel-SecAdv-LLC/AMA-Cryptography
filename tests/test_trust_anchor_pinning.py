@@ -18,6 +18,8 @@ The unpinned paths are asserted to keep their previous behaviour so the fix
 stays backwards compatible.
 """
 
+from __future__ import annotations
+
 import os
 
 import pytest
@@ -222,3 +224,64 @@ class TestSecureChannelPinning:
 
         with pytest.raises(HandshakeError, match="pinned key"):
             initiator.complete_handshake(response)
+
+
+class TestAnchoredBuildRefusesDigestOnlyFallback:
+    """A compiled trust anchor must close the unsigned fallback.
+
+    The signed path already refuses a signature made under the wrong key, so
+    an attacker cannot re-sign edited ``.py`` files with a key of their own.
+    They never had to: deleting ``_integrity_signature.py`` dropped control
+    into the digest-only fallback, where ``_integrity_digest.txt`` is
+    plaintext with no signature at all. Rewriting that one line got modified
+    code accepted on a build carrying an anchor — forging the signature was
+    hard, removing it was not, and removal reached the same place.
+
+    The guard that was supposed to stop this tested
+    ``AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR``, a *build-time* variable that is
+    gone by the time anyone imports the installed wheel. The compiled anchor
+    is the part of that intent that survives into the shipped ``.so``.
+    """
+
+    ANCHOR = "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"
+
+    def _run(
+        self, monkeypatch: pytest.MonkeyPatch, anchor: tuple[str | None, str | None]
+    ) -> tuple[bool, str]:
+        from ama_cryptography import _self_test
+
+        # Force the "signature artefact absent" branch without touching the
+        # installed tree, then vary only whether a build anchor is present.
+        monkeypatch.setattr(
+            _self_test,
+            "_verify_signed_integrity",
+            lambda digest_hex: (False, "no signed-integrity artefact (digest-only fallback)"),
+        )
+        monkeypatch.setattr(_self_test, "_load_integrity_trust_anchor", lambda: anchor)
+        monkeypatch.delenv("AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR", raising=False)
+        return _self_test.verify_module_integrity()
+
+    def test_anchored_build_refuses_a_missing_signature(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        ok, detail = self._run(monkeypatch, (self.ANCHOR, None))
+        assert ok is False
+        assert "compiled trust anchor" in detail
+
+    def test_unanchored_build_keeps_the_documented_fallback(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Non-vacuity control: without an anchor the same inputs still pass.
+
+        Without this, a check that simply refused everything would satisfy the
+        assertion above.
+        """
+        ok, detail = self._run(monkeypatch, (None, None))
+        assert ok is True
+        assert "digest-only fallback" in detail
+
+    def test_unresolvable_anchor_fails_closed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """If we cannot tell whether the build is anchored, do not assume it is not."""
+        ok, detail = self._run(monkeypatch, (None, "native trust-anchor lookup failed: boom"))
+        assert ok is False
+        assert "trust-anchor lookup failed" in detail

@@ -35,6 +35,7 @@
 
 #include "../include/ama_cryptography.h"
 #include "../include/ama_dispatch.h"
+#include "internal/ama_ct_barrier.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
@@ -287,7 +288,19 @@ static void ghash_mul_x(uint8_t V[16]) {
  * Constant-time: no lookup table exists, every array index is a loop
  * counter, and the per-bit selection is an arithmetic mask rather than a
  * conditional.  The accumulator Z is read but not modified during the
- * loop, so the bit extraction sees a stable operand. */
+ * loop, so the bit extraction sees a stable operand.
+ *
+ * The mask goes through ama_ct_value_barrier_u8() and that is load-bearing,
+ * not decoration.  A bare source-level mask is constant-time only in the C
+ * abstract machine: clang 18 at -O2/-O3 proves the mask is 0x00-or-0xFF,
+ * recognises the 16-byte XOR as the identity in the 0x00 case, and emits
+ * `bt`/`jae` to branch straight over it — reintroducing a branch on a bit
+ * of the accumulator, which is a function of the secret subkey H from the
+ * second block onward.  gcc 13 does not.  The barrier hides the mask's
+ * range from both, so the accumulation stays unconditional regardless of
+ * toolchain.  See internal/ama_ct_barrier.h, and
+ * tools/check_ghash_constant_time.py, which measures this path's retired
+ * instruction count under two key classes and fails if it is key-dependent. */
 static void ghash_mul(uint8_t Z[16], const uint8_t H[16]) {
     uint8_t V[16];
     uint8_t out[16];
@@ -298,7 +311,7 @@ static void ghash_mul(uint8_t Z[16], const uint8_t H[16]) {
     for (int i = 0; i < 128; i++) {
         /* Bit i in GCM bit-string order: byte i/8, MSB first. */
         uint8_t bit  = (uint8_t)((Z[i >> 3] >> (7 - (i & 7))) & 1u);
-        uint8_t mask = (uint8_t)(0u - (unsigned)bit);
+        uint8_t mask = ama_ct_value_barrier_u8((uint8_t)(0u - (unsigned)bit));
         for (int k = 0; k < 16; k++)
             out[k] ^= (uint8_t)(V[k] & mask);
         ghash_mul_x(V);

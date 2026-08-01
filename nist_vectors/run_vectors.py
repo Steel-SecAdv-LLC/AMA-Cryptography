@@ -1182,6 +1182,42 @@ def test_slh_dsa_sigver(lib: ctypes.CDLL) -> AlgorithmResult:
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+def _verdict_problems(
+    *,
+    total_fail: int,
+    total_tested: int,
+    errored: list[str],
+    empty: list[str],
+    expected: int,
+    reported: int,
+) -> list[str]:
+    """Every reason this run must not be reported as a success.
+
+    ``total_fail > 0`` used to be the whole verdict, so several distinct ways
+    of validating nothing all exited 0: an algorithm that ran zero vectors
+    (``fail_count == 0`` satisfied the old test and printed "[PASS]"), an
+    algorithm whose harness raised (caught, traced, stepped over), and a run
+    that produced fewer results than the inventory it iterated.  The last is
+    the backstop for a future edit that drops a result without passing through
+    either of the first two.
+
+    Extracted from ``main`` rather than suppressing ruff's ``max-complexity``
+    on it — INVARIANT-13.
+    """
+    problems: list[str] = []
+    if total_fail > 0:
+        problems.append(f"{total_fail} vector failure(s)")
+    if errored:
+        problems.append(f"{len(errored)} algorithm harness(es) raised: {', '.join(errored)}")
+    if empty:
+        problems.append(f"{len(empty)} algorithm(s) ran zero vectors: {', '.join(empty)}")
+    if reported != expected:
+        problems.append(f"{expected - reported} algorithm(s) produced no result at all")
+    if total_tested == 0:
+        problems.append("no vectors were executed by any algorithm")
+    return problems
+
+
 def main() -> int:
     print("=" * 70)
     print("NIST ACVP Vector Validation — AMA Cryptography")
@@ -1217,12 +1253,28 @@ def main() -> int:
 
     start_time = time.time()
 
+    # Algorithms whose harness raised, and algorithms that executed zero
+    # vectors.  Both are tracked because both used to vanish from the verdict:
+    # an exception was printed and stepped over, and an algorithm with no
+    # vectors satisfied `fail_count == 0` and printed "[PASS]".  A gate that
+    # validated nothing at all therefore exited 0 and reported success for
+    # every algorithm in the inventory above.
+    errored: list[str] = []
+    empty: list[str] = []
+
     for name, test_fn in tests:
         print(f"\n--- {name} ---")
         try:
             result = test_fn(lib)
             RESULTS.append(result)
-            status = "PASS" if result.fail_count == 0 else "FAIL"
+            if result.fail_count:
+                status = "FAIL"
+            elif result.vectors_tested == 0:
+                # Not a pass: nothing was compared against anything.
+                status = "EMPTY"
+                empty.append(name)
+            else:
+                status = "PASS"
             print(
                 f"  Tested: {result.vectors_tested}  "
                 f"Pass: {result.pass_count}  "
@@ -1243,6 +1295,9 @@ def main() -> int:
             import traceback
 
             traceback.print_exc()
+            # Record it: a harness that crashed validated nothing, and the
+            # run must not be able to report success without it.
+            errored.append(name)
 
     elapsed = time.time() - start_time
     print(f"\n{'=' * 70}")
@@ -1257,6 +1312,10 @@ def main() -> int:
     print(f"Total pass: {total_pass}")
     print(f"Total fail: {total_fail}")
     print(f"Total skipped: {total_skip}")
+    if empty:
+        print(f"Algorithms that ran ZERO vectors: {', '.join(empty)}")
+    if errored:
+        print(f"Algorithms whose harness raised: {', '.join(errored)}")
 
     # Write results.json
     algo_list: list[dict[str, object]] = []
@@ -1287,6 +1346,10 @@ def main() -> int:
             "total_pass": total_pass,
             "total_fail": total_fail,
             "total_skipped": total_skip,
+            "algorithms_expected": len(tests),
+            "algorithms_reported": len(RESULTS),
+            "algorithms_empty": empty,
+            "algorithms_errored": errored,
         },
         "algorithms": algo_list,
     }
@@ -1295,7 +1358,20 @@ def main() -> int:
     out_path.write_text(json.dumps(results_json, indent=2))
     print(f"\nResults written to {out_path}")
 
-    return 1 if total_fail > 0 else 0
+    problems = _verdict_problems(
+        total_fail=total_fail,
+        total_tested=total_tested,
+        errored=errored,
+        empty=empty,
+        expected=len(tests),
+        reported=len(RESULTS),
+    )
+    if problems:
+        print("\nACVP VALIDATION FAILED — " + "; ".join(problems))
+        return 1
+
+    print("\nACVP VALIDATION PASSED — every algorithm in the inventory ran vectors.")
+    return 0
 
 
 if __name__ == "__main__":

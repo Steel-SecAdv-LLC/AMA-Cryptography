@@ -4,8 +4,8 @@
 
 | Property | Value |
 |----------|-------|
-| Applies to Release | 3.5.0 |
-| Last Updated | 2026-07-30 |
+| Applies to Release | 4.0.0 |
+| Last Updated | 2026-08-01 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -18,6 +18,247 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 ---
 
 ## [Unreleased]
+
+## [4.0.0] - 2026-08-01
+
+### Security — an anchored build no longer accepts the unsigned digest-only fallback
+
+The trust anchor introduced earlier in this release was bypassable, which made
+it decorative on exactly the artefacts it exists to protect.
+
+The signed path refuses a signature made under the wrong key, so an attacker
+could not re-sign edited `.py` files with a key of their own. They never had
+to. Deleting `_integrity_signature.py` outright dropped control through to the
+digest-only fallback, where `_integrity_digest.txt` is plaintext with no
+signature at all — rewrite that one line and arbitrarily modified code was
+accepted, on a build carrying a compiled anchor, with the log reporting the
+wheel had been "built without `AMA_BUILD_PIPELINE=1`". Forging the signature
+was hard; removing it was not, and removal reached the same place.
+
+The guard meant to stop this tested `AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR`, a
+*build-time* variable set inside the cibuildwheel container and gone by the
+time anyone imports the installed wheel — never true at runtime for a released
+artefact, which is precisely where it was needed. The compiled anchor is the
+part of that intent that survives into the shipped `.so`, so the compiled
+anchor is now what is consulted: an anchored build is signed by construction,
+so a missing signature is tampering, not a legacy build. A trust-anchor lookup
+that fails also refuses the fallback, matching the signed path's existing
+fail-closed rule. Unanchored developer builds and source checkouts are
+unchanged and keep the documented WARN-and-continue behaviour, which
+`tests/test_trust_anchor_pinning.py` asserts as the non-vacuity control.
+
+### Security — the scalar GHASH mask is now opaque to the optimizer
+
+The table-free `ghash_mul()` earlier in this release removed a secret-indexed
+lookup and replaced it with a branch-free mask. That is constant-time in the C
+abstract machine only. clang 18 at `-O2` and `-O3` proves the mask is
+`0x00`-or-`0xFF`, recognises the 16-byte XOR as the identity in the `0x00`
+case, and emits `bt` / `jae` to branch over it — putting a branch back on a bit
+of the running accumulator, which is a function of the secret subkey `H` from
+the second block onward. gcc 13 does not. Both builds pass every functional
+test, because the results are identical; only the emitted control flow differs.
+
+`src/c/internal/ama_ct_barrier.h` adds `ama_ct_value_barrier_u8`, the
+BoringSSL/HACL*-style empty-asm value barrier, and `ghash_mul` launders its
+mask through it. clang then keeps the accumulation unconditional (and
+vectorises it); gcc is unaffected.
+
+Verified, not assumed: `tools/check_ghash_constant_time.py` compares retired
+instruction counts under callgrind across key classes with the scalar path
+forced. On the reference build the pre-barrier clang `-O3` object differs by
+3,226 instructions between key classes, the barriered object by 12, against a
+same-key noise floor of 25. A new unconditional `dudect.yml` job runs it on
+every trigger. The existing dudect AES-GCM lane could not have caught this: it
+calls the public entry point, and every x86-64 runner dispatches to the
+PCLMULQDQ kernel, so the scalar GHASH was never executed under measurement.
+
+### Security — package serialization no longer emits the private signing key
+
+`CryptoPackageResult.to_dict()` and `__getstate__` are documented as stripping
+secret fields. `_SECRET_FIELDS` listed only `hmac_key` and
+`hkdf_master_secret`, so the default — the one described as safe — emitted
+`keypairs[...].secret_key`: for the default hybrid signer, ~4 KB of Ed25519 +
+ML-DSA-65 private key. Anything that wrote a package to a log, a cache, a queue
+or a pickle file wrote the signing key with it. `KeyPair` already marked the
+field `repr=False` for this reason; the paths that actually leave the process
+did not follow.
+
+`derived_keys` (the Layer-4 output keys, not just the master secret they come
+from) and `kem_shared_secret` are now stripped as well, and `keypairs` is
+redacted to public keys only. `include_secrets=True` is unchanged and returns
+everything. Pickled packages were already unusable for verification —
+`hmac_key` has always been stripped and Layer 2 cannot be checked without it —
+so no working flow depended on the leak.
+
+### Security — `SecureSession` no longer prints its session keys
+
+`send_key` and `recv_key` were ordinary dataclass fields, so the generated
+`__repr__` rendered both AES-256 keys in full. That reaches much further than a
+deliberate print: a logger called with the session as an argument, a traceback
+showing local variables, `%r` in a debug message, a debugger watch window. Both
+now carry `repr=False`; the fields themselves are unchanged.
+
+### BREAKING — the KDF policy floor now refuses an algorithm downgrade, not only a cost downgrade
+
+The floor added earlier in this release clamps costs *within* an algorithm,
+which left the cheapest move on the board: name a different one.
+`.kdf_metadata.json` carries a `version` field that the Argon2id branch keys
+off, so deleting that one field re-routed derivation to PBKDF2 — and PBKDF2 at
+the 600,000-iteration floor clears its own cost check. The result passed every
+per-parameter test while discarding memory-hardness entirely, which is the
+property Argon2id is chosen for. The control documented as "what actually stops
+the downgrade" did not stop the most valuable downgrade available.
+
+`_enforce_kdf_policy` now also floors the algorithm: on a build with native
+Argon2id, metadata naming PBKDF2 is refused. Builds without native Argon2id are
+unaffected, because PBKDF2 is what `_derive_key_from_password` legitimately
+falls back to there. *Migration:* identical to the cost floor —
+`allow_legacy_kdf=True` warns instead of raising, then `migrate_kdf()`.
+
+### Security — Ed25519 batch verification enforces canonical `y` (INVARIANT-38)
+
+`ama_ed25519_verify` gained the canonical-`y` check, but donna's batch routine
+reaches its point decode through its own internal `ed25519_sign_open`, so
+nothing added there reached `ama_ed25519_batch_verify` — the same structural
+reason the canonical-`S` check in that function already documents. The fe51
+batch path is a loop over `ama_ed25519_verify` and was therefore already
+correct, so the two backends disagreed. Applied per entry alongside the
+canonical-`S` loop.
+
+Only the 19 encodings with `y` in `[p, 2^255)` are affected, and a legitimate
+key collides with one only if its `y` is below 19, so this is an
+encoding-uniqueness guarantee rather than a reachable forgery — the same
+standing INVARIANT-38 has on the single-signature path. The point is that both
+APIs enforce it.
+
+### Security — ChaCha20-Poly1305 enforces the RFC 8439 §2.8 length limit
+
+`ama_chacha20poly1305_encrypt` / `_decrypt` accepted any length. Past
+`(2^32 - 1) * 64` bytes the 32-bit block counter wraps to 0 and the plaintext
+at that offset is XORed with the very block whose first 32 bytes are the
+Poly1305 one-time key `r || s` for that `(key, nonce)` — an authentication-key
+disclosure, not merely a keystream repeat. `ama_aes_gcm.c` already carried the
+equivalent SP 800-38D guard; leaving one AEAD in the tree without the other was
+the inconsistency.
+
+### Fixed — `migrate_kdf` silently orphaned zero-length values
+
+The collection loop used `if key_data:`, so a zero-length stored value — a
+tombstone, a placeholder provisioned before its material arrives, an empty
+result from an upstream serializer — was skipped. The salt and metadata rotated
+around it, leaving that record encrypted under a key the password no longer
+derives: unreadable forever, while `list_keys()` kept reporting it, and nothing
+raised. Now `if key_data is not None:`.
+
+### Fixed — the ACVP runner reported PASS for algorithms that ran no vectors
+
+`nist_vectors/run_vectors.py` decided per-algorithm status on
+`fail_count == 0`, so an algorithm that executed zero vectors printed `[PASS]`,
+and the exit code was `1 if total_fail > 0 else 0`, so a run that validated
+nothing exited 0. An exception inside a harness was printed and stepped over
+without affecting the verdict either. The workflow's separate
+`EXPECTED_VECTORS` cross-check meant the deployed gate was not blind, but the
+script's own verdict was, and it is what a contributor runs by hand.
+
+Zero-vector algorithms now report `EMPTY`, harness exceptions are recorded, and
+the run fails on any of: vector failures, an errored harness, an algorithm with
+no vectors, fewer results than the inventory, or zero vectors overall. The
+verdict logic is extracted to `_verdict_problems` rather than suppressing
+ruff's `max-complexity` on `main` (INVARIANT-13).
+
+### Fixed — `AMA_DISPATCH_ONLY` misreported cross-architecture slots
+
+On an x86-64 build the `aes-gcm-neon`, `chacha20-neon`, `sha3-neon`,
+`kyber-sve2` and `sha3-sve2` branches are compiled out, so those names fell
+through to `AMA_DISPATCH_ONLY_UNRECOGNISED` — telling the operator the name was
+wrong in a sentence that then listed it under "Known slots", and contradicting
+the enum's own definition (`UNSUPPORTED` is documented as covering "the build
+did not compile the kernel"). The slot inventory is now a single
+architecture-independent table used both by the membership test and by the
+diagnostic, so the two cannot drift. CTest skip behaviour is unchanged.
+
+### Fixed — an unset trust anchor no longer inherits a cached one
+
+`setup.py` appended `-DAMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX` only when the
+environment variable was non-empty, and `CMakeLists.txt` declares it as a
+`CACHE STRING`. Building once with an anchor, unsetting the variable, and
+rebuilding in the same tree produced an "unanchored" artefact that still
+carried the old anchor. The flag is now passed unconditionally, so an absent
+anchor explicitly clears the cache entry.
+
+### Fixed — documentation that did not match the code
+
+- **FROST nonce hedging scope.** `nonce_generate`'s rationale said the hedge
+  holds against an adversary who can "predict or replay" the CSPRNG, and the
+  regression test named "a restored VM snapshot replaying the same bytes" as
+  the scenario it covered. The derivation is a pure function of
+  `(label, random, share)` with no state, so a participant handed the same
+  bytes twice emits the identical nonce — and two partial signatures over
+  different messages under one Schnorr nonce disclose the share by
+  subtraction. The hedge defends against a *predictable* CSPRNG, not a
+  *repeating* one; RFC 9591's own `nonce_generate` has the same property. Both
+  comments now say so, and `tests/c/test_frost.c` asserts the repeat as a
+  pinned known limit rather than leaving it to be discovered.
+- **INVARIANT-35** named `slhdsa_params_for()` in its enforcement clause. The
+  function is `slh_lookup()`; it does end in `default: return NULL`, so the
+  invariant held — but an auditor grepping for the cited name found nothing.
+- **`release.yml`** claimed the cibuildwheel pin was the v3.2.0 commit; the SHA
+  is the v4.1.1 tag (the trailing marker was already correct, which is why
+  `check_action_pins.py` never flagged the prose). It also claimed
+  `CIBW_ENVIRONMENT_PASS_LINUX` keeps the signing seed "out of the printed
+  configuration entirely" — checked against the resolver in the pinned 4.1.1,
+  it does not; the passed-through variables are merged back into the resolved
+  build options, and GitHub's secret masking is what redacts the log. The
+  narrower real benefit (one fewer place the literal seed is written) is now
+  what the comment claims.
+- **`benchmarks/arm-baseline.json`.** The 4.0.0 window-extension entry quoted
+  the x86-64 floors (13000/33000/31000) and an x86-64 sandbox run as though
+  they bore on this file, whose AArch64 floors are 11855/30266/28626 — the same
+  x86-64 copy-paste into the AArch64 baseline that the entry immediately above
+  it exists to correct.
+
+### Deferred — the Argon2id legacy shim is not removed in 4.0.0
+
+The 3.0.0 release-summary row records the `legacy_compat` Argon2id migration
+shim as "slated for removal in 4.0.0". It is retained. `ama_argon2id_legacy`,
+`ama_argon2id_legacy_verify` and `native_argon2id_legacy` are a read-only path
+for verifying tags produced by AMA ≤ 2.1.5; removing them would strand anyone
+still holding those tags with no in-library migration route, and SECURITY.md's
+supported-versions table still points 2.1.x users at exactly this shim. They
+remain deprecated, emit `SecurityWarning` on every call, and are never used for
+new hashes. Recorded here rather than left to lapse silently; the removal
+target moves to 5.0.0, by which point the shim will have been available for
+three major versions.
+
+### Testing and gates
+
+- `tools/check_ghash_constant_time.py` — new. Retired-instruction invariance
+  for the scalar AES-GCM path under callgrind. Wired into `dudect.yml` as an
+  unconditional job and into the Constant-Time Gate's aggregation.
+- `tools/check_ed25519_backend_parity.py` — extended with a compressed-point
+  decode stage. The signature corpus could not test the canonical-`y` rule at
+  all: its `pk bitflip` mutations essentially never land in `[p, 2^255)`, and a
+  non-canonical key is not the signer's key, so verify rejects it on the
+  signature and both backends agree without either applying the rule. The new
+  stage pairs `y = 0` (must decode — the curve equation gives `x² = -1`, and
+  `-1` is a square mod `p`) with `y = p`, the same point non-canonically
+  encoded (must be refused). Confirmed to have teeth: stripping the check from
+  one backend makes the gate fail; 1,836 cases now, up from 1,824.
+- `tests/c/test_ed25519_canonical_s.c` — the two canonical-`y` integration
+  assertions were vacuous. `y = p` is not the signer's key, so verify rejected
+  it on the signature and both assertions passed with the check fully removed.
+  Replaced with the `y = 0` / `y = p` decode pair, whose accept half is what
+  makes the reject half evidence; verified to fail with the check stripped and
+  to pass with it.
+- `.github/workflows/integrity-anchor-check.yml` — gains `workflow_call` and a
+  `paths`-scoped `pull_request` trigger. `release.yml` now invokes it as a
+  `verify-anchor` job gating `build-wheels`, so a mismatched seed/anchor pair
+  costs one ubuntu build instead of surfacing 40 minutes into the cibuildwheel
+  matrix. The PR trigger closes the bootstrap gap that made the workflow
+  undispatchable until after the merge it was meant to gate; fork PRs are
+  skipped, since repository secrets are not exposed to them.
+- New regression tests for every fix above, each written so that the assertion
+  fails on the unfixed code and each paired with a non-vacuity control.
 
 ### BREAKING — `verify_crypto_package` no longer reports `all_valid` without a trust anchor
 

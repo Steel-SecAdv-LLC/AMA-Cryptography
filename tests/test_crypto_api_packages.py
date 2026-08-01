@@ -318,6 +318,51 @@ class TestCryptoPackageSerialization:
         assert d["hmac_key"] == pkg.hmac_key
         assert d["hkdf_master_secret"] == pkg.hkdf_master_secret
 
+    def test_to_dict_strips_the_private_signing_key(self) -> None:
+        """The most sensitive field in the package must not survive to_dict().
+
+        Regression: ``_SECRET_FIELDS`` covered only ``hmac_key`` and
+        ``hkdf_master_secret``, so the default — documented as stripping
+        secrets — emitted ``keypairs[...].secret_key``, ~4 KB of Ed25519 +
+        ML-DSA-65 private key. The assertions below fail on that code.
+        """
+        pkg = create_crypto_package(b"data")
+        assert pkg.keypairs, "package must carry at least one keypair to test"
+        # Non-vacuity: the live object really does hold a private key, so a
+        # zero-length secret in the dict is stripping and not absence.
+        assert all(len(kp.secret_key) > 0 for kp in pkg.keypairs.values())
+
+        d = pkg.to_dict()
+        for name, kp in d["keypairs"].items():
+            assert kp.secret_key == b"", f"{name} private key leaked through to_dict()"
+            assert kp.public_key == pkg.keypairs[name].public_key, "public key must survive"
+        assert "derived_keys" not in d
+        assert "kem_shared_secret" not in d
+
+        # Redaction is a copy, never a mutation of the caller's package.
+        assert all(len(kp.secret_key) > 0 for kp in pkg.keypairs.values())
+
+        full = pkg.to_dict(include_secrets=True)
+        assert full["keypairs"]["HYBRID_SIG"].secret_key == pkg.keypairs["HYBRID_SIG"].secret_key
+        assert full["derived_keys"] == pkg.derived_keys
+
+    def test_pickle_strips_the_private_signing_key(self) -> None:
+        """Same leak, via ``__getstate__``. Public material still round-trips."""
+        import pickle
+
+        pkg = create_crypto_package(b"data")
+        restored = pickle.loads(pickle.dumps(pkg))  # noqa: S301  --  self-produced blob (CAP-005)  # fmt: skip
+        for name, kp in restored.keypairs.items():
+            assert kp.secret_key == b"", f"{name} private key survived pickling"
+            assert kp.public_key == pkg.keypairs[name].public_key
+        assert restored.derived_keys == []
+        assert restored.kem_shared_secret is None
+        # Placeholders must keep their declared types, not collapse to b"".
+        assert isinstance(restored.derived_keys, list)
+        # Two restores must not share one placeholder list.
+        other = pickle.loads(pickle.dumps(pkg))  # noqa: S301  --  self-produced blob (CAP-005)  # fmt: skip
+        assert restored.derived_keys is not other.derived_keys
+
     def test_pickle_strips_secrets(self) -> None:
         import pickle
 

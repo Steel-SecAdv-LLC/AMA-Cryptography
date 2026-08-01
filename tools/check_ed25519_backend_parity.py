@@ -47,6 +47,15 @@ and stays meaningful as the code changes:
 3. **Structured corruption** — single-bit flips across ``R``, ``S``, the
    message and the public key, plus out-of-range ``S`` values at the ``L``
    boundary.
+4. **Compressed-point decode** (INVARIANT-38) — canonical and non-canonical
+   encodings of the same curve point, put to ``ama_ed25519_point_add`` and
+   ``ama_ed25519_scalarmult_public`` rather than to verify.  Families 1-3
+   cannot test the canonical-``y`` rule: a non-canonical public key is not the
+   signer's key, so verify rejects it on the signature regardless and the two
+   backends agree without either having applied the rule.  Family 4 pairs
+   ``y = 0`` (must decode) with ``y = p`` — the same point, non-canonically
+   encoded (must be refused) — so a backend that dropped the rule, or applied
+   it on only some entry points, becomes a disagreement.
 
 Exit status
 -----------
@@ -100,6 +109,20 @@ class Backend:
             ctypes.c_char_p,
         ]
 
+        self.lib.ama_ed25519_point_add.restype = ctypes.c_int
+        self.lib.ama_ed25519_point_add.argtypes = [
+            ctypes.c_char_p,
+            ctypes.c_char_p,
+            ctypes.c_char_p,
+        ]
+
+        self.lib.ama_ed25519_scalarmult_public.restype = ctypes.c_int
+        self.lib.ama_ed25519_scalarmult_public.argtypes = [
+            ctypes.c_char_p,
+            ctypes.c_char_p,
+            ctypes.c_char_p,
+        ]
+
     def keypair(self) -> tuple[bytes, bytes]:
         public = ctypes.create_string_buffer(32)
         secret = ctypes.create_string_buffer(64)
@@ -112,6 +135,29 @@ class Backend:
         if self.lib.ama_ed25519_sign(signature, message, len(message), secret) != 0:
             raise RuntimeError(f"{self.name}: ama_ed25519_sign failed")
         return signature.raw[:64]
+
+    def point_add(self, p_enc: bytes, q_enc: bytes) -> bool:
+        """True when both operands decoded and the addition succeeded.
+
+        Exposed because the signature path cannot discriminate the
+        canonical-``y`` rule (INVARIANT-38): a non-canonical public key is
+        never the signer's key, so verify rejects it on the signature whether
+        or not the encoding rule is enforced, and both backends agree
+        vacuously.  ``ama_ed25519_point_add`` reports decode success directly,
+        which is what makes the comparison in ``build_decode_cases`` able to
+        fail.
+        """
+        if len(p_enc) != 32 or len(q_enc) != 32:
+            raise ValueError("compressed points must be exactly 32 bytes")
+        out = ctypes.create_string_buffer(32)
+        return bool(self.lib.ama_ed25519_point_add(out, p_enc, q_enc) == 0)
+
+    def scalarmult_public(self, scalar: bytes, point_enc: bytes) -> bool:
+        """True when the point decoded and the scalar multiplication succeeded."""
+        if len(scalar) != 32 or len(point_enc) != 32:
+            raise ValueError("scalar and compressed point must be exactly 32 bytes")
+        out = ctypes.create_string_buffer(32)
+        return bool(self.lib.ama_ed25519_scalarmult_public(out, scalar, point_enc) == 0)
 
     def verify(self, message: bytes, signature: bytes, public: bytes) -> bool:
         # ama_ed25519_verify takes `const uint8_t signature[64]` with no length
@@ -235,6 +281,43 @@ def build_cases(signer: Backend) -> list[Case]:
     return cases
 
 
+#: Compressed-point decode cases for INVARIANT-38 (canonical ``y``), as
+#: (label, encoding, must_decode).
+#:
+#: Why these and not more signature cases: the corpus above cannot test the
+#: ``y`` rule at all.  Its ``pk bitflip`` mutations essentially never land in
+#: [p, 2^255) — that band needs limbs 1..30 all 0xFF and (byte31 & 0x7F) ==
+#: 0x7F — and even if one did, the mutated key is not the signer's, so verify
+#: rejects it on the signature and both backends agree whether or not either
+#: enforces canonicality.  Agreement reached that way proves nothing.
+#:
+#: ``y = 0`` breaks the symmetry.  It is a genuine curve point: the curve
+#: equation gives x^2 = -1 there, and -1 is a square mod p because p = 1 mod 4,
+#: so the encoding decodes to the order-4 point.  ``y = p`` reduces to 0 and
+#: therefore denotes the SAME point — the only thing that can separate the two
+#: is the canonical-y rule.  Pairing a must-decode case with a must-reject case
+#: over one point is what makes a backend that dropped the rule (or applied it
+#: only on one entry point) show up as a disagreement instead of a silent pass.
+_P_ENC = bytes([0xED] + [0xFF] * 30 + [0x7F])  # y = p, non-canonical
+_ZERO_ENC = bytes(32)  # y = 0, canonical, same point
+_ONE_ENC = bytes([1] + [0] * 31)  # y = 1, the identity
+_MAX_ENC = bytes([0xFF] * 31 + [0x7F])  # y = 2^255 - 1, non-canonical
+_PM1_ENC = bytes([0xEC] + [0xFF] * 30 + [0x7F])  # y = p - 1, canonical
+_TWO_SCALAR = bytes([2] + [0] * 31)  # small scalar for the scalarmult probe
+
+#: ``expected`` is True (must decode), False (must be refused), or None
+#: (no absolute requirement — the two backends must merely agree).  y = p-1 is
+#: canonical but is not on the curve, so only agreement is asserted for it.
+DECODE_CASES: tuple[tuple[str, bytes, Optional[bool]], ...] = (
+    ("y=0 (canonical, decodes)", _ZERO_ENC, True),
+    ("y=1 (canonical identity, decodes)", _ONE_ENC, True),
+    ("y=p (non-canonical twin of y=0)", _P_ENC, False),
+    ("y=p with sign bit set", bytes([0xED] + [0xFF] * 30 + [0xFF]), False),
+    ("y=2^255-1 (non-canonical)", _MAX_ENC, False),
+    ("y=p-1 (largest canonical y, off-curve)", _PM1_ENC, None),
+)
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         description="Assert both Ed25519 backends return identical verdicts."
@@ -290,6 +373,49 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                         f"      sig={case.signature.hex()}\n"
                         f"      pk ={case.public_key.hex()}"
                     )
+
+    # Compressed-point decode parity (INVARIANT-38).  Runs on the two decode
+    # entry points rather than on verify, for the reason recorded on
+    # DECODE_CASES: verify cannot distinguish the y rule, so a signature-only
+    # corpus agrees vacuously and this gate would report "the backends accept
+    # the same set of encodings" without ever having tested that claim.
+    decode_asserted = 0
+    for label, encoding, expected in DECODE_CASES:
+        for op_name, op in (
+            ("point_add", lambda be, e: be.point_add(e, _ONE_ENC)),
+            ("scalarmult_public", lambda be, e: be.scalarmult_public(_TWO_SCALAR, e)),
+        ):
+            checked += 1
+            a = op(donna, encoding)
+            b = op(fe51, encoding)
+            if a != b:
+                disagreements.append(
+                    f"  decode  op={op_name:<18} case={label}\n"
+                    f"      donna={a}  fe51={b}\n"
+                    f"      point={encoding.hex()}"
+                )
+            elif expected is not None and a is not expected:
+                decode_asserted += 1
+                disagreements.append(
+                    f"  decode  op={op_name:<18} case={label}\n"
+                    f"      both backends returned {a}, expected {expected}\n"
+                    f"      (agreement alone is not correctness — INVARIANT-38)\n"
+                    f"      point={encoding.hex()}"
+                )
+            elif expected is not None:
+                decode_asserted += 1
+
+    # Same fail-closed reasoning as must_verify_seen: a decode stage in which
+    # every absolute assertion was skipped is not evidence of anything.  The
+    # canonical y=0 / non-canonical y=p pair is the discriminating half, so
+    # require that both halves actually ran.
+    if decode_asserted == 0:
+        print(
+            "BACKEND DIFFERENTIAL INCONCLUSIVE — the decode stage asserted nothing,\n"
+            "so the canonical-y rule (INVARIANT-38) was never tested.",
+            file=sys.stderr,
+        )
+        return 2
 
     # A corpus with no must-verify case would let a pair of backends that
     # reject everything pass as "in agreement".  Fail closed rather than
