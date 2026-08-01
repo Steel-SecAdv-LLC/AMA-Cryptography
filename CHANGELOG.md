@@ -110,6 +110,94 @@ The general rule, since it will recur: **finding one instance of a defect
 pattern is a reason to sweep for the rest, and a threshold set between one
 known defect and one assumed-clean baseline is only as good as the assumption.**
 
+### Security — `constant_time_compare` fell back to a pure-Python loop (INVARIANT-7)
+
+Raised in review. `secure_memory.constant_time_compare()` used AMA's native
+`ama_consttime_memcmp` when available and otherwise ran a padded pure-Python
+XOR accumulator — documented, here and in `CONSTANT_TIME_VERIFICATION.md`, as
+the constant-time fallback.
+
+INVARIANT-7 names exactly that as an unacceptable substitute: *"a pure-Python
+fallback for any cryptographic primitive or secret-dependent operation"*. This
+is a secret-dependent operation by INVARIANT-12's own definition, which lists
+"pre-verification MAC/tag comparisons" as secret material, and the callers are
+HMAC tag verification in `verify_crypto_package` and the pinned-responder-key
+check in `secure_channel`.
+
+The loop was also not constant-time in fact, only in shape: `ljust` allocates,
+`zip` builds tuples, and `result |= x ^ y` runs CPython's integer path with its
+small-int cache. None of that retires a fixed instruction count. A fallback
+documented as constant-time and not being so is worse than no fallback, because
+callers stop asking.
+
+It now raises `RuntimeError`, at call time, in the same shape `pqc_backends`
+uses. Import still succeeds — this module is also used for non-cryptographic
+memory hygiene and has no import-time guard — which is what keeps the
+documented `AMA_SPHINX_BUILD` docs path working, since the refusal is on the
+call rather than the import.
+
+`TestConstantTimeCompareRefusesWithoutTheNativeBackend` replaces the four tests
+that asserted the fallback's *answers*. Those answers were right, which is why
+they could never have caught this. The new class drives every input shape —
+including the equal case, which is what an attacker gets on a host with no
+native library — plus a non-vacuity control on the native path and a structural
+check that the loop cannot return as a convenience, since a reintroduced
+fallback would pass every behavioural test in the file.
+
+### Fixed — the Ed25519 canonical-`y` Python tests were vacuous
+
+Raised in review, and correct. `tests/test_ed25519_canonical_y.py` drove every
+assertion through `native_ed25519_verify`, passing a non-canonical `y` as the
+public key alongside a signature made by a *different* keypair. Verify returns
+False for the wrong-key reason whether or not the canonical-`y` rule exists, so
+all thirty-eight parametrized assertions passed with the check fully removed.
+Demonstrated: the canonical values `y = 0` and `y = 12345` return False through
+that same call for exactly the same reason.
+
+This is the third time this defect class has been found in the coverage for
+this one invariant — `tests/c/test_ed25519_canonical_s.c` had it and
+`tools/check_ed25519_backend_parity.py` had it, both fixed earlier in this
+release. The lesson is the same each time: **a rejection is only evidence when
+something that differs from it in exactly one respect is accepted.**
+
+Rewritten around the pair the C test settled on, driven through the two decode
+entry points (`ama_ed25519_point_add`, `ama_ed25519_scalarmult_public`) rather
+than through verify, which cannot separate a decode refusal from a signature
+mismatch. `y = 0` is a genuine curve point and must decode; `y = p` reduces to
+it — the same point, non-canonically encoded — and must be refused. Nothing but
+the canonicality rule separates them.
+
+The rewrite also falsified one of its own assumptions, which is worth
+recording: `y = p - 1` was expected to be off-curve and asserted to fail. It is
+on the curve and decodes. That makes `p - 1` / `p` an exact adjacent-integer
+accept/reject boundary pair — a sharper control than the one originally
+written, and the reason boundary assertions should be measured rather than
+predicted. 88 tests, up from 43.
+
+### Verified — the instruction-count sweep found no other key-dependent path
+
+The technique that found the three secp256k1 leaks had not been run anywhere
+else, so it was. Retired instruction counts under callgrind across 8 key
+classes, each with a same-class noise floor, on deterministic drivers:
+
+| operation | noise floor | cross-class spread |
+|---|---|---|
+| Ed25519 sign | 0 | **0** |
+| X25519 key exchange | 0 | **0** |
+| ML-KEM-1024 decapsulate (ciphertext varied) | 1 | 19 |
+| Argon2id | 8 | 24 |
+| HKDF-SHA3-256 | 2 | 21 |
+
+The residual ~20 on the last three is the same measurement constant the GHASH
+and ECDSA gates show on a clean build. No leak. Recorded because a negative
+result from a technique that has already found three defects is evidence, and
+because the first ML-KEM run *did* show 8,810 — entirely an artefact of the
+harness generating its keypair with the RNG, which puts ML-KEM's
+rejection sampling (legitimately variable-time, on public data) inside the
+measurement. Fixed by seeding the keypair deterministically and varying only
+the attacker-controlled ciphertext, which is the input the FO transform's
+implicit rejection must be constant-time in.
+
 ### Security — a malformed KDF cost bypassed the policy floor entirely
 
 Raised in review against `_enforce_kdf_policy`, and the live defect turned out

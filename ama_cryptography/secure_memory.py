@@ -534,9 +534,33 @@ def constant_time_compare(a: bytes, b: bytes) -> bool:
     """
     Compare two byte sequences in constant time.
 
-    Primary: uses ama_consttime_memcmp from AMA's native C library.
-    Fallback: pure-Python XOR accumulator that pads both inputs to
-    equal length and never short-circuits on length or content.
+    Uses ``ama_consttime_memcmp`` from AMA's native C library, and refuses to
+    operate without it.
+
+    INVARIANT-7, no cryptographic fallbacks
+    ---------------------------------------
+    This function used to fall back to a pure-Python XOR accumulator, and both
+    the docstring and ``CONSTANT_TIME_VERIFICATION.md`` described that
+    accumulator as the constant-time fallback. INVARIANT-7 names exactly that
+    substitution as unacceptable — *"a pure-Python fallback for any
+    cryptographic primitive or secret-dependent operation"* — and this is a
+    secret-dependent operation by INVARIANT-12's own definition, which lists
+    "pre-verification MAC/tag comparisons" as secret material. Its callers are
+    HMAC tag verification in ``crypto_api.verify_crypto_package`` and the
+    pinned-responder-key check in ``secure_channel``.
+
+    The loop was also not constant-time in fact, only in shape. ``ljust``
+    allocates, ``zip`` builds tuples, and ``result |= x ^ y`` runs the CPython
+    integer path with its small-int cache — none of which retires a fixed
+    instruction count. A fallback that is documented as constant-time and is
+    not is worse than no fallback, because callers stop asking.
+
+    So the availability axis is enforced the way INVARIANT-7 requires, at call
+    time and in the same shape ``pqc_backends`` uses: no native backend, no
+    operation. Import still succeeds (this module has no import-time guard and
+    is used for non-cryptographic memory hygiene too), which is also what keeps
+    the documented ``AMA_SPHINX_BUILD`` docs path working — the refusal is on
+    the call, not the import.
 
     Args:
         a: First byte sequence
@@ -545,32 +569,34 @@ def constant_time_compare(a: bytes, b: bytes) -> bool:
     Returns:
         True if sequences are equal, False otherwise
 
+    Raises:
+        RuntimeError: If the native constant-time backend is unavailable.
+
     Example:
         >>> constant_time_compare(b"secret", b"secret")
         True
         >>> constant_time_compare(b"secret", b"Secret")
         False
     """
-    # Try AMA's native C constant-time comparison
-    if _native_consttime_memcmp is not None:
-        # Branch-free: both length check and content check always execute.
-        # Pad to equal length so memcmp runs on the same number of bytes
-        # regardless of input lengths.
-        max_len = max(len(a), len(b), 1)
-        a_pad = a.ljust(max_len, b"\x00")
-        b_pad = b.ljust(max_len, b"\x00")
-        length_diff = len(a) ^ len(b)
-        content_diff: int = _native_consttime_memcmp(a_pad, b_pad, max_len)
-        return (length_diff | content_diff) == 0
+    if _native_consttime_memcmp is None:
+        raise RuntimeError(
+            "INVARIANT-7: constant_time_compare requires AMA's native "
+            "ama_consttime_memcmp and refuses to operate without it. A "
+            "pure-Python comparison is not constant-time on CPython, and this "
+            "function is used for MAC/tag verification and key pinning. Build "
+            "the native library: "
+            "cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
+        )
 
-    # Fallback: pure-Python XOR accumulator — no imports, no early return
-    result = len(a) ^ len(b)
-    max_len = max(len(a), len(b))
+    # Branch-free: both length check and content check always execute.
+    # Pad to equal length so memcmp runs on the same number of bytes
+    # regardless of input lengths.
+    max_len = max(len(a), len(b), 1)
     a_pad = a.ljust(max_len, b"\x00")
     b_pad = b.ljust(max_len, b"\x00")
-    for x, y in zip(a_pad, b_pad):
-        result |= x ^ y
-    return result == 0
+    length_diff = len(a) ^ len(b)
+    content_diff: int = _native_consttime_memcmp(a_pad, b_pad, max_len)
+    return (length_diff | content_diff) == 0
 
 
 def secure_random_bytes(size: int) -> bytes:

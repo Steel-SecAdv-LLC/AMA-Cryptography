@@ -7,8 +7,8 @@ Additional coverage for ``ama_cryptography.secure_memory``.
 Exercises the less-trivial branches:
     * secure_mlock / secure_munlock with immutable ``bytes`` objects and
       small platform-specific fall-throughs.
-    * The pure-Python fallback of ``constant_time_compare`` (by bypassing
-      the cached native probe).
+    * ``constant_time_compare`` refusing to operate without the native
+      backend (by bypassing the cached native probe), per INVARIANT-7.
     * The public ``get_status`` helper and the backend-selection probes.
     * The ``secure_buffer`` context manager helper.
     * ``_load_native_consttime`` / ``_try_native_ama_memzero`` exception
@@ -112,28 +112,61 @@ class TestMlockMunlockBytes:
             sm.secure_munlock(memoryview(buf))
 
 
-class TestConstantTimePurePython:
-    """Exercise the pure-Python fallback of ``constant_time_compare``.
+class TestConstantTimeCompareRefusesWithoutTheNativeBackend:
+    """INVARIANT-7: no cryptographic fallbacks, ever.
 
-    Done by temporarily replacing the module-level cached native pointer
-    with ``None`` so the fallback branch executes.
+    This class used to assert the opposite — that a pure-Python XOR
+    accumulator answered correctly when the native pointer was ``None``. It
+    did answer correctly, and that was the problem: correctness is not the
+    property in question. INVARIANT-7 names "a pure-Python fallback for any
+    cryptographic primitive or secret-dependent operation" as an unacceptable
+    substitute, and INVARIANT-12 lists "pre-verification MAC/tag comparisons"
+    as secret material. This function's callers are HMAC tag verification in
+    ``crypto_api.verify_crypto_package`` and the pinned-responder-key check in
+    ``secure_channel``.
+
+    The loop was also not constant-time in fact, only in shape: ``ljust``
+    allocates, ``zip`` builds tuples, and ``|=`` runs CPython's integer path
+    with its small-int cache. Tests that asserted its *answers* could never
+    have noticed, because the answers were right.
     """
 
-    def test_fallback_equal(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    @pytest.mark.parametrize(
+        "a,b",
+        [(b"abc", b"abc"), (b"abc", b"abd"), (b"short", b"longer"), (b"", b"")],
+    )
+    def test_it_raises_rather_than_comparing(
+        self, monkeypatch: pytest.MonkeyPatch, a: bytes, b: bytes
+    ) -> None:
+        """Every input shape refuses — including the ones that would compare equal.
+
+        The equal case is the important one: a fallback that returned True
+        here is what an attacker gets on a host with no native library.
+        """
         monkeypatch.setattr(sm, "_native_consttime_memcmp", None)
+        with pytest.raises(RuntimeError, match="INVARIANT-7"):
+            sm.constant_time_compare(a, b)
+
+    def test_the_native_path_still_works(self) -> None:
+        """Non-vacuity: the refusal must be about the backend, not the inputs."""
         assert sm.constant_time_compare(b"abc", b"abc") is True
-
-    def test_fallback_unequal(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(sm, "_native_consttime_memcmp", None)
         assert sm.constant_time_compare(b"abc", b"abd") is False
-
-    def test_fallback_different_lengths(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(sm, "_native_consttime_memcmp", None)
         assert sm.constant_time_compare(b"short", b"longer") is False
-
-    def test_fallback_empty(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(sm, "_native_consttime_memcmp", None)
         assert sm.constant_time_compare(b"", b"") is True
+
+    def test_no_python_comparison_loop_remains(self) -> None:
+        """The removed loop must not come back as a "temporary" convenience.
+
+        Checked structurally rather than behaviourally because a reintroduced
+        fallback would pass every behavioural test in this file — that is
+        exactly how it survived until now.
+        """
+        import inspect
+
+        source = inspect.getsource(sm.constant_time_compare)
+        body = source.split('"""')[-1]
+        assert "for x, y in zip" not in body
+        assert "raise RuntimeError" in body
 
 
 class TestIsAvailable:

@@ -20,7 +20,16 @@ Constant-time implementations are critical for preventing timing side-channel at
 1. **C Layer**: Custom constant-time utilities in `src/c/ama_consttime.c` (C11 atomics for thread safety)
 2. **Python Layer**: `secure_memory.constant_time_compare()`, which calls AMA's
    own `ama_consttime_memcmp` through ctypes (INVARIANT-1: no third-party
-   crypto), with a padded pure-Python XOR accumulator as the fallback
+   crypto) and **raises `RuntimeError` when that backend is unavailable**
+   rather than substituting anything. It previously fell back to a padded
+   pure-Python XOR accumulator, described here as constant-time. INVARIANT-7
+   names that substitution as unacceptable for a secret-dependent operation,
+   and INVARIANT-12 counts "pre-verification MAC/tag comparisons" as exactly
+   that — the callers are HMAC tag verification and pinned-key comparison. The
+   loop was not constant-time in fact either, only in shape: `ljust`
+   allocates, `zip` builds tuples, and `|=` runs CPython's integer path with
+   its small-int cache. A fallback documented as constant-time and not being
+   so is worse than none, because callers stop asking.
 3. **Native PQC Layer**: All PQC implementations (ML-DSA-65, ML-KEM-1024, SLH-DSA) use constant-time primitives internally
 4. **Ed25519 Layer**: on the portable fe51 backend, dedicated `fe25519_sq()`
    field squaring and C11 `_Atomic` initialization guards; on x86-64 the
