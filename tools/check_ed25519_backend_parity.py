@@ -36,8 +36,12 @@ a differential catches "one was fixed and the other was not".
 
 Corpus
 ------
-Three families, all generated at run time so the check needs no vendored data
-and stays meaningful as the code changes:
+Four families.  The first three are generated at run time from freshly minted
+keypairs, so the check needs no vendored data and stays meaningful as the code
+changes; the fourth is a fixed table of compressed-point encodings
+(``DECODE_CASES``), because the encodings that discriminate the canonical-``y``
+rule are specific constants derived from ``p`` and cannot be stumbled upon by
+generation — which is exactly why the first three families cannot test it:
 
 1. **Honest signatures** — produced by each backend, cross-verified by the
    other.  This also pins that the two agree on *signing*, not just verifying.
@@ -59,9 +63,20 @@ and stays meaningful as the code changes:
 
 Exit status
 -----------
-``0`` when every case agrees, ``1`` on any disagreement (each is printed with
-the inputs needed to reproduce it), ``2`` if a library could not be loaded —
-an unrunnable comparison is never reported as a passing one.
+``0`` when every case agrees and both non-vacuity guards were satisfied.
+
+``1`` on any disagreement, or on a case where the two backends agreed on an
+answer that is absolutely wrong (a genuine signature rejected by both, a
+must-decode encoding refused by both) — each is printed with the inputs needed
+to reproduce it.  Agreement is the property this tool exists to check, but it
+is not on its own evidence of correctness, so the assertions that do not
+depend on agreement are reported through the same exit code.
+
+``2`` when the comparison could not be made to mean anything: a library that
+would not load, a corpus with no genuine signature in it, or a decode stage in
+which no absolute assertion ran.  An unrunnable comparison is never reported
+as a passing one, and the distinct exit code keeps "inconclusive" from being
+read as "failed".
 """
 
 from __future__ import annotations
@@ -78,7 +93,11 @@ from typing import Optional, Sequence
 L = 2**252 + 27742317777372353535851937790883648493
 
 #: Number of independent keypairs to exercise.  Each contributes one honest
-#: signature plus every mutation below, so the case count is a multiple of it.
+#: signature, four ``S``-boundary cases, and 32 structured-corruption cases,
+#: plus the ``S + L`` malleable twin whenever that value still fits in 32
+#: bytes — which it does for every canonical signature, since ``S < L`` gives
+#: ``S + L < 2*L < 2**253``, but the code tests it rather than assuming it, so
+#: the per-keypair count is 37 or 38 and not a fixed multiple.
 KEYPAIRS = 24
 
 
@@ -253,7 +272,10 @@ def build_cases(signer: Backend) -> list[Case]:
 
         # Structured corruption across every field the verifier reads.  The
         # message is never empty (see its length expression above), so every
-        # mutation below always applies.
+        # mutation below always applies — `_flip_bit` reduces the byte index
+        # modulo the buffer length, so on a short message two bit indices can
+        # land on the same byte and produce the same case.  That costs a
+        # duplicate, never a skipped mutation.
         for bit in (0, 1, 7, 8, 63, 127, 254, 255):
             cases.append(
                 Case(

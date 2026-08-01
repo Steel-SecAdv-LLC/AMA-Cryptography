@@ -93,6 +93,43 @@ import subprocess
 import sys
 from pathlib import Path
 
+#: One-line summary, rendered by ``--help``.
+#:
+#: Spelled out rather than sliced out of ``__doc__``.  This used to read
+#: ``description=__doc__.split("\n")[3]``, and index 3 of this module's
+#: docstring is the blank line under the title underline — so ``--help``
+#: printed a usage block, the two option rows, and no description of what the
+#: tool does or when it fails.  Any edit to the header (a longer title, a
+#: reflowed first paragraph) silently changed which line was picked, which is
+#: what makes the slice the wrong construction rather than merely
+#: off-by-three.  ``test_release_tag_gate.py`` asserts this string reaches the
+#: rendered output.
+DESCRIPTION = (
+    "Refuse to release from a tag that is not an annotated, signed tag " "object (INVARIANT-10)."
+)
+
+#: Rendered under the options by ``--help``.  The two verdicts and the CI trap
+#: are what a reader hitting a red gate needs, and they are not discoverable
+#: from the option list.
+EPILOG = """\
+checked, fail-closed:
+  1. the ref resolves under refs/tags/ (a same-named branch does not count)
+  2. it names a tag object, not a commit (the lightweight case)
+  3. that object carries a complete OpenPGP, SSH or SIGNED MESSAGE block
+
+NOT checked: the signature is not verified. That needs a trust store this
+repository deliberately does not ship, so this gate reports shape only
+(INVARIANT-37). GitHub's verified/unverified badge is the complementary
+account-level check.
+
+in CI: fetch the tag ref first --
+  git fetch --force origin refs/tags/<tag>:refs/tags/<tag>
+actions/checkout writes a lightweight local ref at the tag's name, which
+reads as failure (2) on a correctly annotated tag.
+
+exit status: 0 pass, 1 the tag is not releasable.
+"""
+
 #: The armour delimiters of each signature format git emits, as
 #: ``(begin, end)`` pairs. git writes the OpenPGP form for
 #: ``gpg.format=openpgp`` (the default), the SSH form for ``gpg.format=ssh``,
@@ -212,7 +249,11 @@ def check(tag: str, repo: Path) -> list[str]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.split("\n")[3])
+    parser = argparse.ArgumentParser(
+        description=DESCRIPTION,
+        epilog=EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     parser.add_argument("tag", help="tag name, e.g. v4.0.0")
     parser.add_argument(
         "--repo",

@@ -34,13 +34,16 @@ including ones no local key could produce.
 
 from __future__ import annotations
 
+import ast
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 from tools.check_release_tag import (
+    DESCRIPTION,
     SIGNATURE_DELIMITERS,
     SIGNATURE_HEADERS,
     check,
@@ -343,3 +346,90 @@ class TestTheGateIsWiredIntoTheReleasePipeline:
         preceding = workflow[:invocation]
         assert "refs/tags/${TAG}:refs/tags/${TAG}" in preceding
         assert "--force" in preceding[preceding.index("git fetch") :]
+
+
+class TestTheHelpOutputIsUsable:
+    """``--help`` printed a usage line and no description at all.
+
+    The parser was built with ``description=__doc__.split("\\n")[3]``, and
+    index 3 of the module docstring is the blank line under the title
+    underline. Every ``--help`` invocation since the tool was written printed
+    the usage block, two option rows, and nothing that said what the tool
+    checks or when it fails — while the docstring it was slicing runs to
+    eighty lines of exactly that.
+
+    Slicing a docstring by line number is the wrong construction regardless of
+    the index: reflowing the header silently changes which line is picked, and
+    nothing in the tool would report it. ``DESCRIPTION`` and ``EPILOG`` are
+    named constants for that reason, and these tests assert they reach the
+    rendered output rather than merely existing.
+    """
+
+    @staticmethod
+    def _help_text() -> str:
+        result = subprocess.run(
+            [sys.executable, "tools/check_release_tag.py", "--help"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr
+        return result.stdout
+
+    def test_the_description_is_not_empty(self) -> None:
+        assert DESCRIPTION.strip(), "the --help description is blank"
+
+    def test_the_description_is_rendered(self) -> None:
+        text = self._help_text()
+        # argparse re-wraps the description, so compare on words rather than
+        # on the string: a line-wrap must not be able to fail this test, and a
+        # missing description must not be able to pass it.
+        for word in ("annotated", "signed", "INVARIANT-10"):
+            assert word in text, f"{word!r} missing from --help output"
+
+    def test_the_epilog_carries_the_verdicts_and_the_ci_trap(self) -> None:
+        text = self._help_text()
+        assert "refs/tags/" in text
+        assert "exit status" in text
+        assert "git fetch --force origin refs/tags/<tag>:refs/tags/<tag>" in text
+
+    def test_the_epilog_states_that_signatures_are_not_verified(self) -> None:
+        """INVARIANT-37: the boundary is published, including in ``--help``.
+
+        A reader who only ever sees ``--help`` must not come away thinking a
+        PASS from this tool is a cryptographic result.
+        """
+        text = self._help_text()
+        assert "NOT checked" in text
+        assert "not verified" in text
+
+    def test_the_description_is_not_sliced_out_of_the_docstring(self) -> None:
+        """The construction, not just its current output.
+
+        A future edit that reintroduced ``__doc__.split(...)`` would render
+        correctly for exactly as long as the header stayed the same length,
+        and would then go quiet.  Asserted over the parsed syntax tree rather
+        than over the file's text, so the module's own comment *about* the old
+        construction cannot trip it — a text search here would fail on the
+        explanation of the very defect it is checking for.
+        """
+        tree = ast.parse(Path("tools/check_release_tag.py").read_text(encoding="utf-8"))
+        parsers = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "ArgumentParser"
+        ]
+        assert len(parsers) == 1, f"expected one ArgumentParser, found {len(parsers)}"
+        described = {
+            keyword.arg: keyword.value
+            for keyword in parsers[0].keywords
+            if keyword.arg in {"description", "epilog"}
+        }
+        assert set(described) == {"description", "epilog"}
+        for name, value in described.items():
+            assert isinstance(value, ast.Name), (
+                f"{name}= is a {type(value).__name__}, not a named constant; "
+                "computing it from __doc__ is what rendered an empty --help"
+            )
