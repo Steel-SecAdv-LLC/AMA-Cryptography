@@ -35,11 +35,27 @@ import sys
 import time
 from pathlib import Path
 
-import numpy as np
-
 # Add project root to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
+# numpy is optional here, and deliberately so.
+#
+# ama_cryptography has zero runtime dependencies — its numerics live in
+# ama_cryptography._numeric — so a shipped example that fails at import on a
+# clean install is not demonstrating the library, it is demonstrating a
+# dependency the library does not have. numpy is nevertheless the array type
+# most callers arrive with, and AmaEquationEngine accepts it, so when it *is*
+# installed this demo uses it: that way the ndarray path is exercised by
+# running the example rather than only asserted about in a test.
+try:
+    import numpy as np
+
+    HAVE_NUMPY = True
+except ImportError:  # pragma: no cover - exercised on installs without numpy
+    np = None  # type: ignore[assignment]
+    HAVE_NUMPY = False
+
+from ama_cryptography import _numeric
 from ama_cryptography.crypto_api import (
     AlgorithmType,
     AmaCryptography,
@@ -53,6 +69,25 @@ from ama_cryptography.key_management import (
     KeyRotationManager,
     SecureKeyStorage,
 )
+
+
+def random_state(size: int, scale: float = 1.0, seed: int = 0):
+    """Build a random state vector, preferring numpy when it is installed.
+
+    Returns a ``numpy.ndarray`` where numpy is available and an
+    ``ama_cryptography._numeric.Vec`` otherwise.  ``AmaEquationEngine`` accepts
+    either, which is the point of returning whichever one is to hand instead of
+    converting.
+    """
+    if HAVE_NUMPY:
+        return np.random.default_rng(seed).standard_normal(size) * scale
+    _numeric.random.seed(seed)
+    return _numeric.random.randn(size) * scale
+
+
+def array_backend_name() -> str:
+    """Name the array type this run is feeding the engine."""
+    return f"numpy.ndarray (numpy {np.__version__})" if HAVE_NUMPY else "_numeric.Vec"
 
 
 def demo_crypto_api():
@@ -265,15 +300,23 @@ def demo_helix_engine():
     # Create engine
     engine = AmaEquationEngine(state_dim=100, random_seed=42)
 
+    from ama_cryptography.equations import PHI_CUBED
+
     print("\nEngine configuration:")
     print("-" * 70)
     print(f"  State dimension: {engine.state_dim}")
-    print(f"  φ³-amplified weights: {engine.config.get('alpha', 0) / 4.236:.4f}")
+    # Read the weight off the engine, not off `config`.  `config` holds only
+    # the *overrides* a caller passed, so on a default-constructed engine it is
+    # empty and `config.get("alpha", 0)` reported the φ³ amplification of every
+    # default build as 0.0000.
+    print(f"  α (purity) weight: {engine.alpha:.4f} = {engine.alpha / PHI_CUBED:.4f} × φ³")
     print("  All 18+ variants enabled")
 
-    # Run convergence
-    print("\n  Running convergence...")
-    initial_state = np.random.randn(100) * 0.5
+    # Run convergence.  The engine takes a numpy.ndarray, an _numeric.Vec, or
+    # any 1-D array-like of state_dim numbers and normalises it on entry; the
+    # returned state is always a Vec.
+    print(f"\n  Running convergence (initial state: {array_backend_name()})...")
+    initial_state = random_state(100, scale=0.5, seed=42)
     start_time = time.perf_counter()
     final_state, history = engine.converge(initial_state, max_steps=50)
     elapsed = time.perf_counter() - start_time
@@ -282,7 +325,21 @@ def demo_helix_engine():
     print(f"  Iterations: {len(history)}")
     print(f"  Initial Lyapunov: {history[0]:.6f}")
     print(f"  Final Lyapunov: {history[-1]:.6f}")
-    print(f"  Convergence: {(1 - history[-1] / history[0]) * 100:.2f}%")
+    # State the direction rather than printing a "convergence %" that goes
+    # negative.  With the default GA weights the exploration terms dominate and
+    # V rises; converge() detects that (V̇ > 0), rolls the step back and stops,
+    # which is the honest outcome for this configuration and not a failure.
+    delta = (history[-1] - history[0]) / history[0] * 100 if history[0] else 0.0
+    direction = "fell" if delta < 0 else "rose"
+    print(f"  Lyapunov {direction} {abs(delta):.2f}% over {len(history)} step(s)")
+    if delta > 0:
+        print("    (default weights are exploration-dominated; converge() stops")
+        print("     on the first V̇ > 0 after its five-step warm-up)")
+
+    if HAVE_NUMPY:
+        # Round-trip back to the caller's array type.
+        as_array = np.asarray(final_state)
+        print(f"  numpy.asarray(final_state): shape={as_array.shape} dtype={as_array.dtype}")
 
     # Calculate sigma_quadratic
     from ama_cryptography.equations import calculate_sigma_quadratic
@@ -310,7 +367,7 @@ def demo_performance():
 
         # Pure Python
         engine_py = AmaEquationEngine(state_dim=state_dim, random_seed=42)
-        state_py = np.random.randn(state_dim)
+        state_py = random_state(state_dim, seed=1)
 
         start = time.perf_counter()
         for i in range(iterations):
@@ -319,7 +376,7 @@ def demo_performance():
 
         # Cython
         engine_cy = AmaEngineOptimized(state_dim=state_dim, random_seed=42)
-        state_cy = np.random.randn(state_dim)
+        state_cy = random_state(state_dim, seed=1)
 
         start = time.perf_counter()
         for i in range(iterations):
@@ -337,7 +394,7 @@ def demo_performance():
         print("  Benchmarking pure Python only...")
 
         engine = AmaEquationEngine(state_dim=100, random_seed=42)
-        state = np.random.randn(100)
+        state = random_state(100, seed=1)
 
         start = time.perf_counter()
         for i in range(100):
@@ -352,8 +409,11 @@ def main():
     print("=" * 70)
     print("AMA CRYPTOGRAPHY COMPLETE FEATURE DEMONSTRATION")
     print("=" * 70)
-    print("\nDemonstrating all capabilities of AMA Cryptography 2.1")
+    from ama_cryptography import __version__
+
+    print(f"\nDemonstrating all capabilities of AMA Cryptography {__version__}")
     print("Production-grade multi-language PQC system")
+    print(f"Array backend for the math demos: {array_backend_name()}")
     print()
 
     try:

@@ -209,6 +209,29 @@ jobs:
       run: |
         python -m pytest tests/ -v --tb=short --no-cov
 
+    - name: Run the shipped Python examples
+      env:
+        AMA_CI_REQUIRE_BACKENDS: "1"
+        PYTHONUTF8: "1"
+      # examples/python/ is documentation that executes, and nothing executed
+      # it. Both scripts this step covers were broken in the released tree —
+      # basic_usage.py Examples 3 and 4 called the package API with keyword
+      # names it does not have, and complete_demo.py handed converge() a
+      # numpy.ndarray it did not accept — and every test in the suite passed
+      # while they did.
+      #
+      # Named as its own step rather than left to the `tests/` run above,
+      # which already collects this module: a step that appears in the job
+      # summary is one a reviewer can see is present, and one a future `-k`
+      # filter or path narrowing cannot silently drop. It costs about ten
+      # seconds. `make test-examples` is the same check locally.
+      #
+      # Cross-platform on purpose: the examples print box-drawing characters
+      # and Greek letters, and a Windows console encoding failure in shipped
+      # documentation is a real defect, not a CI artefact.
+      run: |
+        python -m pytest tests/test_python_examples.py -v --tb=short --no-cov
+
     - name: "Wycheproof corpus (vendored, offline, fail-closed)"
       # Google's Project Wycheproof is a corpus of the cases that *break*
       # implementations. Running it against this library for the first time

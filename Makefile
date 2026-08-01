@@ -31,7 +31,7 @@ python:
 	@echo "✓ Python package built successfully"
 
 # Run tests
-test: test-c test-python
+test: test-c test-python test-examples
 
 test-c: c
 	@echo "Running C tests..."
@@ -42,6 +42,21 @@ test-python: python
 	@echo "Running Python tests..."
 	@pytest tests/ -v --cov=ama_cryptography --cov-report=term-missing
 	@echo "✓ Python tests passed"
+
+# Execute the shipped Python examples.
+#
+# examples/python/ is documentation that runs, and until this target existed
+# nothing ran it: basic_usage.py Examples 3 and 4 called the package API with
+# keyword names it does not have, and complete_demo.py handed converge() a
+# numpy.ndarray it did not accept.  Both scripts failed for every user who
+# tried them, and every test in the suite passed.
+#
+# Depends on `c` and not on `python`: the examples exercise the native
+# backend, and the Cython extensions are optional to them.
+test-examples: c
+	@echo "Running shipped Python examples..."
+	@pytest tests/test_python_examples.py -v
+	@echo "✓ Python examples ran to completion"
 
 # Run benchmarks
 benchmark: python
@@ -222,7 +237,8 @@ help:
 	@echo "  make c              - Build C library only"
 	@echo "  make c-api          - Build C API with native PQC"
 	@echo "  make python         - Build Python package"
-	@echo "  make test           - Run all tests"
+	@echo "  make test           - Run all tests (C, Python, shipped examples)"
+	@echo "  make test-examples  - Run the shipped Python examples end to end"
 	@echo "  make benchmark      - Run performance benchmarks"
 	@echo "  make clean          - Remove build artifacts"
 	@echo "  make install        - Install system-wide"
