@@ -481,9 +481,18 @@ This costs roughly 6x the byte-operations of the table it replaces, confined
 to the fallback path: hosts with carry-less multiply (x86 PCLMULQDQ via the
 AVX2/VAES kernels, ARM PMULL via the NEON kernel) never execute this code.
 On the platforms that do, a constant-time tag is worth more than a faster
-leaky one, and AES is already bitsliced there. Bit-exactness is covered by the
-existing NIST SP 800-38D vectors and by `test_aes_gcm_vaes_equiv`, which
-differentially compares this path against the hardware kernel.
+leaky one, and AES is already bitsliced there. Bit-exactness is covered by
+`tests/c/test_aes_gcm_scalar_kat.c`, which forces the dispatch slots to NULL
+via `ama_test_force_aes_gcm_scalar()` and then runs NIST SP 800-38D Appendix B
+TC13/TC14 plus a boundary-length sweep against the dispatch-installed kernel.
+
+Naming the right test matters here, because the two this entry first cited
+cover something else: on any AES-NI host the public entry point dispatches
+away from the scalar path, so the plain NIST vectors never execute it, and
+`test_aes_gcm_vaes_equiv` compares the VAES kernel against the AVX2 AES-NI
+reference — SIMD against SIMD, with the scalar code untouched. The scalar KAT
+was the one test that actually exercised this rewrite, and it says so in its
+own header.
 
 ### Security — `verify_crypto_package` had no trust anchor, so it could not detect a forgery
 
