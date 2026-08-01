@@ -769,6 +769,13 @@ static void dispatch_bench_keccak_x4(ama_keccak_f1600_x4_fn simd_x4_fn,
 
 /* Kyber / Dilithium NTT bench helpers.
  *
+ * Compiled only under AMA_USE_NATIVE_PQC, because that is the only
+ * configuration with call sites: the two callers below sit inside
+ * `#ifdef AMA_USE_NATIVE_PQC` blocks.  Without the guard the PQC-off build
+ * carried two ~50-line static functions that nothing referenced —
+ * -Wunused-function reported it and nothing acted on the report, because the
+ * job named "Strict Compiler Warnings (Werror)" did not pass -Werror.
+ *
  * The NTT kernels are in-place — repeated application to the same
  * buffer would accumulate coefficient magnitude past int16/int32 range,
  * which is undefined behaviour and would silently bias the regression
@@ -781,6 +788,7 @@ static void dispatch_bench_keccak_x4(ama_keccak_f1600_x4_fn simd_x4_fn,
  * `simd_best - generic_best` cancels the memcpy term.  Net effect: a
  * fixed additive ns offset on every measurement that doesn't move the
  * regression decision (which is a >10 % ratio threshold). */
+#ifdef AMA_USE_NATIVE_PQC
 static void dispatch_bench_kyber_ntt(ama_kyber_ntt_fn generic_fn,
                                       ama_kyber_ntt_fn simd_fn,
                                       const int16_t poly_seed[256],
@@ -872,6 +880,7 @@ static void dispatch_bench_dilithium_ntt(ama_dilithium_ntt_fn generic_fn,
         if (*simd_best < 0 || s < *simd_best) *simd_best = s;
     }
 }
+#endif /* AMA_USE_NATIVE_PQC — NTT bench helpers */
 
 /* ===== Cross-process auto-tune cache =====================================
  *

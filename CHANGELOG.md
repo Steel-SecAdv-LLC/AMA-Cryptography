@@ -152,7 +152,16 @@ do not carry it — a guarded header would vanish exactly where it is included
 and the callers would fall back to implicit declarations. gcc accepts those
 silently; clang 16+ rejects them, which is how the first attempt was caught.
 
-`-Wunused-function`: `test_kat.c` carried `install_drbg_hooks` /
+`-Wunused-function` also caught a configuration-specific one that the
+PQC-on build cannot see: `dispatch_bench_kyber_ntt` and
+`dispatch_bench_dilithium_ntt` in `src/c/dispatch/ama_dispatch.c` are ~50 lines
+each and their only call sites sit inside `#ifdef AMA_USE_NATIVE_PQC`, so the
+`AMA_USE_NATIVE_PQC=OFF` build — the configuration downstream consumers who
+take the library without native post-quantum support actually run — compiled
+both and referenced neither. Now guarded to match their callers; both
+configurations build clean under both compilers, 61/61 and 28/28 tests.
+
+`-Wunused-function` in the test tree: `test_kat.c` carried `install_drbg_hooks` /
 `remove_drbg_hooks` and their DRBG shim, left behind when the legacy pre-FIPS
 KAT tests were removed and referenced by nothing. Deleted rather than
 annotated — dead scaffolding in a test file reads as coverage that exists.
