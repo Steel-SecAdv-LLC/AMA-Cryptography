@@ -26,6 +26,7 @@ AI Co-Architects: Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
 
 import contextlib
 import ctypes
+import errno as _errno
 import logging
 import os
 import platform
@@ -271,25 +272,139 @@ def _auxv_at_secure(path: str = "/proc/self/auxv") -> Optional[bool]:
     return None
 
 
+#: Cached handle on the process's own symbol namespace, so the two libc probes
+#: below resolve once rather than per call.  ``False`` records a failed
+#: resolution; ``None`` means "not attempted yet".
+_LIBC_HANDLE: Union[ctypes.CDLL, bool, None] = None
+
+
+def _process_libc() -> Optional[ctypes.CDLL]:
+    """The process's own symbol namespace, or None where that cannot be opened.
+
+    ``ctypes.CDLL(None)`` is the POSIX idiom for ``dlopen(NULL)`` — a handle on
+    the already-loaded libc rather than a second copy of it.  Restricted to
+    ``os.name == "posix"``: on Windows there is no equivalent, and both symbols
+    resolved through this handle are POSIX-family APIs that do not exist there.
+    """
+    global _LIBC_HANDLE
+    if _LIBC_HANDLE is None:
+        if os.name != "posix":  # pragma: no cover - platform-dependent
+            _LIBC_HANDLE = False
+        else:
+            try:
+                _LIBC_HANDLE = ctypes.CDLL(None, use_errno=True)
+            except (OSError, TypeError):  # pragma: no cover - platform-dependent
+                _LIBC_HANDLE = False
+    return _LIBC_HANDLE if isinstance(_LIBC_HANDLE, ctypes.CDLL) else None
+
+
+def _libc_issetugid() -> Optional[bool]:
+    """``issetugid(2)``, or None where the platform does not provide it.
+
+    This is the canonical answer on macOS, the BSDs, Solaris and musl: the
+    kernel (or libc) recorded at ``execve`` time whether the image was entered
+    with privileges the caller did not hold, and this call reports that record
+    directly.  It is preferred over every other signal here because it is the
+    platform's own answer to exactly the question being asked, rather than a
+    reconstruction of it.
+
+    glibc does not export it, so on a typical Linux host this returns None and
+    :func:`_libc_getauxval_at_secure` is what answers.
+    """
+    libc = _process_libc()
+    if libc is None:
+        return None
+    try:
+        fn = libc.issetugid
+    except AttributeError:
+        return None
+    fn.restype = ctypes.c_int
+    fn.argtypes = []
+    try:
+        return bool(fn() != 0)
+    except OSError:  # pragma: no cover - platform-dependent
+        return None
+
+
+def _libc_getauxval_at_secure() -> Optional[bool]:
+    """``getauxval(AT_SECURE)``, or None where it is unavailable or absent.
+
+    ``AT_SECURE`` is the flag the dynamic loader itself consults when it
+    decides to ignore ``LD_PRELOAD`` and ``LD_LIBRARY_PATH``.  Asking libc for
+    it is strictly more robust than parsing ``/proc/self/auxv``: it works in a
+    hardened container that masks procfs, it needs no file descriptor, and it
+    cannot be defeated by a bind-mount over ``/proc``.  ``_auxv_at_secure``
+    remains as the fallback for libcs that predate the call (glibc < 2.16).
+
+    ``errno`` is consulted rather than assumed.  glibc and musl both return 0
+    and set ``ENOENT`` for a type that is not in the vector, which is a
+    different statement from "the flag is 0" — the first is no information and
+    must become None, the second is an assertion that the process is not
+    privileged.
+    """
+    libc = _process_libc()
+    if libc is None:
+        return None
+    try:
+        fn = libc.getauxval
+    except AttributeError:
+        return None
+    fn.restype = ctypes.c_ulong
+    fn.argtypes = [ctypes.c_ulong]
+    ctypes.set_errno(0)
+    try:
+        value = int(fn(ctypes.c_ulong(_AT_SECURE)))
+    except OSError:  # pragma: no cover - platform-dependent
+        return None
+    if value == 0 and ctypes.get_errno() == _errno.ENOENT:
+        return None
+    return value != 0
+
+
 def _in_secure_execution_mode() -> bool:
     """True when the process runs with privileges its real user does not hold.
 
-    Mirrors glibc's ``AT_SECURE`` / ``issetugid()`` determination: such a
-    process is executing on behalf of a less-privileged caller, so environment
-    variables that caller controls must not be allowed to steer code loading.
+    Such a process is executing on behalf of a less-privileged caller, so
+    environment variables that caller controls — ``AMA_CRYPTO_LIB_PATH`` above
+    all — must not be allowed to steer code loading. This is the same rule the
+    dynamic loader applies to ``LD_PRELOAD``.
 
-    Both signals are consulted and the answer is their OR, because each covers
-    a case the other misses.  ``AT_SECURE`` catches file capabilities and the
-    other kernel-side triggers, where ``uid == euid`` and the comparison below
-    sees nothing; the comparison still runs because ``/proc`` may be absent or
-    masked, and an unreadable ``AT_SECURE`` must not be read as "not secure".
-    Erring towards True only costs a developer an ignored override.
+    Four signals, consulted in this order, most authoritative first:
 
-    Returns False on platforms without POSIX uid/gid semantics (e.g. Windows),
-    where the concept does not apply.
+    1. ``issetugid(2)`` (:func:`_libc_issetugid`) — the platform's own record,
+       on macOS, the BSDs, Solaris and musl.
+    2. ``getauxval(AT_SECURE)`` (:func:`_libc_getauxval_at_secure`) — the
+       loader's own flag, on glibc >= 2.16 and musl. Survives a masked
+       ``/proc``.
+    3. ``/proc/self/auxv`` (:func:`_auxv_at_secure`) — the same flag read by
+       hand, for libcs predating (2).
+    4. ``uid != euid or gid != egid`` — the classic set-uid/set-gid test.
+
+    **The answer is their OR, and that is the whole of the contract.** The
+    first signal that says True ends it; a signal that says *False* does not
+    end anything, because each covers a case the others cannot see. (1)-(3)
+    catch file capabilities — a ``setcap`` binary runs privileged with
+    ``uid == euid``, so (4) sees nothing — while (4) keeps working where no
+    kernel-side signal is reachable at all.
+
+    **An unavailable signal is not a negative one.** Each of (1)-(3) returns
+    ``None`` for "could not tell" — symbol absent, procfs masked, no
+    ``AT_SECURE`` entry — and ``None`` neither answers True nor suppresses the
+    signals after it. It is not treated as True either: this function does not
+    fail closed on ignorance, it moves on to a signal that can answer. Only (4)
+    remains after all three, and only when *it* is unavailable too does the
+    answer become False by exhaustion.
+
+    Returns:
+        True when any signal reports privileged execution. False when every
+        signal that could run reported unprivileged, and False on a platform
+        where none of them exists (Windows: no ``issetugid``, no auxiliary
+        vector, no ``os.getuid``) — there, the concept has no referent, and the
+        override stays available.
     """
-    if _auxv_at_secure():
-        return True
+    for probe in (_libc_issetugid, _libc_getauxval_at_secure, _auxv_at_secure):
+        if probe() is True:
+            return True
     try:
         return os.getuid() != os.geteuid() or os.getgid() != os.getegid()
     except AttributeError:  # pragma: no cover - non-POSIX platform

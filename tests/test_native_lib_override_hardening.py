@@ -134,6 +134,210 @@ class TestAtSecureIsConsulted:
         assert pqc_backends._auxv_at_secure() is False
 
 
+class TestLibcProbesArePreferred:
+    """``AT_SECURE`` is asked of libc first, and ``/proc`` only as a fallback.
+
+    Reading ``/proc/self/auxv`` works, but it is the least robust of the three
+    kernel-side signals: a hardened container can mask procfs, and a
+    bind-mount can replace it.  ``getauxval(3)`` needs no file descriptor and
+    cannot be masked; ``issetugid(2)`` is the platform's own answer to exactly
+    this question on macOS, the BSDs and Solaris, where there is no auxiliary
+    vector to read at all.  Both are resolved through ``dlopen(NULL)`` rather
+    than a named libc, so no SONAME is guessed.
+    """
+
+    def test_at_least_one_kernel_side_signal_answers_on_this_host(self) -> None:
+        """Non-vacuity for the whole class.
+
+        Every probe returning None would mean the uid/gid comparison is the
+        only thing running — the state this work exists to move away from —
+        while every fixture below still passed.
+        """
+        answers = [
+            pqc_backends._libc_issetugid(),
+            pqc_backends._libc_getauxval_at_secure(),
+            pqc_backends._auxv_at_secure(),
+        ]
+        assert any(answer is not None for answer in answers), answers
+
+    def test_probes_return_a_bool_or_none_and_nothing_else(self) -> None:
+        for probe in (
+            pqc_backends._libc_issetugid,
+            pqc_backends._libc_getauxval_at_secure,
+            pqc_backends._auxv_at_secure,
+        ):
+            assert probe() in (True, False, None)
+
+    @pytest.mark.skipif(not Path("/proc/self/auxv").exists(), reason="no procfs auxiliary vector")
+    def test_getauxval_agrees_with_the_parsed_vector(self) -> None:
+        """The two Linux signals must not disagree about the same flag.
+
+        If ``getauxval`` is unavailable this is vacuous, so it is skipped
+        rather than passed — a silently-absent probe is the failure mode this
+        test is here to notice.
+        """
+        via_libc = pqc_backends._libc_getauxval_at_secure()
+        if via_libc is None:
+            pytest.skip("getauxval(3) is not available in this libc")
+        assert via_libc == pqc_backends._auxv_at_secure()
+
+    def test_issetugid_wins_where_it_is_available(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The BSD/macOS case: no auxiliary vector, and uid == euid."""
+        monkeypatch.setattr(pqc_backends, "_libc_issetugid", lambda: True)
+        monkeypatch.setattr(pqc_backends, "_libc_getauxval_at_secure", lambda: None)
+        monkeypatch.setattr(pqc_backends, "_auxv_at_secure", lambda *a, **k: None)
+        monkeypatch.setattr(os, "getuid", lambda: 1000, raising=False)
+        monkeypatch.setattr(os, "geteuid", lambda: 1000, raising=False)
+        monkeypatch.setattr(os, "getgid", lambda: 1000, raising=False)
+        monkeypatch.setattr(os, "getegid", lambda: 1000, raising=False)
+
+        assert pqc_backends._in_secure_execution_mode() is True
+
+    def test_getauxval_wins_where_procfs_is_masked(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(pqc_backends, "_libc_issetugid", lambda: None)
+        monkeypatch.setattr(pqc_backends, "_libc_getauxval_at_secure", lambda: True)
+        monkeypatch.setattr(pqc_backends, "_auxv_at_secure", lambda *a, **k: None)
+        monkeypatch.setattr(os, "getuid", lambda: 1000, raising=False)
+        monkeypatch.setattr(os, "geteuid", lambda: 1000, raising=False)
+        monkeypatch.setattr(os, "getgid", lambda: 1000, raising=False)
+        monkeypatch.setattr(os, "getegid", lambda: 1000, raising=False)
+
+        assert pqc_backends._in_secure_execution_mode() is True
+
+    def test_a_false_from_one_probe_does_not_veto_a_later_one(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The OR is the contract, and this is the case that proves it.
+
+        A first-non-None-answer-wins design would return False here.  Each
+        signal sees a different subset of privileged execution, so only a
+        signal that says *True* is allowed to end the search.
+        """
+        monkeypatch.setattr(pqc_backends, "_libc_issetugid", lambda: False)
+        monkeypatch.setattr(pqc_backends, "_libc_getauxval_at_secure", lambda: False)
+        monkeypatch.setattr(pqc_backends, "_auxv_at_secure", lambda *a, **k: True)
+
+        assert pqc_backends._in_secure_execution_mode() is True
+
+    def test_all_probes_unavailable_falls_through_to_the_uid_comparison(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(pqc_backends, "_libc_issetugid", lambda: None)
+        monkeypatch.setattr(pqc_backends, "_libc_getauxval_at_secure", lambda: None)
+        monkeypatch.setattr(pqc_backends, "_auxv_at_secure", lambda *a, **k: None)
+        monkeypatch.setattr(os, "getuid", lambda: 1000, raising=False)
+        monkeypatch.setattr(os, "geteuid", lambda: 0, raising=False)
+        monkeypatch.setattr(os, "getgid", lambda: 1000, raising=False)
+        monkeypatch.setattr(os, "getegid", lambda: 1000, raising=False)
+
+        assert pqc_backends._in_secure_execution_mode() is True
+
+    def test_nothing_available_at_all_reports_false(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The Windows shape: no probe exists, so the concept has no referent.
+
+        The documented answer is False — the override stays available — and
+        this pins that the function does not instead fail closed on ignorance.
+        """
+
+        def _no_uid() -> int:
+            raise AttributeError("os.getuid does not exist on this platform")
+
+        monkeypatch.setattr(pqc_backends, "_libc_issetugid", lambda: None)
+        monkeypatch.setattr(pqc_backends, "_libc_getauxval_at_secure", lambda: None)
+        monkeypatch.setattr(pqc_backends, "_auxv_at_secure", lambda *a, **k: None)
+        monkeypatch.setattr(os, "getuid", _no_uid, raising=False)
+
+        assert pqc_backends._in_secure_execution_mode() is False
+
+    def test_missing_symbols_read_as_unknown_not_as_unprivileged(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A libc without either symbol must yield None, never False."""
+
+        class _NoSymbols:
+            def __getattr__(self, name: str) -> Any:
+                raise AttributeError(name)
+
+        monkeypatch.setattr(pqc_backends, "_process_libc", lambda: _NoSymbols())
+        assert pqc_backends._libc_issetugid() is None
+        assert pqc_backends._libc_getauxval_at_secure() is None
+
+    def test_no_libc_handle_reads_as_unknown(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(pqc_backends, "_process_libc", lambda: None)
+        assert pqc_backends._libc_issetugid() is None
+        assert pqc_backends._libc_getauxval_at_secure() is None
+
+    def test_getauxval_reporting_enoent_reads_as_unknown(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``0`` with ``ENOENT`` means "not in the vector", not "not secure".
+
+        Collapsing the two would assert that the process is unprivileged on
+        the strength of an entry that was never there.
+        """
+        import errno
+
+        class _Fn:
+            restype: Any = None
+            argtypes: Any = None
+
+            def __call__(self, _type: Any) -> int:
+                ctypes.set_errno(errno.ENOENT)
+                return 0
+
+        class _Libc:
+            getauxval = _Fn()
+
+        monkeypatch.setattr(pqc_backends, "_process_libc", lambda: _Libc())
+        assert pqc_backends._libc_getauxval_at_secure() is None
+
+    def test_getauxval_reporting_zero_without_errno_reads_as_unprivileged(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        class _Fn:
+            restype: Any = None
+            argtypes: Any = None
+
+            def __call__(self, _type: Any) -> int:
+                return 0
+
+        class _Libc:
+            getauxval = _Fn()
+
+        monkeypatch.setattr(pqc_backends, "_process_libc", lambda: _Libc())
+        assert pqc_backends._libc_getauxval_at_secure() is False
+
+    def test_getauxval_reporting_one_reads_as_privileged(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        class _Fn:
+            restype: Any = None
+            argtypes: Any = None
+
+            def __call__(self, _type: Any) -> int:
+                return 1
+
+        class _Libc:
+            getauxval = _Fn()
+
+        monkeypatch.setattr(pqc_backends, "_process_libc", lambda: _Libc())
+        assert pqc_backends._libc_getauxval_at_secure() is True
+
+    def test_issetugid_nonzero_reads_as_privileged(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        class _Fn:
+            restype: Any = None
+            argtypes: Any = None
+
+            def __call__(self) -> int:
+                return 1
+
+        class _Libc:
+            issetugid = _Fn()
+
+        monkeypatch.setattr(pqc_backends, "_process_libc", lambda: _Libc())
+        assert pqc_backends._libc_issetugid() is True
+
+
 class TestOverrideIgnoredUnderSecureExecution:
     def test_override_file_is_not_loaded_when_setuid(
         self,
