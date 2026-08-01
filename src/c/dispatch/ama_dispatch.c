@@ -2237,10 +2237,13 @@ void ama_test_force_x25519_x4_scalar(void) {
  * ama_aes256_gcm_encrypt / ama_aes256_gcm_decrypt are called with the
  * slot NULL, the generic implementation in ama_aes_gcm.c runs inline
  * instead of forwarding to the SIMD kernel.  Used by
- * test_aes_gcm_neon_equiv.c and the VAES/AVX2 equivalence tests to
- * obtain a NON-DISPATCHED scalar ground truth, which is what makes
- * the byte-identity comparison meaningful — Copilot review
- * #3249188280.  Restore via ama_test_restore_aes_gcm(). */
+ * test_aes_gcm_neon_equiv.c and test_aes_gcm_scalar_kat.c to obtain a
+ * NON-DISPATCHED scalar ground truth, which is what makes the
+ * byte-identity comparison meaningful — Copilot review #3249188280.
+ * (This comment previously also credited "the VAES/AVX2 equivalence
+ * tests"; test_aes_gcm_vaes_equiv.c does not reference this hook and
+ * compares the VAES kernel against the AVX2 AES-NI reference, so it
+ * never exercises the scalar tier.)  Restore via ama_test_restore_aes_gcm(). */
 void ama_test_force_aes_gcm_scalar(void) {
     ama_dispatch_init();
     dispatch_table.aes_gcm_encrypt = NULL;

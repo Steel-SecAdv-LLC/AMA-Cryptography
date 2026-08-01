@@ -128,6 +128,61 @@ bitsliced AES would be — the scan is inherently ~256 operations per byte where
 a bitsliced circuit is ~30 — so the honest summary is that a large avoidable
 cost was removed, not that this path is now fast.
 
+### Security — secp256k1 ECDSA leaked the per-signature nonce through a Montgomery extra-reduction branch
+
+`sc_mont_mul` in `src/c/ama_secp256k1.c` finished its CIOS Montgomery
+multiplication with
+
+    if (t[SC_LIMBS]) { /* borrow-propagating subtract of n */ }
+
+a conditional branch whose predicate is a word of the Montgomery intermediate
+— that is, of secret data. It compiled to a real `test %r14,%r14; je` in the
+shipped RelWithDebInfo object, immediately above `sc_cond_sub_n`, which is the
+correctly masked version of the same operation. This one site had been written
+the other way.
+
+This is the textbook Montgomery extra-reduction side channel (Walter and
+Thompson, *Distinguishing Exponent Digits by Observing Modular Subtractions*,
+CT-RSA 2001), and it was measurable rather than theoretical:
+
+- ctgrind (memcheck with only the 32-byte private key marked undefined) flags
+  `sc_mont_mul` ← `sc_to_mont` ← `sc_inv` ← `ama_secp256k1_ecdsa_sign`.
+- Over eight signatures with a fixed message, callgrind returns deterministic
+  per-key instruction counts spanning **33,354 instructions** with a
+  **zero-instruction** noise floor. Attribution is exact: `secp256k1_fe_mul`,
+  `point_mul_generator`, `sc_cond_sub_n` and `sc_inv` are byte-identical
+  across keys; only `sc_mont_mul` moves.
+- Direct instrumentation gives 462 `sc_mont_mul` calls per signature with
+  taken-counts of 164/125/108/149/121/88 for six key classes, and the
+  arithmetic closes exactly: 56 extra taken branches × 73 instructions × 8
+  signatures = 32,704, matching the observed delta.
+- With the key fixed and the message varied, the taken-count still moves —
+  so the channel carries the **per-signature nonce `k`**, not only the
+  long-term key. For ECDSA that is the dangerous direction.
+
+The fold is now masked: the subtrahend is `SC_N[i] & fold` where `fold` is
+all-ones exactly when the high word is non-zero, computed without a
+comparison. When the high word is zero the subtrahend is zero, the borrow
+chain stays zero and `t` is unchanged — same result, no branch, same
+instruction count every call.
+
+After the fix, `sc_mont_mul` retires **2,590,896 instructions for every key
+tested**, byte-identical. The whole-process spread across eight keys falls to
+728 instructions in exactly four discrete levels, which is DER encoding of `r`
+and `s` each needing a leading `0x00` pad or not — public values the verifier
+already receives, and therefore not a leak.
+
+`tools/check_ghash_constant_time.py` gains an `--target ecdsa` lane covering
+this, wired into `dudect.yml`, with a 3,000-instruction threshold: 4× the
+benign DER spread and 11× below the defect. Verified to fail on the branchy
+build and pass on the fixed one.
+
+**No dudect lane could have caught this.** `dudect - Legacy Harnesses`
+measures ECDSA signing, but classifies it INFO because RFC 6979 candidate
+rejection is legitimately variable-time — so a real leak underneath it fails
+nothing. That is why the new lane counts instructions instead of sampling
+wall time.
+
 ### Security — package serialization no longer emits the private signing key
 
 `CryptoPackageResult.to_dict()` and `__getstate__` are documented as stripping

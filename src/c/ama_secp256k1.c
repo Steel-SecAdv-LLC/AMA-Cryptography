@@ -1744,12 +1744,36 @@ static void sc_mont_mul(secp256k1_sc *r, const secp256k1_sc *a, const secp256k1_
     }
 
     /* t is now < 2n; one conditional subtraction finishes it.  The extra
-     * high word must be folded in first: if it is set, t >= 2^256 > n. */
-    if (t[SC_LIMBS]) {
+     * high word must be folded in first: if it is set, t >= 2^256 > n.
+     *
+     * INVARIANT-12.  This fold is MASKED, not branched.  Written as
+     * `if (t[SC_LIMBS]) { ...subtract... }` it compiled to a real
+     * `test %r14,%r14; je` — a conditional jump whose predicate is a word of
+     * the Montgomery intermediate, i.e. of secret data — and that is the
+     * textbook Montgomery extra-reduction side channel (Walter & Thompson,
+     * "Distinguishing Exponent Digits by Observing Modular Subtractions",
+     * CT-RSA 2001).  It was measurable here, not merely theoretical: over
+     * eight signatures with a fixed message, callgrind returned deterministic
+     * per-key instruction counts spanning 33,354 instructions with a
+     * zero-instruction noise floor, attributable entirely to this function,
+     * and the taken-count varied with the per-signature nonce `k` as well as
+     * with the long-term key.  A leak keyed on `k` is the dangerous one for
+     * ECDSA.
+     *
+     * The masked form below does the same arithmetic unconditionally: when
+     * the high word is zero the subtrahend is zero, the borrow chain stays
+     * zero, and `t` is unchanged — same result, no branch, same instruction
+     * count every call.  It is the pattern sc_cond_sub_n directly below
+     * already uses; this one site had been written the other way. */
+    {
+        const uint64_t hi = t[SC_LIMBS];
+        /* All-ones exactly when hi != 0, computed without a comparison. */
+        const uint64_t fold = (uint64_t)0 - ((hi | ((~hi) + 1u)) >> 63);
         uint64_t borrow = 0;
         for (i = 0; i < SC_LIMBS; i++) {
-            uint64_t d = t[i] - SC_N[i] - borrow;
-            borrow = ((~t[i] & SC_N[i]) | ((~(t[i] ^ SC_N[i])) & d)) >> 63;
+            const uint64_t sub = SC_N[i] & fold;
+            const uint64_t d = t[i] - sub - borrow;
+            borrow = ((~t[i] & sub) | ((~(t[i] ^ sub)) & d)) >> 63;
             t[i] = d;
         }
     }

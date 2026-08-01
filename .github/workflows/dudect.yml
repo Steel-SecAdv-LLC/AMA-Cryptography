@@ -519,8 +519,21 @@ jobs:
           cmake -B build -DAMA_USE_NATIVE_PQC=ON -DAMA_BUILD_TESTS=ON -DAMA_ENABLE_LTO=OFF
           cmake --build build -j"$(nproc)" --target ama_cryptography_test
 
-      - name: Instruction count must not depend on the key
-        run: python tools/check_ghash_constant_time.py --lib build/lib/libama_cryptography_test.a
+      - name: Scalar AES-GCM instruction count must not depend on the key
+        run: |
+          python tools/check_ghash_constant_time.py \
+            --lib build/lib/libama_cryptography_test.a --target ghash
+
+      - name: secp256k1 ECDSA instruction count must not depend on the key
+        # Catches a branch on a secret in the scalar field arithmetic — the
+        # Montgomery extra-reduction leak (Walter & Thompson, CT-RSA 2001).
+        # No dudect lane covers this: `dudect - Legacy Harnesses` measures
+        # ECDSA sign but classifies it INFO because RFC 6979 candidate
+        # rejection is legitimately variable-time, so a real leak underneath
+        # it does not fail anything.
+        run: |
+          python tools/check_ghash_constant_time.py \
+            --lib build/lib/libama_cryptography_test.a --target ecdsa
 
   dudect-gate:
     name: Constant-Time Gate
