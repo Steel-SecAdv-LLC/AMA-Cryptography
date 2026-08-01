@@ -21,6 +21,159 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ## [4.0.0] - 2026-08-01
 
+### Security — two more secret-dependent branches in secp256k1 ECDSA signing
+
+The Montgomery extra-reduction fix earlier in this release closed one branch on
+secret data in `src/c/ama_secp256k1.c` and recorded, in a code comment, that it
+was the only site in the file written that way. It was not. Sweeping for the
+pattern instead of trusting that sentence found two more, both on the default
+signing path, both measurable:
+
+- **`sc_add`'s carry fold.** `if (carry) { …subtract n… }` compiled to a
+  conditional jump over a four-limb borrow chain. On the signing path the
+  operands are `r*d mod n` and `z`, so the predicate is a function of the
+  private key `d` and — through the RFC 6979 nonce — of `k`. Isolated under
+  callgrind over 200,000 calls, the branchy form retired **76 more instructions
+  per call** when the carry was set, deterministically, against a
+  zero-instruction noise floor. `r` and `z` are public, so each observation is
+  a linear inequality on `r*d mod n`: the hidden-number-problem shape that
+  lattice reduction solves from a few hundred traces.
+- **The low-`s` normalisation.** `sc_is_high` was
+  `!sc_lt(a, HALF_N) && memcmp(a, HALF_N, 32) != 0` — `&&` short-circuits, so
+  `memcmp` ran only for `a >= half-n`, and `memcmp` itself exits at the first
+  differing limb — and it gated a branched `sc_negate`. Measured the same way:
+  **105 more instructions per call** for a high `s` than a low one.
+
+The second one had a written justification, and the justification was wrong in
+a way worth recording. INVARIANT-34 excused the normalisation as "a conditional
+negation of a value that is about to be published". What gets published is the
+*normalised* `s`; whether the negation happened is exactly what the published
+value does not reveal. So `s_raw > (n-1)/2` is one bit per signature about `k`
+and `d`. Both INVARIANT-28's and INVARIANT-34's timing paragraphs are corrected.
+
+`sc_add` now folds under an arithmetic mask, `sc_is_high` is a single
+`sc_lt(SC_HALF_N, a->v)`, and the normalisation goes through a new
+`sc_cond_negate`. The same short-circuit existed in `nistp_scalar_is_high` in
+`src/c/ama_nistp.c` and is fixed the same way; its conditional negation now
+uses `nistp_select` under a mask. The `low_s` *flag* is still branched on — it
+is the caller's argument and public.
+
+Measured after: cross-key instruction spread over 20 keys drops from **624 to
+72**, and to **24** once the measurement driver's own variable-time step is
+removed (below). Wycheproof 3912/3912, 61/61 C tests, 137 ECDSA/NIST-curve
+Python tests unchanged.
+
+### Fixed — the ECDSA constant-time gate could not have caught them, and could report PASS over a program that never ran
+
+`tools/check_ghash_constant_time.py --target ecdsa` was added earlier in this
+release specifically to catch this class of defect. It passed on a build
+carrying both of the above, for two independent reasons, each of which is a
+gate defect in its own right.
+
+**It never checked the driver's exit status.** `_instruction_count` parsed
+callgrind's `I refs:` line and returned it regardless of how the process
+ended. Passing `--lib` a shared object instead of the static archive makes the
+driver link but fail at load; every key class then returns the same ~109,000
+instructions of dynamic-loader work, the cross-key delta is zero, and the gate
+prints `PASSED — count is key-independent` over a program that performed no
+cryptography. It gave that verdict identically for the two-leak build and for a
+clean one. The exit status is now required, and a shared-library `--lib` gets
+an rpath so the trap is removed rather than merely reported. The ghash driver
+also now checks its own encrypt return value: eight early returns are as
+key-independent as eight encryptions.
+
+**Its threshold was calibrated against an assumption.** 3,000 sat between a
+known defect (33,354) and an apparent benign spread of 728 — but the 728 was
+mostly the two live leaks above, and ~9 instructions per DER byte of it came
+from the driver iterating to `siglen` rather than a fixed count. Re-measured on
+a git-reverted control build with the driver fixed: benign spread **24**,
+two-leak spread **576**. The threshold is now **200** — 8x above the floor,
+2.9x below the defect — and verified to fail on the control build and pass on
+the fixed one.
+
+Sampling was strengthened alongside: 8 key classes rather than 4 (four saw only
+288 of the 576 instructions actually available), and both drivers now derive
+key material from the class byte rather than `memset`-ing it, which had capped
+the sampled key space at 256 highly structured values.
+
+The general rule, since it will recur: **finding one instance of a defect
+pattern is a reason to sweep for the rest, and a threshold set between one
+known defect and one assumed-clean baseline is only as good as the assumption.**
+
+### Fixed — three CI gates had no negative control
+
+INVARIANT-2 states the standard — *"a gate with no negative control has not
+been shown to be a gate at all"* — and three gates did not meet it. Two had no
+test module of any kind.
+
+- **`tests/test_ghash_constant_time_gate.py`** (new, 22 tests). Pins the
+  exit-status rule, the verdict arithmetic against the measured 24/576 numbers,
+  the threshold calibration, the single-byte-ASCII key-class requirement, and
+  that CI runs both targets. The fail-open defect above is what a negative
+  control would have caught on the day it was written.
+- **`tests/test_action_pin_checks.py`** (new, 18 tests) for
+  `tools/check_action_pins.py` (INVARIANT-24) — the gate standing between this
+  repository and another release that publishes zero artefacts. Covers an
+  unresolvable SHA, a `--strict` version-comment mismatch, unreachable upstream
+  as *inconclusive* rather than passing, a definite failure outranking an
+  unreachable one, and the non-detection cases (`@v1` is not this checker's
+  subject; an annotated tag's `^{}` ref must match).
+- **`tests/test_ed25519_backend_parity_gate.py`** (new, 12 tests) for
+  `tools/check_ed25519_backend_parity.py` — a gate already caught once
+  reporting a canonical-`y` claim its corpus could not test. Drives the verdict
+  logic against stub backends: divergence fails, two backends that reject
+  everything fail (agreement is not correctness), and both vacuity guards
+  refuse to pass.
+
+That last one surfaced an ordering defect in the tool. `decode_asserted` only
+advances on a case where the backends *agreed*, so a pair that disagreed on
+every decode case left it at zero — and with the vacuity guard checked first,
+total divergence was announced as "the decode stage asserted nothing", naming a
+corpus problem for a library problem. Both exits are non-zero so nothing was
+let through; the disagreement report now comes first.
+
+### Fixed — `AMA_CRYPTO_LIB_PATH` was still honoured under file capabilities
+
+The set-uid/set-gid guard added earlier in this release compared `getuid()`
+against `geteuid()`. A binary carrying file capabilities (`setcap`) executes
+with `uid == euid` and `gid == egid`, so that comparison answers "not
+privileged" — while the kernel sets `AT_SECURE=1` and the dynamic loader duly
+ignores `LD_PRELOAD`. The override was therefore still honoured in exactly the
+configuration the loader refuses to honour its own equivalents.
+
+`_auxv_at_secure()` now reads `AT_SECURE` from `/proc/self/auxv`, the same
+authority the loader consults, and the two signals are OR-ed: an unreadable or
+masked procfs must not read as "not secure", and erring towards refusal costs
+only an ignored override. Verified against glibc's own `LD_SHOW_AUXV=1` output.
+Pinned by `TestAtSecureIsConsulted`, including a non-vacuity case that drives
+the parser over the running kernel's real vector.
+
+### Fixed — `ci.yml`'s Bandit step was the last one reading an exit code, and it was red
+
+INVARIANT-2 requires a gate over tool output to read a structured format where
+the tool emits one. `security.yml` and `ci-build-test.yml` do, via
+`tools/check_bandit_severity.py`. The `security-checks` job in `ci.yml` still ran
+
+    bandit -r ama_cryptography/ -l -f json -o bandit-report.json
+    bandit -r ama_cryptography/ -l
+
+which was wrong three ways at once, and had gone red on all of them.
+
+`-l` is Bandit's LOW severity floor, so this job's effective policy was "block
+on any finding at all" rather than the documented and tested policy
+(severity >= MEDIUM **and** confidence >= MEDIUM). One tree, three workflows,
+two policies, only one of them written down. Bandit exits 1 whenever it reports
+anything, so under `bash -e` the *first* command aborted the step and the
+human-readable second line never ran — the failure printed no finding, no file
+and no rule, only `Process completed with exit code 1`. And `if: success()` on
+the artefact upload published the report only when nobody needed it.
+
+The trigger was two B105 findings on `_SECRET_FIELD_PLACEHOLDERS`, added
+earlier in this release: Bandit's heuristic fires on a secret-sounding key
+assigned a literal, and here the literals are the *absence* of the secret. Both
+carry a line-scoped `# nosec B105` with a tracking ID per INVARIANT-13, so the
+tree is now clean at every severity, not merely at the documented floor.
+
 ### Security — an anchored build no longer accepts the unsigned digest-only fallback
 
 The trust anchor introduced earlier in this release was bypassable, which made

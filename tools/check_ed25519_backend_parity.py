@@ -405,6 +405,35 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             elif expected is not None:
                 decode_asserted += 1
 
+    print(f"Compared {checked} Ed25519 verification case(s) across both backends.")
+    print(f"  donna: {args.donna}")
+    print(f"  fe51 : {args.fe51}")
+
+    # A concrete finding is reported before either vacuity guard, and the
+    # order is load-bearing rather than cosmetic.  `decode_asserted` only
+    # advances on a case where the backends AGREED, so a pair that disagreed
+    # on every decode case leaves it at zero — and with the guards first, the
+    # worst possible result (total divergence) was reported as "the decode
+    # stage asserted nothing", which names a corpus problem for what is
+    # actually a library problem.  Both exits are non-zero, so nothing was
+    # ever let through; the defect was in what the failure told the reader,
+    # and INVARIANT-2 is explicit that a gate whose message names a condition
+    # the reader cannot reproduce is one they learn to route around.
+    if disagreements:
+        print(
+            f"\nED25519 BACKEND DIFFERENTIAL FAILED — {len(disagreements)} disagreement(s):\n",
+            file=sys.stderr,
+        )
+        for row in disagreements:
+            print(row, file=sys.stderr)
+            print(file=sys.stderr)
+        print(
+            "Two implementations of one public API have diverged.  A caller's\n"
+            "signature is valid or invalid depending on which CPU they run on.",
+            file=sys.stderr,
+        )
+        return 1
+
     # Same fail-closed reasoning as must_verify_seen: a decode stage in which
     # every absolute assertion was skipped is not evidence of anything.  The
     # canonical y=0 / non-canonical y=p pair is the discriminating half, so
@@ -427,25 +456,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             file=sys.stderr,
         )
         return 2
-
-    print(f"Compared {checked} Ed25519 verification case(s) across both backends.")
-    print(f"  donna: {args.donna}")
-    print(f"  fe51 : {args.fe51}")
-
-    if disagreements:
-        print(
-            f"\nED25519 BACKEND DIFFERENTIAL FAILED — {len(disagreements)} disagreement(s):\n",
-            file=sys.stderr,
-        )
-        for row in disagreements:
-            print(row, file=sys.stderr)
-            print(file=sys.stderr)
-        print(
-            "Two implementations of one public API have diverged.  A caller's\n"
-            "signature is valid or invalid depending on which CPU they run on.",
-            file=sys.stderr,
-        )
-        return 1
 
     print("\nED25519 BACKEND DIFFERENTIAL PASSED — both backends agree on every case.")
     return 0

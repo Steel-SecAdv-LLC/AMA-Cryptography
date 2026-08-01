@@ -237,6 +237,70 @@ _HISTORY_ROW_RE = re.compile(r"^\|\s*\d+\.\d+\.\d+[^|]*\|\s*20\d\d-\d\d-\d\d\s*\
 _DEF_TEST_RE = re.compile(r"^\s*def test_", re.MULTILINE)
 
 
+#: The "Files" column of the Lines of Code table in docs/METRICS_REPORT.md.
+#:
+#: These went unchecked while the *other* file count in the same document —
+#: "Python test files under `tests/` matching the static regex" — was gated,
+#: and the two are different measures that happened to print the same number.
+#: They diverged silently the moment a test file was added that the raw glob
+#: counts and the regex does not (``conftest.py``, ``ref_keyformat.py``), and
+#: the row that was gated is the one that stayed right. A row whose neighbour
+#: is checked reads as checked.
+#:
+#: Each entry maps the row's scope label to the exact reproduction command the
+#: report publishes for it, expressed as ``(roots, suffixes)``. Only the file
+#: counts are gated, not the line totals: ``wc -l`` moves on every commit and a
+#: gate that fails on every commit is one that gets disabled, whereas a file
+#: count moves only when the tree's shape does — which is exactly when the
+#: prose around it needs re-reading.
+_LOC_ROW_SCOPES: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
+    "Library Python (`ama_cryptography/*.py`)": (("ama_cryptography",), (".py",)),
+    "Native C (`src/c/**/*.c`, `include/**/*.h`)": (("src/c", "include"), (".c", ".h")),
+    "Library total (Python + C + headers)": (
+        ("ama_cryptography", "src/c", "include"),
+        (".py", ".c", ".h"),
+    ),
+    "Tests (`tests/**/*.py`)": (("tests",), (".py",)),
+}
+
+
+def _loc_row_re(label: str) -> re.Pattern[str]:
+    return re.compile(rf"\|\s*{re.escape(label)}\s*\|\s*(\d[\d,]*)\s*\|")
+
+
+def check_loc_table_file_counts(repo: Path) -> list[str]:
+    """Every gated row of the LoC table must state the file count it measures."""
+    problems: list[str] = []
+    report = repo / "docs" / "METRICS_REPORT.md"
+    if not report.is_file():
+        return [f"{report} is missing; the LoC table cannot be checked"]
+    text = report.read_text(encoding="utf-8")
+
+    for label, (roots, suffixes) in _LOC_ROW_SCOPES.items():
+        measured = 0
+        for root in roots:
+            base = repo / root
+            if not base.is_dir():
+                continue
+            measured += sum(
+                1 for p in base.rglob("*") if p.is_file() and p.suffix in suffixes
+            )
+        matches = _loc_row_re(label).findall(text)
+        if not matches:
+            problems.append(
+                f"docs/METRICS_REPORT.md: no LoC-table row found for {label!r}; "
+                "the row was renamed or removed and this check stopped checking it"
+            )
+            continue
+        for claimed in matches:
+            if int(claimed.replace(",", "")) != measured:
+                problems.append(
+                    f"docs/METRICS_REPORT.md: LoC table says {claimed} files for "
+                    f"{label}; measured {measured}"
+                )
+    return problems
+
+
 def measure_static_test_counts(repo: Path) -> tuple[int, int]:
     r"""Return ``(function_count, file_count)`` for ``tests/**/*.py``.
 
@@ -306,10 +370,14 @@ def audit(repo: Path = REPO) -> tuple[list[str], int]:
         checked += len(_AGGREGATE_RE.findall(text))
         checked += len(_METRICS_FILES_RE.findall(text))
         checked += len(_METRICS_FUNCS_RE.findall(text))
+        if path.name == "METRICS_REPORT.md":
+            for label in _LOC_ROW_SCOPES:
+                checked += len(_loc_row_re(label).findall(text))
     problems += check_record_counts(repo)
     problems += check_wycheproof_counts(repo)
     problems += check_test_counts(repo)
     problems += check_aggregate_test_counts(repo)
+    problems += check_loc_table_file_counts(repo)
     return problems, checked
 
 

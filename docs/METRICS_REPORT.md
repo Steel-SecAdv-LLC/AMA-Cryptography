@@ -57,20 +57,20 @@ Measured as non-empty-allowed `wc -l` over source files in each scope.
 
 | Scope | Files | Lines |
 |-------|------:|------:|
-| Library Python (`ama_cryptography/*.py`) | 27 | 28,858 |
-| Native C (`src/c/**/*.c`, `include/**/*.h`) | 102 | 50,052 |
-| Library total (Python + C + headers) | 129 | **78,910** |
-| Top-level Python (monitors, benchmarks, demos) | — | 915 |
-| Tests (`tests/**/*.py`) | 130 | 51,771 |
+| Library Python (`ama_cryptography/*.py`) | 27 | 29,623 |
+| Native C (`src/c/**/*.c`, `include/**/*.h`) | 103 | 50,682 |
+| Library total (Python + C + headers) | 130 | **80,305** |
+| Top-level Python (monitors, benchmarks, demos) | — | 945 |
+| Tests (`tests/**/*.py`) | 137 | 53,861 |
 | Cython (`*.pyx`, `*.pxd`) | — | 1,819 |
-| **Whole project** (source + docs + config) | — | **367,877** |
+| **Whole project** (source + docs + config) | — | **374,968** |
 
 **Library total (the figure that most closely tracks "library size"):
-78,910 lines** across 129 files under `ama_cryptography/`, `src/c/`,
+80,305 lines** across 130 files under `ama_cryptography/`, `src/c/`,
 and `include/`. This supersedes any "11,246 LoC" claim that may have
 appeared externally.
 
-**Whole-project total** (`367,877` lines across Python, C, headers,
+**Whole-project total** (`374,968` lines across Python, C, headers,
 Cython, Markdown, YAML/TOML/JSON config, CMake) is the broader figure
 some external claims may have been referencing. Note that this figure
 is dominated by artifacts that are not hand-written library code: the
@@ -82,7 +82,7 @@ relevant; always state which scope you mean.
 ### Scope Composition
 
 The gap between "library" and "whole project" is informative: only
-**21.5%** of the repository is library code. The rest is tests, docs,
+**21.4%** of the repository is library code. The rest is tests, docs,
 config, vendored vector corpora, generated Cython translation units,
 and scaffolding — verification artifacts outweighing library code is
 a healthy ratio for a security library that takes verification
@@ -91,17 +91,17 @@ figure overstates hand-written code.
 
 | Scope                                | Lines    | % of whole | Paths                                                   |
 |--------------------------------------|---------:|-----------:|---------------------------------------------------------|
-| Library (Python + C + headers)       | 78,910   | 21.5%      | `ama_cryptography/` + `src/c/` + `include/`             |
-| Tests                                | 51,771   | 14.1%      | `tests/**/*.py`                                         |
-| Top-level Python                     | 915      | 0.2%       | `*.py` at repo root                                     |
+| Library (Python + C + headers)       | 80,305   | 21.4%      | `ama_cryptography/` + `src/c/` + `include/`             |
+| Tests                                | 53,861   | 14.4%      | `tests/**/*.py`                                         |
+| Top-level Python                     | 945      | 0.3%       | `*.py` at repo root                                     |
 | Cython                               | 1,819    | 0.5%       | `*.pyx` + `*.pxd`                                       |
-| Everything else (remainder)          | 234,462  | 63.7%      | `*.md`, `*.yml`, `*.toml`, `*.json`, CMake, Makefile, plus `.c`/`.h`/`.py` outside the scopes above (generated `src/cython/*.c`, `tests/c/`, `fuzz/`, `tools/`, `benchmarks/`, `examples/`) |
-| **Whole-project total**              | **367,877** | **100%** | sum of the scopes above                                 |
+| Everything else (remainder)          | 238,038  | 63.5%      | `*.md`, `*.yml`, `*.toml`, `*.json`, CMake, Makefile, plus `.c`/`.h`/`.py` outside the scopes above (generated `src/cython/*.c`, `tests/c/`, `fuzz/`, `tools/`, `benchmarks/`, `examples/`) |
+| **Whole-project total**              | **374,968** | **100%** | sum of the scopes above                                 |
 
-Test code (14.1%) is roughly two-thirds the size of the library
-(21.5%) — i.e. the test-to-library ratio is roughly **0.66**, and that
+Test code (14.4%) is roughly two-thirds the size of the library
+(21.4%) — i.e. the test-to-library ratio is roughly **0.67**, and that
 counts only `tests/**/*.py`; the C test suite under `tests/c/` lands
-in the remainder row. The remainder (63.7%) is dominated by the
+in the remainder row. The remainder (63.5%) is dominated by the
 generated Cython translation units checked in under `src/cython/` and
 the vendored NIST/Wycheproof JSON corpora, not by docs or config.
 
@@ -148,8 +148,8 @@ find . -type f \
 
 | Scope | Count |
 |-------|------:|
-| Python test files under `tests/` matching the static regex | 130 |
-| Syntactic `def test_` matches under `tests/**/*.py` | **3,099** |
+| Python test files under `tests/` matching the static regex | 134 |
+| Syntactic `def test_` matches under `tests/**/*.py` | **3,167** |
 | `test_*.c` files under `tests/c/` (ctest-registered) | 57 |
 | `bench_*.c` files under `tests/c/` (standalone, not in ctest) | 1 |
 | `fuzz_*.c` sources under `fuzz/` | 16 |
@@ -177,7 +177,7 @@ pytest --collect-only -q | tail -1
 Stderr is intentionally left unsuppressed so collection/import errors
 remain visible during reproduction.
 
-The static count (3,099) and the dynamic collection count will differ.
+The static count (3,167) and the dynamic collection count will differ.
 Any external claim ("N tests") must state which count it is reporting.
 This supersedes the earlier "866+ tests collected across 39 files" figure
 in ARCHITECTURE.md and any "2,068 tests" figure that may have circulated
@@ -317,7 +317,7 @@ figures change.
 | Version | Date | Change |
 |---------|------|--------|
 | 3.5.0 | 2026-07-30 | Re-measured all static counts on the v3.5.0 release tree: 78,910 library LoC (129 files), 367,877 whole-project LoC, 3,057 static Python test functions across 127 files, 57 ctest-registered C test files, 16 `fuzz_*.c` sources (15 libFuzzer entry points; `fuzz_rng.c` is a shared PRNG helper linked into `fuzz_frost`). Noted that the whole-project figure now sweeps in generated `src/cython/*.c` translation units and vendored NIST/Wycheproof JSON corpora. Adversarial counts (156 strict / 258 umbrella) and NIST ACVP counts (1,215 / 1,215 / 0) re-verified unchanged. |
-| 4.0.0 | 2026-08-01 | Re-measured the Python test counts on the 4.0.0 tree: **3,099** static `def test_` matches across **130** files (was 3,057 / 127, last measured for 3.5.0). The drift was not caught by any gate — `tools/check_documented_counts.py` verified only per-file claims of the form ``` `tests/x.py` — N tests ``` — so this release extends it to check the aggregate against the report's own published reproduction command, and to recognise the parenthesised per-file phrasing that let INVARIANT-35's `test_secp256k1_ecdsa.py` claim sit one off. Revision-history rows are excluded from the comparison, since they record what was true at a past release. C counts unchanged: 57 ctest-registered `test_*.c`, 1 `bench_*.c`, 2 standalone `x25519_equiv_*.c` (60 translation units), 16 `fuzz_*.c` sources / 15 libFuzzer entry points. LoC and adversarial-count figures were NOT re-measured for this entry and still carry their 3.5.0 values. |
+| 4.0.0 | 2026-08-01 | Re-measured every count on the 4.0.0 tree: **3,167** static `def test_` matches across **134** files carrying one (was 3,057 / 127, last measured for 3.5.0), and the Lines-of-Code table, which had gone stale on both file counts and line totals — Native C 102 -> 103 files (the new `src/c/internal/ama_ct_barrier.h`), library total 129 -> 130 files / 78,910 -> 80,305 lines, tests 130 -> 137 files by the raw glob. The drift was not caught by any gate — `tools/check_documented_counts.py` verified only per-file claims of the form ``` `tests/x.py` — N tests ``` — so this release extends it to check the aggregate against the report's own published reproduction command, and to recognise the parenthesised per-file phrasing that let INVARIANT-35's `test_secp256k1_ecdsa.py` claim sit one off. Revision-history rows are excluded from the comparison, since they record what was true at a past release. The LoC table's Files column is now gated too (`check_loc_table_file_counts`): it was the one file count in this document nothing checked, sitting one row from the one that was, and 'a row whose neighbour is checked reads as checked' is how it drifted. Line totals stay ungated deliberately — `wc -l` moves on every commit, and a gate that fails on every commit is one that gets disabled. C counts unchanged: 57 ctest-registered `test_*.c`, 1 `bench_*.c`, 2 standalone `x25519_equiv_*.c` (60 translation units), 16 `fuzz_*.c` sources / 15 libFuzzer entry points. LoC and adversarial-count figures were NOT re-measured for this entry and still carry their 3.5.0 values. |
 | 3.1.0 + Unreleased | 2026-05-16 | Re-measured static counts after PRs #301/#303/#305/#306/#307/#308/#309: 57,035 library LoC, 2,159 static Python test functions, 37 C test files, 14 fuzz harnesses, 156 / 258 adversarial tests. NIST ACVP vector count remains anchored separately at 1,215 / 1,215 / 0. |
 | 2.1.5 | 2026-04-18 | Initial version; anchored 46,235 library LoC, 2,028 test functions, 815 NIST vectors, 156 / 223 adversarial tests for that branch snapshot. Superseded unanchored "2,068 tests / 117 NIST / 180 adversarial / 11,246 LoC" figures. |
 | 2.1.5 | 2026-04-20 | Documentation alignment sweep; header date refresh across repository. |

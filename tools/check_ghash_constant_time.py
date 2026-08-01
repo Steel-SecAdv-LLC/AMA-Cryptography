@@ -85,7 +85,20 @@ DEFAULT_THRESHOLD = 200
 #: Key classes to compare.  Single characters so the driver's argument
 #: handling costs the same for each — a multi-character argument would make
 #: strtoul-style parsing itself key-dependent and pollute the measurement.
-KEY_CLASSES = ("A", "Z", "m", "q")
+#:
+#: Eight rather than four.  This is a *sampling* check: it detects a
+#: secret-dependent path only if two of the keys it happens to try land on
+#: different sides of the predicate.  With four keys the secp256k1 carry-fold
+#: and low-s leaks showed a 288-instruction spread, against 576 over twenty —
+#: i.e. four keys saw half the effect available, and a smaller leak could sit
+#: entirely inside one class.  Each additional class costs ~0.4 s on the ecdsa
+#: target and ~5 s on ghash, which buys detection power cheaply.
+#:
+#: Printable ASCII only: the value reaches the driver as `argv[1][0]`, and a
+#: non-ASCII character would be UTF-8 encoded by the caller into two bytes,
+#: so the driver would silently see the lead byte and two "different" classes
+#: could collide.
+KEY_CLASSES = ("A", "Z", "m", "q", "0", "~", "!", "5")
 
 #: Per-target instruction-count threshold.
 #:
@@ -94,13 +107,30 @@ KEY_CLASSES = ("A", "Z", "m", "q")
 #:
 #: ecdsa: secp256k1 signing has one *legitimate* variable-time step — DER
 #: encoding of r and s, whose leading-zero handling depends on the signature
-#: values.  Those are public: the verifier receives them.  Measured over eight
-#: keys the benign spread is 728 instructions and falls into exactly four
-#: discrete levels (2x2: r and s each needing a leading 0x00 pad or not),
-#: which is what confirms the attribution.  The Montgomery extra-reduction
-#: leak this gate exists to catch measured 33,354.  3,000 sits 4x above the
-#: benign spread and 11x below the defect, so it is tuned to neither.
-THRESHOLDS = {"ghash": 200, "ecdsa": 3000}
+#: values.  Those are public: the verifier receives them.
+#:
+#: This threshold was 3,000, calibrated against the Montgomery
+#: extra-reduction leak (33,354 instructions) and an apparent benign spread
+#: of 728.  Both halves of that calibration were wrong in the same direction.
+#: The 728 was not benign — most of it was two *further* live leaks in the
+#: same file, sc_add's carry fold and sc_is_high's short-circuited memcmp,
+#: which this gate was passing over.  And ~9 instructions per byte of the
+#: remainder came from the driver consuming `siglen` bytes rather than a
+#: fixed count, which is measurement noise the gate itself created.
+#:
+#: Re-measured over 20 key classes with both fixed and the driver consuming a
+#: fixed 80 bytes: benign spread 24 instructions, and the two-leak control
+#: build (git-reverted secp256k1, same compiler and flags) spreads 576.  200
+#: sits 8x above the benign floor and 2.9x below a defect an order of
+#: magnitude smaller than the one the old number was tuned to — which is the
+#: point, because that is the size of leak that was getting through.
+#:
+#: The general lesson is recorded because it will recur: a threshold set
+#: between one known defect and one *assumed* noise floor is only as good as
+#: the assumption. The noise floor has to be measured on a build believed
+#: clean, and "believed clean" has to be earned by looking, not by the
+#: absence of a red gate.
+THRESHOLDS = {"ghash": 200, "ecdsa": 200}
 
 #: Where to look first when a target fails.  Kept per-target so the message
 #: names the code that is actually implicated rather than a generic pointer.
@@ -112,12 +142,15 @@ _REMEDY = {
         "XOR; see src/c/internal/ama_ct_barrier.h."
     ),
     "ecdsa": (
-        "The usual cause is a branch on a secret in the scalar field arithmetic\n"
-        "of src/c/ama_secp256k1.c — classically the Montgomery extra-reduction\n"
-        "predicate in sc_mont_mul, which must stay masked rather than branched.\n"
-        "Disassemble sc_mont_mul and look for a conditional jump. Note that DER\n"
-        "encoding of r and s is legitimately variable-time on public data and\n"
-        "accounts for a benign spread of a few hundred instructions."
+        "The usual cause is a branch on a secret in the scalar arithmetic of\n"
+        "src/c/ama_secp256k1.c. Three sites have had this defect and all three\n"
+        "must stay masked rather than branched: the Montgomery extra-reduction\n"
+        "predicate in sc_mont_mul, the carry fold in sc_add, and the low-s\n"
+        "normalisation (sc_is_high must not short-circuit, and the negation is\n"
+        "selected via sc_cond_negate). Disassemble each and look for a\n"
+        "conditional jump. DER encoding of r and s is legitimately variable on\n"
+        "public data, but with the driver consuming a fixed byte count that\n"
+        "accounts for only ~24 instructions — not hundreds."
     ),
 }
 
@@ -138,16 +171,26 @@ int main(int argc, char **argv) {
     uint8_t key[32], nonce[12], pt[512], aad[64], ct[512], tag[16];
     unsigned fill = (argc > 1) ? (unsigned)(unsigned char)argv[1][0] : 0u;
 
-    memset(key, (int)fill, sizeof key);
+    /* Spread the class byte across the key rather than `memset`-ing it.
+     * A repeated-byte key is a degenerate sample: it makes the whole key
+     * schedule, and every H-derived value, highly structured, and it caps the
+     * reachable key space at 256 values. The expansion is deterministic, so
+     * the count stays reproducible to the instruction. */
+    for (unsigned i = 0; i < sizeof key; i++)
+        key[i] = (uint8_t)(fill * 31u + i * 167u + i * i * 13u);
     memset(nonce, 0, sizeof nonce);
     memset(pt, 0, sizeof pt);
     memset(aad, 0, sizeof aad);
 
     ama_test_force_aes_gcm_scalar();
 
+    /* The return value is checked so that a failed encryption cannot be
+     * measured as if it were a successful one.  Eight early returns are
+     * every bit as key-independent as eight encryptions, and would read as a
+     * pass; the exit status is what lets the caller tell the two apart. */
     for (int i = 0; i < 8; i++) {
-        ama_aes256_gcm_encrypt(key, nonce, pt, sizeof pt,
-                               aad, sizeof aad, ct, tag);
+        if (ama_aes256_gcm_encrypt(key, nonce, pt, sizeof pt,
+                                   aad, sizeof aad, ct, tag) != AMA_SUCCESS) return 1;
     }
 
     /* Consume the tag without letting its value reach control flow or
@@ -167,25 +210,41 @@ _ECDSA_DRIVER = r"""
 
 /* secp256k1 ECDSA signing, fixed message, key varied by class.
  *
- * The property under test is the Montgomery multiplication in the scalar
- * field: written with a branch on the extra-reduction predicate it leaks
- * both the long-term key and, worse, the per-signature nonce.  RFC 6979
- * makes signing deterministic, so with a fixed message the only input that
- * moves is the key and the count is reproducible to the instruction. */
+ * The property under test is every secret-dependent step of signing: the
+ * Montgomery extra reduction in sc_mont_mul, the carry fold in sc_add, and
+ * the low-s normalisation.  Written with a branch, each leaks the long-term
+ * key and — worse — the per-signature nonce.  RFC 6979 makes signing
+ * deterministic, so with a fixed message the only input that moves is the
+ * key and the count is reproducible to the instruction. */
 int main(int argc, char **argv) {
     uint8_t sk[32], pk[33], sig[80], msg[32];
     size_t siglen;
     unsigned fill = (argc > 1) ? (unsigned)(unsigned char)argv[1][0] : 0x41u;
 
-    memset(sk, (int)fill, sizeof sk);
+    /* Spread the class byte across the key — see the ghash driver.  A
+     * repeated-byte scalar is a poor sample of the private-key space, and
+     * this check's whole power comes from two classes landing on opposite
+     * sides of a secret-dependent predicate. */
+    for (unsigned i = 0; i < sizeof sk; i++)
+        sk[i] = (uint8_t)(fill * 31u + i * 167u + i * i * 13u);
     memset(msg, 0x11, sizeof msg);
     if (ama_secp256k1_pubkey_from_privkey(sk, pk) != AMA_SUCCESS) return 1;
 
     static volatile uint8_t sink;
     for (int i = 0; i < 8; i++) {
+        /* Clear the whole buffer so the bytes past the signature are
+         * deterministic, then consume a FIXED count below. */
+        memset(sig, 0, sizeof sig);
         siglen = sizeof sig;
         if (ama_secp256k1_ecdsa_sign(sig, &siglen, msg, sk) != AMA_SUCCESS) return 1;
-        for (size_t j = 0; j < siglen; j++) sink = (uint8_t)(sink ^ sig[j]);
+        /* Iterating to `siglen` would make the *driver* variable-time on the
+         * DER length.  That length is public, but it put ~9 instructions per
+         * byte of avoidable variance into the measurement, and a threshold
+         * padded to tolerate it is a threshold with room for a real leak
+         * underneath.  Consuming a fixed 80 bytes removes the term entirely
+         * and leaves only der_encode_signature's own public-data-dependent
+         * work, which is what drops the benign spread to single digits. */
+        for (size_t j = 0; j < sizeof sig; j++) sink = (uint8_t)(sink ^ sig[j]);
     }
     return 0;
 }
@@ -198,7 +257,25 @@ _IREFS = re.compile(r"I\s+refs:\s+([\d,]+)")
 
 
 def _instruction_count(driver: Path, key_class: str, workdir: Path) -> Optional[int]:
-    """Retired instructions for one run of the driver, or None on failure."""
+    """Retired instructions for one *successful* run of the driver, else None.
+
+    The exit-status check is load-bearing, not defensive tidiness.  Callgrind
+    prints an ``I refs:`` line for any process it supervises, including one
+    that never reached ``main`` — and this tool used to accept that line as a
+    measurement.  Handing ``--lib`` a shared object rather than the static
+    archive produced exactly that: the driver linked, failed at load with
+    ``cannot open shared object file``, and every key class returned the same
+    ~109,000 instructions of dynamic-loader work.  All four agreed, so the
+    delta was zero, and the gate printed ``PASSED — count is key-independent``
+    over a program that had not performed a single cryptographic operation.
+    It gave that verdict identically for a build carrying two live
+    secret-dependent branches and for one with none.
+
+    ``main`` returns 0 only after every crypto call has succeeded and the
+    measured loop has run to completion, so the exit status is a precise
+    witness that the thing under measurement actually executed.  No arbitrary
+    instruction floor is needed on top of it.
+    """
     proc = subprocess.run(
         [
             "valgrind",
@@ -211,6 +288,14 @@ def _instruction_count(driver: Path, key_class: str, workdir: Path) -> Optional[
         text=True,
         check=False,
     )
+    if proc.returncode != 0:
+        print(
+            f"  driver exited {proc.returncode} for key class {key_class!r} — "
+            "the measured workload did not run to completion.\n"
+            f"  {proc.stderr.strip().splitlines()[-1] if proc.stderr.strip() else ''}",
+            file=sys.stderr,
+        )
+        return None
     match = _IREFS.search(proc.stderr)
     if match is None:
         return None
@@ -281,6 +366,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "-lpthread",
             "-lm",
         ]
+        # A shared library named on the command line links fine but is not
+        # found at load time without an rpath, which is how this check came to
+        # report PASS over a driver that never started.  The exit-status check
+        # in _instruction_count() now catches that; embedding the rpath means
+        # the caller does not hit it in the first place.  CI passes the static
+        # archive, for which this is a no-op.
+        if ".so" in args.lib.name or args.lib.suffix in (".dylib", ".so"):
+            compile_cmd.append(f"-Wl,-rpath,{args.lib.resolve().parent}")
         compiled = subprocess.run(compile_cmd, capture_output=True, text=True, check=False)
         if compiled.returncode != 0:
             print(

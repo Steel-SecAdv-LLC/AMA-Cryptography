@@ -429,14 +429,40 @@ jobs:
       # vulnerability found in our own pinned set.
       run: pip-audit --strict --desc --requirement requirements-lock.txt
 
-    - name: Security linting with Bandit
-      run: |
-        bandit -r ama_cryptography/ -l -f json -o bandit-report.json
-        bandit -r ama_cryptography/ -l
+    # INVARIANT-2: a gate over tool output must read a structured format where
+    # the tool emits one, and this job was the last place still reading
+    # Bandit's exit code instead.  It ran
+    #
+    #     bandit -r ama_cryptography/ -l -f json -o bandit-report.json
+    #     bandit -r ama_cryptography/ -l
+    #
+    # which had three problems and had gone red on all of them at once.
+    #
+    #  * `-l` is Bandit's LOW severity floor, so the effective policy here was
+    #    "block on any finding at all" — not the documented policy
+    #    (severity >= MEDIUM and confidence >= MEDIUM) that
+    #    tools/check_bandit_severity.py applies in security.yml and
+    #    ci-build-test.yml.  Three workflows scanned one tree under two
+    #    policies, and only one of them was written down or tested.
+    #  * Bandit exits 1 when it reports anything, so under `bash -e` the FIRST
+    #    command aborted the step and the human-readable second line never
+    #    ran.  The failure printed no finding, no file and no rule — only
+    #    "Process completed with exit code 1".  A gate whose failure message
+    #    is empty is the illegibility failure INVARIANT-2 was written about.
+    #  * `if: success()` on the upload meant the report was published only
+    #    when nobody needed it.
+    #
+    # One unfiltered `--exit-zero` scan now feeds both the artefact and the
+    # gate, matching the other two workflows exactly.
+    - name: Security linting with Bandit (unfiltered JSON report)
+      run: bandit -r ama_cryptography/ -f json -o bandit-report.json --exit-zero
+
+    - name: Bandit severity gate (fail-closed)
+      run: python3 tools/check_bandit_severity.py bandit-report.json
 
     - name: Upload Bandit report
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
-      if: success()
+      if: always()
       with:
         name: bandit-security-report
         path: bandit-report.json

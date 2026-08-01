@@ -1050,6 +1050,28 @@ data-dependent branch, and inversion uses a fixed chain over the public
 exponent `n - 2`. Verification is variable time by design — every input is
 public — matching what `ama_ed25519_batch_verify` states.
 
+That sentence was in this document before it was true of the code, and it is
+worth recording how, because the shape recurs. Three sites in
+`src/c/ama_secp256k1.c` branched on a secret and each was individually
+plausible: `sc_mont_mul`'s Montgomery extra reduction (`if (t[SC_LIMBS])`),
+`sc_add`'s carry fold (`if (carry)`, reached on the signing path as
+`r*d mod n + z`), and `sc_is_high`'s short-circuited `memcmp`. The first was
+found and fixed with a comment asserting it was the only one; the other two
+were found by sweeping for the pattern rather than trusting that assertion.
+All three are masked now — `sc_add` folds under an arithmetic mask,
+`sc_is_high` is a single `sc_lt(SC_HALF_N, a->v)`, and the low-`s`
+normalisation goes through `sc_cond_negate` — and
+`tools/check_ghash_constant_time.py --target ecdsa` measures the property
+rather than asserting it. Its threshold is 200 instructions against a
+measured benign spread of 24; at the 3,000 it was originally set to, all
+three defects fit underneath.
+
+The general rule this yields: **finding one instance of a defect pattern is a
+reason to sweep for the rest, and a gate calibrated between one known defect
+and one assumed-clean baseline is only as good as the assumption.** Both
+halves failed here at once — the "benign" 728-instruction spread the ECDSA
+threshold was calibrated against was mostly two live leaks.
+
 **Verification.** `tests/test_secp256k1_ecdsa.py` (31 tests) covers RFC 6979
 determinism, nonce non-reuse across messages and across keys, rejection of the
 high-`s` twin of a signature the library itself produced, and each strict-DER
@@ -1420,9 +1442,27 @@ visible evidence for this invariant: making the NIST default strict would
 create a new uncounted divergence bucket and turn the gate red.
 
 **Timing posture.** Signing is constant time with respect to the private key
-and the RFC 6979 nonce on both curves; the normalisation is a conditional
-negation of a value that is about to be published. Verification is variable
-time by design on both — every input is public.
+and the RFC 6979 nonce on both curves, *including* the normalisation.
+Verification is variable time by design on both — every input is public.
+
+An earlier revision of this paragraph excused the normalisation as "a
+conditional negation of a value that is about to be published", and that
+reasoning is wrong in a way worth keeping on the record, because it is what
+left a real leak in place on both curves. What gets published is the
+*normalised* `s`. Whether the negation happened is precisely what the
+published value does not reveal: given the low representative, an observer
+cannot tell whether the signer computed it directly or by negating the high
+twin. So `s_raw > (n-1)/2` is one bit per signature about `k` and `d`, and a
+branch on it leaks that bit. Measured in isolation under callgrind, the
+branched form cost 105 more instructions for a high `s` than a low one.
+
+Both curves now select rather than branch: `sc_cond_negate` in
+`ama_secp256k1.c`, and `nistp_select` under a mask in `ama_nistp.c`. The
+`low_s` *flag* is still branched on — it is the caller's argument, it is
+public, and branching on it keeps the default RFC-6979-verbatim path free.
+"About to be published" is a sound argument for the flag and an unsound one
+for the predicate; the distinction is which of the two the observer can
+recover from the output.
 
 **Verification.**
 `tests/test_nistp_curves.py::test_rfc6979_published_vectors` replays all 18

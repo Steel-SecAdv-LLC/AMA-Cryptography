@@ -29,6 +29,7 @@ import ctypes
 import logging
 import os
 import platform
+import sys
 import warnings
 from collections.abc import Iterator
 from dataclasses import dataclass, field
@@ -231,15 +232,64 @@ def _try_load_library(lib_path: Path) -> Optional[ctypes.CDLL]:
         return None
 
 
+#: ``AT_SECURE`` / ``AT_NULL`` from ``elf.h``.  Stable kernel ABI constants.
+_AT_NULL = 0
+_AT_SECURE = 23
+
+
+def _auxv_at_secure(path: str = "/proc/self/auxv") -> Optional[bool]:
+    """The kernel's ``AT_SECURE`` flag, or None where it cannot be read.
+
+    ``AT_SECURE`` is the authority the dynamic loader itself consults when it
+    decides to ignore ``LD_PRELOAD`` and ``LD_LIBRARY_PATH``.  The kernel sets
+    it for set-user-ID and set-group-ID execution *and* for several cases a
+    uid/gid comparison cannot see — most importantly a binary carrying file
+    capabilities (``setcap``), which runs privileged with ``uid == euid``.
+    Reading it directly is what makes this module's rule the same rule the
+    loader applies, rather than an approximation of it.
+
+    Returns None on any platform or configuration without ``/proc/self/auxv``
+    (Windows, macOS, a hardened container that masks procfs), leaving the
+    caller to fall back to the uid/gid comparison.
+
+    ``path`` exists so the parser can be driven over a synthetic auxiliary
+    vector in tests; nothing in the library passes it.
+    """
+    try:
+        with open(path, "rb") as handle:
+            data = handle.read()
+    except OSError:  # pragma: no cover - platform-dependent
+        return None
+    word = ctypes.sizeof(ctypes.c_void_p)
+    for offset in range(0, len(data) - 2 * word + 1, 2 * word):
+        key = int.from_bytes(data[offset : offset + word], sys.byteorder)
+        if key == _AT_NULL:
+            break
+        if key == _AT_SECURE:
+            value = int.from_bytes(data[offset + word : offset + 2 * word], sys.byteorder)
+            return value != 0
+    return None
+
+
 def _in_secure_execution_mode() -> bool:
     """True when the process runs with privileges its real user does not hold.
 
-    Mirrors glibc's ``AT_SECURE`` / ``issetugid()`` determination: a set-user-ID
-    or set-group-ID process is executing on behalf of a less-privileged caller,
-    so environment variables that caller controls must not be allowed to steer
-    code loading.  Returns False on platforms without POSIX uid/gid semantics
-    (e.g. Windows), where the concept does not apply.
+    Mirrors glibc's ``AT_SECURE`` / ``issetugid()`` determination: such a
+    process is executing on behalf of a less-privileged caller, so environment
+    variables that caller controls must not be allowed to steer code loading.
+
+    Both signals are consulted and the answer is their OR, because each covers
+    a case the other misses.  ``AT_SECURE`` catches file capabilities and the
+    other kernel-side triggers, where ``uid == euid`` and the comparison below
+    sees nothing; the comparison still runs because ``/proc`` may be absent or
+    masked, and an unreadable ``AT_SECURE`` must not be read as "not secure".
+    Erring towards True only costs a developer an ignored override.
+
+    Returns False on platforms without POSIX uid/gid semantics (e.g. Windows),
+    where the concept does not apply.
     """
+    if _auxv_at_secure():
+        return True
     try:
         return os.getuid() != os.geteuid() or os.getgid() != os.getegid()
     except AttributeError:  # pragma: no cover - non-POSIX platform

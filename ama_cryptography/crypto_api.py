@@ -2314,11 +2314,17 @@ class CryptoPackageResult:
     #: pickle.  A blanket ``b""`` would give ``derived_keys`` a ``bytes``
     #: where the annotation promises ``List[bytes]``, so a caller iterating it
     #: after a round-trip would silently get single bytes instead of keys.
+    #: Bandit's B105 heuristic fires on a secret-sounding key assigned a
+    #: literal.  Here the literals are the *absence* of the secret — this is
+    #: the table that replaces stripped fields — so the finding is exactly
+    #: inverted.  Suppressed line-scoped with a tracking ID per INVARIANT-13;
+    #: the values are pinned by
+    #: tests/test_crypto_api_packages.py::test_pickle_strips_the_private_signing_key.
     _SECRET_FIELD_PLACEHOLDERS: ClassVar[Dict[str, Any]] = {
         "hmac_key": b"",
-        "hkdf_master_secret": b"",
+        "hkdf_master_secret": b"",  # nosec B105 -- empty placeholder for a stripped field, not a secret (CAPI-002)
         "derived_keys": [],
-        "kem_shared_secret": None,
+        "kem_shared_secret": None,  # nosec B105 -- empty placeholder for a stripped field, not a secret (CAPI-002)
     }
 
     @staticmethod
