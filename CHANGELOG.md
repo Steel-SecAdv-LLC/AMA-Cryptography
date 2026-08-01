@@ -72,6 +72,62 @@ every trigger. The existing dudect AES-GCM lane could not have caught this: it
 calls the public entry point, and every x86-64 runner dispatches to the
 PCLMULQDQ kernel, so the scalar GHASH was never executed under measurement.
 
+### Performance — the constant-time AES S-box scan is ~14x faster, same access pattern
+
+`src/c/ama_aes_bitsliced.c` is the constant-time AES path that
+`AMA_AES_CONSTTIME=ON` (the default) selects. Despite the file name it is not
+bitsliced: it substitutes a byte by scanning all 256 S-box entries with a
+masked compare, which is genuinely constant-time — every entry is read on
+every call — and cost about 57,000 masked compares per block, because
+`SubBytes` re-walked the whole table once per state byte. The scalar
+AES-256-GCM path ran at ~1.07 MB/s as a result, with AES rather than GHASH as
+the dominant term.
+
+The loops are now nested the other way round: walk the 256 entries once per
+`SubBytes` and apply each to all sixteen state bytes. Identical work per
+(byte, entry) pair and an identical memory-access pattern — the whole table is
+still read every call, which is the property that makes the scan safe — but
+the table is read 256 times per round instead of 4096, and the inner loop
+becomes sixteen independent byte operations over contiguous arrays. That is
+the shape auto-vectorisers recognise: gcc and clang both emit one vector
+compare/and/or per table entry (SSE2 is baseline on x86-64, NEON on AArch64).
+
+The equality mask is built arithmetically rather than with `==`, for the same
+reason the GHASH mask goes through a value barrier: `==` invites the compiler
+to materialise a branch, and a branch here would be on a byte of the AES
+state.
+
+End-to-end scalar AES-256-GCM (4 KiB, one core, same host):
+
+| | throughput |
+|---|---|
+| 3.5.0 (leaky GHASH table, per-byte S-box scan) | 1.07 MB/s |
+| 4.0.0 with the GHASH fix alone | 1.11 MB/s |
+| **4.0.0 shipped (GHASH + state-wide S-box scan)** | **2.92 MB/s** |
+
+**2.7x faster than the release it supersedes**, on the path that previously
+had to choose between constant-time and usable.
+
+Constant-timeness verified, not assumed: zero data-dependent branches in the
+generated code on gcc and clang at `-O2`/`-O3` (the four conditional branches
+in `ama_aes256_encrypt_block_consttime` are the table-scan counter, the
+`round == 14` test, the round counter, and the stack-protector canary);
+`tools/check_ghash_constant_time.py`, which measures the whole scalar
+AES-GCM path, reports a 20-instruction cross-key delta against a
+4-instruction noise floor; the dudect AES-GCM lane passes at t = +0.30.
+
+Correctness: the S-box output was checked exhaustively against the algebraic
+definition (GF(2^8) inverse composed with the AES affine map) for all 256
+inputs, FIPS-197 §C.3 AES-256 matches byte for byte, the 232-case differential
+against an independently written AES-256 + GHASH still passes on the scalar
+path, and the full C and Python suites are unchanged.
+
+This is a fallback path: hosts with AES-NI dispatch to the hardware kernels
+and are unaffected. It is also still an order of magnitude slower than a true
+bitsliced AES would be — the scan is inherently ~256 operations per byte where
+a bitsliced circuit is ~30 — so the honest summary is that a large avoidable
+cost was removed, not that this path is now fast.
+
 ### Security — package serialization no longer emits the private signing key
 
 `CryptoPackageResult.to_dict()` and `__getstate__` are documented as stripping
