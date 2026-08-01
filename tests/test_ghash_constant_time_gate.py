@@ -29,7 +29,9 @@ So the properties pinned here are, in order of what actually failed:
 2. **The verdict arithmetic.** Above threshold fails, below passes, and an
    unusable noise floor is inconclusive rather than either.
 3. **The calibration is not decorative.** The ECDSA threshold must stay small
-   enough to catch the class of defect that was getting through at 3,000.
+   enough to catch the class of defect that was getting through at 3,000 —
+   which, measured on the archive build CI uses, spread 2,952 against an old
+   threshold of 3,000.
 4. **The sampling cannot silently collapse.** Key classes must be distinct
    single-byte ASCII: a non-ASCII character is UTF-8 encoded by the caller and
    the driver would see only the lead byte, so two "different" classes could
@@ -160,21 +162,24 @@ class TestVerdict:
     def test_delta_above_threshold_fails(
         self, tool: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        """The 576-instruction spread the two secp256k1 leaks produced.
+        """The spread the two secp256k1 leaks produced.
 
-        This is the number that must not pass, and did at the old threshold of
-        3,000.
+        2,952 instructions on the AMA_TESTING_MODE static archive CI builds.
+        The old threshold of 3,000 sat 48 instructions above it.
         """
         counts: dict[str, Optional[int]] = dict.fromkeys(tool.KEY_CLASSES, 11_628_800)
-        counts[tool.KEY_CLASSES[-1]] = 11_628_800 + 576
+        counts[tool.KEY_CLASSES[-1]] = 11_628_800 + 2_952
         assert _run_main(tool, monkeypatch, tmp_path, counts) == 1
 
     def test_delta_below_threshold_passes(
         self, tool: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        """The 24-instruction benign DER spread must not turn the gate red."""
+        """The measured benign DER spread must not turn the gate red.
+
+        80 instructions on the archive build; 24 on a shared-library build.
+        """
         counts: dict[str, Optional[int]] = dict.fromkeys(tool.KEY_CLASSES, 11_628_800)
-        counts[tool.KEY_CLASSES[-1]] = 11_628_800 + 24
+        counts[tool.KEY_CLASSES[-1]] = 11_628_800 + 80
         assert _run_main(tool, monkeypatch, tmp_path, counts) == 0
 
     def test_unusable_noise_floor_is_inconclusive_not_passing(
@@ -223,13 +228,14 @@ class TestVerdict:
 
 class TestCalibration:
     def test_ecdsa_threshold_would_catch_the_defect_it_missed(self, tool: ModuleType) -> None:
-        """576 was measured on a git-reverted control build; 24 is benign.
+        """2,952 on a git-reverted control build; 80 is the benign floor.
 
-        The threshold has to sit strictly between them. At the original 3,000
-        it sat above both, so the gate passed the very defect class it was
-        added for.
+        Both measured on the AMA_TESTING_MODE static archive, which is what
+        the dudect workflow builds. The threshold has to sit strictly between
+        them. At the original 3,000 it sat 48 instructions above the defect,
+        so the gate could not have fired on the thing it was added for.
         """
-        assert 24 < tool.THRESHOLDS["ecdsa"] < 576
+        assert 80 < tool.THRESHOLDS["ecdsa"] < 2952
 
     def test_ghash_threshold_is_between_its_own_noise_and_defect(self, tool: ModuleType) -> None:
         assert 26 < tool.THRESHOLDS["ghash"] < 3226
@@ -252,7 +258,10 @@ class TestSamplingCannotSilentlyCollapse:
             assert key_class.isascii()
 
     def test_enough_classes_to_have_detection_power(self, tool: ModuleType) -> None:
-        """Four classes saw 288 of the 576 instructions actually available."""
+        """Four classes saw 288 of the 576 instructions actually available.
+
+        (Shared-library measurement; the archive build is larger still.)
+        """
         assert len(tool.KEY_CLASSES) >= 8
 
     @pytest.mark.parametrize("target", ["ghash", "ecdsa"])

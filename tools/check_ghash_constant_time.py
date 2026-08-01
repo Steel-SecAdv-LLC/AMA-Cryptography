@@ -118,12 +118,24 @@ KEY_CLASSES = ("A", "Z", "m", "q", "0", "~", "!", "5")
 #: remainder came from the driver consuming `siglen` bytes rather than a
 #: fixed count, which is measurement noise the gate itself created.
 #:
-#: Re-measured over 20 key classes with both fixed and the driver consuming a
-#: fixed 80 bytes: benign spread 24 instructions, and the two-leak control
-#: build (git-reverted secp256k1, same compiler and flags) spreads 576.  200
-#: sits 8x above the benign floor and 2.9x below a defect an order of
-#: magnitude smaller than the one the old number was tuned to — which is the
-#: point, because that is the size of leak that was getting through.
+#: Re-measured on the configuration CI actually runs — the AMA_TESTING_MODE
+#: static archive, LTO off, 8 key classes, driver consuming a fixed byte
+#: count:
+#:
+#: ==========================================  ==================
+#: build                                       cross-key delta
+#: ==========================================  ==================
+#: pre-fix secp256k1 (git-reverted control)    2,952 instructions
+#: fixed (shipped)                                80
+#: ==========================================  ==================
+#:
+#: The old threshold of 3,000 therefore sat **48 instructions above the
+#: defect it was measuring**.  It was never going to fire.  200 sits 2.5x
+#: above the benign floor and ~15x below the defect.
+#:
+#: (On a shared-library build the same comparison reads 576 against 24; the
+#: absolute numbers move with linkage and codegen, the ratio does not.  Quote
+#: the archive numbers, because that is what the workflow builds.)
 #:
 #: The general lesson is recorded because it will recur: a threshold set
 #: between one known defect and one *assumed* noise floor is only as good as

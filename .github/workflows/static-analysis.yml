@@ -169,11 +169,52 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y cmake ${{ matrix.compiler }}
 
-      - name: Build with strict warnings (Werror)
+      # This step was named "Build with strict warnings (Werror)" and did not
+      # pass -Werror. Nor did CMakeLists.txt. It compiled with an expanded
+      # warning set, printed 68 warnings under gcc and 69 under clang, and
+      # exited 0 — a job that could not fail on the thing it is named after,
+      # which is the same shape as every other gate defect this release fixed.
+      #
+      # -Werror over the whole set is not achievable here and pretending
+      # otherwise would just produce a permanently-disabled job. -Wpedantic is
+      # dominated by `__uint128_t` in src/c/fe51.h and fe64.h — a required
+      # extension, not a defect — and by src/c/vendor/ed25519-donna/, which
+      # INVARIANT-1's vendoring policy keeps byte-for-byte unmodified.
+      # -Wconversion and clang's -Wimplicit-int-conversion are concentrated in
+      # the Kyber arithmetic and the same vendored tree; blanket-casting
+      # reduction arithmetic to silence a warning is how a modular-arithmetic
+      # bug gets introduced, so it is not attempted next to a release.
+      #
+      # So the categories that ARE achievable are made fatal, and they were
+      # first driven to zero at source rather than suppressed:
+      #
+      #   -Werror=missing-prototypes  Every one of these was a symbol declared
+      #                               by `extern` in each consumer separately —
+      #                               the MULX+ADX asm kernels, the FROST and
+      #                               Kyber test-only exports, the renamed
+      #                               X25519 ladders. Three independent
+      #                               transcriptions of one signature, on raw
+      #                               uint64_t[4]/uint8_t[32] buffers, where a
+      #                               mismatch is silent rather than a compile
+      #                               error. Each now has one shared internal
+      #                               header (src/c/internal/*.h,
+      #                               tests/c/x25519_equiv_ladders.h).
+      #   -Werror=shadow              Two `rc` and one `pub33` shadowed in the
+      #                               C tests.
+      #   -Werror=unused-function     Dead DRBG hook installers in test_kat.c,
+      #                               deleted; and fe64.h's frombytes/tobytes
+      #                               were plain `static` in a header where
+      #                               every sibling and every fe51.h
+      #                               counterpart is `static inline`.
+      #
+      # The remaining categories still compile and still print. Making one of
+      # them fatal is a follow-up with its own diff, not a flag flipped here.
+      - name: Build with strict warnings
         run: |
           cmake -B build-strict \
             -DCMAKE_C_COMPILER=${{ matrix.compiler }} \
-            -DCMAKE_C_FLAGS="-Wall -Wextra -Wpedantic -Wshadow -Wformat=2 -Wconversion -Wno-sign-conversion" \
+            -DCMAKE_C_FLAGS="-Wall -Wextra -Wpedantic -Wshadow -Wformat=2 -Wconversion -Wno-sign-conversion \
+                             -Werror=missing-prototypes -Werror=shadow -Werror=unused-function" \
             -DAMA_USE_NATIVE_PQC=ON \
             -DAMA_BUILD_TESTS=ON \
             -DAMA_BUILD_EXAMPLES=OFF \

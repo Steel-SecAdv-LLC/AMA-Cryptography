@@ -67,9 +67,7 @@
  * pure-C fe64_mul / fe64_sq from fe64.h continues to drive the
  * Montgomery ladder. */
 #if defined(AMA_HAVE_X25519_FE64_MULX_IMPL) && defined(AMA_FE64_AVAILABLE)
-extern void ama_x25519_fe64_mul_mulx(uint64_t h[4], const uint64_t f[4],
-                                     const uint64_t g[4]);
-extern void ama_x25519_fe64_sq_mulx(uint64_t h[4], const uint64_t f[4]);
+#include "internal/ama_x25519_fe64_mulx.h"
 #endif
 
 /* Benchmark/test-only runtime override for the MULX+ADX gate.

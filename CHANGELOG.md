@@ -85,11 +85,21 @@ key-independent as eight encryptions.
 **Its threshold was calibrated against an assumption.** 3,000 sat between a
 known defect (33,354) and an apparent benign spread of 728 — but the 728 was
 mostly the two live leaks above, and ~9 instructions per DER byte of it came
-from the driver iterating to `siglen` rather than a fixed count. Re-measured on
-a git-reverted control build with the driver fixed: benign spread **24**,
-two-leak spread **576**. The threshold is now **200** — 8x above the floor,
-2.9x below the defect — and verified to fail on the control build and pass on
-the fixed one.
+from the driver iterating to `siglen` rather than a fixed count.
+
+Re-measured on the configuration the workflow actually builds — the
+`AMA_TESTING_MODE` static archive, LTO off, 8 key classes, fixed-count driver —
+against a git-reverted control:
+
+| build | cross-key delta |
+|---|---|
+| pre-fix secp256k1 (control) | **2,952** instructions |
+| fixed (shipped) | **80** |
+
+So the old threshold of **3,000 sat forty-eight instructions above the defect
+it was measuring**. It was never going to fire. It is now **200** — 2.5x above
+the benign floor, ~15x below the defect — and verified to fail on the control
+build and pass on the fixed one.
 
 Sampling was strengthened alongside: 8 key classes rather than 4 (four saw only
 288 of the 576 instructions actually available), and both drivers now derive
@@ -99,6 +109,56 @@ the sampled key space at 256 highly structured values.
 The general rule, since it will recur: **finding one instance of a defect
 pattern is a reason to sweep for the rest, and a threshold set between one
 known defect and one assumed-clean baseline is only as good as the assumption.**
+
+### Fixed — the "Strict Compiler Warnings (Werror)" job did not pass `-Werror`
+
+Neither the workflow step nor `CMakeLists.txt` contained `-Werror` anywhere.
+The job compiled with an expanded warning set, printed **68 warnings under gcc
+and 69 under clang**, and exited 0. It could not fail on the thing its own name
+asserts — the same shape as the ECDSA constant-time gate above, and as the
+Bandit step below.
+
+`-Werror` over the whole set is not achievable here, and claiming it would just
+produce a permanently-disabled job. `-Wpedantic` is dominated by `__uint128_t`
+in `src/c/fe51.h` and `fe64.h` — a required extension, not a defect — and by
+`src/c/vendor/ed25519-donna/`, which the INVARIANT-1 vendoring policy keeps
+byte-for-byte unmodified. `-Wconversion` and clang's
+`-Wimplicit-int-conversion` are concentrated in the Kyber reduction arithmetic
+and the same vendored tree; blanket-casting modular arithmetic to silence a
+warning is how a real bug gets introduced, and it does not belong next to three
+breaking security changes.
+
+So the three categories that *are* achievable were driven to zero at source —
+not suppressed — and made fatal: `-Werror=missing-prototypes`,
+`-Werror=shadow`, `-Werror=unused-function`. Both compilers build clean and
+61/61 C tests pass under each, and reintroducing a shadowed variable was
+verified to fail the build.
+
+The `-Wmissing-prototypes` findings were not cosmetic. Every one was a symbol
+whose signature was transcribed independently in each consumer via `extern` —
+the MULX+ADX assembly kernels (declared in `ama_x25519.c` and again in their
+equivalence test), the FROST and Kyber test-only exports (declared in three
+test files), and the renamed X25519 ladders used by the fe51/fe64 differential.
+Raw `uint64_t[4]` and `uint8_t[32]` buffers, hand-written asm, and nothing
+tying the transcriptions together: a signature change would have been a silent
+ABI mismatch, not a compile error. Each now has one shared internal header
+(`src/c/internal/ama_x25519_fe64_mulx.h`, `src/c/internal/ama_testing_exports.h`,
+`tests/c/x25519_equiv_ladders.h`) included by the definition and every consumer.
+
+Those headers deliberately do **not** guard their declarations on
+`AMA_TESTING_MODE`. CMake sets that macro `PRIVATE` on the
+`ama_cryptography_test` *library* target, so the test executables that link it
+do not carry it — a guarded header would vanish exactly where it is included
+and the callers would fall back to implicit declarations. gcc accepts those
+silently; clang 16+ rejects them, which is how the first attempt was caught.
+
+`-Wunused-function`: `test_kat.c` carried `install_drbg_hooks` /
+`remove_drbg_hooks` and their DRBG shim, left behind when the legacy pre-FIPS
+KAT tests were removed and referenced by nothing. Deleted rather than
+annotated — dead scaffolding in a test file reads as coverage that exists.
+`fe64.h`'s `frombytes` / `tobytes` were plain `static` in a header where every
+sibling and both `fe51.h` counterparts are `static inline`, which is why every
+translation unit that included it without calling them emitted a warning.
 
 ### Fixed — three CI gates had no negative control
 

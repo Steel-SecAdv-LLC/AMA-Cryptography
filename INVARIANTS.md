@@ -1062,15 +1062,17 @@ All three are masked now — `sc_add` folds under an arithmetic mask,
 `sc_is_high` is a single `sc_lt(SC_HALF_N, a->v)`, and the low-`s`
 normalisation goes through `sc_cond_negate` — and
 `tools/check_ghash_constant_time.py --target ecdsa` measures the property
-rather than asserting it. Its threshold is 200 instructions against a
-measured benign spread of 24; at the 3,000 it was originally set to, all
-three defects fit underneath.
+rather than asserting it. On the AMA_TESTING_MODE static archive the workflow
+actually builds, the pre-fix tree spreads **2,952** instructions across key
+classes and the fixed tree spreads **80**. The gate's threshold was **3,000** —
+forty-eight instructions above the defect it was measuring. It is now 200.
 
 The general rule this yields: **finding one instance of a defect pattern is a
 reason to sweep for the rest, and a gate calibrated between one known defect
 and one assumed-clean baseline is only as good as the assumption.** Both
 halves failed here at once — the "benign" 728-instruction spread the ECDSA
-threshold was calibrated against was mostly two live leaks.
+threshold was calibrated against was mostly two live leaks, and the threshold
+derived from it landed just above the number it needed to be below.
 
 **Verification.** `tests/test_secp256k1_ecdsa.py` (31 tests) covers RFC 6979
 determinism, nonce non-reuse across messages and across keys, rejection of the

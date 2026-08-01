@@ -30,11 +30,9 @@
 #include <string.h>
 #include <time.h>
 
-/* External linkage — defined by the wrapper TUs. */
-extern void x25519_scalarmult_fe51(uint8_t q[32], const uint8_t n[32],
-                                   const uint8_t p[32]);
-extern void x25519_scalarmult_fe64(uint8_t q[32], const uint8_t n[32],
-                                   const uint8_t p[32]);
+/* External linkage — defined by the wrapper TUs, declared once in the header
+ * both they and this file compile against. */
+#include "x25519_equiv_ladders.h"
 
 #define N_VECTORS 1024
 

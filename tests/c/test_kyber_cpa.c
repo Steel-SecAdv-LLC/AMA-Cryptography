@@ -6,8 +6,7 @@
  */
 #include "../../include/ama_cryptography.h"
 #include <stdio.h>
-extern int ama_kyber_debug_ntt_roundtrip(void);
-extern int ama_kyber_debug_cpa_roundtrip(void);
+#include "../../src/c/internal/ama_testing_exports.h"
 int main(void) {
     setbuf(stdout, NULL);
     printf("=== NTT Roundtrip Test ===\n");

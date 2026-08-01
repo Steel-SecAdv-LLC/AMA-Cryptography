@@ -745,6 +745,7 @@ AMA_API ama_error_t ama_frost_aggregate(
 }
 
 #ifdef AMA_TESTING_MODE
+#include "internal/ama_testing_exports.h"
 /* Test-only export of scalar_negate so tests/c/test_frost.c can
  * exercise the constant-time branchless borrow loop directly
  * (INVARIANT-12 boundary tests for s ∈ {0, 1, l-1, mid-range}).

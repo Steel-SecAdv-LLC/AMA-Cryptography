@@ -37,9 +37,7 @@
 /* AMA_TESTING_MODE-only exports from src/c/ama_frost.c.  Forward-
  * declared here so the test can exercise the constant-time branchless
  * borrow loop in scalar_negate directly (INVARIANT-12). */
-extern void ama_frost_test_scalar_negate(uint8_t neg[32], const uint8_t s[32]);
-extern void ama_frost_test_scalar_add(uint8_t c[32], const uint8_t a[32],
-                                       const uint8_t b[32]);
+#include "../../src/c/internal/ama_testing_exports.h"
 
 /* AMA_TESTING_MODE-only CSPRNG override from src/c/ama_frost.c.  Used by
  * the fail-closed and nonce-hedging regression tests below. */
@@ -315,23 +313,23 @@ int main(void) {
         /* Produce a valid share first, with the real CSPRNG, so the
          * round-1 check below exercises the nonce path rather than a
          * malformed-input path. */
-        ama_error_t rc = ama_frost_keygen_trusted_dealer(2, 3, gpk, shares, NULL);
-        TEST_ASSERT(rc == AMA_SUCCESS, "keygen succeeds with a healthy CSPRNG");
+        ama_error_t frc = ama_frost_keygen_trusted_dealer(2, 3, gpk, shares, NULL);
+        TEST_ASSERT(frc == AMA_SUCCESS, "keygen succeeds with a healthy CSPRNG");
 
         ama_frost_randombytes_hook = failing_randombytes;
 
-        rc = ama_frost_keygen_trusted_dealer(2, 3, gpk, shares, NULL);
-        TEST_ASSERT(rc != AMA_SUCCESS,
+        frc = ama_frost_keygen_trusted_dealer(2, 3, gpk, shares, NULL);
+        TEST_ASSERT(frc != AMA_SUCCESS,
                     "keygen fails closed when the CSPRNG fails");
 
-        rc = ama_frost_round1_commit(nonce_pair, commitment, shares);
-        TEST_ASSERT(rc != AMA_SUCCESS,
+        frc = ama_frost_round1_commit(nonce_pair, commitment, shares);
+        TEST_ASSERT(frc != AMA_SUCCESS,
                     "round1 fails closed when the CSPRNG fails");
 
         ama_frost_randombytes_hook = NULL;
 
-        rc = ama_frost_keygen_trusted_dealer(2, 3, gpk, shares, NULL);
-        TEST_ASSERT(rc == AMA_SUCCESS, "keygen recovers once the CSPRNG does");
+        frc = ama_frost_keygen_trusted_dealer(2, 3, gpk, shares, NULL);
+        TEST_ASSERT(frc == AMA_SUCCESS, "keygen recovers once the CSPRNG does");
     }
 
     /* Test 7: nonces are hedged with the secret share (security regression).
@@ -357,15 +355,15 @@ int main(void) {
         uint8_t np_a[64], commit_a[64];
         uint8_t np_b[64], commit_b[64];
 
-        ama_error_t rc = ama_frost_keygen_trusted_dealer(2, 3, gpk, shares, NULL);
-        TEST_ASSERT(rc == AMA_SUCCESS, "keygen for hedge test");
+        ama_error_t hrc = ama_frost_keygen_trusted_dealer(2, 3, gpk, shares, NULL);
+        TEST_ASSERT(hrc == AMA_SUCCESS, "keygen for hedge test");
 
         ama_frost_randombytes_hook = constant_randombytes;
 
-        rc = ama_frost_round1_commit(np_a, commit_a, shares);
-        TEST_ASSERT(rc == AMA_SUCCESS, "round1 succeeds under a constant CSPRNG");
-        rc = ama_frost_round1_commit(np_b, commit_b, shares + 64);
-        TEST_ASSERT(rc == AMA_SUCCESS, "round1 succeeds for a second share");
+        hrc = ama_frost_round1_commit(np_a, commit_a, shares);
+        TEST_ASSERT(hrc == AMA_SUCCESS, "round1 succeeds under a constant CSPRNG");
+        hrc = ama_frost_round1_commit(np_b, commit_b, shares + 64);
+        TEST_ASSERT(hrc == AMA_SUCCESS, "round1 succeeds for a second share");
 
         TEST_ASSERT(memcmp(np_a, np_a + 32, 32) != 0,
                     "hiding and binding nonces differ under a constant CSPRNG");
@@ -382,8 +380,8 @@ int main(void) {
          * with the SCOPE notes updated to match. */
         {
             uint8_t np_repeat[64], commit_repeat[64];
-            rc = ama_frost_round1_commit(np_repeat, commit_repeat, shares);
-            TEST_ASSERT(rc == AMA_SUCCESS, "round1 repeats successfully");
+            hrc = ama_frost_round1_commit(np_repeat, commit_repeat, shares);
+            TEST_ASSERT(hrc == AMA_SUCCESS, "round1 repeats successfully");
             TEST_ASSERT(memcmp(np_a, np_repeat, 64) == 0,
                         "KNOWN LIMIT: a replayed CSPRNG repeats the nonce "
                         "(stateless hedge; see nonce_generate SCOPE note)");
