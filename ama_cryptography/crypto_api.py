@@ -2780,8 +2780,24 @@ def _verify_package_signature(
     embedded_pk = package.keypairs[sig_alg_name].public_key
 
     if expected_public_key is not None:
-        from ama_cryptography.secure_memory import constant_time_compare
+        from ama_cryptography.secure_memory import constant_time_compare, lengths_match
 
+        # Public length pre-check.  `expected_public_key` is the caller's, but
+        # `embedded_pk` came out of the package; a signing public key has one
+        # length per algorithm and that length is not secret.  Checking it here
+        # separates "this package is malformed" from "this package was signed
+        # by someone else" in the log, and keeps an untrusted length out of the
+        # comparison.
+        if not lengths_match(expected_public_key, embedded_pk):
+            logger.error(
+                "Layer 3 trust anchor mismatch: expected a %d-byte %s public "
+                "key, package carries %d bytes — refusing to verify the "
+                "signature.",
+                len(expected_public_key),
+                sig_alg_name,
+                len(embedded_pk),
+            )
+            return False, False
         if not constant_time_compare(embedded_pk, expected_public_key):
             logger.error(
                 "Layer 3 trust anchor mismatch: package signing key does not "
@@ -2937,9 +2953,23 @@ def verify_crypto_package(
     # ========================================================================
     try:
         recomputed_hmac = _hmac_sha3_256(package.hmac_key, content)
-        from ama_cryptography.secure_memory import constant_time_compare
+        from ama_cryptography.secure_memory import constant_time_compare, lengths_match
 
-        results["hmac"] = constant_time_compare(recomputed_hmac, package.hmac_tag)
+        # Public length pre-check first.  `package.hmac_tag` is whatever the
+        # package says it is, and an HMAC-SHA3-256 tag has exactly one length,
+        # which is not a secret.  Refusing a wrong-length tag here says
+        # "malformed" in the log instead of letting a structural defect arrive
+        # at the caller as "the tag did not match", and it means no untrusted
+        # length reaches the comparison at all.
+        if not lengths_match(recomputed_hmac, package.hmac_tag):
+            logger.error(
+                "Layer 2 HMAC tag is malformed: expected %d bytes, package " "carries %d.",
+                len(recomputed_hmac),
+                len(package.hmac_tag),
+            )
+            results["hmac"] = False
+        else:
+            results["hmac"] = constant_time_compare(recomputed_hmac, package.hmac_tag)
     except Exception as exc:
         logger.error("Layer 2 HMAC verification error: %s", exc)
         results["hmac"] = False

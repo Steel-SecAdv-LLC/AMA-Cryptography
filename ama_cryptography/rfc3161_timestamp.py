@@ -1019,17 +1019,23 @@ class MockTSA:
             # S3 fix: Verify HMAC (not raw hash concatenation).
             # Use constant-time comparison to be consistent with the
             # project's security posture (CONTRIBUTING.md / INVARIANT-1).
-            from ama_cryptography.secure_memory import constant_time_compare
+            from ama_cryptography.secure_memory import constant_time_compare, lengths_match
 
+            # `mac` and `embedded_hash` are slices of a caller-supplied token,
+            # so their lengths are attacker-chosen while the expected lengths
+            # (a 32-byte HMAC-SHA256 tag, a digest of `data_hash`'s size) are
+            # public.  Check length plainly, content in constant time.
             expected_mac = _hmac_sha256(nonce, payload)
-            if not constant_time_compare(mac, expected_mac):
+            if not lengths_match(expected_mac, mac) or not constant_time_compare(expected_mac, mac):
                 return False
 
             # Extract embedded data_hash from the payload and compare.
             # SECURITY FIX: Use constant-time comparison to prevent
             # timing oracle attacks on hash values (audit finding S3b).
             embedded_hash = payload[payload_end:]
-            return constant_time_compare(embedded_hash, data_hash)
+            return lengths_match(data_hash, embedded_hash) and constant_time_compare(
+                data_hash, embedded_hash
+            )
         except Exception as exc:
             _logger.error("MockTSA.verify failed: %s", exc)
             return False

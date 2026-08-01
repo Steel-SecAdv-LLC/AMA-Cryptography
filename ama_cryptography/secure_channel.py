@@ -943,10 +943,18 @@ class SecureChannelInitiator:
         # pass.  When the caller pinned the Responder's signature key, require
         # an exact constant-time match before the signature is evaluated.
         if self._expected_responder_sig_pk is not None:
-            from ama_cryptography.secure_memory import constant_time_compare
+            from ama_cryptography.secure_memory import constant_time_compare, lengths_match
 
-            if not constant_time_compare(
-                response.responder_public_key, self._expected_responder_sig_pk
+            # Public length pre-check before the content comparison.
+            # `response.responder_public_key` arrives over the wire, so its
+            # length is peer-controlled; a signature public key has one length
+            # per algorithm and that length is not a secret. Rejecting a
+            # wrong-length key here refuses a malformed handshake as malformed,
+            # and keeps a peer-chosen length out of the comparison entirely.
+            if not lengths_match(
+                self._expected_responder_sig_pk, response.responder_public_key
+            ) or not constant_time_compare(
+                self._expected_responder_sig_pk, response.responder_public_key
             ):
                 raise HandshakeError(
                     "Responder signature key does not match the pinned key "

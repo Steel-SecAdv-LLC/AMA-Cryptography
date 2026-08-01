@@ -56,14 +56,35 @@ Every secret comparison in the Python layer goes through
 
 ```python
 def constant_time_compare(a: bytes, b: bytes) -> bool:
-    # Primary: ama_consttime_memcmp from the native library.
-    # Both operands are padded to the same length first, so the number of
-    # bytes compared does not depend on either length, and the length
-    # difference is folded into the result rather than short-circuited.
-    ...
-    # Fallback (no native library): a pure-Python XOR accumulator over the
-    # padded inputs, which likewise never short-circuits.
+    # ama_consttime_memcmp from the native library, or RuntimeError.
+    # There is no fallback: see item 2 above.
+    #
+    # min(len(a), len(b)) bytes are compared in place — no padding, no
+    # allocation — and the length difference is OR-ed into the verdict
+    # rather than short-circuiting the content scan.  The scan itself
+    # never short-circuits: ama_consttime_memcmp accumulates over all n
+    # bytes.
 ```
+
+**Why the cost is bounded by the *shorter* operand, and why that is not a
+weakening.** Through 4.0.0 both operands were padded to
+`max(len(a), len(b))` with `ljust`, on the reasoning that a fixed comparison
+length hides the lengths. It does not need to: the values AMA compares in
+constant time — HMAC-SHA3-256 tags, Ed25519 / ML-DSA-65 public keys, ML-KEM
+shared secrets — each have exactly one length fixed by their specification, so
+an observer learns nothing from a comparison whose cost depends on them. What
+the padding did do was let an *attacker* set that cost. Every call site
+compares a locally computed value against one that arrived from outside:
+`verify_crypto_package` recomputes a 32-byte tag and compares it against
+`package.hmac_tag`, so a package declaring an 8 MiB tag caused 16 MiB of
+allocation and an 8 MiB scan before any check had established the package was
+worth looking at. Bounding the work by the shorter operand removes that, and
+removes it independently of argument order, while leaving every return value
+and the content-scan property exactly as they were.
+
+`secure_memory.lengths_match()` is the public length pre-check to run first
+where the expected size is known: it refuses a malformed value *as malformed*,
+rather than folding a structural defect into a cryptographic verdict.
 
 > **Correction (2026-08-01).** Through 4.0.0 this section stated that the
 > Python layer used `hmac.compare_digest()`, showed an `hmac_verify()` body
@@ -304,7 +325,7 @@ understated the library's posture rather than overstating it, but it was still
 wrong: a reader could conclude a stock build needed mitigation it already had.)*
 
 **GHASH** is also table-free, and its mask is laundered through
-`ama_ct_value_barrier_u8` so an optimizer cannot convert the branch-free
+`ama_ct_value_barrier_u64` so an optimizer cannot convert the branch-free
 selection back into a branch on the secret subkey — a real regression clang 18
 introduced at `-O2`/`-O3`. `tools/check_ghash_constant_time.py` measures
 retired instructions across key classes under callgrind and fails on any
