@@ -128,10 +128,57 @@ agree on the verdict for every input, and NULL is an input — and pinned by
 function plus a non-vacuity control that the same calls succeed with real
 pointers.
 
-`ama_ed25519_point_from_scalar()` is deliberately **not** changed: it returns
-`void`, so an early return on NULL would leave the caller's output buffer
-uninitialised, which is worse than the crash. Fixing it properly means changing
-its signature, which is an ABI break and does not belong here.
+The third member of the group, `ama_ed25519_point_from_scalar()`, needed an ABI
+change to be fixed at all; it is fixed here too, under its own heading below.
+
+### BREAKING — `ama_ed25519_point_from_scalar()` returns `ama_error_t`, not `void`
+
+The fourth and last group primitive. Through 3.x it was declared
+
+```c
+AMA_API void ama_ed25519_point_from_scalar(uint8_t point[32],
+                                           const uint8_t scalar[32]);
+```
+
+and dereferenced both arguments unconditionally. It is the only entry point in
+this group that could not report the condition its three siblings report, and
+the `void` return is exactly why: an early return on NULL would have left the
+caller's `point` buffer uninitialised, which is *worse* than the crash, because
+a segfault is loud and a stale 32-byte stack buffer treated as a public key is
+silent. There was no honest fix inside the old signature. It now reads
+
+```c
+AMA_API ama_error_t ama_ed25519_point_from_scalar(uint8_t point[32],
+                                                  const uint8_t scalar[32]);
+```
+
+and returns `AMA_ERROR_INVALID_PARAM` if either pointer is NULL, `AMA_SUCCESS`
+otherwise. Both backends are changed identically, for the reason the
+backend-differential job exists.
+
+This is a **source- and binary-compatible-looking change that is neither**.
+Source: a caller that ignores the result still compiles, because C permits
+discarding a return value — so the compiler will not tell you. Binary: the
+return register is now written where it previously was not, so a 3.x object
+file linked against a 4.0.0 library reads whatever the ABI's return register
+happens to hold. **Rebuild; do not mix object files across the boundary.**
+The SONAME already moves `.so.3` → `.so.4` in this release, which is what makes
+the mixed link fail loudly at load time rather than silently at run time.
+
+All four in-tree callers are in `src/c/ama_frost.c` — group public key
+derivation, the public half of each participant share, and both round-1 nonce
+commitments — and every one now checks the result and scrubs the secret
+material it holds before returning. That is not defensive padding: those call
+sites hold the group secret, the Shamir coefficients, or the nonce pair at the
+moment of the call, and the pre-existing failure paths beside them already
+scrub. There are no Python-binding callers; nothing in `ama_cryptography/`
+names this symbol.
+
+Why it belongs in this release rather than a later one: it was found by the
+same review that found the other two NULL dereferences, it is the same defect,
+and 4.0.0 is already a major bump carrying three other breaks. Deferring it
+would have meant shipping a knowingly-crashing entry point through a major
+version boundary and then needing a *second* one to fix it.
 
 ### Added — `--target consttime`, because the dudect lane for it flakes
 

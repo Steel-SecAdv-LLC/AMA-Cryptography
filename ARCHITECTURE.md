@@ -845,7 +845,7 @@ docker run ama-cryptography:latest
 | Fuzz Tests | Input mutation testing | 16 C targets | `fuzz/fuzz_*.c` |
 | NIST ACVP Vectors | Official vector validation | 1,215 vectors, 12 algorithms (815 AFT + 400 SHA-3 MCT) | `nist_vectors/` |
 
-**Total:** 3,178 Python test functions across 134 test files, plus the
+**Total:** 3,181 Python test functions across 134 test files, plus the
 ctest-registered C tests and standalone C benchmark under `tests/c/`
 (the exact C-test count varies with build options — `AMA_USE_NATIVE_PQC`
 gates `test_x25519`, `test_chacha20poly1305`, `test_argon2id`,
@@ -973,7 +973,7 @@ Cryptographic implementations are validated against:
 | 3.1.0 | 2026-05-14 | Steel Security Advisors LLC | Public documentation alignment, v3.1.0 release hygiene, INVARIANT-14 CVE-ignore review, and no public API changes since v3.0.0 |
 | 3.2.0 | 2026-05-20 | Steel Security Advisors LLC | Mercury Agent v1.7.0 alignment; per-slot SIMD auto-tune with file-based cross-process dispatch cache (`AMA_DISPATCH_CACHE_FILE`) + dispatch cache safety; `ama_keypair_generate(AMA_ALG_ED25519)` wiring; NTT benchmark overflow guard; dudect CI hygiene; native `native_hmac_sha256` Python bindings |
 | 3.3.0 | 2026-07-05 | Steel Security Advisors LLC | Native one-shot SHA-256 (`native_sha256`); documented public convenience + native MAC/KDF surface (`quick_hmac` / `quick_hkdf`, native HMAC/HKDF SHA-2/3, `AmaCryptographyError` exception root); consolidated the two SLH-DSA-SHA2-256f C signers into one; completed native-hashing purity in `crypto_api`; SLSA provenance permissions + CodeQL unused-static resolution |
-| 4.0.0 | 2026-08-01 | Steel Security Advisors LLC | Trust-anchor enforcement end to end (anchor compiled into the native library, required for `verify_crypto_package`'s `all_valid`, and no longer bypassable by deleting the signature artefact); constant-time scalar GHASH with an optimizer value barrier and a callgrind instruction-invariance gate; Ed25519 canonical-`y` (INVARIANT-38) on single verify, batch verify and point decode; KDF policy floor on both cost and algorithm; per-epoch AEAD nonce budget (INVARIANT-22); package serialization and `SecureSession` no longer emit key material; RFC 8439 length limit on ChaCha20-Poly1305. BREAKING ×3 — see CHANGELOG `[4.0.0]`. (Rows for 3.4.0 and 3.5.0 were never added to this table; CHANGELOG.md is the complete record for those releases.) |
+| 4.0.0 | 2026-08-01 | Steel Security Advisors LLC | Trust-anchor enforcement end to end (anchor compiled into the native library, required for `verify_crypto_package`'s `all_valid`, and no longer bypassable by deleting the signature artefact); constant-time scalar GHASH with an optimizer value barrier and a callgrind instruction-invariance gate; Ed25519 canonical-`y` (INVARIANT-38) on single verify, batch verify and point decode; KDF policy floor on both cost and algorithm; per-epoch AEAD nonce budget (INVARIANT-22); package serialization and `SecureSession` no longer emit key material; RFC 8439 length limit on ChaCha20-Poly1305. BREAKING ×4 — see CHANGELOG `[4.0.0]`. (Rows for 3.4.0 and 3.5.0 were never added to this table; CHANGELOG.md is the complete record for those releases.) |
 
 ---
 

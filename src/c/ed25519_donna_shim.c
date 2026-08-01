@@ -315,10 +315,15 @@ ama_error_t ama_ed25519_batch_verify(
  * mul256_modm, add256_modm, ed25519_hash (SHA-512).
  * ============================================================================ */
 
-AMA_API void ama_ed25519_point_from_scalar(uint8_t point[32],
-                                           const uint8_t scalar[32]) {
+AMA_API ama_error_t ama_ed25519_point_from_scalar(uint8_t point[32],
+                                                  const uint8_t scalar[32]) {
     bignum256modm s;
     ge25519 ALIGN(16) R;
+    /* BREAKING in 4.0.0: returns ama_error_t so a NULL argument is an error
+     * rather than a segfault.  Returning void left no honest fix — an early
+     * return would leave `point` uninitialised, which is silent where the
+     * crash at least was not.  See include/ama_cryptography.h. */
+    if (!point || !scalar) return AMA_ERROR_INVALID_PARAM;
     expand256_modm(s, scalar, 32);
     /* NOLINTNEXTLINE(clang-analyzer-core.UndefinedBinaryOperatorResult,clang-analyzer-core.uninitialized.Assign,clang-analyzer-core.uninitialized.UndefReturn): vendor (ed25519-donna) initialisation pattern.  donna's curve25519-donna-64bit.h
      * line 85 reads `out[0] = a[0] + fourP0 - b[0]` with `a` filled by
@@ -329,6 +334,7 @@ AMA_API void ama_ed25519_point_from_scalar(uint8_t point[32],
      * tracked under audit Issue 9 close-out. */
     ge25519_scalarmult_base_niels(&R, ge25519_niels_base_multiples, s);
     ge25519_pack(point, &R);
+    return AMA_SUCCESS;
 }
 
 AMA_API ama_error_t ama_ed25519_point_add(uint8_t result[32],

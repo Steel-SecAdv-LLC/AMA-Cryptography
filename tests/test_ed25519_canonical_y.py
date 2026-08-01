@@ -80,6 +80,13 @@ _IDENTITY = (1).to_bytes(32, "little")
 #: the point argument is what is under test.
 _TWO = (2).to_bytes(32, "little")
 
+#: Compressed encoding of 2·B, computed from the curve definition rather than
+#: read back from the library, so the output-contract assertion below is not
+#: circular. Derived by evaluating the twisted-Edwards addition formula on
+#: RFC 8032 §5.1's base point (y = 4/5 mod p, x even) with
+#: d = -121665/121666 mod p.
+_TWO_G = bytes.fromhex("c9a3f86aae465f0e56513864510f3997561fa2c9e85ea21dc2292309f3cd6022")
+
 
 def _encode(y: int, sign_bit: int = 0) -> bytes:
     """Compressed Edwards encoding: 255-bit little-endian y, x-sign in bit 255."""
@@ -221,15 +228,24 @@ class TestNullArgumentsAreRefused:
     """A NULL pointer must return AMA_ERROR_INVALID_PARAM, not segfault.
 
     ``ama_ed25519_double_scalarmult_public`` has always guarded its pointers;
-    ``point_add`` and ``scalarmult_public`` guarded none of theirs, in either
-    backend, so a NULL argument dereferenced instead of returning an error.
+    ``point_add``, ``scalarmult_public`` and ``point_from_scalar`` guarded none
+    of theirs, in either backend, so a NULL argument dereferenced instead of
+    returning an error.
 
-    That mattered more once this module started driving those two entry points
+    That mattered more once this module started driving those entry points
     through ctypes: a Python ``None`` arrives as NULL and takes the interpreter
     down with it, so an unguarded parameter turns a test-suite typo into a
     crash with no traceback. Both backends are fixed identically, which the
     backend-differential job requires — they must agree on the verdict for
     every input, and NULL is an input.
+
+    ``point_from_scalar`` needed an ABI change to be fixable at all: it
+    returned ``void`` through 3.x, so an early return on NULL would have left
+    the caller's output buffer uninitialised — silently wrong where the crash
+    was at least loud. It returns ``ama_error_t`` as of 4.0.0. These
+    assertions are what makes that a fix rather than a signature edit: they
+    fail against a build that changed the return type without adding the
+    guard, because a missing guard still segfaults.
     """
 
     @pytest.mark.parametrize("null_position", [0, 1, 2])
@@ -244,12 +260,43 @@ class TestNullArgumentsAreRefused:
         args[null_position] = None
         assert _native_lib.ama_ed25519_scalarmult_public(*args) != 0
 
+    @pytest.mark.parametrize("null_position", [0, 1])
+    def test_point_from_scalar_refuses_null(self, null_position: int) -> None:
+        args: list[object] = [ctypes.create_string_buffer(32), _TWO]
+        args[null_position] = None
+        assert _native_lib.ama_ed25519_point_from_scalar(*args) != 0
+
     def test_the_same_calls_succeed_with_real_pointers(
         self, decode: dict[str, Callable[[bytes], bool]]
     ) -> None:
         """Non-vacuity: the refusal is about NULL, not about these arguments."""
         assert decode["point_add"](_encode(1)) is True
         assert decode["scalarmult_public"](_encode(1)) is True
+        out = ctypes.create_string_buffer(32)
+        assert _native_lib.ama_ed25519_point_from_scalar(out, _TWO) == 0
+
+    def test_point_from_scalar_actually_writes_the_point(self) -> None:
+        """The return code is new; the output contract is not, and must hold.
+
+        A guard added by returning early on a path that *should* have
+        succeeded would pass every assertion above while producing nothing.
+        2·G is a fixed, known value: it pins that the success path still
+        writes, and that the written bytes are the right ones.
+        """
+        out = ctypes.create_string_buffer(32)
+        assert _native_lib.ama_ed25519_point_from_scalar(out, _TWO) == 0
+        assert out.raw == _TWO_G
+
+    def test_point_from_scalar_leaves_the_buffer_untouched_on_refusal(self) -> None:
+        """The reason the ABI had to change, asserted directly.
+
+        The 3.x ``void`` signature admitted no early return, because a caller
+        cannot distinguish "did not write" from "wrote". Now that it can, the
+        refusal path must not half-write: the sentinel survives intact.
+        """
+        out = ctypes.create_string_buffer(b"\xa5" * 32, 32)
+        assert _native_lib.ama_ed25519_point_from_scalar(out, None) != 0
+        assert out.raw == b"\xa5" * 32
 
 
 class TestSignatureVerificationIsUnaffected:

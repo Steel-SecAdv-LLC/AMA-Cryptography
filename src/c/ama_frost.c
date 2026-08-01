@@ -529,7 +529,11 @@ AMA_API ama_error_t ama_frost_keygen_trusted_dealer(
         }
     }
 
-    ama_ed25519_point_from_scalar(group_public_key, group_secret);
+    if (ama_ed25519_point_from_scalar(group_public_key, group_secret) != AMA_SUCCESS) {
+        ama_secure_memzero(group_secret, 32);
+        ama_secure_memzero(group_public_key, 32);
+        return AMA_ERROR_INVALID_PARAM;
+    }
 
     uint8_t (*coeffs)[32] = (uint8_t (*)[32])calloc(threshold, 32);
     if (!coeffs) {
@@ -556,7 +560,16 @@ AMA_API ama_error_t ama_frost_keygen_trusted_dealer(
         uint8_t *share = participant_shares + i * 64;
         poly_eval(share, (const uint8_t (*)[32])coeffs,
                   threshold - 1, (uint8_t)(i + 1));
-        ama_ed25519_point_from_scalar(share + 32, share);
+        if (ama_ed25519_point_from_scalar(share + 32, share) != AMA_SUCCESS) {
+            /* Scrub every share derived so far plus the coefficients: no
+             * partial share material may survive a failed keygen. */
+            ama_secure_memzero(participant_shares, (size_t)num_participants * 64);
+            ama_secure_memzero(coeffs, (size_t)threshold * 32);
+            free(coeffs);
+            ama_secure_memzero(group_secret, 32);
+            ama_secure_memzero(group_public_key, 32);
+            return AMA_ERROR_INVALID_PARAM;
+        }
     }
 
     ama_secure_memzero(coeffs, (size_t)threshold * 32);
@@ -600,8 +613,12 @@ AMA_API ama_error_t ama_frost_round1_commit(
         return rc;
     }
 
-    ama_ed25519_point_from_scalar(commitment, nonce_pair);
-    ama_ed25519_point_from_scalar(commitment + 32, nonce_pair + 32);
+    if (ama_ed25519_point_from_scalar(commitment, nonce_pair) != AMA_SUCCESS ||
+        ama_ed25519_point_from_scalar(commitment + 32, nonce_pair + 32) != AMA_SUCCESS) {
+        ama_secure_memzero(nonce_pair, 64);
+        ama_secure_memzero(commitment, 64);
+        return AMA_ERROR_INVALID_PARAM;
+    }
 
     return AMA_SUCCESS;
 }

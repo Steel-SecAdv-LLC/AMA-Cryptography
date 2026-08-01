@@ -1217,8 +1217,23 @@ AMA_API ama_error_t ama_ed25519_batch_verify(
  * Ed25519 Group Primitives (for FROST / Threshold Signatures)
  * ---------------------------------------------------------------------------- */
 
-/** Raw scalar-basepoint multiply: point = scalar * G (no hash/clamp). */
-AMA_API void ama_ed25519_point_from_scalar(uint8_t point[32], const uint8_t scalar[32]);
+/**
+ * Raw scalar-basepoint multiply: point = scalar * G (no hash/clamp).
+ *
+ * @return AMA_SUCCESS, or AMA_ERROR_INVALID_PARAM if either pointer is NULL.
+ *
+ * BREAKING in 4.0.0: this returned `void` through 3.x and dereferenced both
+ * arguments unconditionally, so a NULL argument was a segfault rather than an
+ * error — the one entry point in this group that could not report the
+ * condition its siblings (`ama_ed25519_point_add`,
+ * `ama_ed25519_scalarmult_public`, `ama_ed25519_double_scalarmult_public`)
+ * all report. Returning `void` left no honest fix: an early return would have
+ * left the caller's `point` buffer uninitialised, which is worse than the
+ * crash because it is silent. Callers that ignore the result compile
+ * unchanged; a rebuild is required.
+ */
+AMA_API ama_error_t ama_ed25519_point_from_scalar(uint8_t point[32],
+                                                  const uint8_t scalar[32]);
 
 /** Point addition: result = P + Q (compressed Ed25519 points). */
 AMA_API ama_error_t ama_ed25519_point_add(uint8_t result[32],

@@ -1592,12 +1592,19 @@ ama_error_t ama_ed25519_batch_verify(
  *
  * @param point   Output: 32-byte compressed Ed25519 point
  * @param scalar  Input:  32-byte little-endian scalar
+ * @return AMA_SUCCESS, or AMA_ERROR_INVALID_PARAM if either pointer is NULL.
  */
-AMA_API void ama_ed25519_point_from_scalar(uint8_t point[32],
-                                          const uint8_t scalar[32]) {
+AMA_API ama_error_t ama_ed25519_point_from_scalar(uint8_t point[32],
+                                                  const uint8_t scalar[32]) {
     ge25519_p3 R;
+    /* BREAKING in 4.0.0: returns ama_error_t so a NULL argument is an error
+     * rather than a segfault.  Returning void left no honest fix — an early
+     * return would leave `point` uninitialised, which is silent where the
+     * crash at least was not.  See include/ama_cryptography.h. */
+    if (!point || !scalar) return AMA_ERROR_INVALID_PARAM;
     ge25519_scalarmult_base(&R, scalar);
     ge25519_p3_tobytes(point, &R);
+    return AMA_SUCCESS;
 }
 
 /**
