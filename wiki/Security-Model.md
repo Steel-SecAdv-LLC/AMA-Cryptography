@@ -10,7 +10,7 @@ Documentation for AMA Cryptography's security properties, threat model, side-cha
 |----------|-------|
 | Audit Status | Community-tested; **not externally audited** |
 | Version | 4.0.0 |
-| Last Updated | 2026-07-30 |
+| Last Updated | 2026-08-01 |
 | Responsible Disclosure | steel.sa.llc@gmail.com |
 
 > **Production Disclaimer:** This is a self-assessed cryptographic implementation without third-party audit. Production use **requires**:
@@ -154,7 +154,8 @@ which is authoritative.
 
 | Version | Security Support |
 |---------|-----------------|
-| 3.5.x | ✓ Active (development and security updates) |
+| 4.0.x | ✓ Active (development and security updates) |
+| 3.5.x | ✗ Superseded by v4.0 (three breaking changes — see CHANGELOG `[4.0.0]`) |
 | 3.4.x | ✗ Superseded by v3.5 (no public API removals) |
 | 3.3.x | ✗ Superseded by v3.4 (no public API removals) |
 | 3.2.x | ✗ Superseded by v3.3 (no public API removals) |

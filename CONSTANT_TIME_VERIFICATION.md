@@ -5,7 +5,7 @@
 | Property | Value |
 |----------|-------|
 | Document Version | 4.0.0 |
-| Last Updated | 2026-07-25 |
+| Last Updated | 2026-08-01 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -222,7 +222,30 @@ The native C Ed25519 implementation provides constant-time operations:
 
 ### Native AES-256-GCM (`src/c/ama_aes_gcm.c`)
 
-**Caveat:** The AES-256-GCM implementation uses a 256-byte lookup table for S-box operations. This is **not** constant-time with respect to cache-timing side channels in shared-tenant environments. For deployments where cache-timing attacks are a concern, use hardware AES-NI instructions or a bitsliced implementation.
+**Default build is constant-time.** `AMA_AES_CONSTTIME` defaults to `ON`
+(`CMakeLists.txt`), which selects the algebraic bitsliced S-box in
+`src/c/ama_aes_bitsliced.c` — no table, no secret-dependent memory access.
+Hosts with AES-NI / VAES dispatch to the hardware kernels instead, which are
+likewise table-free.
+
+**Caveat, and it is now narrow:** building with `-DAMA_AES_CONSTTIME=OFF`
+selects the 256-byte table S-box, which is **not** constant-time against
+cache-timing side channels in shared-tenant environments. That opt-out is
+deliberately awkward — CMake requires an explicit acknowledgement string before
+it will configure (INVARIANT-20) — so a build reaches the unsafe path only on
+purpose.
+
+*(An earlier revision of this section stated the table S-box unconditionally,
+which stopped being true when the bitsliced path became the default. It
+understated the library's posture rather than overstating it, but it was still
+wrong: a reader could conclude a stock build needed mitigation it already had.)*
+
+**GHASH** is also table-free, and its mask is laundered through
+`ama_ct_value_barrier_u8` so an optimizer cannot convert the branch-free
+selection back into a branch on the secret subkey — a real regression clang 18
+introduced at `-O2`/`-O3`. `tools/check_ghash_constant_time.py` measures
+retired instructions across key classes under callgrind and fails on any
+key-dependent count; it runs unconditionally in `dudect.yml`.
 
 ## Functional Correctness Tests
 

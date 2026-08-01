@@ -63,7 +63,7 @@ cryptographic operations.
 
 | File | Purpose |
 |------|---------|
-| `.github/INVARIANTS.md` | Canonical architectural invariants (INVARIANT-1 through INVARIANT-15) and vendoring policy |
+| `.github/INVARIANTS.md` | Canonical architectural invariants (INVARIANT-1 through INVARIANT-38) and vendoring policy |
 | `CONTRIBUTING.md` | Contribution guidelines |
 | `CSRC_STANDARDS.md` | Algorithm-to-standard mapping |
 

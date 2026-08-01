@@ -54,7 +54,11 @@ REPO = Path(__file__).resolve().parent.parent
 DOC_ROOTS = ("docs", "tests", "wiki", ".")
 
 #: `tests/test_key_formats.py` — 301 tests
-_TEST_COUNT_RE = re.compile(r"`(tests/[A-Za-z0-9_/]+\.py)`\s*[—-]\s*(\d+)\s+tests\b")
+#: Both phrasings in use: "`tests/x.py` — 12 tests" and "`tests/x.py` (12 tests)".
+#: The parenthesised form was outside the pattern, so INVARIANT-35's claim that
+#: `tests/test_secp256k1_ecdsa.py` had 32 tests sat two off the real number
+#: while this gate reported green.
+_TEST_COUNT_RE = re.compile(r"`(tests/[A-Za-z0-9_/]+\.py)`\s*(?:[—-]\s*|\()(\d+)\s+tests\b")
 
 #: `rfc9881_ml_dsa.json` — 15 records
 _RECORD_COUNT_RE = re.compile(r"`([A-Za-z0-9_./-]+\.json)`\s*[—-]\s*(\d+)\s+records\b")
@@ -200,6 +204,91 @@ def check_wycheproof_counts(repo: Path) -> list[str]:
     return problems
 
 
+#: Aggregate claims: "3,099 test functions across 130 Python test files".
+#:
+#: These are the figures docs/METRICS_REPORT.md calls authoritative and README
+#: and ARCHITECTURE.md restate. Nothing checked them, so they drifted three
+#: releases' worth (3,057/127 against a tree with 3,099/130) while this gate
+#: passed — it only ever verified per-file claims. The report even publishes
+#: the reproduction command; this just runs it.
+_AGGREGATE_RE = re.compile(
+    r"([\d,]+)\s+(?:static\s+)?(?:Python\s+)?test functions across\s+([\d,]+)\s+"
+    r"(?:Python\s+)?(?:test\s+)?files?"
+)
+
+#: Same two numbers, as they appear in the METRICS_REPORT table rows.
+_METRICS_FILES_RE = re.compile(
+    r"\|\s*Python test files under `tests/` matching the static regex\s*\|\s*([\d,]+)\s*\|"
+)
+_METRICS_FUNCS_RE = re.compile(
+    r"\|\s*Syntactic `def test_` matches under `tests/\*\*/\*\.py`\s*\|\s*\*\*([\d,]+)\*\*\s*\|"
+)
+
+#: A revision-history row: "| 3.5.0 | 2026-07-30 | Re-measured ... |".
+#:
+#: Those rows are records of what was true at a past release, not claims about
+#: the current tree, and the repository's convention is to leave them verbatim
+#: (see the `baseline_change_log` entries in benchmarks/ and the note in
+#: check_version_consistency.py). Matching them would make every historically
+#: accurate entry a permanent failure and force the gate to be disabled.
+_HISTORY_ROW_RE = re.compile(r"^\|\s*\d+\.\d+\.\d+[^|]*\|\s*20\d\d-\d\d-\d\d\s*\|")
+
+
+_DEF_TEST_RE = re.compile(r"^\s*def test_", re.MULTILINE)
+
+
+def measure_static_test_counts(repo: Path) -> tuple[int, int]:
+    r"""Return ``(function_count, file_count)`` for ``tests/**/*.py``.
+
+    Deliberately the same syntactic ``^\s*def test_`` match that
+    docs/METRICS_REPORT.md publishes as its reproduction command, not pytest
+    collection: a static count and a collected count legitimately differ
+    (parametrisation, skips, collection errors), and the documents quote the
+    static one. Measuring it a different way here would produce a gate that
+    disagrees with correct documentation.
+    """
+    functions = 0
+    files = 0
+    for path in sorted((repo / "tests").rglob("*.py")):
+        hits = len(_DEF_TEST_RE.findall(path.read_text(encoding="utf-8")))
+        if hits:
+            files += 1
+            functions += hits
+    return functions, files
+
+
+def check_aggregate_test_counts(repo: Path) -> list[str]:
+    problems: list[str] = []
+    functions, files = measure_static_test_counts(repo)
+
+    def _num(raw: str) -> int:
+        return int(raw.replace(",", ""))
+
+    for path in _markdown_files(repo):
+        rel = str(path.relative_to(repo))
+        text = path.read_text(encoding="utf-8")
+        live = "\n".join(line for line in text.splitlines() if not _HISTORY_ROW_RE.match(line))
+        for claimed_funcs, claimed_files in _AGGREGATE_RE.findall(live):
+            if _num(claimed_funcs) != functions:
+                problems.append(
+                    f"{rel}: claims {claimed_funcs} test functions; "
+                    f"`grep -rE '^\\s*def test_' tests/` finds {functions}"
+                )
+            if _num(claimed_files) != files:
+                problems.append(
+                    f"{rel}: claims {claimed_files} test files; {files} contain a test function"
+                )
+        for claimed in _METRICS_FILES_RE.findall(live):
+            if _num(claimed) != files:
+                problems.append(f"{rel}: table says {claimed} test files; measured {files}")
+        for claimed in _METRICS_FUNCS_RE.findall(live):
+            if _num(claimed) != functions:
+                problems.append(
+                    f"{rel}: table says {claimed} `def test_` matches; measured {functions}"
+                )
+    return problems
+
+
 def audit(repo: Path = REPO) -> tuple[list[str], int]:
     """Returns ``(problems, claims_checked)``.
 
@@ -214,9 +303,13 @@ def audit(repo: Path = REPO) -> tuple[list[str], int]:
         checked += len(_TEST_COUNT_RE.findall(text))
         checked += len(_RECORD_COUNT_RE.findall(text))
         checked += len(_WYCHEPROOF_RE.findall(text))
+        checked += len(_AGGREGATE_RE.findall(text))
+        checked += len(_METRICS_FILES_RE.findall(text))
+        checked += len(_METRICS_FUNCS_RE.findall(text))
     problems += check_record_counts(repo)
     problems += check_wycheproof_counts(repo)
     problems += check_test_counts(repo)
+    problems += check_aggregate_test_counts(repo)
     return problems, checked
 
 

@@ -18,10 +18,10 @@ SECURITY.md "Module Integrity Verification" for the threat model.
 INTEGRITY_DIGEST_HEX = "100c3ef5ab257526e59279c979bad5eed6d4a7f009d098cbb5b0c91b08f09071"
 
 # Ephemeral build-time Ed25519 public key (raw 32 bytes, hex-encoded).
-INTEGRITY_PUBKEY_HEX = "09484ae1e7a46f26018ef3656b51daf2736ccd31f241a0efeaf43ed97f989f8e"
+INTEGRITY_PUBKEY_HEX = "c3997ca02378b1c4292d5b24a5f47b501cd8c8042177b94d9f5fd1574a476cc3"
 
 # Ed25519 signature over the raw digest above (raw 64 bytes, hex-encoded).
-INTEGRITY_SIGNATURE_HEX = "c2627f9017713609cda59b82f81ea45f578ce206dee0b55903ce11e678df693075e13c406e4632d0c86661f61f6bf40e90e9f44a8706bd36fb394733c05d9509"
+INTEGRITY_SIGNATURE_HEX = "e088bcbf2eb0c501f9e820d0821e5c4046ea46e4aae8c79ae48ff82b16c31da624f6068bd52be2a724425d60b741c36085f593e0737dab620bb7a59ca5618b0c"
 
 # Build metadata — informational only, not part of the integrity contract.
 BUILD_PIPELINE_VERSION = "1"

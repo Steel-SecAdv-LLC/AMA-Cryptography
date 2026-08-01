@@ -1050,7 +1050,7 @@ data-dependent branch, and inversion uses a fixed chain over the public
 exponent `n - 2`. Verification is variable time by design — every input is
 public — matching what `ama_ed25519_batch_verify` states.
 
-**Verification.** `tests/test_secp256k1_ecdsa.py` (32 tests) covers RFC 6979
+**Verification.** `tests/test_secp256k1_ecdsa.py` (31 tests) covers RFC 6979
 determinism, nonce non-reuse across messages and across keys, rejection of the
 high-`s` twin of a signature the library itself produced, and each strict-DER
 rule. All 476 Wycheproof ECDSA vectors run on every PR; 308/308 of the

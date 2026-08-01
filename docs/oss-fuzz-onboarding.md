@@ -93,7 +93,7 @@ python3 infra/helper.py run_fuzzer ama-cryptography fuzz_sha3 -- -max_total_time
 
 4. **Submit a PR** to google/oss-fuzz with:
    - Title: "Add ama-cryptography project"
-   - Description: Brief project description, link to repository, mention the 12 fuzz targets
+   - Description: Brief project description, link to repository, mention the 15 C fuzz targets
 
 5. **Wait for review** — Google's OSS-Fuzz team will review and merge
 

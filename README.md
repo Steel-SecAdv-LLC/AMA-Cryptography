@@ -49,7 +49,7 @@
 
 AMA Cryptography is a hybrid Ed25519 + Dilithium (ML-DSA-65) framework for quantum-resistant integrity protection. Community-tested, not externally audited. A multi-language cryptographic security system designed to protect people, data, and networks against both classical and quantum threats. Built on NIST-standardized post-quantum cryptography (PQC), AMA Cryptography provides security-hardened features with measured performance (see [Performance Metrics](#performance-metrics)).
 
-The system combines NIST-standardized post-quantum algorithms with a 3R runtime security monitoring framework, creating a defense-in-depth architecture that provides visibility into cryptographic operations. 3R overhead is not part of the CI regression gate; measure it locally with `python benchmarks/benchmark_suite.py` before relying on an environment-specific figure. The multi-language architecture (C + Cython + Python) pairs constant-time C implementations with optional Cython acceleration for the 3R math engine only. On that specific workload — Lyapunov exponent, NTT-shaped rotation matrix-vector products, and helix evolution kernels in `ama_cryptography/math_engine.pyx` — Cython is 18–37× faster than the pure-Python NumPy baseline on x86-64 (see [`wiki/Performance-Benchmarks.md`](wiki/Performance-Benchmarks.md) for methodology). This speedup is for 3R monitoring math and **does not apply to the C-implemented cryptographic primitives** — those numbers live in [`benchmark-report.md`](benchmark-report.md). Independent security review is recommended before deployment in high-security or regulated environments.
+The system combines NIST-standardized post-quantum algorithms with a 3R runtime security monitoring framework, creating a defense-in-depth architecture that provides visibility into cryptographic operations. 3R overhead is not part of the CI regression gate; measure it locally with `python benchmarks/benchmark_suite.py` before relying on an environment-specific figure. The multi-language architecture (C + Cython + Python) pairs constant-time C implementations with optional Cython acceleration for the 3R math engine only. On that specific workload — Lyapunov exponent, NTT-shaped rotation matrix-vector products, and helix evolution kernels in `src/cython/math_engine.pyx` — Cython is 18–37× faster than the pure-Python NumPy baseline on x86-64 (see [`wiki/Performance-Benchmarks.md`](wiki/Performance-Benchmarks.md) for methodology). This speedup is for 3R monitoring math and **does not apply to the C-implemented cryptographic primitives** — those numbers live in [`benchmark-report.md`](benchmark-report.md). Independent security review is recommended before deployment in high-security or regulated environments.
 
 **Protecting people, data, and networks with quantum-resistant cryptography**
 
@@ -263,7 +263,7 @@ NIST-standardized post-quantum algorithms:
 
 > All PQC operations run through the native C library. No external PQC dependency (liboqs, pqcrypto) is present or required. Build with `cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build`. Set `AMA_REQUIRE_CONSTANT_TIME=true` in the process environment to enforce constant-time operation at import.
 
-### C library inventory (v3.5.0)
+### C library inventory (v4.0.0)
 
 Top-level `src/c/*.c` — 27 translation units:
 
@@ -531,7 +531,7 @@ reproducible:
 ```bash
 # Replace the tag with the release you want; any published tag works.
 # Tags: https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/tags
-pip install "git+https://github.com/Steel-SecAdv-LLC/AMA-Cryptography.git@v3.5.0"
+pip install "git+https://github.com/Steel-SecAdv-LLC/AMA-Cryptography.git@v4.0.0"
 ```
 
 This clones at the tag and builds the native C library and Cython extensions
@@ -541,7 +541,7 @@ a C11 compiler, `cmake >= 4.3.4`, `Cython >= 3.2.8`, and `numpy >= 1.24.0`.
 To verify the tag is the one you expect before installing:
 
 ```bash
-git ls-remote --tags https://github.com/Steel-SecAdv-LLC/AMA-Cryptography.git v3.5.0
+git ls-remote --tags https://github.com/Steel-SecAdv-LLC/AMA-Cryptography.git v4.0.0
 ```
 
 Confirm the install landed and the native backends are live:
@@ -665,7 +665,7 @@ exact, verifiable pin rather than a floating range.
 `requirements.txt` and in a `pyproject.toml` `dependencies` list):
 
 ```
-ama-cryptography @ git+https://github.com/Steel-SecAdv-LLC/AMA-Cryptography.git@v3.5.0
+ama-cryptography @ git+https://github.com/Steel-SecAdv-LLC/AMA-Cryptography.git@v4.0.0
 ```
 
 **Pin by wheel + hash**, once a release carries built artifacts — the
@@ -673,7 +673,7 @@ strongest form, because pip refuses anything whose hash does not match:
 
 ```
 # requirements.txt  (install with: pip install --require-hashes -r requirements.txt)
-ama-cryptography @ https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/releases/download/v3.5.0/<WHEEL_FILENAME> \
+ama-cryptography @ https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/releases/download/v4.0.0/<WHEEL_FILENAME> \
     --hash=sha256:<DIGEST>
 ```
 
@@ -940,7 +940,7 @@ The test suite includes:
 
 ![Test Suite Coverage](assets/test_coverage.png)
 
-*3,057 test functions across 126 Python test files plus 57 C test suites (60 translation units) covering core crypto and NIST KATs (including the new AVX-512 4-way Keccak KAT, fe51-vs-fe64 X25519 byte-equivalence, MULX+ADX equivalence, VAES AES-GCM equivalence, FROST threshold signing, Ed25519 Shamir verify and base-point comb equivalence, and Dilithium / Kyber sampling-equivalence pinning), PQC backends, key management, adaptive posture, hybrid combiner, memory security, fuzz harnesses, and performance/monitoring. See [docs/METRICS_REPORT.md](docs/METRICS_REPORT.md) for the authoritative count and reproduction command (`grep -rE "^\s*def test_" tests/ --include='*.py' | wc -l`).*
+*3,099 test functions across 130 Python test files plus 57 C test suites (60 translation units) covering core crypto and NIST KATs (including the new AVX-512 4-way Keccak KAT, fe51-vs-fe64 X25519 byte-equivalence, MULX+ADX equivalence, VAES AES-GCM equivalence, FROST threshold signing, Ed25519 Shamir verify and base-point comb equivalence, and Dilithium / Kyber sampling-equivalence pinning), PQC backends, key management, adaptive posture, hybrid combiner, memory security, fuzz harnesses, and performance/monitoring. See [docs/METRICS_REPORT.md](docs/METRICS_REPORT.md) for the authoritative count and reproduction command (`grep -rE "^\s*def test_" tests/ --include='*.py' | wc -l`).*
 
 </details>
 
@@ -1496,7 +1496,7 @@ Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) file for 
 
 ### Third-Party Dependencies
 
-AMA Cryptography v3.5.0 has **zero core cryptographic dependencies** — all cryptographic primitives are implemented natively in C.
+AMA Cryptography v4.0.0 has **zero core cryptographic dependencies** — all cryptographic primitives are implemented natively in C.
 
 **Algorithm implementations (all native, public domain references):**
 - **ML-DSA-65** (Dilithium): Public domain (NIST FIPS 204)
@@ -1563,7 +1563,7 @@ The human architect does not hold formal credentials in cryptography. The AI con
 
 - **Standards-based design:** Built on NIST FIPS 202/204, RFC 2104/5869/8032/3161—not custom cryptography
 - **Quantified claims:** All performance metrics are measured and reproducible (see [benchmarks/](benchmarks/))
-- **Rigorous testing:** 3,057 test functions across 126 Python files plus 57 C test suites, anchored in [docs/METRICS_REPORT.md](docs/METRICS_REPORT.md); CI includes security scanning, NIST ACVP validation (1,215/1,215 — 815 AFT + 400 SHA-3 MCT), and tiered benchmark-regression checks
+- **Rigorous testing:** 3,099 test functions across 130 Python files plus 57 C test suites, anchored in [docs/METRICS_REPORT.md](docs/METRICS_REPORT.md); CI includes security scanning, NIST ACVP validation (1,215/1,215 — 815 AFT + 400 SHA-3 MCT), and tiered benchmark-regression checks
 - **Regression detection:** Tiered benchmark tolerances calibrated for CI environments
 - **Transparent limitations:** Security analysis explicitly distinguishes self-assessed vs. audited claims
 - **Defense-in-depth:** Security bounded by weakest layer (~128-bit classical), not inflated aggregate claims
