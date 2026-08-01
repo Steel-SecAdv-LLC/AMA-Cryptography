@@ -293,15 +293,15 @@ static void aes256_encrypt_block(const uint8_t round_keys[240],
  * conditional.  The accumulator Z is read but not modified during the
  * loop, so the bit extraction sees a stable operand.
  *
- * The mask goes through ama_ct_value_barrier_u8() and that is load-bearing,
+ * The mask goes through ama_ct_value_barrier_u64() and that is load-bearing,
  * not decoration.  A bare source-level mask is constant-time only in the C
- * abstract machine: clang 18 at -O2/-O3 proves the mask is 0x00-or-0xFF,
- * recognises the 16-byte XOR as the identity in the 0x00 case, and emits
- * `bt`/`jae` to branch straight over it — reintroducing a branch on a bit
- * of the accumulator, which is a function of the secret subkey H from the
- * second block onward.  gcc 13 does not.  The barrier hides the mask's
- * range from both, so the accumulation stays unconditional regardless of
- * toolchain.  See internal/ama_ct_barrier.h, and
+ * abstract machine: clang 18 at -O2/-O3 proves the mask is all-zero-or-all-
+ * ones, recognises the masked accumulate as the identity in the all-zero
+ * case, and emits `bt`/`jae` to branch straight over it — reintroducing a
+ * branch on a bit of the accumulator, which is a function of the secret
+ * subkey H from the second block onward.  gcc 13 does not.  The barrier
+ * hides the mask's range from both, so the accumulation stays unconditional
+ * regardless of toolchain.  See internal/ama_ct_barrier.h, and
  * tools/check_ghash_constant_time.py, which measures this path's retired
  * instruction count under two key classes and fails if it is key-dependent. */
 

@@ -17,18 +17,19 @@ Why this exists
     for k in 0..15: out[k] ^= V[k] & mask
 
 That is constant-time in the C abstract machine only.  An optimizer may
-prove the mask is ``0x00``-or-``0xFF``, recognise the loop as the identity
-in the ``0x00`` case, and emit a branch over it — putting a branch back on a
+prove the mask is all-zero-or-all-ones, recognise the masked accumulate as the
+identity in the all-zero case, and emit a branch over it — putting a branch back on a
 bit of the running accumulator, which is a function of the secret ``H`` from
 the second block onward.  clang 18 at ``-O2``/``-O3`` did exactly that; gcc
 13 did not.  Both builds pass every functional test, because the *results*
 are identical.  Only the emitted control flow differs, so only a check that
 looks at execution rather than at output can see it.
 
-The source-level defence is ``ama_ct_value_barrier_u8`` (see
-``src/c/internal/ama_ct_barrier.h``).  This gate is what stops the defence
-from being silently removed, or from being defeated by a compiler nobody has
-tried yet.
+The source-level defence is ``ama_ct_value_barrier_u64`` (see
+``src/c/internal/ama_ct_barrier.h``); ``ghash_mul`` accumulates on 64-bit
+words, so the word-width form is the one it uses.  This gate is what stops the
+defence from being silently removed, or from being defeated by a compiler
+nobody has tried yet.
 
 Method
 ------

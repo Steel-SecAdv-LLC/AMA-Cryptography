@@ -8,22 +8,23 @@
  *
  * The standard branch-free selection idiom
  *
- *     uint8_t mask = (uint8_t)(0u - (unsigned)secret_bit);   // 0x00 or 0xFF
- *     for (k = 0; k < N; k++) out[k] ^= in[k] & mask;
+ *     uint64_t mask = (uint64_t)0 - (uint64_t)secret_bit;   // 0 or ~0
+ *     out_hi ^= v_hi & mask;
+ *     out_lo ^= v_lo & mask;
  *
  * is constant-time in the C abstract machine and *not necessarily*
  * constant-time in the emitted object code.  The compiler can prove that
- * `mask` only ever takes the values 0x00 and 0xFF, that the loop body is
- * the identity when `mask == 0`, and that the whole loop is therefore
- * skippable — so it inserts a branch on the secret bit and jumps over the
- * accumulation.  Nothing in the C standard forbids this: timing is not an
- * observable behaviour, so a source-level mask carries no guarantee.
+ * `mask` only ever takes the values 0 and ~0, that the accumulation is the
+ * identity when `mask == 0`, and that it is therefore skippable — so it
+ * inserts a branch on the secret bit and jumps over the accumulation.
+ * Nothing in the C standard forbids this: timing is not an observable
+ * behaviour, so a source-level mask carries no guarantee.
  *
  * This is not hypothetical.  clang 18 at -O2 and -O3 does exactly that to
  * the GHASH accumulation in ama_aes_gcm.c, emitting
  *
  *     bt   %r14d, %ebp        ; test bit i of the running accumulator
- *     jae  .Lskip             ; ...and branch over the 16-byte XOR
+ *     jae  .Lskip             ; ...and branch over the accumulation
  *
  * where the accumulator is a function of the secret GHASH subkey H from
  * the second block onward.  gcc 13 at the same levels leaves the mask
@@ -33,11 +34,11 @@
  *
  * WHAT THE BARRIER DOES
  *
- * `ama_ct_value_barrier_u8(v)` returns `v`, but launders it through an
+ * `ama_ct_value_barrier_u64(v)` returns `v`, but launders it through an
  * empty inline-asm block with a register in/out constraint.  The compiler
  * must materialise the value in a register and hand it to an opaque
  * instruction sequence, so it loses the range information ("this is 0 or
- * 0xFF") that the branch-conversion depends on.  The generated code is one
+ * ~0") that the branch-conversion depends on.  The generated code is one
  * extra register move at worst, and the accumulation stays unconditional.
  *
  * This is the same construction as BoringSSL's `value_barrier_*` and
@@ -56,6 +57,30 @@
  * is no loop or block worth branching around — but applying it there costs
  * nothing either.
  *
+ * WHY THERE IS NO BYTE-WIDTH VARIANT
+ *
+ * There was one — `ama_ct_value_barrier_u8` — and it never had a caller.
+ * It shipped alongside the u64 form on the assumption that a byte-width
+ * masked accumulate would want the same treatment, and four comments in
+ * this repository then went on to name *it* as the construction protecting
+ * GHASH, which has only ever used the u64 form.  An unused symbol that the
+ * surrounding prose describes as load-bearing is worse than no symbol at
+ * all, so it is gone and those comments now name what the code calls.
+ *
+ * The one byte-width masked accumulate in the tree is the AES S-box scan in
+ * ama_aes_bitsliced.c, and it must NOT be barriered.  Its mask is built from
+ * `state[k] ^ i` where `i` is the loop counter, and the inner loop applies
+ * one table entry to all sixteen state bytes — sixteen independent byte
+ * operations over contiguous arrays, which is precisely the shape gcc and
+ * clang auto-vectorise, and which is worth ~14x on that path.  A register
+ * in/out constraint forces the value into a general-purpose register and
+ * defeats the vectoriser, so adding the barrier there would trade a large,
+ * measured speedup for protection against a transformation the compiler has
+ * no reason to make: there are sixteen distinct masks per table entry, so
+ * there is no single branch that skips a block.  If a byte-width barrier is
+ * ever needed, add it back together with the call site that needs it, and
+ * re-measure that path.
+ *
  * Verify, do not assume: after touching such code, disassemble the object
  * and confirm the only branches inside the routine are loop control.
  * tools/check_ghash_constant_time.py does the equivalent for GHASH without
@@ -70,10 +95,13 @@
 /**
  * @brief Return @p v, opaquely, so the optimizer cannot reason about its value.
  *
+ * Word width is where this matters: a 64-bit masked accumulate is a big
+ * enough block for the optimizer to notice it can be skipped.
+ *
  * @param v Value to launder (typically an all-zero / all-ones select mask).
  * @return  Exactly @p v.
  */
-static inline uint8_t ama_ct_value_barrier_u8(uint8_t v) {
+static inline uint64_t ama_ct_value_barrier_u64(uint64_t v) {
 #if defined(__GNUC__) || defined(__clang__)
     __asm__("" : "+r"(v));
     return v;
@@ -83,23 +111,6 @@ static inline uint8_t ama_ct_value_barrier_u8(uint8_t v) {
      * it forces a store/load rather than merely hiding the value's range —
      * but it is the portable construction, and it likewise denies the
      * optimizer the constant-range fact the branch-conversion needs. */
-    volatile uint8_t opaque = v;
-    return opaque;
-#endif
-}
-
-/**
- * @brief 64-bit form of ama_ct_value_barrier_u8.
- *
- * Word-width selection masks need the same protection as byte-width ones,
- * and want it more: a 64-bit masked accumulate is a bigger block for the
- * optimizer to notice it can skip.
- */
-static inline uint64_t ama_ct_value_barrier_u64(uint64_t v) {
-#if defined(__GNUC__) || defined(__clang__)
-    __asm__("" : "+r"(v));
-    return v;
-#else
     volatile uint64_t opaque = v;
     return opaque;
 #endif
