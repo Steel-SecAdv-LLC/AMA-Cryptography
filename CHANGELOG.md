@@ -328,6 +328,54 @@ anchor explicitly clears the cache entry.
   x86-64 copy-paste into the AArch64 baseline that the entry immediately above
   it exists to correct.
 
+### Fixed — two security documents described implementations that do not ship
+
+Found by re-reading `CONSTANT_TIME_VERIFICATION.md` against the built library
+rather than against the source tree. Both were wrong in the same direction:
+they analysed code that is not the code that runs, so an auditor following
+them would have audited the wrong thing and concluded the posture was fine
+for the wrong reason.
+
+- **The Python constant-time comparison.** The document asserted three times
+  that it rests on `hmac.compare_digest()`, printed an `hmac_verify()` body
+  calling it, and located that function in `crypto_api.py`. None of it was
+  ever true: `git log -S compare_digest -- '*.py'` is empty across the entire
+  history, `crypto_api` has no `hmac_verify`, and a live tripwire records zero
+  `hmac.compare_digest` calls during real verification against two calls into
+  `ama_consttime_memcmp`. What ships is
+  `secure_memory.constant_time_compare()` — ctypes into AMA's own C primitive
+  (INVARIANT-1), with a padded pure-Python XOR accumulator as the fallback.
+  Equivalent in effect, so nothing was weaker than advertised; but the
+  document sent readers to a function that does not exist. Corrected, with
+  3,000 randomised comparisons across the native and forced-fallback paths
+  confirming both agree with `==` and with each other.
+
+- **Which Ed25519 backend is being analysed.** `AMA_ED25519_ASSEMBLY` defaults
+  **ON for x86-64**, which removes `src/c/ama_ed25519.c` from the build and
+  substitutes the vendored ed25519-donna shim. The document's Ed25519 section
+  is titled `src/c/ama_ed25519.c` and describes `comb_signed`, `fe25519_sq`
+  and a C11 `_Atomic` base-point guard — none of which exist in an x86-64
+  build (`nm` finds zero `comb_signed` and zero `fe25519_sq`; donna's base
+  point table is `.rodata`, so there is no runtime initialisation to guard).
+  The word "donna" did not appear anywhere in the document. The section is now
+  scoped as the AArch64/portable analysis, with the x86-64 substitution stated
+  up front and `tools/check_ed25519_backend_parity.py` named as what actually
+  ties the two backends' accept/reject sets together.
+
+Also: `src/c/dispatch/ama_dispatch.c` credited "the VAES/AVX2 equivalence
+tests" with using `ama_test_force_aes_gcm_scalar()`;
+`test_aes_gcm_vaes_equiv.c` does not reference that hook and the scalar GHASH
+symbols are not even linked into its binary. The hook's real users are
+`test_aes_gcm_neon_equiv.c` and `test_aes_gcm_scalar_kat.c`.
+`test_aes_gcm_scalar_kat.c` also still described the GHASH it exercises as
+"4-bit-window" after the table was removed.
+
+`docs/METRICS_REPORT.md`'s header claimed a 2026-08-01 measurement date for
+"static LoC / test-function counts" when only the test counts were
+re-measured — its own 4.0.0 change-log row said so, and the header
+contradicted it. The header now separates the two, and records that the
+whole-project LoC total does not reproduce from a fresh clone by design.
+
 ### Deferred — the Argon2id legacy shim is not removed in 4.0.0
 
 The 3.0.0 release-summary row records the `legacy_compat` Argon2id migration

@@ -18,9 +18,13 @@ This document describes the constant-time verification methodology and tooling f
 Constant-time implementations are critical for preventing timing side-channel attacks. AMA Cryptography employs a defense-in-depth approach to constant-time security:
 
 1. **C Layer**: Custom constant-time utilities in `src/c/ama_consttime.c` (C11 atomics for thread safety)
-2. **Python Layer**: Use of `hmac.compare_digest()` for constant-time comparison
+2. **Python Layer**: `secure_memory.constant_time_compare()`, which calls AMA's
+   own `ama_consttime_memcmp` through ctypes (INVARIANT-1: no third-party
+   crypto), with a padded pure-Python XOR accumulator as the fallback
 3. **Native PQC Layer**: All PQC implementations (ML-DSA-65, ML-KEM-1024, SLH-DSA) use constant-time primitives internally
-4. **Ed25519 Layer**: Dedicated `fe25519_sq()` field squaring, C11 `_Atomic` initialization guards
+4. **Ed25519 Layer**: on the portable fe51 backend, dedicated `fe25519_sq()`
+   field squaring and C11 `_Atomic` initialization guards; on x86-64 the
+   vendored ed25519-donna backend is built instead (see "Native Ed25519")
 
 ## Constant-Time Implementations
 
@@ -36,17 +40,35 @@ All 5 constant-time functions are implemented and verified:
 | `ama_consttime_lookup()` | Table lookup | Full table scan with conditional copy | Yes |
 | `ama_consttime_copy()` | Conditional copy | Bitwise masking based on condition | Yes |
 
-### Python Utilities (`ama_cryptography/crypto_api.py`)
+### Python Utilities (`ama_cryptography/secure_memory.py`)
 
-HMAC verification uses Python's `hmac.compare_digest()`:
+Every secret comparison in the Python layer goes through
+`constant_time_compare()`, which calls AMA's own C primitive:
 
 ```python
-def hmac_verify(message: bytes, tag: bytes, key: bytes) -> bool:
-    expected_tag = hmac_authenticate(message, key)
-    return hmac.compare_digest(expected_tag, tag)
+def constant_time_compare(a: bytes, b: bytes) -> bool:
+    # Primary: ama_consttime_memcmp from the native library.
+    # Both operands are padded to the same length first, so the number of
+    # bytes compared does not depend on either length, and the length
+    # difference is folded into the result rather than short-circuited.
+    ...
+    # Fallback (no native library): a pure-Python XOR accumulator over the
+    # padded inputs, which likewise never short-circuits.
 ```
 
-This function is specifically designed to prevent timing attacks by comparing all bytes regardless of where differences occur.
+> **Correction (2026-08-01).** Through 4.0.0 this section stated that the
+> Python layer used `hmac.compare_digest()`, showed an `hmac_verify()` body
+> calling it, and located that function in `crypto_api.py`. None of it was
+> accurate, and it was never accurate — `git log -S compare_digest -- '*.py'`
+> is empty across the whole history, and `crypto_api` has no `hmac_verify`.
+> The behaviour described was equivalent in effect, so nothing was weaker
+> than advertised; but a reader auditing the constant-time posture would have
+> gone looking for a function that does not exist, and would not have audited
+> the code that does. Verified after correcting: a live tripwire on
+> `hmac.compare_digest` records zero calls during real verification, while
+> `ama_consttime_memcmp` records two; and 3,000 randomised comparisons
+> (lengths 0-40, equal and unequal, native and forced-fallback paths) agree
+> with `==` and with each other in every case.
 
 ## Verification Methodology
 
@@ -200,7 +222,39 @@ The native C implementations provide constant-time operations:
 - Validated through NIST KAT (Known Answer Test) vectors (FIPS 203/204/205)
 - Rejection sampling uses constant-time comparisons
 
-### Native Ed25519 (`src/c/ama_ed25519.c`)
+### Native Ed25519
+
+**Which backend you are reading about.** The tree ships two Ed25519
+implementations and builds exactly one. `CMakeLists.txt` defaults
+`AMA_ED25519_ASSEMBLY` **ON for x86-64**, which *removes* `src/c/ama_ed25519.c`
+from the source list and substitutes `src/c/ed25519_donna_shim.c` (vendored
+ed25519-donna). Every x86-64 CI lane, and every x86-64 wheel, therefore
+contains **no** `ama_ed25519.c` at all: `nm` on the built library finds zero
+`comb_signed` and zero `fe25519_sq` symbols, and `ge25519_niels_base_multiples`
+instead — donna's base-point table, which is `.rodata`.
+
+The section below describes `ama_ed25519.c`, the portable **fe51** backend
+that AArch64 and everything else builds. Read it as the ARM/portable analysis.
+Until 4.0.0 this heading did not say so and the document never mentioned donna
+once, so an auditor on x86-64 would have analysed a file their build does not
+compile.
+
+Two consequences worth stating rather than leaving implied:
+
+- The C11 `_Atomic` base-point initialisation guard below exists only in
+  `ama_ed25519.c`. donna's base-point table is a compile-time constant in
+  `.rodata`, so on x86-64 there is no runtime initialisation to guard and the
+  mechanism is simply absent — not weaker, inapplicable.
+- The two backends are held to *behavioural* equivalence by
+  `tools/check_ed25519_backend_parity.py`, which builds both and requires
+  identical verdicts across 1,836 cases including the canonical-`y` decode
+  pair (INVARIANT-38). That gate is what makes the portable analysis below
+  load-bearing for the donna build's accept/reject set — it does not make
+  donna's *internal* constant-time properties identical, which are donna's own
+  (x86-64 inline assembly for constant-time table selection, see
+  `ed25519-donna-64bit-x86.h`).
+
+#### The portable fe51 backend (`src/c/ama_ed25519.c`, AArch64 and generic)
 
 The native C Ed25519 implementation provides constant-time operations:
 
@@ -273,7 +327,10 @@ These tests verify:
 
 3. **Compiler Optimizations**: Aggressive compiler optimizations may introduce timing variations. The harness is compiled with `-O2` which balances optimization with predictability.
 
-4. **Scope**: This verification covers the C constant-time utilities. The Python layer relies on `hmac.compare_digest()` and upstream library guarantees.
+4. **Scope**: This verification covers the C constant-time utilities. The
+   Python layer routes secret comparisons into the same C primitive via
+   `secure_memory.constant_time_compare()`, so it inherits that coverage
+   rather than relying on an upstream guarantee.
 
 ## Recommendations for Production
 
