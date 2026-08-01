@@ -811,6 +811,90 @@ class TestKDFMetadataIsUntrusted:
             json.dump(metadata, f)
         return metadata
 
+    @pytest.mark.parametrize(
+        "field,value",
+        [
+            ("m_cost", None),
+            ("m_cost", "lots"),
+            ("m_cost", [65536]),
+            ("m_cost", {"value": 65536}),
+            ("m_cost", True),
+            ("t_cost", None),
+            ("parallelism", "one"),
+        ],
+    )
+    def test_a_non_numeric_cost_fails_closed_as_a_policy_error(
+        self, temp_storage_path: Any, test_password: Any, field: str, value: Any
+    ) -> None:
+        """A tampered value that is not a number must not escape as TypeError.
+
+        The floor read these through a bare ``int(params.get(...))``, which
+        raises ``TypeError`` on ``null`` or a list and ``ValueError`` on a
+        non-numeric string. Three consequences, all of them in the wrong
+        direction for a function whose stated premise is that this file is
+        attacker-influenced:
+
+        * the exception was not ``KDFPolicyError``, so a caller doing the
+          documented thing did not catch it;
+        * it fired on the first malformed value before any shortfall was
+          collected, so the operator got a bare ``TypeError`` naming no
+          parameter instead of the actionable message;
+        * it fired regardless of ``allow_legacy_kdf``, disabling the one
+          documented recovery path exactly when it was needed.
+
+        A value that is not a number is not evidence of a strong parameter, so
+        it is a shortfall. ``True`` is in the list deliberately: ``bool`` is an
+        ``int`` subclass, so a JSON ``true`` would otherwise read as 1.
+        """
+        from ama_cryptography.key_management import KDFPolicyError
+
+        storage = SecureKeyStorage(temp_storage_path, master_password=test_password)
+        if storage.kdf_params.get("algorithm") != "Argon2id":
+            pytest.skip("store did not select Argon2id")
+
+        self._weaken(temp_storage_path, **{field: value})
+
+        with pytest.raises(KDFPolicyError):
+            SecureKeyStorage(temp_storage_path, master_password=test_password)
+
+    def test_a_non_numeric_cost_still_honours_allow_legacy_kdf(
+        self, temp_storage_path: Any, test_password: Any
+    ) -> None:
+        """The migration escape hatch must survive a malformed value.
+
+        This is the half that makes the fix more than cosmetic: without it a
+        damaged store could not be opened even to ``migrate_kdf()`` it.
+        """
+        storage = SecureKeyStorage(temp_storage_path, master_password=test_password)
+        if storage.kdf_params.get("algorithm") != "Argon2id":
+            pytest.skip("store did not select Argon2id")
+
+        self._weaken(temp_storage_path, m_cost=None)
+
+        with pytest.warns(SecurityWarning):
+            SecureKeyStorage(
+                temp_storage_path, master_password=test_password, allow_legacy_kdf=True
+            )
+
+    def test_an_integral_float_is_accepted(
+        self, temp_storage_path: Any, test_password: Any
+    ) -> None:
+        """Non-detection: JSON has one number type, so 65536.0 is legitimate.
+
+        Rejecting it would make the gate fire on a conformant file, which is
+        the failure mode INVARIANT-2 records as the way a gate gets routed
+        around.
+        """
+        storage = SecureKeyStorage(temp_storage_path, master_password=test_password)
+        if storage.kdf_params.get("algorithm") != "Argon2id":
+            pytest.skip("store did not select Argon2id")
+
+        current = float(storage.kdf_params["m_cost"])
+        self._weaken(temp_storage_path, m_cost=current)
+
+        # No raise, no warning: the value is the same number, spelled as a float.
+        SecureKeyStorage(temp_storage_path, master_password=test_password)
+
     def test_argon2_cost_downgrade_is_refused(
         self, temp_storage_path: Any, test_password: Any
     ) -> None:

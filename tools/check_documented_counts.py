@@ -282,9 +282,7 @@ def check_loc_table_file_counts(repo: Path) -> list[str]:
             base = repo / root
             if not base.is_dir():
                 continue
-            measured += sum(
-                1 for p in base.rglob("*") if p.is_file() and p.suffix in suffixes
-            )
+            measured += sum(1 for p in base.rglob("*") if p.is_file() and p.suffix in suffixes)
         matches = _loc_row_re(label).findall(text)
         if not matches:
             problems.append(

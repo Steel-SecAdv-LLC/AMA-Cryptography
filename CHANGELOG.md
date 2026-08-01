@@ -110,6 +110,50 @@ The general rule, since it will recur: **finding one instance of a defect
 pattern is a reason to sweep for the rest, and a threshold set between one
 known defect and one assumed-clean baseline is only as good as the assumption.**
 
+### Security — a malformed KDF cost bypassed the policy floor entirely
+
+Raised in review against `_enforce_kdf_policy`, and the live defect turned out
+to be one layer further out than reported.
+
+The reported half is real: the cost floors read their values through a bare
+`int(params.get(...))`, which raises `TypeError` on `null` or a list and
+`ValueError` on a non-numeric string. For a function whose stated premise is
+that `.kdf_metadata.json` is unauthenticated and attacker-influenced, that is
+three failures at once — the exception is not `KDFPolicyError`, so a caller
+doing the documented thing does not catch it; it fires on the first malformed
+value before any shortfall is collected, so the operator gets a bare
+`TypeError` naming no parameter instead of the actionable message; and it fires
+regardless of `allow_legacy_kdf`, disabling the one documented recovery path
+exactly when a damaged store needs `migrate_kdf()`. On the PBKDF2 branch that
+`int()` sits outside any handler and is reachable directly.
+
+The larger half is that on the Argon2id branch the malformed value **never
+reached the policy check at all**. The coercions were inside
+`except (OSError, ValueError, TypeError, KeyError)`, which logged *"using
+defaults"* and continued — so a value the library could not parse was resolved
+by substituting a passing one, and the floor added in this release was never
+consulted about the single input it could not read. The recovery was also
+partial: the coercions run in sequence, so `t_cost` kept an attacker-chosen
+value while `m_cost` reverted to the default, leaving a mixture the log line
+then described as "defaults".
+
+Both are fixed. Values are read raw and `_enforce_kdf_policy` adjudicates them;
+a value that is not a number is a shortfall, because it is not evidence of a
+strong parameter. `bool` is rejected explicitly — it is an `int` subclass, so a
+JSON `true` would otherwise read as an iteration count of 1, the trap
+INVARIANT-35 records for the parameter-set selectors — while an integral float
+is accepted, since JSON has one number type and `3.0` is a legitimate spelling
+of 3. A default is substituted only *after* the policy check has passed, which
+means only where `allow_legacy_kdf=True` and the operator has been warned about
+that parameter by name. Unreadable-file handling (`OSError`, `JSONDecodeError`)
+keeps its existing warn-and-default behaviour: a file that cannot be read is a
+different condition from a readable one carrying a bad value.
+
+Nine regression tests in `TestKDFMetadataIsUntrusted` drive each malformed
+shape through a real store and pin all three directions — refusal by default,
+a warning under `allow_legacy_kdf`, and non-detection for a conformant
+integral float.
+
 ### Fixed — the "Strict Compiler Warnings (Werror)" job did not pass `-Werror`
 
 Neither the workflow step nor `CMakeLists.txt` contained `-Werror` anywhere.

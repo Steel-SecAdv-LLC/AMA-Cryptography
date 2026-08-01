@@ -720,6 +720,41 @@ class SecureKeyStorage:
             self.encryption_key = bytearray(secrets.token_bytes(32))
             self.salt: Optional[bytes] = None  # No salt needed for random key
 
+    @staticmethod
+    def _policy_cost(value: Any) -> Optional[int]:
+        """``value`` as an int, or None when it is not a usable number.
+
+        ``bool`` is rejected explicitly: it is an ``int`` subclass in Python,
+        so a JSON ``true`` would otherwise read as an iteration count of 1 —
+        the same trap INVARIANT-35 records for the parameter-set selectors.
+        An integral float is accepted, because JSON has one number type and
+        ``3.0`` is a legitimate spelling of 3; a non-integral one is not, since
+        truncating it would silently use a different parameter than the file
+        names.
+        """
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float) and value.is_integer():
+            return int(value)
+        return None
+
+    @classmethod
+    def _usable_cost(cls, value: Any, fallback: int) -> int:
+        """``value`` as an int, falling back only where policy already allowed it.
+
+        Reached only after :meth:`_enforce_kdf_policy` has returned, so a
+        non-numeric ``value`` here means the caller passed
+        ``allow_legacy_kdf=True`` and has already been warned about that exact
+        parameter by name.  The fallback keeps such a store openable long
+        enough to :meth:`migrate_kdf` it, which is the whole purpose of the
+        flag; without the policy check in front of it, this same substitution
+        is what let a malformed value pass unexamined.
+        """
+        parsed = cls._policy_cost(value)
+        return fallback if parsed is None else parsed
+
     def _enforce_kdf_policy(self, params: Dict[str, Any]) -> None:
         """Refuse KDF parameters weaker than the policy floor.
 
@@ -763,20 +798,43 @@ class SecureKeyStorage:
                     "build supports (no memory-hardness)"
                 )
 
+        # Cost floors, read through _policy_cost() rather than bare int().
+        #
+        # `int(params.get("iterations", 0))` raises TypeError on `null` or a
+        # list and ValueError on a non-numeric string, and this function's whole
+        # premise is that `params` is attacker-influenced: the file is
+        # unauthenticated, which is the reason the floor exists at all. Three
+        # things went wrong at that boundary, in increasing order of severity.
+        #
+        # The exception escaped as itself, so a caller doing the documented
+        # thing — catching KDFPolicyError around store-opening — did not catch
+        # it. It was raised on the first malformed value, before any shortfall
+        # was collected, so the operator saw a bare TypeError naming no
+        # parameter instead of the actionable message the rest of this function
+        # is written to produce. And it fired regardless of `allow_legacy_kdf`,
+        # which exists precisely so a legacy or damaged store can be opened
+        # long enough to `migrate_kdf()` it — so the one documented recovery
+        # path was unavailable exactly when it was needed.
+        #
+        # A value that is not a number is not evidence of a strong parameter,
+        # so it is treated as a shortfall. That keeps the direction fail-closed
+        # while leaving `allow_legacy_kdf` able to do its job.
+        def _floor(name: str, minimum: int, unit: str = "") -> None:
+            value = self._policy_cost(params.get(name))
+            if value is None:
+                shortfalls.append(
+                    f"{name} {params.get(name)!r} is not a number, so it cannot be "
+                    f"shown to meet the floor of {minimum}{unit}"
+                )
+            elif value < minimum:
+                shortfalls.append(f"{name} {value} < {minimum}{unit}")
+
         if algorithm == "Argon2id":
-            if int(params.get("t_cost", 0)) < MIN_ARGON2_T_COST:
-                shortfalls.append(f"t_cost {params.get('t_cost')} < {MIN_ARGON2_T_COST}")
-            if int(params.get("m_cost", 0)) < MIN_ARGON2_M_COST:
-                shortfalls.append(f"m_cost {params.get('m_cost')} < {MIN_ARGON2_M_COST} KiB")
-            if int(params.get("parallelism", 0)) < MIN_ARGON2_PARALLELISM:
-                shortfalls.append(
-                    f"parallelism {params.get('parallelism')} < {MIN_ARGON2_PARALLELISM}"
-                )
+            _floor("t_cost", MIN_ARGON2_T_COST)
+            _floor("m_cost", MIN_ARGON2_M_COST, " KiB")
+            _floor("parallelism", MIN_ARGON2_PARALLELISM)
         else:
-            if int(params.get("iterations", 0)) < MIN_PBKDF2_ITERATIONS:
-                shortfalls.append(
-                    f"iterations {params.get('iterations')} < {MIN_PBKDF2_ITERATIONS}"
-                )
+            _floor("iterations", MIN_PBKDF2_ITERATIONS)
 
         if not shortfalls:
             return
@@ -909,23 +967,41 @@ class SecureKeyStorage:
             m_cost = self.ARGON2_M_COST
             parallelism = self.ARGON2_PARALLELISM
             if self.metadata_file.exists():
+                # An UNREADABLE file is a different condition from a readable
+                # one carrying a bad value, and only the first justifies
+                # falling back to defaults.  This block used to conflate them:
+                # it wrapped the `int()` coercions in the same
+                # `except (OSError, ValueError, TypeError, KeyError)` and, on a
+                # non-numeric cost, logged "using defaults" and continued.
+                #
+                # Two things were wrong with that, and both bypassed the floor
+                # this release added.  The malformed value never reached
+                # `_enforce_kdf_policy`, so the check that exists to adjudicate
+                # untrusted metadata was not consulted about the one input it
+                # could not parse.  And the recovery was *partial*: the
+                # coercions run in sequence, so `t_cost` keeps an
+                # attacker-chosen value while `m_cost` reverts to the default,
+                # leaving a mixture the log line then described as "defaults".
+                #
+                # Read the values raw and let the policy check adjudicate.
                 try:
                     with open(self.metadata_file, "r") as _f:
                         _meta = json.load(_f)
-                    algorithm = _meta.get("algorithm")
-                    if algorithm is not None and algorithm != "Argon2id":
-                        raise RuntimeError(
-                            f"Unsupported KDF algorithm for v{version} store: {algorithm}"
-                        )
-                    t_cost = int(_meta.get("t_cost", t_cost))
-                    m_cost = int(_meta.get("m_cost", m_cost))
-                    parallelism = int(_meta.get("parallelism", parallelism))
-                except (OSError, ValueError, TypeError, KeyError) as _exc:
+                except (OSError, json.JSONDecodeError) as _exc:
                     logger.warning(
                         "Could not read Argon2id params from %s, using defaults: %s",
                         self.metadata_file,
                         _exc,
                     )
+                    _meta = {}
+                algorithm = _meta.get("algorithm")
+                if algorithm is not None and algorithm != "Argon2id":
+                    raise RuntimeError(
+                        f"Unsupported KDF algorithm for v{version} store: {algorithm}"
+                    )
+                t_cost = _meta.get("t_cost", t_cost)
+                m_cost = _meta.get("m_cost", m_cost)
+                parallelism = _meta.get("parallelism", parallelism)
 
             # Cost check BEFORE the derivation, so a downgraded file never
             # gets to produce a usable key.
@@ -936,6 +1012,17 @@ class SecureKeyStorage:
                 "parallelism": parallelism,
             }
             self._enforce_kdf_policy(self.kdf_params)
+
+            # Past the policy check every cost is either a number at or above
+            # its floor, or the caller passed `allow_legacy_kdf=True` and was
+            # warned by name.  Only in that second case can a value still be
+            # unusable, so that is the only case where a default is
+            # substituted — and it is substituted per-parameter, after a
+            # warning that named it, rather than silently and in bulk.
+            t_cost = self._usable_cost(t_cost, self.ARGON2_T_COST)
+            m_cost = self._usable_cost(m_cost, self.ARGON2_M_COST)
+            parallelism = self._usable_cost(parallelism, self.ARGON2_PARALLELISM)
+            self.kdf_params.update({"t_cost": t_cost, "m_cost": m_cost, "parallelism": parallelism})
 
             try:
                 from ama_cryptography.pqc_backends import native_argon2id
@@ -957,11 +1044,19 @@ class SecureKeyStorage:
                     "cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
                 ) from exc
         else:
+            # Raw, not `int(iterations)`.  This coercion sat outside any
+            # handler, so a tampered `"iterations": null` in the
+            # unauthenticated metadata raised a bare TypeError from here —
+            # before the policy check, not catchable as KDFPolicyError, and
+            # unaffected by `allow_legacy_kdf`.  The policy check adjudicates
+            # it now, as it does every other value from that file.
             self.kdf_params = {
                 "algorithm": "PBKDF2-HMAC-SHA256",
-                "iterations": int(iterations),
+                "iterations": iterations,
             }
             self._enforce_kdf_policy(self.kdf_params)
+            iterations = self._usable_cost(iterations, self.KDF_ITERATIONS)
+            self.kdf_params["iterations"] = iterations
             self.encryption_key = bytearray(
                 hashlib.pbkdf2_hmac(
                     "sha256",
