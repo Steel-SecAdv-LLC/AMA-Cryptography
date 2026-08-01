@@ -21,6 +21,241 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ## [4.0.0] - 2026-08-01
 
+### Behavioural and breaking changes at a glance
+
+Every change in 4.0.0 that alters what existing code does, in one table, so a
+migrating caller does not have to reconstruct the list from six hundred lines
+of narrative below. "Breaking" means a conformant 3.x caller can observe a
+different result or a new exception; "Behavioural" means the observable answer
+is unchanged but the work, the timing, or the failure mode is not.
+
+| # | Kind | Change | Migration |
+|---|---|---|---|
+| 1 | **Breaking** | `verify_crypto_package` returns `all_valid: False` unless `expected_public_key` was supplied and matched | read `core_valid` for the 3.x meaning, or pass the anchor |
+| 2 | **Breaking** | Key stores refuse sub-floor KDF **costs** (PBKDF2 600k; Argon2id t=3, m=64 MiB, p>=1) | `allow_legacy_kdf=True` warns instead of raising; then `migrate_kdf()` |
+| 3 | **Breaking** | Key stores refuse a KDF **algorithm** downgrade — PBKDF2 metadata on a build with native Argon2id | same as (2) |
+| 4 | **Breaking** | Ed25519 rejects non-canonical `y` on single verify, batch verify and point decode (INVARIANT-38) | none for conformant callers; only the 19 redundant encodings are lost |
+| 5 | **Breaking** | `ama_ed25519_point_from_scalar()` returns `ama_error_t`, not `void` (C ABI) | rebuild against the 4.0.0 headers; SONAME moves `.so.3` -> `.so.4` |
+| 6 | **Breaking** | `secure_memory.constant_time_compare()` **fails closed**: `RuntimeError` when AMA's native `ama_consttime_memcmp` is unavailable, where 3.x silently substituted a pure-Python XOR loop (INVARIANT-7) | build the native library; there is no flag to restore the fallback, because the fallback was not constant-time |
+| 7 | Behavioural | `to_dict()` and pickling no longer emit `keypairs[...].secret_key`, `derived_keys` or `kem_shared_secret` | `include_secrets=True` is unchanged |
+| 8 | Behavioural | secp256k1 ECDSA signing: the **Montgomery extra reduction** in `sc_mont_mul` is now a masked conditional subtraction, not a branch on a word of the Montgomery intermediate — the textbook extra-reduction nonce leak | none; same signatures, same API |
+| 9 | Behavioural | secp256k1 **low-s** normalisation: `sc_is_high` no longer short-circuits, and `sc_cond_negate` selects under a mask | none; same signatures |
+| 10 | Behavioural | **NIST P-256/384/521** carried the same defect in `nistp_scalar_is_high` and it is fixed the same way, with `nistp_select` under a mask | none |
+| 11 | Behavioural | Scalar GHASH mask laundered through `ama_ct_value_barrier_u64`; scalar AES-256-GCM is 2.7x faster than 3.5.0 | none |
+| 12 | Behavioural | ChaCha20-Poly1305 refuses inputs past the RFC 8439 §2.8 limit | none below the limit |
+| 13 | Behavioural | `SecureSession.encrypt` enforces `MAX_ENCRYPTIONS_PER_EPOCH` and raises `RekeyRequiredError` | rekey on the error |
+| 14 | Behavioural | `AMA_CRYPTO_LIB_PATH` is ignored in secure-execution mode, now detected via `issetugid(2)` / `getauxval(AT_SECURE)` / `/proc/self/auxv` / uid-gid, OR-ed | none outside set-uid/set-gid/`setcap` |
+| 15 | Behavioural | `constant_time_compare` compares `min(len(a), len(b))` bytes in place instead of padding both to `max(...)`; **every return value is unchanged** | none |
+| 16 | Behavioural | `AmaEquationEngine.converge()`/`step()` and the public `equations` entry points accept `numpy.ndarray` and other 1-D array-likes; they return a `Vec` | `numpy.asarray(result)` to convert back |
+| 17 | Behavioural | `AmaEquationEngine.converge()`'s instability rollback **fires**; through 3.x its condition was unsatisfiable and the branch was dead | pass `max_steps` explicitly if you relied on running to the boundedness clip |
+| 18 | Behavioural | `enforce_sigma_quadratic_threshold()` returns a new `Vec` on both branches; 3.x returned the caller's own object on the pass branch | none unless you relied on the aliasing |
+
+Rows 6, 8, 9 and 10 are the ones a security reviewer should read first: (6) is
+a fail-closed change that turns a silent weakness into a loud refusal, and
+(8)-(10) close secret-dependent branches in three curve implementations.
+
+### Fixed — `AmaEquationEngine.converge()` could not accept a `numpy.ndarray`, and the shipped examples did not run
+
+Three defects, one root cause and two consequences, all found by running the
+examples this repository ships rather than by reading them.
+
+**The root cause was in `_numeric.Mat`, not in the engine.** `Mat` implemented
+`__getitem__` but not `__len__`, so `numpy` could not classify it as a
+sequence: `numpy.asarray(mat)` produced a **0-dimensional object scalar**, and
+`self.ethical_matrix @ state` — with `state` an ndarray — failed inside
+`numpy.matmul` with
+
+```
+ValueError: matmul: Input operand 0 does not have enough dimensions
+(has 0, gufunc core with signature (n?,k),(k,m?)->(n?,m?) requires 1)
+```
+
+raised from `_term_ethical_gradient`, four frames below the public call, naming
+neither the engine, nor the argument, nor numpy's involvement.
+
+`Mat` now implements `__len__`, `__iter__` and `tolist()`, so
+`numpy.asarray(mat)` yields the `(rows, cols)` float array it always should
+have. `_numeric` gains public `asvec()` / `asmat()` coercion, duck-typed on
+`shape` and `tolist()` so **no `numpy` import enters the library** — the
+zero-dependency property is not weakened to accept a dependency's type.
+`converge()`, `step()`, `lyapunov_function()`, `calculate_sigma_quadratic()`
+and `enforce_sigma_quadratic_threshold()` convert once at their boundary and
+raise messages that name the shape or type they were given.
+
+**`examples/python/complete_demo.py` could not run at all**: its first act was
+`numpy.random.randn(100)` into `converge()`. It now also runs *without* numpy,
+selecting `_numeric.random` and printing which array backend it used — the
+library has no runtime dependencies, and a shipped example that needs one was
+demonstrating something untrue. It also read the φ³ weight off
+`engine.config`, which holds only caller overrides and is empty on a
+default-constructed engine, so every run printed the amplification as
+`0.0000`; it reads `engine.alpha` now.
+
+**`examples/python/basic_usage.py` Examples 3 and 4 died on a `TypeError`**:
+they called `legacy_compat.create_crypto_package(dna_codes=..., ...)` and
+`verify_crypto_package(pkg=...)` against parameters actually named `codes` and
+`package`. Both are migrated to the non-deprecated `crypto_api` package API
+and now demonstrate anchored verification with `expected_public_key` — the
+breaking change in row 1 above — alongside the unanchored result, and Example
+4 asserts that a tampered copy is rejected. Neither example printed a failure
+that a reader could mistake for success: `basic_usage` had already printed
+"Example 2 ... success" before dying.
+
+**Both examples are now executed by CI and by `make test-examples`.**
+`tests/test_python_examples.py` runs each as a subprocess across the full
+OS x Python matrix and asserts on the specific output lines that prove the
+fixed sections ran, not merely on the exit code.
+
+### Fixed — `AmaEquationEngine.converge()`'s instability rollback was unreachable
+
+`converge()` tested `lyapunov_derivative(V) > 0` and treated it as "V is
+rising, roll the step back and stop". `lyapunov_derivative` returns the
+*analytic model* `V̇ = -2λV` of the reference exponential decay; `λ = 0.18 > 0`
+and `V = ||x - x*||² >= 0` by construction, so the expression is `<= 0` for
+every input the function can be given. The branch, its rollback and its comment
+had never executed.
+
+The consequence was not cosmetic. With the default GA-optimised weights the
+exploration terms dominate and V rises monotonically, so `converge()` ran until
+every component saturated at the boundedness clip `±10·φ³` and the state stopped
+moving — then reported that saturated state as converged, at 14 to 19 steps
+depending on the seed, with a Lyapunov value two orders of magnitude *above*
+where it started.
+
+V̇ on a discrete trajectory is the step-to-step difference, so that is what is
+compared now, after the same five-step warm-up. `lyapunov_derivative` keeps its
+analytic role in `lyapunov_stability_proof` / `convergence_time`, where a model
+value is what is wanted — it was the wrong instrument here, not a wrong
+function. The rejected step's Lyapunov value is dropped from the history too,
+so `history[-1]` is `V(final_state)`; that mismatch was unobservable while the
+branch was dead.
+
+Pinned across three seeds by `TestConvergeInstabilityRollback`, which asserts
+both that no retained step raises V past the warm-up *and* that the loop stops
+while the trajectory is still moving — the second is what distinguishes a guard
+stop from the convergence-test stop the unfixed code took, and without it the
+test would pass on the old code.
+
+### Security — `constant_time_compare` padded to the *attacker's* length
+
+The comparison padded **both** operands to `max(len(a), len(b))` with `ljust`
+before handing them to the native comparator. Every call site compares a
+locally computed value against one that arrived from outside:
+`verify_crypto_package` recomputes a 32-byte HMAC-SHA3-256 tag and compares it
+to `package.hmac_tag`, which is whatever the package says it is. A package
+declaring a large tag therefore caused two allocations and a scan of that size
+to reject a 32-byte value — measured at 16 MiB of allocation for an 8 MiB tag —
+before any check had established the package was worth looking at. Unbounded
+memory and CPU amplification on unauthenticated input, inside the function
+whose job is to decide whether that input is authentic.
+
+`min(len(a), len(b))` bytes are now compared in place, with no padding, no
+allocation and no slicing, and the length difference OR-ed into the verdict.
+**Every return value is unchanged**, including the cases where the old padding
+compared equal and only the length term rejected them (`b"a"` vs `b"a\x00"`),
+and a 32-byte comparison against an 8 MiB value now allocates nothing
+measurable. The content scan is untouched: `ama_consttime_memcmp` still
+accumulates over all *n* bytes with no early exit.
+
+`secure_memory.lengths_match()` is added as public API and used at the call
+sites where an attacker controls one operand's length — the Layer-2 HMAC tag,
+the Layer-3 key pin, the Noise-NK pinned responder key, `legacy_compat`'s
+`hmac_verify`, and the RFC 3161 mock-token path. Lengths were never the secret
+here: an HMAC-SHA3-256 tag, an Ed25519 public key and an ML-KEM shared secret
+each have exactly one size fixed by their specification, so a wrong length is a
+*malformed* input and now says so in the log instead of arriving at the caller
+as "the tag did not match".
+
+### Fixed — `_in_secure_execution_mode()` did not consult the APIs its docstring named
+
+The docstring said it "mirrors glibc's `AT_SECURE` / `issetugid()`
+determination". It consulted neither directly: it parsed `/proc/self/auxv` by
+hand, which is the least robust of the available signals — a hardened container
+can mask procfs, and there is no auxiliary vector at all on macOS, the BSDs or
+Solaris, where `issetugid(2)` is the platform's own answer to exactly this
+question. The docstring also claimed "erring towards True only costs a
+developer an ignored override", which the code did not do: an unreadable
+`AT_SECURE` returned `None`, and the caller's `if _auxv_at_secure():` treated
+`None` and `False` identically, so the distinction the parser was careful to
+draw had no effect on behaviour.
+
+Four signals are now consulted, most authoritative first — `issetugid(2)`,
+`getauxval(AT_SECURE)`, `/proc/self/auxv`, then the uid/gid comparison — both
+libc calls resolved through `dlopen(NULL)` so no SONAME is guessed, and
+`getauxval`'s `ENOENT` distinguished from a genuine zero so "not in the vector"
+does not read as "not privileged". The answer is their **OR**: only a signal
+that says *True* ends the search, because each covers a case the others cannot
+see, and a `None` neither answers nor suppresses the signals after it. The
+docstring now says that, including the part it previously got wrong — this
+function does not fail closed on ignorance, it moves on to a signal that can
+answer, and returns False by exhaustion where none exists (Windows).
+
+### Fixed — `ama_ct_value_barrier_u8` had no callers, and four comments named it as the one protecting GHASH
+
+`src/c/internal/ama_ct_barrier.h` shipped two barriers. `ghash_mul` uses the
+64-bit one — it accumulates on two big-endian words — and the byte-width
+`ama_ct_value_barrier_u8` was never called by anything. Four places then went
+on to describe *it* as the construction keeping GHASH branch-free:
+`ama_aes_gcm.c`'s block comment, `tools/check_ghash_constant_time.py`'s
+docstring, `CONSTANT_TIME_VERIFICATION.md` and this changelog. An unused symbol
+that the prose describes as load-bearing is worse than no symbol, because a
+reader checking the defence finds a function nothing calls.
+
+The u8 form is removed and all four references corrected to
+`ama_ct_value_barrier_u64`. The header now records *why* there is no byte-width
+variant, which is the part worth keeping: the one byte-width masked accumulate
+in the tree is the AES S-box scan in `ama_aes_bitsliced.c`, and it must **not**
+be barriered — a register in/out constraint would defeat the auto-vectoriser
+that reordering bought ~14x on that path, against a transformation the compiler
+has no reason to make there (sixteen distinct masks per table entry, so no
+single branch skips a block).
+
+Re-verified after the removal, on the `AMA_TESTING_MODE` build under callgrind:
+GHASH cross-key delta **13 instructions** against a 21-instruction noise floor,
+and the whole forced-scalar AES-GCM path **0** against a 0 floor.
+
+### Fixed — `check_release_tag.py --help` printed no description at all
+
+The parser was built with `description=__doc__.split("\n")[3]`, and index 3 of
+that module's docstring is the blank line under the title underline. Every
+`--help` since the tool was written printed a usage block, two option rows, and
+nothing saying what is checked or when it fails — beside an eighty-line
+docstring that says exactly that. Slicing a docstring by line number is the
+wrong construction regardless of the index, because reflowing the header
+silently changes which line is picked.
+
+`DESCRIPTION` and `EPILOG` are named constants now, with
+`RawDescriptionHelpFormatter`, and the epilog carries the three checks, the
+`actions/checkout` fetch trap, the exit codes, and the INVARIANT-37 statement
+that the signature is *not* verified — so a reader who only ever sees `--help`
+cannot mistake a PASS for a cryptographic result.
+`tests/test_release_tag_gate.py::TestTheHelpOutputIsUsable` asserts the text
+reaches the rendered output, and asserts over the parsed syntax tree that
+`description=`/`epilog=` are named constants rather than expressions.
+
+### Fixed — `check_ed25519_backend_parity.py` described a corpus it does not have
+
+Four documentation defects in the differential harness, each of which would
+mislead a reviewer checking what the gate covers:
+
+- The Corpus section said "**Three** families, all generated at run time" and
+  then listed **four**. The fourth, the compressed-point decode cases that make
+  the canonical-`y` claim testable at all, is a fixed table of encodings
+  derived from `p` and is *not* generated — which is precisely why the three
+  generated families cannot test that rule.
+- The Exit-status section listed `2` as "a library could not be loaded" only.
+  It is also returned when the corpus contains no genuine signature and when
+  the decode stage asserted nothing — the two non-vacuity guards — and `1` also
+  covers agreement on an absolutely wrong answer, not just disagreement.
+- `KEYPAIRS`'s comment said each keypair contributes "every mutation below, so
+  the case count is a multiple of it". The `S + L` twin is conditional, so the
+  per-keypair count is 37 or 38 and the total is not a multiple of 24.
+- The structured-corruption comment said every mutation "always applies"
+  without noting that `_flip_bit` reduces the byte index modulo the buffer
+  length, so two bit indices can collapse onto one case for a short message.
+
+No behaviour changed; the gate still compares 1,836 cases and still passes.
+
 ### Added — the release pipeline now checks the tag it is releasing from (INVARIANT-10)
 
 INVARIANT-10 requires signed commits and `release.yml`'s operator runbook has
@@ -594,7 +829,7 @@ of the running accumulator, which is a function of the secret subkey `H` from
 the second block onward. gcc 13 does not. Both builds pass every functional
 test, because the results are identical; only the emitted control flow differs.
 
-`src/c/internal/ama_ct_barrier.h` adds `ama_ct_value_barrier_u8`, the
+`src/c/internal/ama_ct_barrier.h` adds `ama_ct_value_barrier_u64`, the
 BoringSSL/HACL*-style empty-asm value barrier, and `ghash_mul` launders its
 mask through it. clang then keeps the accumulation unconditional (and
 vectorises it); gcc is unaffected.
