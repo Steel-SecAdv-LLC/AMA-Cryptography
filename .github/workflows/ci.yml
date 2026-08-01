@@ -212,7 +212,6 @@ jobs:
     - name: Run the shipped Python examples
       env:
         AMA_CI_REQUIRE_BACKENDS: "1"
-        PYTHONUTF8: "1"
       # examples/python/ is documentation that executes, and nothing executed
       # it. Both scripts this step covers were broken in the released tree —
       # basic_usage.py Examples 3 and 4 called the package API with keyword
@@ -226,9 +225,19 @@ jobs:
       # filter or path narrowing cannot silently drop. It costs about ten
       # seconds. `make test-examples` is the same check locally.
       #
-      # Cross-platform on purpose: the examples print box-drawing characters
-      # and Greek letters, and a Windows console encoding failure in shipped
-      # documentation is a real defect, not a CI artefact.
+      # NOTE — deliberately no PYTHONUTF8 here, and do not add one. The first
+      # run of this step went red on all four Windows lanes with
+      # `UnicodeEncodeError: 'charmap' codec can't encode character '✓'`,
+      # because Python uses the locale encoding (cp1252) for redirected stdout
+      # on Windows and complete_demo.py prints ✓/✗/φ³/σ. Setting PYTHONUTF8=1
+      # would have turned the lanes green while leaving the script broken for
+      # every user who runs it by hand or redirects its output. The example
+      # reconfigures its own streams instead, and
+      # tests/test_python_examples.py strips both PYTHONUTF8 and
+      # PYTHONIOENCODING from the child environment so this step's verdict
+      # cannot depend on the workflow's configuration — plus a parametrised
+      # case that forces cp1252/ascii, so the Windows-only fault is now
+      # reproduced and gated on every runner in the matrix.
       run: |
         python -m pytest tests/test_python_examples.py -v --tb=short --no-cov
 

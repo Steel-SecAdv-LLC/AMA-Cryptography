@@ -35,6 +35,48 @@ import sys
 import time
 from pathlib import Path
 
+
+def _make_stdio_encodable() -> None:
+    """Stop a legacy output encoding from killing the demo mid-run.
+
+    This script prints check/cross verdicts and Greek letters in its labels. On
+    Windows, Python uses the *locale* encoding — cp1252 on a default install —
+    for stdout whenever it is redirected rather than attached to a console, so
+    a user doing ``python complete_demo.py > out.txt``, or any CI job capturing
+    the output, got::
+
+        UnicodeEncodeError: 'charmap' codec can't encode character '\\u2713'
+
+    part-way through, followed by a *second* traceback from the ``except``
+    handler trying to print ``✗`` with the same encoder.  The demo died
+    somewhere in the middle with two stack traces and no summary.
+
+    Reconfiguring to UTF-8 fixes the redirected case outright and is a no-op on
+    a console, which Python already drives as UTF-8 on Windows.  ``errors``
+    falls back to ``replace`` so that a stream which genuinely cannot represent
+    a character degrades to ``?`` rather than aborting: a demo that prints a
+    slightly wrong glyph has still demonstrated something, and one that raises
+    has not.
+
+    Deliberately done here rather than by setting ``PYTHONUTF8=1`` in CI. The
+    environment variable would make the *test* pass while leaving the defect
+    in place for every user who runs the script by hand.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:  # pragma: no cover - non-TextIOWrapper stream
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (ValueError, OSError):  # pragma: no cover - exotic stream
+            try:
+                reconfigure(errors="replace")
+            except (ValueError, OSError):
+                pass
+
+
+_make_stdio_encodable()
+
 # Add project root to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 

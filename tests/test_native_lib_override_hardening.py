@@ -146,19 +146,38 @@ class TestLibcProbesArePreferred:
     than a named libc, so no SONAME is guessed.
     """
 
-    def test_at_least_one_kernel_side_signal_answers_on_this_host(self) -> None:
-        """Non-vacuity for the whole class.
+    def test_the_kernel_side_signals_match_what_the_platform_can_offer(self) -> None:
+        """Non-vacuity for the whole class, stated per platform.
 
-        Every probe returning None would mean the uid/gid comparison is the
-        only thing running — the state this work exists to move away from —
-        while every fixture below still passed.
+        The first version of this asserted "at least one signal answers" and
+        went red on all four Windows lanes — correctly. Windows has no
+        ``issetugid``, no ``getauxval`` and no auxiliary vector, so all three
+        probes return ``None`` there, which is the documented and desired
+        answer, not a defect. Asserting a POSIX property unconditionally made
+        a passing platform look broken.
+
+        Both halves are worth pinning, so the expectation is split rather than
+        skipped:
+
+        * On POSIX, at least one kernel-side signal **must** answer. Every one
+          returning ``None`` would mean the uid/gid comparison is the only
+          thing running — the state this work exists to move away from — while
+          every fixture below still passed.
+        * Off POSIX, all three **must** return ``None`` and
+          ``_in_secure_execution_mode()`` must be ``False``. That is the
+          "returns False by exhaustion" contract from its docstring, and a
+          probe that started guessing on Windows would break it.
         """
         answers = [
             pqc_backends._libc_issetugid(),
             pqc_backends._libc_getauxval_at_secure(),
             pqc_backends._auxv_at_secure(),
         ]
-        assert any(answer is not None for answer in answers), answers
+        if os.name == "posix":
+            assert any(answer is not None for answer in answers), answers
+        else:
+            assert answers == [None, None, None], answers
+            assert pqc_backends._in_secure_execution_mode() is False
 
     def test_probes_return_a_bool_or_none_and_nothing_else(self) -> None:
         for probe in (

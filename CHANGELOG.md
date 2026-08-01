@@ -54,6 +54,73 @@ Rows 6, 8, 9 and 10 are the ones a security reviewer should read first: (6) is
 a fail-closed change that turns a silent weakness into a loud refusal, and
 (8)-(10) close secret-dependent branches in three curve implementations.
 
+### Fixed — `complete_demo.py` died on a non-UTF-8 stdout, and the gate that found it now runs everywhere
+
+The execution gate added below went red on all four Windows lanes the first
+time it ran, which is the gate doing its job: Python uses the *locale* encoding
+— cp1252 on a default Windows install — for stdout whenever it is **redirected**
+rather than attached to a console, and `complete_demo.py` prints `✓`/`✗`
+verdicts and `φ³`/`σ` labels. So `python complete_demo.py > out.txt`, and every
+CI job that captures output, got
+
+```
+UnicodeEncodeError: 'charmap' codec can't encode character '✓'
+```
+
+part-way through — followed by a *second* traceback from the `except` handler
+trying to report the first one with `✗` through the same encoder. The demo died
+mid-run with two stack traces and no summary. This was true of the released
+script; nothing had executed it to find out.
+
+The one-line repair is `PYTHONUTF8: "1"` in the workflow, and it is the wrong
+repair: it turns the lanes green while leaving the script broken for every user
+who runs it by hand or redirects its output, and it hides the next occurrence.
+`complete_demo.py` reconfigures its own streams instead
+(`_make_stdio_encodable`), which is a property of the program rather than of
+the environment it happens to run in. `errors="replace"` is the second layer,
+so a stream that genuinely cannot represent a character degrades to `?` rather
+than aborting.
+
+Two things follow from making it a property of the program. First,
+`tests/test_python_examples.py` strips `PYTHONUTF8` **and** `PYTHONIOENCODING`
+from every example subprocess, so the gate's verdict cannot depend on which CI
+step happened to export them — it reports the program, not the workflow.
+Second, and the reason this is not a Windows story: `PYTHONIOENCODING=cp1252`
+reproduces the identical fault on Linux and macOS, so the guard is now
+parametrised over `cp1252` and `ascii` across **both** examples and is
+exercised on every job in the matrix. Verified in both directions — exit 1 with
+`'charmap' codec can't encode character '✗'` with the guard removed, exit 0
+with it — plus a non-vacuity case asserting `complete_demo.py` still contains a
+character cp1252 cannot encode, so the parametrised cases cannot start passing
+for the wrong reason, and a case asserting `✓` still reaches the output, so
+"does not crash" cannot be satisfied by "prints `?`".
+
+`basic_usage.py` is in the parametrisation despite printing only ASCII today.
+That is deliberate: it costs one subprocess, and it converts "someone adds a
+`✓` to it in six months" from a red Windows lane into a red lane everywhere,
+immediately.
+
+`ama_cryptography/__main__.py` was checked for the same defect and does not
+have it — its output is ASCII throughout, and it survives
+`PYTHONIOENCODING=cp1252` — so the pre-existing `PYTHONUTF8: "1"` on the
+`Run demonstration` step is belt-and-braces rather than load-bearing, and is
+left alone.
+
+### Fixed — a non-vacuity assertion asserted a POSIX property on Windows
+
+`TestLibcProbesArePreferred` gained a check that at least one kernel-side
+`AT_SECURE` signal answers on the host, guarding against every probe silently
+degrading to the uid/gid comparison. It went red on Windows, correctly: there
+is no `issetugid`, no `getauxval` and no auxiliary vector there, so all three
+returning `None` is the documented and desired answer.
+
+Split per platform rather than skipped, because both halves are worth pinning:
+on POSIX at least one signal must answer, and off POSIX all three must return
+`None` **and** `_in_secure_execution_mode()` must be `False` — which is the
+"returns False by exhaustion" contract from its docstring, and would break if a
+probe ever started guessing on Windows. A bare `skipif` would have asserted
+nothing there.
+
 ### Fixed — `AmaEquationEngine.converge()` could not accept a `numpy.ndarray`, and the shipped examples did not run
 
 Three defects, one root cause and two consequences, all found by running the

@@ -47,7 +47,13 @@ import tracemalloc
 
 import pytest
 
-import ama_cryptography.secure_memory as secure_memory
+# One import form for one module, not two.  CodeQL's py/import-and-import-from
+# flagged the earlier `import ama_cryptography.secure_memory as secure_memory`
+# sitting beside the `from ... import` below, and it was right to: two binding
+# paths to the same module is how a later reader ends up patching one and
+# reading through the other.  `from ama_cryptography import secure_memory`
+# binds the module object through the same mechanism as the names beneath it.
+from ama_cryptography import secure_memory
 from ama_cryptography.secure_memory import constant_time_compare, lengths_match
 
 pytestmark = pytest.mark.skipif(
@@ -157,9 +163,7 @@ class TestLengthsMatch:
         assert constant_time_compare(b"\x00" * 32, b"\xff" * 32) is False
 
     def test_it_is_exported(self) -> None:
-        import ama_cryptography.secure_memory as sm
-
-        assert "lengths_match" in sm.__all__
+        assert "lengths_match" in secure_memory.__all__
 
 
 class TestCallSitesRefuseWrongLengths:
