@@ -37,6 +37,7 @@ with ``numpy`` installed would contradict that.
 
 from __future__ import annotations
 
+import ast
 import os
 import subprocess
 import sys
@@ -97,6 +98,24 @@ def _run_example(
 
     ``io_encoding`` puts one back deliberately, to *reproduce* a legacy output
     encoding rather than to avoid one; see :class:`TestExamplesSurviveALegacyOutputEncoding`.
+
+    **The output is decoded as UTF-8, explicitly.** ``text=True`` on its own
+    decodes with ``locale.getpreferredencoding()`` — the *parent's* codec,
+    cp1252 on Windows — while the child writes UTF-8 by construction, because
+    ``complete_demo._make_stdio_encodable`` reconfigures it to. Leaving that
+    mismatched made the harness misread a correct program: on the Windows lanes
+    ``α (purity) weight`` arrived as ``Î± (purity) weight`` and ``✓`` as
+    ``âœ“``, so two assertions failed against output that was in fact byte-for-byte
+    right. Decoding with the codec the producer actually uses is the fix; it is
+    also platform-independent, where the previous behaviour silently varied by
+    runner locale.
+
+    ``errors="replace"`` keeps a genuinely malformed stream from raising
+    ``UnicodeDecodeError`` out of the harness itself — a test should report a
+    bad byte, not die on it. It does not weaken the glyph assertions: a child
+    that stopped emitting UTF-8 would produce replacement characters, and
+    ``test_utf8_output_is_still_produced_when_the_stream_allows_it`` fails on
+    exactly that.
     """
     script = EXAMPLES / name
     if block_numpy:
@@ -118,6 +137,8 @@ def _run_example(
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=TIMEOUT_SECONDS,
         check=False,
         env=env,
@@ -317,3 +338,96 @@ def _cannot_encode(character: str, encoding: str) -> bool:
     except UnicodeEncodeError:
         return True
     return False
+
+
+class TestTheHarnessReadsWhatTheProgramWrote:
+    """The decode step is part of the gate, and it was wrong once.
+
+    ``complete_demo.py`` reconfigures its streams to UTF-8, so it emits UTF-8
+    on every platform. ``subprocess.run(text=True)`` without an explicit
+    ``encoding`` decodes with ``locale.getpreferredencoding()`` — the
+    *parent's* codec. On the Windows lanes that is cp1252, so a correct program
+    was read as ``Î± (purity) weight`` and ``âœ“``, and two assertions failed
+    against output that was byte-for-byte right.
+
+    That is a measurement error, and measurement errors in a gate are worse
+    than the defects they hide: they train a reader to disbelieve the gate.
+    Both halves are pinned here — the producer's contract (the child really
+    does emit UTF-8) and the harness's side of it (the decode is explicit, not
+    inherited from whatever locale the runner happens to have).
+    """
+
+    def test_the_example_emits_strict_utf8(self) -> None:
+        """The producer contract, checked without ``errors='replace'``.
+
+        ``_run_example`` decodes with ``errors="replace"`` so a malformed byte
+        is reported rather than raised. That is right for a harness and wrong
+        for an assertion: it would quietly accept a child that had stopped
+        emitting UTF-8. This decodes the raw bytes strictly, so the contract is
+        asserted rather than assumed.
+        """
+        env = dict(os.environ)
+        env.pop("PYTHONUTF8", None)
+        env.pop("PYTHONIOENCODING", None)
+        raw = subprocess.run(
+            [sys.executable, str(EXAMPLES / "complete_demo.py")],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            timeout=TIMEOUT_SECONDS,
+            check=False,
+            env=env,
+        )
+        assert raw.returncode == 0, raw.stderr[-2000:]
+        decoded = raw.stdout.decode("utf-8")  # strict: raises on a bad byte
+        assert "α (purity) weight" in decoded
+        assert "✓" in decoded
+
+    def test_no_subprocess_call_decodes_by_locale(self) -> None:
+        """Structural, because the behavioural symptom is platform-specific.
+
+        Dropping ``encoding="utf-8"`` from ``_run_example`` restores
+        locale-dependent decoding, which is invisible on a UTF-8 runner and red
+        on Windows — the exact asymmetry that made this cost a CI round.
+        Asserting over the parsed syntax tree catches it on every runner, at the
+        moment the argument is removed rather than the next time a Windows lane
+        happens to run.
+
+        The rule is ``text=True`` implies explicit ``encoding=``, not "every
+        call must pass ``encoding=``". The first draft of this test asserted the
+        broader rule and failed on the sibling test above, which reads **bytes**
+        deliberately in order to decode them strictly itself. A bytes-mode call
+        performs no decode and so cannot inherit a locale; narrowing the rule to
+        the calls that actually decode is what makes it correct rather than
+        merely strict.
+        """
+        tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
+        runs = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "run"
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "subprocess"
+        ]
+        assert runs, "no subprocess.run call found; this test has lost its subject"
+
+        decoding = [
+            call
+            for call in runs
+            if any(
+                kw.arg == "text" and isinstance(kw.value, ast.Constant) and kw.value.value is True
+                for kw in call.keywords
+            )
+        ]
+        assert decoding, (
+            "no text-mode subprocess.run call found; either the harness stopped "
+            "decoding output, or this test has lost its subject"
+        )
+        for call in decoding:
+            kwargs = {kw.arg for kw in call.keywords}
+            assert "encoding" in kwargs, (
+                f"subprocess.run at line {call.lineno} passes text=True with no "
+                "explicit encoding=; it would decode the example's UTF-8 output "
+                "with the parent's locale codec, which is cp1252 on Windows"
+            )

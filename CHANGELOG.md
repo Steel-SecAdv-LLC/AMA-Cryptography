@@ -100,11 +100,53 @@ That is deliberate: it costs one subprocess, and it converts "someone adds a
 `✓` to it in six months" from a red Windows lane into a red lane everywhere,
 immediately.
 
+CodeQL then flagged the guard's own error handling (`py/empty-except`, alert
+593), and it was right to. The first version tried
+`reconfigure(encoding="utf-8", errors="replace")`, caught `(ValueError,
+OSError)`, retried as `reconfigure(errors="replace")`, and ended in a bare
+`pass`. Measured rather than assumed: `ValueError` is the *only* exception that
+call raises, and only for a stream that is already closed or detached — so
+`OSError` was speculation, and the retry hit the same closed stream for the
+same reason, making it dead code whose failure path terminated in a silent
+swallow of the very condition the function exists to handle. The retry and the
+over-broad catch are gone; what remains is a single `except ValueError:
+continue` whose comment records why continuing is correct rather than a shrug.
+That branch is load-bearing in exactly one case, verified: with `sys.stderr`
+closed by a harness, the demo still runs to completion and exits 0 on a working
+`stdout`.
+
 `ama_cryptography/__main__.py` was checked for the same defect and does not
 have it — its output is ASCII throughout, and it survives
 `PYTHONIOENCODING=cp1252` — so the pre-existing `PYTHONUTF8: "1"` on the
 `Run demonstration` step is belt-and-braces rather than load-bearing, and is
 left alone.
+
+### Fixed — the examples gate decoded the child's output with the *parent's* codec
+
+The stream fix above worked: the Windows lanes went from a mid-run
+`UnicodeEncodeError` to `✓ ALL DEMONSTRATIONS COMPLETED SUCCESSFULLY`. Two
+assertions still failed, and the reason was in the harness rather than in the
+program. `subprocess.run(text=True)` with no explicit `encoding` decodes using
+`locale.getpreferredencoding()` — the **parent's** codec, cp1252 on a Windows
+runner — while the child now emits UTF-8 by construction. So a byte-for-byte
+correct program was read as `Î± (purity) weight` and `âœ“`, and the gate
+reported a defect that did not exist.
+
+A measurement error in a gate is worse than the defect it hides, because it
+teaches a reader to disbelieve the gate. `_run_example` now decodes with the
+codec the producer actually uses, which also removes a silent dependence on
+runner locale. Two assertions keep it honest, one per side of the contract: the
+child's raw stdout is decoded **strictly** as UTF-8 in a bytes-mode run, so
+`errors="replace"` cannot mask a producer that stopped emitting it; and a
+structural check refuses any `text=True` subprocess call in the module that
+does not name its encoding, because that defect is invisible on a UTF-8 runner
+and only reddens Windows — verified to fail when the argument is removed.
+
+The first draft of that structural check asserted the broader "every
+`subprocess.run` must pass `encoding=`" and failed against the bytes-mode call
+beside it, which is exactly the call that must *not* decode. Narrowing the rule
+to the calls that actually decode is what made it correct rather than merely
+strict.
 
 ### Fixed — a non-vacuity assertion asserted a POSIX property on Windows
 

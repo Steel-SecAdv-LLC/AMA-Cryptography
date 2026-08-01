@@ -65,14 +65,32 @@ def _make_stdio_encodable() -> None:
     for stream in (sys.stdout, sys.stderr):
         reconfigure = getattr(stream, "reconfigure", None)
         if reconfigure is None:  # pragma: no cover - non-TextIOWrapper stream
+            # Not a ``TextIOWrapper``: a ``StringIO``, a binary stream, or a
+            # sink installed by a harness.  None of those has an encoding to
+            # change, and none of them raises ``UnicodeEncodeError`` from a
+            # console redirect, which is the only failure this function exists
+            # to prevent.  Nothing to do and nothing to report.
             continue
         try:
             reconfigure(encoding="utf-8", errors="replace")
-        except (ValueError, OSError):  # pragma: no cover - exotic stream
-            try:
-                reconfigure(errors="replace")
-            except (ValueError, OSError):
-                pass
+        except ValueError:  # pragma: no cover - closed or detached stream
+            # Measured, not guessed: ``ValueError`` is the *only* exception
+            # this call raises, and only for a stream that is already closed
+            # ("I/O operation on closed file") or detached ("underlying buffer
+            # has been detached").  An earlier revision also caught ``OSError``
+            # and retried as ``reconfigure(errors="replace")``; neither was
+            # reachable — ``OSError`` never occurs, and the retry hits the same
+            # closed stream for the same reason, so it was dead code ending in
+            # a silent ``pass``.
+            #
+            # Continuing is the right answer rather than a shrug: a closed
+            # stream cannot carry output at all — the next ``print`` to it
+            # fails on the stream, not on the encoding — so there is nothing to
+            # preserve and no working channel to report through.  Continuing
+            # also keeps the demo usable when only *one* of the two streams was
+            # closed by a harness, which is the single case where this branch
+            # changes anything.
+            continue
 
 
 _make_stdio_encodable()
