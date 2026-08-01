@@ -34,6 +34,7 @@ including ones no local key could produce.
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -46,6 +47,35 @@ SSH_BLOCK = "-----BEGIN SSH SIGNATURE-----\nnot-a-real-signature\n-----END SSH S
 X509_BLOCK = "-----BEGIN SIGNED MESSAGE-----\nnot-a-real-signature\n-----END SIGNED MESSAGE-----"
 
 
+def _env(repo: Path) -> dict[str, str]:
+    """Inherited environment with the identity pinned and config isolated.
+
+    Inherited rather than replaced: a hand-built environment has to carry
+    everything the platform needs to launch a process, and on Windows that is
+    more than ``PATH`` — ``SystemRoot`` and ``COMSPEC`` among others. Pinning
+    ``HOME``/``USERPROFILE``/``GIT_CONFIG_GLOBAL`` to the throwaway repository
+    is what actually provides the isolation these tests want: the developer's
+    ``~/.gitconfig`` (a signing key, a ``commit.gpgsign``, a template dir)
+    must not reach a fixture whose whole subject is signature presence.
+    """
+    env = dict(os.environ)
+    env.update(
+        {
+            "GIT_AUTHOR_NAME": "Gate Test",
+            "GIT_AUTHOR_EMAIL": "gate@example.invalid",
+            "GIT_COMMITTER_NAME": "Gate Test",
+            "GIT_COMMITTER_EMAIL": "gate@example.invalid",
+            "GIT_AUTHOR_DATE": "2026-08-01T00:00:00+0000",
+            "GIT_COMMITTER_DATE": "2026-08-01T00:00:00+0000",
+            "HOME": str(repo),
+            "USERPROFILE": str(repo),
+            "GIT_CONFIG_GLOBAL": str(repo / "gitconfig-absent"),
+            "GIT_CONFIG_SYSTEM": str(repo / "gitconfig-absent"),
+        }
+    )
+    return env
+
+
 def _git(repo: Path, *args: str) -> str:
     result = subprocess.run(
         ["git", *args],
@@ -53,16 +83,7 @@ def _git(repo: Path, *args: str) -> str:
         capture_output=True,
         text=True,
         check=True,
-        env={
-            "GIT_AUTHOR_NAME": "Gate Test",
-            "GIT_AUTHOR_EMAIL": "gate@example.invalid",
-            "GIT_COMMITTER_NAME": "Gate Test",
-            "GIT_COMMITTER_EMAIL": "gate@example.invalid",
-            "GIT_AUTHOR_DATE": "2026-08-01T00:00:00+0000",
-            "GIT_COMMITTER_DATE": "2026-08-01T00:00:00+0000",
-            "PATH": "/usr/bin:/bin:/usr/local/bin",
-            "HOME": str(repo),
-        },
+        env=_env(repo),
     )
     return result.stdout.strip()
 
@@ -90,15 +111,22 @@ def _write_tag_object(repo: Path, name: str, signature: str | None) -> None:
     )
     if signature is not None:
         body += signature + "\n"
+    # BYTES, not text. With `text=True` Python wraps stdin in a TextIOWrapper
+    # whose default newline translation rewrites every "\n" to "\r\n" on
+    # Windows, so git receives `object <sha>\r` and rejects the object with
+    # `badObjectSha1: invalid 'object' line format`. A git object's bytes are
+    # a wire format, not platform text; encoding here keeps them that way, and
+    # this is why the module tolerates no newline translation anywhere on the
+    # write path.
     result = subprocess.run(
         ["git", "hash-object", "-t", "tag", "-w", "--stdin"],
         cwd=repo,
-        input=body,
+        input=body.encode("utf-8"),
         capture_output=True,
-        text=True,
         check=True,
+        env=_env(repo),
     )
-    _git(repo, "update-ref", f"refs/tags/{name}", result.stdout.strip())
+    _git(repo, "update-ref", f"refs/tags/{name}", result.stdout.decode("ascii").strip())
 
 
 class TestTheShapesThatMustFail:
@@ -190,6 +218,35 @@ class TestTheToolDoesNotOverclaim:
         ).replace("  ", " ")
 
 
+class TestTheFixtureItselfIsPortable:
+    """The fixture writes a git object; git objects are bytes, not text.
+
+    The first version of this module passed ``input=`` as ``str`` with
+    ``text=True``. On Linux and macOS that is a no-op; on Windows Python wraps
+    stdin in a ``TextIOWrapper`` that rewrites every ``\\n`` to ``\\r\\n``, so
+    git received ``object <sha>\\r`` and refused the object with
+    ``badObjectSha1: invalid 'object' line format``. Seven tests failed on
+    every Windows lane and none anywhere else.
+
+    This is the control for that: a stray carriage return anywhere in the
+    written object fails here on *all* platforms, rather than only on the one
+    that translates newlines.
+    """
+
+    def test_the_written_tag_object_contains_no_carriage_returns(self, repo: Path) -> None:
+        _write_tag_object(repo, "v4.0.0", signature=SSH_BLOCK)
+        raw = subprocess.run(
+            ["git", "cat-file", "tag", "refs/tags/v4.0.0"],
+            cwd=repo,
+            capture_output=True,
+            check=True,
+            env=_env(repo),
+        ).stdout
+        assert b"\r" not in raw
+        assert raw.startswith(b"object ")
+        assert SSH_BLOCK.encode() in raw
+
+
 class TestTheSignatureScanner:
     def test_it_matches_nothing_in_an_ordinary_message(self) -> None:
         assert not is_signed("object abc\ntype commit\n\nama-cryptography 4.0.0\n")
@@ -210,12 +267,12 @@ class TestTheGateIsWiredIntoTheReleasePipeline:
     """
 
     def test_release_yml_invokes_the_checker(self) -> None:
-        workflow = Path(".github/workflows/release.yml").read_text()
+        workflow = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
         assert "tools/check_release_tag.py" in workflow
 
     def test_release_yml_force_fetches_the_tag_ref_first(self) -> None:
         """Without this the gate reports lightweight for every annotated tag."""
-        workflow = Path(".github/workflows/release.yml").read_text()
+        workflow = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
         # rindex, not index: the first mention is in the operator runbook
         # comment at the top of the file. The step that actually runs it is
         # the last one, and the fetch has to precede *that*.
