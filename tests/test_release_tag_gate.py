@@ -40,7 +40,13 @@ from pathlib import Path
 
 import pytest
 
-from tools.check_release_tag import SIGNATURE_HEADERS, check, is_signed, main
+from tools.check_release_tag import (
+    SIGNATURE_DELIMITERS,
+    SIGNATURE_HEADERS,
+    check,
+    is_signed,
+    main,
+)
 
 PGP_BLOCK = "-----BEGIN PGP SIGNATURE-----\nnot-a-real-signature\n-----END PGP SIGNATURE-----"
 SSH_BLOCK = "-----BEGIN SSH SIGNATURE-----\nnot-a-real-signature\n-----END SSH SIGNATURE-----"
@@ -251,10 +257,67 @@ class TestTheSignatureScanner:
     def test_it_matches_nothing_in_an_ordinary_message(self) -> None:
         assert not is_signed("object abc\ntype commit\n\nama-cryptography 4.0.0\n")
 
-    @pytest.mark.parametrize("header", SIGNATURE_HEADERS)
-    def test_every_declared_header_is_actually_recognised(self, header: str) -> None:
+    @pytest.mark.parametrize(("begin", "end"), SIGNATURE_DELIMITERS, ids=["pgp", "ssh", "x509"])
+    def test_every_declared_format_is_actually_recognised(self, begin: str, end: str) -> None:
         """The constant and the predicate cannot drift apart."""
-        assert is_signed(f"tagger x\n\nmessage\n{header}\nbody\n")
+        assert is_signed(f"tagger x\n\nmessage\n{begin}\nbody\n{end}\n")
+
+    def test_the_header_tuple_stays_in_step_with_the_pairs(self) -> None:
+        assert SIGNATURE_HEADERS == tuple(b for b, _ in SIGNATURE_DELIMITERS)
+
+
+class TestASignatureBlockIsAPairNotAMarker:
+    """Raised in review: a substring test on BEGIN is not a gate.
+
+    A tag message is free text. Under the original one-sided test, an
+    *unsigned* annotated tag whose message quoted a BEGIN marker — a changelog
+    line about signing, a pasted error, this repository's own documentation —
+    satisfied the gate while carrying no signature. Fail-open, in the one
+    place the whole module exists to fail closed.
+
+    These are the controls for the tightened predicate. Each case is a body
+    that a substring test accepts and a matched-pair test must reject.
+    """
+
+    @pytest.mark.parametrize("begin", SIGNATURE_HEADERS)
+    def test_a_begin_marker_with_no_end_is_refused(self, begin: str) -> None:
+        assert not is_signed(f"tagger x\n\nrelease notes\n{begin}\n")
+
+    def test_an_end_marker_with_no_begin_is_refused(self) -> None:
+        assert not is_signed("tagger x\n\nnotes\n-----END PGP SIGNATURE-----\n")
+
+    def test_the_end_must_follow_the_begin_not_precede_it(self) -> None:
+        assert not is_signed(
+            "tagger x\n\n-----END SSH SIGNATURE-----\n-----BEGIN SSH SIGNATURE-----\n"
+        )
+
+    def test_mismatched_formats_do_not_pair_with_each_other(self) -> None:
+        """A PGP opening and an SSH closing is not a block in either format."""
+        assert not is_signed(
+            "tagger x\n\n-----BEGIN PGP SIGNATURE-----\nz\n-----END SSH SIGNATURE-----\n"
+        )
+
+    def test_a_marker_quoted_inline_is_prose_not_structure(self) -> None:
+        """Armour delimiters occupy a line of their own in every format."""
+        assert not is_signed(
+            "tagger x\n\nsee the -----BEGIN PGP SIGNATURE----- block below\n"
+            "and its -----END PGP SIGNATURE----- terminator\n"
+        )
+
+    def test_a_realistic_release_message_about_signing_is_refused(self) -> None:
+        """The concrete shape the reviewer described, end to end."""
+        body = (
+            "object " + "0" * 40 + "\ntype commit\ntag v4.0.0\n"
+            "tagger Gate Test <gate@example.invalid> 1785542400 +0000\n\n"
+            "ama-cryptography 4.0.0\n\n"
+            "Release tags must now carry a -----BEGIN SSH SIGNATURE----- block;\n"
+            "see tools/check_release_tag.py.\n"
+        )
+        assert not is_signed(body)
+
+    def test_a_genuine_block_still_passes_beside_all_of_that(self) -> None:
+        """Non-vacuity: the refusals above are about pairing, not about text."""
+        assert is_signed(f"tagger x\n\nnotes\n{SSH_BLOCK}\n")
 
 
 class TestTheGateIsWiredIntoTheReleasePipeline:

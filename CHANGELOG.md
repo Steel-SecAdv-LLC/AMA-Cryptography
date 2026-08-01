@@ -75,6 +75,23 @@ emits. One of them asserts that a fabricated signature block **passes** — the
 fixture's signature is the literal text `not-a-real-signature` — so no future
 reader can mistake this gate's PASS for a cryptographic result.
 
+Review caught one thing in the first cut of that predicate, and it was a
+fail-open in the one place this module exists to fail closed: it tested for
+the BEGIN marker as a *substring*. A tag message is free text, so an unsigned
+annotated tag whose message quoted `-----BEGIN PGP SIGNATURE-----` — a
+changelog line about signing, a pasted error, this repository's own
+documentation — satisfied the gate carrying no signature. It now requires a
+matched BEGIN/END pair, each alone on its line, END after BEGIN. Armour
+delimiters occupy a line of their own in every format git emits, so a marker
+quoted inline is prose and only a marker on its own line is structure; a
+message would have to reproduce a whole armour envelope line for line to
+pass, at which point it is indistinguishable from a signature by inspection,
+which is the honest limit of a shape check. Seven controls cover it: a lone
+BEGIN, a lone END, END before BEGIN, a PGP opening with an SSH closing, both
+markers quoted inline, a realistic release message describing the signing
+requirement — and a genuine block beside them all, so the refusals are shown
+to be about pairing rather than about text.
+
 Also corrected while in this file: the runbook's note that "the v3.2.0, v3.3.0
 and v3.5.0 releases all shipped with zero artefacts". v3.2.0 and v3.3.0 still
 carry no assets and, being immutable releases, cannot be repaired. v3.5.0's

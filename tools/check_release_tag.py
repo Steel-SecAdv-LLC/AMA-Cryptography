@@ -44,8 +44,11 @@ Checked, fail-closed:
 
 1. **The ref resolves.** A release cannot proceed from a tag that is not there.
 2. **The ref names a tag object**, not a commit. This is the lightweight case.
-3. **The tag object carries a signature block** — OpenPGP, SSH, or the
-   ``SIGNED MESSAGE`` form ``gpg.format=x509``/gpgsm emits.
+3. **The tag object carries a complete signature block** — OpenPGP, SSH, or
+   the ``SIGNED MESSAGE`` form ``gpg.format=x509``/gpgsm emits. A matched
+   BEGIN/END pair on whole lines, in order; a marker quoted inside the tag
+   *message* is prose and does not count. See ``is_signed`` for why that
+   distinction is the difference between a gate and a substring search.
 
 **Not** checked, and stated plainly rather than implied (INVARIANT-37): this
 tool does **not** verify the signature. Verification needs a trust store — an
@@ -90,17 +93,21 @@ import subprocess
 import sys
 from pathlib import Path
 
-#: Header lines that mark the start of a signature inside a tag object.
-#: git writes the OpenPGP form for ``gpg.format=openpgp`` (the default), the
-#: SSH form for ``gpg.format=ssh``, and the ``SIGNED MESSAGE`` form for
-#: ``gpg.format=x509``. All three are accepted; which one a maintainer uses is
-#: their choice, and refusing two of the three would push them toward the
-#: unsigned path this gate exists to close.
-SIGNATURE_HEADERS = (
-    "-----BEGIN PGP SIGNATURE-----",
-    "-----BEGIN SSH SIGNATURE-----",
-    "-----BEGIN SIGNED MESSAGE-----",
+#: The armour delimiters of each signature format git emits, as
+#: ``(begin, end)`` pairs. git writes the OpenPGP form for
+#: ``gpg.format=openpgp`` (the default), the SSH form for ``gpg.format=ssh``,
+#: and the ``SIGNED MESSAGE`` form for ``gpg.format=x509``. All three are
+#: accepted; which one a maintainer uses is their choice, and refusing two of
+#: the three would push them toward the unsigned path this gate exists to
+#: close.
+SIGNATURE_DELIMITERS = (
+    ("-----BEGIN PGP SIGNATURE-----", "-----END PGP SIGNATURE-----"),
+    ("-----BEGIN SSH SIGNATURE-----", "-----END SSH SIGNATURE-----"),
+    ("-----BEGIN SIGNED MESSAGE-----", "-----END SIGNED MESSAGE-----"),
 )
+
+#: Begin markers alone, kept for callers that only need to name the formats.
+SIGNATURE_HEADERS = tuple(begin for begin, _ in SIGNATURE_DELIMITERS)
 
 _LIGHTWEIGHT_HINT = (
     "A lightweight tag is a ref pointing directly at a commit: there is no tag "
@@ -156,8 +163,37 @@ def tag_object_body(tag: str, repo: Path) -> str:
 
 
 def is_signed(body: str) -> bool:
-    """True when the tag object body contains a signature block."""
-    return any(header in body for header in SIGNATURE_HEADERS)
+    """True when the tag object body contains a complete signature block.
+
+    A **matched pair** on **whole lines**, in order, is required — not a
+    substring hit on the BEGIN marker.
+
+    Raised in review, and the reviewer was right. A tag message is free text;
+    an annotated tag whose message quotes ``-----BEGIN PGP SIGNATURE-----``
+    (a changelog entry about signing, a paste of a failure message, this
+    module's own docstring in a tag body) would have satisfied a bare
+    substring test while carrying no signature at all. That is a fail-open in
+    a gate whose entire job is to fail closed, and the fact that it takes an
+    unusual message to trigger is not a defence: the eleven tags this gate was
+    written for are proof that unusual is what actually ships.
+
+    Whole-line matching matters as much as the pairing. Armour delimiters
+    occupy a line of their own in every format git emits, so a marker quoted
+    inline — ``see the -----BEGIN SSH SIGNATURE----- block`` — is prose, and
+    only a marker alone on its line is structure. Requiring both, and
+    requiring END to follow BEGIN, means the message would have to reproduce
+    a whole armour envelope line for line to pass. At that point it is
+    indistinguishable from a signature by inspection, which is the honest
+    limit of a shape check and is exactly what this module's header says it
+    is.
+    """
+    lines = body.splitlines()
+    for begin, end in SIGNATURE_DELIMITERS:
+        if begin not in lines:
+            continue
+        if end in lines[lines.index(begin) + 1 :]:
+            return True
+    return False
 
 
 def check(tag: str, repo: Path) -> list[str]:
