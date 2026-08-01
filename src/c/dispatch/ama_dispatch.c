@@ -636,9 +636,8 @@ static apply_dispatch_only_result_t apply_dispatch_only(
         return AMA_DISPATCH_ONLY_UNSUPPORTED;
     }
 
-    /* Slot name doesn't match any of our recognised entries (the
-     * inventory the slot inventory in include/ama_dispatch.h
-     * documents).  No stderr here — the caller's diagnostic in
+    /* Slot name doesn't match any of our recognised entries (the slot
+     * inventory that include/ama_dispatch.h documents).  No stderr here — the caller's diagnostic in
      * dispatch_init_internal() carries the inventory list for the
      * unrecognised case (single line of stderr, no duplication). */
     return AMA_DISPATCH_ONLY_UNRECOGNISED;

@@ -524,6 +524,19 @@ jobs:
           python tools/check_ghash_constant_time.py \
             --lib build/lib/libama_cryptography_test.a --target ghash
 
+      - name: ama_consttime_memcmp instruction count must not depend on the data
+        # The dudect lane for this same function is a wall-clock statistical
+        # test and it flakes on shared runners -- it failed at |t| = 5.21
+        # against a 4.5 threshold in 2 of 3 rounds on a commit that did not
+        # touch src/c/ama_consttime.c, whose instruction count is invariant by
+        # construction (measured byte-identical across all eight classes).
+        # This is the deterministic counterpart: it cannot flake, so it is what
+        # a real early-exit regression trips. The dudect lane stays as the
+        # wall-clock cross-check.
+        run: |
+          python tools/check_ghash_constant_time.py \
+            --lib build/lib/libama_cryptography_test.a --target consttime
+
       - name: secp256k1 ECDSA instruction count must not depend on the key
         # Catches a branch on a secret in the scalar field arithmetic — the
         # Montgomery extra-reduction leak (Walter & Thompson, CT-RSA 2001).

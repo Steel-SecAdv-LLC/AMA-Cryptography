@@ -217,6 +217,41 @@ class TestCanonicalYStillDecodes:
             assert decode[op](public_key) is True
 
 
+class TestNullArgumentsAreRefused:
+    """A NULL pointer must return AMA_ERROR_INVALID_PARAM, not segfault.
+
+    ``ama_ed25519_double_scalarmult_public`` has always guarded its pointers;
+    ``point_add`` and ``scalarmult_public`` guarded none of theirs, in either
+    backend, so a NULL argument dereferenced instead of returning an error.
+
+    That mattered more once this module started driving those two entry points
+    through ctypes: a Python ``None`` arrives as NULL and takes the interpreter
+    down with it, so an unguarded parameter turns a test-suite typo into a
+    crash with no traceback. Both backends are fixed identically, which the
+    backend-differential job requires — they must agree on the verdict for
+    every input, and NULL is an input.
+    """
+
+    @pytest.mark.parametrize("null_position", [0, 1, 2])
+    def test_point_add_refuses_null(self, null_position: int) -> None:
+        args: list[object] = [ctypes.create_string_buffer(32), _encode(1), _IDENTITY]
+        args[null_position] = None
+        assert _native_lib.ama_ed25519_point_add(*args) != 0
+
+    @pytest.mark.parametrize("null_position", [0, 1, 2])
+    def test_scalarmult_public_refuses_null(self, null_position: int) -> None:
+        args: list[object] = [ctypes.create_string_buffer(32), _TWO, _encode(1)]
+        args[null_position] = None
+        assert _native_lib.ama_ed25519_scalarmult_public(*args) != 0
+
+    def test_the_same_calls_succeed_with_real_pointers(
+        self, decode: dict[str, Callable[[bytes], bool]]
+    ) -> None:
+        """Non-vacuity: the refusal is about NULL, not about these arguments."""
+        assert decode["point_add"](_encode(1)) is True
+        assert decode["scalarmult_public"](_encode(1)) is True
+
+
 class TestSignatureVerificationIsUnaffected:
     """The end-to-end half, kept honest about what it can and cannot show.
 

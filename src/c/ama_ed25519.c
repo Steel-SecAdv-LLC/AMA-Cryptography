@@ -1615,6 +1615,10 @@ AMA_API ama_error_t ama_ed25519_point_add(uint8_t result[32],
     ge25519_p1p1 R_p1p1;
     ge25519_p3 R;
 
+    /* See the note in src/c/ed25519_donna_shim.c: the two backends must
+     * agree on the verdict for every input, NULL included, and neither
+     * guarded here while both guarded in double_scalarmult_public. */
+    if (!result || !p || !q) return AMA_ERROR_INVALID_PARAM;
     if (ge25519_frombytes(&P, p) != 0) return AMA_ERROR_INVALID_PARAM;
     if (ge25519_frombytes(&Q, q) != 0) return AMA_ERROR_INVALID_PARAM;
 
@@ -1646,6 +1650,7 @@ AMA_API ama_error_t ama_ed25519_scalarmult_public(uint8_t result[32],
                                                   const uint8_t point[32]) {
     ge25519_p3 P, R;
 
+    if (!result || !public_scalar || !point) return AMA_ERROR_INVALID_PARAM;
     if (ge25519_frombytes(&P, point) != 0) return AMA_ERROR_INVALID_PARAM;
     ge25519_scalarmult(&R, public_scalar, &P);
     ge25519_p3_tobytes(result, &R);

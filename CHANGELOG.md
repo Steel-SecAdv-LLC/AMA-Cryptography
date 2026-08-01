@@ -110,6 +110,63 @@ The general rule, since it will recur: **finding one instance of a defect
 pattern is a reason to sweep for the rest, and a threshold set between one
 known defect and one assumed-clean baseline is only as good as the assumption.**
 
+### Fixed — NULL arguments to two Ed25519 entry points, and a deterministic gate for a flaky dudect lane
+
+Raised in review. `ama_ed25519_point_add()` and `ama_ed25519_scalarmult_public()`
+dereferenced `result`, `p`/`point` and `q`/`public_scalar` without a NULL
+check, in **both** backends, while the sibling
+`ama_ed25519_double_scalarmult_public()` has always guarded all five of its
+pointers in both. A NULL argument segfaulted instead of returning
+`AMA_ERROR_INVALID_PARAM`.
+
+That became easier to reach in this same release: `test_ed25519_canonical_y.py`
+now drives exactly those two entry points through `ctypes`, where a Python
+`None` arrives as NULL and takes the interpreter down with no traceback. Both
+backends are fixed identically — the backend-differential job requires them to
+agree on the verdict for every input, and NULL is an input — and pinned by
+`TestNullArgumentsAreRefused`, which drives each of the three positions on each
+function plus a non-vacuity control that the same calls succeed with real
+pointers.
+
+`ama_ed25519_point_from_scalar()` is deliberately **not** changed: it returns
+`void`, so an early return on NULL would leave the caller's output buffer
+uninitialised, which is worse than the crash. Fixing it properly means changing
+its signature, which is an ABI break and does not belong here.
+
+### Added — `--target consttime`, because the dudect lane for it flakes
+
+The `dudect - X25519 AVX2 4-way` job failed on this branch with
+`ama_consttime_memcmp: |t| reached 5.2108 (threshold 4.5) in 2 of 3 rounds`, on
+a commit that does not touch `src/c/ama_consttime.c` — nothing in this release
+does.
+
+Settled deterministically rather than dismissed as flake. Under callgrind, over
+2,000 comparisons of a 4 KiB buffer across eight classes — the equal case and a
+first-difference at eight positions spread through the buffer — the function
+retires **37,157,290 instructions every time, byte-identical**. It is a
+fixed-count XOR accumulator over volatile pointers; its cost cannot depend on
+the data. The dudect result is wall-clock noise on a shared runner.
+
+A first version of that measurement showed an 11-instruction residue, which
+turned out to be the *harness's* own `if (cls > 0)` branch, not the library's.
+A driver for a constant-time check has to be constant-time itself; the shipped
+driver always performs the mutation, with an XOR mask of 0 for the equal class.
+
+`tools/check_ghash_constant_time.py` gains a `consttime` target and
+`dudect.yml` a step for it. This module's docstring already argued the case —
+callgrind counts "give the same verdict on a loaded CI runner as on idle
+hardware" — so the durable answer to a flaky statistical lane over a
+deterministic function is to also measure it deterministically. dudect stays as
+the wall-clock cross-check; this is what a genuine early-exit regression trips.
+
+The gate's own test now derives the CI-coverage assertion from `_DRIVERS`
+rather than a hand-written list, so adding a target without wiring it up fails
+in the suite instead of shipping a check nothing runs. Writing that test also
+reproduced a familiar false positive: the structural assertion "the driver has
+no class-dependent branch" first matched the *comment* explaining why the
+branch is absent — the same prose-versus-code confusion INVARIANT-13 records
+the suppression scanner learning about.
+
 ### Security — `constant_time_compare` fell back to a pure-Python loop (INVARIANT-7)
 
 Raised in review. `secure_memory.constant_time_compare()` used AMA's native

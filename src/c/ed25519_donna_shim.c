@@ -335,6 +335,14 @@ AMA_API ama_error_t ama_ed25519_point_add(uint8_t result[32],
                                           const uint8_t p[32],
                                           const uint8_t q[32]) {
     ge25519 ALIGN(16) P, Q, R;
+    /* Pointer guard first.  ama_ed25519_double_scalarmult_public() below has
+     * always had one; this function and ama_ed25519_scalarmult_public() did
+     * not, in either backend, so a NULL argument segfaulted instead of
+     * returning AMA_ERROR_INVALID_PARAM.  That inconsistency became easier to
+     * reach when tests/test_ed25519_canonical_y.py started driving these two
+     * through ctypes, where a Python None arrives as NULL and takes the
+     * interpreter down with it. */
+    if (!result || !p || !q) return AMA_ERROR_INVALID_PARAM;
     /* donna's unpack negates Y; we negate back */
     if (!ama_ed25519_point_y_is_canonical(p)) return AMA_ERROR_INVALID_PARAM;
     if (!ge25519_unpack_negative_vartime(&P, p)) return AMA_ERROR_INVALID_PARAM;
@@ -359,6 +367,7 @@ AMA_API ama_error_t ama_ed25519_scalarmult_public(uint8_t result[32],
                                                   const uint8_t point[32]) {
     ge25519 ALIGN(16) P, R;
     bignum256modm s1, s2_zero = {0};
+    if (!result || !public_scalar || !point) return AMA_ERROR_INVALID_PARAM;
     if (!ama_ed25519_point_y_is_canonical(point)) return AMA_ERROR_INVALID_PARAM;
     if (!ge25519_unpack_negative_vartime(&P, point)) return AMA_ERROR_INVALID_PARAM;
     curve25519_neg(P.x, P.x);

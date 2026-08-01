@@ -45,6 +45,7 @@ So the properties pinned here are, in order of what actually failed:
 from __future__ import annotations
 
 import importlib.util
+import re
 import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -71,6 +72,18 @@ def tool() -> ModuleType:
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def _strip_c_comments(source: str) -> str:
+    """Drop C comments so a structural check matches code, not prose.
+
+    The first version of the assertion below searched the raw driver text for
+    ``if (cls`` and matched the comment that explains why that branch is
+    *absent*. That is the same false positive INVARIANT-13 records the
+    suppression scanner learning about — "it made no distinction between a
+    marker and prose describing one".
+    """
+    return re.sub(r"/\*.*?\*/", "", source, flags=re.DOTALL)
 
 
 def _fake_proc(returncode: int, count: int = LOADER_ONLY_COUNT) -> SimpleNamespace:
@@ -291,9 +304,46 @@ class TestSamplingCannotSilentlyCollapse:
         assert "j < siglen" not in tool._DRIVERS["ecdsa"]
 
 
-class TestCIRunsBothTargets:
-    def test_dudect_workflow_invokes_each_target(self) -> None:
+class TestTheConsttimeTarget:
+    """The deterministic counterpart to a dudect lane that flakes."""
+
+    def test_it_is_registered(self, tool: ModuleType) -> None:
+        assert "consttime" in tool._DRIVERS
+        assert "consttime" in tool.THRESHOLDS
+        assert "consttime" in tool._REMEDY
+
+    def test_the_driver_has_no_class_dependent_branch(self, tool: ModuleType) -> None:
+        """A driver for a constant-time check must be constant-time itself.
+
+        Written the obvious way — ``if (cls > 0) { ...mutate... }`` — the
+        harness contributed ~11 instructions of its own, and the measurement
+        stopped being a statement about the library. The mutation is always
+        performed, with an XOR mask of 0 for the equal class.
+        """
+        driver = _strip_c_comments(tool._DRIVERS["consttime"])
+        assert "if (cls" not in driver
+        assert "mask" in driver
+        assert "ama_consttime_memcmp" in driver
+
+    def test_the_equal_case_is_covered(self, tool: ModuleType) -> None:
+        """Class 'A' (0x41) makes the buffers equal.
+
+        Without it every class would differ somewhere and the check could not
+        see an implementation that early-exits only on a full match.
+        """
+        assert "0x41u" in tool._DRIVERS["consttime"]
+        assert "A" in tool.KEY_CLASSES
+
+
+class TestCIRunsEveryTarget:
+    def test_dudect_workflow_invokes_each_target(self, tool: ModuleType) -> None:
+        """Every registered target must have a CI step.
+
+        Derived from ``_DRIVERS`` rather than a hand-written list, so adding a
+        target without wiring it up fails here instead of shipping a check
+        nothing runs.
+        """
         text = DUDECT_WORKFLOW.read_text(encoding="utf-8")
         assert yaml.safe_load(text) is not None, "dudect.yml must parse"
-        for target in ("ghash", "ecdsa"):
+        for target in tool._DRIVERS:
             assert f"--target {target}" in text, f"no CI step runs --target {target}"
