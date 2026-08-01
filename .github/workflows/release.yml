@@ -72,18 +72,33 @@ name: Release — Build, Sign, and Publish
 #      runner label, a `python -c` payload broken by YAML folding,
 #      POSIX quoting handed to cmd.exe, and a cibuildwheel 3->4 bump that
 #      turned on delvewheel Windows repair by default (see
-#      CIBW_REPAIR_WHEEL_COMMAND_WINDOWS below) — and the v3.2.0, v3.3.0
-#      and v3.5.0 releases all shipped with zero artefacts as a result.
+#      CIBW_REPAIR_WHEEL_COMMAND_WINDOWS below) — and releases shipped with
+#      zero artefacts as a result.  The v3.2.0 and v3.3.0 releases still
+#      carry no assets and, being immutable, cannot be repaired; v3.5.0's
+#      first attempt failed the same way and was re-tagged onto the fix
+#      commit, so the published release now carries all 54 artefacts.
 #      tools/check_workflow_commands.py now catches the first four classes
 #      statically on every PR; the delvewheel default is a behavioural
 #      change in a dependency, not a command defect, so NO static check
 #      sees it — a dry run is the only thing that exercises the real repair
 #      step against the real matrix and runner fleet.
 #
-#   2. Tag only after the dry run is green:
+#   2. Tag only after the dry run is green.  The tag MUST be annotated and
+#      signed — `-s`, not a bare `git tag` — and preflight now enforces it
+#      (tools/check_release_tag.py).  This is not ceremony either: of the
+#      eleven tags this repository carried before that gate existed, six were
+#      lightweight (a mutable ref straight to a commit, with no object to sign)
+#      and the other five were annotated but unsigned.  Every one of those
+#      releases went out through a pipeline whose runbook said `git tag -s`.
 #
-#        $ git tag -s v3.5.0 -m "ama-cryptography 3.5.0"
-#        $ git push origin v3.5.0
+#        $ git tag -s v4.0.0 -m "ama-cryptography 4.0.0"
+#        $ git push origin v4.0.0
+#
+#      For GitHub to show the tag as Verified, the signing key must also be
+#      registered on the account under Settings -> SSH and GPG keys with type
+#      "Signing Key" — an authentication key of the same material does not
+#      satisfy it.  preflight reports GitHub's verdict without gating on it,
+#      since that setting is account state, not repository state.
 #
 # All of stages 1-7 then run automatically.  A failure in any stage halts
 # the pipeline before the next; the published artefact is exactly the
@@ -166,6 +181,37 @@ jobs:
             echo "version=$pyproject_version"
             echo "tag_clean=$tag_clean"
           } >> "$GITHUB_OUTPUT"
+
+      - name: Require an annotated, signed tag (INVARIANT-10)
+        # Only meaningful on a tag push; a workflow_dispatch dry-run has no
+        # tag to inspect and is explicitly a dry-run.
+        if: github.event_name == 'push'
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF##*/}"
+          # actions/checkout at its default depth fetches the COMMIT the tag
+          # resolves to and writes a local refs/tags/<name> pointing at it.
+          # That local ref is lightweight even when the pushed tag is
+          # annotated, so the checker below would report a false lightweight
+          # verdict on a correctly signed tag.  Re-fetch the tag ref itself,
+          # with --force, so the annotated object is what gets inspected.
+          git fetch --force --no-tags origin "refs/tags/${TAG}:refs/tags/${TAG}"
+          python tools/check_release_tag.py "${TAG}"
+          # The shape check above is fail-closed and needs no key material.
+          # GitHub's own verified/unverified verdict is account-level state —
+          # it turns on when the signing key is registered under
+          # Settings -> SSH and GPG keys with type "Signing Key" — so it is
+          # reported here for the operator to read rather than gated on.  A
+          # release must not be blocked by a setting that lives outside the
+          # repository, but it must not hide it either.
+          echo "GitHub signature verdict for ${TAG}:"
+          gh api "repos/${GITHUB_REPOSITORY}/git/refs/tags/${TAG}" \
+            --jq '.object.sha' \
+          | xargs -I{} gh api "repos/${GITHUB_REPOSITORY}/git/tags/{}" \
+            --jq '"  verified=\(.verification.verified)  reason=\(.verification.reason)"' \
+          || echo "  (unavailable — informational only, not a release blocker)"
+        env:
+          GH_TOKEN: ${{ github.token }}
 
       - name: Run version consistency check
         # Cross-validate that every other version anchor (CMakeLists.txt,

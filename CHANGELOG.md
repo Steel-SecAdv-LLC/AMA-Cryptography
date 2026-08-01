@@ -21,6 +21,67 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ## [4.0.0] - 2026-08-01
 
+### Added — the release pipeline now checks the tag it is releasing from (INVARIANT-10)
+
+INVARIANT-10 requires signed commits and `release.yml`'s operator runbook has
+always said to tag with `git tag -s`. Nothing checked either statement about
+the tag itself, and the repository's own history is what that looks like.
+Every tag present when this was written, measured:
+
+| tag | object | signature |
+|---|---|---|
+| v1.0.0, v1.1, v2.0.0, v2.1.5, v3.0.0, v3.3.0 | **commit** (lightweight) | impossible — no object to sign |
+| v2.1.2, v3.1.0, v3.2.0, v3.4.0, v3.5.0 | tag | **none found** |
+
+**Not one tag in this repository has ever been signed**, and six of the eleven
+are lightweight — a bare ref pointing at a commit, which anyone who can push
+can move, and which has no object a signature could ever attach to. Every one
+of those releases went out through a pipeline documenting the opposite.
+
+`tools/check_release_tag.py` runs in `release.yml`'s preflight, before any
+wheel is built, and fails the release unless the ref resolves, names a tag
+object rather than a commit, and that object carries an OpenPGP, SSH or X.509
+signature block. It looks the ref up under `refs/tags/` explicitly, so a
+same-named branch cannot satisfy it.
+
+What it does **not** do is verify the signature, and it says so in both its
+pass and fail output. Verification needs a trust store — an `allowed_signers`
+file or a keyring holding the maintainer's public key — and shipping one in
+the repository would assert a key binding only the account owner can
+establish. So the gate checks *shape*: the properties that were wrong on all
+eleven tags, that need no key material, and whose absence means no later
+verification can succeed. GitHub's verified/unverified verdict is the
+complementary half and is account-level state, not repository state, so
+preflight prints it rather than gating on it — a release must not be blocked
+by a setting outside the repository, but it must not hide it either.
+
+One trap was found while wiring it and is worth recording, because it would
+have produced a red gate on correct input, which is how gates get switched
+off: `actions/checkout` at its default depth fetches the *commit* a tag
+resolves to and writes a local `refs/tags/<name>` pointing at it. That local
+ref is lightweight even when the pushed tag is annotated. The preflight step
+re-fetches the tag ref with `--force` first, the failure message names the
+trap, and `tests/test_release_tag_gate.py` asserts both — including that the
+fetch precedes the invocation in the workflow file.
+
+`release.yml` is exempt from `check_gate_coverage.py` (it never triggers on
+`pull_request`, so branch protection cannot require a context it produces),
+which means nothing else in the repository would notice this step being
+dropped. That test is what notices.
+
+The gate's own negative controls cover every shape: missing, lightweight,
+annotated-unsigned, a same-named branch, and all three signature formats git
+emits. One of them asserts that a fabricated signature block **passes** — the
+fixture's signature is the literal text `not-a-real-signature` — so no future
+reader can mistake this gate's PASS for a cryptographic result.
+
+Also corrected while in this file: the runbook's note that "the v3.2.0, v3.3.0
+and v3.5.0 releases all shipped with zero artefacts". v3.2.0 and v3.3.0 still
+carry no assets and, being immutable releases, cannot be repaired. v3.5.0's
+first attempt failed the same way but was re-tagged onto the fix commit, and
+the published release carries all 54 artefacts — so the sentence described a
+state that no longer existed.
+
 ### Security — two more secret-dependent branches in secp256k1 ECDSA signing
 
 The Montgomery extra-reduction fix earlier in this release closed one branch on

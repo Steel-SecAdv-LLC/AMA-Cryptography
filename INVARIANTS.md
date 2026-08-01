@@ -312,6 +312,35 @@ model (T4.3). Branch protection rules should enforce this.
 > **Status:** Signed commits are enabled via branch protection on `main` and
 > `develop`.
 
+### INVARIANT-10 Addendum — Release Tags Must Be Annotated and Signed
+
+A release tag **must** be an annotated tag object carrying a signature. A
+lightweight tag — a ref pointing straight at a commit — is prohibited for
+`v*`, because it is a mutable pointer with no object to sign: anyone who can
+push can move it, and there is no place a signature could later be added.
+
+This addendum exists because the invariant above was, until 4.0.0, asserted
+about commits and enforced about nothing else. Measured across the eleven tags
+the repository carried when the gate was written, **six were lightweight and
+the remaining five were annotated but unsigned — none was signed**, and every
+one of those releases went out through a pipeline whose operator runbook said
+`git tag -s`. A documented practice that nothing checks is a practice that has
+not happened.
+
+**Enforcement:** `tools/check_release_tag.py`, run from `release.yml`'s
+preflight stage before any wheel is built. It checks *shape* — the ref
+resolves, names a tag object rather than a commit, and the object contains an
+OpenPGP, SSH, or X.509 signature block — and states in its own output that it
+does **not** verify the signature, since verification needs a trust store this
+repository deliberately does not ship (publishing an `allowed_signers` file
+would assert a key binding only the account owner can establish). GitHub's
+verified/unverified verdict is the complementary half; it is account-level
+state, so preflight reports it rather than gating on it.
+`tests/test_release_tag_gate.py` supplies the negative controls for each
+rejected shape, including one asserting that a fabricated signature block
+passes — so a future reader cannot mistake this gate's PASS for a
+cryptographic result.
+
 ## INVARIANT-11 — SBOM as Release Gate
 
 CycloneDX SBOM generation (Python + C library) **must** succeed as a required
