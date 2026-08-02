@@ -441,9 +441,9 @@ cmake -B build -DAMA_ENABLE_DUDECT=ON && cmake --build build
 
 Location: `fuzz/`
 
-12 libFuzzer fuzz targets with seed corpora and dictionaries:
-- Core: SHA3, Ed25519, AES-GCM, HKDF, consttime
-- PQC: Dilithium, Kyber, SPHINCS+, ChaCha20-Poly1305, X25519, Argon2, secp256k1
+15 libFuzzer fuzz targets with seed corpora and dictionaries:
+- Core: SHA3, Ed25519, AES-GCM, HKDF, consttime, agent-binding, Ascon
+- PQC: Dilithium, Kyber, SPHINCS+, ChaCha20-Poly1305, X25519, Argon2, secp256k1, FROST
 
 OSS-Fuzz onboarding prepared in `oss-fuzz/` for continuous 24/7 fuzzing.
 See [docs/oss-fuzz-onboarding.md](docs/oss-fuzz-onboarding.md) for details.
@@ -679,7 +679,7 @@ See [docs/constant-time-testing.md](docs/constant-time-testing.md) for methodolo
 
 ### Continuous Fuzzing (OSS-Fuzz)
 
-12 libFuzzer fuzz targets with seed corpora and fuzzing dictionaries, prepared
+15 libFuzzer fuzz targets with seed corpora and fuzzing dictionaries, prepared
 for [OSS-Fuzz](https://github.com/google/oss-fuzz) onboarding:
 
 ✓ All fuzz targets have `LLVMFuzzerTestOneInput` entry points

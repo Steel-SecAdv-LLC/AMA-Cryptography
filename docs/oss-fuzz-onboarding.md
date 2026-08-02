@@ -4,7 +4,7 @@
 
 [OSS-Fuzz](https://github.com/google/oss-fuzz) is Google's continuous fuzzing infrastructure for open-source software. It runs fuzzing engines (libFuzzer, AFL++, Honggfuzz) with sanitizers (ASan, MSan, UBSan) against your code 24/7, automatically reporting crashes, memory errors, and undefined behavior.
 
-AMA Cryptography already has 12 libFuzzer fuzz targets running in CI. Onboarding to OSS-Fuzz provides:
+AMA Cryptography already has 15 libFuzzer fuzz targets running in CI. Onboarding to OSS-Fuzz provides:
 
 - **Continuous 24/7 fuzzing** with massive compute resources
 - **Multiple fuzzing engines** (libFuzzer, AFL++, Honggfuzz) for coverage diversity

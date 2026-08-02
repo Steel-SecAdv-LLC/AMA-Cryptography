@@ -140,7 +140,7 @@ concrete instance of this pattern. See M3.5.
 | T2.3 | Secure memory zeroing on all sensitive buffers | **IMPLEMENTED** | `ama_secure_memzero()`, volatile+barrier |
 | T2.3 | Cleanup on all exit paths (including error) | **IMPLEMENTED** | Audited: all `free()` preceded by zeroing |
 | T2.4 | Static analysis (cppcheck, clang-analyzer, CodeQL) | **IMPLEMENTED** | `.github/workflows/static-analysis.yml` |
-| T2.4 | Coverage-guided fuzzing (libFuzzer, 11 harnesses) | **IMPLEMENTED** | `fuzz/`, `.github/workflows/fuzzing.yml` |
+| T2.4 | Coverage-guided fuzzing (libFuzzer, 15 harnesses) | **IMPLEMENTED** | `fuzz/`, `.github/workflows/fuzzing.yml` |
 | T2.5 | Integer overflow guards before allocation | **IMPLEMENTED** | `SIZE_MAX` checks in `ama_dilithium.c`, `ama_ed25519.c` |
 | T2.6 | Simple allocation patterns (malloc→use→zero→free) | **BY DESIGN** | No complex object lifetimes |
 

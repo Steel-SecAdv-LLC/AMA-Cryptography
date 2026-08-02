@@ -33,17 +33,27 @@ from types import ModuleType
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-TOOL_PATH = REPO_ROOT / "tools" / "check_documented_counts.py"
 
 
-@pytest.fixture(scope="module")
-def tool() -> ModuleType:
-    spec = importlib.util.spec_from_file_location("check_documented_counts", TOOL_PATH)
+def _load_tool_module(name: str) -> ModuleType:
+    """Import ``tools/<name>.py`` by path.
+
+    Dynamic on purpose: ``tools/`` is not a package on ``sys.path``, so a static
+    ``import`` would leave ``mypy --strict tests/`` with an unresolved module —
+    which is also why the fuzz-count test below loads the registration gate this
+    way rather than importing it.
+    """
+    spec = importlib.util.spec_from_file_location(name, REPO_ROOT / "tools" / f"{name}.py")
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
+
+
+@pytest.fixture(scope="module")
+def tool() -> ModuleType:
+    return _load_tool_module("check_documented_counts")
 
 
 def _synthetic_repo(
@@ -187,6 +197,136 @@ class TestAggregateTestCounts:
             encoding="utf-8",
         )
         assert tool.check_aggregate_test_counts(repo) == []
+
+
+class TestFuzzTargetCounts:
+    """``check_fuzz_target_counts`` — the prose count vs the number built."""
+
+    @staticmethod
+    def _repo(tmp_path: Path, body: str) -> Path:
+        repo = tmp_path / "repo"
+        (repo / "docs").mkdir(parents=True)
+        (repo / "docs" / "F.md").write_text(body, encoding="utf-8")
+        return repo
+
+    def test_a_matching_count_is_clean(self, tool: ModuleType, tmp_path: Path) -> None:
+        repo = self._repo(tmp_path, "The suite has 15 libFuzzer fuzz targets.\n")
+        assert tool.check_fuzz_target_counts(repo, 15) == []
+
+    def test_a_wrong_count_fails(self, tool: ModuleType, tmp_path: Path) -> None:
+        repo = self._repo(tmp_path, "The suite has 12 libFuzzer fuzz targets.\n")
+        problems = tool.check_fuzz_target_counts(repo, 15)
+        assert problems and "12" in problems[0]
+
+    def test_the_parenthesised_and_trailing_forms_are_both_caught(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        repo = self._repo(tmp_path, "C fuzz harnesses (16 targets); 16 targets in `fuzz/`.\n")
+        assert len(tool.check_fuzz_target_counts(repo, 15)) == 2
+
+    def test_a_number_on_a_non_fuzz_line_is_ignored(self, tool: ModuleType, tmp_path: Path) -> None:
+        repo = self._repo(tmp_path, "There are 3 targets for this sprint.\n")
+        assert tool.check_fuzz_target_counts(repo, 15) == []
+
+    def test_the_source_file_count_is_not_read_as_a_target_count(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        """ "16 ``fuzz_*.c`` sources / 15 entry points" is the correct pairing,
+        not a drifted "16 targets" — the gate must not flag it."""
+        repo = self._repo(tmp_path, "There are 16 `fuzz_*.c` sources, 15 libFuzzer entry points.\n")
+        assert tool.check_fuzz_target_counts(repo, 15) == []
+
+    def test_a_revision_history_row_is_ignored(self, tool: ModuleType, tmp_path: Path) -> None:
+        repo = self._repo(tmp_path, "| 2.1.0 | 2026-03-25 | fuzz testing (12 targets) |\n")
+        assert tool.check_fuzz_target_counts(repo, 15) == []
+
+    def test_the_count_is_imported_from_the_registration_gate(self, tool: ModuleType) -> None:
+        """The authority is the same tool that enforces registration, so the
+        two can never disagree about how many harnesses exist.
+
+        Loaded the same dynamic way the ``tool`` fixture loads its module, so
+        ``mypy --strict tests/`` has no unresolved static import to reject.
+        """
+        registration = _load_tool_module("check_fuzz_target_registration")
+        assert (
+            tool.count_libfuzzer_entry_points(REPO_ROOT)
+            == len(registration._sources(REPO_ROOT))
+            > 0
+        )
+
+
+class TestBreakingChangeCounts:
+    """``check_breaking_change_counts`` — the restated total vs the CHANGELOG table."""
+
+    _CHANGELOG = (
+        "## [4.0.0]\n\n"
+        "### Behavioural and breaking changes at a glance\n\n"
+        "| # | Kind | Change |\n|---|---|---|\n"
+        "| 1 | **Breaking** | a |\n"
+        "| 2 | **Breaking** | b |\n"
+        "| 3 | Behavioural | c |\n\n"
+        "## [3.5.0]\n\nolder\n"
+    )
+
+    @staticmethod
+    def _repo(tmp_path: Path, changelog: str, doc: str) -> Path:
+        repo = tmp_path / "repo"
+        (repo / "docs").mkdir(parents=True)
+        (repo / "CHANGELOG.md").write_text(changelog, encoding="utf-8")
+        (repo / "docs" / "S.md").write_text(doc, encoding="utf-8")
+        return repo
+
+    def test_a_matching_word_count_is_clean(self, tool: ModuleType, tmp_path: Path) -> None:
+        repo = self._repo(
+            tmp_path,
+            self._CHANGELOG,
+            "Superseded (two breaking changes — see CHANGELOG `[4.0.0]`).\n",
+        )
+        assert tool.check_breaking_change_counts(repo) == []
+
+    def test_a_wrong_count_names_the_table_total(self, tool: ModuleType, tmp_path: Path) -> None:
+        repo = self._repo(
+            tmp_path,
+            self._CHANGELOG,
+            "Superseded (three breaking changes — see CHANGELOG `[4.0.0]`).\n",
+        )
+        problems = tool.check_breaking_change_counts(repo)
+        assert problems and "enumerates 2" in problems[0]
+
+    def test_a_digit_spelling_also_resolves(self, tool: ModuleType, tmp_path: Path) -> None:
+        repo = self._repo(
+            tmp_path,
+            self._CHANGELOG,
+            "There are 2 breaking changes — see CHANGELOG `[4.0.0]`.\n",
+        )
+        assert tool.check_breaking_change_counts(repo) == []
+
+    def test_a_claim_about_a_missing_section_fails(self, tool: ModuleType, tmp_path: Path) -> None:
+        repo = self._repo(
+            tmp_path,
+            self._CHANGELOG,
+            "Superseded (two breaking changes — see CHANGELOG `[9.9.9]`).\n",
+        )
+        problems = tool.check_breaking_change_counts(repo)
+        assert problems and "no such section" in problems[0]
+
+    def test_vague_prose_names_no_count_and_is_skipped(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        repo = self._repo(
+            tmp_path,
+            self._CHANGELOG,
+            "Superseded (several breaking changes — see CHANGELOG `[4.0.0]`).\n",
+        )
+        assert tool.check_breaking_change_counts(repo) == []
+
+    def test_a_revision_history_row_is_ignored(self, tool: ModuleType, tmp_path: Path) -> None:
+        repo = self._repo(
+            tmp_path,
+            self._CHANGELOG,
+            "| 3.5.0 | 2026-07-30 | three breaking changes — see CHANGELOG `[4.0.0]` |\n",
+        )
+        assert tool.check_breaking_change_counts(repo) == []
 
 
 class TestTheGateIsNotVacuousOnThisRepository:

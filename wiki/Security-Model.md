@@ -155,7 +155,7 @@ which is authoritative.
 | Version | Security Support |
 |---------|-----------------|
 | 4.0.x | ✓ Active (development and security updates) |
-| 3.5.x | ✗ Superseded by v4.0 (three breaking changes — see CHANGELOG `[4.0.0]`) |
+| 3.5.x | ✗ Superseded by v4.0 (six breaking changes — see CHANGELOG `[4.0.0]`) |
 | 3.4.x | ✗ Superseded by v3.5 (no public API removals) |
 | 3.3.x | ✗ Superseded by v3.4 (no public API removals) |
 | 3.2.x | ✗ Superseded by v3.3 (no public API removals) |

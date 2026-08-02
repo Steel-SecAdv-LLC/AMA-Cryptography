@@ -33,6 +33,7 @@ Comprehensive demonstration of all AMA Cryptography capabilities:
 
 import sys
 import time
+from importlib.util import find_spec
 from pathlib import Path
 
 
@@ -408,60 +409,86 @@ def demo_helix_engine():
     print(f"  σ_quadratic: {sigma:.6f} ({'✓ PASS' if sigma >= 0.96 else '✗ FAIL'} ≥ 0.96)")
 
 
+def _pure_matrix_vector(matrix, vector):
+    """A naive pure-Python matrix-vector product.
+
+    The speed baseline for the Cython kernel below.  numpy's ``@`` is BLAS and
+    would flatter nothing, so the honest "what does compiling this buy you"
+    figure is measured against Python; numpy stays only the *correctness*
+    oracle.
+    """
+    rows, cols = matrix.shape
+    result = [0.0] * rows
+    for i in range(rows):
+        row = matrix[i]
+        acc = 0.0
+        for j in range(cols):
+            acc += float(row[j]) * float(vector[j])
+        result[i] = acc
+    return result
+
+
 def demo_performance():
-    """Demonstrate performance comparison"""
+    """The pure-Python engine, and the Cython kernels that actually ship."""
     print("\n" + "=" * 70)
     print("7. PERFORMANCE BENCHMARKING")
     print("=" * 70)
 
-    try:
-        # Try to import optimized Cython engine
-        from ama_cryptography.helix_engine_complete import AmaEngineOptimized
+    # Section subject: AmaEquationEngine.step runs in pure Python.  Time it.
+    engine = AmaEquationEngine(state_dim=100, random_seed=42)
+    state = random_state(100, seed=1)
+    start = time.perf_counter()
+    for i in range(100):
+        state = engine.step(state, i)
+    time_engine = time.perf_counter() - start
+    print(
+        f"\n  AmaEquationEngine.step (pure Python): "
+        f"{time_engine * 1000:.2f}ms over 100 iterations"
+    )
 
-        print("\nCython-optimized engine available!")
-        print("-" * 70)
+    # The Cython acceleration this project ships is the `math_engine` extension,
+    # which `make python` builds.  An earlier draft of this demo probed
+    # `helix_engine_complete` instead — a reference source the default build
+    # does not compile — so its "run: make python" hint could never take effect.
+    # Report the extension that actually ships, and, when it and numpy are both
+    # present, show a real Cython-vs-pure-Python figure on a kernel it
+    # implements, checked against numpy before it is quoted so the number cannot
+    # drift from the computation it describes.
+    if find_spec("ama_cryptography.math_engine") is None:
+        print("  math_engine Cython kernels:           not built (run `make python`)")
+        return
+    if not HAVE_NUMPY:
+        print("  math_engine Cython kernels:           built (install numpy to benchmark them)")
+        return
 
-        # Benchmark pure Python vs Cython
-        state_dim = 100
-        iterations = 100
+    from ama_cryptography import math_engine
 
-        # Pure Python
-        engine_py = AmaEquationEngine(state_dim=state_dim, random_seed=42)
-        state_py = random_state(state_dim, seed=1)
+    rng = np.random.default_rng(7)
+    matrix = rng.standard_normal((160, 160))
+    vector = rng.standard_normal(160)
 
-        start = time.perf_counter()
-        for i in range(iterations):
-            state_py = engine_py.step(state_py, i)
-        time_py = time.perf_counter() - start
+    cython_result = math_engine.matrix_vector_multiply(matrix, vector)
+    if not np.allclose(cython_result, matrix @ vector, rtol=0, atol=1e-9):
+        print(
+            "  math_engine.matrix_vector_multiply:   built, but disagreed with "
+            "the reference product — not timed"
+        )
+        return
 
-        # Cython
-        engine_cy = AmaEngineOptimized(state_dim=state_dim, random_seed=42)
-        state_cy = random_state(state_dim, seed=1)
-
-        start = time.perf_counter()
-        for i in range(iterations):
-            state_cy = engine_cy.step(state_cy, i)
-        time_cy = time.perf_counter() - start
-
-        speedup = time_py / time_cy
-
-        print(f"  Pure Python: {time_py * 1000:.2f}ms ({iterations} iterations)")
-        print(f"  Cython:      {time_cy * 1000:.2f}ms ({iterations} iterations)")
-        print(f"  Speedup:     {speedup:.1f}x faster")
-
-    except ImportError:
-        print("\n  Cython engine not built (run: make python)")
-        print("  Benchmarking pure Python only...")
-
-        engine = AmaEquationEngine(state_dim=100, random_seed=42)
-        state = random_state(100, seed=1)
-
-        start = time.perf_counter()
-        for i in range(100):
-            state = engine.step(state, i)
-        elapsed = time.perf_counter() - start
-
-        print(f"  Pure Python: {elapsed * 1000:.2f}ms (100 iterations)")
+    iterations = 40
+    start = time.perf_counter()
+    for _ in range(iterations):
+        math_engine.matrix_vector_multiply(matrix, vector)
+    time_cython = time.perf_counter() - start
+    start = time.perf_counter()
+    for _ in range(iterations):
+        _pure_matrix_vector(matrix, vector)
+    time_pure = time.perf_counter() - start
+    print(f"  math_engine.matrix_vector_multiply:   built; 160x160 @ vector x{iterations}")
+    print(
+        f"    Cython {time_cython * 1000:.2f}ms  vs  pure Python "
+        f"{time_pure * 1000:.2f}ms  ->  {time_pure / time_cython:.1f}x"
+    )
 
 
 def main():

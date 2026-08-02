@@ -740,9 +740,9 @@ The system provides two Cython extension modules for performance-critical paths:
 - Helix evolution (18.9x speedup)
 - NumPy integration for array operations
 
-**`src/cython/helix_engine_complete.pyx`** — Complete helix engine with Cython optimization.
+**`src/cython/helix_engine_complete.pyx`** — a complete-engine reference implementation of all 18+ variants. The default build does **not** compile it: `setup.py` builds `math_engine.pyx` and the FFI bindings, and this file is kept as a reference source rather than a shipped extension.
 
-Both compiled `.so` modules are installed into the `ama_cryptography/` package directory. The Python API detects availability at import time and falls back to pure Python implementations when extensions are not built.
+The compiled Cython `.so` modules — `math_engine` and the FFI bindings — are installed into the `ama_cryptography/` package directory. The Python API detects availability at import time and falls back to pure Python implementations when an extension is not built.
 
 ### HMAC-SHA3-256 Binding Architecture
 
@@ -776,7 +776,7 @@ The C library uses CMake (`CMakeLists.txt`, ~270 lines) with the following key c
 
 When `AMA_USE_NATIVE_PQC=OFF`, the PQC source files are excluded and the library provides only classical primitives (SHA3, Ed25519, HKDF, AES-GCM).
 
-Fuzz harnesses are built separately via `fuzz/CMakeLists.txt` (13 targets covering all C implementations).
+Fuzz harnesses are built separately via `fuzz/CMakeLists.txt` (15 targets covering all C implementations).
 
 ### Architectural Invariants
 
@@ -842,10 +842,10 @@ docker run ama-cryptography:latest
 | Performance Tests | Benchmark regression detection | All critical paths | `test_performance.py`, `benchmarks/` |
 | Security Tests | Cryptographic correctness | 100% crypto functions | `test_crypto_core_penetration.py`, `test_memory_security.py` |
 | Compliance Tests | Standards adherence | All claimed standards | `test_nist_kat.py`, `test_pqc_kat.py` |
-| Fuzz Tests | Input mutation testing | 16 C targets | `fuzz/fuzz_*.c` |
+| Fuzz Tests | Input mutation testing | 15 C targets | `fuzz/fuzz_*.c` (16 sources; `fuzz_rng.c` is a helper) |
 | NIST ACVP Vectors | Official vector validation | 1,215 vectors, 12 algorithms (815 AFT + 400 SHA-3 MCT) | `nist_vectors/` |
 
-**Total:** 3,318 Python test functions across 138 test files, plus the
+**Total:** 3,331 Python test functions across 138 test files, plus the
 ctest-registered C tests and standalone C benchmark under `tests/c/`
 (the exact C-test count varies with build options — `AMA_USE_NATIVE_PQC`
 gates `test_x25519`, `test_chacha20poly1305`, `test_argon2id`,

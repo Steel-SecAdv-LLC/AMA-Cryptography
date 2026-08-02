@@ -200,7 +200,7 @@ citing the passing gate.
 | Known-answer vectors | `tests/kat/**`, `nist_vectors/`, ACVP validation workflow |
 | Differential testing | `tests/test_differential.py` + PyCA/PyNaCl/pycryptodome interop lanes |
 | Property-based invariants | `tests/test_property_based_crypto.py` |
-| Fuzzing | `fuzz/` (12 targets), OSS-Fuzz integration |
+| Fuzzing | `fuzz/` (15 targets), OSS-Fuzz integration |
 | Dependency audit | `pip-audit --strict --requirement requirements-lock.txt` |
 | Secret scanning | `tools/check_secrets.py` (INVARIANT-23) — folds concatenated literals, so split credentials are caught |
 | FD-ownership (os.fdopen leak guard) | `tools/check_fdopen_safety.py` (AST-verified, no allowlist) |

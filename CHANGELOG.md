@@ -1208,6 +1208,51 @@ anchor explicitly clears the cache entry.
   x86-64 copy-paste into the AArch64 baseline that the entry immediately above
   it exists to correct.
 
+### Fixed — two documented counts had drifted, and nothing checked either
+
+Both were second declarations of a fact that lives elsewhere in the tree, and
+both drifted because — like the aggregate test counts this release already
+brought under `check_documented_counts.py` — no gate compared them to their
+source. So the numbers are corrected *and* checked, rather than corrected and
+left to drift again.
+
+- **The fuzz-target count was stated four different ways.** The repository
+  builds **15** libFuzzer harnesses from **16** `fuzz_*.c` sources
+  (`fuzz_rng.c` supplies `__wrap_ama_randombytes` to `fuzz_frost` and is not a
+  harness). The prose said 16 (`README.md` ×3, `ARCHITECTURE.md`), 13
+  (`ARCHITECTURE.md`), 12 (`ENHANCED_FEATURES.md` ×2, `CRYPTO_REVIEW_CHECKLIST.md`,
+  `docs/oss-fuzz-onboarding.md`) and 11 (`THREAT_MODEL.md`). Two of those also
+  enumerated the harnesses and got the membership wrong in opposite directions:
+  `README.md` listed `RNG` (the helper) as a target, and `ENHANCED_FEATURES.md`
+  omitted `agent-binding`, `Ascon` and `FROST`. All corrected to 15 and the
+  membership reconciled against `fuzz/CMakeLists.txt`.
+- **The 4.0.0 breaking-change count said "three".** `SECURITY.md`'s
+  supported-versions table and its `wiki/Security-Model.md` mirror both said
+  "three breaking changes — see CHANGELOG `[4.0.0]`", pointing at a table that
+  lists **six**. Corrected to six.
+- **`check_documented_counts.py` now gates both.** The fuzz count is checked
+  against the harness set `check_fuzz_target_registration.py` already derives
+  from `fuzz/CMakeLists.txt` — imported, never re-derived, so the two cannot
+  disagree — and the breaking-change count is checked against the Breaking rows
+  of the exact CHANGELOG section the claim cites. Revision-history rows are
+  excluded from both, as they are for the aggregate-count check. Negative
+  controls for each are in `tests/test_documented_counts_gate.py`.
+
+### Fixed — `complete_demo.py`'s benchmark probed a module the build does not compile
+
+The performance section imported `ama_cryptography.helix_engine_complete`, a
+complete-engine reference source `setup.py` does not build, and on the
+resulting `ImportError` advised "run: make python" — which builds `math_engine`
+and the FFI bindings, never that file, so the hint could not take effect. It
+now benchmarks the pure-Python `AmaEquationEngine.step` (the section's subject)
+and reports the acceleration that actually ships, `math_engine`; where that
+extension and numpy are both present it quotes a Cython-vs-pure-Python figure
+on `matrix_vector_multiply`, checked against numpy's own product before the
+number is printed so it cannot drift from the computation it describes.
+`README.md` and `ARCHITECTURE.md` no longer imply `helix_engine_complete` is a
+compiled module (`ARCHITECTURE.md`'s "Both compiled `.so` modules" named it as
+one).
+
 ### Fixed — two security documents described implementations that do not ship
 
 Found by re-reading `CONSTANT_TIME_VERIFICATION.md` against the built library

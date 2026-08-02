@@ -351,6 +351,147 @@ def check_aggregate_test_counts(repo: Path) -> list[str]:
     return problems
 
 
+# ---------------------------------------------------------------------------
+# Fuzz-target count.
+#
+# How many libFuzzer harnesses the repository builds is a fact that lives in
+# ``fuzz/CMakeLists.txt`` and is already enforced, harness by harness, by
+# ``tools/check_fuzz_target_registration.py``.  The prose restates it — README,
+# ARCHITECTURE.md, ENHANCED_FEATURES.md, CRYPTO_REVIEW_CHECKLIST.md,
+# docs/oss-fuzz-onboarding.md and THREAT_MODEL.md each quote a target count —
+# and, unchecked, those restatements had drifted to 11, 12, 13 and 16 across
+# six documents, only one of which stated the correct 15, against a tree that
+# builds fifteen.  This checks them against the one authority instead of
+# maintaining another number by hand: the count is *imported* from the
+# registration tool, never re-derived here, so the two cannot disagree.
+#
+# ``fuzz_rng.c`` is a support translation unit — it supplies
+# ``__wrap_ama_randombytes`` to ``fuzz_frost`` — not a harness, which is why the
+# authority is "libFuzzer entry points" (15), not "``fuzz_*.c`` files" (16). A
+# document may legitimately state either, so only the entry-point figure — the
+# one that says how many fuzzers actually run — is gated; the source-file count
+# is left to the prose.
+_FUZZ_COUNT_RE = re.compile(
+    r"(\d+)\s+(?:[A-Za-z][\w-]*\s+){0,2}(?:targets?|harnesses?)\b",
+    re.IGNORECASE,
+)
+
+
+def count_libfuzzer_entry_points(repo: Path) -> int:
+    """The authoritative harness count, imported from the registration gate.
+
+    Reusing ``check_fuzz_target_registration._sources`` is deliberate: this
+    module's whole thesis is that a fact should be declared once and every other
+    mention checked against it, so re-implementing the "a ``fuzz/*.c`` that
+    *defines* ``LLVMFuzzerTestOneInput``" detection here would be the exact
+    duplication it exists to police.
+    """
+    tools_dir = str(Path(__file__).resolve().parent)
+    if tools_dir not in sys.path:
+        sys.path.insert(0, tools_dir)
+    import check_fuzz_target_registration as registration
+
+    return len(registration._sources(repo))
+
+
+def check_fuzz_target_counts(repo: Path, authoritative: int) -> list[str]:
+    """Every prose fuzz-target count must equal the number actually built.
+
+    Scoped to lines that mention fuzzing so an unrelated "N targets" elsewhere
+    is not swept in, and skips revision-history rows for the same reason
+    ``check_aggregate_test_counts`` does — they record what was true at a past
+    release and are meant to read stale.
+    """
+    problems: list[str] = []
+    for path in _markdown_files(repo):
+        rel = str(path.relative_to(repo))
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if _HISTORY_ROW_RE.match(line) or "fuzz" not in line.lower():
+                continue
+            for match in _FUZZ_COUNT_RE.finditer(line):
+                claimed = int(match.group(1))
+                if claimed != authoritative:
+                    problems.append(
+                        f"{rel}: says {claimed} fuzz target(s)/harness(es); the "
+                        f"repository builds {authoritative} libFuzzer entry point(s)"
+                    )
+    return problems
+
+
+# ---------------------------------------------------------------------------
+# Breaking-change count.
+#
+# A release's breaking changes are enumerated in that release's CHANGELOG
+# section, under "Behavioural and breaking changes at a glance". SECURITY.md's
+# supported-versions table and the wiki mirror restate the total — "superseded
+# by v4.0 (three breaking changes — see CHANGELOG [4.0.0])" — and both said
+# three against a table that lists six. The claim names the section to check, so
+# this follows that reference and counts the Breaking rows it points at rather
+# than trusting a hand-maintained number beside it.
+_WORD_NUMBERS = {
+    word: value
+    for value, word in enumerate(
+        "zero one two three four five six seven eight nine ten eleven twelve "
+        "thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty".split()
+    )
+}
+_BREAKING_CLAIM_RE = re.compile(
+    r"\(?\s*(\d+|[A-Za-z]+)\s+breaking\s+changes?\b[^)\n]*?"
+    r"CHANGELOG\s*`?\[?(\d+\.\d+\.\d+)\]?`?",
+    re.IGNORECASE,
+)
+_CHANGELOG_BREAKING_ROW_RE = re.compile(r"^\|\s*\d+\s*\|\s*\*{0,2}Breaking\*{0,2}\s*\|", re.M)
+
+
+def _resolve_number(token: str) -> int | None:
+    """A digit string or an English number word; ``None`` for prose like
+    "several", which names no count to check against."""
+    if token.isdigit():
+        return int(token)
+    return _WORD_NUMBERS.get(token.lower())
+
+
+def count_changelog_breaking_rows(repo: Path, version: str) -> int | None:
+    """Breaking rows in the CHANGELOG ``[version]`` glance table, or ``None`` if
+    that section does not exist."""
+    changelog = repo / "CHANGELOG.md"
+    if not changelog.is_file():
+        return None
+    text = changelog.read_text(encoding="utf-8")
+    start = re.search(rf"^##\s*\[{re.escape(version)}\]", text, re.M)
+    if not start:
+        return None
+    rest = text[start.end() :]
+    following = re.search(r"^##\s*\[", rest, re.M)
+    section = rest[: following.start()] if following else rest
+    return len(_CHANGELOG_BREAKING_ROW_RE.findall(section))
+
+
+def check_breaking_change_counts(repo: Path) -> list[str]:
+    problems: list[str] = []
+    for path in _markdown_files(repo):
+        rel = str(path.relative_to(repo))
+        text = path.read_text(encoding="utf-8")
+        live = "\n".join(line for line in text.splitlines() if not _HISTORY_ROW_RE.match(line))
+        for token, version in _BREAKING_CLAIM_RE.findall(live):
+            claimed = _resolve_number(token)
+            if claimed is None:
+                continue
+            actual = count_changelog_breaking_rows(repo, version)
+            if actual is None:
+                problems.append(
+                    f"{rel}: cites CHANGELOG [{version}] for a breaking-change "
+                    "count, but no such section exists to count"
+                )
+                continue
+            if claimed != actual:
+                problems.append(
+                    f"{rel}: says {token} breaking change(s) for {version}; "
+                    f"CHANGELOG [{version}] enumerates {actual}"
+                )
+    return problems
+
+
 def audit(repo: Path = REPO) -> tuple[list[str], int]:
     """Returns ``(problems, claims_checked)``.
 
@@ -368,6 +509,11 @@ def audit(repo: Path = REPO) -> tuple[list[str], int]:
         checked += len(_AGGREGATE_RE.findall(text))
         checked += len(_METRICS_FILES_RE.findall(text))
         checked += len(_METRICS_FUNCS_RE.findall(text))
+        live_lines = [line for line in text.splitlines() if not _HISTORY_ROW_RE.match(line)]
+        for line in live_lines:
+            if "fuzz" in line.lower():
+                checked += len(_FUZZ_COUNT_RE.findall(line))
+        checked += len(_BREAKING_CLAIM_RE.findall("\n".join(live_lines)))
         if path.name == "METRICS_REPORT.md":
             for label in _LOC_ROW_SCOPES:
                 checked += len(_loc_row_re(label).findall(text))
@@ -376,6 +522,13 @@ def audit(repo: Path = REPO) -> tuple[list[str], int]:
     problems += check_test_counts(repo)
     problems += check_aggregate_test_counts(repo)
     problems += check_loc_table_file_counts(repo)
+    try:
+        fuzz_authoritative = count_libfuzzer_entry_points(repo)
+    except Exception as exc:  # registration tool absent or renamed — fail loud
+        problems.append(f"cannot resolve the authoritative fuzz-target count: {exc}")
+    else:
+        problems += check_fuzz_target_counts(repo, fuzz_authoritative)
+    problems += check_breaking_change_counts(repo)
     return problems, checked
 
 

@@ -292,7 +292,7 @@ Additional C sources:
 
 - `hmac_binding.pyx`, `sha3_binding.pyx`, `hkdf_binding.pyx`, `ed25519_binding.pyx`, `dilithium_binding.pyx` — thin FFI bindings that call the native C entry points with no per-call ctypes overhead. `ctypes` fallback is used when the extension is not built.
 - `math_engine.pyx` — the 3R monitoring math kernels (Lyapunov exponent, NTT-shaped rotation matrix-vector products, helix evolution). 18–37× over the pure-Python NumPy baseline (see [`wiki/Performance-Benchmarks.md`](wiki/Performance-Benchmarks.md) for methodology). **This speedup does not apply to the C-implemented cryptographic primitives.**
-- `helix_engine_complete.pyx` — the complete Cython-accelerated helix engine.
+- `helix_engine_complete.pyx` — a complete-engine reference implementation of all 18+ variants. It is **not** compiled by the default build (`setup.py` builds `math_engine.pyx` and the FFI bindings above, not this file); `math_engine.pyx` is the acceleration that actually ships.
 
 ### Python package (`ama_cryptography/`, 25 modules + `__init__` + `__main__`)
 
@@ -934,13 +934,13 @@ The test suite includes:
 - Edge case testing for error handling
 - Performance regression tests with tiered tolerances
 - NIST ACVP vector validation (1,215 vectors across 12 algorithm functions — 815 AFT + 400 SHA-3 MCT; see [CSRC_ALIGN_REPORT.md](docs/compliance/CSRC_ALIGN_REPORT.md))
-- Fuzz harnesses for 16 C targets (`fuzz/`): AES-GCM, agent-binding, Argon2, Ascon, ChaCha20-Poly1305, consttime, Dilithium, Ed25519, FROST, HKDF, Kyber, RNG, secp256k1, SHA3, SPHINCS+, X25519. The agent-binding harness asserts security properties (fail-closed policy, no derivation for a refused binding, tampered tags rejected), not merely absence of crashes.
+- Fuzz harnesses for 15 C targets (`fuzz/`): AES-GCM, agent-binding, Argon2, Ascon, ChaCha20-Poly1305, consttime, Dilithium, Ed25519, FROST, HKDF, Kyber, secp256k1, SHA3, SPHINCS+, X25519. (`fuzz_rng.c` is a shared PRNG helper linked into `fuzz_frost`, not a harness of its own — 16 `fuzz_*.c` sources, 15 libFuzzer entry points.) The agent-binding harness asserts security properties (fail-closed policy, no derivation for a refused binding, tampered tags rejected), not merely absence of crashes.
 - Empirical constant-time verification via [dudect](docs/constant-time-testing.md) (Welch's t-test on execution times)
 - [OSS-Fuzz](docs/oss-fuzz-onboarding.md) onboarding preparation for continuous 24/7 fuzzing
 
 ![Test Suite Coverage](assets/test_coverage.png)
 
-*3,318 test functions across 138 Python test files plus 57 C test suites (60 translation units) covering core crypto and NIST KATs (including the new AVX-512 4-way Keccak KAT, fe51-vs-fe64 X25519 byte-equivalence, MULX+ADX equivalence, VAES AES-GCM equivalence, FROST threshold signing, Ed25519 Shamir verify and base-point comb equivalence, and Dilithium / Kyber sampling-equivalence pinning), PQC backends, key management, adaptive posture, hybrid combiner, memory security, fuzz harnesses, and performance/monitoring. See [docs/METRICS_REPORT.md](docs/METRICS_REPORT.md) for the authoritative count and reproduction command (`grep -rE "^\s*def test_" tests/ --include='*.py' | wc -l`).*
+*3,331 test functions across 138 Python test files plus 57 C test suites (60 translation units) covering core crypto and NIST KATs (including the new AVX-512 4-way Keccak KAT, fe51-vs-fe64 X25519 byte-equivalence, MULX+ADX equivalence, VAES AES-GCM equivalence, FROST threshold signing, Ed25519 Shamir verify and base-point comb equivalence, and Dilithium / Kyber sampling-equivalence pinning), PQC backends, key management, adaptive posture, hybrid combiner, memory security, fuzz harnesses, and performance/monitoring. See [docs/METRICS_REPORT.md](docs/METRICS_REPORT.md) for the authoritative count and reproduction command (`grep -rE "^\s*def test_" tests/ --include='*.py' | wc -l`).*
 
 </details>
 
@@ -970,7 +970,7 @@ GitHub Actions automatically tests:
 | CI - Testing and Code Quality | `ci.yml` | Python test matrix + C build + KAT validation + lint/format/type |
 | CI - Build & Test | `ci-build-test.yml` | Full C library build and C test suite across compilers/platforms |
 | Static Analysis (C) | `static-analysis.yml` | cppcheck, clang-analyzer, CodeQL, Werror, ASan+UBSan, MSan-KAT, clang-tidy fail-closed |
-| Fuzzing (libFuzzer) | `fuzzing.yml` | C fuzz harnesses (16 targets) + dictionary-validity gate |
+| Fuzzing (libFuzzer) | `fuzzing.yml` | C fuzz harnesses (15 targets) + dictionary-validity gate |
 | dudect Constant-Time | `dudect.yml` | Welch's t-test on execution timings |
 | ACVP Vector Validation | `acvp_validation.yml` | 1,215 / 1,215 gate, every push + weekly |
 | Vendored Corpus Provenance | `corpus-provenance.yml` | Wycheproof + NIST digest manifest gate |
@@ -1262,7 +1262,7 @@ sudo cmake --install .
 - `AMA_BUILD_STATIC` - Build static library (default: ON)
 - `AMA_BUILD_TESTS` - Build test suite including NIST KAT tests (default: ON)
 - `AMA_BUILD_EXAMPLES` - Build C example programs (default: ON)
-- `AMA_BUILD_FUZZ` - Build coverage-guided libFuzzer harnesses (default: OFF; 16 targets in `fuzz/`)
+- `AMA_BUILD_FUZZ` - Build coverage-guided libFuzzer harnesses (default: OFF; 15 targets in `fuzz/`)
 - `AMA_ED25519_ASSEMBLY` - Enable ed25519-donna x86-64 assembly scalar mult (default: **ON** on x86-64 builds — donna's AVX2 field arithmetic outruns the in-tree fe51 path there; **OFF** on ARM and other non-x86 targets where donna has no assembly path. Set `-DAMA_ED25519_ASSEMBLY=OFF` to force the in-tree `src/c/ama_ed25519.c` backend on x86-64, e.g. for clean-room auditing of the signed 4-bit window comb.)
 - `AMA_ED25519_VERIFY_SHAMIR` - Use Shamir / Straus joint `[s]B + [h](-A)` in Ed25519 verify (default: ON; set OFF for legacy split scalar-mult, useful for deterministic regression comparisons)
 - `AMA_ED25519_VERIFY_WINDOW` - wNAF window width for Ed25519 verify scalar mults; integer in `[2, 6]` (default: `5`)
@@ -1563,7 +1563,7 @@ The human architect does not hold formal credentials in cryptography. The AI con
 
 - **Standards-based design:** Built on NIST FIPS 202/204, RFC 2104/5869/8032/3161—not custom cryptography
 - **Quantified claims:** All performance metrics are measured and reproducible (see [benchmarks/](benchmarks/))
-- **Rigorous testing:** 3,318 test functions across 138 Python files plus 57 C test suites, anchored in [docs/METRICS_REPORT.md](docs/METRICS_REPORT.md); CI includes security scanning, NIST ACVP validation (1,215/1,215 — 815 AFT + 400 SHA-3 MCT), and tiered benchmark-regression checks
+- **Rigorous testing:** 3,331 test functions across 138 Python files plus 57 C test suites, anchored in [docs/METRICS_REPORT.md](docs/METRICS_REPORT.md); CI includes security scanning, NIST ACVP validation (1,215/1,215 — 815 AFT + 400 SHA-3 MCT), and tiered benchmark-regression checks
 - **Regression detection:** Tiered benchmark tolerances calibrated for CI environments
 - **Transparent limitations:** Security analysis explicitly distinguishes self-assessed vs. audited claims
 - **Defense-in-depth:** Security bounded by weakest layer (~128-bit classical), not inflated aggregate claims
