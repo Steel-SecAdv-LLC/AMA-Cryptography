@@ -33,7 +33,7 @@ Organization: Steel Security Advisors LLC
 Author/Inventor: Andrew E. A.
 Contact: steel.sa.llc@gmail.com
 Date: 2026-04-17
-Version: 3.5.0
+Version: 4.0.0
 
 AI Co-Architects:
     Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
@@ -46,6 +46,7 @@ from typing import Dict, List, Optional, Tuple
 from ama_cryptography._numeric import (
     Vec,
     abs_,
+    asvec,
     clip,
     concatenate,
     cos,
@@ -76,14 +77,13 @@ from ama_cryptography.equations import (
     calculate_sigma_quadratic,
     enforce_sigma_quadratic_threshold,
     initialize_ethical_matrix,
-    lyapunov_derivative,
     lyapunov_function,
 )
 
 # Configure module logger
 logger = logging.getLogger(__name__)
 
-__version__ = "3.5.0"
+__version__ = "4.0.0"
 __author__ = "Andrew E. A., Steel Security Advisors LLC"
 
 
@@ -205,6 +205,65 @@ class AmaEquationEngine:
     def _initialize_ethical_matrix(self) -> None:
         """Initialize positive-definite ethical constraint matrix."""
         self.ethical_matrix = initialize_ethical_matrix(self.state_dim)
+
+    # ========================================================================
+    # INPUT COERCION
+    # ========================================================================
+
+    def _coerce_state(self, state: object, argument: str) -> Vec:
+        """Normalise a caller-supplied state to a :class:`Vec` of the right size.
+
+        This engine's arithmetic runs on ``ama_cryptography._numeric``, but its
+        callers do not all have a ``Vec`` in hand — the shipped
+        ``examples/python/complete_demo.py`` builds its initial state with
+        ``numpy.random.randn``, and so will anyone who already has an array.
+
+        Mixing the two types used to fail deep inside numpy rather than here.
+        ``Mat`` had no ``__len__``, so ``numpy`` treated ``self.ethical_matrix``
+        as a 0-dimensional object scalar and ``self.ethical_matrix @ state``
+        raised::
+
+            ValueError: matmul: Input operand 0 does not have enough
+            dimensions (has 0, gufunc core with signature
+            (n?,k),(k,m?)->(n?,m?) requires 1)
+
+        — from ``_term_ethical_gradient``, four frames below the public call,
+        naming neither the engine, the argument, nor numpy's involvement. The
+        conversion therefore happens once, at the boundary, where the error can
+        say which argument was wrong and why.
+
+        This is analytics, not cryptography (see the module docstring): the
+        right property here is that the numbers are correct and the failure
+        mode is legible, and no constant-time or secret-handling constraint
+        applies to any of it.
+
+        Args:
+            state: ``Vec``, ``numpy.ndarray``, list, tuple, or any 1-D
+                array-like of real numbers.
+            argument: Parameter name to quote in an error message.
+
+        Returns:
+            A ``Vec`` of length ``self.state_dim``.  A ``Vec`` input is passed
+            through without copying — no method on this class mutates the state
+            it is given — so the conversion costs nothing on the internal path.
+
+        Raises:
+            TypeError: ``state`` is not array-like, or holds non-numbers.
+            ValueError: ``state`` is not 1-D, or its length is not
+                ``state_dim``.
+        """
+        try:
+            vec = asvec(state, copy=False)
+        except (TypeError, ValueError) as exc:
+            raise type(exc)(f"{argument}: {exc}") from None
+        if len(vec) != self.state_dim:
+            raise ValueError(
+                f"{argument}: state has {len(vec)} elements but this engine "
+                f"was built for state_dim={self.state_dim}. Construct the "
+                f"engine with AmaEquationEngine(state_dim={len(vec)}) or "
+                f"resize the state."
+            )
+        return vec
 
     def _initialize_vqe_params(self) -> None:
         """Initialize Variational Quantum Eigensolver parameters."""
@@ -411,78 +470,88 @@ class AmaEquationEngine:
     # DOUBLE-HELIX EVOLUTION STEP
     # ========================================================================
 
-    def step(self, state: Vec, t: int = 0) -> Vec:  # fmt: skip  # noqa: C901 -- McCabe complexity unavoidable in double-helix evolution step (DHE-001)
+    def step(self, state: object, t: int = 0) -> Vec:  # fmt: skip  # noqa: C901 -- McCabe complexity unavoidable in double-helix evolution step (DHE-001)
         """
         Execute one Double-Helix evolution step.
 
         ℵ(𝔄_{t+1}) = Helix_1(𝔄_t) ⊗ Helix_2(𝔄_t)
 
         Args:
-            state: Current state 𝔄_t
+            state: Current state 𝔄_t.  A ``Vec``, a ``numpy.ndarray``, or any
+                1-D array-like of ``state_dim`` real numbers; converted once at
+                entry by :meth:`_coerce_state`.
             t: Time step
 
         Returns:
-            Updated state 𝔄_{t+1}
+            Updated state 𝔄_{t+1}, always a ``Vec`` regardless of the input
+            type.  ``numpy.asarray(result)`` converts it back to an ndarray.
+
+        Raises:
+            TypeError: ``state`` is not array-like, or holds non-numbers.
+            ValueError: ``state`` is not 1-D, or its length is not
+                ``state_dim``.
         """
+        vec: Vec = self._coerce_state(state, "step(state=...)")
+
         # Helix 1: Discovery/Exploration Strand
-        helix1 = state.copy()
+        helix1 = vec.copy()
 
         if self.enable_Q:
-            helix1 += self._term_quantum(state)
+            helix1 += self._term_quantum(vec)
         if self.enable_P:
-            helix1 += self._term_perturbation(state)
+            helix1 += self._term_perturbation(vec)
         if self.enable_D:
-            helix1 += self._term_drift(state)
+            helix1 += self._term_drift(vec)
         if self.enable_E:
-            helix1 += self._term_ethical_gradient(state)
+            helix1 += self._term_ethical_gradient(vec)
         if self.enable_V:
-            helix1 += self._term_velocity(state)
+            helix1 += self._term_velocity(vec)
         if self.enable_W:
-            helix1 += self._term_wave(state, t)
+            helix1 += self._term_wave(vec, t)
         if self.enable_R3:
-            helix1 += self._term_resonance(state)
+            helix1 += self._term_resonance(vec)
         if self.enable_An:
-            helix1 += self._term_annealing(state)
+            helix1 += self._term_annealing(vec)
         if self.enable_Lambda:
-            helix1 += self._term_lyapunov_correction(state)
+            helix1 += self._term_lyapunov_correction(vec)
         if self.enable_Theta:
-            helix1 += self._term_threshold(state)
+            helix1 += self._term_threshold(vec)
         if self.enable_Phi:
-            helix1 += self._term_phi_scaling(state)
+            helix1 += self._term_phi_scaling(vec)
         if self.enable_Z:
-            helix1 += self._term_zero_mean(state)
+            helix1 += self._term_zero_mean(vec)
         if self.enable_Hq:
-            helix1 += self._term_hamiltonian(state)
+            helix1 += self._term_hamiltonian(vec)
         if self.enable_VQE:
-            helix1 += self._term_vqe(state)
+            helix1 += self._term_vqe(vec)
         if self.enable_QBM:
-            helix1 += self._term_qbm(state)
+            helix1 += self._term_qbm(vec)
         if self.enable_Attn:
-            helix1 += self._term_attention(state)
+            helix1 += self._term_attention(vec)
         if self.enable_Fractal:
-            helix1 += self._term_fractal(state)
+            helix1 += self._term_fractal(vec)
         if self.enable_Symmetry:
-            helix1 += self._term_symmetry(state)
+            helix1 += self._term_symmetry(vec)
         if self.enable_Information:
-            helix1 += self._term_information(state)
+            helix1 += self._term_information(vec)
         if self.enable_Relativistic:
-            helix1 += self._term_relativistic(state)
+            helix1 += self._term_relativistic(vec)
         if self.enable_Alignment:
-            helix1 += self._term_alignment(state)
+            helix1 += self._term_alignment(vec)
         if self.enable_Omega:
-            helix1 += self._term_omega_singularity(state)
+            helix1 += self._term_omega_singularity(vec)
         if self.enable_Noise:
-            helix1 += self._term_time_noise(state, t)
+            helix1 += self._term_time_noise(vec, t)
 
         # Helix 2: Ethical Verification Strand
-        helix2 = zeros_like(state)
+        helix2 = zeros_like(vec)
 
         # Purity invariant (α𝐇)
-        purity = self._compute_purity(state)
+        purity = self._compute_purity(vec)
         helix2 += purity * (self.alpha * 0.1)
 
         # Lyapunov term (ℓ𝐋)
-        lyapunov_grad = self._term_lyapunov_correction(state)
+        lyapunov_grad = self._term_lyapunov_correction(vec)
         helix2 += lyapunov_grad * self.ell
 
         # σ_quadratic enforcement
@@ -497,7 +566,7 @@ class AmaEquationEngine:
             helix1 = clip(helix1, -bound, bound)
 
         # Multiplicative coupling: Helix_1 × (1 + normalized_Helix_2)
-        helix2_norm = norm(helix2) / (norm(state) + 1e-8)
+        helix2_norm = norm(helix2) / (norm(vec) + 1e-8)
         state_next = helix1 * (1 + helix2_norm * 0.1)
 
         # Decrease temperature for annealing
@@ -507,7 +576,7 @@ class AmaEquationEngine:
 
     def converge(
         self,
-        initial_state: Optional[Vec] = None,
+        initial_state: object = None,
         max_steps: int = 100,
         tolerance: float = 1e-4,
     ) -> Tuple[Vec, List[float]]:
@@ -515,20 +584,90 @@ class AmaEquationEngine:
         Iteratively converge to stable state with Lyapunov monitoring.
 
         Args:
-            initial_state: Starting state (default: random)
-            max_steps: Maximum iteration steps
-            tolerance: Convergence threshold for state change
+            initial_state: Starting state.  Accepts a ``Vec``, a
+                ``numpy.ndarray``, or any 1-D array-like of ``state_dim`` real
+                numbers — a list, a tuple, or another library's array type.
+                ``None`` draws a random start.  Whatever is passed is copied,
+                so the caller's object is never modified.
+            max_steps: Maximum iteration steps.  Must be >= 0; 0 returns the
+                initial state with an empty history.
+            tolerance: Convergence threshold for state change.  Must be >= 0.
 
         Returns:
-            (final_state, convergence_history)
-            convergence_history: List of Lyapunov values over time
+            ``(final_state, convergence_history)``.
+
+            ``final_state`` is always a ``Vec``, regardless of what was passed
+            in — the engine's arithmetic is defined over
+            ``ama_cryptography._numeric``, and returning the input's type would
+            mean re-importing whichever library it came from.  Convert back
+            with ``numpy.asarray(final_state)``, or read
+            ``final_state.tolist()``.
+
+            ``convergence_history`` is the list of Lyapunov values, one per
+            *retained* step, so ``convergence_history[-1]`` is always
+            ``V(final_state)``.
+
+        Stopping conditions, in the order they are tested each step:
+
+        1. **Instability** — the Lyapunov value rose relative to the previous
+           step, after a five-step warm-up. The step is rolled back and its
+           value dropped from the history, so the returned state is the last
+           one that did not increase V.
+        2. **Convergence** — the state moved less than ``tolerance``.
+        3. ``max_steps`` steps have run.
+
+        Note that with the default GA-optimised weights the exploration terms
+        dominate and V *rises*; condition 1 is the one that normally fires, and
+        a rising history is the engine reporting that this configuration does
+        not converge rather than a fault in the caller's input.
+
+        Raises:
+            TypeError: ``initial_state`` is not array-like, or holds
+                non-numbers.
+            ValueError: ``initial_state`` is not 1-D, its length is not
+                ``state_dim``, or ``max_steps`` / ``tolerance`` is negative.
+
+        Example:
+            >>> engine = AmaEquationEngine(state_dim=8, random_seed=42)
+            >>> final, history = engine.converge([0.1] * 8, max_steps=5)
+            >>> len(final) == 8 and len(history) <= 5
+            True
+
+            The same call with numpy, which is what
+            ``examples/python/complete_demo.py`` does::
+
+                import numpy as np
+                final, history = engine.converge(np.random.randn(8) * 0.5)
+                final_array = np.asarray(final)
+
+        .. versionchanged:: 4.0
+           ``numpy.ndarray`` and other 1-D array-likes are accepted. Through
+           3.x only a ``Vec`` worked: anything else reached
+           ``self.ethical_matrix @ state`` as a mixed-type ``matmul`` and
+           raised ``ValueError: matmul: Input operand 0 does not have enough
+           dimensions`` from inside numpy, four frames below this call.
+
+        .. versionchanged:: 4.0
+           The instability rollback now fires. Through 3.x it tested
+           ``lyapunov_derivative(V) > 0``, which is ``-2λV > 0`` and therefore
+           false for every reachable value of ``V``, so the branch was dead and
+           ``converge`` ran to ``max_steps`` or to the boundedness clip in
+           every case. Callers relying on the old behaviour — a state
+           saturated at ``±10·φ³`` reported as converged — should pass
+           ``max_steps`` explicitly and read the history.
         """
+        if max_steps < 0:
+            raise ValueError(f"max_steps must be >= 0, got {max_steps}")
+        if tolerance < 0:
+            raise ValueError(f"tolerance must be >= 0, got {tolerance}")
+
         if initial_state is None:
             state = random.randn(self.state_dim) * (0.1 * PHI_CUBED)
         else:
-            state = initial_state.copy()
+            state = self._coerce_state(initial_state, "converge(initial_state=...)").copy()
 
         history: List[float] = []
+        V_previous: Optional[float] = None
 
         for t in range(max_steps):
             state_prev = state.copy()
@@ -538,11 +677,37 @@ class AmaEquationEngine:
             V = lyapunov_function(state, self.target_state)
             history.append(V)
 
-            # Check for instability
-            V_dot = lyapunov_derivative(V)
-            if V_dot > 0 and t > 5:  # Instability detected
-                state = state_prev  # Rollback
+            # Instability: V̇ > 0, measured on the trajectory this loop is
+            # actually walking.
+            #
+            # This test used to read `lyapunov_derivative(V) > 0`, and it could
+            # never be true. `lyapunov_derivative` returns the *analytic model*
+            # V̇ = -2λV of the reference exponential decay — with λ = 0.18 > 0
+            # and V = ||x - x*||² >= 0 by construction, its value is <= 0 for
+            # every input the function can be given. The branch, its rollback
+            # and its comment were therefore unreachable from the day they were
+            # written, and no test caught it because the only test that named
+            # the mechanism asserted merely that `converge` returns something.
+            #
+            # V̇ on a discrete trajectory is the step-to-step difference, so
+            # that is what is compared. `lyapunov_derivative` keeps its
+            # analytic role in `lyapunov_stability_proof` / `convergence_time`,
+            # where a model value is what is wanted; it was the wrong
+            # instrument here, not a wrong function.
+            #
+            # The `t > 5` warm-up is unchanged: the first steps are dominated
+            # by the exploration terms, and a transient rise there is expected
+            # rather than a failure to converge.
+            if V_previous is not None and t > 5 and V > V_previous:
+                state = state_prev  # Rollback to the last non-increasing state
+                # ...and drop the rejected value, so `history[-1]` is the
+                # Lyapunov value *of the state being returned*. With the branch
+                # dead this mismatch could not be observed; with it live, a
+                # caller plotting `history` against `final_state` would have
+                # been reading one step past the answer.
+                history.pop()
                 break
+            V_previous = V
 
             # Convergence check
             if norm(state - state_prev) < tolerance:

@@ -75,7 +75,8 @@ class TestVerifyCryptoPackage:
         from ama_cryptography.crypto_api import create_crypto_package, verify_crypto_package
 
         result = create_crypto_package(b"Hello")
-        v = verify_crypto_package(b"Hello", result)
+        pk = result.keypairs["HYBRID_SIG"].public_key
+        v = verify_crypto_package(b"Hello", result, expected_public_key=pk)
         assert v["content_hash"] is True
         assert v["hmac"] is True
         assert v["primary_signature"] is True

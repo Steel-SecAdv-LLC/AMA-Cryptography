@@ -1314,7 +1314,17 @@ static int nistp_scalar_is_high(const uint64_t *s, const nistp_curve *c) {
         uint64_t hi = (i + 1 < nl) ? c->n[i + 1] : 0u;
         half[i] = (lo >> 1) | (hi << 63);
     }
-    high = !nistp_lt(s, half, nl) && !nistp_equal(s, half, nl);
+    /* INVARIANT-12.  `s > half` is exactly `half < s`, so one call to the
+     * branch-free comparator answers it.  Spelling it
+     * `!nistp_lt(s, half, nl) && !nistp_equal(s, half, nl)` was correct but
+     * short-circuited: nistp_equal ran only for s >= half, making the cost of
+     * the predicate depend on the secret `s` it is asked about.  On the
+     * signing path (nistp_ecdsa_sign_core under AMA_NISTP_ECDSA_SIGN_LOW_S)
+     * that is a bit about the nonce and the private key which the emitted
+     * signature does not otherwise reveal; on the verify path `s` is public
+     * and this costs nothing either way.  Same fix as sc_is_high in
+     * ama_secp256k1.c. */
+    high = nistp_lt(half, s, nl);
     ama_secure_memzero(half, sizeof(half));
     return high;
 }
@@ -1932,11 +1942,18 @@ static ama_error_t nistp_ecdsa_sign_core(const nistp_curve *c,
      * verifier that these curves need in order to interoperate, it prevents
      * nothing — the twin of an AMA signature still verifies under AMA — and
      * costs conformance.  So the caller asks for the pair or neither. */
-    if (low_s && nistp_scalar_is_high(ss, c)) {
-        uint64_t zero[AMA_NISTP_MAX_LIMBS];
+    /* `low_s` is the caller's flag and is public, so branching on it is free
+     * and keeps the default (RFC 6979 verbatim) path at zero cost.  Whether
+     * `s` was high is not public — the emitted signature is the normalised
+     * one either way — so that half is selected, not branched. */
+    if (low_s) {
+        uint64_t zero[AMA_NISTP_MAX_LIMBS], neg[AMA_NISTP_MAX_LIMBS];
+        const uint64_t take = nistp_mask64((uint64_t)nistp_scalar_is_high(ss, c));
         memset(zero, 0, sizeof(zero));
-        nistp_mod_sub(ss, zero, ss, c->n, nl);
+        nistp_mod_sub(neg, zero, ss, c->n, nl);
+        nistp_select(ss, neg, ss, take, nl);
         ama_secure_memzero(zero, sizeof(zero));
+        ama_secure_memzero(neg, sizeof(neg));
     }
 
     nistp_to_bytes(r_out, rs, c->nbytes);

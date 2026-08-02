@@ -72,6 +72,8 @@
 
 #include <stdint.h>
 
+#include "ama_x25519_fe64_mulx.h"
+
 #define AMA_X25519_FE64_MULX_AVAILABLE 1
 
 /* ----------------------------------------------------------------------
@@ -486,10 +488,6 @@ void fe64_reduce512_mulx(uint64_t h[4], const uint64_t r[8]) {
  * compiled into the production library, so it adds no shipped symbol and
  * no code to the hot path. */
 void ama_x25519_fe64_mul_mulx_twostage(uint64_t h[4], const uint64_t f[4],
-                                       const uint64_t g[4]);
-void ama_x25519_fe64_sq_mulx_twostage(uint64_t h[4], const uint64_t f[4]);
-
-void ama_x25519_fe64_mul_mulx_twostage(uint64_t h[4], const uint64_t f[4],
                                        const uint64_t g[4]) {
     uint64_t r[8];
     fe64_mul512_mulx(r, f, g);
@@ -509,7 +507,7 @@ void ama_x25519_fe64_sq_mulx_twostage(uint64_t h[4], const uint64_t f[4]) {
  * block.  Byte-identical to the pure-C `fe64_mul512` + `fe64_reduce512`
  * chain in src/c/fe64.h, pinned by `tests/c/test_x25519_fe64_mulx_equiv.c`.
  */
-__attribute__((visibility("hidden")))
+AMA_X25519_MULX_HIDDEN
 void ama_x25519_fe64_mul_mulx(uint64_t h[4], const uint64_t f[4],
                               const uint64_t g[4]) {
     uint64_t r0, r1, r2, r3, r4, r5, r6, r7, lo, hi;
@@ -605,7 +603,7 @@ void ama_x25519_fe64_mul_mulx(uint64_t h[4], const uint64_t f[4],
  * composition.  Roughly half the Montgomery ladder is squarings, so this
  * is on the critical path for most of X25519's runtime.
  */
-__attribute__((visibility("hidden")))
+AMA_X25519_MULX_HIDDEN
 void ama_x25519_fe64_sq_mulx(uint64_t h[4], const uint64_t f[4]) {
     uint64_t r0, r1, r2, r3, r4, r5, r6, r7, lo, hi;
     __asm__ __volatile__ (

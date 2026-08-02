@@ -83,7 +83,7 @@ Install from a git tag — the primary channel, reproducible and index-free:
 
 .. code-block:: bash
 
-   pip install "git+https://github.com/Steel-SecAdv-LLC/AMA-Cryptography.git@v3.5.0"
+   pip install "git+https://github.com/Steel-SecAdv-LLC/AMA-Cryptography.git@v4.0.0"
 
 Or build and install the C library from a source checkout:
 

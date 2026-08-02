@@ -35,6 +35,7 @@
 
 #include "../include/ama_cryptography.h"
 #include "../include/ama_dispatch.h"
+#include "internal/ama_ct_barrier.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
@@ -226,150 +227,153 @@ static void aes256_encrypt_block(const uint8_t round_keys[240],
 /* ============================================================================
  * GHASH (GF(2^128) multiplication for GCM authentication)
  *
- * Implementation: 4-bit sliding-window method (NIST SP 800-38D §6.3).
+ * Implementation: branch-free, table-free word-level multiplication
+ * (NIST SP 800-38D §6.3 Algorithm 1).
  *
- * Setup-time: precompute a 16-entry table H_table[i] = q(i) · H in
- * GF(2^128), where q(i) is the 4-bit value i interpreted as a polynomial
- * of degree ≤ 3 in the bit-reflected GCM basis (bit-string position k
- * carries weight x^k).  The schedule uses doubling (multiply-by-x via
- * a single right-shift with reduction) starting from H to derive the
- * four "single-bit" entries H_table[1] = x^3·H, H_table[2] = x^2·H,
- * H_table[4] = x·H, H_table[8] = H, and XOR-composes the remaining
- * eleven entries.  All operations are constant-time in H.
+ * SECURITY NOTE — why this is not a windowed table method.
  *
- * Per-block: process the 16-byte accumulator as 32 nibbles, Horner-
- * style from the highest-index nibble down: 31 multiplications by x^4
- * (each accelerated by the 16-entry rem4 reduction table — single
- * 4-bit right-shift in the byte representation plus one 16-bit XOR
- * into the high end) interleaved with 32 lookups into H_table.  This
- * collapses the prior 128-iteration schoolbook loop's ~4000 byte-ops
- * per block to ~700, while keeping the algorithm bit-exact against
- * NIST SP 800-38D test vectors and constant-time with respect to the
- * (secret) H subkey.  H_table indices come from AAD/ciphertext bytes,
- * which are non-secret under the standard AEAD threat model, so the
- * lookup itself need not be index-blinded.
+ * A previous revision used a 16-entry precomputed table H_table[i] =
+ * q(i)·H and indexed it with nibbles of the running accumulator.  Its
+ * comments asserted that "H_table indices come from AAD/ciphertext
+ * bytes, which are non-secret".  That assertion is false for every
+ * block after the first.  GHASH is the recurrence
+ *
+ *     S_i = (S_{i-1} XOR X_i) · H
+ *
+ * so from the second block onward the value whose nibbles index the
+ * table is a function of the secret subkey H = E_K(0^128), not of
+ * public data alone.  The 256-byte table spans four cache lines, so on
+ * any platform using this scalar path the access pattern leaked H to a
+ * co-resident Flush+Reload / Prime+Probe adversary — the same threat
+ * model this file already takes seriously for the AES S-box.  Recovering
+ * H yields universal forgery under a given nonce, so the leak is
+ * authentication-key recovery, not a marginal side channel.
+ *
+ * The implementation below therefore performs no data-dependent memory
+ * access at all: it walks the 128 bits of the accumulator, converts each
+ * bit to an all-ones/all-zeros mask, and XOR-accumulates a masked copy of
+ * the running multiple of H.  Every operand index is a loop counter, and
+ * the doubling step folds its reduction in behind a mask.
+ *
+ * COST — and this is not a security-for-speed trade.
+ *
+ * The obvious way to write the above is a 128-iteration loop over a
+ * 16-byte array, and that is what the first revision of this fix did.  It
+ * cost about 3.2x the throughput of the leaky table (9.5 MB/s against
+ * 30.4 MB/s, GHASH isolated on the scalar path, x86-64 sandbox), which was
+ * then documented as a deliberate slowdown worth accepting.
+ *
+ * It was not worth accepting, because it was not necessary.  GCM's
+ * bit-string order maps exactly onto two big-endian 64-bit words, so the
+ * same masked accumulate that took 16 byte-XORs takes 2 word-XORs, and the
+ * 16-byte shift-with-reduction becomes a shrd/shr pair.  Identical
+ * algorithm, identical output, no table, same masks — about an eighth of
+ * the operations.  Measured on the same host: 71.7 MB/s, which is 7.4x the
+ * byte loop and 2.35x the windowed table this replaced.
+ *
+ * So the constant-time path is now the fast path as well, and the entry in
+ * CHANGELOG that once justified a regression records a speedup instead.
+ * Hosts with carry-less multiply (x86 PCLMULQDQ via the AVX2/VAES kernels,
+ * ARM PMULL via the NEON kernel) still dispatch away from this code
+ * entirely; this is what the hosts that cannot now get.
  * ============================================================================ */
 
-typedef struct {
-    uint8_t T[16][16];
-} ghash_table_t;
-
-/* Reduction table for multiplication by x^4 in GF(2^128) under the GCM
- * irreducible polynomial x^128 + x^7 + x^2 + x + 1 (bit-reflected
- * representation R = 0xe1 || 0^120).  rem4[w] gives the XOR pattern
- * that must be applied to bytes 0 and 1 of the accumulator after a
- * 4-bit right-shift, where w is the low nibble of byte 15 that got
- * shifted past bit-string position 127.
+/* GHASH multiply in place: Z := Z · H in GF(2^128).
  *
- * Derivation (NIST SP 800-38D §6.3, polynomial x^128 = x^7+x^2+x+1):
- *   bit 0 of w  (poly x^127 → x^131) contributes R·x^3
- *   bit 1 of w  (poly x^126 → x^130) contributes R·x^2
- *   bit 2 of w  (poly x^125 → x^129) contributes R·x
- *   bit 3 of w  (poly x^124 → x^128) contributes R
- * Each rem4[w] is the XOR of the contributions of its set bits, packed
- * as (byte0 in the high octet, byte1 in the low octet) of a uint16_t. */
-static const uint16_t REM4_TABLE[16] = {
-    0x0000, 0x1C20, 0x3840, 0x2460,
-    0x7080, 0x6CA0, 0x48C0, 0x54E0,
-    0xE100, 0xFD20, 0xD940, 0xC560,
-    0x9180, 0x8DA0, 0xA9C0, 0xB5E0
-};
-
-/* Constant-time multiplication by x (= right-shift bit-string by 1 with
- * GCM reduction).  Operates in place.  No data-dependent branch: the
- * reduction XOR is gated by a mask derived from the shifted-out LSB. */
-static void ghash_mul_x(uint8_t V[16]) {
-    uint8_t lsb = V[15] & 1;
-    for (int k = 15; k > 0; k--)
-        V[k] = (uint8_t)((V[k] >> 1) | (V[k-1] << 7));
-    V[0] >>= 1;
-    V[0] ^= (uint8_t)(0xe1u & (0u - (unsigned)lsb));
-}
-
-/* Constant-time multiplication by x^4 using REM4_TABLE.  In-place. */
-static inline void ghash_mul_x4(uint8_t Z[16]) {
-    uint8_t low_nib = Z[15] & 0x0F;
-    for (int k = 15; k > 0; k--)
-        Z[k] = (uint8_t)((Z[k] >> 4) | (Z[k-1] << 4));
-    Z[0] = (uint8_t)(Z[0] >> 4);
-    uint16_t r = REM4_TABLE[low_nib];
-    Z[0] ^= (uint8_t)(r >> 8);
-    Z[1] ^= (uint8_t)(r & 0xFF);
-}
-
-/* Build the 4-bit window table from the GHASH subkey H.
- * Constant-time in H: the doubling cascade uses ghash_mul_x (no
- * H-dependent branch) and the 11 composite entries are XOR-only. */
-static void ghash_table_init(ghash_table_t *t, const uint8_t H[16]) {
-    /* T[0] is GF(2^128) zero (identity for XOR-accumulation).  The
-     * entry is fixed by the GHASH spec, but `t->T` overall holds H-
-     * derived secret state — use the secure scrub primitive so the
-     * one-zero entry stays in the same scrub class as the rest of
-     * the table (INVARIANT-6 / Copilot review #3251987718). */
-    ama_secure_memzero(t->T[0], 16);
-    memcpy(t->T[8], H, 16);                /* T[8]  = H        (q(8)=1)   */
-    memcpy(t->T[4], t->T[8], 16); ghash_mul_x(t->T[4]);  /* T[4] = x·H    */
-    memcpy(t->T[2], t->T[4], 16); ghash_mul_x(t->T[2]);  /* T[2] = x^2·H  */
-    memcpy(t->T[1], t->T[2], 16); ghash_mul_x(t->T[1]);  /* T[1] = x^3·H  */
-
-    for (int k = 0; k < 16; k++) {
-        t->T[3][k]  = t->T[1][k] ^ t->T[2][k];
-        t->T[5][k]  = t->T[1][k] ^ t->T[4][k];
-        t->T[6][k]  = t->T[2][k] ^ t->T[4][k];
-        t->T[7][k]  = t->T[3][k] ^ t->T[4][k];
-        t->T[9][k]  = t->T[1][k] ^ t->T[8][k];
-        t->T[10][k] = t->T[2][k] ^ t->T[8][k];
-        t->T[11][k] = t->T[3][k] ^ t->T[8][k];
-        t->T[12][k] = t->T[4][k] ^ t->T[8][k];
-        t->T[13][k] = t->T[5][k] ^ t->T[8][k];
-        t->T[14][k] = t->T[6][k] ^ t->T[8][k];
-        t->T[15][k] = t->T[7][k] ^ t->T[8][k];
-    }
-}
-
-/* GHASH multiply-by-H in place using the 4-bit window table.
+ * NIST SP 800-38D Algorithm 1, with the data-dependent branches replaced
+ * by masks:
  *
- * Z := Z · H in GF(2^128).  Horner over 32 nibbles (high nibble of
- * byte 0 first as bit-string position 0):
- *   acc = T[low_nibble(Z[15])]                            // N_31
- *   for j = 30 down to 0:
- *       acc = acc · x^4
- *       acc ^= T[N_j]
+ *   out = 0;  V = H
+ *   for i = 0..127:
+ *       out ^= V & mask(bit i of Z)      // bit 0 == MSB of byte 0
+ *       V    = V · x                     // branch-free reduction
  *
- * The H_table index is derived from Z, which carries public
- * AAD/ciphertext bytes; no secret-dependent lookup occurs. */
-static void ghash_mul_table(const ghash_table_t *t, uint8_t Z[16]) {
-    uint8_t acc[16];
+ * Constant-time: no lookup table exists, every array index is a loop
+ * counter, and the per-bit selection is an arithmetic mask rather than a
+ * conditional.  The accumulator Z is read but not modified during the
+ * loop, so the bit extraction sees a stable operand.
+ *
+ * The mask goes through ama_ct_value_barrier_u64() and that is load-bearing,
+ * not decoration.  A bare source-level mask is constant-time only in the C
+ * abstract machine: clang 18 at -O2/-O3 proves the mask is all-zero-or-all-
+ * ones, recognises the masked accumulate as the identity in the all-zero
+ * case, and emits `bt`/`jae` to branch straight over it — reintroducing a
+ * branch on a bit of the accumulator, which is a function of the secret
+ * subkey H from the second block onward.  gcc 13 does not.  The barrier
+ * hides the mask's range from both, so the accumulation stays unconditional
+ * regardless of toolchain.  See internal/ama_ct_barrier.h, and
+ * tools/check_ghash_constant_time.py, which measures this path's retired
+ * instruction count under two key classes and fails if it is key-dependent. */
 
-    /* N_31 = low nibble of byte 15 */
-    memcpy(acc, t->T[Z[15] & 0x0F], 16);
-
-    /* N_30 = high nibble of byte 15 */
-    ghash_mul_x4(acc);
-    {
-        uint8_t n = (uint8_t)((Z[15] >> 4) & 0x0F);
-        for (int k = 0; k < 16; k++) acc[k] ^= t->T[n][k];
-    }
-
-    for (int byte = 14; byte >= 0; byte--) {
-        ghash_mul_x4(acc);
-        {
-            uint8_t n = (uint8_t)(Z[byte] & 0x0F);
-            for (int k = 0; k < 16; k++) acc[k] ^= t->T[n][k];
-        }
-        ghash_mul_x4(acc);
-        {
-            uint8_t n = (uint8_t)((Z[byte] >> 4) & 0x0F);
-            for (int k = 0; k < 16; k++) acc[k] ^= t->T[n][k];
-        }
-    }
-
-    memcpy(Z, acc, 16);
-    /* acc holds H_table-derived intermediate state (built from the
-     * secret subkey H); scrub before return.  Consistent with the
-     * H_table scrub in ghash() — Copilot review #3251987718. */
-    ama_secure_memzero(acc, sizeof(acc));
+/* Big-endian 64-bit load/store.
+ *
+ * GCM's bit-string order places bit 0 at the MSB of byte 0, so viewing the
+ * 16-byte value as two big-endian 64-bit words keeps bit-string position i
+ * at bit (63 - i) of the high word for i < 64, and at bit (127 - i) of the
+ * low word beyond that.  The word view is therefore the natural one for
+ * this algorithm, not a reinterpretation of it. */
+static inline uint64_t ghash_load_be64(const uint8_t *p) {
+    return ((uint64_t)p[0] << 56) | ((uint64_t)p[1] << 48)
+         | ((uint64_t)p[2] << 40) | ((uint64_t)p[3] << 32)
+         | ((uint64_t)p[4] << 24) | ((uint64_t)p[5] << 16)
+         | ((uint64_t)p[6] <<  8) |  (uint64_t)p[7];
 }
+
+static inline void ghash_store_be64(uint8_t *p, uint64_t v) {
+    p[0] = (uint8_t)(v >> 56); p[1] = (uint8_t)(v >> 48);
+    p[2] = (uint8_t)(v >> 40); p[3] = (uint8_t)(v >> 32);
+    p[4] = (uint8_t)(v >> 24); p[5] = (uint8_t)(v >> 16);
+    p[6] = (uint8_t)(v >>  8); p[7] = (uint8_t)(v);
+}
+
+/* One masked accumulate + one doubling, on 64-bit words.
+ *
+ *   out ^= V & mask(bit)      V := V . x
+ *
+ * `bit` is a bit of the accumulator and therefore secret, so the selection
+ * is a mask and the mask goes through the value barrier.  The doubling is
+ * a 128-bit right shift by one with the GCM reduction folded in: the bit
+ * shifted out of the low word is bit-string position 127, and it gates the
+ * XOR of R = 0xe1 into byte 0 — the top byte of the high word. */
+#define GHASH_STEP(bit_expr)                                                  \
+    do {                                                                      \
+        const uint64_t _m = ama_ct_value_barrier_u64((uint64_t)0 - (bit_expr)); \
+        o_hi ^= v_hi & _m;                                                    \
+        o_lo ^= v_lo & _m;                                                    \
+        const uint64_t _lsb = v_lo & 1u;                                      \
+        v_lo = (v_lo >> 1) | (v_hi << 63);                                    \
+        v_hi = (v_hi >> 1)                                                    \
+             ^ (((uint64_t)0 - _lsb) & UINT64_C(0xe100000000000000));         \
+    } while (0)
+
+static void ghash_mul(uint8_t Z[16], const uint8_t H[16]) {
+    uint64_t z_hi = ghash_load_be64(Z);
+    uint64_t z_lo = ghash_load_be64(Z + 8);
+    uint64_t v_hi = ghash_load_be64(H);
+    uint64_t v_lo = ghash_load_be64(H + 8);
+    uint64_t o_hi = 0;
+    uint64_t o_lo = 0;
+
+    for (int i = 0; i < 64; i++) GHASH_STEP((z_hi >> (63 - i)) & 1u);
+    for (int i = 0; i < 64; i++) GHASH_STEP((z_lo >> (63 - i)) & 1u);
+
+    ghash_store_be64(Z, o_hi);
+    ghash_store_be64(Z + 8, o_lo);
+
+    /* v_* and o_* are H-derived.  They are scalars the compiler keeps in
+     * registers, so there is no buffer for ama_secure_memzero to clear;
+     * writing zero through a volatile pointer is what is available, and it
+     * clears any stack slot the compiler chose to spill them to.  Register
+     * residue is out of reach of portable C either way — that was equally
+     * true of the byte-array version this replaced, which scrubbed two
+     * 16-byte locals the optimizer had already kept in registers. */
+    { volatile uint64_t *s;
+      s = &v_hi; *s = 0; s = &v_lo; *s = 0;
+      s = &o_hi; *s = 0; s = &o_lo; *s = 0;
+      s = &z_hi; *s = 0; s = &z_lo; *s = 0; }
+}
+
+#undef GHASH_STEP
 
 /**
  * GHASH: Process AAD and ciphertext blocks.
@@ -385,14 +389,12 @@ static void ghash(const uint8_t H[16],
                   uint8_t tag[16]) {
     uint8_t block[16];
     uint8_t S[16];
-    ghash_table_t H_table;
     size_t i, full_blocks, remaining;
 
-    ghash_table_init(&H_table, H);
     /* `S` is the GHASH running accumulator, built from XORs against the
-     * secret subkey-derived `H_table`.  Use the secure scrub primitive
-     * to initialize so the zero-write is in the same scrub class as
-     * the final scrub at function exit (INVARIANT-6). */
+     * secret subkey H.  Use the secure scrub primitive to initialize so
+     * the zero-write is in the same scrub class as the final scrub at
+     * function exit (INVARIANT-6). */
     ama_secure_memzero(S, 16);
 
     /* Process AAD */
@@ -400,7 +402,7 @@ static void ghash(const uint8_t H[16],
     for (i = 0; i < full_blocks; i++) {
         for (int j = 0; j < 16; j++)
             S[j] ^= aad[i * 16 + j];
-        ghash_mul_table(&H_table, S);
+        ghash_mul(S, H);
     }
     remaining = aad_len % 16;
     if (remaining > 0) {
@@ -411,7 +413,7 @@ static void ghash(const uint8_t H[16],
         memcpy(block, aad + full_blocks * 16, remaining);
         for (int j = 0; j < 16; j++)
             S[j] ^= block[j];
-        ghash_mul_table(&H_table, S);
+        ghash_mul(S, H);
     }
 
     /* Process ciphertext */
@@ -419,7 +421,7 @@ static void ghash(const uint8_t H[16],
     for (i = 0; i < full_blocks; i++) {
         for (int j = 0; j < 16; j++)
             S[j] ^= ciphertext[i * 16 + j];
-        ghash_mul_table(&H_table, S);
+        ghash_mul(S, H);
     }
     remaining = ct_len % 16;
     if (remaining > 0) {
@@ -427,7 +429,7 @@ static void ghash(const uint8_t H[16],
         memcpy(block, ciphertext + full_blocks * 16, remaining);
         for (int j = 0; j < 16; j++)
             S[j] ^= block[j];
-        ghash_mul_table(&H_table, S);
+        ghash_mul(S, H);
     }
 
     /* Length block: [len(A) in bits || len(C) in bits] as big-endian uint64.
@@ -456,16 +458,14 @@ static void ghash(const uint8_t H[16],
     }
     for (int j = 0; j < 16; j++)
         S[j] ^= block[j];
-    ghash_mul_table(&H_table, S);
+    ghash_mul(S, H);
 
     memcpy(tag, S, 16);
 
-    /* Scrub H_table (derived from secret H), the running GHASH state S
-     * (intermediate H-products), and the local block buffer (may carry
-     * the last AAD/CT bytes processed).  block is non-secret on its
-     * own but is part of the same scrub discipline — Copilot review
-     * #3251987718. */
-    ama_secure_memzero(&H_table, sizeof(H_table));
+    /* Scrub the running GHASH state S (intermediate H-products) and the
+     * local block buffer (may carry the last AAD/CT bytes processed).
+     * block is non-secret on its own but is part of the same scrub
+     * discipline — Copilot review #3251987718. */
     ama_secure_memzero(S, sizeof(S));
     ama_secure_memzero(block, sizeof(block));
 }

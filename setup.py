@@ -273,7 +273,7 @@ except ImportError:  # pragma: no cover - preflight should have caught this
     np = None
 
 # Configuration
-VERSION = "3.5.0"
+VERSION = "4.0.0"
 USE_CYTHON = CYTHON_AVAILABLE and not os.getenv("AMA_NO_CYTHON")
 USE_C_EXTENSIONS = not os.getenv("AMA_NO_C_EXTENSIONS")
 DEBUG = bool(os.getenv("AMA_DEBUG"))
@@ -601,6 +601,35 @@ class CMakeBuild(build_ext):
             "-DAMA_BUILD_EXAMPLES=OFF",
             "-DAMA_USE_NATIVE_PQC=ON",
         ]
+
+        # Forward the integrity trust anchor into the native build.
+        #
+        # This is load-bearing, not a convenience: at runtime
+        # ``_self_test._load_integrity_trust_anchor()`` reads the anchor
+        # ONLY from the compiled library (via
+        # ``ama_integrity_trust_anchor_pubkey_hex()``).  An anchor supplied
+        # solely through the environment is consulted at *build* time by
+        # ``_build_sign`` and then forgotten, so without this forwarding a
+        # release could set the anchor variable and still ship a wheel whose
+        # import-time check accepts any public key placed in
+        # ``_integrity_signature.py``.  CMakeLists.txt validates the value
+        # (empty or exactly 64 hex characters) and fails the build otherwise,
+        # so a malformed anchor surfaces here rather than at import.
+        # Passed UNCONDITIONALLY, including when empty.  CMakeLists.txt
+        # declares the option as a CACHE STRING, so a value written into
+        # CMakeCache.txt by an earlier configure survives every later
+        # configure that does not overwrite it.  Appending the flag only when
+        # the variable was set therefore made anchoring sticky: build once
+        # with an anchor, unset the variable, rebuild in the same tree, and
+        # the "unanchored" artefact still carried the old anchor — silently,
+        # since nothing re-reads the environment to notice.  That is the wrong
+        # direction for an artefact whose whole purpose is to say who signed
+        # it, and it makes a build non-reproducible from its inputs.  Passing
+        # the empty string explicitly resets the cache entry; CMakeLists.txt
+        # validates "empty or exactly 64 hex characters", so empty is a
+        # first-class value and not a malformed one.
+        _anchor = os.environ.get("AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX", "").strip()
+        cmake_args.append(f"-DAMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX={_anchor}")
 
         build_args = ["--config", "Debug" if DEBUG else "Release"]
 

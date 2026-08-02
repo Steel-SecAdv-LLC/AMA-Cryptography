@@ -209,6 +209,38 @@ jobs:
       run: |
         python -m pytest tests/ -v --tb=short --no-cov
 
+    - name: Run the shipped Python examples
+      env:
+        AMA_CI_REQUIRE_BACKENDS: "1"
+      # examples/python/ is documentation that executes, and nothing executed
+      # it. Both scripts this step covers were broken in the released tree —
+      # basic_usage.py Examples 3 and 4 called the package API with keyword
+      # names it does not have, and complete_demo.py handed converge() a
+      # numpy.ndarray it did not accept — and every test in the suite passed
+      # while they did.
+      #
+      # Named as its own step rather than left to the `tests/` run above,
+      # which already collects this module: a step that appears in the job
+      # summary is one a reviewer can see is present, and one a future `-k`
+      # filter or path narrowing cannot silently drop. It costs about ten
+      # seconds. `make test-examples` is the same check locally.
+      #
+      # NOTE — deliberately no PYTHONUTF8 here, and do not add one. The first
+      # run of this step went red on all four Windows lanes with
+      # `UnicodeEncodeError: 'charmap' codec can't encode character '✓'`,
+      # because Python uses the locale encoding (cp1252) for redirected stdout
+      # on Windows and complete_demo.py prints ✓/✗/φ³/σ. Setting PYTHONUTF8=1
+      # would have turned the lanes green while leaving the script broken for
+      # every user who runs it by hand or redirects its output. The example
+      # reconfigures its own streams instead, and
+      # tests/test_python_examples.py strips both PYTHONUTF8 and
+      # PYTHONIOENCODING from the child environment so this step's verdict
+      # cannot depend on the workflow's configuration — plus a parametrised
+      # case that forces cp1252/ascii, so the Windows-only fault is now
+      # reproduced and gated on every runner in the matrix.
+      run: |
+        python -m pytest tests/test_python_examples.py -v --tb=short --no-cov
+
     - name: "Wycheproof corpus (vendored, offline, fail-closed)"
       # Google's Project Wycheproof is a corpus of the cases that *break*
       # implementations. Running it against this library for the first time
@@ -429,14 +461,40 @@ jobs:
       # vulnerability found in our own pinned set.
       run: pip-audit --strict --desc --requirement requirements-lock.txt
 
-    - name: Security linting with Bandit
-      run: |
-        bandit -r ama_cryptography/ -l -f json -o bandit-report.json
-        bandit -r ama_cryptography/ -l
+    # INVARIANT-2: a gate over tool output must read a structured format where
+    # the tool emits one, and this job was the last place still reading
+    # Bandit's exit code instead.  It ran
+    #
+    #     bandit -r ama_cryptography/ -l -f json -o bandit-report.json
+    #     bandit -r ama_cryptography/ -l
+    #
+    # which had three problems and had gone red on all of them at once.
+    #
+    #  * `-l` is Bandit's LOW severity floor, so the effective policy here was
+    #    "block on any finding at all" — not the documented policy
+    #    (severity >= MEDIUM and confidence >= MEDIUM) that
+    #    tools/check_bandit_severity.py applies in security.yml and
+    #    ci-build-test.yml.  Three workflows scanned one tree under two
+    #    policies, and only one of them was written down or tested.
+    #  * Bandit exits 1 when it reports anything, so under `bash -e` the FIRST
+    #    command aborted the step and the human-readable second line never
+    #    ran.  The failure printed no finding, no file and no rule — only
+    #    "Process completed with exit code 1".  A gate whose failure message
+    #    is empty is the illegibility failure INVARIANT-2 was written about.
+    #  * `if: success()` on the upload meant the report was published only
+    #    when nobody needed it.
+    #
+    # One unfiltered `--exit-zero` scan now feeds both the artefact and the
+    # gate, matching the other two workflows exactly.
+    - name: Security linting with Bandit (unfiltered JSON report)
+      run: bandit -r ama_cryptography/ -f json -o bandit-report.json --exit-zero
+
+    - name: Bandit severity gate (fail-closed)
+      run: python3 tools/check_bandit_severity.py bandit-report.json
 
     - name: Upload Bandit report
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
-      if: success()
+      if: always()
       with:
         name: bandit-security-report
         path: bandit-report.json

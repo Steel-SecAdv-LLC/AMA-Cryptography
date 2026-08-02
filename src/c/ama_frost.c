@@ -3,7 +3,7 @@
 /**
  * @file ama_frost.c
  * @brief FROST Threshold Ed25519 Signatures — RFC 9591
- * @version 3.5.0
+ * @version 4.0.0
  * @date 2026-04-17
  *
  * Production-ready implementation of FROST (Flexible Round-Optimized
@@ -30,6 +30,27 @@
 /* SHA-512 via the wrapper in ama_ed25519.c (avoids pulling in header-only
  * internal/ama_sha2.h which triggers -Werror=unused-function). */
 #define sha512 ama_ed25519_sha512
+
+#ifdef AMA_TESTING_MODE
+/**
+ * Random bytes hook for fail-closed testing.
+ * When non-NULL, replaces the platform CSPRNG so a test can simulate an
+ * entropy-source failure and assert that FROST aborts instead of emitting
+ * predictable key material.  Only available in test builds
+ * (AMA_TESTING_MODE); the shipped shared/static libraries never define it.
+ */
+ama_error_t (*ama_frost_randombytes_hook)(uint8_t *buf, size_t len) = NULL;
+#endif
+
+/* Get random bytes from the OS CSPRNG (or from the test hook if set). */
+static ama_error_t frost_randombytes(uint8_t *buf, size_t len) {
+#ifdef AMA_TESTING_MODE
+    if (ama_frost_randombytes_hook) {
+        return ama_frost_randombytes_hook(buf, len);
+    }
+#endif
+    return ama_randombytes(buf, len);
+}
 
 /* ======================================================================
  * SCALAR ARITHMETIC (mod l)
@@ -105,21 +126,130 @@ static void scalar_sub(uint8_t c[32], const uint8_t a[32], const uint8_t b[32]) 
 }
 
 /* Generate random scalar in [1, l-1].
- * Single-pass generation + constant-time zero-to-one remap (INVARIANT-12).
- * No data-dependent branching on secret data. */
-static void scalar_random(uint8_t s[32]) {
+ *
+ * FAIL-CLOSED (security fix): the CSPRNG result is checked and propagated.
+ * ama_randombytes() is NOT all-or-nothing — on failure it returns
+ * AMA_ERROR_CRYPTO and leaves `buf` uninitialised/partially written.  An
+ * earlier revision discarded that status and additionally remapped an
+ * all-zero draw to the *known* scalar 1, so a CSPRNG failure silently
+ * produced attacker-predictable key material (group secret = 1, and two
+ * identical signing nonces) instead of an error.  Both behaviours are
+ * removed here: a failed draw aborts, and the negligible-probability
+ * zero scalar is rejected rather than remapped.  This matches the
+ * fail-closed convention already used by ama_nistp.c / ama_x25519.c
+ * keygen and by the explicit-secret path of
+ * ama_frost_keygen_trusted_dealer().
+ *
+ * The zero test is computed without branching on the scalar bytes; the
+ * single branch is on the aggregate "is zero" bit, a negligible-
+ * probability public event (p < 2^-252), which is the same
+ * reject-and-fail structure RFC 6979 candidate rejection uses. */
+static ama_error_t scalar_random(uint8_t s[32]) {
     uint8_t buf[64];
 
-    ama_randombytes(buf, 64);
+    ama_error_t rc = frost_randombytes(buf, 64);
+    if (rc != AMA_SUCCESS) {
+        ama_secure_memzero(buf, 64);
+        ama_secure_memzero(s, 32);
+        return rc;
+    }
     ama_ed25519_sc_reduce(buf);
     memcpy(s, buf, 32);
     ama_secure_memzero(buf, 64);
 
-    /* Constant-time zero check + remap: no data-dependent branch */
+    /* Constant-time zero detection, then fail closed. */
     uint8_t acc = 0;
     for (int i = 0; i < 32; i++) acc |= s[i];
-    uint8_t is_zero_mask = (uint8_t)((((uint32_t)acc) - 1U) >> 8);
-    s[0] |= (uint8_t)(is_zero_mask & 1U);  /* map 0 → 1 */
+    if (acc == 0) {
+        ama_secure_memzero(s, 32);
+        return AMA_ERROR_CRYPTO;
+    }
+    return AMA_SUCCESS;
+}
+
+/* Derive a signing nonce with a secret-share hedge.
+ *
+ * nonce = SHA-512(label || random(32) || share_secret(32)) mod l
+ *
+ * Rationale (security fix).  The previous revision took raw CSPRNG output
+ * as the nonce and explicitly discarded the participant's secret share,
+ * so nonce secrecy rested entirely on the CSPRNG with no second line of
+ * defence.  For a Schnorr-type scheme a repeated or predictable nonce
+ * discloses the secret share outright, so the RNG becomes a single point
+ * of total failure.  Mixing the share into the derivation follows the
+ * same hedging principle as RFC 9591 `nonce_generate` (and RFC 6979 §3.6):
+ * an adversary who can predict the CSPRNG's output still cannot predict the
+ * nonce without the share, and the two per-round nonces stay distinct
+ * because they use distinct domain-separation labels.
+ *
+ * WHAT THE HEDGE DOES NOT COVER.  State it plainly, because this failure is
+ * fatal rather than degrading: the construction defends against a
+ * *predictable* CSPRNG, not against a *repeating* one.  It is a pure
+ * function of (label, random_bytes, share_secret) and holds no state, so a
+ * participant handed the same random bytes twice emits the identical nonce
+ * both times -- a VM restored from a snapshot, a fork inheriting a buffered
+ * pool, two hosts re-seeded from one image.  Two partial signatures over
+ * different messages under one Schnorr nonce disclose the secret share by
+ * subtraction, so a replay is a full compromise of that participant, and no
+ * amount of hashing here can prevent it.  RFC 9591's own `nonce_generate`
+ * has the same property; only per-signature state (a counter, or binding the
+ * message in) would change it, and neither is available to this round-1 API,
+ * which runs before the message is known.  Snapshot-rollback safety is a
+ * deployment obligation, not a property of this function.
+ *
+ * This is deliberately NOT presented as byte-exact RFC 9591 H3: this
+ * implementation's binding-factor and challenge hashes (see
+ * compute_binding_factor / compute_challenge) do not prefix the RFC 9591
+ * "FROST-ED25519-SHA512-v1" context string, so claiming ciphersuite
+ * conformance for this one input would be inaccurate.  The label below is
+ * this implementation's own domain separation.
+ *
+ * The RNG draw remains mandatory and fail-closed: the hedge is
+ * defence-in-depth, not a licence to sign without fresh entropy. */
+#define AMA_FROST_LABEL_HIDING  "AMA-FROST-v1:hiding-nonce"
+#define AMA_FROST_LABEL_BINDING "AMA-FROST-v1:binding-nonce"
+
+static ama_error_t nonce_generate(uint8_t out[32],
+                                  const uint8_t share_secret[32],
+                                  const char *label, size_t label_len)
+{
+    uint8_t random_bytes[32];
+    ama_error_t rc = frost_randombytes(random_bytes, 32);
+    if (rc != AMA_SUCCESS) {
+        ama_secure_memzero(random_bytes, 32);
+        ama_secure_memzero(out, 32);
+        return rc;
+    }
+
+    /* buf = label || random_bytes || share_secret */
+    uint8_t buf[64 + 64];
+    if (label_len > sizeof(buf) - 64) {
+        ama_secure_memzero(random_bytes, 32);
+        return AMA_ERROR_INVALID_PARAM;
+    }
+    size_t off = 0;
+    memcpy(buf + off, label, label_len);       off += label_len;
+    memcpy(buf + off, random_bytes, 32);       off += 32;
+    memcpy(buf + off, share_secret, 32);       off += 32;
+
+    uint8_t hash[64];
+    sha512(buf, off, hash);
+
+    ama_secure_memzero(buf, sizeof(buf));
+    ama_secure_memzero(random_bytes, 32);
+
+    ama_ed25519_sc_reduce(hash);
+    memcpy(out, hash, 32);
+    ama_secure_memzero(hash, 64);
+
+    /* Reject the negligible-probability zero scalar (fail closed). */
+    uint8_t acc = 0;
+    for (int i = 0; i < 32; i++) acc |= out[i];
+    if (acc == 0) {
+        ama_secure_memzero(out, 32);
+        return AMA_ERROR_CRYPTO;
+    }
+    return AMA_SUCCESS;
 }
 
 /* Scalar inverse via Fermat's little theorem: s^{l-2} mod l */
@@ -390,10 +520,20 @@ AMA_API ama_error_t ama_frost_keygen_trusted_dealer(
             return AMA_ERROR_INVALID_PARAM;
         }
     } else {
-        scalar_random(group_secret);
+        /* Fail closed on CSPRNG failure — never derive a group secret
+         * from an unchecked draw (security fix). */
+        ama_error_t rc_rand = scalar_random(group_secret);
+        if (rc_rand != AMA_SUCCESS) {
+            ama_secure_memzero(group_secret, 32);
+            return rc_rand;
+        }
     }
 
-    ama_ed25519_point_from_scalar(group_public_key, group_secret);
+    if (ama_ed25519_point_from_scalar(group_public_key, group_secret) != AMA_SUCCESS) {
+        ama_secure_memzero(group_secret, 32);
+        ama_secure_memzero(group_public_key, 32);
+        return AMA_ERROR_INVALID_PARAM;
+    }
 
     uint8_t (*coeffs)[32] = (uint8_t (*)[32])calloc(threshold, 32);
     if (!coeffs) {
@@ -403,14 +543,33 @@ AMA_API ama_error_t ama_frost_keygen_trusted_dealer(
 
     memcpy(coeffs[0], group_secret, 32);
     for (int i = 1; i < threshold; i++) {
-        scalar_random(coeffs[i]);
+        ama_error_t rc_coeff = scalar_random(coeffs[i]);
+        if (rc_coeff != AMA_SUCCESS) {
+            /* Scrub every coefficient derived so far plus the group
+             * secret before aborting — no partial share material may
+             * survive a failed keygen. */
+            ama_secure_memzero(coeffs, (size_t)threshold * 32);
+            free(coeffs);
+            ama_secure_memzero(group_secret, 32);
+            ama_secure_memzero(group_public_key, 32);
+            return rc_coeff;
+        }
     }
 
     for (int i = 0; i < num_participants; i++) {
         uint8_t *share = participant_shares + i * 64;
         poly_eval(share, (const uint8_t (*)[32])coeffs,
                   threshold - 1, (uint8_t)(i + 1));
-        ama_ed25519_point_from_scalar(share + 32, share);
+        if (ama_ed25519_point_from_scalar(share + 32, share) != AMA_SUCCESS) {
+            /* Scrub every share derived so far plus the coefficients: no
+             * partial share material may survive a failed keygen. */
+            ama_secure_memzero(participant_shares, (size_t)num_participants * 64);
+            ama_secure_memzero(coeffs, (size_t)threshold * 32);
+            free(coeffs);
+            ama_secure_memzero(group_secret, 32);
+            ama_secure_memzero(group_public_key, 32);
+            return AMA_ERROR_INVALID_PARAM;
+        }
     }
 
     ama_secure_memzero(coeffs, (size_t)threshold * 32);
@@ -432,16 +591,34 @@ AMA_API ama_error_t ama_frost_round1_commit(
     if (!nonce_pair || !commitment || !participant_share)
         return AMA_ERROR_INVALID_PARAM;
 
-    /* participant_share is checked for non-NULL but not otherwise used in
-     * nonce generation. Kept in API for forward compatibility with
-     * RFC 9591 hedged nonces where nonce = H(share_secret || random). */
-    (void)participant_share;
+    /* Hedged nonce derivation (security fix): both nonces are bound to
+     * the participant's secret share as well as to fresh CSPRNG output,
+     * and the two draws use distinct domain-separation labels so they
+     * can never collide with one another.  participant_share[0..32) is
+     * the secret scalar of the share (participant_share[32..64) is its
+     * public point).  A failed CSPRNG draw aborts without emitting a
+     * commitment. */
+    ama_error_t rc = nonce_generate(nonce_pair, participant_share,
+                                    AMA_FROST_LABEL_HIDING,
+                                    sizeof(AMA_FROST_LABEL_HIDING) - 1);
+    if (rc != AMA_SUCCESS) {
+        ama_secure_memzero(nonce_pair, 64);
+        return rc;
+    }
+    rc = nonce_generate(nonce_pair + 32, participant_share,
+                        AMA_FROST_LABEL_BINDING,
+                        sizeof(AMA_FROST_LABEL_BINDING) - 1);
+    if (rc != AMA_SUCCESS) {
+        ama_secure_memzero(nonce_pair, 64);
+        return rc;
+    }
 
-    scalar_random(nonce_pair);
-    scalar_random(nonce_pair + 32);
-
-    ama_ed25519_point_from_scalar(commitment, nonce_pair);
-    ama_ed25519_point_from_scalar(commitment + 32, nonce_pair + 32);
+    if (ama_ed25519_point_from_scalar(commitment, nonce_pair) != AMA_SUCCESS ||
+        ama_ed25519_point_from_scalar(commitment + 32, nonce_pair + 32) != AMA_SUCCESS) {
+        ama_secure_memzero(nonce_pair, 64);
+        ama_secure_memzero(commitment, 64);
+        return AMA_ERROR_INVALID_PARAM;
+    }
 
     return AMA_SUCCESS;
 }
@@ -585,6 +762,7 @@ AMA_API ama_error_t ama_frost_aggregate(
 }
 
 #ifdef AMA_TESTING_MODE
+#include "internal/ama_testing_exports.h"
 /* Test-only export of scalar_negate so tests/c/test_frost.c can
  * exercise the constant-time branchless borrow loop directly
  * (INVARIANT-12 boundary tests for s ∈ {0, 1, l-1, mid-range}).

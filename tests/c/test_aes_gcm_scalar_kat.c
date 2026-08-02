@@ -162,7 +162,7 @@ static void test_scalar_tag_tamper(void) {
 
 /* If a SIMD AES-GCM kernel is wired in this build, encrypt the same
  * (key, iv, aad, pt) tuple via scalar and via SIMD and assert byte-
- * identity.  Catches any regression in the new 4-bit-window GHASH
+ * identity.  Catches any regression in the table-free word-level GHASH
  * relative to the hardware-AES paths (AES-NI/PCLMULQDQ on x86-64,
  * PMULL on AArch64 NEON). */
 static void test_scalar_vs_simd_equiv(void) {
@@ -232,7 +232,7 @@ static void test_scalar_vs_simd_equiv(void) {
 int main(void) {
     printf("==================================================\n");
     printf("AES-256-GCM scalar reference KAT + scalar/SIMD\n");
-    printf("equivalence (exercises 4-bit-window GHASH)\n");
+    printf("equivalence (exercises table-free word-level GHASH)\n");
     printf("==================================================\n\n");
 
     /* Run all tests with the dispatch table forced to scalar so the

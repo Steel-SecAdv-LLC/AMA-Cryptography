@@ -245,6 +245,14 @@ static int ge25519_frombytes(ge25519_p3 *h, const uint8_t *s) {
     fe25519 u, v, v3, vxx, check;
     int x_sign = s[31] >> 7;
 
+    /* Reject non-canonical y before decoding.  fe25519_frombytes() reduces
+     * mod p, so the 19 encodings with y in [p, 2^255) would otherwise decode
+     * to the same point as their reduced form and give a key two valid byte
+     * representations.  See internal/ama_ed25519_canonical.h for why this
+     * diverges from ref10/libsodium.  Every call site funnels through here,
+     * so verification and the point helpers are covered alike. */
+    if (!ama_ed25519_point_y_is_canonical(s)) return -1;
+
     fe25519_frombytes(h->Y, s);
     fe25519_1(h->Z);
 
@@ -1584,12 +1592,19 @@ ama_error_t ama_ed25519_batch_verify(
  *
  * @param point   Output: 32-byte compressed Ed25519 point
  * @param scalar  Input:  32-byte little-endian scalar
+ * @return AMA_SUCCESS, or AMA_ERROR_INVALID_PARAM if either pointer is NULL.
  */
-AMA_API void ama_ed25519_point_from_scalar(uint8_t point[32],
-                                          const uint8_t scalar[32]) {
+AMA_API ama_error_t ama_ed25519_point_from_scalar(uint8_t point[32],
+                                                  const uint8_t scalar[32]) {
     ge25519_p3 R;
+    /* BREAKING in 4.0.0: returns ama_error_t so a NULL argument is an error
+     * rather than a segfault.  Returning void left no honest fix — an early
+     * return would leave `point` uninitialised, which is silent where the
+     * crash at least was not.  See include/ama_cryptography.h. */
+    if (!point || !scalar) return AMA_ERROR_INVALID_PARAM;
     ge25519_scalarmult_base(&R, scalar);
     ge25519_p3_tobytes(point, &R);
+    return AMA_SUCCESS;
 }
 
 /**
@@ -1607,6 +1622,10 @@ AMA_API ama_error_t ama_ed25519_point_add(uint8_t result[32],
     ge25519_p1p1 R_p1p1;
     ge25519_p3 R;
 
+    /* See the note in src/c/ed25519_donna_shim.c: the two backends must
+     * agree on the verdict for every input, NULL included, and neither
+     * guarded here while both guarded in double_scalarmult_public. */
+    if (!result || !p || !q) return AMA_ERROR_INVALID_PARAM;
     if (ge25519_frombytes(&P, p) != 0) return AMA_ERROR_INVALID_PARAM;
     if (ge25519_frombytes(&Q, q) != 0) return AMA_ERROR_INVALID_PARAM;
 
@@ -1638,6 +1657,7 @@ AMA_API ama_error_t ama_ed25519_scalarmult_public(uint8_t result[32],
                                                   const uint8_t point[32]) {
     ge25519_p3 P, R;
 
+    if (!result || !public_scalar || !point) return AMA_ERROR_INVALID_PARAM;
     if (ge25519_frombytes(&P, point) != 0) return AMA_ERROR_INVALID_PARAM;
     ge25519_scalarmult(&R, public_scalar, &P);
     ge25519_p3_tobytes(result, &R);

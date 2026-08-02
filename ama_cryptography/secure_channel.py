@@ -66,7 +66,7 @@ Forward-secrecy properties (read before deploying):
 
 Organization: Steel Security Advisors LLC
 Author/Inventor: Andrew E. A.
-Version: 3.5.0
+Version: 4.0.0
 """
 
 import hashlib
@@ -91,7 +91,17 @@ SESSION_ID_BYTES = 32
 NONCE_BYTES = 12
 KEY_BYTES = 32
 TAG_BYTES = 16
-REKEY_INTERVAL = 1000  # Messages before mandatory rekey
+REKEY_INTERVAL = 1000  # Messages before a rekey is advised (soft threshold)
+# Hard ceiling on the number of AEAD *encryptions* performed under one
+# (key, rekey_epoch) pair.  ``encrypt`` draws a fresh 96-bit nonce from the
+# CSPRNG for every message, so nonce reuse is a birthday problem rather than a
+# counter overflow: after n encryptions the collision probability is about
+# n^2 / 2^97.  At the 2^32 invocation limit SP 800-38D sets for random nonces
+# that is ~2^-33, which is far too close for a key that may live for the whole
+# session TTL.  Capping at 2^20 puts it at ~2^-57 while still leaving three
+# orders of magnitude of headroom above REKEY_INTERVAL, so the ceiling is
+# unreachable for any caller that rekeys when advised to.
+MAX_ENCRYPTIONS_PER_EPOCH = 1 << 20
 MAX_MESSAGE_SIZE = 65535
 SESSION_TTL_SECONDS = 3600  # 1 hour default
 # DoS resistance cap for deserialized field lengths (signature, public key).
@@ -135,6 +145,21 @@ class ReplayError(ChannelError):
 
 class SessionExpiredError(ChannelError):
     """Raised when session TTL has elapsed."""
+
+    pass
+
+
+class RekeyRequiredError(ChannelError):
+    """Raised when a session has exhausted its per-epoch encryption budget.
+
+    ``SecureSession.encrypt`` refuses to draw another random nonce under the
+    current key once ``MAX_ENCRYPTIONS_PER_EPOCH`` is reached.  The session is
+    still usable: call :meth:`SecureSession.rekey` on *both* peers to start a
+    new epoch, or close the session.  Recovery is deliberately left to the
+    caller, because rekeying only one side desynchronises the pair — the AAD
+    binds ``rekey_epoch``, so a unilateral rekey makes every subsequent
+    message fail authentication at the peer.
+    """
 
     pass
 
@@ -455,19 +480,33 @@ class SecureSession:
         created_at: Session creation timestamp
         ttl_seconds: Session time-to-live
         messages_since_rekey: Counter for triggering automatic rekey
+        sends_since_rekey: Encryptions performed under the current epoch.
+            Distinct from ``messages_since_rekey``, which also counts
+            *received* messages: only encryptions draw a nonce, so only
+            encryptions bear on the nonce-collision bound enforced by
+            ``MAX_ENCRYPTIONS_PER_EPOCH``.
         rekey_epoch: Monotonic counter incremented on every successful
             rekey; bound into the AEAD AAD so a silent rekey failure
             (same key, different epoch) cannot enable tag forgery.
     """
 
     session_id: bytes
-    send_key: bytearray
-    recv_key: bytearray
+    # repr=False on both keys.  These are the live AES-256 session keys, and
+    # a dataclass repr reaches far more places than a deliberate print: a
+    # logger called with the session as an argument, an exception whose
+    # traceback shows local variables, `%r` in a debug message, a debugger
+    # watch window.  Any one of those wrote both keys out in full.
+    # `crypto_api.KeyPair.secret_key` already carries this marker for the same
+    # reason; SecureSession simply did not.  The keys stay ordinary fields —
+    # only their appearance in the generated repr changes.
+    send_key: bytearray = field(repr=False)
+    recv_key: bytearray = field(repr=False)
     send_seq: int = 0
     recv_seq: int = 0
     created_at: float = field(default_factory=time.monotonic)
     ttl_seconds: float = SESSION_TTL_SECONDS
     messages_since_rekey: int = 0
+    sends_since_rekey: int = 0
     # SECURITY FIX: Track key generation/epoch to bind AAD to the current
     # key material.  Without this, a silent rekey failure could leave the
     # same key active across two epochs with overlapping sequence numbers,
@@ -493,6 +532,11 @@ class SecureSession:
         # surfaces as a deadlock at the bad call site rather than being
         # silently allowed.
         self._lock: LockType = threading.Lock()
+        # Latch for the once-per-epoch "rekey advised" warning.  Kept as a
+        # plain attribute rather than a dataclass field for the same reason
+        # as the lock: it is bookkeeping, not session state worth comparing
+        # or printing.  Reset by ``rekey()``.
+        self._rekey_warned: bool = False
         # Defensive type coercion: callers from older API paths might pass
         # ``bytes`` for send/recv keys.  We canonicalise to bytearray so
         # ``close()`` can wipe the live memory rather than rebind names.
@@ -506,8 +550,36 @@ class SecureSession:
         return (time.monotonic() - self.created_at) >= self.ttl_seconds
 
     def needs_rekey(self) -> bool:
-        """Check if session should be re-keyed based on message count."""
+        """Check if session should be re-keyed based on message count.
+
+        This is the *soft* threshold: it is advisory, and crossing it does
+        not stop the session.  The hard bound that ``encrypt`` enforces is
+        ``MAX_ENCRYPTIONS_PER_EPOCH``, three orders of magnitude higher.
+        """
         return self.messages_since_rekey >= REKEY_INTERVAL
+
+    def _warn_if_rekey_advised(self) -> None:
+        """Log once per epoch when the soft rekey threshold is crossed.
+
+        Called with the session lock held, from both ``encrypt`` and
+        ``decrypt``.  Before this existed, ``needs_rekey()`` was a query no
+        caller was obliged to make, so a session that never rekeyed gave no
+        signal at all until it hit the hard ceiling.  The latch keeps this to
+        one line per epoch rather than one per message.
+        """
+        if self._rekey_warned or not self.needs_rekey():
+            return
+        self._rekey_warned = True
+        logger.warning(
+            "Session %s has sent/received %d messages in epoch %d without a "
+            "rekey (advisory threshold %d). Call rekey() on both peers for "
+            "forward secrecy; encryption stops at %d.",
+            self.session_id.hex()[:16],
+            self.messages_since_rekey,
+            self.rekey_epoch,
+            REKEY_INTERVAL,
+            MAX_ENCRYPTIONS_PER_EPOCH,
+        )
 
     def encrypt(self, plaintext: bytes) -> ChannelMessage:
         """Encrypt plaintext and produce a framed ChannelMessage.
@@ -524,6 +596,7 @@ class SecureSession:
         Raises:
             SessionExpiredError: If session TTL has elapsed
             ChannelError: If session is not in ESTABLISHED state
+            RekeyRequiredError: If this epoch's encryption budget is spent
             ValueError: If plaintext exceeds MAX_MESSAGE_SIZE
         """
         if len(plaintext) > MAX_MESSAGE_SIZE:
@@ -540,6 +613,21 @@ class SecureSession:
             if self.is_expired():
                 self._state = ChannelState.CLOSED
                 raise SessionExpiredError("Session TTL expired")
+
+            # Nonce-reuse budget.  Checked BEFORE the nonce is drawn, so the
+            # message that would have exceeded the bound is never encrypted.
+            # This is the only place the bound can be enforced: ``decrypt``
+            # does not generate nonces, and rejecting on receive would break
+            # interoperability with a peer that has not yet been upgraded
+            # without improving this side's safety margin.
+            if self.sends_since_rekey >= MAX_ENCRYPTIONS_PER_EPOCH:
+                raise RekeyRequiredError(
+                    f"Session {self.session_id.hex()[:16]} reached the per-epoch "
+                    f"encryption limit ({MAX_ENCRYPTIONS_PER_EPOCH} messages in "
+                    f"epoch {self.rekey_epoch}). Call rekey() on both peers before "
+                    "sending again, or close the session. Continuing would erode "
+                    "the 96-bit random-nonce collision bound."
+                )
 
             nonce = secrets.token_bytes(NONCE_BYTES)
             # AAD binds ciphertext to session_id, rekey epoch, and sequence
@@ -567,6 +655,8 @@ class SecureSession:
 
             self.send_seq += 1
             self.messages_since_rekey += 1
+            self.sends_since_rekey += 1
+            self._warn_if_rekey_advised()
             return msg
 
     def decrypt(self, msg: ChannelMessage) -> bytes:
@@ -630,6 +720,7 @@ class SecureSession:
                 self._replay_window_base += 1
 
             self.messages_since_rekey += 1
+            self._warn_if_rekey_advised()
             return plaintext
 
     def rekey(self) -> None:
@@ -663,6 +754,8 @@ class SecureSession:
             self.send_key = new_send
             self.recv_key = new_recv
             self.messages_since_rekey = 0
+            self.sends_since_rekey = 0
+            self._rekey_warned = False
             self.rekey_epoch += 1
             logger.debug(
                 "Session %s re-keyed (epoch %d)",
@@ -718,24 +811,54 @@ class SecureChannelInitiator:
     The Initiator is anonymous (has no static key) and establishes a
     session with a Responder whose static KEM public key is known.
 
+    Where the authentication actually comes from:
+        Confidentiality and implicit authentication rest on the KEM.  The
+        session secret is encapsulated to ``responder_static_kem_pk``, so
+        only the holder of the matching KEM private key can derive the
+        session keys — an attacker without it cannot read or inject traffic.
+
+        The handshake signature does NOT add authentication unless it is
+        pinned.  ``HandshakeResponse.responder_public_key`` is supplied by
+        the peer, so an unpinned signature check verifies a message against
+        a key the sender chose: it proves self-consistency, not identity.
+        Pass ``expected_responder_sig_pk`` to pin the Responder's signature
+        key out of band and make that check meaningful; the constructor
+        argument is optional purely for backwards compatibility.
+
     Usage::
 
-        initiator = SecureChannelInitiator(responder_kem_public_key)
+        initiator = SecureChannelInitiator(
+            responder_kem_public_key,
+            expected_responder_sig_pk=responder_sig_public_key,  # recommended
+        )
         handshake_msg = initiator.create_handshake()
         # ... send handshake_msg to responder, receive response ...
         session = initiator.complete_handshake(response)
     """
 
-    def __init__(self, responder_static_kem_pk: bytes) -> None:
+    def __init__(
+        self,
+        responder_static_kem_pk: bytes,
+        expected_responder_sig_pk: Optional[bytes] = None,
+    ) -> None:
         """Initialize initiator with the Responder's known static KEM public key.
 
         Args:
             responder_static_kem_pk: Responder's hybrid KEM public key
                 (X25519 pub || Kyber-1024 pub)
+            expected_responder_sig_pk: Optional out-of-band pin for the
+                Responder's hybrid *signature* public key (Ed25519 pk ||
+                ML-DSA-65 pk).  When supplied, :meth:`complete_handshake`
+                requires the response to carry exactly this key before the
+                signature is checked.  When omitted, the signature is
+                verified against the key the Responder sends, which proves
+                only that the message was self-consistently signed — see the
+                class docstring.
         """
         from ama_cryptography.crypto_api import HybridKEMProvider
 
         self._responder_kem_pk = responder_static_kem_pk
+        self._expected_responder_sig_pk = expected_responder_sig_pk
         self._kem = HybridKEMProvider()
         self._state = ChannelState.INITIATOR_START
         self._shared_secret: Optional[bytes] = None
@@ -813,6 +936,31 @@ class SecureChannelInitiator:
         # Verify responder's hybrid signature over the handshake transcript
         if self._handshake_hash is None:
             raise HandshakeError("Handshake hash not established")
+
+        # Trust anchor.  `response.responder_public_key` is supplied by the
+        # peer, so verifying against it alone authenticates nothing: any
+        # party can mint a hybrid signature keypair, sign the transcript, and
+        # pass.  When the caller pinned the Responder's signature key, require
+        # an exact constant-time match before the signature is evaluated.
+        if self._expected_responder_sig_pk is not None:
+            from ama_cryptography.secure_memory import constant_time_compare, lengths_match
+
+            # Public length pre-check before the content comparison.
+            # `response.responder_public_key` arrives over the wire, so its
+            # length is peer-controlled; a signature public key has one length
+            # per algorithm and that length is not a secret. Rejecting a
+            # wrong-length key here refuses a malformed handshake as malformed,
+            # and keeps a peer-chosen length out of the comparison entirely.
+            if not lengths_match(
+                self._expected_responder_sig_pk, response.responder_public_key
+            ) or not constant_time_compare(
+                self._expected_responder_sig_pk, response.responder_public_key
+            ):
+                raise HandshakeError(
+                    "Responder signature key does not match the pinned key "
+                    "(expected_responder_sig_pk)"
+                )
+
         transcript = self._handshake_hash + response.session_id
         if not sig_provider.verify(transcript, response.signature, response.responder_public_key):
             raise HandshakeError("Responder signature verification failed")

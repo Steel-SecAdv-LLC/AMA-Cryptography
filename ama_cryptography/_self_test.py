@@ -16,7 +16,7 @@ enters an ERROR state and all cryptographic operations are refused.
 
 Organization: Steel Security Advisors LLC
 Author/Inventor: Andrew E. A.
-Version: 3.5.0
+Version: 4.0.0
 """
 
 import ctypes
@@ -419,11 +419,53 @@ def verify_module_integrity() -> Tuple[bool, str]:
         logger.error("Signed integrity check failed: %s", signed_detail)
         return False, signed_detail
 
-    # Release builds must fail closed: AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR=1
-    # means "this is a release wheel — no unsigned digest-only acceptance
-    # is permitted, even if the .py files happen to match."  Developer
-    # editable installs and source checkouts leave the env var unset and
-    # still get the documented digest-only WARN-and-continue behaviour.
+    # An ANCHORED build has no legitimate unsigned mode, so the fallback is
+    # closed off before anything else is considered.
+    #
+    # This is the bypass that made the anchor decorative.  The signed path
+    # above correctly refuses a signature made with the wrong key — an
+    # attacker cannot re-sign edited .py files under a key of their own and
+    # have it verify.  But they never had to: deleting
+    # `_integrity_signature.py` entirely dropped control through to the
+    # digest-only fallback, where `_integrity_digest.txt` is plaintext with
+    # no signature at all.  Rewrite that one line and arbitrarily modified
+    # code was accepted — on a build carrying a compiled anchor, with the
+    # log line cheerfully reporting the wheel had been "built without
+    # AMA_BUILD_PIPELINE=1".  Forging the signature was hard; removing it
+    # was not, and removal reached the same place.
+    #
+    # The guard below was meant to be that stop, but it tests
+    # AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR — a *build-time* environment
+    # variable, set inside the cibuildwheel container in release.yml and
+    # gone by the time anyone imports the installed wheel. It is therefore
+    # never true at runtime for a released artefact, which is precisely
+    # where it was needed. The compiled anchor is the part of that intent
+    # that survives into the shipped .so, so the compiled anchor is what has
+    # to be consulted.
+    #
+    # An anchor asserts "the signature on this artefact verifies under this
+    # key". A missing artefact does not satisfy that assertion; it evades
+    # it. Unanchored developer builds and source checkouts read `(None,
+    # None)` here and keep the documented WARN-and-continue behaviour.
+    anchor_hex, anchor_error = _load_integrity_trust_anchor()
+    if anchor_error is not None:
+        # Same fail-closed rule the signed path applies: if we cannot
+        # determine whether this build is anchored, we must not assume it is
+        # not.
+        logger.error("Trust-anchor lookup failed: %s", anchor_error)
+        return False, anchor_error
+    if anchor_hex is not None:
+        return False, (
+            "signed-integrity artefact missing on a build with a compiled "
+            f"trust anchor ({anchor_hex[:16]}...) — an anchored build is "
+            "signed by construction, so a missing signature is tampering, "
+            "not a legacy build. Digest-only fallback refused."
+        )
+
+    # Belt and braces for the build environment itself: when the signer runs
+    # with AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR=1 and the artefact is somehow
+    # absent, fail there too rather than emitting an unsigned wheel.  This no
+    # longer carries the runtime case — the anchor check above does.
     if _env_flag_enabled(_INTEGRITY_REQUIRE_TRUST_ANCHOR_ENV):
         return False, (
             "signed-integrity artefact missing and "

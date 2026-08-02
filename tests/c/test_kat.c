@@ -158,23 +158,12 @@ extern ama_error_t (*ama_kyber_randombytes_hook)(uint8_t* buf, size_t len);
 extern ama_error_t (*ama_dilithium_randombytes_hook)(uint8_t* buf, size_t len);
 extern ama_error_t (*ama_sphincs_randombytes_hook)(uint8_t* buf, size_t len);
 
-/* DRBG-based hook (for legacy pre-FIPS KAT tests) */
-static ama_error_t drbg_randombytes(uint8_t *buf, size_t len) {
-    nist_drbg_generate(&g_drbg, buf, len);
-    return AMA_SUCCESS;
-}
-
-static void install_drbg_hooks(void) {
-    ama_kyber_randombytes_hook = drbg_randombytes;
-    ama_dilithium_randombytes_hook = drbg_randombytes;
-    ama_sphincs_randombytes_hook = drbg_randombytes;
-}
-
-static void remove_drbg_hooks(void) {
-    ama_kyber_randombytes_hook = NULL;
-    ama_dilithium_randombytes_hook = NULL;
-    ama_sphincs_randombytes_hook = NULL;
-}
+/* The DRBG-backed randombytes hook and its install/remove pair lived here
+ * for the legacy pre-FIPS KAT tests. Those tests are gone; the hooks were
+ * left behind and referenced nothing, which -Wunused-function reported and
+ * nothing acted on. Deleted rather than annotated: dead scaffolding in a test
+ * file reads as coverage that exists. `g_drbg` itself is still used, by the
+ * DRBG self-tests further down. */
 
 /* Buffer-based hook for FIPS KAT tests (feeds pre-loaded bytes sequentially) */
 static uint8_t g_buf_hook_data[256];

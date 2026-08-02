@@ -4,7 +4,7 @@
 
 [OSS-Fuzz](https://github.com/google/oss-fuzz) is Google's continuous fuzzing infrastructure for open-source software. It runs fuzzing engines (libFuzzer, AFL++, Honggfuzz) with sanitizers (ASan, MSan, UBSan) against your code 24/7, automatically reporting crashes, memory errors, and undefined behavior.
 
-AMA Cryptography already has 12 libFuzzer fuzz targets running in CI. Onboarding to OSS-Fuzz provides:
+AMA Cryptography already has 15 libFuzzer fuzz targets running in CI. Onboarding to OSS-Fuzz provides:
 
 - **Continuous 24/7 fuzzing** with massive compute resources
 - **Multiple fuzzing engines** (libFuzzer, AFL++, Honggfuzz) for coverage diversity
@@ -93,7 +93,7 @@ python3 infra/helper.py run_fuzzer ama-cryptography fuzz_sha3 -- -max_total_time
 
 4. **Submit a PR** to google/oss-fuzz with:
    - Title: "Add ama-cryptography project"
-   - Description: Brief project description, link to repository, mention the 12 fuzz targets
+   - Description: Brief project description, link to repository, mention the 15 C fuzz targets
 
 5. **Wait for review** — Google's OSS-Fuzz team will review and merge
 

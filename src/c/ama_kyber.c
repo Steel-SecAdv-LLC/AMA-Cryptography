@@ -47,6 +47,7 @@
 #include <string.h>
 #include <stdint.h>
 #include "ama_platform_rand.h"
+#include "internal/ama_testing_exports.h"
 
 /* Forward declarations from ama_sha3.c */
 extern ama_error_t ama_sha3_256(const uint8_t* input, size_t input_len, uint8_t* output);

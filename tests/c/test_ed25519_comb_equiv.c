@@ -93,7 +93,10 @@ static void fill_scalar(uint8_t s[32]) {
 static int test_one(const uint8_t scalar[32], const char *label) {
     uint8_t p_fixed[32], p_var[32];
 
-    ama_ed25519_point_from_scalar(p_fixed, scalar);
+    if (ama_ed25519_point_from_scalar(p_fixed, scalar) != AMA_SUCCESS) {
+        fprintf(stderr, "  point_from_scalar failed\n");
+        return 0;
+    }
 
     /* Build a 64-byte reduction buffer: scalar little-endian in the low
      * half, zero-pad in the high half, then reduce mod l in place. */

@@ -4,8 +4,8 @@
 
 | Property | Value |
 |----------|-------|
-| Document Version | 3.5.0 |
-| Last Updated | 2026-07-30 |
+| Document Version | 4.0.0 |
+| Last Updated | 2026-08-01 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -23,7 +23,8 @@ We actively maintain and provide security updates for the following versions:
 
 | Version | Supported | Status |
 |---------|-----------|--------|
-| 3.5.x | Yes | Active development and security updates |
+| 4.0.x | Yes | Active development and security updates |
+| 3.5.x | No | Superseded by v4.0 (six breaking changes — see CHANGELOG `[4.0.0]`) |
 | 3.4.x | No | Superseded by v3.5; no public API removals |
 | 3.3.x | No | Superseded by v3.4; no public API removals |
 | 3.2.x | No | Superseded by v3.3; no public API removals |
@@ -386,13 +387,100 @@ Both halves ship together in the AArch64-completeness PR (2026-05):
       makes a forgotten `AMA_BUILD_PIPELINE=1` in the release pipeline
       a hard failure instead of a silent posture downgrade.
 
+#### What the integrity check does and does not defend against
+
+State this plainly, because the distinction decides whether the mechanism
+is load-bearing for your deployment:
+
+- **Detected:** accidental corruption, partial or interrupted installs,
+  drift between the built wheel and the files on disk, and a tampered
+  `.py` file when the attacker cannot also rewrite the signature
+  artefact.
+- **NOT detected without a compiled trust anchor:** deliberate tampering
+  by anyone who can write to the installed package directory. The
+  verifying public key is read from
+  `ama_cryptography/_integrity_signature.py`, which sits beside the code
+  it attests. An attacker who edits a module can regenerate the digest,
+  sign it with a keypair of their own, and overwrite that artefact; the
+  check then passes. Deleting the artefact instead falls back to
+  `_integrity_digest.txt`, a plaintext file with no signature at all.
+  This is inherent to any self-contained self-check — the anchor is what
+  breaks the circularity.
+- **NOT covered at all:** the native shared library. The digest is
+  computed over the package's `.py` files only
+  (`_self_test._compute_module_digest`), so a substituted or patched
+  `libama_cryptography` is invisible to it. See the
+  `AMA_CRYPTO_LIB_PATH` note below.
+
+A build is only tamper-evident against a write-capable adversary when
+`AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX` is compiled into the native
+library (`CMakeLists.txt`) so the embedded pubkey must match an anchor
+the attacker cannot rewrite by editing Python, and
+`AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR=1` forbids the unsigned fallback.
+**Neither is set by default**, so a stock developer build is in the
+unanchored state described above.
+
+#### Installing the signing key (anchored releases)
+
+Generate the keypair with AMA's own Ed25519 kernel — no third-party
+crypto tool is needed, and using one would contradict INVARIANT-1:
+
+    umask 077
+    python3 -c "
+    from ama_cryptography.pqc_backends import native_ed25519_keypair
+    pk, sk = native_ed25519_keypair()
+    open('seed.txt','w').write(sk[:32].hex())
+    print('PUBLIC KEY:', pk.hex())
+    "
+
+`native_ed25519_keypair()` returns a 64-byte secret key that is
+`seed || public_key`; only the **32-byte seed** (`sk[:32]`) is the value
+to store. Both stored values are exactly 64 hex characters.
+
+Store them on the repository (Settings → Secrets and variables → Actions):
+
+| Value | Kind | Name |
+|---|---|---|
+| the seed | **Secret** | `AMA_INTEGRITY_SIGNING_SEED_HEX` |
+| the public key | **Variable** | `AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX` |
+
+Then delete `seed.txt` and keep a copy of the seed somewhere durable: the
+public half is compiled into published binaries, so the key cannot be
+rotated without invalidating the anchor those releases expect.
+
+Run the **Integrity anchor check** workflow (manual trigger) to confirm
+the two are a matching pair before tagging a release; a mismatch is
+otherwise only surfaced by a failing release build. `release.yml` picks
+both up automatically and sets `AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR=1`
+only when the anchor variable is non-empty, so forks and
+not-yet-configured repositories continue to build unanchored wheels
+rather than failing on a missing secret.
+
+#### `AMA_CRYPTO_LIB_PATH`
+
+This environment variable overrides the search for the native library and
+loads the named shared object directly. It is a developer convenience for
+pointing at an out-of-tree build, and it is a code-execution boundary: a
+shared object runs its constructors the moment it is mapped, before the
+power-on self-test executes, and the integrity digest does not cover it.
+Treat the ability to set it as equivalent to the ability to run code in
+the process.
+
+It is ignored, with a warning, when the process is running set-uid or
+set-gid, matching the dynamic loader's refusal to honour `LD_PRELOAD` and
+`LD_LIBRARY_PATH` in secure-execution mode. When it is honoured, the
+override is logged at WARNING so a substituted backend is visible in
+operational logs.
+
 End-to-end smoke test (from the AArch64-completeness PR's CI):
 
     AMA_BUILD_PIPELINE=1 python -m ama_cryptography.integrity --update --sign
     python -m ama_cryptography.integrity --verify   # → "OK (signed integrity verified, ...)"
-    # Now edit a .py file and re-import:
+    # Now edit a .py file and re-import WITHOUT re-running the signer:
     python -c "import ama_cryptography; ama_cryptography._self_test._run_self_tests()"
     # → ERROR state, all crypto operations refused
+    # (Re-running the signer over the edited tree makes the check pass again —
+    #  see "What the integrity check does and does not defend against" above.)
 
 Release-anchor smoke test:
 
@@ -463,6 +551,99 @@ of logging and continuing with degraded nonce safety.
 The persisted counter path no longer keeps a dirty counter or batching
 interval: every successful reservation writes the `slot+1` high-water
 mark atomically, so there is no deferred flush state to lose on crash.
+
+### Secure-channel nonce budget per rekey epoch (INVARIANT-22)
+
+INVARIANT-22 requires that exceeding a per-key nonce safety limit force
+re-keying or hard failure, never a wrap, reset, or warn-and-continue.
+`SecureSession` auto-generates a nonce per message and is therefore in scope.
+
+`SecureSession.encrypt()` draws a fresh random 96-bit nonce for every
+message, so nonce reuse within one `(key, rekey_epoch)` pair is a birthday
+problem rather than a counter overflow: after n encryptions the collision
+probability is about n² / 2⁹⁷.
+
+`MAX_ENCRYPTIONS_PER_EPOCH` (2²⁰) bounds it, checked *before* the nonce is
+drawn, and `encrypt()` raises `RekeyRequiredError` on reaching it. Recovery is
+the caller's: call `rekey()` on **both** peers, or close the session. The
+library deliberately does not rekey for you — the AEAD associated data binds
+`rekey_epoch`, so a unilateral rekey desynchronises the pair and every
+subsequent message fails authentication at the far end.
+
+Crossing the advisory `REKEY_INTERVAL` (1000 messages, counting both
+directions) logs one WARNING per epoch. The ceiling binds the sender only:
+`decrypt()` generates no nonces, so enforcing it on receive would break a peer
+running an older build without improving this side's margin.
+
+### FROST nonce hedging — what it covers, and what it does not
+
+Round-1 nonces are derived as
+`SHA-512(label || random(32) || share_secret(32)) mod l`, so nonce secrecy does
+not rest on the CSPRNG alone: an adversary who can *predict* the RNG output
+still cannot compute the nonce without the participant's secret share. The two
+nonces in a pair use distinct domain-separation labels and therefore cannot
+collide with each other.
+
+**It does not protect against an RNG that repeats.** The derivation is a pure
+function of its three inputs and holds no state, so a participant handed the
+same random bytes twice emits the identical nonce — a VM restored from a
+snapshot, a fork inheriting a buffered pool, several hosts re-seeded from one
+image. Two partial signatures over different messages under one Schnorr nonce
+disclose that participant's secret share by subtraction, so an RNG replay is a
+full compromise of the share, and no amount of hashing inside the derivation
+can prevent it.
+
+RFC 9591's own `nonce_generate` has the same property. Only per-signature state
+would change it — a counter, or binding the message in — and neither is
+available to a round-1 API that runs before the message is known. **Preventing
+RNG-state rollback is therefore a deployment obligation**, not a property this
+library provides: do not snapshot-and-restore a signing host, and do not clone
+a VM image that has already signed. `tests/c/test_frost.c` pins the repeat
+behaviour as a known limit so it cannot be mistaken for a defect later, or
+quietly assumed away.
+
+### Key-store KDF parameters are untrusted input
+
+`.kdf_metadata.json` names the algorithm and cost that turn the master
+password into the storage key, and it is an unauthenticated file in the key
+directory. Anyone who can write it can name a cheaper derivation.
+
+This does **not** expose keys already stored — those were encrypted under a key
+derived with the old parameters, so a swapped file simply fails to decrypt
+them. What it governs is every key written *afterwards*, and on a store that is
+initialised but not yet populated the downgrade leaves no trace at all.
+
+`SecureKeyStorage` therefore clamps the parameters from below on read and
+raises `KDFPolicyError` rather than deriving a weak key:
+
+| Parameter | Floor | Source |
+|---|---|---|
+| Algorithm | Argon2id, where the build provides it | this section |
+| PBKDF2-HMAC-SHA256 iterations | 600,000 | OWASP 2024 |
+| Argon2id `t_cost` | 3 | RFC 9106 §4 |
+| Argon2id `m_cost` | 65536 KiB (64 MiB) | RFC 9106 §4 |
+| Argon2id `parallelism` | 1 | RFC 9106 §4 |
+
+The algorithm row is load-bearing and not a formality. Clamping costs *within*
+an algorithm leaves the cheapest attack intact: name a different one. The
+metadata's `version` field selects the Argon2id branch, so deleting that single
+field re-routes derivation to PBKDF2 — and PBKDF2 at exactly 600,000 iterations
+satisfies every cost floor above while discarding memory-hardness entirely,
+which is the property Argon2id is chosen for and the one that costs a GPU or
+ASIC attacker real money. On a build with native Argon2id, metadata naming
+PBKDF2 is therefore refused. Builds without native Argon2id are unaffected,
+because PBKDF2 is what such a build legitimately creates stores with.
+
+Storage format v3 also binds the KDF parameters into the AEAD associated data
+and records them in each key file. The parameters already influence the derived
+key, so this adds *provenance*, not confidentiality: the recorded cost cannot
+be edited without invalidating the tag, and a mismatch is reported as a named
+`KDFPolicyError` rather than an unexplained authentication failure. Format v2
+records (which bound `key_id` alone) are still read.
+
+To open a genuine legacy store, pass `allow_legacy_kdf=True` — which warns
+instead of raising — then call `migrate_kdf(password)` to re-encrypt at current
+strength and reopen without the flag.
 
 ## Cryptographic Algorithm Security
 

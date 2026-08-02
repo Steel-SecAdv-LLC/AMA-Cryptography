@@ -2291,19 +2291,84 @@ class CryptoPackageResult:
     keypairs: Dict[str, KeyPair]
     metadata: Dict[str, Any]
 
-    # Secret fields that must be stripped during serialization
-    _SECRET_FIELDS: ClassVar[frozenset[str]] = frozenset({"hmac_key", "hkdf_master_secret"})
+    # Secret fields that must be stripped during serialization.
+    #
+    # `keypairs` is deliberately NOT in this set: it has to survive
+    # serialization, because the verifying public keys live in it.  Its
+    # private half is removed separately — see `_redact_keypairs`.
+    _SECRET_FIELDS: ClassVar[frozenset[str]] = frozenset(
+        {
+            "hmac_key",
+            "hkdf_master_secret",
+            # The Layer-4 output keys, not only the master secret they come
+            # from.  Emitting these hands over the derived key material
+            # directly, which makes stripping the master secret pointless.
+            "derived_keys",
+            # The KEM's entire output, and named a secret in its own field
+            # name.
+            "kem_shared_secret",
+        }
+    )
+
+    #: Type-correct stand-ins for stripped fields when rebuilding from a
+    #: pickle.  A blanket ``b""`` would give ``derived_keys`` a ``bytes``
+    #: where the annotation promises ``List[bytes]``, so a caller iterating it
+    #: after a round-trip would silently get single bytes instead of keys.
+    #: Bandit's B105 heuristic fires on a secret-sounding key assigned a
+    #: literal.  Here the literals are the *absence* of the secret — this is
+    #: the table that replaces stripped fields — so the finding is exactly
+    #: inverted.  Suppressed line-scoped with a tracking ID per INVARIANT-13;
+    #: the values are pinned by
+    #: tests/test_crypto_api_packages.py::test_pickle_strips_the_private_signing_key.
+    _SECRET_FIELD_PLACEHOLDERS: ClassVar[Dict[str, Any]] = {
+        "hmac_key": b"",
+        "hkdf_master_secret": b"",  # nosec B105 -- empty placeholder for a stripped field, not a secret (CAPI-002)
+        "derived_keys": [],
+        "kem_shared_secret": None,  # nosec B105 -- empty placeholder for a stripped field, not a secret (CAPI-002)
+    }
+
+    @staticmethod
+    def _redact_keypairs(keypairs: Dict[str, KeyPair]) -> Dict[str, KeyPair]:
+        """Return the keypairs with every private half replaced by ``b""``.
+
+        ``KeyPair.secret_key`` is the most sensitive value in a package — for
+        the default hybrid signer, ~4 KB of Ed25519 + ML-DSA-65 private key.
+        It was passing through both serialization paths intact while they
+        advertised "stripping secret fields", so anything that wrote a package
+        to a log, a cache, a queue or a pickle file wrote the signing key out
+        with it.  ``KeyPair`` already marks the field ``repr=False`` for
+        exactly this reason; this applies the same rule to the paths that
+        actually leave the process.
+
+        The public half is preserved — it is what a verifier needs, and it is
+        public by construction.
+        """
+        from dataclasses import replace as _replace
+
+        return {name: _replace(kp, secret_key=b"") for name, kp in keypairs.items()}
 
     def to_dict(self, include_secrets: bool = False) -> Dict[str, Any]:
         """Serialize to a dictionary, stripping secret fields by default.
 
         Args:
-            include_secrets: If True, include hmac_key and hkdf_master_secret.
+            include_secrets: If True, include every field verbatim — the HMAC
+                key, the HKDF master secret and derived keys, the KEM shared
+                secret, and the private half of every keypair.  Use it only
+                when the destination is as trusted as the package itself.
                 Defaults to False for safe serialization.
 
         Returns:
-            Dictionary representation with secret fields omitted unless
-            *include_secrets* is True.
+            Dictionary representation.  Unless *include_secrets* is True the
+            fields in :attr:`_SECRET_FIELDS` are omitted entirely and
+            ``keypairs`` carries public keys only.
+
+        .. versionchanged:: 4.0
+           ``derived_keys``, ``kem_shared_secret`` and each
+           ``KeyPair.secret_key`` are now stripped as well.  Through 3.x only
+           ``hmac_key`` and ``hkdf_master_secret`` were, so the default —
+           documented as safe — emitted the package's private signing key.
+           Callers that genuinely need the full object pass
+           ``include_secrets=True``.
         """
         from dataclasses import fields as _fields
 
@@ -2311,21 +2376,34 @@ class CryptoPackageResult:
         for f in _fields(self):
             if not include_secrets and f.name in self._SECRET_FIELDS:
                 continue
-            result[f.name] = getattr(self, f.name)
+            value = getattr(self, f.name)
+            if not include_secrets and f.name == "keypairs":
+                value = self._redact_keypairs(value)
+            result[f.name] = value
         return result
 
     def __getstate__(self) -> Dict[str, Any]:
-        """Strip secret fields during pickling for safety."""
+        """Strip secret fields during pickling for safety.
+
+        A pickled package was already unusable for verification — ``hmac_key``
+        has always been stripped and Layer 2 cannot be checked without it — so
+        removing the rest costs no working flow.  Recovering secrets through a
+        pickle round-trip was never a supported behaviour; it was a leak.
+        """
         state = self.__dict__.copy()
         for key in self._SECRET_FIELDS:
             state.pop(key, None)
+        if "keypairs" in state:
+            state["keypairs"] = self._redact_keypairs(state["keypairs"])
         return state
 
     def __setstate__(self, state: Dict[str, Any]) -> None:
-        """Restore state from pickle, using empty bytes for stripped secrets."""
-        for key in self._SECRET_FIELDS:
+        """Restore state from pickle, substituting empties for stripped secrets."""
+        for key, placeholder in self._SECRET_FIELD_PLACEHOLDERS.items():
             if key not in state:
-                state[key] = b""
+                # Copy mutable placeholders so two restored instances never
+                # share one list.
+                state[key] = list(placeholder) if isinstance(placeholder, list) else placeholder
         self.__dict__.update(state)
 
 
@@ -2667,9 +2745,90 @@ def create_crypto_package(
     )
 
 
+def _verify_package_signature(
+    content: bytes,
+    package: CryptoPackageResult,
+    sig_alg: AlgorithmType,
+    sig_alg_name: str,
+    expected_public_key: Optional[bytes],
+) -> Tuple[bool, bool]:
+    """Verify a package's Layer-3 signature against a trust anchor.
+
+    The signing public key travels INSIDE the package, so a signature that
+    verifies against it proves only that the package is internally consistent
+    — never that it came from a particular signer.  An adversary can mint a
+    keypair, sign arbitrary content, and produce a package whose every layer
+    verifies.  ``expected_public_key`` supplies the out-of-band anchor that
+    turns this into an authenticity check.
+
+    Args:
+        content: Original content that was signed.
+        package: Package carrying the signature and its embedded public key.
+        sig_alg: Resolved signature algorithm.
+        sig_alg_name: Key under which the signing keypair is stored.
+        expected_public_key: Optional out-of-band anchor. When supplied and
+            mismatched, the signature is NOT evaluated at all (fail closed).
+
+    Returns:
+        ``(signature_valid, key_pinned)``. ``key_pinned`` is True only when an
+        anchor was supplied AND matched, so callers can distinguish an
+        authenticity check from a bare self-consistency check (INVARIANT-37).
+    """
+    if sig_alg_name not in package.keypairs:
+        return False, False
+
+    embedded_pk = package.keypairs[sig_alg_name].public_key
+
+    if expected_public_key is not None:
+        from ama_cryptography.secure_memory import constant_time_compare, lengths_match
+
+        # Public length pre-check.  `expected_public_key` is the caller's, but
+        # `embedded_pk` came out of the package; a signing public key has one
+        # length per algorithm and that length is not secret.  Checking it here
+        # separates "this package is malformed" from "this package was signed
+        # by someone else" in the log, and keeps an untrusted length out of the
+        # comparison.
+        if not lengths_match(expected_public_key, embedded_pk):
+            logger.error(
+                "Layer 3 trust anchor mismatch: expected a %d-byte %s public "
+                "key, package carries %d bytes — refusing to verify the "
+                "signature.",
+                len(expected_public_key),
+                sig_alg_name,
+                len(embedded_pk),
+            )
+            return False, False
+        if not constant_time_compare(embedded_pk, expected_public_key):
+            logger.error(
+                "Layer 3 trust anchor mismatch: package signing key does not "
+                "match expected_public_key — refusing to verify the signature."
+            )
+            return False, False
+        key_pinned = True
+    else:
+        key_pinned = False
+
+    try:
+        primary_crypto = AmaCryptography(algorithm=sig_alg)
+        _t0 = time.perf_counter_ns()
+        signature_valid = primary_crypto.verify(
+            content,
+            package.primary_signature.signature,
+            embedded_pk,
+        )
+        _verify_ns = time.perf_counter_ns() - _t0
+        _monitor.monitor_crypto_operation("verify", _verify_ns / 1_000_000)
+    except Exception as exc:
+        logger.error("Layer 3 signature verification error: %s", exc)
+        return False, key_pinned
+
+    return signature_valid, key_pinned
+
+
 def verify_crypto_package(
     content: bytes,
     package: CryptoPackageResult,
+    expected_public_key: Optional[bytes] = None,
 ) -> Dict[str, bool]:
     """
     Verify all 4 layers of a crypto package plus any optional add-ons.
@@ -2681,7 +2840,9 @@ def verify_crypto_package(
     - *Layer 2 — Keyed Authentication:* recompute HMAC-SHA3-256 with
       stored key and compare to stored tag.
     - *Layer 3 — Digital Signature:* verify primary signature
-      (Ed25519 + ML-DSA-65) against stored public key.
+      (Ed25519 + ML-DSA-65) against the signing public key, which is taken
+      from ``expected_public_key`` when supplied and otherwise from the
+      package itself (see the authenticity note below).
     - *Layer 4 — Key Independence:* re-derive keys from stored master
       secret, salt, and info; compare to stored derived keys.
 
@@ -2701,13 +2862,55 @@ def verify_crypto_package(
     message-imprint binding only, never the TSA's signature or certificate
     chain, so no result it can return is third-party time attestation.
 
+    **Authenticity requires a trust anchor, and ``all_valid`` now demands
+    one.** Every key this function needs to check a package is carried *by
+    that package*: the signing public key lives in ``package.keypairs``, the
+    HMAC key in ``package.hmac_key``, and the Layer-4 master secret in
+    ``package.hkdf_master_secret``. Verifying a package against its own
+    material proves **integrity and internal consistency only** — that the
+    parts agree with each other and were not corrupted in transit. It is *not*
+    proof of origin: anyone can generate a keypair, call
+    :func:`create_crypto_package` over content of their choosing, and obtain a
+    package whose every layer verifies.
+
+    To obtain authenticity, pass ``expected_public_key`` — a signing public
+    key you obtained out of band (pinned in config, fetched from a directory
+    you trust, or established at enrollment). It is compared in constant time
+    against the package's embedded signing key; on mismatch the signature is
+    not evaluated and ``primary_signature`` is False.
+
+    .. versionchanged:: 4.0
+       ``all_valid`` is False unless ``expected_public_key`` was supplied and
+       matched. Through 3.x an unanchored call returned ``all_valid`` True,
+       which reported success for a check that could not distinguish the
+       expected signer from an attacker who had built their own package. The
+       safe mode was the one a caller had to opt into, so the default was
+       changed rather than documented harder.
+
+       **Migration.** If you were relying on the old meaning — "these parts
+       agree with each other" — read ``core_valid``, which is unchanged and
+       still covers Layers 1-4. If you want what ``all_valid`` now asserts,
+       supply the anchor. There is no flag to restore the old aggregate: it
+       would reintroduce the same silent default under a different name.
+
+    The ``key_pinned`` result key still reports which mode ran, so an auditor
+    can distinguish the two programmatically (INVARIANT-37: the boundary is
+    published as data, not only as prose).
+
+    Note that Layers 1, 2 and 4 remain self-referential even when the
+    signature is anchored — they are integrity checks, and only the anchored
+    Layer 3 signature carries origin.
+
     Args:
         content: Original content that was signed.
         package: CryptoPackageResult to verify.
+        expected_public_key: Out-of-band signing public key to pin the package
+            against. Optional in signature only: when omitted, no authenticity
+            claim is made (``key_pinned`` is False) and ``all_valid`` is False.
+            When supplied and mismatched, the signature check fails closed.
 
     Returns:
-        Dictionary with a boolean for each layer plus ``all_valid`` (True
-        only if every layer passes). Keys:
+        Dictionary with a boolean for each layer plus ``all_valid``. Keys:
 
         - ``content_hash``: Layer 1
         - ``hmac``: Layer 2
@@ -2715,12 +2918,25 @@ def verify_crypto_package(
         - ``hkdf_keys``: Layer 4
         - ``sphincs``: (if present)
         - ``kem``: (if present)
-        - ``all_valid``: True iff all checks passed
+        - ``key_pinned``: True iff ``expected_public_key`` was supplied and
+          matched the package's signing key.
+        - ``core_valid``: True iff Layers 1-4 passed. Self-consistency only;
+          unchanged in 4.0.
+        - ``all_valid``: True iff every executed check passed **and** the
+          package was anchored. An origin claim.
 
     Example:
         >>> result = create_crypto_package(b"Hello")
         >>> v = verify_crypto_package(b"Hello", result)
-        >>> assert v["all_valid"]
+        >>> assert v["core_valid"]        # integrity / self-consistency
+        >>> assert not v["key_pinned"]    # no authenticity claimed
+        >>> assert not v["all_valid"]     # 4.0: unanchored is not "valid"
+
+        Anchored verification, which is what proves origin::
+
+        >>> pk = result.keypairs["HYBRID_SIG"].public_key  # obtained out of band
+        >>> v = verify_crypto_package(b"Hello", result, expected_public_key=pk)
+        >>> assert v["all_valid"] and v["key_pinned"]
     """
     _enforce_invariant7()
     _check_operational()
@@ -2737,9 +2953,23 @@ def verify_crypto_package(
     # ========================================================================
     try:
         recomputed_hmac = _hmac_sha3_256(package.hmac_key, content)
-        from ama_cryptography.secure_memory import constant_time_compare
+        from ama_cryptography.secure_memory import constant_time_compare, lengths_match
 
-        results["hmac"] = constant_time_compare(recomputed_hmac, package.hmac_tag)
+        # Public length pre-check first.  `package.hmac_tag` is whatever the
+        # package says it is, and an HMAC-SHA3-256 tag has exactly one length,
+        # which is not a secret.  Refusing a wrong-length tag here says
+        # "malformed" in the log instead of letting a structural defect arrive
+        # at the caller as "the tag did not match", and it means no untrusted
+        # length reaches the comparison at all.
+        if not lengths_match(recomputed_hmac, package.hmac_tag):
+            logger.error(
+                "Layer 2 HMAC tag is malformed: expected %d bytes, package " "carries %d.",
+                len(recomputed_hmac),
+                len(package.hmac_tag),
+            )
+            results["hmac"] = False
+        else:
+            results["hmac"] = constant_time_compare(recomputed_hmac, package.hmac_tag)
     except Exception as exc:
         logger.error("Layer 2 HMAC verification error: %s", exc)
         results["hmac"] = False
@@ -2753,22 +2983,11 @@ def verify_crypto_package(
     except KeyError:
         sig_alg = AlgorithmType.HYBRID_SIG
 
-    if sig_alg_name in package.keypairs:
-        try:
-            primary_crypto = AmaCryptography(algorithm=sig_alg)
-            _t0 = time.perf_counter_ns()
-            results["primary_signature"] = primary_crypto.verify(
-                content,
-                package.primary_signature.signature,
-                package.keypairs[sig_alg_name].public_key,
-            )
-            _verify_ns = time.perf_counter_ns() - _t0
-            _monitor.monitor_crypto_operation("verify", _verify_ns / 1_000_000)
-        except Exception as exc:
-            logger.error("Layer 3 signature verification error: %s", exc)
-            results["primary_signature"] = False
-    else:
-        results["primary_signature"] = False
+    signature_valid, key_pinned = _verify_package_signature(
+        content, package, sig_alg, sig_alg_name, expected_public_key
+    )
+    results["primary_signature"] = signature_valid
+    results["key_pinned"] = key_pinned
     # Backward compatibility: the key was previously named 'primary'.
     # Deprecated — will be removed in a future version.
     results["primary"] = results["primary_signature"]
@@ -2850,6 +3069,15 @@ def verify_crypto_package(
     # Core 4 layers: content_hash (L1), hmac (L2), primary_signature (L3),
     # hkdf_keys (L4).  Optional add-ons: sphincs, kem.
     # The 'primary' key is a backward-compat alias and excluded from aggregation.
+    #
+    # `key_pinned` IS part of `all_valid` (4.0 change).  Every key this
+    # function needs to check a package travels inside the package, so without
+    # an out-of-band anchor the strongest available statement is "internally
+    # consistent" -- an adversary can generate a keypair, call
+    # create_crypto_package over content of their choosing, and produce a
+    # package whose every layer verifies.  Reporting all_valid True for that
+    # made the safe default the one nobody selected.  Callers who genuinely
+    # only want self-consistency read `core_valid`, which is unchanged.
     _core_keys = {"content_hash", "hmac", "primary_signature", "hkdf_keys"}
     _aggregate_exclude = {"core_valid", "all_valid", "primary"}
     core_results = {k: v for k, v in results.items() if k in _core_keys}

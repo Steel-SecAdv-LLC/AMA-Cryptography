@@ -4,8 +4,8 @@
 
 | Property | Value |
 |----------|-------|
-| Applies to Release | 3.5.0 |
-| Last Updated | 2026-07-30 |
+| Applies to Release | 4.0.0 |
+| Last Updated | 2026-08-01 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -18,6 +18,1661 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 ---
 
 ## [Unreleased]
+
+## [4.0.0] - 2026-08-01
+
+### Behavioural and breaking changes at a glance
+
+Every change in 4.0.0 that alters what existing code does, in one table, so a
+migrating caller does not have to reconstruct the list from six hundred lines
+of narrative below. "Breaking" means a conformant 3.x caller can observe a
+different result or a new exception; "Behavioural" means the observable answer
+is unchanged but the work, the timing, or the failure mode is not.
+
+| # | Kind | Change | Migration |
+|---|---|---|---|
+| 1 | **Breaking** | `verify_crypto_package` returns `all_valid: False` unless `expected_public_key` was supplied and matched | read `core_valid` for the 3.x meaning, or pass the anchor |
+| 2 | **Breaking** | Key stores refuse sub-floor KDF **costs** (PBKDF2 600k; Argon2id t=3, m=64 MiB, p>=1) | `allow_legacy_kdf=True` warns instead of raising; then `migrate_kdf()` |
+| 3 | **Breaking** | Key stores refuse a KDF **algorithm** downgrade — PBKDF2 metadata on a build with native Argon2id | same as (2) |
+| 4 | **Breaking** | Ed25519 rejects non-canonical `y` on single verify, batch verify and point decode (INVARIANT-38) | none for conformant callers; only the 19 redundant encodings are lost |
+| 5 | **Breaking** | `ama_ed25519_point_from_scalar()` returns `ama_error_t`, not `void` (C ABI) | rebuild against the 4.0.0 headers; SONAME moves `.so.3` -> `.so.4` |
+| 6 | **Breaking** | `secure_memory.constant_time_compare()` **fails closed**: `RuntimeError` when AMA's native `ama_consttime_memcmp` is unavailable, where 3.x silently substituted a pure-Python XOR loop (INVARIANT-7) | build the native library; there is no flag to restore the fallback, because the fallback was not constant-time |
+| 7 | Behavioural | `to_dict()` and pickling no longer emit `keypairs[...].secret_key`, `derived_keys` or `kem_shared_secret` | `include_secrets=True` is unchanged |
+| 8 | Behavioural | secp256k1 ECDSA signing: the **Montgomery extra reduction** in `sc_mont_mul` is now a masked conditional subtraction, not a branch on a word of the Montgomery intermediate — the textbook extra-reduction nonce leak | none; same signatures, same API |
+| 9 | Behavioural | secp256k1 **low-s** normalisation: `sc_is_high` no longer short-circuits, and `sc_cond_negate` selects under a mask | none; same signatures |
+| 10 | Behavioural | **NIST P-256/384/521** carried the same defect in `nistp_scalar_is_high` and it is fixed the same way, with `nistp_select` under a mask | none |
+| 11 | Behavioural | Scalar GHASH mask laundered through `ama_ct_value_barrier_u64`; scalar AES-256-GCM is 2.7x faster than 3.5.0 | none |
+| 12 | Behavioural | ChaCha20-Poly1305 refuses inputs past the RFC 8439 §2.8 limit | none below the limit |
+| 13 | Behavioural | `SecureSession.encrypt` enforces `MAX_ENCRYPTIONS_PER_EPOCH` and raises `RekeyRequiredError` | rekey on the error |
+| 14 | Behavioural | `AMA_CRYPTO_LIB_PATH` is ignored in secure-execution mode, now detected via `issetugid(2)` / `getauxval(AT_SECURE)` / `/proc/self/auxv` / uid-gid, OR-ed | none outside set-uid/set-gid/`setcap` |
+| 15 | Behavioural | `constant_time_compare` compares `min(len(a), len(b))` bytes in place instead of padding both to `max(...)`; **every return value is unchanged** | none |
+| 16 | Behavioural | `AmaEquationEngine.converge()`/`step()` and the public `equations` entry points accept `numpy.ndarray` and other 1-D array-likes; they return a `Vec` | `numpy.asarray(result)` to convert back |
+| 17 | Behavioural | `AmaEquationEngine.converge()`'s instability rollback **fires**; through 3.x its condition was unsatisfiable and the branch was dead | pass `max_steps` explicitly if you relied on running to the boundedness clip |
+| 18 | Behavioural | `enforce_sigma_quadratic_threshold()` returns a new `Vec` on both branches; 3.x returned the caller's own object on the pass branch | none unless you relied on the aliasing |
+
+Rows 6, 8, 9 and 10 are the ones a security reviewer should read first: (6) is
+a fail-closed change that turns a silent weakness into a loud refusal, and
+(8)-(10) close secret-dependent branches in three curve implementations.
+
+### Fixed — `complete_demo.py` died on a non-UTF-8 stdout, and the gate that found it now runs everywhere
+
+The execution gate added below went red on all four Windows lanes the first
+time it ran, which is the gate doing its job: Python uses the *locale* encoding
+— cp1252 on a default Windows install — for stdout whenever it is **redirected**
+rather than attached to a console, and `complete_demo.py` prints `✓`/`✗`
+verdicts and `φ³`/`σ` labels. So `python complete_demo.py > out.txt`, and every
+CI job that captures output, got
+
+```
+UnicodeEncodeError: 'charmap' codec can't encode character '✓'
+```
+
+part-way through — followed by a *second* traceback from the `except` handler
+trying to report the first one with `✗` through the same encoder. The demo died
+mid-run with two stack traces and no summary. This was true of the released
+script; nothing had executed it to find out.
+
+The one-line repair is `PYTHONUTF8: "1"` in the workflow, and it is the wrong
+repair: it turns the lanes green while leaving the script broken for every user
+who runs it by hand or redirects its output, and it hides the next occurrence.
+`complete_demo.py` reconfigures its own streams instead
+(`_make_stdio_encodable`), which is a property of the program rather than of
+the environment it happens to run in. `errors="replace"` is the second layer,
+so a stream that genuinely cannot represent a character degrades to `?` rather
+than aborting.
+
+Two things follow from making it a property of the program. First,
+`tests/test_python_examples.py` strips `PYTHONUTF8` **and** `PYTHONIOENCODING`
+from every example subprocess, so the gate's verdict cannot depend on which CI
+step happened to export them — it reports the program, not the workflow.
+Second, and the reason this is not a Windows story: `PYTHONIOENCODING=cp1252`
+reproduces the identical fault on Linux and macOS, so the guard is now
+parametrised over `cp1252` and `ascii` across **both** examples and is
+exercised on every job in the matrix. Verified in both directions — exit 1 with
+`'charmap' codec can't encode character '✗'` with the guard removed, exit 0
+with it — plus a non-vacuity case asserting `complete_demo.py` still contains a
+character cp1252 cannot encode, so the parametrised cases cannot start passing
+for the wrong reason, and a case asserting `✓` still reaches the output, so
+"does not crash" cannot be satisfied by "prints `?`".
+
+`basic_usage.py` is in the parametrisation despite printing only ASCII today.
+That is deliberate: it costs one subprocess, and it converts "someone adds a
+`✓` to it in six months" from a red Windows lane into a red lane everywhere,
+immediately.
+
+CodeQL then flagged the guard's own error handling (`py/empty-except`, alert
+593), and it was right to. The first version tried
+`reconfigure(encoding="utf-8", errors="replace")`, caught `(ValueError,
+OSError)`, retried as `reconfigure(errors="replace")`, and ended in a bare
+`pass`. Measured rather than assumed: `ValueError` is the *only* exception that
+call raises, and only for a stream that is already closed or detached — so
+`OSError` was speculation, and the retry hit the same closed stream for the
+same reason, making it dead code whose failure path terminated in a silent
+swallow of the very condition the function exists to handle. The retry and the
+over-broad catch are gone; what remains is a single `except ValueError:
+continue` whose comment records why continuing is correct rather than a shrug.
+That branch is load-bearing in exactly one case, verified: with `sys.stderr`
+closed by a harness, the demo still runs to completion and exits 0 on a working
+`stdout`.
+
+`ama_cryptography/__main__.py` was checked for the same defect and does not
+have it — its output is ASCII throughout, and it survives
+`PYTHONIOENCODING=cp1252` — so the pre-existing `PYTHONUTF8: "1"` on the
+`Run demonstration` step is belt-and-braces rather than load-bearing, and is
+left alone.
+
+### Fixed — the examples gate decoded the child's output with the *parent's* codec
+
+The stream fix above worked: the Windows lanes went from a mid-run
+`UnicodeEncodeError` to `✓ ALL DEMONSTRATIONS COMPLETED SUCCESSFULLY`. Two
+assertions still failed, and the reason was in the harness rather than in the
+program. `subprocess.run(text=True)` with no explicit `encoding` decodes using
+`locale.getpreferredencoding()` — the **parent's** codec, cp1252 on a Windows
+runner — while the child now emits UTF-8 by construction. So a byte-for-byte
+correct program was read as `Î± (purity) weight` and `âœ“`, and the gate
+reported a defect that did not exist.
+
+A measurement error in a gate is worse than the defect it hides, because it
+teaches a reader to disbelieve the gate. `_run_example` now decodes with the
+codec the producer actually uses, which also removes a silent dependence on
+runner locale. Two assertions keep it honest, one per side of the contract: the
+child's raw stdout is decoded **strictly** as UTF-8 in a bytes-mode run, so
+`errors="replace"` cannot mask a producer that stopped emitting it; and a
+structural check refuses any `text=True` subprocess call in the module that
+does not name its encoding, because that defect is invisible on a UTF-8 runner
+and only reddens Windows — verified to fail when the argument is removed.
+
+The first draft of that structural check asserted the broader "every
+`subprocess.run` must pass `encoding=`" and failed against the bytes-mode call
+beside it, which is exactly the call that must *not* decode. Narrowing the rule
+to the calls that actually decode is what made it correct rather than merely
+strict.
+
+### Fixed — a non-vacuity assertion asserted a POSIX property on Windows
+
+`TestLibcProbesArePreferred` gained a check that at least one kernel-side
+`AT_SECURE` signal answers on the host, guarding against every probe silently
+degrading to the uid/gid comparison. It went red on Windows, correctly: there
+is no `issetugid`, no `getauxval` and no auxiliary vector there, so all three
+returning `None` is the documented and desired answer.
+
+Split per platform rather than skipped, because both halves are worth pinning:
+on POSIX at least one signal must answer, and off POSIX all three must return
+`None` **and** `_in_secure_execution_mode()` must be `False` — which is the
+"returns False by exhaustion" contract from its docstring, and would break if a
+probe ever started guessing on Windows. A bare `skipif` would have asserted
+nothing there.
+
+### Fixed — `AmaEquationEngine.converge()` could not accept a `numpy.ndarray`, and the shipped examples did not run
+
+Three defects, one root cause and two consequences, all found by running the
+examples this repository ships rather than by reading them.
+
+**The root cause was in `_numeric.Mat`, not in the engine.** `Mat` implemented
+`__getitem__` but not `__len__`, so `numpy` could not classify it as a
+sequence: `numpy.asarray(mat)` produced a **0-dimensional object scalar**, and
+`self.ethical_matrix @ state` — with `state` an ndarray — failed inside
+`numpy.matmul` with
+
+```
+ValueError: matmul: Input operand 0 does not have enough dimensions
+(has 0, gufunc core with signature (n?,k),(k,m?)->(n?,m?) requires 1)
+```
+
+raised from `_term_ethical_gradient`, four frames below the public call, naming
+neither the engine, nor the argument, nor numpy's involvement.
+
+`Mat` now implements `__len__`, `__iter__` and `tolist()`, so
+`numpy.asarray(mat)` yields the `(rows, cols)` float array it always should
+have. `_numeric` gains public `asvec()` / `asmat()` coercion, duck-typed on
+`shape` and `tolist()` so **no `numpy` import enters the library** — the
+zero-dependency property is not weakened to accept a dependency's type.
+`converge()`, `step()`, `lyapunov_function()`, `calculate_sigma_quadratic()`
+and `enforce_sigma_quadratic_threshold()` convert once at their boundary and
+raise messages that name the shape or type they were given.
+
+**`examples/python/complete_demo.py` could not run at all**: its first act was
+`numpy.random.randn(100)` into `converge()`. It now also runs *without* numpy,
+selecting `_numeric.random` and printing which array backend it used — the
+library has no runtime dependencies, and a shipped example that needs one was
+demonstrating something untrue. It also read the φ³ weight off
+`engine.config`, which holds only caller overrides and is empty on a
+default-constructed engine, so every run printed the amplification as
+`0.0000`; it reads `engine.alpha` now.
+
+**`examples/python/basic_usage.py` Examples 3 and 4 died on a `TypeError`**:
+they called `legacy_compat.create_crypto_package(dna_codes=..., ...)` and
+`verify_crypto_package(pkg=...)` against parameters actually named `codes` and
+`package`. Both are migrated to the non-deprecated `crypto_api` package API
+and now demonstrate anchored verification with `expected_public_key` — the
+breaking change in row 1 above — alongside the unanchored result, and Example
+4 asserts that a tampered copy is rejected. Neither example printed a failure
+that a reader could mistake for success: `basic_usage` had already printed
+"Example 2 ... success" before dying.
+
+**Both examples are now executed by CI and by `make test-examples`.**
+`tests/test_python_examples.py` runs each as a subprocess across the full
+OS x Python matrix and asserts on the specific output lines that prove the
+fixed sections ran, not merely on the exit code.
+
+### Fixed — `AmaEquationEngine.converge()`'s instability rollback was unreachable
+
+`converge()` tested `lyapunov_derivative(V) > 0` and treated it as "V is
+rising, roll the step back and stop". `lyapunov_derivative` returns the
+*analytic model* `V̇ = -2λV` of the reference exponential decay; `λ = 0.18 > 0`
+and `V = ||x - x*||² >= 0` by construction, so the expression is `<= 0` for
+every input the function can be given. The branch, its rollback and its comment
+had never executed.
+
+The consequence was not cosmetic. With the default GA-optimised weights the
+exploration terms dominate and V rises monotonically, so `converge()` ran until
+every component saturated at the boundedness clip `±10·φ³` and the state stopped
+moving — then reported that saturated state as converged, at 14 to 19 steps
+depending on the seed, with a Lyapunov value two orders of magnitude *above*
+where it started.
+
+V̇ on a discrete trajectory is the step-to-step difference, so that is what is
+compared now, after the same five-step warm-up. `lyapunov_derivative` keeps its
+analytic role in `lyapunov_stability_proof` / `convergence_time`, where a model
+value is what is wanted — it was the wrong instrument here, not a wrong
+function. The rejected step's Lyapunov value is dropped from the history too,
+so `history[-1]` is `V(final_state)`; that mismatch was unobservable while the
+branch was dead.
+
+Pinned across three seeds by `TestConvergeInstabilityRollback`, which asserts
+both that no retained step raises V past the warm-up *and* that the loop stops
+while the trajectory is still moving — the second is what distinguishes a guard
+stop from the convergence-test stop the unfixed code took, and without it the
+test would pass on the old code.
+
+### Security — `constant_time_compare` padded to the *attacker's* length
+
+The comparison padded **both** operands to `max(len(a), len(b))` with `ljust`
+before handing them to the native comparator. Every call site compares a
+locally computed value against one that arrived from outside:
+`verify_crypto_package` recomputes a 32-byte HMAC-SHA3-256 tag and compares it
+to `package.hmac_tag`, which is whatever the package says it is. A package
+declaring a large tag therefore caused two allocations and a scan of that size
+to reject a 32-byte value — measured at 16 MiB of allocation for an 8 MiB tag —
+before any check had established the package was worth looking at. Unbounded
+memory and CPU amplification on unauthenticated input, inside the function
+whose job is to decide whether that input is authentic.
+
+`min(len(a), len(b))` bytes are now compared in place, with no padding, no
+allocation and no slicing, and the length difference OR-ed into the verdict.
+**Every return value is unchanged**, including the cases where the old padding
+compared equal and only the length term rejected them (`b"a"` vs `b"a\x00"`),
+and a 32-byte comparison against an 8 MiB value now allocates nothing
+measurable. The content scan is untouched: `ama_consttime_memcmp` still
+accumulates over all *n* bytes with no early exit.
+
+`secure_memory.lengths_match()` is added as public API and used at the call
+sites where an attacker controls one operand's length — the Layer-2 HMAC tag,
+the Layer-3 key pin, the Noise-NK pinned responder key, `legacy_compat`'s
+`hmac_verify`, and the RFC 3161 mock-token path. Lengths were never the secret
+here: an HMAC-SHA3-256 tag, an Ed25519 public key and an ML-KEM shared secret
+each have exactly one size fixed by their specification, so a wrong length is a
+*malformed* input and now says so in the log instead of arriving at the caller
+as "the tag did not match".
+
+### Fixed — `_in_secure_execution_mode()` did not consult the APIs its docstring named
+
+The docstring said it "mirrors glibc's `AT_SECURE` / `issetugid()`
+determination". It consulted neither directly: it parsed `/proc/self/auxv` by
+hand, which is the least robust of the available signals — a hardened container
+can mask procfs, and there is no auxiliary vector at all on macOS, the BSDs or
+Solaris, where `issetugid(2)` is the platform's own answer to exactly this
+question. The docstring also claimed "erring towards True only costs a
+developer an ignored override", which the code did not do: an unreadable
+`AT_SECURE` returned `None`, and the caller's `if _auxv_at_secure():` treated
+`None` and `False` identically, so the distinction the parser was careful to
+draw had no effect on behaviour.
+
+Four signals are now consulted, most authoritative first — `issetugid(2)`,
+`getauxval(AT_SECURE)`, `/proc/self/auxv`, then the uid/gid comparison — both
+libc calls resolved through `dlopen(NULL)` so no SONAME is guessed, and
+`getauxval`'s `ENOENT` distinguished from a genuine zero so "not in the vector"
+does not read as "not privileged". The answer is their **OR**: only a signal
+that says *True* ends the search, because each covers a case the others cannot
+see, and a `None` neither answers nor suppresses the signals after it. The
+docstring now says that, including the part it previously got wrong — this
+function does not fail closed on ignorance, it moves on to a signal that can
+answer, and returns False by exhaustion where none exists (Windows).
+
+### Fixed — `ama_ct_value_barrier_u8` had no callers, and four comments named it as the one protecting GHASH
+
+`src/c/internal/ama_ct_barrier.h` shipped two barriers. `ghash_mul` uses the
+64-bit one — it accumulates on two big-endian words — and the byte-width
+`ama_ct_value_barrier_u8` was never called by anything. Four places then went
+on to describe *it* as the construction keeping GHASH branch-free:
+`ama_aes_gcm.c`'s block comment, `tools/check_ghash_constant_time.py`'s
+docstring, `CONSTANT_TIME_VERIFICATION.md` and this changelog. An unused symbol
+that the prose describes as load-bearing is worse than no symbol, because a
+reader checking the defence finds a function nothing calls.
+
+The u8 form is removed and all four references corrected to
+`ama_ct_value_barrier_u64`. The header now records *why* there is no byte-width
+variant, which is the part worth keeping: the one byte-width masked accumulate
+in the tree is the AES S-box scan in `ama_aes_bitsliced.c`, and it must **not**
+be barriered — a register in/out constraint would defeat the auto-vectoriser
+that reordering bought ~14x on that path, against a transformation the compiler
+has no reason to make there (sixteen distinct masks per table entry, so no
+single branch skips a block).
+
+Re-verified after the removal, on the `AMA_TESTING_MODE` build under callgrind:
+GHASH cross-key delta **13 instructions** against a 21-instruction noise floor,
+and the whole forced-scalar AES-GCM path **0** against a 0 floor.
+
+### Fixed — `check_release_tag.py --help` printed no description at all
+
+The parser was built with `description=__doc__.split("\n")[3]`, and index 3 of
+that module's docstring is the blank line under the title underline. Every
+`--help` since the tool was written printed a usage block, two option rows, and
+nothing saying what is checked or when it fails — beside an eighty-line
+docstring that says exactly that. Slicing a docstring by line number is the
+wrong construction regardless of the index, because reflowing the header
+silently changes which line is picked.
+
+`DESCRIPTION` and `EPILOG` are named constants now, with
+`RawDescriptionHelpFormatter`, and the epilog carries the three checks, the
+`actions/checkout` fetch trap, the exit codes, and the INVARIANT-37 statement
+that the signature is *not* verified — so a reader who only ever sees `--help`
+cannot mistake a PASS for a cryptographic result.
+`tests/test_release_tag_gate.py::TestTheHelpOutputIsUsable` asserts the text
+reaches the rendered output, and asserts over the parsed syntax tree that
+`description=`/`epilog=` are named constants rather than expressions.
+
+### Fixed — `check_ed25519_backend_parity.py` described a corpus it does not have
+
+Four documentation defects in the differential harness, each of which would
+mislead a reviewer checking what the gate covers:
+
+- The Corpus section said "**Three** families, all generated at run time" and
+  then listed **four**. The fourth, the compressed-point decode cases that make
+  the canonical-`y` claim testable at all, is a fixed table of encodings
+  derived from `p` and is *not* generated — which is precisely why the three
+  generated families cannot test that rule.
+- The Exit-status section listed `2` as "a library could not be loaded" only.
+  It is also returned when the corpus contains no genuine signature and when
+  the decode stage asserted nothing — the two non-vacuity guards — and `1` also
+  covers agreement on an absolutely wrong answer, not just disagreement.
+- `KEYPAIRS`'s comment said each keypair contributes "every mutation below, so
+  the case count is a multiple of it". The `S + L` twin is conditional, so the
+  per-keypair count is 37 or 38 and the total is not a multiple of 24.
+- The structured-corruption comment said every mutation "always applies"
+  without noting that `_flip_bit` reduces the byte index modulo the buffer
+  length, so two bit indices can collapse onto one case for a short message.
+
+No behaviour changed; the gate still compares 1,836 cases and still passes.
+
+### Added — the release pipeline now checks the tag it is releasing from (INVARIANT-10)
+
+INVARIANT-10 requires signed commits and `release.yml`'s operator runbook has
+always said to tag with `git tag -s`. Nothing checked either statement about
+the tag itself, and the repository's own history is what that looks like.
+Every tag present when this was written, measured:
+
+| tag | object | signature |
+|---|---|---|
+| v1.0.0, v1.1, v2.0.0, v2.1.5, v3.0.0, v3.3.0 | **commit** (lightweight) | impossible — no object to sign |
+| v2.1.2, v3.1.0, v3.2.0, v3.4.0, v3.5.0 | tag | **none found** |
+
+**Not one tag in this repository has ever been signed**, and six of the eleven
+are lightweight — a bare ref pointing at a commit, which anyone who can push
+can move, and which has no object a signature could ever attach to. Every one
+of those releases went out through a pipeline documenting the opposite.
+
+`tools/check_release_tag.py` runs in `release.yml`'s preflight, before any
+wheel is built, and fails the release unless the ref resolves, names a tag
+object rather than a commit, and that object carries an OpenPGP, SSH or X.509
+signature block. It looks the ref up under `refs/tags/` explicitly, so a
+same-named branch cannot satisfy it.
+
+What it does **not** do is verify the signature, and it says so in both its
+pass and fail output. Verification needs a trust store — an `allowed_signers`
+file or a keyring holding the maintainer's public key — and shipping one in
+the repository would assert a key binding only the account owner can
+establish. So the gate checks *shape*: the properties that were wrong on all
+eleven tags, that need no key material, and whose absence means no later
+verification can succeed. GitHub's verified/unverified verdict is the
+complementary half and is account-level state, not repository state, so
+preflight prints it rather than gating on it — a release must not be blocked
+by a setting outside the repository, but it must not hide it either.
+
+One trap was found while wiring it and is worth recording, because it would
+have produced a red gate on correct input, which is how gates get switched
+off: `actions/checkout` at its default depth fetches the *commit* a tag
+resolves to and writes a local `refs/tags/<name>` pointing at it. That local
+ref is lightweight even when the pushed tag is annotated. The preflight step
+re-fetches the tag ref with `--force` first, the failure message names the
+trap, and `tests/test_release_tag_gate.py` asserts both — including that the
+fetch precedes the invocation in the workflow file.
+
+`release.yml` is exempt from `check_gate_coverage.py` (it never triggers on
+`pull_request`, so branch protection cannot require a context it produces),
+which means nothing else in the repository would notice this step being
+dropped. That test is what notices.
+
+The gate's own negative controls cover every shape: missing, lightweight,
+annotated-unsigned, a same-named branch, and all three signature formats git
+emits. One of them asserts that a fabricated signature block **passes** — the
+fixture's signature is the literal text `not-a-real-signature` — so no future
+reader can mistake this gate's PASS for a cryptographic result.
+
+Review caught one thing in the first cut of that predicate, and it was a
+fail-open in the one place this module exists to fail closed: it tested for
+the BEGIN marker as a *substring*. A tag message is free text, so an unsigned
+annotated tag whose message quoted `-----BEGIN PGP SIGNATURE-----` — a
+changelog line about signing, a pasted error, this repository's own
+documentation — satisfied the gate carrying no signature. It now requires a
+matched BEGIN/END pair, each alone on its line, END after BEGIN. Armour
+delimiters occupy a line of their own in every format git emits, so a marker
+quoted inline is prose and only a marker on its own line is structure; a
+message would have to reproduce a whole armour envelope line for line to
+pass, at which point it is indistinguishable from a signature by inspection,
+which is the honest limit of a shape check. Seven controls cover it: a lone
+BEGIN, a lone END, END before BEGIN, a PGP opening with an SSH closing, both
+markers quoted inline, a realistic release message describing the signing
+requirement — and a genuine block beside them all, so the refusals are shown
+to be about pairing rather than about text.
+
+Also corrected while in this file: the runbook's note that "the v3.2.0, v3.3.0
+and v3.5.0 releases all shipped with zero artefacts". v3.2.0 and v3.3.0 still
+carry no assets and, being immutable releases, cannot be repaired. v3.5.0's
+first attempt failed the same way but was re-tagged onto the fix commit, and
+the published release carries all 54 artefacts — so the sentence described a
+state that no longer existed.
+
+### Security — two more secret-dependent branches in secp256k1 ECDSA signing
+
+The Montgomery extra-reduction fix earlier in this release closed one branch on
+secret data in `src/c/ama_secp256k1.c` and recorded, in a code comment, that it
+was the only site in the file written that way. It was not. Sweeping for the
+pattern instead of trusting that sentence found two more, both on the default
+signing path, both measurable:
+
+- **`sc_add`'s carry fold.** `if (carry) { …subtract n… }` compiled to a
+  conditional jump over a four-limb borrow chain. On the signing path the
+  operands are `r*d mod n` and `z`, so the predicate is a function of the
+  private key `d` and — through the RFC 6979 nonce — of `k`. Isolated under
+  callgrind over 200,000 calls, the branchy form retired **76 more instructions
+  per call** when the carry was set, deterministically, against a
+  zero-instruction noise floor. `r` and `z` are public, so each observation is
+  a linear inequality on `r*d mod n`: the hidden-number-problem shape that
+  lattice reduction solves from a few hundred traces.
+- **The low-`s` normalisation.** `sc_is_high` was
+  `!sc_lt(a, HALF_N) && memcmp(a, HALF_N, 32) != 0` — `&&` short-circuits, so
+  `memcmp` ran only for `a >= half-n`, and `memcmp` itself exits at the first
+  differing limb — and it gated a branched `sc_negate`. Measured the same way:
+  **105 more instructions per call** for a high `s` than a low one.
+
+The second one had a written justification, and the justification was wrong in
+a way worth recording. INVARIANT-34 excused the normalisation as "a conditional
+negation of a value that is about to be published". What gets published is the
+*normalised* `s`; whether the negation happened is exactly what the published
+value does not reveal. So `s_raw > (n-1)/2` is one bit per signature about `k`
+and `d`. Both INVARIANT-28's and INVARIANT-34's timing paragraphs are corrected.
+
+`sc_add` now folds under an arithmetic mask, `sc_is_high` is a single
+`sc_lt(SC_HALF_N, a->v)`, and the normalisation goes through a new
+`sc_cond_negate`. The same short-circuit existed in `nistp_scalar_is_high` in
+`src/c/ama_nistp.c` and is fixed the same way; its conditional negation now
+uses `nistp_select` under a mask. The `low_s` *flag* is still branched on — it
+is the caller's argument and public.
+
+Measured after: cross-key instruction spread over 20 keys drops from **624 to
+72**, and to **24** once the measurement driver's own variable-time step is
+removed (below). Wycheproof 3912/3912, 61/61 C tests, 137 ECDSA/NIST-curve
+Python tests unchanged.
+
+### Fixed — the ECDSA constant-time gate could not have caught them, and could report PASS over a program that never ran
+
+`tools/check_ghash_constant_time.py --target ecdsa` was added earlier in this
+release specifically to catch this class of defect. It passed on a build
+carrying both of the above, for two independent reasons, each of which is a
+gate defect in its own right.
+
+**It never checked the driver's exit status.** `_instruction_count` parsed
+callgrind's `I refs:` line and returned it regardless of how the process
+ended. Passing `--lib` a shared object instead of the static archive makes the
+driver link but fail at load; every key class then returns the same ~109,000
+instructions of dynamic-loader work, the cross-key delta is zero, and the gate
+prints `PASSED — count is key-independent` over a program that performed no
+cryptography. It gave that verdict identically for the two-leak build and for a
+clean one. The exit status is now required, and a shared-library `--lib` gets
+an rpath so the trap is removed rather than merely reported. The ghash driver
+also now checks its own encrypt return value: eight early returns are as
+key-independent as eight encryptions.
+
+**Its threshold was calibrated against an assumption.** 3,000 sat between a
+known defect (33,354) and an apparent benign spread of 728 — but the 728 was
+mostly the two live leaks above, and ~9 instructions per DER byte of it came
+from the driver iterating to `siglen` rather than a fixed count.
+
+Re-measured on the configuration the workflow actually builds — the
+`AMA_TESTING_MODE` static archive, LTO off, 8 key classes, fixed-count driver —
+against a git-reverted control:
+
+| build | cross-key delta |
+|---|---|
+| pre-fix secp256k1 (control) | **2,952** instructions |
+| fixed (shipped) | **80** |
+
+So the old threshold of **3,000 sat forty-eight instructions above the defect
+it was measuring**. It was never going to fire. It is now **200** — 2.5x above
+the benign floor, ~15x below the defect — and verified to fail on the control
+build and pass on the fixed one.
+
+Sampling was strengthened alongside: 8 key classes rather than 4 (four saw only
+288 of the 576 instructions actually available), and both drivers now derive
+key material from the class byte rather than `memset`-ing it, which had capped
+the sampled key space at 256 highly structured values.
+
+The general rule, since it will recur: **finding one instance of a defect
+pattern is a reason to sweep for the rest, and a threshold set between one
+known defect and one assumed-clean baseline is only as good as the assumption.**
+
+### Fixed — NULL arguments to two Ed25519 entry points, and a deterministic gate for a flaky dudect lane
+
+Raised in review. `ama_ed25519_point_add()` and `ama_ed25519_scalarmult_public()`
+dereferenced `result`, `p`/`point` and `q`/`public_scalar` without a NULL
+check, in **both** backends, while the sibling
+`ama_ed25519_double_scalarmult_public()` has always guarded all five of its
+pointers in both. A NULL argument segfaulted instead of returning
+`AMA_ERROR_INVALID_PARAM`.
+
+That became easier to reach in this same release: `test_ed25519_canonical_y.py`
+now drives exactly those two entry points through `ctypes`, where a Python
+`None` arrives as NULL and takes the interpreter down with no traceback. Both
+backends are fixed identically — the backend-differential job requires them to
+agree on the verdict for every input, and NULL is an input — and pinned by
+`TestNullArgumentsAreRefused`, which drives each of the three positions on each
+function plus a non-vacuity control that the same calls succeed with real
+pointers.
+
+The third member of the group, `ama_ed25519_point_from_scalar()`, needed an ABI
+change to be fixed at all; it is fixed here too, under its own heading below.
+
+### BREAKING — `ama_ed25519_point_from_scalar()` returns `ama_error_t`, not `void`
+
+The fourth and last group primitive. Through 3.x it was declared
+
+```c
+AMA_API void ama_ed25519_point_from_scalar(uint8_t point[32],
+                                           const uint8_t scalar[32]);
+```
+
+and dereferenced both arguments unconditionally. It is the only entry point in
+this group that could not report the condition its three siblings report, and
+the `void` return is exactly why: an early return on NULL would have left the
+caller's `point` buffer uninitialised, which is *worse* than the crash, because
+a segfault is loud and a stale 32-byte stack buffer treated as a public key is
+silent. There was no honest fix inside the old signature. It now reads
+
+```c
+AMA_API ama_error_t ama_ed25519_point_from_scalar(uint8_t point[32],
+                                                  const uint8_t scalar[32]);
+```
+
+and returns `AMA_ERROR_INVALID_PARAM` if either pointer is NULL, `AMA_SUCCESS`
+otherwise. Both backends are changed identically, for the reason the
+backend-differential job exists.
+
+This is a **source- and binary-compatible-looking change that is neither**.
+Source: a caller that ignores the result still compiles, because C permits
+discarding a return value — so the compiler will not tell you. Binary: the
+return register is now written where it previously was not, so a 3.x object
+file linked against a 4.0.0 library reads whatever the ABI's return register
+happens to hold. **Rebuild; do not mix object files across the boundary.**
+The SONAME already moves `.so.3` → `.so.4` in this release, which is what makes
+the mixed link fail loudly at load time rather than silently at run time.
+
+All four in-tree callers are in `src/c/ama_frost.c` — group public key
+derivation, the public half of each participant share, and both round-1 nonce
+commitments — and every one now checks the result and scrubs the secret
+material it holds before returning. That is not defensive padding: those call
+sites hold the group secret, the Shamir coefficients, or the nonce pair at the
+moment of the call, and the pre-existing failure paths beside them already
+scrub. There are no Python-binding callers; nothing in `ama_cryptography/`
+names this symbol.
+
+Why it belongs in this release rather than a later one: it was found by the
+same review that found the other two NULL dereferences, it is the same defect,
+and 4.0.0 is already a major bump carrying three other breaks. Deferring it
+would have meant shipping a knowingly-crashing entry point through a major
+version boundary and then needing a *second* one to fix it.
+
+### Added — `--target consttime`, because the dudect lane for it flakes
+
+The `dudect - X25519 AVX2 4-way` job failed on this branch with
+`ama_consttime_memcmp: |t| reached 5.2108 (threshold 4.5) in 2 of 3 rounds`, on
+a commit that does not touch `src/c/ama_consttime.c` — nothing in this release
+does.
+
+Settled deterministically rather than dismissed as flake. Under callgrind, over
+2,000 comparisons of a 4 KiB buffer across eight classes — the equal case and a
+first-difference at eight positions spread through the buffer — the function
+retires **37,157,290 instructions every time, byte-identical**. It is a
+fixed-count XOR accumulator over volatile pointers; its cost cannot depend on
+the data. The dudect result is wall-clock noise on a shared runner.
+
+A first version of that measurement showed an 11-instruction residue, which
+turned out to be the *harness's* own `if (cls > 0)` branch, not the library's.
+A driver for a constant-time check has to be constant-time itself; the shipped
+driver always performs the mutation, with an XOR mask of 0 for the equal class.
+
+`tools/check_ghash_constant_time.py` gains a `consttime` target and
+`dudect.yml` a step for it. This module's docstring already argued the case —
+callgrind counts "give the same verdict on a loaded CI runner as on idle
+hardware" — so the durable answer to a flaky statistical lane over a
+deterministic function is to also measure it deterministically. dudect stays as
+the wall-clock cross-check; this is what a genuine early-exit regression trips.
+
+The gate's own test now derives the CI-coverage assertion from `_DRIVERS`
+rather than a hand-written list, so adding a target without wiring it up fails
+in the suite instead of shipping a check nothing runs. Writing that test also
+reproduced a familiar false positive: the structural assertion "the driver has
+no class-dependent branch" first matched the *comment* explaining why the
+branch is absent — the same prose-versus-code confusion INVARIANT-13 records
+the suppression scanner learning about.
+
+### Security — `constant_time_compare` fell back to a pure-Python loop (INVARIANT-7)
+
+Raised in review. `secure_memory.constant_time_compare()` used AMA's native
+`ama_consttime_memcmp` when available and otherwise ran a padded pure-Python
+XOR accumulator — documented, here and in `CONSTANT_TIME_VERIFICATION.md`, as
+the constant-time fallback.
+
+INVARIANT-7 names exactly that as an unacceptable substitute: *"a pure-Python
+fallback for any cryptographic primitive or secret-dependent operation"*. This
+is a secret-dependent operation by INVARIANT-12's own definition, which lists
+"pre-verification MAC/tag comparisons" as secret material, and the callers are
+HMAC tag verification in `verify_crypto_package` and the pinned-responder-key
+check in `secure_channel`.
+
+The loop was also not constant-time in fact, only in shape: `ljust` allocates,
+`zip` builds tuples, and `result |= x ^ y` runs CPython's integer path with its
+small-int cache. None of that retires a fixed instruction count. A fallback
+documented as constant-time and not being so is worse than no fallback, because
+callers stop asking.
+
+It now raises `RuntimeError`, at call time, in the same shape `pqc_backends`
+uses. Import still succeeds — this module is also used for non-cryptographic
+memory hygiene and has no import-time guard — which is what keeps the
+documented `AMA_SPHINX_BUILD` docs path working, since the refusal is on the
+call rather than the import.
+
+`TestConstantTimeCompareRefusesWithoutTheNativeBackend` replaces the four tests
+that asserted the fallback's *answers*. Those answers were right, which is why
+they could never have caught this. The new class drives every input shape —
+including the equal case, which is what an attacker gets on a host with no
+native library — plus a non-vacuity control on the native path and a structural
+check that the loop cannot return as a convenience, since a reintroduced
+fallback would pass every behavioural test in the file.
+
+### Fixed — the Ed25519 canonical-`y` Python tests were vacuous
+
+Raised in review, and correct. `tests/test_ed25519_canonical_y.py` drove every
+assertion through `native_ed25519_verify`, passing a non-canonical `y` as the
+public key alongside a signature made by a *different* keypair. Verify returns
+False for the wrong-key reason whether or not the canonical-`y` rule exists, so
+all thirty-eight parametrized assertions passed with the check fully removed.
+Demonstrated: the canonical values `y = 0` and `y = 12345` return False through
+that same call for exactly the same reason.
+
+This is the third time this defect class has been found in the coverage for
+this one invariant — `tests/c/test_ed25519_canonical_s.c` had it and
+`tools/check_ed25519_backend_parity.py` had it, both fixed earlier in this
+release. The lesson is the same each time: **a rejection is only evidence when
+something that differs from it in exactly one respect is accepted.**
+
+Rewritten around the pair the C test settled on, driven through the two decode
+entry points (`ama_ed25519_point_add`, `ama_ed25519_scalarmult_public`) rather
+than through verify, which cannot separate a decode refusal from a signature
+mismatch. `y = 0` is a genuine curve point and must decode; `y = p` reduces to
+it — the same point, non-canonically encoded — and must be refused. Nothing but
+the canonicality rule separates them.
+
+The rewrite also falsified one of its own assumptions, which is worth
+recording: `y = p - 1` was expected to be off-curve and asserted to fail. It is
+on the curve and decodes. That makes `p - 1` / `p` an exact adjacent-integer
+accept/reject boundary pair — a sharper control than the one originally
+written, and the reason boundary assertions should be measured rather than
+predicted. 88 tests, up from 43.
+
+### Verified — the instruction-count sweep found no other key-dependent path
+
+The technique that found the three secp256k1 leaks had not been run anywhere
+else, so it was. Retired instruction counts under callgrind across 8 key
+classes, each with a same-class noise floor, on deterministic drivers:
+
+| operation | noise floor | cross-class spread |
+|---|---|---|
+| Ed25519 sign | 0 | **0** |
+| X25519 key exchange | 0 | **0** |
+| ML-KEM-1024 decapsulate (ciphertext varied) | 1 | 19 |
+| Argon2id | 8 | 24 |
+| HKDF-SHA3-256 | 2 | 21 |
+
+The residual ~20 on the last three is the same measurement constant the GHASH
+and ECDSA gates show on a clean build. No leak. Recorded because a negative
+result from a technique that has already found three defects is evidence, and
+because the first ML-KEM run *did* show 8,810 — entirely an artefact of the
+harness generating its keypair with the RNG, which puts ML-KEM's
+rejection sampling (legitimately variable-time, on public data) inside the
+measurement. Fixed by seeding the keypair deterministically and varying only
+the attacker-controlled ciphertext, which is the input the FO transform's
+implicit rejection must be constant-time in.
+
+### Security — a malformed KDF cost bypassed the policy floor entirely
+
+Raised in review against `_enforce_kdf_policy`, and the live defect turned out
+to be one layer further out than reported.
+
+The reported half is real: the cost floors read their values through a bare
+`int(params.get(...))`, which raises `TypeError` on `null` or a list and
+`ValueError` on a non-numeric string. For a function whose stated premise is
+that `.kdf_metadata.json` is unauthenticated and attacker-influenced, that is
+three failures at once — the exception is not `KDFPolicyError`, so a caller
+doing the documented thing does not catch it; it fires on the first malformed
+value before any shortfall is collected, so the operator gets a bare
+`TypeError` naming no parameter instead of the actionable message; and it fires
+regardless of `allow_legacy_kdf`, disabling the one documented recovery path
+exactly when a damaged store needs `migrate_kdf()`. On the PBKDF2 branch that
+`int()` sits outside any handler and is reachable directly.
+
+The larger half is that on the Argon2id branch the malformed value **never
+reached the policy check at all**. The coercions were inside
+`except (OSError, ValueError, TypeError, KeyError)`, which logged *"using
+defaults"* and continued — so a value the library could not parse was resolved
+by substituting a passing one, and the floor added in this release was never
+consulted about the single input it could not read. The recovery was also
+partial: the coercions run in sequence, so `t_cost` kept an attacker-chosen
+value while `m_cost` reverted to the default, leaving a mixture the log line
+then described as "defaults".
+
+Both are fixed. Values are read raw and `_enforce_kdf_policy` adjudicates them;
+a value that is not a number is a shortfall, because it is not evidence of a
+strong parameter. `bool` is rejected explicitly — it is an `int` subclass, so a
+JSON `true` would otherwise read as an iteration count of 1, the trap
+INVARIANT-35 records for the parameter-set selectors — while an integral float
+is accepted, since JSON has one number type and `3.0` is a legitimate spelling
+of 3. A default is substituted only *after* the policy check has passed, which
+means only where `allow_legacy_kdf=True` and the operator has been warned about
+that parameter by name. Unreadable-file handling (`OSError`, `JSONDecodeError`)
+keeps its existing warn-and-default behaviour: a file that cannot be read is a
+different condition from a readable one carrying a bad value.
+
+Nine regression tests in `TestKDFMetadataIsUntrusted` drive each malformed
+shape through a real store and pin all three directions — refusal by default,
+a warning under `allow_legacy_kdf`, and non-detection for a conformant
+integral float.
+
+### Fixed — the "Strict Compiler Warnings (Werror)" job did not pass `-Werror`
+
+Neither the workflow step nor `CMakeLists.txt` contained `-Werror` anywhere.
+The job compiled with an expanded warning set, printed **68 warnings under gcc
+and 69 under clang**, and exited 0. It could not fail on the thing its own name
+asserts — the same shape as the ECDSA constant-time gate above, and as the
+Bandit step below.
+
+`-Werror` over the whole set is not achievable here, and claiming it would just
+produce a permanently-disabled job. `-Wpedantic` is dominated by `__uint128_t`
+in `src/c/fe51.h` and `fe64.h` — a required extension, not a defect — and by
+`src/c/vendor/ed25519-donna/`, which the INVARIANT-1 vendoring policy keeps
+byte-for-byte unmodified. `-Wconversion` and clang's
+`-Wimplicit-int-conversion` are concentrated in the Kyber reduction arithmetic
+and the same vendored tree; blanket-casting modular arithmetic to silence a
+warning is how a real bug gets introduced, and it does not belong next to three
+breaking security changes.
+
+So the three categories that *are* achievable were driven to zero at source —
+not suppressed — and made fatal: `-Werror=missing-prototypes`,
+`-Werror=shadow`, `-Werror=unused-function`. Both compilers build clean and
+61/61 C tests pass under each, and reintroducing a shadowed variable was
+verified to fail the build.
+
+The `-Wmissing-prototypes` findings were not cosmetic. Every one was a symbol
+whose signature was transcribed independently in each consumer via `extern` —
+the MULX+ADX assembly kernels (declared in `ama_x25519.c` and again in their
+equivalence test), the FROST and Kyber test-only exports (declared in three
+test files), and the renamed X25519 ladders used by the fe51/fe64 differential.
+Raw `uint64_t[4]` and `uint8_t[32]` buffers, hand-written asm, and nothing
+tying the transcriptions together: a signature change would have been a silent
+ABI mismatch, not a compile error. Each now has one shared internal header
+(`src/c/internal/ama_x25519_fe64_mulx.h`, `src/c/internal/ama_testing_exports.h`,
+`tests/c/x25519_equiv_ladders.h`) included by the definition and every consumer.
+
+Those headers deliberately do **not** guard their declarations on
+`AMA_TESTING_MODE`. CMake sets that macro `PRIVATE` on the
+`ama_cryptography_test` *library* target, so the test executables that link it
+do not carry it — a guarded header would vanish exactly where it is included
+and the callers would fall back to implicit declarations. gcc accepts those
+silently; clang 16+ rejects them, which is how the first attempt was caught.
+
+`-Wunused-function` also caught a configuration-specific one that the
+PQC-on build cannot see: `dispatch_bench_kyber_ntt` and
+`dispatch_bench_dilithium_ntt` in `src/c/dispatch/ama_dispatch.c` are ~50 lines
+each and their only call sites sit inside `#ifdef AMA_USE_NATIVE_PQC`, so the
+`AMA_USE_NATIVE_PQC=OFF` build — the configuration downstream consumers who
+take the library without native post-quantum support actually run — compiled
+both and referenced neither. Now guarded to match their callers; both
+configurations build clean under both compilers, 61/61 and 28/28 tests.
+
+`-Wunused-function` in the test tree: `test_kat.c` carried `install_drbg_hooks` /
+`remove_drbg_hooks` and their DRBG shim, left behind when the legacy pre-FIPS
+KAT tests were removed and referenced by nothing. Deleted rather than
+annotated — dead scaffolding in a test file reads as coverage that exists.
+`fe64.h`'s `frombytes` / `tobytes` were plain `static` in a header where every
+sibling and both `fe51.h` counterparts are `static inline`, which is why every
+translation unit that included it without calling them emitted a warning.
+
+### Fixed — three CI gates had no negative control
+
+INVARIANT-2 states the standard — *"a gate with no negative control has not
+been shown to be a gate at all"* — and three gates did not meet it. Two had no
+test module of any kind.
+
+- **`tests/test_ghash_constant_time_gate.py`** (new, 22 tests). Pins the
+  exit-status rule, the verdict arithmetic against the measured 24/576 numbers,
+  the threshold calibration, the single-byte-ASCII key-class requirement, and
+  that CI runs both targets. The fail-open defect above is what a negative
+  control would have caught on the day it was written.
+- **`tests/test_action_pin_checks.py`** (new, 18 tests) for
+  `tools/check_action_pins.py` (INVARIANT-24) — the gate standing between this
+  repository and another release that publishes zero artefacts. Covers an
+  unresolvable SHA, a `--strict` version-comment mismatch, unreachable upstream
+  as *inconclusive* rather than passing, a definite failure outranking an
+  unreachable one, and the non-detection cases (`@v1` is not this checker's
+  subject; an annotated tag's `^{}` ref must match).
+- **`tests/test_ed25519_backend_parity_gate.py`** (new, 12 tests) for
+  `tools/check_ed25519_backend_parity.py` — a gate already caught once
+  reporting a canonical-`y` claim its corpus could not test. Drives the verdict
+  logic against stub backends: divergence fails, two backends that reject
+  everything fail (agreement is not correctness), and both vacuity guards
+  refuse to pass.
+
+That last one surfaced an ordering defect in the tool. `decode_asserted` only
+advances on a case where the backends *agreed*, so a pair that disagreed on
+every decode case left it at zero — and with the vacuity guard checked first,
+total divergence was announced as "the decode stage asserted nothing", naming a
+corpus problem for a library problem. Both exits are non-zero so nothing was
+let through; the disagreement report now comes first.
+
+### Fixed — `AMA_CRYPTO_LIB_PATH` was still honoured under file capabilities
+
+The set-uid/set-gid guard added earlier in this release compared `getuid()`
+against `geteuid()`. A binary carrying file capabilities (`setcap`) executes
+with `uid == euid` and `gid == egid`, so that comparison answers "not
+privileged" — while the kernel sets `AT_SECURE=1` and the dynamic loader duly
+ignores `LD_PRELOAD`. The override was therefore still honoured in exactly the
+configuration the loader refuses to honour its own equivalents.
+
+`_auxv_at_secure()` now reads `AT_SECURE` from `/proc/self/auxv`, the same
+authority the loader consults, and the two signals are OR-ed: an unreadable or
+masked procfs must not read as "not secure", and erring towards refusal costs
+only an ignored override. Verified against glibc's own `LD_SHOW_AUXV=1` output.
+Pinned by `TestAtSecureIsConsulted`, including a non-vacuity case that drives
+the parser over the running kernel's real vector.
+
+### Fixed — `ci.yml`'s Bandit step was the last one reading an exit code, and it was red
+
+INVARIANT-2 requires a gate over tool output to read a structured format where
+the tool emits one. `security.yml` and `ci-build-test.yml` do, via
+`tools/check_bandit_severity.py`. The `security-checks` job in `ci.yml` still ran
+
+    bandit -r ama_cryptography/ -l -f json -o bandit-report.json
+    bandit -r ama_cryptography/ -l
+
+which was wrong three ways at once, and had gone red on all of them.
+
+`-l` is Bandit's LOW severity floor, so this job's effective policy was "block
+on any finding at all" rather than the documented and tested policy
+(severity >= MEDIUM **and** confidence >= MEDIUM). One tree, three workflows,
+two policies, only one of them written down. Bandit exits 1 whenever it reports
+anything, so under `bash -e` the *first* command aborted the step and the
+human-readable second line never ran — the failure printed no finding, no file
+and no rule, only `Process completed with exit code 1`. And `if: success()` on
+the artefact upload published the report only when nobody needed it.
+
+The trigger was two B105 findings on `_SECRET_FIELD_PLACEHOLDERS`, added
+earlier in this release: Bandit's heuristic fires on a secret-sounding key
+assigned a literal, and here the literals are the *absence* of the secret. Both
+carry a line-scoped `# nosec B105` with a tracking ID per INVARIANT-13, so the
+tree is now clean at every severity, not merely at the documented floor.
+
+### Security — an anchored build no longer accepts the unsigned digest-only fallback
+
+The trust anchor introduced earlier in this release was bypassable, which made
+it decorative on exactly the artefacts it exists to protect.
+
+The signed path refuses a signature made under the wrong key, so an attacker
+could not re-sign edited `.py` files with a key of their own. They never had
+to. Deleting `_integrity_signature.py` outright dropped control through to the
+digest-only fallback, where `_integrity_digest.txt` is plaintext with no
+signature at all — rewrite that one line and arbitrarily modified code was
+accepted, on a build carrying a compiled anchor, with the log reporting the
+wheel had been "built without `AMA_BUILD_PIPELINE=1`". Forging the signature
+was hard; removing it was not, and removal reached the same place.
+
+The guard meant to stop this tested `AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR`, a
+*build-time* variable set inside the cibuildwheel container and gone by the
+time anyone imports the installed wheel — never true at runtime for a released
+artefact, which is precisely where it was needed. The compiled anchor is the
+part of that intent that survives into the shipped `.so`, so the compiled
+anchor is now what is consulted: an anchored build is signed by construction,
+so a missing signature is tampering, not a legacy build. A trust-anchor lookup
+that fails also refuses the fallback, matching the signed path's existing
+fail-closed rule. Unanchored developer builds and source checkouts are
+unchanged and keep the documented WARN-and-continue behaviour, which
+`tests/test_trust_anchor_pinning.py` asserts as the non-vacuity control.
+
+### Security — the scalar GHASH mask is now opaque to the optimizer
+
+The table-free `ghash_mul()` earlier in this release removed a secret-indexed
+lookup and replaced it with a branch-free mask. That is constant-time in the C
+abstract machine only. clang 18 at `-O2` and `-O3` proves the mask is
+`0x00`-or-`0xFF`, recognises the 16-byte XOR as the identity in the `0x00`
+case, and emits `bt` / `jae` to branch over it — putting a branch back on a bit
+of the running accumulator, which is a function of the secret subkey `H` from
+the second block onward. gcc 13 does not. Both builds pass every functional
+test, because the results are identical; only the emitted control flow differs.
+
+`src/c/internal/ama_ct_barrier.h` adds `ama_ct_value_barrier_u64`, the
+BoringSSL/HACL*-style empty-asm value barrier, and `ghash_mul` launders its
+mask through it. clang then keeps the accumulation unconditional (and
+vectorises it); gcc is unaffected.
+
+Verified, not assumed: `tools/check_ghash_constant_time.py` compares retired
+instruction counts under callgrind across key classes with the scalar path
+forced. On the reference build the pre-barrier clang `-O3` object differs by
+3,226 instructions between key classes, the barriered object by 12, against a
+same-key noise floor of 25. A new unconditional `dudect.yml` job runs it on
+every trigger. The existing dudect AES-GCM lane could not have caught this: it
+calls the public entry point, and every x86-64 runner dispatches to the
+PCLMULQDQ kernel, so the scalar GHASH was never executed under measurement.
+
+### Performance — the constant-time AES S-box scan is ~14x faster, same access pattern
+
+`src/c/ama_aes_bitsliced.c` is the constant-time AES path that
+`AMA_AES_CONSTTIME=ON` (the default) selects. Despite the file name it is not
+bitsliced: it substitutes a byte by scanning all 256 S-box entries with a
+masked compare, which is genuinely constant-time — every entry is read on
+every call — and cost about 57,000 masked compares per block, because
+`SubBytes` re-walked the whole table once per state byte. The scalar
+AES-256-GCM path ran at ~1.07 MB/s as a result, with AES rather than GHASH as
+the dominant term.
+
+The loops are now nested the other way round: walk the 256 entries once per
+`SubBytes` and apply each to all sixteen state bytes. Identical work per
+(byte, entry) pair and an identical memory-access pattern — the whole table is
+still read every call, which is the property that makes the scan safe — but
+the table is read 256 times per round instead of 4096, and the inner loop
+becomes sixteen independent byte operations over contiguous arrays. That is
+the shape auto-vectorisers recognise: gcc and clang both emit one vector
+compare/and/or per table entry (SSE2 is baseline on x86-64, NEON on AArch64).
+
+The equality mask is built arithmetically rather than with `==`, for the same
+reason the GHASH mask goes through a value barrier: `==` invites the compiler
+to materialise a branch, and a branch here would be on a byte of the AES
+state.
+
+End-to-end scalar AES-256-GCM (4 KiB, one core, same host):
+
+| | throughput |
+|---|---|
+| 3.5.0 (leaky GHASH table, per-byte S-box scan) | 1.07 MB/s |
+| 4.0.0 with the GHASH fix alone | 1.11 MB/s |
+| **4.0.0 shipped (GHASH + state-wide S-box scan)** | **2.92 MB/s** |
+
+**2.7x faster than the release it supersedes**, on the path that previously
+had to choose between constant-time and usable.
+
+Constant-timeness verified, not assumed: zero data-dependent branches in the
+generated code on gcc and clang at `-O2`/`-O3` (the four conditional branches
+in `ama_aes256_encrypt_block_consttime` are the table-scan counter, the
+`round == 14` test, the round counter, and the stack-protector canary);
+`tools/check_ghash_constant_time.py`, which measures the whole scalar
+AES-GCM path, reports a 20-instruction cross-key delta against a
+4-instruction noise floor; the dudect AES-GCM lane passes at t = +0.30.
+
+Correctness: the S-box output was checked exhaustively against the algebraic
+definition (GF(2^8) inverse composed with the AES affine map) for all 256
+inputs, FIPS-197 §C.3 AES-256 matches byte for byte, the 232-case differential
+against an independently written AES-256 + GHASH still passes on the scalar
+path, and the full C and Python suites are unchanged.
+
+This is a fallback path: hosts with AES-NI dispatch to the hardware kernels
+and are unaffected. It is also still an order of magnitude slower than a true
+bitsliced AES would be — the scan is inherently ~256 operations per byte where
+a bitsliced circuit is ~30 — so the honest summary is that a large avoidable
+cost was removed, not that this path is now fast.
+
+### Security — secp256k1 ECDSA leaked the per-signature nonce through a Montgomery extra-reduction branch
+
+`sc_mont_mul` in `src/c/ama_secp256k1.c` finished its CIOS Montgomery
+multiplication with
+
+    if (t[SC_LIMBS]) { /* borrow-propagating subtract of n */ }
+
+a conditional branch whose predicate is a word of the Montgomery intermediate
+— that is, of secret data. It compiled to a real `test %r14,%r14; je` in the
+shipped RelWithDebInfo object, immediately above `sc_cond_sub_n`, which is the
+correctly masked version of the same operation. This one site had been written
+the other way.
+
+This is the textbook Montgomery extra-reduction side channel (Walter and
+Thompson, *Distinguishing Exponent Digits by Observing Modular Subtractions*,
+CT-RSA 2001), and it was measurable rather than theoretical:
+
+- ctgrind (memcheck with only the 32-byte private key marked undefined) flags
+  `sc_mont_mul` ← `sc_to_mont` ← `sc_inv` ← `ama_secp256k1_ecdsa_sign`.
+- Over eight signatures with a fixed message, callgrind returns deterministic
+  per-key instruction counts spanning **33,354 instructions** with a
+  **zero-instruction** noise floor. Attribution is exact: `secp256k1_fe_mul`,
+  `point_mul_generator`, `sc_cond_sub_n` and `sc_inv` are byte-identical
+  across keys; only `sc_mont_mul` moves.
+- Direct instrumentation gives 462 `sc_mont_mul` calls per signature with
+  taken-counts of 164/125/108/149/121/88 for six key classes, and the
+  arithmetic closes exactly: 56 extra taken branches × 73 instructions × 8
+  signatures = 32,704, matching the observed delta.
+- With the key fixed and the message varied, the taken-count still moves —
+  so the channel carries the **per-signature nonce `k`**, not only the
+  long-term key. For ECDSA that is the dangerous direction.
+
+The fold is now masked: the subtrahend is `SC_N[i] & fold` where `fold` is
+all-ones exactly when the high word is non-zero, computed without a
+comparison. When the high word is zero the subtrahend is zero, the borrow
+chain stays zero and `t` is unchanged — same result, no branch, same
+instruction count every call.
+
+After the fix, `sc_mont_mul` retires **2,590,896 instructions for every key
+tested**, byte-identical. The whole-process spread across eight keys falls to
+728 instructions in exactly four discrete levels, which is DER encoding of `r`
+and `s` each needing a leading `0x00` pad or not — public values the verifier
+already receives, and therefore not a leak.
+
+`tools/check_ghash_constant_time.py` gains an `--target ecdsa` lane covering
+this, wired into `dudect.yml`, with a 3,000-instruction threshold: 4× the
+benign DER spread and 11× below the defect. Verified to fail on the branchy
+build and pass on the fixed one.
+
+**No dudect lane could have caught this.** `dudect - Legacy Harnesses`
+measures ECDSA signing, but classifies it INFO because RFC 6979 candidate
+rejection is legitimately variable-time — so a real leak underneath it fails
+nothing. That is why the new lane counts instructions instead of sampling
+wall time.
+
+### Security — package serialization no longer emits the private signing key
+
+`CryptoPackageResult.to_dict()` and `__getstate__` are documented as stripping
+secret fields. `_SECRET_FIELDS` listed only `hmac_key` and
+`hkdf_master_secret`, so the default — the one described as safe — emitted
+`keypairs[...].secret_key`: for the default hybrid signer, ~4 KB of Ed25519 +
+ML-DSA-65 private key. Anything that wrote a package to a log, a cache, a queue
+or a pickle file wrote the signing key with it. `KeyPair` already marked the
+field `repr=False` for this reason; the paths that actually leave the process
+did not follow.
+
+`derived_keys` (the Layer-4 output keys, not just the master secret they come
+from) and `kem_shared_secret` are now stripped as well, and `keypairs` is
+redacted to public keys only. `include_secrets=True` is unchanged and returns
+everything. Pickled packages were already unusable for verification —
+`hmac_key` has always been stripped and Layer 2 cannot be checked without it —
+so no working flow depended on the leak.
+
+### Security — `SecureSession` no longer prints its session keys
+
+`send_key` and `recv_key` were ordinary dataclass fields, so the generated
+`__repr__` rendered both AES-256 keys in full. That reaches much further than a
+deliberate print: a logger called with the session as an argument, a traceback
+showing local variables, `%r` in a debug message, a debugger watch window. Both
+now carry `repr=False`; the fields themselves are unchanged.
+
+### BREAKING — the KDF policy floor now refuses an algorithm downgrade, not only a cost downgrade
+
+The floor added earlier in this release clamps costs *within* an algorithm,
+which left the cheapest move on the board: name a different one.
+`.kdf_metadata.json` carries a `version` field that the Argon2id branch keys
+off, so deleting that one field re-routed derivation to PBKDF2 — and PBKDF2 at
+the 600,000-iteration floor clears its own cost check. The result passed every
+per-parameter test while discarding memory-hardness entirely, which is the
+property Argon2id is chosen for. The control documented as "what actually stops
+the downgrade" did not stop the most valuable downgrade available.
+
+`_enforce_kdf_policy` now also floors the algorithm: on a build with native
+Argon2id, metadata naming PBKDF2 is refused. Builds without native Argon2id are
+unaffected, because PBKDF2 is what `_derive_key_from_password` legitimately
+falls back to there. *Migration:* identical to the cost floor —
+`allow_legacy_kdf=True` warns instead of raising, then `migrate_kdf()`.
+
+### Security — Ed25519 batch verification enforces canonical `y` (INVARIANT-38)
+
+`ama_ed25519_verify` gained the canonical-`y` check, but donna's batch routine
+reaches its point decode through its own internal `ed25519_sign_open`, so
+nothing added there reached `ama_ed25519_batch_verify` — the same structural
+reason the canonical-`S` check in that function already documents. The fe51
+batch path is a loop over `ama_ed25519_verify` and was therefore already
+correct, so the two backends disagreed. Applied per entry alongside the
+canonical-`S` loop.
+
+Only the 19 encodings with `y` in `[p, 2^255)` are affected, and a legitimate
+key collides with one only if its `y` is below 19, so this is an
+encoding-uniqueness guarantee rather than a reachable forgery — the same
+standing INVARIANT-38 has on the single-signature path. The point is that both
+APIs enforce it.
+
+### Security — ChaCha20-Poly1305 enforces the RFC 8439 §2.8 length limit
+
+`ama_chacha20poly1305_encrypt` / `_decrypt` accepted any length. Past
+`(2^32 - 1) * 64` bytes the 32-bit block counter wraps to 0 and the plaintext
+at that offset is XORed with the very block whose first 32 bytes are the
+Poly1305 one-time key `r || s` for that `(key, nonce)` — an authentication-key
+disclosure, not merely a keystream repeat. `ama_aes_gcm.c` already carried the
+equivalent SP 800-38D guard; leaving one AEAD in the tree without the other was
+the inconsistency.
+
+### Fixed — `migrate_kdf` silently orphaned zero-length values
+
+The collection loop used `if key_data:`, so a zero-length stored value — a
+tombstone, a placeholder provisioned before its material arrives, an empty
+result from an upstream serializer — was skipped. The salt and metadata rotated
+around it, leaving that record encrypted under a key the password no longer
+derives: unreadable forever, while `list_keys()` kept reporting it, and nothing
+raised. Now `if key_data is not None:`.
+
+### Fixed — the ACVP runner reported PASS for algorithms that ran no vectors
+
+`nist_vectors/run_vectors.py` decided per-algorithm status on
+`fail_count == 0`, so an algorithm that executed zero vectors printed `[PASS]`,
+and the exit code was `1 if total_fail > 0 else 0`, so a run that validated
+nothing exited 0. An exception inside a harness was printed and stepped over
+without affecting the verdict either. The workflow's separate
+`EXPECTED_VECTORS` cross-check meant the deployed gate was not blind, but the
+script's own verdict was, and it is what a contributor runs by hand.
+
+Zero-vector algorithms now report `EMPTY`, harness exceptions are recorded, and
+the run fails on any of: vector failures, an errored harness, an algorithm with
+no vectors, fewer results than the inventory, or zero vectors overall. The
+verdict logic is extracted to `_verdict_problems` rather than suppressing
+ruff's `max-complexity` on `main` (INVARIANT-13).
+
+### Fixed — `AMA_DISPATCH_ONLY` misreported cross-architecture slots
+
+On an x86-64 build the `aes-gcm-neon`, `chacha20-neon`, `sha3-neon`,
+`kyber-sve2` and `sha3-sve2` branches are compiled out, so those names fell
+through to `AMA_DISPATCH_ONLY_UNRECOGNISED` — telling the operator the name was
+wrong in a sentence that then listed it under "Known slots", and contradicting
+the enum's own definition (`UNSUPPORTED` is documented as covering "the build
+did not compile the kernel"). The slot inventory is now a single
+architecture-independent table used both by the membership test and by the
+diagnostic, so the two cannot drift. CTest skip behaviour is unchanged.
+
+### Fixed — an unset trust anchor no longer inherits a cached one
+
+`setup.py` appended `-DAMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX` only when the
+environment variable was non-empty, and `CMakeLists.txt` declares it as a
+`CACHE STRING`. Building once with an anchor, unsetting the variable, and
+rebuilding in the same tree produced an "unanchored" artefact that still
+carried the old anchor. The flag is now passed unconditionally, so an absent
+anchor explicitly clears the cache entry.
+
+### Fixed — documentation that did not match the code
+
+- **FROST nonce hedging scope.** `nonce_generate`'s rationale said the hedge
+  holds against an adversary who can "predict or replay" the CSPRNG, and the
+  regression test named "a restored VM snapshot replaying the same bytes" as
+  the scenario it covered. The derivation is a pure function of
+  `(label, random, share)` with no state, so a participant handed the same
+  bytes twice emits the identical nonce — and two partial signatures over
+  different messages under one Schnorr nonce disclose the share by
+  subtraction. The hedge defends against a *predictable* CSPRNG, not a
+  *repeating* one; RFC 9591's own `nonce_generate` has the same property. Both
+  comments now say so, and `tests/c/test_frost.c` asserts the repeat as a
+  pinned known limit rather than leaving it to be discovered.
+- **INVARIANT-35** named `slhdsa_params_for()` in its enforcement clause. The
+  function is `slh_lookup()`; it does end in `default: return NULL`, so the
+  invariant held — but an auditor grepping for the cited name found nothing.
+- **`release.yml`** claimed the cibuildwheel pin was the v3.2.0 commit; the SHA
+  is the v4.1.1 tag (the trailing marker was already correct, which is why
+  `check_action_pins.py` never flagged the prose). It also claimed
+  `CIBW_ENVIRONMENT_PASS_LINUX` keeps the signing seed "out of the printed
+  configuration entirely" — checked against the resolver in the pinned 4.1.1,
+  it does not; the passed-through variables are merged back into the resolved
+  build options, and GitHub's secret masking is what redacts the log. The
+  narrower real benefit (one fewer place the literal seed is written) is now
+  what the comment claims.
+- **`benchmarks/arm-baseline.json`.** The 4.0.0 window-extension entry quoted
+  the x86-64 floors (13000/33000/31000) and an x86-64 sandbox run as though
+  they bore on this file, whose AArch64 floors are 11855/30266/28626 — the same
+  x86-64 copy-paste into the AArch64 baseline that the entry immediately above
+  it exists to correct.
+
+### Fixed — two documented counts had drifted, and nothing checked either
+
+Both were second declarations of a fact that lives elsewhere in the tree, and
+both drifted because — like the aggregate test counts this release already
+brought under `check_documented_counts.py` — no gate compared them to their
+source. So the numbers are corrected *and* checked, rather than corrected and
+left to drift again.
+
+- **The fuzz-target count was stated four different ways.** The repository
+  builds **15** libFuzzer harnesses from **16** `fuzz_*.c` sources
+  (`fuzz_rng.c` supplies `__wrap_ama_randombytes` to `fuzz_frost` and is not a
+  harness). The prose said 16 (`README.md` ×3, `ARCHITECTURE.md`), 13
+  (`ARCHITECTURE.md`), 12 (`ENHANCED_FEATURES.md` ×2, `CRYPTO_REVIEW_CHECKLIST.md`,
+  `docs/oss-fuzz-onboarding.md`) and 11 (`THREAT_MODEL.md`). Two of those also
+  enumerated the harnesses and got the membership wrong in opposite directions:
+  `README.md` listed `RNG` (the helper) as a target, and `ENHANCED_FEATURES.md`
+  omitted `agent-binding`, `Ascon` and `FROST`. All corrected to 15 and the
+  membership reconciled against `fuzz/CMakeLists.txt`.
+- **The 4.0.0 breaking-change count said "three".** `SECURITY.md`'s
+  supported-versions table and its `wiki/Security-Model.md` mirror both said
+  "three breaking changes — see CHANGELOG `[4.0.0]`", pointing at a table that
+  lists **six**. Corrected to six.
+- **`check_documented_counts.py` now gates both.** The fuzz count is checked
+  against the harness set `check_fuzz_target_registration.py` already derives
+  from `fuzz/CMakeLists.txt` — imported, never re-derived, so the two cannot
+  disagree — and the breaking-change count is checked against the Breaking rows
+  of the exact CHANGELOG section the claim cites. Revision-history rows are
+  excluded from both, as they are for the aggregate-count check. Negative
+  controls for each are in `tests/test_documented_counts_gate.py`.
+
+### Fixed — `complete_demo.py`'s benchmark probed a module the build does not compile
+
+The performance section imported `ama_cryptography.helix_engine_complete`, a
+complete-engine reference source `setup.py` does not build, and on the
+resulting `ImportError` advised "run: make python" — which builds `math_engine`
+and the FFI bindings, never that file, so the hint could not take effect. It
+now benchmarks the pure-Python `AmaEquationEngine.step` (the section's subject)
+and reports the acceleration that actually ships, `math_engine`; where that
+extension and numpy are both present it quotes a Cython-vs-pure-Python figure
+on `matrix_vector_multiply`, checked against numpy's own product before the
+number is printed so it cannot drift from the computation it describes.
+`README.md` and `ARCHITECTURE.md` no longer imply `helix_engine_complete` is a
+compiled module (`ARCHITECTURE.md`'s "Both compiled `.so` modules" named it as
+one).
+
+### Fixed — two security documents described implementations that do not ship
+
+Found by re-reading `CONSTANT_TIME_VERIFICATION.md` against the built library
+rather than against the source tree. Both were wrong in the same direction:
+they analysed code that is not the code that runs, so an auditor following
+them would have audited the wrong thing and concluded the posture was fine
+for the wrong reason.
+
+- **The Python constant-time comparison.** The document asserted three times
+  that it rests on `hmac.compare_digest()`, printed an `hmac_verify()` body
+  calling it, and located that function in `crypto_api.py`. None of it was
+  ever true: `git log -S compare_digest -- '*.py'` is empty across the entire
+  history, `crypto_api` has no `hmac_verify`, and a live tripwire records zero
+  `hmac.compare_digest` calls during real verification against two calls into
+  `ama_consttime_memcmp`. What ships is
+  `secure_memory.constant_time_compare()` — ctypes into AMA's own C primitive
+  (INVARIANT-1), with a padded pure-Python XOR accumulator as the fallback.
+  Equivalent in effect, so nothing was weaker than advertised; but the
+  document sent readers to a function that does not exist. Corrected, with
+  3,000 randomised comparisons across the native and forced-fallback paths
+  confirming both agree with `==` and with each other.
+
+- **Which Ed25519 backend is being analysed.** `AMA_ED25519_ASSEMBLY` defaults
+  **ON for x86-64**, which removes `src/c/ama_ed25519.c` from the build and
+  substitutes the vendored ed25519-donna shim. The document's Ed25519 section
+  is titled `src/c/ama_ed25519.c` and describes `comb_signed`, `fe25519_sq`
+  and a C11 `_Atomic` base-point guard — none of which exist in an x86-64
+  build (`nm` finds zero `comb_signed` and zero `fe25519_sq`; donna's base
+  point table is `.rodata`, so there is no runtime initialisation to guard).
+  The word "donna" did not appear anywhere in the document. The section is now
+  scoped as the AArch64/portable analysis, with the x86-64 substitution stated
+  up front and `tools/check_ed25519_backend_parity.py` named as what actually
+  ties the two backends' accept/reject sets together.
+
+Also: `src/c/dispatch/ama_dispatch.c` credited "the VAES/AVX2 equivalence
+tests" with using `ama_test_force_aes_gcm_scalar()`;
+`test_aes_gcm_vaes_equiv.c` does not reference that hook and the scalar GHASH
+symbols are not even linked into its binary. The hook's real users are
+`test_aes_gcm_neon_equiv.c` and `test_aes_gcm_scalar_kat.c`.
+`test_aes_gcm_scalar_kat.c` also still described the GHASH it exercises as
+"4-bit-window" after the table was removed.
+
+`docs/METRICS_REPORT.md`'s header claimed a 2026-08-01 measurement date for
+"static LoC / test-function counts" when only the test counts were
+re-measured — its own 4.0.0 change-log row said so, and the header
+contradicted it. The header now separates the two, and records that the
+whole-project LoC total does not reproduce from a fresh clone by design.
+
+### Deferred — the Argon2id legacy shim is not removed in 4.0.0
+
+The 3.0.0 release-summary row records the `legacy_compat` Argon2id migration
+shim as "slated for removal in 4.0.0". It is retained. `ama_argon2id_legacy`,
+`ama_argon2id_legacy_verify` and `native_argon2id_legacy` are a read-only path
+for verifying tags produced by AMA ≤ 2.1.5; removing them would strand anyone
+still holding those tags with no in-library migration route, and SECURITY.md's
+supported-versions table still points 2.1.x users at exactly this shim. They
+remain deprecated, emit `SecurityWarning` on every call, and are never used for
+new hashes. Recorded here rather than left to lapse silently; the removal
+target moves to 5.0.0, by which point the shim will have been available for
+three major versions.
+
+### Testing and gates
+
+- `tools/check_ghash_constant_time.py` — new. Retired-instruction invariance
+  for the scalar AES-GCM path under callgrind. Wired into `dudect.yml` as an
+  unconditional job and into the Constant-Time Gate's aggregation.
+- `tools/check_ed25519_backend_parity.py` — extended with a compressed-point
+  decode stage. The signature corpus could not test the canonical-`y` rule at
+  all: its `pk bitflip` mutations essentially never land in `[p, 2^255)`, and a
+  non-canonical key is not the signer's key, so verify rejects it on the
+  signature and both backends agree without either applying the rule. The new
+  stage pairs `y = 0` (must decode — the curve equation gives `x² = -1`, and
+  `-1` is a square mod `p`) with `y = p`, the same point non-canonically
+  encoded (must be refused). Confirmed to have teeth: stripping the check from
+  one backend makes the gate fail; 1,836 cases now, up from 1,824.
+- `tests/c/test_ed25519_canonical_s.c` — the two canonical-`y` integration
+  assertions were vacuous. `y = p` is not the signer's key, so verify rejected
+  it on the signature and both assertions passed with the check fully removed.
+  Replaced with the `y = 0` / `y = p` decode pair, whose accept half is what
+  makes the reject half evidence; verified to fail with the check stripped and
+  to pass with it.
+- `.github/workflows/integrity-anchor-check.yml` — gains `workflow_call` and a
+  `paths`-scoped `pull_request` trigger. `release.yml` now invokes it as a
+  `verify-anchor` job gating `build-wheels`, so a mismatched seed/anchor pair
+  costs one ubuntu build instead of surfacing 40 minutes into the cibuildwheel
+  matrix. The PR trigger closes the bootstrap gap that made the workflow
+  undispatchable until after the merge it was meant to gate; fork PRs are
+  skipped, since repository secrets are not exposed to them.
+- New regression tests for every fix above, each written so that the assertion
+  fails on the unfixed code and each paired with a non-vacuity control.
+
+### BREAKING — `verify_crypto_package` no longer reports `all_valid` without a trust anchor
+
+Every key `verify_crypto_package` needs to check a package travels inside that
+package: the signing public key in `package.keypairs`, the HMAC key in
+`package.hmac_key`, the Layer-4 master secret in
+`package.hkdf_master_secret`. Verifying a package against its own material
+establishes internal consistency and nothing more — an adversary can generate a
+keypair, call `create_crypto_package` over content of their choosing, and
+obtain a package whose every layer verifies.
+
+Through 3.x that produced `all_valid: True`, and the anchored mode had to be
+opted into with `expected_public_key`. The safe behaviour was therefore the one
+nobody selected by default. `key_pinned` is now part of the `all_valid`
+aggregate, so an unanchored call returns `all_valid: False`.
+
+**Migration.** Callers who wanted the old meaning — "these parts agree with
+each other" — read `core_valid`, which still covers Layers 1–4 and is
+unchanged. Callers who want an origin claim pass `expected_public_key`. There
+is no opt-out flag: one would reintroduce the same silent default under a new
+name.
+
+### BREAKING — key stores refuse KDF parameters below the policy floor
+
+`.kdf_metadata.json` names the algorithm and cost used to turn the master
+password into the storage key, and it is a plain unauthenticated file sitting
+next to the key material. Anyone who could write it could name a cheaper
+derivation — PBKDF2 at 100k iterations, or Argon2id with `m_cost` reduced to a
+few KiB — and `SecureKeyStorage` honoured it.
+
+That does not expose keys already stored: those were encrypted under a key
+derived with the *old* parameters, so a swapped file simply fails to decrypt
+them. It governs every key written *afterwards*, and on a store that is
+initialised but not yet populated the downgrade is completely silent.
+
+`SecureKeyStorage.__init__` and `from_existing` now clamp the stored
+parameters from below (`MIN_PBKDF2_ITERATIONS`, `MIN_ARGON2_T_COST`,
+`MIN_ARGON2_M_COST`, `MIN_ARGON2_PARALLELISM`) and raise the new
+`KDFPolicyError` rather than deriving a weak key.
+
+Storage format v3 additionally binds the KDF parameters into the AEAD
+associated data and records them in each key file. The parameters already
+influence the derived key, so this adds provenance rather than confidentiality:
+the recorded cost cannot be edited without invalidating the tag, and a mismatch
+is reported as a named `KDFPolicyError` instead of an unexplained
+authentication failure. Format v2 records are still read.
+
+**Migration.** A genuine legacy store opens with
+`SecureKeyStorage(path, password, allow_legacy_kdf=True)`, which warns instead
+of raising; call `migrate_kdf(password)` to re-encrypt at current strength,
+then reopen without the flag.
+
+### BREAKING — Ed25519 rejects non-canonical `y` in compressed points (INVARIANT-38)
+
+RFC 8032 §5.1.3 requires a compressed point whose `y` is not in `[0, p)` to be
+**rejected**, not reduced. INVARIANT-27 already recorded that rule — it is the
+stated reason X25519's canonicalisation sits on the 32-byte encoding rather
+than inside the `fe51_frombytes` / `fe64_frombytes` helpers the two curves
+share, "because those helpers are shared with Ed25519, whose point decoding has
+the opposite rule". The statement was true of the specification and true of the
+document; it was not true of the code.
+
+Both backends reduced. Each of the 19 encodings with `y` in `[p, 2^255)`
+therefore decoded to the same curve point as its reduced form, and a public key
+had two accepted byte representations — which breaks the assumption that a
+key's bytes are its identity, wherever a key is fingerprinted, used as a map
+key, or compared bytewise for authorisation.
+
+This is not a forgery route on its own: `S < L` is enforced and a malleated `R`
+already fails the re-encode comparison, so both signature-malleability paths
+were closed. It is the same input-canonicalization class as INVARIANT-26,
+INVARIANT-28 and INVARIANT-29, resolved the same way, and the deliberate policy
+counterpart of INVARIANT-27 — X25519 reduces so two peers agree on one shared
+secret; Ed25519 rejects so a signature cannot verify under a second encoding of
+its key.
+
+Enforced identically on both backends via `ama_ed25519_point_y_is_canonical` in
+`src/c/internal/ama_ed25519_canonical.h`, so the backend-differential job still
+holds. Strictly narrowing: every encoding a conformant signer produces is
+unaffected.
+
+### Security — `SecureSession.encrypt` never consulted the rekey state (INVARIANT-22)
+
+INVARIANT-22 requires that "exceeding the configured per-key nonce safety limit
+must force re-keying or hard failure; it must not wrap, reset, or continue with
+a warning". `SecureSession` auto-generates a nonce per message and so falls
+inside that invariant's scope, and it did none of those three things — it
+simply continued.
+
+`needs_rekey()` existed but was a query no caller was obliged to make, so a
+session that never rekeyed kept drawing fresh random 96-bit nonces under one
+key for as long as it lived. Nonce reuse there is a birthday problem: after n
+encryptions the collision probability is about `n^2 / 2^97`, which at the 2^32
+invocations SP 800-38D allows for random nonces is roughly 2^-33.
+
+Auto-rekeying on send was not available as a fix — the AAD binds `rekey_epoch`,
+so a unilateral rekey desynchronises the peers, and the counters are not
+symmetric because `messages_since_rekey` advances on receive too.
+`MAX_ENCRYPTIONS_PER_EPOCH` (2^20) now caps encryptions under one
+`(key, epoch)` pair, checked before the nonce is drawn, and `encrypt` raises
+the new `RekeyRequiredError` on reaching it. That puts the collision
+probability at about 2^-57 while leaving three orders of magnitude of headroom
+above `REKEY_INTERVAL`. Crossing the soft threshold now logs one advisory per
+epoch. The bound binds the sender only: `decrypt` generates no nonces.
+
+### Security — the integrity trust anchor never reached the compiled library, so it could not work
+
+`SECURITY.md` documented `AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX` as the way to
+make a release tamper-evident, `CMakeLists.txt` defined and validated the
+option, and `src/c/ama_core.c` exposed it through
+`ama_integrity_trust_anchor_pubkey_hex()` — but `setup.py`'s `cmake_args` never
+passed it, so no wheel ever had an anchor compiled in.
+
+That gap silently voided the mechanism. At runtime
+`_self_test._load_integrity_trust_anchor()` reads the anchor **only** from the
+native library; an anchor supplied through the environment is consulted at
+build time by `_build_sign` and then forgotten. A release could therefore set
+the anchor and still ship a wheel whose import-time check accepted any public
+key written into `_integrity_signature.py` — the self-signed bypass the check
+exists to prevent.
+
+`setup.py` now forwards the environment value into the CMake configure step.
+Verified end to end: with the anchor compiled in, signing with the matching
+seed reports "signed integrity verified (Ed25519, **trusted build pubkey**)",
+while tampering a `.py` file and re-signing with an attacker-chosen key is
+refused by the signer and fails verification. Without the environment variable
+the build is unchanged, so unanchored developer builds keep working.
+
+### Added — release wiring and an on-demand check for the integrity signing key
+
+`release.yml` now passes the `AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX` variable
+and `AMA_INTEGRITY_SIGNING_SEED_HEX` secret into the wheel build, and sets
+`AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR=1` **only when the anchor variable is
+non-empty**. Repositories and forks that have not installed a key expand both
+to empty and build exactly as before, with a per-build ephemeral key — a
+missing secret must not break a release.
+
+New `integrity-anchor-check` workflow (`workflow_dispatch`) confirms that the
+installed secret and variable are a matching Ed25519 pair. A mismatch is
+otherwise invisible until a tagged release fails deep inside the wheel build.
+The seed is passed only through the environment, never printed, and never
+placed on a command line; the job's output is the derived public key (public by
+definition) and a MATCH/MISMATCH verdict. Wrong-length input is diagnosed
+explicitly, including the common mistake of pasting the 64-byte secret key
+instead of its 32-byte seed. Derivation runs through AMA's own Ed25519 kernel,
+so a MATCH means the release signer will accept the pair.
+
+### Security — FROST reported success when the CSPRNG failed, collapsing the threshold key
+
+`scalar_random()` in `src/c/ama_frost.c` discarded the return value of
+`ama_randombytes()`. That function is not all-or-nothing: on failure it
+returns `AMA_ERROR_CRYPTO` and leaves the buffer uninitialised or partially
+written. The routine then reduced whatever was in the buffer and, via a
+constant-time "zero-to-one" remap, turned an all-zero draw into the *known*
+scalar 1. Every sibling keygen in the tree — `ama_nistp.c:1626`,
+`ama_nistp.c:1989`, `ama_x25519.c:777`, `ama_core.c:249` — checks that status
+and aborts, so this was a defect rather than a considered exception.
+
+With entropy unavailable (`getrandom` denied by seccomp, absent on pre-3.17
+kernels, or `/dev/urandom` missing in a minimal container) the trusted-dealer
+keygen therefore returned `AMA_SUCCESS` with a group secret of 1 — the group
+public key equals the Ed25519 basepoint and every participant share is a
+public value — and `ama_frost_round1_commit` produced two *identical* signing
+nonces. For a Schnorr-type scheme that discloses the secret share from the
+resulting partial signatures. Reproduced end to end through the public Python
+binding under a CSPRNG that fails the way the syscall actually fails.
+
+Both entry points now propagate the failure, the zero scalar is rejected
+instead of remapped, and a failed `scalar_random()` inside keygen scrubs the
+coefficients derived so far before returning.
+
+### Security — FROST signing nonces are now hedged with the secret share
+
+`ama_frost_round1_commit` took raw CSPRNG output as both nonces and
+explicitly discarded the participant's share (`(void)participant_share;`),
+leaving nonce secrecy wholly dependent on the RNG with no second line of
+defence — the single point of total failure that RFC 9591 `nonce_generate`
+and RFC 6979 §3.6 exist to remove. Each nonce is now derived as
+`SHA-512(label || random(32) || share_secret) mod l` with distinct
+domain-separation labels for the hiding and binding nonces, so an adversary
+who predicts or replays the CSPRNG still cannot predict a nonce without the
+share, and the two nonces of a round cannot collide with each other.
+
+The fresh CSPRNG draw remains mandatory and fail-closed; the hedge is
+defence-in-depth, not a licence to sign without entropy. This is deliberately
+*not* described as byte-exact RFC 9591 H3: this implementation's binding
+factor and challenge hashes do not prefix the RFC 9591
+`FROST-ED25519-SHA512-v1` context string, so claiming ciphersuite conformance
+for one input would be inaccurate.
+
+`tests/c/test_frost.c` gains a CSPRNG-failure hook
+(`ama_frost_randombytes_hook`, `AMA_TESTING_MODE` only, following the existing
+`ama_dilithium_randombytes_hook` pattern) and pins both properties: keygen and
+round 1 fail closed under a failing entropy source, and under a *constant*
+entropy source the two nonces still differ from each other and across
+participants.
+
+### Security — the scalar GHASH leaked the authentication subkey through its lookup table
+
+`src/c/ama_aes_gcm.c` multiplied in GF(2^128) with a 16-entry table
+`H_table[i] = q(i)·H` indexed by nibbles of the running accumulator, and
+asserted in its own comments that "All operations are constant-time in H" and
+that "H_table indices come from AAD/ciphertext bytes, which are non-secret".
+That assertion holds only for the first block. GHASH is
+`S_i = (S_{i-1} XOR X_i) · H`, so from the second block onward the value whose
+nibbles index the table is a function of the secret subkey `H = E_K(0^128)`.
+The table spans 256 bytes — four cache lines — so the access pattern leaked
+`H` to a co-resident Flush+Reload or Prime+Probe adversary, the same threat
+model this file already documents for the AES S-box. Recovering `H` yields
+universal forgery under a given nonce, so this was authentication-key
+recovery rather than a marginal side channel.
+
+The multiply is now the branch-free, table-free bitwise form of NIST SP
+800-38D Algorithm 1: 128 iterations that convert each accumulator bit into an
+all-ones/all-zeros mask and XOR a masked multiple of `H`, with the only
+reduction step being the already-branch-free `ghash_mul_x`. No lookup table
+exists and every array index is a loop counter.
+
+The replacement is **faster than the leaky table**, not slower. The first
+revision of this fix was a 128-iteration loop over a 16-byte array, which cost
+about 3.2x the throughput of the table (9.5 MB/s against 30.4 MB/s, GHASH
+isolated on the scalar path) and was documented here as a deliberate slowdown
+worth accepting for constant-timeness. It was not worth accepting, because it
+was not necessary: GCM's bit-string order maps exactly onto two big-endian
+64-bit words, so the same masked accumulate takes 2 word-XORs instead of 16
+byte-XORs and the shift-with-reduction becomes a `shrd`/`shr` pair. Same
+algorithm, same output, same masks, no table, roughly an eighth of the
+operations.
+
+Measured on one core of the same host, GHASH isolated on the scalar path
+(AAD-only, so the bitsliced AES that dominates full AES-GCM is excluded):
+
+| GHASH implementation | throughput |
+|---|---|
+| 4-bit windowed table (leaky) | 30.4 MB/s |
+| bitwise byte loop (first revision of this fix) | 9.5 MB/s |
+| **word-level masked loop (shipped)** | **71.7 MB/s** |
+
+End to end on the scalar AES-256-GCM path the difference is small in relative
+terms — 1.10 MB/s against the table's 1.08 — because the bitsliced AES S-box
+dominates that path. It is still the right direction, and it means this
+release ships no AES-GCM performance regression at all.
+
+Hosts with carry-less multiply (x86 PCLMULQDQ via the AVX2/VAES kernels, ARM
+PMULL via the NEON kernel) dispatch away from this code entirely and are
+unaffected either way. Bit-exactness is covered by
+`tests/c/test_aes_gcm_scalar_kat.c`, which forces the dispatch slots to NULL
+via `ama_test_force_aes_gcm_scalar()` and then runs NIST SP 800-38D Appendix B
+TC13/TC14 plus a boundary-length sweep against the dispatch-installed kernel.
+
+Naming the right test matters here, because the two this entry first cited
+cover something else: on any AES-NI host the public entry point dispatches
+away from the scalar path, so the plain NIST vectors never execute it, and
+`test_aes_gcm_vaes_equiv` compares the VAES kernel against the AVX2 AES-NI
+reference — SIMD against SIMD, with the scalar code untouched. The scalar KAT
+was the one test that actually exercised this rewrite, and it says so in its
+own header.
+
+### Security — `verify_crypto_package` had no trust anchor, so it could not detect a forgery
+
+Every key the function needed travelled inside the package it was checking:
+the signing public key in `package.keypairs`, the HMAC key in
+`package.hmac_key`, the Layer-4 master secret in `package.hkdf_master_secret`.
+Verifying a package against its own material proves internal consistency, not
+origin — an adversary could generate a keypair, call `create_crypto_package`
+over content of their choosing, and obtain a package whose every layer
+verified and whose `all_valid` was `True`, while the docstring advertised that
+Layer 2 "prevents forgery" and Layer 3 provides "non-repudiation".
+
+`verify_crypto_package` now takes an optional `expected_public_key`: an
+out-of-band signing key, compared in constant time against the package's
+embedded key, with the signature left unevaluated and `primary_signature` set
+`False` on mismatch (which forces `all_valid` `False`). A new `key_pinned`
+result key reports which mode ran, satisfying INVARIANT-37's requirement that
+such a boundary be published as data rather than prose, and the docstring now
+states plainly that `all_valid` answers "is this package self-consistent?"
+rather than "did the expected signer produce it?".
+
+`key_pinned` is reported but excluded from the `core_valid` / `all_valid`
+aggregates: folding it in would report "verification failed" for every
+existing caller that never asked for an authenticity check. Callers that pass
+no anchor keep their previous results exactly, so the change is backwards
+compatible.
+
+### Security — the Noise-NK initiator accepted any responder signature key
+
+`SecureChannelInitiator.complete_handshake` verified the responder's hybrid
+signature against `response.responder_public_key` — a key supplied by the peer
+in the same message — with nothing pinning it to a trust anchor. Any active
+party could mint a signature keypair, sign the transcript, and pass the check
+that the docstring described as "proving the Responder holds the static key".
+
+The constructor now accepts an optional `expected_responder_sig_pk`, compared
+in constant time before the signature is evaluated; a mismatch raises
+`HandshakeError`. The class docstring now records where the channel's
+authentication actually comes from: encapsulation to the *known* static KEM
+public key, which an attacker without the matching KEM private key cannot
+decapsulate — the signature adds authentication only once pinned. Session
+confidentiality was never affected.
+
+### Security — `AMA_CRYPTO_LIB_PATH` could steer the crypto backend of a set-uid process
+
+The variable selects the shared object providing every cryptographic
+primitive, is loaded with `ctypes.CDLL` before the power-on self-test can run
+(a shared object executes its constructors the moment it is mapped), and is
+not covered by the module-integrity digest, which hashes `.py` files only. The
+dynamic loader refuses to honour `LD_PRELOAD` / `LD_LIBRARY_PATH` in
+secure-execution mode for exactly this reason; honouring an override of our
+own there re-opened the hole the platform had closed.
+
+The override is now ignored, with a warning, when the process is running
+set-uid or set-gid (`os.getuid() != os.geteuid()` or the gid equivalent —
+glibc's `AT_SECURE` determination). Outside secure-execution mode it still
+works, since that is how developers point at an out-of-tree build, but it now
+logs at WARNING that the backend was overridden and that the override is not
+tamper-evident.
+
+### Fixed — `ama_secure_alloc` promised locked memory it cannot guarantee
+
+The doxygen contract read "@return Pointer to locked, zeroed memory", while
+the implementation discards the result of `ama_secure_mlock()` because
+`RLIMIT_MEMLOCK` defaults to as little as 64 KiB on common distributions and
+the failure is deliberately non-fatal. Callers reading the contract could
+conclude that key material provably never reaches swap or a core dump. The
+behaviour is unchanged — refusing to allocate would be worse — but the
+contract now states that locking is best-effort, points at
+`ama_secure_mlock()` (and the Python `SecureBuffer.locked`) for callers that
+need to fail closed, and records that `malloc`-backed buffers are not
+page-aligned, so the kernel locks and unlocks whole pages that may be shared
+with neighbouring allocations.
 
 ## [3.5.0] - 2026-07-30
 

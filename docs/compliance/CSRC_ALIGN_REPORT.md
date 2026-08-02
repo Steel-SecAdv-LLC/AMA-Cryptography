@@ -1,6 +1,6 @@
 # CSRC Alignment Report — NIST ACVP Vector Validation
 
-**Version:** 3.5.0
+**Version:** 4.0.0
 **Original audit:** 2026-05-16
 **Re-validated:** 2026-07-30 (see the Re-validation Addendum at the end of this document)
 **Organization:** Steel Security Advisors LLC

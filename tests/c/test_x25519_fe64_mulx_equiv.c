@@ -35,23 +35,12 @@
 
 #include "../../include/ama_cpuid.h"
 
-/* The MULX+ADX kernel exposes two hidden-visibility entry points. We
- * declare them locally here — the test executable links the kernel TU
- * via the `ama_cryptography_test` static library. */
-extern void ama_x25519_fe64_mul_mulx(uint64_t h[4], const uint64_t f[4],
-                                     const uint64_t g[4]);
-extern void ama_x25519_fe64_sq_mulx(uint64_t h[4], const uint64_t f[4]);
-
-/* Two-stage composition of the kernel's building blocks, exported only
- * under AMA_TESTING_MODE (the test library is built with it).  Used as a
- * second oracle: the production entry points fuse the multiply/square
- * and reduction into one asm block, and these keep the two stages
- * separate, so a divergence introduced while editing either asm block
- * shows up as fused-vs-two-stage disagreement even if both somehow
- * agreed with a mis-tabulated pure-C expectation. */
-extern void ama_x25519_fe64_mul_mulx_twostage(uint64_t h[4], const uint64_t f[4],
-                                              const uint64_t g[4]);
-extern void ama_x25519_fe64_sq_mulx_twostage(uint64_t h[4], const uint64_t f[4]);
+/* The kernel's entry points, and the AMA_TESTING_MODE-only two-stage
+ * compositions used as a second oracle, come from the one header the
+ * definitions are compiled against — see src/c/internal/ama_x25519_fe64_mulx.h
+ * for why this is not re-declared locally. The test executable links the
+ * kernel TU via the `ama_cryptography_test` static library. */
+#include "../../src/c/internal/ama_x25519_fe64_mulx.h"
 
 /* Pull in the pure-C reference. fe64.h is header-only and the
  * functions are `static inline`, so just including it gives us the

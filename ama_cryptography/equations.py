@@ -32,7 +32,7 @@ Organization: Steel Security Advisors LLC
 Author/Inventor: Andrew E. A.
 Contact: steel.sa.llc@gmail.com
 Date: 2026-04-17
-Version: 3.5.0
+Version: 4.0.0
 
 AI Co-Architects:
     Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
@@ -46,6 +46,8 @@ from ama_cryptography._numeric import (
     Mat,
     Vec,
     allclose,
+    asmat,
+    asvec,
     diag,
     eigvals,
     eye,
@@ -58,7 +60,7 @@ from ama_cryptography._numeric import (
 # Configure module logger
 logger = logging.getLogger(__name__)
 
-__version__ = "3.5.0"
+__version__ = "4.0.0"
 __author__ = "Andrew E. A., Steel Security Advisors LLC"
 __all__ = [
     "PHI",
@@ -251,20 +253,36 @@ def verify_all_codes() -> Dict[str, Dict[str, float]]:
 # ============================================================================
 
 
-def lyapunov_function(state: Vec, target: Vec) -> float:
+def lyapunov_function(state: object, target: object) -> float:
     """
     Lyapunov function V(x) = ||x - x*||².
 
     Positive definite: V(x) > 0 for x ≠ x*, V(x*) = 0
 
     Args:
-        state: Current state x
-        target: Equilibrium state x*
+        state: Current state x.  ``Vec``, ``numpy.ndarray``, or any 1-D
+            array-like of real numbers.
+        target: Equilibrium state x*, same accepted types.
 
     Returns:
         Lyapunov value V(x)
+
+    Raises:
+        TypeError: An argument is not array-like, or holds non-numbers.
+        ValueError: An argument is not 1-D, or the two lengths differ.
+
+    .. versionchanged:: 4.0
+       ``numpy.ndarray`` and other 1-D array-likes are accepted; see
+       :func:`ama_cryptography._numeric.asvec`.
     """
-    diff = state - target
+    x = asvec(state, copy=False)
+    x_star = asvec(target, copy=False)
+    if len(x) != len(x_star):
+        raise ValueError(
+            f"lyapunov_function: state has {len(x)} elements but target has "
+            f"{len(x_star)}; V(x) = ||x - x*||^2 needs them to match"
+        )
+    diff = x - x_star
     return float(sum_(diff**2))
 
 
@@ -424,27 +442,46 @@ def golden_ratio_convergence_proof(iterations: int = 30) -> Tuple[bool, float, D
 # ============================================================================
 
 
-def calculate_sigma_quadratic(state: Vec, E: Mat) -> float:
+def calculate_sigma_quadratic(state: object, E: object) -> float:
     """
     Calculate σ_quadratic = (x^T · E · x) / ||x||².
 
     Args:
-        state: State vector x
-        E: Positive-definite ethical constraint matrix
+        state: State vector x.  ``Vec``, ``numpy.ndarray``, or any 1-D
+            array-like of real numbers.
+        E: Positive-definite ethical constraint matrix.  ``Mat``, a 2-D
+            ``numpy.ndarray``, or a sequence of equal-length rows.
 
     Returns:
         σ_quadratic value
+
+    Raises:
+        TypeError: An argument is not array-like, or holds non-numbers.
+        ValueError: ``state`` is not 1-D, ``E`` is not 2-D, or ``E`` is not
+            square with side ``len(state)``.
+
+    .. versionchanged:: 4.0
+       ``numpy.ndarray`` operands are accepted.  A mixed ``Mat @ ndarray``
+       previously raised ``ValueError: matmul: Input operand 0 does not have
+       enough dimensions`` from inside numpy.
     """
-    Ex = E @ state
-    x_norm_sq = state @ state
+    x = asvec(state, copy=False)
+    matrix = asmat(E, copy=False)
+    if matrix.rows != matrix.cols or matrix.cols != len(x):
+        raise ValueError(
+            f"calculate_sigma_quadratic: E has shape {matrix.shape} but x^T E x "
+            f"needs E square with side {len(x)}"
+        )
+    Ex = matrix @ x
+    x_norm_sq = x @ x
     if x_norm_sq == 0:
         return 0.0
-    return float((state @ Ex) / x_norm_sq)
+    return float((x @ Ex) / x_norm_sq)
 
 
 def enforce_sigma_quadratic_threshold(
-    state: Vec,
-    E: Mat,
+    state: object,
+    E: object,
     threshold: float = SIGMA_QUADRATIC_THRESHOLD,
 ) -> Tuple[bool, Vec]:
     """
@@ -453,23 +490,39 @@ def enforce_sigma_quadratic_threshold(
     If violated, scale state by √(threshold/σ) to satisfy constraint.
 
     Args:
-        state: State vector x
-        E: Positive-definite ethical constraint matrix
+        state: State vector x.  ``Vec``, ``numpy.ndarray``, or any 1-D
+            array-like of real numbers.
+        E: Positive-definite ethical constraint matrix.  ``Mat``, a 2-D
+            ``numpy.ndarray``, or a sequence of equal-length rows.
         threshold: Minimum σ_quadratic (default 0.96)
 
     Returns:
-        (is_valid, corrected_state)
-        is_valid: True if original state met threshold
-        corrected_state: Original or scaled state
+        ``(is_valid, corrected_state)``.
+
+        ``is_valid`` is True if the original state met the threshold.
+        ``corrected_state`` is always a ``Vec`` — the original (converted, and
+        never the caller's own object) or a scaled copy of it.
+
+    Raises:
+        TypeError: An argument is not array-like, or holds non-numbers.
+        ValueError: ``state`` is not 1-D, or ``E`` is not square with side
+            ``len(state)``.
+
+    .. versionchanged:: 4.0
+       ``numpy.ndarray`` operands are accepted, and the returned state is a
+       ``Vec`` on both branches.  Through 3.x the pass branch handed back the
+       caller's own object while the correction branch returned a new one, so
+       whether the result aliased the input depended on the data.
     """
-    sigma = calculate_sigma_quadratic(state, E)
+    x = asvec(state)
+    sigma = calculate_sigma_quadratic(x, E)
 
     if sigma >= threshold:
-        return True, state
+        return True, x
 
     # Correction: scale by √(threshold/σ)
     scale = math.sqrt(threshold / sigma) if sigma > 0 else 1.0
-    corrected_state = state * scale
+    corrected_state = x * scale
 
     return False, corrected_state
 

@@ -488,6 +488,17 @@ def main() -> int:
             "docker/Dockerfile LABEL version",
         ),
         (
+            # The Alpine variant carries the same LABEL and the same
+            # release-tag alignment requirement as docker/Dockerfile, but was
+            # never registered here — so it sat at 3.5.0 through a 4.0.0
+            # release while this gate reported every declaration in agreement.
+            # A version anchor that is not in this list is a version anchor
+            # that drifts.
+            "docker/Dockerfile.alpine",
+            r'^\s*LABEL\s+version\s*=\s*"([^"]+)"',
+            "docker/Dockerfile.alpine LABEL version",
+        ),
+        (
             # OCI Image Spec annotation on the C-API image
             # (https://github.com/opencontainers/image-spec/blob/main/annotations.md).
             # Same release-tag alignment requirement as Dockerfile above.

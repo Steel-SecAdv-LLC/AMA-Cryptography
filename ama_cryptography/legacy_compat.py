@@ -25,7 +25,7 @@ symbols — they are intentionally excluded to prevent name collisions.
 
 Organization: Steel Security Advisors LLC
 Author/Inventor: Andrew E. A.
-Version: 3.5.0
+Version: 4.0.0
 """
 
 from __future__ import annotations
@@ -79,7 +79,7 @@ from ama_cryptography.rfc3161_timestamp import (
     request_timestamp_exchange,
     verify_token_binding,
 )
-from ama_cryptography.secure_memory import constant_time_compare
+from ama_cryptography.secure_memory import constant_time_compare, lengths_match
 
 
 # ---------------------------------------------------------------------------
@@ -355,10 +355,17 @@ def hmac_authenticate(message: bytes, key: bytes) -> bytes:
 
 
 def hmac_verify(message: bytes, tag: bytes, key: bytes) -> bool:
-    """Verify HMAC-SHA3-256 authentication tag (constant-time)."""
+    """Verify HMAC-SHA3-256 authentication tag (constant-time).
+
+    ``tag`` is caller-supplied and therefore untrusted.  Its length is public —
+    an HMAC-SHA3-256 tag is 32 bytes and nothing else — so it is checked
+    plainly, up front, and only the *content* comparison is constant-time.
+    """
     _enforce_invariant7_lc()
     expected = hmac_authenticate(message, key)
-    return constant_time_compare(tag, expected)
+    if not lengths_match(expected, tag):
+        return False
+    return constant_time_compare(expected, tag)
 
 
 # ============================================================================

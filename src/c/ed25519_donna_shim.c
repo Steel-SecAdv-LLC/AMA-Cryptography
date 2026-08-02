@@ -173,6 +173,16 @@ ama_error_t ama_ed25519_verify(
         return AMA_ERROR_VERIFY_FAILED;
     }
 
+    /* Reject a non-canonical public-key y.  donna's
+     * ge25519_unpack_negative_vartime() reduces mod p like ref10, so the 19
+     * encodings with y in [p, 2^255) decode to the same key as their reduced
+     * form.  The in-tree fe51 backend enforces this inside its own
+     * ge25519_frombytes(); applied here so both backends accept exactly the
+     * same set of encodings.  donna's sources stay unmodified. */
+    if (!ama_ed25519_point_y_is_canonical(public_key)) {
+        return AMA_ERROR_VERIFY_FAILED;
+    }
+
     /* donna returns 0 on success, -1 on failure */
     int result = ed25519_sign_open(message, message_len, public_key, signature);
 
@@ -261,8 +271,26 @@ ama_error_t ama_ed25519_batch_verify(
      * arithmetic runs over the inputs it was handed; the override below is
      * what decides the result.  S is public, so no timing property is at
      * stake in overriding rather than skipping. */
+    /* RFC 8032 §5.1.3 canonical-y enforcement (INVARIANT-38), applied per
+     * entry for exactly the reason spelled out above for canonical S.
+     *
+     * ama_ed25519_verify() gained this check, but donna's batch routine
+     * reaches ge25519_unpack_negative_vartime() through its own internal
+     * ed25519_sign_open(), so nothing added there reaches here.  Leaving it
+     * out would make batch verification accept a public-key encoding that
+     * single verification rejects — and would also split the two Ed25519
+     * backends, since the fe51 batch path (ama_ed25519.c) is a loop over
+     * ama_ed25519_verify() and therefore already enforces it.
+     *
+     * Only the 19 encodings with y in [p, 2^255) are affected, and a
+     * legitimate key can collide with one only if its y is below 19, so this
+     * is an encoding-uniqueness guarantee rather than a reachable forgery.
+     * That is the same standing INVARIANT-38 has on the single-signature
+     * path; the point is that both APIs enforce it, not that either is a
+     * break. */
     for (size_t i = 0; i < count; i++) {
-        if (!ama_ed25519_signature_s_is_canonical(entries[i].signature)) {
+        if (!ama_ed25519_signature_s_is_canonical(entries[i].signature) ||
+            !ama_ed25519_point_y_is_canonical(entries[i].public_key)) {
             results[i] = 0;
             ret = -1;
         }
@@ -287,10 +315,15 @@ ama_error_t ama_ed25519_batch_verify(
  * mul256_modm, add256_modm, ed25519_hash (SHA-512).
  * ============================================================================ */
 
-AMA_API void ama_ed25519_point_from_scalar(uint8_t point[32],
-                                           const uint8_t scalar[32]) {
+AMA_API ama_error_t ama_ed25519_point_from_scalar(uint8_t point[32],
+                                                  const uint8_t scalar[32]) {
     bignum256modm s;
     ge25519 ALIGN(16) R;
+    /* BREAKING in 4.0.0: returns ama_error_t so a NULL argument is an error
+     * rather than a segfault.  Returning void left no honest fix — an early
+     * return would leave `point` uninitialised, which is silent where the
+     * crash at least was not.  See include/ama_cryptography.h. */
+    if (!point || !scalar) return AMA_ERROR_INVALID_PARAM;
     expand256_modm(s, scalar, 32);
     /* NOLINTNEXTLINE(clang-analyzer-core.UndefinedBinaryOperatorResult,clang-analyzer-core.uninitialized.Assign,clang-analyzer-core.uninitialized.UndefReturn): vendor (ed25519-donna) initialisation pattern.  donna's curve25519-donna-64bit.h
      * line 85 reads `out[0] = a[0] + fourP0 - b[0]` with `a` filled by
@@ -301,16 +334,27 @@ AMA_API void ama_ed25519_point_from_scalar(uint8_t point[32],
      * tracked under audit Issue 9 close-out. */
     ge25519_scalarmult_base_niels(&R, ge25519_niels_base_multiples, s);
     ge25519_pack(point, &R);
+    return AMA_SUCCESS;
 }
 
 AMA_API ama_error_t ama_ed25519_point_add(uint8_t result[32],
                                           const uint8_t p[32],
                                           const uint8_t q[32]) {
     ge25519 ALIGN(16) P, Q, R;
+    /* Pointer guard first.  ama_ed25519_double_scalarmult_public() below has
+     * always had one; this function and ama_ed25519_scalarmult_public() did
+     * not, in either backend, so a NULL argument segfaulted instead of
+     * returning AMA_ERROR_INVALID_PARAM.  That inconsistency became easier to
+     * reach when tests/test_ed25519_canonical_y.py started driving these two
+     * through ctypes, where a Python None arrives as NULL and takes the
+     * interpreter down with it. */
+    if (!result || !p || !q) return AMA_ERROR_INVALID_PARAM;
     /* donna's unpack negates Y; we negate back */
+    if (!ama_ed25519_point_y_is_canonical(p)) return AMA_ERROR_INVALID_PARAM;
     if (!ge25519_unpack_negative_vartime(&P, p)) return AMA_ERROR_INVALID_PARAM;
     curve25519_neg(P.x, P.x);
     curve25519_neg(P.t, P.t);
+    if (!ama_ed25519_point_y_is_canonical(q)) return AMA_ERROR_INVALID_PARAM;
     if (!ge25519_unpack_negative_vartime(&Q, q)) return AMA_ERROR_INVALID_PARAM;
     curve25519_neg(Q.x, Q.x);
     curve25519_neg(Q.t, Q.t);
@@ -329,6 +373,8 @@ AMA_API ama_error_t ama_ed25519_scalarmult_public(uint8_t result[32],
                                                   const uint8_t point[32]) {
     ge25519 ALIGN(16) P, R;
     bignum256modm s1, s2_zero = {0};
+    if (!result || !public_scalar || !point) return AMA_ERROR_INVALID_PARAM;
+    if (!ama_ed25519_point_y_is_canonical(point)) return AMA_ERROR_INVALID_PARAM;
     if (!ge25519_unpack_negative_vartime(&P, point)) return AMA_ERROR_INVALID_PARAM;
     curve25519_neg(P.x, P.x);
     curve25519_neg(P.t, P.t);
@@ -357,9 +403,11 @@ AMA_API ama_error_t ama_ed25519_double_scalarmult_public(
     ge25519_p1p1 ALIGN(16) sum;
 
     if (!result || !s1 || !P1 || !s2 || !P2) return AMA_ERROR_INVALID_PARAM;
+    if (!ama_ed25519_point_y_is_canonical(P1)) return AMA_ERROR_INVALID_PARAM;
     if (!ge25519_unpack_negative_vartime(&P1u, P1)) return AMA_ERROR_INVALID_PARAM;
     curve25519_neg(P1u.x, P1u.x);
     curve25519_neg(P1u.t, P1u.t);
+    if (!ama_ed25519_point_y_is_canonical(P2)) return AMA_ERROR_INVALID_PARAM;
     if (!ge25519_unpack_negative_vartime(&P2u, P2)) return AMA_ERROR_INVALID_PARAM;
     curve25519_neg(P2u.x, P2u.x);
     curve25519_neg(P2u.t, P2u.t);

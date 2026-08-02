@@ -1744,12 +1744,43 @@ static void sc_mont_mul(secp256k1_sc *r, const secp256k1_sc *a, const secp256k1_
     }
 
     /* t is now < 2n; one conditional subtraction finishes it.  The extra
-     * high word must be folded in first: if it is set, t >= 2^256 > n. */
-    if (t[SC_LIMBS]) {
+     * high word must be folded in first: if it is set, t >= 2^256 > n.
+     *
+     * INVARIANT-12.  This fold is MASKED, not branched.  Written as
+     * `if (t[SC_LIMBS]) { ...subtract... }` it compiled to a real
+     * `test %r14,%r14; je` — a conditional jump whose predicate is a word of
+     * the Montgomery intermediate, i.e. of secret data — and that is the
+     * textbook Montgomery extra-reduction side channel (Walter & Thompson,
+     * "Distinguishing Exponent Digits by Observing Modular Subtractions",
+     * CT-RSA 2001).  It was measurable here, not merely theoretical: over
+     * eight signatures with a fixed message, callgrind returned deterministic
+     * per-key instruction counts spanning 33,354 instructions with a
+     * zero-instruction noise floor, attributable entirely to this function,
+     * and the taken-count varied with the per-signature nonce `k` as well as
+     * with the long-term key.  A leak keyed on `k` is the dangerous one for
+     * ECDSA.
+     *
+     * The masked form below does the same arithmetic unconditionally: when
+     * the high word is zero the subtrahend is zero, the borrow chain stays
+     * zero, and `t` is unchanged — same result, no branch, same instruction
+     * count every call.  It is the pattern sc_cond_sub_n directly below
+     * already uses.
+     *
+     * An earlier revision of this comment claimed this was the only site in
+     * the file written the other way.  It was not: sc_add's carry fold had
+     * the identical shape and is likewise on the signing path, and
+     * sc_is_high's short-circuited memcmp was a third.  Both are masked now.
+     * The lesson is that finding one instance of a pattern is a reason to
+     * sweep for the rest, not evidence that there are none. */
+    {
+        const uint64_t hi = t[SC_LIMBS];
+        /* All-ones exactly when hi != 0, computed without a comparison. */
+        const uint64_t fold = (uint64_t)0 - ((hi | ((~hi) + 1u)) >> 63);
         uint64_t borrow = 0;
         for (i = 0; i < SC_LIMBS; i++) {
-            uint64_t d = t[i] - SC_N[i] - borrow;
-            borrow = ((~t[i] & SC_N[i]) | ((~(t[i] ^ SC_N[i])) & d)) >> 63;
+            const uint64_t sub = SC_N[i] & fold;
+            const uint64_t d = t[i] - sub - borrow;
+            borrow = ((~t[i] & sub) | ((~(t[i] ^ sub)) & d)) >> 63;
             t[i] = d;
         }
     }
@@ -1782,12 +1813,36 @@ static void sc_add(secp256k1_sc *r, const secp256k1_sc *a, const secp256k1_sc *b
         t[i] = sum;
     }
     /* carry can only be 0 or 1; when set the sum exceeded 2^256 and is
-     * certainly >= n, so fold it by subtracting n unconditionally first. */
-    if (carry) {
+     * certainly >= n, so fold it by subtracting n first.
+     *
+     * INVARIANT-12.  MASKED, not branched — for the same reason, and with the
+     * same measured consequence, as the fold in sc_mont_mul above.  Written as
+     * `if (carry) { ...subtract... }` this compiled to a conditional jump over
+     * a four-limb borrow chain, and `carry` is the top bit of `a + b`.  On the
+     * signing path the operands are `r*d mod n` and `z` (see
+     * ama_secp256k1_ecdsa_sign), so the predicate is a function of the private
+     * key `d` and, through the RFC 6979 nonce, of `k`.  Measured in isolation
+     * under callgrind, the branchy form retired 76 more instructions per call
+     * when the carry was set than when it was clear, deterministically and
+     * with a zero-instruction noise floor.
+     *
+     * One bit per signature is not a small leak in this setting: `r` and `z`
+     * are public, so each observation is a linear inequality on `r*d mod n`,
+     * which is the hidden-number-problem shape that lattice reduction solves
+     * from a few hundred traces.  The whole-process spread it produces is
+     * ~600 instructions over eight signatures, which sits under the
+     * `--target ecdsa` threshold in tools/check_ghash_constant_time.py, so no
+     * gate would have reported it either. */
+    {
+        /* All-ones exactly when carry != 0, computed without a comparison.
+         * `carry` is already 0 or 1, but deriving the mask arithmetically
+         * keeps the form identical to sc_mont_mul's and independent of that. */
+        const uint64_t fold = (uint64_t)0 - (carry & 1u);
         uint64_t borrow = 0;
         for (i = 0; i < SC_LIMBS; i++) {
-            uint64_t d = t[i] - SC_N[i] - borrow;
-            borrow = ((~t[i] & SC_N[i]) | ((~(t[i] ^ SC_N[i])) & d)) >> 63;
+            const uint64_t sub = SC_N[i] & fold;
+            const uint64_t d = t[i] - sub - borrow;
+            borrow = ((~t[i] & sub) | ((~(t[i] ^ sub)) & d)) >> 63;
             t[i] = d;
         }
     }
@@ -1809,9 +1864,40 @@ static void sc_negate(secp256k1_sc *r, const secp256k1_sc *a) {
         r->v[i] = t[i] & ~mask;
 }
 
-/* 1 when a > (n-1)/2 — the "high s" half of the signature space. */
+/* 1 when a > (n-1)/2 — the "high s" half of the signature space.
+ *
+ * INVARIANT-12.  `a > SC_HALF_N` is exactly `SC_HALF_N < a`, so one call to
+ * the branch-free comparator answers it.  The previous form,
+ *
+ *     !sc_lt(a->v, SC_HALF_N) && memcmp(a->v, SC_HALF_N, ...) != 0
+ *
+ * had two secret-dependent costs: `&&` short-circuits, so `memcmp` ran only
+ * for a >= half-n, and `memcmp` itself exits at the first differing limb.
+ * That matters because of where this is called from — the low-s
+ * normalisation in ama_secp256k1_ecdsa_sign, on the raw `s` before it is
+ * canonicalised.  The emitted signature is always the low representative, so
+ * an observer cannot otherwise tell whether the negation happened; the
+ * predicate is a genuine one bit per signature about `k` and `d`.  Measured
+ * in isolation under callgrind, the old form plus its branched negation cost
+ * 105 more instructions per call for a high `s` than for a low one.
+ *
+ * On the verification path (ama_secp256k1_ecdsa_verify) `s` is public and the
+ * timing carries nothing, but there is no reason to keep two spellings. */
 static int sc_is_high(const secp256k1_sc *a) {
-    return !sc_lt(a->v, SC_HALF_N) && memcmp(a->v, SC_HALF_N, sizeof(a->v)) != 0;
+    return sc_lt(SC_HALF_N, a->v);
+}
+
+/* r = -a mod n when flag is 1, r = a when flag is 0.  Constant time in both
+ * the value and the flag: the negation is always computed and the result is
+ * selected with an arithmetic mask, so the caller's `if` disappears. */
+static void sc_cond_negate(secp256k1_sc *r, const secp256k1_sc *a, uint64_t flag) {
+    secp256k1_sc neg;
+    const uint64_t mask = (uint64_t)0 - (flag & 1u);
+    int i;
+    sc_negate(&neg, a);
+    for (i = 0; i < SC_LIMBS; i++)
+        r->v[i] = (a->v[i] & ~mask) | (neg.v[i] & mask);
+    ama_secure_memzero(&neg, sizeof(neg));
 }
 
 /* r = a^-1 mod n by Fermat: a^(n-2).  The exponent is a fixed public
@@ -2068,9 +2154,10 @@ AMA_API ama_error_t ama_secp256k1_ecdsa_sign(uint8_t *signature, size_t *signatu
     if (sc_is_zero(&s_sc))
         goto done;
 
-    /* Low-s normalization: emit the canonical representative. */
-    if (sc_is_high(&s_sc))
-        sc_negate(&s_sc, &s_sc);
+    /* Low-s normalization: emit the canonical representative.  Selected
+     * rather than branched — whether `s` needed negating is a bit about `k`
+     * and `d` that the emitted signature does not reveal (see sc_is_high). */
+    sc_cond_negate(&s_sc, &s_sc, (uint64_t)sc_is_high(&s_sc));
 
     sc_to_bytes(r_bytes, &r_sc);
     sc_to_bytes(s_bytes, &s_sc);

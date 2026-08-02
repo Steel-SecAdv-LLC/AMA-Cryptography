@@ -1544,7 +1544,7 @@ static double test_kyber_decaps(int iterations) {
  *     pattern across positions, same scalar bytes test_frost.c uses
  *     in its `mid` boundary check).
  * ----------------------------------------------------------------------- */
-extern void ama_frost_test_scalar_negate(uint8_t neg[32], const uint8_t s[32]);
+#include "../../src/c/internal/ama_testing_exports.h"
 
 /* Mid-range scalar matching the `mid` boundary case in test_frost.c. */
 static const uint8_t SCALAR_NEGATE_MID[32] = {

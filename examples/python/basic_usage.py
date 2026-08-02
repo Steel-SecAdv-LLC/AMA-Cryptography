@@ -163,51 +163,73 @@ def example_3_data_protection():
     print("Example 3: Complete Data Protection")
     print("=" * 60)
 
-    from ama_cryptography.legacy_compat import (
+    from ama_cryptography.crypto_api import (
+        CryptoPackageConfig,
         create_crypto_package,
-        generate_key_management_system,
         verify_crypto_package,
     )
 
-    # Your sensitive data
-    sensitive_data = "Patient ID: 12345, Diagnosis: Confidential"
-    data_params = [(1.0, 2.0), (1.5, 2.5)]  # Helix parameters
+    # Your sensitive data.  The package API works on bytes, so encode whatever
+    # record format you already have — JSON, protobuf, CBOR, plain text.
+    sensitive_data = b"Patient ID: 12345, Diagnosis: Confidential"
 
-    # Generate key management system
-    print("\nGenerating keys...")
-    kms = generate_key_management_system("My Organization")
-
-    # Create protected package
-    print("Creating protected package...")
+    # Create protected package.  create_crypto_package() generates the signing
+    # keypair, the HMAC key and the HKDF material itself and returns them on
+    # the result; pass `signing_keypair` to use one you already hold.
+    print("\nCreating protected package...")
     package = create_crypto_package(
-        dna_codes=sensitive_data,
-        helix_params=data_params,
-        kms=kms,
-        author="Data Owner",
-        use_rfc3161=False,  # True requests an RFC 3161 token. AMA verifies the
-        # §2.4.2 message-imprint binding only — not the TSA's signature or
-        # certificate chain — so it is not third-party attestation.
+        sensitive_data,
+        config=CryptoPackageConfig(
+            include_timestamp=False,  # True requests an RFC 3161 token. AMA
+            # verifies the §2.4.2 message-imprint binding only — not the TSA's
+            # signature or certificate chain — so it is not third-party
+            # attestation, and verify_crypto_package() does not check it.
+        ),
     )
 
-    print("\nPackage created:")
-    print(f"  Content hash: {package.content_hash[:32]}...")
-    print(f"  HMAC tag: {package.hmac_tag[:32]}...")
-    print(f"  Ed25519 signature: {package.ed25519_signature[:32]}...")
-    print(f"  Timestamp: {package.timestamp}")
+    signing_key = package.keypairs["HYBRID_SIG"]
 
-    # Verify the package
-    print("\nVerifying package...")
+    print("\nPackage created:")
+    print(f"  Layer 1  content hash (SHA3-256):    {package.content_hash[:32]}...")
+    print(f"  Layer 2  HMAC tag (HMAC-SHA3-256):   {package.hmac_tag.hex()[:32]}...")
+    print(
+        f"  Layer 3  signature ({package.primary_signature.algorithm.name}): "
+        f"{package.primary_signature.signature.hex()[:32]}..."
+    )
+    print(f"  Layer 4  derived keys (HKDF):        {len(package.derived_keys)}")
+    print(f"  Signing public key:                  {signing_key.public_key.hex()[:32]}...")
+
+    # Verify the package.
+    #
+    # `expected_public_key` is the whole point of this call, not an optional
+    # extra.  Every key needed to check a package travels *inside* it, so
+    # verifying a package against its own material proves integrity and
+    # internal consistency and nothing about who produced it — anyone can build
+    # a package that passes.  Pin the signing key you obtained out of band
+    # (config, enrollment, a directory you trust) and `all_valid` becomes an
+    # origin claim.  Without it, `all_valid` is False by design as of 4.0.0.
+    print("\nVerifying package (anchored against the expected signing key)...")
     results = verify_crypto_package(
-        dna_codes=sensitive_data,
-        helix_params=data_params,
-        pkg=package,
-        hmac_key=kms.hmac_key,
+        sensitive_data,
+        package,
+        expected_public_key=signing_key.public_key,
     )
 
     print("Verification results:")
     for check, passed in results.items():
-        status = "PASS" if passed else ("SKIP" if passed is None else "FAIL")
-        print(f"  {check}: {status}")
+        print(f"  {check}: {'PASS' if passed else 'FAIL'}")
+
+    # The same call without the anchor, so the difference is visible rather
+    # than described.  Layers 1-4 still pass — `core_valid` reports that — but
+    # nothing has been established about origin, so `all_valid` is False.
+    unanchored = verify_crypto_package(sensitive_data, package)
+    print(
+        f"\nWithout an anchor: core_valid={unanchored['core_valid']}, "
+        f"key_pinned={unanchored['key_pinned']}, all_valid={unanchored['all_valid']}"
+    )
+
+    if not results["all_valid"]:
+        raise RuntimeError(f"anchored verification failed: {results}")
 
 
 def example_4_humanitarian_use_case():
@@ -220,14 +242,15 @@ def example_4_humanitarian_use_case():
     print("Example 4: Humanitarian Use Case")
     print("=" * 60)
 
-    from ama_cryptography.legacy_compat import (
+    from ama_cryptography.crypto_api import (
+        AlgorithmType,
+        CryptoPackageConfig,
         create_crypto_package,
-        generate_key_management_system,
         verify_crypto_package,
     )
 
     # Crisis response data
-    crisis_data = """
+    crisis_data = b"""
     CRISIS RESPONSE REPORT
     ----------------------
     Location: 34.0522, -118.2437
@@ -237,39 +260,54 @@ def example_4_humanitarian_use_case():
     Medical Needs: Critical
     """
 
-    helix_params = [(1.0, 1.5)]
-
-    # Protect the data
-    kms = generate_key_management_system("Crisis Response Unit")
+    # HYBRID_SIG is Ed25519 + ML-DSA-65: a forger must break both.  It is the
+    # default; naming it here makes the choice explicit in the example.
     package = create_crypto_package(
-        dna_codes=crisis_data,
-        helix_params=helix_params,
-        kms=kms,
-        author="Field Operator",
-        use_rfc3161=False,
+        crisis_data,
+        config=CryptoPackageConfig(signature_algorithm=AlgorithmType.HYBRID_SIG),
     )
+    signing_key = package.keypairs[package.primary_signature.algorithm.name]
 
     print("\nCrisis data protected with:")
     print("  - SHA3-256 content hash")
     print("  - HMAC-SHA3-256 authentication")
-    print("  - Ed25519 digital signature")
+    print(f"  - {package.primary_signature.algorithm.name} digital signature")
+    print(f"  - {len(package.derived_keys)} independently derived HKDF keys")
 
-    # Check if quantum protection is available
-    if package.dilithium_signature:
-        print("  - ML-DSA-65 quantum-resistant signature")
+    # Report the quantum layer from what the package actually carries, rather
+    # than from a build-time flag: the hybrid signature falls back to Ed25519
+    # alone when the native PQC backend is missing.
+    pqc_status = package.metadata.get("pqc_status", "UNKNOWN")
+    if pqc_status == "AVAILABLE":
+        print("  - ML-DSA-65 quantum-resistant signature (inside the hybrid)")
     else:
-        print("  - (Quantum signatures available with native C library)")
+        print(f"  - (Quantum signatures unavailable: pqc_status={pqc_status}.")
+        print("     Build the native C library for quantum resistance.)")
 
-    # Verify integrity
+    # Verify integrity, anchored against the signing key — see Example 3 for
+    # why the anchor is what turns this into an authenticity check.
     results = verify_crypto_package(
-        dna_codes=crisis_data,
-        helix_params=helix_params,
-        pkg=package,
-        hmac_key=kms.hmac_key,
+        crisis_data,
+        package,
+        expected_public_key=signing_key.public_key,
     )
+    print(f"\nData integrity verified: {results['all_valid']}")
 
-    all_passed = all(v is True for v in results.values() if v is not None)
-    print(f"\nData integrity verified: {all_passed}")
+    # A tampered copy must fail, and a demonstration that only shows the happy
+    # path has not shown anything.
+    tampered = crisis_data.replace(b"150 displaced", b"  0 displaced")
+    tampered_results = verify_crypto_package(
+        tampered,
+        package,
+        expected_public_key=signing_key.public_key,
+    )
+    print(f"Tampered copy rejected:  {not tampered_results['all_valid']}")
+
+    if not results["all_valid"] or tampered_results["all_valid"]:
+        raise RuntimeError(
+            f"verification did not behave as documented: "
+            f"genuine={results}, tampered={tampered_results}"
+        )
 
 
 def main():

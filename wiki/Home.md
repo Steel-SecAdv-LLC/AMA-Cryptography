@@ -90,7 +90,7 @@ classDef gray fill:#1f1f1f,stroke:#11AEED,color:#f6f6f6;
 
 | Property | Value |
 |----------|-------|
-| Version | 3.5.0 |
+| Version | 4.0.0 |
 | Algorithms | ML-DSA-44/-65/-87, ML-KEM-512/-768/-1024, SLH-DSA, HSS/LMS verify, Ed25519, FROST-Ed25519, ECDSA P-256/P-384/P-521 + secp256k1, X25519, AES-256-GCM, ChaCha20-Poly1305, Ascon-AEAD128, Ascon-Hash256, SHA-3/HKDF, Argon2id |
 | Runtime safeguards | 3R monitoring, agent-instance binding (INVARIANT-30) |
 | Platforms | Linux, macOS, Windows |

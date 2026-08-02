@@ -4,8 +4,8 @@
 
 | Property | Value |
 |----------|-------|
-| Document Version | 3.5.0 |
-| Last Updated | 2026-07-25 |
+| Document Version | 4.0.0 |
+| Last Updated | 2026-08-01 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -441,9 +441,9 @@ cmake -B build -DAMA_ENABLE_DUDECT=ON && cmake --build build
 
 Location: `fuzz/`
 
-12 libFuzzer fuzz targets with seed corpora and dictionaries:
-- Core: SHA3, Ed25519, AES-GCM, HKDF, consttime
-- PQC: Dilithium, Kyber, SPHINCS+, ChaCha20-Poly1305, X25519, Argon2, secp256k1
+15 libFuzzer fuzz targets with seed corpora and dictionaries:
+- Core: SHA3, Ed25519, AES-GCM, HKDF, consttime, agent-binding, Ascon
+- PQC: Dilithium, Kyber, SPHINCS+, ChaCha20-Poly1305, X25519, Argon2, secp256k1, FROST
 
 OSS-Fuzz onboarding prepared in `oss-fuzz/` for continuous 24/7 fuzzing.
 See [docs/oss-fuzz-onboarding.md](docs/oss-fuzz-onboarding.md) for details.
@@ -679,7 +679,7 @@ See [docs/constant-time-testing.md](docs/constant-time-testing.md) for methodolo
 
 ### Continuous Fuzzing (OSS-Fuzz)
 
-12 libFuzzer fuzz targets with seed corpora and fuzzing dictionaries, prepared
+15 libFuzzer fuzz targets with seed corpora and fuzzing dictionaries, prepared
 for [OSS-Fuzz](https://github.com/google/oss-fuzz) onboarding:
 
 ✓ All fuzz targets have `LLVMFuzzerTestOneInput` entry points
@@ -748,6 +748,7 @@ python -c "from ama_cryptography.math_engine import benchmark_matrix_operations;
 | 2.0.0 | 2026-03-08 | Zero-dependency native C, AES-256-GCM, adaptive posture, hybrid KEM combiner, Ed25519 atomics, FIPS 203/204/205, KAT validation, Phase 2 primitives, fuzzing harnesses, threat model, Mercury Agent integration |
 | 2.1.0 | 2026-03-25 | Hand-written AVX2/NEON/SVE2 SIMD for 8 algorithms, runtime dispatch, security fixes S1-S6, professional dashboard/chart overhaul |
 | 2.1.5 | 2026-04-17 | HSM support via PyKCS11, security audit fixes (length-prefixed HKDF encoding, constant-time ops), secure channel protocol v2, comprehensive test coverage expansion |
+| 4.0.0 | 2026-08-01 | Trust-anchor enforcement end to end, constant-time scalar GHASH with an instruction-invariance gate, Ed25519 canonical-`y` (INVARIANT-38), KDF cost + algorithm floor, per-epoch AEAD nonce budget, no key material in serialization or reprs, RFC 8439 length limit. BREAKING ×4 — see CHANGELOG `[4.0.0]`. (This table skips 3.x; CHANGELOG.md is the complete record.) |
 
 ---
 

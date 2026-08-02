@@ -72,18 +72,33 @@ name: Release — Build, Sign, and Publish
 #      runner label, a `python -c` payload broken by YAML folding,
 #      POSIX quoting handed to cmd.exe, and a cibuildwheel 3->4 bump that
 #      turned on delvewheel Windows repair by default (see
-#      CIBW_REPAIR_WHEEL_COMMAND_WINDOWS below) — and the v3.2.0, v3.3.0
-#      and v3.5.0 releases all shipped with zero artefacts as a result.
+#      CIBW_REPAIR_WHEEL_COMMAND_WINDOWS below) — and releases shipped with
+#      zero artefacts as a result.  The v3.2.0 and v3.3.0 releases still
+#      carry no assets and, being immutable, cannot be repaired; v3.5.0's
+#      first attempt failed the same way and was re-tagged onto the fix
+#      commit, so the published release now carries all 54 artefacts.
 #      tools/check_workflow_commands.py now catches the first four classes
 #      statically on every PR; the delvewheel default is a behavioural
 #      change in a dependency, not a command defect, so NO static check
 #      sees it — a dry run is the only thing that exercises the real repair
 #      step against the real matrix and runner fleet.
 #
-#   2. Tag only after the dry run is green:
+#   2. Tag only after the dry run is green.  The tag MUST be annotated and
+#      signed — `-s`, not a bare `git tag` — and preflight now enforces it
+#      (tools/check_release_tag.py).  This is not ceremony either: of the
+#      eleven tags this repository carried before that gate existed, six were
+#      lightweight (a mutable ref straight to a commit, with no object to sign)
+#      and the other five were annotated but unsigned.  Every one of those
+#      releases went out through a pipeline whose runbook said `git tag -s`.
 #
-#        $ git tag -s v3.5.0 -m "ama-cryptography 3.5.0"
-#        $ git push origin v3.5.0
+#        $ git tag -s v4.0.0 -m "ama-cryptography 4.0.0"
+#        $ git push origin v4.0.0
+#
+#      For GitHub to show the tag as Verified, the signing key must also be
+#      registered on the account under Settings -> SSH and GPG keys with type
+#      "Signing Key" — an authentication key of the same material does not
+#      satisfy it.  preflight reports GitHub's verdict without gating on it,
+#      since that setting is account state, not repository state.
 #
 # All of stages 1-7 then run automatically.  A failure in any stage halts
 # the pipeline before the next; the published artefact is exactly the
@@ -167,6 +182,37 @@ jobs:
             echo "tag_clean=$tag_clean"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Require an annotated, signed tag (INVARIANT-10)
+        # Only meaningful on a tag push; a workflow_dispatch dry-run has no
+        # tag to inspect and is explicitly a dry-run.
+        if: github.event_name == 'push'
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF##*/}"
+          # actions/checkout at its default depth fetches the COMMIT the tag
+          # resolves to and writes a local refs/tags/<name> pointing at it.
+          # That local ref is lightweight even when the pushed tag is
+          # annotated, so the checker below would report a false lightweight
+          # verdict on a correctly signed tag.  Re-fetch the tag ref itself,
+          # with --force, so the annotated object is what gets inspected.
+          git fetch --force --no-tags origin "refs/tags/${TAG}:refs/tags/${TAG}"
+          python tools/check_release_tag.py "${TAG}"
+          # The shape check above is fail-closed and needs no key material.
+          # GitHub's own verified/unverified verdict is account-level state —
+          # it turns on when the signing key is registered under
+          # Settings -> SSH and GPG keys with type "Signing Key" — so it is
+          # reported here for the operator to read rather than gated on.  A
+          # release must not be blocked by a setting that lives outside the
+          # repository, but it must not hide it either.
+          echo "GitHub signature verdict for ${TAG}:"
+          gh api "repos/${GITHUB_REPOSITORY}/git/refs/tags/${TAG}" \
+            --jq '.object.sha' \
+          | xargs -I{} gh api "repos/${GITHUB_REPOSITORY}/git/tags/{}" \
+            --jq '"  verified=\(.verification.verified)  reason=\(.verification.reason)"' \
+          || echo "  (unavailable — informational only, not a release blocker)"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
       - name: Run version consistency check
         # Cross-validate that every other version anchor (CMakeLists.txt,
         # include/ama_cryptography.h, docs/conf.py, Dockerfiles, etc.)
@@ -181,9 +227,36 @@ jobs:
         # exactly the same way security.yml::sbom does.
         run: python tools/generate_sbom.py --check
 
+  # Confirm the installed signing seed derives the configured trust anchor
+  # BEFORE anything expensive runs.  Without this gate a mismatched pair is
+  # first noticed by `_build_sign` inside cibuildwheel, i.e. after the whole
+  # matrix has compiled the native library on every platform — a ~40 minute
+  # round trip to learn that a repository variable is wrong.  Here it costs one
+  # ubuntu build.
+  #
+  # Skipped when no anchor is configured, which is the supported unanchored
+  # path (forks, and repositories before the key is installed); `build-wheels`
+  # below treats "skipped" as permission to proceed.  The check itself lives in
+  # integrity-anchor-check.yml so the dispatchable job and this gate cannot
+  # drift apart.
+  verify-anchor:
+    name: Verify the integrity trust anchor pair
+    needs: [preflight]
+    if: vars.AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX != ''
+    uses: ./.github/workflows/integrity-anchor-check.yml
+    secrets: inherit
+
   build-wheels:
     name: cibuildwheel ${{ matrix.os }}
-    needs: [preflight]
+    needs: [preflight, verify-anchor]
+    # `verify-anchor` is conditional, and a skipped dependency would otherwise
+    # skip this job too.  Accept success or skipped, refuse failure.  Bracket
+    # indexing for the hyphenated job id, for the reason documented on
+    # `github-release` below.
+    if: >-
+      !cancelled()
+      && needs.preflight.result == 'success'
+      && needs['verify-anchor'].result != 'failure'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     strategy:
@@ -212,12 +285,18 @@ jobs:
           python-version: "3.11"
 
       - name: Build wheels via cibuildwheel
-        # Real v3.2.0 commit, verified with
-        #   git ls-remote https://github.com/pypa/cibuildwheel.git refs/tags/v3.2.0^{}
-        # The previous pin (e9c4a96e…) did not exist in pypa/cibuildwheel at
-        # all — it matched neither the v3.2.0 tag object nor its commit — so
-        # every wheel job aborted with "Unable to resolve action … unable to
-        # find version".  That is why no release has ever produced artifacts.
+        # Real v4.1.1 commit, verified with
+        #   git ls-remote https://github.com/pypa/cibuildwheel.git refs/tags/v4.1.1
+        # (This block previously said v3.2.0 and quoted the v3.2.0^{} lookup,
+        # left behind when the pin was bumped; the SHA below is the v4.1.1 tag
+        # — 7c619ef… is v3.2.0^{} — and the trailing marker was already
+        # correct, which is why check_action_pins.py never flagged it.)
+        #
+        # Background, kept because it explains a real outage: an earlier pin
+        # (e9c4a96e…) did not exist in pypa/cibuildwheel at all — it matched
+        # neither the v3.2.0 tag object nor its commit — so every wheel job
+        # aborted with "Unable to resolve action … unable to find version".
+        # That is why no release before then produced artifacts.
         uses: pypa/cibuildwheel@4726cd35bb13f7bde50cf2761f2499ac7b3aa32c  # v4.1.1
         env:
           # PYTHON VERSION MATRIX:
@@ -251,9 +330,53 @@ jobs:
           # AMA_KYBER_BUILD_DIAGNOSTICS is INTENTIONALLY left unset so the
           # production wheels ship without the ~600 lines of printf-emitting
           # Kyber debug code (audit Issue 7).
+          #
+          # INTEGRITY TRUST ANCHOR (optional, opt-in per repository).
+          # When the AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX *variable* and the
+          # AMA_INTEGRITY_SIGNING_SEED_HEX *secret* are both configured, the
+          # wheel is built with the anchor compiled into the native library
+          # (setup.py forwards it to CMake) and signed with the matching
+          # long-lived key, and AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR=1 makes the
+          # signer refuse to emit an unanchored artefact.  That combination is
+          # what makes a released wheel tamper-evident: the import-time check
+          # then requires the signature's public key to equal a value baked
+          # into the compiled .so, so re-signing edited .py files with an
+          # attacker-chosen key no longer verifies.
+          #
+          # When they are NOT configured, both expand to empty and the build
+          # behaves exactly as before — a per-build ephemeral signing key, an
+          # unanchored (still signed) artefact.  Releases therefore keep
+          # working on a fork or before the key is installed, rather than
+          # failing on a missing secret.  Run the "Integrity anchor check"
+          # workflow after installing the key to confirm the pair matches.
           CIBW_ENVIRONMENT: >-
             AMA_BUILD_PIPELINE=1
             CMAKE_BUILD_PARALLEL_LEVEL=4
+          # The three integrity variables are supplied through the step
+          # environment below and forwarded into the Linux build container by
+          # name, NOT interpolated into CIBW_ENVIRONMENT.
+          #
+          # What this does and does not buy, stated accurately: it keeps the
+          # seed out of the CIBW_ENVIRONMENT *string* — out of this file, and
+          # out of anything that echoes that option verbatim.  It does NOT
+          # keep it out of cibuildwheel's resolved build options; those merge
+          # the passed-through variables back in, so the value is present
+          # there either way, and GitHub's secret masking is what redacts it
+          # in the log.  (An earlier revision of this comment claimed the
+          # pass-by-name kept it out of the printed configuration entirely.
+          # It does not — checked against the resolver in the pinned 4.1.1.)
+          # The remaining benefit is real but narrow: one fewer place the
+          # literal seed is written.
+          #
+          # On macOS and Windows cibuildwheel builds in the host environment,
+          # so the step-level `env` below already reaches the build there.
+          CIBW_ENVIRONMENT_PASS_LINUX: >-
+            AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX
+            AMA_INTEGRITY_SIGNING_SEED_HEX
+            AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR
+          AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX: ${{ vars.AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX }}
+          AMA_INTEGRITY_SIGNING_SEED_HEX: ${{ secrets.AMA_INTEGRITY_SIGNING_SEED_HEX }}
+          AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR: ${{ vars.AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX != '' && '1' || '' }}
           # PRE-BUILD COMMANDS — install cmake + the cython/numpy build
           # deps that setup.py CMakeBuild needs.  cibuildwheel runs in
           # an isolated build env that only sees pyproject.toml's

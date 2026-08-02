@@ -9,8 +9,31 @@ Zero-dependency numerical library replacing numpy for the mathematical
 framework layer (equations.py, double_helix_engine.py).  Every operation
 is owned end-to-end — no external numerical libraries.
 
+Interoperating with ``numpy``
+-----------------------------
+This module does not import ``numpy`` and never will — owning the numerics
+end-to-end is the point.  It does, however, have to *accept* a
+``numpy.ndarray``, because callers who already have one (the shipped examples
+among them) should not have to convert by hand, and because silently mixing
+the two types produced a genuinely confusing failure: ``Mat`` had no
+``__len__``, so ``numpy`` classified it as a 0-dimensional object scalar and
+``Mat @ ndarray`` raised
+
+    ValueError: matmul: Input operand 0 does not have enough dimensions
+
+from inside numpy, naming neither operand.  Two changes close that:
+
+* :func:`asvec` / :func:`asmat` coerce at the boundary by duck typing —
+  ``tolist()`` and ``shape`` — so any array library works, ``numpy`` included,
+  with no import and no ``isinstance`` check against a type this package does
+  not depend on.
+* ``Vec`` and ``Mat`` both implement the sequence protocol fully, so
+  ``numpy.asarray()`` converts them to 1-D and 2-D float arrays respectively
+  rather than to an object scalar.
+
 Provides:
   - Vec / Mat types with arithmetic operators and ``@`` (matmul)
+  - asvec / asmat coercion from numpy.ndarray, nested lists, or Vec/Mat
   - Element-wise math (sqrt, exp, log, sin, cos, …)
   - Reductions (sum, mean, max, min, norm)
   - Linear-algebra (eigvals via QR iteration for real symmetric matrices)
@@ -29,6 +52,8 @@ __all__ = [
     "Vec",
     "Mat",
     "array",
+    "asvec",
+    "asmat",
     "zeros",
     "ones",
     "zeros_like",
@@ -288,6 +313,27 @@ class Mat:
             return self._data[r][c]
         return self._data[idx]
 
+    def __len__(self) -> int:
+        """Number of rows, matching ``numpy``'s convention for a 2-D array.
+
+        Load-bearing for interoperability, not a convenience.  Without it
+        ``numpy`` cannot see this object as a sequence, so ``numpy.asarray``
+        wraps it as a 0-dimensional object scalar and ``Mat @ ndarray`` fails
+        inside ``matmul`` with "Input operand 0 does not have enough
+        dimensions" — an error that names neither the operand nor this class.
+        With ``__len__`` and ``__getitem__`` together, ``numpy.asarray(mat)``
+        yields the ``(rows, cols)`` float array it should.
+        """
+        return self.rows
+
+    def __iter__(self) -> Iterator[List[float]]:
+        """Iterate over rows, so ``list(mat)`` and ``for row in mat`` work."""
+        return iter(self._data)
+
+    def tolist(self) -> List[List[float]]:
+        """Return the contents as a nested list of floats (a copy)."""
+        return [row[:] for row in self._data]
+
     def __setitem__(self, idx: int | Tuple[int, int], value: float | List[float]) -> None:
         if isinstance(idx, tuple):
             r, c = idx
@@ -411,6 +457,164 @@ def array(data: Sequence[float] | Sequence[Sequence[float]]) -> Vec | Mat:
     if isinstance(first, (list, tuple)):
         return Mat(data)  # type: ignore[arg-type]  # discriminated union not statically resolvable at runtime (NM-006)
     return Vec(data)  # type: ignore[arg-type]  # fallback Vec branch in array(), same runtime pattern (NM-007)
+
+
+#: Types that are sequences but are never a vector of numbers.  Kept separate
+#: so the rejection message can name what was actually passed.
+_NOT_NUMERIC_SEQUENCES = (str, bytes, bytearray, memoryview)
+
+
+def _shape_of(data: object) -> Tuple[int, ...] | None:
+    """Return ``data.shape`` when it is a tuple of ints, else None.
+
+    Duck-typed on purpose.  ``numpy.ndarray`` exposes ``shape``; so do
+    ``Vec``/``Mat`` and several other array libraries.  Reading the attribute
+    instead of testing ``isinstance(data, numpy.ndarray)`` is what keeps this
+    module free of a numpy import while still handling one correctly.
+    """
+    shape = getattr(data, "shape", None)
+    if isinstance(shape, tuple) and all(isinstance(d, int) for d in shape):
+        return shape
+    return None
+
+
+def _to_float(value: object, where: str) -> float:
+    """Convert one element to float, or raise naming the offending value."""
+    try:
+        return float(value)  # type: ignore[arg-type]  # duck-typed numeric coercion, guarded by the except (NM-011)
+    except (TypeError, ValueError) as exc:
+        raise TypeError(
+            f"{where}: elements must be real numbers, got "
+            f"{type(value).__name__} ({value!r}) — {exc}"
+        ) from None
+
+
+def asvec(data: object, *, copy: bool = True) -> Vec:
+    """Coerce ``data`` to a :class:`Vec`.
+
+    Accepts, in this order:
+
+    * a :class:`Vec` — returned as-is when ``copy=False``, otherwise copied;
+    * anything exposing a 1-D ``shape`` and ``tolist()``, which is how a
+      ``numpy.ndarray`` arrives — no ``numpy`` import happens here;
+    * any other sequence or iterable of real numbers, including a plain
+      ``list``, ``tuple``, ``range`` or generator.
+
+    Raises:
+        ValueError: ``data`` is 0-D or 2-D-or-higher (including a
+            :class:`Mat`), i.e. it is an array but not a vector.
+        TypeError: ``data`` is not array-like at all, or an element is not a
+            real number.
+
+    Every message names the shape or type it actually received.  The failure
+    this replaces surfaced from inside ``numpy.matmul`` as "Input operand 0
+    does not have enough dimensions", which told a caller neither which
+    operand nor which of their arguments was wrong.
+    """
+    if isinstance(data, Vec):
+        return data.copy() if copy else data
+    if isinstance(data, Mat):
+        raise ValueError(
+            f"expected a 1-D vector, got a 2-D Mat with shape {data.shape}. "
+            "Index a row (mat[i]) or use asmat() if a matrix was intended."
+        )
+    if isinstance(data, _NOT_NUMERIC_SEQUENCES):
+        raise TypeError(
+            f"expected a 1-D vector of numbers, got {type(data).__name__}; "
+            "byte and text sequences are not numeric vectors"
+        )
+
+    shape = _shape_of(data)
+    if shape is not None and len(shape) != 1:
+        if len(shape) == 0:
+            hint = "This is a 0-D scalar; wrap it in a list to make it a vector."
+        elif len(shape) == 2:
+            hint = "Use asmat() for a 2-D array, or index the axis you meant."
+        else:
+            hint = "Flatten or index it down to one dimension."
+        raise ValueError(f"expected a 1-D vector, got an array with shape {shape}. {hint}")
+
+    to_list = getattr(data, "tolist", None)
+    if callable(to_list):
+        data = to_list()
+
+    try:
+        values = list(data)  # type: ignore[call-overload]  # arbitrary iterable, guarded by the except (NM-012)
+    except TypeError:
+        raise TypeError(
+            f"cannot build a Vec from {type(data).__name__}: it is neither a "
+            "Vec, a sequence of numbers, nor an object exposing tolist()/shape"
+        ) from None
+
+    for element in values:
+        if isinstance(element, (list, tuple, Vec)):
+            raise ValueError(
+                "expected a 1-D vector, got nested sequences; use asmat() for " "a 2-D array"
+            )
+
+    return Vec._wrap([_to_float(v, "asvec") for v in values])
+
+
+def asmat(data: object, *, copy: bool = True) -> Mat:
+    """Coerce ``data`` to a :class:`Mat`.
+
+    The 2-D counterpart of :func:`asvec`, with the same duck-typed contract:
+    a :class:`Mat`, a 2-D ``numpy.ndarray``, or a sequence of equal-length
+    sequences of real numbers.
+
+    Raises:
+        ValueError: ``data`` is not 2-D, or its rows are ragged.
+        TypeError: ``data`` is not array-like, or an element is not a real
+            number.
+    """
+    if isinstance(data, Mat):
+        return data.copy() if copy else data
+    if isinstance(data, Vec):
+        raise ValueError(
+            f"expected a 2-D matrix, got a 1-D Vec of length {len(data)}. "
+            "Wrap it ([vec]) to make it a single row."
+        )
+    if isinstance(data, _NOT_NUMERIC_SEQUENCES):
+        raise TypeError(
+            f"expected a 2-D matrix of numbers, got {type(data).__name__}; "
+            "byte and text sequences are not numeric arrays"
+        )
+
+    shape = _shape_of(data)
+    if shape is not None and len(shape) != 2:
+        raise ValueError(
+            f"expected a 2-D matrix, got an array with shape {shape}. "
+            + ("Use asvec() for a 1-D array." if len(shape) == 1 else "")
+        )
+
+    to_list = getattr(data, "tolist", None)
+    if callable(to_list):
+        data = to_list()
+
+    try:
+        rows = list(data)  # type: ignore[call-overload]  # arbitrary iterable, guarded by the except (NM-013)
+    except TypeError:
+        raise TypeError(
+            f"cannot build a Mat from {type(data).__name__}: it is neither a "
+            "Mat, a sequence of rows, nor an object exposing tolist()/shape"
+        ) from None
+
+    out: List[List[float]] = []
+    for index, row in enumerate(rows):
+        if isinstance(row, _NOT_NUMERIC_SEQUENCES) or not hasattr(row, "__iter__"):
+            raise ValueError(
+                f"expected a 2-D matrix, but row {index} is "
+                f"{type(row).__name__}, not a sequence of numbers"
+            )
+        out.append([_to_float(v, f"asmat row {index}") for v in row])
+
+    width = len(out[0]) if out else 0
+    for index, row in enumerate(out):
+        if len(row) != width:
+            raise ValueError(
+                f"ragged matrix: row 0 has {width} columns but row {index} " f"has {len(row)}"
+            )
+    return Mat._wrap(out, len(out), width)
 
 
 def zeros(n: int) -> Vec:

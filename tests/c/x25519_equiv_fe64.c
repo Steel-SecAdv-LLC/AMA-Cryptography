@@ -14,4 +14,6 @@
 #define AMA_X25519_LADDER_LINKAGE   /* empty — external linkage */
 #define x25519_scalarmult           x25519_scalarmult_fe64
 
+#include "x25519_equiv_ladders.h"
+
 #include "../../src/c/ama_x25519.c"

@@ -1,7 +1,7 @@
 {
   "metadata": {
     "baseline_source_release": "3.4.0",
-    "applies_through_release": "3.5.0",
+    "applies_through_release": "4.0.0",
     "created": "2026-04-05T00:00:00Z",
     "description": "AMA Cryptography performance baseline for regression detection",
     "system": "GitHub Actions shared runner, Linux x86-64, Python 3.11",
@@ -98,6 +98,11 @@
         "date": "2026-07-30",
         "release": "3.5.0",
         "change": "PROVENANCE METADATA CORRECTED, NO FLOOR CHANGES. `baseline_source_release` (2.1.2) and the `notes` opening claim (‘measured against v2.1.2 … valid through v3.0.0’) still described the original 2026-02 calibration, three re-floors after it stopped being true — including in the failure banner test_benchmark_baseline_freshness.py prints, which would have reported false provenance on the first window violation. Both now name the 2026-07-29 recalibration this file's own change log records: source release 3.4.0, window per `applies_through_release`. Historical change-log entries are records and were left verbatim."
+      },
+      {
+        "date": "2026-07-31",
+        "release": "4.0.0",
+        "change": "WINDOW EXTENDED TO 4.0.0, NO FLOOR CHANGES. The 4.0.0 major bump pushed the package past `applies_through_release` (3.5.0) and tripped test_benchmark_baseline_freshness. Every `baseline_value` in this file is carried forward unchanged; only `applies_through_release` moved. Rationale: of the primitives this file floors, 4.0.0 touches exactly one measured path — Ed25519 verify and point decode gain `ama_ed25519_point_y_is_canonical`, a single branch-free 32-byte comparison per decode, against a verify costing ~10^5 ns. The scalar-GHASH rewrite earlier in this release affects only the non-SIMD AES-GCM fallback; x86-64 and ARM canonical runners dispatch to VAES/PCLMULQDQ and PMULL respectively, so `aes_256_gcm_encrypt` measures the same kernel as before. No other floored primitive changed — ed25519_keygen, ed25519_sign, ed25519_verify, secp256k1_ecdsa_sign, secp256k1_ecdsa_verify, ama_sha3_256_hash, hmac_sha3_256, hkdf_derive, dilithium_keygen, dilithium_sign, dilithium_verify, kyber_keygen, kyber_encapsulate, aes_256_gcm_encrypt, chacha20poly1305_encrypt, x25519_scalarmult, full_package_create and full_package_verify all keep their existing floors. AUTHORITY: these floors were NOT re-measured for this entry. The canonical measurement is the benchmark-regression CI job, which runs on the calibrated runner class named in `system` and gates this PR. A local run on a non-canonical contended sandbox VM (`./build/bin/benchmark_c_raw`) recorded 6965 ops/sec for Ed25519 verify, 25702 for sign and 28185 for keygen; those sit below the 13000/33000/31000 floors purely because that host is slower than the canonical class, so they corroborate nothing and are recorded only so the numbers are not mistaken for a calibration. If the benchmark-regression job fails on this PR, these floors need a genuine canonical re-measure, not a further window extension."
       }
     ]
   },

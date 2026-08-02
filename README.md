@@ -40,7 +40,7 @@
 **Author/Inventor:** Andrew E. A.
 **Contact:** steel.sa.llc@gmail.com
 **License:** Apache License 2.0
-**Version:** 3.5.0
+**Version:** 4.0.0
 **AI Co-Architects:** Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
 
 ---
@@ -49,7 +49,7 @@
 
 AMA Cryptography is a hybrid Ed25519 + Dilithium (ML-DSA-65) framework for quantum-resistant integrity protection. Community-tested, not externally audited. A multi-language cryptographic security system designed to protect people, data, and networks against both classical and quantum threats. Built on NIST-standardized post-quantum cryptography (PQC), AMA Cryptography provides security-hardened features with measured performance (see [Performance Metrics](#performance-metrics)).
 
-The system combines NIST-standardized post-quantum algorithms with a 3R runtime security monitoring framework, creating a defense-in-depth architecture that provides visibility into cryptographic operations. 3R overhead is not part of the CI regression gate; measure it locally with `python benchmarks/benchmark_suite.py` before relying on an environment-specific figure. The multi-language architecture (C + Cython + Python) pairs constant-time C implementations with optional Cython acceleration for the 3R math engine only. On that specific workload — Lyapunov exponent, NTT-shaped rotation matrix-vector products, and helix evolution kernels in `ama_cryptography/math_engine.pyx` — Cython is 18–37× faster than the pure-Python NumPy baseline on x86-64 (see [`wiki/Performance-Benchmarks.md`](wiki/Performance-Benchmarks.md) for methodology). This speedup is for 3R monitoring math and **does not apply to the C-implemented cryptographic primitives** — those numbers live in [`benchmark-report.md`](benchmark-report.md). Independent security review is recommended before deployment in high-security or regulated environments.
+The system combines NIST-standardized post-quantum algorithms with a 3R runtime security monitoring framework, creating a defense-in-depth architecture that provides visibility into cryptographic operations. 3R overhead is not part of the CI regression gate; measure it locally with `python benchmarks/benchmark_suite.py` before relying on an environment-specific figure. The multi-language architecture (C + Cython + Python) pairs constant-time C implementations with optional Cython acceleration for the 3R math engine only. On that specific workload — Lyapunov exponent, NTT-shaped rotation matrix-vector products, and helix evolution kernels in `src/cython/math_engine.pyx` — Cython is 18–37× faster than the pure-Python NumPy baseline on x86-64 (see [`wiki/Performance-Benchmarks.md`](wiki/Performance-Benchmarks.md) for methodology). This speedup is for 3R monitoring math and **does not apply to the C-implemented cryptographic primitives** — those numbers live in [`benchmark-report.md`](benchmark-report.md). Independent security review is recommended before deployment in high-security or regulated environments.
 
 **Protecting people, data, and networks with quantum-resistant cryptography**
 
@@ -263,7 +263,7 @@ NIST-standardized post-quantum algorithms:
 
 > All PQC operations run through the native C library. No external PQC dependency (liboqs, pqcrypto) is present or required. Build with `cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build`. Set `AMA_REQUIRE_CONSTANT_TIME=true` in the process environment to enforce constant-time operation at import.
 
-### C library inventory (v3.5.0)
+### C library inventory (v4.0.0)
 
 Top-level `src/c/*.c` — 27 translation units:
 
@@ -292,7 +292,7 @@ Additional C sources:
 
 - `hmac_binding.pyx`, `sha3_binding.pyx`, `hkdf_binding.pyx`, `ed25519_binding.pyx`, `dilithium_binding.pyx` — thin FFI bindings that call the native C entry points with no per-call ctypes overhead. `ctypes` fallback is used when the extension is not built.
 - `math_engine.pyx` — the 3R monitoring math kernels (Lyapunov exponent, NTT-shaped rotation matrix-vector products, helix evolution). 18–37× over the pure-Python NumPy baseline (see [`wiki/Performance-Benchmarks.md`](wiki/Performance-Benchmarks.md) for methodology). **This speedup does not apply to the C-implemented cryptographic primitives.**
-- `helix_engine_complete.pyx` — the complete Cython-accelerated helix engine.
+- `helix_engine_complete.pyx` — a complete-engine reference implementation of all 18+ variants. It is **not** compiled by the default build (`setup.py` builds `math_engine.pyx` and the FFI bindings above, not this file); `math_engine.pyx` is the acceleration that actually ships.
 
 ### Python package (`ama_cryptography/`, 25 modules + `__init__` + `__main__`)
 
@@ -531,7 +531,7 @@ reproducible:
 ```bash
 # Replace the tag with the release you want; any published tag works.
 # Tags: https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/tags
-pip install "git+https://github.com/Steel-SecAdv-LLC/AMA-Cryptography.git@v3.5.0"
+pip install "git+https://github.com/Steel-SecAdv-LLC/AMA-Cryptography.git@v4.0.0"
 ```
 
 This clones at the tag and builds the native C library and Cython extensions
@@ -541,7 +541,7 @@ a C11 compiler, `cmake >= 4.3.4`, `Cython >= 3.2.8`, and `numpy >= 1.24.0`.
 To verify the tag is the one you expect before installing:
 
 ```bash
-git ls-remote --tags https://github.com/Steel-SecAdv-LLC/AMA-Cryptography.git v3.5.0
+git ls-remote --tags https://github.com/Steel-SecAdv-LLC/AMA-Cryptography.git v4.0.0
 ```
 
 Confirm the install landed and the native backends are live:
@@ -665,7 +665,7 @@ exact, verifiable pin rather than a floating range.
 `requirements.txt` and in a `pyproject.toml` `dependencies` list):
 
 ```
-ama-cryptography @ git+https://github.com/Steel-SecAdv-LLC/AMA-Cryptography.git@v3.5.0
+ama-cryptography @ git+https://github.com/Steel-SecAdv-LLC/AMA-Cryptography.git@v4.0.0
 ```
 
 **Pin by wheel + hash**, once a release carries built artifacts — the
@@ -673,7 +673,7 @@ strongest form, because pip refuses anything whose hash does not match:
 
 ```
 # requirements.txt  (install with: pip install --require-hashes -r requirements.txt)
-ama-cryptography @ https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/releases/download/v3.5.0/<WHEEL_FILENAME> \
+ama-cryptography @ https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/releases/download/v4.0.0/<WHEEL_FILENAME> \
     --hash=sha256:<DIGEST>
 ```
 
@@ -934,13 +934,13 @@ The test suite includes:
 - Edge case testing for error handling
 - Performance regression tests with tiered tolerances
 - NIST ACVP vector validation (1,215 vectors across 12 algorithm functions — 815 AFT + 400 SHA-3 MCT; see [CSRC_ALIGN_REPORT.md](docs/compliance/CSRC_ALIGN_REPORT.md))
-- Fuzz harnesses for 16 C targets (`fuzz/`): AES-GCM, agent-binding, Argon2, Ascon, ChaCha20-Poly1305, consttime, Dilithium, Ed25519, FROST, HKDF, Kyber, RNG, secp256k1, SHA3, SPHINCS+, X25519. The agent-binding harness asserts security properties (fail-closed policy, no derivation for a refused binding, tampered tags rejected), not merely absence of crashes.
+- Fuzz harnesses for 15 C targets (`fuzz/`): AES-GCM, agent-binding, Argon2, Ascon, ChaCha20-Poly1305, consttime, Dilithium, Ed25519, FROST, HKDF, Kyber, secp256k1, SHA3, SPHINCS+, X25519. (`fuzz_rng.c` is a shared PRNG helper linked into `fuzz_frost`, not a harness of its own — 16 `fuzz_*.c` sources, 15 libFuzzer entry points.) The agent-binding harness asserts security properties (fail-closed policy, no derivation for a refused binding, tampered tags rejected), not merely absence of crashes.
 - Empirical constant-time verification via [dudect](docs/constant-time-testing.md) (Welch's t-test on execution times)
 - [OSS-Fuzz](docs/oss-fuzz-onboarding.md) onboarding preparation for continuous 24/7 fuzzing
 
 ![Test Suite Coverage](assets/test_coverage.png)
 
-*3,057 test functions across 126 Python test files plus 57 C test suites (60 translation units) covering core crypto and NIST KATs (including the new AVX-512 4-way Keccak KAT, fe51-vs-fe64 X25519 byte-equivalence, MULX+ADX equivalence, VAES AES-GCM equivalence, FROST threshold signing, Ed25519 Shamir verify and base-point comb equivalence, and Dilithium / Kyber sampling-equivalence pinning), PQC backends, key management, adaptive posture, hybrid combiner, memory security, fuzz harnesses, and performance/monitoring. See [docs/METRICS_REPORT.md](docs/METRICS_REPORT.md) for the authoritative count and reproduction command (`grep -rE "^\s*def test_" tests/ --include='*.py' | wc -l`).*
+*3,331 test functions across 138 Python test files plus 57 C test suites (60 translation units) covering core crypto and NIST KATs (including the new AVX-512 4-way Keccak KAT, fe51-vs-fe64 X25519 byte-equivalence, MULX+ADX equivalence, VAES AES-GCM equivalence, FROST threshold signing, Ed25519 Shamir verify and base-point comb equivalence, and Dilithium / Kyber sampling-equivalence pinning), PQC backends, key management, adaptive posture, hybrid combiner, memory security, fuzz harnesses, and performance/monitoring. See [docs/METRICS_REPORT.md](docs/METRICS_REPORT.md) for the authoritative count and reproduction command (`grep -rE "^\s*def test_" tests/ --include='*.py' | wc -l`).*
 
 </details>
 
@@ -970,7 +970,7 @@ GitHub Actions automatically tests:
 | CI - Testing and Code Quality | `ci.yml` | Python test matrix + C build + KAT validation + lint/format/type |
 | CI - Build & Test | `ci-build-test.yml` | Full C library build and C test suite across compilers/platforms |
 | Static Analysis (C) | `static-analysis.yml` | cppcheck, clang-analyzer, CodeQL, Werror, ASan+UBSan, MSan-KAT, clang-tidy fail-closed |
-| Fuzzing (libFuzzer) | `fuzzing.yml` | C fuzz harnesses (16 targets) + dictionary-validity gate |
+| Fuzzing (libFuzzer) | `fuzzing.yml` | C fuzz harnesses (15 targets) + dictionary-validity gate |
 | dudect Constant-Time | `dudect.yml` | Welch's t-test on execution timings |
 | ACVP Vector Validation | `acvp_validation.yml` | 1,215 / 1,215 gate, every push + weekly |
 | Vendored Corpus Provenance | `corpus-provenance.yml` | Wycheproof + NIST digest manifest gate |
@@ -1200,7 +1200,7 @@ Full reproduction instructions:
 |----------|-------------|
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Contribution guidelines |
 | [CHANGELOG.md](CHANGELOG.md) | Version history |
-| [INVARIANTS.md](INVARIANTS.md) | Canonical architectural invariants (INVARIANT-1 through INVARIANT-37) and vendoring policy |
+| [INVARIANTS.md](INVARIANTS.md) | Canonical architectural invariants (INVARIANT-1 through INVARIANT-38) and vendoring policy |
 | [AMA_CRYPTOGRAPHY_ETHICAL_PILLARS.md](AMA_CRYPTOGRAPHY_ETHICAL_PILLARS.md) | Ethical pillar specification |
 
 </details>
@@ -1262,7 +1262,7 @@ sudo cmake --install .
 - `AMA_BUILD_STATIC` - Build static library (default: ON)
 - `AMA_BUILD_TESTS` - Build test suite including NIST KAT tests (default: ON)
 - `AMA_BUILD_EXAMPLES` - Build C example programs (default: ON)
-- `AMA_BUILD_FUZZ` - Build coverage-guided libFuzzer harnesses (default: OFF; 16 targets in `fuzz/`)
+- `AMA_BUILD_FUZZ` - Build coverage-guided libFuzzer harnesses (default: OFF; 15 targets in `fuzz/`)
 - `AMA_ED25519_ASSEMBLY` - Enable ed25519-donna x86-64 assembly scalar mult (default: **ON** on x86-64 builds — donna's AVX2 field arithmetic outruns the in-tree fe51 path there; **OFF** on ARM and other non-x86 targets where donna has no assembly path. Set `-DAMA_ED25519_ASSEMBLY=OFF` to force the in-tree `src/c/ama_ed25519.c` backend on x86-64, e.g. for clean-room auditing of the signed 4-bit window comb.)
 - `AMA_ED25519_VERIFY_SHAMIR` - Use Shamir / Straus joint `[s]B + [h](-A)` in Ed25519 verify (default: ON; set OFF for legacy split scalar-mult, useful for deterministic regression comparisons)
 - `AMA_ED25519_VERIFY_WINDOW` - wNAF window width for Ed25519 verify scalar mults; integer in `[2, 6]` (default: `5`)
@@ -1496,7 +1496,7 @@ Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) file for 
 
 ### Third-Party Dependencies
 
-AMA Cryptography v3.5.0 has **zero core cryptographic dependencies** — all cryptographic primitives are implemented natively in C.
+AMA Cryptography v4.0.0 has **zero core cryptographic dependencies** — all cryptographic primitives are implemented natively in C.
 
 **Algorithm implementations (all native, public domain references):**
 - **ML-DSA-65** (Dilithium): Public domain (NIST FIPS 204)
@@ -1563,7 +1563,7 @@ The human architect does not hold formal credentials in cryptography. The AI con
 
 - **Standards-based design:** Built on NIST FIPS 202/204, RFC 2104/5869/8032/3161—not custom cryptography
 - **Quantified claims:** All performance metrics are measured and reproducible (see [benchmarks/](benchmarks/))
-- **Rigorous testing:** 3,057 test functions across 126 Python files plus 57 C test suites, anchored in [docs/METRICS_REPORT.md](docs/METRICS_REPORT.md); CI includes security scanning, NIST ACVP validation (1,215/1,215 — 815 AFT + 400 SHA-3 MCT), and tiered benchmark-regression checks
+- **Rigorous testing:** 3,331 test functions across 138 Python files plus 57 C test suites, anchored in [docs/METRICS_REPORT.md](docs/METRICS_REPORT.md); CI includes security scanning, NIST ACVP validation (1,215/1,215 — 815 AFT + 400 SHA-3 MCT), and tiered benchmark-regression checks
 - **Regression detection:** Tiered benchmark tolerances calibrated for CI environments
 - **Transparent limitations:** Security analysis explicitly distinguishes self-assessed vs. audited claims
 - **Defense-in-depth:** Security bounded by weakest layer (~128-bit classical), not inflated aggregate claims

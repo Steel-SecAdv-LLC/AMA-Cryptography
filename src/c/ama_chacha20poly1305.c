@@ -703,6 +703,29 @@ static void chacha20poly1305_compute_tag(const uint8_t poly_key[32],
 }
 
 /* ============================================================================
+ * RFC 8439 §2.8 length limit
+ *
+ * ChaCha20's block counter is 32 bits and the AEAD construction spends
+ * counter 0 on the Poly1305 one-time key, so the payload occupies counters
+ * 1 .. 2^32-1: at most (2^32 - 1) blocks of 64 bytes = 256 GiB - 64 B.
+ *
+ * Overrunning it is not a graceful degradation.  The counter wraps back to 0
+ * and the plaintext bytes at that offset are XORed with the very block whose
+ * first 32 bytes ARE the Poly1305 key r||s for this (key, nonce).  A caller
+ * who knows or can guess those 64 plaintext bytes — a header, a run of zeros
+ * in a disk image — recovers the authenticator key and can forge tags for
+ * that nonce.  So this is an authentication break, not just a keystream
+ * repeat, which is why it is refused rather than truncated.
+ *
+ * Unreachable on a 32-bit size_t, and rare on 64-bit, but "rare" is the
+ * wrong bar for a check this cheap: ama_aes_gcm.c already carries the
+ * equivalent SP 800-38D guard, and leaving one AEAD in the tree without the
+ * other is the inconsistency, not the guard.  The uint64_t cast keeps the
+ * comparison meaningful where size_t is narrower.
+ * ============================================================================ */
+#define AMA_CHACHA20POLY1305_MAX_PLAINTEXT_BYTES (((uint64_t)UINT32_MAX) * 64ULL)
+
+/* ============================================================================
  * PUBLIC API
  * ============================================================================ */
 
@@ -734,6 +757,12 @@ ama_error_t ama_chacha20poly1305_encrypt(
     if (!key || !nonce || !tag) return AMA_ERROR_INVALID_PARAM;
     if (pt_len > 0 && (!plaintext || !ciphertext)) return AMA_ERROR_INVALID_PARAM;
     if (aad_len > 0 && !aad) return AMA_ERROR_INVALID_PARAM;
+
+    /* RFC 8439 §2.8 length limit — see the constant above for why exceeding
+     * it discloses the Poly1305 one-time key rather than merely repeating
+     * keystream. */
+    if ((uint64_t)pt_len > AMA_CHACHA20POLY1305_MAX_PLAINTEXT_BYTES)
+        return AMA_ERROR_INVALID_PARAM;
 
     /* Step 1: Generate Poly1305 one-time key (counter = 0) */
     poly1305_key_gen(key, nonce, poly_key);
@@ -783,6 +812,12 @@ ama_error_t ama_chacha20poly1305_decrypt(
     if (!key || !nonce || !tag) return AMA_ERROR_INVALID_PARAM;
     if (ct_len > 0 && (!ciphertext || !plaintext)) return AMA_ERROR_INVALID_PARAM;
     if (aad_len > 0 && !aad) return AMA_ERROR_INVALID_PARAM;
+
+    /* Mirror of the encrypt-side limit: a ciphertext this long could only
+     * have come from an encryptor that ignored the bound, so decrypting it
+     * would reproduce the same counter wrap. */
+    if ((uint64_t)ct_len > AMA_CHACHA20POLY1305_MAX_PLAINTEXT_BYTES)
+        return AMA_ERROR_INVALID_PARAM;
 
     /* Step 1: Generate Poly1305 one-time key (counter = 0) */
     poly1305_key_gen(key, nonce, poly_key);

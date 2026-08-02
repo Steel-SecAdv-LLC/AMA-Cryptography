@@ -45,8 +45,14 @@ static inline void fe64_copy(fe64 h, const fe64 f) {
 /**
  * Load 32 bytes (little-endian) into 4-limb field element.
  * Clear bit 255 (high bit of byte 31).
+ *
+ * `static inline`, like every other entry point in this header and like
+ * fe51.h's counterparts. Plain `static` in a header makes every translation
+ * unit that includes it but does not call it emit "defined but not used" —
+ * which is what -Wunused-function was reporting, on a header included by
+ * most of the X25519 and Ed25519 tree.
  */
-static void fe64_frombytes(fe64 h, const uint8_t *s) {
+static inline void fe64_frombytes(fe64 h, const uint8_t *s) {
     h[0]  = (uint64_t)s[ 0]       | ((uint64_t)s[ 1] << 8)
           | ((uint64_t)s[ 2] << 16) | ((uint64_t)s[ 3] << 24)
           | ((uint64_t)s[ 4] << 32) | ((uint64_t)s[ 5] << 40)
@@ -74,7 +80,7 @@ static void fe64_frombytes(fe64 h, const uint8_t *s) {
  * After reduction, value is in [0, p). We need to check if the value >= p
  * and conditionally subtract p = 2^255 - 19.
  */
-static void fe64_tobytes(uint8_t *s, const fe64 h) {
+static inline void fe64_tobytes(uint8_t *s, const fe64 h) {
     uint64_t t[4];
     uint128_t c;
 

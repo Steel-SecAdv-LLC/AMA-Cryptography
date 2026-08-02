@@ -12,7 +12,10 @@ only the Python standard library.
 Features:
 
 - Secure zeroing — multi-pass overwrite implementation
-- Constant-time comparison — AMA C library or pure-Python XOR accumulator
+- Constant-time comparison — AMA's native C library, and nothing else: the
+  pure-Python XOR accumulator this module used to fall back to was not
+  constant-time in fact (INVARIANT-7), so ``constant_time_compare`` now raises
+  rather than substituting it
 - SecureBuffer context manager — automatic cleanup on exit
 - Secure random byte generation — uses ``os.urandom``
 
@@ -20,7 +23,10 @@ Implementation notes:
 
 - ``secure_memzero``: Multi-pass byte-level overwrite
 - ``secure_mlock`` / ``secure_munlock``: Native C backend (VirtualLock/mlock) or POSIX fallback
-- ``constant_time_compare``: ``ama_consttime_memcmp`` (C) or XOR accumulator (Python)
+- ``constant_time_compare``: ``ama_consttime_memcmp`` (C), required — raises
+  ``RuntimeError`` when the native library is absent
+- ``lengths_match``: public (non-constant-time) length pre-check, for use
+  before ``constant_time_compare`` where the expected size is fixed
 - ``secure_random_bytes``: Uses ``os.urandom`` (stdlib)
 
 Usage::
@@ -534,43 +540,152 @@ def constant_time_compare(a: bytes, b: bytes) -> bool:
     """
     Compare two byte sequences in constant time.
 
-    Primary: uses ama_consttime_memcmp from AMA's native C library.
-    Fallback: pure-Python XOR accumulator that pads both inputs to
-    equal length and never short-circuits on length or content.
+    Uses ``ama_consttime_memcmp`` from AMA's native C library, and refuses to
+    operate without it.
+
+    INVARIANT-7, no cryptographic fallbacks
+    ---------------------------------------
+    This function used to fall back to a pure-Python XOR accumulator, and both
+    the docstring and ``CONSTANT_TIME_VERIFICATION.md`` described that
+    accumulator as the constant-time fallback. INVARIANT-7 names exactly that
+    substitution as unacceptable — *"a pure-Python fallback for any
+    cryptographic primitive or secret-dependent operation"* — and this is a
+    secret-dependent operation by INVARIANT-12's own definition, which lists
+    "pre-verification MAC/tag comparisons" as secret material. Its callers are
+    HMAC tag verification in ``crypto_api.verify_crypto_package`` and the
+    pinned-responder-key check in ``secure_channel``.
+
+    The loop was also not constant-time in fact, only in shape. ``ljust``
+    allocates, ``zip`` builds tuples, and ``result |= x ^ y`` runs the CPython
+    integer path with its small-int cache — none of which retires a fixed
+    instruction count. A fallback that is documented as constant-time and is
+    not is worse than no fallback, because callers stop asking.
+
+    So the availability axis is enforced the way INVARIANT-7 requires, at call
+    time and in the same shape ``pqc_backends`` uses: no native backend, no
+    operation. Import still succeeds (this module has no import-time guard and
+    is used for non-cryptographic memory hygiene too), which is also what keeps
+    the documented ``AMA_SPHINX_BUILD`` docs path working — the refusal is on
+    the call, not the import.
+
+    Cost is bounded by the *shorter* operand
+    ----------------------------------------
+    Lengths are public metadata here and always have been: a MAC tag, a public
+    key and a KEM shared secret each have one fixed size that is published in
+    the specification, so an observer learns nothing from a comparison whose
+    cost depends on them. What matters is that the cost cannot be driven by an
+    attacker, and until this release it could be.
+
+    The previous implementation padded *both* operands to
+    ``max(len(a), len(b))`` with ``ljust``. Every caller of this function
+    compares a locally computed value against one that arrived from outside —
+    ``verify_crypto_package`` recomputes a 32-byte HMAC tag and compares it to
+    ``package.hmac_tag``, which is whatever the package says it is. A package
+    declaring an 8 MiB tag therefore caused 16 MiB of allocation and an 8 MiB
+    scan to reject a 32-byte value — measured — before any other check could
+    look at it, and nothing bounded the size it could declare. That is memory
+    and CPU amplification on unauthenticated input, reachable from the one
+    function whose job is to decide whether that input is authentic.
+
+    Now ``min(len(a), len(b))`` bytes are compared in place — no padding, no
+    allocation, no copy — and the length difference is OR-ed into the verdict
+    rather than short-circuiting the content scan: a mismatched length does not
+    skip the comparison, it is folded into its result. Work is bounded by the
+    shorter operand, whichever argument that is, so the bound does not depend
+    on a call site passing its own value first. The branch-free property with
+    respect to *content* is unchanged: the native ``ama_consttime_memcmp``
+    accumulates over all n bytes with no early exit.
+
+    Callers that know the expected length up front should still say so, with
+    :func:`lengths_match`, so a malformed length is refused explicitly rather
+    than folded into a comparison verdict.
 
     Args:
-        a: First byte sequence
-        b: Second byte sequence
+        a: First byte sequence.  By convention the locally computed value.
+        b: Second byte sequence.  By convention the untrusted one.
 
     Returns:
         True if sequences are equal, False otherwise
+
+    Raises:
+        RuntimeError: If the native constant-time backend is unavailable.
 
     Example:
         >>> constant_time_compare(b"secret", b"secret")
         True
         >>> constant_time_compare(b"secret", b"Secret")
         False
-    """
-    # Try AMA's native C constant-time comparison
-    if _native_consttime_memcmp is not None:
-        # Branch-free: both length check and content check always execute.
-        # Pad to equal length so memcmp runs on the same number of bytes
-        # regardless of input lengths.
-        max_len = max(len(a), len(b), 1)
-        a_pad = a.ljust(max_len, b"\x00")
-        b_pad = b.ljust(max_len, b"\x00")
-        length_diff = len(a) ^ len(b)
-        content_diff: int = _native_consttime_memcmp(a_pad, b_pad, max_len)
-        return (length_diff | content_diff) == 0
+        >>> constant_time_compare(b"secret", b"secret-and-then-some")
+        False
 
-    # Fallback: pure-Python XOR accumulator — no imports, no early return
-    result = len(a) ^ len(b)
-    max_len = max(len(a), len(b))
-    a_pad = a.ljust(max_len, b"\x00")
-    b_pad = b.ljust(max_len, b"\x00")
-    for x, y in zip(a_pad, b_pad):
-        result |= x ^ y
-    return result == 0
+    .. versionchanged:: 4.0
+       Work is bounded by ``min(len(a), len(b))`` instead of
+       ``max(len(a), len(b))``, removing the padding allocations. Return values
+       are unchanged for every input.
+    """
+    if _native_consttime_memcmp is None:
+        raise RuntimeError(
+            "INVARIANT-7: constant_time_compare requires AMA's native "
+            "ama_consttime_memcmp and refuses to operate without it. A "
+            "pure-Python comparison is not constant-time on CPython, and this "
+            "function is used for MAC/tag verification and key pinning. Build "
+            "the native library: "
+            "cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
+        )
+
+    # Both terms always execute: the content scan is not skipped when the
+    # lengths differ, and the length term is not skipped when they match.
+    length_diff = len(a) ^ len(b)
+    common = min(len(a), len(b))
+    # ctypes passes a pointer to each object's own buffer, so `common` bounds
+    # the read without slicing either operand.  n == 0 (both empty, or one
+    # empty) is well defined: the native loop does not execute and returns 0,
+    # leaving `length_diff` to decide.
+    content_diff: int = _native_consttime_memcmp(a, b, common) if common else 0
+    return (length_diff | content_diff) == 0
+
+
+def lengths_match(a: bytes, b: bytes) -> bool:
+    """Public length pre-check for values whose size is not secret.
+
+    A deliberately ordinary, deliberately *not* constant-time comparison of two
+    lengths, published as API so call sites can perform it explicitly instead
+    of leaving it implicit inside :func:`constant_time_compare`.
+
+    Why this is safe, stated once so call sites need not restate it: the values
+    AMA compares in constant time — HMAC-SHA3-256 tags, Ed25519 / ML-DSA-65
+    public keys, ML-KEM shared secrets — each have exactly one length fixed by
+    their specification. An observer who learns that a candidate was the wrong
+    length learns nothing they did not already know from the algorithm name.
+    The secret is the *content*, and that is what
+    :func:`constant_time_compare` protects.
+
+    Why it is worth calling anyway:
+
+    * It refuses malformed input at the boundary, where the error can say
+      "expected a 32-byte tag, got 9", rather than folding a structural defect
+      into a cryptographic verdict that reads as "the tag did not match".
+    * It bounds work on untrusted input before any of it is scanned.
+    * It documents, at the call site, that the caller thought about which of
+      the two properties — length and content — is the secret one.
+
+    Args:
+        a: First byte sequence.
+        b: Second byte sequence.
+
+    Returns:
+        True if the two have the same length.
+
+    Example:
+        >>> tag = b"\\x00" * 32
+        >>> lengths_match(tag, b"\\x00" * 32)
+        True
+        >>> lengths_match(tag, b"short")
+        False
+
+    .. versionadded:: 4.0
+    """
+    return len(a) == len(b)
 
 
 def secure_random_bytes(size: int) -> bytes:
@@ -847,6 +962,7 @@ __all__ = [
     "constant_time_compare",
     "get_status",
     "is_available",
+    "lengths_match",
     "secure_buffer",
     "secure_memzero",
     "secure_mlock",

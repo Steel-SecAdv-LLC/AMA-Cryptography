@@ -26,9 +26,11 @@ AI Co-Architects: Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
 
 import contextlib
 import ctypes
+import errno as _errno
 import logging
 import os
 import platform
+import sys
 import warnings
 from collections.abc import Iterator
 from dataclasses import dataclass, field
@@ -231,15 +233,226 @@ def _try_load_library(lib_path: Path) -> Optional[ctypes.CDLL]:
         return None
 
 
+#: ``AT_SECURE`` / ``AT_NULL`` from ``elf.h``.  Stable kernel ABI constants.
+_AT_NULL = 0
+_AT_SECURE = 23
+
+
+def _auxv_at_secure(path: str = "/proc/self/auxv") -> Optional[bool]:
+    """The kernel's ``AT_SECURE`` flag, or None where it cannot be read.
+
+    ``AT_SECURE`` is the authority the dynamic loader itself consults when it
+    decides to ignore ``LD_PRELOAD`` and ``LD_LIBRARY_PATH``.  The kernel sets
+    it for set-user-ID and set-group-ID execution *and* for several cases a
+    uid/gid comparison cannot see — most importantly a binary carrying file
+    capabilities (``setcap``), which runs privileged with ``uid == euid``.
+    Reading it directly is what makes this module's rule the same rule the
+    loader applies, rather than an approximation of it.
+
+    Returns None on any platform or configuration without ``/proc/self/auxv``
+    (Windows, macOS, a hardened container that masks procfs), leaving the
+    caller to fall back to the uid/gid comparison.
+
+    ``path`` exists so the parser can be driven over a synthetic auxiliary
+    vector in tests; nothing in the library passes it.
+    """
+    try:
+        with open(path, "rb") as handle:
+            data = handle.read()
+    except OSError:  # pragma: no cover - platform-dependent
+        return None
+    word = ctypes.sizeof(ctypes.c_void_p)
+    for offset in range(0, len(data) - 2 * word + 1, 2 * word):
+        key = int.from_bytes(data[offset : offset + word], sys.byteorder)
+        if key == _AT_NULL:
+            break
+        if key == _AT_SECURE:
+            value = int.from_bytes(data[offset + word : offset + 2 * word], sys.byteorder)
+            return value != 0
+    return None
+
+
+#: Cached handle on the process's own symbol namespace, so the two libc probes
+#: below resolve once rather than per call.  ``False`` records a failed
+#: resolution; ``None`` means "not attempted yet".
+_LIBC_HANDLE: Union[ctypes.CDLL, bool, None] = None
+
+
+def _process_libc() -> Optional[ctypes.CDLL]:
+    """The process's own symbol namespace, or None where that cannot be opened.
+
+    ``ctypes.CDLL(None)`` is the POSIX idiom for ``dlopen(NULL)`` — a handle on
+    the already-loaded libc rather than a second copy of it.  Restricted to
+    ``os.name == "posix"``: on Windows there is no equivalent, and both symbols
+    resolved through this handle are POSIX-family APIs that do not exist there.
+    """
+    global _LIBC_HANDLE
+    if _LIBC_HANDLE is None:
+        if os.name != "posix":  # pragma: no cover - platform-dependent
+            _LIBC_HANDLE = False
+        else:
+            try:
+                _LIBC_HANDLE = ctypes.CDLL(None, use_errno=True)
+            except (OSError, TypeError):  # pragma: no cover - platform-dependent
+                _LIBC_HANDLE = False
+    return _LIBC_HANDLE if isinstance(_LIBC_HANDLE, ctypes.CDLL) else None
+
+
+def _libc_issetugid() -> Optional[bool]:
+    """``issetugid(2)``, or None where the platform does not provide it.
+
+    This is the canonical answer on macOS, the BSDs, Solaris and musl: the
+    kernel (or libc) recorded at ``execve`` time whether the image was entered
+    with privileges the caller did not hold, and this call reports that record
+    directly.  It is preferred over every other signal here because it is the
+    platform's own answer to exactly the question being asked, rather than a
+    reconstruction of it.
+
+    glibc does not export it, so on a typical Linux host this returns None and
+    :func:`_libc_getauxval_at_secure` is what answers.
+    """
+    libc = _process_libc()
+    if libc is None:
+        return None
+    try:
+        fn = libc.issetugid
+    except AttributeError:
+        return None
+    fn.restype = ctypes.c_int
+    fn.argtypes = []
+    try:
+        return bool(fn() != 0)
+    except OSError:  # pragma: no cover - platform-dependent
+        return None
+
+
+def _libc_getauxval_at_secure() -> Optional[bool]:
+    """``getauxval(AT_SECURE)``, or None where it is unavailable or absent.
+
+    ``AT_SECURE`` is the flag the dynamic loader itself consults when it
+    decides to ignore ``LD_PRELOAD`` and ``LD_LIBRARY_PATH``.  Asking libc for
+    it is strictly more robust than parsing ``/proc/self/auxv``: it works in a
+    hardened container that masks procfs, it needs no file descriptor, and it
+    cannot be defeated by a bind-mount over ``/proc``.  ``_auxv_at_secure``
+    remains as the fallback for libcs that predate the call (glibc < 2.16).
+
+    ``errno`` is consulted rather than assumed.  glibc and musl both return 0
+    and set ``ENOENT`` for a type that is not in the vector, which is a
+    different statement from "the flag is 0" — the first is no information and
+    must become None, the second is an assertion that the process is not
+    privileged.
+    """
+    libc = _process_libc()
+    if libc is None:
+        return None
+    try:
+        fn = libc.getauxval
+    except AttributeError:
+        return None
+    fn.restype = ctypes.c_ulong
+    fn.argtypes = [ctypes.c_ulong]
+    ctypes.set_errno(0)
+    try:
+        value = int(fn(ctypes.c_ulong(_AT_SECURE)))
+    except OSError:  # pragma: no cover - platform-dependent
+        return None
+    if value == 0 and ctypes.get_errno() == _errno.ENOENT:
+        return None
+    return value != 0
+
+
+def _in_secure_execution_mode() -> bool:
+    """True when the process runs with privileges its real user does not hold.
+
+    Such a process is executing on behalf of a less-privileged caller, so
+    environment variables that caller controls — ``AMA_CRYPTO_LIB_PATH`` above
+    all — must not be allowed to steer code loading. This is the same rule the
+    dynamic loader applies to ``LD_PRELOAD``.
+
+    Four signals, consulted in this order, most authoritative first:
+
+    1. ``issetugid(2)`` (:func:`_libc_issetugid`) — the platform's own record,
+       on macOS, the BSDs, Solaris and musl.
+    2. ``getauxval(AT_SECURE)`` (:func:`_libc_getauxval_at_secure`) — the
+       loader's own flag, on glibc >= 2.16 and musl. Survives a masked
+       ``/proc``.
+    3. ``/proc/self/auxv`` (:func:`_auxv_at_secure`) — the same flag read by
+       hand, for libcs predating (2).
+    4. ``uid != euid or gid != egid`` — the classic set-uid/set-gid test.
+
+    **The answer is their OR, and that is the whole of the contract.** The
+    first signal that says True ends it; a signal that says *False* does not
+    end anything, because each covers a case the others cannot see. (1)-(3)
+    catch file capabilities — a ``setcap`` binary runs privileged with
+    ``uid == euid``, so (4) sees nothing — while (4) keeps working where no
+    kernel-side signal is reachable at all.
+
+    **An unavailable signal is not a negative one.** Each of (1)-(3) returns
+    ``None`` for "could not tell" — symbol absent, procfs masked, no
+    ``AT_SECURE`` entry — and ``None`` neither answers True nor suppresses the
+    signals after it. It is not treated as True either: this function does not
+    fail closed on ignorance, it moves on to a signal that can answer. Only (4)
+    remains after all three, and only when *it* is unavailable too does the
+    answer become False by exhaustion.
+
+    Returns:
+        True when any signal reports privileged execution. False when every
+        signal that could run reported unprivileged, and False on a platform
+        where none of them exists (Windows: no ``issetugid``, no auxiliary
+        vector, no ``os.getuid``) — there, the concept has no referent, and the
+        override stays available.
+    """
+    for probe in (_libc_issetugid, _libc_getauxval_at_secure, _auxv_at_secure):
+        if probe() is True:
+            return True
+    try:
+        return os.getuid() != os.geteuid() or os.getgid() != os.getegid()
+    except AttributeError:  # pragma: no cover - non-POSIX platform
+        return False
+
+
 def _find_native_library() -> Optional[ctypes.CDLL]:
     """Locate and load the native ama_cryptography shared library."""
     lib_names = _get_lib_names()
     search_dirs = _get_search_dirs()
 
-    # AMA_CRYPTO_LIB_PATH override
+    # AMA_CRYPTO_LIB_PATH override.
+    #
+    # SECURITY: this variable selects the shared object that provides every
+    # cryptographic primitive, and a shared object executes its constructors
+    # the moment it is mapped — before any power-on self-test can run.  The
+    # dynamic loader refuses to honour LD_PRELOAD / LD_LIBRARY_PATH in
+    # secure-execution mode for exactly that reason; an override of our own
+    # must honour the same rule, or it becomes a way to reintroduce the
+    # loader-hijack the platform just prevented.  Under set-uid/set-gid the
+    # variable is therefore ignored, loudly.
+    #
+    # Outside secure-execution mode the override remains available (it is how
+    # developers point at an out-of-tree build), but it is logged at WARNING
+    # so that a substituted backend is visible in operational logs.  Note that
+    # the module-integrity digest covers the package's .py files only and
+    # never the native library, so this log line is the only signal that the
+    # backend was not the shipped one.
     override = os.getenv("AMA_CRYPTO_LIB_PATH")
+    if override and _in_secure_execution_mode():
+        logging.getLogger(__name__).warning(
+            "Ignoring AMA_CRYPTO_LIB_PATH=%r: the process is running in "
+            "secure-execution mode (set-uid/set-gid), where environment "
+            "variables from a less-privileged caller must not select the "
+            "cryptographic backend.",
+            override,
+        )
+        override = None
     if override:
         override_path = Path(override)
+        if override_path.is_file() or override_path.is_dir():
+            logging.getLogger(__name__).warning(
+                "Loading the native cryptographic backend from "
+                "AMA_CRYPTO_LIB_PATH=%r instead of the shipped library. The "
+                "module-integrity digest does not cover the native library, "
+                "so this override is not tamper-evident.",
+                override,
+            )
         if override_path.is_file():
             lib = _try_load_library(override_path)
             if lib is not None:

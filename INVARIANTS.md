@@ -312,6 +312,35 @@ model (T4.3). Branch protection rules should enforce this.
 > **Status:** Signed commits are enabled via branch protection on `main` and
 > `develop`.
 
+### INVARIANT-10 Addendum — Release Tags Must Be Annotated and Signed
+
+A release tag **must** be an annotated tag object carrying a signature. A
+lightweight tag — a ref pointing straight at a commit — is prohibited for
+`v*`, because it is a mutable pointer with no object to sign: anyone who can
+push can move it, and there is no place a signature could later be added.
+
+This addendum exists because the invariant above was, until 4.0.0, asserted
+about commits and enforced about nothing else. Measured across the eleven tags
+the repository carried when the gate was written, **six were lightweight and
+the remaining five were annotated but unsigned — none was signed**, and every
+one of those releases went out through a pipeline whose operator runbook said
+`git tag -s`. A documented practice that nothing checks is a practice that has
+not happened.
+
+**Enforcement:** `tools/check_release_tag.py`, run from `release.yml`'s
+preflight stage before any wheel is built. It checks *shape* — the ref
+resolves, names a tag object rather than a commit, and the object contains an
+OpenPGP, SSH, or X.509 signature block — and states in its own output that it
+does **not** verify the signature, since verification needs a trust store this
+repository deliberately does not ship (publishing an `allowed_signers` file
+would assert a key binding only the account owner can establish). GitHub's
+verified/unverified verdict is the complementary half; it is account-level
+state, so preflight reports it rather than gating on it.
+`tests/test_release_tag_gate.py` supplies the negative controls for each
+rejected shape, including one asserting that a fabricated signature block
+passes — so a future reader cannot mistake this gate's PASS for a
+cryptographic result.
+
 ## INVARIANT-11 — SBOM as Release Gate
 
 CycloneDX SBOM generation (Python + C library) **must** succeed as a required
@@ -1050,7 +1079,31 @@ data-dependent branch, and inversion uses a fixed chain over the public
 exponent `n - 2`. Verification is variable time by design — every input is
 public — matching what `ama_ed25519_batch_verify` states.
 
-**Verification.** `tests/test_secp256k1_ecdsa.py` (32 tests) covers RFC 6979
+That sentence was in this document before it was true of the code, and it is
+worth recording how, because the shape recurs. Three sites in
+`src/c/ama_secp256k1.c` branched on a secret and each was individually
+plausible: `sc_mont_mul`'s Montgomery extra reduction (`if (t[SC_LIMBS])`),
+`sc_add`'s carry fold (`if (carry)`, reached on the signing path as
+`r*d mod n + z`), and `sc_is_high`'s short-circuited `memcmp`. The first was
+found and fixed with a comment asserting it was the only one; the other two
+were found by sweeping for the pattern rather than trusting that assertion.
+All three are masked now — `sc_add` folds under an arithmetic mask,
+`sc_is_high` is a single `sc_lt(SC_HALF_N, a->v)`, and the low-`s`
+normalisation goes through `sc_cond_negate` — and
+`tools/check_ghash_constant_time.py --target ecdsa` measures the property
+rather than asserting it. On the AMA_TESTING_MODE static archive the workflow
+actually builds, the pre-fix tree spreads **2,952** instructions across key
+classes and the fixed tree spreads **80**. The gate's threshold was **3,000** —
+forty-eight instructions above the defect it was measuring. It is now 200.
+
+The general rule this yields: **finding one instance of a defect pattern is a
+reason to sweep for the rest, and a gate calibrated between one known defect
+and one assumed-clean baseline is only as good as the assumption.** Both
+halves failed here at once — the "benign" 728-instruction spread the ECDSA
+threshold was calibrated against was mostly two live leaks, and the threshold
+derived from it landed just above the number it needed to be below.
+
+**Verification.** `tests/test_secp256k1_ecdsa.py` (31 tests) covers RFC 6979
 determinism, nonce non-reuse across messages and across keys, rejection of the
 high-`s` twin of a signature the library itself produced, and each strict-DER
 rule. All 476 Wycheproof ECDSA vectors run on every PR; 308/308 of the
@@ -1420,9 +1473,27 @@ visible evidence for this invariant: making the NIST default strict would
 create a new uncounted divergence bucket and turn the gate red.
 
 **Timing posture.** Signing is constant time with respect to the private key
-and the RFC 6979 nonce on both curves; the normalisation is a conditional
-negation of a value that is about to be published. Verification is variable
-time by design on both — every input is public.
+and the RFC 6979 nonce on both curves, *including* the normalisation.
+Verification is variable time by design on both — every input is public.
+
+An earlier revision of this paragraph excused the normalisation as "a
+conditional negation of a value that is about to be published", and that
+reasoning is wrong in a way worth keeping on the record, because it is what
+left a real leak in place on both curves. What gets published is the
+*normalised* `s`. Whether the negation happened is precisely what the
+published value does not reveal: given the low representative, an observer
+cannot tell whether the signer computed it directly or by negating the high
+twin. So `s_raw > (n-1)/2` is one bit per signature about `k` and `d`, and a
+branch on it leaks that bit. Measured in isolation under callgrind, the
+branched form cost 105 more instructions for a high `s` than a low one.
+
+Both curves now select rather than branch: `sc_cond_negate` in
+`ama_secp256k1.c`, and `nistp_select` under a mask in `ama_nistp.c`. The
+`low_s` *flag* is still branched on — it is the caller's argument, it is
+public, and branching on it keeps the default RFC-6979-verbatim path free.
+"About to be published" is a sound argument for the flag and an unsound one
+for the predicate; the distinction is which of the two the observer can
+recover from the output.
 
 **Verification.**
 `tests/test_nistp_curves.py::test_rfc6979_published_vectors` replays all 18
@@ -1477,7 +1548,7 @@ and a rule that requires that judgement invites a fallback that argues it got
 the direction right. Resolve exactly, or refuse.
 
 **Enforcement.** In C: `nistp_lookup()`, `kyber_params_for()`,
-`dil_params_for()` and `slhdsa_params_for()` each end in `default: return NULL`
+`dil_params_for()` and `slh_lookup()` each end in `default: return NULL`
 and every public size/name query propagates that as `0` / `NULL`. In Python:
 `_param_set_id()` (shared by `_ml_kem_id` / `_ml_dsa_id`) and
 `_nistp_curve_id()` raise `ValueError` on any unrecognised value, and reject
@@ -1742,5 +1813,67 @@ scoped in [ARCHITECTURE.md § Scope: RFC 3161 attestation is not implemented](AR
 
 ---
 
+## INVARIANT-38 — Ed25519 Compressed Points Must Have a Canonical `y`
+
+**Statement.** Every Ed25519 point decode must reject a compressed encoding
+whose `y` coordinate, after masking bit 255, is not in `[0, p)` with
+`p = 2^255 - 19`. A `y >= p` is rejected, never reduced modulo `p` before the
+curve equation is solved.
+
+**Why.** RFC 8032 §5.1.3 requires exactly this: a non-canonical `y` is
+rejected, not reduced. INVARIANT-27 already stated the rule as the reason
+X25519's canonicalisation lives on the 32-byte encoding rather than inside the
+shared `fe51_frombytes` / `fe64_frombytes` helpers — "those helpers are shared
+with Ed25519, whose point decoding has the opposite rule". The statement was
+true of the specification and of the document; it was not true of the code.
+Both backends reduced. Nineteen values, `[p, 2^255)`, therefore decoded to the
+same curve point as their reduced counterpart, and a public key had two
+accepted byte encodings.
+
+This is the same input-canonicalization class as INVARIANT-26 (`0 <= S < L`),
+INVARIANT-28 (`r, s ∈ [1, n-1]`) and INVARIANT-29 (ECDSA `Qx`/`Qy` in
+`[0, p)`), and it is resolved the same way and for the same reason: a
+*verification key* must not admit a second encoding, because everything that
+treats the key as an identity — a fingerprint, a map key, a bytewise
+authorisation compare — is otherwise looking at two names for one key.
+
+It is the deliberate policy counterpart of INVARIANT-27, resolved the other
+way, and the split is the one the two RFCs draw. X25519 *reduces*, because two
+peers must agree on one shared secret and the failure mode of disagreeing is
+silent. Ed25519 *rejects*, because a signature must not verify under a second
+encoding of its key.
+
+**Not a forgery route on its own.** `S < L` (INVARIANT-26) is enforced and a
+malleated `R` fails the re-encode comparison in verify, so both
+signature-malleability paths were already closed. This closes the remaining
+public-key encoding malleability.
+
+**Enforcement.** `ama_ed25519_point_y_is_canonical()` in
+`src/c/internal/ama_ed25519_canonical.h` masks bit 255 and compares the 32-byte
+little-endian value against `p` using the same branch-free comparator as the
+`S < L` check (`ama_ed25519_lt_32`, factored out so the scalar and
+field-element predicates cannot drift apart). Both backends enforce it: the
+in-tree fe51 path inside `ge25519_frombytes()` in `src/c/ama_ed25519.c`, which
+every decode in that file funnels through, and the donna path at each call site
+in `src/c/ed25519_donna_shim.c` — verify plus the four point helpers — because
+`ge25519_unpack_negative_vartime()` belongs to the vendored tree and stays
+byte-for-byte unmodified. Both therefore accept exactly the same set of
+encodings, which the Ed25519 backend-differential job depends on.
+
+**Not a constant-time requirement.** The `y` coordinate arrives in a public
+key and is public. The comparison is branch-free regardless.
+
+**Verification.** `tests/c/test_ed25519_canonical_y.c`-style coverage lives in
+`tests/c/test_ed25519_canonical_s.c` alongside the `S < L` cases: the full
+19-value band, the `p-1` / `p` boundary, sign-bit independence in both
+directions, and integration assertions through single and batch verify.
+`tests/test_ed25519_canonical_y.py` drives the policy through the Python
+binding — the whole `[p, p+18]` band rejected, canonical keys accepted, and the
+sign bit shown not to affect the verdict — mirroring
+`tests/test_secp256k1_ecdsa_noncanonical_pubkey.py` for INVARIANT-29. The
+backend-differential job proves the two backends agree on every case.
+
+---
+
 _Maintained by Steel Security Advisors LLC._
-_Last updated: 2026-07-28_
+_Last updated: 2026-07-31_
