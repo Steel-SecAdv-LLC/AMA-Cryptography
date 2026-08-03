@@ -34,14 +34,14 @@ pytest-benchmark==5.2.3
 pytest-cov==7.1.0
 pytest-timeout==2.4.0
 pytest-xdist==3.8.0
-hypothesis==6.161.8
+hypothesis==6.164.0
 coverage==7.15.2
 
 # --- Linting & formatting ---
 black==26.5.1
 mypy==2.3.0
 mypy_extensions==1.1.0
-ruff==0.16.0
+ruff==0.16.1
 
 # --- Security scanning ---
 bandit==1.9.4
