@@ -54,11 +54,26 @@ Exit status: 0 when every public native entry point is gated, 1 otherwise.
 from __future__ import annotations
 
 import ast
+import re
 import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TARGET = REPO_ROOT / "ama_cryptography" / "pqc_backends.py"
+
+#: The Cython binding modules.  Each is a public submodule
+#: (``ama_cryptography.ed25519_binding`` …) whose ``cy_*`` functions call the C
+#: kernel directly — bypassing ``pqc_backends``' gated wrappers, and, when the
+#: package directory is on ``sys.path``, bypassing POST itself.  They are not
+#: valid Python (``cdef`` etc.), so they get a line-based check rather than the
+#: AST one used for ``pqc_backends.py``.
+BINDING_PYX = (
+    "src/cython/ed25519_binding.pyx",
+    "src/cython/hmac_binding.pyx",
+    "src/cython/sha3_binding.pyx",
+    "src/cython/dilithium_binding.pyx",
+    "src/cython/hkdf_binding.pyx",
+)
 
 GUARD = "check_crypto_permitted"
 
@@ -153,6 +168,54 @@ def audit(
     return ungated, stale, checked
 
 
+def audit_pyx(path: Path) -> list[tuple[str, int]]:
+    """Return ``[(funcname, lineno), ...]`` for ungated ``cy_*`` binding funcs.
+
+    A line-based scan because ``.pyx`` is not valid Python.  Every module-level
+    ``def cy_...`` must call ``check_crypto_permitted()`` somewhere in its body,
+    and before the first native ``ama_`` call, so the guard cannot be placed
+    after cryptographic output has already been produced.
+    """
+    lines = path.read_text(encoding="utf-8").splitlines()
+    def_re = re.compile(r"^def (cy_\w+)\s*\(")
+    ungated: list[tuple[str, int]] = []
+
+    starts = [(i, m.group(1)) for i, line in enumerate(lines) if (m := def_re.match(line))]
+    for idx, (start, name) in enumerate(starts):
+        end = starts[idx + 1][0] if idx + 1 < len(starts) else len(lines)
+        body = _strip_leading_docstring(lines[start + 1 : end])
+        guard_line = next((j for j, ln in enumerate(body) if f"{GUARD}()" in ln), None)
+        native_line = next(
+            (j for j, ln in enumerate(body) if re.search(r"\bama_\w+\s*\(", ln)), None
+        )
+        if guard_line is None:
+            ungated.append((name, start + 1))
+        elif native_line is not None and native_line < guard_line:
+            # Guard present but after a native call — output already produced.
+            ungated.append((name, start + 1))
+    return ungated
+
+
+def _strip_leading_docstring(body: list[str]) -> list[str]:
+    """Drop a leading triple-quoted docstring so its prose (which mentions the
+    ``ama_*`` symbols by name) is not mistaken for a native call site."""
+    i = 0
+    while i < len(body) and body[i].strip() == "":
+        i += 1
+    if i < len(body):
+        stripped = body[i].strip()
+        for quote in ('"""', "'''"):
+            if stripped.startswith(quote):
+                # Single-line docstring?
+                if len(stripped) >= 6 and stripped.endswith(quote) and stripped != quote:
+                    return body[i + 1 :]
+                for j in range(i + 1, len(body)):
+                    if quote in body[j]:
+                        return body[j + 1 :]
+                return body[i + 1 :]
+    return body[i:]
+
+
 def main() -> int:
     if not TARGET.is_file():
         print(f"ERROR: {TARGET} not found", file=sys.stderr)
@@ -160,6 +223,30 @@ def main() -> int:
 
     ungated, stale, checked = audit(TARGET)
     rel = TARGET.relative_to(REPO_ROOT)
+
+    # Cython binding modules.
+    pyx_ungated: list[tuple[str, str, int]] = []
+    pyx_checked = 0
+    for rel_pyx in BINDING_PYX:
+        pyx_path = REPO_ROOT / rel_pyx
+        if not pyx_path.is_file():
+            print(f"ERROR: expected binding {rel_pyx} not found", file=sys.stderr)
+            return 1
+        found = audit_pyx(pyx_path)
+        pyx_checked += _count_cy_funcs(pyx_path)
+        pyx_ungated.extend((rel_pyx, name, lineno) for name, lineno in found)
+
+    if pyx_ungated:
+        print(
+            f"ERROR: {len(pyx_ungated)} Cython binding entry point(s) call the "
+            f"native library without a leading {GUARD}().\n\n"
+            "These are public submodules; a direct importer reaches them without "
+            "pqc_backends' gate. Each must call the guard before any ama_* call:\n",
+            file=sys.stderr,
+        )
+        for rel_pyx, name, lineno in pyx_ungated:
+            print(f"  {rel_pyx}:{lineno}: {name}()", file=sys.stderr)
+        return 1
 
     if stale:
         print(
@@ -194,10 +281,19 @@ def main() -> int:
         return 1
 
     print(
-        f"OK: all {checked} public native entry points in {rel} are gated on "
-        f"{GUARD}() ({len(EXEMPT)} documented exemption(s))."
+        f"OK: all {checked} public native entry points in {rel} and "
+        f"{pyx_checked} Cython binding entry points are gated on {GUARD}() "
+        f"({len(EXEMPT)} documented exemption(s))."
     )
     return 0
+
+
+def _count_cy_funcs(path: Path) -> int:
+    return sum(
+        1
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if re.match(r"^def cy_\w+\s*\(", line)
+    )
 
 
 if __name__ == "__main__":

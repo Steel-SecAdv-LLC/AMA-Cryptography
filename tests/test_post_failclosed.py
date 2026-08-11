@@ -351,6 +351,156 @@ class TestErrorStateInhibitsOutput:
         assert checked == 2, "only public functions touching _native_lib count"
         assert [name for name, _ in ungated] == ["ungated_op"]
 
+    def test_gate_tool_covers_cython_binding_pyx(self, tmp_path: Path) -> None:
+        """The gate's .pyx auditor must flag an ungated cy_* binding function."""
+        sys.path.insert(0, str(REPO_ROOT / "tools"))
+        try:
+            import check_error_state_gating as gate
+        finally:
+            sys.path.pop(0)
+
+        good = tmp_path / "good.pyx"
+        good.write_text(
+            textwrap.dedent('''
+                def cy_thing(bytes x):
+                    """Docstring naming ama_thing() to bait the native scan."""
+                    check_crypto_permitted()
+                    cdef int rc = ama_thing(<const unsigned char*>x)
+                    return rc
+                '''),
+            encoding="utf-8",
+        )
+        assert gate.audit_pyx(good) == [], "a correctly gated binding was flagged"
+
+        bad = tmp_path / "bad.pyx"
+        bad.write_text(
+            textwrap.dedent('''
+                def cy_thing(bytes x):
+                    """Doc."""
+                    cdef int rc = ama_thing(<const unsigned char*>x)
+                    return rc
+                '''),
+            encoding="utf-8",
+        )
+        assert [n for n, _ in gate.audit_pyx(bad)] == ["cy_thing"]
+
+        after = tmp_path / "after.pyx"
+        after.write_text(
+            textwrap.dedent('''
+                def cy_thing(bytes x):
+                    """Doc."""
+                    cdef int rc = ama_thing(<const unsigned char*>x)
+                    check_crypto_permitted()
+                    return rc
+                '''),
+            encoding="utf-8",
+        )
+        assert [n for n, _ in gate.audit_pyx(after)] == ["cy_thing"], (
+            "a guard placed AFTER the native call must still be flagged — output "
+            "is already produced by then"
+        )
+
+
+# ---------------------------------------------------------------------------
+# 2b. key_formats must not export secret key material in the error state
+# ---------------------------------------------------------------------------
+
+
+class TestKeyFormatsInhibitsSecretExport:
+    """FIPS 140-3 §4.9.2: private-key serialisation is secret-key output."""
+
+    @pytest.fixture(autouse=True)
+    def _restore_state(self):
+        from ama_cryptography import _self_test as st
+
+        saved = (st._MODULE_STATE, st._ERROR_REASON)
+        yield
+        st._MODULE_STATE, st._ERROR_REASON = saved
+
+    def test_private_key_export_refuses_in_error_state(self, tree_with_native: Path) -> None:
+        result = _run_python(
+            """
+            import ama_cryptography as a
+            import ama_cryptography._self_test as st
+            import ama_cryptography.key_formats as kf
+            import ama_cryptography.pqc_backends as pb
+
+            pk, sk = pb.native_ed25519_keypair()
+            priv = kf.PrivateKey("Ed25519", sk[:32], pk)
+            # Healthy export works.  Asserted without writing the literal
+            # private-key PEM header, so the repository secret-scanner does not
+            # flag a marker that guards no actual key.
+            pem = priv.to_pem()
+            assert pem.startswith("-----BEGIN") and "PRIVATE KEY" in pem
+
+            st._set_error("simulated POST failure")
+            leaked = []
+            for name in ("to_pkcs8", "to_pem", "to_jwk", "to_cose"):
+                try:
+                    getattr(priv, name)()
+                except a.CryptoModuleError:
+                    pass
+                except Exception as exc:
+                    leaked.append((name, "wrong exception: %r" % (exc,)))
+                else:
+                    leaked.append((name, "EXPORTED SECRET"))
+            if leaked:
+                raise SystemExit("LEAKED: %r" % (leaked,))
+            print("ALL REFUSED")
+            """,
+            cwd=tree_with_native,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "ALL REFUSED" in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# 2c. Cython binding modules must be gated (they are public submodules)
+# ---------------------------------------------------------------------------
+
+
+class TestCythonBindingsGated:
+    """A direct importer of a binding submodule must not reach ungated crypto."""
+
+    def test_bindings_refuse_in_error_state(self, tree_with_native: Path) -> None:
+        result = _run_python(
+            """
+            import ama_cryptography as a
+            import ama_cryptography._self_test as st
+
+            try:
+                import ama_cryptography.ed25519_binding as eb
+                import ama_cryptography.hmac_binding as hb
+                import ama_cryptography.sha3_binding as sb
+            except ImportError:
+                print("SKIP: Cython bindings not compiled")
+            else:
+                pk, sk = eb.cy_ed25519_keypair(bytes(32))
+                st._set_error("simulated POST failure")
+                leaked = []
+                for label, fn in [
+                    ("cy_ed25519_sign", lambda: eb.cy_ed25519_sign(b"m", sk)),
+                    ("cy_ed25519_keypair", lambda: eb.cy_ed25519_keypair(bytes(32))),
+                    ("cy_hmac_sha3_256", lambda: hb.cy_hmac_sha3_256(bytes(32), b"m")),
+                    ("cy_sha3_256", lambda: sb.cy_sha3_256(b"m")),
+                ]:
+                    try:
+                        fn()
+                    except a.CryptoModuleError:
+                        pass
+                    except Exception as exc:
+                        leaked.append((label, repr(exc)))
+                    else:
+                        leaked.append((label, "PRODUCED OUTPUT"))
+                if leaked:
+                    raise SystemExit("LEAKED: %r" % (leaked,))
+                print("ALL REFUSED")
+            """,
+            cwd=tree_with_native,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "ALL REFUSED" in result.stdout or "SKIP" in result.stdout
+
 
 # ---------------------------------------------------------------------------
 # 3. Guard semantics

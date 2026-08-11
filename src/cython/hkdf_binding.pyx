@@ -30,6 +30,14 @@ cdef extern from "ama_cryptography.h":
     void ama_secure_memzero(void *ptr, size_t len)
 
 
+# FIPS 140-3 §4.9.2 output inhibition — see ed25519_binding.pyx for the
+# full rationale.  This module is a public submodule whose cy_* function
+# calls the C kernel directly, bypassing pqc_backends' gated wrappers (and,
+# imported as a top-level module, POST itself); the guard refuses output in
+# the FIPS error state and the import forces POST to run.
+from ama_cryptography._self_test import check_crypto_permitted
+
+
 def cy_hkdf(bytes ikm, int length, bytes salt=None, bytes info=None):
     """
     HKDF-SHA3-256 key derivation via native C ama_hkdf().
@@ -47,6 +55,7 @@ def cy_hkdf(bytes ikm, int length, bytes salt=None, bytes info=None):
         Derived key material of specified length.
     Raises RuntimeError on native C failure.
     """
+    check_crypto_permitted()
     if length <= 0 or length > 8160:
         raise ValueError(f"HKDF output length must be 1..8160, got {length}")
 

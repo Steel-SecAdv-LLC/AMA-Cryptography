@@ -1992,15 +1992,35 @@ self-tested. The Ed25519 KAT is also now a genuine RFC 8032 §7.1 known-answer
 test with a negative case, not a self-consistency roundtrip an always-accept
 verifier would pass — and that same verifier backs the integrity check.
 
+**The gate covers the Cython bindings and secret-key export too.** Output
+inhibition is not only about `pqc_backends`. The five Cython binding modules
+(`ama_cryptography.ed25519_binding` …) are public submodules whose `cy_*`
+functions call the C kernel directly — a caller importing one reaches signing
+and key generation without passing through `pqc_backends`' gated wrappers, and
+if the package directory is on `sys.path`, without the package `__init__` (and
+therefore POST) running at all. Each `cy_*` function now calls the guard, and
+its module-level import of `check_crypto_permitted` forces POST to run even on
+a top-level binding import. Separately, `key_formats` serialises secret keys
+(`to_pkcs8` / `to_pem` / `to_jwk` / `to_cose`); those private-key output paths
+now refuse in the error state rather than emitting a secret-key block from a
+faulted module. (Compiled binding `.so` files and the vectors under
+`_post_kats/` remain outside the *tamper* coverage of the module digest, which
+hashes the `.py` files, `_post_kats/`, and the native library — extending it to
+the binding `.so` files is future work; the runtime guard closes the
+error-state bypass regardless.)
+
 **Enforcement.** `tools/check_error_state_gating.py` parses the AST of
 `pqc_backends.py` and requires `check_crypto_permitted()` on every public
-function that reaches `_native_lib`.  Exemptions must be declared with a stated
+function that reaches `_native_lib` or a `_cy_*` Cython callable, and
+line-scans the five binding `.pyx` files to require the guard before the first
+native call in every `cy_*` function. Exemptions must be declared with a stated
 reason and are themselves checked for staleness, so the list cannot rot into a
-blanket allowlist.  It runs as a required CI step.  Both directions — the gate
-passing on the real tree, and the gate failing on an ungated function — are
-pinned by `tests/test_post_failclosed.py`, which also drives the import-level
-behaviour in subprocesses (it cannot be observed from a process that has
-already imported the package) and checks that a broken KAT is not excused by
+blanket allowlist. It runs as a required CI step. Both directions — the gate
+passing on the real tree, and the gate failing on an ungated function (Python
+or `.pyx`) — are pinned by `tests/test_post_failclosed.py`, which also drives
+the import-level behaviour in subprocesses (it cannot be observed from a
+process that has already imported the package), exercises the binding and
+key-export refusals, and checks that a broken KAT is not excused by
 `AMA_BUILD_PIPELINE=1`.
 
 **Measured cost.** The guard is ~37 ns per gated call (~9 ns of check, the rest

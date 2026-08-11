@@ -24,6 +24,14 @@ cdef extern from "ama_cryptography.h":
     )
 
 
+# FIPS 140-3 §4.9.2 output inhibition — see ed25519_binding.pyx for the
+# full rationale.  This module is a public submodule whose cy_* function
+# calls the C kernel directly, bypassing pqc_backends' gated wrappers (and,
+# imported as a top-level module, POST itself); the guard refuses output in
+# the FIPS error state and the import forces POST to run.
+from ama_cryptography._self_test import check_crypto_permitted
+
+
 def cy_hmac_sha3_256(bytes key, bytes msg):
     """
     HMAC-SHA3-256 via native C ama_hmac_sha3_256().
@@ -34,6 +42,7 @@ def cy_hmac_sha3_256(bytes key, bytes msg):
     Returns 32-byte HMAC digest.
     Raises RuntimeError on native C failure (e.g. AMA_ERROR_MEMORY).
     """
+    check_crypto_permitted()
     cdef unsigned char out[32]
     cdef int ret
 
