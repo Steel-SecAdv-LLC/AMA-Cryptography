@@ -496,6 +496,34 @@ set-gid, matching the dynamic loader's refusal to honour `LD_PRELOAD` and
 override is logged at WARNING so a substituted backend is visible in
 operational logs.
 
+#### `LD_LIBRARY_PATH` / `DYLD_LIBRARY_PATH`
+
+The native-library search also consults `LD_LIBRARY_PATH` /
+`DYLD_LIBRARY_PATH`, which are caller-controlled and steer backend
+selection with the same power as `AMA_CRYPTO_LIB_PATH`. The dynamic loader
+strips these from a set-uid/set-gid or file-capability process before it
+maps anything, but this module reads them directly with `os.getenv`, which
+bypasses that stripping — so on a privileged binary a less-privileged
+caller's `LD_LIBRARY_PATH` could otherwise steer the cryptographic backend
+the loader had already protected. Under secure-execution mode these
+variables are therefore ignored for backend discovery, with a WARNING,
+matching the loader's own rule. On Windows the concept has no referent and
+`PATH`-based DLL resolution is unaffected.
+
+#### Partial or mismatched native builds
+
+A shared object can export some primitives and not others — a build with
+`AMA_USE_NATIVE_PQC=OFF`, a stale library from a previous major version, or
+a cross-architecture mismatch. Such a library now surfaces the families it
+does **not** provide in `native_backend_diagnostics()["missing_families"]`
+and a one-time WARNING at import, rather than presenting as a clean load
+with a scattering of unrelated failures at first use. The POST known-answer
+tests additionally *call* each covered primitive (ML-KEM, ML-DSA, SLH-DSA,
+Ed25519, SHA3-256, HMAC-SHA3-256, AES-256-GCM) on a fixed input, so a
+mismatched ABI there produces a wrong answer the KAT catches — the check a
+bare symbol-presence probe cannot perform. Under `AMA_FIPS_STRICT=1` a
+missing covered family hard-fails POST via its skipped KAT.
+
 End-to-end smoke test (from the AArch64-completeness PR's CI):
 
     AMA_BUILD_PIPELINE=1 python -m ama_cryptography.integrity --update --sign

@@ -220,15 +220,39 @@ def _get_search_dirs() -> list:
     if platform.system() != "Windows":
         search_dirs.extend([Path("/usr/local/lib"), Path("/usr/lib")])
 
-    # LD_LIBRARY_PATH / DYLD_LIBRARY_PATH / PATH (Windows)
-    env_vars = ["LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH"]
-    if platform.system() == "Windows":
-        env_vars.append("PATH")
-    for var in env_vars:
-        env_path = os.getenv(var, "")
-        for p in env_path.split(os.pathsep):
-            if p:
-                search_dirs.append(Path(p))
+    # LD_LIBRARY_PATH / DYLD_LIBRARY_PATH / PATH (Windows).
+    #
+    # SECURITY: these variables are controlled by the process's caller and steer
+    # which shared object provides every cryptographic primitive — the same
+    # power AMA_CRYPTO_LIB_PATH has, and it is gated against secure-execution
+    # mode for exactly that reason.  The dynamic loader already strips
+    # LD_LIBRARY_PATH / DYLD_LIBRARY_PATH from a set-uid/set-gid (or file-cap)
+    # process before it maps anything, but we read the raw environment with
+    # os.getenv, which bypasses that stripping — so a less-privileged caller's
+    # LD_LIBRARY_PATH could point our backend search at an attacker-controlled
+    # directory on a privileged binary the loader had already protected.
+    # Honour the same rule the loader does: ignore these variables under
+    # secure-execution mode, loudly.  On Windows _in_secure_execution_mode()
+    # is always False (the concept has no referent there), so PATH-based DLL
+    # resolution is unaffected.
+    if _in_secure_execution_mode():
+        logging.getLogger(__name__).warning(
+            "Ignoring LD_LIBRARY_PATH/DYLD_LIBRARY_PATH for native-backend "
+            "discovery: the process is running in secure-execution mode "
+            "(set-uid/set-gid or file capabilities), where environment "
+            "variables from a less-privileged caller must not select the "
+            "cryptographic backend. This matches the dynamic loader's own "
+            "refusal to honour them."
+        )
+    else:
+        env_vars = ["LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH"]
+        if platform.system() == "Windows":
+            env_vars.append("PATH")
+        for var in env_vars:
+            env_path = os.getenv(var, "")
+            for p in env_path.split(os.pathsep):
+                if p:
+                    search_dirs.append(Path(p))
 
     return search_dirs
 
@@ -253,6 +277,7 @@ _LOAD_DIAGNOSTICS: dict = {
     "searched_dirs": [],  # list[str]: every directory consulted, in order
     "candidates": [],  # list[str]: files that existed and were tried
     "errors": [],  # list[(path, str)]: dlopen failure per candidate
+    "missing_families": [],  # list[str]: algorithm families the loaded lib lacks
 }
 
 
@@ -551,6 +576,7 @@ def native_backend_diagnostics() -> dict:
         "searched_dirs": list(_LOAD_DIAGNOSTICS["searched_dirs"]),
         "candidates": list(_LOAD_DIAGNOSTICS["candidates"]),
         "errors": [(p, e) for p, e in _LOAD_DIAGNOSTICS["errors"]],
+        "missing_families": list(_LOAD_DIAGNOSTICS["missing_families"]),
     }
 
 
@@ -2048,6 +2074,55 @@ if _native_lib is not None:
     if _FROST_AVAILABLE:
         _FROST_BACKEND = "native"
     _CONTEXT_API_AVAILABLE = _setup_context_ctypes(_native_lib)
+
+    # Partial-population visibility.
+    #
+    # A shared object can export some primitives and not others: a build with
+    # AMA_USE_NATIVE_PQC=OFF, a stale library left over from a previous major
+    # version, or a cross-architecture mismatch that resolved only some symbols.
+    # Each ``_setup_*`` probe above independently records False for its family,
+    # producing a MIXED availability state — some algorithms work, others
+    # silently do not — that was never aggregated and never logged.  An operator
+    # saw a library that "loaded" and a scattering of unrelated failures at
+    # first use, with no single signal that the backend was incomplete.
+    #
+    # Collect the families whose symbols the loaded library does not provide, so
+    # the state is visible in the logs and in ``native_backend_diagnostics()``.
+    # The KAT-covered families (ML-KEM, ML-DSA, SLH-DSA, Ed25519, SHA3-256,
+    # HMAC-SHA3-256, AES-256-GCM) are additionally validated by the POST KATs,
+    # which CALL each primitive on a known input — a mismatched ABI there
+    # produces a wrong answer or a crash the KAT catches, which is the check a
+    # bare ctypes attribute probe cannot perform.  Under AMA_FIPS_STRICT a
+    # missing KAT-covered family already hard-fails POST via its skipped KAT.
+    _family_flags = {
+        "ML-DSA": _ML_DSA_NATIVE_AVAILABLE,
+        "ML-KEM": _ML_KEM_NATIVE_AVAILABLE,
+        "SLH-DSA": _SPHINCS_AVAILABLE,
+        "Ed25519": _ED25519_NATIVE_AVAILABLE,
+        "X25519": _X25519_NATIVE_AVAILABLE,
+        "AES-256-GCM": _AES_GCM_NATIVE_AVAILABLE,
+        "ChaCha20-Poly1305": _CHACHA20_POLY1305_NATIVE_AVAILABLE,
+        "SHA3-256": _SHA3_256_NATIVE_AVAILABLE,
+        "SHA-256": _SHA256_NATIVE_AVAILABLE,
+        "HMAC-SHA3-256": _HMAC_SHA3_256_NATIVE_AVAILABLE,
+        "HKDF": _HKDF_NATIVE_AVAILABLE,
+        "secp256k1": _SECP256K1_NATIVE_AVAILABLE,
+        "NIST-P": _NISTP_NATIVE_AVAILABLE,
+        "HSS/LMS": _LMS_NATIVE_AVAILABLE,
+        "Argon2": _ARGON2_NATIVE_AVAILABLE,
+    }
+    _LOAD_DIAGNOSTICS["missing_families"] = sorted(
+        name for name, ok in _family_flags.items() if not ok
+    )
+    if _LOAD_DIAGNOSTICS["missing_families"]:
+        logging.getLogger(__name__).warning(
+            "Native library loaded from %s but provides NO symbols for: %s. "
+            "This is a partial or mismatched build; those primitives will refuse "
+            "to operate. Rebuild with cmake -DAMA_USE_NATIVE_PQC=ON, or set "
+            "AMA_FIPS_STRICT=1 so the resulting self-test skips fail POST.",
+            _NATIVE_LIB_PATH,
+            ", ".join(_LOAD_DIAGNOSTICS["missing_families"]),
+        )
 
 
 # Public API for checking availability

@@ -409,3 +409,61 @@ class TestOverrideIgnoredUnderSecureExecution:
         assert any(
             "AMA_CRYPTO_LIB_PATH" in r.message for r in caplog.records
         ), "an overridden cryptographic backend must be visible in the logs"
+
+
+class TestLibraryPathEnvIgnoredUnderSecureExecution:
+    """LD_LIBRARY_PATH / DYLD_LIBRARY_PATH steer backend selection like the
+    override does, and must obey the same secure-execution rule the dynamic
+    loader applies — reading them with os.getenv bypasses the loader's own
+    stripping on a set-uid/set-gid or file-capability binary."""
+
+    def test_ld_library_path_excluded_when_setuid(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        monkeypatch.setattr(pqc_backends, "_in_secure_execution_mode", lambda: True)
+        monkeypatch.setenv("LD_LIBRARY_PATH", "/attacker/controlled")
+        monkeypatch.setenv("DYLD_LIBRARY_PATH", "/attacker/dyld")
+
+        with caplog.at_level(logging.WARNING):
+            dirs = [str(d) for d in pqc_backends._get_search_dirs()]
+
+        assert "/attacker/controlled" not in dirs
+        assert "/attacker/dyld" not in dirs
+        assert any(
+            "LD_LIBRARY_PATH" in r.message and "secure-execution" in r.message
+            for r in caplog.records
+        ), "suppression of a caller-controlled search path must be logged"
+
+    def test_ld_library_path_honoured_when_not_setuid(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(pqc_backends, "_in_secure_execution_mode", lambda: False)
+        monkeypatch.setenv("LD_LIBRARY_PATH", "/dev/build/lib")
+
+        dirs = [str(d) for d in pqc_backends._get_search_dirs()]
+        assert "/dev/build/lib" in dirs, (
+            "outside secure-execution the developer's LD_LIBRARY_PATH is a "
+            "legitimate way to point at an out-of-tree build"
+        )
+
+
+class TestPartialPopulationVisibility:
+    """A library that provides some primitives and not others must not present
+    as a clean load — the mixed state has to be aggregated and reachable."""
+
+    def test_diagnostics_exposes_missing_families(self) -> None:
+        diag = pqc_backends.native_backend_diagnostics()
+        assert "missing_families" in diag
+        assert isinstance(diag["missing_families"], list)
+
+    def test_full_build_reports_no_missing_families(self) -> None:
+        if pqc_backends._native_lib is None:
+            pytest.skip("native library not built in this tree")
+        # A complete build — the one this test suite runs against — must not
+        # report any family as missing, or the aggregation is miscounting.
+        assert pqc_backends.native_backend_diagnostics()["missing_families"] == []
+
+    def test_diagnostics_snapshot_is_a_copy(self) -> None:
+        snap = pqc_backends.native_backend_diagnostics()
+        snap["missing_families"].append("INJECTED")
+        assert "INJECTED" not in pqc_backends._LOAD_DIAGNOSTICS["missing_families"]
