@@ -81,6 +81,18 @@ clean:
 	# objects (audit 5b).
 	@find ama_cryptography -type f -name "*.so" -delete
 	@find ama_cryptography -type f -name "*.pyd" -delete
+	# The native library is bundled into the package by setup.py as a SONAME
+	# chain — libama_cryptography.so -> .so.4 -> .so.4.0.0 — and the two rules
+	# above miss every link in it: the first two are symlinks, which `-type f`
+	# excludes, and the third does not match `*.so`. So the whole chain
+	# survived `make clean`, and pqc_backends._get_search_dirs() searches this
+	# directory FIRST, ahead of build/ and the system paths. A stale library
+	# therefore shadowed every later build indefinitely, with the loaded path
+	# appearing nowhere in the logs — a rebuilt .so could sit in build/lib
+	# while the process kept running last month's code. Matched by prefix
+	# rather than by extension, and without -type, so symlinks go too.
+	@find ama_cryptography -maxdepth 1 -name "libama_cryptography*" -delete
+	@find ama_cryptography -maxdepth 1 -name "ama_cryptography*.dll" -delete
 	@echo "✓ Cleaned"
 
 # Install system-wide
