@@ -1964,6 +1964,34 @@ error for the latter.  The dispatch is on the return value; it used to be a
 substring test against the message, which made a security-critical branch a
 function of prose.
 
+**The integrity check must cover the code that does the cryptography.** The
+signed artefact covered the package's `.py` files and nothing else. The shared
+object that performs every cryptographic operation was signed by nothing and
+verified at load by nothing, so a back-doored `libama_cryptography` left the
+`.py` digest, the signature and the trust anchor all verifying while the actual
+cryptography ran from unexamined bytes. The signature now covers the composite
+`SHA3-256(domain ‖ py_digest ‖ native_digest)`, and the verifier re-hashes the
+shared object it actually loaded and requires it to match. A one-byte change to
+the `.so` fails POST and therefore the import; rewriting the embedded native
+digest to match a tampered `.so` breaks the signature, which cannot be forged.
+Because `_build_sign` can only sign by calling the native `ama_ed25519_sign`, a
+working library is present at signing time by construction, so every signed
+artefact binds it — there is no unsigned-native downgrade path. The one
+non-full-strength outcome is an explicit `AMA_CRYPTO_LIB_PATH` override, which
+is recorded as *unverified* (a skip, `fully_verified` `False`) rather than
+tampering. Pinned by `tests/test_native_integrity.py`, including the tamper and
+forge-attempt cases and the signer/verifier domain-constant agreement.
+
+**CASTs precede the integrity test that relies on them.** FIPS 140-3
+(NIST IG 10.3.A) requires the algorithm self-test for any approved algorithm the
+integrity test uses to run first. The signed-integrity check verifies an Ed25519
+signature and computes SHA3-256 digests, so the SHA3-256 and Ed25519 KATs now
+run before the integrity stage; the original single KAT stage ran them after,
+so the module authenticated itself with an Ed25519 verifier it had not yet
+self-tested. The Ed25519 KAT is also now a genuine RFC 8032 §7.1 known-answer
+test with a negative case, not a self-consistency roundtrip an always-accept
+verifier would pass — and that same verifier backs the integrity check.
+
 **Enforcement.** `tools/check_error_state_gating.py` parses the AST of
 `pqc_backends.py` and requires `check_crypto_permitted()` on every public
 function that reaches `_native_lib`.  Exemptions must be declared with a stated
@@ -1977,7 +2005,8 @@ already imported the package) and checks that a broken KAT is not excused by
 
 **Measured cost.** The guard is ~37 ns per gated call (~9 ns of check, the rest
 CPython call overhead), which is ~2 % of a 64-byte `native_sha3_256` and less on
-everything larger.
+everything larger.  The native-library digest adds one SHA3-256 over the shared
+object (~800 KB → well under 1 ms) once per import.
 
 ---
 

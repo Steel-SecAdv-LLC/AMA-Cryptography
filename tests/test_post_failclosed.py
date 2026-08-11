@@ -212,25 +212,19 @@ class TestImportFailsClosed:
 
         self_test = root / "ama_cryptography" / "_self_test.py"
         source = self_test.read_text(encoding="utf-8")
+        # Corrupt the negative expected value inside the SHA3-256 KAT (the
+        # empty-message digest), leaving the algorithm itself intact so it is
+        # the *KAT* that fails, not SHA3 generally.
         marker = '"a7ffc6f8bf1ed76651c14756a061d662f580ff4de43b49fa82d80a4b80f8434a"'
         assert marker in source, "SHA3-256 KAT vector moved; update this test"
         self_test.write_text(source.replace(marker, marker[:-2] + 'ff"', 1), encoding="utf-8")
 
-        # Re-sign so the integrity stage passes and the KAT is what fails.
-        resign = _run_python(
-            """
-            import runpy, sys
-            sys.argv = ["ama_cryptography.integrity", "--update", "--sign"]
-            try:
-                runpy.run_module("ama_cryptography.integrity", run_name="__main__")
-            except SystemExit as exc:
-                sys.exit(int(exc.code or 0))
-            """,
-            cwd=root,
-            env_extra={"AMA_BUILD_PIPELINE": "1"},
-        )
-        assert resign.returncode == 0, resign.stdout + resign.stderr
-
+        # No re-sign needed. The SHA3-256 CAST now runs BEFORE the integrity
+        # stage (NIST IG 10.3.A), so the broken KAT fails POST first — a KAT
+        # failure, which AMA_BUILD_PIPELINE=1 does not excuse. Editing
+        # _self_test.py also stales the .py digest, but POST never reaches the
+        # integrity stage to notice, which is the point: the build-pipeline flag
+        # forgives a stale artefact, never a broken algorithm.
         result = _run_python(
             """
             import ama_cryptography  # noqa: F401
@@ -617,9 +611,16 @@ class TestNativeBackendDiagnostics:
         assert path == str(broken)
         assert message, "an empty loader message is no better than silence"
 
-    def test_summary_distinguishes_broken_from_absent(self, tmp_path: Path) -> None:
+    def test_summary_distinguishes_broken_from_absent(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         from ama_cryptography import pqc_backends as pb
 
+        # The "loaded" branch of the summary keys off the real _native_lib
+        # handle, not the mutable scratch dict, so the broken/absent branches
+        # are only reachable with no library actually loaded.  monkeypatch
+        # restores _native_lib after the test.
+        monkeypatch.setattr(pb, "_native_lib", None)
         saved = {k: (list(v) if isinstance(v, list) else v) for k, v in pb._LOAD_DIAGNOSTICS.items()}
         try:
             pb._LOAD_DIAGNOSTICS.update(

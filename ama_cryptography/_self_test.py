@@ -395,6 +395,52 @@ _INTEGRITY_STRENGTH: Optional[str] = None
 _INTEGRITY_REQUIRE_TRUST_ANCHOR_ENV = "AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR"
 _TRUE_ENV_VALUES = {"1", "true", "yes", "on"}
 
+# Domain-separation tag for the Ed25519 signature that binds the .py digest and
+# the native-library digest together.  A fixed, versioned constant so the signer
+# (_build_sign) and the verifier here construct byte-identical messages; the
+# ``v2`` marks the format that binds the native library, distinguishing it from
+# the ``v1`` artefacts that signed the .py digest alone.  It is duplicated
+# verbatim in _build_sign._INTEGRITY_SIG_DOMAIN and pinned equal by
+# tests/test_native_integrity.py — the two modules must not import each other
+# (build-time vs runtime separation, INVARIANT-1), so agreement is enforced by
+# test rather than by a shared import.
+_INTEGRITY_SIG_DOMAIN = b"AMA-integrity-signature-v2\x00"
+
+
+def _compute_native_library_digest(path: Optional[str]) -> Optional[bytes]:
+    """SHA3-256 over the raw bytes of the native library file at ``path``.
+
+    Follows symlinks — the SONAME chain (``.so`` -> ``.so.4`` -> ``.so.4.0.0``)
+    resolves to one real object, and it is those bytes, the ones the loader
+    actually mapped, that must match what was signed.  Returns ``None`` when the
+    path is absent or unreadable; the caller treats that as "could not verify"
+    rather than "verified" or "tampered", so a race or a permissions problem
+    fails closed on an anchored build and warns on a developer one.
+    """
+    if not path:
+        return None
+    try:
+        return hashlib.sha3_256(Path(path).read_bytes()).digest()
+    except OSError:
+        return None
+
+
+def _composite_integrity_message(py_digest_raw: bytes, native_digest_raw: bytes) -> bytes:
+    """The exact bytes the Ed25519 integrity signature covers, v2 format.
+
+    ``SHA3-256(domain || py_digest || native_digest)``.  Hashing the
+    concatenation (rather than signing the concatenation directly) keeps the
+    signed message a fixed 32 bytes regardless of digest sizes and makes the
+    two components inseparable: an attacker who swaps the native library must
+    also change the embedded native digest to match at verify time, which
+    changes this message, which invalidates a signature they cannot forge.
+
+    Mirrored byte-for-byte in ``_build_sign._composite_integrity_message``.
+    """
+    return hashlib.sha3_256(
+        _INTEGRITY_SIG_DOMAIN + py_digest_raw + native_digest_raw
+    ).digest()
+
 
 def _env_flag_enabled(name: str) -> bool:
     """Return True when a boolean environment variable is explicitly enabled."""
@@ -556,6 +602,7 @@ def _verify_signed_integrity(digest_hex: str) -> Tuple[Optional[bool], str]:
         from ama_cryptography.pqc_backends import (
             _ED25519_NATIVE_AVAILABLE,
             native_ed25519_verify,
+            native_backend_diagnostics,
             native_backend_load_summary,
         )
     except ImportError as exc:
@@ -572,15 +619,101 @@ def _verify_signed_integrity(digest_hex: str) -> Tuple[Optional[bool], str]:
             f"artefact. {native_backend_load_summary()}"
         )
 
+    # The native-library digest binds libama_cryptography — the code that
+    # performs every cryptographic operation — into the same signature that
+    # covers the .py files.  Before this field existed the signature covered the
+    # Python wrapper only: an attacker who replaced the shared object with a
+    # back-doored build left the .py digest, the signature and the trust anchor
+    # all intact and verifying, while the actual cryptography ran from bytes no
+    # check had ever looked at.  The wrapper was tamper-evident and the
+    # implementation was not.
+    #
+    # Every SIGNED artefact carries this field: _build_sign can only produce a
+    # signature by calling the native ama_ed25519_sign, so a working native
+    # library is present at signing time by construction, and its digest is
+    # always embedded.  The field is therefore absent only on a hand-built v1
+    # test fixture, where the signature covers the raw .py digest instead of the
+    # composite — stripping it from a real v2 artefact changes the message the
+    # signature must cover and so is caught as a signature failure below, not as
+    # a silent downgrade.
+    native_digest_hex = getattr(sig_mod, "INTEGRITY_NATIVE_DIGEST_HEX", None)
+    if native_digest_hex is None:
+        signed_message = digest_raw  # v1: signature is over the raw .py digest
+        native_digest_raw = None
+    else:
+        try:
+            native_digest_raw = bytes.fromhex(native_digest_hex)
+        except (ValueError, TypeError) as exc:
+            return False, f"signature module INTEGRITY_NATIVE_DIGEST_HEX not hex: {exc}"
+        if len(native_digest_raw) != 32:
+            return False, (
+                f"signature module native digest is {len(native_digest_raw)} bytes "
+                "(expected 32)"
+            )
+        signed_message = _composite_integrity_message(digest_raw, native_digest_raw)
+
     try:
-        ok = native_ed25519_verify(signature, digest_raw, pubkey)
+        ok = native_ed25519_verify(signature, signed_message, pubkey)
     except Exception as exc:  # fail-closed: any verify exception must yield False (INT-003)
         return False, f"native Ed25519 verify raised: {exc}"
     if not ok:
         return False, "Ed25519 signature did NOT verify — module tampered"
-    if trust_anchor_hex is not None:
-        return True, "signed integrity verified (Ed25519, trusted build pubkey)"
-    return True, "signed integrity verified (Ed25519, build-time pubkey)"
+
+    # Signature authentic.  Now bind it to the shared object actually loaded.
+    global _INTEGRITY_STRENGTH
+    anchored = trust_anchor_hex is not None
+    native_ok = False
+    if native_digest_raw is None:
+        native_note = "; native library NOT covered (legacy v1 artefact)"
+    else:
+        diag = native_backend_diagnostics()
+        loaded_path = diag.get("path")
+        override = diag.get("override")
+        actual_native = _compute_native_library_digest(loaded_path)
+        if override:
+            # AMA_CRYPTO_LIB_PATH deliberately substitutes the backend; the
+            # existing contract already documents that override as "not
+            # tamper-evident".  The signature still proves the artefact is
+            # authentic, so we do not fail — but the loaded object is not the
+            # signed one, and that must be said plainly rather than implied by
+            # a green check.
+            native_note = (
+                "; native library UNVERIFIED — AMA_CRYPTO_LIB_PATH override in "
+                f"effect ({override}), loaded object is not the signed one"
+            )
+        elif actual_native is None:
+            # Could not read the loaded object.  Fail closed on an anchored
+            # build; downgrade to a note on a developer one, consistent with
+            # the tri-state the rest of this verifier uses.
+            if anchored:
+                return False, (
+                    "native library integrity UNVERIFIABLE on an anchored build — "
+                    f"could not read the loaded object at {loaded_path!r}"
+                )
+            native_note = (
+                f"; native library UNVERIFIED — could not read {loaded_path!r}"
+            )
+        elif actual_native != native_digest_raw:
+            return False, (
+                "native library digest MISMATCH — libama_cryptography has been "
+                f"modified since signing (signed={native_digest_raw.hex()[:16]}..., "
+                f"loaded={actual_native.hex()[:16]}... at {loaded_path!r})"
+            )
+        else:
+            native_note = "; native library verified"
+            native_ok = True
+
+    # Only a signed artefact whose native library was verified against the
+    # loaded object is the full-strength state.  Signed-but-native-unverified
+    # (override, unreadable dev object, or a legacy v1 artefact) is recorded
+    # distinctly so the integrity stage can treat it as a skip rather than a
+    # pass — otherwise ``fully_verified`` would again cover a case where the
+    # code doing the cryptography was never checked.
+    _INTEGRITY_STRENGTH = "signed" if native_ok else "signed-native-unverified"
+
+    if anchored:
+        return True, f"signed integrity verified (Ed25519, trusted build pubkey){native_note}"
+    return True, f"signed integrity verified (Ed25519, build-time pubkey){native_note}"
 
 
 def verify_module_integrity() -> Tuple[bool, str]:
@@ -614,7 +747,11 @@ def verify_module_integrity() -> Tuple[bool, str]:
 
     signed_ok, signed_detail = _verify_signed_integrity(current)
     if signed_ok is True:
-        _INTEGRITY_STRENGTH = "signed"
+        # _verify_signed_integrity has already set _INTEGRITY_STRENGTH to
+        # "signed" (native library verified) or "signed-native-unverified"
+        # (override / unreadable / legacy v1).  Do not flatten that distinction
+        # back to "signed" here — the whole point is that a build whose native
+        # library went unchecked is not full-strength.
         return True, signed_detail
 
     # ``False`` is a positive finding of tampering — the artefact is present
@@ -1506,17 +1643,24 @@ def _run_integrity_stage() -> Tuple[bool, Optional[str]]:
         _SELF_TEST_RESULTS.append(("integrity", False, integrity_detail))
         return False, integrity_detail
 
-    # A pass by the unsigned digest alone is recorded as a SKIP, not a PASS.
-    # The plaintext digest detects accidental corruption; it does not detect
-    # tampering, because an attacker who can edit the .py files can edit
-    # _integrity_digest.txt in the same breath.  Recording it as a pass made
-    # the two outcomes indistinguishable to every consumer, so a release gate
-    # asking "is this module fully verified?" got True for a module whose
-    # signature check never ran.  As a skip it lands in the same machinery as
-    # an untested algorithm: named in the POST warning, counted by
+    # Anything short of "signed AND native library verified" is recorded as a
+    # SKIP, not a PASS, because each weaker outcome leaves some part of the
+    # module unchecked:
+    #   * "digest-only" — an unsigned plaintext digest an attacker who edits
+    #     the .py files can rewrite in the same breath.  Detects corruption,
+    #     not tampering.
+    #   * "signed-native-unverified" — the signature verified, but the shared
+    #     object that performs every cryptographic operation was not bound to
+    #     it (AMA_CRYPTO_LIB_PATH override, an unreadable dev object, or a
+    #     legacy v1 artefact).  The wrapper is verified; the implementation is
+    #     not.
+    # Recording either as a skip lands it in the same machinery as an untested
+    # algorithm: named in the POST warning, counted by
     # module_attestation()["tests_skipped"], excluded from "fully_verified",
-    # and escalated to a hard failure under AMA_FIPS_STRICT.
-    if _INTEGRITY_STRENGTH == "digest-only":
+    # and escalated to a hard failure under AMA_FIPS_STRICT.  Promoting either
+    # to a pass is exactly the class of "fully verified over an unchecked
+    # component" this whole change exists to close.
+    if _INTEGRITY_STRENGTH in ("digest-only", "signed-native-unverified"):
         _SELF_TEST_RESULTS.append(("integrity", None, integrity_detail))
         # Read from the environment rather than taken as a parameter: every
         # other stage helper that needs strict mode is wrapped in a lambda by
@@ -1526,7 +1670,7 @@ def _run_integrity_stage() -> Tuple[bool, Optional[str]]:
         if _env_flag_enabled(_AMA_FIPS_STRICT_ENV):
             return False, (
                 f"FIPS strict mode ({_AMA_FIPS_STRICT_ENV}=1): module integrity "
-                f"verified by unsigned digest only — {integrity_detail}"
+                f"not full-strength ({_INTEGRITY_STRENGTH}) — {integrity_detail}"
             )
         return True, None
 
@@ -1555,15 +1699,29 @@ def _handle_kat_skip(name: str, detail: str, strict_mode: bool) -> Optional[str]
     return None
 
 
-def _run_kat_stage(strict_mode: bool) -> Tuple[bool, Optional[str]]:
-    """Run every per-algorithm KAT and record its outcome.
+#: The CASTs the signed-integrity stage depends on, run before it.
+#
+# The split is not cosmetic: FIPS 140-3 (NIST IG 10.3.A) requires that the
+# cryptographic algorithm self-test (CAST) for any approved algorithm the
+# integrity test depends on be performed before the integrity test relies on
+# it.  The signed-integrity check verifies an Ed25519 signature with the
+# module's own native verifier and computes SHA3-256 digests, so both CASTs
+# must pass first.  Running Ed25519's KAT after the integrity test — as the
+# original single KAT stage did — meant the module authenticated itself with an
+# algorithm it had not yet self-tested.
+_PRE_INTEGRITY_KAT_NAMES = ("SHA3-256", "Ed25519")
 
-    Returns ``(passed, error_reason)`` with the same semantics as
-    :func:`_run_integrity_stage`.  Walks the list of KAT callables
-    once; on the first hard-failure (or strict-mode skip) the
-    function returns early without running the remaining KATs.
+
+def _all_kat_tests() -> Tuple[Tuple[str, Callable[[], Tuple[Optional[bool], str]]], ...]:
+    """Every algorithm KAT, in recorded order.
+
+    Built on each call rather than frozen into a module constant so the
+    function references resolve against the *current* module globals: the
+    branch tests monkeypatch ``_self_test._kat_sha3_256`` and friends to force
+    failures, and a constant captured at import time would hold the originals
+    and quietly ignore the patch.
     """
-    kat_tests = (
+    return (
         ("SHA3-256", _kat_sha3_256),
         ("HMAC-SHA3-256", _kat_hmac_sha3_256),
         ("AES-256-GCM", _kat_aes_256_gcm),
@@ -1573,6 +1731,30 @@ def _run_kat_stage(strict_mode: bool) -> Tuple[bool, Optional[str]]:
         ("SLH-DSA-SHAKE-128s", _kat_slh_dsa_shake_128s),
         ("Ed25519", _kat_ed25519),
     )
+
+
+def _pre_integrity_kats() -> Tuple[Tuple[str, Callable[[], Tuple[Optional[bool], str]]], ...]:
+    return tuple(t for t in _all_kat_tests() if t[0] in _PRE_INTEGRITY_KAT_NAMES)
+
+
+def _post_integrity_kats() -> Tuple[Tuple[str, Callable[[], Tuple[Optional[bool], str]]], ...]:
+    return tuple(t for t in _all_kat_tests() if t[0] not in _PRE_INTEGRITY_KAT_NAMES)
+
+
+def _run_kat_stage(
+    strict_mode: bool,
+    kat_tests: Optional[Tuple[Tuple[str, Callable[[], Tuple[Optional[bool], str]]], ...]] = None,
+) -> Tuple[bool, Optional[str]]:
+    """Run the given per-algorithm KATs and record each outcome.
+
+    ``kat_tests`` defaults to the full set; the runner passes a subset so the
+    integrity-relevant CASTs run before the integrity stage and the remainder
+    after.  Returns ``(passed, error_reason)`` with the same semantics as
+    :func:`_run_integrity_stage`; on the first hard-failure (or strict-mode
+    skip) it returns early without running the remaining KATs.
+    """
+    if kat_tests is None:
+        kat_tests = _all_kat_tests()
     for name, test_fn in kat_tests:
         try:
             passed, detail = test_fn()
@@ -1690,8 +1872,15 @@ def _run_self_tests() -> bool:
             # verdict is order-independent — a missing backend fails POST from
             # whichever position this stage occupies.
             ("native-backend", _run_backend_stage),
+            # CASTs for the algorithms the integrity stage relies on, run
+            # BEFORE it (NIST IG 10.3.A): the signed-integrity check verifies an
+            # Ed25519 signature with the module's own native verifier and
+            # computes SHA3-256 digests, so both must be self-tested first. See
+            # _PRE_INTEGRITY_KAT_NAMES.
+            ("kat-pre-integrity", lambda: _run_kat_stage(strict_mode, _pre_integrity_kats())),
             ("integrity", _run_integrity_stage),
-            ("kat", lambda: _run_kat_stage(strict_mode)),
+            # The remaining CASTs, after integrity.
+            ("kat", lambda: _run_kat_stage(strict_mode, _post_integrity_kats())),
             ("oracle", lambda: _run_timing_oracle_stage(strict_mode)),
             ("rng", _run_rng_stage),
         )

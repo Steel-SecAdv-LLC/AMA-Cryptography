@@ -309,24 +309,45 @@ Users deploying AMA Cryptography in production should:
 ### Threat model
 
 The integrity check verifies that an installed wheel's `.py` files
-have not been tampered with after build.  It is **not** a supply-chain
-identity check (PyPI's existing PGP / sigstore mechanisms cover that)
-and it does **not** prove anything about a malicious build pipeline —
-both the digest and the signing key are produced by the same build
-that produced the code being signed.  The contract is:
+**and its native library** have not been tampered with after build.  It
+is **not** a supply-chain identity check (PyPI's existing PGP / sigstore
+mechanisms cover that) and it does **not** prove anything about a
+malicious build pipeline — both the digest and the signing key are
+produced by the same build that produced the code being signed.  The
+contract is:
 
-1. The wheel build computes SHA3-256 over the package's `.py` files,
-   generates an **ephemeral, per-build Ed25519 key** by default (or
-   uses `AMA_INTEGRITY_SIGNING_SEED_HEX` in release CI), signs the
-   digest, embeds **the signature + the public verification key** as
-   a Python literal in `ama_cryptography/_integrity_signature.py`,
-   then **discards the private key** before publishing the wheel.
-2. At import, `_self_test._verify_integrity()` re-hashes the
-   `.py` files, loads the embedded `(pubkey, signature)` pair, and
-   calls `ama_ed25519_verify` from the in-tree C kernel (via
-   ctypes — INVARIANT-1 forbids a PyCA dependency).  Mismatch
+1. The wheel build computes SHA3-256 over the package's `.py` files
+   **and a second SHA3-256 over the native library
+   (`libama_cryptography`) it is about to ship**, generates an
+   **ephemeral, per-build Ed25519 key** by default (or uses
+   `AMA_INTEGRITY_SIGNING_SEED_HEX` in release CI), and signs the
+   **composite** `SHA3-256(domain ‖ py_digest ‖ native_digest)` — so the
+   two digests are inseparable.  It embeds **the signature, the public
+   verification key, and both digests** as Python literals in
+   `ama_cryptography/_integrity_signature.py`, then **discards the
+   private key** before publishing the wheel.
+2. At import, `_self_test._verify_signed_integrity()` re-hashes the
+   `.py` files, loads the embedded `(pubkey, signature)` pair, verifies
+   the signature over the recomputed composite with `ama_ed25519_verify`
+   from the in-tree C kernel (via ctypes — INVARIANT-1 forbids a PyCA
+   dependency), and then **re-hashes the shared object it actually
+   loaded and requires it to match the signed native digest**.  Any
+   mismatch — edited `.py` file, edited `.so`, or a swapped signature —
    transitions the module to the ERROR state and refuses every
    cryptographic operation.
+
+   Binding the native library closes the gap where the Python wrapper
+   was tamper-evident but the code doing the cryptography was not: a
+   back-doored `libama_cryptography` used to leave the `.py` digest, the
+   signature and the trust anchor all verifying.  Because `_build_sign`
+   can only produce a signature by calling the native `ama_ed25519_sign`,
+   a working native library is present at signing time by construction,
+   so every signed artefact carries the native digest — there is no
+   unsigned-native downgrade path.  The one exception is an explicit
+   `AMA_CRYPTO_LIB_PATH` override (see below): the operator has
+   deliberately substituted the backend, so the loaded object is
+   recorded as **unverified** (a warning, and `fully_verified` is
+   `False`) rather than treated as tampering.
 
 There is **no long-lived signing key in developer builds**.  Each
 default build generates, signs once, and discards.  Release CI may
@@ -462,9 +483,12 @@ This environment variable overrides the search for the native library and
 loads the named shared object directly. It is a developer convenience for
 pointing at an out-of-tree build, and it is a code-execution boundary: a
 shared object runs its constructors the moment it is mapped, before the
-power-on self-test executes, and the integrity digest does not cover it.
-Treat the ability to set it as equivalent to the ability to run code in
-the process.
+power-on self-test executes. Because the override is by definition not the
+signed, shipped object, the integrity check records the loaded library as
+**unverified** (the signature over the artefact still verifies, but the
+loaded bytes are not bound to it) — `module_attestation()["fully_verified"]`
+is `False` and a warning names the override. Treat the ability to set it as
+equivalent to the ability to run code in the process.
 
 It is ignored, with a warning, when the process is running set-uid or
 set-gid, matching the dynamic loader's refusal to honour `LD_PRELOAD` and

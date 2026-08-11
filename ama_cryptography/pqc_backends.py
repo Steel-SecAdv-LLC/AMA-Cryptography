@@ -248,6 +248,7 @@ _LOAD_DIAGNOSTICS: dict = {
     "loaded": False,
     "path": None,  # str: the library that loaded, when one did
     "override": None,  # str: AMA_CRYPTO_LIB_PATH value, when honoured
+    "loaded_via_override": False,  # bool: the loaded library IS the override file
     "override_ignored_reason": None,  # str: why an override was refused
     "searched_dirs": [],  # list[str]: every directory consulted, in order
     "candidates": [],  # list[str]: files that existed and were tried
@@ -506,6 +507,7 @@ def _find_native_library() -> Optional[ctypes.CDLL]:
             if lib is not None:
                 _LOAD_DIAGNOSTICS["loaded"] = True
                 _LOAD_DIAGNOSTICS["path"] = str(override_path)
+                _LOAD_DIAGNOSTICS["loaded_via_override"] = True
                 return lib
         elif override_path.is_dir():
             search_dirs.insert(0, override_path)
@@ -526,16 +528,25 @@ def _find_native_library() -> Optional[ctypes.CDLL]:
 
 
 def native_backend_diagnostics() -> dict:
-    """Return a copy of the native-library discovery record.
+    """Return the native-library backend record.
 
-    Keys: ``loaded``, ``path``, ``override``, ``override_ignored_reason``,
-    ``searched_dirs``, ``candidates``, ``errors``.  Safe to call at any time;
-    it performs no I/O and never raises.
+    The security-relevant fields — ``loaded``, ``path``, ``override`` —
+    describe the library the process is ACTUALLY running, read from the
+    import-time snapshot rather than the mutable discovery scratch, so a later
+    ``_find_native_library`` call (the build signer, a test) cannot change what
+    this reports about the loaded backend.  ``loaded`` reflects the real module
+    state (``_native_lib``); ``path`` is that object's file; ``override`` is the
+    AMA_CRYPTO_LIB_PATH value only when the loaded object actually came from it.
+
+    The remaining fields — ``override_ignored_reason``, ``searched_dirs``,
+    ``candidates``, ``errors`` — come from the last discovery and exist to
+    explain a FAILED load (see ``native_backend_load_summary``).  Safe to call
+    at any time; performs no I/O and never raises.
     """
     return {
-        "loaded": _LOAD_DIAGNOSTICS["loaded"],
-        "path": _LOAD_DIAGNOSTICS["path"],
-        "override": _LOAD_DIAGNOSTICS["override"],
+        "loaded": _native_lib is not None,
+        "path": _NATIVE_LIB_PATH,
+        "override": _NATIVE_LIB_VIA_OVERRIDE,
         "override_ignored_reason": _LOAD_DIAGNOSTICS["override_ignored_reason"],
         "searched_dirs": list(_LOAD_DIAGNOSTICS["searched_dirs"]),
         "candidates": list(_LOAD_DIAGNOSTICS["candidates"]),
@@ -561,8 +572,8 @@ def native_backend_load_summary() -> str:
                           advice, so it is the only case that gives it.
     """
     diag = _LOAD_DIAGNOSTICS
-    if diag["loaded"]:
-        return f"native backend loaded from {diag['path']}"
+    if _native_lib is not None:
+        return f"native backend loaded from {_NATIVE_LIB_PATH}"
 
     if diag["errors"]:
         detail = "; ".join(f"{path}: {err}" for path, err in diag["errors"][:3])
@@ -1985,6 +1996,26 @@ def _setup_context_ctypes(lib: ctypes.CDLL) -> bool:
 
 
 _native_lib = _find_native_library()
+
+# Snapshot how the ACTUAL loaded library was discovered, taken once, here, at
+# the moment ``_native_lib`` is bound and before anything else can re-invoke
+# ``_find_native_library`` (the build-time signer does; several tests do, with
+# a mocked override).  ``_LOAD_DIAGNOSTICS`` is a mutable scratch record that a
+# later discovery overwrites — reading the security-relevant "which object did
+# we load, and did it come via override?" from it let a test that planted an
+# AMA_CRYPTO_LIB_PATH override leak that state into a subsequent module's
+# integrity verdict.  These two names describe the library the process is
+# actually running and never change after import, so the verifier's answer does
+# not depend on who called discovery last.
+_NATIVE_LIB_PATH: Optional[str] = (
+    getattr(_native_lib, "_name", None) if _native_lib is not None else None
+)
+_NATIVE_LIB_VIA_OVERRIDE: Optional[str] = (
+    _LOAD_DIAGNOSTICS["override"]
+    if (_native_lib is not None and _LOAD_DIAGNOSTICS["loaded_via_override"])
+    else None
+)
+
 if _native_lib is not None:
     if _setup_native_ctypes(_native_lib):
         _DILITHIUM_AVAILABLE = True
