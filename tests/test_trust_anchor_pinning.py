@@ -309,9 +309,7 @@ class TestAnchoredBuildRefusesDigestOnlyFallback:
                 "Ed25519 verifier unavailable — cannot check the signed-integrity artefact.",
             ),
         )
-        monkeypatch.setattr(
-            _self_test, "_load_integrity_trust_anchor", lambda: (self.ANCHOR, None)
-        )
+        monkeypatch.setattr(_self_test, "_load_integrity_trust_anchor", lambda: (self.ANCHOR, None))
         monkeypatch.delenv("AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR", raising=False)
 
         ok, detail = _self_test.verify_module_integrity()

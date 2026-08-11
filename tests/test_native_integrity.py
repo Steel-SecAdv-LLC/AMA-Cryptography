@@ -146,7 +146,8 @@ class TestNativeDigestHelper:
         real.write_bytes(b"real-object-bytes")
         link = tmp_path / "lib.so"
         link.symlink_to(real)
-        assert _compute_native_library_digest(str(link)) == _compute_native_library_digest(str(real))
+        via_link = _compute_native_library_digest(str(link))
+        assert via_link == _compute_native_library_digest(str(real))
 
     def test_none_on_missing_or_empty_path(self, tmp_path: Path) -> None:
         from ama_cryptography._self_test import _compute_native_library_digest
@@ -270,6 +271,99 @@ class TestOverrideIsNotFullyVerified:
 # ---------------------------------------------------------------------------
 # 6. FIPS stage ordering (NIST IG 10.3.A)
 # ---------------------------------------------------------------------------
+
+
+class TestPostKatVectors:
+    """The POST KAT vectors are authentic NIST records and are tamper-covered."""
+
+    def test_provenance_gate_passes_and_is_not_vacuous(self) -> None:
+        """`build_post_kats.py --check` re-derives from the vendored sources."""
+        import subprocess
+
+        tool = REPO_ROOT / "tools" / "build_post_kats.py"
+        assert tool.is_file()
+        ok = subprocess.run(
+            [sys.executable, str(tool), "--check"],
+            cwd=str(REPO_ROOT),
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        assert ok.returncode == 0, ok.stdout + ok.stderr
+
+        # Non-vacuity: a corrupted pinned vector must serialise differently from
+        # what the builder re-derives, so `--check` (which compares the two)
+        # cannot pass over a drift.
+        import json
+
+        sys.path.insert(0, str(REPO_ROOT / "tools"))
+        try:
+            import build_post_kats as bpk
+        finally:
+            sys.path.pop(0)
+
+        expected = bpk._serialise(bpk._build_ml_kem_1024())
+        corrupted = json.loads(expected)
+        ss = corrupted["ss_hex"]
+        corrupted["ss_hex"] = ("0" if ss[0] != "0" else "1") + ss[1:]
+        assert bpk._serialise(corrupted) != expected, "check() could not detect a corrupted vector"
+
+    def test_module_digest_covers_post_kats(self, tmp_path: Path) -> None:
+        """Editing a POST KAT vector changes the module digest.
+
+        Without this, an attacker could swap a known-answer vector for one a
+        broken implementation passes and defeat the KAT on a build whose .py
+        digest and signature still verified.
+        """
+        from ama_cryptography import _self_test as st
+
+        kat = PKG_DIR / "_post_kats" / "ml_kem_1024_kat.json"
+        if not kat.is_file():
+            pytest.skip("pinned vector not present")
+
+        before = st._compute_module_digest()
+        original = kat.read_bytes()
+        try:
+            kat.write_bytes(original[:-2] + b"X\n")
+            after = st._compute_module_digest()
+        finally:
+            kat.write_bytes(original)
+        assert before != after, "the module digest does not cover _post_kats/ vectors"
+
+    def test_swapped_vector_fails_import(self, signed_tree: Path, tmp_path: Path) -> None:
+        """End to end: a modified POST KAT vector fails POST and the import."""
+        import json
+
+        root = tmp_path / "swapped"
+        shutil.copytree(signed_tree / "ama_cryptography", root / "ama_cryptography")
+        vec = root / "ama_cryptography" / "_post_kats" / "ml_dsa_65_kat.json"
+        payload = json.loads(vec.read_text(encoding="utf-8"))
+        payload["pk_hex"] = ("0" if payload["pk_hex"][0] != "0" else "1") + payload["pk_hex"][1:]
+        vec.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+        result = _run_python("import ama_cryptography", cwd=root)
+        assert result.returncode != 0, "a swapped POST KAT vector imported cleanly"
+        assert "digest mismatch" in (result.stdout + result.stderr)
+
+    def test_kats_are_known_answer_not_roundtrip(self) -> None:
+        """The PQC KATs must consume the pinned vectors, not self-generate.
+
+        A roundtrip KAT calls keygen with no fixed input; a known-answer KAT
+        reads the vector.  Pinning the source guards against a silent regression
+        back to a self-consistency roundtrip.
+        """
+        import inspect
+
+        from ama_cryptography import _self_test as st
+
+        for fn, token in (
+            (st._kat_ml_kem_1024, "ml_kem_1024_kat.json"),
+            (st._kat_ml_dsa_65, "ml_dsa_65_kat.json"),
+            (st._kat_slh_dsa, "slh_dsa_sha2_256f_kat.json"),
+        ):
+            src = inspect.getsource(fn)
+            assert token in src, f"{fn.__name__} no longer loads its pinned vector"
+            assert "_load_post_kat" in src, f"{fn.__name__} does not use the pinned-vector loader"
 
 
 class TestStageOrdering:

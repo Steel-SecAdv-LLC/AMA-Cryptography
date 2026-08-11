@@ -86,12 +86,14 @@ def _require_build_pipeline() -> None:
 
 
 def _compute_package_digest(pkg_dir: Path) -> bytes:
-    """Compute SHA3-256 over ``pkg_dir``'s ``.py`` files.
+    """Compute SHA3-256 over ``pkg_dir``'s ``.py`` files and POST KAT vectors.
 
-    Mirrors ``_self_test._compute_module_digest`` byte-for-byte:
-    sorted glob over ``*.py`` at the top level, name + content with
-    CRLF normalised to LF.  Returns raw 32 bytes (the import-time
-    verifier compares raw, not hex).
+    Mirrors ``_self_test._compute_module_digest`` byte-for-byte: the top-level
+    ``*.py`` files (excluding the generated ``_integrity_signature.py``), then
+    every file under ``_post_kats/`` ordered by name, each contributing its name
+    plus content with CRLF normalised to LF.  Covering ``_post_kats/`` binds the
+    Known Answer vectors so a swapped vector fails the import-time integrity
+    check.  Returns raw 32 bytes (the verifier compares raw, not hex).
     """
     hasher = hashlib.sha3_256()
     for py_file in sorted(pkg_dir.glob("*.py")):
@@ -101,8 +103,13 @@ def _compute_package_digest(pkg_dir: Path) -> bytes:
         if py_file.name == "_integrity_signature.py":
             continue
         hasher.update(py_file.name.encode("utf-8"))
-        content = py_file.read_bytes().replace(b"\r\n", b"\n")
-        hasher.update(content)
+        hasher.update(py_file.read_bytes().replace(b"\r\n", b"\n"))
+    kat_dir = pkg_dir / "_post_kats"
+    if kat_dir.is_dir():
+        for kat_file in sorted((p for p in kat_dir.iterdir() if p.is_file()), key=lambda p: p.name):
+            hasher.update(b"_post_kats/")
+            hasher.update(kat_file.name.encode("utf-8"))
+            hasher.update(kat_file.read_bytes().replace(b"\r\n", b"\n"))
     return hasher.digest()
 
 

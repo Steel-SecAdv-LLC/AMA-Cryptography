@@ -45,7 +45,6 @@ import sys
 import textwrap
 import threading
 from pathlib import Path
-from typing import List, Tuple
 
 import pytest
 
@@ -129,9 +128,9 @@ class TestImportFailsClosed:
             "import succeeded with a failed POST — a caller cannot distinguish "
             "this from a working module.\nstdout:\n" + result.stdout
         )
-        assert "verified" not in result.stdout, (
-            "the caller's success path ran despite the POST failure"
-        )
+        assert (
+            "verified" not in result.stdout
+        ), "the caller's success path ran despite the POST failure"
         assert "CryptoModuleError" in result.stderr
 
     def test_failure_message_names_the_real_cause(self, tree_without_native: Path) -> None:
@@ -147,9 +146,9 @@ class TestImportFailsClosed:
         assert "searched directories" in combined
         # The remedy has to be present, and it has to be the right remedy.
         assert "cmake" in combined or "AMA_CRYPTO_LIB_PATH" in combined
-        assert "not built — cannot verify signature" not in combined, (
-            "the misleading legacy diagnostic is back"
-        )
+        assert (
+            "not built — cannot verify signature" not in combined
+        ), "the misleading legacy diagnostic is back"
 
     def test_healthy_tree_imports_and_is_fully_verified(self, tree_with_native: Path) -> None:
         """The fix must not make a good build unusable."""
@@ -168,9 +167,7 @@ class TestImportFailsClosed:
         assert result.returncode == 0, result.stdout + result.stderr
         assert "OK" in result.stdout
 
-    def test_diagnostic_flag_permits_import_but_not_crypto(
-        self, tree_without_native: Path
-    ) -> None:
+    def test_diagnostic_flag_permits_import_but_not_crypto(self, tree_without_native: Path) -> None:
         """The triage escape hatch buys introspection, never cryptography."""
         result = _run_python(
             """
@@ -235,8 +232,7 @@ class TestImportFailsClosed:
         )
         assert result.returncode != 0, (
             "AMA_BUILD_PIPELINE=1 excused a failing Known Answer Test; a release "
-            "container could smoke-test a broken wheel and call it built.\n"
-            + result.stdout
+            "container could smoke-test a broken wheel and call it built.\n" + result.stdout
         )
         assert "IMPORTED" not in result.stdout
         assert "SHA3-256" in result.stdout + result.stderr
@@ -331,8 +327,7 @@ class TestErrorStateInhibitsOutput:
 
         module = tmp_path / "fake_backends.py"
         module.write_text(
-            textwrap.dedent(
-                '''
+            textwrap.dedent('''
                 def gated_op(x):
                     """Doc."""
                     check_crypto_permitted()
@@ -347,8 +342,7 @@ class TestErrorStateInhibitsOutput:
 
                 def pure_python(x):
                     return x + 1
-                '''
-            ),
+                '''),
             encoding="utf-8",
         )
 
@@ -404,7 +398,7 @@ class TestCheckCryptoPermitted:
         st._SELF_TEST_THREAD = threading.get_ident()
         st.check_crypto_permitted()  # this thread is the POST thread
 
-        outcome: List[object] = []
+        outcome: list[object] = []
 
         def other_thread() -> None:
             try:
@@ -487,8 +481,7 @@ class TestAttestation:
             st._SELF_TEST_RESULTS.append(("ML-KEM-1024", None, "skipped (backend absent)"))
             att = st.module_attestation()
             assert att["fully_verified"] is False, (
-                "a run with an untested approved algorithm reported itself as "
-                "fully verified"
+                "a run with an untested approved algorithm reported itself as " "fully verified"
             )
             assert att["tests_skipped"] == 1
             assert att["skipped"][0][0] == "ML-KEM-1024"
@@ -508,32 +501,29 @@ class TestAttestation:
 
 
 class TestIntegrityTriState:
-    """"Cannot verify" and "verification failed" are different claims."""
+    """ "Cannot verify" and "verification failed" are different claims."""
 
     def test_missing_artefact_is_not_a_tamper_verdict(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """No artefact means "nothing was checked", not "the check failed"."""
-        from ama_cryptography import _self_test as st
-
         # ``None`` in sys.modules makes an import of that name raise
         # ImportError, which is the condition the function branches on.  The
         # attribute on the parent package has to go too: ``from pkg import mod``
         # resolves through the parent's namespace first when the submodule has
         # already been imported once, and would otherwise sail past the patch.
         import ama_cryptography as pkg
+        from ama_cryptography import _self_test as st
 
         monkeypatch.setitem(sys.modules, "ama_cryptography._integrity_signature", None)
         monkeypatch.delattr(pkg, "_integrity_signature", raising=False)
         verdict, detail = st._verify_signed_integrity("00" * 32)
-        assert verdict is None, (
-            f"a missing artefact must be 'cannot verify' (None), got {verdict!r}: {detail}"
-        )
+        assert (
+            verdict is None
+        ), f"a missing artefact must be 'cannot verify' (None), got {verdict!r}: {detail}"
         assert "no signed-integrity artefact" in detail
 
-    def test_absent_verifier_is_not_a_tamper_verdict(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_absent_verifier_is_not_a_tamper_verdict(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """The reported bug: a missing native library read as tampering.
 
         ``_ED25519_NATIVE_AVAILABLE`` being False means the verifier could not
@@ -547,8 +537,7 @@ class TestIntegrityTriState:
 
         verdict, detail = st._verify_signed_integrity(sig_mod.INTEGRITY_DIGEST_HEX)
         assert verdict is None, (
-            f"an unavailable verifier must be 'cannot verify' (None), got "
-            f"{verdict!r}: {detail}"
+            f"an unavailable verifier must be 'cannot verify' (None), got " f"{verdict!r}: {detail}"
         )
         assert "not built" not in detail, "the misleading build claim is back"
 
@@ -556,9 +545,9 @@ class TestIntegrityTriState:
         from ama_cryptography import _self_test as st
 
         verdict, detail = st._verify_signed_integrity("ff" * 32)
-        assert verdict is False, (
-            f"a present-but-wrong artefact must be False, got {verdict!r}: {detail}"
-        )
+        assert (
+            verdict is False
+        ), f"a present-but-wrong artefact must be False, got {verdict!r}: {detail}"
         assert "mismatch" in detail
 
     def test_verdict_is_not_carried_by_the_message_text(self) -> None:
@@ -621,7 +610,9 @@ class TestNativeBackendDiagnostics:
         # are only reachable with no library actually loaded.  monkeypatch
         # restores _native_lib after the test.
         monkeypatch.setattr(pb, "_native_lib", None)
-        saved = {k: (list(v) if isinstance(v, list) else v) for k, v in pb._LOAD_DIAGNOSTICS.items()}
+        saved = {
+            k: (list(v) if isinstance(v, list) else v) for k, v in pb._LOAD_DIAGNOSTICS.items()
+        }
         try:
             pb._LOAD_DIAGNOSTICS.update(
                 {
@@ -658,11 +649,9 @@ class TestNativeBackendDiagnostics:
 
 
 class TestInvariant7Enforcement:
-    """"A warning without a hard stop" is explicitly not an acceptable substitute."""
+    """ "A warning without a hard stop" is explicitly not an acceptable substitute."""
 
-    def test_no_backend_fails_post_rather_than_skipping(
-        self, tree_without_native: Path
-    ) -> None:
+    def test_no_backend_fails_post_rather_than_skipping(self, tree_without_native: Path) -> None:
         result = _run_python(
             """
             import ama_cryptography  # noqa: F401
@@ -672,9 +661,9 @@ class TestInvariant7Enforcement:
         )
         assert result.returncode == 0, result.stderr
         combined = result.stdout + result.stderr
-        assert "INVARIANT-7" in combined, (
-            "a backend-less import did not cite the invariant it violates"
-        )
+        assert (
+            "INVARIANT-7" in combined
+        ), "a backend-less import did not cite the invariant it violates"
 
     def test_docs_build_override_is_honoured(self, tree_without_native: Path) -> None:
         """The one exception INVARIANT-7 carves out must still work.

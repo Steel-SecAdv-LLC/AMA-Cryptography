@@ -56,7 +56,6 @@ from __future__ import annotations
 import ast
 import sys
 from pathlib import Path
-from typing import Dict, List, Tuple
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TARGET = REPO_ROOT / "ama_cryptography" / "pqc_backends.py"
@@ -81,7 +80,7 @@ CYTHON_PREFIX = "_cy_"
 #: Functions that legitimately reach ``_native_lib`` without the guard.
 #: Each entry must carry the reason it is safe; the check refuses to run if an
 #: entry names a function that no longer exists.
-EXEMPT: Dict[str, str] = {
+EXEMPT: dict[str, str] = {
     "lms_signing_available": (
         "capability probe: returns a bool describing what this build supports. "
         "Raising here would break feature detection in exactly the degraded "
@@ -118,8 +117,8 @@ def _calls_guard(node: ast.FunctionDef) -> bool:
 
 
 def audit(
-    path: Path, exempt: Dict[str, str] | None = None
-) -> Tuple[List[Tuple[str, int]], List[str], int]:
+    path: Path, exempt: dict[str, str] | None = None
+) -> tuple[list[tuple[str, int]], list[str], int]:
     """Return ``(ungated, stale_exemptions, checked_count)``.
 
     ``exempt`` defaults to :data:`EXEMPT`; it is a parameter so the audit logic
@@ -130,7 +129,7 @@ def audit(
         exempt = EXEMPT
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
 
-    ungated: List[Tuple[str, int]] = []
+    ungated: list[tuple[str, int]] = []
     seen: set = set()
     checked = 0
 

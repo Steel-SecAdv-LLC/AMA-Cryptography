@@ -350,10 +350,13 @@ class TestKatFailureBranches:
         if not pq.KYBER_AVAILABLE:
             pytest.skip("Kyber backend unavailable")
 
-        monkeypatch.setattr(pq, "kyber_decapsulate", lambda ct, sk: b"\x00" * 32)
+        # The KAT now decapsulates the NIST ciphertext and compares to the
+        # vector's known shared secret; a decapsulation that returns the wrong
+        # bytes must be caught as a known-answer failure.
+        monkeypatch.setattr(pq, "native_ml_kem_decapsulate", lambda ps, ct, sk: b"\x00" * 32)
         passed, detail = st._kat_ml_kem_1024()
         assert passed is False
-        assert "mismatch" in detail.lower()
+        assert "known answer" in detail.lower()
 
     def test_kat_ml_dsa_65_exception(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from ama_cryptography import pqc_backends as pq
@@ -362,9 +365,11 @@ class TestKatFailureBranches:
             pytest.skip("Dilithium backend unavailable")
 
         def _boom(*args: object, **kwargs: object) -> bytes:
-            raise RuntimeError("simulated sign failure")
+            raise RuntimeError("simulated keygen failure")
 
-        monkeypatch.setattr(pq, "dilithium_sign", _boom)
+        # The KAT derives the keypair from the NIST seed first; an exception
+        # there must be caught and reported, not propagated.
+        monkeypatch.setattr(pq, "native_ml_dsa_keypair_from_seed", _boom)
         passed, detail = st._kat_ml_dsa_65()
         assert passed is False
         assert "exception" in detail.lower()

@@ -671,6 +671,21 @@ jobs:
       run: |
         python tools/build_keyformat_corpus.py --verify
 
+    - name: "FIPS 140-3 §4.9.1: POST KAT vectors match their vendored NIST sources"
+      # The power-on self-test's known-answer vectors for ML-KEM-1024,
+      # ML-DSA-65 and SLH-DSA-SHA2-256f are extracted from the version-pinned
+      # NIST ACVP vectors under tests/kat/ (see tests/kat/README.md) into
+      # ama_cryptography/_post_kats/.  A KAT is only as trustworthy as its
+      # known answer: if the pinned vector drifted from its NIST source — or was
+      # swapped for one a broken implementation happens to pass — the KAT would
+      # go green while testing nothing.  This gate re-derives from the vendored
+      # sources and fails on any mismatch.  It needs no native library.  The
+      # vectors are additionally integrity-covered (the module digest hashes
+      # _post_kats/), so a swap also fails POST at import; both directions are
+      # pinned by tests/test_native_integrity.py.
+      run: |
+        python tools/build_post_kats.py --check
+
     - name: "FIPS 140-3 §4.9.2: error-state output inhibition is complete"
       # FIPS 140-3 §4.9.2 requires a module whose power-on self-tests failed to
       # inhibit ALL cryptographic output.  That requirement used to be met only

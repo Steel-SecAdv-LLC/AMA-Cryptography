@@ -437,9 +437,7 @@ def _composite_integrity_message(py_digest_raw: bytes, native_digest_raw: bytes)
 
     Mirrored byte-for-byte in ``_build_sign._composite_integrity_message``.
     """
-    return hashlib.sha3_256(
-        _INTEGRITY_SIG_DOMAIN + py_digest_raw + native_digest_raw
-    ).digest()
+    return hashlib.sha3_256(_INTEGRITY_SIG_DOMAIN + py_digest_raw + native_digest_raw).digest()
 
 
 def _env_flag_enabled(name: str) -> bool:
@@ -488,26 +486,89 @@ def _load_integrity_trust_anchor() -> Tuple[Optional[str], Optional[str]]:
 
 
 def _compute_module_digest() -> str:
-    """Compute SHA3-256 hash over all .py files in the ama_cryptography package.
+    """Compute SHA3-256 over the package's ``.py`` files and POST KAT vectors.
 
     Line endings are normalized (CRLF → LF) before hashing so that the digest
     is identical on Windows (autocrlf=true) and Linux/macOS.
 
-    Excludes ``_integrity_signature.py`` (the build-time-generated
-    signature artefact) so the digest input is independent of the
-    signature output — otherwise the construction is self-referential
-    and the signature could never be verified.
+    Two sections, in a fixed order:
+
+    1. Every top-level ``*.py`` file, excluding ``_integrity_signature.py`` (the
+       build-time-generated signature artefact — hashing it would make the
+       construction self-referential and unverifiable).
+    2. Every file under ``_post_kats/`` — the Known Answer vectors the
+       self-tests check against.  Covering these closes a gap: without it, an
+       attacker could swap a KAT vector for one a broken implementation happens
+       to pass and defeat the self-test without touching a ``.py`` file, on a
+       build whose ``.py`` digest and signature still verified.  Files are
+       ordered by name so the build-time signer and this runtime verifier agree
+       regardless of the absolute package path.
+
+    Mirrored byte-for-byte in ``_build_sign._compute_package_digest``; pinned
+    equal by ``tests/test_native_integrity.py``.
     """
     pkg_dir = Path(__file__).resolve().parent
     hasher = hashlib.sha3_256()
-    py_files = sorted(pkg_dir.glob("*.py"))
-    for py_file in py_files:
+    for py_file in sorted(pkg_dir.glob("*.py")):
         if py_file.name == "_integrity_signature.py":
             continue
         hasher.update(py_file.name.encode("utf-8"))
-        content = py_file.read_bytes().replace(b"\r\n", b"\n")
-        hasher.update(content)
+        hasher.update(py_file.read_bytes().replace(b"\r\n", b"\n"))
+    kat_dir = pkg_dir / "_post_kats"
+    if kat_dir.is_dir():
+        for kat_file in sorted((p for p in kat_dir.iterdir() if p.is_file()), key=lambda p: p.name):
+            hasher.update(b"_post_kats/")
+            hasher.update(kat_file.name.encode("utf-8"))
+            hasher.update(kat_file.read_bytes().replace(b"\r\n", b"\n"))
     return hasher.hexdigest()
+
+
+def _validate_trust_anchor(pubkey_hex: str) -> Tuple[Optional[str], Optional[str]]:
+    """Return ``(trust_anchor_hex, error)`` for the signing key's trust anchor.
+
+    ``error`` is non-None when the anchor cannot be resolved, is required but
+    absent, or does not match the key that signed the artefact — each a hard
+    integrity failure.  ``trust_anchor_hex`` is the compiled anchor (or None for
+    an unanchored developer build) when there is no error.
+    """
+    trust_anchor_hex, trust_anchor_error = _load_integrity_trust_anchor()
+    if trust_anchor_error is not None:
+        return None, trust_anchor_error
+    if trust_anchor_hex is None and _env_flag_enabled(_INTEGRITY_REQUIRE_TRUST_ANCHOR_ENV):
+        return None, "integrity trust anchor required but not configured"
+    if trust_anchor_hex is not None and pubkey_hex.strip().lower() != trust_anchor_hex:
+        return None, (
+            "integrity trust anchor mismatch: "
+            f"signed_pubkey={pubkey_hex[:16]}... anchor={trust_anchor_hex[:16]}..."
+        )
+    return trust_anchor_hex, None
+
+
+def _parse_embedded_native_digest(
+    sig_mod: Any, digest_raw: bytes
+) -> Tuple[Optional[bytes], bytes, Optional[str]]:
+    """Return ``(native_digest_raw, signed_message, error)`` from the artefact.
+
+    A v2 artefact embeds ``INTEGRITY_NATIVE_DIGEST_HEX`` and the signature covers
+    the composite of the .py digest and it; a legacy v1 artefact (absent field)
+    signs the raw .py digest alone.  ``error`` is non-None for a malformed native
+    digest.  See ``_verify_signed_integrity`` for why the absence of the field
+    is not a downgrade path.
+    """
+    native_digest_hex = getattr(sig_mod, "INTEGRITY_NATIVE_DIGEST_HEX", None)
+    if native_digest_hex is None:
+        return None, digest_raw, None  # v1: signature is over the raw .py digest
+    try:
+        native_digest_raw = bytes.fromhex(native_digest_hex)
+    except (ValueError, TypeError) as exc:
+        return None, digest_raw, f"signature module INTEGRITY_NATIVE_DIGEST_HEX not hex: {exc}"
+    if len(native_digest_raw) != 32:
+        return (
+            None,
+            digest_raw,
+            (f"signature module native digest is {len(native_digest_raw)} bytes (expected 32)"),
+        )
+    return native_digest_raw, _composite_integrity_message(digest_raw, native_digest_raw), None
 
 
 def _verify_signed_integrity(digest_hex: str) -> Tuple[Optional[bool], str]:
@@ -571,7 +632,8 @@ def _verify_signed_integrity(digest_hex: str) -> Tuple[Optional[bool], str]:
     if embedded_digest_hex != digest_hex:
         return False, (
             f"signed digest mismatch: stored={embedded_digest_hex[:16]}... "
-            f"computed={digest_hex[:16]}... — .py files changed post-build"
+            f"computed={digest_hex[:16]}... — a .py file or a POST KAT vector "
+            "under _post_kats/ changed post-build"
         )
 
     try:
@@ -587,23 +649,15 @@ def _verify_signed_integrity(digest_hex: str) -> Tuple[Optional[bool], str]:
             f"signature={len(signature)} (expected 32, 64)"
         )
 
-    trust_anchor_hex, trust_anchor_error = _load_integrity_trust_anchor()
+    trust_anchor_hex, trust_anchor_error = _validate_trust_anchor(pubkey_hex)
     if trust_anchor_error is not None:
         return False, trust_anchor_error
-    if trust_anchor_hex is None and _env_flag_enabled(_INTEGRITY_REQUIRE_TRUST_ANCHOR_ENV):
-        return False, "integrity trust anchor required but not configured"
-    if trust_anchor_hex is not None and pubkey_hex.strip().lower() != trust_anchor_hex:
-        return False, (
-            "integrity trust anchor mismatch: "
-            f"signed_pubkey={pubkey_hex[:16]}... anchor={trust_anchor_hex[:16]}..."
-        )
 
     try:
         from ama_cryptography.pqc_backends import (
             _ED25519_NATIVE_AVAILABLE,
-            native_ed25519_verify,
-            native_backend_diagnostics,
             native_backend_load_summary,
+            native_ed25519_verify,
         )
     except ImportError as exc:
         return None, f"Ed25519 verifier unavailable (pqc_backends import failed: {exc})"
@@ -636,21 +690,11 @@ def _verify_signed_integrity(digest_hex: str) -> Tuple[Optional[bool], str]:
     # composite — stripping it from a real v2 artefact changes the message the
     # signature must cover and so is caught as a signature failure below, not as
     # a silent downgrade.
-    native_digest_hex = getattr(sig_mod, "INTEGRITY_NATIVE_DIGEST_HEX", None)
-    if native_digest_hex is None:
-        signed_message = digest_raw  # v1: signature is over the raw .py digest
-        native_digest_raw = None
-    else:
-        try:
-            native_digest_raw = bytes.fromhex(native_digest_hex)
-        except (ValueError, TypeError) as exc:
-            return False, f"signature module INTEGRITY_NATIVE_DIGEST_HEX not hex: {exc}"
-        if len(native_digest_raw) != 32:
-            return False, (
-                f"signature module native digest is {len(native_digest_raw)} bytes "
-                "(expected 32)"
-            )
-        signed_message = _composite_integrity_message(digest_raw, native_digest_raw)
+    native_digest_raw, signed_message, native_digest_error = _parse_embedded_native_digest(
+        sig_mod, digest_raw
+    )
+    if native_digest_error is not None:
+        return False, native_digest_error
 
     try:
         ok = native_ed25519_verify(signature, signed_message, pubkey)
@@ -662,46 +706,16 @@ def _verify_signed_integrity(digest_hex: str) -> Tuple[Optional[bool], str]:
     # Signature authentic.  Now bind it to the shared object actually loaded.
     global _INTEGRITY_STRENGTH
     anchored = trust_anchor_hex is not None
-    native_ok = False
     if native_digest_raw is None:
-        native_note = "; native library NOT covered (legacy v1 artefact)"
+        verdict, native_note, native_ok = (
+            None,
+            "; native library NOT covered (legacy v1 artefact)",
+            False,
+        )
     else:
-        diag = native_backend_diagnostics()
-        loaded_path = diag.get("path")
-        override = diag.get("override")
-        actual_native = _compute_native_library_digest(loaded_path)
-        if override:
-            # AMA_CRYPTO_LIB_PATH deliberately substitutes the backend; the
-            # existing contract already documents that override as "not
-            # tamper-evident".  The signature still proves the artefact is
-            # authentic, so we do not fail — but the loaded object is not the
-            # signed one, and that must be said plainly rather than implied by
-            # a green check.
-            native_note = (
-                "; native library UNVERIFIED — AMA_CRYPTO_LIB_PATH override in "
-                f"effect ({override}), loaded object is not the signed one"
-            )
-        elif actual_native is None:
-            # Could not read the loaded object.  Fail closed on an anchored
-            # build; downgrade to a note on a developer one, consistent with
-            # the tri-state the rest of this verifier uses.
-            if anchored:
-                return False, (
-                    "native library integrity UNVERIFIABLE on an anchored build — "
-                    f"could not read the loaded object at {loaded_path!r}"
-                )
-            native_note = (
-                f"; native library UNVERIFIED — could not read {loaded_path!r}"
-            )
-        elif actual_native != native_digest_raw:
-            return False, (
-                "native library digest MISMATCH — libama_cryptography has been "
-                f"modified since signing (signed={native_digest_raw.hex()[:16]}..., "
-                f"loaded={actual_native.hex()[:16]}... at {loaded_path!r})"
-            )
-        else:
-            native_note = "; native library verified"
-            native_ok = True
+        verdict, native_note, native_ok = _check_loaded_native_library(native_digest_raw, anchored)
+        if verdict is False:
+            return False, native_note
 
     # Only a signed artefact whose native library was verified against the
     # loaded object is the full-strength state.  Signed-but-native-unverified
@@ -714,6 +728,63 @@ def _verify_signed_integrity(digest_hex: str) -> Tuple[Optional[bool], str]:
     if anchored:
         return True, f"signed integrity verified (Ed25519, trusted build pubkey){native_note}"
     return True, f"signed integrity verified (Ed25519, build-time pubkey){native_note}"
+
+
+def _check_loaded_native_library(
+    native_digest_raw: bytes, anchored: bool
+) -> Tuple[Optional[bool], str, bool]:
+    """Bind the authenticated native digest to the shared object actually loaded.
+
+    Returns ``(verdict, note, native_ok)``:
+
+    * ``verdict`` is ``False`` for a hard failure (the caller returns it as the
+      integrity error) and ``None`` to proceed.
+    * ``note`` is the human-readable suffix appended to the integrity detail.
+    * ``native_ok`` is True only when the loaded object's digest matched the
+      signed one — the sole full-strength outcome.
+
+    The three non-matching outcomes are deliberately distinct: an
+    AMA_CRYPTO_LIB_PATH override is the operator's own substitution (proceed,
+    unverified); an unreadable object fails closed on an anchored build but only
+    warns on a developer one; a digest mismatch is tampering and always fails.
+    """
+    from ama_cryptography.pqc_backends import native_backend_diagnostics
+
+    diag = native_backend_diagnostics()
+    loaded_path = diag.get("path")
+    override = diag.get("override")
+    actual_native = _compute_native_library_digest(loaded_path)
+    if override:
+        return (
+            None,
+            (
+                "; native library UNVERIFIED — AMA_CRYPTO_LIB_PATH override in "
+                f"effect ({override}), loaded object is not the signed one"
+            ),
+            False,
+        )
+    if actual_native is None:
+        if anchored:
+            return (
+                False,
+                (
+                    "native library integrity UNVERIFIABLE on an anchored build — "
+                    f"could not read the loaded object at {loaded_path!r}"
+                ),
+                False,
+            )
+        return None, f"; native library UNVERIFIED — could not read {loaded_path!r}", False
+    if actual_native != native_digest_raw:
+        return (
+            False,
+            (
+                "native library digest MISMATCH — libama_cryptography has been "
+                f"modified since signing (signed={native_digest_raw.hex()[:16]}..., "
+                f"loaded={actual_native.hex()[:16]}... at {loaded_path!r})"
+            ),
+            False,
+        )
+    return None, "; native library verified", True
 
 
 def verify_module_integrity() -> Tuple[bool, str]:
@@ -1024,83 +1095,143 @@ def _kat_aes_256_gcm() -> Tuple[Optional[bool], str]:
         return False, f"AES-256-GCM KAT exception: {exc}"
 
 
+def _load_post_kat(filename: str) -> dict:
+    """Load a pinned POST KAT vector from the ``_post_kats/`` package data.
+
+    Raises ``FileNotFoundError`` if the vector is absent so the caller records a
+    hard KAT failure — a POST that cannot find its known answer has not tested
+    anything.  The vectors are integrity-covered (``_compute_module_digest``
+    hashes ``_post_kats/``), so a swapped vector fails the integrity stage.
+    """
+    from importlib.resources import files as _resfiles
+
+    path = _resfiles("ama_cryptography").joinpath(f"_post_kats/{filename}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
 def _kat_ml_kem_1024() -> Tuple[Optional[bool], str]:
-    """ML-KEM-1024 KAT: keygen + encaps + decaps roundtrip."""
+    """ML-KEM-1024 KAT: NIST known-answer keygen + decapsulation.
+
+    Was a keygen/encaps/decaps roundtrip, which proves only that the
+    implementation agrees with itself — a mistyped parameter set or a shared
+    NTT bug round-trips cleanly and interoperates with nothing.  Now two
+    deterministic functions are checked against the one correct output the NIST
+    ACVP vector fixes:
+
+    1. **Keygen** ``(d, z) -> (pk, sk)`` (FIPS 203 §7.1) must equal the vector.
+    2. **Decapsulation** ``(ct, sk) -> ss`` must equal the vector's shared
+       secret.  Decapsulation is deterministic, so it too has a known answer.
+
+    Vector: ``_post_kats/ml_kem_1024_kat.json`` (NIST ACVP-Server FIPS 203,
+    pinned by ``tools/build_post_kats.py``).
+    """
     try:
         from ama_cryptography.pqc_backends import (
             KYBER_AVAILABLE,
-            generate_kyber_keypair,
-            kyber_decapsulate,
-            kyber_encapsulate,
+            native_ml_kem_decapsulate,
+            native_ml_kem_keypair_from_seed,
         )
 
         if not KYBER_AVAILABLE:
             return None, "ML-KEM-1024 KAT skipped (backend unavailable)"
 
-        kp = generate_kyber_keypair()
-        encap = kyber_encapsulate(kp.public_key)
-        ss = kyber_decapsulate(encap.ciphertext, kp.secret_key)
-        if ss != encap.shared_secret:
-            return False, "ML-KEM-1024 KAT: shared secrets mismatch"
-        return True, "ML-KEM-1024 KAT passed"
+        v = _load_post_kat("ml_kem_1024_kat.json")
+        pk, sk = native_ml_kem_keypair_from_seed(
+            1024, bytes.fromhex(v["d_hex"]), bytes.fromhex(v["z_hex"])
+        )
+        if pk.hex() != v["pk_hex"]:
+            return False, "ML-KEM-1024 KAT: keygen public key != NIST known answer"
+        if sk.hex() != v["sk_hex"]:
+            return False, "ML-KEM-1024 KAT: keygen secret key != NIST known answer"
+
+        ss = native_ml_kem_decapsulate(1024, bytes.fromhex(v["ct_hex"]), bytes.fromhex(v["sk_hex"]))
+        if ss.hex() != v["ss_hex"]:
+            return False, "ML-KEM-1024 KAT: decapsulated secret != NIST known answer"
+        return True, "ML-KEM-1024 KAT passed (NIST ACVP keygen + decaps known answer)"
     except Exception as exc:
         return False, f"ML-KEM-1024 KAT exception: {exc}"
 
 
 def _kat_ml_dsa_65() -> Tuple[Optional[bool], str]:
-    """ML-DSA-65 KAT: keygen + sign + verify roundtrip."""
+    """ML-DSA-65 KAT: NIST known-answer keygen + verification, plus negative.
+
+    Was a keygen/sign/verify roundtrip — which an always-accept verifier
+    passes, and so does an implementation whose arithmetic is wrong in a way
+    sign and verify share.  Now checked against the NIST ACVP vector:
+
+    1. **Keygen** ``seed -> (pk, sk)`` (FIPS 204 §5.1) must equal the vector.
+    2. **Verify** ``(pk, msg, ctx, sig) -> valid`` must accept the vector's
+       signature.
+    3. **Negative** — a one-bit-flipped signature must be rejected, which is
+       what catches the always-accept verifier.
+
+    Vector: ``_post_kats/ml_dsa_65_kat.json`` (NIST ACVP-Server FIPS 204,
+    external interface with a fixed context).
+    """
     try:
         from ama_cryptography.pqc_backends import (
             DILITHIUM_AVAILABLE,
-            dilithium_sign,
-            dilithium_verify,
-            generate_dilithium_keypair,
+            native_ml_dsa_keypair_from_seed,
+            native_ml_dsa_verify,
         )
 
         if not DILITHIUM_AVAILABLE:
             return None, "ML-DSA-65 KAT skipped (backend unavailable)"
 
-        kp = generate_dilithium_keypair()
-        msg = b"FIPS 140-3 ML-DSA-65 KAT"
-        sig = dilithium_sign(msg, kp.secret_key)
-        valid = dilithium_verify(msg, sig, kp.public_key)
-        if not valid:
-            return False, "ML-DSA-65 KAT: signature verification failed"
-        # Negative test: tampered message should fail
-        tampered = dilithium_verify(msg + b"X", sig, kp.public_key)
-        if tampered:
-            return False, "ML-DSA-65 KAT: tampered message incorrectly verified"
-        return True, "ML-DSA-65 KAT passed"
+        v = _load_post_kat("ml_dsa_65_kat.json")
+        pk, sk = native_ml_dsa_keypair_from_seed(65, bytes.fromhex(v["seed_hex"]))
+        if pk.hex() != v["pk_hex"]:
+            return False, "ML-DSA-65 KAT: keygen public key != NIST known answer"
+        if sk.hex() != v["sk_hex"]:
+            return False, "ML-DSA-65 KAT: keygen secret key != NIST known answer"
+
+        pk_b = bytes.fromhex(v["pk_hex"])
+        msg = bytes.fromhex(v["msg_hex"])
+        ctx = bytes.fromhex(v["ctx_hex"])
+        sig = bytes.fromhex(v["sig_hex"])
+        if not native_ml_dsa_verify(65, msg, sig, pk_b, ctx=ctx):
+            return False, "ML-DSA-65 KAT: NIST signature did not verify"
+
+        tampered = bytearray(sig)
+        tampered[0] ^= 0x01
+        if native_ml_dsa_verify(65, msg, bytes(tampered), pk_b, ctx=ctx):
+            return False, "ML-DSA-65 KAT: verifier ACCEPTED a corrupted signature"
+        return True, "ML-DSA-65 KAT passed (NIST ACVP keygen + verify + negative)"
     except Exception as exc:
         return False, f"ML-DSA-65 KAT exception: {exc}"
 
 
 def _kat_slh_dsa() -> Tuple[Optional[bool], str]:
-    """SLH-DSA (SPHINCS+) KAT: keygen + sign + verify roundtrip.
+    """SLH-DSA-SHA2-256f KAT: verify-only against a pinned NIST ACVP vector.
 
-    Exercises the SHA2-256f-simple parameter set via the legacy SPHINCS+
-    surface and tampers the message to confirm the verifier rejects.
+    Was a keygen/sign/verify roundtrip.  At the ``256f`` parameter set a sign is
+    expensive, so the roundtrip both cost the POST budget a full signature and
+    proved only self-consistency.  Verify-only against a fixed NIST
+    ``(pk, msg, ctx, sig)`` quadruple is the FIPS 140-3 §4.9.1 Known Answer Test
+    — one correct verdict, ~6 ms — and mirrors the established SLH-DSA-SHAKE-128s
+    POST KAT.  The negative case (flipped message) confirms the verifier
+    rejects, catching an always-accept implementation.
+
+    Vector: ``_post_kats/slh_dsa_sha2_256f_kat.json`` (NIST ACVP-Server
+    SLH-DSA-sigVer-FIPS205, a ``testPassed=true`` record).
     """
     try:
-        from ama_cryptography.pqc_backends import (
-            SPHINCS_AVAILABLE,
-            generate_sphincs_keypair,
-            sphincs_sign,
-            sphincs_verify,
-        )
+        from ama_cryptography.pqc_backends import SPHINCS_AVAILABLE, slhdsa_verify
 
         if not SPHINCS_AVAILABLE:
             return None, "SLH-DSA KAT skipped (backend unavailable)"
 
-        kp = generate_sphincs_keypair()
-        msg = b"FIPS 140-3 SLH-DSA KAT"
-        sig = sphincs_sign(msg, kp.secret_key)
-        if not sphincs_verify(msg, sig, kp.public_key):
-            return False, "SLH-DSA KAT: signature verification failed"
-        # Negative path: tampered message must NOT verify (FIPS 140-3 §4.9.1).
-        if sphincs_verify(b"tampered " + msg, sig, kp.public_key):
-            return False, "SLH-DSA KAT: tampered message incorrectly verified"
-        return True, "SLH-DSA KAT passed"
+        v = _load_post_kat("slh_dsa_sha2_256f_kat.json")
+        pk = bytes.fromhex(v["pk_hex"])
+        msg = bytes.fromhex(v["message_hex"])
+        ctx = bytes.fromhex(v["context_hex"])
+        sig = bytes.fromhex(v["signature_hex"])
+
+        if not slhdsa_verify(msg, sig, pk, ctx, param_set="SHA2-256f"):
+            return False, "SLH-DSA KAT: pinned NIST signature did not verify"
+        if slhdsa_verify(b"\x00" + msg, sig, pk, ctx, param_set="SHA2-256f"):
+            return False, "SLH-DSA KAT: verifier ACCEPTED a tampered message"
+        return True, f"SLH-DSA KAT passed (pinned NIST tcId={v['tcId']}, SHA2-256f verify)"
     except Exception as exc:
         return False, f"SLH-DSA KAT exception: {exc}"
 
@@ -1207,9 +1338,7 @@ def _kat_ed25519() -> Tuple[Optional[bool], str]:
             return None, "Ed25519 KAT skipped (native unavailable)"
 
         # RFC 8032 §7.1, TEST 1.
-        seed = bytes.fromhex(
-            "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60"
-        )
+        seed = bytes.fromhex("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60")
         expected_pk = bytes.fromhex(
             "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"
         )
@@ -1592,8 +1721,8 @@ def _run_backend_stage() -> Tuple[bool, Optional[str]]:
     """
     try:
         from ama_cryptography.pqc_backends import (
-            native_backend_load_summary,
             native_backend_diagnostics,
+            native_backend_load_summary,
         )
     except Exception as exc:
         _SELF_TEST_RESULTS.append(("native-backend", False, f"probe failed: {exc}"))
