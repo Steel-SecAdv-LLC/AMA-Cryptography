@@ -208,16 +208,35 @@ at import time on a regular (non-docs) run.  In other words: INVARIANT-7
 is preserved by a hop from import-time enforcement to call-time
 enforcement under the documented docs-only flag, never weakened.
 
-**Enforcement:** Module-level guards in `crypto_api.py`, `key_management.py`,
-and `legacy_compat.py` raise `RuntimeError` at import time when the native C
-backend is unavailable, except under the documented Sphinx/docs-build
-override above.  `pqc_backends.py` enforces the same guarantee at **call
-time** rather than import time: it records the backend as unavailable at
-import (`*_NATIVE_AVAILABLE = False`) and every wrapper raises `RuntimeError`
-before performing any operation without the native backend — and
-`crypto_api.py`, which imports `pqc_backends`, layers the import-time gate on
-top.  Under the docs override, call-time enforcement (`_enforce_invariant7*`)
-still refuses any cryptographic work without the native backend.
+**Enforcement:** The primary gate is the POST stage
+`_self_test._run_backend_stage()`, which fails the power-on self-tests when no
+native library loaded, so `import ama_cryptography` raises
+`CryptoModuleError` — see [INVARIANT-39](#invariant-39--a-failed-post-must-fail-the-import-and-the-error-state-must-inhibit-output).
+That stage exists because the guards named below are **not** reached by a bare
+`import ama_cryptography`: `crypto_api` is behind `__init__.__getattr__` and
+`key_management` / `legacy_compat` are imported on demand, so for a long time a
+checkout with no discoverable `libama_cryptography` imported cleanly, emitted a
+`UserWarning`, skipped eight of its eleven self-tests and reached
+`OPERATIONAL` — a warning without a hard stop, which is the substitute this
+invariant explicitly rules out.  The claim in this section was true of the
+modules it named and false of the package as a whole.  POST is the one thing
+that always runs on import, so POST is where the invariant is now enforced.
+
+The remaining layers are unchanged and still apply:
+
+* Module-level guards in `crypto_api.py`, `key_management.py` and
+  `legacy_compat.py` raise `RuntimeError` when those modules *are* imported
+  without a native backend, except under the documented Sphinx/docs-build
+  override above.
+* `pqc_backends.py` enforces at **call time**: it records the backend as
+  unavailable at import (`*_NATIVE_AVAILABLE = False`) and every wrapper
+  raises before performing any operation without it.
+
+Under the docs override the POST stage records a skip instead of a failure and
+the import proceeds so autodoc can read signatures — call-time enforcement
+(`_enforce_invariant7*`, and now `check_crypto_permitted()`) still refuses
+every cryptographic operation, and `module_attestation()["fully_verified"]`
+stays `False`.
 
 ## INVARIANT-8 — Deterministic Reproducible Builds
 
@@ -1875,5 +1894,92 @@ backend-differential job proves the two backends agree on every case.
 
 ---
 
+## INVARIANT-39 — A Failed POST Must Fail the Import, and the Error State Must Inhibit Output
+
+FIPS 140-3 §4.9.2 requires a module whose power-on self-tests have failed to
+enter an error state in which **all** cryptographic output is inhibited.  This
+invariant states the two halves that requirement decomposes into for a Python
+package, because for a long time this repository satisfied neither.
+
+**A failed POST must fail the import.** `ama_cryptography/__init__.py` discarded
+the return value of `_run_self_tests()`.  POST would log
+`CRITICAL: FIPS 140-3 POST FAILURE: <cause>`, set the module state to `ERROR` —
+and then `import ama_cryptography` succeeded, with exit status 0.  Every build
+script, CI smoke test and deployment health check that treats a clean import as
+evidence of a working module therefore reported success over a module that had
+just announced its own failure in the line above.  The failure went to the log
+and the success went to the exit code, and the exit code is what tooling reads.
+A self-test whose failure cannot fail anything is not a self-test.
+
+Import now raises `CryptoModuleError` carrying the root cause and the full POST
+result table, because a raising import leaves nothing behind to introspect: the
+partially-initialised module is dropped from `sys.modules`, so the message is
+the only artefact the operator gets.
+
+Two narrow, documented completions of the import remain, and neither permits
+cryptography:
+
+* `AMA_POST_DIAGNOSTIC_IMPORT=1` — triage.  The module stays in `ERROR` and
+  `check_crypto_permitted()` refuses every operation; the operator gains
+  `module_attestation()`, nothing else.
+* `AMA_BUILD_PIPELINE=1`, **and only for an integrity-stage failure** — the
+  tools that repair a stale integrity artefact (`_build_sign`,
+  `integrity --update`) live inside this package, so a hard raise would wall
+  them off behind the fault they exist to clear.  That flag already confers the
+  power to rewrite the artefacts outright, so honouring it grants no new
+  capability.  A failed KAT, a timing leak or an RNG fault still hard-fails
+  under it, so a release container — which carries the flag for its whole
+  lifetime — cannot smoke-test a genuinely broken wheel and call it built.
+
+**The error state must inhibit output.** The requirement was met only by
+`crypto_api`, which calls `check_operational()` on its public methods.  All
+eighty public entry points in `pqc_backends` — key generation, signing, KEM
+encapsulation, AEAD, HMAC, KDF — called straight through to the C library with
+no state check, so a module in `ERROR` kept producing keys and signatures for
+any caller that reached past `crypto_api`, which is what this package's own
+internal modules do.  Each now calls `check_crypto_permitted()` first.
+
+`check_crypto_permitted()` is deliberately weaker than `check_operational()`:
+it permits `SELF_TEST` **on the POST thread only**, because POST's Known Answer
+Tests must be able to call the primitives under test, and widening that to any
+thread would open the whole native surface for the duration of every
+`reset_module()` — precisely the window an operator opens after a failure.
+
+**A skip is not a pass.** In non-strict mode a KAT whose backend is absent is
+recorded as a skip and POST still reaches `OPERATIONAL`.  That is a legitimate
+source-checkout mode, but `module_status() == "OPERATIONAL"` answers "did
+anything fail?", not "was everything tested?".  `module_attestation()` answers
+the second question directly: `fully_verified` is true only when no self-test
+was skipped, and release gates assert it rather than re-deriving it from the
+tri-state result tuples.
+
+**Diagnostics must describe what happened.** A native library that could not be
+found was reported as `native Ed25519 not built — cannot verify signature`: a
+claim about the C build, usually false, that sent operators to fix a build that
+was fine.  `_verify_signed_integrity` now returns a tri-state —
+verified / tampered / **could not be verified** — and the "could not" case
+carries `native_backend_load_summary()`, which distinguishes a library that is
+absent from one that is present and unloadable, and quotes the loader's own
+error for the latter.  The dispatch is on the return value; it used to be a
+substring test against the message, which made a security-critical branch a
+function of prose.
+
+**Enforcement.** `tools/check_error_state_gating.py` parses the AST of
+`pqc_backends.py` and requires `check_crypto_permitted()` on every public
+function that reaches `_native_lib`.  Exemptions must be declared with a stated
+reason and are themselves checked for staleness, so the list cannot rot into a
+blanket allowlist.  It runs as a required CI step.  Both directions — the gate
+passing on the real tree, and the gate failing on an ungated function — are
+pinned by `tests/test_post_failclosed.py`, which also drives the import-level
+behaviour in subprocesses (it cannot be observed from a process that has
+already imported the package) and checks that a broken KAT is not excused by
+`AMA_BUILD_PIPELINE=1`.
+
+**Measured cost.** The guard is ~37 ns per gated call (~9 ns of check, the rest
+CPython call overhead), which is ~2 % of a 64-byte `native_sha3_256` and less on
+everything larger.
+
+---
+
 _Maintained by Steel Security Advisors LLC._
-_Last updated: 2026-07-31_
+_Last updated: 2026-08-11_

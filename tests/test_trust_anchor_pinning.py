@@ -255,7 +255,7 @@ class TestAnchoredBuildRefusesDigestOnlyFallback:
         monkeypatch.setattr(
             _self_test,
             "_verify_signed_integrity",
-            lambda digest_hex: (False, "no signed-integrity artefact (digest-only fallback)"),
+            lambda digest_hex: (None, "no signed-integrity artefact (digest-only fallback)"),
         )
         monkeypatch.setattr(_self_test, "_load_integrity_trust_anchor", lambda: anchor)
         monkeypatch.delenv("AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR", raising=False)
@@ -285,3 +285,38 @@ class TestAnchoredBuildRefusesDigestOnlyFallback:
         ok, detail = self._run(monkeypatch, (None, "native trust-anchor lookup failed: boom"))
         assert ok is False
         assert "trust-anchor lookup failed" in detail
+
+    def test_anchored_build_refuses_an_unverifiable_signature(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The second route into the same refusal: present artefact, absent verifier.
+
+        ``_verify_signed_integrity`` returns ``None`` both when the artefact is
+        missing and when the Ed25519 verifier could not run — the two ways of
+        failing to check rather than checking and failing.  The second is newer
+        and is the one the reported build hit, so it needs its own coverage
+        here: an anchored build must refuse it exactly as it refuses a missing
+        artefact, or a native library that failed to load becomes a way to skip
+        the anchor.
+        """
+        from ama_cryptography import _self_test
+
+        monkeypatch.setattr(
+            _self_test,
+            "_verify_signed_integrity",
+            lambda digest_hex: (
+                None,
+                "Ed25519 verifier unavailable — cannot check the signed-integrity artefact.",
+            ),
+        )
+        monkeypatch.setattr(
+            _self_test, "_load_integrity_trust_anchor", lambda: (self.ANCHOR, None)
+        )
+        monkeypatch.delenv("AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR", raising=False)
+
+        ok, detail = _self_test.verify_module_integrity()
+        assert ok is False, "an anchored build accepted an unverifiable artefact"
+        assert "compiled trust anchor" in detail
+        # The refusal must carry the reason it could not verify, or the
+        # operator is told only that something is wrong.
+        assert "verifier unavailable" in detail

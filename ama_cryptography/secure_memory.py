@@ -692,7 +692,17 @@ def secure_random_bytes(size: int) -> bytes:
     """
     Generate cryptographically secure random bytes.
 
-    Uses os.urandom from the standard library.
+    Routed through :func:`ama_cryptography._self_test.secure_token_bytes`, which
+    applies two controls this function previously had neither of:
+
+    * **FIPS 140-3 §4.9.2 output inhibition** — a module in the error state must
+      not emit key material, and this function is one of the places key material
+      comes from.  It called ``os.urandom`` directly, so it kept producing
+      output after POST had failed.
+    * **The FIPS 140-3 §4.9.2 continuous RNG health test** — the repeated-block
+      check lived in ``secure_token_bytes`` and nothing in the library called
+      it, so the test was implemented and never ran against a single real draw.
+      Every byte handed out here is now compared against the previous draw.
 
     Args:
         size: Number of random bytes to generate
@@ -702,6 +712,8 @@ def secure_random_bytes(size: int) -> bytes:
 
     Raises:
         ValueError: If size is negative
+        CryptoModuleError: If the module is in the FIPS error state, or the
+            continuous RNG health test fails
     """
     if size < 0:
         raise ValueError("size must be non-negative")
@@ -709,7 +721,12 @@ def secure_random_bytes(size: int) -> bytes:
     if size == 0:
         return b""
 
-    return os.urandom(size)
+    # Imported at call time: secure_memory is imported by the build-time signer
+    # before the package's POST has run, and a module-level import here would
+    # order those two against each other for no benefit.
+    from ama_cryptography._self_test import secure_token_bytes
+
+    return secure_token_bytes(size)
 
 
 class SecureBuffer:

@@ -69,6 +69,8 @@ import ctypes
 import os
 from typing import Any, Optional, Tuple, Union
 
+# FIPS 140-3 §4.9.2 output inhibition — see ``_require_native`` below.
+from ama_cryptography._self_test import check_crypto_permitted
 from ama_cryptography.exceptions import AmaCryptographyError
 
 __all__ = [
@@ -171,6 +173,12 @@ ASCON_AVAILABLE: bool = bool(_lib is not None and _setup_ascon_ctypes(_lib))
 
 
 def _require_native() -> Any:
+    # FIPS 140-3 §4.9.2 output inhibition.  Ascon reaches the shared library
+    # through its own ctypes bindings rather than through pqc_backends, so the
+    # guards there do not cover it: with the module in ERROR, hash256(),
+    # aead128_encrypt() and aead128_decrypt() all still produced output.  This
+    # is the single choke point every one of them passes through.
+    check_crypto_permitted()
     if not ASCON_AVAILABLE:
         # Ascon depends on no other primitive in this library and is in the
         # unconditional source list, so it is present in both the default and
@@ -196,7 +204,13 @@ def _as_bytes(name: str, value: _BufferInput, expected: Optional[int] = None) ->
 
 
 def generate_key() -> bytes:
-    """Return a fresh 16-byte Ascon-AEAD128 key from ``os.urandom``."""
+    """Return a fresh 16-byte Ascon-AEAD128 key from ``os.urandom``.
+
+    Gated separately from ``_require_native``: key generation touches no native
+    symbol, so it would otherwise keep minting keys for a module in the FIPS
+    error state.
+    """
+    check_crypto_permitted()
     return os.urandom(AEAD128_KEY_BYTES)
 
 
@@ -209,6 +223,7 @@ def generate_nonce() -> bytes:
     a stateless caller cannot provide, and a counter that resets is worse than
     a random nonce that does not.
     """
+    check_crypto_permitted()
     return os.urandom(AEAD128_NONCE_BYTES)
 
 

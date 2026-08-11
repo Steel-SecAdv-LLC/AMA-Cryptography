@@ -671,6 +671,29 @@ jobs:
       run: |
         python tools/build_keyformat_corpus.py --verify
 
+    - name: "FIPS 140-3 §4.9.2: error-state output inhibition is complete"
+      # FIPS 140-3 §4.9.2 requires a module whose power-on self-tests failed to
+      # inhibit ALL cryptographic output.  That requirement used to be met only
+      # by crypto_api; every one of the eighty public entry points in
+      # pqc_backends — keygen, signing, KEM, AEAD, HMAC, KDF — called straight
+      # through to the C library with no state check, so a module that had
+      # logged "FIPS 140-3 POST FAILURE" at import kept signing for any caller
+      # that reached past crypto_api, which is what this package's own internal
+      # modules all do.  The error state inhibited nothing that mattered.
+      #
+      # The fix is one guard call per function, which is exactly why it needs a
+      # machine to hold it: a convention this small, spread over eighty call
+      # sites, decays the first time someone adds a primitive without reading
+      # the file.  The gap would be silent — the new function works, the tests
+      # pass, and the only symptom is a FIPS violation on the failure path
+      # nobody exercises.  tools/check_error_state_gating.py parses the AST and
+      # requires the guard on every public function that reaches _native_lib;
+      # exemptions must be declared with a reason and are themselves checked
+      # for staleness, so the list cannot rot into a blanket allowlist.
+      # Both directions are pinned by tests/test_post_failclosed.py.
+      run: |
+        python tools/check_error_state_gating.py
+
     - name: "INVARIANT-23: Secret scan (in-house)"
       # tools/check_secrets.py is written in house rather than adopting a
       # third-party scanner — see the module docstring for why a generic

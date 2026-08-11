@@ -131,7 +131,7 @@ class TestModuleIntegrity:
         with (
             patch(
                 "ama_cryptography._self_test._verify_signed_integrity",
-                return_value=(False, "no signed-integrity artefact (digest-only fallback)"),
+                return_value=(None, "no signed-integrity artefact (digest-only fallback)"),
             ),
             patch("ama_cryptography._self_test._INTEGRITY_DIGEST_FILE") as mock_path,
         ):
@@ -147,7 +147,7 @@ class TestModuleIntegrity:
         with (
             patch(
                 "ama_cryptography._self_test._verify_signed_integrity",
-                return_value=(False, "no signed-integrity artefact (digest-only fallback)"),
+                return_value=(None, "no signed-integrity artefact (digest-only fallback)"),
             ),
             patch("ama_cryptography._self_test._INTEGRITY_DIGEST_FILE") as mock_path,
         ):
@@ -164,7 +164,7 @@ class TestModuleIntegrity:
         with (
             patch(
                 "ama_cryptography._self_test._verify_signed_integrity",
-                return_value=(False, "no signed-integrity artefact (digest-only fallback)"),
+                return_value=(None, "no signed-integrity artefact (digest-only fallback)"),
             ),
             patch("ama_cryptography._self_test._INTEGRITY_DIGEST_FILE") as mock_path,
         ):
@@ -356,7 +356,7 @@ class TestModuleIntegrity:
         monkeypatch.setattr(
             st_mod,
             "_verify_signed_integrity",
-            lambda _digest: (False, "no signed-integrity artefact (digest-only fallback)"),
+            lambda _digest: (None, "no signed-integrity artefact (digest-only fallback)"),
         )
         monkeypatch.setenv("AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR", "1")
 

@@ -39,6 +39,18 @@ from pathlib import Path
 from typing import Any, Callable, Optional, Union, cast
 
 from ama_cryptography._finalizer_health import record_finalizer_error
+
+# FIPS 140-3 §4.9.2 output inhibition.  Every public entry point below that
+# reaches ``_native_lib`` calls this first, so a module whose power-on
+# self-tests failed cannot emit keys, signatures, ciphertext, MACs or KDF
+# output through the native surface.  ``tools/check_error_state_gating.py``
+# enforces the rule mechanically — a new native primitive that forgets the
+# guard fails CI rather than silently reopening the hole.
+#
+# Import-order note: ``_self_test`` imports only ``ama_cryptography.exceptions``
+# at module scope and reaches this module lazily from inside the KAT functions,
+# so this top-level import does not close a cycle.
+from ama_cryptography._self_test import check_crypto_permitted
 from ama_cryptography.exceptions import (
     NativeBackendUnavailableError,
     PQCUnavailableError,
@@ -221,15 +233,46 @@ def _get_search_dirs() -> list:
     return search_dirs
 
 
+# Structured record of what the native-library search actually did.
+#
+# Every availability flag in this module is downstream of one question — did
+# ``libama_cryptography`` load? — and until now a "no" was indistinguishable
+# from every other "no".  ``_try_load_library`` swallowed OSError and returned
+# None, so a .so that was present but unloadable (wrong architecture, missing
+# NEEDED dependency, SONAME mismatch, unreadable file) produced exactly the
+# same silence as a .so that had never been built.  Callers then rendered that
+# silence as "native Ed25519 not built", which is a claim about the build, not
+# about the search — and it was usually false.  Recording the search makes the
+# distinction available to the POST message, to operators, and to CI.
+_LOAD_DIAGNOSTICS: dict = {
+    "loaded": False,
+    "path": None,  # str: the library that loaded, when one did
+    "override": None,  # str: AMA_CRYPTO_LIB_PATH value, when honoured
+    "override_ignored_reason": None,  # str: why an override was refused
+    "searched_dirs": [],  # list[str]: every directory consulted, in order
+    "candidates": [],  # list[str]: files that existed and were tried
+    "errors": [],  # list[(path, str)]: dlopen failure per candidate
+}
+
+
 def _try_load_library(lib_path: Path) -> Optional[ctypes.CDLL]:
-    """Try to load a shared library from the given path. Returns None on failure."""
+    """Try to load a shared library from the given path. Returns None on failure.
+
+    Records every attempt — and the exact loader error on failure — in
+    ``_LOAD_DIAGNOSTICS`` so that a library which is present but unloadable can
+    be told apart from one that was never built.  The OSError is still
+    swallowed (discovery must keep walking the search path), but it is no
+    longer discarded.
+    """
+    _LOAD_DIAGNOSTICS["candidates"].append(str(lib_path))
     try:
         if platform.system() == "Windows":
             # On Windows with Python 3.8+, DLL search paths are restricted.
             # Use winmode=0 to search the DLL's directory and PATH.
             return ctypes.CDLL(str(lib_path), winmode=0)
         return ctypes.CDLL(str(lib_path))
-    except OSError:
+    except OSError as exc:
+        _LOAD_DIAGNOSTICS["errors"].append((str(lib_path), str(exc)))
         return None
 
 
@@ -442,8 +485,13 @@ def _find_native_library() -> Optional[ctypes.CDLL]:
             "cryptographic backend.",
             override,
         )
+        _LOAD_DIAGNOSTICS["override_ignored_reason"] = (
+            "secure-execution mode (set-uid/set-gid): caller-controlled "
+            "AMA_CRYPTO_LIB_PATH must not select the cryptographic backend"
+        )
         override = None
     if override:
+        _LOAD_DIAGNOSTICS["override"] = override
         override_path = Path(override)
         if override_path.is_file() or override_path.is_dir():
             logging.getLogger(__name__).warning(
@@ -456,9 +504,13 @@ def _find_native_library() -> Optional[ctypes.CDLL]:
         if override_path.is_file():
             lib = _try_load_library(override_path)
             if lib is not None:
+                _LOAD_DIAGNOSTICS["loaded"] = True
+                _LOAD_DIAGNOSTICS["path"] = str(override_path)
                 return lib
         elif override_path.is_dir():
             search_dirs.insert(0, override_path)
+
+    _LOAD_DIAGNOSTICS["searched_dirs"] = [str(d) for d in search_dirs]
 
     for search_dir in search_dirs:
         for lib_name in lib_names:
@@ -466,9 +518,74 @@ def _find_native_library() -> Optional[ctypes.CDLL]:
             if lib_path.is_file():
                 lib = _try_load_library(lib_path)
                 if lib is not None:
+                    _LOAD_DIAGNOSTICS["loaded"] = True
+                    _LOAD_DIAGNOSTICS["path"] = str(lib_path)
                     return lib
 
     return None
+
+
+def native_backend_diagnostics() -> dict:
+    """Return a copy of the native-library discovery record.
+
+    Keys: ``loaded``, ``path``, ``override``, ``override_ignored_reason``,
+    ``searched_dirs``, ``candidates``, ``errors``.  Safe to call at any time;
+    it performs no I/O and never raises.
+    """
+    return {
+        "loaded": _LOAD_DIAGNOSTICS["loaded"],
+        "path": _LOAD_DIAGNOSTICS["path"],
+        "override": _LOAD_DIAGNOSTICS["override"],
+        "override_ignored_reason": _LOAD_DIAGNOSTICS["override_ignored_reason"],
+        "searched_dirs": list(_LOAD_DIAGNOSTICS["searched_dirs"]),
+        "candidates": list(_LOAD_DIAGNOSTICS["candidates"]),
+        "errors": [(p, e) for p, e in _LOAD_DIAGNOSTICS["errors"]],
+    }
+
+
+def native_backend_load_summary() -> str:
+    """One-line, operator-actionable explanation of the native-backend state.
+
+    Written for the place it is consumed: a POST failure message in a build
+    log, where the reader needs to know in one line whether to run cmake, fix a
+    path, or investigate a corrupt artefact.  The three outcomes are genuinely
+    different problems and used to share a single wrong sentence
+    ("native Ed25519 not built"):
+
+    * loaded            — nothing to explain.
+    * found but broken  — the file exists; the loader rejected it.  Quote the
+                          loader's own error, which names the actual fault
+                          (wrong ELF class, missing NEEDED, permission).
+    * not found         — no candidate existed anywhere on the search path.
+                          This is the only case where "build it" is the right
+                          advice, so it is the only case that gives it.
+    """
+    diag = _LOAD_DIAGNOSTICS
+    if diag["loaded"]:
+        return f"native backend loaded from {diag['path']}"
+
+    if diag["errors"]:
+        detail = "; ".join(f"{path}: {err}" for path, err in diag["errors"][:3])
+        return (
+            f"the native library was FOUND but could not be loaded — {detail}. "
+            "This is a load failure, not a missing build: check the "
+            "architecture, the SONAME, and the library's own dependencies "
+            "(ldd/otool)."
+        )
+
+    n_dirs = len(diag["searched_dirs"])
+    shown = ", ".join(diag["searched_dirs"][:4])
+    ignored = (
+        f" AMA_CRYPTO_LIB_PATH was ignored: {diag['override_ignored_reason']}."
+        if diag["override_ignored_reason"]
+        else ""
+    )
+    return (
+        f"no native library found in any of {n_dirs} searched directories "
+        f"(first: {shown}).{ignored} Build it with: "
+        "cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build — or "
+        "point AMA_CRYPTO_LIB_PATH at an existing build."
+    )
 
 
 def _setup_native_ctypes(lib: ctypes.CDLL) -> bool:
@@ -2508,6 +2625,7 @@ def generate_dilithium_keypair() -> DilithiumKeyPair:
     Raises:
         QuantumSignatureUnavailableError: If no Dilithium backend is available
     """
+    check_crypto_permitted()
     if not DILITHIUM_AVAILABLE:
         raise QuantumSignatureUnavailableError(_DILITHIUM_UNAVAILABLE_MSG)
 
@@ -2541,6 +2659,7 @@ def dilithium_sign(message: bytes, secret_key: Union[bytes, bytearray]) -> bytes
     Raises:
         QuantumSignatureUnavailableError: If no Dilithium backend is available
     """
+    check_crypto_permitted()
     if not DILITHIUM_AVAILABLE:
         raise QuantumSignatureUnavailableError(_DILITHIUM_UNAVAILABLE_MSG)
 
@@ -2594,6 +2713,7 @@ def dilithium_verify(message: bytes, signature: bytes, public_key: bytes) -> boo
     Raises:
         QuantumSignatureUnavailableError: If no Dilithium backend is available
     """
+    check_crypto_permitted()
     if not DILITHIUM_AVAILABLE:
         raise QuantumSignatureUnavailableError(_DILITHIUM_UNAVAILABLE_MSG)
 
@@ -2640,6 +2760,7 @@ def dilithium_verify_ctx(message: bytes, signature: bytes, public_key: bytes, ct
         QuantumSignatureUnavailableError: If no Dilithium backend is available
         ValueError: If ctx exceeds 255 bytes
     """
+    check_crypto_permitted()
     if len(ctx) > 255:
         raise ValueError(f"Context must be at most 255 bytes, got {len(ctx)}")
     if not DILITHIUM_AVAILABLE:
@@ -2688,6 +2809,7 @@ def dilithium_sign_ctx(message: bytes, secret_key: Union[bytes, bytearray], ctx:
     Standards:
         NIST FIPS 204 §5.2 (ML-DSA.Sign).
     """
+    check_crypto_permitted()
     if len(ctx) > 255:
         raise ValueError(f"Context must be at most 255 bytes, got {len(ctx)}")
     if not DILITHIUM_AVAILABLE:
@@ -2749,6 +2871,7 @@ def generate_kyber_keypair() -> KyberKeyPair:
         >>> len(keypair.secret_key)
         3168
     """
+    check_crypto_permitted()
     if not KYBER_AVAILABLE:
         raise KyberUnavailableError(_KYBER_UNAVAILABLE_MSG)
 
@@ -2797,6 +2920,7 @@ def kyber_encapsulate(public_key: bytes) -> KyberEncapsulation:
         >>> len(encap.shared_secret)
         32
     """
+    check_crypto_permitted()
     if not KYBER_AVAILABLE:
         raise KyberUnavailableError(_KYBER_UNAVAILABLE_MSG)
 
@@ -2853,6 +2977,7 @@ def kyber_decapsulate(ciphertext: bytes, secret_key: Union[bytes, bytearray]) ->
         >>> shared_secret == encap.shared_secret
         True
     """
+    check_crypto_permitted()
     if not KYBER_AVAILABLE:
         raise KyberUnavailableError(_KYBER_UNAVAILABLE_MSG)
 
@@ -2916,6 +3041,7 @@ def generate_sphincs_keypair() -> SphincsKeyPair:
         >>> len(keypair.secret_key)
         128
     """
+    check_crypto_permitted()
     if not SPHINCS_AVAILABLE:
         raise SphincsUnavailableError(_SPHINCS_UNAVAILABLE_MSG)
 
@@ -2957,6 +3083,7 @@ def sphincs_sign(message: bytes, secret_key: Union[bytes, bytearray]) -> bytes:
         >>> len(signature)
         49856
     """
+    check_crypto_permitted()
     if not SPHINCS_AVAILABLE:
         raise SphincsUnavailableError(_SPHINCS_UNAVAILABLE_MSG)
 
@@ -3012,6 +3139,7 @@ def sphincs_verify(message: bytes, signature: bytes, public_key: bytes) -> bool:
         >>> sphincs_verify(b"Tampered!", signature, keypair.public_key)
         False
     """
+    check_crypto_permitted()
     if not SPHINCS_AVAILABLE:
         raise SphincsUnavailableError(_SPHINCS_UNAVAILABLE_MSG)
 
@@ -3053,6 +3181,7 @@ def sphincs_verify_ctx(message: bytes, signature: bytes, public_key: bytes, ctx:
         SphincsUnavailableError: If SPHINCS+ backend is not available
         ValueError: If ctx exceeds 255 bytes
     """
+    check_crypto_permitted()
     if len(ctx) > 255:
         raise ValueError(f"Context must be at most 255 bytes, got {len(ctx)}")
     if not SPHINCS_AVAILABLE:
@@ -3158,6 +3287,7 @@ def generate_slhdsa_keypair(param_set: str = "SHAKE-128s") -> SlhDsaKeyPair:
         ValueError: On unsupported param_set.
         RuntimeError: On native key generation failure.
     """
+    check_crypto_permitted()
     enum_id, pk_len, sk_len, _, _ = _slhdsa_resolve(param_set)
     if not SPHINCS_AVAILABLE or _native_lib is None:
         raise SphincsUnavailableError(_SPHINCS_UNAVAILABLE_MSG)
@@ -3198,6 +3328,7 @@ def generate_slhdsa_keypair_from_seed(
         ValueError: On unsupported ``param_set`` or wrong seed length.
         RuntimeError: On native key generation failure.
     """
+    check_crypto_permitted()
     enum_id, pk_len, sk_len, _, n = _slhdsa_resolve(param_set)
     if not SPHINCS_AVAILABLE or _native_lib is None:
         raise SphincsUnavailableError(_SPHINCS_UNAVAILABLE_MSG)
@@ -3251,6 +3382,7 @@ def slhdsa_sign(
         SphincsUnavailableError: If the native backend is not built.
         RuntimeError: On native signing failure.
     """
+    check_crypto_permitted()
     if len(ctx) > 255:
         raise ValueError(f"Context must be at most 255 bytes, got {len(ctx)}")
     enum_id, _, sk_len, sig_len, _ = _slhdsa_resolve(param_set)
@@ -3298,6 +3430,7 @@ def slhdsa_verify(
     cryptographic verification failure (wrong message, wrong context, wrong
     public key, malformed signature length, …).
     """
+    check_crypto_permitted()
     if len(ctx) > 255:
         raise ValueError(f"Context must be at most 255 bytes, got {len(ctx)}")
     enum_id, pk_len, _, _, _ = _slhdsa_resolve(param_set)
@@ -3333,6 +3466,7 @@ def slhdsa_sign_deterministic(
     sigGen vectors. **Production code should call** :func:`slhdsa_sign`
     (hedged) **for forward-secrecy under fault attacks.**
     """
+    check_crypto_permitted()
     if len(ctx) > 255:
         raise ValueError(f"Context must be at most 255 bytes, got {len(ctx)}")
     enum_id, _, sk_len, sig_len, _ = _slhdsa_resolve(param_set)
@@ -3376,6 +3510,7 @@ def slhdsa_sign_internal(
     Skips the FIPS 205 §10.2 context wrapper and signs ``message`` directly.
     Exposed for ACVP ``signatureInterface == "internal"`` KAT validation.
     """
+    check_crypto_permitted()
     enum_id, _, sk_len, sig_len, n = _slhdsa_resolve(param_set)
     if not SPHINCS_AVAILABLE or _native_lib is None:
         raise SphincsUnavailableError(_SPHINCS_UNAVAILABLE_MSG)
@@ -3428,6 +3563,7 @@ def native_ed25519_keypair() -> tuple:
     Raises:
         RuntimeError: If native library is not available or keypair generation fails
     """
+    check_crypto_permitted()
     import secrets as _secrets
 
     if _native_lib is None or not _ED25519_NATIVE_AVAILABLE:
@@ -3466,6 +3602,7 @@ def native_ed25519_keypair_from_seed(seed: bytes) -> tuple:
         ValueError: If seed is not exactly 32 bytes
         RuntimeError: If native library is not available
     """
+    check_crypto_permitted()
     if len(seed) != 32:
         raise ValueError(f"Ed25519 seed must be 32 bytes, got {len(seed)}")
 
@@ -3505,6 +3642,7 @@ def native_ed25519_sign(message: bytes, secret_key: Union[bytes, bytearray]) -> 
         RuntimeError: If native library is not available or signing fails
         ValueError: If secret_key has incorrect length
     """
+    check_crypto_permitted()
     if len(secret_key) != ED25519_SECRET_KEY_BYTES:
         raise ValueError(
             f"Ed25519 secret key must be {ED25519_SECRET_KEY_BYTES} bytes, "
@@ -3594,6 +3732,7 @@ def native_ed25519_verify(signature: bytes, message: bytes, public_key: bytes) -
         RuntimeError: If native library is not available
         ValueError: If signature or public_key has incorrect length
     """
+    check_crypto_permitted()
     if len(signature) != ED25519_SIGNATURE_BYTES:
         raise ValueError(
             f"Ed25519 signature must be {ED25519_SIGNATURE_BYTES} bytes, " f"got {len(signature)}"
@@ -3641,6 +3780,7 @@ def native_ed25519_batch_verify(
         RuntimeError: If native library is not available
         ValueError: If any entry has invalid lengths
     """
+    check_crypto_permitted()
     if _native_lib is None or not _ED25519_NATIVE_AVAILABLE:
         raise NativeBackendUnavailableError(
             "Ed25519 native backend not available. " + _INSTALL_HINT
@@ -3720,6 +3860,7 @@ def native_aes256_gcm_encrypt(
         RuntimeError: If native library is not available
         ValueError: If key or nonce has incorrect length
     """
+    check_crypto_permitted()
     if _native_lib is None or not _AES_GCM_NATIVE_AVAILABLE:
         raise NativeBackendUnavailableError(
             "AES-256-GCM native backend not available. " + _INSTALL_HINT
@@ -3785,6 +3926,7 @@ def native_aes256_gcm_decrypt(
         ValueError: If key, nonce, or tag has incorrect length, or if
             authentication tag verification fails
     """
+    check_crypto_permitted()
     if _native_lib is None or not _AES_GCM_NATIVE_AVAILABLE:
         raise NativeBackendUnavailableError(
             "AES-256-GCM native backend not available. " + _INSTALL_HINT
@@ -3858,6 +4000,7 @@ def native_hkdf(
         RuntimeError: If native library is not available
         ValueError: If length exceeds maximum
     """
+    check_crypto_permitted()
     if length > 8160:
         raise ValueError(f"HKDF output length must be <= 8160, got {length}")
     if length <= 0:
@@ -4051,6 +4194,7 @@ def native_sha3_256(data: bytes) -> bytes:
     Raises:
         RuntimeError: If native library is not available
     """
+    check_crypto_permitted()
     if _cy_sha3_fn is not None:
         try:
             return _cy_sha3_fn(data)
@@ -4095,6 +4239,7 @@ def native_sha256(data: bytes) -> bytes:
     Raises:
         RuntimeError: If the native library / ama_sha256 symbol is unavailable.
     """
+    check_crypto_permitted()
     if _native_lib is None or not _SHA256_NATIVE_AVAILABLE:
         raise NativeBackendUnavailableError(
             "SHA-256 native backend not available. " + _INSTALL_HINT
@@ -4124,6 +4269,7 @@ def native_sha3_512(data: bytes) -> bytes:
     Raises:
         RuntimeError: If the native backend is not available.
     """
+    check_crypto_permitted()
     if _native_lib is None or not _SHA3_EXT_NATIVE_AVAILABLE:
         raise NativeBackendUnavailableError(
             "SHA3-512 native backend not available. " + _INSTALL_HINT
@@ -4214,6 +4360,7 @@ def native_hmac_sha3_256(key: bytes, msg: bytes) -> bytes:
     Raises:
         RuntimeError: If native library is not available
     """
+    check_crypto_permitted()
     if _native_lib is None or not _HMAC_SHA3_256_NATIVE_AVAILABLE:
         raise NativeBackendUnavailableError(
             "HMAC-SHA3-256 native backend not available. " + _INSTALL_HINT
@@ -4251,6 +4398,7 @@ def native_hmac_sha512(key: bytes, msg: bytes) -> bytes:
     Raises:
         RuntimeError: If native library is not available
     """
+    check_crypto_permitted()
     if _native_lib is None or not _HMAC_SHA512_NATIVE_AVAILABLE:
         raise NativeBackendUnavailableError(
             "HMAC-SHA-512 native backend not available. " + _INSTALL_HINT
@@ -4298,6 +4446,7 @@ def native_hmac_sha384(key: bytes, msg: bytes) -> bytes:
         RuntimeError: If the native library is not loaded or the
                       ama_hmac_sha384 symbol was not bound at module init.
     """
+    check_crypto_permitted()
     if _native_lib is None or not _HMAC_SHA384_NATIVE_AVAILABLE:
         raise NativeBackendUnavailableError(
             "HMAC-SHA-384 native backend not available. " + _INSTALL_HINT
@@ -4356,6 +4505,7 @@ def native_hmac_sha256(key: bytes, msg: bytes) -> bytes:
                       ama_hmac_sha256 symbol was not bound at module
                       init (older AMA build without the v3.2.0 wiring).
     """
+    check_crypto_permitted()
     if _native_lib is None or not _HMAC_SHA256_NATIVE_AVAILABLE:
         raise NativeBackendUnavailableError(
             "HMAC-SHA-256 native backend not available. " + _INSTALL_HINT
@@ -4403,6 +4553,7 @@ def native_hmac_sha256_2(key: bytes, msg1: bytes, msg2: bytes) -> bytes:
         RuntimeError: If the native library is not loaded or the
                       ama_hmac_sha256_2 symbol was not bound.
     """
+    check_crypto_permitted()
     if _native_lib is None or not _HMAC_SHA256_NATIVE_AVAILABLE:
         raise NativeBackendUnavailableError(
             "HMAC-SHA-256 native backend not available. " + _INSTALL_HINT
@@ -4469,6 +4620,11 @@ def hmac_sha3_256(key: bytes, msg: bytes) -> bytes:
         RuntimeError: If no HMAC-SHA3-256 backend is available (neither
             Cython extension nor native C library found).
     """
+    # Gated here rather than only in ``native_hmac_sha3_256``: when the Cython
+    # extension is built, ``_cy_hmac_fn`` is called directly and the ctypes
+    # wrapper — along with its guard — is never reached.  A backend chosen for
+    # speed must not also be a way around the error state.
+    check_crypto_permitted()
     if not HMAC_SHA3_256_AVAILABLE:
         raise NativeBackendUnavailableError("HMAC-SHA3-256 backend not available. " + _INSTALL_HINT)
     if _cy_hmac_fn is not None:
@@ -4643,6 +4799,7 @@ def native_secp256k1_pubkey_from_privkey(privkey: bytes) -> bytes:
         ValueError: If privkey is not 32 bytes
         RuntimeError: If native library is not available
     """
+    check_crypto_permitted()
     if len(privkey) != SECP256K1_PRIVKEY_BYTES:
         raise ValueError(f"Private key must be {SECP256K1_PRIVKEY_BYTES} bytes, got {len(privkey)}")
 
@@ -4702,6 +4859,7 @@ def native_secp256k1_pubkey_decompress(compressed: bytes) -> bytes:
             is not on the curve.
         NativeBackendUnavailableError: If the native library is not available.
     """
+    check_crypto_permitted()
     if len(compressed) != SECP256K1_PUBKEY_BYTES:
         raise ValueError(
             f"Compressed public key must be {SECP256K1_PUBKEY_BYTES} bytes, got {len(compressed)}"
@@ -4746,6 +4904,7 @@ def native_secp256k1_ecdsa_sign(message_digest: bytes, privkey: bytes) -> bytes:
         RuntimeError: If the native library is unavailable or the private
             key is out of range.
     """
+    check_crypto_permitted()
     if len(message_digest) != 32:
         raise ValueError(f"Message digest must be 32 bytes, got {len(message_digest)}")
     if len(privkey) != SECP256K1_PRIVKEY_BYTES:
@@ -4809,6 +4968,7 @@ def native_secp256k1_ecdsa_verify(
         ValueError: If the digest or public key has the wrong length.
         RuntimeError: If the native library is unavailable.
     """
+    check_crypto_permitted()
     if len(message_digest) != 32:
         raise ValueError(f"Message digest must be 32 bytes, got {len(message_digest)}")
     if len(pubkey) != SECP256K1_UNCOMPRESSED_PUBKEY_BYTES:
@@ -4962,6 +5122,7 @@ def native_ml_kem_keypair(ps: Union[int, str]) -> tuple:
         PQCUnavailableError: If the native backend is unavailable.
         RuntimeError: If key generation failed.
     """
+    check_crypto_permitted()
     pid = _ml_kem_id(ps)
     _ml_kem_require_native()
     sz = ML_KEM_SIZES[pid]
@@ -4988,6 +5149,7 @@ def native_ml_kem_keypair_from_seed(ps: Union[int, str], d: bytes, z: bytes) -> 
     Raises:
         ValueError: If a seed is not exactly 32 bytes, or the set is unknown.
     """
+    check_crypto_permitted()
     pid = _ml_kem_id(ps)
     if len(d) != 32 or len(z) != 32:
         raise ValueError(f"ML-KEM seeds must be 32 bytes each, got d={len(d)}, z={len(z)}")
@@ -5034,6 +5196,7 @@ def native_ml_kem_pubkey_from_privkey(ps: Union[int, str], secret_key: bytes) ->
         ValueError: On a wrong key length, an unknown parameter set, or a key
             whose embedded digest or key pair is inconsistent.
     """
+    check_crypto_permitted()
     pid = _ml_kem_id(ps)
     sz = ML_KEM_SIZES[pid]
     if len(secret_key) != sz["secret_key"]:
@@ -5070,6 +5233,7 @@ def native_ml_kem_privkey_check(ps: Union[int, str], secret_key: bytes) -> bool:
         ValueError: On a wrong key length or an unknown parameter set — those
             are caller errors, not verdicts.
     """
+    check_crypto_permitted()
     pid = _ml_kem_id(ps)
     sz = ML_KEM_SIZES[pid]
     if len(secret_key) != sz["secret_key"]:
@@ -5108,6 +5272,7 @@ def native_ml_kem_pubkey_check(ps: Union[int, str], public_key: bytes) -> bool:
         ValueError: On a wrong key length or an unknown parameter set — those
             are caller errors, not verdicts.
     """
+    check_crypto_permitted()
     pid = _ml_kem_id(ps)
     sz = ML_KEM_SIZES[pid]
     if len(public_key) != sz["public_key"]:
@@ -5132,6 +5297,7 @@ def native_ml_kem_encapsulate(ps: Union[int, str], public_key: bytes) -> tuple:
     Raises:
         ValueError: If the public key has the wrong length for ``ps``.
     """
+    check_crypto_permitted()
     pid = _ml_kem_id(ps)
     sz = ML_KEM_SIZES[pid]
     if len(public_key) != sz["public_key"]:
@@ -5172,6 +5338,7 @@ def native_ml_kem_decapsulate(
     wrong *length* is an error, because that is a caller bug rather than an
     attacker-supplied ciphertext.
     """
+    check_crypto_permitted()
     pid = _ml_kem_id(ps)
     sz = ML_KEM_SIZES[pid]
     if len(ciphertext) != sz["ciphertext"]:
@@ -5204,6 +5371,7 @@ def native_ml_kem_decapsulate(
 
 def native_ml_dsa_keypair(ps: Union[int, str]) -> tuple:
     """Generate an ML-DSA keypair for any FIPS 204 parameter set."""
+    check_crypto_permitted()
     pid = _ml_dsa_id(ps)
     _ml_dsa_require_native()
     sz = ML_DSA_SIZES[pid]
@@ -5225,6 +5393,7 @@ def native_ml_dsa_keypair_from_seed(ps: Union[int, str], xi: bytes) -> tuple:
     Raises:
         ValueError: If the seed is not exactly 32 bytes, or the set is unknown.
     """
+    check_crypto_permitted()
     pid = _ml_dsa_id(ps)
     if len(xi) != 32:
         raise ValueError(f"ML-DSA seed must be 32 bytes, got {len(xi)}")
@@ -5264,6 +5433,7 @@ def native_ml_dsa_pubkey_from_privkey(ps: Union[int, str], secret_key: bytes) ->
             ``s1``/``s2`` coefficient outside ``[-eta, eta]`` (FIPS 204
             Algorithm 25), or a ``t0``/``tr`` disagreement.
     """
+    check_crypto_permitted()
     pid = _ml_dsa_id(ps)
     sz = ML_DSA_SIZES[pid]
     if len(secret_key) != sz["secret_key"]:
@@ -5295,6 +5465,7 @@ def native_ml_dsa_privkey_check(ps: Union[int, str], secret_key: bytes) -> bool:
         ValueError: On a wrong key length or an unknown parameter set — those
             are caller errors, not verdicts.
     """
+    check_crypto_permitted()
     pid = _ml_dsa_id(ps)
     sz = ML_DSA_SIZES[pid]
     if len(secret_key) != sz["secret_key"]:
@@ -5326,6 +5497,7 @@ def native_ml_dsa_sign(
     Raises:
         ValueError: On a wrong key length or a context longer than 255 bytes.
     """
+    check_crypto_permitted()
     pid = _ml_dsa_id(ps)
     sz = ML_DSA_SIZES[pid]
     if len(secret_key) != sz["secret_key"]:
@@ -5392,6 +5564,7 @@ def native_ml_dsa_verify(
         True if valid. A wrong-length signature or public key returns False
         rather than raising — those are just invalid signatures.
     """
+    check_crypto_permitted()
     pid = _ml_dsa_id(ps)
     sz = ML_DSA_SIZES[pid]
     # INVARIANT-7 first: with no backend loaded, `False` would read as "the
@@ -5512,6 +5685,7 @@ def native_nistp_keypair(curve: Union[int, str]) -> tuple:
         NativeBackendUnavailableError: If the native library is unavailable.
         RuntimeError: If the CSPRNG failed.
     """
+    check_crypto_permitted()
     cid = _nistp_curve_id(curve)
     _nistp_require_native()
     nb = NISTP_FIELD_BYTES[cid]
@@ -5541,6 +5715,7 @@ def native_nistp_pubkey_from_privkey(curve: Union[int, str], privkey: bytes) -> 
         RuntimeError: If the native library is unavailable, or on an internal
             failure that is not attributable to the arguments.
     """
+    check_crypto_permitted()
     cid = _nistp_curve_id(curve)
     nb = NISTP_FIELD_BYTES[cid]
     if len(privkey) != nb:
@@ -5568,6 +5743,7 @@ def native_nistp_pubkey_validate(curve: Union[int, str], pubkey: bytes) -> bool:
     "member of the prime-order group". Returns False rather than raising for a
     wrong-length key, because a wrong length is just another invalid key.
     """
+    check_crypto_permitted()
     cid = _nistp_curve_id(curve)
     nb = NISTP_FIELD_BYTES[cid]
     # INVARIANT-7 first — see native_ml_dsa_verify for why the order matters.
@@ -5581,6 +5757,7 @@ def native_nistp_point_encode(
     curve: Union[int, str], pubkey: bytes, *, compressed: bool = False
 ) -> bytes:
     """Encode an X||Y public key as a prefixed SEC 1 point."""
+    check_crypto_permitted()
     cid = _nistp_curve_id(curve)
     nb = NISTP_FIELD_BYTES[cid]
     if len(pubkey) != 2 * nb:
@@ -5608,6 +5785,7 @@ def native_nistp_point_decode(curve: Union[int, str], point: bytes) -> bytes:
     Raises:
         ValueError: On any malformed, off-curve, or non-canonical input.
     """
+    check_crypto_permitted()
     cid = _nistp_curve_id(curve)
     nb = NISTP_FIELD_BYTES[cid]
     _nistp_require_native()
@@ -5641,6 +5819,7 @@ def native_nistp_ecdh(curve: Union[int, str], privkey: bytes, peer_pubkey: bytes
         RuntimeError: If the native library is unavailable, or on an internal
             failure not attributable to the arguments.
     """
+    check_crypto_permitted()
     cid = _nistp_curve_id(curve)
     nb = NISTP_FIELD_BYTES[cid]
     if len(privkey) != nb:
@@ -5711,6 +5890,7 @@ def native_nistp_ecdsa_sign(
         ValueError: On a wrong length or an unsupported digest width.
         RuntimeError: If the native library is unavailable or signing failed.
     """
+    check_crypto_permitted()
     cid = _nistp_curve_id(curve)
     nb = NISTP_FIELD_BYTES[cid]
     _nistp_check_digest(message_digest)
@@ -5793,6 +5973,7 @@ def native_nistp_ecdsa_verify(
         ValueError: If the digest or public key has the wrong length.
         RuntimeError: If the native library is unavailable.
     """
+    check_crypto_permitted()
     cid = _nistp_curve_id(curve)
     nb = NISTP_FIELD_BYTES[cid]
     _nistp_check_digest(message_digest)
@@ -5827,6 +6008,7 @@ def native_nistp_sig_der_to_raw(curve: Union[int, str], der: bytes) -> bytes:
     Raises:
         ValueError: If the DER is not minimal or a component is out of range.
     """
+    check_crypto_permitted()
     cid = _nistp_curve_id(curve)
     nb = NISTP_FIELD_BYTES[cid]
     _nistp_require_native()
@@ -5845,6 +6027,7 @@ def native_nistp_sig_raw_to_der(curve: Union[int, str], raw: bytes) -> bytes:
     Raises:
         ValueError: If the length is wrong or a component is out of range.
     """
+    check_crypto_permitted()
     cid = _nistp_curve_id(curve)
     _nistp_require_native()
     out = ctypes.create_string_buffer(NISTP_MAX_SIG_LEN)
@@ -5911,6 +6094,7 @@ def native_lms_pubkey_params(pubkey: bytes) -> dict:
             does not implement. An unrecognised typecode is refused, never
             resolved onto a neighbour (INVARIANT-35).
     """
+    check_crypto_permitted()
     _lms_require_native()
     if len(pubkey) != AMA_LMS_PUBKEY_LEN:
         # An LMS public key is exactly u32(type) || u32(otstype) || I(16) ||
@@ -5971,6 +6155,7 @@ def native_lms_signature_length(signature: bytes) -> int:
         The length, or ``0`` if the head is not a structurally valid LMS
         signature that fits in the buffer.
     """
+    check_crypto_permitted()
     _lms_require_native()
     return int(_native_lib.ama_lms_signature_length(bytes(signature), len(signature)))
 
@@ -5983,6 +6168,7 @@ def native_hss_pubkey_levels(pubkey: bytes) -> int:
         ValueError: If the key is malformed, or names more levels than
             ``AMA_HSS_MAX_LEVELS``.
     """
+    check_crypto_permitted()
     _lms_require_native()
     if len(pubkey) != AMA_HSS_PUBKEY_LEN:
         # An HSS public key is u32(L) || LMS_public_key = 4 + 56 = 60 octets
@@ -6020,6 +6206,7 @@ def native_lms_verify(message: bytes, signature: bytes, pubkey: bytes) -> bool:
         ValueError: If the *public key* is malformed. A bad key is a caller
             error; a bad signature is an answer.
     """
+    check_crypto_permitted()
     _lms_require_native()
     if len(pubkey) != AMA_LMS_PUBKEY_LEN:
         # A malformed key is a caller error, distinct from a failed signature.
@@ -6054,6 +6241,7 @@ def native_hss_verify(message: bytes, signature: bytes, pubkey: bytes) -> bool:
     Raises:
         ValueError: If the *public key* is malformed.
     """
+    check_crypto_permitted()
     _lms_require_native()
     if len(pubkey) != AMA_HSS_PUBKEY_LEN:
         # A malformed key is a caller error, distinct from a failed signature.
@@ -6083,6 +6271,7 @@ def native_x25519_keypair() -> tuple:
     Raises:
         RuntimeError: If native library is not available
     """
+    check_crypto_permitted()
     if _native_lib is None or not _X25519_NATIVE_AVAILABLE:
         raise NativeBackendUnavailableError("X25519 native backend not available. " + _INSTALL_HINT)
 
@@ -6110,6 +6299,7 @@ def native_x25519_key_exchange(our_secret_key: bytes, their_public_key: bytes) -
     Raises:
         RuntimeError: On low-order point or native library unavailable
     """
+    check_crypto_permitted()
     if _native_lib is None or not _X25519_NATIVE_AVAILABLE:
         raise NativeBackendUnavailableError("X25519 native backend not available. " + _INSTALL_HINT)
 
@@ -6156,6 +6346,7 @@ def native_x25519_scalarmult_batch(scalars: list[bytes], points: list[bytes]) ->
         ValueError: On length mismatch or wrong-sized inputs.
         RuntimeError: On low-order rejection or native backend unavailable.
     """
+    check_crypto_permitted()
     if _native_lib is None or not _X25519_NATIVE_AVAILABLE:
         raise NativeBackendUnavailableError("X25519 native backend not available. " + _INSTALL_HINT)
     if not hasattr(_native_lib, "ama_x25519_scalarmult_batch"):
@@ -6288,6 +6479,7 @@ def native_argon2id(
     Raises:
         RuntimeError: If native library is not available
     """
+    check_crypto_permitted()
     if _native_lib is None or not _ARGON2_NATIVE_AVAILABLE:
         raise NativeBackendUnavailableError(
             "Argon2id native backend not available. " + _INSTALL_HINT
@@ -6378,6 +6570,7 @@ def native_argon2id_legacy(
         ValueError:   On parameter-range violations (same rules as
             :func:`native_argon2id`).
     """
+    check_crypto_permitted()
     if _native_lib is None or not _ARGON2_NATIVE_AVAILABLE:
         raise NativeBackendUnavailableError(
             "Argon2id native backend not available. " + _INSTALL_HINT
@@ -6482,6 +6675,7 @@ def native_argon2id_legacy_verify(
         ValueError:   On parameter-range violations (same rules as
             :func:`native_argon2id`).
     """
+    check_crypto_permitted()
     if _native_lib is None or not _ARGON2_NATIVE_AVAILABLE:
         raise NativeBackendUnavailableError(
             "Argon2id native backend not available. " + _INSTALL_HINT
@@ -6556,6 +6750,7 @@ def native_chacha20poly1305_encrypt(
     Returns:
         (ciphertext, tag) — ciphertext same length as plaintext, 16-byte tag
     """
+    check_crypto_permitted()
     if _native_lib is None or not _CHACHA20_POLY1305_NATIVE_AVAILABLE:
         raise NativeBackendUnavailableError(
             "ChaCha20-Poly1305 native backend not available. " + _INSTALL_HINT
@@ -6610,6 +6805,7 @@ def native_chacha20poly1305_decrypt(
             wrapper raises before the freshly-allocated zero-initialised
             buffer is returned, so caller-visible behaviour is unchanged.
     """
+    check_crypto_permitted()
     if _native_lib is None or not _CHACHA20_POLY1305_NATIVE_AVAILABLE:
         raise NativeBackendUnavailableError(
             "ChaCha20-Poly1305 native backend not available. " + _INSTALL_HINT
@@ -6661,6 +6857,7 @@ def native_kyber_keypair_from_seed(d: bytes, z: bytes) -> tuple:
     Returns:
         (public_key, secret_key)
     """
+    check_crypto_permitted()
     if _native_lib is None or not _DETERMINISTIC_KEYGEN_AVAILABLE:
         raise NativeBackendUnavailableError("Deterministic keygen not available. " + _INSTALL_HINT)
 
@@ -6689,6 +6886,7 @@ def native_dilithium_keypair_from_seed(xi: bytes) -> tuple:
     Returns:
         (public_key, secret_key)
     """
+    check_crypto_permitted()
     if _native_lib is None or not _DETERMINISTIC_KEYGEN_AVAILABLE:
         raise NativeBackendUnavailableError("Deterministic keygen not available. " + _INSTALL_HINT)
 
@@ -6730,6 +6928,7 @@ def frost_keygen_trusted_dealer(
         Tuple of (group_public_key, list_of_participant_shares)
         where each share is 64 bytes (32 secret + 32 public).
     """
+    check_crypto_permitted()
     if not _FROST_AVAILABLE or _native_lib is None:
         raise NativeBackendUnavailableError("FROST native library not available")
     if threshold < 2 or num_participants < threshold:
@@ -6773,6 +6972,7 @@ def frost_round1_commit(participant_share: bytes) -> tuple:
         Tuple of (nonce_pair, commitment) — nonce_pair is SECRET (64 bytes),
         commitment is PUBLIC (64 bytes).
     """
+    check_crypto_permitted()
     if not _FROST_AVAILABLE or _native_lib is None:
         raise NativeBackendUnavailableError("FROST native library not available")
     if len(participant_share) != FROST_SHARE_BYTES:
@@ -6813,6 +7013,7 @@ def frost_round2_sign(
     Returns:
         32-byte signature share.
     """
+    check_crypto_permitted()
     if not _FROST_AVAILABLE or _native_lib is None:
         raise NativeBackendUnavailableError("FROST native library not available")
     if not (2 <= num_signers <= 255):
@@ -6871,6 +7072,7 @@ def frost_aggregate(
     Returns:
         64-byte Ed25519-format signature (R || z).
     """
+    check_crypto_permitted()
     if not _FROST_AVAILABLE or _native_lib is None:
         raise NativeBackendUnavailableError("FROST native library not available")
     if not (2 <= num_signers <= 255):
