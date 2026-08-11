@@ -503,6 +503,109 @@ class TestCythonBindingsGated:
 
 
 # ---------------------------------------------------------------------------
+# 2d. Class-based and cross-module crypto surfaces refuse in the error state
+# ---------------------------------------------------------------------------
+
+
+class TestClassAndCrossModuleInhibition:
+    """The error state must inhibit output from class methods and from modules
+    that reach the native library indirectly — the blind spots that let
+    AmaContext, HybridCombiner, AgentBinding and SessionStore run crypto while
+    the module was faulted."""
+
+    def test_surfaces_refuse_in_error_state(self, tree_with_native: Path) -> None:
+        # AmaContext (pqc_backends class methods) is covered authoritatively by
+        # the static gate; this behavioural test covers the modules that reach
+        # native INDIRECTLY through a private helper, which the AST gate cannot
+        # see: HybridCombiner (via _hkdf_native), AgentBinding (via
+        # _require_native), and SessionStore (RNG-minted session token). Each is
+        # called with valid arguments so a refusal is unambiguous.
+        result = _run_python(
+            """
+            import ama_cryptography as a
+            import ama_cryptography._self_test as st
+            import ama_cryptography.hybrid_combiner as hc
+            import ama_cryptography.agent_binding as ab
+            import ama_cryptography.session as se
+
+            # Prove the healthy path first, so a refusal in the error state is
+            # a state effect and not a broken call.
+            hc.HybridCombiner().combine(b"\\x11" * 32, b"\\x22" * 32, b"c1", b"c2")
+            healthy = ab.AgentBinding(
+                bytes(32), ab.AgentCapability.DATA_SIGN, list(ab.AgentLifetime)[0]
+            )
+            healthy.encode()
+            se.SessionStore().create()
+
+            st._set_error("simulated POST failure")
+
+            probes = [
+                ("HybridCombiner.combine",
+                 lambda: hc.HybridCombiner().combine(b"\\x11" * 32, b"\\x22" * 32, b"c1", b"c2")),
+                ("AgentBinding.__init__",
+                 lambda: ab.AgentBinding(bytes(32), ab.AgentCapability.DATA_SIGN,
+                                         list(ab.AgentLifetime)[0])),
+                ("AgentBinding.encode", healthy.encode),
+                ("SessionStore.create", lambda: se.SessionStore().create()),
+            ]
+            leaked = []
+            for name, fn in probes:
+                try:
+                    fn()
+                except a.CryptoModuleError:
+                    pass
+                except Exception as exc:
+                    leaked.append((name, "%s: %s" % (type(exc).__name__, exc)))
+                else:
+                    leaked.append((name, "PRODUCED OUTPUT"))
+            if leaked:
+                raise SystemExit("LEAKED: %r" % (leaked,))
+            print("ALL REFUSED")
+            """,
+            cwd=tree_with_native,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "ALL REFUSED" in result.stdout
+
+    def test_gate_reports_class_methods(self) -> None:
+        """The gate must descend into classes and flag an ungated method."""
+        import ast as _ast
+
+        sys.path.insert(0, str(REPO_ROOT / "tools"))
+        try:
+            import check_error_state_gating as gate
+        finally:
+            sys.path.pop(0)
+
+        src = textwrap.dedent("""
+            class Ctx:
+                def sign(self, m):
+                    return self._native_lib.ama_sign(m)
+
+                def _helper(self):
+                    return _native_lib.ama_thing()
+
+            class _Private:
+                def sign(self, m):
+                    return _native_lib.ama_sign(m)
+            """)
+        import tempfile
+
+        with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as fh:
+            fh.write(src)
+            path = Path(fh.name)
+        try:
+            ungated, _stale, _checked = gate.audit(path, exempt={})
+            names = [n for n, _ in ungated]
+            assert "Ctx.sign" in names, names
+            assert "Ctx._helper" not in names, "private method must be skipped"
+            assert not any(n.startswith("_Private") for n in names), "private class skipped"
+        finally:
+            path.unlink()
+        assert _ast is not None
+
+
+# ---------------------------------------------------------------------------
 # 3. Guard semantics
 # ---------------------------------------------------------------------------
 

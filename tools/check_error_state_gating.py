@@ -75,26 +75,34 @@ BINDING_PYX = (
     "src/cython/hkdf_binding.pyx",
 )
 
-GUARD = "check_crypto_permitted"
+#: The two error-state guards.  ``check_crypto_permitted`` gates the native
+#: surface (permissive on the POST thread); ``check_operational`` is the
+#: stricter form the high-level ``crypto_api`` surface uses.  Either inhibits
+#: output in the ERROR state, so either satisfies the gate.
+GUARDS = ("check_crypto_permitted", "check_operational")
 
-#: The ctypes handle on the shared library.
-NATIVE_HANDLE = "_native_lib"
-
-#: Prefix of the module-level Cython binding callables (``_cy_hmac_fn``,
-#: ``_cy_sha3_fn``, ``_cy_ed25519_sign_fn`` …).
-#:
-#: These have to count, and the reason is not hypothetical.  ``hmac_sha3_256``
-#: dispatches to ``_cy_hmac_fn`` when the Cython extension is built and only
-#: falls back to the ctypes wrapper otherwise.  A rule that looked solely for
-#: ``_native_lib`` therefore declared it out of scope, and on precisely the
-#: builds this project recommends — the ones with the fast bindings compiled —
-#: HMAC ran in the error state.  A backend chosen for speed must not also be a
-#: way around the guard.
+#: Prefix of the module-level Cython binding callables (``_cy_hmac_fn`` …).
+#: ``hmac_sha3_256`` dispatches to ``_cy_hmac_fn`` when the Cython extension is
+#: built and only falls back to the ctypes wrapper otherwise, so a rule that
+#: looked solely at ``_native_lib`` missed the fast path this project
+#: recommends.  A backend chosen for speed must not be a way around the guard.
 CYTHON_PREFIX = "_cy_"
 
-#: Functions that legitimately reach ``_native_lib`` without the guard.
-#: Each entry must carry the reason it is safe; the check refuses to run if an
-#: entry names a function that no longer exists.
+#: Modules the AST gate scans.  It reliably detects a DIRECT native call
+#: (``*.ama_*(...)`` or ``_cy_*(...)``) in a public function or method, which is
+#: how ``pqc_backends`` — including the whole ``AmaContext`` class — reaches the
+#: library.  Modules that reach native only INDIRECTLY through a private helper
+#: (``hybrid_combiner`` via ``_hkdf_native``, ``ascon`` via ``_require_native``)
+#: are not listed here, because a body-level scan cannot see the reach; those
+#: surfaces are enforced behaviourally instead — ``tests/test_post_failclosed.py``
+#: drives each in the ERROR state and asserts it refuses, which exercises the
+#: real code path rather than approximating it.
+MODULES = ("ama_cryptography/pqc_backends.py",)
+
+#: Functions/methods that reach a native symbol without the guard for a stated
+#: safe reason.  Keyed by ``name`` or ``Class.method``.  The check refuses to
+#: run if an entry names something that no longer exists, so the list cannot rot
+#: into a silent allowlist.
 EXEMPT: dict[str, str] = {
     "lms_signing_available": (
         "capability probe: returns a bool describing what this build supports. "
@@ -102,39 +110,64 @@ EXEMPT: dict[str, str] = {
         "state the probe exists to report on, and it emits no cryptographic "
         "output of its own."
     ),
+    "AmaContext.close": (
+        "resource cleanup: frees the native context (ama_context_free) and must "
+        "succeed in the ERROR state so a faulted module still releases memory. "
+        "It produces no cryptographic output."
+    ),
 }
 
 
-def _reaches_native(node: ast.FunctionDef) -> bool:
-    """True when the function body reaches compiled code by either route.
+def _calls_native(node: ast.AST) -> bool:
+    """True when the body makes a native call by any route.
 
-    Both routes count: the ctypes handle on the shared library, and the Cython
-    binding callables that bypass it entirely.
+    Matches an ``ast.Call`` whose function is an attribute ``*.ama_*`` (so
+    ``_native_lib.ama_x``, ``self._native_lib.ama_x`` and ``lib.ama_x`` are all
+    caught — the receiver is irrelevant), or a call to a ``_cy_*`` Cython
+    binding.  Attribute *access* without a call — the ``lib.ama_x.argtypes =``
+    idiom in the ctypes setup helpers — is deliberately not matched: it
+    configures a signature, it does not perform cryptography.
     """
     for sub in ast.walk(node):
-        if (
-            isinstance(sub, ast.Attribute)
-            and isinstance(sub.value, ast.Name)
-            and sub.value.id == NATIVE_HANDLE
-        ):
-            return True
-        if isinstance(sub, ast.Name) and sub.id.startswith(CYTHON_PREFIX):
-            return True
+        if isinstance(sub, ast.Call):
+            fn = sub.func
+            if isinstance(fn, ast.Attribute) and fn.attr.startswith("ama_"):
+                return True
+            if isinstance(fn, ast.Name) and fn.id.startswith(CYTHON_PREFIX):
+                return True
     return False
 
 
-def _calls_guard(node: ast.FunctionDef) -> bool:
-    """True when the function body calls the error-state guard."""
+def _calls_guard(node: ast.AST) -> bool:
+    """True when the body calls an error-state guard."""
     return any(
-        isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name) and sub.func.id == GUARD
+        isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name) and sub.func.id in GUARDS
         for sub in ast.walk(node)
     )
+
+
+def _iter_public_functions(tree: ast.Module):
+    """Yield ``(display_name, node)`` for every public function and method.
+
+    Descends one level into public classes so class methods — the blind spot
+    that let ``AmaContext`` run crypto in the ERROR state — are covered.  A
+    method is public when neither its own name nor its enclosing class name
+    starts with an underscore (dunders and private members are excluded)."""
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if not node.name.startswith("_"):
+                yield node.name, node
+        elif isinstance(node, ast.ClassDef) and not node.name.startswith("_"):
+            for sub in node.body:
+                if isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    if not sub.name.startswith("_"):
+                        yield f"{node.name}.{sub.name}", sub
 
 
 def audit(
     path: Path, exempt: dict[str, str] | None = None
 ) -> tuple[list[tuple[str, int]], list[str], int]:
-    """Return ``(ungated, stale_exemptions, checked_count)``.
+    """Return ``(ungated, stale_exemptions, checked_count)`` for one module.
 
     ``exempt`` defaults to :data:`EXEMPT`; it is a parameter so the audit logic
     can be exercised over a synthetic module without the real exemption list
@@ -148,21 +181,15 @@ def audit(
     seen: set = set()
     checked = 0
 
-    for node in tree.body:
-        if not isinstance(node, ast.FunctionDef):
+    for display, node in _iter_public_functions(tree):
+        if not _calls_native(node):
             continue
-        if node.name.startswith("_"):
+        seen.add(display)
+        if display in exempt:
             continue
-        if not _reaches_native(node):
-            continue
-
-        seen.add(node.name)
-        if node.name in exempt:
-            continue
-
         checked += 1
         if not _calls_guard(node):
-            ungated.append((node.name, node.lineno))
+            ungated.append((display, node.lineno))
 
     stale = sorted(name for name in exempt if name not in seen)
     return ungated, stale, checked
@@ -184,7 +211,9 @@ def audit_pyx(path: Path) -> list[tuple[str, int]]:
     for idx, (start, name) in enumerate(starts):
         end = starts[idx + 1][0] if idx + 1 < len(starts) else len(lines)
         body = _strip_leading_docstring(lines[start + 1 : end])
-        guard_line = next((j for j, ln in enumerate(body) if f"{GUARD}()" in ln), None)
+        guard_line = next(
+            (j for j, ln in enumerate(body) if any(f"{g}()" in ln for g in GUARDS)), None
+        )
         native_line = next(
             (j for j, ln in enumerate(body) if re.search(r"\bama_\w+\s*\(", ln)), None
         )
@@ -217,14 +246,26 @@ def _strip_leading_docstring(body: list[str]) -> list[str]:
 
 
 def main() -> int:
-    if not TARGET.is_file():
-        print(f"ERROR: {TARGET} not found", file=sys.stderr)
-        return 1
+    total_ungated: list[tuple[str, str, int]] = []
+    total_checked = 0
+    seen_exempt: set = set()
 
-    ungated, stale, checked = audit(TARGET)
-    rel = TARGET.relative_to(REPO_ROOT)
+    for rel_mod in MODULES:
+        mod_path = REPO_ROOT / rel_mod
+        if not mod_path.is_file():
+            print(f"ERROR: module {rel_mod} not found", file=sys.stderr)
+            return 1
+        ungated, _stale, checked = audit(mod_path)
+        total_checked += checked
+        total_ungated.extend((rel_mod, name, lineno) for name, lineno in ungated)
+        # Track which exemptions matched somewhere so staleness is computed
+        # across the union of scanned modules, not per file.
+        tree = ast.parse(mod_path.read_text(encoding="utf-8"), filename=str(mod_path))
+        for display, node in _iter_public_functions(tree):
+            if _calls_native(node) and display in EXEMPT:
+                seen_exempt.add(display)
 
-    # Cython binding modules.
+    # Cython binding modules (line-based, not AST).
     pyx_ungated: list[tuple[str, str, int]] = []
     pyx_checked = 0
     for rel_pyx in BINDING_PYX:
@@ -232,58 +273,47 @@ def main() -> int:
         if not pyx_path.is_file():
             print(f"ERROR: expected binding {rel_pyx} not found", file=sys.stderr)
             return 1
-        found = audit_pyx(pyx_path)
         pyx_checked += _count_cy_funcs(pyx_path)
-        pyx_ungated.extend((rel_pyx, name, lineno) for name, lineno in found)
+        pyx_ungated.extend((rel_pyx, name, lineno) for name, lineno in audit_pyx(pyx_path))
 
-    if pyx_ungated:
-        print(
-            f"ERROR: {len(pyx_ungated)} Cython binding entry point(s) call the "
-            f"native library without a leading {GUARD}().\n\n"
-            "These are public submodules; a direct importer reaches them without "
-            "pqc_backends' gate. Each must call the guard before any ama_* call:\n",
-            file=sys.stderr,
-        )
-        for rel_pyx, name, lineno in pyx_ungated:
-            print(f"  {rel_pyx}:{lineno}: {name}()", file=sys.stderr)
-        return 1
-
+    stale = sorted(name for name in EXEMPT if name not in seen_exempt)
     if stale:
         print(
-            "ERROR: stale entries in EXEMPT — these functions no longer exist "
-            "or no longer reach the native library, so the exemption is dead "
-            "weight that would silently cover a future function of the same "
-            "name:",
+            "ERROR: stale entries in EXEMPT — these no longer exist or no longer "
+            "reach a native symbol, so the exemption is dead weight that would "
+            "silently cover a future function of the same name:",
             file=sys.stderr,
         )
         for name in stale:
             print(f"  - {name}", file=sys.stderr)
         return 1
 
-    if ungated:
+    if total_ungated or pyx_ungated:
+        n = len(total_ungated) + len(pyx_ungated)
         print(
-            f"ERROR: {len(ungated)} public entry point(s) in {rel} reach the "
-            f"native library without calling {GUARD}().\n"
-            "\n"
-            "FIPS 140-3 §4.9.2 requires that a module whose power-on "
-            "self-tests failed inhibit ALL cryptographic output. Each function "
-            "below would still produce output in the error state:\n",
+            f"ERROR: {n} public entry point(s) reach the native library without "
+            "an error-state guard.\n\n"
+            "FIPS 140-3 §4.9.2 requires that a module whose power-on self-tests "
+            "failed inhibit ALL cryptographic output. Each below would still "
+            "produce output in the error state:\n",
             file=sys.stderr,
         )
-        for name, lineno in ungated:
-            print(f"  {rel}:{lineno}: {name}()", file=sys.stderr)
+        for rel_mod, name, lineno in total_ungated:
+            print(f"  {rel_mod}:{lineno}: {name}", file=sys.stderr)
+        for rel_pyx, name, lineno in pyx_ungated:
+            print(f"  {rel_pyx}:{lineno}: {name}() [Cython binding]", file=sys.stderr)
         print(
-            f"\nFix: add `{GUARD}()` as the first statement after the "
-            "docstring. If the function genuinely emits no cryptographic "
-            "output, add it to EXEMPT in this file with the reason.",
+            f"\nFix: call one of {GUARDS} before the first native call. If the "
+            "function genuinely emits no cryptographic output, add it to EXEMPT "
+            "with the reason.",
             file=sys.stderr,
         )
         return 1
 
     print(
-        f"OK: all {checked} public native entry points in {rel} and "
-        f"{pyx_checked} Cython binding entry points are gated on {GUARD}() "
-        f"({len(EXEMPT)} documented exemption(s))."
+        f"OK: all {total_checked} public native entry points across "
+        f"{len(MODULES)} module(s) and {pyx_checked} Cython binding entry points "
+        f"are gated ({len(EXEMPT)} documented exemption(s))."
     )
     return 0
 

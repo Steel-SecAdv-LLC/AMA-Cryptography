@@ -2339,6 +2339,7 @@ class AmaContext:
         secret_key_len: int,
     ) -> int:
         """Call ``ama_keypair_generate``. Returns ``AMA_SUCCESS`` (0) on success."""
+        check_crypto_permitted()  # FIPS 140-3 §4.9.2: no output in the ERROR state
         self._require_open()
         return int(
             _native_lib.ama_keypair_generate(
@@ -2358,6 +2359,7 @@ class AmaContext:
         signature_len: "ctypes._Pointer[ctypes.c_size_t]",
     ) -> int:
         """Call ``ama_sign``. Returns ``AMA_SUCCESS`` (0) on success."""
+        check_crypto_permitted()  # FIPS 140-3 §4.9.2: no output in the ERROR state
         self._require_open()
         return int(
             _native_lib.ama_sign(
@@ -2383,6 +2385,7 @@ class AmaContext:
         Returns ``AMA_SUCCESS`` (0) if the signature is valid,
         ``AMA_ERROR_VERIFY_FAILED`` (-4) if it is not.
         """
+        check_crypto_permitted()  # FIPS 140-3 §4.9.2: no output in the ERROR state
         self._require_open()
         return int(
             _native_lib.ama_verify(
@@ -2409,6 +2412,7 @@ class AmaContext:
         shared_secret_len: int,
     ) -> int:
         """Call ``ama_kem_encapsulate``. Returns ``AMA_SUCCESS`` (0) on success."""
+        check_crypto_permitted()  # FIPS 140-3 §4.9.2: no output in the ERROR state
         self._require_open()
         return int(
             _native_lib.ama_kem_encapsulate(
@@ -2430,6 +2434,7 @@ class AmaContext:
         shared_secret_len: int,
     ) -> int:
         """Call ``ama_kem_decapsulate``. Returns ``AMA_SUCCESS`` (0) on success."""
+        check_crypto_permitted()  # FIPS 140-3 §4.9.2: no output in the ERROR state
         self._require_open()
         return int(
             _native_lib.ama_kem_decapsulate(

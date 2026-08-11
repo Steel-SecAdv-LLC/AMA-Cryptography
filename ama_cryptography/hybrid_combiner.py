@@ -50,6 +50,10 @@ import struct
 from dataclasses import dataclass
 from typing import Any, List
 
+# FIPS 140-3 §4.9.2 output inhibition — combine()/encapsulate_hybrid()/
+# decapsulate_hybrid() derive shared secrets and must refuse in the error state.
+from ama_cryptography._self_test import check_crypto_permitted
+
 logger = logging.getLogger(__name__)
 
 # Default label for domain separation in hybrid HKDF
@@ -205,6 +209,12 @@ class HybridCombiner:
         here, as that would change the transcript and break INVARIANT-19's
         pinned vectors.
         """
+        # FIPS 140-3 §4.9.2: this derives a shared secret via native HKDF and
+        # must not run while the module is in the error state.  combine()
+        # reaches the native library indirectly through _hkdf_native, so the
+        # AST error-state gate cannot see it; the guard is placed directly here
+        # and the refusal is pinned behaviourally by tests/test_post_failclosed.py.
+        check_crypto_permitted()
         # SECURITY FIX (audit finding C6): Use length-prefixed encoding
         # for all variable-length components.  This prevents component
         # stripping / substitution attacks where an attacker manipulates
@@ -358,6 +368,7 @@ class HybridCombiner:
         Returns:
             HybridEncapsulation with combined secret and component data
         """
+        check_crypto_permitted()  # FIPS 140-3 §4.9.2: no output in the ERROR state
         classical_ct, classical_ss = classical_encapsulate(classical_pk)
         pqc_ct, pqc_ss = pqc_encapsulate(pqc_pk)
 
@@ -426,6 +437,7 @@ class HybridCombiner:
         Returns:
             Combined shared secret (must match encapsulate output)
         """
+        check_crypto_permitted()  # FIPS 140-3 §4.9.2: no output in the ERROR state
         classical_ss = classical_decapsulate(classical_ct, classical_sk)
         pqc_ss = pqc_decapsulate(pqc_ct, pqc_sk)
 
