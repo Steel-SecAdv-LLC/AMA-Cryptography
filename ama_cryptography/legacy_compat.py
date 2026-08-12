@@ -1358,8 +1358,15 @@ def verify_crypto_package(
 # ============================================================================
 
 
-def main() -> None:
-    """Demonstrate complete AMA Cryptography system with all Omni-Codes."""
+def main() -> int:
+    """Demonstrate complete AMA Cryptography system with all Omni-Codes.
+
+    Returns the process exit code: ``0`` when every exercised verification
+    layer passed (layers the demo did not exercise are reported but do not
+    fail the run), ``1`` when any layer's verdict was ``False``.  ``__main__``
+    passes this straight to :func:`sys.exit`, so a printed
+    "VERIFICATION FAILED" is always matched by a non-zero exit.
+    """
     # Ensure UTF-8 stdout on Windows so Unicode symbols render correctly
     if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
         import io
@@ -1423,8 +1430,27 @@ def main() -> None:
         require_quantum_signatures=kms.quantum_signatures_enabled,
     )
 
-    all_valid = all(v is True or v is None for v in results.values())
-    for check, valid in results.items():
+    # A check that returned False FAILED; a check that returned None was NOT
+    # performed.  The previous ``all(v is True or v is None)`` folded None into
+    # the pass count, so the summary printed "ALL VERIFICATIONS PASSED" without
+    # ever admitting a layer had not run.  Separate the three outcomes so the
+    # summary can name what did not run instead of silently absorbing it.
+    #
+    # For *this* routine every None is N/A by the package's own construction,
+    # not a missing backend: the demo builds its package offline with
+    # ``use_rfc3161=False`` (so the RFC 3161 keys are None) and adds a Dilithium
+    # signature only when quantum signing is enabled (so ``dilithium`` is None
+    # otherwise).  A None here therefore means "this package does not carry that
+    # layer", which is reported with its cause rather than treated as a failure.
+    #
+    # The deprecated ``rfc3161`` alias carries the identical value as
+    # ``rfc3161_binding`` (see _VerificationResults); folding it in would
+    # double-count that layer and reprint the deprecated name we tell callers
+    # not to read.  Judge the canonical keys only.
+    _summary_items = [(k, v) for k, v in results.items() if k != _LEGACY_RFC3161_KEY]
+    failed = [k for k, v in _summary_items if v is False]
+    not_performed = [k for k, v in _summary_items if v is None]
+    for check, valid in _summary_items:
         if valid is None:
             status = "\u26a0"
             status_text = "NOT PRESENT/UNSUPPORTED"
@@ -1447,16 +1473,44 @@ def main() -> None:
         json.dump(asdict(crypto_pkg), f, indent=2)
     print(f"  \u2713 Package saved: {package_file}")
 
-    # Final summary
+    # Final summary.
+    #
+    # A False verdict is always fatal.  Otherwise every layer the package
+    # carries verified, and the success line says so \u2014 but it must not be read
+    # as "every possible layer ran", so any layer this offline package does not
+    # carry (see above) is named explicitly beneath it rather than folded into
+    # the pass count.  That was the whole defect: the old summary counted the
+    # not-carried layers as passes and printed nothing about them.
+    #
+    # The verdict is also the process exit code (see ``__main__.py``): a real
+    # signature/HMAC failure returns non-zero so ``python -m ama_cryptography``
+    # cannot print "VERIFICATION FAILED" and still exit 0.  A layer that is
+    # merely not carried by this package is reported but is not a failure, so it
+    # does not poison the exit code.
+    verified = [k for k, v in _summary_items if v is True]
     print("\n" + "=" * 70)
-    if all_valid:
+    if failed:
+        print("\u2717 VERIFICATION FAILED")
+        print(f"\nFailed checks: {', '.join(failed)}")
+        if not_performed:
+            print(f"Not carried by this package: {', '.join(not_performed)}")
+        exit_code = 1
+    else:
         print("\u2713 ALL VERIFICATIONS PASSED")
         print("\nThe Omni-Code Helix codes are cryptographically protected.")
-        print("All integrity checks, authentication, and signatures verified.")
-    else:
-        print("\u2717 VERIFICATION FAILED")
-        print("\nOne or more cryptographic checks failed.")
+        print(f"Layers verified: {', '.join(verified)}.")
+        if not_performed:
+            # Named, not counted as passes: these layers are absent from this
+            # offline package (no RFC 3161 token; no Dilithium signature when
+            # quantum signing is disabled), so there was nothing to verify.
+            print(f"Not carried by this package (nothing to verify): {', '.join(not_performed)}.")
+            print(
+                "Run against a package built with those layers "
+                "(e.g. a TSA-backed RFC 3161 token) to exercise them."
+            )
+        exit_code = 0
     print("=" * 70 + "\n")
+    return exit_code
 
 
 # ============================================================================

@@ -500,10 +500,20 @@ jobs:
         path: bandit-report.json
 
     - name: Semgrep security scan
+      # `semgrep scan` exits 0 whether or not it finds anything (there is no
+      # --error here), and semgrep-report.json was never read — so this
+      # merge-blocking step could not fail on a finding, or even on a rule that
+      # failed to evaluate.  tools/check_semgrep_severity.py applies the policy
+      # to the JSON: fail closed on a missing/erroring scan, and block on any
+      # finding at or above ERROR severity (the config's insecure-random,
+      # weak-hash, deprecated-crypto-api, private-key-logging, unsafe-pickle and
+      # bare-memset rules).  Mirrors the Bandit gate already in this job; both
+      # directions are pinned by tests/test_semgrep_severity_gate.py.
       continue-on-error: false
       run: |
         python -m pip install semgrep==1.74.0
         semgrep --config .semgrep.yml ama_cryptography/ --json -o semgrep-report.json
+        python tools/check_semgrep_severity.py semgrep-report.json
 
     - name: Upload Semgrep report
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1

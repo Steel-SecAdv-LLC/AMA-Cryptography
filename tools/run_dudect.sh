@@ -110,14 +110,21 @@ if [ -f "$LEGACY_DIR/Makefile" ]; then
         echo "WARNING: legacy dudect build failed" >&2
     fi
 
+    # A non-zero exit from either legacy harness is a measured timing leak and
+    # must contribute to the script's verdict.  These used to end in `|| true`,
+    # which discarded the result — so a leak the crypto-primitive harness found
+    # was thrown away and the script still printed "All dudect tests PASSED".
+    # Fold each status into EXIT_CODE instead; the shared-runner noise caveat is
+    # already printed on failure below, so a false positive is explained rather
+    # than hidden.
     if [ -f "$LEGACY_DIR/dudect_harness" ]; then
         echo "--- Utility function harness ---"
-        $TASKSET "$LEGACY_DIR/dudect_harness" 50000 || true
+        $TASKSET "$LEGACY_DIR/dudect_harness" 50000 || EXIT_CODE=$?
     fi
 
     if [ -f "$LEGACY_DIR/dudect_crypto" ]; then
         echo "--- Crypto primitive harness ---"
-        $TASKSET "$LEGACY_DIR/dudect_crypto" 50000 || true
+        $TASKSET "$LEGACY_DIR/dudect_crypto" 50000 || EXIT_CODE=$?
     fi
 else
     echo "Legacy harnesses not found, skipping."
