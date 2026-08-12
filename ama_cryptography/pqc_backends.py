@@ -485,6 +485,26 @@ def _find_native_library() -> Optional[ctypes.CDLL]:
     lib_names = _get_lib_names()
     search_dirs = _get_search_dirs()
 
+    # Reset the per-run discovery record.  _find_native_library() runs more than
+    # once in-process (secure_memory during import, the build-time signer, tests),
+    # _try_load_library() *appends* to "candidates"/"errors", and the assignment
+    # fields below are set only on the branch that applies to a given run.  Without
+    # this reset, a candidate or a one-shot "override_ignored_reason" from an
+    # earlier call would leak into native_backend_load_summary() /
+    # native_backend_diagnostics() and misreport the current attempt's failure
+    # mode.  "missing_families" is intentionally not cleared here: it is computed
+    # after load by the symbol-presence check, not during discovery.
+    _LOAD_DIAGNOSTICS.update(
+        loaded=False,
+        path=None,
+        override=None,
+        loaded_via_override=False,
+        override_ignored_reason=None,
+        searched_dirs=[],
+        candidates=[],
+        errors=[],
+    )
+
     # AMA_CRYPTO_LIB_PATH override.
     #
     # SECURITY: this variable selects the shared object that provides every
@@ -4170,6 +4190,13 @@ def _native_hkdf_sha2(
     info: _BufferInput,
 ) -> bytes:
     """Shared body for the HKDF-SHA-256/384/512 (RFC 5869) bindings."""
+    # FIPS 140-3 §4.9.2: no output in the ERROR state.  The public
+    # native_hkdf_sha256/384/512 wrappers reach the native library only through
+    # this shared helper (via getattr(_native_lib, fn_name)), so the guard lives
+    # here — one call inhibits all three.  The AST gate cannot see this indirect
+    # reach; tests/test_post_failclosed.py drives each wrapper in the ERROR state
+    # and asserts refusal.
+    check_crypto_permitted()
     max_len = 255 * digest_size
     if length <= 0:
         raise ValueError(f"HKDF output length must be > 0, got {length}")
@@ -4395,6 +4422,12 @@ def native_sha3_512(data: bytes) -> bytes:
 
 def _native_shake(fn_name: str, data: bytes, length: int) -> bytes:
     """Shared body for the SHAKE128/256 one-shot XOF bindings."""
+    # FIPS 140-3 §4.9.2: no output in the ERROR state.  native_shake128/256 reach
+    # the native XOF only through this shared helper (via getattr(_native_lib,
+    # fn_name)), so the guard lives here — one call inhibits both.  The AST gate
+    # cannot see this indirect reach; tests/test_post_failclosed.py drives each
+    # wrapper in the ERROR state and asserts refusal.
+    check_crypto_permitted()
     if length < 0:
         raise ValueError(f"SHAKE output length must be >= 0, got {length}")
     if _native_lib is None or not _SHA3_EXT_NATIVE_AVAILABLE:

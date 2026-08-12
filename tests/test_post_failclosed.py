@@ -327,6 +327,55 @@ class TestErrorStateInhibitsOutput:
         assert result.returncode == 0, result.stdout + result.stderr
         assert "ALL REFUSED" in result.stdout
 
+    #: The SHAKE and HKDF-SHA-2 public wrappers reach the native library only
+    #: INDIRECTLY: ``native_shake128`` is ``return _native_shake(...)`` and
+    #: ``native_hkdf_sha256`` is ``return _native_hkdf_sha2(...)``, and each
+    #: shared helper reaches the C kernel through ``getattr(_native_lib, fn)``.
+    #: A body-level AST scan of the public wrapper sees no native call, so
+    #: ``tools/check_error_state_gating.py`` cannot cover them — this list is
+    #: their ONLY output-inhibition enforcement, so every wrapper is named here,
+    #: not one representative per family.
+    INDIRECT_OPERATIONS = (
+        "native_shake128(b'm', 16)",
+        "native_shake256(b'm', 16)",
+        "native_hkdf_sha256(bytes(32), 32)",
+        "native_hkdf_sha384(bytes(32), 32)",
+        "native_hkdf_sha512(bytes(32), 32)",
+    )
+
+    def test_indirect_native_surfaces_refuse_in_error_state(self, tree_with_native: Path) -> None:
+        """SHAKE / HKDF-SHA-2 reach native through a private helper, so the
+        static gate is blind to them; assert their runtime refusal directly."""
+        ops = repr(list(self.INDIRECT_OPERATIONS))
+        result = _run_python(
+            f"""
+            import ama_cryptography as a
+            import ama_cryptography._self_test as st
+            import ama_cryptography.pqc_backends as pb
+
+            assert a.module_status() == "OPERATIONAL"
+            st._set_error("simulated POST failure")
+
+            OPS = {ops}
+            leaked = []
+            for src in OPS:
+                try:
+                    eval("pb." + src)
+                except a.CryptoModuleError:
+                    pass
+                except Exception as exc:
+                    leaked.append((src, "wrong exception: %r" % (exc,)))
+                else:
+                    leaked.append((src, "PRODUCED OUTPUT"))
+            if leaked:
+                raise SystemExit("LEAKED: %r" % (leaked,))
+            print("ALL REFUSED")
+            """,
+            cwd=tree_with_native,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "ALL REFUSED" in result.stdout
+
     def test_static_gate_covers_every_native_entry_point(self) -> None:
         """The exhaustive rule is enforced by a tool, not by this test's list."""
         checker = REPO_ROOT / "tools" / "check_error_state_gating.py"

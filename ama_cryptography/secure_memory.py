@@ -17,7 +17,8 @@ Features:
   constant-time in fact (INVARIANT-7), so ``constant_time_compare`` now raises
   rather than substituting it
 - SecureBuffer context manager — automatic cleanup on exit
-- Secure random byte generation — uses ``os.urandom``
+- Secure random byte generation — routed through the FIPS 140-3 §4.9.2
+  output-inhibited, health-tested CSPRNG (no longer a bare ``os.urandom``)
 
 Implementation notes:
 
@@ -27,7 +28,8 @@ Implementation notes:
   ``RuntimeError`` when the native library is absent
 - ``lengths_match``: public (non-constant-time) length pre-check, for use
   before ``constant_time_compare`` where the expected size is fixed
-- ``secure_random_bytes``: Uses ``os.urandom`` (stdlib)
+- ``secure_random_bytes``: routed through ``_self_test.secure_token_bytes`` —
+  the error-state-gated, continuous-health-tested draw (not bare ``os.urandom``)
 
 Usage::
 
