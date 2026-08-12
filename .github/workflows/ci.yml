@@ -891,6 +891,18 @@ jobs:
         pip install "Cython>=3.0.0" "numpy>=1.24.0,<3.0.0"
         pip install -e ".[dev]"
 
+    - name: Re-sign the integrity artefact for this build's native library
+      # benchmark_runner.py imports the package, which runs POST. This job builds
+      # the native library itself, and the AArch64 matrix entry's .so cannot match
+      # the committed native digest (a different architecture), so POST would
+      # fail-close before a single measurement ran. Re-sign for whatever this job
+      # just built — exactly as the test lanes and the wheel signer do — so the
+      # binding is self-consistent on every matrix entry; tamper detection is
+      # covered by test_native_integrity.
+      env:
+        AMA_BUILD_PIPELINE: "1"
+      run: python -m ama_cryptography.integrity --update --sign
+
     - name: Run benchmark regression tests
       env:
         AMA_RUNNER_CPU_CLASS: ${{ steps.cpu_class.outputs.arch }}
