@@ -73,6 +73,17 @@ COPY --from=builder /build/dist/*.whl /tmp/
 RUN pip3 install --no-cache-dir /tmp/*.whl && \
     rm -rf /tmp/*.whl
 
+# Re-sign the module-integrity artefact for the native library this image loads.
+# The wheel ships the committed artefact, whose signed native digest is specific
+# to the build it was signed against; this Alpine image compiles its own musl
+# native library, which hashes differently, so POST would fail-close and the
+# HEALTHCHECK / CMD `import ama_cryptography` below would fail. Bind the artefact
+# to what this runtime actually loads, as root before dropping to `ama` — the
+# same per-build re-sign the wheel signer performs; tamper detection is covered
+# by tests/test_native_integrity.py.
+RUN AMA_BUILD_PIPELINE=1 python3 -m ama_cryptography.integrity --update --sign && \
+    python3 -c "import ama_cryptography as a; assert a.module_attestation()['state'] == 'OPERATIONAL', a.module_attestation(); print('POST OPERATIONAL after re-sign')"
+
 USER ama
 WORKDIR /app
 
