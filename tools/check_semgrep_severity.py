@@ -92,7 +92,12 @@ def main(argv: list[str] | None = None) -> int:
     blocking = []
     for result in data["results"]:
         severity = str((result.get("extra") or {}).get("severity", "INFO")).upper()
-        if _ORDER.get(severity, 0) >= floor:
+        rank = _ORDER.get(severity)
+        # Fail closed on an unrecognised severity.  Mapping an unknown label to
+        # INFO (the old `.get(severity, 0)`) means a future Semgrep level above
+        # ERROR — or a custom label from a config — would sink to INFO and slip a
+        # real finding through a merge-blocking gate.  Unknown severity blocks.
+        if rank is None or rank >= floor:
             blocking.append(result)
 
     if blocking:

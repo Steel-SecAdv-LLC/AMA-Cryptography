@@ -118,15 +118,33 @@ EXEMPT: dict[str, str] = {
 }
 
 
+def _is_native_lib_ref(node: ast.AST) -> bool:
+    """True for a reference to the native handle — ``_native_lib`` or
+    ``self._native_lib`` (the receiver AmaContext methods use)."""
+    if isinstance(node, ast.Name):
+        return node.id == "_native_lib"
+    if isinstance(node, ast.Attribute):
+        return node.attr == "_native_lib"
+    return False
+
+
 def _calls_native(node: ast.AST) -> bool:
     """True when the body makes a native call by any route.
 
-    Matches an ``ast.Call`` whose function is an attribute ``*.ama_*`` (so
-    ``_native_lib.ama_x``, ``self._native_lib.ama_x`` and ``lib.ama_x`` are all
-    caught — the receiver is irrelevant), or a call to a ``_cy_*`` Cython
-    binding.  Attribute *access* without a call — the ``lib.ama_x.argtypes =``
-    idiom in the ctypes setup helpers — is deliberately not matched: it
-    configures a signature, it does not perform cryptography.
+    Matches an ``ast.Call`` whose function is:
+
+    * an attribute ``*.ama_*`` (so ``_native_lib.ama_x``, ``self._native_lib.ama_x``
+      and ``lib.ama_x`` are all caught — the receiver is irrelevant);
+    * a ``_cy_*`` Cython binding; or
+    * a dynamically resolved symbol ``getattr(_native_lib, name)(...)`` — the
+      indirection ``_native_shake`` / ``_native_hkdf_sha2`` use to reach the C
+      kernel.  Missing this form is what let the SHAKE and HKDF-SHA-2 surfaces
+      route past the guard undetected.
+
+    Attribute *access* without a call — the ``lib.ama_x.argtypes =`` idiom in the
+    ctypes setup helpers, or an un-called ``getattr(_native_lib, x, None)`` probe
+    — is deliberately not matched: it configures or inspects a signature, it does
+    not perform cryptography.
     """
     for sub in ast.walk(node):
         if isinstance(sub, ast.Call):
@@ -134,6 +152,16 @@ def _calls_native(node: ast.AST) -> bool:
             if isinstance(fn, ast.Attribute) and fn.attr.startswith("ama_"):
                 return True
             if isinstance(fn, ast.Name) and fn.id.startswith(CYTHON_PREFIX):
+                return True
+            # getattr(_native_lib, name)(...) — the outer Call's func is itself a
+            # getattr Call on the native handle.  Only the *called* form counts.
+            if (
+                isinstance(fn, ast.Call)
+                and isinstance(fn.func, ast.Name)
+                and fn.func.id == "getattr"
+                and fn.args
+                and _is_native_lib_ref(fn.args[0])
+            ):
                 return True
     return False
 
@@ -178,7 +206,7 @@ def audit(
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
 
     ungated: list[tuple[str, int]] = []
-    seen: set = set()
+    seen: set[str] = set()
     checked = 0
 
     for display, node in _iter_public_functions(tree):
@@ -205,15 +233,19 @@ def audit_pyx(path: Path) -> list[tuple[str, int]]:
     """
     lines = path.read_text(encoding="utf-8").splitlines()
     def_re = re.compile(r"^def (cy_\w+)\s*\(")
+    guard_alt = "|".join(re.escape(g) for g in GUARDS)
+    guard_re = re.compile(rf"\b(?:{guard_alt})\s*\(\s*\)")
     ungated: list[tuple[str, int]] = []
 
     starts = [(i, m.group(1)) for i, line in enumerate(lines) if (m := def_re.match(line))]
     for idx, (start, name) in enumerate(starts):
         end = starts[idx + 1][0] if idx + 1 < len(starts) else len(lines)
-        body = _strip_leading_docstring(lines[start + 1 : end])
-        guard_line = next(
-            (j for j, ln in enumerate(body) if any(f"{g}()" in ln for g in GUARDS)), None
-        )
+        # Strip comments before matching so a commented-out ``# check_crypto_permitted()``
+        # cannot satisfy the guard check, and a ``# ... ama_foo()`` mention in a comment
+        # is not mistaken for a native call.  Require the guard as a real, no-arg call
+        # (optional inner whitespace), not a bare substring.
+        body = [_strip_comment(ln) for ln in _strip_leading_docstring(lines[start + 1 : end])]
+        guard_line = next((j for j, ln in enumerate(body) if guard_re.search(ln)), None)
         native_line = next(
             (j for j, ln in enumerate(body) if re.search(r"\bama_\w+\s*\(", ln)), None
         )
@@ -223,6 +255,14 @@ def audit_pyx(path: Path) -> list[tuple[str, int]]:
             # Guard present but after a native call — output already produced.
             ungated.append((name, start + 1))
     return ungated
+
+
+def _strip_comment(line: str) -> str:
+    """Drop a trailing ``#`` comment so a commented-out guard or ``ama_*`` call is
+    not read as a real one.  Naive (no string-literal awareness), which is safe
+    here: the guard and native call sites this scans are never inside string
+    literals in the ``.pyx`` bindings."""
+    return line.split("#", 1)[0]
 
 
 def _strip_leading_docstring(body: list[str]) -> list[str]:
@@ -248,7 +288,7 @@ def _strip_leading_docstring(body: list[str]) -> list[str]:
 def main() -> int:
     total_ungated: list[tuple[str, str, int]] = []
     total_checked = 0
-    seen_exempt: set = set()
+    seen_exempt: set[str] = set()
 
     for rel_mod in MODULES:
         mod_path = REPO_ROOT / rel_mod
