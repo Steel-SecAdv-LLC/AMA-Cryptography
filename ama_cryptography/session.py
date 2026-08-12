@@ -30,6 +30,9 @@ import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
+from ama_cryptography._module_state import check_crypto_permitted
+from ama_cryptography.exceptions import AmaCryptographyError
+
 logger = logging.getLogger(__name__)
 
 # Constants
@@ -38,10 +41,6 @@ DEFAULT_TTL_SECONDS = 3600.0  # 1 hour
 DEFAULT_REKEY_INTERVAL = 1000  # messages
 REPLAY_WINDOW_SIZE = 256
 MAX_SESSIONS = 1024  # prevent unbounded memory growth
-
-
-from ama_cryptography._self_test import check_crypto_permitted
-from ama_cryptography.exceptions import AmaCryptographyError
 
 
 class SessionError(AmaCryptographyError):

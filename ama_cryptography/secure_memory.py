@@ -65,6 +65,14 @@ from typing import Any, Callable, Dict, Generator, Optional, Type, Union
 logger = logging.getLogger(__name__)
 
 
+# The health-tested draw lives in the ``_module_state`` leaf (imports only the
+# stdlib and ``exceptions``), so this import is safe at module level in every
+# context this module is loaded from — including the build-time signer, which
+# imports secure_memory before the package's POST has run.  The previous
+# call-time import inside ``secure_random_bytes`` existed only because the draw
+# lived in ``_self_test`` and importing the POST orchestrator here formed a
+# cycle.
+from ama_cryptography._module_state import secure_token_bytes
 from ama_cryptography.exceptions import AmaCryptographyError
 
 
@@ -722,11 +730,6 @@ def secure_random_bytes(size: int) -> bytes:
 
     if size == 0:
         return b""
-
-    # Imported at call time: secure_memory is imported by the build-time signer
-    # before the package's POST has run, and a module-level import here would
-    # order those two against each other for no benefit.
-    from ama_cryptography._self_test import secure_token_bytes
 
     return secure_token_bytes(size)
 

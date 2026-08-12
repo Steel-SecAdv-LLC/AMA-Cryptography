@@ -29,7 +29,7 @@ cdef extern from "ama_cryptography.h":
 # calls the C kernel directly, bypassing pqc_backends' gated wrappers (and,
 # imported as a top-level module, POST itself); the guard refuses output in
 # the FIPS error state and the import forces POST to run.
-from ama_cryptography._self_test import check_crypto_permitted
+from ama_cryptography._module_state import check_crypto_permitted
 
 
 def cy_hmac_sha3_256(bytes key, bytes msg):

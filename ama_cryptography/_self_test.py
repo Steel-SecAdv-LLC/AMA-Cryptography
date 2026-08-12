@@ -36,16 +36,33 @@ from pathlib import Path
 from types import CodeType
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
+# The FIPS state machine, the two output-inhibition guards, and the
+# health-tested CSPRNG draw live in ``_module_state`` — a leaf module every
+# layer can import without forming a cycle (this module's KATs import
+# ``pqc_backends``, so the guards could not stay here without every guarded
+# module importing the POST orchestrator back).  The ``X as X`` form is an
+# explicit re-export: this module remains the public face of POST, and
+# existing imports of these names from ``_self_test`` stay valid.  The raw
+# state variables (``_MODULE_STATE`` …) are deliberately NOT re-exported —
+# rebinding them must happen on ``_module_state`` itself, where the guards
+# read them; a rebind on a re-exported copy would silently diverge.
+from ama_cryptography._module_state import _begin_self_test, _clear_self_test_thread, _rng_state
+from ama_cryptography._module_state import _set_error as _set_error
+from ama_cryptography._module_state import _set_operational as _set_operational
+from ama_cryptography._module_state import check_crypto_permitted as check_crypto_permitted
+from ama_cryptography._module_state import check_operational as check_operational
+from ama_cryptography._module_state import module_error_reason as module_error_reason
+from ama_cryptography._module_state import module_status as module_status
+from ama_cryptography._module_state import secure_token_bytes as secure_token_bytes
 from ama_cryptography.exceptions import CryptoModuleError
 
 logger = logging.getLogger(__name__)
 
 # ============================================================================
-# ERROR STATE MACHINE (FIPS 140-3 Section 4.9.2)
+# POST RESULTS AND ORCHESTRATION STATE
+# (the ERROR state machine itself is in _module_state)
 # ============================================================================
 
-_MODULE_STATE = "SELF_TEST"  # OPERATIONAL | ERROR | SELF_TEST
-_ERROR_REASON: Optional[str] = None
 # ``passed`` is tri-state:
 #   * True  — the test ran and the algorithm produced the expected output.
 #   * False — the test ran and the algorithm failed; module enters ERROR.
@@ -64,18 +81,6 @@ _POST_DURATION_MS: float = 0.0
 # module OPERATIONAL on the strength of a half-populated result list.
 _POST_LOCK = threading.RLock()
 
-# Identity of the thread currently executing POST, or None.
-#
-# The error-state guard below has to let POST's own Known Answer Tests call the
-# very primitives it is guarding — a KAT that could not invoke ama_sha3_256
-# would test nothing.  Widening the guard to "allow anything while the module
-# is in SELF_TEST" would do that, but it would also open the whole native
-# surface to every *other* thread for the duration of a ``reset_module()``
-# call, which is exactly the window an operator triggers after a failure.  So
-# the allowance is pinned to the one thread that is actually running the
-# self-tests; every other thread continues to see the module as not-yet-usable.
-_SELF_TEST_THREAD: Optional[int] = None
-
 #: Evidence from the last POST failure, retained across a successful
 #: ``reset_module()`` so recovery does not erase the record of what failed.
 _LAST_FAILURE: Dict[str, Any] = {"reason": None, "results": [], "duration_ms": 0.0}
@@ -88,16 +93,6 @@ _LAST_FAILURE: Dict[str, Any] = {"reason": None, "results": [], "duration_ms": 0
 # documentation and CI matrix jobs that intentionally exclude a
 # backend keep working.
 _AMA_FIPS_STRICT_ENV = "AMA_FIPS_STRICT"
-
-
-def module_status() -> str:
-    """Return current module state: OPERATIONAL, ERROR, or SELF_TEST."""
-    return _MODULE_STATE
-
-
-def module_error_reason() -> Optional[str]:
-    """Return the reason for ERROR state, or None if not in ERROR."""
-    return _ERROR_REASON
 
 
 def module_self_test_results() -> List[Tuple[str, Optional[bool], str]]:
@@ -164,9 +159,9 @@ def module_attestation() -> Dict[str, Any]:
         native = {"loaded": False, "reason": f"diagnostics unavailable: {exc}"}
 
     return {
-        "state": _MODULE_STATE,
-        "error_reason": _ERROR_REASON,
-        "fully_verified": _MODULE_STATE == "OPERATIONAL" and not skipped and not failed,
+        "state": module_status(),
+        "error_reason": module_error_reason(),
+        "fully_verified": module_status() == "OPERATIONAL" and not skipped and not failed,
         "strict_mode": _env_flag_enabled(_AMA_FIPS_STRICT_ENV),
         "tests_run": len(results),
         "tests_passed": n_pass,
@@ -176,84 +171,6 @@ def module_attestation() -> Dict[str, Any]:
         "duration_ms": _POST_DURATION_MS,
         "native_backend": native,
     }
-
-
-def _set_error(reason: str) -> None:
-    global _MODULE_STATE, _ERROR_REASON
-    _MODULE_STATE = "ERROR"
-    _ERROR_REASON = reason
-    logger.critical("FIPS 140-3 POST FAILURE: %s", reason)
-
-
-def _set_operational() -> None:
-    global _MODULE_STATE, _ERROR_REASON
-    _MODULE_STATE = "OPERATIONAL"
-    _ERROR_REASON = None
-
-
-def check_operational() -> None:
-    """Raise CryptoModuleError if module is not OPERATIONAL.
-
-    The error message explicitly labels downstream failures as POST-lockout
-    symptoms so CI logs do not present a cascade of "Module in error state"
-    failures as N independent bugs — they are all consequences of a single
-    POST failure whose root cause is in ``_ERROR_REASON``.  Operators
-    triaging a failed CI run should look at the FIRST ``CryptoModuleError``
-    (which carries the POST root-cause string) and ignore subsequent ones.
-    """
-    if _MODULE_STATE != "OPERATIONAL":
-        root_cause = _ERROR_REASON or _MODULE_STATE
-        raise CryptoModuleError(
-            f"Module locked out by FIPS POST failure (downstream symptom — "
-            f"root cause: {root_cause})"
-        )
-
-
-def check_crypto_permitted() -> None:
-    """Refuse cryptographic output while the module is in the FIPS ERROR state.
-
-    FIPS 140-3 §4.9.2 requires a module whose self-tests failed to enter an
-    error state in which *all* cryptographic output is inhibited.  Until this
-    guard existed the requirement was met only by the high-level
-    ``crypto_api`` surface: every one of the native entry points in
-    ``pqc_backends`` — key generation, signing, KEM encapsulation, AEAD, HMAC,
-    KDF — called straight through to the C library with no state check, so a
-    module that had announced ``FIPS 140-3 POST FAILURE`` at import went on
-    signing and generating keys for any caller who reached past
-    ``crypto_api``.  The error state inhibited nothing that mattered.
-
-    This is deliberately a *weaker* precondition than :func:`check_operational`:
-
-    * ``OPERATIONAL``  — permitted; the ordinary case, and one interned-string
-      comparison so the guard is free on the hot path.
-    * ``SELF_TEST``    — permitted **only on the thread running POST**, whose
-      Known Answer Tests must be able to call the primitives under test.
-    * ``ERROR``        — refused, always.
-
-    ``crypto_api`` keeps calling :func:`check_operational` (strict
-    ``OPERATIONAL``): a public API entered while POST is still running is a
-    caller bug, whereas the native layer is legitimately re-entered from
-    inside POST.
-
-    Raises:
-        CryptoModuleError: when the module is in ERROR, or when a thread other
-            than the POST thread reaches a native primitive mid-self-test.
-    """
-    if _MODULE_STATE == "OPERATIONAL":
-        return
-    if _MODULE_STATE == "SELF_TEST" and _SELF_TEST_THREAD == threading.get_ident():
-        return
-    if _MODULE_STATE == "ERROR":
-        raise CryptoModuleError(
-            f"Cryptographic operation refused: module is in the FIPS 140-3 "
-            f"error state (root cause: {_ERROR_REASON}).  All cryptographic "
-            f"output is inhibited until the fault is corrected and "
-            f"reset_module() re-runs the power-on self-tests."
-        )
-    raise CryptoModuleError(
-        "Cryptographic operation refused: power-on self-tests have not "
-        "completed on this thread (module state: SELF_TEST)."
-    )
 
 
 def reset_module() -> bool:
@@ -271,8 +188,8 @@ def reset_module() -> bool:
     an operator most needs the record of.
     """
     with _POST_LOCK:
-        if _MODULE_STATE == "ERROR":
-            _LAST_FAILURE["reason"] = _ERROR_REASON
+        if module_status() == "ERROR":
+            _LAST_FAILURE["reason"] = module_error_reason()
             _LAST_FAILURE["results"] = list(_SELF_TEST_RESULTS)
             _LAST_FAILURE["duration_ms"] = _POST_DURATION_MS
         return _run_self_tests()
@@ -289,44 +206,6 @@ def last_failure() -> Dict[str, Any]:
         "results": list(_LAST_FAILURE["results"]),
         "duration_ms": _LAST_FAILURE["duration_ms"],
     }
-
-
-# ============================================================================
-# CONTINUOUS RNG TEST (FIPS 140-3 Section 4.9.2)
-# ============================================================================
-
-_RNG_HEALTH_SIZE = 32  # Fixed size for continuous health comparison
-
-# Mutable container for continuous RNG health state (FIPS 140-3 Section 4.9.2).
-# Using a dict avoids the ``global`` keyword, which silences CodeQL's
-# "unused global variable" false-positive while preserving identical semantics.
-_rng_state: dict[str, Optional[bytes]] = {"previous": None}
-
-
-def secure_token_bytes(n: int = 32) -> bytes:
-    """
-    Wrapper around secrets.token_bytes with continuous RNG health test.
-
-    Draws a single buffer of max(n, 32) bytes, uses the first 32 bytes for
-    the health comparison, and returns the first n bytes to the caller.
-    This avoids a second RNG call and ensures the health check covers
-    the same entropy that the caller receives.
-
-    Gated on :func:`check_crypto_permitted` rather than
-    :func:`check_operational`: the stricter form refuses while POST is running,
-    which would prevent the self-tests themselves from drawing entropy and left
-    this function unusable from exactly the paths that most need a
-    health-tested draw.
-    """
-    check_crypto_permitted()
-    draw_size = max(n, _RNG_HEALTH_SIZE)
-    buf = secrets.token_bytes(draw_size)
-    health_sample = buf[:_RNG_HEALTH_SIZE]
-    if _rng_state["previous"] is not None and health_sample == _rng_state["previous"]:
-        _set_error("Continuous RNG test failed: consecutive identical outputs")
-        raise CryptoModuleError("Module in error state: Continuous RNG test failed")
-    _rng_state["previous"] = health_sample
-    return buf[:n]
 
 
 # ============================================================================
@@ -2273,14 +2152,13 @@ def _run_self_tests() -> bool:
     cyclomatic-complexity ceiling and each stage is independently
     testable.
     """
-    global _MODULE_STATE, _ERROR_REASON, _SELF_TEST_RESULTS, _POST_DURATION_MS
-    global _SELF_TEST_THREAD
+    global _SELF_TEST_RESULTS, _POST_DURATION_MS
 
     with _POST_LOCK:
-        _MODULE_STATE = "SELF_TEST"
-        _ERROR_REASON = None
+        # Enter SELF_TEST and pin the guard's allowance to this thread — the
+        # transition lives in _module_state, where the state does.
+        _begin_self_test()
         _SELF_TEST_RESULTS = []
-        _SELF_TEST_THREAD = threading.get_ident()
         start = time.monotonic()
 
         strict_mode = _env_flag_enabled(_AMA_FIPS_STRICT_ENV)
@@ -2330,7 +2208,7 @@ def _run_self_tests() -> bool:
             # including an unexpected exception escaping a stage.  Leaving it
             # set would keep ``check_crypto_permitted`` permissive on this
             # thread for the rest of the process's life.
-            _SELF_TEST_THREAD = None
+            _clear_self_test_thread()
 
         _POST_DURATION_MS = (time.monotonic() - start) * 1000
 

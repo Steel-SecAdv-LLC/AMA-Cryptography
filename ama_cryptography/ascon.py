@@ -70,7 +70,7 @@ import os
 from typing import Any, Optional, Tuple, Union
 
 # FIPS 140-3 §4.9.2 output inhibition — see ``_require_native`` below.
-from ama_cryptography._self_test import check_crypto_permitted
+from ama_cryptography._module_state import check_crypto_permitted
 from ama_cryptography.exceptions import AmaCryptographyError
 
 __all__ = [

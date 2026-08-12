@@ -57,7 +57,7 @@ import ctypes
 import enum
 from typing import Any, Optional, Union
 
-from ama_cryptography._self_test import check_crypto_permitted
+from ama_cryptography._module_state import check_crypto_permitted
 from ama_cryptography.exceptions import AmaCryptographyError
 
 __all__ = [

@@ -487,11 +487,14 @@ class TestKeyFormatsInhibitsSecretExport:
 
     @pytest.fixture(autouse=True)
     def _restore_state(self) -> Generator[None, None, None]:
-        from ama_cryptography import _self_test as st
+        # The raw state lives in the _module_state leaf — rebinding it anywhere
+        # else would not be seen by the guards (and _self_test deliberately does
+        # not re-export the raw names, so the stale spelling fails loudly).
+        from ama_cryptography import _module_state as ms
 
-        saved = (st._MODULE_STATE, st._ERROR_REASON)
+        saved = (ms._MODULE_STATE, ms._ERROR_REASON)
         yield
-        st._MODULE_STATE, st._ERROR_REASON = saved
+        ms._MODULE_STATE, ms._ERROR_REASON = saved
 
     def test_private_key_export_refuses_in_error_state(self, tree_with_native: Path) -> None:
         result = _run_python(
@@ -691,24 +694,51 @@ class TestCheckCryptoPermitted:
 
     @pytest.fixture(autouse=True)
     def _restore_state(self) -> Generator[None, None, None]:
+        # State pokes target _module_state, the leaf the guards read; the guard
+        # is still CALLED through _self_test in these tests, so the re-export
+        # facade is exercised against the leaf's state in the same breath.
+        from ama_cryptography import _module_state as ms
+
+        saved = (ms._MODULE_STATE, ms._ERROR_REASON, ms._SELF_TEST_THREAD)
+        yield
+        ms._MODULE_STATE, ms._ERROR_REASON, ms._SELF_TEST_THREAD = saved
+
+    def test_reexports_are_the_leaf_objects(self) -> None:
+        """_self_test's guard names must BE the leaf's functions, not copies.
+
+        A divergent copy would read different state than the one tests and
+        operators drive, making every assertion through the facade a no-op.
+        """
+        from ama_cryptography import _module_state as ms
         from ama_cryptography import _self_test as st
 
-        saved = (st._MODULE_STATE, st._ERROR_REASON, st._SELF_TEST_THREAD)
-        yield
-        st._MODULE_STATE, st._ERROR_REASON, st._SELF_TEST_THREAD = saved
+        assert st.check_crypto_permitted is ms.check_crypto_permitted
+        assert st.check_operational is ms.check_operational
+        assert st.module_status is ms.module_status
+        assert st.module_error_reason is ms.module_error_reason
+        assert st.secure_token_bytes is ms.secure_token_bytes
+        assert st._set_error is ms._set_error
+        assert st._set_operational is ms._set_operational
+        # The raw state names must NOT be reachable through the facade: a
+        # rebind there would silently diverge from what the guards enforce.
+        assert not hasattr(st, "_MODULE_STATE")
+        assert not hasattr(st, "_ERROR_REASON")
+        assert not hasattr(st, "_SELF_TEST_THREAD")
 
     def test_permits_operational(self) -> None:
+        from ama_cryptography import _module_state as ms
         from ama_cryptography import _self_test as st
 
-        st._MODULE_STATE = "OPERATIONAL"
+        ms._MODULE_STATE = "OPERATIONAL"
         st.check_crypto_permitted()  # must not raise
 
     def test_refuses_error_and_names_root_cause(self) -> None:
+        from ama_cryptography import _module_state as ms
         from ama_cryptography import _self_test as st
         from ama_cryptography.exceptions import CryptoModuleError
 
-        st._MODULE_STATE = "ERROR"
-        st._ERROR_REASON = "sentinel root cause"
+        ms._MODULE_STATE = "ERROR"
+        ms._ERROR_REASON = "sentinel root cause"
         with pytest.raises(CryptoModuleError, match="sentinel root cause"):
             st.check_crypto_permitted()
 
@@ -720,11 +750,12 @@ class TestCheckCryptoPermitted:
         ``reset_module()`` call — which is precisely the window an operator
         opens after a failure.
         """
+        from ama_cryptography import _module_state as ms
         from ama_cryptography import _self_test as st
         from ama_cryptography.exceptions import CryptoModuleError
 
-        st._MODULE_STATE = "SELF_TEST"
-        st._SELF_TEST_THREAD = threading.get_ident()
+        ms._MODULE_STATE = "SELF_TEST"
+        ms._SELF_TEST_THREAD = threading.get_ident()
         st.check_crypto_permitted()  # this thread is the POST thread
 
         outcome: list[object] = []
@@ -743,9 +774,9 @@ class TestCheckCryptoPermitted:
 
     def test_post_clears_the_thread_allowance(self) -> None:
         """The allowance must not survive the run that granted it."""
-        from ama_cryptography import _self_test as st
+        from ama_cryptography import _module_state as ms
 
-        assert st._SELF_TEST_THREAD is None, (
+        assert ms._SELF_TEST_THREAD is None, (
             "a completed POST left its thread allowance set; the guard would "
             "stay permissive on that thread for the life of the process"
         )
@@ -841,8 +872,14 @@ class TestIntegrityTriState:
         # attribute on the parent package has to go too: ``from pkg import mod``
         # resolves through the parent's namespace first when the submodule has
         # already been imported once, and would otherwise sail past the patch.
-        import ama_cryptography as pkg
         from ama_cryptography import _self_test as st
+
+        # The parent package object, taken from sys.modules rather than via a
+        # second ``import ama_cryptography`` spelling: the package is already
+        # imported (the line above guarantees it), and mixing ``import`` with
+        # ``from ... import`` for the same module in one file is the exact
+        # pattern the code scanner flags.
+        pkg = sys.modules["ama_cryptography"]
 
         monkeypatch.setitem(sys.modules, "ama_cryptography._integrity_signature", None)
         monkeypatch.delattr(pkg, "_integrity_signature", raising=False)

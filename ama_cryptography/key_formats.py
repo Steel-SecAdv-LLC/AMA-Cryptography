@@ -122,7 +122,7 @@ from ama_cryptography._asn1 import (
     der_tagged,
     oid_from_string,
 )
-from ama_cryptography._self_test import check_crypto_permitted
+from ama_cryptography._module_state import check_crypto_permitted
 from ama_cryptography.exceptions import KeyFormatError, UnsupportedKeyFormatError
 
 __all__ = [

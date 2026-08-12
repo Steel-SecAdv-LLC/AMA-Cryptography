@@ -61,7 +61,7 @@ cdef extern from "ama_cryptography.h":
 # forces ama_cryptography.__init__ to run POST, and calling it at the head of
 # each entry point refuses cryptographic output while the module is in the
 # error state, closing both bypasses.
-from ama_cryptography._self_test import check_crypto_permitted
+from ama_cryptography._module_state import check_crypto_permitted
 
 
 def cy_ed25519_keypair(bytes seed):

@@ -52,7 +52,7 @@ from typing import Any, List
 
 # FIPS 140-3 §4.9.2 output inhibition — combine()/encapsulate_hybrid()/
 # decapsulate_hybrid() derive shared secrets and must refuse in the error state.
-from ama_cryptography._self_test import check_crypto_permitted
+from ama_cryptography._module_state import check_crypto_permitted
 
 logger = logging.getLogger(__name__)
 

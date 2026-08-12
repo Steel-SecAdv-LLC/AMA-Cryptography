@@ -50,7 +50,7 @@ from ama_cryptography._finalizer_health import record_finalizer_error
 # Import-order note: ``_self_test`` imports only ``ama_cryptography.exceptions``
 # at module scope and reaches this module lazily from inside the KAT functions,
 # so this top-level import does not close a cycle.
-from ama_cryptography._self_test import check_crypto_permitted
+from ama_cryptography._module_state import check_crypto_permitted
 from ama_cryptography.exceptions import (
     NativeBackendUnavailableError,
     PQCUnavailableError,
