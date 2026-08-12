@@ -62,16 +62,37 @@ pytestmark = pytest.mark.fips
 
 
 def _run_python(
-    code: str, cwd: Path, env_extra: dict[str, str] | None = None
+    code: str,
+    cwd: Path,
+    env_extra: dict[str, str] | None = None,
+    *,
+    isolated: bool = False,
 ) -> subprocess.CompletedProcess[str]:
-    """Run ``code`` in a fresh interpreter rooted at ``cwd``."""
+    """Run ``code`` in a fresh interpreter rooted at ``cwd``.
+
+    ``isolated=True`` adds ``-S`` (do not import ``site``). The no-native tests
+    need it. When this test suite runs against an *editable* install
+    (``pip install -e .``, as CI does), setuptools registers a meta-path finder
+    via a ``.pth`` file that maps ``ama_cryptography.*`` — including the compiled
+    Cython bindings — back to the developer's build tree. That finder resolves
+    ``ama_cryptography.sha3_binding`` even when the copy under ``cwd`` has had
+    every ``.so`` removed, so ``native_sha3_256`` finds a working Cython backend
+    and the "no native backend" premise is silently false. ``-S`` skips
+    ``.pth`` processing, so the subprocess sees only the copy on ``PYTHONPATH``
+    (still honoured under ``-S``) and the stdlib — a genuinely backend-free tree,
+    which is also what a real deployment without the C library looks like (the
+    Cython bindings dynamically link ``libama_cryptography`` and cannot load
+    without it). The core package imports with no third-party dependency
+    (INVARIANT-1), so dropping ``site`` costs these subprocesses nothing.
+    """
     env = dict(os.environ)
     env.pop("PYTHONPATH", None)
     # An installed copy of the package would shadow the tree under test.
     env["PYTHONPATH"] = str(cwd)
     env.update(env_extra or {})
+    argv = [sys.executable, "-S", "-c"] if isolated else [sys.executable, "-c"]
     return subprocess.run(
-        [sys.executable, "-c", textwrap.dedent(code)],
+        [*argv, textwrap.dedent(code)],
         cwd=str(cwd),
         env=env,
         capture_output=True,
@@ -126,6 +147,7 @@ class TestImportFailsClosed:
             print("verified")
             """,
             cwd=tree_without_native,
+            isolated=True,
         )
 
         assert result.returncode != 0, (
@@ -143,7 +165,7 @@ class TestImportFailsClosed:
         ``native Ed25519 not built`` was a claim about the C build, and it was
         usually false: the library was built and simply not on the search path.
         """
-        result = _run_python("import ama_cryptography", cwd=tree_without_native)
+        result = _run_python("import ama_cryptography", cwd=tree_without_native, isolated=True)
 
         combined = result.stdout + result.stderr
         assert "no native library found" in combined
@@ -189,6 +211,7 @@ class TestImportFailsClosed:
                 raise AssertionError("crypto ran in the ERROR state")
             """,
             cwd=tree_without_native,
+            isolated=True,
             env_extra={"AMA_POST_DIAGNOSTIC_IMPORT": "1"},
         )
         assert result.returncode == 0, result.stdout + result.stderr
@@ -914,6 +937,7 @@ class TestInvariant7Enforcement:
             import ama_cryptography  # noqa: F401
             """,
             cwd=tree_without_native,
+            isolated=True,
             env_extra={"AMA_POST_DIAGNOSTIC_IMPORT": "1"},
         )
         assert result.returncode == 0, result.stderr
@@ -942,6 +966,7 @@ class TestInvariant7Enforcement:
                 raise AssertionError("crypto ran under the docs override")
             """,
             cwd=tree_without_native,
+            isolated=True,
             env_extra={"AMA_SPHINX_BUILD": "1"},
         )
         assert result.returncode == 0, result.stdout + result.stderr
