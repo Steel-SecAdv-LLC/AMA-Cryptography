@@ -201,7 +201,7 @@ class TestRealTree:
 # ---------------------------------------------------------------------------
 # 5. End to end: a poisoned .pyc fails POST and the import
 # ---------------------------------------------------------------------------
-def _run_python(code: str, cwd: Path) -> subprocess.CompletedProcess:
+def _run_python(code: str, cwd: Path) -> subprocess.CompletedProcess[str]:
     env = dict(os.environ)
     env.pop("PYTHONPATH", None)
     env["PYTHONPATH"] = str(cwd)

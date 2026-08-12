@@ -238,7 +238,8 @@ def _gate_step() -> dict[str, Any]:
     for job in document["jobs"].values():
         for step in job.get("steps", []):
             if step.get("name") == GATE_STEP_NAME:
-                return step
+                gate_step: dict[str, Any] = step
+                return gate_step
     raise AssertionError(f"ci.yml has no step named {GATE_STEP_NAME!r}")
 
 

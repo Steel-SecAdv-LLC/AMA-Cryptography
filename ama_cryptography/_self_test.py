@@ -1342,7 +1342,7 @@ def _kat_aes_256_gcm() -> Tuple[Optional[bool], str]:
         return False, f"AES-256-GCM KAT exception: {exc}"
 
 
-def _load_post_kat(filename: str) -> dict:
+def _load_post_kat(filename: str) -> dict[str, Any]:
     """Load a pinned POST KAT vector from the ``_post_kats/`` package data.
 
     Raises ``FileNotFoundError`` if the vector is absent so the caller records a
@@ -1353,7 +1353,8 @@ def _load_post_kat(filename: str) -> dict:
     from importlib.resources import files as _resfiles
 
     path = _resfiles("ama_cryptography").joinpath(f"_post_kats/{filename}")
-    return json.loads(path.read_text(encoding="utf-8"))
+    data: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
+    return data
 
 
 def _kat_ml_kem_1024() -> Tuple[Optional[bool], str]:

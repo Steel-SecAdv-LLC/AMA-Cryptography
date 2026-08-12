@@ -45,6 +45,8 @@ import sys
 import textwrap
 import threading
 from pathlib import Path
+from types import ModuleType
+from typing import Generator
 
 import pytest
 
@@ -59,7 +61,9 @@ pytestmark = pytest.mark.fips
 # ---------------------------------------------------------------------------
 
 
-def _run_python(code: str, cwd: Path, env_extra: dict | None = None) -> subprocess.CompletedProcess:
+def _run_python(
+    code: str, cwd: Path, env_extra: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
     """Run ``code`` in a fresh interpreter rooted at ``cwd``."""
     env = dict(os.environ)
     env.pop("PYTHONPATH", None)
@@ -321,7 +325,7 @@ class TestErrorStateInhibitsOutput:
         """
         sys.path.insert(0, str(REPO_ROOT / "tools"))
         try:
-            import check_error_state_gating as gate
+            import check_error_state_gating as gate  # type: ignore[import-not-found]  # loaded from tools/ via runtime sys.path insert; mypy cannot see it (PFC-001)
         finally:
             sys.path.pop(0)
 
@@ -410,7 +414,7 @@ class TestKeyFormatsInhibitsSecretExport:
     """FIPS 140-3 §4.9.2: private-key serialisation is secret-key output."""
 
     @pytest.fixture(autouse=True)
-    def _restore_state(self):
+    def _restore_state(self) -> Generator[None, None, None]:
         from ama_cryptography import _self_test as st
 
         saved = (st._MODULE_STATE, st._ERROR_REASON)
@@ -614,7 +618,7 @@ class TestCheckCryptoPermitted:
     """The guard must be permissive enough for POST and strict everywhere else."""
 
     @pytest.fixture(autouse=True)
-    def _restore_state(self):
+    def _restore_state(self) -> Generator[None, None, None]:
         from ama_cryptography import _self_test as st
 
         saved = (st._MODULE_STATE, st._ERROR_REASON, st._SELF_TEST_THREAD)
@@ -684,7 +688,7 @@ class TestAttestation:
     """``OPERATIONAL`` is a weaker claim than "everything was tested"."""
 
     @pytest.fixture
-    def fresh_post(self):
+    def fresh_post(self) -> Generator[ModuleType, None, None]:
         """Re-run POST so these assertions describe a known run.
 
         ``module_attestation()`` reports live global state, and the rest of the
@@ -697,13 +701,13 @@ class TestAttestation:
         assert st.reset_module() is True, st.module_error_reason()
         yield st
 
-    def test_reports_fully_verified_on_a_complete_run(self, fresh_post) -> None:
+    def test_reports_fully_verified_on_a_complete_run(self, fresh_post: ModuleType) -> None:
         att = fresh_post.module_attestation()
         assert att["state"] == "OPERATIONAL"
         assert att["fully_verified"] is True, att
         assert att["tests_skipped"] == 0, att
 
-    def test_digest_only_integrity_is_not_fully_verified(self, fresh_post) -> None:
+    def test_digest_only_integrity_is_not_fully_verified(self, fresh_post: ModuleType) -> None:
         """An unsigned digest is corruption detection, not tamper detection.
 
         It passes, so it is not a failure — but it is not the check the signed
@@ -726,7 +730,7 @@ class TestAttestation:
         finally:
             st._SELF_TEST_RESULTS[:] = saved
 
-    def test_a_skip_is_not_a_pass(self, fresh_post) -> None:
+    def test_a_skip_is_not_a_pass(self, fresh_post: ModuleType) -> None:
         st = fresh_post
 
         saved = list(st._SELF_TEST_RESULTS)

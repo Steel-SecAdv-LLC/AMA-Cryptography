@@ -49,7 +49,9 @@ PKG_DIR = REPO_ROOT / "ama_cryptography"
 pytestmark = pytest.mark.fips
 
 
-def _run_python(code: str, cwd: Path, env_extra: dict | None = None) -> subprocess.CompletedProcess:
+def _run_python(
+    code: str, cwd: Path, env_extra: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
     env = dict(os.environ)
     env.pop("PYTHONPATH", None)
     env["PYTHONPATH"] = str(cwd)
@@ -298,7 +300,7 @@ class TestPostKatVectors:
 
         sys.path.insert(0, str(REPO_ROOT / "tools"))
         try:
-            import build_post_kats as bpk
+            import build_post_kats as bpk  # type: ignore[import-not-found]  # loaded from tools/ via runtime sys.path insert; mypy cannot see it (NI-001)
         finally:
             sys.path.pop(0)
 
