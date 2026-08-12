@@ -131,19 +131,52 @@ jobs:
         # Installing them converts those skips into real assertions.
         pip install -e ".[dev,legacy,benchmark]" pycryptodome
 
-    - name: Verify module integrity digest is current
+    # The signed integrity artefact binds two digests: the .py sources
+    # (platform-independent) and the built native library (specific to the exact
+    # OS/arch/toolchain/flags it was compiled with). This job builds the native
+    # library itself, so its .so/.dll/.dylib hashes differently from the one the
+    # committed artefact was signed against — the native digest cannot match, on
+    # Windows/macOS/ARM by binary format and even across Linux build configs. The
+    # verification therefore splits: check the .py half (which every runner can
+    # verify identically), then re-sign the native half for this build — exactly
+    # what setup.py's _run_integrity_signer already does for each wheel.
+    - name: Verify committed .py integrity digest is current (platform-independent)
       shell: bash
+      # Catches the real thing the old committed-artefact check protected: a .py
+      # source edited without refreshing _integrity_digest.txt. AMA_BUILD_PIPELINE
+      # lets the import complete for this read even though the native digest does
+      # not match this build; the module stays in ERROR and refuses crypto.
+      env:
+        AMA_BUILD_PIPELINE: "1"
       run: |
-        python -c "
-        from ama_cryptography._self_test import verify_module_integrity
-        ok, detail = verify_module_integrity()
-        if not ok:
+        python - <<'PY'
+        from pathlib import Path
+        import ama_cryptography as a
+        from ama_cryptography._self_test import _compute_module_digest
+        committed = (Path(a.__file__).parent / "_integrity_digest.txt").read_text().strip()
+        computed = _compute_module_digest()
+        if committed != computed:
             raise SystemExit(
-                f'FATAL: Module integrity digest is stale or tampered: {detail}\n'
-                'Run: python -m ama_cryptography.integrity --update'
+                f"FATAL: committed .py integrity digest is stale: "
+                f"committed={committed[:16]}... computed={computed[:16]}...\n"
+                "A .py source changed without refreshing the digest. Run:\n"
+                "  AMA_BUILD_PIPELINE=1 python -m ama_cryptography.integrity --update --sign"
             )
-        print(f'Module integrity: OK ({detail})')
-        "
+        print(f"Committed .py integrity digest is current ({committed[:16]}...).")
+        PY
+
+    - name: Re-sign the integrity artefact for this build's native library
+      shell: bash
+      # Mirrors the wheel signer: bind the freshly-built native library into the
+      # artefact so the module is internally consistent and POST can verify it.
+      # This is a positive-path test (a valid signature verifies); tamper
+      # DETECTION — a flipped .so or forged signature failing POST — is covered
+      # by tests/test_native_integrity.py on a purpose-built tree, so re-signing
+      # here removes no security coverage.
+      env:
+        AMA_BUILD_PIPELINE: "1"
+      run: |
+        python -m ama_cryptography.integrity --update --sign
 
     - name: Verify crypto backends are available
       shell: bash
