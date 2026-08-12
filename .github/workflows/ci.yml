@@ -605,6 +605,18 @@ jobs:
       # re-derived: pytest's own collection count, the corpus files' `records`
       # arrays, and the Wycheproof manifest. Same class of duplication as the
       # version strings check_version_consistency.py polices, same fix.
+      #
+      # AMA_POST_DIAGNOSTIC_IMPORT=1: this job deliberately installs no native
+      # library (see the Install step — "collection needs no native library").
+      # Since INVARIANT-39, a failed POST makes `import ama_cryptography` raise,
+      # so `pytest --collect-only` on any file importing the package now yields
+      # no count and the gate reports every pinned file as drift. The diagnostic
+      # flag lets the import complete for introspection only — the module stays
+      # in ERROR and every cryptographic operation still refuses — which is
+      # exactly what collection needs and nothing more. Collection enumerates
+      # test functions; it runs no cryptography.
+      env:
+        AMA_POST_DIAGNOSTIC_IMPORT: "1"
       run: |
         python tools/check_documented_counts.py
 

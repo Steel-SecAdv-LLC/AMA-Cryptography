@@ -266,9 +266,9 @@ def test_the_gate_exit_code_is_not_swallowed() -> None:
     assert step.get("continue-on-error", False) is False
     for line in step.get("run", "").splitlines():
         if "check_semgrep_severity.py" in line:
-            assert "|| true" not in line and "|| echo" not in line, (
-                "the gate's exit code is swallowed; a finding would not fail CI"
-            )
+            assert (
+                "|| true" not in line and "|| echo" not in line
+            ), "the gate's exit code is swallowed; a finding would not fail CI"
 
 
 # ---------------------------------------------------------------------------

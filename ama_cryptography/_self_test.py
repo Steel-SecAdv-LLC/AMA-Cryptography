@@ -653,7 +653,7 @@ def _cached_code_for(src_path: str) -> Tuple[str, Optional[CodeType], Optional[s
         # the "deserialising untrusted data runs code" hazard does not apply,
         # and reading this exact .pyc is what detects a poisoned one. Malformed
         # marshal input raises ValueError/EOFError, caught below.
-        cached_code = marshal.loads(cached_body)  # noqa: S302 # nosec B302 -- code object is compared, never exec'd; reading this .pyc is how a poisoned one is caught (INT-004)
+        cached_code = marshal.loads(cached_body)  # fmt: skip  # noqa: S302 # nosec B302 -- compared, never exec'd; reading the .pyc is how a poisoned one is caught (INT-004)
     except (OSError, ValueError, EOFError) as exc:
         return "verified", None, f"cached bytecode {cache_path} is unreadable ({exc})"
     if not isinstance(cached_code, CodeType):
