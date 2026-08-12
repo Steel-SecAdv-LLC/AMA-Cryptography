@@ -360,6 +360,47 @@ public key is not that anchor.  This gives release packaging a stable
 trust-anchor gate without adding any external crypto dependency or
 trusting mutable Python source for the anchor.
 
+### Execution integrity — binding the bytecode, not just the source
+
+The signed digest above covers the package's `.py` **source**. CPython
+does not execute source; it executes the compiled bytecode in
+`__pycache__/*.pyc`. A timestamp-based `.pyc` (the default) is honoured
+by the interpreter whenever its stored `(mtime, size)` match the source,
+and an attacker with write access to the installed package sets exactly
+those. So a poisoned `.pyc` can run while every `.py` stays pristine —
+the source digest and its signature both still verify.
+
+A POST stage (`execution-integrity`, run right after the source-integrity
+stage) closes this by making on-disk bytecode subordinate to the signed
+source: it recompiles each signed `.py` and refuses any cached `.pyc`
+whose bytecode is not a faithful compile of it. The comparison is by
+executed surface — the instructions and constants, recursively into
+nested functions — and ignores the file path and line tables, so a
+legitimately relocated wheel is not a false positive while a single
+altered instruction is caught. It covers every signed source file, not
+only the ones imported so far, so a poisoned `.pyc` for a lazily-imported
+module is caught at POST rather than on first use; a source-only run
+(no `.pyc` on disk) has nothing to poison and is reported as such. A
+second pass rejects any loaded `ama_cryptography` module served from
+outside the verified package directory (module substitution). Pinned by
+`tests/test_execution_integrity.py`, including an end-to-end case where a
+poisoned-but-loadable `.pyc` fails the import while the source digest
+stays valid. This is INVARIANT-40.
+
+**Boundary (shared with the trust anchor).** A self-check written in
+Python cannot vouch for the bytecode of *its own* module if that was
+already poisoned before the check ran, just as the trust anchor lives in
+a shared object the same attacker could swap. This stage raises the cost
+from "poison any `.pyc`" to "poison the checker's own `.pyc` without
+tripping the source signature its source is bound by", but the residual
+class is real and is not something an in-process check can eliminate. The
+control that does is out-of-band: OS / package-manager code signing (dpkg
+/ rpm signatures, a signed wheel verified by the installer, an immutable
+or verified-boot filesystem) that authenticates the files before the
+Python interpreter loads them. Deploy AMA behind one of those where the
+`.pyc`/`.so` tampering threat is in scope; the in-process checks are
+defense in depth beneath it, not a substitute for it.
+
 ### `--update` is build-pipeline-only
 
 `python -m ama_cryptography.integrity --update` is gated behind

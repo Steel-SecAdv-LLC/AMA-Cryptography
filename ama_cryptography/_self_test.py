@@ -21,15 +21,20 @@ Version: 4.0.0
 
 import ctypes
 import hashlib
+import importlib.machinery
+import importlib.util
 import json
 import logging
+import marshal
 import math
 import os
 import secrets
+import sys
 import threading
 import time
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from types import CodeType
+from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
 from ama_cryptography.exceptions import CryptoModuleError
 
@@ -521,6 +526,248 @@ def _compute_module_digest() -> str:
             hasher.update(kat_file.name.encode("utf-8"))
             hasher.update(kat_file.read_bytes().replace(b"\r\n", b"\n"))
     return hasher.hexdigest()
+
+
+# ============================================================================
+# EXECUTION INTEGRITY (the .pyc the interpreter runs vs the .py we signed)
+# ============================================================================
+#
+# ``_compute_module_digest`` hashes the package's ``.py`` SOURCE, and the
+# Ed25519 artefact signs that hash.  But CPython does not execute source — it
+# executes the compiled bytecode in ``__pycache__/*.pyc``.  A ``.pyc`` is
+# honoured whenever it is "up to date": for the default timestamp-based cache
+# that means its stored (mtime, size) match the source file, and an attacker
+# with write access to the package tree sets exactly those.  So the gap is
+# real: leave every ``.py`` pristine (the signature still verifies) and drop a
+# ``.pyc`` whose bytecode differs, and the poisoned bytecode runs while the
+# source digest and its signature both check out.
+#
+# This stage closes it by making on-disk bytecode SUBORDINATE to the signed
+# source: for every loaded package module it recompiles the (already
+# integrity-verified) ``.py`` and refuses any cached ``.pyc`` whose bytecode is
+# not a faithful compile of it.  Bytecode is compared structurally — the actual
+# instructions (``co_code``) and constants, recursively into nested code
+# objects — rather than by marshalled bytes, so a legitimate ``.pyc`` built at a
+# different absolute path (its ``co_filename`` differs) is not a false positive
+# while a single altered instruction is caught.
+#
+# Bounded, and stated rather than implied: a self-check written in Python cannot
+# vouch for the bytecode of its OWN module if that was already poisoned before
+# this code ran (the checker-poisoning boundary).  The control for that is
+# out-of-band — OS / package-manager code signing that verifies files before
+# the interpreter loads them.  See SECURITY.md, "Execution integrity".
+
+#: The import prefix whose loaded modules this stage binds to signed source.
+_EXEC_PKG_PREFIX = "ama_cryptography"
+
+
+def _code_matches(fresh: CodeType, cached: CodeType) -> bool:
+    """Whether two code objects are execution-equivalent.
+
+    Compares the fields that determine what the code *does* — the bytecode,
+    the names and locals it references, the argument/flag shape, and every
+    constant (descending into nested code objects) — and deliberately ignores
+    ``co_filename`` and the line-number tables, which differ between an
+    interpreter-fresh compile and a ``.pyc`` built elsewhere without changing a
+    single executed instruction.  Ignoring them is what lets this be a bytecode
+    check rather than a path check; the executed-surface fields below are what
+    a poisoned ``.pyc`` cannot alter without being caught.
+    """
+    if (
+        fresh.co_code != cached.co_code
+        or fresh.co_names != cached.co_names
+        or fresh.co_varnames != cached.co_varnames
+        or fresh.co_freevars != cached.co_freevars
+        or fresh.co_cellvars != cached.co_cellvars
+        or fresh.co_flags != cached.co_flags
+        or fresh.co_argcount != cached.co_argcount
+        or fresh.co_posonlyargcount != cached.co_posonlyargcount
+        or fresh.co_kwonlyargcount != cached.co_kwonlyargcount
+        or fresh.co_nlocals != cached.co_nlocals
+        or fresh.co_stacksize != cached.co_stacksize
+    ):
+        return False
+    if len(fresh.co_consts) != len(cached.co_consts):
+        return False
+    for a, b in zip(fresh.co_consts, cached.co_consts):
+        a_is_code = isinstance(a, CodeType)
+        b_is_code = isinstance(b, CodeType)
+        if a_is_code != b_is_code:
+            return False
+        if a_is_code:
+            if not _code_matches(a, b):
+                return False
+        # Guard the type first: ``1 == 1.0`` and ``1 == True`` are ``True`` in
+        # Python, so a bare ``!=`` would let an int constant be swapped for an
+        # equal-valued float or bool.  Requiring identical types closes that.
+        elif type(a) is not type(b) or a != b:
+            return False
+    return True
+
+
+def _iter_covered_modules() -> Iterator[Tuple[str, Any]]:
+    """Yield ``(name, module)`` for every loaded ``ama_cryptography`` module.
+
+    Snapshots ``sys.modules`` first: importing nothing here, but a defensive
+    copy keeps a concurrent import from mutating the mapping mid-iteration.
+    """
+    for name, module in list(sys.modules.items()):
+        if module is None:
+            continue
+        if name == _EXEC_PKG_PREFIX or name.startswith(_EXEC_PKG_PREFIX + "."):
+            yield name, module
+
+
+def _cached_code_for(src_path: str) -> Tuple[str, Optional[CodeType], Optional[str]]:
+    """Load the cached bytecode the running interpreter would use for ``src_path``.
+
+    Returns ``(status, code, error)``:
+
+    * ``("verified", code, None)`` — a ``.pyc`` for THIS interpreter version
+      exists and its code object was read;
+    * ``("skipped", None, None)`` — nothing on disk to bind: no cache written
+      (the source is compiled directly, so what runs is already the signed
+      source), or a cache built by another interpreter version the running one
+      will not load;
+    * ``("verified", None, error)`` — a cache exists but could not be read as a
+      code object; that is a fault, not a pass.
+    """
+    try:
+        cache_path = importlib.util.cache_from_source(src_path)
+    except (NotImplementedError, ValueError):
+        return "skipped", None, None
+    if not os.path.isfile(cache_path):
+        return "skipped", None, None
+    try:
+        with open(cache_path, "rb") as fh:
+            magic = fh.read(4)
+            if magic != importlib.util.MAGIC_NUMBER:
+                # A .pyc from a different interpreter version. The running
+                # interpreter will not load it — it recompiles from source — so
+                # it is not what executes and is not ours to judge.
+                return "skipped", None, None
+            fh.read(12)  # bit field + (mtime,size) | source hash: header, not code
+            cached_body = fh.read()
+        # marshal.loads only *materialises* the code object so its instructions
+        # can be compared to a fresh compile; the object is never exec()'d, so
+        # the "deserialising untrusted data runs code" hazard does not apply,
+        # and reading this exact .pyc is what detects a poisoned one. Malformed
+        # marshal input raises ValueError/EOFError, caught below.
+        cached_code = marshal.loads(cached_body)  # noqa: S302 # nosec B302 -- code object is compared, never exec'd; reading this .pyc is how a poisoned one is caught (INT-004)
+    except (OSError, ValueError, EOFError) as exc:
+        return "verified", None, f"cached bytecode {cache_path} is unreadable ({exc})"
+    if not isinstance(cached_code, CodeType):
+        return "verified", None, f"cached bytecode {cache_path} is not a code object"
+    return "verified", cached_code, None
+
+
+def _verify_source_file_bytecode(py_file: Path) -> Tuple[str, Optional[str]]:
+    """Bind one signed source file's cached bytecode to a fresh compile of it.
+
+    Iterates the SAME set the module-integrity digest signs (top-level
+    ``*.py``), not just the modules imported so far, so a poisoned ``.pyc`` for
+    a lazily-imported module is caught at POST rather than when that module is
+    first used.
+
+    Returns ``(status, error)``: ``"verified"`` with ``error=None`` when a cache
+    existed and matched; ``"verified"`` with a fault string when it existed and
+    did not match / could not be read (POST must fail); ``"skipped"`` when there
+    was nothing on disk to bind.
+    """
+    src_path = str(py_file)
+    status, cached_code, error = _cached_code_for(src_path)
+    if error is not None:
+        return "verified", f"{py_file.name}: {error}"
+    if status == "skipped" or cached_code is None:
+        return "skipped", None
+
+    # Read the source exactly as the import system would (BOM/encoding-cookie
+    # handling and universal-newline translation) so a benign CRLF or encoding
+    # difference is never mistaken for tampering.  The loader name is cosmetic
+    # here — get_source() reads by path.
+    try:
+        source = importlib.machinery.SourceFileLoader(py_file.stem, src_path).get_source(
+            py_file.stem
+        )
+    except (OSError, SyntaxError, ValueError) as exc:
+        return "verified", f"{py_file.name}: source unavailable for the bytecode check ({exc})"
+    if source is None:
+        return "skipped", None
+    try:
+        # optimize=-1 tracks the running interpreter's -O level, the same level
+        # whose cache tag cache_from_source() just resolved, so the compile and
+        # the .pyc are the same optimization.  co_filename is deliberately not
+        # part of _code_matches, so the path passed here does not matter.
+        fresh = compile(source, src_path, "exec", dont_inherit=True, optimize=-1)
+    except SyntaxError as exc:
+        return "verified", f"{py_file.name}: integrity-verified source failed to recompile ({exc})"
+
+    if not _code_matches(fresh, cached_code):
+        return "verified", (
+            f"{py_file.name}: on-disk bytecode does not match a fresh compile of the "
+            f"integrity-verified source — poisoned or stale .pyc"
+        )
+    return "verified", None
+
+
+def _detect_module_substitution(name: str, module: Any, pkg_dir: Path) -> Optional[str]:
+    """Flag a loaded ``ama_cryptography`` module served from outside ``pkg_dir``.
+
+    The file-scan above binds the source files that ARE in the verified package
+    directory; this catches the complementary attack of a covered module name
+    resolved to a ``.py`` somewhere else on ``sys.path`` — module substitution,
+    whatever that file's bytecode says.  Native ``.so`` submodules and
+    namespace packages (no source ``__file__``) are left to the native-library
+    digest and the source-digest stage respectively.
+    """
+    src_path = getattr(module, "__file__", None)
+    if not isinstance(src_path, str) or not src_path.endswith(".py"):
+        return None
+    try:
+        resolved = Path(src_path).resolve()
+    except OSError as exc:
+        return f"{name}: source path {src_path} is unresolvable ({exc})"
+    if resolved.parent != pkg_dir and pkg_dir not in resolved.parents:
+        return (
+            f"{name}: loaded from {resolved}, outside the verified package "
+            f"directory {pkg_dir} — module substitution"
+        )
+    return None
+
+
+def _check_execution_integrity() -> Tuple[bool, int, int, List[str]]:
+    """Bind executed bytecode to signed source across the whole package.
+
+    Two complementary passes:
+
+    1. every signed ``*.py`` file's cached bytecode must recompile-match its
+       source (catches a poisoned/stale ``.pyc``, loaded or not yet);
+    2. no loaded ``ama_cryptography`` module may be served from outside the
+       package directory (catches module substitution).
+
+    Returns ``(ok, verified, skipped, problems)``.  ``ok`` is False as soon as
+    any check fails; ``problems`` lists the faults (capped when logged).
+    """
+    pkg_dir = Path(__file__).resolve().parent
+    verified = 0
+    skipped = 0
+    problems: List[str] = []
+
+    for py_file in sorted(pkg_dir.glob("*.py")):
+        status, error = _verify_source_file_bytecode(py_file)
+        if error is not None:
+            problems.append(error)
+        elif status == "verified":
+            verified += 1
+        else:
+            skipped += 1
+
+    for name, module in _iter_covered_modules():
+        sub_error = _detect_module_substitution(name, module, pkg_dir)
+        if sub_error is not None:
+            problems.append(sub_error)
+
+    return (not problems), verified, skipped, problems
 
 
 def _validate_trust_anchor(pubkey_hex: str) -> Tuple[Optional[str], Optional[str]]:
@@ -1032,13 +1279,13 @@ def _kat_hmac_sha3_256() -> Tuple[Optional[bool], str]:
         if not _HMAC_SHA3_256_NATIVE_AVAILABLE:
             return None, "HMAC-SHA3-256 KAT skipped (native unavailable)"
 
-        key = bytes.fromhex("000102030405060708090a0b0c0d0e0f" "101112131415161718191a1b1c1d1e1f")
+        key = bytes.fromhex("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")
         data = bytes.fromhex("53616d706c65206d65737361676520666f72206b65796c656e3d626c6f636b6c656e")
         expected = bytes.fromhex("b83bfd563059c9f54e75cb509af83aa3db5b6eda4ce07afe03063998dac54f3b")
         result = native_hmac_sha3_256(key, data)
         if result != expected:
             return False, (
-                f"HMAC-SHA3-256 KAT: native output {result.hex()} " f"!= expected {expected.hex()}"
+                f"HMAC-SHA3-256 KAT: native output {result.hex()} != expected {expected.hex()}"
             )
         if len(result) != 32:
             return False, f"HMAC-SHA3-256 KAT: expected 32 bytes, got {len(result)}"
@@ -1060,7 +1307,7 @@ def _kat_aes_256_gcm() -> Tuple[Optional[bool], str]:
             return None, "AES-256-GCM KAT skipped (native unavailable)"
 
         # NIST SP 800-38D Test Case 16 (AES-256, 96-bit IV, AAD)
-        key = bytes.fromhex("feffe9928665731c6d6a8f9467308308" "feffe9928665731c6d6a8f9467308308")
+        key = bytes.fromhex("feffe9928665731c6d6a8f9467308308feffe9928665731c6d6a8f9467308308")
         nonce = bytes.fromhex("cafebabefacedbaddecaf888")
         plaintext = bytes.fromhex(
             "d9313225f88406e5a55909c5aff5269a"
@@ -1807,6 +2054,50 @@ def _run_integrity_stage() -> Tuple[bool, Optional[str]]:
     return True, None
 
 
+def _run_execution_integrity_stage() -> Tuple[bool, Optional[str]]:
+    """POST stage: bind executed bytecode to the integrity-verified source.
+
+    Runs AFTER the source-digest/signature stage, because it recompiles the
+    very ``.py`` files that stage just proved unmodified and refuses any cached
+    ``.pyc`` that is not a faithful compile of them.  See the EXECUTION
+    INTEGRITY section for the gap this closes and the checker-poisoning
+    boundary it cannot.
+
+    A failure here is a hard POST failure: the interpreter is running bytecode
+    that does not correspond to the signed source, so the module must not go
+    OPERATIONAL.  When no cached bytecode is present (source-only run) there is
+    nothing to poison; the stage passes and records how much it could bind.
+    """
+    try:
+        ok, verified, skipped, problems = _check_execution_integrity()
+    except Exception as exc:
+        _SELF_TEST_RESULTS.append(("execution-integrity", False, f"Exception: {exc}"))
+        return False, f"Execution-integrity check exception: {exc}"
+
+    if not ok:
+        detail = "; ".join(problems[:5])
+        if len(problems) > 5:
+            detail += f"; (+{len(problems) - 5} more)"
+        _SELF_TEST_RESULTS.append(("execution-integrity", False, detail))
+        return False, f"Execution-integrity check FAILED: {detail}"
+
+    detail = (
+        f"{verified} signed source file(s) bound to their on-disk bytecode; "
+        f"{skipped} had no cached bytecode to bind"
+    )
+    if verified == 0:
+        # Honest, not a silent pass: with no .pyc on disk the interpreter ran
+        # the signed source directly, so there was nothing to verify — say so
+        # rather than reporting a bytecode check that did not happen.
+        logger.info(
+            "FIPS 140-3 POST: execution-integrity stage found no cached bytecode "
+            "to bind (%d source file(s) run from source directly).",
+            skipped,
+        )
+    _SELF_TEST_RESULTS.append(("execution-integrity", True, detail))
+    return True, detail
+
+
 def _handle_kat_skip(name: str, detail: str, strict_mode: bool) -> Optional[str]:
     """Decide whether a KAT skip should fail POST or just WARN.
 
@@ -1816,7 +2107,7 @@ def _handle_kat_skip(name: str, detail: str, strict_mode: bool) -> Optional[str]
     notice the missing coverage in CI logs.
     """
     if strict_mode:
-        return f"FIPS strict mode ({_AMA_FIPS_STRICT_ENV}=1): " f"{name} KAT cannot run — {detail}"
+        return f"FIPS strict mode ({_AMA_FIPS_STRICT_ENV}=1): {name} KAT cannot run — {detail}"
     logger.warning(
         "FIPS 140-3 POST: %s KAT skipped (%s).  This backend has NO "
         "self-test coverage in this run.  Build the C library or set "
@@ -2008,6 +2299,12 @@ def _run_self_tests() -> bool:
             # _PRE_INTEGRITY_KAT_NAMES.
             ("kat-pre-integrity", lambda: _run_kat_stage(strict_mode, _pre_integrity_kats())),
             ("integrity", _run_integrity_stage),
+            # Bind the bytecode the interpreter actually executes to the source
+            # the integrity stage just verified.  Runs immediately after it: the
+            # source is proven unmodified, so any cached .pyc that does not
+            # recompile to it is poisoned or stale (NIST IG closes the signed
+            # source; this closes the compiled artefact the source is run from).
+            ("execution-integrity", _run_execution_integrity_stage),
             # The remaining CASTs, after integrity.
             ("kat", lambda: _run_kat_stage(strict_mode, _post_integrity_kats())),
             ("oracle", lambda: _run_timing_oracle_stage(strict_mode)),

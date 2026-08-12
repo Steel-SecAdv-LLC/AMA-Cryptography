@@ -2030,5 +2030,66 @@ object (~800 KB → well under 1 ms) once per import.
 
 ---
 
+## INVARIANT-40 — The Executed Bytecode Must Match the Signed Source
+
+INVARIANT-39 binds the module's `.py` **source** and its native `.so`. But
+CPython does not execute source: it executes the compiled bytecode in
+`__pycache__/*.pyc`. A timestamp-based `.pyc` — the default — is honoured by
+the interpreter whenever its stored `(mtime, size)` match the source file, and
+an attacker with write access to the installed package sets exactly those. So
+the gap is real and specific: leave every `.py` pristine, so the signed digest
+and its Ed25519 signature still verify, and drop a `.pyc` whose bytecode
+differs. The poisoned bytecode runs while every source-level check is green.
+
+**The fix makes on-disk bytecode subordinate to the signed source.** A POST
+stage (`execution-integrity`, run immediately after the source-integrity stage
+that has just proven the `.py` files unmodified) recompiles each signed source
+file and refuses any cached `.pyc` whose bytecode is not a faithful compile of
+it. The comparison is by *executed surface* — `co_code`, the referenced
+names/locals, the argument and flag shape, and every constant, descending
+recursively into nested code objects — and deliberately ignores `co_filename`
+and the line tables. Ignoring those is what keeps a legitimate `.pyc` built at a
+different absolute path (a relocated wheel) from being a false positive, while a
+single altered instruction, even inside a nested function, is still caught. A
+constant swapped for an equal-valued one of another type (`1` for `1.0`, `1` for
+`True`) is caught by a type guard, because `==` alone would pass it.
+
+The stage covers the **same file set the digest signs** (every top-level
+`*.py`), not merely the modules imported so far, so a poisoned `.pyc` for a
+lazily-imported module is caught at POST rather than when that module is first
+used. Where no `.pyc` exists (a source-only run, or `PYTHONDONTWRITEBYTECODE`),
+there is nothing to poison — the interpreter compiled the signed source
+directly — and the stage records that honestly rather than reporting a check it
+did not perform. A `.pyc` from a different interpreter version (magic-number
+mismatch) is skipped because the running interpreter will not load it either. A
+complementary pass flags any loaded `ama_cryptography` module whose source
+resolves outside the verified package directory — module substitution, whatever
+its bytecode says.
+
+**Bounded, and stated rather than implied.** A self-check written in Python
+cannot vouch for the bytecode of *its own* module if that was already poisoned
+before this code ran — the checker-poisoning boundary. This stage raises the
+bar from "poison any `.pyc` freely" to "poison the checker's own `.pyc`, and do
+so without tripping the source signature that the checker's source is bound by",
+but it does not eliminate the class. The out-of-band control that does is OS /
+package-manager code signing, which verifies files before the interpreter loads
+them; this is documented in [`SECURITY.md`](SECURITY.md) under *Execution
+integrity* alongside the trust-anchor boundary it shares.
+
+**Enforcement.** `tests/test_execution_integrity.py` pins the bytecode
+comparator (a changed instruction, a nested-function change and a
+constant-type swap are caught; a filename-only difference is not), the
+per-file check (a poisoned `.pyc` whose header still matches its pristine
+source is a fault; a corrupt or foreign-magic `.pyc` is handled), the
+substitution guard, and the end-to-end path: on a copied tree, a poisoned
+but still-loadable `.pyc` fails POST and the import while the source digest
+stays valid.
+
+**Measured cost.** One `compile()` per signed source file, once per import —
+tens of milliseconds over the package, on the same one-time POST path as the
+digests above.
+
+---
+
 _Maintained by Steel Security Advisors LLC._
-_Last updated: 2026-08-11_
+_Last updated: 2026-08-12_
