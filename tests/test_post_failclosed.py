@@ -409,6 +409,12 @@ class TestErrorStateInhibitsOutput:
                     check_crypto_permitted()
                     return _native_lib.ama_thing(x)
 
+                def gated_via_attribute(x):
+                    """Guard reached through a module reference — still a real
+                    guard call, and must not be reported as ungated."""
+                    _module_state.check_crypto_permitted()
+                    return _native_lib.ama_thing(x)
+
                 def ungated_op(x):
                     """Doc."""
                     return _native_lib.ama_thing(x)
@@ -424,7 +430,7 @@ class TestErrorStateInhibitsOutput:
 
         ungated, stale, checked = gate.audit(module, exempt={})
         assert stale == []
-        assert checked == 2, "only public functions touching _native_lib count"
+        assert checked == 3, "only public functions touching _native_lib count"
         assert [name for name, _ in ungated] == ["ungated_op"]
 
     def test_gate_tool_covers_cython_binding_pyx(self, tmp_path: Path) -> None:

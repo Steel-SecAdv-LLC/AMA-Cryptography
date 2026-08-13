@@ -206,7 +206,17 @@ def secure_token_bytes(n: int = 32) -> bytes:
     which would prevent the self-tests themselves from drawing entropy and left
     this function unusable from exactly the paths that most need a
     health-tested draw.
+
+    Raises:
+        ValueError: if ``n`` is negative.  Without this, ``buf[:n]`` with a
+            negative ``n`` silently returns a truncated buffer (32 - \\|n\\|
+            bytes) instead of failing — and a caller that computed a length
+            wrong would get key material shorter than it asked for.
+        CryptoModuleError: if the module is in the FIPS error state, or the
+            continuous RNG health test fails.
     """
+    if n < 0:
+        raise ValueError("n must be non-negative")
     check_crypto_permitted()
     draw_size = max(n, _RNG_HEALTH_SIZE)
     buf = secrets.token_bytes(draw_size)

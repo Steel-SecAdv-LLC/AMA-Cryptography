@@ -167,11 +167,28 @@ def _calls_native(node: ast.AST) -> bool:
 
 
 def _calls_guard(node: ast.AST) -> bool:
-    """True when the body calls an error-state guard."""
-    return any(
-        isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name) and sub.func.id in GUARDS
-        for sub in ast.walk(node)
-    )
+    """True when the body calls an error-state guard.
+
+    Receiver-agnostic, mirroring ``_calls_native``: both the direct form the
+    package convention uses (``check_crypto_permitted()`` after a ``from …
+    import``) and the module-qualified form (``_module_state.
+    check_crypto_permitted()``, ``st.check_operational()``) are real guard
+    calls, and flagging the qualified form would report a gated function as
+    ungated.  The symmetric risk — a same-named method on an unrelated object
+    satisfying the check — is accepted for the same reason ``_calls_native``
+    accepts any ``*.ama_*`` receiver: this gate enforces the convention;
+    ``tests/test_post_failclosed.py`` proves the behaviour by driving each
+    surface in the ERROR state.
+    """
+    for sub in ast.walk(node):
+        if not isinstance(sub, ast.Call):
+            continue
+        fn = sub.func
+        if isinstance(fn, ast.Name) and fn.id in GUARDS:
+            return True
+        if isinstance(fn, ast.Attribute) and fn.attr in GUARDS:
+            return True
+    return False
 
 
 def _iter_public_functions(tree: ast.Module):

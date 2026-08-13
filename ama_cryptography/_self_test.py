@@ -56,6 +56,29 @@ from ama_cryptography._module_state import module_status as module_status
 from ama_cryptography._module_state import secure_token_bytes as secure_token_bytes
 from ama_cryptography.exceptions import CryptoModuleError
 
+#: The module's public surface.  The ``_module_state`` names re-exported above
+#: appear here as well: ``__all__`` states the re-export intent in the form
+#: every tool understands (CodeQL's unused-import query included), while the
+#: ``X as X`` import form above keeps mypy's ``--no-implicit-reexport`` (part
+#: of ``--strict``) treating them as re-exports.  Both are needed; neither
+#: subsumes the other.
+__all__ = [
+    "check_crypto_permitted",
+    "check_operational",
+    "last_failure",
+    "module_attestation",
+    "module_error_reason",
+    "module_self_test_results",
+    "module_status",
+    "pairwise_test_kem",
+    "pairwise_test_signature",
+    "post_duration_ms",
+    "reset_module",
+    "secure_token_bytes",
+    "update_integrity_digest",
+    "verify_module_integrity",
+]
+
 logger = logging.getLogger(__name__)
 
 # ============================================================================
@@ -1066,7 +1089,11 @@ def update_integrity_digest() -> str:
     kernel and lives in ``ama_cryptography._build_sign``.
     """
     digest = _compute_module_digest()
-    _INTEGRITY_DIGEST_FILE.write_text(digest + "\n")
+    # newline="\n" pins the artefact to LF on every platform.  Windows' default
+    # text-mode translation would write CRLF, which the committed-blob
+    # byte-identity gate (tools/check_line_endings.py) rejects — the digest
+    # artefact must be byte-identical wherever it is regenerated.
+    _INTEGRITY_DIGEST_FILE.write_text(digest + "\n", encoding="utf-8", newline="\n")
     return digest
 
 

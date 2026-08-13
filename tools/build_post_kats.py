@@ -81,7 +81,10 @@ def _source_fingerprint(path: Path, record_id: str, fields: dict[str, str]) -> s
     vendored record, so a change to either side is caught.
     """
     hasher = hashlib.sha3_256()
-    hasher.update(str(path.relative_to(REPO_ROOT)).encode("utf-8"))
+    # as_posix() so the fingerprint is identical on every platform — str() of a
+    # WindowsPath renders backslashes, which would make --check reject vectors
+    # pinned on a POSIX machine (and vice versa) for a purely cosmetic reason.
+    hasher.update(path.relative_to(REPO_ROOT).as_posix().encode("utf-8"))
     hasher.update(record_id.encode("utf-8"))
     for key in sorted(fields):
         hasher.update(key.encode("utf-8"))
@@ -98,7 +101,7 @@ def _build_ml_kem_1024() -> dict[str, Any]:
         "kind": "keygen+decaps",
         "parameter_set": 1024,
         "provenance": {
-            "source": str(src.relative_to(REPO_ROOT)),
+            "source": src.relative_to(REPO_ROOT).as_posix(),
             "upstream": "NIST ACVP-Server ML-KEM-keyGen/encapDecap-FIPS203 v1.1.0.42",
             "record": 0,
             "fingerprint": _source_fingerprint(src, "record[0]", fields),
@@ -121,7 +124,7 @@ def _build_ml_dsa_65() -> dict[str, Any]:
         "kind": "keygen+verify",
         "parameter_set": 65,
         "provenance": {
-            "source": str(src.relative_to(REPO_ROOT)),
+            "source": src.relative_to(REPO_ROOT).as_posix(),
             "upstream": "NIST ACVP-Server ML-DSA-keyGen/sigGen-FIPS204 v1.1.0.42",
             "record": 0,
             "fingerprint": _source_fingerprint(src, "record[0]", fields),
@@ -154,7 +157,7 @@ def _build_slh_dsa_sha2_256f() -> dict[str, Any]:
                     "kind": "verify",
                     "parameter_set": "SHA2-256f",
                     "provenance": {
-                        "source": str(src.relative_to(REPO_ROOT)),
+                        "source": src.relative_to(REPO_ROOT).as_posix(),
                         "upstream": "NIST ACVP-Server SLH-DSA-sigVer-FIPS205 v1.1.0.42",
                         "tgId": group["tgId"],
                         "tcId": test["tcId"],
@@ -244,7 +247,9 @@ def generate(verify: bool = True) -> int:
         payload = builder()
         if verify:
             _verify_against_native(name, payload)
-        (OUT_DIR / name).write_text(_serialise(payload), encoding="utf-8")
+        # newline="\n" keeps the pinned vector LF on Windows too; --check and
+        # the module-digest computation both read these bytes.
+        (OUT_DIR / name).write_text(_serialise(payload), encoding="utf-8", newline="\n")
         print(f"wrote {OUT_DIR.joinpath(name).relative_to(REPO_ROOT)} ({payload['algorithm']})")
     return 0
 

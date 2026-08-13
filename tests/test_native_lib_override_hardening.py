@@ -440,8 +440,12 @@ class TestLibraryPathEnvIgnoredUnderSecureExecution:
         monkeypatch.setattr(pqc_backends, "_in_secure_execution_mode", lambda: False)
         monkeypatch.setenv("LD_LIBRARY_PATH", "/dev/build/lib")
 
-        dirs = [str(d) for d in pqc_backends._get_search_dirs()]
-        assert "/dev/build/lib" in dirs, (
+        # Compare as Path objects, not strings: _get_search_dirs() wraps each
+        # entry in Path, and str(WindowsPath("/dev/build/lib")) renders
+        # backslashes — a cosmetic difference that would fail the assertion on
+        # Windows even though discovery honours the variable there too.
+        dirs = [Path(d) for d in pqc_backends._get_search_dirs()]
+        assert Path("/dev/build/lib") in dirs, (
             "outside secure-execution the developer's LD_LIBRARY_PATH is a "
             "legitimate way to point at an out-of-tree build"
         )

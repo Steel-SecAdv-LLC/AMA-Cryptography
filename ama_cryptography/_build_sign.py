@@ -370,6 +370,10 @@ def _write_signature_module(
 ) -> Path:
     """Emit ``_integrity_signature.py`` as a Python literal module."""
     out_path = pkg_dir / "_integrity_signature.py"
+    # newline="\n" pins the artefact to LF on every platform.  Windows'
+    # default text-mode translation would emit CRLF, making the working tree
+    # diverge from the committed blob byte-for-byte — which the checkout
+    # byte-identity gate (tools/check_line_endings.py) correctly rejects.
     out_path.write_text(
         _SIGNATURE_TEMPLATE.format(
             digest_hex=digest.hex(),
@@ -378,6 +382,7 @@ def _write_signature_module(
             signature_hex=signature.hex(),
         ),
         encoding="utf-8",
+        newline="\n",
     )
     return out_path
 
@@ -413,8 +418,11 @@ def main() -> int:
     digest_hex = digest.hex()
 
     # Always refresh the legacy digest-only artefact so the
-    # digest-fallback verifier path stays in sync.
-    (pkg_dir / "_integrity_digest.txt").write_text(digest_hex + "\n")
+    # digest-fallback verifier path stays in sync.  newline="\n" keeps the
+    # artefact LF on Windows too (see _write_signature_module).
+    (pkg_dir / "_integrity_digest.txt").write_text(
+        digest_hex + "\n", encoding="utf-8", newline="\n"
+    )
     print(f"Integrity digest refreshed: {digest_hex}")
 
     if args.digest_only:

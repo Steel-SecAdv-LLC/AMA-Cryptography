@@ -247,6 +247,25 @@ def test_require_build_pipeline_exits_when_env_unset(
     assert excinfo.value.code == 2
 
 
+def test_signature_module_is_lf_terminated_on_every_platform(tmp_path: Any) -> None:
+    """The generated artefacts must be byte-identical wherever they are written.
+
+    Windows' default text-mode newline translation turns every ``\\n`` into
+    ``\\r\\n``, which makes a re-signed working tree diverge from the committed
+    blob and fails the checkout byte-identity gate
+    (``tools/check_line_endings.py``) — the exact failure that took down all
+    ten Windows CI jobs.  Asserting on the raw bytes pins the ``newline="\\n"``
+    contract on the platforms where translation would not occur anyway, and
+    catches a regression on the one where it would.
+    """
+    pkg = tmp_path / "ama_cryptography"
+    pkg.mkdir()
+    out = bs._write_signature_module(pkg, b"\x01" * 32, b"\x02" * 32, b"\x03" * 32, b"\x04" * 64)
+    raw = out.read_bytes()
+    assert b"\r" not in raw, "signature artefact must be LF-only on every platform"
+    assert raw.endswith(b"\n")
+
+
 def test_compute_package_digest_matches_self_test(tmp_path: Any) -> None:
     """The signer's digest computation must be byte-identical with the
     import-time verifier's — otherwise the (digest, signature) embedded in
