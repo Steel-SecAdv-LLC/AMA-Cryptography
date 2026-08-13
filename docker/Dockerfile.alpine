@@ -6,10 +6,12 @@
 
 FROM alpine:3.18 AS builder
 
+# openssl-dev is deliberately absent (INVARIANT-1): AMA's C sources link no
+# OpenSSL, and requirements.txt / requirements-dev.txt pull no package that
+# builds against it — the Ubuntu Dockerfile documents the same exclusion.
 RUN apk add --no-cache \
     build-base \
     cmake \
-    openssl-dev \
     python3-dev \
     py3-pip \
     py3-setuptools \

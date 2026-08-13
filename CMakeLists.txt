@@ -646,13 +646,12 @@ endif()
 # uses InitOnceExecuteOnce from synchapi.h, linked automatically).
 find_package(Threads REQUIRED)
 
-# OpenSSL: no longer required — all cryptographic operations use native
-# implementations. Kept as optional for backward compatibility with
-# downstream builds that may pass -DOPENSSL_ROOT_DIR.
-find_package(OpenSSL QUIET)
-if(OPENSSL_FOUND)
-    message(STATUS "OpenSSL found: ${OPENSSL_VERSION} (not used by AMA sources)")
-endif()
+# OpenSSL: deliberately NOT probed.  Every cryptographic operation is a
+# native AMA implementation (INVARIANT-1), nothing in this build consumes
+# OPENSSL_FOUND, and a find_package() whose result feeds nothing is dead
+# weight that invites the suspicion it exists to hide a linkage.  A
+# downstream that passes -DOPENSSL_ROOT_DIR gets an unused-variable warning
+# from CMake, which is the honest answer.
 
 # Helper: apply ed25519-donna settings to a target
 function(ama_apply_donna_settings target)
