@@ -185,30 +185,56 @@ class TestQuadraticFormConstraints(unittest.TestCase):
         self.assertTrue(allclose(corrected, state))
 
     def test_sigma_quadratic_enforcement_correction(self) -> None:
-        """Test automatic correction mechanism exists."""
-        # Test that the correction function properly scales states
-        state = Vec([1.0, 1.0, 1.0])
-        E = eye(3) * 0.5  # Diagonal matrix with values < threshold
+        """A violated threshold is actually corrected, to the threshold.
+
+        σ is a Rayleigh quotient, so ``σ(kx) == σ(x)``: scaling cannot change
+        it, and the correction has to rotate the state toward E's dominant
+        eigenvector.  This asserts the property the function advertises —
+        σ_corrected >= threshold — rather than "σ did not decrease", which a
+        no-op satisfies (and which is how a scale-only "correction" went
+        unnoticed through 4.0).
+        """
+        # E's dominant eigenvalue is 1.0, so a 0.9 threshold is reachable;
+        # the state starts aligned with the weak (0.2) directions.
+        E = eye(4) * 0.2
+        E[0][0] = 1.0
+        state = Vec([0.0, 1.0, 1.0, 1.0])
 
         sigma_original = calculate_sigma_quadratic(state, E)
-        valid, corrected = enforce_sigma_quadratic_threshold(state, E, threshold=0.96)
+        self.assertLess(sigma_original, 0.9, "Original should be below threshold")
 
-        # For a diagonal matrix, the correction should work
-        # σ_quadratic = x^T·E·x / ||x||² = sum(E_ii * x_i^2) / sum(x_i^2)
-        # For diagonal E and uniform state, σ = E_ii (all same)
-        self.assertFalse(valid, "Original state should be invalid")
-        self.assertLess(sigma_original, 0.96, "Original should be below threshold")
+        valid, corrected = enforce_sigma_quadratic_threshold(state, E, threshold=0.9)
+        self.assertFalse(valid, "Original state should be reported invalid")
 
-        # After correction, verify state was modified
-        self.assertFalse(allclose(state, corrected), "State should be corrected")
-
-        # Verify sigma improved (though may not reach threshold for all matrices)
         sigma_corrected = calculate_sigma_quadratic(corrected, E)
         self.assertGreaterEqual(
             sigma_corrected,
-            sigma_original * 0.95,  # Should not decrease
-            "Correction should not decrease sigma",
+            0.9 - 1e-9,
+            f"Correction must reach the threshold, got {sigma_corrected}",
         )
+
+        # The correction preserves the state's magnitude: σ does not depend on
+        # it, but the downstream helix dynamics do.
+        norm_before = math.sqrt(sum(v * v for v in state))
+        norm_after = math.sqrt(sum(v * v for v in corrected))
+        self.assertAlmostEqual(norm_before, norm_after, places=9)
+
+    def test_sigma_quadratic_enforcement_unreachable_threshold(self) -> None:
+        """An unreachable threshold is reported, not faked.
+
+        ``max_x σ(x) == λ_max``, so with E = 0.5·I no state whatsoever can
+        reach 0.96.  The honest result is "invalid, unchanged" — perturbing the
+        state would return something that still fails the constraint while
+        looking corrected.
+        """
+        state = Vec([1.0, 1.0, 1.0])
+        E = eye(3) * 0.5
+
+        valid, corrected = enforce_sigma_quadratic_threshold(state, E, threshold=0.96)
+
+        self.assertFalse(valid, "0.96 is unreachable for λ_max = 0.5")
+        self.assertTrue(allclose(corrected, state), "Unreachable → state unchanged")
+        self.assertAlmostEqual(calculate_sigma_quadratic(corrected, E), 0.5, places=12)
 
     def test_initialize_ethical_matrix_positive_definite(self) -> None:
         """Test ethical matrix is positive-definite."""

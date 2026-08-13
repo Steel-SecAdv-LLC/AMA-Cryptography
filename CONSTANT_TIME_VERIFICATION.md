@@ -307,8 +307,12 @@ The native C Ed25519 implementation provides constant-time operations:
 ### Native AES-256-GCM (`src/c/ama_aes_gcm.c`)
 
 **Default build is constant-time.** `AMA_AES_CONSTTIME` defaults to `ON`
-(`CMakeLists.txt`), which selects the algebraic bitsliced S-box in
-`src/c/ama_aes_bitsliced.c` — no table, no secret-dependent memory access.
+(`CMakeLists.txt`), which selects the masked full-table-scan S-box in
+`src/c/ama_aes_bitsliced.c` — a lookup reads all 256 entries and selects with
+an arithmetic mask, so the memory access pattern is uniform and independent of
+the secret index.  (The construct is a masked scan, not an algebraic circuit:
+both are constant-time, but a side-channel reviewer assesses them differently,
+and THREAT_MODEL.md:136 already describes it correctly.)
 Hosts with AES-NI / VAES dispatch to the hardware kernels instead, which are
 likewise table-free.
 

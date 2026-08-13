@@ -683,10 +683,24 @@ def run_atheris(argv: list[str]) -> int:  # pragma: no cover - optional engine
     # run started cold, which is exactly the failure the module docstring says
     # the seed corpus exists to prevent ("a fuzzer from an empty corpus spends
     # its whole budget rediscovering that a key file begins with 0x30").
+    #
+    # Two things the seeds must get right, and neither was:
+    #
+    # `build_seed_corpus` returns (target_name, data) PAIRS, so writing each
+    # element straight out raised `TypeError: memoryview: a bytes-like object is
+    # required, not 'tuple'` — the --atheris lane died before Setup on every
+    # invocation.
+    #
+    # And `one()` above spends raw[0] as a target selector, so a seed file must
+    # carry that byte or every seed is dispatched to an arbitrary target with
+    # its own first byte eaten (a DER seed starting 0x30 always lands on
+    # index 48 % len(targets), and arrives truncated).  Prefix the selector that
+    # reproduces the pairing the corpus was built with.
     seed_dir = Path(tempfile.mkdtemp(prefix="ama-fuzz-seeds-"))
     seeds = build_seed_corpus(None)
-    for index, blob in enumerate(seeds):
-        (seed_dir / f"seed-{index:04d}").write_bytes(blob)
+    for index, (target_name, blob) in enumerate(seeds):
+        selector = targets.index(target_name)
+        (seed_dir / f"seed-{index:04d}").write_bytes(bytes([selector]) + blob)
     print(f"seeded with {len(seeds)} inputs in {seed_dir}")
 
     # argv[0] is the program name by libFuzzer/sys.argv convention and Setup

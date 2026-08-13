@@ -359,26 +359,45 @@ and author*; attribution as to *time* requires a control outside AMA
 #### Sub-property 4.2: Mathematical Correctness
 **Cryptographic Mapping:**
 - Length-prefixed encoding (provably unambiguous)
-- Standard library cryptography (formally verified implementations)
-- Comprehensive test coverage (>95%)
+- Primitives implemented from the published standards and pinned to their
+  published test vectors (FIPS 202/203/204/205, RFC 8032/7748/5869/8439)
+- Measured test coverage — see `pyproject.toml` for the enforced floor and
+  `docs/METRICS_REPORT.md` for the current figure
 
-**Correctness Proof:**
+**Correctness Argument:**
 ```
 Specification S defines correct behavior
 Implementation I must satisfy: I ⊨ S
 
-Verification methods:
-1. Unit tests: 100+ test cases covering edge cases
-2. Property-based testing: QuickCheck-style invariants
-3. Formal verification: Type safety (Python 3.10+)
-4. Standard compliance: NIST FIPS validation
+Evidence:
+1. Known Answer Tests against published NIST/IETF vectors, plus the
+   vendored ACVP and Wycheproof corpora, run as CI gates that fail closed
+2. Property-based testing (Hypothesis) over the parsing and AEAD surfaces
+3. Differential testing against independent implementations
+4. Static typing (mypy --strict) and sanitizer/fuzz coverage of the C core
 
-Result: I ⊨ S with confidence ≥ 99.9%
+This is testing evidence, not proof: it bounds the behaviours exercised,
+and no confidence figure is claimed from it.
 ```
 
+**Verification status — read this before citing the above:**
+This library is **not** FIPS-validated and has **not** been formally verified.
+No CAVP or CMVP certificate has been issued for it, and NIST has not reviewed
+it; the ACVP figures reported elsewhere in this repository are a
+**self-attestation** against published vectors, which is a different thing from
+a validation certificate. Its primitives follow the FIPS/RFC specifications and
+its POST follows the FIPS 140-3 §4.9 *pattern*, and that is the whole of the
+claim. See `CSRC_STANDARDS.md` ("No CAVP certificate has been issued", "No CMVP
+certificate has been issued") and the same disclaimer in `README.md`, which are
+the canonical statements.
+
 **Citation:**
-- NIST SP 800-140 (Cryptographic Module Validation)
+- NIST SP 800-140 (Cryptographic Module Validation Program requirements —
+  cited as the standard this library's POST design *follows*, not as a program
+  it has been through)
 - Klein et al. (2014) "Comprehensive formal verification of an OS microkernel"
+  (cited as the reference point for what formal verification means; this
+  library has not undergone it)
 
 #### Sub-property 4.3: Hybrid Security
 **Cryptographic Mapping:**

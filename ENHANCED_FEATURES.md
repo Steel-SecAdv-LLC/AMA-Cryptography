@@ -421,8 +421,8 @@ Tests:
 - `test_consttime.c`: Constant-time operation validation (structural correctness)
 - `test_dudect.c`: Empirical constant-time verification via dudect (Welch's t-test)
 - `test_core.c`: Context and lifecycle management
-- `test_kyber.c`: ML-KEM-1024 algorithm tests
-- `test_ml_dsa.c`: ML-DSA-65 signature tests
+- `test_kat.c`: ML-KEM / ML-DSA / SLH-DSA byte-exact KATs (FIPS 203/204/205 vectors)
+- `test_kyber_cpa.c`, `test_dilithium_*.c`: ML-KEM CPA-PKE and ML-DSA sampling-equivalence tests
 - `test_agent_binding.c`: Agent-instance binding (INVARIANT-30) — pins the canonical
   encoding as a byte KAT and covers structural refusals, foreign-key tags, single-bit
   tag flips and capability escalation
@@ -748,7 +748,7 @@ python -c "from ama_cryptography.math_engine import benchmark_matrix_operations;
 | 2.0.0 | 2026-03-08 | Zero-dependency native C, AES-256-GCM, adaptive posture, hybrid KEM combiner, Ed25519 atomics, FIPS 203/204/205, KAT validation, Phase 2 primitives, fuzzing harnesses, threat model, Mercury Agent integration |
 | 2.1.0 | 2026-03-25 | Hand-written AVX2/NEON/SVE2 SIMD for 8 algorithms, runtime dispatch, security fixes S1-S6, professional dashboard/chart overhaul |
 | 2.1.5 | 2026-04-17 | HSM support via PyKCS11, security audit fixes (length-prefixed HKDF encoding, constant-time ops), secure channel protocol v2, comprehensive test coverage expansion |
-| 4.0.0 | 2026-08-01 | Trust-anchor enforcement end to end, constant-time scalar GHASH with an instruction-invariance gate, Ed25519 canonical-`y` (INVARIANT-38), KDF cost + algorithm floor, per-epoch AEAD nonce budget, no key material in serialization or reprs, RFC 8439 length limit. BREAKING ×4 — see CHANGELOG `[4.0.0]`. (This table skips 3.x; CHANGELOG.md is the complete record.) |
+| 4.0.0 | 2026-08-01 | Trust-anchor enforcement end to end, constant-time scalar GHASH with an instruction-invariance gate, Ed25519 canonical-`y` (INVARIANT-38), KDF cost + algorithm floor, per-epoch AEAD nonce budget, no key material in serialization or reprs, RFC 8439 length limit. BREAKING ×6 — see CHANGELOG `[4.0.0]`. (This table skips 3.x; CHANGELOG.md is the complete record.) |
 
 ---
 

@@ -109,9 +109,14 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          if cmake --build build --config Release -j4; then
-            exit 0
-          fi
+          # Capture the BUILD's exit status, not the `if` statement's.  In bash
+          # an `if` whose condition fails and whose branches do not run returns
+          # 0, so the previous `if cmake …; then exit 0; fi; rc=$?` form always
+          # recorded rc=0 and the final `exit "$rc"` reported success — a failed
+          # compile or link went green whenever ctest did not independently
+          # notice (e.g. the shared library failing to link while the tests link
+          # the static one).  Assign from the command itself.
+          cmake --build build --config Release -j4 && exit 0
           rc=$?
           echo "::group::Re-running build with --verbose to surface the failing command"
           # `--clean-first` discards the partial build state from the

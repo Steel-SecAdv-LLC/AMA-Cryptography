@@ -479,6 +479,53 @@ def calculate_sigma_quadratic(state: object, E: object) -> float:
     return float((x @ Ex) / x_norm_sq)
 
 
+def _dominant_eigenvector(
+    matrix: Mat,
+    *,
+    iterations: int = 512,
+    tol: float = 1e-13,
+) -> Optional[Vec]:
+    """Unit eigenvector of ``matrix``'s largest-magnitude eigenvalue, or None.
+
+    Power iteration.  ``E`` is a symmetric positive-definite constraint matrix
+    (see :func:`initialize_ethical_matrix`), so the dominant eigenvalue is real,
+    positive and equal to ``max_x σ_quadratic(x)`` — which is what makes this
+    the only direction that can raise σ toward a threshold.
+
+    Returns None when the iteration cannot produce a direction (a zero matrix,
+    or a start vector that lands exactly in the null space and stays there);
+    callers treat that as "no correction available" rather than guessing.
+    """
+    n = matrix.rows
+    if n == 0 or matrix.cols != n:
+        return None
+
+    # Start off-axis so a vector orthogonal to the dominant eigenvector is not
+    # a fixed point of the iteration for a symmetric matrix with structured
+    # eigenvectors (a plain all-ones start is exactly orthogonal to the
+    # dominant eigenvector of, e.g., diag(1, -1)).
+    v = asvec([1.0 + (i % 3) * 0.25 for i in range(n)])
+    norm = math.sqrt(v @ v)
+    v = v * (1.0 / norm)
+
+    for _ in range(iterations):
+        w = matrix @ v
+        w_norm = math.sqrt(w @ w)
+        if w_norm == 0.0:
+            return None
+        w = w * (1.0 / w_norm)
+        # Converged when the direction stops moving.  Compare against both
+        # signs: for a negative dominant eigenvalue the iterate flips each
+        # step while the direction itself is stationary.
+        delta_pos = math.sqrt(sum((a - b) ** 2 for a, b in zip(list(w), list(v))))
+        delta_neg = math.sqrt(sum((a + b) ** 2 for a, b in zip(list(w), list(v))))
+        v = w
+        if min(delta_pos, delta_neg) <= tol:
+            break
+
+    return v
+
+
 def enforce_sigma_quadratic_threshold(
     state: object,
     E: object,
@@ -513,6 +560,18 @@ def enforce_sigma_quadratic_threshold(
        ``Vec`` on both branches.  Through 3.x the pass branch handed back the
        caller's own object while the correction branch returned a new one, so
        whether the result aliased the input depended on the data.
+
+    .. versionchanged:: 4.0.1
+       The correction actually corrects.  Through 4.0 it scaled the state by
+       ``√(threshold/σ)`` — but σ is a Rayleigh quotient, ``σ(kx) == σ(x)`` for
+       every scalar k, so the "corrected" state had exactly the σ it started
+       with and the advertised enforcement was a provable no-op (verified: σ
+       0.1 before, 0.1 after, against a 0.96 threshold).  Raising σ requires
+       rotating x toward E's dominant eigenvector, which is what this now does,
+       by the smallest blend that reaches the threshold.  The state's norm is
+       preserved, and when the threshold exceeds ``λ_max`` — unreachable by any
+       state, since ``max_x σ(x) == λ_max`` — the state is returned unchanged
+       rather than perturbed to no purpose.
     """
     x = asvec(state)
     sigma = calculate_sigma_quadratic(x, E)
@@ -520,9 +579,46 @@ def enforce_sigma_quadratic_threshold(
     if sigma >= threshold:
         return True, x
 
-    # Correction: scale by √(threshold/σ)
-    scale = math.sqrt(threshold / sigma) if sigma > 0 else 1.0
-    corrected_state = x * scale
+    matrix = asmat(E, copy=False)
+    x_norm = math.sqrt(x @ x)
+    if x_norm == 0.0:
+        # No direction to rotate: σ is undefined for the zero vector (reported
+        # as 0.0) and every state is a scalar multiple of it.  Unchanged.
+        return False, x
+
+    dominant = _dominant_eigenvector(matrix)
+    if dominant is None or calculate_sigma_quadratic(dominant, matrix) < threshold:
+        # λ_max < threshold: no state satisfies the constraint, so there is no
+        # correction to make.  Report the violation instead of returning a
+        # perturbed state that still fails.
+        return False, x
+
+    # Smallest blend toward the dominant eigenvector that reaches the
+    # threshold.  σ is continuous in α and σ(α=1) == λ_max >= threshold, so a
+    # bisection on [0, 1] always converges; taking the smallest such α keeps
+    # the correction minimal rather than discarding the caller's direction.
+    unit_x = x * (1.0 / x_norm)
+    lo, hi = 0.0, 1.0
+    for _ in range(64):
+        mid = (lo + hi) / 2.0
+        candidate = unit_x * (1.0 - mid) + dominant * mid
+        if math.sqrt(candidate @ candidate) == 0.0:
+            # x anti-parallel to the eigenvector: the blend passes through the
+            # origin.  Step past it.
+            lo = mid
+            continue
+        if calculate_sigma_quadratic(candidate, matrix) >= threshold:
+            hi = mid
+        else:
+            lo = mid
+
+    blended = unit_x * (1.0 - hi) + dominant * hi
+    blended_norm = math.sqrt(blended @ blended)
+    if blended_norm == 0.0:
+        return False, x
+    # Restore the caller's magnitude — σ does not depend on it, but the state
+    # feeds downstream dynamics that do.
+    corrected_state = blended * (x_norm / blended_norm)
 
     return False, corrected_state
 

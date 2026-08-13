@@ -38,6 +38,7 @@ Run with:  pytest tests/test_post_failclosed.py -v
 
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
 import subprocess
@@ -1063,3 +1064,114 @@ class TestInvariant7Enforcement:
         )
         assert result.returncode == 0, result.stdout + result.stderr
         assert "REFUSED" in result.stdout
+
+
+class TestContinuousRNGTest:
+    """FIPS 140-3 §4.9.2 continuous RNG test — the control's own integrity.
+
+    These pin two properties the implementation is easy to lose: the
+    compare-and-store is atomic (so the one fault it exists to catch cannot slip
+    through an interleaving), and it never retains the caller's key material.
+    """
+
+    def test_compare_and_store_is_atomic_under_concurrency(self) -> None:
+        """A stuck RNG must be caught even when many threads draw at once.
+
+        Without a lock this is a check-then-act race: threads A and B both read
+        the same stale ``previous``, both compare their identical stuck value
+        against it, both pass, and two consecutive identical outputs are issued
+        as key material with the control silently satisfied.
+        """
+        from ama_cryptography import _module_state as ms
+        from ama_cryptography.exceptions import CryptoModuleError
+
+        saved_previous = ms._rng_state["previous"]
+        saved_state = ms._MODULE_STATE
+        saved_reason = ms._ERROR_REASON
+        stuck = b"\xa5" * 32
+
+        try:
+            ms._rng_state["previous"] = None
+            ms._MODULE_STATE = "OPERATIONAL"
+            ms._ERROR_REASON = None
+
+            # Force the "stuck DRBG" condition: every draw returns the same buffer.
+            original_token_bytes = ms.secrets.token_bytes
+            ms.secrets.token_bytes = lambda n: stuck[:n] if n <= 32 else stuck * (n // 32 + 1)
+
+            refusals: list[BaseException] = []
+            successes: list[bytes] = []
+            barrier = threading.Barrier(8)
+
+            def draw() -> None:
+                barrier.wait()
+                try:
+                    successes.append(ms.secure_token_bytes(32))
+                except CryptoModuleError as exc:
+                    refusals.append(exc)
+
+            threads = [threading.Thread(target=draw) for _ in range(8)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+
+            # Exactly one draw may establish the baseline; every other draw sees
+            # the identical value and must be refused.  The pre-lock code let
+            # several through.
+            assert len(successes) <= 1, (
+                f"{len(successes)} identical draws were issued as key material; "
+                "the continuous RNG test must catch consecutive identical outputs"
+            )
+            assert refusals, "a stuck RNG must trip the continuous test"
+            assert ms.module_status() == "ERROR"
+        finally:
+            ms.secrets.token_bytes = original_token_bytes
+            ms._rng_state["previous"] = saved_previous
+            ms._MODULE_STATE = saved_state
+            ms._ERROR_REASON = saved_reason
+
+    def test_health_state_does_not_retain_issued_key_material(self) -> None:
+        """The health state stores a digest, never the bytes handed to the caller.
+
+        For the common 32-byte draw CPython returns the same object for
+        ``buf[:32]``, so storing the sample pinned live key material — an
+        Ed25519 seed, say — in module state until the next draw.
+        """
+        from ama_cryptography import _module_state as ms
+
+        saved_previous = ms._rng_state["previous"]
+        try:
+            ms._rng_state["previous"] = None
+            issued = ms.secure_token_bytes(32)
+            stored = ms._rng_state["previous"]
+
+            assert stored is not None
+            assert stored != issued, "health state must not hold the issued bytes"
+            assert stored is not issued
+            assert stored == hashlib.sha256(issued).digest()
+        finally:
+            ms._rng_state["previous"] = saved_previous
+
+    def test_post_seeds_the_health_state_in_digest_form(self) -> None:
+        """POST's seed must match what secure_token_bytes compares against.
+
+        If POST stored the raw sample while the draw compares digests, the first
+        comparison after POST could never match and the very first post-POST
+        draw would escape the continuous check entirely.
+        """
+        from ama_cryptography import _module_state as ms
+        from ama_cryptography import _self_test as st
+
+        saved_previous = ms._rng_state["previous"]
+        saved_results = list(st._SELF_TEST_RESULTS)
+        try:
+            ms._rng_state["previous"] = None
+            passed, reason = st._run_rng_stage()
+            assert passed, reason
+            stored = ms._rng_state["previous"]
+            assert stored is not None
+            assert len(stored) == 32  # a SHA-256 digest, not a raw token
+        finally:
+            ms._rng_state["previous"] = saved_previous
+            st._SELF_TEST_RESULTS[:] = saved_results

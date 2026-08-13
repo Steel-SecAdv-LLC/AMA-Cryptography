@@ -80,7 +80,7 @@ Measured as non-empty-allowed `wc -l` over source files in each scope.
 | Native C (`src/c/**/*.c`, `include/**/*.h`) | 105 | 50,899 |
 | Library total (Python + C + headers) | 133 | **83,987** |
 | Top-level Python (monitors, benchmarks, demos) | — | 952 |
-| Tests (`tests/**/*.py`) | 148 | 59,188 |
+| Tests (`tests/**/*.py`) | 149 | 59,585 |
 | Cython (`*.pyx`, `*.pxd`) | — | 1,873 |
 | **Whole project** (source + docs + config) | — | **304,171** |
 
@@ -132,7 +132,7 @@ the whole-project figure overstates hand-written code.
 | Scope                                | Lines    | % of whole | Paths                                                   |
 |--------------------------------------|---------:|-----------:|---------------------------------------------------------|
 | Library (Python + C + headers)       | 83,768   | 27.5%      | `ama_cryptography/` + `src/c/` + `include/`             |
-| Tests                                | 58,979   | 19.4%      | `tests/**/*.py`                                         |
+| Tests                                | 59,585   | 19.5%      | `tests/**/*.py`                                         |
 | Top-level Python                     | 952      | 0.3%       | `*.py` at repo root                                     |
 | Cython                               | 1,873    | 0.6%       | `*.pyx` + `*.pxd`                                       |
 | Everything else (remainder)          | 158,599  | 52.1%      | `*.md`, `*.yml`, `*.toml`, `*.json`, CMake, Makefile, plus `.c`/`.h`/`.py` outside the scopes above (`tests/c/`, `fuzz/`, `tools/`, `benchmarks/`, `examples/`) |
@@ -188,8 +188,8 @@ find . -type f \
 
 | Scope | Count |
 |-------|------:|
-| Python test files under `tests/` matching the static regex | 145 |
-| Syntactic `def test_` matches under `tests/**/*.py` | **3,458** |
+| Python test files under `tests/` matching the static regex | 146 |
+| Syntactic `def test_` matches under `tests/**/*.py` | **3,475** |
 | `test_*.c` files under `tests/c/` (ctest-registered) | 57 |
 | `bench_*.c` files under `tests/c/` (standalone, not in ctest) | 1 |
 | `fuzz_*.c` sources under `fuzz/` | 16 |
@@ -217,7 +217,7 @@ pytest --collect-only -q | tail -1
 Stderr is intentionally left unsuppressed so collection/import errors
 remain visible during reproduction.
 
-The static count (3,458) and the dynamic collection count will differ.
+The static count (3,475) and the dynamic collection count will differ.
 Any external claim ("N tests") must state which count it is reporting.
 This supersedes the earlier "866+ tests collected across 39 files" figure
 in ARCHITECTURE.md and any "2,068 tests" figure that may have circulated

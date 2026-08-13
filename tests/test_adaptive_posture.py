@@ -351,3 +351,68 @@ class TestCryptoPostureController:
         controller = CryptoPostureController(rotation_manager=rotation_mgr, rotation_cooldown=0)
         # Should not raise
         controller._trigger_rotation()
+
+    def test_failed_rotation_does_not_arm_the_cooldown(self) -> None:
+        """A rotation that was attempted and FAILED must remain retryable.
+
+        ``_trigger_rotation`` arms ``_last_rotation_time`` only when a rotation
+        actually happened, precisely so a transient backend failure does not
+        suppress every retry for the full cooldown window while the threat that
+        demanded the rotation persists.  ``_execute_action`` used to arm it
+        unconditionally, and *before* the attempt, which made that condition
+        dead code: this pins the behaviour it protects.
+        """
+        on_rotation = MagicMock(side_effect=RuntimeError("KMS unreachable"))
+        controller = CryptoPostureController(on_rotation=on_rotation, rotation_cooldown=300)
+        controller._last_rotation_time = 0.0
+
+        controller._execute_action(PostureAction.ROTATE_KEYS)
+
+        assert on_rotation.call_count == 1
+        assert controller._last_rotation_time == 0.0, (
+            "a failed rotation must not arm the cooldown — otherwise the engine "
+            "believes it acted and suppresses retries while the threat persists"
+        )
+
+        # The retry is therefore free to run rather than being throttled out.
+        controller._execute_action(PostureAction.ROTATE_KEYS)
+        assert on_rotation.call_count == 2
+
+    def test_successful_rotation_arms_the_cooldown(self) -> None:
+        """The converse: a rotation that succeeded does throttle the next one."""
+        controller = CryptoPostureController(on_rotation=MagicMock(), rotation_cooldown=300)
+        controller._last_rotation_time = 0.0
+
+        controller._execute_action(PostureAction.ROTATE_KEYS)
+
+        assert controller._last_rotation_time > 0.0
+
+    def test_algorithm_switch_arms_the_cooldown(self) -> None:
+        """A non-rotating action still consumes the throttle window."""
+        controller = CryptoPostureController(
+            on_algorithm_switch=MagicMock(), rotation_cooldown=300
+        )
+        controller._last_rotation_time = 0.0
+
+        controller._execute_action(PostureAction.SWITCH_ALGORITHM)
+
+        assert controller._last_rotation_time > 0.0
+
+    def test_unknown_algorithm_is_rejected(self) -> None:
+        """INVARIANT-35: an unrankable algorithm name must not resolve to a rung.
+
+        Every strength lookup is ``ALGORITHM_STRENGTH.get(name, 0)``, so an
+        unrecognised name silently scored as the WEAKEST algorithm — and a
+        controller constructed with a real ``AlgorithmType`` this table does not
+        list (KYBER_1024, HYBRID_KEM) would be "upgraded" to ML_DSA_65 on the
+        first CRITICAL evaluation, logged as hardening, with the downgrade
+        detector blinded by the same default.
+        """
+        with pytest.raises(ValueError, match="unknown algorithm"):
+            CryptoPostureController(current_algorithm="HYBRID_KEM")
+        with pytest.raises(ValueError, match="unknown algorithm"):
+            CryptoPostureController(current_algorithm="ML_DSA_87")
+
+        # Every name the table does rank is still accepted.
+        for name in CryptoPostureController.ALGORITHM_STRENGTH:
+            CryptoPostureController(current_algorithm=name)

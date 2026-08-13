@@ -505,6 +505,23 @@ class CryptoPostureController:
         self.evaluator = evaluator or PostureEvaluator()
         self.rotation_manager = rotation_manager
         self.hd_derivation = hd_derivation
+        # INVARIANT-35: a selector must never resolve weaker than it was asked,
+        # and no selector may map unknown input onto a real choice.  Every
+        # strength lookup below is `ALGORITHM_STRENGTH.get(name, 0)`, so an
+        # unrecognised name silently scored 0 — the WEAKEST rung.  A controller
+        # constructed with a real AlgorithmType this table does not list
+        # (KYBER_1024, HYBRID_KEM) would therefore be "upgraded" to ML_DSA_65 on
+        # the first CRITICAL evaluation and the swap logged as hardening, while
+        # the downgrade detector — seeded from the same 0 — could not see it.
+        # Reject at the boundary instead, so the .get() defaults below are
+        # unreachable by construction rather than load-bearing.
+        if current_algorithm not in self.ALGORITHM_STRENGTH:
+            raise ValueError(
+                f"unknown algorithm {current_algorithm!r}: expected one of "
+                f"{sorted(self.ALGORITHM_STRENGTH)}.  The posture controller "
+                f"orders algorithms by strength and cannot rank a name it does "
+                f"not know without risking a silent downgrade (INVARIANT-35)."
+            )
         self.current_algorithm = current_algorithm
         self.rotation_cooldown = rotation_cooldown
         self.on_rotation = on_rotation
@@ -616,17 +633,31 @@ class CryptoPostureController:
     def _execute_action(self, action: PostureAction) -> None:
         """Execute a posture action immediately.
 
-        Updates ``_last_rotation_time`` so the cooldown window applies
+        Arms ``_last_rotation_time`` so the cooldown window applies
         consistently regardless of whether the action was queued via
         confirmation mode or executed immediately.
+
+        For actions that rotate, arming is delegated to :meth:`_trigger_rotation`,
+        which arms only when a rotation actually happened (or when there was no
+        mechanism to attempt).  Arming here as well — unconditionally, and
+        *before* the attempt — silently defeated that: a rotation that was
+        attempted and FAILED (the KMS unreachable, ``on_rotation`` raising) left
+        the cooldown armed anyway, so ``evaluate_and_respond`` suppressed every
+        retry for the full window while the threat that demanded the rotation
+        persisted.  That is precisely the outcome ``_trigger_rotation``'s
+        arming condition exists to prevent, and it made the entire
+        attempted/succeeded distinction dead code.
         """
-        self._last_rotation_time = time.time()
         if action == PostureAction.ROTATE_AND_SWITCH:
-            self._trigger_rotation()
+            self._trigger_rotation()  # arms the cooldown iff it succeeded
             self._trigger_algorithm_switch()
         elif action == PostureAction.ROTATE_KEYS:
-            self._trigger_rotation()
+            self._trigger_rotation()  # arms the cooldown iff it succeeded
         elif action == PostureAction.SWITCH_ALGORITHM:
+            # No rotation involved, so nothing else arms the throttle: an
+            # algorithm switch still consumes the cooldown window so repeated
+            # evaluations cannot drive back-to-back switches.
+            self._last_rotation_time = time.time()
             self._trigger_algorithm_switch()
 
     def _process_expired_pending_actions(self) -> None:

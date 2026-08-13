@@ -591,7 +591,7 @@ the strict path rejects unanchored artefacts.
 
 ### `AMA_FIPS_STRICT` — escalate skipped KATs to POST failure
 
-Released wheels and FIPS-validated deployments should set
+Released wheels and deployments requiring FIPS-style strictness should set
 `AMA_FIPS_STRICT=1` so a missing backend cannot silently degrade the
 approved-algorithm self-test set:
 
@@ -602,7 +602,7 @@ approved-algorithm self-test set:
     `module_self_test_results()`, and continues.  Skip is NOT a pass —
     consumers filtering for "everything passed" must compare
     `passed is True`.
-  * **`=1` (release / FIPS-validated path):** a skipped KAT is
+  * **`=1` (release / FIPS-strict path):** a skipped KAT is
     escalated to a hard POST failure.  The module enters ERROR state
     and refuses every cryptographic operation until the missing
     backend is built and the process restarted.  This makes a

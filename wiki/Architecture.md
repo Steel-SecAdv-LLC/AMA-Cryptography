@@ -100,7 +100,7 @@ classDef gray fill:#1a1a1a,stroke:#11AEED,color:#f6f6f6;
 ```
 
 **C Layer (`src/c/`):**
-Implements all cryptographic primitives in C11 with zero external dependencies. NIST FIPS compliant implementations for ML-DSA-65, ML-KEM-1024, SLH-DSA-SHA2-256f, SHA3-256, HKDF, Ed25519, AES-256-GCM, and more.
+Implements all cryptographic primitives in C11 with zero external dependencies. Specification-conformant implementations (NIST FIPS/SP where the algorithm is a NIST standard, IETF RFC otherwise) for ML-DSA-65, ML-KEM-1024, SLH-DSA-SHA2-256f, SHA3-256, HKDF, Ed25519, AES-256-GCM, and more.  Not FIPS-validated: no CAVP/CMVP certificate has been issued (see CSRC_STANDARDS.md).
 
 **Cython Layer:**
 Optional acceleration for mathematical operations (18–37x vs pure Python). Provides NumPy integration for the 3R monitoring engine.

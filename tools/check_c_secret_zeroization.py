@@ -1,0 +1,224 @@
+#!/usr/bin/env python3
+# Copyright (C) 2025-2026 Steel Security Advisors LLC
+# SPDX-License-Identifier: Apache-2.0
+"""INVARIANT-6 gate: no bare ``memset(SECRET, 0, LEN)`` in the C sources.
+
+Why this exists as a tool rather than a semgrep rule
+----------------------------------------------------
+``.semgrep.yml`` carries ``bare-memset-zero-secret-named-buffer`` at ERROR
+severity, scoped to ``src/c/**``, and both ``tools/check_semgrep_severity.py``
+and the CI step name it as one of the blocking rules.  It never ran.  Every
+semgrep invocation in this repository scans ``ama_cryptography/`` only, so a
+rule restricted to ``src/c/**`` matched nothing and could not fail the gate —
+an ERROR-severity control that was, in practice, decorative.
+
+Adding ``src/c/`` to the scan target does not fix it either: semgrep's C parser
+does not know this codebase's ``AMA_API`` export macro and reports a syntax
+error on every function declared with it (15 files on the current tree).  The
+severity gate fails closed on scan errors — correctly — so widening the scope
+turns a silent no-op into a permanently red gate.
+
+So the check is implemented here instead, against the same rule, in a parser
+that understands the codebase.  The semgrep rule is retained for the Python
+tree's benefit and annotated to point here.
+
+What is flagged
+---------------
+``memset(DST, 0, ...)`` — and the ``0x00`` / ``'\\0'`` spellings — where DST
+names secret state.  The name test is deliberately the narrow one the semgrep
+rule established: unambiguous prefixes (``secret_``, ``private_``, ``master_``,
+``seed_``, ``key_``, ``sk_``, ``priv_``, ``kp_``), unambiguous suffixes
+(``_key``, ``_secret``, ``_seed``, ``_state``, ``_priv``, ``_kp``, ``_sk``,
+``_ks``), and a short list of known-secret spellings (``round_keys``,
+``tag_mask``, ``ipad``/``opad``, ``h_table``, …).  Generic names (``block``,
+``buf``, ``out``) are NOT flagged: they often hold AAD or ciphertext, and
+mass-flagging them trains people to silence the gate, which is worse than not
+having it.
+
+``ama_secure_memzero()`` is the required replacement: its volatile writes plus
+memory barrier defeat the dead-store elimination the as-if rule permits on a
+plain ``memset`` whose result is never read (CWE-226).
+
+Scope: ``src/c/**/*.c`` and ``src/c/**/*.h``, excluding ``src/c/vendor/``
+(third-party code this project does not rewrite).  Tests are deliberately in
+scope — a test that bare-memsets a secret exercises the same anti-pattern.
+
+Exit status: 0 when clean, 1 on any finding, 2 on a usage error.  A tree with
+no C sources is an error, not a pass: that means the scan pointed nowhere.
+"""
+
+from __future__ import annotations
+
+import re
+import sys
+from pathlib import Path
+from typing import NamedTuple, Sequence
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+C_ROOT = REPO_ROOT / "src" / "c"
+EXCLUDED_DIRS = ("vendor",)
+
+# The destination-name test, character-for-character the semgrep rule's regex.
+_SECRET_NAME_RE = re.compile(
+    r"^(secret_[A-Za-z0-9_]+|private_[A-Za-z0-9_]+|master_[A-Za-z0-9_]+"
+    r"|seed_[A-Za-z0-9_]+|key_[A-Za-z0-9_]+|sk_[A-Za-z0-9_]+|priv_[A-Za-z0-9_]+"
+    r"|kp_[A-Za-z0-9_]+|round_keys?|tag_mask|k_prime|scalar_reduced|wnaf|hram"
+    r"|inner_hash|opad|ipad|h_table|ghash_key|poly_key|chaining_state|nu_state)$"
+    r"|^[A-Za-z0-9_]+_(key|secret|seed|state|priv|kp|sk|ks)$"
+)
+
+# memset(DST, 0, ...) with the zero written as 0, 0x00, 0x0, or '\0'.
+#
+# DST may be a bare identifier (`secret_key`), a member access
+# (`ctx->hmac_key`, `st.master_seed`), or either with an index or a leading `&`.
+# The name that carries the convention is the LAST identifier in the chain —
+# `ctx->hmac_key` is a key because of `hmac_key`, not because of `ctx` — so the
+# whole destination expression is captured here and the trailing identifier is
+# extracted in _destination_name().
+_MEMSET_RE = re.compile(
+    r"\bmemset\s*\(\s*&?\s*"
+    r"(?P<dst>[A-Za-z_][A-Za-z0-9_]*"
+    r"(?:\s*(?:->|\.)\s*[A-Za-z_][A-Za-z0-9_]*|\s*\[[^\]]*\])*)"
+    r"\s*,\s*(?P<val>0[xX]0+|0|'\\0')\s*,"
+)
+
+_IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def _destination_name(expression: str) -> str:
+    """The identifier a naming convention attaches to, for a memset target.
+
+    ``ctx->hmac_key`` -> ``hmac_key``; ``round_keys[i]`` -> ``round_keys``;
+    ``secret_key`` -> itself.  Array subscripts are dropped first so an index
+    variable is never mistaken for the destination.
+    """
+    without_subscripts = re.sub(r"\[[^\]]*\]", "", expression)
+    identifiers = _IDENTIFIER_RE.findall(without_subscripts)
+    return identifiers[-1] if identifiers else ""
+
+
+class Finding(NamedTuple):
+    path: Path
+    line_no: int
+    dst: str
+    text: str
+
+    def render(self) -> str:
+        # Paths outside the repository (an explicit file argument, a test's
+        # temporary tree) have no repo-relative form; show them as given rather
+        # than raising out of the reporting path.
+        try:
+            rel: Path | str = self.path.relative_to(REPO_ROOT)
+        except ValueError:
+            rel = self.path
+        return (
+            f"{rel}:{self.line_no}: bare memset() zeroing secret-named "
+            f"buffer {self.dst!r}\n"
+            f"    {self.text.strip()}\n"
+            f"    Use ama_secure_memzero({self.dst}, LEN) — a plain memset may be "
+            f"elided by the optimizer (INVARIANT-6, CWE-226)."
+        )
+
+
+def c_sources(root: Path | None = None) -> list[Path]:
+    """Every first-party C source and header, vendored code excluded.
+
+    ``root`` defaults to :data:`C_ROOT` read at CALL time, not bound as a
+    default argument: a default would capture the module global at import and
+    then ignore any later rebinding, which would leave the fail-closed
+    empty-scan guard in :func:`main` unable to see the root it is guarding.
+    """
+    root = C_ROOT if root is None else root
+    out: list[Path] = []
+    for path in sorted(root.rglob("*")):
+        if path.suffix not in (".c", ".h") or not path.is_file():
+            continue
+        if any(part in EXCLUDED_DIRS for part in path.relative_to(root).parts):
+            continue
+        out.append(path)
+    return out
+
+
+def scan_text(text: str, path: Path) -> list[Finding]:
+    """Findings in one file's text.
+
+    Line comments are stripped before matching so a ``memset`` written inside
+    an explanatory comment — this repo has several, including in the rule's own
+    documentation — is not reported as code.
+    """
+    findings: list[Finding] = []
+    in_block_comment = False
+    for line_no, raw in enumerate(text.splitlines(), start=1):
+        line = raw
+        if in_block_comment:
+            end = line.find("*/")
+            if end == -1:
+                continue
+            line = line[end + 2 :]
+            in_block_comment = False
+        while True:
+            start = line.find("/*")
+            if start == -1:
+                break
+            end = line.find("*/", start + 2)
+            if end == -1:
+                line = line[:start]
+                in_block_comment = True
+                break
+            line = line[:start] + " " + line[end + 2 :]
+        line = re.sub(r"//.*$", "", line)
+
+        for match in _MEMSET_RE.finditer(line):
+            dst = _destination_name(match.group("dst"))
+            if dst and _SECRET_NAME_RE.match(dst):
+                findings.append(Finding(path, line_no, dst, raw))
+    return findings
+
+
+def audit(paths: Sequence[Path] | None = None) -> list[Finding]:
+    """Scan the C tree (or an explicit file list) and return every finding."""
+    targets = list(paths) if paths is not None else c_sources()
+    findings: list[Finding] = []
+    for path in targets:
+        findings.extend(scan_text(path.read_text(encoding="utf-8", errors="replace"), path))
+    return findings
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = list(sys.argv[1:] if argv is None else argv)
+    if args:
+        targets = [Path(a).resolve() for a in args]
+        missing = [t for t in targets if not t.is_file()]
+        if missing:
+            for path in missing:
+                print(f"ERROR: not a file: {path}", file=sys.stderr)
+            return 2
+    else:
+        if not C_ROOT.is_dir():
+            print(f"ERROR: C source root not found: {C_ROOT}", file=sys.stderr)
+            return 2
+        targets = c_sources()
+        if not targets:
+            # Fail closed: an empty scan is a broken scan, not a clean tree.
+            print(f"ERROR: no C sources found under {C_ROOT}", file=sys.stderr)
+            return 2
+
+    findings = audit(targets)
+    if findings:
+        print(f"FAIL  bare memset() on secret-named buffers ({len(findings)} finding(s)):\n")
+        for finding in findings:
+            print(finding.render())
+            print()
+        print(
+            "Replace each with ama_secure_memzero() from src/c/ama_consttime.c.\n"
+            "INVARIANT-6: secret material must be scrubbed with a write the "
+            "compiler is not free to remove."
+        )
+        return 1
+
+    print(f"OK    no bare memset() on secret-named buffers ({len(targets)} C file(s) checked)")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

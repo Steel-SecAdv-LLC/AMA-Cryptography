@@ -550,7 +550,10 @@ jobs:
 
     - name: Upload Semgrep report
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
-      if: success()
+      # always(), not success(): the report is the evidence for a FAILED gate,
+      # so publishing it only when the gate passed withheld it exactly when a
+      # reviewer needs it.  Same reasoning as the Bandit upload above.
+      if: always()
       with:
         name: semgrep-security-report
         path: semgrep-report.json
@@ -788,6 +791,20 @@ jobs:
       # Both directions are pinned by tests/test_fdopen_safety.py.
       run: |
         python tools/check_fdopen_safety.py
+
+    - name: Enforce ama_secure_memzero for C secret scrubbing (INVARIANT-6)
+      # The .semgrep.yml rule `bare-memset-zero-secret-named-buffer` states this
+      # property at ERROR severity, and the Semgrep step above names it as one
+      # of its blocking rules — but that rule is scoped to `src/c/**` while
+      # every semgrep invocation here scans `ama_cryptography/` only, so it
+      # matched nothing and could never fail.  Widening the semgrep scope is not
+      # the fix either: semgrep's C parser does not know the AMA_API export
+      # macro and errors on every file that uses it, which the severity gate
+      # (correctly) treats as a failed scan.  This tool enforces the same rule,
+      # with the same secret-name test, in a parser that handles the codebase.
+      # Both directions are pinned by tests/test_c_secret_zeroization_gate.py.
+      run: |
+        python tools/check_c_secret_zeroization.py
 
     - name: Checkout byte-identity (line endings)
       # Several controls in this repository measure octets rather than meaning:

@@ -1334,6 +1334,10 @@ class RecursionPatternMonitor:
     short-term spikes and long-term drift in signing behavior.
     """
 
+    # Bounds on the caller-fed key-lifecycle structures (see __init__).
+    _MAX_TRACKED_KEYS = 4096
+    _MAX_KEY_ALERTS = 1000
+
     def __init__(self, max_depth: int = 3, max_history: int = 10000) -> None:
         """
         Initialize pattern monitor.
@@ -1351,9 +1355,26 @@ class RecursionPatternMonitor:
         self.max_history = max_history
         # Use deque with maxlen for O(1) append and automatic pruning
         self.package_history: Deque[Dict] = deque(maxlen=max_history)
-        # Priority 4: Key lifecycle monitoring
+        # Priority 4: Key lifecycle monitoring.
+        #
+        # Both structures are keyed/fed by caller-supplied values, so both are
+        # bounded — a monitoring component must not become the memory-exhaustion
+        # vector, the same rule VolumeSpikeDetector.max_operations enforces.
+        #
+        # _key_usage_rates: one deque per distinct key_id, and key_id comes from
+        # the caller.  Capped at _MAX_TRACKED_KEYS distinct ids (far above any
+        # real key inventory); ids beyond the cap are counted and not tracked.
+        #
+        # _key_alerts: a diagnostic ring of the most recent key-lifecycle
+        # anomalies.  It was an unbounded list that nothing ever read or pruned,
+        # so a service that kept signing with an expired or near-limit key — the
+        # very condition this monitor exists to surface — appended a dict per
+        # signing call forever.  The anomalies are returned to the caller and
+        # mirrored into the bounded AmaCryptographyMonitor.alerts, so a bounded
+        # ring loses nothing.
         self._key_usage_rates: Dict[str, Deque[float]] = {}  # key_id -> recent usage timestamps
-        self._key_alerts: List[Dict[str, Any]] = []
+        self._key_alerts: Deque[Dict[str, Any]] = deque(maxlen=self._MAX_KEY_ALERTS)
+        self.dropped_key_ids: int = 0
 
     def record_package(self, package_metadata: Dict) -> None:
         """
@@ -1505,10 +1526,19 @@ class RecursionPatternMonitor:
         max_usage = key_metadata.get("max_usage")
         expires_at = key_metadata.get("expires_at")
 
-        # Track usage rate per key
+        # Track usage rate per key.  key_id is caller-supplied, so the number of
+        # distinct ids is capped: past the cap, new ids are counted in
+        # dropped_key_ids and not tracked (already-tracked keys keep working, so
+        # a flood of junk ids cannot displace real monitoring either).  The
+        # rate-anomaly check below simply finds no history for an untracked id.
         if key_id not in self._key_usage_rates:
-            self._key_usage_rates[key_id] = deque(maxlen=1000)
-        self._key_usage_rates[key_id].append(time.time())
+            if len(self._key_usage_rates) >= self._MAX_TRACKED_KEYS:
+                self.dropped_key_ids += 1
+            else:
+                self._key_usage_rates[key_id] = deque(maxlen=1000)
+        bucket = self._key_usage_rates.get(key_id)
+        if bucket is not None:
+            bucket.append(time.time())
 
         # Check max_usage limits
         if max_usage is not None and max_usage > 0:
@@ -2800,7 +2830,13 @@ class AmaCryptographyMonitor:
 
         anomaly = self.timing.record_timing(operation, duration_ms)
         if anomaly:
-            self.alerts.append({"type": "timing", "anomaly": anomaly, "timestamp": time.time()})
+            # Under _alert_lock like every other writer: this runs on the
+            # instrumented sign/verify/encrypt/decrypt paths, which crypto_api
+            # drives from a ThreadPoolExecutor during hybrid verification.
+            with self._alert_lock:
+                self.alerts.append(
+                    {"type": "timing", "anomaly": anomaly, "timestamp": time.time()}
+                )
             self._prune_alerts()
 
     def check_nonce(self, key_id: bytes, nonce: bytes) -> None:
@@ -2815,7 +2851,10 @@ class AmaCryptographyMonitor:
             return
         anomaly = self.nonce_tracker.check_and_record(key_id, nonce)
         if anomaly:
-            self.alerts.append({"type": "nonce", "anomaly": anomaly, "timestamp": time.time()})
+            with self._alert_lock:
+                self.alerts.append(
+                    {"type": "nonce", "anomaly": anomaly, "timestamp": time.time()}
+                )
             self._prune_alerts()
 
     def monitor_key_lifecycle(self, key_metadata: Dict[str, Any]) -> None:
@@ -2829,13 +2868,14 @@ class AmaCryptographyMonitor:
             return
         anomalies = self.patterns.monitor_key_usage(key_metadata)
         for anomaly in anomalies:
-            self.alerts.append(
-                {
-                    "type": "key_lifecycle",
-                    "anomaly": anomaly,
-                    "timestamp": time.time(),
-                }
-            )
+            with self._alert_lock:
+                self.alerts.append(
+                    {
+                        "type": "key_lifecycle",
+                        "anomaly": anomaly,
+                        "timestamp": time.time(),
+                    }
+                )
             self._prune_alerts()
 
     def record_operation_event(
@@ -2909,30 +2949,31 @@ class AmaCryptographyMonitor:
         integrity_violations = self.analyzer.verify_integrity()
         import_violations = self.analyzer.verify_imports()
 
-        for v in integrity_violations:
-            self.alerts.append(
-                {
-                    "type": "integrity_violation",
-                    "anomaly": {
-                        "file": v.file_path,
-                        "expected": v.expected_hash,
-                        "actual": v.actual_hash,
-                    },
-                    "timestamp": time.time(),
-                }
-            )
-        for iv in import_violations:
-            self.alerts.append(
-                {
-                    "type": "import_hijack",
-                    "anomaly": {
-                        "module": iv.module_name,
-                        "expected": iv.expected_path,
-                        "actual": iv.actual_path,
-                    },
-                    "timestamp": time.time(),
-                }
-            )
+        with self._alert_lock:
+            for v in integrity_violations:
+                self.alerts.append(
+                    {
+                        "type": "integrity_violation",
+                        "anomaly": {
+                            "file": v.file_path,
+                            "expected": v.expected_hash,
+                            "actual": v.actual_hash,
+                        },
+                        "timestamp": time.time(),
+                    }
+                )
+            for iv in import_violations:
+                self.alerts.append(
+                    {
+                        "type": "import_hijack",
+                        "anomaly": {
+                            "module": iv.module_name,
+                            "expected": iv.expected_path,
+                            "actual": iv.actual_path,
+                        },
+                        "timestamp": time.time(),
+                    }
+                )
         self._prune_alerts()
 
         return {
@@ -2965,9 +3006,10 @@ class AmaCryptographyMonitor:
         analysis = self.patterns.analyze_patterns()
         if analysis.get("status") == "analyzed":
             for anomaly in analysis.get("anomalies", []):
-                self.alerts.append(
-                    {"type": "pattern", "anomaly": anomaly, "timestamp": time.time()}
-                )
+                with self._alert_lock:
+                    self.alerts.append(
+                        {"type": "pattern", "anomaly": anomaly, "timestamp": time.time()}
+                    )
                 self._prune_alerts()
 
     def analyze_codebase(self, directory: Path) -> Dict:
@@ -3091,9 +3133,21 @@ class AmaCryptographyMonitor:
         return report
 
     def _prune_alerts(self) -> None:
-        """Limit memory usage by pruning old alerts."""
-        if len(self.alerts) > self.alert_retention:
-            self.alerts = self.alerts[-self.alert_retention :]
+        """Limit memory usage by pruning old alerts.
+
+        Trims IN PLACE under ``_alert_lock``.  The previous form rebound the
+        attribute (``self.alerts = self.alerts[-retention:]``), which silently
+        dropped alerts raised concurrently: a writer that had already resolved
+        ``self.alerts`` appended to the list object this method had just
+        discarded, so the alert vanished — and a lost alert is a suppressed
+        security signal, one the posture evaluator then never scores.  Deleting
+        a slice keeps the list identity stable, so an append that races the trim
+        still lands in the list every reader sees.
+        """
+        with self._alert_lock:
+            excess = len(self.alerts) - self.alert_retention
+            if excess > 0:
+                del self.alerts[:excess]
 
 
 # Module-level convenience functions

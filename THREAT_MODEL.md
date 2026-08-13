@@ -134,7 +134,7 @@ concrete instance of this pattern. See M3.5.
 | Threat | Mitigation | Status | Evidence |
 |--------|-----------|--------|----------|
 | T2.1 | Constant-time AES S-box (full-table scan) | **IMPLEMENTED** | `ama_aes_bitsliced.c`, `-DAMA_AES_CONSTTIME=ON` |
-| T2.1 | Hardware AES-NI (no table access) | **RECOMMENDED** | Application-level; not in this library |
+| T2.1 | Hardware AES-NI / VAES / ARMv8-CE (no table access) | **IMPLEMENTED** | `src/c/avx2/ama_aes_gcm_avx2.c`, `ama_aes_gcm_vaes_avx2.c`, `neon/ama_aes_gcm_neon.c`; selected by CPUID/HWCAP dispatch |
 | T2.2 | Ed25519 verify uses public scalar (non-secret) | **BY DESIGN** | Verification scalar = H(R,A,M), public |
 | T2.2 | Ed25519 sign uses constant-time scalar mul | **IMPLEMENTED** | `ama_ed25519.c`, `ge25519_scalarmult_base_comb_signed()` — 32-table signed 4-bit-window base-point comb, masked full-table reads |
 | T2.3 | Secure memory zeroing on all sensitive buffers | **IMPLEMENTED** | `ama_secure_memzero()`, volatile+barrier |
@@ -183,7 +183,7 @@ These risks are accepted or require external mitigation:
 
 | Risk | Severity | Rationale |
 |------|----------|-----------|
-| Table-based AES S-box (opt-in) | **LOW** | Constant-time bitsliced AES is the **default** build (`AMA_AES_CONSTTIME=ON`). Disabling it emits a compile-time warning. |
+| Table-based AES S-box (opt-in) | **LOW** | Constant-time bitsliced AES is the **default** build (`AMA_AES_CONSTTIME=ON`). Disabling it fails the CMake configure unless `-DAMA_AES_TABLE_INSECURE=ON` explicitly acknowledges the risk (INVARIANT-20); an acknowledged build then emits a compile-time warning. |
 | No third-party security audit | **MEDIUM** | Self-assessed. Recommended before high-value production deployment. |
 | PQC algorithm maturity | **LOW** | ML-DSA-65 and ML-KEM-1024 are NIST-standardized (FIPS 203/204) but have limited deployment history. |
 | Ed25519 quantum vulnerability | **LOW** | Mitigated by ML-DSA-65 quantum-resistant layer. Ed25519 provides classical defense only. |
@@ -246,7 +246,7 @@ Do NOT open public GitHub issues for security vulnerabilities.
 | Review | Frequency | Scope |
 |--------|-----------|-------|
 | Threat model update | Quarterly | New threats, algorithm status |
-| Dependency audit | Monthly | `pip-audit`, `safety` |
+| Dependency audit | Per push + scheduled | `pip-audit` (`--strict --requirement requirements-lock.txt`; `safety` was removed in v3.2.0 — no workflow ever invoked it) |
 | Static analysis | Every PR | cppcheck, clang-analyzer, CodeQL |
 | Fuzzing campaign | Every PR | libFuzzer, 30s per target |
 | Constant-time verification | Every PR | dudect harness, 50K iterations |

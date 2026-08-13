@@ -52,6 +52,12 @@ jobs:
           sudo apt-get install -y cppcheck
 
       - name: Run cppcheck on C sources
+        # `shell: bash` is load-bearing: it adds `-o pipefail`, which the
+        # default `bash -e {0}` does NOT set.  Without it the pipeline's status
+        # is `tee`'s (always 0), so `--error-exitcode=1` was inert and this gate
+        # could not fail on a finding — the same defect the clang-tidy job below
+        # documents and guards against.
+        shell: bash
         run: |
           cppcheck \
             --enable=warning,style,performance,portability \
