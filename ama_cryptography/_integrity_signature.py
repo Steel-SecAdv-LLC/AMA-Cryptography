@@ -25,12 +25,12 @@ INTEGRITY_DIGEST_HEX = "891d9eaad02a215e03b98026357f3b89d7971de72bd99f4cb9243983
 INTEGRITY_NATIVE_DIGEST_HEX = "9af3c76454fb2f00a89831b1a87807875f7f915710d76805d7b347a96d52ddfe"
 
 # Ephemeral build-time Ed25519 public key (raw 32 bytes, hex-encoded).
-INTEGRITY_PUBKEY_HEX = "2a9c0b003a88450873c38c09dd2626d5f7f23d3c31b57c587b48ec15377cfe22"
+INTEGRITY_PUBKEY_HEX = "dc4186dcf5633596c7aeeb45959b0b1dbcd494392bd0887202e9151e4439c8f6"
 
 # Ed25519 signature over SHA3-256(domain || py_digest || native_digest) — the
 # v2 composite that makes the two digests inseparable.  See
 # ama_cryptography._self_test._composite_integrity_message.
-INTEGRITY_SIGNATURE_HEX = "be558f90207f30818934d99957adaacbd49732013077f98f3dc7470e664a85e3d4983aa458612330245c7753f2f4bc05be57ce3236776d254f55f94679ec4606"
+INTEGRITY_SIGNATURE_HEX = "fc7ceebe637a29968df3abd9da04847e62435b9a2e3d48fe4201086c7d6b30c306090e7f76434505a1ff2728a7a54c5edebb35917df9efad5cddb1b9be61d807"
 
 # Build metadata — informational only, not part of the integrity contract.
 BUILD_PIPELINE_VERSION = "2"

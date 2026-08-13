@@ -1074,7 +1074,9 @@ class TestContinuousRNGTest:
     through an interleaving), and it never retains the caller's key material.
     """
 
-    def test_compare_and_store_is_atomic_under_concurrency(self) -> None:
+    def test_compare_and_store_is_atomic_under_concurrency(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """A stuck RNG must be caught even when many threads draw at once.
 
         Without a lock this is a check-then-act race: threads A and B both read
@@ -1095,9 +1097,18 @@ class TestContinuousRNGTest:
             ms._MODULE_STATE = "OPERATIONAL"
             ms._ERROR_REASON = None
 
-            # Force the "stuck DRBG" condition: every draw returns the same buffer.
-            original_token_bytes = ms.secrets.token_bytes
-            ms.secrets.token_bytes = lambda n: stuck[:n] if n <= 32 else stuck * (n // 32 + 1)
+            # Force the "stuck DRBG" condition: every draw returns the same
+            # buffer.  Patched through monkeypatch's dotted-target form so it is
+            # undone automatically — assigning to ``ms.secrets.token_bytes``
+            # directly would mutate the shared stdlib module for every other
+            # test in the session, including any running concurrently.
+            def _stuck_token_bytes(n: int) -> bytes:
+                return stuck[:n] if n <= 32 else stuck * (n // 32 + 1)
+
+            monkeypatch.setattr(
+                "ama_cryptography._module_state.secrets.token_bytes",
+                _stuck_token_bytes,
+            )
 
             refusals: list[BaseException] = []
             successes: list[bytes] = []
@@ -1126,7 +1137,7 @@ class TestContinuousRNGTest:
             assert refusals, "a stuck RNG must trip the continuous test"
             assert ms.module_status() == "ERROR"
         finally:
-            ms.secrets.token_bytes = original_token_bytes
+            # token_bytes is restored by monkeypatch's own teardown.
             ms._rng_state["previous"] = saved_previous
             ms._MODULE_STATE = saved_state
             ms._ERROR_REASON = saved_reason

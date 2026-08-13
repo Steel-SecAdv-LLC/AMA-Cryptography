@@ -12,15 +12,13 @@ on purpose-built input, plus the real tree.
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO_ROOT / "tools"))
+from tools import check_c_secret_zeroization as gate
 
-import check_c_secret_zeroization as gate  # noqa: E402 -- after the sys.path insert above; tools/ is not a package (CSZ-001)
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 def _write(tmp_path: Path, body: str, name: str = "probe.c") -> Path:

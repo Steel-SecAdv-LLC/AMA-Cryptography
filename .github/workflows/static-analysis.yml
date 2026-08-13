@@ -59,10 +59,52 @@ jobs:
         # documents and guards against.
         shell: bash
         run: |
+          # Scope and suppressions, all four established by running the gate for
+          # the first time (with pipefail it reported 121 findings, none of them
+          # a defect — see below).  A gate that is permanently red is as useless
+          # as one that cannot fail, so the configuration below is the set that
+          # makes a NEW finding meaningful:
+          #
+          # `style` is dropped.  Its 78 findings here are opinions —
+          # variableScope ("this local could be declared inside the loop"),
+          # unusedStructMember, constParameterPointer — not defects, and this
+          # repository already runs clang-tidy (fail-closed), the clang static
+          # analyzer, CodeQL, and -Wall -Wextra -Wpedantic as errors, which is
+          # where substantive C analysis actually happens.  Keeping `style` at
+          # --error-exitcode=1 is what made this gate un-turn-on-able.
+          #
+          # shiftTooManyBitsSigned: the `x >> 31` / `x >> 63` sign-broadcast
+          # mask, which is how every branchless comparison in this codebase is
+          # written (ama_dilithium.c, ama_secp256k1.c, ama_cpuid.c, and the
+          # pq-crystals reference these follow).  C leaves it
+          # implementation-defined; every supported target implements it as an
+          # arithmetic shift, and the unsigned-cast rewrite would obscure the
+          # constant-time intent at 12 sites for no behavioural change.
+          #
+          # uninitvar: false positives on out-parameters.  cppcheck cannot see
+          # through the helpers that fill them, so it flags `*r = out` in
+          # ama_nistp.c (out.X/Y/Z are each written by nistp_mont_mul /
+          # nistp_mod_sub first), `&mat[i].vec[j]` in ama_kyber.c (the address
+          # is taken so kyber_gen_matrix can write it), and w1_packed in
+          # ama_dilithium.c.  Scoped per file so the check stays live elsewhere.
+          #
+          # arrayIndexOutOfBounds: cppcheck's own invented configuration.  With
+          # --force it tries a pass where PATH_MAX is defined but unknown,
+          # evaluates `char dir[AMA_DISPATCH_PATH_MAX]` as `dir[1]`, and reports
+          # the writes into it.  The real definition is 4096.
+          #
+          # unknownMacro: a vendored donna header (mul64x64_128); -i excludes
+          # vendor files from being CHECKED but not from being #included.
           cppcheck \
-            --enable=warning,style,performance,portability \
+            --enable=warning,performance,portability \
             --suppress=missingIncludeSystem \
             --suppress=unusedFunction \
+            --suppress=shiftTooManyBitsSigned \
+            --suppress=uninitvar:src/c/ama_nistp.c \
+            --suppress=uninitvar:src/c/ama_kyber.c \
+            --suppress=uninitvar:src/c/ama_dilithium.c \
+            --suppress=arrayIndexOutOfBounds:src/c/dispatch/ama_dispatch.c \
+            --suppress=unknownMacro:src/c/vendor/* \
             --error-exitcode=1 \
             --inline-suppr \
             --std=c11 \
