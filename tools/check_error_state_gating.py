@@ -36,9 +36,31 @@ What this checks
 Every module-level ``def`` in ``pqc_backends.py`` that
 
   * has a public name (no leading underscore), and
-  * contains an attribute access on ``_native_lib``
+  * calls a native symbol
 
-must call ``check_crypto_permitted()`` somewhere in its body.
+must call ``check_crypto_permitted()`` **before** the first such call.
+
+Both halves of that sentence were once weaker than they read.
+
+*Ordering.*  The Python audit asked only whether a guard appeared anywhere in
+the body, while ``audit_pyx`` — the same gate over the ``.pyx`` bindings — had
+always rejected a guard placed after a native call.  Two halves of one gate
+enforcing different rules is the kind of gap that survives review, and the
+weaker half was guarding the larger surface.  A guard reached after the C
+kernel has run does not inhibit anything: the output exists.  FIPS 140-3
+§4.9.2 is about not producing it.
+
+*Reachability.*  A native symbol resolved and called in one expression
+(``getattr(_native_lib, name)(...)``) was matched; the same call split across
+two statements was not, because the binding is not a call and the call is of a
+plain local name.  A function written that way reached the C kernel while the
+gate recorded it as making no native call — and a function that makes no
+native call is never asked for a guard.  Local names bound to a native symbol
+are now tracked and calls through them counted.
+
+Neither shape appears in the current tree.  They are closed because nothing
+was stopping them, and because a gate is only worth what its weakest branch
+enforces.
 
 Deliberate exemptions live in ``EXEMPT`` below, each with a stated reason.
 The exemption list is itself checked: an entry naming a function that no
@@ -128,42 +150,95 @@ def _is_native_lib_ref(node: ast.AST) -> bool:
     return False
 
 
-def _calls_native(node: ast.AST) -> bool:
-    """True when the body makes a native call by any route.
+def _native_handle_aliases(node: ast.AST) -> set[str]:
+    """Local names bound to a native symbol without calling it.
+
+    ``_native_call_lines`` matches ``getattr(_native_lib, name)(...)`` — the
+    symbol resolved and called in one expression.  Split across two statements
+    the same call disappeared from the scan::
+
+        fn = getattr(_native_lib, name)   # binding, not a call
+        fn(a, b)                          # call of a plain local name
+
+    Neither line matches on its own, so a function using this shape reached
+    the C kernel while the gate reported it as making no native call at all —
+    and a function that makes no native call is never required to carry a
+    guard.  No current code uses the shape; the point is that nothing stopped
+    it, and the two-line form is the natural way to write a loop that resolves
+    a symbol once and calls it repeatedly.
+
+    Both routes to a bare symbol are collected: ``getattr(_native_lib, ...)``
+    and direct attribute access ``_native_lib.ama_x`` (as a value, not a call).
+    """
+    aliases: set[str] = set()
+    for sub in ast.walk(node):
+        if not isinstance(sub, ast.Assign):
+            continue
+        value = sub.value
+        bound = (
+            isinstance(value, ast.Call)
+            and isinstance(value.func, ast.Name)
+            and value.func.id == "getattr"
+            and bool(value.args)
+            and _is_native_lib_ref(value.args[0])
+        ) or (isinstance(value, ast.Attribute) and value.attr.startswith("ama_"))
+        if not bound:
+            continue
+        for target in sub.targets:
+            if isinstance(target, ast.Name):
+                aliases.add(target.id)
+    return aliases
+
+
+def _native_call_lines(node: ast.AST) -> list[int]:
+    """Line numbers of every native call in the body, by any route.
 
     Matches an ``ast.Call`` whose function is:
 
     * an attribute ``*.ama_*`` (so ``_native_lib.ama_x``, ``self._native_lib.ama_x``
       and ``lib.ama_x`` are all caught — the receiver is irrelevant);
-    * a ``_cy_*`` Cython binding; or
+    * a ``_cy_*`` Cython binding;
     * a dynamically resolved symbol ``getattr(_native_lib, name)(...)`` — the
       indirection ``_native_shake`` / ``_native_hkdf_sha2`` use to reach the C
       kernel.  Missing this form is what let the SHAKE and HKDF-SHA-2 surfaces
-      route past the guard undetected.
+      route past the guard undetected; or
+    * a local name bound to a native symbol earlier in the same function (see
+      :func:`_native_handle_aliases`).
 
     Attribute *access* without a call — the ``lib.ama_x.argtypes =`` idiom in the
     ctypes setup helpers, or an un-called ``getattr(_native_lib, x, None)`` probe
     — is deliberately not matched: it configures or inspects a signature, it does
-    not perform cryptography.
+    not perform cryptography.  An alias binding is likewise not a call; only a
+    later call *through* the alias counts.
     """
+    aliases = _native_handle_aliases(node)
+    lines: list[int] = []
     for sub in ast.walk(node):
-        if isinstance(sub, ast.Call):
-            fn = sub.func
-            if isinstance(fn, ast.Attribute) and fn.attr.startswith("ama_"):
-                return True
-            if isinstance(fn, ast.Name) and fn.id.startswith(CYTHON_PREFIX):
-                return True
-            # getattr(_native_lib, name)(...) — the outer Call's func is itself a
-            # getattr Call on the native handle.  Only the *called* form counts.
-            if (
-                isinstance(fn, ast.Call)
-                and isinstance(fn.func, ast.Name)
-                and fn.func.id == "getattr"
-                and fn.args
-                and _is_native_lib_ref(fn.args[0])
-            ):
-                return True
-    return False
+        if not isinstance(sub, ast.Call):
+            continue
+        fn = sub.func
+        if isinstance(fn, ast.Attribute) and fn.attr.startswith("ama_"):
+            lines.append(sub.lineno)
+        elif isinstance(fn, ast.Name) and fn.id.startswith(CYTHON_PREFIX):
+            lines.append(sub.lineno)
+        elif isinstance(fn, ast.Name) and fn.id in aliases:
+            lines.append(sub.lineno)
+        # getattr(_native_lib, name)(...) — the outer Call's func is itself a
+        # getattr Call on the native handle.  Only the *called* form counts.
+        elif (
+            isinstance(fn, ast.Call)
+            and isinstance(fn.func, ast.Name)
+            and fn.func.id == "getattr"
+            and fn.args
+            and _is_native_lib_ref(fn.args[0])
+        ):
+            lines.append(sub.lineno)
+    return lines
+
+
+def _calls_native(node: ast.AST) -> bool:
+    """True when the body makes a native call by any route."""
+    return bool(_native_call_lines(node))
 
 
 def _calls_guard(node: ast.AST) -> bool:
@@ -180,15 +255,21 @@ def _calls_guard(node: ast.AST) -> bool:
     ``tests/test_post_failclosed.py`` proves the behaviour by driving each
     surface in the ERROR state.
     """
+    return bool(_guard_call_lines(node))
+
+
+def _guard_call_lines(node: ast.AST) -> list[int]:
+    """Line numbers of every error-state guard call in the body."""
+    lines: list[int] = []
     for sub in ast.walk(node):
         if not isinstance(sub, ast.Call):
             continue
         fn = sub.func
         if isinstance(fn, ast.Name) and fn.id in GUARDS:
-            return True
-        if isinstance(fn, ast.Attribute) and fn.attr in GUARDS:
-            return True
-    return False
+            lines.append(sub.lineno)
+        elif isinstance(fn, ast.Attribute) and fn.attr in GUARDS:
+            lines.append(sub.lineno)
+    return lines
 
 
 def _iter_public_functions(tree: ast.Module):
@@ -227,14 +308,24 @@ def audit(
     checked = 0
 
     for display, node in _iter_public_functions(tree):
-        if not _calls_native(node):
+        native_lines = _native_call_lines(node)
+        if not native_lines:
             continue
         seen.add(display)
         if display in exempt:
             continue
         checked += 1
-        if not _calls_guard(node):
+        guard_lines = _guard_call_lines(node)
+        if not guard_lines:
             ungated.append((display, node.lineno))
+        elif min(native_lines) < min(guard_lines):
+            # Guard present but reached only after a native call has already
+            # run — the module is in the ERROR state, output has been produced,
+            # and the guard raises too late to inhibit it.  ``audit_pyx`` has
+            # rejected this ordering since it was written; the Python half
+            # asked only whether a guard appeared anywhere in the body, so the
+            # two halves of the same gate enforced different rules.
+            ungated.append((display, min(native_lines)))
 
     stale = sorted(name for name in exempt if name not in seen)
     return ungated, stale, checked

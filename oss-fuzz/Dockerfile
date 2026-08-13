@@ -3,7 +3,13 @@
 #
 # OSS-Fuzz Dockerfile for AMA-Cryptography
 # https://google.github.io/oss-fuzz/getting-started/new-project-guide/
-
+#
+# This base is deliberately NOT digest-pinned, unlike the images under
+# docker/. OSS-Fuzz builds this file inside its own infrastructure against
+# the base-builder image it currently ships, and rebuilds every project
+# against new bases as its toolchain moves; pinning a digest here would
+# either be ignored or break the project's builds on the next base refresh.
+# The pin belongs to OSS-Fuzz, not to this repository.
 FROM gcr.io/oss-fuzz-base/base-builder
 
 # Install build dependencies

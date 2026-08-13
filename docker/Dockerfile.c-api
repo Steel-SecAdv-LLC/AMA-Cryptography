@@ -9,8 +9,21 @@
 #   docker run -v $(pwd)/output:/output ama-cryptography-c-api:latest
 #
 # The built libraries will be copied to the mounted /output directory.
+#
+# Base image: pinned by digest, not by tag alone. A tag is a mutable pointer,
+# so a tag-only FROM makes the build unreproducible and gives an upstream
+# account takeover a path straight into this image -- the same supply-chain
+# reasoning behind pinning every GitHub Action to a commit SHA
+# (tools/check_action_pins.py), applied to the other half of the build inputs.
+# The tag is kept alongside the digest so the line stays readable; Docker
+# verifies the digest and ignores the tag. ubuntu:22.04 is an LTS release
+# supported to 2027-04; refreshing the digest is a deliberate edit.
+#
+# base-eol: 2027-04-30
+# ^ read by tools/check_docker_pins.py, which fails 60 days out so the
+#   base can be moved while it is still receiving fixes.
 
-FROM ubuntu:22.04 AS builder
+FROM ubuntu:22.04@sha256:3b06811b2afd352be909dd088a004166d665dc76d38b13eada33522a9d915c6f AS builder
 
 # Prevent interactive prompts during package installation
 ENV DEBIAN_FRONTEND=noninteractive
@@ -41,7 +54,7 @@ RUN mkdir -p build && cd build && \
     make -j$(nproc)
 
 # Create output stage
-FROM ubuntu:22.04 AS output
+FROM ubuntu:22.04@sha256:3b06811b2afd352be909dd088a004166d665dc76d38b13eada33522a9d915c6f AS output
 
 # Install runtime dependencies
 RUN apt-get update && apt-get install -y \

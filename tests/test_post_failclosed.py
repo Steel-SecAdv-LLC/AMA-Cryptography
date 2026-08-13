@@ -434,6 +434,91 @@ class TestErrorStateInhibitsOutput:
         assert checked == 3, "only public functions touching _native_lib count"
         assert [name for name, _ in ungated] == ["ungated_op"]
 
+    def test_gate_tool_rejects_a_guard_placed_after_the_native_call(self, tmp_path: Path) -> None:
+        """A guard that runs after the C call cannot inhibit its output.
+
+        ``audit_pyx`` has rejected this ordering since it was written; the
+        Python half asked only whether a guard appeared anywhere in the body,
+        so the two halves of one gate enforced different rules. FIPS 140-3
+        §4.9.2 output inhibition is about *not producing* the output, which a
+        guard reached afterwards does not achieve.
+        """
+        sys.path.insert(0, str(REPO_ROOT / "tools"))
+        try:
+            import check_error_state_gating as gate
+        finally:
+            sys.path.pop(0)
+
+        module = tmp_path / "fake_backends.py"
+        module.write_text(
+            textwrap.dedent('''
+                def guard_after_call(x):
+                    """The C kernel has already run and produced output."""
+                    out = _native_lib.ama_thing(x)
+                    check_crypto_permitted()
+                    return out
+
+                def guard_before_call(x):
+                    """Correct ordering — must not be flagged."""
+                    check_crypto_permitted()
+                    return _native_lib.ama_thing(x)
+                '''),
+            encoding="utf-8",
+        )
+
+        ungated, _stale, checked = gate.audit(module, exempt={})
+        assert checked == 2
+        assert [name for name, _ in ungated] == ["guard_after_call"]
+
+    def test_gate_tool_sees_a_native_symbol_reached_through_an_alias(self, tmp_path: Path) -> None:
+        """Resolving the symbol and calling it in two statements is still a call.
+
+        ``getattr(_native_lib, name)(...)`` was matched only as a single
+        expression. Split in two, neither line matched: the binding is not a
+        call and the call is of a plain local name. A function using that shape
+        reached the C kernel while the gate recorded it as making no native
+        call at all — and a function that makes no native call is never
+        required to carry a guard.
+        """
+        sys.path.insert(0, str(REPO_ROOT / "tools"))
+        try:
+            import check_error_state_gating as gate
+        finally:
+            sys.path.pop(0)
+
+        module = tmp_path / "fake_backends.py"
+        module.write_text(
+            textwrap.dedent('''
+                def aliased_getattr(x):
+                    """Two-statement getattr indirection, no guard."""
+                    fn = getattr(_native_lib, "ama_thing")
+                    return fn(x)
+
+                def aliased_attribute(x):
+                    """Bound by attribute access, then called. No guard."""
+                    fn = _native_lib.ama_thing
+                    return fn(x)
+
+                def aliased_but_gated(x):
+                    """Same indirection, guarded first — must not be flagged."""
+                    check_crypto_permitted()
+                    fn = getattr(_native_lib, "ama_thing")
+                    return fn(x)
+
+                def probe_only(x):
+                    """An un-called probe configures a signature; not a call."""
+                    fn = getattr(_native_lib, "ama_thing", None)
+                    return fn is not None
+                '''),
+            encoding="utf-8",
+        )
+
+        ungated, _stale, checked = gate.audit(module, exempt={})
+        assert checked == 3, "the un-called probe must not count as a native call"
+        assert [name for name, _ in ungated] == ["aliased_attribute", "aliased_getattr"] or [
+            name for name, _ in ungated
+        ] == ["aliased_getattr", "aliased_attribute"], ungated
+
     def test_gate_tool_covers_cython_binding_pyx(self, tmp_path: Path) -> None:
         """The gate's .pyx auditor must flag an ungated cy_* binding function."""
         sys.path.insert(0, str(REPO_ROOT / "tools"))

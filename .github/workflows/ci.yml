@@ -569,6 +569,20 @@ jobs:
       run: |
         python tools/check_action_pins.py --strict
 
+    - name: "Verify container base images are pinned and still supported"
+      # The other half of the same supply-chain property the step above
+      # enforces for Actions.  The published images built FROM `alpine:3.18`
+      # and `ubuntu:22.04` — mutable tags, so the same line resolved to
+      # different bytes over time — and alpine:3.18 had been past
+      # end-of-support since 2025-05-09, fifteen months of unpatched base CVEs
+      # under a cryptography container.  Neither was visible from the
+      # Dockerfile, because a tag for an end-of-life release keeps resolving
+      # perfectly well.  The gate also fails 60 days BEFORE a declared
+      # end-of-support date, so the base moves while it is still getting
+      # fixes.  Both directions pinned by tests/test_docker_pins_gate.py.
+      run: |
+        python tools/check_docker_pins.py
+
     - name: "INVARIANT-25: Verify workflow runner labels and command strings"
       # release.yml runs only on a tag push, so anything wrong inside it stays
       # invisible until release day.  Three defects shipped that way, each on
