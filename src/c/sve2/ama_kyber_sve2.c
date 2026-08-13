@@ -80,7 +80,22 @@
  * We use scalar Barrett to guarantee correctness.
  * ============================================================================ */
 static inline int16_t barrett_reduce_scalar(int16_t a) {
-    int16_t t = (int16_t)(((int32_t)KYBER_BARRETT_V * a + (1 << 25)) >> 26);
+    /* Truncating form — NO `+ (1 << 25)` rounding addend.
+     *
+     * This must be the same function as `barrett_reduce` in src/c/ama_kyber.c
+     * (which computes `((int32_t)v * a) >> 26`) and as `barrett_reduce_neon`
+     * (vqdmulhq >>15 followed by >>11, also unrounded), because the dispatch
+     * table substitutes these kernels for one another and
+     * tests/c/test_kyber_ntt_equiv.c demands byte-identity between them.
+     *
+     * This file previously added the rounded variant's `+ (1 << 25)`.  Both
+     * forms are valid reductions and agree mod q, but they select different
+     * representatives near the rounding boundary, so the SVE2 kernel returned
+     * coefficients differing from every other backend by exactly one q.  The
+     * comment above claimed it "matches generic C reference exactly"; it did
+     * not, and nothing noticed because AMA_ENABLE_SVE2 was off in every CI
+     * configuration, so this code had never run under the test that pins it. */
+    int16_t t = (int16_t)(((int32_t)KYBER_BARRETT_V * a) >> 26);
     t *= KYBER_Q;
     return a - t;
 }
@@ -212,6 +227,26 @@ void ama_kyber_ntt_sve2(int16_t poly[KYBER_N],
             }
         }
     }
+
+    /* Canonicalising Barrett sweep.
+     *
+     * The butterflies alone leave coefficients in [-q, q); the AVX2 and NEON
+     * kernels both finish with this sweep, which normalises to [-q/2, q/2],
+     * and the dispatch layer swaps these three implementations for one
+     * another.  Without it the SVE2 path returned a different (though
+     * congruent) representative from every other backend, which
+     * tests/c/test_kyber_ntt_equiv.c reports as a lane mismatch — it was never
+     * caught because AMA_ENABLE_SVE2 was off in every CI configuration, so
+     * this kernel had never been executed by the test that pins it. */
+    {
+        size_t i = 0;
+        while (i < KYBER_N) {
+            svbool_t pg = svwhilelt_b16((int64_t)i, (int64_t)KYBER_N);
+            svint16_t v = svld1_s16(pg, poly + i);
+            svst1_s16(pg, poly + i, barrett_reduce_sve2(pg, v));
+            i += svcnth();
+        }
+    }
 }
 
 /* ============================================================================
@@ -291,7 +326,12 @@ void ama_kyber_invntt_sve2(int16_t poly[KYBER_N],
             svst1_s16(pg, buf, va);
 
             for (uint64_t e = 0; e < active; e++) {
-                buf[e] = montgomery_reduce_scalar((int32_t)f * buf[e]);
+                /* montgomery_mul by f, then the canonicalising Barrett the
+                 * AVX2 and NEON inverse kernels also emit here — see the note
+                 * on the forward NTT's sweep for why the post-condition has to
+                 * match across backends. */
+                buf[e] = barrett_reduce_scalar(
+                    montgomery_reduce_scalar((int32_t)f * buf[e]));
             }
 
             svst1_s16(pg, poly + i, svld1_s16(pg, buf));

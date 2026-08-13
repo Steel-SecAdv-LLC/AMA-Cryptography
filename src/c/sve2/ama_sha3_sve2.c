@@ -66,19 +66,30 @@ void ama_keccak_f1600_sve2(uint64_t state[25]) {
     uint64_t C[5], D[5], B[25];
 
     for (int round = 0; round < 24; round++) {
-        /* Theta: compute column parity */
-        svbool_t pg = svwhilelt_b64(0, 5);
-        svuint64_t col0 = svld1_u64(pg, &state[0]);
-        svuint64_t col5 = svld1_u64(pg, &state[5]);
-        svuint64_t col10 = svld1_u64(pg, &state[10]);
-        svuint64_t col15 = svld1_u64(pg, &state[15]);
-        svuint64_t col20 = svld1_u64(pg, &state[20]);
-
-        svuint64_t parity = sveor_u64_x(pg,
-            sveor_u64_x(pg, col0, col5),
-            sveor_u64_x(pg, col10, sveor_u64_x(pg, col15, col20)));
-
-        svst1_u64(pg, C, parity);
+        /* Theta: column parity.
+         *
+         * Computed scalar, and that is a correctness requirement rather than a
+         * missed optimisation.  The previous form built one predicate
+         * `svwhilelt_b64(0, 5)` and issued five `svld1_u64` / `sveor` / one
+         * `svst1_u64` against it — but a predicate can activate at most
+         * `svcntd()` lanes, which is the HARDWARE vector length, not the 5 the
+         * bound asks for.  At VL=128 (2 lanes) only C[0..1] were written and at
+         * VL=256 (4 lanes) C[4] was not, so the D[] computation below consumed
+         * uninitialised stack and mixed it into the state — wrong digests, and
+         * undefined behaviour besides.  Every SVE2 part shipping today is
+         * VL=128 (Neoverse N2/V2/V3, Cortex-X2..X4, A710/A715/A720, Graviton 4)
+         * or VL=256, i.e. exactly the hardware where this dispatches.  It went
+         * unseen because the only environment this path was ever exercised in
+         * is QEMU's default `max` CPU, whose 2048-bit vectors activate all five
+         * lanes and hide the bug.
+         *
+         * Strip-mining a five-element reduction would cost more code than the
+         * 20 XORs it replaces, and the permutation's real vector work is
+         * elsewhere; the correct-at-every-VL scalar form is used instead.  The
+         * absorb loop below is separately strip-mined and is not affected. */
+        for (int i = 0; i < 5; i++) {
+            C[i] = state[i] ^ state[i + 5] ^ state[i + 10] ^ state[i + 15] ^ state[i + 20];
+        }
 
         /* D[i] = C[(i+4)%5] ^ ROT(C[(i+1)%5], 1) */
         for (int i = 0; i < 5; i++) {

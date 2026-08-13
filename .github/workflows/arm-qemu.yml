@@ -72,6 +72,60 @@ jobs:
       - name: Test (ctest under QEMU user-mode)
         run: ctest --test-dir build-arm --output-on-failure -j"$(nproc)"
 
+  arm-qemu-sve2:
+    name: AArch64 SVE2 kernels (VL=128 and VL=256)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # AMA_ENABLE_SVE2 defaults OFF and no workflow turned it on, so the SVE2
+    # kernels were never compiled in CI, let alone run — the equivalence and
+    # KAT tests that are documented as pinning them could not reach them, and
+    # the dudect matrix's sve2 lanes skipped unconditionally.  That is how a
+    # theta step that assumed >=5 64-bit lanes per vector shipped: it is correct
+    # only at VL>=320, and QEMU's default `max` CPU (2048-bit) is the one
+    # environment where it was ever exercised.
+    #
+    # Both vector lengths that real SVE2 silicon implements are run: VL=128
+    # (Neoverse N2/V2/V3, Cortex-X2..X4, A710/A715/A720, Graviton 4) and
+    # VL=256.  sve-max-vq is in units of 128 bits, so vq=1 -> VL=128.
+    strategy:
+      fail-fast: false
+      matrix:
+        sve_vq: [1, 2]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Install AArch64 cross toolchain + QEMU
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build \
+            gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev-arm64-cross \
+            qemu-user-static
+
+      - name: Configure (aarch64 toolchain, SVE2 kernels enabled)
+        run: |
+          cmake -S . -B build-arm-sve2 -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/aarch64-linux-gnu.cmake \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DAMA_BUILD_TESTS=ON \
+            -DAMA_USE_NATIVE_PQC=ON \
+            -DAMA_AES_CONSTTIME=ON \
+            -DAMA_ENABLE_SVE2=ON \
+            -DAMA_BUILD_EXAMPLES=OFF \
+            -DAMA_BUILD_FUZZ=OFF \
+            -DAMA_ENABLE_LTO=OFF
+
+      - name: Build (aarch64, SVE2)
+        run: cmake --build build-arm-sve2 -j"$(nproc)"
+
+      - name: Test at VL=${{ matrix.sve_vq * 128 }} bits
+        # QEMU_CPU reaches qemu-aarch64-static through binfmt, so every test
+        # binary ctest launches inherits the vector length.
+        env:
+          QEMU_CPU: max,sve-max-vq=${{ matrix.sve_vq }}
+        run: ctest --test-dir build-arm-sve2 --output-on-failure -j"$(nproc)"
+
   arm-qemu-gate:
     name: ARM QEMU Gate
     # Single aggregating status check for this workflow (see the matching gate
@@ -80,17 +134,18 @@ jobs:
     if: always()
     needs:
       - arm-qemu-ctest
+      - arm-qemu-sve2
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
-      - name: Fail unless the AArch64 job succeeded
+      - name: Fail unless every AArch64 job succeeded
         # STRICT. skipped/cancelled also fail: on this workflow they can only
         # mean the dependency failed or a future if: drifted so it silently
         # stopped running.
         if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'skipped') || contains(needs.*.result, 'cancelled') }}
         run: |
-          echo "::error::ARM QEMU Gate failed — the AArch64 cross-test job did not succeed."
+          echo "::error::ARM QEMU Gate failed — an AArch64 cross-test job did not succeed (baseline ctest, or the SVE2 kernels at VL=128/256)."
           echo "Dependency results: ${{ join(needs.*.result, ', ') }}"
           exit 1
-      - name: AArch64 cross-test succeeded
-        run: echo "ARM QEMU Gate passed — AArch64 ctest is green under QEMU."
+      - name: AArch64 cross-tests succeeded
+        run: echo "ARM QEMU Gate passed — AArch64 ctest is green under QEMU, including the SVE2 kernels at VL=128 and VL=256."
