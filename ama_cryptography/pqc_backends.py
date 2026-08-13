@@ -28,6 +28,7 @@ import contextlib
 import ctypes
 import errno as _errno
 import functools
+import hashlib
 import logging
 import os
 import platform
@@ -56,6 +57,7 @@ from ama_cryptography._module_state import (
     pairwise_test_agreement,
     pairwise_test_kem,
     pairwise_test_signature,
+    secure_token_bytes,
 )
 from ama_cryptography.exceptions import (
     NativeBackendUnavailableError,
@@ -4020,8 +4022,6 @@ def native_ed25519_keypair() -> tuple:
         RuntimeError: If native library is not available or keypair generation fails
     """
     check_crypto_permitted()
-    import secrets as _secrets
-
     if _native_lib is None or not _ED25519_NATIVE_AVAILABLE:
         raise NativeBackendUnavailableError(
             "Ed25519 native backend not available. " + _INSTALL_HINT
@@ -4030,8 +4030,11 @@ def native_ed25519_keypair() -> tuple:
     pk_buf = ctypes.create_string_buffer(ED25519_PUBLIC_KEY_BYTES)
     sk_buf = ctypes.create_string_buffer(ED25519_SECRET_KEY_BYTES)
 
-    # Seed the first 32 bytes — the C function expects caller-provided entropy
-    seed = _secrets.token_bytes(32)
+    # Seed the first 32 bytes — the C function expects caller-provided
+    # entropy.  Drawn through the FIPS 140-3 §4.9.2 health-tested CSPRNG
+    # (error-state-gated, continuous repeated-output check), not a raw
+    # secrets.token_bytes: this seed IS the long-term private key.
+    seed = secure_token_bytes(32)
     ctypes.memmove(sk_buf, seed, 32)
 
     rc = _native_lib.ama_ed25519_keypair(pk_buf, sk_buf)
@@ -6230,12 +6233,21 @@ def native_nistp_keypair(curve: Union[int, str]) -> tuple:
             raise RuntimeError(f"NIST curve keypair generation failed (rc={rc})")
         public_key = bytes(pub.raw[: 2 * nb])
         private_key = bytes(priv.raw[:nb])
-        # FIPS 140-3 pairwise consistency test (SP 800-56A rev. 3
-        # §5.6.2.1.4): re-derive the public point from the private scalar and
-        # require it to match — one scalar multiplication, and it covers both
-        # the ECDSA and the ECDH use of the keypair (INVARIANT-41).
-        pairwise_test_agreement(
-            functools.partial(native_nistp_pubkey_from_privkey, cid),
+        # FIPS 140-3 pairwise consistency test, FIPS 186-5 §3.3 form: sign
+        # with the private scalar and verify with the public point — two
+        # genuinely independent computations, unlike public-key regeneration,
+        # which re-runs the same scalar-mult kernel on the same input and can
+        # only catch transient faults (INVARIANT-41).  Correspondence of the
+        # halves is what the roundtrip proves, so it covers the keypair's
+        # ECDH use as well.  The digest is produced with the curve's FIPS
+        # 186-5 hash pairing; stdlib hashlib here mirrors what crypto_api
+        # ships for message hashing and carries no key material.
+        digest_name = nistp_default_hash(cid)
+        pairwise_test_signature(
+            lambda m, sk_: native_nistp_ecdsa_sign(cid, hashlib.new(digest_name, m).digest(), sk_),
+            lambda m, sig, pk_: native_nistp_ecdsa_verify(
+                cid, sig, hashlib.new(digest_name, m).digest(), pk_
+            ),
             private_key,
             public_key,
             f"P-{cid}",
@@ -6835,10 +6847,19 @@ def native_x25519_keypair() -> tuple:
 
     public_key, secret_key = bytes(pk_buf), bytes(sk_buf)
     # FIPS 140-3 pairwise consistency test for a key-agreement keypair
-    # (SP 800-56A rev. 3 §5.6.2.1.4): recompute the public key as
-    # X25519(sk, base point) and require it to match (INVARIANT-41).
+    # (SP 800-56A rev. 3 §5.6.2.1.4, strong form): a DH roundtrip against a
+    # fresh ephemeral peer, X25519(sk, eph_pk) == X25519(eph_sk, pk), which
+    # exercises the scalar-mult kernel on two DIFFERENT scalar/point pairs
+    # rather than re-running it on the same input (INVARIANT-41).  The
+    # ephemeral is built here, not via this function (which would recurse
+    # into this very test): a health-tested scalar draw, public half derived
+    # by one base-point multiplication.  The kernel clamps scalars per
+    # RFC 7748 §5, so a raw 32-byte draw is a valid private key.
+    eph_secret = secure_token_bytes(32)
+    eph_public = native_x25519_key_exchange(eph_secret, _X25519_BASEPOINT_U)
     pairwise_test_agreement(
-        lambda sk_: native_x25519_key_exchange(sk_, _X25519_BASEPOINT_U),
+        native_x25519_key_exchange,
+        (eph_public, eph_secret),
         secret_key,
         public_key,
         "X25519",

@@ -31,6 +31,7 @@ from types import TracebackType
 from typing import Any, Dict, List, Optional, Tuple, Type, cast
 
 from ama_cryptography._finalizer_health import record_finalizer_error
+from ama_cryptography._module_state import secure_token_bytes
 from ama_cryptography.exceptions import (
     AmaHSMUnavailableError as AmaHSMUnavailableError,
 )
@@ -300,8 +301,11 @@ class HDKeyDerivation:
             seed_phrase: Alternative: BIP39-style seed phrase
         """
         if seed is None and seed_phrase is None:
-            # Generate random seed
-            self.master_seed = secrets.token_bytes(64)
+            # Generate a random seed through the FIPS 140-3 §4.9.2
+            # health-tested CSPRNG draw — this seed determines every key in
+            # the hierarchy, so a raw secrets.token_bytes (no error-state
+            # gate, no continuous repeated-output check) is not enough.
+            self.master_seed = secure_token_bytes(64)
         elif seed is not None:
             self.master_seed = seed
         else:

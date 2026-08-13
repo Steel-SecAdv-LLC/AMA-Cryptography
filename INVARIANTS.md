@@ -2101,26 +2101,31 @@ a miscomputed BIP32 modular sum) was handed out and failed later, far from
 the generation event that caused it.
 
 **Every keygen path now runs the matching test before its keypair leaves the
-function.** Sign-and-verify for the signature families (Ed25519, ML-DSA,
-SLH-DSA/SPHINCS+, the FROST dealer via a full t-of-n round aggregated and
-verified against the group key, ECDSA for BIP32 secp256k1 keys);
-encapsulate-and-decapsulate for the KEM families (ML-KEM/Kyber); public-key
-regeneration (SP 800-56A rev. 3 §5.6.2.1.4, one scalar multiplication) for
-the key-agreement families (X25519, NIST-P). One boundary stated rather
-than implied: the X25519 regeneration necessarily re-runs the same
-scalar-multiplication kernel keygen ran (the library exposes no second
-derivation path), so unlike the sign/verify pairs — which traverse
-genuinely independent signer and verifier code — it detects a transient
-fault between the two computations, not a systematic defect common to
-both. The NIST-P regeneration crosses from the keygen sampler into the
-separate ``pubkey_from_privkey`` entry point, and every other family's test
-exercises independent halves. The rule is otherwise uniform across
-random and seed-derived generation — `*_from_seed` is publicly callable with
-arbitrary seeds, which is precisely the path a corrupted input reaches — and
-across every surface: the `native_*` entry points, the `generate_*` wrappers,
-`AmaContext.keypair_generate` (tested with the context's *own* sign/verify or
-encaps/decaps), and the BIP32 master and child derivations in
-`key_management`.
+function, and every family's test halves are independent.** Sign-and-verify
+for the signature families (Ed25519, ML-DSA, SLH-DSA/SPHINCS+, the FROST
+dealer via a full t-of-n round aggregated and verified against the group
+key, ECDSA per FIPS 186-5 §3.3 for both the NIST-P curves and the BIP32
+secp256k1 keys — the signer and verifier traverse genuinely independent
+code); encapsulate-and-decapsulate for the KEM families (ML-KEM/Kyber); and
+for X25519, the SP 800-56A rev. 3 §5.6.2.1.4 assurance in its strong form —
+a Diffie-Hellman roundtrip against a fresh ephemeral peer,
+``X25519(sk, eph_pk) == X25519(eph_sk, pk)``, which exercises the
+scalar-multiplication kernel on two *different* scalar/point pairs and
+demands the group law hold across them. An earlier revision recomputed the
+public key and compared, which re-ran the same kernel on the same input and
+could catch only a transient fault between the two computations; the
+roundtrip closes that gap, and the ephemeral it needs is built without
+re-entering keygen (a health-tested scalar draw plus one base-point
+multiplication). The rule is uniform across random and seed-derived
+generation — `*_from_seed` is publicly callable with arbitrary seeds, which
+is precisely the path a corrupted input reaches — and across every surface:
+the `native_*` entry points, the `generate_*` wrappers,
+`AmaContext.keypair_generate` (tested with the context's *own* sign/verify
+or encaps/decaps), and the BIP32 master and child derivations in
+`key_management`. Every Python-side entropy draw that mints key material —
+the Ed25519 seed, the BIP32 master seed, the Ascon key and nonce — now
+routes through the §4.9.2 health-tested, error-state-gated CSPRNG draw
+rather than a bare `secrets.token_bytes` / `os.urandom`.
 
 The test is deliberately **unconditional**. Gating it behind an environment
 flag would make the default configuration the non-compliant one; validation

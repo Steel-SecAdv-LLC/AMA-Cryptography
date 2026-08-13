@@ -69,7 +69,7 @@ class TestEveryKeygenPathIsWired:
         def rec_kem(encaps_fn: Any, decaps_fn: Any, pk: Any, sk: Any, name: str) -> None:
             recorded.append(name)
 
-        def rec_agree(regen_fn: Any, sk: Any, pk: Any, name: str) -> None:
+        def rec_agree(agree_fn: Any, ephemeral: Any, sk: Any, pk: Any, name: str) -> None:
             recorded.append(name)
 
         monkeypatch.setattr(pb, "pairwise_test_signature", rec_sig)
@@ -219,7 +219,16 @@ class TestPctFailureFailsClosed:
         self._expect_error_state(lambda: pb.native_ml_kem_keypair(1024))
 
     def test_agreement_pct_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(pb, "native_x25519_key_exchange", lambda sk, pk: b"\x00" * 32)
+        # A constant exchange result would make BOTH roundtrip halves agree,
+        # so the corruption has to vary per call: a counter guarantees the
+        # two DH computations disagree and the roundtrip must fail.
+        calls = {"n": 0}
+
+        def _drifting_exchange(sk: bytes, pk: bytes) -> bytes:
+            calls["n"] += 1
+            return calls["n"].to_bytes(32, "big")
+
+        monkeypatch.setattr(pb, "native_x25519_key_exchange", _drifting_exchange)
         self._expect_error_state(pb.native_x25519_keypair)
 
 
@@ -261,13 +270,25 @@ class TestPctPositivePath:
 
 
 class TestPairwiseAgreementHelper:
-    def test_passes_when_regeneration_matches(self) -> None:
-        ms.pairwise_test_agreement(lambda sk: b"PUB", b"SK", b"PUB", "test-algo")
+    def test_passes_when_the_roundtrip_agrees(self) -> None:
+        # A toy commutative "agreement": XOR of the two single-byte halves,
+        # so agree(sk, eph_pk) == agree(eph_sk, pk) holds whenever the four
+        # values XOR consistently — which the chosen constants do.
+        def agree(own_sk: bytes, peer_pk: bytes) -> bytes:
+            return bytes([own_sk[0] ^ peer_pk[0]])
 
-    def test_fails_closed_when_regeneration_differs(self) -> None:
+        ms.pairwise_test_agreement(agree, (b"\x21", b"\x2c"), b"\x0e", b"\x03", "test-algo")
+
+    def test_fails_closed_when_the_roundtrip_disagrees(self) -> None:
+        # A function that ignores the peer cannot satisfy the roundtrip: the
+        # two sides return their own (different) secrets and the helper must
+        # fail closed.
+        def agree(own_sk: bytes, peer_pk: bytes) -> bytes:
+            return bytes(own_sk)
+
         try:
             with pytest.raises(CryptoModuleError, match="Pairwise test failed"):
-                ms.pairwise_test_agreement(lambda sk: b"OTHER", b"SK", b"PUB", "test-algo")
+                ms.pairwise_test_agreement(agree, (b"\x21", b"\x2c"), b"\x0e", b"\x03", "test-algo")
             assert ms.module_status() == "ERROR"
         finally:
             ms._set_operational()
