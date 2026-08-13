@@ -228,3 +228,107 @@ def test_backend_skipif_without_ci_env_stays_a_skip(
         """)
     result = isolated_conftest.runpytest_subprocess(*_inner_pytest_args())
     result.assert_outcomes(skipped=1, failed=0, errors=0, passed=0)
+
+
+# ---------------------------------------------------------------------------
+# Imperative skips
+# ---------------------------------------------------------------------------
+# The hook above reads ``item.iter_markers("skipif")``, which sees only
+# *declarative* skips. An imperative ``pytest.skip("...")`` raised from a test
+# body or a fixture attaches no marker, so it went straight through the hook
+# and CI reported it as an ordinary skip — the same silently-green outcome the
+# ``skipif`` path exists to prevent. Several PQC KAT suites report a missing
+# backend exactly that way (``tests/test_pqc_kat.py`` lines 164, 177, 555), so
+# the gap covered the backends most likely to be absent from a broken build.
+#
+# The hook now also reads the reason pytest recorded on the report itself,
+# which is the only place an imperative skip's reason appears.
+
+
+def test_imperative_backend_skip_in_a_test_body_becomes_a_failure(
+    isolated_conftest: pytest.Pytester,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``pytest.skip("Kyber backend unavailable")`` must not survive CI."""
+    monkeypatch.setenv("AMA_CI_REQUIRE_BACKENDS", "1")
+    isolated_conftest.makepyfile("""
+        import pytest
+
+        def test_kyber_kat():
+            pytest.skip("Kyber backend unavailable (build with -DAMA_USE_NATIVE_PQC=ON)")
+        """)
+    result = isolated_conftest.runpytest_subprocess(*_inner_pytest_args())
+    # Raised in the call phase, so it is reported as a failure rather than
+    # the setup-phase "error" a skipif produces.
+    result.assert_outcomes(failed=1, errors=0, skipped=0, passed=0)
+    result.stdout.fnmatch_lines(["*CI FAILURE: Kyber backend unavailable*"])
+
+
+def test_imperative_backend_skip_in_a_fixture_becomes_a_failure(
+    isolated_conftest: pytest.Pytester,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The shape the SLH-DSA suites actually use: skip raised from a fixture."""
+    monkeypatch.setenv("AMA_CI_REQUIRE_BACKENDS", "1")
+    isolated_conftest.makepyfile("""
+        import pytest
+
+        @pytest.fixture
+        def sphincs_provider():
+            pytest.skip("SPHINCS+ backend not available")
+
+        def test_slhdsa_kat(sphincs_provider):
+            raise AssertionError("must not run")
+        """)
+    result = isolated_conftest.runpytest_subprocess(*_inner_pytest_args())
+    result.assert_outcomes(errors=1, failed=0, skipped=0, passed=0)
+    result.stdout.fnmatch_lines(["*CI FAILURE: SPHINCS+ backend not available*"])
+
+
+def test_imperative_non_backend_skip_stays_a_skip(
+    isolated_conftest: pytest.Pytester,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The five legitimate skips this suite still reports must be unaffected.
+
+    Escalating on any imperative skip would turn every optional-dependency and
+    network-gated test into a CI failure. These are the exact reason strings
+    the suite emits today.
+    """
+    monkeypatch.setenv("AMA_CI_REQUIRE_BACKENDS", "1")
+    isolated_conftest.makepyfile("""
+        import pytest
+
+        def test_metadata():
+            pytest.skip("package not pip-installed; metadata unavailable")
+
+        def test_tsa():
+            pytest.skip("Live TSA integration test — requires network and a TSA endpoint.")
+
+        def test_hsm():
+            pytest.skip("SoftHSM2 is not installed")
+
+        def test_semgrep():
+            pytest.skip("semgrep is not installed")
+
+        def test_wycheproof():
+            pytest.skip("network-dependent; set AMA_WYCHEPROOF_ONLINE=1 to check upstream bytes")
+        """)
+    result = isolated_conftest.runpytest_subprocess(*_inner_pytest_args())
+    result.assert_outcomes(skipped=5, failed=0, errors=0, passed=0)
+
+
+def test_imperative_backend_skip_without_ci_env_stays_a_skip(
+    isolated_conftest: pytest.Pytester,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Outside CI an imperative backend skip is still just a skip."""
+    monkeypatch.delenv("AMA_CI_REQUIRE_BACKENDS", raising=False)
+    isolated_conftest.makepyfile("""
+        import pytest
+
+        def test_kyber_kat():
+            pytest.skip("Kyber backend unavailable")
+        """)
+    result = isolated_conftest.runpytest_subprocess(*_inner_pytest_args())
+    result.assert_outcomes(skipped=1, failed=0, errors=0, passed=0)

@@ -49,6 +49,11 @@ _BACKEND_SKIP_REASONS = (
 )
 
 
+def _mentions_backend(reason: str) -> bool:
+    """Whether a skip reason names a cryptographic backend."""
+    return any(kw in reason.lower() for kw in _BACKEND_SKIP_REASONS)
+
+
 def _is_backend_skip(marker: Any) -> bool:
     """Check if a skipif marker is about a missing crypto backend."""
     reason = ""
@@ -56,7 +61,23 @@ def _is_backend_skip(marker: Any) -> bool:
         reason = marker.kwargs.get("reason", "")
     if hasattr(marker, "args") and len(marker.args) > 1 and not reason:
         reason = str(marker.args[1])
-    return any(kw in reason.lower() for kw in _BACKEND_SKIP_REASONS)
+    return _mentions_backend(reason)
+
+
+def _reported_skip_reason(rep: Any) -> str:
+    """The reason text pytest recorded for a skip, however it was raised.
+
+    For a skip, ``rep.longrepr`` is the ``(path, lineno, message)`` triple, and
+    the message is ``"Skipped: <reason>"``.  Reading it is the only way to see
+    an *imperative* ``pytest.skip("...")`` — those raise at call time and leave
+    no marker on the item, so marker inspection alone cannot find them.
+    """
+    longrepr = getattr(rep, "longrepr", None)
+    if isinstance(longrepr, tuple) and len(longrepr) == 3:
+        message = str(longrepr[2])
+        _, _, tail = message.partition("Skipped: ")
+        return tail or message
+    return ""
 
 
 @pytest.hookimpl(hookwrapper=True)
@@ -73,6 +94,14 @@ def pytest_runtest_makereport(item: Any, call: Any) -> Any:
     reason (e.g. a broken PyCA install) would be incorrectly reported as
     a backend-missing failure because a sibling backend-related skipif
     happens to be attached to the same item.
+
+    Marker inspection is not sufficient on its own.  An imperative
+    ``pytest.skip("Kyber backend unavailable")`` — raised from a fixture or a
+    test body, which is how several of the PQC KAT suites report a missing
+    backend — attaches no marker to the item, so it passed straight through
+    this hook and CI reported it as a skip.  That is the same
+    escalation-shaped hole the ``skipif`` path exists to close, so the
+    reason pytest actually recorded is checked too.
     """
     outcome = yield
     if not _CI:
@@ -80,6 +109,15 @@ def pytest_runtest_makereport(item: Any, call: Any) -> Any:
     rep = outcome.get_result()
     if not rep.skipped:
         return
+
+    def _fail(reason: str) -> None:
+        rep.outcome = "failed"
+        rep.longrepr = (
+            f"CI FAILURE: {reason} — "
+            "all cryptographic backends must be available in CI. "
+            "The C library must be built before running tests."
+        )
+
     for marker in item.iter_markers("skipif"):
         if not _is_backend_skip(marker):
             continue
@@ -88,14 +126,12 @@ def pytest_runtest_makereport(item: Any, call: Any) -> Any:
             # The backend-related condition was false at evaluation time —
             # the backend is present, so this marker did not cause the skip.
             continue
-        reason = marker.kwargs.get("reason", "backend unavailable")
-        rep.outcome = "failed"
-        rep.longrepr = (
-            f"CI FAILURE: {reason} — "
-            "all cryptographic backends must be available in CI. "
-            "The C library must be built before running tests."
-        )
-        break
+        _fail(marker.kwargs.get("reason", "backend unavailable"))
+        return
+
+    reported = _reported_skip_reason(rep)
+    if reported and _mentions_backend(reported):
+        _fail(reported)
 
 
 # =============================================================================

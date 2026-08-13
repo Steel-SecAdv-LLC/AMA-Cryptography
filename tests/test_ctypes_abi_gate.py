@@ -138,7 +138,12 @@ class TestMainFailurePaths:
         monkeypatch.setattr(gate, "REPO_ROOT", tmp_path)
         monkeypatch.setattr(gate, "HEADER", header_file)
         monkeypatch.setattr(gate, "EXTRA_HEADERS", ())
-        monkeypatch.setattr(gate, "MODULES", ("mod.py",))
+        # Scope is discovered rather than listed, so the synthetic tree is
+        # injected by stubbing discovery. REQUIRED_MODULES is emptied with it:
+        # it is the floor beneath real discovery and would otherwise pull the
+        # production modules into this sandbox, which has no package tree.
+        monkeypatch.setattr(gate, "REQUIRED_MODULES", ())
+        monkeypatch.setattr(gate, "ctypes_modules", lambda *a, **k: ("mod.py",))
         return int(gate.main([]))
 
     def test_a_mismatch_exits_nonzero(
@@ -294,3 +299,82 @@ class TestThisRepository:
         )
         assert "ama_secure_memzero" in sigs_sm
         assert "ama_secure_memzero" in called_sm
+
+
+class TestScopeIsDiscoveredNotHandMaintained:
+    """Every ctypes-declaring module is in scope, without anyone maintaining a list.
+
+    ``MODULES`` was a hand-written tuple and had drifted: ``hybrid_combiner.py``,
+    ``_build_sign.py`` and ``_self_test.py`` all assign ctypes signatures and
+    none of them was listed, so INVARIANT-42 was not enforced for them. A list
+    of files-that-use-a-feature drifts by construction — adding the feature to
+    a new file is not a change to the list — so scope is now derived from the
+    sources themselves.
+    """
+
+    def test_every_ctypes_declaring_module_is_in_scope(self) -> None:
+        """Derived independently of the gate: grep-equivalent over the AST."""
+        import ast as _ast
+
+        expected = set()
+        for path in sorted((REPO_ROOT / "ama_cryptography").rglob("*.py")):
+            tree = _ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in _ast.walk(tree):
+                if isinstance(node, _ast.Assign) and any(
+                    isinstance(t, _ast.Attribute) and t.attr in ("argtypes", "restype")
+                    for t in node.targets
+                ):
+                    expected.add(path.relative_to(REPO_ROOT).as_posix())
+                    break
+
+        scope = set(gate.ctypes_modules())
+        assert expected, "no ctypes-declaring modules found at all — extractor is broken"
+        missing = expected - scope
+        assert (
+            not missing
+        ), f"modules declaring ctypes signatures but out of scope: {sorted(missing)}"
+
+    def test_the_previously_missing_modules_are_covered(self) -> None:
+        """The three the hand-written list had lost."""
+        scope = set(gate.ctypes_modules())
+        for rel in (
+            "ama_cryptography/hybrid_combiner.py",
+            "ama_cryptography/_build_sign.py",
+            "ama_cryptography/_self_test.py",
+        ):
+            assert rel in scope, f"{rel} is not checked by the ABI gate"
+
+    def test_required_modules_are_a_floor_under_discovery(self, tmp_path: Path) -> None:
+        """A discovery that finds nothing must not shrink the scope to nothing.
+
+        Pointed at an empty tree, ``ctypes_modules`` must still return the
+        required set — otherwise an extractor bug turns the gate into a silent
+        pass, which this repository treats as worse than having no gate.
+        """
+        empty = tmp_path / "pkg"
+        empty.mkdir()
+        assert set(gate.ctypes_modules(empty)) == set(gate.REQUIRED_MODULES)
+
+    def test_a_new_ctypes_module_is_picked_up(self, tmp_path: Path) -> None:
+        """The property that makes the list unnecessary."""
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        (pkg / "brand_new.py").write_text(
+            "import ctypes\nlib = ctypes.CDLL(None)\nlib.ama_thing.restype = ctypes.c_int\n",
+            encoding="utf-8",
+        )
+        scope = gate.ctypes_modules(pkg)
+        assert any(m.endswith("brand_new.py") for m in scope), scope
+
+    def test_a_mention_in_prose_does_not_pull_a_module_into_scope(self, tmp_path: Path) -> None:
+        """Detection is by AST assignment, not by text search."""
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        (pkg / "just_talking.py").write_text(
+            '"""This module explains argtypes and restype but assigns neither."""\n'
+            "# lib.foo.argtypes = [ctypes.c_int]\n"
+            "VALUE = 1\n",
+            encoding="utf-8",
+        )
+        scope = gate.ctypes_modules(pkg)
+        assert not any(m.endswith("just_talking.py") for m in scope), scope

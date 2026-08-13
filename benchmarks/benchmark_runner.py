@@ -112,33 +112,126 @@ def validate_baseline_contract(
         raise ValueError(f"{baseline_path} contains unpopulated zero baselines: {joined}")
 
 
-def benchmark_operation(
-    operation: Callable[[], object],
-    iterations: int = 100,
-    warmup: int = 5,
-) -> float:
-    """
-    Benchmark an operation and return operations per second.
+#: Minimum wall-clock a single timed batch must span, in seconds.
+#:
+#: The per-call ``iterations`` defaults (20-100) were chosen per primitive and
+#: are three orders of magnitude apart in cost, so they bought wildly different
+#: amounts of signal: 20 ML-DSA-65 signatures is about 6 ms of measurement, and
+#: the whole 19-benchmark suite finished in roughly 0.4 s of wall clock on the
+#: CI runner.  On a shared, unpinned GitHub-hosted runner a single scheduler
+#: preemption is larger than that, so the reported number was dominated by
+#: whatever else the host was doing.  Observed directly: three consecutive runs
+#: of one unchanged binary measured 917, 1845 and 3086 ops/sec for
+#: ``dilithium_sign`` -- a 3.4x spread with the code held constant, against a
+#: 10% regression threshold.  A gate whose noise exceeds its threshold by 34x
+#: cannot fail for the reason it claims to, which is the failure mode
+#: ``tests/test_benchmark_baseline_freshness.py`` was written about.
+#:
+#: Batches are therefore sized from a calibration run rather than fixed, so
+#: every primitive gets a comparable amount of signal regardless of its cost.
+_MIN_SAMPLE_SECONDS = 0.15
 
-    Args:
-        operation: Callable to benchmark
-        iterations: Number of iterations to run
-        warmup: Number of warmup iterations (not counted)
+#: Timed batches per benchmark; the fastest is reported.
+#:
+#: Throughput noise on a shared runner is one-sided -- interference can only
+#: make an operation look slower, never faster -- so the fastest of several
+#: batches is the best available estimate of the machine's actual capability
+#: and is far more stable than the mean.  This is the estimator
+#: ``benchmark_operation_best_of`` already applied to the two composite
+#: package benchmarks; it is now what every benchmark gets.
+_ROUNDS = 3
 
-    Returns:
-        Operations per second
-    """
-    # Warmup
-    for _ in range(warmup):
-        operation()
+#: Ceiling on a calibrated batch, so a primitive that gets much faster cannot
+#: turn the benchmark job into a long-running one.
+_MAX_ITERATIONS = 500_000
 
-    # Timed run
+
+def _timed_batch(operation: Callable[[], object], iterations: int) -> tuple[float, float]:
+    """One timed batch, as ``(operations_per_second, elapsed_seconds)``."""
     start = time.perf_counter()
     for _ in range(iterations):
         operation()
     elapsed = time.perf_counter() - start
+    ops = iterations / elapsed if elapsed > 0 else float("inf")
+    return ops, elapsed
 
-    return iterations / elapsed if elapsed > 0 else float("inf")
+
+#: Hard stop on re-sizing, so a pathological operation cannot loop forever.
+_MAX_SIZING_ATTEMPTS = 12
+
+
+def _required_batch(rate: float) -> int:
+    """Iterations needed to span ``_MIN_SAMPLE_SECONDS`` at ``rate`` ops/sec."""
+    if rate <= 0.0 or rate == float("inf"):
+        return 1
+    return min(_MAX_ITERATIONS, max(1, int(rate * _MIN_SAMPLE_SECONDS) + 1))
+
+
+def benchmark_operation(
+    operation: Callable[[], object],
+    iterations: int = 100,
+    warmup: int = 5,
+    rounds: int = _ROUNDS,
+) -> float:
+    """
+    Benchmark an operation and return operations per second.
+
+    ``iterations`` is a *floor*, not the batch size.  Batches are sized to span
+    at least ``_MIN_SAMPLE_SECONDS`` at the fastest rate observed so far, so a
+    cheap primitive gets many more iterations than an expensive one and both
+    are measured over a comparable window.  ``rounds`` full-window batches are
+    run and the fastest is reported (see ``_ROUNDS``).
+
+    The target is recomputed after *every* batch rather than from one
+    up-front calibration.  Sizing once is not enough in either direction: a
+    calibration that lands during interference reports a low rate and sizes
+    the next batch too small, and — the subtler case — a batch that is slow
+    because it was unlucky satisfies the elapsed-time target with very few
+    iterations, so the undersized batch would then be reused for every
+    remaining round.  Keying the target off the fastest rate seen recovers
+    from both, because throughput noise is one-sided: interference can only
+    make an operation look slower than it is, never faster.
+
+    Only full-window batches are eligible to be reported.  An undersized
+    batch can report a lucky-high rate off a very short window, and since the
+    baselines this feeds are *floors*, an inflated number makes the gate
+    weaker — so those batches inform sizing and nothing else.
+
+    Args:
+        operation: Callable to benchmark
+        iterations: Minimum iterations per timed batch
+        warmup: Number of warmup iterations (not counted)
+        rounds: Full-window batches to run; the fastest is reported
+
+    Returns:
+        Operations per second
+    """
+    for _ in range(warmup):
+        operation()
+
+    batch = max(1, iterations)
+    observed = 0.0  # fastest rate seen anywhere, used only for sizing
+    best = 0.0  # fastest rate seen at a full-window batch, reported
+    completed = 0
+    for _attempt in range(rounds + _MAX_SIZING_ATTEMPTS):
+        if completed >= rounds:
+            break
+        ops, _elapsed = _timed_batch(operation, batch)
+        if ops == float("inf"):
+            return ops
+        observed = max(observed, ops)
+        target = _required_batch(observed)
+        if batch >= target:
+            best = max(best, ops)
+            completed += 1
+        else:
+            # Grow toward the target, capped at 8x a step so one wild
+            # extrapolation cannot jump straight to _MAX_ITERATIONS.
+            batch = min(_MAX_ITERATIONS, max(batch + 1, min(target, batch * 8)))
+            completed = 0
+            best = 0.0
+
+    return best if best > 0.0 else observed
 
 
 def benchmark_operation_best_of(
@@ -147,7 +240,12 @@ def benchmark_operation_best_of(
     warmup: int,
     rounds: int,
 ) -> float:
-    """Benchmark latency-spiky composite operations and keep the fastest round."""
+    """Benchmark latency-spiky composite operations and keep the fastest round.
+
+    Retained because callers and tests name it directly.  ``benchmark_operation``
+    now takes the fastest of several batches for every benchmark, so this adds
+    only the caller's explicit round count on top of that.
+    """
     measurements = [
         benchmark_operation(operation, iterations=iterations, warmup=warmup) for _ in range(rounds)
     ]

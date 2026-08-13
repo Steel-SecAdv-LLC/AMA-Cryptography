@@ -623,7 +623,12 @@ class TestSLHDSA_SHA2_256f_KAT:
         """Validate against NIST ACVP SLH-DSA-sigVer-FIPS205 internal vectors."""
         vectors_path = Path(__file__).parent / "kat" / "fips205" / "SLH-DSA-sigVer-FIPS205.json"
         if not vectors_path.exists():
-            pytest.skip("ACVP SLH-DSA vectors not available")
+            pytest.fail(
+                f"vendored NIST ACVP corpus missing: {vectors_path}. It is tracked in "
+                "git; a missing KAT corpus is a broken checkout or a deleted "
+                "corpus, not a reason to report this parameter set as "
+                "validated-by-skip."
+            )
 
         with open(vectors_path) as f:
             data = json.load(f)
@@ -655,7 +660,12 @@ class TestSLHDSA_SHA2_256f_KAT:
 
         vectors_path = Path(__file__).parent / "kat" / "fips205" / "SLH-DSA-sigVer-FIPS205.json"
         if not vectors_path.exists():
-            pytest.skip("ACVP SLH-DSA vectors not available")
+            pytest.fail(
+                f"vendored NIST ACVP corpus missing: {vectors_path}. It is tracked in "
+                "git; a missing KAT corpus is a broken checkout or a deleted "
+                "corpus, not a reason to report this parameter set as "
+                "validated-by-skip."
+            )
 
         with open(vectors_path) as f:
             data = json.load(f)
@@ -708,12 +718,20 @@ class TestSLHDSA_SHAKE_128s_ACVP:
     @pytest.fixture(scope="class")
     def vectors(self) -> list[dict[str, Any]]:
         if not self.VECTORS_PATH.exists():
-            pytest.skip(f"NIST ACVP SLH-DSA-SHAKE-128s vectors not present at {self.VECTORS_PATH}")
+            pytest.fail(
+                f"vendored NIST ACVP corpus missing: {self.VECTORS_PATH}. It is tracked in "
+                "git; a missing KAT corpus is a broken checkout or a deleted "
+                "corpus, not a reason to report this parameter set as "
+                "validated-by-skip."
+            )
         with open(self.VECTORS_PATH) as f:
             data = json.load(f)
         vectors: list[dict[str, Any]] = data["vectors"]
         if not vectors:
-            pytest.skip("No SLH-DSA-SHAKE-128s vectors in JSON")
+            pytest.fail(
+                f"{self.VECTORS_PATH} contains no vectors. An emptied corpus "
+                "passes every test in this class vacuously."
+            )
         return vectors
 
     def test_size_constants(self) -> None:
@@ -849,12 +867,20 @@ class TestSLHDSA_SHA2_256f_ACVP_sigGen:
     @pytest.fixture(scope="class")
     def vectors(self) -> list[dict[str, Any]]:
         if not self.VECTORS_PATH.exists():
-            pytest.skip(f"NIST ACVP SLH-DSA-SHA2-256f vectors not present at {self.VECTORS_PATH}")
+            pytest.fail(
+                f"vendored NIST ACVP corpus missing: {self.VECTORS_PATH}. It is tracked in "
+                "git; a missing KAT corpus is a broken checkout or a deleted "
+                "corpus, not a reason to report this parameter set as "
+                "validated-by-skip."
+            )
         with open(self.VECTORS_PATH) as f:
             data = json.load(f)
         vectors: list[dict[str, Any]] = data["vectors"]
         if not vectors:
-            pytest.skip("No SLH-DSA-SHA2-256f vectors in JSON")
+            pytest.fail(
+                f"{self.VECTORS_PATH} contains no vectors. An emptied corpus "
+                "passes every test in this class vacuously."
+            )
         return vectors
 
     @staticmethod

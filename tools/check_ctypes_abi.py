@@ -45,12 +45,23 @@ against it.
 
 Scope
 -----
-``ama_cryptography/pqc_backends.py`` (the primary native surface, ~110
-symbols) plus the sibling ctypes consumers ``ascon.py``, ``agent_binding.py``
-and ``secure_memory.py``.  Completeness is enforced in both directions inside
-that scope: a symbol *called* on a library handle without a signature
-assignment is an error, and a signature assigned for a symbol the header does
-not declare is an error.
+Every module under ``ama_cryptography/`` that assigns ``argtypes`` or
+``restype`` — discovered by walking the package's ASTs, not from a
+hand-maintained list.  In practice that is ``pqc_backends.py`` (the primary
+native surface, ~110 symbols) plus ``ascon.py``, ``agent_binding.py``,
+``secure_memory.py``, ``hybrid_combiner.py``, ``_build_sign.py`` and
+``_self_test.py``.
+
+The list *was* hand-maintained, and had drifted: the last three above were
+missing from it, so INVARIANT-42 did not cover them.  That is the predictable
+end state for a list of files-that-use-a-feature, because adding the feature
+to a new file is not a change to the list, and nothing fails when the two
+disagree.  ``REQUIRED_MODULES`` now acts as a floor beneath discovery so an
+extractor bug cannot quietly empty the scope and report a pass.
+
+Completeness is enforced in both directions inside that scope: a symbol
+*called* on a library handle without a signature assignment is an error, and a
+signature assigned for a symbol the header does not declare is an error.
 
 Usage
 -----
@@ -84,13 +95,71 @@ EXTRA_HEADERS = (
     "src/c/ama_hmac_sha256.h",
 )
 
-#: The Python modules whose ctypes assignments are checked.
-MODULES = (
+#: The package whose ctypes assignments are checked.
+PACKAGE = "ama_cryptography"
+
+#: Modules that must always be in scope.
+#:
+#: The scope used to be this list *alone*, and it had drifted: three modules
+#: that declare ctypes signatures were absent from it (``hybrid_combiner.py``,
+#: ``_build_sign.py``, ``_self_test.py``), so INVARIANT-42 was unenforced for
+#: them.  Their transcriptions happened to match the header, but nothing was
+#: checking — and a hand-maintained list of files-that-use-a-feature drifts by
+#: construction, because adding the feature to a new file is not a change to
+#: the list.
+#:
+#: Scope is now discovered (see :func:`ctypes_modules`) and this tuple is the
+#: floor beneath it.  A discovery bug that returned nothing would otherwise
+#: turn the gate into a silent pass, which is the failure mode this repository
+#: treats as worse than no gate at all.
+REQUIRED_MODULES = (
     "ama_cryptography/pqc_backends.py",
     "ama_cryptography/ascon.py",
     "ama_cryptography/agent_binding.py",
     "ama_cryptography/secure_memory.py",
+    "ama_cryptography/hybrid_combiner.py",
+    "ama_cryptography/_build_sign.py",
+    "ama_cryptography/_self_test.py",
 )
+
+#: Marks a module as declaring a ctypes signature.
+_CTYPES_ATTRS = ("argtypes", "restype")
+
+
+def ctypes_modules(package_root: Path | None = None) -> tuple[str, ...]:
+    """Every module in the package that assigns ``argtypes`` or ``restype``.
+
+    Detection is by AST attribute assignment rather than a text search, so a
+    mention inside a docstring or comment does not pull a module into scope.
+
+    ``package_root`` is read at call time rather than bound as a default so a
+    test can point the scan somewhere else; see the note on the same pattern in
+    ``tools/check_c_secret_zeroization.py``.
+    """
+    root = (REPO_ROOT / PACKAGE) if package_root is None else package_root
+    found: set[str] = set()
+    for path in sorted(root.rglob("*.py")):
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Assign):
+                continue
+            if any(
+                isinstance(target, ast.Attribute) and target.attr in _CTYPES_ATTRS
+                for target in node.targets
+            ):
+                # A scan pointed outside the repository (a test's temporary
+                # tree) has no repo-relative form; report the path as given
+                # rather than raising out of discovery.
+                try:
+                    found.add(path.relative_to(REPO_ROOT).as_posix())
+                except ValueError:
+                    found.add(path.as_posix())
+                break
+    return tuple(sorted(found | set(REQUIRED_MODULES)))
+
 
 #: ctypes type names that marshal as an integer-class argument.
 _INT_CTYPES = {
@@ -522,9 +591,20 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             # header only fills symbols the public one does not carry.
             header_protos.setdefault(symbol, proto)
 
+    modules = ctypes_modules()
+    missing = [m for m in REQUIRED_MODULES if m not in modules]
+    if missing:
+        # Discovery lost a module the gate is known to cover: that is a
+        # checker bug or a deleted module, never a clean tree.
+        print(
+            f"ERROR: required module(s) absent from the discovered scope: " f"{', '.join(missing)}",
+            file=sys.stderr,
+        )
+        return 2
+
     parsed = []
     parse_problems: list = []
-    for rel in MODULES:
+    for rel in modules:
         path = REPO_ROOT / rel
         if not path.is_file():
             print(f"ERROR: {rel} not found", file=sys.stderr)
@@ -554,7 +634,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 1
     total_symbols = sum(len(signatures) for _, signatures, _ in parsed)
     print(
-        f"OK: {checked} ctypes signature(s) across {len(MODULES)} module(s) "
+        f"OK: {checked} ctypes signature(s) across {len(modules)} module(s) "
         f"match their header prototypes ({total_symbols} symbols covered, "
         f"{len(header_protos)} prototypes in the header)."
     )
