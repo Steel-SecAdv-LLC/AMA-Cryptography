@@ -212,7 +212,23 @@ static inline uint8x16_t aes_key_assist_neon(uint8x16_t prev_even,
     for (int i = 4; i < 8; i++) out[i] = even_bytes[i] ^ out[i-4];
     for (int i = 8; i < 12; i++) out[i] = even_bytes[i] ^ out[i-4];
     for (int i = 12; i < 16; i++) out[i] = even_bytes[i] ^ out[i-4];
-    return vld1q_u8(out);
+    uint8x16_t result = vld1q_u8(out);
+
+    /* Scrub the round-key material this helper round-trips through the stack.
+     * `out` IS a complete AES-256 round key and `even_bytes`/`odd_bytes` hold
+     * neighbouring ones — two consecutive round keys reverse to the master key.
+     * The helper runs 13 times per expansion, so without this the dead frames
+     * of ama_aes256_gcm_{encrypt,decrypt}_neon held several round keys, while
+     * this file's header claims every kernel scrubs its key material
+     * (INVARIANT-6/12).  The x86 kernels have no equivalent exposure: their
+     * schedule stays in XMM registers. */
+    ama_secure_memzero(out, sizeof(out));
+    ama_secure_memzero(even_bytes, sizeof(even_bytes));
+    ama_secure_memzero(odd_bytes, sizeof(odd_bytes));
+    ama_secure_memzero(word3_input, sizeof(word3_input));
+    ama_secure_memzero(w3_out, sizeof(w3_out));
+    ama_secure_memzero(w3, sizeof(w3));
+    return result;
 }
 
 static inline uint8x16_t aes_key_assist2_neon(uint8x16_t prev_even, uint8x16_t prev_odd) {
@@ -240,7 +256,16 @@ static inline uint8x16_t aes_key_assist2_neon(uint8x16_t prev_even, uint8x16_t p
     for (int i = 4; i < 8; i++) out[i] = prev_bytes[i] ^ out[i-4];
     for (int i = 8; i < 12; i++) out[i] = prev_bytes[i] ^ out[i-4];
     for (int i = 12; i < 16; i++) out[i] = prev_bytes[i] ^ out[i-4];
-    return vld1q_u8(out);
+    uint8x16_t result = vld1q_u8(out);
+
+    /* Same scrub discipline as aes_key_assist_neon above — see the note there. */
+    ama_secure_memzero(out, sizeof(out));
+    ama_secure_memzero(prev_bytes, sizeof(prev_bytes));
+    ama_secure_memzero(even_bytes, sizeof(even_bytes));
+    ama_secure_memzero(word3_input, sizeof(word3_input));
+    ama_secure_memzero(w3_out, sizeof(w3_out));
+    ama_secure_memzero(w3, sizeof(w3));
+    return result;
 }
 
 static void ama_aes256_expand_key_neon(const uint8_t key[32], uint8x16_t rk[15]) {
@@ -376,6 +401,14 @@ void ama_aes256_gcm_encrypt_neon(
     ama_secure_memzero(rk, sizeof(rk));
     ama_secure_memzero(&H, sizeof(H));
     ama_secure_memzero(&enc_j0, sizeof(enc_j0));
+    /* ghash_acc is in the same secret class as enc_j0 and must go with it:
+     * its final value satisfies ghash_acc == tag ^ enc_j0 (see the tag
+     * computation above), and the tag is public — so a stack snapshot holding
+     * a spilled accumulator yields enc_j0 exactly, which is what the enc_j0
+     * scrub exists to prevent.  The intermediates are H-dependent for the same
+     * reason.  Whether it spills is compiler-dependent, exactly as it is for
+     * enc_j0 and H, which are scrubbed regardless. */
+    ama_secure_memzero(&ghash_acc, sizeof(ghash_acc));
 }
 
 /* ============================================================================
@@ -512,6 +545,14 @@ ama_error_t ama_aes256_gcm_decrypt_neon(
     ama_secure_memzero(rk, sizeof(rk));
     ama_secure_memzero(&H, sizeof(H));
     ama_secure_memzero(&enc_j0, sizeof(enc_j0));
+    /* ghash_acc is in the same secret class as enc_j0 and must go with it:
+     * its final value satisfies ghash_acc == tag ^ enc_j0 (see the tag
+     * computation above), and the tag is public — so a stack snapshot holding
+     * a spilled accumulator yields enc_j0 exactly, which is what the enc_j0
+     * scrub exists to prevent.  The intermediates are H-dependent for the same
+     * reason.  Whether it spills is compiler-dependent, exactly as it is for
+     * enc_j0 and H, which are scrubbed regardless. */
+    ama_secure_memzero(&ghash_acc, sizeof(ghash_acc));
     ama_secure_memzero(computed_tag_bytes, sizeof(computed_tag_bytes));
     return tag_match ? AMA_SUCCESS : AMA_ERROR_VERIFY_FAILED;
 }

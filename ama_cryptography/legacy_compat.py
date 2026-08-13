@@ -318,6 +318,13 @@ def canonical_hash_code(
 
     helix_parts = [f"{r:.10f}:{c:.10f}" for r, c in helix_params]
 
+    if hash_version not in (HASH_FORMAT_V1, HASH_FORMAT_V2):
+        # No default branch (INVARIANT-35): an unrecognised version silently
+        # resolved to the V2 encoding below rather than being refused.
+        raise ValueError(
+            f"unknown hash_version {hash_version!r}: expected "
+            f"{HASH_FORMAT_V1!r} or {HASH_FORMAT_V2!r}"
+        )
     if hash_version == HASH_FORMAT_V1:
         encoded = length_prefixed_encode("CODE", codes, "HELIX", *helix_parts)
     else:
@@ -1314,6 +1321,19 @@ def verify_crypto_package(
             monitor.monitor_crypto_operation("hmac_verify", (time.time() - start_time) * 1000)
 
         sig_format = getattr(package, "signature_format_version", SIGNATURE_FORMAT_V1)
+        if sig_format not in (SIGNATURE_FORMAT_V1, SIGNATURE_FORMAT_V2):
+            # No default branch (INVARIANT-35).  signature_format_version is an
+            # unauthenticated package field, and the else-branch below is the
+            # V1 construction — a bare digest with no domain prefix and no
+            # ethical-hash binding.  Any unrecognised spelling ("3.0.0", "2.0",
+            # "") therefore selected the WEAKER of the two, so the
+            # cross-protocol replay that SIGNATURE_DOMAIN_PREFIX exists to
+            # prevent was reachable through infinitely many selector values,
+            # not just the literal "1.0.0".
+            raise ValueError(
+                f"unknown signature_format_version {sig_format!r}: expected "
+                f"{SIGNATURE_FORMAT_V1!r} or {SIGNATURE_FORMAT_V2!r}"
+            )
         if sig_format == SIGNATURE_FORMAT_V2:
             ethical_hash_bytes = bytes.fromhex(package.ethical_hash)
             signature_message = build_signature_message(

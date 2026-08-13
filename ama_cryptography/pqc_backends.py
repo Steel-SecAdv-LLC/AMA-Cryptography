@@ -2543,6 +2543,31 @@ class AmaContext:
         pk_size, sk_size = self._KEY_SIZES[self._algorithm]
         if public_key_len < pk_size or secret_key_len < sk_size:
             return -1  # AMA_ERROR_INVALID_PARAM
+        # ...and the declared capacity must not EXCEED the buffer it describes.
+        # The lengths above are plain ints supplied alongside the buffers; the
+        # C side writes public_key_len / secret_key_len bytes on their word, so
+        # a caller passing a 100-byte array with public_key_len=1952 gets 1952
+        # bytes written past it — heap corruption reachable from pure Python,
+        # and the pairwise test's string_at() would then over-read the same
+        # buffer.  ctypes arrays know their own size, so check it when it is
+        # knowable; buffers whose size cannot be determined (raw pointers) are
+        # left to the caller's contract, as before.
+        for buf, declared, name in (
+            (public_key, public_key_len, "public_key"),
+            (secret_key, secret_key_len, "secret_key"),
+        ):
+            try:
+                actual = ctypes.sizeof(buf)
+            except TypeError:
+                continue  # not a sized ctypes object — nothing to compare
+            if declared > actual:
+                logging.getLogger(__name__).error(
+                    "keypair_generate: %s_len=%d exceeds the %d-byte buffer supplied",
+                    name,
+                    declared,
+                    actual,
+                )
+                return -1  # AMA_ERROR_INVALID_PARAM
         rc = int(
             _native_lib.ama_keypair_generate(
                 self._ctx, public_key, public_key_len, secret_key, secret_key_len

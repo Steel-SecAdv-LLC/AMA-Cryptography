@@ -542,6 +542,14 @@ void ama_aes256_gcm_encrypt_avx2(
     ama_secure_memzero(&H,      sizeof(H));
     ama_secure_memzero(&H_sw,   sizeof(H_sw));
     ama_secure_memzero(&enc_j0, sizeof(enc_j0));
+    /* ghash_acc is in the same secret class as enc_j0 and must go with it:
+     * its final value satisfies ghash_acc == tag ^ enc_j0 (see the tag
+     * computation above), and the tag is public — so a stack snapshot holding
+     * a spilled accumulator yields enc_j0 exactly, which is what the enc_j0
+     * scrub exists to prevent.  The intermediates are H-dependent for the same
+     * reason.  Whether it spills is compiler-dependent, exactly as it is for
+     * enc_j0 and H, which are scrubbed regardless. */
+    ama_secure_memzero(&ghash_acc, sizeof(ghash_acc));
 }
 
 /**
@@ -731,6 +739,14 @@ ama_error_t ama_aes256_gcm_decrypt_avx2(
     ama_secure_memzero(&H, sizeof(H));
     ama_secure_memzero(&H_sw, sizeof(H_sw));
     ama_secure_memzero(&enc_j0, sizeof(enc_j0));
+    /* ghash_acc is in the same secret class as enc_j0 and must go with it:
+     * its final value satisfies ghash_acc == tag ^ enc_j0 (see the tag
+     * computation above), and the tag is public — so a stack snapshot holding
+     * a spilled accumulator yields enc_j0 exactly, which is what the enc_j0
+     * scrub exists to prevent.  The intermediates are H-dependent for the same
+     * reason.  Whether it spills is compiler-dependent, exactly as it is for
+     * enc_j0 and H, which are scrubbed regardless. */
+    ama_secure_memzero(&ghash_acc, sizeof(ghash_acc));
 
     /* Unified post-verify return — branch on the precomputed
      * `tag_match` flag.  Both classes have reached this point via

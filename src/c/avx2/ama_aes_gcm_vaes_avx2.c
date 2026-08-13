@@ -566,6 +566,14 @@ void ama_aes256_gcm_encrypt_vaes_avx2(
     ama_secure_memzero(&H3, sizeof(H3));
     ama_secure_memzero(&H4, sizeof(H4));
     ama_secure_memzero(&enc_j0, sizeof(enc_j0));
+    /* ghash_acc is in the same secret class as enc_j0 and must go with it:
+     * its final value satisfies ghash_acc == tag ^ enc_j0 (see the tag
+     * computation above), and the tag is public — so a stack snapshot holding
+     * a spilled accumulator yields enc_j0 exactly, which is what the enc_j0
+     * scrub exists to prevent.  The intermediates are H-dependent for the same
+     * reason.  Whether it spills is compiler-dependent, exactly as it is for
+     * enc_j0 and H, which are scrubbed regardless. */
+    ama_secure_memzero(&ghash_acc, sizeof(ghash_acc));
     /* Zero the AVX upper halves to avoid an SSE/AVX transition penalty
      * for the next caller running in the legacy SSE register file. */
     _mm256_zeroupper();
@@ -710,6 +718,14 @@ ama_error_t ama_aes256_gcm_decrypt_vaes_avx2(
     ama_secure_memzero(&H3, sizeof(H3));
     ama_secure_memzero(&H4, sizeof(H4));
     ama_secure_memzero(&enc_j0, sizeof(enc_j0));
+    /* ghash_acc is in the same secret class as enc_j0 and must go with it:
+     * its final value satisfies ghash_acc == tag ^ enc_j0 (see the tag
+     * computation above), and the tag is public — so a stack snapshot holding
+     * a spilled accumulator yields enc_j0 exactly, which is what the enc_j0
+     * scrub exists to prevent.  The intermediates are H-dependent for the same
+     * reason.  Whether it spills is compiler-dependent, exactly as it is for
+     * enc_j0 and H, which are scrubbed regardless. */
+    ama_secure_memzero(&ghash_acc, sizeof(ghash_acc));
     _mm256_zeroupper();
     return tag_match ? AMA_SUCCESS : AMA_ERROR_VERIFY_FAILED;
 }

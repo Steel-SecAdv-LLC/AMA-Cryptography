@@ -2427,6 +2427,17 @@ def _acquire_timestamp(
         return None
 
     tsa_mode = getattr(config, "tsa_mode", "online")
+    if tsa_mode not in ("online", "mock", "disabled"):
+        # No default branch (INVARIANT-35's rule applied to a mode selector):
+        # an unrecognised value used to fall through to the ONLINE path, so a
+        # typo like "disable" or "off" in an air-gapped or privacy-sensitive
+        # deployment silently sent the content digest to an external TSA
+        # instead of failing.
+        raise ValueError(
+            f"unknown tsa_mode {tsa_mode!r}: expected 'online', 'mock' or "
+            f"'disabled'.  Refusing to guess — the previous fallthrough "
+            f"contacted an external timestamp authority."
+        )
     if tsa_mode == "disabled":
         return None
 
@@ -2686,6 +2697,16 @@ def create_crypto_package(
     hkdf_salt = secure_token_bytes(32)
     hkdf_info = b"ama_cryptography_crypto_package_v1"
     derived_keys: List[bytes] = []
+    if config.num_derived_keys < 1:
+        # Layer 4 requires at least one derived key: verify_crypto_package
+        # fails closed on an empty derived_keys list, so a package built with
+        # 0 (or a negative count) is rejected by its own verifier — including
+        # by the party that created it — while creation reported success and
+        # recorded metadata["defense_layers"] = 4.
+        raise ValueError(
+            f"num_derived_keys must be at least 1, got {config.num_derived_keys}: "
+            f"Layer 4 (HKDF key derivation) cannot be verified without one."
+        )
     for i in range(config.num_derived_keys):
         dk = _hkdf_sha3_256(
             ikm=master_secret,
@@ -2832,6 +2853,91 @@ def _verify_package_signature(
         return False, key_pinned
 
     return signature_valid, key_pinned
+
+
+def _verify_addon_layers(
+    content: bytes,
+    package: CryptoPackageResult,
+    results: Dict[str, bool],
+) -> None:
+    """Verify the optional SPHINCS+ and KEM add-on layers into ``results``.
+
+    Split out of :func:`verify_crypto_package`, whose branch count the
+    present-but-unverifiable handling below pushed over the project's
+    complexity ceiling.  INVARIANT-13 prefers a refactor to a suppression,
+    and these two blocks are a natural unit: they read only ``content`` and
+    ``package`` and write only their own keys in ``results``.
+
+    An add-on that is PRESENT but cannot be checked records ``False`` — see
+    the comments in each branch.
+    """
+    # ========================================================================
+    # OPTIONAL: Verify SPHINCS+ signature (add-on)
+    # ========================================================================
+    if package.sphincs_signature is not None and "SPHINCS_256F" not in package.keypairs:
+        # Present but unverifiable: the package still CARRIES a SPHINCS+
+        # signature, so a caller reading `all_valid: True` would believe it was
+        # evaluated.  Omitting the key entirely — which is what this branch used
+        # to do — kept it out of the aggregate and let the package pass with a
+        # visible signature nobody checked.  The primary-signature path fails
+        # closed for exactly this condition (`sig_alg_name not in
+        # package.keypairs` returns False, False); an add-on must not be more
+        # permissive than the layer it supplements (INVARIANT-37).
+        logger.error(
+            "SPHINCS+ signature present but its public key is missing from the "
+            "package — recording the layer as FAILED rather than skipping it"
+        )
+        results["sphincs"] = False
+    elif package.sphincs_signature is not None and "SPHINCS_256F" in package.keypairs:
+        if SPHINCS_AVAILABLE:
+            try:
+                sphincs_provider = SphincsProvider()
+                results["sphincs"] = sphincs_provider.verify(
+                    content,
+                    package.sphincs_signature.signature,
+                    package.keypairs["SPHINCS_256F"].public_key,
+                )
+            except Exception as exc:
+                logger.error("SPHINCS+ signature verification error: %s", exc)
+                results["sphincs"] = False
+        else:
+            results["sphincs"] = False
+
+    # ========================================================================
+    # OPTIONAL: Verify KEM shared secret (add-on)
+    # ========================================================================
+    if package.kem_ciphertext is not None and (
+        package.kem_shared_secret is None or "KYBER_1024" not in package.keypairs
+    ):
+        # Same rule as the SPHINCS+ add-on above: a ciphertext the package still
+        # carries, whose counterpart secret or keypair has been stripped, is an
+        # unverifiable layer and must be reported False rather than dropped from
+        # the aggregate (INVARIANT-37).
+        logger.error(
+            "KEM ciphertext present but its shared secret or keypair is missing "
+            "from the package — recording the layer as FAILED rather than skipping it"
+        )
+        results["kem"] = False
+    elif (
+        package.kem_ciphertext is not None
+        and package.kem_shared_secret is not None
+        and "KYBER_1024" in package.keypairs
+    ):
+        try:
+            kyber_provider = KyberProvider()
+            _t0 = time.perf_counter_ns()
+            decapsulated_ss = kyber_provider.decapsulate(
+                package.kem_ciphertext,
+                package.keypairs["KYBER_1024"].secret_key,
+            )
+            _decaps_ns = time.perf_counter_ns() - _t0
+            _monitor.monitor_crypto_operation("decrypt", _decaps_ns / 1_000_000)
+            from ama_cryptography.secure_memory import constant_time_compare as _ct2
+
+            results["kem"] = _ct2(decapsulated_ss, package.kem_shared_secret)
+        except Exception as exc:
+            logger.error("KEM decapsulation verification error: %s", exc)
+            results["kem"] = False
 
 
 def verify_crypto_package(
@@ -3032,47 +3138,10 @@ def verify_crypto_package(
         logger.error("Layer 4 HKDF key verification error: %s", exc)
         results["hkdf_keys"] = False
 
-    # ========================================================================
-    # OPTIONAL: Verify SPHINCS+ signature (add-on)
-    # ========================================================================
-    if package.sphincs_signature is not None and "SPHINCS_256F" in package.keypairs:
-        if SPHINCS_AVAILABLE:
-            try:
-                sphincs_provider = SphincsProvider()
-                results["sphincs"] = sphincs_provider.verify(
-                    content,
-                    package.sphincs_signature.signature,
-                    package.keypairs["SPHINCS_256F"].public_key,
-                )
-            except Exception as exc:
-                logger.error("SPHINCS+ signature verification error: %s", exc)
-                results["sphincs"] = False
-        else:
-            results["sphincs"] = False
-
-    # ========================================================================
-    # OPTIONAL: Verify KEM shared secret (add-on)
-    # ========================================================================
-    if (
-        package.kem_ciphertext is not None
-        and package.kem_shared_secret is not None
-        and "KYBER_1024" in package.keypairs
-    ):
-        try:
-            kyber_provider = KyberProvider()
-            _t0 = time.perf_counter_ns()
-            decapsulated_ss = kyber_provider.decapsulate(
-                package.kem_ciphertext,
-                package.keypairs["KYBER_1024"].secret_key,
-            )
-            _decaps_ns = time.perf_counter_ns() - _t0
-            _monitor.monitor_crypto_operation("decrypt", _decaps_ns / 1_000_000)
-            from ama_cryptography.secure_memory import constant_time_compare as _ct2
-
-            results["kem"] = _ct2(decapsulated_ss, package.kem_shared_secret)
-        except Exception as exc:
-            logger.error("KEM decapsulation verification error: %s", exc)
-            results["kem"] = False
+    # Optional add-on layers (SPHINCS+, KEM).  Extracted to keep this function
+    # under the complexity ceiling — the add-ons are a self-contained pass over
+    # the package and share no state with the core four layers beyond `results`.
+    _verify_addon_layers(content, package, results)
 
     # Aggregate: separate core 4-layer validity from optional add-ons.
     # Core 4 layers: content_hash (L1), hmac (L2), primary_signature (L3),
