@@ -57,6 +57,7 @@ import ctypes
 import enum
 from typing import Any, Optional, Union
 
+from ama_cryptography._module_state import check_crypto_permitted
 from ama_cryptography.exceptions import AmaCryptographyError
 
 __all__ = [
@@ -245,6 +246,11 @@ if ctypes.sizeof(_CAgentBinding) != 4 + 3 * 32:
 
 
 def _require_native() -> Any:
+    # FIPS 140-3 §4.9.2 output inhibition.  Every native agent-binding
+    # operation (capability-token derivation over HMAC/HKDF) passes through
+    # here, so gating this single choke point refuses them all in the error
+    # state.
+    check_crypto_permitted()
     if not AGENT_BINDING_AVAILABLE:
         # The binding layer depends only on SHA3/HMAC/HKDF, so it is present in
         # both the default (native PQC) and the PQC-off build — a missing

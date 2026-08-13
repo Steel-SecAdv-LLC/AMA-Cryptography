@@ -82,6 +82,18 @@ jobs:
           cmake -B build -DAMA_USE_NATIVE_PQC=ON -DAMA_BUILD_TESTS=OFF -DAMA_BUILD_EXAMPLES=OFF
           cmake --build build -j"$(nproc)" --target ama_cryptography_shared
 
+      - name: Re-sign the integrity artefact for this build's native library
+        # The derive step below calls into the native Ed25519 kernel, which
+        # requires POST to have passed. The committed artefact's native digest
+        # is specific to the build it was signed against and does not match the
+        # library this job just compiled, so POST would fail-close on a native
+        # digest mismatch before the seed/anchor check ever ran. Re-sign for
+        # this build (the wheel signer does the same per platform); the seed and
+        # anchor being compared are independent of the integrity signing key.
+        env:
+          AMA_BUILD_PIPELINE: "1"
+        run: python -m ama_cryptography.integrity --update --sign
+
       - name: Check that both values are configured
         env:
           SEED: ${{ secrets.AMA_INTEGRITY_SIGNING_SEED_HEX }}

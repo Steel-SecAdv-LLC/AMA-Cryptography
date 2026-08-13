@@ -109,7 +109,7 @@ def test_legacy_compat_main_callable() -> None:
     from ama_cryptography.legacy_compat import main
 
     assert callable(main)
-    # signature: def main() -> None
+    # signature: def main() -> int  (the demo's verdict, used as the exit code)
     import inspect
 
     sig = inspect.signature(main)

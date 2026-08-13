@@ -309,24 +309,45 @@ Users deploying AMA Cryptography in production should:
 ### Threat model
 
 The integrity check verifies that an installed wheel's `.py` files
-have not been tampered with after build.  It is **not** a supply-chain
-identity check (PyPI's existing PGP / sigstore mechanisms cover that)
-and it does **not** prove anything about a malicious build pipeline —
-both the digest and the signing key are produced by the same build
-that produced the code being signed.  The contract is:
+**and its native library** have not been tampered with after build.  It
+is **not** a supply-chain identity check (PyPI's existing PGP / sigstore
+mechanisms cover that) and it does **not** prove anything about a
+malicious build pipeline — both the digest and the signing key are
+produced by the same build that produced the code being signed.  The
+contract is:
 
-1. The wheel build computes SHA3-256 over the package's `.py` files,
-   generates an **ephemeral, per-build Ed25519 key** by default (or
-   uses `AMA_INTEGRITY_SIGNING_SEED_HEX` in release CI), signs the
-   digest, embeds **the signature + the public verification key** as
-   a Python literal in `ama_cryptography/_integrity_signature.py`,
-   then **discards the private key** before publishing the wheel.
-2. At import, `_self_test._verify_integrity()` re-hashes the
-   `.py` files, loads the embedded `(pubkey, signature)` pair, and
-   calls `ama_ed25519_verify` from the in-tree C kernel (via
-   ctypes — INVARIANT-1 forbids a PyCA dependency).  Mismatch
+1. The wheel build computes SHA3-256 over the package's `.py` files
+   **and a second SHA3-256 over the native library
+   (`libama_cryptography`) it is about to ship**, generates an
+   **ephemeral, per-build Ed25519 key** by default (or uses
+   `AMA_INTEGRITY_SIGNING_SEED_HEX` in release CI), and signs the
+   **composite** `SHA3-256(domain ‖ py_digest ‖ native_digest)` — so the
+   two digests are inseparable.  It embeds **the signature, the public
+   verification key, and both digests** as Python literals in
+   `ama_cryptography/_integrity_signature.py`, then **discards the
+   private key** before publishing the wheel.
+2. At import, `_self_test._verify_signed_integrity()` re-hashes the
+   `.py` files, loads the embedded `(pubkey, signature)` pair, verifies
+   the signature over the recomputed composite with `ama_ed25519_verify`
+   from the in-tree C kernel (via ctypes — INVARIANT-1 forbids a PyCA
+   dependency), and then **re-hashes the shared object it actually
+   loaded and requires it to match the signed native digest**.  Any
+   mismatch — edited `.py` file, edited `.so`, or a swapped signature —
    transitions the module to the ERROR state and refuses every
    cryptographic operation.
+
+   Binding the native library closes the gap where the Python wrapper
+   was tamper-evident but the code doing the cryptography was not: a
+   back-doored `libama_cryptography` used to leave the `.py` digest, the
+   signature and the trust anchor all verifying.  Because `_build_sign`
+   can only produce a signature by calling the native `ama_ed25519_sign`,
+   a working native library is present at signing time by construction,
+   so every signed artefact carries the native digest — there is no
+   unsigned-native downgrade path.  The one exception is an explicit
+   `AMA_CRYPTO_LIB_PATH` override (see below): the operator has
+   deliberately substituted the backend, so the loaded object is
+   recorded as **unverified** (a warning, and `fully_verified` is
+   `False`) rather than treated as tampering.
 
 There is **no long-lived signing key in developer builds**.  Each
 default build generates, signs once, and discards.  Release CI may
@@ -338,6 +359,47 @@ anchor, and the import-time verifier fails closed if the embedded
 public key is not that anchor.  This gives release packaging a stable
 trust-anchor gate without adding any external crypto dependency or
 trusting mutable Python source for the anchor.
+
+### Execution integrity — binding the bytecode, not just the source
+
+The signed digest above covers the package's `.py` **source**. CPython
+does not execute source; it executes the compiled bytecode in
+`__pycache__/*.pyc`. A timestamp-based `.pyc` (the default) is honoured
+by the interpreter whenever its stored `(mtime, size)` match the source,
+and an attacker with write access to the installed package sets exactly
+those. So a poisoned `.pyc` can run while every `.py` stays pristine —
+the source digest and its signature both still verify.
+
+A POST stage (`execution-integrity`, run right after the source-integrity
+stage) closes this by making on-disk bytecode subordinate to the signed
+source: it recompiles each signed `.py` and refuses any cached `.pyc`
+whose bytecode is not a faithful compile of it. The comparison is by
+executed surface — the instructions and constants, recursively into
+nested functions — and ignores the file path and line tables, so a
+legitimately relocated wheel is not a false positive while a single
+altered instruction is caught. It covers every signed source file, not
+only the ones imported so far, so a poisoned `.pyc` for a lazily-imported
+module is caught at POST rather than on first use; a source-only run
+(no `.pyc` on disk) has nothing to poison and is reported as such. A
+second pass rejects any loaded `ama_cryptography` module served from
+outside the verified package directory (module substitution). Pinned by
+`tests/test_execution_integrity.py`, including an end-to-end case where a
+poisoned-but-loadable `.pyc` fails the import while the source digest
+stays valid. This is INVARIANT-40.
+
+**Boundary (shared with the trust anchor).** A self-check written in
+Python cannot vouch for the bytecode of *its own* module if that was
+already poisoned before the check ran, just as the trust anchor lives in
+a shared object the same attacker could swap. This stage raises the cost
+from "poison any `.pyc`" to "poison the checker's own `.pyc` without
+tripping the source signature its source is bound by", but the residual
+class is real and is not something an in-process check can eliminate. The
+control that does is out-of-band: OS / package-manager code signing (dpkg
+/ rpm signatures, a signed wheel verified by the installer, an immutable
+or verified-boot filesystem) that authenticates the files before the
+Python interpreter loads them. Deploy AMA behind one of those where the
+`.pyc`/`.so` tampering threat is in scope; the in-process checks are
+defense in depth beneath it, not a substitute for it.
 
 ### `--update` is build-pipeline-only
 
@@ -462,15 +524,46 @@ This environment variable overrides the search for the native library and
 loads the named shared object directly. It is a developer convenience for
 pointing at an out-of-tree build, and it is a code-execution boundary: a
 shared object runs its constructors the moment it is mapped, before the
-power-on self-test executes, and the integrity digest does not cover it.
-Treat the ability to set it as equivalent to the ability to run code in
-the process.
+power-on self-test executes. Because the override is by definition not the
+signed, shipped object, the integrity check records the loaded library as
+**unverified** (the signature over the artefact still verifies, but the
+loaded bytes are not bound to it) — `module_attestation()["fully_verified"]`
+is `False` and a warning names the override. Treat the ability to set it as
+equivalent to the ability to run code in the process.
 
 It is ignored, with a warning, when the process is running set-uid or
 set-gid, matching the dynamic loader's refusal to honour `LD_PRELOAD` and
 `LD_LIBRARY_PATH` in secure-execution mode. When it is honoured, the
 override is logged at WARNING so a substituted backend is visible in
 operational logs.
+
+#### `LD_LIBRARY_PATH` / `DYLD_LIBRARY_PATH`
+
+The native-library search also consults `LD_LIBRARY_PATH` /
+`DYLD_LIBRARY_PATH`, which are caller-controlled and steer backend
+selection with the same power as `AMA_CRYPTO_LIB_PATH`. The dynamic loader
+strips these from a set-uid/set-gid or file-capability process before it
+maps anything, but this module reads them directly with `os.getenv`, which
+bypasses that stripping — so on a privileged binary a less-privileged
+caller's `LD_LIBRARY_PATH` could otherwise steer the cryptographic backend
+the loader had already protected. Under secure-execution mode these
+variables are therefore ignored for backend discovery, with a WARNING,
+matching the loader's own rule. On Windows the concept has no referent and
+`PATH`-based DLL resolution is unaffected.
+
+#### Partial or mismatched native builds
+
+A shared object can export some primitives and not others — a build with
+`AMA_USE_NATIVE_PQC=OFF`, a stale library from a previous major version, or
+a cross-architecture mismatch. Such a library now surfaces the families it
+does **not** provide in `native_backend_diagnostics()["missing_families"]`
+and a one-time WARNING at import, rather than presenting as a clean load
+with a scattering of unrelated failures at first use. The POST known-answer
+tests additionally *call* each covered primitive (ML-KEM, ML-DSA, SLH-DSA,
+Ed25519, SHA3-256, HMAC-SHA3-256, AES-256-GCM) on a fixed input, so a
+mismatched ABI there produces a wrong answer the KAT catches — the check a
+bare symbol-presence probe cannot perform. Under `AMA_FIPS_STRICT=1` a
+missing covered family hard-fails POST via its skipped KAT.
 
 End-to-end smoke test (from the AArch64-completeness PR's CI):
 

@@ -193,6 +193,19 @@ static void get_key_sizes(
             *signature_size = AMA_ED25519_SIGNATURE_BYTES;
             break;
 
+        case AMA_ALG_HYBRID:
+            /* Hybrid generates and signs with ML-DSA-65 (see the dispatch in
+             * ama_keypair_generate / ama_sign below).  Without this case the
+             * sizes fell to the zero default, which made the caller-buffer
+             * capacity check in ama_keypair_generate vacuous for HYBRID: any
+             * declared capacity passed, and ama_dilithium_keypair then wrote
+             * 1952 + 4032 bytes into buffers of unchecked size — a heap
+             * overflow reachable from the public context API. */
+            *public_key_size = AMA_ML_DSA_65_PUBLIC_KEY_BYTES;
+            *secret_key_size = AMA_ML_DSA_65_SECRET_KEY_BYTES;
+            *signature_size = AMA_ML_DSA_65_SIGNATURE_BYTES;
+            break;
+
         default:
             *public_key_size = 0;
             *secret_key_size = 0;

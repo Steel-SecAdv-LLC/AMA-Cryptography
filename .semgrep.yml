@@ -33,27 +33,27 @@ rules:
       cwe: "CWE-330: Use of Insufficiently Random Values"
 
   - id: hardcoded-secret-key
-    # Match assignments that *look like* hardcoded secret material and are
-    # NOT one of the well-known false-positive patterns (dunder metadata,
-    # version strings, doc strings, type annotations).
+    # Match an assignment of a non-empty string literal to a variable whose
+    # NAME looks like secret material (key / secret / password / token /
+    # credential / api-key / private-key).
+    #
+    # This rule was previously written with three separate metavariables
+    # ($KEY / $SECRET / $PASSWORD), each bound in only one branch of a
+    # pattern-either, and then three metavariable-pattern blocks constraining
+    # all three.  When a match bound via one branch, the other two
+    # metavariables were unbound, and semgrep raised an "Internal matching
+    # error" on every file — so the rule detected NOTHING while appearing in
+    # the config.  It is rewritten with a single metavariable: a positive
+    # name regex selects secret-shaped identifiers, and the metadata denylist
+    # keeps version/URL/label constants out.
     patterns:
-      - pattern-either:
-          - pattern: $KEY = "..."
-          - pattern: $SECRET = "..."
-          - pattern: $PASSWORD = "..."
-      - pattern-not: $KEY = ""
+      - pattern: $NAME = "..."
+      - pattern-not: $NAME = ""
       - metavariable-pattern:
-          metavariable: $KEY
+          metavariable: $NAME
           patterns:
-            - pattern-not-regex: '^(__\w+__|VERSION|NAME|TITLE|DESCRIPTION|AUTHOR|MAINTAINER|EMAIL|URL|HOMEPAGE|LICENSE|COPYRIGHT|README|CHANGELOG|RELEASE|TAG|BUILD|MODULE|PACKAGE|FORMAT|TYPE|KIND|MODE|STATUS|STATE|LEVEL|GRADE|CATEGORY|SUBCATEGORY|CLASS|FAMILY|GROUP|LABEL|MARKER|HEADING|SECTION|PROMPT|MESSAGE|TEXT|HEADER|FOOTER|PATH|FILE|DIR|HOST|PORT|SERVICE|ENDPOINT)$'
-      - metavariable-pattern:
-          metavariable: $SECRET
-          patterns:
-            - pattern-not-regex: '^(__\w+__|VERSION|NAME|TITLE|DESCRIPTION|AUTHOR|MAINTAINER|EMAIL|URL|HOMEPAGE|LICENSE|COPYRIGHT|README|CHANGELOG|RELEASE|TAG|BUILD|MODULE|PACKAGE|FORMAT|TYPE|KIND|MODE|STATUS|STATE|LEVEL|GRADE|CATEGORY|SUBCATEGORY|CLASS|FAMILY|GROUP|LABEL|MARKER|HEADING|SECTION|PROMPT|MESSAGE|TEXT|HEADER|FOOTER|PATH|FILE|DIR|HOST|PORT|SERVICE|ENDPOINT)$'
-      - metavariable-pattern:
-          metavariable: $PASSWORD
-          patterns:
-            - pattern-not-regex: '^(__\w+__|VERSION|NAME|TITLE|DESCRIPTION|AUTHOR|MAINTAINER|EMAIL|URL|HOMEPAGE|LICENSE|COPYRIGHT|README|CHANGELOG|RELEASE|TAG|BUILD|MODULE|PACKAGE|FORMAT|TYPE|KIND|MODE|STATUS|STATE|LEVEL|GRADE|CATEGORY|SUBCATEGORY|CLASS|FAMILY|GROUP|LABEL|MARKER|HEADING|SECTION|PROMPT|MESSAGE|TEXT|HEADER|FOOTER|PATH|FILE|DIR|HOST|PORT|SERVICE|ENDPOINT)$'
+            - pattern-regex: '(?i)(secret|passwd|password|api_?key|private_?key|access_?token|auth_?token|credential)'
+            - pattern-not-regex: '^(__\w+__|VERSION|NAME|TITLE|DESCRIPTION|AUTHOR|MAINTAINER|EMAIL|URL|HOMEPAGE|LICENSE|COPYRIGHT|README|CHANGELOG|RELEASE|TAG|BUILD|MODULE|PACKAGE|FORMAT|TYPE|KIND|MODE|STATUS|STATE|LEVEL|GRADE|CATEGORY|SUBCATEGORY|CLASS|FAMILY|GROUP|LABEL|MARKER|HEADING|SECTION|PROMPT|MESSAGE|TEXT|HEADER|FOOTER|PATH|FILE|DIR|HOST|PORT|SERVICE|ENDPOINT|_ENV|_KEY_HEX)$'
     paths:
       exclude:
         # Tests, fixtures, docs, KAT vectors, and example scripts contain

@@ -31,8 +31,13 @@ from types import TracebackType
 from typing import Any, Dict, List, Optional, Tuple, Type, cast
 
 from ama_cryptography._finalizer_health import record_finalizer_error
+from ama_cryptography._module_state import secure_token_bytes
 from ama_cryptography.exceptions import (
     AmaHSMUnavailableError as AmaHSMUnavailableError,
+)
+from ama_cryptography.exceptions import (
+    CryptoModuleError,
+    NativeBackendUnavailableError,
 )
 from ama_cryptography.exceptions import (
     KeyManagementError as KeyManagementError,
@@ -296,8 +301,11 @@ class HDKeyDerivation:
             seed_phrase: Alternative: BIP39-style seed phrase
         """
         if seed is None and seed_phrase is None:
-            # Generate random seed
-            self.master_seed = secrets.token_bytes(64)
+            # Generate a random seed through the FIPS 140-3 §4.9.2
+            # health-tested CSPRNG draw — this seed determines every key in
+            # the hierarchy, so a raw secrets.token_bytes (no error-state
+            # gate, no continuous repeated-output check) is not enough.
+            self.master_seed = secure_token_bytes(64)
         elif seed is not None:
             self.master_seed = seed
         else:
@@ -319,7 +327,83 @@ class HDKeyDerivation:
         master_key = hmac_result[:32]
         chain_code = hmac_result[32:]
 
+        # BIP32: a master key whose scalar is 0 or >= n is invalid and the
+        # seed must be rejected (probability ~2^-127).  This check predates
+        # nothing — it was silently absent, and an invalid scalar would have
+        # surfaced later as an unexplained signing failure.
+        master_int = int.from_bytes(master_key, "big")
+        if master_int == 0 or master_int >= self.SECP256K1_N:
+            raise ValueError(
+                "Invalid BIP32 master key derived from this seed (scalar is 0 "
+                "or >= n; probability ~2^-127). Use a different seed."
+            )
+
+        # FIPS 140-3 pairwise consistency test — the master key is the root
+        # secp256k1 keypair this hierarchy mints (INVARIANT-41).
+        self._pairwise_consistency_test(master_key, "secp256k1 (BIP32 master)")
+
         return master_key, chain_code
+
+    @staticmethod
+    def _pairwise_consistency_test(private_key: bytes, label: str) -> None:
+        """Sign/verify pairwise consistency test for a freshly minted secp256k1 key.
+
+        The public key is re-derived from the private scalar (compressed, then
+        decompressed to the X||Y form the verifier consumes) and the pair must
+        round-trip an ECDSA sign/verify.  A failure enters the module ERROR
+        state via the shared helper (INVARIANT-41).
+
+        Availability is pre-checked with an explanation: a build without the
+        native secp256k1 backend cannot run this test, so HD keys are refused
+        on it — including hierarchies that would otherwise use hardened-only
+        derivation and never touch secp256k1.  That configuration is retired
+        deliberately: an untestable keypair is not released.
+
+        A ``ValueError`` out of the public-key derivation AFTER the caller has
+        range-checked the scalar is the other story entirely: the scalar was
+        valid, so a rejected derivation means the derivation itself is corrupt
+        — the fault class under test — and it enters ERROR like any other
+        pairwise failure.
+        """
+        from ama_cryptography._module_state import _set_error, pairwise_test_signature
+        from ama_cryptography.pqc_backends import (
+            _SECP256K1_NATIVE_AVAILABLE,
+            native_secp256k1_ecdsa_sign,
+            native_secp256k1_ecdsa_verify,
+            native_secp256k1_pubkey_decompress,
+            native_secp256k1_pubkey_from_privkey,
+        )
+
+        if not _SECP256K1_NATIVE_AVAILABLE:
+            raise NativeBackendUnavailableError(
+                "secp256k1 sign/verify unavailable: the FIPS 140-3 pairwise "
+                "consistency test cannot run, so no HD key is released — "
+                "hardened-only derivation included. Build the native library "
+                "with the secp256k1 backend to use HD key derivation."
+            )
+
+        try:
+            public_key_64 = native_secp256k1_pubkey_decompress(
+                native_secp256k1_pubkey_from_privkey(private_key)
+            )
+        except ValueError as exc:
+            # The caller validated the scalar against the curve order, so a
+            # derivation rejection is corruption, not bad input.
+            _set_error(f"Pairwise consistency test failed for {label}: {exc}")
+            raise CryptoModuleError(
+                f"Module in error state: Pairwise test failed for {label}"
+            ) from exc
+        # The ECDSA primitives take a 32-byte digest, not a message; hash the
+        # helper's test message on both sides so sign and verify agree.
+        pairwise_test_signature(
+            lambda message, sk: native_secp256k1_ecdsa_sign(hashlib.sha256(message).digest(), sk),
+            lambda message, signature, pk: native_secp256k1_ecdsa_verify(
+                signature, hashlib.sha256(message).digest(), pk
+            ),
+            private_key,
+            public_key_64,
+            label,
+        )
 
     def _ckd_private(
         self, parent_key: bytes, parent_chain: bytes, index: int
@@ -382,6 +466,14 @@ class HDKeyDerivation:
 
         # Convert back to 32-byte big-endian representation
         child_key = child_key_int.to_bytes(32, "big")
+
+        # FIPS 140-3 pairwise consistency test — a derived child is a newly
+        # minted keypair, and derivation-time is when a fault-corrupted
+        # intermediate (a flipped bit in IL, a miscomputed modular sum) is
+        # still caught before release (INVARIANT-41).  The label deliberately
+        # omits the derivation index: a failure writes the label into
+        # operator logs, and wallet-structure metadata does not belong there.
+        self._pairwise_consistency_test(child_key, "secp256k1 (BIP32 child)")
 
         return child_key, child_chain
 

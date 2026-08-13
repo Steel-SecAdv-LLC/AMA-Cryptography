@@ -880,6 +880,13 @@ setup(
             "_integrity_digest.txt",
             "py.typed",
             "*.pyi",
+            # Pinned NIST ACVP-Server vectors consumed by the FIPS 140-3 POST
+            # known-answer tests.  Listed here as well as in pyproject.toml's
+            # [tool.setuptools.package-data] because a setup.py package_data
+            # kwarg overrides the pyproject table under setuptools — omitting it
+            # here would silently drop the vectors from the wheel and make the
+            # PQC KATs fail at import with "pinned vector missing".
+            "_post_kats/*.json",
             "libama_cryptography.so*",
             "libama_cryptography.dylib",
             "libama_cryptography*.dylib",

@@ -350,10 +350,42 @@ class TestKatFailureBranches:
         if not pq.KYBER_AVAILABLE:
             pytest.skip("Kyber backend unavailable")
 
-        monkeypatch.setattr(pq, "kyber_decapsulate", lambda ct, sk: b"\x00" * 32)
-        passed, detail = st._kat_ml_kem_1024()
-        assert passed is False
-        assert "mismatch" in detail.lower()
+        # The KAT decapsulates the PINNED NIST ciphertext and compares to the
+        # vector's known shared secret; a decapsulation that returns the wrong
+        # bytes must be caught as a known-answer failure.
+        #
+        # The lie has to be surgical: the KAT's keygen now runs a pairwise
+        # consistency test (INVARIANT-41) that decapsulates a FRESH ciphertext
+        # it just encapsulated, and a blanket lie would fail that PCT first —
+        # proving fail-closed, but at the wrong stage and leaving the module
+        # in ERROR.  Lying only for ciphertexts this process did not just
+        # produce keeps the PCT honest, so the known-answer comparison is the
+        # stage under test.
+        fresh_cts: set[bytes] = set()
+        real_encaps = pq.native_ml_kem_encapsulate
+        real_decaps = pq.native_ml_kem_decapsulate
+
+        def _tracking_encaps(ps: int | str, pk: bytes) -> tuple[bytes, bytes]:
+            ct, ss = real_encaps(ps, pk)
+            fresh_cts.add(ct)
+            return ct, ss
+
+        def _lying_decaps(ps: int | str, ct: bytes, sk: bytes) -> bytes:
+            if ct in fresh_cts:
+                return real_decaps(ps, ct, sk)
+            return b"\x00" * 32
+
+        monkeypatch.setattr(pq, "native_ml_kem_encapsulate", _tracking_encaps)
+        monkeypatch.setattr(pq, "native_ml_kem_decapsulate", _lying_decaps)
+        try:
+            passed, detail = st._kat_ml_kem_1024()
+            assert passed is False
+            assert "known answer" in detail.lower()
+        finally:
+            # Belt and braces: if a future wiring change routes the lie into a
+            # PCT after all, do not leak the ERROR state into later tests.
+            if st.module_status() != "OPERATIONAL":
+                st._set_operational()
 
     def test_kat_ml_dsa_65_exception(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from ama_cryptography import pqc_backends as pq
@@ -362,9 +394,11 @@ class TestKatFailureBranches:
             pytest.skip("Dilithium backend unavailable")
 
         def _boom(*args: object, **kwargs: object) -> bytes:
-            raise RuntimeError("simulated sign failure")
+            raise RuntimeError("simulated keygen failure")
 
-        monkeypatch.setattr(pq, "dilithium_sign", _boom)
+        # The KAT derives the keypair from the NIST seed first; an exception
+        # there must be caught and reported, not propagated.
+        monkeypatch.setattr(pq, "native_ml_dsa_keypair_from_seed", _boom)
         passed, detail = st._kat_ml_dsa_65()
         assert passed is False
         assert "exception" in detail.lower()

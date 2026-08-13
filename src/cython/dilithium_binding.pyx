@@ -45,12 +45,21 @@ cdef extern from "ama_cryptography.h":
     void ama_secure_memzero(void *ptr, size_t len)
 
 
+# FIPS 140-3 §4.9.2 output inhibition — see ed25519_binding.pyx for the
+# full rationale.  This module is a public submodule whose cy_* function
+# calls the C kernel directly, bypassing pqc_backends' gated wrappers (and,
+# imported as a top-level module, POST itself); the guard refuses output in
+# the FIPS error state and the import forces POST to run.
+from ama_cryptography._module_state import check_crypto_permitted
+
+
 def cy_dilithium_keygen():
     """
     Generate ML-DSA-65 keypair via native C.
     Returns (public_key, secret_key) as bytes.
     Raises RuntimeError on native C failure.
     """
+    check_crypto_permitted()
     cdef unsigned char *pk = <unsigned char*>malloc(DILITHIUM_PK_BYTES)
     cdef unsigned char *sk = <unsigned char*>malloc(DILITHIUM_SK_BYTES)
     if pk == NULL or sk == NULL:
@@ -78,6 +87,7 @@ def cy_dilithium_sign(bytes message, bytes secret_key):
     Returns signature bytes.
     Raises RuntimeError on native C failure.
     """
+    check_crypto_permitted()
     if len(secret_key) != DILITHIUM_SK_BYTES:
         raise ValueError(
             f"Dilithium secret key must be {DILITHIUM_SK_BYTES} bytes, "
@@ -117,6 +127,7 @@ def cy_dilithium_verify(bytes signature, bytes message, bytes public_key):
     Verify ML-DSA-65 signature via native C.
     Returns True if valid, False otherwise.
     """
+    check_crypto_permitted()
     if len(public_key) != DILITHIUM_PK_BYTES:
         raise ValueError(
             f"Dilithium public key must be {DILITHIUM_PK_BYTES} bytes, "

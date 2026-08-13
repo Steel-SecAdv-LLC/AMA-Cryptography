@@ -122,6 +122,7 @@ from ama_cryptography._asn1 import (
     der_tagged,
     oid_from_string,
 )
+from ama_cryptography._module_state import check_crypto_permitted
 from ama_cryptography.exceptions import KeyFormatError, UnsupportedKeyFormatError
 
 __all__ = [
@@ -1101,6 +1102,14 @@ def _encode_pq_private_key(key: PrivateKey, alg: _Alg, pq_format: str) -> bytes:
 
 
 def _encode_pkcs8(key: PrivateKey, *, include_public_key: bool | None, pq_format: str) -> bytes:
+    # FIPS 140-3 §4.9.2: a module in the error state must not output secret key
+    # material.  This is the single choke point for private-key serialisation —
+    # PrivateKey.to_pkcs8() and .to_pem() both route through here — so gating it
+    # refuses PKCS#8 / PEM export of a secret key while POST has failed, rather
+    # than emitting a full private-key PEM block from a faulted module.
+    # Public-key and parse paths are deliberately not gated: they emit no
+    # secret material.
+    check_crypto_permitted()
     alg = _lookup(key.algorithm)
     if include_public_key is None:
         include_public_key = _CONVENTIONAL_PUBLIC[alg.kind]
@@ -1640,6 +1649,9 @@ def public_key_to_jwk(key: PublicKey) -> dict[str, Any]:
 
 def private_key_to_jwk(key: PrivateKey) -> dict[str, Any]:
     """Encode a private key as a JWK — includes the public members per RFC 7518."""
+    # FIPS 140-3 §4.9.2: no secret-key output from a module in the error state.
+    # The ``d`` member below is the private scalar.
+    check_crypto_permitted()
     alg = _lookup(key.algorithm)
     _require_jwk_support(alg, "JWK")
     jwk = public_key_to_jwk(key.public())
@@ -1857,6 +1869,9 @@ def public_key_to_cose(key: PublicKey) -> bytes:
 
 def private_key_to_cose(key: PrivateKey) -> bytes:
     """Encode a private key as a COSE_Key with the ``d`` (-4) member."""
+    # FIPS 140-3 §4.9.2: no secret-key output from a module in the error state.
+    # The ``d`` (-4) member below is the private scalar.
+    check_crypto_permitted()
     alg = _lookup(key.algorithm)
     _require_jwk_support(alg, "COSE")
     decoded = cbor_decode_canonical(public_key_to_cose(key.public()))

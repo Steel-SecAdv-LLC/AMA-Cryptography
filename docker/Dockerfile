@@ -110,6 +110,20 @@ RUN pip3 install --no-cache-dir /tmp/*.whl && \
     rm -rf /tmp/*.whl /tmp/requirements.txt && \
     ldconfig
 
+# Re-sign the module-integrity artefact for the native library THIS image loads.
+# The wheel ships the committed artefact, whose signed native digest is specific
+# to the exact build it was signed against; this image compiles its own native
+# library (gcc-12, LTO, its own SIMD flags), so the loaded .so hashes differently
+# and POST would fail-close — the HEALTHCHECK and CMD below both `import
+# ama_cryptography`. Re-signing here binds the artefact to whatever the runtime
+# discovery actually loads (the wheel's bundled .so or /usr/local/lib), exactly
+# as the wheel signer does per platform. Run as root, before dropping to `ama`,
+# so it can write into the installed package. AMA_BUILD_PIPELINE=1 lets the
+# import complete for the re-sign despite the initial mismatch; tamper detection
+# is covered by tests/test_native_integrity.py, so this removes no coverage.
+RUN AMA_BUILD_PIPELINE=1 python3 -m ama_cryptography.integrity --update --sign && \
+    python3 -c "import ama_cryptography as a; assert a.module_attestation()['state'] == 'OPERATIONAL', a.module_attestation(); print('POST OPERATIONAL after re-sign')"
+
 # Switch to non-root user
 USER ama
 

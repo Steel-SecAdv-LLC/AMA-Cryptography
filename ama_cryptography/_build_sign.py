@@ -18,12 +18,17 @@ wrapper) to:
      the build-time signer must also obey that contract.
   2. Compute the SHA3-256 digest over the package's ``.py`` files
      (the same algorithm ``_self_test._compute_module_digest`` uses
-     at import time).
-  3. Sign the digest with the per-build private key using
-     ``ama_ed25519_sign``.
+     at import time) AND a second SHA3-256 over the native library
+     (``libama_cryptography``) that will ship in the wheel.
+  3. Sign the **composite** ``SHA3-256(domain || py_digest ||
+     native_digest)`` with the per-build private key using
+     ``ama_ed25519_sign``.  Signing the composite binds the shared
+     object that performs every cryptographic operation into the same
+     signature that covers the Python wrapper, so a tampered ``.so`` is
+     caught at import (``_self_test._verify_signed_integrity``).
   4. Write ``ama_cryptography/_integrity_signature.py`` containing
-     the embedded public key, signature, and digest as Python
-     literals — the only artefact that ships with the wheel.
+     the embedded public key, signature, .py digest, and native digest
+     as Python literals — the only artefact that ships with the wheel.
   5. Discard the private key (it never leaves the build host's
      memory, never lands in the wheel, never gets cached).
 
@@ -46,6 +51,7 @@ Verification (at import time, see ``_self_test._verify_integrity``):
 from __future__ import annotations
 
 import argparse
+import contextlib
 import ctypes
 import hashlib
 import os
@@ -81,12 +87,14 @@ def _require_build_pipeline() -> None:
 
 
 def _compute_package_digest(pkg_dir: Path) -> bytes:
-    """Compute SHA3-256 over ``pkg_dir``'s ``.py`` files.
+    """Compute SHA3-256 over ``pkg_dir``'s ``.py`` files and POST KAT vectors.
 
-    Mirrors ``_self_test._compute_module_digest`` byte-for-byte:
-    sorted glob over ``*.py`` at the top level, name + content with
-    CRLF normalised to LF.  Returns raw 32 bytes (the import-time
-    verifier compares raw, not hex).
+    Mirrors ``_self_test._compute_module_digest`` byte-for-byte: the top-level
+    ``*.py`` files (excluding the generated ``_integrity_signature.py``), then
+    every file under ``_post_kats/`` ordered by name, each contributing its name
+    plus content with CRLF normalised to LF.  Covering ``_post_kats/`` binds the
+    Known Answer vectors so a swapped vector fails the import-time integrity
+    check.  Returns raw 32 bytes (the verifier compares raw, not hex).
     """
     hasher = hashlib.sha3_256()
     for py_file in sorted(pkg_dir.glob("*.py")):
@@ -96,9 +104,43 @@ def _compute_package_digest(pkg_dir: Path) -> bytes:
         if py_file.name == "_integrity_signature.py":
             continue
         hasher.update(py_file.name.encode("utf-8"))
-        content = py_file.read_bytes().replace(b"\r\n", b"\n")
-        hasher.update(content)
+        hasher.update(py_file.read_bytes().replace(b"\r\n", b"\n"))
+    kat_dir = pkg_dir / "_post_kats"
+    if kat_dir.is_dir():
+        for kat_file in sorted((p for p in kat_dir.iterdir() if p.is_file()), key=lambda p: p.name):
+            hasher.update(b"_post_kats/")
+            hasher.update(kat_file.name.encode("utf-8"))
+            hasher.update(kat_file.read_bytes().replace(b"\r\n", b"\n"))
     return hasher.digest()
+
+
+# Domain-separation tag binding the .py digest and the native-library digest
+# under one signature.  MUST equal ``_self_test._INTEGRITY_SIG_DOMAIN`` byte for
+# byte — the runtime verifier reconstructs the signed message from these same
+# bytes.  The two modules deliberately do not import each other (build-time vs
+# runtime separation, INVARIANT-1); ``tests/test_native_integrity.py`` pins the
+# constants equal so a drift fails CI rather than silently invalidating every
+# signature.
+_INTEGRITY_SIG_DOMAIN = b"AMA-integrity-signature-v2\x00"
+
+
+def _compute_native_library_digest(path: str) -> bytes:
+    """SHA3-256 over the raw bytes of the native library at ``path``.
+
+    Follows symlinks so the SONAME chain resolves to the one real object whose
+    bytes the loader maps — the same bytes the runtime verifier will hash.
+    """
+    with open(path, "rb") as handle:
+        return hashlib.sha3_256(handle.read()).digest()
+
+
+def _composite_integrity_message(py_digest: bytes, native_digest: bytes) -> bytes:
+    """The exact bytes the Ed25519 integrity signature covers (v2 format).
+
+    ``SHA3-256(domain || py_digest || native_digest)``.  Mirrored byte-for-byte
+    in ``_self_test._composite_integrity_message``.
+    """
+    return hashlib.sha3_256(_INTEGRITY_SIG_DOMAIN + py_digest + native_digest).digest()
 
 
 def _env_flag_enabled(name: str) -> bool:
@@ -300,28 +342,62 @@ SECURITY.md "Module Integrity Verification" for the threat model.
 # hex-encoded for embeddability).
 INTEGRITY_DIGEST_HEX = "{digest_hex}"
 
+# SHA3-256 digest of the native library (libama_cryptography) at build time.
+# This is what binds the shared object that performs every cryptographic
+# operation into the same signature that covers the .py files — without it the
+# signature attested to the Python wrapper only, and the implementation the
+# wrapper calls into was covered by nothing.
+INTEGRITY_NATIVE_DIGEST_HEX = "{native_digest_hex}"
+
 # Ephemeral build-time Ed25519 public key (raw 32 bytes, hex-encoded).
 INTEGRITY_PUBKEY_HEX = "{pubkey_hex}"
 
-# Ed25519 signature over the raw digest above (raw 64 bytes, hex-encoded).
+# Ed25519 signature over SHA3-256(domain || py_digest || native_digest) — the
+# v2 composite that makes the two digests inseparable.  See
+# ama_cryptography._self_test._composite_integrity_message.
 INTEGRITY_SIGNATURE_HEX = "{signature_hex}"
 
 # Build metadata — informational only, not part of the integrity contract.
-BUILD_PIPELINE_VERSION = "1"
+BUILD_PIPELINE_VERSION = "2"
 '''
 
 
-def _write_signature_module(pkg_dir: Path, digest: bytes, pubkey: bytes, signature: bytes) -> Path:
+def _write_signature_module(
+    pkg_dir: Path,
+    digest: bytes,
+    native_digest: bytes,
+    pubkey: bytes,
+    signature: bytes,
+) -> Path:
     """Emit ``_integrity_signature.py`` as a Python literal module."""
     out_path = pkg_dir / "_integrity_signature.py"
+    # newline="\n" pins the artefact to LF on every platform.  Windows'
+    # default text-mode translation would emit CRLF, making the working tree
+    # diverge from the committed blob byte-for-byte — which the checkout
+    # byte-identity gate (tools/check_line_endings.py) correctly rejects.
     out_path.write_text(
         _SIGNATURE_TEMPLATE.format(
             digest_hex=digest.hex(),
+            native_digest_hex=native_digest.hex(),
             pubkey_hex=pubkey.hex(),
             signature_hex=signature.hex(),
         ),
         encoding="utf-8",
+        newline="\n",
     )
+    # Drop any cached bytecode compiled from the PREVIOUS artefact.  CPython
+    # validates a .pyc by (mtime-seconds, size) — and this rewrite produces a
+    # file of IDENTICAL size (fixed-width hex fields), often within the same
+    # second in a build pipeline.  The stale .pyc then still validates, the
+    # next import reads the OLD digests, and the runtime reports a
+    # native-digest mismatch against a signature that no longer exists on
+    # disk.  This is not hypothetical: it failed the Alpine Docker build on
+    # PR #391, where the per-image re-sign and its verification import ran
+    # 250 ms apart.  Unlinking the cache forces the next import to compile
+    # the bytes just written.
+    for cached in (out_path.parent / "__pycache__").glob("_integrity_signature.*.pyc"):
+        with contextlib.suppress(OSError):
+            cached.unlink()
     return out_path
 
 
@@ -356,18 +432,45 @@ def main() -> int:
     digest_hex = digest.hex()
 
     # Always refresh the legacy digest-only artefact so the
-    # digest-fallback verifier path stays in sync.
-    (pkg_dir / "_integrity_digest.txt").write_text(digest_hex + "\n")
+    # digest-fallback verifier path stays in sync.  newline="\n" keeps the
+    # artefact LF on Windows too (see _write_signature_module).
+    (pkg_dir / "_integrity_digest.txt").write_text(
+        digest_hex + "\n", encoding="utf-8", newline="\n"
+    )
     print(f"Integrity digest refreshed: {digest_hex}")
 
     if args.digest_only:
         return 0
 
     try:
+        # Locate the native library and hash the exact object that will ship in
+        # the wheel.  This runs BEFORE signing so the digest is bound into the
+        # signed message: the signature covers the composite of the .py digest
+        # and this native digest, not the .py digest alone.  _find_native_library
+        # is the same discovery the runtime uses, so the file hashed here is the
+        # file the runtime will load and re-hash.
+        from ama_cryptography.pqc_backends import (
+            _find_native_library,
+            native_backend_diagnostics,
+        )
+
+        native_lib = _find_native_library()
+        if native_lib is None:
+            raise RuntimeError(
+                "native library not found; cannot bind it into the integrity "
+                "signature. Build it first: cmake -B build "
+                "-DAMA_USE_NATIVE_PQC=ON && cmake --build build"
+            )
+        native_path = getattr(native_lib, "_name", None) or native_backend_diagnostics()["path"]
+        if not native_path:
+            raise RuntimeError("native library loaded but its path is unknown; cannot hash it")
+        native_digest = _compute_native_library_digest(native_path)
+        signed_message = _composite_integrity_message(digest, native_digest)
+
         seed_override = _load_hex_env_bytes(_INTEGRITY_SIGNING_SEED_ENV, 32)
         trusted_pubkey_env = _load_hex_env_bytes(_INTEGRITY_TRUST_ANCHOR_ENV, 32)
         pubkey, signature, anchor_source = _generate_keypair_and_sign(
-            digest,
+            signed_message,
             seed_override=seed_override,
             trusted_pubkey=trusted_pubkey_env,
             require_trust_anchor=_env_flag_enabled(_INTEGRITY_REQUIRE_TRUST_ANCHOR_ENV),
@@ -386,12 +489,13 @@ def main() -> int:
         )
         return 1
 
-    out_path = _write_signature_module(pkg_dir, digest, pubkey, signature)
+    out_path = _write_signature_module(pkg_dir, digest, native_digest, pubkey, signature)
     print(
         f"Signed integrity artefact written: {out_path}\n"
-        f"  digest    = {digest_hex}\n"
-        f"  pubkey    = {pubkey.hex()}\n"
-        f"  signature = {signature.hex()[:32]}... (64 B)"
+        f"  digest        = {digest_hex}\n"
+        f"  native digest = {native_digest.hex()}\n"
+        f"  pubkey        = {pubkey.hex()}\n"
+        f"  signature     = {signature.hex()[:32]}... (64 B)"
     )
     # Report the *actual* enforcement state — native-compiled anchor, env-var
     # anchor, or unanchored — so CI logs cannot mislead packagers about

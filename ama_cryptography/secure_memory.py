@@ -17,7 +17,8 @@ Features:
   constant-time in fact (INVARIANT-7), so ``constant_time_compare`` now raises
   rather than substituting it
 - SecureBuffer context manager — automatic cleanup on exit
-- Secure random byte generation — uses ``os.urandom``
+- Secure random byte generation — routed through the FIPS 140-3 §4.9.2
+  output-inhibited, health-tested CSPRNG (no longer a bare ``os.urandom``)
 
 Implementation notes:
 
@@ -27,7 +28,8 @@ Implementation notes:
   ``RuntimeError`` when the native library is absent
 - ``lengths_match``: public (non-constant-time) length pre-check, for use
   before ``constant_time_compare`` where the expected size is fixed
-- ``secure_random_bytes``: Uses ``os.urandom`` (stdlib)
+- ``secure_random_bytes``: routed through ``_self_test.secure_token_bytes`` —
+  the error-state-gated, continuous-health-tested draw (not bare ``os.urandom``)
 
 Usage::
 
@@ -63,6 +65,14 @@ from typing import Any, Callable, Dict, Generator, Optional, Type, Union
 logger = logging.getLogger(__name__)
 
 
+# The health-tested draw lives in the ``_module_state`` leaf (imports only the
+# stdlib and ``exceptions``), so this import is safe at module level in every
+# context this module is loaded from — including the build-time signer, which
+# imports secure_memory before the package's POST has run.  The previous
+# call-time import inside ``secure_random_bytes`` existed only because the draw
+# lived in ``_self_test`` and importing the POST orchestrator here formed a
+# cycle.
+from ama_cryptography._module_state import secure_token_bytes
 from ama_cryptography.exceptions import AmaCryptographyError
 
 
@@ -75,9 +85,13 @@ class SecureMemoryError(AmaCryptographyError):
 def _load_native_consttime() -> Optional[Callable[..., Any]]:
     """Try to load ama_consttime_memcmp from AMA's native C library."""
     try:
-        from ama_cryptography.pqc_backends import _find_native_library
+        # Verified discovery: a library the ABI handshake rejected must not
+        # serve the constant-time comparison either — this module's own
+        # handle would otherwise bypass the version gate pqc_backends applies
+        # to its module-level binding.
+        from ama_cryptography.pqc_backends import _find_verified_native_library
 
-        lib = _find_native_library()
+        lib = _find_verified_native_library()
         if lib is None:
             return None
         lib.ama_consttime_memcmp.argtypes = [
@@ -229,9 +243,10 @@ SECURE_MEMZERO_BACKEND: str = "python_fallback"
 def _try_native_ama_memzero() -> "Optional[Callable[[Union[bytearray, memoryview]], None]]":
     """Attempt to use ama_secure_memzero from AMA's native C library."""
     try:
-        from ama_cryptography.pqc_backends import _find_native_library
+        # Verified discovery — see _load_native_consttime for why.
+        from ama_cryptography.pqc_backends import _find_verified_native_library
 
-        lib = _find_native_library()
+        lib = _find_verified_native_library()
         if lib is None:
             return None
         fn = lib.ama_secure_memzero
@@ -692,7 +707,17 @@ def secure_random_bytes(size: int) -> bytes:
     """
     Generate cryptographically secure random bytes.
 
-    Uses os.urandom from the standard library.
+    Routed through :func:`ama_cryptography._self_test.secure_token_bytes`, which
+    applies two controls this function previously had neither of:
+
+    * **FIPS 140-3 §4.9.2 output inhibition** — a module in the error state must
+      not emit key material, and this function is one of the places key material
+      comes from.  It called ``os.urandom`` directly, so it kept producing
+      output after POST had failed.
+    * **The FIPS 140-3 §4.9.2 continuous RNG health test** — the repeated-block
+      check lived in ``secure_token_bytes`` and nothing in the library called
+      it, so the test was implemented and never ran against a single real draw.
+      Every byte handed out here is now compared against the previous draw.
 
     Args:
         size: Number of random bytes to generate
@@ -702,6 +727,8 @@ def secure_random_bytes(size: int) -> bytes:
 
     Raises:
         ValueError: If size is negative
+        CryptoModuleError: If the module is in the FIPS error state, or the
+            continuous RNG health test fails
     """
     if size < 0:
         raise ValueError("size must be non-negative")
@@ -709,7 +736,7 @@ def secure_random_bytes(size: int) -> bytes:
     if size == 0:
         return b""
 
-    return os.urandom(size)
+    return secure_token_bytes(size)
 
 
 class SecureBuffer:

@@ -131,19 +131,52 @@ jobs:
         # Installing them converts those skips into real assertions.
         pip install -e ".[dev,legacy,benchmark]" pycryptodome
 
-    - name: Verify module integrity digest is current
+    # The signed integrity artefact binds two digests: the .py sources
+    # (platform-independent) and the built native library (specific to the exact
+    # OS/arch/toolchain/flags it was compiled with). This job builds the native
+    # library itself, so its .so/.dll/.dylib hashes differently from the one the
+    # committed artefact was signed against — the native digest cannot match, on
+    # Windows/macOS/ARM by binary format and even across Linux build configs. The
+    # verification therefore splits: check the .py half (which every runner can
+    # verify identically), then re-sign the native half for this build — exactly
+    # what setup.py's _run_integrity_signer already does for each wheel.
+    - name: Verify committed .py integrity digest is current (platform-independent)
       shell: bash
+      # Catches the real thing the old committed-artefact check protected: a .py
+      # source edited without refreshing _integrity_digest.txt. AMA_BUILD_PIPELINE
+      # lets the import complete for this read even though the native digest does
+      # not match this build; the module stays in ERROR and refuses crypto.
+      env:
+        AMA_BUILD_PIPELINE: "1"
       run: |
-        python -c "
-        from ama_cryptography._self_test import verify_module_integrity
-        ok, detail = verify_module_integrity()
-        if not ok:
+        python - <<'PY'
+        from pathlib import Path
+        import ama_cryptography as a
+        from ama_cryptography._self_test import _compute_module_digest
+        committed = (Path(a.__file__).parent / "_integrity_digest.txt").read_text().strip()
+        computed = _compute_module_digest()
+        if committed != computed:
             raise SystemExit(
-                f'FATAL: Module integrity digest is stale or tampered: {detail}\n'
-                'Run: python -m ama_cryptography.integrity --update'
+                f"FATAL: committed .py integrity digest is stale: "
+                f"committed={committed[:16]}... computed={computed[:16]}...\n"
+                "A .py source changed without refreshing the digest. Run:\n"
+                "  AMA_BUILD_PIPELINE=1 python -m ama_cryptography.integrity --update --sign"
             )
-        print(f'Module integrity: OK ({detail})')
-        "
+        print(f"Committed .py integrity digest is current ({committed[:16]}...).")
+        PY
+
+    - name: Re-sign the integrity artefact for this build's native library
+      shell: bash
+      # Mirrors the wheel signer: bind the freshly-built native library into the
+      # artefact so the module is internally consistent and POST can verify it.
+      # This is a positive-path test (a valid signature verifies); tamper
+      # DETECTION — a flipped .so or forged signature failing POST — is covered
+      # by tests/test_native_integrity.py on a purpose-built tree, so re-signing
+      # here removes no security coverage.
+      env:
+        AMA_BUILD_PIPELINE: "1"
+      run: |
+        python -m ama_cryptography.integrity --update --sign
 
     - name: Verify crypto backends are available
       shell: bash
@@ -500,10 +533,20 @@ jobs:
         path: bandit-report.json
 
     - name: Semgrep security scan
+      # `semgrep scan` exits 0 whether or not it finds anything (there is no
+      # --error here), and semgrep-report.json was never read — so this
+      # merge-blocking step could not fail on a finding, or even on a rule that
+      # failed to evaluate.  tools/check_semgrep_severity.py applies the policy
+      # to the JSON: fail closed on a missing/erroring scan, and block on any
+      # finding at or above ERROR severity (the config's insecure-random,
+      # weak-hash, deprecated-crypto-api, private-key-logging, unsafe-pickle and
+      # bare-memset rules).  Mirrors the Bandit gate already in this job; both
+      # directions are pinned by tests/test_semgrep_severity_gate.py.
       continue-on-error: false
       run: |
         python -m pip install semgrep==1.74.0
         semgrep --config .semgrep.yml ama_cryptography/ --json -o semgrep-report.json
+        python tools/check_semgrep_severity.py semgrep-report.json
 
     - name: Upload Semgrep report
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
@@ -595,6 +638,18 @@ jobs:
       # re-derived: pytest's own collection count, the corpus files' `records`
       # arrays, and the Wycheproof manifest. Same class of duplication as the
       # version strings check_version_consistency.py polices, same fix.
+      #
+      # AMA_POST_DIAGNOSTIC_IMPORT=1: this job deliberately installs no native
+      # library (see the Install step — "collection needs no native library").
+      # Since INVARIANT-39, a failed POST makes `import ama_cryptography` raise,
+      # so `pytest --collect-only` on any file importing the package now yields
+      # no count and the gate reports every pinned file as drift. The diagnostic
+      # flag lets the import complete for introspection only — the module stays
+      # in ERROR and every cryptographic operation still refuses — which is
+      # exactly what collection needs and nothing more. Collection enumerates
+      # test functions; it runs no cryptography.
+      env:
+        AMA_POST_DIAGNOSTIC_IMPORT: "1"
       run: |
         python tools/check_documented_counts.py
 
@@ -670,6 +725,44 @@ jobs:
       # vs. the RFCs themselves) runs in corpus-provenance.yml.
       run: |
         python tools/build_keyformat_corpus.py --verify
+
+    - name: "FIPS 140-3 §4.9.1: POST KAT vectors match their vendored NIST sources"
+      # The power-on self-test's known-answer vectors for ML-KEM-1024,
+      # ML-DSA-65 and SLH-DSA-SHA2-256f are extracted from the version-pinned
+      # NIST ACVP vectors under tests/kat/ (see tests/kat/README.md) into
+      # ama_cryptography/_post_kats/.  A KAT is only as trustworthy as its
+      # known answer: if the pinned vector drifted from its NIST source — or was
+      # swapped for one a broken implementation happens to pass — the KAT would
+      # go green while testing nothing.  This gate re-derives from the vendored
+      # sources and fails on any mismatch.  It needs no native library.  The
+      # vectors are additionally integrity-covered (the module digest hashes
+      # _post_kats/), so a swap also fails POST at import; both directions are
+      # pinned by tests/test_native_integrity.py.
+      run: |
+        python tools/build_post_kats.py --check
+
+    - name: "FIPS 140-3 §4.9.2: error-state output inhibition is complete"
+      # FIPS 140-3 §4.9.2 requires a module whose power-on self-tests failed to
+      # inhibit ALL cryptographic output.  That requirement used to be met only
+      # by crypto_api; every one of the eighty public entry points in
+      # pqc_backends — keygen, signing, KEM, AEAD, HMAC, KDF — called straight
+      # through to the C library with no state check, so a module that had
+      # logged "FIPS 140-3 POST FAILURE" at import kept signing for any caller
+      # that reached past crypto_api, which is what this package's own internal
+      # modules all do.  The error state inhibited nothing that mattered.
+      #
+      # The fix is one guard call per function, which is exactly why it needs a
+      # machine to hold it: a convention this small, spread over eighty call
+      # sites, decays the first time someone adds a primitive without reading
+      # the file.  The gap would be silent — the new function works, the tests
+      # pass, and the only symptom is a FIPS violation on the failure path
+      # nobody exercises.  tools/check_error_state_gating.py parses the AST and
+      # requires the guard on every public function that reaches _native_lib;
+      # exemptions must be declared with a reason and are themselves checked
+      # for staleness, so the list cannot rot into a blanket allowlist.
+      # Both directions are pinned by tests/test_post_failclosed.py.
+      run: |
+        python tools/check_error_state_gating.py
 
     - name: "INVARIANT-23: Secret scan (in-house)"
       # tools/check_secrets.py is written in house rather than adopting a
@@ -797,6 +890,18 @@ jobs:
         python -m pip install --upgrade pip setuptools wheel
         pip install "Cython>=3.0.0" "numpy>=1.24.0,<3.0.0"
         pip install -e ".[dev]"
+
+    - name: Re-sign the integrity artefact for this build's native library
+      # benchmark_runner.py imports the package, which runs POST. This job builds
+      # the native library itself, and the AArch64 matrix entry's .so cannot match
+      # the committed native digest (a different architecture), so POST would
+      # fail-close before a single measurement ran. Re-sign for whatever this job
+      # just built — exactly as the test lanes and the wheel signer do — so the
+      # binding is self-consistent on every matrix entry; tamper detection is
+      # covered by test_native_integrity.
+      env:
+        AMA_BUILD_PIPELINE: "1"
+      run: python -m ama_cryptography.integrity --update --sign
 
     - name: Run benchmark regression tests
       env:

@@ -247,6 +247,57 @@ def test_require_build_pipeline_exits_when_env_unset(
     assert excinfo.value.code == 2
 
 
+def test_signature_rewrite_removes_stale_bytecode(tmp_path: Any) -> None:
+    """Rewriting the artefact must invalidate bytecode cached from the old one.
+
+    CPython validates a ``.pyc`` by ``(mtime-seconds, size)``.  The signature
+    module is rewritten with an IDENTICAL size (fixed-width hex fields) and,
+    in a build pipeline, within the same second — so a cache compiled from
+    the previous artefact still validates and the next import reads STALE
+    digests.  That exact race failed PR #391's Alpine image build: the
+    re-sign and its verification import ran 250 ms apart, the verifier read
+    the old native digest through the stale ``.pyc``, and POST refused an
+    image whose on-disk artefact was correct.  The writer now removes the
+    cache entries; this pins that contract.
+    """
+    pkg = tmp_path / "ama_cryptography"
+    pkg.mkdir()
+    bs._write_signature_module(pkg, b"\x01" * 32, b"\x02" * 32, b"\x03" * 32, b"\x04" * 64)
+    pycache = pkg / "__pycache__"
+    pycache.mkdir()
+    stale = pycache / "_integrity_signature.cpython-311.pyc"
+    stale.write_bytes(b"bytecode compiled from the previous artefact")
+    unrelated = pycache / "some_other_module.cpython-311.pyc"
+    unrelated.write_bytes(b"must not be touched")
+
+    bs._write_signature_module(pkg, b"\x05" * 32, b"\x06" * 32, b"\x07" * 32, b"\x08" * 64)
+
+    assert not list(pycache.glob("_integrity_signature.*.pyc")), (
+        "stale signature bytecode survived the rewrite — the same-second "
+        "same-size .pyc race is open again"
+    )
+    assert unrelated.exists(), "the invalidation must be surgical, not a cache wipe"
+
+
+def test_signature_module_is_lf_terminated_on_every_platform(tmp_path: Any) -> None:
+    """The generated artefacts must be byte-identical wherever they are written.
+
+    Windows' default text-mode newline translation turns every ``\\n`` into
+    ``\\r\\n``, which makes a re-signed working tree diverge from the committed
+    blob and fails the checkout byte-identity gate
+    (``tools/check_line_endings.py``) — the exact failure that took down all
+    ten Windows CI jobs.  Asserting on the raw bytes pins the ``newline="\\n"``
+    contract on the platforms where translation would not occur anyway, and
+    catches a regression on the one where it would.
+    """
+    pkg = tmp_path / "ama_cryptography"
+    pkg.mkdir()
+    out = bs._write_signature_module(pkg, b"\x01" * 32, b"\x02" * 32, b"\x03" * 32, b"\x04" * 64)
+    raw = out.read_bytes()
+    assert b"\r" not in raw, "signature artefact must be LF-only on every platform"
+    assert raw.endswith(b"\n")
+
+
 def test_compute_package_digest_matches_self_test(tmp_path: Any) -> None:
     """The signer's digest computation must be byte-identical with the
     import-time verifier's — otherwise the (digest, signature) embedded in

@@ -208,16 +208,35 @@ at import time on a regular (non-docs) run.  In other words: INVARIANT-7
 is preserved by a hop from import-time enforcement to call-time
 enforcement under the documented docs-only flag, never weakened.
 
-**Enforcement:** Module-level guards in `crypto_api.py`, `key_management.py`,
-and `legacy_compat.py` raise `RuntimeError` at import time when the native C
-backend is unavailable, except under the documented Sphinx/docs-build
-override above.  `pqc_backends.py` enforces the same guarantee at **call
-time** rather than import time: it records the backend as unavailable at
-import (`*_NATIVE_AVAILABLE = False`) and every wrapper raises `RuntimeError`
-before performing any operation without the native backend — and
-`crypto_api.py`, which imports `pqc_backends`, layers the import-time gate on
-top.  Under the docs override, call-time enforcement (`_enforce_invariant7*`)
-still refuses any cryptographic work without the native backend.
+**Enforcement:** The primary gate is the POST stage
+`_self_test._run_backend_stage()`, which fails the power-on self-tests when no
+native library loaded, so `import ama_cryptography` raises
+`CryptoModuleError` — see [INVARIANT-39](#invariant-39--a-failed-post-must-fail-the-import-and-the-error-state-must-inhibit-output).
+That stage exists because the guards named below are **not** reached by a bare
+`import ama_cryptography`: `crypto_api` is behind `__init__.__getattr__` and
+`key_management` / `legacy_compat` are imported on demand, so for a long time a
+checkout with no discoverable `libama_cryptography` imported cleanly, emitted a
+`UserWarning`, skipped eight of its eleven self-tests and reached
+`OPERATIONAL` — a warning without a hard stop, which is the substitute this
+invariant explicitly rules out.  The claim in this section was true of the
+modules it named and false of the package as a whole.  POST is the one thing
+that always runs on import, so POST is where the invariant is now enforced.
+
+The remaining layers are unchanged and still apply:
+
+* Module-level guards in `crypto_api.py`, `key_management.py` and
+  `legacy_compat.py` raise `RuntimeError` when those modules *are* imported
+  without a native backend, except under the documented Sphinx/docs-build
+  override above.
+* `pqc_backends.py` enforces at **call time**: it records the backend as
+  unavailable at import (`*_NATIVE_AVAILABLE = False`) and every wrapper
+  raises before performing any operation without it.
+
+Under the docs override the POST stage records a skip instead of a failure and
+the import proceeds so autodoc can read signatures — call-time enforcement
+(`_enforce_invariant7*`, and now `check_crypto_permitted()`) still refuses
+every cryptographic operation, and `module_attestation()["fully_verified"]`
+stays `False`.
 
 ## INVARIANT-8 — Deterministic Reproducible Builds
 
@@ -1875,5 +1894,298 @@ backend-differential job proves the two backends agree on every case.
 
 ---
 
+## INVARIANT-39 — A Failed POST Must Fail the Import, and the Error State Must Inhibit Output
+
+FIPS 140-3 §4.9.2 requires a module whose power-on self-tests have failed to
+enter an error state in which **all** cryptographic output is inhibited.  This
+invariant states the two halves that requirement decomposes into for a Python
+package, because for a long time this repository satisfied neither.
+
+**A failed POST must fail the import.** `ama_cryptography/__init__.py` discarded
+the return value of `_run_self_tests()`.  POST would log
+`CRITICAL: FIPS 140-3 POST FAILURE: <cause>`, set the module state to `ERROR` —
+and then `import ama_cryptography` succeeded, with exit status 0.  Every build
+script, CI smoke test and deployment health check that treats a clean import as
+evidence of a working module therefore reported success over a module that had
+just announced its own failure in the line above.  The failure went to the log
+and the success went to the exit code, and the exit code is what tooling reads.
+A self-test whose failure cannot fail anything is not a self-test.
+
+Import now raises `CryptoModuleError` carrying the root cause and the full POST
+result table, because a raising import leaves nothing behind to introspect: the
+partially-initialised module is dropped from `sys.modules`, so the message is
+the only artefact the operator gets.
+
+Two narrow, documented completions of the import remain, and neither permits
+cryptography:
+
+* `AMA_POST_DIAGNOSTIC_IMPORT=1` — triage.  The module stays in `ERROR` and
+  `check_crypto_permitted()` refuses every operation; the operator gains
+  `module_attestation()`, nothing else.
+* `AMA_BUILD_PIPELINE=1`, **and only for an integrity-stage failure** — the
+  tools that repair a stale integrity artefact (`_build_sign`,
+  `integrity --update`) live inside this package, so a hard raise would wall
+  them off behind the fault they exist to clear.  That flag already confers the
+  power to rewrite the artefacts outright, so honouring it grants no new
+  capability.  A failed KAT, a timing leak or an RNG fault still hard-fails
+  under it, so a release container — which carries the flag for its whole
+  lifetime — cannot smoke-test a genuinely broken wheel and call it built.
+
+**The error state must inhibit output.** The requirement was met only by
+`crypto_api`, which calls `check_operational()` on its public methods.  All
+eighty public entry points in `pqc_backends` — key generation, signing, KEM
+encapsulation, AEAD, HMAC, KDF — called straight through to the C library with
+no state check, so a module in `ERROR` kept producing keys and signatures for
+any caller that reached past `crypto_api`, which is what this package's own
+internal modules do.  Each now calls `check_crypto_permitted()` first.
+
+`check_crypto_permitted()` is deliberately weaker than `check_operational()`:
+it permits `SELF_TEST` **on the POST thread only**, because POST's Known Answer
+Tests must be able to call the primitives under test, and widening that to any
+thread would open the whole native surface for the duration of every
+`reset_module()` — precisely the window an operator opens after a failure.
+
+**A skip is not a pass.** In non-strict mode a KAT whose backend is absent is
+recorded as a skip and POST still reaches `OPERATIONAL`.  That is a legitimate
+source-checkout mode, but `module_status() == "OPERATIONAL"` answers "did
+anything fail?", not "was everything tested?".  `module_attestation()` answers
+the second question directly: `fully_verified` is true only when no self-test
+was skipped, and release gates assert it rather than re-deriving it from the
+tri-state result tuples.
+
+**Diagnostics must describe what happened.** A native library that could not be
+found was reported as `native Ed25519 not built — cannot verify signature`: a
+claim about the C build, usually false, that sent operators to fix a build that
+was fine.  `_verify_signed_integrity` now returns a tri-state —
+verified / tampered / **could not be verified** — and the "could not" case
+carries `native_backend_load_summary()`, which distinguishes a library that is
+absent from one that is present and unloadable, and quotes the loader's own
+error for the latter.  The dispatch is on the return value; it used to be a
+substring test against the message, which made a security-critical branch a
+function of prose.
+
+**The integrity check must cover the code that does the cryptography.** The
+signed artefact covered the package's `.py` files and nothing else. The shared
+object that performs every cryptographic operation was signed by nothing and
+verified at load by nothing, so a back-doored `libama_cryptography` left the
+`.py` digest, the signature and the trust anchor all verifying while the actual
+cryptography ran from unexamined bytes. The signature now covers the composite
+`SHA3-256(domain ‖ py_digest ‖ native_digest)`, and the verifier re-hashes the
+shared object it actually loaded and requires it to match. A one-byte change to
+the `.so` fails POST and therefore the import; rewriting the embedded native
+digest to match a tampered `.so` breaks the signature, which cannot be forged.
+Because `_build_sign` can only sign by calling the native `ama_ed25519_sign`, a
+working library is present at signing time by construction, so every signed
+artefact binds it — there is no unsigned-native downgrade path. The one
+non-full-strength outcome is an explicit `AMA_CRYPTO_LIB_PATH` override, which
+is recorded as *unverified* (a skip, `fully_verified` `False`) rather than
+tampering. Pinned by `tests/test_native_integrity.py`, including the tamper and
+forge-attempt cases and the signer/verifier domain-constant agreement.
+
+**CASTs precede the integrity test that relies on them.** FIPS 140-3
+(NIST IG 10.3.A) requires the algorithm self-test for any approved algorithm the
+integrity test uses to run first. The signed-integrity check verifies an Ed25519
+signature and computes SHA3-256 digests, so the SHA3-256 and Ed25519 KATs now
+run before the integrity stage; the original single KAT stage ran them after,
+so the module authenticated itself with an Ed25519 verifier it had not yet
+self-tested. The Ed25519 KAT is also now a genuine RFC 8032 §7.1 known-answer
+test with a negative case, not a self-consistency roundtrip an always-accept
+verifier would pass — and that same verifier backs the integrity check.
+
+**The gate covers the Cython bindings and secret-key export too.** Output
+inhibition is not only about `pqc_backends`. The five Cython binding modules
+(`ama_cryptography.ed25519_binding` …) are public submodules whose `cy_*`
+functions call the C kernel directly — a caller importing one reaches signing
+and key generation without passing through `pqc_backends`' gated wrappers, and
+if the package directory is on `sys.path`, without the package `__init__` (and
+therefore POST) running at all. Each `cy_*` function now calls the guard, and
+its module-level import of `check_crypto_permitted` forces POST to run even on
+a top-level binding import. Separately, `key_formats` serialises secret keys
+(`to_pkcs8` / `to_pem` / `to_jwk` / `to_cose`); those private-key output paths
+now refuse in the error state rather than emitting a secret-key block from a
+faulted module. (Compiled binding `.so` files and the vectors under
+`_post_kats/` remain outside the *tamper* coverage of the module digest, which
+hashes the `.py` files, `_post_kats/`, and the native library — extending it to
+the binding `.so` files is future work; the runtime guard closes the
+error-state bypass regardless.)
+
+**Enforcement.** `tools/check_error_state_gating.py` parses the AST of
+`pqc_backends.py` and requires `check_crypto_permitted()` on every public
+function that reaches `_native_lib` or a `_cy_*` Cython callable, and
+line-scans the five binding `.pyx` files to require the guard before the first
+native call in every `cy_*` function. Exemptions must be declared with a stated
+reason and are themselves checked for staleness, so the list cannot rot into a
+blanket allowlist. It runs as a required CI step. Both directions — the gate
+passing on the real tree, and the gate failing on an ungated function (Python
+or `.pyx`) — are pinned by `tests/test_post_failclosed.py`, which also drives
+the import-level behaviour in subprocesses (it cannot be observed from a
+process that has already imported the package), exercises the binding and
+key-export refusals, and checks that a broken KAT is not excused by
+`AMA_BUILD_PIPELINE=1`.
+
+**Measured cost.** The guard is ~37 ns per gated call (~9 ns of check, the rest
+CPython call overhead), which is ~2 % of a 64-byte `native_sha3_256` and less on
+everything larger.  The native-library digest adds one SHA3-256 over the shared
+object (~800 KB → well under 1 ms) once per import.
+
+---
+
+## INVARIANT-40 — The Executed Bytecode Must Match the Signed Source
+
+INVARIANT-39 binds the module's `.py` **source** and its native `.so`. But
+CPython does not execute source: it executes the compiled bytecode in
+`__pycache__/*.pyc`. A timestamp-based `.pyc` — the default — is honoured by
+the interpreter whenever its stored `(mtime, size)` match the source file, and
+an attacker with write access to the installed package sets exactly those. So
+the gap is real and specific: leave every `.py` pristine, so the signed digest
+and its Ed25519 signature still verify, and drop a `.pyc` whose bytecode
+differs. The poisoned bytecode runs while every source-level check is green.
+
+**The fix makes on-disk bytecode subordinate to the signed source.** A POST
+stage (`execution-integrity`, run immediately after the source-integrity stage
+that has just proven the `.py` files unmodified) recompiles each signed source
+file and refuses any cached `.pyc` whose bytecode is not a faithful compile of
+it. The comparison is by *executed surface* — `co_code`, the referenced
+names/locals, the argument and flag shape, and every constant, descending
+recursively into nested code objects — and deliberately ignores `co_filename`
+and the line tables. Ignoring those is what keeps a legitimate `.pyc` built at a
+different absolute path (a relocated wheel) from being a false positive, while a
+single altered instruction, even inside a nested function, is still caught. A
+constant swapped for an equal-valued one of another type (`1` for `1.0`, `1` for
+`True`) is caught by a type guard, because `==` alone would pass it.
+
+The stage covers the **same file set the digest signs** (every top-level
+`*.py`), not merely the modules imported so far, so a poisoned `.pyc` for a
+lazily-imported module is caught at POST rather than when that module is first
+used. Where no `.pyc` exists (a source-only run, or `PYTHONDONTWRITEBYTECODE`),
+there is nothing to poison — the interpreter compiled the signed source
+directly — and the stage records that honestly rather than reporting a check it
+did not perform. A `.pyc` from a different interpreter version (magic-number
+mismatch) is skipped because the running interpreter will not load it either. A
+complementary pass flags any loaded `ama_cryptography` module whose source
+resolves outside the verified package directory — module substitution, whatever
+its bytecode says.
+
+**Bounded, and stated rather than implied.** A self-check written in Python
+cannot vouch for the bytecode of *its own* module if that was already poisoned
+before this code ran — the checker-poisoning boundary. This stage raises the
+bar from "poison any `.pyc` freely" to "poison the checker's own `.pyc`, and do
+so without tripping the source signature that the checker's source is bound by",
+but it does not eliminate the class. The out-of-band control that does is OS /
+package-manager code signing, which verifies files before the interpreter loads
+them; this is documented in [`SECURITY.md`](SECURITY.md) under *Execution
+integrity* alongside the trust-anchor boundary it shares.
+
+**Enforcement.** `tests/test_execution_integrity.py` pins the bytecode
+comparator (a changed instruction, a nested-function change and a
+constant-type swap are caught; a filename-only difference is not), the
+per-file check (a poisoned `.pyc` whose header still matches its pristine
+source is a fault; a corrupt or foreign-magic `.pyc` is handled), the
+substitution guard, and the end-to-end path: on a copied tree, a poisoned
+but still-loadable `.pyc` fails POST and the import while the source digest
+stays valid.
+
+**Measured cost.** One `compile()` per signed source file, once per import —
+tens of milliseconds over the package, on the same one-time POST path as the
+digests above.
+
+## INVARIANT-41 — No Asymmetric Keypair Is Released Without a Pairwise Consistency Test
+
+FIPS 140-3 requires a conditional self-test on every asymmetric key
+generation: the fresh keypair must demonstrate that its halves correspond
+before the caller receives it. The helpers existed
+(`pairwise_test_signature` / `pairwise_test_kem`) and were wired into **no**
+key-generation path — the 2026-08 audit's finding #5. A keypair whose halves
+do not correspond (a fault mid-generation, a corrupted caller-supplied seed,
+a miscomputed BIP32 modular sum) was handed out and failed later, far from
+the generation event that caused it.
+
+**Every keygen path now runs the matching test before its keypair leaves the
+function, and every family's test halves are independent.** Sign-and-verify
+for the signature families (Ed25519, ML-DSA, SLH-DSA/SPHINCS+, the FROST
+dealer via a full t-of-n round aggregated and verified against the group
+key, ECDSA per FIPS 186-5 §3.3 for both the NIST-P curves and the BIP32
+secp256k1 keys — the signer and verifier traverse genuinely independent
+code); encapsulate-and-decapsulate for the KEM families (ML-KEM/Kyber); and
+for X25519, the SP 800-56A rev. 3 §5.6.2.1.4 assurance in its strong form —
+a Diffie-Hellman roundtrip against a fresh ephemeral peer,
+``X25519(sk, eph_pk) == X25519(eph_sk, pk)``, which exercises the
+scalar-multiplication kernel on two *different* scalar/point pairs and
+demands the group law hold across them. An earlier revision recomputed the
+public key and compared, which re-ran the same kernel on the same input and
+could catch only a transient fault between the two computations; the
+roundtrip closes that gap, and the ephemeral it needs is built without
+re-entering keygen (a health-tested scalar draw plus one base-point
+multiplication). The rule is uniform across random and seed-derived
+generation — `*_from_seed` is publicly callable with arbitrary seeds, which
+is precisely the path a corrupted input reaches — and across every surface:
+the `native_*` entry points, the `generate_*` wrappers,
+`AmaContext.keypair_generate` (tested with the context's *own* sign/verify
+or encaps/decaps), and the BIP32 master and child derivations in
+`key_management`. Every Python-side entropy draw that mints key material —
+the Ed25519 seed, the BIP32 master seed, the Ascon key and nonce — now
+routes through the §4.9.2 health-tested, error-state-gated CSPRNG draw
+rather than a bare `secrets.token_bytes` / `os.urandom`.
+
+The test is deliberately **unconditional**. Gating it behind an environment
+flag would make the default configuration the non-compliant one; validation
+applies to a configuration, not to a runtime toggle. Where a pairwise test's
+counterpart operation is not built (a partial library with deterministic
+keygen but no encapsulation), the keygen **refuses with an availability
+error** rather than releasing an untested keypair — and rather than entering
+the module ERROR state, which is reserved for a test that *ran and failed*. A
+failed pairwise test enters ERROR through the shared helpers and inhibits all
+further output (INVARIANT-39).
+
+**Enforcement.** `tests/test_keygen_pct.py` pins the wiring (every keygen
+entry point invokes its helper — a new keygen path that forgets the test
+fails the coverage assertion), both failure directions (a verify that lies →
+`CryptoModuleError` + ERROR state; the ERROR state then refuses further
+keygen), and the positive path on real keypairs for every fast family.
+
+**Measured cost.** Sub-millisecond for every family except the hash-based
+signatures: ~220 ms for SPHINCS+-SHA2-256f, ~1.0 s for SLH-DSA-SHAKE-128s —
+paid at key generation, the rare, long-lived-key operation, and quantified
+here rather than averaged away.
+
+## INVARIANT-42 — The Declared ctypes ABI Must Match the C Header, and the Loaded Library Must Match the Package
+
+A ctypes symbol probe proves a name is exported — not its arity, not its
+parameter types, not its return convention. The 2026-08 audit's finding #7:
+a stale major-version library, or any object exporting `ama_`-prefixed
+names, satisfied every `hasattr` check and would corrupt the call frame at
+the first mismatched invocation. A shared object carries no parameter
+metadata, so the ABI cannot be interrogated at runtime; what the repository
+does carry is the contract the library was compiled from.
+
+**Two halves, static and runtime.** `tools/check_ctypes_abi.py` parses every
+`AMA_API` prototype out of the C headers and every `argtypes`/`restype`
+assignment out of the Python sources (`pqc_backends`, `ascon`,
+`agent_binding`, `secure_memory` — 124 symbols), and requires agreement on
+arity and on a coarse class per position (pointer-like vs. integer-like,
+pointer/integer/void for returns) — the classes that decide call-frame
+layout. Coverage is closed in both directions: a symbol called without a
+declared signature fails, and a signature for a symbol no header declares
+fails. At runtime, `pqc_backends` asks the **loaded** object for its
+compiled-in version (`ama_version_number`) before configuring a single
+signature against it, and rejects any library whose major version is not the
+package's — extending `tools/check_version_consistency.py`'s static
+version-consistency guarantee to the artefact the loader actually mapped.
+The Python transcription of the required major is itself pinned to the
+header macro by that same tool, so the two gates cannot drift apart
+silently.
+
+**Enforcement.** The gate runs in the test suite
+(`tests/test_ctypes_abi_gate.py`), which also proves the negative
+directions: an arity change, a pointer/integer confusion, a void return
+read as a value, and an uncovered called symbol are each demonstrated to
+fail on synthetic input. The handshake's reject branch is pinned by test
+against a fake library object reporting a foreign version.
+
+**Measured cost.** The static gate is CI-only. The handshake is one call
+returning three compile-time constants, once per import.
+
+---
+
 _Maintained by Steel Security Advisors LLC._
-_Last updated: 2026-07-31_
+_Last updated: 2026-08-13_

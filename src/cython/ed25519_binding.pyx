@@ -52,12 +52,25 @@ cdef extern from "ama_cryptography.h":
     void ama_secure_memzero(void *ptr, size_t len)
 
 
+# FIPS 140-3 §4.9.2 output inhibition.  These binding functions are exported as
+# a public submodule (ama_cryptography.ed25519_binding) and call the C kernel
+# directly, so a caller importing this module can reach signing and key
+# generation without ever passing through pqc_backends' gated wrappers — and,
+# if the module dir is on sys.path, without ama_cryptography's __init__ (and
+# therefore POST) ever running at all.  Importing check_crypto_permitted here
+# forces ama_cryptography.__init__ to run POST, and calling it at the head of
+# each entry point refuses cryptographic output while the module is in the
+# error state, closing both bypasses.
+from ama_cryptography._module_state import check_crypto_permitted
+
+
 def cy_ed25519_keypair(bytes seed):
     """
     Generate Ed25519 keypair from 32-byte seed via native C.
     Returns (public_key, secret_key) as bytes.
     Raises RuntimeError on native C failure.
     """
+    check_crypto_permitted()
     if len(seed) != 32:
         raise ValueError(f"Ed25519 seed must be 32 bytes, got {len(seed)}")
 
@@ -81,6 +94,7 @@ def cy_ed25519_sign(bytes message, bytes secret_key):
     Returns 64-byte signature.
     Raises RuntimeError on native C failure.
     """
+    check_crypto_permitted()
     if len(secret_key) != 64:
         raise ValueError(f"Ed25519 secret key must be 64 bytes, got {len(secret_key)}")
 
@@ -105,6 +119,7 @@ def cy_ed25519_verify(bytes signature, bytes message, bytes public_key):
     Verify Ed25519 signature via native C.
     Returns True if valid, False otherwise.
     """
+    check_crypto_permitted()
     if len(signature) != 64:
         raise ValueError(f"Ed25519 signature must be 64 bytes, got {len(signature)}")
     if len(public_key) != 32:
@@ -132,6 +147,7 @@ def cy_ed25519_batch_verify(list entries):
         ValueError: If batch size exceeds 64 or entries have wrong lengths
         MemoryError: If allocation fails
     """
+    check_crypto_permitted()
     cdef size_t count = len(entries)
     if count == 0:
         return []

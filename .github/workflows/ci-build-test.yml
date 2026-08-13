@@ -341,8 +341,40 @@ jobs:
         if: runner.os == 'Linux'
         run: pip install cryptography pynacl pycryptodome
 
-      - name: Verify module integrity
-        run: python -m ama_cryptography.integrity --verify
+      # The signed artefact's native digest is specific to the exact build it
+      # was signed against; this job builds the native library itself, so that
+      # digest cannot match (across OS by binary format, across Linux by build
+      # config). Verify the platform-independent .py half, then re-sign the
+      # native half for this build — the same split ci.yml::test uses and the
+      # same per-build re-sign setup.py's _run_integrity_signer does per wheel.
+      - name: Verify committed .py integrity digest is current (platform-independent)
+        shell: bash
+        env:
+          AMA_BUILD_PIPELINE: "1"
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import ama_cryptography as a
+          from ama_cryptography._self_test import _compute_module_digest
+          committed = (Path(a.__file__).parent / "_integrity_digest.txt").read_text().strip()
+          computed = _compute_module_digest()
+          if committed != computed:
+              raise SystemExit(
+                  f"FATAL: committed .py integrity digest is stale: "
+                  f"committed={committed[:16]}... computed={computed[:16]}...\n"
+                  "A .py source changed without refreshing the digest. Run:\n"
+                  "  AMA_BUILD_PIPELINE=1 python -m ama_cryptography.integrity --update --sign"
+              )
+          print(f"Committed .py integrity digest is current ({committed[:16]}...).")
+          PY
+
+      - name: Re-sign the integrity artefact for this build's native library
+        shell: bash
+        # Positive-path only; tamper detection is covered by
+        # tests/test_native_integrity.py, so re-signing removes no coverage.
+        env:
+          AMA_BUILD_PIPELINE: "1"
+        run: python -m ama_cryptography.integrity --update --sign
 
       - name: Run tests
         env:

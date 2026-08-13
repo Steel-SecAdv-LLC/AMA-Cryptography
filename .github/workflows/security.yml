@@ -243,7 +243,20 @@ jobs:
       uses: trufflesecurity/trufflehog@6f3c981e7b77f235fd2702dd74af25fc4b72bf11  # v3.96.0
       with:
         path: ./
-        extra_args: --debug --only-verified
+        # --exclude-detectors=Lob removes a detector that produces only false
+        # positives here and zero true positives. Lob API keys are of the form
+        # `test_<hex>` / `live_<hex>`; the detector's pattern matches any
+        # `test_<word>` token, so every pytest function name in this repository
+        # (`test_kats_are_known_answer_not_roundtrip`, …) is flagged, and the
+        # detector's verifier lenient-accepts them, so `--only-verified` does not
+        # filter them out — 685 "verified Lob" hits, all pytest names. This is a
+        # cryptography library with no Lob integration, so a real Lob key can
+        # never legitimately appear; excluding the detector makes the gate
+        # trustworthy (it can now go green, and a real secret from any other
+        # detector still fails it) instead of red on every test name. Verified
+        # locally with trufflehog v3.96.0: with Lob excluded the verified git
+        # scan reports zero findings. Pinned by tests/test_secret_scan_config.py.
+        extra_args: --debug --only-verified --exclude-detectors=Lob
 
   security-gate:
     name: Security Gate

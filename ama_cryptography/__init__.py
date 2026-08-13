@@ -17,6 +17,7 @@ AI Co-Architects:
 """
 
 import importlib as _importlib
+import logging as _logging
 import os as _os
 import sys as _sys
 from typing import TYPE_CHECKING, Any
@@ -79,7 +80,13 @@ if _sys.platform == "win32":
 # Sets module state to OPERATIONAL or ERROR.
 from ama_cryptography._self_test import _run_self_tests as _post
 from ama_cryptography._self_test import (
+    check_crypto_permitted as check_crypto_permitted,
+)
+from ama_cryptography._self_test import (
     check_operational as check_operational,
+)
+from ama_cryptography._self_test import (
+    module_attestation as module_attestation,
 )
 from ama_cryptography._self_test import (
     module_error_reason as module_error_reason,
@@ -106,7 +113,87 @@ from ama_cryptography.exceptions import (
     CryptoModuleError as CryptoModuleError,
 )
 
-_post()
+# FIPS 140-3 §4.9.2: a module whose power-on self-tests failed must not
+# present itself as usable.
+#
+# This return value used to be discarded.  POST would log
+# ``CRITICAL: FIPS 140-3 POST FAILURE: ...``, set the module state to ERROR —
+# and then ``import ama_cryptography`` would succeed, with exit code 0.  Every
+# build script, CI smoke test and health check that treated a clean import as
+# proof of a working module therefore reported success over the top of a
+# module that had just announced its own failure.  The failure was in the log
+# and the success was in the exit code, and the exit code is what tooling
+# reads.  A self-test whose failure cannot fail anything is not a self-test.
+#
+# Import now raises.  The error message carries the root cause and the POST
+# result table, because a raising import leaves nothing behind to introspect:
+# the partially-initialised module is dropped from ``sys.modules``, so
+# ``module_error_reason()`` is not reachable afterwards and the text is the
+# only artefact the operator gets.
+#
+# ``AMA_POST_DIAGNOSTIC_IMPORT=1`` is the triage escape hatch: the import
+# completes so an operator can call ``module_attestation()`` and read the full
+# picture, but the module stays in ERROR and ``check_crypto_permitted()``
+# refuses every cryptographic operation.  It buys introspection, not crypto.
+if not _post():
+    _reason = module_error_reason() or "unknown"
+    _results = module_self_test_results()
+    _rows = "\n".join(
+        f"    {_name:<24} {'PASS' if _ok else ('SKIP' if _ok is None else 'FAIL')}  {_detail}"
+        for _name, _ok, _detail in _results
+    )
+    _diag_env = "AMA_POST_DIAGNOSTIC_IMPORT"
+    _build_env = "AMA_BUILD_PIPELINE"
+    _TRUE = {"1", "true", "yes", "on"}
+
+    # The tools that REPAIR a failed integrity check — ``_build_sign`` and
+    # ``integrity --update`` — live inside this package, so a hard raise here
+    # would wall them off behind the very fault they exist to clear: edit a
+    # .py file, the digest goes stale, and the command that refreshes it can
+    # no longer import the package that contains it.  Both are already gated
+    # on AMA_BUILD_PIPELINE=1, and that flag already confers the power to
+    # rewrite the integrity artefacts outright, so honouring it here grants no
+    # capability an attacker did not already have.
+    #
+    # It is honoured ONLY for an integrity-stage failure, which is the one
+    # POST outcome a signing run legitimately expects to see in a tree it is
+    # about to re-sign.  A failed KAT, a timing leak or an RNG fault has
+    # nothing to do with a stale artefact and still hard-fails, so a release
+    # container — which has AMA_BUILD_PIPELINE=1 set for its whole lifetime —
+    # cannot smoke-test a genuinely broken wheel and call it built.
+    _integrity_stage_failed = any(
+        _name == "integrity" and _ok is False for _name, _ok, _ in _results
+    )
+
+    if _os.environ.get(_diag_env, "").strip().lower() in _TRUE:
+        _logging.getLogger(__name__).critical(
+            "FIPS 140-3 POST FAILED and %s is set: completing the import for "
+            "diagnosis only. The module is in the ERROR state and every "
+            "cryptographic operation will be refused. Root cause: %s",
+            _diag_env,
+            _reason,
+        )
+    elif _integrity_stage_failed and _os.environ.get(_build_env, "").strip().lower() in _TRUE:
+        _logging.getLogger(__name__).critical(
+            "FIPS 140-3 POST integrity stage FAILED and %s=1: completing the "
+            "import so the build-pipeline integrity tooling can run. The "
+            "module is in the ERROR state and every cryptographic operation "
+            "through the public surface will be refused. Root cause: %s",
+            _build_env,
+            _reason,
+        )
+    else:
+        raise CryptoModuleError(
+            "ama_cryptography refused to initialise: FIPS 140-3 power-on "
+            f"self-tests FAILED.\n\n  Root cause: {_reason}\n\n"
+            f"  POST results:\n{_rows}\n\n"
+            "  All cryptographic operations are inhibited (FIPS 140-3 "
+            "§4.9.2). Correct the fault and re-import.\n\n"
+            f"  Diagnosis: set {_diag_env}=1 to import anyway (crypto stays "
+            "refused) and call module_attestation().\n"
+            "  Stale digest after editing package sources? Refresh it with:\n"
+            f"      {_build_env}=1 python -m ama_cryptography.integrity --update --sign"
+        )
 
 # Eagerly import math modules (double_helix_engine, equations) — they carry
 # no availability-check side effects and are the most frequently used exports.
@@ -319,7 +406,9 @@ __all__ = [
     "__author__",
     "AmaCryptographyError",
     "CryptoModuleError",
+    "check_crypto_permitted",
     "check_operational",
+    "module_attestation",
     "module_status",
     "module_error_reason",
     "module_self_test_results",

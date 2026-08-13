@@ -30,6 +30,9 @@ import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
+from ama_cryptography._module_state import check_crypto_permitted
+from ama_cryptography.exceptions import AmaCryptographyError
+
 logger = logging.getLogger(__name__)
 
 # Constants
@@ -38,9 +41,6 @@ DEFAULT_TTL_SECONDS = 3600.0  # 1 hour
 DEFAULT_REKEY_INTERVAL = 1000  # messages
 REPLAY_WINDOW_SIZE = 256
 MAX_SESSIONS = 1024  # prevent unbounded memory growth
-
-
-from ama_cryptography.exceptions import AmaCryptographyError
 
 
 class SessionError(AmaCryptographyError):
@@ -271,7 +271,13 @@ class SessionStore:
 
         Raises:
             SessionLimitError: If max_sessions would be exceeded
+            CryptoModuleError: If the module is in the FIPS error state
         """
+        # FIPS 140-3 §4.9.2: minting a new session draws a secret session ID
+        # from the RNG. A faulted module — whose continuous RNG health test may
+        # be the very reason it is in the error state — must not issue new
+        # security tokens.
+        check_crypto_permitted()
         with self._lock:
             # Cleanup expired sessions first
             self._cleanup_expired()

@@ -250,6 +250,18 @@ class TestContinuousRNG:
         b = secure_token_bytes(32)
         assert a != b
 
+    def test_secure_token_bytes_rejects_negative_size(self) -> None:
+        """A negative ``n`` must raise, not silently truncate.
+
+        ``buf[:n]`` with a negative ``n`` returns ``32 - |n|`` bytes — a
+        caller that miscomputed a length would receive key material shorter
+        than requested, with no error to notice.
+        """
+        from ama_cryptography._self_test import secure_token_bytes
+
+        with pytest.raises(ValueError):
+            secure_token_bytes(-1)
+
     def test_secure_token_bytes_raises_in_error_state(self) -> None:
         from ama_cryptography._self_test import (
             _set_error,

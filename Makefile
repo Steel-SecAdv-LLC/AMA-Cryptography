@@ -81,6 +81,18 @@ clean:
 	# objects (audit 5b).
 	@find ama_cryptography -type f -name "*.so" -delete
 	@find ama_cryptography -type f -name "*.pyd" -delete
+	# The native library is bundled into the package by setup.py as a SONAME
+	# chain — libama_cryptography.so -> .so.4 -> .so.4.0.0 — and the two rules
+	# above miss every link in it: the first two are symlinks, which `-type f`
+	# excludes, and the third does not match `*.so`. So the whole chain
+	# survived `make clean`, and pqc_backends._get_search_dirs() searches this
+	# directory FIRST, ahead of build/ and the system paths. A stale library
+	# therefore shadowed every later build indefinitely, with the loaded path
+	# appearing nowhere in the logs — a rebuilt .so could sit in build/lib
+	# while the process kept running last month's code. Matched by prefix
+	# rather than by extension, and without -type, so symlinks go too.
+	@find ama_cryptography -maxdepth 1 -name "libama_cryptography*" -delete
+	@find ama_cryptography -maxdepth 1 -name "ama_cryptography*.dll" -delete
 	@echo "✓ Cleaned"
 
 # Install system-wide
@@ -151,14 +163,23 @@ security-audit:
 security-scan:
 	@echo "Running comprehensive security scan..."
 	@echo "[1/3] Running bandit for Python security issues..."
+	@# Produce the JSON, then apply the SAME severity gate CI uses. The `|| true`
+	@# is only on the report-writing bandit run (bandit exits non-zero when it
+	@# finds anything at the -ll floor); the gate below is what actually decides
+	@# pass/fail, fail-closed on a missing/erroring report.
 	@bandit -r ama_cryptography/ -ll -f json -o bandit-report.json || true
-	@bandit -r ama_cryptography/ -ll
+	@python3 tools/check_bandit_severity.py bandit-report.json
 	@echo "[2/3] Running semgrep for cryptographic rules..."
-	@semgrep --config .semgrep.yml ama_cryptography/ --json -o semgrep-report.json || echo "  (semgrep not installed or no rules matched)"
+	@# semgrep scan exits 0 regardless of findings; the gate reads the JSON and
+	@# fails on ERROR-severity findings or a scan that did not run. No `|| echo`
+	@# swallowing a failure into a success line.
+	@semgrep --config .semgrep.yml ama_cryptography/ --json -o semgrep-report.json
+	@python3 tools/check_semgrep_severity.py semgrep-report.json
 	@echo "[3/3] Running pip-audit for dependency vulnerabilities..."
-	@pip-audit --format json -o pip-audit-report.json || pip-audit || echo "  (pip-audit completed)"
-	@echo "✓ Comprehensive security scan complete"
-	@echo "  Reports: bandit-report.json, semgrep-report.json, pip-audit-report.json"
+	@# pip-audit exits non-zero when a known-vulnerable dependency is present;
+	@# let that propagate rather than masking it with `|| echo completed`.
+	@pip-audit
+	@echo "✓ Comprehensive security scan complete (bandit + semgrep + pip-audit all passed)"
 
 # Constant-time verification (dudect-style timing analysis)
 constant-time-check:
@@ -194,13 +215,25 @@ fuzz:
 # Run a quick fuzzing smoke test (10 seconds per target)
 fuzz-run: fuzz
 	@echo "Running fuzzing smoke tests (10 seconds each)..."
+	@# libFuzzer exits non-zero on a crash/leak/timeout.  Piping to `tail`
+	@# previously discarded that exit code (the pipeline returned tail's status),
+	@# so a discovered crash printed its last lines and the target still reported
+	@# "✓ complete".  Write output to a log and branch on the fuzzer's OWN exit
+	@# status (no pipe in the tested command), so a crash fails the target and
+	@# names the offender.  Portable across /bin/sh and bash.
 	@for target in fuzz_sha3 fuzz_ed25519 fuzz_aes_gcm fuzz_hkdf fuzz_consttime; do \
 		echo "  Fuzzing $$target..."; \
-		./build-fuzz/bin/$$target \
-			-max_total_time=10 -max_len=4096 \
-			build-fuzz/corpus/$$target/ 2>&1 | tail -3; \
+		if ./build-fuzz/bin/$$target -max_total_time=10 -max_len=4096 \
+				build-fuzz/corpus/$$target/ > fuzz-$$target.log 2>&1; then \
+			tail -3 fuzz-$$target.log; \
+		else \
+			status=$$?; \
+			echo "✗ $$target FAILED (libFuzzer exit $$status) — crash/leak/timeout:"; \
+			tail -20 fuzz-$$target.log; \
+			exit "$$status"; \
+		fi; \
 	done
-	@echo "✓ Fuzzing smoke tests complete"
+	@echo "✓ Fuzzing smoke tests complete (no crashes/leaks/timeouts)"
 
 # Build C API with native PQC
 c-api:
