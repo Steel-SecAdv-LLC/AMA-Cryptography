@@ -107,6 +107,58 @@ static inline int ama_ed25519_point_y_is_canonical(const uint8_t p[32]) {
     return ama_ed25519_lt_32(y, AMA_ED25519_FIELD_PRIME_LE);
 }
 
+/* 1 when the compressed point's x-sign bit is admissible for its y, else 0.
+ *
+ * RFC 8032 5.1.3 step 3: "if x = 0, and x_0 = 1, decoding fails."  x = 0 has a
+ * single square root, so the sign bit distinguishes nothing, and the encoding
+ * with it SET is a second spelling of a point whose canonical encoding has it
+ * clear.  Neither backend implemented the rule: fe25519's decoder negates
+ * conditionally (and -0 == 0, so the sign bit was silently ignored), and
+ * donna's ge25519_unpack_negative_vartime compares parity and skips the negate
+ * for the same reason.  The identity therefore had two accepted encodings.
+ *
+ * x = 0 exactly when y^2 = 1 — from x^2 = (y^2 - 1)/(d*y^2 + 1), the numerator
+ * vanishes — i.e. y = 1 (the identity) or y = p-1 (the order-2 point).  So the
+ * rule is decidable from the encoding alone, without decompressing: reject
+ * when the sign bit is set and the masked y is one of those two values.  That
+ * keeps this a pure byte predicate usable by both backends, exactly like the
+ * y-canonicality check above.
+ *
+ * Neither affected point is a legitimate verification key (the identity
+ * verifies nothing; the order-2 point is low-order), so this is an
+ * encoding-uniqueness fix in the family of INVARIANT-26/29/38 rather than a
+ * forgery route.  Public input; branch-free regardless.
+ *
+ * Call AFTER ama_ed25519_point_y_is_canonical(), whose masked-y < p property
+ * this assumes. */
+static inline int ama_ed25519_point_x_sign_is_admissible(const uint8_t p[32]) {
+    uint8_t y[32];
+    size_t i;
+    uint32_t is_one = 1;
+    uint32_t is_p_minus_1 = 1;
+    const uint32_t sign_set = (uint32_t)((p[31] >> 7) & 1u);
+
+    for (i = 0; i < 31; i++) {
+        y[i] = p[i];
+    }
+    y[31] = (uint8_t)(p[31] & 0x7f);
+
+    /* y == 1 */
+    is_one &= (uint32_t)(y[0] == 0x01);
+    for (i = 1; i < 32; i++) {
+        is_one &= (uint32_t)(y[i] == 0x00);
+    }
+
+    /* y == p-1 == 2^255 - 20:  ec ff ... ff 7f */
+    is_p_minus_1 &= (uint32_t)(y[0] == 0xec);
+    for (i = 1; i < 31; i++) {
+        is_p_minus_1 &= (uint32_t)(y[i] == 0xff);
+    }
+    is_p_minus_1 &= (uint32_t)(y[31] == 0x7f);
+
+    return (int)(1u - (sign_set & (is_one | is_p_minus_1)));
+}
+
 /* 1 when the 64-byte signature's S half (bytes 32..63) is canonical. */
 static inline int ama_ed25519_signature_s_is_canonical(const uint8_t sig[64]) {
     return ama_ed25519_scalar_is_canonical(sig + 32);

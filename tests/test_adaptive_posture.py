@@ -389,9 +389,7 @@ class TestCryptoPostureController:
 
     def test_algorithm_switch_arms_the_cooldown(self) -> None:
         """A non-rotating action still consumes the throttle window."""
-        controller = CryptoPostureController(
-            on_algorithm_switch=MagicMock(), rotation_cooldown=300
-        )
+        controller = CryptoPostureController(on_algorithm_switch=MagicMock(), rotation_cooldown=300)
         controller._last_rotation_time = 0.0
 
         controller._execute_action(PostureAction.SWITCH_ALGORITHM)

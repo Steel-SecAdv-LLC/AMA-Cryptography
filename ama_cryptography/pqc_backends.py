@@ -224,11 +224,15 @@ def _get_search_dirs() -> list:
     for build_dir in build_dirs:
         search_dirs.append(pkg_dir / build_dir)
 
-    # System paths (Unix only)
-    if platform.system() != "Windows":
-        search_dirs.extend([Path("/usr/local/lib"), Path("/usr/lib")])
-
     # LD_LIBRARY_PATH / DYLD_LIBRARY_PATH / PATH (Windows).
+    #
+    # ORDERING: these are collected into `env_dirs` and appended BEFORE the
+    # system directories below.  The dynamic loader consults LD_LIBRARY_PATH
+    # ahead of the system defaults, and this search used to do the opposite —
+    # so an operator who pointed LD_LIBRARY_PATH at a patched or newer
+    # libama_cryptography could still be served a stale copy from
+    # /usr/local/lib, with the ABI handshake (major version only) accepting it
+    # and nothing but the load-diagnostics record showing which file won.
     #
     # SECURITY: these variables are controlled by the process's caller and steer
     # which shared object provides every cryptographic primitive — the same
@@ -243,6 +247,7 @@ def _get_search_dirs() -> list:
     # secure-execution mode, loudly.  On Windows _in_secure_execution_mode()
     # is always False (the concept has no referent there), so PATH-based DLL
     # resolution is unaffected.
+    env_dirs: list = []
     if _in_secure_execution_mode():
         logging.getLogger(__name__).warning(
             "Ignoring LD_LIBRARY_PATH/DYLD_LIBRARY_PATH for native-backend "
@@ -260,7 +265,15 @@ def _get_search_dirs() -> list:
             env_path = os.getenv(var, "")
             for p in env_path.split(os.pathsep):
                 if p:
-                    search_dirs.append(Path(p))
+                    env_dirs.append(Path(p))
+
+    # Operator-selected directories first, then the system defaults — see the
+    # ordering note above.
+    search_dirs.extend(env_dirs)
+
+    # System paths (Unix only)
+    if platform.system() != "Windows":
+        search_dirs.extend([Path("/usr/local/lib"), Path("/usr/lib")])
 
     return search_dirs
 

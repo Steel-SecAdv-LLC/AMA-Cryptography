@@ -181,6 +181,38 @@ else()
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wstrict-prototypes -Wmissing-prototypes")
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fstack-protector-strong")
 
+    # ELF link-time hardening.
+    #
+    # The MSVC branch above has carried /guard:cf /DYNAMICBASE /NXCOMPAT since
+    # this file was written; the ELF equivalents were never added, so on the
+    # platform that ships the overwhelming majority of installs the library had
+    # a lazily-bound, writable GOT and relied on the toolchain default for a
+    # non-executable stack.  A memory-corruption bug anywhere in the C code was
+    # therefore more exploitable here than on Windows.
+    #
+    #   relro + now  — full RELRO: the GOT is resolved at load and mapped
+    #                  read-only, closing GOT-overwrite as an exploit primitive.
+    #   noexecstack  — marks the stack non-executable.  Usually the default, but
+    #                  a single assembly object without .note.GNU-stack silently
+    #                  makes the WHOLE image executable-stack, and this project
+    #                  links hand-written assembly (ed25519-donna).
+    #
+    # Checked for support rather than assumed, so a toolchain without them still
+    # configures (the checks below are cheap and run once).
+    include(CheckLinkerFlag OPTIONAL RESULT_VARIABLE _have_check_linker_flag)
+    if(_have_check_linker_flag)
+        check_linker_flag(C "LINKER:-z,relro,-z,now" AMA_HAVE_RELRO_NOW)
+        check_linker_flag(C "LINKER:-z,noexecstack" AMA_HAVE_NOEXECSTACK)
+    endif()
+    if(AMA_HAVE_RELRO_NOW)
+        set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,-z,relro -Wl,-z,now")
+        set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,-z,relro -Wl,-z,now")
+    endif()
+    if(AMA_HAVE_NOEXECSTACK)
+        set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,-z,noexecstack")
+        set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,-z,noexecstack")
+    endif()
+
     # Position-independent code: scoped to shared library target only
     # (see set_target_properties on ama_cryptography_shared below)
 
@@ -204,10 +236,49 @@ else()
     set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -fno-omit-frame-pointer")
 endif()
 
-# Sanitizers for debug builds (GCC/Clang only)
+# Sanitizers (GCC/Clang only).
+#
+# Applied to CMAKE_C_FLAGS, not CMAKE_C_FLAGS_DEBUG: the config-specific form
+# meant `-DAMA_ENABLE_SANITIZERS=ON` was a silent no-op for every build type
+# except Debug — including the realistic "test what you ship" Release run and
+# the empty default — while the configuration summary still printed
+# "Sanitizers: ON".  A sanitizer run that instruments nothing and reports clean
+# is worse than not running one.
 if(AMA_ENABLE_SANITIZERS AND NOT MSVC)
-    set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -fsanitize=address,undefined")
-    set(CMAKE_EXE_LINKER_FLAGS_DEBUG "${CMAKE_EXE_LINKER_FLAGS_DEBUG} -fsanitize=address,undefined")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=address,undefined -fno-omit-frame-pointer")
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fsanitize=address,undefined")
+    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -fsanitize=address,undefined")
+endif()
+
+# Fuzzing instrumentation.
+#
+# MUST be set here, before any target is created, so it reaches the LIBRARY the
+# harnesses link against.  fuzz/CMakeLists.txt applies its flags with
+# target_compile_options on the harness executables only, and those harnesses
+# link `ama_cryptography_static` — built, until this block existed, from the
+# ordinary flags with no sanitizer and no coverage instrumentation at all.
+# The consequences were that libFuzzer received SanitizerCoverage feedback from
+# the ~100-line harness and nothing else (so "coverage-guided" fuzzing of the
+# crypto code was effectively blind random testing), and ASan/UBSan could not
+# see an out-of-bounds access or an overflow inside the library, because
+# uninstrumented loads and stores are never shadow-checked.  Every 60-second CI
+# fuzz run and every `make fuzz-run` reported green while being structurally
+# incapable of finding a memory-safety bug in ML-KEM, ML-DSA, AES-GCM or the
+# signature parsers.  oss-fuzz/build.sh has always injected $CFLAGS into the
+# library for exactly this reason; the first-party path was the anomaly.
+#
+# `fuzzer-no-link` gives the library coverage instrumentation without pulling in
+# libFuzzer's main(); the harness targets add plain `fuzzer` at link time.
+if(AMA_BUILD_FUZZ AND NOT MSVC)
+    if(NOT DEFINED AMA_FUZZ_ENGINE OR AMA_FUZZ_ENGINE STREQUAL "libfuzzer")
+        set(CMAKE_C_FLAGS
+            "${CMAKE_C_FLAGS} -fsanitize=fuzzer-no-link,address,undefined -fno-omit-frame-pointer")
+    else()
+        set(CMAKE_C_FLAGS
+            "${CMAKE_C_FLAGS} -fsanitize=address,undefined -fno-omit-frame-pointer")
+    endif()
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fsanitize=address,undefined")
+    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -fsanitize=address,undefined")
 endif()
 
 # SIMD build gating.

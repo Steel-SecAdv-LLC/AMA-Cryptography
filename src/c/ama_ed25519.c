@@ -251,7 +251,8 @@ static int ge25519_frombytes(ge25519_p3 *h, const uint8_t *s) {
      * representations.  See internal/ama_ed25519_canonical.h for why this
      * diverges from ref10/libsodium.  Every call site funnels through here,
      * so verification and the point helpers are covered alike. */
-    if (!ama_ed25519_point_y_is_canonical(s)) return -1;
+    if (!ama_ed25519_point_y_is_canonical(s) ||
+        !ama_ed25519_point_x_sign_is_admissible(s)) return -1;
 
     fe25519_frombytes(h->Y, s);
     fe25519_1(h->Z);
@@ -291,6 +292,23 @@ static int ge25519_frombytes(ge25519_p3 *h, const uint8_t *s) {
             0x78595a6804c9eULL, 0x2b8324804fc1dULL
         };
         fe25519_mul(h->X, h->X, sqrt_m1);
+    }
+
+    /* RFC 8032 §5.1.3 step 3: "if x = 0, and x_0 = 1, decoding fails."
+     *
+     * x = 0 has a single square root, so the sign bit carries no information
+     * and the encoding with it SET is a second, non-canonical spelling of a
+     * point whose canonical form has it clear.  Without this check the
+     * identity (0, 1) and (0, p-1) each admitted two accepted 32-byte
+     * encodings — the encoding-uniqueness property INVARIANT-26 (canonical S),
+     * -29 (canonical ECDSA coordinates) and -38 (canonical y) exist to
+     * establish, applied to the remaining coordinate.  Not a forgery route on
+     * its own: only x = 0 points are affected and those are the identity and a
+     * low-order point, neither a legitimate verification key.  Checked BEFORE
+     * the conditional negation below, which would otherwise mask it by mapping
+     * -0 back to 0. */
+    if (fe25519_iszero(h->X) && x_sign) {
+        return -1;
     }
 
     /* Adjust sign of x to match the sign bit */

@@ -195,7 +195,8 @@ ama_error_t ama_ed25519_verify(
      * form.  The in-tree fe51 backend enforces this inside its own
      * ge25519_frombytes(); applied here so both backends accept exactly the
      * same set of encodings.  donna's sources stay unmodified. */
-    if (!ama_ed25519_point_y_is_canonical(public_key)) {
+    if (!ama_ed25519_point_y_is_canonical(public_key) ||
+        !ama_ed25519_point_x_sign_is_admissible(public_key)) {
         return AMA_ERROR_VERIFY_FAILED;
     }
 
@@ -325,7 +326,8 @@ ama_error_t ama_ed25519_batch_verify(
      * break. */
     for (size_t i = 0; i < count; i++) {
         if (!ama_ed25519_signature_s_is_canonical(entries[i].signature) ||
-            !ama_ed25519_point_y_is_canonical(entries[i].public_key)) {
+            !ama_ed25519_point_y_is_canonical(entries[i].public_key) ||
+            !ama_ed25519_point_x_sign_is_admissible(entries[i].public_key)) {
             results[i] = 0;
             ret = -1;
         }
@@ -385,11 +387,13 @@ AMA_API ama_error_t ama_ed25519_point_add(uint8_t result[32],
      * interpreter down with it. */
     if (!result || !p || !q) return AMA_ERROR_INVALID_PARAM;
     /* donna's unpack negates Y; we negate back */
-    if (!ama_ed25519_point_y_is_canonical(p)) return AMA_ERROR_INVALID_PARAM;
+    if (!ama_ed25519_point_y_is_canonical(p) ||
+        !ama_ed25519_point_x_sign_is_admissible(p)) return AMA_ERROR_INVALID_PARAM;
     if (!ge25519_unpack_negative_vartime(&P, p)) return AMA_ERROR_INVALID_PARAM;
     curve25519_neg(P.x, P.x);
     curve25519_neg(P.t, P.t);
-    if (!ama_ed25519_point_y_is_canonical(q)) return AMA_ERROR_INVALID_PARAM;
+    if (!ama_ed25519_point_y_is_canonical(q) ||
+        !ama_ed25519_point_x_sign_is_admissible(q)) return AMA_ERROR_INVALID_PARAM;
     if (!ge25519_unpack_negative_vartime(&Q, q)) return AMA_ERROR_INVALID_PARAM;
     curve25519_neg(Q.x, Q.x);
     curve25519_neg(Q.t, Q.t);
@@ -409,7 +413,8 @@ AMA_API ama_error_t ama_ed25519_scalarmult_public(uint8_t result[32],
     ge25519 ALIGN(16) P, R;
     bignum256modm s1, s2_zero = {0};
     if (!result || !public_scalar || !point) return AMA_ERROR_INVALID_PARAM;
-    if (!ama_ed25519_point_y_is_canonical(point)) return AMA_ERROR_INVALID_PARAM;
+    if (!ama_ed25519_point_y_is_canonical(point) ||
+        !ama_ed25519_point_x_sign_is_admissible(point)) return AMA_ERROR_INVALID_PARAM;
     if (!ge25519_unpack_negative_vartime(&P, point)) return AMA_ERROR_INVALID_PARAM;
     curve25519_neg(P.x, P.x);
     curve25519_neg(P.t, P.t);
@@ -438,11 +443,13 @@ AMA_API ama_error_t ama_ed25519_double_scalarmult_public(
     ge25519_p1p1 ALIGN(16) sum;
 
     if (!result || !s1 || !P1 || !s2 || !P2) return AMA_ERROR_INVALID_PARAM;
-    if (!ama_ed25519_point_y_is_canonical(P1)) return AMA_ERROR_INVALID_PARAM;
+    if (!ama_ed25519_point_y_is_canonical(P1) ||
+        !ama_ed25519_point_x_sign_is_admissible(P1)) return AMA_ERROR_INVALID_PARAM;
     if (!ge25519_unpack_negative_vartime(&P1u, P1)) return AMA_ERROR_INVALID_PARAM;
     curve25519_neg(P1u.x, P1u.x);
     curve25519_neg(P1u.t, P1u.t);
-    if (!ama_ed25519_point_y_is_canonical(P2)) return AMA_ERROR_INVALID_PARAM;
+    if (!ama_ed25519_point_y_is_canonical(P2) ||
+        !ama_ed25519_point_x_sign_is_admissible(P2)) return AMA_ERROR_INVALID_PARAM;
     if (!ge25519_unpack_negative_vartime(&P2u, P2)) return AMA_ERROR_INVALID_PARAM;
     curve25519_neg(P2u.x, P2u.x);
     curve25519_neg(P2u.t, P2u.t);

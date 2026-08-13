@@ -2834,9 +2834,7 @@ class AmaCryptographyMonitor:
             # instrumented sign/verify/encrypt/decrypt paths, which crypto_api
             # drives from a ThreadPoolExecutor during hybrid verification.
             with self._alert_lock:
-                self.alerts.append(
-                    {"type": "timing", "anomaly": anomaly, "timestamp": time.time()}
-                )
+                self.alerts.append({"type": "timing", "anomaly": anomaly, "timestamp": time.time()})
             self._prune_alerts()
 
     def check_nonce(self, key_id: bytes, nonce: bytes) -> None:
@@ -2852,9 +2850,7 @@ class AmaCryptographyMonitor:
         anomaly = self.nonce_tracker.check_and_record(key_id, nonce)
         if anomaly:
             with self._alert_lock:
-                self.alerts.append(
-                    {"type": "nonce", "anomaly": anomaly, "timestamp": time.time()}
-                )
+                self.alerts.append({"type": "nonce", "anomaly": anomaly, "timestamp": time.time()})
             self._prune_alerts()
 
     def monitor_key_lifecycle(self, key_metadata: Dict[str, Any]) -> None:

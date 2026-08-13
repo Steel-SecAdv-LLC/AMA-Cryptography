@@ -21,7 +21,13 @@ all: c python
 c:
 	@echo "Building C library (native PQC + all crypto primitives)..."
 	@mkdir -p build
-	@cd build && cmake .. -DAMA_USE_NATIVE_PQC=ON && $(MAKE)
+	@# CMAKE_BUILD_TYPE=Release is explicit, not decorative: an empty build type
+	@# applies NONE of the per-config flags, so this target used to produce an
+	@# unoptimised library with no _FORTIFY_SOURCE (which is inert without -O)
+	@# and no LTO — and `make install` below then installs exactly that build
+	@# system-wide.  Every document that quotes performance or hardening for
+	@# this project describes the Release configuration.
+	@cd build && cmake .. -DCMAKE_BUILD_TYPE=Release -DAMA_USE_NATIVE_PQC=ON && $(MAKE)
 	@echo "✓ C library built successfully"
 
 # Build Python package with extensions
@@ -239,7 +245,8 @@ fuzz-run: fuzz
 c-api:
 	@echo "Building C API library with native PQC..."
 	@mkdir -p build
-	@cd build && cmake .. -DAMA_BUILD_SHARED=ON -DAMA_BUILD_STATIC=ON \
+	@cd build && cmake .. -DCMAKE_BUILD_TYPE=Release \
+		-DAMA_BUILD_SHARED=ON -DAMA_BUILD_STATIC=ON \
 		-DAMA_USE_NATIVE_PQC=ON && $(MAKE)
 	@echo "✓ C API built successfully"
 	@echo "  Shared library: build/lib/libama_cryptography.so"

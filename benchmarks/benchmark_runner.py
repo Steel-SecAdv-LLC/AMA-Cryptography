@@ -10,7 +10,15 @@ Compares current performance against baseline.json and fails if
 any benchmark regresses more than the configured threshold.
 
 Usage:
-    python benchmarks/benchmark_runner.py [--update-baseline] [--verbose]
+    python benchmarks/benchmark_runner.py [--verbose]
+
+Refreshing a baseline is deliberately NOT a flag on this runner.
+`--update-baseline` used to be accepted here and then ignored — the parsed value
+was never read, so a maintainer recalibrating floors saw a normal green run and
+believed baseline.json had been rewritten.  Baselines are edited by hand, and
+every changed line needs a justification entry that
+`benchmarks/check_baseline_justification.py` enforces; an automatic write-back
+would route around that gate.
 
 Exit codes:
     0 - All benchmarks within acceptable range
@@ -803,11 +811,6 @@ def main() -> int:
         "-v",
         action="store_true",
         help="Verbose output",
-    )
-    parser.add_argument(
-        "--update-baseline",
-        action="store_true",
-        help="Update baseline with current results (use with caution)",
     )
     parser.add_argument(
         "--require-runner-class",

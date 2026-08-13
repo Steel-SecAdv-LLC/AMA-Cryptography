@@ -297,7 +297,11 @@ def get_compiler_flags():
     link_flags = []
 
     if platform.system() == "Windows":
-        flags.extend(["/O2", "/W3"])
+        # /guard:cf matches what CMakeLists.txt gives the MSVC library targets;
+        # without it the binding extensions — which marshal keys and plaintexts
+        # across the C boundary — were the least hardened artefacts in the wheel.
+        flags.extend(["/O2", "/W3", "/guard:cf"])
+        link_flags.extend(["/guard:cf", "/DYNAMICBASE", "/NXCOMPAT"])
     else:
         # Linux/macOS
         flags.extend(
@@ -315,7 +319,19 @@ def get_compiler_flags():
             flags.extend(["-O0", "-g3", "-DDEBUG"])
         else:
             # Note: -march=native removed for portability across CI environments
-            flags.extend(["-O3", "-DNDEBUG"])
+            # _FORTIFY_SOURCE mirrors the CMake Release flags; it is inert
+            # without optimisation, hence the non-DEBUG branch only.  The
+            # published wheels are built in manylinux containers whose GCC does
+            # not enable it by default, so these extensions shipped without the
+            # fortified string/memory checks the C library has had all along.
+            flags.extend(["-O3", "-DNDEBUG", "-U_FORTIFY_SOURCE", "-D_FORTIFY_SOURCE=2"])
+
+        # ELF link hardening, matching the library (see CMakeLists.txt): full
+        # RELRO closes GOT-overwrite, and an explicit non-executable stack does
+        # not depend on every linked object carrying .note.GNU-stack.  macOS's
+        # ld does not accept -z options, so this is Linux-only.
+        if platform.system() == "Linux":
+            link_flags.extend(["-Wl,-z,relro", "-Wl,-z,now", "-Wl,-z,noexecstack"])
 
         if COVERAGE:
             flags.extend(["--coverage"])
