@@ -51,6 +51,7 @@ Verification (at import time, see ``_self_test._verify_integrity``):
 from __future__ import annotations
 
 import argparse
+import contextlib
 import ctypes
 import hashlib
 import os
@@ -384,6 +385,19 @@ def _write_signature_module(
         encoding="utf-8",
         newline="\n",
     )
+    # Drop any cached bytecode compiled from the PREVIOUS artefact.  CPython
+    # validates a .pyc by (mtime-seconds, size) — and this rewrite produces a
+    # file of IDENTICAL size (fixed-width hex fields), often within the same
+    # second in a build pipeline.  The stale .pyc then still validates, the
+    # next import reads the OLD digests, and the runtime reports a
+    # native-digest mismatch against a signature that no longer exists on
+    # disk.  This is not hypothetical: it failed the Alpine Docker build on
+    # PR #391, where the per-image re-sign and its verification import ran
+    # 250 ms apart.  Unlinking the cache forces the next import to compile
+    # the bytes just written.
+    for cached in (out_path.parent / "__pycache__").glob("_integrity_signature.*.pyc"):
+        with contextlib.suppress(OSError):
+            cached.unlink()
     return out_path
 
 
