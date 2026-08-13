@@ -137,3 +137,100 @@ class TestRealTree:
         """The shipped C sources use ama_secure_memzero for secret scrubbing."""
         findings = gate.audit()
         assert findings == [], "\n".join(f.render() for f in findings)
+
+
+class TestPatternIsLinear:
+    """The scanner must not be the thing that hangs CI.
+
+    The first draft of ``_MEMSET_RE`` had two nullable quantifiers in sequence
+    (``\\(\\s*&?\\s*``) and a starred group whose alternatives each began with
+    ``\\s*``.  Both make the number of ways to split a run of whitespace grow
+    with its length, so a line that enters the match and then fails backtracked
+    polynomially — 16,000 spaces cost two seconds.  CodeQL flagged it, and this
+    pins the fix.
+    """
+
+    def test_whitespace_run_does_not_blow_up(self) -> None:
+        import time
+
+        # Enters `memset(` then fails: the worst case for a backtracking engine.
+        pathological = "memset(" + " " * 200_000 + "x"
+        start = time.perf_counter()
+        gate._MEMSET_RE.search(pathological)
+        elapsed = time.perf_counter() - start
+        assert elapsed < 1.0, (
+            f"matching 200k spaces took {elapsed:.2f}s — the pattern has "
+            f"regained polynomial backtracking"
+        )
+
+    def test_member_chain_does_not_blow_up(self) -> None:
+        import time
+
+        pathological = "memset(" + "a->" * 50_000 + "!"
+        start = time.perf_counter()
+        gate._MEMSET_RE.search(pathological)
+        elapsed = time.perf_counter() - start
+        assert elapsed < 1.0, f"matching a 50k-link member chain took {elapsed:.2f}s"
+
+    def test_spacing_variants_still_match(self) -> None:
+        """Linearity must not have cost the shapes the gate is for."""
+        for line, expected in [
+            ("memset(secret_key, 0, 32);", "secret_key"),
+            ("memset( secret_key , 0 , 32 );", "secret_key"),
+            ("memset(&kp_local, 0, 8);", "kp_local"),
+            ("memset( & kp_local , 0, 8);", "kp_local"),
+            ("memset(ctx->hmac_key, 0, 32);", "hmac_key"),
+            ("memset(keys[i].signing_key, 0, 32);", "signing_key"),
+        ]:
+            match = gate._MEMSET_RE.search(line)
+            assert match is not None, f"no match for: {line}"
+            assert gate._destination_name(match.group("dst")) == expected, line
+
+    @pytest.mark.parametrize("filler", ["[", "]", "a[b"])
+    def test_destination_name_does_not_blow_up(self, filler: str) -> None:
+        """``_destination_name`` is linear too, on unbalanced input included.
+
+        The helper first stripped subscripts with ``re.sub(r"\\[[^\\]]*\\]", …)``.
+        That is linear on the balanced expressions ``_MEMSET_RE`` produces, but
+        each unmatched ``[`` makes the engine rescan to end-of-string looking
+        for a ``]``, so 100,000 of them cost 5.5 s.  The helper is module-level
+        and takes a plain string; nothing stops a caller handing it that.
+        """
+        import time
+
+        pathological = filler * 100_000
+        start = time.perf_counter()
+        gate._destination_name(pathological)
+        elapsed = time.perf_counter() - start
+        assert elapsed < 1.0, (
+            f"extracting from 100k {filler!r} took {elapsed:.2f}s — the helper "
+            f"has regained superlinear behaviour"
+        )
+
+    @pytest.mark.parametrize(
+        "expression,expected",
+        [
+            # Shapes _MEMSET_RE can produce: subscripts skipped, last
+            # depth-0 identifier wins.
+            ("secret_key", "secret_key"),
+            ("ctx->hmac_key", "hmac_key"),
+            ("st.master_seed", "master_seed"),
+            ("round_keys[i]", "round_keys"),
+            ("keys[i].signing_key", "signing_key"),
+            ("s->t[i].u->private_scalar", "private_scalar"),
+            ("x[y[z]].key_material", "key_material"),  # nested subscript
+            ("tbl[i][j]", "tbl"),
+            ("a[b[c]d]e", "e"),
+            # Shapes only a direct caller can produce.  The scan tracks depth
+            # rather than deleting bracket pairs, so an unterminated subscript
+            # no longer returns the INDEX variable (`a[b` gave `b` before), and
+            # text is never spliced across a removed pair (`a[b]c` gave `ac`,
+            # an identifier that appears nowhere in the input).
+            ("a[b", "a"),
+            ("a[b]c", "c"),
+            ("[a", ""),
+            ("", ""),
+        ],
+    )
+    def test_destination_name_extraction(self, expression: str, expected: str) -> None:
+        assert gate._destination_name(expression) == expected

@@ -75,10 +75,27 @@ _SECRET_NAME_RE = re.compile(
 # `ctx->hmac_key` is a key because of `hmac_key`, not because of `ctx` — so the
 # whole destination expression is captured here and the trailing identifier is
 # extracted in _destination_name().
+#
+# Written to backtrack linearly.  Two shapes in the first draft made it
+# polynomial, and CodeQL flagged it (correctly) as a ReDoS:
+#
+#   `\(\s*&?\s*`  — two nullable quantifiers separated by an optional atom, so
+#                   a run of N spaces that ultimately fails to match can be
+#                   split between them N ways.
+#   `(?:\s*…|\s*\[…\])*` — a starred group whose every alternative begins with
+#                   `\s*`, which multiplies the same ambiguity.
+#
+# Measured on the original: 2,000 spaces 37 ms, 4,000 128 ms, 8,000 516 ms,
+# 16,000 2,077 ms — a clean 4x per doubling.  Both are rewritten so each
+# quantifier is followed by something that cannot itself match whitespace
+# (`&` and the identifier start), which makes the match deterministic:
+# 16,000 spaces now costs microseconds.  A .c file with a long run of spaces
+# after `memset(` is a strange input, but this tool runs over whatever is in
+# the tree, and a gate must not be the thing that hangs CI.
 _MEMSET_RE = re.compile(
-    r"\bmemset\s*\(\s*&?\s*"
+    r"\bmemset\s*\((?:\s*&)?\s*"
     r"(?P<dst>[A-Za-z_][A-Za-z0-9_]*"
-    r"(?:\s*(?:->|\.)\s*[A-Za-z_][A-Za-z0-9_]*|\s*\[[^\]]*\])*)"
+    r"(?:(?:->|\.)[A-Za-z_][A-Za-z0-9_]*|\[[^\]]*\])*)"
     r"\s*,\s*(?P<val>0[xX]0+|0|'\\0')\s*,"
 )
 
@@ -89,12 +106,47 @@ def _destination_name(expression: str) -> str:
     """The identifier a naming convention attaches to, for a memset target.
 
     ``ctx->hmac_key`` -> ``hmac_key``; ``round_keys[i]`` -> ``round_keys``;
-    ``secret_key`` -> itself.  Array subscripts are dropped first so an index
+    ``secret_key`` -> itself.  Subscript contents are skipped so an index
     variable is never mistaken for the destination.
+
+    A single left-to-right scan tracking bracket depth, not
+    ``re.sub(r"\\[[^\\]]*\\]", …)`` + findall.  That form is linear on the
+    balanced input _MEMSET_RE actually produces, but quadratic on unbalanced
+    brackets (100k ``[`` took 5.5 s), and this helper is module-level: a test
+    or a later caller can hand it anything.  Linearity here is free.
+
+    Tracking depth also fixes two things deleting bracket pairs got wrong on
+    input _MEMSET_RE cannot produce but a direct caller can: an unterminated
+    subscript used to return the INDEX (``a[b`` -> ``b``, exactly the mistake
+    this function exists to avoid), and deleting a pair spliced its neighbours
+    into an identifier that was never in the source (``a[b]c`` -> ``ac``).
+    They now yield ``a`` and ``c``.
     """
-    without_subscripts = re.sub(r"\[[^\]]*\]", "", expression)
-    identifiers = _IDENTIFIER_RE.findall(without_subscripts)
-    return identifiers[-1] if identifiers else ""
+    depth = 0
+    last = ""
+    current: list[str] = []
+
+    def flush() -> None:
+        nonlocal last, current
+        if current and depth == 0:
+            last = "".join(current)
+        current = []
+
+    for ch in expression:
+        if ch == "[":
+            flush()
+            depth += 1
+        elif ch == "]":
+            current = []
+            if depth > 0:
+                depth -= 1
+        elif ch.isalnum() or ch == "_":
+            if depth == 0:
+                current.append(ch)
+        else:
+            flush()
+    flush()
+    return last
 
 
 class Finding(NamedTuple):
