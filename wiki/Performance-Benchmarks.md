@@ -319,16 +319,16 @@ _Headline source: `benchmarks/benchmark-results.json` (run 2026-04-27). Regressi
 |-----------|---------------------:|---------------------------:|----------:|------|
 | Ama Sha3 256 Hash | 230,244 | 140,000 | ±35% | microbenchmark |
 | Hmac Sha3 256 | 148,565 | 96,000 | ±40% | microbenchmark |
-| Ed25519 Keygen | 48,134 | 31,000 | ±35% | microbenchmark |
+| Ed25519 Keygen | 48,134 | 12,651 | ±35% | microbenchmark |
 | Ed25519 Sign | 51,046 | 33,000 | ±35% | microbenchmark |
 | Ed25519 Verify | 21,097 | 13,000 | ±35% | microbenchmark |
 | Hkdf Derive | 95,433 | 62,000 | ±35% | microbenchmark |
 | Full Package Create | 3,813.1 | 2,400 | ±70% | complex_operation |
 | Full Package Verify | 4,055.4 | 2,600 | ±50% | complex_operation |
-| Dilithium Keygen *(optional)* | 3,331.0 | 2,100 | ±40% | microbenchmark |
+| Dilithium Keygen *(optional)* | 3,331.0 | 1,281 | ±40% | microbenchmark |
 | Dilithium Sign *(optional)* | 1,103.7 | 710 | ±50% | microbenchmark |
 | Dilithium Verify *(optional)* | 7,215.7 | 4,600 | ±40% | microbenchmark |
-| Kyber Keygen *(optional)* | 5,346.1 | 3,400 | ±40% | microbenchmark |
+| Kyber Keygen *(optional)* | 5,346.1 | 3,158 | ±40% | microbenchmark |
 | Kyber Encapsulate *(optional)* | 11,688 | 7,500 | ±40% | microbenchmark |
 | Aes 256 Gcm Encrypt *(optional)* | 276,778 | 150,000 | ±40% | microbenchmark |
 | Chacha20Poly1305 Encrypt *(optional)* | 215,256 | 130,000 | ±40% | microbenchmark |
