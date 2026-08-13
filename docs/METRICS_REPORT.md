@@ -80,7 +80,7 @@ Measured as non-empty-allowed `wc -l` over source files in each scope.
 | Native C (`src/c/**/*.c`, `include/**/*.h`) | 105 | 50,899 |
 | Library total (Python + C + headers) | 133 | **83,987** |
 | Top-level Python (monitors, benchmarks, demos) | — | 952 |
-| Tests (`tests/**/*.py`) | 150 | 60,403 |
+| Tests (`tests/**/*.py`) | 150 | 60,495 |
 | Cython (`*.pyx`, `*.pxd`) | — | 1,873 |
 | **Whole project** (source + docs + config) | — | **304,171** |
 
@@ -189,7 +189,7 @@ find . -type f \
 | Scope | Count |
 |-------|------:|
 | Python test files under `tests/` matching the static regex | 147 |
-| Syntactic `def test_` matches under `tests/**/*.py` | **3,525** |
+| Syntactic `def test_` matches under `tests/**/*.py` | **3,528** |
 | `test_*.c` files under `tests/c/` (ctest-registered) | 57 |
 | `bench_*.c` files under `tests/c/` (standalone, not in ctest) | 1 |
 | `fuzz_*.c` sources under `fuzz/` | 16 |
@@ -217,7 +217,7 @@ pytest --collect-only -q | tail -1
 Stderr is intentionally left unsuppressed so collection/import errors
 remain visible during reproduction.
 
-The static count (3,525) and the dynamic collection count will differ.
+The static count (3,528) and the dynamic collection count will differ.
 Any external claim ("N tests") must state which count it is reporting.
 This supersedes the earlier "866+ tests collected across 39 files" figure
 in ARCHITECTURE.md and any "2,068 tests" figure that may have circulated

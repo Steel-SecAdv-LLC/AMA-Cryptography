@@ -280,3 +280,95 @@ class TestSampleWindow:
 
         rate = br.benchmark_operation(lambda: None, iterations=10, warmup=0, rounds=1)
         assert rate == 1_000.0, f"an undersized batch's {rate} ops/sec reached the report"
+
+
+class TestValidityWindowCannotBeExtendedWithoutRemeasuring:
+    """The escape hatch in the freshness test, closed.
+
+    ``tests/test_benchmark_baseline_freshness.py`` fails once the package
+    version passes a baseline's ``applies_through_release`` — but bumping that
+    field is itself a way to satisfy it, and nothing required the floors to be
+    re-measured first. The cheapest way to make the freshness test green was to
+    declare the stale floors valid for longer.
+
+    ``arm-baseline.json`` shows the shape: ``baseline_source_release: 3.1.0``
+    against ``applies_through_release: 4.0.0``, floors measured nine minor
+    releases before the window they are declared valid for, with the file's own
+    notes recording that the 2026-07-29 recalibration skipped AArch64. The
+    freshness gate passed throughout.
+
+    The rule is about the diff, not the current state, so it constrains the
+    next extension rather than retroactively failing the files as they stand.
+    """
+
+    @staticmethod
+    def _install_refs(
+        monkeypatch: pytest.MonkeyPatch,
+        before: dict[str, Any],
+        after: dict[str, Any],
+    ) -> Any:
+        """Stub ``_run_git`` so the guard reads synthetic before/after files."""
+        import json
+        import subprocess
+
+        import benchmarks.check_baseline_justification as guard
+
+        def fake_run_git(*args: str) -> str:
+            ref, _, path = args[1].partition(":")
+            if path != guard.ARM_BASELINE_PATH:
+                raise subprocess.CalledProcessError(1, "git")
+            return json.dumps(before if ref == "BASE" else after)
+
+        monkeypatch.setattr(guard, "_run_git", fake_run_git)
+        return guard
+
+    @staticmethod
+    def _baseline(through: str, source: str, value: int) -> dict[str, Any]:
+        return {
+            "metadata": {
+                "applies_through_release": through,
+                "baseline_source_release": source,
+            },
+            "benchmarks": {"ama_sha3_256_hash": {"baseline_value": value}},
+            "pqc_benchmarks": {},
+        }
+
+    def test_extending_the_window_alone_is_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        guard = self._install_refs(
+            monkeypatch,
+            self._baseline("4.0.0", "3.1.0", 100),
+            self._baseline("5.0.0", "3.1.0", 100),
+        )
+        failures = guard._check_validity_window("BASE", "HEAD")
+        assert len(failures) == 1, failures
+        assert "no floor was re-measured" in failures[0]
+
+    @pytest.mark.parametrize(
+        "after,why",
+        [
+            (("5.0.0", "3.1.0", 150), "a floor was re-measured"),
+            (("5.0.0", "5.0.0", 100), "baseline_source_release advanced"),
+            (("4.0.0", "3.1.0", 100), "the window did not move"),
+            (("3.5.0", "3.1.0", 100), "the window was narrowed"),
+        ],
+    )
+    def test_legitimate_edits_are_allowed(
+        self, monkeypatch: pytest.MonkeyPatch, after: tuple[str, str, int], why: str
+    ) -> None:
+        guard = self._install_refs(
+            monkeypatch,
+            self._baseline("4.0.0", "3.1.0", 100),
+            self._baseline(*after),
+        )
+        assert guard._check_validity_window("BASE", "HEAD") == [], why
+
+    def test_the_current_tree_satisfies_the_rule(self) -> None:
+        """This branch must not itself be extending a window silently."""
+        import subprocess
+
+        import benchmarks.check_baseline_justification as guard
+
+        try:
+            assert guard._check_validity_window("origin/main", "HEAD") == []
+        except subprocess.CalledProcessError:  # pragma: no cover - shallow clone
+            pytest.skip("origin/main is not available in this checkout")

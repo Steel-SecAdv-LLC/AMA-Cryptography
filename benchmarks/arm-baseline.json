@@ -5,7 +5,7 @@
     "created": "2026-05-15T18:49:48Z",
     "description": "AArch64 (ubuntu-24.04-arm) populated baseline for regression detection. Values are conservative 65% floors from the first successful PR #305 AArch64 benchmark artifact; subsequent updates require line-item justification per benchmarks/check_baseline_justification.py.",
     "system": "GitHub Actions ubuntu-24.04-arm shared runner, Linux AArch64, Python 3.11",
-    "notes": "AArch64 floors measured 2026-05-15 on the benchmark-regression job's ubuntu-24.04-arm runner (PR #305; the library then shipped 3.1.0 \u2014 see `baseline_source_release`), with the two secp256k1 floors added alongside the native secp256k1 implementation (PR #370). Floors set to ~65% of measured performance for 35% regression headroom, matching the x86-64 file's convention. These floors were NOT re-measured during the 2026-07-29 x86-64 recalibration (no AArch64 hardware was available); the 2026-07-29 change-log entry's ACTION REQUIRED to re-measure on the ubuntu-24.04-arm matrix runner still stands. SHA3 dispatches through the NEON Keccak path on this target; PQC benchmarks use the native C library.",
+    "notes": "AArch64 floors measured 2026-05-15 on the benchmark-regression job's ubuntu-24.04-arm runner (PR #305; the library then shipped 3.1.0 - see `baseline_source_release`), with the two secp256k1 floors added alongside the native secp256k1 implementation (PR #370). Floors set to ~65% of measured performance for 35% regression headroom, matching the x86-64 file's convention. SHA3 dispatches through the NEON Keccak path on this target; PQC benchmarks use the native C library. STILL NOT RE-MEASURED: the 2026-07-29 x86-64 recalibration skipped AArch64 and its ACTION REQUIRED stands. What changed is that the floors are now known to be wrong rather than merely old, and by how much - see `calibration_evidence`. Do not extend `applies_through_release` again without re-measuring: benchmarks/check_baseline_justification.py now refuses that edit.",
     "peer_references": {
       "description": "Published ops/sec figures for peer cryptographic libraries on comparable x86-64 hardware. These are context numbers for the `Peer Comparison` table in `benchmark-report.md`; the regression harness does not compare against them. When `benchmarks/comparative_benchmark.py` runs with `pynacl`/`oqs`/`cryptography` installed it produces live measurements that supersede these static references for that specific run.",
       "sources": {
@@ -185,7 +185,35 @@
         "change": "KEYGEN FLOORS RE-MEASURED FOR INVARIANT-41 (PR #391): key generation now includes the FIPS 140-3 pairwise consistency test on every keypair \u2014 a sign+verify for signature keys, an encapsulate+decapsulate for KEM keys \u2014 so the keygen benchmarks measure keygen-plus-PCT, deliberately: hiding the test from the benchmark would report a cost users do not get. Floors are set to the canonical benchmark-regression CI job's measurements on the PCT-bearing head (commit f195e69): ed25519_keygen 28626 -> 10116 ops/sec, dilithium_keygen 2700 -> 1705 ops/sec, kyber_keygen 4094 -> 3684 ops/sec. Only ed25519_keygen, dilithium_keygen and kyber_keygen change; no other primitive's measured path was touched by INVARIANT-41 (x25519_scalarmult and the secp256k1/sign/verify/encrypt benches do not generate keys). AUTHORITY: these ARE the canonical runner's own measurements, taken from the failing gate run itself on ubuntu-24.04-arm (AArch64)."
       }
     ],
-    "runner_cpu_class": "aarch64"
+    "runner_cpu_class": "aarch64",
+    "calibration_evidence": {
+      "recorded": "2026-08-13",
+      "runner": "ubuntu-24.04-arm (benchmark-regression matrix entry)",
+      "harness": "benchmarks/benchmark_runner.py after the sample-window fix: batches sized to span >=0.15 s, fastest of three reported",
+      "summary": "Measured throughput was compared against these floors across three runs on the same runner class. The floors are not uniformly calibrated: they span 0.55x to 9.54x of measured, so the 65% convention this file states does not currently hold for most entries. Combined with per-entry tolerance_percent values of 35-70%, the effective headroom is a 34-94% throughput drop before the gate fails - against a stated 10% regression threshold.",
+      "measured_over_floor": {
+        "secp256k1_ecdsa_sign": 9.54,
+        "secp256k1_ecdsa_verify": 3.2,
+        "dilithium_verify": 1.59,
+        "ama_sha3_256_hash": 1.58,
+        "hkdf_derive": 1.56,
+        "x25519_scalarmult_batch4": 1.54,
+        "x25519_scalarmult": 1.54,
+        "kyber_encapsulate": 1.54,
+        "hmac_sha3_256": 1.53,
+        "ed25519_verify": 1.53,
+        "full_package_verify": 1.52,
+        "chacha20poly1305_encrypt": 1.51,
+        "ed25519_sign": 1.5,
+        "kyber_keygen": 1.0,
+        "ed25519_keygen": 0.98,
+        "dilithium_keygen": 0.9,
+        "dilithium_sign": 0.85,
+        "aes_256_gcm_encrypt": 0.66,
+        "full_package_create": 0.55
+      },
+      "not_recalibrated_here": "Recalibrating from a single artifact of a harness changed in the same pull request would repeat the thin-basis problem the freshness test exists to prevent, and four entries (dilithium_sign, full_package_create, aes_256_gcm_encrypt, hkdf_derive) were not yet stable across the runs available. The other fifteen agreed within 7%. Re-measure with several runs of the fixed harness, then set the floors to 65% of the median and advance baseline_source_release."
+    }
   },
   "thresholds": {
     "regression_threshold_percent": 10,

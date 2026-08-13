@@ -100,7 +100,7 @@ def _run_git(*args: str) -> str:
     return result.stdout
 
 
-def _load_baseline_at(ref: str, path: str = BASELINE_PATH) -> Dict[str, Dict]:
+def _load_baseline_at(ref: str, path: str = BASELINE_PATH) -> Dict[str, Dict[str, object]]:
     """Return {primitive_name: entry_dict} merged from benchmarks + pqc_benchmarks
     sections, as they appeared at ``ref``. Missing file yields {}."""
     try:
@@ -112,14 +112,14 @@ def _load_baseline_at(ref: str, path: str = BASELINE_PATH) -> Dict[str, Dict]:
     except json.JSONDecodeError as exc:
         print(f"ERROR: could not parse {path}@{ref}: {exc}", file=sys.stderr)
         sys.exit(2)
-    merged: Dict[str, Dict] = {}
+    merged: Dict[str, Dict[str, object]] = {}
     for section in ("benchmarks", "pqc_benchmarks"):
         merged.update(data.get(section, {}))
     return merged
 
 
 def _changed_baseline_values(
-    before: Dict[str, Dict], after: Dict[str, Dict]
+    before: Dict[str, Dict[str, object]], after: Dict[str, Dict[str, object]]
 ) -> List[Tuple[str, object, object]]:
     """Return [(name, before_value, after_value)] for every primitive whose
     ``baseline_value`` differs between the two snapshots. Includes adds and
@@ -199,6 +199,90 @@ def _check_justification(
     return failures
 
 
+def _load_metadata_at(ref: str, path: str) -> Dict[str, object]:
+    """``metadata`` from a baseline file as it appeared at ``ref``."""
+    try:
+        raw = _run_git("show", f"{ref}:{path}")
+    except subprocess.CalledProcessError:
+        return {}
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    meta = data.get("metadata", {})
+    return meta if isinstance(meta, dict) else {}
+
+
+def _release_tuple(value: object) -> Tuple[int, ...] | None:
+    if not isinstance(value, str):
+        return None
+    match = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)", value.strip())
+    return tuple(int(g) for g in match.groups()) if match else None
+
+
+def _check_validity_window(base_ref: str, head_ref: str) -> List[str]:
+    """Refuse to extend a baseline's validity window without re-measuring it.
+
+    ``tests/test_benchmark_baseline_freshness.py`` fails once the package
+    version passes a baseline's ``applies_through_release``.  It has one
+    escape: bumping that field is itself a way to satisfy it.  Nothing
+    required the floors to be re-measured first, so the cheapest way to make
+    the freshness test green was to declare the stale floors valid for longer.
+
+    That is not hypothetical.  ``arm-baseline.json`` carries
+    ``baseline_source_release: 3.1.0`` against ``applies_through_release:
+    4.0.0`` — floors measured nine minor releases before the window they are
+    declared valid for — and its own ``notes`` record that the 2026-07-29
+    recalibration skipped AArch64 because no hardware was available.  The
+    freshness gate passed throughout.
+
+    So the window may move only in a commit that also moves the measurements:
+    at least one ``baseline_value`` changed, or ``baseline_source_release``
+    advanced.  Historical state is untouched — this is a rule about the diff,
+    so it constrains the next extension rather than retroactively failing the
+    current files.
+    """
+    failures: List[str] = []
+    for path in ALL_BASELINE_PATHS:
+        before_meta = _load_metadata_at(base_ref, path)
+        after_meta = _load_metadata_at(head_ref, path)
+        if not before_meta or not after_meta:
+            continue
+
+        old_through = _release_tuple(before_meta.get("applies_through_release"))
+        new_through = _release_tuple(after_meta.get("applies_through_release"))
+        if old_through is None or new_through is None or new_through <= old_through:
+            continue
+
+        old_source = _release_tuple(before_meta.get("baseline_source_release"))
+        new_source = _release_tuple(after_meta.get("baseline_source_release"))
+        source_advanced = (
+            old_source is not None and new_source is not None and new_source > old_source
+        )
+        before_vals = _load_baseline_at(base_ref, path)
+        after_vals = _load_baseline_at(head_ref, path)
+        values_changed = bool(_changed_baseline_values(before_vals, after_vals))
+
+        if not (source_advanced or values_changed):
+            failures.append(
+                f"{path}: applies_through_release moved "
+                f"{before_meta.get('applies_through_release')!r} -> "
+                f"{after_meta.get('applies_through_release')!r}, but no floor was "
+                f"re-measured — no baseline_value changed and "
+                f"baseline_source_release is still "
+                f"{after_meta.get('baseline_source_release')!r}.\n"
+                f"  Extending the window is how the freshness test in "
+                f"tests/test_benchmark_baseline_freshness.py gets satisfied, so "
+                f"extending it without re-measuring turns that test into a "
+                f"formality: the floors keep describing an older tree and the "
+                f"regression gate keeps passing because it cannot fail.\n"
+                f"  Re-measure on the canonical runner for this file, update the "
+                f"floors and baseline_source_release, and record the measurement "
+                f"in metadata.baseline_change_log."
+            )
+    return failures
+
+
 def main(argv: List[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -248,6 +332,21 @@ def main(argv: List[str]) -> int:
     except subprocess.CalledProcessError as exc:
         print(f"ERROR: git show failed: {exc.stderr}", file=sys.stderr)
         return 2
+
+    try:
+        window_failures = _check_validity_window(args.base_ref, args.head_ref)
+    except subprocess.CalledProcessError as exc:
+        print(f"ERROR: git show failed: {exc.stderr}", file=sys.stderr)
+        return 2
+    if window_failures:
+        print("\n" + "=" * 72, file=sys.stderr)
+        print(
+            "FAIL: a baseline validity window was extended without re-measuring.", file=sys.stderr
+        )
+        print("=" * 72, file=sys.stderr)
+        for msg in window_failures:
+            print("\n" + msg, file=sys.stderr)
+        return 1
 
     if not per_path_changes:
         print(
