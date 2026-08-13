@@ -171,6 +171,63 @@ static inline uint8x16_t ghash_mul_neon(uint8x16_t a_gcm, uint8x16_t b_gcm) {
  * Uses vaeseq_u8 with a zero block to access the SubBytes look-up, which
  * is equivalent to calling _mm_aeskeygenassist_si128 on x86.
  * ============================================================================ */
+/* Why these two helpers never touch memory
+ * ----------------------------------------
+ * Both previously staged the key schedule through `uint8_t[16]` locals
+ * (`vst1q_u8` out, index the bytes, `vld1q_u8` back).  `out` is a complete
+ * AES-256 round key and its neighbours hold the adjacent one — and two
+ * consecutive AES-256 round keys invert to the master key — so those arrays
+ * were secret material sitting in the dead frames of
+ * ama_aes256_gcm_{encrypt,decrypt}_neon, contradicting this file's header
+ * claim that every kernel scrubs its key material (INVARIANT-6/12).
+ *
+ * Scrubbing them with ama_secure_memzero() was the first attempt and was a
+ * bad trade.  Each scrub carries a compiler barrier, so 6 per helper x 13
+ * helper calls per expansion both defeated inlining and forced the arrays to
+ * be materialised in memory — measured on aarch64 (gcc 13 -O2
+ * -march=armv8-a+crypto): the expansion went from one 880-instruction
+ * straight-line block to 13 out-of-line calls totalling ~1,524 instructions,
+ * and 200,000 expansions under qemu-aarch64 went 345 ms -> 1,593 ms (4.6x).
+ * Key expansion runs once per GCM call, so that is a per-operation cost.
+ *
+ * Keeping the schedule in NEON registers is both faster and strictly safer:
+ * there is no stack copy left to scrub, which is the property the x86 kernels
+ * already had ("their schedule stays in XMM registers").  A scrub can only
+ * erase a secret after it has been written down; not writing it down is the
+ * stronger guarantee.
+ *
+ * The one subtlety is SubWord.  AESE(state, key) computes
+ * ShiftRows(SubBytes(state ^ key)), which is why the old code hid a 4-byte
+ * word at byte positions 0/5/10/15 so ShiftRows would gather it into 0..3.
+ * Broadcasting the word to all four 32-bit lanes makes the placement
+ * unnecessary: SubBytes is bytewise, and ShiftRows permutes only across
+ * columns, so on a vector whose four columns are identical it is the
+ * identity.  AESE of a broadcast word is therefore the broadcast of
+ * SubWord(word), readable from any lane.
+ */
+
+/** SubWord() via the AES S-box in AESE, without a memory round trip. */
+static inline uint32_t aes_subword_neon(uint32_t word) {
+    const uint8x16_t bcast = vreinterpretq_u8_u32(vdupq_n_u32(word));
+    const uint8x16_t subbed = vaeseq_u8(bcast, vdupq_n_u8(0));
+    return vgetq_lane_u32(vreinterpretq_u32_u8(subbed), 0);
+}
+
+/** The AES-256 key-schedule XOR cascade, in-register.
+ *
+ * Produces words [p0^t, p0^p1^t, p0^p1^p2^t, p0^p1^p2^p3^t] from
+ * prev = [p0,p1,p2,p3] and the injected word t — the vector form of the
+ * four `out[i] = prev[i] ^ out[i-4]` loops it replaces.  `vextq_u8(zero, v, 12)`
+ * and `vextq_u8(zero, v, 8)` shift the vector up by one and two 32-bit words
+ * with zero fill, giving the prefix-XOR in two steps.
+ */
+static inline uint8x16_t aes_key_cascade_neon(uint8x16_t prev, uint32_t t) {
+    const uint8x16_t zero = vdupq_n_u8(0);
+    uint8x16_t acc = veorq_u8(prev, vextq_u8(zero, prev, 12));
+    acc = veorq_u8(acc, vextq_u8(zero, acc, 8));
+    return veorq_u8(acc, vreinterpretq_u8_u32(vdupq_n_u32(t)));
+}
+
 static inline uint8x16_t aes_key_assist_neon(uint8x16_t prev_even,
                                                uint8x16_t prev_odd,
                                                uint8_t rcon) {
@@ -181,91 +238,21 @@ static inline uint8x16_t aes_key_assist_neon(uint8x16_t prev_even,
      * key half), not prev_even.  This matches the x86 reference where
      * _mm_aeskeygenassist_si128 operates on rk[odd] while the XOR cascade
      * runs on rk[even]. */
-    uint8x16_t zero = vdupq_n_u8(0);
-
-    /* Extract word 3 (bytes 12-15) from prev_odd for SubWord+RotWord */
-    uint8_t odd_bytes[16];
-    vst1q_u8(odd_bytes, prev_odd);
-    uint8_t word3_input[16] = {0};
-    word3_input[0] = odd_bytes[12];
-    word3_input[5] = odd_bytes[13];
-    word3_input[10] = odd_bytes[14];
-    word3_input[15] = odd_bytes[15];
-    uint8x16_t w3_vec = vld1q_u8(word3_input);
-    uint8x16_t w3_sub = vaeseq_u8(w3_vec, zero); /* SubBytes + ShiftRows */
-    uint8_t w3_out[16];
-    vst1q_u8(w3_out, w3_sub);
-    /* After ShiftRows on our carefully placed bytes, they end up at:
-     * byte[0] stays at [0], byte[5] -> [1], byte[10] -> [2], byte[15] -> [3]
-     * (ShiftRows: row0 no shift, row1 shift 1, row2 shift 2, row3 shift 3) */
-    uint8_t w3[4];
-    w3[0] = w3_out[1] ^ rcon; /* RotWord: [1,2,3,0] + rcon on first byte */
-    w3[1] = w3_out[2];
-    w3[2] = w3_out[3];
-    w3[3] = w3_out[0];
-
-    /* XOR cascade into prev_even */
-    uint8_t even_bytes[16];
-    vst1q_u8(even_bytes, prev_even);
-    uint8_t out[16];
-    for (int i = 0; i < 4; i++) out[i] = even_bytes[i] ^ w3[i];
-    for (int i = 4; i < 8; i++) out[i] = even_bytes[i] ^ out[i-4];
-    for (int i = 8; i < 12; i++) out[i] = even_bytes[i] ^ out[i-4];
-    for (int i = 12; i < 16; i++) out[i] = even_bytes[i] ^ out[i-4];
-    uint8x16_t result = vld1q_u8(out);
-
-    /* Scrub the round-key material this helper round-trips through the stack.
-     * `out` IS a complete AES-256 round key and `even_bytes`/`odd_bytes` hold
-     * neighbouring ones — two consecutive round keys reverse to the master key.
-     * The helper runs 13 times per expansion, so without this the dead frames
-     * of ama_aes256_gcm_{encrypt,decrypt}_neon held several round keys, while
-     * this file's header claims every kernel scrubs its key material
-     * (INVARIANT-6/12).  The x86 kernels have no equivalent exposure: their
-     * schedule stays in XMM registers. */
-    ama_secure_memzero(out, sizeof(out));
-    ama_secure_memzero(even_bytes, sizeof(even_bytes));
-    ama_secure_memzero(odd_bytes, sizeof(odd_bytes));
-    ama_secure_memzero(word3_input, sizeof(word3_input));
-    ama_secure_memzero(w3_out, sizeof(w3_out));
-    ama_secure_memzero(w3, sizeof(w3));
-    return result;
+    const uint32_t w3 = vgetq_lane_u32(vreinterpretq_u32_u8(prev_odd), 3);
+    const uint32_t subbed = aes_subword_neon(w3);
+    /* RotWord on a little-endian word is a rotate-right by 8: byte 0 of the
+     * result is the old byte 1, and the old byte 0 wraps to byte 3 — exactly
+     * the [1,2,3,0] permutation the byte-indexed version spelled out.  rcon
+     * lands on byte 0. */
+    const uint32_t rotated = ((subbed >> 8) | (subbed << 24)) ^ (uint32_t)rcon;
+    return aes_key_cascade_neon(prev_even, rotated);
 }
 
 static inline uint8x16_t aes_key_assist2_neon(uint8x16_t prev_even, uint8x16_t prev_odd) {
     /* For AES-256 odd-numbered round keys (rk[3], rk[5], ...):
      * SubWord(prev_even[3]) without RotWord, no rcon. */
-    uint8_t prev_bytes[16], even_bytes[16];
-    vst1q_u8(prev_bytes, prev_odd);
-    vst1q_u8(even_bytes, prev_even);
-
-    uint8x16_t zero = vdupq_n_u8(0);
-    uint8_t word3_input[16] = {0};
-    word3_input[0] = even_bytes[12];
-    word3_input[5] = even_bytes[13];
-    word3_input[10] = even_bytes[14];
-    word3_input[15] = even_bytes[15];
-    uint8x16_t w3_vec = vld1q_u8(word3_input);
-    uint8x16_t w3_sub = vaeseq_u8(w3_vec, zero);
-    uint8_t w3_out[16];
-    vst1q_u8(w3_out, w3_sub);
-    /* SubWord (no RotWord, no rcon) */
-    uint8_t w3[4] = { w3_out[0], w3_out[1], w3_out[2], w3_out[3] };
-
-    uint8_t out[16];
-    for (int i = 0; i < 4; i++) out[i] = prev_bytes[i] ^ w3[i];
-    for (int i = 4; i < 8; i++) out[i] = prev_bytes[i] ^ out[i-4];
-    for (int i = 8; i < 12; i++) out[i] = prev_bytes[i] ^ out[i-4];
-    for (int i = 12; i < 16; i++) out[i] = prev_bytes[i] ^ out[i-4];
-    uint8x16_t result = vld1q_u8(out);
-
-    /* Same scrub discipline as aes_key_assist_neon above — see the note there. */
-    ama_secure_memzero(out, sizeof(out));
-    ama_secure_memzero(prev_bytes, sizeof(prev_bytes));
-    ama_secure_memzero(even_bytes, sizeof(even_bytes));
-    ama_secure_memzero(word3_input, sizeof(word3_input));
-    ama_secure_memzero(w3_out, sizeof(w3_out));
-    ama_secure_memzero(w3, sizeof(w3));
-    return result;
+    const uint32_t w3 = vgetq_lane_u32(vreinterpretq_u32_u8(prev_even), 3);
+    return aes_key_cascade_neon(prev_odd, aes_subword_neon(w3));
 }
 
 static void ama_aes256_expand_key_neon(const uint8_t key[32], uint8x16_t rk[15]) {
