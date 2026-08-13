@@ -3092,23 +3092,18 @@ def dilithium_sign(message: bytes, secret_key: Union[bytes, bytearray]) -> bytes
         # snapshotting it — bytes(bytearray) is exactly the un-wipeable
         # transient _borrow exists to avoid.
         sk_buf = _borrow(secret_key)
-        try:
-            rc = _native_lib.ama_dilithium_sign(
-                sig_buf,
-                ctypes.byref(sig_len),
-                message,
-                ctypes.c_size_t(len(message)),
-                sk_buf,
+        rc = _native_lib.ama_dilithium_sign(
+            sig_buf,
+            ctypes.byref(sig_len),
+            message,
+            ctypes.c_size_t(len(message)),
+            sk_buf,
+        )
+        if rc != 0:
+            raise QuantumSignatureUnavailableError(
+                f"Native dilithium_sign failed with error code {rc}"
             )
-            if rc != 0:
-                raise QuantumSignatureUnavailableError(
-                    f"Native dilithium_sign failed with error code {rc}"
-                )
-            return bytes(sig_buf[: sig_len.value])  # type: ignore[arg-type]  # ctypes buffer slice not typed as bytes-compatible (PQC-001)
-        finally:
-            # sk_buf is BORROWED (see above): wiping it would zero the caller's
-            # live key.  Release the borrow so a bytearray caller can resize.
-            del sk_buf
+        return bytes(sig_buf[: sig_len.value])  # type: ignore[arg-type]  # ctypes buffer slice not typed as bytes-compatible (PQC-001)
 
     raise QuantumSignatureUnavailableError(_DILITHIUM_UNKNOWN_STATE)
 
@@ -3242,25 +3237,20 @@ def dilithium_sign_ctx(message: bytes, secret_key: Union[bytes, bytearray], ctx:
         # snapshotting it — bytes(bytearray) is exactly the un-wipeable
         # transient _borrow exists to avoid.
         sk_buf = _borrow(secret_key)
-        try:
-            rc = _native_lib.ama_dilithium_sign_ctx(
-                sig_buf,
-                ctypes.byref(sig_len),
-                message,
-                ctypes.c_size_t(len(message)),
-                ctx,
-                ctypes.c_size_t(len(ctx)),
-                sk_buf,
+        rc = _native_lib.ama_dilithium_sign_ctx(
+            sig_buf,
+            ctypes.byref(sig_len),
+            message,
+            ctypes.c_size_t(len(message)),
+            ctx,
+            ctypes.c_size_t(len(ctx)),
+            sk_buf,
+        )
+        if rc != 0:
+            raise QuantumSignatureUnavailableError(
+                f"Native dilithium_sign_ctx failed with error code {rc}"
             )
-            if rc != 0:
-                raise QuantumSignatureUnavailableError(
-                    f"Native dilithium_sign_ctx failed with error code {rc}"
-                )
-            return bytes(sig_buf[: sig_len.value])  # type: ignore[arg-type]  # ctypes buffer slice not typed as bytes-compatible (PQC-001)
-        finally:
-            # sk_buf is BORROWED (see above): wiping it would zero the caller's
-            # live key.  Release the borrow so a bytearray caller can resize.
-            del sk_buf
+        return bytes(sig_buf[: sig_len.value])  # type: ignore[arg-type]  # ctypes buffer slice not typed as bytes-compatible (PQC-001)
 
     raise QuantumSignatureUnavailableError(_DILITHIUM_UNKNOWN_STATE)
 
@@ -3428,22 +3418,17 @@ def kyber_decapsulate(ciphertext: bytes, secret_key: Union[bytes, bytearray]) ->
         # snapshotting it — bytes(bytearray) is exactly the un-wipeable
         # transient _borrow exists to avoid.
         sk_buf = _borrow(secret_key)
-        try:
-            rc = _native_lib.ama_kyber_decapsulate(
-                ciphertext,
-                ctypes.c_size_t(len(ciphertext)),
-                sk_buf,
-                ctypes.c_size_t(len(secret_key)),
-                ss_buf,
-                ctypes.c_size_t(KYBER_SHARED_SECRET_BYTES),
-            )
-            if rc != 0:
-                raise KyberUnavailableError(f"Native kyber_decapsulate failed with error code {rc}")
-            return bytes(ss_buf)
-        finally:
-            # sk_buf is BORROWED (see above): wiping it would zero the caller's
-            # live key.  Release the borrow so a bytearray caller can resize.
-            del sk_buf
+        rc = _native_lib.ama_kyber_decapsulate(
+            ciphertext,
+            ctypes.c_size_t(len(ciphertext)),
+            sk_buf,
+            ctypes.c_size_t(len(secret_key)),
+            ss_buf,
+            ctypes.c_size_t(KYBER_SHARED_SECRET_BYTES),
+        )
+        if rc != 0:
+            raise KyberUnavailableError(f"Native kyber_decapsulate failed with error code {rc}")
+        return bytes(ss_buf)
 
     raise KyberUnavailableError(_KYBER_UNKNOWN_STATE)
 
@@ -3543,21 +3528,16 @@ def sphincs_sign(message: bytes, secret_key: Union[bytes, bytearray]) -> bytes:
         # snapshotting it — bytes(bytearray) is exactly the un-wipeable
         # transient _borrow exists to avoid.
         sk_buf = _borrow(secret_key)
-        try:
-            rc = _native_lib.ama_sphincs_sign(
-                sig_buf,
-                ctypes.byref(sig_len),
-                message,
-                ctypes.c_size_t(len(message)),
-                sk_buf,
-            )
-            if rc != 0:
-                raise SphincsUnavailableError(f"Native sphincs_sign failed with error code {rc}")
-            return bytes(sig_buf[: sig_len.value])  # type: ignore[arg-type]  # ctypes buffer slice not typed as bytes-compatible (PQC-003)
-        finally:
-            # sk_buf is BORROWED (see above): wiping it would zero the caller's
-            # live key.  Release the borrow so a bytearray caller can resize.
-            del sk_buf
+        rc = _native_lib.ama_sphincs_sign(
+            sig_buf,
+            ctypes.byref(sig_len),
+            message,
+            ctypes.c_size_t(len(message)),
+            sk_buf,
+        )
+        if rc != 0:
+            raise SphincsUnavailableError(f"Native sphincs_sign failed with error code {rc}")
+        return bytes(sig_buf[: sig_len.value])  # type: ignore[arg-type]  # ctypes buffer slice not typed as bytes-compatible (PQC-003)
 
     raise SphincsUnavailableError(_SPHINCS_UNKNOWN_STATE)
 
@@ -3872,24 +3852,19 @@ def slhdsa_sign(
     # snapshotting it — bytes(bytearray) is exactly the un-wipeable
     # transient _borrow exists to avoid.
     sk_buf = _borrow(secret_key)
-    try:
-        rc = _native_lib.ama_slhdsa_sign(
-            ctypes.c_int(enum_id),
-            sig_buf,
-            ctypes.byref(sig_buf_len),
-            message,
-            ctypes.c_size_t(len(message)),
-            ctx if ctx else None,
-            ctypes.c_size_t(len(ctx)),
-            sk_buf,
-        )
-        if rc != 0:
-            raise RuntimeError(f"ama_slhdsa_sign({param_set}) failed: rc={rc}")
-        return bytes(sig_buf.raw[: sig_buf_len.value])
-    finally:
-        # sk_buf is BORROWED (see above): wiping it would zero the caller's
-        # live key.  Release the borrow so a bytearray caller can resize.
-        del sk_buf
+    rc = _native_lib.ama_slhdsa_sign(
+        ctypes.c_int(enum_id),
+        sig_buf,
+        ctypes.byref(sig_buf_len),
+        message,
+        ctypes.c_size_t(len(message)),
+        ctx if ctx else None,
+        ctypes.c_size_t(len(ctx)),
+        sk_buf,
+    )
+    if rc != 0:
+        raise RuntimeError(f"ama_slhdsa_sign({param_set}) failed: rc={rc}")
+    return bytes(sig_buf.raw[: sig_buf_len.value])
 
 
 def slhdsa_verify(
@@ -3959,24 +3934,19 @@ def slhdsa_sign_deterministic(
     # snapshotting it — bytes(bytearray) is exactly the un-wipeable
     # transient _borrow exists to avoid.
     sk_buf = _borrow(secret_key)
-    try:
-        rc = _native_lib.ama_slhdsa_sign_deterministic(
-            ctypes.c_int(enum_id),
-            sig_buf,
-            ctypes.byref(sig_buf_len),
-            message,
-            ctypes.c_size_t(len(message)),
-            ctx if ctx else None,
-            ctypes.c_size_t(len(ctx)),
-            sk_buf,
-        )
-        if rc != 0:
-            raise RuntimeError(f"ama_slhdsa_sign_deterministic({param_set}) failed: rc={rc}")
-        return bytes(sig_buf.raw[: sig_buf_len.value])
-    finally:
-        # sk_buf is BORROWED (see above): wiping it would zero the caller's
-        # live key.  Release the borrow so a bytearray caller can resize.
-        del sk_buf
+    rc = _native_lib.ama_slhdsa_sign_deterministic(
+        ctypes.c_int(enum_id),
+        sig_buf,
+        ctypes.byref(sig_buf_len),
+        message,
+        ctypes.c_size_t(len(message)),
+        ctx if ctx else None,
+        ctypes.c_size_t(len(ctx)),
+        sk_buf,
+    )
+    if rc != 0:
+        raise RuntimeError(f"ama_slhdsa_sign_deterministic({param_set}) failed: rc={rc}")
+    return bytes(sig_buf.raw[: sig_buf_len.value])
 
 
 def slhdsa_sign_internal(
@@ -4027,9 +3997,10 @@ def slhdsa_sign_internal(
             raise RuntimeError(f"ama_slhdsa_sign_internal({param_set}) failed: rc={rc}")
         return bytes(sig_buf.raw[: sig_buf_len.value])
     finally:
-        # sk_buf is BORROWED (see above): wiping it would zero the caller's
-        # live key.  Release the borrow so a bytearray caller can resize.
-        del sk_buf
+        # sk_buf is a BORROW of the caller's storage (see above) and is not
+        # wiped here — wiping it would zero the caller's live key; the borrow
+        # itself is released at frame exit.  The additional-randomness scratch
+        # buffer is this function's own and is scrubbed.
         ctypes.memset(addrnd_buf, 0, n)
 
 
@@ -4170,15 +4141,10 @@ def native_ed25519_sign(message: bytes, secret_key: Union[bytes, bytearray]) -> 
     # snapshotting it — bytes(bytearray) is exactly the un-wipeable
     # transient _borrow exists to avoid.
     sk_buf = _borrow(secret_key)
-    try:
-        rc = _native_lib.ama_ed25519_sign(sig_buf, message, ctypes.c_size_t(len(message)), sk_buf)
-        if rc != 0:
-            raise RuntimeError(f"Ed25519 signing failed (rc={rc})")
-        return bytes(sig_buf)
-    finally:
-        # sk_buf is BORROWED (see above): wiping it would zero the caller's
-        # live key.  Release the borrow so a bytearray caller can resize.
-        del sk_buf
+    rc = _native_lib.ama_ed25519_sign(sig_buf, message, ctypes.c_size_t(len(message)), sk_buf)
+    if rc != 0:
+        raise RuntimeError(f"Ed25519 signing failed (rc={rc})")
+    return bytes(sig_buf)
 
 
 def _probe_cython_ed25519() -> "tuple[Any, Any]":
