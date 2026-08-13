@@ -2089,7 +2089,90 @@ stays valid.
 tens of milliseconds over the package, on the same one-time POST path as the
 digests above.
 
+## INVARIANT-41 — No Asymmetric Keypair Is Released Without a Pairwise Consistency Test
+
+FIPS 140-3 requires a conditional self-test on every asymmetric key
+generation: the fresh keypair must demonstrate that its halves correspond
+before the caller receives it. The helpers existed
+(`pairwise_test_signature` / `pairwise_test_kem`) and were wired into **no**
+key-generation path — the 2026-08 audit's finding #5. A keypair whose halves
+do not correspond (a fault mid-generation, a corrupted caller-supplied seed,
+a miscomputed BIP32 modular sum) was handed out and failed later, far from
+the generation event that caused it.
+
+**Every keygen path now runs the matching test before its keypair leaves the
+function.** Sign-and-verify for the signature families (Ed25519, ML-DSA,
+SLH-DSA/SPHINCS+, the FROST dealer via a full t-of-n round aggregated and
+verified against the group key, ECDSA for BIP32 secp256k1 keys);
+encapsulate-and-decapsulate for the KEM families (ML-KEM/Kyber); public-key
+regeneration (SP 800-56A rev. 3 §5.6.2.1.4, one scalar multiplication) for
+the key-agreement families (X25519, NIST-P). The rule is uniform across
+random and seed-derived generation — `*_from_seed` is publicly callable with
+arbitrary seeds, which is precisely the path a corrupted input reaches — and
+across every surface: the `native_*` entry points, the `generate_*` wrappers,
+`AmaContext.keypair_generate` (tested with the context's *own* sign/verify or
+encaps/decaps), and the BIP32 master and child derivations in
+`key_management`.
+
+The test is deliberately **unconditional**. Gating it behind an environment
+flag would make the default configuration the non-compliant one; validation
+applies to a configuration, not to a runtime toggle. Where a pairwise test's
+counterpart operation is not built (a partial library with deterministic
+keygen but no encapsulation), the keygen **refuses with an availability
+error** rather than releasing an untested keypair — and rather than entering
+the module ERROR state, which is reserved for a test that *ran and failed*. A
+failed pairwise test enters ERROR through the shared helpers and inhibits all
+further output (INVARIANT-39).
+
+**Enforcement.** `tests/test_keygen_pct.py` pins the wiring (every keygen
+entry point invokes its helper — a new keygen path that forgets the test
+fails the coverage assertion), both failure directions (a verify that lies →
+`CryptoModuleError` + ERROR state; the ERROR state then refuses further
+keygen), and the positive path on real keypairs for every fast family.
+
+**Measured cost.** Sub-millisecond for every family except the hash-based
+signatures: ~220 ms for SPHINCS+-SHA2-256f, ~1.0 s for SLH-DSA-SHAKE-128s —
+paid at key generation, the rare, long-lived-key operation, and quantified
+here rather than averaged away.
+
+## INVARIANT-42 — The Declared ctypes ABI Must Match the C Header, and the Loaded Library Must Match the Package
+
+A ctypes symbol probe proves a name is exported — not its arity, not its
+parameter types, not its return convention. The 2026-08 audit's finding #7:
+a stale major-version library, or any object exporting `ama_`-prefixed
+names, satisfied every `hasattr` check and would corrupt the call frame at
+the first mismatched invocation. A shared object carries no parameter
+metadata, so the ABI cannot be interrogated at runtime; what the repository
+does carry is the contract the library was compiled from.
+
+**Two halves, static and runtime.** `tools/check_ctypes_abi.py` parses every
+`AMA_API` prototype out of the C headers and every `argtypes`/`restype`
+assignment out of the Python sources (`pqc_backends`, `ascon`,
+`agent_binding`, `secure_memory` — 124 symbols), and requires agreement on
+arity and on a coarse class per position (pointer-like vs. integer-like,
+pointer/integer/void for returns) — the classes that decide call-frame
+layout. Coverage is closed in both directions: a symbol called without a
+declared signature fails, and a signature for a symbol no header declares
+fails. At runtime, `pqc_backends` asks the **loaded** object for its
+compiled-in version (`ama_version_number`) before configuring a single
+signature against it, and rejects any library whose major version is not the
+package's — extending `tools/check_version_consistency.py`'s static
+version-consistency guarantee to the artefact the loader actually mapped.
+The Python transcription of the required major is itself pinned to the
+header macro by that same tool, so the two gates cannot drift apart
+silently.
+
+**Enforcement.** The gate runs in the test suite
+(`tests/test_ctypes_abi_gate.py`), which also proves the negative
+directions: an arity change, a pointer/integer confusion, a void return
+read as a value, and an uncovered called symbol are each demonstrated to
+fail on synthetic input. The handshake's reject branch is pinned by test
+against a fake library object reporting a foreign version.
+
+**Measured cost.** The static gate is CI-only. The handshake is one call
+returning three compile-time constants, once per import.
+
 ---
 
 _Maintained by Steel Security Advisors LLC._
-_Last updated: 2026-08-12_
+_Last updated: 2026-08-13_

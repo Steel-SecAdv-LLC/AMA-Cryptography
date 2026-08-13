@@ -319,7 +319,58 @@ class HDKeyDerivation:
         master_key = hmac_result[:32]
         chain_code = hmac_result[32:]
 
+        # BIP32: a master key whose scalar is 0 or >= n is invalid and the
+        # seed must be rejected (probability ~2^-127).  This check predates
+        # nothing — it was silently absent, and an invalid scalar would have
+        # surfaced later as an unexplained signing failure.
+        master_int = int.from_bytes(master_key, "big")
+        if master_int == 0 or master_int >= self.SECP256K1_N:
+            raise ValueError(
+                "Invalid BIP32 master key derived from this seed (scalar is 0 "
+                "or >= n; probability ~2^-127). Use a different seed."
+            )
+
+        # FIPS 140-3 pairwise consistency test — the master key is the root
+        # secp256k1 keypair this hierarchy mints (INVARIANT-41).
+        self._pairwise_consistency_test(master_key, "secp256k1 (BIP32 master)")
+
         return master_key, chain_code
+
+    @staticmethod
+    def _pairwise_consistency_test(private_key: bytes, label: str) -> None:
+        """Sign/verify pairwise consistency test for a freshly minted secp256k1 key.
+
+        The public key is re-derived from the private scalar (compressed, then
+        decompressed to the X||Y form the verifier consumes) and the pair must
+        round-trip an ECDSA sign/verify.  A failure enters the module ERROR
+        state via the shared helper (INVARIANT-41).  On a build without the
+        native secp256k1 backend the derivation raises
+        ``NativeBackendUnavailableError`` before the helper runs — an
+        availability refusal, deliberately distinct from a consistency
+        failure: a keypair that cannot be consistency-tested is not released.
+        """
+        from ama_cryptography._module_state import pairwise_test_signature
+        from ama_cryptography.pqc_backends import (
+            native_secp256k1_ecdsa_sign,
+            native_secp256k1_ecdsa_verify,
+            native_secp256k1_pubkey_decompress,
+            native_secp256k1_pubkey_from_privkey,
+        )
+
+        public_key_64 = native_secp256k1_pubkey_decompress(
+            native_secp256k1_pubkey_from_privkey(private_key)
+        )
+        # The ECDSA primitives take a 32-byte digest, not a message; hash the
+        # helper's test message on both sides so sign and verify agree.
+        pairwise_test_signature(
+            lambda message, sk: native_secp256k1_ecdsa_sign(hashlib.sha256(message).digest(), sk),
+            lambda message, signature, pk: native_secp256k1_ecdsa_verify(
+                signature, hashlib.sha256(message).digest(), pk
+            ),
+            private_key,
+            public_key_64,
+            label,
+        )
 
     def _ckd_private(
         self, parent_key: bytes, parent_chain: bytes, index: int
@@ -382,6 +433,12 @@ class HDKeyDerivation:
 
         # Convert back to 32-byte big-endian representation
         child_key = child_key_int.to_bytes(32, "big")
+
+        # FIPS 140-3 pairwise consistency test — a derived child is a newly
+        # minted keypair, and derivation-time is when a fault-corrupted
+        # intermediate (a flipped bit in IL, a miscomputed modular sum) is
+        # still attributable to this index (INVARIANT-41).
+        self._pairwise_consistency_test(child_key, f"secp256k1 (BIP32 child {index})")
 
         return child_key, child_chain
 

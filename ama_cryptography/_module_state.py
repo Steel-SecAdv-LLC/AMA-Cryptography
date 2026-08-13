@@ -40,7 +40,7 @@ spelling fails loudly (``AttributeError``) instead of passing silently.
 import logging
 import secrets
 import threading
-from typing import Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 from ama_cryptography.exceptions import CryptoModuleError
 
@@ -226,3 +226,121 @@ def secure_token_bytes(n: int = 32) -> bytes:
         raise CryptoModuleError("Module in error state: Continuous RNG test failed")
     _rng_state["previous"] = health_sample
     return buf[:n]
+
+
+# ============================================================================
+# PAIRWISE CONSISTENCY TESTS (FIPS 140-3 Section 4.9.2)
+# ============================================================================
+#
+# These live in the leaf so ``pqc_backends`` — whose keygen entry points run
+# them on every keypair — can import them without re-creating the
+# pqc_backends → _self_test → pqc_backends cycle this module exists to break.
+# They deliberately import no cryptography: the primitive under test arrives
+# as a callable, and the helpers' only dependencies are the error-state
+# machinery above.  ``_self_test`` re-exports them, so the historical
+# ``from ama_cryptography._self_test import pairwise_test_signature`` spelling
+# keeps working.
+
+
+def pairwise_test_signature(
+    sign_fn: Callable[..., Any],
+    verify_fn: Callable[..., Any],
+    secret_key: Any,
+    public_key: Any,
+    algo_name: str,
+) -> None:
+    """Sign a test message and verify — raise on failure.
+
+    The FIPS 140-3 pairwise consistency test for a signature keypair: a
+    keypair whose halves do not correspond signs something the matching
+    public key rejects, and this catches it at generation time instead of at
+    first use.  A failure is a conditional self-test failure, so the module
+    enters the ERROR state (§4.9.2), not merely the caller's exception
+    handler.
+
+    ``sign_fn(message, secret_key)`` must return the signature (raw ``bytes``
+    or an object carrying it in ``.signature``);
+    ``verify_fn(message, signature, public_key)`` must return truthy for a
+    valid signature.
+    """
+    test_msg = b"FIPS 140-3 pairwise consistency test"
+    try:
+        sig = sign_fn(test_msg, secret_key)
+        if isinstance(sig, bytes):
+            valid = verify_fn(test_msg, sig, public_key)
+        else:
+            # Signature object with .signature attribute
+            valid = verify_fn(test_msg, sig.signature, public_key)
+        if not valid:
+            raise ValueError("Verification returned False")
+    except Exception as exc:
+        _set_error(f"Pairwise consistency test failed for {algo_name}: {exc}")
+        raise CryptoModuleError(
+            f"Module in error state: Pairwise test failed for {algo_name}"
+        ) from exc
+
+
+def pairwise_test_kem(
+    encaps_fn: Callable[..., Any],
+    decaps_fn: Callable[..., Any],
+    public_key: Any,
+    secret_key: Any,
+    algo_name: str,
+) -> None:
+    """Encapsulate + decapsulate roundtrip test — raise on failure.
+
+    The FIPS 140-3 pairwise consistency test for a KEM keypair.  A failure
+    puts the module in the ERROR state, as for the signature form.
+
+    ``encaps_fn(public_key)`` may return either an object carrying
+    ``.ciphertext`` / ``.shared_secret`` (the high-level ``kyber_encapsulate``
+    shape) or a plain ``(ciphertext, shared_secret)`` tuple (the
+    ``native_ml_kem_encapsulate`` shape); ``decaps_fn(ciphertext,
+    secret_key)`` must return the shared secret.  The equality check is an
+    ordinary comparison: both values are secrets this process derived
+    milliseconds ago from its own keypair, so there is no attacker-supplied
+    operand for a timing difference to leak anything about.
+    """
+    try:
+        encap = encaps_fn(public_key)
+        if isinstance(encap, tuple):
+            ciphertext, shared_secret = encap
+        else:
+            ciphertext, shared_secret = encap.ciphertext, encap.shared_secret
+        ss = decaps_fn(ciphertext, secret_key)
+        if ss != shared_secret:
+            raise ValueError("Shared secrets do not match")
+    except Exception as exc:
+        _set_error(f"Pairwise consistency test failed for {algo_name}: {exc}")
+        raise CryptoModuleError(
+            f"Module in error state: Pairwise test failed for {algo_name}"
+        ) from exc
+
+
+def pairwise_test_agreement(
+    regenerate_public_fn: Callable[..., Any],
+    secret_key: Any,
+    public_key: Any,
+    algo_name: str,
+) -> None:
+    """Public-key regeneration test for a key-agreement keypair.
+
+    The owner assurance of pair-wise consistency from NIST SP 800-56A rev. 3
+    §5.6.2.1.4: recompute the public key from the private key and require it
+    to equal the public key the generation returned.  One scalar
+    multiplication, so it is cheap enough to run unconditionally on every
+    X25519 / ECDH keypair.  A failure puts the module in the ERROR state, as
+    for the signature and KEM forms.
+
+    ``regenerate_public_fn(secret_key)`` must return the public key the
+    private half determines.
+    """
+    try:
+        regenerated = regenerate_public_fn(secret_key)
+        if regenerated != public_key:
+            raise ValueError("Regenerated public key does not match the generated one")
+    except Exception as exc:
+        _set_error(f"Pairwise consistency test failed for {algo_name}: {exc}")
+        raise CryptoModuleError(
+            f"Module in error state: Pairwise test failed for {algo_name}"
+        ) from exc

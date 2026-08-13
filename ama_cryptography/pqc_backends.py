@@ -27,6 +27,7 @@ AI Co-Architects: Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
 import contextlib
 import ctypes
 import errno as _errno
+import functools
 import logging
 import os
 import platform
@@ -50,7 +51,12 @@ from ama_cryptography._finalizer_health import record_finalizer_error
 # Import-order note: ``_self_test`` imports only ``ama_cryptography.exceptions``
 # at module scope and reaches this module lazily from inside the KAT functions,
 # so this top-level import does not close a cycle.
-from ama_cryptography._module_state import check_crypto_permitted
+from ama_cryptography._module_state import (
+    check_crypto_permitted,
+    pairwise_test_agreement,
+    pairwise_test_kem,
+    pairwise_test_signature,
+)
 from ama_cryptography.exceptions import (
     NativeBackendUnavailableError,
     PQCUnavailableError,
@@ -278,6 +284,12 @@ _LOAD_DIAGNOSTICS: dict = {
     "candidates": [],  # list[str]: files that existed and were tried
     "errors": [],  # list[(path, str)]: dlopen failure per candidate
     "missing_families": [],  # list[str]: algorithm families the loaded lib lacks
+    # str: "major.minor.patch" the loaded library reports via
+    # ama_version_number, or None when it exports no version (a pre-4 or
+    # foreign object).  Like "missing_families", this is a post-load field
+    # computed once at import — _find_native_library's per-run reset leaves
+    # it alone.
+    "native_version": None,
 }
 
 
@@ -597,6 +609,7 @@ def native_backend_diagnostics() -> dict:
         "candidates": list(_LOAD_DIAGNOSTICS["candidates"]),
         "errors": [(p, e) for p, e in _LOAD_DIAGNOSTICS["errors"]],
         "missing_families": list(_LOAD_DIAGNOSTICS["missing_families"]),
+        "native_version": _LOAD_DIAGNOSTICS["native_version"],
     }
 
 
@@ -2062,6 +2075,88 @@ _NATIVE_LIB_VIA_OVERRIDE: Optional[str] = (
     else None
 )
 
+# ---------------------------------------------------------------------------
+# ABI version handshake (audit finding #7 close-out).
+#
+# A ctypes symbol probe proves a NAME is exported, not that the object behind
+# it implements this package's ABI: a stale major-version library, or a
+# foreign object that happens to export ama_-prefixed names, satisfies every
+# hasattr check and then corrupts memory at the first mismatched call.  The
+# static half of this guarantee already exists — tools/check_version_consistency.py
+# pins __version__, the header macros and the docs to one another — but it
+# says nothing about the artefact the loader actually mapped.  Asking the
+# LOADED library for its compiled-in version extends the static consistency
+# into a runtime check against the running object.
+#
+# The gate is applied here, at the one-time module-level binding, and not
+# inside _find_native_library(): the build-time signer and several tests call
+# discovery directly (some with mocked loaders that return sentinels), and
+# what must never run against a wrong-ABI object is THIS module's primitive
+# surface — the 100+ ctypes signatures configured below.
+# ---------------------------------------------------------------------------
+
+#: Python transcription of ``AMA_CRYPTOGRAPHY_VERSION_MAJOR`` from
+#: ``include/ama_cryptography.h``.  tools/check_version_consistency.py
+#: cross-checks every Python mirror of a header constant, so this value
+#: cannot drift from the header silently.
+_CRYPTOGRAPHY_VERSION_MAJOR = 4
+
+
+def _native_abi_version(lib: ctypes.CDLL) -> Optional[tuple]:
+    """The ``(major, minor, patch)`` the library reports, or None if it cannot.
+
+    ``ama_version_number`` is a compile-time-constant return with no failure
+    modes; its absence means the object predates the versioning API (or is
+    not this library at all), which the caller treats as a mismatch.
+    """
+    if not hasattr(lib, "ama_version_number"):
+        return None
+    fn = lib.ama_version_number
+    fn.argtypes = [ctypes.POINTER(ctypes.c_int)] * 3
+    fn.restype = None
+    major = ctypes.c_int(-1)
+    minor = ctypes.c_int(-1)
+    patch = ctypes.c_int(-1)
+    fn(ctypes.byref(major), ctypes.byref(minor), ctypes.byref(patch))
+    return (major.value, minor.value, patch.value)
+
+
+def _abi_handshake(lib: ctypes.CDLL) -> tuple:
+    """Return ``(version_string, reject_reason)`` for a loaded library.
+
+    ``version_string`` is what the object reports (None when it exports no
+    version symbol); ``reject_reason`` is None exactly when the handshake
+    passes.  Pure so the reject branch is testable without rebuilding a
+    wrong-version shared object.
+    """
+    version = _native_abi_version(lib)
+    version_string = ".".join(str(part) for part in version) if version is not None else None
+    if version is not None and version[0] == _CRYPTOGRAPHY_VERSION_MAJOR:
+        return version_string, None
+    reported = version_string or "no ama_version_number symbol (pre-4 or foreign)"
+    return version_string, (
+        f"ABI version handshake failed: the library reports {reported}, "
+        f"this package requires major version {_CRYPTOGRAPHY_VERSION_MAJOR}. "
+        "Refusing to configure the native surface against a mismatched ABI. "
+        "Rebuild the library from this source tree: cmake -B build "
+        "-DAMA_USE_NATIVE_PQC=ON && cmake --build build"
+    )
+
+
+if _native_lib is not None:
+    _abi_version_string, _abi_reject = _abi_handshake(_native_lib)
+    _LOAD_DIAGNOSTICS["native_version"] = _abi_version_string
+    if _abi_reject is not None:
+        logging.getLogger(__name__).critical(
+            "Native library %s rejected: %s", _NATIVE_LIB_PATH, _abi_reject
+        )
+        _LOAD_DIAGNOSTICS["errors"].append((_NATIVE_LIB_PATH or "<unknown>", _abi_reject))
+        _LOAD_DIAGNOSTICS["loaded"] = False
+        _LOAD_DIAGNOSTICS["path"] = None
+        _native_lib = None
+        _NATIVE_LIB_PATH = None
+        _NATIVE_LIB_VIA_OVERRIDE = None
+
 if _native_lib is not None:
     if _setup_native_ctypes(_native_lib):
         _DILITHIUM_AVAILABLE = True
@@ -2317,6 +2412,9 @@ class AmaContext:
                 "Context-based C API is not available. "
                 "Build native C library with AMA_USE_NATIVE_PQC=ON."
             )
+        # Retained so keypair_generate() can select the pairwise consistency
+        # test that matches the operation this context actually performs.
+        self._algorithm = algorithm
         self._ctx = _native_lib.ama_context_init(algorithm)
         if not self._ctx:
             raise RuntimeError(
@@ -2361,11 +2459,79 @@ class AmaContext:
         """Call ``ama_keypair_generate``. Returns ``AMA_SUCCESS`` (0) on success."""
         check_crypto_permitted()  # FIPS 140-3 §4.9.2: no output in the ERROR state
         self._require_open()
-        return int(
+        rc = int(
             _native_lib.ama_keypair_generate(
                 self._ctx, public_key, public_key_len, secret_key, secret_key_len
             )
         )
+        if rc == 0:
+            # FIPS 140-3 pairwise consistency test (INVARIANT-41), run with
+            # the context's OWN sign/verify or encaps/decaps so the algorithm
+            # under test is exactly the one that generated the keys.
+            self._keypair_pairwise_test(public_key, secret_key)
+        return rc
+
+    #: Exact per-algorithm key sizes — mirrors ``get_key_sizes()`` in
+    #: ``ama_core.c``.  The caller's buffer arguments are capacities (the C
+    #: side accepts anything large enough), so the pairwise test slices the
+    #: actual key lengths rather than trusting the capacities.  ALG_HYBRID
+    #: generates and signs with ML-DSA-65 in the current C implementation.
+    _KEY_SIZES = {
+        ALG_ML_DSA_65: (DILITHIUM_PUBLIC_KEY_BYTES, DILITHIUM_SECRET_KEY_BYTES),
+        ALG_KYBER_1024: (KYBER_PUBLIC_KEY_BYTES, KYBER_SECRET_KEY_BYTES),
+        ALG_SPHINCS_256F: (SPHINCS_PUBLIC_KEY_BYTES, SPHINCS_SECRET_KEY_BYTES),
+        ALG_ED25519: (ED25519_PUBLIC_KEY_BYTES, ED25519_SECRET_KEY_BYTES),
+        ALG_HYBRID: (DILITHIUM_PUBLIC_KEY_BYTES, DILITHIUM_SECRET_KEY_BYTES),
+    }
+
+    def _keypair_pairwise_test(self, public_key: ctypes.Array, secret_key: ctypes.Array) -> None:
+        """FIPS 140-3 pairwise consistency test on a context-generated keypair.
+
+        Uses the context's own operations (``sign``/``verify`` for the
+        signature algorithms including ALG_HYBRID, ``kem_encapsulate``/
+        ``kem_decapsulate`` for ALG_KYBER_1024) so a keypair is exercised by
+        the very code path its caller will use it on.  A failure enters the
+        module ERROR state via the shared helpers (INVARIANT-41).
+        """
+        pk_size, sk_size = self._KEY_SIZES[self._algorithm]
+        pk = ctypes.string_at(public_key, pk_size)
+        sk = ctypes.string_at(secret_key, sk_size)
+
+        if self._algorithm == self.ALG_KYBER_1024:
+
+            def _encaps(pub: bytes) -> tuple:
+                ct = ctypes.create_string_buffer(KYBER_CIPHERTEXT_BYTES)
+                ct_len = ctypes.c_size_t(KYBER_CIPHERTEXT_BYTES)
+                ss = ctypes.create_string_buffer(KYBER_SHARED_SECRET_BYTES)
+                rc = self.kem_encapsulate(
+                    pub, ct, ctypes.pointer(ct_len), ss, KYBER_SHARED_SECRET_BYTES
+                )
+                if rc != 0:
+                    raise RuntimeError(f"ama_kem_encapsulate failed (rc={rc})")
+                return bytes(ct.raw[: ct_len.value]), bytes(ss)
+
+            def _decaps(ciphertext: bytes, secret: bytes) -> bytes:
+                ss = ctypes.create_string_buffer(KYBER_SHARED_SECRET_BYTES)
+                rc = self.kem_decapsulate(ciphertext, secret, ss, KYBER_SHARED_SECRET_BYTES)
+                if rc != 0:
+                    raise RuntimeError(f"ama_kem_decapsulate failed (rc={rc})")
+                return bytes(ss)
+
+            pairwise_test_kem(_encaps, _decaps, pk, sk, "AmaContext(ML-KEM-1024)")
+        else:
+
+            def _sign(message: bytes, secret: bytes) -> bytes:
+                sig = ctypes.create_string_buffer(SPHINCS_SIGNATURE_BYTES)
+                sig_len = ctypes.c_size_t(SPHINCS_SIGNATURE_BYTES)
+                rc = self.sign(message, secret, sig, ctypes.pointer(sig_len))
+                if rc != 0:
+                    raise RuntimeError(f"ama_sign failed (rc={rc})")
+                return bytes(sig.raw[: sig_len.value])
+
+            def _verify(message: bytes, signature: bytes, pub: bytes) -> bool:
+                return self.verify(message, signature, pub) == 0
+
+            pairwise_test_signature(_sign, _verify, sk, pk, f"AmaContext(alg={self._algorithm})")
 
     # ------------------------------------------------------------------
     # Signature operations
@@ -2769,9 +2935,19 @@ def generate_dilithium_keypair() -> DilithiumKeyPair:
             raise QuantumSignatureUnavailableError(
                 f"Native dilithium_keypair failed with error code {rc}"
             )
-        result = DilithiumKeyPair(secret_key=bytearray(sk_buf), public_key=bytes(pk_buf))
-        ctypes.memset(sk_buf, 0, DILITHIUM_SECRET_KEY_BYTES)
-        return result
+        try:
+            result = DilithiumKeyPair(secret_key=bytearray(sk_buf), public_key=bytes(pk_buf))
+            # FIPS 140-3 pairwise consistency test (INVARIANT-41).
+            pairwise_test_signature(
+                dilithium_sign,
+                dilithium_verify,
+                result.secret_key,
+                result.public_key,
+                "ML-DSA-65 (Dilithium)",
+            )
+            return result
+        finally:
+            ctypes.memset(sk_buf, 0, DILITHIUM_SECRET_KEY_BYTES)
 
     raise QuantumSignatureUnavailableError(_DILITHIUM_UNKNOWN_STATE)
 
@@ -3018,9 +3194,19 @@ def generate_kyber_keypair() -> KyberKeyPair:
         if rc != 0:
             ctypes.memset(sk_buf, 0, KYBER_SECRET_KEY_BYTES)
             raise KyberUnavailableError(f"Native kyber_keypair failed with error code {rc}")
-        result = KyberKeyPair(secret_key=bytearray(sk_buf), public_key=bytes(pk_buf))
-        ctypes.memset(sk_buf, 0, KYBER_SECRET_KEY_BYTES)
-        return result
+        try:
+            result = KyberKeyPair(secret_key=bytearray(sk_buf), public_key=bytes(pk_buf))
+            # FIPS 140-3 pairwise consistency test (INVARIANT-41).
+            pairwise_test_kem(
+                kyber_encapsulate,
+                kyber_decapsulate,
+                result.public_key,
+                result.secret_key,
+                "ML-KEM-1024 (Kyber)",
+            )
+            return result
+        finally:
+            ctypes.memset(sk_buf, 0, KYBER_SECRET_KEY_BYTES)
 
     raise KyberUnavailableError(_KYBER_UNKNOWN_STATE)
 
@@ -3183,9 +3369,19 @@ def generate_sphincs_keypair() -> SphincsKeyPair:
         if rc != 0:
             ctypes.memset(sk_buf, 0, SPHINCS_SECRET_KEY_BYTES)
             raise SphincsUnavailableError(f"Native sphincs_keypair failed with error code {rc}")
-        result = SphincsKeyPair(secret_key=bytearray(sk_buf), public_key=bytes(pk_buf))
-        ctypes.memset(sk_buf, 0, SPHINCS_SECRET_KEY_BYTES)
-        return result
+        try:
+            result = SphincsKeyPair(secret_key=bytearray(sk_buf), public_key=bytes(pk_buf))
+            # FIPS 140-3 pairwise consistency test (INVARIANT-41).
+            pairwise_test_signature(
+                sphincs_sign,
+                sphincs_verify,
+                result.secret_key,
+                result.public_key,
+                "SLH-DSA-SHA2-256f (SPHINCS+)",
+            )
+            return result
+        finally:
+            ctypes.memset(sk_buf, 0, SPHINCS_SECRET_KEY_BYTES)
 
     raise SphincsUnavailableError(_SPHINCS_UNKNOWN_STATE)
 
@@ -3431,11 +3627,24 @@ def generate_slhdsa_keypair(param_set: str = "SHAKE-128s") -> SlhDsaKeyPair:
         # INVARIANT-6: copy SK into a wipeable bytearray, then immediately
         # zero the ctypes scratch buffer so the only live copy of the secret
         # key is the one the SlhDsaKeyPair (or its caller) owns.
-        return SlhDsaKeyPair(
+        result = SlhDsaKeyPair(
             public_key=bytes(pk_buf.raw[:pk_len]),
             secret_key=bytearray(sk_buf.raw[:sk_len]),
             param_set=param_set,
         )
+        # FIPS 140-3 pairwise consistency test (INVARIANT-41).  Deliberately
+        # unconditional: SLH-DSA signing at the slow parameter sets costs
+        # ~1 s, but keygen is a rare, long-lived-key operation and a gated
+        # self-test would make the default configuration the non-compliant
+        # one.
+        pairwise_test_signature(
+            functools.partial(slhdsa_sign, param_set=param_set),
+            functools.partial(slhdsa_verify, param_set=param_set),
+            result.secret_key,
+            result.public_key,
+            f"SLH-DSA-{param_set}",
+        )
+        return result
     finally:
         ctypes.memset(sk_buf, 0, sk_len)
 
@@ -3484,11 +3693,21 @@ def generate_slhdsa_keypair_from_seed(
         )
         if rc != 0:
             raise RuntimeError(f"ama_slhdsa_keygen_from_seed({param_set}) failed: rc={rc}")
-        return SlhDsaKeyPair(
+        result = SlhDsaKeyPair(
             public_key=bytes(pk_buf.raw[:pk_len]),
             secret_key=bytearray(sk_buf.raw[:sk_len]),
             param_set=param_set,
         )
+        # FIPS 140-3 pairwise consistency test — seed-derived keypairs are
+        # still generated keypairs (INVARIANT-41).
+        pairwise_test_signature(
+            functools.partial(slhdsa_sign, param_set=param_set),
+            functools.partial(slhdsa_verify, param_set=param_set),
+            result.secret_key,
+            result.public_key,
+            f"SLH-DSA-{param_set}",
+        )
+        return result
     finally:
         ctypes.memset(sk_buf, 0, sk_len)
         ctypes.memset(sk_seed_buf, 0, n)
@@ -3713,7 +3932,18 @@ def native_ed25519_keypair() -> tuple:
     if rc != 0:
         raise RuntimeError(f"Ed25519 keypair generation failed (rc={rc})")
 
-    return bytes(pk_buf), bytes(sk_buf)
+    public_key, secret_key = bytes(pk_buf), bytes(sk_buf)
+    # FIPS 140-3 pairwise consistency test — no keypair is released before it
+    # signs and verifies (INVARIANT-41).  native_ed25519_verify takes the
+    # signature first, hence the reordering shim.
+    pairwise_test_signature(
+        native_ed25519_sign,
+        lambda m, s, p: native_ed25519_verify(s, m, p),
+        secret_key,
+        public_key,
+        "Ed25519",
+    )
+    return public_key, secret_key
 
 
 def native_ed25519_keypair_from_seed(seed: bytes) -> tuple:
@@ -3752,7 +3982,18 @@ def native_ed25519_keypair_from_seed(seed: bytes) -> tuple:
     if rc != 0:
         raise RuntimeError(f"Ed25519 keypair generation failed (rc={rc})")
 
-    return bytes(pk_buf), bytes(sk_buf)
+    public_key, secret_key = bytes(pk_buf), bytes(sk_buf)
+    # FIPS 140-3 pairwise consistency test — no keypair is released before it
+    # signs and verifies (INVARIANT-41).  native_ed25519_verify takes the
+    # signature first, hence the reordering shim.
+    pairwise_test_signature(
+        native_ed25519_sign,
+        lambda m, s, p: native_ed25519_verify(s, m, p),
+        secret_key,
+        public_key,
+        "Ed25519",
+    )
+    return public_key, secret_key
 
 
 def native_ed25519_sign(message: bytes, secret_key: Union[bytes, bytearray]) -> bytes:
@@ -5278,7 +5519,17 @@ def native_ml_kem_keypair(ps: Union[int, str]) -> tuple:
         )
         if rc != 0:
             raise RuntimeError(f"ML-KEM keypair generation failed (rc={rc})")
-        return bytes(pk.raw[: sz["public_key"]]), bytes(sk.raw[: sz["secret_key"]])
+        public_key = bytes(pk.raw[: sz["public_key"]])
+        secret_key = bytes(sk.raw[: sz["secret_key"]])
+        # FIPS 140-3 pairwise consistency test (INVARIANT-41).
+        pairwise_test_kem(
+            functools.partial(native_ml_kem_encapsulate, pid),
+            functools.partial(native_ml_kem_decapsulate, pid),
+            public_key,
+            secret_key,
+            f"ML-KEM-{pid}",
+        )
+        return public_key, secret_key
     finally:
         _wipe(sk)
 
@@ -5315,7 +5566,18 @@ def native_ml_kem_keypair_from_seed(ps: Union[int, str], d: bytes, z: bytes) -> 
         )
         if rc != 0:
             raise RuntimeError(f"ML-KEM deterministic keypair failed (rc={rc})")
-        return bytes(pk.raw[: sz["public_key"]]), bytes(sk.raw[: sz["secret_key"]])
+        public_key = bytes(pk.raw[: sz["public_key"]])
+        secret_key = bytes(sk.raw[: sz["secret_key"]])
+        # FIPS 140-3 pairwise consistency test — seed-derived keypairs are
+        # still generated keypairs (INVARIANT-41).
+        pairwise_test_kem(
+            functools.partial(native_ml_kem_encapsulate, pid),
+            functools.partial(native_ml_kem_decapsulate, pid),
+            public_key,
+            secret_key,
+            f"ML-KEM-{pid}",
+        )
+        return public_key, secret_key
     finally:
         _wipe(sk)
 
@@ -5525,7 +5787,17 @@ def native_ml_dsa_keypair(ps: Union[int, str]) -> tuple:
         rc = _native_lib.ama_ml_dsa_keypair(pid, pk, sk)
         if rc != 0:
             raise RuntimeError(f"ML-DSA keypair generation failed (rc={rc})")
-        return bytes(pk.raw[: sz["public_key"]]), bytes(sk.raw[: sz["secret_key"]])
+        public_key = bytes(pk.raw[: sz["public_key"]])
+        secret_key = bytes(sk.raw[: sz["secret_key"]])
+        # FIPS 140-3 pairwise consistency test (INVARIANT-41).
+        pairwise_test_signature(
+            functools.partial(native_ml_dsa_sign, pid),
+            functools.partial(native_ml_dsa_verify, pid),
+            secret_key,
+            public_key,
+            f"ML-DSA-{pid}",
+        )
+        return public_key, secret_key
     finally:
         _wipe(sk)
 
@@ -5550,7 +5822,19 @@ def native_ml_dsa_keypair_from_seed(ps: Union[int, str], xi: bytes) -> tuple:
         rc = _native_lib.ama_ml_dsa_keypair_from_seed(pid, xi_buf, pk, sk)
         if rc != 0:
             raise RuntimeError(f"ML-DSA deterministic keypair failed (rc={rc})")
-        return bytes(pk.raw[: sz["public_key"]]), bytes(sk.raw[: sz["secret_key"]])
+        public_key = bytes(pk.raw[: sz["public_key"]])
+        secret_key = bytes(sk.raw[: sz["secret_key"]])
+        # FIPS 140-3 pairwise consistency test — seed-derived keypairs are
+        # still generated keypairs, and this is the public path a corrupted
+        # caller-supplied seed reaches (INVARIANT-41).
+        pairwise_test_signature(
+            functools.partial(native_ml_dsa_sign, pid),
+            functools.partial(native_ml_dsa_verify, pid),
+            secret_key,
+            public_key,
+            f"ML-DSA-{pid}",
+        )
+        return public_key, secret_key
     finally:
         _wipe(sk)
 
@@ -5839,7 +6123,19 @@ def native_nistp_keypair(curve: Union[int, str]) -> tuple:
         rc = _native_lib.ama_nistp_keypair(cid, priv, pub)
         if rc != 0:
             raise RuntimeError(f"NIST curve keypair generation failed (rc={rc})")
-        return bytes(pub.raw[: 2 * nb]), bytes(priv.raw[:nb])
+        public_key = bytes(pub.raw[: 2 * nb])
+        private_key = bytes(priv.raw[:nb])
+        # FIPS 140-3 pairwise consistency test (SP 800-56A rev. 3
+        # §5.6.2.1.4): re-derive the public point from the private scalar and
+        # require it to match — one scalar multiplication, and it covers both
+        # the ECDSA and the ECDH use of the keypair (INVARIANT-41).
+        pairwise_test_agreement(
+            functools.partial(native_nistp_pubkey_from_privkey, cid),
+            private_key,
+            public_key,
+            f"P-{cid}",
+        )
+        return public_key, private_key
     finally:
         _wipe(priv)
 
@@ -6405,6 +6701,12 @@ def native_hss_verify(message: bytes, signature: bytes, pubkey: bytes) -> bool:
 # ============================================================================
 
 
+#: The RFC 7748 curve25519 base point (u = 9, little-endian).  Multiplying a
+#: private scalar by it IS the X25519 public-key derivation, which is what the
+#: keygen pairwise consistency test recomputes.
+_X25519_BASEPOINT_U = b"\x09" + b"\x00" * 31
+
+
 def native_x25519_keypair() -> tuple:
     """
     Generate X25519 keypair.
@@ -6426,7 +6728,17 @@ def native_x25519_keypair() -> tuple:
     if rc != 0:
         raise RuntimeError(f"X25519 keypair generation failed (rc={rc})")
 
-    return bytes(pk_buf), bytes(sk_buf)
+    public_key, secret_key = bytes(pk_buf), bytes(sk_buf)
+    # FIPS 140-3 pairwise consistency test for a key-agreement keypair
+    # (SP 800-56A rev. 3 §5.6.2.1.4): recompute the public key as
+    # X25519(sk, base point) and require it to match (INVARIANT-41).
+    pairwise_test_agreement(
+        lambda sk_: native_x25519_key_exchange(sk_, _X25519_BASEPOINT_U),
+        secret_key,
+        public_key,
+        "X25519",
+    )
+    return public_key, secret_key
 
 
 def native_x25519_key_exchange(our_secret_key: bytes, their_public_key: bytes) -> bytes:
@@ -7004,6 +7316,16 @@ def native_kyber_keypair_from_seed(d: bytes, z: bytes) -> tuple:
     check_crypto_permitted()
     if _native_lib is None or not _DETERMINISTIC_KEYGEN_AVAILABLE:
         raise NativeBackendUnavailableError("Deterministic keygen not available. " + _INSTALL_HINT)
+    if not KYBER_AVAILABLE:
+        # The deterministic-keygen symbol group and the Kyber encaps/decaps
+        # group are independently optional in a partial build.  Without the
+        # latter the pairwise consistency test cannot run, and a keypair that
+        # cannot be consistency-tested is not released (INVARIANT-41) — as an
+        # availability refusal, not a module ERROR.
+        raise NativeBackendUnavailableError(
+            "Kyber encapsulation unavailable: the FIPS 140-3 pairwise "
+            "consistency test cannot run, so no keypair is released. " + _INSTALL_HINT
+        )
 
     if len(d) != 32:
         raise ValueError(f"Kyber seed d must be 32 bytes, got {len(d)}")
@@ -7017,7 +7339,16 @@ def native_kyber_keypair_from_seed(d: bytes, z: bytes) -> tuple:
     if rc != 0:
         raise RuntimeError(f"Kyber deterministic keygen failed (rc={rc})")
 
-    return bytes(pk_buf), bytes(sk_buf)
+    public_key, secret_key = bytes(pk_buf), bytes(sk_buf)
+    # FIPS 140-3 pairwise consistency test (INVARIANT-41).
+    pairwise_test_kem(
+        kyber_encapsulate,
+        kyber_decapsulate,
+        public_key,
+        secret_key,
+        "ML-KEM-1024 (deterministic)",
+    )
+    return public_key, secret_key
 
 
 def native_dilithium_keypair_from_seed(xi: bytes) -> tuple:
@@ -7033,6 +7364,13 @@ def native_dilithium_keypair_from_seed(xi: bytes) -> tuple:
     check_crypto_permitted()
     if _native_lib is None or not _DETERMINISTIC_KEYGEN_AVAILABLE:
         raise NativeBackendUnavailableError("Deterministic keygen not available. " + _INSTALL_HINT)
+    if not DILITHIUM_AVAILABLE:
+        # See native_kyber_keypair_from_seed: no PCT counterpart means no
+        # keypair release, surfaced as unavailability rather than ERROR.
+        raise NativeBackendUnavailableError(
+            "Dilithium sign/verify unavailable: the FIPS 140-3 pairwise "
+            "consistency test cannot run, so no keypair is released. " + _INSTALL_HINT
+        )
 
     if len(xi) != 32:
         raise ValueError(f"Dilithium seed xi must be 32 bytes, got {len(xi)}")
@@ -7044,7 +7382,16 @@ def native_dilithium_keypair_from_seed(xi: bytes) -> tuple:
     if rc != 0:
         raise RuntimeError(f"Dilithium deterministic keygen failed (rc={rc})")
 
-    return bytes(pk_buf), bytes(sk_buf)
+    public_key, secret_key = bytes(pk_buf), bytes(sk_buf)
+    # FIPS 140-3 pairwise consistency test (INVARIANT-41).
+    pairwise_test_signature(
+        dilithium_sign,
+        dilithium_verify,
+        secret_key,
+        public_key,
+        "ML-DSA-65 (deterministic)",
+    )
+    return public_key, secret_key
 
 
 # ============================================================================
@@ -7075,6 +7422,15 @@ def frost_keygen_trusted_dealer(
     check_crypto_permitted()
     if not _FROST_AVAILABLE or _native_lib is None:
         raise NativeBackendUnavailableError("FROST native library not available")
+    if not _ED25519_NATIVE_AVAILABLE:
+        # The dealt shares' pairwise consistency test verifies the aggregate
+        # with the Ed25519 backend, which a partial build can lack
+        # independently of FROST.  No PCT counterpart, no key release
+        # (INVARIANT-41) — surfaced as unavailability, not module ERROR.
+        raise NativeBackendUnavailableError(
+            "Ed25519 verify unavailable: the FROST shares' pairwise "
+            "consistency test cannot run, so no shares are released. " + _INSTALL_HINT
+        )
     if threshold < 2 or num_participants < threshold:
         raise ValueError("Require threshold >= 2 and num_participants >= threshold")
     if num_participants > 255:
@@ -7103,6 +7459,40 @@ def frost_keygen_trusted_dealer(
     shares = [
         raw[i * FROST_SHARE_BYTES : (i + 1) * FROST_SHARE_BYTES] for i in range(num_participants)
     ]
+
+    # FIPS 140-3-style pairwise consistency test for the dealt shares
+    # (INVARIANT-41): a full t-of-n signing round over the first ``threshold``
+    # shares must aggregate to a signature the group public key verifies.
+    # FROST has no two-call sign/verify, so the "sign" closure runs the whole
+    # round-1/round-2/aggregate protocol; the aggregate is Ed25519-format, so
+    # the verifier is the module's Ed25519 backend (availability pre-checked
+    # at the top of this function so a partial build refuses instead of
+    # entering the module ERROR state).
+    def _frost_roundtrip_sign(message: bytes, dealt_shares: list) -> bytes:
+        signer_shares = dealt_shares[:threshold]
+        indices = bytes(range(1, threshold + 1))
+        nonces = []
+        commitment_list = []
+        for share in signer_shares:
+            nonce, commitment = frost_round1_commit(share)
+            nonces.append(nonce)
+            commitment_list.append(commitment)
+        commitments = b"".join(commitment_list)
+        sig_shares = b"".join(
+            frost_round2_sign(
+                message, signer_shares[i], i + 1, nonces[i], commitments, indices, threshold, gpk
+            )
+            for i in range(threshold)
+        )
+        return frost_aggregate(sig_shares, commitments, indices, threshold, message, gpk)
+
+    pairwise_test_signature(
+        _frost_roundtrip_sign,
+        lambda m, s, p: native_ed25519_verify(s, m, p),
+        shares,
+        gpk,
+        "FROST(Ed25519)",
+    )
     return gpk, shares
 
 

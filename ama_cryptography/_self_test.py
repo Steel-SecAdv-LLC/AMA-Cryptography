@@ -53,8 +53,10 @@ from ama_cryptography._module_state import check_crypto_permitted as check_crypt
 from ama_cryptography._module_state import check_operational as check_operational
 from ama_cryptography._module_state import module_error_reason as module_error_reason
 from ama_cryptography._module_state import module_status as module_status
+from ama_cryptography._module_state import pairwise_test_agreement as pairwise_test_agreement
+from ama_cryptography._module_state import pairwise_test_kem as pairwise_test_kem
+from ama_cryptography._module_state import pairwise_test_signature as pairwise_test_signature
 from ama_cryptography._module_state import secure_token_bytes as secure_token_bytes
-from ama_cryptography.exceptions import CryptoModuleError
 
 #: The module's public surface.  The ``_module_state`` names re-exported above
 #: appear here as well: ``__all__`` states the re-export intent in the form
@@ -70,6 +72,7 @@ __all__ = [
     "module_error_reason",
     "module_self_test_results",
     "module_status",
+    "pairwise_test_agreement",
     "pairwise_test_kem",
     "pairwise_test_signature",
     "post_duration_ms",
@@ -234,51 +237,12 @@ def last_failure() -> Dict[str, Any]:
 # ============================================================================
 # PAIRWISE CONSISTENCY TESTS (FIPS 140-3 Section 4.9.2)
 # ============================================================================
-
-
-def pairwise_test_signature(
-    sign_fn: Callable[..., Any],
-    verify_fn: Callable[..., Any],
-    secret_key: Any,
-    public_key: Any,
-    algo_name: str,
-) -> None:
-    """Sign a test message and verify — raise on failure."""
-    test_msg = b"FIPS 140-3 pairwise consistency test"
-    try:
-        sig = sign_fn(test_msg, secret_key)
-        if isinstance(sig, bytes):
-            valid = verify_fn(test_msg, sig, public_key)
-        else:
-            # Signature object with .signature attribute
-            valid = verify_fn(test_msg, sig.signature, public_key)
-        if not valid:
-            raise ValueError("Verification returned False")
-    except Exception as exc:
-        _set_error(f"Pairwise consistency test failed for {algo_name}: {exc}")
-        raise CryptoModuleError(
-            f"Module in error state: Pairwise test failed for {algo_name}"
-        ) from exc
-
-
-def pairwise_test_kem(
-    encaps_fn: Callable[..., Any],
-    decaps_fn: Callable[..., Any],
-    public_key: Any,
-    secret_key: Any,
-    algo_name: str,
-) -> None:
-    """Encapsulate + decapsulate roundtrip test — raise on failure."""
-    try:
-        encap = encaps_fn(public_key)
-        ss = decaps_fn(encap.ciphertext, secret_key)
-        if ss != encap.shared_secret:
-            raise ValueError("Shared secrets do not match")
-    except Exception as exc:
-        _set_error(f"Pairwise consistency test failed for {algo_name}: {exc}")
-        raise CryptoModuleError(
-            f"Module in error state: Pairwise test failed for {algo_name}"
-        ) from exc
+#
+# The helpers themselves moved to ``_module_state`` (the leaf) so
+# ``pqc_backends`` can run them on every keygen without re-creating the
+# import cycle; they are re-exported at the top of this module, so the
+# historical ``from ama_cryptography._self_test import pairwise_test_*``
+# spelling keeps working.  See ``_module_state`` for the implementations.
 
 
 # ============================================================================
