@@ -80,6 +80,7 @@ from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Optional, Tuple
 
+from ama_cryptography._module_state import secure_token_bytes
 from ama_cryptography.secure_memory import SecureMemoryError, secure_memzero
 
 logger = logging.getLogger(__name__)
@@ -629,7 +630,9 @@ class SecureSession:
                     "the 96-bit random-nonce collision bound."
                 )
 
-            nonce = secrets.token_bytes(NONCE_BYTES)
+            # INVARIANT-41: the AEAD nonce whose uniqueness the epoch
+            # encryption budget presumes — health-tested, gated draw.
+            nonce = secure_token_bytes(NONCE_BYTES)
             # AAD binds ciphertext to session_id, rekey epoch, and sequence
             # number.  Including the epoch ensures that a silent rekey failure
             # (same key across two epochs) produces distinct AAD, preventing

@@ -64,6 +64,7 @@ _logger = logging.getLogger(__name__)
 # (e.g. ``monkeypatch.setattr(dgs, "DILITHIUM_AVAILABLE", False)``) land
 # in *this* module's namespace.
 # ---------------------------------------------------------------------------
+from ama_cryptography._module_state import secure_token_bytes
 from ama_cryptography.pqc_backends import (
     _ED25519_NATIVE_AVAILABLE,
     _HKDF_NATIVE_AVAILABLE,
@@ -686,7 +687,7 @@ def derive_keys(
     if salt is not None:
         hkdf_salt = salt
     else:
-        hkdf_salt = secrets.token_bytes(32)
+        hkdf_salt = secure_token_bytes(32)  # INVARIANT-41 health-tested draw
 
     derived_keys = []
     for i in range(num_keys):
@@ -733,7 +734,8 @@ def generate_key_management_system(
     if ethical_vector is None:
         ethical_vector = ETHICAL_VECTOR.copy()
 
-    master_secret = secrets.token_bytes(32)
+    # INVARIANT-41: the root secret of the KMS — health-tested, gated draw.
+    master_secret = secure_token_bytes(32)
 
     derived_keys, hkdf_salt = derive_keys(
         master_secret, f"OMNI_CODES:{author}", num_keys=3, ethical_vector=ethical_vector

@@ -809,7 +809,11 @@ class SecureKeyStorage:
             self._derive_key_from_password(master_password)
         else:
             # Generate random encryption key (should be HSM-backed in production)
-            self.encryption_key = bytearray(secrets.token_bytes(32))
+            # INVARIANT-41: this key protects every key at rest — draw it
+            # through the health-tested, error-state-gated CSPRNG, not a bare
+            # secrets.token_bytes (which neither detects a stuck DRBG nor
+            # refuses to mint key material while the module is in ERROR).
+            self.encryption_key = bytearray(secure_token_bytes(32))
             self.salt: Optional[bytes] = None  # No salt needed for random key
 
     @staticmethod
@@ -1016,7 +1020,7 @@ class SecureKeyStorage:
                 version = 1
         else:
             # New installation: generate random salt
-            self.salt = secrets.token_bytes(self.KDF_SALT_BYTES)
+            self.salt = secure_token_bytes(self.KDF_SALT_BYTES)  # INVARIANT-41
 
             # Save salt with secure permissions (0600), no world-readable window.
             _atomic_write_bytes(self.salt_file, self.salt)
@@ -1198,7 +1202,7 @@ class SecureKeyStorage:
                 old_keys[key_id] = (key_data, metadata)
 
         # Generate new salt
-        new_salt = secrets.token_bytes(self.KDF_SALT_BYTES)
+        new_salt = secure_token_bytes(self.KDF_SALT_BYTES)  # INVARIANT-41
 
         # Derive new key — prefer Argon2id, fall back to PBKDF2
         from ama_cryptography.pqc_backends import _ARGON2_NATIVE_AVAILABLE, native_argon2id
@@ -1395,7 +1399,10 @@ class SecureKeyStorage:
         # from escaping ``storage_path`` — see ``_validate_key_id``).
         self._validate_key_id(key_id)
 
-        nonce = secrets.token_bytes(12)  # 96-bit nonce for GCM (NIST recommended)
+        # INVARIANT-41: a repeated GCM nonce under one key is catastrophic
+        # (keystream reuse + GHASH subkey recovery), so the draw that mints it
+        # must be the one carrying the continuous repeated-output test.
+        nonce = secure_token_bytes(12)  # 96-bit nonce for GCM (NIST recommended)
 
         # Associated data binds the ciphertext to key_id and, from format v3,
         # to the KDF parameters this instance derived its key with.  The
@@ -1826,7 +1833,7 @@ class HSMKeyStorage:
         handle = self._handle_map.get(key_handle, int.from_bytes(key_handle, "big"))
 
         try:
-            nonce = secrets.token_bytes(12)
+            nonce = secure_token_bytes(12)  # INVARIANT-41 (see store_key)
             mechanism = self.pkcs11.AES_GCM_Mechanism(nonce, b"", 128)
             ciphertext_with_tag = bytes(self.session.encrypt(handle, plaintext, mechanism))
 

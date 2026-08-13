@@ -356,7 +356,7 @@ def _marker_tables(
 _CY_VOLUME_SCORES: Any = None
 _CY_TOKEN_COUNTS: Any = None
 try:  # pragma: no cover - exercised by whichever build the test run has
-    import ama_cryptography.math_engine as _math_engine  # type: ignore[import-not-found]  # compiled Cython extension — absent from a source checkout, so mypy cannot resolve it; the except branch below is the supported path (MON-001)
+    import ama_cryptography.math_engine as _math_engine  # type: ignore[import-not-found, unused-ignore]  # compiled Cython extension — absent from a source checkout, so mypy cannot resolve it; the except branch below is the supported path (MON-001)
 
     _CY_TOKEN_COUNTS = _math_engine.token_family_counts
     _CY_VOLUME_SCORES = _math_engine.volume_spike_scores

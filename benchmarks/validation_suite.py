@@ -17,7 +17,6 @@ Version: 3.0.0
 Project: AMA Cryptography Performance Validation
 """
 
-import hashlib
 import json
 import platform
 import secrets
@@ -261,9 +260,17 @@ class BenchmarkValidator:
 
         test_data = b"AMA Cryptography benchmark test data for cryptographic operations" * 10
 
-        # SHA3-256 hashing
+        # SHA3-256 hashing.
+        #
+        # AMA's native kernel, not hashlib: this function validates the
+        # documented `sha3_256_hash` claim, and hashlib.sha3_256 is OpenSSL's
+        # implementation on CPython — so the claim was being "validated"
+        # against a throughput AMA does not produce, and AMA's own SHA3 could
+        # regress arbitrarily while this printed PASS (INVARIANT-36).
         def sha3_hash():
-            return hashlib.sha3_256(test_data).digest()
+            from ama_cryptography.pqc_backends import native_sha3_256
+
+            return native_sha3_256(test_data)
 
         stats = self.benchmark_operation("sha3_256", sha3_hash)
         result = self.validate_claim("sha3_256_hash", stats["mean_ms"], stats["std_ms"])

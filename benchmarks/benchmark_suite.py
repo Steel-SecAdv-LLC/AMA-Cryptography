@@ -18,7 +18,6 @@ AI Co-Architects:
     Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
 """
 
-import hashlib
 import json
 import os
 import platform
@@ -60,7 +59,7 @@ from ama_cryptography.legacy_compat import (
     native_hkdf,
     verify_crypto_package,
 )
-from ama_cryptography.pqc_backends import DILITHIUM_BACKEND
+from ama_cryptography.pqc_backends import DILITHIUM_BACKEND, native_sha3_256
 
 
 class BenchmarkSuite:
@@ -169,9 +168,17 @@ class BenchmarkSuite:
 
         results = {}
 
-        # SHA3-256 hashing
+        # SHA3-256 hashing.
+        #
+        # Must be AMA's own native kernel, not hashlib: on CPython builds
+        # hashlib.sha3_256 routes through OpenSSL's provider, so timing it here
+        # published ANOTHER implementation's throughput under an AMA-labelled
+        # row — the exact confusion INVARIANT-36 exists to prevent, and a
+        # measurement that could not detect a regression in AMA's SHA3 at all.
+        # benchmark_runner.py (the gate that binds baseline.json) has always
+        # used native_sha3_256; this brings the reporting suite in line.
         results["sha3_256"] = self.benchmark_operation(
-            "SHA3-256 Hashing", lambda: hashlib.sha3_256(test_data).digest(), iterations=10000
+            "SHA3-256 Hashing", lambda: native_sha3_256(test_data), iterations=10000
         )
 
         # HMAC authentication

@@ -39,6 +39,26 @@
 /* Forward declaration: generic Keccak-f[1600] exported for dispatch table */
 void ama_keccak_f1600_generic(uint64_t state[KECCAK_STATE_SIZE]);
 
+/* Cross-family streaming-context guard.
+ *
+ * ama_sha3_ctx is one public type shared by SHA3-256 (rate 136), SHA3-512
+ * (rate 72), SHAKE256 (136) and SHAKE128 (168), and it carries no field
+ * recording which family absorbed it.  A well-behaved same-family sequence
+ * always leaves buffer_len strictly below that family's rate (absorb/update
+ * flush a full block to zero immediately).  But mixing families across the
+ * shared type — e.g. absorbing 150 bytes through the SHAKE128 API (rate 168)
+ * and then calling ama_sha3_512_final (block[72]) — leaves buffer_len past
+ * the second call's rate, and the memcpy-into-a-rate-sized-stack-block plus
+ * the block[buffer_len] padding write would smash the stack; the analogous
+ * space = rate - buffer_len in the absorb/update paths would underflow and
+ * overrun ctx->buffer.  Both are exported and reachable from ctypes, so this
+ * validates buffer_len against each call's own rate and fails closed on the
+ * misuse rather than corrupting memory.  Returns nonzero when the context is
+ * usable at `rate`. */
+static inline int sha3_ctx_len_ok(const ama_sha3_ctx *ctx, size_t rate) {
+    return ctx->buffer_len < rate;
+}
+
 /* Forward declaration: generic 4-way Keccak-f[1600] exported for the
  * dispatch table's always-non-NULL keccak_f1600_x4 slot.  Defined
  * further down in this translation unit; the prototype here keeps
@@ -499,6 +519,10 @@ ama_error_t ama_sha3_update(ama_sha3_ctx* ctx, const uint8_t* data, size_t len) 
         return AMA_SUCCESS;
     }
 
+    if (!sha3_ctx_len_ok(ctx, SHA3_256_RATE)) {
+        return AMA_ERROR_INVALID_PARAM;  /* cross-family misuse — see sha3_ctx_len_ok */
+    }
+
     /* If we have buffered data, try to fill the buffer first */
     if (ctx->buffer_len > 0) {
         size_t space = SHA3_256_RATE - ctx->buffer_len;
@@ -550,6 +574,10 @@ ama_error_t ama_sha3_final(ama_sha3_ctx* ctx, uint8_t* output) {
     }
     if (ctx->finalized) {
         return AMA_ERROR_INVALID_PARAM;
+    }
+
+    if (!sha3_ctx_len_ok(ctx, SHA3_256_RATE)) {
+        return AMA_ERROR_INVALID_PARAM;  /* cross-family misuse — see sha3_ctx_len_ok */
     }
 
     /* Prepare final block with padding */
@@ -616,6 +644,10 @@ ama_error_t ama_sha3_512_update(ama_sha3_ctx* ctx, const uint8_t* data, size_t l
         return AMA_SUCCESS;
     }
 
+    if (!sha3_ctx_len_ok(ctx, SHA3_512_RATE)) {
+        return AMA_ERROR_INVALID_PARAM;  /* cross-family misuse — see sha3_ctx_len_ok */
+    }
+
     if (ctx->buffer_len > 0) {
         size_t space = SHA3_512_RATE - ctx->buffer_len;
         size_t to_copy = (len < space) ? len : space;
@@ -658,6 +690,10 @@ ama_error_t ama_sha3_512_final(ama_sha3_ctx* ctx, uint8_t* output) {
     }
     if (ctx->finalized) {
         return AMA_ERROR_INVALID_PARAM;
+    }
+
+    if (!sha3_ctx_len_ok(ctx, SHA3_512_RATE)) {
+        return AMA_ERROR_INVALID_PARAM;  /* cross-family misuse — see sha3_ctx_len_ok */
     }
 
     memset(block, 0, sizeof(block));  // PUBLIC-DATA: block (FIPS 202 rate-block padding scratch, pre-use init; immediately filled by memcpy + the domain separator (0x06 for SHA3, 0x1F for SHAKE) + 0x80 final bit)
@@ -710,6 +746,10 @@ ama_error_t ama_shake256_inc_absorb(ama_sha3_ctx* ctx, const uint8_t* data, size
     if (!data && len > 0) return AMA_ERROR_INVALID_PARAM;
     if (len == 0) return AMA_SUCCESS;
 
+    if (!sha3_ctx_len_ok(ctx, SHAKE256_RATE)) {
+        return AMA_ERROR_INVALID_PARAM;  /* cross-family misuse — see sha3_ctx_len_ok */
+    }
+
     /* Fill partial buffer */
     if (ctx->buffer_len > 0) {
         size_t space = SHAKE256_RATE - ctx->buffer_len;
@@ -750,6 +790,10 @@ ama_error_t ama_shake256_inc_finalize(ama_sha3_ctx* ctx) {
     size_t i;
     if (!ctx) return AMA_ERROR_INVALID_PARAM;
     if (ctx->finalized) return AMA_ERROR_INVALID_PARAM;
+
+    if (!sha3_ctx_len_ok(ctx, SHAKE256_RATE)) {
+        return AMA_ERROR_INVALID_PARAM;  /* cross-family misuse — see sha3_ctx_len_ok */
+    }
 
     memset(block, 0, sizeof(block));  // PUBLIC-DATA: block (FIPS 202 rate-block padding scratch, pre-use init; immediately filled by memcpy + the domain separator (0x06 for SHA3, 0x1F for SHAKE) + 0x80 final bit)
     if (ctx->buffer_len > 0) {
@@ -820,6 +864,9 @@ ama_error_t ama_shake128_inc_absorb(ama_sha3_ctx* ctx, const uint8_t* data, size
     if (ctx->finalized) return AMA_ERROR_INVALID_PARAM;
     if (!data && len > 0) return AMA_ERROR_INVALID_PARAM;
     if (len == 0) return AMA_SUCCESS;
+    if (!sha3_ctx_len_ok(ctx, SHAKE128_RATE)) {
+        return AMA_ERROR_INVALID_PARAM;  /* cross-family misuse — see sha3_ctx_len_ok */
+    }
 
     if (ctx->buffer_len > 0) {
         size_t space = SHAKE128_RATE - ctx->buffer_len;
@@ -858,6 +905,9 @@ ama_error_t ama_shake128_inc_finalize(ama_sha3_ctx* ctx) {
     size_t i;
     if (!ctx) return AMA_ERROR_INVALID_PARAM;
     if (ctx->finalized) return AMA_ERROR_INVALID_PARAM;
+    if (!sha3_ctx_len_ok(ctx, SHAKE128_RATE)) {
+        return AMA_ERROR_INVALID_PARAM;  /* cross-family misuse — see sha3_ctx_len_ok */
+    }
 
     memset(block, 0, sizeof(block));  // PUBLIC-DATA: block (FIPS 202 rate-block padding scratch, pre-use init; immediately filled by memcpy + the domain separator (0x06 for SHA3, 0x1F for SHAKE) + 0x80 final bit)
     if (ctx->buffer_len > 0) {

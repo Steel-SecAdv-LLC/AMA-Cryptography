@@ -2113,7 +2113,13 @@ def _run_rng_stage() -> Tuple[bool, Optional[str]]:
     if out1 == out2:
         _SELF_TEST_RESULTS.append(("RNG", False, "Identical consecutive outputs"))
         return False, "RNG health test failed at startup"
-    _rng_state["previous"] = out2
+    # Seed the continuous test with a DIGEST of the last draw, matching what
+    # secure_token_bytes stores and compares (it hashes its health sample so
+    # module state never retains live key material).  Storing the raw bytes
+    # here would make the very first post-POST comparison compare a digest
+    # against a raw sample — never equal, so the first draw after POST would
+    # escape the continuous check entirely.
+    _rng_state["previous"] = hashlib.sha256(out2).digest()
     _SELF_TEST_RESULTS.append(("RNG", True, "RNG health test passed"))
     return True, None
 

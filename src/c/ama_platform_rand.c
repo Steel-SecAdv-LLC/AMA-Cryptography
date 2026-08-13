@@ -35,7 +35,8 @@
     #pragma comment(lib, "bcrypt.lib")
 #else
     /* BSD / generic POSIX fallback */
-    #include <stdio.h>
+    #include <fcntl.h>          /* open, O_RDONLY, O_CLOEXEC */
+    #include <unistd.h>         /* read, close */
     #include <errno.h>
 #endif
 
@@ -93,11 +94,27 @@ ama_error_t ama_randombytes(uint8_t *buf, size_t len) {
     /*
      * BCryptGenRandom: Windows Vista+ CSPRNG.
      * BCRYPT_USE_SYSTEM_PREFERRED_RNG avoids needing an algorithm handle.
+     *
+     * cbBuffer is a ULONG (32-bit).  A bare (ULONG)len cast silently truncates
+     * any request larger than 2^32-1 bytes, filling only the low bits' worth
+     * and returning success — the caller would then treat the untouched tail
+     * as random.  Chunk the draw so every byte is covered regardless of len's
+     * width (size_t is 64-bit on x64 Windows).
      */
-    NTSTATUS status = BCryptGenRandom(
-        NULL, buf, (ULONG)len, BCRYPT_USE_SYSTEM_PREFERRED_RNG
-    );
-    return (status == 0) ? AMA_SUCCESS : AMA_ERROR_CRYPTO;
+    size_t offset = 0;
+    while (offset < len) {
+        size_t remaining = len - offset;
+        ULONG chunk = (remaining > 0x40000000UL) ? 0x40000000UL /* 1 GiB */
+                                                  : (ULONG)remaining;
+        NTSTATUS status = BCryptGenRandom(
+            NULL, buf + offset, chunk, BCRYPT_USE_SYSTEM_PREFERRED_RNG
+        );
+        if (status != 0) {
+            return AMA_ERROR_CRYPTO;
+        }
+        offset += chunk;
+    }
+    return AMA_SUCCESS;
 
 #else
     /*

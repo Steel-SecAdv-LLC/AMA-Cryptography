@@ -27,7 +27,6 @@ import contextlib
 import logging
 import os
 import pathlib
-import secrets
 import sys
 import threading
 import time
@@ -40,6 +39,7 @@ from typing import Any, ClassVar, Dict, List, Mapping, Optional, Tuple, Union
 
 from ama_cryptography._finalizer_health import record_finalizer_error as _record_finalizer_error
 from ama_cryptography._module_state import check_operational as _check_operational
+from ama_cryptography._module_state import secure_token_bytes
 from ama_cryptography.monitor import AmaCryptographyMonitor, create_monitor
 
 # Module-level 3R monitor instance — feeds timing data to anomaly detection
@@ -1350,7 +1350,6 @@ class AESGCMProvider:
                 was inherited across ``os.fork()``.
         """
         _enforce_invariant7()
-        import secrets as _secrets
 
         # Fork detection: refuse to reuse nonce state after os.fork()
         if os.getpid() != self._pid_at_init:
@@ -1385,8 +1384,15 @@ class AESGCMProvider:
         # Generate the random nonce only after the durable counter
         # reservation succeeds, so failed persistence cannot consume
         # entropy or leave an untracked nonce candidate in caller state.
+        #
+        # INVARIANT-41: drawn through the health-tested, error-state-gated
+        # CSPRNG.  The counter machinery above bounds how MANY nonces a key
+        # may see; it never inspects their values, so a stuck DRBG repeating a
+        # nonce under one key — keystream reuse plus GHASH-subkey recovery —
+        # would pass every check here.  The continuous repeated-output test is
+        # the only control that can see it.
         if nonce is None:
-            nonce = _secrets.token_bytes(12)
+            nonce = secure_token_bytes(12)
 
         from ama_cryptography.pqc_backends import native_aes256_gcm_encrypt
 
@@ -2595,7 +2601,9 @@ def create_crypto_package(
     # ========================================================================
     # LAYER 2: Keyed Authentication — HMAC-SHA3-256 (RFC 2104)
     # ========================================================================
-    hmac_key = secrets.token_bytes(32)  # 256-bit HMAC key
+    # INVARIANT-41: key material comes from the health-tested, error-state-gated
+    # draw, not bare secrets.token_bytes — a stuck DRBG must be detected here.
+    hmac_key = secure_token_bytes(32)  # 256-bit HMAC key
     hmac_tag = _hmac_sha3_256(hmac_key, content)
 
     # ========================================================================
@@ -2673,8 +2681,9 @@ def create_crypto_package(
     # ========================================================================
     # LAYER 4: Key Independence — HKDF-SHA3-256 (RFC 5869)
     # ========================================================================
-    master_secret = secrets.token_bytes(32)  # 256-bit master secret
-    hkdf_salt = secrets.token_bytes(32)
+    # INVARIANT-41: health-tested, error-state-gated draw (see above).
+    master_secret = secure_token_bytes(32)  # 256-bit master secret
+    hkdf_salt = secure_token_bytes(32)
     hkdf_info = b"ama_cryptography_crypto_package_v1"
     derived_keys: List[bytes] = []
     for i in range(config.num_derived_keys):

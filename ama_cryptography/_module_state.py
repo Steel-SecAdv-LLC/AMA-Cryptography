@@ -37,6 +37,7 @@ from the state the guards enforce and turn a test into a no-op — so the stale
 spelling fails loudly (``AttributeError``) instead of passing silently.
 """
 
+import hashlib
 import logging
 import secrets
 import threading
@@ -184,6 +185,18 @@ def check_crypto_permitted() -> None:
 
 _RNG_HEALTH_SIZE = 32  # Fixed size for continuous health comparison
 
+# Serializes the continuous RNG test's compare-and-store.
+#
+# The test is a read-compare-write on shared state, and without a lock it is a
+# check-then-act race: with a stuck DRBG returning V, two threads can both read
+# the same stale ``previous`` (!= V), both compare their identical V against
+# it, both pass, and both store V.  Two consecutive identical CSPRNG outputs —
+# the one fault §4.9.2 requires this control to detect — would be issued as key
+# material with the control silently satisfied, and it would happen precisely
+# when the module is busiest.  The interleaving also loses updates in the
+# benign case, so the values being compared are not reliably consecutive.
+_rng_lock = threading.Lock()
+
 # Mutable container for continuous RNG health state (FIPS 140-3 Section 4.9.2).
 # Using a dict avoids the ``global`` keyword, which silences CodeQL's
 # "unused global variable" false-positive while preserving identical semantics.
@@ -220,11 +233,18 @@ def secure_token_bytes(n: int = 32) -> bytes:
     check_crypto_permitted()
     draw_size = max(n, _RNG_HEALTH_SIZE)
     buf = secrets.token_bytes(draw_size)
-    health_sample = buf[:_RNG_HEALTH_SIZE]
-    if _rng_state["previous"] is not None and health_sample == _rng_state["previous"]:
-        _set_error("Continuous RNG test failed: consecutive identical outputs")
-        raise CryptoModuleError("Module in error state: Continuous RNG test failed")
-    _rng_state["previous"] = health_sample
+    # Compare a DIGEST of the sample rather than the sample itself.  The test
+    # needs only equality, and for the common n == 32 draw ``buf[:32]`` is the
+    # same object CPython hands back to the caller — so retaining it would pin
+    # live key material (an Ed25519 seed, say) in module state until the next
+    # draw, visible to a heap dump or the GC for that whole window.
+    health_digest = hashlib.sha256(buf[:_RNG_HEALTH_SIZE]).digest()
+    # Compare-and-store atomically: see the _rng_lock rationale above.
+    with _rng_lock:
+        if _rng_state["previous"] is not None and health_digest == _rng_state["previous"]:
+            _set_error("Continuous RNG test failed: consecutive identical outputs")
+            raise CryptoModuleError("Module in error state: Continuous RNG test failed")
+        _rng_state["previous"] = health_digest
     return buf[:n]
 
 

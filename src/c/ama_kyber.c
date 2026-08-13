@@ -159,6 +159,9 @@ static ama_error_t kyber_pubkey_check(const kyber_params* P,
                                       const uint8_t* ek, size_t ek_len);
 static int16_t montgomery_reduce(int32_t a);
 static int16_t coeff_normalize(int16_t a);
+/* Division-free FIPS 203 Compress_d — defined beside coeff_normalize, whose
+ * [0, q-1] output is its documented input domain. */
+static inline uint32_t kyber_compress_d(uint32_t x_normalized, unsigned d);
 static void poly_tomont(poly* r);
 
 /* Public wrapper prototypes (called from ama_core.c via extern) */
@@ -581,6 +584,11 @@ static void kyber_gennoise(polyvec* r, const uint8_t seed[32], uint8_t nonce,
          * INVARIANT-12 applies to both arms of one function. */
         ama_secure_memzero(streams, sizeof(streams));
         ama_secure_memzero(bufs, sizeof(bufs));
+        /* The x4 sponge state was seeded with sigma||nonce and, until it is
+         * re-permuted, its absorbed lanes are as recoverable as `streams`
+         * itself (a Keccak state is invertible within a permutation).  Scrub
+         * it in the same class as streams/bufs — INVARIANT-12. */
+        ama_secure_memzero(&ctx, sizeof(ctx));
         return;
     }
 
@@ -1050,8 +1058,9 @@ static ama_error_t kyber_decapsulate_internal(
             unsigned int j;
             for (j = 0; j < 8; j++) {
                 int16_t t = coeff_normalize(mp.coeffs[8*i + j]);
-                /* Compress_1: round(2t/q) mod 2 */
-                t = (int16_t)((((uint32_t)t << 1) + KYBER_Q / 2) / KYBER_Q);
+                /* Compress_1: round(2t/q) mod 2.  Division-free — mp is
+                 * secret-key-derived, see kyber_compress_d (KyberSlash). */
+                t = (int16_t)kyber_compress_d((uint32_t)t, 1);
                 m[i] |= (uint8_t)((t & 1) << j);
             }
         }
@@ -1554,7 +1563,7 @@ int ama_kyber_debug_ntt_roundtrip(void) {
             m_test[ii] = 0;
             for (jj = 0; jj < 8; jj++) {
                 int16_t tv = coeff_normalize(stu_man.coeffs[8*ii + jj]);
-                tv = (int16_t)((((uint32_t)tv << 1) + KYBER_Q / 2) / KYBER_Q);
+                tv = (int16_t)kyber_compress_d((uint32_t)tv, 1);
                 m_test[ii] |= (uint8_t)((tv & 1) << jj);
             }
         }
@@ -1660,7 +1669,7 @@ int ama_kyber_debug_ntt_roundtrip(void) {
             unsigned int kj;
             for (kj = 0; kj < 8; kj++) {
                 int16_t tv2 = coeff_normalize(stu3.coeffs[8*ki + kj]);
-                tv2 = (int16_t)((((uint32_t)tv2 << 1) + KYBER_Q / 2) / KYBER_Q);
+                tv2 = (int16_t)kyber_compress_d((uint32_t)tv2, 1);
                 msg_dec3[ki] |= (uint8_t)((tv2 & 1) << kj);
             }
         }
@@ -1850,7 +1859,7 @@ int ama_kyber_debug_cpa_roundtrip(void) {
             unsigned int j;
             for (j = 0; j < 8; j++) {
                 int16_t t = coeff_normalize(stu_poly.coeffs[8*i + j]);
-                t = (int16_t)((((uint32_t)t << 1) + KYBER_Q / 2) / KYBER_Q);
+                t = (int16_t)kyber_compress_d((uint32_t)t, 1);
                 m_recov[i] |= (uint8_t)((t & 1) << j);
             }
         }
@@ -1901,7 +1910,7 @@ int ama_kyber_debug_cpa_roundtrip(void) {
             unsigned int j;
             for (j = 0; j < 8; j++) {
                 int16_t t = coeff_normalize(mp.coeffs[8*i + j]);
-                t = (int16_t)((((uint32_t)t << 1) + KYBER_Q / 2) / KYBER_Q);
+                t = (int16_t)kyber_compress_d((uint32_t)t, 1);
                 m_recov[i] |= (uint8_t)((t & 1) << j);
             }
         }
@@ -2548,6 +2557,48 @@ static int16_t coeff_normalize(int16_t a) {
     return csubq(a);            /* Reduce: [0,2q-1] -> [0,q-1] */
 }
 
+/* FIPS 203 Compress_d, division-free (the KyberSlash fix).
+ *
+ * Compress_d(x) = round(2^d * x / q) mod 2^d, which reads most directly as
+ *
+ *     (((uint32_t)x << d) + q/2) / KYBER_Q
+ *
+ * and that is how this file computed it.  The operand of that division is
+ * secret on two reachable paths: the Compress_1 message decode in
+ * decapsulation works on mp = v - s^T u (a function of the secret key), and
+ * poly_compress runs over the re-encryption inside the FO transform.  A
+ * division by a compile-time constant is only constant-time if the compiler
+ * lowers it to a reciprocal multiply — usual at -O2/-O3, but NOT guaranteed,
+ * and this project builds Debug at -O0 where a hardware divide with
+ * operand-dependent latency is emitted.  That is precisely the KyberSlash
+ * defect class (secret-dependent division timing in ML-KEM compression,
+ * exploitable as a decapsulation timing oracle for key recovery), and it
+ * contradicts INVARIANT-12 and CRYPTO_REVIEW_CHECKLIST's "no variable-time
+ * division/modulo on secret values".  ama_dilithium.c's dil_decompose already
+ * uses the multiply/shift idiom for the same reason.
+ *
+ * The replacement is a Granlund-Montgomery reciprocal multiply chosen so it is
+ * EXACT, not approximate, over this function's whole domain:
+ *
+ *     M = ceil(2^40 / q) = 330282857,  S = 40
+ *     Compress_d(x) = ((((uint64_t)x << d) + q/2) * M >> S) & (2^d - 1)
+ *
+ * Callers always pass x through coeff_normalize() first, so x is in [0, q-1]
+ * and the widest intermediate (d = 11) is 3328*2^11 + 1664 = 6_817_408 < 2^23;
+ * the 64-bit product cannot overflow.  Equivalence to the division form was
+ * verified by exhaustive comparison over every x in [0, q-1] for every width
+ * d in {1, 4, 5, 10, 11} — all 16_645 pairs agree, so the ciphertext bytes and
+ * every KAT are unchanged by construction.  The 64-bit multiply is a
+ * fixed-latency instruction on every supported target, unlike the divide it
+ * replaces. */
+#define AMA_KYBER_COMPRESS_MULT  330282857ULL  /* ceil(2^40 / KYBER_Q) */
+#define AMA_KYBER_COMPRESS_SHIFT 40
+
+static inline uint32_t kyber_compress_d(uint32_t x_normalized, unsigned d) {
+    uint64_t n = ((uint64_t)x_normalized << d) + (KYBER_Q / 2);
+    return (uint32_t)((n * AMA_KYBER_COMPRESS_MULT) >> AMA_KYBER_COMPRESS_SHIFT);
+}
+
 /**
  * Serialize polynomial to bytes (12-bit coefficients)
  * Packs 256 coefficients into 384 bytes
@@ -2592,7 +2643,7 @@ static void poly_compress(uint8_t* r, const poly* a, int bits) {
         for (i = 0; i < KYBER_N / 2; i++) {
             for (j = 0; j < 2; j++) {
                 int16_t coeff = coeff_normalize(a->coeffs[2*i + j]);
-                t[j] = (uint8_t)(((((uint32_t)coeff << 4) + KYBER_Q / 2) / KYBER_Q) & 0xF);
+                t[j] = (uint8_t)(kyber_compress_d((uint32_t)coeff, 4) & 0xF);
             }
             r[i] = t[0] | (t[1] << 4);
         }
@@ -2601,7 +2652,7 @@ static void poly_compress(uint8_t* r, const poly* a, int bits) {
         for (i = 0; i < KYBER_N / 8; i++) {
             for (j = 0; j < 8; j++) {
                 int16_t coeff = coeff_normalize(a->coeffs[8*i + j]);
-                t[j] = (uint8_t)(((((uint32_t)coeff << 5) + KYBER_Q / 2) / KYBER_Q) & 0x1F);
+                t[j] = (uint8_t)(kyber_compress_d((uint32_t)coeff, 5) & 0x1F);
             }
             r[5*i + 0] = (t[0]) | (t[1] << 5);
             r[5*i + 1] = (t[1] >> 3) | (t[2] << 2) | (t[3] << 7);
@@ -2615,7 +2666,7 @@ static void poly_compress(uint8_t* r, const poly* a, int bits) {
             uint16_t d[4];
             for (j = 0; j < 4; j++) {
                 int16_t coeff = coeff_normalize(a->coeffs[4*i + j]);
-                d[j] = (uint16_t)(((((uint32_t)coeff << 10) + KYBER_Q / 2) / KYBER_Q) & 0x3FF);
+                d[j] = (uint16_t)(kyber_compress_d((uint32_t)coeff, 10) & 0x3FF);
             }
             r[5*i + 0] = (uint8_t)(d[0]);
             r[5*i + 1] = (uint8_t)((d[0] >> 8) | (d[1] << 2));
@@ -2629,7 +2680,7 @@ static void poly_compress(uint8_t* r, const poly* a, int bits) {
             uint16_t d[8];
             for (j = 0; j < 8; j++) {
                 int16_t coeff = coeff_normalize(a->coeffs[8*i + j]);
-                d[j] = (uint16_t)(((((uint32_t)coeff << 11) + KYBER_Q / 2) / KYBER_Q) & 0x7FF);
+                d[j] = (uint16_t)(kyber_compress_d((uint32_t)coeff, 11) & 0x7FF);
             }
             r[11*i + 0]  = (uint8_t)(d[0]);
             r[11*i + 1]  = (uint8_t)((d[0] >> 8) | (d[1] << 3));

@@ -620,6 +620,15 @@ static ama_error_t ama_argon2id_core(
     if (!salt && salt_len > 0) {
         return AMA_ERROR_INVALID_PARAM;
     }
+    /* RFC 9106 §3.1 bounds P and S at 2^32-1 bytes, and H0 binds each length
+     * as a little-endian uint32 (§3.2) — the same truncation hazard the
+     * out_len guard above rejects.  On 32-bit size_t these comparisons fold
+     * away; on 64-bit hosts they reject the (absurd, ≥4 GiB) inputs that would
+     * otherwise absorb the full byte stream while binding a truncated length,
+     * producing a tag no conforming implementation can reproduce. */
+    if ((uint64_t)pwd_len > UINT32_MAX || (uint64_t)salt_len > UINT32_MAX) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
 
     if (parallelism == 0) parallelism = 1;
     if (parallelism > ARGON2_MAX_PARALLELISM) parallelism = ARGON2_MAX_PARALLELISM;

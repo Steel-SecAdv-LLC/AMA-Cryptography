@@ -4153,7 +4153,7 @@ def native_ed25519_sign(message: bytes, secret_key: Union[bytes, bytearray]) -> 
 def _probe_cython_ed25519() -> "tuple[Any, Any]":
     """Detect Cython Ed25519 bindings at module load time."""
     try:
-        from ama_cryptography.ed25519_binding import (  # type: ignore[import-not-found]  # optional Cython .so, cmake -DAMA_USE_NATIVE_PQC=ON (PQC-004)
+        from ama_cryptography.ed25519_binding import (  # type: ignore[import-not-found, unused-ignore]  # optional Cython .so, cmake -DAMA_USE_NATIVE_PQC=ON (PQC-004)
             cy_ed25519_sign,
             cy_ed25519_verify,
         )
@@ -4166,7 +4166,7 @@ def _probe_cython_ed25519() -> "tuple[Any, Any]":
 def _probe_cython_dilithium() -> "tuple[Any, Any]":
     """Detect Cython Dilithium bindings at module load time."""
     try:
-        from ama_cryptography.dilithium_binding import (  # type: ignore[import-not-found]  # optional Cython .so, cmake -DAMA_USE_NATIVE_PQC=ON (PQC-005)
+        from ama_cryptography.dilithium_binding import (  # type: ignore[import-not-found, unused-ignore]  # optional Cython .so, cmake -DAMA_USE_NATIVE_PQC=ON (PQC-005)
             cy_dilithium_sign,
             cy_dilithium_verify,
         )
@@ -4179,7 +4179,7 @@ def _probe_cython_dilithium() -> "tuple[Any, Any]":
 def _probe_cython_hkdf() -> "Any":
     """Detect Cython HKDF binding at module load time."""
     try:
-        from ama_cryptography.hkdf_binding import (  # type: ignore[import-not-found]  # optional Cython .so, cmake -DAMA_USE_NATIVE_PQC=ON (PQC-006)
+        from ama_cryptography.hkdf_binding import (  # type: ignore[import-not-found, unused-ignore]  # optional Cython .so, cmake -DAMA_USE_NATIVE_PQC=ON (PQC-006)
             cy_hkdf,
         )
 

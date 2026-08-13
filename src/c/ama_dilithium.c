@@ -1111,9 +1111,11 @@ static void dil_polyvec_uniform_eta(dil_poly *polys, unsigned int count,
 
         /* `streams` is the RejBoundedPoly input for s1/s2 and `bufs` carries
          * rhoprime — both secret-derived, neither previously scrubbed
-         * (INVARIANT-12). */
+         * (INVARIANT-12).  The x4 sponge state absorbed rhoprime||nonce and is
+         * equally recoverable until re-permuted — scrub it in the same class. */
         ama_secure_memzero(streams, sizeof(streams));
         ama_secure_memzero(bufs, sizeof(bufs));
+        ama_secure_memzero(&ctx, sizeof(ctx));
         idx += 4;
     }
 
@@ -1200,9 +1202,11 @@ static void dil_polyvecl_uniform_gamma1(dil_polyvecl *y,
          * the single most sensitive ephemeral in ML-DSA: y together with the
          * emitted z = y + c*s1 and the public c yields c*s1 and hence s1.
          * `dil_sign_internal` scrubs its own copy of y; this one was missed
-         * (INVARIANT-12). */
+         * (INVARIANT-12).  The x4 sponge absorbed rhoprime||kappa and is
+         * recoverable until re-permuted — scrub it in the same class. */
         ama_secure_memzero(streams, sizeof(streams));
         ama_secure_memzero(bufs, sizeof(bufs));
+        ama_secure_memzero(&ctx, sizeof(ctx));
         idx += 4;
     }
 

@@ -32,9 +32,25 @@
  * but needed to compile). Backed by AMA's platform CSPRNG. */
 #include "ama_platform_rand.h"
 
+/* Batch verification draws its per-signature randomizers through this hook.
+ * ama_randombytes is NOT all-or-nothing (it returns AMA_ERROR_CRYPTO and may
+ * leave the buffer partially or never written), and donna's void-returning
+ * hook signature cannot report that.  Dropping the status is a fail-OPEN:
+ * with garbage randomizers the Bos-Carter multi-scalar check loses its
+ * soundness, and in the degenerate all-zero case the aggregate collapses to
+ * the identity and the routine reports EVERY signature valid regardless of
+ * whether it is genuine.  Latch the failure in a thread-local flag that
+ * ama_ed25519_batch_verify inspects and fails closed on; zero-fill the buffer
+ * so the discarded computation is at least deterministic rather than reading
+ * indeterminate stack. */
+static _Thread_local int s_ed25519_batch_rng_failed = 0;
+
 static void
 ed25519_randombytes_unsafe(void *p, size_t len) {
-    ama_randombytes((uint8_t *)p, len);
+    if (ama_randombytes((uint8_t *)p, len) != AMA_SUCCESS) {
+        s_ed25519_batch_rng_failed = 1;
+        memset(p, 0, len);
+    }
 }
 
 /* Suppress -Wmissing-prototypes for donna's static functions */
@@ -254,8 +270,27 @@ ama_error_t ama_ed25519_batch_verify(
     }
 
     /* donna's batch verify: returns 0 if all valid, nonzero otherwise.
-     * Per-entry results are written to the valid[] array (1=valid, 0=invalid). */
+     * Per-entry results are written to the valid[] array (1=valid, 0=invalid).
+     * Clear the CSPRNG-failure latch first so it reflects only this call's
+     * randomizer draw (see ed25519_randombytes_unsafe). */
+    s_ed25519_batch_rng_failed = 0;
     int ret = ed25519_sign_open_batch(msgs, mlens, pks, sigs, count, results);
+
+    /* Fail closed if the randomizer draw failed: the batch soundness argument
+     * depends on unpredictable randomizers, so a batch that could not draw
+     * them cannot report any entry valid.  Mark every entry invalid and force
+     * an error return, ahead of (and overriding) the canonical-S/y loop and
+     * the success mapping below. */
+    if (s_ed25519_batch_rng_failed) {
+        for (size_t i = 0; i < count; i++) {
+            results[i] = 0;
+        }
+        free((void *)msgs);
+        free((void *)mlens);
+        free((void *)pks);
+        free((void *)sigs);
+        return AMA_ERROR_CRYPTO;
+    }
 
     /* RFC 8032 §5.1.7 canonical-S enforcement, applied per entry.
      *

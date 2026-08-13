@@ -210,20 +210,29 @@ if(AMA_ENABLE_SANITIZERS AND NOT MSVC)
     set(CMAKE_EXE_LINKER_FLAGS_DEBUG "${CMAKE_EXE_LINKER_FLAGS_DEBUG} -fsanitize=address,undefined")
 endif()
 
-# SIMD flags (AVX2 is x86_64-only — skip on ARM/Apple Silicon)
+# SIMD build gating.
+#
+# AVX2 (and any other ISA-extension code) is enabled PER FILE via
+# set_source_files_properties below, never globally.  A global `-mavx2` on
+# CMAKE_C_FLAGS licenses the compiler to auto-vectorise ordinary C in EVERY
+# translation unit — including the CPUID probe, the runtime dispatcher, and
+# the portable scalar fallbacks that exist precisely for CPUs WITHOUT AVX2 —
+# into YMM instructions.  Those TUs are reached on every host regardless of
+# the runtime CPUID dispatch, so a global flag turns "portable fallback the
+# dispatcher correctly selected" into a SIGILL on any pre-AVX2 x86-64 part
+# (pre-Haswell Intel, pre-Excavator AMD, and the Atom/Celeron/Pentium lines
+# that shipped without AVX2 well into the 2020s).  Release wheels build with
+# the defaults, so this would crash real installs before main().
+#
+# The hand-written AVX2/AVX-512/VAES/SHA-NI kernels below get their -m flags
+# per file and are only ever entered through the CPUID-gated dispatch table,
+# so nothing that needs the flags loses them.  The former `-DAMA_HAS_AVX2`
+# macro was consumed by no source file (the real gate is AMA_HAVE_AVX2_IMPL,
+# set alongside the per-file sources) and is intentionally not reintroduced.
 if(AMA_ENABLE_SIMD)
-    if(AMA_ENABLE_AVX2)
-        if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64|x86")
-            if(MSVC)
-                set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} /arch:AVX2 /DAMA_HAS_AVX2")
-            else()
-                set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mavx2 -DAMA_HAS_AVX2")
-            endif()
-        else()
-            message(STATUS "AVX2 requested but architecture is ${CMAKE_SYSTEM_PROCESSOR} — skipping")
-        endif()
+    if(AMA_ENABLE_AVX2 AND NOT (CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64|x86"))
+        message(STATUS "AVX2 requested but architecture is ${CMAKE_SYSTEM_PROCESSOR} — skipping")
     endif()
-
 endif()
 
 # ============================================================================

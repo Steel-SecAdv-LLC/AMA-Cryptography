@@ -337,6 +337,11 @@ static void poly1305_init(poly1305_ctx *ctx, const uint8_t key[32]) {
     ctx->h[3] = 0;
     ctx->h[4] = 0;
     ctx->buf_len = 0;
+
+    /* Scrub the clamped one-time Poly1305 r key from the stack, matching the
+     * radix-2^44 branch above (INVARIANT-6).  r_bytes holds the authenticator
+     * key; recovering it for a (key, nonce) enables tag forgery. */
+    ama_secure_memzero(r_bytes, sizeof(r_bytes));
 #endif /* AMA_POLY1305_LIMBS_64 */
 }
 
