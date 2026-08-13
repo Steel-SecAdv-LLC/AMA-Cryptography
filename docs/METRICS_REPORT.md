@@ -76,16 +76,16 @@ Measured as non-empty-allowed `wc -l` over source files in each scope.
 
 | Scope | Files | Lines |
 |-------|------:|------:|
-| Library Python (`ama_cryptography/*.py`) | 28 | 32,869 |
+| Library Python (`ama_cryptography/*.py`) | 28 | 33,075 |
 | Native C (`src/c/**/*.c`, `include/**/*.h`) | 105 | 50,899 |
-| Library total (Python + C + headers) | 133 | **83,768** |
+| Library total (Python + C + headers) | 133 | **83,987** |
 | Top-level Python (monitors, benchmarks, demos) | — | 952 |
-| Tests (`tests/**/*.py`) | 148 | 58,979 |
+| Tests (`tests/**/*.py`) | 148 | 59,188 |
 | Cython (`*.pyx`, `*.pxd`) | — | 1,873 |
 | **Whole project** (source + docs + config) | — | **296,728** |
 
 **Library total (the figure that most closely tracks "library size"):
-83,768 lines** across 133 files under `ama_cryptography/`, `src/c/`,
+83,987 lines** across 133 files under `ama_cryptography/`, `src/c/`,
 and `include/`. This supersedes any "11,246 LoC" claim that may have
 appeared externally.
 
@@ -179,7 +179,7 @@ find . -type f \
 | Scope | Count |
 |-------|------:|
 | Python test files under `tests/` matching the static regex | 145 |
-| Syntactic `def test_` matches under `tests/**/*.py` | **3,450** |
+| Syntactic `def test_` matches under `tests/**/*.py` | **3,457** |
 | `test_*.c` files under `tests/c/` (ctest-registered) | 57 |
 | `bench_*.c` files under `tests/c/` (standalone, not in ctest) | 1 |
 | `fuzz_*.c` sources under `fuzz/` | 16 |
@@ -207,7 +207,7 @@ pytest --collect-only -q | tail -1
 Stderr is intentionally left unsuppressed so collection/import errors
 remain visible during reproduction.
 
-The static count (3,450) and the dynamic collection count will differ.
+The static count (3,457) and the dynamic collection count will differ.
 Any external claim ("N tests") must state which count it is reporting.
 This supersedes the earlier "866+ tests collected across 39 files" figure
 in ARCHITECTURE.md and any "2,068 tests" figure that may have circulated

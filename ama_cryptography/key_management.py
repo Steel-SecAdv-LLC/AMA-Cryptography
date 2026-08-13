@@ -35,6 +35,10 @@ from ama_cryptography.exceptions import (
     AmaHSMUnavailableError as AmaHSMUnavailableError,
 )
 from ama_cryptography.exceptions import (
+    CryptoModuleError,
+    NativeBackendUnavailableError,
+)
+from ama_cryptography.exceptions import (
     KeyManagementError as KeyManagementError,
 )
 from ama_cryptography.exceptions import (
@@ -343,23 +347,48 @@ class HDKeyDerivation:
         The public key is re-derived from the private scalar (compressed, then
         decompressed to the X||Y form the verifier consumes) and the pair must
         round-trip an ECDSA sign/verify.  A failure enters the module ERROR
-        state via the shared helper (INVARIANT-41).  On a build without the
-        native secp256k1 backend the derivation raises
-        ``NativeBackendUnavailableError`` before the helper runs — an
-        availability refusal, deliberately distinct from a consistency
-        failure: a keypair that cannot be consistency-tested is not released.
+        state via the shared helper (INVARIANT-41).
+
+        Availability is pre-checked with an explanation: a build without the
+        native secp256k1 backend cannot run this test, so HD keys are refused
+        on it — including hierarchies that would otherwise use hardened-only
+        derivation and never touch secp256k1.  That configuration is retired
+        deliberately: an untestable keypair is not released.
+
+        A ``ValueError`` out of the public-key derivation AFTER the caller has
+        range-checked the scalar is the other story entirely: the scalar was
+        valid, so a rejected derivation means the derivation itself is corrupt
+        — the fault class under test — and it enters ERROR like any other
+        pairwise failure.
         """
-        from ama_cryptography._module_state import pairwise_test_signature
+        from ama_cryptography._module_state import _set_error, pairwise_test_signature
         from ama_cryptography.pqc_backends import (
+            _SECP256K1_NATIVE_AVAILABLE,
             native_secp256k1_ecdsa_sign,
             native_secp256k1_ecdsa_verify,
             native_secp256k1_pubkey_decompress,
             native_secp256k1_pubkey_from_privkey,
         )
 
-        public_key_64 = native_secp256k1_pubkey_decompress(
-            native_secp256k1_pubkey_from_privkey(private_key)
-        )
+        if not _SECP256K1_NATIVE_AVAILABLE:
+            raise NativeBackendUnavailableError(
+                "secp256k1 sign/verify unavailable: the FIPS 140-3 pairwise "
+                "consistency test cannot run, so no HD key is released — "
+                "hardened-only derivation included. Build the native library "
+                "with the secp256k1 backend to use HD key derivation."
+            )
+
+        try:
+            public_key_64 = native_secp256k1_pubkey_decompress(
+                native_secp256k1_pubkey_from_privkey(private_key)
+            )
+        except ValueError as exc:
+            # The caller validated the scalar against the curve order, so a
+            # derivation rejection is corruption, not bad input.
+            _set_error(f"Pairwise consistency test failed for {label}: {exc}")
+            raise CryptoModuleError(
+                f"Module in error state: Pairwise test failed for {label}"
+            ) from exc
         # The ECDSA primitives take a 32-byte digest, not a message; hash the
         # helper's test message on both sides so sign and verify agree.
         pairwise_test_signature(
@@ -437,8 +466,10 @@ class HDKeyDerivation:
         # FIPS 140-3 pairwise consistency test — a derived child is a newly
         # minted keypair, and derivation-time is when a fault-corrupted
         # intermediate (a flipped bit in IL, a miscomputed modular sum) is
-        # still attributable to this index (INVARIANT-41).
-        self._pairwise_consistency_test(child_key, f"secp256k1 (BIP32 child {index})")
+        # still caught before release (INVARIANT-41).  The label deliberately
+        # omits the derivation index: a failure writes the label into
+        # operator logs, and wallet-structure metadata does not belong there.
+        self._pairwise_consistency_test(child_key, "secp256k1 (BIP32 child)")
 
         return child_key, child_chain
 

@@ -38,6 +38,22 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+@pytest.fixture(autouse=True)
+def _never_leak_the_error_state() -> Any:
+    """Restore OPERATIONAL after EVERY test in this file, unconditionally.
+
+    The per-test ``finally`` blocks below remain (they restore even when a
+    later assertion in the same test would run), but this fixture is the
+    backstop the file's docstring promises: the positive-path tests run REAL
+    pairwise tests on real keypairs, and a genuine failure there would
+    otherwise leave the module in ERROR and cascade a POST-lockout failure
+    into every subsequent test in the session.
+    """
+    yield
+    if ms.module_status() != "OPERATIONAL":
+        ms._set_operational()
+
+
 # ---------------------------------------------------------------------------
 # Wiring: every keygen entry point must invoke its pairwise helper.
 # ---------------------------------------------------------------------------
@@ -60,37 +76,47 @@ class TestEveryKeygenPathIsWired:
         monkeypatch.setattr(pb, "pairwise_test_kem", rec_kem)
         monkeypatch.setattr(pb, "pairwise_test_agreement", rec_agree)
 
-        pb.native_ed25519_keypair()
-        pb.native_ed25519_keypair_from_seed(b"\x01" * 32)
-        pb.native_ml_dsa_keypair(65)
-        pb.native_ml_dsa_keypair_from_seed(65, b"\x02" * 32)
-        pb.native_ml_kem_keypair(1024)
-        pb.native_ml_kem_keypair_from_seed(1024, b"\x03" * 32, b"\x04" * 32)
-        pb.native_x25519_keypair()
-        pb.native_nistp_keypair(256)
-        pb.generate_dilithium_keypair()
-        pb.generate_kyber_keypair()
-        pb.native_kyber_keypair_from_seed(b"\x05" * 32, b"\x06" * 32)
-        pb.native_dilithium_keypair_from_seed(b"\x07" * 32)
-        if pb.FROST_AVAILABLE:
+        # Each family is driven only when its backend is built, so on a
+        # partial build (a real, documented configuration — see the
+        # missing_families machinery) this test still proves the wiring of
+        # every family that EXISTS instead of erroring out of the coverage
+        # assertion entirely.
+        expected: list[str] = []
+        if pb._ED25519_NATIVE_AVAILABLE:
+            pb.native_ed25519_keypair()
+            pb.native_ed25519_keypair_from_seed(b"\x01" * 32)
+            expected += ["Ed25519", "Ed25519"]
+        if pb._ML_DSA_NATIVE_AVAILABLE:
+            pb.native_ml_dsa_keypair(65)
+            pb.native_ml_dsa_keypair_from_seed(65, b"\x02" * 32)
+            expected += ["ML-DSA-65", "ML-DSA-65"]
+        if pb._ML_KEM_NATIVE_AVAILABLE:
+            pb.native_ml_kem_keypair(1024)
+            pb.native_ml_kem_keypair_from_seed(1024, b"\x03" * 32, b"\x04" * 32)
+            expected += ["ML-KEM-1024", "ML-KEM-1024"]
+        if pb._X25519_NATIVE_AVAILABLE:
+            pb.native_x25519_keypair()
+            expected += ["X25519"]
+        if pb._NISTP_NATIVE_AVAILABLE:
+            pb.native_nistp_keypair(256)
+            expected += ["P-256"]
+        if pb.DILITHIUM_AVAILABLE:
+            pb.generate_dilithium_keypair()
+            expected += ["ML-DSA-65 (Dilithium)"]
+        if pb.KYBER_AVAILABLE:
+            pb.generate_kyber_keypair()
+            expected += ["ML-KEM-1024 (Kyber)"]
+        if pb._DETERMINISTIC_KEYGEN_AVAILABLE and pb.KYBER_AVAILABLE:
+            pb.native_kyber_keypair_from_seed(b"\x05" * 32, b"\x06" * 32)
+            expected += ["ML-KEM-1024 (deterministic)"]
+        if pb._DETERMINISTIC_KEYGEN_AVAILABLE and pb.DILITHIUM_AVAILABLE:
+            pb.native_dilithium_keypair_from_seed(b"\x07" * 32)
+            expected += ["ML-DSA-65 (deterministic)"]
+        if pb.FROST_AVAILABLE and pb._ED25519_NATIVE_AVAILABLE:
             pb.frost_keygen_trusted_dealer(2, 3)
+            expected += ["FROST(Ed25519)"]
 
-        expected = [
-            "Ed25519",
-            "Ed25519",
-            "ML-DSA-65",
-            "ML-DSA-65",
-            "ML-KEM-1024",
-            "ML-KEM-1024",
-            "X25519",
-            "P-256",
-            "ML-DSA-65 (Dilithium)",
-            "ML-KEM-1024 (Kyber)",
-            "ML-KEM-1024 (deterministic)",
-            "ML-DSA-65 (deterministic)",
-        ]
-        if pb.FROST_AVAILABLE:
-            expected.append("FROST(Ed25519)")
+        assert expected, "no family available at all — the sweep proved nothing"
         assert recorded == expected
 
     def test_slhdsa_keygens_run_a_pct(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -114,9 +140,12 @@ class TestEveryKeygenPathIsWired:
         monkeypatch.setattr(
             pb, "pairwise_test_kem", lambda e, d, pk, sk, name: recorded.append(name)
         )
+        if not pb._CONTEXT_API_AVAILABLE:
+            pytest.skip("context API not available in this build")
         for alg in (
             pb.AmaContext.ALG_ML_DSA_65,
             pb.AmaContext.ALG_KYBER_1024,
+            pb.AmaContext.ALG_SPHINCS_256F,
             pb.AmaContext.ALG_ED25519,
             pb.AmaContext.ALG_HYBRID,
         ):
@@ -128,9 +157,25 @@ class TestEveryKeygenPathIsWired:
         assert recorded == [
             "AmaContext(alg=0)",
             "AmaContext(ML-KEM-1024)",
+            "AmaContext(alg=2)",
             "AmaContext(alg=3)",
             "AmaContext(alg=4)",
         ]
+
+    def test_context_keypair_generate_refuses_undersized_buffers(self) -> None:
+        """The capacity contract, enforced Python-side (review 6a).
+
+        The C side's HYBRID capacity check was vacuous (get_key_sizes had no
+        HYBRID case — now fixed in ama_core.c), so the Python layer refuses
+        undersized buffers itself rather than letting the C write past them
+        and then slicing out of a too-small Python buffer.
+        """
+        if not pb._CONTEXT_API_AVAILABLE:
+            pytest.skip("context API not available in this build")
+        with pb.AmaContext(pb.AmaContext.ALG_HYBRID) as ctx:
+            small_pk = ctypes.create_string_buffer(8)
+            small_sk = ctypes.create_string_buffer(8)
+            assert ctx.keypair_generate(small_pk, 8, small_sk, 8) == -1
 
     def test_bip32_master_and_children_run_a_pct(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from ama_cryptography.key_management import HDKeyDerivation

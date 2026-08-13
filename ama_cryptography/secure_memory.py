@@ -85,9 +85,13 @@ class SecureMemoryError(AmaCryptographyError):
 def _load_native_consttime() -> Optional[Callable[..., Any]]:
     """Try to load ama_consttime_memcmp from AMA's native C library."""
     try:
-        from ama_cryptography.pqc_backends import _find_native_library
+        # Verified discovery: a library the ABI handshake rejected must not
+        # serve the constant-time comparison either — this module's own
+        # handle would otherwise bypass the version gate pqc_backends applies
+        # to its module-level binding.
+        from ama_cryptography.pqc_backends import _find_verified_native_library
 
-        lib = _find_native_library()
+        lib = _find_verified_native_library()
         if lib is None:
             return None
         lib.ama_consttime_memcmp.argtypes = [
@@ -239,9 +243,10 @@ SECURE_MEMZERO_BACKEND: str = "python_fallback"
 def _try_native_ama_memzero() -> "Optional[Callable[[Union[bytearray, memoryview]], None]]":
     """Attempt to use ama_secure_memzero from AMA's native C library."""
     try:
-        from ama_cryptography.pqc_backends import _find_native_library
+        # Verified discovery — see _load_native_consttime for why.
+        from ama_cryptography.pqc_backends import _find_verified_native_library
 
-        lib = _find_native_library()
+        lib = _find_verified_native_library()
         if lib is None:
             return None
         fn = lib.ama_secure_memzero

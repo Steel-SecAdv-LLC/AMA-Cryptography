@@ -2106,7 +2106,15 @@ SLH-DSA/SPHINCS+, the FROST dealer via a full t-of-n round aggregated and
 verified against the group key, ECDSA for BIP32 secp256k1 keys);
 encapsulate-and-decapsulate for the KEM families (ML-KEM/Kyber); public-key
 regeneration (SP 800-56A rev. 3 §5.6.2.1.4, one scalar multiplication) for
-the key-agreement families (X25519, NIST-P). The rule is uniform across
+the key-agreement families (X25519, NIST-P). One boundary stated rather
+than implied: the X25519 regeneration necessarily re-runs the same
+scalar-multiplication kernel keygen ran (the library exposes no second
+derivation path), so unlike the sign/verify pairs — which traverse
+genuinely independent signer and verifier code — it detects a transient
+fault between the two computations, not a systematic defect common to
+both. The NIST-P regeneration crosses from the keygen sampler into the
+separate ``pubkey_from_privkey`` entry point, and every other family's test
+exercises independent halves. The rule is otherwise uniform across
 random and seed-derived generation — `*_from_seed` is publicly callable with
 arbitrary seeds, which is precisely the path a corrupted input reaches — and
 across every surface: the `native_*` entry points, the `generate_*` wrappers,

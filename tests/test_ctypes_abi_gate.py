@@ -23,6 +23,8 @@ import textwrap
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 sys.path.insert(0, str(REPO_ROOT / "tools"))
@@ -115,6 +117,65 @@ class TestRejectionDirections:
         assert found == [] and checked == 3
 
 
+class TestMainFailurePaths:
+    """The gate's exit-code wiring, not just its predicates (review F10).
+
+    ``check()`` producing a problem means nothing if ``main()`` does not turn
+    it into a nonzero exit — that one line of plumbing is what CI actually
+    consumes, so both failure exits are driven end to end here.
+    """
+
+    def _run_main(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        header: str,
+        module_source: str,
+    ) -> int:
+        (tmp_path / "mod.py").write_text(textwrap.dedent(module_source), encoding="utf-8")
+        header_file = tmp_path / "header.h"
+        header_file.write_text(header, encoding="utf-8")
+        monkeypatch.setattr(gate, "REPO_ROOT", tmp_path)
+        monkeypatch.setattr(gate, "HEADER", header_file)
+        monkeypatch.setattr(gate, "EXTRA_HEADERS", ())
+        monkeypatch.setattr(gate, "MODULES", ("mod.py",))
+        return int(gate.main([]))
+
+    def test_a_mismatch_exits_nonzero(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        rc = self._run_main(
+            monkeypatch,
+            tmp_path,
+            _HEADER,
+            """
+            lib.ama_two_args.argtypes = [ctypes.c_char_p]
+            """,
+        )
+        assert rc == 1
+
+    def test_an_unclassifiable_expression_exits_nonzero(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """A parse problem must reach the exit code, not just a list."""
+        rc = self._run_main(
+            monkeypatch,
+            tmp_path,
+            _HEADER,
+            """
+            lib.ama_two_args.argtypes = make_argtypes()
+            lib.ama_void_return.argtypes = [ctypes.c_char_p]
+            """,
+        )
+        assert rc == 1
+
+    def test_zero_checked_signatures_is_a_checker_bug_not_a_pass(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        rc = self._run_main(monkeypatch, tmp_path, _HEADER, "x = 1\n")
+        assert rc == 2
+
+
 class TestExtractionIdioms:
     def test_list_multiplication_and_getattr_loop(self) -> None:
         sigs, called, problems = _signatures_for("""
@@ -144,6 +205,42 @@ class TestExtractionIdioms:
             """)
         assert any("cannot classify" in p for p in problems)
 
+    def test_local_binding_idiom_is_extracted_and_counted_as_called(self) -> None:
+        """``fn = lib.ama_x`` then ``fn.argtypes = …`` / ``fn(...)`` (review F1).
+
+        This idiom escaped the gate in BOTH directions — no signature and no
+        call recorded — and its two live uses included the version
+        handshake's own ctypes call, the one call in the package that runs
+        against an unvalidated object.
+        """
+        sigs, called, problems = _signatures_for("""
+            def probe(lib):
+                fn = lib.ama_void_return
+                fn.argtypes = [ctypes.c_char_p]
+                fn.restype = None
+                fn(b"x")
+            """)
+        assert problems == []
+        assert sigs["ama_void_return"]["params"] == ("ptr",)
+        assert sigs["ama_void_return"]["ret"] == "void"
+        assert "ama_void_return" in called
+
+    def test_binding_scope_does_not_leak_between_functions(self) -> None:
+        """An ``fn`` in one function must not contaminate another's."""
+        sigs, called, _ = _signatures_for("""
+            def one(lib):
+                fn = lib.ama_two_args
+                fn.argtypes = [ctypes.c_char_p, ctypes.c_size_t]
+
+            def two(other):
+                fn = other.unrelated
+                fn(1)
+            """)
+        assert sigs["ama_two_args"]["params"] == ("ptr", "int")
+        # Neither function CALLS an ama_ symbol (one only configures, two
+        # calls a non-ama binding), so nothing may be recorded as called.
+        assert called == set()
+
 
 class TestThisRepository:
     def test_repository_passes_the_gate_and_it_is_not_vacuous(self) -> None:
@@ -154,8 +251,46 @@ class TestThisRepository:
             timeout=120,
         )
         assert result.returncode == 0, result.stdout + result.stderr
-        # Vacuity guard: the tool prints how many signatures it checked; a
-        # collapse of the extractor to zero must not read as a clean tree.
+        # Vacuity guard, pinned TIGHT (review F11): the tree checks 126
+        # signatures today, and the getattr-loop and local-binding idioms
+        # contribute 13 of them — a loose floor (>= 100) would stay green
+        # through the silent loss of every one of those.  Growing the native
+        # surface legitimately raises this number; update it with the change
+        # that does.
         assert "OK:" in result.stdout
         checked = int(result.stdout.split("OK:")[1].split()[0])
-        assert checked >= 100, result.stdout
+        assert checked >= 126, result.stdout
+
+    def test_the_fragile_extraction_idioms_are_present_on_the_real_tree(self) -> None:
+        """Sentinels for the idioms a refactor can silently defeat (F4/F11).
+
+        Hoisting a loop's symbol tuple to a module constant, or renaming a
+        local binding, would drop these from extraction with no error — the
+        exact-symbol assertions here are the tripwire.
+        """
+        import ast as _ast
+
+        src = (REPO_ROOT / "ama_cryptography" / "pqc_backends.py").read_text(encoding="utf-8")
+        sigs, called, _ = gate.parse_python_signatures(
+            _ast.parse(src), "ama_cryptography/pqc_backends.py"
+        )
+        for symbol in (
+            # getattr-loop groups
+            "ama_hkdf_sha256",
+            "ama_hkdf_sha512",
+            "ama_shake128",
+            "ama_shake256",
+            "ama_ml_kem_public_key_bytes",
+            "ama_ml_dsa_signature_bytes",
+            # the local-binding idiom (the version handshake's own call)
+            "ama_version_number",
+        ):
+            assert symbol in sigs, f"{symbol} lost from extraction"
+        assert "ama_version_number" in called
+
+        src_sm = (REPO_ROOT / "ama_cryptography" / "secure_memory.py").read_text(encoding="utf-8")
+        sigs_sm, called_sm, _ = gate.parse_python_signatures(
+            _ast.parse(src_sm), "ama_cryptography/secure_memory.py"
+        )
+        assert "ama_secure_memzero" in sigs_sm
+        assert "ama_secure_memzero" in called_sm

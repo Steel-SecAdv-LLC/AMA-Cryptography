@@ -42,7 +42,7 @@ import secrets
 import threading
 from typing import Any, Callable, Dict, Optional
 
-from ama_cryptography.exceptions import CryptoModuleError
+from ama_cryptography.exceptions import CryptoModuleError, NativeBackendUnavailableError
 
 logger = logging.getLogger(__name__)
 
@@ -240,6 +240,23 @@ def secure_token_bytes(n: int = 32) -> bytes:
 # machinery above.  ``_self_test`` re-exports them, so the historical
 # ``from ama_cryptography._self_test import pairwise_test_signature`` spelling
 # keeps working.
+#
+# Exception discipline (shared by all three helpers): the ERROR state is
+# reserved for a test that RAN and FAILED.  Two exception classes reaching a
+# helper mean the test could not run at all and must pass through unchanged:
+#
+# * ``CryptoModuleError`` — the callable re-entered ``check_crypto_permitted``
+#   and was refused because another thread moved the module into SELF_TEST or
+#   ERROR mid-flight.  Converting that refusal into ``_set_error`` would let a
+#   concurrent ``reset_module()`` brick the module with a fabricated
+#   "pairwise test failed" root cause, racing POST's own state transitions.
+# * ``NativeBackendUnavailableError`` — a counterpart operation is not built.
+#   An availability gap is a refusal to release the keypair, not evidence
+#   against it.
+#
+# Everything else (a verify that returns False, a wrong shared secret, a
+# nonzero return code, an unexpected crash inside the primitive) is the test
+# running and failing, and enters ERROR.
 
 
 def pairwise_test_signature(
@@ -273,6 +290,9 @@ def pairwise_test_signature(
             valid = verify_fn(test_msg, sig.signature, public_key)
         if not valid:
             raise ValueError("Verification returned False")
+    except (CryptoModuleError, NativeBackendUnavailableError):
+        # Could-not-run, not ran-and-failed — see the discipline note above.
+        raise
     except Exception as exc:
         _set_error(f"Pairwise consistency test failed for {algo_name}: {exc}")
         raise CryptoModuleError(
@@ -303,13 +323,21 @@ def pairwise_test_kem(
     """
     try:
         encap = encaps_fn(public_key)
-        if isinstance(encap, tuple):
-            ciphertext, shared_secret = encap
-        else:
+        # Dispatch on the named attributes FIRST: a result class converted to
+        # a NamedTuple would satisfy isinstance(…, tuple) and silently switch
+        # to positional unpacking, which breaks the moment its field order
+        # changes.  The names are the contract; the bare tuple is the
+        # fallback for the native functions that return one.
+        if hasattr(encap, "ciphertext"):
             ciphertext, shared_secret = encap.ciphertext, encap.shared_secret
+        else:
+            ciphertext, shared_secret = encap
         ss = decaps_fn(ciphertext, secret_key)
         if ss != shared_secret:
             raise ValueError("Shared secrets do not match")
+    except (CryptoModuleError, NativeBackendUnavailableError):
+        # Could-not-run, not ran-and-failed — see the discipline note above.
+        raise
     except Exception as exc:
         _set_error(f"Pairwise consistency test failed for {algo_name}: {exc}")
         raise CryptoModuleError(
@@ -339,6 +367,9 @@ def pairwise_test_agreement(
         regenerated = regenerate_public_fn(secret_key)
         if regenerated != public_key:
             raise ValueError("Regenerated public key does not match the generated one")
+    except (CryptoModuleError, NativeBackendUnavailableError):
+        # Could-not-run, not ran-and-failed — see the discipline note above.
+        raise
     except Exception as exc:
         _set_error(f"Pairwise consistency test failed for {algo_name}: {exc}")
         raise CryptoModuleError(

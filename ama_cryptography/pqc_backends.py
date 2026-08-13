@@ -290,6 +290,13 @@ _LOAD_DIAGNOSTICS: dict = {
     # computed once at import — _find_native_library's per-run reset leaves
     # it alone.
     "native_version": None,
+    # str: why the ABI handshake rejected a library, or None.  Deliberately a
+    # post-load field OUTSIDE the per-run reset: the rejection is appended to
+    # "errors" too, but "errors" is per-discovery scratch and secure_memory /
+    # the build signer legitimately re-run discovery during import — which
+    # was observed to erase the rejection before POST could report it.  This
+    # field is the durable record native_backend_load_summary() reads first.
+    "abi_rejection": None,
 }
 
 
@@ -610,6 +617,7 @@ def native_backend_diagnostics() -> dict:
         "errors": [(p, e) for p, e in _LOAD_DIAGNOSTICS["errors"]],
         "missing_families": list(_LOAD_DIAGNOSTICS["missing_families"]),
         "native_version": _LOAD_DIAGNOSTICS["native_version"],
+        "abi_rejection": _LOAD_DIAGNOSTICS["abi_rejection"],
     }
 
 
@@ -633,6 +641,17 @@ def native_backend_load_summary() -> str:
     diag = _LOAD_DIAGNOSTICS
     if _native_lib is not None:
         return f"native backend loaded from {_NATIVE_LIB_PATH}"
+
+    if diag["abi_rejection"]:
+        # Checked before "errors": that list is per-discovery scratch which a
+        # later _find_native_library() call (secure_memory's import-time
+        # probes, the build signer) resets — without this durable field the
+        # summary told an operator whose library was REJECTED for a wrong
+        # major version to go build the library that was sitting right there.
+        return (
+            f"a native library was FOUND and REJECTED — {diag['abi_rejection']} "
+            f"(it reported {diag['native_version'] or 'no version'})"
+        )
 
     if diag["errors"]:
         detail = "; ".join(f"{path}: {err}" for path, err in diag["errors"][:3])
@@ -2105,20 +2124,33 @@ _CRYPTOGRAPHY_VERSION_MAJOR = 4
 def _native_abi_version(lib: ctypes.CDLL) -> Optional[tuple]:
     """The ``(major, minor, patch)`` the library reports, or None if it cannot.
 
-    ``ama_version_number`` is a compile-time-constant return with no failure
-    modes; its absence means the object predates the versioning API (or is
-    not this library at all), which the caller treats as a mismatch.
+    This is the one ctypes call in the package that runs against a NOT-yet-
+    validated object — validating the object is its purpose — so every
+    catchable failure (a symbol that ctypes refuses to wrap, an argument
+    marshalling error, an OSError out of the call) is normalised to None,
+    which the caller treats as a reject.  The uncatchable case remains: a
+    hostile object exporting ``ama_version_number`` as a *data* symbol dies
+    in the jump, as any dlopen-based loader would; the OS-level code-signing
+    control documented in SECURITY.md is the boundary for objects that
+    adversarial (the in-tree ``-1`` sentinel initialisers cover the benign
+    stub that returns without writing).
     """
-    if not hasattr(lib, "ama_version_number"):
+    try:
+        if not hasattr(lib, "ama_version_number"):
+            return None
+        fn = lib.ama_version_number
+        fn.argtypes = [ctypes.POINTER(ctypes.c_int)] * 3
+        fn.restype = None
+        major = ctypes.c_int(-1)
+        minor = ctypes.c_int(-1)
+        patch = ctypes.c_int(-1)
+        fn(ctypes.byref(major), ctypes.byref(minor), ctypes.byref(patch))
+        return (major.value, minor.value, patch.value)
+    except Exception:
+        # An object whose version cannot be interrogated is an object whose
+        # version does not match — fail toward rejection, never toward an
+        # import-time crash of the whole package.
         return None
-    fn = lib.ama_version_number
-    fn.argtypes = [ctypes.POINTER(ctypes.c_int)] * 3
-    fn.restype = None
-    major = ctypes.c_int(-1)
-    minor = ctypes.c_int(-1)
-    patch = ctypes.c_int(-1)
-    fn(ctypes.byref(major), ctypes.byref(minor), ctypes.byref(patch))
-    return (major.value, minor.value, patch.value)
 
 
 def _abi_handshake(lib: ctypes.CDLL) -> tuple:
@@ -2151,11 +2183,45 @@ if _native_lib is not None:
             "Native library %s rejected: %s", _NATIVE_LIB_PATH, _abi_reject
         )
         _LOAD_DIAGNOSTICS["errors"].append((_NATIVE_LIB_PATH or "<unknown>", _abi_reject))
+        # The durable copy: "errors" above is per-discovery scratch that a
+        # later _find_native_library() call resets before POST reads it.
+        _LOAD_DIAGNOSTICS["abi_rejection"] = _abi_reject
         _LOAD_DIAGNOSTICS["loaded"] = False
         _LOAD_DIAGNOSTICS["path"] = None
         _native_lib = None
         _NATIVE_LIB_PATH = None
         _NATIVE_LIB_VIA_OVERRIDE = None
+
+
+def _find_verified_native_library() -> Optional[ctypes.CDLL]:
+    """Discovery plus the ABI version handshake, for out-of-module consumers.
+
+    ``secure_memory`` obtains its own library handle at its own import time
+    (its constant-time memcmp and native memzero probes) rather than reusing
+    this module's ``_native_lib`` — which meant it would happily configure
+    and call symbols on an object the handshake at module scope had just
+    REJECTED.  This helper is the version those consumers use: same
+    discovery, same handshake, and a rejected object comes back as ``None``
+    with the reason recorded, exactly as if no library had been found.
+
+    The build-time signer (``_build_sign``) deliberately keeps raw
+    ``_find_native_library``: it hashes and signs whatever object the build
+    produced, and the runtime handshake plus the signed native digest decide
+    at load time whether that object may execute — the signer is not an
+    execution surface.
+    """
+    lib = _find_native_library()
+    if lib is None:
+        return None
+    _, reject = _abi_handshake(lib)
+    if reject is not None:
+        logging.getLogger(__name__).critical(
+            "Native library rejected during out-of-module discovery: %s", reject
+        )
+        _LOAD_DIAGNOSTICS["abi_rejection"] = reject
+        return None
+    return lib
+
 
 if _native_lib is not None:
     if _setup_native_ctypes(_native_lib):
@@ -2456,9 +2522,25 @@ class AmaContext:
         secret_key: ctypes.Array,
         secret_key_len: int,
     ) -> int:
-        """Call ``ama_keypair_generate``. Returns ``AMA_SUCCESS`` (0) on success."""
+        """Call ``ama_keypair_generate``. Returns ``AMA_SUCCESS`` (0) on success.
+
+        Buffers smaller than the algorithm's key sizes return
+        ``AMA_ERROR_INVALID_PARAM`` (-1) without calling into C.  On success
+        the generated keypair's FIPS 140-3 pairwise consistency test runs
+        before the rc is returned; a FAILED test raises ``CryptoModuleError``
+        and moves the module to the ERROR state (INVARIANT-41) — the one case
+        where this method raises rather than returning an rc.
+        """
         check_crypto_permitted()  # FIPS 140-3 §4.9.2: no output in the ERROR state
         self._require_open()
+        # Enforce the capacity contract in Python as well as C: the pairwise
+        # test below slices the algorithm's exact key sizes out of the
+        # caller's buffers, so undersized buffers must be refused HERE, with
+        # the same rc the C returns for the case — not discovered by an
+        # out-of-bounds read after the C wrote past them.
+        pk_size, sk_size = self._KEY_SIZES[self._algorithm]
+        if public_key_len < pk_size or secret_key_len < sk_size:
+            return -1  # AMA_ERROR_INVALID_PARAM
         rc = int(
             _native_lib.ama_keypair_generate(
                 self._ctx, public_key, public_key_len, secret_key, secret_key_len
@@ -2484,6 +2566,16 @@ class AmaContext:
         ALG_HYBRID: (DILITHIUM_PUBLIC_KEY_BYTES, DILITHIUM_SECRET_KEY_BYTES),
     }
 
+    #: Maximum signature size per algorithm — sized exactly so the Ed25519
+    #: pairwise test does not allocate a 48 KB SPHINCS+-sized scratch buffer
+    #: for a 64-byte signature.  ALG_KYBER_1024 has no signature.
+    _SIG_SIZES = {
+        ALG_ML_DSA_65: DILITHIUM_SIGNATURE_BYTES,
+        ALG_SPHINCS_256F: SPHINCS_SIGNATURE_BYTES,
+        ALG_ED25519: ED25519_SIGNATURE_BYTES,
+        ALG_HYBRID: DILITHIUM_SIGNATURE_BYTES,
+    }
+
     def _keypair_pairwise_test(self, public_key: ctypes.Array, secret_key: ctypes.Array) -> None:
         """FIPS 140-3 pairwise consistency test on a context-generated keypair.
 
@@ -2492,10 +2584,17 @@ class AmaContext:
         ``kem_decapsulate`` for ALG_KYBER_1024) so a keypair is exercised by
         the very code path its caller will use it on.  A failure enters the
         module ERROR state via the shared helpers (INVARIANT-41).
+
+        The secret key is BORROWED from the caller's buffer
+        (``from_buffer``), never copied: this class is the one API here whose
+        caller owns the only secret-key copy in wipeable storage, and an
+        immutable ``bytes`` snapshot for the test's convenience would be
+        exactly the un-wipeable transient the ``_borrow`` policy forbids.
+        The public key is copied — it is public.
         """
         pk_size, sk_size = self._KEY_SIZES[self._algorithm]
         pk = ctypes.string_at(public_key, pk_size)
-        sk = ctypes.string_at(secret_key, sk_size)
+        sk_view = (ctypes.c_char * sk_size).from_buffer(secret_key)
 
         if self._algorithm == self.ALG_KYBER_1024:
 
@@ -2510,20 +2609,23 @@ class AmaContext:
                     raise RuntimeError(f"ama_kem_encapsulate failed (rc={rc})")
                 return bytes(ct.raw[: ct_len.value]), bytes(ss)
 
-            def _decaps(ciphertext: bytes, secret: bytes) -> bytes:
+            def _decaps(ciphertext: bytes, secret: ctypes.Array) -> bytes:
                 ss = ctypes.create_string_buffer(KYBER_SHARED_SECRET_BYTES)
-                rc = self.kem_decapsulate(ciphertext, secret, ss, KYBER_SHARED_SECRET_BYTES)
+                rc = self.kem_decapsulate(
+                    ciphertext, cast(bytes, secret), ss, KYBER_SHARED_SECRET_BYTES
+                )
                 if rc != 0:
                     raise RuntimeError(f"ama_kem_decapsulate failed (rc={rc})")
                 return bytes(ss)
 
-            pairwise_test_kem(_encaps, _decaps, pk, sk, "AmaContext(ML-KEM-1024)")
+            pairwise_test_kem(_encaps, _decaps, pk, sk_view, "AmaContext(ML-KEM-1024)")
         else:
+            sig_size = self._SIG_SIZES[self._algorithm]
 
-            def _sign(message: bytes, secret: bytes) -> bytes:
-                sig = ctypes.create_string_buffer(SPHINCS_SIGNATURE_BYTES)
-                sig_len = ctypes.c_size_t(SPHINCS_SIGNATURE_BYTES)
-                rc = self.sign(message, secret, sig, ctypes.pointer(sig_len))
+            def _sign(message: bytes, secret: ctypes.Array) -> bytes:
+                sig = ctypes.create_string_buffer(sig_size)
+                sig_len = ctypes.c_size_t(sig_size)
+                rc = self.sign(message, cast(bytes, secret), sig, ctypes.pointer(sig_len))
                 if rc != 0:
                     raise RuntimeError(f"ama_sign failed (rc={rc})")
                 return bytes(sig.raw[: sig_len.value])
@@ -2531,7 +2633,9 @@ class AmaContext:
             def _verify(message: bytes, signature: bytes, pub: bytes) -> bool:
                 return self.verify(message, signature, pub) == 0
 
-            pairwise_test_signature(_sign, _verify, sk, pk, f"AmaContext(alg={self._algorithm})")
+            pairwise_test_signature(
+                _sign, _verify, sk_view, pk, f"AmaContext(alg={self._algorithm})"
+            )
 
     # ------------------------------------------------------------------
     # Signature operations
@@ -2984,8 +3088,10 @@ def dilithium_sign(message: bytes, secret_key: Union[bytes, bytearray]) -> bytes
     if DILITHIUM_BACKEND == "native" and _native_lib is not None:
         sig_buf = ctypes.create_string_buffer(DILITHIUM_SIGNATURE_BYTES)
         sig_len = ctypes.c_size_t(DILITHIUM_SIGNATURE_BYTES)
-        # INVARIANT-6: use mutable ctypes buffer to avoid non-wipeable bytes() copy
-        sk_buf = ctypes.create_string_buffer(bytes(secret_key), len(secret_key))
+        # INVARIANT-6: borrow the caller's secret-key storage instead of
+        # snapshotting it — bytes(bytearray) is exactly the un-wipeable
+        # transient _borrow exists to avoid.
+        sk_buf = _borrow(secret_key)
         try:
             rc = _native_lib.ama_dilithium_sign(
                 sig_buf,
@@ -3000,7 +3106,9 @@ def dilithium_sign(message: bytes, secret_key: Union[bytes, bytearray]) -> bytes
                 )
             return bytes(sig_buf[: sig_len.value])  # type: ignore[arg-type]  # ctypes buffer slice not typed as bytes-compatible (PQC-001)
         finally:
-            ctypes.memset(sk_buf, 0, len(secret_key))
+            # sk_buf is BORROWED (see above): wiping it would zero the caller's
+            # live key.  Release the borrow so a bytearray caller can resize.
+            del sk_buf
 
     raise QuantumSignatureUnavailableError(_DILITHIUM_UNKNOWN_STATE)
 
@@ -3130,8 +3238,10 @@ def dilithium_sign_ctx(message: bytes, secret_key: Union[bytes, bytearray], ctx:
     if DILITHIUM_BACKEND == "native" and _native_lib is not None:
         sig_buf = ctypes.create_string_buffer(DILITHIUM_SIGNATURE_BYTES)
         sig_len = ctypes.c_size_t(DILITHIUM_SIGNATURE_BYTES)
-        # INVARIANT-6: use mutable ctypes buffer to avoid non-wipeable bytes() copy
-        sk_buf = ctypes.create_string_buffer(bytes(secret_key), len(secret_key))
+        # INVARIANT-6: borrow the caller's secret-key storage instead of
+        # snapshotting it — bytes(bytearray) is exactly the un-wipeable
+        # transient _borrow exists to avoid.
+        sk_buf = _borrow(secret_key)
         try:
             rc = _native_lib.ama_dilithium_sign_ctx(
                 sig_buf,
@@ -3148,7 +3258,9 @@ def dilithium_sign_ctx(message: bytes, secret_key: Union[bytes, bytearray], ctx:
                 )
             return bytes(sig_buf[: sig_len.value])  # type: ignore[arg-type]  # ctypes buffer slice not typed as bytes-compatible (PQC-001)
         finally:
-            ctypes.memset(sk_buf, 0, len(secret_key))
+            # sk_buf is BORROWED (see above): wiping it would zero the caller's
+            # live key.  Release the borrow so a bytearray caller can resize.
+            del sk_buf
 
     raise QuantumSignatureUnavailableError(_DILITHIUM_UNKNOWN_STATE)
 
@@ -3312,8 +3424,10 @@ def kyber_decapsulate(ciphertext: bytes, secret_key: Union[bytes, bytearray]) ->
 
     if KYBER_BACKEND == "native" and _native_lib is not None:
         ss_buf = ctypes.create_string_buffer(KYBER_SHARED_SECRET_BYTES)
-        # INVARIANT-6: use mutable ctypes buffer to avoid non-wipeable bytes() copy
-        sk_buf = ctypes.create_string_buffer(bytes(secret_key), len(secret_key))
+        # INVARIANT-6: borrow the caller's secret-key storage instead of
+        # snapshotting it — bytes(bytearray) is exactly the un-wipeable
+        # transient _borrow exists to avoid.
+        sk_buf = _borrow(secret_key)
         try:
             rc = _native_lib.ama_kyber_decapsulate(
                 ciphertext,
@@ -3327,7 +3441,9 @@ def kyber_decapsulate(ciphertext: bytes, secret_key: Union[bytes, bytearray]) ->
                 raise KyberUnavailableError(f"Native kyber_decapsulate failed with error code {rc}")
             return bytes(ss_buf)
         finally:
-            ctypes.memset(sk_buf, 0, len(secret_key))
+            # sk_buf is BORROWED (see above): wiping it would zero the caller's
+            # live key.  Release the borrow so a bytearray caller can resize.
+            del sk_buf
 
     raise KyberUnavailableError(_KYBER_UNKNOWN_STATE)
 
@@ -3423,8 +3539,10 @@ def sphincs_sign(message: bytes, secret_key: Union[bytes, bytearray]) -> bytes:
     if SPHINCS_BACKEND == "native" and _native_lib is not None:
         sig_buf = ctypes.create_string_buffer(SPHINCS_SIGNATURE_BYTES)
         sig_len = ctypes.c_size_t(SPHINCS_SIGNATURE_BYTES)
-        # INVARIANT-6: use mutable ctypes buffer to avoid non-wipeable bytes() copy
-        sk_buf = ctypes.create_string_buffer(bytes(secret_key), len(secret_key))
+        # INVARIANT-6: borrow the caller's secret-key storage instead of
+        # snapshotting it — bytes(bytearray) is exactly the un-wipeable
+        # transient _borrow exists to avoid.
+        sk_buf = _borrow(secret_key)
         try:
             rc = _native_lib.ama_sphincs_sign(
                 sig_buf,
@@ -3437,7 +3555,9 @@ def sphincs_sign(message: bytes, secret_key: Union[bytes, bytearray]) -> bytes:
                 raise SphincsUnavailableError(f"Native sphincs_sign failed with error code {rc}")
             return bytes(sig_buf[: sig_len.value])  # type: ignore[arg-type]  # ctypes buffer slice not typed as bytes-compatible (PQC-003)
         finally:
-            ctypes.memset(sk_buf, 0, len(secret_key))
+            # sk_buf is BORROWED (see above): wiping it would zero the caller's
+            # live key.  Release the borrow so a bytearray caller can resize.
+            del sk_buf
 
     raise SphincsUnavailableError(_SPHINCS_UNKNOWN_STATE)
 
@@ -3748,7 +3868,10 @@ def slhdsa_sign(
     # INVARIANT-6: route the secret key through a mutable ctypes buffer so it
     # can be zeroed on the way out — ``bytes(secret_key)`` would otherwise
     # leave an immutable, non-wipeable copy on the Python heap.
-    sk_buf = ctypes.create_string_buffer(bytes(secret_key), sk_len)
+    # INVARIANT-6: borrow the caller's secret-key storage instead of
+    # snapshotting it — bytes(bytearray) is exactly the un-wipeable
+    # transient _borrow exists to avoid.
+    sk_buf = _borrow(secret_key)
     try:
         rc = _native_lib.ama_slhdsa_sign(
             ctypes.c_int(enum_id),
@@ -3764,7 +3887,9 @@ def slhdsa_sign(
             raise RuntimeError(f"ama_slhdsa_sign({param_set}) failed: rc={rc}")
         return bytes(sig_buf.raw[: sig_buf_len.value])
     finally:
-        ctypes.memset(sk_buf, 0, sk_len)
+        # sk_buf is BORROWED (see above): wiping it would zero the caller's
+        # live key.  Release the borrow so a bytearray caller can resize.
+        del sk_buf
 
 
 def slhdsa_verify(
@@ -3830,7 +3955,10 @@ def slhdsa_sign_deterministic(
     sig_buf = ctypes.create_string_buffer(sig_len)
     sig_buf_len = ctypes.c_size_t(sig_len)
     # INVARIANT-6: see slhdsa_sign — wipe the ctypes scratch SK on exit.
-    sk_buf = ctypes.create_string_buffer(bytes(secret_key), sk_len)
+    # INVARIANT-6: borrow the caller's secret-key storage instead of
+    # snapshotting it — bytes(bytearray) is exactly the un-wipeable
+    # transient _borrow exists to avoid.
+    sk_buf = _borrow(secret_key)
     try:
         rc = _native_lib.ama_slhdsa_sign_deterministic(
             ctypes.c_int(enum_id),
@@ -3846,7 +3974,9 @@ def slhdsa_sign_deterministic(
             raise RuntimeError(f"ama_slhdsa_sign_deterministic({param_set}) failed: rc={rc}")
         return bytes(sig_buf.raw[: sig_buf_len.value])
     finally:
-        ctypes.memset(sk_buf, 0, sk_len)
+        # sk_buf is BORROWED (see above): wiping it would zero the caller's
+        # live key.  Release the borrow so a bytearray caller can resize.
+        del sk_buf
 
 
 def slhdsa_sign_internal(
@@ -3878,7 +4008,10 @@ def slhdsa_sign_internal(
     # depending on caller policy — may be derived from secret material
     # (e.g. PRF over SK), so we treat it as sensitive even though it is
     # ultimately revealed via the resulting signature.
-    sk_buf = ctypes.create_string_buffer(bytes(secret_key), sk_len)
+    # INVARIANT-6: borrow the caller's secret-key storage instead of
+    # snapshotting it — bytes(bytearray) is exactly the un-wipeable
+    # transient _borrow exists to avoid.
+    sk_buf = _borrow(secret_key)
     addrnd_buf = ctypes.create_string_buffer(bytes(addrnd), n)
     try:
         rc = _native_lib.ama_slhdsa_sign_internal(
@@ -3894,7 +4027,9 @@ def slhdsa_sign_internal(
             raise RuntimeError(f"ama_slhdsa_sign_internal({param_set}) failed: rc={rc}")
         return bytes(sig_buf.raw[: sig_buf_len.value])
     finally:
-        ctypes.memset(sk_buf, 0, sk_len)
+        # sk_buf is BORROWED (see above): wiping it would zero the caller's
+        # live key.  Release the borrow so a bytearray caller can resize.
+        del sk_buf
         ctypes.memset(addrnd_buf, 0, n)
 
 
@@ -4031,15 +4166,19 @@ def native_ed25519_sign(message: bytes, secret_key: Union[bytes, bytearray]) -> 
         )
 
     sig_buf = ctypes.create_string_buffer(ED25519_SIGNATURE_BYTES)
-    # INVARIANT-6: use mutable ctypes buffer to avoid non-wipeable bytes() copy
-    sk_buf = ctypes.create_string_buffer(bytes(secret_key), len(secret_key))
+    # INVARIANT-6: borrow the caller's secret-key storage instead of
+    # snapshotting it — bytes(bytearray) is exactly the un-wipeable
+    # transient _borrow exists to avoid.
+    sk_buf = _borrow(secret_key)
     try:
         rc = _native_lib.ama_ed25519_sign(sig_buf, message, ctypes.c_size_t(len(message)), sk_buf)
         if rc != 0:
             raise RuntimeError(f"Ed25519 signing failed (rc={rc})")
         return bytes(sig_buf)
     finally:
-        ctypes.memset(sk_buf, 0, len(secret_key))
+        # sk_buf is BORROWED (see above): wiping it would zero the caller's
+        # live key.  Release the borrow so a bytearray caller can resize.
+        del sk_buf
 
 
 def _probe_cython_ed25519() -> "tuple[Any, Any]":

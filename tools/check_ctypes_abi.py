@@ -69,7 +69,7 @@ import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Any, Optional, Sequence
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 HEADER = REPO_ROOT / "include" / "ama_cryptography.h"
@@ -345,30 +345,104 @@ def parse_python_signatures(tree: ast.Module, origin: str) -> tuple:
                 return
             entry["ret"] = cls
 
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Assign) and len(node.targets) == 1:
-            target = _symbol_of_attribute_target(node.targets[0])
-            if target is not None:
-                record(target[0], target[1], node.value, node.lineno)
-        if isinstance(node, ast.For):
-            symbols = _getattr_loop_symbols(node)
-            if symbols:
-                for sub in ast.walk(node):
-                    if isinstance(sub, ast.Assign) and len(sub.targets) == 1:
-                        loop_target = sub.targets[0]
-                        if (
-                            isinstance(loop_target, ast.Attribute)
-                            and loop_target.attr in ("argtypes", "restype")
-                            and isinstance(loop_target.value, ast.Name)
-                        ):
-                            for symbol in symbols:
-                                record(symbol, loop_target.attr, sub.value, sub.lineno)
-                # A symbol configured by a loop group is reachable through
-                # getattr dispatch at the call sites; count it as called.
-                called.update(symbols)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
-            if node.func.attr.startswith("ama_"):
-                called.add(node.func.attr)
+    def _local_binding_symbol(node: ast.Assign) -> Optional[tuple]:
+        """Match the ``fn = lib.ama_x`` binding idiom: ``(local_name, symbol)``.
+
+        This shape was the extractor's one blind spot (adversarial-review
+        finding F1): a symbol bound to a local first was invisible to the
+        direct-target match, AND its call site (``fn(...)``) is a bare
+        ``ast.Name`` call the completeness check could not see either — so
+        the two live uses of the idiom (``ama_secure_memzero``,
+        ``ama_version_number``, the exact call the version handshake makes
+        against an unvalidated object) escaped the gate in both directions.
+        """
+        if (
+            len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and isinstance(node.value, ast.Attribute)
+            and node.value.attr.startswith("ama_")
+        ):
+            return node.targets[0].id, node.value.attr
+        return None
+
+    def _walk_scope(scope: ast.AST) -> Any:
+        """Yield this scope's nodes WITHOUT descending into nested functions.
+
+        ``ast.walk`` + ``continue`` does not do this — ``walk`` has already
+        queued the skipped node's children — so a shared bindings map would
+        leak an ``fn`` from one function into another's calls.  (The
+        rejection-direction test for exactly that leak is what caught it.)
+        """
+        # Pre-order DFS in SOURCE order (reversed pushes onto a LIFO stack):
+        # the one-pass binding tracker below requires seeing ``fn = lib.ama_x``
+        # before the ``fn.argtypes = ...`` that follows it in the file.
+        stack = list(ast.iter_child_nodes(scope))[::-1]
+        while stack:
+            node = stack.pop()
+            yield node
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                stack.extend(list(ast.iter_child_nodes(node))[::-1])
+
+    def _process_scope(scope: ast.AST, inherited: Optional[dict] = None) -> None:
+        """Extract from one lexical scope, tracking its local ``fn`` bindings.
+
+        Bindings are scoped per function so an ``fn`` in one function cannot
+        contaminate an unrelated ``fn`` in another.  A NESTED function is
+        recursed into with a copy of the bindings visible at its definition
+        point — closures read their enclosing scope (``secure_memory``'s
+        ``_zero_via_native`` calls the outer ``fn`` binding), and a child
+        scope's own rebindings must not flow back up.
+        """
+        local_bindings: dict = dict(inherited or {})
+        for node in _walk_scope(scope):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                _process_scope(node, local_bindings)
+                continue
+            if isinstance(node, ast.Assign) and len(node.targets) == 1:
+                target = _symbol_of_attribute_target(node.targets[0])
+                if target is not None:
+                    record(target[0], target[1], node.value, node.lineno)
+                    continue
+                binding = _local_binding_symbol(node)
+                if binding is not None:
+                    local_bindings[binding[0]] = binding[1]
+                    continue
+                loop_target = node.targets[0]
+                if (
+                    isinstance(loop_target, ast.Attribute)
+                    and loop_target.attr in ("argtypes", "restype")
+                    and isinstance(loop_target.value, ast.Name)
+                    and loop_target.value.id in local_bindings
+                ):
+                    record(
+                        local_bindings[loop_target.value.id],
+                        loop_target.attr,
+                        node.value,
+                        node.lineno,
+                    )
+            if isinstance(node, ast.For):
+                symbols = _getattr_loop_symbols(node)
+                if symbols:
+                    for sub in ast.walk(node):
+                        if isinstance(sub, ast.Assign) and len(sub.targets) == 1:
+                            loop_target = sub.targets[0]
+                            if (
+                                isinstance(loop_target, ast.Attribute)
+                                and loop_target.attr in ("argtypes", "restype")
+                                and isinstance(loop_target.value, ast.Name)
+                            ):
+                                for symbol in symbols:
+                                    record(symbol, loop_target.attr, sub.value, sub.lineno)
+                    # A symbol configured by a loop group is reachable through
+                    # getattr dispatch at the call sites; count it as called.
+                    called.update(symbols)
+            if isinstance(node, ast.Call):
+                if isinstance(node.func, ast.Attribute) and node.func.attr.startswith("ama_"):
+                    called.add(node.func.attr)
+                elif isinstance(node.func, ast.Name) and node.func.id in local_bindings:
+                    called.add(local_bindings[node.func.id])
+
+    _process_scope(tree)
 
     # Resolve aliases after the pass so order of definition does not matter.
     for symbol, source, lineno in aliases:
