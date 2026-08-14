@@ -41,6 +41,7 @@ from types import CodeType, ModuleType
 import pytest
 
 from ama_cryptography import _self_test as st
+from tests.conftest import native_library_present
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PKG_DIR = REPO_ROOT / "ama_cryptography"
@@ -226,7 +227,7 @@ def importable_tree(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """
     if not (PKG_DIR / "_integrity_signature.py").is_file():
         pytest.skip("no signed-integrity artefact in the source tree")
-    if not any(PKG_DIR.glob("libama_cryptography*")):
+    if not native_library_present(PKG_DIR):
         pytest.skip("native library not built in this tree")
 
     root = tmp_path_factory.mktemp("exec_integrity")

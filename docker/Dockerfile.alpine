@@ -41,8 +41,19 @@ RUN apk add --no-cache \
 WORKDIR /build
 COPY . .
 
-# Install both runtime and dev dependencies for Cython/PQC builds
-RUN pip3 install --no-cache-dir -r requirements.txt -r requirements-dev.txt
+# Install both runtime and dev dependencies for Cython/PQC builds.
+#
+# `--break-system-packages` is required from Alpine 3.19 onward, not just on
+# the upgrade step below. Alpine 3.18 shipped a pip that predates PEP 668
+# enforcement, so installing into the system interpreter was simply allowed
+# and only the explicit `--upgrade` of system-managed packages needed the
+# override. 3.23 ships pip 25.1.1 against an EXTERNALLY-MANAGED interpreter,
+# which refuses every system-wide install — this line failed the image build
+# with `error: externally-managed-environment` on the first CI run after the
+# base bump. The override is contained to this builder stage and never reaches
+# the runtime image.
+RUN pip3 install --no-cache-dir --break-system-packages \
+        -r requirements.txt -r requirements-dev.txt
 
 RUN mkdir build && cd build && \
     cmake .. \
@@ -94,8 +105,11 @@ COPY --from=builder /build/build/lib/*.so* /usr/local/lib/
 COPY --from=builder /build/dist/*.whl /tmp/
 
 # Install Python package (core has zero runtime dependencies;
-# numpy/scipy are only needed for the optional [monitoring] extra)
-RUN pip3 install --no-cache-dir /tmp/*.whl && \
+# numpy/scipy are only needed for the optional [monitoring] extra).
+# `--break-system-packages` for the same PEP 668 reason as the builder stage:
+# this is the runtime image's system interpreter, and it is the only Python in
+# the image, so a venv would buy nothing but indirection.
+RUN pip3 install --no-cache-dir --break-system-packages /tmp/*.whl && \
     rm -rf /tmp/*.whl
 
 # Re-sign the module-integrity artefact for the native library this image loads.

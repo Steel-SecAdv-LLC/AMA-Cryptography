@@ -51,6 +51,8 @@ from typing import Generator
 
 import pytest
 
+from tests.conftest import native_library_present
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PKG_DIR = REPO_ROOT / "ama_cryptography"
 
@@ -122,7 +124,7 @@ def tree_with_native(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """A copy of the package with whatever native library the tree has."""
     root = tmp_path_factory.mktemp("with_native")
     shutil.copytree(PKG_DIR, root / "ama_cryptography")
-    if not any((root / "ama_cryptography").glob("libama_cryptography*")):
+    if not native_library_present(root / "ama_cryptography"):
         pytest.skip("native library not built in this tree")
     return root
 

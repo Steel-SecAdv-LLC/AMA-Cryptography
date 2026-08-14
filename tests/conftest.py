@@ -49,6 +49,28 @@ _BACKEND_SKIP_REASONS = (
 )
 
 
+#: Filename patterns the built native library can have, across platforms.
+#:
+#: Mirrors ``pqc_backends._get_lib_names``: ``libama_cryptography.so`` on Linux,
+#: ``.dylib`` on macOS, and on Windows either ``ama_cryptography.dll`` or
+#: ``libama_cryptography.dll``.  The first pattern covers everything except the
+#: unprefixed Windows spelling, which is the one CMake actually produces there.
+#:
+#: Three fixtures used to test for the library with ``glob("libama_cryptography*")``
+#: alone.  On Windows that matched nothing even when the DLL was present and
+#: loaded, so `tests/test_native_integrity.py`, `tests/test_execution_integrity.py`
+#: and the POST fixtures in `tests/test_post_failclosed.py` skipped their whole
+#: integrity surface — 15 tests — on every Windows job, silently, while the
+#: platform's own `import ama_cryptography` worked fine. The skip read as
+#: "no native build here", which on Windows was never true.
+_NATIVE_LIB_PATTERNS = ("libama_cryptography*", "ama_cryptography.dll")
+
+
+def native_library_present(directory: Path) -> bool:
+    """Whether ``directory`` holds a built native library for this platform."""
+    return any(any(directory.glob(pattern)) for pattern in _NATIVE_LIB_PATTERNS)
+
+
 def _mentions_backend(reason: str) -> bool:
     """Whether a skip reason names a cryptographic backend."""
     return any(kw in reason.lower() for kw in _BACKEND_SKIP_REASONS)

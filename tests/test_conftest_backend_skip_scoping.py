@@ -332,3 +332,71 @@ def test_imperative_backend_skip_without_ci_env_stays_a_skip(
         """)
     result = isolated_conftest.runpytest_subprocess(*_inner_pytest_args())
     result.assert_outcomes(skipped=1, failed=0, errors=0, passed=0)
+
+
+class TestNativeLibraryDetection:
+    """The native-library probe must recognise the artefact on every platform.
+
+    Three fixtures tested for a built library with
+    ``glob("libama_cryptography*")``. On Windows CMake produces
+    ``ama_cryptography.dll`` — ``pqc_backends._get_lib_names()`` lists it first
+    for that platform — which the pattern never matches. So on every Windows
+    job those fixtures reported "native library not built in this tree" and
+    skipped the entire integrity surface (15 tests across
+    ``test_native_integrity.py``, ``test_execution_integrity.py`` and
+    ``test_post_failclosed.py``), while the same job's ``import
+    ama_cryptography`` loaded that very DLL successfully.
+
+    The skip was invisible for the usual reason: it read as a statement about
+    the build, and nobody checks a skip that sounds true.
+    """
+
+    @pytest.mark.parametrize(
+        "filename",
+        [
+            "libama_cryptography.so",  # Linux
+            "libama_cryptography.so.4",  # Linux, versioned soname
+            "libama_cryptography.dylib",  # macOS
+            "ama_cryptography.dll",  # Windows, as CMake names it
+            "libama_cryptography.dll",  # Windows, MinGW-style prefix
+        ],
+    )
+    def test_every_platform_spelling_is_recognised(self, tmp_path: Path, filename: str) -> None:
+        from tests.conftest import native_library_present
+
+        (tmp_path / filename).write_bytes(b"\x7fELF")
+        assert native_library_present(tmp_path), f"{filename} not recognised"
+
+    def test_every_name_pqc_backends_looks_for_is_covered(self, tmp_path: Path) -> None:
+        """Derived from the production list, so a new platform cannot drift.
+
+        ``_get_lib_names`` is platform-conditional, so the names for the other
+        two platforms are read out of its source rather than by calling it.
+        """
+        import re
+
+        from tests.conftest import native_library_present
+
+        repo_root = Path(__file__).resolve().parent.parent
+        source = (repo_root / "ama_cryptography" / "pqc_backends.py").read_text(encoding="utf-8")
+        body = source[source.index("def _get_lib_names()") :]
+        body = body[: body.index("\ndef ")]
+        names = set(re.findall(r'"(\w*ama_cryptography[.\w]*)"', body))
+        assert len(names) >= 4, f"only found {names} — the extractor missed the candidate list"
+
+        for name in sorted(names):
+            probe = tmp_path / name.replace(".", "_")
+            probe.mkdir()
+            (probe / name).write_bytes(b"\x7fELF")
+            assert native_library_present(probe), f"{name} is a real candidate but not recognised"
+
+    def test_an_empty_tree_is_still_reported_as_missing(self, tmp_path: Path) -> None:
+        """The probe must not become a tautology."""
+        from tests.conftest import native_library_present
+
+        assert not native_library_present(tmp_path)
+        (tmp_path / "sha3_binding.cp311-win_amd64.pyd").write_bytes(b"MZ")
+        assert not native_library_present(tmp_path), (
+            "a Cython binding is not the native library; matching it would make "
+            "the integrity fixtures run against a tree with no C library"
+        )
