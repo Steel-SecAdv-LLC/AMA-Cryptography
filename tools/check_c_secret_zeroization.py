@@ -99,8 +99,6 @@ _MEMSET_RE = re.compile(
     r"\s*,\s*(?P<val>0[xX]0+|0|'\\0')\s*,"
 )
 
-_IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
-
 
 def _destination_name(expression: str) -> str:
     """The identifier a naming convention attaches to, for a memset target.

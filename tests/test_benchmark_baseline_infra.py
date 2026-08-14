@@ -11,12 +11,13 @@ from typing import Any
 
 import pytest
 
-from benchmarks.benchmark_runner import (
-    benchmark_operation_best_of,
-    normalize_runner_cpu_class,
-    run_full_package_create_benchmark,
-    validate_baseline_contract,
-)
+# One import style throughout: the module object.  This file also patches
+# attributes on the module (monkeypatch through the "benchmarks.benchmark_runner"
+# string target), and mixing `from ... import name` with `import ... as br`
+# left half the references bound to stale objects the patches never touched —
+# and tripped CodeQL's imported-both-ways check once benchmarks/ became a real
+# package.
+import benchmarks.benchmark_runner as br
 
 
 def _baseline(runner_cpu_class: str = "aarch64", baseline_value: int = 1) -> dict[str, Any]:
@@ -34,13 +35,13 @@ def _baseline(runner_cpu_class: str = "aarch64", baseline_value: int = 1) -> dic
 
 def test_normalize_runner_cpu_class_aliases() -> None:
     """Common architecture spellings collapse to the matrix baseline key."""
-    assert normalize_runner_cpu_class("arm64") == "aarch64"
-    assert normalize_runner_cpu_class("AMD64") == "x86_64"
+    assert br.normalize_runner_cpu_class("arm64") == "aarch64"
+    assert br.normalize_runner_cpu_class("AMD64") == "x86_64"
 
 
 def test_validate_baseline_contract_accepts_matching_arm_alias() -> None:
     """A GitHub arm64 runner may consume an aarch64 baseline."""
-    validate_baseline_contract(
+    br.validate_baseline_contract(
         _baseline("aarch64"),
         Path("benchmarks/arm-baseline.json"),
         expected_runner_cpu_class="arm64",
@@ -50,7 +51,7 @@ def test_validate_baseline_contract_accepts_matching_arm_alias() -> None:
 def test_validate_baseline_contract_rejects_runner_mismatch() -> None:
     """x86 baselines must not be used on the AArch64 matrix entry."""
     with pytest.raises(ValueError, match="runner_cpu_class"):
-        validate_baseline_contract(
+        br.validate_baseline_contract(
             _baseline("x86_64"),
             Path("benchmarks/baseline.json"),
             expected_runner_cpu_class="aarch64",
@@ -60,7 +61,7 @@ def test_validate_baseline_contract_rejects_runner_mismatch() -> None:
 def test_validate_baseline_contract_rejects_zero_when_required() -> None:
     """Strict baseline publication mode refuses first-run zero placeholders."""
     with pytest.raises(ValueError, match="unpopulated zero baselines"):
-        validate_baseline_contract(
+        br.validate_baseline_contract(
             _baseline("aarch64", baseline_value=0),
             Path("benchmarks/arm-baseline.json"),
             expected_runner_cpu_class="aarch64",
@@ -82,11 +83,9 @@ def test_benchmark_operation_best_of_uses_fastest_round(
         assert warmup == 2
         return next(measurements)
 
-    import benchmarks.benchmark_runner as br
-
     monkeypatch.setattr(br, "benchmark_operation", fake_benchmark_operation)
 
-    assert benchmark_operation_best_of(lambda: None, iterations=20, warmup=2, rounds=3) == 42.0
+    assert br.benchmark_operation_best_of(lambda: None, iterations=20, warmup=2, rounds=3) == 42.0
 
 
 def test_full_package_create_uses_best_of_rounds(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -102,7 +101,7 @@ def test_full_package_create_uses_best_of_rounds(monkeypatch: pytest.MonkeyPatch
 
     monkeypatch.setattr("benchmarks.benchmark_runner.benchmark_operation_best_of", fake_best_of)
 
-    assert run_full_package_create_benchmark() == 123.0
+    assert br.run_full_package_create_benchmark() == 123.0
     assert calls == [(20, 2, 5)]
 
 
@@ -136,8 +135,6 @@ class TestSampleWindow:
 
     def test_batch_grows_until_the_window_is_reached(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A too-small starting batch is grown, not accepted."""
-        import benchmarks.benchmark_runner as br
-
         clock = self._virtual_clock(monkeypatch)
         sizes: list[int] = []
         real_batch = br._timed_batch
@@ -160,8 +157,6 @@ class TestSampleWindow:
 
     def test_batch_growth_is_capped(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """An operation too cheap to fill the window cannot run unbounded."""
-        import benchmarks.benchmark_runner as br
-
         clock = self._virtual_clock(monkeypatch)
         sizes: list[int] = []
         real_batch = br._timed_batch
@@ -189,8 +184,6 @@ class TestSampleWindow:
         remaining round. Keying the target off the fastest rate seen recovers,
         because interference can only make an operation look slower.
         """
-        import benchmarks.benchmark_runner as br
-
         clock = self._virtual_clock(monkeypatch)
         sizes: list[int] = []
         real_batch = br._timed_batch
@@ -223,8 +216,6 @@ class TestSampleWindow:
         Fails if the mean is reported: the mean of these rounds is well below
         the fastest.
         """
-        import benchmarks.benchmark_runner as br
-
         self._virtual_clock(monkeypatch)
         rates = iter([500.0, 2000.0, 800.0])
         # Every batch is already full-window, so sizing never intervenes.
@@ -242,8 +233,6 @@ class TestSampleWindow:
         interference is one-sided, the fastest rate seen is the better
         estimate of what the batch must be to fill the window.
         """
-        import benchmarks.benchmark_runner as br
-
         self._virtual_clock(monkeypatch)
         # Fast, then a stall while the batch is still tiny, then fast again.
         rates = iter([1_000.0, 10.0] + [1_000.0] * 40)
@@ -271,8 +260,6 @@ class TestSampleWindow:
         The first batch is undersized and reports an implausibly high rate.
         It may inform sizing; it must not be the number that ships.
         """
-        import benchmarks.benchmark_runner as br
-
         self._virtual_clock(monkeypatch)
         rates = iter([9_999.0, 1_000.0, 1_000.0])
         monkeypatch.setattr(br, "_required_batch", lambda rate: 50)

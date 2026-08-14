@@ -2793,11 +2793,16 @@ class AmaContext:
             except TypeError:
                 continue  # not a sized ctypes object — nothing to compare
             if declared > actual:
+                # Log the caller's DECLARED length only.  The buffer's real
+                # size (`actual`) is an expression derived from the secret-key
+                # buffer object, and CodeQL's clear-text-logging taint follows
+                # that derivation; the size itself is not key material, but a
+                # log line whose provenance a scanner must special-case is not
+                # worth one integer of extra context.
                 logging.getLogger(__name__).error(
-                    "keypair_generate: %s_len=%d exceeds the %d-byte buffer supplied",
+                    "keypair_generate: %s_len=%d exceeds the supplied buffer's size",
                     name,
                     declared,
-                    actual,
                 )
                 return -1  # AMA_ERROR_INVALID_PARAM
         rc = int(

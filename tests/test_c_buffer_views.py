@@ -84,16 +84,23 @@ class TestReleaseContract:
         two_dimensional = memoryview(bytearray(range(16))).cast("B", (4, 4))
         with pytest.raises(TypeError, match="one-dimensional"):
             with _CBufferViews(backing, two_dimensional):
-                raise AssertionError("body must not run")
+                # __enter__ raises, so this body never runs — pytest.raises
+                # enforces that: if it ran, no TypeError would propagate and
+                # the raises block itself would fail.
+                pass
         # The first view must have been released by the failure path.
         backing.extend(b"grow")
         assert len(backing) == 36
 
     def test_views_released_when_body_raises(self) -> None:
         backing = bytearray(b"k" * 32)
+
+        def _explode() -> None:
+            raise RuntimeError("boom")
+
         with pytest.raises(RuntimeError, match="boom"):
             with _CBufferViews(backing):
-                raise RuntimeError("boom")
+                _explode()
         backing.extend(b"grow")
         assert len(backing) == 36
 
