@@ -19,7 +19,7 @@ based on real-time anomaly signals from the 3R monitoring system.
 
 Organization: Steel Security Advisors LLC
 Author/Inventor: Andrew E. A.
-Version: 4.0.0
+Version: 5.0.0
 """
 
 import logging

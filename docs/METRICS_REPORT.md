@@ -1,6 +1,6 @@
 # AMA Cryptography — Verified Metrics Report
 
-**Version:** 4.0.0
+**Version:** 5.0.0
 **Measurement Date:** test-function counts **and** lines-of-code figures
 re-measured **2026-08-01**. Adversarial-test figures still carry their
 **2026-07-30** (3.5.0) measurement — see the caveat below. Benchmark figures

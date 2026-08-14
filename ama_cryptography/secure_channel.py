@@ -66,7 +66,7 @@ Forward-secrecy properties (read before deploying):
 
 Organization: Steel Security Advisors LLC
 Author/Inventor: Andrew E. A.
-Version: 4.0.0
+Version: 5.0.0
 """
 
 import hashlib

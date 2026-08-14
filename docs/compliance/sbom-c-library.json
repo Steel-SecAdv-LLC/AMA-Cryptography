@@ -1,13 +1,13 @@
 {
   "bomFormat": "CycloneDX",
   "specVersion": "1.5",
-  "serialNumber": "urn:uuid:7820d6bb-db4f-5765-9137-0398058e0d7c",
+  "serialNumber": "urn:uuid:86169c24-deb0-5751-b6fb-cb8b4db50164",
   "version": 1,
   "metadata": {
     "component": {
       "type": "library",
       "name": "ama-cryptography",
-      "version": "4.0.0",
+      "version": "5.0.0",
       "description": "Quantum-resistant cryptographic protection system",
       "licenses": [
         {
@@ -25,130 +25,130 @@
     {
       "type": "library",
       "name": "ama_aes_gcm",
-      "version": "4.0.0",
+      "version": "5.0.0",
       "description": "AES-256-GCM AEAD (NIST SP 800-38D)",
       "scope": "required",
-      "purl": "pkg:generic/ama_aes_gcm@4.0.0"
+      "purl": "pkg:generic/ama_aes_gcm@5.0.0"
     },
     {
       "type": "library",
       "name": "ama_agent_binding",
-      "version": "4.0.0",
+      "version": "5.0.0",
       "description": "Agent-instance key/signature binding (INVARIANT-30)",
       "scope": "required",
-      "purl": "pkg:generic/ama_agent_binding@4.0.0"
+      "purl": "pkg:generic/ama_agent_binding@5.0.0"
     },
     {
       "type": "library",
       "name": "ama_argon2",
-      "version": "4.0.0",
+      "version": "5.0.0",
       "description": "Argon2id password hashing (RFC 9106)",
       "scope": "required",
-      "purl": "pkg:generic/ama_argon2@4.0.0"
+      "purl": "pkg:generic/ama_argon2@5.0.0"
     },
     {
       "type": "library",
       "name": "ama_ascon",
-      "version": "4.0.0",
+      "version": "5.0.0",
       "description": "Ascon-AEAD128 AEAD and Ascon-Hash256 (NIST SP 800-232)",
       "scope": "required",
-      "purl": "pkg:generic/ama_ascon@4.0.0"
+      "purl": "pkg:generic/ama_ascon@5.0.0"
     },
     {
       "type": "library",
       "name": "ama_chacha20poly1305",
-      "version": "4.0.0",
+      "version": "5.0.0",
       "description": "ChaCha20-Poly1305 AEAD (RFC 8439)",
       "scope": "required",
-      "purl": "pkg:generic/ama_chacha20poly1305@4.0.0"
+      "purl": "pkg:generic/ama_chacha20poly1305@5.0.0"
     },
     {
       "type": "library",
       "name": "ama_dilithium",
-      "version": "4.0.0",
+      "version": "5.0.0",
       "description": "ML-DSA-44/-65/-87 post-quantum signatures (NIST FIPS 204)",
       "scope": "required",
-      "purl": "pkg:generic/ama_dilithium@4.0.0"
+      "purl": "pkg:generic/ama_dilithium@5.0.0"
     },
     {
       "type": "library",
       "name": "ama_ed25519",
-      "version": "4.0.0",
+      "version": "5.0.0",
       "description": "Ed25519 digital signatures (RFC 8032)",
       "scope": "required",
-      "purl": "pkg:generic/ama_ed25519@4.0.0"
+      "purl": "pkg:generic/ama_ed25519@5.0.0"
     },
     {
       "type": "library",
       "name": "ama_frost",
-      "version": "4.0.0",
+      "version": "5.0.0",
       "description": "FROST threshold Ed25519 signatures (RFC 9591)",
       "scope": "required",
-      "purl": "pkg:generic/ama_frost@4.0.0"
+      "purl": "pkg:generic/ama_frost@5.0.0"
     },
     {
       "type": "library",
       "name": "ama_hkdf",
-      "version": "4.0.0",
+      "version": "5.0.0",
       "description": "HKDF-SHA3-256 key derivation (RFC 5869)",
       "scope": "required",
-      "purl": "pkg:generic/ama_hkdf@4.0.0"
+      "purl": "pkg:generic/ama_hkdf@5.0.0"
     },
     {
       "type": "library",
       "name": "ama_kyber",
-      "version": "4.0.0",
+      "version": "5.0.0",
       "description": "ML-KEM-512/-768/-1024 key encapsulation (NIST FIPS 203)",
       "scope": "required",
-      "purl": "pkg:generic/ama_kyber@4.0.0"
+      "purl": "pkg:generic/ama_kyber@5.0.0"
     },
     {
       "type": "library",
       "name": "ama_lms",
-      "version": "4.0.0",
+      "version": "5.0.0",
       "description": "HSS/LMS hash-based signature verification (RFC 8554)",
       "scope": "required",
-      "purl": "pkg:generic/ama_lms@4.0.0"
+      "purl": "pkg:generic/ama_lms@5.0.0"
     },
     {
       "type": "library",
       "name": "ama_nistp",
-      "version": "4.0.0",
+      "version": "5.0.0",
       "description": "ECDSA and ECDH over NIST P-256/P-384/P-521 (FIPS 186-5; RFC 6979 nonces)",
       "scope": "required",
-      "purl": "pkg:generic/ama_nistp@4.0.0"
+      "purl": "pkg:generic/ama_nistp@5.0.0"
     },
     {
       "type": "library",
       "name": "ama_secp256k1",
-      "version": "4.0.0",
+      "version": "5.0.0",
       "description": "secp256k1 elliptic curve operations",
       "scope": "required",
-      "purl": "pkg:generic/ama_secp256k1@4.0.0"
+      "purl": "pkg:generic/ama_secp256k1@5.0.0"
     },
     {
       "type": "library",
       "name": "ama_sha3",
-      "version": "4.0.0",
+      "version": "5.0.0",
       "description": "SHA3-256/512, SHAKE128/256 (NIST FIPS 202)",
       "scope": "required",
-      "purl": "pkg:generic/ama_sha3@4.0.0"
+      "purl": "pkg:generic/ama_sha3@5.0.0"
     },
     {
       "type": "library",
       "name": "ama_slhdsa",
-      "version": "4.0.0",
+      "version": "5.0.0",
       "description": "SLH-DSA-SHA2-256f + SHAKE-128s (NIST FIPS 205); legacy ama_sphincs_* API",
       "scope": "required",
-      "purl": "pkg:generic/ama_slhdsa@4.0.0"
+      "purl": "pkg:generic/ama_slhdsa@5.0.0"
     },
     {
       "type": "library",
       "name": "ama_x25519",
-      "version": "4.0.0",
+      "version": "5.0.0",
       "description": "X25519 ECDH key exchange (RFC 7748)",
       "scope": "required",
-      "purl": "pkg:generic/ama_x25519@4.0.0"
+      "purl": "pkg:generic/ama_x25519@5.0.0"
     }
   ],
   "dependencies": []

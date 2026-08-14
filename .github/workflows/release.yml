@@ -91,8 +91,8 @@ name: Release — Build, Sign, and Publish
 #      and the other five were annotated but unsigned.  Every one of those
 #      releases went out through a pipeline whose runbook said `git tag -s`.
 #
-#        $ git tag -s v4.0.0 -m "ama-cryptography 4.0.0"
-#        $ git push origin v4.0.0
+#        $ git tag -s v5.0.0 -m "ama-cryptography 5.0.0"
+#        $ git push origin v5.0.0
 #
 #      For GitHub to show the tag as Verified, the signing key must also be
 #      registered on the account under Settings -> SSH and GPG keys with type

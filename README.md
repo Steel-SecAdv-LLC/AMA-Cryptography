@@ -40,7 +40,7 @@
 **Author/Inventor:** Andrew E. A.
 **Contact:** steel.sa.llc@gmail.com
 **License:** Apache License 2.0
-**Version:** 4.0.0
+**Version:** 5.0.0
 **AI Co-Architects:** Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
 
 ---
@@ -263,7 +263,7 @@ NIST-standardized post-quantum algorithms:
 
 > All PQC operations run through the native C library. No external PQC dependency (liboqs, pqcrypto) is present or required. Build with `cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build`. Set `AMA_REQUIRE_CONSTANT_TIME=true` in the process environment to enforce constant-time operation at import.
 
-### C library inventory (v4.0.0)
+### C library inventory (v5.0.0)
 
 Top-level `src/c/*.c` — 27 translation units:
 
@@ -531,7 +531,7 @@ reproducible:
 ```bash
 # Replace the tag with the release you want; any published tag works.
 # Tags: https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/tags
-pip install "git+https://github.com/Steel-SecAdv-LLC/AMA-Cryptography.git@v4.0.0"
+pip install "git+https://github.com/Steel-SecAdv-LLC/AMA-Cryptography.git@v5.0.0"
 ```
 
 This clones at the tag and builds the native C library and Cython extensions
@@ -541,7 +541,7 @@ a C11 compiler, `cmake >= 4.3.4`, `Cython >= 3.2.8`, and `numpy >= 1.24.0`.
 To verify the tag is the one you expect before installing:
 
 ```bash
-git ls-remote --tags https://github.com/Steel-SecAdv-LLC/AMA-Cryptography.git v4.0.0
+git ls-remote --tags https://github.com/Steel-SecAdv-LLC/AMA-Cryptography.git v5.0.0
 ```
 
 Confirm the install landed and the native backends are live:
@@ -665,7 +665,7 @@ exact, verifiable pin rather than a floating range.
 `requirements.txt` and in a `pyproject.toml` `dependencies` list):
 
 ```
-ama-cryptography @ git+https://github.com/Steel-SecAdv-LLC/AMA-Cryptography.git@v4.0.0
+ama-cryptography @ git+https://github.com/Steel-SecAdv-LLC/AMA-Cryptography.git@v5.0.0
 ```
 
 **Pin by wheel + hash**, once a release carries built artifacts — the
@@ -673,7 +673,7 @@ strongest form, because pip refuses anything whose hash does not match:
 
 ```
 # requirements.txt  (install with: pip install --require-hashes -r requirements.txt)
-ama-cryptography @ https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/releases/download/v4.0.0/<WHEEL_FILENAME> \
+ama-cryptography @ https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/releases/download/v5.0.0/<WHEEL_FILENAME> \
     --hash=sha256:<DIGEST>
 ```
 
@@ -1496,7 +1496,7 @@ Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) file for 
 
 ### Third-Party Dependencies
 
-AMA Cryptography v4.0.0 has **zero core cryptographic dependencies** — all cryptographic primitives are implemented natively in C.
+AMA Cryptography v5.0.0 has **zero core cryptographic dependencies** — all cryptographic primitives are implemented natively in C.
 
 **Algorithm implementations (all native, public domain references):**
 - **ML-DSA-65** (Dilithium): Public domain (NIST FIPS 204)

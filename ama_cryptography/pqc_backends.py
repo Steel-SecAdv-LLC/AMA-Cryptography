@@ -2355,7 +2355,7 @@ _NATIVE_LIB_PRELOAD_DIGEST_HEX: Optional[str] = (
 #: ``include/ama_cryptography.h``.  tools/check_version_consistency.py
 #: cross-checks every Python mirror of a header constant, so this value
 #: cannot drift from the header silently.
-_CRYPTOGRAPHY_VERSION_MAJOR = 4
+_CRYPTOGRAPHY_VERSION_MAJOR = 5
 
 
 def _native_abi_version(lib: ctypes.CDLL) -> Optional[tuple]:
@@ -7606,7 +7606,7 @@ def native_chacha20poly1305_encrypt(
 
     ``key`` (and every other input) may be ``bytes``, ``bytearray`` or a
     ``memoryview`` — the same wipeable-key contract as the AES-256-GCM
-    wrappers.  Until 4.0.0 this wrapper accepted ``bytes`` only, so a caller
+    wrappers.  Until 5.0.0 this wrapper accepted ``bytes`` only, so a caller
     holding its session key in the zeroizable ``bytearray`` storage the
     project recommends had to materialise an immutable copy first — the
     exact transient-copy hazard ``_CBufferViews`` exists to remove.

@@ -92,7 +92,7 @@ FROM alpine:3.23@sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc
 
 LABEL maintainer="Steel Security Advisors LLC <steel.sa.llc@gmail.com>"
 LABEL description="AMA Cryptography - Quantum-Resistant Cryptographic Protection System (Alpine)"
-LABEL version="4.0.0"
+LABEL version="5.0.0"
 
 RUN apk add --no-cache \
     libssl3 \

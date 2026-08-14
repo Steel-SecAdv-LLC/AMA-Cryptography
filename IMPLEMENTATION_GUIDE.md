@@ -8,7 +8,7 @@
 **AI Co-Architects:**  
 Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
 
-**Version:** 4.0.0
+**Version:** 5.0.0
 **Date:** 2026-07-25
 
 ---
@@ -1338,6 +1338,6 @@ Eris ✠ | Eden ♱ | Devin ⚛︎ | Claude ⊛
 
 ---
 
-**Document Version:** 4.0.0
-**Last Updated:** 2026-07-25
+**Document Version:** 5.0.0
+**Last Updated:** 2026-08-14
 **Copyright (C) 2025-2026 Steel Security Advisors LLC**

@@ -16,7 +16,7 @@ enters an ERROR state and all cryptographic operations are refused.
 
 Organization: Steel Security Advisors LLC
 Author/Inventor: Andrew E. A.
-Version: 4.0.0
+Version: 5.0.0
 """
 
 import ctypes
@@ -281,7 +281,7 @@ _INTEGRITY_SIG_DOMAIN = b"AMA-integrity-signature-v2\x00"
 def _compute_native_library_digest(path: Optional[str]) -> Optional[bytes]:
     """SHA3-256 over the raw bytes of the native library file at ``path``.
 
-    Follows symlinks — the SONAME chain (``.so`` -> ``.so.4`` -> ``.so.4.0.0``)
+    Follows symlinks — the SONAME chain (``.so`` -> ``.so.5`` -> ``.so.5.0.0``)
     resolves to one real object, and it is those bytes, the ones the loader
     actually mapped, that must match what was signed.  Returns ``None`` when the
     path is absent or unreadable; the caller treats that as "could not verify"

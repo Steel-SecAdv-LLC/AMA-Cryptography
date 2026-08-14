@@ -140,7 +140,7 @@ class TestSingleBufferCompatibilityShim:
 class TestChaChaWipeableKeyContract:
     """ChaCha20-Poly1305 accepts bytearray/memoryview key material.
 
-    Until 4.0.0 the ChaCha wrappers were the one AEAD surface typed ``bytes``
+    Until 5.0.0 the ChaCha wrappers were the one AEAD surface typed ``bytes``
     only, so a caller holding its session key in the zeroizable ``bytearray``
     storage the project recommends had to materialise an immutable copy first
     — the exact transient-copy hazard the borrow machinery exists to remove,

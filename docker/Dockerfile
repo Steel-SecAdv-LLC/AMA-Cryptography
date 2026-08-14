@@ -93,7 +93,7 @@ FROM ubuntu:22.04@sha256:3b06811b2afd352be909dd088a004166d665dc76d38b13eada33522
 
 LABEL maintainer="Steel Security Advisors LLC <steel.sa.llc@gmail.com>"
 LABEL description="AMA Cryptography - Quantum-Resistant Cryptographic Protection System"
-LABEL version="4.0.0"
+LABEL version="5.0.0"
 
 # Install runtime dependencies only
 # INVARIANT-1: libssl3 is NOT installed — AMA's native C primitives do not
