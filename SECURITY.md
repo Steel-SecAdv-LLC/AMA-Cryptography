@@ -424,7 +424,9 @@ INVARIANT-39 binding) detects tampering but cannot prevent it from
 running: a shared object executes its constructors the moment it is
 mapped. Discovery therefore hashes every candidate **before** loading it
 and refuses to map an object whose SHA3-256 does not match the signed
-`INTEGRITY_NATIVE_DIGEST_HEX` in the integrity artefact. On Linux the
+`INTEGRITY_NATIVE_DIGEST_HEX` in the integrity artefact. A candidate
+whose bytes cannot be read is refused on the same grounds, on every
+platform: bytes that cannot be hashed cannot be verified. On Linux the
 mapping then goes through `/proc/self/fd` on the very descriptor that was
 hashed — the descriptor pins the inode, so the verified bytes and the
 mapped bytes cannot be split by swapping the path between the two steps —
