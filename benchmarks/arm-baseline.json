@@ -1,7 +1,7 @@
 {
   "metadata": {
     "baseline_source_release": "4.0.0",
-    "applies_through_release": "4.0.0",
+    "applies_through_release": "5.0.0",
     "created": "2026-05-15T18:49:48Z",
     "description": "AArch64 (ubuntu-24.04-arm) regression baseline. baseline_value IS the measured median on the canonical runner (no pre-discounting); tolerance_percent is the single derived allowance. The runner fleet is homogeneous (cross-run spreads <= 3% for deterministic primitives over the 2026-08-14 calibration runs), so tolerance is 15, or 25 for the rejection-averaged composites dilithium_sign and full_package_create. The gate fires at a 15-25% regression; the previous 65%-floor-times-35-70%-tolerance convention compounded to a 34-94% blind spot and absorbed a 2.1x AES-GCM wrapper regression without firing. Updates require line-item justification per benchmarks/check_baseline_justification.py.",
     "system": "GitHub Actions ubuntu-24.04-arm shared runner, Linux AArch64, Python 3.11",
@@ -188,6 +188,11 @@
         "date": "2026-08-14",
         "release": "4.0.0",
         "change": "FULL RECALIBRATION FROM THE REPAIRED HARNESS (PR #394). baseline_value becomes the measured median (slow-class median for x86) and tolerance_percent the single derived allowance \u2014 see description. Every primitive changed; per-primitive from/to values with measurements and runner identifiers are in the recalibration commit message and in calibration_evidence.per_primitive. baseline_source_release advances to 4.0.0, making the freshness window honest for the first time since 2026-05-15 (ARM) / 2026-07-29 (x86)."
+      },
+      {
+        "date": "2026-08-14",
+        "release": "5.0.0",
+        "change": "WINDOW EXTENDED TO 5.0.0, NO FLOOR CHANGES. The 5.0.0 major bump pushes the package past `applies_through_release` (4.0.0) and would trip test_benchmark_baseline_freshness. Every `baseline_value` in this file is carried forward unchanged; only `applies_through_release` moves. Rationale: these floors ARE the 2026-08-14 full recalibration recorded in the previous entry \u2014 measured in this same PR (#394) from the repaired harness on the canonical benchmark-regression runner class for this file (ubuntu-24.04-arm, AArch64) \u2014 and 5.0.0 is cut from the tree those medians describe. The only commits between the recalibration head and the 5.0.0 cut are: the CodeQL alert cleanup (an error-path log line in `keypair_generate`'s ctypes guard, import-style unification), the fail-closed unreadable-candidate rule in library discovery (load-time, not per-operation), the binding-extension digest signing (build- and import-time), CI probe and C-test-lane fixes, documentation and CHANGELOG restructuring, and the version bump itself. No src/c kernel, no dispatch path, and no Python hot-path wrapper changed after the floors were measured, so the floors describe exactly the code 5.0.0 ships \u2014 the same tree-delta argument as the 3.5.0 and 4.0.0 window extensions above, this time with floors measured inside the same PR rather than carried forward from an earlier release. AUTHORITY: no new measurement was taken for this entry; the benchmark-regression (aarch64) CI job gates this PR against these floors on the canonical runner class, which is the check that matters. If that job fails on this PR, the floors need a genuine canonical re-measure, not a further window extension."
       }
     ],
     "runner_cpu_class": "aarch64",

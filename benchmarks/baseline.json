@@ -1,7 +1,7 @@
 {
   "metadata": {
     "baseline_source_release": "4.0.0",
-    "applies_through_release": "4.0.0",
+    "applies_through_release": "5.0.0",
     "created": "2026-04-05T00:00:00Z",
     "description": "x86-64 (ubuntu-latest) regression baseline. baseline_value IS the measured SLOW-CLASS median; tolerance_percent a uniform 45. Derivation: ubuntu-latest is a heterogeneous fleet \u2014 measured as two CPU classes ~1.45x apart (SHA3-256 ~326-355k vs ~476k ops/sec across the 2026-08 calibration runs) plus one observed 33% contention burst \u2014 so a tolerance tighter than the fleet spread would false-fail on runner assignment alone. This lane is an honest coarse safety net; the homogeneous ubuntu-24.04-arm lane (arm-baseline.json, tolerance 15-25) is the precision gate. Updates require line-item justification per benchmarks/check_baseline_justification.py.",
     "system": "GitHub Actions shared runner, Linux x86-64, Python 3.11",
@@ -113,6 +113,11 @@
         "date": "2026-08-14",
         "release": "4.0.0",
         "change": "FULL RECALIBRATION FROM THE REPAIRED HARNESS (PR #394). baseline_value becomes the measured median (slow-class median for x86) and tolerance_percent the single derived allowance \u2014 see description. Every primitive changed; per-primitive from/to values with measurements and runner identifiers are in the recalibration commit message and in calibration_evidence.per_primitive. baseline_source_release advances to 4.0.0, making the freshness window honest for the first time since 2026-05-15 (ARM) / 2026-07-29 (x86)."
+      },
+      {
+        "date": "2026-08-14",
+        "release": "5.0.0",
+        "change": "WINDOW EXTENDED TO 5.0.0, NO FLOOR CHANGES. The 5.0.0 major bump pushes the package past `applies_through_release` (4.0.0) and would trip test_benchmark_baseline_freshness. Every `baseline_value` in this file is carried forward unchanged; only `applies_through_release` moves. Rationale: these floors ARE the 2026-08-14 full recalibration recorded in the previous entry \u2014 measured in this same PR (#394) from the repaired harness on the canonical benchmark-regression runner class for this file (ubuntu-latest, x86_64) \u2014 and 5.0.0 is cut from the tree those medians describe. The only commits between the recalibration head and the 5.0.0 cut are: the CodeQL alert cleanup (an error-path log line in `keypair_generate`'s ctypes guard, import-style unification), the fail-closed unreadable-candidate rule in library discovery (load-time, not per-operation), the binding-extension digest signing (build- and import-time), CI probe and C-test-lane fixes, documentation and CHANGELOG restructuring, and the version bump itself. No src/c kernel, no dispatch path, and no Python hot-path wrapper changed after the floors were measured, so the floors describe exactly the code 5.0.0 ships \u2014 the same tree-delta argument as the 3.5.0 and 4.0.0 window extensions above, this time with floors measured inside the same PR rather than carried forward from an earlier release. AUTHORITY: no new measurement was taken for this entry; the benchmark-regression CI job gates this PR against these floors on the canonical runner class, which is the check that matters. If that job fails on this PR, the floors need a genuine canonical re-measure, not a further window extension."
       }
     ],
     "calibration_evidence": {
