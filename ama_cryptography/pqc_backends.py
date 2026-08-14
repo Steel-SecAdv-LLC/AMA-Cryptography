@@ -456,7 +456,10 @@ def _try_load_library(lib_path: Path, verify_digest: bool = True) -> Optional[ct
     try:
         if platform.system() != "Windows":
             try:
-                fd = os.open(str(lib_path), os.O_RDONLY | getattr(os, "O_CLOEXEC", 0))
+                fd = os.open(
+                    str(lib_path),
+                    os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_BINARY", 0),
+                )
                 digest: Optional[bytes] = _digest_fd(fd)
             except OSError as exc:
                 if verify_digest and expected is not None:

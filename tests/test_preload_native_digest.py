@@ -66,7 +66,9 @@ class TestDigestFd:
         payload = os.urandom(3_000_000)  # spans multiple 1 MiB chunks
         target = tmp_path / "blob"
         target.write_bytes(payload)
-        fd = os.open(str(target), os.O_RDONLY)
+        # O_BINARY: on Windows a bare os.open defaults to text mode, which
+        # translates CRLF and truncates at 0x1A — corrupting binary reads.
+        fd = os.open(str(target), os.O_RDONLY | getattr(os, "O_BINARY", 0))
         try:
             assert pb._digest_fd(fd) == hashlib.sha3_256(payload).digest()
         finally:
