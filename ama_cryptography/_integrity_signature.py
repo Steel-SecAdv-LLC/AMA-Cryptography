@@ -15,7 +15,7 @@ SECURITY.md "Module Integrity Verification" for the threat model.
 
 # SHA3-256 digest of the package's .py files at build time (raw 32 bytes,
 # hex-encoded for embeddability).
-INTEGRITY_DIGEST_HEX = "3abba80f741d29e37c675c0b1a90b89559b985da64fbe202d171c228d0062fd8"
+INTEGRITY_DIGEST_HEX = "a7a52548db5e61ac6a5caeac34f1d5831ae566e638a4ecc7f70bb70381077c93"
 
 # SHA3-256 digest of the native library (libama_cryptography) at build time.
 # This is what binds the shared object that performs every cryptographic
@@ -31,22 +31,15 @@ INTEGRITY_NATIVE_DIGEST_HEX = "9af3c76454fb2f00a89831b1a87807875f7f915710d76805d
 # library resolves in-package via $ORIGIN/@loader_path; Windows repair is
 # disabled), so the build-time digest is the runtime file's digest on every
 # platform.  Verified by ama_cryptography._self_test._check_binding_extensions.
-INTEGRITY_BINDING_DIGESTS_HEX = {
-    "dilithium_binding.cpython-311-x86_64-linux-gnu.so": "60f13f61c42b8e0e967fc1517dfb5b48674c0fc811fdd9fb192ea895467af122",
-    "ed25519_binding.cpython-311-x86_64-linux-gnu.so": "ea2b82b30cd7ec87c7087ac6f79a43ea51cbe91b7b8078d201c8dbfb3f0d21a7",
-    "hkdf_binding.cpython-311-x86_64-linux-gnu.so": "7f96ae03152ec07c6721f81e87bdda288c32a745e38d7fb6edbfb16bbff6d356",
-    "hmac_binding.cpython-311-x86_64-linux-gnu.so": "33f0f0271989fa6fda61f8e63799822339886e5a99a362422074b57e6d89695c",
-    "math_engine.cpython-311-x86_64-linux-gnu.so": "19111c35c06803dce8cba8add58ed1ff0094ecfef60da623f71d55bc1cc6c98c",
-    "sha3_binding.cpython-311-x86_64-linux-gnu.so": "9cf6f1162a195be694e1af07bf08c134100df40e1f8f022d2e0da3f5697d6c85",
-}
+INTEGRITY_BINDING_DIGESTS_HEX: dict[str, str] = {}
 
 # Ephemeral build-time Ed25519 public key (raw 32 bytes, hex-encoded).
-INTEGRITY_PUBKEY_HEX = "a1898138eb0f0f37d56f44613af84f3422626153a839fe1b20ecf076c825f620"
+INTEGRITY_PUBKEY_HEX = "bac3ef35b31e3a4e9fd92f419c184665a30ddb9d48f8463dc654c8d8ffa67296"
 
 # Ed25519 signature over SHA3-256(domain_v3 || py_digest || native_digest ||
 # serialized_binding_digests) — the v3 composite that makes all three
 # inseparable.  See ama_cryptography._self_test._composite_integrity_message_v3.
-INTEGRITY_SIGNATURE_HEX = "038f36da26028688b19a2580e35ca8f0e0e4ec416d0715f5d3ac131ac45b9491f3cece5d7c1194480765eceb55f30498253e89a639e40243c15b912ba80fd802"
+INTEGRITY_SIGNATURE_HEX = "569aa75ee0937568f7ca16b9fbbdda46037318d0042d90de1fe43c350b4faeebca2f758c5ef7d7415d34752d3e5c106dd3a3e4750fc9810efe0d71bcf9cee804"
 
 # Build metadata — informational only, not part of the integrity contract.
 BUILD_PIPELINE_VERSION = "3"

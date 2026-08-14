@@ -55,7 +55,7 @@ is unchanged but the work, the timing, or the failure mode is not.
 | 22 | Behavioural | every asymmetric keygen — random and seed-derived, on every surface — runs a FIPS 140-3 pairwise consistency test before the keypair is released (INVARIANT-41); sub-millisecond for every family except the hash-based signatures: ~220 ms for SPHINCS+-SHA2-256f, **~1.0 s for SLH-DSA-SHAKE-128s** | none; budget for keygen latency on the hash-based parameter sets — the cost is paid once, at the rare long-lived-key operation |
 | 23 | Behavioural | `create_crypto_package` rejects a `signing_keypair` whose Ed25519 public-key component does not correspond to its seed; 3.x accepted the pair and produced packages whose signatures could never verify | none for internally-consistent pairs |
 | 24 | Behavioural | a shipped native library whose digest does not match the signed artefact is refused **before** it is mapped (previously it loaded — running its constructors — and failed POST afterwards); an `AMA_CRYPTO_LIB_PATH` override that is byte-identical to the signed library now reports **verified** instead of unconditionally UNVERIFIED | after rebuilding the C library locally, refresh the artefact: `AMA_BUILD_PIPELINE=1 python -m ama_cryptography.integrity --update --sign` |
-| 25 | **Breaking** | the compiled binding extensions (`ed25519_binding`, `hmac_binding`, `sha3_binding`, `dilithium_binding`, `hkdf_binding`, `math_engine`) are digest-bound into the integrity signature (v3 artefact); a binding that is modified, missing, or present-but-unsigned fails the import | after rebuilding the extensions locally, refresh the artefact: `AMA_BUILD_PIPELINE=1 python -m ama_cryptography.integrity --update --sign` (a `setup.py` build re-signs automatically) |
+| 25 | **Breaking** | the compiled binding extensions (`ed25519_binding`, `hmac_binding`, `sha3_binding`, `dilithium_binding`, `hkdf_binding`, `math_engine`) are digest-bound into the integrity signature (v3 artefact); a modified binding fails the import on every build, and missing/unsigned bindings fail it on anchored (release) builds (developer source trees log a warning) | after rebuilding the extensions locally, refresh the artefact: `AMA_BUILD_PIPELINE=1 python -m ama_cryptography.integrity --update --sign` (a `setup.py` build re-signs automatically) |
 
 Rows 6, 8, 9, 10 and 19 are the ones a security reviewer should read first:
 (6) and (19) are fail-closed changes that turn a silent weakness into a loud
@@ -179,9 +179,17 @@ disabled outright.
 So the artefact now binds them: a per-file SHA3-256 map, serialized into a
 v3 composite message under its own domain string
 (`AMA-integrity-signature-v3`). POST verifies every extension-suffixed file
-in the package directory against the authenticated map — modified, missing,
-and present-but-unsigned are each a hard failure with the re-sign
-remediation in the message. The schema selects the signed message, so
+in the package directory against the authenticated map with the same
+anchored/developer severity split the native-library check uses: modified
+bytes are fatal on every build; missing or unsigned extensions are fatal
+on anchored (release) builds and a logged warning on developer trees,
+where they are the ordinary state of a source checkout — Cython builds
+are per-interpreter and not reproducible, which is also why the
+repair-flow artefact this repository commits binds no extensions (the
+wheel pipeline's `--bind-extensions` artefact binds exactly what ships;
+a committed map of one machine's extensions would read as tampering
+against every other machine's rebuild). The schema selects the signed
+message, so
 stripping the map from a v3 artefact (or grafting one onto a v2 artefact)
 fails the signature rather than downgrading, the same construction that
 protected the v1 → v2 native-digest transition. The signer refuses to sign

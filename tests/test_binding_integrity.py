@@ -90,7 +90,16 @@ class TestSignerVerifierAgreement:
 
 
 class TestTreeArtefactSelfCheck:
-    """The committed artefact must describe this tree's actual binding files."""
+    """The artefact in this tree must be one of the two legitimate states.
+
+    A repair-flow artefact (``integrity --update --sign``, the state a source
+    tree and this repository's commits carry) binds NO extensions — binding
+    extensions are per-interpreter and not reproducible across environments,
+    so a committed artefact that bound one machine's extensions would report
+    tampering on every other machine's legitimate rebuild.  A wheel-pipeline
+    artefact (``--bind-extensions``) binds exactly the extensions shipped
+    beside it.  Anything in between is drift.
+    """
 
     def test_artefact_is_v3(self) -> None:
         from ama_cryptography import _integrity_signature as sig_mod
@@ -98,14 +107,19 @@ class TestTreeArtefactSelfCheck:
         assert getattr(sig_mod, "BUILD_PIPELINE_VERSION", None) == "3"
         assert isinstance(getattr(sig_mod, "INTEGRITY_BINDING_DIGESTS_HEX", None), dict)
 
-    def test_artefact_matches_on_disk_bindings(self) -> None:
+    def test_artefact_is_a_legitimate_state_for_this_tree(self) -> None:
         from ama_cryptography import _integrity_signature as sig_mod
 
         on_disk = {p.name: p for p in _self_test._iter_extension_files(PKG_DIR)}
         signed = sig_mod.INTEGRITY_BINDING_DIGESTS_HEX
+        if not signed:
+            return  # repair-flow artefact: binds none, by design
         assert set(signed) == set(on_disk), (
-            "artefact and package directory disagree on the binding inventory — "
-            "re-sign: AMA_BUILD_PIPELINE=1 python -m ama_cryptography.integrity --update --sign"
+            "artefact binds extensions but disagrees with the package "
+            "directory — a partially-drifted artefact is neither the "
+            "repair-flow state (binds none) nor the wheel state (binds "
+            "exactly what ships); re-sign: AMA_BUILD_PIPELINE=1 python -m "
+            "ama_cryptography.integrity --update --sign"
         )
         for name, path in on_disk.items():
             assert hashlib.sha3_256(path.read_bytes()).hexdigest() == signed[name], name
@@ -168,33 +182,71 @@ class TestCheckBindingExtensions:
 
     def test_matching_tree_verifies(self, scratch: tuple[Path, dict[str, bytes]]) -> None:
         tree, files = scratch
-        ok, note = _self_test._check_binding_extensions(files, pkg_dir=tree)
-        assert ok and "2 binding extension(s) verified" in note
+        for anchored in (False, True):
+            ok, note, exact = _self_test._check_binding_extensions(files, anchored, pkg_dir=tree)
+            assert ok and exact
+            assert "2 binding extension(s) verified" in note
 
-    def test_tampered_file_fails(self, scratch: tuple[Path, dict[str, bytes]]) -> None:
+    def test_empty_map_with_no_extensions_is_exact(self, tmp_path: Path) -> None:
+        """The repair-flow artefact on a tree without built extensions."""
+        (tmp_path / "libama_cryptography.so.4").write_bytes(b"native")
+        for anchored in (False, True):
+            ok, _note, exact = _self_test._check_binding_extensions({}, anchored, pkg_dir=tmp_path)
+            assert ok and exact
+
+    def test_tampered_file_fails_on_every_build(
+        self, scratch: tuple[Path, dict[str, bytes]]
+    ) -> None:
+        """MISMATCH is tampering — fatal on anchored AND developer builds."""
         tree, files = scratch
         (tree / "math_engine.pyd").write_bytes(b"different bytes")
-        ok, note = _self_test._check_binding_extensions(files, pkg_dir=tree)
-        assert not ok and "math_engine.pyd" in note and "MISMATCH" in note
+        for anchored in (False, True):
+            ok, note, _exact = _self_test._check_binding_extensions(files, anchored, pkg_dir=tree)
+            assert not ok and "math_engine.pyd" in note and "MISMATCH" in note
 
-    def test_missing_file_fails(self, scratch: tuple[Path, dict[str, bytes]]) -> None:
+    def test_missing_file_fails_anchored_warns_developer(
+        self, scratch: tuple[Path, dict[str, bytes]]
+    ) -> None:
         tree, files = scratch
         (tree / "math_engine.pyd").unlink()
-        ok, note = _self_test._check_binding_extensions(files, pkg_dir=tree)
+        ok, note, _e = _self_test._check_binding_extensions(files, True, pkg_dir=tree)
         assert not ok and "missing on disk" in note
+        ok, note, exact = _self_test._check_binding_extensions(files, False, pkg_dir=tree)
+        assert ok and not exact
+        assert "PARTIALLY covered" in note and "missing on disk" in note
 
-    def test_unlisted_file_fails(self, scratch: tuple[Path, dict[str, bytes]]) -> None:
+    def test_uncovered_file_fails_anchored_warns_developer(
+        self, scratch: tuple[Path, dict[str, bytes]]
+    ) -> None:
         tree, files = scratch
         (tree / "planted.cpython-311-x86_64-linux-gnu.so").write_bytes(b"rogue")
-        ok, note = _self_test._check_binding_extensions(files, pkg_dir=tree)
+        ok, note, _e = _self_test._check_binding_extensions(files, True, pkg_dir=tree)
         assert not ok and "planted" in note and "not covered" in note
+        ok, note, exact = _self_test._check_binding_extensions(files, False, pkg_dir=tree)
+        # Developer build: warned and named, not fatal — a source tree
+        # legitimately builds extensions after its artefact was signed, and
+        # source trees sit inside the checker-poisoning boundary where
+        # in-process attestation of locally built artifacts adds nothing.
+        assert ok and not exact
+        assert "PARTIALLY covered" in note and "planted" in note
+
+    def test_source_tree_state_uncovered_bindings_with_empty_map(
+        self, scratch: tuple[Path, dict[str, bytes]]
+    ) -> None:
+        """The natural dev state: repair-flow artefact ({}) + built bindings."""
+        tree, _files = scratch
+        ok, note, exact = _self_test._check_binding_extensions({}, False, pkg_dir=tree)
+        assert ok and not exact
+        assert "PARTIALLY covered" in note
+        ok, _note, _e = _self_test._check_binding_extensions({}, True, pkg_dir=tree)
+        assert not ok  # anchored builds never carry drift legitimately
 
     def test_failure_note_carries_the_resign_hint(
         self, scratch: tuple[Path, dict[str, bytes]]
     ) -> None:
         tree, files = scratch
         (tree / "math_engine.pyd").write_bytes(b"different bytes")
-        _ok, note = _self_test._check_binding_extensions(files, pkg_dir=tree)
+        _ok, note, _e = _self_test._check_binding_extensions(files, False, pkg_dir=tree)
         assert "integrity --update --sign" in note
 
 

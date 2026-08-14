@@ -586,6 +586,11 @@ class CMakeBuild(build_ext):
             "ama_cryptography._build_sign",
             "--package-dir",
             str(src_pkg_dir),
+            # Wheel pipeline: bind the just-synced binding extensions into the
+            # signed artefact.  The repair flow (`integrity --update --sign`)
+            # deliberately omits this — see _build_sign's --bind-extensions
+            # help for why a source-tree artefact must bind none.
+            "--bind-extensions",
         ]
         env = os.environ.copy()
         env["AMA_BUILD_PIPELINE"] = "1"

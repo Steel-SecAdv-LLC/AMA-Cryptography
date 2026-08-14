@@ -408,15 +408,35 @@ def _parse_embedded_binding_digests(
 
 
 def _check_binding_extensions(
-    binding_digests: Dict[str, bytes], pkg_dir: Optional[Path] = None
-) -> Tuple[bool, str]:
+    binding_digests: Dict[str, bytes],
+    anchored: bool,
+    pkg_dir: Optional[Path] = None,
+) -> Tuple[bool, str, bool]:
     """Verify every on-disk binding extension against the authenticated map.
 
     Called only after the artefact's signature verified, so the map is
-    trusted.  Three failure directions, each a hard POST failure: a listed
-    file that is missing (deletion), a listed file whose bytes differ
-    (tampering or a rebuild after signing), and an on-disk extension the map
-    does not cover (a planted module, or a binding built after signing).
+    trusted.  Returns ``(ok, note, exact)``: ``ok`` False is a hard POST
+    failure; ``exact`` True means every binding matched the map with no
+    drift in either direction.
+
+    The severity split mirrors the native-library check exactly ("an
+    unreadable object fails closed on an anchored build but only warns on a
+    developer one; a digest mismatch is tampering and always fails"):
+
+    * **digest MISMATCH** — a file the artefact signs whose bytes differ —
+      is tampering and a hard failure on every build.  This cannot false-
+      positive on developer trees: the repair-flow artefact a source tree
+      carries binds only what was present at its own signing, so a mismatch
+      always means a signed file changed afterwards.
+    * **listed-but-missing** and **present-but-uncovered** are inventory
+      drift.  On an ANCHORED build (release wheels — where the artefact is
+      generated in the same pipeline that assembles the wheel, so drift is
+      impossible unless someone modified the installed tree) they are hard
+      failures.  On a developer build they are expected states of a source
+      tree — bindings not yet built, or built after the last re-sign — and
+      are reported: a warning is logged, the note names the drift, and an
+      uncovered (executing, unverified) extension additionally drops the
+      integrity strength below full.
 
     Timing is stated honestly: binding extensions are ordinary imports and
     execute before this stage runs, so this is post-load detection that moves
@@ -426,38 +446,51 @@ def _check_binding_extensions(
     SECURITY.md rather than implied away.
 
     ``pkg_dir`` defaults to this package's directory; tests pass a scratch
-    tree to drive each failure direction without touching the live install.
+    tree to drive each direction without touching the live install.
     """
     if pkg_dir is None:
         pkg_dir = Path(__file__).resolve().parent
     on_disk = {path.name: path for path in _iter_extension_files(pkg_dir)}
-    problems = []
+    mismatches = []
+    missing = []
+    unreadable = []
     for name in sorted(binding_digests):
         path = on_disk.get(name)
         if path is None:
-            problems.append(f"{name}: listed in the signed artefact but missing on disk")
+            missing.append(f"{name}: listed in the signed artefact but missing on disk")
             continue
         try:
             actual = hashlib.sha3_256(path.read_bytes()).digest()
         except OSError as exc:
-            problems.append(f"{name}: unreadable ({exc})")
+            unreadable.append(f"{name}: unreadable ({exc})")
             continue
         if actual != binding_digests[name]:
-            problems.append(f"{name}: digest MISMATCH — bytes differ from the signed build")
-    for name in sorted(on_disk):
-        if name not in binding_digests:
-            problems.append(
-                f"{name}: present but not covered by the signed artefact "
-                "(rebuilt or added after signing)"
-            )
-    if problems:
-        return False, (
-            "binding-extension verification FAILED: "
-            + "; ".join(problems)
-            + ". If you rebuilt the extensions, refresh the artefact with: "
-            "AMA_BUILD_PIPELINE=1 python -m ama_cryptography.integrity --update --sign"
+            mismatches.append(f"{name}: digest MISMATCH — bytes differ from the signed build")
+    uncovered = [
+        f"{name}: present but not covered by the signed artefact"
+        for name in sorted(on_disk)
+        if name not in binding_digests
+    ]
+
+    resign_hint = (
+        ". If you rebuilt the extensions, refresh the artefact with: "
+        "AMA_BUILD_PIPELINE=1 python -m ama_cryptography.integrity --update --sign"
+    )
+    if mismatches or (anchored and (missing or uncovered or unreadable)):
+        problems = mismatches + unreadable + missing + uncovered
+        return (
+            False,
+            "binding-extension verification FAILED: " + "; ".join(problems) + resign_hint,
+            False,
         )
-    return True, f"{len(binding_digests)} binding extension(s) verified"
+    if missing or uncovered or unreadable:
+        drift = unreadable + missing + uncovered
+        note = (
+            "binding extensions PARTIALLY covered (developer build): " + "; ".join(drift)
+        ) + resign_hint
+        logging.getLogger(__name__).warning("%s", note)
+        return True, note, False
+    return True, f"{len(binding_digests)} binding extension(s) verified", True
 
 
 def _env_flag_enabled(name: str) -> bool:
@@ -1037,16 +1070,15 @@ def _verify_signed_integrity(digest_hex: str) -> Tuple[Optional[bool], str]:
 
     # Bind the authenticated binding-digest map to the files on disk.  Runs
     # only after the signature verified (the map is trusted) and the native
-    # check passed; any of its three failure directions — listed-but-missing,
-    # digest mismatch, present-but-unlisted — is tampering or a stale artefact
-    # and always a hard POST failure, with no override carve-out: unlike the
-    # native library, substituting binding extensions is not a supported
-    # operator flow.
+    # check passed.  Severity follows the anchored/developer split documented
+    # on _check_binding_extensions: a digest mismatch is always fatal; on
+    # anchored (release) builds any drift is fatal; on developer builds
+    # drift is a logged warning and a note, not an attestation downgrade.
     if binding_digests is not None:
-        bindings_ok, bindings_note = _check_binding_extensions(binding_digests)
-        if not bindings_ok:
-            return False, bindings_note
-        native_note += f"; {bindings_note}"
+        b_ok, b_note, _b_exact = _check_binding_extensions(binding_digests, anchored)
+        if not b_ok:
+            return False, b_note
+        native_note += f"; {b_note}"
     else:
         native_note += "; binding extensions NOT covered (pre-v3 artefact — re-sign to bind them)"
 

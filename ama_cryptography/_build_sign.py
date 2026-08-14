@@ -485,7 +485,7 @@ INTEGRITY_NATIVE_DIGEST_HEX = "{native_digest_hex}"
 # library resolves in-package via $ORIGIN/@loader_path; Windows repair is
 # disabled), so the build-time digest is the runtime file's digest on every
 # platform.  Verified by ama_cryptography._self_test._check_binding_extensions.
-INTEGRITY_BINDING_DIGESTS_HEX = {binding_digests_literal}
+INTEGRITY_BINDING_DIGESTS_HEX: dict[str, str] = {binding_digests_literal}
 
 # Ephemeral build-time Ed25519 public key (raw 32 bytes, hex-encoded).
 INTEGRITY_PUBKEY_HEX = "{pubkey_hex}"
@@ -573,6 +573,24 @@ def main() -> int:
             "the native library is not available at build time (rare)."
         ),
     )
+    parser.add_argument(
+        "--bind-extensions",
+        action="store_true",
+        help=(
+            "Bind the compiled binding extensions into the signed artefact "
+            "(wheel pipeline only — setup.py passes this after syncing the "
+            "staged extensions into the package dir).  The repair flow "
+            "(`integrity --update --sign`) deliberately does NOT: binding "
+            "extensions are per-interpreter and not reproducible across "
+            "environments, so an artefact that binds one tree's extensions "
+            "would report a digest MISMATCH — a tampering verdict — on every "
+            "other machine's legitimately rebuilt extensions.  A source-tree "
+            "artefact therefore binds none, and the verifier reports built "
+            "extensions on such trees as covered-by-no-artefact (a warning "
+            "and a below-full integrity strength on developer builds, a hard "
+            "failure on anchored ones)."
+        ),
+    )
     args = parser.parse_args()
 
     _require_build_pipeline()
@@ -632,14 +650,18 @@ def main() -> int:
             if preload_hex
             else _compute_native_library_digest(native_path)
         )
-        # Bind every compiled binding extension into the same signature (v3).
-        # These load and execute before POST can examine them, and the release
-        # pipeline ships them byte-identical to the build (verified on the
-        # published v4.0.0 wheels: auditwheel and delocate graft nothing —
-        # the library resolves in-package via $ORIGIN/@loader_path — and
-        # Windows repair is disabled), so a build-time digest is checkable at
-        # import time on every platform.
-        binding_digests = _compute_binding_digests(pkg_dir)
+        # Bind the compiled binding extensions into the same signature (v3) —
+        # in the wheel pipeline only (see --bind-extensions above for why the
+        # repair flow must not).  These load and execute before POST can
+        # examine them, and the release pipeline ships them byte-identical to
+        # the build (verified on the published v4.0.0 wheels: auditwheel and
+        # delocate graft nothing — the library resolves in-package via
+        # $ORIGIN/@loader_path — and Windows repair is disabled), so a
+        # build-time digest is checkable at import time on every platform.
+        # A repair-flow artefact carries an EMPTY map (still v3): the message
+        # format stays schema-selected, and a source tree's built extensions
+        # are reported as uncovered rather than mis-verified.
+        binding_digests = _compute_binding_digests(pkg_dir) if args.bind_extensions else {}
         signed_message = _composite_integrity_message_v3(digest, native_digest, binding_digests)
 
         seed_override = _load_hex_env_bytes(_INTEGRITY_SIGNING_SEED_ENV, 32)
