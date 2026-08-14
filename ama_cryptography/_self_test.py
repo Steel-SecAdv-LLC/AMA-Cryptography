@@ -311,6 +311,155 @@ def _composite_integrity_message(py_digest_raw: bytes, native_digest_raw: bytes)
     return hashlib.sha3_256(_INTEGRITY_SIG_DOMAIN + py_digest_raw + native_digest_raw).digest()
 
 
+# v3 domain: the signed message additionally binds every compiled binding
+# extension (the Cython modules that contain compiled kernels and execute at
+# import, before this stage can examine them).  Distinct domain string so a
+# v3 signature can never verify against a v2-shaped message or vice versa.
+# Duplicated verbatim in _build_sign._INTEGRITY_SIG_DOMAIN_V3 and pinned equal
+# by tests/test_binding_integrity.py (the two modules must not import each
+# other — build-time vs runtime separation, INVARIANT-1).
+_INTEGRITY_SIG_DOMAIN_V3 = b"AMA-integrity-signature-v3\x00"
+
+# Extension-module enumeration criteria, mirrored from _build_sign (pinned
+# equal by tests/test_binding_integrity.py).  The verifier deliberately does
+# NOT filter by the signer's stem inventory: every extension-suffixed file
+# that is not the native library must appear in the signed map, so a rogue
+# module with an unknown stem fails verification instead of being skipped.
+_EXTENSION_SUFFIXES = (".so", ".pyd", ".dylib")
+_NATIVE_LIB_PREFIXES = ("libama_cryptography", "ama_cryptography.dll")
+
+
+def _iter_extension_files(pkg_dir: Path) -> List[Path]:
+    """Every compiled extension file in ``pkg_dir`` except the native library.
+
+    The native library is bound separately (``INTEGRITY_NATIVE_DIGEST_HEX``,
+    with pre-load verification in discovery); everything else with an
+    extension-module suffix is a binding the v3 artefact must cover.
+    """
+    out: List[Path] = []
+    for path in sorted(pkg_dir.iterdir()):
+        if not path.is_file() or path.suffix not in _EXTENSION_SUFFIXES:
+            continue
+        if path.name.startswith(_NATIVE_LIB_PREFIXES):
+            continue
+        out.append(path)
+    return out
+
+
+def _serialize_binding_digests(binding_digests: Dict[str, bytes]) -> bytes:
+    """Canonical serialization of the binding-digest map (see _build_sign).
+
+    ``name || 0x00 || digest`` per entry, sorted by name.  Mirrored
+    byte-for-byte in ``_build_sign._serialize_binding_digests``.
+    """
+    out = bytearray()
+    for name in sorted(binding_digests):
+        out += name.encode("utf-8") + b"\x00" + binding_digests[name]
+    return bytes(out)
+
+
+def _composite_integrity_message_v3(
+    py_digest_raw: bytes, native_digest_raw: bytes, binding_digests: Dict[str, bytes]
+) -> bytes:
+    """The exact bytes the v3 Ed25519 integrity signature covers.
+
+    Mirrored byte-for-byte in ``_build_sign._composite_integrity_message_v3``.
+    """
+    return hashlib.sha3_256(
+        _INTEGRITY_SIG_DOMAIN_V3
+        + py_digest_raw
+        + native_digest_raw
+        + _serialize_binding_digests(binding_digests)
+    ).digest()
+
+
+def _parse_embedded_binding_digests(
+    sig_mod: Any,
+) -> Tuple[Optional[Dict[str, bytes]], Optional[str]]:
+    """Return ``(binding_digests, error)`` from the artefact.
+
+    ``(None, None)`` for a pre-v3 artefact (field absent) — like the v1/v2
+    native-digest transition, absence is not a downgrade path: the field's
+    presence selects which message the signature must cover, so stripping it
+    from a v3 artefact (or grafting one onto a v2 artefact) changes the
+    message and fails the signature.  ``error`` is non-None for a field that
+    is present but malformed — always tampering, never a fallback.
+    """
+    field = getattr(sig_mod, "INTEGRITY_BINDING_DIGESTS_HEX", None)
+    if field is None:
+        return None, None
+    if not isinstance(field, dict):
+        return None, "signature module INTEGRITY_BINDING_DIGESTS_HEX is not a dict"
+    parsed: Dict[str, bytes] = {}
+    for name, digest_hex in field.items():
+        if not isinstance(name, str) or not isinstance(digest_hex, str):
+            return None, "signature module binding-digest entries must be str -> str"
+        try:
+            digest_raw = bytes.fromhex(digest_hex)
+        except ValueError as exc:
+            return None, f"signature module binding digest for {name!r} not hex: {exc}"
+        if len(digest_raw) != 32:
+            return None, (
+                f"signature module binding digest for {name!r} is "
+                f"{len(digest_raw)} bytes (expected 32)"
+            )
+        parsed[name] = digest_raw
+    return parsed, None
+
+
+def _check_binding_extensions(
+    binding_digests: Dict[str, bytes], pkg_dir: Optional[Path] = None
+) -> Tuple[bool, str]:
+    """Verify every on-disk binding extension against the authenticated map.
+
+    Called only after the artefact's signature verified, so the map is
+    trusted.  Three failure directions, each a hard POST failure: a listed
+    file that is missing (deletion), a listed file whose bytes differ
+    (tampering or a rebuild after signing), and an on-disk extension the map
+    does not cover (a planted module, or a binding built after signing).
+
+    Timing is stated honestly: binding extensions are ordinary imports and
+    execute before this stage runs, so this is post-load detection that moves
+    the module to the ERROR state — the same posture the native library had
+    before pre-load verification, and weaker than pre-load refusal.  Closing
+    that would need an import hook ahead of every binding import; recorded in
+    SECURITY.md rather than implied away.
+
+    ``pkg_dir`` defaults to this package's directory; tests pass a scratch
+    tree to drive each failure direction without touching the live install.
+    """
+    if pkg_dir is None:
+        pkg_dir = Path(__file__).resolve().parent
+    on_disk = {path.name: path for path in _iter_extension_files(pkg_dir)}
+    problems = []
+    for name in sorted(binding_digests):
+        path = on_disk.get(name)
+        if path is None:
+            problems.append(f"{name}: listed in the signed artefact but missing on disk")
+            continue
+        try:
+            actual = hashlib.sha3_256(path.read_bytes()).digest()
+        except OSError as exc:
+            problems.append(f"{name}: unreadable ({exc})")
+            continue
+        if actual != binding_digests[name]:
+            problems.append(f"{name}: digest MISMATCH — bytes differ from the signed build")
+    for name in sorted(on_disk):
+        if name not in binding_digests:
+            problems.append(
+                f"{name}: present but not covered by the signed artefact "
+                "(rebuilt or added after signing)"
+            )
+    if problems:
+        return False, (
+            "binding-extension verification FAILED: "
+            + "; ".join(problems)
+            + ". If you rebuilt the extensions, refresh the artefact with: "
+            "AMA_BUILD_PIPELINE=1 python -m ama_cryptography.integrity --update --sign"
+        )
+    return True, f"{len(binding_digests)} binding extension(s) verified"
+
+
 def _env_flag_enabled(name: str) -> bool:
     """Return True when a boolean environment variable is explicitly enabled."""
     return os.environ.get(name, "").strip().lower() in _TRUE_ENV_VALUES
@@ -684,6 +833,84 @@ def _parse_embedded_native_digest(
     return native_digest_raw, _composite_integrity_message(digest_raw, native_digest_raw), None
 
 
+def _resolve_signed_message(
+    sig_mod: Any, digest_raw: bytes
+) -> Tuple[Optional[bytes], Optional[Dict[str, bytes]], bytes, Optional[str]]:
+    """Reconstruct the message the artefact's signature must cover.
+
+    Returns ``(native_digest_raw, binding_digests, signed_message, error)``.
+    The artefact's fields select the format — v1 (raw .py digest), v2
+    (native digest bound), v3 (binding-extension digests additionally
+    bound) — and each field's presence changes the message, so moving
+    fields between schemas is a signature failure, not a downgrade: the
+    v1 -> v2 argument in ``_parse_embedded_native_digest`` applies to the
+    v2 -> v3 transition identically.  ``error`` is non-None for a field
+    that is present but malformed, or the binding dict appearing without a
+    native digest (no signer emits that shape) — always tampering.
+    """
+    native_digest_raw, signed_message, error = _parse_embedded_native_digest(sig_mod, digest_raw)
+    if error is not None:
+        return None, None, signed_message, error
+    binding_digests, error = _parse_embedded_binding_digests(sig_mod)
+    if error is not None:
+        return native_digest_raw, None, signed_message, error
+    if binding_digests is not None:
+        if native_digest_raw is None:
+            return (
+                None,
+                None,
+                signed_message,
+                "signature module malformed: binding digests present without "
+                "a native digest (no signer emits this shape)",
+            )
+        signed_message = _composite_integrity_message_v3(
+            digest_raw, native_digest_raw, binding_digests
+        )
+    return native_digest_raw, binding_digests, signed_message, None
+
+
+def _load_artefact_fields(
+    sig_mod: Any, digest_hex: str
+) -> Tuple[Optional[Tuple[bytes, bytes, bytes, str]], Optional[str]]:
+    """Extract and validate the artefact's mandatory fields.
+
+    Returns ``((pubkey, signature, digest_raw, pubkey_hex), None)`` on
+    success, ``(None, reason)`` for a missing field, a stored digest that
+    does not match the computed one, non-hex fields, or wrong sizes — each
+    tampering, each a hard POST failure at the caller.  Pure field
+    validation, no cryptography; extracted verbatim from
+    ``_verify_signed_integrity`` so that function stays within the
+    complexity gate as schema versions accrete.
+    """
+    try:
+        embedded_digest_hex = sig_mod.INTEGRITY_DIGEST_HEX
+        pubkey_hex = sig_mod.INTEGRITY_PUBKEY_HEX
+        signature_hex = sig_mod.INTEGRITY_SIGNATURE_HEX
+    except AttributeError as exc:
+        return None, f"signature module malformed: missing field ({exc})"
+
+    if embedded_digest_hex != digest_hex:
+        return None, (
+            f"signed digest mismatch: stored={embedded_digest_hex[:16]}... "
+            f"computed={digest_hex[:16]}... — a .py file or a POST KAT vector "
+            "under _post_kats/ changed post-build"
+        )
+
+    try:
+        pubkey = bytes.fromhex(pubkey_hex)
+        signature = bytes.fromhex(signature_hex)
+        digest_raw = bytes.fromhex(digest_hex)
+    except ValueError as exc:
+        return None, f"signature module fields not hex: {exc}"
+
+    if len(pubkey) != 32 or len(signature) != 64:
+        return None, (
+            f"signature module sizes wrong: pubkey={len(pubkey)} "
+            f"signature={len(signature)} (expected 32, 64)"
+        )
+    return (pubkey, signature, digest_raw, pubkey_hex), None
+
+
 def _verify_signed_integrity(digest_hex: str) -> Tuple[Optional[bool], str]:
     """Verify the build-time Ed25519 signature over the .py digest.
 
@@ -735,32 +962,10 @@ def _verify_signed_integrity(digest_hex: str) -> Tuple[Optional[bool], str]:
     except ImportError:
         return None, "no signed-integrity artefact (digest-only fallback)"
 
-    try:
-        embedded_digest_hex = sig_mod.INTEGRITY_DIGEST_HEX
-        pubkey_hex = sig_mod.INTEGRITY_PUBKEY_HEX
-        signature_hex = sig_mod.INTEGRITY_SIGNATURE_HEX
-    except AttributeError as exc:
-        return False, f"signature module malformed: missing field ({exc})"
-
-    if embedded_digest_hex != digest_hex:
-        return False, (
-            f"signed digest mismatch: stored={embedded_digest_hex[:16]}... "
-            f"computed={digest_hex[:16]}... — a .py file or a POST KAT vector "
-            "under _post_kats/ changed post-build"
-        )
-
-    try:
-        pubkey = bytes.fromhex(pubkey_hex)
-        signature = bytes.fromhex(signature_hex)
-        digest_raw = bytes.fromhex(digest_hex)
-    except ValueError as exc:
-        return False, f"signature module fields not hex: {exc}"
-
-    if len(pubkey) != 32 or len(signature) != 64:
-        return False, (
-            f"signature module sizes wrong: pubkey={len(pubkey)} "
-            f"signature={len(signature)} (expected 32, 64)"
-        )
+    fields, fields_error = _load_artefact_fields(sig_mod, digest_hex)
+    if fields is None:
+        return False, fields_error or "signature module malformed"
+    pubkey, signature, digest_raw, pubkey_hex = fields
 
     trust_anchor_hex, trust_anchor_error = _validate_trust_anchor(pubkey_hex)
     if trust_anchor_error is not None:
@@ -803,11 +1008,11 @@ def _verify_signed_integrity(digest_hex: str) -> Tuple[Optional[bool], str]:
     # composite — stripping it from a real v2 artefact changes the message the
     # signature must cover and so is caught as a signature failure below, not as
     # a silent downgrade.
-    native_digest_raw, signed_message, native_digest_error = _parse_embedded_native_digest(
+    native_digest_raw, binding_digests, signed_message, schema_error = _resolve_signed_message(
         sig_mod, digest_raw
     )
-    if native_digest_error is not None:
-        return False, native_digest_error
+    if schema_error is not None:
+        return False, schema_error
 
     try:
         ok = native_ed25519_verify(signature, signed_message, pubkey)
@@ -829,6 +1034,21 @@ def _verify_signed_integrity(digest_hex: str) -> Tuple[Optional[bool], str]:
         verdict, native_note, native_ok = _check_loaded_native_library(native_digest_raw, anchored)
         if verdict is False:
             return False, native_note
+
+    # Bind the authenticated binding-digest map to the files on disk.  Runs
+    # only after the signature verified (the map is trusted) and the native
+    # check passed; any of its three failure directions — listed-but-missing,
+    # digest mismatch, present-but-unlisted — is tampering or a stale artefact
+    # and always a hard POST failure, with no override carve-out: unlike the
+    # native library, substituting binding extensions is not a supported
+    # operator flow.
+    if binding_digests is not None:
+        bindings_ok, bindings_note = _check_binding_extensions(binding_digests)
+        if not bindings_ok:
+            return False, bindings_note
+        native_note += f"; {bindings_note}"
+    else:
+        native_note += "; binding extensions NOT covered (pre-v3 artefact — re-sign to bind them)"
 
     # Only a signed artefact whose native library was verified against the
     # loaded object is the full-strength state.  Signed-but-native-unverified

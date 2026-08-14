@@ -18,17 +18,23 @@ wrapper) to:
      the build-time signer must also obey that contract.
   2. Compute the SHA3-256 digest over the package's ``.py`` files
      (the same algorithm ``_self_test._compute_module_digest`` uses
-     at import time) AND a second SHA3-256 over the native library
-     (``libama_cryptography``) that will ship in the wheel.
-  3. Sign the **composite** ``SHA3-256(domain || py_digest ||
-     native_digest)`` with the per-build private key using
-     ``ama_ed25519_sign``.  Signing the composite binds the shared
-     object that performs every cryptographic operation into the same
-     signature that covers the Python wrapper, so a tampered ``.so`` is
-     caught at import (``_self_test._verify_signed_integrity``).
+     at import time), a second SHA3-256 over the native library
+     (``libama_cryptography``) that will ship in the wheel, AND a
+     per-file SHA3-256 map of the compiled binding extensions
+     (``ed25519_binding`` et al. — they execute at import, before POST
+     can examine them, and the release pipeline ships them
+     byte-identical to the build).
+  3. Sign the **v3 composite** ``SHA3-256(domain_v3 || py_digest ||
+     native_digest || serialized_binding_digests)`` with the per-build
+     private key using ``ama_ed25519_sign``.  Signing the composite
+     binds every compiled artefact in the package into the same
+     signature that covers the Python wrapper, so a tampered ``.so``
+     or binding extension is caught at import
+     (``_self_test._verify_signed_integrity``).
   4. Write ``ama_cryptography/_integrity_signature.py`` containing
-     the embedded public key, signature, .py digest, and native digest
-     as Python literals — the only artefact that ships with the wheel.
+     the embedded public key, signature, .py digest, native digest and
+     binding-digest map as Python literals — the only artefact that
+     ships with the wheel.
   5. Discard the private key (it never leaves the build host's
      memory, never lands in the wheel, never gets cached).
 
@@ -57,7 +63,7 @@ import hashlib
 import os
 import sys
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 _BUILD_PIPELINE_ENV = "AMA_BUILD_PIPELINE"
 _INTEGRITY_SIGNING_SEED_ENV = "AMA_INTEGRITY_SIGNING_SEED_HEX"
@@ -138,9 +144,113 @@ def _composite_integrity_message(py_digest: bytes, native_digest: bytes) -> byte
     """The exact bytes the Ed25519 integrity signature covers (v2 format).
 
     ``SHA3-256(domain || py_digest || native_digest)``.  Mirrored byte-for-byte
-    in ``_self_test._composite_integrity_message``.
+    in ``_self_test._composite_integrity_message``.  Retained for the verifier's
+    legacy path and its pinning tests; the signer now emits v3 exclusively.
     """
     return hashlib.sha3_256(_INTEGRITY_SIG_DOMAIN + py_digest + native_digest).digest()
+
+
+# v3 domain: the signed message additionally binds every compiled binding
+# extension.  A distinct domain string means a v3 signature can never verify
+# against a v2-shaped message or vice versa, even if an attacker moves fields
+# between artefact schemas.  MUST equal ``_self_test._INTEGRITY_SIG_DOMAIN_V3``
+# byte for byte; pinned by ``tests/test_binding_integrity.py``.
+_INTEGRITY_SIG_DOMAIN_V3 = b"AMA-integrity-signature-v3\x00"
+
+#: The compiled extension modules the package ships besides the native
+#: library.  Everything in the package directory with an extension-module
+#: suffix must be either the native library (bound via
+#: ``INTEGRITY_NATIVE_DIGEST_HEX``) or carry one of these stems —
+#: ``_iter_binding_files`` refuses to sign a tree containing an extension it
+#: does not recognise, so a new binding cannot ship uncovered by forgetting
+#: this inventory.
+_BINDING_STEMS = (
+    "dilithium_binding",
+    "ed25519_binding",
+    "hkdf_binding",
+    "hmac_binding",
+    "math_engine",
+    "sha3_binding",
+)
+
+#: Suffixes an extension module can carry across the shipped platforms
+#: (``.cpython-311-x86_64-linux-gnu.so``, ``.cpython-311-darwin.so``,
+#: ``.pyd``).  ``.dylib`` is included so a macOS native-library file is
+#: recognised (and excluded by prefix) rather than treated as unknown.
+_EXTENSION_SUFFIXES = (".so", ".pyd", ".dylib")
+
+#: The native library's filename prefixes on the shipped platforms —
+#: ``libama_cryptography.so*`` / ``libama_cryptography*.dylib`` /
+#: ``libama_cryptography.dll`` / ``ama_cryptography.dll``.  These are covered
+#: by ``INTEGRITY_NATIVE_DIGEST_HEX``, not the binding dict.
+_NATIVE_LIB_PREFIXES = ("libama_cryptography", "ama_cryptography.dll")
+
+
+def _iter_binding_files(pkg_dir: Path) -> List[Path]:
+    """Every compiled binding-extension file in the package directory.
+
+    Enumerates the directory rather than trusting a static filename list:
+    the suffix is platform- and interpreter-specific, so identity is carried
+    by the stem.  Fails closed on an extension whose stem is not in
+    :data:`_BINDING_STEMS` — an unrecognised compiled module must be added to
+    the inventory (and ``_self_test``'s verification updated by the same
+    commit's tests) or it would ship executing code the signature never
+    covered.
+    """
+    out: List[Path] = []
+    for path in sorted(pkg_dir.iterdir()):
+        if not path.is_file() or path.suffix not in _EXTENSION_SUFFIXES:
+            continue
+        if path.name.startswith(_NATIVE_LIB_PREFIXES):
+            continue
+        stem = path.name.split(".", 1)[0]
+        if stem not in _BINDING_STEMS:
+            raise RuntimeError(
+                f"unknown compiled extension {path.name!r} in the package "
+                "directory: add its stem to _BINDING_STEMS so it is bound "
+                "into the integrity signature, or remove the file"
+            )
+        out.append(path)
+    return out
+
+
+def _compute_binding_digests(pkg_dir: Path) -> Dict[str, bytes]:
+    """SHA3-256 of every binding extension, keyed by exact filename."""
+    return {
+        path.name: hashlib.sha3_256(path.read_bytes()).digest()
+        for path in _iter_binding_files(pkg_dir)
+    }
+
+
+def _serialize_binding_digests(binding_digests: Dict[str, bytes]) -> bytes:
+    """Canonical byte serialization of the binding-digest map.
+
+    ``name || 0x00 || digest`` per entry, entries in sorted-name order.  The
+    NUL terminator makes the (name, digest) framing unambiguous — filenames
+    cannot contain NUL — so no concatenation of entries collides with any
+    other map.  Mirrored byte-for-byte in ``_self_test``.
+    """
+    out = bytearray()
+    for name in sorted(binding_digests):
+        out += name.encode("utf-8") + b"\x00" + binding_digests[name]
+    return bytes(out)
+
+
+def _composite_integrity_message_v3(
+    py_digest: bytes, native_digest: bytes, binding_digests: Dict[str, bytes]
+) -> bytes:
+    """The exact bytes the Ed25519 integrity signature covers (v3 format).
+
+    ``SHA3-256(domain_v3 || py_digest || native_digest ||
+    serialized_binding_digests)``.  Mirrored byte-for-byte in
+    ``_self_test._composite_integrity_message_v3``.
+    """
+    return hashlib.sha3_256(
+        _INTEGRITY_SIG_DOMAIN_V3
+        + py_digest
+        + native_digest
+        + _serialize_binding_digests(binding_digests)
+    ).digest()
 
 
 def _env_flag_enabled(name: str) -> bool:
@@ -368,23 +478,43 @@ INTEGRITY_DIGEST_HEX = "{digest_hex}"
 # wrapper calls into was covered by nothing.
 INTEGRITY_NATIVE_DIGEST_HEX = "{native_digest_hex}"
 
+# SHA3-256 digests of the compiled binding extensions at build time, keyed by
+# exact filename.  These modules contain compiled kernels and execute at import
+# — before POST can examine them — and the release pipeline ships them
+# byte-identical to the build (auditwheel/delocate graft nothing: the native
+# library resolves in-package via $ORIGIN/@loader_path; Windows repair is
+# disabled), so the build-time digest is the runtime file's digest on every
+# platform.  Verified by ama_cryptography._self_test._check_binding_extensions.
+INTEGRITY_BINDING_DIGESTS_HEX = {binding_digests_literal}
+
 # Ephemeral build-time Ed25519 public key (raw 32 bytes, hex-encoded).
 INTEGRITY_PUBKEY_HEX = "{pubkey_hex}"
 
-# Ed25519 signature over SHA3-256(domain || py_digest || native_digest) — the
-# v2 composite that makes the two digests inseparable.  See
-# ama_cryptography._self_test._composite_integrity_message.
+# Ed25519 signature over SHA3-256(domain_v3 || py_digest || native_digest ||
+# serialized_binding_digests) — the v3 composite that makes all three
+# inseparable.  See ama_cryptography._self_test._composite_integrity_message_v3.
 INTEGRITY_SIGNATURE_HEX = "{signature_hex}"
 
 # Build metadata — informational only, not part of the integrity contract.
-BUILD_PIPELINE_VERSION = "2"
+BUILD_PIPELINE_VERSION = "3"
 '''
+
+
+def _binding_digests_literal(binding_digests: Dict[str, bytes]) -> str:
+    """Render the binding-digest map as a stable Python dict literal."""
+    if not binding_digests:
+        return "{}"
+    entries = ",\n".join(
+        f'    "{name}": "{binding_digests[name].hex()}"' for name in sorted(binding_digests)
+    )
+    return "{\n" + entries + ",\n}"
 
 
 def _write_signature_module(
     pkg_dir: Path,
     digest: bytes,
     native_digest: bytes,
+    binding_digests: Dict[str, bytes],
     pubkey: bytes,
     signature: bytes,
 ) -> Path:
@@ -398,6 +528,7 @@ def _write_signature_module(
         _SIGNATURE_TEMPLATE.format(
             digest_hex=digest.hex(),
             native_digest_hex=native_digest.hex(),
+            binding_digests_literal=_binding_digests_literal(binding_digests),
             pubkey_hex=pubkey.hex(),
             signature_hex=signature.hex(),
         ),
@@ -501,7 +632,15 @@ def main() -> int:
             if preload_hex
             else _compute_native_library_digest(native_path)
         )
-        signed_message = _composite_integrity_message(digest, native_digest)
+        # Bind every compiled binding extension into the same signature (v3).
+        # These load and execute before POST can examine them, and the release
+        # pipeline ships them byte-identical to the build (verified on the
+        # published v4.0.0 wheels: auditwheel and delocate graft nothing —
+        # the library resolves in-package via $ORIGIN/@loader_path — and
+        # Windows repair is disabled), so a build-time digest is checkable at
+        # import time on every platform.
+        binding_digests = _compute_binding_digests(pkg_dir)
+        signed_message = _composite_integrity_message_v3(digest, native_digest, binding_digests)
 
         seed_override = _load_hex_env_bytes(_INTEGRITY_SIGNING_SEED_ENV, 32)
         trusted_pubkey_env = _load_hex_env_bytes(_INTEGRITY_TRUST_ANCHOR_ENV, 32)
@@ -525,11 +664,14 @@ def main() -> int:
         )
         return 1
 
-    out_path = _write_signature_module(pkg_dir, digest, native_digest, pubkey, signature)
+    out_path = _write_signature_module(
+        pkg_dir, digest, native_digest, binding_digests, pubkey, signature
+    )
     print(
         f"Signed integrity artefact written: {out_path}\n"
         f"  digest        = {digest_hex}\n"
         f"  native digest = {native_digest.hex()}\n"
+        f"  bindings      = {len(binding_digests)} extension(s) bound\n"
         f"  pubkey        = {pubkey.hex()}\n"
         f"  signature     = {signature.hex()[:32]}... (64 B)"
     )

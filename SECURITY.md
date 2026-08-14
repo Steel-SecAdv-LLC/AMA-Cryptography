@@ -24,7 +24,7 @@ We actively maintain and provide security updates for the following versions:
 | Version | Supported | Status |
 |---------|-----------|--------|
 | 4.0.x | Yes | Active development and security updates |
-| 3.5.x | No | Superseded by v4.0 (nine breaking changes — see CHANGELOG `[4.0.0]`) |
+| 3.5.x | No | Superseded by v4.0 (ten breaking changes — see CHANGELOG `[4.0.0]`) |
 | 3.4.x | No | Superseded by v3.5; no public API removals |
 | 3.3.x | No | Superseded by v3.4; no public API removals |
 | 3.2.x | No | Superseded by v3.3; no public API removals |
@@ -461,29 +461,46 @@ library, wherever it was loaded from — while the override's presence
 stays visible in `native_backend_diagnostics()`. A modified override
 remains UNVERIFIED, never blocked.
 
-**Stated gap: the Cython binding extensions are not digest-bound.** The
-composite signature covers the `.py` sources, the POST KAT vectors and
-`libama_cryptography`; it does not cover the compiled extension modules
-(`ed25519_binding`, `hmac_binding`, `sha3_binding`, `dilithium_binding`,
-`hkdf_binding`, `math_engine`), which contain compiled kernels and load
-before POST. This is not an oversight to be papered over but a pipeline
-constraint with a specific shape: shipped Linux wheels pass through
-`auditwheel repair`, which **rewrites the binding ELFs after signing**
-(patching their `libama_cryptography.so.4` dependency), so any
-build-time digest of those files is invalidated by the very pipeline
-that produces the release artefact — a digest check would fail every
-repaired wheel at import. Closing the gap therefore requires a release-
-pipeline change validated by a full dry run: either static-linking the
-bindings (no external dependency for auditwheel to graft, leaving their
-bytes stable through repair) or an `--exclude`-scoped repair, followed
-by extending the composite signature to a per-extension digest map. Until
-then, stated without softening: a tampered binding extension is caught by
-no in-process check. What bounds the exposure is that the bindings are
-thin marshalling layers over the digest-bound native library, and that
-the wheel-level controls (SLSA provenance, signed wheels) and the
-OS-level signing boundary above are the authenticating controls for
-every compiled artefact in the package — the same controls the
-checker-poisoning boundary already depends on.
+**The Cython binding extensions are digest-bound (v3 artefact).** The
+composite signature covers the `.py` sources, the POST KAT vectors,
+`libama_cryptography`, **and** a per-file SHA3-256 map of the compiled
+extension modules (`ed25519_binding`, `hmac_binding`, `sha3_binding`,
+`dilithium_binding`, `hkdf_binding`, `math_engine`), serialized into the
+signed v3 composite under its own domain string. At import, POST verifies
+every extension-suffixed file in the package directory against the
+authenticated map — a listed file that is missing, a file whose bytes
+differ, and a file the map does not cover are each a hard POST failure
+with no override carve-out. The artefact's schema selects the signed
+message, so stripping the binding map from a v3 artefact (or grafting one
+onto a v2 artefact) is a signature failure, not a downgrade. The signer
+refuses to sign a tree containing an extension module outside its
+inventory, so a new binding cannot ship uncovered by omission.
+
+An earlier revision of this section recorded the gap as blocked on a
+release-pipeline change, on the claim that `auditwheel repair` rewrites
+the binding ELFs after signing. Measured, that claim was false: the
+bindings resolve `libama_cryptography` **inside the package** via
+`$ORIGIN`/`@loader_path` RUNPATHs, so auditwheel and delocate have
+nothing external to graft — the published v4.0.0 wheels ship every
+binding byte-identical to the build (no `.libs`/`.dylibs` directory,
+unmangled `DT_NEEDED`, verified on the release assets for
+manylinux x86_64 and macOS arm64), a local `auditwheel repair` of a
+freshly built wheel changes only `RECORD`/`WHEEL` metadata, and Windows
+repair is disabled outright. The full chain is exercised end-to-end:
+a wheel built with the v3 signer, repaired by auditwheel, installed
+into a clean environment, passes POST with all six bindings verified,
+and refuses to import when any installed binding is modified.
+
+One residue, stated rather than implied: binding extensions are ordinary
+imports and **execute before POST examines them**, so this is post-load
+detection that moves the module to the ERROR state — the posture the
+native library had before pre-load verification, and weaker than the
+pre-load refusal the native library now gets. Pre-load refusal for
+bindings would require an import hook ahead of every binding import. If
+a future repair-tool version begins rewriting the bindings, every
+repaired wheel fails its own build-time smoke test (`CIBW_TEST_COMMAND`
+imports the package, which runs POST), so the release pipeline catches
+the regression before any artefact ships.
 
 ### `--update` is build-pipeline-only
 

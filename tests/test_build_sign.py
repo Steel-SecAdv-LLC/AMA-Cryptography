@@ -262,7 +262,9 @@ def test_signature_rewrite_removes_stale_bytecode(tmp_path: Any) -> None:
     """
     pkg = tmp_path / "ama_cryptography"
     pkg.mkdir()
-    bs._write_signature_module(pkg, b"\x01" * 32, b"\x02" * 32, b"\x03" * 32, b"\x04" * 64)
+    bs._write_signature_module(
+        pkg, b"\x01" * 32, b"\x02" * 32, {"a_binding.so": b"\x0a" * 32}, b"\x03" * 32, b"\x04" * 64
+    )
     pycache = pkg / "__pycache__"
     pycache.mkdir()
     stale = pycache / "_integrity_signature.cpython-311.pyc"
@@ -270,7 +272,9 @@ def test_signature_rewrite_removes_stale_bytecode(tmp_path: Any) -> None:
     unrelated = pycache / "some_other_module.cpython-311.pyc"
     unrelated.write_bytes(b"must not be touched")
 
-    bs._write_signature_module(pkg, b"\x05" * 32, b"\x06" * 32, b"\x07" * 32, b"\x08" * 64)
+    bs._write_signature_module(
+        pkg, b"\x05" * 32, b"\x06" * 32, {"a_binding.so": b"\x0b" * 32}, b"\x07" * 32, b"\x08" * 64
+    )
 
     assert not list(pycache.glob("_integrity_signature.*.pyc")), (
         "stale signature bytecode survived the rewrite — the same-second "
@@ -292,7 +296,9 @@ def test_signature_module_is_lf_terminated_on_every_platform(tmp_path: Any) -> N
     """
     pkg = tmp_path / "ama_cryptography"
     pkg.mkdir()
-    out = bs._write_signature_module(pkg, b"\x01" * 32, b"\x02" * 32, b"\x03" * 32, b"\x04" * 64)
+    out = bs._write_signature_module(
+        pkg, b"\x01" * 32, b"\x02" * 32, {"a_binding.so": b"\x0a" * 32}, b"\x03" * 32, b"\x04" * 64
+    )
     raw = out.read_bytes()
     assert b"\r" not in raw, "signature artefact must be LF-only on every platform"
     assert raw.endswith(b"\n")
