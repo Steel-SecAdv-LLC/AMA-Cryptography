@@ -242,7 +242,11 @@ hand-written context manager handling all of a call's buffers in one
 enter/exit, with a pass-through fast path for `bytes`; the security contract
 is unchanged and pinned by `tests/test_c_buffer_views.py` (in-place borrow,
 release on every path, multi-dimensional rejection). Measured: one-shot
-AES-256-GCM +60%, decrypt and HKDF similar.
+AES-256-GCM +60%, decrypt and HKDF similar. The ChaCha20-Poly1305 wrappers,
+which were the one AEAD surface typed `bytes` only — forcing a caller with a
+wipeable `bytearray` session key to materialise the immutable copy the borrow
+machinery exists to avoid — now share the same contract and the same borrow
+path.
 
 Two further hot-path taxes fell in the same pass. Hybrid signing re-expanded
 the Ed25519 seed on every call — and that expansion is a key *generation*, so

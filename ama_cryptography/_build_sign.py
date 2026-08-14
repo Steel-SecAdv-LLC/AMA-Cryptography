@@ -272,7 +272,26 @@ def _generate_keypair_and_sign(
 
     pk = bytearray(32)
     sk = bytearray(64)
-    seed = bytearray(seed_override if seed_override is not None else os.urandom(32))
+    # The per-build signing seed deliberately does NOT route through the
+    # error-state-gated ``secure_token_bytes`` draw that INVARIANT-41 requires
+    # of runtime key material: this signer's defining use case is repairing a
+    # stale artefact, which it does from the ERROR state — where the gated
+    # draw refuses by design, and routing through it would wall the repair
+    # tool off behind the fault it exists to clear.  The health property the
+    # gate would have provided is applied directly instead: the FIPS 140-3
+    # continuous-test comparison of consecutive draws, which a catastrophically
+    # stuck entropy source fails.
+    if seed_override is not None:
+        seed = bytearray(seed_override)
+    else:
+        first_draw = os.urandom(32)
+        second_draw = os.urandom(32)
+        if first_draw == second_draw:
+            raise RuntimeError(
+                "os.urandom returned two identical 32-byte draws — entropy "
+                "source stuck; refusing to mint an integrity-signing key"
+            )
+        seed = bytearray(second_draw)
     sk[0:32] = seed
     secure_memzero(seed)
 

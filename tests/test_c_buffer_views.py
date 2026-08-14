@@ -128,3 +128,45 @@ class TestSingleBufferCompatibilityShim:
         del borrowed
         secret.extend(b"ok")
         assert len(secret) == 18
+
+
+class TestChaChaWipeableKeyContract:
+    """ChaCha20-Poly1305 accepts bytearray/memoryview key material.
+
+    Until 4.0.0 the ChaCha wrappers were the one AEAD surface typed ``bytes``
+    only, so a caller holding its session key in the zeroizable ``bytearray``
+    storage the project recommends had to materialise an immutable copy first
+    — the exact transient-copy hazard the borrow machinery exists to remove,
+    and an inconsistency with the AES-256-GCM wrappers' contract.
+    """
+
+    def test_all_input_forms_agree(self) -> None:
+        import secrets
+
+        from ama_cryptography import pqc_backends as pb
+        from ama_cryptography.pqc_backends import (
+            native_chacha20poly1305_decrypt,
+            native_chacha20poly1305_encrypt,
+        )
+
+        if not pb._CHACHA20_POLY1305_NATIVE_AVAILABLE:
+            pytest.skip("ChaCha20-Poly1305 native backend not built")
+
+        key = secrets.token_bytes(32)
+        nonce = secrets.token_bytes(12)
+        plaintext = secrets.token_bytes(256)
+        aad = b"header"
+
+        from_bytes = native_chacha20poly1305_encrypt(key, nonce, plaintext, aad)
+        from_wipeable = native_chacha20poly1305_encrypt(
+            bytearray(key), memoryview(nonce), bytearray(plaintext), aad
+        )
+        assert from_bytes == from_wipeable
+
+        ciphertext, tag = from_bytes
+        assert (
+            native_chacha20poly1305_decrypt(bytearray(key), nonce, ciphertext, tag, aad)
+            == plaintext
+        )
+        with pytest.raises(RuntimeError):
+            native_chacha20poly1305_decrypt(key, nonce, ciphertext, bytes(16), aad)

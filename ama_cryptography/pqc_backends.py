@@ -7547,13 +7547,20 @@ def native_argon2id_legacy_verify(
 
 
 def native_chacha20poly1305_encrypt(
-    key: bytes,
-    nonce: bytes,
-    plaintext: bytes,
-    aad: bytes = b"",
+    key: _BufferInput,
+    nonce: _BufferInput,
+    plaintext: _BufferInput,
+    aad: _BufferInput = b"",
 ) -> tuple:
     """
     ChaCha20-Poly1305 AEAD encryption (RFC 8439).
+
+    ``key`` (and every other input) may be ``bytes``, ``bytearray`` or a
+    ``memoryview`` — the same wipeable-key contract as the AES-256-GCM
+    wrappers.  Until 4.0.0 this wrapper accepted ``bytes`` only, so a caller
+    holding its session key in the zeroizable ``bytearray`` storage the
+    project recommends had to materialise an immutable copy first — the
+    exact transient-copy hazard ``_CBufferViews`` exists to remove.
 
     Returns:
         (ciphertext, tag) — ciphertext same length as plaintext, 16-byte tag
@@ -7570,23 +7577,27 @@ def native_chacha20poly1305_encrypt(
         raise ValueError(f"ChaCha20-Poly1305 nonce must be 12 bytes, got {len(nonce)}")
 
     pt_len = len(plaintext)
-    pt_ptr = plaintext if pt_len > 0 else None
-    aad_ptr = aad if aad and len(aad) > 0 else None
     aad_len = len(aad) if aad else 0
 
     ct_buf = ctypes.create_string_buffer(pt_len)
     tag_buf = ctypes.create_string_buffer(POLY1305_TAG_BYTES)
 
-    rc = _native_lib.ama_chacha20poly1305_encrypt(
-        key,
-        nonce,
-        pt_ptr,
-        pt_len,
-        aad_ptr,
-        aad_len,
-        ct_buf,
-        tag_buf,
-    )
+    with _CBufferViews(key, nonce, plaintext, aad if aad else b"") as (
+        key_buf,
+        nonce_buf,
+        pt_buf,
+        aad_buf,
+    ):
+        rc = _native_lib.ama_chacha20poly1305_encrypt(
+            key_buf,
+            nonce_buf,
+            pt_buf if pt_len > 0 else None,
+            pt_len,
+            aad_buf if aad_len > 0 else None,
+            aad_len,
+            ct_buf,
+            tag_buf,
+        )
     if rc != 0:
         raise RuntimeError(f"ChaCha20-Poly1305 encrypt failed (rc={rc})")
 
@@ -7594,14 +7605,18 @@ def native_chacha20poly1305_encrypt(
 
 
 def native_chacha20poly1305_decrypt(
-    key: bytes,
-    nonce: bytes,
-    ciphertext: bytes,
-    tag: bytes,
-    aad: bytes = b"",
+    key: _BufferInput,
+    nonce: _BufferInput,
+    ciphertext: _BufferInput,
+    tag: _BufferInput,
+    aad: _BufferInput = b"",
 ) -> bytes:
     """
     ChaCha20-Poly1305 AEAD decryption (RFC 8439).
+
+    Accepts ``bytes``, ``bytearray`` or ``memoryview`` inputs — the same
+    wipeable-key contract as the AES-256-GCM wrappers (see the encrypt
+    sibling above).
 
     Returns:
         Decrypted plaintext
@@ -7627,22 +7642,27 @@ def native_chacha20poly1305_decrypt(
         raise ValueError(f"ChaCha20-Poly1305 tag must be 16 bytes, got {len(tag)}")
 
     ct_len = len(ciphertext)
-    ct_ptr = ciphertext if ct_len > 0 else None
-    aad_ptr = aad if aad and len(aad) > 0 else None
     aad_len = len(aad) if aad else 0
 
     pt_buf = ctypes.create_string_buffer(ct_len)
 
-    rc = _native_lib.ama_chacha20poly1305_decrypt(
-        key,
-        nonce,
-        ct_ptr,
-        ct_len,
-        aad_ptr,
-        aad_len,
-        tag,
-        pt_buf,
-    )
+    with _CBufferViews(key, nonce, ciphertext, tag, aad if aad else b"") as (
+        key_buf,
+        nonce_buf,
+        ct_buf,
+        tag_buf,
+        aad_buf,
+    ):
+        rc = _native_lib.ama_chacha20poly1305_decrypt(
+            key_buf,
+            nonce_buf,
+            ct_buf if ct_len > 0 else None,
+            ct_len,
+            aad_buf if aad_len > 0 else None,
+            aad_len,
+            tag_buf,
+            pt_buf,
+        )
     if rc != 0:
         raise RuntimeError(f"ChaCha20-Poly1305 decrypt failed (rc={rc})")
 

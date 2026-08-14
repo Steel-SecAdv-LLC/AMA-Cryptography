@@ -120,22 +120,39 @@ ama_error_t ama_randombytes(uint8_t *buf, size_t len) {
     /*
      * Generic POSIX fallback: /dev/urandom.
      * Used for BSDs and other POSIX systems without getentropy/getrandom.
+     *
+     * Raw open/read, deliberately not stdio: fread() stages every draw
+     * through FILE's internal heap buffer, which is freed unzeroized at
+     * fclose() — a copy of RNG output (frequently key material seed bytes)
+     * left on the heap outside every wipe path.  O_CLOEXEC keeps the
+     * descriptor from leaking across exec into child processes.  EINTR is
+     * retried: a signal during the read is routine, not an entropy failure.
      */
-    FILE *f = fopen("/dev/urandom", "rb");
-    if (f == NULL) {
+    #ifndef O_CLOEXEC
+    #define O_CLOEXEC 0
+    #endif
+    int fd = open("/dev/urandom", O_RDONLY | O_CLOEXEC);
+    if (fd < 0) {
         return AMA_ERROR_CRYPTO;
     }
     size_t offset = 0;
     while (offset < len) {
-        size_t nread = fread(buf + offset, 1, len - offset, f);
-        if (nread == 0) {
-            /* EOF or error — cannot recover */
-            fclose(f);
+        ssize_t nread = read(fd, buf + offset, len - offset);
+        if (nread < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            close(fd);
             return AMA_ERROR_CRYPTO;
         }
-        offset += nread;
+        if (nread == 0) {
+            /* EOF from /dev/urandom — cannot recover */
+            close(fd);
+            return AMA_ERROR_CRYPTO;
+        }
+        offset += (size_t)nread;
     }
-    fclose(f);
+    close(fd);
     return AMA_SUCCESS;
 
 #endif
