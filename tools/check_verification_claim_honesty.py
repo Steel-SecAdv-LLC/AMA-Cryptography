@@ -159,9 +159,12 @@ CLAIM_SCAN_EXEMPT: frozenset[str] = frozenset(
 #: statements about other things. A pattern marked ``requires_context`` is only
 #: a violation on a line that is about timestamping.
 CONTEXT_CUES: tuple[re.Pattern[str], ...] = (
-    re.compile(r"rfc\s*-?\s*3161", re.I),
+    # ``\s*-?\s*`` is two nullable quantifiers around an optional atom — the
+    # same adjacent-nullable shape fixed elsewhere in this branch, quadratic on
+    # a long whitespace run. One character class has a single way to match.
+    re.compile(r"rfc[\s-]{0,8}3161", re.I),
     re.compile(r"\bTSA\b"),
-    re.compile(r"\btime\s*-?\s*stamp", re.I),
+    re.compile(r"\btime[\s-]{0,8}stamp", re.I),
     re.compile(r"\bTST\b|\bTSTInfo\b"),
     re.compile(r"\bgenTime\b", re.I),
 )

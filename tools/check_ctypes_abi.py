@@ -252,8 +252,24 @@ def parse_header(header_text: str, origin: str = "header") -> dict[str, Signatur
     """Extract ``{symbol: Signature}`` for every ``AMA_API`` prototype."""
     text = _strip_c_comments(header_text)
     prototypes: dict[str, Signature] = {}
+    # The return-type segment must not be able to match whitespace that the
+    # neighbouring quantifiers can also match.  The original spelling —
+    # ``\s+(?P<ret>[\w\s]+?\**)\s*`` — put three overlapping whitespace
+    # matchers in a row (``\s+``, the ``\s`` inside ``[\w\s]``, and ``\s*``)
+    # with a nullable ``\**`` between them, so a run of N spaces could be
+    # divided among them in O(N^2) ways; with ``finditer`` retrying every start
+    # offset that is cubic.  Measured on ``"AMA_API" + " " * N + "!"``:
+    # 2.4 ms at N=100, 145 ms at 400, 8.6 s at 1,600 — 7.8x per doubling, and
+    # roughly 2.4 hours extrapolated to N=16,000.  Worse than every other
+    # pattern this branch has fixed, all of which were merely quadratic.
+    #
+    # ``[^;{()]`` cannot match the ``(`` that follows the function name, so the
+    # segment has exactly one way to end, and the bound keeps a pathological
+    # header linear rather than merely slower.  A real prototype's return type
+    # is a few dozen characters; 200 is generous.
     pattern = re.compile(
-        r"AMA_API\s+(?P<ret>[\w\s]+?\**)\s*(?P<name>ama_\w+)\s*\((?P<params>[^;{]*)\)\s*;",
+        r"AMA_API(?P<ret>[^;{()]{0,200}?)\b(?P<name>ama_\w+)\s{0,64}"
+        r"\((?P<params>[^;{]*)\)\s{0,64};",
         re.DOTALL,
     )
     for match in pattern.finditer(text):

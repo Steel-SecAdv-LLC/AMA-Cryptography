@@ -378,3 +378,65 @@ class TestScopeIsDiscoveredNotHandMaintained:
         )
         scope = gate.ctypes_modules(pkg)
         assert not any(m.endswith("just_talking.py") for m in scope), scope
+
+
+class TestHeaderPatternIsLinear:
+    """The prototype scanner must not be the thing that hangs CI.
+
+    ``AMA_API\\s+(?P<ret>[\\w\\s]+?\\**)\\s*(?P<name>ama_\\w+)…`` put three
+    overlapping whitespace matchers in sequence — ``\\s+``, the ``\\s`` inside
+    ``[\\w\\s]``, and ``\\s*`` — with a nullable ``\\**`` between them. A run of
+    N spaces could be divided among them in O(N^2) ways, and ``finditer``
+    retries every start offset, making it cubic. Measured on
+    ``"AMA_API" + " " * N + "!"``: 2.4 ms at N=100, 145 ms at 400, 8.6 s at
+    1,600 — 7.8x per doubling, extrapolating to hours on a 16,000-character
+    run. That is worse than every other pattern this branch fixed, all of
+    which were merely quadratic.
+    """
+
+    def test_a_long_whitespace_run_does_not_blow_up(self) -> None:
+        import time
+
+        # Enters the match at "AMA_API" and then fails: the worst case.
+        pathological = "AMA_API" + " " * 50_000 + "!"
+        start = time.perf_counter()
+        gate.parse_header(pathological)
+        elapsed = time.perf_counter() - start
+        assert elapsed < 1.0, (
+            f"parsing a 50k-space run took {elapsed:.2f}s — the prototype "
+            f"pattern has regained superlinear backtracking"
+        )
+
+    def test_the_real_header_still_parses_completely(self) -> None:
+        """Linearity must not have cost any prototype.
+
+        The count is asserted as a floor rather than an exact number so adding
+        a prototype does not fail this, but losing the whole surface does.
+        """
+        header = (REPO_ROOT / "include" / "ama_cryptography.h").read_text(encoding="utf-8")
+        protos = gate.parse_header(header, origin="ama_cryptography.h")
+        assert len(protos) >= 160, f"only {len(protos)} prototypes extracted"
+        for symbol in ("ama_context_init", "ama_keypair_generate", "ama_sign", "ama_verify"):
+            assert symbol in protos, f"{symbol} lost from the header scan"
+
+    @pytest.mark.parametrize(
+        "decl,symbol,ret",
+        [
+            ("AMA_API void ama_a(void);", "ama_a", "void"),
+            ("AMA_API int ama_b(int x);", "ama_b", "int"),
+            ("AMA_API ama_error_t ama_c(void);", "ama_c", "int"),
+            ("AMA_API const uint8_t *ama_d(void);", "ama_d", "ptr"),
+            ("AMA_API uint8_t* ama_e(void);", "ama_e", "ptr"),
+            # Multi-line declarations, and an ama_-prefixed return TYPE ahead of
+            # an ama_-prefixed function name — the case that makes the return
+            # segment need to backtrack.
+            ("AMA_API ama_error_t\nama_f(\n    int x);", "ama_f", "int"),
+            ("AMA_API ama_keypair_t *ama_g(void);", "ama_g", "ptr"),
+        ],
+    )
+    def test_return_and_name_are_still_split_correctly(
+        self, decl: str, symbol: str, ret: str
+    ) -> None:
+        protos = gate.parse_header(decl)
+        assert symbol in protos, f"{decl!r} -> {sorted(protos)}"
+        assert protos[symbol].ret == ret, f"{decl!r} -> {protos[symbol]}"

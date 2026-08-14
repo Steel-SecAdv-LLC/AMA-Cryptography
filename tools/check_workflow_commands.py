@@ -212,7 +212,16 @@ def _unescape_double_quoted(payload: str) -> str:
 
 
 #: ``${{ ... }}`` expression, e.g. ``${{ matrix.os }}``.
-_EXPRESSION = re.compile(r"\$\{\{\s*(?P<inner>[^}]+?)\s*\}\}")
+#:
+#: The inner text is captured raw and stripped by the caller.  Spelling it
+#: ``\s*(?P<inner>[^}]+?)\s*`` instead put three overlapping whitespace
+#: matchers in a row — the two ``\s*`` and the whitespace inside ``[^}]`` —
+#: around a lazy quantifier, so a run of N spaces could be split among them
+#: in O(N^2) ways and ``search`` retried every start offset: cubic.  Measured
+#: on ``"${{" + " " * N``: 7.9x per doubling, 634 ms at N=1,000.  With the
+#: ``\s*`` gone there is exactly one way to divide the text, and the bound
+#: keeps a malformed workflow linear.
+_EXPRESSION = re.compile(r"\$\{\{(?P<inner>[^}]{0,500})\}\}")
 
 #: A single-quoted argument, as POSIX shells understand it.
 _POSIX_SINGLE_QUOTED_ARG = re.compile(r"(?:^|\s)'[^']+'")
@@ -353,7 +362,7 @@ def _resolve_runs_on(raw: Any, job: dict[str, Any]) -> tuple[list[str], list[str
             else:
                 resolved.append(candidate)
             continue
-        inner = match.group("inner")
+        inner = match.group("inner").strip()
         if inner.startswith("matrix."):
             values = _matrix_values(job, inner[len("matrix.") :])
             if values is None:
