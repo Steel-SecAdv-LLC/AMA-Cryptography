@@ -87,7 +87,7 @@ import hashlib
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Any, Callable, Optional, Sequence
 
 #: Order of the Ed25519 base point (RFC 8032 §5.1).
 L = 2**252 + 27742317777372353535851937790883648493
@@ -403,10 +403,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     # the same set of encodings" without ever having tested that claim.
     decode_asserted = 0
     for label, encoding, expected in DECODE_CASES:
-        for op_name, op in (
+        ops: tuple[tuple[str, Callable[[Any, bytes], Any]], ...] = (
             ("point_add", lambda be, e: be.point_add(e, _ONE_ENC)),
             ("scalarmult_public", lambda be, e: be.scalarmult_public(_TWO_SCALAR, e)),
-        ):
+        )
+        for op_name, op in ops:
             checked += 1
             a = op(donna, encoding)
             b = op(fe51, encoding)

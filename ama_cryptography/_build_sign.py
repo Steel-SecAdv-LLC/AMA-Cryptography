@@ -450,6 +450,7 @@ def main() -> int:
         # is the same discovery the runtime uses, so the file hashed here is the
         # file the runtime will load and re-hash.
         from ama_cryptography.pqc_backends import (
+            _LOAD_DIAGNOSTICS,
             _find_native_library,
             native_backend_diagnostics,
         )
@@ -461,10 +462,26 @@ def main() -> int:
                 "signature. Build it first: cmake -B build "
                 "-DAMA_USE_NATIVE_PQC=ON && cmake --build build"
             )
-        native_path = getattr(native_lib, "_name", None) or native_backend_diagnostics()["path"]
+        # The discovery record, not the CDLL's ``_name``: a pre-load-verified
+        # library is mapped through /proc/self/fd on Linux, so ``_name`` is a
+        # transient descriptor path that no longer resolves.  The scratch
+        # record is authoritative here because the discovery above is the one
+        # that just ran.
+        native_path = (
+            _LOAD_DIAGNOSTICS.get("path")
+            or getattr(native_lib, "_name", None)
+            or native_backend_diagnostics()["path"]
+        )
         if not native_path:
             raise RuntimeError("native library loaded but its path is unknown; cannot hash it")
-        native_digest = _compute_native_library_digest(native_path)
+        # Prefer the digest of the bytes the discovery actually mapped (hashed
+        # from the same descriptor dlopen used) over a fresh read of the path.
+        preload_hex = _LOAD_DIAGNOSTICS.get("preload_digest_hex")
+        native_digest = (
+            bytes.fromhex(preload_hex)
+            if preload_hex
+            else _compute_native_library_digest(native_path)
+        )
         signed_message = _composite_integrity_message(digest, native_digest)
 
         seed_override = _load_hex_env_bytes(_INTEGRITY_SIGNING_SEED_ENV, 32)

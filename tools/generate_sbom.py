@@ -34,6 +34,7 @@ import re
 import sys
 import uuid
 from pathlib import Path
+from typing import Any
 
 REPO = Path(__file__).resolve().parent.parent
 DEFAULT_OUTPUT = REPO / "docs" / "compliance" / "sbom-c-library.json"
@@ -156,7 +157,7 @@ def read_package_version() -> str:
     return match.group(1)
 
 
-def render_sbom(version: str) -> dict:
+def render_sbom(version: str) -> dict[str, Any]:
     """Render the C-library SBOM as a CycloneDX 1.5 JSON document.
 
     The ``serialNumber`` is a deterministic UUID5 derived from the
@@ -203,7 +204,7 @@ def render_sbom(version: str) -> dict:
     }
 
 
-def serialize(doc: dict) -> str:
+def serialize(doc: dict[str, Any]) -> str:
     """Render the SBOM with stable formatting so the CI --check is byte-exact."""
     return json.dumps(doc, indent=2, ensure_ascii=False) + "\n"
 

@@ -1977,10 +1977,32 @@ digest to match a tampered `.so` breaks the signature, which cannot be forged.
 Because `_build_sign` can only sign by calling the native `ama_ed25519_sign`, a
 working library is present at signing time by construction, so every signed
 artefact binds it — there is no unsigned-native downgrade path. The one
-non-full-strength outcome is an explicit `AMA_CRYPTO_LIB_PATH` override, which
-is recorded as *unverified* (a skip, `fully_verified` `False`) rather than
-tampering. Pinned by `tests/test_native_integrity.py`, including the tamper and
+non-full-strength outcome is an explicit `AMA_CRYPTO_LIB_PATH` override whose
+bytes differ from the signed library's, which is recorded as *unverified* (a
+skip, `fully_verified` `False`) rather than tampering; a byte-identical
+override verifies in full, because verification binds the bytes, not the path.
+Pinned by `tests/test_native_integrity.py`, including the tamper and
 forge-attempt cases and the signer/verifier domain-constant agreement.
+
+**The check runs before the object is mapped, not only after.** A shared
+object executes its constructors at `dlopen` time, so a digest comparison
+performed after load detects tampering the tampered code has already had a
+chance to act on — the "raw discovery" boundary the 2026-08 audit recorded.
+Discovery now hashes every candidate first and refuses to map an object whose
+SHA3-256 does not match the artefact's signed native digest; on Linux the
+mapping goes through `/proc/self/fd` on the descriptor that was hashed, so
+the verified and mapped bytes cannot be split by a path swap, and the POST
+stage compares the recorded digest of those mapped bytes rather than
+re-reading the file. The pre-load comparison uses the artefact before its
+signature can be verified (the verifier is inside the library being loaded),
+so it defeats the `.so`-only attacker outright; the rewrites-both attacker is
+caught post-load by the unforgeable signature or the trust anchor, with the
+constructor residue that entails — that attacker remains the OS-code-signing
+boundary `SECURITY.md` documents. `AMA_BUILD_PIPELINE=1` (outside
+secure-execution mode) demotes the refusal to a warning so the in-package
+artefact-repair tools can import after a rebuild. Pinned by
+`tests/test_preload_native_digest.py` and the refused-before-mapping tamper
+case in `tests/test_native_integrity.py`.
 
 **CASTs precede the integrity test that relies on them.** FIPS 140-3
 (NIST IG 10.3.A) requires the algorithm self-test for any approved algorithm the

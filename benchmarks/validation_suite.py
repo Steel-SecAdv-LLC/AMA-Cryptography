@@ -95,7 +95,7 @@ class BenchmarkValidator:
         }
 
     def benchmark_operation(
-        self, name: str, func: Callable, *args: Any, **kwargs: Any
+        self, name: str, func: "Callable[..., Any]", *args: Any, **kwargs: Any
     ) -> Dict[str, float]:
         """
         Run benchmark and return statistics.
@@ -196,7 +196,7 @@ class BenchmarkValidator:
         print("=" * 70)
 
         # Master secret generation (CSPRNG)
-        def gen_master_secret():
+        def gen_master_secret() -> bytes:
             return secrets.token_bytes(32)
 
         stats = self.benchmark_operation("master_secret", gen_master_secret)
@@ -205,12 +205,12 @@ class BenchmarkValidator:
 
         # HKDF derivation (native C backend)
         try:
-            from ama_cryptography.legacy_compat import native_hkdf
+            from ama_cryptography.pqc_backends import native_hkdf
 
             master = secrets.token_bytes(32)
             salt = secrets.token_bytes(32)
 
-            def hkdf_derive():
+            def hkdf_derive() -> bytes:
                 return native_hkdf(master, 32, salt, b"ama-cryptography-key")
 
             stats = self.benchmark_operation("hkdf", hkdf_derive)
@@ -223,7 +223,7 @@ class BenchmarkValidator:
         try:
             from ama_cryptography.legacy_compat import generate_ed25519_keypair
 
-            def ed25519_keygen():
+            def ed25519_keygen() -> Any:
                 return generate_ed25519_keypair()
 
             stats = self.benchmark_operation("ed25519_keygen", ed25519_keygen)
@@ -243,7 +243,7 @@ class BenchmarkValidator:
                 print("  SKIP: Dilithium not available in native backend")
             else:
 
-                def dilithium_keygen():
+                def dilithium_keygen() -> Any:
                     return generate_dilithium_keypair()
 
                 stats = self.benchmark_operation("dilithium_keygen", dilithium_keygen)
@@ -267,7 +267,7 @@ class BenchmarkValidator:
         # implementation on CPython — so the claim was being "validated"
         # against a throughput AMA does not produce, and AMA's own SHA3 could
         # regress arbitrarily while this printed PASS (INVARIANT-36).
-        def sha3_hash():
+        def sha3_hash() -> bytes:
             from ama_cryptography.pqc_backends import native_sha3_256
 
             return native_sha3_256(test_data)
@@ -282,7 +282,7 @@ class BenchmarkValidator:
 
             key = secrets.token_bytes(32)
 
-            def hmac_auth():
+            def hmac_auth() -> bytes:
                 return hmac_authenticate(test_data, key)
 
             stats = self.benchmark_operation("hmac_sha3", hmac_auth)
@@ -301,12 +301,12 @@ class BenchmarkValidator:
 
             keypair = generate_ed25519_keypair()
 
-            def ed25519_sign():
+            def ed25519_sign() -> bytes:
                 return native_ed25519_sign(test_data, keypair.private_key)
 
             signature = native_ed25519_sign(test_data, keypair.private_key)
 
-            def ed25519_verify():
+            def ed25519_verify() -> bool:
                 return native_ed25519_verify(test_data, signature, keypair.public_key)
 
             stats = self.benchmark_operation("ed25519_sign", ed25519_sign)
@@ -333,12 +333,12 @@ class BenchmarkValidator:
             else:
                 kp = generate_dilithium_keypair()
 
-                def dilithium_sign():
+                def dilithium_sign() -> bytes:
                     return native_dilithium_sign(test_data, kp.secret_key)
 
                 signature = native_dilithium_sign(test_data, kp.secret_key)
 
-                def dilithium_verify():
+                def dilithium_verify() -> bool:
                     return native_dilithium_verify(test_data, signature, kp.public_key)
 
                 stats = self.benchmark_operation("dilithium_sign", dilithium_sign)
@@ -370,7 +370,7 @@ class BenchmarkValidator:
 
             # Measure timing monitor overhead (this is the hot-path instrumentation)
             # The documented <2% overhead refers to this timing instrumentation
-            def timing_monitor_call():
+            def timing_monitor_call() -> None:
                 monitor.monitor_crypto_operation("test_op", 0.1)
 
             timing_stats = self.benchmark_operation("timing_monitor", timing_monitor_call)

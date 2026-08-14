@@ -205,7 +205,7 @@ _INT_C_TOKENS = {
 class Signature:
     """A coarse ABI signature: per-parameter classes plus a return class."""
 
-    params: tuple  # tuple[str, ...] of "ptr" | "int"
+    params: tuple[str, ...]  # each entry "ptr" | "int"
     ret: str  # "ptr" | "int" | "void"
     origin: str  # "file:line" for diagnostics
 
@@ -248,10 +248,10 @@ def _classify_c_return(ret: str) -> str:
     return "int"
 
 
-def parse_header(header_text: str, origin: str = "header") -> dict:
+def parse_header(header_text: str, origin: str = "header") -> dict[str, Signature]:
     """Extract ``{symbol: Signature}`` for every ``AMA_API`` prototype."""
     text = _strip_c_comments(header_text)
-    prototypes: dict = {}
+    prototypes: dict[str, Signature] = {}
     pattern = re.compile(
         r"AMA_API\s+(?P<ret>[\w\s]+?\**)\s*(?P<name>ama_\w+)\s*\((?P<params>[^;{]*)\)\s*;",
         re.DOTALL,
@@ -311,7 +311,7 @@ def _classify_ctypes_restype(node: ast.AST) -> Optional[str]:
     return None
 
 
-def _argtypes_classes(node: ast.AST) -> Optional[list]:
+def _argtypes_classes(node: ast.AST) -> Optional[list[str]]:
     """Classify a full ``argtypes`` value expression, or None if opaque.
 
     Handles the three literal shapes the tree uses: a plain list/tuple, a
@@ -343,7 +343,7 @@ def _argtypes_classes(node: ast.AST) -> Optional[list]:
     return None
 
 
-def _symbol_of_attribute_target(node: ast.AST) -> Optional[tuple]:
+def _symbol_of_attribute_target(node: ast.AST) -> Optional[tuple[str, str]]:
     """For a target ``<recv>.ama_x.argtypes`` return ``("ama_x", "argtypes")``."""
     if (
         isinstance(node, ast.Attribute)
@@ -355,7 +355,7 @@ def _symbol_of_attribute_target(node: ast.AST) -> Optional[tuple]:
     return None
 
 
-def _getattr_loop_symbols(loop: ast.For) -> list:
+def _getattr_loop_symbols(loop: ast.For) -> list[str]:
     """Symbol names a ``for name in (...)`` getattr-loop configures.
 
     Matches the tree's idiom::
@@ -380,17 +380,19 @@ def _getattr_loop_symbols(loop: ast.For) -> list:
     return symbols if len(symbols) == len(loop.iter.elts) else []
 
 
-def parse_python_signatures(tree: ast.Module, origin: str) -> tuple:
+def parse_python_signatures(
+    tree: ast.Module, origin: str
+) -> tuple[dict[str, dict[str, Any]], set[str], list[str]]:
     """Return ``(signatures, called, problems)`` for one module.
 
     ``signatures`` maps symbol -> dict with optional "params"/"ret" and the
     assignment line.  ``called`` is the set of ``ama_*`` symbols invoked via
     attribute access or via a getattr-loop signature group.
     """
-    signatures: dict = {}
-    aliases: list = []
-    called: set = set()
-    problems: list = []
+    signatures: dict[str, dict[str, Any]] = {}
+    aliases: list[tuple[str, str, int]] = []
+    called: set[str] = set()
+    problems: list[str] = []
 
     def record(symbol: str, field: str, value_node: ast.AST, lineno: int) -> None:
         entry = signatures.setdefault(symbol, {"origin": f"{origin}:{lineno}"})
@@ -414,7 +416,7 @@ def parse_python_signatures(tree: ast.Module, origin: str) -> tuple:
                 return
             entry["ret"] = cls
 
-    def _local_binding_symbol(node: ast.Assign) -> Optional[tuple]:
+    def _local_binding_symbol(node: ast.Assign) -> Optional[tuple[str, str]]:
         """Match the ``fn = lib.ama_x`` binding idiom: ``(local_name, symbol)``.
 
         This shape was the extractor's one blind spot (adversarial-review
@@ -452,7 +454,7 @@ def parse_python_signatures(tree: ast.Module, origin: str) -> tuple:
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 stack.extend(list(ast.iter_child_nodes(node))[::-1])
 
-    def _process_scope(scope: ast.AST, inherited: Optional[dict] = None) -> None:
+    def _process_scope(scope: ast.AST, inherited: Optional[dict[str, str]] = None) -> None:
         """Extract from one lexical scope, tracking its local ``fn`` bindings.
 
         Bindings are scoped per function so an ``fn`` in one function cannot
@@ -462,7 +464,7 @@ def parse_python_signatures(tree: ast.Module, origin: str) -> tuple:
         ``_zero_via_native`` calls the outer ``fn`` binding), and a child
         scope's own rebindings must not flow back up.
         """
-        local_bindings: dict = dict(inherited or {})
+        local_bindings: dict[str, str] = dict(inherited or {})
         for node in _walk_scope(scope):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 _process_scope(node, local_bindings)
@@ -525,13 +527,16 @@ def parse_python_signatures(tree: ast.Module, origin: str) -> tuple:
     return signatures, called, problems
 
 
-def check(header_protos: dict, modules: Sequence[tuple]) -> tuple:
+def check(
+    header_protos: dict[str, Signature],
+    modules: Sequence[tuple[str, dict[str, dict[str, Any]], set[str]]],
+) -> tuple[list[str], int]:
     """Cross-check parsed Python signatures against header prototypes.
 
     ``modules`` is a sequence of ``(origin, signatures, called)``.
     Returns ``(problems, checked_count)``.
     """
-    problems: list = []
+    problems: list[str] = []
     checked = 0
     for origin, signatures, called in modules:
         for symbol in sorted(called - set(signatures)):
@@ -603,7 +608,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 2
 
     parsed = []
-    parse_problems: list = []
+    parse_problems: list[str] = []
     for rel in modules:
         path = REPO_ROOT / rel
         if not path.is_file():

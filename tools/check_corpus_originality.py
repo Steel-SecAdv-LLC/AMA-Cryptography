@@ -194,7 +194,7 @@ def _module_string_constants(tree: ast.AST) -> dict[str, list[str]]:
         targets: list[ast.expr] = []
         if isinstance(node, ast.Assign):
             targets = list(node.targets)
-            value: ast.expr | None = node.value
+            value: ast.expr = node.value
         elif isinstance(node, ast.AnnAssign) and node.value is not None:
             targets = [node.target]
             value = node.value

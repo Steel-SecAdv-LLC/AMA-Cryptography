@@ -1583,6 +1583,7 @@ class HybridSignatureProvider(CryptoProvider):
 
     # Key sizes for splitting combined keys
     ED25519_SK_SIZE = 32
+    ED25519_FULL_SK_SIZE = 64  # expanded native form: seed || public key
     ED25519_PK_SIZE = 32
     ED25519_SIG_SIZE = 64
     DILITHIUM_SK_SIZE = 4032  # ML-DSA-65 per FIPS 204
@@ -1648,14 +1649,16 @@ class HybridSignatureProvider(CryptoProvider):
         """
         Create hybrid signature (Ed25519 + ML-DSA-65).
 
-        Performance Optimization:
-        -------------------------
-        This method now caches Ed25519 key objects to eliminate reconstruction
-        overhead during hybrid operations (~2x faster Ed25519 signing).
-
         Args:
             message: Data to sign
-            secret_key: Combined secret key (Ed25519 + Dilithium)
+            secret_key: Combined secret key (Ed25519 + Dilithium).  The
+                Ed25519 component may be either the 32-byte seed (the format
+                :meth:`generate_keypair` emits) or the 64-byte expanded
+                native key (the format
+                ``create_crypto_package``'s per-config normalization caches
+                so steady-state signing skips the per-call seed expansion);
+                the two are distinguished unambiguously by total length,
+                because the ML-DSA-65 component is a fixed 4,032 bytes.
             precomputed_hash: Optional pre-computed SHA3-256 hash of message.
                 When provided, skips redundant hash computation (~2x savings).
 
@@ -1669,9 +1672,15 @@ class HybridSignatureProvider(CryptoProvider):
         if not self._pqc_available:
             raise PQCUnavailableError("PQC_UNAVAILABLE: Hybrid signatures require ML-DSA-65.")
 
-        # Split keys
-        classical_sk_bytes = secret_key[: self.ED25519_SK_SIZE]
-        pqc_sk = secret_key[self.ED25519_SK_SIZE :]
+        # Split keys — see the ``secret_key`` docstring for the two accepted
+        # classical-component widths.
+        classical_size = (
+            self.ED25519_FULL_SK_SIZE
+            if len(secret_key) == self.ED25519_FULL_SK_SIZE + self.DILITHIUM_SK_SIZE
+            else self.ED25519_SK_SIZE
+        )
+        classical_sk_bytes = secret_key[:classical_size]
+        pqc_sk = secret_key[classical_size:]
 
         # Compute hash once and pass to both providers
         msg_hash = precomputed_hash if precomputed_hash is not None else native_sha3_256(message)
@@ -2216,10 +2225,25 @@ class CryptoPackageConfig:
     agents (e.g. Mercury Agent) that sign many results with the same identity.
 
     The supplied keys are checked to ensure they are non-empty and not
-    composed entirely of zero bytes.  No algorithm-specific key length
-    validation is performed at this layer; invalid keys will surface as
+    composed entirely of zero bytes, and — for HYBRID_SIG and ED25519 —
+    that the Ed25519 public-key component matches the supplied seed (see
+    ``_normalized_signing_secret``).  Other algorithm-specific key length
+    validation is not performed at this layer; invalid keys will surface as
     errors from the underlying signing call.
     When ``None`` (default), a fresh keypair is generated per call.
+    """
+
+    _normalized_signing_memo: Optional[Tuple[Optional[Tuple[bytes, bytes]], bytes]] = field(
+        default=None, init=False, repr=False, compare=False
+    )
+    """``(signing_keypair identity, normalized secret)`` memo.
+
+    Written by ``_normalized_signing_secret`` on first use of a
+    ``signing_keypair`` so the per-call Ed25519 seed expansion (and the
+    keygen pairwise consistency test it drags in) is paid once per identity
+    instead of once per package.  Lives on this object deliberately: the
+    caller already owns the secret key stored two fields up, so the memo
+    introduces no new key-material retention class.
     """
 
 
@@ -2509,6 +2533,68 @@ def _public_key_fingerprint(public_key: bytes) -> bytes:
     return bytes(public_key[:8])
 
 
+def _normalized_signing_secret(
+    config: CryptoPackageConfig, public_key: bytes, secret_key: bytes
+) -> bytes:
+    """Normalize a pre-generated signing secret once per config object.
+
+    HYBRID_SIG and ED25519 secret keys embed the Ed25519 secret as its
+    32-byte seed.  :meth:`Ed25519Provider.sign` expands a seed to the
+    64-byte native form on every call, and that expansion is a key
+    *generation* (``native_ed25519_keypair_from_seed``), so it also re-ran
+    the INVARIANT-41 pairwise consistency test per signature — measured at
+    ~0.2 ms per package on the agent flow the ``signing_keypair`` option
+    exists for, a cost with no security payoff after the first call.
+
+    The expansion is done once here and memoized on the *config object*,
+    which the caller already owns and which already holds the secret key —
+    the cached expansion is derivable from what the object stores, so this
+    creates no new key-material retention class (contrast module-level
+    caches, which INVARIANT-41's continuous-RNG fix removed).  The memo is
+    keyed on the identity of ``config.signing_keypair``, so replacing the
+    tuple (e.g. after ``KeypairCache.rotate()``) re-normalizes.
+
+    Normalization also *strengthens* validation: the Ed25519 public key
+    derived from the seed must equal the supplied public-key component,
+    which previously went unchecked — a mismatched pair produced packages
+    whose signatures could never verify, discovered only downstream.
+
+    Signing behaviour is unchanged: the native signer derives its scalar
+    from the seed and reads the public-key half from the expanded form,
+    which this function guarantees is the seed's own derived key.
+    """
+    cached = config._normalized_signing_memo
+    if cached is not None and cached[0] is config.signing_keypair:
+        return cached[1]
+
+    algorithm = config.signature_algorithm
+    normalized = secret_key
+    if (
+        algorithm is AlgorithmType.HYBRID_SIG
+        and len(secret_key)
+        == HybridSignatureProvider.ED25519_SK_SIZE + HybridSignatureProvider.DILITHIUM_SK_SIZE
+    ):
+        seed = secret_key[: HybridSignatureProvider.ED25519_SK_SIZE]
+        derived_pk, full_sk = native_ed25519_keypair_from_seed(seed)
+        if derived_pk != public_key[: HybridSignatureProvider.ED25519_PK_SIZE]:
+            raise ValueError(
+                "signing_keypair mismatch: the Ed25519 public-key component does "
+                "not correspond to the supplied Ed25519 seed"
+            )
+        normalized = full_sk + secret_key[HybridSignatureProvider.ED25519_SK_SIZE :]
+    elif algorithm is AlgorithmType.ED25519 and len(secret_key) == 32:
+        derived_pk, full_sk = native_ed25519_keypair_from_seed(secret_key)
+        if derived_pk != public_key:
+            raise ValueError(
+                "signing_keypair mismatch: the Ed25519 public key does not "
+                "correspond to the supplied seed"
+            )
+        normalized = full_sk
+
+    config._normalized_signing_memo = (config.signing_keypair, normalized)
+    return normalized
+
+
 def create_crypto_package(
     content: bytes,
     config: Optional[CryptoPackageConfig] = None,
@@ -2650,10 +2736,12 @@ def create_crypto_package(
             algorithm=config.signature_algorithm,
             metadata={"source": "pre-generated"},
         )
+        _signing_secret = _normalized_signing_secret(config, _pk, _sk)
     else:
         primary_keypair = primary_crypto.generate_keypair()
+        _signing_secret = primary_keypair.secret_key
     _t0 = time.perf_counter_ns()
-    primary_signature = primary_crypto.sign(content, primary_keypair.secret_key)
+    primary_signature = primary_crypto.sign(content, _signing_secret)
     _sign_ns = time.perf_counter_ns() - _t0
     _monitor.monitor_crypto_operation("sign", _sign_ns / 1_000_000)
     # INVARIANT-30 companion signal.  Wired at the sites that are already

@@ -145,6 +145,41 @@ _ROUNDS = 3
 #: turn the benchmark job into a long-running one.
 _MAX_ITERATIONS = 500_000
 
+#: Distinct inputs cycled through by benchmarks of rejection-sampled
+#: primitives (see ``_cycle``).
+_INPUT_POOL = 64
+
+
+def _cycle(items: "List[Any]") -> Callable[[], Any]:
+    """Return a callable that yields ``items`` round-robin, one per call.
+
+    ML-DSA-65 signing is FIPS 204's *deterministic* variant here (rnd = 0), so
+    for a fixed (key, message) pair the rejection-loop count — and therefore
+    the running time — is a constant, not a random variable.  A benchmark that
+    signs one fixed message under one per-process keypair measures the luck of
+    that single pair: across six runs of this suite on the ubuntu-24.04-arm CI
+    runner, ``dilithium_sign`` reported 1,396 to 7,474 ops/sec (a 5.35x
+    spread) while every non-rejection-sampled primitive on the same runs
+    agreed within 3%.  ``full_package_create`` carries the same signature
+    inside it and showed the same bimodality (2,701 vs 5,481).
+
+    Cycling a pool of distinct inputs makes every timed batch average over
+    ``_INPUT_POOL`` independent draws of the rejection count, so the reported
+    number converges on the *expected* signing rate — the quantity a
+    regression floor can meaningfully be set against.  The per-call cost of
+    the cycling itself is two attribute loads and an integer increment,
+    negligible against the >100 us primitives it is applied to.
+    """
+    n = len(items)
+    state = {"i": 0}
+
+    def next_item() -> Any:
+        i = state["i"]
+        state["i"] = (i + 1) % n
+        return items[i]
+
+    return next_item
+
 
 def _timed_batch(operation: Callable[[], object], iterations: int) -> tuple[float, float]:
     """One timed batch, as ``(operations_per_second, elapsed_seconds)``."""
@@ -333,56 +368,64 @@ def run_hkdf_derive_benchmark(iterations: int = 100) -> float:
 
 
 def run_full_package_create_benchmark(iterations: int = 20) -> float:
-    """Benchmark complete crypto package creation."""
-    from ama_cryptography.legacy_compat import (
+    """Benchmark complete crypto package creation (4-layer, hybrid signature).
+
+    Measures :func:`ama_cryptography.crypto_api.create_crypto_package` — the
+    shipped flagship API — under a long-lived signing identity
+    (:class:`~ama_cryptography.crypto_api.KeypairCache`), which mirrors the
+    agent flow the API documents and keeps the workload comparable to the
+    pre-4.0.0 benchmark that reused one KMS across calls.  The deprecated
+    ``legacy_compat`` shim this used to time emitted a ``DeprecationWarning``
+    per call and measured a code path new integrations are told not to take.
+
+    Package creation embeds an ML-DSA-65 signature, so the content is cycled
+    for the same reason ``run_dilithium_sign_benchmark`` cycles its message
+    (see ``_cycle``): with deterministic signing, one fixed (key, content)
+    pair pins one rejection count, and the benchmark measures that pair's
+    luck instead of the expected rate.
+    """
+    from ama_cryptography.crypto_api import (
+        CryptoPackageConfig,
+        KeypairCache,
         create_crypto_package,
-        generate_key_management_system,
     )
 
-    kms = generate_key_management_system("Benchmark Test")
-    codes = "TEST_OMNI_CODE_12345"
-    helix_params = [(1.0, 2.0)]
+    cache = KeypairCache()
+    public_key, secret_key = cache.get_or_generate()
+    config = CryptoPackageConfig(signing_keypair=(public_key, secret_key))
+    base = b"Benchmark package content " * 8
+    next_content = _cycle([base + i.to_bytes(2, "big") for i in range(_INPUT_POOL)])
 
     def operation() -> None:
-        create_crypto_package(
-            codes=codes,
-            helix_params=helix_params,
-            kms=kms,
-            author="Benchmark",
-            use_rfc3161=False,
-        )
+        create_crypto_package(next_content(), config)
 
     return benchmark_operation_best_of(operation, iterations, warmup=2, rounds=5)
 
 
 def run_full_package_verify_benchmark(iterations: int = 20) -> float:
-    """Benchmark complete crypto package verification."""
-    from ama_cryptography.legacy_compat import (
+    """Benchmark complete crypto package verification (4-layer, anchored).
+
+    Measures :func:`ama_cryptography.crypto_api.verify_crypto_package` with
+    ``expected_public_key`` supplied, so the timed path is the one 4.0.0
+    callers must take for ``all_valid`` to mean anything (the unanchored form
+    caps the result at ``core_valid``).  Verification is deterministic — no
+    rejection sampling — so a fixed package is the right fixture.
+    """
+    from ama_cryptography.crypto_api import (
+        CryptoPackageConfig,
+        KeypairCache,
         create_crypto_package,
-        generate_key_management_system,
         verify_crypto_package,
     )
 
-    kms = generate_key_management_system("Benchmark Test")
-    codes = "TEST_OMNI_CODE_12345"
-    helix_params = [(1.0, 2.0)]
-
-    package = create_crypto_package(
-        codes=codes,
-        helix_params=helix_params,
-        kms=kms,
-        author="Benchmark",
-        use_rfc3161=False,
-    )
+    cache = KeypairCache()
+    public_key, secret_key = cache.get_or_generate()
+    config = CryptoPackageConfig(signing_keypair=(public_key, secret_key))
+    content = b"Benchmark package content for verification " * 4
+    package = create_crypto_package(content, config)
 
     def operation() -> None:
-        verify_crypto_package(
-            codes=codes,
-            helix_params=helix_params,
-            package=package,
-            hmac_key=kms.hmac_key,
-            require_quantum_signatures=False,
-        )
+        verify_crypto_package(content, package, expected_public_key=public_key)
 
     return benchmark_operation(operation, iterations, warmup=2)
 
@@ -419,10 +462,15 @@ def run_dilithium_sign_benchmark(iterations: int = 20) -> Optional[float]:
             return None
 
         kp = generate_dilithium_keypair()
-        message = b"Test message for ML-DSA-65 signing" * 10
+        # Deterministic signing makes the rejection count a constant per
+        # (key, message) pair — cycle distinct messages so the batch averages
+        # over the rejection distribution instead of sampling one pair's luck
+        # (see _cycle).
+        base = b"Test message for ML-DSA-65 signing" * 10
+        next_message = _cycle([base + i.to_bytes(2, "big") for i in range(_INPUT_POOL)])
 
         def operation() -> None:
-            dilithium_sign(message, kp.secret_key)
+            dilithium_sign(next_message(), kp.secret_key)
 
         return benchmark_operation(operation, iterations, warmup=2)
     except (ImportError, Exception):

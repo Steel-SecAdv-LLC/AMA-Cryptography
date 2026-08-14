@@ -78,6 +78,7 @@ from __future__ import annotations
 import ast
 import re
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -272,7 +273,9 @@ def _guard_call_lines(node: ast.AST) -> list[int]:
     return lines
 
 
-def _iter_public_functions(tree: ast.Module):
+def _iter_public_functions(
+    tree: ast.Module,
+) -> Iterator[tuple[str, ast.FunctionDef | ast.AsyncFunctionDef]]:
     """Yield ``(display_name, node)`` for every public function and method.
 
     Descends one level into public classes so class methods — the blind spot

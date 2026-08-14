@@ -151,34 +151,74 @@ _native_lib: Any = None
 _BufferInput = Union[bytes, bytearray, memoryview]
 
 
-@contextlib.contextmanager
-def _c_buffer_view(data: _BufferInput) -> Iterator[Any]:
-    """Yield a ctypes buffer view without copying writable key material.
+class _CBufferViews:
+    """Borrow one or more inputs as ctypes-compatible buffers without copying
+    writable key material, releasing every borrowed view on exit.
 
     SECURITY: ``ctypes.c_char_p`` accepts immutable ``bytes`` directly but
     rejects ``bytearray``.  For mutable buffers we borrow the exporter with
     ``from_buffer`` so session keys stay in their wipeable bytearray storage
-    instead of being materialised as transient heap copies.
+    instead of being materialised as transient heap copies.  Read-only
+    memoryviews may not expose a writable buffer for ``from_buffer``;
+    converting those to bytes is limited to non-wipeable public inputs and
+    never used by SecureSession key storage.
+
+    PERFORMANCE: this is a hand-written context manager, not a
+    ``@contextlib.contextmanager`` generator, and it handles all of a call's
+    buffers in one enter/exit.  The generator form cost ~1 us per buffer per
+    call in the generator/``contextlib`` machinery alone — four of them
+    halved the one-shot AEAD wrappers' throughput (measured 8.4 us vs 3.4 us
+    per 1 KiB AES-256-GCM call), which is why the regression floors recorded
+    in May 2026 sat ~2.1x above what the wrappers could deliver.  ``bytes``
+    inputs — the overwhelmingly common case — take no view at all and are
+    passed straight through, exactly as ctypes itself accepts them.
+
+    ``__enter__`` returns a tuple of per-input arguments in input order, so
+    call sites unpack: ``with _CBufferViews(a, b) as (a_buf, b_buf):``.
     """
-    if isinstance(data, bytes):
-        yield data
-        return
-    view = memoryview(data)
-    if view.readonly:
-        # Read-only memoryviews may not expose a writable buffer for
-        # ``from_buffer``; converting to bytes is limited to non-wipeable
-        # public inputs and never used by SecureSession key storage.
+
+    __slots__ = ("_args", "_data", "_views")
+
+    def __init__(self, *data: _BufferInput) -> None:
+        self._data = data
+        self._views: list[memoryview] = []
+        self._args: Optional[tuple[Any, ...]] = None
+
+    def __enter__(self) -> tuple[Any, ...]:
+        views = self._views
+        args: list[Any] = []
         try:
-            yield view.tobytes()
-        finally:
+            for data in self._data:
+                if isinstance(data, bytes):
+                    args.append(data)
+                    continue
+                view = memoryview(data)
+                views.append(view)
+                if view.readonly:
+                    args.append(view.tobytes())
+                    continue
+                if view.ndim != 1 or view.itemsize != 1:
+                    raise TypeError("buffer must be a one-dimensional byte buffer")
+                args.append((ctypes.c_char * view.nbytes).from_buffer(view))
+        except BaseException:
+            self.__exit__(None, None, None)
+            raise
+        self._args = tuple(args)
+        return self._args
+
+    def __exit__(self, *exc: Any) -> None:
+        # Drop the ctypes borrows before releasing the views they came from.
+        self._args = None
+        views, self._views = self._views, []
+        for view in views:
             view.release()
-        return
-    try:
-        if view.ndim != 1 or view.itemsize != 1:
-            raise TypeError("buffer must be a one-dimensional byte buffer")
-        yield (ctypes.c_char * view.nbytes).from_buffer(view)
-    finally:
-        view.release()
+
+
+@contextlib.contextmanager
+def _c_buffer_view(data: _BufferInput) -> Iterator[Any]:
+    """Single-buffer form of :class:`_CBufferViews` (see its docstring)."""
+    with _CBufferViews(data) as (arg,):
+        yield arg
 
 
 def _get_lib_names() -> list:
@@ -312,10 +352,69 @@ _LOAD_DIAGNOSTICS: dict = {
     # was observed to erase the rejection before POST could report it.  This
     # field is the durable record native_backend_load_summary() reads first.
     "abi_rejection": None,
+    # str: hex SHA3-256 of the candidate's bytes, computed BEFORE the object
+    # was mapped (see _try_load_library).  On Linux the same file descriptor
+    # that was hashed is the one dlopen maps, so this is the digest of the
+    # bytes actually executing; the integrity POST stage prefers it over
+    # re-reading the path, which closes the hash-after-load race.
+    "preload_digest_hex": None,
 }
 
 
-def _try_load_library(lib_path: Path) -> Optional[ctypes.CDLL]:
+def _expected_native_digest() -> Optional[bytes]:
+    """The build-signed SHA3-256 of ``libama_cryptography``, or ``None``.
+
+    Read from ``_integrity_signature.py`` for the PRE-LOAD check in
+    ``_try_load_library``.  At this point the artefact's Ed25519 signature has
+    not been verified — the verifier that checks it lives inside the library
+    being loaded — so this value is authoritative exactly against the attacker
+    who can replace the shared object but cannot rewrite and re-sign the
+    artefact.  An attacker who rewrites both is caught after load, by the
+    signature (unforgeable) or, having re-signed with their own key, by the
+    trust-anchor comparison on anchored builds; that residue is the OS-level
+    code-signing boundary SECURITY.md documents.  Returns ``None`` when the
+    artefact is absent or malformed, in which case there is nothing to check
+    against and discovery proceeds as before (the POST integrity stage then
+    reports the unverifiable state as it always has).
+    """
+    try:
+        from ama_cryptography import _integrity_signature as sig_mod
+    except Exception:
+        return None
+    digest_hex = getattr(sig_mod, "INTEGRITY_NATIVE_DIGEST_HEX", None)
+    if not isinstance(digest_hex, str):
+        return None
+    try:
+        digest_raw = bytes.fromhex(digest_hex)
+    except ValueError:
+        return None
+    return digest_raw if len(digest_raw) == 32 else None
+
+
+def _digest_fd(fd: int) -> bytes:
+    """SHA3-256 over an open file descriptor, without moving its offset users."""
+    hasher = hashlib.sha3_256()
+    os.lseek(fd, 0, os.SEEK_SET)
+    while True:
+        chunk = os.read(fd, 1 << 20)
+        if not chunk:
+            return hasher.digest()
+        hasher.update(chunk)
+
+
+#: Hint appended to a pre-load digest refusal.  The repair tools live inside
+#: this package, so the refusal message must carry the way back in — the same
+#: reasoning INVARIANT-39 applied to the integrity-stage import completion.
+_PRELOAD_MISMATCH_HINT = (
+    "refused before mapping: the object's SHA3-256 does not match the signed "
+    "INTEGRITY_NATIVE_DIGEST_HEX, and a shared object executes its "
+    "constructors the moment it is mapped. If you rebuilt the library, "
+    "refresh the artefact with: AMA_BUILD_PIPELINE=1 python -m "
+    "ama_cryptography.integrity --update --sign"
+)
+
+
+def _try_load_library(lib_path: Path, verify_digest: bool = True) -> Optional[ctypes.CDLL]:
     """Try to load a shared library from the given path. Returns None on failure.
 
     Records every attempt — and the exact loader error on failure — in
@@ -323,17 +422,87 @@ def _try_load_library(lib_path: Path) -> Optional[ctypes.CDLL]:
     be told apart from one that was never built.  The OSError is still
     swallowed (discovery must keep walking the search path), but it is no
     longer discarded.
+
+    PRE-LOAD VERIFICATION.  A shared object executes its constructors the
+    moment it is mapped, before any power-on self-test can examine it — so a
+    check that runs only after ``dlopen`` detects tampering but does not
+    prevent the tampered code from running.  Every candidate's bytes are
+    therefore hashed *first*, and when the integrity artefact carries a
+    native digest and ``verify_digest`` is true, a mismatch refuses to map
+    the object at all.  On Linux the mapping then goes through
+    ``/proc/self/fd`` on the very descriptor that was hashed: a path swap
+    between the two steps cannot occur (the descriptor pins the inode), so
+    what remains is an in-place overwrite of that inode inside the window —
+    an attacker who could do that could have pre-written the file, which the
+    hash catches — and platforms without procfs, where hash-then-load's
+    window is accepted and the POST stage re-verifies after load as before.
+    The recorded ``preload_digest_hex`` is the digest of the mapped bytes,
+    which the POST integrity stage prefers over re-reading the path.
+
+    Two deliberate carve-outs.  The ``AMA_CRYPTO_LIB_PATH`` override
+    (``verify_digest=False``) is the operator's own substitution: its digest
+    is still recorded, but a mismatch is reported by POST as UNVERIFIED
+    rather than blocked here.  ``AMA_BUILD_PIPELINE=1`` (outside
+    secure-execution mode) demotes the refusal to a warning because the
+    tools that refresh a stale artefact after a rebuild live inside this
+    package and must be able to import it.
     """
     _LOAD_DIAGNOSTICS["candidates"].append(str(lib_path))
+    # Per-attempt state: a digest recorded for an earlier candidate that then
+    # failed to map must not be attributed to this one.
+    _LOAD_DIAGNOSTICS["preload_digest_hex"] = None
+    expected = _expected_native_digest()
+    fd: Optional[int] = None
     try:
-        if platform.system() == "Windows":
-            # On Windows with Python 3.8+, DLL search paths are restricted.
-            # Use winmode=0 to search the DLL's directory and PATH.
-            return ctypes.CDLL(str(lib_path), winmode=0)
-        return ctypes.CDLL(str(lib_path))
-    except OSError as exc:
-        _LOAD_DIAGNOSTICS["errors"].append((str(lib_path), str(exc)))
-        return None
+        if platform.system() != "Windows":
+            try:
+                fd = os.open(str(lib_path), os.O_RDONLY | getattr(os, "O_CLOEXEC", 0))
+                digest: Optional[bytes] = _digest_fd(fd)
+            except OSError as exc:
+                if verify_digest and expected is not None:
+                    _LOAD_DIAGNOSTICS["errors"].append(
+                        (str(lib_path), f"pre-load digest read failed: {exc}")
+                    )
+                    return None
+                digest = None
+        else:
+            try:
+                digest = hashlib.sha3_256(lib_path.read_bytes()).digest()
+            except OSError:
+                digest = None
+        if verify_digest and expected is not None and digest is not None and digest != expected:
+            if os.environ.get("AMA_BUILD_PIPELINE") == "1" and not _in_secure_execution_mode():
+                logging.getLogger(__name__).warning(
+                    "Native library %s does not match the signed digest "
+                    "(build pipeline: loading anyway so the artefact can "
+                    "be re-signed for this build).",
+                    lib_path,
+                )
+            else:
+                _LOAD_DIAGNOSTICS["errors"].append((str(lib_path), _PRELOAD_MISMATCH_HINT))
+                return None
+        if digest is not None:
+            _LOAD_DIAGNOSTICS["preload_digest_hex"] = digest.hex()
+        if fd is not None and platform.system() == "Linux":
+            proc_fd_path = f"/proc/self/fd/{fd}"
+            if os.path.exists(proc_fd_path):
+                try:
+                    return ctypes.CDLL(proc_fd_path)
+                except OSError as exc:
+                    _LOAD_DIAGNOSTICS["errors"].append((str(lib_path), str(exc)))
+                    return None
+        try:
+            if platform.system() == "Windows":
+                # On Windows with Python 3.8+, DLL search paths are restricted.
+                # Use winmode=0 to search the DLL's directory and PATH.
+                return ctypes.CDLL(str(lib_path), winmode=0)
+            return ctypes.CDLL(str(lib_path))
+        except OSError as exc:
+            _LOAD_DIAGNOSTICS["errors"].append((str(lib_path), str(exc)))
+            return None
+    finally:
+        if fd is not None:
+            os.close(fd)
 
 
 #: ``AT_SECURE`` / ``AT_NULL`` from ``elf.h``.  Stable kernel ABI constants.
@@ -556,6 +725,7 @@ def _find_native_library() -> Optional[ctypes.CDLL]:
     # the module-integrity digest covers the package's .py files only and
     # never the native library, so this log line is the only signal that the
     # backend was not the shipped one.
+    override_dir: Optional[Path] = None
     override = os.getenv("AMA_CRYPTO_LIB_PATH")
     if override and _in_secure_execution_mode():
         logging.getLogger(__name__).warning(
@@ -577,18 +747,25 @@ def _find_native_library() -> Optional[ctypes.CDLL]:
             logging.getLogger(__name__).warning(
                 "Loading the native cryptographic backend from "
                 "AMA_CRYPTO_LIB_PATH=%r instead of the shipped library. The "
-                "module-integrity digest does not cover the native library, "
-                "so this override is not tamper-evident.",
+                "signed integrity artefact binds the SHIPPED library's "
+                "digest, which this substituted object is by definition not "
+                "bound by — the POST integrity stage will record it as "
+                "UNVERIFIED.",
                 override,
             )
         if override_path.is_file():
-            lib = _try_load_library(override_path)
+            # verify_digest=False: the override is by definition not the signed
+            # object; it is the operator's own substitution, honoured (outside
+            # secure-execution mode) and recorded UNVERIFIED by the POST stage
+            # rather than blocked here.
+            lib = _try_load_library(override_path, verify_digest=False)
             if lib is not None:
                 _LOAD_DIAGNOSTICS["loaded"] = True
                 _LOAD_DIAGNOSTICS["path"] = str(override_path)
                 _LOAD_DIAGNOSTICS["loaded_via_override"] = True
                 return lib
         elif override_path.is_dir():
+            override_dir = override_path
             search_dirs.insert(0, override_path)
 
     _LOAD_DIAGNOSTICS["searched_dirs"] = [str(d) for d in search_dirs]
@@ -597,10 +774,15 @@ def _find_native_library() -> Optional[ctypes.CDLL]:
         for lib_name in lib_names:
             lib_path = search_dir / lib_name
             if lib_path.is_file():
-                lib = _try_load_library(lib_path)
+                # Candidates under an AMA_CRYPTO_LIB_PATH directory carry the
+                # same operator intent as an override file: substitution is
+                # honoured and reported, not digest-blocked.
+                lib = _try_load_library(lib_path, verify_digest=search_dir is not override_dir)
                 if lib is not None:
                     _LOAD_DIAGNOSTICS["loaded"] = True
                     _LOAD_DIAGNOSTICS["path"] = str(lib_path)
+                    if search_dir is override_dir:
+                        _LOAD_DIAGNOSTICS["loaded_via_override"] = True
                     return lib
 
     return None
@@ -633,6 +815,7 @@ def native_backend_diagnostics() -> dict:
         "missing_families": list(_LOAD_DIAGNOSTICS["missing_families"]),
         "native_version": _LOAD_DIAGNOSTICS["native_version"],
         "abi_rejection": _LOAD_DIAGNOSTICS["abi_rejection"],
+        "preload_digest_hex": _NATIVE_LIB_PRELOAD_DIGEST_HEX,
     }
 
 
@@ -2101,12 +2284,26 @@ _native_lib = _find_native_library()
 # actually running and never change after import, so the verifier's answer does
 # not depend on who called discovery last.
 _NATIVE_LIB_PATH: Optional[str] = (
-    getattr(_native_lib, "_name", None) if _native_lib is not None else None
+    # Prefer the discovery record: a pre-load-verified library is mapped via
+    # /proc/self/fd on Linux, so the CDLL's ``_name`` is a transient fd path
+    # while the discovery record holds the real filesystem location.
+    (_LOAD_DIAGNOSTICS["path"] or getattr(_native_lib, "_name", None))
+    if _native_lib is not None
+    else None
 )
 _NATIVE_LIB_VIA_OVERRIDE: Optional[str] = (
     _LOAD_DIAGNOSTICS["override"]
     if (_native_lib is not None and _LOAD_DIAGNOSTICS["loaded_via_override"])
     else None
+)
+#: Digest of the bytes that were actually hashed-then-mapped at load time
+#: (None when the load skipped pre-load verification — an override, a missing
+#: artefact, or a pre-artefact test harness).  Snapshotted here for the same
+#: reason as the two names above: the POST integrity stage must describe the
+#: library the process is running, not whatever a later discovery re-run
+#: scribbled into the scratch record.
+_NATIVE_LIB_PRELOAD_DIGEST_HEX: Optional[str] = (
+    _LOAD_DIAGNOSTICS["preload_digest_hex"] if _native_lib is not None else None
 )
 
 # ---------------------------------------------------------------------------
@@ -4397,12 +4594,7 @@ def native_aes256_gcm_encrypt(
     # SECURITY: borrow bytearray-backed key material directly through the
     # buffer protocol; do not call bytes(key), which leaves an immutable
     # transient copy outside the secure wipe path.
-    with (
-        _c_buffer_view(key) as key_buf,
-        _c_buffer_view(nonce) as nonce_buf,
-        _c_buffer_view(plaintext) as pt_buf,
-        _c_buffer_view(aad) as aad_buf,
-    ):
+    with _CBufferViews(key, nonce, plaintext, aad) as (key_buf, nonce_buf, pt_buf, aad_buf):
         rc = _native_lib.ama_aes256_gcm_encrypt(
             key_buf,
             nonce_buf,
@@ -4465,12 +4657,12 @@ def native_aes256_gcm_decrypt(
 
     # SECURITY: borrow bytearray-backed key material directly through the
     # buffer protocol; authentication failure never observes a copied key.
-    with (
-        _c_buffer_view(key) as key_buf,
-        _c_buffer_view(nonce) as nonce_buf,
-        _c_buffer_view(ciphertext) as ct_buf,
-        _c_buffer_view(aad) as aad_buf,
-        _c_buffer_view(tag) as tag_buf,
+    with _CBufferViews(key, nonce, ciphertext, aad, tag) as (
+        key_buf,
+        nonce_buf,
+        ct_buf,
+        aad_buf,
+        tag_buf,
     ):
         rc = _native_lib.ama_aes256_gcm_decrypt(
             key_buf,
@@ -4547,11 +4739,7 @@ def native_hkdf(
     # SECURITY: rekey derives from live bytearray key storage via a
     # borrowed ctypes view.  This removes the previous bytes(self.key)
     # transient heap copy while preserving the native HKDF implementation.
-    with (
-        _c_buffer_view(ikm) as ikm_buf,
-        _c_buffer_view(salt or b"") as salt_buf,
-        _c_buffer_view(info) as info_buf,
-    ):
+    with _CBufferViews(ikm, salt or b"", info) as (ikm_buf, salt_buf, info_buf):
         rc = _native_lib.ama_hkdf(
             salt_buf if salt_len > 0 else None,
             ctypes.c_size_t(salt_len),
@@ -4603,10 +4791,10 @@ def _native_hkdf_sha2(
     # material is read in place through a c_char view rather than coerced via
     # the c_void_p argtype — the latter rejects bytearray outright (TypeError)
     # and never exposes the wipeable buffer to the native kernel directly.
-    with (
-        _c_buffer_view(ikm) as ikm_buf,
-        _c_buffer_view(salt if salt is not None else b"") as salt_buf,
-        _c_buffer_view(info) as info_buf,
+    with _CBufferViews(ikm, salt if salt is not None else b"", info) as (
+        ikm_buf,
+        salt_buf,
+        info_buf,
     ):
         rc = getattr(_native_lib, fn_name)(
             salt_buf if salt_len > 0 else None,

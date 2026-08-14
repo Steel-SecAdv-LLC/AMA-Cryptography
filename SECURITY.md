@@ -24,7 +24,7 @@ We actively maintain and provide security updates for the following versions:
 | Version | Supported | Status |
 |---------|-----------|--------|
 | 4.0.x | Yes | Active development and security updates |
-| 3.5.x | No | Superseded by v4.0 (six breaking changes — see CHANGELOG `[4.0.0]`) |
+| 3.5.x | No | Superseded by v4.0 (nine breaking changes — see CHANGELOG `[4.0.0]`) |
 | 3.4.x | No | Superseded by v3.5; no public API removals |
 | 3.3.x | No | Superseded by v3.4; no public API removals |
 | 3.2.x | No | Superseded by v3.3; no public API removals |
@@ -401,6 +401,88 @@ Python interpreter loads them. Deploy AMA behind one of those where the
 `.pyc`/`.so` tampering threat is in scope; the in-process checks are
 defense in depth beneath it, not a substitute for it.
 
+**Why the boundary is not narrowed further in-band (2026-08
+reassessment).** The obvious next step — bootstrapping the checker by
+`exec`-ing its *source* so its own `.pyc` never runs — was evaluated and
+rejected: it moves the trusted base from the checker's module to the
+orchestration chain that would perform the exec (`__init__.py` and the
+modules it imports first), and every file in that chain lives in the same
+directory under the same permissions as the one it replaced. An attacker
+with the write access the attack requires can poison `__init__.pyc` as
+easily as the checker's `.pyc`, so the narrowing buys complexity, not
+security. What *does* help, and costs nothing at runtime, is deployment
+posture: install the package read-only (the norm for system site-packages),
+or run with `PYTHONDONTWRITEBYTECODE=1` / `sys.dont_write_bytecode` so no
+`.pyc` cache exists to poison — the execution-integrity stage reports the
+no-cache case honestly as "nothing to poison" — and let the OS-level
+signing above authenticate the tree.
+
+### Pre-load native-library verification — refusing before mapping
+
+Digest-checking the shared object *after* `dlopen` (the original
+INVARIANT-39 binding) detects tampering but cannot prevent it from
+running: a shared object executes its constructors the moment it is
+mapped. Discovery therefore hashes every candidate **before** loading it
+and refuses to map an object whose SHA3-256 does not match the signed
+`INTEGRITY_NATIVE_DIGEST_HEX` in the integrity artefact. On Linux the
+mapping then goes through `/proc/self/fd` on the very descriptor that was
+hashed — the descriptor pins the inode, so the verified bytes and the
+mapped bytes cannot be split by swapping the path between the two steps —
+and the POST integrity stage compares the *recorded* digest of those
+mapped bytes rather than re-reading the file, closing the same race on
+the back end.
+
+Stated boundaries, not implied ones: at pre-load time the artefact's
+signature cannot yet be verified (the Ed25519 verifier is inside the
+library being loaded), so this check defeats the attacker who can replace
+the shared object but not re-sign the artefact; one who rewrites both is
+caught after load by the signature — or, having re-signed under their own
+key, by the trust-anchor comparison on anchored builds, with the
+constructor-execution residue that entails. That full-package attacker
+remains the OS-code-signing boundary above. An in-place overwrite of the
+pinned inode inside the hash-to-map window is not excluded (an attacker
+with that write access is caught whenever they write *before* the hash),
+and platforms without procfs fall back to hash-then-load with the POST
+stage re-verifying after load. Two deliberate carve-outs:
+`AMA_CRYPTO_LIB_PATH` (the operator's own substitution — honoured,
+digest-recorded, reported UNVERIFIED when the bytes differ) and
+`AMA_BUILD_PIPELINE=1` outside secure-execution mode (the artefact-repair
+tools live inside this package and must be able to import it after a
+rebuild). Pinned in both directions by
+`tests/test_preload_native_digest.py` and the tamper cases in
+`tests/test_native_integrity.py`.
+
+Because verification now binds the mapped **bytes**, an
+`AMA_CRYPTO_LIB_PATH` override whose bytes are identical to the signed
+library reports as verified — a byte-identical copy *is* the signed
+library, wherever it was loaded from — while the override's presence
+stays visible in `native_backend_diagnostics()`. A modified override
+remains UNVERIFIED, never blocked.
+
+**Stated gap: the Cython binding extensions are not digest-bound.** The
+composite signature covers the `.py` sources, the POST KAT vectors and
+`libama_cryptography`; it does not cover the compiled extension modules
+(`ed25519_binding`, `hmac_binding`, `sha3_binding`, `dilithium_binding`,
+`hkdf_binding`, `math_engine`), which contain compiled kernels and load
+before POST. This is not an oversight to be papered over but a pipeline
+constraint with a specific shape: shipped Linux wheels pass through
+`auditwheel repair`, which **rewrites the binding ELFs after signing**
+(patching their `libama_cryptography.so.4` dependency), so any
+build-time digest of those files is invalidated by the very pipeline
+that produces the release artefact — a digest check would fail every
+repaired wheel at import. Closing the gap therefore requires a release-
+pipeline change validated by a full dry run: either static-linking the
+bindings (no external dependency for auditwheel to graft, leaving their
+bytes stable through repair) or an `--exclude`-scoped repair, followed
+by extending the composite signature to a per-extension digest map. Until
+then, stated without softening: a tampered binding extension is caught by
+no in-process check. What bounds the exposure is that the bindings are
+thin marshalling layers over the digest-bound native library, and that
+the wheel-level controls (SLSA provenance, signed wheels) and the
+OS-level signing boundary above are the authenticating controls for
+every compiled artefact in the package — the same controls the
+checker-poisoning boundary already depends on.
+
 ### `--update` is build-pipeline-only
 
 `python -m ama_cryptography.integrity --update` is gated behind
@@ -524,8 +606,11 @@ This environment variable overrides the search for the native library and
 loads the named shared object directly. It is a developer convenience for
 pointing at an out-of-tree build, and it is a code-execution boundary: a
 shared object runs its constructors the moment it is mapped, before the
-power-on self-test executes. Because the override is by definition not the
-signed, shipped object, the integrity check records the loaded library as
+power-on self-test executes. The loaded object's digest is recorded at load
+time and compared against the signed native digest: when the override's
+bytes are **identical** to the signed library's, it verifies in full (a
+byte-identical copy is the signed library, wherever it was loaded from);
+when they differ, the integrity check records the loaded library as
 **unverified** (the signature over the artefact still verifies, but the
 loaded bytes are not bound to it) — `module_attestation()["fully_verified"]`
 is `False` and a warning names the override. Treat the ability to set it as

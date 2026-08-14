@@ -35,6 +35,7 @@ AI Co-Architects:
 """
 
 import ast
+import bisect
 import cmath
 import hashlib
 import logging
@@ -549,7 +550,7 @@ class EWMAStats:
         n: Number of observations
     """
 
-    __slots__ = ("alpha", "mean", "variance", "n", "_recent_values")
+    __slots__ = ("alpha", "mean", "variance", "n", "_recent_values", "_mad_cache")
 
     def __init__(self, alpha: float = 0.1, window_size: int = 100) -> None:
         """
@@ -571,6 +572,17 @@ class EWMAStats:
         self.variance: float = 0.0
         self.n: int = 0
         self._recent_values: Deque[float] = deque(maxlen=window_size)
+        # ``(n_at_computation, median, mad)`` memo for :meth:`_median_and_mad`.
+        #
+        # ``record_timing`` consults the MAD three times per recorded
+        # operation (the ``baseline_stats`` report, ``is_anomaly_mad``'s MAD
+        # and its median), and each consultation sorted the whole window —
+        # up to four O(w log w) sorts per crypto operation.  Measured on the
+        # package-create hot path that made the *monitoring* of a signature
+        # several times more expensive than the Ed25519 signature it
+        # monitored.  The window only changes in ``update``, so one
+        # computation per observation is enough; ``n`` is the change counter.
+        self._mad_cache: Tuple[int, float, float] = (-1, 0.0, 0.0)
 
     def update(self, x: float) -> Tuple[float, float]:
         """
@@ -607,6 +619,49 @@ class EWMAStats:
         """
         return self.mean, math.sqrt(self.variance)
 
+    def _median_and_mad(self) -> Tuple[float, float]:
+        """Median and MAD of the recent window, memoized per observation.
+
+        One O(w log w) sort per new observation.  The deviations
+        ``abs(v - median)`` over the *sorted* window form two ascending runs
+        (walking outward from the median in each direction), so their median
+        is selected with an O(w) two-pointer merge instead of building and
+        sorting a second list.  Values are bit-identical to the naive
+        ``sorted(abs(v - median) for v in values)`` form, which
+        ``tests/test_monitoring_mad.py`` pins against randomized windows.
+        """
+        if self._mad_cache[0] == self.n:
+            return self._mad_cache[1], self._mad_cache[2]
+
+        values = sorted(self._recent_values)
+        count = len(values)
+        median = _median_sorted(values)
+
+        # Split at the last element <= median; deviations ascend walking left
+        # from the split and right from the element after it.
+        lo = bisect.bisect_right(values, median) - 1
+        hi = lo + 1
+
+        def _next_deviation(left: int, right: int) -> Tuple[float, int, int]:
+            left_dev = median - values[left] if left >= 0 else math.inf
+            right_dev = values[right] - median if right < count else math.inf
+            if left_dev <= right_dev:
+                return left_dev, left - 1, right
+            return right_dev, left, right + 1
+
+        # Select the median of the ``count`` deviations: element at index
+        # (count - 1) // 2, averaged with the next one when count is even.
+        target = (count - 1) // 2
+        deviation = 0.0
+        for _ in range(target + 1):
+            deviation, lo, hi = _next_deviation(lo, hi)
+        if count % 2 == 0:
+            second, _, _ = _next_deviation(lo, hi)
+            deviation = (deviation + second) / 2.0
+
+        self._mad_cache = (self.n, float(median), float(deviation))
+        return float(median), float(deviation)
+
     def get_mad(self) -> float:
         """
         Calculate Median Absolute Deviation (MAD) from recent values.
@@ -623,12 +678,7 @@ class EWMAStats:
         """
         if len(self._recent_values) < 3:
             return 0.0
-
-        values = sorted(self._recent_values)
-        median = _median_sorted(values)
-        deviations = sorted(abs(v - median) for v in values)
-        mad = _median_sorted(deviations)
-        return float(mad)
+        return self._median_and_mad()[1]
 
     def is_anomaly_mad(self, x: float, threshold: float = 3.5) -> bool:
         """
@@ -649,12 +699,10 @@ class EWMAStats:
         if len(self._recent_values) < 10:
             return False
 
-        mad = self.get_mad()
+        median, mad = self._median_and_mad()
         if mad == 0:
             return False
 
-        values = sorted(self._recent_values)
-        median = _median_sorted(values)
         modified_z = abs(x - median) / (1.4826 * mad)
         return modified_z > threshold
 
@@ -664,6 +712,7 @@ class EWMAStats:
         self.variance = 0.0
         self.n = 0
         self._recent_values.clear()
+        self._mad_cache = (-1, 0.0, 0.0)
 
 
 @dataclass

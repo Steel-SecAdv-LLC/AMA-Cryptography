@@ -398,10 +398,10 @@ def count_libfuzzer_entry_points(repo: Path) -> int:
     *defines* ``LLVMFuzzerTestOneInput``" detection here would be the exact
     duplication it exists to police.
     """
-    tools_dir = str(Path(__file__).resolve().parent)
-    if tools_dir not in sys.path:
-        sys.path.insert(0, tools_dir)
-    import check_fuzz_target_registration as registration
+    repo_root = str(Path(__file__).resolve().parent.parent)
+    if repo_root not in sys.path:
+        sys.path.insert(0, repo_root)
+    from tools import check_fuzz_target_registration as registration
 
     return len(registration._sources(repo))
 

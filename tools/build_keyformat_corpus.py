@@ -54,6 +54,7 @@ import argparse
 import base64
 import binascii
 import json
+from typing import Any
 import re
 import sys
 import urllib.request
@@ -109,7 +110,8 @@ def fetch(url: str) -> str:
     with urllib.request.urlopen(  # noqa: S310 -- https enforced directly above (KFC-001)
         url, timeout=120
     ) as response:
-        return response.read().decode("utf-8", "replace")
+        text: str = response.read().decode("utf-8", "replace")
+    return text
 
 
 def strip_page_furniture(text: str) -> str:
@@ -130,11 +132,11 @@ def strip_page_furniture(text: str) -> str:
     return "\n".join(kept)
 
 
-def extract_pem_blocks(text: str) -> list[dict]:
+def extract_pem_blocks(text: str) -> list[dict[str, Any]]:
     """Pull every PEM block out of RFC running text, tagged with its section."""
     lines = strip_page_furniture(text).split("\n")
     section = ""
-    blocks: list[dict] = []
+    blocks: list[dict[str, Any]] = []
     i = 0
     while i < len(lines):
         raw = lines[i]
@@ -190,7 +192,7 @@ def classify_pq(section: str, label: str) -> tuple[str, str]:
     )
 
 
-def build_pq(filename: str) -> dict:
+def build_pq(filename: str) -> dict[str, Any]:
     meta = SOURCES[filename]
     blocks = extract_pem_blocks(fetch(meta["url"]))
     records = []
@@ -210,7 +212,7 @@ def build_pq(filename: str) -> dict:
     return {"source": meta, "records": records}
 
 
-def build_okp() -> dict:
+def build_okp() -> dict[str, Any]:
     """RFC 8410 §10: the two Ed25519 private-key forms and the public key.
 
     §10.3's second example is the valuable one — it carries a PKCS#8 attribute
@@ -320,7 +322,7 @@ JOSE_COSE = {
 RFC9500_EC_BY_LENGTH = {121: "P-256", 167: "P-384", 223: "P-521"}
 
 
-def build_rfc9500_ec() -> dict:
+def build_rfc9500_ec() -> dict[str, Any]:
     """RFC 9500 §2.3 — the IETF's own EC test keys.
 
     This is the answer key that was thought not to exist. RFC 5915 defines
@@ -392,7 +394,7 @@ EXPECTED_JSON = {
 }
 
 
-def _verify_hex_record(where: str, filename: str, record: dict) -> list[str]:
+def _verify_hex_record(where: str, filename: str, record: dict[str, Any]) -> list[str]:
     """Check a hex-valued corpus record (RFC 8554 Appendix F).
 
     The structural sizes are already known to this module — they are asserted
@@ -427,7 +429,7 @@ def _verify_hex_record(where: str, filename: str, record: dict) -> list[str]:
     return problems
 
 
-def _verify_jose_record(where: str, record: dict) -> list[str]:
+def _verify_jose_record(where: str, record: dict[str, Any]) -> list[str]:
     """Check a JWK/COSE corpus record (RFC 8037 / RFC 8152 worked examples)."""
     problems: list[str] = []
     fmt = record.get("format")
@@ -609,7 +611,7 @@ def _appendix_f_hex(lines: list[str]) -> str:
     return "".join(out)
 
 
-def build_rfc8554_hss_lms() -> dict:
+def build_rfc8554_hss_lms() -> dict[str, Any]:
     """RFC 8554 Appendix F — the HSS/LMS answer key.
 
     Vendored so that the reference for any future LMS work is a checked-in,
@@ -731,7 +733,7 @@ def verify_upstream(corpus: Path = CORPUS) -> list[str]:
                 f"{fresh['source']['revision']!r}"
             )
 
-        def _key(record: dict) -> tuple:
+        def _key(record: dict[str, Any]) -> tuple[Any, ...]:
             # RFC 8554's appendix publishes labelled hexadecimal rather than
             # PEM, so its records carry `hex`/`kind` where the others carry
             # `pem_b64`/`label`. One comparison covers both.

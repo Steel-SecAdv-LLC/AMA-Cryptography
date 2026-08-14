@@ -860,14 +860,26 @@ def _check_loaded_native_library(
     AMA_CRYPTO_LIB_PATH override is the operator's own substitution (proceed,
     unverified); an unreadable object fails closed on an anchored build but only
     warns on a developer one; a digest mismatch is tampering and always fails.
+
+    The digest compared is, by preference, the one recorded by the PRE-LOAD
+    verification — computed from the very file descriptor the loader mapped,
+    so no post-load file swap can make this stage describe different bytes
+    than the ones executing.  Re-reading the path is the fallback for loads
+    that skipped pre-load hashing (an override, or a missing artefact).  A
+    match is reported as verified even under an override: bytes identical to
+    the signed bytes are the signed library, wherever the operator loaded it
+    from.
     """
     from ama_cryptography.pqc_backends import native_backend_diagnostics
 
     diag = native_backend_diagnostics()
     loaded_path = diag.get("path")
     override = diag.get("override")
-    actual_native = _compute_native_library_digest(loaded_path)
-    if override:
+    preload_hex = diag.get("preload_digest_hex")
+    actual_native = bytes.fromhex(preload_hex) if preload_hex else None
+    if actual_native is None:
+        actual_native = _compute_native_library_digest(loaded_path)
+    if override and actual_native != native_digest_raw:
         return (
             None,
             (

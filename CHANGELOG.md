@@ -5,7 +5,7 @@
 | Property | Value |
 |----------|-------|
 | Applies to Release | 4.0.0 |
-| Last Updated | 2026-08-01 |
+| Last Updated | 2026-08-14 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -49,10 +49,241 @@ is unchanged but the work, the timing, or the failure mode is not.
 | 16 | Behavioural | `AmaEquationEngine.converge()`/`step()` and the public `equations` entry points accept `numpy.ndarray` and other 1-D array-likes; they return a `Vec` | `numpy.asarray(result)` to convert back |
 | 17 | Behavioural | `AmaEquationEngine.converge()`'s instability rollback **fires**; through 3.x its condition was unsatisfiable and the branch was dead | pass `max_steps` explicitly if you relied on running to the boundedness clip |
 | 18 | Behavioural | `enforce_sigma_quadratic_threshold()` returns a new `Vec` on both branches; 3.x returned the caller's own object on the pass branch | none unless you relied on the aliasing |
+| 19 | **Breaking** | `import ama_cryptography` raises `CryptoModuleError` when the FIPS 140-3 power-on self-tests fail, where 3.x logged CRITICAL and imported cleanly; the resulting ERROR state inhibits output on **every** surface — `pqc_backends`' 81 native entry points, the five Cython bindings, `AmaContext`, Ascon, `secure_memory`, and the key-format secret exports (INVARIANT-39, INVARIANT-40) | correct the fault the message names; `AMA_POST_DIAGNOSTIC_IMPORT=1` imports for triage with cryptography still refused |
+| 20 | **Breaking** | Ed25519 rejects the two remaining non-canonical encodings — `x = 0` with the sign bit set (RFC 8032 §5.1.3), in both backends, at every public-key decode | none for conformant callers; the affected points are the identity and the order-2 point, neither a usable key |
+| 21 | **Breaking** | `CryptoPostureController` raises `ValueError` for an algorithm name outside `ALGORITHM_STRENGTH`, which 3.x silently mapped onto the weakest rung (INVARIANT-35) | add the algorithm to the table, or correct the name |
+| 22 | Behavioural | every asymmetric keygen — random and seed-derived, on every surface — runs a FIPS 140-3 pairwise consistency test before the keypair is released (INVARIANT-41); sub-millisecond for every family except the hash-based signatures: ~220 ms for SPHINCS+-SHA2-256f, **~1.0 s for SLH-DSA-SHAKE-128s** | none; budget for keygen latency on the hash-based parameter sets — the cost is paid once, at the rare long-lived-key operation |
+| 23 | Behavioural | `create_crypto_package` rejects a `signing_keypair` whose Ed25519 public-key component does not correspond to its seed; 3.x accepted the pair and produced packages whose signatures could never verify | none for internally-consistent pairs |
+| 24 | Behavioural | a shipped native library whose digest does not match the signed artefact is refused **before** it is mapped (previously it loaded — running its constructors — and failed POST afterwards); an `AMA_CRYPTO_LIB_PATH` override that is byte-identical to the signed library now reports **verified** instead of unconditionally UNVERIFIED | after rebuilding the C library locally, refresh the artefact: `AMA_BUILD_PIPELINE=1 python -m ama_cryptography.integrity --update --sign` |
 
-Rows 6, 8, 9 and 10 are the ones a security reviewer should read first: (6) is
-a fail-closed change that turns a silent weakness into a loud refusal, and
-(8)-(10) close secret-dependent branches in three curve implementations.
+Rows 6, 8, 9, 10 and 19 are the ones a security reviewer should read first:
+(6) and (19) are fail-closed changes that turn a silent weakness into a loud
+refusal, and (8)-(10) close secret-dependent branches in three curve
+implementations. Row 22 is the one a *user* is most likely to notice: SLH-DSA
+key generation visibly pauses for about a second while the fresh keypair
+proves its halves correspond.
+
+### Security — a failed power-on self-test now fails the import, and the module proves what it actually runs (INVARIANT-39 through INVARIANT-42)
+
+Four invariants landed together because they close one compound defect: the
+module could detect its own failure, describe it inaccurately, and then report
+success to everything able to act on it. Reproduced exactly before the fix:
+with no discoverable native library, POST failed, CRITICAL was logged,
+`import ama_cryptography` returned cleanly, and the process exited 0.
+
+**INVARIANT-39 — a failed POST fails the import, and the error state inhibits
+output.** `__init__.py` discarded `_post()`'s return value; the failure went
+to the log and the success went to the exit code. Import now raises
+`CryptoModuleError` carrying the root cause and the full POST result table.
+Output inhibition (FIPS 140-3 §4.9.2) was previously satisfied only by
+`crypto_api`: all 81 public entry points in `pqc_backends`, the five Cython
+binding modules (whose direct import used to run crypto without POST ever
+executing), `AmaContext`'s class methods, Ascon, `secure_memory`, and the
+key-format secret exports (`to_pkcs8`/`to_pem`/`to_jwk`/`to_cose` emitted
+full private keys in the ERROR state) called straight through to C. Every one
+of them now refuses in the ERROR state via `check_crypto_permitted()`, at a
+measured cost of ~37 ns per gated call, and
+`tools/check_error_state_gating.py` enforces the guard by AST — including
+guard-before-native-call *ordering* — in CI.
+
+**INVARIANT-40 — the executed bytecode must match the signed source.** The
+signed integrity artefact covered `.py` sources, but CPython executes `.pyc`;
+a poisoned or stale cached compile ran unexamined. POST now compares the
+on-disk bytecode against a fresh compile of the integrity-verified source and
+fails closed on mismatch. The signature also now covers the composite
+digest of the Python sources **and the native library actually loaded** — a
+one-byte change to `libama_cryptography.so` was previously undetectable, since
+only the wrapper was tamper-evident, never the implementation. The POST KAT
+vectors under `_post_kats/` are inside the digest too, so a known-answer test
+cannot be aimed at a swapped answer. The PQC KATs themselves were replaced:
+roundtrips (which an always-accept verifier passes) became genuine NIST ACVP
+known-answer tests with negative cases, and the CAST ordering now follows
+NIST IG 10.3.A — SHA3-256 and Ed25519 self-test *before* the integrity stage
+that depends on both.
+
+**INVARIANT-41 — no asymmetric keypair is released without a pairwise
+consistency test.** The helpers existed and were wired into no keygen path.
+Every generation path — random and seed-derived, `native_*`, `generate_*`,
+`AmaContext.keypair_generate`, the BIP32 master and child derivations — now
+proves the fresh keypair's halves correspond before the caller receives it:
+sign-and-verify for signature families, encapsulate-and-decapsulate for KEMs,
+and the SP 800-56A rev. 3 §5.6.2.1.4 assurance in its strong form for X25519.
+The test is unconditional (a flag-gated test would make the default
+configuration the non-compliant one). Measured cost: sub-millisecond for
+every family except the hash-based signatures — ~220 ms for
+SPHINCS+-SHA2-256f and ~1.0 s for SLH-DSA-SHAKE-128s, stated here rather than
+averaged away, because it is the change users will actually notice (glance
+row 22). The keygen regression floors were re-measured on the PCT-bearing
+head so the benchmarks report the cost users get. Alongside the PCT wiring,
+every Python-side entropy draw that mints key material now routes through the
+health-tested, error-state-gated CSPRNG draw instead of bare
+`secrets.token_bytes` / `os.urandom`.
+
+**INVARIANT-42 — the declared ctypes ABI must match the C header, and the
+loaded library must match the package.** A ctypes symbol probe proves a name
+exports, not its arity or types; a stale prior-major library satisfied every
+`hasattr` and corrupted the call frame at the first mismatched invocation.
+`tools/check_ctypes_abi.py` now parses the header and cross-checks every
+declared signature — with its module scope discovered from the package's ASTs
+rather than a hand-maintained list, which had drifted to cover 4 of the 7
+declaring modules (89 of 131 signatures) — and the loader performs a
+major-version handshake against the library it actually mapped.
+
+### Security — the native library is verified before it is mapped, closing the raw-discovery boundary's executable half
+
+The audit recorded "raw discovery" as an accepted boundary: a shared object
+executes its constructors the moment `dlopen` maps it, so INVARIANT-39's
+digest binding — checked at POST, after load — detected a tampered
+`libama_cryptography` only after its constructors had run. Re-examined
+rather than restated, most of that boundary turned out to be closable:
+discovery now hashes every candidate **first** and refuses to map an object
+whose SHA3-256 does not match the signed `INTEGRITY_NATIVE_DIGEST_HEX`; on
+Linux the mapping goes through `/proc/self/fd` on the very descriptor that
+was hashed, so the verified and the mapped bytes cannot be split by a path
+swap, and the POST stage then compares the recorded digest of the mapped
+bytes instead of re-reading the file — closing the same race on the back
+end. The residue is stated, not implied: the pre-load comparison runs before
+the artefact's signature can be verified (the verifier lives inside the
+library being loaded), so the attacker who rewrites the `.so`, the artefact
+*and* re-signs is still caught only after load, by the unforgeable signature
+or the trust anchor — that attacker remains the OS-code-signing boundary.
+Two carve-outs, both deliberate: `AMA_CRYPTO_LIB_PATH` (the operator's own
+substitution — honoured, digest-recorded, and now reported **verified** when
+byte-identical to the signed library, UNVERIFIED when not) and
+`AMA_BUILD_PIPELINE=1` outside secure-execution mode (the artefact-repair
+tools live inside the package and must import after a rebuild). The
+checker-poisoning boundary was re-examined in the same pass and deliberately
+left structural, with the reasoning recorded in `SECURITY.md`: `exec`-ing
+the checker from source merely relocates the trusted base to files in the
+same directory under the same permissions, so the narrowing buys complexity,
+not security — read-only installs and OS-level code signing remain the
+controls that close it.
+
+### Security / Fixed — repository-wide audit at v4.0.0: shipped-wheel SIGILL, KyberSlash divisions, SVE2 kernels, and controls that could not fail
+
+A fifteen-subsystem audit of the tree as it stood after INVARIANT-39/-42
+landed, every finding independently re-verified before it was acted on. The
+three most consequential were invisible to the suite for the same structural
+reason — nothing exercised the configuration in which they are reachable:
+
+- **Shipped wheels could SIGILL on pre-AVX2 x86-64.** `-mavx2` sat on the
+  global `CMAKE_C_FLAGS`, so the compiler auto-vectorised ordinary C
+  everywhere — 34 YMM instructions inside ML-KEM's *portable* keygen/encaps/
+  decaps, 18 in the dispatcher, and 2 in the bitsliced constant-time AES
+  fallback that exists *for* CPUs without AES-NI, which overwhelmingly also
+  lack AVX2. The crash landed inside the very path the CPUID dispatcher
+  correctly selected. Per-file kernel flags stay; the global contamination is
+  gone, and the linked library now carries zero AVX opcodes outside
+  `src/c/avx2` / `src/c/avx512`.
+- **ML-KEM carried the KyberSlash division pattern on secret operands** — the
+  Compress_1 message decode in decapsulation and `poly_compress` inside the
+  FO re-encryption. Replaced with an exact Granlund–Montgomery reciprocal
+  multiply (`M = ceil(2^40/q)`, `S = 40`), proven byte-identical by
+  exhaustive comparison over every coefficient in `[0, q-1]` for every width
+  in {1, 4, 5, 10, 11}; ciphertexts, shared secrets and every FIPS 203 KAT
+  are bit-for-bit unchanged.
+- **The SVE2 backend was wired into dispatch but built by no CI
+  configuration.** Behind that gap: a Keccak theta step whose single
+  `svwhilelt_b64(0,5)` predicate left 3 of 5 column-parity words
+  uninitialised at VL=128 — every shipping SVE2 CPU — and a Kyber NTT that
+  disagreed with every other backend at all vector lengths (rounded rather
+  than truncating Barrett form, and no canonicalising final sweep). Both
+  fixed; an SVE2 cross-compile + QEMU lane now runs the suite at VL=128,
+  VL=256 and VL=2048 so the kernels stay correct.
+
+Also closed in the same pass, each pinned by a test that fails without the
+fix: the Ed25519 batch verifier treated a failed CSPRNG draw as all-zero
+randomizers — collapsing the aggregate to the identity and reporting every
+signature in the batch valid — and now latches the failure and returns
+`AMA_ERROR_CRYPTO`; the shared `ama_sha3_ctx` validated `buffer_len` against
+no rate, leaving a ctypes-reachable stack overflow of up to 95 bytes, and
+each streaming entry point now checks its own; Poly1305's radix-2^26 init
+never scrubbed the clamped `r` key on the path MSVC and every 32-bit target
+take; three 4-way Keccak sponge contexts stayed seeded with sigma/rhoprime;
+`ama_hkdf` reached a `memcpy` from NULL for a NULL `info` with non-zero
+length; Argon2id truncated `pwd_len`/`salt_len` into H0 above `UINT32_MAX`;
+the Windows RNG reported success over an unwritten tail past `ULONG`; the
+generic-POSIX RNG fallback copied output through a never-zeroised stdio
+buffer and lacked `O_CLOEXEC`; nine key-material and nonce draws still used
+bare `secrets.token_bytes` against INVARIANT-41's claim; and the continuous
+RNG test's unlocked read-compare-store let two threads both pass on one stuck
+value — now compare-and-store under a lock, storing a digest rather than
+pinning the live sample in module state.
+
+Controls that stated properties their implementations did not deliver were
+treated as defects of the same weight: a `rc=$?` that always read 0, a
+cppcheck `--error-exitcode` swallowed by `tee` without pipefail, an
+ERROR-severity semgrep rule scoped to files no invocation scanned (the
+property is now enforced by `tools/check_c_secret_zeroization.py`), fuzz
+harnesses whose *library* carried no instrumentation (libFuzzer coverage was
+effectively blind — a dedicated instrumented target now measures 115-10,237
+blocks per target), seed corpora that could not execute any library code,
+`benchmark_suite.py`/`validation_suite.py` timing OpenSSL's `hashlib` and
+publishing it as AMA's SHA3-256 (INVARIANT-36), a σ-threshold "enforcement"
+that was a provable no-op (σ is a Rayleigh quotient; scaling cannot change
+it — it now rotates toward the dominant eigenvector or reports the threshold
+unreachable), a rotation cooldown armed before and regardless of the attempt
+it was cooling down, `_prune_alerts` discarding concurrently-appended alerts,
+and documentation that claimed FIPS validation, formal verification and
+coverage numbers the canonical documents disclaim (INVARIANT-16).
+
+### Performance — the Python one-shot AEAD wrappers give back the throughput the buffer-borrow hardening took
+
+The 3.2.0-era `_c_buffer_view` context manager — introduced so
+`bytearray`-backed key material is borrowed through the buffer protocol
+instead of copied to immutable `bytes` outside the secure-wipe path — cost
+~1 us per buffer per call in `@contextlib.contextmanager` generator machinery
+alone. Four of them on every one-shot call roughly **halved** Python-level
+AES-256-GCM throughput (measured 8.4 us vs 3.4 us per 1 KiB call), which is
+exactly the gap between the ~283k ops/sec the May 2026 ARM regression floors
+were calibrated against and the ~132k the wrappers have delivered since —
+absorbed unnoticed by a stale floor and a 40% tolerance. The borrow is now a
+hand-written context manager handling all of a call's buffers in one
+enter/exit, with a pass-through fast path for `bytes`; the security contract
+is unchanged and pinned by `tests/test_c_buffer_views.py` (in-place borrow,
+release on every path, multi-dimensional rejection). Measured: one-shot
+AES-256-GCM +60%, decrypt and HKDF similar.
+
+Two further hot-path taxes fell in the same pass. Hybrid signing re-expanded
+the Ed25519 seed on every call — and that expansion is a key *generation*, so
+it re-ran the INVARIANT-41 pairwise consistency test per signature, ~0.2 ms
+per package with no security payoff after the first call; the expansion now
+happens once per supplied `signing_keypair`, memoized on the config object
+the caller already owns, and validates seed/public-key correspondence while
+it is there (glance row 23). And the timing-anomaly monitor sorted its
+recent-value window up to four times per recorded operation to compute the
+MAD — monitoring a signature cost several times the signature — where one
+memoized sort per observation and an O(w) two-pointer selection produce
+bit-identical values (`tests/test_monitoring_mad.py` pins equality over
+randomized windows).
+
+### Changed — benchmark floors are recalibrated from the repaired harness, and the harness measures what it claims
+
+The benchmark gate's numbers were produced by single short batches (20
+ML-DSA-65 signatures ≈ 6 ms of measurement), so a scheduler preemption on a
+shared runner dominated the result: three consecutive runs of one unchanged
+binary reported 917, 1845 and 3086 ops/sec for `dilithium_sign`, against a
+stated 10% threshold. Batches are now sized to span a comparable window
+(≥0.15 s) at the fastest rate observed, the fastest of three full-window
+batches is reported, and undersized batches can never be reported. On top of
+that, deterministic ML-DSA signing makes the rejection-loop count a constant
+per (key, message) pair, so benchmarks that signed one fixed message under
+one per-run keypair measured that single pair's luck — a measured 5.35x
+cross-run spread on `dilithium_sign` while every non-rejection-sampled
+primitive on the same runs agreed within 3%. Those benchmarks now cycle a
+pool of distinct inputs so the batch converges on the expected rate. The
+package benchmarks were moved off the deprecated `legacy_compat` shim onto
+`crypto_api` (the flagship 4-layer path, measured under a long-lived signing
+identity, verification anchored with `expected_public_key`), which also
+silences the per-call `DeprecationWarning` the runner used to emit. The
+floors in `benchmarks/*.json` are recalibrated against multiple CI runs of
+the repaired harness with a uniform, derivation-stated tolerance — replacing
+per-entry floors that had drifted to between 0.55x and 9.54x of measured
+throughput, tolerances that allowed a 34-94% regression to pass, and one
+floor (ARM AES-256-GCM) that sat *above* anything the wrapper overhead then
+allowed the machine to deliver. A validity window can no longer be extended
+without re-measuring: `benchmarks/check_baseline_justification.py` refuses
+the edit.
 
 ### Fixed — `complete_demo.py` died on a non-UTF-8 stdout, and the gate that found it now runs everywhere
 

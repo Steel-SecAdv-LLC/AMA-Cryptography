@@ -43,6 +43,7 @@ import re
 import subprocess
 from datetime import date
 from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).resolve().parent.parent
 CHANGELOG = ROOT / "CHANGELOG.md"
@@ -216,9 +217,9 @@ def update_changelog(dry_run: bool = False) -> bool:
     text = CHANGELOG.read_text()
     # Find the insertion point: after "## Overview" block's "---"
     insert_re = re.compile(r"(## Overview.*?---\s*\n)", re.DOTALL)
-    m = insert_re.search(text)
-    if m:
-        pos = m.end()
+    insert_match = insert_re.search(text)
+    if insert_match:
+        pos = insert_match.end()
         text = text[:pos] + new_section + text[pos:]
     else:
         # Fallback: insert after first "---"
@@ -318,7 +319,7 @@ def _format_iso_date(timestamp: str | None) -> str:
         return timestamp[:10] if len(timestamp) >= 10 else "unknown"
 
 
-def _baseline_index() -> dict[str, dict]:
+def _baseline_index() -> dict[str, dict[str, Any]]:
     """Flatten baseline.json into ``{name: entry}`` so per-row lookup is O(1).
 
     Both the ``benchmarks`` and ``pqc_benchmarks`` blocks contribute.
@@ -349,7 +350,7 @@ def _baseline_index() -> dict[str, dict]:
     if not BASELINE_JSON.exists():
         return {}
     data = json.loads(BASELINE_JSON.read_text())
-    flat: dict[str, dict] = {}
+    flat: dict[str, dict[str, Any]] = {}
     flat.update(data.get("benchmarks", {}))
     flat.update(data.get("pqc_benchmarks", {}))
     return flat
