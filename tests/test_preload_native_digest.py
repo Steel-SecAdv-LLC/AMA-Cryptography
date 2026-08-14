@@ -100,6 +100,31 @@ class TestPreloadRefusal:
         # Refused means never attributed a mapped digest.
         assert pb._LOAD_DIAGNOSTICS["preload_digest_hex"] is None
 
+    def test_unreadable_candidate_is_refused_not_loaded_unverified(
+        self, tampered_so: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Bytes that cannot be read cannot be verified — with a signed digest
+        present, a read failure is a refusal, on every platform.  (The first
+        draft applied this only on POSIX; on Windows a read error silently
+        skipped the check and the DLL loaded unverified.)"""
+        import platform
+
+        monkeypatch.delenv("AMA_BUILD_PIPELINE", raising=False)
+
+        def _refuse_read(*_args: object, **_kwargs: object) -> bytes:
+            raise OSError("simulated unreadable candidate")
+
+        # Break the digest read on the branch this platform actually takes.
+        if platform.system() == "Windows":
+            monkeypatch.setattr(Path, "read_bytes", _refuse_read)
+        else:
+            monkeypatch.setattr(pb, "_digest_fd", _refuse_read)
+        errors_before = len(pb._LOAD_DIAGNOSTICS["errors"])
+        assert pb._try_load_library(tampered_so) is None
+        new_errors = pb._LOAD_DIAGNOSTICS["errors"][errors_before:]
+        assert any("pre-load digest read failed" in err for _p, err in new_errors), new_errors
+        assert pb._LOAD_DIAGNOSTICS["preload_digest_hex"] is None
+
     def test_build_pipeline_demotes_to_warning(
         self, tampered_so: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

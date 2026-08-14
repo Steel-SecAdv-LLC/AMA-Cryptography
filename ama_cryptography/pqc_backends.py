@@ -473,25 +473,28 @@ def _try_load_library(lib_path: Path, verify_digest: bool = True) -> Optional[ct
     expected = _expected_native_digest()
     fd: Optional[int] = None
     try:
-        if platform.system() != "Windows":
-            try:
+        try:
+            if platform.system() != "Windows":
                 fd = os.open(
                     str(lib_path),
                     os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_BINARY", 0),
                 )
                 digest: Optional[bytes] = _digest_fd(fd)
-            except OSError as exc:
-                if verify_digest and expected is not None:
-                    _LOAD_DIAGNOSTICS["errors"].append(
-                        (str(lib_path), f"pre-load digest read failed: {exc}")
-                    )
-                    return None
-                digest = None
-        else:
-            try:
+            else:
                 digest = hashlib.sha3_256(lib_path.read_bytes()).digest()
-            except OSError:
-                digest = None
+        except OSError as exc:
+            # One handler for every platform: bytes that cannot be read
+            # cannot be verified, and when there IS a signed digest to check
+            # against, an unreadable candidate is refused rather than loaded
+            # unverified.  (The first draft applied this only on POSIX; on
+            # Windows a read failure silently skipped the check — a fail-open
+            # on exactly the error path a fail-closed control must cover.)
+            if verify_digest and expected is not None:
+                _LOAD_DIAGNOSTICS["errors"].append(
+                    (str(lib_path), f"pre-load digest read failed: {exc}")
+                )
+                return None
+            digest = None
         if verify_digest and expected is not None and digest is not None and digest != expected:
             if os.environ.get("AMA_BUILD_PIPELINE") == "1" and not _in_secure_execution_mode():
                 logging.getLogger(__name__).warning(
