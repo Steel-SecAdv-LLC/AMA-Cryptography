@@ -561,7 +561,7 @@ def enforce_sigma_quadratic_threshold(
        caller's own object while the correction branch returned a new one, so
        whether the result aliased the input depended on the data.
 
-    .. versionchanged:: 4.0.1
+    .. versionchanged:: 5.0
        The correction actually corrects.  Through 4.0 it scaled the state by
        ``√(threshold/σ)`` — but σ is a Rayleigh quotient, ``σ(kx) == σ(x)`` for
        every scalar k, so the "corrected" state had exactly the σ it started

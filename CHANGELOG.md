@@ -47,6 +47,11 @@ modified binding extension fails the import (7). Row 4 is the one a *user*
 is most likely to notice: SLH-DSA key generation visibly pauses for about a
 second while the fresh keypair proves its halves correspond.
 
+For C consumers of the installed shared library: the SONAME follows the
+major version by convention, so it moves `.so.4` -> `.so.5` and existing
+binaries must be relinked. No C API signature changed in this release; the
+loader's major-version handshake (INVARIANT-42) now expects major version 5.
+
 ### Security — a failed power-on self-test now fails the import, and the module proves what it actually runs (INVARIANT-39 through INVARIANT-42)
 
 Four invariants landed together because they close one compound defect: the
@@ -96,7 +101,8 @@ The test is unconditional (a flag-gated test would make the default
 configuration the non-compliant one). Measured cost: sub-millisecond for
 every family except the hash-based signatures — ~220 ms for
 SPHINCS+-SHA2-256f and ~1.0 s for SLH-DSA-SHAKE-128s, stated here rather than
-averaged away, because it is the change users will actually notice (glance row 4). The keygen regression floors were re-measured on the PCT-bearing
+averaged away, because it is the change users will actually notice (glance
+row 4). The keygen regression floors were re-measured on the PCT-bearing
 head so the benchmarks report the cost users get. Alongside the PCT wiring,
 every Python-side entropy draw that mints key material now routes through the
 health-tested, error-state-gated CSPRNG draw instead of bare

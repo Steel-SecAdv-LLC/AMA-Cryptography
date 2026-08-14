@@ -88,7 +88,7 @@ clean:
 	@find ama_cryptography -type f -name "*.so" -delete
 	@find ama_cryptography -type f -name "*.pyd" -delete
 	# The native library is bundled into the package by setup.py as a SONAME
-	# chain — libama_cryptography.so -> .so.4 -> .so.4.0.0 — and the two rules
+	# chain — libama_cryptography.so -> .so.5 -> .so.5.0.0 — and the two rules
 	# above miss every link in it: the first two are symlinks, which `-type f`
 	# excludes, and the third does not match `*.so`. So the whole chain
 	# survived `make clean`, and pqc_backends._get_search_dirs() searches this

@@ -374,7 +374,7 @@ def run_full_package_create_benchmark(iterations: int = 20) -> float:
     shipped flagship API — under a long-lived signing identity
     (:class:`~ama_cryptography.crypto_api.KeypairCache`), which mirrors the
     agent flow the API documents and keeps the workload comparable to the
-    pre-4.0.0 benchmark that reused one KMS across calls.  The deprecated
+    pre-5.0.0 benchmark that reused one KMS across calls.  The deprecated
     ``legacy_compat`` shim this used to time emitted a ``DeprecationWarning``
     per call and measured a code path new integrations are told not to take.
 

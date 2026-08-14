@@ -2,21 +2,21 @@
 
 **Version:** 5.0.0
 **Measurement Date:** test-function counts **and** lines-of-code figures
-re-measured **2026-08-01**. Adversarial-test figures still carry their
+re-measured **2026-08-14**. Adversarial-test figures still carry their
 **2026-07-30** (3.5.0) measurement — see the caveat below. Benchmark figures
 are refreshed separately.
-**Last Reviewed:** 2026-08-01
+**Last Reviewed:** 2026-08-14
 **Repository snapshot:** re-run the reproduction commands after any rebase,
 squash, or large merge so the figures continue to match the shipped tree. If a
 documented count and this report disagree, the count is the bug.
 
 > **Which figures are current, stated precisely.** The Python test counts in
-> *Test Counts* below were measured on this branch on 2026-08-01 and are
+> *Test Counts* below were measured on this branch on 2026-08-14 and are
 > enforced on every PR by `tools/check_documented_counts.py`, which runs this
 > report's own published reproduction command — so they cannot drift silently
 > again.
 >
-> The **lines-of-code figures were re-measured for 4.0.0** with the
+> The **lines-of-code figures were re-measured for 5.0.0** with the
 > reproduction commands below, and the *file counts* in the table are now
 > enforced by `check_loc_table_file_counts`. The *line totals* are
 > deliberately not enforced: `wc -l` moves on every commit, and a gate that

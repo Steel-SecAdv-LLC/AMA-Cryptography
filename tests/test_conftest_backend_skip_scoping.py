@@ -355,7 +355,7 @@ class TestNativeLibraryDetection:
         "filename",
         [
             "libama_cryptography.so",  # Linux
-            "libama_cryptography.so.4",  # Linux, versioned soname
+            "libama_cryptography.so.5",  # Linux, versioned soname
             "libama_cryptography.dylib",  # macOS
             "ama_cryptography.dll",  # Windows, as CMake names it
             "libama_cryptography.dll",  # Windows, MinGW-style prefix

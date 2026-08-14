@@ -70,7 +70,7 @@ def native_library_path(directory: Path) -> Path | None:
     """The resolved native library in ``directory``, or ``None`` if absent.
 
     An unversioned name wins over a versioned soname
-    (``libama_cryptography.so`` over ``libama_cryptography.so.4``): the
+    (``libama_cryptography.so`` over ``libama_cryptography.so.5``): the
     versioned file is normally the real object and the bare name a symlink to
     it, and ``Path.resolve()`` collapses that anyway — but a caller that wants
     to *modify* the library (the tamper-detection tests) must land on the file
