@@ -221,6 +221,25 @@ def _c_buffer_view(data: _BufferInput) -> Iterator[Any]:
         yield arg
 
 
+def _all_bytes(*data: _BufferInput) -> bool:
+    """True when every input is exactly ``bytes`` — the AEAD fast path.
+
+    ``bytes`` passes straight through to ctypes with no view to take and no
+    release obligation, so the hot one-shot AEAD wrappers skip the borrow
+    context manager entirely for the overwhelmingly-common all-``bytes``
+    call.  Measured on the ubuntu-24.04-arm CI runner, the context-manager
+    protocol alone cost ChaCha20-Poly1305's one-shot path ~14% (205k ->
+    178k ops/sec); this predicate is two-digit nanoseconds per argument.
+    Exact ``type`` check, not ``isinstance``: a ``bytes`` subclass could
+    override behaviour observed elsewhere, and it takes the borrow path,
+    which handles it correctly through the buffer protocol.
+    """
+    for item in data:
+        if type(item) is not bytes:
+            return False
+    return True
+
+
 def _get_lib_names() -> list:
     """Return platform-specific library names."""
     system = platform.system()
@@ -4596,8 +4615,18 @@ def native_aes256_gcm_encrypt(
 
     # SECURITY: borrow bytearray-backed key material directly through the
     # buffer protocol; do not call bytes(key), which leaves an immutable
-    # transient copy outside the secure wipe path.
-    with _CBufferViews(key, nonce, plaintext, aad) as (key_buf, nonce_buf, pt_buf, aad_buf):
+    # transient copy outside the secure wipe path.  All-bytes calls skip the
+    # borrow entirely (see _all_bytes); one FFI expression serves both paths
+    # so the marshalling cannot drift between them.
+    borrow = (
+        None
+        if _all_bytes(key, nonce, plaintext, aad)
+        else _CBufferViews(key, nonce, plaintext, aad)
+    )
+    key_buf, nonce_buf, pt_buf, aad_buf = (
+        (key, nonce, plaintext, aad) if borrow is None else borrow.__enter__()
+    )
+    try:
         rc = _native_lib.ama_aes256_gcm_encrypt(
             key_buf,
             nonce_buf,
@@ -4608,6 +4637,9 @@ def native_aes256_gcm_encrypt(
             ct_buf,
             tag_buf,
         )
+    finally:
+        if borrow is not None:
+            borrow.__exit__(None, None, None)
     if rc != 0:
         raise RuntimeError(f"AES-256-GCM encryption failed (rc={rc})")
 
@@ -4660,13 +4692,15 @@ def native_aes256_gcm_decrypt(
 
     # SECURITY: borrow bytearray-backed key material directly through the
     # buffer protocol; authentication failure never observes a copied key.
-    with _CBufferViews(key, nonce, ciphertext, aad, tag) as (
-        key_buf,
-        nonce_buf,
-        ct_buf,
-        aad_buf,
-        tag_buf,
-    ):
+    borrow = (
+        None
+        if _all_bytes(key, nonce, ciphertext, aad, tag)
+        else _CBufferViews(key, nonce, ciphertext, aad, tag)
+    )
+    key_buf, nonce_buf, ct_buf, aad_buf, tag_buf = (
+        (key, nonce, ciphertext, aad, tag) if borrow is None else borrow.__enter__()
+    )
+    try:
         rc = _native_lib.ama_aes256_gcm_decrypt(
             key_buf,
             nonce_buf,
@@ -4677,6 +4711,9 @@ def native_aes256_gcm_decrypt(
             tag_buf,
             pt_buf,
         )
+    finally:
+        if borrow is not None:
+            borrow.__exit__(None, None, None)
     if rc != 0:
         raise ValueError("AES-256-GCM authentication tag verification failed")
 
@@ -7585,12 +7622,16 @@ def native_chacha20poly1305_encrypt(
     ct_buf = ctypes.create_string_buffer(pt_len)
     tag_buf = ctypes.create_string_buffer(POLY1305_TAG_BYTES)
 
-    with _CBufferViews(key, nonce, plaintext, aad if aad else b"") as (
-        key_buf,
-        nonce_buf,
-        pt_buf,
-        aad_buf,
-    ):
+    aad_in = aad if aad else b""
+    borrow = (
+        None
+        if _all_bytes(key, nonce, plaintext, aad_in)
+        else _CBufferViews(key, nonce, plaintext, aad_in)
+    )
+    key_buf, nonce_buf, pt_buf, aad_buf = (
+        (key, nonce, plaintext, aad_in) if borrow is None else borrow.__enter__()
+    )
+    try:
         rc = _native_lib.ama_chacha20poly1305_encrypt(
             key_buf,
             nonce_buf,
@@ -7601,6 +7642,9 @@ def native_chacha20poly1305_encrypt(
             ct_buf,
             tag_buf,
         )
+    finally:
+        if borrow is not None:
+            borrow.__exit__(None, None, None)
     if rc != 0:
         raise RuntimeError(f"ChaCha20-Poly1305 encrypt failed (rc={rc})")
 
@@ -7649,13 +7693,16 @@ def native_chacha20poly1305_decrypt(
 
     pt_buf = ctypes.create_string_buffer(ct_len)
 
-    with _CBufferViews(key, nonce, ciphertext, tag, aad if aad else b"") as (
-        key_buf,
-        nonce_buf,
-        ct_buf,
-        tag_buf,
-        aad_buf,
-    ):
+    aad_in = aad if aad else b""
+    borrow = (
+        None
+        if _all_bytes(key, nonce, ciphertext, tag, aad_in)
+        else _CBufferViews(key, nonce, ciphertext, tag, aad_in)
+    )
+    key_buf, nonce_buf, ct_buf, tag_buf, aad_buf = (
+        (key, nonce, ciphertext, tag, aad_in) if borrow is None else borrow.__enter__()
+    )
+    try:
         rc = _native_lib.ama_chacha20poly1305_decrypt(
             key_buf,
             nonce_buf,
@@ -7666,6 +7713,9 @@ def native_chacha20poly1305_decrypt(
             tag_buf,
             pt_buf,
         )
+    finally:
+        if borrow is not None:
+            borrow.__exit__(None, None, None)
     if rc != 0:
         raise RuntimeError(f"ChaCha20-Poly1305 decrypt failed (rc={rc})")
 
