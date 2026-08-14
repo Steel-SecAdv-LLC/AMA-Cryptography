@@ -317,30 +317,30 @@ _Headline source: `benchmarks/benchmark-results.json` (run 2026-04-27). Regressi
 
 | Benchmark | Throughput (ops/sec) | Regression floor (ops/sec) | Tolerance | Tier |
 |-----------|---------------------:|---------------------------:|----------:|------|
-| Ama Sha3 256 Hash | 230,244 | 140,000 | ±35% | microbenchmark |
-| Hmac Sha3 256 | 148,565 | 96,000 | ±40% | microbenchmark |
-| Ed25519 Keygen | 48,134 | 31,000 | ±35% | microbenchmark |
-| Ed25519 Sign | 51,046 | 33,000 | ±35% | microbenchmark |
-| Ed25519 Verify | 21,097 | 13,000 | ±35% | microbenchmark |
-| Hkdf Derive | 95,433 | 62,000 | ±35% | microbenchmark |
-| Full Package Create | 3,813.1 | 2,400 | ±70% | complex_operation |
-| Full Package Verify | 4,055.4 | 2,600 | ±50% | complex_operation |
-| Dilithium Keygen *(optional)* | 3,331.0 | 2,100 | ±40% | microbenchmark |
-| Dilithium Sign *(optional)* | 1,103.7 | 710 | ±50% | microbenchmark |
-| Dilithium Verify *(optional)* | 7,215.7 | 4,600 | ±40% | microbenchmark |
-| Kyber Keygen *(optional)* | 5,346.1 | 3,400 | ±40% | microbenchmark |
-| Kyber Encapsulate *(optional)* | 11,688 | 7,500 | ±40% | microbenchmark |
-| Aes 256 Gcm Encrypt *(optional)* | 276,778 | 150,000 | ±40% | microbenchmark |
-| Chacha20Poly1305 Encrypt *(optional)* | 215,256 | 130,000 | ±40% | microbenchmark |
-| X25519 Scalarmult *(optional)* | 17,560 | 13,000 | ±40% | microbenchmark |
-| X25519 Scalarmult Batch4 *(optional)* | 4,112.2 | 2,600 | ±40% | microbenchmark |
+| Ama Sha3 256 Hash | 230,244 | 327,222 | ±45% | microbenchmark |
+| Hmac Sha3 256 | 148,565 | 215,299 | ±45% | microbenchmark |
+| Ed25519 Keygen | 48,134 | 10,822 | ±45% | microbenchmark |
+| Ed25519 Sign | 51,046 | 53,885 | ±45% | microbenchmark |
+| Ed25519 Verify | 21,097 | 19,181 | ±45% | microbenchmark |
+| Hkdf Derive | 95,433 | 131,341 | ±45% | microbenchmark |
+| Full Package Create | 3,813.1 | 1,983 | ±45% | complex_operation |
+| Full Package Verify | 4,055.4 | 3,442 | ±45% | complex_operation |
+| Dilithium Keygen *(optional)* | 3,331.0 | 1,312 | ±45% | microbenchmark |
+| Dilithium Sign *(optional)* | 1,103.7 | 2,636 | ±45% | microbenchmark |
+| Dilithium Verify *(optional)* | 7,215.7 | 8,897 | ±45% | microbenchmark |
+| Kyber Keygen *(optional)* | 5,346.1 | 2,726 | ±45% | microbenchmark |
+| Kyber Encapsulate *(optional)* | 11,688 | 11,994 | ±45% | microbenchmark |
+| Aes 256 Gcm Encrypt *(optional)* | 276,778 | 224,406 | ±45% | microbenchmark |
+| Chacha20Poly1305 Encrypt *(optional)* | 215,256 | 227,521 | ±45% | microbenchmark |
+| X25519 Scalarmult *(optional)* | 17,560 | 16,876 | ±45% | microbenchmark |
+| X25519 Scalarmult Batch4 *(optional)* | 4,112.2 | 4,074 | ±45% | microbenchmark |
 
 _Floors below were added to `benchmarks/baseline.json` after the 2026-04-27 results-JSON run; their measured values are in [`benchmark-report.md`](https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/blob/main/benchmark-report.md) until the next dual-output canonical-host run is committed._
 
 | Benchmark | Throughput (ops/sec) | Regression floor (ops/sec) | Tolerance | Tier |
 |-----------|---------------------:|---------------------------:|----------:|------|
-| Secp256K1 Ecdsa Sign | see report | 1,900 | ±40% | microbenchmark |
-| Secp256K1 Ecdsa Verify | see report | 2,600 | ±40% | microbenchmark |
+| Secp256K1 Ecdsa Sign | see report | 8,068 | ±45% | microbenchmark |
+| Secp256K1 Ecdsa Verify | see report | 3,302 | ±45% | microbenchmark |
 <!-- AUTO-BENCHMARK-TABLE-END -->
 
 *See [Cryptography Algorithms](Cryptography-Algorithms) for algorithm key sizes, or [Architecture](Architecture) for the multi-language performance architecture.*
