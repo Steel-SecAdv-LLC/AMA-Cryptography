@@ -147,7 +147,7 @@ _MAX_ITERATIONS = 500_000
 
 #: Distinct inputs cycled through by benchmarks of rejection-sampled
 #: primitives (see ``_cycle``).
-_INPUT_POOL = 64
+_INPUT_POOL = 256
 
 
 def _cycle(items: "List[Any]") -> Callable[[], Any]:

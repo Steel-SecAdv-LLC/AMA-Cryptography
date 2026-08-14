@@ -245,8 +245,13 @@ release on every path, multi-dimensional rejection). Measured: one-shot
 AES-256-GCM +60%, decrypt and HKDF similar. The ChaCha20-Poly1305 wrappers,
 which were the one AEAD surface typed `bytes` only — forcing a caller with a
 wipeable `bytearray` session key to materialise the immutable copy the borrow
-machinery exists to avoid — now share the same contract and the same borrow
-path.
+machinery exists to avoid — now share the same contract. On top of that, the
+four one-shot AEAD wrappers skip the borrow scaffolding entirely when every
+input is exactly `bytes` (no view to take, no release obligation), because
+even the hand-written context manager measured as a 14% toll on ChaCha's
+cheap call; one FFI expression serves both paths per wrapper so the
+marshalling cannot drift. Net measured effect at 1 KiB on the same host:
+AES-256-GCM one-shot 123k → 234k ops/sec.
 
 Two further hot-path taxes fell in the same pass. Hybrid signing re-expanded
 the Ed25519 seed on every call — and that expansion is a key *generation*, so
