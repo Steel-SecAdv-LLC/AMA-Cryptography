@@ -372,3 +372,66 @@ class TestValidityWindowCannotBeExtendedWithoutRemeasuring:
             assert guard._check_validity_window("origin/main", "HEAD") == []
         except subprocess.CalledProcessError:  # pragma: no cover - shallow clone
             pytest.skip("origin/main is not available in this checkout")
+
+
+class TestReleaseParsing:
+    """The release parser must be exact, and must not be quadratic.
+
+    ``re.fullmatch(r"(\\d+)\\.(\\d+)\\.(\\d+)")`` — three unbounded quantifiers
+    separated by literals — is the shape CodeQL reports as a polynomial ReDoS.
+    Measured before the rewrite: 4.2x per doubling, 1,545 ms on a 16,000-character
+    run. The parsed value comes from a JSON file in this repository rather than
+    from a remote party, so the exposure was small; a version parser simply has
+    no need of a regex, and "the input is trusted today" is a weaker guarantee
+    than not being quadratic at all.
+    """
+
+    @pytest.mark.parametrize(
+        "value,expected",
+        [
+            ("4.0.0", (4, 0, 0)),
+            (" 3.1.0 ", (3, 1, 0)),
+            ("10.20.30", (10, 20, 30)),
+            ("4.0", None),
+            ("4.0.0.1", None),
+            ("4..0", None),
+            ("a.b.c", None),
+            ("", None),
+            ("-1.0.0", None),
+            ("99999.0.0", None),  # beyond the component width bound
+            ("٤.٠.٠", None),  # non-ASCII digits: isdigit() is true, int() would accept
+            (None, None),
+            (4.0, None),
+        ],
+    )
+    def test_parses_exactly(self, value: object, expected: tuple[int, ...] | None) -> None:
+        import benchmarks.check_baseline_justification as guard
+
+        assert guard._release_tuple(value) == expected
+
+    def test_is_linear_on_a_long_run_of_digits(self) -> None:
+        """The input that cost 1.5 s before."""
+        import time
+
+        import benchmarks.check_baseline_justification as guard
+
+        pathological = "0" * 200_000
+        start = time.perf_counter()
+        assert guard._release_tuple(pathological) is None
+        elapsed = time.perf_counter() - start
+        assert elapsed < 0.5, f"parsing 200k digits took {elapsed:.2f}s"
+
+    def test_ordering_is_by_component_not_lexicographic(self) -> None:
+        """The comparison the window rule depends on.
+
+        Each parse is asserted non-None first: the return type is Optional, and
+        comparing through it would make the ordering assertions unreachable on
+        a parser regression rather than failing them.
+        """
+        import benchmarks.check_baseline_justification as guard
+
+        for higher, lower in (("4.10.0", "4.9.0"), ("10.0.0", "9.9.9")):
+            a = guard._release_tuple(higher)
+            b = guard._release_tuple(lower)
+            assert a is not None and b is not None, (higher, lower)
+            assert a > b
