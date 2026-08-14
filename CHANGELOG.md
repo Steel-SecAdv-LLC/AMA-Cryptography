@@ -294,6 +294,19 @@ allowed the machine to deliver. A validity window can no longer be extended
 without re-measuring: `benchmarks/check_baseline_justification.py` refuses
 the edit.
 
+One more measurement-conditions repair, found re-verifying this release's
+own claims: the best-effort negative-`nice` probe added in 3.2.0
+(`if nice -n -10 true`) could not detect anything — GNU `nice`
+warns-and-continues on EPERM and exits with the *command's* status, so the
+probe succeeded on runners without `CAP_SYS_NICE` too and reinstated the
+dead prefix, "cannot set niceness" warning and all, exactly what the 3.2.0
+entry recorded it as fixing. All seven probe sites (the benchmark job, the
+CI dudect smoke step, the five `dudect.yml` lanes) now read the *resulting*
+niceness (`nice -n -10 nice` printing `-10`) and prepend the prefix only
+where the runner actually grants it. The floors above are unaffected: the
+prefix never took effect on the hosted runners they were measured on, so
+the recalibrated medians describe the conditions that actually hold.
+
 ### Fixed — `complete_demo.py` died on a non-UTF-8 stdout, and the gate that found it now runs everywhere
 
 The execution gate added below went red on all four Windows lanes the first

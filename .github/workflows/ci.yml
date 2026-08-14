@@ -955,13 +955,17 @@ jobs:
       run: |
         # Pin to a single core (`taskset -c 0`) so the benchmark numbers
         # are not contaminated by other tasks on the shared GitHub-hosted
-        # runner.  The negative-nice prefix is probed first, exactly as
-        # dudect.yml does: hosted runners lack CAP_SYS_NICE, and an
-        # unconditional `nice -n -10` prints "cannot set niceness" on
-        # every run while silently executing at priority 0 — a stated
-        # control that was not in effect.  Core pinning is the
-        # load-bearing part; the raised priority applies only where the
-        # runner actually permits it.
+        # runner.  The negative-nice prefix is probed first: hosted
+        # runners lack CAP_SYS_NICE, and an unconditional `nice -n -10`
+        # prints "cannot set niceness" on every run while silently
+        # executing at priority 0 — a stated control that was not in
+        # effect.  The probe reads the RESULTING niceness, not nice's
+        # exit status: GNU nice warns-and-continues on EPERM and exits
+        # with the command's status, so an exit-status probe (this
+        # step's first draft, copied from dudect.yml) reinstated the
+        # dead prefix everywhere.  Core pinning is the load-bearing
+        # part; the raised priority applies only where the runner
+        # actually permits it.
         #
         # `--baseline "$AMA_MATRIX_BASELINE"` is the per-matrix entry
         # baseline path (Copilot review #3249188319): the x86 entry
@@ -970,7 +974,7 @@ jobs:
         # entries default to the x86 baseline and the AArch64 job
         # reports spurious regressions on every PR.
         NICE_PREFIX=""
-        if nice -n -10 true 2>/dev/null; then NICE_PREFIX="nice -n -10"; fi
+        if [ "$(nice -n -10 nice 2>/dev/null)" = "-10" ]; then NICE_PREFIX="nice -n -10"; fi
         taskset -c 0 $NICE_PREFIX python benchmarks/benchmark_runner.py \
           --verbose \
           --baseline "$AMA_MATRIX_BASELINE" \
@@ -1044,7 +1048,11 @@ jobs:
         # GHA hosted runners lack CAP_SYS_NICE so the negative-nice
         # request prints "Permission denied" but still execs the
         # binary; probe once up front and drop the prefix when the
-        # runner refuses (PR #326), so the log stays clean.  The
+        # runner refuses (PR #326), so the log stays clean.  The probe
+        # reads the RESULTING niceness — GNU nice warns-and-continues
+        # on EPERM and exits with the command's status, so the earlier
+        # exit-status probe succeeded everywhere and never dropped the
+        # dead prefix.  The
         # v3.2.0 dudect setup-symmetry harness fixes made the lanes
         # noise-tolerant enough that taskset-only pinning is the
         # load-bearing CI gate; the nice prefix is opportunistic on
@@ -1053,7 +1061,7 @@ jobs:
         # authoritative constant-time check; this smoke test exists
         # as a fast pre-gate for every PR regardless of path filter.
         NICE_PREFIX=""
-        if nice -n -10 true 2>/dev/null; then NICE_PREFIX="nice -n -10"; fi
+        if [ "$(nice -n -10 nice 2>/dev/null)" = "-10" ]; then NICE_PREFIX="nice -n -10"; fi
         echo "=== Utility function timing analysis ==="
         taskset -c 0 $NICE_PREFIX ./dudect_harness 50000
         echo "=== Crypto primitive timing analysis ==="

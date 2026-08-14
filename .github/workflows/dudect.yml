@@ -118,7 +118,11 @@ jobs:
           # GHA hosted runners lack CAP_SYS_NICE so `nice -n -10` would
           # print "Permission denied" but still exec the binary —
           # detect that once up front and drop the nice prefix so the
-          # log stays clean.  The harness setup-symmetry fixes
+          # log stays clean.  The probe reads the RESULTING niceness:
+          # GNU nice warns-and-continues on EPERM and exits with the
+          # command's status, so the previous exit-status probe
+          # (`if nice -n -10 true`) succeeded everywhere and never
+          # dropped the dead prefix.  The harness setup-symmetry fixes
           # (v3.2.0) made the lanes noise-tolerant enough that
           # taskset-only pinning is the load-bearing CI gate.
           # The verdict rule decides whether this gate can block a merge, and
@@ -128,7 +132,7 @@ jobs:
           # broken rule fails loudly instead of silently passing everything.
           ./build/bin/test_dudect --self-test
           NICE_PREFIX=""
-          if nice -n -10 true 2>/dev/null; then NICE_PREFIX="nice -n -10"; fi
+          if [ "$(nice -n -10 nice 2>/dev/null)" = "-10" ]; then NICE_PREFIX="nice -n -10"; fi
           taskset -c 0 $NICE_PREFIX \
             ./build/bin/test_dudect --measurements "$MEASUREMENTS" --timeout 300
 
@@ -179,7 +183,7 @@ jobs:
           # broken rule fails loudly instead of silently passing everything.
           ./build/bin/test_dudect --self-test
           NICE_PREFIX=""
-          if nice -n -10 true 2>/dev/null; then NICE_PREFIX="nice -n -10"; fi
+          if [ "$(nice -n -10 nice 2>/dev/null)" = "-10" ]; then NICE_PREFIX="nice -n -10"; fi
           # Give the high-N scheduled reading more wall-clock than a PR run.
           DUDECT_TIMEOUT=600
           if [ "${{ github.event_name }}" = "schedule" ]; then DUDECT_TIMEOUT=1800; fi
@@ -222,7 +226,7 @@ jobs:
           ./dudect_crypto --self-test
           # Best-effort priority elevation — see `dudect-utility` for rationale.
           NICE_PREFIX=""
-          if nice -n -10 true 2>/dev/null; then NICE_PREFIX="nice -n -10"; fi
+          if [ "$(nice -n -10 nice 2>/dev/null)" = "-10" ]; then NICE_PREFIX="nice -n -10"; fi
           echo "=== Utility function timing analysis ==="
           taskset -c 0 $NICE_PREFIX ./dudect_harness 50000
           echo "=== Crypto primitive timing analysis ==="
@@ -276,7 +280,7 @@ jobs:
           # broken rule fails loudly instead of silently passing everything.
           ./build/bin/test_dudect --self-test
           NICE_PREFIX=""
-          if nice -n -10 true 2>/dev/null; then NICE_PREFIX="nice -n -10"; fi
+          if [ "$(nice -n -10 nice 2>/dev/null)" = "-10" ]; then NICE_PREFIX="nice -n -10"; fi
           taskset -c 0 $NICE_PREFIX \
             ./build/bin/test_dudect --measurements "$MEASUREMENTS" --timeout 300
 
@@ -474,7 +478,7 @@ jobs:
           # broken rule fails loudly instead of silently passing everything.
           ./build/bin/test_dudect --self-test
           NICE_PREFIX=""
-          if nice -n -10 true 2>/dev/null; then NICE_PREFIX="nice -n -10"; fi
+          if [ "$(nice -n -10 nice 2>/dev/null)" = "-10" ]; then NICE_PREFIX="nice -n -10"; fi
           taskset -c 0 $NICE_PREFIX \
             ./build/bin/test_dudect --measurements "$MEASUREMENTS" --timeout 900
 
