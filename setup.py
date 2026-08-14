@@ -558,6 +558,23 @@ class CMakeBuild(build_ext):
         src_pkg_dir = Path(__file__).resolve().parent / "ama_cryptography"
         staged_pkg_dir = Path(self.build_lib) / "ama_cryptography" if self.build_lib else None
 
+        # The signer's v3 artefact binds every compiled binding extension by
+        # digest, enumerated from the SOURCE package dir — but build_ext
+        # compiles the extensions into build_lib, so on a fresh checkout the
+        # source dir has none at signing time and the artefact binds an empty
+        # map while the wheel ships six unlisted bindings: POST then fails
+        # every install with "present but not covered" (caught by the
+        # wheel-install CI lane the first time a fresh tree built).  Sync the
+        # source dir's extension set to EXACTLY the staged set before
+        # signing: copy what the wheel will ship, and remove stale extension
+        # files the wheel will not (a leftover from a previous interpreter's
+        # build in the same tree — cibuildwheel builds every Python version
+        # sequentially from one /project — would otherwise be signed into an
+        # artefact whose wheel does not contain it, failing POST as
+        # "missing on disk").  The native library is excluded: it is synced
+        # by _copy_native_library_into_package and bound separately.
+        self._sync_binding_extensions_into_source(src_pkg_dir, staged_pkg_dir)
+
         # _build_sign loads the native library via _find_native_library,
         # which searches the in-tree package dir first.  We already copied
         # libama_cryptography.so* into BOTH the source and staging dirs
@@ -589,6 +606,43 @@ class CMakeBuild(build_ext):
                 src_file = src_pkg_dir / name
                 if src_file.is_file():
                     shutil.copy2(src_file, staged_pkg_dir / name)
+
+    # Mirrors _build_sign's enumeration criteria (and _self_test's): every
+    # file with one of these suffixes in the package dir, except the native
+    # library, is a binding extension the artefact must bind.
+    _EXTENSION_SUFFIXES = (".so", ".pyd", ".dylib")
+    _NATIVE_LIB_PREFIXES = ("libama_cryptography", "ama_cryptography.dll")
+
+    def _iter_extension_files(self, pkg_dir):
+        out = []
+        if pkg_dir is None or not pkg_dir.is_dir():
+            return out
+        for path in sorted(pkg_dir.iterdir()):
+            if not path.is_file() or path.suffix not in self._EXTENSION_SUFFIXES:
+                continue
+            if path.name.startswith(self._NATIVE_LIB_PREFIXES):
+                continue
+            out.append(path)
+        return out
+
+    def _sync_binding_extensions_into_source(self, src_pkg_dir, staged_pkg_dir):
+        """Make the source dir's binding-extension set exactly the staged set.
+
+        See the call site for why both directions matter.  A missing staging
+        dir (an ``--inplace`` build, or ``AMA_NO_CYTHON=1`` before any
+        staging exists) is a no-op: the source dir already IS the build
+        output in those flows, so the signer's enumeration of it is correct.
+        """
+        if staged_pkg_dir is None or not staged_pkg_dir.is_dir():
+            return
+        staged = {path.name: path for path in self._iter_extension_files(staged_pkg_dir)}
+        for stale in self._iter_extension_files(src_pkg_dir):
+            if stale.name not in staged:
+                print(f"Removing stale binding extension not in this build: {stale.name}")
+                stale.unlink()
+        for name, path in staged.items():
+            print(f"Syncing binding extension into source package for signing: {name}")
+            shutil.copy2(path, src_pkg_dir / name)
 
     def _build_cmake(self):
         """Build libama_cryptography via CMake."""
