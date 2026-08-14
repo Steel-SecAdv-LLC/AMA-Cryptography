@@ -4,7 +4,7 @@
 
 | Property | Value |
 |----------|-------|
-| Applies to Release | 4.0.0 |
+| Applies to Release | 5.0.0 |
 | Last Updated | 2026-08-14 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
@@ -19,50 +19,33 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ## [Unreleased]
 
-## [4.0.0] - 2026-08-01
+## [5.0.0] - 2026-08-14
 
 ### Behavioural and breaking changes at a glance
 
-Every change in 4.0.0 that alters what existing code does, in one table, so a
-migrating caller does not have to reconstruct the list from six hundred lines
-of narrative below. "Breaking" means a conformant 3.x caller can observe a
-different result or a new exception; "Behavioural" means the observable answer
-is unchanged but the work, the timing, or the failure mode is not.
+Every change in 5.0.0 that alters what existing code does, in one table, so a
+migrating caller does not have to reconstruct the list from the narrative
+below. "Breaking" means a conformant 4.x caller can observe a different
+result or a new exception; "Behavioural" means the observable answer is
+unchanged but the work, the timing, or the failure mode is not.
 
 | # | Kind | Change | Migration |
 |---|---|---|---|
-| 1 | **Breaking** | `verify_crypto_package` returns `all_valid: False` unless `expected_public_key` was supplied and matched | read `core_valid` for the 3.x meaning, or pass the anchor |
-| 2 | **Breaking** | Key stores refuse sub-floor KDF **costs** (PBKDF2 600k; Argon2id t=3, m=64 MiB, p>=1) | `allow_legacy_kdf=True` warns instead of raising; then `migrate_kdf()` |
-| 3 | **Breaking** | Key stores refuse a KDF **algorithm** downgrade — PBKDF2 metadata on a build with native Argon2id | same as (2) |
-| 4 | **Breaking** | Ed25519 rejects non-canonical `y` on single verify, batch verify and point decode (INVARIANT-38) | none for conformant callers; only the 19 redundant encodings are lost |
-| 5 | **Breaking** | `ama_ed25519_point_from_scalar()` returns `ama_error_t`, not `void` (C ABI) | rebuild against the 4.0.0 headers; SONAME moves `.so.3` -> `.so.4` |
-| 6 | **Breaking** | `secure_memory.constant_time_compare()` **fails closed**: `RuntimeError` when AMA's native `ama_consttime_memcmp` is unavailable, where 3.x silently substituted a pure-Python XOR loop (INVARIANT-7) | build the native library; there is no flag to restore the fallback, because the fallback was not constant-time |
-| 7 | Behavioural | `to_dict()` and pickling no longer emit `keypairs[...].secret_key`, `derived_keys` or `kem_shared_secret` | `include_secrets=True` is unchanged |
-| 8 | Behavioural | secp256k1 ECDSA signing: the **Montgomery extra reduction** in `sc_mont_mul` is now a masked conditional subtraction, not a branch on a word of the Montgomery intermediate — the textbook extra-reduction nonce leak | none; same signatures, same API |
-| 9 | Behavioural | secp256k1 **low-s** normalisation: `sc_is_high` no longer short-circuits, and `sc_cond_negate` selects under a mask | none; same signatures |
-| 10 | Behavioural | **NIST P-256/384/521** carried the same defect in `nistp_scalar_is_high` and it is fixed the same way, with `nistp_select` under a mask | none |
-| 11 | Behavioural | Scalar GHASH mask laundered through `ama_ct_value_barrier_u64`; scalar AES-256-GCM is 2.7x faster than 3.5.0 | none |
-| 12 | Behavioural | ChaCha20-Poly1305 refuses inputs past the RFC 8439 §2.8 limit | none below the limit |
-| 13 | Behavioural | `SecureSession.encrypt` enforces `MAX_ENCRYPTIONS_PER_EPOCH` and raises `RekeyRequiredError` | rekey on the error |
-| 14 | Behavioural | `AMA_CRYPTO_LIB_PATH` is ignored in secure-execution mode, now detected via `issetugid(2)` / `getauxval(AT_SECURE)` / `/proc/self/auxv` / uid-gid, OR-ed | none outside set-uid/set-gid/`setcap` |
-| 15 | Behavioural | `constant_time_compare` compares `min(len(a), len(b))` bytes in place instead of padding both to `max(...)`; **every return value is unchanged** | none |
-| 16 | Behavioural | `AmaEquationEngine.converge()`/`step()` and the public `equations` entry points accept `numpy.ndarray` and other 1-D array-likes; they return a `Vec` | `numpy.asarray(result)` to convert back |
-| 17 | Behavioural | `AmaEquationEngine.converge()`'s instability rollback **fires**; through 3.x its condition was unsatisfiable and the branch was dead | pass `max_steps` explicitly if you relied on running to the boundedness clip |
-| 18 | Behavioural | `enforce_sigma_quadratic_threshold()` returns a new `Vec` on both branches; 3.x returned the caller's own object on the pass branch | none unless you relied on the aliasing |
-| 19 | **Breaking** | `import ama_cryptography` raises `CryptoModuleError` when the FIPS 140-3 power-on self-tests fail, where 3.x logged CRITICAL and imported cleanly; the resulting ERROR state inhibits output on **every** surface — `pqc_backends`' 81 native entry points, the five Cython bindings, `AmaContext`, Ascon, `secure_memory`, and the key-format secret exports (INVARIANT-39, INVARIANT-40) | correct the fault the message names; `AMA_POST_DIAGNOSTIC_IMPORT=1` imports for triage with cryptography still refused |
-| 20 | **Breaking** | Ed25519 rejects the two remaining non-canonical encodings — `x = 0` with the sign bit set (RFC 8032 §5.1.3), in both backends, at every public-key decode | none for conformant callers; the affected points are the identity and the order-2 point, neither a usable key |
-| 21 | **Breaking** | `CryptoPostureController` raises `ValueError` for an algorithm name outside `ALGORITHM_STRENGTH`, which 3.x silently mapped onto the weakest rung (INVARIANT-35) | add the algorithm to the table, or correct the name |
-| 22 | Behavioural | every asymmetric keygen — random and seed-derived, on every surface — runs a FIPS 140-3 pairwise consistency test before the keypair is released (INVARIANT-41); sub-millisecond for every family except the hash-based signatures: ~220 ms for SPHINCS+-SHA2-256f, **~1.0 s for SLH-DSA-SHAKE-128s** | none; budget for keygen latency on the hash-based parameter sets — the cost is paid once, at the rare long-lived-key operation |
-| 23 | Behavioural | `create_crypto_package` rejects a `signing_keypair` whose Ed25519 public-key component does not correspond to its seed; 3.x accepted the pair and produced packages whose signatures could never verify | none for internally-consistent pairs |
-| 24 | Behavioural | a shipped native library whose digest does not match the signed artefact is refused **before** it is mapped (previously it loaded — running its constructors — and failed POST afterwards); an `AMA_CRYPTO_LIB_PATH` override that is byte-identical to the signed library now reports **verified** instead of unconditionally UNVERIFIED | after rebuilding the C library locally, refresh the artefact: `AMA_BUILD_PIPELINE=1 python -m ama_cryptography.integrity --update --sign` |
-| 25 | **Breaking** | the compiled binding extensions (`ed25519_binding`, `hmac_binding`, `sha3_binding`, `dilithium_binding`, `hkdf_binding`, `math_engine`) are digest-bound into the integrity signature (v3 artefact); a modified binding fails the import on every build, and missing/unsigned bindings fail it on anchored (release) builds (developer source trees log a warning) | after rebuilding the extensions locally, refresh the artefact: `AMA_BUILD_PIPELINE=1 python -m ama_cryptography.integrity --update --sign` (a `setup.py` build re-signs automatically) |
+| 1 | **Breaking** | `import ama_cryptography` raises `CryptoModuleError` when the FIPS 140-3 power-on self-tests fail, where 4.x logged CRITICAL and imported cleanly; the resulting ERROR state inhibits output on **every** surface — `pqc_backends`' 81 native entry points, the five Cython bindings, `AmaContext`, Ascon, `secure_memory`, and the key-format secret exports (INVARIANT-39, INVARIANT-40) | correct the fault the message names; `AMA_POST_DIAGNOSTIC_IMPORT=1` imports for triage with cryptography still refused |
+| 2 | **Breaking** | Ed25519 rejects the two remaining non-canonical encodings — `x = 0` with the sign bit set (RFC 8032 §5.1.3), in both backends, at every public-key decode | none for conformant callers; the affected points are the identity and the order-2 point, neither a usable key |
+| 3 | **Breaking** | `CryptoPostureController` raises `ValueError` for an algorithm name outside `ALGORITHM_STRENGTH`, which 4.x silently mapped onto the weakest rung (INVARIANT-35) | add the algorithm to the table, or correct the name |
+| 4 | Behavioural | every asymmetric keygen — random and seed-derived, on every surface — runs a FIPS 140-3 pairwise consistency test before the keypair is released (INVARIANT-41); sub-millisecond for every family except the hash-based signatures: ~220 ms for SPHINCS+-SHA2-256f, **~1.0 s for SLH-DSA-SHAKE-128s** | none; budget for keygen latency on the hash-based parameter sets — the cost is paid once, at the rare long-lived-key operation |
+| 5 | Behavioural | `create_crypto_package` rejects a `signing_keypair` whose Ed25519 public-key component does not correspond to its seed; 4.x accepted the pair and produced packages whose signatures could never verify | none for internally-consistent pairs |
+| 6 | Behavioural | a shipped native library whose digest does not match the signed artefact is refused **before** it is mapped (previously it loaded — running its constructors — and failed POST afterwards); an `AMA_CRYPTO_LIB_PATH` override that is byte-identical to the signed library now reports **verified** instead of unconditionally UNVERIFIED | after rebuilding the C library locally, refresh the artefact: `AMA_BUILD_PIPELINE=1 python -m ama_cryptography.integrity --update --sign` |
+| 7 | **Breaking** | the compiled binding extensions (`ed25519_binding`, `hmac_binding`, `sha3_binding`, `dilithium_binding`, `hkdf_binding`, `math_engine`) are digest-bound into the integrity signature (v3 artefact); a modified binding fails the import on every build, and missing/unsigned bindings fail it on anchored (release) builds (developer source trees log a warning) | after rebuilding the extensions locally, refresh the artefact: `AMA_BUILD_PIPELINE=1 python -m ama_cryptography.integrity --update --sign` (a `setup.py` build re-signs automatically) |
 
-Rows 6, 8, 9, 10 and 19 are the ones a security reviewer should read first:
-(6) and (19) are fail-closed changes that turn a silent weakness into a loud
-refusal, and (8)-(10) close secret-dependent branches in three curve
-implementations. Row 22 is the one a *user* is most likely to notice: SLH-DSA
-key generation visibly pauses for about a second while the fresh keypair
-proves its halves correspond.
+Rows 1, 3 and 7 are the ones a security reviewer should read first: all
+three are fail-closed changes that turn a silent weakness into a loud
+refusal — a failed power-on self-test now fails the import (1), an unknown
+algorithm name no longer resolves silently to the weakest rung (3), and a
+modified binding extension fails the import (7). Row 4 is the one a *user*
+is most likely to notice: SLH-DSA key generation visibly pauses for about a
+second while the fresh keypair proves its halves correspond.
 
 ### Security — a failed power-on self-test now fails the import, and the module proves what it actually runs (INVARIANT-39 through INVARIANT-42)
 
@@ -113,8 +96,7 @@ The test is unconditional (a flag-gated test would make the default
 configuration the non-compliant one). Measured cost: sub-millisecond for
 every family except the hash-based signatures — ~220 ms for
 SPHINCS+-SHA2-256f and ~1.0 s for SLH-DSA-SHAKE-128s, stated here rather than
-averaged away, because it is the change users will actually notice (glance
-row 22). The keygen regression floors were re-measured on the PCT-bearing
+averaged away, because it is the change users will actually notice (glance row 4). The keygen regression floors were re-measured on the PCT-bearing
 head so the benchmarks report the cost users get. Alongside the PCT wiring,
 every Python-side entropy draw that mints key material now routes through the
 health-tested, error-state-gated CSPRNG draw instead of bare
@@ -301,7 +283,7 @@ it re-ran the INVARIANT-41 pairwise consistency test per signature, ~0.2 ms
 per package with no security payoff after the first call; the expansion now
 happens once per supplied `signing_keypair`, memoized on the config object
 the caller already owns, and validates seed/public-key correspondence while
-it is there (glance row 23). And the timing-anomaly monitor sorted its
+it is there (glance row 5). And the timing-anomaly monitor sorted its
 recent-value window up to four times per recorded operation to compute the
 MAD — monitoring a signature cost several times the signature — where one
 memoized sort per observation and an O(w) two-pointer selection produce
@@ -348,6 +330,41 @@ niceness (`nice -n -10 nice` printing `-10`) and prepend the prefix only
 where the runner actually grants it. The floors above are unaffected: the
 prefix never took effect on the hosted runners they were measured on, so
 the recalibrated medians describe the conditions that actually hold.
+
+## [4.0.0] - 2026-08-01
+
+### Behavioural and breaking changes at a glance
+
+Every change in 4.0.0 that alters what existing code does, in one table, so a
+migrating caller does not have to reconstruct the list from six hundred lines
+of narrative below. "Breaking" means a conformant 3.x caller can observe a
+different result or a new exception; "Behavioural" means the observable answer
+is unchanged but the work, the timing, or the failure mode is not.
+
+| # | Kind | Change | Migration |
+|---|---|---|---|
+| 1 | **Breaking** | `verify_crypto_package` returns `all_valid: False` unless `expected_public_key` was supplied and matched | read `core_valid` for the 3.x meaning, or pass the anchor |
+| 2 | **Breaking** | Key stores refuse sub-floor KDF **costs** (PBKDF2 600k; Argon2id t=3, m=64 MiB, p>=1) | `allow_legacy_kdf=True` warns instead of raising; then `migrate_kdf()` |
+| 3 | **Breaking** | Key stores refuse a KDF **algorithm** downgrade — PBKDF2 metadata on a build with native Argon2id | same as (2) |
+| 4 | **Breaking** | Ed25519 rejects non-canonical `y` on single verify, batch verify and point decode (INVARIANT-38) | none for conformant callers; only the 19 redundant encodings are lost |
+| 5 | **Breaking** | `ama_ed25519_point_from_scalar()` returns `ama_error_t`, not `void` (C ABI) | rebuild against the 4.0.0 headers; SONAME moves `.so.3` -> `.so.4` |
+| 6 | **Breaking** | `secure_memory.constant_time_compare()` **fails closed**: `RuntimeError` when AMA's native `ama_consttime_memcmp` is unavailable, where 3.x silently substituted a pure-Python XOR loop (INVARIANT-7) | build the native library; there is no flag to restore the fallback, because the fallback was not constant-time |
+| 7 | Behavioural | `to_dict()` and pickling no longer emit `keypairs[...].secret_key`, `derived_keys` or `kem_shared_secret` | `include_secrets=True` is unchanged |
+| 8 | Behavioural | secp256k1 ECDSA signing: the **Montgomery extra reduction** in `sc_mont_mul` is now a masked conditional subtraction, not a branch on a word of the Montgomery intermediate — the textbook extra-reduction nonce leak | none; same signatures, same API |
+| 9 | Behavioural | secp256k1 **low-s** normalisation: `sc_is_high` no longer short-circuits, and `sc_cond_negate` selects under a mask | none; same signatures |
+| 10 | Behavioural | **NIST P-256/384/521** carried the same defect in `nistp_scalar_is_high` and it is fixed the same way, with `nistp_select` under a mask | none |
+| 11 | Behavioural | Scalar GHASH mask laundered through `ama_ct_value_barrier_u64`; scalar AES-256-GCM is 2.7x faster than 3.5.0 | none |
+| 12 | Behavioural | ChaCha20-Poly1305 refuses inputs past the RFC 8439 §2.8 limit | none below the limit |
+| 13 | Behavioural | `SecureSession.encrypt` enforces `MAX_ENCRYPTIONS_PER_EPOCH` and raises `RekeyRequiredError` | rekey on the error |
+| 14 | Behavioural | `AMA_CRYPTO_LIB_PATH` is ignored in secure-execution mode, now detected via `issetugid(2)` / `getauxval(AT_SECURE)` / `/proc/self/auxv` / uid-gid, OR-ed | none outside set-uid/set-gid/`setcap` |
+| 15 | Behavioural | `constant_time_compare` compares `min(len(a), len(b))` bytes in place instead of padding both to `max(...)`; **every return value is unchanged** | none |
+| 16 | Behavioural | `AmaEquationEngine.converge()`/`step()` and the public `equations` entry points accept `numpy.ndarray` and other 1-D array-likes; they return a `Vec` | `numpy.asarray(result)` to convert back |
+| 17 | Behavioural | `AmaEquationEngine.converge()`'s instability rollback **fires**; through 3.x its condition was unsatisfiable and the branch was dead | pass `max_steps` explicitly if you relied on running to the boundedness clip |
+| 18 | Behavioural | `enforce_sigma_quadratic_threshold()` returns a new `Vec` on both branches; 3.x returned the caller's own object on the pass branch | none unless you relied on the aliasing |
+
+Rows 6, 8, 9 and 10 are the ones a security reviewer should read first: (6) is
+a fail-closed change that turns a silent weakness into a loud refusal, and
+(8)-(10) close secret-dependent branches in three curve implementations.
 
 ### Fixed — `complete_demo.py` died on a non-UTF-8 stdout, and the gate that found it now runs everywhere
 

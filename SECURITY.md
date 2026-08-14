@@ -23,8 +23,9 @@ We actively maintain and provide security updates for the following versions:
 
 | Version | Supported | Status |
 |---------|-----------|--------|
-| 4.0.x | Yes | Active development and security updates |
-| 3.5.x | No | Superseded by v4.0 (ten breaking changes — see CHANGELOG `[4.0.0]`) |
+| 5.0.x | Yes | Active development and security updates |
+| 4.0.x | No | Superseded by v5.0 (four breaking changes — see CHANGELOG `[5.0.0]`) |
+| 3.5.x | No | Superseded by v4.0 (six breaking changes — see CHANGELOG `[4.0.0]`) |
 | 3.4.x | No | Superseded by v3.5; no public API removals |
 | 3.3.x | No | Superseded by v3.4; no public API removals |
 | 3.2.x | No | Superseded by v3.3; no public API removals |
@@ -968,6 +969,8 @@ Non-compliance with these standards should be reported as a high-severity securi
 | 3.3.0 | 2026-07-05 | Native one-shot SHA-256; documented public MAC/KDF surface (`quick_hmac` / `quick_hkdf`, native HMAC/HKDF SHA-2/3, `AmaCryptographyError` exception root); SLH-DSA-SHA2-256f signer consolidation; native-hashing purity in `crypto_api`; SLSA provenance permissions + CodeQL unused-static resolution |
 | 3.4.0 | 2026-07-25 | Support matrix rolled (3.4.x active); vendored Wycheproof gate; Ed25519 canonical-`S` enforcement (INVARIANT-26) and X25519 u-coordinate canonicalization (INVARIANT-27); agent-instance binding (INVARIANT-30) with 3R detectors; Ascon-AEAD128/Hash256 (SP 800-232) |
 | 3.5.0 | 2026-07-30 | Support matrix rolled (3.5.x active, 3.4.x superseded — no public API removals); INVARIANT-22 nonce-counter rollback residual risk documented; NIST P-256/384/521 ECDSA (FIPS 186-5, INVARIANT-34 low-`s` policy), ML-KEM/ML-DSA parameter sets, HSS/LMS verification enter the supported surface |
+| 4.0.0 | 2026-08-01 | Support matrix rolled (4.0.x active, 3.5.x superseded — six breaking changes); trust-anchor enforcement end to end; constant-time scalar GHASH with an optimizer value barrier; Ed25519 canonical-`y` (INVARIANT-38); KDF policy floor on both cost and algorithm; per-epoch AEAD nonce budget (INVARIANT-22); package serialization and `SecureSession` no longer emit key material; RFC 8439 length limit on ChaCha20-Poly1305 |
+| 5.0.0 | 2026-08-14 | Support matrix rolled (5.0.x active, 4.0.x superseded — four breaking changes); fail-closed FIPS 140-3 POST import with output inhibition on every surface (INVARIANT-39/-40); pairwise consistency test on every asymmetric keygen (INVARIANT-41); declared-ctypes-ABI cross-check and loaded-library major-version handshake (INVARIANT-42); pre-load native-library digest verification with the fail-closed unreadable-candidate rule; the six binding extensions digest-bound into the v3 integrity artefact (wheel pipeline binds, repair flow binds none, anchored/developer severity split); Ed25519 `x = 0` twin-encoding rejection; `CryptoPostureController` fail-closed on unknown algorithm names |
 
 ---
 
