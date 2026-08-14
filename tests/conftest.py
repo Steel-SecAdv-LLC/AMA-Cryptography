@@ -66,9 +66,28 @@ _BACKEND_SKIP_REASONS = (
 _NATIVE_LIB_PATTERNS = ("libama_cryptography*", "ama_cryptography.dll")
 
 
+def native_library_path(directory: Path) -> Path | None:
+    """The resolved native library in ``directory``, or ``None`` if absent.
+
+    An unversioned name wins over a versioned soname
+    (``libama_cryptography.so`` over ``libama_cryptography.so.4``): the
+    versioned file is normally the real object and the bare name a symlink to
+    it, and ``Path.resolve()`` collapses that anyway — but a caller that wants
+    to *modify* the library (the tamper-detection tests) must land on the file
+    the loader will actually open.
+    """
+    for pattern in _NATIVE_LIB_PATTERNS:
+        matches = sorted(directory.glob(pattern))
+        if not matches:
+            continue
+        exact = [m for m in matches if m.suffix in (".so", ".dylib", ".dll")]
+        return (exact or matches)[-1].resolve()
+    return None
+
+
 def native_library_present(directory: Path) -> bool:
     """Whether ``directory`` holds a built native library for this platform."""
-    return any(any(directory.glob(pattern)) for pattern in _NATIVE_LIB_PATTERNS)
+    return native_library_path(directory) is not None
 
 
 def _mentions_backend(reason: str) -> bool:

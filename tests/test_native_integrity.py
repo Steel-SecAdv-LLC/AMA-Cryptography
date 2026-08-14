@@ -43,7 +43,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.conftest import native_library_present
+from tests.conftest import native_library_path, native_library_present
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PKG_DIR = REPO_ROOT / "ama_cryptography"
@@ -89,14 +89,19 @@ def signed_tree(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 
 def _real_so(tree_root: Path) -> Path:
-    """The resolved (symlink-followed) native library inside a package tree."""
-    for name in ("libama_cryptography.so", "libama_cryptography.dylib"):
-        p = tree_root / "ama_cryptography" / name
-        if p.exists():
-            return p.resolve()
-    matches = sorted((tree_root / "ama_cryptography").glob("libama_cryptography.so*"))
-    assert matches, "no native library in the copied tree"
-    return matches[-1].resolve()
+    """The resolved (symlink-followed) native library inside a package tree.
+
+    Delegates to the shared probe rather than carrying its own candidate list.
+    It used to hold ``("libama_cryptography.so", "libama_cryptography.dylib")``
+    with a ``libama_cryptography.so*`` fallback — no Windows spelling in either
+    — so once the fixtures stopped skipping on Windows this asserted "no native
+    library in the copied tree" against a tree that contained
+    ``ama_cryptography.dll``. Two hardcoded lists for one question is how the
+    first one drifted; there is now only the one in ``conftest``.
+    """
+    found = native_library_path(tree_root / "ama_cryptography")
+    assert found is not None, "no native library in the copied tree"
+    return found
 
 
 # ---------------------------------------------------------------------------

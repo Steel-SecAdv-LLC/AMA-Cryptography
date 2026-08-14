@@ -211,9 +211,17 @@ def check_wycheproof_counts(repo: Path) -> list[str]:
 #: releases' worth (3,057/127 against a tree with 3,099/130) while this gate
 #: passed — it only ever verified per-file claims. The report even publishes
 #: the reproduction command; this just runs it.
+#: Every quantifier here is bounded.  Unbounded ``[\d,]+`` / ``\s+`` made
+#: ``search`` re-run the quantifier from every start offset — quadratic on a
+#: long run of digits (measured 4.0x per doubling, 368 ms at 6,000 chars),
+#: the polynomial-ReDoS shape CodeQL reports.  The inputs are Markdown files
+#: in this repository rather than anything remote, but a count like "3,534"
+#: is never more than a handful of characters and the whitespace between two
+#: words is never a kilobyte, so the bounds cost nothing and remove the shape.
 _AGGREGATE_RE = re.compile(
-    r"([\d,]+)\s+(?:static\s+)?(?:Python\s+)?test functions across\s+([\d,]+)\s+"
-    r"(?:Python\s+)?(?:test\s+)?files?"
+    r"([\d,]{1,15})\s{1,8}(?:static\s{1,8})?(?:Python\s{1,8})?"
+    r"test functions across\s{1,8}([\d,]{1,15})\s{1,8}"
+    r"(?:Python\s{1,8})?(?:test\s{1,8})?files?"
 )
 
 #: Same two numbers, as they appear in the METRICS_REPORT table rows.
@@ -371,8 +379,12 @@ def check_aggregate_test_counts(repo: Path) -> list[str]:
 # document may legitimately state either, so only the entry-point figure — the
 # one that says how many fuzzers actually run — is gated; the source-file count
 # is left to the prose.
+#: Bounded for the same reason as _AGGREGATE_RE above: ``\d+``, ``[\w-]*``
+#: and ``\s+`` were all unbounded (4.1x per doubling, 363 ms at 6,000 chars).
+#: Two adjectives of at most 40 characters each is the shape this is for
+#: ("15 libFuzzer entry points", "16 fuzz targets").
 _FUZZ_COUNT_RE = re.compile(
-    r"(\d+)\s+(?:[A-Za-z][\w-]*\s+){0,2}(?:targets?|harnesses?)\b",
+    r"(\d{1,9})\s{1,8}(?:[A-Za-z][\w-]{0,40}\s{1,8}){0,2}(?:targets?|harnesses?)\b",
     re.IGNORECASE,
 )
 
@@ -435,9 +447,14 @@ _WORD_NUMBERS = {
         "thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty".split()
     )
 }
+#: Bounded for the same reason as the two patterns above; this one was the
+#: worst of the three (4.0x per doubling, 842 ms at 6,000 chars), because
+#: ``[^)\n]*?`` rescans the tail from every start offset.  The claim it
+#: matches — "(4 breaking changes ... CHANGELOG 4.0.0)" — fits comfortably
+#: inside 300 characters.
 _BREAKING_CLAIM_RE = re.compile(
-    r"\(?\s*(\d+|[A-Za-z]+)\s+breaking\s+changes?\b[^)\n]*?"
-    r"CHANGELOG\s*`?\[?(\d+\.\d+\.\d+)\]?`?",
+    r"\(?\s{0,8}(\d{1,9}|[A-Za-z]{1,20})\s{1,8}breaking\s{1,8}changes?\b[^)\n]{0,300}?"
+    r"CHANGELOG\s{0,8}`?\[?(\d{1,9}\.\d{1,9}\.\d{1,9})\]?`?",
     re.IGNORECASE,
 )
 _CHANGELOG_BREAKING_ROW_RE = re.compile(r"^\|\s*\d+\s*\|\s*\*{0,2}Breaking\*{0,2}\s*\|", re.M)
