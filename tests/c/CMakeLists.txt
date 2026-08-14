@@ -511,3 +511,22 @@ if(AMA_ENABLE_DUDECT)
     add_test(NAME test_dudect_verdict COMMAND test_dudect --self-test)
     message(STATUS "dudect: Empirical constant-time verification tests enabled")
 endif()
+
+# Generic-POSIX /dev/urandom fallback of ama_platform_rand.c, EXECUTED.
+# The fallback compiles only on BSD-class hosts no CI lane runs, which is
+# how a half-landed rewrite of it survived to the 2026-08 audit: reviewed,
+# syntax-checked, never run.  This target compiles that one translation
+# unit with -U__linux__ -U__APPLE__ so the preprocessor takes the #else
+# branch on this host, then draws real bytes through open/read/close.
+# It deliberately does NOT link ama_cryptography_test — the library carries
+# its own platform-selected ama_randombytes, and the point is to run the
+# other one.  The test source #errors if the -U flags are ever dropped.
+# Not built on Windows: the generic branch is POSIX and MSVC has no -U.
+if(NOT WIN32)
+    add_executable(test_platform_rand_generic
+        test_platform_rand_generic.c
+        ${CMAKE_SOURCE_DIR}/src/c/ama_platform_rand.c)
+    target_compile_options(test_platform_rand_generic PRIVATE
+        -U__linux__ -U__APPLE__)
+    add_test(NAME test_platform_rand_generic COMMAND test_platform_rand_generic)
+endif()

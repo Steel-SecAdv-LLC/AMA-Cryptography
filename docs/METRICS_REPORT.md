@@ -191,7 +191,7 @@ find . -type f \
 |-------|------:|
 | Python test files under `tests/` matching the static regex | 151 |
 | Syntactic `def test_` matches under `tests/**/*.py` | **3,579** |
-| `test_*.c` files under `tests/c/` (ctest-registered) | 57 |
+| `test_*.c` files under `tests/c/` (ctest-registered) | 58 |
 | `bench_*.c` files under `tests/c/` (standalone, not in ctest) | 1 |
 | `fuzz_*.c` sources under `fuzz/` | 16 |
 | — of which standalone libFuzzer entry points | 15 |
