@@ -585,3 +585,79 @@ class TestProvenanceRecordsTheMeasuredTree:
         commit, dirty = br.capture_tree_state()
         assert commit == "unknown"
         assert dirty is False, "an unavailable git must not be reported as a modified tree"
+
+
+class TestBothRecordsCarryProvenance:
+    """The JSON record is the machine-readable one; it had no provenance.
+
+    ``benchmark-report.md`` recorded commit, host, sampling and aggregation;
+    ``benchmarks/benchmark-results.json`` recorded none of it. That put the two
+    published records on different footings, and left the record another tool
+    is most likely to consume unable to say what produced it.
+    """
+
+    def test_the_json_report_carries_the_same_fields_as_the_markdown(self) -> None:
+        report = br.generate_report([])
+        assert "provenance" in report, "the JSON record must carry provenance"
+        rendered = {br._provenance_key(label) for label, _ in br._provenance()}
+        assert set(report["provenance"]) == rendered, "the two blocks must not drift apart"
+
+    def test_keys_are_machine_readable(self) -> None:
+        keys = set(br.generate_report([])["provenance"])
+        assert "extra_whole_run_repeats" in keys
+        assert all(k == k.lower() and " " not in k for k in keys)
+
+    def test_the_shipped_json_record_has_provenance(self) -> None:
+        """The committed record, not just a freshly generated one."""
+        import json
+
+        path = Path(__file__).resolve().parent.parent / "benchmarks" / "benchmark-results.json"
+        record = json.loads(path.read_text(encoding="utf-8"))
+        provenance = record.get("provenance")
+        assert provenance, f"{path.name} was regenerated without provenance"
+        assert provenance.get("commit", "").strip("`") not in ("", "unknown")
+        assert "version" in provenance and "host" in provenance
+
+
+class TestTheRecordedCommandIsTheCommandThatRan:
+    """It was a hard-coded string that omitted the flag writing the record.
+
+    Every real run passes ``--output`` as well as ``--baseline``/``--markdown``,
+    so copying the recorded command would not reproduce the JSON file it was
+    printed in.
+    """
+
+    def test_the_flags_actually_used_are_recorded(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            br.sys,
+            "argv",
+            ["benchmarks/benchmark_runner.py", "--baseline", "b.json", "--output", "o.json"],
+        )
+        rendered = br._invocation()
+        assert "--output o.json" in rendered
+        assert "--baseline b.json" in rendered
+
+    def test_arguments_needing_quoting_are_quoted(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            br.sys, "argv", ["benchmarks/benchmark_runner.py", "--baseline", "a file.json"]
+        )
+        assert "'a file.json'" in br._invocation()
+
+    def test_an_absolute_script_path_is_made_repository_relative(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        absolute = str(Path(br.__file__).resolve())
+        monkeypatch.setattr(br.sys, "argv", [absolute, "--verbose"])
+        rendered = br._invocation()
+        assert rendered.startswith("python benchmarks/benchmark_runner.py")
+        assert str(Path(absolute).parent.parent) not in rendered
+
+    def test_an_unrelated_script_path_degrades_to_its_basename(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(br.sys, "argv", ["/opt/elsewhere/runner.py"])
+        assert br._invocation() == "python runner.py"
+
+    def test_an_empty_argv_does_not_raise(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(br.sys, "argv", [])
+        assert "benchmark_runner.py" in br._invocation()

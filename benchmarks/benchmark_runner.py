@@ -31,6 +31,7 @@ import json
 import os
 import platform
 import secrets
+import shlex
 import subprocess
 import sys
 import time
@@ -974,9 +975,18 @@ def run_all_benchmarks(baseline: Dict[str, Any], verbose: bool = False) -> List[
 
 
 def generate_report(results: List[BenchmarkResult]) -> Dict[str, Any]:
-    """Generate a JSON report of benchmark results."""
+    """Generate a JSON report of benchmark results.
+
+    Carries the same provenance block as the markdown report. It was markdown
+    only, which put the two published records on different footings: a reader
+    of ``benchmark-results.json`` — the machine-readable one, and so the one
+    another tool is most likely to consume — had no way to tell which commit,
+    host or sampling rule produced the numbers. A measurement without its
+    provenance is a number somebody quotes.
+    """
     return {
         "timestamp": datetime.now(timezone.utc).isoformat(),
+        "provenance": {_provenance_key(label): value for label, value in _provenance()},
         "summary": {
             "total": len(results),
             "passed": sum(1 for r in results if r.passed),
@@ -1012,6 +1022,38 @@ def _package_version() -> str:
         return str(__version__)
     except Exception:
         return "unknown"
+
+
+def _invocation() -> str:
+    """The command this process was actually run with.
+
+    Was a hard-coded string naming ``--baseline`` and ``--markdown``. Every
+    real run also passes ``--output`` — the flag that writes the JSON record
+    the string appeared in — so the one field a reader would copy to reproduce
+    the run did not reproduce it. A provenance line that describes a different
+    command than the one that ran is worse than no line at all.
+
+    ``sys.argv[0]`` is normalised to a repository-relative path when it is one,
+    so the record does not depend on where the checkout happens to live.
+    """
+    argv = list(sys.argv) or ["benchmarks/benchmark_runner.py"]
+    try:
+        script = Path(argv[0]).resolve().relative_to(Path(__file__).resolve().parent.parent)
+        argv[0] = str(script)
+    except Exception:
+        argv[0] = Path(argv[0]).name
+    return "python " + " ".join(shlex.quote(a) for a in argv)
+
+
+def _provenance_key(label: str) -> str:
+    """``"Extra whole-run repeats"`` -> ``"extra_whole_run_repeats"``.
+
+    The markdown block is written for a human and the JSON block for a tool,
+    so the label is rendered once and mechanically transformed rather than
+    maintained twice — two hand-kept copies of the same list drift, which is
+    the failure this whole provenance block exists to prevent.
+    """
+    return "".join(c if c.isalnum() else "_" for c in label.strip().lower()).strip("_")
 
 
 def _git(*args: str) -> str:
@@ -1076,7 +1118,7 @@ def _provenance() -> "list[tuple[str, str]]":
         ("Host", f"{platform.platform()} / {platform.machine()}"),
         ("CPU", f"{os.cpu_count()} logical processor(s)"),
         ("Python", f"{platform.python_version()} ({platform.python_implementation()})"),
-        ("Command", "`python benchmarks/benchmark_runner.py --baseline <file> --markdown <file>`"),
+        ("Command", f"`{_invocation()}`"),
         (
             "Sampling",
             f"batches sized to span >= {_MIN_SAMPLE_SECONDS:g}s at the fastest rate observed; "
