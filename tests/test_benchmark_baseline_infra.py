@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+import subprocess
+import sys
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -580,7 +582,7 @@ class TestProvenanceRecordsTheMeasuredTree:
         def _boom(*args: str) -> str:
             raise OSError("no git here")
 
-        monkeypatch.setattr(br.subprocess, "run", _boom)
+        monkeypatch.setattr(subprocess, "run", _boom)
         monkeypatch.setattr(br, "_TREE_STATE", None)
         commit, dirty = br.capture_tree_state()
         assert commit == "unknown"
@@ -629,7 +631,7 @@ class TestTheRecordedCommandIsTheCommandThatRan:
 
     def test_the_flags_actually_used_are_recorded(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(
-            br.sys,
+            sys,
             "argv",
             ["benchmarks/benchmark_runner.py", "--baseline", "b.json", "--output", "o.json"],
         )
@@ -639,7 +641,7 @@ class TestTheRecordedCommandIsTheCommandThatRan:
 
     def test_arguments_needing_quoting_are_quoted(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(
-            br.sys, "argv", ["benchmarks/benchmark_runner.py", "--baseline", "a file.json"]
+            sys, "argv", ["benchmarks/benchmark_runner.py", "--baseline", "a file.json"]
         )
         assert "'a file.json'" in br._invocation()
 
@@ -647,7 +649,7 @@ class TestTheRecordedCommandIsTheCommandThatRan:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         absolute = str(Path(br.__file__).resolve())
-        monkeypatch.setattr(br.sys, "argv", [absolute, "--verbose"])
+        monkeypatch.setattr(sys, "argv", [absolute, "--verbose"])
         rendered = br._invocation()
         assert rendered.startswith("python benchmarks/benchmark_runner.py")
         assert str(Path(absolute).parent.parent) not in rendered
@@ -655,9 +657,9 @@ class TestTheRecordedCommandIsTheCommandThatRan:
     def test_an_unrelated_script_path_degrades_to_its_basename(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(br.sys, "argv", ["/opt/elsewhere/runner.py"])
+        monkeypatch.setattr(sys, "argv", ["/opt/elsewhere/runner.py"])
         assert br._invocation() == "python runner.py"
 
     def test_an_empty_argv_does_not_raise(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(br.sys, "argv", [])
+        monkeypatch.setattr(sys, "argv", [])
         assert "benchmark_runner.py" in br._invocation()

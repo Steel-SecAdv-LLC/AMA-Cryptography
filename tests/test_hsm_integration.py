@@ -14,7 +14,9 @@ library is present on the system.
 """
 
 import os
+import pathlib
 import shutil
+import sys
 from typing import Any, Optional
 from unittest.mock import MagicMock, patch
 
@@ -808,14 +810,57 @@ def test_softhsm_lane_is_provisioned_in_ci() -> None:
     backend), so the requirement is asserted here instead: in the CI job that
     promises every backend is present, a missing token is a failure with a
     remedy attached, not a quiet skip.
+
+    Scoped to Linux, because that is where ``ci.yml`` provisions the token.
+    The first version asserted on every platform and so failed all five
+    Windows matrix entries for a package `apt-get` cannot install there —
+    a false failure, which is its own kind of broken gate: a check that
+    fires where nothing is wrong teaches readers to ignore it.
+
+    The scope is not a hole. ``test_the_workflow_still_provisions_softhsm``
+    below asserts the provisioning step still exists, so deleting it fails
+    the suite rather than silently returning this lane to the skip it spent
+    this release's whole history in. Extending real PKCS#11 coverage to the
+    macOS and Windows matrix entries is a genuine gap, recorded as such —
+    not one this assertion can close by demanding a token no step installs.
     """
     if os.environ.get("AMA_CI_REQUIRE_BACKENDS", "").lower() not in ("true", "1", "yes"):
         pytest.skip("AMA_CI_REQUIRE_BACKENDS is not set — local run")
+    if not sys.platform.startswith("linux"):
+        pytest.skip(
+            f"SoftHSM2 is provisioned by ci.yml on Linux runners only; "
+            f"this is {sys.platform}. See test_the_workflow_still_provisions_softhsm."
+        )
     assert _SOFTHSM_AVAILABLE, (
         _softhsm_unavailable_reason()
         + ". This job asserts every backend is provisioned; install SoftHSM2 "
         "and the [hsm] extra (see the 'Install SoftHSM2' step in ci.yml) "
         "rather than letting the only real PKCS#11 coverage skip."
+    )
+
+
+def test_the_workflow_still_provisions_softhsm() -> None:
+    """The Linux install step must not be deleted.
+
+    ``test_softhsm_lane_is_provisioned_in_ci`` only fires where the token is
+    expected, so on its own it would be satisfied by removing the step that
+    installs it — the lane would return to skipping everywhere and both
+    checks would stay green. This asserts the provisioning exists, so the
+    pair cannot be satisfied by deletion.
+
+    Reads the workflow rather than trusting a comment: the claim is about
+    what CI does.
+    """
+    workflow = pathlib.Path(__file__).resolve().parent.parent / ".github" / "workflows" / "ci.yml"
+    text = workflow.read_text(encoding="utf-8")
+    assert "softhsm2" in text, (
+        "ci.yml no longer installs softhsm2. TestSoftHSMIntegration is the only "
+        "real PKCS#11 coverage in the tree; without this step it skips on every "
+        "job, which is the state 5.0.0 fixed."
+    )
+    assert "[dev,legacy,benchmark,hsm]" in text or "hsm]" in text, (
+        "ci.yml no longer installs the [hsm] extra, so PyKCS11 is absent and the "
+        "SoftHSM2 lane skips even with the token installed."
     )
 
 

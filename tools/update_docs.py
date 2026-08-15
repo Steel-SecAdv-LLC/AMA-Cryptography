@@ -26,6 +26,27 @@ Usage:
     python tools/update_docs.py                # full update
     python tools/update_docs.py --dry-run      # preview only
     python tools/update_docs.py --changelog-only
+
+Text I/O
+--------
+Every read and write below passes ``encoding="utf-8"`` explicitly, and every
+write also passes ``newline=""``.  Neither is decoration.
+
+``Path.read_text()`` without an encoding uses the *locale* encoding, which on
+Windows is the ANSI code page (cp1252 on a US/Western install).  ``CHANGELOG
+.md`` is UTF-8 and full of em dashes, Greek letters and mathematical symbols,
+so the read raised ``UnicodeDecodeError: 'charmap' codec can't decode byte
+0x90`` on every Windows job — the doc-sync tool could not run at all on a
+platform this project tests across five Python versions.
+
+The write side was worse than an error, because it would have succeeded on the
+subset that round-trips: ``write_text`` in text mode translates ``"\\n"`` to
+``"\\r\\n"`` on Windows, so a single run would have rewritten every line ending
+in ``CHANGELOG.md`` and ``README.md``.  ``tools/check_line_endings.py`` exists
+precisely to reject that, so the tool that maintains the documentation would
+have failed the repository's own gate on the documentation it maintains.
+``newline=""`` disables the translation and pins LF on every platform, the
+same way ``ama_cryptography/_build_sign.py`` pins the signature artefact.
 """
 
 from __future__ import annotations
@@ -73,7 +94,7 @@ BENCH_END = "<!-- AUTO-BENCHMARK-TABLE-END -->"
 
 def _get_version() -> str:
     """Read __version__ from ama_cryptography/__init__.py."""
-    text = INIT_PY.read_text()
+    text = INIT_PY.read_text(encoding="utf-8")
     m = re.search(r'__version__\s*=\s*["\']([^"\']+)["\']', text)
     return m.group(1) if m else "2.1"
 
@@ -118,7 +139,7 @@ def _last_changelog_date() -> str | None:
     """Extract the date from the first ## [x.y.z] - YYYY-MM-DD line."""
     if not CHANGELOG.exists():
         return None
-    for line in CHANGELOG.read_text().splitlines():
+    for line in CHANGELOG.read_text(encoding="utf-8").splitlines():
         m = re.match(r"^##\s+\[.*?\]\s+-\s+(\d{4}-\d{2}-\d{2})", line)
         if m:
             return m.group(1)
@@ -151,7 +172,7 @@ def _latest_changelog_version() -> str | None:
     """
     if not CHANGELOG.exists():
         return None
-    for line in CHANGELOG.read_text().splitlines():
+    for line in CHANGELOG.read_text(encoding="utf-8").splitlines():
         m = _CHANGELOG_HEADING_RE.match(line)
         if m and m.group(1).strip().lower() != "unreleased":
             return m.group(1).strip()
@@ -175,7 +196,7 @@ def update_changelog(dry_run: bool = False) -> bool:
     # Parse existing SHA7s from CHANGELOG to avoid duplicates
     existing_shas: set[str] = set()
     if CHANGELOG.exists():
-        for m in re.finditer(r"\(([0-9a-f]{7})\)", CHANGELOG.read_text()):
+        for m in re.finditer(r"\(([0-9a-f]{7})\)", CHANGELOG.read_text(encoding="utf-8")):
             existing_shas.add(m.group(1))
 
     commits: list[tuple[str, str]] = []
@@ -236,7 +257,7 @@ def update_changelog(dry_run: bool = False) -> bool:
         return True
 
     # Insert after the "---" that follows "## Overview"
-    text = CHANGELOG.read_text()
+    text = CHANGELOG.read_text(encoding="utf-8")
     # Find the insertion point: after "## Overview" block's "---"
     insert_re = re.compile(r"(## Overview.*?---\s*\n)", re.DOTALL)
     insert_match = insert_re.search(text)
@@ -259,7 +280,7 @@ def update_changelog(dry_run: bool = False) -> bool:
         text,
     )
 
-    CHANGELOG.write_text(text)
+    CHANGELOG.write_text(text, encoding="utf-8", newline="")
     print(f"  CHANGELOG: updated with {len(commits)} commits")
     return True
 
@@ -274,7 +295,7 @@ def update_readme(dry_run: bool = False) -> bool:
         print("  README: not found")
         return False
 
-    text = README.read_text()
+    text = README.read_text(encoding="utf-8")
     version = _get_version()
     today = _today()
     changed = False
@@ -307,7 +328,7 @@ def update_readme(dry_run: bool = False) -> bool:
         print(f"  README: would update version to {version}, date to {today}")
         return True
 
-    README.write_text(text)
+    README.write_text(text, encoding="utf-8", newline="")
     print(f"  README: updated version={version} date={today}")
     return True
 
@@ -371,7 +392,7 @@ def _baseline_index() -> dict[str, dict[str, Any]]:
     """
     if not BASELINE_JSON.exists():
         return {}
-    data = json.loads(BASELINE_JSON.read_text())
+    data = json.loads(BASELINE_JSON.read_text(encoding="utf-8"))
     flat: dict[str, dict[str, Any]] = {}
     flat.update(data.get("benchmarks", {}))
     flat.update(data.get("pqc_benchmarks", {}))
@@ -390,7 +411,7 @@ def _generate_benchmark_table() -> str:
     if not BENCHMARK_RESULTS_JSON.exists():
         return ""
 
-    measured = json.loads(BENCHMARK_RESULTS_JSON.read_text())
+    measured = json.loads(BENCHMARK_RESULTS_JSON.read_text(encoding="utf-8"))
     rows = measured.get("results", [])
     if not rows:
         return ""
@@ -510,7 +531,7 @@ def update_benchmark_docs(dry_run: bool = False) -> bool:
     # Find all .md files that contain the markers
     md_files = list(ROOT.glob("*.md")) + list(ROOT.glob("wiki/*.md"))
     for md_file in md_files:
-        text = md_file.read_text()
+        text = md_file.read_text(encoding="utf-8")
         if BENCH_START not in text:
             continue
 
@@ -525,7 +546,7 @@ def update_benchmark_docs(dry_run: bool = False) -> bool:
             if dry_run:
                 print(f"  BENCHMARKS: would update {md_file.name}")
             else:
-                md_file.write_text(new_text)
+                md_file.write_text(new_text, encoding="utf-8", newline="")
                 print(f"  BENCHMARKS: updated {md_file.name}")
             changed = True
 
@@ -550,7 +571,7 @@ def update_wiki(dry_run: bool = False) -> bool:
     changed = False
 
     for md_file in sorted(WIKI_DIR.glob("*.md")):
-        text = md_file.read_text()
+        text = md_file.read_text(encoding="utf-8")
         new_text = text
 
         # Update "| Version | X.Y |" table rows
@@ -571,7 +592,7 @@ def update_wiki(dry_run: bool = False) -> bool:
             if dry_run:
                 print(f"  WIKI: would update {md_file.name}")
             else:
-                md_file.write_text(new_text)
+                md_file.write_text(new_text, encoding="utf-8", newline="")
                 print(f"  WIKI: updated {md_file.name}")
             changed = True
 

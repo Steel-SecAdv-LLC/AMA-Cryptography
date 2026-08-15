@@ -1282,7 +1282,7 @@ def verify_module_integrity() -> Tuple[bool, str]:
     if not _INTEGRITY_DIGEST_FILE.exists():
         logger.error("Integrity digest file not found and no signature artefact")
         return False, "Integrity digest file missing"
-    stored = _INTEGRITY_DIGEST_FILE.read_text().strip()
+    stored = _INTEGRITY_DIGEST_FILE.read_text(encoding="utf-8").strip()
     if not stored:
         logger.error("Integrity digest file is empty")
         return False, "Integrity digest file empty"

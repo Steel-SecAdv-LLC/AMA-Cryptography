@@ -115,7 +115,8 @@ def load_library() -> ctypes.CDLL:
 
     raise RuntimeError(
         f"Cannot find libama_cryptography.so (or a versioned libama_cryptography.so.N) "
-        f"in {LIB_DIR}. Build it first: cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
+        f"in {LIB_DIR}. Build it first: "
+        f"cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build"
     )
 
 

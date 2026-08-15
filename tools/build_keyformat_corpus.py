@@ -488,7 +488,7 @@ def verify_offline(corpus: Path = CORPUS) -> list[str]:
             )
             continue
         try:
-            data = json.loads(path.read_text())
+            data = json.loads(path.read_text(encoding="utf-8"))
         except json.JSONDecodeError as exc:
             problems.append(f"{filename}: not valid JSON: {exc}")
             continue
@@ -720,7 +720,7 @@ def verify_upstream(corpus: Path = CORPUS) -> list[str]:
         if not path.is_file():
             problems.append(f"{filename}: missing; cannot compare against upstream")
             continue
-        vendored = json.loads(path.read_text())
+        vendored = json.loads(path.read_text(encoding="utf-8"))
         try:
             fresh = builder()
         except Exception as exc:  # any fetch/parse failure is a finding, reported not raised
@@ -765,7 +765,7 @@ def report_offline(corpus: Path = CORPUS) -> int:
         path = corpus / filename
         if not path.is_file():
             continue
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
         revision = data.get("source", {}).get("revision", "<unrecorded>")
         print(f"{filename}: {len(data.get('records', []))} records, source={revision}")
     for problem in problems:
@@ -795,18 +795,28 @@ def main() -> int:
         CORPUS.mkdir(parents=True, exist_ok=True)
         for filename in ("rfc9881_ml_dsa.json", "lamps_ml_kem.json"):
             data = build_pq(filename)
-            (CORPUS / filename).write_text(json.dumps(data, indent=1) + "\n")
+            (CORPUS / filename).write_text(
+                json.dumps(data, indent=1) + "\n", encoding="utf-8", newline=""
+            )
             print(f"wrote {filename}: {len(data['records'])} records")
         data = build_okp()
-        (CORPUS / "rfc8410_okp.json").write_text(json.dumps(data, indent=1) + "\n")
+        (CORPUS / "rfc8410_okp.json").write_text(
+            json.dumps(data, indent=1) + "\n", encoding="utf-8", newline=""
+        )
         print(f"wrote rfc8410_okp.json: {len(data['records'])} records")
         data = build_rfc9500_ec()
-        (CORPUS / "rfc9500_ec.json").write_text(json.dumps(data, indent=1) + "\n")
+        (CORPUS / "rfc9500_ec.json").write_text(
+            json.dumps(data, indent=1) + "\n", encoding="utf-8", newline=""
+        )
         print(f"wrote rfc9500_ec.json: {len(data['records'])} records")
         data = build_rfc8554_hss_lms()
-        (CORPUS / "rfc8554_hss_lms.json").write_text(json.dumps(data, indent=1) + "\n")
+        (CORPUS / "rfc8554_hss_lms.json").write_text(
+            json.dumps(data, indent=1) + "\n", encoding="utf-8", newline=""
+        )
         print(f"wrote rfc8554_hss_lms.json: {len(data['records'])} records")
-        (CORPUS / "jose_cose.json").write_text(json.dumps(JOSE_COSE, indent=1) + "\n")
+        (CORPUS / "jose_cose.json").write_text(
+            json.dumps(JOSE_COSE, indent=1) + "\n", encoding="utf-8", newline=""
+        )
         print(f"wrote jose_cose.json: {len(JOSE_COSE['records'])} records")
 
     status = 0

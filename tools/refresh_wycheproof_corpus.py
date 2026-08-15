@@ -223,7 +223,9 @@ def refresh(manifest: dict[str, Any], commit: str) -> int:
         },
     }
     MANIFEST_PATH.write_text(
-        json.dumps(new_manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        json.dumps(new_manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+        newline="",
     )
 
     print(f"\nRewrote {len(new_files)} files; totalVectors = {total}; commit pinned to {commit}.")

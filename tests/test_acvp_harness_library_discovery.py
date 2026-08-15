@@ -107,9 +107,7 @@ class TestNoHardcodedMajorRemains:
         import re
 
         source = (REPO_ROOT / "nist_vectors" / "run_vectors.py").read_text(encoding="utf-8")
-        code = "\n".join(
-            line for line in source.splitlines() if not line.lstrip().startswith("#")
-        )
+        code = "\n".join(line for line in source.splitlines() if not line.lstrip().startswith("#"))
         # Strip the docstring, which discusses the old constant by name.
         body = code.split('"""', 2)[-1] if code.count('"""') >= 2 else code
         pinned = re.findall(r'["\']libama_cryptography\.so\.\d', body)

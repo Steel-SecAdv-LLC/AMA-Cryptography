@@ -145,3 +145,90 @@ class TestTheRealTree:
                 )
                 return
         pytest.fail(f"no CHANGELOG section for the project version {version}")
+
+
+class TestTextIOIsPlatformIndependent:
+    """Every document read and write must name its encoding and line ending.
+
+    ``Path.read_text()`` with no encoding uses the *locale* encoding — the ANSI
+    code page on Windows.  ``CHANGELOG.md`` is UTF-8 and carries em dashes,
+    ``σ``, ``≤`` and ``·``, so every Windows job failed with::
+
+        UnicodeDecodeError: 'charmap' codec can't decode byte 0x90
+
+    The write side would have been worse than an error: text-mode
+    ``write_text`` translates ``\\n`` to ``\\r\\n`` on Windows, so one run of
+    the doc-sync tool would have rewritten every line ending in the files it
+    maintains — which ``tools/check_line_endings.py`` then rejects.  The tool
+    that maintains the documentation would have failed the repository's own
+    gate on the documentation it maintains.
+
+    Asserted against the source rather than by simulating a locale, because
+    the property wanted is "no call omits it", which a behavioural test on one
+    call cannot establish.
+    """
+
+    _MODULES = (
+        "tools/update_docs.py",
+        "tools/build_keyformat_corpus.py",
+        "tools/build_post_kats.py",
+        "tools/refresh_wycheproof_corpus.py",
+        "benchmarks/generate_competitive.py",
+    )
+
+    @staticmethod
+    def _calls(source: str, method: str) -> list[str]:
+        """Keyword names of every ``.<method>(...)`` *call*, via the AST.
+
+        Parsed rather than string-searched: the first version scanned raw text
+        and matched ``Path.read_text()`` written inside a docstring explaining
+        this very rule, so documenting the fix broke the test enforcing it.
+        The AST sees calls and nothing else.
+        """
+        import ast
+
+        found: list[str] = []
+        for node in ast.walk(ast.parse(source)):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == method
+            ):
+                keywords = {kw.arg for kw in node.keywords if kw.arg}
+                found.append(f"line {node.lineno}: keywords={sorted(keywords)}")
+        return found
+
+    @staticmethod
+    def _keywords(call: str) -> set[str]:
+        return set(call.split("keywords=", 1)[1].strip("[]").replace("'", "").split(", ")) - {""}
+
+    @pytest.mark.parametrize("module", _MODULES)
+    def test_reads_name_their_encoding(self, module: str) -> None:
+        source = (REPO_ROOT / module).read_text(encoding="utf-8")
+        bare = [c for c in self._calls(source, "read_text") if "encoding" not in self._keywords(c)]
+        assert not bare, f"{module}: read_text without encoding: {bare}"
+
+    @pytest.mark.parametrize("module", _MODULES)
+    def test_writes_name_their_encoding_and_newline(self, module: str) -> None:
+        source = (REPO_ROOT / module).read_text(encoding="utf-8")
+        offenders = [
+            c
+            for c in self._calls(source, "write_text")
+            if not {"encoding", "newline"} <= self._keywords(c)
+        ]
+        assert not offenders, f"{module}: write_text without encoding/newline: {offenders}"
+
+    def test_the_package_digest_read_names_its_encoding(self) -> None:
+        """The one in the shipped package, not just the tooling."""
+        source = (REPO_ROOT / "ama_cryptography" / "_self_test.py").read_text(encoding="utf-8")
+        bare = [c for c in self._calls(source, "read_text") if "encoding" not in self._keywords(c)]
+        assert not bare, f"_self_test.py: read_text without encoding: {bare}"
+
+    def test_the_changelog_really_does_contain_non_ascii(self) -> None:
+        """Guards the premise: without this, the tests above prove nothing."""
+        raw = (REPO_ROOT / "CHANGELOG.md").read_bytes()
+        assert any(b > 0x7F for b in raw), "CHANGELOG is pure ASCII — premise no longer holds"
+
+    def test_the_changelog_has_no_crlf(self) -> None:
+        """The state a text-mode write on Windows would have destroyed."""
+        assert b"\r\n" not in (REPO_ROOT / "CHANGELOG.md").read_bytes()

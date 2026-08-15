@@ -643,7 +643,7 @@ and <code>benchmarks/pqc_results.json</code>. Nothing is hand-entered.
 def main() -> int:
     c, q = load()
     out = BENCH / "competitive.html"
-    out.write_text(render(c, q), encoding="utf-8")
+    out.write_text(render(c, q), encoding="utf-8", newline="")
     print(f"wrote {out} ({out.stat().st_size:,} bytes)")
     return 0
 
