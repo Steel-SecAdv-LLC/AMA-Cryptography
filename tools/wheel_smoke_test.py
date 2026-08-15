@@ -123,6 +123,50 @@ def check_module_health() -> None:
     )
 
 
+def check_binding_extensions_are_bound() -> None:
+    """A release wheel must ship the EXACT binding extensions it signed.
+
+    Since 5.0.0 the six Cython binding extensions are digest-bound into the v3
+    integrity artefact, so this is checkable — and it needs checking, because
+    the thing that breaks it is a post-signing step in the packaging pipeline,
+    which no unit test can see.  The 5.0.0 release dry run found precisely
+    that: `delocate-wheel` runs after the signer on macOS and rewrites each
+    extension's Mach-O load commands, so all five bindings in the macOS wheels
+    mismatched their signed digests.
+
+    An import failure would surface it too — the pre-import gate refuses a
+    mismatch outright — but this states the requirement instead of relying on
+    a side effect, and it distinguishes "mismatch" (tampering or a rewriting
+    build step) from "uncovered" (the wheel was built without
+    `--bind-extensions`), which are different pipeline faults with different
+    fixes.
+    """
+    results = ama_cryptography.module_self_test_results()
+    integrity = [detail for name, _passed, detail in results if name == "integrity"]
+    check("the POST integrity stage ran", bool(integrity), "no integrity stage in the results")
+    if not integrity:
+        return
+
+    detail = integrity[0]
+    check(
+        "no binding extension mismatches its signed digest",
+        "MISMATCH" not in detail,
+        detail,
+    )
+    # "PARTIALLY covered" is the developer-tree wording; a release wheel is an
+    # anchored build and must be fully covered.
+    check(
+        "every shipped binding extension is covered by the signature",
+        "PARTIALLY covered" not in detail and "not covered by the signed artefact" not in detail,
+        detail,
+    )
+    check(
+        "the artefact binds at least one binding extension",
+        "binding extension(s) verified" in detail,
+        f"expected a verified-bindings count; got: {detail}",
+    )
+
+
 def check_no_fallback_backends() -> None:
     """INVARIANT-7: a shipped wheel must not degrade to a fallback backend.
 
@@ -281,6 +325,7 @@ def main() -> int:
     for group in (
         check_installed_not_source,
         check_module_health,
+        check_binding_extensions_are_bound,
         check_no_fallback_backends,
         check_ml_kem,
         check_x25519,

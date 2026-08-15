@@ -461,6 +461,45 @@ _PRELOAD_MISMATCH_HINT = (
 _SIGNING_LOAD_OVERRIDE = False
 
 
+def _process_is_the_integrity_signer() -> bool:
+    """True when THIS PROCESS was started as the integrity signing tool.
+
+    The in-process override above cannot cover the whole need on its own, and
+    the release dry run proved it.  `python -m ama_cryptography._build_sign`
+    imports the package before `_build_sign` runs a single line, so by the time
+    it could enter the context manager, discovery has already refused the
+    freshly-built library, `pqc_backends._native_lib` is None, and
+    `secure_memory` — which takes its OWN handle at its own import time — has
+    already concluded there is no native backend.  `secure_memzero` then
+    refuses (correctly, fail-closed), the signer cannot produce a signature,
+    and the wheel build fails.  Observed on windows-latest; the same shape
+    applies to every platform whose freshly-built library necessarily differs
+    from the committed artefact, which is all of them.
+
+    The capability tested here is deliberately NOT "this process inherited an
+    environment variable".  That was the fail-open being removed:
+    `AMA_BUILD_PIPELINE=1` sitting in a Dockerfile `ENV`, a CI environment or a
+    systemd unit made every ordinary import in that environment map unverified
+    native code, with the attacker needing to run nothing at all.
+
+    What is tested is `__main__`'s identity: the process must BE the signer.
+    An attacker who can choose which program the victim runs can already run
+    anything; an attacker who can only set a variable cannot change `__main__`.
+    `AMA_BUILD_PIPELINE=1` is still required alongside it — the signing entry
+    points refuse to act without it — so this narrows the old condition rather
+    than replacing it with a different one of equal breadth.
+
+    Secure-execution mode revokes it regardless, at the call site, exactly as
+    it already did for the environment variable.
+    """
+    if os.environ.get("AMA_BUILD_PIPELINE") != "1":
+        return False
+    main_module = sys.modules.get("__main__")
+    spec = getattr(main_module, "__spec__", None)
+    name = getattr(spec, "name", None)
+    return name in ("ama_cryptography._build_sign", "ama_cryptography.integrity")
+
+
 @contextlib.contextmanager
 def unverified_load_for_signing() -> Iterator[None]:
     """Permit ONE region of code to map a digest-mismatching native library.
@@ -577,7 +616,9 @@ def _try_load_library(lib_path: Path, verify_digest: bool = True) -> Optional[ct
             # execution, and no environment variable may buy execution of
             # bytes that failed verification.  See the docstring for why the
             # build pipeline does not need the map.
-            if _SIGNING_LOAD_OVERRIDE and not _in_secure_execution_mode():
+            if (
+                _SIGNING_LOAD_OVERRIDE or _process_is_the_integrity_signer()
+            ) and not _in_secure_execution_mode():
                 # The signing tool is explicitly blessing this object. It is
                 # about to become the signed digest, so mapping it is the
                 # operator's stated intent rather than an inherited default.

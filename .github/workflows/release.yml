@@ -442,11 +442,48 @@ jobs:
           # LOAD_WITH_ALTERED_SEARCH_PATH (the module's own directory is
           # searched first) and the ctypes path loads it by absolute path.
           # An empty command skips repair on Windows only; Linux (auditwheel)
-          # and macOS (delocate) repair are untouched and still run.
+          # repair is untouched and still runs.  macOS repair is disabled
+          # separately below, for a related reason the 5.0.0 release dry run
+          # surfaced.
           # tools/check_workflow_commands.py already tracks
           # CIBW_REPAIR_WHEEL_COMMAND_WINDOWS in WINDOWS_COMMAND_KEYS; an empty
           # value has no payload or quoting for it to flag.
           CIBW_REPAIR_WHEEL_COMMAND_WINDOWS: ""
+          # MACOS WHEEL REPAIR: disabled on purpose, for the same reason as
+          # Windows above and for a second one this release introduced.
+          #
+          # Found by the mandatory release dry run, which is the only thing
+          # that runs this path: the macos-15 and macos-15-intel wheels BUILT
+          # and SIGNED green and then failed their own smoke test with
+          #     dilithium_binding.cpython-310-darwin.so: digest MISMATCH
+          #     ed25519_binding... hkdf_binding... hmac_binding... sha3_binding...
+          # every one of the five binding extensions.  `delocate-wheel` runs
+          # AFTER the integrity signer, and it rewrites each extension's Mach-O
+          # load commands — so the bytes the wheel ships are, by construction,
+          # not the bytes the artefact signed.  Since 5.0.0 binds those digests
+          # (v3 artefact), that is a hard import failure on every macOS wheel.
+          # The check is working; the pipeline ordering was not.
+          #
+          # There is nothing for delocate to do here.  This project links no
+          # external libraries — INVARIANT-1, zero external crypto
+          # dependencies — so the only shared object involved is
+          # `libama_cryptography.dylib`, which setup.py's
+          # CMakeBuild._copy_native_library_into_package already vendors INTO
+          # the package beside the .so bindings, resolved via `@loader_path`.
+          # And as on Windows, letting the repair tool vendor + name-mangle it
+          # would be actively harmful: `pqc_backends._find_native_library`
+          # loads the library through ctypes by FIXED name, so a mangled
+          # `libama_cryptography-<hash>.dylib` would silently drop the native
+          # backend even though the bindings themselves still resolved.
+          #
+          # The wheel smoke test is the proof that skipping repair is safe: it
+          # imports the built wheel in a throwaway venv, asserts the native
+          # backend loaded and that nothing degraded to a fallback, and — added
+          # with this change — asserts explicitly that every shipped binding
+          # extension is covered by the signature and matches it, so a future
+          # post-signing rewrite is reported as what it is rather than as an
+          # opaque import failure.
+          CIBW_REPAIR_WHEEL_COMMAND_MACOS: ""
           # TEST COMMAND: smoke-test the built wheel inside the throwaway
           # virtualenv cibuildwheel creates for it.  The full pytest suite
           # runs in ci-build-test.yml; this gate answers the narrower
