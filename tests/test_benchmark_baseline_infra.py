@@ -269,6 +269,90 @@ class TestSampleWindow:
         assert rate == 1_000.0, f"an undersized batch's {rate} ops/sec reached the report"
 
 
+class TestPerPrimitiveSampling:
+    """The high-variance primitives get more measurements, and the map stays real.
+
+    Fourteen of the nineteen benchmarks agree within 3% across whole runs on a
+    quiet host.  Five do not, and they share a shape: each is either
+    rejection-sampled (the ML-DSA family — the rejection count is a constant
+    per (key, message) pair, so one run samples a pair's luck) or a composite
+    containing one.  The 256-input pool removed the message half of that
+    variance; the key half is redrawn per run, so the remedy is more
+    independent measurements.
+
+    These pin the mechanism rather than a measured number, so they are
+    meaningful on any host.
+    """
+
+    def test_every_repeated_name_is_a_registered_benchmark(self) -> None:
+        """A rename must not silently drop a primitive back to one measurement."""
+        registered: set[str] = set()
+        for path in (Path("benchmarks/baseline.json"), Path("benchmarks/arm-baseline.json")):
+            baseline = br.load_baseline(path)
+            registered |= set(baseline.get("benchmarks", {}))
+            registered |= set(baseline.get("pqc_benchmarks", {}))
+        unknown = set(br._SAMPLING_REPEATS) - registered
+        assert not unknown, (
+            f"_SAMPLING_REPEATS names primitives the baseline does not define: "
+            f"{sorted(unknown)} — a rename left the extra sampling pointing at "
+            f"nothing, and the primitive it was meant to cover is back to a "
+            f"single measurement"
+        )
+
+    def test_repeat_counts_are_greater_than_one(self) -> None:
+        """An entry of 1 is a no-op that reads like coverage."""
+        for name, repeats in br._SAMPLING_REPEATS.items():
+            assert repeats > 1, f"{name}: a repeat count of {repeats} measures nothing extra"
+
+    def test_a_repeated_benchmark_is_actually_invoked_repeatedly(self) -> None:
+        calls = {"n": 0}
+
+        def fake() -> float:
+            calls["n"] += 1
+            return float(calls["n"])
+
+        name = next(iter(br._SAMPLING_REPEATS))
+        result = br._measure_benchmark(name, fake)
+        assert calls["n"] == br._SAMPLING_REPEATS[name]
+        # Fastest wins, matching benchmark_operation's estimator.
+        assert result == float(br._SAMPLING_REPEATS[name])
+
+    def test_an_unlisted_benchmark_is_invoked_once(self) -> None:
+        calls = {"n": 0}
+
+        def fake() -> float:
+            calls["n"] += 1
+            return 1.0
+
+        assert br._measure_benchmark("not-a-registered-name", fake) == 1.0
+        assert calls["n"] == 1
+
+    def test_none_short_circuits_without_further_calls(self) -> None:
+        """An absent primitive must not be probed once per repeat."""
+        calls = {"n": 0}
+
+        def absent() -> None:
+            calls["n"] += 1
+            return None
+
+        name = next(iter(br._SAMPLING_REPEATS))
+        assert br._measure_benchmark(name, absent) is None
+        assert calls["n"] == 1
+
+    def test_the_rejection_sampled_primitives_are_covered(self) -> None:
+        """The ML-DSA family is a reason this exists; it must stay covered.
+
+        Named individually rather than derived, because the point is that a
+        future addition to the suite gets a deliberate decision rather than the
+        default.
+        """
+        for name in ("dilithium_keygen", "dilithium_sign"):
+            assert name in br._SAMPLING_REPEATS, (
+                f"{name} is rejection-sampled and needs more than one whole-run "
+                f"measurement to produce a stable floor"
+            )
+
+
 class TestValidityWindowCannotBeExtendedWithoutRemeasuring:
     """The escape hatch in the freshness test, closed.
 

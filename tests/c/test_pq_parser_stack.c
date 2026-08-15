@@ -73,8 +73,12 @@ int main(void) {
 }
 #else
 
+#include <errno.h>
+#include <fcntl.h>
 #include <pthread.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 /* The stated ceiling for either parser-reachable validation entry point,
  * measured over the whole call chain. Chosen with headroom over the measured
@@ -116,10 +120,6 @@ typedef struct {
     const uint8_t *msg;
     size_t msg_len;
     ama_error_t rc;
-    /* Filled in by the measured thread itself — see run_job(). */
-    const uint64_t *region;
-    size_t region_words;
-    size_t high_water_bytes;
 } job_t;
 
 static void *run_job(void *arg) {
@@ -154,87 +154,102 @@ static void *run_job(void *arg) {
             break;
     }
 
-    /* Scan the paint HERE, in the thread that owns this stack, rather than in
-     * the parent after pthread_join().
-     *
-     * The post-join scan was correct POSIX — with pthread_attr_setstack() the
-     * caller owns the region and may reuse it once the thread is joined — but
-     * Valgrind models a thread stack as unaddressable from the moment the
-     * thread exits, so every one of those reads was reported as an "Invalid
-     * read of size 8" (32 errors across 6 contexts).  A memory checker that
-     * reports on this binary is worth more than the convenience of scanning
-     * outside; the alternative was a suppression file, which buys silence
-     * rather than correctness.
-     *
-     * The measurement is unchanged.  This function's own frame already
-     * disturbed the paint before the parent could see it, so it was always
-     * included in the high-water mark; the scan loop's locals live in that
-     * same frame.  The scan reads upward from the LOWEST address, so the first
-     * disturbed word is still the deepest point the job reached.
-     *
-     * Reads its own stack, which is exactly what a thread is allowed to do,
-     * so the checker has nothing to report. */
-    if (job->region != NULL && job->region_words > 0) {
-        size_t i;
-        for (i = 0; i < job->region_words; i++) {
-            if (job->region[i] != PAINT) {
-                break;
-            }
-        }
-        job->high_water_bytes =
-            (i == job->region_words)
-                ? 0
-                : (job->region_words - i) * sizeof(uint64_t);
-    }
     return NULL;
 }
 
-/* Returns the high-water mark in bytes, or SIZE_MAX on a harness failure. */
+/* Two mappings of ONE shared object: the thread runs on `stack_map`, and the
+ * paint is read back through `read_map`.
+ *
+ * The obvious single-mapping arrangements are both unusable under a memory
+ * checker, for the same underlying reason — Valgrind models a thread stack and
+ * refuses reads it believes are out of bounds:
+ *
+ *   - scanning from the PARENT after pthread_join() reads a region Valgrind
+ *     marks unaddressable the moment the thread exits (32 invalid reads across
+ *     6 contexts), even though POSIX hands the region back to the caller;
+ *   - scanning from inside the THREAD reads far below its own stack pointer,
+ *     which Valgrind also refuses (32 invalid reads, 1 context).
+ *
+ * A second mapping of the same pages is neither: `read_map` is an ordinary
+ * shared mapping that no thread has ever run on, so the checker has nothing to
+ * object to, while the bytes it reads are the same bytes the thread wrote.  No
+ * suppression file and no client-request annotation — the reads become
+ * genuinely unremarkable rather than merely excused.
+ *
+ * shm_open + ftruncate + two mmaps is the POSIX spelling; the anonymous
+ * mapping the previous version used cannot be aliased.  A harness that cannot
+ * set this up returns SIZE_MAX, which main() reports as a SKIP.
+ *
+ * Returns the high-water mark in bytes, or SIZE_MAX on a harness failure. */
 static size_t measure(job_t *job) {
-    void *region;
+    void *stack_map = MAP_FAILED, *read_map = MAP_FAILED;
     pthread_attr_t attr;
     pthread_t tid;
     uint64_t *words;
+    const uint64_t *paint;
     size_t count, i;
-    size_t high_water;
+    char shm_name[64];
+    int fd;
 
-    region = mmap(NULL, REGION_BYTES, PROT_READ | PROT_WRITE,
-                  MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (region == MAP_FAILED) {
+    snprintf(shm_name, sizeof(shm_name), "/ama-pqstack-%ld-%u",
+             (long)getpid(), (unsigned)job->kind);
+    shm_unlink(shm_name); /* stale object from a crashed earlier run */
+    fd = shm_open(shm_name, O_RDWR | O_CREAT | O_EXCL, 0600);
+    if (fd < 0) {
         return (size_t)-1;
     }
-    words = (uint64_t *)region;
+    /* Unlink immediately: the two mappings keep the object alive, and nothing
+     * is left behind if this process dies. */
+    shm_unlink(shm_name);
+    if (ftruncate(fd, (off_t)REGION_BYTES) != 0) {
+        close(fd);
+        return (size_t)-1;
+    }
+    stack_map = mmap(NULL, REGION_BYTES, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    read_map = mmap(NULL, REGION_BYTES, PROT_READ, MAP_SHARED, fd, 0);
+    close(fd);
+    if (stack_map == MAP_FAILED || read_map == MAP_FAILED) {
+        if (stack_map != MAP_FAILED) munmap(stack_map, REGION_BYTES);
+        if (read_map != MAP_FAILED) munmap(read_map, REGION_BYTES);
+        return (size_t)-1;
+    }
+
+    words = (uint64_t *)stack_map;
+    paint = (const uint64_t *)read_map;
     count = REGION_BYTES / sizeof(uint64_t);
     for (i = 0; i < count; i++) {
         words[i] = PAINT;
     }
 
-    /* The stack grows down from the top of the region on every platform this
-     * builds for, so the first disturbed word from the bottom is the deepest
-     * point reached.  The scan runs inside run_job() — see the comment there
-     * for why it cannot run here. */
-    job->region = words;
-    job->region_words = count;
-    job->high_water_bytes = 0;
-
     if (pthread_attr_init(&attr) != 0) {
-        munmap(region, REGION_BYTES);
+        munmap(stack_map, REGION_BYTES);
+        munmap(read_map, REGION_BYTES);
         return (size_t)-1;
     }
-    if (pthread_attr_setstack(&attr, region, REGION_BYTES) != 0 ||
+    if (pthread_attr_setstack(&attr, stack_map, REGION_BYTES) != 0 ||
         pthread_create(&tid, &attr, run_job, job) != 0) {
         pthread_attr_destroy(&attr);
-        munmap(region, REGION_BYTES);
+        munmap(stack_map, REGION_BYTES);
+        munmap(read_map, REGION_BYTES);
         return (size_t)-1;
     }
     pthread_join(tid, NULL);
     pthread_attr_destroy(&attr);
 
-    high_water = job->high_water_bytes;
-    job->region = NULL;
-    job->region_words = 0;
-    munmap(region, REGION_BYTES);
-    return high_water;
+    /* The stack grows down from the top of the region on every platform this
+     * builds for, so the first disturbed word from the bottom is the deepest
+     * point reached.  Read through the alias, never through the stack. */
+    for (i = 0; i < count; i++) {
+        if (paint[i] != PAINT) {
+            break;
+        }
+    }
+    munmap(stack_map, REGION_BYTES);
+    munmap(read_map, REGION_BYTES);
+    if (i == count) {
+        return 0;
+    }
+    return REGION_BYTES - i * sizeof(uint64_t);
 }
 
 static int fail(const char *msg) {

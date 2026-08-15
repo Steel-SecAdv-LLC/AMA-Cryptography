@@ -125,14 +125,36 @@ def _last_changelog_date() -> str | None:
     return None
 
 
+#: A ``## [version]`` heading, with or without a trailing date.
+#:
+#: The date is OPTIONAL, and that is the whole point.  Requiring it made
+#: :func:`_latest_changelog_version` blind to exactly the headings a
+#: pre-release tree carries — ``## [Unreleased]`` under the Keep a Changelog
+#: convention this file declares, and ``## [5.0.0] - Unreleased`` while a
+#: version is prepared but not yet tagged.  The duplicate-section guard in
+#: :func:`update_changelog` is built on that function, so with an undated top
+#: section the guard read the *previous* release's version, decided the current
+#: one had no section, and inserted a SECOND ``## [5.0.0]`` above the
+#: hand-written one — splitting the release's notes in two and leaving
+#: ``check_documented_counts``' breaking-row derivation reading an empty
+#: section.  Running the repository's own documentation sync must not corrupt
+#: the file it syncs.
+_CHANGELOG_HEADING_RE = re.compile(r"^##\s+\[([^\]]+)\]\s*(?:-\s*(\S.*))?$")
+
+
 def _latest_changelog_version() -> str | None:
-    """Extract the version from the first ## [x.y.z] - YYYY-MM-DD line."""
+    """The version of the newest release section, dated or not.
+
+    ``[Unreleased]`` is skipped: it is a standing placeholder, never a version,
+    and treating it as one would make the guard compare ``"Unreleased"`` against
+    the project version and always miss.
+    """
     if not CHANGELOG.exists():
         return None
     for line in CHANGELOG.read_text().splitlines():
-        m = re.match(r"^##\s+\[([^\]]+)\]\s+-\s+\d{4}-\d{2}-\d{2}", line)
-        if m:
-            return m.group(1)
+        m = _CHANGELOG_HEADING_RE.match(line)
+        if m and m.group(1).strip().lower() != "unreleased":
+            return m.group(1).strip()
     return None
 
 

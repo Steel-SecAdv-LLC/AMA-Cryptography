@@ -448,7 +448,7 @@ class TestAlgorithmFamilies:
         assert ladder == {"ED25519": 0, "ML_DSA_65": 1, "SPHINCS_256F": 2, "HYBRID_SIG": 3}
 
     def test_families_are_disjoint(self) -> None:
-        seen: set = set()
+        seen: set[str] = set()
         for ladder in CryptoPostureController.ALGORITHM_FAMILIES.values():
             assert not (seen & set(ladder)), "an algorithm ranks in two families"
             seen |= set(ladder)
@@ -496,7 +496,9 @@ class TestAlgorithmFamilies:
         )
         assert controller._family_strength("HYBRID_KEM") < controller._family_strength("ED25519")
 
-    def test_downgrade_detection_fires_for_an_unranked_name(self, caplog) -> None:
+    def test_downgrade_detection_fires_for_an_unranked_name(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
         import logging
 
         monitor = MagicMock()

@@ -19,7 +19,17 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 
 ## [Unreleased]
 
-## [5.0.0] - 2026-08-14
+## [5.0.0] - Unreleased
+
+> **Not yet released.** The version is 5.0.0 throughout the tree, but no
+> `v5.0.0` tag exists and no wheels have been published. Under the
+> Keep-a-Changelog convention this heading carries the release *date*, and a
+> date here would state that the release happened. It is replaced with the
+> real date at tag time, after the mandatory `release.yml` dry run succeeds —
+> the same way `[Unreleased]` became `[3.5.0]`.
+>
+> Compare `[4.0.0]` below, which is dated because it *is* released: tag
+> `v4.0.0`, published 2026-08-02.
 
 ### Behavioural and breaking changes at a glance
 
@@ -33,7 +43,7 @@ unchanged but the work, the timing, or the failure mode is not.
 |---|---|---|---|
 | 1 | **Breaking** | `import ama_cryptography` raises `CryptoModuleError` when the FIPS 140-3 power-on self-tests fail, where 4.x logged CRITICAL and imported cleanly; the resulting ERROR state inhibits output on **every** surface — `pqc_backends`' 81 native entry points, the five Cython bindings, `AmaContext`, Ascon, `secure_memory`, and the key-format secret exports (INVARIANT-39, INVARIANT-40) | correct the fault the message names; `AMA_POST_DIAGNOSTIC_IMPORT=1` imports for triage with cryptography still refused |
 | 2 | **Breaking** | Ed25519 rejects the two remaining non-canonical encodings — `x = 0` with the sign bit set (RFC 8032 §5.1.3), in both backends, at every public-key decode | none for conformant callers; the affected points are the identity and the order-2 point, neither a usable key |
-| 3 | **Breaking** | `CryptoPostureController` raises `ValueError` for an algorithm name outside `ALGORITHM_STRENGTH`, which 4.x silently mapped onto the weakest rung (INVARIANT-35) | add the algorithm to the table, or correct the name |
+| 3 | **Breaking** | `CryptoPostureController` raises `ValueError` for an algorithm it cannot rank, which 4.x silently mapped onto the weakest rung (INVARIANT-35). Strength ladders are now per algorithm family: `KYBER_1024` and `HYBRID_KEM` rank on a KEM ladder (they previously ranked nowhere), and a posture escalation can no longer cross families and answer a KEM escalation with a signature scheme. `AES_256_GCM` remains unrankable — an AEAD with nothing stronger to escalate to | pass a name from `ALGORITHM_FAMILIES`; the error lists them by family |
 | 4 | Behavioural | every asymmetric keygen — random and seed-derived, on every surface — runs a FIPS 140-3 pairwise consistency test before the keypair is released (INVARIANT-41); sub-millisecond for every family except the hash-based signatures: ~220 ms for SPHINCS+-SHA2-256f, **~1.0 s for SLH-DSA-SHAKE-128s** | none; budget for keygen latency on the hash-based parameter sets — the cost is paid once, at the rare long-lived-key operation |
 | 5 | Behavioural | `create_crypto_package` rejects a `signing_keypair` whose Ed25519 public-key component does not correspond to its seed; 4.x accepted the pair and produced packages whose signatures could never verify | none for internally-consistent pairs |
 | 6 | Behavioural | a shipped native library whose digest does not match the signed artefact is refused **before** it is mapped (previously it loaded — running its constructors — and failed POST afterwards); an `AMA_CRYPTO_LIB_PATH` override that is byte-identical to the signed library now reports **verified** instead of unconditionally UNVERIFIED | after rebuilding the C library locally, refresh the artefact: `AMA_BUILD_PIPELINE=1 python -m ama_cryptography.integrity --update --sign` |
@@ -117,6 +127,199 @@ declared signature — with its module scope discovered from the package's ASTs
 rather than a hand-maintained list, which had drifted to cover 4 of the 7
 declaring modules (89 of 131 signatures) — and the loader performs a
 major-version handshake against the library it actually mapped.
+
+### Security — the pre-load refusal is no longer defeatable by an environment variable, and binding extensions are refused before they execute
+
+Two of the fail-closed controls above had a hole of the same shape: the check
+ran, decided correctly, and then something short-circuited the consequence.
+
+`AMA_BUILD_PIPELINE=1` demoted the pre-load native-library digest refusal to a
+warning and mapped the object anyway. That variable is read from `os.environ`
+on **every** import, so anyone able to set one variable in the target process
+converted a pre-execution refusal into a post-hoc report — and a shared object
+runs its constructors the moment it is mapped, which is the entire event the
+check exists to prevent. No code execution was required to reach it.
+
+The need behind the carve-out is real: re-signing has to map the library,
+because the signature is produced by the in-tree Ed25519 kernel and
+INVARIANT-1 forbids a PyCA dependency. It is met by **scope** instead of by
+severity. `pqc_backends.unverified_load_for_signing()` is an in-process
+context manager that `ama_cryptography._build_sign` enters around its own
+discovery call and leaves immediately; setting a module attribute inside the
+victim's interpreter is not a capability an environment variable confers.
+Secure-execution mode (set-uid/set-gid) revokes it regardless, exactly as it
+already did for the variable.
+
+Two consequences followed, and both are fixed here rather than worked around:
+
+* The signer now selects the file to bind by **path** discovery and hashes it,
+  instead of deriving the path from a loaded handle. With the refusal
+  unconditional, a loader-based signer walked past the very file it was asked
+  to re-bless — its digest is stale by definition — and signed whichever later
+  candidate still matched. Signing the wrong file is worse than failing to
+  sign, so a disagreement between the hashed and the loaded object is now an
+  error rather than a silent substitution.
+* A rebuilt library legitimately leaves the backend absent, so the
+  build-pipeline import escape widens from "the integrity stage failed" to
+  "every failing stage is one a re-signing run repairs", decided structurally
+  (`native_backend_refused_on_digest()`) rather than by matching message text.
+  A missing library, a wrong architecture, an ABI rejection or a loader error
+  still hard-fails the import, so a release container — which carries the flag
+  for its whole lifetime — cannot smoke-test a broken wheel and report success.
+
+The binding extensions were verified **after** the imports that pull them in.
+A binding extension is an ordinary extension module, so importing it runs its
+module-init function; a tampered `sha3_binding` therefore executed and only
+then moved the module to the ERROR state. That is post-load detection where
+the native library already had pre-load refusal. A gate at the top of package
+initialisation now hashes every extension the artefact signs and raises before
+any binding import can occur — verified end to end by flipping one byte in a
+signed binding, which refuses the import with the extension unimported. Scope
+is deliberately narrow: a digest **mismatch** is unambiguous tampering and is
+always fatal, while inventory drift keeps its existing anchored/developer
+split inside POST, because deciding its severity needs the trust anchor from
+the library this gate deliberately runs ahead of.
+
+### Fixed — four verification lanes that could not execute, and the FROST timing excursion
+
+Each of these was configured, named in the documentation, and incapable of
+running. They are listed together because the failure is one failure: a check
+whose *availability probe* is wrong reports "not applicable" in exactly the
+same words it would use if it had passed.
+
+* **SoftHSM2.** No workflow ever installed it, so `TestSoftHSMIntegration` —
+  the only coverage of the real PKCS#11 key lifecycle in the tree — skipped on
+  every job this repository has ever run, and "HSM support works" rested
+  entirely on mocks agreeing with themselves. CI now provisions `softhsm2` and
+  the `[hsm]` extra on Linux, the availability predicate also tests for
+  PyKCS11 (a host with the token but not the binding previously *errored*
+  rather than skipping), and under `AMA_CI_REQUIRE_BACKENDS=1` a missing token
+  is a failure carrying the remedy. 51 tests now execute against a real token.
+* **The semgrep end-to-end assertion.** Its probe ran `python -m semgrep
+  --version` and read the return code. That entry point has been deprecated
+  since semgrep 1.38.0 and exits **2** on a perfectly working installation, so
+  the probe answered "semgrep is not installed" everywhere semgrep *was*
+  installed and the only assertion that the shipped package passes the gate
+  had never run. Same shape as the `nice` probe corrected earlier in this
+  release. Rewritten against the console script, pinned behaviourally, and
+  wired into the one CI job that has semgrep.
+* **`test_dispatch_cache_file` on any `-DAMA_ENABLE_SIMD=OFF` build.** The
+  auto-tune microbench is gated on a SIMD kernel actually being installed, but
+  the test inferred that from `dispatch_info.sha3 != AMA_IMPL_GENERIC` — which
+  the BMI1/BMI2 *scalar* Keccak also satisfies. The two disagreed on every
+  SIMD-off build (the MSan and Valgrind lanes are both configured that way)
+  and the test failed, which had been papered over with an `#ifdef
+  AMA_TEST_UNDER_MSAN` skip of the entire file. The root cause was that `0 ns`
+  meant both "not measured" and "measured as zero": the auto-tune verdict
+  timings now seed to `-1`, the two states are distinguishable in the cache
+  file, the test asserts the real invariant on every configuration, and the
+  skip is gone.
+* **`test_pq_parser_stack` under Valgrind.** 32 invalid reads: the stack-paint
+  scan read a region Valgrind marks unaddressable once the measured thread
+  exits. Scanning from inside the thread instead trades one Valgrind objection
+  for another (reads far below its own stack pointer). The region is now
+  mapped **twice** from one shared object — the thread runs on one mapping,
+  the paint is read back through the other — so the reads are genuinely
+  unremarkable rather than suppressed or annotated. The measurement is
+  unchanged. Whole-suite Valgrind memcheck is now clean: 40 binaries, 0
+  errors, 0 failures.
+
+**The `FROST scalar_negate (extremes)` excursion**, seen once at |t| <= 13.3 in
+3/3 rounds, was investigated rather than re-run until it passed. Re-measured
+at 2,000,000 operations per round x 5 rounds on a quiet host, at batch sizes
+1, 8, 64 and 256, the lane reads |t| <= 1.62 with per-class means agreeing to
+within 0.6% (106.9 ns vs 107.5 ns unbatched); `scalar_negate`'s borrow loop
+and `sc_reduce` are branchless on inspection. There is no timing difference to
+find. What the CI run showed was the t-statistic **flipping sign** between
+rounds, which a systematic effect cannot do — and the verdict rule could not
+tell that apart from a finding, so it called noise a leak.
+
+The rule now classifies rather than collapses. A majority of rounds over
+threshold **agreeing on a direction** is a leak; a majority over threshold
+**disagreeing** is `UNUSABLE` — the host's measurements are dominated by
+something other than the code under test. Both still fail the run, so nothing
+is waved through; what changes is the diagnosis, and therefore whether the
+operator re-runs on a quiet machine or audits the primitive. Sensitivity is
+untouched, because a real leak's excursions share a sign. Eight new self-test
+cases pin the boundary, including the exact observed shape.
+
+### Fixed — ML-KEM `Compress_d` applies its own `mod 2^d`, and the gates that read the C tree can see it
+
+`kyber_compress_d`'s documented contract is `round(2^d*x/q) mod 2^d`; it
+returned the unmasked quotient. That is not cosmetic: 832 of the 3,329
+coefficients exceed `2^d` before the mask at d=1 — the width that decodes the
+ML-KEM message — along with 104 at d=4, 52 at d=5 and 1 at d=10. Every current
+call site happens to mask with the matching width, so no shipped ciphertext
+byte changes, but a helper whose contract and return value disagree is a trap
+for the next caller. `tests/c/test_kyber_compress.c` now proves the whole
+function exhaustively against the FIPS 203 formula in exact 64-bit arithmetic
+— 5 widths x 3,329 coefficients = 16,645 pairs — together with the mask
+contract, the overflow headroom, and the defined-mask behaviour at widths the
+signature admits. Reverting the mask fails eight of its groups. It also
+records why the derived 64-bit constant is kept over a per-width
+transcription: any 32-bit per-width reciprocal overflows at d=10 and d=11,
+which is the defect the first transcription attempt shipped into review.
+
+`tools/check_c_secret_zeroization.py` matched its pattern one **line** at a
+time, so the ordinary wrapped spelling of `memset(...)` was invisible to it —
+and the wrap is forced by exactly the long member chains into secret state the
+rule exists for. It now runs over the whole file with comment and
+string-literal bodies blanked in place, offsets preserved so the reported line
+is still the source line. Blanking literals closes a second miss: a string
+containing `//` used to swallow the rest of a real line. Character literals
+are passed through, because `'\0'` is one of the three spellings of the zero
+being matched. The remediation hint also quoted only the trailing identifier,
+so it suggested `ama_secure_memzero(hmac_key, LEN)` at a site whose
+destination is `ctx->hmac_key`; it now reproduces the full expression.
+
+`tools/check_docker_pins.py`'s support window fails rather than warns, and the
+reasoning is recorded beside the constant: the failure being replaced is
+`alpine:3.18` shipping in a published cryptography image for fifteen months
+after leaving support, which a warning did not change. Past-end-of-support and
+approaching-end-of-support are now distinct finding kinds — both red, with
+different remedies — and a new test asserts the shipped bases are not one
+ordinary sprint away from tripping the gate on an unrelated pull request.
+
+`tools/update_docs.py` inserted a **second** `## [5.0.0]` section above the
+hand-written one whenever the newest heading carried no date — which is the
+state a prepared-but-untagged release is in, and the state `[Unreleased]` is
+always in. `check_documented_counts` derives the documented breaking-change
+count from the first matching section, so the generated one (no glance table,
+zero rows) would have made every "four breaking changes" statement in the tree
+read as drift. Running the repository's own documentation sync must not
+corrupt the file it syncs.
+
+### Changed — the SVE2 Keccak theta stays scalar, and the reason is now a measurement
+
+The question left open in review was whether to restore a vector theta written
+vector-length-agnostically. It is answered by measurement: a correctly
+strip-mined VLA reduction is **slower** than the scalar form at every vector
+length, because a five-element reduction cannot fill a vector — 15.9x at
+VL=128, 10.0x at VL=256 and 5.6x at VL=512 over 2,000,000 calls
+(`aarch64-linux-gnu-gcc 13.3 -O2 -march=armv9-a+sve2` under
+`qemu-aarch64-static`), with the static instruction counts agreeing on the
+direction. The same harness re-confirmed that the single-predicate form this
+release removed is wrong at VL=128 and VL=256 and right at VL=512, exactly as
+the lane analysis predicts. The scalar form is both correct at every vector
+length and the faster of the two on all shipping SVE2 silicon.
+
+### Changed — the five high-variance benchmarks get more measurements
+
+Fourteen of the nineteen benchmarks agree to within 3% across whole runs on a
+quiet host. Five do not, and they share a shape: each is either
+rejection-sampled (the ML-DSA family — under FIPS 204's deterministic variant
+the rejection count is a *constant* per (key, message) pair, so one run samples
+a pair's luck rather than a rate) or a composite containing one
+(`full_package_create` performs a hybrid sign; `kyber_encapsulate` runs the FO
+re-encryption). The 256-input pool introduced earlier in this release removed
+the message half of that variance; the key half is redrawn per run and cannot
+be pooled without benchmarking a fixed key, which would measure one sample of
+the distribution instead of the distribution.
+
+Those five now get independent whole-run repeats. The estimator is unchanged —
+throughput noise is one-sided, so the fastest observation remains the best
+estimate of the machine's capability — and since these numbers become floors, a
+sharper estimate tightens the gate rather than loosening it.
 
 ### Security — the native library is verified before it is mapped, closing the raw-discovery boundary's executable half
 

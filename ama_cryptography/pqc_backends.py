@@ -928,7 +928,7 @@ def _find_native_library_path() -> Optional[Path]:
         # select what gets signed either.
         override = None
 
-    search_dirs = _get_search_dirs()
+    search_dirs: list[Path] = list(_get_search_dirs())
     if override:
         override_path = Path(override)
         if override_path.is_file():
@@ -938,7 +938,7 @@ def _find_native_library_path() -> Optional[Path]:
 
     for search_dir in search_dirs:
         for lib_name in _get_lib_names():
-            lib_path = search_dir / lib_name
+            lib_path = Path(search_dir) / str(lib_name)
             if lib_path.is_file():
                 return lib_path
     return None
