@@ -65,4 +65,22 @@ int ama_kyber_debug_ntt_roundtrip(void);
 /** CPA-secure keygen/encrypt/decrypt round-trip. 0 on success. */
 int ama_kyber_debug_cpa_roundtrip(void);
 
+/**
+ * Test-only export of FIPS 203 `Compress_d`, defined under AMA_TESTING_MODE.
+ *
+ * `kyber_compress_d` is `static inline`, so tests/c/test_kyber_compress.c
+ * cannot link it and a copy in the test would verify the copy rather than the
+ * shipped code.  This forwards to the real definition, so the exhaustive
+ * equivalence proof for the Granlund-Montgomery reciprocal — all 16,645
+ * (coefficient, width) pairs against the specification's division form — runs
+ * against the translation unit that ships.
+ *
+ * Declared here rather than as an `extern` in the test, for the reason this
+ * header exists: an untethered transcription of a signature is an ABI
+ * mismatch waiting to be silent.  The first version of this export carried no
+ * prototype at all and `-Werror=missing-prototypes` rejected it — which is the
+ * check working.
+ */
+uint32_t ama_kyber_compress_d_for_test(uint32_t x_normalized, unsigned d);
+
 #endif /* AMA_TESTING_EXPORTS_H */

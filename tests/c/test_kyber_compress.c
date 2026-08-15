@@ -50,8 +50,12 @@
 
 /* Test-only export of the `static inline` helper from src/c/ama_kyber.c.
  * Forwarding to the real definition (rather than copying it here) is what
- * makes this a test of the shipped translation unit. */
-extern uint32_t ama_kyber_compress_d_for_test(uint32_t x_normalized, unsigned d);
+ * makes this a test of the shipped translation unit.
+ *
+ * Declared in the shared testing-exports header, NOT re-transcribed here:
+ * an `extern` written out at each consumer is an ABI mismatch waiting to be
+ * silent, which is the whole reason that header exists. */
+#include "../../src/c/internal/ama_testing_exports.h"
 
 /* Every width ama_kyber.c calls Compress_d with:
  *   d=1  poly_tomsg / the Compress_1 message decode in decapsulation
