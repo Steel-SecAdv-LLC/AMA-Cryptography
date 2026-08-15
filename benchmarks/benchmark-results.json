@@ -1,5 +1,17 @@
 {
-  "timestamp": "2026-08-15T23:05:02.335379+00:00",
+  "timestamp": "2026-08-15T23:59:21.739814+00:00",
+  "provenance": {
+    "commit": "`0e97aefb09efa23672d5d0c5d651bdfe3b5a579c`",
+    "version": "`5.0.0`",
+    "host": "Linux-6.18.5-fc-v20-x86_64-with-glibc2.39 / x86_64",
+    "cpu": "4 logical processor(s)",
+    "python": "3.11.15 (CPython)",
+    "command": "`python benchmarks/benchmark_runner.py --baseline benchmarks/baseline.json --output benchmarks/benchmark-results.json --markdown benchmark-report.md`",
+    "sampling": "batches sized to span >= 0.15s at the fastest rate observed; 3 full-window batches per call",
+    "extra_whole_run_repeats": "aes_256_gcm_encrypt x3, ama_sha3_256_hash x3, chacha20poly1305_encrypt x3, dilithium_keygen x3, dilithium_sign x3, dilithium_verify x3, ed25519_keygen x3, ed25519_sign x3, ed25519_verify x3, full_package_create x5, full_package_verify x5, hkdf_derive x3, hmac_sha3_256 x3",
+    "aggregation": "fastest observation (throughput noise is one-sided: interference can only make an operation look slower)",
+    "reading_these_numbers": "the baseline column is a regression FLOOR measured on the named CI runner, not this host's expected throughput; a ratio below 1.0 on a developer machine is ordinary"
+  },
   "summary": {
     "total": 19,
     "passed": 19,
@@ -10,9 +22,9 @@
     {
       "name": "ama_sha3_256_hash",
       "description": "AMA native C SHA3-256 hashing of 1KB data (FIPS 202, ctypes)",
-      "ops_per_second": 288371.12,
+      "ops_per_second": 289691.85,
       "baseline_value": 327222,
-      "regression_percent": 11.87,
+      "regression_percent": 11.47,
       "tolerance_percent": 45,
       "passed": true,
       "optional": false
@@ -20,9 +32,9 @@
     {
       "name": "hmac_sha3_256",
       "description": "HMAC-SHA3-256 authentication (native C via ctypes)",
-      "ops_per_second": 187032.75,
+      "ops_per_second": 187324.62,
       "baseline_value": 215299,
-      "regression_percent": 13.13,
+      "regression_percent": 12.99,
       "tolerance_percent": 45,
       "passed": true,
       "optional": false
@@ -30,9 +42,9 @@
     {
       "name": "ed25519_keygen",
       "description": "Ed25519 key pair generation (native C)",
-      "ops_per_second": 11155.92,
+      "ops_per_second": 11268.46,
       "baseline_value": 10822,
-      "regression_percent": -3.09,
+      "regression_percent": -4.13,
       "tolerance_percent": 45,
       "passed": true,
       "optional": false
@@ -40,9 +52,9 @@
     {
       "name": "ed25519_sign",
       "description": "Ed25519 signature generation (native C, expanded key)",
-      "ops_per_second": 56032.26,
+      "ops_per_second": 56299.06,
       "baseline_value": 53885,
-      "regression_percent": -3.98,
+      "regression_percent": -4.48,
       "tolerance_percent": 45,
       "passed": true,
       "optional": false
@@ -50,9 +62,9 @@
     {
       "name": "ed25519_verify",
       "description": "Ed25519 signature verification (native C)",
-      "ops_per_second": 20227.27,
+      "ops_per_second": 20634.18,
       "baseline_value": 19181,
-      "regression_percent": -5.45,
+      "regression_percent": -7.58,
       "tolerance_percent": 45,
       "passed": true,
       "optional": false
@@ -60,9 +72,9 @@
     {
       "name": "hkdf_derive",
       "description": "HKDF-SHA3-256 key derivation (3 keys)",
-      "ops_per_second": 108276.13,
+      "ops_per_second": 109134.95,
       "baseline_value": 131341,
-      "regression_percent": 17.56,
+      "regression_percent": 16.91,
       "tolerance_percent": 45,
       "passed": true,
       "optional": false
@@ -70,9 +82,9 @@
     {
       "name": "full_package_create",
       "description": "Complete crypto package creation (with PQC)",
-      "ops_per_second": 1440.48,
+      "ops_per_second": 1514.51,
       "baseline_value": 1983,
-      "regression_percent": 27.36,
+      "regression_percent": 23.63,
       "tolerance_percent": 45,
       "passed": true,
       "optional": false
@@ -80,9 +92,9 @@
     {
       "name": "full_package_verify",
       "description": "Complete crypto package verification (with PQC)",
-      "ops_per_second": 2132.74,
+      "ops_per_second": 1963.75,
       "baseline_value": 3442,
-      "regression_percent": 38.04,
+      "regression_percent": 42.95,
       "tolerance_percent": 45,
       "passed": true,
       "optional": false
@@ -90,9 +102,9 @@
     {
       "name": "secp256k1_ecdsa_sign",
       "description": "secp256k1 ECDSA signing (native C, RFC 6979 deterministic nonce)",
-      "ops_per_second": 8049.19,
+      "ops_per_second": 8352.05,
       "baseline_value": 8068,
-      "regression_percent": 0.23,
+      "regression_percent": -3.52,
       "tolerance_percent": 45,
       "passed": true,
       "optional": false
@@ -100,9 +112,9 @@
     {
       "name": "secp256k1_ecdsa_verify",
       "description": "secp256k1 ECDSA verification (native C, Shamir's-trick joint multiply, low-s + canonical-pubkey policy)",
-      "ops_per_second": 3618.09,
+      "ops_per_second": 3674.69,
       "baseline_value": 3302,
-      "regression_percent": -9.57,
+      "regression_percent": -11.29,
       "tolerance_percent": 45,
       "passed": true,
       "optional": false
@@ -110,9 +122,9 @@
     {
       "name": "dilithium_keygen",
       "description": "ML-DSA-65 (Dilithium) key pair generation (native C)",
-      "ops_per_second": 980.06,
+      "ops_per_second": 962.63,
       "baseline_value": 1312,
-      "regression_percent": 25.3,
+      "regression_percent": 26.63,
       "tolerance_percent": 45,
       "passed": true,
       "optional": true
@@ -120,9 +132,9 @@
     {
       "name": "dilithium_sign",
       "description": "ML-DSA-65 (Dilithium) signature generation (native C)",
-      "ops_per_second": 1825.94,
+      "ops_per_second": 1837.72,
       "baseline_value": 2636,
-      "regression_percent": 30.73,
+      "regression_percent": 30.28,
       "tolerance_percent": 45,
       "passed": true,
       "optional": true
@@ -130,9 +142,9 @@
     {
       "name": "dilithium_verify",
       "description": "ML-DSA-65 (Dilithium) signature verification (native C)",
-      "ops_per_second": 6950.32,
+      "ops_per_second": 6902.27,
       "baseline_value": 8897,
-      "regression_percent": 21.88,
+      "regression_percent": 22.42,
       "tolerance_percent": 45,
       "passed": true,
       "optional": true
@@ -140,9 +152,9 @@
     {
       "name": "kyber_keygen",
       "description": "ML-KEM-1024 (Kyber) key pair generation (native C)",
-      "ops_per_second": 1924.33,
+      "ops_per_second": 1899.98,
       "baseline_value": 2726,
-      "regression_percent": 29.41,
+      "regression_percent": 30.3,
       "tolerance_percent": 45,
       "passed": true,
       "optional": true
@@ -150,9 +162,9 @@
     {
       "name": "kyber_encapsulate",
       "description": "ML-KEM-1024 (Kyber) encapsulation (native C)",
-      "ops_per_second": 8305.46,
+      "ops_per_second": 8435.81,
       "baseline_value": 11994,
-      "regression_percent": 30.75,
+      "regression_percent": 29.67,
       "tolerance_percent": 45,
       "passed": true,
       "optional": true
@@ -160,9 +172,9 @@
     {
       "name": "aes_256_gcm_encrypt",
       "description": "AES-256-GCM encryption of 1KB data (native C)",
-      "ops_per_second": 244131.44,
+      "ops_per_second": 237703.35,
       "baseline_value": 224406,
-      "regression_percent": -8.79,
+      "regression_percent": -5.93,
       "tolerance_percent": 45,
       "passed": true,
       "optional": true
@@ -170,9 +182,9 @@
     {
       "name": "chacha20poly1305_encrypt",
       "description": "ChaCha20-Poly1305 encryption of 1KB data (native C)",
-      "ops_per_second": 211098.35,
+      "ops_per_second": 208052.5,
       "baseline_value": 227521,
-      "regression_percent": 7.22,
+      "regression_percent": 8.56,
       "tolerance_percent": 45,
       "passed": true,
       "optional": true
@@ -180,9 +192,9 @@
     {
       "name": "x25519_scalarmult",
       "description": "X25519 single-shot Diffie-Hellman scalar-mult (native C, default dispatch). Backed by fe64 (radix-2^64, MULX/ADX) on x86-64 hosts with BMI2+ADX, fe51 (radix-2^51) on 64-bit hosts without, and gf16 on 32-bit. The AVX2 4-way kernel is OPT-IN via AMA_DISPATCH_USE_X25519_AVX2=1 and is intentionally not faster than scalar fe64 on MULX/ADX hosts \u2014 see src/c/dispatch/ama_dispatch.c:478-502 and tests/test_x25519_dispatch_policy.py for the dispatch contract. Re-floored 5,000 \u2192 13,000 (2026-04-27 audit) so the regression gate actually catches a >40% drop from canonical-host throughput rather than ignoring it.",
-      "ops_per_second": 17945.31,
+      "ops_per_second": 18201.38,
       "baseline_value": 16876,
-      "regression_percent": -6.34,
+      "regression_percent": -7.85,
       "tolerance_percent": 45,
       "passed": true,
       "optional": true
@@ -190,9 +202,9 @@
     {
       "name": "x25519_scalarmult_batch4",
       "description": "X25519 batch-4 Diffie-Hellman under default dispatch \u2014 measures BATCHES/SEC, not per-op rate. On MULX/ADX hosts this is roughly x25519_scalarmult / 4 plus the wrapper's per-batch overhead (canonical-host run measured ~4,100 batches/sec vs ~17,000 single-shot ops/sec). A significantly slower batches/sec number typically means the AVX2 4-way kernel was accidentally selected as the default \u2014 that is a regression on every shipped Broadwell+/Zen+ part (see PR #273 design note and ama_dispatch.c:478-502). The runner calls native_x25519_scalarmult_batch with count=4 so this baseline genuinely exercises the batch wrapper, not four sequential native_x25519_key_exchange calls.",
-      "ops_per_second": 4333.68,
+      "ops_per_second": 4269.87,
       "baseline_value": 4074,
-      "regression_percent": -6.37,
+      "regression_percent": -4.81,
       "tolerance_percent": 45,
       "passed": true,
       "optional": true
