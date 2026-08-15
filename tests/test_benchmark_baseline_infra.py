@@ -506,3 +506,82 @@ class TestReleaseParsing:
             b = guard._release_tuple(lower)
             assert a is not None and b is not None, (higher, lower)
             assert a > b
+
+
+class TestProvenanceRecordsTheMeasuredTree:
+    """The tree state in the provenance block must describe the measured tree.
+
+    ``_provenance`` used to sample ``git status --porcelain`` at the moment the
+    markdown was rendered. A normal run writes ``benchmarks/benchmark-results.
+    json`` — a tracked file — before rendering, so the working tree was always
+    dirty by then and every report the tool had ever produced carried
+    ``(working tree DIRTY)``, including reports produced from a pristine
+    checkout.
+
+    A field that always prints the same value carries no information; one that
+    always prints the alarming value trains the reader to ignore it. The state
+    is now captured once, before the first measurement.
+    """
+
+    def test_the_snapshot_is_used_in_preference_to_a_live_query(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(br, "_TREE_STATE", ("c0ffee" * 6 + "abcd", False))
+
+        def _fail(*args: str) -> str:
+            raise AssertionError("_provenance queried git despite a captured snapshot")
+
+        monkeypatch.setattr(br, "_git", _fail)
+        rendered = dict(br._provenance())["Commit"]
+        assert "DIRTY" not in rendered
+        assert "c0ffee" in rendered
+
+    def test_a_dirty_snapshot_is_reported(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The flag must still fire when the tree really was modified."""
+        monkeypatch.setattr(br, "_TREE_STATE", ("deadbeef", True))
+        assert "working tree DIRTY" in dict(br._provenance())["Commit"]
+
+    def test_writing_the_report_files_does_not_make_the_snapshot_dirty(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The regression itself, exercised through the ordering that caused it.
+
+        ``capture_tree_state`` reads a clean tree; the run then modifies it;
+        the rendered provenance must still describe what was measured.
+        """
+        observed: list[tuple[str, ...]] = []
+
+        def _fake_git(*args: str) -> str:
+            observed.append(args)
+            # Clean on the first status query, dirty on every later one — the
+            # shape a run has once it has written its own tracked output.
+            if args[0] == "status":
+                return "" if len(observed) <= 2 else " M benchmarks/benchmark-results.json"
+            return "1234567890abcdef"
+
+        monkeypatch.setattr(br, "_git", _fake_git)
+        monkeypatch.setattr(br, "_TREE_STATE", None)
+
+        captured = br.capture_tree_state()
+        assert captured[1] is False, "precondition: the tree was clean when measuring began"
+
+        monkeypatch.setattr(br, "_TREE_STATE", captured)
+        assert "DIRTY" not in dict(br._provenance())["Commit"]
+
+    def test_without_a_snapshot_it_still_produces_a_block(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Direct calls (tests, embeddings) must not crash on the fallback."""
+        monkeypatch.setattr(br, "_TREE_STATE", None)
+        block = dict(br._provenance())
+        assert "Commit" in block and "Aggregation" in block
+
+    def test_git_failures_degrade_rather_than_raise(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        def _boom(*args: str) -> str:
+            raise OSError("no git here")
+
+        monkeypatch.setattr(br.subprocess, "run", _boom)
+        monkeypatch.setattr(br, "_TREE_STATE", None)
+        commit, dirty = br.capture_tree_state()
+        assert commit == "unknown"
+        assert dirty is False, "an unavailable git must not be reported as a modified tree"

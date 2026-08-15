@@ -1014,6 +1014,43 @@ def _package_version() -> str:
         return "unknown"
 
 
+def _git(*args: str) -> str:
+    """Run a read-only git command, or return ``"unknown"``.
+
+    Guarded on every axis that can fail, so producing a report never fails
+    because the host has no git, no repository, or a slow filesystem.
+    """
+    try:
+        out = subprocess.run(
+            ["git", *args], capture_output=True, text=True, check=False, timeout=10
+        )
+        return out.stdout.strip() or "unknown"
+    except Exception:
+        return "unknown"
+
+
+def capture_tree_state() -> "tuple[str, bool]":
+    """Snapshot ``(commit, dirty)`` for the tree the measurements come from.
+
+    Called once, **before** the first measurement.  Sampling it later is what
+    the first version did, and it made the flag useless: the run writes
+    ``benchmarks/benchmark-results.json`` before rendering the markdown, and
+    that file is tracked, so ``git status --porcelain`` was never empty by the
+    time the provenance block was built.  Every report the tool had ever
+    produced said ``working tree DIRTY`` — including the ones produced from a
+    pristine checkout — so a reader could not tell a genuinely modified tree
+    from the tool observing its own output.
+
+    A provenance field that always reports the same value carries no
+    information, and one that always reports the *alarming* value is worse
+    than absent: it trains the reader to ignore it.
+    """
+    return (_git("rev-parse", "HEAD"), _git("status", "--porcelain") not in ("", "unknown"))
+
+
+_TREE_STATE: "tuple[str, bool] | None" = None
+
+
 def _provenance() -> "list[tuple[str, str]]":
     """Everything needed to reproduce or discard this report.
 
@@ -1027,18 +1064,11 @@ def _provenance() -> "list[tuple[str, str]]":
     Read only; every lookup that can fail is guarded, so producing the report
     never fails because a host withheld a detail.
     """
-
-    def _git(*args: str) -> str:
-        try:
-            out = subprocess.run(
-                ["git", *args], capture_output=True, text=True, check=False, timeout=10
-            )
-            return out.stdout.strip() or "unknown"
-        except Exception:
-            return "unknown"
-
-    dirty = _git("status", "--porcelain") not in ("", "unknown")
-    commit = _git("rev-parse", "HEAD")
+    # Falls back to a live query when nothing captured the state first — a
+    # direct call from a test, or an embedding that skips ``main``. That
+    # reading is the pessimistic one (the report files may already be
+    # written), which is the right direction for a field about trust.
+    commit, dirty = _TREE_STATE if _TREE_STATE is not None else capture_tree_state()
     repeated = ", ".join(f"{k} x{v}" for k, v in sorted(_SAMPLING_REPEATS.items()))
     return [
         ("Commit", f"`{commit}`{' (working tree DIRTY)' if dirty else ''}"),
@@ -1161,6 +1191,12 @@ def main() -> int:
     )
 
     args = parser.parse_args()
+
+    # Before anything is measured and before any output file is written, so
+    # the recorded commit and cleanliness describe the tree the numbers came
+    # from rather than the tree after this run edited it.
+    global _TREE_STATE
+    _TREE_STATE = capture_tree_state()
 
     print("=" * 60)
     print("AMA CRYPTOGRAPHY - BENCHMARK REGRESSION DETECTION")
