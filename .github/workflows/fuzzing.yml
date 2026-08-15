@@ -291,6 +291,25 @@ jobs:
             -DAMA_BUILD_TESTS=OFF -DAMA_BUILD_EXAMPLES=OFF
           cmake --build build -j$(nproc)
 
+      - name: Bind the freshly-built library into the integrity artefact
+        # A library built here is not the library the committed artefact was
+        # signed over, and since 5.0.0 a digest mismatch is refused BEFORE the
+        # object is mapped rather than reported after — so without this step
+        # the harness cannot import the package it is meant to fuzz, and the
+        # job fails on the import rather than on a parser defect.
+        #
+        # Every other job that builds the library and then imports the package
+        # already does this (ci.yml, ci-build-test.yml, integrity-anchor-
+        # check.yml); this one built the library and skipped the step, which
+        # only became visible once the refusal stopped being demotable.
+        #
+        # This is the positive path (a valid signature verifies). Tamper
+        # DETECTION is covered by tests/test_native_integrity.py on a
+        # purpose-built tree, so re-signing here removes no coverage.
+        env:
+          AMA_BUILD_PIPELINE: "1"
+        run: python -m ama_cryptography.integrity --update --sign
+
       - name: Fuzz the key parsers
         env:
           FUZZ_DURATION: ${{ github.event.inputs.fuzz_duration || '60' }}

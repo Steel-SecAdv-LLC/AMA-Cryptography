@@ -765,8 +765,11 @@ class CMakeBuild(build_ext):
         """Bundle libama_cryptography.so* (and Windows DLL) into the package.
 
         D-1 — without this step the produced wheel ships only the Cython
-        binding `.so` files; they NEEDED-link against `libama_cryptography.so.3`
-        which is not present anywhere on a fresh install, so any
+        binding `.so` files; they NEEDED-link against the library's current
+        SONAME (`libama_cryptography.so.<major>`, `.so.5` at this release —
+        CMake derives SOVERSION from the project major, so this tracks the
+        version rather than being a fixed name), which is not present anywhere
+        on a fresh install, so any
         `python -m ama_cryptography` invocation outside the source tree dies
         with `RuntimeError: AMA native C library required`.
 
