@@ -90,7 +90,21 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        sve_vq: [1, 2]
+        # vl_bits is carried explicitly rather than computed.  GitHub Actions
+        # expressions have no arithmetic operators — the grammar admits only
+        # `!`, the comparisons, `&&` and `||` — so `${{ matrix.sve_vq * 128 }}`
+        # is a PARSE ERROR, not a wrong value.  A workflow file that does not
+        # parse never runs and never reports: this whole workflow, the SVE2
+        # lanes it was added for and the aggregating `ARM QEMU Gate` alike,
+        # produced no check on any pull request that referenced it.  A gate that
+        # cannot fail is the failure this branch exists to remove; a gate that
+        # cannot start is the same failure one step earlier.
+        # tools/check_workflow_commands.py now rejects the shape.
+        include:
+          - sve_vq: 1
+            vl_bits: 128
+          - sve_vq: 2
+            vl_bits: 256
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
@@ -119,7 +133,7 @@ jobs:
       - name: Build (aarch64, SVE2)
         run: cmake --build build-arm-sve2 -j"$(nproc)"
 
-      - name: Test at VL=${{ matrix.sve_vq * 128 }} bits
+      - name: Test at VL=${{ matrix.vl_bits }} bits
         # QEMU_CPU reaches qemu-aarch64-static through binfmt, so every test
         # binary ctest launches inherits the vector length.
         env:

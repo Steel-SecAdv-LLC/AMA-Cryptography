@@ -45,6 +45,7 @@ from tools.check_workflow_commands import (
     RETIRED_LABELS,
     SUPPORTED_LABELS,
     Report,
+    check_expression_syntax,
     check_inline_python,
     check_release_publishing,
     check_runner_labels,
@@ -67,6 +68,7 @@ def run_checks(source: str, name: str = "test.yml") -> Report:
     check_windows_quoting(path, document, report)
     check_shell_parseable(path, document, report)
     check_release_publishing(path, document, report)
+    check_expression_syntax(path, document, report)
     return report
 
 
@@ -532,6 +534,97 @@ class TestReleasePublishingReplantedDefects:
 
     def test_post_fix_shape_passes(self) -> None:
         report = run_checks(release_workflow(self.POST_FIX))
+        assert report.ok, messages(report)
+
+
+class TestExpressionSyntax:
+    """An expression GitHub cannot parse makes the whole FILE produce no checks.
+
+    `.github/workflows/arm-qemu.yml` carried
+    ``name: Test at VL=${{ matrix.sve_vq * 128 }} bits``.  GitHub Actions
+    expressions have no arithmetic — the grammar admits `!`, the comparisons,
+    `&&`, `||`, indexing and the documented functions, and nothing else — so
+    the file failed to parse and every job in it, including the SVE2 lanes it
+    had just been extended with and the aggregating ``ARM QEMU Gate``, silently
+    produced no check on any pull request.
+
+    YAML parses the file perfectly well (the operator is inside a string as far
+    as YAML is concerned), so the existing malformed-YAML guard could not see
+    it.  It was found by dispatching the workflow, which is not a thing CI does.
+    """
+
+    def test_the_shipped_defect_is_caught(self) -> None:
+        report = run_checks(textwrap.dedent("""
+                name: probe
+                on: workflow_dispatch
+                jobs:
+                  j:
+                    runs-on: ubuntu-latest
+                    strategy:
+                      matrix:
+                        sve_vq: [1, 2]
+                    steps:
+                      - name: Test at VL=${{ matrix.sve_vq * 128 }} bits
+                        run: echo hi
+                """))
+        assert not report.ok
+        assert any("arithmetic" in f.message for f in report.findings), messages(report)
+
+    @pytest.mark.parametrize(
+        "expression",
+        [
+            "${{ matrix.n * 2 }}",
+            "${{ matrix.n + 1 }}",
+            "${{ (matrix.a) / 4 }}",
+            "${{ matrix.a % 8 }}",
+        ],
+    )
+    def test_every_arithmetic_operator_is_rejected(self, expression: str) -> None:
+        report = run_checks(
+            "name: p\non: workflow_dispatch\njobs:\n  j:\n    runs-on: ubuntu-latest\n"
+            f"    steps:\n      - name: {expression}\n        run: echo hi\n"
+        )
+        assert not report.ok, f"{expression} was accepted"
+
+    @pytest.mark.parametrize(
+        "expression",
+        [
+            # A slash inside a string literal is data, not division. This is
+            # the shape that made the first draft of the check unusable: it
+            # flagged every `github.ref != 'refs/heads/main'` in the tree.
+            "${{ github.ref != 'refs/heads/main' && github.event_name != 'schedule' }}",
+            "${{ !cancelled() }}",
+            "${{ contains(needs.*.result, 'failure') }}",
+            "${{ matrix.os }}",
+            "${{ github.event.inputs.measurements || '100000' }}",
+            "${{ steps.confirm.outputs.supported == 'true' }}",
+            "${{ hashFiles('**/requirements*.txt') }}",
+        ],
+    )
+    def test_legitimate_expressions_are_not_flagged(self, expression: str) -> None:
+        report = run_checks(
+            "name: p\non: workflow_dispatch\njobs:\n  j:\n    runs-on: ubuntu-latest\n"
+            f"    steps:\n      - name: step\n        if: {expression}\n        run: echo hi\n"
+        )
+        assert report.ok, messages(report)
+
+    def test_the_check_inspects_something(self) -> None:
+        """A silent no-op would pass every workflow in the tree."""
+        report = sweep(REPO_ROOT / ".github" / "workflows")
+        assert report.expressions_checked > 0
+
+    def test_the_real_arm_workflow_parses_and_has_both_vector_lengths(self) -> None:
+        """The fix, asserted on the file rather than on a fixture."""
+        document = yaml.safe_load(
+            (REPO_ROOT / ".github" / "workflows" / "arm-qemu.yml").read_text(encoding="utf-8")
+        )
+        matrix = document["jobs"]["arm-qemu-sve2"]["strategy"]["matrix"]
+        assert "include" in matrix, "the vector length must be carried, not computed"
+        assert {entry["vl_bits"] for entry in matrix["include"]} == {128, 256}
+        report = Report()
+        check_expression_syntax(
+            REPO_ROOT / ".github" / "workflows" / "arm-qemu.yml", document, report
+        )
         assert report.ok, messages(report)
 
 

@@ -245,6 +245,7 @@ class Report:
     labels_checked: int = 0
     labels_unresolved: list[str] = field(default_factory=list)
     payloads_checked: int = 0
+    expressions_checked: int = 0
     windows_commands_checked: int = 0
     release_steps_checked: int = 0
     gated_binaries_checked: int = 0
@@ -769,6 +770,91 @@ def check_cmake_gated_binaries(path: Path, document: Any, report: Report) -> Non
                 )
 
 
+#: Every operator GitHub Actions' expression grammar admits.
+#:
+#: The list is short and closed: logical `!`, `&&`, `||`; the comparisons
+#: `<`, `<=`, `>`, `>=`, `==`, `!=`; grouping; indexing; and the documented
+#: functions.  There is NO arithmetic.  `${{ matrix.sve_vq * 128 }}` is not a
+#: wrong value — it is a parse error, and a workflow file that does not parse
+#: never runs and never reports.
+#:
+#: That is exactly what happened to `.github/workflows/arm-qemu.yml`: the
+#: expression above made the whole file invalid, so the AArch64 cross-tests,
+#: the SVE2 lanes at VL=128 and VL=256, and the aggregating `ARM QEMU Gate`
+#: produced no check on any pull request. The gate did not fail — it never
+#: started, which looks identical to "not applicable to this change".
+#:
+#: Found by dispatching the workflow (GitHub answers `422 Invalid Argument -
+#: failed to parse workflow`), not by any check in this repository.  It is
+#: checked here now.
+_ARITHMETIC_IN_EXPRESSION_RE = re.compile(
+    r"\$\{\{(?P<body>[^}]*)\}\}",
+)
+
+#: Arithmetic operators, matched only where they can be an operator: between
+#: two operand-ish characters.  Written narrowly so ordinary content inside an
+#: expression — a `-` inside a quoted string, a `/` in a path literal, a `!` —
+#: does not produce a false positive.
+_ARITHMETIC_OPERATOR_RE = re.compile(r"[\w)\]]\s*[*/%+]\s*[\w(]")
+
+#: A single-quoted GitHub-expression string literal, `''` being the escape.
+_EXPRESSION_LITERAL_RE = re.compile(r"'(?:[^']|'')*'")
+
+
+def _iter_expression_strings(node: Any, trail: str = "") -> list[tuple[str, str]]:
+    """Every string in the document that contains a `${{ ... }}` expression."""
+    found: list[tuple[str, str]] = []
+    if isinstance(node, dict):
+        for key, value in node.items():
+            found.extend(_iter_expression_strings(value, f"{trail}.{key}" if trail else str(key)))
+    elif isinstance(node, list):
+        for index, value in enumerate(node):
+            found.extend(_iter_expression_strings(value, f"{trail}[{index}]"))
+    elif isinstance(node, str) and "${{" in node:
+        found.append((trail or "<root>", node))
+    return found
+
+
+def check_expression_syntax(path: Path, document: Any, report: Report) -> None:
+    """Reject expression forms GitHub's parser rejects.
+
+    Only arithmetic today, because that is the class that has actually shipped
+    here and because it is decidable without reimplementing the grammar. YAML
+    parses the file fine — the operator is inside a string as far as YAML is
+    concerned — so this cannot be caught by loading the document, which is why
+    the existing YAML guard in :func:`sweep` did not see it.
+    """
+    for location, text in _iter_expression_strings(document):
+        for match in _ARITHMETIC_IN_EXPRESSION_RE.finditer(text):
+            report.expressions_checked += 1
+            body = match.group("body")
+            # Blank single-quoted string literals first.  GitHub expressions
+            # quote with `'` only, and their CONTENTS are data: `'refs/heads/main'`
+            # contains a `/` between two word characters and would otherwise read
+            # as a division.  Replaced with spaces rather than removed so the
+            # reported text keeps its shape.
+            scannable = _EXPRESSION_LITERAL_RE.sub(lambda m: " " * len(m.group(0)), body)
+            operator = _ARITHMETIC_OPERATOR_RE.search(scannable)
+            if operator is None:
+                continue
+            report.findings.append(
+                Finding(
+                    workflow=path.name,
+                    location=location,
+                    message=(
+                        f"expression `${{{{{body}}}}}` uses the arithmetic operator "
+                        f"`{operator.group(0).strip()}`. GitHub Actions expressions have no "
+                        f"arithmetic; this makes the WHOLE FILE fail to parse, so every job "
+                        f"in it silently produces no check at all."
+                    ),
+                    remedy=(
+                        "carry the computed value in the matrix (matrix.include) or an env "
+                        "var instead of computing it in the expression."
+                    ),
+                )
+            )
+
+
 def sweep(workflows_dir: Path) -> Report:
     """Run every check across every workflow file."""
     report = Report()
@@ -792,6 +878,7 @@ def sweep(workflows_dir: Path) -> Report:
         check_shell_parseable(path, document, report)
         check_release_publishing(path, document, report)
         check_cmake_gated_binaries(path, document, report)
+        check_expression_syntax(path, document, report)
     return report
 
 
@@ -814,7 +901,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         f"{report.payloads_checked} inline python payload(s), "
         f"{report.windows_commands_checked} Windows command string(s), "
         f"{report.release_steps_checked} release-publishing step(s), "
-        f"{report.gated_binaries_checked} CMake-gated binary invocation(s)."
+        f"{report.gated_binaries_checked} CMake-gated binary invocation(s), "
+        f"{report.expressions_checked} `${{{{ }}}}` expression(s)."
     )
     if report.labels_unresolved:
         # Reported, never counted as verified.  Silence here would read as
