@@ -83,10 +83,34 @@ void ama_keccak_f1600_sve2(uint64_t state[25]) {
          * is QEMU's default `max` CPU, whose 2048-bit vectors activate all five
          * lanes and hide the bug.
          *
-         * Strip-mining a five-element reduction would cost more code than the
-         * 20 XORs it replaces, and the permutation's real vector work is
-         * elsewhere; the correct-at-every-VL scalar form is used instead.  The
-         * absorb loop below is separately strip-mined and is not affected. */
+         * Whether to restore a vector form, written vector-length-agnostically,
+         * was left open in review.  It is settled here by measurement rather
+         * than preference: a correctly strip-mined VLA reduction is SLOWER
+         * than the scalar form at every vector length, because a five-element
+         * reduction cannot fill a vector.  aarch64-linux-gnu-gcc 13.3
+         * -O2 -march=armv9-a+sve2, 2,000,000 calls under qemu-aarch64-static:
+         *
+         *   VL   scalar    VLA vector   ratio
+         *   128  108.1 ms  1720.0 ms    15.9x slower  (3 strip-mine passes)
+         *   256  114.7 ms  1144.7 ms    10.0x slower  (2 passes)
+         *   512  108.6 ms   612.0 ms     5.6x slower  (1 pass + loop overhead)
+         *
+         * Static instruction counts agree on the direction: 16 for the scalar
+         * form against a 20-instruction loop BODY for the vector one, executed
+         * three times at VL=128 and twice at VL=256.  QEMU translates rather
+         * than models a pipeline, so treat the ratios as indicative and the
+         * ordering as sound — they agree at every VL and with the static count,
+         * and the gap is an order of magnitude, not a margin.
+         *
+         * The same harness re-confirmed the defect this replaced: the
+         * single-predicate form produces the wrong parity at VL=128 and VL=256
+         * and the right one at VL=512, exactly as the lane analysis predicts.
+         *
+         * So the scalar form is kept — it is both correct at every VL and the
+         * faster of the two on all shipping SVE2 silicon.  The permutation's
+         * real vector work is elsewhere.  The absorb loop below is separately
+         * strip-mined (it reduces over 17 lanes, which does fill a vector) and
+         * is not affected. */
         for (int i = 0; i < 5; i++) {
             C[i] = state[i] ^ state[i + 5] ^ state[i + 10] ^ state[i + 15] ^ state[i + 20];
         }

@@ -118,6 +118,23 @@ jobs:
         cmake -B build -DAMA_USE_NATIVE_PQC=ON -DCMAKE_BUILD_TYPE=Release -DAMA_BUILD_TESTS=OFF -DAMA_BUILD_EXAMPLES=OFF
         cmake --build build --config Release --parallel
 
+    # SoftHSM2 is a software PKCS#11 token: it makes tests/test_hsm_integration.py's
+    # TestSoftHSMIntegration executable without hardware.  Without it that class
+    # skipped on every job this repository has ever run, so the entire HSM key
+    # lifecycle (connect, generate, encrypt/decrypt, find, delete) was covered
+    # only by mocks — the "a lane that never runs is not a lane" failure this
+    # branch removed from the SVE2 kernels, still present here.  Linux only:
+    # the package is Debian-only and one executing lane is what the coverage
+    # argument needs; the mock-backed tests still run everywhere.
+    - name: Install SoftHSM2 (PKCS#11 test token)
+      if: runner.os == 'Linux'
+      run: |
+        sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends softhsm2
+        test -f /usr/lib/softhsm/libsofthsm2.so
+        command -v softhsm2-util
+
     - name: Install Python dependencies
       run: |
         python -m pip install --upgrade pip setuptools wheel
@@ -129,7 +146,11 @@ jobs:
         # / test_hkdf_sha3_256.py) silently SKIP, so a divergence between AMA's
         # native C primitives and a reference implementation would go unnoticed.
         # Installing them converts those skips into real assertions.
-        pip install -e ".[dev,legacy,benchmark]" pycryptodome
+        #
+        # [hsm] supplies PyKCS11, for the same reason: SoftHSM2 alone is not
+        # enough to run the HSM lane, because HSMKeyStorage reaches the token
+        # through PyKCS11.
+        pip install -e ".[dev,legacy,benchmark,hsm]" pycryptodome
 
     # The signed integrity artefact binds two digests: the .py sources
     # (platform-independent) and the built native library (specific to the exact
@@ -561,6 +582,16 @@ jobs:
         python -m pip install semgrep==1.74.0
         semgrep --config .semgrep.yml ama_cryptography/ --json -o semgrep-report.json
         python tools/check_semgrep_severity.py semgrep-report.json
+
+    - name: Semgrep gate self-tests (the end-to-end case needs semgrep present)
+      # tests/test_semgrep_severity_gate.py's only end-to-end assertion — that
+      # the shipped package passes the gate on a report the gate generated
+      # itself — is skipped wherever semgrep is absent, which is every job in
+      # the test matrix.  This job is the one that has semgrep, so it is the
+      # one that can run it.  Until 5.0.0 the test was skipped even here,
+      # because its availability probe used the deprecated `python -m semgrep`
+      # entry point, which exits non-zero on a working install.
+      run: python -m pytest tests/test_semgrep_severity_gate.py -q
 
     - name: Upload Semgrep report
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1

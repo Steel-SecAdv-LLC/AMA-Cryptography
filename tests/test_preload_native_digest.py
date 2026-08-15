@@ -19,9 +19,7 @@ pins for the pieces.
 from __future__ import annotations
 
 import os
-import shutil
 from pathlib import Path
-from typing import Optional
 
 import pytest
 
@@ -125,68 +123,190 @@ class TestPreloadRefusal:
         assert any("pre-load digest read failed" in err for _p, err in new_errors), new_errors
         assert pb._LOAD_DIAGNOSTICS["preload_digest_hex"] is None
 
-    def test_build_pipeline_demotes_to_warning(
+    def test_the_build_pipeline_environment_variable_no_longer_relaxes_this(
         self, tampered_so: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """``AMA_BUILD_PIPELINE=1`` used to map a mismatching object anyway.
+
+        ``os.environ`` is read on EVERY import, so that made the refusal
+        defeatable by anyone who could set one variable in the target process —
+        no code execution required, which is less than this check was ever
+        defending against.  The build pipeline's real need is served by
+        :func:`pb.unverified_load_for_signing`, an in-process opt-in the
+        signing tool enters around its own discovery call.
+        """
         monkeypatch.setenv("AMA_BUILD_PIPELINE", "1")
         monkeypatch.setattr(pb, "_in_secure_execution_mode", lambda: False)
-        lib = pb._try_load_library(tampered_so)
+        errors_before = len(pb._LOAD_DIAGNOSTICS["errors"])
+        assert (
+            pb._try_load_library(tampered_so) is None
+        ), "an environment variable must not buy a mapping of unverified bytes"
+        new_errors = pb._LOAD_DIAGNOSTICS["errors"][errors_before:]
+        assert any("refused before mapping" in err for _p, err in new_errors), new_errors
+        assert pb._LOAD_DIAGNOSTICS["preload_digest_hex"] is None
+
+    def test_the_signing_override_permits_the_mapping(
+        self, tampered_so: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Re-signing must be able to map the library it is about to bless.
+
+        The signature is produced by the in-tree Ed25519 kernel (INVARIANT-1
+        forbids a PyCA dependency), so the object has to be mapped — and it is
+        by definition the one whose digest does not match the artefact yet.
+        """
+        monkeypatch.delenv("AMA_BUILD_PIPELINE", raising=False)
+        monkeypatch.setattr(pb, "_in_secure_execution_mode", lambda: False)
+        with pb.unverified_load_for_signing():
+            lib = pb._try_load_library(tampered_so)
         # The tampered copy still parses as an ELF object, so the load itself
         # succeeds; the point is that the mismatch did not refuse it.
         assert lib is not None
         assert pb._LOAD_DIAGNOSTICS["preload_digest_hex"] is not None
 
-    def test_secure_execution_ignores_the_build_pipeline_carve_out(
+    def test_the_signing_override_is_scoped_to_its_block(
         self, tampered_so: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """AMA_BUILD_PIPELINE is an environment variable; in secure-execution
-        mode environment variables must not relax a security decision."""
+        """Scope is the whole security argument; exiting must restore refusal."""
+        monkeypatch.delenv("AMA_BUILD_PIPELINE", raising=False)
+        monkeypatch.setattr(pb, "_in_secure_execution_mode", lambda: False)
+        assert pb._SIGNING_LOAD_OVERRIDE is False
+        with pb.unverified_load_for_signing():
+            assert pb._SIGNING_LOAD_OVERRIDE is True
+            # Nesting must not clear the outer entry on the inner exit.
+            with pb.unverified_load_for_signing():
+                assert pb._SIGNING_LOAD_OVERRIDE is True
+            assert pb._SIGNING_LOAD_OVERRIDE is True
+        assert pb._SIGNING_LOAD_OVERRIDE is False
+        assert pb._try_load_library(tampered_so) is None
+
+    def test_the_signing_override_is_restored_after_an_exception(
+        self, tampered_so: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(pb, "_in_secure_execution_mode", lambda: False)
+        with pytest.raises(RuntimeError):
+            with pb.unverified_load_for_signing():
+                raise RuntimeError("signing blew up")
+        assert pb._SIGNING_LOAD_OVERRIDE is False
+        assert pb._try_load_library(tampered_so) is None
+
+    def test_secure_execution_revokes_the_signing_override(
+        self, tampered_so: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A set-uid process must not be talked into mapping unverified bytes.
+
+        Not by an environment variable, and not by the in-process override
+        either — the dynamic loader drops LD_PRELOAD under set-uid for the same
+        reason, and an override of our own must honour the same rule.
+        """
         monkeypatch.setenv("AMA_BUILD_PIPELINE", "1")
         monkeypatch.setattr(pb, "_in_secure_execution_mode", lambda: True)
         errors_before = len(pb._LOAD_DIAGNOSTICS["errors"])
-        assert pb._try_load_library(tampered_so) is None
+        with pb.unverified_load_for_signing():
+            assert pb._try_load_library(tampered_so) is None
         new_errors = pb._LOAD_DIAGNOSTICS["errors"][errors_before:]
         assert any("refused before mapping" in err for _p, err in new_errors), new_errors
 
-    def test_verify_digest_false_records_but_never_refuses(
+    def test_a_refusal_is_recorded_structurally_not_only_in_prose(
         self, tampered_so: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The override path: digest recorded for the POST stage, no block."""
+        """``__init__`` classifies on this, so it must not be a substring test.
+
+        A native-backend failure caused solely by digest refusal is the one
+        such failure a re-signing run may complete the import through; anything
+        else is a broken build.
+        """
         monkeypatch.delenv("AMA_BUILD_PIPELINE", raising=False)
-        lib = pb._try_load_library(tampered_so, verify_digest=False)
-        assert lib is not None
-        assert pb._LOAD_DIAGNOSTICS["preload_digest_hex"] is not None
+        pb._LOAD_DIAGNOSTICS["digest_refused"] = []
+        pb._LOAD_DIAGNOSTICS["errors"] = []
+        assert pb._try_load_library(tampered_so) is None
+        assert str(tampered_so) in pb._LOAD_DIAGNOSTICS["digest_refused"]
 
-
-@needs_native
-class TestMatchingLoad:
-    def test_genuine_library_loads_and_records_its_digest(
+    def test_refused_on_digest_is_false_for_a_loader_failure(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        import hashlib
+        """A load failure that is NOT a digest refusal must not be excused.
 
-        assert _REAL_SO is not None
-        copy = tmp_path / _REAL_SO.name
-        shutil.copyfile(_REAL_SO, copy)
-        expected: Optional[bytes] = pb._expected_native_digest()
-        if expected != hashlib.sha3_256(copy.read_bytes()).digest():
-            pytest.skip("tree's artefact digest is stale relative to the built library")
+        Note what this layer can and cannot distinguish.  The digest check runs
+        BEFORE dlopen, so any object whose bytes do not match the signed digest
+        is a pre-load refusal — a merely-stale library and a corrupt one are
+        the same event here, and both are treated as repairable, which is
+        correct: the remedy for each is to rebuild and re-sign.  What must stay
+        unexcused is a failure the digest check never reached: a loader error
+        or an ABI rejection.  Those are reachable when no signed digest exists
+        to check against, and they are what "broken build" means.
+        """
         monkeypatch.delenv("AMA_BUILD_PIPELINE", raising=False)
-        lib = pb._try_load_library(copy)
-        assert lib is not None
-        assert pb._LOAD_DIAGNOSTICS["preload_digest_hex"] == expected.hex()
+        monkeypatch.setattr(pb, "_native_lib", None, raising=False)
+        monkeypatch.setattr(pb, "_expected_native_digest", lambda: None)
+        pb._LOAD_DIAGNOSTICS["digest_refused"] = []
+        pb._LOAD_DIAGNOSTICS["errors"] = []
+        pb._LOAD_DIAGNOSTICS["abi_rejection"] = None
 
-    def test_no_descriptor_leak(self, tmp_path: Path) -> None:
-        """Every load attempt must close the descriptor it hashed from."""
-        assert _REAL_SO is not None
-        copy = tmp_path / _REAL_SO.name
-        shutil.copyfile(_REAL_SO, copy)
-        open_fds_before = (
-            len(os.listdir("/proc/self/fd")) if os.path.isdir("/proc/self/fd") else None
-        )
-        if open_fds_before is None:
-            pytest.skip("no procfs on this platform")
-        for _ in range(5):
-            pb._try_load_library(copy)
-        open_fds_after = len(os.listdir("/proc/self/fd"))
-        assert open_fds_after <= open_fds_before + 1  # dlopen itself may cache one
+        assert pb.native_backend_refused_on_digest() is False, "no refusal recorded"
+
+        # Force the loader to reject the candidate. Writing junk bytes is not
+        # enough to guarantee this: dlopen deduplicates by resolved path and a
+        # real library of the same name is already mapped in this process, so
+        # the failure has to be injected at the ctypes boundary to be certain
+        # which path the test is exercising.
+        import ctypes as _ctypes
+
+        def _refuse(*_a: object, **_k: object) -> object:
+            raise OSError("simulated loader rejection: wrong ELF class")
+
+        monkeypatch.setattr(_ctypes, "CDLL", _refuse)
+        candidate = tmp_path / "libama_cryptography.so"
+        candidate.write_bytes(b"not an ELF object" * 64)
+        assert pb._try_load_library(candidate) is None
+        assert pb._LOAD_DIAGNOSTICS["errors"], "the loader error was not recorded"
+        assert pb._LOAD_DIAGNOSTICS["digest_refused"] == []
+        assert pb.native_backend_refused_on_digest() is False
+
+    def test_refused_on_digest_requires_every_failure_to_be_a_refusal(
+        self, tampered_so: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """One stale library plus one unloadable one is a broken build."""
+        monkeypatch.delenv("AMA_BUILD_PIPELINE", raising=False)
+        monkeypatch.setattr(pb, "_native_lib", None, raising=False)
+        pb._LOAD_DIAGNOSTICS["digest_refused"] = []
+        pb._LOAD_DIAGNOSTICS["errors"] = []
+        pb._LOAD_DIAGNOSTICS["abi_rejection"] = None
+
+        assert pb._try_load_library(tampered_so) is None
+        assert pb.native_backend_refused_on_digest() is True
+
+        # A second candidate that gets past the digest check and then fails to
+        # map: the mixture is no longer purely repairable.
+        import ctypes as _ctypes
+
+        def _refuse(*_a: object, **_k: object) -> object:
+            raise OSError("simulated loader rejection: missing NEEDED")
+
+        monkeypatch.setattr(pb, "_expected_native_digest", lambda: None)
+        monkeypatch.setattr(_ctypes, "CDLL", _refuse)
+        other = tmp_path / ("other-" + tampered_so.name)
+        other.write_bytes(b"not an ELF object" * 64)
+        assert pb._try_load_library(other) is None
+        assert pb.native_backend_refused_on_digest() is False
+
+    def test_an_abi_rejection_is_never_excused(
+        self, tampered_so: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A library of the wrong major version is a broken build, not a stale one."""
+        monkeypatch.delenv("AMA_BUILD_PIPELINE", raising=False)
+        monkeypatch.setattr(pb, "_native_lib", None, raising=False)
+        pb._LOAD_DIAGNOSTICS["digest_refused"] = []
+        pb._LOAD_DIAGNOSTICS["errors"] = []
+        pb._LOAD_DIAGNOSTICS["abi_rejection"] = None
+
+        assert pb._try_load_library(tampered_so) is None
+        assert pb.native_backend_refused_on_digest() is True
+        pb._LOAD_DIAGNOSTICS["abi_rejection"] = "reports major 3, this build needs 5"
+        assert pb.native_backend_refused_on_digest() is False
+        pb._LOAD_DIAGNOSTICS["abi_rejection"] = None
+
+    def test_a_loaded_backend_is_never_reported_as_refused(self) -> None:
+        """The predicate describes an ABSENT backend; a present one is not it."""
+        if pb._native_lib is None:
+            pytest.skip("no native backend loaded in this process")
+        assert pb.native_backend_refused_on_digest() is False

@@ -63,7 +63,7 @@ import hashlib
 import os
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 _BUILD_PIPELINE_ENV = "AMA_BUILD_PIPELINE"
 _INTEGRITY_SIGNING_SEED_ENV = "AMA_INTEGRITY_SIGNING_SEED_HEX"
@@ -310,6 +310,7 @@ def _generate_keypair_and_sign(
     seed_override: Optional[bytes] = None,
     trusted_pubkey: Optional[bytes] = None,
     require_trust_anchor: bool = False,
+    native_lib: Optional[Any] = None,
 ) -> Tuple[bytes, bytes, str]:
     """Generate an ephemeral Ed25519 keypair and sign ``digest``.
 
@@ -336,7 +337,11 @@ def _generate_keypair_and_sign(
     from ama_cryptography.pqc_backends import _find_native_library
     from ama_cryptography.secure_memory import secure_memzero
 
-    lib = _find_native_library()
+    # The caller normally hands in the handle it already resolved, under the
+    # narrowly-scoped signing override.  Re-discovering here would run outside
+    # that scope and refuse the very library being blessed — and would widen
+    # the override's window if it were extended to cover this call instead.
+    lib = native_lib if native_lib is not None else _find_native_library()
     if lib is None:
         raise RuntimeError(
             "Cannot find the native AMA Cryptography library; build "
@@ -618,38 +623,64 @@ def main() -> int:
         # is the same discovery the runtime uses, so the file hashed here is the
         # file the runtime will load and re-hash.
         from ama_cryptography.pqc_backends import (
-            _LOAD_DIAGNOSTICS,
             _find_native_library,
-            native_backend_diagnostics,
+            _find_native_library_path,
+            unverified_load_for_signing,
         )
 
-        native_lib = _find_native_library()
-        if native_lib is None:
+        # The file to bind is chosen by PATH discovery, and its digest is taken
+        # by reading it.  Deriving the path from a loaded handle is wrong in
+        # exactly the case this flow exists for: the operator rebuilt the
+        # library, so its digest no longer matches the artefact, so the
+        # (correctly) unconditional pre-load check refuses to map it — and a
+        # loader-based signer would then walk past the file it was asked to
+        # re-bless and sign whichever later candidate still happened to match.
+        # Signing the wrong file is worse than failing to sign.
+        #
+        # _find_native_library_path applies the same search order and the same
+        # AMA_CRYPTO_LIB_PATH rules (secure-execution suppression included), so
+        # the file hashed here is the file the runtime will select.
+        native_path_obj = _find_native_library_path()
+        if native_path_obj is None:
             raise RuntimeError(
                 "native library not found; cannot bind it into the integrity "
                 "signature. Build it first: cmake -B build "
                 "-DAMA_USE_NATIVE_PQC=ON && cmake --build build"
             )
-        # The discovery record, not the CDLL's ``_name``: a pre-load-verified
-        # library is mapped through /proc/self/fd on Linux, so ``_name`` is a
-        # transient descriptor path that no longer resolves.  The scratch
-        # record is authoritative here because the discovery above is the one
-        # that just ran.
-        native_path = (
-            _LOAD_DIAGNOSTICS.get("path")
-            or getattr(native_lib, "_name", None)
-            or native_backend_diagnostics()["path"]
-        )
-        if not native_path:
-            raise RuntimeError("native library loaded but its path is unknown; cannot hash it")
-        # Prefer the digest of the bytes the discovery actually mapped (hashed
-        # from the same descriptor dlopen used) over a fresh read of the path.
-        preload_hex = _LOAD_DIAGNOSTICS.get("preload_digest_hex")
-        native_digest = (
-            bytes.fromhex(preload_hex)
-            if preload_hex
-            else _compute_native_library_digest(native_path)
-        )
+        native_path = str(native_path_obj)
+        native_digest = _compute_native_library_digest(native_path)
+
+        # The signature itself is produced by the in-tree Ed25519 kernel
+        # (INVARIANT-1: no PyCA dependency), so the library does have to be
+        # mapped here — and it is the very object whose digest does not match
+        # the artefact being replaced.  unverified_load_for_signing() is the
+        # narrowly-scoped, in-process opt-in for exactly that: it is entered
+        # around this discovery call and nowhere else, so an ordinary import
+        # in a process carrying the build environment is unaffected.  It is
+        # revoked under secure-execution mode.
+        with unverified_load_for_signing():
+            native_lib = _find_native_library()
+        if native_lib is None:
+            raise RuntimeError(
+                f"native library at {native_path} could not be loaded; the "
+                "signing pipeline needs the in-tree Ed25519 kernel "
+                "(INVARIANT-1: no PyCA dependency). Check the architecture, "
+                "the SONAME and the library's own dependencies (ldd/otool)."
+            )
+        # The two discoveries must have agreed on the file: with the override
+        # active nothing is digest-refused, so both select the first existing
+        # candidate.  A disagreement would mean signing a digest for a
+        # different object than the one just loaded, so it is an error rather
+        # than a warning.
+        from ama_cryptography.pqc_backends import _LOAD_DIAGNOSTICS as _LD
+
+        loaded_path = _LD.get("path")
+        if loaded_path and Path(loaded_path).resolve() != native_path_obj.resolve():
+            raise RuntimeError(
+                f"discovery disagreement: hashing {native_path} but loaded "
+                f"{loaded_path}. Refusing to sign a digest for an object other "
+                f"than the one this process is running."
+            )
         # Bind the compiled binding extensions into the same signature (v3) —
         # in the wheel pipeline only (see --bind-extensions above for why the
         # repair flow must not).  These load and execute before POST can
@@ -671,6 +702,7 @@ def main() -> int:
             seed_override=seed_override,
             trusted_pubkey=trusted_pubkey_env,
             require_trust_anchor=_env_flag_enabled(_INTEGRITY_REQUIRE_TRUST_ANCHOR_ENV),
+            native_lib=native_lib,
         )
     except Exception as exc:
         # Catch every exception (RuntimeError, ctypes OSError, KeyboardInterrupt

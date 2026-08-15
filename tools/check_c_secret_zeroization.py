@@ -51,6 +51,7 @@ from __future__ import annotations
 
 import re
 import sys
+from bisect import bisect_right
 from pathlib import Path
 from typing import NamedTuple, Sequence
 
@@ -92,8 +93,19 @@ _SECRET_NAME_RE = re.compile(
 # 16,000 spaces now costs microseconds.  A .c file with a long run of spaces
 # after `memset(` is a strange input, but this tool runs over whatever is in
 # the tree, and a gate must not be the thing that hangs CI.
+#
+# ``\s`` matches newlines, so every quantifier below spans line breaks and the
+# pattern matches the multi-line spelling of the call as readily as the
+# one-line one — see scan_text(), which applies it to the whole (comment- and
+# literal-blanked) file text rather than to each line in isolation.
+#
+# The optional address-of is written ``(?:(?P<amp>&)\s*)?`` rather than
+# ``&?\s*``: every ``\s*`` here is followed by something that cannot itself be
+# whitespace (``&`` or an identifier start), which is what keeps the match
+# deterministic.  It is captured, not discarded, because the remediation hint
+# has to reproduce a destination expression that compiles.
 _MEMSET_RE = re.compile(
-    r"\bmemset\s*\((?:\s*&)?\s*"
+    r"\bmemset\s*\(\s*(?:(?P<amp>&)\s*)?"
     r"(?P<dst>[A-Za-z_][A-Za-z0-9_]*"
     r"(?:(?:->|\.)[A-Za-z_][A-Za-z0-9_]*|\[[^\]]*\])*)"
     r"\s*,\s*(?P<val>0[xX]0+|0|'\\0')\s*,"
@@ -152,6 +164,21 @@ class Finding(NamedTuple):
     line_no: int
     dst: str
     text: str
+    expression: str = ""
+
+    @property
+    def target(self) -> str:
+        """The destination as written in the source, for the remediation hint.
+
+        ``dst`` is only the trailing identifier — the one the naming convention
+        attaches to (``hmac_key`` out of ``ctx->hmac_key``, ``signing_key`` out
+        of ``keys[i].signing_key``).  That is the right thing to *test* and the
+        wrong thing to *suggest*: ``ama_secure_memzero(hmac_key, LEN)`` does not
+        compile at the site being reported.  The hint uses the full destination
+        expression the regex captured, falling back to ``dst`` only for a
+        Finding constructed without one.
+        """
+        return self.expression or self.dst
 
     def render(self) -> str:
         # Paths outside the repository (an explicit file argument, a test's
@@ -165,7 +192,7 @@ class Finding(NamedTuple):
             f"{rel}:{self.line_no}: bare memset() zeroing secret-named "
             f"buffer {self.dst!r}\n"
             f"    {self.text.strip()}\n"
-            f"    Use ama_secure_memzero({self.dst}, LEN) — a plain memset may be "
+            f"    Use ama_secure_memzero({self.target}, LEN) — a plain memset may be "
             f"elided by the optimizer (INVARIANT-6, CWE-226)."
         )
 
@@ -189,39 +216,135 @@ def c_sources(root: Path | None = None) -> list[Path]:
     return out
 
 
+def blank_comments_and_literals(text: str) -> str:
+    """``text`` with comment and string/char-literal bodies replaced by spaces.
+
+    Length and line structure are preserved exactly — every replaced character
+    becomes a space and every newline is kept — so an offset into the result
+    indexes the same character of the original.  That is what lets scan_text()
+    match against the blanked text and still report the source line.
+
+    Comments are blanked because this repo documents the anti-pattern in prose,
+    including inside this rule's own sources, and a gate that reports its own
+    documentation is a gate people turn off.  String and character literals are
+    blanked for two reasons in opposite directions: a literal containing
+    ``memset(secret_key, 0,`` is not code and must not be reported, and — the
+    sharper one — a literal containing ``//`` or ``/*`` used to swallow the rest
+    of a real line.  ``puts("a//b"); memset(secret_key, 0, 32);`` was a silent
+    MISS under the previous per-line ``re.sub(r"//.*$", ...)``: an ERROR-severity
+    gate failing open on a legal C line.
+
+    A single left-to-right pass, so this is linear in the length of the input.
+    """
+    out: list[str] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        nxt = text[i + 1] if i + 1 < n else ""
+
+        if ch == "/" and nxt == "/":
+            # Line comment. A backslash-newline splices the next line into it
+            # (C11 5.1.1.2 phase 2 runs before comments are recognised), so the
+            # comment does not end there.
+            out.append("  ")
+            i += 2
+            while i < n and text[i] != "\n":
+                if text[i] == "\\" and text.startswith("\n", i + 1):
+                    out.append(" \n")
+                    i += 2
+                    continue
+                if text[i] == "\\" and text.startswith("\r\n", i + 1):
+                    out.append(" \r\n")
+                    i += 3
+                    continue
+                out.append(" ")
+                i += 1
+            continue
+
+        if ch == "/" and nxt == "*":
+            out.append("  ")
+            i += 2
+            while i < n and not (text[i] == "*" and text.startswith("/", i + 1)):
+                out.append("\n" if text[i] == "\n" else " ")
+                i += 1
+            if i < n:
+                out.append("  ")
+                i += 2
+            continue
+
+        if ch in ('"', "'"):
+            # A character literal is passed through VERBATIM, a string literal
+            # is blanked.  The asymmetry is deliberate: `'\0'` is one of the
+            # three spellings of the zero this rule looks for, so blanking it
+            # would make `memset(secret_key, '\0', 32)` invisible — and a char
+            # literal is one character wide, so it cannot hide a call.  A string
+            # literal can, so its body goes.
+            quote = ch
+            keep = quote == "'"
+            out.append(quote if keep else " ")
+            i += 1
+            while i < n and text[i] != quote:
+                if text[i] == "\\" and i + 1 < n:
+                    # An escaped character never terminates the literal, and an
+                    # escaped newline continues it.
+                    pair = text[i : i + 2]
+                    out.append(pair if keep else ("  " if pair[1] != "\n" else " \n"))
+                    i += 2
+                    continue
+                if text[i] == "\n":
+                    # Unterminated literal: C forbids it, but this tool reads
+                    # whatever is in the tree.  End it at the newline rather
+                    # than blanking the rest of the file.
+                    break
+                out.append(text[i] if keep else " ")
+                i += 1
+            if i < n and text[i] == quote:
+                out.append(quote if keep else " ")
+                i += 1
+            continue
+
+        out.append(ch)
+        i += 1
+
+    return "".join(out)
+
+
 def scan_text(text: str, path: Path) -> list[Finding]:
     """Findings in one file's text.
 
-    Line comments are stripped before matching so a ``memset`` written inside
-    an explanatory comment — this repo has several, including in the rule's own
-    documentation — is not reported as code.
-    """
-    findings: list[Finding] = []
-    in_block_comment = False
-    for line_no, raw in enumerate(text.splitlines(), start=1):
-        line = raw
-        if in_block_comment:
-            end = line.find("*/")
-            if end == -1:
-                continue
-            line = line[end + 2 :]
-            in_block_comment = False
-        while True:
-            start = line.find("/*")
-            if start == -1:
-                break
-            end = line.find("*/", start + 2)
-            if end == -1:
-                line = line[:start]
-                in_block_comment = True
-                break
-            line = line[:start] + " " + line[end + 2 :]
-        line = re.sub(r"//.*$", "", line)
+    The scan runs over the WHOLE file at once, not line by line.  ``memset``
+    calls are routinely written across several lines:
 
-        for match in _MEMSET_RE.finditer(line):
-            dst = _destination_name(match.group("dst"))
-            if dst and _SECRET_NAME_RE.match(dst):
-                findings.append(Finding(path, line_no, dst, raw))
+        memset(secret_key,
+               0,
+               sizeof(secret_key));
+
+    and a per-line regex cannot see them — a shape common enough in formatted C
+    that missing it made this ERROR-severity gate under-enforce exactly where a
+    long destination expression (the ones most likely to be secret state) forces
+    the wrap.  ``\\s`` matches newlines, so _MEMSET_RE spans the wrap unchanged;
+    what had to change is the unit of text it is applied to.
+
+    Comment and literal bodies are blanked first, in place, so match offsets
+    still index the original text and the reported line is the source line.
+    """
+    blanked = blank_comments_and_literals(text)
+    lines = text.splitlines()
+    # Offset of the first character of each line, for offset -> line lookup.
+    line_starts: list[int] = [0]
+    for match in re.finditer(r"\n", text):
+        line_starts.append(match.end())
+
+    findings: list[Finding] = []
+    for match in _MEMSET_RE.finditer(blanked):
+        dst = _destination_name(match.group("dst"))
+        if not dst or not _SECRET_NAME_RE.match(dst):
+            continue
+        line_no = bisect_right(line_starts, match.start())
+        raw = lines[line_no - 1] if 0 < line_no <= len(lines) else ""
+        expression = ("&" if match.group("amp") else "") + match.group("dst")
+        findings.append(Finding(path, line_no, dst, raw, expression))
     return findings
 
 

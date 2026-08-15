@@ -377,6 +377,22 @@ _LOAD_DIAGNOSTICS: dict = {
     # bytes actually executing; the integrity POST stage prefers it over
     # re-reading the path, which closes the hash-after-load race.
     "preload_digest_hex": None,
+    # list[str]: candidates refused by the PRE-LOAD digest check, as opposed to
+    # refused by the loader.  A structured record rather than a substring of
+    # the message, because __init__ distinguishes on it: a native-backend
+    # failure whose every cause is a digest refusal is the "stale artefact in a
+    # tree about to be re-signed" case that AMA_BUILD_PIPELINE=1 legitimately
+    # expects, and it is the ONLY native-backend failure that flag may excuse.
+    # A missing library, a wrong architecture or a loader error must still hard
+    # fail, or a release container (which carries the flag for its whole
+    # lifetime) could smoke-test a broken wheel and call it built.
+    #
+    # Like "abi_rejection", this is deliberately OUTSIDE the per-run reset in
+    # _find_native_library: discovery legitimately re-runs during import
+    # (secure_memory's probes, the build signer), and a reset would erase the
+    # refusal before POST could classify it.  _reset_digest_refusals() clears
+    # it explicitly where a fresh verdict is wanted.
+    "digest_refused": [],
 }
 
 
@@ -433,6 +449,46 @@ _PRELOAD_MISMATCH_HINT = (
 )
 
 
+#: In-process opt-in that lets the signing tool map a library whose digest does
+#: not (yet) match the artefact it is about to rewrite.
+#:
+#: Deliberately NOT an environment variable.  The predecessor of this flag was
+#: ``AMA_BUILD_PIPELINE=1``, read from ``os.environ`` on every import, which
+#: meant the pre-load digest refusal could be disabled by anyone able to set a
+#: variable in the target process — no code execution required.  A module
+#: attribute costs an attacker code execution inside the interpreter, which is
+#: strictly more than the check was ever defending against.
+_SIGNING_LOAD_OVERRIDE = False
+
+
+@contextlib.contextmanager
+def unverified_load_for_signing() -> Iterator[None]:
+    """Permit ONE region of code to map a digest-mismatching native library.
+
+    For ``ama_cryptography._build_sign`` only.  Re-signing has to map the
+    library because the signature is produced by the in-tree Ed25519 kernel
+    (INVARIANT-1: no PyCA dependency), and the library being signed is by
+    definition the one whose digest does not match the artefact yet.
+
+    Scope is the whole point: enter it around the discovery call, leave it
+    immediately, and an ordinary import — including one in a process that
+    happens to carry the build pipeline's environment — is unaffected.
+    Restored on every exit path, exceptions included, and nested entries are
+    handled by saving the previous value rather than assuming False.
+
+    Refused outright under secure-execution mode by _try_load_library, which
+    checks that separately: a set-uid process must not be talked into mapping
+    an unverified object by any means.
+    """
+    global _SIGNING_LOAD_OVERRIDE
+    previous = _SIGNING_LOAD_OVERRIDE
+    _SIGNING_LOAD_OVERRIDE = True
+    try:
+        yield
+    finally:
+        _SIGNING_LOAD_OVERRIDE = previous
+
+
 def _try_load_library(lib_path: Path, verify_digest: bool = True) -> Optional[ctypes.CDLL]:
     """Try to load a shared library from the given path. Returns None on failure.
 
@@ -458,13 +514,34 @@ def _try_load_library(lib_path: Path, verify_digest: bool = True) -> Optional[ct
     The recorded ``preload_digest_hex`` is the digest of the mapped bytes,
     which the POST integrity stage prefers over re-reading the path.
 
-    Two deliberate carve-outs.  The ``AMA_CRYPTO_LIB_PATH`` override
+    One deliberate carve-out.  The ``AMA_CRYPTO_LIB_PATH`` override
     (``verify_digest=False``) is the operator's own substitution: its digest
     is still recorded, but a mismatch is reported by POST as UNVERIFIED
-    rather than blocked here.  ``AMA_BUILD_PIPELINE=1`` (outside
-    secure-execution mode) demotes the refusal to a warning because the
-    tools that refresh a stale artefact after a rebuild live inside this
-    package and must be able to import it.
+    rather than blocked here.
+
+    ``AMA_BUILD_PIPELINE=1`` is NOT a second carve-out, and used to be.  It
+    demoted the refusal to a warning and then mapped the object anyway, on the
+    reasoning that the tools which refresh a stale artefact after a rebuild
+    live inside this package and must be able to import it.  The premise is
+    right; the scope was not.  ``os.environ`` is read on EVERY import, so any
+    attacker who could set one variable in the victim's process turned this
+    pre-execution refusal into a post-hoc report — the definition of a
+    fail-open, and it required no code execution to reach.
+
+    The premise is honoured by scope instead of by severity.  The re-signing
+    run does need the library mapped (it signs with the in-tree Ed25519 kernel;
+    INVARIANT-1 forbids a PyCA dependency), so a mapping has to be possible —
+    but only from inside the tool that is deliberately blessing that library,
+    never from an ordinary import that merely inherited an environment.
+    :func:`unverified_load_for_signing` is that opt-in: an explicit,
+    narrowly-scoped in-process context manager, entered by
+    ``ama_cryptography._build_sign`` around its own discovery call and exited
+    immediately after.  Setting a module attribute inside the victim's
+    interpreter is not a capability an environment variable confers; it
+    requires already executing code there, at which point this check is moot.
+
+    Secure-execution mode (set-uid/set-gid) revokes even that, for the same
+    reason the dynamic loader drops ``LD_PRELOAD``.
     """
     _LOAD_DIAGNOSTICS["candidates"].append(str(lib_path))
     # Per-attempt state: a digest recorded for an earlier candidate that then
@@ -496,15 +573,25 @@ def _try_load_library(lib_path: Path, verify_digest: bool = True) -> Optional[ct
                 return None
             digest = None
         if verify_digest and expected is not None and digest is not None and digest != expected:
-            if os.environ.get("AMA_BUILD_PIPELINE") == "1" and not _in_secure_execution_mode():
+            # Refused on EVERY path, AMA_BUILD_PIPELINE included: mapping is
+            # execution, and no environment variable may buy execution of
+            # bytes that failed verification.  See the docstring for why the
+            # build pipeline does not need the map.
+            if _SIGNING_LOAD_OVERRIDE and not _in_secure_execution_mode():
+                # The signing tool is explicitly blessing this object. It is
+                # about to become the signed digest, so mapping it is the
+                # operator's stated intent rather than an inherited default.
                 logging.getLogger(__name__).warning(
-                    "Native library %s does not match the signed digest "
-                    "(build pipeline: loading anyway so the artefact can "
-                    "be re-signed for this build).",
+                    "Native library %s does not match the signed digest; "
+                    "mapping it anyway because the in-process signing "
+                    "override is active (the artefact is being re-signed for "
+                    "this build).",
                     lib_path,
                 )
             else:
                 _LOAD_DIAGNOSTICS["errors"].append((str(lib_path), _PRELOAD_MISMATCH_HINT))
+                if str(lib_path) not in _LOAD_DIAGNOSTICS["digest_refused"]:
+                    _LOAD_DIAGNOSTICS["digest_refused"].append(str(lib_path))
                 return None
         if digest is not None:
             _LOAD_DIAGNOSTICS["preload_digest_hex"] = digest.hex()
@@ -813,6 +900,50 @@ def _find_native_library() -> Optional[ctypes.CDLL]:
     return None
 
 
+def _find_native_library_path() -> Optional[Path]:
+    """The path discovery would select — WITHOUT mapping the object.
+
+    Same search order as :func:`_find_native_library`, same handling of
+    ``AMA_CRYPTO_LIB_PATH`` (including its suppression under secure-execution
+    mode), but it stops at "this file exists" instead of going on to
+    ``dlopen`` it.
+
+    This exists for the build-time signer.  Signing needs the *bytes* of the
+    library that will ship, which is a read; it never calls into the library.
+    Asking for a loaded handle instead coupled signing to mapping, and once
+    the pre-load digest check became unconditional (see _try_load_library)
+    that coupling had a sharp edge: the repair flow's whole purpose is to
+    re-bless a library whose digest no longer matches, so requiring a
+    successful load meant the one file the operator wanted re-signed was the
+    one file discovery would refuse — and the signer would silently fall
+    through to a *different* candidate and sign that instead.
+
+    Returns None when no candidate exists at all, which is a real error for
+    the signer (there is nothing to bind) and is reported as one.
+    """
+    override = os.getenv("AMA_CRYPTO_LIB_PATH")
+    if override and _in_secure_execution_mode():
+        # Identical rule to the loading path: a caller-controlled variable
+        # must not select the backend under set-uid/set-gid, and it must not
+        # select what gets signed either.
+        override = None
+
+    search_dirs = _get_search_dirs()
+    if override:
+        override_path = Path(override)
+        if override_path.is_file():
+            return override_path
+        if override_path.is_dir():
+            search_dirs.insert(0, override_path)
+
+    for search_dir in search_dirs:
+        for lib_name in _get_lib_names():
+            lib_path = search_dir / lib_name
+            if lib_path.is_file():
+                return lib_path
+    return None
+
+
 def native_backend_diagnostics() -> dict:
     """Return the native-library backend record.
 
@@ -841,7 +972,34 @@ def native_backend_diagnostics() -> dict:
         "native_version": _LOAD_DIAGNOSTICS["native_version"],
         "abi_rejection": _LOAD_DIAGNOSTICS["abi_rejection"],
         "preload_digest_hex": _NATIVE_LIB_PRELOAD_DIGEST_HEX,
+        "digest_refused": list(_LOAD_DIAGNOSTICS["digest_refused"]),
     }
+
+
+def native_backend_refused_on_digest() -> bool:
+    """True when the native backend is absent SOLELY because of digest refusal.
+
+    The distinction __init__ needs to decide whether ``AMA_BUILD_PIPELINE=1``
+    may complete the import: a library refused for failing its signed digest is
+    the one native-backend fault a re-signing run legitimately expects to meet,
+    because clearing it is precisely what that run does.  Anything else — no
+    library at all, a wrong architecture, an ABI rejection, a loader error — is
+    a broken build and must keep hard-failing, so that a release container
+    holding the flag for its whole lifetime cannot smoke-test a broken wheel
+    and report success.
+
+    Requires that EVERY recorded candidate error be a digest refusal, not just
+    one of them: a tree with one stale library and one genuinely corrupt one is
+    a broken build.
+    """
+    if _native_lib is not None:
+        return False
+    refused = _LOAD_DIAGNOSTICS["digest_refused"]
+    if not refused:
+        return False
+    if _LOAD_DIAGNOSTICS["abi_rejection"]:
+        return False
+    return all(err is _PRELOAD_MISMATCH_HINT for _, err in _LOAD_DIAGNOSTICS["errors"])
 
 
 def native_backend_load_summary() -> str:

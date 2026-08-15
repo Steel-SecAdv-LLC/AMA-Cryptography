@@ -116,6 +116,10 @@ typedef struct {
     const uint8_t *msg;
     size_t msg_len;
     ama_error_t rc;
+    /* Filled in by the measured thread itself — see run_job(). */
+    const uint64_t *region;
+    size_t region_words;
+    size_t high_water_bytes;
 } job_t;
 
 static void *run_job(void *arg) {
@@ -149,6 +153,39 @@ static void *run_job(void *arg) {
             job->rc = AMA_SUCCESS;
             break;
     }
+
+    /* Scan the paint HERE, in the thread that owns this stack, rather than in
+     * the parent after pthread_join().
+     *
+     * The post-join scan was correct POSIX — with pthread_attr_setstack() the
+     * caller owns the region and may reuse it once the thread is joined — but
+     * Valgrind models a thread stack as unaddressable from the moment the
+     * thread exits, so every one of those reads was reported as an "Invalid
+     * read of size 8" (32 errors across 6 contexts).  A memory checker that
+     * reports on this binary is worth more than the convenience of scanning
+     * outside; the alternative was a suppression file, which buys silence
+     * rather than correctness.
+     *
+     * The measurement is unchanged.  This function's own frame already
+     * disturbed the paint before the parent could see it, so it was always
+     * included in the high-water mark; the scan loop's locals live in that
+     * same frame.  The scan reads upward from the LOWEST address, so the first
+     * disturbed word is still the deepest point the job reached.
+     *
+     * Reads its own stack, which is exactly what a thread is allowed to do,
+     * so the checker has nothing to report. */
+    if (job->region != NULL && job->region_words > 0) {
+        size_t i;
+        for (i = 0; i < job->region_words; i++) {
+            if (job->region[i] != PAINT) {
+                break;
+            }
+        }
+        job->high_water_bytes =
+            (i == job->region_words)
+                ? 0
+                : (job->region_words - i) * sizeof(uint64_t);
+    }
     return NULL;
 }
 
@@ -159,6 +196,7 @@ static size_t measure(job_t *job) {
     pthread_t tid;
     uint64_t *words;
     size_t count, i;
+    size_t high_water;
 
     region = mmap(NULL, REGION_BYTES, PROT_READ | PROT_WRITE,
                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -170,6 +208,14 @@ static size_t measure(job_t *job) {
     for (i = 0; i < count; i++) {
         words[i] = PAINT;
     }
+
+    /* The stack grows down from the top of the region on every platform this
+     * builds for, so the first disturbed word from the bottom is the deepest
+     * point reached.  The scan runs inside run_job() — see the comment there
+     * for why it cannot run here. */
+    job->region = words;
+    job->region_words = count;
+    job->high_water_bytes = 0;
 
     if (pthread_attr_init(&attr) != 0) {
         munmap(region, REGION_BYTES);
@@ -184,19 +230,11 @@ static size_t measure(job_t *job) {
     pthread_join(tid, NULL);
     pthread_attr_destroy(&attr);
 
-    /* The stack grows down from the top of the region on every platform this
-     * builds for, so the first disturbed word from the bottom is the deepest
-     * point reached. */
-    for (i = 0; i < count; i++) {
-        if (words[i] != PAINT) {
-            break;
-        }
-    }
+    high_water = job->high_water_bytes;
+    job->region = NULL;
+    job->region_words = 0;
     munmap(region, REGION_BYTES);
-    if (i == count) {
-        return 0;
-    }
-    return REGION_BYTES - i * sizeof(uint64_t);
+    return high_water;
 }
 
 static int fail(const char *msg) {

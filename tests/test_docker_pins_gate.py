@@ -84,18 +84,89 @@ class TestSupportWindow:
         """The alpine:3.18 case: EOL 2025-05-09, still in use in Aug 2026."""
         findings = gate.audit([_write(tmp_path, _dockerfile(eol="2025-05-09"))], today=_TODAY)
         assert len(findings) == 1
-        assert "past end-of-support" in findings[0].render()
+        assert findings[0].kind == gate.EOL_PASSED
+        assert "left support" in findings[0].render()
 
     def test_the_gate_fires_before_support_lapses(self, tmp_path: Path) -> None:
         """The point of the grace window: fail while there is time to act."""
         soon = (_TODAY + _dt.timedelta(days=gate.GRACE_DAYS - 1)).isoformat()
         findings = gate.audit([_write(tmp_path, _dockerfile(eol=soon))], today=_TODAY)
         assert len(findings) == 1
+        assert findings[0].kind == gate.EOL_APPROACHING
         assert "reaches end-of-support" in findings[0].render()
 
     def test_a_base_comfortably_in_support_passes(self, tmp_path: Path) -> None:
         far = (_TODAY + _dt.timedelta(days=gate.GRACE_DAYS + 1)).isoformat()
         assert gate.audit([_write(tmp_path, _dockerfile(eol=far))], today=_TODAY) == []
+
+
+class TestSupportWindowIsEnforcedNotAdvised:
+    """The warn-versus-fail question, settled as a behaviour rather than prose.
+
+    ``check_docker_pins`` fails on the support window instead of warning.  The
+    objection — a red gate with no diff behind it — is real, and answered in
+    ``GRACE_DAYS``: the failure being replaced is ``alpine:3.18`` shipping in a
+    published cryptography image for fifteen months after leaving support,
+    which a warning would not have changed.  These pin the decision so a later
+    "make it a warning" cannot land silently.
+    """
+
+    def test_both_states_fail_the_gate(self, tmp_path: Path) -> None:
+        approaching = (_TODAY + _dt.timedelta(days=gate.GRACE_DAYS - 1)).isoformat()
+        passed = (_TODAY - _dt.timedelta(days=1)).isoformat()
+        for eol in (approaching, passed):
+            path = _write(tmp_path, _dockerfile(eol=eol), name=f"Dockerfile.{eol}")
+            assert gate.main([str(path)]) == 1, (
+                f"eol={eol} must fail the gate, not merely report — a "
+                f"warn-only support window is not a gate"
+            )
+
+    def test_the_two_states_are_distinguishable_without_reading_prose(self, tmp_path: Path) -> None:
+        boundary = _TODAY.isoformat()  # today == eol: support has lapsed
+        findings = gate.audit([_write(tmp_path, _dockerfile(eol=boundary))], today=_TODAY)
+        assert [f.kind for f in findings] == [gate.EOL_PASSED]
+
+        one_day_left = (_TODAY + _dt.timedelta(days=1)).isoformat()
+        findings = gate.audit([_write(tmp_path, _dockerfile(eol=one_day_left))], today=_TODAY)
+        assert [f.kind for f in findings] == [gate.EOL_APPROACHING]
+
+    def test_every_finding_kind_is_labelled(self, tmp_path: Path) -> None:
+        """No path may emit an unlabelled Finding — the default is a placeholder."""
+        cases = [
+            _dockerfile(eol=None),
+            _dockerfile(eol=(_TODAY - _dt.timedelta(days=1)).isoformat()),
+            _dockerfile(eol=(_TODAY + _dt.timedelta(days=1)).isoformat()),
+            "# base-eol: 2099-01-01\nFROM alpine:3.23\n",
+        ]
+        seen = set()
+        for i, body in enumerate(cases):
+            for finding in gate.audit(
+                [_write(tmp_path, body, name=f"Dockerfile.case{i}")], today=_TODAY
+            ):
+                assert finding.kind, f"unlabelled finding: {finding.render()}"
+                seen.add(finding.kind)
+        assert seen == {
+            gate.EOL_UNDECLARED,
+            gate.EOL_PASSED,
+            gate.EOL_APPROACHING,
+            gate.NOT_DIGEST_PINNED,
+        }
+
+    def test_the_shipped_dockerfiles_are_not_about_to_trip_the_gate(self) -> None:
+        """A base whose window closes imminently is a finding waiting to happen.
+
+        The gate answers "is it broken today"; this answers "is the tree one
+        ordinary sprint away from breaking on a pull request that has nothing
+        to do with containers".  Failing here is a prompt to bump the base
+        deliberately rather than to discover it mid-review.
+        """
+        horizon = _dt.date.today() + _dt.timedelta(days=gate.GRACE_DAYS)
+        imminent = gate.audit(today=horizon)
+        assert (
+            imminent == []
+        ), "a shipped base leaves support within " f"{2 * gate.GRACE_DAYS} days:\n" + "\n".join(
+            f.render() for f in imminent
+        )
 
 
 class TestExemptions:

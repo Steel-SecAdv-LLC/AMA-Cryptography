@@ -751,11 +751,75 @@ class TestPKCS11Paths:
 # Conditional integration test: SoftHSM2
 # ===========================================================================
 
-_SOFTHSM_LIB = "/usr/lib/softhsm/libsofthsm2.so"
-_SOFTHSM_AVAILABLE = os.path.exists(_SOFTHSM_LIB) and shutil.which("softhsm2-util") is not None
+#: Where Debian/Ubuntu's ``softhsm2`` package installs the PKCS#11 module, and
+#: where a multiarch install puts it.  Both are checked: a host with the token
+#: available but at the second path used to read as "not installed".
+_SOFTHSM_LIB_CANDIDATES = (
+    "/usr/lib/softhsm/libsofthsm2.so",
+    "/usr/lib/x86_64-linux-gnu/softhsm/libsofthsm2.so",
+    "/usr/lib/aarch64-linux-gnu/softhsm/libsofthsm2.so",
+    "/usr/local/lib/softhsm/libsofthsm2.so",
+)
+_SOFTHSM_LIB = next((p for p in _SOFTHSM_LIB_CANDIDATES if os.path.exists(p)), None)
 
 
-@pytest.mark.skipif(not _SOFTHSM_AVAILABLE, reason="SoftHSM2 is not installed")
+def _pykcs11_importable() -> bool:
+    """Whether ``HSMKeyStorage`` can actually reach a token.
+
+    Checked as part of the availability predicate, not left implicit.
+    ``HSMKeyStorage`` reaches the token through PyKCS11, so a host with
+    SoftHSM2 installed and PyKCS11 absent made this class ERROR rather than
+    skip — the predicate claimed a capability one of whose halves it never
+    tested.  It is a real configuration: the ``hsm`` extra is optional, and
+    SoftHSM2 arrives from the system package manager.
+    """
+    import importlib.util
+
+    return importlib.util.find_spec("PyKCS11") is not None
+
+
+_SOFTHSM_AVAILABLE = (
+    _SOFTHSM_LIB is not None and shutil.which("softhsm2-util") is not None and _pykcs11_importable()
+)
+
+
+def _softhsm_unavailable_reason() -> str:
+    """Which half is missing, so a skip line says what to install."""
+    missing = []
+    if _SOFTHSM_LIB is None:
+        missing.append("SoftHSM2 module (apt-get install softhsm2)")
+    if shutil.which("softhsm2-util") is None:
+        missing.append("softhsm2-util")
+    if not _pykcs11_importable():
+        missing.append("PyKCS11 (pip install '.[hsm]')")
+    return "SoftHSM2 integration unavailable: missing " + ", ".join(missing)
+
+
+def test_softhsm_lane_is_provisioned_in_ci() -> None:
+    """Under ``AMA_CI_REQUIRE_BACKENDS=1`` the HSM lane must actually run.
+
+    ``TestSoftHSMIntegration`` is the only coverage of the real PKCS#11 key
+    lifecycle — every other test in this file drives a mock.  It skipped on
+    every job this repository had ever run, because nothing installed SoftHSM2,
+    so "HSM support works" rested entirely on mocks agreeing with themselves.
+
+    The declarative ``skipif`` below cannot be escalated by conftest's
+    ``AMA_CI_REQUIRE_BACKENDS`` hook (its reason does not name a crypto
+    backend), so the requirement is asserted here instead: in the CI job that
+    promises every backend is present, a missing token is a failure with a
+    remedy attached, not a quiet skip.
+    """
+    if os.environ.get("AMA_CI_REQUIRE_BACKENDS", "").lower() not in ("true", "1", "yes"):
+        pytest.skip("AMA_CI_REQUIRE_BACKENDS is not set — local run")
+    assert _SOFTHSM_AVAILABLE, (
+        _softhsm_unavailable_reason()
+        + ". This job asserts every backend is provisioned; install SoftHSM2 "
+        "and the [hsm] extra (see the 'Install SoftHSM2' step in ci.yml) "
+        "rather than letting the only real PKCS#11 coverage skip."
+    )
+
+
+@pytest.mark.skipif(not _SOFTHSM_AVAILABLE, reason=_softhsm_unavailable_reason())
 class TestSoftHSMIntegration:
     """
     Integration tests that run against a real SoftHSM2 instance.

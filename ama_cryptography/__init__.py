@@ -76,6 +76,92 @@ if _sys.platform == "win32":
             # empty so callers can introspect registration state.
             pass
 
+
+# ---------------------------------------------------------------------------
+# PRE-IMPORT binding-extension gate.
+#
+# The POST integrity stage verifies every compiled binding extension against
+# the signed artefact — but a binding extension is an ordinary Python
+# extension module, so importing it runs its module-init function, and POST
+# runs after the imports that pull them in.  That made binding verification
+# post-load DETECTION where the native library already had pre-load REFUSAL:
+# a tampered ``sha3_binding`` executed and only then moved the module to the
+# ERROR state.
+#
+# This closes that asymmetry for the case that is unambiguous tampering — a
+# file the artefact SIGNS whose bytes differ.  It runs here, at the top of
+# package initialisation, before any submodule import, so it is ahead of
+# every binding import in the tree (all are lazy inside functions except
+# ``monitoring``'s ``math_engine``, which this still precedes).  Verified by
+# construction: importing ``ama_cryptography.sha3_binding`` directly
+# initialises this package first, so there is no import path that reaches a
+# binding without passing through here.
+#
+# Scope is deliberately narrow.
+#
+#   * digest MISMATCH -> raise now, before the module-init function runs.
+#     Always fatal, on every build, exactly as the POST stage treats it.
+#   * inventory drift (listed-but-missing, present-but-uncovered) -> NOT
+#     handled here.  It is not tampering, its correct severity depends on
+#     whether the build is anchored, and answering that needs the trust
+#     anchor from the native library — which means loading it, which is the
+#     work this gate exists to run ahead of.  POST still applies the full
+#     anchored/developer split afterwards.
+#
+# Reading ``_integrity_signature`` is safe this early: it is generated source
+# containing only literals, imports nothing from this package, and its own
+# authenticity is checked by POST (this gate is defence in depth ahead of
+# that, not a replacement for it — an attacker who rewrites both the
+# extension and the artefact is caught by the signature check, as before).
+def _refuse_tampered_bindings_before_import() -> None:
+    import hashlib as _hashlib
+    from pathlib import Path as _Path
+
+    try:
+        from ama_cryptography import _integrity_signature as _sig
+    except Exception:
+        # No artefact (editable install, source checkout before the first
+        # sign): nothing is signed, so nothing here is tampering. POST
+        # reports the missing artefact.
+        return
+
+    signed = getattr(_sig, "INTEGRITY_BINDING_DIGESTS_HEX", None)
+    if not isinstance(signed, dict) or not signed:
+        return
+
+    pkg_dir = _Path(__file__).resolve().parent
+    tampered = []
+    for name, digest_hex in sorted(signed.items()):
+        path = pkg_dir / name
+        if not path.is_file():
+            # Listed-but-missing is inventory drift, not tampering. POST.
+            continue
+        try:
+            actual = _hashlib.sha3_256(path.read_bytes()).hexdigest()
+        except OSError as exc:
+            # Bytes that cannot be read cannot be verified.  The artefact
+            # signs this file, so refusing is the same fail-closed rule the
+            # native-library read-error path applies.
+            tampered.append(f"{name}: unreadable ({exc})")
+            continue
+        if not isinstance(digest_hex, str) or actual != digest_hex.lower():
+            tampered.append(f"{name}: digest MISMATCH — bytes differ from the signed build")
+
+    if tampered:
+        raise ImportError(
+            "ama_cryptography refused to initialise: a signed binding "
+            "extension does not match the artefact, and a binding extension "
+            "executes its module-init function the moment it is imported.\n\n"
+            "  " + "\n  ".join(tampered) + "\n\n"
+            "  Refused BEFORE any binding was imported. If you rebuilt the "
+            "extensions, refresh the artefact with:\n"
+            "      AMA_BUILD_PIPELINE=1 python -m ama_cryptography.integrity "
+            "--update --sign"
+        )
+
+
+_refuse_tampered_bindings_before_import()
+
 # FIPS 140-3 Power-On Self-Tests — run at module import time.
 # Sets module state to OPERATIONAL or ERROR.
 from ama_cryptography._self_test import _run_self_tests as _post
@@ -155,14 +241,60 @@ if not _post():
     # rewrite the integrity artefacts outright, so honouring it here grants no
     # capability an attacker did not already have.
     #
-    # It is honoured ONLY for an integrity-stage failure, which is the one
-    # POST outcome a signing run legitimately expects to see in a tree it is
-    # about to re-sign.  A failed KAT, a timing leak or an RNG fault has
-    # nothing to do with a stale artefact and still hard-fails, so a release
-    # container — which has AMA_BUILD_PIPELINE=1 set for its whole lifetime —
-    # cannot smoke-test a genuinely broken wheel and call it built.
+    # It is honoured ONLY for the POST outcomes a signing run legitimately
+    # expects to see in a tree it is about to re-sign.  A failed KAT, a timing
+    # leak or an RNG fault has nothing to do with a stale artefact and still
+    # hard-fails, so a release container — which has AMA_BUILD_PIPELINE=1 set
+    # for its whole lifetime — cannot smoke-test a genuinely broken wheel and
+    # call it built.
+    #
+    # There are two such outcomes, not one:
+    #
+    #   integrity      — a .py file changed, so the signed digest is stale.
+    #   native-backend — the native library changed, so its signed digest is
+    #                    stale and the PRE-LOAD check refuses to map it.
+    #
+    # The second used to be absent from this list because it could not happen:
+    # AMA_BUILD_PIPELINE=1 mapped the mismatching library anyway, which kept
+    # POST green at the cost of executing unverified code — the fail-open that
+    # check exists to prevent.  With the refusal now unconditional, a rebuilt
+    # library legitimately leaves the backend absent, and the repair flow (which
+    # only READS the library) must still be able to import the package that
+    # contains it.
+    #
+    # native_backend_refused_on_digest() is deliberately narrow: it is true only
+    # when every candidate failure was a digest refusal.  A missing library, a
+    # wrong architecture, an ABI rejection or a loader error is a broken build
+    # and keeps hard-failing.
     _integrity_stage_failed = any(
         _name == "integrity" and _ok is False for _name, _ok, _ in _results
+    )
+    try:
+        from ama_cryptography.pqc_backends import (
+            native_backend_refused_on_digest as _refused_on_digest,
+        )
+
+        _native_stage_is_stale_digest = (
+            any(_name == "native-backend" and _ok is False for _name, _ok, _ in _results)
+            and _refused_on_digest()
+        )
+    except Exception:  # pragma: no cover - the import cannot fail in a built tree
+        _native_stage_is_stale_digest = False
+
+    # Every FAILED stage must be one of the two repairable ones. A run that
+    # also broke a KAT is a broken build, and the presence of a stale digest
+    # alongside it must not buy it an import.
+    _repairable = {
+        _name
+        for _name, _ok, _ in _results
+        if _ok is False
+        and (
+            (_name == "integrity" and _integrity_stage_failed)
+            or (_name == "native-backend" and _native_stage_is_stale_digest)
+        )
+    }
+    _all_failures_repairable = bool(_repairable) and all(
+        _name in _repairable for _name, _ok, _ in _results if _ok is False
     )
 
     if _os.environ.get(_diag_env, "").strip().lower() in _TRUE:
@@ -173,12 +305,14 @@ if not _post():
             _diag_env,
             _reason,
         )
-    elif _integrity_stage_failed and _os.environ.get(_build_env, "").strip().lower() in _TRUE:
+    elif _all_failures_repairable and _os.environ.get(_build_env, "").strip().lower() in _TRUE:
         _logging.getLogger(__name__).critical(
-            "FIPS 140-3 POST integrity stage FAILED and %s=1: completing the "
-            "import so the build-pipeline integrity tooling can run. The "
-            "module is in the ERROR state and every cryptographic operation "
-            "through the public surface will be refused. Root cause: %s",
+            "FIPS 140-3 POST FAILED only in stage(s) a re-signing run repairs "
+            "(%s) and %s=1: completing the import so the build-pipeline "
+            "integrity tooling can run. The module is in the ERROR state and "
+            "every cryptographic operation through the public surface will be "
+            "refused; no unverified native code has been mapped. Root cause: %s",
+            ", ".join(sorted(_repairable)),
             _build_env,
             _reason,
         )

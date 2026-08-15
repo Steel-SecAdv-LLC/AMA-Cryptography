@@ -33,10 +33,21 @@ What is checked
     Every Dockerfile carrying a pinned base must declare ``# base-eol:
     YYYY-MM-DD``, the end-of-support date of the base release, taken from
     upstream's own published schedule (for Alpine that is
-    ``alpinelinux.org/releases.json``).  The gate fails once that date is
-    within ``GRACE_DAYS``, naming the remedy.  A date the gate cannot check
-    against the network is still worth requiring: writing it down is what
-    turns "nobody noticed" into "the gate told us in advance".
+    ``alpinelinux.org/releases.json``).  A date the gate cannot check against
+    the network is still worth requiring: writing it down is what turns
+    "nobody noticed" into "the gate told us in advance".
+
+    Two distinct states fail, and they are reported as distinct kinds rather
+    than one message with a conditional clause:
+
+    ``EOL_APPROACHING``
+        The date is within ``GRACE_DAYS``.  Act inside the remaining window.
+    ``EOL_PASSED``
+        The date has passed.  The image is already being published on an
+        unsupported base — a shipped defect, not a reminder.
+
+    Both fail.  ``GRACE_DAYS`` carries the reasoning for why the first one
+    fails rather than warns, which was an open question in review.
 
 ``documented exemptions``
     A Dockerfile may opt out of pinning only by appearing in ``EXEMPT`` *and*
@@ -62,7 +73,43 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 #: Fail this many days before the declared end-of-support date, so the base
 #: can be moved while the current one is still receiving fixes.
+#:
+#: Why this window fails rather than warns — the question left open in review.
+#:
+#: The objection is real: this is a red gate with no diff behind it, which can
+#: appear on a pull request that has nothing to do with containers.  It is
+#: nonetheless the correct behaviour, for a reason specific to what is being
+#: gated.  The failure mode this replaces is not "someone forgot"; it is
+#: ``alpine:3.18`` shipping in a published cryptography image for fifteen
+#: months after leaving support, because an end-of-life base is
+#: indistinguishable from a healthy one until something says otherwise.  A
+#: warning is exactly the thing that said otherwise for fifteen months and
+#: changed nothing.  By this repository's own standard — a gate that cannot
+#: fail is worse than no gate — a warn-only support window is not a gate.
+#:
+#: The precedent is already set in-tree by
+#: ``tests/test_benchmark_baseline_freshness.py``, which fails on a date for
+#: the same reason: the thing being guarded decays with time rather than with
+#: commits, so only time can trip the guard.
+#:
+#: 60 days is chosen against the shortest support window this repository's
+#: bases actually have.  Alpine ships a release every ~6 months and supports
+#: each for 2 years; Ubuntu LTS for 5.  Sixty days is therefore ~1% of the
+#: shortest window: long enough that a base bump is ordinary scheduled work
+#: (digest refresh, image rebuild, one CI cycle), short enough that the gate is
+#: quiet for the other 99% of the base's life.  Two Findings are produced
+#: instead of one so the two states are never confused: see EOL_APPROACHING
+#: (act within the window) and EOL_PASSED (already shipping unsupported).
 GRACE_DAYS = 60
+
+#: Finding kinds.  Both fail the gate; they are distinguished because the
+#: remedies differ in urgency and a reader must not have to parse prose to tell
+#: "you have N days" from "this is already unsupported".
+EOL_APPROACHING = "eol-approaching"
+EOL_PASSED = "eol-passed"
+EOL_UNDECLARED = "eol-undeclared"
+NOT_DIGEST_PINNED = "not-digest-pinned"
+UNDOCUMENTED_EXEMPTION = "undocumented-exemption"
 
 #: Repo-relative Dockerfiles that may use an unpinned base, each of which must
 #: also explain itself in prose. See the module docstring.
@@ -87,6 +134,10 @@ class Finding(NamedTuple):
     path: Path
     line_no: int
     message: str
+    #: One of the module-level kind constants. Every kind fails the gate; the
+    #: label exists so a reader (and a test) can tell the states apart without
+    #: pattern-matching on prose.
+    kind: str = ""
 
     def render(self) -> str:
         try:
@@ -140,6 +191,7 @@ def scan(path: Path, text: str, today: _dt.date) -> list[Finding]:
                     "is exempt from digest pinning but does not say why. An "
                     "undocumented exemption is indistinguishable from an "
                     "oversight; state the reason in a comment beside the FROM.",
+                    UNDOCUMENTED_EXEMPTION,
                 )
             )
         return findings
@@ -168,6 +220,7 @@ def scan(path: Path, text: str, today: _dt.date) -> list[Finding]:
                     f"upstream account takeover reaches this image directly. "
                     f"Pin it as name:tag@sha256:<digest> (keep the tag for "
                     f"readability; Docker verifies the digest).",
+                    NOT_DIGEST_PINNED,
                 )
             )
 
@@ -182,19 +235,36 @@ def scan(path: Path, text: str, today: _dt.date) -> list[Finding]:
                 "schedule so this gate can warn before it lapses — alpine:3.18 "
                 "went unsupported for fifteen months precisely because nothing "
                 "recorded the date.",
+                EOL_UNDECLARED,
             )
         )
-    elif today >= eol - _dt.timedelta(days=GRACE_DAYS):
-        state = "is past end-of-support" if today >= eol else "reaches end-of-support"
+    elif today >= eol:
         findings.append(
             Finding(
                 path,
                 eol_line,
-                f"the pinned base {state} on {eol.isoformat()} "
-                f"({(eol - today).days} day(s) from now; this gate fails within "
-                f"{GRACE_DAYS} days so there is a window to act). Move to a "
+                f"the pinned base left support on {eol.isoformat()}, "
+                f"{(today - eol).days} day(s) ago. This image is being "
+                f"published on a base that no longer receives security "
+                f"updates — a shipped defect, not a reminder. Move to a "
                 f"supported release, refresh the digest, and update the "
                 f"'# base-eol:' line from upstream's schedule.",
+                EOL_PASSED,
+            )
+        )
+    elif today >= eol - _dt.timedelta(days=GRACE_DAYS):
+        findings.append(
+            Finding(
+                path,
+                eol_line,
+                f"the pinned base reaches end-of-support on {eol.isoformat()}, "
+                f"in {(eol - today).days} day(s). This gate fails inside the "
+                f"final {GRACE_DAYS} days deliberately, so the base moves while "
+                f"it is still receiving fixes rather than after it stops "
+                f"(see GRACE_DAYS for why this fails rather than warns). Move "
+                f"to a supported release, refresh the digest, and update the "
+                f"'# base-eol:' line from upstream's schedule.",
+                EOL_APPROACHING,
             )
         )
     return findings

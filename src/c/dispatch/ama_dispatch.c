@@ -1758,6 +1758,34 @@ static void dispatch_init_internal(void) {
      * before the benches run, in which case the benches are skipped. */
     dispatch_autotune_verdicts_t v;
     memset(&v, 0, sizeof(v));  // PUBLIC-DATA: v — zero-init verdict struct (PUBLIC; no secret material)
+    /* The regression flags default to 0 ("SIMD kept"), which the memset above
+     * gives them.  The TIMINGS must not: 0 ns is a real reading that would mean
+     * "the bench ran and the clock returned nothing", and it is
+     * indistinguishable from "the bench never ran" once the struct is zeroed.
+     *
+     * That ambiguity was a live defect, not a hypothetical one.  A slot is
+     * benched only when a SIMD kernel is actually installed
+     * (`dispatch_table.keccak_f1600 != keccak_scalar_baseline`), while
+     * `ama_get_dispatch_info()->sha3` reports the *level*, which the BMI1/BMI2
+     * scalar Keccak also raises above GENERIC.  On any build that selects the
+     * BMI path without a SIMD one — every `-DAMA_ENABLE_SIMD=OFF` build, which
+     * is how the MSan and Valgrind lanes are configured — the two disagree, and
+     * tests/c/test_dispatch_cache_file.c's positivity check read the zeroed
+     * field as a failed measurement and failed.  It was worked around by
+     * skipping that test under MSan rather than by making the states
+     * distinguishable.
+     *
+     * -1 is already this file's "not measured" sentinel: it is what
+     * dispatch_bench_* initialise their locals to, and bench_slot_regressed()
+     * documents negative inputs as "bench never ran".  Using it here makes the
+     * cache file say the same thing, so 0 means only what it should — a
+     * measurement that came back zero, which is always a bug. */
+    v.keccak_simd_ns = v.keccak_generic_ns = -1;
+    v.keccak_x4_simd_ns = v.keccak_x4_generic_ns = -1;
+    v.kyber_ntt_simd_ns = v.kyber_ntt_generic_ns = -1;
+    v.kyber_invntt_simd_ns = v.kyber_invntt_generic_ns = -1;
+    v.dilithium_ntt_simd_ns = v.dilithium_ntt_generic_ns = -1;
+    v.dilithium_invntt_simd_ns = v.dilithium_invntt_generic_ns = -1;
 
     /* Suppress AMA_DISPATCH_CACHE_FILE in setuid/setgid (or otherwise
      * "tainted") processes — environment-controlled file writes are a

@@ -396,21 +396,116 @@ class TestCryptoPostureController:
 
         assert controller._last_rotation_time > 0.0
 
-    def test_unknown_algorithm_is_rejected(self) -> None:
+    def test_unrankable_algorithm_is_rejected(self) -> None:
         """INVARIANT-35: an unrankable algorithm name must not resolve to a rung.
 
-        Every strength lookup is ``ALGORITHM_STRENGTH.get(name, 0)``, so an
+        Every strength lookup was ``ALGORITHM_STRENGTH.get(name, 0)``, so an
         unrecognised name silently scored as the WEAKEST algorithm — and a
-        controller constructed with a real ``AlgorithmType`` this table does not
-        list (KYBER_1024, HYBRID_KEM) would be "upgraded" to ML_DSA_65 on the
-        first CRITICAL evaluation, logged as hardening, with the downgrade
-        detector blinded by the same default.
-        """
-        with pytest.raises(ValueError, match="unknown algorithm"):
-            CryptoPostureController(current_algorithm="HYBRID_KEM")
-        with pytest.raises(ValueError, match="unknown algorithm"):
-            CryptoPostureController(current_algorithm="ML_DSA_87")
+        controller constructed with a name the table did not list would be
+        "upgraded" on the first CRITICAL evaluation, logged as hardening, with
+        the downgrade detector blinded by the same default.
 
-        # Every name the table does rank is still accepted.
+        What is rejected is now a name that ranks in NO family.  KYBER_1024 and
+        HYBRID_KEM rank on the KEM ladder; AES_256_GCM ranks nowhere, because
+        there is no stronger AEAD to escalate to.
+        """
+        with pytest.raises(ValueError, match="unrankable algorithm"):
+            CryptoPostureController(current_algorithm="ML_DSA_87")
+        with pytest.raises(ValueError, match="unrankable algorithm"):
+            CryptoPostureController(current_algorithm="AES_256_GCM")
+        with pytest.raises(ValueError, match="unrankable algorithm"):
+            CryptoPostureController(current_algorithm="")
+
+        # Every name the ladders do rank is accepted.
         for name in CryptoPostureController.ALGORITHM_STRENGTH:
             CryptoPostureController(current_algorithm=name)
+
+
+class TestAlgorithmFamilies:
+    """Escalation is scoped to a family of interchangeable algorithms.
+
+    A single flat strength ladder over every ``AlgorithmType`` would make
+    ``_trigger_algorithm_switch`` answer a posture escalation on a KEM by
+    switching to a signature scheme — the caller's key agreement performed by
+    something that cannot do key agreement.  These pin the family scoping and
+    the ranking of the two KEM names.
+    """
+
+    def test_every_kem_algorithm_type_is_rankable(self) -> None:
+        """The two KEM ``AlgorithmType`` names reach the controller and rank."""
+        for name in ("KYBER_1024", "HYBRID_KEM"):
+            controller = CryptoPostureController(current_algorithm=name)
+            assert controller.family_of(name) == "kem"
+            assert controller.current_algorithm == name
+
+    def test_hybrid_kem_outranks_kyber(self) -> None:
+        """X25519 + ML-KEM-1024 survives the failure of either component."""
+        ladder = CryptoPostureController.ALGORITHM_FAMILIES["kem"]
+        assert ladder["HYBRID_KEM"] > ladder["KYBER_1024"]
+
+    def test_signature_family_ordering_is_unchanged(self) -> None:
+        ladder = CryptoPostureController.ALGORITHM_FAMILIES["signature"]
+        assert ladder == {"ED25519": 0, "ML_DSA_65": 1, "SPHINCS_256F": 2, "HYBRID_SIG": 3}
+
+    def test_families_are_disjoint(self) -> None:
+        seen: set = set()
+        for ladder in CryptoPostureController.ALGORITHM_FAMILIES.values():
+            assert not (seen & set(ladder)), "an algorithm ranks in two families"
+            seen |= set(ladder)
+        # The flat view must not silently drop a name to a collision.
+        assert set(CryptoPostureController.ALGORITHM_STRENGTH) == seen
+
+    def test_switch_never_leaves_the_family(self) -> None:
+        """The escalation ladder contains only same-family algorithms.
+
+        Driven through the real escalation path, not by inspecting the table:
+        a KEM controller pushed to its ceiling must never be holding a
+        signature-scheme name.
+        """
+        for family, ladder in CryptoPostureController.ALGORITHM_FAMILIES.items():
+            for name in ladder:
+                controller = CryptoPostureController(current_algorithm=name)
+                for _ in range(len(CryptoPostureController.ALGORITHM_STRENGTH) + 2):
+                    controller._trigger_algorithm_switch()
+                    assert controller.current_algorithm in ladder, (
+                        f"escalation from {name} left the {family} family: "
+                        f"now {controller.current_algorithm}"
+                    )
+                # It settles at the family ceiling, not at the global one.
+                ceiling = max(ladder, key=ladder.__getitem__)
+                assert controller.current_algorithm == ceiling
+
+    def test_kem_escalation_reaches_hybrid_kem(self) -> None:
+        controller = CryptoPostureController(current_algorithm="KYBER_1024")
+        controller._trigger_algorithm_switch()
+        assert controller.current_algorithm == "HYBRID_KEM"
+        assert controller._switch_count == 1
+
+    def test_cross_family_assignment_trips_the_downgrade_alarm(self) -> None:
+        """A name from another family scores below the weakest ranked rung.
+
+        ``current_algorithm`` is public, so a caller can assign across
+        families.  ``.get(name, 0)`` scored that exactly like the weakest real
+        algorithm; it must instead be strictly worse, so the alarm fires.
+        """
+        controller = CryptoPostureController(current_algorithm="HYBRID_SIG")
+        assert controller._family_strength("HYBRID_SIG") == 3
+        # A KEM name is not on the signature ladder at any rung.
+        assert (
+            controller._family_strength("HYBRID_KEM") == CryptoPostureController.UNRANKED_STRENGTH
+        )
+        assert controller._family_strength("HYBRID_KEM") < controller._family_strength("ED25519")
+
+    def test_downgrade_detection_fires_for_an_unranked_name(self, caplog) -> None:
+        import logging
+
+        monitor = MagicMock()
+        monitor.get_security_report.return_value = {"recent_alerts": [], "total_alerts": 0}
+        controller = CryptoPostureController(monitor=monitor, current_algorithm="HYBRID_SIG")
+        controller.evaluate_and_respond()
+        controller.current_algorithm = "KYBER_1024"  # wrong family, unrankable here
+        with caplog.at_level(logging.CRITICAL, logger="ama_cryptography.adaptive_posture"):
+            controller.evaluate_and_respond()
+        assert any(
+            "Algorithm downgrade detected" in record.message for record in caplog.records
+        ), "an unrankable current_algorithm must trip the downgrade alarm"

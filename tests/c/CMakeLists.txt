@@ -271,6 +271,12 @@ if(AMA_USE_NATIVE_PQC)
     # Kyber debug / CPA isolation tests (run manually or via ctest)
     add_ama_test(test_kyber_debug test_kyber_debug.c)
     add_ama_test(test_kyber_cpa test_kyber_cpa.c)
+    # Exhaustive proof that the division-free Compress_d (the KyberSlash fix)
+    # equals the FIPS 203 definition over all 16,645 (coefficient, width)
+    # pairs, and that it applies its own `mod 2^d`.  Cheap enough to be
+    # unconditional; the argument for the reciprocal multiply otherwise lives
+    # only in a comment.
+    add_ama_test(test_kyber_compress test_kyber_compress.c)
     add_ama_test(test_kyber_cbd2_equiv test_kyber_cbd2_equiv.c)
     # Returns 77 (CTest SKIP) when no dispatched CBD2 was exercised
     # (non-AVX2 hosts where the dispatch table leaves kyber_cbd2 NULL

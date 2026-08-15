@@ -464,14 +464,56 @@ class CryptoPostureController:
         ...     logger.warning(f"Posture action: {evaluation.action}")
     """
 
-    # Algorithm preference ordering: higher index = stronger.
+    # Algorithm preference ordering: higher index = stronger, WITHIN a family.
     # Keys correspond to AlgorithmType enum names in crypto_api.py.
-    ALGORITHM_STRENGTH = {
-        "ED25519": 0,
-        "ML_DSA_65": 1,
-        "SPHINCS_256F": 2,
-        "HYBRID_SIG": 3,
+    #
+    # Strength is only meaningful between algorithms that do the same job.  A
+    # single flat ladder over every AlgorithmType is not merely imprecise, it
+    # is unsafe: `_trigger_algorithm_switch` upgrades to the next entry above
+    # the current one, so a flat table containing both families would answer a
+    # posture escalation on KYBER_1024 (a KEM) by switching to ML_DSA_65 (a
+    # signature scheme).  The caller's key agreement would then be performed by
+    # something that cannot perform key agreement — a functional break dressed
+    # as hardening, and precisely the "selector maps input onto a real choice
+    # it does not mean" failure INVARIANT-35 forbids.
+    #
+    # So the ladders are per family, and every comparison the controller makes
+    # is scoped to the family it was constructed for.  KYBER_1024 and
+    # HYBRID_KEM are ranked here — the open question this resolves — but on
+    # their own ladder: the hybrid is stronger because it composes X25519 with
+    # ML-KEM-1024 and survives the failure of either.
+    ALGORITHM_FAMILIES: Dict[str, Dict[str, int]] = {
+        "signature": {
+            "ED25519": 0,
+            "ML_DSA_65": 1,
+            "SPHINCS_256F": 2,
+            "HYBRID_SIG": 3,
+        },
+        "kem": {
+            "KYBER_1024": 0,
+            "HYBRID_KEM": 1,
+        },
     }
+
+    # Flat name -> strength view, retained because it is public API and read by
+    # callers and tests.  Strengths are family-local: comparing across families
+    # through this mapping is meaningless, which is why the controller never
+    # does — it uses `_family_strength` throughout.  AlgorithmType members that
+    # rank in no family (AES_256_GCM, an AEAD with no alternative to escalate
+    # to) are deliberately absent and are rejected at construction.
+    ALGORITHM_STRENGTH: Dict[str, int] = {
+        name: strength
+        for ladder in ALGORITHM_FAMILIES.values()
+        for name, strength in ladder.items()
+    }
+
+    @classmethod
+    def family_of(cls, algorithm: str) -> Optional[str]:
+        """The ladder ``algorithm`` belongs to, or None if it ranks in none."""
+        for family, ladder in cls.ALGORITHM_FAMILIES.items():
+            if algorithm in ladder:
+                return family
+        return None
 
     def __init__(
         self,
@@ -507,21 +549,34 @@ class CryptoPostureController:
         self.hd_derivation = hd_derivation
         # INVARIANT-35: a selector must never resolve weaker than it was asked,
         # and no selector may map unknown input onto a real choice.  Every
-        # strength lookup below is `ALGORITHM_STRENGTH.get(name, 0)`, so an
-        # unrecognised name silently scored 0 — the WEAKEST rung.  A controller
-        # constructed with a real AlgorithmType this table does not list
-        # (KYBER_1024, HYBRID_KEM) would therefore be "upgraded" to ML_DSA_65 on
-        # the first CRITICAL evaluation and the swap logged as hardening, while
-        # the downgrade detector — seeded from the same 0 — could not see it.
-        # Reject at the boundary instead, so the .get() defaults below are
-        # unreachable by construction rather than load-bearing.
-        if current_algorithm not in self.ALGORITHM_STRENGTH:
-            raise ValueError(
-                f"unknown algorithm {current_algorithm!r}: expected one of "
-                f"{sorted(self.ALGORITHM_STRENGTH)}.  The posture controller "
-                f"orders algorithms by strength and cannot rank a name it does "
-                f"not know without risking a silent downgrade (INVARIANT-35)."
+        # strength lookup below used to be `ALGORITHM_STRENGTH.get(name, 0)`, so
+        # an unrecognised name silently scored 0 — the WEAKEST rung.  A
+        # controller constructed with a real AlgorithmType the table did not
+        # list would therefore be "upgraded" on the first CRITICAL evaluation
+        # and the swap logged as hardening, while the downgrade detector —
+        # seeded from the same 0 — could not see it.  Reject at the boundary
+        # instead, so the defaults below are unreachable by construction rather
+        # than load-bearing.
+        #
+        # KYBER_1024 and HYBRID_KEM now rank, on the KEM ladder; what is
+        # rejected is a name that ranks in no family at all.
+        family = self.family_of(current_algorithm)
+        if family is None:
+            ranked = ", ".join(
+                f"{fam}: {sorted(ladder, key=ladder.__getitem__)}"
+                for fam, ladder in self.ALGORITHM_FAMILIES.items()
             )
+            raise ValueError(
+                f"unrankable algorithm {current_algorithm!r}: the posture "
+                f"controller escalates within a family of interchangeable "
+                f"algorithms, and this name belongs to none of them ({ranked}). "
+                f"AES_256_GCM is the expected case — an AEAD with no stronger "
+                f"alternative to escalate to. Ranking it anyway would let a "
+                f"posture escalation substitute an algorithm that does a "
+                f"different job (INVARIANT-35)."
+            )
+        self._algorithm_family: str = family
+        self._ladder: Dict[str, int] = self.ALGORITHM_FAMILIES[family]
         self.current_algorithm = current_algorithm
         self.rotation_cooldown = rotation_cooldown
         self.on_rotation = on_rotation
@@ -535,13 +590,37 @@ class CryptoPostureController:
         self._history: Deque[PostureEvaluation] = deque(maxlen=max_history)
         # Pre-sorted (ascending strength) for _trigger_algorithm_switch; avoids
         # repeated sort on every posture-triggered algorithm upgrade.
+        # Scoped to this controller's family, so an escalation can never leave
+        # it: the ladder it walks contains only interchangeable algorithms.
         self._sorted_algorithms: List[Tuple[str, int]] = sorted(
-            self.ALGORITHM_STRENGTH.items(), key=lambda x: x[1]
+            self._ladder.items(), key=lambda x: x[1]
         )
         # Priority 5: Algorithm downgrade detection
-        self._highest_algorithm_reached: int = self.ALGORITHM_STRENGTH.get(current_algorithm, 0)
+        self._highest_algorithm_reached: int = self._family_strength(current_algorithm)
         # Priority 12: Pending actions for confirmation gate
         self._pending_actions: List[PendingAction] = []
+
+    UNRANKED_STRENGTH = -1
+    """Strength of a name absent from this controller's ladder.
+
+    Below the weakest ranked rung, deliberately: ``current_algorithm`` is a
+    public attribute, so a caller can assign a name from another family (or a
+    typo) after construction.  ``.get(name, 0)`` scored that identically to the
+    weakest *real* algorithm, which is the silent-downgrade shape INVARIANT-35
+    exists to forbid — the detector could not distinguish "dropped to ED25519"
+    from "dropped to something I cannot rank at all".  A negative rung makes
+    the second case strictly worse than the first, so it always trips the
+    downgrade alarm.
+    """
+
+    def _family_strength(self, algorithm: str) -> int:
+        """Strength of ``algorithm`` on THIS controller's ladder.
+
+        Never consults another family's ladder: a KEM's rung and a signature
+        scheme's rung are not comparable quantities, and treating them as
+        comparable is how a cross-family switch would look like an upgrade.
+        """
+        return self._ladder.get(algorithm, self.UNRANKED_STRENGTH)
 
     def evaluate_and_respond(self) -> PostureEvaluation:
         """
@@ -563,16 +642,12 @@ class CryptoPostureController:
         self._history.append(evaluation)
 
         # Priority 5: Algorithm downgrade detection
-        current_strength = self.ALGORITHM_STRENGTH.get(self.current_algorithm, 0)
+        current_strength = self._family_strength(self.current_algorithm)
         if current_strength > self._highest_algorithm_reached:
             self._highest_algorithm_reached = current_strength
         if current_strength < self._highest_algorithm_reached:
             highest_name = next(
-                (
-                    k
-                    for k, v in self.ALGORITHM_STRENGTH.items()
-                    if v == self._highest_algorithm_reached
-                ),
+                (k for k, v in self._ladder.items() if v == self._highest_algorithm_reached),
                 "unknown",
             )
             logger.critical(
@@ -738,7 +813,7 @@ class CryptoPostureController:
             reason: Human-readable justification for the downgrade
         """
         old_highest = self._highest_algorithm_reached
-        self._highest_algorithm_reached = self.ALGORITHM_STRENGTH.get(self.current_algorithm, 0)
+        self._highest_algorithm_reached = self._family_strength(self.current_algorithm)
         logger.info(
             "Algorithm downgrade acknowledged: strength %d -> %d, reason: %s",
             old_highest,
@@ -804,7 +879,7 @@ class CryptoPostureController:
 
     def _trigger_algorithm_switch(self) -> None:
         """Switch to a stronger algorithm."""
-        current_strength = self.ALGORITHM_STRENGTH.get(self.current_algorithm, 0)
+        current_strength = self._family_strength(self.current_algorithm)
         # Use pre-sorted list (ascending strength) cached at init time
         new_algorithm = self.current_algorithm
         for alg, strength in self._sorted_algorithms:
@@ -870,5 +945,5 @@ class CryptoPostureController:
         self._rotation_count = 0
         self._switch_count = 0
         self._history.clear()
-        self._highest_algorithm_reached = self.ALGORITHM_STRENGTH.get(self.current_algorithm, 0)
+        self._highest_algorithm_reached = self._family_strength(self.current_algorithm)
         self._pending_actions.clear()

@@ -100,6 +100,8 @@ typedef struct {
     const char *name;
     int         is_info_only;
     int         rounds_failed; /**< rounds in which |t| >= threshold */
+    int         trips_positive; /**< over-threshold rounds with t > 0 */
+    int         trips_negative; /**< over-threshold rounds with t < 0 */
     int         fatal;         /**< saw a harness fault at least once */
     double      worst_t;       /**< signed t of the largest |t| observed */
 } dudect_lane_evidence_t;
@@ -137,9 +139,11 @@ static inline void dudect_rounds_add(dudect_rounds_t *r,
         for (int i = 0; i < num_results; i++) {
             r->lanes[i].name          = results[i].name;
             r->lanes[i].is_info_only  = results[i].is_info_only;
-            r->lanes[i].rounds_failed = 0;
-            r->lanes[i].fatal         = 0;
-            r->lanes[i].worst_t       = 0.0;
+            r->lanes[i].rounds_failed  = 0;
+            r->lanes[i].trips_positive = 0;
+            r->lanes[i].trips_negative = 0;
+            r->lanes[i].fatal          = 0;
+            r->lanes[i].worst_t        = 0.0;
         }
         r->num_lanes = num_results;
     } else if (num_results != r->num_lanes) {
@@ -160,26 +164,88 @@ static inline void dudect_rounds_add(dudect_rounds_t *r,
             r->lanes[i].rounds_failed++;
             continue;
         }
-        if (fabs(results[i].t_value) >= r->threshold)
+        if (fabs(results[i].t_value) >= r->threshold) {
             r->lanes[i].rounds_failed++;
+            /* Which direction the excursion went. A leak has a direction: one
+             * class is systematically the faster one, so its t keeps its sign
+             * as measurements accumulate. Scheduler noise does not. */
+            if (results[i].t_value > 0.0)
+                r->lanes[i].trips_positive++;
+            else if (results[i].t_value < 0.0)
+                r->lanes[i].trips_negative++;
+        }
         if (fabs(results[i].t_value) > fabs(r->lanes[i].worst_t))
             r->lanes[i].worst_t = results[i].t_value;
     }
     r->rounds_run++;
 }
 
-/** A lane fails only if it is strict and tripped in a MAJORITY of rounds, or
- *  ever reported a harness fault.
+/** What a lane's accumulated evidence amounts to. */
+typedef enum {
+    DUDECT_LANE_CLEAN = 0,   /**< never tripped */
+    DUDECT_LANE_NOISE,       /**< tripped, but in a minority of rounds */
+    DUDECT_LANE_LEAK,        /**< tripped a majority of rounds, one direction */
+    DUDECT_LANE_UNUSABLE,    /**< tripped a majority of rounds, directions disagree */
+    DUDECT_LANE_FAULT,       /**< harness fault; conclusive on one sighting */
+} dudect_lane_verdict_t;
+
+/**
+ * Classify a lane.
  *
- *  Strictly more than half, so a 3-round schedule fails at 2/3 and 3/3 and
- *  passes at 1/3; a single round fails at 1/1.  Integer arithmetic on both
- *  sides — no floating-point midpoint to argue about. */
-static inline int dudect_lane_failed(const dudect_lane_evidence_t *lane, int rounds_run) {
+ * Majority: strictly more than half of the rounds must have tripped, so a
+ * 3-round schedule reaches a verdict at 2/3 and 3/3 and reports noise at 1/3;
+ * a single round counts at 1/1.  Integer arithmetic on both sides — no
+ * floating-point midpoint to argue about.
+ *
+ * Direction: a timing leak means one class is systematically faster, so its
+ * Welch t keeps a fixed sign — the statistic grows with measurements, it does
+ * not oscillate.  An over-threshold excursion in the OPPOSITE direction would
+ * require the slower class to become the faster one by more than the threshold,
+ * which a deterministic timing difference cannot do.  So trips that disagree
+ * about direction are not evidence of a leak; they are evidence that the host's
+ * measurements are dominated by something other than the code under test.
+ *
+ * This is not hypothetical.  The `FROST scalar_negate (extremes)` lane tripped
+ * |t| <= 13.3 in 3/3 rounds on one CI run with the sign flipping between
+ * rounds, and the rule reported it as a timing leak.  Re-measured on a quiet
+ * host at 2,000,000 operations per round x 5 rounds, at batch sizes 1, 8, 64
+ * and 256, that lane reads |t| <= 1.62 with per-class means agreeing to within
+ * 0.6% (106.9 ns vs 107.5 ns unbatched) — there is no timing difference to
+ * find, and `scalar_negate`'s borrow loop plus `sc_reduce` are branchless on
+ * inspection.  The excursion was the runner, and the gate said "leak".
+ *
+ * Both of the majority cases still FAIL the build.  Nothing is being waved
+ * through: DUDECT_LANE_UNUSABLE is a red run, because a gate that cannot
+ * measure has not cleared anything.  What changes is the diagnosis, and
+ * therefore the operator's next action — re-run on a quiet host versus audit
+ * the primitive.  Sensitivity is untouched: a real leak's trips share a sign,
+ * so it classifies as DUDECT_LANE_LEAK exactly as before.
+ */
+static inline dudect_lane_verdict_t dudect_lane_verdict(
+    const dudect_lane_evidence_t *lane, int rounds_run) {
     if (lane->fatal)
-        return 1;
-    if (rounds_run <= 0)
-        return 0;
-    return !lane->is_info_only && (lane->rounds_failed * 2 > rounds_run);
+        return DUDECT_LANE_FAULT;
+    if (rounds_run <= 0 || lane->rounds_failed == 0)
+        return DUDECT_LANE_CLEAN;
+    if (lane->is_info_only)
+        return DUDECT_LANE_NOISE;
+    if (lane->rounds_failed * 2 <= rounds_run)
+        return DUDECT_LANE_NOISE;
+    if (lane->trips_positive > 0 && lane->trips_negative > 0)
+        return DUDECT_LANE_UNUSABLE;
+    return DUDECT_LANE_LEAK;
+}
+
+/** A lane fails the build unless it is clean, info-only, or minority noise. */
+static inline int dudect_lane_failed(const dudect_lane_evidence_t *lane, int rounds_run) {
+    switch (dudect_lane_verdict(lane, rounds_run)) {
+        case DUDECT_LANE_FAULT:
+        case DUDECT_LANE_LEAK:
+        case DUDECT_LANE_UNUSABLE:
+            return 1;
+        default:
+            return 0;
+    }
 }
 
 /** 1 iff no lane failed under the rule above. */
@@ -221,22 +287,29 @@ static inline void dudect_rounds_print_summary(const dudect_rounds_t *r) {
     for (int i = 0; i < r->num_lanes; i++) {
         const dudect_lane_evidence_t *lane = &r->lanes[i];
         const char *status;
-        if (lane->fatal)
-            status = "FAIL";
-        else if (lane->rounds_failed == 0)
-            status = "PASS";
-        else if (lane->is_info_only)
-            status = "INFO";
-        else if (dudect_lane_failed(lane, r->rounds_run))
-            status = "FAIL";
-        else
-            /* Over the threshold, but in a minority of rounds. Printed rather
-             * than hidden: a lane drifting toward the threshold should be
-             * visible in the log before it becomes a failure. */
-            status = "NOISE";
+        switch (dudect_lane_verdict(lane, r->rounds_run)) {
+            case DUDECT_LANE_FAULT:    status = "FAULT";    break;
+            case DUDECT_LANE_LEAK:     status = "FAIL";     break;
+            /* A majority of rounds tripped, but they disagreed on direction —
+             * one class faster in some rounds and slower in others.  A leak has
+             * a direction; this does not.  Still a failing run (see
+             * dudect_lane_verdict), labelled for what it is. */
+            case DUDECT_LANE_UNUSABLE: status = "UNUSABLE"; break;
+            /* Over the threshold in a minority of rounds, or an info-only lane.
+             * Printed rather than hidden: a lane drifting toward the threshold
+             * should be visible in the log before it becomes a failure. */
+            case DUDECT_LANE_NOISE:
+                status = lane->is_info_only ? "INFO" : "NOISE";
+                break;
+            default:                   status = "PASS";     break;
+        }
 
-        char rounds[16];
-        snprintf(rounds, sizeof(rounds), "%d/%d", lane->rounds_failed, r->rounds_run);
+        char rounds[24];
+        if (lane->trips_positive && lane->trips_negative)
+            snprintf(rounds, sizeof(rounds), "%d/%d %d+/%d-", lane->rounds_failed,
+                     r->rounds_run, lane->trips_positive, lane->trips_negative);
+        else
+            snprintf(rounds, sizeof(rounds), "%d/%d", lane->rounds_failed, r->rounds_run);
         printf("  %-35s  %+10.4f  %8s  %8s\n", lane->name, lane->worst_t, rounds, status);
     }
 }
@@ -247,13 +320,29 @@ static inline void dudect_rounds_print_failures(const dudect_rounds_t *r) {
         const dudect_lane_evidence_t *lane = &r->lanes[i];
         if (!dudect_lane_failed(lane, r->rounds_run))
             continue;
-        if (lane->fatal)
-            printf("  - %s: harness fault (setup failure or per-class rc mismatch)\n",
-                   lane->name);
-        else
-            printf("  - %s: |t| reached %.4f (threshold %.1f) in %d of %d round(s)\n",
-                   lane->name, fabs(lane->worst_t), r->threshold,
-                   lane->rounds_failed, r->rounds_run);
+        switch (dudect_lane_verdict(lane, r->rounds_run)) {
+            case DUDECT_LANE_FAULT:
+                printf("  - %s: harness fault (setup failure or per-class rc mismatch)\n",
+                       lane->name);
+                break;
+            case DUDECT_LANE_UNUSABLE:
+                printf("  - %s: |t| reached %.4f (threshold %.1f) in %d of %d round(s), "
+                       "but the excursions DISAGREED on direction (%d+/%d-). A timing "
+                       "leak has a direction; this does not. The measurements on this "
+                       "host are not usable — re-run on a quiet, unshared machine "
+                       "before treating it as a finding.\n",
+                       lane->name, fabs(lane->worst_t), r->threshold,
+                       lane->rounds_failed, r->rounds_run,
+                       lane->trips_positive, lane->trips_negative);
+                break;
+            default:
+                printf("  - %s: |t| reached %.4f (threshold %.1f) in %d of %d round(s), "
+                       "consistently signed (%d+/%d-)\n",
+                       lane->name, fabs(lane->worst_t), r->threshold,
+                       lane->rounds_failed, r->rounds_run,
+                       lane->trips_positive, lane->trips_negative);
+                break;
+        }
     }
 }
 
@@ -275,42 +364,111 @@ static inline int dudect_rounds_case(const char *what, dudect_lane_evidence_t la
     return got == want;
 }
 
+/** Same, for the classification rather than the pass/fail collapse of it. */
+static inline int dudect_rounds_verdict_case(const char *what,
+                                             dudect_lane_evidence_t lane,
+                                             int rounds_run,
+                                             dudect_lane_verdict_t want) {
+    dudect_lane_verdict_t got = dudect_lane_verdict(&lane, rounds_run);
+    printf("  %-58s %s\n", what, got == want ? "ok" : "MISMATCH");
+    return got == want;
+}
+
 static inline int dudect_rounds_self_test(void) {
     int ok = 1;
     printf("dudect verdict self-check\n\n");
 
-    /* name, is_info_only, rounds_failed, fatal, worst_t
+    /* Designated initialisers throughout: this struct gained the per-direction
+     * trip counters, and positional forms would have silently re-bound every
+     * field after `rounds_failed` — the exact failure mode designated
+     * initialisers exist to prevent in a table that decides a security gate.
      *
      * The majority boundary is the load-bearing part: 2/3 fails and 1/3 does
      * not.  Both sides of it are named so that moving the rule again means
      * editing a case that says what it decides, rather than watching a number
-     * change. */
+     * change.  Every case here gives its trips a consistent direction unless
+     * it is specifically testing the direction rule. */
+#define LANE(...) ((dudect_lane_evidence_t){__VA_ARGS__})
     ok &= dudect_rounds_case("strict lane over threshold in 3/3 rounds -> FAIL",
-                             (dudect_lane_evidence_t){"strict", 0, 3, 0, 9.0}, 3, 1);
+                             LANE(.name = "strict", .rounds_failed = 3,
+                                  .trips_positive = 3, .worst_t = 9.0), 3, 1);
     ok &= dudect_rounds_case("strict lane over threshold in 2/3 rounds -> FAIL (majority)",
-                             (dudect_lane_evidence_t){"strict", 0, 2, 0, 9.0}, 3, 1);
+                             LANE(.name = "strict", .rounds_failed = 2,
+                                  .trips_positive = 2, .worst_t = 9.0), 3, 1);
     ok &= dudect_rounds_case("strict lane over threshold in 1/3 rounds -> pass (minority)",
-                             (dudect_lane_evidence_t){"strict", 0, 1, 0, 9.0}, 3, 0);
+                             LANE(.name = "strict", .rounds_failed = 1,
+                                  .trips_positive = 1, .worst_t = 9.0), 3, 0);
     ok &= dudect_rounds_case("strict lane over threshold in 2/2 rounds -> FAIL",
-                             (dudect_lane_evidence_t){"strict", 0, 2, 0, 9.0}, 2, 1);
+                             LANE(.name = "strict", .rounds_failed = 2,
+                                  .trips_positive = 2, .worst_t = 9.0), 2, 1);
     ok &= dudect_rounds_case("strict lane over threshold in 1/2 rounds -> pass (tie, not majority)",
-                             (dudect_lane_evidence_t){"strict", 0, 1, 0, 9.0}, 2, 0);
+                             LANE(.name = "strict", .rounds_failed = 1,
+                                  .trips_positive = 1, .worst_t = 9.0), 2, 0);
     ok &= dudect_rounds_case("strict lane over threshold in 2/4 rounds -> pass (tie, not majority)",
-                             (dudect_lane_evidence_t){"strict", 0, 2, 0, 9.0}, 4, 0);
+                             LANE(.name = "strict", .rounds_failed = 2,
+                                  .trips_positive = 2, .worst_t = 9.0), 4, 0);
     ok &= dudect_rounds_case("strict lane over threshold in 3/4 rounds -> FAIL",
-                             (dudect_lane_evidence_t){"strict", 0, 3, 0, 9.0}, 4, 1);
+                             LANE(.name = "strict", .rounds_failed = 3,
+                                  .trips_positive = 3, .worst_t = 9.0), 4, 1);
     ok &= dudect_rounds_case("strict lane within threshold every round -> pass",
-                             (dudect_lane_evidence_t){"strict", 0, 0, 0, 1.2}, 3, 0);
+                             LANE(.name = "strict", .worst_t = 1.2), 3, 0);
     ok &= dudect_rounds_case("info lane over threshold in 3/3 rounds -> pass",
-                             (dudect_lane_evidence_t){"info", 1, 3, 0, 3800.0}, 3, 0);
+                             LANE(.name = "info", .is_info_only = 1, .rounds_failed = 3,
+                                  .trips_positive = 3, .worst_t = 3800.0), 3, 0);
     ok &= dudect_rounds_case("fatal harness fault seen once in 3 rounds -> FAIL",
-                             (dudect_lane_evidence_t){"strict", 0, 1, 1, 0.0}, 3, 1);
+                             LANE(.name = "strict", .rounds_failed = 1, .fatal = 1), 3, 1);
     ok &= dudect_rounds_case("fatal harness fault on an info lane -> FAIL",
-                             (dudect_lane_evidence_t){"info", 1, 1, 1, 0.0}, 3, 1);
+                             LANE(.name = "info", .is_info_only = 1, .rounds_failed = 1,
+                                  .fatal = 1), 3, 1);
     ok &= dudect_rounds_case("strict lane over threshold in 1/1 round -> FAIL",
-                             (dudect_lane_evidence_t){"strict", 0, 1, 0, 9.0}, 1, 1);
+                             LANE(.name = "strict", .rounds_failed = 1,
+                                  .trips_positive = 1, .worst_t = 9.0), 1, 1);
     ok &= dudect_rounds_case("no rounds run -> pass (nothing was measured)",
-                             (dudect_lane_evidence_t){"strict", 0, 0, 0, 0.0}, 0, 0);
+                             LANE(.name = "strict"), 0, 0);
+
+    /* The direction rule.  A leak makes one class systematically faster, so
+     * its Welch t keeps its sign; noise on a shared runner does not.  The
+     * `FROST scalar_negate (extremes)` lane tripped 3/3 on one CI run with the
+     * sign flipping between rounds — a shape no leak produces, and the
+     * majority rule alone called it a finding. */
+    ok &= dudect_rounds_verdict_case("3/3 trips, all + -> LEAK",
+                             LANE(.name = "strict", .rounds_failed = 3,
+                                  .trips_positive = 3, .worst_t = 9.0), 3,
+                             DUDECT_LANE_LEAK);
+    ok &= dudect_rounds_verdict_case("3/3 trips, all - -> LEAK",
+                             LANE(.name = "strict", .rounds_failed = 3,
+                                  .trips_negative = 3, .worst_t = -9.0), 3,
+                             DUDECT_LANE_LEAK);
+    ok &= dudect_rounds_verdict_case("3/3 trips, signs 2+/1- -> UNUSABLE (not a leak)",
+                             LANE(.name = "strict", .rounds_failed = 3,
+                                  .trips_positive = 2, .trips_negative = 1,
+                                  .worst_t = 13.3), 3, DUDECT_LANE_UNUSABLE);
+    ok &= dudect_rounds_verdict_case("3/3 trips, signs 1+/2- -> UNUSABLE (not a leak)",
+                             LANE(.name = "strict", .rounds_failed = 3,
+                                  .trips_positive = 1, .trips_negative = 2,
+                                  .worst_t = -9.0), 3, DUDECT_LANE_UNUSABLE);
+    ok &= dudect_rounds_verdict_case("4/4 trips, signs 2+/2- -> UNUSABLE",
+                             LANE(.name = "strict", .rounds_failed = 4,
+                                  .trips_positive = 2, .trips_negative = 2,
+                                  .worst_t = 9.0), 4, DUDECT_LANE_UNUSABLE);
+    ok &= dudect_rounds_verdict_case("2/3 trips, signs 1+/1- -> UNUSABLE",
+                             LANE(.name = "strict", .rounds_failed = 2,
+                                  .trips_positive = 1, .trips_negative = 1,
+                                  .worst_t = 9.0), 3, DUDECT_LANE_UNUSABLE);
+    ok &= dudect_rounds_verdict_case("1/3 trips -> NOISE regardless of sign",
+                             LANE(.name = "strict", .rounds_failed = 1,
+                                  .trips_negative = 1, .worst_t = -9.0), 3,
+                             DUDECT_LANE_NOISE);
+    /* UNUSABLE still fails the build — it is a diagnosis, not an exemption. */
+    ok &= dudect_rounds_case("an UNUSABLE lane still fails the run",
+                             LANE(.name = "strict", .rounds_failed = 3,
+                                  .trips_positive = 2, .trips_negative = 1,
+                                  .worst_t = 13.3), 3, 1);
+    ok &= dudect_rounds_verdict_case("fatal outranks the direction rule",
+                             LANE(.name = "strict", .rounds_failed = 2, .fatal = 1,
+                                  .trips_positive = 1, .trips_negative = 1), 2,
+                             DUDECT_LANE_FAULT);
+#undef LANE
 
     /* Folding: a different lane over threshold each round fails nothing. */
     dudect_rounds_t r;
@@ -357,6 +515,46 @@ static inline int dudect_rounds_self_test(void) {
     printf("  %-58s %s\n", "one lane over threshold in 2 of 3 rounds -> FAIL",
            majority ? "ok" : "MISMATCH");
     ok &= majority;
+
+    /* The FROST case, folded from results rather than hand-built evidence:
+     * the same lane over threshold in all three rounds with the sign flipping
+     * must NOT be reported as a finding. */
+    dudect_rounds_t f;
+    dudect_rounds_init(&f, 4.5);
+    dudect_lane_result_t flip1[1] = {{"frost", 13.3, 0, 0}};
+    dudect_lane_result_t flip2[1] = {{"frost", -9.1, 0, 0}};
+    dudect_lane_result_t flip3[1] = {{"frost", 7.4, 0, 0}};
+    dudect_rounds_add(&f, flip1, 1);
+    dudect_rounds_add(&f, flip2, 1);
+    dudect_rounds_add(&f, flip3, 1);
+    int flipped = (f.lanes[0].rounds_failed == 3 &&
+                   f.lanes[0].trips_positive == 2 && f.lanes[0].trips_negative == 1 &&
+                   dudect_lane_verdict(&f.lanes[0], f.rounds_run) == DUDECT_LANE_UNUSABLE &&
+                   !dudect_rounds_passed(&f));
+    printf("  %-58s %s\n",
+           "the observed FROST shape -> UNUSABLE, and still red",
+           flipped ? "ok" : "MISMATCH");
+    ok &= flipped;
+
+    dudect_rounds_t g;
+    dudect_rounds_init(&g, 4.5);
+    dudect_lane_result_t alt1[1] = {{"frost", 13.3, 0, 0}};
+    dudect_lane_result_t alt2[1] = {{"frost", -9.1, 0, 0}};
+    dudect_lane_result_t alt3[1] = {{"frost", 7.4, 0, 0}};
+    dudect_lane_result_t alt4[1] = {{"frost", -6.2, 0, 0}};
+    dudect_rounds_add(&g, alt1, 1);
+    dudect_rounds_add(&g, alt2, 1);
+    dudect_rounds_add(&g, alt3, 1);
+    dudect_rounds_add(&g, alt4, 1);
+    int alternating = (g.lanes[0].rounds_failed == 4 &&
+                       g.lanes[0].trips_positive == 2 &&
+                       g.lanes[0].trips_negative == 2 &&
+                       dudect_lane_verdict(&g.lanes[0], g.rounds_run) == DUDECT_LANE_UNUSABLE &&
+                       !dudect_rounds_passed(&g));
+    printf("  %-58s %s\n",
+           "4/4 alternating-sign trips -> UNUSABLE, not a leak, still red",
+           alternating ? "ok" : "MISMATCH");
+    ok &= alternating;
 
     /* The early-exit predicate. It is load-bearing under a majority rule: the
      * loop may only stop while nothing has tripped, because a lane at 1/2

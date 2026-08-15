@@ -2596,8 +2596,43 @@ static int16_t coeff_normalize(int16_t a) {
 
 static inline uint32_t kyber_compress_d(uint32_t x_normalized, unsigned d) {
     uint64_t n = ((uint64_t)x_normalized << d) + (KYBER_Q / 2);
-    return (uint32_t)((n * AMA_KYBER_COMPRESS_MULT) >> AMA_KYBER_COMPRESS_SHIFT);
+    uint32_t quotient = (uint32_t)((n * AMA_KYBER_COMPRESS_MULT) >> AMA_KYBER_COMPRESS_SHIFT);
+    /* The `mod 2^d` of the definition, applied HERE rather than left to the
+     * caller.  It is not cosmetic at d = 1: x = q-1 = 3328 gives
+     * round(2*3328/3329) = 2, and FIPS 203 Compress_1(3328) is 2 mod 2 = 0.
+     * 832 of the 3,329 coefficients exceed 2^d before the mask at d=1 (104 at
+     * d=4, 52 at d=5, 1 at d=10 — tests/c/test_kyber_compress.c counts them).
+     * Every current call site happens to mask with the matching width, so the
+     * shipped ciphertext bytes are unchanged by this line — but a helper whose
+     * documented contract is `mod 2^d` and whose return value is not is a trap
+     * for the next caller, and the values it gets wrong are the ones nearest
+     * the decision boundary an attacker steers toward.
+     *
+     * `d` is a plaintext parameter (the compression width, a literal at every
+     * call site), never secret, so selecting the mask on it is not a timing
+     * channel — and it folds away entirely, since this is `static inline` and
+     * every call passes a constant.  The `d >= 32` arm keeps the shift defined
+     * for a width this function is never called with; UB in a fallback is
+     * still UB (C11 6.5.7p3). */
+    uint32_t mask = (d >= 32u) ? 0xFFFFFFFFu : ((1u << d) - 1u);
+    return quotient & mask;
 }
+
+#ifdef AMA_TESTING_MODE
+/**
+ * Test-only export of Compress_d.
+ *
+ * `kyber_compress_d` is `static inline`, so tests/c/test_kyber_compress.c
+ * cannot link it directly, and a copy of the implementation in the test would
+ * verify the copy rather than the code that ships.  This forwards to the real
+ * definition, so the exhaustive equivalence proof for the Granlund-Montgomery
+ * reciprocal is executed against the shipped translation unit.
+ * Not declared in any public header — visible only to AMA_TESTING_MODE builds.
+ */
+uint32_t ama_kyber_compress_d_for_test(uint32_t x_normalized, unsigned d) {
+    return kyber_compress_d(x_normalized, d);
+}
+#endif
 
 /**
  * Serialize polynomial to bytes (12-bit coefficients)
