@@ -227,7 +227,14 @@ immediately: it turned an opaque exit 1 into
 `softhsm2-util.exe` living in `bin\` while the module it loads
 (`softhsm2-x64.dll`) lives in `lib\` — so both directories are now published
 to the job PATH, the half the MSI's own machine-PATH edit targets included.
-The
+Naming the module then surfaced the layer under that, as
+`LoadLibraryA failed: 0x000000C1` (`ERROR_BAD_EXE_FORMAT`): the Disig
+package's PE headers show `softhsm2-util.exe` and `softhsm2.dll` are i386
+while `softhsm2-x64.dll` is AMD64 — two modules shipped deliberately,
+because the command-line tools are 32-bit and a 64-bit Python reaching the
+token through PyKCS11 needs the x64 one. The utility is now paired with its
+own-architecture sibling while `HSMKeyStorage` keeps the x64 module; on
+POSIX there is one module and it serves both. The
 availability probe and `PKCS11_PATHS` know the Windows DLL location, and the
 win32 exemption in the provisioning guard test is removed — Windows is held
 to the same standard as Linux and macOS. The Disig build statically embeds

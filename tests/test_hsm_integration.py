@@ -985,11 +985,30 @@ class TestSoftHSMIntegration:
         # module lives in <prefix>/lib, so a bare LoadLibrary/dlopen depends on
         # that lib directory being on PATH (Windows) or the loader path (POSIX)
         # — which is why the Windows lane failed with
-        #     Could not load the PKCS#11 library/module:
         #     LoadLibraryA failed: 0x0000007E   (ERROR_MOD_NOT_FOUND)
-        # even with a correct install and bin/ on PATH.  _SOFTHSM_LIB is the
-        # module this suite already resolved, so naming it removes the
-        # dependence on loader search order entirely, on every platform.
+        # even with a correct install and bin/ on PATH.
+        #
+        # The module must match the *loading process's* architecture, and on
+        # Windows that is not the same module the test process needs.  Verified
+        # from the MSI payload's PE headers:
+        #     softhsm2-util.exe  machine=0x014c  i386   (32-bit)
+        #     softhsm2.dll       machine=0x014c  i386   (32-bit)
+        #     softhsm2-x64.dll   machine=0x8664  AMD64  (64-bit)
+        # The Disig package ships both modules deliberately: its command-line
+        # tools are 32-bit, while a 64-bit Python loading the token through
+        # PyKCS11 needs the x64 module.  Naming the x64 DLL for the 32-bit
+        # utility is what turned 0x7E into
+        #     LoadLibraryA failed: 0x000000C1   (ERROR_BAD_EXE_FORMAT)
+        # — the module was found, and refused as a foreign image.  So the
+        # utility is paired with its own-architecture sibling; HSMKeyStorage
+        # keeps resolving the x64 module for this process.  On POSIX there is
+        # one module and _SOFTHSM_LIB serves both.
+        init_module = _SOFTHSM_LIB
+        if sys.platform == "win32" and init_module is not None:
+            sibling = pathlib.Path(init_module).with_name("softhsm2.dll")
+            if sibling.is_file():
+                init_module = str(sibling)
+
         init_cmd = [
             "softhsm2-util",
             "--init-token",
@@ -1001,8 +1020,8 @@ class TestSoftHSMIntegration:
             "--pin",
             "1234",
         ]
-        if _SOFTHSM_LIB is not None:
-            init_cmd += ["--module", str(_SOFTHSM_LIB)]
+        if init_module is not None:
+            init_cmd += ["--module", init_module]
 
         proc = subprocess.run(
             init_cmd,
