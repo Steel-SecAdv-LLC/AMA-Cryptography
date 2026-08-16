@@ -218,9 +218,16 @@ installs the `[hsm]` extra, the token is initialised with `--init-token
 --free` (the form `softhsm2-util`'s own SYNOPSIS documents; `--slot 0`
 addresses a slot ID and SoftHSM reassigns initialised tokens to a
 serial-derived slot) against a config mirroring the one the Disig MSI itself
-ships — trailing path separator, explicit `objectstore.backend` — and a
-failed init now reports the tool's stdout/stderr instead of a bare
-`returned non-zero exit status 1`. The
+ships — trailing path separator, explicit `objectstore.backend` — with the
+PKCS#11 module named via `--module` rather than left to loader search order,
+and a failed init now reports the tool's stdout/stderr instead of a bare
+`returned non-zero exit status 1`. That last part paid for itself
+immediately: it turned an opaque exit 1 into
+`LoadLibraryA failed: 0x0000007E` (`ERROR_MOD_NOT_FOUND`), which is
+`softhsm2-util.exe` living in `bin\` while the module it loads
+(`softhsm2-x64.dll`) lives in `lib\` — so both directories are now published
+to the job PATH, the half the MSI's own machine-PATH edit targets included.
+The
 availability probe and `PKCS11_PATHS` know the Windows DLL location, and the
 win32 exemption in the provisioning guard test is removed — Windows is held
 to the same standard as Linux and macOS. The Disig build statically embeds

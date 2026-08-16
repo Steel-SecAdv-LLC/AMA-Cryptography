@@ -206,12 +206,17 @@ jobs:
           Write-Error "SoftHSM2 installed to $root, not the pinned $installDir; HSMKeyStorage's PKCS11_PATHS would not find it. The INSTALLDIR property did not take effect."
           exit 1
         }
-        # The MSI appends INSTALLDIR\lib (not bin) to the *machine* PATH, which
-        # an already-running job never re-reads anyway — publish bin\ to the
-        # remaining steps explicitly so softhsm2-util is resolvable.  The test
-        # module derives the module path from softhsm2-util's own location,
-        # so this is what makes the lane self-locating.
+        # Publish BOTH bin\ and lib\ to the remaining steps.  The MSI appends
+        # INSTALLDIR\lib to the *machine* PATH, which an already-running job
+        # never re-reads — and lib\ is the half that matters to the loader:
+        # softhsm2-util.exe lives in bin\ but the PKCS#11 module it loads is
+        # softhsm2-x64.dll in lib\, so publishing bin\ alone made the util
+        # resolvable and the module not, failing token init with
+        # "LoadLibraryA failed: 0x0000007E" (ERROR_MOD_NOT_FOUND).  The test
+        # also passes --module explicitly, so this is defence in depth rather
+        # than the only thing holding the lane up.
         Add-Content -Path $env:GITHUB_PATH -Value (Join-Path $root 'bin')
+        Add-Content -Path $env:GITHUB_PATH -Value (Join-Path $root 'lib')
         & (Join-Path $root 'bin\softhsm2-util.exe') --version
         if ($LASTEXITCODE -ne 0) {
           Write-Error "softhsm2-util --version failed (exit ${LASTEXITCODE})"

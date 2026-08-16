@@ -980,18 +980,32 @@ class TestSoftHSMIntegration:
         # addresses a slot ID, and SoftHSM reassigns initialised tokens to a
         # serial-derived slot, so slot 0 is only incidentally the free one.
         # Verified equivalent on Linux 2.6.1 (both initialise a fresh store).
+        # `--module` is passed explicitly rather than left to the loader's
+        # search path.  softhsm2-util lives in <prefix>/bin while the PKCS#11
+        # module lives in <prefix>/lib, so a bare LoadLibrary/dlopen depends on
+        # that lib directory being on PATH (Windows) or the loader path (POSIX)
+        # — which is why the Windows lane failed with
+        #     Could not load the PKCS#11 library/module:
+        #     LoadLibraryA failed: 0x0000007E   (ERROR_MOD_NOT_FOUND)
+        # even with a correct install and bin/ on PATH.  _SOFTHSM_LIB is the
+        # module this suite already resolved, so naming it removes the
+        # dependence on loader search order entirely, on every platform.
+        init_cmd = [
+            "softhsm2-util",
+            "--init-token",
+            "--free",
+            "--label",
+            "AmaTest",
+            "--so-pin",
+            "12345678",
+            "--pin",
+            "1234",
+        ]
+        if _SOFTHSM_LIB is not None:
+            init_cmd += ["--module", str(_SOFTHSM_LIB)]
+
         proc = subprocess.run(
-            [
-                "softhsm2-util",
-                "--init-token",
-                "--free",
-                "--label",
-                "AmaTest",
-                "--so-pin",
-                "12345678",
-                "--pin",
-                "1234",
-            ],
+            init_cmd,
             env=env,
             check=False,
             capture_output=True,
