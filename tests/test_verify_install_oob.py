@@ -36,14 +36,43 @@ from tools import verify_install_oob as oob
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TOOL_PATH = REPO_ROOT / "tools" / "verify_install_oob.py"
 PKG_DIR = REPO_ROOT / "ama_cryptography"
-NATIVE_LIB = REPO_ROOT / "build" / "lib" / "libama_cryptography.so"
+
+
+def _resolve_native_lib() -> "Path | None":
+    """Locate the built native library the way the package itself does.
+
+    Hard-coding ``build/lib/libama_cryptography.so`` was wrong twice over: the
+    library is ``.dylib`` on macOS and ``.dll``/``.pyd`` on Windows, so that
+    path could never exist there *even when the library was built*, and the
+    output directory varies by generator (MSVC uses ``build/bin/Release``).
+    The result was four CI errors on every macOS and Windows test job — the
+    conftest promotes a backend skip to a failure, correctly, because the
+    backend was in fact present and only this lookup could not see it.
+
+    ``_find_native_library_path`` is the package's own discovery — the same
+    function the build-time signer uses to decide which bytes to bind — so
+    this test now asks the question the rest of the tree already answers, and
+    inherits every search dir and platform suffix it knows about.
+    """
+    try:
+        from ama_cryptography.pqc_backends import _find_native_library_path
+
+        return _find_native_library_path()
+    except Exception:
+        # No importable package / no candidate: report "not discoverable" and
+        # let the skip marker (and, in CI, the conftest promotion) decide.
+        return None
+
+
+NATIVE_LIB = _resolve_native_lib()
 
 requires_signed_tree = pytest.mark.skipif(
     not (PKG_DIR / "_integrity_signature.py").is_file(),
     reason="working tree carries no signed integrity artefact",
 )
 requires_native_lib = pytest.mark.skipif(
-    not NATIVE_LIB.exists(), reason="native library not built at build/lib"
+    NATIVE_LIB is None,
+    reason="native library backend not discoverable by the package loader",
 )
 
 
@@ -212,11 +241,56 @@ class TestEd25519Verify:
 # ---------------------------------------------------------------------------
 
 
+def _covered_binding_names() -> "set[str]":
+    """Names the working tree's artefact actually binds, via the tool's own
+    parser (never a re-implementation of the schema)."""
+    fields, error = oob.parse_artefact_fields(PKG_DIR / "_integrity_signature.py")
+    if fields is None or error is not None:
+        return set()
+    binding, _ = oob._parse_binding_digest_field(fields)
+    return set(binding or ())
+
+
+@pytest.fixture()
+def installed_tree(tmp_path: Path) -> Path:
+    """A copy of the signed package tree in the state the tool is designed to
+    PASS: no compiled extension the artefact does not cover.
+
+    The *working* tree is deliberately not such a state.  ``pip install -e .``
+    builds the six Cython bindings into the package directory, while the
+    repair flow (``integrity --update --sign``) deliberately binds an EMPTY
+    map — only the wheel pipeline's ``--bind-extensions`` binds them.
+    ``_verify_binding_extensions`` refuses that combination on purpose: an
+    out-of-band verifier cannot tell a developer rebuild from an implant.
+
+    So asserting ``RESULT: PASS`` against the working tree asserted the
+    opposite of the tool's documented contract, and did so in a test that
+    could not run in CI (its skip guard looked for a library path that never
+    exists on macOS or Windows).  With the guard fixed the assertion would
+    have failed on every job.  Copying the tree and dropping the *uncovered*
+    extensions reproduces a real installed tree, so the PASS path is exercised
+    for real; ``test_uncovered_binding_extension_is_refused`` below pins the
+    refusal that the working tree's own state demonstrates.
+    """
+    pkg_copy = tmp_path / "ama_cryptography"
+    shutil.copytree(PKG_DIR, pkg_copy)
+    covered = _covered_binding_names()
+    for path in pkg_copy.iterdir():
+        if not path.is_file() or path.suffix not in oob._EXTENSION_SUFFIXES:
+            continue
+        if path.name.startswith(oob._NATIVE_LIB_PREFIXES):
+            continue
+        if path.name not in covered:
+            path.unlink()
+    return pkg_copy
+
+
 @requires_signed_tree
 @requires_native_lib
 class TestCliAgainstRepoTree:
-    def test_clean_tree_passes(self) -> None:
-        result = _run_tool(str(PKG_DIR), "--native-lib", str(NATIVE_LIB))
+    def test_clean_tree_passes(self, installed_tree: Path) -> None:
+        assert NATIVE_LIB is not None  # guaranteed by @requires_native_lib
+        result = _run_tool(str(installed_tree), "--native-lib", str(NATIVE_LIB))
         assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         # The working tree's artefact is a repair-flow signing: v3 schema with
         # the binding map EMPTY — the tool must handle that state, not choke.
@@ -224,6 +298,22 @@ class TestCliAgainstRepoTree:
         assert "[signature] verified" in result.stdout
         assert "[native] verified" in result.stdout
         assert "RESULT: PASS" in result.stdout
+
+    def test_uncovered_binding_extension_is_refused(self, installed_tree: Path) -> None:
+        """A compiled extension the artefact does not cover must fail closed.
+
+        This is the state a developer tree lands in after ``pip install -e .``
+        re-builds the bindings, and the state an implant would also produce;
+        the tool cannot distinguish them out of band, so it refuses both.
+        """
+        assert NATIVE_LIB is not None  # guaranteed by @requires_native_lib
+        planted = installed_tree / f"implant_binding{oob._EXTENSION_SUFFIXES[0]}"
+        planted.write_bytes(b"not a real extension, but it is compiled code")
+        result = _run_tool(str(installed_tree), "--native-lib", str(NATIVE_LIB))
+        assert result.returncode != 0, f"stdout:\n{result.stdout}"
+        assert "not covered by" in result.stdout
+        assert planted.name in result.stdout
+        assert "RESULT: FAIL" in result.stdout
 
 
 # ---------------------------------------------------------------------------
@@ -257,9 +347,12 @@ def _write_pyc(py_path: Path, source: str) -> Path:
 def tree_copy(tmp_path: Path) -> tuple[Path, Path]:
     """A byte-identical copy of the signed package tree plus the native
     library, isolated in tmp so tampering never touches the working tree."""
+    assert NATIVE_LIB is not None, "fixture used without @requires_native_lib"
     pkg_copy = tmp_path / "ama_cryptography"
     shutil.copytree(PKG_DIR, pkg_copy)
-    native_copy = tmp_path / "libama_cryptography.so"
+    # Keep the real suffix (.so / .dylib / .dll): the copy stands in for the
+    # shipped object, and a platform-wrong name would misrepresent it.
+    native_copy = tmp_path / NATIVE_LIB.name
     native_copy.write_bytes(NATIVE_LIB.resolve().read_bytes())
     return pkg_copy, native_copy
 

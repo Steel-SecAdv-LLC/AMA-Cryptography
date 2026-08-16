@@ -277,6 +277,16 @@ jobs:
         # pipefail is load-bearing: without it the pipeline's status is
         # tee's (always 0) and a compile error could not fail this step —
         # the same defect the cppcheck job above documents.
+        env:
+          # GCC quotes identifiers in diagnostics with U+2018/U+2019 when the
+          # locale is UTF-8 (which GitHub runners set: LANG=C.UTF-8) and with
+          # ASCII apostrophes otherwise.  The allowlist below matches on that
+          # text, so the text must not depend on the runner's locale.  Pinning
+          # LC_ALL here makes the diagnostics byte-reproducible between a
+          # developer's shell and CI; the allowlist patterns are *also*
+          # quote-agnostic so a future locale change cannot silently break the
+          # gate the way it did at 94e4bd6.
+          LC_ALL: C
         run: |
           set -o pipefail
           cmake -B build-strict \
@@ -298,9 +308,15 @@ jobs:
         # pattern here; loosening requires editing this list in review.
         shell: bash
         run: |
+          # The identifier-quoting characters are deliberately matched as
+          # ".." rather than "'..'": gcc emits U+2018/U+2019 under a UTF-8
+          # locale and ASCII apostrophes otherwise, and a multibyte quote is
+          # not one byte to grep under LC_ALL=C.  Matching the quote loosely
+          # keeps the *substance* of the pattern (file, category, type name)
+          # exact while making it immune to the quoting style.
           unexpected=$(grep "warning:" build-warnings.log \
             | grep -v "/src/c/vendor/" \
-            | grep -Ev "fe(51|64)\.h:[0-9:]+ *warning: ISO C does not support '__int128'" \
+            | grep -Ev "fe(51|64)\.h:[0-9:]+ *warning: ISO C does not support .*__int128.* types" \
             | grep -Ev "ama_nistp_mont_mulx\.c:[0-9:]+ *warning: string literal of length" \
             || true)
           if [ -n "${unexpected}" ]; then

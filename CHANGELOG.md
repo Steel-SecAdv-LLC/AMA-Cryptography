@@ -161,7 +161,12 @@ strict-warnings job now **fails on any warning outside `src/c/vendor/`**
 beyond two documented extension classes (`__int128` in fe51/fe64.h;
 the one-statement asm literal in the MULX kernel), with pipefail on the
 build so a compile error cannot pass, so the clean state is a gate rather
-than a snapshot.
+than a snapshot. The allowlist matches diagnostic *text*, so the build step
+pins `LC_ALL=C` and the patterns are quote-agnostic: gcc quotes identifiers
+with U+2018/U+2019 under a UTF-8 locale (which GitHub runners set) and with
+ASCII apostrophes otherwise, so the first revision's `'__int128'` pattern
+matched nothing in CI and the gate red-flagged its own exemption. Verified
+against a real strict build with both quoting styles present.
 
 **CodeQL alert 620 is resolved at source** — the same `_explode()` helper
 pattern `tests/test_c_buffer_views.py` established for this exact
@@ -190,10 +195,17 @@ percentage, and a legacy `—` cell.
 "SoftHSM2 has no maintained package on any Windows runner manager" was
 checked rather than repeated, and it is false: Chocolatey's
 `softhsm.install` 2.5.0 (the Disig SoftHSM2-for-Windows MSI) is live on the
-community feed. Both CI workflows now provision it on `windows-latest`
-(with `C:\SoftHSM2\bin` added to the job PATH — the MSI's machine-PATH edit
-is invisible to a running job — and a fail-loud verification of the DLL and
-`softhsm2-util`), the Windows lane installs the `[hsm]` extra, the
+community feed. Both CI workflows now provision it on `windows-latest`,
+pinning `INSTALLDIR` on the MSI and then *discovering* the installed module
+rather than assuming a path: the MSI parents its install directory to
+`TARGETDIR`, which Windows Installer resolves to `ROOTDRIVE` — the fixed
+drive with the most free space, which on GitHub's runners is `D:`, not `C:`.
+The first revision of the step asserted `C:\SoftHSM2\lib\softhsm2-x64.dll`
+and every Windows lane in both workflows failed on a *successful* install.
+The resolved `bin\` is added to the job PATH (the MSI's machine-PATH edit is
+invisible to a running job) and the DLL and `softhsm2-util` are verified
+fail-loud, with the searched roots printed on a miss. The Windows lane
+installs the `[hsm]` extra, the
 availability probe and `PKCS11_PATHS` know the Windows DLL location, and the
 win32 exemption in the provisioning guard test is removed — Windows is held
 to the same standard as Linux and macOS. The Disig build statically embeds
@@ -240,7 +252,16 @@ signed source against its cached `.pyc`, by executed surface, without ever
 the tool file itself, fetched out of band — which is the point. The in-band
 boundary statement in `SECURITY.md` stands unchanged for in-process checks;
 what changes is that the out-of-band control the boundary defers to now has
-a supported, tested procedure.
+a supported, tested procedure. Uncovered compiled extensions fail closed
+out of band — the verifier cannot tell a developer rebuild from an implant —
+so the end-to-end test drives a copy of the tree with the *unbound*
+extensions removed (a real installed tree) rather than the working tree,
+which `pip install -e .` leaves carrying six bindings the repair-flow
+artefact deliberately does not bind. The first revision asserted `PASS`
+against that working tree, i.e. the opposite of the tool's contract, behind
+a skip guard that hard-coded `build/lib/libama_cryptography.so` and so could
+never run on macOS (`.dylib`) or Windows (`.dll`); the guard now uses the
+package's own library discovery and the refusal has its own test.
 
 **Repository noise removed at root cause.** A stray libFuzzer `slow-unit-*`
 artifact committed to the repository root in `da63d5c` is deleted, and

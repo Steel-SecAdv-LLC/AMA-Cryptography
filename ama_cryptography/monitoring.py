@@ -1096,6 +1096,7 @@ class ResonanceTimingMonitor:
       removed, not re-tuned.
 
     Features:
+
     - Per-operation baseline statistics and anomaly profiles, keyed by the
       operation names the instrumented call sites actually emit
     - Empirically calibrated false-alarm budgets (heavy-tail safe)
@@ -1372,15 +1373,18 @@ class ResonanceTimingMonitor:
         # mathematically unreachable.
         # ------------------------------------------------------------------
 
-        is_anomaly = False
-        severity = "warning"
-        deviation = 0.0
+        # The point-anomaly verdict does not exist until a baseline does.  A
+        # `None` sentinel says exactly that, and keeps "no baseline yet"
+        # distinguishable from a real "measured, not anomalous" verdict.
+        # Seeding `severity`/`deviation` with placeholders instead would be
+        # dead stores — the only read of them is guarded by the same
+        # `prior_count` condition that overwrites them — which is what CodeQL
+        # flagged as alerts 621 and 622.
+        point_verdict: Optional[Tuple[bool, str, float]] = None
         shift_anomaly: Optional[TimingAnomaly] = None
 
         if prior_count >= 30:
-            is_anomaly, severity, deviation = self._detect_point_anomaly(
-                operation, effective_duration, profile, ewma
-            )
+            point_verdict = self._detect_point_anomaly(operation, effective_duration, profile, ewma)
             shift_anomaly = self._step_shift_cusum(operation, effective_duration, ewma, prior_count)
 
             # The observed score joins the calibration history AFTER the
@@ -1389,7 +1393,7 @@ class ResonanceTimingMonitor:
             # (alarming ones included): a quantile over the trailing window
             # is robust to the alarm fraction itself, and excluding flagged
             # samples would create a ratchet that can only tighten.
-            self._score_history[operation].append(deviation)
+            self._score_history[operation].append(point_verdict[2])
 
         # ------------------------------------------------------------------
         # UPDATE PHASE
@@ -1457,7 +1461,8 @@ class ResonanceTimingMonitor:
         if shift_anomaly is not None:
             return shift_anomaly
 
-        if is_anomaly:
+        if point_verdict is not None and point_verdict[0]:
+            _, severity, deviation = point_verdict
             return TimingAnomaly(
                 operation=operation,
                 expected_ms=mean,

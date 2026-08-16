@@ -867,11 +867,16 @@ def test_softhsm_lane_is_provisioned_in_ci() -> None:
     Windows was the last holdout, excused by "SoftHSM2 has no maintained
     package on any Windows runner manager, only a manual installer".  That
     claim was checked and found false: Chocolatey's ``softhsm.install``
-    package (which wraps the Disig SoftHSM2-for-Windows MSI, installing to
-    ``C:\\SoftHSM2``) is live on the community feed, and ``choco`` is on
-    every windows-latest runner.  CI now installs it and puts
-    ``C:\\SoftHSM2\\bin`` on the job PATH, so Windows is held to the same
-    provisioning standard as Linux and macOS rather than skipped on the
+    package (which wraps the Disig SoftHSM2-for-Windows MSI) is live on the
+    community feed, and ``choco`` is on every windows-latest runner.  CI now
+    installs it with ``INSTALLDIR`` pinned to ``C:\\SoftHSM2`` and then
+    *discovers* the resulting module before putting its ``bin\\`` on the job
+    PATH.  The pin matters: the MSI parents its directory to ``TARGETDIR``,
+    which Windows Installer resolves to ``ROOTDRIVE`` — the fixed drive with
+    the most free space, ``D:`` on these runners — so the first revision's
+    hard-coded ``C:\\SoftHSM2\\lib\\softhsm2-x64.dll`` assertion failed every
+    Windows lane on an otherwise successful install.  Windows is held to the
+    same provisioning standard as Linux and macOS rather than skipped on the
     strength of a falsified premise.
 
     The requirement is not a hole if a step is deleted:

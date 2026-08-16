@@ -1609,7 +1609,13 @@ class HSMKeyStorage:
             "/usr/lib/softhsm/libsofthsm2.so",
             "/usr/local/lib/softhsm/libsofthsm2.so",
             "/opt/homebrew/lib/softhsm/libsofthsm2.so",  # macOS ARM
-            "C:\\SoftHSM2\\lib\\softhsm2-x64.dll",  # Windows (Disig MSI / choco)
+            # Windows (Disig MSI, via `choco install softhsm.install`).  The
+            # MSI parents its directory to TARGETDIR, so the drive follows
+            # ROOTDRIVE unless INSTALLDIR is pinned; both the drive-root form
+            # the installer defaults to and the Program Files form an operator
+            # may choose are listed.
+            "C:\\SoftHSM2\\lib\\softhsm2-x64.dll",
+            "C:\\Program Files\\SoftHSM2\\lib\\softhsm2-x64.dll",
         ],
         "aws-cloudhsm": [
             "/opt/cloudhsm/lib/libcloudhsm_pkcs11.so",

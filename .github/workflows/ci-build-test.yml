@@ -374,10 +374,19 @@ jobs:
         # posture as the OpenSSL-linked apt/brew builds above.  Retry shape
         # matches the cmake choco step (transient CDN outages).
         run: |
+          # INSTALLDIR is pinned, not assumed.  The Disig MSI parents its
+          # install directory to TARGETDIR, which Windows Installer resolves
+          # to ROOTDRIVE — the fixed drive with the MOST FREE SPACE, which on
+          # GitHub's Windows runners is D:, not C:.  The first revision of
+          # this step asserted C:\SoftHSM2\lib\softhsm2-x64.dll and every
+          # Windows lane in both workflows failed on a *successful* install.
+          # Pinning the property makes the location deterministic and keeps
+          # the constant in HSMKeyStorage.PKCS11_PATHS truthful.
+          $installDir = 'C:\SoftHSM2'
           $maxAttempts = 5
           for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
             Write-Host "Attempt ${attempt}/${maxAttempts}: choco install softhsm.install..."
-            choco install softhsm.install -y --no-progress 2>&1
+            choco install softhsm.install -y --no-progress --install-arguments "INSTALLDIR=$installDir" 2>&1
             if ($LASTEXITCODE -eq 0) {
               Write-Host "Successfully installed softhsm.install"
               break
@@ -392,17 +401,47 @@ jobs:
             Write-Error "All ${maxAttempts} attempts to install softhsm.install via Chocolatey failed"
             exit 1
           }
-          # The MSI appends INSTALLDIR\lib (not bin) to the *machine* PATH,
-          # which a running job never re-reads anyway — publish bin\ to the
-          # remaining steps explicitly so softhsm2-util is resolvable.
-          Add-Content -Path $env:GITHUB_PATH -Value 'C:\SoftHSM2\bin'
-          # Verify loudly: a missing DLL or broken util fails the step rather
+          # Discover rather than assume.  The pin above should make the first
+          # candidate exact; searching every fixed drive's two plausible roots
+          # means a future runner-image or MSI change degrades into a slower
+          # success instead of a red lane, while a genuine miss still fails.
+          $roots = @($installDir)
+          foreach ($fs in (Get-PSDrive -PSProvider FileSystem)) {
+            $roots += (Join-Path $fs.Root 'SoftHSM2')
+            $roots += (Join-Path $fs.Root 'Program Files\SoftHSM2')
+          }
+          $dll = $null
+          foreach ($root in ($roots | Select-Object -Unique)) {
+            $candidate = Join-Path $root 'lib\softhsm2-x64.dll'
+            if (Test-Path $candidate) { $dll = $candidate; break }
+          }
+          # Fail loudly WITH evidence: a missing DLL fails the step rather
           # than quietly returning the HSM lane to a skip.
-          if (-not (Test-Path 'C:\SoftHSM2\lib\softhsm2-x64.dll')) {
-            Write-Error "C:\SoftHSM2\lib\softhsm2-x64.dll not found after install"
+          if (-not $dll) {
+            Write-Error "softhsm2-x64.dll not found after a successful install. Roots searched:`n$($roots -join "`n")"
+            Get-ChildItem -Path $installDir -Recurse -ErrorAction SilentlyContinue |
+              Select-Object -First 50 -ExpandProperty FullName
             exit 1
           }
-          & 'C:\SoftHSM2\bin\softhsm2-util.exe' --version
+          $root = Split-Path -Parent (Split-Path -Parent $dll)
+          Write-Host "SoftHSM2 resolved at $root (module: $dll)"
+          # TestSoftHSMIntegration constructs HSMKeyStorage("softhsm") with NO
+          # library_path override, so the module must land somewhere
+          # PKCS11_PATHS lists.  If the INSTALLDIR pin did not take effect the
+          # install is still "successful" but the lane would fail later with
+          # an opaque PKCS#11 error, so assert the contract here, where the
+          # message can name the real location.
+          if ($root -ne $installDir) {
+            Write-Error "SoftHSM2 installed to $root, not the pinned $installDir; HSMKeyStorage's PKCS11_PATHS would not find it. The INSTALLDIR property did not take effect."
+            exit 1
+          }
+          # The MSI appends INSTALLDIR\lib (not bin) to the *machine* PATH,
+          # which a running job never re-reads anyway — publish bin\ to the
+          # remaining steps explicitly so softhsm2-util is resolvable.  The
+          # test module derives the module path from softhsm2-util's own
+          # location, so this is what makes the lane self-locating.
+          Add-Content -Path $env:GITHUB_PATH -Value (Join-Path $root 'bin')
+          & (Join-Path $root 'bin\softhsm2-util.exe') --version
           if ($LASTEXITCODE -ne 0) {
             Write-Error "softhsm2-util --version failed (exit ${LASTEXITCODE})"
             exit 1

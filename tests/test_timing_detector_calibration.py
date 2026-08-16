@@ -229,23 +229,27 @@ class TestEvalHarnessGateLogic:
     """The evaluation harness is itself load-bearing (CI gates on it), so
     its pure gate logic gets the same negative-direction coverage."""
 
-    def test_tie_band_is_derived_from_seed_spread(self) -> None:
-        from benchmarks.detector_baseline_eval import tie_band
+    # One import style for this module throughout the class: the monkeypatch
+    # test below needs the module object itself, and mixing `import x` with
+    # `from x import y` for the same module is what CodeQL alert 623 flagged.
 
-        assert tie_band([0.5, 0.5, 0.5]) == pytest.approx(0.01)  # floor
+    def test_tie_band_is_derived_from_seed_spread(self) -> None:
+        import benchmarks.detector_baseline_eval as ev
+
+        assert ev.tie_band([0.5, 0.5, 0.5]) == pytest.approx(0.01)  # floor
         spread = [0.40, 0.50, 0.60]
-        assert tie_band(spread) == pytest.approx(0.2, abs=0.001)  # 2 x stdev
+        assert ev.tie_band(spread) == pytest.approx(0.2, abs=0.001)  # 2 x stdev
 
     def test_flags_at_budget_selects_top_scores_in_eval_region(self) -> None:
-        from benchmarks.detector_baseline_eval import EVAL_START, flags_at_budget
+        import benchmarks.detector_baseline_eval as ev
 
-        scores = [0.0] * (EVAL_START + 10)
-        scores[EVAL_START + 3] = 9.0
-        scores[EVAL_START + 7] = 8.0
-        scores[EVAL_START - 1] = 99.0  # outside the eval region: never chosen
-        flags = flags_at_budget(scores, 2)
-        assert flags[EVAL_START + 3] and flags[EVAL_START + 7]
-        assert not flags[EVAL_START - 1]
+        scores = [0.0] * (ev.EVAL_START + 10)
+        scores[ev.EVAL_START + 3] = 9.0
+        scores[ev.EVAL_START + 7] = 8.0
+        scores[ev.EVAL_START - 1] = 99.0  # outside the eval region: never chosen
+        flags = ev.flags_at_budget(scores, 2)
+        assert flags[ev.EVAL_START + 3] and flags[ev.EVAL_START + 7]
+        assert not flags[ev.EVAL_START - 1]
         assert sum(flags) == 2
 
     def test_sigma_floor_gate_fails_on_an_inert_detector(self) -> None:
