@@ -760,8 +760,8 @@ _SOFTHSM_LIB_CANDIDATES = (
     "/usr/lib/softhsm/libsofthsm2.so",
     "/usr/lib/x86_64-linux-gnu/softhsm/libsofthsm2.so",
     "/usr/lib/aarch64-linux-gnu/softhsm/libsofthsm2.so",
-    "/usr/local/lib/softhsm/libsofthsm2.so",       # Homebrew on Intel macOS
-    "/opt/homebrew/lib/softhsm/libsofthsm2.so",    # Homebrew on Apple Silicon
+    "/usr/local/lib/softhsm/libsofthsm2.so",  # Homebrew on Intel macOS
+    "/opt/homebrew/lib/softhsm/libsofthsm2.so",  # Homebrew on Apple Silicon
 )
 
 
