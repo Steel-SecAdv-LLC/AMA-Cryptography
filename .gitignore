@@ -283,3 +283,13 @@ build-tidy/
 # Local clang-explicit build dir (used to reproduce the
 # `C Library (*, clang)` CI lanes — see PR #326 follow-up)
 build-clang/
+
+# libFuzzer run artifacts dropped into the invoking CWD.  One slow-unit-*
+# file was accidentally committed to the repository root in da63d5c (the
+# fuzz-instrumentation commit) and removed in the 5.0.0 completion pass;
+# these patterns keep the accident from recurring.
+slow-unit-*
+crash-*
+oom-*
+timeout-*
+leak-*

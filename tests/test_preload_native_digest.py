@@ -183,9 +183,19 @@ class TestPreloadRefusal:
         self, tampered_so: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(pb, "_in_secure_execution_mode", lambda: False)
-        with pytest.raises(RuntimeError):
+
+        # Raise through a helper rather than a bare ``raise`` in the ``with``
+        # body: CodeQL's py/unreachable-statement does not model
+        # ``pytest.raises`` swallowing the exception, so a literal ``raise``
+        # marks every following assert unreachable (alert 620 — same false
+        # positive, and same source-level resolution, as the ``_explode()``
+        # pattern in tests/test_c_buffer_views.py).
+        def _explode() -> None:
+            raise RuntimeError("signing blew up")
+
+        with pytest.raises(RuntimeError, match="signing blew up"):
             with pb.unverified_load_for_signing():
-                raise RuntimeError("signing blew up")
+                _explode()
         assert pb._SIGNING_LOAD_OVERRIDE is False
         assert pb._try_load_library(tampered_so) is None
 

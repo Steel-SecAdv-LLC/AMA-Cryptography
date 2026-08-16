@@ -418,6 +418,35 @@ or run with `PYTHONDONTWRITEBYTECODE=1` / `sys.dont_write_bytecode` so no
 no-cache case honestly as "nothing to poison" — and let the OS-level
 signing above authenticate the tree.
 
+**Supported out-of-band procedure (`tools/verify_install_oob.py`).** The
+repository ships a standalone, stdlib-only verifier that performs the
+out-of-band check the boundary above defers to, runnable anywhere Python
+runs even where OS/package-manager code signing is not deployed. Invoked
+in a fresh interpreter against an installed package directory
+(`python3 tools/verify_install_oob.py <package-dir> [--native-lib PATH]`),
+it imports nothing from the target tree: it parses
+`_integrity_signature.py` as text (never importing or executing it),
+recomputes the `.py`/`_post_kats/` digest and the v1/v2/v3 signed message
+exactly as the in-process verifier does, checks the build-time Ed25519
+signature, verifies the native-library and binding-extension digests, and
+compares every cached `__pycache__/*.pyc` for the invoking interpreter
+against a fresh compile of its on-disk source using the same
+executed-surface comparison as the execution-integrity POST stage — so a
+poisoned `.pyc` is caught by a checker whose own bytecode does not live in
+the tree being checked. Its SHA3-256, SHA-512 and Ed25519 verification are
+hand-written from FIPS 202 / FIPS 180-4 / RFC 8032 (no OpenSSL-backed
+`hashlib`, per INVARIANT-1) and must pass startup known-answer tests,
+including a negative control, before anything is verified; a failed
+self-test verifies nothing and exits nonzero. Its trust base is stated in
+the tool and is deliberately small: the operator's Python interpreter and
+that one file — which must itself be obtained out of band (a fresh clone
+or a checksum-verified release artifact, never the installation under
+test), because relocating the verifier outside the tree's trusted
+computing base is the entire point. The boundary statement above stands
+unchanged for the in-process checks: a self-check written in Python still
+cannot vouch for its own bytecode, and this tool is the supported way to
+check what those checks cannot.
+
 ### Pre-load native-library verification — refusing before mapping
 
 Digest-checking the shared object *after* `dlopen` (the original
@@ -497,30 +526,68 @@ no adversarial resistance. The binding guarantee is a shipped-wheel
 property, where it is exact-or-fatal.
 
 An earlier revision of this section recorded the gap as blocked on a
-release-pipeline change, on the claim that `auditwheel repair` rewrites
-the binding ELFs after signing. Measured, that claim was false: the
-bindings resolve `libama_cryptography` **inside the package** via
-`$ORIGIN`/`@loader_path` RUNPATHs, so auditwheel and delocate have
-nothing external to graft — the published v4.0.0 wheels ship every
+release-pipeline change, on the claim that repair tools rewrite the
+binding ELFs after signing. Measured, that claim was false for
+auditwheel on Linux — the bindings resolve `libama_cryptography`
+**inside the package** via `$ORIGIN`/`@loader_path` RUNPATHs, so there
+is nothing external to graft: the published v4.0.0 wheels ship every
 binding byte-identical to the build (no `.libs`/`.dylibs` directory,
-unmangled `DT_NEEDED`, verified on the release assets for
-manylinux x86_64 and macOS arm64), a local `auditwheel repair` of a
-freshly built wheel changes only `RECORD`/`WHEEL` metadata, and Windows
-repair is disabled outright. The full chain is exercised end-to-end:
-a wheel built with the v3 signer, repaired by auditwheel, installed
-into a clean environment, passes POST with all six bindings verified,
-and refuses to import when any installed binding is modified.
+unmangled `DT_NEEDED`, verified on the release assets), and a local
+`auditwheel repair` of a freshly built wheel changes only
+`RECORD`/`WHEEL` metadata. It was **not** false for delocate on macOS:
+the 5.0.0 release dry run showed `delocate-wheel` rewriting every
+binding's Mach-O load commands *after* the signer ran, so all five
+bindings in the macOS wheels failed their signed digests at the wheels'
+own smoke test. The mitigation there is to disable macOS repair
+outright (`CIBW_REPAIR_WHEEL_COMMAND_MACOS: ""` in `release.yml`),
+which this project can afford because delocate has nothing to vendor;
+Windows repair is disabled for the same reason. The full chain is
+exercised end-to-end: a wheel built with the v3 signer, repaired,
+installed into a clean environment, passes POST with all six bindings
+verified, and refuses to import when any installed binding is modified.
 
-One residue, stated rather than implied: binding extensions are ordinary
-imports and **execute before POST examines them**, so this is post-load
-detection that moves the module to the ERROR state — the posture the
-native library had before pre-load verification, and weaker than the
-pre-load refusal the native library now gets. Pre-load refusal for
-bindings would require an import hook ahead of every binding import. If
-a future repair-tool version begins rewriting the bindings, every
-repaired wheel fails its own build-time smoke test (`CIBW_TEST_COMMAND`
-imports the package, which runs POST), so the release pipeline catches
-the regression before any artefact ships.
+On Linux the pipeline no longer bets on auditwheel continuing to leave
+the bindings alone. The default `auditwheel repair` still runs — the
+manylinux retagging is worth keeping — and `tools/resign_wheel.py`
+(`CIBW_REPAIR_WHEEL_COMMAND_LINUX` in `release.yml`) then re-signs each
+repaired wheel over its **post-repair** bytes: the wheel is unpacked,
+the signer is run against the unpacked tree itself (with a hard
+verification that the native library it bound came from *inside* that
+tree), `RECORD` is regenerated, and the wheel is repacked in place. The
+artefact's digests therefore describe the bytes the wheel ships **by
+construction**, whatever a future auditwheel version rewrites — the
+failure mode delocate exhibited on macOS can no longer invalidate a
+shipped Linux signature. The wheel smoke test (`CIBW_TEST_COMMAND`)
+still verifies every re-signed wheel end to end before any artefact
+ships.
+
+A digest scheme covering only the regions repair tools do not rewrite
+(.text-only or section-selective hashing) was considered and rejected,
+and the rejection is recorded deliberately: the rewritten regions —
+`RUNPATH`/`DT_NEEDED` entries on Linux, Mach-O load commands on macOS —
+are precisely the highest-value tamper surface, because they decide
+*which shared object the loader binds*. Excluding them from the digest
+would trade tamper-evidence on the load path for a compatibility with
+post-signing rewrites that the resign-after-repair chain provides in
+full while keeping whole-file digests.
+
+Binding extensions are ordinary imports, and an extension's module-init
+function runs the moment it is imported — so verification cannot wait
+for POST alone. The pre-import gate
+(`__init__._refuse_tampered_bindings_before_import`) closes that
+asymmetry for the case that is unambiguous tampering: at the top of
+package initialisation, ahead of every binding import path, it
+recomputes each signed binding digest and **refuses to import** on a
+mismatch, before any binding executes. (An earlier revision of this
+paragraph said pre-load refusal "would require an import hook"; the
+gate achieves the same property without one, because no import path
+reaches a binding without initialising the package first.) POST covers
+what the gate deliberately leaves to it: inventory drift
+(listed-but-missing / present-but-uncovered, whose correct severity
+depends on the trust anchor, which lives in the native library the gate
+runs ahead of) and authentication of the artefact itself — an attacker
+who rewrites both a binding and the artefact is caught by the Ed25519
+signature check, not the gate.
 
 ### `--update` is build-pipeline-only
 

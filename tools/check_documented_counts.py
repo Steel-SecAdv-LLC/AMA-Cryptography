@@ -46,6 +46,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import Callable
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -245,52 +246,188 @@ _HISTORY_ROW_RE = re.compile(r"^\|\s*\d+\.\d+\.\d+[^|]*\|\s*20\d\d-\d\d-\d\d\s*\
 _DEF_TEST_RE = re.compile(r"^\s*def test_", re.MULTILINE)
 
 
-#: The "Files" column of the Lines of Code table in docs/METRICS_REPORT.md.
+#: The Lines of Code table in docs/METRICS_REPORT.md — BOTH columns.
 #:
-#: These went unchecked while the *other* file count in the same document —
-#: "Python test files under `tests/` matching the static regex" — was gated,
-#: and the two are different measures that happened to print the same number.
-#: They diverged silently the moment a test file was added that the raw glob
-#: counts and the regex does not (``conftest.py``, ``ref_keyformat.py``), and
-#: the row that was gated is the one that stayed right. A row whose neighbour
-#: is checked reads as checked.
+#: History of this gate, kept because each stage failed differently. First
+#: nothing was gated, and both columns drifted. Then the Files column was
+#: gated (4.0.0) while the line totals were left out on the argument that
+#: "``wc -l`` moves on every commit and a gate that fails on every commit is
+#: one that gets disabled" — and the totals drifted again, silently, within
+#: two days of being re-measured (measured at 8d72b8c: four of seven totals
+#: stale). The argument identified a real operational cost but drew the
+#: wrong conclusion: the fix for "the gate fails whenever the tree changes"
+#: is a one-command regenerator, not an ungated number. ``python
+#: tools/update_docs.py --loc`` rewrites every gated figure from the same
+#: measurement functions this checker verifies with, so keeping the gate
+#: green after a change is one command, and a figure that was not
+#: re-measured cannot survive review.
 #:
-#: Each entry maps the row's scope label to the exact reproduction command the
-#: report publishes for it, expressed as ``(roots, suffixes)``. Only the file
-#: counts are gated, not the line totals: ``wc -l`` moves on every commit and a
-#: gate that fails on every commit is one that gets disabled, whereas a file
-#: count moves only when the tree's shape does — which is exactly when the
-#: prose around it needs re-reading.
-_LOC_ROW_SCOPES: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
-    "Library Python (`ama_cryptography/*.py`)": (("ama_cryptography",), (".py",)),
-    "Native C (`src/c/**/*.c`, `include/**/*.h`)": (("src/c", "include"), (".c", ".h")),
-    "Library total (Python + C + headers)": (
-        ("ama_cryptography", "src/c", "include"),
-        (".py", ".c", ".h"),
-    ),
-    "Tests (`tests/**/*.py`)": (("tests",), (".py",)),
+#: Counting rules, stated exactly (the report publishes the matching
+#: reproduction commands): files are enumerated with ``git ls-files`` —
+#: tracked files only, so virtualenvs, build directories and generated
+#: ``src/cython/*.c`` can never leak into a measurement — and lines are
+#: counted as ``\n`` bytes per file (exact ``wc -l`` semantics,
+#: locale-independent; trailing-newline-free files under-count by one).
+#: For a directory that is not a git checkout (this gate's own test
+#: fixtures) the enumeration falls back to a sorted filesystem walk
+#: excluding ``.git``; the real repository always takes the git path.
+_LOC_WHOLE_SUFFIX_RE = re.compile(r"\.(py|c|h|pyx|pxd|md|yml|yaml|toml|json|cmake)$")
+
+
+def _loc_is_library_python(path: str) -> bool:
+    return path.startswith("ama_cryptography/") and path.endswith(".py")
+
+
+def _loc_is_native_c(path: str) -> bool:
+    return (path.startswith("src/c/") or path.startswith("include/")) and path.endswith(
+        (".c", ".h")
+    )
+
+
+def _loc_is_top_level_python(path: str) -> bool:
+    return "/" not in path and path.endswith(".py")
+
+
+def _loc_is_tests_python(path: str) -> bool:
+    return path.startswith("tests/") and path.endswith(".py")
+
+
+def _loc_is_cython(path: str) -> bool:
+    return path.endswith((".pyx", ".pxd"))
+
+
+def _loc_is_whole_project(path: str) -> bool:
+    if path.startswith("src/cython/") and path.endswith(".c"):
+        return False  # cythonize output; .gitignore excludes it, belt-and-braces
+    basename = path.rsplit("/", 1)[-1]
+    return (
+        bool(_LOC_WHOLE_SUFFIX_RE.search(path))
+        or basename == "CMakeLists.txt"
+        or basename == "Makefile"
+    )
+
+
+#: Row label -> path predicate, in table order. Every row is gated on both
+#: columns.
+_LOC_TABLE_ROWS: dict[str, Callable[[str], bool]] = {
+    "Library Python (`ama_cryptography/*.py`)": _loc_is_library_python,
+    "Native C (`src/c/**/*.c`, `include/**/*.h`)": _loc_is_native_c,
+    "Library total (Python + C + headers)": lambda p: _loc_is_library_python(p)
+    or _loc_is_native_c(p),
+    "Top-level Python (monitors, benchmarks, demos)": _loc_is_top_level_python,
+    "Tests (`tests/**/*.py`)": _loc_is_tests_python,
+    "Cython (`*.pyx`, `*.pxd`)": _loc_is_cython,
+    "**Whole project** (source + docs + config)": _loc_is_whole_project,
 }
 
 
+def _loc_tracked_files(repo: Path) -> list[str]:
+    """Tracked files as repo-relative POSIX paths.
+
+    ``git ls-files`` is authoritative; the sorted filesystem walk exists only
+    for non-git fixture directories in this gate's own tests and excludes
+    nothing beyond ``.git`` (fixtures are clean by construction).
+    """
+    if (repo / ".git").exists():
+        proc = subprocess.run(
+            ["git", "-C", str(repo), "ls-files", "-z"],
+            capture_output=True,
+            check=True,
+        )
+        return [p.decode("utf-8") for p in proc.stdout.split(b"\0") if p]
+    return sorted(
+        p.relative_to(repo).as_posix()
+        for p in repo.rglob("*")
+        if p.is_file() and ".git" not in p.parts
+    )
+
+
+def measure_loc_table(repo: Path) -> dict[str, tuple[int, int]]:
+    """``{row label: (file_count, line_count)}`` for every gated row."""
+    counts: dict[str, tuple[int, int]] = {}
+    tracked = _loc_tracked_files(repo)
+    lines_cache: dict[str, int] = {}
+
+    def _lines(rel: str) -> int:
+        if rel not in lines_cache:
+            lines_cache[rel] = (repo / rel).read_bytes().count(b"\n")
+        return lines_cache[rel]
+
+    for label, predicate in _LOC_TABLE_ROWS.items():
+        selected = [p for p in tracked if predicate(p)]
+        counts[label] = (len(selected), sum(_lines(p) for p in selected))
+    return counts
+
+
+def measure_scope_composition(repo: Path) -> dict[str, tuple[int, str]]:
+    """``{composition row label: (line_count, percent_string)}``.
+
+    The remainder row is derived by subtraction, so the composition always
+    sums to the whole-project total by construction.
+    """
+    table = measure_loc_table(repo)
+    whole = table["**Whole project** (source + docs + config)"][1]
+    library = table["Library total (Python + C + headers)"][1]
+    tests_lines = table["Tests (`tests/**/*.py`)"][1]
+    top = table["Top-level Python (monitors, benchmarks, demos)"][1]
+    cython = table["Cython (`*.pyx`, `*.pxd`)"][1]
+    remainder = whole - library - tests_lines - top - cython
+
+    def _pct(x: int) -> str:
+        return f"{x / whole * 100:.1f}%" if whole else "0.0%"
+
+    return {
+        "Library (Python + C + headers)": (library, _pct(library)),
+        "Tests": (tests_lines, _pct(tests_lines)),
+        "Top-level Python": (top, _pct(top)),
+        "Cython": (cython, _pct(cython)),
+        "Everything else (remainder)": (remainder, _pct(remainder)),
+        "**Whole-project total**": (whole, "100%"),
+    }
+
+
+def measure_tracked_json_lines(repo: Path) -> int:
+    """Lines across tracked ``*.json`` — the corpus-dominance figure the
+    Scope Composition prose quotes."""
+    return sum(
+        (repo / p).read_bytes().count(b"\n")
+        for p in _loc_tracked_files(repo)
+        if p.endswith(".json")
+    )
+
+
 def _loc_row_re(label: str) -> re.Pattern[str]:
-    return re.compile(rf"\|\s*{re.escape(label)}\s*\|\s*(\d[\d,]*)\s*\|")
+    # Cells may be bold (``**86,620**``); a legacy Files cell may be ``—``
+    # (the 4.0.0 table left three rows uncounted — the checker treats that
+    # as a failure and the regenerator fills the real count).
+    return re.compile(
+        rf"\|\s*{re.escape(label)}\s*\|\s*\**\s*(\d[\d,]*|—)\s*\**\s*\|\s*\**\s*(\d[\d,]*)\s*\**\s*\|"
+    )
+
+
+def _composition_row_re(label: str) -> re.Pattern[str]:
+    return re.compile(
+        rf"\|\s*{re.escape(label)}\s*\|\s*\**\s*(\d[\d,]*)\s*\**\s*\|\s*\**\s*([\d.]+%)\s*\**\s*\|"
+    )
+
+
+def _num(raw: str) -> int:
+    return int(raw.replace(",", ""))
 
 
 def check_loc_table_file_counts(repo: Path) -> list[str]:
-    """Every gated row of the LoC table must state the file count it measures."""
+    """Every row of the LoC table must state the file AND line counts it
+    measures, and the Scope Composition table must agree with the same
+    measurement (function name kept from the Files-only 4.0.0 gate; it now
+    gates both columns)."""
     problems: list[str] = []
     report = repo / "docs" / "METRICS_REPORT.md"
     if not report.is_file():
         return [f"{report} is missing; the LoC table cannot be checked"]
     text = report.read_text(encoding="utf-8")
 
-    for label, (roots, suffixes) in _LOC_ROW_SCOPES.items():
-        measured = 0
-        for root in roots:
-            base = repo / root
-            if not base.is_dir():
-                continue
-            measured += sum(1 for p in base.rglob("*") if p.is_file() and p.suffix in suffixes)
+    table = measure_loc_table(repo)
+    for label, (files_measured, lines_measured) in table.items():
         matches = _loc_row_re(label).findall(text)
         if not matches:
             problems.append(
@@ -298,12 +435,44 @@ def check_loc_table_file_counts(repo: Path) -> list[str]:
                 "the row was renamed or removed and this check stopped checking it"
             )
             continue
-        for claimed in matches:
-            if int(claimed.replace(",", "")) != measured:
+        for claimed_files, claimed_lines in matches:
+            if claimed_files == "—" or _num(claimed_files) != files_measured:
                 problems.append(
-                    f"docs/METRICS_REPORT.md: LoC table says {claimed} files for "
-                    f"{label}; measured {measured}"
+                    f"docs/METRICS_REPORT.md: LoC table says {claimed_files} files for "
+                    f"{label}; measured {files_measured}"
                 )
+            if _num(claimed_lines) != lines_measured:
+                problems.append(
+                    f"docs/METRICS_REPORT.md: LoC table says {claimed_lines} lines for "
+                    f"{label}; measured {lines_measured} "
+                    "(re-measure with: python tools/update_docs.py --loc)"
+                )
+
+    composition = measure_scope_composition(repo)
+    for label, (lines_measured, pct) in composition.items():
+        matches2 = _composition_row_re(label).findall(text)
+        if not matches2:
+            problems.append(f"docs/METRICS_REPORT.md: no Scope Composition row found for {label!r}")
+            continue
+        for claimed_lines, claimed_pct in matches2:
+            if _num(claimed_lines) != lines_measured:
+                problems.append(
+                    f"docs/METRICS_REPORT.md: Scope Composition says {claimed_lines} "
+                    f"lines for {label}; measured {lines_measured}"
+                )
+            if claimed_pct != pct:
+                problems.append(
+                    f"docs/METRICS_REPORT.md: Scope Composition says {claimed_pct} "
+                    f"for {label}; measured {pct}"
+                )
+
+    json_lines = measure_tracked_json_lines(repo)
+    for claimed in re.findall(r"\((\d[\d,]*) lines of\s*`\*\.json`", text):
+        if _num(claimed) != json_lines:
+            problems.append(
+                f"docs/METRICS_REPORT.md: prose says {claimed} lines of *.json; "
+                f"measured {json_lines}"
+            )
     return problems
 
 
@@ -532,8 +701,21 @@ def audit(repo: Path = REPO) -> tuple[list[str], int]:
                 checked += len(_FUZZ_COUNT_RE.findall(line))
         checked += len(_BREAKING_CLAIM_RE.findall("\n".join(live_lines)))
         if path.name == "METRICS_REPORT.md":
-            for label in _LOC_ROW_SCOPES:
-                checked += len(_loc_row_re(label).findall(text))
+            # Each LoC-table row contributes two gated claims (Files, Lines);
+            # each Scope Composition row contributes two (Lines, %); the
+            # *.json prose figure contributes one.
+            for label in _LOC_TABLE_ROWS:
+                checked += 2 * len(_loc_row_re(label).findall(text))
+            for comp_label in (
+                "Library (Python + C + headers)",
+                "Tests",
+                "Top-level Python",
+                "Cython",
+                "Everything else (remainder)",
+                "**Whole-project total**",
+            ):
+                checked += 2 * len(_composition_row_re(comp_label).findall(text))
+            checked += len(re.findall(r"\((\d[\d,]*) lines of\s*`\*\.json`", text))
     problems += check_record_counts(repo)
     problems += check_wycheproof_counts(repo)
     problems += check_test_counts(repo)

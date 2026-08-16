@@ -484,6 +484,31 @@ jobs:
           # post-signing rewrite is reported as what it is rather than as an
           # opaque import failure.
           CIBW_REPAIR_WHEEL_COMMAND_MACOS: ""
+          # LINUX WHEEL REPAIR: default repair preserved, then RE-SIGN.
+          #
+          # The integrity artefact is minted by setup.py's post-build signer,
+          # BEFORE this repair step — so a repair tool that rewrites the
+          # binding ELFs after signing invalidates the signature on every
+          # wheel it touches.  That is not hypothetical: it is exactly what
+          # delocate did on macOS in the 5.0.0 release dry run (see the MACOS
+          # block above), and today's auditwheel leaving the bindings alone
+          # (verified on the v4.0.0 assets: nothing grafted, the library
+          # resolves in-package via $ORIGIN) is a property of the current
+          # auditwheel, not a guarantee.  Instead of betting the release on
+          # that staying true, keep the DEFAULT Linux repair (the first half
+          # below is cibuildwheel's own default command — manylinux retagging
+          # is worth having) and then re-sign each repaired wheel over its
+          # POST-repair bytes: tools/resign_wheel.py unpacks the wheel, runs
+          # the signer against the unpacked tree (with a guard that the bound
+          # native library came from INSIDE the wheel), regenerates RECORD and
+          # repacks in place.  The binding digests then describe what ships by
+          # construction, so the failure mode delocate exhibited cannot
+          # invalidate a shipped Linux signature no matter what a future
+          # auditwheel rewrites.  CIBW_TEST_COMMAND's smoke test
+          # (check_binding_extensions_are_bound) still verifies every
+          # re-signed wheel end to end.  macOS/Windows repair stay disabled
+          # above — nothing here re-enables them.
+          CIBW_REPAIR_WHEEL_COMMAND_LINUX: "auditwheel repair -w {dest_dir} {wheel} && python {project}/tools/resign_wheel.py {dest_dir}"
           # TEST COMMAND: smoke-test the built wheel inside the throwaway
           # virtualenv cibuildwheel creates for it.  The full pytest suite
           # runs in ci-build-test.yml; this gate answers the narrower

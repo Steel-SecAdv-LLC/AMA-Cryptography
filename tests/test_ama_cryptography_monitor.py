@@ -318,29 +318,50 @@ class TestResonanceTimingMonitor:
         assert anomaly.severity in ["warning", "critical"]
 
     def test_anomaly_severity_levels(self) -> None:
-        """Test that severity escalates with deviation magnitude."""
-        # Use Welford's algorithm (non-EWMA) for predictable threshold behavior
-        # EWMA updates variance with the anomaly value, making exact thresholds harder to test
-        monitor = ResonanceTimingMonitor(threshold_sigma=3.0, use_ewma=False)
+        """Severity escalates with magnitude — once the threshold is calibrated.
 
-        # Deterministic baseline: mean=10.0, std=0.1 (alternating 9.9 and 10.1)
-        # This eliminates randomness that caused flaky test results
-        baseline = [9.9, 10.1] * 25  # 50 samples with exact mean=10.0, std=0.1
-        for value in baseline:
+        The 5.0.0 contract has two stages:
+
+        * Pre-calibration (fewer than ~100 post-warmup scores): the sigma
+          floor governs, and severity is capped at 'warning' — paging a
+          human requires an empirically measured tail, not an assumption.
+        * Calibrated: 'critical' at twice the operating threshold.
+
+        On the deterministic alternating baseline the robust scale is
+        1.4826 * MAD = 0.14826, so with the default 3.0 floor the warning
+        band starts at ~10.44 and (once calibrated) criticality at ~10.89.
+        """
+        monitor = ResonanceTimingMonitor(threshold_sigma=3.0)
+
+        # Stage 1: 50 samples — beyond warmup (30) but far below the ~100
+        # scores calibration needs.  A gross outlier alarms, but only at
+        # 'warning': criticality is not available uncalibrated.
+        for value in [9.9, 10.1] * 25:
+            monitor.record_timing("test_op", value)
+        anomaly = monitor.record_timing("test_op", 50.0)
+        assert anomaly is not None
+        assert anomaly.severity == "warning", "uncalibrated operations must not page"
+
+        # Stage 2: continue the clean baseline until the empirical threshold
+        # activates (>= 100 post-warmup scores), on a fresh monitor so the
+        # 50.0 spike does not sit in the calibration history.
+        monitor = ResonanceTimingMonitor(threshold_sigma=3.0)
+        for value in [9.9, 10.1] * 100:  # 200 samples -> 170 scores
             monitor.record_timing("test_op", value)
 
-        # Warning-level anomaly (3σ < dev < 5σ)
-        # With mean=10.0, std=0.1: deviation for 10.4 = (10.4-10.0)/0.1 = 4σ
-        anomaly = monitor.record_timing("test_op", 10.4)
-        if anomaly:
-            assert anomaly.severity == "warning"
+        # Warning band: 10.6 is ~4.0 robust sigma — above the 3.0 floor
+        # (clean alternating scores calibrate near 0.67, so the floor
+        # governs), below the 6.0 criticality boundary.
+        anomaly = monitor.record_timing("test_op", 10.6)
+        assert anomaly is not None
+        assert anomaly.severity == "warning"
 
-        # Critical-level anomaly (dev > 5σ)
-        # Need extreme value because Welford updates stats with each value
-        # Use 11.0 to ensure deviation > 5σ even after baseline drift
+        # Critical: 11.0 is ~6.7 robust sigma >= 2 x the operating
+        # threshold.  Unreachable before 5.0.0 (the z-score was
+        # mathematically capped below 3.0); reachable and pinned now.
         anomaly = monitor.record_timing("test_op", 11.0)
-        if anomaly:
-            assert anomaly.severity == "critical"
+        assert anomaly is not None
+        assert anomaly.severity == "critical"
 
     def test_detect_resonance_insufficient_data(self) -> None:
         """Test resonance detection with insufficient samples."""

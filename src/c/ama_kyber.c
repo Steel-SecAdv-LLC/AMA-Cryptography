@@ -2296,11 +2296,16 @@ static int16_t montgomery_reduce(int32_t a) {
  * Reduces a mod q for values up to 2^26
  */
 static int16_t barrett_reduce(int16_t a) {
-    int16_t t;
-    const int16_t v = ((1 << 26) + KYBER_Q / 2) / KYBER_Q;
-    t = ((int32_t)v * a) >> 26;
+    /* All intermediates in int32: v*a is at most 20159 * 32768 < 2^31, the
+     * shifted quotient t lies in [-10, 9] (exhaustively verified over every
+     * int16_t input), and a - t*q lies in [0, q] for in-contract inputs and
+     * within (-2q, 2q) for the full int16_t range — so the single narrowing
+     * cast at the return cannot change the value.  Bit-identical to the
+     * previous int16_t-accumulator form over all 65,536 inputs. */
+    const int32_t v = ((1 << 26) + KYBER_Q / 2) / KYBER_Q;
+    int32_t t = (v * (int32_t)a) >> 26;
     t *= KYBER_Q;
-    return a - t;
+    return (int16_t)(a - t);
 }
 
 /**
@@ -2680,7 +2685,7 @@ static void poly_compress(uint8_t* r, const poly* a, int bits) {
                 int16_t coeff = coeff_normalize(a->coeffs[2*i + j]);
                 t[j] = (uint8_t)(kyber_compress_d((uint32_t)coeff, 4) & 0xF);
             }
-            r[i] = t[0] | (t[1] << 4);
+            r[i] = (uint8_t)(t[0] | (t[1] << 4));
         }
     } else if (bits == 5) {
         /* Compress to 5 bits per coefficient */
@@ -2689,11 +2694,14 @@ static void poly_compress(uint8_t* r, const poly* a, int bits) {
                 int16_t coeff = coeff_normalize(a->coeffs[8*i + j]);
                 t[j] = (uint8_t)(kyber_compress_d((uint32_t)coeff, 5) & 0x1F);
             }
-            r[5*i + 0] = (t[0]) | (t[1] << 5);
-            r[5*i + 1] = (t[1] >> 3) | (t[2] << 2) | (t[3] << 7);
-            r[5*i + 2] = (t[3] >> 1) | (t[4] << 4);
-            r[5*i + 3] = (t[4] >> 4) | (t[5] << 1) | (t[6] << 6);
-            r[5*i + 4] = (t[6] >> 2) | (t[7] << 3);
+            /* (uint8_t) narrowing is the packing itself: high bits of a
+             * shifted 5-bit field continue in the next byte (same explicit-
+             * cast style as the 10-bit branch below). */
+            r[5*i + 0] = (uint8_t)((t[0]) | (t[1] << 5));
+            r[5*i + 1] = (uint8_t)((t[1] >> 3) | (t[2] << 2) | (t[3] << 7));
+            r[5*i + 2] = (uint8_t)((t[3] >> 1) | (t[4] << 4));
+            r[5*i + 3] = (uint8_t)((t[4] >> 4) | (t[5] << 1) | (t[6] << 6));
+            r[5*i + 4] = (uint8_t)((t[6] >> 2) | (t[7] << 3));
         }
     } else if (bits == 10) {
         /* Compress to 10 bits per coefficient */
@@ -2768,14 +2776,18 @@ static void poly_decompress(poly* r, const uint8_t* a, int bits) {
         }
     } else if (bits == 11) {
         for (i = 0; i < KYBER_N / 8; i++) {
-            uint16_t t0 = ((uint16_t)a[11*i]) | (((uint16_t)a[11*i + 1] & 0x07) << 8);
-            uint16_t t1 = ((uint16_t)a[11*i + 1] >> 3) | (((uint16_t)a[11*i + 2] & 0x3F) << 5);
-            uint16_t t2 = ((uint16_t)a[11*i + 2] >> 6) | ((uint16_t)a[11*i + 3] << 2) | (((uint16_t)a[11*i + 4] & 0x01) << 10);
-            uint16_t t3 = ((uint16_t)a[11*i + 4] >> 1) | (((uint16_t)a[11*i + 5] & 0x0F) << 7);
-            uint16_t t4 = ((uint16_t)a[11*i + 5] >> 4) | (((uint16_t)a[11*i + 6] & 0x7F) << 4);
-            uint16_t t5 = ((uint16_t)a[11*i + 6] >> 7) | ((uint16_t)a[11*i + 7] << 1) | (((uint16_t)a[11*i + 8] & 0x03) << 9);
-            uint16_t t6 = ((uint16_t)a[11*i + 8] >> 2) | (((uint16_t)a[11*i + 9] & 0x1F) << 6);
-            uint16_t t7 = ((uint16_t)a[11*i + 9] >> 5) | ((uint16_t)a[11*i + 10] << 3);
+            /* Every assembled value is an 11-bit field scattered over at
+             * most 2^11 (largest term: a byte shifted left by 3, < 2^11),
+             * so the (uint16_t) narrowing after int promotion is
+             * value-preserving. */
+            uint16_t t0 = (uint16_t)(((uint16_t)a[11*i]) | (((uint16_t)a[11*i + 1] & 0x07) << 8));
+            uint16_t t1 = (uint16_t)(((uint16_t)a[11*i + 1] >> 3) | (((uint16_t)a[11*i + 2] & 0x3F) << 5));
+            uint16_t t2 = (uint16_t)(((uint16_t)a[11*i + 2] >> 6) | ((uint16_t)a[11*i + 3] << 2) | (((uint16_t)a[11*i + 4] & 0x01) << 10));
+            uint16_t t3 = (uint16_t)(((uint16_t)a[11*i + 4] >> 1) | (((uint16_t)a[11*i + 5] & 0x0F) << 7));
+            uint16_t t4 = (uint16_t)(((uint16_t)a[11*i + 5] >> 4) | (((uint16_t)a[11*i + 6] & 0x7F) << 4));
+            uint16_t t5 = (uint16_t)(((uint16_t)a[11*i + 6] >> 7) | ((uint16_t)a[11*i + 7] << 1) | (((uint16_t)a[11*i + 8] & 0x03) << 9));
+            uint16_t t6 = (uint16_t)(((uint16_t)a[11*i + 8] >> 2) | (((uint16_t)a[11*i + 9] & 0x1F) << 6));
+            uint16_t t7 = (uint16_t)(((uint16_t)a[11*i + 9] >> 5) | ((uint16_t)a[11*i + 10] << 3));
 
             r->coeffs[8*i + 0] = (int16_t)(((uint32_t)(t0 & 0x7FF) * KYBER_Q + 1024) >> 11);
             r->coeffs[8*i + 1] = (int16_t)(((uint32_t)(t1 & 0x7FF) * KYBER_Q + 1024) >> 11);

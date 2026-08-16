@@ -38,6 +38,7 @@
 #include "ama_dispatch.h"
 #include <stdio.h>
 #include <stdint.h>
+#include <inttypes.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -172,11 +173,14 @@ int main(void) {
 #else
     const ama_dispatch_table_t *dt = ama_get_dispatch_table();
     if (dt->argon2_g != ama_argon2_g_avx2) {
+        /* Function-pointer-to-integer via explicit cast is sanctioned by
+         * C11 6.3.2.3p6; the object-pointer (void *) form is not, and
+         * trips -Wpedantic. */
         printf("  SKIP: dispatcher did not select the AVX2 Argon2 G\n"
-               "        kernel (argon2_g=%p, env opt-out, or future\n"
+               "        kernel (argon2_g=%#" PRIxPTR ", env opt-out, or future\n"
                "        ISA wiring landed first).  Nothing to compare\n"
                "        against the scalar reference.\n",
-               (void *)dt->argon2_g);
+               (uintptr_t)dt->argon2_g);
         return 77;
     }
 

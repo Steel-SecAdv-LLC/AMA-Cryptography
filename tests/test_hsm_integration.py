@@ -748,6 +748,15 @@ class TestPKCS11Paths:
         for hsm_type, paths in HSMKeyStorage.PKCS11_PATHS.items():
             assert len(paths) >= 1, f"{hsm_type} has no library paths"
 
+    def test_softhsm_auto_resolution_covers_windows(self) -> None:
+        """The choco/Disig install path is auto-resolvable, not override-only.
+
+        TestSoftHSMIntegration constructs ``HSMKeyStorage("softhsm")`` with no
+        ``library_path`` override, so the Windows lane only works if the DLL
+        the ``softhsm.install`` package lays down is in the search list.
+        """
+        assert "C:\\SoftHSM2\\lib\\softhsm2-x64.dll" in HSMKeyStorage.PKCS11_PATHS["softhsm"]
+
 
 # ===========================================================================
 # Conditional integration test: SoftHSM2
@@ -762,6 +771,7 @@ _SOFTHSM_LIB_CANDIDATES = (
     "/usr/lib/aarch64-linux-gnu/softhsm/libsofthsm2.so",
     "/usr/local/lib/softhsm/libsofthsm2.so",  # Homebrew on Intel macOS
     "/opt/homebrew/lib/softhsm/libsofthsm2.so",  # Homebrew on Apple Silicon
+    "C:\\SoftHSM2\\lib\\softhsm2-x64.dll",  # Disig MSI via `choco install softhsm.install`
 )
 
 
@@ -776,12 +786,21 @@ def _softhsm_module_path() -> "str | None":
     a host where it *is* installed — the same failure as the ``.so.2`` SONAME
     pin in the ACVP harness, and it would have made provisioning the macOS
     runners look like it worked while the lane went on skipping.
+
+    On win32 the Disig build lays the module out differently: the DLL sits
+    directly under ``<prefix>\\lib`` (no ``softhsm`` subdirectory) as
+    ``softhsm2-x64.dll``, so the derivation has its own arm rather than
+    pretending the POSIX layout is universal.
     """
     util = shutil.which("softhsm2-util")
     if util:
-        # <prefix>/bin/softhsm2-util -> <prefix>/lib/softhsm/libsofthsm2.so
         prefix = os.path.dirname(os.path.dirname(os.path.realpath(util)))
-        derived = os.path.join(prefix, "lib", "softhsm", "libsofthsm2.so")
+        if sys.platform == "win32":
+            # <prefix>\bin\softhsm2-util.exe -> <prefix>\lib\softhsm2-x64.dll
+            derived = os.path.join(prefix, "lib", "softhsm2-x64.dll")
+        else:
+            # <prefix>/bin/softhsm2-util -> <prefix>/lib/softhsm/libsofthsm2.so
+            derived = os.path.join(prefix, "lib", "softhsm", "libsofthsm2.so")
         if os.path.exists(derived):
             return derived
     return next((c for c in _SOFTHSM_LIB_CANDIDATES if os.path.exists(c)), None)
@@ -814,7 +833,10 @@ def _softhsm_unavailable_reason() -> str:
     """Which half is missing, so a skip line says what to install."""
     missing = []
     if _SOFTHSM_LIB is None:
-        missing.append("SoftHSM2 module (apt-get install softhsm2 / brew install softhsm)")
+        missing.append(
+            "SoftHSM2 module (apt-get install softhsm2 / brew install softhsm / "
+            "choco install softhsm.install)"
+        )
     if shutil.which("softhsm2-util") is None:
         missing.append("softhsm2-util")
     if not _pykcs11_importable():
@@ -836,35 +858,29 @@ def test_softhsm_lane_is_provisioned_in_ci() -> None:
     promises every backend is present, a missing token is a failure with a
     remedy attached, not a quiet skip.
 
-    Scoped to the platforms CI actually provisions: Linux (apt) and macOS
-    (Homebrew).  An earlier revision asserted on every platform and so failed
-    all five Windows matrix entries for a package no runner-available manager
-    installs there — a false failure, which is its own kind of broken gate: a
-    check that fires where nothing is wrong teaches readers to ignore it.
+    Asserted on every platform CI runs.  The history of this test's scope is
+    a history of claims being retired one by one.  An earlier revision scoped
+    it to Linux only and wrote the macOS gap up as a known limitation; that
+    was a choice presented as a constraint — `brew install softhsm` ships the
+    same PKCS#11 module — so macOS was provisioned and asserted instead.
 
-    A later revision then scoped it to Linux *only* and wrote the macOS gap up
-    as a known limitation.  That was a choice presented as a constraint —
-    `brew install softhsm` ships the same PKCS#11 module — so macOS is now
-    provisioned and asserted rather than explained.
+    Windows was the last holdout, excused by "SoftHSM2 has no maintained
+    package on any Windows runner manager, only a manual installer".  That
+    claim was checked and found false: Chocolatey's ``softhsm.install``
+    package (which wraps the Disig SoftHSM2-for-Windows MSI, installing to
+    ``C:\\SoftHSM2``) is live on the community feed, and ``choco`` is on
+    every windows-latest runner.  CI now installs it and puts
+    ``C:\\SoftHSM2\\bin`` on the job PATH, so Windows is held to the same
+    provisioning standard as Linux and macOS rather than skipped on the
+    strength of a falsified premise.
 
-    Windows stays out, and that one is a real constraint: SoftHSM2 has no
-    maintained package on any Windows runner manager, only a manual
-    installer.  HSMKeyStorage's PKCS#11 interaction is platform-independent
-    Python, so the Linux and macOS lanes cover the logic.
-
-    The scope is not a hole: ``test_the_workflow_still_provisions_softhsm``
-    asserts the provisioning steps still exist, so deleting one fails the
-    suite rather than silently returning this lane to the skip it spent this
-    release's whole history in.
+    The requirement is not a hole if a step is deleted:
+    ``test_the_workflow_still_provisions_softhsm`` asserts the provisioning
+    steps still exist, so removing one fails the suite rather than silently
+    returning this lane to the skip it spent this release's whole history in.
     """
     if os.environ.get("AMA_CI_REQUIRE_BACKENDS", "").lower() not in ("true", "1", "yes"):
         pytest.skip("AMA_CI_REQUIRE_BACKENDS is not set — local run")
-    if not (sys.platform.startswith("linux") or sys.platform == "darwin"):
-        pytest.skip(
-            f"SoftHSM2 has no maintained package manager on {sys.platform}; "
-            f"CI provisions it on Linux and macOS. "
-            f"See test_the_workflow_still_provisions_softhsm."
-        )
     assert _SOFTHSM_AVAILABLE, (
         _softhsm_unavailable_reason()
         + ". This job asserts every backend is provisioned; install SoftHSM2 "
@@ -900,6 +916,16 @@ def test_the_workflow_still_provisions_softhsm() -> None:
             f"{name} sets AMA_CI_REQUIRE_BACKENDS but no longer installs softhsm2. "
             f"TestSoftHSMIntegration is the only real PKCS#11 coverage in the tree; "
             f"without this step it skips while the flag claims every backend is present."
+        )
+        # Windows evidence is asserted separately: the choco package name is
+        # the only string the apt/brew checks above cannot be satisfied by,
+        # so deleting just the Windows step would otherwise stay green while
+        # test_softhsm_lane_is_provisioned_in_ci failed the Windows entries.
+        assert "softhsm.install" in text, (
+            f"{name} sets AMA_CI_REQUIRE_BACKENDS but no longer installs the "
+            f"Windows SoftHSM2 token (choco softhsm.install). The Windows matrix "
+            f"entries assert the real PKCS#11 lane runs there; without this step "
+            f"they fail — or, if the assertion is also removed, silently skip."
         )
         assert "hsm]" in text, (
             f"{name} no longer installs the [hsm] extra, so PyKCS11 is absent and the "

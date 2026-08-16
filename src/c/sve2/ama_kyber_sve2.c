@@ -95,9 +95,9 @@ static inline int16_t barrett_reduce_scalar(int16_t a) {
      * comment above claimed it "matches generic C reference exactly"; it did
      * not, and nothing noticed because AMA_ENABLE_SVE2 was off in every CI
      * configuration, so this code had never run under the test that pins it. */
-    int16_t t = (int16_t)(((int32_t)KYBER_BARRETT_V * a) >> 26);
+    int32_t t = ((int32_t)KYBER_BARRETT_V * (int32_t)a) >> 26;
     t *= KYBER_Q;
-    return a - t;
+    return (int16_t)(a - t);
 }
 
 /* ============================================================================

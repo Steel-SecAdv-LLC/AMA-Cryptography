@@ -689,6 +689,18 @@ class EWMAStats:
         The constant 1.4826 makes MAD consistent with standard deviation
         for normally distributed data.
 
+        .. note::
+            The fixed default threshold of 3.5 is calibrated for **normally
+            distributed** data (~99.95% coverage).  Real operation timings
+            are heavy-tailed: measured on wall-clock Ed25519 signing
+            timings, 11.4% of clean samples exceed this threshold
+            (``benchmarks/detector_baseline_eval.py``).  For that reason
+            ``ResonanceTimingMonitor`` no longer uses this fixed rule for
+            alarming — it calibrates the threshold for :meth:`robust_score`
+            empirically against a per-operation false-alarm budget.  This
+            method is retained as a documented statistical helper for
+            callers that know their data is near-normal.
+
         Args:
             x: Value to check
             threshold: Detection threshold (default 3.5 = ~99.95% for normal)
@@ -705,6 +717,35 @@ class EWMAStats:
 
         modified_z = abs(x - median) / (1.4826 * mad)
         return modified_z > threshold
+
+    def robust_score(self, x: float) -> float:
+        """Robust standardized deviation of ``x`` from the current window.
+
+        ``|x - median| / (1.4826 * MAD)`` over the values recorded so far —
+        call BEFORE :meth:`update` so the score is measured against a window
+        that does not yet contain ``x``.  (Scoring after the update lets the
+        observation shift its own baseline: with EWMA smoothing ``alpha`` the
+        post-update z-score is bounded by ``sqrt((1 - alpha)/alpha)`` — 3.0
+        at the default ``alpha=0.1`` — which is how every per-operation
+        ``threshold_sigma`` >= 3.0 became unreachable in the pre-5.0.0 rule.)
+
+        Scale degradation, stated: when the window's MAD is 0 (a perfectly
+        constant window, e.g. a quantized clock), the EWMA standard deviation
+        is used as the scale; when that is also 0, any ``x`` equal to the
+        constant scores 0.0 and any other ``x`` scores ``inf``.
+
+        Returns 0.0 while fewer than 10 values have been recorded (no stable
+        window to score against).
+        """
+        if len(self._recent_values) < 10:
+            return 0.0
+        median, mad = self._median_and_mad()
+        scale = 1.4826 * mad
+        if scale == 0.0:
+            scale = math.sqrt(self.variance)
+        if scale == 0.0:
+            return 0.0 if x == median else math.inf
+        return abs(x - median) / scale
 
     def reset(self) -> None:
         """Reset all accumulators to initial state."""
@@ -733,9 +774,15 @@ class TimingAnomaly:
         operation: Name of the cryptographic operation
         expected_ms: Baseline expected duration in milliseconds
         observed_ms: Actual observed duration in milliseconds
-        deviation_sigma: Number of standard deviations from baseline
+        deviation_sigma: For a ``point`` anomaly, the robust standardized
+            deviation; for a ``shift`` event, the accumulated sign-CUSUM
+            statistic; for a ``cross_operation`` anomaly, the ratio
+            deviation
         severity: Alert level ('info', 'warning', 'critical')
         timestamp: Unix timestamp of detection
+        kind: Which detection path raised this — 'point' (isolated outlier),
+            'shift' (edge-triggered sustained-regime-change event), or
+            'cross_operation' (timing-ratio anomaly)
     """
 
     operation: str
@@ -744,6 +791,7 @@ class TimingAnomaly:
     deviation_sigma: float
     severity: str  # 'info', 'warning', 'critical'
     timestamp: float
+    kind: str = "point"  # 'point', 'shift', 'cross_operation'
 
 
 @dataclass
@@ -1011,31 +1059,172 @@ class NonceTracker:
 
 class ResonanceTimingMonitor:
     """
-    Detect timing anomalies via frequency-domain analysis.
-
-    Uses FFT-based resonance detection to identify periodic timing patterns
-    that may indicate anomalous behavior in cryptographic operations.
+    Detect timing anomalies via statistical and frequency-domain analysis.
 
     This is a MONITORING system that surfaces statistical anomalies for
     security review. It does not guarantee detection of timing attacks
     or provide side-channel resistance.
 
+    Detection rule (5.0.0 — measured, not assumed):
+
+    * **Point anomalies** are scored with the robust standardized deviation
+      ``|x - median| / (1.4826 * MAD)`` computed against the trailing window
+      *before* the observation enters it.  The alarm threshold per operation
+      is ``max(threshold_sigma, calibrated)`` where ``calibrated`` is the
+      empirical ``(1 - alarm_budget)`` quantile of recently observed clean
+      scores.  ``threshold_sigma`` is therefore a sensitivity floor that
+      governs on well-behaved (near-normal) data, and the empirical quantile
+      governs on the heavy-tailed distributions real timings exhibit — where
+      any fixed Gaussian-calibrated constant is wrong by orders of magnitude
+      (measured on Ed25519 wall-clock timings: a 1% false-alarm budget needs
+      a threshold near 628 and 0.1% near 1073, versus the Gaussian 3.5;
+      ``benchmarks/detector_baseline_eval.py`` regenerates this evidence and
+      CI gates on it).
+    * **Sustained shifts** are detected with a two-sided sign CUSUM against
+      a reference median locked after 200 observations, evaluated on every
+      sample.  A trailing window absorbs a regime change by construction
+      (the pre-5.0.0 rule measured 17.6% recall on a 30% shift); the sign
+      CUSUM accumulates distribution-free evidence against the *locked*
+      reference instead, and keeps flagging while the shifted regime
+      persists (measured: >= 0.95 recall on a 30% shift across seeds, with
+      the shift path alone flagging <= 0.025% of clean samples).
+    * The pre-5.0.0 rule — a z-score against statistics that had already
+      absorbed the observation (mathematically capped below
+      ``sqrt((1-alpha)/alpha)`` = 3.0 at the default ``alpha``), OR'd with a
+      fixed Gaussian MAD threshold that produced a measured 12.5% false-alarm
+      rate and made every ``threshold_sigma`` >= 3.0 unreachable — is
+      removed, not re-tuned.
+
     Features:
-    - Per-operation baseline statistics (ed25519_sign, dilithium_verify, etc.)
-    - EWMA with MAD for robust, outlier-resistant anomaly detection
+    - Per-operation baseline statistics and anomaly profiles, keyed by the
+      operation names the instrumented call sites actually emit
+    - Empirically calibrated false-alarm budgets (heavy-tail safe)
+    - Two-sided winsorized CUSUM for sustained regime changes
     - High-resolution timing via perf_counter_ns() (cross-platform)
     - Sliding window FFT analysis for periodic pattern detection
     """
 
-    # Priority 8: Default operation-specific anomaly profiles
+    #: Fraction of clean operations an operation's point-anomaly path may
+    #: flag once calibrated (the default false-alarm budget).  1% is the
+    #: review budget the evaluation harness gates against; operations whose
+    #: timing is legitimately variable get a smaller budget in their profile
+    #: because their alarms carry less information per review.
+    DEFAULT_ALARM_BUDGET: ClassVar[float] = 0.01
+
+    # Priority 8: Default operation-specific anomaly profiles.
+    #
+    # Keys cover BOTH instrumentation vocabularies that exist in this
+    # package: legacy_compat emits primitive-specific names (ed25519_sign,
+    # dilithium_verify, hmac_verify, ...) while crypto_api emits generic
+    # names (sign / verify / encrypt / decrypt / sphincs_sign).  The
+    # pre-5.0.0 table carried aes_gcm_encrypt / aes_gcm_decrypt — names no
+    # production call site ever emitted, so those profiles were dead
+    # configuration; they are kept for external callers but the generic
+    # names the API actually emits are now profiled too.
+    #
+    # threshold_sigma is the robust-score floor (governs on near-normal
+    # data); alarm_budget is the calibrated false-alarm budget (governs on
+    # heavy-tailed data).  Rejection-sampling signatures (ML-DSA) and
+    # hash-tree signatures (SLH-DSA) have legitimately variable timing, so
+    # their alarms are lower-information and get a 5x smaller budget.
     DEFAULT_ANOMALY_PROFILES: ClassVar[Dict[str, Dict[str, Any]]] = {
-        "ed25519_sign": {"threshold_sigma": 2.0, "normalize_by_size": False},
-        "ed25519_verify": {"threshold_sigma": 2.0, "normalize_by_size": False},
-        "dilithium_sign": {"threshold_sigma": 5.0, "normalize_by_size": False},
-        "dilithium_verify": {"threshold_sigma": 3.0, "normalize_by_size": False},
-        "aes_gcm_encrypt": {"threshold_sigma": 3.0, "normalize_by_size": True},
-        "aes_gcm_decrypt": {"threshold_sigma": 3.0, "normalize_by_size": True},
+        # legacy_compat instrumentation names:
+        "ed25519_sign": {"threshold_sigma": 2.0, "alarm_budget": 0.01, "normalize_by_size": False},
+        "ed25519_verify": {
+            "threshold_sigma": 2.0,
+            "alarm_budget": 0.01,
+            "normalize_by_size": False,
+        },
+        "dilithium_sign": {
+            "threshold_sigma": 5.0,
+            "alarm_budget": 0.002,
+            "normalize_by_size": False,
+        },
+        "dilithium_verify": {
+            "threshold_sigma": 3.0,
+            "alarm_budget": 0.01,
+            "normalize_by_size": False,
+        },
+        # crypto_api instrumentation names:
+        "sign": {"threshold_sigma": 3.0, "alarm_budget": 0.01, "normalize_by_size": False},
+        "verify": {"threshold_sigma": 3.0, "alarm_budget": 0.01, "normalize_by_size": False},
+        "sphincs_sign": {"threshold_sigma": 5.0, "alarm_budget": 0.002, "normalize_by_size": False},
+        # crypto_api's 'encrypt'/'decrypt' are ML-KEM encapsulate/decapsulate
+        # — fixed-size operations, so size normalization does not apply.
+        "encrypt": {"threshold_sigma": 3.0, "alarm_budget": 0.01, "normalize_by_size": False},
+        "decrypt": {"threshold_sigma": 3.0, "alarm_budget": 0.01, "normalize_by_size": False},
+        # Kept for external callers (no in-tree emitter):
+        "aes_gcm_encrypt": {
+            "threshold_sigma": 3.0,
+            "alarm_budget": 0.01,
+            "normalize_by_size": True,
+        },
+        "aes_gcm_decrypt": {
+            "threshold_sigma": 3.0,
+            "alarm_budget": 0.01,
+            "normalize_by_size": True,
+        },
     }
+
+    #: Robust scores retained per operation for empirical threshold
+    #: calibration.  4096 scores bound both memory and the smallest
+    #: estimable tail quantile (1/4096 < every supported alarm_budget).
+    _SCORE_HISTORY_LEN: ClassVar[int] = 4096
+    #: Recompute the cached calibrated threshold every N observations.
+    _THRESHOLD_RECOMPUTE_INTERVAL: ClassVar[int] = 32
+
+    # Two-sided SIGN CUSUM parameters for the sustained-shift path.  The
+    # statistic accumulates sign(x - mu0), not a standardized magnitude:
+    # under the no-shift hypothesis P(x > median) = 1/2 for ANY continuous
+    # distribution, so the test is distribution-free — a magnitude CUSUM
+    # standardized by a robust scale was measured to false-alarm on 77% of
+    # clean right-skewed timing samples, because the skewed tail's residuals
+    # persistently exceed any symmetric reference drift.
+    #
+    # (k, h) were tuned EMPIRICALLY, not from a per-excursion approximation
+    # (a first draft used k=0.25, h=8 sized from the single-excursion
+    # crossing bound e^(-theta*h); over a 4,000-sample run the ~1,000
+    # independent excursions multiply that bound, and the measured worst
+    # seed false-alarmed on 46% of clean samples).  Measured over 40 seeded
+    # clean lognormal runs x 4,000 samples and 15 seeded 30%-shift runs:
+    #
+    #   k=0.5 h=8 :  shift+point clean 1.46% worst, recall min 0.958
+    #   k=0.5 h=10:  shift+point clean 1.26% worst, recall min 0.956
+    #   k=0.5 h=12:  shift+point clean 1.26% worst, recall min 0.953
+    #
+    # k=0.5, h=10 is the chosen point; with the point path disabled the
+    # shift path alone false-alarms on at most 0.025% of clean samples
+    # (worst seed).  A sustained shift moving p = P(x > mu0) to ~0.9
+    # accumulates ~0.28 per sample and crosses h in ~36 samples, then keeps
+    # flagging while the regime persists.  benchmarks/detector_baseline_eval.py
+    # regenerates these measurements and CI gates on them.  The accumulator
+    # cap bounds recovery after a regime returns to baseline at ~cap/k
+    # samples instead of the shift's duration.
+    _CUSUM_K: ClassVar[float] = 0.5
+    _CUSUM_H: ClassVar[float] = 10.0
+    _CUSUM_CAP: ClassVar[float] = 40.0
+    #: A shift alarm is an EVENT, not a per-sample condition: the alarm is
+    #: raised once when the statistic crosses h (and escalated once to
+    #: 'critical' if it later reaches 2h); after the shifted regime has
+    #: persisted for this many samples the reference median is re-locked on
+    #: the new regime and accumulation restarts — the operating point moved,
+    #: the operator was told, and the monitor tracks the new normal.
+    #: Measured motivation: on real hosts CPU frequency scaling moves the
+    #: timing median mid-run; per-sample shift flagging turned one genuine
+    #: regime change into a 27% "false"-alarm rate on clean traffic.
+    _SHIFT_REBASELINE_SAMPLES: ClassVar[int] = 300
+    #: The reference median locks after this many observations.  The sign
+    #: test's clean-traffic drift is 2*delta - k where delta is the error in
+    #: P(x > mu0) induced by estimating the median from n samples
+    #: (sd ~ 1/(2*sqrt(n))).  Locking at n=30 (the warmup point) puts the
+    #: k/2 = 0.125 tolerance at 1.4 standard errors — measured: one seeded
+    #: clean run false-alarmed on 96% of samples from a mis-frozen median.
+    #: At n=200 the tolerance sits at 3.5 standard errors (~2e-4 of
+    #: operations would drift).  Before the lock the reference tracks the
+    #: trailing-window median, which keeps E[sign] ~ 0 on clean traffic at
+    #: the cost of absorbing a shift that occurs inside the first 200
+    #: samples — the documented warmup blind spot.
+    _CUSUM_LOCK_SAMPLES: ClassVar[int] = 200
 
     def __init__(
         self,
@@ -1064,7 +1253,10 @@ class ResonanceTimingMonitor:
             anomaly_profiles: Per-operation anomaly detection profiles (Priority 8).
                 Keys are operation names, values are dicts with threshold_sigma
                 and normalize_by_size.
-            drift_check_interval: Check for timing drift every N samples (Priority 7).
+            drift_check_interval: Retained for API compatibility.  The
+                pre-5.0.0 drift check ran only every N samples; the
+                sustained-shift CUSUM that replaced it evaluates every
+                sample, so this parameter no longer drives detection.
 
         Performance Optimization:
             Uses collections.deque with maxlen for O(1) append and automatic
@@ -1088,6 +1280,17 @@ class ResonanceTimingMonitor:
         self._ratio_samples: Dict[Tuple[str, str], Deque[float]] = {}
         # Priority 7: Frozen baselines for drift detection
         self._frozen_baselines: Dict[str, Tuple[float, float]] = {}  # (frozen_mean, frozen_std)
+        # Empirical threshold calibration: robust scores observed per
+        # operation, and a cached (observation_count, threshold) pair so the
+        # quantile is recomputed every _THRESHOLD_RECOMPUTE_INTERVAL
+        # observations instead of per call.
+        self._score_history: Dict[str, Deque[float]] = {}
+        self._calibrated_threshold: Dict[str, Tuple[int, Optional[float]]] = {}
+        # Sustained-shift sign-CUSUM state per operation: mu0 (reference
+        # median — tracking until locked), sigma0 (robust warmup scale, kept
+        # for reporting), gp/gn (two-sided accumulators), locked (True once
+        # the reference median is frozen at _CUSUM_LOCK_SAMPLES).
+        self._shift_state: Dict[str, Dict[str, Any]] = {}
         # Priority 8: Operation-specific anomaly profiles
         self.anomaly_profiles: Dict[str, Dict[str, Any]] = dict(self.DEFAULT_ANOMALY_PROFILES)
         if anomaly_profiles:
@@ -1148,6 +1351,7 @@ class ResonanceTimingMonitor:
             self._ewma_stats[operation] = EWMAStats(
                 alpha=self.ewma_alpha, window_size=self.window_size
             )
+            self._score_history[operation] = deque(maxlen=self._SCORE_HISTORY_LEN)
 
         # Priority 8: Normalize by input size if profile says so
         profile = self.anomaly_profiles.get(operation, {})
@@ -1156,88 +1360,104 @@ class ResonanceTimingMonitor:
         if normalize_by_size and input_size and input_size > 0:
             effective_duration = duration_ms / input_size
 
+        ewma = self._ewma_stats[operation]
+        prior_count = self._incremental_stats[operation].n
+
+        # ------------------------------------------------------------------
+        # DETECT FIRST, UPDATE AFTER.  Every statistic consulted below is
+        # measured against state that does not yet contain this observation.
+        # The pre-5.0.0 rule updated first, which bounded the achievable
+        # z-score below sqrt((1-alpha)/alpha) = 3.0 at the default alpha —
+        # making every threshold_sigma >= 3.0, and 'critical' severity,
+        # mathematically unreachable.
+        # ------------------------------------------------------------------
+
+        is_anomaly = False
+        severity = "warning"
+        deviation = 0.0
+        shift_anomaly: Optional[TimingAnomaly] = None
+
+        if prior_count >= 30:
+            is_anomaly, severity, deviation = self._detect_point_anomaly(
+                operation, effective_duration, profile, ewma
+            )
+            shift_anomaly = self._step_shift_cusum(operation, effective_duration, ewma, prior_count)
+
+            # The observed score joins the calibration history AFTER the
+            # decision, so a sample can never raise the threshold it is
+            # judged against.  Calibration deliberately ingests every score
+            # (alarming ones included): a quantile over the trailing window
+            # is robust to the alarm fraction itself, and excluding flagged
+            # samples would create a ratchet that can only tighten.
+            self._score_history[operation].append(deviation)
+
+        # ------------------------------------------------------------------
+        # UPDATE PHASE
+        # ------------------------------------------------------------------
         # O(1) append with automatic pruning via deque maxlen
         self.timing_history[operation].append(effective_duration)
-
-        # Update both stats (EWMA provides responsiveness, Welford provides accuracy)
         self._incremental_stats[operation].update(effective_duration)
-        ewma_mean, ewma_std = self._ewma_stats[operation].update(effective_duration)
-
-        # Get sample count
+        ewma_mean, ewma_std = ewma.update(effective_duration)
         sample_count = self._incremental_stats[operation].n
 
-        # Priority 7: Capture frozen baseline after warmup
-        if sample_count == 30 and operation not in self._frozen_baselines:
-            welford_mean, welford_std = self._incremental_stats[operation].get_stats()
-            self._frozen_baselines[operation] = (welford_mean, welford_std)
-
-        # Need baseline before detection
-        if sample_count < 30:
-            return None
-
-        # Choose which stats to use
+        # Choose which stats to report (EWMA responsiveness vs Welford accuracy)
         if self.use_ewma:
             mean, std = ewma_mean, ewma_std
         else:
             mean, std = self._incremental_stats[operation].get_stats()
 
-        # Update baseline stats for reporting
-        self.baseline_stats[operation] = {
-            "mean": mean,
-            "std": std,
-            "samples": sample_count,
-            "mad": self._ewma_stats[operation].get_mad(),
-        }
+        # Priority 7: establish the shift reference once warmup completes
+        # (after the 30th recorded sample, matching the documented warmup).
+        # Robust location (median) — a heavy right tail corrupts a mean
+        # baseline but not this one.  The reference TRACKS the trailing
+        # window until _CUSUM_LOCK_SAMPLES observations, then locks (see the
+        # constant's comment for the finite-sample error analysis).
+        if sample_count == 30 and operation not in self._shift_state:
+            mu0, mad0 = ewma._median_and_mad()
+            sigma0 = 1.4826 * mad0
+            if sigma0 == 0.0:
+                sigma0 = math.sqrt(ewma.variance)
+            self._shift_state[operation] = {
+                "mu0": mu0,
+                "sigma0": sigma0,
+                "gp": 0.0,
+                "gn": 0.0,
+                "locked": False,
+                "in_shift": False,
+                "escalated": False,
+                "shift_run": 0,
+            }
+            # Kept for backward compatibility with readers of the Welford
+            # frozen baseline (reporting only; no longer drives alarming).
+            if operation not in self._frozen_baselines:
+                self._frozen_baselines[operation] = self._incremental_stats[operation].get_stats()
 
-        # Priority 8: Use operation-specific threshold or global
-        op_threshold = profile.get("threshold_sigma", self.threshold)
+        if sample_count >= 30:
+            # Update baseline stats for reporting
+            self.baseline_stats[operation] = {
+                "mean": mean,
+                "std": std,
+                "samples": sample_count,
+                "mad": ewma.get_mad(),
+            }
 
-        # Detect statistical anomaly using both Z-score and MAD
-        is_anomaly = False
-        deviation = 0.0
-
-        # Numerical tolerance for floating-point threshold comparisons
-        THRESHOLD_EPSILON = 0.01
-
-        # Primary: Z-score based detection
-        if std > 0:
-            deviation = abs(effective_duration - mean) / std
-            if deviation >= op_threshold - THRESHOLD_EPSILON:
-                is_anomaly = True
-
-        # Secondary: MAD-based detection (more robust to outliers)
-        if self.use_ewma and self._ewma_stats[operation].is_anomaly_mad(effective_duration):
-            is_anomaly = True
-
-        # Priority 7: Drift detection (does NOT preempt Z-score/MAD — both reported)
-        drift_anomaly: Optional[TimingAnomaly] = None
-        if (
-            sample_count > 30
-            and sample_count % self.drift_check_interval == 0
-            and operation in self._frozen_baselines
-        ):
-            frozen_mean, frozen_std = self._frozen_baselines[operation]
-            if frozen_std > 0:
-                drift = abs(mean - frozen_mean) / frozen_std
-                if drift > 2.0:
-                    drift_anomaly = TimingAnomaly(
-                        operation=operation,
-                        expected_ms=frozen_mean,
-                        observed_ms=mean,
-                        deviation_sigma=drift,
-                        severity="warning",
-                        timestamp=time.time(),
-                    )
+        # Need baseline before detection
+        if prior_count < 30:
+            return None
 
         # Priority 6: Cross-operation timing correlation
         cross_op_anomaly = self._update_timing_ratios(operation, mean)
 
-        # Return the most severe anomaly found (point > drift > cross-op)
+        # Return priority: shift > point > cross-op.  A shift EVENT is
+        # edge-triggered — if it is not delivered on the sample where the
+        # edge fired, the edge state has already been consumed and the event
+        # is lost forever, whereas a coinciding point alarm is one of a
+        # budgeted stream.  (Shift events are also the rarer, higher-value
+        # signal.)
+        if shift_anomaly is not None:
+            return shift_anomaly
+
         if is_anomaly:
-            CRITICAL_THRESHOLD = 5.0
-            severity = (
-                "critical" if deviation >= CRITICAL_THRESHOLD - THRESHOLD_EPSILON else "warning"
-            )
             return TimingAnomaly(
                 operation=operation,
                 expected_ms=mean,
@@ -1247,13 +1467,186 @@ class ResonanceTimingMonitor:
                 timestamp=time.time(),
             )
 
-        if drift_anomaly is not None:
-            return drift_anomaly
-
         if cross_op_anomaly is not None:
             return cross_op_anomaly
 
         return None
+
+    def _detect_point_anomaly(
+        self,
+        operation: str,
+        effective_duration: float,
+        profile: Dict[str, Any],
+        ewma: EWMAStats,
+    ) -> Tuple[bool, str, float]:
+        """Point-anomaly decision: robust score vs calibrated threshold.
+
+        Returns ``(is_anomaly, severity, robust_score)``.  The threshold is
+        ``max(threshold_sigma, calibrated)``; 'critical' means twice the
+        operating threshold — reachable by construction (the pre-5.0.0 fixed
+        5.0-sigma criticality sat above the 3.0 z-score cap), but ONLY once
+        the threshold is empirically calibrated: before the tail has been
+        measured, a large score on heavy-tailed data is ordinary, and paging
+        a human on it would be a confidence claim nothing supports.
+        """
+        THRESHOLD_EPSILON = 0.01
+        deviation = ewma.robust_score(effective_duration)
+        alarm_budget = float(profile.get("alarm_budget", self.DEFAULT_ALARM_BUDGET))
+        sigma_floor = float(profile.get("threshold_sigma", self.threshold))
+        calibrated = self._calibrated_score_threshold(operation, alarm_budget)
+        op_threshold = sigma_floor if calibrated is None else max(sigma_floor, calibrated)
+        if deviation < op_threshold - THRESHOLD_EPSILON:
+            return False, "warning", deviation
+        severity = (
+            "critical"
+            if calibrated is not None and deviation >= 2.0 * op_threshold - THRESHOLD_EPSILON
+            else "warning"
+        )
+        return True, severity, deviation
+
+    def _step_shift_cusum(
+        self,
+        operation: str,
+        effective_duration: float,
+        ewma: EWMAStats,
+        prior_count: int,
+    ) -> Optional[TimingAnomaly]:
+        """Advance the sustained-shift sign CUSUM by one observation.
+
+        Two-sided sign CUSUM against the reference median, evaluated on
+        EVERY sample (the pre-5.0.0 drift check ran on every 50th sample
+        only, and a trailing window had absorbed the shift by then —
+        measured 17.6% recall on a 30% regime change).  Signs, not
+        magnitudes: see the ``_CUSUM_*`` comment for why a magnitude CUSUM
+        is miscalibrated on skewed timing distributions.
+
+        Edge-triggered event semantics (see ``_SHIFT_REBASELINE_SAMPLES``
+        for the measured motivation): one 'warning' when the regime
+        transition is detected, one 'critical' escalation if the evidence
+        later doubles, then re-baseline once the new regime has persisted.
+        """
+        state = self._shift_state.get(operation)
+        if state is None:
+            return None
+
+        if not state["locked"]:
+            if prior_count >= self._CUSUM_LOCK_SAMPLES:
+                # Lock the reference on a median estimated from the last
+                # _CUSUM_LOCK_SAMPLES observations, and restart the
+                # accumulators: evidence gathered against the tracking
+                # reference is not evidence against the locked one.
+                tail = sorted(list(self.timing_history[operation])[-self._CUSUM_LOCK_SAMPLES :])
+                state["mu0"] = _median_sorted(tail)
+                state["gp"] = 0.0
+                state["gn"] = 0.0
+                state["locked"] = True
+            else:
+                # Pre-lock: track the trailing-window median so the sign
+                # statistic stays centred on clean traffic.
+                state["mu0"] = ewma._median_and_mad()[0]
+
+        mu0 = state["mu0"]
+        # Ties contribute 0 (decay only): on a quantized clock a stream
+        # sitting exactly on the baseline median must not read as a shift
+        # in either direction.
+        if effective_duration > mu0:
+            sgn = 1.0
+        elif effective_duration < mu0:
+            sgn = -1.0
+        else:
+            sgn = 0.0
+        state["gp"] = min(self._CUSUM_CAP, max(0.0, state["gp"] + sgn - self._CUSUM_K))
+        state["gn"] = min(self._CUSUM_CAP, max(0.0, state["gn"] - sgn - self._CUSUM_K))
+        g_max = max(state["gp"], state["gn"])
+
+        def _shift_event(severity: str) -> TimingAnomaly:
+            return TimingAnomaly(
+                operation=operation,
+                expected_ms=mu0,
+                observed_ms=effective_duration,
+                # For a shift event this carries the CUSUM statistic
+                # (accumulated sign-evidence), not a per-sample deviation.
+                deviation_sigma=g_max,
+                severity=severity,
+                timestamp=time.time(),
+                kind="shift",
+            )
+
+        if not state["in_shift"]:
+            if g_max > self._CUSUM_H:
+                state["in_shift"] = True
+                state["escalated"] = False
+                state["shift_run"] = 0
+                return _shift_event("warning")
+            return None
+
+        state["shift_run"] += 1
+        event: Optional[TimingAnomaly] = None
+        if g_max >= 2.0 * self._CUSUM_H and not state["escalated"]:
+            state["escalated"] = True
+            event = _shift_event("critical")
+        if g_max < self._CUSUM_H / 2.0:
+            # The stream returned to the reference regime.
+            state["in_shift"] = False
+            state["escalated"] = False
+            state["shift_run"] = 0
+        elif state["shift_run"] >= self._SHIFT_REBASELINE_SAMPLES:
+            # The shifted regime is the new normal: re-lock the reference on
+            # the trailing window and restart accumulation.  The transition
+            # was already alerted.
+            state["mu0"] = ewma._median_and_mad()[0]
+            state["gp"] = 0.0
+            state["gn"] = 0.0
+            state["in_shift"] = False
+            state["escalated"] = False
+            state["shift_run"] = 0
+        return event
+
+    def _calibrated_score_threshold(self, operation: str, alarm_budget: float) -> Optional[float]:
+        """Empirical ``(1 - alarm_budget)`` quantile of the operation's
+        trailing robust scores, or ``None`` until enough scores exist.
+
+        Activation requires ``max(100, ceil(1/alarm_budget))`` observed
+        scores: estimating the (1 - b) tail from fewer than 1/b samples is
+        extrapolation, and until then the ``threshold_sigma`` floor governs
+        alone (the documented warmup posture).  The quantile is the
+        conservative order statistic ``ceil((1 - b) * (n + 1))`` and is
+        recomputed every ``_THRESHOLD_RECOMPUTE_INTERVAL`` observations,
+        cached in between.
+        """
+        history = self._score_history.get(operation)
+        if history is None:
+            return None
+        n = len(history)
+        if alarm_budget <= 0.0:
+            return None
+        if n < max(100, math.ceil(1.0 / alarm_budget)):
+            return None
+        cached = self._calibrated_threshold.get(operation)
+        if cached is not None and n - cached[0] < self._THRESHOLD_RECOMPUTE_INTERVAL:
+            return cached[1]
+        ordered = sorted(history)
+        k = min(n - 1, max(0, math.ceil((1.0 - alarm_budget) * (n + 1)) - 1))
+        threshold = ordered[k]
+        self._calibrated_threshold[operation] = (n, threshold)
+        return threshold
+
+    def get_shift_state(self, operation: str) -> Optional[Dict[str, Any]]:
+        """Snapshot of the sustained-shift detector for one operation.
+
+        Returns ``None`` before warmup completes, otherwise a copy of the
+        state: ``mu0`` (the reference median), ``sigma0`` (the robust warmup
+        scale, reporting only), ``gp``/``gn`` (the two-sided sign-CUSUM
+        accumulators), ``locked`` (whether the reference has been frozen),
+        ``in_shift`` (whether the operation is currently in a detected
+        shifted regime), ``escalated`` and ``shift_run``.  Shift alarms are
+        edge-triggered events; this accessor is how an operator (or the
+        evaluation harness) reads the persistent regime state between
+        events.
+        """
+        with self._lock:
+            state = self._shift_state.get(operation)
+            return dict(state) if state is not None else None
 
     def _update_timing_ratios(self, operation: str, current_mean: float) -> Optional[TimingAnomaly]:
         """
@@ -1297,6 +1690,7 @@ class ResonanceTimingMonitor:
                             deviation_sigma=deviation,
                             severity="warning",
                             timestamp=time.time(),
+                            kind="cross_operation",
                         )
         return None
 
@@ -2862,7 +3256,9 @@ class AmaCryptographyMonitor:
         # shared alert list needs its own guard.
         self._alert_lock = threading.RLock()
 
-    def monitor_crypto_operation(self, operation: str, duration_ms: float) -> None:
+    def monitor_crypto_operation(
+        self, operation: str, duration_ms: float, input_size: Optional[int] = None
+    ) -> None:
         """
         Monitor cryptographic operation timing.
 
@@ -2873,11 +3269,15 @@ class AmaCryptographyMonitor:
             operation: Operation name (e.g., 'ed25519_sign',
                 'dilithium_verify')
             duration_ms: Operation duration in milliseconds
+            input_size: Optional input size in bytes.  Required for a
+                profile with ``normalize_by_size`` to take effect — the
+                pre-5.0.0 wrapper silently dropped it, which made every
+                size-normalized profile dead configuration.
         """
         if not self.enabled:
             return
 
-        anomaly = self.timing.record_timing(operation, duration_ms)
+        anomaly = self.timing.record_timing(operation, duration_ms, input_size=input_size)
         if anomaly:
             # Under _alert_lock like every other writer: this runs on the
             # instrumented sign/verify/encrypt/decrypt paths, which crypto_api

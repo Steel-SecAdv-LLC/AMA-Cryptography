@@ -48,11 +48,16 @@ static inline int16_t montgomery_reduce_scalar(int32_t a) {
  * Matches the generic C implementation in ama_kyber.c.
  * ============================================================================ */
 static inline int16_t barrett_reduce_scalar(int16_t a) {
-    int16_t t;
-    const int16_t v = ((1 << 26) + KYBER_Q / 2) / KYBER_Q;
-    t = ((int32_t)v * a) >> 26;
+    /* Same int32-accumulator form as ama_kyber.c's barrett_reduce: t lies in
+     * [-10, 9] and a - t*q within (-2q, 2q) over the full int16_t domain, so
+     * the narrowing cast is value-preserving (exhaustively verified).  The
+     * old int16_t-accumulator form was the exact -Wconversion pattern fixed
+     * in the generic and AVX2 twins — latent here only because no ARM lane
+     * compiles with -Wconversion. */
+    const int32_t v = ((1 << 26) + KYBER_Q / 2) / KYBER_Q;
+    int32_t t = (v * (int32_t)a) >> 26;
     t *= KYBER_Q;
-    return a - t;
+    return (int16_t)(a - t);
 }
 
 /* Barrett constant: floor(2^26 / q) + 1 */

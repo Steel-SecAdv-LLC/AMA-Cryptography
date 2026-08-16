@@ -48,6 +48,7 @@ unchanged but the work, the timing, or the failure mode is not.
 | 5 | Behavioural | `create_crypto_package` rejects a `signing_keypair` whose Ed25519 public-key component does not correspond to its seed; 4.x accepted the pair and produced packages whose signatures could never verify | none for internally-consistent pairs |
 | 6 | Behavioural | a shipped native library whose digest does not match the signed artefact is refused **before** it is mapped (previously it loaded — running its constructors — and failed POST afterwards); an `AMA_CRYPTO_LIB_PATH` override that is byte-identical to the signed library now reports **verified** instead of unconditionally UNVERIFIED | after rebuilding the C library locally, refresh the artefact: `AMA_BUILD_PIPELINE=1 python -m ama_cryptography.integrity --update --sign` |
 | 7 | **Breaking** | the compiled binding extensions (`ed25519_binding`, `hmac_binding`, `sha3_binding`, `dilithium_binding`, `hkdf_binding`, `math_engine`) are digest-bound into the integrity signature (v3 artefact); a modified binding fails the import on every build, and missing/unsigned bindings fail it on anchored (release) builds (developer source trees log a warning) | after rebuilding the extensions locally, refresh the artefact: `AMA_BUILD_PIPELINE=1 python -m ama_cryptography.integrity --update --sign` (a `setup.py` build re-signs automatically) |
+| 8 | Behavioural | the 3R timing-anomaly detector's alarm rule is rebuilt against its measured evidence (see *Completion pass 2* below): point alarms come from a robust score against an empirically calibrated per-operation false-alarm budget instead of a post-update z-score OR'd with a fixed Gaussian MAD threshold, sustained shifts raise edge-triggered sign-CUSUM events instead of an every-50th-sample drift check, `critical` severity is reachable (it mathematically was not) but only once calibrated, and `TimingAnomaly` gains a `kind` field (`point`/`shift`/`cross_operation`). Alarm streams differ from 4.x in content and rate — by design: the old rule flagged 12.5% of clean heavy-tailed traffic | consumers filtering alarms should read the new `TimingAnomaly`/`ResonanceTimingMonitor` docs; `record_timing`'s signature and return type are unchanged |
 
 Rows 1, 3 and 7 are the ones a security reviewer should read first: all
 three are fail-closed changes that turn a silent weakness into a loud
@@ -61,6 +62,190 @@ For C consumers of the installed shared library: the SONAME follows the
 major version by convention, so it moves `.so.4` -> `.so.5` and existing
 binaries must be relinked. No C API signature changed in this release; the
 loader's major-version handshake (INVARIANT-42) now expects major version 5.
+
+### Completion pass 2 (post-8d72b8c) — the detector made measurable, the lanes made witnessing, the counts made gated
+
+The first completion pass closed the review threads and executed the lanes;
+this one resolves what the measurements those lanes produced then showed.
+Every item below started as a measured negative result or an explicitly
+recorded gap, and none is closed by documentation alone.
+
+**The 3R timing-anomaly detector is rebuilt against its own negative
+evidence.** `benchmarks/detector_baseline_eval.py` (added at 8d72b8c)
+measured the shipped rule non-functional: `threshold_sigma` was inert —
+provably, not just empirically, because the EWMA update ran *before* the
+z-test, capping the achievable deviation below `sqrt((1-alpha)/alpha)` = 3.0
+at the default alpha, so four of six per-operation profiles (and 'critical'
+severity) were mathematically unreachable; the OR'd MAD branch used a
+Gaussian-calibrated 3.5 threshold against heavy-tailed real timings (12.52%
+clean false-alarm rate — one in eight operations flagged — where a 1% budget
+needs a threshold near 628); the AES-GCM profiles named operations no
+production call site emits while `crypto_api`'s real names fell to the
+global default; `normalize_by_size` required an `input_size` the wrapper
+never forwarded; and a 30% sustained regime change was absorbed by the
+trailing window (17.6% recall). The rebuilt rule scores each observation
+against the window *before* it enters (robust `|x-median|/(1.4826*MAD)`),
+alarms at `max(threshold_sigma, empirical (1-alarm_budget) quantile)` so the
+sigma floor governs near-normal data and the calibrated quantile governs
+heavy tails, caps severity at 'warning' until the threshold is calibrated
+(paging a human requires a measured tail), and detects sustained shifts with
+a two-sided **sign CUSUM** — distribution-free for the median, after a
+magnitude CUSUM measured a 77% clean false-alarm rate on skewed timings —
+against a reference locked at 200 samples (locking at the 30-sample warmup
+put the sample-median error at 1.4 standard errors of the drift tolerance;
+one seeded clean run false-alarmed on 96% of samples). Shift alarms are
+edge-triggered *events* (alert once, escalate once at 2h, re-baseline after
+300 persisted samples — on real hosts CPU frequency scaling moves the
+median, and per-sample flagging turned one genuine regime change into a 27%
+"false"-alarm rate), delivered ahead of point alarms so an event edge can
+never be silently consumed, and distinguishable via the new
+`TimingAnomaly.kind` field (`point` / `shift` / `cross_operation`).
+Measured on real Ed25519 wall-clock timings: clean point-alarm rate 0.78-1.0%
+against the declared 1% budget, a 30% shift alerted in ~11-20 samples with
+0.93-0.96 regime coverage before re-baseline, and strictly monotone alarm
+counts in both the budget and the sigma floor. The evaluation itself now
+drives the real monitor (its 8d72b8c predecessor re-implemented the rule and
+modelled a stronger z-branch than production shipped), derives its tie band
+from cross-seed spread instead of the unjustified `_TIE_F1 = 0.02`, labels
+its ground truth as synthetic injection over measured timings — not observed
+attack traffic — in both the report and the JSON record, and **runs in CI as
+a gate** (`ci.yml`, ubuntu/3.11 cell, with the file added to the
+`mypy --strict` enforcement surface): clean FAR within budget, budget and
+sigma liveness, prompt shift detection, and a spike-ranking-quality floor
+against the trivial baselines. On that last comparison the honest result is
+stated rather than spun: at a matched alarm budget a top-N KNN baseline
+ranks isolated spikes as well as or somewhat better (mean F1 ratio
+0.80-0.98) — while needing the shipped detector's own calibrated alarm count
+as an oracle to run at all; the machinery's earned value is the calibrated
+budget and the shift path, and `MONITORING.md` now says exactly that. The
+1,807-line historical detector copy under `tools/monitoring/` (nothing
+imported it; the shipped demo already imports `ama_cryptography.monitoring`)
+is deleted rather than left carrying the superseded rule.
+
+**Both AEAD dudect tag-verify lanes witness the corrected masked
+control flow, and the forgery-position property is covered at every site
+where post-verify structure exists.** The ChaCha20-Poly1305 lane's comment
+still described a `if (ct_len > 0)` guard that the unified-control-flow fix
+replaced with `bounded_len = ct_len & -tag_match`, and the lane still passed
+`ct_len = 0` — so the corrected masked path was never timed with a payload
+capable of witnessing it. The accept-vs-reject pair structurally cannot
+carry a payload (only an accepted tag has plaintext to produce, and the
+outcome is public via the return code), so the nonzero-payload witness is a
+new **forgery-position** lane in the Ascon lane's mould: two forgeries over
+a 64-byte ciphertext, identical instruction streams through Poly1305, the
+hoisted compare and the masked skip, differing only in which tag byte
+disagrees — the byte-by-byte oracle an attacker actually wants. AES-GCM had
+the same stale comment and the same gap and gets the same twin lane
+(measured locally: |t| = 0.51 and 0.93 over 100K measurements, 27 lanes all
+green). Argon2id legacy verify and the agent-binding check need no per-site
+position lane — their fail paths are straight-line after a hoisted compare
+with no length-masked work, so the position property rides entirely on
+`ama_consttime_memcmp`, which has its own lane — and the registration now
+records that reasoning where a reviewer will look for the missing lanes.
+
+**The Kyber `-Wconversion` inventory is driven to zero and frozen.** The
+pre-existing warning at `barrett_reduce` (`ama_kyber.c:2301`) was an int32
+expression implicitly narrowed by assignment; the rewrite keeps every
+intermediate in `int32_t` with one explicit final cast, proven
+value-preserving by exhaustive comparison over all 65,536 `int16_t` inputs
+(quotient in [-10, 9], result within (-2q, 2q)) — bit-identical, branch-free,
+same arithmetic-shift semantics. The sweep for equivalents found and fixed
+the identical pattern in the AVX2 scalar twin, the **latent pre-fix form in
+the NEON backend** (invisible because no ARM lane compiles with
+`-Wconversion`), the SVE2 and test-reference variants (normalized for
+uniformity), clang's 42 `-Wimplicit-int-conversion` findings in the
+`poly_compress`/`poly_decompress` bit-packing (explicit casts in the same
+style the d=10 branch always had; FIPS 203 KATs pin the serialization
+bit-for-bit), and three stray non-vendor warnings in the C tests. The
+strict-warnings job now **fails on any warning outside `src/c/vendor/`**
+beyond two documented extension classes (`__int128` in fe51/fe64.h;
+the one-statement asm literal in the MULX kernel), with pipefail on the
+build so a compile error cannot pass, so the clean state is a gate rather
+than a snapshot.
+
+**CodeQL alert 620 is resolved at source** — the same `_explode()` helper
+pattern `tests/test_c_buffer_views.py` established for this exact
+`pytest.raises` false positive (CodeQL does not model the context manager
+swallowing the raise), with no dismissal and no suppression.
+
+**The Lines-of-Code figures are gated — both columns, plus the Scope
+Composition table and every prose restatement.** The 4.0.0 decision to gate
+only the Files column ("`wc -l` moves on every commit, and a gate that fails
+on every commit is one that gets disabled") was falsified by its own
+outcome: four of seven line totals had drifted within two days of being
+re-measured, and the two published whole-project commands disagreed with
+each other by 502 lines (the `find` form counted the three tracked
+`Makefile`s and leaked untracked `build-strict*/` directories; the `git`
+form did neither). Measurement is now `git ls-files` + newline-byte counts —
+tracked files only, deterministic, immune to whatever the measuring machine
+has built — with Makefiles explicitly in the whole-project scope, one
+command shape published per scope, and `python tools/update_docs.py --loc`
+regenerating every gated figure from the same functions the checker
+verifies with, so keeping the gate green after a change is one command. The
+three previously uncounted `—` Files cells now carry real counts, and the
+gate's negative controls cover a wrong line total, a wrong composition
+percentage, and a legacy `—` cell.
+
+**Windows runs the real SoftHSM2 token lifecycle.** The recorded claim that
+"SoftHSM2 has no maintained package on any Windows runner manager" was
+checked rather than repeated, and it is false: Chocolatey's
+`softhsm.install` 2.5.0 (the Disig SoftHSM2-for-Windows MSI) is live on the
+community feed. Both CI workflows now provision it on `windows-latest`
+(with `C:\SoftHSM2\bin` added to the job PATH — the MSI's machine-PATH edit
+is invisible to a running job — and a fail-loud verification of the DLL and
+`softhsm2-util`), the Windows lane installs the `[hsm]` extra, the
+availability probe and `PKCS11_PATHS` know the Windows DLL location, and the
+win32 exemption in the provisioning guard test is removed — Windows is held
+to the same standard as Linux and macOS. The Disig build statically embeds
+OpenSSL 1.1.1 (EOL); that is acceptable only because it is a test token
+that never executes in or for product code — the same posture as the
+OpenSSL-linked apt/brew SoftHSM2 builds the other lanes already use, and
+recorded as such in the workflow.
+
+**Linux wheels are re-signed after `auditwheel repair`, so the integrity
+artefact binds the shipped bytes by construction.** The in-wheel Ed25519
+signature was minted before the repair step; on Linux the default
+`auditwheel repair` is currently measured byte-identical on these wheels,
+but that is an accident of today's tool behaviour — the macOS dry run
+proved the failure mode is real when `delocate` rewrote the bindings
+post-signing. `tools/resign_wheel.py` (stdlib-only) now chains onto the
+Linux repair command: unpack the repaired wheel, re-run the signer against
+the wheel's own tree (import-path discovery, native digest and the
+signer-process identity check all resolve inside the unpacked root, with an
+out-of-root guard that hard-fails if the signer bound a library outside
+it), regenerate `RECORD`, repack. The per-wheel smoke test
+(`CIBW_TEST_COMMAND`) then verifies every binding digest against the
+re-signed artefact, and the alternative design — a repair-invariant digest
+that skips the rewritten regions — is rejected on the record: RUNPATH,
+`DT_NEEDED` and Mach-O load commands are precisely the highest-value
+sub-file tamper surface, and a digest blind to them trades tamper-evidence
+for a compatibility the resign chain provides in full.
+
+**The `.pyc` checker-poisoning boundary gets the one genuine engineering
+improvement available: verification from outside the trust boundary.**
+The 2026-08 reassessment correctly rejected in-band narrowing (any
+in-process checker's own bytecode lives in the tree it verifies), but the
+project shipped no tool an operator could actually run out-of-band.
+`tools/verify_install_oob.py` is a standalone, stdlib-only verifier that
+imports nothing from the target package: it re-implements SHA3-256
+(Keccak-f[1600]) and Ed25519 verification by hand from FIPS 202 / RFC 8032
+(self-KATs run first and fail closed; `hashlib`'s OpenSSL-backed SHA3 is
+used only as a test oracle, per INVARIANT-36's distinction), parses the
+integrity artefact textually without executing it, recomputes the v1/v2/v3
+signed message byte-for-byte as `_self_test` resolves it, verifies the
+signature, the `.py` digests, the native-library and binding digests, and
+performs the execution-integrity comparison (fresh `compile()` of each
+signed source against its cached `.pyc`, by executed surface, without ever
+`exec`-ing target code). Its trust base is the operator's interpreter and
+the tool file itself, fetched out of band — which is the point. The in-band
+boundary statement in `SECURITY.md` stands unchanged for in-process checks;
+what changes is that the out-of-band control the boundary defers to now has
+a supported, tested procedure.
+
+**Repository noise removed at root cause.** A stray libFuzzer `slow-unit-*`
+artifact committed to the repository root in `da63d5c` is deleted, and
+`.gitignore` now covers the whole artifact family (`crash-*`, `oom-*`,
+`timeout-*`, `leak-*`) so the accident class cannot recur.
 
 ### Security — a failed power-on self-test now fails the import, and the module proves what it actually runs (INVARIANT-39 through INVARIANT-42)
 

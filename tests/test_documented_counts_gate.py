@@ -26,6 +26,7 @@ as useless as one that never does, and rather more likely to be switched off.
 from __future__ import annotations
 
 import importlib.util
+import re
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -57,17 +58,25 @@ def tool() -> ModuleType:
 
 
 def _synthetic_repo(
+    tool: ModuleType,
     tmp_path: Path,
     *,
     lib_py: int = 2,
     c_files: int = 3,
     test_files: int = 4,
     table_overrides: dict[str, int] | None = None,
+    lines_overrides: dict[str, int] | None = None,
+    composition_overrides: dict[str, int] | None = None,
 ) -> Path:
-    """A miniature tree plus a METRICS_REPORT whose table describes it.
+    """A miniature tree plus a METRICS_REPORT whose tables describe it.
 
-    By default the table is correct, so each test states exactly the one lie it
-    is checking rather than inheriting a pile of unrelated mismatches.
+    By default every gated figure is correct — rendered from the tool's own
+    measurement functions — so each test states exactly the one lie it is
+    checking rather than inheriting a pile of unrelated mismatches.  The
+    report is written twice with an identical line count (a placeholder pass
+    to fix the report's own contribution to the whole-project scope, then
+    the measured pass), because the report is a tracked ``*.md`` and
+    measures itself.
     """
     repo = tmp_path / "repo"
     (repo / "ama_cryptography").mkdir(parents=True)
@@ -84,16 +93,59 @@ def _synthetic_repo(
     for i in range(test_files):
         (repo / "tests" / f"test_{i}.py").write_text("def test_a():\n    pass\n", encoding="utf-8")
 
-    counts = {
-        "Library Python (`ama_cryptography/*.py`)": lib_py,
-        "Native C (`src/c/**/*.c`, `include/**/*.h`)": c_files + 1,
-        "Library total (Python + C + headers)": lib_py + c_files + 1,
-        "Tests (`tests/**/*.py`)": test_files,
-    }
-    counts.update(table_overrides or {})
-    rows = "\n".join(f"| {label} | {value} | 100 |" for label, value in counts.items())
-    (repo / "docs" / "METRICS_REPORT.md").write_text(
-        "## Lines of Code\n\n| Scope | Files | Lines |\n|---|---:|---:|\n" + rows + "\n",
+    def _render(
+        table: dict[str, tuple[int, int]],
+        composition: dict[str, tuple[int, str]],
+        json_lines: int,
+    ) -> str:
+        for label, files in (table_overrides or {}).items():
+            table[label] = (files, table[label][1])
+        for label, lines in (lines_overrides or {}).items():
+            table[label] = (table[label][0], lines)
+        for label, lines in (composition_overrides or {}).items():
+            composition[label] = (lines, composition[label][1])
+        rows = "\n".join(
+            f"| {label} | {files} | {lines:,} |" for label, (files, lines) in table.items()
+        )
+        comp_rows = "\n".join(
+            f"| {label} | {lines:,} | {pct} | x |" for label, (lines, pct) in composition.items()
+        )
+        return (
+            "## Lines of Code\n\n| Scope | Files | Lines |\n|---|---:|---:|\n"
+            + rows
+            + "\n\n### Scope Composition\n\n"
+            + "| Scope | Lines | % of whole | Paths |\n|---|---:|---:|---|\n"
+            + comp_rows
+            + f"\n\ncorpora ({json_lines:,} lines of `*.json` alone)\n"
+        )
+
+    report = repo / "docs" / "METRICS_REPORT.md"
+    # Placeholder pass fixes the report's own line count; measured pass fills
+    # the real numbers into a byte-different but line-identical document.
+    report.write_text(
+        _render(
+            dict.fromkeys(tool._LOC_TABLE_ROWS, (0, 0)),
+            dict.fromkeys(
+                (
+                    "Library (Python + C + headers)",
+                    "Tests",
+                    "Top-level Python",
+                    "Cython",
+                    "Everything else (remainder)",
+                    "**Whole-project total**",
+                ),
+                (0, "0.0%"),
+            ),
+            0,
+        ),
+        encoding="utf-8",
+    )
+    report.write_text(
+        _render(
+            tool.measure_loc_table(repo),
+            tool.measure_scope_composition(repo),
+            tool.measure_tracked_json_lines(repo),
+        ),
         encoding="utf-8",
     )
     return repo
@@ -102,7 +154,7 @@ def _synthetic_repo(
 class TestLocTableFileCounts:
     def test_a_correct_table_is_clean(self, tool: ModuleType, tmp_path: Path) -> None:
         """Non-vacuity for everything below."""
-        repo = _synthetic_repo(tmp_path)
+        repo = _synthetic_repo(tool, tmp_path)
         assert tool.check_loc_table_file_counts(repo) == []
 
     @pytest.mark.parametrize(
@@ -111,17 +163,78 @@ class TestLocTableFileCounts:
             "Library Python (`ama_cryptography/*.py`)",
             "Native C (`src/c/**/*.c`, `include/**/*.h`)",
             "Library total (Python + C + headers)",
+            "Top-level Python (monitors, benchmarks, demos)",
             "Tests (`tests/**/*.py`)",
+            "Cython (`*.pyx`, `*.pxd`)",
+            "**Whole project** (source + docs + config)",
         ],
     )
     def test_every_gated_row_is_really_checked(
         self, tool: ModuleType, tmp_path: Path, label: str
     ) -> None:
         """One lie per run, so no row can be covered by another's failure."""
-        repo = _synthetic_repo(tmp_path, table_overrides={label: 999})
+        repo = _synthetic_repo(tool, tmp_path, table_overrides={label: 999})
         problems = tool.check_loc_table_file_counts(repo)
         assert len(problems) == 1
         assert label in problems[0]
+
+    @pytest.mark.parametrize(
+        "label",
+        [
+            "Library Python (`ama_cryptography/*.py`)",
+            "Native C (`src/c/**/*.c`, `include/**/*.h`)",
+            "Library total (Python + C + headers)",
+            "Top-level Python (monitors, benchmarks, demos)",
+            "Tests (`tests/**/*.py`)",
+            "Cython (`*.pyx`, `*.pxd`)",
+            "**Whole project** (source + docs + config)",
+        ],
+    )
+    def test_every_line_total_is_really_checked(
+        self, tool: ModuleType, tmp_path: Path, label: str
+    ) -> None:
+        """The 4.0.0 gate checked only the Files column; the line totals then
+        drifted within two days of being re-measured.  Every Lines cell is
+        now a gated claim of its own."""
+        repo = _synthetic_repo(tool, tmp_path, lines_overrides={label: 999_999})
+        problems = tool.check_loc_table_file_counts(repo)
+        assert len(problems) == 1
+        assert label in problems[0] and "999,999" in problems[0]
+
+    @pytest.mark.parametrize(
+        "label",
+        [
+            "Library (Python + C + headers)",
+            "Tests",
+            "Everything else (remainder)",
+            "**Whole-project total**",
+        ],
+    )
+    def test_scope_composition_rows_are_checked(
+        self, tool: ModuleType, tmp_path: Path, label: str
+    ) -> None:
+        repo = _synthetic_repo(tool, tmp_path, composition_overrides={label: 888_888})
+        problems = tool.check_loc_table_file_counts(repo)
+        assert problems, "a wrong Scope Composition line total passed the gate"
+        assert any(label in p and "888,888" in p for p in problems)
+
+    def test_a_legacy_uncounted_files_cell_is_a_failure(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        """A ``—`` Files cell reads as 'not applicable' but means 'never
+        measured'; the gate treats it as a wrong count, and the regenerator
+        fills the real one."""
+        repo = _synthetic_repo(tool, tmp_path)
+        report = repo / "docs" / "METRICS_REPORT.md"
+        text = report.read_text(encoding="utf-8")
+        text = re.sub(
+            r"\| Cython \(`\*\.pyx`, `\*\.pxd`\) \| \d+ \|",
+            "| Cython (`*.pyx`, `*.pxd`) | — |",
+            text,
+        )
+        report.write_text(text, encoding="utf-8")
+        problems = tool.check_loc_table_file_counts(repo)
+        assert any("Cython" in p and "— files" in p for p in problems)
 
     def test_a_renamed_row_fails_rather_than_stops_being_checked(
         self, tool: ModuleType, tmp_path: Path
@@ -132,7 +245,7 @@ class TestLocTableFileCounts:
         document into a silently unverified one — which reads identically to a
         verified one in the CI log.
         """
-        repo = _synthetic_repo(tmp_path)
+        repo = _synthetic_repo(tool, tmp_path)
         report = repo / "docs" / "METRICS_REPORT.md"
         report.write_text(
             report.read_text(encoding="utf-8").replace(
@@ -157,7 +270,7 @@ class TestLocTableFileCounts:
         not by the regex, which is why the two numbers must be measured
         separately rather than assumed equal.
         """
-        repo = _synthetic_repo(tmp_path)
+        repo = _synthetic_repo(tool, tmp_path)
         (repo / "tests" / "conftest.py").write_text("import pytest\n", encoding="utf-8")
         problems = tool.check_loc_table_file_counts(repo)
         assert any("Tests (`tests/**/*.py`)" in p for p in problems)
@@ -167,13 +280,13 @@ class TestAggregateTestCounts:
     def test_the_static_measure_ignores_files_without_a_test_function(
         self, tool: ModuleType, tmp_path: Path
     ) -> None:
-        repo = _synthetic_repo(tmp_path, test_files=4)
+        repo = _synthetic_repo(tool, tmp_path, test_files=4)
         (repo / "tests" / "conftest.py").write_text("import pytest\n", encoding="utf-8")
         functions, files = tool.measure_static_test_counts(repo)
         assert (functions, files) == (4, 4)
 
     def test_a_wrong_aggregate_claim_fails(self, tool: ModuleType, tmp_path: Path) -> None:
-        repo = _synthetic_repo(tmp_path, test_files=4)
+        repo = _synthetic_repo(tool, tmp_path, test_files=4)
         (repo / "OVERVIEW.md").write_text(
             "9,999 test functions across 42 Python test files.\n", encoding="utf-8"
         )
@@ -181,7 +294,7 @@ class TestAggregateTestCounts:
         assert len(problems) == 2  # one for the function count, one for the file count
 
     def test_a_correct_aggregate_claim_passes(self, tool: ModuleType, tmp_path: Path) -> None:
-        repo = _synthetic_repo(tmp_path, test_files=4)
+        repo = _synthetic_repo(tool, tmp_path, test_files=4)
         (repo / "OVERVIEW.md").write_text(
             "4 test functions across 4 Python test files.\n", encoding="utf-8"
         )
@@ -191,7 +304,7 @@ class TestAggregateTestCounts:
         self, tool: ModuleType, tmp_path: Path
     ) -> None:
         """History records what was true then; matching it would freeze the gate red."""
-        repo = _synthetic_repo(tmp_path, test_files=4)
+        repo = _synthetic_repo(tool, tmp_path, test_files=4)
         (repo / "OVERVIEW.md").write_text(
             "| 3.5.0 | 2026-07-30 | 3,057 test functions across 127 Python test files. |\n",
             encoding="utf-8",

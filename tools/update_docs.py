@@ -607,6 +607,136 @@ def update_wiki(dry_run: bool = False) -> bool:
 # ============================================================================
 
 
+def _counts_module() -> Any:
+    """Load tools/check_documented_counts.py as a module.
+
+    The regenerator and the gate MUST share one measurement implementation:
+    a regenerator with its own counting rules is how the two would disagree
+    while both looked authoritative.
+    """
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "check_documented_counts", ROOT / "tools" / "check_documented_counts.py"
+    )
+    if spec is None or spec.loader is None:  # pragma: no cover - loader contract
+        raise RuntimeError("tools/check_documented_counts.py could not be loaded")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def update_loc_metrics(dry_run: bool = False) -> bool:
+    """Re-measure and rewrite every gated Lines-of-Code figure in
+    docs/METRICS_REPORT.md from the same functions the documented-counts
+    gate verifies with.
+
+    This is the one-command answer to "a line-total gate fails on every
+    commit": run this after a change, review the diff, done.  A figure the
+    regenerator does not know how to rewrite is a figure the gate does not
+    check — keep the two lists in lockstep.
+    """
+    counts = _counts_module()
+    report = ROOT / "docs" / "METRICS_REPORT.md"
+    text = report.read_text(encoding="utf-8")
+    original = text
+
+    table = counts.measure_loc_table(ROOT)
+    composition = counts.measure_scope_composition(ROOT)
+    json_lines = counts.measure_tracked_json_lines(ROOT)
+
+    def _fmt(n: int) -> str:
+        return f"{n:,}"
+
+    # --- Lines of Code table rows (bold preserved on the two flagship
+    # cells: Library-total lines and the Whole-project row).
+    for label, (files, lines) in table.items():
+        lines_cell = _fmt(lines)
+        if label in ("Library total (Python + C + headers)",):
+            lines_cell = f"**{lines_cell}**"
+        if label.startswith("**Whole project**"):
+            lines_cell = f"**{lines_cell}**"
+        text = counts._loc_row_re(label).sub(f"| {label} | {_fmt(files)} | {lines_cell} |", text)
+
+    # --- Scope Composition table rows.
+    comp_paths = {
+        "Library (Python + C + headers)": "`ama_cryptography/` + `src/c/` + `include/`",
+        "Tests": "`tests/**/*.py`",
+        "Top-level Python": "`*.py` at repo root",
+        "Cython": "`*.pyx` + `*.pxd`",
+        "Everything else (remainder)": (
+            "`*.md`, `*.yml`, `*.toml`, `*.json`, CMake, Makefile, plus "
+            "`.c`/`.h`/`.py` outside the scopes above (`tests/c/`, `fuzz/`, "
+            "`tools/`, `benchmarks/`, `examples/`)"
+        ),
+        "**Whole-project total**": "sum of the scopes above",
+    }
+    for label, (lines, pct) in composition.items():
+        bold = label.startswith("**")
+        lines_cell = f"**{_fmt(lines)}**" if bold else _fmt(lines)
+        pct_cell = f"**{pct}**" if bold else pct
+        text = re.sub(
+            rf"\|\s*{re.escape(label)}\s*\|[^|]*\|[^|]*\|[^|]*\|",
+            f"| {label} | {lines_cell} | {pct_cell} | {comp_paths[label]} |",
+            text,
+        )
+
+    # --- Prose restatements of the measured figures.
+    lib_files, lib_lines = table["Library total (Python + C + headers)"]
+    whole_lines = table["**Whole project** (source + docs + config)"][1]
+    tests_lines, tests_pct = composition["Tests"]
+    library_pct = composition["Library (Python + C + headers)"][1]
+    remainder_pct = composition["Everything else (remainder)"][1]
+    ratio = tests_lines / lib_lines if lib_lines else 0.0
+
+    text = re.sub(
+        r"\d[\d,]* lines\*\* across \d[\d,]* files under",
+        f"{_fmt(lib_lines)} lines** across {_fmt(lib_files)} files under",
+        text,
+    )
+    text = re.sub(
+        r"Whole-project total\*\* \(`\d[\d,]*` lines",
+        f"Whole-project total** (`{_fmt(whole_lines)}` lines",
+        text,
+    )
+    text = re.sub(
+        r"only\s*\*\*[\d.]+%\*\* of the repository is library code",
+        f"only **{library_pct}** of the repository is library code",
+        text,
+    )
+    text = re.sub(
+        r"Test code \([\d.]+%\) is roughly \S+ the size of the library\s*\([\d.]+%\)",
+        f"Test code ({tests_pct}) is roughly {ratio:.1f}x the size of the library "
+        f"({library_pct})",
+        text,
+    )
+    text = re.sub(
+        r"test-to-library ratio is roughly \*\*[\d.]+\*\*",
+        f"test-to-library ratio is roughly **{ratio:.2f}**",
+        text,
+    )
+    text = re.sub(
+        r"The remainder \([\d.]+%\)",
+        f"The remainder ({remainder_pct})",
+        text,
+    )
+    text = re.sub(
+        r"\(\d[\d,]* lines of\s*`\*\.json`",
+        f"({_fmt(json_lines)} lines of `*.json`",
+        text,
+    )
+
+    if text == original:
+        print("   METRICS_REPORT.md LoC figures: already current")
+        return False
+    if dry_run:
+        print("   METRICS_REPORT.md LoC figures: would be re-measured and rewritten")
+        return True
+    report.write_text(text, encoding="utf-8", newline="")
+    print("   METRICS_REPORT.md LoC figures: re-measured and rewritten")
+    return True
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="AMA Cryptography auto-documentation updater")
     parser.add_argument(
@@ -619,12 +749,28 @@ def main() -> None:
         action="store_true",
         help="Only update CHANGELOG.md",
     )
+    parser.add_argument(
+        "--loc",
+        action="store_true",
+        help="Only re-measure and rewrite the Lines-of-Code figures in "
+        "docs/METRICS_REPORT.md (the one-command fix for a red LoC gate)",
+    )
     args = parser.parse_args()
 
     if args.dry_run:
         print("=== DRY RUN ===\n")
 
     any_changed = False
+
+    if args.loc:
+        print("LoC metrics")
+        any_changed = update_loc_metrics(dry_run=args.dry_run)
+        print(
+            "\n✓ Documentation updated" + (" (dry run)" if args.dry_run else "")
+            if any_changed
+            else "\n• No changes needed"
+        )
+        return
 
     print("1. CHANGELOG")
     any_changed |= update_changelog(dry_run=args.dry_run)
@@ -638,6 +784,9 @@ def main() -> None:
 
         print("\n4. Wiki pages")
         any_changed |= update_wiki(dry_run=args.dry_run)
+
+        print("\n5. LoC metrics")
+        any_changed |= update_loc_metrics(dry_run=args.dry_run)
 
     if any_changed:
         print("\n✓ Documentation updated" + (" (dry run)" if args.dry_run else ""))

@@ -224,17 +224,9 @@ jobs:
       # which is the same shape as every other gate defect this release fixed.
       #
       # -Werror over the whole set is not achievable here and pretending
-      # otherwise would just produce a permanently-disabled job. -Wpedantic is
-      # dominated by `__uint128_t` in src/c/fe51.h and fe64.h — a required
-      # extension, not a defect — and by src/c/vendor/ed25519-donna/, which
-      # INVARIANT-1's vendoring policy keeps byte-for-byte unmodified.
-      # -Wconversion and clang's -Wimplicit-int-conversion are concentrated in
-      # the Kyber arithmetic and the same vendored tree; blanket-casting
-      # reduction arithmetic to silence a warning is how a modular-arithmetic
-      # bug gets introduced, so it is not attempted next to a release.
-      #
-      # So the categories that ARE achievable are made fatal, and they were
-      # first driven to zero at source rather than suppressed:
+      # otherwise would just produce a permanently-disabled job. So the
+      # categories that ARE achievable are made fatal, and they were first
+      # driven to zero at source rather than suppressed:
       #
       #   -Werror=missing-prototypes  Every one of these was a symbol declared
       #                               by `extern` in each consumer separately —
@@ -255,10 +247,38 @@ jobs:
       #                               every sibling and every fe51.h
       #                               counterpart is `static inline`.
       #
-      # The remaining categories still compile and still print. Making one of
-      # them fatal is a follow-up with its own diff, not a flag flipped here.
+      # An earlier revision of this comment said -Wconversion and clang's
+      # -Wimplicit-int-conversion were "concentrated in the Kyber arithmetic"
+      # and left un-attempted next to a release. That inventory has since
+      # been driven to zero at source with per-site range proofs, not blanket
+      # casts: barrett_reduce (ama_kyber.c and the avx2 scalar twin) keeps all
+      # intermediates in int32 with the quotient exhaustively verified in
+      # [-10, 9] over every int16_t input, and the d=4/d=5 packers plus the
+      # d=11 unpacker carry the same explicit casts the d=10 branch always
+      # had (the FIPS 203 KATs pin the serialization bit-for-bit).
+      #
+      # What legitimately remains outside src/c/vendor/ is exactly two
+      # documented language-extension classes, both required by construction:
+      #   fe51.h / fe64.h            "ISO C does not support '__int128'"
+      #                              (-Wpedantic, gcc) — the 128-bit limbs the
+      #                              field arithmetic is built on.
+      #   x86/ama_nistp_mont_mulx.c  overlength string literal (-Woverlength-
+      #                              strings, clang) — one atomic asm() block;
+      #                              splitting the Montgomery kernel into
+      #                              several asm statements would forfeit the
+      #                              register-state guarantees the kernel
+      #                              depends on, and the warning measures the
+      #                              concatenated literal anyway.
+      # The "Enforce the frozen warning allowlist" step below fails this job
+      # if ANY other warning appears outside src/c/vendor/, so the clean
+      # state is now a gate, not a snapshot.
       - name: Build with strict warnings
+        shell: bash
+        # pipefail is load-bearing: without it the pipeline's status is
+        # tee's (always 0) and a compile error could not fail this step —
+        # the same defect the cppcheck job above documents.
         run: |
+          set -o pipefail
           cmake -B build-strict \
             -DCMAKE_C_COMPILER=${{ matrix.compiler }} \
             -DCMAKE_C_FLAGS="-Wall -Wextra -Wpedantic -Wshadow -Wformat=2 -Wconversion -Wno-sign-conversion \
@@ -267,7 +287,28 @@ jobs:
             -DAMA_BUILD_TESTS=ON \
             -DAMA_BUILD_EXAMPLES=OFF \
             -DAMA_ENABLE_LTO=OFF
-          cmake --build build-strict -j$(nproc)
+          cmake --build build-strict -j$(nproc) 2>&1 | tee build-warnings.log
+
+      - name: Enforce the frozen warning allowlist
+        # The allowlist is exactly the two documented extension classes in the
+        # comment above, plus src/c/vendor/** (INVARIANT-1 keeps vendored
+        # sources byte-for-byte unmodified). Anything else — any file, any
+        # category, either compiler — fails the job with the offending lines
+        # printed. Tightening (a class driven to zero) means deleting its
+        # pattern here; loosening requires editing this list in review.
+        shell: bash
+        run: |
+          unexpected=$(grep "warning:" build-warnings.log \
+            | grep -v "/src/c/vendor/" \
+            | grep -Ev "fe(51|64)\.h:[0-9:]+ *warning: ISO C does not support '__int128'" \
+            | grep -Ev "ama_nistp_mont_mulx\.c:[0-9:]+ *warning: string literal of length" \
+            || true)
+          if [ -n "${unexpected}" ]; then
+            echo "::error::Compiler warnings outside the frozen allowlist:"
+            echo "${unexpected}"
+            exit 1
+          fi
+          echo "OK: no warnings outside src/c/vendor/ beyond the two documented extension classes."
 
       - name: Run tests
         run: cd build-strict && ctest --output-on-failure

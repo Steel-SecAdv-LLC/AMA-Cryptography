@@ -184,7 +184,7 @@ int main(void) {
     static const char *const timing_keys[] = {
         "keccak_simd_ns=", "keccak_generic_ns=", NULL,
     };
-    for (const char **k = timing_keys; *k; ++k) {
+    for (const char *const *k = timing_keys; *k; ++k) {
         const char *timing_line = strstr(body, *k);
         if (!timing_line) {
             fprintf(stderr,

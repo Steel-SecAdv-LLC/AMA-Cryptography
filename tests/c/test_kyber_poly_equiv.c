@@ -101,11 +101,10 @@ extern void ama_kyber_poly_reduce_sve2(int16_t poly[256]);
  * convention.  Strict byte-identity (`cmp_poly()`) is used for
  * `poly_add` / `poly_sub` since those are non-reducing int16 ops. */
 static int16_t barrett_reduce_ref(int16_t a) {
-    int16_t t;
-    const int16_t v = ((1 << 26) + KYBER_Q / 2) / KYBER_Q;
-    t = (int16_t)(((int32_t)v * a) >> 26);
+    const int32_t v = ((1 << 26) + KYBER_Q / 2) / KYBER_Q;
+    int32_t t = (v * (int32_t)a) >> 26;
     t *= KYBER_Q;
-    return a - t;
+    return (int16_t)(a - t);
 }
 
 /* Scalar reference helpers — match the inlined scalar fallback paths

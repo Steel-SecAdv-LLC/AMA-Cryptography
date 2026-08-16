@@ -89,11 +89,10 @@ static int16_t montgomery_reduce_ref(int32_t a) {
 }
 
 static int16_t barrett_reduce_ref(int16_t a) {
-    int16_t t;
-    const int16_t v = ((1 << 26) + KYBER_Q / 2) / KYBER_Q;
-    t = (int16_t)(((int32_t)v * a) >> 26);
+    const int32_t v = ((1 << 26) + KYBER_Q / 2) / KYBER_Q;
+    int32_t t = (v * (int32_t)a) >> 26;
     t *= KYBER_Q;
-    return a - t;
+    return (int16_t)(a - t);
 }
 
 /* zetas[128] — identical to the static `zetas` table in

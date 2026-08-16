@@ -1609,6 +1609,7 @@ class HSMKeyStorage:
             "/usr/lib/softhsm/libsofthsm2.so",
             "/usr/local/lib/softhsm/libsofthsm2.so",
             "/opt/homebrew/lib/softhsm/libsofthsm2.so",  # macOS ARM
+            "C:\\SoftHSM2\\lib\\softhsm2-x64.dll",  # Windows (Disig MSI / choco)
         ],
         "aws-cloudhsm": [
             "/opt/cloudhsm/lib/libcloudhsm_pkcs11.so",

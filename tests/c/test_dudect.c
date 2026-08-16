@@ -335,13 +335,20 @@ static double test_ed25519_sign(int iterations) {
  * Both issues are now closed:
  *   - The tag pointer is selected *before* the timer starts (same
  *     pointer-select pattern as the secp256k1 lane).
- *   - ct_len = 0 collapses Step 4 to a no-op in **both** classes
- *     (`if (ct_len > 0)` guards the CTR-decrypt step), so the only
- *     work whose duration could differ between classes is the
+ *   - ct_len = 0 collapses the CTR-decrypt step to a no-op in **both**
+ *     classes.  The decrypt no longer branches on the compare at all:
+ *     the CTR loop bounds are a constant-time mask of `tag_match`
+ *     (`bounded_full` / `bounded_remaining`, src/c/ama_aes_gcm.c:705-731),
+ *     and with ct_len = 0 both masked bounds are 0 in both classes, so
+ *     the only work whose duration could differ between classes is the
  *     `ama_consttime_memcmp` of the 16-byte tag — exactly the
  *     invariant this lane is supposed to witness.  GHASH still
  *     processes the AAD + length block identically in both classes,
  *     and the AES-256 key expansion runs once in both classes.
+ *
+ * The masked bounds are witnessed WITH a non-zero payload by
+ * test_aes_gcm_forgery_position() below, mirroring the ChaCha20-
+ * Poly1305 pair of lanes.
  *
  * Restored to strict pass/fail.
  * ----------------------------------------------------------------------- */
@@ -407,6 +414,93 @@ static double test_aes_gcm_tag_verify(int iterations) {
                 "(expected AMA_SUCCESS for good tag, AMA_ERROR_VERIFY_FAILED "
                 "for tampered tag)\n",
                 rc_mismatches);
+        dudect_print_result(&ctx);
+        return DUDECT_FATAL_SENTINEL;
+    }
+
+    dudect_print_result(&ctx);
+    return dudect_get_t(&ctx);
+}
+
+/* -----------------------------------------------------------------------
+ * Test: AES-GCM tag verify — the *position* of a forgery must not be
+ * readable from the clock.
+ *
+ * Class 0: forged tag differing in byte 0.
+ * Class 1: forged tag differing in byte 15.
+ * Both return AMA_ERROR_VERIFY_FAILED.
+ *
+ * Same construction and rationale as
+ * test_chacha20poly1305_forgery_position(): the accept/reject outcome
+ * is public via the return code, the mismatch POSITION is the secret
+ * the compare must hide, and two forgeries over a 64-byte ciphertext
+ * take the identical instruction stream — GHASH over AAD + CT + the
+ * length block, the hoisted `tag_match` compare, and the masked CTR
+ * bounds (`bounded_full = (64/16) & 0`, src/c/ama_aes_gcm.c:707) — so
+ * this lane times the masked control flow with a non-zero `ct_len`.
+ *
+ * The four remaining tag-compare call sites in the tree keep their
+ * position property through `ama_consttime_memcmp` itself (its own
+ * utility lane runs above): Ascon has its dedicated forgery-position
+ * lane; Argon2id legacy verify and the agent-binding check hoist the
+ * compare into a value and run a single straight-line fail path with
+ * no length-masked work after it (src/c/ama_argon2.c:923-926,
+ * src/c/ama_agent_binding.c:354-355), so there is no per-site control
+ * flow left for a position lane to witness.
+ * ----------------------------------------------------------------------- */
+static double test_aes_gcm_forgery_position(int iterations) {
+    dudect_ctx_t ctx;
+    dudect_ctx_init(&ctx, "AES-GCM tag verify (forgery position)");
+
+    uint8_t key[32], nonce[12];
+    uint8_t aad[32];
+    uint8_t pt[64], ct[64], out[64];
+    uint8_t tag_good[16], tag_first[16], tag_last[16];
+
+    random_bytes(key, sizeof(key));
+    random_bytes(nonce, sizeof(nonce));
+    random_bytes(aad, sizeof(aad));
+    random_bytes(pt, sizeof(pt));
+
+    if (ama_aes256_gcm_encrypt(key, nonce, pt, sizeof(pt),
+                               aad, sizeof(aad),
+                               ct, tag_good) != AMA_SUCCESS) {
+        fprintf(stderr,
+                "  FAIL: AES-GCM dudect setup encrypt failed; "
+                "forgery-position lane never executed\n");
+        dudect_print_result(&ctx);
+        return DUDECT_FATAL_SENTINEL;
+    }
+
+    memcpy(tag_first, tag_good, sizeof(tag_good));
+    memcpy(tag_last, tag_good, sizeof(tag_good));
+    tag_first[0] ^= 0x01;
+    tag_last[15] ^= 0x01;
+
+    /* Both classes MUST be refused — same guard as the ChaCha and
+     * Ascon forgery-position lanes. */
+    int rc_mismatches = 0;
+
+    for (int i = 0; i < iterations && !g_timeout_hit; i++) {
+        int class_idx = rand() & 1;
+        /* Pointer select OUTSIDE the timing region. */
+        const uint8_t *tag_use = class_idx ? tag_last : tag_first;
+
+        uint64_t start = dudect_get_time_ns();
+        volatile ama_error_t rc =
+            ama_aes256_gcm_decrypt(key, nonce, ct, sizeof(ct),
+                                   aad, sizeof(aad), tag_use, out);
+        uint64_t end = dudect_get_time_ns();
+
+        if (rc != AMA_ERROR_VERIFY_FAILED) rc_mismatches++;
+
+        dudect_record(&ctx, class_idx, (double)(end - start));
+    }
+
+    if (rc_mismatches != 0) {
+        fprintf(stderr,
+                "  FAIL: AES-GCM forgery-position lane saw %d "
+                "non-refusal(s); a forged tag was accepted\n", rc_mismatches);
         dudect_print_result(&ctx);
         return DUDECT_FATAL_SENTINEL;
     }
@@ -512,21 +606,34 @@ static double test_ed25519_verify(int iterations) {
  *          AMA_ERROR_VERIFY_FAILED).
  *
  * The first iteration of this harness timed a non-zero `ct_len`,
- * which made the lane structurally fail at +100..+200 σ: after
- * `ama_consttime_memcmp` returns at src/c/ama_chacha20poly1305.c:591,
- * Class 0 continued into the `chacha20_xor` decrypt step (Step 4,
- * `ct_len` bytes of work), while Class 1 early-returned.  That is a
- * structural wall-clock delta unrelated to the constant-time tag
- * compare — the verify outcome is observable via the return code,
- * but the lane was claiming to test something else.
+ * which made the lane structurally fail at +100..+200 σ: the decrypt
+ * then branched directly on the compare result, so Class 0 continued
+ * into the `chacha20_xor` decrypt step (`ct_len` bytes of work) while
+ * Class 1 early-returned.  That is a structural wall-clock delta
+ * unrelated to the constant-time tag compare — the verify outcome is
+ * observable via the return code, but the lane was claiming to test
+ * something else.
  *
- * Fixed by setting `ct_len = 0`.  Step 4 of the decrypt is guarded
- * by `if (ct_len > 0)` and collapses to a no-op in **both** classes,
- * so the only work whose duration could differ between classes is the
- * `ama_consttime_memcmp` of the 16-byte tag — exactly the invariant
- * this lane is supposed to witness.  The Poly1305 tag computation
- * (Step 2) still runs identically in both classes over the AAD plus
- * the empty CT plus the RFC 8439 length block.
+ * The implementation has since been rewritten with unified post-verify
+ * control flow (src/c/ama_chacha20poly1305.c:869-878): the compare is
+ * hoisted into `tag_match`, there is one shared scrub call site, and
+ * Step 4's length is `bounded_len = ct_len & -(size_t)tag_match` — a
+ * constant-time mask, not a branch on the comparison.  The structural
+ * accept/reject asymmetry remains BY DESIGN (only an accepted tag has
+ * plaintext to produce, and the accept/reject outcome is public via
+ * the return code), which is why an accept-vs-reject pair can only be
+ * timed at `ct_len = 0`, where the masked step is a no-op in both
+ * classes and the only work whose duration could differ is the
+ * `ama_consttime_memcmp` of the 16-byte tag.  The Poly1305 tag
+ * computation (Step 2) still runs identically in both classes over
+ * the AAD plus the empty CT plus the RFC 8439 length block.
+ *
+ * The corrected masked path is witnessed WITH a non-zero payload by
+ * test_chacha20poly1305_forgery_position() below: two forgeries over
+ * a 64-byte ciphertext take identical instruction streams through
+ * Step 2, the hoisted compare, and the masked skip, so that lane
+ * times `bounded_len` doing real eliding work while this one
+ * isolates the accept/reject boundary.
  *
  * Tag pointer is selected *before* the timer starts (pointer-select
  * pattern, same as the secp256k1 lane) so branch-predictor variance
@@ -606,6 +713,94 @@ static double test_chacha20poly1305_tag_verify(int iterations) {
                 "(expected AMA_SUCCESS for good tag, AMA_ERROR_VERIFY_FAILED "
                 "for tampered tag)\n",
                 rc_mismatches);
+        dudect_print_result(&ctx);
+        return DUDECT_FATAL_SENTINEL;
+    }
+
+    dudect_print_result(&ctx);
+    return dudect_get_t(&ctx);
+}
+
+/* -----------------------------------------------------------------------
+ * Test: ChaCha20-Poly1305 tag verify — the *position* of a forgery must
+ * not be readable from the clock.
+ *
+ * Class 0: forged tag differing in byte 0.
+ * Class 1: forged tag differing in byte 15.
+ * Both return AMA_ERROR_VERIFY_FAILED.
+ *
+ * Same construction as test_ascon_tag_verify(), and for the same
+ * reason: what an attacker actually wants from a tag-verify oracle is
+ * to walk the tag space byte by byte, learning how much of a guessed
+ * tag was correct.  The accept/reject outcome is already public via
+ * the return code; the mismatch POSITION is the secret the compare
+ * must hide.  The good-vs-bad lane above cannot carry a payload
+ * (accepting does structurally more work than rejecting), but two
+ * forgeries take the identical path — Poly1305 over AAD + 64 bytes of
+ * real ciphertext + the RFC 8439 length block, the hoisted
+ * `tag_match` compare, and the masked Step 4 skip
+ * (`bounded_len = 64 & -(size_t)0`, src/c/ama_chacha20poly1305.c:874)
+ * — so this is the lane that times the corrected masked control flow
+ * with a non-zero `ct_len`, with the only class difference being
+ * where the tag first disagrees.
+ * ----------------------------------------------------------------------- */
+static double test_chacha20poly1305_forgery_position(int iterations) {
+    dudect_ctx_t ctx;
+    dudect_ctx_init(&ctx, "ChaCha20-Poly1305 tag verify (forgery position)");
+
+    uint8_t key[AMA_CHACHA20_KEY_BYTES];
+    uint8_t nonce[AMA_CHACHA20_NONCE_BYTES];
+    uint8_t aad[32];
+    uint8_t pt[64], ct[64], out[64];
+    uint8_t tag_good[AMA_POLY1305_TAG_BYTES];
+    uint8_t tag_first[AMA_POLY1305_TAG_BYTES];
+    uint8_t tag_last[AMA_POLY1305_TAG_BYTES];
+
+    random_bytes(key, sizeof(key));
+    random_bytes(nonce, sizeof(nonce));
+    random_bytes(aad, sizeof(aad));
+    random_bytes(pt, sizeof(pt));
+
+    if (ama_chacha20poly1305_encrypt(key, nonce, pt, sizeof(pt),
+                                     aad, sizeof(aad),
+                                     ct, tag_good) != AMA_SUCCESS) {
+        fprintf(stderr,
+                "  FAIL: ChaCha20-Poly1305 dudect setup encrypt failed; "
+                "forgery-position lane never executed\n");
+        dudect_print_result(&ctx);
+        return DUDECT_FATAL_SENTINEL;
+    }
+
+    memcpy(tag_first, tag_good, sizeof(tag_good));
+    memcpy(tag_last, tag_good, sizeof(tag_good));
+    tag_first[0] ^= 0x01;
+    tag_last[AMA_POLY1305_TAG_BYTES - 1] ^= 0x01;
+
+    /* Both classes MUST be refused; an accepted forgery would collapse
+     * the classes onto the same path and the lane would testify to
+     * nothing (same guard as the Ascon forgery-position lane). */
+    int rc_mismatches = 0;
+
+    for (int i = 0; i < iterations && !g_timeout_hit; i++) {
+        int class_idx = rand() & 1;
+        /* Pointer select OUTSIDE the timing region. */
+        const uint8_t *tag_use = class_idx ? tag_last : tag_first;
+
+        uint64_t start = dudect_get_time_ns();
+        volatile ama_error_t rc =
+            ama_chacha20poly1305_decrypt(key, nonce, ct, sizeof(ct),
+                                         aad, sizeof(aad), tag_use, out);
+        uint64_t end = dudect_get_time_ns();
+
+        if (rc != AMA_ERROR_VERIFY_FAILED) rc_mismatches++;
+
+        dudect_record(&ctx, class_idx, (double)(end - start));
+    }
+
+    if (rc_mismatches != 0) {
+        fprintf(stderr,
+                "  FAIL: ChaCha20-Poly1305 forgery-position lane saw %d "
+                "non-refusal(s); a forged tag was accepted\n", rc_mismatches);
         dudect_print_result(&ctx);
         return DUDECT_FATAL_SENTINEL;
     }
@@ -1819,8 +2014,12 @@ typedef struct {
 } test_result_t;
 
 /* Upper bound on the number of lanes `run_all_tests` registers.
- * Counted by hand: utility(5) + primitives(8) + ascon(3) +
- * classical-kex(2) + threshold(3) + PQC(3) = 24.  Reserve 32 to give 8 lanes of
+ * Counted by hand against the registration list: utility(5) +
+ * primitives(13, incl. the three Ascon lanes and both AEAD
+ * forgery-position lanes) + classical-kex(2) + threshold(4) +
+ * PQC(3) = 27.  (An earlier revision of this comment said 24 while
+ * 25 were registered — the count is now maintained with the list.)
+ * Reserve 32 to give
  * headroom for future additions without silently overflowing the
  * fixed-size results array.  Bumping this constant is the only place
  * a lane addition needs to be capacity-checked. */
@@ -1894,13 +2093,21 @@ static int run_all_tests(int iterations, test_result_t *results, int *num_result
     DUDECT_REGISTER_LANE(results, idx,
         "Ed25519 verify",
         test_ed25519_verify(iterations), 1);
-    /* Strict: ct_len=0 in the harness collapses the post-verify
-     * decrypt branch in both classes, so any class delta is a real
+    /* Strict: ct_len=0 in the harness makes the masked post-verify
+     * decrypt a no-op in both classes, so any class delta is a real
      * leak in the tag-compare path.  See header comment on
      * test_chacha20poly1305_tag_verify(). */
     DUDECT_REGISTER_LANE(results, idx,
         "ChaCha20-Poly1305 tag verify",
         test_chacha20poly1305_tag_verify(iterations), 0);
+    /* Strict: two forgeries over a 64-byte ciphertext — times the
+     * corrected masked control flow (bounded_len = ct_len & -tag_match)
+     * with a non-zero payload; the only class difference is WHERE the
+     * tag first disagrees.  See header comment on
+     * test_chacha20poly1305_forgery_position(). */
+    DUDECT_REGISTER_LANE(results, idx,
+        "ChaCha20-Poly1305 tag verify (forgery position)",
+        test_chacha20poly1305_forgery_position(iterations), 0);
     /* Ascon (NIST SP 800-232).  All three are strict.  The tag lane times
      * two FORGERIES differing only in mismatch position rather than the
      * usual good-vs-bad pair, because ama_ascon_aead128_decrypt is
@@ -1927,6 +2134,15 @@ static int run_all_tests(int iterations, test_result_t *results, int *num_result
     DUDECT_REGISTER_LANE(results, idx,
         "AES-GCM tag verify",
         test_aes_gcm_tag_verify(iterations), 0);
+    /* Strict: the GCM twin of the ChaCha forgery-position lane —
+     * non-zero payload through the masked CTR bounds, classes differ
+     * only in the mismatch byte.  Argon2id legacy verify and the
+     * agent-binding check need no per-site position lane (straight-line
+     * fail paths, no length-masked work after the hoisted compare —
+     * see the header comment on test_aes_gcm_forgery_position()). */
+    DUDECT_REGISTER_LANE(results, idx,
+        "AES-GCM tag verify (forgery position)",
+        test_aes_gcm_forgery_position(iterations), 0);
     DUDECT_REGISTER_LANE(results, idx,
         "HKDF-SHA3-256",
         test_hkdf(iterations), 0);

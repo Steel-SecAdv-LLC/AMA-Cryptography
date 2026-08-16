@@ -123,9 +123,10 @@ jobs:
     # skipped on every job this repository has ever run, so the entire HSM key
     # lifecycle (connect, generate, encrypt/decrypt, find, delete) was covered
     # only by mocks — the "a lane that never runs is not a lane" failure this
-    # branch removed from the SVE2 kernels, still present here.  Linux only:
-    # the package is Debian-only and one executing lane is what the coverage
-    # argument needs; the mock-backed tests still run everywhere.
+    # branch removed from the SVE2 kernels, still present here.  Provisioned on
+    # every OS this matrix runs: Linux via apt here, Windows via Chocolatey in
+    # the next step (this workflow has no macOS entries; ci-build-test.yml
+    # carries the Homebrew lane).  The mock-backed tests still run everywhere.
     - name: Install SoftHSM2 (PKCS#11 test token)
       if: runner.os == 'Linux'
       run: |
@@ -134,6 +135,49 @@ jobs:
         sudo apt-get install -y --no-install-recommends softhsm2
         test -f /usr/lib/softhsm/libsofthsm2.so
         command -v softhsm2-util
+
+    - name: Install SoftHSM2 (PKCS#11 test token, Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      # Chocolatey's softhsm.install embeds the Disig SoftHSM2-for-Windows MSI,
+      # which statically links OpenSSL 1.1.1 (EOL) — acceptable ONLY as a test
+      # token that never executes in or for product code, the same posture as
+      # the OpenSSL-linked apt/brew SoftHSM2 builds Linux/macOS already use.
+      # Retry shape matches the cmake choco step above (transient CDN outages).
+      run: |
+        $maxAttempts = 5
+        for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+          Write-Host "Attempt ${attempt}/${maxAttempts}: choco install softhsm.install..."
+          choco install softhsm.install -y --no-progress 2>&1
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "Successfully installed softhsm.install"
+            break
+          }
+          if ($attempt -lt $maxAttempts) {
+            $delay = $attempt * 15
+            Write-Host "Install failed, waiting ${delay}s before retry..."
+            Start-Sleep -Seconds $delay
+          }
+        }
+        if ($LASTEXITCODE -ne 0) {
+          Write-Error "All ${maxAttempts} attempts to install softhsm.install via Chocolatey failed"
+          exit 1
+        }
+        # The MSI appends INSTALLDIR\lib (not bin) to the *machine* PATH, which
+        # an already-running job never re-reads anyway — publish bin\ to the
+        # remaining steps explicitly so softhsm2-util is resolvable.
+        Add-Content -Path $env:GITHUB_PATH -Value 'C:\SoftHSM2\bin'
+        # Verify loudly: a missing DLL or broken util must fail this step, not
+        # quietly return the HSM lane to the skip it spent its history in.
+        if (-not (Test-Path 'C:\SoftHSM2\lib\softhsm2-x64.dll')) {
+          Write-Error "C:\SoftHSM2\lib\softhsm2-x64.dll not found after install"
+          exit 1
+        }
+        & 'C:\SoftHSM2\bin\softhsm2-util.exe' --version
+        if ($LASTEXITCODE -ne 0) {
+          Write-Error "softhsm2-util --version failed (exit ${LASTEXITCODE})"
+          exit 1
+        }
 
     - name: Install Python dependencies
       run: |
@@ -262,6 +306,21 @@ jobs:
         AMA_CI_REQUIRE_BACKENDS: "1"
       run: |
         python -m pytest tests/ -v --tb=short --no-cov
+
+    - name: "3R detector efficacy gates (real timings, measured contract)"
+      # benchmarks/detector_baseline_eval.py is the measurement that found
+      # the pre-5.0.0 detector non-functional (sigma inert, 12.5% clean
+      # false-alarm rate, 17.6% shift recall) and is now the regression gate
+      # on the rebuilt detector's measured contract: point-alarm rate within
+      # the declared budget, budget and sigma-floor liveness, prompt
+      # sustained-shift events, and not losing to the trivial baselines at a
+      # matched alarm budget.  One matrix cell is enough — the gates bound
+      # detector behaviour, not host performance — and this cell has the
+      # freshly built native library bound, so the stream is real
+      # ed25519_sign wall-clock timings, not the synthetic fallback.
+      if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11'
+      run: |
+        python benchmarks/detector_baseline_eval.py --samples 4000 --gate
 
     - name: Run the shipped Python examples
       env:
@@ -437,6 +496,7 @@ jobs:
           tools/build_keyformat_corpus.py \
           benchmarks/benchmark_runner.py \
           benchmarks/check_baseline_justification.py \
+          benchmarks/detector_baseline_eval.py \
           benchmarks/validation_suite.py
 
     - name: "INVARIANT-13: Suppression hygiene check"
