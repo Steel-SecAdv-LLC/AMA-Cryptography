@@ -320,6 +320,39 @@ running, for longer than this release.
   the package requires, so it now builds the library and binds it into the
   artefact first, like every other build-then-import job.
 
+### Security — ChaCha20-Poly1305 decrypt gets the unified post-verify control flow AES-GCM already had
+
+The `chacha20-neon` slot of the dudect SIMD sweep, on `ubuntu-24.04-arm`,
+reported `ChaCha20-Poly1305 tag verify` at |t| = 7.68 against a 4.5 threshold
+in 2 of 3 rounds **with a consistent sign** — the shape this release's own
+verdict rule distinguishes from host noise, because a noisy host produces
+excursions that flip sign between rounds. The lane runs only on dispatch and
+schedule, so the per-PR Constant-Time Gate had never exercised it.
+
+The compare itself was never the problem: `ama_consttime_memcmp` accumulates
+all 16 bytes with no early exit, so the *position* of a forgery — the oracle
+that lets an attacker build a tag byte by byte — has never been observable.
+
+What was observable was structural. The verify-pass and verify-fail paths
+were two separate straight lines: each arm of the `if` carried its own
+`ama_secure_memzero()` call site, which the compiler lays out independently,
+and only the pass arm went on to evaluate `if (ct_len > 0)`. Two call sites
+plus one extra test on one side is class-dependent work — small, but
+systematic, and measuring exactly that is what dudect is for.
+
+`ama_aes_gcm.c` had already been given the remedy, and its comment records
+closing the same lane for AES-GCM; this path was simply never brought into
+line. It now follows the same pattern: the compare is hoisted to a value, one
+scrub call site is shared by both outcomes, and the decrypt length is a
+constant-time mask of `tag_match`, so both classes execute the same
+instruction-sequence shape and only the iteration count differs.
+
+The fail-closed contract is unchanged and still pinned by
+`test_chacha20poly1305.c`'s canary test: on `AMA_ERROR_VERIFY_FAILED` the
+caller's plaintext buffer is not written, because the masked length is zero
+on that path. Zeroing a buffer the function never wrote would corrupt caller
+memory, so it is still not done.
+
 ### Fixed — ML-KEM `Compress_d` applies its own `mod 2^d`, and the gates that read the C tree can see it
 
 `kyber_compress_d`'s documented contract is `round(2^d*x/q) mod 2^d`; it

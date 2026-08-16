@@ -833,22 +833,47 @@ ama_error_t ama_chacha20poly1305_decrypt(
 
     ama_secure_memzero(poly_key, sizeof(poly_key));
 
-    /* Step 3: Verify tag (constant-time comparison) */
-    if (ama_consttime_memcmp(computed_tag, tag, 16) != 0) {
-        /* SECURITY: plaintext was never written above this point;
-         * zeroing it here would silently corrupt caller memory with no
-         * cryptographic benefit.  Caller contract: on
-         * AMA_ERROR_VERIFY_FAILED, plaintext is not modified.  Matches
-         * the scalar AES-GCM decrypt path in ama_aes_gcm.c. */
-        ama_secure_memzero(computed_tag, sizeof(computed_tag));
-        return AMA_ERROR_VERIFY_FAILED;
-    }
-
+    /* Step 3: Verify tag (constant-time comparison) + unified post-verify
+     * control flow.
+     *
+     * The compare itself was always constant-time — ama_consttime_memcmp
+     * accumulates all 16 bytes with no early exit, so the *position* of a
+     * forgery has never been observable, which is the oracle that would let
+     * an attacker build a tag byte by byte.
+     *
+     * What was observable was coarser and structural: the verify-pass and
+     * verify-fail paths were two different straight lines.  Each arm of the
+     * `if` carried its OWN ama_secure_memzero() call site, and only the pass
+     * arm went on to evaluate `if (ct_len > 0)`.  Two call sites the compiler
+     * lays out independently, plus one extra test on one side, is
+     * class-dependent work — small, but systematic, and dudect measures
+     * exactly that.  The `chacha20-neon` SIMD slot on ubuntu-24.04-arm
+     * reported |t| = 7.68 against a 4.5 threshold in 2 of 3 rounds with a
+     * consistent sign, which is the signature of a systematic effect rather
+     * than host noise (a noisy host produces excursions that flip sign).
+     *
+     * ama_aes_gcm.c:705 had already been given this treatment — its comment
+     * records closing the same lane for AES-GCM — and this path was simply
+     * never brought into line with it.  Same remedy here: hoist the compare
+     * to a value, share ONE scrub call site, and drive the decrypt length
+     * from a constant-time mask of tag_match so both classes execute the
+     * same instruction-sequence shape and only the iteration count differs.
+     *
+     * SECURITY (unchanged contract): on AMA_ERROR_VERIFY_FAILED the caller's
+     * plaintext buffer is not modified.  `bounded_len` is 0 whenever
+     * tag_match is 0, so chacha20_xor is not entered on the failing path —
+     * the same fail-closed property the early return provided, without the
+     * divergent control flow.  Zeroing the caller's plaintext on failure
+     * would corrupt memory that was never written, so it is still not done.
+     */
+    int tag_match = (ama_consttime_memcmp(computed_tag, tag, 16) == 0);
     ama_secure_memzero(computed_tag, sizeof(computed_tag));
 
-    /* Step 4: Decrypt ciphertext with ChaCha20 (counter starts at 1) */
-    if (ct_len > 0)
-        chacha20_xor(key, 1, nonce, ciphertext, plaintext, ct_len);
+    /* Step 4: Decrypt ciphertext with ChaCha20 (counter starts at 1),
+     * bounded by the verify result. */
+    size_t bounded_len = ct_len & ((size_t)0 - (size_t)tag_match);
+    if (bounded_len > 0)
+        chacha20_xor(key, 1, nonce, ciphertext, plaintext, bounded_len);
 
-    return AMA_SUCCESS;
+    return tag_match ? AMA_SUCCESS : AMA_ERROR_VERIFY_FAILED;
 }
