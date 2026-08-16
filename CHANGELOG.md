@@ -243,7 +243,7 @@ operator re-runs on a quiet machine or audits the primitive. Sensitivity is
 untouched, because a real leak's excursions share a sign. Eight new self-test
 cases pin the boundary, including the exact observed shape.
 
-### Fixed — five defects the verification lanes surfaced only by being run
+### Fixed — six defects the verification lanes surfaced only by being run
 
 Each of these was found by executing a lane against the final code rather than
 trusting that it worked. Four of them had been failing, or silently not
@@ -306,6 +306,19 @@ running, for longer than this release.
   that writes that file, so the one line a reader would copy to reproduce the
   run did not reproduce it. Both records now carry the same block, and the
   command is rendered from the actual invocation.
+
+* **The `Security Checks` CI job could not start pytest.** The semgrep gate's
+  only end-to-end assertion was wired into that job in this release, because
+  it is the one job with semgrep installed. The job then failed — but not on
+  semgrep, which reported no finding at or above ERROR severity. It failed
+  because the job builds no native library: its other steps drive `tools/`
+  scripts that never import the package, so one had never been needed, and
+  `tests/conftest.py` imports `ama_cryptography` at `pytest_configure`. With a
+  failed POST now raising rather than logging, the run died with
+  `INTERNALERROR` before collecting a single test. That is the fail-closed
+  behaviour working exactly as designed; the job simply has to provide what
+  the package requires, so it now builds the library and binds it into the
+  artefact first, like every other build-then-import job.
 
 ### Fixed — ML-KEM `Compress_d` applies its own `mod 2^d`, and the gates that read the C tree can see it
 
