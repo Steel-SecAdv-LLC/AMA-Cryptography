@@ -133,14 +133,26 @@ def isolated_conftest(
         "PYTHONPATH",
         str(repo_root) + (os.pathsep + existing if existing else ""),
     )
-    # encoding="utf-8" is load-bearing, not decoration.  Without it
-    # Path.read_text() uses the locale codepage, which on a Windows runner
-    # without PYTHONUTF8 is cp1252: conftest.py's em dashes decode to mojibake,
-    # pytester writes that back out, and the copy is then read as UTF-8 —
-    # "'utf-8' codec can't decode byte 0x97 in position 757", which failed all
-    # seven tests in this module on every windows-latest job in ci.yml (0x97 is
-    # cp1252's em dash).  ci-build-test.yml sets PYTHONUTF8=1 and so hid it.
-    # Line 381 of this same file already reads with an explicit encoding.
+    # Force the INNER pytest subprocess to speak UTF-8.  runpytest_subprocess
+    # spawns pytest, captures its stdout/stderr as bytes, and decodes them as
+    # UTF-8.  That inner run imports ama_cryptography, whose POST prints
+    # diagnostics containing em dashes (e.g. "binding extensions PARTIALLY
+    # covered ...").  On a windows-latest runner without PYTHONUTF8 the
+    # subprocess emits those on a cp1252 stream, so the em dash is byte 0x97,
+    # and pytester's UTF-8 decode raises "'utf-8' codec can't decode byte 0x97"
+    # — failing all seven tests in this module on every windows-latest job in
+    # ci.yml.  ci-build-test.yml sets PYTHONUTF8=1 at the step and so never saw
+    # it.  ci.yml deliberately does NOT (its Run-pytest step verifies real
+    # cp1252 console behaviour for tests/test_python_examples.py, which strips
+    # these vars from its own children), so the guarantee has to be made HERE,
+    # scoped to this fixture's inner subprocess only.  An earlier fix read the
+    # conftest source with encoding="utf-8" — correct, but the failing bytes
+    # are in the subprocess's runtime OUTPUT, not the source file, so it did
+    # not resolve the failure.
+    monkeypatch.setenv("PYTHONUTF8", "1")
+    monkeypatch.setenv("PYTHONIOENCODING", "utf-8")
+    # encoding="utf-8" on the source read stays load-bearing on its own: without
+    # it Path.read_text() would use the outer process's locale codepage.
     conftest_src = (Path(__file__).parent / "conftest.py").read_text(encoding="utf-8")
     pytester.makepyfile(conftest=conftest_src)
     return pytester
