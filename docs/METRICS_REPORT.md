@@ -200,7 +200,7 @@ find . -type f \
 | Scope | Count |
 |-------|------:|
 | Python test files under `tests/` matching the static regex | 154 |
-| Syntactic `def test_` matches under `tests/**/*.py` | **3,680** |
+| Syntactic `def test_` matches under `tests/**/*.py` | **3,682** |
 | `test_*.c` files under `tests/c/` (ctest-registered) | 58 |
 | `bench_*.c` files under `tests/c/` (standalone, not in ctest) | 1 |
 | `fuzz_*.c` sources under `fuzz/` | 16 |
@@ -228,7 +228,7 @@ pytest --collect-only -q | tail -1
 Stderr is intentionally left unsuppressed so collection/import errors
 remain visible during reproduction.
 
-The static count (3,680) and the dynamic collection count will differ.
+The static count (3,682) and the dynamic collection count will differ.
 Any external claim ("N tests") must state which count it is reporting.
 This supersedes the earlier "866+ tests collected across 39 files" figure
 in ARCHITECTURE.md and any "2,068 tests" figure that may have circulated
