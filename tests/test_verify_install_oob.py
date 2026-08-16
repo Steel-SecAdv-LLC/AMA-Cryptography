@@ -297,19 +297,31 @@ class TestTrustAnchor:
     consistency and nothing about authenticity.  These pin the anchor.
     """
 
+    # These drive `installed_tree`, not PKG_DIR.  The working tree is not a
+    # tree the verifier is designed to pass: `pip install -e .` builds six
+    # Cython bindings into the package directory that the repair-flow artefact
+    # deliberately does not cover, and _verify_binding_extensions refuses that
+    # combination by design.  Pointing the anchoring tests at PKG_DIR made the
+    # two PASS-expecting ones fail on every job that installs the package
+    # (measured: `RESULT: FAIL — 6 problem(s)`, returncode 1, on ubuntu, macOS
+    # and arm) for a reason that has nothing to do with the trust anchor they
+    # exist to pin.  The three refusal-expecting ones still "passed", but for
+    # the wrong reason — a binding failure, not the anchor check — so they are
+    # moved too rather than left resting on a coincidence of exit codes.
+
     @staticmethod
-    def _artefact_pubkey() -> str:
+    def _artefact_pubkey(tree: Path) -> str:
         import re
 
-        text = (PKG_DIR / "_integrity_signature.py").read_text(encoding="utf-8")
+        text = (tree / "_integrity_signature.py").read_text(encoding="utf-8")
         match = re.search(r'INTEGRITY_PUBKEY_HEX = "([0-9a-fA-F]+)"', text)
         assert match is not None, "artefact carries no pubkey"
         return match.group(1)
 
     @requires_signed_tree
     @requires_native_lib
-    def test_refuses_to_run_without_an_anchor(self) -> None:
-        result = _run_tool(str(PKG_DIR), "--native-lib", str(NATIVE_LIB))
+    def test_refuses_to_run_without_an_anchor(self, installed_tree: Path) -> None:
+        result = _run_tool(str(installed_tree), "--native-lib", str(NATIVE_LIB))
         assert result.returncode == 2, (
             "with no --expected-pubkey the tool must refuse rather than report a "
             f"PASS it cannot justify: {result.stdout}{result.stderr}"
@@ -318,13 +330,13 @@ class TestTrustAnchor:
 
     @requires_signed_tree
     @requires_native_lib
-    def test_matching_anchor_passes_and_is_labelled_anchored(self) -> None:
+    def test_matching_anchor_passes_and_is_labelled_anchored(self, installed_tree: Path) -> None:
         result = _run_tool(
-            str(PKG_DIR),
+            str(installed_tree),
             "--native-lib",
             str(NATIVE_LIB),
             "--expected-pubkey",
-            self._artefact_pubkey(),
+            self._artefact_pubkey(installed_tree),
         )
         assert result.returncode == 0, f"{result.stdout}{result.stderr}"
         assert "anchored to --expected-pubkey" in result.stdout
@@ -332,12 +344,12 @@ class TestTrustAnchor:
 
     @requires_signed_tree
     @requires_native_lib
-    def test_wrong_anchor_fails(self) -> None:
+    def test_wrong_anchor_fails(self, installed_tree: Path) -> None:
         """A tree re-signed under another key is refused, however valid its
         own signature is."""
         other = "11" * 32
         result = _run_tool(
-            str(PKG_DIR), "--native-lib", str(NATIVE_LIB), "--expected-pubkey", other
+            str(installed_tree), "--native-lib", str(NATIVE_LIB), "--expected-pubkey", other
         )
         assert result.returncode == 1
         assert "artefact pubkey is NOT the expected one" in result.stdout
@@ -348,19 +360,21 @@ class TestTrustAnchor:
 
     @requires_signed_tree
     @requires_native_lib
-    def test_unanchored_mode_is_explicit_about_what_it_proved(self) -> None:
-        result = _run_tool(str(PKG_DIR), "--native-lib", str(NATIVE_LIB), "--allow-unanchored")
+    def test_unanchored_mode_is_explicit_about_what_it_proved(self, installed_tree: Path) -> None:
+        result = _run_tool(
+            str(installed_tree), "--native-lib", str(NATIVE_LIB), "--allow-unanchored"
+        )
         assert result.returncode == 0, f"{result.stdout}{result.stderr}"
         assert "PASS (UNANCHORED)" in result.stdout
         assert "internal consistency, not authenticity" in result.stdout
         # The whole key, so an operator can compare it against one they hold.
-        assert self._artefact_pubkey() in result.stdout
+        assert self._artefact_pubkey(installed_tree) in result.stdout
 
     @requires_signed_tree
     @requires_native_lib
-    def test_malformed_anchor_is_rejected(self) -> None:
+    def test_malformed_anchor_is_rejected(self, installed_tree: Path) -> None:
         for bad in ("nothex" * 8, "aa" * 16):
-            result = _run_tool(str(PKG_DIR), "--expected-pubkey", bad)
+            result = _run_tool(str(installed_tree), "--expected-pubkey", bad)
             assert result.returncode == 2, f"accepted a malformed anchor {bad!r}"
 
 

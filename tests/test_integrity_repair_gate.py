@@ -46,7 +46,32 @@ from ama_cryptography import _self_test as st
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PKG_DIR = REPO_ROOT / "ama_cryptography"
-NATIVE_LIB = REPO_ROOT / "build" / "lib" / "libama_cryptography.so"
+
+
+def _resolve_native_lib() -> Path | None:
+    """Locate the built native library the way the package itself does.
+
+    The literal ``build/lib/libama_cryptography.so`` this replaced could never
+    exist on macOS (``.dylib``) or Windows (``.dll``) even when the library was
+    built, and MSVC emits to ``build/bin/Release`` rather than ``build/lib``.
+    The three call sites below skip on ``not NATIVE_LIB.exists()`` with the
+    reason ``"native library not built at build/lib"`` — which
+    ``tests/conftest.py`` escalates to a hard CI FAILURE because it names a
+    backend.  So the stale path did not degrade to a skip; it turned every
+    macOS and Windows job red while the backend was in fact present.  This is
+    the same defect already fixed in ``tests/test_verify_install_oob.py``;
+    ``_find_native_library_path`` is the package's own discovery and knows
+    every search dir and platform suffix.
+    """
+    try:
+        from ama_cryptography.pqc_backends import _find_native_library_path
+
+        return _find_native_library_path()
+    except Exception:
+        return None
+
+
+NATIVE_LIB = _resolve_native_lib()
 
 pytestmark = pytest.mark.fips
 
@@ -65,6 +90,19 @@ def _restore_classifier() -> Iterator[None]:
     st._INTEGRITY_STRENGTH = saved_strength
 
 
+def _package() -> types.ModuleType:
+    """The ``ama_cryptography`` package object.
+
+    Resolved through ``sys.modules`` rather than a second ``import
+    ama_cryptography``: this module already imports the package in
+    ``from``-form (``from ama_cryptography import _self_test as st``), and
+    mixing the two import styles for one module is what CodeQL flagged as
+    alerts 624 and 625.  The entry is guaranteed present because importing
+    the ``_self_test`` submodule imports its package first.
+    """
+    return sys.modules["ama_cryptography"]
+
+
 def _install_artefact(monkeypatch: pytest.MonkeyPatch, **fields: Any) -> None:
     """Put a synthetic ``_integrity_signature`` module in front of the real one.
 
@@ -74,21 +112,17 @@ def _install_artefact(monkeypatch: pytest.MonkeyPatch, **fields: Any) -> None:
     resolves through the already-bound package attribute without consulting
     ``sys.modules`` at all.
     """
-    import ama_cryptography
-
     mod = types.ModuleType(_ARTEFACT)
     for name, value in fields.items():
         setattr(mod, name, value)
     monkeypatch.setitem(sys.modules, _ARTEFACT, mod)
-    monkeypatch.setattr(ama_cryptography, "_integrity_signature", mod, raising=False)
+    monkeypatch.setattr(_package(), "_integrity_signature", mod, raising=False)
 
 
 def _remove_artefact(monkeypatch: pytest.MonkeyPatch) -> None:
     """Make importing the artefact raise ImportError (a tree with no signature)."""
-    import ama_cryptography
-
     monkeypatch.setitem(sys.modules, _ARTEFACT, None)
-    monkeypatch.delattr(ama_cryptography, "_integrity_signature", raising=False)
+    monkeypatch.delattr(_package(), "_integrity_signature", raising=False)
 
 
 class TestFailureClassification:
@@ -326,7 +360,8 @@ class TestImportGateEndToEnd:
         # The copied tree carries no shared object, and a missing native
         # backend is a broken build that hard-fails POST on its own — which
         # would mask the integrity-stage outcome these tests are about.
-        env["AMA_CRYPTO_LIB_PATH"] = str(NATIVE_LIB)
+        if NATIVE_LIB is not None:
+            env["AMA_CRYPTO_LIB_PATH"] = str(NATIVE_LIB)
         env.update(env_extra)
         return subprocess.run(
             [sys.executable, "-c", textwrap.dedent(code)],
@@ -345,8 +380,8 @@ class TestImportGateEndToEnd:
         artefact = PKG_DIR / "_integrity_signature.py"
         if not artefact.is_file():
             pytest.skip("no signed-integrity artefact in the source tree")
-        if not NATIVE_LIB.exists():
-            pytest.skip("native library not built at build/lib")
+        if NATIVE_LIB is None:
+            pytest.skip("no native library discoverable by the package loader")
 
         root = self._tree(tmp_path)
         copied = root / "ama_cryptography" / "_integrity_signature.py"
@@ -373,8 +408,8 @@ class TestImportGateEndToEnd:
         artefact = PKG_DIR / "_integrity_signature.py"
         if not artefact.is_file():
             pytest.skip("no signed-integrity artefact in the source tree")
-        if not NATIVE_LIB.exists():
-            pytest.skip("native library not built at build/lib")
+        if NATIVE_LIB is None:
+            pytest.skip("no native library discoverable by the package loader")
 
         root = self._tree(tmp_path)
         target = root / "ama_cryptography" / "exceptions.py"
