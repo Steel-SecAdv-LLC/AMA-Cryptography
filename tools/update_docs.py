@@ -419,18 +419,32 @@ def _generate_benchmark_table() -> str:
     floor_for = _baseline_index()
     captured = _format_iso_date(measured.get("timestamp"))
 
+    # The host is rendered from the record's own provenance, never asserted.
+    # This header used to call every run "the canonical-host measurements",
+    # which was a claim about hardware the generator has no knowledge of: the
+    # committed record was produced on a 4-CPU build container, and the table
+    # published its numbers under a label naming an AVX-512 bench host.
+    provenance = measured.get("provenance", {})
+    host = str(provenance.get("host", "unrecorded host")).strip("` ")
+    cpu = str(provenance.get("cpu", "")).strip("` ")
+    host_desc = f"{host}" + (f", {cpu}" if cpu else "")
+
     lines = [
         "<!-- "
-        "Throughput numbers below are the canonical-host measurements written "
-        "by `benchmarks/benchmark_runner.py --output benchmarks/benchmark-results.json` "
-        f"(the same command CI runs) on {captured}.  The regression-floor "
+        "Throughput numbers below were written by "
+        "`benchmarks/benchmark_runner.py --output benchmarks/benchmark-results.json` "
+        f"(the same command CI runs) on {captured}, on the host that record "
+        f"names ({host_desc}).  They describe THAT host: compare rows within "
+        "the table, not against a different machine.  The regression-floor "
         "column is the value enforced by `benchmarks/baseline.json` (CI "
         "fails when measured drops more than `tolerance_percent` below "
         "floor).  Regenerate via `python tools/update_docs.py`. -->",
-        f"_Headline source: `benchmarks/benchmark-results.json` (run {captured}). "
-        "Regression floor: `benchmarks/baseline.json`.  CI fails on "
-        "(measured - tolerance%) < floor — both columns shown so reviewers "
-        "can sanity-check the headroom._",
+        f"_Headline source: `benchmarks/benchmark-results.json` (run {captured} on "
+        f"{host_desc}). Regression floor: `benchmarks/baseline.json`, measured on "
+        "the CI runner class named there — a floor and a throughput figure are "
+        "different machines on purpose, so the gap between the columns is not "
+        "headroom unless both were measured on the same host.  CI fails when "
+        "measured falls more than `tolerance_percent` below floor._",
         "",
         "| Benchmark | Throughput (ops/sec) | Regression floor (ops/sec) | Tolerance | Tier |",
         "|-----------|---------------------:|---------------------------:|----------:|------|",

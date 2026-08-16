@@ -308,15 +308,28 @@ jobs:
         # pattern here; loosening requires editing this list in review.
         shell: bash
         run: |
-          # The identifier-quoting characters are deliberately matched as
-          # ".." rather than "'..'": gcc emits U+2018/U+2019 under a UTF-8
-          # locale and ASCII apostrophes otherwise, and a multibyte quote is
-          # not one byte to grep under LC_ALL=C.  Matching the quote loosely
-          # keeps the *substance* of the pattern (file, category, type name)
-          # exact while making it immune to the quoting style.
+          # Fail closed when the log is absent or empty: grep exits 2 with "No
+          # such file or directory", which `|| true` would flatten into the
+          # same empty result as "no warnings found", and the step would print
+          # OK having examined nothing.  A gate that passes when its input
+          # vanished is the shape this job exists to remove.
+          if [ ! -s build-warnings.log ]; then
+            echo "::error::build-warnings.log is missing or empty — the build step did not"
+            echo "::error::produce a log, so no warning was examined. Refusing to pass."
+            exit 1
+          fi
+          # `.{1,3}` spans either spelling of GCC's quotes around an
+          # identifier: one ASCII apostrophe under LC_ALL=C (set on the build
+          # step) or the three UTF-8 bytes of U+2018/U+2019 under a UTF-8
+          # locale.  A literal ASCII apostrophe made this gate fail on every
+          # GitHub-hosted run — LANG=C.UTF-8 there — reporting the exact class
+          # it is written to allow, and a bracket class would not have fixed it
+          # either: a C-locale grep splits a multibyte quote into single bytes.
+          # The file, the warning text and the type name still have to match,
+          # so no other pedantic diagnostic in these headers is swallowed.
           unexpected=$(grep "warning:" build-warnings.log \
             | grep -v "/src/c/vendor/" \
-            | grep -Ev "fe(51|64)\.h:[0-9:]+ *warning: ISO C does not support .*__int128.* types" \
+            | grep -Ev "fe(51|64)\.h:[0-9:]+ *warning: ISO C does not support .{1,3}__int128.{1,3} types" \
             | grep -Ev "ama_nistp_mont_mulx\.c:[0-9:]+ *warning: string literal of length" \
             || true)
           if [ -n "${unexpected}" ]; then

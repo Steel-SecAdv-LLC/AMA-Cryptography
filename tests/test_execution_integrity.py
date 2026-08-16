@@ -151,6 +151,62 @@ class TestVerifySourceFileBytecode:
         assert status == "verified"
         assert error is not None and "unreadable" in error
 
+    def test_timestamp_stale_pyc_is_skipped(self, tmp_path: Path) -> None:
+        """A (mtime,size)-invalid cache is recompiled by the interpreter.
+
+        The same rule the wrong-magic case already applied: bytecode the
+        running interpreter refuses to load is not what executes and is not
+        ours to judge.  Judging it produced a false ``poisoned or stale .pyc``
+        POST failure for the most ordinary state there is — edit a lazily
+        imported module, re-sign, and the next import died on a cache that
+        never ran, in a stage ``AMA_BUILD_PIPELINE=1`` does not repair.
+        """
+        py = _make_module(tmp_path, "stale_ts", "X = 5\n")
+        py_compile.compile(str(py), doraise=True)
+        # Change the size as well as the content: the header records the source
+        # size alongside a whole-second mtime, so a same-size rewrite inside the
+        # same second would still look current.
+        py.write_text("X = 5\nY = 6\nZ = 7\n", encoding="utf-8")
+        assert st._verify_source_file_bytecode(py) == ("skipped", None)
+
+    def test_checked_hash_stale_pyc_is_skipped(self, tmp_path: Path) -> None:
+        """PEP 552 checked-hash caches are validated by the interpreter too."""
+        py = _make_module(tmp_path, "stale_hash", "X = 8\n")
+        py_compile.compile(
+            str(py), doraise=True, invalidation_mode=py_compile.PycInvalidationMode.CHECKED_HASH
+        )
+        py.write_text("X = 9\n", encoding="utf-8")
+        assert st._verify_source_file_bytecode(py) == ("skipped", None)
+
+    def test_unchecked_hash_pyc_is_still_judged(self, tmp_path: Path) -> None:
+        """An UNCHECKED-hash cache is loaded blindly, so it must still be judged.
+
+        This is the direction that matters for the attack: the interpreter does
+        not validate the recorded hash, so a poisoned body executes.  Skipping
+        every cache whose source moved on would have handed exactly this case a
+        pass.
+        """
+        py = _make_module(tmp_path, "unchecked", "SECRET = 1\n\ndef check():\n    return True\n")
+        py_compile.compile(
+            str(py), doraise=True, invalidation_mode=py_compile.PycInvalidationMode.UNCHECKED_HASH
+        )
+        pyc = Path(importlib.util.cache_from_source(str(py)))
+        poisoned = compile("SECRET = 1\n\ndef check():\n    return False\n", str(py), "exec")
+        _poison_pyc_body(pyc, poisoned)
+        status, error = st._verify_source_file_bytecode(py)
+        assert status == "verified"
+        assert error is not None and "poisoned or stale" in error
+
+    def test_truncated_header_is_a_fault(self, tmp_path: Path) -> None:
+        """A cache too short to carry a validation header is a fault, not a skip."""
+        py = _make_module(tmp_path, "truncated", "X = 10\n")
+        py_compile.compile(str(py), doraise=True)
+        pyc = Path(importlib.util.cache_from_source(str(py)))
+        pyc.write_bytes(pyc.read_bytes()[:10])
+        status, error = st._verify_source_file_bytecode(py)
+        assert status == "verified"
+        assert error is not None and "truncated header" in error
+
 
 # ---------------------------------------------------------------------------
 # 3. _detect_module_substitution — a covered module served from elsewhere

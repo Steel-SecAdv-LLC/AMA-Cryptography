@@ -304,3 +304,52 @@ class TestEvalHarnessGateLogic:
             assert ev.gate_sigma_floor_live().passed is False
         finally:
             ev.run_shipped = original
+
+    def test_gates_are_deterministic(self) -> None:
+        """Two runs of the gate suite must agree exactly.
+
+        The gates used to run on live wall-clock timings, which made their
+        verdicts a property of the host: the shift gate failed 7 runs in 30
+        with nothing wrong, because a CPU frequency change is a genuine regime
+        change that the detector correctly reacts to and the gate could not
+        tell from the injected one.  A gate whose result depends on the host
+        cannot distinguish a detector regression from a busy runner.
+        """
+        import benchmarks.detector_baseline_eval as ev
+
+        first = {g.name: (g.passed, g.detail) for g in ev.run_gates(1200)}
+        second = {g.name: (g.passed, g.detail) for g in ev.run_gates(1200)}
+        assert first == second, "gate results differ between runs on identical input"
+
+    def test_synthetic_gate_base_has_no_regime_change(self) -> None:
+        """The stream the gates run on must contain no shift for the detector
+        to find — otherwise 'zero false shift events' would be measuring the
+        stream's quirks rather than the detector's restraint."""
+        import benchmarks.detector_baseline_eval as ev
+
+        base = ev.synthetic_base(2000, ev.GATE_BASE_SEED)
+        first_half = sorted(base[: len(base) // 2])
+        second_half = sorted(base[len(base) // 2 :])
+        median_first = first_half[len(first_half) // 2]
+        median_second = second_half[len(second_half) // 2]
+        assert (
+            abs(median_second - median_first) / median_first < 0.05
+        ), "the gate base drifted between halves; a gate stream must be stationary"
+
+    def test_sigma_gate_counts_in_the_calibrated_regime(self) -> None:
+        """The sigma gate must not draw its separation from the warmup window.
+
+        Calibration for budget b activates only after max(100, 1/b) scores.
+        Counting from before that point measured the uncalibrated posture,
+        where sigma is the only threshold and separation is guaranteed whether
+        or not it survives calibration — so a detector that ignored sigma the
+        moment calibration went live still passed.
+        """
+        import benchmarks.detector_baseline_eval as ev
+
+        activation = max(100, int(1 / ev._SIGMA_GATE_BUDGET))
+        assert ev._SIGMA_GATE_START > activation, (
+            f"the sigma gate counts from {ev._SIGMA_GATE_START}, at or before "
+            f"calibration activates ({activation}) — its separation would come "
+            f"from the uncalibrated warmup"
+        )

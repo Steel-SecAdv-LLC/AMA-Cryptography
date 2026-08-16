@@ -538,6 +538,7 @@ jobs:
           tools/check_*.py tools/generate_sbom.py tools/update_docs.py \
           tools/build_post_kats.py tools/sanity_check.py \
           tools/build_keyformat_corpus.py \
+          tools/verify_install_oob.py tools/resign_wheel.py \
           benchmarks/benchmark_runner.py \
           benchmarks/check_baseline_justification.py \
           benchmarks/detector_baseline_eval.py \
@@ -837,8 +838,20 @@ jobs:
       # arrays, and the Wycheproof manifest. Same class of duplication as the
       # version strings check_version_consistency.py polices, same fix.
       #
-      # AMA_POST_DIAGNOSTIC_IMPORT=1: this job deliberately installs no native
-      # library (see the Install step — "collection needs no native library").
+      # AMA_POST_DIAGNOSTIC_IMPORT=1: this step runs `pytest --collect-only`
+      # over files that import the package, and a failed POST makes that import
+      # raise, so without the flag a POST failure is indistinguishable from
+      # "every pinned file drifted".
+      #
+      # The original rationale — "this job installs no native library" — stopped
+      # being true when this PR added the build-and-bind steps above (pytest
+      # could not start at all without them). The job now DOES have a signed
+      # native library, so the flag is narrower in effect than it was: it only
+      # matters if POST fails, and it makes such a failure surface as a count
+      # mismatch here rather than as an import traceback. That is a weaker
+      # signal than a raise, and it is bounded to this counting step — the
+      # test-running jobs do not set it, so a genuine KAT or RNG fault still
+      # fails the suite loudly.
       # Since INVARIANT-39, a failed POST makes `import ama_cryptography` raise,
       # so `pytest --collect-only` on any file importing the package now yields
       # no count and the gate reports every pinned file as drift. The diagnostic

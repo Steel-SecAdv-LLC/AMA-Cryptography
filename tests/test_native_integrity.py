@@ -370,27 +370,44 @@ class TestPostKatVectors:
         corrupted["ss_hex"] = ("0" if ss[0] != "0" else "1") + ss[1:]
         assert bpk._serialise(corrupted) != expected, "check() could not detect a corrupted vector"
 
-    def test_module_digest_covers_post_kats(self, tmp_path: Path) -> None:
+    def test_module_digest_covers_post_kats(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Editing a POST KAT vector changes the module digest.
 
         Without this, an attacker could swap a known-answer vector for one a
         broken implementation passes and defeat the KAT on a build whose .py
         digest and signature still verified.
+
+        Runs against a COPY of the package.  The earlier version tampered with
+        the repository's own tracked vector and restored it in a ``finally``:
+        a Ctrl-C, a SIGKILL or a crash inside that window left the checkout
+        with a corrupted vector, and — as the sibling test
+        ``test_swapped_vector_fails_import`` demonstrates — every subsequent
+        ``import ama_cryptography`` in that checkout then failed POST, with
+        nothing pointing at this test as the cause.  ``_compute_module_digest``
+        resolves the package directory from the module's ``__file__`` at call
+        time, so pointing that at the copy is enough.
         """
         from ama_cryptography import _self_test as st
 
-        kat = PKG_DIR / "_post_kats" / "ml_kem_1024_kat.json"
-        if not kat.is_file():
+        kat_name = "ml_kem_1024_kat.json"
+        if not (PKG_DIR / "_post_kats" / kat_name).is_file():
             pytest.skip("pinned vector not present")
 
+        pkg_copy = tmp_path / "ama_cryptography"
+        shutil.copytree(PKG_DIR, pkg_copy)
+        monkeypatch.setattr(st, "__file__", str(pkg_copy / "_self_test.py"))
+
+        kat = pkg_copy / "_post_kats" / kat_name
         before = st._compute_module_digest()
-        original = kat.read_bytes()
-        try:
-            kat.write_bytes(original[:-2] + b"X\n")
-            after = st._compute_module_digest()
-        finally:
-            kat.write_bytes(original)
+        kat.write_bytes(kat.read_bytes()[:-2] + b"X\n")
+        after = st._compute_module_digest()
+
         assert before != after, "the module digest does not cover _post_kats/ vectors"
+        assert (
+            PKG_DIR / "_post_kats" / kat_name
+        ).read_bytes() != kat.read_bytes(), "the working tree's own vector was modified"
 
     def test_swapped_vector_fails_import(self, signed_tree: Path, tmp_path: Path) -> None:
         """End to end: a modified POST KAT vector fails POST and the import."""

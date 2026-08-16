@@ -266,6 +266,72 @@ _INTEGRITY_STRENGTH: Optional[str] = None
 _INTEGRITY_REQUIRE_TRUST_ANCHOR_ENV = "AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR"
 _TRUE_ENV_VALUES = {"1", "true", "yes", "on"}
 
+#: Why the last integrity check FAILED, in the one distinction the import-time
+#: repair escape in ``__init__`` is allowed to act on.
+#:
+#: ``"stale-binding"`` — the artefact itself is sound, but a local build output
+#: it binds no longer matches: a ``.py`` file or POST KAT vector changed, the
+#: native library was rebuilt, or a binding extension was rebuilt.  This is the
+#: state a re-signing run exists to clear, and it is what
+#: ``AMA_BUILD_PIPELINE=1`` may import through so the in-package repair tooling
+#: can run.
+#:
+#: ``"tampering"`` — the artefact is *wrong*, not stale: the Ed25519 signature
+#: did not verify, the trust anchor did not match, the fields are malformed or
+#: missing, or an anchored build could not verify at all.  Re-signing would
+#: launder these, so they hard-fail on every path, including inside a build
+#: container that carries ``AMA_BUILD_PIPELINE=1`` for its whole lifetime.
+#:
+#: The distinction is carried by this flag rather than by matching the detail
+#: string, for the same reason ``_verify_signed_integrity``'s tri-state is: a
+#: security decision that is a function of prose silently changes meaning when
+#: the prose is reworded.
+#:
+#: What this flag deliberately does NOT claim to separate is a rebuilt binary
+#: from a tampered one — identical local bytes changing under an intact
+#: signature is the same observation either way.  That ambiguity is inherent
+#: and pre-existing (``native_backend_refused_on_digest()`` already accepts it
+#: for the shared object); it is bounded by the module staying in the ERROR
+#: state with every cryptographic operation refused.
+_INTEGRITY_FAILURE_STALE_BINDING = "stale-binding"
+_INTEGRITY_FAILURE_TAMPERING = "tampering"
+_INTEGRITY_FAILURE_KIND: Optional[str] = None
+
+
+def _record_stale_binding_failure(reason: str) -> str:
+    """Classify the in-flight integrity failure as a stale local binding.
+
+    Returns ``reason`` unchanged so call sites read as a single ``return``.
+    """
+    global _INTEGRITY_FAILURE_KIND
+    _INTEGRITY_FAILURE_KIND = _INTEGRITY_FAILURE_STALE_BINDING
+    return reason
+
+
+def _finalise_integrity_failure(reason: str) -> str:
+    """Default an unclassified integrity failure to ``"tampering"``.
+
+    Every failure path that did not explicitly declare itself a stale binding
+    is tampering, so the classification is total and the safe verdict is the
+    one you get by omission.
+    """
+    global _INTEGRITY_FAILURE_KIND
+    if _INTEGRITY_FAILURE_KIND is None:
+        _INTEGRITY_FAILURE_KIND = _INTEGRITY_FAILURE_TAMPERING
+    return reason
+
+
+def integrity_failure_was_stale_binding() -> bool:
+    """True when the last integrity failure was a stale local binding.
+
+    Consumed by ``ama_cryptography.__init__`` to decide whether
+    ``AMA_BUILD_PIPELINE=1`` may complete the import so the in-package
+    re-signing tooling can run.  False for every tampering verdict, and False
+    when no integrity failure has been recorded.
+    """
+    return _INTEGRITY_FAILURE_KIND == _INTEGRITY_FAILURE_STALE_BINDING
+
+
 # Domain-separation tag for the Ed25519 signature that binds the .py digest and
 # the native-library digest together.  A fixed, versioned constant so the signer
 # (_build_sign) and the verifier here construct byte-identical messages; the
@@ -478,9 +544,15 @@ def _check_binding_extensions(
     )
     if mismatches or (anchored and (missing or uncovered or unreadable)):
         problems = mismatches + unreadable + missing + uncovered
+        # Same classification as the native library: a rebuilt extension and a
+        # modified one are indistinguishable from here, and the resign_hint
+        # this very message carries is the documented repair, so the import
+        # escape must be able to reach it.
         return (
             False,
-            "binding-extension verification FAILED: " + "; ".join(problems) + resign_hint,
+            _record_stale_binding_failure(
+                "binding-extension verification FAILED: " + "; ".join(problems) + resign_hint
+            ),
             False,
         )
     if missing or uncovered or unreadable:
@@ -666,6 +738,44 @@ def _iter_covered_modules() -> Iterator[Tuple[str, Any]]:
             yield name, module
 
 
+def _cache_header_is_live(src_path: str, header: bytes) -> bool:
+    """True when the running interpreter would LOAD this ``.pyc`` header.
+
+    Mirrors CPython's ``_bootstrap_external`` validation (PEP 552).  ``header``
+    is the 12 bytes following the magic number: a 4-byte little-endian flags
+    field, then either the source mtime and size (timestamp caches) or an
+    8-byte source hash (hash-based caches).
+
+    A cache the interpreter would reject is not what executes, so the caller
+    treats it exactly like a wrong-magic cache: nothing to bind.  Anything this
+    function cannot resolve — an unreadable source, an unknown flag bit — is
+    reported as live, so an odd cache is judged rather than waved through.
+    """
+    flags = int.from_bytes(header[:4], "little")
+    if flags & 0b1:
+        # Hash-based.  CPython validates the recorded hash only when the
+        # check_source bit is set; an unchecked hash cache is loaded blindly,
+        # so it always executes and must always be judged.
+        if not flags & 0b10:
+            return True
+        try:
+            with open(src_path, "rb") as src_fh:
+                source_bytes = src_fh.read()
+        except OSError:
+            return True
+        return bool(importlib.util.source_hash(source_bytes) == header[4:12])
+    try:
+        stat = os.stat(src_path)
+    except OSError:
+        return True
+    recorded_mtime = int.from_bytes(header[4:8], "little")
+    recorded_size = int.from_bytes(header[8:12], "little")
+    return (
+        recorded_mtime == int(stat.st_mtime) & 0xFFFFFFFF
+        and recorded_size == stat.st_size & 0xFFFFFFFF
+    )
+
+
 def _cached_code_for(src_path: str) -> Tuple[str, Optional[CodeType], Optional[str]]:
     """Load the cached bytecode the running interpreter would use for ``src_path``.
 
@@ -675,10 +785,31 @@ def _cached_code_for(src_path: str) -> Tuple[str, Optional[CodeType], Optional[s
       exists and its code object was read;
     * ``("skipped", None, None)`` — nothing on disk to bind: no cache written
       (the source is compiled directly, so what runs is already the signed
-      source), or a cache built by another interpreter version the running one
-      will not load;
+      source), a cache built by another interpreter version the running one
+      will not load, or a cache whose validation header the running interpreter
+      would reject (it recompiles from source instead);
     * ``("verified", None, error)`` — a cache exists but could not be read as a
       code object; that is a fault, not a pass.
+
+    The header is *validated*, not skipped, because "what executes" is the
+    whole question this stage asks.  PEP 552 gives a ``.pyc`` two validation
+    modes, and the running interpreter refuses a cache that fails either one,
+    recompiling from the source the integrity stage has already verified:
+
+    * timestamp caches (flag bit 0 clear) carry the source mtime and size, and
+      are rejected when either disagrees with the source on disk;
+    * hash-based caches carry a source hash, but the interpreter only checks it
+      when the ``check_source`` flag (bit 1) is set — an unchecked hash cache is
+      always loaded, so it is always ours to judge.
+
+    Judging a cache the interpreter would reject produced a false ``poisoned or
+    stale .pyc`` verdict for the most ordinary state there is: edit a lazily
+    imported module, re-sign, and the next import failed POST on bytecode that
+    never ran.  That failure is not in ``__init__``'s repairable set, so
+    ``AMA_BUILD_PIPELINE=1`` did not clear it and the error's own remediation
+    hint could not either — the tree stayed unimportable until ``__pycache__``
+    was removed by hand.  Under ``PYTHONDONTWRITEBYTECODE`` (common in CI)
+    eagerly imported modules hit it too, since no import rewrites the cache.
     """
     try:
         cache_path = importlib.util.cache_from_source(src_path)
@@ -694,7 +825,11 @@ def _cached_code_for(src_path: str) -> Tuple[str, Optional[CodeType], Optional[s
                 # interpreter will not load it — it recompiles from source — so
                 # it is not what executes and is not ours to judge.
                 return "skipped", None, None
-            fh.read(12)  # bit field + (mtime,size) | source hash: header, not code
+            header = fh.read(12)  # flags + (mtime,size) | source hash
+            if len(header) != 12:
+                return "verified", None, f"cached bytecode {cache_path} has a truncated header"
+            if not _cache_header_is_live(src_path, header):
+                return "skipped", None, None
             cached_body = fh.read()
         # marshal.loads only *materialises* the code object so its instructions
         # can be compared to a fresh compile; the object is never exec()'d, so
@@ -923,7 +1058,10 @@ def _load_artefact_fields(
         return None, f"signature module malformed: missing field ({exc})"
 
     if embedded_digest_hex != digest_hex:
-        return None, (
+        # The signed source no longer matches the tree: exactly what editing a
+        # .py file (or a POST KAT vector) produces, and exactly what
+        # ``integrity --update --sign`` refreshes.
+        return None, _record_stale_binding_failure(
             f"signed digest mismatch: stored={embedded_digest_hex[:16]}... "
             f"computed={digest_hex[:16]}... — a .py file or a POST KAT vector "
             "under _post_kats/ changed post-build"
@@ -942,6 +1080,63 @@ def _load_artefact_fields(
             f"signature={len(signature)} (expected 32, 64)"
         )
     return (pubkey, signature, digest_raw, pubkey_hex), None
+
+
+def _resolve_binding_coverage(
+    binding_digests: Optional[Dict[str, bytes]], anchored: bool
+) -> Tuple[bool, str, bool]:
+    """Bind the authenticated binding map to what is on disk.
+
+    Returns ``(ok, note_suffix, exact)``.  Extracted from
+    ``_verify_signed_integrity`` for the same reason ``_load_artefact_fields``
+    was: that function has to stay inside the complexity gate as schema
+    versions accrete, and this is the branch a v4 artefact would extend.
+    """
+    if binding_digests is not None:
+        ok, note, exact = _check_binding_extensions(binding_digests, anchored)
+        if not ok:
+            return False, note, False
+        return True, f"; {note}", exact
+
+    # A pre-v3 artefact carries no map at all, so every extension present on
+    # disk is executing unverified — the same uncovered state the v3 path
+    # reports as drift, reached by a different route.  A source tree with
+    # nothing built has nothing uncovered and stays full-strength.
+    uncovered = sorted(path.name for path in _iter_extension_files(Path(__file__).resolve().parent))
+    note = "; binding extensions NOT covered (pre-v3 artefact — re-sign to bind them)"
+    if uncovered:
+        note += f" — uncovered and executing: {', '.join(uncovered)}"
+    return True, note, not uncovered
+
+
+def _integrity_strength_for(native_ok: bool, bindings_exact: bool) -> str:
+    """The recorded strength of a verified signature.
+
+    Only a signed artefact whose native library AND binding extensions were
+    both verified against what is on disk is full strength.  Each weaker
+    outcome is named distinctly so the integrity stage can record it as a skip
+    rather than a pass — otherwise ``fully_verified`` again covers code that
+    executed and was never checked:
+
+    * ``signed-native-unverified`` — the shared object performing every
+      cryptographic operation went unchecked (an AMA_CRYPTO_LIB_PATH override,
+      an unreadable developer object, or a legacy v1 artefact).  It is the
+      broader gap, so it wins when both apply.
+    * ``signed-bindings-unverified`` — the library was verified, but at least
+      one binding extension imported and executed without being covered by the
+      artefact.  This is the downgrade ``_check_binding_extensions``' contract
+      promises for drift on a developer build; the ``exact`` flag it returns
+      used to be unpacked and discarded, so the promise was documented and not
+      delivered, and such a tree reported ``fully_verified: True``.
+
+    Both are named in the detail note either way; the strength is what a gate
+    reads.
+    """
+    if not native_ok:
+        return "signed-native-unverified"
+    if not bindings_exact:
+        return "signed-bindings-unverified"
+    return "signed"
 
 
 def _verify_signed_integrity(digest_hex: str) -> Tuple[Optional[bool], str]:
@@ -1074,21 +1269,12 @@ def _verify_signed_integrity(digest_hex: str) -> Tuple[Optional[bool], str]:
     # on _check_binding_extensions: a digest mismatch is always fatal; on
     # anchored (release) builds any drift is fatal; on developer builds
     # drift is a logged warning and a note, not an attestation downgrade.
-    if binding_digests is not None:
-        b_ok, b_note, _b_exact = _check_binding_extensions(binding_digests, anchored)
-        if not b_ok:
-            return False, b_note
-        native_note += f"; {b_note}"
-    else:
-        native_note += "; binding extensions NOT covered (pre-v3 artefact — re-sign to bind them)"
+    binding_ok, binding_note, bindings_exact = _resolve_binding_coverage(binding_digests, anchored)
+    if not binding_ok:
+        return False, binding_note
+    native_note += binding_note
 
-    # Only a signed artefact whose native library was verified against the
-    # loaded object is the full-strength state.  Signed-but-native-unverified
-    # (override, unreadable dev object, or a legacy v1 artefact) is recorded
-    # distinctly so the integrity stage can treat it as a skip rather than a
-    # pass — otherwise ``fully_verified`` would again cover a case where the
-    # code doing the cryptography was never checked.
-    _INTEGRITY_STRENGTH = "signed" if native_ok else "signed-native-unverified"
+    _INTEGRITY_STRENGTH = _integrity_strength_for(native_ok, bindings_exact)
 
     if anchored:
         return True, f"signed integrity verified (Ed25519, trusted build pubkey){native_note}"
@@ -1152,9 +1338,14 @@ def _check_loaded_native_library(
             )
         return None, f"; native library UNVERIFIED — could not read {loaded_path!r}", False
     if actual_native != native_digest_raw:
+        # A rebuilt shared object and a substituted one are the same
+        # observation here, so this is classified as a stale binding: the state
+        # a re-signing run legitimately clears.  The ambiguity is bounded — the
+        # module stays in ERROR and refuses every cryptographic operation — and
+        # is the same one native_backend_refused_on_digest() already accepts.
         return (
             False,
-            (
+            _record_stale_binding_failure(
                 "native library digest MISMATCH — libama_cryptography has been "
                 f"modified since signing (signed={native_digest_raw.hex()[:16]}..., "
                 f"loaded={actual_native.hex()[:16]}... at {loaded_path!r})"
@@ -1189,8 +1380,9 @@ def verify_module_integrity() -> Tuple[bool, str]:
     runtime cost is a single hash + (optionally) a single Ed25519
     verify, both well under 1 ms.
     """
-    global _INTEGRITY_STRENGTH
+    global _INTEGRITY_STRENGTH, _INTEGRITY_FAILURE_KIND
     _INTEGRITY_STRENGTH = None
+    _INTEGRITY_FAILURE_KIND = None
     current = _compute_module_digest()
 
     signed_ok, signed_detail = _verify_signed_integrity(current)
@@ -1220,7 +1412,7 @@ def verify_module_integrity() -> Tuple[bool, str]:
     # value, and the message is free to say whatever is most useful.
     if signed_ok is False:
         logger.error("Signed integrity check failed: %s", signed_detail)
-        return False, signed_detail
+        return False, _finalise_integrity_failure(signed_detail)
 
     # An ANCHORED build has no legitimate unsigned mode, so the fallback is
     # closed off before anything else is considered.
@@ -1256,9 +1448,9 @@ def verify_module_integrity() -> Tuple[bool, str]:
         # determine whether this build is anchored, we must not assume it is
         # not.
         logger.error("Trust-anchor lookup failed: %s", anchor_error)
-        return False, anchor_error
+        return False, _finalise_integrity_failure(anchor_error)
     if anchor_hex is not None:
-        return False, (
+        return False, _finalise_integrity_failure(
             "signed integrity could not be verified on a build with a compiled "
             f"trust anchor ({anchor_hex[:16]}...) — an anchored build is signed "
             "by construction and ships the verifier that checks it, so an "
@@ -1271,7 +1463,7 @@ def verify_module_integrity() -> Tuple[bool, str]:
     # absent, fail there too rather than emitting an unsigned wheel.  This no
     # longer carries the runtime case — the anchor check above does.
     if _env_flag_enabled(_INTEGRITY_REQUIRE_TRUST_ANCHOR_ENV):
-        return False, (
+        return False, _finalise_integrity_failure(
             "signed integrity could not be verified and "
             f"{_INTEGRITY_REQUIRE_TRUST_ANCHOR_ENV}=1 forbids digest-only "
             f"fallback — rebuild the wheel with AMA_BUILD_PIPELINE=1. "
@@ -1281,13 +1473,17 @@ def verify_module_integrity() -> Tuple[bool, str]:
     # Digest-only fallback (editable install / source checkout).
     if not _INTEGRITY_DIGEST_FILE.exists():
         logger.error("Integrity digest file not found and no signature artefact")
-        return False, "Integrity digest file missing"
+        return False, _finalise_integrity_failure("Integrity digest file missing")
     stored = _INTEGRITY_DIGEST_FILE.read_text(encoding="utf-8").strip()
     if not stored:
         logger.error("Integrity digest file is empty")
-        return False, "Integrity digest file empty"
+        return False, _finalise_integrity_failure("Integrity digest file empty")
     if stored != current:
-        reason = f"Module digest mismatch: stored={stored[:16]}... computed={current[:16]}..."
+        # Unsigned tree whose .py files moved on: the digest-only twin of the
+        # signed stale-source case, and repaired by the same command.
+        reason = _record_stale_binding_failure(
+            f"Module digest mismatch: stored={stored[:16]}... computed={current[:16]}..."
+        )
         logger.error(reason)
         return False, reason
     # Digest-only path is healthy; log why the stronger check did not run so
@@ -1811,6 +2007,13 @@ _TIMING_BUFFER_SIZE = 256
 #: ``module_attestation()`` rather than only in the process's own logs.
 _TIMING_MAX_MIN_EFFECT_NS = 100_000.0
 
+#: True when the min-effect floor in force came from
+#: ``AMA_POST_TIMING_MIN_EFFECT_NS`` rather than from the host's clock
+#: resolution.  Surfaced in the oracle's detail string so a release gate
+#: reading ``module_attestation()`` can tell a tuned floor from a computed one
+#: instead of having to recognise the two auto values by sight.
+_TIMING_MIN_EFFECT_OVERRIDDEN = False
+
 
 def _compute_timing_min_effect_ns() -> float:
     """Compute the platform-aware minimum absolute mean-time delta floor.
@@ -1868,17 +2071,29 @@ def _compute_timing_min_effect_ns() -> float:
             # far enough disables the test: an unbounded override could be set
             # to 1e18 ns and every real timing leak would report "Constant-time
             # OK".  A control that an environment variable can silently switch
-            # off is not a control.  The ceiling is the smallest signal a real
-            # early-exit memcmp over 256 bytes produces (>500 ns, see the
-            # docstring); anything at or above it would mask a genuine leak,
-            # so it is refused rather than honoured.
+            # off is not a control.
+            #
+            # What the ceiling bounds is precisely that — DISABLING the test —
+            # and not masking in general.  It sits three orders of magnitude
+            # above the auto-computed floor (50 ns Linux/macOS, 400 ns
+            # Windows), which leaves an honoured override room to hide leaks
+            # smaller than itself, the >500 ns early-exit memcmp signal
+            # included.  That range is deliberately left to the operator: a
+            # tighter ceiling would reject honest tuning on a noisy host, and
+            # an attacker who can already set environment variables in the
+            # target process has better options than narrowing a self-test.
+            # An honoured override is logged at WARNING and marked in the
+            # oracle detail, so a gate reading module_attestation() sees that
+            # the floor was not the computed one.
             if override_ns >= _TIMING_MAX_MIN_EFFECT_NS:
                 logger.error(
                     "Refusing AMA_POST_TIMING_MIN_EFFECT_NS=%.0f ns: at or "
-                    "above %.0f ns the min-effect floor would exceed the "
-                    "signal a real early-exit memcmp produces, turning the "
-                    "timing-leak self-test into an unconditional pass. Using "
-                    "the auto-computed default instead.",
+                    "above %.0f ns (three orders of magnitude above the "
+                    "auto-computed floor) the min-effect threshold would "
+                    "swallow any effect a measurement of this length can "
+                    "resolve, turning the timing-leak self-test into an "
+                    "unconditional pass. Using the auto-computed default "
+                    "instead.",
                     override_ns,
                     _TIMING_MAX_MIN_EFFECT_NS,
                 )
@@ -1886,9 +2101,13 @@ def _compute_timing_min_effect_ns() -> float:
                 logger.warning(
                     "POST timing-leak min-effect floor overridden via "
                     "AMA_POST_TIMING_MIN_EFFECT_NS=%.0f ns (auto would have "
-                    "been computed from time.get_clock_info)",
+                    "been computed from time.get_clock_info). Effects below "
+                    "this are reported as measurement noise, so a real leak "
+                    "smaller than the override is not detected.",
                     override_ns,
                 )
+                global _TIMING_MIN_EFFECT_OVERRIDDEN
+                _TIMING_MIN_EFFECT_OVERRIDDEN = True
                 return override_ns
 
     absolute_floor_ns = 50.0
@@ -2049,7 +2268,8 @@ def _timing_oracle_consttime() -> Tuple[Optional[bool], str]:
         return (
             True,
             f"Constant-time OK: |t|={abs(t_stat):.2f}, delta={delta_ns:.0f}ns "
-            f"(threshold={_DUDECT_THRESHOLD}, min-effect={_TIMING_MIN_EFFECT_NS:.0f}ns) "
+            f"(threshold={_DUDECT_THRESHOLD}, min-effect={_TIMING_MIN_EFFECT_NS:.0f}ns"
+            f"{' OVERRIDDEN' if _TIMING_MIN_EFFECT_OVERRIDDEN else ''}) "
             f"(first-diff={mean1:.0f}ns, last-diff={mean2:.0f}ns, n={n1})",
         )
 
@@ -2171,7 +2391,15 @@ def _run_integrity_stage() -> Tuple[bool, Optional[str]]:
     # and escalated to a hard failure under AMA_FIPS_STRICT.  Promoting either
     # to a pass is exactly the class of "fully verified over an unchecked
     # component" this whole change exists to close.
-    if _INTEGRITY_STRENGTH in ("digest-only", "signed-native-unverified"):
+    #   * "signed-bindings-unverified" — the signature and the shared object
+    #     verified, but a binding extension that has already imported and
+    #     executed is not covered by the artefact.  Uncovered executing code is
+    #     the same gap as an unverified library, one module smaller.
+    if _INTEGRITY_STRENGTH in (
+        "digest-only",
+        "signed-native-unverified",
+        "signed-bindings-unverified",
+    ):
         _SELF_TEST_RESULTS.append(("integrity", None, integrity_detail))
         # Read from the environment rather than taken as a parameter: every
         # other stage helper that needs strict mode is wrapped in a lambda by

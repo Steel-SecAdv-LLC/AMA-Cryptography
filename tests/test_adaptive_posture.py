@@ -388,13 +388,56 @@ class TestCryptoPostureController:
         assert controller._last_rotation_time > 0.0
 
     def test_algorithm_switch_arms_the_cooldown(self) -> None:
-        """A non-rotating action still consumes the throttle window."""
-        controller = CryptoPostureController(on_algorithm_switch=MagicMock(), rotation_cooldown=300)
-        controller._last_rotation_time = 0.0
+        """A non-rotating action still consumes its own throttle window.
+
+        The switch throttle is separate from the rotation one: a rotation that
+        failed must stay retryable, while a switch must never run back-to-back,
+        and a single timer cannot deliver both.  The property asserted here is
+        the one that matters — a second immediate switch does not execute.
+        """
+        on_switch = MagicMock()
+        controller = CryptoPostureController(on_algorithm_switch=on_switch, rotation_cooldown=300)
+        controller._last_switch_time = 0.0
 
         controller._execute_action(PostureAction.SWITCH_ALGORITHM)
 
-        assert controller._last_rotation_time > 0.0
+        assert controller._last_switch_time > 0.0
+        assert on_switch.call_count == 1
+
+        controller._execute_action(PostureAction.SWITCH_ALGORITHM)
+        assert on_switch.call_count == 1, "a second switch inside the window must be suppressed"
+
+    def test_failed_rotation_does_not_unthrottle_the_paired_switch(self) -> None:
+        """ROTATE_AND_SWITCH must not turn a failing rotation into a switch spin.
+
+        ``_trigger_rotation`` deliberately leaves the rotation throttle unarmed
+        when the rotation was attempted and failed, so the retry is not
+        suppressed.  While the two effects shared one timer, that left the
+        paired algorithm switch un-throttled as well: every evaluation cycle
+        climbed another rung of the ladder and fired the switch callback again,
+        with the KMS still unreachable.  The rotation stays retryable; the
+        switch does not ride along.
+        """
+        on_rotation = MagicMock(side_effect=RuntimeError("KMS unreachable"))
+        on_switch = MagicMock()
+        controller = CryptoPostureController(
+            on_rotation=on_rotation,
+            on_algorithm_switch=on_switch,
+            rotation_cooldown=300,
+        )
+        controller._last_rotation_time = 0.0
+        controller._last_switch_time = 0.0
+
+        controller._execute_action(PostureAction.ROTATE_AND_SWITCH)
+        controller._execute_action(PostureAction.ROTATE_AND_SWITCH)
+        controller._execute_action(PostureAction.ROTATE_AND_SWITCH)
+
+        assert on_rotation.call_count == 3, "a failed rotation must remain retryable"
+        assert on_switch.call_count == 1, (
+            "the paired switch must obey its own cooldown even though the "
+            "rotation failed and left the rotation throttle unarmed"
+        )
+        assert controller._last_rotation_time == 0.0
 
     def test_unrankable_algorithm_is_rejected(self) -> None:
         """INVARIANT-35: an unrankable algorithm name must not resolve to a rung.

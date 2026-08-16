@@ -41,7 +41,7 @@ unchanged but the work, the timing, or the failure mode is not.
 
 | # | Kind | Change | Migration |
 |---|---|---|---|
-| 1 | **Breaking** | `import ama_cryptography` raises `CryptoModuleError` when the FIPS 140-3 power-on self-tests fail, where 4.x logged CRITICAL and imported cleanly; the resulting ERROR state inhibits output on **every** surface — `pqc_backends`' 81 native entry points, the five Cython bindings, `AmaContext`, Ascon, `secure_memory`, and the key-format secret exports (INVARIANT-39, INVARIANT-40) | correct the fault the message names; `AMA_POST_DIAGNOSTIC_IMPORT=1` imports for triage with cryptography still refused |
+| 1 | **Breaking** | `import ama_cryptography` raises `CryptoModuleError` when the FIPS 140-3 power-on self-tests fail, where 4.x logged CRITICAL and imported cleanly; the resulting ERROR state inhibits output on **every** surface — `pqc_backends`' 85 native entry points, the ten Cython binding entry points, `AmaContext`, Ascon, `secure_memory`, and the key-format secret exports (INVARIANT-39, INVARIANT-40) | correct the fault the message names; `AMA_POST_DIAGNOSTIC_IMPORT=1` imports for triage with cryptography still refused |
 | 2 | **Breaking** | Ed25519 rejects the two remaining non-canonical encodings — `x = 0` with the sign bit set (RFC 8032 §5.1.3), in both backends, at every public-key decode | none for conformant callers; the affected points are the identity and the order-2 point, neither a usable key |
 | 3 | **Breaking** | `CryptoPostureController` raises `ValueError` for an algorithm it cannot rank, which 4.x silently mapped onto the weakest rung (INVARIANT-35). Strength ladders are now per algorithm family: `KYBER_1024` and `HYBRID_KEM` rank on a KEM ladder (they previously ranked nowhere), and a posture escalation can no longer cross families and answer a KEM escalation with a signature scheme. `AES_256_GCM` remains unrankable — an AEAD with nothing stronger to escalate to | pass a name from `ALGORITHM_FAMILIES`; the error lists them by family |
 | 4 | Behavioural | every asymmetric keygen — random and seed-derived, on every surface — runs a FIPS 140-3 pairwise consistency test before the keypair is released (INVARIANT-41); sub-millisecond for every family except the hash-based signatures: ~220 ms for SPHINCS+-SHA2-256f, **~1.0 s for SLH-DSA-SHAKE-128s** | none; budget for keygen latency on the hash-based parameter sets — the cost is paid once, at the rare long-lived-key operation |
@@ -69,6 +69,110 @@ The first completion pass closed the review threads and executed the lanes;
 this one resolves what the measurements those lanes produced then showed.
 Every item below started as a measured negative result or an explicitly
 recorded gap, and none is closed by documentation alone.
+
+#### Completion pass 3 — what an independent review of the full diff found
+
+Pass 2 asserted that automated review had covered ~6% of the branch and
+established a full-effective-diff review to fix that.  Running it found
+twenty-nine defects, several of them in pass 2's own new code, and they are
+resolved here.  The ones that changed behaviour rather than prose:
+
+- **A memory-safety hole in the SHA-3 streaming API.** The cross-family
+  `buffer_len` guard added earlier covers the eight absorb/update/final/
+  finalize entry points but not the two exported squeeze functions.  A
+  SHAKE128-finalized context squeezed past byte 136 carries a position up to
+  168; handing it to `ama_shake256_inc_squeeze` computes
+  `available = 136 - 168`, which wraps, and the extraction loop then reads
+  past the 200-byte Keccak state and off the end of the context, returning
+  adjacent process memory to the caller.  Both functions are exported and
+  reachable from ctypes.  Guarded by `sha3_squeeze_pos_ok` (the legal squeeze
+  range is `[0, rate]`, not `[0, rate)` — a call that consumes a whole block
+  leaves the position exactly at `rate`), with three regression tests; without
+  the guard the new test aborts under UBSan with
+  `index 25 out of bounds for type 'uint64_t [25]'`.
+- **The out-of-band verifier trusted the key it was auditing.**
+  `tools/verify_install_oob.py` verified the artefact signature against the
+  public key the artefact itself carries, so an attacker with write access to
+  the installed tree — the threat the tool exists to answer — could rewrite the
+  sources, mint a keypair, re-sign, and get `RESULT: PASS`.  It now takes
+  `--expected-pubkey` from outside the tree and compares it *before* checking
+  the signature; without an anchor it refuses to run (exit 2) unless
+  `--allow-unanchored` is passed, which labels the verdict `PASS (UNANCHORED)`
+  and states that it establishes internal consistency, not authenticity.
+- **The import-time repair carve-out excluded nothing.** The condition
+  `(name == "integrity" and _integrity_stage_failed)` was witnessed by the very
+  row it filtered, so every integrity failure — including "Ed25519 signature did
+  NOT verify — module tampered" — completed the import with exit code 0 under
+  `AMA_BUILD_PIPELINE=1`.  Failures are now classified structurally by
+  `integrity_failure_was_stale_binding()`: a stale local binding (a changed
+  `.py`, a rebuilt library or extension) is repairable; a bad signature, a
+  wrong trust anchor or a malformed artefact is tampering and hard-fails on
+  every path.
+- **The documented binding-strength downgrade was never implemented.** The
+  `exact` flag from `_check_binding_extensions` was unpacked into `_b_exact`
+  and discarded, so a developer tree with built-but-uncovered extensions
+  reported integrity PASS and `module_attestation()['fully_verified'] == True`
+  over code that had already executed unchecked.  It now yields a new
+  `signed-bindings-unverified` strength, which the integrity stage records as a
+  SKIP and `AMA_FIPS_STRICT` escalates.
+- **POST failed on bytecode the interpreter would never run.** The execution-
+  integrity stage read and discarded the `.pyc` validation header, so a
+  timestamp- or hash-stale cache was compared against a fresh compile and
+  reported as `poisoned or stale .pyc`.  Editing a lazily imported module and
+  re-signing left the tree unimportable until `__pycache__` was cleared by
+  hand, in a stage `AMA_BUILD_PIPELINE=1` does not repair.  Both the in-tree
+  checker and the out-of-band verifier now validate the header the way CPython
+  does (PEP 552), including the unchecked-hash case that *is* always executed.
+- **A session ID was minted outside the health-tested RNG.**
+  `SessionStore.create()` gated on `check_crypto_permitted()` citing the
+  continuous RNG test, then drew from bare `secrets.token_bytes`.  It now uses
+  `secure_token_bytes` (INVARIANT-41) and refuses to overwrite a live session
+  on a collision rather than replacing it silently.
+- **`ROTATE_AND_SWITCH` could spin the algorithm ladder.** A failed rotation
+  deliberately leaves the rotation cooldown unarmed so the retry is not
+  suppressed; while one timer served both effects, that also left the paired
+  algorithm switch un-throttled, so every evaluation cycle climbed a rung and
+  fired the callback again.  Rotation and switch now throttle independently.
+- **The strict-warnings gate was red on every CI run.** Its allowlist matched
+  GCC's ASCII apostrophes, but GitHub-hosted runners set `LANG=C.UTF-8`, where
+  GCC quotes identifiers with U+2018/U+2019 — so the job failed on the exact
+  two warning classes it exists to permit.  The build step now pins `LC_ALL=C`,
+  the patterns accept either spelling, and a missing or empty log fails the
+  step instead of passing it having examined nothing.
+- **Three detector gates could not do their job.** Run on live host timings,
+  `shift-detection` failed 7 runs in 30 with nothing wrong (a CPU frequency
+  change is a real regime change, and once the detector re-baselined onto it
+  the injected shift raised no event at all), and `spike-ranking-quality`'s
+  floor sat inside the statistic's own spread.  `sigma-floor-is-live` counted
+  from before its budget's calibration activated, so all of its separation came
+  from the uncalibrated warmup and a detector that ignored sigma the moment
+  calibration went live still passed.  The gates now run on deterministic
+  seeded streams — identical results across runs, and each one verified to fail
+  when the property it names is broken — while the live-timing measurements are
+  still taken and reported as the evidence.
+- **Two silent bypasses of the C zeroization gate.** A cast on the destination
+  (`memset((void *)ctx->hmac_key, 0, n)`) and an integer suffix on the zero
+  (`0U`) both escaped the only enforcement INVARIANT-6 has, since the semgrep
+  rule it replaces cannot run.  Both are matched now.
+- **The baseline validity-window gate accepted a hand-edited string as proof.**
+  It now verifies mechanically, with `git diff` from the calibration commit,
+  that no code the floors describe has changed — and the claim it was trusting
+  ("No src/c kernel ... changed after the floors were measured") was false: the
+  Kyber `barrett_reduce` rewrite landed in the same commit that carried the
+  extension.  Every drifted path is now itemised with its reasoning in
+  `metadata.floor_drift_acknowledged`.
+
+Documentation claims corrected against measurement rather than restated: the
+SoftHSM2 lane runs **one** real-token test (`test_full_lifecycle`), not 51; the
+C suite is 59 files / 62 translation units, not 58 / 61; the gated
+`pqc_backends` surface is what `tools/check_error_state_gating.py` reports (85
+native plus 10 Cython entry points), replacing two documents that disagreed at
+80 and 81; the canonical-host performance tables understate 5.0.0 on the AEAD
+rows *and overstate it on every keygen row*, which now pay a pairwise
+consistency test; the published throughput table names the host that actually
+produced it instead of asserting a canonical bench host it was not run on; and
+`ARCHITECTURE.md` no longer points at `.github/INVARIANTS.md` — a three-line
+pointer — as the canonical invariant register.
 
 **The 3R timing-anomaly detector is rebuilt against its own negative
 evidence.** `benchmarks/detector_baseline_eval.py` (added at 8d72b8c)
@@ -429,7 +533,7 @@ same words it would use if it had passed.
   the `[hsm]` extra on Linux, the availability predicate also tests for
   PyKCS11 (a host with the token but not the binding previously *errored*
   rather than skipping), and under `AMA_CI_REQUIRE_BACKENDS=1` a missing token
-  is a failure carrying the remedy. 51 tests now execute against a real token.
+  is a failure carrying the remedy. The suite's one real-token test, `TestSoftHSMIntegration::test_full_lifecycle`, now executes instead of skipping: it drives keygen, sign, verify and delete against a provisioned token. The other 53 tests in the file exercise the PKCS#11 wrapper against mocks and always ran.
 * **The semgrep end-to-end assertion.** Its probe ran `python -m semgrep
   --version` and read the return code. That entry point has been deprecated
   since semgrep 1.38.0 and exits **2** on a perfectly working installation, so

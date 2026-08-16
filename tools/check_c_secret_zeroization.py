@@ -104,11 +104,21 @@ _SECRET_NAME_RE = re.compile(
 # whitespace (``&`` or an identifier start), which is what keeps the match
 # deterministic.  It is captured, not discarded, because the remediation hint
 # has to reproduce a destination expression that compiles.
+# A leading cast is admitted (``memset((void *)ctx->hmac_key, 0, n)`` is an
+# ordinary C spelling, and requiring the destination to START with an
+# identifier let it through), and the zero accepts an integer suffix
+# (``0U``/``0u``/``0L``).  Both were silent bypasses of an ERROR-severity
+# control whose semgrep counterpart is documented as unrunnable, so this regex
+# is the only enforcement of INVARIANT-6.  The cast group is non-capturing and
+# bounded — no nesting, no whitespace-only alternative — so the linear-time
+# property the ReDoS hardening established is preserved.
 _MEMSET_RE = re.compile(
-    r"\bmemset\s*\(\s*(?:(?P<amp>&)\s*)?"
+    r"\bmemset\s*\(\s*"
+    r"(?:\(\s*[A-Za-z_][A-Za-z0-9_ \t]*\**\s*\)\s*)?"
+    r"(?:(?P<amp>&)\s*)?"
     r"(?P<dst>[A-Za-z_][A-Za-z0-9_]*"
     r"(?:(?:->|\.)[A-Za-z_][A-Za-z0-9_]*|\[[^\]]*\])*)"
-    r"\s*,\s*(?P<val>0[xX]0+|0|'\\0')\s*,"
+    r"\s*,\s*(?P<val>0[xX]0+[uUlL]*|0[uUlL]*|'\\0')\s*,"
 )
 
 

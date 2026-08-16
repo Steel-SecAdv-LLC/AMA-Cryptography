@@ -212,16 +212,53 @@ static int test_derived_constant_vs_per_width(void) {
         failures++;
     }
 
+    /* The rationale is about PER-WIDTH reciprocals, so the arithmetic has to
+     * use them.  Multiplying by the single 64-bit M (S=40) instead measured
+     * nothing about the alternative: n_max * M exceeds 2^32 for EVERY width
+     * including d=1, so the printed "fits in 32 bits: NO" was true of the
+     * constant this codebase already uses rather than of the per-width form,
+     * and the FAIL branch below could not fire for any input.
+     *
+     * The per-width constant is M_d = ceil(2^(S_d)/q) with the smallest S_d
+     * that is exact over [0, n_max]: writing e = M_d*q - 2^(S_d), the
+     * multiply-shift agrees with the division for every n <= n_max exactly
+     * when n_max * e < 2^(S_d).  Derived here rather than transcribed, so the
+     * evidence is reproducible from the definition. */
     for (wi = 0; wi < N_WIDTHS; wi++) {
         unsigned d = WIDTHS[wi];
         uint64_t n_max = ((uint64_t)(KYBER_Q - 1) << d) + (KYBER_Q / 2);
-        uint64_t product = n_max * M;
-        int fits32 = product <= 0xFFFFFFFFULL;
-        printf("  d=%-2u  n_max*M = %-20llu  fits in 32 bits: %s\n",
-               d, (unsigned long long)product, fits32 ? "yes" : "NO");
+        unsigned s_d;
+        uint64_t m_d = 0;
+        uint64_t product;
+        int fits32;
+
+        for (s_d = 1u; s_d < 63u; s_d++) {
+            uint64_t two_s = (uint64_t)1u << s_d;
+            uint64_t e;
+            m_d = (two_s + KYBER_Q - 1u) / (uint64_t)KYBER_Q;  /* ceil(2^s/q) */
+            e = m_d * (uint64_t)KYBER_Q - two_s;
+            if (e == 0u || n_max * e < two_s) {
+                break;
+            }
+        }
+        product = n_max * m_d;
+        fits32 = product <= 0xFFFFFFFFULL;
+        printf("  d=%-2u  S_d=%-2u  M_d=%-10llu  n_max*M_d = %-20llu  fits in 32 bits: %s\n",
+               d, s_d, (unsigned long long)m_d, (unsigned long long)product,
+               fits32 ? "yes" : "NO");
+
+        /* Both directions are real tripwires on the recorded rationale:
+         * the wide widths must NOT fit (that is why one 64-bit constant is
+         * preferred), and the narrow ones must (which is why the claim is
+         * "worse at d=10/11", not "impossible everywhere" — reference
+         * implementations do use 32-bit reciprocals at the small widths). */
         if (d >= 10u && fits32) {
-            /* If this ever became true the rationale above would be stale. */
             printf("  FAIL d=%u: the 32-bit-overflow rationale no longer holds\n", d);
+            failures++;
+        }
+        if (d <= 5u && !fits32) {
+            printf("  FAIL d=%u: a per-width 32-bit reciprocal no longer fits, so the\n"
+                   "        recorded reason for preferring one 64-bit constant is wrong\n", d);
             failures++;
         }
     }

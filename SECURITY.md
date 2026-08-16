@@ -423,7 +423,8 @@ repository ships a standalone, stdlib-only verifier that performs the
 out-of-band check the boundary above defers to, runnable anywhere Python
 runs even where OS/package-manager code signing is not deployed. Invoked
 in a fresh interpreter against an installed package directory
-(`python3 tools/verify_install_oob.py <package-dir> [--native-lib PATH]`),
+(`python3 tools/verify_install_oob.py <package-dir> --expected-pubkey <64
+hex> [--native-lib PATH]`),
 it imports nothing from the target tree: it parses
 `_integrity_signature.py` as text (never importing or executing it),
 recomputes the `.py`/`_post_kats/` digest and the v1/v2/v3 signed message
@@ -438,14 +439,32 @@ hand-written from FIPS 202 / FIPS 180-4 / RFC 8032 (no OpenSSL-backed
 `hashlib`, per INVARIANT-1) and must pass startup known-answer tests,
 including a negative control, before anything is verified; a failed
 self-test verifies nothing and exits nonzero. Its trust base is stated in
-the tool and is deliberately small: the operator's Python interpreter and
+the tool and is deliberately small: the operator's Python interpreter,
 that one file — which must itself be obtained out of band (a fresh clone
 or a checksum-verified release artifact, never the installation under
 test), because relocating the verifier outside the tree's trusted
-computing base is the entire point. The boundary statement above stands
-unchanged for the in-process checks: a self-check written in Python still
-cannot vouch for its own bytecode, and this tool is the supported way to
-check what those checks cannot.
+computing base is the entire point — and the **public key supplied as
+`--expected-pubkey`**.
+
+That key is part of the trust base for the same reason the tool is. The
+artefact carries the public key it was signed under, so checking the
+signature against *that* key shows only that whoever wrote the artefact
+also wrote a matching signature; the attacker this tool answers — one
+who can rewrite the installed tree — can rewrite the sources, mint a
+keypair, re-sign, and leave every digest and the signature agreeing. The
+key is therefore compared before the signature is checked, and a tree
+signed under any other key is refused however valid its own signature
+is. Without `--expected-pubkey` the tool exits 2 rather than reporting a
+verdict; `--allow-unanchored` is available for developer trees, whose
+artefacts are signed with a per-build ephemeral key no operator holds,
+and it labels the result `PASS (UNANCHORED)` and prints the full key, so
+what was established (internal consistency) is not confused with what
+was not (authenticity). For a release wheel the key to pass is the
+compiled trust anchor, read from a trusted copy of the release.
+
+The boundary statement above stands unchanged for the in-process checks:
+a self-check written in Python still cannot vouch for its own bytecode,
+and this tool is the supported way to check what those checks cannot.
 
 ### Pre-load native-library verification — refusing before mapping
 

@@ -125,7 +125,12 @@ EXEMPT = {"oss-fuzz/Dockerfile"}
 #: appear in the image reference being excused.
 _EXEMPTION_PROSE = ("pin",)
 
-_FROM_RE = re.compile(r"^\s*FROM\s+(?P<image>\S+)", re.IGNORECASE)
+#: ``FROM`` may carry flags before the image (``--platform=$BUILDPLATFORM`` is
+#: the standard multi-arch idiom).  Capturing the first token grabbed the flag,
+#: which contains neither ':' nor '@', so the build-stage-reference shortcut
+#: below treated it as a stage name and the unpinned base was never checked —
+#: the gate reported "pinned" for a tag-only image.  Skip leading flags.
+_FROM_RE = re.compile(r"^\s*FROM\s+(?:--[^\s]+\s+)*(?P<image>\S+)", re.IGNORECASE)
 _DIGEST_RE = re.compile(r"@sha256:[0-9a-f]{64}$")
 _EOL_RE = re.compile(r"^\s*#\s*base-eol:\s*(?P<date>\d{4}-\d{2}-\d{2})\b")
 

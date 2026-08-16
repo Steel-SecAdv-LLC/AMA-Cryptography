@@ -246,6 +246,85 @@ def _release_tuple(value: object) -> Tuple[int, ...] | None:
     return tuple(int(p) for p in parts)
 
 
+#: Paths whose contents the published floors describe.  A change under any of
+#: them after the calibration commit means the floors and the shipped code have
+#: drifted apart, whatever the change log asserts.
+_FLOORED_CODE_PATHS = ("src/c", "include", "ama_cryptography", "benchmarks/benchmark_runner.py")
+
+#: Extracts the commit from a calibration_evidence run entry, which records
+#: ``"<counter> (<commit>, <class>)"``.
+_CALIBRATION_COMMIT_RE = re.compile(r"\(([0-9a-f]{7,40})[,)]")
+
+
+def _calibration_commit(metadata: Dict[str, object]) -> str | None:
+    """The newest commit named in ``metadata.calibration_evidence.runs``."""
+    evidence = metadata.get("calibration_evidence")
+    if not isinstance(evidence, dict):
+        return None
+    runs = evidence.get("runs")
+    if not isinstance(runs, dict) or not runs:
+        return None
+
+    # Keys are p1, p3, p4, p5...: take the highest-numbered, which is the last
+    # calibration pass and therefore the tree the floors actually describe.
+    def _pass_number(key: str) -> int:
+        digits = "".join(ch for ch in key if ch.isdigit())
+        return int(digits) if digits else -1
+
+    latest = max(runs, key=_pass_number)
+    value = runs[latest]
+    if not isinstance(value, str):
+        return None
+    match = _CALIBRATION_COMMIT_RE.search(value)
+    return match.group(1) if match else None
+
+
+def _floored_code_changed_since_calibration(
+    metadata: Dict[str, object], head_ref: str
+) -> List[str]:
+    """Files under the floored paths that changed since the calibration commit.
+
+    Returns an empty list when the question cannot be answered (no recorded
+    commit, or a commit this clone does not have) rather than inventing a
+    failure: an unanswerable check must not masquerade as a passed one, and the
+    prose-justification path below still applies.
+    """
+    commit = _calibration_commit(metadata)
+    if commit is None:
+        return []
+    try:
+        _run_git("cat-file", "-e", f"{commit}^{{commit}}")
+        changed = _run_git(
+            "diff", "--name-only", f"{commit}..{head_ref}", "--", *_FLOORED_CODE_PATHS
+        )
+    except subprocess.CalledProcessError:
+        return []
+    return [line.strip() for line in changed.splitlines() if line.strip()]
+
+
+def _drift_is_acknowledged(metadata: Dict[str, object], changed_path: str) -> bool:
+    """True when ``metadata.floor_drift_acknowledged`` covers ``changed_path``.
+
+    Each entry is ``{"path": <repo-relative file or directory prefix>,
+    "reason": <why the floors still hold>}``.  Both fields are required: a
+    path with no reason is an acknowledgement of nothing, and this gate exists
+    because an unchecked assertion is worth nothing.
+    """
+    entries = metadata.get("floor_drift_acknowledged")
+    if not isinstance(entries, list):
+        return False
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        path = entry.get("path")
+        reason = entry.get("reason")
+        if not isinstance(path, str) or not isinstance(reason, str) or not reason.strip():
+            continue
+        if changed_path == path or changed_path.startswith(path.rstrip("/") + "/"):
+            return True
+    return False
+
+
 def _check_validity_window(base_ref: str, head_ref: str) -> List[str]:
     """Refuse to extend a baseline's validity window without re-measuring it.
 
@@ -288,6 +367,37 @@ def _check_validity_window(base_ref: str, head_ref: str) -> List[str]:
         before_vals = _load_baseline_at(base_ref, path)
         after_vals = _load_baseline_at(head_ref, path)
         values_changed = bool(_changed_baseline_values(before_vals, after_vals))
+
+        # A window extension with no new measurement is only defensible while
+        # the floored code has not moved.  That claim used to live in prose in
+        # the change log — "No src/c kernel, no dispatch path, and no Python
+        # hot-path wrapper changed after the floors were measured" — where
+        # nothing checked it, and it was false: the Kyber barrett_reduce
+        # rewrite landed in the same commit that carried the extension.  So it
+        # is checked here, against the commit the calibration evidence names.
+        drifted = _floored_code_changed_since_calibration(after_meta, head_ref)
+        drifted = [name for name in drifted if not _drift_is_acknowledged(after_meta, name)]
+        if drifted:
+            failures.append(
+                f"{path}: applies_through_release moved "
+                f"{before_meta.get('applies_through_release')!r} -> "
+                f"{after_meta.get('applies_through_release')!r} with no floor "
+                f"re-measured, but code the floors describe has changed since "
+                f"the calibration commit recorded in "
+                f"metadata.calibration_evidence:\n"
+                + "".join(f"    {name}\n" for name in drifted[:12])
+                + (f"    ... and {len(drifted) - 12} more\n" if len(drifted) > 12 else "")
+                + f"  A floor that describes a tree the branch no longer ships "
+                f"is not a regression gate. Either re-measure on the canonical "
+                f"runner for this file (updating the floors and "
+                f"calibration_evidence), or acknowledge each path explicitly in "
+                f"metadata.floor_drift_acknowledged — a list of "
+                f"{{path, reason}} entries, where path is a repo-relative file "
+                f"or directory prefix. The acknowledgement is reviewable; the "
+                f"prose sentence it replaces was not checked by anything and "
+                f"was false when it was written."
+            )
+            continue
 
         if not (source_advanced or values_changed):
             failures.append(

@@ -54,9 +54,36 @@ void ama_keccak_f1600_generic(uint64_t state[KECCAK_STATE_SIZE]);
  * overrun ctx->buffer.  Both are exported and reachable from ctypes, so this
  * validates buffer_len against each call's own rate and fails closed on the
  * misuse rather than corrupting memory.  Returns nonzero when the context is
- * usable at `rate`. */
+ * usable at `rate`.
+ *
+ * This covers the ABSORB half of the lifecycle only.  After finalize,
+ * buffer_len is reused as a squeeze position whose legal range is different,
+ * so the squeeze entry points are guarded by sha3_squeeze_pos_ok below;
+ * applying this predicate there would reject a legal resume. */
 static inline int sha3_ctx_len_ok(const ama_sha3_ctx *ctx, size_t rate) {
     return ctx->buffer_len < rate;
+}
+
+/* Squeeze-phase companion to sha3_ctx_len_ok.
+ *
+ * After finalize, buffer_len is reused as the offset into the current output
+ * block, and a well-behaved same-family squeeze leaves it anywhere in
+ * [0, rate] — exactly `rate` when a call consumes a whole block without
+ * starting the next one — so the absorb-side predicate (buffer_len < rate)
+ * would reject a legal resume.  The corruption to prevent is the same
+ * cross-family replay at the other end of the lifecycle: a SHAKE128-finalized
+ * context squeezed past byte 136 carries buffer_len up to 168, and
+ * ama_shake256_inc_squeeze would then compute
+ * `available = SHAKE256_RATE - ctx->buffer_len`, which wraps to ~SIZE_MAX, so
+ * tocopy becomes the caller's whole outlen and the extraction loop's
+ * `ctx->state[pos / 8]` walks past the 200-byte state into the absorb buffer
+ * and past the end of ama_sha3_ctx entirely, copying adjacent process memory
+ * into caller-visible output.  Both squeeze functions are exported and
+ * reachable from ctypes — the same reachability that justifies guarding the
+ * absorb side.  Returns nonzero when the squeeze position is usable at
+ * `rate`. */
+static inline int sha3_squeeze_pos_ok(const ama_sha3_ctx *ctx, size_t rate) {
+    return ctx->buffer_len <= rate;
 }
 
 /* Forward declaration: generic 4-way Keccak-f[1600] exported for the
@@ -818,6 +845,10 @@ ama_error_t ama_shake256_inc_squeeze(ama_sha3_ctx* ctx, uint8_t* output, size_t 
     if (!ctx || !output) return AMA_ERROR_INVALID_PARAM;
     if (!ctx->finalized) return AMA_ERROR_INVALID_PARAM;
 
+    if (!sha3_squeeze_pos_ok(ctx, SHAKE256_RATE)) {
+        return AMA_ERROR_INVALID_PARAM;  /* cross-family misuse — see sha3_squeeze_pos_ok */
+    }
+
     /* buffer_len tracks how many bytes have been consumed from the current block */
     while (outlen > 0) {
         available = SHAKE256_RATE - ctx->buffer_len;
@@ -930,6 +961,15 @@ ama_error_t ama_shake128_inc_squeeze(ama_sha3_ctx* ctx, uint8_t* output, size_t 
     size_t i, available, tocopy;
     if (!ctx || !output) return AMA_ERROR_INVALID_PARAM;
     if (!ctx->finalized) return AMA_ERROR_INVALID_PARAM;
+
+    /* SHAKE128 has the largest rate of the four families sharing this context,
+     * so no legal same- or cross-family sequence can leave a position above it
+     * today.  The guard is here anyway: it is the invariant the extraction loop
+     * below depends on, and stating it symmetrically with SHAKE256 keeps a
+     * future family (or a larger rate) from silently reopening the underflow. */
+    if (!sha3_squeeze_pos_ok(ctx, SHAKE128_RATE)) {
+        return AMA_ERROR_INVALID_PARAM;  /* cross-family misuse — see sha3_squeeze_pos_ok */
+    }
 
     while (outlen > 0) {
         available = SHAKE128_RATE - ctx->buffer_len;

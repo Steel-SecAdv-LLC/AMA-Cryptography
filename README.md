@@ -379,9 +379,9 @@ Additional C sources:
 
 > **Reading the numbers below.** All ops/sec figures in the tables that follow are from the **canonical bench host** (Linux x86-64 with AVX-512F/VL/BW/DQ/VBMI + VAES + VPCLMULQDQ; Sapphire Rapids / Zen 4 class), measured 2026-04-25 with `python benchmarks/benchmark_runner.py` and `build/bin/benchmark_c_raw --json`. They describe **that host**, not a runner you are likely to have; reproduce them on equivalent silicon.
 >
-> **What 5.0.0 changed, stated rather than implied.** The canonical-host figures below were measured against the 4.x code. 5.0.0 rewrote the Python one-shot AEAD wrappers (a hand-written multi-buffer borrow plus an all-`bytes` fast path, replacing four `@contextlib.contextmanager` borrows per call), so the **AES-256-GCM and ChaCha20-Poly1305 rows describe a code path this release replaced** and understate it. Measured on the `ubuntu-24.04-arm` CI runner across the change: AES-256-GCM one-shot 132k → 234k ops/sec; ChaCha20-Poly1305 195k, against 207k before it also gained the wipeable-key contract it alone lacked — the ~6% being the shared fast-path scaffolding, stated rather than hidden. Nothing else in these tables touches a path 5.0.0 changed.
+> **What 5.0.0 changed, stated rather than implied.** The canonical-host figures below were measured against the 4.x code. 5.0.0 rewrote the Python one-shot AEAD wrappers (a hand-written multi-buffer borrow plus an all-`bytes` fast path, replacing four `@contextlib.contextmanager` borrows per call), so the **AES-256-GCM and ChaCha20-Poly1305 rows describe a code path this release replaced** and understate it. Measured on the `ubuntu-24.04-arm` CI runner across the change: AES-256-GCM one-shot 132k → 234k ops/sec; ChaCha20-Poly1305 195k, against 207k before it also gained the wipeable-key contract it alone lacked — the ~6% being the shared fast-path scaffolding, stated rather than hidden. The keygen rows are affected in the other direction and are **optimistic**: 5.0.0 runs a FIPS 140-3 pairwise consistency test on every asymmetric keygen (INVARIANT-41), so each of those rows now pays a sign and a verify it did not pay when it was measured — using this table's own figures, that is roughly 3.7x the Ed25519 keygen cost itself. Every row also pays the ~37 ns `check_crypto_permitted()` guard 5.0.0 added to each gated native entry point (INVARIANT-39), which is measurable only on the shortest operations. Read the AEAD rows as understating this release, the keygen rows as overstating it, and no row as a 5.0.0 measurement.
 >
-> **Every canonical-host row below is a 4.x-era measurement** (each row carries its 2026-04 date). No 5.0.0 measurement on AVX-512 + VAES + VPCLMULQDQ silicon exists: the canonical bench host is not reachable from CI or from the environment this release was engineered in, and this repository does not publish numbers it did not measure. An earlier revision of this paragraph said the canonical rows are "re-measured on the canonical host at release time" — the date labels on every row contradicted it, and the sentence is withdrawn. Re-measuring on canonical silicon is a release-time action on hardware (tracked in the release PR's *Remaining actions*); until it happens, read the two AEAD rows as understating 5.0.0 and every other row as accurate for the 4.x code it measured.
+> **Every canonical-host row below is a 4.x-era measurement** (each row carries its 2026-04 date). No 5.0.0 measurement on AVX-512 + VAES + VPCLMULQDQ silicon exists: the canonical bench host is not reachable from CI or from the environment this release was engineered in, and this repository does not publish numbers it did not measure. An earlier revision of this paragraph said the canonical rows are "re-measured on the canonical host at release time" — the date labels on every row contradicted it, and the sentence is withdrawn. Re-measuring on canonical silicon is a release-time action on hardware (tracked in the release PR's *Remaining actions*); until it happens, read every row as a measurement of the 4.x code, adjusted by the paragraph above for the paths 5.0.0 changed.
 >
 > **Where the current, per-runner numbers live.** `benchmarks/baseline.json` and `benchmarks/arm-baseline.json` carry **measured medians** on their named CI runners with a single derived tolerance each — they are regression *floors*, and since 5.0.0 they are no longer pre-discounted guesses (`x86` uses the slow-class median of a measurably two-class `ubuntu-latest` fleet with a uniform 45% tolerance; `aarch64`, a homogeneous fleet with spreads ≤3%, uses 15% — 25% for the two rejection-averaged composites). `benchmark-report.md` is regenerated from a run of the suite and records the exact commit, host, command, repeat count and aggregation. A floor and a canonical-host figure are different numbers on purpose; neither is an estimate of the other.
 
@@ -533,6 +533,14 @@ installs byte-identical source.
 The primary channel, and the one to use if you want zero third-party
 intermediaries. Pin to a **tag**, never a branch, so the install is
 reproducible:
+
+> **`v5.0.0` is not tagged yet.** This tree is 5.0.0 in preparation; the tag is
+> created at release time (see `CHANGELOG.md`, whose 5.0.0 heading is
+> deliberately dated `Unreleased`). Until then the commands below resolve only
+> for tags that exist — `v4.0.0` is the newest published one. The version is
+> written here rather than left as a placeholder so that these commands are
+> correct the moment the tag is pushed, and wrong in a way you can see rather
+> than silently installing something else.
 
 ```bash
 # Replace the tag with the release you want; any published tag works.
@@ -946,7 +954,7 @@ The test suite includes:
 
 ![Test Suite Coverage](assets/test_coverage.png)
 
-*3,740 test functions across 157 Python test files plus 58 C test suites (61 translation units) covering core crypto and NIST KATs (including the new AVX-512 4-way Keccak KAT, fe51-vs-fe64 X25519 byte-equivalence, MULX+ADX equivalence, VAES AES-GCM equivalence, FROST threshold signing, Ed25519 Shamir verify and base-point comb equivalence, and Dilithium / Kyber sampling-equivalence pinning), PQC backends, key management, adaptive posture, hybrid combiner, memory security, fuzz harnesses, and performance/monitoring. See [docs/METRICS_REPORT.md](docs/METRICS_REPORT.md) for the authoritative count and reproduction command (`grep -rE "^\s*def test_" tests/ --include='*.py' | wc -l`).*
+*3,770 test functions across 158 Python test files plus 59 C test suites (62 translation units) covering core crypto and NIST KATs (including the new AVX-512 4-way Keccak KAT, fe51-vs-fe64 X25519 byte-equivalence, MULX+ADX equivalence, VAES AES-GCM equivalence, FROST threshold signing, Ed25519 Shamir verify and base-point comb equivalence, and Dilithium / Kyber sampling-equivalence pinning), PQC backends, key management, adaptive posture, hybrid combiner, memory security, fuzz harnesses, and performance/monitoring. See [docs/METRICS_REPORT.md](docs/METRICS_REPORT.md) for the authoritative count and reproduction command (`grep -rE "^\s*def test_" tests/ --include='*.py' | wc -l`).*
 
 </details>
 
@@ -1569,7 +1577,7 @@ The human architect does not hold formal credentials in cryptography. The AI con
 
 - **Standards-based design:** Built on NIST FIPS 202/204, RFC 2104/5869/8032/3161—not custom cryptography
 - **Quantified claims:** All performance metrics are measured and reproducible (see [benchmarks/](benchmarks/))
-- **Rigorous testing:** 3,740 test functions across 157 Python files plus 58 C test suites, anchored in [docs/METRICS_REPORT.md](docs/METRICS_REPORT.md); CI includes security scanning, NIST ACVP validation (1,215/1,215 — 815 AFT + 400 SHA-3 MCT), and tiered benchmark-regression checks
+- **Rigorous testing:** 3,770 test functions across 158 Python files plus 59 C test suites, anchored in [docs/METRICS_REPORT.md](docs/METRICS_REPORT.md); CI includes security scanning, NIST ACVP validation (1,215/1,215 — 815 AFT + 400 SHA-3 MCT), and tiered benchmark-regression checks
 - **Regression detection:** Tiered benchmark tolerances calibrated for CI environments
 - **Transparent limitations:** Security analysis explicitly distinguishes self-assessed vs. audited claims
 - **Defense-in-depth:** Security bounded by weakest layer (~128-bit classical), not inflated aggregate claims

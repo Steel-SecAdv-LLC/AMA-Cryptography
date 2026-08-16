@@ -287,10 +287,89 @@ def installed_tree(tmp_path: Path) -> Path:
 
 @requires_signed_tree
 @requires_native_lib
+class TestTrustAnchor:
+    """The key must come from the operator, not from the tree being checked.
+
+    The tool exists because an attacker with write access to the installed
+    tree can poison the in-band checker.  That same attacker can rewrite the
+    sources, mint a keypair, and re-sign the artefact — so verifying the
+    signature against the pubkey the artefact itself carries proves internal
+    consistency and nothing about authenticity.  These pin the anchor.
+    """
+
+    @staticmethod
+    def _artefact_pubkey() -> str:
+        import re
+
+        text = (PKG_DIR / "_integrity_signature.py").read_text(encoding="utf-8")
+        match = re.search(r'INTEGRITY_PUBKEY_HEX = "([0-9a-fA-F]+)"', text)
+        assert match is not None, "artefact carries no pubkey"
+        return match.group(1)
+
+    @requires_signed_tree
+    @requires_native_lib
+    def test_refuses_to_run_without_an_anchor(self) -> None:
+        result = _run_tool(str(PKG_DIR), "--native-lib", str(NATIVE_LIB))
+        assert result.returncode == 2, (
+            "with no --expected-pubkey the tool must refuse rather than report a "
+            f"PASS it cannot justify: {result.stdout}{result.stderr}"
+        )
+        assert "no trust anchor" in result.stderr
+
+    @requires_signed_tree
+    @requires_native_lib
+    def test_matching_anchor_passes_and_is_labelled_anchored(self) -> None:
+        result = _run_tool(
+            str(PKG_DIR),
+            "--native-lib",
+            str(NATIVE_LIB),
+            "--expected-pubkey",
+            self._artefact_pubkey(),
+        )
+        assert result.returncode == 0, f"{result.stdout}{result.stderr}"
+        assert "anchored to --expected-pubkey" in result.stdout
+        assert "UNANCHORED" not in result.stdout
+
+    @requires_signed_tree
+    @requires_native_lib
+    def test_wrong_anchor_fails(self) -> None:
+        """A tree re-signed under another key is refused, however valid its
+        own signature is."""
+        other = "11" * 32
+        result = _run_tool(
+            str(PKG_DIR), "--native-lib", str(NATIVE_LIB), "--expected-pubkey", other
+        )
+        assert result.returncode == 1
+        assert "artefact pubkey is NOT the expected one" in result.stdout
+        assert "[signature] verified" not in result.stdout, (
+            "the key check must precede the signature check: reporting 'verified' "
+            "for a tree signed by the wrong key is the misleading half of the result"
+        )
+
+    @requires_signed_tree
+    @requires_native_lib
+    def test_unanchored_mode_is_explicit_about_what_it_proved(self) -> None:
+        result = _run_tool(str(PKG_DIR), "--native-lib", str(NATIVE_LIB), "--allow-unanchored")
+        assert result.returncode == 0, f"{result.stdout}{result.stderr}"
+        assert "PASS (UNANCHORED)" in result.stdout
+        assert "internal consistency, not authenticity" in result.stdout
+        # The whole key, so an operator can compare it against one they hold.
+        assert self._artefact_pubkey() in result.stdout
+
+    @requires_signed_tree
+    @requires_native_lib
+    def test_malformed_anchor_is_rejected(self) -> None:
+        for bad in ("nothex" * 8, "aa" * 16):
+            result = _run_tool(str(PKG_DIR), "--expected-pubkey", bad)
+            assert result.returncode == 2, f"accepted a malformed anchor {bad!r}"
+
+
 class TestCliAgainstRepoTree:
     def test_clean_tree_passes(self, installed_tree: Path) -> None:
         assert NATIVE_LIB is not None  # guaranteed by @requires_native_lib
-        result = _run_tool(str(installed_tree), "--native-lib", str(NATIVE_LIB))
+        result = _run_tool(
+            str(installed_tree), "--native-lib", str(NATIVE_LIB), "--allow-unanchored"
+        )
         assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         # The working tree's artefact is a repair-flow signing: v3 schema with
         # the binding map EMPTY — the tool must handle that state, not choke.
@@ -309,7 +388,9 @@ class TestCliAgainstRepoTree:
         assert NATIVE_LIB is not None  # guaranteed by @requires_native_lib
         planted = installed_tree / f"implant_binding{oob._EXTENSION_SUFFIXES[0]}"
         planted.write_bytes(b"not a real extension, but it is compiled code")
-        result = _run_tool(str(installed_tree), "--native-lib", str(NATIVE_LIB))
+        result = _run_tool(
+            str(installed_tree), "--native-lib", str(NATIVE_LIB), "--allow-unanchored"
+        )
         assert result.returncode != 0, f"stdout:\n{result.stdout}"
         assert "not covered by" in result.stdout
         assert planted.name in result.stdout
@@ -332,14 +413,25 @@ def _ensure_cache(py_path: Path) -> Path:
 def _write_pyc(py_path: Path, source: str) -> Path:
     """Write bytecode compiled from ``source`` into ``py_path``'s cache slot.
 
-    The 16-byte header (magic + flags/mtime/size zeroed) is enough for the
-    tool, which deliberately ignores the timestamp fields exactly as
-    ``_self_test._cached_code_for`` does — an attacker sets those freely.
+    The header carries the SOURCE's real mtime and size, which is what a
+    poisoned cache must do to be dangerous: the interpreter validates those
+    fields and recompiles from source when they disagree, so a cache with a
+    zeroed header is one that never executes.  Both the tool and
+    ``_self_test._cached_code_for`` skip such a cache for exactly that reason —
+    an attacker who wants their bytecode to run has to make the header agree,
+    and it is those caches that get judged.
     """
     code = compile(source, str(py_path), "exec", dont_inherit=True, optimize=-1)
     cache_path = Path(importlib.util.cache_from_source(str(py_path)))
     cache_path.parent.mkdir(exist_ok=True)
-    cache_path.write_bytes(importlib.util.MAGIC_NUMBER + b"\x00" * 12 + marshal.dumps(code))
+    stat = py_path.stat()
+    header = (
+        importlib.util.MAGIC_NUMBER
+        + (0).to_bytes(4, "little")
+        + (int(stat.st_mtime) & 0xFFFFFFFF).to_bytes(4, "little")
+        + (stat.st_size & 0xFFFFFFFF).to_bytes(4, "little")
+    )
+    cache_path.write_bytes(header + marshal.dumps(code))
     return cache_path
 
 
@@ -369,7 +461,7 @@ class TestTamperDetection:
         assert tampered != original, "fixture assumption broken: no 'class ' in exceptions.py"
         target.write_bytes(tampered)
 
-        result = _run_tool(str(pkg_copy), "--native-lib", str(native_copy))
+        result = _run_tool(str(pkg_copy), "--native-lib", str(native_copy), "--allow-unanchored")
         assert result.returncode != 0
         assert "py digest MISMATCH" in result.stdout
         # Attribution: the cached bytecode no longer matches the tampered
@@ -388,7 +480,7 @@ class TestTamperDetection:
         poisoned_source = target.read_text(encoding="utf-8") + "\n_OOB_POISON_MARKER = 1\n"
         _write_pyc(target, poisoned_source)
 
-        result = _run_tool(str(pkg_copy), "--native-lib", str(native_copy))
+        result = _run_tool(str(pkg_copy), "--native-lib", str(native_copy), "--allow-unanchored")
         assert result.returncode != 0
         # Source tree still authentic...
         assert "[py-digest] verified" in result.stdout
@@ -404,7 +496,7 @@ class TestTamperDetection:
         blob[len(blob) // 2] ^= 0x01
         native_copy.write_bytes(bytes(blob))
 
-        result = _run_tool(str(pkg_copy), "--native-lib", str(native_copy))
+        result = _run_tool(str(pkg_copy), "--native-lib", str(native_copy), "--allow-unanchored")
         assert result.returncode != 0
         assert "native library digest MISMATCH" in result.stdout
         assert "RESULT: FAIL" in result.stdout

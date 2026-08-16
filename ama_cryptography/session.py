@@ -24,13 +24,12 @@ Version: 5.0.0
 """
 
 import logging
-import secrets
 import threading
 import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
-from ama_cryptography._module_state import check_crypto_permitted
+from ama_cryptography._module_state import check_crypto_permitted, secure_token_bytes
 from ama_cryptography.exceptions import AmaCryptographyError
 
 logger = logging.getLogger(__name__)
@@ -285,7 +284,23 @@ class SessionStore:
             if len(self._sessions) >= self.max_sessions:
                 raise SessionLimitError(f"Maximum sessions ({self.max_sessions}) reached")
 
-            session_id = secrets.token_bytes(SESSION_ID_BYTES)
+            # Drawn through ``secure_token_bytes``, not ``secrets`` (INVARIANT-41):
+            # a session ID is a bearer token, and the continuous repeated-output
+            # health test that draw carries is the only control in the module
+            # that can notice a stuck DRBG minting the same one twice.  Gating on
+            # check_crypto_permitted() above while drawing outside the health-
+            # tested path cited a fault detector the call then bypassed.
+            session_id = secure_token_bytes(SESSION_ID_BYTES)
+            if session_id in self._sessions:
+                # Unreachable with a healthy 256-bit draw; reached only if the
+                # RNG repeats, which is exactly when silently replacing a live
+                # session — handing two callers state keyed by one bearer token
+                # — is worst.  Fail closed instead of overwriting.
+                raise AmaCryptographyError(
+                    "session ID collision on a fresh 256-bit draw — refusing to "
+                    "replace the live session; the RNG is not producing unique "
+                    "output"
+                )
             session = SessionState(
                 session_id=session_id,
                 ttl_seconds=ttl_seconds if ttl_seconds is not None else self.default_ttl,

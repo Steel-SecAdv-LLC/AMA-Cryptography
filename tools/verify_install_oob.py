@@ -37,15 +37,32 @@ is that move: nothing it executes comes from the target tree.
 Trust base — stated honestly
 ----------------------------
 
-The operator's Python interpreter (and its stdlib), and this single
-file.  Fetch this file out of band — from the repository over an
-independent channel (a fresh ``git clone``, or a release tarball whose
-checksum you verified) — never from the installation being verified.
-Displacing the trust base out of the verified tree is the point; a copy
-of this tool that shipped inside a compromised tree proves nothing.
-Run it with the same interpreter (version and ``-O`` level) that runs
-the application, so the ``__pycache__`` slot it checks is the one that
-interpreter would load.
+The operator's Python interpreter (and its stdlib), this single file,
+**and the public key passed as ``--expected-pubkey``**.  Fetch this file
+out of band — from the repository over an independent channel (a fresh
+``git clone``, or a release tarball whose checksum you verified) — never
+from the installation being verified.  Displacing the trust base out of
+the verified tree is the point; a copy of this tool that shipped inside
+a compromised tree proves nothing.  Run it with the same interpreter
+(version and ``-O`` level) that runs the application, so the
+``__pycache__`` slot it checks is the one that interpreter would load.
+
+The key belongs in that list and not in the tree, for the same reason
+the tool itself does.  The artefact carries the public key it was signed
+under, so verifying against *that* key establishes only that whoever
+wrote the artefact also wrote a matching signature — and an attacker who
+can rewrite the installed tree, which is the threat this tool exists to
+answer, can rewrite the sources, mint a keypair, re-sign, and produce a
+tree where every digest and the signature all agree.  Supply the key you
+hold: ``--expected-pubkey`` is compared before the signature is checked,
+and without it the tool refuses to run unless ``--allow-unanchored`` is
+given, in which case the verdict says UNANCHORED and claims internal
+consistency rather than authenticity.  (Developer trees are the honest
+use of that mode: their artefacts are signed with a per-build ephemeral
+key that no operator holds.  A release wheel's key is the compiled trust
+anchor ``ama_integrity_trust_anchor_pubkey_hex`` reports, which the
+in-tree checker pins and which you can read from a trusted copy of the
+release.)
 
 INVARIANT-1 / sovereignty: the digests verified here are NOT computed
 with ``hashlib`` (OpenSSL-backed on CPython — a forbidden stand-in for
@@ -59,10 +76,14 @@ A failed self-KAT verifies nothing and exits nonzero (fail closed).
 Usage::
 
     python3 tools/verify_install_oob.py <path-to-ama_cryptography-dir> \\
-        [--native-lib PATH]
+        --expected-pubkey <64 hex> [--native-lib PATH]
+
+    # developer tree signed with a per-build ephemeral key nobody holds:
+    python3 tools/verify_install_oob.py <dir> --allow-unanchored
 
 Exit codes: 0 everything verified; 1 verification failure (report names
-each fault); 2 unusable target; 3 self-KAT failure.
+each fault); 2 unusable target, malformed anchor, or no trust anchor and
+no explicit --allow-unanchored; 3 self-KAT failure.
 """
 
 from __future__ import annotations
@@ -73,6 +94,7 @@ import importlib.machinery
 import importlib.util
 import marshal
 import math
+import os
 import sys
 from pathlib import Path
 from types import CodeType
@@ -644,6 +666,39 @@ def _code_matches(fresh: CodeType, cached: CodeType) -> bool:
     return True
 
 
+def _cache_header_is_live(source_path: str, header: bytes) -> bool:
+    """True when the running interpreter would LOAD this ``.pyc`` header.
+
+    Mirrors CPython's ``_bootstrap_external`` validation (PEP 552) and
+    ``_self_test._cache_header_is_live``.  ``header`` is the 12 bytes after the
+    magic number: a little-endian flags word, then either the source mtime and
+    size (timestamp caches) or an 8-byte source hash.  A hash-based cache is
+    validated by the interpreter only when its check_source bit is set; an
+    unchecked one is loaded blindly and therefore always executes.
+
+    Anything unresolvable — unreadable source, unknown flag bit — is reported
+    live, so an odd cache is judged rather than waved through.
+    """
+    flags = int.from_bytes(header[:4], "little")
+    if flags & 0b1:
+        if not flags & 0b10:
+            return True
+        try:
+            with open(source_path, "rb") as src_fh:
+                source_bytes = src_fh.read()
+        except OSError:
+            return True
+        return bool(importlib.util.source_hash(source_bytes) == header[4:12])
+    try:
+        stat = os.stat(source_path)
+    except OSError:
+        return True
+    return (
+        int.from_bytes(header[4:8], "little") == int(stat.st_mtime) & 0xFFFFFFFF
+        and int.from_bytes(header[8:12], "little") == stat.st_size & 0xFFFFFFFF
+    )
+
+
 def _cached_bytecode(source_path: str) -> tuple[str, Optional[CodeType], Optional[str]]:
     """Load the ``.pyc`` the running interpreter would use for ``source_path``.
 
@@ -666,7 +721,16 @@ def _cached_bytecode(source_path: str) -> tuple[str, Optional[CodeType], Optiona
                 # Built by a different interpreter version; the running one
                 # recompiles from source instead of loading it.
                 return "skipped", None, None
-            fh.read(12)  # bit field + (mtime,size) | source hash: header only
+            header = fh.read(12)  # flags + (mtime,size) | source hash
+            if len(header) != 12:
+                return "verified", None, f"cached bytecode {cache_path} has a truncated header"
+            if not _cache_header_is_live(source_path, header):
+                # The running interpreter would reject this cache and recompile
+                # from source, so it is not what executes — the same rule the
+                # wrong-magic case above applies.  Judging it anyway reported a
+                # tree whose executed bytecode IS the signed source as a
+                # poisoned/stale .pyc failure.
+                return "skipped", None, None
             cached_body = fh.read()
         # The code object is only materialised for comparison — NEVER exec'd;
         # reading the exact .pyc is precisely how a poisoned one is caught.
@@ -729,10 +793,21 @@ def verify_bytecode_cache(py_file: Path) -> tuple[str, Optional[str]]:
 
 def _verify_artefact(
     pkg_dir: Path,
+    expected_pubkey: Optional[bytes],
 ) -> tuple[list[str], Optional[bytes], Optional[dict[str, bytes]]]:
     """Signature + .py digest verification.  Returns ``(failures,
     native_digest, binding_digests)``; the digests are None when the artefact
     could not be authenticated (later stages then have nothing to bind to).
+
+    ``expected_pubkey`` is the anchor: the 32-byte Ed25519 public key the
+    artefact MUST be signed under, supplied by the operator from outside the
+    tree.  Checking it is what separates authenticity from internal
+    consistency.  Without it, this stage proves only that whoever wrote the
+    artefact also wrote a matching signature — which an attacker holding write
+    access to the installed tree, the threat this tool exists to answer, can do
+    with a keypair of their own: replace the sources, mint a key, re-sign, and
+    every digest lines up.  ``main()`` refuses to report PASS unless an anchor
+    was supplied or the weaker mode was explicitly requested.
     """
     fields, error = parse_artefact_fields(pkg_dir / _ARTEFACT_NAME)
     if fields is None:
@@ -783,6 +858,22 @@ def _verify_artefact(
     bound = "none" if binding is None else str(len(binding))
     print(f"[artefact] schema {schema}; native bound: {native_raw is not None}; bindings: {bound}")
 
+    # Anchor BEFORE verifying: a signature that verifies under the wrong key is
+    # a stronger finding than one that does not verify at all, and reporting it
+    # as "verified" for even one line of output would be the misleading half of
+    # the result.
+    if expected_pubkey is not None and pubkey != expected_pubkey:
+        return (
+            [
+                "artefact pubkey is NOT the expected one: artefact carries "
+                f"{pubkey.hex()} but --expected-pubkey names "
+                f"{expected_pubkey.hex()} — the tree was signed by a different "
+                "key, which is what re-signing tampered sources looks like"
+            ],
+            None,
+            None,
+        )
+
     if not ed25519_verify(signature, message, pubkey):
         return (
             [
@@ -792,7 +883,11 @@ def _verify_artefact(
             None,
             None,
         )
-    print(f"[signature] verified (Ed25519, build pubkey {pubkey.hex()[:16]}...)")
+    # Print the WHOLE key, not a prefix: the operator's only way to check an
+    # unanchored run after the fact is to compare it against a key they hold,
+    # and a 16-hex-digit prefix is not that comparison.
+    anchored = "anchored to --expected-pubkey" if expected_pubkey is not None else "UNANCHORED"
+    print(f"[signature] verified (Ed25519, {anchored}) pubkey={pubkey.hex()}")
     return [], native_raw, binding
 
 
@@ -951,6 +1046,27 @@ def main(argv: Optional[list[str]] = None) -> int:
             "package directory)."
         ),
     )
+    parser.add_argument(
+        "--expected-pubkey",
+        default=None,
+        help=(
+            "The 64-hex-character Ed25519 public key the artefact must be "
+            "signed under, supplied from OUTSIDE the tree being checked. "
+            "Without it the signature can only be checked against the key the "
+            "tree itself carries, which an attacker who can rewrite the tree "
+            "can replace with their own; PASS then requires --allow-unanchored."
+        ),
+    )
+    parser.add_argument(
+        "--allow-unanchored",
+        action="store_true",
+        help=(
+            "Report PASS without --expected-pubkey. For developer trees, whose "
+            "artefacts are signed with a per-build ephemeral key that no "
+            "operator holds. The verdict then attests internal consistency, "
+            "not authenticity."
+        ),
+    )
     args = parser.parse_args(argv)
 
     kat_error = run_self_kats()
@@ -959,6 +1075,32 @@ def main(argv: Optional[list[str]] = None) -> int:
         print("Refusing to verify anything (fail closed).", file=sys.stderr)
         return 3
     print("[self-kat] SHA3-256 / SHA-512 / Ed25519 KATs passed (incl. negative control)")
+
+    expected_pubkey: Optional[bytes] = None
+    if args.expected_pubkey is not None:
+        try:
+            expected_pubkey = bytes.fromhex(args.expected_pubkey.strip())
+        except ValueError as exc:
+            print(f"ERROR: --expected-pubkey is not hex: {exc}", file=sys.stderr)
+            return 2
+        if len(expected_pubkey) != 32:
+            print(
+                f"ERROR: --expected-pubkey is {len(expected_pubkey)} bytes (expected 32)",
+                file=sys.stderr,
+            )
+            return 2
+    if expected_pubkey is None and not args.allow_unanchored:
+        print(
+            "ERROR: no trust anchor. This tool verifies a signature made with a "
+            "key the target tree supplies, so without --expected-pubkey a PASS "
+            "would mean only that the artefact is internally consistent — which "
+            "an attacker who can rewrite the installed tree can arrange by "
+            "re-signing it under a key of their own. Pass --expected-pubkey "
+            "<64 hex> with the key you hold, or --allow-unanchored to accept "
+            "the weaker claim deliberately.",
+            file=sys.stderr,
+        )
+        return 2
 
     pkg_dir = args.package_dir.resolve()
     if not pkg_dir.is_dir():
@@ -972,7 +1114,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         )
         return 1
 
-    failures, native_digest, binding_digests = _verify_artefact(pkg_dir)
+    failures, native_digest, binding_digests = _verify_artefact(pkg_dir, expected_pubkey)
     warnings: list[str] = []
 
     native_failures, native_warnings = _verify_native_library(
@@ -996,8 +1138,15 @@ def main(argv: Optional[list[str]] = None) -> int:
         for failure in failures:
             print(f"  - {failure}")
         return 1
-    print("RESULT: PASS — signature, source digest, native/binding digests and")
-    print("bytecode caches all verified out of band.")
+    if expected_pubkey is None:
+        print("RESULT: PASS (UNANCHORED) — source digest, native/binding digests and")
+        print("bytecode caches are all consistent with the artefact, and the artefact's")
+        print("signature verifies under the key the TREE ITSELF carries. That is")
+        print("internal consistency, not authenticity: re-run with --expected-pubkey")
+        print("<64 hex> to check the tree was signed by the key you hold.")
+        return 0
+    print("RESULT: PASS — signature (anchored to the expected pubkey), source digest,")
+    print("native/binding digests and bytecode caches all verified out of band.")
     return 0
 
 

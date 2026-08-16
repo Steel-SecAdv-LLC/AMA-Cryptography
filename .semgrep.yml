@@ -34,8 +34,14 @@ rules:
 
   - id: hardcoded-secret-key
     # Match an assignment of a non-empty string literal to a variable whose
-    # NAME looks like secret material (key / secret / password / token /
-    # credential / api-key / private-key).
+    # NAME looks like secret material.  The positive regex below is the exact
+    # list: secret, passwd, password, api_key/apikey, private_key/privatekey,
+    # access_token/accesstoken, auth_token/authtoken, credential.  Bare `key`
+    # and bare `token` are deliberately NOT in it — `key = "name"` in a dict
+    # loop and `token = "("` in a parser are both common and neither is a
+    # secret — so `signing_key`, `master_key` and `hmac_key` are not matched
+    # either.  An earlier version of this comment listed `key` and `token` as
+    # covered categories, which read as a promise the rule never kept.
     #
     # This rule was previously written with three separate metavariables
     # ($KEY / $SECRET / $PASSWORD), each bound in only one branch of a

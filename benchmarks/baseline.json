@@ -3,7 +3,7 @@
     "baseline_source_release": "4.0.0",
     "applies_through_release": "5.0.0",
     "created": "2026-04-05T00:00:00Z",
-    "description": "x86-64 (ubuntu-latest) regression baseline. baseline_value IS the measured SLOW-CLASS median; tolerance_percent a uniform 45. Derivation: ubuntu-latest is a heterogeneous fleet \u2014 measured as two CPU classes ~1.45x apart (SHA3-256 ~326-355k vs ~476k ops/sec across the 2026-08 calibration runs) plus one observed 33% contention burst \u2014 so a tolerance tighter than the fleet spread would false-fail on runner assignment alone. This lane is an honest coarse safety net; the homogeneous ubuntu-24.04-arm lane (arm-baseline.json, tolerance 15-25) is the precision gate. Updates require line-item justification per benchmarks/check_baseline_justification.py.",
+    "description": "x86-64 (ubuntu-latest) regression baseline. baseline_value IS the measured SLOW-CLASS median; tolerance_percent a uniform 45. Derivation: the floor is the SLOW-class median, so a fast-class assignment can only produce a positive delta and the 1.45x fleet spread cannot by itself justify any downward tolerance \u2014 an earlier version of this note derived the number from that spread, which does not follow. What the tolerance must absorb is downward excursion on the slow class: the per-primitive spread recorded in calibration_evidence is small (worst case hkdf_derive, median 131,341 vs min 123,672 = 5.8%), and the binding observation is the single 33% contention burst seen during the 2026-08 calibration on a shared runner. 45% is that burst plus margin. It is deliberately coarse: a regression smaller than 45% is not caught on this lane, which is why the homogeneous ubuntu-24.04-arm lane (arm-baseline.json, tolerance 15-25) is the precision gate and this one is a safety net. This lane is an honest coarse safety net; the homogeneous ubuntu-24.04-arm lane (arm-baseline.json, tolerance 15-25) is the precision gate. Updates require line-item justification per benchmarks/check_baseline_justification.py.",
     "system": "GitHub Actions shared runner, Linux x86-64, Python 3.11",
     "runner_cpu_class": "x86_64",
     "notes": "Re-measured 2026-08-14 across the slow-class runs of the repaired harness (see description). aes_256_gcm_encrypt and chacha20poly1305_encrypt floored from final-wrapper-state runs only, for the reason recorded in arm-baseline.json.",
@@ -117,7 +117,7 @@
       {
         "date": "2026-08-14",
         "release": "5.0.0",
-        "change": "WINDOW EXTENDED TO 5.0.0, NO FLOOR CHANGES. The 5.0.0 major bump pushes the package past `applies_through_release` (4.0.0) and would trip test_benchmark_baseline_freshness. Every `baseline_value` in this file is carried forward unchanged; only `applies_through_release` moves. Rationale: these floors ARE the 2026-08-14 full recalibration recorded in the previous entry \u2014 measured in this same PR (#394) from the repaired harness on the canonical benchmark-regression runner class for this file (ubuntu-latest, x86_64) \u2014 and 5.0.0 is cut from the tree those medians describe. The only commits between the recalibration head and the 5.0.0 cut are: the CodeQL alert cleanup (an error-path log line in `keypair_generate`'s ctypes guard, import-style unification), the polynomial-regex (ReDoS) hardening in three tools/ gate scripts (no shipped code path), the fail-closed unreadable-candidate rule in library discovery (load-time, not per-operation), the binding-extension digest signing (build- and import-time), CI probe and C-test-lane fixes, documentation and CHANGELOG restructuring, and the version bump itself. No src/c kernel, no dispatch path, and no Python hot-path wrapper changed after the floors were measured, so the floors describe exactly the code 5.0.0 ships \u2014 the same tree-delta argument as the 3.5.0 and 4.0.0 window extensions above, this time with floors measured inside the same PR rather than carried forward from an earlier release. AUTHORITY: no new measurement was taken for this entry; the benchmark-regression CI job gates this PR against these floors on the canonical runner class, which is the check that matters. If that job fails on this PR, the floors need a genuine canonical re-measure, not a further window extension."
+        "change": "WINDOW EXTENDED TO 5.0.0, NO FLOOR CHANGES. The 5.0.0 major bump pushes the package past `applies_through_release` (4.0.0) and would trip test_benchmark_baseline_freshness. Every `baseline_value` in this file is carried forward unchanged; only `applies_through_release` moves. Rationale: these floors ARE the 2026-08-14 full recalibration recorded in the previous entry \u2014 measured in this same PR (#394) from the repaired harness on the canonical benchmark-regression runner class for this file (ubuntu-latest, x86_64) \u2014 and 5.0.0 is cut from the tree those medians describe. The only commits between the recalibration head and the 5.0.0 cut are: the CodeQL alert cleanup (an error-path log line in `keypair_generate`'s ctypes guard, import-style unification), the polynomial-regex (ReDoS) hardening in three tools/ gate scripts (no shipped code path), the fail-closed unreadable-candidate rule in library discovery (load-time, not per-operation), the binding-extension digest signing (build- and import-time), CI probe and C-test-lane fixes, documentation and CHANGELOG restructuring, and the version bump itself. Code the floors describe DID change after they were measured, and this entry no longer claims otherwise: the Kyber barrett_reduce rewrite (an NTT inner-loop function), the ChaCha20-Poly1305 post-verify control flow, the dispatch auto-tune sentinel, a SHA3 squeeze-entry guard, and the benchmark harness itself all landed after the calibration head. Each is itemised with its reasoning in metadata.floor_drift_acknowledged, which benchmarks/check_baseline_justification.py now verifies against `git diff` from the calibration commit \u2014 the previous sentence here asserted the opposite and nothing checked it. The floors are therefore carried as a coarse safety net that describes a very slightly older tree, not as a measurement of the shipped one \u2014 the same tree-delta argument as the 3.5.0 and 4.0.0 window extensions above, this time with floors measured inside the same PR rather than carried forward from an earlier release. AUTHORITY: no new measurement was taken for this entry; the benchmark-regression CI job gates this PR against these floors on the canonical runner class, which is the check that matters. If that job fails on this PR, the floors need a genuine canonical re-measure, not a further window extension."
       }
     ],
     "calibration_evidence": {
@@ -245,7 +245,61 @@
           "max": 4532
         }
       }
-    }
+    },
+    "floor_drift_acknowledged": [
+      {
+        "path": "src/c/ama_kyber.c",
+        "reason": "barrett_reduce rewritten with int32 intermediates for -Wconversion (94e4bd6). Proven bit-identical over all 65,536 inputs, but it is an NTT inner-loop function, so kyber_keygen/kyber_encapsulate throughput is NOT vouched for by the pre-change medians. Carried as a coarse floor pending a canonical re-measure; the benchmark-regression job on this PR is the check that exercises it."
+      },
+      {
+        "path": "src/c/avx2/ama_kyber_avx2.c",
+        "reason": "Same barrett_reduce form as the generic path (94e4bd6); same status."
+      },
+      {
+        "path": "src/c/neon/ama_kyber_neon.c",
+        "reason": "Same barrett_reduce form (94e4bd6); aarch64 floors carry the same caveat."
+      },
+      {
+        "path": "src/c/sve2/ama_kyber_sve2.c",
+        "reason": "Same barrett_reduce form (94e4bd6). SVE2 is off in the benchmarked configuration, so no floored primitive dispatches here."
+      },
+      {
+        "path": "src/c/ama_sha3.c",
+        "reason": "Cross-family squeeze-position guard added: two comparisons on entry to ama_shake{128,256}_inc_squeeze, outside the absorb/permute loops. sha3_256_hash and the SHAKE-driven PQC paths keep their per-block cost."
+      },
+      {
+        "path": "src/c/ama_chacha20poly1305.c",
+        "reason": "Post-verify control flow unified with AES-GCM (7bc7e58): the tag compare is hoisted to a value and the decrypt length masked. chacha20poly1305_encrypt is the floored primitive and does not execute the verify path."
+      },
+      {
+        "path": "src/c/dispatch/ama_dispatch.c",
+        "reason": "Auto-tune verdict timings seed to -1 instead of 0 (d500783) so 'not measured' and 'measured zero' are distinguishable. One-time initialisation; per-operation dispatch is a function-pointer read either way."
+      },
+      {
+        "path": "include",
+        "reason": "Declarations only \u2014 no executable code is generated from these headers into the benchmarked library."
+      },
+      {
+        "path": "ama_cryptography",
+        "reason": "Python wrappers. The paths the floored primitives actually traverse (pqc_backends entry points, the AEAD one-shot wrappers) were re-measured in this PR and their floors moved accordingly; the remaining changes here are import-time integrity, self-test, posture, docs tooling and error handling, none of which runs inside a benchmarked call. The ~37 ns check_crypto_permitted() guard is measured and recorded in INVARIANT-39."
+      },
+      {
+        "path": "benchmarks/benchmark_runner.py",
+        "reason": "The harness itself: batch sizing, provenance capture and the switch of full_package_* to crypto_api. Floors for the affected rows were re-measured from the repaired harness in this PR."
+      },
+      {
+        "path": "src/c/ama_frost.c",
+        "reason": "FROST threshold-signing helpers. No floored primitive in either baseline file calls FROST \u2014 the benchmarked set is Dilithium, Kyber, Ed25519, X25519, secp256k1, AES-GCM, ChaCha20-Poly1305, SHA3, HMAC, HKDF and the package composites."
+      },
+      {
+        "path": "src/c/sve2/ama_sha3_sve2.c",
+        "reason": "SVE2 Keccak theta fix. SVE2 is disabled in the benchmarked build configuration, so this kernel is not dispatched on either canonical runner."
+      },
+      {
+        "path": "src/c/internal/ama_testing_exports.h",
+        "reason": "Declarations behind AMA_TESTING_MODE, which the benchmarked library is not built with."
+      }
+    ]
   },
   "thresholds": {
     "regression_threshold_percent": 10,

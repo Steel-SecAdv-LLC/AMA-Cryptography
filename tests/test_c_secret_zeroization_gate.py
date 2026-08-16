@@ -47,6 +47,17 @@ class TestDetection:
             ("    memset(sk_buf, 0, 64);", "sk_buf"),
             ("    memset(keys[i].signing_key, 0, 32);", "signing_key"),
             ("    memset( secret_bytes , 0 , 32 );", "secret_bytes"),
+            # A cast on the destination is an ordinary C spelling; requiring
+            # the destination to START with an identifier silently exempted it
+            # from an ERROR-severity control whose semgrep counterpart cannot
+            # run at all, so the regex here was the only enforcement.
+            ("    memset((void *)ctx->hmac_key, 0, 32);", "hmac_key"),
+            ("    memset((unsigned char *)secret_key, 0, 32);", "secret_key"),
+            ("    memset((void*)&kp_local, 0, sizeof(kp_local));", "kp_local"),
+            # An integer suffix on the zero was the same kind of bypass: the
+            # value group ended at `0` and the pattern then demanded a comma.
+            ("    memset(secret_key, 0U, 32);", "secret_key"),
+            ("    memset(round_key, 0x00u, 240);", "round_key"),
         ],
     )
     def test_flags_secret_named_destinations(

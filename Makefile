@@ -184,7 +184,12 @@ security-scan:
 	@echo "[3/3] Running pip-audit for dependency vulnerabilities..."
 	@# pip-audit exits non-zero when a known-vulnerable dependency is present;
 	@# let that propagate rather than masking it with `|| echo completed`.
-	@pip-audit
+	@# Scoped to the lock file, not the ambient interpreter: a bare `pip-audit`
+	@# reports CVEs in packages this project does not ship (pip, urllib3 and
+	@# whatever else the host image carries), so the target went red for reasons
+	@# nothing in this repository can fix. Same scoping ci.yml and security.yml
+	@# already use.
+	@pip-audit --strict --desc --requirement requirements-lock.txt
 	@echo "✓ Comprehensive security scan complete (bandit + semgrep + pip-audit all passed)"
 
 # Constant-time verification (dudect-style timing analysis)

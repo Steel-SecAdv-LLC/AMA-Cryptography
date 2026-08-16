@@ -53,13 +53,29 @@ no claim built on this file may present it as such — the JSON record carries
 ``evidence_class`` stating exactly this.
 
 The comparison is deliberately unflattering and reported as measured: on
-isolated spikes at a matched budget, the top-N KNN baseline ranks as well
-as or somewhat better than the calibrated point path (mean F1 ratio
-0.80-0.98 across measured runs) — while needing the shipped detector's own
-calibrated alarm count as an oracle to run at all.  What the machinery buys — measured, and gated below — is the
-calibrated false-alarm budget itself (no baseline has one) and the
-sustained-shift event path, which the trailing-window baselines
-structurally cannot provide because they absorb the new regime.
+isolated spikes at a matched budget, the top-N KNN baseline ranks about as
+well as the calibrated point path — while needing the shipped detector's own
+calibrated alarm count as an oracle to run at all.  Measured mean F1 ratio
+(shipped / best baseline): 0.95-0.99 on the deterministic gate streams, and
+0.65-1.12 across runs on live host timings, where the base stream dominates
+the spread.  Neither range supports a claim that the shipped point path
+ranks isolated spikes better; it ranks them comparably.
+
+What the machinery buys, stated no more strongly than the measurement
+supports:
+
+* The calibrated false-alarm budget.  No baseline has one — a top-N rule
+  needs an N, and here it is handed the shipped detector's own alarm count.
+  This is gated (clean-FAR, budget-monotonic, sigma-floor).
+* A sustained-shift EVENT with a bounded detection delay.  The baselines
+  have no event or regime concept at all, and their trailing window absorbs
+  a new regime within WINDOW samples, so they cannot raise one — that is a
+  structural fact about the algorithms, not a measured advantage.  What the
+  measurement does NOT show is a large F1 advantage on the shift stream:
+  the gaps there are inside this file's own tie band, and on live timings
+  the shift row is further confounded because the host is already in the
+  regime state for a substantial fraction of clean traffic (printed on every
+  run).  The gated claim is the event and its delay, not the F1.
 
 Stdlib only, by INVARIANT-1 habit — KNN on 1-D windows is a sort.
 """
@@ -168,6 +184,45 @@ def inject_shift(base: Sequence[float], *, start_frac: float, magnitude: float) 
         values[i] = values[i] * magnitude
         anomalies.add(i)
     return Stream(values, anomalies, f"shift x{magnitude:g} from {start_frac:.0%}")
+
+
+#: Seed for the deterministic clean stream the GATES run on.  Gates and
+#: measurements answer different questions and must not share a stream: a gate
+#: is a regression tripwire and has to fail only when the detector changes,
+#: while the reported measurement has to describe real timings.
+GATE_BASE_SEED = 20260817
+
+
+def synthetic_base(count: int, seed: int) -> List[float]:
+    """A deterministic clean stream with NO regime change.
+
+    Lognormal, matching the shape of the measured ed25519_sign distribution,
+    with an occasional benign tail sample.  Reproducible from ``seed`` alone.
+
+    This exists because a gate that runs on live host timings measures the
+    host.  The shift path is the sharp case: a CPU that changes frequency
+    mid-run produces a genuine sustained regime change, the detector correctly
+    raises an event for it, and the gate then cannot tell that event from the
+    one the injected shift should have produced — it re-baselines onto the
+    host's new level and the injection becomes invisible.  Measured on this
+    host, gating the shift path on live timings failed 7 runs in 30 with
+    nothing wrong, and the delay and coverage numbers a passing run printed
+    were not attributable to the injected anomaly.  On this stream the same
+    gate is exactly reproducible (measured: event at 26-40 samples, coverage
+    0.87-0.91, zero false shift events over eight seeds).
+
+    Live timings are still measured and reported on every run — that is the
+    evidence — but the pass/fail decision is taken here, where a failure means
+    the detector changed.
+    """
+    rng = random.Random(seed)  # noqa: S311 -- evaluation stream, not key material (DBE-001)
+    out: List[float] = []
+    for _ in range(count):
+        value = rng.lognormvariate(-3.9, 0.22)
+        if rng.random() < 0.01:
+            value *= 1.6
+        out.append(value)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -349,11 +404,16 @@ def tie_band(per_seed_best_baseline_f1: Sequence[float]) -> float:
     """F1 gap below which two detectors are indistinguishable HERE.
 
     Derived from the data instead of asserted: twice the standard deviation
-    of the best baseline's F1 across the seeded spike streams — i.e. the
-    sampling noise of the metric itself on this stream family — floored at
+    of the best baseline's F1 across the evaluated spike streams, floored at
     0.01 so a zero-variance degenerate case cannot declare every difference
     significant.  (The first revision hard-coded 0.02 with no justification;
     this replaces the constant with the measurement that justifies one.)
+
+    Each spike stream is built on its OWN independent base, so the band covers
+    both sources of variation: which samples the injection seed corrupts, and
+    which base stream they are corrupted in.  Sharing one base across the
+    seeds measured only the first and understated the total by up to 5x on
+    live timings, where the base is the dominant term.
     """
     if len(per_seed_best_baseline_f1) < 2:
         return 0.05
@@ -371,36 +431,38 @@ class GateResult:
 
 
 def gate_clean_far(base: Sequence[float], budget: float) -> GateResult:
-    """Clean traffic: the point path must respect its declared budget, and
-    shift events must respect their structural rate bound.
+    """Clean traffic: the point path respects its budget and raises no regime.
 
     Two sub-checks, because the two alarm kinds have different contracts:
 
     * POINT alarms are budgeted by calibration: rate <= 2x budget (the
-      declared spend plus binomial noise at n ~ 3,600 evaluated samples;
-      the defect this gate exists to catch was 12.5x over budget).
-    * SHIFT events are edge-triggered detections of genuine regime changes,
-      which on real hosts include CPU frequency scaling — they are real,
-      not false, and their rate is bounded STRUCTURALLY by the detect ->
-      recover/re-baseline cycle: the shortest possible cycle (a blip that
-      crosses h and immediately recovers) is ~50 samples, so the cap is
-      n_eval/50.  A regression toward the per-sample flagging this release
-      removed produces an order of magnitude more than the cap, while a
-      pathologically oscillating host was measured at well under half of it.
+      declared spend plus binomial noise at n ~ 3,600 evaluated samples; the
+      defect this gate exists to catch was 12.5x over budget).  Measured on
+      this stream family: 0.0078-0.0117 against a 0.01 budget.
+    * SHIFT events must not fire at all.  This stream contains no regime
+      change by construction, so every event is a false one; measured zero
+      over eight seeds.  On live timings the same count is a measurement of
+      the host's frequency scaling rather than of the detector, which is why
+      it is reported there and gated here.
+
+    For reference, the structural bound on the event rate is the detect ->
+    recover cycle: with k=0.5 the fastest ascent to h=10 takes 21 samples and
+    the fastest recovery below h/2 takes 4, so the shortest cycle is ~25
+    samples and the loosest defensible cap is n_eval/25.  The earlier text
+    said ~50, which was wrong by 2x; on this stream the honest cap is zero.
     """
     run = run_shipped(base, alarm_budget=budget)
     n_eval = len(base) - EVAL_START
     events = [i for i in run.shift_events if i >= EVAL_START]
     point_alarms = sum(1 for i, f in enumerate(run.emitted) if f and i >= EVAL_START) - len(events)
     far = point_alarms / n_eval if n_eval else 0.0
-    event_cap = n_eval // 50
-    passed = far <= 2.0 * budget and len(events) <= event_cap
+    passed = far <= 2.0 * budget and not events
     return GateResult(
         "clean-FAR-within-budget",
         passed,
         f"clean point-alarm rate {far:.4f} vs declared budget {budget:.4f} "
         f"(limit {2 * budget:.4f}; 8d72b8c shipped 0.1252); "
-        f"shift events {len(events)} (cap {event_cap})",
+        f"false shift events {len(events)} (must be 0 on a stream with no regime change)",
     )
 
 
@@ -429,16 +491,40 @@ def gate_budget_monotonic(base: Sequence[float]) -> GateResult:
     )
 
 
-def gate_sigma_floor_live() -> GateResult:
-    """The per-operation sigma floor must change behaviour.
+#: Alarm budget for the sigma gate.  See gate_sigma_floor_live for why it is
+#: loose rather than tight.
+_SIGMA_GATE_BUDGET = 0.05
 
-    Uses a deterministic near-normal stream with spikes at ~4 robust sigma —
-    between the 3.0 and 5.0 floors — so the three canonical profile values
-    must produce strictly separated alarm counts.  This is the direct
-    regression gate on the 8d72b8c finding that sigma 2/3/5 produced exactly
-    the same 497 alarms.
+#: First index the sigma gate counts from.  Calibration for budget b activates
+#: after max(100, 1/b) scores; counting before that measures the uncalibrated
+#: warmup, where sigma is the only threshold and separation is guaranteed
+#: whether or not it survives calibration.
+_SIGMA_GATE_START = 600
+
+
+def gate_sigma_floor_live() -> GateResult:
+    """The per-operation sigma floor must change behaviour WHERE IT IS USED.
+
+    The operating threshold is ``max(sigma_floor, calibrated_quantile)``, so
+    sigma only binds where it exceeds the calibrated threshold.  Two
+    consequences the earlier version of this gate got wrong:
+
+    * It counted from EVAL_START (400) with a 0.002 budget, whose calibration
+      does not activate until ~530 samples.  All of its 2.0-vs-3.0 separation
+      came from the 130-sample uncalibrated window.  Measured: from sample 600
+      that budget gives (5, 5, 1) — sigma 2.0 and 3.0 identical — and a mutant
+      that ignores sigma entirely the moment calibration is live still passed.
+    * The budget has to be loose enough that all three floors sit above the
+      calibrated quantile, or the comparison cannot separate them even when
+      sigma is working perfectly.  At 0.05 the calibrated threshold is low and
+      each floor binds: measured (94, 53, 1) from sample 600.
+
+    So: a loose budget, counted in the calibrated steady state, requiring
+    STRICT separation — which is what the docstring always claimed and the
+    assertion (``>=``) did not enforce.  This is the direct regression gate on
+    the 8d72b8c finding that sigma 2/3/5 produced exactly the same 497 alarms.
     """
-    rng = random.Random(7)  # noqa: S311 - deterministic evaluation stream
+    rng = random.Random(7)  # noqa: S311 -- deterministic evaluation stream (DBE-002)
     values: List[float] = []
     for _ in range(3000):
         x = 10.0 + 0.1483 * rng.gauss(0, 1)
@@ -447,85 +533,123 @@ def gate_sigma_floor_live() -> GateResult:
         values.append(x)
     counts = []
     for sigma in (2.0, 3.0, 5.0):
-        run = run_shipped(values, threshold_sigma=sigma, alarm_budget=0.002)
-        counts.append(sum(1 for i, f in enumerate(run.emitted) if f and i >= EVAL_START))
-    passed = counts[0] >= counts[1] > counts[2]
+        run = run_shipped(values, threshold_sigma=sigma, alarm_budget=_SIGMA_GATE_BUDGET)
+        counts.append(sum(1 for i, f in enumerate(run.emitted) if f and i >= _SIGMA_GATE_START))
+    passed = counts[0] > counts[1] > counts[2]
     return GateResult(
         "sigma-floor-is-live",
         passed,
-        f"alarms at sigma (2.0, 3.0, 5.0): {counts} (4-sigma spikes must separate 3.0 from 5.0)",
+        f"alarms at sigma (2.0, 3.0, 5.0) from sample {_SIGMA_GATE_START} at budget "
+        f"{_SIGMA_GATE_BUDGET}: {counts} (must be STRICTLY decreasing — equal counts "
+        f"are what an inert sigma produces)",
     )
 
 
 def gate_shift_detection(base: Sequence[float]) -> GateResult:
     """A 30% sustained regime change must be alerted, promptly, and covered.
 
-    Three requirements, all measured on the injected shift stream:
-      1. at least one shift EVENT is raised at or after the onset;
-      2. the first such event lands within 300 samples of onset (the
-         re-baseline horizon — past it, detection has either happened or
-         structurally failed; measured delay is ~40 samples);
-      3. the regime state covers >= 60% of the pre-re-baseline window
-         (onset .. onset+300), i.e. the majority of the window in which the
-         detector claims to be flagging the regime.
+    Four requirements on the injected shift stream:
+      1. NO shift event before the onset — otherwise what follows is being
+         credited to an injection that did not exist yet;
+      2. at least one shift EVENT at or after the onset;
+      3. the first such event lands within 150 samples of onset (measured
+         26-40 on this stream family; the re-baseline horizon is 300, so a
+         detection later than half of it is a regression);
+      4. the regime state covers >= 70% of the window onset..onset+300
+         (measured 0.87-0.91).
     8d72b8c had no event concept and flagged 17.6% of the regime.
+
+    Requirement 1 is the one that forced this gate onto a deterministic
+    stream.  On live timings the detector legitimately enters the shift state
+    for the host's own frequency changes; when that happened before the
+    injection, the CUSUM re-baselined onto the already-shifted level and the
+    injected shift raised no event at all, while the coverage figure was
+    satisfied by samples that predated it.  The gate then failed, or passed
+    for the wrong reason, depending on the host — 7 failures in 30 runs
+    measured here.  The live numbers are still measured and reported; the
+    pass/fail decision is taken where an event can only come from the
+    injection.
     """
     stream = inject_shift(base, start_frac=0.6, magnitude=1.3)
     onset = int(len(base) * 0.6)
     run = run_shipped(stream.values)
+    events_before = [i for i in run.shift_events if EVAL_START <= i < onset]
     events_after = [i for i in run.shift_events if i >= onset]
     detected = bool(events_after)
     delay = (events_after[0] - onset) if detected else -1
     horizon = range(onset, min(onset + 300, len(base)))
     coverage = sum(1 for i in horizon if run.in_shift[i]) / len(horizon) if len(horizon) else 0.0
-    passed = detected and delay <= 300 and coverage >= 0.6
+    passed = not events_before and detected and 0 <= delay <= 150 and coverage >= 0.70
     return GateResult(
         "shift-detection",
         passed,
+        f"pre-onset events {len(events_before)} (must be 0) — "
         f"event={'yes' if detected else 'NO'} delay={delay} samples "
-        f"(limit 300), regime coverage before re-baseline {coverage:.2f} (floor 0.6)",
+        f"(limit 150), regime coverage before re-baseline {coverage:.2f} (floor 0.70)",
     )
 
 
-def run_gates(base: Sequence[float], spike_rows: Dict[str, List[Result]]) -> List[GateResult]:
-    gates = [
-        gate_clean_far(base, 0.01),
-        gate_budget_monotonic(base),
-        gate_sigma_floor_live(),
-        gate_shift_detection(base),
-    ]
+def gate_spike_ranking(samples: int) -> Tuple[GateResult, float]:
+    """Ranking quality against the best trivial baseline, deterministically.
 
-    # Spike-ranking-quality gate.  MEASURED, STATED PLAINLY: at a matched
-    # alarm budget the top-N KNN baseline ranks isolated spikes as well as
-    # or somewhat better than the calibrated point path (mean F1 ratio
-    # 0.80-0.98 across measured runs on this host).  That comparison hands
-    # the baseline an oracle — its N is the shipped detector's own
-    # calibrated alarm count; a top-N rule has no false-alarm control of
-    # its own and is not deployable without one — so the honest contract is
-    # not "wins" but "same order of ranking quality": the mean over seeds
-    # of shipped_F1 / best_baseline_F1 must stay >= 0.7, i.e. the measured
-    # range minus the observed cross-run spread.  A genuine ranking
-    # degradation (the statistic no longer separating spikes from the clean
-    # tail) breaks the floor; seed noise does not.  The per-stream tables
-    # above report the raw comparison, and the derived tie band quantifies
-    # the metric's own seed noise.
-    ratios = [
-        rows[0].f1 / max(r.f1 for r in rows[1:])
-        for rows in spike_rows.values()
-        if len(rows) > 1 and max(r.f1 for r in rows[1:]) > 0
-    ]
+    MEASURED AND STATED PLAINLY: at a matched alarm budget a top-N KNN
+    baseline ranks isolated spikes about as well as the calibrated point path.
+    That comparison hands the baseline an oracle — its N is the shipped
+    detector's own calibrated alarm count, and a top-N rule has no false-alarm
+    control of its own, so it is not deployable without one — which is why the
+    contract is "same order of ranking quality", not "wins".
+
+    The floor is 0.85, from measurement with margin: over four independent
+    trials of five seeded streams the mean ratio was 0.947-0.963.  The
+    previous floor of 0.7 was set from live-timing runs whose mean ratio
+    ranged 0.652-1.123, i.e. it sat inside the statistic's own spread and one
+    run in 25 failed it with nothing wrong; the documented range of 0.80-0.98
+    did not describe those runs either.  Each stream gets its own base, so the
+    ratio is reproducible from the seeds alone.
+
+    Returns the gate and the tie band derived from the same streams.
+    """
+    ratios: List[float] = []
+    best_f1s: List[float] = []
+    for seed in SPIKE_SEEDS:
+        base = synthetic_base(samples, GATE_BASE_SEED + seed)
+        stream = inject_spikes(base, rate=0.01, magnitude=2.5, seed=seed)
+        rows, _run = evaluate(stream)
+        shipped = rows[0]
+        best = max(r.f1 for r in rows[1:]) if len(rows) > 1 else 0.0
+        if best > 0:
+            ratios.append(shipped.f1 / best)
+            best_f1s.append(best)
     mean_ratio = statistics.fmean(ratios) if ratios else 0.0
-    best_f1s = [max(r.f1 for r in rows[1:]) for rows in spike_rows.values() if len(rows) > 1]
     band = tie_band(best_f1s)
-    gates.append(
+    return (
         GateResult(
             "spike-ranking-quality",
-            mean_ratio >= 0.7,
+            mean_ratio >= 0.85,
             f"mean shipped/best-baseline F1 ratio {mean_ratio:.3f} over "
-            f"{len(ratios)} seeded streams (floor 0.7; metric's own seed "
-            f"noise band {band:.3f})",
-        )
+            f"{len(ratios)} seeded streams on independent bases (floor 0.85; "
+            f"metric's own noise band {band:.3f})",
+        ),
+        band,
     )
+
+
+def run_gates(samples: int) -> List[GateResult]:
+    """Every gate runs on a deterministic stream — see synthetic_base().
+
+    The live-timing measurements printed above these gates are the evidence;
+    these are the tripwires, and they must fail when the detector changes and
+    not when the host does.
+    """
+    gate_base = synthetic_base(samples, GATE_BASE_SEED)
+    ranking_gate, _band = gate_spike_ranking(samples)
+    gates = [
+        gate_clean_far(gate_base, 0.01),
+        gate_budget_monotonic(gate_base),
+        gate_sigma_floor_live(),
+        gate_shift_detection(gate_base),
+        ranking_gate,
+    ]
     return gates
 
 
@@ -571,16 +695,38 @@ def main() -> int:
 
     # Seeded spike streams (for the comparison and the derived tie band) and
     # the sustained shift stream.
-    spike_rows: Dict[str, List[Result]] = {}
     eval_streams: List[Stream] = [
         inject_spikes(base, rate=0.01, magnitude=3.0, seed=s) for s in SPIKE_SEEDS
     ]
     eval_streams.append(inject_shift(base, start_frac=0.6, magnitude=1.3))
 
+    # How much of this host's own CLEAN traffic the detector already calls a
+    # regime, printed before the shift row so that row can be read honestly:
+    # the injected shift raises the fraction from this base rate, and the
+    # difference — not the absolute coverage — is what the injection bought.
+    clean_run = run_shipped(base)
+    n_eval = len(base) - EVAL_START
+    clean_shift_frac = (
+        sum(1 for i in range(EVAL_START, len(base)) if clean_run.in_shift[i]) / n_eval
+        if n_eval
+        else 0.0
+    )
+    clean_events = [i for i in clean_run.shift_events if i >= EVAL_START]
+    print(
+        f"Host regime base rate : this host's clean traffic is already in the shift "
+        f"state for {clean_shift_frac:.1%} of the\n"
+        f"                        evaluated region ({len(clean_events)} event(s)) with "
+        f"nothing injected — CPU\n"
+        f"                        frequency scaling is a real regime change.  Read the "
+        f"shift row below\n"
+        f"                        against this baseline, not against zero."
+    )
+    print()
+    payload["host_clean_shift_fraction"] = round(clean_shift_frac, 4)
+    payload["host_clean_shift_events"] = len(clean_events)
+
     for st in eval_streams:
         rows, run = evaluate(st, use_regime_coverage=st.label.startswith("shift"))
-        if st.label.startswith("spike"):
-            spike_rows[st.label] = rows
         injected = len([i for i in st.anomalies if i >= EVAL_START])
         print(f"--- {st.label} ---")
         print(f"    injected anomalies in eval region: {injected}")
@@ -611,7 +757,13 @@ def main() -> int:
     print("=" * 78)
     print("REGRESSION GATES (each one pins a measured 8d72b8c failure)")
     print("=" * 78)
-    gates = run_gates(base, spike_rows)
+    print("Gates run on DETERMINISTIC seeded streams, not on the live timings")
+    print("measured above: a gate must fail when the detector changes, and this")
+    print("host's own frequency scaling is a genuine regime change that the shift")
+    print("path correctly reacts to.  See synthetic_base() for the measurements")
+    print("that forced the split.  The live numbers above are the evidence.")
+    print()
+    gates = run_gates(len(base))
     all_pass = True
     for g in gates:
         status = "PASS" if g.passed else "FAIL"

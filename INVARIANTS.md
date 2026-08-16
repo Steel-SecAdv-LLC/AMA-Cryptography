@@ -1932,12 +1932,18 @@ cryptography:
   lifetime — cannot smoke-test a genuinely broken wheel and call it built.
 
 **The error state must inhibit output.** The requirement was met only by
-`crypto_api`, which calls `check_operational()` on its public methods.  All
-eighty public entry points in `pqc_backends` — key generation, signing, KEM
+`crypto_api`, which calls `check_operational()` on its public methods.  Every
+public entry point in `pqc_backends` — key generation, signing, KEM
 encapsulation, AEAD, HMAC, KDF — called straight through to the C library with
 no state check, so a module in `ERROR` kept producing keys and signatures for
 any caller that reached past `crypto_api`, which is what this package's own
 internal modules do.  Each now calls `check_crypto_permitted()` first.
+
+The count is not written down here, because a number in prose is a number that
+goes stale: `tools/check_error_state_gating.py` enumerates the surface from the
+module's own AST and fails when any entry point is ungated, and its output is
+the authoritative figure (85 native entry points and 10 Cython binding entry
+points at the time of writing, with 2 documented exemptions).
 
 `check_crypto_permitted()` is deliberately weaker than `check_operational()`:
 it permits `SELF_TEST` **on the POST thread only**, because POST's Known Answer

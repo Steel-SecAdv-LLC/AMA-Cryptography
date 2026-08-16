@@ -585,6 +585,9 @@ class CryptoPostureController:
         self.grace_period = grace_period
 
         self._last_rotation_time: float = 0.0
+        #: Throttles algorithm switches independently of rotations — see
+        #: _execute_action for why one timer could not serve both.
+        self._last_switch_time: float = 0.0
         self._rotation_count: int = 0
         self._switch_count: int = 0
         self._history: Deque[PostureEvaluation] = deque(maxlen=max_history)
@@ -708,32 +711,39 @@ class CryptoPostureController:
     def _execute_action(self, action: PostureAction) -> None:
         """Execute a posture action immediately.
 
-        Arms ``_last_rotation_time`` so the cooldown window applies
-        consistently regardless of whether the action was queued via
-        confirmation mode or executed immediately.
+        The two effects an action can have are throttled independently, by
+        ``_last_rotation_time`` and ``_last_switch_time``, because they have
+        opposite failure modes and one timer cannot serve both:
 
-        For actions that rotate, arming is delegated to :meth:`_trigger_rotation`,
-        which arms only when a rotation actually happened (or when there was no
-        mechanism to attempt).  Arming here as well — unconditionally, and
-        *before* the attempt — silently defeated that: a rotation that was
-        attempted and FAILED (the KMS unreachable, ``on_rotation`` raising) left
-        the cooldown armed anyway, so ``evaluate_and_respond`` suppressed every
-        retry for the full window while the threat that demanded the rotation
-        persisted.  That is precisely the outcome ``_trigger_rotation``'s
-        arming condition exists to prevent, and it made the entire
-        attempted/succeeded distinction dead code.
+        * A rotation that was attempted and FAILED (the KMS unreachable,
+          ``on_rotation`` raising) must stay retryable, so arming is delegated
+          to :meth:`_trigger_rotation`, which arms only when a rotation
+          actually happened or there was no mechanism to attempt.  Arming
+          unconditionally here, and *before* the attempt, silently defeated
+          that and made the whole attempted/succeeded distinction dead code.
+        * An algorithm switch must never run back-to-back, so
+          :meth:`_trigger_algorithm_switch_if_due` arms its own window whether
+          or not anything else in the action succeeded.
+
+        Sharing one timer meant ``ROTATE_AND_SWITCH`` had to pick which
+        property to break, and it broke the second: a failing rotation left the
+        timer unarmed, the switch rode along un-throttled, and every evaluation
+        cycle climbed another rung of the ladder and fired the switch callback
+        again — the exact condition the ``SWITCH_ALGORITHM`` branch armed the
+        timer to prevent.
+
+        Splitting them also means a switch no longer postpones a due rotation.
+        That coupling was incidental to the shared timer, and losing it removes
+        a case where escalating the algorithm suppressed the retry of a
+        rotation the same threat had demanded.
         """
         if action == PostureAction.ROTATE_AND_SWITCH:
-            self._trigger_rotation()  # arms the cooldown iff it succeeded
-            self._trigger_algorithm_switch()
+            self._trigger_rotation()  # arms the rotation throttle iff it succeeded
+            self._trigger_algorithm_switch_if_due()
         elif action == PostureAction.ROTATE_KEYS:
-            self._trigger_rotation()  # arms the cooldown iff it succeeded
+            self._trigger_rotation()  # arms the rotation throttle iff it succeeded
         elif action == PostureAction.SWITCH_ALGORITHM:
-            # No rotation involved, so nothing else arms the throttle: an
-            # algorithm switch still consumes the cooldown window so repeated
-            # evaluations cannot drive back-to-back switches.
-            self._last_rotation_time = time.time()
-            self._trigger_algorithm_switch()
+            self._trigger_algorithm_switch_if_due()
 
     def _process_expired_pending_actions(self) -> None:
         """Auto-execute pending actions that have exceeded the grace period.
@@ -877,6 +887,24 @@ class CryptoPostureController:
         if succeeded or not attempted:
             self._last_rotation_time = time.time()
 
+    def _trigger_algorithm_switch_if_due(self) -> None:
+        """Switch algorithms unless the switch throttle is still cooling down.
+
+        Arms ``_last_switch_time`` on every switch attempt that is allowed
+        through — not only on ones that changed the algorithm — so a controller
+        already at the top of its ladder cannot spin the callback either.
+        """
+        now = time.time()
+        if (now - self._last_switch_time) < self.rotation_cooldown:
+            logger.debug(
+                "Algorithm switch suppressed: %.0fs of the %.0fs switch cooldown remain",
+                self.rotation_cooldown - (now - self._last_switch_time),
+                self.rotation_cooldown,
+            )
+            return
+        self._last_switch_time = now
+        self._trigger_algorithm_switch()
+
     def _trigger_algorithm_switch(self) -> None:
         """Switch to a stronger algorithm."""
         current_strength = self._family_strength(self.current_algorithm)
@@ -942,6 +970,7 @@ class CryptoPostureController:
         """Reset controller state."""
         self.evaluator.reset()
         self._last_rotation_time = 0.0
+        self._last_switch_time = 0.0
         self._rotation_count = 0
         self._switch_count = 0
         self._history.clear()

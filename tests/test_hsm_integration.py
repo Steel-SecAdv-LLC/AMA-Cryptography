@@ -913,10 +913,12 @@ def test_the_workflow_still_provisions_softhsm() -> None:
     what CI does.
     """
     workflows = pathlib.Path(__file__).resolve().parent.parent / ".github" / "workflows"
+    gating = []
     for name in ("ci.yml", "ci-build-test.yml"):
         text = (workflows / name).read_text(encoding="utf-8")
         if "AMA_CI_REQUIRE_BACKENDS" not in text:
             continue
+        gating.append(name)
         assert "softhsm2" in text or "brew install softhsm" in text, (
             f"{name} sets AMA_CI_REQUIRE_BACKENDS but no longer installs softhsm2. "
             f"TestSoftHSMIntegration is the only real PKCS#11 coverage in the tree; "
@@ -936,6 +938,19 @@ def test_the_workflow_still_provisions_softhsm() -> None:
             f"{name} no longer installs the [hsm] extra, so PyKCS11 is absent and the "
             f"SoftHSM2 lane skips even with the token installed."
         )
+
+    # Without this the whole test is vacuous by deletion, which is the exact
+    # hole its docstring claims the pair does not have: drop the two
+    # AMA_CI_REQUIRE_BACKENDS lines and every assertion above is skipped by the
+    # `continue`, test_softhsm_lane_is_provisioned_in_ci skips on every job,
+    # and the conftest backend-skip escalation disarms — all with a green
+    # suite.  Nothing else in the tree pins the flag's presence.
+    assert gating, (
+        "neither ci.yml nor ci-build-test.yml sets AMA_CI_REQUIRE_BACKENDS any more. "
+        "That flag is what turns a missing backend into a failure instead of a silent "
+        "skip; without it the SoftHSM2 lane — the only real PKCS#11 coverage in the "
+        "tree — returns to skipping everywhere while this suite stays green."
+    )
 
 
 @pytest.mark.skipif(not _SOFTHSM_AVAILABLE, reason=_softhsm_unavailable_reason())

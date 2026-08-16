@@ -250,9 +250,23 @@ if not _post():
     #
     # There are two such outcomes, not one:
     #
-    #   integrity      — a .py file changed, so the signed digest is stale.
+    #   integrity      — a local build output the artefact binds changed: a .py
+    #                    file or POST KAT vector, the native library, or a
+    #                    binding extension.  The signed artefact itself is
+    #                    intact; it simply describes the previous build.
     #   native-backend — the native library changed, so its signed digest is
     #                    stale and the PRE-LOAD check refuses to map it.
+    #
+    # The integrity side is narrowed by integrity_failure_was_stale_binding(),
+    # the counterpart of native_backend_refused_on_digest(), and for the same
+    # reason: the test used to be `any(integrity row failed)`, which the failing
+    # row itself witnesses, so the conjunct was a tautology that excluded
+    # nothing.  Under it, a wheel whose Ed25519 signature did not verify — or
+    # whose trust anchor did not match, or whose artefact was malformed —
+    # imported with exit code 0 inside a release container, which is the
+    # "failure in the log, success in the exit code" fail-open this whole block
+    # exists to close.  Those verdicts are tampering, re-signing would launder
+    # them, and they now hard-fail on every path.
     #
     # The second used to be absent from this list because it could not happen:
     # AMA_BUILD_PIPELINE=1 mapped the mismatching library anyway, which kept
@@ -266,9 +280,17 @@ if not _post():
     # when every candidate failure was a digest refusal.  A missing library, a
     # wrong architecture, an ABI rejection or a loader error is a broken build
     # and keeps hard-failing.
-    _integrity_stage_failed = any(
-        _name == "integrity" and _ok is False for _name, _ok, _ in _results
-    )
+    try:
+        from ama_cryptography._self_test import (
+            integrity_failure_was_stale_binding as _integrity_was_stale_binding,
+        )
+
+        _integrity_stage_is_stale_binding = (
+            any(_name == "integrity" and _ok is False for _name, _ok, _ in _results)
+            and _integrity_was_stale_binding()
+        )
+    except Exception:  # pragma: no cover - _self_test is imported above
+        _integrity_stage_is_stale_binding = False
     try:
         from ama_cryptography.pqc_backends import (
             native_backend_refused_on_digest as _refused_on_digest,
@@ -289,7 +311,7 @@ if not _post():
         for _name, _ok, _ in _results
         if _ok is False
         and (
-            (_name == "integrity" and _integrity_stage_failed)
+            (_name == "integrity" and _integrity_stage_is_stale_binding)
             or (_name == "native-backend" and _native_stage_is_stale_digest)
         )
     }

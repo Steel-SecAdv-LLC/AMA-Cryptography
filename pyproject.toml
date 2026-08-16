@@ -303,12 +303,6 @@ ignore = [
     "S310", "S603",
     "UP006", "UP007", "UP012", "UP015", "UP035", "UP045",
 ]
-# tools/monitoring/ama_cryptography_monitor.py — production monitoring module with same conventions
-"tools/monitoring/ama_cryptography_monitor.py" = [
-    "I001", "N806",
-    "RUF003", "RUF022", "RUF023",
-    "UP006", "UP015", "UP035",
-]
 "ama_cryptography/monitoring.py" = [
     "I001", "N806",
     "RUF003", "RUF022", "RUF023",
@@ -405,8 +399,7 @@ module = "ama_cryptography.hmac_binding"
 ignore_missing_imports = true
 
 # ama_cryptography_monitor — compatibility shim for production monitoring.
-# ama_cryptography.monitoring / tools.monitoring.ama_cryptography_monitor —
-# production monitoring, relax generic-type-arg.
+# ama_cryptography.monitoring — production monitoring, relax generic-type-arg.
 # NOTE: ama_cryptography.* is NOT blanket-relaxed. Only specific modules that
 # have pre-existing bare generic annotations (dict, list, tuple without type
 # params) are individually listed here. New modules must use strict generics.
@@ -414,7 +407,6 @@ ignore_missing_imports = true
 module = [
     "ama_cryptography_monitor",
     "ama_cryptography.monitoring",
-    "tools.monitoring.ama_cryptography_monitor",
     "ama_cryptography.pqc_backends",
     "ama_cryptography.crypto_api",
     "ama_cryptography.adaptive_posture",
