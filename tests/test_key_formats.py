@@ -612,7 +612,14 @@ def test_the_reference_encoder_is_independent_of_the_production_one() -> None:
     """
     import ast
 
-    source = (REPO_ROOT / "tests" / "ref_keyformat.py").read_text()
+    # Explicit encoding: ref_keyformat.py contains non-ASCII, and ci.yml's
+    # Windows lanes deliberately do not set PYTHONUTF8 (see the note in that
+    # workflow), so a bare read_text() decodes UTF-8 source through cp1252.
+    # That does not raise — cp1252 maps every byte — it silently yields
+    # mojibake, so this import scan would parse subtly wrong text and still
+    # report success.  Same root cause as the UnicodeDecodeError this commit
+    # fixes in test_conftest_backend_skip_scoping.py, one failure mode quieter.
+    source = (REPO_ROOT / "tests" / "ref_keyformat.py").read_text(encoding="utf-8")
     imported: set[str] = set()
     for node in ast.walk(ast.parse(source)):
         if isinstance(node, ast.Import):

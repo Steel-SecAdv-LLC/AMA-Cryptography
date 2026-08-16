@@ -133,7 +133,15 @@ def isolated_conftest(
         "PYTHONPATH",
         str(repo_root) + (os.pathsep + existing if existing else ""),
     )
-    conftest_src = (Path(__file__).parent / "conftest.py").read_text()
+    # encoding="utf-8" is load-bearing, not decoration.  Without it
+    # Path.read_text() uses the locale codepage, which on a Windows runner
+    # without PYTHONUTF8 is cp1252: conftest.py's em dashes decode to mojibake,
+    # pytester writes that back out, and the copy is then read as UTF-8 —
+    # "'utf-8' codec can't decode byte 0x97 in position 757", which failed all
+    # seven tests in this module on every windows-latest job in ci.yml (0x97 is
+    # cp1252's em dash).  ci-build-test.yml sets PYTHONUTF8=1 and so hid it.
+    # Line 381 of this same file already reads with an explicit encoding.
+    conftest_src = (Path(__file__).parent / "conftest.py").read_text(encoding="utf-8")
     pytester.makepyfile(conftest=conftest_src)
     return pytester
 
