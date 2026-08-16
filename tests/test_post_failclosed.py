@@ -104,6 +104,37 @@ def _run_python(
     )
 
 
+def _drop_unbound_extensions(pkg_root: Path) -> None:
+    """Remove compiled binding extensions the signed artefact does not cover.
+
+    A source-tree artefact deliberately binds NO extensions: they are
+    per-interpreter and not reproducible, so binding one tree's would read as
+    a digest MISMATCH — a tampering verdict — on every other machine (see
+    ``_build_sign``'s ``--bind-extensions`` help).  The documented consequence
+    is that a tree carrying built-but-uncovered extensions is *correctly*
+    reported at below-full integrity strength.
+
+    ``pip install -e .`` builds six such extensions into the package
+    directory, so a fixture that copies the package wholesale inherits them
+    and can never be "fully verified" — which is what turned five tests red
+    across ubuntu, macOS and arm once the strength downgrade stopped being
+    dead code.  Dropping the uncovered ones makes the copied tree internally
+    consistent, which is the state these tests mean by "healthy".
+    """
+    try:
+        from ama_cryptography import _integrity_signature as _sig
+
+        covered = set(getattr(_sig, "INTEGRITY_BINDING_DIGESTS_HEX", {}) or {})
+    except Exception:
+        covered = set()
+    for suffix in (".so", ".pyd", ".dylib"):
+        for path in pkg_root.glob(f"*{suffix}"):
+            if path.name.startswith(("libama_cryptography", "ama_cryptography.dll")):
+                continue  # the native library, bound separately
+            if path.name not in covered:
+                path.unlink()
+
+
 @pytest.fixture(scope="module")
 def tree_without_native(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """A copy of the package with the native library removed.
@@ -113,6 +144,8 @@ def tree_without_native(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """
     root = tmp_path_factory.mktemp("no_native")
     shutil.copytree(PKG_DIR, root / "ama_cryptography")
+    # No _drop_unbound_extensions here: the loop below removes every compiled
+    # artefact anyway, which is this fixture's whole point.
     for pattern in ("*.so", "*.so.*", "*.dylib", "*.dll", "*.pyd"):
         for artefact in (root / "ama_cryptography").glob(pattern):
             artefact.unlink()
@@ -124,6 +157,7 @@ def tree_with_native(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """A copy of the package with whatever native library the tree has."""
     root = tmp_path_factory.mktemp("with_native")
     shutil.copytree(PKG_DIR, root / "ama_cryptography")
+    _drop_unbound_extensions(root / "ama_cryptography")
     if not native_library_present(root / "ama_cryptography"):
         pytest.skip("native library not built in this tree")
     return root
@@ -899,10 +933,29 @@ class TestAttestation:
         yield st
 
     def test_reports_fully_verified_on_a_complete_run(self, fresh_post: ModuleType) -> None:
-        att = fresh_post.module_attestation()
-        assert att["state"] == "OPERATIONAL"
-        assert att["fully_verified"] is True, att
-        assert att["tests_skipped"] == 0, att
+        """A run in which every row passed reports itself fully verified.
+
+        The completeness is CONSTRUCTED rather than assumed.  The ambient tree
+        legitimately may not be complete: ``pip install -e .`` builds binding
+        extensions that a source-tree artefact deliberately does not cover, and
+        the documented consequence is an integrity SKIP and below-full
+        strength.  Asserting on the ambient state therefore tested the
+        environment, not ``module_attestation`` — and failed on every CI job
+        that installs the package.  Substituting a passing row for that stage
+        keeps the property this test is named for.
+        """
+        st = fresh_post
+        saved = list(st._SELF_TEST_RESULTS)
+        try:
+            st._SELF_TEST_RESULTS[:] = [
+                (name, True if passed is None else passed, detail) for name, passed, detail in saved
+            ]
+            att = st.module_attestation()
+            assert att["state"] == "OPERATIONAL"
+            assert att["fully_verified"] is True, att
+            assert att["tests_skipped"] == 0, att
+        finally:
+            st._SELF_TEST_RESULTS[:] = saved
 
     def test_digest_only_integrity_is_not_fully_verified(self, fresh_post: ModuleType) -> None:
         """An unsigned digest is corruption detection, not tamper detection.
@@ -931,14 +984,21 @@ class TestAttestation:
         st = fresh_post
 
         saved = list(st._SELF_TEST_RESULTS)
+        # Measure the DELTA, not an absolute.  The ambient tree may already
+        # carry a legitimate skip (an editable install's binding extensions are
+        # uncovered by a source-tree artefact by design), which made the old
+        # `== 1` read `assert 2 == 1` on every CI job that installs the
+        # package.  One added skip must add exactly one, and must drag
+        # fully_verified down — that is the property.
+        before = st.module_attestation()["tests_skipped"]
         try:
             st._SELF_TEST_RESULTS.append(("ML-KEM-1024", None, "skipped (backend absent)"))
             att = st.module_attestation()
             assert att["fully_verified"] is False, (
                 "a run with an untested approved algorithm reported itself as " "fully verified"
             )
-            assert att["tests_skipped"] == 1
-            assert att["skipped"][0][0] == "ML-KEM-1024"
+            assert att["tests_skipped"] == before + 1
+            assert "ML-KEM-1024" in [name for name, _detail in att["skipped"]]
         finally:
             st._SELF_TEST_RESULTS[:] = saved
 

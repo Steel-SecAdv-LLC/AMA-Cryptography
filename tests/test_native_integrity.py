@@ -85,7 +85,39 @@ def signed_tree(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
     root = tmp_path_factory.mktemp("signed")
     shutil.copytree(PKG_DIR, root / "ama_cryptography")
+    _drop_unbound_extensions(root / "ama_cryptography")
     return root
+
+
+def _drop_unbound_extensions(pkg_root: Path) -> None:
+    """Remove compiled binding extensions the signed artefact does not cover.
+
+    A source-tree artefact deliberately binds NO extensions: they are
+    per-interpreter and not reproducible, so binding one tree's would read as
+    a digest MISMATCH — a tampering verdict — on every other machine (see
+    ``_build_sign``'s ``--bind-extensions`` help).  The documented consequence
+    is that a tree carrying built-but-uncovered extensions is *correctly*
+    reported at below-full integrity strength.
+
+    ``pip install -e .`` builds six such extensions into the package
+    directory, so a fixture that copies the package wholesale inherits them
+    and can never be "fully verified" — which is what turned five tests red
+    across ubuntu, macOS and arm once the strength downgrade stopped being
+    dead code.  Dropping the uncovered ones makes the copied tree internally
+    consistent, which is the state these tests mean by "healthy".
+    """
+    try:
+        from ama_cryptography import _integrity_signature as _sig
+
+        covered = set(getattr(_sig, "INTEGRITY_BINDING_DIGESTS_HEX", {}) or {})
+    except Exception:
+        covered = set()
+    for suffix in (".so", ".pyd", ".dylib"):
+        for path in pkg_root.glob(f"*{suffix}"):
+            if path.name.startswith(("libama_cryptography", "ama_cryptography.dll")):
+                continue  # the native library, bound separately
+            if path.name not in covered:
+                path.unlink()
 
 
 def _real_so(tree_root: Path) -> Path:
@@ -397,6 +429,7 @@ class TestPostKatVectors:
 
         pkg_copy = tmp_path / "ama_cryptography"
         shutil.copytree(PKG_DIR, pkg_copy)
+        _drop_unbound_extensions(pkg_copy)
         monkeypatch.setattr(st, "__file__", str(pkg_copy / "_self_test.py"))
 
         kat = pkg_copy / "_post_kats" / kat_name
