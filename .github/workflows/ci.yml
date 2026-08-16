@@ -491,7 +491,10 @@ jobs:
   security-checks:
     name: Security Checks
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # 10 -> 15: this job now compiles the native library so it can run the
+    # semgrep gate's end-to-end assertion (see the build step below).  The
+    # scans themselves take ~4 minutes; the build adds ~2.
+    timeout-minutes: 15
 
     steps:
     - name: Checkout code
@@ -583,6 +586,32 @@ jobs:
         semgrep --config .semgrep.yml ama_cryptography/ --json -o semgrep-report.json
         python tools/check_semgrep_severity.py semgrep-report.json
 
+    - name: Build the native library (pytest cannot start without it)
+      # This job's other steps drive tools/ scripts, which do not import the
+      # package — so it had never needed a native library.  The step below
+      # runs pytest, and tests/conftest.py imports ama_cryptography at
+      # pytest_configure; since 5.0.0 a failed POST RAISES rather than logging,
+      # so with no library the run dies with INTERNALERROR before collecting a
+      # single test.  That is the fail-closed behaviour working as designed —
+      # the job simply has to provide what the package requires.
+      #
+      # Built here rather than by moving the pytest step to a job that already
+      # has a library, because no such job has semgrep, and installing semgrep
+      # into the test matrix would put a large scanner in every matrix entry to
+      # serve one assertion.
+      run: |
+        cmake -B build -DCMAKE_BUILD_TYPE=Release -DAMA_USE_NATIVE_PQC=ON \
+          -DAMA_BUILD_TESTS=OFF -DAMA_BUILD_EXAMPLES=OFF
+        cmake --build build -j"$(nproc)"
+
+    - name: Bind the freshly-built library into the integrity artefact
+      # Same reason as every other build-then-import job: a library built here
+      # is not the one the committed artefact was signed over, and the digest
+      # mismatch is refused before the object is mapped.
+      env:
+        AMA_BUILD_PIPELINE: "1"
+      run: python -m ama_cryptography.integrity --update --sign
+
     - name: Semgrep gate self-tests (the end-to-end case needs semgrep present)
       # tests/test_semgrep_severity_gate.py's only end-to-end assertion — that
       # the shipped package passes the gate on a report the gate generated
@@ -591,6 +620,9 @@ jobs:
       # one that can run it.  Until 5.0.0 the test was skipped even here,
       # because its availability probe used the deprecated `python -m semgrep`
       # entry point, which exits non-zero on a working install.
+      #
+      # The module is named explicitly so this step cannot silently broaden
+      # into the whole suite, which belongs to the test matrix.
       run: python -m pytest tests/test_semgrep_severity_gate.py -q
 
     - name: Upload Semgrep report
