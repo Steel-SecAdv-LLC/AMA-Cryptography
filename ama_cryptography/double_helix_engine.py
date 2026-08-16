@@ -739,8 +739,8 @@ if __name__ == "__main__":
     final_state, history = engine.converge(initial_state, max_steps=50)
 
     logger.info("\nConvergence Results:")
-    logger.info(f"  Initial Lyapunov V(x₀): {history[0]:.6f}")
-    logger.info(f"  Final Lyapunov V(xₙ):   {history[-1]:.6f}")
+    logger.info(f"  Initial Lyapunov V(x0): {history[0]:.6f}")
+    logger.info(f"  Final Lyapunov V(xn):   {history[-1]:.6f}")
     logger.info(f"  Convergence steps: {len(history)}")
     logger.info(f"  Final state norm: {norm(final_state):.6f}")
     logger.info(f"  Target state norm: {norm(engine.target_state):.6f}")
@@ -749,12 +749,12 @@ if __name__ == "__main__":
     # Verify σ_quadratic
     sigma = calculate_sigma_quadratic(final_state, engine.ethical_matrix)
     logger.info("\nEthical Constraints:")
-    logger.info(f"  σ_quadratic: {sigma:.6f}")
+    logger.info(f"  sigma_quadratic: {sigma:.6f}")
     logger.info(
-        f"  {'✓' if sigma >= SIGMA_QUADRATIC_THRESHOLD else '✗'} Threshold (≥ 0.96): "
+        f"  {'[OK]' if sigma >= SIGMA_QUADRATIC_THRESHOLD else '[FAIL]'} Threshold (>= 0.96): "
         f"{sigma >= SIGMA_QUADRATIC_THRESHOLD}"
     )
 
     logger.info("\n" + "=" * 70)
-    logger.info("✓ Double-Helix Evolution Engine operational")
+    logger.info("[OK] Double-Helix Evolution Engine operational")
     logger.info("=" * 70)

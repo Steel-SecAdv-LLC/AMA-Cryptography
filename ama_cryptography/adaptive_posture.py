@@ -865,7 +865,7 @@ class CryptoPostureController:
                         expires_in=timedelta(days=30),
                     )
                     self.rotation_manager.initiate_rotation(active_key, new_key_id)
-                    logger.info("Posture-triggered key rotation: %s → %s", active_key, new_key_id)
+                    logger.info("Posture-triggered key rotation: %s -> %s", active_key, new_key_id)
                     succeeded = True
                 except Exception as e:
                     logger.warning("Posture key rotation failed: %s", e)
@@ -919,7 +919,7 @@ class CryptoPostureController:
             old = self.current_algorithm
             self.current_algorithm = new_algorithm
             self._switch_count += 1
-            logger.info("Posture-triggered algorithm switch: %s → %s", old, new_algorithm)
+            logger.info("Posture-triggered algorithm switch: %s -> %s", old, new_algorithm)
 
             if self.on_algorithm_switch is not None:
                 try:

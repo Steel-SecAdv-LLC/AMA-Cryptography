@@ -732,22 +732,22 @@ if __name__ == "__main__":
     logger.info("\n[1/5] Helical Geometric Invariants:")
     dna_results = verify_all_codes()
     for code, data in dna_results.items():
-        status = "✓" if data["valid"] else "✗"
+        status = "[OK]" if data["valid"] else "[FAIL]"
         logger.info(f"  {status} {code[:15]}: error = {data['fundamental_error']:.2e}")
 
     logger.info("\n[2/5] Lyapunov Stability Theory:")
     test_state = Vec([0.5, 0.3, 0.2])
     stable, V, proof = lyapunov_stability_proof(test_state)
-    logger.info(f"  {'✓' if stable else '✗'} Asymptotic stability: {stable}")
+    logger.info(f"  {'[OK]' if stable else '[FAIL]'} Asymptotic stability: {stable}")
     logger.info(f"  V(x) = {V:.6f}")
-    logger.info(f"  V̇(x) = {proof['V_dot']:.6f} (≤ 0 required)")
+    logger.info(f"  V_dot(x) = {proof['V_dot']:.6f} (<= 0 required)")
     logger.info(f"  Time to 99%: {proof['time_to_99']:.2f} time units")
 
     logger.info("\n[3/5] Golden Ratio Harmonics:")
     converged, ratio, proof = golden_ratio_convergence_proof(30)
-    logger.info(f"  {'✓' if converged else '✗'} Fibonacci convergence: {converged}")
-    logger.info(f"  F₃₁/F₃₀ = {ratio:.15f}")
-    logger.info(f"  φ       = {PHI:.15f}")
+    logger.info(f"  {'[OK]' if converged else '[FAIL]'} Fibonacci convergence: {converged}")
+    logger.info(f"  F31/F30 = {ratio:.15f}")
+    logger.info(f"  phi       = {PHI:.15f}")
     logger.info(f"  Error   = {proof['error']:.2e}")
 
     logger.info("\n[4/5] Quadratic Form Constraints:")
@@ -755,22 +755,24 @@ if __name__ == "__main__":
     E = initialize_ethical_matrix(4)
     sigma = calculate_sigma_quadratic(test_state_4d, E)
     valid, corrected = enforce_sigma_quadratic_threshold(test_state_4d, E, 0.96)
-    logger.info(f"  σ_quadratic = {sigma:.6f}")
-    logger.info(f"  {'✓' if valid else '✗'} Threshold (≥ 0.96): {valid}")
+    logger.info(f"  sigma_quadratic = {sigma:.6f}")
+    logger.info(f"  {'[OK]' if valid else '[FAIL]'} Threshold (>= 0.96): {valid}")
     if not valid:
         sigma_corrected = calculate_sigma_quadratic(corrected, E)
-        logger.info(f"  σ_quadratic (corrected) = {sigma_corrected:.6f}")
+        logger.info(f"  sigma_quadratic (corrected) = {sigma_corrected:.6f}")
 
     logger.info("\n[5/5] Overall Framework Status:")
     for framework, framework_status in results.items():
         if framework != "frameworks_ready":
-            logger.info(f"  {'✓' if framework_status else '✗'} {framework}: {framework_status}")
+            logger.info(
+                f"  {'[OK]' if framework_status else '[FAIL]'} {framework}: {framework_status}"
+            )
 
     logger.info("\n" + "=" * 70)
     if results["frameworks_ready"]:
-        logger.info("✓ ALL MATHEMATICAL FRAMEWORKS VERIFIED")
+        logger.info("[OK] ALL MATHEMATICAL FRAMEWORKS VERIFIED")
         logger.info("\nMachine-precision foundations ready for cryptographic integration.")
     else:
-        logger.warning("✗ SOME FRAMEWORKS FAILED VERIFICATION")
+        logger.warning("[FAIL] SOME FRAMEWORKS FAILED VERIFICATION")
         logger.warning("\nPlease review framework implementation.")
     logger.info("=" * 70)

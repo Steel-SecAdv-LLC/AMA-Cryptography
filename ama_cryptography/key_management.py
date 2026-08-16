@@ -2000,14 +2000,14 @@ if __name__ == "__main__":
     # Store a key
     test_key = secrets.token_bytes(32)
     storage.store_key("master-key-001", test_key, metadata={"purpose": "signing"})
-    logger.info("✓ Key stored securely")
+    logger.info("[OK] Key stored securely")
 
     # Retrieve key — demo-only equality check on a freshly-generated key.
     retrieved_key = storage.retrieve_key("master-key-001")
     logger.info(
-        f"✓ Key retrieved: {retrieved_key == test_key}"  # nosemgrep: non-constant-time-comparison -- demo-only equality check on freshly-generated key in __main__ block (KM-004)
+        f"[OK] Key retrieved: {retrieved_key == test_key}"  # nosemgrep: non-constant-time-comparison -- demo-only equality check on freshly-generated key in __main__ block (KM-004)
     )
 
     logger.info("\n" + "=" * 70)
-    logger.info("✓ Key Management System operational")
+    logger.info("[OK] Key Management System operational")
     logger.info("=" * 70)

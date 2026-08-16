@@ -826,6 +826,35 @@ jobs:
       run: |
         python tools/check_fuzz_target_registration.py
 
+    - name: "INVARIANT-43: Verify logged text survives a Windows handler"
+      # `logging` fails closed AND silent. A handler that cannot encode a
+      # record's text raises inside emit(); logging routes that to
+      # handleError, prints a traceback to stderr, and DISCARDS the record.
+      # The call site is told nothing. logging.FileHandler opens with
+      # encoding=None -> locale.getpreferredencoding(), which on a default
+      # Windows install is cp1252.
+      #
+      # adaptive_posture.py logged both the key-rotation and the
+      # algorithm-switch events with a `→` (U+2192) between the old and new
+      # identifiers. cp1252 cannot encode it, so on Windows the two records
+      # stating that a signing key had changed were exactly the two records a
+      # file handler dropped. An audit trail that silently loses its
+      # key-rotation entries is worse than one never claimed: the absence
+      # reads as "no rotation happened".
+      #
+      # sys.stderr hides this — CPython gives it errors="backslashreplace", so
+      # a bare StreamHandler degrades to a visible → rather than a loss.
+      # Only a handler that opens its own stream fails into handleError, which
+      # is why "it looked fine in my terminal" was not evidence and why this is
+      # decided here instead.
+      #
+      # The rule is cp1252-encodable, not ASCII: `—` and `§` encode fine and
+      # appear in over a thousand POST strings where they read correctly.
+      # cp1252 is precisely the line at which a record stops being written.
+      # Both directions are pinned by tests/test_log_message_encodability_gate.py.
+      run: |
+        python tools/check_log_message_encodability.py
+
     - name: "Verify every count the documentation pins"
       # docs/KEY_FORMATS.md said "tests/test_key_formats.py — 301 tests". True
       # when written, checked by nothing, so the only question was how long
