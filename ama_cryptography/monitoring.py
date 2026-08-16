@@ -1549,6 +1549,33 @@ class ResonanceTimingMonitor:
                 # Pre-lock: track the trailing-window median so the sign
                 # statistic stays centred on clean traffic.
                 state["mu0"] = ewma._median_and_mad()[0]
+                # ...and raise NOTHING from it.  Two reasons, both already
+                # written into this file before the events were:
+                #
+                #  * the lock branch above zeroes the accumulators because
+                #    "evidence gathered against the tracking reference is not
+                #    evidence against the locked one" — evidence too weak to
+                #    survive the lock is too weak to page an operator; and
+                #  * _CUSUM_LOCK_SAMPLES documents absorbing "a shift that
+                #    occurs inside the first 200 samples — the documented
+                #    warmup blind spot".
+                #
+                # A moving reference only keeps E[sign] ~ 0 on a *stationary*
+                # stream.  Against any systematic drift the trailing median
+                # lags, every sample lands on the same side, and gn/gp climb
+                # ~k per sample until they cross h and then 2h.  Measured on
+                # a 96-sample benign stream drifting 4e-6 ms/sample: gn = 33,
+                # a 'warning' at sample 50 and a **'critical' at sample 69**,
+                # with the reference still unlocked.  That is what failed
+                # test_scheduled_key_rotation_raises_no_critical_anomaly on
+                # ubuntu-24.04-arm — a key-registration schedule walking a
+                # growing dict is exactly such a drift, and it is benign.
+                #
+                # Detection is unaffected: shift recall is defined against
+                # the locked reference, and every shift test and the eval
+                # harness inject well past the lock (sample 1000; eval region
+                # from 400).
+                return None
 
         mu0 = state["mu0"]
         # Ties contribute 0 (decay only): on a quantized clock a stream

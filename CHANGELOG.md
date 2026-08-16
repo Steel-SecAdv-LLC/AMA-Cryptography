@@ -93,7 +93,16 @@ a two-sided **sign CUSUM** — distribution-free for the median, after a
 magnitude CUSUM measured a 77% clean false-alarm rate on skewed timings —
 against a reference locked at 200 samples (locking at the 30-sample warmup
 put the sample-median error at 1.4 standard errors of the drift tolerance;
-one seeded clean run false-alarmed on 96% of samples). Shift alarms are
+one seeded clean run false-alarmed on 96% of samples). **Before that lock
+the shift path raises nothing at all**: pre-lock the reference is the
+trailing median, which only keeps E[sign] ~ 0 on a stationary stream, so
+against any systematic drift the median lags, every sample lands on the same
+side, and the accumulator climbs through h and 2h — a 96-sample benign
+stream drifting 4e-6 ms/sample reached gn = 33 and emitted a **`critical`**
+with the reference still unlocked. Suppressing pre-lock events costs no
+detection (recall is defined against the locked reference; the eval injects
+its shift at 60% of a 4,000-sample stream) and matches both the documented
+warmup blind spot and the lock's own accumulator reset. Shift alarms are
 edge-triggered *events* (alert once, escalate once at 2h, re-baseline after
 300 persisted samples — on real hosts CPU frequency scaling moves the
 median, and per-sample flagging turned one genuine regime change into a 27%
@@ -205,7 +214,13 @@ and every Windows lane in both workflows failed on a *successful* install.
 The resolved `bin\` is added to the job PATH (the MSI's machine-PATH edit is
 invisible to a running job) and the DLL and `softhsm2-util` are verified
 fail-loud, with the searched roots printed on a miss. The Windows lane
-installs the `[hsm]` extra, the
+installs the `[hsm]` extra, the token is initialised with `--init-token
+--free` (the form `softhsm2-util`'s own SYNOPSIS documents; `--slot 0`
+addresses a slot ID and SoftHSM reassigns initialised tokens to a
+serial-derived slot) against a config mirroring the one the Disig MSI itself
+ships — trailing path separator, explicit `objectstore.backend` — and a
+failed init now reports the tool's stdout/stderr instead of a bare
+`returned non-zero exit status 1`. The
 availability probe and `PKCS11_PATHS` know the Windows DLL location, and the
 win32 exemption in the provisioning guard test is removed — Windows is held
 to the same standard as Linux and macOS. The Disig build statically embeds

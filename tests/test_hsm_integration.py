@@ -953,8 +953,21 @@ class TestSoftHSMIntegration:
         token_dir = tmp_path / "softhsm_tokens"
         token_dir.mkdir()
 
+        # Mirror the configuration SoftHSM2 itself ships.  The Disig Windows
+        # MSI installs this exact shape (verified by extracting the package's
+        # own softhsm2.conf): a tokendir with a TRAILING separator, plus the
+        # objectstore/log/slots keys stated rather than left to defaults.  The
+        # first revision wrote only `directories.tokendir` with no trailing
+        # separator, which is fine on Linux and macOS but is not the layout
+        # the Windows build is shipped and tested against.
         conf_path = tmp_path / "softhsm2.conf"
-        conf_path.write_text(f"directories.tokendir = {token_dir}\n")
+        conf_path.write_text(
+            f"directories.tokendir = {token_dir}{os.sep}\n"
+            "objectstore.backend = file\n"
+            "log.level = INFO\n"
+            "slots.removable = false\n",
+            encoding="utf-8",
+        )
 
         env = os.environ.copy()
         env["SOFTHSM2_CONF"] = str(conf_path)
@@ -962,12 +975,16 @@ class TestSoftHSMIntegration:
 
         import subprocess
 
-        subprocess.run(
+        # `--free` is the form softhsm2-util's own SYNOPSIS documents for
+        # initialising a token ("--init-token --free --label text"); `--slot 0`
+        # addresses a slot ID, and SoftHSM reassigns initialised tokens to a
+        # serial-derived slot, so slot 0 is only incidentally the free one.
+        # Verified equivalent on Linux 2.6.1 (both initialise a fresh store).
+        proc = subprocess.run(
             [
                 "softhsm2-util",
                 "--init-token",
-                "--slot",
-                "0",
+                "--free",
                 "--label",
                 "AmaTest",
                 "--so-pin",
@@ -976,8 +993,18 @@ class TestSoftHSMIntegration:
                 "1234",
             ],
             env=env,
-            check=True,
+            check=False,
             capture_output=True,
+            text=True,
+        )
+        # Surface the tool's own diagnosis.  `check=True` with captured output
+        # raises a CalledProcessError whose message carries the exit status and
+        # nothing else, which is how a Windows token-init failure reached CI as
+        # an unactionable "returned non-zero exit status 1".
+        assert proc.returncode == 0, (
+            f"softhsm2-util --init-token failed (exit {proc.returncode})\n"
+            f"config: {conf_path}\n{conf_path.read_text(encoding='utf-8')}\n"
+            f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
         )
 
         self._old_env = os.environ.get("SOFTHSM2_CONF")

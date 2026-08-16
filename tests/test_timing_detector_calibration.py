@@ -167,6 +167,41 @@ class TestSustainedShift:
         # ...and after re-baselining the shifted level is the new normal.
         assert not any(in_shift_flags[1600:]), "re-baseline did not adopt the new regime"
 
+    def test_drifting_stream_shorter_than_the_lock_raises_nothing(self) -> None:
+        """Pre-lock, a moving reference must raise no shift event at all.
+
+        Before the reference locks at ``_CUSUM_LOCK_SAMPLES`` the CUSUM is
+        scored against the *trailing* median, which only keeps E[sign] ~ 0 on
+        a stationary stream.  Against a systematic drift the median lags,
+        every sample lands on the same side, and the accumulator climbs ~k per
+        sample straight through h and 2h — so a short, entirely benign stream
+        produced a **'critical'**.  That is what failed
+        ``test_scheduled_key_rotation_raises_no_critical_anomaly`` on
+        ubuntu-24.04-arm: key registration walks a dict that grows as the
+        schedule advances, which is exactly such a drift.
+
+        Reverting the pre-lock guard makes this fail with a 'warning' at
+        sample ~50 and a 'critical' at ~69.
+        """
+        rng = random.Random(7)  # noqa: S311 -- test stream, not key material (TDC-001)
+        monitor = ResonanceTimingMonitor(window_size=64)
+        events: list[TimingAnomaly] = []
+        n = ResonanceTimingMonitor._CUSUM_LOCK_SAMPLES // 2  # far below the lock
+        for i in range(n):
+            x = 0.0016 - i * 4e-6 + rng.uniform(-2e-7, 2e-7)
+            anomaly = monitor.record_timing("key_register", x)
+            if anomaly is not None and anomaly.kind == "shift":
+                events.append(anomaly)
+
+        state = monitor.get_shift_state("key_register")
+        assert state is not None and not state["locked"], (
+            "scenario is only meaningful while the reference is unlocked; "
+            f"locked={state['locked'] if state else None} after {n} samples"
+        )
+        assert events == [], f"pre-lock drift raised shift event(s): {events}"
+        # And the accumulators carry no evidence to escalate from later.
+        assert state["gp"] == 0.0 and state["gn"] == 0.0
+
     def test_constant_stream_never_alarms(self) -> None:
         monitor = ResonanceTimingMonitor()
         for _ in range(1500):
