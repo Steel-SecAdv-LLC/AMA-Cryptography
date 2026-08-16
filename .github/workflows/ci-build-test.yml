@@ -335,15 +335,33 @@ jobs:
         # otherwise.  ci.yml gained this step in 5.0.0; this workflow needs it
         # for the same reason, because it makes the same promise.
         #
-        # Linux only: the package is Debian-packaged, and one executing lane
-        # per workflow is what the coverage argument needs.  The mock-backed
-        # tests still run on every matrix entry.
-        if: runner.os == 'Linux'
+        # Linux via apt, macOS via Homebrew.  The first version of this step
+        # was Linux-only and the macOS gap was written up as a known
+        # limitation instead of being closed — but `brew install softhsm`
+        # ships the same PKCS#11 module, so the limitation was a choice, not a
+        # constraint.  Both platforms now execute the real token lifecycle.
+        #
+        # Windows remains genuinely unprovisioned: SoftHSM2 has no maintained
+        # package on any runner-available manager there, only a manual
+        # installer.  That one is a real constraint rather than a decision,
+        # and HSMKeyStorage's PKCS#11 interaction is platform-independent
+        # Python, so the Linux and macOS lanes cover the logic.
+        if: runner.os == 'Linux' || runner.os == 'macOS'
+        shell: bash
         run: |
-          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends softhsm2
-          test -f /usr/lib/softhsm/libsofthsm2.so
+          set -euo pipefail
+          if [ "${RUNNER_OS}" = "Linux" ]; then
+            sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends softhsm2
+            test -f /usr/lib/softhsm/libsofthsm2.so
+          else
+            brew install softhsm
+            # Homebrew is prefix-relative (/opt/homebrew on arm64,
+            # /usr/local on x86-64), so the module path is discovered rather
+            # than hard-coded — the same mistake as the .so.2 SONAME pin.
+            test -f "$(brew --prefix)/lib/softhsm/libsofthsm2.so"
+          fi
           command -v softhsm2-util
 
       - name: Install Python dependencies + package (with [dev] extras)
@@ -351,13 +369,12 @@ jobs:
         # come in via the canonical pyproject.toml declaration rather
         # than the legacy requirements-dev.txt.  Matches ci.yml::test.
         #
-        # [hsm] on Linux supplies PyKCS11: SoftHSM2 alone does not make the
-        # HSM lane executable, because HSMKeyStorage reaches the token through
-        # that binding.  Installed only where the token above was installed,
-        # so the other matrix entries do not pay for a binding with nothing to
-        # bind to.
+        # [hsm] supplies PyKCS11: SoftHSM2 alone does not make the HSM lane
+        # executable, because HSMKeyStorage reaches the token through that
+        # binding.  Installed wherever the token was installed above, so the
+        # remaining entries do not pay for a binding with nothing to bind to.
         run: |
-          if [ "${{ runner.os }}" = "Linux" ]; then
+          if [ "${{ runner.os }}" = "Linux" ] || [ "${{ runner.os }}" = "macOS" ]; then
             pip install -e ".[dev,hsm]"
           else
             pip install -e ".[dev]"
