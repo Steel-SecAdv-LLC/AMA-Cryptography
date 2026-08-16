@@ -328,11 +328,41 @@ jobs:
           cmake -B build -DAMA_USE_NATIVE_PQC=ON -DCMAKE_BUILD_TYPE=Release -DAMA_BUILD_TESTS=OFF -DAMA_BUILD_EXAMPLES=OFF
           cmake --build build --config Release --parallel
 
+      - name: Install SoftHSM2 (PKCS#11 test token)
+        # This job runs with AMA_CI_REQUIRE_BACKENDS=1, which promises every
+        # backend is provisioned — and SoftHSM2 was not, so the only real
+        # PKCS#11 coverage in the tree skipped here while the flag claimed
+        # otherwise.  ci.yml gained this step in 5.0.0; this workflow needs it
+        # for the same reason, because it makes the same promise.
+        #
+        # Linux only: the package is Debian-packaged, and one executing lane
+        # per workflow is what the coverage argument needs.  The mock-backed
+        # tests still run on every matrix entry.
+        if: runner.os == 'Linux'
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends softhsm2
+          test -f /usr/lib/softhsm/libsofthsm2.so
+          command -v softhsm2-util
+
       - name: Install Python dependencies + package (with [dev] extras)
         # Use the [dev] extras so hypothesis / pytest-cov / mypy / etc.
         # come in via the canonical pyproject.toml declaration rather
         # than the legacy requirements-dev.txt.  Matches ci.yml::test.
-        run: pip install -e ".[dev]"
+        #
+        # [hsm] on Linux supplies PyKCS11: SoftHSM2 alone does not make the
+        # HSM lane executable, because HSMKeyStorage reaches the token through
+        # that binding.  Installed only where the token above was installed,
+        # so the other matrix entries do not pay for a binding with nothing to
+        # bind to.
+        run: |
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            pip install -e ".[dev,hsm]"
+          else
+            pip install -e ".[dev]"
+          fi
+        shell: bash
 
       - name: Install differential/interop reference libraries (test-only)
         # Independent third-party implementations that let the cross-library

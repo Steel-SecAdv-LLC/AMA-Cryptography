@@ -654,6 +654,38 @@ class TestTheRecordedCommandIsTheCommandThatRan:
         assert rendered.startswith("python benchmarks/benchmark_runner.py")
         assert str(Path(absolute).parent.parent) not in rendered
 
+    def test_the_script_path_is_rendered_the_same_on_every_platform(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The Windows regression, asserted as the property it violated.
+
+        ``str(Path(...))`` yields ``benchmarks\\benchmark_runner.py`` on
+        Windows, and ``shlex.quote`` then wraps it in single quotes because a
+        backslash is a POSIX metacharacter — producing
+        ``python 'benchmarks\\benchmark_runner.py'``, which is neither valid
+        Windows nor comparable with the same run recorded on Linux. A
+        provenance field that renders differently per platform cannot be used
+        to compare two measurements, which is most of what it is for.
+        """
+        monkeypatch.setattr(sys, "argv", [str(Path(br.__file__).resolve())])
+        rendered = br._invocation()
+        assert "\\" not in rendered, f"platform-specific separator leaked: {rendered!r}"
+        assert "'" not in rendered, f"the script path was needlessly quoted: {rendered!r}"
+        assert rendered == "python benchmarks/benchmark_runner.py"
+
+    def test_caller_arguments_are_reproduced_verbatim(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Only the script path is normalised; the caller's strings are not.
+
+        Rewriting an argument the caller actually passed would make the field
+        describe a command that did not run — the defect it was added to fix.
+        """
+        monkeypatch.setattr(
+            sys, "argv", ["benchmarks/benchmark_runner.py", "--baseline", r"C:\\bench\\b.json"]
+        )
+        assert r"C:\\bench\\b.json" in br._invocation()
+
     def test_an_unrelated_script_path_degrades_to_its_basename(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

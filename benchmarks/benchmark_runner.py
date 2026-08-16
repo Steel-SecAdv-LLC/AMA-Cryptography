@@ -1034,12 +1034,23 @@ def _invocation() -> str:
     command than the one that ran is worse than no line at all.
 
     ``sys.argv[0]`` is normalised to a repository-relative path when it is one,
-    so the record does not depend on where the checkout happens to live.
+    so the record does not depend on where the checkout happens to live, and
+    rendered with forward slashes so it does not depend on which platform
+    measured.  ``str()`` gave ``benchmarks\\benchmark_runner.py`` on Windows,
+    which ``shlex.quote`` then wrapped in single quotes because a backslash is
+    a POSIX metacharacter — a command line that is neither valid Windows nor
+    comparable with the same run recorded on Linux.
+
+    The normalisation is applied to the script path only.  That path is one
+    *this function derives*, so its form is ours to choose; the remaining
+    arguments are the caller's own strings and are reproduced verbatim
+    (shell-quoted, never rewritten), because silently altering what was
+    actually passed is the failure this field exists to prevent.
     """
     argv = list(sys.argv) or ["benchmarks/benchmark_runner.py"]
     try:
         script = Path(argv[0]).resolve().relative_to(Path(__file__).resolve().parent.parent)
-        argv[0] = str(script)
+        argv[0] = script.as_posix()
     except Exception:
         argv[0] = Path(argv[0]).name
     return "python " + " ".join(shlex.quote(a) for a in argv)

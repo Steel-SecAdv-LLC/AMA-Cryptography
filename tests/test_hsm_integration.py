@@ -840,28 +840,37 @@ def test_softhsm_lane_is_provisioned_in_ci() -> None:
 
 
 def test_the_workflow_still_provisions_softhsm() -> None:
-    """The Linux install step must not be deleted.
+    """Every workflow that promises provisioned backends must install the token.
 
     ``test_softhsm_lane_is_provisioned_in_ci`` only fires where the token is
     expected, so on its own it would be satisfied by removing the step that
-    installs it — the lane would return to skipping everywhere and both
-    checks would stay green. This asserts the provisioning exists, so the
-    pair cannot be satisfied by deletion.
+    installs it — the lane would return to skipping everywhere and both checks
+    would stay green. This asserts the provisioning exists, so the pair cannot
+    be satisfied by deletion.
 
-    Reads the workflow rather than trusting a comment: the claim is about
+    Both workflows are checked, because both set ``AMA_CI_REQUIRE_BACKENDS=1``.
+    ``ci-build-test.yml`` set that flag while installing neither the token nor
+    PyKCS11, so it promised every backend was present and skipped the only
+    real PKCS#11 coverage in the tree — which is exactly the shape this test
+    exists to catch, and is how it was found.
+
+    Reads the workflows rather than trusting a comment: the claim is about
     what CI does.
     """
-    workflow = pathlib.Path(__file__).resolve().parent.parent / ".github" / "workflows" / "ci.yml"
-    text = workflow.read_text(encoding="utf-8")
-    assert "softhsm2" in text, (
-        "ci.yml no longer installs softhsm2. TestSoftHSMIntegration is the only "
-        "real PKCS#11 coverage in the tree; without this step it skips on every "
-        "job, which is the state 5.0.0 fixed."
-    )
-    assert "[dev,legacy,benchmark,hsm]" in text or "hsm]" in text, (
-        "ci.yml no longer installs the [hsm] extra, so PyKCS11 is absent and the "
-        "SoftHSM2 lane skips even with the token installed."
-    )
+    workflows = pathlib.Path(__file__).resolve().parent.parent / ".github" / "workflows"
+    for name in ("ci.yml", "ci-build-test.yml"):
+        text = (workflows / name).read_text(encoding="utf-8")
+        if "AMA_CI_REQUIRE_BACKENDS" not in text:
+            continue
+        assert "softhsm2" in text, (
+            f"{name} sets AMA_CI_REQUIRE_BACKENDS but no longer installs softhsm2. "
+            f"TestSoftHSMIntegration is the only real PKCS#11 coverage in the tree; "
+            f"without this step it skips while the flag claims every backend is present."
+        )
+        assert "hsm]" in text, (
+            f"{name} no longer installs the [hsm] extra, so PyKCS11 is absent and the "
+            f"SoftHSM2 lane skips even with the token installed."
+        )
 
 
 @pytest.mark.skipif(not _SOFTHSM_AVAILABLE, reason=_softhsm_unavailable_reason())
