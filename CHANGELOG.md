@@ -243,6 +243,70 @@ operator re-runs on a quiet machine or audits the primitive. Sensitivity is
 untouched, because a real leak's excursions share a sign. Eight new self-test
 cases pin the boundary, including the exact observed shape.
 
+### Fixed — five defects the verification lanes surfaced only by being run
+
+Each of these was found by executing a lane against the final code rather than
+trusting that it worked. Four of them had been failing, or silently not
+running, for longer than this release.
+
+* **The ARM/QEMU cross-test workflow had never run.** `${{ matrix.sve_vq *
+  128 }}` is not valid GitHub Actions expression syntax — the grammar has no
+  arithmetic operators — so every dispatch failed at parse time with HTTP 422
+  and the workflow contributed nothing to any run in its history. The matrix
+  now carries `vl_bits` explicitly through `include:`, and
+  `tools/check_workflow_commands.py` grew a `check_expression_syntax()` pass
+  that rejects the whole class; 210 expressions across the workflow tree are
+  parsed by the gate. The lane executes, at each declared vector length.
+
+* **The Python key-parser fuzz job could not import the package it fuzzes.**
+  It builds the native library and then imports `ama_cryptography`, but never
+  bound the freshly-built object into the integrity artefact. Once the digest
+  refusal became unconditional (above), the job failed on the import rather
+  than on a parser defect, and the campaign never ran. Every other
+  build-then-import job already re-signs; this one did not, which only became
+  visible when the refusal stopped being demotable.
+
+* **`tools/update_docs.py` could not run on Windows at all.**
+  `Path.read_text()` with no encoding uses the locale encoding — the ANSI code
+  page on Windows — and `CHANGELOG.md` is UTF-8, so every Windows job in the
+  five-version matrix failed with `UnicodeDecodeError: 'charmap' codec can't
+  decode byte 0x90`. The write side would have been worse than an error,
+  because it succeeds on the subset that round-trips: text-mode `write_text`
+  translates `\n` to `\r\n`, so a single run would have rewritten every line
+  ending in the files it maintains, which `tools/check_line_endings.py` exists
+  to reject — the documentation tool failing the repository's own gate on the
+  documentation it maintains. Every read now names `encoding="utf-8"` and
+  every write also pins `newline=""`. The same class is swept across
+  `build_keyformat_corpus.py`, `build_post_kats.py`,
+  `refresh_wycheproof_corpus.py`, `generate_competitive.py` and one read in
+  the shipped package, and pinned by tests that walk the AST for calls missing
+  the keywords.
+
+* **The ACVP harness pinned `libama_cryptography.so.2` as its versioned
+  fallback.** CMake derives `SOVERSION` from the project major, so that name
+  went stale at 3.0.0 and had been wrong for three majors. It never bit
+  because CI builds in-tree, where the unversioned symlink is tried first —
+  but on any layout carrying only the versioned object (an installed prefix, a
+  packaged sysroot) the harness reports "cannot find library" while the
+  library sits beside it, turning a build problem into what reads as a vector
+  problem. Discovery is now derived from what is present rather than named, so
+  it survives every future major; re-pinning to `.so.5` would only have
+  restarted the same clock.
+
+* **The benchmark provenance flag could never read clean.** It sampled `git
+  status --porcelain` *after* the run had written its own tracked output, so
+  every report the tool had ever produced carried `(working tree DIRTY)`,
+  including reports produced from a pristine checkout. A provenance field that
+  always prints the same value carries no information, and one that always
+  prints the alarming value is worse than absent: it trains the reader to
+  ignore it. The tree state is now captured before the first measurement. Two
+  related gaps closed with it: `benchmarks/benchmark-results.json` — the
+  machine-readable record — carried no provenance block at all, and the
+  `Command` field was a hard-coded string omitting `--output`, the very flag
+  that writes that file, so the one line a reader would copy to reproduce the
+  run did not reproduce it. Both records now carry the same block, and the
+  command is rendered from the actual invocation.
+
 ### Fixed — ML-KEM `Compress_d` applies its own `mod 2^d`, and the gates that read the C tree can see it
 
 `kyber_compress_d`'s documented contract is `round(2^d*x/q) mod 2^d`; it

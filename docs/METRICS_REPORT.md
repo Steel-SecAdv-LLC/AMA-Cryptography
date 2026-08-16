@@ -2,16 +2,16 @@
 
 **Version:** 5.0.0
 **Measurement Date:** test-function counts **and** lines-of-code figures
-re-measured **2026-08-14**. Adversarial-test figures still carry their
+re-measured **2026-08-16**. Adversarial-test figures still carry their
 **2026-07-30** (3.5.0) measurement — see the caveat below. Benchmark figures
 are refreshed separately.
-**Last Reviewed:** 2026-08-14
+**Last Reviewed:** 2026-08-16
 **Repository snapshot:** re-run the reproduction commands after any rebase,
 squash, or large merge so the figures continue to match the shipped tree. If a
 documented count and this report disagree, the count is the bug.
 
 > **Which figures are current, stated precisely.** The Python test counts in
-> *Test Counts* below were measured on this branch on 2026-08-14 and are
+> *Test Counts* below were measured on this branch on 2026-08-16 and are
 > enforced on every PR by `tools/check_documented_counts.py`, which runs this
 > report's own published reproduction command — so they cannot drift silently
 > again.
@@ -76,33 +76,43 @@ Measured as non-empty-allowed `wc -l` over source files in each scope.
 
 | Scope | Files | Lines |
 |-------|------:|------:|
-| Library Python (`ama_cryptography/*.py`) | 28 | 33,897 |
-| Native C (`src/c/**/*.c`, `include/**/*.h`) | 105 | 51,299 |
-| Library total (Python + C + headers) | 133 | **85,196** |
-| Top-level Python (monitors, benchmarks, demos) | — | 968 |
-| Tests (`tests/**/*.py`) | 156 | 61,394 |
+| Library Python (`ama_cryptography/*.py`) | 28 | 34,771 |
+| Native C (`src/c/**/*.c`, `include/**/*.h`) | 105 | 51,404 |
+| Library total (Python + C + headers) | 133 | **86,175** |
+| Top-level Python (monitors, benchmarks, demos) | — | 1,030 |
+| Tests (`tests/**/*.py`) | 157 | 63,089 |
 | Cython (`*.pyx`, `*.pxd`) | — | 1,873 |
-| **Whole project** (source + docs + config) | — | **309,239** |
+| **Whole project** (source + docs + config) | — | **314,083** |
 
 **Library total (the figure that most closely tracks "library size"):
-85,196 lines** across 133 files under `ama_cryptography/`, `src/c/`,
+86,175 lines** across 133 files under `ama_cryptography/`, `src/c/`,
 and `include/`. This supersedes any "11,246 LoC" claim that may have
 appeared externally.
 
-**Whole-project total** (`309,239` lines across Python, C, headers,
+**Whole-project total** (`314,083` lines across Python, C, headers,
 Cython, Markdown, YAML/TOML/JSON config, CMake) is the broader figure
 some external claims may have been referencing. Reproduce it with:
 
 ```
-find . -type d \( -name build -o -name .git -o -name __pycache__ \
-    -o -name "*.egg-info" \) -prune -o \
-    -path "./src/cython/*.c" -prune -o -type f \( -name "*.py" \
-    -o -name "*.c" -o -name "*.h" -o -name "*.pyx" -o -name "*.pxd" \
-    -o -name "*.md" -o -name "*.yml" -o -name "*.yaml" -o -name "*.toml" \
-    -o -name "*.json" -o -name CMakeLists.txt -o -name "*.cmake" \) \
-    -print0 | xargs -0 cat | wc -l
+git ls-files -z \
+  | tr '\0' '\n' \
+  | grep -E '\.(py|c|h|pyx|pxd|md|yml|yaml|toml|json|cmake)$|CMakeLists\.txt$' \
+  | grep -v '^src/cython/.*\.c$' \
+  | tr '\n' '\0' | xargs -0 cat | wc -l
 ```
- Note that this figure
+
+The command enumerates **tracked** files rather than walking the working
+directory. The `find`-based form it replaces pruned `build/`, `.git/`,
+`__pycache__/` and `*.egg-info/` and then relied on a written instruction to
+re-measure on a clean checkout — which a developer's tree never is. Measured
+here on a working tree with a virtualenv and two out-of-source CMake build
+directories (`build-x86/`, `build-arm/`, the names `cmake -B` actually
+produces), the old form reported **336,644** against this table's 314,083: a
+7% overcount, entirely from files that are not in the repository. Asking
+`git` which files are tracked makes the measurement independent of what the
+person running it happens to have built.
+
+Note that this figure
 is dominated by artifacts that are not hand-written library code: the
 `*.json` pattern sweeps in the vendored NIST ACVP and Wycheproof vector
 corpora, and `*.md` sweeps in this repository's documentation, which is
@@ -189,8 +199,8 @@ find . -type f \
 
 | Scope | Count |
 |-------|------:|
-| Python test files under `tests/` matching the static regex | 153 |
-| Syntactic `def test_` matches under `tests/**/*.py` | **3,653** |
+| Python test files under `tests/` matching the static regex | 154 |
+| Syntactic `def test_` matches under `tests/**/*.py` | **3,680** |
 | `test_*.c` files under `tests/c/` (ctest-registered) | 58 |
 | `bench_*.c` files under `tests/c/` (standalone, not in ctest) | 1 |
 | `fuzz_*.c` sources under `fuzz/` | 16 |
@@ -218,7 +228,7 @@ pytest --collect-only -q | tail -1
 Stderr is intentionally left unsuppressed so collection/import errors
 remain visible during reproduction.
 
-The static count (3,653) and the dynamic collection count will differ.
+The static count (3,680) and the dynamic collection count will differ.
 Any external claim ("N tests") must state which count it is reporting.
 This supersedes the earlier "866+ tests collected across 39 files" figure
 in ARCHITECTURE.md and any "2,068 tests" figure that may have circulated
