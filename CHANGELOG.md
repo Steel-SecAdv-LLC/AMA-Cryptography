@@ -299,10 +299,79 @@ indistinguishable from one that cannot:
 
 Measured on the tree as committed: the shipped `libama_cryptography.so.5.0.0`
 declares exactly two dependencies — `libc.so.6` and `ld-linux-x86-64.so.2` —
-and imports no symbol carrying a vendor prefix. CPython's `hashlib` remains
+imports no symbol carrying a vendor prefix, and defines none either (241
+exported symbols, all `ama_`-namespaced). CPython's `hashlib` remains
 permitted for hashing under INVARIANT-1's stdlib carve-out and is
 deliberately not screened; screening the interpreter's own accelerators would
 make the gate fail on a stock CPython rather than on an AMA defect.
+
+##### Follow-up: the gate's own coverage gaps, found by running it everywhere
+
+The first version of this gate was written and measured on Linux. Its first
+run across the full CI matrix reported four failures on macOS and three on
+Windows, and every one of them was a defect in the gate rather than in the
+library. They are recorded here because the whole point of the gate is that a
+control which has not been shown to work on a platform is not a control on
+that platform.
+
+- **Universal binaries were unparseable.** macOS wheels are `universal2`, so
+  the artefact there is a *fat* wrapper around two Mach-O images and not a
+  Mach-O image at all. The parser knew only thin images and rejected it as an
+  unrecognised format. That is fail-closed — it reported a violation, never a
+  false clean — but the effect was that the linkage check could not examine
+  the shipped artefact on the one platform whose binary is fat. Every slice
+  is now parsed and the results **unioned**, because a vendor present in one
+  architecture ships in the artefact and reading only the host's slice would
+  be an evasion path. Both `FAT_MAGIC` and `FAT_MAGIC_64` are handled, and a
+  Java class file — which shares the `0xCAFEBABE` magic — is rejected rather
+  than read as a two-dozen-slice binary.
+- **The Mach-O symbol screen was inert.** The parser returned an empty symbol
+  set for every Mach-O image, so on macOS the dependency record was the only
+  thing screened. `LC_SYMTAB` is now parsed, and the leading underscore
+  Mach-O prepends to every C symbol is stripped before matching, so
+  `_EVP_DigestInit_ex` is recognised as OpenSSL rather than as an unknown
+  name.
+- **Both byte-swapped Mach-O magics were mapped to little-endian.** A
+  big-endian image decoded that way reads `ncmds` in the millions and walks
+  load commands from nonsense offsets. No such image ships today, but a
+  parser that is wrong for an input it *accepts* is a defect regardless.
+- **Three tests looked for `build/lib/libama_cryptography.so` by exact
+  name.** That name exists only on Linux. On macOS and Windows — where the
+  same job builds `.dylib` and `.dll` and sets `AMA_CI_REQUIRE_BACKENDS=1` —
+  they skipped, `conftest` correctly escalated the skip to a hard failure,
+  and ten jobs went red. Until they did, the shipped macOS and Windows
+  artefacts had never been examined by these tests at all. The library is now
+  located through `tests.conftest.native_library_path` across every directory
+  CMake writes to, and a new test asserts that `_LIBRARY_DIRS` still matches
+  the `CMAKE_*_OUTPUT_DIRECTORY` values `CMakeLists.txt` actually sets.
+
+Two gaps in what the gate could *detect* were closed at the same time, both
+concerning a vendor linked **statically** — which produces no dependency
+record and imports nothing, and so passed every screen the gate had:
+
+- **Defined symbols are now screened.** A statically linked vendor's own
+  symbols are the one linkage trace it leaves, and the ELF and Mach-O parsers
+  now collect them. The parse is cross-checked against `nm -D --defined-only`
+  on the built library.
+- **The build configuration is now checked** (`--build-config`, in the
+  default run). `find_package(OpenSSL)` plus `target_link_libraries(...
+  OpenSSL::Crypto)` is the shortest path from "no vendor" to "vendor
+  executing inside the library", and if the link is static with hidden
+  visibility the artefact carries no trace of it at all. This module's own
+  docstring had named that as the threat since it was written; naming a
+  threat is not checking for it. Commands are matched rather than words,
+  because `CMakeLists.txt` names OpenSSL both in a status message and in the
+  comment recording why it is deliberately not probed — a word-level scan
+  would fire on the documentation of the boundary it enforces, and the fix
+  for that false positive would have been to weaken the scan.
+
+`tests/test_vendor_isolation_gate.py` is now **72 cases**. The Mach-O images
+are constructed in the test from the format's own field layout rather than
+borrowed from the host, so a Linux or Windows runner exercises the macOS
+path, and a fixture cannot silently agree with a wrong parser because the
+parser plays no part in producing it. The static-link, non-first-slice,
+underscore-prefix, big-endian, truncated-`LC_SYMTAB` and out-of-bounds-slice
+cases each have a test that fails without the corresponding fix.
 
 #### Warning gate completeness pass (2026-08-17) — the frozen allowlist now covers the configurations that ship
 

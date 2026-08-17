@@ -2,7 +2,7 @@
 # Copyright (C) 2025-2026 Steel Security Advisors LLC
 # SPDX-License-Identifier: Apache-2.0
 """
-AMA Cryptography — Vendor Isolation Gate (INVARIANT-1, enforced three ways)
+AMA Cryptography — Vendor Isolation Gate (INVARIANT-1, enforced four ways)
 
 INVARIANT-1 says no third-party cryptographic implementation may be linked,
 imported or called by the shipped library.  Until this script existed, that
@@ -12,14 +12,22 @@ claim rested on:
   invocations of external crypto binaries (``openssl``, ``gpg``, …); and
 * comments, naming, documentation and intent.
 
-Nothing checked the three things that actually decide the question:
+Nothing checked the four things that actually decide the question:
 
 ``linkage``
-    What the built shared object *depends on* and what symbols it expects an
-    external library to supply.  A ``find_package(OpenSSL)`` added to
-    CMakeLists.txt, a system header that pulls in a vendor's inline
-    implementation, or a `-lcrypto` inherited from a toolchain file would all
-    produce a library that AMA's Python-level checks cannot see at all.
+    What the built shared object *depends on*, what symbols it expects an
+    external library to supply, and what symbols it defines itself.  The
+    third is what a *static* link leaves behind: it produces no dependency
+    record and imports nothing, so the first two see a clean library while
+    vendor code runs inside it.
+
+``build configuration``
+    A ``find_package(OpenSSL)`` added to CMakeLists.txt, or a ``-lcrypto``
+    inherited from a toolchain file, is the shortest path from "no vendor" to
+    "vendor executing inside the library" — and if the link is static and the
+    build hides its symbols, the artefact carries no trace of it.  The build
+    files are where that decision is written down, so that is where it is
+    checked.
 
 ``runtime``
     What is actually resident in ``sys.modules`` after ``import
@@ -36,11 +44,22 @@ Nothing checked the three things that actually decide the question:
     comparators on their side of the line was that no package module happened
     to import ``benchmarks``.
 
-All three are checked here, and the binary formats are parsed in-tree with
+All four are checked here, and the binary formats are parsed in-tree with
 ``struct`` rather than by shelling out to ``readelf`` / ``otool`` /
 ``dumpbin``: this gate must run on every platform the wheels are built on,
 including runners where those tools are absent, and a gate that silently
 skips is the failure mode this repository's audit exists to remove.
+
+Parsing them in-tree carries its own obligation, which the first version of
+this file did not meet: the parser has to accept what the platform actually
+ships.  macOS wheels are ``universal2``, so the artefact there is a *fat*
+wrapper around two Mach-O images and not a Mach-O image at all.  The parser
+recognised only thin images, so on macOS it reported "unrecognised binary
+format" — fail-closed, and therefore not a false clean, but the linkage
+check could not examine the shipped artefact on that platform at all.  Every
+slice of a universal binary is now parsed and the results are **unioned**: a
+vendor present in one architecture is a vendor in the shipped artefact, and
+reading only the host's slice would be an evasion path.
 
 Forbidden vendors
 -----------------
@@ -58,14 +77,24 @@ Checks
     package's own import graph).  Also flags a ``ctypes`` load whose library
     name is a forbidden vendor, which no ``import`` statement would reveal.
 
+``--build-config``
+    No ``CMakeLists.txt``, ``cmake/**.cmake`` or ``setup.py`` outside
+    ``benchmarks/`` may search for, find, or link a forbidden vendor.
+    Commands are matched, not words: ``CMakeLists.txt`` names OpenSSL in a
+    status message and in the comment recording why it is deliberately not
+    probed, and a scan that cannot tell a mention from a link would fire on
+    the documentation of the boundary it is enforcing.
+
 ``--runtime``
     Imports the package in a clean subprocess and fails if any forbidden
     top-level module is resident afterwards.
 
 ``--library PATH``
-    Parses the native library's own dependency records — ELF ``DT_NEEDED``
-    plus undefined ``.dynsym`` entries, Mach-O ``LC_LOAD_DYLIB``, PE import
-    directory — and fails on a forbidden vendor name or symbol prefix.
+    Parses the native library's own linkage records — ELF ``DT_NEEDED`` plus
+    ``.dynsym``, Mach-O ``LC_LOAD_DYLIB`` plus ``LC_SYMTAB`` (thin or
+    universal), PE import directory — and fails on a forbidden vendor name
+    or symbol prefix, whether the symbol is imported (dynamic link) or
+    defined by the image itself (static link).
 
 With no check selected, every check that can run in the current environment
 runs.  ``--library`` is skipped only when no path is given; a path that is
@@ -83,10 +112,11 @@ from __future__ import annotations
 import argparse
 import ast
 import json
+import re
 import struct
 import subprocess
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Iterable, NamedTuple, Sequence
 
 
@@ -269,6 +299,216 @@ def check_source(package_dir: Path) -> list[Violation]:
 
 
 # --------------------------------------------------------------------------
+# Build-configuration check
+# --------------------------------------------------------------------------
+
+#: CMake commands that can put a vendor into the link line or make the build
+#: depend on finding one.  ``message()``, ``option()`` and the like are
+#: deliberately absent: ``CMakeLists.txt`` names OpenSSL in a status string
+#: and in the comment explaining why it is *not* probed, and a scan that
+#: cannot tell a mention from a link would fire on the very documentation
+#: that records the boundary.
+_CMAKE_VENDOR_COMMANDS = (
+    "find_package",
+    "find_library",
+    "pkg_check_modules",
+    "pkg_search_module",
+    "target_link_libraries",
+    "link_libraries",
+)
+
+#: Files that decide what the build links, beyond the sources themselves.
+_BUILD_CONFIG_GLOBS = ("CMakeLists.txt", "**/CMakeLists.txt", "cmake/**/*.cmake", "setup.py")
+
+#: Directories that hold generated or third-party trees rather than this
+#: repository's own build configuration.  ``build/`` in particular is full of
+#: CMake's own generated files, which name every package CMake knows how to
+#: find; scanning them would report the toolchain's vocabulary as AMA's
+#: choices.
+_BUILD_CONFIG_SKIP_DIRS = frozenset(
+    {".git", "build", "_build", "dist", ".venv", "venv", "node_modules", "__pycache__"}
+)
+
+#: A library's version suffix: an optional separator, then a digit, then
+#: whatever the packager appended (``-3``, ``.3``, ``-3-x64``, ``2``).
+_VERSION_SUFFIX_RE = re.compile(r"[-_.]?\d[\w.+-]*$")
+
+
+def _strip_cmake_comments(text: str) -> str:
+    """Remove ``#`` comments, leaving quoted strings intact.
+
+    A ``#`` inside a quoted argument is data, not a comment, and dropping the
+    rest of such a line would hide whatever followed it on that line from the
+    scan.  Bracket comments (``#[[ ... ]]``) are handled by the same rule
+    that handles line comments: everything from the ``#`` is dropped, and the
+    closing ``]]`` sits on a later line that is scanned normally — which can
+    only make the scan see more, never less.
+    """
+    out: list[str] = []
+    in_string = False
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if in_string:
+            if char == "\\":
+                out.append(text[index : index + 2])
+                index += 2
+                continue
+            if char == '"':
+                in_string = False
+            out.append(char)
+        elif char == '"':
+            in_string = True
+            out.append(char)
+        elif char == "#":
+            newline = text.find("\n", index)
+            if newline == -1:
+                break
+            index = newline
+            continue
+        else:
+            out.append(char)
+        index += 1
+    return "".join(out)
+
+
+def _vendor_link_tokens() -> dict[str, str]:
+    """``token -> vendor name`` for every spelling a vendor links under.
+
+    Derived from :data:`VENDORS` rather than written out again, so a vendor
+    added to the table is screened here without a second edit.  Both the
+    ``libfoo`` and the ``-lfoo`` spelling are generated: CMake accepts either
+    in a link-libraries list.
+    """
+    tokens: dict[str, str] = {}
+    for vendor in VENDORS:
+        for name in vendor.library_names:
+            tokens.setdefault(name.lower(), vendor.name)
+            if name.lower().startswith("lib"):
+                tokens.setdefault(name[3:].lower(), vendor.name)
+        for module in vendor.modules:
+            tokens.setdefault(module.lower(), vendor.name)
+        tokens.setdefault(vendor.name.lower(), vendor.name)
+    return tokens
+
+
+def check_build_config(repo_root: Path) -> list[Violation]:
+    """No build file may search for, find, or link a forbidden vendor.
+
+    This is the leg the other three cannot cover.  ``check_library`` reads a
+    *built* artefact, so it sees a vendor only if the link left a trace in
+    it; a static link with hidden visibility leaves none.  ``check_source``
+    and ``check_runtime`` read Python.  Nothing read the build files — and a
+    ``find_package(OpenSSL)`` plus ``target_link_libraries(... OpenSSL::Crypto)``
+    is the shortest path from "no vendor" to "vendor executing inside the
+    library", which is precisely why this module's own docstring named it as
+    the threat.  Naming a threat is not checking for it.
+
+    ``benchmarks/`` is exempt by the comparator boundary: a comparative
+    benchmark that cannot link its comparators measures nothing.
+    """
+    tokens = _vendor_link_tokens()
+    command_re = re.compile(
+        r"\b(" + "|".join(_CMAKE_VENDOR_COMMANDS) + r")\s*\(([^)]*)\)",
+        re.IGNORECASE | re.DOTALL,
+    )
+    flag_re = re.compile(r"-l\s*([A-Za-z0-9_.+-]+)")
+    arg_split_re = re.compile(r"[\s\"'$<>{},;:]+")
+
+    def _lookup(candidate: str) -> str | None:
+        """A vendor for one spelling, allowing the version suffix libraries carry.
+
+        Botan links as ``botan-3``, OpenSSL ships ``libcrypto-3-x64`` on
+        Windows and ``libcrypto.so.3`` on Linux, and none of those is an
+        exact match for the base name.  A trailing version suffix — an
+        optional separator followed by a digit and whatever follows it — is
+        therefore stripped before the second lookup.
+
+        The digit is what keeps this narrow.  ``ama_cryptography`` does not
+        begin with ``crypto`` and so is never considered; a target that did
+        would still have to end in a version-shaped suffix to match.
+        """
+        vendor = tokens.get(candidate.lower())
+        if vendor is not None:
+            return vendor
+        trimmed = _VERSION_SUFFIX_RE.sub("", candidate.lower())
+        if trimmed and trimmed != candidate.lower():
+            return tokens.get(trimmed)
+        return None
+
+    def _vendor_for_argument(argument: str) -> tuple[str, str] | None:
+        """``(matched spelling, vendor)`` for one link-command argument.
+
+        Two spellings reach the linker and neither is the other: a bare name
+        (``crypto``, ``OpenSSL::Crypto`` after splitting) and an absolute path
+        to the library file (``/usr/lib/libcrypto.so.3``).  The second is
+        matched on the file name up to its first dot, which is where a
+        SONAME's version digits begin.
+        """
+        vendor = _lookup(argument)
+        if vendor is not None:
+            return argument, vendor
+        stem = PurePosixPath(argument.replace("\\", "/")).name.split(".", 1)[0]
+        if stem and stem != argument:
+            vendor = _lookup(stem)
+            if vendor is not None:
+                return stem, vendor
+        return None
+
+    violations: list[Violation] = []
+    seen: set[Path] = set()
+    paths: list[Path] = []
+    for pattern in _BUILD_CONFIG_GLOBS:
+        for path in sorted(repo_root.glob(pattern)):
+            resolved = path.resolve()
+            if not path.is_file() or resolved in seen:
+                continue
+            relative = path.relative_to(repo_root)
+            if set(relative.parts) & _BUILD_CONFIG_SKIP_DIRS:
+                continue
+            if relative.parts and relative.parts[0] == COMPARATOR_PACKAGE:
+                continue
+            seen.add(resolved)
+            paths.append(path)
+
+    def _report(where: str, token: str, vendor: str, context: str) -> None:
+        violations.append(
+            Violation(
+                "build-config",
+                where,
+                f"{context} names {token!r} — {vendor} may not be linked into the library",
+            )
+        )
+
+    for path in paths:
+        text = path.read_text(encoding="utf-8", errors="replace")
+        scanned = _strip_cmake_comments(text) if path.suffix != ".py" else text
+        where = str(path.relative_to(repo_root))
+
+        for match in command_re.finditer(scanned):
+            command, arguments = match.group(1), match.group(2)
+            for argument in arg_split_re.split(arguments):
+                hit = _vendor_for_argument(argument)
+                if hit is not None:
+                    _report(where, hit[0], hit[1], f"{command}()")
+
+        for match in flag_re.finditer(scanned):
+            hit = _vendor_for_argument(match.group(1))
+            if hit is not None:
+                _report(where, f"-l{match.group(1)}", hit[1], "linker flag")
+
+    if not paths:
+        violations.append(
+            Violation(
+                "build-config",
+                str(repo_root),
+                "no build files found — refusing to report clean having " "examined nothing",
+            )
+        )
+    return violations
+
+
+# --------------------------------------------------------------------------
 # Runtime check
 # --------------------------------------------------------------------------
 
@@ -341,6 +581,18 @@ class BinaryInfo(NamedTuple):
     fmt: str
     dependencies: tuple[str, ...]
     undefined_symbols: tuple[str, ...]
+    #: Externally visible symbols the image DEFINES itself.
+    #:
+    #: A vendor linked *dynamically* leaves two traces — a dependency record
+    #: and undefined symbols — and both are checked above.  A vendor linked
+    #: *statically* leaves neither: its code is inside this image, so there is
+    #: nothing to import.  The one linkage-level trace it does leave is its
+    #: own symbols appearing among this image's, which is what this field
+    #: carries.  It is not complete on its own (a static link whose symbols
+    #: are all local, or an image stripped of everything but its exports,
+    #: shows nothing here) — see ``check_library``'s docstring for what the
+    #: linkage check can and cannot see, and which control covers the rest.
+    defined_symbols: tuple[str, ...] = ()
 
 
 def _parse_elf(data: bytes) -> BinaryInfo:
@@ -399,6 +651,7 @@ def _parse_elf(data: bytes) -> BinaryInfo:
                 dependencies.append(cstr(dynstr["offset"], val))
 
     undefined: list[str] = []
+    defined: list[str] = []
     dynsym = by_name.get(".dynsym")
     if dynsym is not None and dynsym["entsize"]:
         strtab = sections[dynsym["link"]]
@@ -406,40 +659,184 @@ def _parse_elf(data: bytes) -> BinaryInfo:
         for i in range(count):
             off = dynsym["offset"] + i * dynsym["entsize"]
             st_name, _st_info, _st_other, st_shndx = struct.unpack_from(end + "IBBH", data, off)
-            if st_shndx == 0 and st_name:  # SHN_UNDEF
+            if not st_name:
+                continue
+            if st_shndx == 0:  # SHN_UNDEF
                 undefined.append(cstr(strtab["offset"], st_name))
+            else:
+                defined.append(cstr(strtab["offset"], st_name))
 
-    return BinaryInfo("ELF", tuple(dependencies), tuple(undefined))
+    return BinaryInfo("ELF", tuple(dependencies), tuple(undefined), tuple(defined))
+
+
+#: Read with ``"<I"`` at offset 0 → ``(struct endianness, is 64-bit)``.
+#:
+#: A native little-endian image stores ``MH_MAGIC_64`` as ``CF FA ED FE``, so
+#: the little-endian read yields ``0xFEEDFACF`` — the *swapped* spellings
+#: (``0xCFFAEDFE`` / ``0xCEFAEDFE``) are therefore what a BIG-endian image
+#: looks like through the same read, and its fields must be decoded with
+#: ``">"``.  Both swapped spellings were mapped to ``"<"`` when this parser
+#: was written, which would have decoded every subsequent field of a
+#: big-endian image byte-reversed: ``ncmds`` in the millions, load commands
+#: read from nonsense offsets.  No such image ships today (Mach-O big-endian
+#: means 32-bit PowerPC), but a parser that is wrong for an input it accepts
+#: is a defect regardless of whether the input is current.
+_MACHO_MAGICS: dict[int, tuple[str, bool]] = {
+    0xFEEDFACF: ("<", True),
+    0xCFFAEDFE: (">", True),
+    0xFEEDFACE: ("<", False),
+    0xCEFAEDFE: (">", False),
+}
+
+#: Universal ("fat") wrapper magics, read big-endian — the fat header is
+#: always big-endian on disk, whatever the slices inside it are.
+_FAT_MAGIC = 0xCAFEBABE
+_FAT_MAGIC_64 = 0xCAFEBABF
+
+#: An implausible slice count means this is not a universal binary.  Java
+#: class files share ``0xCAFEBABE`` and put their version where ``nfat_arch``
+#: lives, so the count alone does not settle it — every slice is also
+#: bounds-checked and required to start with a Mach-O magic, and anything
+#: that fails raises rather than returning a partial answer.
+_MAX_FAT_SLICES = 32
 
 
 def _parse_macho(data: bytes) -> BinaryInfo:
-    magics = {
-        0xFEEDFACF: ("<", True),
-        0xCFFAEDFE: ("<", True),
-        0xFEEDFACE: ("<", False),
-        0xCEFAEDFE: ("<", False),
-    }
     (magic,) = struct.unpack_from("<I", data, 0)
-    if magic not in magics:
+    if magic not in _MACHO_MAGICS:
         raise ValueError("not a thin Mach-O image")
-    end, is64 = magics[magic]
+    end, is64 = _MACHO_MAGICS[magic]
     header_size = 32 if is64 else 28
     (ncmds,) = struct.unpack_from(end + "I", data, 16)
 
+    lc_symtab = 0x02
     lc_load_dylib = 0x0C
     lc_load_weak_dylib = 0x80000018
     lc_reexport_dylib = 0x8000001F
 
     dependencies: list[str] = []
+    undefined: list[str] = []
+    defined: list[str] = []
+
     offset = header_size
     for _ in range(ncmds):
         cmd, cmdsize = struct.unpack_from(end + "II", data, offset)
+        if cmdsize < 8:
+            raise ValueError(f"Mach-O load command at {offset} has size {cmdsize}")
         if cmd in (lc_load_dylib, lc_load_weak_dylib, lc_reexport_dylib):
             (name_off,) = struct.unpack_from(end + "I", data, offset + 8)
             raw = data[offset + name_off : offset + cmdsize]
             dependencies.append(raw.split(b"\0", 1)[0].decode("utf-8", "replace"))
+        elif cmd == lc_symtab:
+            symoff, nsyms, stroff, strsize = struct.unpack_from(end + "IIII", data, offset + 8)
+            _read_macho_symbols(data, end, is64, symoff, nsyms, stroff, strsize, undefined, defined)
         offset += cmdsize
-    return BinaryInfo("Mach-O", tuple(dependencies), ())
+
+    return BinaryInfo("Mach-O", tuple(dependencies), tuple(undefined), tuple(defined))
+
+
+def _read_macho_symbols(
+    data: bytes,
+    end: str,
+    is64: bool,
+    symoff: int,
+    nsyms: int,
+    stroff: int,
+    strsize: int,
+    undefined: list[str],
+    defined: list[str],
+) -> None:
+    """Split one ``LC_SYMTAB``'s external symbols into undefined and defined.
+
+    Without this the Mach-O branch reported an empty symbol set, so the
+    symbol half of the vendor screen — the half that catches a vendor whose
+    dependency record is absent — was inert on macOS while reporting the
+    library clean.
+
+    ``n_type`` is a bitfield: ``N_STAB`` (0xE0) marks debug entries, which
+    carry no linkage meaning; ``N_EXT`` (0x01) marks external visibility; and
+    ``N_TYPE`` (0x0E) selects the kind, of which ``N_UNDF`` (0x0) is
+    "imported from elsewhere".  Only external symbols are collected: a static
+    function named ``EVP_something`` in AMA's own code is not evidence of a
+    vendor, and screening locals would make the gate fire on the tree's own
+    private names.
+    """
+    n_stab, n_type_mask, n_ext, n_undf = 0xE0, 0x0E, 0x01, 0x00
+    entry_size = 16 if is64 else 12
+    value_fmt = "Q" if is64 else "I"
+
+    end_of_symbols = symoff + nsyms * entry_size
+    if symoff < 0 or stroff < 0 or end_of_symbols > len(data) or stroff + strsize > len(data):
+        raise ValueError("Mach-O LC_SYMTAB points outside the image")
+
+    for index in range(nsyms):
+        off = symoff + index * entry_size
+        n_strx, n_type, _n_sect, _n_desc, _n_value = struct.unpack_from(
+            end + "IBBH" + value_fmt, data, off
+        )
+        if n_type & n_stab or not n_type & n_ext or not n_strx:
+            continue
+        if n_strx >= strsize:
+            raise ValueError("Mach-O symbol name offset outside the string table")
+        start = stroff + n_strx
+        stop = data.index(b"\0", start, stroff + strsize)
+        name = data[start:stop].decode("utf-8", "replace")
+        if n_type & n_type_mask == n_undf:
+            undefined.append(name)
+        else:
+            defined.append(name)
+
+
+def _parse_macho_universal(data: bytes) -> BinaryInfo:
+    """Parse every architecture slice of a universal binary and union them.
+
+    macOS wheels ship ``universal2`` artefacts, so the file this gate is
+    pointed at on macOS is normally a fat wrapper and not a Mach-O image at
+    all.  The parser rejected it as an unrecognised format, which
+    ``check_library`` correctly reported as a violation rather than as clean
+    — but the effect was that the linkage check could not actually examine
+    the artefact on the one platform whose shipped binary is fat.
+
+    Every slice is parsed and the results unioned.  A union, not an
+    intersection or a host-slice-only read: a vendor present in only one
+    architecture is a vendor in the shipped artefact, and picking a single
+    slice would be an evasion path.
+    """
+    magic, nfat_arch = struct.unpack_from(">II", data, 0)
+    if magic not in (_FAT_MAGIC, _FAT_MAGIC_64):
+        raise ValueError("not a universal Mach-O image")
+    if not 1 <= nfat_arch <= _MAX_FAT_SLICES:
+        raise ValueError(f"implausible universal-binary slice count: {nfat_arch}")
+
+    wide = magic == _FAT_MAGIC_64
+    arch_size = 32 if wide else 20
+    offset_fmt = ">QQ" if wide else ">II"
+
+    dependencies: list[str] = []
+    undefined: list[str] = []
+    defined: list[str] = []
+
+    for index in range(nfat_arch):
+        base = 8 + index * arch_size
+        if base + arch_size > len(data):
+            raise ValueError("universal-binary arch table extends past end of file")
+        slice_off, slice_size = struct.unpack_from(offset_fmt, data, base + 8)
+        if slice_off + slice_size > len(data) or slice_size < 28:
+            raise ValueError(
+                f"universal-binary slice {index} at {slice_off}+{slice_size} "
+                f"lies outside the {len(data)}-byte file"
+            )
+        info = _parse_macho(data[slice_off : slice_off + slice_size])
+        dependencies.extend(info.dependencies)
+        undefined.extend(info.undefined_symbols)
+        defined.extend(info.defined_symbols)
+
+    return BinaryInfo(
+        f"Mach-O universal ({nfat_arch} slices)",
+        tuple(dict.fromkeys(dependencies)),
+        tuple(dict.fromkeys(undefined)),
+        tuple(dict.fromkeys(defined)),
+    )
 
 
 def _parse_pe(data: bytes) -> BinaryInfo:
@@ -490,18 +887,54 @@ def parse_binary(path: Path) -> BinaryInfo:
         return _parse_elf(data)
     if data[:2] == b"MZ":
         return _parse_pe(data)
-    if len(data) >= 4 and struct.unpack_from("<I", data, 0)[0] in (
-        0xFEEDFACF,
-        0xCFFAEDFE,
-        0xFEEDFACE,
-        0xCEFAEDFE,
-    ):
+    if len(data) >= 8 and struct.unpack_from(">I", data, 0)[0] in (_FAT_MAGIC, _FAT_MAGIC_64):
+        return _parse_macho_universal(data)
+    if len(data) >= 4 and struct.unpack_from("<I", data, 0)[0] in _MACHO_MAGICS:
         return _parse_macho(data)
     raise ValueError(f"unrecognised binary format (first bytes: {data[:8]!r})")
 
 
+def _vendor_for_symbol(symbol: str) -> str | None:
+    """The vendor a symbol name belongs to, or ``None``.
+
+    Mach-O prefixes every C symbol with an underscore, so ``EVP_DigestInit``
+    is spelled ``_EVP_DigestInit`` there.  One leading underscore is stripped
+    before matching, which cannot cause a miss on ELF or PE: a name that
+    matched before stripping still matches, and a name that starts with an
+    underscore only becomes *more* likely to match.
+    """
+    bare = symbol[1:] if symbol.startswith("_") else symbol
+    for vendor in VENDORS:
+        for prefix in vendor.symbol_prefixes:
+            if symbol.startswith(prefix) or bare.startswith(prefix):
+                return vendor.name
+    return None
+
+
 def check_library(path: Path) -> list[Violation]:
-    """The built library may not depend on, or import symbols from, a vendor."""
+    """The built library may not depend on, or import symbols from, a vendor.
+
+    Three linkage traces are screened, and between them they cover both ways
+    a vendor can arrive:
+
+    * a **dependency record** (ELF ``DT_NEEDED``, Mach-O ``LC_LOAD_DYLIB``,
+      PE import directory) — a dynamic link;
+    * **undefined symbols** — a dynamic link whose dependency record was
+      satisfied indirectly (a transitively loaded library, or a
+      ``-Wl,--as-needed`` build that dropped the record but kept the import);
+    * **defined external symbols** — a *static* link, which leaves no
+      dependency record and imports nothing, and would otherwise pass this
+      check while executing vendor code inside the image.
+
+    What this check cannot see, stated plainly rather than implied away: a
+    static link whose symbols are all local (``-fvisibility=hidden`` plus an
+    internalising LTO pass), or an image stripped down to its exports, leaves
+    no linkage trace at all.  That case is covered upstream instead — by the
+    build configuration (no vendor is searched for, found, or linked by
+    ``CMakeLists.txt``, which ``tests/test_vendor_isolation_gate.py``
+    asserts) and by the source scan.  This function is the linkage leg of a
+    three-legged control, not the whole of it.
+    """
     if not path.is_file():
         return [Violation("library", str(path), "no such file — refusing to report clean")]
     try:
@@ -522,15 +955,26 @@ def check_library(path: Path) -> list[Violation]:
                     )
                 )
     for symbol in info.undefined_symbols:
-        for vendor in VENDORS:
-            if any(symbol.startswith(prefix) for prefix in vendor.symbol_prefixes):
-                violations.append(
-                    Violation(
-                        "library",
-                        f"{path} [{info.fmt}]",
-                        f"imports undefined symbol {symbol!r} — {vendor.name}",
-                    )
+        vendor_name = _vendor_for_symbol(symbol)
+        if vendor_name is not None:
+            violations.append(
+                Violation(
+                    "library",
+                    f"{path} [{info.fmt}]",
+                    f"imports undefined symbol {symbol!r} — {vendor_name}",
                 )
+            )
+    for symbol in info.defined_symbols:
+        vendor_name = _vendor_for_symbol(symbol)
+        if vendor_name is not None:
+            violations.append(
+                Violation(
+                    "library",
+                    f"{path} [{info.fmt}]",
+                    f"defines symbol {symbol!r} — {vendor_name} appears to be "
+                    "linked statically into this image",
+                )
+            )
     return violations
 
 
@@ -555,6 +999,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="built native library to inspect; repeatable",
     )
     parser.add_argument("--source", action="store_true", help="run only the source check")
+    parser.add_argument(
+        "--build-config",
+        action="store_true",
+        help="run only the build-configuration check (CMake / setup.py link lines)",
+    )
     parser.add_argument("--runtime", action="store_true", help="run only the runtime import check")
     parser.add_argument(
         "--no-runtime",
@@ -563,8 +1012,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     args = parser.parse_args(list(argv) if argv is not None else None)
 
-    selected_source = args.source or not (args.source or args.runtime)
-    selected_runtime = (args.runtime or not (args.source or args.runtime)) and not args.no_runtime
+    explicit = args.source or args.runtime or args.build_config
+    selected_source = args.source or not explicit
+    selected_build_config = args.build_config or not explicit
+    selected_runtime = (args.runtime or not explicit) and not args.no_runtime
 
     repo_root = Path(__file__).resolve().parent.parent
     violations: list[Violation] = []
@@ -573,6 +1024,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if selected_source:
         violations += check_source(args.package)
         ran.append(f"source ({args.package})")
+    if selected_build_config:
+        violations += check_build_config(repo_root)
+        ran.append("build config (CMake / setup.py link lines)")
     if selected_runtime:
         violations += check_runtime(repo_root)
         ran.append("runtime (import ama_cryptography)")
