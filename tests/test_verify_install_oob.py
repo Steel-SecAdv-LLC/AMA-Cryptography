@@ -20,6 +20,7 @@ way): a disagreement between two independent implementations of a fixed
 function localises the fault immediately.
 """
 
+import ast
 import hashlib
 import importlib.util
 import marshal
@@ -465,6 +466,74 @@ def tree_copy(tmp_path: Path) -> tuple[Path, Path]:
 
 @requires_signed_tree
 @requires_native_lib
+class TestArtefactIsLiteralDataOnly:
+    """The one file no digest covers must not be able to execute.
+
+    ``_integrity_signature.py`` is excluded from the package digest by the
+    signer and both verifiers — unavoidably, since it carries that digest.
+    Nothing constrained its SHAPE, and ``parse_artefact_fields`` silently
+    skipped every statement that was not an assignment, so the excluded file
+    was unconstrained executable Python that runs at import, before POST
+    exists to have an opinion.
+
+    Measured before the fix: appending two lines to a shipped artefact, with
+    all five signed fields untouched, produced ``RESULT: PASS — signature
+    (anchored to the expected pubkey) ...`` and exit 0 — the strongest verdict
+    the tool can emit — for a tree containing attacker-controlled code.
+    """
+
+    @pytest.mark.parametrize(
+        ("payload", "expect"),
+        [
+            ('import os as _os\n_os.environ["PWNED"] = "1"\n', "Import"),
+            ('print("side effect")\n', "Expr"),
+            ("def _hook():\n    return 1\n", "FunctionDef"),
+            ("class _C:\n    pass\n", "ClassDef"),
+            ("if True:\n    import os\n", "If"),
+            ("for _i in range(1):\n    pass\n", "For"),
+            ("EXTRA = __import__('os').name\n", "not assigned a plain literal"),
+        ],
+    )
+    def test_executable_content_is_refused(
+        self, tree_copy: tuple[Path, Path], payload: str, expect: str
+    ) -> None:
+        pkg_copy, native_copy = tree_copy
+        artefact = pkg_copy / "_integrity_signature.py"
+        artefact.write_text(artefact.read_text(encoding="utf-8") + "\n" + payload, encoding="utf-8")
+
+        result = _run_tool(str(pkg_copy), "--native-lib", str(native_copy), "--allow-unanchored")
+        assert result.returncode != 0, result.stdout
+        assert "contains more than literal data" in result.stdout, result.stdout
+        assert expect in result.stdout, result.stdout
+        assert "RESULT: FAIL" in result.stdout
+
+    def test_the_real_artefact_is_accepted(self) -> None:
+        """The rule must admit the artefact the signer actually writes.
+
+        It carries ``BUILD_PIPELINE_VERSION`` alongside the five signed
+        fields, so a fixed field whitelist would reject a legitimate tree.
+        The rule is "literal data only", not "exactly these names".
+        """
+        tree = ast.parse((REPO_ROOT / "ama_cryptography" / "_integrity_signature.py").read_text())
+        assert oob.artefact_shape_violation(tree) is None
+
+    def test_a_new_literal_field_is_still_accepted(self) -> None:
+        """A future signer may add a literal; that must not need a code change."""
+        tree = ast.parse('"""doc"""\nA = "x"\nB: dict = {"k": 1}\nC = (1, 2, None, True)\n')
+        assert oob.artefact_shape_violation(tree) is None
+
+    def test_the_check_runs_before_the_fields_are_trusted(self, tmp_path: Path) -> None:
+        """A malformed artefact yields no fields, not fields-plus-a-warning."""
+        artefact = tmp_path / "_integrity_signature.py"
+        artefact.write_text(
+            'INTEGRITY_DIGEST_HEX = "00"\nimport os\n',
+            encoding="utf-8",
+        )
+        fields, error = oob.parse_artefact_fields(artefact)
+        assert fields is None
+        assert error is not None and "more than literal data" in error
+
+
 class TestTamperDetection:
     def test_flipped_byte_in_py_fails_naming_the_file(self, tree_copy: tuple[Path, Path]) -> None:
         pkg_copy, native_copy = tree_copy

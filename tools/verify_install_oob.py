@@ -470,6 +470,76 @@ _ARTEFACT_FIELDS = frozenset(
 )
 
 
+def artefact_shape_violation(tree: ast.Module) -> Optional[str]:
+    """Why ``_integrity_signature.py`` is not pure data, or ``None``.
+
+    The artefact is the ONE file excluded from the package digest, and it has
+    to be: it carries that digest, so it cannot contain it.  The in-tree
+    signer and verifier exclude it identically
+    (``_build_sign._compute_package_digest`` / ``_self_test``), and that is
+    correct and unavoidable.
+
+    What was missing is the compensating control.  Nothing constrained the
+    file's SHAPE, so the one file no digest covers was unconstrained
+    executable Python — and this parser silently skipped every statement that
+    was not an assignment.  Measured before this check existed: appending
+
+        import os as _os
+        _os.environ["PWNED"] = "1"
+
+    to a shipped artefact, leaving all five signed fields untouched, made this
+    tool print "RESULT: PASS — signature (anchored to the expected pubkey),
+    source digest, native/binding digests and bytecode caches all verified out
+    of band" and exit 0.  The strongest verdict the tool can emit, for a tree
+    containing attacker-controlled Python that runs at import, before POST
+    exists to have an opinion.  The ``[pyc]`` stage is no help either way: an
+    absent cache reports "nothing to poison" and a present one is checked
+    against the modified source, so a fresh compile matches.
+
+    The rule is therefore "literal data only": a docstring, and assignments of
+    plain names to literals.  Not a fixed field list — the artefact legitimately
+    carries ``BUILD_PIPELINE_VERSION`` alongside the five signed fields, and a
+    future signer may add another literal — but anything that can *execute*
+    (import, call, def, class, if, loop, comprehension with a call in it) is
+    refused.  ``ast.literal_eval`` is what draws that line, and it is the same
+    function whose result this module already trusts.
+    """
+    for node in tree.body:
+        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant):
+            if isinstance(node.value.value, str):
+                continue  # module docstring, or a bare string; inert.
+            return f"line {node.lineno}: a bare non-string constant"
+        if isinstance(node, (ast.Assign, ast.AnnAssign)):
+            targets: list[ast.expr]
+            value: Optional[ast.expr]
+            if isinstance(node, ast.Assign):
+                targets, value = list(node.targets), node.value
+            else:
+                targets, value = [node.target], node.value
+            if value is None:
+                return f"line {node.lineno}: an annotation with no value"
+            for target in targets:
+                if not isinstance(target, ast.Name):
+                    return (
+                        f"line {node.lineno}: assignment to "
+                        f"{type(target).__name__}, not a plain name"
+                    )
+            try:
+                ast.literal_eval(value)
+            except (ValueError, TypeError, SyntaxError, MemoryError, RecursionError):
+                return (
+                    f"line {node.lineno}: {targets[0].id if isinstance(targets[0], ast.Name) else '?'}"
+                    " is not assigned a plain literal"
+                )
+            continue
+        return (
+            f"line {node.lineno}: {type(node).__name__} — the integrity "
+            "artefact must contain only a docstring and literal assignments, "
+            "because it is the one file no digest covers"
+        )
+    return None
+
+
 def parse_artefact_fields(path: Path) -> tuple[Optional[dict[str, object]], Optional[str]]:
     """Read the artefact's fields from its TEXT — never import/exec it.
 
@@ -477,6 +547,10 @@ def parse_artefact_fields(path: Path) -> tuple[Optional[dict[str, object]], Opti
     in-process verifier sees via ``getattr`` (an absent assignment is an
     absent field, which is what selects the v1/v2/v3 schema), while keeping
     target-tree code out of this process.
+
+    The artefact's shape is checked first — see
+    :func:`artefact_shape_violation` for why the file excluded from every
+    digest must be constrained to literal data.
     """
     try:
         text = path.read_text(encoding="utf-8")
@@ -486,6 +560,10 @@ def parse_artefact_fields(path: Path) -> tuple[Optional[dict[str, object]], Opti
         tree = ast.parse(text, filename=str(path))
     except SyntaxError as exc:
         return None, f"{path.name} is not parseable Python: {exc}"
+
+    violation = artefact_shape_violation(tree)
+    if violation is not None:
+        return None, f"{path.name} contains more than literal data: {violation}"
 
     fields: dict[str, object] = {}
     for node in tree.body:
