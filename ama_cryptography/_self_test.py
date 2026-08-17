@@ -712,7 +712,32 @@ def _code_matches(fresh: CodeType, cached: CodeType) -> bool:
     single executed instruction.  Ignoring them is what lets this be a bytecode
     check rather than a path check; the executed-surface fields below are what
     a poisoned ``.pyc`` cannot alter without being caught.
+
+    ``co_exceptiontable`` is one of those fields, and was missing.  From
+    Python 3.11 exception handling is no longer encoded as instructions in
+    ``co_code`` (3.10's ``SETUP_FINALLY`` and friends): it is a side table
+    mapping instruction ranges to handlers.  So on 3.11+ a ``.pyc`` could
+    redirect or DELETE any ``try``/``except`` in the package while leaving
+    ``co_code`` byte-identical, and this function called the two
+    execution-equivalent.  Demonstrated on 3.11.15 with a handler whose table
+    was blanked: ``co_code`` identical, ``co_consts`` identical,
+    ``_code_matches`` True, and the function's behaviour changed from
+    returning ``"handled"`` to letting the ``ValueError`` escape.  Applied to
+    this package that removes the ``except Exception`` arms which turn a
+    failed KAT into a POST failure — the module would stay OPERATIONAL after a
+    failed FIPS 140-3 §4.9.2 conditional self-test, and ``check_crypto_permitted``
+    would keep releasing output.
+
+    It is read with ``getattr`` because the support floor is 3.10
+    (``pyproject.toml`` ``requires-python``), where the attribute does not
+    exist and the equivalent information already lives in ``co_code`` and so
+    is already covered.  The table is a pure function of the source and the
+    compiler version, exactly like ``co_code``, so comparing it cannot
+    reintroduce the relocated-wheel false positives this function is careful
+    to avoid.
     """
+    if getattr(fresh, "co_exceptiontable", b"") != getattr(cached, "co_exceptiontable", b""):
+        return False
     if (
         fresh.co_code != cached.co_code
         or fresh.co_names != cached.co_names

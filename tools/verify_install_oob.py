@@ -714,7 +714,21 @@ def _code_matches(fresh: CodeType, cached: CodeType) -> bool:
     so ``1``/``1.0``/``True`` cannot be swapped) and ignores ``co_filename``
     and the line tables, which legitimately differ for a tree compiled at a
     different path.
+
+    That includes ``co_exceptiontable``, which both copies were missing.
+    From Python 3.11 exception handling is a side table mapping instruction
+    ranges to handlers rather than instructions in ``co_code`` (3.10's
+    ``SETUP_FINALLY`` and friends), so a ``.pyc`` could delete or redirect any
+    ``try``/``except`` in the target tree with ``co_code`` byte-identical, and
+    both this tool and the in-process check called the result equivalent.
+    Demonstrated on 3.11.15: table blanked, ``co_code`` and ``co_consts``
+    identical, comparison True, behaviour changed from returning ``"handled"``
+    to letting the exception escape.  Read with ``getattr`` because the
+    support floor is 3.10, where the attribute does not exist and the same
+    information is already inside ``co_code``.
     """
+    if getattr(fresh, "co_exceptiontable", b"") != getattr(cached, "co_exceptiontable", b""):
+        return False
     if (
         fresh.co_code != cached.co_code
         or fresh.co_names != cached.co_names

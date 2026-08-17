@@ -80,6 +80,48 @@ class TestCodeMatches:
         b = compile("def f(x):\n    return x + 2\n", "m.py", "exec")
         assert not st._code_matches(a, b)
 
+    @pytest.mark.skipif(
+        not hasattr((lambda: None).__code__, "co_exceptiontable"),
+        reason="co_exceptiontable exists only on Python 3.11+; on 3.10 the same "
+        "information is encoded as instructions inside co_code, which is already compared",
+    )
+    def test_rewritten_exception_table_is_caught(self) -> None:
+        """A deleted ``except`` arm with byte-identical ``co_code``.
+
+        From 3.11, exception handling is a side table mapping instruction
+        ranges to handlers rather than ``SETUP_FINALLY``-style instructions.
+        Blanking that table removes the handler WITHOUT touching one byte of
+        ``co_code`` or one entry of ``co_consts`` — so before this was
+        compared, a poisoned ``.pyc`` could delete any ``try``/``except`` in
+        the package and pass execution integrity.  Applied to the
+        ``except Exception`` arms that turn a failed KAT into a POST failure,
+        the module would stay OPERATIONAL after a failed FIPS 140-3 §4.9.2
+        conditional self-test.
+
+        The assertions below prove the tamper is invisible to every other
+        field, so the test fails if the ``co_exceptiontable`` comparison is
+        removed rather than merely passing for some other reason.
+        """
+        src = (
+            "def f(x):\n"
+            "    try:\n"
+            "        if x:\n"
+            "            raise ValueError('boom')\n"
+            "        return 'no-raise'\n"
+            "    except ValueError:\n"
+            "        return 'handled'\n"
+        )
+        fresh = next(c for c in compile(src, "m.py", "exec").co_consts if isinstance(c, CodeType))
+        # getattr / kwargs-dict rather than direct access: mypy checks against
+        # the 3.10 support floor, where neither the attribute nor the replace()
+        # keyword exists.  The skipif above is the runtime guard.
+        assert getattr(fresh, "co_exceptiontable", b""), "fixture: the handler makes a table"
+        tampered = fresh.replace(**{"co_exceptiontable": b""})  # type: ignore[arg-type]
+
+        assert fresh.co_code == tampered.co_code, "the tamper must not touch co_code"
+        assert fresh.co_consts == tampered.co_consts, "nor co_consts"
+        assert not st._code_matches(fresh, tampered)
+
     def test_constant_type_swap_is_caught(self) -> None:
         """``1 == 1.0`` and ``1 == True`` in Python, so a bare == would let an
         int constant be swapped for an equal-valued float/bool.  The type guard
