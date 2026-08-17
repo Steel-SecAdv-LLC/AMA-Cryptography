@@ -320,3 +320,104 @@ class TestPreloadRefusal:
         if pb._native_lib is None:
             pytest.skip("no native backend loaded in this process")
         assert pb.native_backend_refused_on_digest() is False
+
+
+class TestARejectedLibraryLeavesNoDigestBehind:
+    """The ABI reject branch must disown the object completely.
+
+    The handshake runs once, at module scope, so the branch cannot be reached
+    twice in one process — which is exactly why the state-clearing lives in
+    :func:`pb._disown_rejected_native_library` and is pinned here directly.
+
+    The defect this pins: the branch cleared ``_native_lib``, the path and the
+    override but left ``_NATIVE_LIB_PRELOAD_DIGEST_HEX`` holding the digest of
+    the object it had just refused.  ``native_backend_diagnostics()`` then
+    published a record that said "nothing is loaded, there is no path, there is
+    no override" while still carrying a digest, and the POST integrity stage
+    PREFERS that digest over re-reading the path: it took the "I can see the
+    executing bytes" branch and reported the rejection as a digest MISMATCH —
+    "libama_cryptography has been modified since signing" — recording a stale
+    binding, the one fault a re-signing run is meant to clear.  Re-signing a
+    wrong-ABI library is the wrong remedy; rebuilding it is.
+    """
+
+    _SCRATCH_KEYS = ("errors", "abi_rejection", "loaded", "path", "preload_digest_hex")
+
+    @pytest.fixture()
+    def restore_diagnostics(self) -> object:
+        """Save and restore the shared scratch record this branch writes to."""
+        saved = {key: pb._LOAD_DIAGNOSTICS[key] for key in self._SCRATCH_KEYS}
+        saved["errors"] = list(saved["errors"])
+        yield
+        pb._LOAD_DIAGNOSTICS.update(saved)
+
+    def test_the_preload_digest_is_cleared_with_everything_else(
+        self, restore_diagnostics: object, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        sentinel = object()
+        monkeypatch.setattr(pb, "_native_lib", sentinel, raising=False)
+        monkeypatch.setattr(pb, "_NATIVE_LIB_PATH", "/opt/wrong/libama_cryptography.so")
+        monkeypatch.setattr(pb, "_NATIVE_LIB_VIA_OVERRIDE", "/opt/wrong/libama_cryptography.so")
+        monkeypatch.setattr(pb, "_NATIVE_LIB_PRELOAD_DIGEST_HEX", "ab" * 32)
+        pb._LOAD_DIAGNOSTICS["preload_digest_hex"] = "ab" * 32
+        pb._LOAD_DIAGNOSTICS["errors"] = []
+
+        pb._disown_rejected_native_library("reports 4.9.9, this package requires major version 5")
+
+        # Nothing in the module still describes a loaded library.
+        assert pb._native_lib is None
+        assert pb._NATIVE_LIB_PATH is None
+        assert pb._NATIVE_LIB_VIA_OVERRIDE is None
+        assert pb._NATIVE_LIB_PRELOAD_DIGEST_HEX is None
+        assert pb._LOAD_DIAGNOSTICS["preload_digest_hex"] is None
+        # The reason survives, durably, so POST can still explain itself.
+        assert "4.9.9" in pb._LOAD_DIAGNOSTICS["abi_rejection"]
+        assert pb._LOAD_DIAGNOSTICS["errors"], "the rejection was not recorded per-candidate"
+
+    def test_the_published_diagnostics_record_is_self_consistent(
+        self, restore_diagnostics: object, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No loaded library means no digest — the record cannot claim both."""
+        monkeypatch.setattr(pb, "_native_lib", object(), raising=False)
+        monkeypatch.setattr(pb, "_NATIVE_LIB_PATH", "/opt/wrong/libama_cryptography.so")
+        monkeypatch.setattr(pb, "_NATIVE_LIB_PRELOAD_DIGEST_HEX", "cd" * 32)
+        pb._LOAD_DIAGNOSTICS["errors"] = []
+
+        pb._disown_rejected_native_library("wrong major version")
+
+        diag = pb.native_backend_diagnostics()
+        assert diag["loaded"] is False
+        assert diag["path"] is None
+        assert diag["override"] is None
+        assert diag["preload_digest_hex"] is None, (
+            "a record that reports no loaded library must not carry the digest "
+            "of the object that was refused"
+        )
+
+    def test_a_rejection_never_reads_as_tampering(
+        self, restore_diagnostics: object, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The POST integrity stage must not call an ABI reject a MISMATCH.
+
+        This is the downstream consequence the cleared digest exists to
+        prevent, asserted against the real stage rather than by inspection.
+        """
+        from ama_cryptography import _self_test
+
+        monkeypatch.setattr(pb, "_native_lib", object(), raising=False)
+        monkeypatch.setattr(pb, "_NATIVE_LIB_PATH", "/opt/wrong/libama_cryptography.so")
+        monkeypatch.setattr(pb, "_NATIVE_LIB_PRELOAD_DIGEST_HEX", "ef" * 32)
+        pb._LOAD_DIAGNOSTICS["errors"] = []
+
+        pb._disown_rejected_native_library("wrong major version")
+
+        signed_digest = bytes.fromhex("11" * 32)
+        verdict, note, native_ok = _self_test._check_loaded_native_library(
+            signed_digest, anchored=True
+        )
+        assert native_ok is False
+        assert "MISMATCH" not in note, note
+        assert "modified since signing" not in note, note
+        # Absent bytes are unverifiable, and on an anchored build that is fatal.
+        assert verdict is False
+        assert "UNVERIFIABLE" in note, note

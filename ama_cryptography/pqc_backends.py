@@ -2671,22 +2671,54 @@ def _abi_handshake(lib: ctypes.CDLL) -> tuple:
     )
 
 
+def _disown_rejected_native_library(reason: str) -> None:
+    """Drop every trace of a library the ABI handshake refused.
+
+    Called from the module-scope handshake below.  It exists as a function
+    rather than an inline block for the same reason :func:`_abi_handshake` is
+    pure — the reject branch runs once, at import, against whatever object the
+    build produced, so a test that cannot call it directly cannot verify it at
+    all.
+
+    The postcondition is one sentence: after this returns, nothing in this
+    module describes a loaded library, because none is loaded.  That includes
+    the pre-load digest.  Leaving the digest set is not a cosmetic
+    inconsistency -- ``_check_loaded_native_library`` PREFERS it over
+    re-reading the path, so a surviving value sends the POST integrity stage
+    down its "I can see the bytes that are executing" branch, where it reports
+    a digest MISMATCH ("libama_cryptography has been modified since signing")
+    and records a stale binding.  A stale binding is the one fault a re-signing
+    run legitimately clears, and re-signing is the wrong remedy for a wrong-ABI
+    object -- rebuilding is.  With the digest cleared the stage finds none,
+    cannot read a path that is now ``None``, and lands where it belongs:
+    "could not verify", fatal on an anchored build.
+
+    This is the invariant the digest-refusal path in :func:`_try_load_library`
+    already holds (``tests/test_preload_native_digest.py``): refused means
+    never attributed a mapped digest.
+    """
+    global _native_lib, _NATIVE_LIB_PATH, _NATIVE_LIB_VIA_OVERRIDE
+    global _NATIVE_LIB_PRELOAD_DIGEST_HEX
+
+    logging.getLogger(__name__).critical("Native library %s rejected: %s", _NATIVE_LIB_PATH, reason)
+    _LOAD_DIAGNOSTICS["errors"].append((_NATIVE_LIB_PATH or "<unknown>", reason))
+    # The durable copy: "errors" above is per-discovery scratch that a
+    # later _find_native_library() call resets before POST reads it.
+    _LOAD_DIAGNOSTICS["abi_rejection"] = reason
+    _LOAD_DIAGNOSTICS["loaded"] = False
+    _LOAD_DIAGNOSTICS["path"] = None
+    _LOAD_DIAGNOSTICS["preload_digest_hex"] = None
+    _native_lib = None
+    _NATIVE_LIB_PATH = None
+    _NATIVE_LIB_VIA_OVERRIDE = None
+    _NATIVE_LIB_PRELOAD_DIGEST_HEX = None
+
+
 if _native_lib is not None:
     _abi_version_string, _abi_reject = _abi_handshake(_native_lib)
     _LOAD_DIAGNOSTICS["native_version"] = _abi_version_string
     if _abi_reject is not None:
-        logging.getLogger(__name__).critical(
-            "Native library %s rejected: %s", _NATIVE_LIB_PATH, _abi_reject
-        )
-        _LOAD_DIAGNOSTICS["errors"].append((_NATIVE_LIB_PATH or "<unknown>", _abi_reject))
-        # The durable copy: "errors" above is per-discovery scratch that a
-        # later _find_native_library() call resets before POST reads it.
-        _LOAD_DIAGNOSTICS["abi_rejection"] = _abi_reject
-        _LOAD_DIAGNOSTICS["loaded"] = False
-        _LOAD_DIAGNOSTICS["path"] = None
-        _native_lib = None
-        _NATIVE_LIB_PATH = None
-        _NATIVE_LIB_VIA_OVERRIDE = None
+        _disown_rejected_native_library(_abi_reject)
 
 
 def _find_verified_native_library() -> Optional[ctypes.CDLL]:
