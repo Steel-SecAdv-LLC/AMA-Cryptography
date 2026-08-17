@@ -89,10 +89,23 @@ end to end surfaced two things the pass that added it had not yet seen.
   configuration to compile it under the strict flag set, and it carried
   exactly one finding: `s[31] ^= fe25519_isnegative(x) << 7` narrowing `int`
   to `uint8_t` (`-Wconversion`). The value is `{0, 0x80}` and the narrowing
-  is exact, so this is a diagnostic rather than a bug — but it was the only
-  thing standing between that file and a gate, and it is fixed at source with
-  the explicit cast the Kyber packers already use. The library built before
-  and after is byte-identical on AArch64.
+  is exact — the two forms are value-equivalent for every input — so this is a
+  diagnostic rather than a bug, but it was the only thing standing between
+  that file and a gate. Fixed at source with the explicit cast the Kyber
+  packers already use.
+
+  The cast is value-equivalent but **not codegen-neutral**, which is worth
+  stating rather than glossing: the narrower type changes what GCC can prove
+  about the expression, and because `ge25519_p3_tobytes` is `static` and
+  inlined into several callers that propagates through inlining and register
+  allocation across the whole translation unit. Measured on aarch64 at `-O3
+  -funroll-loops`: `ama_ed25519.c.o` is the only object that changes among all
+  of them, and linked `.text` moves 469,124 → 464,852 bytes. x86-64 is
+  untouched — that build produces zero `ama_ed25519.c` objects and links the
+  donna shim instead, and its library is byte-identical to `267c16c`.
+  Behavioural equivalence is carried by the AArch64 suite: ctest 64/64 under
+  QEMU user-mode, including the RFC 8032 Ed25519 KATs and the donna-vs-fe51
+  backend differential.
 - **The gate was matching clang's own bookkeeping.** `_WARNING_RE` was
   `\bwarning[ :]`, which matches `1 warning generated.` — clang's
   per-translation-unit summary, printed once per file that emitted any

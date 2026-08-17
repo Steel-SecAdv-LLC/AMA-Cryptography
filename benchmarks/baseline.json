@@ -358,6 +358,10 @@
       {
         "path": "src/c/sve2/ama_sve2_internal.h",
         "reason": "Declaration-only: the translation unit gained a #include of src/c/neon/ama_neon_internal.h (or the sve2 counterpart), which declares prototypes for symbols the same file already defined identically — the fix for the 36 -Wmissing-prototypes the AArch64 strict-warnings lane reported. No floor is at risk because no instruction changed: the shared library built from 267c16c and from this commit is BYTE-IDENTICAL on both architectures these floors describe. Measured with an out-of-tree build of each commit (Release, LTO off): x86-64 whole-file SHA-256 2030cbbcade673dc18060dac464dc8237e6f9e32b5d13885a1986de614bf2d82 on both, aarch64 (aarch64-linux-gnu cross) 42ca3370b95bc2c3f1814cc39ac0b38f823f114bb17c50f8040f930451ad3694 on both, with .text, .rodata, .data.rel.ro and the exported symbol set matching exactly (0 lines of nm -D diff). A floor cannot be invalidated by a change that emits the same bytes."
+      },
+      {
+        "path": "src/c/ama_ed25519.c",
+        "reason": "Not in the x86-64 build at all: CMakeLists.txt removes src/c/ama_ed25519.c in favour of ed25519_donna_shim.c whenever AMA_ED25519_ASSEMBLY is on, which is the x86-64 default (verified: an x86-64 build produces zero ama_ed25519.c objects). No floor on this lane can be affected, and the x86-64 library is byte-identical to 267c16c (SHA-256 2030cbbcade673dc18060dac464dc8237e6f9e32b5d13885a1986de614bf2d82)."
       }
     ]
   },
