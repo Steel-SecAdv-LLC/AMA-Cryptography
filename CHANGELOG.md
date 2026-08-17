@@ -261,6 +261,21 @@ suppressed and no allowlist entry was added.
   defaults OFF, so those eleven kernels were doubly invisible) and checks the
   logs; correctness on AArch64 remains `arm-qemu.yml`'s job.
 
+**The benchmark floors caught this pass and were answered with a
+measurement.** `benchmarks/check_baseline_justification.py` reported eleven
+newly-drifted paths — the eight NEON/SVE2 translation units, the two new
+internal headers, and `src/c/ama_sha256.c`/`ama_sha256_ni.c` — because their
+bytes changed after the calibration commit. That gate is doing exactly what
+it was built for, and the answer is not prose: the shared library built from
+`267c16c` and from this branch is **byte-identical on both architectures the
+floors describe**. Measured with an out-of-tree build of each commit (Release,
+LTO off): x86-64 whole-file SHA-256
+`2030cbbc…4bf2d82` on both, aarch64 cross-build `42ca3370…1ad3694` on both,
+with `.text`, `.rodata`, `.data.rel.ro` and the exported symbol set matching
+exactly (0 lines of `nm -D` diff). Each path is recorded in
+`metadata.floor_drift_acknowledged` with that evidence. A floor cannot be
+invalidated by a change that emits the same bytes.
+
 #### Post-review hardening pass (2026-08-17)
 
 A fourth independent review over the completed branch — ten subsystem
