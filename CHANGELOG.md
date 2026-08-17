@@ -53,6 +53,7 @@ unchanged but the work, the timing, or the failure mode is not.
 | 10 | Behavioural | POST validates `.pyc` staleness the way CPython does (PEP 552, unchecked-hash case included) and no longer hard-fails on cached bytecode the interpreter would never load; a genuinely poisoned cache for a module that WOULD load still fails | none; previously-required manual `__pycache__` clearing after re-signing is no longer needed |
 | 11 | Behavioural | squeezing a one-shot digest context after `ama_sha3_final` / `ama_sha3_512_final` returns `AMA_ERROR_INVALID_PARAM`, where it previously returned `AMA_SUCCESS` with output read from the zeroized state — all zeros, then fixed permutations of the zero state | none for conformant callers; a caller that consumed that output was consuming constants |
 | 12 | Behavioural | the responder-side handshake session ID is drawn through the health-tested CSPRNG (INVARIANT-41), so a stuck DRBG now fails the handshake instead of silently issuing a repeated, transcript-signed session ID | none |
+| 13 | Behavioural | every AEAD decrypt (ChaCha20-Poly1305 and all four AES-256-GCM paths — scalar, AVX2, VAES, NEON) selects its public accept/reject return code by mask arithmetic instead of a compiler-chosen conditional branch, so the accept and reject outcomes retire identical instruction counts (CI-enforced by the `aead-verify` invariance gate); this closes the last class-dependent instruction the dudect ChaCha tag-verify lane could measure at `ct_len = 0` | none; return values are unchanged (`AMA_SUCCESS` / `AMA_ERROR_VERIFY_FAILED`) |
 
 Rows 1, 3 and 7 are the ones a security reviewer should read first: all
 three are fail-closed changes that turn a silent weakness into a loud
@@ -130,6 +131,53 @@ cmake floor (4.3.4 → 4.4.0, matching pyproject/setup.py); a merged
 change-log table row in `docs/METRICS_REPORT.md`; and glance rows 9 and
 10, which existed in the narrative but not in the table whose claim is
 "every change in one table".
+
+#### Timing-excursion investigation (2026-08-17) — the ChaCha tag-verify residual root-caused; the ARM lookup excursions attributed to the instrument
+
+The two ARM dudect sweep excursions the hardening pass recorded as open
+were investigated to ground rather than waited out.
+
+- **`ChaCha20-Poly1305 tag verify` on the `chacha20-neon` slot: root-caused
+  and fixed** (glance row 13). QEMU instruction traces of the accept/reject
+  pair at `ct_len = 0` are byte-identical for 166,799 instructions and then
+  split at exactly one instruction: gcc 13 on aarch64 compiled
+  `return tag_match ? AMA_SUCCESS : AMA_ERROR_VERIFY_FAILED` into a `cbnz`
+  whose reject arm is one instruction longer. The lane's excursion history
+  matches the code's asymmetry era by era — +100..+200σ before the v3.3.0
+  control-flow unification, +7.68 measured the night before that
+  unification landed, −8.08 (reject-slower) after it — so the lane has been
+  measuring the class-dependent instruction delta that actually existed at
+  each commit, ending at this one-instruction floor. The return is now
+  selected by mask arithmetic in all five AEAD decrypts (the same ternary
+  compiled branch-free in the AES-GCM files by compiler accident — luck the
+  mask form retires), and the new `aead-verify` instruction-invariance gate
+  (callgrind, `ubuntu-24.04-arm`, unconditional on every trigger) holds the
+  accept/reject pair to equal retired-instruction counts: reverting the
+  ChaCha fix alone moves the gate by 518 instructions against its 200
+  threshold and 6-instruction floor, with the eight key classes splitting
+  bimodally on exactly the accept/reject bit. The outcome itself is public
+  via the return code — this is measurement symmetry and hardening, not a
+  secrecy fix.
+- **`ama_consttime_lookup` on ARM sweep slots: attributed to the
+  instrument, not the code.** The kernel's executed instruction stream is
+  class-identical on both ISAs (QEMU full-process traces, -O2 and -O3;
+  x86-64 callgrind counts equal), the function has zero production call
+  sites inside the library, and 25 days of `main` nightly history show the
+  same lane failing 10 times across all three NEON slots with |t| 14–28
+  and signs that flip within single runs (−21.7/+22.3) and across runs on
+  the same slot (+26.99 then −20.22) — the signature of measurement noise,
+  not of a data-dependent path, on runners whose fixed-clock, no-SMT
+  Neoverse N2 cores leave no documented microarchitectural mechanism for
+  it. Recorded follow-ups rather than smuggled changes: the vendored
+  dudect harness omits upstream's percentile-cropping preprocessing (raw
+  fat-tailed shared-runner latencies inflate Welch's t), and the harness
+  runs with `PSTATE.DIT` unset, where the architecture makes no timing
+  guarantee — setting DIT (HWCAP-gated, precedent in AWS-LC and Go 1.24)
+  and adopting upstream's cropping are the two candidate instrument
+  improvements, both owner-visible decisions on gate statistics rather
+  than quiet edits. The `sha3-neon` slot's one qualitatively different
+  historical failure (Kyber-1024 decaps, 2026-08-05, 3/3 rounds, single
+  sign, |t| 6.7) joins the quiet-hardware list.
 
 #### Completion pass 3 — what an independent review of the full diff found
 

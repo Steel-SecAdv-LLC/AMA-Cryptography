@@ -740,5 +740,17 @@ ama_error_t ama_aes256_gcm_decrypt(
     ama_secure_memzero(tag_mask, sizeof(tag_mask));
     ama_secure_memzero(computed_tag, sizeof(computed_tag));
 
-    return tag_match ? AMA_SUCCESS : AMA_ERROR_VERIFY_FAILED;
+    /* Masked return-code selection — same defect class and same remedy
+     * as ama_chacha20poly1305.c's decrypt return (see the comment
+     * there).  Measured caveat: HERE gcc 13 -O2 on aarch64 happened to
+     * compile the ternary branch-free already (QEMU traces of the
+     * accept/reject pair were identical pre-change, 441,262
+     * instructions each), while the byte-for-byte identical ternary in
+     * the ChaCha decrypt got a `cbnz` with asymmetric arms — which is
+     * precisely why compiler luck is not a contract.  The mask form
+     * makes the symmetry a property of the source, and the aead-verify
+     * instruction-invariance gate pins both decrypts together. */
+    _Static_assert(AMA_SUCCESS == 0,
+                   "masked return-code selection relies on AMA_SUCCESS == 0");
+    return (ama_error_t)((int)AMA_ERROR_VERIFY_FAILED & ((int)tag_match - 1));
 }

@@ -22,7 +22,7 @@ INTEGRITY_DIGEST_HEX = "67981c4ed53a2baaa56b826cb67dcbbf2ec7373a7935088c159ae8e5
 # operation into the same signature that covers the .py files — without it the
 # signature attested to the Python wrapper only, and the implementation the
 # wrapper calls into was covered by nothing.
-INTEGRITY_NATIVE_DIGEST_HEX = "ca4d7c50b3d553d8abdfa392b5f349f01f3820a6a46939697f16dee3a1cf6b0b"
+INTEGRITY_NATIVE_DIGEST_HEX = "d3d4bfd19d2783ac2765ee84d516d01a751e1bb15335a5658627b27c110f46c7"
 
 # SHA3-256 digests of the compiled binding extensions at build time, keyed by
 # exact filename.  These modules contain compiled kernels and execute at import
@@ -34,12 +34,12 @@ INTEGRITY_NATIVE_DIGEST_HEX = "ca4d7c50b3d553d8abdfa392b5f349f01f3820a6a46939697
 INTEGRITY_BINDING_DIGESTS_HEX: dict[str, str] = {}
 
 # Ephemeral build-time Ed25519 public key (raw 32 bytes, hex-encoded).
-INTEGRITY_PUBKEY_HEX = "5970d9b68bef00b945bd54d43ca7713d2c834a9fd88820b01a79d9979c4ae5a7"
+INTEGRITY_PUBKEY_HEX = "715099d969b31712ce320f2af931e51c4823238b7dd1a1b70f63deb08e2e6125"
 
 # Ed25519 signature over SHA3-256(domain_v3 || py_digest || native_digest ||
 # serialized_binding_digests) — the v3 composite that makes all three
 # inseparable.  See ama_cryptography._self_test._composite_integrity_message_v3.
-INTEGRITY_SIGNATURE_HEX = "ade634023963223109106d84efb653988428547bb1912b30148da4c3bdfa4f7f4c2e6410e646d9a93123072be064c4fad94d101add736cb89041b417dce07000"
+INTEGRITY_SIGNATURE_HEX = "dfa7abe5491f65f458e690971ab174d4e51cc979b3c287e551d7910754bbdbd6f313023af6a46f3c088b7ca745d6cb8c77829f1014fa4ef04a9a4ddea6d1430a"
 
 # Build metadata — informational only, not part of the integrity contract.
 BUILD_PIPELINE_VERSION = "3"

@@ -552,6 +552,53 @@ jobs:
           python tools/check_ghash_constant_time.py \
             --lib build/lib/libama_cryptography_test.a --target ecdsa
 
+  aead-verify-invariance:
+    # The AEAD accept/reject pair at ct_len == 0, pinned by retired
+    # instruction counts.  Runs on the ARM runner deliberately: the
+    # defect this gate exists to catch was aarch64-specific — gcc 13
+    # compiled the ChaCha20-Poly1305 decrypt's ternary return into a
+    # cbnz whose reject arm was one instruction longer, which the
+    # chacha20-neon dudect sweep slot measured statistically at
+    # |t| = 8.08 (3/3 rounds, reject-slower) while the same source
+    # compiled branch-free on x86-64.  QEMU instruction traces of the
+    # accept/reject pair localized the divergence to that single
+    # branch; the masked return in ama_chacha20poly1305.c /
+    # ama_aes_gcm.c removes it, and this job holds both decrypts
+    # there, deterministically, on the architecture where the
+    # regression manifests.  Same callgrind methodology as
+    # ghash-scalar-invariance above — no statistics, no quiet-machine
+    # requirement — and unconditional on every trigger for the same
+    # reason.
+    name: AEAD verify instruction-count invariance
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Install dependencies
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake valgrind
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Build the AMA_TESTING_MODE static library
+        # LTO off for the same reason as ghash-scalar-invariance: the
+        # check reads instruction counts out of this archive.
+        run: |
+          cmake -B build -DAMA_USE_NATIVE_PQC=ON -DAMA_BUILD_TESTS=ON -DAMA_ENABLE_LTO=OFF
+          cmake --build build -j"$(nproc)" --target ama_cryptography_test
+
+      - name: AEAD accept/reject instruction counts must be equal
+        run: |
+          python tools/check_ghash_constant_time.py \
+            --lib build/lib/libama_cryptography_test.a --target aead-verify
+
   dudect-gate:
     name: Constant-Time Gate
     # Single aggregating status check for this workflow, matching the
@@ -571,6 +618,7 @@ jobs:
       - dudect-x25519-avx2-batch
       - dudect-simd-sweep
       - ghash-scalar-invariance
+      - aead-verify-invariance
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
@@ -604,6 +652,7 @@ jobs:
         R_X25519:  ${{ needs.dudect-x25519-avx2-batch.result }}
         R_SWEEP:   ${{ needs.dudect-simd-sweep.result }}
         R_GHASH:   ${{ needs['ghash-scalar-invariance'].result }}
+        R_AEADVER: ${{ needs['aead-verify-invariance'].result }}
       run: |
         set -euo pipefail
         rc=0
@@ -649,6 +698,7 @@ jobs:
         # Unconditional job: it carries no `if:`, so the only acceptable
         # result on every trigger is success.
         check ghash-scalar-invariance   "${R_GHASH}"   "success"
+        check aead-verify-invariance    "${R_AEADVER}" "success"
 
         if [ "${rc}" -ne 0 ]; then
           echo "::error::Constant-Time Gate failed."

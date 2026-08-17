@@ -875,5 +875,23 @@ ama_error_t ama_chacha20poly1305_decrypt(
     if (bounded_len > 0)
         chacha20_xor(key, 1, nonce, ciphertext, plaintext, bounded_len);
 
-    return tag_match ? AMA_SUCCESS : AMA_ERROR_VERIFY_FAILED;
+    /* Masked return-code selection.  The ternary form of this line was
+     * the one class-dependent instruction left in the ct_len == 0
+     * accept/reject pair: gcc 13 -O2/-O3 on aarch64 compiles it to a
+     * `cbnz` whose reject arm is one instruction longer than the accept
+     * arm — the dudect tag-verify lane times exactly that window, and
+     * the `chacha20-neon` sweep slot measured the residue at |t| = 8.08
+     * (3/3 rounds, consistently accept-faster) after the v3.3.0 rewrite
+     * above had removed every larger asymmetry.  QEMU instruction traces
+     * of the two classes are byte-identical for 166,799 instructions and
+     * then split at precisely this selection.  The mask form pins the
+     * accept and reject returns to one instruction sequence; the
+     * aead-verify instruction-invariance gate (tools/
+     * check_ghash_constant_time.py --target aead-verify) holds it there.
+     * The accept/reject outcome itself is public via the return code —
+     * this is measurement hygiene for the lane and hardening symmetry,
+     * not a secrecy fix. */
+    _Static_assert(AMA_SUCCESS == 0,
+                   "masked return-code selection relies on AMA_SUCCESS == 0");
+    return (ama_error_t)((int)AMA_ERROR_VERIFY_FAILED & ((int)tag_match - 1));
 }

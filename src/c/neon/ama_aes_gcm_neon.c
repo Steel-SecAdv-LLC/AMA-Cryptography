@@ -552,7 +552,16 @@ ama_error_t ama_aes256_gcm_decrypt_neon(
      * enc_j0 and H, which are scrubbed regardless. */
     ama_secure_memzero(&ghash_acc, sizeof(ghash_acc));
     ama_secure_memzero(computed_tag_bytes, sizeof(computed_tag_bytes));
-    return tag_match ? AMA_SUCCESS : AMA_ERROR_VERIFY_FAILED;
+    /* Masked return-code selection -- source-level branch-freedom for the
+     * public accept/reject pick, matching ama_aes_gcm.c and
+     * ama_chacha20poly1305.c (where gcc 13 aarch64 compiled this exact
+     * ternary into a cbnz with asymmetric arms; see the scalar files
+     * for the measurement).  The aead-verify invariance gate pins the
+     * scalar pair; SIMD kernels carry the same source form so the
+     * guarantee does not depend on per-kernel compiler luck. */
+    _Static_assert(AMA_SUCCESS == 0,
+                   "masked return-code selection relies on AMA_SUCCESS == 0");
+    return (ama_error_t)((int)AMA_ERROR_VERIFY_FAILED & ((int)tag_match - 1));
 }
 
 #else
