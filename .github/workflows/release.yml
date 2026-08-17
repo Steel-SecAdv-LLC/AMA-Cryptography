@@ -297,7 +297,7 @@ jobs:
         # neither the v3.2.0 tag object nor its commit — so every wheel job
         # aborted with "Unable to resolve action … unable to find version".
         # That is why no release before then produced artifacts.
-        uses: pypa/cibuildwheel@4726cd35bb13f7bde50cf2761f2499ac7b3aa32c  # v4.1.1
+        uses: pypa/cibuildwheel@1828c10ab37f080699c7b81cea34097c684a7074  # v4.2.0
         env:
           # PYTHON VERSION MATRIX:
           # Build for the same Python range the test workflows already
@@ -592,7 +592,7 @@ jobs:
           path: dist
 
       - name: Sign distribution with sigstore-python
-        uses: sigstore/gh-action-sigstore-python@5b79a39c381910c090341a2c9b0bf022c8b387e1  # v3.4.0
+        uses: sigstore/gh-action-sigstore-python@790bc6befb9d733738f18d8f895854b453640ec9  # v3.5.0
         with:
           inputs: ./dist/*.whl ./dist/*.tar.gz
           upload-signing-artifacts: true
@@ -671,7 +671,7 @@ jobs:
           ls -la signatures/
 
       - name: Publish to PyPI (Trusted Publishing)
-        uses: pypa/gh-action-pypi-publish@ba38be9e461d3875417946c167d0b5f3d385a247  # v1.14.1
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33  # v1.14.2
         with:
           packages-dir: dist/
           # No `password` — Trusted Publishing handles OIDC exchange.
