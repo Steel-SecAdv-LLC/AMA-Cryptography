@@ -491,13 +491,73 @@ def _process_is_the_integrity_signer() -> bool:
 
     Secure-execution mode revokes it regardless, at the call site, exactly as
     it already did for the environment variable.
+
+    Two windows are recognised, because ``__main__``'s spec is not populated
+    for the whole life of a ``python -m`` process:
+
+    1. ``__main__.__spec__.name`` — authoritative once runpy has bound the
+       target module into ``__main__``.  This is the check as originally
+       built, and it covers every call made while the signer's own code runs
+       (``secure_memzero`` during signing, the native-load override, …).
+    2. ``sys.orig_argv`` — the interpreter's own record of the command line
+       (Python >= 3.10, this package's floor).  runpy imports the *parent
+       package* before it rebinds ``__main__``, so during that import —
+       where POST runs — the spec is still ``None`` and check 1 cannot
+       identify anyone.  The first exercised release dry run failed exactly
+       there: ``tools/resign_wheel.py`` launches
+       ``python -m ama_cryptography._build_sign`` against an anchored wheel
+       tree whose artefact it just deleted, and the anchored missing-artefact
+       refusal fired during the parent import with the identity check blind.
+       ``sys.orig_argv`` is immutable truth about how this process was
+       started: an attacker who can choose the victim's command line can
+       already run arbitrary code, while an attacker who can only set an
+       environment variable cannot alter it — the same boundary check 1
+       draws, available earlier.
     """
     if os.environ.get("AMA_BUILD_PIPELINE") != "1":
         return False
     main_module = sys.modules.get("__main__")
     spec = getattr(main_module, "__spec__", None)
     name = getattr(spec, "name", None)
-    return name in ("ama_cryptography._build_sign", "ama_cryptography.integrity")
+    if name in _INTEGRITY_SIGNER_MODULES:
+        return True
+    return _launched_as_signer_module()
+
+
+#: The two module entry points whose process identity confers signing scope.
+_INTEGRITY_SIGNER_MODULES = ("ama_cryptography._build_sign", "ama_cryptography.integrity")
+
+
+def _launched_as_signer_module() -> bool:
+    """True when this process's command line is ``python -m <signer module>``.
+
+    Reads ``sys.orig_argv`` — the exact argv the interpreter was launched
+    with, before any option processing — and answers whether the ``-m``
+    target is one of the signing modules.  Both spellings are recognised
+    (``-m mod`` and ``-mmod``).  The scan stops, answering False, at the
+    first argument that ends interpreter-option parsing (``-c``, ``-``, or a
+    positional script path), so a script that merely *mentions* the module
+    name in its arguments is never identified as the signer.
+
+    The parse is deliberately conservative rather than a full re-implementation
+    of CPython's option grammar: an interpreter option that takes a separate
+    argument (``-W ignore -m mod``) is skipped over correctly because the
+    argument either starts with a letter (ending the scan, False — the
+    fail-safe direction) or is itself option-shaped and harmless to step
+    across.  Any residual misreading requires an adversary who already
+    controls the victim's full command line, which is the same adversary the
+    ``__main__`` check accepts as out of scope.
+    """
+    argv = list(getattr(sys, "orig_argv", []) or [])
+    for index in range(1, len(argv)):
+        argument = argv[index]
+        if argument == "-m":
+            return index + 1 < len(argv) and argv[index + 1] in _INTEGRITY_SIGNER_MODULES
+        if argument.startswith("-m") and len(argument) > 2:
+            return argument[2:] in _INTEGRITY_SIGNER_MODULES
+        if argument == "-c" or argument == "-" or not argument.startswith("-"):
+            return False
+    return False
 
 
 @contextlib.contextmanager

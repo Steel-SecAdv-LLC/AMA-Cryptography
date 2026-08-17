@@ -332,6 +332,26 @@ def integrity_failure_was_stale_binding() -> bool:
     return _INTEGRITY_FAILURE_KIND == _INTEGRITY_FAILURE_STALE_BINDING
 
 
+def _integrity_signer_process() -> bool:
+    """True when this process is the integrity signer and may hold a bare tree.
+
+    Wraps ``pqc_backends._process_is_the_integrity_signer`` (identity: the
+    process was *launched as* the signing module, plus ``AMA_BUILD_PIPELINE=1``)
+    and revokes it under secure-execution mode, mirroring the revocation every
+    other consumer of that identity applies.  Kept as a helper so the anchored
+    classification below reads as one predicate and the two conditions cannot
+    drift apart between call sites.
+    """
+    try:
+        from ama_cryptography.pqc_backends import (
+            _in_secure_execution_mode,
+            _process_is_the_integrity_signer,
+        )
+    except Exception:  # pragma: no cover - pqc_backends always imports in a built tree
+        return False
+    return _process_is_the_integrity_signer() and not _in_secure_execution_mode()
+
+
 # Domain-separation tag for the Ed25519 signature that binds the .py digest and
 # the native-library digest together.  A fixed, versioned constant so the signer
 # (_build_sign) and the verifier here construct byte-identical messages; the
@@ -1450,6 +1470,41 @@ def verify_module_integrity() -> Tuple[bool, str]:
         logger.error("Trust-anchor lookup failed: %s", anchor_error)
         return False, _finalise_integrity_failure(anchor_error)
     if anchor_hex is not None:
+        # One process legitimately holds an anchored tree with no artefact:
+        # the signing run that just deleted it in order to re-sign the tree.
+        # tools/resign_wheel.py removes the stale, pre-repair artefact before
+        # invoking `python -m ama_cryptography._build_sign` (if repair rewrote
+        # a binding, the pre-import gate would refuse the import against the
+        # stale digests), so the signer subprocess imports this package in
+        # exactly the state this branch calls tampering.  The first exercised
+        # release dry run proved it: both Linux cibuildwheel jobs failed here
+        # with "no signed-integrity artefact" while macOS and Windows — which
+        # do not chain the re-signer — passed.
+        #
+        # The stage still FAILS either way; what changes is the
+        # classification.  For the signer process the failure is recorded as
+        # a stale local binding, which lets `__init__`'s AMA_BUILD_PIPELINE
+        # escape complete the import in the ERROR state so the signer can run
+        # — the same treatment a stale native digest already receives.  For
+        # every other process, including the release container's smoke test
+        # of a wheel that lost its artefact, the verdict remains tampering
+        # and the import hard-fails.  Identity is the process's own launch
+        # record (see _process_is_the_integrity_signer), not an environment
+        # variable, and secure-execution mode revokes it regardless.
+        #
+        # A positively *invalid* artefact (signed_ok is False) never reaches
+        # this branch and stays tampering for the signer too — re-signing
+        # over a bad signature would launder it.
+        if _integrity_signer_process():
+            return False, _record_stale_binding_failure(
+                "signed integrity could not be verified on a build with a "
+                f"compiled trust anchor ({anchor_hex[:16]}...), in a process "
+                "launched as the integrity signer with AMA_BUILD_PIPELINE=1. "
+                "A signing run begins from the artefact it is about to replace "
+                "being absent, so this is recorded as a stale binding: the "
+                "stage fails, the import may complete for the signer only, and "
+                f"every cryptographic surface stays refused. Cause: {signed_detail}"
+            )
         return False, _finalise_integrity_failure(
             "signed integrity could not be verified on a build with a compiled "
             f"trust anchor ({anchor_hex[:16]}...) — an anchored build is signed "
