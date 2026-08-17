@@ -75,6 +75,64 @@ this one resolves what the measurements those lanes produced then showed.
 Every item below started as a measured negative result or an explicitly
 recorded gap, and none is closed by documentation alone.
 
+#### Vendor isolation made enforceable (2026-08-17) — INVARIANT-1 checked by linkage and runtime, not by comment
+
+INVARIANT-1 forbids any third-party cryptographic implementation being
+linked, imported or called by the shipped library. What enforced it was
+`tools/check_corpus_originality.py`, which AST-scans for **subprocess**
+invocations of external crypto binaries (`openssl`, `gpg`, …). That is a real
+control, and it was blind to the two ways a vendor would most plausibly get
+in.
+
+* **Linkage.** Nothing examined what the built shared object actually depends
+  on. A `find_package(OpenSSL)` in `CMakeLists.txt`, a `-lcrypto` inherited
+  from a toolchain file, or a system header pulling in a vendor's inline
+  implementation would all produce a library no Python-level check can see.
+* **Transitive imports.** Nothing examined what is resident in `sys.modules`
+  after `import ama_cryptography`. A module imported for an unrelated reason
+  that itself imports `cryptography` puts an OpenSSL binding in the process,
+  and no `import` statement in this repository names it.
+* **The comparator boundary.** `benchmarks/` is explicitly authorised to
+  invoke peer implementations — that is what a comparative benchmark is — and
+  `benchmarks/requirements-bench.txt` pins them. The only thing keeping them
+  on their side of the line was that no package module happened to import
+  `benchmarks`.
+
+`tools/check_vendor_isolation.py` checks all three and is wired into the
+`Security Checks` job, which is the one job that both builds the native
+library and binds it into the integrity artefact, so every check has its
+evidence. The binary formats are parsed in-tree with `struct` — ELF
+`DT_NEEDED` plus undefined `.dynsym` entries, Mach-O `LC_LOAD_DYLIB`, the PE
+import directory — rather than by shelling out to `readelf` / `otool` /
+`dumpbin`, because the gate must run on every platform the wheels are built
+on and a gate that silently skips is the failure mode this release exists to
+remove.
+
+Verified in **both** directions by `tests/test_vendor_isolation_gate.py` (35
+cases), because a control that has never been shown to fail is
+indistinguishable from one that cannot:
+
+* the ELF parser's output is compared against `readelf -d` and
+  `nm -D --undefined-only` on the built library (2 dependencies, 41 undefined
+  symbols — exact agreement);
+* the interpreter's own `_ssl` extension is the positive control, so the
+  parser is validated against a genuinely OpenSSL-linked binary rather than a
+  fixture that could agree with a wrong parser;
+* injecting `import cryptography` through `sitecustomize` makes the runtime
+  check fail with `'cryptography' is resident`;
+* adding `import nacl.signing` or `from benchmarks import …` to a package
+  module makes the source check fail;
+* a missing library, an unparseable file, a truncated ELF, a 32-bit ELF and a
+  package directory containing no sources are each failures, not silent
+  passes.
+
+Measured on the tree as committed: the shipped `libama_cryptography.so.5.0.0`
+declares exactly two dependencies — `libc.so.6` and `ld-linux-x86-64.so.2` —
+and imports no symbol carrying a vendor prefix. CPython's `hashlib` remains
+permitted for hashing under INVARIANT-1's stdlib carve-out and is
+deliberately not screened; screening the interpreter's own accelerators would
+make the gate fail on a stock CPython rather than on an AMA defect.
+
 #### Warning gate completeness pass (2026-08-17) — the frozen allowlist now covers the configurations that ship
 
 The "Strict Compiler Warnings" job asserts a property of the repository: *no

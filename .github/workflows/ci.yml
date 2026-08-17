@@ -717,6 +717,35 @@ jobs:
         AMA_BUILD_PIPELINE: "1"
       run: python -m ama_cryptography.integrity --update --sign
 
+    - name: "INVARIANT-1: verify vendor isolation by linkage and runtime, not by comment"
+      # INVARIANT-1 says no third-party cryptographic implementation may be
+      # linked, imported or called by the shipped library.  Before this step
+      # the enforcement was tools/check_corpus_originality.py, which AST-scans
+      # for *subprocess* invocations of external crypto binaries — a real
+      # control, but blind to the two ways a vendor would most plausibly get
+      # in: a linker flag, and a transitive Python import that no `import`
+      # statement in this repository names.
+      #
+      # This job is where the check belongs because it is the only one that
+      # both builds the native library and binds it into the integrity
+      # artefact, so all three checks have their evidence available:
+      #   source   — no package module imports a vendor binding, loads one by
+      #              name through ctypes, or imports `benchmarks` (which is
+      #              authorised to use peer implementations and must not enter
+      #              the shipped package's import graph)
+      #   runtime  — no vendor binding is resident in sys.modules after
+      #              `import ama_cryptography`
+      #   library  — the built shared object names no vendor in its DT_NEEDED /
+      #              LC_LOAD_DYLIB / PE import table, and imports no undefined
+      #              symbol with a vendor's prefix
+      #
+      # All three are verified to FAIL under mutation by
+      # tests/test_vendor_isolation_gate.py, including the ELF parser against
+      # a genuinely OpenSSL-linked object.
+      run: |
+        python tools/check_vendor_isolation.py \
+          --library build/lib/libama_cryptography.so
+
     - name: Semgrep gate self-tests (the end-to-end case needs semgrep present)
       # tests/test_semgrep_severity_gate.py's only end-to-end assertion — that
       # the shipped package passes the gate on a report the gate generated
