@@ -19,6 +19,7 @@ builds of this tree, not invented text.
 
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -301,3 +302,87 @@ class TestClangSummaryLineIsNotADiagnostic:
         result = run_gate(log)
         assert result.returncode == 1
         assert "C4244" in result.stderr
+
+
+class TestInterleavedParallelOutput:
+    """`make -j N` can merge two compilers' stderr inside one line.
+
+    Two processes share one pipe, so a single line can carry both
+    diagnostics character-interleaved.  Observed verbatim in a clean parallel
+    build of this tree: two identical -Woverlength-strings warnings from the
+    shared and static targets merged into one line.  A position-exact
+    allowlist pattern stops matching such a line, so an *allowlisted* warning
+    is reported as a violation and the gate goes red for a reason that has
+    nothing to do with the code.
+
+    The build steps pass `-Otarget` so Make serialises per-target output;
+    these cases pin the defence in depth that keeps the allowlist working if
+    a generator ever does not.
+    """
+
+    #: Verbatim from a clean `make -j` build of this tree.
+    INTERLEAVED_OVERLENGTH = (
+        "/home/user/AMA-Cryptography/src/c/x86/ama_nistp_mont_mulx.c"
+        "/home/user/AMA-Cryptography/src/c/x86/ama_nistp_mont_mulx.c::161161::99::"
+        "  warning: warning: string literal of length 4266 exceeds maximum length "
+        "4095 that ISO C99 compilers are required to support [-Woverlength-strings]"
+        "string literal of length 4266 exceeds maximum length 4095 that ISO C99 "
+        "compilers are required to support [-Woverlength-strings]"
+    )
+
+    def test_interleaved_allowlisted_warning_is_still_allowlisted(self, tmp_path: Path) -> None:
+        log = write_log(tmp_path, "build.log", self.INTERLEAVED_OVERLENGTH)
+        result = run_gate(log)
+        assert result.returncode == 0, result.stderr
+
+    def test_interleaved_int128_is_still_allowlisted(self, tmp_path: Path) -> None:
+        merged = (
+            "/src/c/fe51.h/src/c/fe51.h::188188::2222::  warning: warning: "
+            "ISO C does not support '__int128' types [-Wpedantic]"
+            "ISO C does not support '__int128' types [-Wpedantic]"
+        )
+        log = write_log(tmp_path, "build.log", merged)
+        result = run_gate(log)
+        assert result.returncode == 0, result.stderr
+
+    def test_tolerance_does_not_admit_a_different_warning(self, tmp_path: Path) -> None:
+        """The relaxation is `.*` between name and text, not `name ⇒ exempt`.
+
+        A line naming an allowlisted file but carrying a DIFFERENT diagnostic
+        must still fail — otherwise the exemption would become a per-file
+        blanket.
+        """
+        line = (
+            "/home/user/AMA-Cryptography/src/c/x86/ama_nistp_mont_mulx.c:12:3: "
+            "warning: variable 'tmp' set but not used [-Wunused-but-set-variable]"
+        )
+        log = write_log(tmp_path, "build.log", line)
+        result = run_gate(log)
+        assert result.returncode == 1
+        assert "unused-but-set-variable" in result.stderr
+
+    def test_every_parallel_strict_build_serialises_its_output(self) -> None:
+        """Make needs ``-Otarget``; Ninja already buffers per edge.
+
+        The assertion is per build directory, not per line: the two generators
+        need different things, and demanding one flag for both would either
+        miss the Make lanes or require a flag Ninja rejects.
+        """
+        workflow = (REPO_ROOT / ".github" / "workflows" / "static-analysis.yml").read_text(
+            encoding="utf-8"
+        )
+        ninja_dirs = set(re.findall(r"-B (\S+) -G Ninja", workflow))
+        builds = [
+            line
+            for line in workflow.splitlines()
+            if "cmake --build build-strict" in line and "tee" in line
+        ]
+        assert builds, "no strict build step pipes through tee"
+        for line in builds:
+            build_dir = line.split("cmake --build ", 1)[1].split()[0]
+            if build_dir in ninja_dirs:
+                assert (
+                    "-Otarget" not in line
+                ), f"{build_dir} is a Ninja build; -Otarget is a Make flag: {line.strip()}"
+                continue
+            assert "-Otarget" in line, f"unsynchronised parallel Make build: {line.strip()}"

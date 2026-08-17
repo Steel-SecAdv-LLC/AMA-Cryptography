@@ -75,6 +75,32 @@ this one resolves what the measurements those lanes produced then showed.
 Every item below started as a measured negative result or an explicitly
 recorded gap, and none is closed by documentation alone.
 
+#### Parallel `make` can interleave two compilers inside one line (2026-08-17)
+
+A clean `make -j"$(nproc)"` build of the strict configuration merged two
+identical `-Woverlength-strings` diagnostics — from the shared and static
+targets compiling the same file — into a single unparseable line:
+
+```
+…/ama_nistp_mont_mulx.c…/ama_nistp_mont_mulx.c::161161::99::  warning: warning: string literal…string literal…
+```
+
+Two processes share one pipe and their stderr can interleave character by
+character. The allowlist pattern matched the exact `:LINE:COL: warning: `
+bridge, so it stopped matching — and an **allowlisted** warning was reported
+as a violation. The gate would have gone red intermittently in CI, on a class
+it exists to permit, for a reason with nothing to do with the code.
+
+Fixed at both ends. The strict build steps pass `-Otarget`, so Make
+serialises per-target output (Ninja, which the AArch64 lanes use, already
+buffers per edge — measured: 1 interleaved line across the four Make logs, 0
+across the two Ninja logs). And the two text-matching exemptions now allow
+`.*` between the file name and the diagnostic text instead of the exact
+position syntax, as defence in depth for any generator that does not
+serialise. That is not a per-file blanket: the file name, `warning:` and the
+specific diagnostic text must all still appear, and a case pins that a
+*different* warning in the same file still fails.
+
 #### The AArch64 warning lane found the Ed25519 backend nobody had compiled under it (2026-08-17)
 
 Running the new `Strict Compiler Warnings (AArch64 cross, NEON + SVE2)` job

@@ -136,8 +136,21 @@ EXEMPTIONS: tuple[Exemption, ...] = (
     ),
     Exemption(
         name="int128-extension",
+        # `.*` between the file name and the diagnostic text rather than the
+        # exact `:LINE:COL: warning: ` bridge.  Under `make -j N` two compiler
+        # processes share one pipe and their stderr can INTERLEAVE inside a
+        # single line — observed verbatim in a clean parallel build of this
+        # tree, where two identical -Woverlength-strings diagnostics merged
+        # into `...mont_mulx.c...mont_mulx.c::161161::99::  warning: warning:
+        # string literal...`.  A position-exact pattern stops matching, so an
+        # allowlisted warning is reported as a violation and the gate goes red
+        # for a reason that has nothing to do with the code.  The build steps
+        # now pass `-Otarget` to serialise Make's output, and this pattern is
+        # the defence in depth for any generator that does not.  It is not
+        # loose: the file name AND `warning:` AND the specific diagnostic text
+        # must all still appear on the line.
         pattern=re.compile(
-            r"fe(51|64)\.h:[0-9:]+\s*warning:\s*ISO C does not support "
+            r"fe(51|64)\.h.*warning:.*ISO C does not support "
             rf"{_QUOTE}__int128{_QUOTE} types"
         ),
         reason=(
@@ -148,7 +161,10 @@ EXEMPTIONS: tuple[Exemption, ...] = (
     ),
     Exemption(
         name="overlength-asm-literal",
-        pattern=re.compile(r"ama_nistp_mont_mulx\.c:[0-9:]+\s*warning:\s*string literal of length"),
+        # Same interleaving tolerance as int128-extension above.
+        pattern=re.compile(
+            r"ama_nistp_mont_mulx\.c.*warning:.*string literal of length"
+        ),
         reason=(
             "-Woverlength-strings under clang.  One atomic asm() block; "
             "splitting the Montgomery kernel would forfeit the register-state "

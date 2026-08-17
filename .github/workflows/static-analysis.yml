@@ -313,7 +313,14 @@ jobs:
             -DAMA_BUILD_TESTS=ON \
             -DAMA_BUILD_EXAMPLES=OFF \
             -DAMA_ENABLE_LTO=OFF
-          cmake --build build-strict -j$(nproc) 2>&1 | tee build-warnings.log
+          # -Otarget: without it, two compiler processes under -j N share one
+          # pipe and their stderr can interleave INSIDE a single line — observed
+          # in a clean parallel build of this tree, where two identical
+          # -Woverlength-strings diagnostics merged into one unparseable line.
+          # An allowlisted warning that no longer matches its pattern turns this
+          # gate red for a reason unrelated to the code.  Make serialises
+          # per-target output with -Otarget; Ninja already buffers per edge.
+          cmake --build build-strict -j$(nproc) -- -Otarget 2>&1 | tee build-warnings.log
 
       - name: Build with strict warnings (Release + LTO, the shipped configuration)
         shell: bash
@@ -334,7 +341,7 @@ jobs:
             -DAMA_BUILD_EXAMPLES=OFF \
             -DAMA_ENABLE_NATIVE_ARCH=OFF \
             -DAMA_ENABLE_LTO=ON
-          cmake --build build-strict-release -j$(nproc) 2>&1 | tee build-warnings-release.log
+          cmake --build build-strict-release -j$(nproc) -- -Otarget 2>&1 | tee build-warnings-release.log
 
       - name: Enforce the frozen warning allowlist
         # The allowlist itself now lives in tools/check_compiler_warnings.py
