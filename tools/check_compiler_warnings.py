@@ -95,9 +95,20 @@ import sys
 from pathlib import Path
 from typing import Iterable, NamedTuple, Sequence
 
-#: Lines that are compiler diagnostics.  ``warning:`` is the GCC/clang
-#: spelling; MSVC uses ``warning Cxxxx:`` which this also matches.
-_WARNING_RE = re.compile(r"\bwarning[ :]")
+#: Lines that are compiler DIAGNOSTICS.
+#:
+#: ``warning:`` is the GCC/clang spelling and ``warning Cxxxx:`` is MSVC's;
+#: both end in a colon, and requiring it is what separates a diagnostic from
+#: clang's per-translation-unit SUMMARY line, ``1 warning generated.``.
+#:
+#: An earlier form (``\bwarning[ :]``) matched that summary, so every clang
+#: build reported one bogus finding per file that emitted any warning — twelve
+#: of them across the two clang configurations, all of them the summary of
+#: warnings this allowlist had already excused.  It went unnoticed until the
+#: gate was first run over a clang log; GCC prints no such line.  A gate that
+#: fires on its own bookkeeping is as useless as one that cannot fire.
+#: ``\bwarning\b`` also declines to match the plural ``2 warnings generated.``
+_WARNING_RE = re.compile(r"\bwarning\b\s*(?:C\d+\s*)?:")
 
 #: GCC quotes identifiers with U+2018/U+2019 under a UTF-8 locale and with
 #: ASCII apostrophes otherwise.  ``.{1,3}`` spans either spelling: one ASCII

@@ -261,3 +261,43 @@ class TestClangFormatConfigLoads:
         # — a file that failed to load still dumps a config, just the wrong one.
         assert "IndentWidth:     4" in result.stdout
         assert "ColumnLimit:     100" in result.stdout
+
+
+class TestClangSummaryLineIsNotADiagnostic:
+    """``1 warning generated.`` is clang's bookkeeping, not a finding.
+
+    An earlier form of the line matcher (``\\bwarning[ :]``) matched it, so
+    every clang build reported one bogus finding per translation unit that
+    emitted any warning — including warnings the allowlist had already
+    excused.  GCC prints no such line, so it survived until the gate was first
+    run over a clang log.  A gate that fires on its own bookkeeping is as
+    useless as one that cannot fire.
+    """
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "1 warning generated.",
+            "2 warnings generated.",
+            "17 warnings generated.",
+        ],
+    )
+    def test_summary_lines_are_ignored(self, tmp_path: Path, line: str) -> None:
+        log = write_log(tmp_path, "build.log", line)
+        result = run_gate(log)
+        assert result.returncode == 0, result.stderr
+
+    def test_a_summary_line_does_not_mask_a_real_warning(self, tmp_path: Path) -> None:
+        log = write_log(tmp_path, "build.log", MISSING_PROTOTYPE, "1 warning generated.")
+        result = run_gate(log)
+        assert result.returncode == 1
+        assert "ama_kyber_ntt_neon" in result.stderr
+        assert "1 warning generated." not in result.stderr
+
+    def test_msvc_spelling_is_still_a_diagnostic(self, tmp_path: Path) -> None:
+        """MSVC writes ``warning Cxxxx:`` — the colon is what both forms share."""
+        line = r"C:\src\ama_kyber.c(42): warning C4244: conversion, possible loss of data"
+        log = write_log(tmp_path, "build.log", line)
+        result = run_gate(log)
+        assert result.returncode == 1
+        assert "C4244" in result.stderr

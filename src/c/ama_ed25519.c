@@ -229,7 +229,18 @@ static void ge25519_p3_tobytes(uint8_t *s, const ge25519_p3 *h) {
     fe25519_mul(x, h->X, recip);
     fe25519_mul(y, h->Y, recip);
     fe25519_tobytes(s, y);
-    s[31] ^= fe25519_isnegative(x) << 7;
+    /* Explicit cast, in the style the Kyber packers use: fe25519_isnegative
+     * returns int in {0, 1} (it is the low bit of the canonical encoding), so
+     * the shifted value is {0, 0x80} and the narrowing is exact.  Without the
+     * cast the compound assignment converts int -> uint8_t implicitly, which
+     * -Wconversion reports.
+     *
+     * This file is compiled ONLY on non-x86-64 targets — CMakeLists.txt drops
+     * it in favour of the donna shim when AMA_ED25519_ASSEMBLY is on, which is
+     * the x86-64 default — so the whole in-tree Ed25519 backend sat outside
+     * the strict-warnings gate until that gate gained an AArch64 lane.  This
+     * was the one finding it carried. */
+    s[31] ^= (uint8_t)(fe25519_isnegative(x) << 7);
 }
 
 /*

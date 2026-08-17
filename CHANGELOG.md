@@ -75,6 +75,34 @@ this one resolves what the measurements those lanes produced then showed.
 Every item below started as a measured negative result or an explicitly
 recorded gap, and none is closed by documentation alone.
 
+#### The AArch64 warning lane found the Ed25519 backend nobody had compiled under it (2026-08-17)
+
+Running the new `Strict Compiler Warnings (AArch64 cross, NEON + SVE2)` job
+end to end surfaced two things the pass that added it had not yet seen.
+
+- **`src/c/ama_ed25519.c` has never been inside the strict-warnings gate.**
+  `CMakeLists.txt` drops that file in favour of the donna shim whenever
+  `AMA_ED25519_ASSEMBLY` is on, which is the **x86-64 default** — so the
+  entire in-tree Ed25519 backend (field arithmetic, point decompression, the
+  verify path), which is what every non-x86-64 target ships, was outside the
+  one job that examines compiler diagnostics. The AArch64 lane is the first
+  configuration to compile it under the strict flag set, and it carried
+  exactly one finding: `s[31] ^= fe25519_isnegative(x) << 7` narrowing `int`
+  to `uint8_t` (`-Wconversion`). The value is `{0, 0x80}` and the narrowing
+  is exact, so this is a diagnostic rather than a bug — but it was the only
+  thing standing between that file and a gate, and it is fixed at source with
+  the explicit cast the Kyber packers already use. The library built before
+  and after is byte-identical on AArch64.
+- **The gate was matching clang's own bookkeeping.** `_WARNING_RE` was
+  `\bwarning[ :]`, which matches `1 warning generated.` — clang's
+  per-translation-unit summary, printed once per file that emitted any
+  warning at all, *including* warnings the allowlist had already excused.
+  Twelve bogus findings across the two clang configurations. GCC prints no
+  such line, which is why it survived the first runs. The matcher now
+  requires the colon that both `warning:` and MSVC's `warning C4244:` share,
+  and four cases pin it — including that a summary line beside a real
+  diagnostic does not mask it.
+
 #### The two dudect follow-ups, closed out (2026-08-17)
 
 `267c16c` reverted the percentile-cropping experiment and left two items
