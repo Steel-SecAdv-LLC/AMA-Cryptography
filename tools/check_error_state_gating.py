@@ -58,9 +58,25 @@ gate recorded it as making no native call — and a function that makes no
 native call is never asked for a guard.  Local names bound to a native symbol
 are now tracked and calls through them counted.
 
-Neither shape appears in the current tree.  They are closed because nothing
-was stopping them, and because a gate is only worth what its weakest branch
-enforces.
+A third variant of the same class — a symbol *selected* between two native
+references, ``fn = _native_lib.ama_a if cond else _native_lib.ama_b`` — did
+appear in the current tree, and had since 2026-07-28: ``native_nistp_ecdsa_verify``
+in ``pqc_backends.py``, a public module-level entry point in the one module
+this gate audits.  It was invisible for the same reason as the split binding,
+so the audit skipped the function entirely and its guard was unenforced;
+deleting that guard left the tool's output unchanged.  Conditional and
+annotated bindings are now tracked too, and the entry-point count went from
+85 to 86.
+
+An earlier revision of this docstring asserted that neither shape appeared in
+the tree.  That was true of the two shapes it described and false of the class
+they belong to, which is the more useful thing for a reader to know: the
+lesson is that a gate matching a fixed list of syntactic shapes is only as
+complete as that list, so the matcher now recurses through the forms that
+*are* the resulting callable rather than enumerating spellings.  It
+deliberately does not walk the whole expression: ``x = wrapper(_native_lib.ama_y)``
+does not bind ``x`` to the native symbol, and a gate that demands a guard
+there would fire on correct code.
 
 Deliberate exemptions live in ``EXEMPT`` below, each with a stated reason.
 The exemption list is itself checked: an entry naming a function that no
@@ -170,25 +186,72 @@ def _native_handle_aliases(node: ast.AST) -> set[str]:
 
     Both routes to a bare symbol are collected: ``getattr(_native_lib, ...)``
     and direct attribute access ``_native_lib.ama_x`` (as a value, not a call).
+
+    A symbol *selected* between two such references counts too.  Matching only
+    the two flat shapes above missed::
+
+        fn = _native_lib.ama_nistp_ecdsa_verify_raw_ex if raw else \\
+             _native_lib.ama_nistp_ecdsa_verify_ex
+        rc = int(fn(...))
+
+    which is an ``ast.IfExp``, not an ``Attribute``.  That shape is not
+    hypothetical and is not new: ``native_nistp_ecdsa_verify`` in
+    ``pqc_backends.py`` — a public module-level entry point, in the one module
+    this gate audits — has used it since 2026-07-28, predating the
+    alias-tracking commit whose docstring said "Neither shape appears in the
+    current tree".  Measured before this fix: ``_native_call_lines`` returned
+    ``[]`` and ``_calls_native`` returned ``False`` for that function, so
+    ``audit()`` skipped it at the "no native lines" guard and never asked
+    whether it was gated.  Deleting its ``check_crypto_permitted()`` from a
+    copy of the module left the audit's output completely unchanged.  The
+    function *is* correctly guarded today; the defect was that the gate had
+    silently stopped enforcing it, which is precisely the regression this
+    module exists to prevent.
+
+    The recursion is deliberately narrow — ``IfExp`` branches and ``BoolOp``
+    operands, both of which *are* the resulting callable — rather than a walk
+    of the whole expression.  A blanket walk would also match
+    ``x = wrapper(_native_lib.ama_y)``, where ``x`` is not the native symbol,
+    and would then demand a guard on functions that make no native call: a
+    gate that fires on correct code teaches people to bypass it.
     """
     aliases: set[str] = set()
     for sub in ast.walk(node):
-        if not isinstance(sub, ast.Assign):
+        if isinstance(sub, ast.Assign):
+            targets, value = list(sub.targets), sub.value
+        elif isinstance(sub, ast.AnnAssign) and sub.value is not None:
+            # `fn: Callable[..., int] = _native_lib.ama_x` is the same binding
+            # wearing an annotation, and was equally invisible.
+            targets, value = [sub.target], sub.value
+        else:
             continue
-        value = sub.value
-        bound = (
-            isinstance(value, ast.Call)
-            and isinstance(value.func, ast.Name)
-            and value.func.id == "getattr"
-            and bool(value.args)
-            and _is_native_lib_ref(value.args[0])
-        ) or (isinstance(value, ast.Attribute) and value.attr.startswith("ama_"))
-        if not bound:
+        if not _binds_native_symbol(value):
             continue
-        for target in sub.targets:
+        for target in targets:
             if isinstance(target, ast.Name):
                 aliases.add(target.id)
     return aliases
+
+
+def _binds_native_symbol(value: ast.expr) -> bool:
+    """Whether an assigned expression yields a native symbol to call later."""
+    if (
+        isinstance(value, ast.Call)
+        and isinstance(value.func, ast.Name)
+        and value.func.id == "getattr"
+        and bool(value.args)
+        and _is_native_lib_ref(value.args[0])
+    ):
+        return True
+    if isinstance(value, ast.Attribute) and value.attr.startswith("ama_"):
+        return True
+    if isinstance(value, ast.IfExp):
+        # Either branch reaching the C kernel is enough; recursion handles a
+        # chain of them.
+        return _binds_native_symbol(value.body) or _binds_native_symbol(value.orelse)
+    if isinstance(value, ast.BoolOp):
+        return any(_binds_native_symbol(operand) for operand in value.values)
+    return False
 
 
 def _native_call_lines(node: ast.AST) -> list[int]:

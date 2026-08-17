@@ -470,6 +470,100 @@ class TestErrorStateInhibitsOutput:
         assert checked == 3, "only public functions touching _native_lib count"
         assert [name for name, _ in ungated] == ["ungated_op"]
 
+    def test_gate_tool_sees_a_symbol_selected_by_a_conditional(self, tmp_path: Path) -> None:
+        """A native symbol chosen with ``a if cond else b`` is still a native call.
+
+        ``_native_handle_aliases`` matched only two flat shapes —
+        ``getattr(_native_lib, name)`` and ``_native_lib.ama_x`` — so a symbol
+        selected between two of those was invisible, the body appeared to make
+        no native call, and ``audit()`` skipped the function without ever
+        asking whether it was gated.
+
+        That was live: ``native_nistp_ecdsa_verify`` in ``pqc_backends.py``
+        binds ``fn = _native_lib.ama_..._raw_ex if raw else _native_lib.ama_..._ex``
+        and is a public module-level entry point in the one module this gate
+        audits.  Removing its guard changed the audit's output not at all.
+
+        The annotated-assignment case is here for the same reason: an
+        annotation on the binding is not a different kind of binding.
+        """
+        sys.path.insert(0, str(REPO_ROOT / "tools"))
+        try:
+            import check_error_state_gating as gate
+        finally:
+            sys.path.pop(0)
+
+        module = tmp_path / "fake_conditional.py"
+        module.write_text(
+            textwrap.dedent('''
+                from typing import Callable
+
+                def ungated_conditional(x, raw):
+                    """The shape pqc_backends actually uses."""
+                    fn = _native_lib.ama_verify_raw if raw else _native_lib.ama_verify
+                    return fn(x)
+
+                def gated_conditional(x, raw):
+                    """Same shape, correctly guarded — must NOT be reported."""
+                    check_crypto_permitted()
+                    fn = _native_lib.ama_verify_raw if raw else _native_lib.ama_verify
+                    return fn(x)
+
+                def ungated_annotated(x):
+                    """An annotation does not make it a different binding."""
+                    fn: Callable = _native_lib.ama_thing
+                    return fn(x)
+
+                def ungated_getattr_conditional(x, raw):
+                    """Conditional over the getattr route."""
+                    fn = getattr(_native_lib, "a") if raw else getattr(_native_lib, "b")
+                    return fn(x)
+                '''),
+            encoding="utf-8",
+        )
+
+        ungated, stale, checked = gate.audit(module, exempt={})
+        assert stale == []
+        assert checked == 4, "every conditional/annotated binding must be audited"
+        assert sorted(name for name, _ in ungated) == [
+            "ungated_annotated",
+            "ungated_conditional",
+            "ungated_getattr_conditional",
+        ]
+
+    def test_gate_tool_does_not_demand_a_guard_for_a_wrapped_reference(
+        self, tmp_path: Path
+    ) -> None:
+        """The widening must not over-reach into "mentions the library".
+
+        ``x = wrapper(_native_lib.ama_y)`` does not bind ``x`` to the native
+        symbol, so calling ``x`` is not a native call and the function must not
+        be required to carry a guard.  A gate that fires on correct code is one
+        people learn to bypass, which is why the recursion covers only the
+        forms that ARE the resulting callable.
+        """
+        sys.path.insert(0, str(REPO_ROOT / "tools"))
+        try:
+            import check_error_state_gating as gate
+        finally:
+            sys.path.pop(0)
+
+        module = tmp_path / "fake_wrapped.py"
+        module.write_text(
+            textwrap.dedent('''
+                def passes_symbol_to_a_wrapper(x):
+                    """Not a native call: `handle` is whatever wrapper returns."""
+                    handle = _wrap(_native_lib.ama_thing)
+                    return handle(x)
+                '''),
+            encoding="utf-8",
+        )
+
+        ungated, stale, checked = gate.audit(module, exempt={})
+        assert ungated == []
+        assert stale == []
+        assert checked == 0, "a wrapped reference is not a native entry point"
+
     def test_gate_tool_rejects_a_guard_placed_after_the_native_call(self, tmp_path: Path) -> None:
         """A guard that runs after the C call cannot inhibit its output.
 
