@@ -116,7 +116,10 @@ class TestCodeMatches:
         # the 3.10 support floor, where neither the attribute nor the replace()
         # keyword exists.  The skipif above is the runtime guard.
         assert getattr(fresh, "co_exceptiontable", b""), "fixture: the handler makes a table"
-        tampered = fresh.replace(**{"co_exceptiontable": b""})  # type: ignore[arg-type]
+        # co_exceptiontable is a 3.11+ only replace() keyword; the skipif above
+        # is the runtime guard, and mypy checks against the 3.10 floor (EXI-001)
+        blank_table: dict[str, bytes] = {"co_exceptiontable": b""}
+        tampered = fresh.replace(**blank_table)  # type: ignore[arg-type]  # 3.10 floor (EXI-001)
 
         assert fresh.co_code == tampered.co_code, "the tamper must not touch co_code"
         assert fresh.co_consts == tampered.co_consts, "nor co_consts"
