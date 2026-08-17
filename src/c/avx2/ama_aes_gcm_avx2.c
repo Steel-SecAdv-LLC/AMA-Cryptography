@@ -504,6 +504,13 @@ void ama_aes256_gcm_encrypt_avx2(
         memset(pad_ct + remaining, 0, 16 - remaining);  // PUBLIC-DATA: pad_ct trailing zero-pad — AES-GCM partial-block GHASH input: pad bytes [remaining..16) zero so GHASH absorbs the public ciphertext + zero pad
         ct_block = _mm_loadu_si128((const __m128i *)pad_ct);
         ghash_acc = ghash_absorb_block_sw(ghash_acc, bswap128(ct_block), H_sw);
+        /* Scrub the plaintext staging copy: pad_pt holds up to 15 bytes of
+         * caller plaintext on the stack, exactly the buffer the DECRYPT
+         * twin below already scrubs.  Encrypt staged the same class of
+         * data and left it behind — one barriered write per call, on the
+         * partial-block path only.  pad_ct is the public ciphertext and
+         * needs nothing. */
+        ama_secure_memzero(pad_pt, sizeof(pad_pt));
     }
 
     /* Final GHASH block: len(AAD) || len(C) in bits, big-endian */

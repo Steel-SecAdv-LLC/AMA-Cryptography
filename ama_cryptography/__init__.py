@@ -148,15 +148,32 @@ def _refuse_tampered_bindings_before_import() -> None:
             tampered.append(f"{name}: digest MISMATCH — bytes differ from the signed build")
 
     if tampered:
+        # The remediation below must be executable AS WRITTEN from the state
+        # the reader is in.  An earlier revision recommended running the
+        # signer directly — but `python -m ama_cryptography.integrity`
+        # imports this package, which lands right back in this gate against
+        # the same stale digests, so the advertised way out provably could
+        # not run (and AMA_POST_DIAGNOSTIC_IMPORT deliberately does not
+        # demote this gate: importing a tampered binding for "diagnosis"
+        # executes it).  Removing the stale artefact first is the working
+        # recipe: with no artefact nothing is signed, nothing reads as
+        # tampering, the unsigned digest file still pins the .py sources,
+        # and the signer can then import and re-sign — the same
+        # delete-then-sign order tools/resign_wheel.py uses.
         raise ImportError(
             "ama_cryptography refused to initialise: a signed binding "
             "extension does not match the artefact, and a binding extension "
             "executes its module-init function the moment it is imported.\n\n"
             "  " + "\n  ".join(tampered) + "\n\n"
-            "  Refused BEFORE any binding was imported. If you rebuilt the "
-            "extensions, refresh the artefact with:\n"
-            "      AMA_BUILD_PIPELINE=1 python -m ama_cryptography.integrity "
-            "--update --sign"
+            "  Refused BEFORE any binding was imported.\n"
+            "  If you rebuilt the extensions from source, remove the stale "
+            "artefact and re-sign:\n"
+            "      rm <package-dir>/_integrity_signature.py && "
+            "AMA_BUILD_PIPELINE=1 python -m ama_cryptography.integrity "
+            "--update --sign\n"
+            "  For an installed wheel, reinstall it (pip install "
+            "--force-reinstall) — a wheel's bindings never legitimately "
+            "change beneath its signature."
         )
 
 

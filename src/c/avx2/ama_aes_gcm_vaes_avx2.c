@@ -545,6 +545,10 @@ void ama_aes256_gcm_encrypt_vaes_avx2(
         memset(pad_ct + remaining, 0, 16 - remaining);  // PUBLIC-DATA: pad_ct trailing zero-pad — AES-GCM partial-block GHASH input: pad bytes [remaining..16) zero so GHASH absorbs the public ciphertext + zero pad
         ct_block = _mm_loadu_si128((const __m128i *)pad_ct);
         ghash_acc = ghash_mul_xmm(_mm_xor_si128(ghash_acc, ct_block), H);
+        /* Scrub the plaintext staging copy — the buffer the DECRYPT twin
+         * below already scrubs; encrypt staged the same class of data.
+         * pad_ct is the public ciphertext and needs nothing. */
+        ama_secure_memzero(pad_pt, sizeof(pad_pt));
     }
 
     /* Length block + tag. */

@@ -363,6 +363,11 @@ void ama_aes256_gcm_encrypt_neon(
         ct = vld1q_u8(ct_buf);
         ghash_acc = veorq_u8(ghash_acc, ct);
         ghash_acc = ghash_mul_neon(ghash_acc, H);
+        /* Scrub the plaintext staging copy — the buffer the DECRYPT twin
+         * below already scrubs (its pad_pt); encrypt staged the same class
+         * of data in `pad`.  ct_buf is the public ciphertext and needs
+         * nothing. */
+        ama_secure_memzero(pad, sizeof(pad));
     }
 
     /* Length block */
@@ -413,10 +418,16 @@ void ama_aes256_gcm_encrypt_neon(
  * GCM decryption runs AES-CTR over the ciphertext (using the forward
  * AES block cipher — *not* the inverse) and verifies the GHASH tag
  * before releasing any plaintext (constant-time compare).  We compute
- * the tag over ciphertext+AAD BEFORE decrypting, reject on mismatch
- * with a zeroed-out plaintext output, and only run the CTR mode pass
- * when the tag is authenticated.  Round-key schedule, GHASH key H,
- * and J0 tag-mask are scrubbed on every return path (INVARIANT-12).
+ * the tag over ciphertext+AAD BEFORE decrypting; the compare is
+ * hoisted to a value and the CTR pass ALWAYS executes with its length
+ * bounded by a constant-time mask of that value — zero on mismatch —
+ * so a forged tag leaves the caller's plaintext buffer untouched (not
+ * zeroed: nothing is written to it) with the control flow identical on
+ * both outcomes.  An earlier revision of this header described a
+ * reject-then-skip shape this function does not have; the masked form
+ * is the one the dudect forgery-position lanes measure.  Round-key
+ * schedule, GHASH key H, and J0 tag-mask are scrubbed on every return
+ * path (INVARIANT-12).
  * ============================================================================ */
 ama_error_t ama_aes256_gcm_decrypt_neon(
     const uint8_t *ciphertext, size_t ciphertext_len,
