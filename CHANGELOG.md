@@ -168,47 +168,44 @@ were investigated to ground rather than waited out.
   the same slot (+26.99 then −20.22) — the signature of measurement noise,
   not of a data-dependent path, on runners whose fixed-clock, no-SMT
   Neoverse N2 cores leave no documented microarchitectural mechanism for
-  it. Two instrument improvements were recorded as owner decisions rather
-  than smuggled changes: adopting upstream's percentile-cropping
-  preprocessing (the vendored harness had it stripped — raw fat-tailed
-  shared-runner latencies inflate Welch's t), and setting `PSTATE.DIT`
-  (HWCAP-gated, precedent in AWS-LC and Go 1.24; expected statistical
-  effect ~zero — it removes an architectural caveat, not noise). The
-  `sha3-neon` slot's one qualitatively different historical failure
-  (Kyber-1024 decaps, 2026-08-05, 3/3 rounds, single sign, |t| 6.7)
-  joins the quiet-hardware list.
-- **Percentile cropping restored (owner-authorized as the option with the
-  best statistical effect).** `tests/c/dudect/dudect.h` again maintains
-  upstream's ladder of percentile-cropped t-tests (thresholds
-  `1 − 0.5^(10(i+1)/100)` of the observed distribution, estimated from a
-  1,024-sample calibration prefix that is then excluded from the cropped
-  statistics, exactly as upstream excludes its first batch). The lane
-  verdict is the MEDIAN of the signed t-values over the eligible rungs
-  (more than 10,000 samples, at or below the 99% quantile) — two
-  departures from upstream's max-over-all-tests, each forced by a
-  measurement made while building this change. The cap: a threshold
-  estimated from ~1,024 samples can land *inside* a spike cluster and
-  admit part of it — the statistics self-test caught rung 99 reporting
-  |t| = 6.8 on identical classes before the cap existed. The median:
-  max over ~60 correlated rungs is a multiple-comparisons trap whose
-  null distribution sits well above a single t's — measured live on a
-  fat-tailed shared host, where one contaminated rung reported −5.97
-  while the raw t was +0.85 on a leak-free lane. A genuine leak is
-  class-dependent work on essentially every sample, so it moves every
-  rung in the same direction and survives the median; contamination of
-  a few adjacent rungs cannot move the middle of sixty. Raw t and every
-  rung stay computed, the printout shows both, and short runs
-  (self-test drives) fall back to the raw t, preserving pre-change
-  behaviour exactly. A third `--self-test` suite pins both properties
-  deterministically through the real `dudect_record` machinery:
-  injected asymmetric fat-tail outliers on identical classes fool the
-  raw statistic (+8.0) while the median verdict stays clean (−0.5 over
-  64 rungs), and a genuine +2 ns class shift under the same tail noise
-  is still detected (+6.3). Mutation-checked via the cap knob: with
-  cropping neutralized the verdict equals raw and the suite fails on
-  the fat-tail case. Lane code is untouched — all 27 lanes flow through
-  the same four `dudect_*` calls. `PSTATE.DIT` remains the one recorded
-  follow-up.
+  it. Recorded follow-ups rather than smuggled changes: the vendored
+  dudect harness omits upstream's percentile-cropping preprocessing (raw
+  fat-tailed shared-runner latencies inflate Welch's t), and the harness
+  runs with `PSTATE.DIT` unset, where the architecture makes no timing
+  guarantee — setting DIT (HWCAP-gated, precedent in AWS-LC and Go 1.24)
+  and adopting upstream's cropping are the two candidate instrument
+  improvements, both owner-visible decisions on gate statistics rather
+  than quiet edits. The `sha3-neon` slot's one qualitatively different
+  historical failure (Kyber-1024 decaps, 2026-08-05, 3/3 rounds, single
+  sign, |t| 6.7) joins the quiet-hardware list.
+- **Percentile cropping: attempted, CI-falsified as a drop-in, reverted
+  — the follow-up now carries measured design constraints.** With owner
+  authorization the cropping option was implemented in full (upstream's
+  rung ladder from a discarded calibration prefix; verdict = median of
+  the eligible rungs after two locally-measured corrections — a 99%
+  quantile cap because a threshold estimated from ~1,024 samples lands
+  inside spike clusters, and median-not-max because the maximum of ~60
+  correlated rungs is a multiple-comparisons trap, measured live at
+  −5.97 on a leak-free lane whose raw t was +0.85). Deterministic
+  self-tests passed both directions: injected fat-tail outliers fooled
+  the raw statistic while the median verdict stayed clean, and a
+  genuine +2 ns shift was still detected. CI then falsified the design
+  at `5a99189` on grounds none of that local validation could reach:
+  (1) on the legitimately variable-time lanes (ML-DSA/SLH-DSA sign,
+  Kyber decaps — bimodal rejection-sampling distributions) a common
+  crop threshold slices one class asymmetrically, leaving rungs whose
+  |t| exceeds the 99,999 fatal-sentinel range, so six lanes across
+  three jobs misreported as "harness fault"; (2) cropping at a pooled
+  threshold is only class-neutral when both classes share one
+  distribution under H0 — upstream's fixed-vs-random design guarantees
+  that, several of this harness's lane constructions do not, and the
+  resulting truncation bias failed previously clean strict lanes with
+  *consistent* sign (Agent binding −7.18 in 3/3 rounds, FROST
+  mid-range +16.96 in 2/3). Reverted the same hour; the harness runs
+  the proven raw-t statistics. Any future attempt needs per-lane
+  opt-in limited to H0-identical class constructions plus a
+  sentinel-range guard — recorded here so the next attempt starts from
+  these measurements instead of rediscovering them.
 
 #### Completion pass 3 — what an independent review of the full diff found
 
