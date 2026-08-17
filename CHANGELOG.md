@@ -449,6 +449,19 @@ uncropped rung must catch), the degenerate-crop failure mode from 267c16c,
 and three fail-closed paths; an unmeasured lane now aborts the run rather
 than reporting t = 0.0, which reads as CLEAN.
 
+The legacy harnesses' round budget moved from 3 to 5 at the same time. The
+sharper statistic no longer averages runner noise away into an inflated
+variance, so a noisy round lands nearer the threshold, and under a majority
+rule two same-signed excursions were a FAIL: `Ascon-AEAD128 encrypt` reached
++6.4478 in 2 of 3 rounds on a CI runner, on C byte-identical to a passing run.
+That lane's true effect is ~0 and was measured to be so — |t| does not scale
+with the sample count and its sign flips (−1.04 at 50,000 iterations, +1.36 at
+200,000, −1.75 at 800,000, where a genuine effect grows as √n) — and its setup
+is already symmetric. Three of five raises the evidence a verdict needs without
+touching the threshold or the statistic, and cannot hide a leak: the planted
+early-exit `memcmp` trips **5 of 5 rounds at |t| = 242**. Clean runs still exit
+after round 1, so it costs nothing except on a run that is already suspicious.
+
 The primary harness (`tests/c/test_dudect.c`, 27 lanes) still computes the
 uncropped statistic and is the next application of this work.
 

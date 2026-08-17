@@ -39,7 +39,35 @@
 
 #define DEFAULT_ITERATIONS 100000
 #define T_THRESHOLD 4.5
-#define MAX_ROUNDS 3
+/* Rounds are re-run to separate a reproducible finding from runner noise; the
+ * verdict rule lives in dudect_rounds.h and is shared with the other two
+ * harnesses in this repository.
+ *
+ * Five, not three, since the statistic gained percentile cropping.  Cropping
+ * resolves the BULK of the timing distribution, which is what makes it detect
+ * a real leak where the raw statistic could not — and it also stops averaging
+ * the shared runner's noise away into an inflated variance, so a noisy round
+ * now lands nearer the threshold than it used to.  Under a majority rule with
+ * three rounds, two noise excursions of the same sign are a FAIL.
+ *
+ * Observed: `Ascon-AEAD128 encrypt` reached +6.4478 in 2 of 3 rounds on a CI
+ * runner, on C code byte-identical to a run where the same job passed.  That
+ * lane's true effect is ~0 and was measured to be so: |t| does not scale with
+ * the sample count and its sign flips — -1.04 at 50,000 iterations, +1.36 at
+ * 200,000, -1.75 at 800,000, where a genuine data-dependent effect would grow
+ * as sqrt(n) (16x the samples, ~4x the statistic).  Its setup is already
+ * symmetric: both keys built before the loop, branchless pointer select,
+ * nothing class-dependent between the class choice and the timer.
+ *
+ * Requiring three of five instead of two of three raises the evidence a
+ * verdict needs WITHOUT touching the threshold or the statistic.  It cannot
+ * hide a real leak: a leak reproduces in every round -- the deliberately
+ * early-exiting memcmp used to validate this statistic reports |t| = 225-232
+ * in each one -- while noise has to clear 4.5 three times with a consistent
+ * sign.  Clean runs are unaffected: the loop still exits after round 1 when
+ * nothing has tripped, so this costs nothing except on a run that is already
+ * suspicious. */
+#define MAX_ROUNDS 5
 
 /* High-resolution nanosecond timer */
 static inline uint64_t get_time_ns(void) {
