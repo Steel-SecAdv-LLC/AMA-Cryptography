@@ -165,6 +165,62 @@ int main(void) {
     TEST_ASSERT(rc == AMA_ERROR_INVALID_PARAM,
                 "sha3_512_final on a SHAKE128-buffered context must be refused");
 
+    /* Test 10: squeezing a CONSUMED one-shot digest context is refused.
+     *
+     * ama_sha3_final scrubs the state and buffer but used to leave
+     * buffer_len wherever the last update put it — always a legal squeeze
+     * position for some rate — so the exported inc_squeeze entry points
+     * accepted the context (finalized is exactly what they require) and
+     * emitted bytes read from the zeroized state: all-zero output with
+     * AMA_SUCCESS, reachable from ctypes.  A final now parks the position
+     * at SHA3_CTX_CONSUMED (past every rate), so both squeeze guards
+     * refuse.  Both digest widths and both squeeze rates are pinned, and
+     * the refusal must not depend on where buffer_len happened to sit, so
+     * the absorb lengths (3 and 100) leave it at two different values. */
+    ama_sha3_ctx consumed_ctx;
+    uint8_t consumed_digest[64];
+    uint8_t abc_digest_first[32];
+    uint8_t must_not_emit[32];
+
+    rc = ama_sha3_init(&consumed_ctx);
+    TEST_ASSERT(rc == AMA_SUCCESS, "sha3 init (consumed) should succeed");
+    rc = ama_sha3_update(&consumed_ctx, (const uint8_t*)"abc", 3);
+    TEST_ASSERT(rc == AMA_SUCCESS, "sha3 update (consumed) should succeed");
+    rc = ama_sha3_final(&consumed_ctx, consumed_digest);
+    TEST_ASSERT(rc == AMA_SUCCESS, "sha3 final (consumed) should succeed");
+    memcpy(abc_digest_first, consumed_digest, 32);
+    rc = ama_shake256_inc_squeeze(&consumed_ctx, must_not_emit, sizeof(must_not_emit));
+    TEST_ASSERT(rc == AMA_ERROR_INVALID_PARAM,
+                "shake256 squeeze of a consumed sha3_final context must be refused");
+    rc = ama_shake128_inc_squeeze(&consumed_ctx, must_not_emit, sizeof(must_not_emit));
+    TEST_ASSERT(rc == AMA_ERROR_INVALID_PARAM,
+                "shake128 squeeze of a consumed sha3_final context must be refused");
+
+    memset(filler, 0xAB, sizeof(filler));
+    rc = ama_sha3_512_init(&consumed_ctx);
+    TEST_ASSERT(rc == AMA_SUCCESS, "sha3-512 init (consumed) should succeed");
+    rc = ama_sha3_512_update(&consumed_ctx, filler, 100);
+    TEST_ASSERT(rc == AMA_SUCCESS, "sha3-512 update (consumed) should succeed");
+    rc = ama_sha3_512_final(&consumed_ctx, consumed_digest);
+    TEST_ASSERT(rc == AMA_SUCCESS, "sha3-512 final (consumed) should succeed");
+    rc = ama_shake128_inc_squeeze(&consumed_ctx, must_not_emit, sizeof(must_not_emit));
+    TEST_ASSERT(rc == AMA_ERROR_INVALID_PARAM,
+                "shake128 squeeze of a consumed sha3_512_final context must be refused");
+
+    /* Re-init after consumption stays legal: the sentinel must not brick
+     * context reuse through the documented init path.  The recomputed
+     * SHA3-256("abc") must equal the one produced before consumption, so
+     * re-init provably restores a working context rather than merely
+     * returning AMA_SUCCESS. */
+    rc = ama_sha3_init(&consumed_ctx);
+    TEST_ASSERT(rc == AMA_SUCCESS, "re-init of a consumed context should succeed");
+    rc = ama_sha3_update(&consumed_ctx, (const uint8_t*)"abc", 3);
+    TEST_ASSERT(rc == AMA_SUCCESS, "update after re-init should succeed");
+    rc = ama_sha3_final(&consumed_ctx, must_not_emit);
+    TEST_ASSERT(rc == AMA_SUCCESS, "final after re-init should succeed");
+    TEST_ASSERT(memcmp(must_not_emit, abc_digest_first, 32) == 0,
+                "SHA3-256(\"abc\") after re-init matches the pre-consumption digest");
+
     printf("\n===========================================\n");
     printf("All SHA3-256 tests passed!\n");
     printf("===========================================\n");

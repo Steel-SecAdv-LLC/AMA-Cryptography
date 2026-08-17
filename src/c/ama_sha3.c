@@ -86,6 +86,25 @@ static inline int sha3_squeeze_pos_ok(const ama_sha3_ctx *ctx, size_t rate) {
     return ctx->buffer_len <= rate;
 }
 
+/* Position sentinel a one-shot digest final parks buffer_len at.
+ *
+ * ama_sha3_final / ama_sha3_512_final scrub the context's state and buffer
+ * after emitting the digest, but buffer_len kept whatever value the last
+ * update left (0..135, or 0..71 for SHA3-512) — every one of which is a
+ * legal squeeze position for at least one XOF rate.  The exported
+ * ama_shake*_inc_squeeze entry points check only `finalized` (which final
+ * sets) and sha3_squeeze_pos_ok, so squeezing a consumed digest context
+ * passed both guards and emitted bytes read from the freshly ZEROIZED
+ * state: all-zero output, AMA_SUCCESS, reachable from ctypes.  An
+ * "extract" that reports success while returning constants is the
+ * fail-open the squeeze guard exists to close, so a consumed context now
+ * parks its position past every Keccak rate (max 168 for SHAKE128) and
+ * both squeeze guards reject it with the same cross-family error.  200 is
+ * the Keccak state size — self-documentingly larger than any rate, and
+ * stored in the existing field, so the public ama_sha3_ctx layout (ABI)
+ * is unchanged. */
+#define SHA3_CTX_CONSUMED ((size_t)200)
+
 /* Forward declaration: generic 4-way Keccak-f[1600] exported for the
  * dispatch table's always-non-NULL keccak_f1600_x4 slot.  Defined
  * further down in this translation unit; the prototype here keeps
@@ -633,6 +652,10 @@ ama_error_t ama_sha3_final(ama_sha3_ctx* ctx, uint8_t* output) {
     ama_secure_memzero(ctx->state, sizeof(ctx->state));
     ama_secure_memzero(ctx->buffer, sizeof(ctx->buffer));
     ama_secure_memzero(block, sizeof(block));
+    /* Consumed: park the squeeze position out of every rate's range so the
+     * exported inc_squeeze entry points refuse this context instead of
+     * emitting the zeroized state as output.  See SHA3_CTX_CONSUMED. */
+    ctx->buffer_len = SHA3_CTX_CONSUMED;
 
     return AMA_SUCCESS;
 }
@@ -746,6 +769,8 @@ ama_error_t ama_sha3_512_final(ama_sha3_ctx* ctx, uint8_t* output) {
     ama_secure_memzero(ctx->state, sizeof(ctx->state));
     ama_secure_memzero(ctx->buffer, sizeof(ctx->buffer));
     ama_secure_memzero(block, sizeof(block));
+    /* Consumed: same parking as ama_sha3_final — see SHA3_CTX_CONSUMED. */
+    ctx->buffer_len = SHA3_CTX_CONSUMED;
 
     return AMA_SUCCESS;
 }
