@@ -66,6 +66,42 @@ class TestDigestPinning:
         body = f"# base-eol: 2027-11-01\nFROM {_PINNED} AS builder\nFROM builder AS runtime\n"
         assert gate.audit([_write(tmp_path, body)], today=_TODAY) == []
 
+    def test_an_untagged_image_is_flagged_not_mistaken_for_a_stage(self, tmp_path: Path) -> None:
+        """``FROM ubuntu`` is an implicit ``:latest``, the most mutable form.
+
+        The old stage-reference shortcut skipped any image containing neither
+        ':' nor '@', which describes ``FROM ubuntu`` exactly — the least
+        pinned base a Dockerfile can name sailed through the pin gate
+        unexamined.  A stage reference is now identified structurally (its
+        name was declared by an earlier ``FROM ... AS``), so an untagged
+        registry image is a finding.
+        """
+        body = "# base-eol: 2027-11-01\nFROM ubuntu\nRUN echo hi\n"
+        findings = gate.audit([_write(tmp_path, body)], today=_TODAY)
+        assert len(findings) == 1, [f.render() for f in findings]
+        assert "no tag at all" in findings[0].render()
+        assert findings[0].kind == gate.NOT_DIGEST_PINNED
+
+    def test_an_untagged_image_that_declares_a_stage_is_still_flagged(self, tmp_path: Path) -> None:
+        """``FROM ubuntu AS base`` declares a stage but ``ubuntu`` is an image."""
+        body = "# base-eol: 2027-11-01\nFROM ubuntu AS base\nFROM base AS runtime\n"
+        findings = gate.audit([_write(tmp_path, body)], today=_TODAY)
+        assert len(findings) == 1, [f.render() for f in findings]
+        assert "no tag at all" in findings[0].render()
+
+    def test_a_stage_name_used_before_declaration_is_treated_as_an_image(
+        self, tmp_path: Path
+    ) -> None:
+        """Docker rejects forward stage references, so a bare name with no
+        earlier declaration is a registry image — the fail-safe reading."""
+        body = f"# base-eol: 2027-11-01\nFROM runtime\nFROM {_PINNED} AS runtime\n"
+        findings = gate.audit([_write(tmp_path, body)], today=_TODAY)
+        assert len(findings) == 1, [f.render() for f in findings]
+
+    def test_stage_names_match_case_insensitively(self, tmp_path: Path) -> None:
+        body = f"# base-eol: 2027-11-01\nFROM {_PINNED} AS Builder\nFROM builder\nRUN echo hi\n"
+        assert gate.audit([_write(tmp_path, body)], today=_TODAY) == []
+
     def test_main_exits_nonzero_on_a_finding(self, tmp_path: Path) -> None:
         path = _write(tmp_path, _dockerfile(base="ubuntu:22.04"))
         assert gate.main([str(path)]) == 1

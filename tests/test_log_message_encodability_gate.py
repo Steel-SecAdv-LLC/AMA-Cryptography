@@ -182,3 +182,64 @@ class TestUnencodableCharacters:
 
     def test_ascii_and_cp1252_text_is_clean(self, tool: ModuleType) -> None:
         assert tool.unencodable_characters("plain ASCII \u2014 and a section \u00a7") == []
+
+
+class TestInlineGetLoggerIdiom:
+    """``logging.getLogger(__name__).critical(...)`` — the idiom the gate missed.
+
+    The receiver of the level method is a Call node, which the dotted-name
+    walk renders as an empty string, so the first version of this gate
+    skipped every such site while reporting PASS over the files containing
+    them — 15 real emission sites in the shipped package, including the
+    POST-failure criticals in ``__init__``.  These pin the fix in both
+    directions and for the aliased-module spelling ``__init__`` actually
+    uses.
+    """
+
+    def test_inline_getlogger_with_unencodable_text_is_caught(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        root = _synthetic_package(
+            tmp_path,
+            'import logging\nlogging.getLogger(__name__).critical("POST → FAILED")\n',
+        )
+        failures, _, sites = tool.audit(root)
+        assert len(failures) == 1
+        assert "U+2192" in failures[0]
+        assert sites == 1
+
+    def test_aliased_module_inline_getlogger_is_caught(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        """``import logging as _logging`` — the spelling ``__init__`` uses."""
+        root = _synthetic_package(
+            tmp_path,
+            "import logging as _logging\n"
+            '_logging.getLogger(__name__).critical("refused ✗ tampered")\n',
+        )
+        failures, _, _ = tool.audit(root)
+        assert len(failures) == 1
+        assert "U+2717" in failures[0]
+
+    def test_inline_getlogger_with_clean_text_passes(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        root = _synthetic_package(
+            tmp_path,
+            'import logging\nlogging.getLogger(__name__).warning("plain -> ok")\n',
+        )
+        failures, _, sites = tool.audit(root)
+        assert failures == []
+        assert sites == 1
+
+    def test_getlogger_itself_is_not_an_emission_site(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        """The factory call alone emits nothing; only a level method does."""
+        root = _synthetic_package(
+            tmp_path,
+            'import logging\nlogger = logging.getLogger("app → name")\n',
+        )
+        failures, _, sites = tool.audit(root)
+        assert failures == []
+        assert sites == 0

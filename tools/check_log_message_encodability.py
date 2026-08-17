@@ -105,6 +105,22 @@ def _emission_kind(call: ast.Call) -> str | None:
     func = call.func
     if not isinstance(func, ast.Attribute):
         return None
+    # The inline idiom: ``logging.getLogger(__name__).critical(...)``.  The
+    # receiver of ``.critical`` is a Call node, which the dotted-name walk
+    # below renders as "" — so the first version of this gate was blind to
+    # every such site while reporting PASS over the files that contained
+    # them.  The shipped package uses this exact shape for some of its most
+    # consequential records (the POST-failure criticals in ``__init__``),
+    # which is the audience this gate exists for.  Any call spelled
+    # ``<...>.getLogger(...).<level>(...)`` is a logger emission by
+    # construction, whatever the module alias in front of it.
+    if isinstance(func.value, ast.Call):
+        callee = func.value.func
+        if isinstance(callee, (ast.Name, ast.Attribute)):
+            callee_name = _receiver_name(callee)
+            if callee_name.rsplit(".", 1)[-1] == "getLogger" and func.attr in LOG_METHODS:
+                return f"{callee_name}(...).{func.attr}"
+        return None
     receiver = _receiver_name(func.value)
     if func.attr == "warn" and receiver.split(".")[-1] == "warnings":
         return "warnings.warn"

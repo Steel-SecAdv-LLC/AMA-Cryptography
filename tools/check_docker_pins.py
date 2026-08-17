@@ -131,6 +131,9 @@ _EXEMPTION_PROSE = ("pin",)
 #: below treated it as a stage name and the unpinned base was never checked —
 #: the gate reported "pinned" for a tag-only image.  Skip leading flags.
 _FROM_RE = re.compile(r"^\s*FROM\s+(?:--[^\s]+\s+)*(?P<image>\S+)", re.IGNORECASE)
+#: ``FROM x AS name`` declares a build stage.  Stage names are matched
+#: case-insensitively because Docker treats them that way.
+_STAGE_RE = re.compile(r"\bAS\s+(?P<stage>\S+)\s*$", re.IGNORECASE)
 _DIGEST_RE = re.compile(r"@sha256:[0-9a-f]{64}$")
 _EOL_RE = re.compile(r"^\s*#\s*base-eol:\s*(?P<date>\d{4}-\d{2}-\d{2})\b")
 
@@ -209,25 +212,50 @@ def scan(path: Path, text: str, today: _dt.date) -> list[Finding]:
     if not froms:
         return findings
 
+    # Stage names declared by `FROM ... AS <name>`, collected in file order so
+    # only a name declared BEFORE its use reads as a stage reference.  The
+    # previous rule — skip any image containing neither ':' nor '@' — was
+    # meant for `FROM builder`, but `FROM ubuntu` matches it too: an untagged
+    # registry image, implicitly `:latest`, the MOST mutable pointer this gate
+    # exists to refuse, and it sailed through unexamined.  A stage reference
+    # is structurally identifiable (its name was declared above); everything
+    # else is a registry image and must carry a digest, tag or no tag.
+    declared_stages: set[str] = set()
+    stage_by_line: dict[int, str | None] = {}
+    for line_no, _image in froms:
+        stage_match = _STAGE_RE.search(lines[line_no - 1])
+        stage_by_line[line_no] = stage_match.group("stage").lower() if stage_match else None
+
     for line_no, image in froms:
-        # A stage reference (`FROM builder AS x`) names an earlier stage in the
-        # same file, not a registry image, and cannot carry a digest.
-        if ":" not in image and "@" not in image:
+        if ":" not in image and "@" not in image and image.lower() in declared_stages:
+            # `FROM builder` naming an earlier `FROM ... AS builder` stage in
+            # this same file: not a registry image, cannot carry a digest.
+            if stage_by_line[line_no]:
+                declared_stages.add(str(stage_by_line[line_no]))
             continue
         if not _DIGEST_RE.search(image):
+            tagless = ":" not in image and "@" not in image
             findings.append(
                 Finding(
                     path,
                     line_no,
-                    f"base image {image!r} is pinned by tag only. A tag is a "
-                    f"mutable pointer: the same line resolves to different "
-                    f"bytes over time, so the build is not reproducible and an "
-                    f"upstream account takeover reaches this image directly. "
-                    f"Pin it as name:tag@sha256:<digest> (keep the tag for "
-                    f"readability; Docker verifies the digest).",
+                    (
+                        f"base image {image!r} carries no tag at all — it resolves "
+                        f"to :latest, the most mutable pointer there is, and it "
+                        f"matches no build stage declared earlier in this file. "
+                        if tagless
+                        else f"base image {image!r} is pinned by tag only. "
+                    )
+                    + "A tag is a mutable pointer: the same line resolves to "
+                    "different bytes over time, so the build is not reproducible "
+                    "and an upstream account takeover reaches this image "
+                    "directly. Pin it as name:tag@sha256:<digest> (keep the tag "
+                    "for readability; Docker verifies the digest).",
                     NOT_DIGEST_PINNED,
                 )
             )
+        if stage_by_line[line_no]:
+            declared_stages.add(str(stage_by_line[line_no]))
 
     eol, eol_line = _declared_eol(lines)
     if eol is None:
