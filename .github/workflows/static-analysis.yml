@@ -1163,9 +1163,41 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
+      # Retry with backoff, and a per-attempt timeout.
+      #
+      # This step has hung in `apt-get install` twice on this branch, each
+      # time consuming the job's whole `timeout-minutes: 12` and being
+      # cancelled — which fails `Static Analysis Gate` even though every
+      # other job in the run succeeded, because a cancelled dependency is
+      # not a success.  It is not a code fault and re-running fixes it (one
+      # re-run completed the same step in 61 seconds), but a gate that goes
+      # red on an apt mirror hiccup trains reviewers to re-run without
+      # reading, which is exactly how a real failure gets waved through.
+      #
+      # `timeout 300` bounds an attempt so a stalled mirror cannot eat the
+      # job budget, and three attempts with 15s/30s backoff match the
+      # retry-with-backoff pattern this repository already uses for the
+      # Windows Chocolatey install in ci-build-test.yml and for
+      # actions/setup-python.  The final attempt runs bare so its failure is
+      # the step's failure: a genuinely unavailable package still fails the
+      # job, and nothing here is `|| true`.
       - name: Install dependencies
         run: |
           sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
+          install_deps() {
+            sudo timeout 300 apt-get update && \
+            sudo timeout 300 apt-get install -y cmake clang-18 libc++-18-dev libc++abi-18-dev
+          }
+          for attempt in 1 2; do
+            if install_deps; then
+              echo "dependencies installed (attempt ${attempt})"
+              exit 0
+            fi
+            delay=$((attempt * 15))
+            echo "attempt ${attempt} failed or timed out; retrying in ${delay}s"
+            sleep "${delay}"
+          done
+          echo "final attempt (its failure fails this job)"
           sudo apt-get update
           sudo apt-get install -y cmake clang-18 libc++-18-dev libc++abi-18-dev
 
