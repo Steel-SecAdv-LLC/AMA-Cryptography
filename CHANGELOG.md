@@ -75,6 +75,32 @@ this one resolves what the measurements those lanes produced then showed.
 Every item below started as a measured negative result or an explicitly
 recorded gap, and none is closed by documentation alone.
 
+#### `.clang-format` could not be read by the toolchain this project pins (2026-08-17)
+
+`Language: C` is not a valid value for any clang-format before LLVM 20 —
+including the clang-18 CI installs and the container images ship. Loading the
+file produced `unknown enumerated scalar` followed by
+`Error reading .clang-format: Invalid argument`, so **the entire file was
+ignored**: the command the file itself advertised (`clang-format -i
+src/c/*.c include/*.h`) errored out, and an editor with format-on-save fell
+back to LLVM defaults — 2-space indent, 80 columns — which is the opposite of
+what the file specifies. Corrected to `Language: Cpp`, the language kind
+clang-format has always used for C sources and which is valid in every
+version including 20+.
+
+The header comment now also states the scope, measured rather than assumed:
+this file is a style *reference* for new and edited C, not a formatter to run
+across the tree. The existing sources are hand-formatted — aligned
+continuation lines, aligned comment blocks, and a mix of `void* p` and
+`void *p` that no single `PointerAlignment` setting reproduces — so a
+whole-tree `clang-format -i` rewrites **9,571 lines across 31 files**
+(`PointerAlignment: Left` is worse at 10,316). Nothing in CI runs
+clang-format and nothing should start without that reformat being a
+deliberate, separate change. Two cases in
+`tests/test_compiler_warning_gate.py` pin both halves: the `Language:` value,
+and that clang-format actually parses the file and applies *its* settings
+rather than LLVM's defaults.
+
 #### The LoC regenerator can no longer measure around a file it is about to commit (2026-08-17)
 
 `tools/update_docs.py --loc` is the one-command fix for a red

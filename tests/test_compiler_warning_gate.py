@@ -211,3 +211,53 @@ class TestWiredIntoTheWorkflow:
         checked_text = "".join(checked_section[1:])
         for log in sorted(produced):
             assert log in checked_text, f"{log} is written but never checked"
+
+
+class TestClangFormatConfigLoads:
+    """``.clang-format`` must be loadable by the toolchain this project pins.
+
+    Placed beside the warning-gate tests because it is the same class of
+    defect: a toolchain configuration file that silently does not apply.
+
+    ``Language: C`` was rejected by every clang-format before LLVM 20 —
+    including the clang-18 in CI and in the container images — with
+    ``unknown enumerated scalar`` followed by
+    ``Error reading .clang-format: Invalid argument``.  The whole file was
+    then ignored, so an editor with format-on-save fell back to LLVM defaults
+    (2-space indent, 80 columns): the exact opposite of what the file
+    specifies.
+    """
+
+    CONFIG = REPO_ROOT / ".clang-format"
+
+    def test_language_is_the_universally_valid_spelling(self) -> None:
+        text = self.CONFIG.read_text(encoding="utf-8")
+        language_lines = [
+            line.strip() for line in text.splitlines() if line.strip().startswith("Language:")
+        ]
+        assert language_lines == ["Language: Cpp"], (
+            "Language must be 'Cpp' — the kind clang-format uses for C in every "
+            "version.  'C' is a parse error before LLVM 20, which silently "
+            f"disables the entire file.  Found: {language_lines}"
+        )
+
+    def test_clang_format_actually_parses_it(self) -> None:
+        import shutil
+        import subprocess
+
+        clang_format = shutil.which("clang-format")
+        if clang_format is None:
+            pytest.skip("clang-format not installed")
+        result = subprocess.run(
+            [clang_format, "--dump-config"],
+            capture_output=True,
+            text=True,
+            cwd=REPO_ROOT,
+        )
+        assert (
+            result.returncode == 0
+        ), f"clang-format could not read .clang-format: {result.stderr.strip()}"
+        # The dumped config must carry this file's settings, not LLVM defaults
+        # — a file that failed to load still dumps a config, just the wrong one.
+        assert "IndentWidth:     4" in result.stdout
+        assert "ColumnLimit:     100" in result.stdout
