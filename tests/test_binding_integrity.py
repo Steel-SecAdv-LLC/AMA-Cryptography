@@ -25,6 +25,7 @@ constructions are pinned equal here — same pattern as
 
 from __future__ import annotations
 
+import ast
 import hashlib
 from pathlib import Path
 
@@ -87,6 +88,79 @@ class TestSignerVerifierAgreement:
         assert _self_test._serialize_binding_digests(
             {"ab.so": b"\x01" * 32}
         ) != _self_test._serialize_binding_digests({"a": b"b" + b".so\x00" + b"\x01" * 31})
+
+
+def _setup_py_class_constant(name: str) -> tuple[str, ...]:
+    """Read a class-level tuple constant out of ``setup.py`` without running it.
+
+    ``setup.py`` calls ``setup()`` at import, so it cannot be imported here;
+    and it cannot import the package either, because at build time the
+    package's ``__init__`` would try to load a native library that does not
+    exist yet.  Its copy of the enumeration criteria is therefore genuinely
+    separate code, and parsing is how it gets pinned.
+    """
+    tree = ast.parse((REPO_ROOT / "setup.py").read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ClassDef):
+            continue
+        for statement in node.body:
+            targets = (
+                statement.targets
+                if isinstance(statement, ast.Assign)
+                else [statement.target] if isinstance(statement, ast.AnnAssign) else []
+            )
+            for target in targets:
+                if isinstance(target, ast.Name) and target.id == name:
+                    assert statement.value is not None
+                    value = ast.literal_eval(statement.value)
+                    assert isinstance(value, tuple)
+                    return value
+    raise AssertionError(f"no class-level {name} found in setup.py")
+
+
+class TestEveryCopyOfTheEnumerationCriteriaAgrees:
+    """Four modules decide "is this file a binding extension?" independently.
+
+    ``_build_sign`` (what the signature covers), ``_self_test`` (what the
+    verifier expects to be covered), ``setup.py`` (what the wheel pipeline
+    syncs into the directory the signer enumerates) and
+    ``tools/verify_install_oob.py`` (what an out-of-band audit of an
+    installed tree treats as a binding).  Only the first two were pinned
+    together, and drift in the other two is silent in both directions:
+
+    * if ``setup.py`` stops recognising a suffix the signer recognises, the
+      wheel ships a binding the artefact never bound, and POST fails every
+      install with "present but not covered" — the exact failure the sync
+      step was written to prevent, reintroduced by drift;
+    * if ``verify_install_oob`` stops recognising one, an implanted
+      extension carrying that suffix is never examined by the tool whose
+      whole purpose is to find it.
+
+    ``verify_install_oob`` must keep its own copy rather than import one:
+    it audits a possibly-tampered installation, and taking its definition of
+    "binding extension" from the tree under audit would put the target
+    inside the verifier's trust base.  Independence is the design; agreement
+    is what needs a test.
+    """
+
+    def test_setup_py_matches_the_signer(self) -> None:
+        assert _setup_py_class_constant("_EXTENSION_SUFFIXES") == _build_sign._EXTENSION_SUFFIXES
+        assert _setup_py_class_constant("_NATIVE_LIB_PREFIXES") == _build_sign._NATIVE_LIB_PREFIXES
+
+    def test_the_out_of_band_verifier_matches_the_signer(self) -> None:
+        from tools import verify_install_oob as oob
+
+        assert oob._EXTENSION_SUFFIXES == _build_sign._EXTENSION_SUFFIXES
+        assert oob._NATIVE_LIB_PREFIXES == _build_sign._NATIVE_LIB_PREFIXES
+
+    def test_the_parser_would_notice_a_changed_value(self) -> None:
+        """The pin is only worth having if reading it can fail.
+
+        A parser that silently returned the first tuple it found, or an
+        empty one, would agree with anything.
+        """
+        with pytest.raises(AssertionError, match="no class-level"):
+            _setup_py_class_constant("_NO_SUCH_CONSTANT_IN_SETUP_PY")
 
 
 class TestTreeArtefactSelfCheck:
