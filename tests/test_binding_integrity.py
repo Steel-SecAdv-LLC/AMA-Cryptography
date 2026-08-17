@@ -104,17 +104,19 @@ def _setup_py_class_constant(name: str) -> tuple[str, ...]:
         if not isinstance(node, ast.ClassDef):
             continue
         for statement in node.body:
-            targets = (
-                statement.targets
-                if isinstance(statement, ast.Assign)
-                else [statement.target] if isinstance(statement, ast.AnnAssign) else []
-            )
+            targets: list[ast.expr] = []
+            expression: ast.expr | None = None
+            if isinstance(statement, ast.Assign):
+                targets, expression = list(statement.targets), statement.value
+            elif isinstance(statement, ast.AnnAssign):
+                targets, expression = [statement.target], statement.value
+            if expression is None:
+                continue
             for target in targets:
                 if isinstance(target, ast.Name) and target.id == name:
-                    assert statement.value is not None
-                    value = ast.literal_eval(statement.value)
+                    value = ast.literal_eval(expression)
                     assert isinstance(value, tuple)
-                    return value
+                    return tuple(str(item) for item in value)
     raise AssertionError(f"no class-level {name} found in setup.py")
 
 
