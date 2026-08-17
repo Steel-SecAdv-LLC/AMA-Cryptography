@@ -60,7 +60,9 @@
 #define DUDECT_FATAL_SENTINEL 99999.0
 
 static int g_measurements = DEFAULT_MEASUREMENTS;
-static volatile int g_timeout_hit = 0;
+/* sig_atomic_t: the one integer type the C standard guarantees a signal
+ * handler may write while the main flow reads it. */
+static volatile sig_atomic_t g_timeout_hit = 0;
 
 static void timeout_handler(int sig) {
     (void)sig;
@@ -2044,6 +2046,24 @@ typedef struct {
         }                                                                     \
         (_results)[(_idx)].name         = (_name);                            \
         (_results)[(_idx)].t_value      = (_expr);                            \
+        /* --timeout fail-closed rule: if the alarm has fired by the time    \
+         * this lane's measurement returns, the lane was truncated mid-loop  \
+         * or never looped at all.  Its t-statistic is then computed from    \
+         * partial or zero samples — an unmeasured lane reads t = 0.0,       \
+         * which the verdict machinery counts as CLEAN.  Before this guard,  \
+         * `--measurements 10000000 --timeout 2` printed "Overall: PASS"     \
+         * with exit 0 over dozens of lanes that measured nothing.  A        \
+         * truncated measurement is not evidence, so it is recorded as a     \
+         * harness fault (conclusive on one sighting), never a verdict.      \
+         * Lanes that completed before the alarm keep their genuine t.  */   \
+        if (g_timeout_hit) {                                                  \
+            fprintf(stderr,                                                   \
+                    "  TIMEOUT: lane '%s' truncated or unmeasured after "     \
+                    "--timeout expired; recording a harness fault, not a "    \
+                    "verdict\n",                                              \
+                    (_name));                                                 \
+            (_results)[(_idx)].t_value = DUDECT_FATAL_SENTINEL;               \
+        }                                                                     \
         (_results)[(_idx)].is_info_only = (_info_only);                       \
         (_idx)++;                                                             \
     } while (0)
@@ -2055,6 +2075,59 @@ typedef struct {
  * negative on the sentinel comparison. */
 static int is_fatal_result(double t) {
     return t >= DUDECT_FATAL_SENTINEL - 1.0;
+}
+
+/* Pins the --timeout fail-closed rule at the macro level, in both
+ * directions: a lane whose measurement window overlaps a fired alarm is
+ * recorded as a harness fault, and a lane that completed before the alarm
+ * keeps its genuine t.  Driven synthetically, because a real alarm cannot
+ * be scheduled deterministically between two specific lanes — the same
+ * reason dudect_rounds_self_test() drives the verdict rule with synthetic
+ * evidence.  Before the rule existed, `--measurements 10000000 --timeout 2`
+ * printed "Overall: PASS" with exit 0 over dozens of lanes that measured
+ * nothing (their truncated t computed as 0.0, which the verdict machinery
+ * counts as CLEAN). */
+static int timeout_truncation_self_test(void) {
+    int ok = 1;
+    test_result_t results[2];
+    int idx = 0;
+
+    printf("\ntimeout truncation self-check\n\n");
+
+    g_timeout_hit = 0;
+    DUDECT_REGISTER_LANE(results, idx, "completed-before-alarm", 0.5, 0);
+    int kept = !is_fatal_result(results[0].t_value) && results[0].t_value == 0.5;
+    printf("  %-58s %s\n", "lane completed before the alarm keeps its t", kept ? "ok" : "MISMATCH");
+    ok &= kept;
+
+    g_timeout_hit = 1;
+    DUDECT_REGISTER_LANE(results, idx, "truncated-by-alarm", 0.5, 0);
+    int marked = is_fatal_result(results[1].t_value);
+    printf("  %-58s %s\n", "lane measured after the alarm becomes a harness fault",
+           marked ? "ok" : "MISMATCH");
+    ok &= marked;
+    g_timeout_hit = 0;
+
+    /* Through the verdict machinery end to end: one truncated lane must
+     * fail the run, exactly as any other harness fault does. */
+    dudect_rounds_t r;
+    dudect_rounds_init(&r, DUDECT_T_THRESHOLD);
+    dudect_lane_result_t lanes[2];
+    for (int i = 0; i < 2; i++) {
+        lanes[i].name         = results[i].name;
+        lanes[i].is_info_only = results[i].is_info_only;
+        lanes[i].is_fatal     = is_fatal_result(results[i].t_value);
+        lanes[i].t_value      = lanes[i].is_fatal ? 0.0 : results[i].t_value;
+    }
+    dudect_rounds_add(&r, lanes, 2);
+    int fails = !dudect_rounds_passed(&r);
+    printf("  %-58s %s\n", "a truncated lane fails the run through the verdict rule",
+           fails ? "ok" : "MISMATCH");
+    ok &= fails;
+
+    printf("\n%s\n", ok ? "timeout truncation self-check: PASS"
+                        : "timeout truncation self-check: FAIL");
+    return ok ? 0 : 1;
 }
 
 static int run_all_tests(int iterations, test_result_t *results, int *num_results) {
@@ -2258,8 +2331,13 @@ int main(int argc, char *argv[]) {
     int timeout_sec = 0;
 
     for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--self-test") == 0)
-            return dudect_rounds_self_test();
+        if (strcmp(argv[i], "--self-test") == 0) {
+            /* Both suites always run, so one failing cannot hide the
+             * other's report; either failing fails the binary. */
+            int verdict_rc    = dudect_rounds_self_test();
+            int truncation_rc = timeout_truncation_self_test();
+            return (verdict_rc != 0 || truncation_rc != 0) ? 1 : 0;
+        }
     }
 
     /* Parse arguments */
@@ -2290,7 +2368,10 @@ int main(int argc, char *argv[]) {
     printf("Threshold:   |t| < %.1f (99.999%% confidence)\n", DUDECT_T_THRESHOLD);
     printf("Measurements: %d per test, up to %d rounds\n", g_measurements, MAX_ROUNDS);
     if (timeout_sec > 0) {
-        printf("Timeout:     %d seconds per round\n", timeout_sec);
+        /* alarm() is armed once, before the round loop — the budget covers
+         * the whole run, not each round.  The banner used to say "per
+         * round", which described an arming scheme this file never had. */
+        printf("Timeout:     %d seconds (whole run)\n", timeout_sec);
     }
 
     test_result_t results[DUDECT_MAX_LANES];
@@ -2302,7 +2383,12 @@ int main(int argc, char *argv[]) {
 
     for (int round = 1; round <= MAX_ROUNDS; round++) {
         printf("\n=== Round %d/%d ===\n", round, MAX_ROUNDS);
-        g_timeout_hit = 0;
+        /* No per-round g_timeout_hit reset here: alarm() is armed once for
+         * the whole run and the loop below breaks the moment it fires, so
+         * the flag can only be 0 at this point.  The old reset implied a
+         * per-round re-arming scheme this file never had — and clearing the
+         * flag without re-arming the alarm is exactly what let post-timeout
+         * rounds run unbounded while their truncated lanes read as clean. */
 
         run_all_tests(g_measurements, results, &num_results);
         for (int i = 0; i < num_results; i++) {
@@ -2314,6 +2400,22 @@ int main(int argc, char *argv[]) {
             round_lanes[i].t_value      = round_lanes[i].is_fatal ? 0.0 : results[i].t_value;
         }
         dudect_rounds_add(&rounds, round_lanes, num_results);
+
+        /* Once the alarm has fired the run's verdict is already decided:
+         * every lane measured after expiry is a harness fault, and a fault
+         * is conclusive on one sighting.  Stop here rather than resetting
+         * the flag for another round — alarm() fired once and will not
+         * re-arm, so further rounds would run with no time bound at all,
+         * measuring toward a verdict the fault has already fixed at FAIL. */
+        if (g_timeout_hit) {
+            printf("\nTIMEOUT: the --timeout %d s budget expired during round %d. "
+                   "Lanes measured after expiry are recorded as harness faults and "
+                   "the run FAILS - a truncated measurement is not evidence of "
+                   "constant-time behaviour. Raise --timeout or lower "
+                   "--measurements so every lane completes.\n",
+                   timeout_sec, round);
+            break;
+        }
 
         /* Stop early only while nothing has tripped. Under a majority rule a
          * clean round settles nothing once a lane has already tripped: at 1/2
