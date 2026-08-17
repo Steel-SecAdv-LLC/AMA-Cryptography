@@ -150,8 +150,7 @@ EXEMPTIONS: tuple[Exemption, ...] = (
         # loose: the file name AND `warning:` AND the specific diagnostic text
         # must all still appear on the line.
         pattern=re.compile(
-            r"fe(51|64)\.h.*warning:.*ISO C does not support "
-            rf"{_QUOTE}__int128{_QUOTE} types"
+            r"fe(51|64)\.h.*warning:.*ISO C does not support " rf"{_QUOTE}__int128{_QUOTE} types"
         ),
         reason=(
             "-Wpedantic under GCC.  The 128-bit limbs are what the X25519 / "
@@ -162,9 +161,7 @@ EXEMPTIONS: tuple[Exemption, ...] = (
     Exemption(
         name="overlength-asm-literal",
         # Same interleaving tolerance as int128-extension above.
-        pattern=re.compile(
-            r"ama_nistp_mont_mulx\.c.*warning:.*string literal of length"
-        ),
+        pattern=re.compile(r"ama_nistp_mont_mulx\.c.*warning:.*string literal of length"),
         reason=(
             "-Woverlength-strings under clang.  One atomic asm() block; "
             "splitting the Montgomery kernel would forfeit the register-state "
