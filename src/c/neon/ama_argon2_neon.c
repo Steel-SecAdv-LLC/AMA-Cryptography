@@ -44,6 +44,7 @@
 
 #if defined(__aarch64__) || defined(_M_ARM64)
 #include <arm_neon.h>
+#include "ama_neon_internal.h"
 
 static const uint64_t BLAKE2B_IV[8] = {
     0x6a09e667f3bcc908ULL, 0xbb67ae8584caa73bULL,

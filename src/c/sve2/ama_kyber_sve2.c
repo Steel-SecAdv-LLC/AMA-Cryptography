@@ -61,6 +61,7 @@
 
 #if defined(__ARM_FEATURE_SVE2)
 #include <arm_sve.h>
+#include "ama_sve2_internal.h"
 
 #define KYBER_Q  3329
 #define KYBER_N  256

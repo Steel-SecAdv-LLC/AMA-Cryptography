@@ -26,6 +26,7 @@
 
 #if defined(__aarch64__) || defined(_M_ARM64)
 #include <arm_neon.h>
+#include "ama_neon_internal.h"
 
 /* SHA-256 round constants */
 static const uint32_t K256[64] = {

@@ -19,6 +19,7 @@
 
 #if defined(__aarch64__) || defined(_M_ARM64)
 #include <arm_neon.h>
+#include "ama_neon_internal.h"
 
 /* Keccak-f[1600] round constants */
 static const uint64_t RC[24] = {

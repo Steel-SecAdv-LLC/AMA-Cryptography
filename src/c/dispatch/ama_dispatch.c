@@ -325,69 +325,29 @@ extern void ama_keccak_f1600_x4_avx512(uint64_t states[4][25]);
 #endif
 
 #ifdef AMA_HAVE_NEON_IMPL
-extern void ama_keccak_f1600_neon(uint64_t state[25]);
-extern ama_error_t ama_sha3_256_neon(const uint8_t *input, size_t input_len,
-                                      uint8_t output[32]);
-extern void ama_kyber_ntt_neon(int16_t poly[256], const int16_t zetas[128]);
-extern void ama_kyber_invntt_neon(int16_t poly[256], const int16_t zetas[128]);
-extern void ama_kyber_poly_pointwise_neon(int16_t r[256],
-                                           const int16_t a[256],
-                                           const int16_t b[256],
-                                           const int16_t zetas[128]);
-extern void ama_dilithium_ntt_neon(int32_t poly[256],
-                                    const int32_t zetas[256]);
-extern void ama_dilithium_invntt_neon(int32_t poly[256],
-                                       const int32_t zetas[256]);
-extern void ama_dilithium_poly_pointwise_neon(int32_t r[256],
-                                               const int32_t a[256],
-                                               const int32_t b[256]);
-/* NEON AES-GCM, ChaCha20, Argon2 kernels (wired by this PR — 2026-05).
- * Each is gated at install-time on the ARM Crypto Extensions probe
- * `ama_has_arm_aes()` (AES + PMULL) for AES-GCM and unconditionally
- * for ChaCha20 / Argon2 (which only need baseline NEON, mandatory on
- * AArch64).  All four kernels scrub round-key / GHASH-key / mask
- * material on every return path — INVARIANT-12. */
-extern void ama_aes256_gcm_encrypt_neon(const uint8_t *plaintext, size_t plaintext_len,
-                                         const uint8_t *aad, size_t aad_len,
-                                         const uint8_t key[32], const uint8_t nonce[12],
-                                         uint8_t *ciphertext, uint8_t tag[16]);
-extern ama_error_t ama_aes256_gcm_decrypt_neon(const uint8_t *ciphertext, size_t ciphertext_len,
-                                                const uint8_t *aad, size_t aad_len,
-                                                const uint8_t key[32], const uint8_t nonce[12],
-                                                const uint8_t tag[16], uint8_t *plaintext);
-extern void ama_chacha20_block_x8_neon(const uint8_t key[32],
-                                        const uint8_t nonce[12],
-                                        uint32_t counter,
-                                        uint8_t out[512]);
-extern void ama_argon2_g_neon(uint64_t out[128],
-                               const uint64_t x[128],
-                               const uint64_t y[128]);
+/* Prototypes for the NEON kernels this dispatcher installs.
+ *
+ * These were transcribed by hand here, a second time in src/c/ama_sha256.c,
+ * and a third time in tests/c/test_sha256_neon_kat.c, while the definitions
+ * in src/c/neon/ carried no declaration at all (which is what
+ * -Wmissing-prototypes reports, and what the strict-warnings gate makes
+ * fatal — on the one architecture it builds, where these files are empty).
+ * The signatures are raw buffer pointers whose addresses land in a function-
+ * pointer table: drift between a transcription and the definition is not a
+ * diagnostic, it is undefined behaviour at the indirect call.  One header,
+ * included by the definitions and by every consumer, removes that class.
+ *
+ * The NEON AES-GCM kernel is gated at install time on the ARM Crypto
+ * Extensions probe `ama_has_arm_aes()` (AES + PMULL); ChaCha20 and Argon2
+ * need only baseline NEON, which is mandatory on AArch64.  All of them scrub
+ * round-key / GHASH-key / mask material on every return path (INVARIANT-12). */
+#include "../neon/ama_neon_internal.h"
 #endif
 
 #ifdef AMA_HAVE_SVE2_IMPL
-extern void ama_keccak_f1600_sve2(uint64_t state[25]);
-extern ama_error_t ama_sha3_256_sve2(const uint8_t *input, size_t input_len,
-                                     uint8_t output[32]);
-extern void ama_kyber_ntt_sve2(int16_t poly[256], const int16_t zetas[128]);
-extern void ama_kyber_invntt_sve2(int16_t poly[256], const int16_t zetas[128]);
-extern void ama_kyber_poly_pointwise_sve2(int16_t r[256],
-                                           const int16_t a[256],
-                                           const int16_t b[256],
-                                           const int16_t zetas[128]);
-extern void ama_kyber_poly_add_sve2(int16_t r[256],
-                                     const int16_t a[256],
-                                     const int16_t b[256]);
-extern void ama_kyber_poly_sub_sve2(int16_t r[256],
-                                     const int16_t a[256],
-                                     const int16_t b[256]);
-extern void ama_kyber_poly_reduce_sve2(int16_t poly[256]);
-extern void ama_dilithium_ntt_sve2(int32_t poly[256],
-                                    const int32_t zetas[256]);
-extern void ama_dilithium_invntt_sve2(int32_t poly[256],
-                                       const int32_t zetas[256]);
-extern void ama_dilithium_poly_pointwise_sve2(int32_t r[256],
-                                               const int32_t a[256],
-                                               const int32_t b[256]);
+/* Same single-source-of-truth treatment as the NEON block above; see
+ * src/c/sve2/ama_sve2_internal.h for why the header carries two guards. */
+#include "../sve2/ama_sve2_internal.h"
 #endif
 
 

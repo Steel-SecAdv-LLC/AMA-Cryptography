@@ -18,6 +18,7 @@
 
 #if defined(__aarch64__) || defined(_M_ARM64)
 #include <arm_neon.h>
+#include "ama_neon_internal.h"
 
 #define DILITHIUM_Q     8380417
 #define DILITHIUM_N     256

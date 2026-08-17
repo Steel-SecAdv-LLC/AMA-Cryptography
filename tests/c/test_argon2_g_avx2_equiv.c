@@ -59,6 +59,12 @@ extern void ama_argon2_g_avx2(uint64_t out[128],
 /*  mutating the reference side of the test (INVARIANT-1).             */
 /* -------------------------------------------------------------------- */
 
+/* Guarded by the same predicate as the only call sites below.  Defining
+ * these unconditionally left them unused on every non-x86-64 target — the
+ * -Wunused-function class `-Werror=unused-function` makes fatal in the
+ * strict-warnings gate, unreported until that gate covered AArch64. */
+#if defined(AMA_HAVE_AVX2_IMPL) && (defined(__x86_64__) || defined(_M_X64))
+
 static uint64_t ref_rotr64(uint64_t x, unsigned int n) {
     return (x >> n) | (x << (64 - n));
 }
@@ -134,6 +140,8 @@ static void argon2_g_ref(uint64_t out[QWORDS_IN_BLOCK],
         out[i] = R[i] ^ Z[i];
     }
 }
+
+#endif /* AMA_HAVE_AVX2_IMPL && x86-64 */
 
 #if defined(AMA_HAVE_AVX2_IMPL) && (defined(__x86_64__) || defined(_M_X64))
 static uint64_t prng_state;

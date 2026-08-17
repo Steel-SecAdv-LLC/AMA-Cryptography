@@ -22,6 +22,7 @@
 
 #if defined(__aarch64__) || defined(_M_ARM64)
 #include <arm_neon.h>
+#include "ama_neon_internal.h"
 
 #define KYBER_Q       3329
 #define KYBER_N       256

@@ -17,6 +17,7 @@
 
 #if defined(__aarch64__) || defined(_M_ARM64)
 #include <arm_neon.h>
+#include "ama_neon_internal.h"
 
 #define CHACHA_C0 0x61707865
 #define CHACHA_C1 0x3320646e

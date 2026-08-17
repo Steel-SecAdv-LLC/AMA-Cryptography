@@ -28,6 +28,7 @@
 
 #if defined(__ARM_FEATURE_SVE2)
 #include <arm_sve.h>
+#include "ama_sve2_internal.h"
 
 static const uint64_t RC[24] = {
     0x0000000000000001ULL, 0x0000000000008082ULL,

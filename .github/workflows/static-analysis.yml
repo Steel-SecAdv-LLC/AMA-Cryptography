@@ -202,7 +202,9 @@ jobs:
   compiler-warnings:
     name: Strict Compiler Warnings
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # Two full builds per compiler now (unoptimized and Release+LTO), so the
+    # 10-minute budget that covered one no longer fits.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -272,7 +274,20 @@ jobs:
       # The "Enforce the frozen warning allowlist" step below fails this job
       # if ANY other warning appears outside src/c/vendor/, so the clean
       # state is now a gate, not a snapshot.
-      - name: Build with strict warnings
+      #
+      # TWO configurations are built, because one of them could not see an
+      # entire class of diagnostic.  The original step passed no
+      # CMAKE_BUILD_TYPE at all, so it compiled at -O0 — and
+      # -Wmaybe-uninitialized, -Wstringop-truncation, -Wstringop-overflow,
+      # -Wrestrict and everything _FORTIFY_SOURCE derives are computed from
+      # dataflow the optimizer builds and are simply not emitted there.
+      # Measured when this second lane was added: the same tree that produced
+      # ZERO warnings at -O0 produced seven -Wstringop-truncation in
+      # benchmarks/benchmark_c_raw.c at Release, and one
+      # "'pk_k' may be used uninitialized" with LTO on — the configuration
+      # `make c` and the release wheels actually use.  A gate whose green
+      # describes a configuration nobody ships is a snapshot again.
+      - name: Build with strict warnings (unoptimized)
         shell: bash
         # pipefail is load-bearing: without it the pipeline's status is
         # tee's (always 0) and a compile error could not fail this step —
@@ -280,12 +295,13 @@ jobs:
         env:
           # GCC quotes identifiers in diagnostics with U+2018/U+2019 when the
           # locale is UTF-8 (which GitHub runners set: LANG=C.UTF-8) and with
-          # ASCII apostrophes otherwise.  The allowlist below matches on that
-          # text, so the text must not depend on the runner's locale.  Pinning
+          # ASCII apostrophes otherwise.  The allowlist matches on that text,
+          # so the text must not depend on the runner's locale.  Pinning
           # LC_ALL here makes the diagnostics byte-reproducible between a
-          # developer's shell and CI; the allowlist patterns are *also*
-          # quote-agnostic so a future locale change cannot silently break the
-          # gate the way it did at 94e4bd6.
+          # developer's shell and CI; the allowlist patterns in
+          # tools/check_compiler_warnings.py are *also* quote-agnostic so a
+          # future locale change cannot silently break the gate the way it did
+          # at 94e4bd6.
           LC_ALL: C
         run: |
           set -o pipefail
@@ -299,48 +315,124 @@ jobs:
             -DAMA_ENABLE_LTO=OFF
           cmake --build build-strict -j$(nproc) 2>&1 | tee build-warnings.log
 
+      - name: Build with strict warnings (Release + LTO, the shipped configuration)
+        shell: bash
+        env:
+          LC_ALL: C
+        run: |
+          set -o pipefail
+          # AMA_ENABLE_NATIVE_ARCH stays OFF explicitly: -march=native would
+          # make the diagnostic set depend on whichever runner SKU picked up
+          # the job, which is the opposite of a frozen allowlist.
+          cmake -B build-strict-release \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=${{ matrix.compiler }} \
+            -DCMAKE_C_FLAGS="-Wall -Wextra -Wpedantic -Wshadow -Wformat=2 -Wconversion -Wno-sign-conversion \
+                             -Werror=missing-prototypes -Werror=shadow -Werror=unused-function" \
+            -DAMA_USE_NATIVE_PQC=ON \
+            -DAMA_BUILD_TESTS=ON \
+            -DAMA_BUILD_EXAMPLES=OFF \
+            -DAMA_ENABLE_NATIVE_ARCH=OFF \
+            -DAMA_ENABLE_LTO=ON
+          cmake --build build-strict-release -j$(nproc) 2>&1 | tee build-warnings-release.log
+
       - name: Enforce the frozen warning allowlist
-        # The allowlist is exactly the two documented extension classes in the
-        # comment above, plus src/c/vendor/** (INVARIANT-1 keeps vendored
-        # sources byte-for-byte unmodified). Anything else — any file, any
-        # category, either compiler — fails the job with the offending lines
-        # printed. Tightening (a class driven to zero) means deleting its
-        # pattern here; loosening requires editing this list in review.
+        # The allowlist itself now lives in tools/check_compiler_warnings.py
+        # rather than in a chain of `grep -v` here, for one reason: it has to
+        # be applied to more than one log.  Three build configurations across
+        # two jobs (unoptimized, Release+LTO, and the AArch64 cross-build
+        # below) each need the identical decision, and three transcriptions of
+        # an allowlist is how a gate ends up enforcing three different things.
+        # The script is covered by tests/test_compiler_warning_gate.py, which
+        # pins that it fails on a real out-of-allowlist warning and that a
+        # missing or empty log is fatal rather than vacuously clean.
         shell: bash
         run: |
-          # Fail closed when the log is absent or empty: grep exits 2 with "No
-          # such file or directory", which `|| true` would flatten into the
-          # same empty result as "no warnings found", and the step would print
-          # OK having examined nothing.  A gate that passes when its input
-          # vanished is the shape this job exists to remove.
-          if [ ! -s build-warnings.log ]; then
-            echo "::error::build-warnings.log is missing or empty — the build step did not"
-            echo "::error::produce a log, so no warning was examined. Refusing to pass."
-            exit 1
-          fi
-          # `.{1,3}` spans either spelling of GCC's quotes around an
-          # identifier: one ASCII apostrophe under LC_ALL=C (set on the build
-          # step) or the three UTF-8 bytes of U+2018/U+2019 under a UTF-8
-          # locale.  A literal ASCII apostrophe made this gate fail on every
-          # GitHub-hosted run — LANG=C.UTF-8 there — reporting the exact class
-          # it is written to allow, and a bracket class would not have fixed it
-          # either: a C-locale grep splits a multibyte quote into single bytes.
-          # The file, the warning text and the type name still have to match,
-          # so no other pedantic diagnostic in these headers is swallowed.
-          unexpected=$(grep "warning:" build-warnings.log \
-            | grep -v "/src/c/vendor/" \
-            | grep -Ev "fe(51|64)\.h:[0-9:]+ *warning: ISO C does not support .{1,3}__int128.{1,3} types" \
-            | grep -Ev "ama_nistp_mont_mulx\.c:[0-9:]+ *warning: string literal of length" \
-            || true)
-          if [ -n "${unexpected}" ]; then
-            echo "::error::Compiler warnings outside the frozen allowlist:"
-            echo "${unexpected}"
-            exit 1
-          fi
-          echo "OK: no warnings outside src/c/vendor/ beyond the two documented extension classes."
+          python3 tools/check_compiler_warnings.py \
+            build-warnings.log build-warnings-release.log
 
       - name: Run tests
         run: cd build-strict && ctest --output-on-failure
+
+  compiler-warnings-aarch64:
+    name: Strict Compiler Warnings (AArch64 cross, NEON + SVE2)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # The x86-64 job above cannot see src/c/neon/** or src/c/sve2/** at all:
+    # on x86 both collapse to a placeholder typedef in their `#else` branch.
+    # When this job was first run against the branch it reported 36
+    # -Wmissing-prototypes — a class the strict flag set makes FATAL — because
+    # every NEON and SVE2 kernel was defined with no visible declaration while
+    # src/c/dispatch/ama_dispatch.c, src/c/ama_sha256.c and
+    # tests/c/test_sha256_neon_kat.c each re-transcribed the signatures by
+    # hand.  Those are raw buffer signatures whose addresses land in a
+    # function-pointer table, so drift between a transcription and its
+    # definition is undefined behaviour at the indirect call, not a compile
+    # error.  Fixed at source by src/c/neon/ama_neon_internal.h and
+    # src/c/sve2/ama_sve2_internal.h; this job is what keeps it fixed.
+    #
+    # SVE2 is built in the same job because AMA_ENABLE_SVE2 defaults OFF, so
+    # those eleven kernels are doubly invisible: wrong architecture AND off by
+    # default.  No tests are run here — correctness on AArch64 is
+    # arm-qemu.yml's job; this one is about the diagnostics.
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Install AArch64 cross toolchain
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build \
+            gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev-arm64-cross
+
+      - name: Build with strict warnings (AArch64, NEON)
+        shell: bash
+        env:
+          LC_ALL: C
+        run: |
+          set -o pipefail
+          cmake -S . -B build-strict-arm -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/aarch64-linux-gnu.cmake \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_FLAGS="-Wall -Wextra -Wpedantic -Wshadow -Wformat=2 -Wconversion -Wno-sign-conversion \
+                             -Werror=missing-prototypes -Werror=shadow -Werror=unused-function" \
+            -DAMA_USE_NATIVE_PQC=ON \
+            -DAMA_AES_CONSTTIME=ON \
+            -DAMA_BUILD_TESTS=ON \
+            -DAMA_BUILD_EXAMPLES=OFF \
+            -DAMA_BUILD_FUZZ=OFF \
+            -DAMA_ENABLE_NATIVE_ARCH=OFF \
+            -DAMA_ENABLE_LTO=OFF
+          cmake --build build-strict-arm -j$(nproc) 2>&1 | tee build-warnings-arm.log
+
+      - name: Build with strict warnings (AArch64, SVE2 kernels enabled)
+        shell: bash
+        env:
+          LC_ALL: C
+        run: |
+          set -o pipefail
+          cmake -S . -B build-strict-arm-sve2 -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/aarch64-linux-gnu.cmake \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_FLAGS="-Wall -Wextra -Wpedantic -Wshadow -Wformat=2 -Wconversion -Wno-sign-conversion \
+                             -Werror=missing-prototypes -Werror=shadow -Werror=unused-function" \
+            -DAMA_USE_NATIVE_PQC=ON \
+            -DAMA_AES_CONSTTIME=ON \
+            -DAMA_ENABLE_SVE2=ON \
+            -DAMA_BUILD_TESTS=ON \
+            -DAMA_BUILD_EXAMPLES=OFF \
+            -DAMA_BUILD_FUZZ=OFF \
+            -DAMA_ENABLE_NATIVE_ARCH=OFF \
+            -DAMA_ENABLE_LTO=OFF
+          cmake --build build-strict-arm-sve2 -j$(nproc) 2>&1 | tee build-warnings-arm-sve2.log
+
+      - name: Enforce the frozen warning allowlist
+        shell: bash
+        run: |
+          python3 tools/check_compiler_warnings.py \
+            build-warnings-arm.log build-warnings-arm-sve2.log
 
   version-consistency:
     # Enforces audit 5a: every file that declares the library version must
@@ -1108,6 +1200,7 @@ jobs:
       - clang-analyzer
       - codeql
       - compiler-warnings
+      - compiler-warnings-aarch64
       - version-consistency
       - address-sanitizer
       - memory-sanitizer
@@ -1120,7 +1213,7 @@ jobs:
     timeout-minutes: 3
     steps:
       - name: Fail unless every job reached the state this trigger requires
-        # A gate that demanded `success` from all twelve jobs would be red on
+        # A gate that demanded `success` from all thirteen jobs would be red on
         # every pull request, because memory-sanitizer / thread-sanitizer /
         # valgrind-memcheck are schedule/dispatch-only and skip on PRs by
         # design, and clang-tidy / reproducible-build skip on a non-PR push. A
@@ -1145,6 +1238,7 @@ jobs:
           R_CLANG_ANALYZER: ${{ needs.clang-analyzer.result }}
           R_CODEQL: ${{ needs.codeql.result }}
           R_WARNINGS: ${{ needs.compiler-warnings.result }}
+          R_WARNINGS_ARM: ${{ needs.compiler-warnings-aarch64.result }}
           R_VERSION: ${{ needs.version-consistency.result }}
           R_ASAN: ${{ needs.address-sanitizer.result }}
           R_MSAN: ${{ needs.memory-sanitizer.result }}
@@ -1193,6 +1287,7 @@ jobs:
           check clang-analyzer       "${R_CLANG_ANALYZER}" success
           check codeql               "${R_CODEQL}"         success
           check compiler-warnings    "${R_WARNINGS}"       success
+          check compiler-warnings-aarch64 "${R_WARNINGS_ARM}" success
           check version-consistency  "${R_VERSION}"        success
           check address-sanitizer    "${R_ASAN}"           success
           check memory-sanitizer-kat "${R_MSAN_KAT}"       success

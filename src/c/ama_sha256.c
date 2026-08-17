@@ -44,7 +44,12 @@ extern int ama_has_arm_sha2(void);
 extern void ama_sha256_compress_x86_shani(uint32_t state[8], const uint8_t block[64]);
 #define AMA_SHA256_HAVE_X86_SHANI 1
 #elif (defined(__aarch64__) || defined(_M_ARM64)) && defined(AMA_HAVE_NEON_IMPL)
-extern void ama_sha256_compress_neon(uint32_t state[8], const uint8_t block[64]);
+/* Declared by the NEON kernels' own internal header rather than re-typed
+ * here.  This file, src/c/dispatch/ama_dispatch.c and
+ * tests/c/test_sha256_neon_kat.c each carried an independent transcription
+ * of this signature while the definition in src/c/neon/ama_sphincs_neon.c
+ * had no declaration at all. */
+#include "neon/ama_neon_internal.h"
 #define AMA_SHA256_HAVE_ARM_SHA2 1
 #endif
 

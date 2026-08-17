@@ -22,6 +22,7 @@
 
 #if defined(__ARM_FEATURE_SVE2)
 #include <arm_sve.h>
+#include "ama_sve2_internal.h"
 
 #define DILITHIUM_Q     8380417
 #define DILITHIUM_N     256

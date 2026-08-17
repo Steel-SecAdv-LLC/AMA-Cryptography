@@ -94,6 +94,12 @@ static int passed = 0;
 /* Deterministic PRNG (splitmix-ish).  Gives reproducible random
  * inputs from a single seed so the exact failure case can be
  * replayed.  Not cryptographic. */
+/* Guarded by the same predicate as the only call sites below.  Defining
+ * these unconditionally left them unused on every non-x86-64 target — the
+ * -Wunused-function class `-Werror=unused-function` makes fatal in the
+ * strict-warnings gate, unreported until that gate covered AArch64. */
+#if defined(AMA_HAVE_AVX2_IMPL) && (defined(__x86_64__) || defined(_M_X64))
+
 static uint64_t prng_state;
 static uint64_t prng_next(void) {
     uint64_t z = (prng_state += 0x9E3779B97F4A7C15ULL);
@@ -104,6 +110,8 @@ static uint64_t prng_next(void) {
 static void prng_fill(uint8_t *buf, size_t n) {
     for (size_t i = 0; i < n; i++) buf[i] = (uint8_t)(prng_next() >> 24);
 }
+
+#endif /* AMA_HAVE_AVX2_IMPL && x86-64 */
 
 /* Compare dispatched encrypt against AES-NI reference for one tuple.
  * Returns 1 on byte-identical match, 0 on mismatch (and increments

@@ -83,19 +83,19 @@ Measured as non-empty-allowed `wc -l` over source files in each scope.
 | Scope | Files | Lines |
 |-------|------:|------:|
 | Library Python (`ama_cryptography/*.py`) | 28 | 35,799 |
-| Native C (`src/c/**/*.c`, `include/**/*.h`) | 105 | 51,592 |
-| Library total (Python + C + headers) | 133 | **87,391** |
+| Native C (`src/c/**/*.c`, `include/**/*.h`) | 107 | 51,859 |
+| Library total (Python + C + headers) | 135 | **87,658** |
 | Top-level Python (monitors, benchmarks, demos) | 2 | 1,030 |
-| Tests (`tests/**/*.py`) | 163 | 66,420 |
+| Tests (`tests/**/*.py`) | 164 | 66,633 |
 | Cython (`*.pyx`, `*.pxd`) | 7 | 1,873 |
-| **Whole project** (source + docs + config) | 588 | **322,416** |
+| **Whole project** (source + docs + config) | 592 | **323,492** |
 
 **Library total (the figure that most closely tracks "library size"):
-87,391 lines** across 133 files under `ama_cryptography/`, `src/c/`,
+87,658 lines** across 135 files under `ama_cryptography/`, `src/c/`,
 and `include/`. This supersedes any "11,246 LoC" claim that may have
 appeared externally.
 
-**Whole-project total** (`322,416` lines across Python, C, headers,
+**Whole-project total** (`323,492` lines across Python, C, headers,
 Cython, Markdown, YAML/TOML/JSON config, CMake and Makefiles) is the
 broader figure some external claims may have been referencing. Reproduce
 it with:
@@ -154,12 +154,12 @@ the whole-project figure overstates hand-written code.
 
 | Scope                                | Lines    | % of whole | Paths                                                   |
 |--------------------------------------|---------:|-----------:|---------------------------------------------------------|
-| Library (Python + C + headers) | 87,391 | 27.1% | `ama_cryptography/` + `src/c/` + `include/` |
-| Tests | 66,420 | 20.6% | `tests/**/*.py` |
+| Library (Python + C + headers) | 87,658 | 27.1% | `ama_cryptography/` + `src/c/` + `include/` |
+| Tests | 66,633 | 20.6% | `tests/**/*.py` |
 | Top-level Python | 1,030 | 0.3% | `*.py` at repo root |
 | Cython | 1,873 | 0.6% | `*.pyx` + `*.pxd` |
-| Everything else (remainder) | 165,702 | 51.4% | `*.md`, `*.yml`, `*.toml`, `*.json`, CMake, Makefile, plus `.c`/`.h`/`.py` outside the scopes above (`tests/c/`, `fuzz/`, `tools/`, `benchmarks/`, `examples/`) |
-| **Whole-project total** | **322,416** | **100%** | sum of the scopes above |
+| Everything else (remainder) | 166,298 | 51.4% | `*.md`, `*.yml`, `*.toml`, `*.json`, CMake, Makefile, plus `.c`/`.h`/`.py` outside the scopes above (`tests/c/`, `fuzz/`, `tools/`, `benchmarks/`, `examples/`) |
+| **Whole-project total** | **323,492** | **100%** | sum of the scopes above |
 
 Test code (20.6%) is roughly 0.8x the size of the library (27.1%) — i.e. the test-to-library ratio is roughly **0.76**, and that
 counts only `tests/**/*.py`; the C test suite under `tests/c/` lands
@@ -213,8 +213,8 @@ git ls-files -z | tr '\0' '\n' \
 
 | Scope | Count |
 |-------|------:|
-| Python test files under `tests/` matching the static regex | 160 |
-| Syntactic `def test_` matches under `tests/**/*.py` | **3,820** |
+| Python test files under `tests/` matching the static regex | 161 |
+| Syntactic `def test_` matches under `tests/**/*.py` | **3,833** |
 | `test_*.c` files under `tests/c/` (ctest-registered) | 59 |
 | `bench_*.c` files under `tests/c/` (standalone, not in ctest) | 1 |
 | `fuzz_*.c` sources under `fuzz/` | 16 |
@@ -242,7 +242,7 @@ pytest --collect-only -q | tail -1
 Stderr is intentionally left unsuppressed so collection/import errors
 remain visible during reproduction.
 
-The static count (3,820) and the dynamic collection count will differ.
+The static count (3,833) and the dynamic collection count will differ.
 Any external claim ("N tests") must state which count it is reporting.
 This supersedes the earlier "866+ tests collected across 39 files" figure
 in ARCHITECTURE.md and any "2,068 tests" figure that may have circulated

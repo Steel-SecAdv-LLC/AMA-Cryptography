@@ -18,10 +18,7 @@
 
 #if defined(__aarch64__) || defined(_M_ARM64)
 #include <arm_neon.h>
-
-typedef struct {
-    uint64_t v[5];
-} fe51_neon;
+#include "ama_neon_internal.h"
 
 static const uint64_t TWO_P_NEON[5] = {
     0xFFFFFFFFFFFDA, 0xFFFFFFFFFFFFE, 0xFFFFFFFFFFFFE,

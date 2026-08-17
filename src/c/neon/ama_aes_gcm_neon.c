@@ -17,6 +17,7 @@
 
 #if defined(__aarch64__) || defined(_M_ARM64)
 #include <arm_neon.h>
+#include "ama_neon_internal.h"
 
 #if defined(__ARM_FEATURE_AES)
 

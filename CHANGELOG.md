@@ -75,6 +75,83 @@ this one resolves what the measurements those lanes produced then showed.
 Every item below started as a measured negative result or an explicitly
 recorded gap, and none is closed by documentation alone.
 
+#### Warning gate completeness pass (2026-08-17) — the frozen allowlist now covers the configurations that ship
+
+The "Strict Compiler Warnings" job asserts a property of the repository: *no
+compiler warning outside `src/c/vendor/` beyond two documented extension
+classes.* It was asserting a property of **one build of one architecture**,
+and the two classes of diagnostic it could not reach both had live instances
+in this branch.
+
+- **The gate compiled at `-O0`.** It passed no `CMAKE_BUILD_TYPE`, so
+  `-Wmaybe-uninitialized`, `-Wstringop-truncation`, `-Wstringop-overflow`,
+  `-Wrestrict` and everything `_FORTIFY_SOURCE` derives — all computed from
+  dataflow the optimizer builds — were never emitted. Measured on this tree:
+  the same sources produced **0** warnings at `-O0`, **7**
+  `-Wstringop-truncation` at `Release`, and a
+  `'pk_k' may be used uninitialized` at `Release` with LTO on, which is the
+  configuration `make c` and the release wheels use.
+- **The gate ran on x86-64 only.** `src/c/neon/**` and `src/c/sve2/**`
+  collapse to a placeholder typedef there. Cross-compiled to AArch64 the same
+  flag set reported **36 `-Wmissing-prototypes`** — a class the job makes
+  *fatal* with `-Werror=missing-prototypes` — plus 7 `-Wunused-function`,
+  1 `-Wunused-const-variable`, 1 `-Wunused-parameter`, an empty translation
+  unit and a function-pointer-to-object-pointer cast. A job that is `-Werror`
+  on a class the build carries 36 instances of is not enforcing that class.
+
+Everything the widened gate then reported is fixed at source; nothing is
+suppressed and no allowlist entry was added.
+
+- **The NEON and SVE2 kernels have prototypes.** `src/c/neon/ama_neon_internal.h`
+  and `src/c/sve2/ama_sve2_internal.h` are the counterparts of the AVX2
+  header that already existed for exactly this reason. This is not only a
+  lint fix: the signatures were being re-transcribed by hand in
+  `src/c/dispatch/ama_dispatch.c`, `src/c/ama_sha256.c` and
+  `tests/c/test_sha256_neon_kat.c` while the definitions carried none, and
+  they are raw buffer signatures whose addresses are stored into a
+  function-pointer table — drift between a transcription and its definition
+  is undefined behaviour at the indirect call, not a compile error. One
+  declaration, included by the definition and by every consumer, retires the
+  class. The `fe51_neon` limb type moves to the header with the four field
+  primitives that name it.
+- **The raw-C benchmark harness is fail-closed.** Every one of its 93 calls
+  into the library discarded the `ama_error_t` it returned. Two consequences,
+  both of which reach published numbers — `README.md` and
+  `wiki/Performance-Benchmarks.md` quote `build/bin/benchmark_c_raw --json`,
+  and `tools/generate_visuals.py` anchors a chart panel on it. A failed setup
+  call left the buffer it was asked to fill *indeterminate* and the harness
+  read it anyway (which is what the `pk_k` diagnostic was reporting: an
+  `ama_x25519_keypair` whose failure would have been benchmarked over
+  uninitialised stack). And a primitive that fails immediately is timed as if
+  it were fast, so the failure mode of a broken build was an *inflated*
+  ops/sec rather than an error. `BENCH_REQUIRE` / `BENCH_CHECK` end the run at
+  the first failure with the call, the code and the source location; inside
+  the timed loops the check is evaluated after the closing `now_ns()`, so it
+  is outside every measurement window. Verified by mutation: one call given a
+  NULL input exits 1 with `ama_hkdf returned -1`, where the pre-change harness
+  reported a throughput figure.
+- **The harness's five rotating static label caches are retired.**
+  `bench_result_t.name` is an in-struct array, so the `static char
+  labels[N][64]` rings indexed modulo N (three different depths, each correct
+  only while its own call count stayed below N) and the
+  `strncpy(dst, src, 63)` idiom behind the seven truncation warnings are both
+  gone. Iteration tiers become enum constants carrying `_Static_assert`s
+  against `MAX_SAMPLES`, and row insertion is bounds-checked against
+  `MAX_RESULTS`; both arrays were previously indexed with nothing checking
+  them. Verified: 58 rows, 58 distinct labels, byte-valid JSON.
+- **The allowlist moved into `tools/check_compiler_warnings.py`.** Three build
+  configurations across two jobs need the identical decision, and three
+  transcriptions of an allowlist is how a gate ends up enforcing three
+  different things. `tests/test_compiler_warning_gate.py` (17 cases) pins both
+  directions: each exemption admits its own class in *both* of GCC's quote
+  spellings, the real out-of-allowlist lines from this tree's own builds fail,
+  a missing or empty log is fatal rather than vacuously clean, and every
+  `build-warnings*.log` the workflow writes is passed to the gate.
+- **New job `Strict Compiler Warnings (AArch64 cross, NEON + SVE2)`**, wired
+  into the aggregating `Static Analysis Gate`. It builds NEON and SVE2 (which
+  defaults OFF, so those eleven kernels were doubly invisible) and checks the
+  logs; correctness on AArch64 remains `arm-qemu.yml`'s job.
+
 #### Post-review hardening pass (2026-08-17)
 
 A fourth independent review over the completed branch — ten subsystem
