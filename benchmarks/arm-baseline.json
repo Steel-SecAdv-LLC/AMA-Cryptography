@@ -387,6 +387,10 @@
       {
         "path": "src/c/neon/ama_aes_gcm_neon.c",
         "reason": "Same encrypt-path partial-block scrub plus a header-comment correction with no code change (a4cbf55); aarch64 floors carry the same sub-noise caveat."
+      },
+      {
+        "path": "src/c/ama_aes_gcm.c",
+        "reason": "Masked return-code selection replaces the ternary in ama_aes256_gcm_decrypt's tail (b8fffe3): two arithmetic instructions once per call on the post-scrub return path, outside every per-block loop. Sub-noise for the floored AES-GCM throughput medians; the aead-verify instruction-invariance gate pins the change's shape, and the benchmark-regression job on this PR exercises the floors."
       }
     ]
   },
