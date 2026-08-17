@@ -373,6 +373,85 @@ parser plays no part in producing it. The static-link, non-first-slice,
 underscore-prefix, big-endian, truncated-`LC_SYMTAB` and out-of-bounds-slice
 cases each have a test that fails without the corresponding fix.
 
+#### dudect statistic and lane construction (2026-08-17) — the constant-time gate could not see an obvious leak
+
+The `dudect - Legacy Harnesses` job failed on `2460adb` with
+`ama_consttime_memcmp` at |t| = 11.08 in 2 of 3 rounds. It is a false
+positive, and chasing it found something considerably worse underneath.
+
+**The function cannot leak.** Disassembly of the exact binary CI builds shows
+two branches, both on `len` and the loop counter — no data-dependent branch
+or access. The repository's own deterministic gate agrees:
+`check_ghash_constant_time.py --target consttime` measures **37,112,833
+retired instructions for all eight data classes — a cross-class delta of 0,
+with a 0-instruction noise floor** against a threshold of 200.
+
+**The statistic was the problem, in both directions.** Every harness in the
+tree computed one Welch t over raw wall-clock samples with no post-processing.
+`DUDECT_NUMBER_PERCENTILES` sat defined-and-unused in `tests/c/dudect/dudect.h`:
+upstream dudect's cropping knob had been carried over, the code that reads it
+had not. Timing distributions have a heavy right tail — preemption, migration,
+frequency changes — that inflates the pooled variance and buries a systematic
+shift in the bulk. Measured against a textbook early-exit `memcmp` at the
+50,000 iterations this job runs, 12 repetitions per condition, on idle and
+contended cores:
+
+| statistic | detects the leak | fires on constant-time code |
+|---|---|---|
+| raw Welch t (as shipped) | **19 / 48** | 0 / 48 |
+| percentile-cropped | **48 / 48** | 0 / 48 |
+
+A constant-time gate that misses a blatant leak in 60% of runs is close to no
+gate at all. `tests/c/dudect/dudect_percentile.h` implements the cropping the
+dudect paper specifies (§3.3), with two properties that are not optional:
+
+* the **uncropped rung is retained**, because cropping is blind by
+  construction to a leak that lives only in the tail — a rejection-sampling
+  loop that occasionally runs an extra iteration. The reported value is the
+  signed t of largest magnitude over the uncropped rung and every cropped
+  one, so it cannot be less sensitive than what the harnesses reported before;
+* a rung is **skipped** unless both classes retain at least 128 samples. This
+  is the precondition the 267c16c cropping revert recorded and did not
+  implement: cropping had left rungs holding a handful of samples whose
+  variance collapsed toward zero, and `(m0 - m1) / se` with a vanishing `se`
+  produced enormous statistics from nothing.
+
+**Turning the sensitivity up exposed that three lanes had been measuring the
+harness.** `memcmp`, `secure_memzero` and `consttime_lookup` prepared their
+two classes with `if (class_idx) {...} else {...}`, doing different work
+immediately before the timed region — an extra `rand()` and an extra store to
+a line the loop then reads, two different `memset` call sites, two different
+index computations. The classes entered the measured window in different
+machine states, so the difference measured was the harness's, not the
+function's. This is the same defect `dudect_crypto.c` already carries a note
+about for its Ascon and SHA3-256 lanes, in the in-timer form; nobody had
+looked for the out-of-timer form, and the raw statistic could not see it.
+Controlled A/B, same function, same statistic, only the preparation differing:
+
+| lane | branchy preparation (as shipped) | branchless |
+|---|---|---|
+| `ama_consttime_memcmp` | mean t = **+9.93**, over threshold 15/15 | **−0.02**, 0/15 |
+| `ama_secure_memzero` | mean t = **+43.38**, 10/10 | **+1.26**, 0/10 |
+| `ama_consttime_lookup` | mean t = **−8.68**, 9/10 | **−0.85**, 0/10 |
+
+The two lanes that already prepared their classes branchlessly — `swap` and
+`copy` — passed throughout. All five now do, and the fix is the repository's
+own established pattern rather than a new one.
+
+**Verified in both directions.** With the cropped statistic and branchless
+lanes, all five utility lanes and all nine crypto lanes pass, five runs each,
+idle and contended, worst |t| = 2.76. Built against a deliberately
+early-exiting `memcmp`, the same harness reports **|t| = 225–232** and exits
+1 — where the statistic it replaced reported at most 26 and failed to notice
+at all in 29 of 48 attempts. `--self-test` gained 12 synthetic cases covering
+the null, a bulk shift under a heavy tail, a tail-only difference (which the
+uncropped rung must catch), the degenerate-crop failure mode from 267c16c,
+and three fail-closed paths; an unmeasured lane now aborts the run rather
+than reporting t = 0.0, which reads as CLEAN.
+
+The primary harness (`tests/c/test_dudect.c`, 27 lanes) still computes the
+uncropped statistic and is the next application of this work.
+
 #### Warning gate completeness pass (2026-08-17) — the frozen allowlist now covers the configurations that ship
 
 The "Strict Compiler Warnings" job asserts a property of the repository: *no

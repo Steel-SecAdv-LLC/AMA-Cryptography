@@ -34,6 +34,7 @@
 #include <time.h>
 
 #include "ama_cryptography.h"
+#include "dudect_percentile.h"
 #include "dudect_rounds.h"
 
 #define DEFAULT_ITERATIONS 100000
@@ -47,32 +48,56 @@ static inline uint64_t get_time_ns(void) {
     return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
 }
 
-/* Online Welch's t-test */
-typedef struct {
-    double n[2];
-    double mean[2];
-    double m2[2];
-} ttest_ctx_t;
+/* Welch's t-test with dudect percentile cropping.
+ *
+ * Was a streaming mean/variance pair feeding one Welch t over every raw
+ * sample — a statistic dominated by the timing distribution's right tail
+ * (preemption, migration, frequency changes), which buries a systematic
+ * shift in the bulk.  Measured against a textbook early-exit memcmp at the
+ * 50,000 iterations these harnesses run in CI, over 48 repetitions on idle
+ * and contended cores, it detected the leak 19 times; the cropped statistic
+ * detected it 48 times, and neither fired on constant-time code.
+ *
+ * Construction, the retained uncropped rung (tail-only leaks), and the
+ * minimum-samples guard (the 267c16c revert) are in
+ * tests/c/dudect/dudect_percentile.h. */
+typedef dudect_cropped_ctx_t ttest_ctx_t;
 
-static void ttest_init(ttest_ctx_t *ctx) {
-    memset(ctx, 0, sizeof(*ctx));
+static void ttest_init(ttest_ctx_t *ctx, size_t capacity) {
+    if (!dudect_cropped_init(ctx, capacity)) {
+        fprintf(stderr,
+                "FATAL: could not allocate %zu samples for a timing lane. "
+                "A harness that cannot measure must not report a verdict.\n",
+                capacity);
+        exit(EXIT_FAILURE);
+    }
 }
 
 static void ttest_update(ttest_ctx_t *ctx, int class_idx, double value) {
-    ctx->n[class_idx]++;
-    double delta = value - ctx->mean[class_idx];
-    ctx->mean[class_idx] += delta / ctx->n[class_idx];
-    double delta2 = value - ctx->mean[class_idx];
-    ctx->m2[class_idx] += delta * delta2;
+    dudect_cropped_update(ctx, class_idx, value);
 }
 
-static double ttest_compute(ttest_ctx_t *ctx) {
-    if (ctx->n[0] < 2 || ctx->n[1] < 2) return 0.0;
-    double var0 = ctx->m2[0] / (ctx->n[0] - 1);
-    double var1 = ctx->m2[1] / (ctx->n[1] - 1);
-    double se = sqrt(var0 / ctx->n[0] + var1 / ctx->n[1]);
-    if (se < 1e-10) return 0.0;
-    return (ctx->mean[0] - ctx->mean[1]) / se;
+/* Compute, report which rung carried the statistic, release.  A lane that
+ * produced no usable measurement aborts rather than returning a number:
+ * t = 0.0 for an unmeasured lane reads as CLEAN, and reporting it as a leak
+ * would be a false diagnosis. */
+static double ttest_finish(ttest_ctx_t *ctx, const char *name) {
+    double t = dudect_cropped_compute(ctx);
+    int rung = ctx->winning_rung;
+    size_t kept0 = ctx->winning_kept[0], kept1 = ctx->winning_kept[1];
+    size_t total0 = ctx->n[0], total1 = ctx->n[1];
+    dudect_cropped_free(ctx);
+
+    if (t == DUDECT_CROP_FAILED) {
+        fprintf(stderr,
+                "FATAL: lane '%s' produced no usable measurement. "
+                "Refusing to report a verdict.\n",
+                name);
+        exit(EXIT_FAILURE);
+    }
+    printf("    statistic from rung %d (kept %zu/%zu and %zu/%zu)\n", rung, kept0, total0, kept1,
+           total1);
+    return t;
 }
 
 static void random_bytes(uint8_t *buf, size_t len) {
@@ -88,7 +113,7 @@ static void random_bytes(uint8_t *buf, size_t len) {
  * ------------------------------------------------------------------- */
 static double test_ed25519_sign(int iterations) {
     ttest_ctx_t ctx;
-    ttest_init(&ctx);
+    ttest_init(&ctx, (size_t)iterations);
 
     uint8_t pk0[32], sk0[64], pk1[32], sk1[64];
     uint8_t sig[64];
@@ -116,7 +141,7 @@ static double test_ed25519_sign(int iterations) {
         ttest_update(&ctx, class_idx, (double)(end - start));
     }
 
-    return ttest_compute(&ctx);
+    return ttest_finish(&ctx, "test_ed25519_sign");
 }
 
 /* -------------------------------------------------------------------
@@ -127,7 +152,7 @@ static double test_ed25519_sign(int iterations) {
  * ------------------------------------------------------------------- */
 static double test_aes_gcm_encrypt(int iterations) {
     ttest_ctx_t ctx;
-    ttest_init(&ctx);
+    ttest_init(&ctx, (size_t)iterations);
 
     uint8_t key0[32], key1[32];
     memset(key0, 0x00, 32);
@@ -151,7 +176,7 @@ static double test_aes_gcm_encrypt(int iterations) {
         ttest_update(&ctx, class_idx, (double)(end - start));
     }
 
-    return ttest_compute(&ctx);
+    return ttest_finish(&ctx, "test_aes_gcm_encrypt");
 }
 
 /* -------------------------------------------------------------------
@@ -206,7 +231,7 @@ static double test_aes_gcm_encrypt(int iterations) {
  * ------------------------------------------------------------------- */
 static double test_aes_gcm_tag_compare(int iterations) {
     ttest_ctx_t ctx;
-    ttest_init(&ctx);
+    ttest_init(&ctx, (size_t)iterations);
 
     uint8_t reference_tag[16];
     uint8_t probe[16];            /* ONE reused probe, fixed address */
@@ -241,7 +266,7 @@ static double test_aes_gcm_tag_compare(int iterations) {
     }
 
     (void)sink;
-    return ttest_compute(&ctx);
+    return ttest_finish(&ctx, "test_aes_gcm_tag_compare");
 }
 
 /* -------------------------------------------------------------------
@@ -267,7 +292,7 @@ static double test_aes_gcm_tag_compare(int iterations) {
  * ------------------------------------------------------------------- */
 static double test_aes_gcm_decrypt_branch(int iterations) {
     ttest_ctx_t ctx;
-    ttest_init(&ctx);
+    ttest_init(&ctx, (size_t)iterations);
 
     uint8_t key[32], nonce[12];
     uint8_t pt[64], ct[64], tag[16], bad_tag[16];
@@ -296,7 +321,7 @@ static double test_aes_gcm_decrypt_branch(int iterations) {
         ttest_update(&ctx, class_idx, (double)(end - start));
     }
 
-    return ttest_compute(&ctx);
+    return ttest_finish(&ctx, "test_aes_gcm_decrypt_branch");
 }
 
 /* -------------------------------------------------------------------
@@ -307,7 +332,7 @@ static double test_aes_gcm_decrypt_branch(int iterations) {
  * ------------------------------------------------------------------- */
 static double test_hkdf(int iterations) {
     ttest_ctx_t ctx;
-    ttest_init(&ctx);
+    ttest_init(&ctx, (size_t)iterations);
 
     uint8_t ikm0[32], ikm1[32];
     memset(ikm0, 0x00, 32);
@@ -332,7 +357,7 @@ static double test_hkdf(int iterations) {
         ttest_update(&ctx, class_idx, (double)(end - start));
     }
 
-    return ttest_compute(&ctx);
+    return ttest_finish(&ctx, "test_hkdf");
 }
 
 /* -------------------------------------------------------------------
@@ -364,7 +389,7 @@ static double test_hkdf(int iterations) {
  * ------------------------------------------------------------------- */
 static double test_sha3_256(int iterations) {
     ttest_ctx_t ctx;
-    ttest_init(&ctx);
+    ttest_init(&ctx, (size_t)iterations);
 
     uint8_t input0[136], input1[136];  /* One full SHA3-256 rate block */
     memset(input0, 0x00, 136);
@@ -385,7 +410,7 @@ static double test_sha3_256(int iterations) {
         ttest_update(&ctx, class_idx, (double)(end - start));
     }
 
-    return ttest_compute(&ctx);
+    return ttest_finish(&ctx, "test_sha3_256");
 }
 
 /* -------------------------------------------------------------------
@@ -401,7 +426,7 @@ static double test_sha3_256(int iterations) {
 
 static double test_ascon_aead_encrypt(int iterations) {
     ttest_ctx_t ctx;
-    ttest_init(&ctx);
+    ttest_init(&ctx, (size_t)iterations);
 
     /* Fixed-vs-fixed key, identical everything else — the same idiom every
      * other keyed lane in this file uses (AES-GCM: key0 zeros / key1 0xFF;
@@ -444,12 +469,12 @@ static double test_ascon_aead_encrypt(int iterations) {
         ttest_update(&ctx, class_idx, (double)(end - start));
     }
 
-    return ttest_compute(&ctx);
+    return ttest_finish(&ctx, "test_ascon_aead_encrypt");
 }
 
 static double test_ascon_tag_compare(int iterations) {
     ttest_ctx_t ctx;
-    ttest_init(&ctx);
+    ttest_init(&ctx, (size_t)iterations);
 
     /* The side-channel-bearing measurement: does the time to REJECT a forged
      * tag depend on how much of the tag was correct?  Class 0 flips the first
@@ -482,12 +507,12 @@ static double test_ascon_tag_compare(int iterations) {
         ttest_update(&ctx, class_idx, (double)(end - start));
     }
 
-    return ttest_compute(&ctx);
+    return ttest_finish(&ctx, "test_ascon_tag_compare");
 }
 
 static double test_ascon_hash256(int iterations) {
     ttest_ctx_t ctx;
-    ttest_init(&ctx);
+    ttest_init(&ctx, (size_t)iterations);
 
     uint8_t input0[64], input1[64];  /* Eight full Ascon-Hash256 rate blocks */
     uint8_t digest[32];
@@ -507,7 +532,7 @@ static double test_ascon_hash256(int iterations) {
         ttest_update(&ctx, class_idx, (double)(end - start));
     }
 
-    return ttest_compute(&ctx);
+    return ttest_finish(&ctx, "test_ascon_hash256");
 }
 
 /* -------------------------------------------------------------------
@@ -586,7 +611,14 @@ int main(int argc, char *argv[]) {
      * instead — see tests/c/dudect/dudect_rounds.h. */
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--self-test") == 0)
-            return dudect_rounds_self_test();
+            /* Both halves of the verdict machinery — the rounds rule and
+             * the statistic — driven synthetically, since a measurement pass
+             * cannot reach either.  Neither result hides the other. */
+            {
+                int rounds_rc = dudect_rounds_self_test();
+                int crop_rc = dudect_cropped_self_test();
+                return (rounds_rc != 0 || crop_rc != 0) ? 1 : 0;
+            }
     }
 
     if (argc > 1) {
