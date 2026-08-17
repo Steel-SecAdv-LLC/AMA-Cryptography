@@ -375,6 +375,18 @@
       {
         "path": "src/c/internal/ama_testing_exports.h",
         "reason": "Declarations behind AMA_TESTING_MODE, which the benchmarked library is not built with."
+      },
+      {
+        "path": "src/c/avx2/ama_aes_gcm_avx2.c",
+        "reason": "Encrypt-path partial-block plaintext scrub added (a4cbf55): one barriered 16-byte ama_secure_memzero on the trailing-partial tail only, outside the block loops, mirroring the scrub the decrypt twin already carried inside the measured medians. Sub-noise for the floored aes_256_gcm rates; the benchmark-regression jobs on this PR are the check that exercises it."
+      },
+      {
+        "path": "src/c/avx2/ama_aes_gcm_vaes_avx2.c",
+        "reason": "Same encrypt-path partial-block scrub (a4cbf55); same status."
+      },
+      {
+        "path": "src/c/neon/ama_aes_gcm_neon.c",
+        "reason": "Same encrypt-path partial-block scrub plus a header-comment correction with no code change (a4cbf55); aarch64 floors carry the same sub-noise caveat."
       }
     ]
   },

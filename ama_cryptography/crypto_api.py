@@ -2233,10 +2233,16 @@ class CryptoPackageConfig:
     When ``None`` (default), a fresh keypair is generated per call.
     """
 
-    _normalized_signing_memo: Optional[Tuple[Optional[Tuple[bytes, bytes]], bytes]] = field(
+    _normalized_signing_memo: Optional[Tuple[bytes, bytes, bytes]] = field(
         default=None, init=False, repr=False, compare=False
     )
-    """``(signing_keypair identity, normalized secret)`` memo.
+    """``(public_key identity, secret_key identity, normalized secret)`` memo.
+
+    Keyed on the identity of the two ELEMENTS, not of the container: the
+    runtime validator admits a list, whose identity survives element
+    replacement, and a container-identity memo kept returning the previous
+    key's normalization after ``signing_keypair[1] = new_sk``.  bytes are
+    immutable, so element identity implies element value.
 
     Written by ``_normalized_signing_secret`` on first use of a
     ``signing_keypair`` so the per-call Ed25519 seed expansion (and the
@@ -2551,8 +2557,10 @@ def _normalized_signing_secret(
     the cached expansion is derivable from what the object stores, so this
     creates no new key-material retention class (contrast module-level
     caches, which INVARIANT-41's continuous-RNG fix removed).  The memo is
-    keyed on the identity of ``config.signing_keypair``, so replacing the
-    tuple (e.g. after ``KeypairCache.rotate()``) re-normalizes.
+    keyed on the identity of the two bytes ELEMENTS (immutable, so
+    identity implies value), so replacing the tuple or swapping an element
+    inside an admitted list container (e.g. after ``KeypairCache.rotate()``)
+    re-normalizes.
 
     Normalization also *strengthens* validation: the Ed25519 public key
     derived from the seed must equal the supplied public-key component,
@@ -2563,9 +2571,21 @@ def _normalized_signing_secret(
     from the seed and reads the public-key half from the expanded form,
     which this function guarantees is the seed's own derived key.
     """
+    # Memo hit requires ELEMENT identity, not container identity.  The
+    # runtime validator in create_crypto_package deliberately admits a list
+    # container, and a list's identity survives element replacement — so a
+    # container-identity memo returned the OLD normalized secret after a
+    # caller swapped config.signing_keypair[1] in place, silently signing
+    # every subsequent package under the replaced key while attaching the
+    # new public key: unverifiable by construction, detected only
+    # downstream.  The elements themselves are enforced to be bytes
+    # (immutable), so element identity implies element value — two `is`
+    # checks close the hole completely, at no cost, with no behavioural
+    # change for any caller who replaces the tuple (both keyings miss) or
+    # reuses it (both hit).
     cached = config._normalized_signing_memo
-    if cached is not None and cached[0] is config.signing_keypair:
-        return cached[1]
+    if cached is not None and cached[0] is public_key and cached[1] is secret_key:
+        return cached[2]
 
     algorithm = config.signature_algorithm
     normalized = secret_key
@@ -2591,7 +2611,7 @@ def _normalized_signing_secret(
             )
         normalized = full_sk
 
-    config._normalized_signing_memo = (config.signing_keypair, normalized)
+    config._normalized_signing_memo = (public_key, secret_key, normalized)
     return normalized
 
 
@@ -2718,7 +2738,10 @@ def create_crypto_package(
             not isinstance(config.signing_keypair, (tuple, list))
             or len(config.signing_keypair) != 2
         ):
-            raise TypeError("signing_keypair must be a (bytes, bytes) tuple of length 2")
+            raise TypeError(
+                "signing_keypair must be a (public_key, secret_key) pair of two "
+                "bytes values (tuple, or the equivalent list)"
+            )
         _pk, _sk = config.signing_keypair
         if not isinstance(_pk, bytes) or not isinstance(_sk, bytes):
             raise TypeError("signing_keypair must be a tuple of (bytes, bytes)")

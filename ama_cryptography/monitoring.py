@@ -1287,6 +1287,20 @@ class ResonanceTimingMonitor:
         # observations instead of per call.
         self._score_history: Dict[str, Deque[float]] = {}
         self._calibrated_threshold: Dict[str, Tuple[int, Optional[float]]] = {}
+        # Monotone per-operation count of every score ever ingested into
+        # _score_history.  The recompute cadence must be driven by THIS and
+        # never by len(_score_history): the history is a bounded deque, so
+        # len() freezes at maxlen (~4,096) once saturated — at which point a
+        # cadence test of the form `len - cached_len < interval` is
+        # permanently true and the cached quantile threshold silently never
+        # recomputes again.  Measured on the shipped default: after
+        # saturation the cache froze while a changed timing regime pushed
+        # the live 99% quantile from 3.4 to 15.8, and the point-alarm rate
+        # ran at 10.6% against the declared, CI-gated 1% budget — for every
+        # subsequent sample, forever, in any service that records more than
+        # ~4,126 operations of one name.  len(bounded deque) is a window
+        # size, not a sample counter.
+        self._score_sample_total: Dict[str, int] = {}
         # Sustained-shift sign-CUSUM state per operation: mu0 (reference
         # median — tracking until locked), sigma0 (robust warmup scale, kept
         # for reporting), gp/gn (two-sided accumulators), locked (True once
@@ -1394,6 +1408,7 @@ class ResonanceTimingMonitor:
             # is robust to the alarm fraction itself, and excluding flagged
             # samples would create a ratchet that can only tighten.
             self._score_history[operation].append(point_verdict[2])
+            self._score_sample_total[operation] = self._score_sample_total.get(operation, 0) + 1
 
         # ------------------------------------------------------------------
         # UPDATE PHASE
@@ -1654,13 +1669,21 @@ class ResonanceTimingMonitor:
             return None
         if n < max(100, math.ceil(1.0 / alarm_budget)):
             return None
+        # Cadence runs on the monotone ingest counter, NOT on len(history):
+        # the history is a bounded deque, so len() freezes at maxlen once
+        # saturated and a len-based cadence test becomes permanently true —
+        # the cached threshold then silently never recomputes again, for the
+        # rest of the process lifetime, in exactly the long-running services
+        # this detector exists for.  n stays the QUANTILE's sample size (the
+        # window is the sample); total is WHEN to recompute.
+        total = self._score_sample_total.get(operation, n)
         cached = self._calibrated_threshold.get(operation)
-        if cached is not None and n - cached[0] < self._THRESHOLD_RECOMPUTE_INTERVAL:
+        if cached is not None and total - cached[0] < self._THRESHOLD_RECOMPUTE_INTERVAL:
             return cached[1]
         ordered = sorted(history)
         k = min(n - 1, max(0, math.ceil((1.0 - alarm_budget) * (n + 1)) - 1))
         threshold = ordered[k]
-        self._calibrated_threshold[operation] = (n, threshold)
+        self._calibrated_threshold[operation] = (total, threshold)
         return threshold
 
     def get_shift_state(self, operation: str) -> Optional[Dict[str, Any]]:

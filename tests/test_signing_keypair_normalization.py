@@ -62,9 +62,13 @@ class TestNormalizedSigning:
         create_crypto_package(CONTENT, config)
         memo = config._normalized_signing_memo
         assert memo is not None
-        assert memo[0] is config.signing_keypair
+        # Element-identity keying: the memo records the two bytes objects,
+        # not the container (a list container's identity survives element
+        # replacement, which is exactly the staleness the keying closes).
+        assert memo[0] is config.signing_keypair[0]
+        assert memo[1] is config.signing_keypair[1]
         # The normalized secret embeds the 64-byte expanded Ed25519 key.
-        assert len(memo[1]) == (
+        assert len(memo[2]) == (
             HybridSignatureProvider.ED25519_FULL_SK_SIZE + HybridSignatureProvider.DILITHIUM_SK_SIZE
         )
         create_crypto_package(CONTENT, config)
@@ -94,6 +98,50 @@ class TestNormalizedSigning:
         stored = package.keypairs[AlgorithmType.HYBRID_SIG.name]
         assert stored.secret_key == sk
         assert stored.public_key == pk
+
+
+class TestListContainerElementSwap:
+    """The runtime validator admits a list container; the memo must survive it.
+
+    ``create_crypto_package`` accepts ``isinstance(config.signing_keypair,
+    (tuple, list))``, and a list's identity survives element replacement.  A
+    container-identity memo therefore returned the PREVIOUS key's
+    normalization after ``signing_keypair[1] = new_sk`` — every subsequent
+    package was signed under the replaced key while carrying the new public
+    key, unverifiable by construction and detected only downstream.  The
+    memo is keyed on element identity now (bytes are immutable, so identity
+    implies value); this drives the exact scenario end to end.
+    """
+
+    def test_swapping_elements_in_an_admitted_list_renormalizes(
+        self, hybrid_identity: tuple[bytes, bytes]
+    ) -> None:
+        from typing import Tuple, cast
+
+        pk, sk = hybrid_identity
+        keypair = [pk, sk]
+        # The annotation says Tuple; the runtime validator deliberately also
+        # admits the list form, which is the whole point of this test.
+        config = CryptoPackageConfig(signing_keypair=cast("Tuple[bytes, bytes]", keypair))
+        first = create_crypto_package(CONTENT, config)
+        assert verify_crypto_package(CONTENT, first, expected_public_key=pk)["all_valid"]
+        first_memo = config._normalized_signing_memo
+        assert first_memo is not None
+
+        pk2, sk2 = KeypairCache().get_or_generate()
+        keypair[0] = pk2
+        keypair[1] = sk2
+        assert config.signing_keypair is cast("Tuple[bytes, bytes]", keypair)
+
+        second = create_crypto_package(CONTENT, config)
+        assert config._normalized_signing_memo is not first_memo, (
+            "element replacement inside the admitted list container must "
+            "invalidate the memo — a container-identity memo silently signs "
+            "with the replaced key"
+        )
+        assert verify_crypto_package(CONTENT, second, expected_public_key=pk2)[
+            "all_valid"
+        ], "package signed after the swap must verify under the NEW public key"
 
 
 class TestMismatchRejection:

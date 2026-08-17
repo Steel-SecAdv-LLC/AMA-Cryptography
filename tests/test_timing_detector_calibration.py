@@ -101,6 +101,45 @@ class TestCalibration:
         threshold = monitor._calibrated_score_threshold("op", 0.01)
         assert threshold is not None and threshold > 0.0
 
+    def test_calibration_survives_score_history_saturation(self) -> None:
+        """The recompute cadence must outlive the bounded score history.
+
+        _score_history is a deque(maxlen=4096).  The recompute test used to
+        be `len(history) - cached_len < 32` — and len() freezes at maxlen
+        once the deque saturates, so after ~4,126 recorded operations of one
+        name the cached quantile threshold silently never recomputed again
+        for the life of the process.  Measured on the shipped default: a
+        post-saturation regime change left the cache frozen at 3.4 while the
+        live 99% quantile was 15.8, and the point-alarm rate ran at 10.6%
+        against the declared 1% budget — permanently.  The cadence now runs
+        on a monotone ingest counter; this drives a monitor well past
+        saturation, changes the regime, and requires the calibrated
+        threshold to follow.  Fails against the len()-cadence form.
+        """
+        monitor = ResonanceTimingMonitor()
+        rng = random.Random(11)  # noqa: S311 -- test stream, not key material (TDC-001)
+        maxlen = monitor._SCORE_HISTORY_LEN
+        interval = monitor._THRESHOLD_RECOMPUTE_INTERVAL
+
+        # Saturate the history and settle the cache in the low regime.
+        for _ in range(maxlen + 4 * interval):
+            monitor.record_timing("op", rng.lognormvariate(-3.9, 0.22))
+        low_threshold = monitor._calibrated_score_threshold("op", 0.01)
+        assert low_threshold is not None
+        assert len(monitor._score_history["op"]) == maxlen, "history must be saturated"
+
+        # New regime: two orders of magnitude slower.  Enough samples to
+        # cross several recompute intervals and dominate the window tail.
+        for _ in range(maxlen // 2):
+            monitor.record_timing("op", rng.lognormvariate(0.7, 0.22))
+        high_threshold = monitor._calibrated_score_threshold("op", 0.01)
+        assert high_threshold is not None
+        assert high_threshold > low_threshold * 2, (
+            f"calibrated threshold froze across deque saturation: "
+            f"low={low_threshold} high={high_threshold} — the recompute "
+            f"cadence is reading the bounded window's len() again"
+        )
+
     def test_uncalibrated_severity_is_capped_at_warning(self) -> None:
         """Criticality claims a measured tail; before calibration a gross
         outlier alarms at 'warning' only."""
