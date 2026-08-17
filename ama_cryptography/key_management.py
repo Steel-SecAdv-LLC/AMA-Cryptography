@@ -1607,6 +1607,16 @@ class HSMKeyStorage:
         ],
         "softhsm": [
             "/usr/lib/softhsm/libsofthsm2.so",
+            # Debian-style multiarch layouts install under the triplet
+            # directory instead.  The test suite's availability probe knew
+            # both spellings while this list knew only the first, so on a
+            # multiarch host the probe lifted the skip and this resolver
+            # then raised "PKCS#11 library not found" — and outside the
+            # tests, the class simply could not find a SoftHSM2 the distro
+            # had installed.  tests/test_hsm_integration.py now pins that
+            # every path the probe accepts is one this list can resolve.
+            "/usr/lib/x86_64-linux-gnu/softhsm/libsofthsm2.so",
+            "/usr/lib/aarch64-linux-gnu/softhsm/libsofthsm2.so",
             "/usr/local/lib/softhsm/libsofthsm2.so",
             "/opt/homebrew/lib/softhsm/libsofthsm2.so",  # macOS ARM
             # Windows (Disig MSI, via `choco install softhsm.install`).  The

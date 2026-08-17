@@ -1085,3 +1085,30 @@ class TestSoftHSMIntegration:
             assert deleted is True
 
             assert hsm.find_key("integration-key") is None
+
+
+class TestProbeAndResolverAgree:
+    """The availability probe and HSMKeyStorage's resolver must not drift.
+
+    The probe (`_SOFTHSM_LIB_CANDIDATES` + the softhsm2-util derivation)
+    decides whether the real-token lane runs; `HSMKeyStorage.PKCS11_PATHS`
+    decides whether the class can then actually load the module.  They are
+    two lists that must agree, and they had already drifted: the probe knew
+    the Debian multiarch spellings while the resolver did not, so on a
+    multiarch host the skip lifted and construction raised "PKCS#11 library
+    not found" — an availability claim the consumer could not honour, the
+    exact shape of the semgrep probe and SONAME-pin findings this release
+    closed elsewhere.
+    """
+
+    def test_every_probe_candidate_is_resolvable_by_the_class(self) -> None:
+        from ama_cryptography.key_management import HSMKeyStorage
+
+        resolver_paths = set(HSMKeyStorage.PKCS11_PATHS["softhsm"])
+        missing = [c for c in _SOFTHSM_LIB_CANDIDATES if c not in resolver_paths]
+        assert missing == [], (
+            "the availability probe accepts SoftHSM2 module paths that "
+            f"HSMKeyStorage cannot resolve: {missing}. Add them to "
+            "PKCS11_PATHS['softhsm'] so a lifted skip cannot land on a "
+            "resolver error."
+        )
