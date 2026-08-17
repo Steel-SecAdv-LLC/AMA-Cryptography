@@ -308,13 +308,32 @@ def _platform_dependencies(path: Path) -> list[str] | None:
             [otool, "-L", str(path)], capture_output=True, text=True, check=False
         )
         if result.returncode == 0:
-            # First line is the file name; each dependency line is indented
-            # and followed by "(compatibility version ...)".
-            return [
+            # First line is the file name; each remaining line is indented and
+            # carries "(compatibility version ...)".
+            listed = [
                 line.strip().split(" (", 1)[0]
                 for line in result.stdout.splitlines()[1:]
                 if line.startswith(("\t", " ")) and "(" in line
             ]
+            # ...but for a DYLIB the first of those is the image's own install
+            # name (LC_ID_DYLIB), not something it depends on.  `otool -L`
+            # does not distinguish them; `otool -D` prints exactly the install
+            # name, so subtracting it is precise rather than positional.  The
+            # gate parses LC_LOAD_DYLIB and correctly never reported the
+            # install name — this helper did, and called the gate wrong for it.
+            identity = subprocess.run(
+                [otool, "-D", str(path)], capture_output=True, text=True, check=False
+            )
+            if identity.returncode == 0:
+                own = [
+                    line.strip()
+                    for line in identity.stdout.splitlines()[1:]
+                    if line.strip() and not line.strip().endswith(":")
+                ]
+                for name in own:
+                    if name in listed:
+                        listed.remove(name)
+            return listed
 
     dumpbin = shutil.which("dumpbin")
     if dumpbin is not None:  # pragma: no cover - Windows-only path
@@ -361,7 +380,11 @@ class TestBinaryParsers:
             pytest.skip("native library not built in this tree")
         info = gate.parse_binary(built)
         if info.fmt != "ELF":
-            pytest.skip(f"built library is {info.fmt}; this cross-check is ELF-only")
+            pytest.skip(
+                f"built library is {info.fmt}; this cross-check is ELF-only "
+                "(the Mach-O symbol parsing is covered deterministically on every "
+                "runner by TestMachOParsing's constructed images, not left unchecked)"
+            )
         nm = shutil.which("nm")
         if nm is None:
             pytest.skip("nm is not installed on this runner")
@@ -385,7 +408,11 @@ class TestBinaryParsers:
             pytest.skip("native library not built in this tree")
         info = gate.parse_binary(built)
         if info.fmt != "ELF":
-            pytest.skip(f"built library is {info.fmt}; this cross-check is ELF-only")
+            pytest.skip(
+                f"built library is {info.fmt}; this cross-check is ELF-only "
+                "(the Mach-O symbol parsing is covered deterministically on every "
+                "runner by TestMachOParsing's constructed images, not left unchecked)"
+            )
         nm = shutil.which("nm")
         if nm is None:
             pytest.skip("nm is not installed on this runner")
