@@ -541,6 +541,26 @@ jobs:
           python tools/check_ghash_constant_time.py \
             --lib build/lib/libama_cryptography_test.a --target consttime
 
+      - name: Ascon-Hash256 instruction count must not depend on the input
+        # Same deterministic counterpart, for the same reason and with a
+        # sharper case behind it.  The wall-clock lane reported |t| = 19.0 in
+        # 5 of 5 rounds, consistently signed, on a shared runner — while the
+        # SAME binary is a null elsewhere (t = +2.16 / -1.57 / -1.18 at
+        # 50,000 / 200,000 / 800,000 iterations: no sqrt(n) growth, sign
+        # flipping).  The lane's construction is already symmetric, so the
+        # disagreement was between two machines rather than two harnesses.
+        #
+        # Measured here: 20,167,057 retired instructions for all eight input
+        # classes, cross-class delta 0, noise floor 0.  ama_ascon_hash256 is
+        # therefore input-independent, and the wall-clock difference belongs
+        # to the CPU's data-operand-dependent execution — what Intel's DOITM
+        # and ARM's PSTATE.DIT exist to control — not to src/c/ama_ascon.c.
+        # This gate is what a real regression in that file trips; the dudect
+        # lane stays as the wall-clock cross-check.
+        run: |
+          python tools/check_ghash_constant_time.py \
+            --lib build/lib/libama_cryptography_test.a --target ascon-hash
+
       - name: secp256k1 ECDSA instruction count must not depend on the key
         # Catches a branch on a secret in the scalar field arithmetic — the
         # Montgomery extra-reduction leak (Walter & Thompson, CT-RSA 2001).
