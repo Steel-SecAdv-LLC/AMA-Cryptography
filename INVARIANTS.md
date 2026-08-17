@@ -2213,7 +2213,39 @@ against a fake library object reporting a foreign version.
 **Measured cost.** The static gate is CI-only. The handshake is one call
 returning three compile-time constants, once per import.
 
+## INVARIANT-43 — Every Logged Literal Must Survive a cp1252 Handler
+
+`logging` fails closed and silent: when a handler cannot encode a record's
+text, the encode raises inside `Handler.emit`, `logging` routes it to
+`Handler.handleError`, prints a traceback to stderr, and **discards the
+record** — the call site is told nothing. `logging.FileHandler` opens with
+`encoding=None`, which resolves to the platform's preferred encoding —
+cp1252 on a default Windows install. The 2026-08 audit found
+`adaptive_posture` logging both the posture-triggered key rotation and the
+algorithm switch with a `→` (U+2192) between the old and new identifiers,
+so on Windows the two records stating that a signing key had changed were
+exactly the two records a file handler dropped. An audit trail that
+silently loses its key-rotation entries is worse than one never claimed:
+the absence is indistinguishable from "no rotation happened".
+
+**The rule is cp1252-encodable, not ASCII.** `—` and `§` encode in cp1252
+and appear, correctly, in over a thousand POST and diagnostic strings;
+cp1252 is precisely the line at which a record stops being written, so it
+is the line this invariant draws. Only literal text is checked —
+interpolated values are runtime data and cannot be decided statically.
+
+**Enforcement.** `tools/check_log_message_encodability.py` walks every
+module's AST for logger and `warnings.warn` emission sites — bound-name
+loggers, `self.logger`, and the inline
+`logging.getLogger(__name__).<level>(...)` idiom alike — and fails on any
+literal a cp1252 handler would refuse. It runs in ci.yml's Security Checks
+job; both directions, including the inline idiom the first version of the
+gate could not see, are pinned by
+`tests/test_log_message_encodability_gate.py`.
+
+**Measured cost.** CI-only; one AST pass over the shipped package.
+
 ---
 
 _Maintained by Steel Security Advisors LLC._
-_Last updated: 2026-08-13_
+_Last updated: 2026-08-17_

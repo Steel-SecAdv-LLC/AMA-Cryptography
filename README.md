@@ -550,7 +550,7 @@ pip install "git+https://github.com/Steel-SecAdv-LLC/AMA-Cryptography.git@v5.0.0
 
 This clones at the tag and builds the native C library and Cython extensions
 locally, so it needs a build toolchain (see *Platform-Specific Notes* below):
-a C11 compiler, `cmake >= 4.3.4`, `Cython >= 3.2.8`, and `numpy >= 1.24.0`.
+a C11 compiler, `cmake >= 4.4.0`, `Cython >= 3.2.8`, and `numpy >= 1.24.0`.
 
 To verify the tag is the one you expect before installing:
 
@@ -1214,7 +1214,7 @@ Full reproduction instructions:
 |----------|-------------|
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Contribution guidelines |
 | [CHANGELOG.md](CHANGELOG.md) | Version history |
-| [INVARIANTS.md](INVARIANTS.md) | Canonical architectural invariants (INVARIANT-1 through INVARIANT-42) and vendoring policy |
+| [INVARIANTS.md](INVARIANTS.md) | Canonical architectural invariants (INVARIANT-1 through INVARIANT-43) and vendoring policy |
 | [AMA_CRYPTOGRAPHY_ETHICAL_PILLARS.md](AMA_CRYPTOGRAPHY_ETHICAL_PILLARS.md) | Ethical pillar specification |
 
 </details>

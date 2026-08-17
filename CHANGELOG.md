@@ -49,6 +49,10 @@ unchanged but the work, the timing, or the failure mode is not.
 | 6 | Behavioural | a shipped native library whose digest does not match the signed artefact is refused **before** it is mapped (previously it loaded — running its constructors — and failed POST afterwards); an `AMA_CRYPTO_LIB_PATH` override that is byte-identical to the signed library now reports **verified** instead of unconditionally UNVERIFIED | after rebuilding the C library locally, refresh the artefact: `AMA_BUILD_PIPELINE=1 python -m ama_cryptography.integrity --update --sign` |
 | 7 | **Breaking** | the compiled binding extensions (`ed25519_binding`, `hmac_binding`, `sha3_binding`, `dilithium_binding`, `hkdf_binding`, `math_engine`) are digest-bound into the integrity signature (v3 artefact); a modified binding fails the import on every build, and missing/unsigned bindings fail it on anchored (release) builds (developer source trees log a warning) | after rebuilding the extensions locally, refresh the artefact: `AMA_BUILD_PIPELINE=1 python -m ama_cryptography.integrity --update --sign` (a `setup.py` build re-signs automatically) |
 | 8 | Behavioural | the 3R timing-anomaly detector's alarm rule is rebuilt against its measured evidence (see *Completion pass 2* below): point alarms come from a robust score against an empirically calibrated per-operation false-alarm budget instead of a post-update z-score OR'd with a fixed Gaussian MAD threshold, sustained shifts raise edge-triggered sign-CUSUM events instead of an every-50th-sample drift check, `critical` severity is reachable (it mathematically was not) but only once calibrated, and `TimingAnomaly` gains a `kind` field (`point`/`shift`/`cross_operation`). Alarm streams differ from 4.x in content and rate — by design: the old rule flagged 12.5% of clean heavy-tailed traffic | consumers filtering alarms should read the new `TimingAnomaly`/`ResonanceTimingMonitor` docs; `record_timing`'s signature and return type are unchanged |
+| 9 | Behavioural | a source tree carrying built binding extensions the signed artefact does not cover reports `fully_verified: False` with the integrity stage recorded as a SKIP under the `signed-bindings-unverified` strength, where the documented-but-unimplemented downgrade previously left `fully_verified: True` over code that had already executed unchecked; `AMA_FIPS_STRICT=1` escalates the skip to a failure | none for release wheels (their bindings are digest-bound); developer trees refresh with `AMA_BUILD_PIPELINE=1 python -m ama_cryptography.integrity --update --sign` |
+| 10 | Behavioural | POST validates `.pyc` staleness the way CPython does (PEP 552, unchecked-hash case included) and no longer hard-fails on cached bytecode the interpreter would never load; a genuinely poisoned cache for a module that WOULD load still fails | none; previously-required manual `__pycache__` clearing after re-signing is no longer needed |
+| 11 | Behavioural | squeezing a one-shot digest context after `ama_sha3_final` / `ama_sha3_512_final` returns `AMA_ERROR_INVALID_PARAM`, where it previously returned `AMA_SUCCESS` with output read from the zeroized state — all zeros, then fixed permutations of the zero state | none for conformant callers; a caller that consumed that output was consuming constants |
+| 12 | Behavioural | the responder-side handshake session ID is drawn through the health-tested CSPRNG (INVARIANT-41), so a stuck DRBG now fails the handshake instead of silently issuing a repeated, transcript-signed session ID | none |
 
 Rows 1, 3 and 7 are the ones a security reviewer should read first: all
 three are fail-closed changes that turn a silent weakness into a loud
@@ -69,6 +73,63 @@ The first completion pass closed the review threads and executed the lanes;
 this one resolves what the measurements those lanes produced then showed.
 Every item below started as a measured negative result or an explicitly
 recorded gap, and none is closed by documentation alone.
+
+#### Post-review hardening pass (2026-08-17)
+
+A fourth independent review over the completed branch — ten subsystem
+reviewers with adversarial verification, plus the first end-to-end exercise
+of the Linux wheel re-sign chain — surfaced and fixed six further defects.
+Each fix is mutation-checked (its test fails against the pre-fix code):
+
+- **dudect's `--timeout` could not fail.** `alarm()` expiry silently
+  truncated the remaining measurement loops; an unmeasured lane's Welch t
+  computes as 0.0, which the verdict machinery counts as CLEAN, so
+  `--measurements 10000000 --timeout 2` printed "Overall: PASS" (exit 0)
+  over dozens of lanes that measured nothing — and every dudect.yml lane
+  passes `--timeout`. A lane whose measurement window overlaps the fired
+  alarm is now recorded as a harness fault (conclusive on one sighting),
+  the round loop stops the moment the alarm fires, and the run FAILS: a
+  truncated measurement is not evidence.
+- **The Linux release re-sign chain had never run, and could not.**
+  `resign_wheel.py` deletes the stale artefact and launches
+  `python -m ama_cryptography._build_sign` in the unpacked wheel; runpy
+  imports the package before binding `__main__`, POST fires the anchored
+  missing-artefact refusal during that import, and the signer identity
+  check was structurally blind in exactly that window. Both Linux
+  cibuildwheel jobs failed in the first exercised dry run; macOS and
+  Windows, which do not re-sign, passed. The signer is now also
+  recognised by `sys.orig_argv` (the process's own immutable launch
+  record — the same trust boundary as the `__main__` check), and the
+  anchored branch classifies the signer's missing-artefact state as a
+  repairable stale binding: the stage still fails, the import completes
+  only for the signer, and a non-signer process — including a release
+  container smoke-testing a wheel that lost its artefact — still
+  hard-fails as tampering.
+- **The tenth bare RNG draw.** The responder handshake session ID (glance
+  row 12). The INVARIANT-41 hand sweep is retired in favour of an AST
+  gate, `tests/test_invariant41_rng_sweep.py`, that enumerates every bare
+  OS-entropy call site in the shipped package against a reasoned
+  allowlist and rejects allowlist rot.
+- **The SHA-3 fail-open half of the cross-family misuse class** (glance
+  row 11), closed with the position sentinel `SHA3_CTX_CONSUMED` — same
+  field, no ABI movement.
+- **Two gate blind spots.** The INVARIANT-43 log-encodability gate could
+  not see the inline `logging.getLogger(__name__).<level>(...)` idiom —
+  15 real emission sites including the POST-failure criticals in
+  `__init__` (coverage 166 → 181 sites, all clean); and
+  `check_docker_pins` skipped untagged `FROM ubuntu`-shaped images as
+  "stage references", so the least-pinned base a Dockerfile can name
+  bypassed the digest-pin gate. Stage references are now identified
+  structurally by their earlier `AS` declaration.
+
+Also corrected against measurement in this pass: INVARIANT-43 registered
+in `INVARIANTS.md` (it was enforced in CI but absent from the canonical
+register, with four documents still claiming the set ends at 42); the
+ctest-registered C test file count (57 → 59); the README source-install
+cmake floor (4.3.4 → 4.4.0, matching pyproject/setup.py); a merged
+change-log table row in `docs/METRICS_REPORT.md`; and glance rows 9 and
+10, which existed in the narrative but not in the table whose claim is
+"every change in one table".
 
 #### Completion pass 3 — what an independent review of the full diff found
 

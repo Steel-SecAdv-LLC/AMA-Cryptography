@@ -780,7 +780,7 @@ Fuzz harnesses are built separately via `fuzz/CMakeLists.txt` (15 targets coveri
 
 ### Architectural Invariants
 
-All PRs touching `ama_cryptography/`, `.github/workflows/`, or `tests/` must satisfy the architectural invariants defined in [`INVARIANTS.md`](INVARIANTS.md) (canonical, INVARIANT-1 through INVARIANT-42). `.github/INVARIANTS.md` is a three-line pointer to it, kept that way by the version-consistency gate so a second divergent copy cannot reappear. Highlights:
+All PRs touching `ama_cryptography/`, `.github/workflows/`, or `tests/` must satisfy the architectural invariants defined in [`INVARIANTS.md`](INVARIANTS.md) (canonical, INVARIANT-1 through INVARIANT-43). `.github/INVARIANTS.md` is a three-line pointer to it, kept that way by the version-consistency gate so a second divergent copy cannot reappear. Highlights:
 
 1. **INVARIANT-1 — Zero External Crypto Dependencies**: All cryptographic primitives are owned natively. No third-party crypto packages (`libsodium`, `pynacl`, `cryptography`, etc.). Python stdlib modules (`hashlib`, `os`, `secrets`) permitted for non-primitive operations only. All primitives must map to a non-deprecated entry in [`CSRC_STANDARDS.md`](CSRC_STANDARDS.md); vendored public-domain source compiled in-tree is permitted.
 2. **INVARIANT-2 — Fail-Closed CI**: Security-critical CI steps must not use `continue-on-error: true`.
@@ -788,7 +788,7 @@ All PRs touching `ama_cryptography/`, `.github/workflows/`, or `tests/` must sat
 4. **INVARIANT-4 — Pinned Action References**: All third-party GitHub Actions pinned to full commit SHA.
 5. **INVARIANT-15 — Thread-Safe CPU Dispatch**: `ama_cpuid.c` one-time init must use `pthread_once` (POSIX) or `InitOnceExecuteOnce` (MSVC); lockless flag + plain-variable patterns are prohibited.
 
-See [`INVARIANTS.md`](INVARIANTS.md) for the complete set (INVARIANT-1 through INVARIANT-42) and vendoring policy.
+See [`INVARIANTS.md`](INVARIANTS.md) for the complete set (INVARIANT-1 through INVARIANT-43) and vendoring policy.
 
 ---
 
@@ -837,7 +837,7 @@ docker run ama-cryptography:latest
 | Category | Purpose | Coverage Target | Files |
 |----------|---------|-----------------|-------|
 | Unit Tests | Individual function validation | 80% line coverage | Python test files under `tests/` (count enforced by `tools/check_documented_counts.py` — see the verified totals below) |
-| C Unit Tests | Native library validation | All C functions | 57 `test_*.c` registered via ctest in `tests/c/` (+ 1 standalone `bench_*.c` + 2 standalone `x25519_equiv_*.c`) |
+| C Unit Tests | Native library validation | All C functions | 59 `test_*.c` registered via ctest in `tests/c/` (+ 1 standalone `bench_*.c` + 2 standalone `x25519_equiv_*.c`) |
 | Integration Tests | Cross-component workflows | All public APIs | `test_integration_e2e.py`, `test_comprehensive_system.py` |
 | Performance Tests | Benchmark regression detection | All critical paths | `test_performance.py`, `benchmarks/` |
 | Security Tests | Cryptographic correctness | 100% crypto functions | `test_crypto_core_penetration.py`, `test_memory_security.py` |
@@ -956,7 +956,7 @@ Cryptographic implementations are validated against:
 - `docs/compliance/CSRC_ALIGN_REPORT.md`: NIST ACVP vector validation results (1,215/1,215 pass — 815 AFT + 400 SHA-3 MCT)
 - `CSRC_STANDARDS.md`: Governing standards registry
 - `IMPLEMENTATION_GUIDE.md`: Deployment and integration guide
-- `INVARIANTS.md`: Canonical architectural invariants (INVARIANT-1 through INVARIANT-42), including vendoring policy and CSRC_STANDARDS.md mapping (`.github/INVARIANTS.md` is a pointer to it)
+- `INVARIANTS.md`: Canonical architectural invariants (INVARIANT-1 through INVARIANT-43), including vendoring policy and CSRC_STANDARDS.md mapping (`.github/INVARIANTS.md` is a pointer to it)
 
 ---
 
