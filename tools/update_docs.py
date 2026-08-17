@@ -62,6 +62,7 @@ import datetime as _dt
 import json
 import re
 import subprocess
+import sys
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -640,6 +641,48 @@ def _counts_module() -> Any:
     return module
 
 
+class UnstagedAdditionsError(RuntimeError):
+    """New files exist that ``git ls-files`` cannot see yet."""
+
+
+def _unstaged_additions_that_would_count(repo: Path | None = None) -> list[str]:
+    """Untracked, non-ignored files a gated LoC row would select.
+
+    ``measure_loc_table`` enumerates with ``git ls-files``, which lists the
+    INDEX.  A file that has been written but not ``git add``-ed is therefore
+    invisible to the measurement while being very much part of the commit
+    about to be made — so running ``--loc`` before staging writes figures that
+    are correct for the index and wrong for the commit, and the gate goes red
+    on CI for a tree the author measured as green.
+
+    That is not hypothetical: it happened during this branch's own work, and
+    it is silent in both directions (the regenerator reports success, the
+    figures look plausible, and the failure surfaces one commit later
+    attributed to the wrong change).  Ignored paths — build directories,
+    virtualenvs, caches — are excluded by ``--exclude-standard``, so an
+    ordinary working tree with build output does not trip this.
+
+    ``repo`` overrides the tree inspected; it exists so the tests can drive a
+    scratch repository without relocating ROOT, which is also where the
+    predicate module is loaded from.
+    """
+    counts = _counts_module()
+    root = ROOT if repo is None else repo
+    if not (root / ".git").exists():
+        return []
+    proc = subprocess.run(
+        ["git", "-C", str(root), "ls-files", "--others", "--exclude-standard", "-z"],
+        capture_output=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        return []
+    selects = counts._LOC_TABLE_ROWS["**Whole project** (source + docs + config)"]
+    return sorted(
+        path for path in (p.decode("utf-8") for p in proc.stdout.split(b"\0") if p) if selects(path)
+    )
+
+
 def update_loc_metrics(dry_run: bool = False) -> bool:
     """Re-measure and rewrite every gated Lines-of-Code figure in
     docs/METRICS_REPORT.md from the same functions the documented-counts
@@ -649,7 +692,25 @@ def update_loc_metrics(dry_run: bool = False) -> bool:
     commit": run this after a change, review the diff, done.  A figure the
     regenerator does not know how to rewrite is a figure the gate does not
     check — keep the two lists in lockstep.
+
+    Raises:
+        UnstagedAdditionsError: when a new, non-ignored file has not been
+            staged.  Measuring around it would produce figures that describe
+            the index rather than the commit; see
+            :func:`_unstaged_additions_that_would_count`.
     """
+    pending = _unstaged_additions_that_would_count()
+    if pending:
+        shown = "\n  ".join(pending[:20])
+        more = f"\n  … and {len(pending) - 20} more" if len(pending) > 20 else ""
+        raise UnstagedAdditionsError(
+            "refusing to re-measure: these files are not staged, so "
+            "`git ls-files` cannot see them and the figures written here "
+            "would describe the index rather than the commit:\n"
+            f"  {shown}{more}\n\n"
+            "Stage them first (`git add …`), then re-run.  If a file should "
+            "never be committed, add it to .gitignore."
+        )
     counts = _counts_module()
     report = ROOT / "docs" / "METRICS_REPORT.md"
     text = report.read_text(encoding="utf-8")
@@ -778,7 +839,13 @@ def main() -> None:
 
     if args.loc:
         print("LoC metrics")
-        any_changed = update_loc_metrics(dry_run=args.dry_run)
+        try:
+            any_changed = update_loc_metrics(dry_run=args.dry_run)
+        except UnstagedAdditionsError as exc:
+            # Exit non-zero: a caller that scripted `update_docs.py --loc &&
+            # git commit` must not proceed on figures the commit invalidates.
+            print(f"   ERROR: {exc}", file=sys.stderr)
+            raise SystemExit(1) from exc
         print(
             "\n✓ Documentation updated" + (" (dry run)" if args.dry_run else "")
             if any_changed
@@ -800,7 +867,11 @@ def main() -> None:
         any_changed |= update_wiki(dry_run=args.dry_run)
 
         print("\n5. LoC metrics")
-        any_changed |= update_loc_metrics(dry_run=args.dry_run)
+        try:
+            any_changed |= update_loc_metrics(dry_run=args.dry_run)
+        except UnstagedAdditionsError as exc:
+            print(f"   ERROR: {exc}", file=sys.stderr)
+            raise SystemExit(1) from exc
 
     if any_changed:
         print("\n✓ Documentation updated" + (" (dry run)" if args.dry_run else ""))

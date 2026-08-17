@@ -75,6 +75,31 @@ this one resolves what the measurements those lanes produced then showed.
 Every item below started as a measured negative result or an explicitly
 recorded gap, and none is closed by documentation alone.
 
+#### The LoC regenerator can no longer measure around a file it is about to commit (2026-08-17)
+
+`tools/update_docs.py --loc` is the one-command fix for a red
+lines-of-code gate, and it measured with `git ls-files` — which lists the
+**index**. A file that has been written but not `git add`-ed is therefore
+invisible to the measurement while being very much part of the commit about
+to be made, so running the regenerator before staging writes figures that are
+correct for the index and wrong for the commit. The gate then goes red on CI
+one commit later, attributed to the wrong change.
+
+Silent in both directions: the regenerator printed success and the figures
+looked plausible. It happened during this branch's own work — a commit was
+prepared whose `docs/METRICS_REPORT.md` was measured before its four new
+files were staged, and the tree it created failed
+`tools/check_documented_counts.py` on its own contents.
+
+`--loc` now refuses, naming the files and the fix, and exits 1 so a scripted
+`update_docs.py --loc && git commit` cannot proceed on figures the commit
+invalidates. Ignored paths (build directories, virtualenvs, caches) are
+excluded via `--exclude-standard`, so an ordinary working tree with build
+output does not trip it. Four cases in
+`tests/test_update_docs_changelog_guard.py` pin the behaviour, including that
+this repository's own tree satisfies the guard rather than permanently
+tripping it.
+
 #### Vendor isolation made enforceable (2026-08-17) — INVARIANT-1 checked by linkage and runtime, not by comment
 
 INVARIANT-1 forbids any third-party cryptographic implementation being

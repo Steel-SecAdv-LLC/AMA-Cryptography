@@ -232,3 +232,67 @@ class TestTextIOIsPlatformIndependent:
     def test_the_changelog_has_no_crlf(self) -> None:
         """The state a text-mode write on Windows would have destroyed."""
         assert b"\r\n" not in (REPO_ROOT / "CHANGELOG.md").read_bytes()
+
+
+class TestLocRegeneratorRefusesUnstagedAdditions:
+    """``--loc`` must not write figures the commit will invalidate.
+
+    ``measure_loc_table`` enumerates with ``git ls-files``, which lists the
+    INDEX.  A file written but not ``git add``-ed is invisible to it while
+    being part of the commit about to be made, so running the regenerator
+    before staging produces numbers that are right for the index and wrong for
+    the commit — and the documented-counts gate then goes red on CI, one
+    commit later, attributed to the wrong change.  It is silent in both
+    directions without this guard: the regenerator reports success and the
+    figures look plausible.
+    """
+
+    def test_the_guard_selects_a_countable_untracked_file(self, tmp_path: Path) -> None:
+        import subprocess
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        (repo / "tracked.py").write_text("x = 1\n", encoding="utf-8")
+        subprocess.run(["git", "add", "tracked.py"], cwd=repo, check=True)
+        (repo / "brand_new.py").write_text("y = 2\n", encoding="utf-8")
+        (repo / ".gitignore").write_text("ignored/\n", encoding="utf-8")
+        subprocess.run(["git", "add", ".gitignore"], cwd=repo, check=True)
+        (repo / "ignored").mkdir()
+        (repo / "ignored" / "scratch.py").write_text("z = 3\n", encoding="utf-8")
+
+        pending = update_docs._unstaged_additions_that_would_count(repo)
+
+        assert "brand_new.py" in pending, "an untracked countable file must be reported"
+        assert "ignored/scratch.py" not in pending, "ignored paths must not trip the guard"
+        assert "tracked.py" not in pending, "staged files are visible to git ls-files"
+
+    def test_a_staged_file_does_not_trip_the_guard(self, tmp_path: Path) -> None:
+        import subprocess
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        (repo / "new.py").write_text("x = 1\n", encoding="utf-8")
+        assert update_docs._unstaged_additions_that_would_count(repo) == ["new.py"]
+
+        subprocess.run(["git", "add", "new.py"], cwd=repo, check=True)
+        assert update_docs._unstaged_additions_that_would_count(repo) == []
+
+    def test_update_loc_metrics_raises_rather_than_measuring_around_it(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            update_docs,
+            "_unstaged_additions_that_would_count",
+            lambda: ["tools/brand_new_gate.py"],
+        )
+        with pytest.raises(update_docs.UnstagedAdditionsError) as excinfo:
+            update_docs.update_loc_metrics(dry_run=True)
+        assert "tools/brand_new_gate.py" in str(excinfo.value)
+        assert "git add" in str(excinfo.value)
+
+    def test_the_real_tree_has_no_unstaged_countable_additions(self) -> None:
+        """Meta-check: this repository's own working tree is in the state the
+        regenerator requires, so the guard above is not permanently tripped."""
+        assert update_docs._unstaged_additions_that_would_count() == []
