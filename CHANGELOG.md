@@ -75,6 +75,59 @@ this one resolves what the measurements those lanes produced then showed.
 Every item below started as a measured negative result or an explicitly
 recorded gap, and none is closed by documentation alone.
 
+#### The two dudect follow-ups, closed out (2026-08-17)
+
+`267c16c` reverted the percentile-cropping experiment and left two items
+recorded as follow-ups. Both are settled here — one by implementing the part
+that was actually a defect, the other by a decision with its reasoning stated,
+rather than by carrying either forward.
+
+**The sentinel-range guard is implemented, not deferred.** The revert recorded
+"a sentinel-range guard" as a precondition for any future cropping attempt.
+It was a defect in its own right, independent of cropping:
+`is_fatal_result()` classified a t-value with `t >= DUDECT_FATAL_SENTINEL -
+1.0` — an open ray, so **every** sufficiently large statistic was reported as
+"setup failure or per-class rc mismatch", including a genuine catastrophic
+separation. That is what produced the revert's "six lanes across three jobs
+misreported as harness fault". Nothing was ever hidden — a fault is
+conclusive on one sighting and a leak fails the majority rule, so both
+outcomes fail the run — but the *diagnosis* was wrong, and a diagnosis is
+what a reviewer acts on. The band is now bounded on both sides, with a
+self-test case pinning both directions; reverting to the open ray makes
+`--self-test` exit 1.
+
+**Percentile cropping is closed as falsified, not deferred.** It was
+implemented in full with owner authorization, CI falsified it within the hour
+on two mechanisms that no single-lane local drive could reach, and it was
+reverted. The falsifying conditions are recorded and unchanged: the eligible
+design that survives them (per-lane opt-in limited to H0-identical class
+constructions) admits only lanes that already pass on raw *t*, while cropping
+discards the distribution tail where a real leak's excursions live — so the
+measured trade is a sensitivity reduction on 22 strict lanes against
+diagnostic-noise reduction on one. The lane that motivated it,
+`ama_consttime_lookup`, already has a deterministic counterpart in CI that
+cannot flake: `tools/check_ghash_constant_time.py --target consttime`, an
+instruction-count invariance check. Re-running a falsified experiment with no
+new evidence is not rigour.
+
+**PSTATE.DIT is a change to the device under test, not to the instrument.**
+Setting DIT in the dudect harness alone would make the constant-time gate
+certify behaviour under a CPU mode the shipped library does not enable — a
+weaker verification reported as green, which is the failure mode this release
+exists to remove. Making it meaningful means the *library* setting DIT around
+sensitive operations: HWCAP gating, save/restore so a caller's PSTATE is
+unchanged, and a decision about which operations qualify. That is a new
+security control, not maintenance, and it is unmeasurable from here — no
+ARMv8.4+ hardware is reachable and QEMU models no timing, so it could be
+implemented but not shown to change any lane. Recorded as an owner decision
+with that reasoning attached, rather than as an open task.
+
+Measured while closing these out (this build container, 20,000 measurements,
+`taskset -c 0`): all 26 strict lanes PASS on raw *t*; `ML-DSA-65 sign` reads
+|t| = 107.5 and is correctly classified INFO (FIPS 204 rejection sampling is
+variable-time by construction). The four deterministic instruction-count
+gates — `ghash`, `consttime`, `ecdsa`, `aead-verify` — each pass with exit 0.
+
 #### `.clang-format` could not be read by the toolchain this project pins (2026-08-17)
 
 `Language: C` is not a valid value for any clang-format before LLVM 20 —

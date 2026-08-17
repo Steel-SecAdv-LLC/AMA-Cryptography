@@ -2070,11 +2070,31 @@ typedef struct {
 
 /* Returns 1 iff the t-value is the sentinel for a fatal harness fault
  * (setup failure or per-class rc mismatch).  DUDECT_FATAL_SENTINEL is
- * defined near the top of this file.  We use a 1.0 tolerance so a
- * floating-point round-trip cannot accidentally produce a false
- * negative on the sentinel comparison. */
+ * defined near the top of this file.
+ *
+ * The comparison is a BOUNDED band, not `t >= SENTINEL - 1.0`.
+ *
+ * The lower tolerance is the original one and is kept: the sentinel is only
+ * ever assigned literally, but a 1.0 window costs nothing and removes any
+ * dependence on exact floating-point equality.  The upper bound is the
+ * missing half.  An unbounded `>=` classifies EVERY sufficiently large
+ * statistic as a harness fault, including a genuine one — so a lane whose
+ * two classes separated enormously would be reported as "setup failure
+ * or per-class rc mismatch" rather than as the leak it is.
+ *
+ * That is not theoretical.  The percentile-cropping experiment reverted at
+ * 267c16c produced exactly this: cropping at a pooled threshold left rungs
+ * with tiny per-class counts and near-zero variance, whose |t| exceeded the
+ * sentinel band, and six lanes across three jobs were misreported as harness
+ * faults.  Both outcomes fail the run — `fatal` is conclusive on one sighting
+ * and a leak fails the majority rule — so nothing was ever hidden; what was
+ * wrong was the DIAGNOSIS, and a diagnosis is what a reviewer acts on.
+ *
+ * The revert recorded "a sentinel-range guard" as a precondition any future
+ * cropping attempt must satisfy.  This is that guard, implemented now rather
+ * than left as a note for the attempt to rediscover. */
 static int is_fatal_result(double t) {
-    return t >= DUDECT_FATAL_SENTINEL - 1.0;
+    return t >= DUDECT_FATAL_SENTINEL - 1.0 && t <= DUDECT_FATAL_SENTINEL + 1.0;
 }
 
 /* Pins the --timeout fail-closed rule at the macro level, in both
@@ -2107,6 +2127,23 @@ static int timeout_truncation_self_test(void) {
            marked ? "ok" : "MISMATCH");
     ok &= marked;
     g_timeout_hit = 0;
+
+    /* The sentinel band is BOUNDED — see is_fatal_result().  A statistic
+     * above the band is a catastrophic separation, which is a leak; calling
+     * it "setup failure or per-class rc mismatch" sends the reader looking
+     * for a harness bug that does not exist.  Both directions are pinned
+     * here because an unbounded `>=` passes the first case and fails only
+     * this one. */
+    int band_low = is_fatal_result(DUDECT_FATAL_SENTINEL);
+    int band_edges = is_fatal_result(DUDECT_FATAL_SENTINEL - 0.5) &&
+                     is_fatal_result(DUDECT_FATAL_SENTINEL + 0.5);
+    int above_band_is_not_a_fault = !is_fatal_result(DUDECT_FATAL_SENTINEL * 2.0);
+    int ordinary_is_not_a_fault = !is_fatal_result(7.68) && !is_fatal_result(-99999.0);
+    int sentinel_ok = band_low && band_edges && above_band_is_not_a_fault &&
+                      ordinary_is_not_a_fault;
+    printf("  %-58s %s\n", "the fatal sentinel is a bounded band, not an open ray",
+           sentinel_ok ? "ok" : "MISMATCH");
+    ok &= sentinel_ok;
 
     /* Through the verdict machinery end to end: one truncated lane must
      * fail the run, exactly as any other harness fault does. */
