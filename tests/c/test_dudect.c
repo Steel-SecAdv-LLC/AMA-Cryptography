@@ -2325,6 +2325,96 @@ static int run_all_tests(int iterations, test_result_t *results, int *num_result
 }
 
 /* -----------------------------------------------------------------------
+ * Statistics self-test: the percentile-cropped verdict must reject
+ * fat-tail noise and keep detecting genuine shifts
+ *
+ * Two deterministic synthetic drives through the REAL dudect_record /
+ * dudect_get_t machinery (no timing, no randomness beyond a fixed LCG,
+ * milliseconds total):
+ *
+ *   1. Fat-tail false-positive regression.  Both classes draw from the
+ *      same base distribution; a rare huge outlier (50x the base scale,
+ *      ~0.2% of samples) is injected into class 0 only — the interrupt/
+ *      hypervisor-steal shape that 25 days of nightly ARM sweep history
+ *      shows inflating the raw Welch t to |t| = 14-28 with flipping
+ *      signs.  The RAW statistic must go over threshold on this input
+ *      (proving the synthetic noise is strong enough to fool the old
+ *      verdict — this half is the mutation direction: revert the
+ *      percentile cropping and the verdict equals raw, failing here),
+ *      and the CROPPED verdict must stay under threshold.
+ *
+ *   2. Detection-power check.  A genuine class shift (base + constant
+ *      on every class-0 sample, ~1.5% of the mean) with the same tail
+ *      noise: the cropped verdict must still exceed the threshold —
+ *      cropping rejects the tail, not the leak.
+ * ----------------------------------------------------------------------- */
+static int statistics_self_test(void) {
+    int ok = 1;
+    printf("\n--- dudect statistics self-check (percentile cropping) ---\n");
+
+    /* Deterministic LCG; values in ns-scale to mirror real lanes. */
+    unsigned lcg = 0x5EED0001u;
+    #define STATS_ST_NEXT() (lcg = lcg * 1664525u + 1013904223u)
+
+    /* Case 1: identical classes + asymmetric fat tail. */
+    {
+        dudect_ctx_t ctx;
+        dudect_ctx_init(&ctx, "selftest-fat-tail");
+        for (int i = 0; i < 60000; i++) {
+            STATS_ST_NEXT();
+            int class_idx = (int)((lcg >> 16) & 1u);
+            STATS_ST_NEXT();
+            double base = 100.0 + (double)((lcg >> 20) & 0x3Fu);  /* 100..163 */
+            STATS_ST_NEXT();
+            /* ~0.2% of class-0 samples spike to ~50x the base scale. */
+            if (class_idx == 0 && ((lcg >> 8) & 0x1FFu) == 0) {
+                base += 5000.0;
+            }
+            dudect_record(&ctx, class_idx, base);
+        }
+        double raw = dudect_ttest_compute(&ctx.ttest);
+        int rung = -1;
+        double verdict = dudect_get_t_rung(&ctx, &rung);
+        int raw_fooled = fabs(raw) >= DUDECT_T_THRESHOLD;
+        int verdict_clean = (rung >= 0) && fabs(verdict) < DUDECT_T_THRESHOLD;
+        printf("  fat-tail: raw t = %+8.4f (%s), verdict t = %+8.4f over %d rungs (%s)\n",
+               raw, raw_fooled ? "over threshold as constructed" : "UNDER — synthetic noise too weak",
+               verdict, rung, verdict_clean ? "clean" : "FALSE POSITIVE");
+        if (!raw_fooled || !verdict_clean) ok = 0;
+    }
+
+    /* Case 2: genuine shift + the same tail — must still be detected. */
+    {
+        dudect_ctx_t ctx;
+        dudect_ctx_init(&ctx, "selftest-shift");
+        for (int i = 0; i < 60000; i++) {
+            STATS_ST_NEXT();
+            int class_idx = (int)((lcg >> 16) & 1u);
+            STATS_ST_NEXT();
+            double base = 100.0 + (double)((lcg >> 20) & 0x3Fu);
+            STATS_ST_NEXT();
+            if (class_idx == 0 && ((lcg >> 8) & 0x1FFu) == 0) {
+                base += 5000.0;
+            }
+            if (class_idx == 0) {
+                base += 2.0;  /* the leak: +2 ns on every class-0 sample */
+            }
+            dudect_record(&ctx, class_idx, base);
+        }
+        int rung = -1;
+        double verdict = dudect_get_t_rung(&ctx, &rung);
+        int detected = (rung >= 0) && fabs(verdict) >= DUDECT_T_THRESHOLD;
+        printf("  shift:    verdict t = %+8.4f over %d rungs (%s)\n",
+               verdict, rung, detected ? "detected" : "MISSED — power lost");
+        if (!detected) ok = 0;
+    }
+    #undef STATS_ST_NEXT
+
+    printf("statistics self-check: %s\n", ok ? "PASS" : "FAIL");
+    return ok ? 0 : 1;
+}
+
+/* -----------------------------------------------------------------------
  * Main
  * ----------------------------------------------------------------------- */
 int main(int argc, char *argv[]) {
@@ -2332,11 +2422,12 @@ int main(int argc, char *argv[]) {
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--self-test") == 0) {
-            /* Both suites always run, so one failing cannot hide the
-             * other's report; either failing fails the binary. */
+            /* All suites always run, so one failing cannot hide another's
+             * report; any failing fails the binary. */
             int verdict_rc    = dudect_rounds_self_test();
             int truncation_rc = timeout_truncation_self_test();
-            return (verdict_rc != 0 || truncation_rc != 0) ? 1 : 0;
+            int stats_rc      = statistics_self_test();
+            return (verdict_rc != 0 || truncation_rc != 0 || stats_rc != 0) ? 1 : 0;
         }
     }
 
