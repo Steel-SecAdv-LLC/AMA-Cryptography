@@ -47,7 +47,8 @@ than ChaCha20-Poly1305 under the same misuse, not a safe one — treat nonce
 uniqueness as mandatory either way.
 
 :func:`aead128_encrypt` will not generate a nonce for you silently — pass one
-explicitly, or use :func:`generate_nonce`, which draws from ``os.urandom``.
+explicitly, or use :func:`generate_nonce`, which draws through the
+health-tested CSPRNG (``secure_token_bytes``).
 
 Usage
 -----
@@ -216,7 +217,7 @@ def generate_key() -> bytes:
 
 
 def generate_nonce() -> bytes:
-    """Return a fresh 16-byte nonce from ``os.urandom``.
+    """Return a fresh 16-byte nonce from the health-tested CSPRNG.
 
     A 128-bit random nonce makes collision probability negligible for any
     realistic message count, which is why this is offered rather than a

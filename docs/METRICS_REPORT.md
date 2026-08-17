@@ -82,20 +82,20 @@ Measured as non-empty-allowed `wc -l` over source files in each scope.
 
 | Scope | Files | Lines |
 |-------|------:|------:|
-| Library Python (`ama_cryptography/*.py`) | 28 | 35,506 |
+| Library Python (`ama_cryptography/*.py`) | 28 | 35,516 |
 | Native C (`src/c/**/*.c`, `include/**/*.h`) | 105 | 51,488 |
-| Library total (Python + C + headers) | 133 | **86,994** |
+| Library total (Python + C + headers) | 133 | **87,004** |
 | Top-level Python (monitors, benchmarks, demos) | 2 | 1,030 |
 | Tests (`tests/**/*.py`) | 162 | 65,569 |
 | Cython (`*.pyx`, `*.pxd`) | 7 | 1,873 |
-| **Whole project** (source + docs + config) | 587 | **320,587** |
+| **Whole project** (source + docs + config) | 587 | **320,699** |
 
 **Library total (the figure that most closely tracks "library size"):
-86,994 lines** across 133 files under `ama_cryptography/`, `src/c/`,
+87,004 lines** across 133 files under `ama_cryptography/`, `src/c/`,
 and `include/`. This supersedes any "11,246 LoC" claim that may have
 appeared externally.
 
-**Whole-project total** (`320,587` lines across Python, C, headers,
+**Whole-project total** (`320,699` lines across Python, C, headers,
 Cython, Markdown, YAML/TOML/JSON config, CMake and Makefiles) is the
 broader figure some external claims may have been referencing. Reproduce
 it with:
@@ -154,14 +154,14 @@ the whole-project figure overstates hand-written code.
 
 | Scope                                | Lines    | % of whole | Paths                                                   |
 |--------------------------------------|---------:|-----------:|---------------------------------------------------------|
-| Library (Python + C + headers) | 86,994 | 27.1% | `ama_cryptography/` + `src/c/` + `include/` |
-| Tests | 65,569 | 20.5% | `tests/**/*.py` |
+| Library (Python + C + headers) | 87,004 | 27.1% | `ama_cryptography/` + `src/c/` + `include/` |
+| Tests | 65,569 | 20.4% | `tests/**/*.py` |
 | Top-level Python | 1,030 | 0.3% | `*.py` at repo root |
 | Cython | 1,873 | 0.6% | `*.pyx` + `*.pxd` |
-| Everything else (remainder) | 165,121 | 51.5% | `*.md`, `*.yml`, `*.toml`, `*.json`, CMake, Makefile, plus `.c`/`.h`/`.py` outside the scopes above (`tests/c/`, `fuzz/`, `tools/`, `benchmarks/`, `examples/`) |
-| **Whole-project total** | **320,587** | **100%** | sum of the scopes above |
+| Everything else (remainder) | 165,223 | 51.5% | `*.md`, `*.yml`, `*.toml`, `*.json`, CMake, Makefile, plus `.c`/`.h`/`.py` outside the scopes above (`tests/c/`, `fuzz/`, `tools/`, `benchmarks/`, `examples/`) |
+| **Whole-project total** | **320,699** | **100%** | sum of the scopes above |
 
-Test code (20.5%) is roughly 0.8x the size of the library (27.1%) — i.e. the test-to-library ratio is roughly **0.75**, and that
+Test code (20.4%) is roughly 0.8x the size of the library (27.1%) — i.e. the test-to-library ratio is roughly **0.75**, and that
 counts only `tests/**/*.py`; the C test suite under `tests/c/` lands
 in the remainder row. The remainder (51.5%) is dominated by the
 vendored NIST ACVP and Wycheproof JSON corpora (69,529 lines of `*.json` alone) and by this repository's Markdown, not by config.
@@ -213,8 +213,8 @@ git ls-files -z | tr '\0' '\n' \
 
 | Scope | Count |
 |-------|------:|
-| Python test files under `tests/` matching the static regex | 159 |
-| Syntactic `def test_` matches under `tests/**/*.py` | **3,782** |
+| Python test files under `tests/` matching the static regex | 160 |
+| Syntactic `def test_` matches under `tests/**/*.py` | **3,788** |
 | `test_*.c` files under `tests/c/` (ctest-registered) | 59 |
 | `bench_*.c` files under `tests/c/` (standalone, not in ctest) | 1 |
 | `fuzz_*.c` sources under `fuzz/` | 16 |
@@ -242,7 +242,7 @@ pytest --collect-only -q | tail -1
 Stderr is intentionally left unsuppressed so collection/import errors
 remain visible during reproduction.
 
-The static count (3,782) and the dynamic collection count will differ.
+The static count (3,788) and the dynamic collection count will differ.
 Any external claim ("N tests") must state which count it is reporting.
 This supersedes the earlier "866+ tests collected across 39 files" figure
 in ARCHITECTURE.md and any "2,068 tests" figure that may have circulated

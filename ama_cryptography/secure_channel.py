@@ -71,7 +71,6 @@ Version: 5.0.0
 
 import hashlib
 import logging
-import secrets
 import struct
 import threading
 import time
@@ -1097,8 +1096,18 @@ class SecureChannelResponder:
             )
             raise HandshakeError("Handshake failed") from None
 
-        # Generate session ID
-        session_id = secrets.token_bytes(SESSION_ID_BYTES)
+        # Generate session ID — through the health-tested draw, not bare
+        # secrets.token_bytes.  The session ID is signed into the handshake
+        # transcript and is a _derive_session input, and INVARIANT-41's
+        # contract is that every identifier a key derivation consumes passes
+        # the continuous stuck-DRBG check.  This was the one draw in the
+        # package the INVARIANT-41 sweep missed: the initiator-side ID was
+        # routed through secure_token_bytes while the responder side kept
+        # the bare draw, which no control would have flagged had the DRBG
+        # stuck.  tests/test_invariant41_rng_sweep.py now enumerates every
+        # bare draw in the shipped package against an allowlist, so the
+        # next missed site fails CI instead of waiting for a review.
+        session_id = secure_token_bytes(SESSION_ID_BYTES)
 
         # Sign the handshake transcript (proves we hold the static key)
         handshake_hash = hashlib.sha3_256(msg.serialize()).digest()
