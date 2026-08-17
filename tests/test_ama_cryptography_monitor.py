@@ -582,7 +582,11 @@ class TestSharedMonitorConcurrency:
     second killing an unguarded posture-evaluation cycle.  Threaded by
     necessity: the property is exactly "no exception under concurrent
     writers", and each pre-fix failure reproduced well inside the window
-    driven here.
+    driven here.  The workers catch Exception, not BaseException: every
+    failure class the fixes close (and any future library error) is an
+    Exception, while BaseException would also swallow KeyboardInterrupt /
+    SystemExit inside the loop — masking a Ctrl-C during a local run, which
+    is CodeQL's objection (alerts 626/627) and correct.
     """
 
     def test_pattern_monitor_analyze_survives_concurrent_recording(self) -> None:
@@ -590,7 +594,7 @@ class TestSharedMonitorConcurrency:
 
         monitor = RecursionPatternMonitor(max_history=2000)
         stop = threading.Event()
-        errors: list[BaseException] = []
+        errors: list[Exception] = []
 
         def writer() -> None:
             i = 0
@@ -609,7 +613,7 @@ class TestSharedMonitorConcurrency:
                 try:
                     monitor.analyze_patterns()
                     monitor.monitor_key_usage({"key_id": "k1", "usage_count": 1, "max_usage": 1000})
-                except BaseException as exc:
+                except Exception as exc:
                     errors.append(exc)
                     break
         finally:
@@ -623,7 +627,7 @@ class TestSharedMonitorConcurrency:
 
         monitor = AmaCryptographyMonitor()
         stop = threading.Event()
-        errors: list[BaseException] = []
+        errors: list[Exception] = []
 
         def writer() -> None:
             i = 0
@@ -640,7 +644,7 @@ class TestSharedMonitorConcurrency:
             while time.time() < deadline:
                 try:
                     monitor.get_security_report()
-                except BaseException as exc:
+                except Exception as exc:
                     errors.append(exc)
                     break
         finally:
