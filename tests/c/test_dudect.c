@@ -205,12 +205,20 @@ static double test_consttime_lookup(int iterations) {
 
     for (int i = 0; i < iterations && !g_timeout_hit; i++) {
         int class_idx = rand() & 1;
-        size_t index;
-        if (class_idx == 0) {
-            index = rand() % (TABLE_SIZE / 2);
-        } else {
-            index = (TABLE_SIZE / 2) + (rand() % (TABLE_SIZE / 2));
-        }
+        /* Branchless half-selection, the same reason the sk / tag / scalar
+         * lanes select their pointers arithmetically: a class-correlated
+         * taken/not-taken pair immediately before the timer leaves the two
+         * classes entering the measured window in different machine states,
+         * and for a lane this short that offset IS the measurement.
+         *
+         * Measured in the legacy harness, which had the identical construction
+         * (tools/constant_time/dudect_harness.c): the branchy form gives mean
+         * t = -8.68 over 10 runs of 50,000 iterations, over threshold in 9 of
+         * them; this form gives -0.85, over threshold in none — on a function
+         * that scans the whole table under a constant-time mask and therefore
+         * cannot depend on the index at all. */
+        size_t index =
+            (size_t)class_idx * (TABLE_SIZE / 2) + (size_t)(rand() % (TABLE_SIZE / 2));
 
         uint64_t start = dudect_get_time_ns();
         ama_consttime_lookup(table, TABLE_SIZE, ELEM_SIZE, index, output);
@@ -1040,22 +1048,36 @@ static double test_secp256k1_ecdsa_sign(int iterations) {
 
     for (int i = 0; i < iterations && !g_timeout_hit; i++) {
         int class_idx = rand() & 1;
-        const uint8_t *d, *m;
 
-        if (class_idx) {
-            /* Random valid key in [1, n-1]: clearing the top bit keeps it
-             * below n (< 2^255 < n) and an odd last byte keeps it non-zero.
-             * Generated OUTSIDE the timed region so only signing is measured. */
-            random_bytes(d_rand, sizeof(d_rand));
-            d_rand[0]  &= 0x7F;
-            d_rand[31] |= 0x01;
-            random_bytes(msg_rand, sizeof(msg_rand));
-            d = d_rand;
-            m = msg_rand;
-        } else {
-            d = d_fixed;
-            m = msg_fixed;
-        }
+        /* The random key/message are regenerated on EVERY iteration, not only
+         * in class 1, and the pointers are then selected arithmetically.
+         *
+         * Generating them in class 1 alone did keep them out of the timed
+         * region — which is what the previous comment here claimed, and it was
+         * true — but it left the two classes doing very different amounts of
+         * work in the moments before the timer started (96 bytes of rand()
+         * plus bit-twiddling, versus nothing).  That leaves a class-correlated
+         * machine state entering the measured window, which is a fixed offset
+         * of a few nanoseconds and therefore matters in proportion to how
+         * short the timed region is.  It is negligible here — an ECDSA sign is
+         * tens of microseconds — and it was NOT negligible for the short
+         * utility lanes, where the identical construction produced |t| of 9 to
+         * 43 on functions a callgrind gate proves are data-independent.
+         *
+         * Doing the work unconditionally costs one extra RNG draw per
+         * iteration on a lane that then spends tens of microseconds signing,
+         * and removes the hazard rather than relying on it staying
+         * proportionally small.
+         *
+         * Random valid key in [1, n-1]: clearing the top bit keeps it below n
+         * (< 2^255 < n) and an odd last byte keeps it non-zero. */
+        random_bytes(d_rand, sizeof(d_rand));
+        d_rand[0] &= 0x7F;
+        d_rand[31] |= 0x01;
+        random_bytes(msg_rand, sizeof(msg_rand));
+
+        const uint8_t *d = class_idx ? d_rand : d_fixed;
+        const uint8_t *m = class_idx ? msg_rand : msg_fixed;
 
         uint64_t start = dudect_get_time_ns();
         volatile ama_error_t rc =
