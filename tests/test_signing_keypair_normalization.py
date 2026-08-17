@@ -116,13 +116,13 @@ class TestListContainerElementSwap:
     def test_swapping_elements_in_an_admitted_list_renormalizes(
         self, hybrid_identity: tuple[bytes, bytes]
     ) -> None:
-        from typing import Tuple, cast
+        from typing import cast
 
         pk, sk = hybrid_identity
         keypair = [pk, sk]
         # The annotation says Tuple; the runtime validator deliberately also
         # admits the list form, which is the whole point of this test.
-        config = CryptoPackageConfig(signing_keypair=cast("Tuple[bytes, bytes]", keypair))
+        config = CryptoPackageConfig(signing_keypair=cast("tuple[bytes, bytes]", keypair))
         first = create_crypto_package(CONTENT, config)
         assert verify_crypto_package(CONTENT, first, expected_public_key=pk)["all_valid"]
         first_memo = config._normalized_signing_memo
@@ -131,7 +131,7 @@ class TestListContainerElementSwap:
         pk2, sk2 = KeypairCache().get_or_generate()
         keypair[0] = pk2
         keypair[1] = sk2
-        assert config.signing_keypair is cast("Tuple[bytes, bytes]", keypair)
+        assert config.signing_keypair is cast("tuple[bytes, bytes]", keypair)
 
         second = create_crypto_package(CONTENT, config)
         assert config._normalized_signing_memo is not first_memo, (

@@ -352,6 +352,35 @@ class TestCryptoPostureController:
         # Should not raise
         controller._trigger_rotation()
 
+    def test_raising_get_active_key_is_caught_and_counts_as_attempted(self) -> None:
+        """The one rotation_manager call that was unguarded, guarded.
+
+        register_key / initiate_rotation / on_rotation failures were each
+        caught, but get_active_key — the FIRST call of the flow — raised
+        straight through _trigger_rotation and out of a whole
+        evaluate_and_respond cycle.  The shipped KeyRotationManager's
+        implementation is a bare attribute read that cannot raise, but the
+        manager is caller-suppliable precisely so a remote KMS can back it,
+        and this module's own contract names "the KMS is unreachable" as a
+        failure the flow must survive.  A raising fetch must not crash, and
+        it counts as attempted-and-FAILED so the cooldown stays unarmed and
+        the next evaluation retries.
+        """
+        rotation_mgr = MagicMock()
+        rotation_mgr.get_active_key.side_effect = ConnectionError("KMS unreachable")
+        controller = CryptoPostureController(rotation_manager=rotation_mgr, rotation_cooldown=300)
+        controller._last_rotation_time = 0.0
+
+        # Must not raise.
+        controller._trigger_rotation()
+
+        assert rotation_mgr.get_active_key.call_count == 1
+        rotation_mgr.register_key.assert_not_called()
+        assert controller._last_rotation_time == 0.0, (
+            "a rotation that failed at the active-key fetch must not arm the "
+            "cooldown — the threat that demanded it is still standing"
+        )
+
     def test_failed_rotation_does_not_arm_the_cooldown(self) -> None:
         """A rotation that was attempted and FAILED must remain retryable.
 

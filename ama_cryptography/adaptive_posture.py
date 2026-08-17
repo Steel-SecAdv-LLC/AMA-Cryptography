@@ -843,7 +843,22 @@ class CryptoPostureController:
         succeeded = False
 
         if self.rotation_manager is not None:
-            active_key = self.rotation_manager.get_active_key()
+            # Guarded like every other rotation_manager call in this flow.
+            # get_active_key was the one unguarded fetch: the shipped
+            # KeyRotationManager's is a bare attribute read that cannot
+            # raise, but the manager is caller-suppliable precisely so a
+            # remote KMS can back it, and this module's own contract (and
+            # the comment below) names "the KMS is unreachable" as a
+            # failure the posture flow must survive.  A raising fetch is an
+            # attempted-and-failed rotation: the cooldown stays unarmed and
+            # the next evaluation retries, exactly as a failed register/
+            # initiate does.
+            try:
+                active_key = self.rotation_manager.get_active_key()
+            except Exception as e:
+                logger.warning("Posture key rotation failed: could not read the active key: %s", e)
+                active_key = None
+                attempted = True
             if active_key is not None:
                 attempted = True
                 new_key_id = f"posture-rotation-{self._rotation_count}"

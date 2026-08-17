@@ -695,3 +695,71 @@ class TestTheRecordedCommandIsTheCommandThatRan:
     def test_an_empty_argv_does_not_raise(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(sys, "argv", [])
         assert "benchmark_runner.py" in br._invocation()
+
+
+class TestPqcRowsAreHardGated:
+    """A measured AEAD/PQC/X25519 row must be able to fail the run.
+
+    These rows were built ``optional=True``, which ``main()`` maps to
+    warn-and-exit-0 — so all nine populated floors had an infinite blind
+    spot while both baseline files described a 15–25% firing threshold and
+    cited the 2.1x AES-GCM wrapper regression as the case the recalibration
+    prevents.  Reproduced against the real arm baseline: halving the
+    aes_256_gcm_encrypt floor's measured rate printed ``[WARN]`` and exited
+    0.  A row is only built after a successful measurement (the None path
+    skips an absent backend before any row exists), so "optional" carried
+    no availability meaning — only the blind spot.
+    """
+
+    def _run_one_pqc_row(
+        self, monkeypatch: pytest.MonkeyPatch, measured_rate: float | None
+    ) -> list[br.BenchmarkResult]:
+        baseline = {
+            "thresholds": {"regression_threshold_percent": 10},
+            "benchmarks": {},
+            "pqc_benchmarks": {
+                "aes_256_gcm_encrypt": {
+                    "description": "synthetic",
+                    "baseline_value": 1000.0,
+                    "tolerance_percent": 15,
+                }
+            },
+        }
+        monkeypatch.setattr(br, "_measure_benchmark", lambda name, func: measured_rate)
+        return br.run_all_benchmarks(baseline)
+
+    def test_a_breached_measured_row_fails_the_run(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        results = self._run_one_pqc_row(monkeypatch, measured_rate=400.0)  # -60%
+        assert len(results) == 1
+        row = results[0]
+        assert row.passed is False
+        assert row.optional is False, (
+            "a measured PQC row must be hard-gated — optional=True is the "
+            "warn-and-exit-0 blind spot the baseline notes claim does not exist"
+        )
+        # main()'s failure collapse: the row must survive the filter.
+        failed = [r for r in results if not r.passed and not r.optional]
+        assert failed, "the breached row must reach the CI-failing branch"
+
+    def test_a_healthy_measured_row_passes(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        results = self._run_one_pqc_row(monkeypatch, measured_rate=1000.0)
+        assert len(results) == 1 and results[0].passed is True
+
+    def test_an_absent_backend_still_skips_without_a_row(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        results = self._run_one_pqc_row(monkeypatch, measured_rate=None)
+        assert results == [], "no measurement, no row — the only meaning 'optional' ever had"
+
+    def test_no_populated_baseline_row_is_optional(self) -> None:
+        """Both committed baseline files must carry optional=false everywhere."""
+        import json as _json
+
+        for name in ("baseline.json", "arm-baseline.json"):
+            data = _json.loads((Path(br.__file__).parent / name).read_text(encoding="utf-8"))
+            offenders = [
+                key
+                for key, row in data.get("pqc_benchmarks", {}).items()
+                if row.get("optional") is True
+            ]
+            assert offenders == [], f"{name}: rows opted back out of the gate: {offenders}"

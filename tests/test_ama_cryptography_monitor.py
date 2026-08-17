@@ -27,6 +27,7 @@ AI Co-Architects:
 
 import ast
 import sys
+import time
 from typing import Any
 
 import pytest
@@ -569,6 +570,83 @@ class TestRecursionPatternMonitor:
         for anomaly in size_anomalies:
             assert "z_score" in anomaly
             assert "severity" in anomaly
+
+
+class TestSharedMonitorConcurrency:
+    """The reader/analyzer races the PR's writer locks had not covered.
+
+    Both were reproduced as RuntimeError crashes against the pre-fix code
+    (deque/dict mutated during iteration) with the tracebacks landing in
+    analyze_patterns and get_security_report — the first escaping through
+    the public create_crypto_package after signatures were computed, the
+    second killing an unguarded posture-evaluation cycle.  Threaded by
+    necessity: the property is exactly "no exception under concurrent
+    writers", and each pre-fix failure reproduced well inside the window
+    driven here.
+    """
+
+    def test_pattern_monitor_analyze_survives_concurrent_recording(self) -> None:
+        import threading
+
+        monitor = RecursionPatternMonitor(max_history=2000)
+        stop = threading.Event()
+        errors: list[BaseException] = []
+
+        def writer() -> None:
+            i = 0
+            while not stop.is_set():
+                monitor.record_package(
+                    {"author": f"a{i % 7}", "code_count": i % 13, "content_hash": "x" * 16}
+                )
+                i += 1
+
+        threads = [threading.Thread(target=writer) for _ in range(4)]
+        for t in threads:
+            t.start()
+        try:
+            deadline = time.time() + 2.0
+            while time.time() < deadline:
+                try:
+                    monitor.analyze_patterns()
+                    monitor.monitor_key_usage({"key_id": "k1", "usage_count": 1, "max_usage": 1000})
+                except BaseException as exc:
+                    errors.append(exc)
+                    break
+        finally:
+            stop.set()
+            for t in threads:
+                t.join()
+        assert errors == [], f"analysis raced concurrent recording: {errors!r}"
+
+    def test_security_report_survives_concurrent_first_time_operations(self) -> None:
+        import threading
+
+        monitor = AmaCryptographyMonitor()
+        stop = threading.Event()
+        errors: list[BaseException] = []
+
+        def writer() -> None:
+            i = 0
+            while not stop.is_set():
+                # A FRESH operation name each record: the race window is the
+                # first-ever insert of a key into timing_history.
+                monitor.monitor_crypto_operation(f"op-{i}", 0.01)
+                i += 1
+
+        t = threading.Thread(target=writer)
+        t.start()
+        try:
+            deadline = time.time() + 2.0
+            while time.time() < deadline:
+                try:
+                    monitor.get_security_report()
+                except BaseException as exc:
+                    errors.append(exc)
+                    break
+        finally:
+            stop.set()
+            t.join()
+        assert errors == [], f"report reader raced first-time inserts: {errors!r}"
 
 
 class TestRefactoringAnalyzer:

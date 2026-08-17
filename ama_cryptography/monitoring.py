@@ -1873,6 +1873,19 @@ class RecursionPatternMonitor:
         self._key_usage_rates: Dict[str, Deque[float]] = {}  # key_id -> recent usage timestamps
         self._key_alerts: Deque[Dict[str, Any]] = deque(maxlen=self._MAX_KEY_ALERTS)
         self.dropped_key_ids: int = 0
+        # Every other shared monitor component takes a lock (NonceTracker,
+        # ResonanceTimingMonitor, VolumeSpikeDetector, the alert ring) — this
+        # class was the one writer/analyzer pair left bare.  The shipped
+        # concurrency is real: record_package_signing appends from every
+        # create_crypto_package call, MONITORING.md documents the shared-
+        # monitor ThreadPoolExecutor deployment, and analyze_patterns
+        # iterates the same deque with Python-level comprehensions —
+        # measured: 4 threads raised RuntimeError("deque mutated during
+        # iteration") within 0.11 s, and the exception escaped through the
+        # public create_crypto_package AFTER signatures were computed.  An
+        # RLock plus snapshot-then-analyze keeps the lock window to the
+        # copies, exactly the pattern _prune_alerts uses.
+        self._lock = threading.RLock()
 
     def record_package(self, package_metadata: Dict) -> None:
         """
@@ -1889,7 +1902,8 @@ class RecursionPatternMonitor:
             O(1) append with automatic pruning via deque maxlen.
         """
         # O(1) append with automatic pruning via deque maxlen
-        self.package_history.append({"timestamp": time.time(), **package_metadata})
+        with self._lock:
+            self.package_history.append({"timestamp": time.time(), **package_metadata})
 
     def analyze_patterns(self) -> Dict:
         """
@@ -1904,11 +1918,15 @@ class RecursionPatternMonitor:
         Note:
             Requires minimum 10 packages for analysis.
         """
-        if len(self.package_history) < 10:
+        # Snapshot under the lock; every read below is over the immutable
+        # copy, so a concurrent record_package can never mutate mid-iteration.
+        with self._lock:
+            history = list(self.package_history)
+        if len(history) < 10:
             return {"status": "insufficient_data"}
 
         # Extract time series features
-        timestamps = [p["timestamp"] for p in self.package_history]
+        timestamps = [p["timestamp"] for p in history]
         intervals = [timestamps[i + 1] - timestamps[i] for i in range(len(timestamps) - 1)]
 
         # Recursive hierarchical analysis
@@ -1937,7 +1955,7 @@ class RecursionPatternMonitor:
                     )
 
         # Check for package size anomalies
-        code_counts = [float(p.get("code_count", 0)) for p in self.package_history]
+        code_counts = [float(p.get("code_count", 0)) for p in history]
         if len(code_counts) > 10:
             mean_count = _mean(code_counts)
             std_count = _std(code_counts)
@@ -1962,7 +1980,7 @@ class RecursionPatternMonitor:
             "status": "analyzed",
             "features": features,
             "anomalies": anomalies,
-            "total_packages": len(self.package_history),
+            "total_packages": len(history),
         }
 
     def _recursive_extract(self, data: List[float], depth: int) -> Dict[str, Any]:
@@ -2029,14 +2047,15 @@ class RecursionPatternMonitor:
         # dropped_key_ids and not tracked (already-tracked keys keep working, so
         # a flood of junk ids cannot displace real monitoring either).  The
         # rate-anomaly check below simply finds no history for an untracked id.
-        if key_id not in self._key_usage_rates:
-            if len(self._key_usage_rates) >= self._MAX_TRACKED_KEYS:
-                self.dropped_key_ids += 1
-            else:
-                self._key_usage_rates[key_id] = deque(maxlen=1000)
-        bucket = self._key_usage_rates.get(key_id)
-        if bucket is not None:
-            bucket.append(time.time())
+        with self._lock:
+            if key_id not in self._key_usage_rates:
+                if len(self._key_usage_rates) >= self._MAX_TRACKED_KEYS:
+                    self.dropped_key_ids += 1
+                else:
+                    self._key_usage_rates[key_id] = deque(maxlen=1000)
+            bucket = self._key_usage_rates.get(key_id)
+            if bucket is not None:
+                bucket.append(time.time())
 
         # Check max_usage limits
         if max_usage is not None and max_usage > 0:
@@ -2103,16 +2122,19 @@ class RecursionPatternMonitor:
         if rate_anomaly:
             anomalies.append(rate_anomaly)
 
-        self._key_alerts.extend(anomalies)
+        with self._lock:
+            self._key_alerts.extend(anomalies)
         return anomalies
 
     def _check_key_rate_anomaly(self, key_id: str) -> Optional[Dict[str, Any]]:
         """Check if a single key's usage rate is anomalous compared to its history."""
-        timestamps = self._key_usage_rates.get(key_id)
-        if not timestamps or len(timestamps) < 20:
-            return None
-
-        ts_list = list(timestamps)
+        with self._lock:
+            timestamps = self._key_usage_rates.get(key_id)
+            if not timestamps or len(timestamps) < 20:
+                return None
+            # Copy under the lock: a concurrent append during the interval
+            # arithmetic below would otherwise mutate the deque mid-list().
+            ts_list = list(timestamps)
         intervals = [ts_list[i + 1] - ts_list[i] for i in range(len(ts_list) - 1)]
         if len(intervals) < 10:
             return None
@@ -3587,9 +3609,18 @@ class AmaCryptographyMonitor:
             "recommendations": [],
         }
 
-        # Add resonance analysis for monitored operations
+        # Add resonance analysis for monitored operations.  Snapshot the
+        # operation names under the timing monitor's lock: record_timing
+        # inserts a NEW dict key on the first record of an operation name
+        # under that lock, and iterating the live keys() from this (locked
+        # nowhere) reader raced it — reproduced as RuntimeError("dictionary
+        # changed size during iteration") within ~1 s of a reader loop
+        # against a writer issuing fresh names, killing the posture
+        # evaluation cycle that calls this report unguarded.
         resonance_data = {}
-        for operation in self.timing.timing_history.keys():
+        with self.timing._lock:
+            monitored_operations = list(self.timing.timing_history)
+        for operation in monitored_operations:
             resonance = self.timing.detect_resonance(operation)
             if resonance.get("has_resonance"):
                 resonance_data[operation] = resonance

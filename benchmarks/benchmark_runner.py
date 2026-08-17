@@ -926,7 +926,8 @@ def run_all_benchmarks(baseline: Dict[str, Any], verbose: bool = False) -> List[
             status = "PASS" if passed else "FAIL"
             print(f"{ops_per_sec:.0f} ops/sec ({regression:+.1f}%) [{status}]")
 
-    # Run PQC benchmarks (optional)
+    # Run PQC benchmarks (hard-gated when measured; skipped when the
+    # native backend is absent — see the None path below)
     for name, pqc_func in pqc_benchmark_functions.items():
         if name not in baseline.get("pqc_benchmarks", {}):
             continue
@@ -963,12 +964,23 @@ def run_all_benchmarks(baseline: Dict[str, Any], verbose: bool = False) -> List[
                 tolerance_percent=tolerance,
                 regression_percent=regression,
                 passed=passed,
-                optional=True,
+                # HARD-gated.  These rows were built optional=True, which
+                # main() maps to warn-and-exit-0 — so all nine populated
+                # AEAD/PQC/X25519 floors had an infinite blind spot while
+                # both baseline files described a 15-25% firing threshold
+                # and cited the 2.1x AES-GCM wrapper regression as the case
+                # the recalibration prevents.  Reproduced: halving the
+                # aes_256_gcm_encrypt floor printed "+52.4%% [WARN]" and
+                # exited 0.  A measured row now fails like every core row;
+                # a build without native PQC still skips above (the None
+                # path) before any row is built, which was always the only
+                # legitimate meaning "optional" had here.
+                optional=False,
             )
         )
 
         if verbose:
-            status = "PASS" if passed else "WARN"
+            status = "PASS" if passed else "FAIL"
             print(f"{pqc_ops_per_sec:.0f} ops/sec ({regression:+.1f}%) [{status}]")
 
     return results
