@@ -350,7 +350,10 @@ if not _post():
             "(%s) and %s=1: completing the import so the build-pipeline "
             "integrity tooling can run. The module is in the ERROR state and "
             "every cryptographic operation through the public surface will be "
-            "refused; no unverified native code has been mapped. Root cause: %s",
+            "refused. Any native object mapped in this process was mapped "
+            "under the signer's own load override and is digest-bound into "
+            "the artefact this signing run produces; outside the signer "
+            "identity, nothing unverified has been mapped. Root cause: %s",
             ", ".join(sorted(_repairable)),
             _build_env,
             _reason,

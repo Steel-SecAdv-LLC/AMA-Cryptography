@@ -1216,8 +1216,37 @@ def _verify_signed_integrity(digest_hex: str) -> Tuple[Optional[bool], str]:
     pubkey, signature, digest_raw, pubkey_hex = fields
 
     trust_anchor_hex, trust_anchor_error = _validate_trust_anchor(pubkey_hex)
+    signer_anchor_mismatch: Optional[str] = None
     if trust_anchor_error is not None:
-        return False, trust_anchor_error
+        # An artefact whose key does not match the compiled anchor is the
+        # DOCUMENTED starting state of every wheel build: the committed
+        # artefact is dev-signed with a per-build ephemeral key by design,
+        # and the build-time signer's whole job is to replace it with one
+        # minted from the release seed whose anchor-match the pipeline
+        # verifies separately.  The first exercised dry run at the previous
+        # head only survived this comparison by an accident of blindness —
+        # the pre-load digest refusal kept the anchored library unmapped, so
+        # the anchor was unreadable and this branch never ran at build time.
+        # Once the signer identity legitimately maps the library, the anchor
+        # becomes readable and this mismatch fired on every cibuildwheel
+        # platform, hard-failing the signer against the exact artefact it
+        # exists to discard.
+        #
+        # The carve-out is deliberately narrow: the process must BE the
+        # signer (launch-record identity + AMA_BUILD_PIPELINE, secure-exec
+        # revoked — see _integrity_signer_process), and the foreign artefact
+        # must STILL verify under its own embedded key below, proving it is
+        # a coherent artefact from another signing run and not corruption.
+        # Then the failure classifies as a repairable stale binding: the
+        # stage still FAILS, the module still lands in ERROR, and only the
+        # signer's import completes so it can mint the replacement.  For
+        # every other process an anchor mismatch remains what it always was
+        # — a re-signed tree, the attack the anchor exists to catch — and a
+        # signature that does not verify stays tampering for the signer too.
+        if _integrity_signer_process():
+            signer_anchor_mismatch = trust_anchor_error
+        else:
+            return False, trust_anchor_error
 
     try:
         from ama_cryptography.pqc_backends import (
@@ -1268,6 +1297,23 @@ def _verify_signed_integrity(digest_hex: str) -> Tuple[Optional[bool], str]:
         return False, f"native Ed25519 verify raised: {exc}"
     if not ok:
         return False, "Ed25519 signature did NOT verify — module tampered"
+
+    # Signature authentic under its embedded key.  If the anchor comparison
+    # above was deferred for the signer process, the artefact is now proven
+    # coherent-but-foreign: fail the stage repairably so the signing run can
+    # replace it.  Everything the final artefact must satisfy — the anchor
+    # match included — is re-checked by the smoke test against the artefact
+    # the signer actually produces.
+    if signer_anchor_mismatch is not None:
+        return False, _record_stale_binding_failure(
+            "integrity artefact is signed by a key that does not match the "
+            "compiled trust anchor, in a process launched as the integrity "
+            "signer with AMA_BUILD_PIPELINE=1. This is the documented "
+            "pre-signing state of a wheel build (the committed artefact is "
+            "dev-signed by design); the stage fails, the import may complete "
+            "for the signer only, and the signing run replaces the artefact. "
+            f"Cause: {signer_anchor_mismatch}"
+        )
 
     # Signature authentic.  Now bind it to the shared object actually loaded.
     global _INTEGRITY_STRENGTH

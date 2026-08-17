@@ -471,3 +471,87 @@ class TestSignerIdentityRunpyWindow:
 
     def test_empty_orig_argv_is_not_the_signer(self, monkeypatch: pytest.MonkeyPatch) -> None:
         assert self._identity(monkeypatch, []) is False
+
+
+class TestSignerAnchorMismatchCarveOut:
+    """The documented pre-signing state must not hard-fail the signer.
+
+    Every wheel build starts from (freshly built anchored library + committed
+    dev-signed artefact): the anchor comparison on that artefact can only
+    mismatch, and the signer exists to replace it.  The first head where the
+    signer identity legitimately mapped the library exposed this — all five
+    cibuildwheel platforms failed the BUILD phase on "integrity trust anchor
+    mismatch" (previously the unreadable anchor made the branch unreachable
+    at build time, an accident of blindness, not a design).  These drive the
+    REAL _verify_signed_integrity against the repository's real artefact.
+    """
+
+    @staticmethod
+    def _artefact_digest_hex() -> str:
+        from ama_cryptography import _integrity_signature as sig
+
+        return str(sig.INTEGRITY_DIGEST_HEX)
+
+    def test_signer_with_coherent_foreign_artefact_fails_repairably(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from ama_cryptography import _self_test
+
+        monkeypatch.setattr(_self_test, "_INTEGRITY_FAILURE_KIND", None)
+        monkeypatch.setattr(
+            _self_test,
+            "_validate_trust_anchor",
+            lambda pubkey_hex: (None, "integrity trust anchor mismatch: synthetic"),
+        )
+        monkeypatch.setattr(_self_test, "_integrity_signer_process", lambda: True)
+
+        ok, detail = _self_test._verify_signed_integrity(self._artefact_digest_hex())
+        assert ok is False, "the stage must FAIL for the signer too"
+        assert "integrity signer" in detail
+        assert _self_test.integrity_failure_was_stale_binding(), (
+            "a coherent-but-foreign artefact in the signer process is the "
+            "documented pre-signing state and must classify repairable"
+        )
+
+    def test_non_signer_anchor_mismatch_stays_a_hard_refusal(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from ama_cryptography import _self_test
+
+        monkeypatch.setattr(_self_test, "_INTEGRITY_FAILURE_KIND", None)
+        monkeypatch.setattr(
+            _self_test,
+            "_validate_trust_anchor",
+            lambda pubkey_hex: (None, "integrity trust anchor mismatch: synthetic"),
+        )
+        monkeypatch.setattr(_self_test, "_integrity_signer_process", lambda: False)
+
+        ok, detail = _self_test._verify_signed_integrity(self._artefact_digest_hex())
+        assert ok is False
+        assert "trust anchor mismatch" in detail
+        assert not _self_test.integrity_failure_was_stale_binding(), (
+            "for every non-signer process an anchor mismatch is the re-signed-"
+            "tree attack; the caller finalises it to tampering"
+        )
+
+    def test_signer_with_an_invalid_signature_stays_tampering(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The carve-out requires coherence: a signature that does not verify
+        under its own embedded key is a tampering event even for the signer —
+        re-signing over it would launder it."""
+        from ama_cryptography import _self_test, pqc_backends
+
+        monkeypatch.setattr(_self_test, "_INTEGRITY_FAILURE_KIND", None)
+        monkeypatch.setattr(
+            _self_test,
+            "_validate_trust_anchor",
+            lambda pubkey_hex: (None, "integrity trust anchor mismatch: synthetic"),
+        )
+        monkeypatch.setattr(_self_test, "_integrity_signer_process", lambda: True)
+        monkeypatch.setattr(pqc_backends, "native_ed25519_verify", lambda sig, msg, pk: False)
+
+        ok, detail = _self_test._verify_signed_integrity(self._artefact_digest_hex())
+        assert ok is False
+        assert "did NOT verify" in detail
+        assert not _self_test.integrity_failure_was_stale_binding()
