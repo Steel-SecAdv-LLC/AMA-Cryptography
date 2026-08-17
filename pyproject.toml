@@ -4,13 +4,13 @@
 # Build-time dependencies (PEP 518).  These versions are floors enforced
 # by setup.py's preflight check (D-9).
 #
-# - setuptools >= 83.0.0 (D-8/D-9): older releases — particularly Debian's
+# - setuptools >= 84.0.0 (D-8/D-9): older releases — particularly Debian's
 #   patched 68.x — fail bdist_wheel with `AttributeError: install_layout`.
 #   70.0.0 closes GHSA-cx63-2mw6-8hw5 and 78.1.1 closes PYSEC-2025-49; the
 #   floor is pinned at 83.0.0 (the latest baseline) and setup.py's preflight
 #   check enforces the SAME value so the isolated-build requirement and the
 #   guard cannot drift.
-# - wheel >= 0.47.0 (D-8): closes GHSA-8rrh-rw8j-w5fx.
+# - wheel >= 0.48.0 (D-8): closes GHSA-8rrh-rw8j-w5fx.
 # - cmake: required to auto-build the native C cryptographic library during
 #   `pip install .` — the CMakeBuild command in setup.py invokes cmake.
 # - numpy, Cython: required to build the math_engine extension; failures
@@ -19,7 +19,7 @@
 requires = [
     "setuptools>=83.0.0",
     "wheel>=0.47.0",
-    "cmake>=4.4.0",
+    "cmake>=4.4.2",
     "Cython>=3.2.8",
     "numpy>=1.24.0",
 ]
@@ -148,12 +148,12 @@ dev = [
     "pytest-timeout>=2.1.0",
     "pytest-benchmark>=4.0.0",
     "pytest-xdist>=3.0.0",
-    "hypothesis>=6.161.8",
+    "hypothesis>=6.165.7",
     # Black 26.5.1 carries the GHSA-fc3w-v5rg-v7q6 fix and requires Python
     # 3.10+ — consistent with this project's requires-python >= 3.10 floor,
     # so no version guard is needed.
     "black>=26.5.1",
-    "ruff>=0.16.0",
+    "ruff>=0.16.3",
     "mypy>=2.3.0",
     "bandit>=1.7.0",
     # `safety` was removed in v3.2.0: it was a dev-deps inventory entry

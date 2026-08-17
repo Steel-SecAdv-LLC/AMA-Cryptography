@@ -22,11 +22,11 @@ pytest-cov>=4.0.0
 pytest-timeout>=2.1.0
 pytest-benchmark>=4.0.0
 pytest-xdist>=3.0.0
-hypothesis>=6.161.8
+hypothesis>=6.165.7
 
 # Code Quality
 black>=26.5.1
-ruff>=0.16.0
+ruff>=0.16.3
 mypy>=2.3.0
 # PyYAML powers tools/check_workflow_commands.py (INVARIANT-25), which parses
 # .github/workflows/** structurally rather than by regex.  types-PyYAML keeps
@@ -42,6 +42,6 @@ bandit>=1.7.0
 # psutil>=5.9.0
 
 # Build and packaging
-setuptools>=83.0.0
-wheel>=0.47.0
+setuptools>=84.0.0
+wheel>=0.48.0
 build>=1.5.0
