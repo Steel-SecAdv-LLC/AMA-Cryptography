@@ -97,12 +97,12 @@ class TestPbkdf2Kats:
     @pytest.mark.parametrize(
         ("pw_len", "salt_len", "iterations", "dk_len"),
         [
-            (0, 4, 1, 32),     # empty password
-            (5, 0, 2, 31),     # empty salt, sub-digest output
-            (64, 17, 3, 33),   # password exactly one SHA-256 block; multi-block output
-            (65, 8, 10, 96),   # password over the SHA-256 block -> RFC 2104 pre-hash
+            (0, 4, 1, 32),  # empty password
+            (5, 0, 2, 31),  # empty salt, sub-digest output
+            (64, 17, 3, 33),  # password exactly one SHA-256 block; multi-block output
+            (65, 8, 10, 96),  # password over the SHA-256 block -> RFC 2104 pre-hash
             (129, 20, 7, 65),  # password over the SHA-512 block -> pre-hash on both
-            (1, 1, 1, 1),      # minimum everything
+            (1, 1, 1, 1),  # minimum everything
         ],
     )
     def test_differential_against_hashlib(

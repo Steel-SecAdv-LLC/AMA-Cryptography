@@ -5469,7 +5469,9 @@ def _native_sha2_ext(fn_name: str, data: bytes, digest_len: int, label: str) -> 
     """
     check_crypto_permitted()
     if _native_lib is None or not _SHA2_EXT_NATIVE_AVAILABLE:
-        raise NativeBackendUnavailableError(f"{label} native backend not available. " + _INSTALL_HINT)
+        raise NativeBackendUnavailableError(
+            f"{label} native backend not available. " + _INSTALL_HINT
+        )
     out_buf = ctypes.create_string_buffer(digest_len)
     rc = getattr(_native_lib, fn_name)(data, ctypes.c_size_t(len(data)), out_buf)
     if rc != 0:
@@ -5546,7 +5548,9 @@ def _native_pbkdf2(
     if out_len < 1:
         raise ValueError(f"PBKDF2 output length must be >= 1, got {out_len}")
     if _native_lib is None or not _PBKDF2_NATIVE_AVAILABLE:
-        raise NativeBackendUnavailableError(f"{label} native backend not available. " + _INSTALL_HINT)
+        raise NativeBackendUnavailableError(
+            f"{label} native backend not available. " + _INSTALL_HINT
+        )
     out_buf = ctypes.create_string_buffer(out_len)
     rc = getattr(_native_lib, fn_name)(
         password,

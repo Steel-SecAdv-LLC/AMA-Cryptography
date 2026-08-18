@@ -128,11 +128,27 @@
     },
     {
       "type": "library",
+      "name": "ama_pbkdf2",
+      "version": "5.0.0",
+      "description": "PBKDF2-HMAC-SHA256/512 key derivation (NIST SP 800-132)",
+      "scope": "required",
+      "purl": "pkg:generic/ama_pbkdf2@5.0.0"
+    },
+    {
+      "type": "library",
       "name": "ama_sha3",
       "version": "5.0.0",
-      "description": "SHA3-256/512, SHAKE128/256 (NIST FIPS 202)",
+      "description": "SHA3-256/384/512, SHAKE128/256 (NIST FIPS 202)",
       "scope": "required",
       "purl": "pkg:generic/ama_sha3@5.0.0"
+    },
+    {
+      "type": "library",
+      "name": "ama_sha512",
+      "version": "5.0.0",
+      "description": "SHA-512/SHA-384 one-shot hashing (NIST FIPS 180-4)",
+      "scope": "required",
+      "purl": "pkg:generic/ama_sha512@5.0.0"
     },
     {
       "type": "library",

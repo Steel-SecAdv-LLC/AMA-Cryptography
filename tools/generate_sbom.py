@@ -75,7 +75,9 @@ C_COMPONENTS: list[tuple[str, str]] = [
     ("ama_lms", "HSS/LMS hash-based signature verification (RFC 8554)"),
     ("ama_nistp", "ECDSA and ECDH over NIST P-256/P-384/P-521 (FIPS 186-5; RFC 6979 nonces)"),
     ("ama_secp256k1", "secp256k1 elliptic curve operations"),
-    ("ama_sha3", "SHA3-256/512, SHAKE128/256 (NIST FIPS 202)"),
+    ("ama_pbkdf2", "PBKDF2-HMAC-SHA256/512 key derivation (NIST SP 800-132)"),
+    ("ama_sha3", "SHA3-256/384/512, SHAKE128/256 (NIST FIPS 202)"),
+    ("ama_sha512", "SHA-512/SHA-384 one-shot hashing (NIST FIPS 180-4)"),
     ("ama_slhdsa", "SLH-DSA-SHA2-256f + SHAKE-128s (NIST FIPS 205); legacy ama_sphincs_* API"),
     ("ama_x25519", "X25519 ECDH key exchange (RFC 7748)"),
 ]
