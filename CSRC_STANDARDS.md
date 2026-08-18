@@ -19,9 +19,14 @@ algorithms with shipping code are listed — no aspirational entries.
 |-----------|----------|---------------|--------|----------|
 | SHA3-256 | FIPS 202 | SHA3-256 (r=1088, c=512, d=256) | Final | https://csrc.nist.gov/pubs/fips/202/final |
 | SHA3-512 | FIPS 202 | SHA3-512 (r=576, c=1024, d=512) | Final | https://csrc.nist.gov/pubs/fips/202/final |
+| SHA3-384 | FIPS 202 | SHA3-384 (r=832, c=768, d=384) | Final | https://csrc.nist.gov/pubs/fips/202/final |
 | SHAKE128 | FIPS 202 | SHAKE128 (r=1344, c=256, XOF) | Final | https://csrc.nist.gov/pubs/fips/202/final |
 | SHAKE256 | FIPS 202 | SHAKE256 (r=1088, c=512, XOF) | Final | https://csrc.nist.gov/pubs/fips/202/final |
 | SHA-256 | FIPS 180-4 | SHA-256 (256-bit digest) | Final | https://csrc.nist.gov/pubs/fips/180-4/upd1/final |
+| SHA-384 | FIPS 180-4 | SHA-384 (384-bit digest, SHA-512 core) | Final | https://csrc.nist.gov/pubs/fips/180-4/upd1/final |
+| SHA-512 | FIPS 180-4 | SHA-512 (512-bit digest) | Final | https://csrc.nist.gov/pubs/fips/180-4/upd1/final |
+| PBKDF2-HMAC-SHA256 | NIST SP 800-132 | PBKDF2 with HMAC-SHA-256 PRF | Final | https://csrc.nist.gov/pubs/sp/800/132/final |
+| PBKDF2-HMAC-SHA512 | NIST SP 800-132 | PBKDF2 with HMAC-SHA-512 PRF (BIP39 seed KDF) | Final | https://csrc.nist.gov/pubs/sp/800/132/final |
 | HMAC-SHA-256 | FIPS 198-1 | HMAC with SHA-256 (key ≤ block size 64 B) | Final | https://csrc.nist.gov/pubs/fips/198-1/final |
 | AES-256-GCM | NIST SP 800-38D | AES-256 key (256-bit), 96-bit nonce, 128-bit tag | Final | https://csrc.nist.gov/pubs/sp/800/38/d/final |
 | Ascon-AEAD128 | NIST SP 800-232 | 128-bit key, 128-bit nonce, 128-bit tag, rate 128 / capacity 192 | Final | https://csrc.nist.gov/pubs/sp/800/232/final |

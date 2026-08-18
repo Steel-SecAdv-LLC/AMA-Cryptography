@@ -73,7 +73,7 @@ AMA_API ama_error_t ama_hmac_sha384(const uint8_t *key, size_t key_len,
      * oversized keys collapse to SHA-384(key) zero-padded to the block. */
     ama_secure_memzero(k_prime, AMA_SHA512_BLOCK_SIZE);
     if (key_len > AMA_SHA512_BLOCK_SIZE) {
-        ama_sha384(key, key_len, k_prime);  /* writes 48 bytes; [48..127] stay zero */
+        ama_sha384_oneshot(key, key_len, k_prime);  /* writes 48 bytes; [48..127] stay zero */
     } else {
         memcpy(k_prime, key, key_len);
     }

@@ -80,8 +80,9 @@
 
 /* SHA-512 provided by internal/ama_sha2.h (shared with ama_slhdsa.c) */
 
-/* sha512() is now ama_sha512() from internal/ama_sha2.h */
-#define sha512 ama_sha512
+/* sha512() is now ama_sha512_oneshot() from internal/ama_sha2.h (the
+ * public AMA_API ama_sha512 lives in src/c/ama_sha512.c) */
+#define sha512 ama_sha512_oneshot
 
 /* Stack buffer threshold: messages up to 4KB use stack allocation,
  * larger messages fall back to heap. Covers >99% of real-world use

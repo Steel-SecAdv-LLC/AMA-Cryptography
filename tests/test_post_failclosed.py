@@ -378,6 +378,14 @@ class TestErrorStateInhibitsOutput:
         "native_hkdf_sha256(bytes(32), 32)",
         "native_hkdf_sha384(bytes(32), 32)",
         "native_hkdf_sha512(bytes(32), 32)",
+        # SHA-512/384, SHA3-384 and PBKDF2 route through _native_sha2_ext /
+        # _native_pbkdf2 — the same getattr indirection, the same blindness
+        # in the static gate, the same rule: every wrapper, not a sample.
+        "native_sha512(b'm')",
+        "native_sha384(b'm')",
+        "native_sha3_384(b'm')",
+        "native_pbkdf2_hmac_sha256(b'p', b's', 1, 32)",
+        "native_pbkdf2_hmac_sha512(b'p', b's', 1, 32)",
     )
 
     def test_indirect_native_surfaces_refuse_in_error_state(self, tree_with_native: Path) -> None:

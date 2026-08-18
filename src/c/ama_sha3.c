@@ -36,6 +36,10 @@
 #define SHA3_512_RATE 72      /* (1600 - 2*512) / 8 = 72 bytes */
 #define SHA3_512_DIGEST_SIZE 64
 
+/* SHA3-384 parameters (FIPS 202 Section 6.1) */
+#define SHA3_384_RATE 104     /* (1600 - 2*384) / 8 = 104 bytes */
+#define SHA3_384_DIGEST_SIZE 48
+
 /* Forward declaration: generic Keccak-f[1600] exported for dispatch table */
 void ama_keccak_f1600_generic(uint64_t state[KECCAK_STATE_SIZE]);
 
@@ -362,6 +366,72 @@ ama_error_t ama_sha3_512(
 
     /* Squeeze output (64 bytes = 8 words) */
     for (i = 0; i < SHA3_512_DIGEST_SIZE / 8; i++) {
+        store64_le(output + i * 8, state[i]);
+    }
+
+    /* Scrub sensitive data */
+    ama_secure_memzero(state, sizeof(state));
+    ama_secure_memzero(block, sizeof(block));
+
+    return AMA_SUCCESS;
+}
+
+/**
+ * SHA3-384 hash function
+ *
+ * Computes the SHA3-384 hash of the input data.  Implements FIPS 202
+ * SHA3-384 (capacity 768, rate 104): same Keccak-f[1600] core as the
+ * SHA3-256/512 one-shots above, differing only in the rate and output
+ * width.  Exported so the Python layer's RFC 3161 hash table can back
+ * every digest it offers natively (INVARIANT-1) instead of reaching for
+ * stdlib hashlib's OpenSSL-backed sha3_384.
+ *
+ * @param input Input data to hash
+ * @param input_len Length of input in bytes
+ * @param output Output buffer (must be 48 bytes)
+ * @return AMA_SUCCESS or error code
+ */
+AMA_API ama_error_t ama_sha3_384(
+    const uint8_t* input,
+    size_t input_len,
+    uint8_t* output
+) {
+    _Alignas(64) uint64_t state[KECCAK_STATE_SIZE];
+    uint8_t block[SHA3_384_RATE];
+    size_t remaining, i;
+
+    if (!input && input_len > 0) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+    if (!output) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+
+    /* Initialize state to zero */
+    memset(state, 0, sizeof(state));  // PUBLIC-DATA: state (Keccak permutation buffer, pre-use init; post-use scrub via ama_secure_memzero at function exit)
+
+    /* Absorb full blocks */
+    keccak_absorb(state, input, input_len, SHA3_384_RATE);
+
+    /* Handle remaining bytes with padding */
+    remaining = input_len % SHA3_384_RATE;
+    memset(block, 0, sizeof(block));  // PUBLIC-DATA: block (FIPS 202 rate-block padding scratch, pre-use init; immediately filled by memcpy + the domain separator (0x06 for SHA3) + 0x80 final bit)
+    if (remaining > 0) {
+        memcpy(block, input + (input_len - remaining), remaining);
+    }
+
+    /* SHA3 padding: 0x06...0x80 */
+    block[remaining] = 0x06;
+    block[SHA3_384_RATE - 1] |= 0x80;
+
+    /* Absorb final padded block */
+    for (i = 0; i < SHA3_384_RATE / 8; i++) {
+        state[i] ^= load64_le(block + i * 8);
+    }
+    keccak_f1600(state);
+
+    /* Squeeze output (48 bytes = 6 words, no partial word) */
+    for (i = 0; i < SHA3_384_DIGEST_SIZE / 8; i++) {
         store64_le(output + i * 8, state[i]);
     }
 

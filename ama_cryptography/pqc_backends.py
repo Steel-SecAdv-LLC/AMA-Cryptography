@@ -101,6 +101,11 @@ __all__ = [
     "native_shake256",
     # Native FIPS 180-4 hash (raw one-shot SHA-256)
     "native_sha256",
+    "native_sha384",
+    "native_sha512",
+    "native_sha3_384",
+    "native_pbkdf2_hmac_sha256",
+    "native_pbkdf2_hmac_sha512",
 ]
 
 
@@ -1554,6 +1559,61 @@ def _setup_sha3_ext_ctypes(lib: ctypes.CDLL) -> bool:
         return False
 
 
+# SHA-512 / SHA-384 / SHA3-384 one-shot native availability (FIPS 180-4 /
+# FIPS 202).  These C symbols are the closure of the INVARIANT-1 sweep: the
+# SHA-512 core always existed in-tree (internal/ama_sha2.h, backing Ed25519,
+# SLH-DSA-SHA2, HKDF-SHA-512 and HMAC-SHA-384) but was never surfaced, so
+# Python callers needing SHA-384/512 — the FIPS 186-5 hash pairings for
+# P-384/P-521, the RFC 3161 digest table — reached for stdlib hashlib, whose
+# constructors resolve to OpenSSL.  Fail-closed per INVARIANT-7.
+_SHA2_EXT_NATIVE_AVAILABLE = False
+
+# PBKDF2-HMAC-SHA256/512 native availability (SP 800-132).  Backs the BIP39
+# master-seed derivation and the key-encryption-key derivation, which
+# previously ran on hashlib.pbkdf2_hmac — OpenSSL's PBKDF2.
+_PBKDF2_NATIVE_AVAILABLE = False
+
+
+def _setup_sha2_ext_ctypes(lib: ctypes.CDLL) -> bool:
+    """Configure ctypes for SHA-512/SHA-384/SHA3-384 one-shots.
+
+    All three follow the SHA-3 family convention (input, input_len, output;
+    rc-checked) — NOT ama_sha256's output-first void convention.
+    """
+    try:
+        for name in ("ama_sha512", "ama_sha384", "ama_sha3_384"):
+            fn = getattr(lib, name)
+            fn.argtypes = [
+                ctypes.c_char_p,  # input
+                ctypes.c_size_t,  # input_len
+                ctypes.c_char_p,  # output (64 / 48 / 48 bytes)
+            ]
+            fn.restype = ctypes.c_int
+        return True
+    except AttributeError:
+        return False
+
+
+def _setup_pbkdf2_ctypes(lib: ctypes.CDLL) -> bool:
+    """Configure ctypes for PBKDF2-HMAC-SHA256/512 (SP 800-132)."""
+    try:
+        for name in ("ama_pbkdf2_hmac_sha256", "ama_pbkdf2_hmac_sha512"):
+            fn = getattr(lib, name)
+            fn.argtypes = [
+                ctypes.c_char_p,  # password
+                ctypes.c_size_t,  # password_len
+                ctypes.c_char_p,  # salt
+                ctypes.c_size_t,  # salt_len
+                ctypes.c_uint32,  # iterations
+                ctypes.c_char_p,  # out
+                ctypes.c_size_t,  # out_len
+            ]
+            fn.restype = ctypes.c_int
+        return True
+    except AttributeError:
+        return False
+
+
 # HMAC-SHA3-256 native availability (independent of HKDF)
 _HMAC_SHA3_256_NATIVE_AVAILABLE = False
 
@@ -2766,6 +2826,8 @@ if _native_lib is not None:
     _SHA3_256_NATIVE_AVAILABLE = _setup_sha3_256_ctypes(_native_lib)
     _SHA256_NATIVE_AVAILABLE = _setup_sha256_ctypes(_native_lib)
     _SHA3_EXT_NATIVE_AVAILABLE = _setup_sha3_ext_ctypes(_native_lib)
+    _SHA2_EXT_NATIVE_AVAILABLE = _setup_sha2_ext_ctypes(_native_lib)
+    _PBKDF2_NATIVE_AVAILABLE = _setup_pbkdf2_ctypes(_native_lib)
     _HMAC_SHA3_256_NATIVE_AVAILABLE = _setup_hmac_sha3_256_ctypes(_native_lib)
     _HMAC_SHA512_NATIVE_AVAILABLE = _setup_hmac_sha512_ctypes(_native_lib)
     _HMAC_SHA384_NATIVE_AVAILABLE = _setup_hmac_sha384_ctypes(_native_lib)
@@ -5395,6 +5457,160 @@ def native_shake256(data: bytes, length: int) -> bytes:
         `length` bytes of XOF output.
     """
     return _native_shake("ama_shake256", data, length)
+
+
+def _native_sha2_ext(fn_name: str, data: bytes, digest_len: int, label: str) -> bytes:
+    """Shared body for the SHA-512/SHA-384/SHA3-384 one-shot bindings.
+
+    FIPS 140-3 §4.9.2: no output in the ERROR state.  The three wrappers
+    reach the native kernels only through this helper, so the guard lives
+    here; tests/test_post_failclosed.py drives each wrapper in the ERROR
+    state and asserts refusal.
+    """
+    check_crypto_permitted()
+    if _native_lib is None or not _SHA2_EXT_NATIVE_AVAILABLE:
+        raise NativeBackendUnavailableError(f"{label} native backend not available. " + _INSTALL_HINT)
+    out_buf = ctypes.create_string_buffer(digest_len)
+    rc = getattr(_native_lib, fn_name)(data, ctypes.c_size_t(len(data)), out_buf)
+    if rc != 0:
+        raise RuntimeError(f"{label} failed (rc={rc})")
+    return bytes(out_buf)
+
+
+def native_sha512(data: bytes) -> bytes:
+    """SHA-512 (FIPS 180-4) via native C implementation (ama_sha512).
+
+    Byte-identical to ``hashlib.sha512(data).digest()``.  INVARIANT-1
+    compliant (zero external crypto dependencies); fail-closed per
+    INVARIANT-7 (no stdlib fallback).
+
+    Args:
+        data: Input bytes to hash.
+
+    Returns:
+        64-byte SHA-512 digest.
+
+    Raises:
+        NativeBackendUnavailableError: If the native library is unavailable.
+    """
+    return _native_sha2_ext("ama_sha512", data, 64, "SHA-512")
+
+
+def native_sha384(data: bytes) -> bytes:
+    """SHA-384 (FIPS 180-4) via native C implementation (ama_sha384).
+
+    Byte-identical to ``hashlib.sha384(data).digest()``.  INVARIANT-1
+    compliant; fail-closed per INVARIANT-7.
+
+    Args:
+        data: Input bytes to hash.
+
+    Returns:
+        48-byte SHA-384 digest.
+
+    Raises:
+        NativeBackendUnavailableError: If the native library is unavailable.
+    """
+    return _native_sha2_ext("ama_sha384", data, 48, "SHA-384")
+
+
+def native_sha3_384(data: bytes) -> bytes:
+    """SHA3-384 (FIPS 202) via native C implementation (ama_sha3_384).
+
+    Byte-identical to ``hashlib.sha3_384(data).digest()``.  INVARIANT-1
+    compliant; fail-closed per INVARIANT-7.
+
+    Args:
+        data: Input bytes to hash.
+
+    Returns:
+        48-byte SHA3-384 digest.
+
+    Raises:
+        NativeBackendUnavailableError: If the native library is unavailable.
+    """
+    return _native_sha2_ext("ama_sha3_384", data, 48, "SHA3-384")
+
+
+def _native_pbkdf2(
+    fn_name: str, password: bytes, salt: bytes, iterations: int, out_len: int, label: str
+) -> bytes:
+    """Shared body for the PBKDF2-HMAC-SHA256/512 bindings (SP 800-132).
+
+    Same §4.9.2 gating rationale as _native_sha2_ext: one choke point, both
+    wrappers pass through it.
+    """
+    check_crypto_permitted()
+    if not 1 <= iterations <= 0xFFFFFFFF:
+        raise ValueError(f"PBKDF2 iterations must be in [1, 2**32 - 1], got {iterations}")
+    if out_len < 1:
+        raise ValueError(f"PBKDF2 output length must be >= 1, got {out_len}")
+    if _native_lib is None or not _PBKDF2_NATIVE_AVAILABLE:
+        raise NativeBackendUnavailableError(f"{label} native backend not available. " + _INSTALL_HINT)
+    out_buf = ctypes.create_string_buffer(out_len)
+    rc = getattr(_native_lib, fn_name)(
+        password,
+        ctypes.c_size_t(len(password)),
+        salt,
+        ctypes.c_size_t(len(salt)),
+        ctypes.c_uint32(iterations),
+        out_buf,
+        ctypes.c_size_t(out_len),
+    )
+    if rc != 0:
+        raise RuntimeError(f"{label} failed (rc={rc})")
+    return bytes(out_buf.raw[:out_len])
+
+
+def native_pbkdf2_hmac_sha256(password: bytes, salt: bytes, iterations: int, out_len: int) -> bytes:
+    """PBKDF2-HMAC-SHA256 (SP 800-132) via native C (ama_pbkdf2_hmac_sha256).
+
+    Byte-identical to ``hashlib.pbkdf2_hmac("sha256", password, salt,
+    iterations, out_len)``.  INVARIANT-1 compliant: the KDF runs on the
+    in-tree SHA-256 core, not OpenSSL's PBKDF2.  Fail-closed per INVARIANT-7.
+
+    Args:
+        password: Password bytes.
+        salt: Salt bytes.
+        iterations: Iteration count (>= 1).
+        out_len: Derived key length in bytes (>= 1).
+
+    Returns:
+        ``out_len`` bytes of derived key.
+
+    Raises:
+        ValueError: On an out-of-range iteration count or output length.
+        NativeBackendUnavailableError: If the native library is unavailable.
+    """
+    return _native_pbkdf2(
+        "ama_pbkdf2_hmac_sha256", password, salt, iterations, out_len, "PBKDF2-HMAC-SHA256"
+    )
+
+
+def native_pbkdf2_hmac_sha512(password: bytes, salt: bytes, iterations: int, out_len: int) -> bytes:
+    """PBKDF2-HMAC-SHA512 (SP 800-132) via native C (ama_pbkdf2_hmac_sha512).
+
+    Byte-identical to ``hashlib.pbkdf2_hmac("sha512", password, salt,
+    iterations, out_len)``.  This is the BIP39 seed-derivation KDF (2048
+    iterations, salt ``b"mnemonic" + passphrase``).  INVARIANT-1 compliant;
+    fail-closed per INVARIANT-7.
+
+    Args:
+        password: Password bytes.
+        salt: Salt bytes.
+        iterations: Iteration count (>= 1).
+        out_len: Derived key length in bytes (>= 1).
+
+    Returns:
+        ``out_len`` bytes of derived key.
+
+    Raises:
+        ValueError: On an out-of-range iteration count or output length.
+        NativeBackendUnavailableError: If the native library is unavailable.
+    """
+    return _native_pbkdf2(
+        "ama_pbkdf2_hmac_sha512", password, salt, iterations, out_len, "PBKDF2-HMAC-SHA512"
+    )
 
 
 # ============================================================================

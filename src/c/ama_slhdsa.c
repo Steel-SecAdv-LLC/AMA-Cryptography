@@ -222,7 +222,7 @@ static void sha2_mgf1_sha512(uint8_t *out, size_t outlen,
         hashbuf[seedlen + 1] = (uint8_t)(i >> 16);
         hashbuf[seedlen + 2] = (uint8_t)(i >> 8);
         hashbuf[seedlen + 3] = (uint8_t)i;
-        ama_sha512(hashbuf, seedlen + 4, buf);
+        ama_sha512_oneshot(hashbuf, seedlen + 4, buf);
         tocopy = (outlen - i * 64 < 64) ? outlen - i * 64 : 64;
         memcpy(out + i * 64, buf, tocopy);
     }
@@ -298,7 +298,7 @@ static void sha2_HT(const slhdsa_params_t *p, uint8_t *out,
     /* toByte(0, 128-n) is left as zeros from the memset above. */
     memcpy(buf + 128, addr_c, 22);
     if (msglen > 0) memcpy(buf + 150, m, msglen);
-    ama_sha512(buf, total, hash);
+    ama_sha512_oneshot(buf, total, hash);
     memcpy(out, hash, p->n);
     ama_secure_memzero(hash, sizeof(hash));
     ama_secure_memzero(buf, total);

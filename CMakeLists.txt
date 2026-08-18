@@ -592,6 +592,13 @@ set(AMA_SOURCES
     src/c/ama_sha256_ni.c
     src/c/ama_hmac_sha256.c
     src/c/ama_hmac_sha384.c
+    # Public SHA-512/384 one-shots (surface the internal/ama_sha2.h core to
+    # the Python layer) and PBKDF2-HMAC-SHA256/512 (SP 800-132) on the same
+    # cores.  Unconditional for the same reason the rest of the SHA-2 block
+    # is: they are not PQC-specific, and the Python layer binds them in
+    # every configuration (INVARIANT-1 — no stdlib hashlib for primitives).
+    src/c/ama_sha512.c
+    src/c/ama_pbkdf2.c
     # HSS/LMS verification (RFC 8554).  Consumes only SHA-256, holds no secret
     # and keeps no state, so it belongs in the unconditional list: the
     # firmware-update verifiers this exists for are exactly the constrained

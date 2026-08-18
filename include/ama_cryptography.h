@@ -471,6 +471,24 @@ AMA_API ama_error_t ama_sha3_512(
 );
 
 /**
+ * @brief SHA3-384 hash function (FIPS 202)
+ *
+ * One-shot SHA3-384 (capacity 768, rate 104).  Byte-identical to
+ * hashlib.sha3_384(input).digest().  Exported so the Python layer's
+ * RFC 3161 digest table is natively backed end to end (INVARIANT-1).
+ *
+ * @param input Input data (may be NULL iff input_len == 0)
+ * @param input_len Length of input
+ * @param output Output buffer (48 bytes)
+ * @return AMA_SUCCESS or error code
+ */
+AMA_API ama_error_t ama_sha3_384(
+    const uint8_t* input,
+    size_t input_len,
+    uint8_t* output
+);
+
+/**
  * @brief SHAKE128 / SHAKE256 extendable-output functions (FIPS 202)
  *
  * One-shot XOF: absorb `input`, squeeze `output_len` bytes into `output`.
@@ -696,6 +714,92 @@ AMA_API ama_error_t ama_hmac_sha384(
     const uint8_t *key, size_t key_len,
     const uint8_t *msg, size_t msg_len,
     uint8_t out[48]
+);
+
+/**
+ * @brief One-shot SHA-512 (FIPS 180-4 Section 6.4)
+ *
+ * Byte-identical to hashlib.sha512(input).digest().  Surfaces the in-tree
+ * SHA-512 core (internal/ama_sha2.h — the one Ed25519, SLH-DSA-SHA2,
+ * HKDF-SHA-512 and HMAC-SHA-384 already run on) to public callers, so the
+ * Python layer's FIPS 186-5 hash pairings and RFC 3161 digest table need
+ * no stdlib hashlib (INVARIANT-1).  Argument order follows the SHA-3
+ * family (input-first, rc-checked), not the older output-first ama_sha256.
+ *
+ * @param input     Input data (may be NULL iff input_len == 0)
+ * @param input_len Input length in bytes
+ * @param output    Output buffer (must be at least 64 bytes)
+ * @return          AMA_SUCCESS or AMA_ERROR_INVALID_PARAM
+ */
+AMA_API ama_error_t ama_sha512(
+    const uint8_t* input,
+    size_t input_len,
+    uint8_t* output
+);
+
+/**
+ * @brief One-shot SHA-384 (FIPS 180-4 Section 6.5)
+ *
+ * Byte-identical to hashlib.sha384(input).digest().  Shares the SHA-512
+ * compression function; differs only in IV and 48-byte truncation.
+ *
+ * @param input     Input data (may be NULL iff input_len == 0)
+ * @param input_len Input length in bytes
+ * @param output    Output buffer (must be at least 48 bytes)
+ * @return          AMA_SUCCESS or AMA_ERROR_INVALID_PARAM
+ */
+AMA_API ama_error_t ama_sha384(
+    const uint8_t* input,
+    size_t input_len,
+    uint8_t* output
+);
+
+/**
+ * @brief PBKDF2-HMAC-SHA256 (NIST SP 800-132 / RFC 8018 Section 5.2)
+ *
+ * Byte-identical to hashlib.pbkdf2_hmac("sha256", password, salt,
+ * iterations, out_len).  Backs the Python key-encryption-key derivation
+ * so no KDF is delegated to stdlib hashlib's OpenSSL PBKDF2 (INVARIANT-1).
+ * The HMAC key schedule is hoisted out of the iteration loop (two
+ * compression passes per iteration, not four).
+ *
+ * @param password      Password bytes (may be NULL iff password_len == 0)
+ * @param password_len  Password length in bytes
+ * @param salt          Salt bytes (may be NULL iff salt_len == 0)
+ * @param salt_len      Salt length in bytes
+ * @param iterations    Iteration count (must be >= 1)
+ * @param out           Output buffer for the derived key
+ * @param out_len       Derived key length (>= 1, <= (2^32 - 1) * 32)
+ * @return              AMA_SUCCESS or AMA_ERROR_INVALID_PARAM
+ */
+AMA_API ama_error_t ama_pbkdf2_hmac_sha256(
+    const uint8_t *password, size_t password_len,
+    const uint8_t *salt, size_t salt_len,
+    uint32_t iterations,
+    uint8_t *out, size_t out_len
+);
+
+/**
+ * @brief PBKDF2-HMAC-SHA512 (NIST SP 800-132 / RFC 8018 Section 5.2)
+ *
+ * Byte-identical to hashlib.pbkdf2_hmac("sha512", password, salt,
+ * iterations, out_len).  This is the BIP39 seed-derivation KDF
+ * (2048 iterations, salt "mnemonic" || passphrase).
+ *
+ * @param password      Password bytes (may be NULL iff password_len == 0)
+ * @param password_len  Password length in bytes
+ * @param salt          Salt bytes (may be NULL iff salt_len == 0)
+ * @param salt_len      Salt length in bytes
+ * @param iterations    Iteration count (must be >= 1)
+ * @param out           Output buffer for the derived key
+ * @param out_len       Derived key length (>= 1, <= (2^32 - 1) * 64)
+ * @return              AMA_SUCCESS or AMA_ERROR_INVALID_PARAM
+ */
+AMA_API ama_error_t ama_pbkdf2_hmac_sha512(
+    const uint8_t *password, size_t password_len,
+    const uint8_t *salt, size_t salt_len,
+    uint32_t iterations,
+    uint8_t *out, size_t out_len
 );
 
 /**

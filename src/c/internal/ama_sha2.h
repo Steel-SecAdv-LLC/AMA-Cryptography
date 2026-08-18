@@ -239,14 +239,14 @@ static AMA_SHA2_MAYBE_UNUSED void ama_sha512_ctx_final(ama_sha512_ctx *ctx,
  * ONE-SHOT HASHES
  * ============================================================================ */
 
-static AMA_SHA2_MAYBE_UNUSED void ama_sha512(const uint8_t *data, size_t len, uint8_t out[64]) {
+static AMA_SHA2_MAYBE_UNUSED void ama_sha512_oneshot(const uint8_t *data, size_t len, uint8_t out[64]) {
     ama_sha512_ctx ctx;
     ama_sha512_ctx_init(&ctx);
     ama_sha512_ctx_update(&ctx, data, len);
     ama_sha512_ctx_final(&ctx, out, AMA_SHA512_DIGEST_SIZE);
 }
 
-static AMA_SHA2_MAYBE_UNUSED void ama_sha384(const uint8_t *data, size_t len, uint8_t out[48]) {
+static AMA_SHA2_MAYBE_UNUSED void ama_sha384_oneshot(const uint8_t *data, size_t len, uint8_t out[48]) {
     ama_sha512_ctx ctx;
     ama_sha384_ctx_init(&ctx);
     ama_sha512_ctx_update(&ctx, data, len);
@@ -278,7 +278,7 @@ static AMA_SHA2_MAYBE_UNUSED int ama_hmac_sha512_3(
 
     /* If key > block size, hash it first (RFC 2104 §2) */
     if (key_len > AMA_SHA512_BLOCK_SIZE) {
-        ama_sha512(key, key_len, key_hash);
+        ama_sha512_oneshot(key, key_len, key_hash);
         key = key_hash;
         key_len = AMA_SHA512_DIGEST_SIZE;
     }
