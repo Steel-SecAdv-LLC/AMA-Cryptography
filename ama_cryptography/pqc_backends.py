@@ -59,6 +59,9 @@ from ama_cryptography._module_state import (
     pairwise_test_signature,
     secure_token_bytes,
 )
+from ama_cryptography._module_state import (
+    register_health_digest as _register_health_digest,
+)
 from ama_cryptography.exceptions import (
     NativeBackendUnavailableError,
     PQCUnavailableError,
@@ -5430,6 +5433,21 @@ def native_sha256(data: bytes) -> bytes:
     # to match ama_sha3_256(in, len, out) — that would corrupt memory.
     _native_lib.ama_sha256(out_buf, data, ctypes.c_size_t(len(data)))
     return bytes(out_buf)
+
+
+# Hand the continuous-RNG health test its SHA-256 kernel.
+#
+# _module_state is the leaf this module imports at module scope, so it cannot
+# import back without creating a genuine import cycle (CodeQL "Cyclic import"
+# on the previous function-local form).  Injecting the callable here reverses
+# the edge: the dependency now runs the same direction as the import, and the
+# cycle is gone from the graph rather than merely deferred past import time.
+#
+# The registration is deliberately immediately after `native_sha256` is bound
+# and before any keygen entry point below can run, so no caller can reach
+# `secure_token_bytes` with the kernel unset; if one somehow did, that
+# function fails closed rather than falling back to OpenSSL (INVARIANT-1).
+_register_health_digest(native_sha256)
 
 
 def native_sha3_512(data: bytes) -> bytes:
