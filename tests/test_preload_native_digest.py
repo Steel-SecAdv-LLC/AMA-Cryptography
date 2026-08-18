@@ -544,3 +544,48 @@ class TestSigningScopeRequiresIntentNotJustIdentity:
             sys, "orig_argv", ["python", "-m", "ama_cryptography.integrity", "--update"]
         )
         assert pb._process_is_the_integrity_signer()
+
+
+class TestArgvScanSkipsOptionValues:
+    """An interpreter option's VALUE must not be read as an option itself.
+
+    Found by adversarial review, which executed the attack: with an ELF
+    constructor in a planted ``.so``, ``python -W -mama_cryptography._build_sign
+    app.py`` mapped the digest-mismatching library and ran its constructor
+    while the program actually executing was ``app.py``.  ``-W`` only warns
+    about an unparseable value and continues; ``-X`` accepts any value
+    silently.  So the attacker needs control of one interpreter-option value
+    — the shape a launcher or wrapper that interpolates a config-supplied
+    ``-X``/``-W`` into ``exec python …`` hands over — not the command line.
+    """
+
+    @staticmethod
+    def _scope(monkeypatch: pytest.MonkeyPatch, argv: list[str]) -> bool:
+        monkeypatch.setenv("AMA_BUILD_PIPELINE", "1")
+        monkeypatch.setattr(sys, "orig_argv", argv, raising=False)
+        return pb._process_is_the_integrity_signer()
+
+    @pytest.mark.parametrize("option", ["-W", "-X", "--check-hash-based-pycs"])
+    def test_a_signer_name_as_an_option_value_confers_nothing(
+        self, monkeypatch: pytest.MonkeyPatch, option: str
+    ) -> None:
+        assert not self._scope(
+            monkeypatch,
+            ["python", option, "-mama_cryptography._build_sign", "app.py"],
+        )
+
+    @pytest.mark.parametrize(
+        "argv",
+        [
+            ["python", "-m", "ama_cryptography._build_sign"],
+            ["python", "-mama_cryptography._build_sign"],
+            ["python", "-W", "ignore", "-m", "ama_cryptography._build_sign"],
+            ["python", "-X", "dev", "-m", "ama_cryptography.integrity", "--update"],
+            ["python", "-B", "-m", "ama_cryptography._build_sign"],
+        ],
+    )
+    def test_real_signer_invocations_still_work(
+        self, monkeypatch: pytest.MonkeyPatch, argv: list[str]
+    ) -> None:
+        """Skipping option values must not cost the documented invocations."""
+        assert self._scope(monkeypatch, argv)

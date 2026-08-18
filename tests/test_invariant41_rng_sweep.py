@@ -36,6 +36,10 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
+from ama_cryptography.exceptions import CryptoModuleError
+
 PACKAGE_DIR = Path(__file__).resolve().parent.parent / "ama_cryptography"
 
 #: Call shapes that reach OS entropy without the continuous health test.
@@ -222,3 +226,54 @@ class TestTheSweepItselfWorks:
                         f"{node.module}; use the module-qualified form so the INVARIANT-41 "
                         f"sweep can see every draw"
                     )
+
+
+class TestHealthDigestKernelResolution:
+    """Losing the injected kernel must not brick the module permanently.
+
+    Injecting the SHA-256 kernel at ``pqc_backends`` import time removed an
+    import cycle, but it also removed the self-healing the previous
+    function-local import had: that form re-resolved from ``sys.modules`` on
+    every call, so anything re-running this module's body (``importlib.reload``,
+    IPython ``%autoreload``, a test popping the module, a second module
+    identity on a vendored path) recovered on the next draw.  With a plain
+    module global it did not, and ``reset_module()`` could not repair it —
+    its POST re-import is a no-op against a cached ``pqc_backends``.
+
+    The recovery path is a ``sys.modules`` lookup rather than an import
+    statement, so it heals the state without putting the cycle back in the
+    import graph.
+    """
+
+    def test_a_lost_kernel_is_re_resolved_rather_than_bricking(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from ama_cryptography import _module_state as ms
+
+        monkeypatch.setattr(ms, "_health_digest", None, raising=False)
+        assert len(ms.secure_token_bytes(32)) == 32
+        assert ms.module_error_reason() is None
+
+    def test_an_unresolvable_kernel_refuses_without_latching_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Could-not-run is not ran-and-failed.
+
+        No bytes may be issued, and hashlib must never stand in — its
+        constructors are OpenSSL on a libcrypto build and the health sample is
+        potential key material (INVARIANT-1).  But a missing kernel means the
+        continuous test never executed, so it must not latch the permanent,
+        process-wide ERROR state this module reserves for a test that ran and
+        failed.
+        """
+        import sys as _sys
+
+        from ama_cryptography import _module_state as ms
+
+        monkeypatch.setattr(ms, "_health_digest", None, raising=False)
+        monkeypatch.delitem(_sys.modules, "ama_cryptography.pqc_backends", raising=False)
+
+        with pytest.raises(CryptoModuleError, match="no health-digest kernel"):
+            ms.secure_token_bytes(32)
+
+        assert ms.module_error_reason() is None

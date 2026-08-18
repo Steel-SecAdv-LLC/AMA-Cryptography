@@ -528,11 +528,16 @@ def _process_is_the_integrity_signer() -> bool:
        ``python -m ama_cryptography._build_sign`` against an anchored wheel
        tree whose artefact it just deleted, and the anchored missing-artefact
        refusal fired during the parent import with the identity check blind.
-       ``sys.orig_argv`` is immutable truth about how this process was
-       started: an attacker who can choose the victim's command line can
-       already run arbitrary code, while an attacker who can only set an
-       environment variable cannot alter it — the same boundary check 1
-       draws, available earlier.
+       ``sys.orig_argv`` records how the interpreter was started.  Stated
+       precisely, because an earlier revision called it "immutable truth":
+       it is a plain mutable list, and anything executing in-process can
+       rewrite it, exactly as it can rewrite ``__main__.__spec__``.  Neither
+       window resists an in-process adversary; both resist one who can only
+       set an environment variable, which is the boundary being drawn.  Note
+       that PYTHONPATH plus a planted ``sitecustomize.py`` (or a ``.pth``
+       file) turns an environment-variable adversary into an in-process one
+       — that is a gap in the surrounding design, not something this check
+       can close by itself.
     """
     if os.environ.get("AMA_BUILD_PIPELINE") != "1":
         return False
@@ -564,6 +569,15 @@ _MIXED_MODE_SIGNER_MODULES = ("ama_cryptography.integrity",)
 #: ``--update`` (they are one mutually-exclusive group plus a modifier), so
 #: ``--update`` is the token that distinguishes a writing run.
 _SIGNING_INTENT_FLAGS = ("--update",)
+
+
+#: Interpreter options that take their value as the NEXT argv element.  The
+#: signer-identity scan must step over that value; otherwise a caller-supplied
+#: option value is read as an interpreter option, and `python -W <value> app.py`
+#: with `<value>` spelled `-mama_cryptography._build_sign` grants app.py
+#: signing scope.  `-W` warns and continues on a bad value, `-X` accepts any
+#: value silently, so neither aborts the way `--check-hash-based-pycs` does.
+_INTERPRETER_OPTIONS_TAKING_A_VALUE = frozenset({"-W", "-X", "--check-hash-based-pycs"})
 
 
 def _argv_shows_signing_intent() -> bool:
@@ -614,14 +628,26 @@ def _launched_as_signer_module() -> bool:
     ``__main__`` check accepts as out of scope.
     """
     argv = list(getattr(sys, "orig_argv", []) or [])
-    for index in range(1, len(argv)):
+    index = 1
+    while index < len(argv):
         argument = argv[index]
+        # Options that consume a SEPARATE following argument must skip it, or
+        # that argument gets read as though it were an interpreter option.
+        # Without this, `python -W -mama_cryptography._build_sign app.py`
+        # matched the joined `-m` form below and handed signing scope to
+        # app.py: `-W` only warns about the bad value and continues, and `-X`
+        # accepts arbitrary values silently.  Verified: both mapped a
+        # digest-mismatching library before this skip existed.
+        if argument in _INTERPRETER_OPTIONS_TAKING_A_VALUE:
+            index += 2
+            continue
         if argument == "-m":
             return index + 1 < len(argv) and _module_confers_signing_scope(argv[index + 1])
         if argument.startswith("-m") and len(argument) > 2:
             return _module_confers_signing_scope(argument[2:])
         if argument == "-c" or argument == "-" or not argument.startswith("-"):
             return False
+        index += 1
     return False
 
 

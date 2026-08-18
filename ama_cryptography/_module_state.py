@@ -39,6 +39,7 @@ spelling fails loudly (``AttributeError``) instead of passing silently.
 
 import logging
 import secrets
+import sys
 import threading
 from typing import Any, Callable, Dict, Optional
 
@@ -273,19 +274,45 @@ def secure_token_bytes(n: int = 32) -> bytes:
     # never hashlib: those constructors are OpenSSL on a libcrypto build, and
     # the health sample IS potential key material (INVARIANT-1).
     #
-    # By the time any caller can reach here, pqc_backends is fully initialised
-    # — it imports this module at module scope, and check_crypto_permitted()
-    # above has already refused the ERROR state; OPERATIONAL without the
-    # native backend cannot occur (INVARIANT-7 fails the import).  If the
-    # kernel is somehow absent anyway, refuse rather than reach for a
-    # fallback: an unauthorised digest of live key material is the outcome
-    # this path exists to prevent.
+    # Ordering: `check_crypto_permitted()` above runs BEFORE the kernel is
+    # resolved, which is what keeps a non-POST thread calling in mid-POST from
+    # reaching this code at all.  An earlier revision of this comment also
+    # claimed "OPERATIONAL without the native backend cannot occur
+    # (INVARIANT-7 fails the import)"; that is false — the documented
+    # docs-build override in `_self_test._run_backend_stage` returns success
+    # with no native library, and in that state this function raises
+    # `NativeBackendUnavailableError` from the kernel itself.
     digest_fn = _health_digest
     if digest_fn is None:
-        _set_error("Continuous RNG test unavailable: no health-digest kernel registered")
+        # Recovery path, NOT a fallback to another vendor.  Injection alone
+        # made this state unrecoverable: `_health_digest` is set once while
+        # `pqc_backends` executes its module body, so anything that re-runs
+        # THIS module's body while `pqc_backends` stays cached in sys.modules
+        # (importlib.reload, IPython %autoreload, a test popping the module,
+        # a second module identity on a vendored path) left the kernel None
+        # forever — and `reset_module()` cannot repair it, because its POST
+        # re-import is a no-op against the cached module.  The previous
+        # function-local `from ... import native_sha256` re-resolved on every
+        # call and so healed itself; losing that was a regression.
+        #
+        # Resolving through sys.modules restores the self-healing without
+        # restoring the import cycle: this is a dict lookup, not an import
+        # statement, so it adds no edge to the import graph.
+        module = sys.modules.get("ama_cryptography.pqc_backends")
+        digest_fn = getattr(module, "native_sha256", None) if module is not None else None
+    if digest_fn is None:
+        # Genuinely unavailable.  Refuse — hashlib is not an option here, its
+        # constructors are OpenSSL on a libcrypto build and the health sample
+        # IS potential key material (INVARIANT-1).  Deliberately NOT
+        # `_set_error`: this file reserves the ERROR state for a test that RAN
+        # and FAILED, and a missing kernel means the continuous test never
+        # ran.  Latching a permanent, process-wide, unrecoverable error for an
+        # initialisation-ordering fault would inhibit even verify-only paths
+        # that draw no randomness.
         raise CryptoModuleError(
-            "Module in error state: the continuous RNG test has no digest kernel "
-            "(ama_cryptography.pqc_backends did not complete initialisation)"
+            "Continuous RNG test unavailable: no health-digest kernel is registered "
+            "and ama_cryptography.pqc_backends.native_sha256 could not be resolved. "
+            "No random bytes were issued."
         )
     health_digest = digest_fn(buf[:_RNG_HEALTH_SIZE])
     # Compare-and-store atomically: see the _rng_lock rationale above.
