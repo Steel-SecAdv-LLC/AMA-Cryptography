@@ -2737,7 +2737,32 @@ def _run_rng_stage() -> Tuple[bool, Optional[str]]:
     # here would make the very first post-POST comparison compare a digest
     # against a raw sample — never equal, so the first draw after POST would
     # escape the continuous check entirely.
-    _rng_state["previous"] = hashlib.sha256(out2).digest()
+    # Same kernel as secure_token_bytes uses for the comparison side
+    # (pqc_backends.native_sha256): both halves of the continuous test must
+    # produce identical digests for the same draw, and both must come from
+    # this module's own SHA-256 rather than OpenSSL-backed hashlib
+    # (INVARIANT-1).  This runs during POST, where SELF_TEST-state crypto is
+    # permitted — the pairwise tests a few stages earlier already exercised
+    # exactly this path.
+    #
+    # When the native backend is absent the seed is skipped rather than
+    # computed by hashlib (INVARIANT-7: no fallback).  That is sound in every
+    # state that can follow: without the native backend the module never
+    # reaches OPERATIONAL, so under the docs-build override every crypto call
+    # refuses before the continuous test is consulted, and in a normal
+    # no-native import POST hard-fails — an unseeded continuous test is
+    # unreachable, an OpenSSL-seeded one would be a vendor in the RNG path.
+    from ama_cryptography.exceptions import (
+        NativeBackendUnavailableError,
+    )  # noqa: PLC0415  # import cycle: _self_test is imported during package init before pqc_backends finishes (MST-001)
+    from ama_cryptography.pqc_backends import (
+        native_sha256,
+    )  # noqa: PLC0415  # import cycle: _self_test is imported during package init before pqc_backends finishes (MST-001)
+
+    try:
+        _rng_state["previous"] = native_sha256(out2)
+    except NativeBackendUnavailableError:
+        _rng_state["previous"] = None
     _SELF_TEST_RESULTS.append(("RNG", True, "RNG health test passed"))
     return True, None
 

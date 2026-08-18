@@ -37,7 +37,6 @@ from the state the guards enforce and turn a test into a no-op — so the stale
 spelling fails loudly (``AttributeError``) instead of passing silently.
 """
 
-import hashlib
 import logging
 import secrets
 import threading
@@ -238,7 +237,21 @@ def secure_token_bytes(n: int = 32) -> bytes:
     # same object CPython hands back to the caller — so retaining it would pin
     # live key material (an Ed25519 seed, say) in module state until the next
     # draw, visible to a heap dump or the GC for that whole window.
-    health_digest = hashlib.sha256(buf[:_RNG_HEALTH_SIZE]).digest()
+    # The digest is computed by this module's own SHA-256 kernel.  The health
+    # sample IS potential key material (for n == 32 it is byte-for-byte the
+    # buffer the caller receives), and hashlib's constructors resolve to
+    # OpenSSL — so the old hashlib.sha256 here handed every RNG draw's health
+    # window to an unauthorized vendor (INVARIANT-1).  The import is local
+    # because pqc_backends imports this module at its own import time; by the
+    # time any caller can reach secure_token_bytes, pqc_backends is fully
+    # initialised, and check_crypto_permitted() above already refused the
+    # ERROR state.  OPERATIONAL without the native backend cannot occur
+    # (INVARIANT-7 fails the import), so native_sha256 cannot be absent here.
+    from ama_cryptography.pqc_backends import (
+        native_sha256,
+    )  # noqa: PLC0415  # import cycle: pqc_backends imports _module_state at module scope (MST-001)
+
+    health_digest = native_sha256(buf[:_RNG_HEALTH_SIZE])
     # Compare-and-store atomically: see the _rng_lock rationale above.
     with _rng_lock:
         if _rng_state["previous"] is not None and health_digest == _rng_state["previous"]:

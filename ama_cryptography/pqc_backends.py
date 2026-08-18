@@ -7026,14 +7026,22 @@ def native_nistp_keypair(curve: Union[int, str]) -> tuple:
         # only catch transient faults (INVARIANT-41).  Correspondence of the
         # halves is what the roundtrip proves, so it covers the keypair's
         # ECDH use as well.  The digest is produced with the curve's FIPS
-        # 186-5 hash pairing; stdlib hashlib here mirrors what crypto_api
-        # ships for message hashing and carries no key material.
+        # 186-5 hash pairing, on this module's own SHA-2 kernels.  An earlier
+        # revision hashed with stdlib hashlib under a comment claiming that
+        # "mirrors what crypto_api ships for message hashing" — the opposite
+        # of what crypto_api.hash_message documents ("Per INVARIANT-7 there
+        # is no hashlib fallback: a hash is a cryptographic primitive"), and
+        # hashlib's constructors resolve to OpenSSL, so a FIPS self-test of
+        # THIS module was routing its digests through an unauthorized vendor
+        # (INVARIANT-1).  A keypair generator cannot run without the native
+        # library, so the native hash is definitionally present here.
         digest_name = nistp_default_hash(cid)
+        pct_hash = {"sha256": native_sha256, "sha384": native_sha384, "sha512": native_sha512}[
+            digest_name
+        ]
         pairwise_test_signature(
-            lambda m, sk_: native_nistp_ecdsa_sign(cid, hashlib.new(digest_name, m).digest(), sk_),
-            lambda m, sig, pk_: native_nistp_ecdsa_verify(
-                cid, sig, hashlib.new(digest_name, m).digest(), pk_
-            ),
+            lambda m, sk_: native_nistp_ecdsa_sign(cid, pct_hash(m), sk_),
+            lambda m, sig, pk_: native_nistp_ecdsa_verify(cid, sig, pct_hash(m), pk_),
             private_key,
             public_key,
             f"P-{cid}",

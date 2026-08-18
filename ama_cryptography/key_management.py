@@ -372,6 +372,7 @@ class HDKeyDerivation:
             native_secp256k1_ecdsa_verify,
             native_secp256k1_pubkey_decompress,
             native_secp256k1_pubkey_from_privkey,
+            native_sha256,
         )
 
         if not _SECP256K1_NATIVE_AVAILABLE:
@@ -394,11 +395,16 @@ class HDKeyDerivation:
                 f"Module in error state: Pairwise test failed for {label}"
             ) from exc
         # The ECDSA primitives take a 32-byte digest, not a message; hash the
-        # helper's test message on both sides so sign and verify agree.
+        # helper's test message on both sides so sign and verify agree.  The
+        # digest comes from this module's own SHA-256 kernel: a FIPS pairwise
+        # test that hashed through stdlib hashlib was routing part of itself
+        # through OpenSSL (INVARIANT-1), and the native hash is definitionally
+        # present here — the keypair that is being tested came from the same
+        # library.
         pairwise_test_signature(
-            lambda message, sk: native_secp256k1_ecdsa_sign(hashlib.sha256(message).digest(), sk),
+            lambda message, sk: native_secp256k1_ecdsa_sign(native_sha256(message), sk),
             lambda message, signature, pk: native_secp256k1_ecdsa_verify(
-                signature, hashlib.sha256(message).digest(), pk
+                signature, native_sha256(message), pk
             ),
             private_key,
             public_key_64,
