@@ -19,6 +19,7 @@ pins for the pieces.
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -451,7 +452,7 @@ class TestSigningScopeRequiresIntentNotJustIdentity:
             monkeypatch.setenv("AMA_BUILD_PIPELINE", "1")
         else:
             monkeypatch.delenv("AMA_BUILD_PIPELINE", raising=False)
-        monkeypatch.setattr(pb.sys, "orig_argv", argv, raising=False)
+        monkeypatch.setattr(sys, "orig_argv", argv, raising=False)
         return pb._process_is_the_integrity_signer()
 
     @pytest.mark.parametrize("subcommand", ["--verify", "--show"])
@@ -531,15 +532,15 @@ class TestSigningScopeRequiresIntentNotJustIdentity:
         monkeypatch.setattr(
             main_module, "__spec__", types.SimpleNamespace(name="ama_cryptography.integrity")
         )
-        monkeypatch.setitem(pb.sys.modules, "__main__", main_module)
+        monkeypatch.setitem(sys.modules, "__main__", main_module)
         monkeypatch.setenv("AMA_BUILD_PIPELINE", "1")
 
         monkeypatch.setattr(
-            pb.sys, "orig_argv", ["python", "-m", "ama_cryptography.integrity", "--verify"]
+            sys, "orig_argv", ["python", "-m", "ama_cryptography.integrity", "--verify"]
         )
         assert not pb._process_is_the_integrity_signer()
 
         monkeypatch.setattr(
-            pb.sys, "orig_argv", ["python", "-m", "ama_cryptography.integrity", "--update"]
+            sys, "orig_argv", ["python", "-m", "ama_cryptography.integrity", "--update"]
         )
         assert pb._process_is_the_integrity_signer()
