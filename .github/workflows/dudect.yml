@@ -561,6 +561,62 @@ jobs:
           python tools/check_ghash_constant_time.py \
             --lib build/lib/libama_cryptography_test.a --target ascon-hash
 
+      - name: SHA3-256 instruction count must not depend on the input
+        # Same question as the Ascon-Hash256 gate above, raised by the same
+        # kind of evidence.  The `Constant-Time Verification (Smoke Test)`
+        # lane in ci.yml reported SHA3-256 at t = +12.05 in 3 of 5 rounds,
+        # consistently signed, on commit 09b2e51 — and t = +2.42 (0/1) on
+        # its parent 2b2dc9d, which differs by no C code at all: that commit
+        # changed Python and documentation only.  The harness escalates past
+        # round 1 only when a lane trips, so the two runs are the same binary
+        # measured twice on the same runner class.
+        #
+        # The lane's construction is not the suspect either: it builds both
+        # inputs before the loop and selects between them with a branchless
+        # pointer select outside the timer.  That lane USED to have exactly
+        # the defect one would suspect, and it is documented as fixed in
+        # tools/constant_time/dudect_crypto.c.
+        #
+        # Measured here: SHA3-256 costs 10,055 retired instructions per call
+        # and that cost does not depend on the input.  The whole-process
+        # figure this gate prints is dominated by a ~1.736e9 one-time
+        # dispatch initialisation (dispatch_init_internal plus the
+        # Dilithium/Kyber NTT reference-vs-AVX2 equivalence self-checks) that
+        # the first SHA3 call triggers; that initialisation is
+        # class-independent but not bit-reproducible, and it is the entire
+        # source of the small cross-class spread this gate tolerates.  It was
+        # separated out by differencing iteration counts and by re-running a
+        # single class: identical input, five runs, spread 17 instructions.
+        # A zero-hash control over all eight classes is exactly constant.
+        #
+        # So ama_sha3_256 is input-independent and the wall-clock reading
+        # belongs to the CPU's data-operand-dependent execution (DOITM /
+        # PSTATE.DIT), not to src/c/ama_sha3.c.  This gate is what a real
+        # regression in that file trips.
+        run: |
+          python tools/check_ghash_constant_time.py \
+            --lib build/lib/libama_cryptography_test.a --target sha3-256
+
+      - name: Ed25519 signing instruction count must not depend on the key
+        # The same CI run flagged Ed25519 sign at t = -6.71 in 4 of 5 rounds,
+        # consistently signed, having passed at -2.40 on the parent commit.
+        # This is the most serious of the three lanes, because unlike a hash
+        # the class variable here IS the long-term secret: a real
+        # input-dependence would be a key-recovery surface rather than a
+        # nuisance, so it gets the deterministic instrument rather than an
+        # argument from the wall clock.
+        #
+        # Measured here: 33,949,265 retired instructions for all eight
+        # secret-key classes — cross-class delta 0, noise floor 0.  Signing
+        # is deterministic per RFC 8032 §5.1.6, so for the fixed message this
+        # driver uses the count is a pure function of the key; that function
+        # is constant.  ama_ed25519_sign is key-independent, and this gate is
+        # what a conditional point-add or a data-dependent window index in
+        # the comb would trip.
+        run: |
+          python tools/check_ghash_constant_time.py \
+            --lib build/lib/libama_cryptography_test.a --target ed25519-sign
+
       - name: secp256k1 ECDSA instruction count must not depend on the key
         # Catches a branch on a secret in the scalar field arithmetic — the
         # Montgomery extra-reduction leak (Walter & Thompson, CT-RSA 2001).
