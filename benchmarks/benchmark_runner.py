@@ -22,8 +22,20 @@ would route around that gate.
 
 Exit codes:
     0 - All benchmarks within acceptable range
-    1 - Performance regression detected (>10% slower than baseline)
+    1 - Performance regression detected (slower than the operative tolerance)
     2 - Error running benchmarks
+
+On the operative tolerance: `thresholds.regression_threshold_percent` (10) is
+only a FALLBACK.  Every primitive in both shipped baselines carries its own
+`tolerance_percent`, and a per-primitive value overrides the global one, so
+the number that actually gates a run is never 10 in the shipped
+configuration — it is 45 on `benchmarks/baseline.json` (x86-64) and 15 or 25
+on `benchmarks/arm-baseline.json`.  Those values are derived from each lane's
+measured noise and the reasoning is recorded in each file's
+`metadata.description`: the x86 lane is a coarse safety net over a shared,
+contended runner, and the ARM lane is the precision gate.  This docstring
+previously advertised ">10%", which reads as a much tighter gate than the one
+that runs.
 """
 
 import argparse

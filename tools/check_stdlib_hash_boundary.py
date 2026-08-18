@@ -37,6 +37,34 @@ Why the bootstrap cannot be converted:
   fixed constants, never a producer of trusted values.
 * ``hybrid_combiner._hkdf_python`` is the RuntimeError-guarded test-only
   reference whose value is exactly its independence from the native path.
+
+What this gate counts, and why the shape matters
+------------------------------------------------
+
+An earlier revision counted only ``import hashlib`` statements and
+``hashlib.<attr>`` attribute reads off a name literally spelled ``hashlib``
+or ``_hashlib``.  That left four ways to use OpenSSL inside an allowlisted
+file without moving its pinned count, i.e. four silent bypasses of the only
+enforcement INVARIANT-1 has on the Python side:
+
+1. ``from hashlib import sha256`` — the import counted once, and every
+   subsequent bare ``sha256(...)`` call was invisible.
+2. ``import hashlib as h`` — the import counted once, and every ``h.sha256``
+   was invisible because the attribute root was not spelled ``hashlib``.
+   (``__init__.py`` escaped this only by accident: its alias happens to be
+   ``_hashlib``, one of the two hard-coded names.)
+3. ``importlib.import_module("hashlib")`` / ``__import__("hashlib")`` —
+   invisible entirely, module object bound to an arbitrary name.
+4. Anything under a subpackage — the scan used a non-recursive ``glob``.
+
+The walker below therefore resolves *bindings* rather than matching a
+spelling: it tracks which local names refer to a guarded module (through any
+alias), which names were imported directly out of one, and flags dynamic
+imports by the module string.  ``hmac`` is guarded alongside ``hashlib``
+because stdlib ``hmac`` on a libcrypto build is OpenSSL performing an AMA
+MAC — the same violation, and one the docstrings in ``crypto_api`` and
+``pqc_backends`` already name explicitly.  The scan is recursive so a future
+subpackage cannot host an unpinned use.
 """
 
 from __future__ import annotations
@@ -85,39 +113,102 @@ ALLOWLIST: dict[str, tuple[int, str]] = {
 }
 
 
+#: Modules whose use inside the package is an INVARIANT-1 violation unless
+#: allowlisted.  ``hmac`` is here for the same reason as ``hashlib``: on any
+#: libcrypto build ``hmac.new`` is OpenSSL computing an AMA MAC.
+GUARDED_MODULES = ("hashlib", "_hashlib", "hmac")
+
+#: Callables that materialise a module object from a runtime string.
+_DYNAMIC_IMPORTERS = ("import_module", "__import__")
+
+
+class _GuardedModuleVisitor(ast.NodeVisitor):
+    """Count references to a guarded module, resolving bindings not spellings.
+
+    Three binding forms are tracked:
+
+    * ``import hashlib`` / ``import hashlib as h`` binds a *module root*.
+      Every attribute read off that root counts, whatever the alias.
+    * ``from hashlib import sha256 as s`` binds a *direct name*.  Every load
+      of that name counts, because the call site no longer mentions the
+      module at all.
+    * ``importlib.import_module("hashlib")`` / ``__import__("hashlib")``
+      counts at the call, since the resulting object is bound to a name this
+      gate cannot follow.  Flagging the call is what keeps it from being free.
+    """
+
+    def __init__(self) -> None:
+        self.count = 0
+        self._module_roots: set[str] = set()
+        self._direct_names: set[str] = set()
+
+    def visit_Import(self, node: ast.Import) -> None:
+        for alias in node.names:
+            if alias.name in GUARDED_MODULES:
+                self.count += 1
+                self._module_roots.add(alias.asname or alias.name)
+        self.generic_visit(node)
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+        if node.module in GUARDED_MODULES:
+            self.count += 1
+            for alias in node.names:
+                self._direct_names.add(alias.asname or alias.name)
+        self.generic_visit(node)
+
+    def visit_Attribute(self, node: ast.Attribute) -> None:
+        if isinstance(node.value, ast.Name) and node.value.id in self._module_roots:
+            self.count += 1
+        self.generic_visit(node)
+
+    def visit_Name(self, node: ast.Name) -> None:
+        # Only loads: rebinding the name locally is not a use of the import.
+        if isinstance(node.ctx, ast.Load) and node.id in self._direct_names:
+            self.count += 1
+        self.generic_visit(node)
+
+    def visit_Call(self, node: ast.Call) -> None:
+        func = node.func
+        name = (
+            func.attr
+            if isinstance(func, ast.Attribute)
+            else func.id if isinstance(func, ast.Name) else None
+        )
+        if name in _DYNAMIC_IMPORTERS and node.args:
+            first = node.args[0]
+            if isinstance(first, ast.Constant) and first.value in GUARDED_MODULES:
+                self.count += 1
+        self.generic_visit(node)
+
+
 def count_hash_references(tree: ast.AST) -> int:
-    """Import statements plus attribute reads of ``hashlib`` / ``_hashlib``."""
-    count = 0
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Attribute):
-            if isinstance(node.value, ast.Name) and node.value.id in ("hashlib", "_hashlib"):
-                count += 1
-        elif isinstance(node, ast.Import):
-            count += sum(1 for a in node.names if a.name in ("hashlib", "_hashlib"))
-        elif isinstance(node, ast.ImportFrom):
-            if node.module in ("hashlib", "_hashlib"):
-                count += 1
-    return count
+    """Guarded-module references: imports, aliased uses, and dynamic imports."""
+    visitor = _GuardedModuleVisitor()
+    visitor.visit(tree)
+    return visitor.count
 
 
 def scan_package(package_dir: Path) -> list[str]:
     """Return failure messages; empty means the boundary holds."""
     failures: list[str] = []
     seen: set[str] = set()
-    py_files = sorted(package_dir.glob("*.py"))
+    py_files = sorted(path for path in package_dir.rglob("*.py") if "__pycache__" not in path.parts)
     if not py_files:
         return [f"{package_dir}: no Python files found — refusing to pass an empty scan"]
     for path in py_files:
         try:
             tree = ast.parse(path.read_text(encoding="utf-8"))
         except SyntaxError as exc:  # pragma: no cover - a broken tree fails elsewhere
-            failures.append(f"{path.name}: unparseable ({exc}); cannot verify the boundary")
+            failures.append(
+                f"{path.relative_to(package_dir).as_posix()}: unparseable ({exc}); cannot verify the boundary"
+            )
             continue
         count = count_hash_references(tree)
-        entry = ALLOWLIST.get(path.name)
+        key = path.relative_to(package_dir).as_posix()
+        entry = ALLOWLIST.get(key)
         if count and entry is None:
             failures.append(
-                f"{path.name}: {count} hashlib/_hashlib reference(s), but the file is "
+                f"{key}: {count} guarded-module reference(s), but the file is "
                 "not in the trust-bootstrap allowlist. Production hashing belongs on "
                 "the native kernels (native_sha256/384/512, native_sha3_256/384/512, "
                 "native_pbkdf2_hmac_sha256/512). If this file genuinely joined the "
@@ -125,11 +216,11 @@ def scan_package(package_dir: Path) -> list[str]:
                 "with the exact count and the reason."
             )
         elif entry is not None:
-            seen.add(path.name)
+            seen.add(key)
             expected, rationale = entry
             if count != expected:
                 failures.append(
-                    f"{path.name}: {count} hashlib/_hashlib reference(s), allowlist "
+                    f"{key}: {count} guarded-module reference(s), allowlist "
                     f"records {expected} ({rationale}). A new use inside a bootstrap "
                     "file is not covered by the file's rationale — convert it to the "
                     "native kernels, or update the allowlist entry with why the "

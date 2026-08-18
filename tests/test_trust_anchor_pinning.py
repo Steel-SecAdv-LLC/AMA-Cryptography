@@ -442,7 +442,34 @@ class TestSignerIdentityRunpyWindow:
         assert self._identity(monkeypatch, argv) is True
 
     def test_dash_m_concatenated_form_is_recognised(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        argv = ["/usr/bin/python3", "-mama_cryptography.integrity", "--verify"]
+        """``-mmod`` must parse exactly as ``-m mod`` — in BOTH directions.
+
+        This test previously asserted that ``-mama_cryptography.integrity
+        --verify`` conferred signer identity, which encoded the fail-open
+        that identity alone answered for a mixed-mode CLI: ``--verify`` and
+        ``--show`` write nothing, so granting them the pre-load digest escape
+        let a build-pipeline environment map an unverified shared object
+        during the documented *verification* command.  The joined spelling is
+        still what this test is for, so it is now driven with a subcommand
+        that legitimately confers scope, and the refused direction is
+        asserted alongside it rather than dropped.
+        """
+        writing = ["/usr/bin/python3", "-mama_cryptography.integrity", "--update"]
+        assert self._identity(monkeypatch, writing) is True
+
+        read_only = ["/usr/bin/python3", "-mama_cryptography.integrity", "--verify"]
+        assert self._identity(monkeypatch, read_only) is False
+
+    def test_the_signing_module_needs_no_subcommand(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``_build_sign`` has no read-only mode, so identity is the whole test.
+
+        Pinned separately because the release path depends on it: the wheel
+        re-signer launches it with no ``--update``, during the parent import
+        where POST runs.
+        """
+        argv = ["/usr/bin/python3", "-mama_cryptography._build_sign"]
         assert self._identity(monkeypatch, argv) is True
 
     def test_env_flag_is_still_required(self, monkeypatch: pytest.MonkeyPatch) -> None:

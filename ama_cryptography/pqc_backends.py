@@ -487,12 +487,24 @@ def _process_is_the_integrity_signer() -> bool:
     systemd unit made every ordinary import in that environment map unverified
     native code, with the attacker needing to run nothing at all.
 
-    What is tested is `__main__`'s identity: the process must BE the signer.
-    An attacker who can choose which program the victim runs can already run
-    anything; an attacker who can only set a variable cannot change `__main__`.
-    `AMA_BUILD_PIPELINE=1` is still required alongside it — the signing entry
-    points refuse to act without it — so this narrows the old condition rather
-    than replacing it with a different one of equal breadth.
+    What is tested is `__main__`'s identity AND, for a mixed-mode entry point,
+    the mode: the process must BE the signer and be running its writing
+    subcommand.  An attacker who can choose which program the victim runs can
+    already run anything; an attacker who can only set a variable cannot
+    change `__main__` or `sys.orig_argv`.  `AMA_BUILD_PIPELINE=1` is still
+    required alongside it — the signing entry points refuse to act without it
+    — so this narrows the old condition rather than replacing it with a
+    different one of equal breadth.
+
+    The mode half is not decoration.  Identity alone answered for the whole
+    of `ama_cryptography.integrity`, whose `--verify` and `--show` subcommands
+    are the documented way to CHECK an installation and write nothing.  In an
+    environment that carries the build-pipeline variable — the Dockerfile
+    `ENV` / CI / systemd shape named above — running the documented verify
+    command therefore mapped a shared object that had just failed its digest
+    check, executing its constructors before any verdict was printed.  The
+    variable was still a necessary ingredient of a fail-open, which is what
+    this check was written to end, so `--update` must now also be present.
 
     Secure-execution mode revokes it regardless, at the call site, exactly as
     it already did for the environment variable.
@@ -524,13 +536,58 @@ def _process_is_the_integrity_signer() -> bool:
     main_module = sys.modules.get("__main__")
     spec = getattr(main_module, "__spec__", None)
     name = getattr(spec, "name", None)
-    if name in _INTEGRITY_SIGNER_MODULES:
+    if _module_confers_signing_scope(name):
         return True
     return _launched_as_signer_module()
 
 
-#: The two module entry points whose process identity confers signing scope.
+#: The two module entry points whose process identity can confer signing scope.
 _INTEGRITY_SIGNER_MODULES = ("ama_cryptography._build_sign", "ama_cryptography.integrity")
+
+#: Signer modules that are NOT signers in every mode.  ``_build_sign`` exists
+#: only to sign, so being it is enough.  ``ama_cryptography.integrity`` is a
+#: mixed CLI: ``--update`` writes the artefact and needs the pre-load escape,
+#: while ``--verify`` and ``--show`` are read-only and documented as the way
+#: to *check* an installation.  Granting them signing scope let the identity
+#: check answer for the whole module rather than for the run: an operator (or
+#: a health check) running the documented verify command in an environment
+#: that carries ``AMA_BUILD_PIPELINE=1`` would map a digest-mismatching shared
+#: object — executing its ELF constructors, which is the entire event the
+#: pre-load refusal exists to prevent — while doing nothing that needs it.
+_MIXED_MODE_SIGNER_MODULES = ("ama_cryptography.integrity",)
+
+#: The subcommand that makes a mixed-mode signer run actually write.  ``--sign``
+#: is deliberately NOT accepted on its own: ``integrity`` rejects it without
+#: ``--update`` (they are one mutually-exclusive group plus a modifier), so
+#: ``--update`` is the token that distinguishes a writing run.
+_SIGNING_INTENT_FLAGS = ("--update",)
+
+
+def _argv_shows_signing_intent() -> bool:
+    """True when this process's own command line asks for a writing run.
+
+    Read from ``sys.orig_argv`` for the same reason the module identity is:
+    it is the interpreter's immutable record of how the process started, so
+    an adversary who can only set an environment variable cannot forge it,
+    and one who can rewrite the victim's command line is already out of the
+    boundary this check draws.
+    """
+    return any(
+        argument in _SIGNING_INTENT_FLAGS for argument in getattr(sys, "orig_argv", []) or []
+    )
+
+
+def _module_confers_signing_scope(name: object) -> bool:
+    """True when being *this* module, in *this* mode, is signing scope.
+
+    Split from the raw membership test because module identity alone answers
+    the wrong question for a mixed-mode CLI — see ``_MIXED_MODE_SIGNER_MODULES``.
+    """
+    if name not in _INTEGRITY_SIGNER_MODULES:
+        return False
+    if name in _MIXED_MODE_SIGNER_MODULES:
+        return _argv_shows_signing_intent()
+    return True
 
 
 def _launched_as_signer_module() -> bool:
@@ -557,9 +614,9 @@ def _launched_as_signer_module() -> bool:
     for index in range(1, len(argv)):
         argument = argv[index]
         if argument == "-m":
-            return index + 1 < len(argv) and argv[index + 1] in _INTEGRITY_SIGNER_MODULES
+            return index + 1 < len(argv) and _module_confers_signing_scope(argv[index + 1])
         if argument.startswith("-m") and len(argument) > 2:
-            return argument[2:] in _INTEGRITY_SIGNER_MODULES
+            return _module_confers_signing_scope(argument[2:])
         if argument == "-c" or argument == "-" or not argument.startswith("-"):
             return False
     return False
@@ -677,10 +734,18 @@ def _try_load_library(lib_path: Path, verify_digest: bool = True) -> Optional[ct
                 return None
             digest = None
         if verify_digest and expected is not None and digest is not None and digest != expected:
-            # Refused on EVERY path, AMA_BUILD_PIPELINE included: mapping is
-            # execution, and no environment variable may buy execution of
-            # bytes that failed verification.  See the docstring for why the
-            # build pipeline does not need the map.
+            # Refused on every ORDINARY path: mapping is execution, and no
+            # environment variable alone may buy execution of bytes that
+            # failed verification.  Precisely: `AMA_BUILD_PIPELINE=1` is a
+            # NECESSARY but not sufficient condition below — it must be
+            # accompanied by this process being a signing entry point running
+            # its writing subcommand (`_process_is_the_integrity_signer`), or
+            # by the in-process override the signer sets around its own
+            # discovery call.  Stating it as "the variable is ignored" would
+            # be false, and was: the variable is still read, and the whole
+            # weight of the boundary rests on the identity/mode test beside
+            # it.  See that function's docstring for why the build pipeline
+            # needs the map at all.
             if (
                 _SIGNING_LOAD_OVERRIDE or _process_is_the_integrity_signer()
             ) and not _in_secure_execution_mode():

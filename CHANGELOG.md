@@ -31,6 +31,104 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > Compare `[4.0.0]` below, which is dated because it *is* released: tag
 > `v4.0.0`, published 2026-08-02.
 
+### Post-audit remediation pass (2026-08-18) — five confirmed defects, and the claims that were wrong
+
+An independent audit of this branch verified the headline results (the
+KyberSlash reciprocal is exact over its whole domain, the AVX2 contamination
+is gone from every portable translation unit, the SVE2 theta/NTT fixes are
+correct, the ChaCha20-Poly1305 and NEON key-schedule rewrites hold) and found
+five defects that survived the completion passes. All are fixed here, and the
+claims the audit falsified are corrected rather than restated.
+
+- **`AMA_BUILD_PIPELINE=1` still bought native-library execution through a
+  read-only command.** Completion pass 1 replaced the environment-variable
+  demotion with a process-identity test, but the identity test answered for
+  the whole of `ama_cryptography.integrity` — a mixed CLI whose `--verify`
+  and `--show` subcommands are the documented way to *check* an installation
+  and write nothing. In an environment carrying the flag (the Dockerfile
+  `ENV` / CI / systemd shape the docstring itself names as the threat), an
+  attacker with write access to the installed tree could overwrite the shared
+  object and have the victim map it — executing its ELF constructors, the
+  entire event the pre-load refusal exists to prevent — by running the
+  documented verify command. No attacker code, and no control of the victim's
+  command line, was required. Signing scope now requires signing *intent*:
+  `_module_confers_signing_scope()` admits `_build_sign` (which has no
+  read-only mode) unconditionally and `integrity` only with `--update` in
+  `sys.orig_argv`, applied to both the `__main__.__spec__` and the
+  `orig_argv` windows so gating one did not leave the other open. The
+  in-repo comment claiming *"no environment variable may buy execution"* was
+  false — the variable is still read, and is a necessary condition of the
+  escape — and now states the real rule. Nine tests drive the matrix,
+  including the flag+argv combination the previous suite never reached
+  (its coverage ran under pytest, where the identity half is always false,
+  so "the variable no longer relaxes this" held for the wrong reason).
+
+- **The INVARIANT-1 hashlib gate could be walked past four ways.** It counted
+  a *spelling* — `import hashlib` statements and attribute reads off a name
+  literally spelled `hashlib`/`_hashlib` — so `from hashlib import sha256`
+  (bare call sites invisible), `import hashlib as h` (alias root invisible;
+  `__init__.py` escaped only because its alias happens to be `_hashlib`),
+  `importlib.import_module("hashlib")` (invisible entirely) and anything under
+  a subpackage (non-recursive `glob`) each moved the pinned count by zero
+  while putting OpenSSL back on a production hashing path. The walker now
+  resolves *bindings*: alias roots, direct-imported names, and dynamic imports
+  by module string, scanning recursively. Stdlib `hmac` is guarded alongside
+  `hashlib`, because `hmac.new` on a libcrypto build is OpenSSL computing an
+  AMA MAC — the same violation, and one `crypto_api` and `pqc_backends`
+  already name in their docstrings. The audit that accompanied this found no
+  live violation: the counts are unchanged, which is the evidence that the
+  PBKDF2/SHA-2/SHA-3/SHAKE sweep was in fact complete.
+
+- **The scalar Kyber CBD path left its seed on the stack.** `kyber_gennoise`'s
+  x4 arm scrubs `streams`, `bufs` and the sponge context; the scalar arm
+  beside it — the path every non-AVX2 target takes — scrubbed `stream` but
+  never the `buf` holding sigma||nonce, and `kyber_cbd_poly` likewise left the
+  FO coins `r` behind. The noise vector is fully re-derivable from that seed,
+  so scrubbing only the expansion left the stronger secret in a dead frame.
+  Both are scrubbed now. The x4 arm's comment asserted *"the scalar arm below
+  has always scrubbed its equivalents"*, which was never true and is corrected
+  to say that neither arm was complete. Pre-existing (4.0.0 is byte-identical
+  here), but this branch touched the function and the completion narrative
+  presented the class as closed. KATs are unchanged, as a scrub must leave
+  them.
+
+- **The C zeroization gate reacquired the ReDoS it was hardened against.** The
+  cast group added to catch `memset((void*)ctx->key, …)` let its identifier
+  class match whitespace and then handed the same run to `\s*` before the
+  closing paren, so a failing cast split a whitespace run in O(N) ways:
+  measured cleanly quadratic at 4x per doubling, 32k characters taking 7.7 s
+  — enough to hang the CI step, which is the outcome the file's own hardening
+  exists to prevent. The comment asserting *"the linear-time property … is
+  preserved"* was false. The classes are now disjoint (identifier words
+  separated by `[ \t]+` that must be followed by an identifier character, each
+  `*` anchoring its own run, one trailing `[ \t]*` to the paren), so every
+  input has a single parse: the same 32k input now takes 1.75 ms, and growth
+  is 2.0x per doubling. Every cast and integer-suffix form the group exists
+  for still matches, pinned by tests in both directions.
+
+- **The dudect SVE2 slots could not run, on any silicon.** The SIMD sweep
+  builds with AVX2/AVX-512/NEON explicitly enabled but never passed
+  `-DAMA_ENABLE_SVE2=ON`, which defaults OFF — so on the AArch64 runners the
+  SVE2 kernels were not compiled, the dispatcher reported the slot missing,
+  and both cells exited 77 (Skipped) on every run since the sweep was added.
+  The matrix comment attributed that skip to the runner's silicon, so the
+  workflow reported "not applicable" in exactly the words it would use if it
+  had passed — this repository's stated definition of a gate that cannot
+  fail. The SVE2 Barrett sweeps and theta rewrite this branch adds therefore
+  had *no* timing coverage. The flag is now passed (a no-op on x86-64: the
+  CMake block is guarded on `CMAKE_SYSTEM_PROCESSOR`), so a 77 there now
+  means the silicon genuinely lacks SVE2.
+
+Two further inaccurate statements are corrected in place: `ama_aes_gcm_neon.c`
+claimed decrypt has *"the control flow identical on both outcomes"*, which is
+not literal — the masked length makes the CTR loop's trip count differ on the
+public accept/reject verdict, and what must not exist (and does not) is a
+*byte-position* oracle, since the compare has no early exit. And
+`benchmark_runner.py`'s docstring advertised a *">10% slower"* exit condition
+when every primitive in both shipped baselines carries a per-primitive
+`tolerance_percent` that overrides the global 10 — the operative gate is 45%
+on x86-64 and 15–25% on AArch64, as each baseline's own metadata already said.
+
 ### Behavioural and breaking changes at a glance
 
 Every change in 5.0.0 that alters what existing code does, in one table, so a

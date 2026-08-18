@@ -357,6 +357,41 @@ class TestPatternIsLinear:
             f"regained polynomial backtracking"
         )
 
+    def test_cast_group_whitespace_does_not_blow_up(self) -> None:
+        """The cast group added for destination casts reintroduced the ReDoS.
+
+        ``(?:\\(\\s*[A-Za-z_][A-Za-z0-9_ \\t]*\\**\\s*\\))?`` let the identifier
+        class match whitespace and then handed the same run to ``\\s*`` before
+        the closing paren, so a failing cast split a whitespace run in O(N)
+        ways: measured 4x per doubling, 32k chars taking 7.7 s — enough to
+        hang the CI step this gate runs in, which is the outcome the rest of
+        this class exists to prevent.  Both whitespace shapes are driven here
+        because they backtrack through different quantifiers.
+        """
+        import time
+
+        for pathological in (
+            "memset((void" + " \t" * 100_000 + "Y",
+            "memset((a" + " " * 200_000 + "X",
+        ):
+            start = time.perf_counter()
+            gate._MEMSET_RE.search(pathological)
+            elapsed = time.perf_counter() - start
+            assert elapsed < 1.0, (
+                f"a failing cast over {len(pathological)} chars took "
+                f"{elapsed:.2f}s — the cast group has regained backtracking"
+            )
+
+    def test_casts_the_gate_exists_for_still_match(self) -> None:
+        """Linearity must not have cost the bypasses the cast group closed."""
+        for line in (
+            "memset((void*)ctx->secret_key, 0, 32);",
+            "memset((void *)ctx->secret_key, 0, 32);",
+            "memset((unsigned char *)kp.signing_key, 0, 32);",
+            "memset((uint8_t *)&kp.signing_key, 0, 32);",
+        ):
+            assert gate._MEMSET_RE.search(line), line
+
     def test_member_chain_does_not_blow_up(self) -> None:
         import time
 

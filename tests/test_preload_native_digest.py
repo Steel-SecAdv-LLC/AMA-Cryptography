@@ -421,3 +421,121 @@ class TestARejectedLibraryLeavesNoDigestBehind:
         # Absent bytes are unverifiable, and on an anchored build that is fatal.
         assert verdict is False
         assert "UNVERIFIABLE" in note, note
+
+
+class TestSigningScopeRequiresIntentNotJustIdentity:
+    """The environment variable must never be sufficient on its own.
+
+    ``_process_is_the_integrity_signer`` keys on process identity, but
+    ``ama_cryptography.integrity`` is a mixed CLI whose ``--verify`` and
+    ``--show`` subcommands are the documented way to CHECK an installation
+    and write nothing.  While identity alone answered, any process launched
+    as that module inherited the pre-load digest escape — so in an
+    environment carrying ``AMA_BUILD_PIPELINE=1`` (a Dockerfile ``ENV``, a CI
+    runner, a systemd unit) the documented verify command would map a
+    shared object that had just failed its digest check, running its ELF
+    constructors before printing a verdict.  No attacker code and no control
+    of the command line was required, which is the fail-open class this
+    check exists to end.
+
+    The combination below — the flag set AND a signer-module argv — is the
+    one the earlier suite never drove: its coverage ran under pytest, where
+    ``sys.orig_argv`` names pytest, so the identity half was always False and
+    the assertion "the variable no longer relaxes this" held for the wrong
+    reason.
+    """
+
+    @staticmethod
+    def _scope(monkeypatch: pytest.MonkeyPatch, *, flag: bool, argv: list[str]) -> bool:
+        if flag:
+            monkeypatch.setenv("AMA_BUILD_PIPELINE", "1")
+        else:
+            monkeypatch.delenv("AMA_BUILD_PIPELINE", raising=False)
+        monkeypatch.setattr(pb.sys, "orig_argv", argv, raising=False)
+        return pb._process_is_the_integrity_signer()
+
+    @pytest.mark.parametrize("subcommand", ["--verify", "--show"])
+    def test_read_only_integrity_subcommands_get_no_signing_scope(
+        self, monkeypatch: pytest.MonkeyPatch, subcommand: str
+    ) -> None:
+        assert not self._scope(
+            monkeypatch,
+            flag=True,
+            argv=["python", "-m", "ama_cryptography.integrity", subcommand],
+        )
+
+    @pytest.mark.parametrize("argv_tail", [["--update"], ["--update", "--sign"]])
+    def test_the_writing_subcommand_keeps_signing_scope(
+        self, monkeypatch: pytest.MonkeyPatch, argv_tail: list[str]
+    ) -> None:
+        """The documented re-signing flow must still work — this is the point."""
+        assert self._scope(
+            monkeypatch,
+            flag=True,
+            argv=["python", "-m", "ama_cryptography.integrity", *argv_tail],
+        )
+
+    def test_the_joined_dash_m_spelling_is_read_the_same_way(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        assert self._scope(
+            monkeypatch, flag=True, argv=["python", "-mama_cryptography.integrity", "--update"]
+        )
+        assert not self._scope(
+            monkeypatch, flag=True, argv=["python", "-mama_cryptography.integrity", "--verify"]
+        )
+
+    def test_build_sign_needs_no_subcommand_because_it_only_signs(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``_build_sign`` has no read-only mode, so identity is the whole test.
+
+        The release path depends on this: ``tools/resign_wheel.py`` launches
+        it with no ``--update``, during the parent import where POST runs.
+        """
+        assert self._scope(
+            monkeypatch, flag=True, argv=["python", "-m", "ama_cryptography._build_sign"]
+        )
+
+    def test_the_flag_alone_is_never_enough(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """An ordinary program in a build-pipeline environment gets nothing."""
+        assert not self._scope(monkeypatch, flag=True, argv=["python", "app.py", "--update"])
+        assert not self._scope(monkeypatch, flag=True, argv=["python", "-c", "import x"])
+
+    def test_signing_intent_alone_is_never_enough(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Without the flag, even the real signing command has no scope."""
+        assert not self._scope(
+            monkeypatch,
+            flag=False,
+            argv=["python", "-m", "ama_cryptography.integrity", "--update", "--sign"],
+        )
+
+    def test_a_mixed_mode_module_named_in_main_spec_also_needs_intent(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The ``__main__.__spec__`` window carries the same requirement.
+
+        Once runpy binds the target into ``__main__`` the spec answers, so
+        gating only the argv window would leave the identical hole open for
+        the rest of the process's life.
+        """
+        import types
+
+        main_module = types.ModuleType("__main__")
+        # setattr rather than a direct assignment: ModuleType.__spec__ is
+        # typed as ModuleSpec | None, and a real ModuleSpec cannot be built
+        # for a module that was never loaded from a finder.  Going through
+        # setattr keeps the stub without needing a type suppression.
+        setattr(main_module, "__spec__", types.SimpleNamespace(name="ama_cryptography.integrity"))
+        monkeypatch.setitem(pb.sys.modules, "__main__", main_module)
+        monkeypatch.setenv("AMA_BUILD_PIPELINE", "1")
+
+        monkeypatch.setattr(
+            pb.sys, "orig_argv", ["python", "-m", "ama_cryptography.integrity", "--verify"]
+        )
+        assert not pb._process_is_the_integrity_signer()
+
+        monkeypatch.setattr(
+            pb.sys, "orig_argv", ["python", "-m", "ama_cryptography.integrity", "--update"]
+        )
+        assert pb._process_is_the_integrity_signer()

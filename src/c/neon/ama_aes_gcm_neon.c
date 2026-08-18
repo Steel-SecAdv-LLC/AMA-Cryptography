@@ -423,10 +423,21 @@ void ama_aes256_gcm_encrypt_neon(
  * hoisted to a value and the CTR pass ALWAYS executes with its length
  * bounded by a constant-time mask of that value — zero on mismatch —
  * so a forged tag leaves the caller's plaintext buffer untouched (not
- * zeroed: nothing is written to it) with the control flow identical on
- * both outcomes.  An earlier revision of this header described a
- * reject-then-skip shape this function does not have; the masked form
- * is the one the dudect forgery-position lanes measure.  Round-key
+ * zeroed: nothing is written to it).  An earlier revision of this header
+ * described a reject-then-skip shape this function does not have; the
+ * masked form is the one the dudect forgery-position lanes measure.
+ *
+ * Stated precisely, because "control flow identical on both outcomes" —
+ * which this header used to claim — is not literally true and a comment
+ * that overstates a constant-time property is worse than none: the two
+ * outcomes take the SAME code path with the same call sequence, and the
+ * bounded length differs (ct_len vs 0), so the CTR loop's trip count
+ * differs.  What that trip count reveals is the accept/reject verdict,
+ * which the caller learns from the return value anyway; it carries no
+ * information about WHICH tag byte mismatched, because the compare is
+ * `ama_consttime_memcmp` over all 16 bytes with no early exit.  The
+ * byte-position oracle is the property the forgery-position lanes
+ * measure, and it is the one that must not exist.  Round-key
  * schedule, GHASH key H, and J0 tag-mask are scrubbed on every return
  * path (INVARIANT-12).
  * ============================================================================ */

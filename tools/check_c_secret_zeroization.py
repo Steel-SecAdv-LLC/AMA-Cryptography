@@ -109,12 +109,23 @@ _SECRET_NAME_RE = re.compile(
 # identifier let it through), and the zero accepts an integer suffix
 # (``0U``/``0u``/``0L``).  Both were silent bypasses of an ERROR-severity
 # control whose semgrep counterpart is documented as unrunnable, so this regex
-# is the only enforcement of INVARIANT-6.  The cast group is non-capturing and
-# bounded — no nesting, no whitespace-only alternative — so the linear-time
-# property the ReDoS hardening established is preserved.
+# is the only enforcement of INVARIANT-6.
+#
+# The cast group must also not reintroduce the ReDoS this file was hardened
+# against.  Its first form did: ``[A-Za-z0-9_ \t]*`` matched whitespace and was
+# followed by ``\**\s*\)``, so on a failing match a whitespace run could be
+# split between two quantifiers in O(N) ways and the engine tried all of them
+# — measured cleanly quadratic (32k whitespace chars after ``memset((void``
+# took 7.7 s, 4x per doubling).  The form below keeps the character classes
+# DISJOINT so no position is claimable by two quantifiers: identifier words are
+# separated by ``[ \t]+`` that must be followed by an identifier character,
+# each pointer ``*`` anchors its own optional whitespace run, and exactly one
+# trailing ``[ \t]*`` reaches the closing paren.  Every input therefore has a
+# single parse, which is what makes the scan linear rather than usually-fast.
 _MEMSET_RE = re.compile(
     r"\bmemset\s*\(\s*"
-    r"(?:\(\s*[A-Za-z_][A-Za-z0-9_ \t]*\**\s*\)\s*)?"
+    r"(?:\(\s*[A-Za-z_][A-Za-z0-9_]*(?:[ \t]+[A-Za-z_][A-Za-z0-9_]*)*"
+    r"(?:[ \t]*\*)*[ \t]*\)\s*)?"
     r"(?:(?P<amp>&)\s*)?"
     r"(?P<dst>[A-Za-z_][A-Za-z0-9_]*"
     r"(?:(?:->|\.)[A-Za-z_][A-Za-z0-9_]*|\[[^\]]*\])*)"

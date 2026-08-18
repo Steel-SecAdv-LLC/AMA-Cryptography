@@ -367,9 +367,11 @@ jobs:
           # the AVX2 X25519 lane.  Same rationale as above, with
           # `aes-gcm-neon` / `chacha20-neon` / `sha3-neon` retained
           # on this side because AArch64 mandates NEON.  SVE2 slots
-          # are KEPT on this side — when the runner's silicon lacks
-          # SVE2 the dispatcher reports the slot unsupported and the
-          # test exits 77 (Skipped), preserving an audit trail.
+          # are KEPT on this side: the build step now passes
+          # -DAMA_ENABLE_SVE2=ON, so a 77 (Skipped) here means the
+          # RUNNER'S SILICON lacks SVE2 — a real audit trail — rather
+          # than the kernels having been omitted from the build, which
+          # is what it silently meant while that flag was missing.
           - os: ubuntu-24.04-arm
             slot: sha3-avx512x4
           - os: ubuntu-24.04-arm
@@ -399,6 +401,19 @@ jobs:
           # future change of those defaults.  AVX-512 is opt-in (see
           # CMakeLists.txt:64); enable it on x86-64 so the AVX-512
           # 4-way Keccak kernel is sampled when the runner exposes it.
+          #
+          # AMA_ENABLE_SVE2 is opt-in and defaults OFF, and omitting it here
+          # made the two sve2 slots below unrunnable rather than unsupported:
+          # with the kernels never compiled, the dispatcher reported the slot
+          # missing and the cell exited 77 on EVERY run, on silicon that has
+          # SVE2 and silicon that does not alike.  That is the failure this
+          # workflow exists to prevent — an availability probe answering "not
+          # applicable" in the same words it would use if it had passed — so
+          # the sve2 kernels this repository ships had, and would have kept,
+          # no timing coverage at all.  Enabling it is safe on x86-64: the
+          # CMake block is guarded on CMAKE_SYSTEM_PROCESSOR (CMakeLists.txt
+          # :506-507), so on a non-AArch64 host the flag is a no-op and those
+          # slots are excluded from the matrix anyway.
           cmake -B build \
             -DCMAKE_BUILD_TYPE=Release \
             -DAMA_ENABLE_DUDECT=ON \
@@ -409,6 +424,7 @@ jobs:
             -DAMA_ENABLE_AVX2=ON \
             -DAMA_ENABLE_AVX512=ON \
             -DAMA_ENABLE_NEON=ON \
+            -DAMA_ENABLE_SVE2=ON \
             -DAMA_ENABLE_LTO=OFF \
             -DAMA_BUILD_EXAMPLES=OFF
           cmake --build build -j$(nproc)

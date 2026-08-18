@@ -578,10 +578,11 @@ static void kyber_gennoise(polyvec* r, const uint8_t seed[32], uint8_t nonce,
             kyber_poly_cbd_eta(&r->vec[i], streams[i]);
         }
         /* The CBD input *is* the secret vector s (and e, from which s follows
-         * given the public t = A*s + e and A), and `bufs` carries sigma.  The
-         * scalar arm below has always scrubbed its equivalents; the batched
-         * arm did not, so widening the SIMD path quietly widened the residue.
-         * INVARIANT-12 applies to both arms of one function. */
+         * given the public t = A*s + e and A), and `bufs` carries sigma.
+         * INVARIANT-12 applies to both arms of one function, and until the
+         * commit carrying this comment NEITHER arm was complete: the batched
+         * arm scrubbed nothing, and the scalar arm below scrubbed `stream`
+         * but never the `buf` holding sigma||nonce.  Both are closed now. */
         ama_secure_memzero(streams, sizeof(streams));
         ama_secure_memzero(bufs, sizeof(bufs));
         /* The x4 sponge state was seeded with sigma||nonce and, until it is
@@ -608,6 +609,12 @@ static void kyber_gennoise(polyvec* r, const uint8_t seed[32], uint8_t nonce,
             }
         }
         ama_secure_memzero(stream, sizeof(stream));
+        /* `buf` is sigma||nonce — the CBD seed, not a derivative of it.  It
+         * is the same secret class as `stream` (which it generates) and as
+         * the x4 arm's `bufs`, which is scrubbed above.  Scrubbing only the
+         * expanded stream left the seed itself in a dead frame, where the
+         * whole noise vector is re-derivable from it. */
+        ama_secure_memzero(buf, sizeof(buf));
     }
 }
 
@@ -628,6 +635,10 @@ static void kyber_cbd_poly(poly* r, const uint8_t seed[32], uint8_t nonce, unsig
         kyber_poly_cbd_eta(r, stream);
     }
     ama_secure_memzero(stream, sizeof(stream));
+    /* Same class as `stream`: `buf` holds the CBD seed (the FO coins `r`
+     * during encapsulation and the decapsulation re-encryption), from which
+     * this polynomial is fully re-derivable.  INVARIANT-12. */
+    ama_secure_memzero(buf, sizeof(buf));
 }
 
 #ifdef AMA_TESTING_MODE
