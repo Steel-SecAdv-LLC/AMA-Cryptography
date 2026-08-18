@@ -35,10 +35,28 @@ Naming another implementation is not calling it. Curve aliases such as
 crediting where an approach came from is scholarship; the check works on the AST
 so neither trips it.
 
-Python stdlib modules (`hashlib`, `os`, `secrets`) are permitted for
-non-primitive operations (OS entropy, hashing). They **must NOT** be used as a
-substitute for AMA's own implementations of HMAC, memory zeroing, or core
-cipher operations.
+Python stdlib modules (`os`, `secrets`) are permitted for OS services —
+entropy is the operating system's to provide, not a competing implementation.
+
+**`hashlib` policy (tightened 2026-08):** CPython's `hashlib` is not a neutral
+helper. In every build that links libcrypto its constructors resolve to
+OpenSSL — `hashlib.sha3_256` *is* `_hashlib.openssl_sha3_256` — so a
+production `hashlib` call inside the package is OpenSSL performing an AMA
+cryptographic primitive in-process. An earlier revision of this invariant
+permitted stdlib "hashing" as a non-primitive operation; that parenthetical
+granted what the rule forbids, and roughly fifty call sites accumulated under
+it. All production hashing and key derivation now runs on AMA's own kernels
+(`native_sha256/384/512`, `native_sha3_256/384/512`,
+`native_pbkdf2_hmac_sha256/512`). `hashlib` is confined to the pre-execution
+**trust bootstrap** — the pre-load shared-object digest (which cannot be
+computed by the library not yet loaded), the signed-integrity source digests,
+the build-time signer, the SHA3-256 KAT cross-check against fixed FIPS 202
+vectors, and the RuntimeError-guarded test-only HKDF reference — pinned
+file-by-file with exact reference counts by
+`tools/check_stdlib_hash_boundary.py`, so a new use anywhere fails CI.
+
+They **must NOT** be used as a substitute for AMA's own implementations of
+HMAC, memory zeroing, or core cipher operations.
 
 **`hmac` module policy:** `hmac.compare_digest()` is permitted for constant-time
 comparison. `hmac.new()` / `hmac.HMAC()` are not permitted — use AMA's own HMAC

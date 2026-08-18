@@ -102,7 +102,7 @@ The AMA Cryptography architecture is built on the following foundational princip
 
 **Standards Compliance**: Built exclusively from standardized cryptographic primitives (NIST FIPS, IETF RFC) — no custom ciphers, hash functions, or signature schemes. The composition protocol (how primitives are combined into the multi-layer defense architecture, key evolution, and adaptive posture system) is an original design.
 
-**Zero External Crypto Dependencies (INVARIANT-1)**: All cryptographic primitives are implemented natively in C. No third-party crypto packages are permitted. See [`.github/INVARIANTS.md`](.github/INVARIANTS.md).
+**Zero External Crypto Dependencies (INVARIANT-1)**: All cryptographic primitives are implemented natively in C, and every production hash/KDF call in the Python layer runs on those C kernels — stdlib `hashlib` (OpenSSL-backed) is confined to the gate-pinned pre-execution trust bootstrap. No third-party crypto packages are permitted. See [`.github/INVARIANTS.md`](.github/INVARIANTS.md).
 
 **Performance Efficiency**: Cryptographic operations are optimized and measured through reproducible benchmark artifacts. Throughput claims must name the benchmark host, build flags, and generated artifact.
 
@@ -782,7 +782,7 @@ Fuzz harnesses are built separately via `fuzz/CMakeLists.txt` (15 targets coveri
 
 All PRs touching `ama_cryptography/`, `.github/workflows/`, or `tests/` must satisfy the architectural invariants defined in [`INVARIANTS.md`](INVARIANTS.md) (canonical, INVARIANT-1 through INVARIANT-43). `.github/INVARIANTS.md` is a three-line pointer to it, kept that way by the version-consistency gate so a second divergent copy cannot reappear. Highlights:
 
-1. **INVARIANT-1 — Zero External Crypto Dependencies**: All cryptographic primitives are owned natively. No third-party crypto packages (`libsodium`, `pynacl`, `cryptography`, etc.). Python stdlib modules (`hashlib`, `os`, `secrets`) permitted for non-primitive operations only. All primitives must map to a non-deprecated entry in [`CSRC_STANDARDS.md`](CSRC_STANDARDS.md); vendored public-domain source compiled in-tree is permitted.
+1. **INVARIANT-1 — Zero External Crypto Dependencies**: All cryptographic primitives are owned natively. No third-party crypto packages (`libsodium`, `pynacl`, `cryptography`, etc.). Python stdlib `os`/`secrets` permitted for OS entropy; `hashlib` (OpenSSL-backed in every libcrypto-linked CPython) is confined to the pre-execution trust bootstrap, pinned with exact per-file counts by `tools/check_stdlib_hash_boundary.py` — all production hashing and key derivation runs on the native kernels. All primitives must map to a non-deprecated entry in [`CSRC_STANDARDS.md`](CSRC_STANDARDS.md); vendored public-domain source compiled in-tree is permitted.
 2. **INVARIANT-2 — Fail-Closed CI**: Security-critical CI steps must not use `continue-on-error: true`.
 3. **INVARIANT-3 — Observable Failure States**: No bare `except: pass`, no silent `return`, no stderr suppression.
 4. **INVARIANT-4 — Pinned Action References**: All third-party GitHub Actions pinned to full commit SHA.
@@ -845,7 +845,7 @@ docker run ama-cryptography:latest
 | Fuzz Tests | Input mutation testing | 15 C targets | `fuzz/fuzz_*.c` (16 sources; `fuzz_rng.c` is a helper) |
 | NIST ACVP Vectors | Official vector validation | 1,215 vectors, 12 algorithms (815 AFT + 400 SHA-3 MCT) | `nist_vectors/` |
 
-**Total:** 3,923 Python test functions across 163 test files, plus the
+**Total:** 3,933 Python test functions across 164 test files, plus the
 ctest-registered C tests and standalone C benchmark under `tests/c/`
 (the exact C-test count varies with build options — `AMA_USE_NATIVE_PQC`
 gates `test_x25519`, `test_chacha20poly1305`, `test_argon2id`,

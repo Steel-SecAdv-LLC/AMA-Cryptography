@@ -884,6 +884,21 @@ jobs:
       run: |
         python tools/check_log_message_encodability.py
 
+    - name: "stdlib hashlib must stay inside the trust bootstrap (INVARIANT-1)"
+      # CPython's hashlib constructors resolve to OpenSSL in every build that
+      # links libcrypto — hashlib.sha3_256 IS _hashlib.openssl_sha3_256 — so a
+      # production hashlib call in the package is OpenSSL performing an AMA
+      # primitive in-process.  Fifty such sites accumulated under
+      # zero-dependency documentation before the 2026-08 sweep converted them
+      # to the native kernels.  What remains is the pre-execution trust
+      # bootstrap (pre-load digest, integrity chain, build signer, the KAT
+      # comparator, the guarded test-only HKDF reference), pinned file-by-file
+      # WITH exact reference counts, so a new use anywhere fails loudly.
+      # Both failure directions are pinned by
+      # tests/test_stdlib_hash_boundary_gate.py.
+      run: |
+        python tools/check_stdlib_hash_boundary.py
+
     - name: "Verify every count the documentation pins"
       # docs/KEY_FORMATS.md said "tests/test_key_formats.py — 301 tests". True
       # when written, checked by nothing, so the only question was how long

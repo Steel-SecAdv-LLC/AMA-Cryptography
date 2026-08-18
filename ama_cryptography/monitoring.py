@@ -37,7 +37,6 @@ AI Co-Architects:
 import ast
 import bisect
 import cmath
-import hashlib
 import logging
 import math
 import os
@@ -3032,12 +3031,19 @@ class RefactoringAnalyzer:
 
     @staticmethod
     def _hash_file(filepath: Path) -> str:
-        """Compute SHA3-256 hash of a file's contents."""
-        h = hashlib.sha3_256()
-        with open(filepath, "rb") as f:
-            for chunk in iter(lambda: f.read(8192), b""):
-                h.update(chunk)
-        return h.hexdigest()
+        """Compute SHA3-256 hash of a file's contents.
+
+        The integrity monitor's whole claim rests on this digest's collision
+        resistance, so it is computed by the module's own FIPS 202 kernel
+        rather than OpenSSL-backed hashlib (INVARIANT-1).  The files hashed
+        are Python sources, so a whole-file read replaces the old 8 KiB
+        streaming loop without a memory concern.
+        """
+        from ama_cryptography.pqc_backends import (
+            native_sha3_256,
+        )  # noqa: PLC0415  # deferred: import cycle with pqc_backends (MON-002)
+
+        return native_sha3_256(filepath.read_bytes()).hex()
 
     def verify_integrity(self) -> List[IntegrityViolation]:
         """
@@ -3207,7 +3213,11 @@ class RefactoringAnalyzer:
                 }
 
             # Priority 9: Compute and cache content hash
-            content_hash = hashlib.sha3_256(source.encode("utf-8")).hexdigest()
+            from ama_cryptography.pqc_backends import (
+                native_sha3_256,
+            )  # noqa: PLC0415  # deferred: import cycle with pqc_backends (MON-002)
+
+            content_hash = native_sha3_256(source.encode("utf-8")).hex()
             metrics["content_hash"] = content_hash
             self.analysis_cache[str(filepath)] = metrics
 
