@@ -460,9 +460,7 @@ class TestSignerIdentityRunpyWindow:
         read_only = ["/usr/bin/python3", "-mama_cryptography.integrity", "--verify"]
         assert self._identity(monkeypatch, read_only) is False
 
-    def test_the_signing_module_needs_no_subcommand(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_the_signing_module_needs_no_subcommand(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """``_build_sign`` has no read-only mode, so identity is the whole test.
 
         Pinned separately because the release path depends on it: the wheel

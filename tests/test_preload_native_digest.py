@@ -522,11 +522,15 @@ class TestSigningScopeRequiresIntentNotJustIdentity:
         import types
 
         main_module = types.ModuleType("__main__")
-        # setattr rather than a direct assignment: ModuleType.__spec__ is
-        # typed as ModuleSpec | None, and a real ModuleSpec cannot be built
-        # for a module that was never loaded from a finder.  Going through
-        # setattr keeps the stub without needing a type suppression.
-        setattr(main_module, "__spec__", types.SimpleNamespace(name="ama_cryptography.integrity"))
+        # monkeypatch.setattr rather than a direct assignment: ModuleType
+        # types __spec__ as ModuleSpec | None, and a real ModuleSpec cannot be
+        # built for a module that was never loaded from a finder — so a plain
+        # assignment needs a type suppression this repository would then have
+        # to justify (INVARIANT-13).  Going through monkeypatch also restores
+        # the attribute at teardown.
+        monkeypatch.setattr(
+            main_module, "__spec__", types.SimpleNamespace(name="ama_cryptography.integrity")
+        )
         monkeypatch.setitem(pb.sys.modules, "__main__", main_module)
         monkeypatch.setenv("AMA_BUILD_PIPELINE", "1")
 

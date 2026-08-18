@@ -109,10 +109,35 @@ if _sys.platform == "win32":
 #     anchored/developer split afterwards.
 #
 # Reading ``_integrity_signature`` is safe this early: it is generated source
-# containing only literals, imports nothing from this package, and its own
-# authenticity is checked by POST (this gate is defence in depth ahead of
-# that, not a replacement for it — an attacker who rewrites both the
-# extension and the artefact is caught by the signature check, as before).
+# containing only literals and imports nothing from this package.  What that
+# does NOT establish is its authenticity, and the boundary is worth stating
+# exactly, because an earlier revision of this comment overstated it.
+#
+# This gate compares each binding against a digest THE ARTEFACT SUPPLIES.  So
+# it detects any tampering that leaves the artefact intact — the realistic
+# case, since a rebuilt or swapped extension does not update a signed file.
+# It cannot, by construction, detect an attacker who rewrites the extension
+# AND the artefact together: the forged artefact simply lists the forged
+# digest and the comparison succeeds.
+#
+# The earlier comment claimed that case "is caught by the signature check, as
+# before".  That holds only while the NATIVE LIBRARY is authentic, because the
+# trust anchor the signature is checked against is compiled into that library
+# (`ama_integrity_trust_anchor_pubkey_hex`, see `_self_test.
+# _load_integrity_trust_anchor`) and the library itself is admitted by a digest
+# the same artefact supplies.  An attacker with write access to the installed
+# tree who replaces the library, the artefact and the extensions coherently
+# therefore validates against their own key at every step.
+#
+# So the honest statement of this chain, matching SECURITY.md's "Boundary
+# (shared with the trust anchor)" and `tools/verify_install_oob.py`'s
+# UNANCHORED verdict: in-tree verification establishes INTERNAL CONSISTENCY,
+# not authenticity.  Authenticity requires an anchor from OUTSIDE the tree —
+# `tools/verify_install_oob.py --expected-pubkey <key held elsewhere>`, or the
+# wheel's own Sigstore/PyPI attestation.  What this gate adds over POST is
+# real and narrower than "authenticity": it moves the detection of the
+# single-file case to BEFORE the extension's module-init function runs, which
+# is the only point at which detection still prevents execution.
 def _refuse_tampered_bindings_before_import() -> None:
     import hashlib as _hashlib
     from pathlib import Path as _Path
