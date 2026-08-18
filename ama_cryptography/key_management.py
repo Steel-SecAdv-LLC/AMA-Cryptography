@@ -16,7 +16,6 @@ Enterprise-grade key management with:
 
 import base64
 import contextlib
-import hashlib
 import json
 import logging
 import os
@@ -313,8 +312,19 @@ class HDKeyDerivation:
             # seed_phrase is guaranteed non-None here: the first `if` excluded
             # the (seed is None AND seed_phrase is None) case, and the `elif`
             # excluded seed is not None, so seed is None and seed_phrase is not None.
-            self.master_seed = hashlib.pbkdf2_hmac(
-                "sha512", cast(str, seed_phrase).encode("utf-8"), b"mnemonic", 2048, 64
+            # BIP39 seed derivation (PBKDF2-HMAC-SHA512, c=2048, salt
+            # "mnemonic" + passphrase, empty here) on this module's own KDF
+            # (SP 800-132, src/c/ama_pbkdf2.c).  hashlib.pbkdf2_hmac is
+            # OpenSSL's PBKDF2 — a master-seed derivation delegated to an
+            # unauthorized vendor (INVARIANT-1).  Byte-identical: pinned
+            # against the official BIP39 vector and differentially against
+            # hashlib in tests/test_sha2_pbkdf2_native.py.
+            from ama_cryptography.pqc_backends import (  # noqa: PLC0415  # deferred: import cycle with pqc_backends (KMG-001)
+                native_pbkdf2_hmac_sha512,
+            )
+
+            self.master_seed = native_pbkdf2_hmac_sha512(
+                cast(str, seed_phrase).encode("utf-8"), b"mnemonic", 2048, 64
             )
 
         # Generate master key
@@ -1159,9 +1169,14 @@ class SecureKeyStorage:
             self._enforce_kdf_policy(self.kdf_params)
             iterations = self._usable_cost(iterations, self.KDF_ITERATIONS)
             self.kdf_params["iterations"] = iterations
+            # Key-encryption-key derivation on this module's own PBKDF2
+            # (INVARIANT-1; see the BIP39 site above for the full rationale).
+            from ama_cryptography.pqc_backends import (  # noqa: PLC0415  # deferred: import cycle with pqc_backends (KMG-001)
+                native_pbkdf2_hmac_sha256,
+            )
+
             self.encryption_key = bytearray(
-                hashlib.pbkdf2_hmac(
-                    "sha256",
+                native_pbkdf2_hmac_sha256(
                     master_password.encode("utf-8"),
                     self.salt,
                     iterations,
@@ -1227,9 +1242,13 @@ class SecureKeyStorage:
                 )
             )
         else:
+            # Same KDF as the initial derivation above (INVARIANT-1).
+            from ama_cryptography.pqc_backends import (  # noqa: PLC0415  # deferred: import cycle with pqc_backends (KMG-001)
+                native_pbkdf2_hmac_sha256,
+            )
+
             new_encryption_key = bytearray(
-                hashlib.pbkdf2_hmac(
-                    "sha256",
+                native_pbkdf2_hmac_sha256(
                     master_password.encode("utf-8"),
                     new_salt,
                     self.KDF_ITERATIONS,
@@ -1983,8 +2002,15 @@ if __name__ == "__main__":
     # to logs / terminal scrollback.  A SHA3-256 fingerprint is one-way,
     # supports `grep` / log-correlation just as well as a hex prefix,
     # and reveals nothing about the key value itself.
-    sk_fp = hashlib.sha3_256(signing_key).hexdigest()[:16]
-    ek_fp = hashlib.sha3_256(encryption_key).hexdigest()[:16]
+    # The fingerprint input IS key material, so even this display path uses
+    # the module's own SHA3-256 rather than OpenSSL-backed hashlib
+    # (INVARIANT-1).
+    from ama_cryptography.pqc_backends import (
+        native_sha3_256,  # noqa: PLC0415  # deferred: import cycle with pqc_backends (KMG-001)
+    )
+
+    sk_fp = native_sha3_256(signing_key).hex()[:16]
+    ek_fp = native_sha3_256(encryption_key).hex()[:16]
     logger.info(f"Signing key fingerprint:    sha3-256:{sk_fp}")
     logger.info(f"Encryption key fingerprint: sha3-256:{ek_fp}")
 
