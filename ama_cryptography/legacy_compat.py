@@ -31,7 +31,6 @@ Version: 5.0.0
 from __future__ import annotations
 
 import base64
-import hashlib
 import json
 import logging
 import os
@@ -74,6 +73,10 @@ from ama_cryptography.pqc_backends import (
     native_ed25519_sign,
     native_ed25519_verify,
     native_hkdf,
+    native_sha3_256,
+)
+from ama_cryptography.pqc_backends import (
+    native_sha256 as _native_sha256,
 )
 from ama_cryptography.rfc3161_timestamp import (
     TimestampError,
@@ -345,7 +348,9 @@ def canonical_hash_code(
             "|".join(invariant_parts),
         )
 
-    return hashlib.sha3_256(encoded).digest()
+    # This module's own SHA3-256 kernel, not OpenSSL-backed hashlib
+    # (INVARIANT-1).
+    return native_sha3_256(encoded)
 
 
 # ============================================================================
@@ -503,7 +508,7 @@ def get_rfc3161_timestamp(data: bytes, tsa_url: Optional[str] = None) -> Optiona
         # what `CryptoPackage.timestamp_token` stores, so the stored format is
         # unchanged; `verify_token_binding` accepts either shape.
         response, _token = request_timestamp_exchange(
-            hashlib.sha256(data).digest(),
+            _native_sha256(data),
             "sha256",
             tsa_url,
             nonce=secrets.randbits(64),
@@ -658,7 +663,7 @@ def create_ethical_hkdf_context(
         ethical_vector = ETHICAL_VECTOR
 
     ethical_json = json.dumps(ethical_vector, sort_keys=True)
-    ethical_hash = hashlib.sha3_256(ethical_json.encode()).digest()
+    ethical_hash = native_sha3_256(ethical_json.encode())
     ethical_signature = ethical_hash[:16]
     enhanced_context = base_context + ethical_signature
 
@@ -942,7 +947,7 @@ def create_crypto_package(  # noqa: C901 -- McCabe complexity inherent to coordi
     # 3. Compute ethical hash BEFORE signing
     ethical_vector_copy = kms.ethical_vector.copy()
     ethical_json = json.dumps(ethical_vector_copy, sort_keys=True)
-    ethical_hash_bytes = hashlib.sha3_256(ethical_json.encode()).digest()
+    ethical_hash_bytes = native_sha3_256(ethical_json.encode())
     ethical_hash_hex = ethical_hash_bytes.hex()
 
     # 4. Build domain-separated message for hybrid signature binding (v2 format)

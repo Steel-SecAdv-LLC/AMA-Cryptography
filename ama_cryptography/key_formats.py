@@ -102,13 +102,12 @@ import base64
 import binascii
 import contextlib
 import contextvars
-import hashlib
 import json
 import os
 import re
 from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import Any, Union
+from typing import Any, Callable, Union
 
 import ama_cryptography.pqc_backends as _pb
 from ama_cryptography._asn1 import (
@@ -1828,20 +1827,38 @@ def jwk_thumbprint(jwk: Union[dict[str, Any], str], *, hash_name: str = "sha256"
     for name in members:
         _unb64u(canonical[name], name)
     payload = json.dumps(canonical, separators=(",", ":"), sort_keys=True).encode("utf-8")
-    try:
-        digest = hashlib.new(hash_name)
-    except (ValueError, TypeError):
-        raise KeyFormatError(f"unknown hash {hash_name!r} for a JWK thumbprint") from None
-    if digest.digest_size == 0:
-        # SHAKE and friends need an output length, so `.digest()` would raise
-        # TypeError past this function's contract. A thumbprint has no length
-        # to supply, so an XOF is simply not a thumbprint hash.
+    # This module's own fixed-length digests (INVARIANT-1).  The previous
+    # hashlib.new(hash_name) accepted every algorithm CPython's OpenSSL build
+    # knew — MD5 and SHA-1 thumbprints included — and computed all of them
+    # through OpenSSL.  The supported set is now exactly the fixed-length
+    # hashes AMA implements; RFC 7638's own example and the ecosystem's
+    # near-universal choice is sha256, which is unchanged byte-for-byte.
+    # XOFs are structurally excluded by the table, which subsumes the old
+    # digest_size == 0 check.
+    from ama_cryptography.pqc_backends import (  # noqa: PLC0415  # deferred: import cycle via key module graph (KFM-001)
+        native_sha3_256,
+        native_sha3_384,
+        native_sha3_512,
+        native_sha256,
+        native_sha384,
+        native_sha512,
+    )
+
+    thumbprint_hashes: dict[str, Callable[[bytes], bytes]] = {
+        "sha256": native_sha256,
+        "sha384": native_sha384,
+        "sha512": native_sha512,
+        "sha3_256": native_sha3_256,
+        "sha3_384": native_sha3_384,
+        "sha3_512": native_sha3_512,
+    }
+    func = thumbprint_hashes.get(hash_name)
+    if func is None:
         raise KeyFormatError(
-            f"{hash_name!r} is an extendable-output function and has no fixed-size "
-            "digest; RFC 7638 thumbprints need a fixed-length hash"
+            f"unknown hash {hash_name!r} for a JWK thumbprint; supported: "
+            f"{', '.join(sorted(thumbprint_hashes))}"
         )
-    digest.update(payload)
-    return digest.digest()
+    return func(payload)
 
 
 # ---------------------------------------------------------------------------

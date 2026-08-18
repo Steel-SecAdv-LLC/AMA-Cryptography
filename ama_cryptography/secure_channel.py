@@ -69,7 +69,6 @@ Author/Inventor: Andrew E. A.
 Version: 5.0.0
 """
 
-import hashlib
 import logging
 import struct
 import threading
@@ -910,8 +909,16 @@ class SecureChannelInitiator:
             kem_ciphertext=encap_result.ciphertext,
         )
 
-        # Hash the handshake transcript for signature verification
-        self._handshake_hash = hashlib.sha3_256(msg.serialize()).digest()
+        # Hash the handshake transcript for signature verification.  The
+        # transcript hash binds the key exchange, so it is computed by this
+        # module's own SHA3-256 kernel — stdlib hashlib resolves to OpenSSL
+        # (INVARIANT-1), and both sides must agree byte-for-byte, which two
+        # FIPS 202 implementations do.
+        from ama_cryptography.pqc_backends import (
+            native_sha3_256,  # noqa: PLC0415  # deferred: secure_channel imports at class-method scope throughout (SCH-001)
+        )
+
+        self._handshake_hash = native_sha3_256(msg.serialize())
         self._state = ChannelState.HANDSHAKE_SENT
         return msg
 
@@ -1109,8 +1116,14 @@ class SecureChannelResponder:
         # next missed site fails CI instead of waiting for a review.
         session_id = secure_token_bytes(SESSION_ID_BYTES)
 
-        # Sign the handshake transcript (proves we hold the static key)
-        handshake_hash = hashlib.sha3_256(msg.serialize()).digest()
+        # Sign the handshake transcript (proves we hold the static key).
+        # Same kernel as the initiator side above — the two transcript hashes
+        # must be equal, and neither may come from OpenSSL (INVARIANT-1).
+        from ama_cryptography.pqc_backends import (
+            native_sha3_256,  # noqa: PLC0415  # deferred: secure_channel imports at class-method scope throughout (SCH-001)
+        )
+
+        handshake_hash = native_sha3_256(msg.serialize())
         transcript = handshake_hash + session_id
         sig_result = self._sig.sign(transcript, self._sig_sk)
 

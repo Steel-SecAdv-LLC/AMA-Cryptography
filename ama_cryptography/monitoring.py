@@ -1010,7 +1010,15 @@ class NonceTracker:
         Returns:
             Dict with anomaly details if nonce reuse detected, None otherwise
         """
-        key_hash = hashlib.sha256(key_id).hexdigest()
+        # key_id is key-identifying material inside a security control; its
+        # digest comes from this module's own SHA-256, not OpenSSL-backed
+        # hashlib (INVARIANT-1).  Deferred import: monitoring is imported by
+        # modules pqc_backends itself pulls in.
+        from ama_cryptography.pqc_backends import (
+            native_sha256,
+        )  # noqa: PLC0415  # deferred: import cycle with pqc_backends (MON-002)
+
+        key_hash = native_sha256(key_id).hex()
         nonce_hex = nonce.hex()
         entry = (key_hash, nonce_hex)
 
@@ -1048,7 +1056,15 @@ class NonceTracker:
 
     def get_counter(self, key_id: bytes) -> int:
         """Get current nonce count for a key."""
-        key_hash = hashlib.sha256(key_id).hexdigest()
+        # key_id is key-identifying material inside a security control; its
+        # digest comes from this module's own SHA-256, not OpenSSL-backed
+        # hashlib (INVARIANT-1).  Deferred import: monitoring is imported by
+        # modules pqc_backends itself pulls in.
+        from ama_cryptography.pqc_backends import (
+            native_sha256,
+        )  # noqa: PLC0415  # deferred: import cycle with pqc_backends (MON-002)
+
+        key_hash = native_sha256(key_id).hex()
         return self._counters.get(key_hash, 0)
 
     def get_all_counters(self) -> Dict[str, int]:

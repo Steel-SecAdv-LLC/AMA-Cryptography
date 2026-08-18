@@ -53,7 +53,6 @@ Use Cases:
   (the ``hmac`` layer of a crypto package, a signed transport, a trusted store)
 """
 
-import hashlib
 import http.client
 import logging
 import os as _os_mod
@@ -67,6 +66,8 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Callable, Dict, Generator, Literal, Mapping, NoReturn, Optional
 from urllib.parse import urlparse
+
+from ama_cryptography import pqc_backends
 
 _logger = logging.getLogger(__name__)
 
@@ -308,13 +309,19 @@ _OID_CT_TSTINFO = "1.2.840.113549.1.9.16.1.4"
 #: Reverse of :data:`TSA_HASH_OIDS`, for reading a token's messageImprint.
 _HASH_BY_OID = {oid: name for name, oid in TSA_HASH_OIDS.items()}
 
-_HASH_FUNCS: Dict[str, Callable[[bytes], "hashlib._Hash"]] = {
-    "sha256": hashlib.sha256,
-    "sha384": hashlib.sha384,
-    "sha512": hashlib.sha512,
-    "sha3-256": hashlib.sha3_256,
-    "sha3-384": hashlib.sha3_384,
-    "sha3-512": hashlib.sha3_512,
+# Native one-shot digests (bytes -> digest bytes) for every algorithm
+# TSA_HASH_OIDS names.  These are this module's own FIPS 180-4 / FIPS 202
+# kernels; the previous table mapped to stdlib hashlib constructors, whose
+# every entry resolves to OpenSSL — an unauthorized vendor computing the
+# messageImprint this API exists to bind (INVARIANT-1).  ama_sha3_384 was
+# exported for exactly this table, so all six names stay supported.
+_HASH_FUNCS: Dict[str, Callable[[bytes], bytes]] = {
+    "sha256": pqc_backends.native_sha256,
+    "sha384": pqc_backends.native_sha384,
+    "sha512": pqc_backends.native_sha512,
+    "sha3-256": pqc_backends.native_sha3_256,
+    "sha3-384": pqc_backends.native_sha3_384,
+    "sha3-512": pqc_backends.native_sha3_512,
 }
 
 
@@ -700,7 +707,7 @@ def verify_token_binding(data: bytes, token: bytes) -> bool:
             f"token's messageImprint uses hash OID {digest_oid}, which AMA does not "
             "implement; the binding cannot be checked"
         )
-    computed = _HASH_FUNCS[name](data).digest()
+    computed = _HASH_FUNCS[name](data)
     if len(computed) != len(hashed):
         return False
     # Constant-time: the comparison operand is attacker-supplied, and a length
@@ -1146,13 +1153,13 @@ def get_timestamp(
 
     # ---- Compute data hash (needed for all modes) ----
     if hash_algorithm == "sha256":
-        data_hash = hashlib.sha256(data).digest()
+        data_hash = pqc_backends.native_sha256(data)
     elif hash_algorithm == "sha3-256":
-        data_hash = hashlib.sha3_256(data).digest()
+        data_hash = pqc_backends.native_sha3_256(data)
     elif hash_algorithm == "sha512":
-        data_hash = hashlib.sha512(data).digest()
+        data_hash = pqc_backends.native_sha512(data)
     elif hash_algorithm == "sha3-512":
-        data_hash = hashlib.sha3_512(data).digest()
+        data_hash = pqc_backends.native_sha3_512(data)
     else:
         raise ValueError(
             f"Unsupported hash algorithm: {hash_algorithm}. "
@@ -1233,7 +1240,7 @@ def _compute_data_hash(data: bytes, algorithm: str) -> Optional[bytes]:
     func = _HASH_FUNCS.get(algorithm)
     if func is None:
         return None
-    return func(data).digest()
+    return func(data)
 
 
 def verify_timestamp_binding(
