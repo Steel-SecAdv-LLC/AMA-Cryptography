@@ -5443,10 +5443,17 @@ def native_sha256(data: bytes) -> bytes:
 # the edge: the dependency now runs the same direction as the import, and the
 # cycle is gone from the graph rather than merely deferred past import time.
 #
-# The registration is deliberately immediately after `native_sha256` is bound
-# and before any keygen entry point below can run, so no caller can reach
-# `secure_token_bytes` with the kernel unset; if one somehow did, that
-# function fails closed rather than falling back to OpenSSL (INVARIANT-1).
+# Placement: immediately after `native_sha256` is bound, which is the earliest
+# point the kernel exists.  What makes that sufficient is NOT that the keygen
+# entry points sit below this line — `native_ed25519_keypair` is at ~4701 and
+# draws through `secure_token_bytes`, above here — but that a `def` body does
+# not execute at import.  The only module-scope calls that run before this
+# point are library discovery, the ABI handshake, the `_setup_*_ctypes`
+# binders, logging, and the `_probe_cython_*` probes; an AST enumeration of
+# module-scope calls confirms none of them draws randomness or reaches
+# `secure_token_bytes`.  So the kernel is registered before any caller can
+# arrive, and if one somehow did, `secure_token_bytes` fails closed rather
+# than falling back to OpenSSL (INVARIANT-1).
 _register_health_digest(native_sha256)
 
 
