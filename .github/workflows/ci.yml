@@ -536,6 +536,8 @@ jobs:
           tools/check_*.py tools/generate_sbom.py tools/update_docs.py \
           tools/build_post_kats.py tools/sanity_check.py \
           tools/build_keyformat_corpus.py \
+          tools/build_ascon_seed_corpus.py tools/build_kyber_seed_corpus.py \
+          tools/build_pqc_verify_seed_corpus.py \
           tools/verify_install_oob.py tools/resign_wheel.py \
           benchmarks/benchmark_runner.py \
           benchmarks/check_baseline_justification.py \
