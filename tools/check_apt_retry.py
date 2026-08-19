@@ -50,7 +50,11 @@ import sys
 from pathlib import Path
 
 HELPER = ".github/scripts/apt-install.sh"
-WORKFLOW_GLOB = ".github/workflows/*.yml"
+#: BOTH extensions.  GitHub Actions reads `.yml` and `.yaml` alike, so a gate
+#: that globs only one of them is bypassed by a workflow named the other way —
+#: silently, and in the direction that passes.  `check_action_pins.py` and
+#: `check_workflow_commands.py` already glob both; this one did not.
+WORKFLOW_GLOBS = (".github/workflows/*.yml", ".github/workflows/*.yaml")
 
 #: An apt invocation that reaches the network.  `apt-get` covers update,
 #: install, upgrade and remove; `apt install` is the interactive spelling that
@@ -93,9 +97,12 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
 
-    workflows = sorted(root.glob(WORKFLOW_GLOB))
+    workflows = sorted(q for g in WORKFLOW_GLOBS for q in root.glob(g))
     if not workflows:
-        print(f"FATAL: no workflows matched {WORKFLOW_GLOB}; refusing to pass vacuously.")
+        print(
+            f"FATAL: no workflows matched {' or '.join(WORKFLOW_GLOBS)}; "
+            f"refusing to pass vacuously."
+        )
         return 2
 
     violations: list[str] = []

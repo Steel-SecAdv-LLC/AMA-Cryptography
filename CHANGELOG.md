@@ -211,6 +211,30 @@ deliberate narrowing and is not claimed as more than it is: the scalar fallback
 is not covered by these counts — `AMA_DISPATCH_ONLY` pins individual slots, and
 the scalar AES-GCM invariance job covers that path directly.
 
+**The same defect class, twice more, in external fetches.** `Corpus Provenance
+Gate` then went red on a commit whose offline integrity check had just
+confirmed all fifteen vendored Wycheproof files byte-for-byte against
+`manifest.json`: `--verify` issues one HTTPS request per file back to back, and
+raw.githubusercontent.com answered the burst by resetting three of them
+(`[Errno 104] Connection reset by peer`) while the other twelve verified
+against upstream. That is the apt-hang shape again — an unretried external
+fetch failing an aggregating gate on a commit whose every real check passed —
+so it gets the same policy: bounded retry with backoff, and a retry that
+cannot convert a failure into a pass. Only transport errors are retried; a 404
+or a 403 is an answer about the resource and fails on the first attempt; the
+final attempt is unguarded; and a wrong digest is not a transport error at all
+— it is compared once, by the caller, and still reported as a provenance
+failure. Sixteen tests pin both halves, including that a digest mismatch is
+never given a second chance to agree and that the HTTPS-only scheme guard is
+checked before any attempt.
+
+`tools/check_apt_retry.py` itself globbed only `.github/workflows/*.yml`, while
+`check_action_pins.py` and `check_workflow_commands.py` beside it already
+globbed `*.yaml` too. GitHub Actions reads both, so a workflow named the other
+way would have bypassed the apt gate silently, in the direction that passes.
+Both extensions now, with tests for a raw apt call in a `.yaml` workflow and
+for a `.yaml`-only tree.
+
 **A timeout budget that could not cover the schedule its own verdict rule
 demands.** `test_dudect` runs up to `MAX_ROUNDS` rounds and refuses the early
 exit once any lane has tripped, but the Utility and X25519 jobs gave it 300 s

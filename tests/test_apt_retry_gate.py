@@ -84,6 +84,44 @@ def test_no_workflows_fails_closed(tmp_path: Path) -> None:
     assert gate.main(["--root", str(tmp_path)]) == 2
 
 
+def test_a_yaml_workflow_is_scanned_too(tmp_path: Path) -> None:
+    """GitHub Actions reads `.yml` and `.yaml` alike.
+
+    A gate that globs only one extension is bypassed by a workflow named the
+    other way — silently, and in the direction that passes. This gate globbed
+    only `*.yml` on first writing while `check_action_pins.py` and
+    `check_workflow_commands.py` next to it already globbed both.
+    """
+    scripts = tmp_path / ".github" / "scripts"
+    scripts.mkdir(parents=True)
+    helper = scripts / "apt-install.sh"
+    helper.write_text("#!/bin/sh\n")
+    helper.chmod(helper.stat().st_mode | stat.S_IXUSR)
+    workflows = tmp_path / ".github" / "workflows"
+    workflows.mkdir()
+    (workflows / "sneaky.yaml").write_text(
+        "jobs:\n  a:\n    steps:\n" "      - run: sudo apt-get install -y cmake\n"
+    )
+    assert (
+        gate.main(["--root", str(tmp_path)]) == 1
+    ), "a raw apt call in a .yaml workflow must fail the gate"
+
+
+def test_a_yaml_only_tree_is_not_vacuous(tmp_path: Path) -> None:
+    """...and a tree whose workflows are all `.yaml` is scanned, not skipped."""
+    scripts = tmp_path / ".github" / "scripts"
+    scripts.mkdir(parents=True)
+    helper = scripts / "apt-install.sh"
+    helper.write_text("#!/bin/sh\n")
+    helper.chmod(helper.stat().st_mode | stat.S_IXUSR)
+    workflows = tmp_path / ".github" / "workflows"
+    workflows.mkdir()
+    (workflows / "ok.yaml").write_text(
+        "jobs:\n  a:\n    steps:\n" "      - run: .github/scripts/apt-install.sh cmake\n"
+    )
+    assert gate.main(["--root", str(tmp_path)]) == 0
+
+
 def test_missing_helper_fails(tmp_path: Path) -> None:
     (tmp_path / ".github" / "workflows").mkdir(parents=True)
     assert gate.main(["--root", str(tmp_path)]) == 1
