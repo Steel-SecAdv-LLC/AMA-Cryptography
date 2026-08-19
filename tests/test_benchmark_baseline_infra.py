@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from collections.abc import Callable
@@ -20,6 +21,8 @@ import pytest
 # and tripped CodeQL's imported-both-ways check once benchmarks/ became a real
 # package.
 import benchmarks.benchmark_runner as br
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 def _baseline(runner_cpu_class: str = "aarch64", baseline_value: int = 1) -> dict[str, Any]:
@@ -269,6 +272,89 @@ class TestSampleWindow:
 
         rate = br.benchmark_operation(lambda: None, iterations=10, warmup=0, rounds=1)
         assert rate == 1_000.0, f"an undersized batch's {rate} ops/sec reached the report"
+
+
+class TestAnUnmeasurableBatchCannotBecomeAnInfiniteRate:
+    """`elapsed == 0` used to be reported as an infinite throughput.
+
+    ``_timed_batch`` yields ``float("inf")`` when the clock reads exactly zero
+    for a batch, and ``benchmark_operation`` returned that straight out. It is
+    a fail-open twice over: ``inf`` serialises as ``Infinity``, which is not
+    JSON (RFC 8259) and which a strict reader rejects, and an infinite rate
+    clears every regression FLOOR it is compared against — so the one value
+    that means "not measured" would have passed the gate that exists to catch
+    a slowdown.
+
+    A batch too short to time is a sizing problem, and is now treated as one.
+    """
+
+    @staticmethod
+    def _virtual_clock(monkeypatch: pytest.MonkeyPatch) -> dict[str, float]:
+        clock = {"t": 0.0}
+        monkeypatch.setattr("benchmarks.benchmark_runner.time.perf_counter", lambda: clock["t"])
+        return clock
+
+    def test_an_unmeasurable_batch_grows_instead_of_returning_infinity(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """It must try to measure, not give up with a number it cannot stand behind."""
+        self._virtual_clock(monkeypatch)
+        sizes: list[int] = []
+        real_batch = br._timed_batch
+
+        def spy(op: Callable[[], object], n: int) -> tuple[float, float]:
+            sizes.append(n)
+            return real_batch(op, n)
+
+        monkeypatch.setattr(br, "_timed_batch", spy)
+
+        def op() -> None:
+            """Never advances the clock: every batch reads as zero elapsed."""
+
+        with pytest.raises(RuntimeError, match="zero elapsed time"):
+            br.benchmark_operation(op, iterations=1, warmup=0, rounds=1)
+        assert len(sizes) > 1, "the batch was never grown; it gave up on the first read"
+        assert max(sizes) > sizes[0], "the batch did not grow"
+
+    def test_it_recovers_when_the_batch_becomes_measurable(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Growing is the point; raising is only the terminal case.
+
+        A batch that is briefly too short to time must end up measured, not
+        abandoned — otherwise this fix would trade a fail-open for a
+        fail-noisy on a fast primitive.
+        """
+        clock = self._virtual_clock(monkeypatch)
+        calls = {"n": 0}
+
+        def op() -> None:
+            calls["n"] += 1
+            # The first 8 operations are free; everything after costs 1 ms.
+            if calls["n"] > 8:
+                clock["t"] += 0.001
+
+        rate = br.benchmark_operation(op, iterations=8, warmup=0, rounds=1)
+        assert rate == pytest.approx(1000.0, rel=0.05)
+        assert rate != float("inf")
+
+    def test_the_json_record_refuses_a_non_finite_value(self, tmp_path: Path) -> None:
+        """The writer is the second line, and it fails closed.
+
+        Even if some future path produced a non-finite rate, the record must
+        not be written: `Infinity` in a results file is unparseable by a
+        strict reader and passes every floor it is compared against.
+        """
+        out = tmp_path / "results.json"
+        with pytest.raises(ValueError):
+            with open(out, "w") as handle:
+                json.dump({"ops_per_sec": float("inf")}, handle, allow_nan=False)
+
+    def test_the_runner_writes_with_allow_nan_disabled(self) -> None:
+        """Stated at the call site, because the default is the unsafe one."""
+        source = (REPO_ROOT / "benchmarks" / "benchmark_runner.py").read_text(encoding="utf-8")
+        assert "allow_nan=False" in source
+        assert "json.dump(report, f, indent=2)" not in source
 
 
 class TestPerPrimitiveSampling:

@@ -374,7 +374,18 @@ def benchmark_operation(
             break
         ops, _elapsed = _timed_batch(operation, batch)
         if ops == float("inf"):
-            return ops
+            # The clock could not resolve this batch at all (elapsed read as
+            # exactly zero).  Returning that straight out was a fail-OPEN in
+            # two directions: `inf` serialises as `Infinity`, which is not
+            # valid JSON (RFC 8259) and which a strict reader rejects, and an
+            # infinite rate clears every regression FLOOR it is compared
+            # against.  A batch too short to time is a sizing problem, so it
+            # is treated as one — grow and try again, exactly as an
+            # under-target batch is.
+            batch = min(_MAX_ITERATIONS, max(batch + 1, batch * 8))
+            completed = 0
+            best = 0.0
+            continue
         observed = max(observed, ops)
         target = _required_batch(observed)
         if batch >= target:
@@ -387,7 +398,20 @@ def benchmark_operation(
             completed = 0
             best = 0.0
 
-    return best if best > 0.0 else observed
+    if best > 0.0:
+        return best
+    if observed > 0.0 and observed != float("inf"):
+        return observed
+    # Every attempt timed as zero.  That is a broken clock rather than a fast
+    # operation, and a number this function cannot stand behind must not be
+    # returned as if it could — the JSON writer below refuses non-finite
+    # values for the same reason.
+    raise RuntimeError(
+        "benchmark_operation could not obtain a measurable batch: every timed "
+        "batch reported zero elapsed time, up to "
+        f"{_MAX_ITERATIONS} iterations. The monotonic clock is not resolving "
+        "this operation."
+    )
 
 
 def benchmark_operation_best_of(
@@ -1317,7 +1341,12 @@ def main() -> int:
 
     if args.output:
         with open(args.output, "w") as f:
-            json.dump(report, f, indent=2)
+            # allow_nan=False: the default emits `Infinity` / `NaN`, which are
+            # not JSON (RFC 8259).  A record a strict reader cannot parse is
+            # worse than no record, and a non-finite throughput would clear
+            # every regression floor it is compared against, so the write
+            # fails rather than producing one.
+            json.dump(report, f, indent=2, allow_nan=False)
         print(f"Report written to: {args.output}")
 
     if args.markdown:
