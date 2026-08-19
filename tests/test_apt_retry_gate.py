@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -186,7 +187,19 @@ def _fake_sudo(tmp_path: Path) -> Path:
     fake = binroot / "sudo"
     fake.write_text(textwrap.dedent("""\
             #!/usr/bin/env bash
-            if [ "$1" = "timeout" ]; then shift 2; fi
+            # Skip a leading `timeout [--kill-after=N] <secs>`, then drop any
+            # `-o Key=Value` apt options, so the case below sees the verb.
+            if [ "$1" = "timeout" ]; then
+              shift
+              case "$1" in --kill-after=*) shift ;; esac
+              shift
+            fi
+            verb="$1"; shift
+            args=()
+            while [ "$#" -gt 0 ]; do
+              case "$1" in -o) shift 2 ;; *) args+=("$1"); shift ;; esac
+            done
+            set -- "$verb" "${args[@]}"
             case "$1 $2" in
               "rm -f") exit 0 ;;
               "apt-get update") [ "${FAKE_APT_FAIL:-0}" = "1" ] && exit 100; exit 0 ;;
@@ -249,6 +262,57 @@ def test_helper_retries_before_giving_up(tmp_path: Path) -> None:
     assert "attempt 1 failed" in r.stdout
     assert "attempt 2 failed" in r.stdout
     assert "final attempt" in r.stdout
+
+
+@_LINUX_ONLY
+def test_each_bounded_attempt_escalates_to_sigkill(tmp_path: Path) -> None:
+    """The defect that made the bound advisory instead of binding.
+
+    GNU `timeout` sends SIGTERM. `apt-get` blocked on a network read inside its
+    http method child does not necessarily die on one, and without
+    `--kill-after` nothing escalates. Measured consequence: two jobs stalled at
+    the same Ubuntu mirror line within a second of each other, sat there for
+    8m44s past a 300s bound with no retry line printed, and were killed by
+    their 20-minute job caps — taking two aggregating gates red on a commit
+    where every other job passed.
+    """
+    body = HELPER_PATH.read_text(encoding="utf-8")
+    bounded = [ln for ln in body.splitlines() if "timeout" in ln and "sudo" in ln]
+    assert bounded, "no bounded attempt found in the helper"
+    for line in bounded:
+        assert (
+            "--kill-after=" in line
+        ), f"bounded attempt does not escalate past SIGTERM: {line.strip()!r}"
+
+
+@_LINUX_ONLY
+def test_apt_carries_its_own_acquire_timeouts(tmp_path: Path) -> None:
+    """Bound the transfer inside apt, not only around it.
+
+    An external kill turns a hang into a dead process; an acquire timeout turns
+    it into an ordinary, retriable apt failure with a real message. The final
+    attempt is unbounded in wall clock by design, so these are what stop it
+    hanging forever on a dead mirror.
+    """
+    body = HELPER_PATH.read_text(encoding="utf-8")
+    for opt in ("Acquire::http::Timeout", "Acquire::https::Timeout", "Acquire::Retries"):
+        assert opt in body, f"helper does not set {opt}"
+
+
+def test_the_bounded_phase_fits_inside_a_job_budget() -> None:
+    """Two bounded attempts plus backoff must leave the job time to do its work.
+
+    At the previous 300s default the bounded phase alone could consume 10.75
+    minutes of a 20-minute job, so one stall left nothing for the build and test
+    the job exists to run. This reads the shipped default rather than a copy of
+    it, so raising the constant without re-checking the budget fails here.
+    """
+    body = HELPER_PATH.read_text(encoding="utf-8")
+    match = re.search(r'ATTEMPT_TIMEOUT="\$\{APT_ATTEMPT_TIMEOUT:-(\d+)\}"', body)
+    assert match is not None, "could not find the per-attempt timeout default"
+    assert (
+        int(match.group(1)) <= 180
+    ), f"per-attempt bound {match.group(1)}s is too large for a 20-minute job"
 
 
 @_LINUX_ONLY

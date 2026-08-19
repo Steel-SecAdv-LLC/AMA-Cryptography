@@ -310,6 +310,33 @@ could not cover the work. `memory-sanitizer` runs the *identical*
 disagreeing about the cost of the same workload was the defect, the same shape
 as the three dudect jobs disagreeing at 300/600/900 s. ASan is now 25.
 
+**And the apt bound was never a bound.** With the Kyber lane settled and ASan
+green, two jobs still went red — `dudect - Utility Functions` and `clang-tidy`
+— and the logs showed both stalled at the *same* Ubuntu mirror line
+(`Get:5 …noble-security InRelease`) within one second of each other, sat there
+for **8m44s** with no output, and were killed by their 20-minute job caps.
+`APT_ATTEMPT_TIMEOUT` was 300, so the bound had expired five minutes earlier
+and no "attempt 1 failed" line was ever printed.
+
+The reason is a defect in `apt-install.sh` itself, which is the script written
+to stop exactly this. GNU `timeout` sends **SIGTERM**, and `apt-get` blocked on
+a network read inside its `/usr/lib/apt/methods/http` child does not
+necessarily die on one; without `--kill-after` nothing ever escalates. The
+bound was advisory. A retry policy whose timeout can be ignored is not a retry
+policy — it is the original hang with extra logging, and it took two
+aggregating gates red on a commit where every other job passed.
+
+Bounded two ways now, at different layers: `--kill-after` escalates to SIGKILL,
+which cannot be ignored, and apt carries its own
+`Acquire::http::Timeout` / `Acquire::https::Timeout` / `Acquire::Retries` so the
+ordinary case is an honest, retriable apt error rather than a process that has
+to be shot — including on the final attempt, which is unbounded in wall clock
+by design. The per-attempt default drops from 300 s to 120 s: at 300 the
+bounded phase alone could consume 10.75 minutes of a 20-minute job, leaving
+nothing for the work the job exists to do, while a healthy `apt-get update` on
+these runners takes 10-60 seconds. Three tests pin it, the SIGKILL one
+mutation-checked.
+
 **A timeout budget that could not cover the schedule its own verdict rule
 demands.** `test_dudect` runs up to `MAX_ROUNDS` rounds and refuses the early
 exit once any lane has tripped, but the Utility and X25519 jobs gave it 300 s

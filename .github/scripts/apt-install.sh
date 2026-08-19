@@ -42,8 +42,29 @@
 #   .github/scripts/apt-install.sh cmake clang
 #   .github/scripts/apt-install.sh --no-install-recommends cmake ninja-build
 #
+# WHY `timeout` ALONE WAS NOT A BOUND
+# -----------------------------------
+# The first version of this script wrapped each attempt in `timeout "$bound"`
+# and believed that bounded it.  It did not.  GNU `timeout` sends SIGTERM, and
+# `apt-get` blocked on a network read inside its `/usr/lib/apt/methods/http`
+# child does not necessarily die on SIGTERM — so the bound was advisory.
+#
+# Measured: on one push, `dudect - Utility Functions` and `clang-tidy` both
+# stalled at `Get:5 https://archive.ubuntu.com/ubuntu noble-security InRelease`
+# within one second of each other, sat there for 8m44s with no output, and were
+# killed by their 20-minute job caps.  APT_ATTEMPT_TIMEOUT was 300, so SIGTERM
+# had fired five minutes in and been ignored; no "attempt 1 failed" line was
+# ever printed, and `Constant-Time Gate` and `Static Analysis Gate` both went
+# red on a commit where every other job passed.
+#
+# So the bound is now enforced two ways, at different layers:
+#   * `--kill-after` escalates to SIGKILL, which cannot be ignored.
+#   * apt's OWN acquire timeouts fail the transfer fast and cleanly, so the
+#     usual case is an honest error rather than a process that has to be shot.
+#
 # Environment:
-#   APT_ATTEMPT_TIMEOUT   seconds to bound each non-final attempt (default 300)
+#   APT_ATTEMPT_TIMEOUT   seconds to bound each non-final attempt (default 120)
+#   APT_ATTEMPT_KILL_AFTER  seconds after SIGTERM before SIGKILL (default 30)
 #   APT_ATTEMPTS          total attempts including the final bare one (default 3)
 
 set -euo pipefail
@@ -55,8 +76,23 @@ if [ "$#" -eq 0 ]; then
     exit 2
 fi
 
-ATTEMPT_TIMEOUT="${APT_ATTEMPT_TIMEOUT:-300}"
+# 120, not 300.  Two bounded attempts plus backoff has to fit inside the job
+# budget with room for the work the job actually exists to do; at 300 the
+# bounded phase alone could consume 10.75 minutes of a 20-minute job.  A healthy
+# `apt-get update` on these runners takes 10-60 seconds.
+ATTEMPT_TIMEOUT="${APT_ATTEMPT_TIMEOUT:-120}"
+KILL_AFTER="${APT_ATTEMPT_KILL_AFTER:-30}"
 ATTEMPTS="${APT_ATTEMPTS:-3}"
+
+# Bound the transfer inside apt as well as around it.  These make a stalled
+# mirror an ordinary apt failure — retriable, with a real message — instead of
+# a wedged process that only a signal can end.
+APT_NET_OPTS=(
+    -o Acquire::http::Timeout=20
+    -o Acquire::https::Timeout=20
+    -o Acquire::ftp::Timeout=20
+    -o Acquire::Retries=1
+)
 
 if [ "$ATTEMPTS" -lt 1 ]; then
     echo "apt-install.sh: APT_ATTEMPTS must be at least 1 (got $ATTEMPTS)" >&2
@@ -74,11 +110,18 @@ attempt_install() {
     local bound="$1"
     shift
     if [ -n "$bound" ]; then
-        sudo timeout "$bound" apt-get update &&
-            sudo timeout "$bound" apt-get install -y "$@"
+        # --kill-after is the load-bearing flag: SIGTERM is a request, SIGKILL
+        # is not.  Without it a wedged apt outlives its own timeout.
+        sudo timeout --kill-after="$KILL_AFTER" "$bound" \
+            apt-get "${APT_NET_OPTS[@]}" update &&
+            sudo timeout --kill-after="$KILL_AFTER" "$bound" \
+                apt-get "${APT_NET_OPTS[@]}" install -y "$@"
     else
-        sudo apt-get update &&
-            sudo apt-get install -y "$@"
+        # The final attempt is deliberately unbounded in WALL CLOCK so a genuine
+        # failure is reported rather than truncated, but it still carries apt's
+        # own acquire timeouts so it cannot hang forever on a dead mirror.
+        sudo apt-get "${APT_NET_OPTS[@]}" update &&
+            sudo apt-get "${APT_NET_OPTS[@]}" install -y "$@"
     fi
 }
 
@@ -91,7 +134,8 @@ for attempt in $(seq 1 "$final"); do
     fi
     delay=$((attempt * 15))
     echo "apt-install.sh: attempt ${attempt} failed or exceeded" \
-         "${ATTEMPT_TIMEOUT}s; retrying in ${delay}s"
+         "${ATTEMPT_TIMEOUT}s (SIGKILL ${KILL_AFTER}s later if it ignored" \
+         "SIGTERM); retrying in ${delay}s"
     sleep "$delay"
 done
 
