@@ -31,6 +31,137 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > Compare `[4.0.0]` below, which is dated because it *is* released: tag
 > `v4.0.0`, published 2026-08-02.
 
+### Verification pass, sixth (2026-08-19) — five gates that were green and could not fail, and the enforcement entry point nobody had run
+
+Every item here was found by RUNNING something rather than by reading it, and
+none of them changed a line of shipped code: `src/c/`, `include/` and
+`ama_cryptography/` are untouched across this pass. What changed is the
+instruments, and what they were failing to see.
+
+**Three red lanes, all of them the instrument.**
+
+`dudect - Utility Functions` and `dudect - X25519 AVX2 4-way` were failing on
+class staging, not on the code under test. The shared helper selected the
+input with `class_idx ? A : B` in front of the timer — a class-correlated
+branch and a class-correlated address stream inside the measurement window.
+On a null experiment (byte-identical inputs, true effect zero) that
+construction reads over threshold in 4 of 8 runs. Replaced by
+`tests/c/dudect/dudect_stage.h`, which merges both inputs under a mask into
+one staging buffer: same address, same instruction sequence, both classes.
+0 of 8 on the same null experiment. Converted at all 23 sites in
+`tests/c/test_dudect.c` and 7 in `tools/constant_time/dudect_crypto.c`, and
+`tools/check_dudect_class_staging.py` was rewritten as a window state machine
+so a ternary, an `if` on the class, or `[class_idx]` indexing between the
+class draw and the timer fails the build.
+
+`ASan + UBSan` was failing `test_pq_parser_stack` on an implausible
+measurement because AddressSanitizer's fake stack had moved the frames off
+the real stack the test measures. The test now re-execs itself once with
+`detect_stack_use_after_return=0` rather than measuring a stack the frames
+are not on.
+
+**Four gates that were green and could not fail.**
+
+*Instruction-count thresholds.* All twelve deterministic constant-time
+targets shared a flat limit of 200. Sensitivity is limit divided by
+amplification, so that reserved 25 instructions per signature for `ecdsa` and
+`x25519`, 50 per signature for `nistp-ecdsa`, and exactly 1 per signature for
+`ed25519-sign` — against a `>` verdict, so a one-instruction key-dependent
+divergence passed exactly. Measured, not argued: a branch on
+`private_key[0] & 1` reinstated at the top of `ama_nistp_ecdsa_sign_raw`
+produces a 12-instruction, 8-data-reference cross-key delta, and at a limit of
+200 the tool printed PASSED over it, exit 0. Eleven of the twelve targets
+measure exactly zero on both gcc 13 and clang 18 with a same-class floor of
+zero; their limit is now 0. `ecdsa` keeps 64, which is 2.7x its worst benign
+DER-length delta and is stated as the residual rather than rounded away.
+`nistp-ecdsa` reached zero by construction: its driver now signs through
+`ama_nistp_ecdsa_sign_raw`, so the DER encoder's key-dependent length variance
+is no longer inside the measurement.
+
+*KEM fuzz coverage.* `fuzz_kyber` took `data[0] % 3`, so it could reach
+round-trip, ciphertext corruption and keygen — and never handed
+`ama_kyber_decapsulate` an attacker-shaped ciphertext, an encapsulation key,
+or a secret key. Now `% 6`, with case 3 asserting that a fully fuzzed
+ciphertext of exactly `AMA_KYBER_1024_CIPHERTEXT_BYTES` MUST return
+`AMA_SUCCESS` — implicit rejection (FIPS 203 §6.3) has no other correct
+answer, and a status divergence would itself be the plaintext-checking oracle
+the FO transform exists to deny.
+
+*Fuzz input reachability.* The lane ran every target at a hard-coded
+`-max_len=4096`. `fuzz_dilithium` case 1 needs 5,262 bytes and `fuzz_sphincs`
+cases 1 and 2 need 49,921 and 49,857. libFuzzer truncates corpus units to
+`-max_len` as well as bounding mutations — measured on this tree, a
+60,001-byte seed enters the in-memory corpus at 4,096 — so the
+attacker-controlled ML-DSA verify path and both SLH-DSA verify paths had never
+executed in any run this repository has done, while the jobs reported success.
+`tools/check_fuzz_input_reachability.py` now derives each lane's ceiling from
+the harness's own guards and fails if a branch sits above it, if a guard is
+unresolvable and undeclared, or if the workflow goes back to writing the
+number down.
+
+*Vendor isolation.* `tools/check_vendor_isolation.py` never read `src/c`,
+which is the only place in the tree with `#include <openssl/...>` — the
+`#else` arms of the vendored ed25519-donna headers. It reads it now. The arms
+remain unreachable: `src/c/ed25519_donna_shim.c` defines `ED25519_REFHASH` and
+`ED25519_CUSTOMRANDOM` before including them, and the built object confirms it
+— `DT_NEEDED` is `libc.so.6` and `ld-linux-x86-64.so.2` only, with zero
+undefined symbols matching any prohibited vendor.
+
+**A benchmark that failed open.** `benchmarks/benchmark_runner.py` returned
+`inf` throughput for a batch too fast to time, and infinity clears every
+regression floor. It now grows the batch until the measurement resolves and
+raises rather than reporting a number it did not measure; `json.dump` is
+`allow_nan=False`, so a non-finite figure can no longer be written at all.
+
+**The apt wrapper.** Its retries were bounded and its final attempt was not,
+so a stalled mirror consumed whole jobs and gates went red on commits where
+every real check had passed. Bounded by a total budget first; then measured
+again, because two jobs on two workflows still failed identically at
+`Get:5 https://archive.ubuntu.com/ubuntu noble-security InRelease` — headers
+received, body never completing, 315s and 293s. Retrying is the same request
+to the same mirror, and every stall on record is in `apt-get update`, never in
+`install`. `install` now runs first against the package lists the runner image
+already ships, falling through to the full bounded refresh only if they cannot
+satisfy the request. Measured: `Fuzz PQC Primitives (fuzz_frost)` spent 6
+seconds in that step where the previous path spent 10 minutes and failed.
+
+**The enforcement entry point nobody had run.** `pre-commit run --all-files`
+turned out to be both destructive and inert.
+
+`trailing-whitespace` and `end-of-file-fixer` rewrote 150 files: 94 binary
+seeds under `fuzz/seed_corpus/`, all 32 vendored ed25519-donna headers, 19
+NIST/Ascon KAT vector files, the FIPS 140-3 power-on self-test KAT JSON. The
+KAT format spells an empty field as a key followed by a trailing space, so the
+hook turned `PT = ` into `PT =` across ML-KEM, ML-DSA, SLH-DSA and Ascon.
+Nothing caught it: on the rewritten tree the corpus generators' `--check`,
+`check_corpus_originality.py`, `check_vendor_isolation.py` and all 135 KAT
+tests still passed. Both hooks are now scoped away from verbatim data, and
+`--markdown-linebreak-ext=md` stops the hook stripping Markdown hard line
+breaks.
+
+The `mypy` hook aborted at file collection on every `--all-files` run —
+`schemas/` and `wycheproof_vectors/` have no `__init__.py`, so mypy saw their
+modules under two names and stopped with "errors prevented further checking".
+It had never type-checked anything in that mode while reporting what read like
+an ordinary lint failure. `--explicit-package-bases` fixes the class; the
+hook is held to the surface `ci.yml` gates, and `tests/test_precommit_mypy_scope.py`
+derives that surface from `ci.yml` so the two cannot drift apart.
+
+`bandit` reported four findings outside CI's `ama_cryptography/` scope. Rather
+than narrow the hook, the causes are recorded at the sites: three `B310`
+urlopen calls that already enforce `https://` and already carried the
+reasoning for ruff, and one `B324` that is a false positive on the argument —
+`hashlib.new(sha, ...)` where `sha` is the value side of a SHA-2-only table.
+`usedforsecurity=False` was deliberately not used there: those are the message
+digests an ECDSA verification consumes, and declaring them non-security to
+satisfy a scanner would be false.
+
+**What is still open.** `ecdsa` retains a 64-instruction tolerance because
+secp256k1 exposes only the DER form; a secret-dependent divergence below 8
+instructions per signature is beneath what that target can resolve. Closing it
+needs a fixed-width secp256k1 signing entry point, the same remedy
+`nistp-ecdsa` used.
+
 ### Constant-time gate, fifth pass (2026-08-19) — the gates were measuring an unoptimized library, and a live ECDSA leak was sitting behind that
 
 Every instruction-count constant-time target in `dudect.yml` was built by
