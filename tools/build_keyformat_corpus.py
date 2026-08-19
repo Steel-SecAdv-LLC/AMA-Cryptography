@@ -107,7 +107,7 @@ def fetch(url: str) -> str:
     # The suppression sits on the `urlopen` line, not on the closing `as
     # response:` line — that is where ruff anchors S310, and a trailing
     # comment on the wrong line of a wrapped call silently disarms it.
-    with urllib.request.urlopen(  # noqa: S310 -- https enforced directly above (KFC-001)
+    with urllib.request.urlopen(  # noqa: S310  # nosec B310 -- https enforced directly above (KFC-001)
         url, timeout=120
     ) as response:
         text: str = response.read().decode("utf-8", "replace")

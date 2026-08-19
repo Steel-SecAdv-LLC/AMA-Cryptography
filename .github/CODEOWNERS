@@ -55,4 +55,3 @@
 /benchmarks/baseline.json @Steel-SecAdv-LLC
 /benchmarks/check_baseline_justification.py @Steel-SecAdv-LLC
 /.github/workflows/baseline-guard.yml @Steel-SecAdv-LLC
-

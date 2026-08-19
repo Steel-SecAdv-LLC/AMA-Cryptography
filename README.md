@@ -45,7 +45,7 @@
 
 ---
 
-## Executive Summary 🌎 
+## Executive Summary 🌎
 
 AMA Cryptography is a hybrid Ed25519 + Dilithium (ML-DSA-65) framework for quantum-resistant integrity protection. Community-tested, not externally audited. A multi-language cryptographic security system designed to protect people, data, and networks against both classical and quantum threats. Built on NIST-standardized post-quantum cryptography (PQC), AMA Cryptography provides security-hardened features with measured performance (see [Performance Metrics](#performance-metrics)).
 
@@ -105,7 +105,7 @@ The system combines NIST-standardized post-quantum algorithms with a 3R runtime 
 
 ---
 
-## Key Capabilities 
+## Key Capabilities
 
 <details>
 <summary><strong>Problem Statement and Solution</strong></summary>
@@ -309,7 +309,7 @@ Additional C sources:
 <details>
 <summary><strong>Real-world scenarios (click to expand)</strong></summary>
 
-### Humanitarian and Conservation 
+### Humanitarian and Conservation
 
 **Unique Value:** Protection of sensitive field data with runtime attack detection (Not approved for clinical, medical, or regulated government deployment without independent audit):
 
@@ -328,7 +328,7 @@ Additional C sources:
 - **Integrity Verification**: Mathematical invariant checking provides additional tampering detection beyond standard checksums.
 - **Zero-Trust Environments**: Runtime monitoring provides continuous observation of cryptographic operations.
 
-### Financial Services 
+### Financial Services
 
 **Unique Value:** Transaction security with real-time anomaly detection
 
@@ -338,7 +338,7 @@ Additional C sources:
 - **Audit Compliance**: Cryptographic audit trail with ethical constraint enforcement.
 - **Long-term Archival**: Financial records with quantum-resistant protection for long-term security.
 
-### Healthcare 
+### Healthcare
 
 **Unique Value:** Quantum-resistant encryption with integrity monitoring (independent compliance validation required for HIPAA and other regulations)
 
@@ -349,7 +349,7 @@ Additional C sources:
 - **Research Data**: Sensitive research data with ethical policy enforcement and audit trails.
 - **Telemedicine**: Secure video consultations with hybrid classical+quantum key exchange.
 
-### Critical Infrastructure 
+### Critical Infrastructure
 
 **Unique Value:** SCADA/ICS security with runtime anomaly monitoring
 
@@ -360,7 +360,7 @@ Additional C sources:
 - **Anomaly Monitoring**: 3R system surfaces statistical anomalies in cryptographic operations for security review.
 - **Legacy System Protection**: Wrapper for older systems needing quantum resistance without full replacement.
 
-### Blockchain and Cryptocurrency 
+### Blockchain and Cryptocurrency
 
 **Unique Value:** Post-quantum secure signatures with high-performance verification
 
@@ -954,7 +954,7 @@ The test suite includes:
 
 ![Test Suite Coverage](assets/test_coverage.png)
 
-*4,050 test functions across 169 Python test files plus 59 C test suites (62 translation units) covering core crypto and NIST KATs (including the new AVX-512 4-way Keccak KAT, fe51-vs-fe64 X25519 byte-equivalence, MULX+ADX equivalence, VAES AES-GCM equivalence, FROST threshold signing, Ed25519 Shamir verify and base-point comb equivalence, and Dilithium / Kyber sampling-equivalence pinning), PQC backends, key management, adaptive posture, hybrid combiner, memory security, fuzz harnesses, and performance/monitoring. See [docs/METRICS_REPORT.md](docs/METRICS_REPORT.md) for the authoritative count and reproduction command (`grep -rE "^\s*def test_" tests/ --include='*.py' | wc -l`).*
+*4,059 test functions across 171 Python test files plus 59 C test suites (62 translation units) covering core crypto and NIST KATs (including the new AVX-512 4-way Keccak KAT, fe51-vs-fe64 X25519 byte-equivalence, MULX+ADX equivalence, VAES AES-GCM equivalence, FROST threshold signing, Ed25519 Shamir verify and base-point comb equivalence, and Dilithium / Kyber sampling-equivalence pinning), PQC backends, key management, adaptive posture, hybrid combiner, memory security, fuzz harnesses, and performance/monitoring. See [docs/METRICS_REPORT.md](docs/METRICS_REPORT.md) for the authoritative count and reproduction command (`grep -rE "^\s*def test_" tests/ --include='*.py' | wc -l`).*
 
 </details>
 
@@ -1577,7 +1577,7 @@ The human architect does not hold formal credentials in cryptography. The AI con
 
 - **Standards-based design:** Built on NIST FIPS 202/204, RFC 2104/5869/8032/3161—not custom cryptography
 - **Quantified claims:** All performance metrics are measured and reproducible (see [benchmarks/](benchmarks/))
-- **Rigorous testing:** 4,050 test functions across 169 Python files plus 59 C test suites, anchored in [docs/METRICS_REPORT.md](docs/METRICS_REPORT.md); CI includes security scanning, NIST ACVP validation (1,215/1,215 — 815 AFT + 400 SHA-3 MCT), and tiered benchmark-regression checks
+- **Rigorous testing:** 4,059 test functions across 171 Python files plus 59 C test suites, anchored in [docs/METRICS_REPORT.md](docs/METRICS_REPORT.md); CI includes security scanning, NIST ACVP validation (1,215/1,215 — 815 AFT + 400 SHA-3 MCT), and tiered benchmark-regression checks
 - **Regression detection:** Tiered benchmark tolerances calibrated for CI environments
 - **Transparent limitations:** Security analysis explicitly distinguishes self-assessed vs. audited claims
 - **Defense-in-depth:** Security bounded by weakest layer (~128-bit classical), not inflated aggregate claims

@@ -150,7 +150,7 @@ encryption_key = bytearray(os.urandom(32))
 with SecureKeyStorage(encryption_key) as storage:
     # Store key material (encrypted with AES-256-GCM)
     storage.store("signing-key-v1", os.urandom(32))
-    
+
     # Retrieve key material (decrypted on access)
     key = storage.retrieve("signing-key-v1")
 

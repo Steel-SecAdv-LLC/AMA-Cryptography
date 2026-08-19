@@ -450,31 +450,31 @@ Security: IND-CCA2 secure if either component KEM remains unbroken. Uses native 
 1. Input Validation
    - Validate data format and parameters
    - Verify KMS integrity and key availability
-   
+
 2. Canonical Encoding
    - Apply length-prefixed encoding to all fields
    - Ensure deterministic byte representation
-   
+
 3. Content Hashing
    - Compute SHA3-256 digest of encoded data
    - Store as content_hash in package
-   
+
 4. HMAC Generation
    - Compute HMAC-SHA3-256 using derived hmac_key
    - Store as hmac_tag in package
-   
+
 5. Classical Signature
    - Sign content_hash with Ed25519 private key
    - Store signature and public key in package
-   
+
 6. Quantum-Resistant Signature
    - Sign content_hash with ML-DSA-65 private key
    - Store signature and public key in package
-   
+
 7. Timestamp (Optional)
    - Request RFC 3161 timestamp from TSA
    - Store timestamp token in package
-   
+
 8. Package Assembly
    - Combine all components into CryptoPackage
    - Serialize to JSON format
@@ -486,30 +486,30 @@ Security: IND-CCA2 secure if either component KEM remains unbroken. Uses native 
 1. Package Parsing
    - Deserialize JSON to CryptoPackage
    - Validate all required fields present
-   
+
 2. Content Hash Verification
    - Recompute SHA3-256 from provided data
    - Compare with stored content_hash
-   
+
 3. HMAC Verification (if key available)
    - Recompute HMAC-SHA3-256
    - Constant-time comparison with stored tag
-   
+
 4. Ed25519 Signature Verification
    - Extract public key from package
    - Verify signature over content_hash
-   
+
 5. ML-DSA-65 Signature Verification
    - Extract public key from package
    - Verify signature over content_hash
-   
+
 6. Timestamp Binding Check (if present)
    - Parse RFC 3161 timestamp token
    - Recompute the message imprint and compare in constant time (§2.4.2)
    - The TSA signature and certificate chain are NOT verified, and genTime
      is NOT evaluated: a passing check means the token refers to this data,
      not that a trusted authority issued it (INVARIANT-37)
-   
+
 7. Result Aggregation
    - Return verification status for each layer
    - Overall success requires all layers to pass
@@ -845,7 +845,7 @@ docker run ama-cryptography:latest
 | Fuzz Tests | Input mutation testing | 15 C targets | `fuzz/fuzz_*.c` (16 sources; `fuzz_rng.c` is a helper) |
 | NIST ACVP Vectors | Official vector validation | 1,215 vectors, 12 algorithms (815 AFT + 400 SHA-3 MCT) | `nist_vectors/` |
 
-**Total:** 4,050 Python test functions across 169 test files, plus the
+**Total:** 4,059 Python test functions across 171 test files, plus the
 ctest-registered C tests and standalone C benchmark under `tests/c/`
 (the exact C-test count varies with build options — `AMA_USE_NATIVE_PQC`
 gates `test_x25519`, `test_chacha20poly1305`, `test_argon2id`,

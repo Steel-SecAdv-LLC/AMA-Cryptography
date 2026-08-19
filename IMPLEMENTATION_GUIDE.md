@@ -167,14 +167,14 @@ from botocore.exceptions import ClientError
 def store_master_secret_hsm(master_secret: bytes, key_label: str):
     """Store master secret in AWS CloudHSM."""
     client = boto3.client('cloudhsmv2')
-    
+
     # Import key to HSM
     response = client.import_key(
         KeyLabel=key_label,
         KeyMaterial=master_secret,
         KeySpec='AES_256'
     )
-    
+
     return response['KeyId']
 
 # Store master secret
@@ -202,13 +202,13 @@ def store_key_yubikey(master_secret: bytes, slot: int = 0x82):
     """Store key in YubiKey PIV slot."""
     device, _ = connect_to_device()[0]
     piv = PivController(device.driver)
-    
+
     # Authenticate with management key
     piv.authenticate(bytes.fromhex('010203040506070801020304050607080102030405060708'))
-    
+
     # Store key in slot
     piv.import_key(slot, master_secret)
-    
+
     print(f"Key stored in YubiKey slot {hex(slot)}")
 
 store_key_yubikey(kms.master_secret)
@@ -230,14 +230,14 @@ def store_master_secret_encrypted(
     keyfile: str = "master_secret.enc"
 ):
     """Store master secret encrypted with password."""
-    
+
     # Get password from user
     password = getpass.getpass("Enter encryption password: ")
     password_confirm = getpass.getpass("Confirm password: ")
-    
+
     if password != password_confirm:
         raise ValueError("Passwords don't match")
-    
+
     # Derive encryption key from password using PBKDF2
     salt = os.urandom(32)  # 256-bit salt
     kdf = PBKDF2(
@@ -247,32 +247,32 @@ def store_master_secret_encrypted(
         iterations=600000  # OWASP recommendation (2024)
     )
     key = base64.urlsafe_b64encode(kdf.derive(password.encode()))
-    
+
     # Encrypt master secret
     fernet = Fernet(key)
     encrypted = fernet.encrypt(master_secret)
-    
+
     # Save salt + encrypted data
     with open(keyfile, 'wb') as f:
         f.write(salt + encrypted)
-    
+
     print(f"Master secret encrypted and saved to {keyfile}")
     print("WARNING: Password-protected encryption is weaker than HSM")
     print("         Use HSM for production deployments")
 
 def load_master_secret_encrypted(keyfile: str = "master_secret.enc") -> bytes:
     """Load and decrypt master secret."""
-    
+
     # Read salt + encrypted data
     with open(keyfile, 'rb') as f:
         data = f.read()
-    
+
     salt = data[:16]
     encrypted = data[16:]
-    
+
     # Get password from user
     password = getpass.getpass("Enter encryption password: ")
-    
+
     # Derive decryption key
     kdf = PBKDF2(
         algorithm=hashes.SHA256(),
@@ -281,11 +281,11 @@ def load_master_secret_encrypted(keyfile: str = "master_secret.enc") -> bytes:
         iterations=600000  # Must match store iterations
     )
     key = base64.urlsafe_b64encode(kdf.derive(password.encode()))
-    
+
     # Decrypt master secret
     fernet = Fernet(key)
     master_secret = fernet.decrypt(encrypted)
-    
+
     return master_secret
 
 # Usage
@@ -306,7 +306,7 @@ def create_package_with_timestamp(
     kms: KeyManagementSystem
 ) -> CryptoPackage:
     """Create package with RFC 3161 timestamp."""
-    
+
     return create_crypto_package(
         codes,
         helix_params,
@@ -378,35 +378,35 @@ def should_rotate_keys(kms: KeyManagementSystem) -> bool:
     creation = datetime.fromisoformat(kms.creation_date)
     now = datetime.now(timezone.utc)
     age = (now - creation).days
-    
+
     if kms.rotation_schedule == "quarterly":
         return age >= 90
     elif kms.rotation_schedule == "monthly":
         return age >= 30
     elif kms.rotation_schedule == "annually":
         return age >= 365
-    
+
     return False
 
 def rotate_keys(old_kms: KeyManagementSystem, author: str) -> KeyManagementSystem:
     """Rotate keys while maintaining master secret."""
-    
+
     print("Rotating keys...")
-    
+
     # Generate new KMS with NEW master secret
     new_kms = generate_key_management_system(author)
-    
+
     # Archive old public keys for verification
     archive_dir = Path(f"public_keys_archive_{datetime.now().isoformat()}")
     export_public_keys(old_kms, archive_dir)
     print(f"Old public keys archived to: {archive_dir}")
-    
+
     # Export new public keys
     export_public_keys(new_kms, Path("public_keys"))
-    
+
     # Securely delete old master secret
     old_kms.master_secret = b'\x00' * 32
-    
+
     print("✓ Key rotation complete")
     return new_kms
 
@@ -425,7 +425,7 @@ def sign_codes(
     output_file: str = "CRYPTO_PACKAGE.json"
 ) -> CryptoPackage:
     """Sign Omni-Codes and save package."""
-    
+
     # Create cryptographic package
     pkg = create_crypto_package(
         codes,
@@ -434,11 +434,11 @@ def sign_codes(
         author="Steel-SecAdv-LLC",
         use_rfc3161=True  # Production should use RFC 3161
     )
-    
+
     # Save to file
     with open(output_file, 'w') as f:
         json.dump(asdict(pkg), f, indent=2)
-    
+
     print(f"✓ Package signed and saved: {output_file}")
     return pkg
 
@@ -456,13 +456,13 @@ def verify_dna_package(
     hmac_key: bytes
 ) -> bool:
     """Verify Omni-Code package from file."""
-    
+
     # Load package
     with open(package_file, 'r') as f:
         pkg_dict = json.load(f)
-    
+
     pkg = CryptoPackage(**pkg_dict)
-    
+
     # Verify all layers
     results = verify_crypto_package(
         codes,
@@ -470,21 +470,21 @@ def verify_dna_package(
         pkg,
         hmac_key
     )
-    
+
     # Print results
     print(f"\nVerification Results for {package_file}:")
     print("-" * 50)
     for check, valid in results.items():
         status = "✓" if valid else "✗"
         print(f"  {status} {check}: {'VALID' if valid else 'INVALID'}")
-    
+
     all_valid = all(results.values())
     print("-" * 50)
     if all_valid:
         print("✓ ALL VERIFICATIONS PASSED")
     else:
         print("✗ VERIFICATION FAILED")
-    
+
     return all_valid
 
 # Verify package
@@ -540,21 +540,21 @@ def create_multi_signed_package(
     signers: List[Tuple[str, KeyManagementSystem]]
 ) -> Dict[str, Any]:
     """Create package signed by multiple parties."""
-    
+
     # Create base package with first signer
     author1, kms1 = signers[0]
     pkg = create_crypto_package(codes, helix_params, kms1, author1)
-    
+
     # Add additional signatures
     multi_pkg = {
         "content_hash": pkg.content_hash,
         "timestamp": pkg.timestamp,
         "signatures": []
     }
-    
+
     for author, kms in signers:
         content_hash = bytes.fromhex(pkg.content_hash)
-        
+
         sig = {
             "author": author,
             "hmac": hmac_authenticate(content_hash, kms.hmac_key).hex(),
@@ -564,7 +564,7 @@ def create_multi_signed_package(
             "dilithium_pubkey": kms.dilithium_keypair.public_key.hex()
         }
         multi_pkg["signatures"].append(sig)
-    
+
     return multi_pkg
 
 # Usage: Multiple organizations co-sign
@@ -592,18 +592,18 @@ import subprocess
 
 def setup_git_signing(kms: KeyManagementSystem):
     """Configure Git to sign commits with Ed25519."""
-    
+
     # Export Ed25519 key in SSH format
     public_key_ssh = base64.b64encode(kms.ed25519_keypair.public_key).decode()
-    
+
     with open("ed25519_git.key", "w") as f:
         f.write(f"ssh-ed25519 {public_key_ssh} Steel-SecAdv-LLC\n")
-    
+
     # Configure Git
     subprocess.run(["git", "config", "user.signingkey", "ed25519_git.key"])
     subprocess.run(["git", "config", "commit.gpgsign", "true"])
     subprocess.run(["git", "config", "gpg.format", "ssh"])
-    
+
     print("✓ Git configured for Ed25519 signing")
     print("Commit with: git commit -S -m 'Your message'")
 
@@ -730,9 +730,9 @@ def sign_multiple_codes(
     kms: KeyManagementSystem
 ) -> List[CryptoPackage]:
     """Sign multiple Omni-Codes efficiently."""
-    
+
     packages = []
-    
+
     for i, (codes, helix_params) in enumerate(dna_list):
         pkg = create_crypto_package(
             codes,
@@ -741,10 +741,10 @@ def sign_multiple_codes(
             author="Steel-SecAdv-LLC"
         )
         packages.append(pkg)
-        
+
         if (i + 1) % 100 == 0:
             print(f"Signed {i + 1} packages...")
-    
+
     print(f"✓ Signed {len(packages)} packages total")
     return packages
 
@@ -773,15 +773,15 @@ def verify_multiple_packages(
     workers: int = 4
 ) -> List[Dict[str, bool]]:
     """Verify multiple packages in parallel."""
-    
+
     args_list = [
         (pkg, codes, helix_params, hmac_key)
         for pkg in packages
     ]
-    
+
     with ProcessPoolExecutor(max_workers=workers) as executor:
         results = list(executor.map(verify_package_worker, args_list))
-    
+
     return results
 
 # Usage: Verify 1000 packages with 4 workers
@@ -925,20 +925,20 @@ from typing import Optional
 
 def load_package_any_version(package_file: str) -> CryptoPackage:
     """Load package from any version, adding defaults for missing fields."""
-    
+
     with open(package_file, 'r') as f:
         pkg_dict = json.load(f)
-    
+
     # Check if ethical fields are present
     if 'ethical_vector' not in pkg_dict:
         # v1.0.0 package - add default ethical vector
         print("⚠ Loading v1.0.0 package without ethical integration")
         pkg_dict['ethical_vector'] = ETHICAL_VECTOR.copy()
-        
+
         # Compute ethical hash for consistency
         ethical_json = json.dumps(pkg_dict['ethical_vector'], sort_keys=True)
         pkg_dict['ethical_hash'] = hashlib.sha3_256(ethical_json.encode()).hexdigest()
-    
+
     return CryptoPackage(**pkg_dict)
 
 # Usage
@@ -968,19 +968,19 @@ def migrate_package_directory(
     helix_params: List[Tuple[float, float]]
 ):
     """Migrate all packages in directory to v2.0.0."""
-    
+
     input_path = Path(input_dir)
     output_path = Path(output_dir)
     output_path.mkdir(exist_ok=True)
-    
+
     # Find all JSON packages
     packages = list(input_path.glob("*.json"))
-    
+
     print(f"Found {len(packages)} packages to migrate")
-    
+
     for pkg_file in packages:
         print(f"Migrating {pkg_file.name}...")
-        
+
         # Create new package with ethical integration
         new_pkg = create_crypto_package(
             codes,
@@ -989,14 +989,14 @@ def migrate_package_directory(
             author=kms.author if hasattr(kms, 'author') else "Unknown",
             use_rfc3161=True
         )
-        
+
         # Save to output directory
         output_file = output_path / pkg_file.name
         with open(output_file, 'w') as f:
             json.dump(asdict(new_pkg), f, indent=2)
-        
+
         print(f"  ✓ Migrated to {output_file}")
-    
+
     print(f"\n✓ Migration complete: {len(packages)} packages")
 
 # Usage
@@ -1068,22 +1068,22 @@ kms = generate_key_management_system(
 ```python
 def verify_ethical_binding(pkg: CryptoPackage) -> bool:
     """Verify ethical vector matches its hash."""
-    
+
     # Recompute ethical hash
     ethical_json = json.dumps(pkg.ethical_vector, sort_keys=True)
     computed_hash = hashlib.sha3_256(ethical_json.encode()).hexdigest()
-    
+
     # Compare with package hash
     if computed_hash != pkg.ethical_hash:
         print("✗ Ethical hash mismatch - package may be tampered")
         return False
-    
+
     # Verify constraint
     total_weight = sum(pkg.ethical_vector.values())
     if abs(total_weight - 12.0) > 1e-10:
         print(f"✗ Ethical vector constraint violated: Σw = {total_weight} ≠ 12.0")
         return False
-    
+
     print("✓ Ethical binding verified")
     return True
 
@@ -1097,9 +1097,9 @@ if verify_ethical_binding(pkg):
 ```python
 def test_migration():
     """Test migration from v1.0.0 to v2.0.0."""
-    
+
     print("Testing migration...")
-    
+
     # 1. Create v2.0.0 package
     kms = generate_key_management_system("TestOrg")
     pkg_v2 = create_crypto_package(
@@ -1108,16 +1108,16 @@ def test_migration():
         kms,
         author="TestOrg"
     )
-    
+
     # 2. Verify all fields present
     assert hasattr(pkg_v2, 'ethical_vector')
     assert hasattr(pkg_v2, 'ethical_hash')
     assert len(pkg_v2.ethical_vector) == 12
     assert sum(pkg_v2.ethical_vector.values()) == 12.0
-    
+
     # 3. Verify ethical hash
     assert verify_ethical_binding(pkg_v2)
-    
+
     # 4. Verify cryptographic integrity
     results = verify_crypto_package(
         MASTER_OMNI_CODES,
@@ -1126,7 +1126,7 @@ def test_migration():
         kms.hmac_key
     )
     assert all(results.values())
-    
+
     print("✓ Migration test passed")
 
 test_migration()

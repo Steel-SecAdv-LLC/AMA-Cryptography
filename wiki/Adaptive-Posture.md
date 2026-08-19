@@ -207,19 +207,19 @@ def monitoring_loop(crypto_api, key_manager, interval_seconds=60):
     while True:
         # Collect monitoring signals
         signals = collect_monitoring_signals()
-        
+
         # Evaluate threat level
         evaluation = evaluator.evaluate(signals)
-        
+
         # Log current posture
         print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] "
               f"Threat: {evaluation.threat_level.name} | "
               f"Action: {evaluation.recommended_action.name}")
-        
+
         # Execute actions if needed
         if evaluation.recommended_action != PostureAction.NONE:
             controller.execute_action(evaluation, crypto_api, key_manager)
-        
+
         time.sleep(interval_seconds)
 ```
 

@@ -87,12 +87,12 @@ def fetch_bytes(
     wait = DEFAULT_BACKOFF if backoff is None else backoff
 
     ctx = ssl.create_default_context()
-    req = urllib.request.Request(  # noqa: S310 -- https enforced directly above (FETCH-001)
+    req = urllib.request.Request(  # noqa: S310  # nosec B310 -- https enforced directly above (FETCH-001)
         url, headers={"User-Agent": user_agent}
     )
     for attempt in range(1, total + 1):
         try:
-            with urllib.request.urlopen(  # noqa: S310 -- https enforced above (FETCH-001)
+            with urllib.request.urlopen(  # noqa: S310  # nosec B310 -- https enforced above (FETCH-001)
                 req, timeout=timeout, context=ctx
             ) as resp:
                 return bytes(resp.read())
