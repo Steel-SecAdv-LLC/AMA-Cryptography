@@ -142,12 +142,23 @@ if [ "$ATTEMPTS" -lt 1 ]; then
     exit 2
 fi
 
-# Azure/Microsoft package sources are the usual culprit for a stalled update on
-# GitHub-hosted images and nothing in this repository needs them.  Removing
-# them is best-effort: their absence is the desired state, so `|| true` here
-# asserts nothing about the install that follows.
-sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list \
-           /etc/apt/sources.list.d/azure-cli.list 2>/dev/null || true
+# Third-party sources nothing in this repository needs.  Each one is another
+# InRelease fetch on every `update`, so dropping them shortens the window in
+# which a mirror can stall.  Removing them is best-effort: their absence is the
+# desired state, so `|| true` here asserts nothing about the install that
+# follows.
+#
+# Globbed, not named with `.list`.  The previous form removed
+# `microsoft-prod.list` and `azure-cli.list`; the runner image has moved to
+# deb822 (`.sources`), so it matched nothing.  Measured, in the fuzz_frost and
+# `Python 3.12 on ubuntu-latest` logs of run 32304592250/32304592231: after the
+# `rm` ran, `apt-get update` still fetched
+# `https://packages.microsoft.com/repos/azure-cli noble InRelease`.  A
+# best-effort mitigation that silently does nothing is worse than none, because
+# its comment says the risk is handled.
+sudo rm -f /etc/apt/sources.list.d/microsoft-prod.* \
+           /etc/apt/sources.list.d/azure-cli.* \
+           /etc/apt/sources.list.d/google-chrome.* 2>/dev/null || true
 
 # Every attempt is bounded — there is no unbounded arm to fall through to.
 # --kill-after is the load-bearing flag: SIGTERM is a request, SIGKILL is not.
@@ -157,9 +168,52 @@ attempt_install() {
     shift
     sudo timeout --kill-after="$KILL_AFTER" "$bound" \
         apt-get "${APT_NET_OPTS[@]}" update &&
-        sudo timeout --kill-after="$KILL_AFTER" "$bound" \
-            apt-get "${APT_NET_OPTS[@]}" install -y "$@"
+        install_only "$bound" "$@"
 }
+
+install_only() {
+    local bound="$1"
+    shift
+    sudo timeout --kill-after="$KILL_AFTER" "$bound" \
+        apt-get "${APT_NET_OPTS[@]}" install -y "$@"
+}
+
+# FIRST, WITHOUT `update`: every stall on record has been in `apt-get update`.
+#
+# Both failures on run 32304592250/32304592231 — `Fuzz PQC Primitives
+# (fuzz_frost)` and `Python 3.12 on ubuntu-latest`, different workflows,
+# different runners — stalled at the same point: every
+# `azure.archive.ubuntu.com` entry `Ign`ed (the in-datacentre mirror the image
+# prefers was unreachable), apt fell back to the public
+# `https://archive.ubuntu.com`, announced
+# `Get:5 ... noble-security InRelease [126 kB]` — so the connection was made and
+# the headers arrived — and then produced no further output until the bound
+# fired, 293s and 315s later.  All three attempts stalled identically, because
+# retrying is the same request to the same mirror.  `Acquire::*::Timeout=20` did
+# not stop it: those bound an idle socket, not a transfer that trickles.
+#
+# The lists shipped in the image already resolve every package these workflows
+# ask for, so try `install` against them before refreshing.  That takes the
+# whole `update` — the only step that has ever hung — out of the common path.
+#
+# This cannot turn a failure into a pass: if the image's lists cannot satisfy
+# the request for any reason (package absent, version superseded and its .deb
+# gone), this arm fails and the full bounded `update` + `install` runs below,
+# with its failure still fatal.  What it trades is freshness: a package may be
+# installed at the image's version rather than the mirror's newest.  These are
+# build tools on an ephemeral runner — cmake, clang, ninja, the aarch64
+# cross-toolchain — not anything shipped, and the refresh arm still runs
+# whenever the pinned lists fall short.
+left="$(budget_left)"
+bound="$ATTEMPT_TIMEOUT"
+if [ "$bound" -gt "$left" ]; then bound="$left"; fi
+if [ "$bound" -gt 0 ] && install_only "$bound" "$@"; then
+    echo "apt-install.sh: installed from the image's own package lists," \
+         "without apt-get update: $*"
+    exit 0
+fi
+echo "apt-install.sh: the image's package lists did not satisfy: $*" \
+     "— refreshing them"
 
 # Every attempt but the last is recoverable; all of them, including the last,
 # are bounded by whichever is smaller — the per-attempt bound or what is left
@@ -198,4 +252,28 @@ if [ "$left" -le 0 ]; then
 fi
 echo "apt-install.sh: final attempt, bounded by the ${left}s left of the" \
      "${TOTAL_BUDGET}s budget (its failure fails this job): $*"
-attempt_install "$left" "$@"
+
+# The failure must SAY what happened.  The version that introduced the budget
+# diagnosed only the arm where the budget ran out before the final attempt
+# started — the rarer one.  When the final attempt itself hit its bound, which
+# is what both jobs on run 32304592250/32304592231 did, `timeout`'s bare 124
+# propagated and the step's whole output was
+# `##[error]Process completed with exit code 124.`  A reader then cannot tell a
+# stalled mirror from a missing package, which is precisely the distinction
+# this script exists to make.
+status=0
+attempt_install "$left" "$@" || status=$?
+if [ "$status" -eq 0 ]; then
+    echo "apt-install.sh: installed on the final attempt: $*"
+    exit 0
+fi
+case "$status" in
+    124) reason="it exceeded its ${left}s bound; apt did not complete on this runner" ;;
+    137) reason="it ignored SIGTERM at its ${left}s bound and was SIGKILLed ${KILL_AFTER}s later" ;;
+    *)   reason="apt-get exited ${status}" ;;
+esac
+echo "apt-install.sh: FAILED to install: $*" >&2
+echo "apt-install.sh: the final attempt failed because ${reason}." >&2
+echo "apt-install.sh: this is a FAILED step, not a cancelled job. Exit 124 or" \
+     "137 above means a stalled mirror, not a missing package." >&2
+exit "$status"

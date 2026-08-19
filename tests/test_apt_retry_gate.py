@@ -201,11 +201,22 @@ def _fake_sudo(tmp_path: Path) -> Path:
               case "$1" in -o) shift 2 ;; *) args+=("$1"); shift ;; esac
             done
             set -- "$verb" "${args[@]}"
+            [ -n "${FAKE_APT_LOG:-}" ] && echo "$1 $2" >> "$FAKE_APT_LOG"
             case "$1 $2" in
               "rm -f") exit 0 ;;
-              "apt-get update") [ "${FAKE_APT_FAIL:-0}" = "1" ] && exit 100; exit 0 ;;
+              "apt-get update")
+                  [ "${FAKE_APT_FAIL:-0}" = "1" ] && exit 100
+                  [ -n "${FAKE_APT_LOG:-}" ] && touch "${FAKE_APT_LOG}.updated"
+                  exit 0 ;;
               "apt-get install")
                   [ "${FAKE_APT_FAIL:-0}" = "1" ] && exit 100
+                  # Stands in for lists that cannot resolve the request until
+                  # they are refreshed.
+                  if [ "${FAKE_APT_NEEDS_UPDATE:-0}" = "1" ] &&
+                     [ ! -e "${FAKE_APT_LOG:-/nonexistent}.updated" ]; then
+                      echo "E: Unable to locate package ${3:-}" >&2
+                      exit 100
+                  fi
                   echo "installed: ${*:3}"; exit 0 ;;
             esac
             exit 0
@@ -436,6 +447,29 @@ def test_the_total_budget_bounds_the_whole_script(tmp_path: Path) -> None:
     )
 
 
+def _outside_double_quotes(line: str) -> str:
+    """`line` with every double-quoted segment removed.
+
+    Used to tell a command word from the same text inside a message string.
+    """
+    out: list[str] = []
+    in_quotes = False
+    escaped = False
+    for ch in line:
+        if escaped:
+            escaped = False
+            continue
+        if ch == "\\":
+            escaped = True
+            continue
+        if ch == '"':
+            in_quotes = not in_quotes
+            continue
+        if not in_quotes:
+            out.append(ch)
+    return "".join(out)
+
+
 def test_the_final_attempt_is_not_unbounded(tmp_path: Path) -> None:
     """No arm of the helper may run apt without a `timeout`.
 
@@ -447,12 +481,25 @@ def test_the_final_attempt_is_not_unbounded(tmp_path: Path) -> None:
     # are one shell statement split across lines, and reading them separately
     # would report the second half as unbounded.
     joined = body.replace("\\\n", " ")
+    invocations = 0
     for line in joined.splitlines():
         stripped = line.strip()
-        if stripped.startswith("#") or "apt-get" not in stripped:
+        if stripped.startswith("#"):
             continue
-        assert "timeout" in stripped, f"apt-get without a timeout bound: {stripped!r}"
+        # An INVOCATION has `apt-get` as a bare word.  The diagnostics this
+        # script prints mention `apt-get update` inside their message strings,
+        # and a substring match reported those as unbounded commands.
+        code = _outside_double_quotes(stripped)
+        if "apt-get" not in code:
+            continue
+        invocations += 1
+        assert "timeout" in code, f"apt-get without a timeout bound: {stripped!r}"
+    # Not vacuous, and not silently reduced: `attempt_install` runs `update`
+    # and `install_only` runs `install`.  A third call site has to come here
+    # and be accounted for rather than inheriting a pass.
+    assert invocations == 2, f"expected 2 apt-get invocations, found {invocations}"
     assert 'attempt_install ""' not in body, "an unbounded attempt arm is still reachable"
+    assert 'install_only ""' not in body, "an unbounded install arm is still reachable"
 
 
 def test_the_total_budget_fits_inside_the_shortest_job_that_uses_it() -> None:
@@ -492,3 +539,116 @@ def test_the_bounded_phase_fits_inside_a_job_budget() -> None:
 def test_helper_rejects_a_nonsense_attempt_count(tmp_path: Path) -> None:
     r = _run_helper(tmp_path, ["cmake"], APT_ATTEMPTS="0")
     assert r.returncode == 2
+
+
+# --------------------------------------------------------------------------
+# `update` is the only step that has ever stalled, so it is not on the common
+# path.  Measured, run 32304592250 / 32304592231 at b781706: `Fuzz PQC
+# Primitives (fuzz_frost)` and `Python 3.12 on ubuntu-latest`, two workflows on
+# two runners, both stalled at `Get:5 https://archive.ubuntu.com/ubuntu
+# noble-security InRelease [126 kB]` and produced no further output until the
+# bound fired 315s and 293s later.  Neither reached `install`.
+# --------------------------------------------------------------------------
+
+
+@_LINUX_ONLY
+def test_the_image_lists_are_tried_before_the_network(tmp_path: Path) -> None:
+    """The happy path must not run `apt-get update` at all."""
+    log = tmp_path / "apt.log"
+    r = _run_helper(tmp_path, ["cmake", "clang"], FAKE_APT_LOG=str(log))
+    assert r.returncode == 0, r.stderr
+    verbs = log.read_text(encoding="utf-8").split("\n")
+    assert "apt-get update" not in verbs, f"update ran on the happy path: {verbs}"
+    assert "apt-get install" in verbs
+    assert "without apt-get update" in r.stdout
+
+
+@_LINUX_ONLY
+def test_stale_lists_still_fall_through_to_a_refresh(tmp_path: Path) -> None:
+    """Skipping `update` must not skip the packages.
+
+    If the image's lists cannot satisfy the request, the full bounded
+    `update` + `install` still runs — otherwise this would be a fast path that
+    quietly stopped installing things.
+    """
+    log = tmp_path / "apt.log"
+    r = _run_helper(
+        tmp_path,
+        ["libclang-rt-dev"],
+        FAKE_APT_LOG=str(log),
+        FAKE_APT_NEEDS_UPDATE="1",
+    )
+    assert r.returncode == 0, r.stderr
+    verbs = log.read_text(encoding="utf-8").split("\n")
+    assert "apt-get update" in verbs, "the refresh arm never ran"
+    assert "did not satisfy" in r.stdout
+    assert "libclang-rt-dev" in r.stdout
+
+
+@_LINUX_ONLY
+def test_the_fast_path_cannot_mask_a_missing_package(tmp_path: Path) -> None:
+    """A package that does not exist still fails the job, through both arms."""
+    r = _run_helper(
+        tmp_path,
+        ["definitely-not-a-package"],
+        FAKE_APT_FAIL="1",
+        APT_ATTEMPTS="1",
+        APT_ATTEMPT_TIMEOUT="1",
+    )
+    assert r.returncode != 0
+
+
+# --------------------------------------------------------------------------
+# A failure has to say what it was
+# --------------------------------------------------------------------------
+
+
+@_LINUX_ONLY
+def test_a_timed_out_final_attempt_is_diagnosed_not_a_bare_124(tmp_path: Path) -> None:
+    """The output both stalled jobs produced was `exit code 124` and nothing else.
+
+    That is indistinguishable from a missing package to anyone reading the
+    log, which defeats the purpose of converting the hang into a failure.
+    """
+    binroot = tmp_path / "bin"
+    binroot.mkdir(exist_ok=True)
+    fake = binroot / "sudo"
+    fake.write_text(textwrap.dedent("""\
+            #!/usr/bin/env bash
+            if [ "$1" = "timeout" ]; then
+              shift
+              case "$1" in --kill-after=*) shift ;; esac
+              bound="$1"; shift
+              if [ "$1" = "rm" ]; then exit 0; fi
+              # Outlast the bound, as a stalled mirror does.
+              exec timeout --kill-after=1 "$bound" sleep 300
+            fi
+            exit 0
+            """))
+    fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+    e = dict(os.environ)
+    e["PATH"] = f"{binroot}{os.pathsep}{e['PATH']}"
+    e.update(APT_ATTEMPTS="1", APT_ATTEMPT_TIMEOUT="1", APT_TOTAL_BUDGET="4")
+    r = subprocess.run(["bash", str(HELPER_PATH), "cmake"], capture_output=True, text=True, env=e)
+    assert r.returncode == 124, f"expected timeout's status to propagate, got {r.returncode}"
+    assert "FAILED to install: cmake" in r.stderr
+    assert "stalled mirror" in r.stderr
+    assert "not a cancelled job" in r.stderr
+
+
+# --------------------------------------------------------------------------
+# The third-party source removal
+# --------------------------------------------------------------------------
+
+
+def test_the_third_party_source_removal_is_not_extension_specific() -> None:
+    """It matched `.list` while the image had moved to deb822 `.sources`.
+
+    Proof it was a no-op: in the fuzz_frost log the `rm` ran and `apt-get
+    update` then still fetched
+    `https://packages.microsoft.com/repos/azure-cli noble InRelease`.
+    """
+    body = HELPER_PATH.read_text(encoding="utf-8")
+    assert "/etc/apt/sources.list.d/microsoft-prod.*" in body
+    assert "/etc/apt/sources.list.d/azure-cli.*" in body
+    assert "microsoft-prod.list " not in body, "the extension-specific form is back"
