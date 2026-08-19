@@ -22,6 +22,7 @@ from __future__ import annotations
 import importlib.util
 import sys
 import urllib.error
+from email.message import Message
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -81,6 +82,17 @@ def _no_sleep(monkeypatch: pytest.MonkeyPatch) -> None:
 URL = "https://raw.githubusercontent.com/o/r/deadbeef/vectors/x_test.json"
 
 
+def _http_error(status: int, msg: str) -> urllib.error.HTTPError:
+    """An HTTPError built with the argument types urllib actually declares.
+
+    `hdrs` is an email.message.Message and `fp` is an optional binary stream,
+    so passing a bare dict needs a type suppression to get past mypy --strict.
+    A suppression there would cover nothing but the convenience of not writing
+    this function, which is the kind INVARIANT-13 exists to keep out.
+    """
+    return urllib.error.HTTPError(URL, status, msg, Message(), None)
+
+
 def test_a_reset_connection_is_retried_and_survived(monkeypatch: pytest.MonkeyPatch) -> None:
     """The observed failure: reset once, then served."""
     reset = urllib.error.URLError(ConnectionResetError(104, "Connection reset by peer"))
@@ -105,7 +117,7 @@ def test_the_final_attempt_is_unguarded(monkeypatch: pytest.MonkeyPatch) -> None
 @pytest.mark.parametrize("status", [400, 401, 403, 404, 410])
 def test_a_permanent_status_is_not_retried(monkeypatch: pytest.MonkeyPatch, status: int) -> None:
     """A 404 is an answer about the resource. Asking again cannot change it."""
-    err = urllib.error.HTTPError(URL, status, "nope", {}, None)  # type: ignore[arg-type]
+    err = _http_error(status, "nope")
     fake, calls = _urlopen_script([err])
     monkeypatch.setattr(tool.urllib.request, "urlopen", fake)
     monkeypatch.setattr(tool, "_FETCH_ATTEMPTS", 3)
@@ -116,7 +128,7 @@ def test_a_permanent_status_is_not_retried(monkeypatch: pytest.MonkeyPatch, stat
 
 @pytest.mark.parametrize("status", [429, 500, 502, 503, 504])
 def test_a_transient_status_is_retried(monkeypatch: pytest.MonkeyPatch, status: int) -> None:
-    err = urllib.error.HTTPError(URL, status, "later", {}, None)  # type: ignore[arg-type]
+    err = _http_error(status, "later")
     fake, calls = _urlopen_script([err, b"payload"])
     monkeypatch.setattr(tool.urllib.request, "urlopen", fake)
     monkeypatch.setattr(tool, "_FETCH_ATTEMPTS", 3)
