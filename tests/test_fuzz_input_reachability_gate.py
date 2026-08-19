@@ -147,7 +147,10 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
 
 
 def test_an_unresolved_guard_is_a_failure_not_a_skip(
-    gate: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    gate: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     """A guard the gate cannot evaluate is the branch that goes dark.
 
@@ -206,7 +209,10 @@ def test_frost_is_declared_because_its_bound_is_a_runtime_value(gate: ModuleType
 
 
 def test_a_hardcoded_max_len_in_the_workflow_fails(
-    gate: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    gate: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     """The number must be asked for, not restated.
 
