@@ -62,6 +62,45 @@
  * info-only on this lane.  See is_fatal_result() below. */
 #define DUDECT_FATAL_SENTINEL 99999.0
 
+/* Package a finished lane context as this lane's measurement.
+ *
+ * Every lane ends the same way, and that is the point: the conversion from a
+ * context to a measurement is where a lane that could NOT measure has to be
+ * separated from one that measured nothing.  Doing it inline, 27 times, is
+ * how the two got conflated.
+ *
+ * `dudect_cropped_compute()` returns DUDECT_CROP_FAILED (-1e308) when the
+ * context was poisoned — sample buffers unallocatable, or more samples pushed
+ * than the caller declared, which means a silently truncated and therefore
+ * biased class.  Read straight into a lane result that value is |t| = 1e308:
+ * over any threshold, in every round, always the same sign, with an effect
+ * size of exactly 0.0 because there is no winning rung.  Against the
+ * effect-size floor that reads as a SUB-FLOOR excursion, which does not fail
+ * a build — so a lane that could not measure at all would report as one that
+ * measured a difference too small to matter.
+ *
+ * The two legacy harnesses in tools/constant_time/ already refuse this, in
+ * `ttest_finish()`: "produced no usable measurement. Refusing to report a
+ * verdict."  This file did not, which is the third time a discipline the
+ * other two harnesses carry had not been propagated here.  It maps the
+ * failure onto DUDECT_FATAL_SENTINEL — conclusive on one sighting, exactly as
+ * an allocation failure or a per-class rc mismatch already is — rather than
+ * calling exit(), so the remaining lanes still report their measurements and
+ * the operator sees the whole picture in one run.
+ */
+static dudect_measurement_t dudect_lane_finish(dudect_ctx_t *ctx) {
+    if (dudect_measurement_failed(ctx)) {
+        fprintf(stderr,
+                "  FATAL: lane '%s' produced no usable statistic (the context "
+                "was poisoned: allocation failure, or more samples than its "
+                "declared capacity). Refusing to report a verdict for it.\n",
+                ctx->name);
+        return (dudect_measurement_t){.t = DUDECT_FATAL_SENTINEL};
+    }
+    return (dudect_measurement_t){.t = dudect_get_t(ctx),
+                                  .delta_ns = dudect_get_delta_ns(ctx)};
+}
+
 static int g_measurements = DEFAULT_MEASUREMENTS;
 /* sig_atomic_t: the one integer type the C standard guarantees a signal
  * handler may write while the main flow reads it. */
@@ -143,8 +182,7 @@ static dudect_measurement_t test_consttime_memcmp(int iterations) {
     }
 
     dudect_print_result(&ctx);
-    dudect_measurement_t lane = {.t = dudect_get_t(&ctx),
-                                .delta_ns = dudect_get_delta_ns(&ctx)};
+    dudect_measurement_t lane = dudect_lane_finish(&ctx);
     dudect_ctx_free(&ctx);
     return lane;
 }
@@ -181,8 +219,7 @@ static dudect_measurement_t test_consttime_swap(int iterations) {
     }
 
     dudect_print_result(&ctx);
-    dudect_measurement_t lane = {.t = dudect_get_t(&ctx),
-                                .delta_ns = dudect_get_delta_ns(&ctx)};
+    dudect_measurement_t lane = dudect_lane_finish(&ctx);
     dudect_ctx_free(&ctx);
     return lane;
 }
@@ -217,8 +254,7 @@ static dudect_measurement_t test_secure_memzero(int iterations) {
     }
 
     dudect_print_result(&ctx);
-    dudect_measurement_t lane = {.t = dudect_get_t(&ctx),
-                                .delta_ns = dudect_get_delta_ns(&ctx)};
+    dudect_measurement_t lane = dudect_lane_finish(&ctx);
     dudect_ctx_free(&ctx);
     return lane;
 }
@@ -268,8 +304,7 @@ static dudect_measurement_t test_consttime_lookup(int iterations) {
     }
 
     dudect_print_result(&ctx);
-    dudect_measurement_t lane = {.t = dudect_get_t(&ctx),
-                                .delta_ns = dudect_get_delta_ns(&ctx)};
+    dudect_measurement_t lane = dudect_lane_finish(&ctx);
     dudect_ctx_free(&ctx);
     return lane;
 }
@@ -306,8 +341,7 @@ static dudect_measurement_t test_consttime_copy(int iterations) {
     }
 
     dudect_print_result(&ctx);
-    dudect_measurement_t lane = {.t = dudect_get_t(&ctx),
-                                .delta_ns = dudect_get_delta_ns(&ctx)};
+    dudect_measurement_t lane = dudect_lane_finish(&ctx);
     dudect_ctx_free(&ctx);
     return lane;
 }
@@ -388,8 +422,7 @@ static dudect_measurement_t test_ed25519_sign(int iterations) {
     }
 
     dudect_print_result(&ctx);
-    dudect_measurement_t lane = {.t = dudect_get_t(&ctx),
-                                .delta_ns = dudect_get_delta_ns(&ctx)};
+    dudect_measurement_t lane = dudect_lane_finish(&ctx);
     dudect_ctx_free(&ctx);
     return lane;
 }
@@ -508,8 +541,7 @@ static dudect_measurement_t test_aes_gcm_tag_verify(int iterations) {
     }
 
     dudect_print_result(&ctx);
-    dudect_measurement_t lane = {.t = dudect_get_t(&ctx),
-                                .delta_ns = dudect_get_delta_ns(&ctx)};
+    dudect_measurement_t lane = dudect_lane_finish(&ctx);
     dudect_ctx_free(&ctx);
     return lane;
 }
@@ -610,8 +642,7 @@ static dudect_measurement_t test_aes_gcm_forgery_position(int iterations) {
     }
 
     dudect_print_result(&ctx);
-    dudect_measurement_t lane = {.t = dudect_get_t(&ctx),
-                                .delta_ns = dudect_get_delta_ns(&ctx)};
+    dudect_measurement_t lane = dudect_lane_finish(&ctx);
     dudect_ctx_free(&ctx);
     return lane;
 }
@@ -714,8 +745,7 @@ static dudect_measurement_t test_ed25519_verify(int iterations) {
     }
 
     dudect_print_result(&ctx);
-    dudect_measurement_t lane = {.t = dudect_get_t(&ctx),
-                                .delta_ns = dudect_get_delta_ns(&ctx)};
+    dudect_measurement_t lane = dudect_lane_finish(&ctx);
     dudect_ctx_free(&ctx);
     return lane;
 }
@@ -852,8 +882,7 @@ static dudect_measurement_t test_chacha20poly1305_tag_verify(int iterations) {
     }
 
     dudect_print_result(&ctx);
-    dudect_measurement_t lane = {.t = dudect_get_t(&ctx),
-                                .delta_ns = dudect_get_delta_ns(&ctx)};
+    dudect_measurement_t lane = dudect_lane_finish(&ctx);
     dudect_ctx_free(&ctx);
     return lane;
 }
@@ -955,8 +984,7 @@ static dudect_measurement_t test_chacha20poly1305_forgery_position(int iteration
     }
 
     dudect_print_result(&ctx);
-    dudect_measurement_t lane = {.t = dudect_get_t(&ctx),
-                                .delta_ns = dudect_get_delta_ns(&ctx)};
+    dudect_measurement_t lane = dudect_lane_finish(&ctx);
     dudect_ctx_free(&ctx);
     return lane;
 }
@@ -1058,8 +1086,7 @@ static dudect_measurement_t test_argon2id_legacy_verify(int iterations) {
     }
 
     dudect_print_result(&ctx);
-    dudect_measurement_t lane = {.t = dudect_get_t(&ctx),
-                                .delta_ns = dudect_get_delta_ns(&ctx)};
+    dudect_measurement_t lane = dudect_lane_finish(&ctx);
     dudect_ctx_free(&ctx);
     return lane;
 }
@@ -1158,8 +1185,7 @@ static dudect_measurement_t test_secp256k1_scalarmult(int iterations) {
     }
 
     dudect_print_result(&ctx);
-    dudect_measurement_t lane = {.t = dudect_get_t(&ctx),
-                                .delta_ns = dudect_get_delta_ns(&ctx)};
+    dudect_measurement_t lane = dudect_lane_finish(&ctx);
     dudect_ctx_free(&ctx);
     return lane;
 }
@@ -1285,8 +1311,7 @@ static dudect_measurement_t test_secp256k1_ecdsa_sign(int iterations) {
     }
 
     dudect_print_result(&ctx);
-    dudect_measurement_t lane = {.t = dudect_get_t(&ctx),
-                                .delta_ns = dudect_get_delta_ns(&ctx)};
+    dudect_measurement_t lane = dudect_lane_finish(&ctx);
     dudect_ctx_free(&ctx);
     return lane;
 }
@@ -1355,8 +1380,7 @@ static dudect_measurement_t test_hkdf(int iterations) {
     }
 
     dudect_print_result(&ctx);
-    dudect_measurement_t lane = {.t = dudect_get_t(&ctx),
-                                .delta_ns = dudect_get_delta_ns(&ctx)};
+    dudect_measurement_t lane = dudect_lane_finish(&ctx);
     dudect_ctx_free(&ctx);
     return lane;
 }
@@ -1457,8 +1481,7 @@ static dudect_measurement_t test_hmac_verify(int iterations) {
     }
 
     dudect_print_result(&ctx);
-    dudect_measurement_t lane = {.t = dudect_get_t(&ctx),
-                                .delta_ns = dudect_get_delta_ns(&ctx)};
+    dudect_measurement_t lane = dudect_lane_finish(&ctx);
     dudect_ctx_free(&ctx);
     return lane;
 }
@@ -1563,8 +1586,7 @@ static dudect_measurement_t test_ascon_tag_verify(int iterations) {
     }
 
     dudect_print_result(&ctx);
-    dudect_measurement_t lane = {.t = dudect_get_t(&ctx),
-                                .delta_ns = dudect_get_delta_ns(&ctx)};
+    dudect_measurement_t lane = dudect_lane_finish(&ctx);
     dudect_ctx_free(&ctx);
     return lane;
 }
@@ -1638,8 +1660,7 @@ static dudect_measurement_t test_ascon_encrypt_key_independent(int iterations) {
     }
 
     dudect_print_result(&ctx);
-    dudect_measurement_t lane = {.t = dudect_get_t(&ctx),
-                                .delta_ns = dudect_get_delta_ns(&ctx)};
+    dudect_measurement_t lane = dudect_lane_finish(&ctx);
     dudect_ctx_free(&ctx);
     return lane;
 }
@@ -1696,8 +1717,7 @@ static dudect_measurement_t test_ascon_hash256_input_independent(int iterations)
     }
 
     dudect_print_result(&ctx);
-    dudect_measurement_t lane = {.t = dudect_get_t(&ctx),
-                                .delta_ns = dudect_get_delta_ns(&ctx)};
+    dudect_measurement_t lane = dudect_lane_finish(&ctx);
     dudect_ctx_free(&ctx);
     return lane;
 }
@@ -1800,8 +1820,7 @@ static dudect_measurement_t test_agent_binding_check(int iterations) {
     }
 
     dudect_print_result(&ctx);
-    dudect_measurement_t lane = {.t = dudect_get_t(&ctx),
-                                .delta_ns = dudect_get_delta_ns(&ctx)};
+    dudect_measurement_t lane = dudect_lane_finish(&ctx);
     dudect_ctx_free(&ctx);
     return lane;
 }
@@ -1879,8 +1898,7 @@ static dudect_measurement_t test_x25519_scalarmult(int iterations) {
     }
 
     dudect_print_result(&ctx);
-    dudect_measurement_t lane = {.t = dudect_get_t(&ctx),
-                                .delta_ns = dudect_get_delta_ns(&ctx)};
+    dudect_measurement_t lane = dudect_lane_finish(&ctx);
     dudect_ctx_free(&ctx);
     return lane;
 }
@@ -1964,8 +1982,7 @@ static dudect_measurement_t test_x25519_scalarmult_x4(int iterations) {
     }
 
     dudect_print_result(&ctx);
-    dudect_measurement_t lane = {.t = dudect_get_t(&ctx),
-                                .delta_ns = dudect_get_delta_ns(&ctx)};
+    dudect_measurement_t lane = dudect_lane_finish(&ctx);
     dudect_ctx_free(&ctx);
     return lane;
 }
@@ -2060,8 +2077,7 @@ static dudect_measurement_t test_kyber_decaps(int iterations) {
     }
 
     dudect_print_result(&ctx);
-    dudect_measurement_t lane = {.t = dudect_get_t(&ctx),
-                                .delta_ns = dudect_get_delta_ns(&ctx)};
+    dudect_measurement_t lane = dudect_lane_finish(&ctx);
     dudect_ctx_free(&ctx);
     return lane;
 }
@@ -2121,8 +2137,7 @@ static dudect_measurement_t test_frost_scalar_negate_extremes(int iterations) {
     }
 
     dudect_print_result(&ctx);
-    dudect_measurement_t lane = {.t = dudect_get_t(&ctx),
-                                .delta_ns = dudect_get_delta_ns(&ctx)};
+    dudect_measurement_t lane = dudect_lane_finish(&ctx);
     dudect_ctx_free(&ctx);
     return lane;
 }
@@ -2177,8 +2192,7 @@ static dudect_measurement_t test_frost_scalar_negate_midrange(int iterations) {
     }
 
     dudect_print_result(&ctx);
-    dudect_measurement_t lane = {.t = dudect_get_t(&ctx),
-                                .delta_ns = dudect_get_delta_ns(&ctx)};
+    dudect_measurement_t lane = dudect_lane_finish(&ctx);
     dudect_ctx_free(&ctx);
     return lane;
 }
@@ -2272,8 +2286,7 @@ static dudect_measurement_t test_dilithium_sign(int iterations) {
     }
 
     dudect_print_result(&ctx);
-    dudect_measurement_t lane = {.t = dudect_get_t(&ctx),
-                                .delta_ns = dudect_get_delta_ns(&ctx)};
+    dudect_measurement_t lane = dudect_lane_finish(&ctx);
     dudect_ctx_free(&ctx);
     return lane;
 }
@@ -2390,8 +2403,7 @@ static dudect_measurement_t test_slhdsa_sign(int iterations) {
     }
 
     dudect_print_result(&ctx);
-    dudect_measurement_t lane = {.t = dudect_get_t(&ctx),
-                                .delta_ns = dudect_get_delta_ns(&ctx)};
+    dudect_measurement_t lane = dudect_lane_finish(&ctx);
     dudect_ctx_free(&ctx);
     return lane;
 }
@@ -2586,6 +2598,46 @@ static int timeout_truncation_self_test(void) {
            marked ? "ok" : "MISMATCH");
     ok &= marked;
     g_timeout_hit = 0;
+
+    /* A poisoned context must reach the verdict rule as a FAULT, not as a
+     * sub-floor pass.  dudect_cropped_compute() returns DUDECT_CROP_FAILED
+     * (-1e308) for it, and read straight into a lane result that is |t| =
+     * 1e308 with an effect size of exactly 0.0 — over every threshold, always
+     * the same sign, and therefore SUB-FLOOR under the effect-size rule,
+     * which does not fail a build.  dudect_lane_finish() is what stops a lane
+     * that could not measure from reporting as one whose difference was too
+     * small to matter.  Poisoning here is done the way it actually happens:
+     * pushing more samples than the declared capacity, which is the
+     * silently-truncated-class path. */
+    dudect_ctx_t poisoned;
+    /* Capacity is per class, so 3 samples into each of two classes overruns a
+     * declared capacity of 2. */
+    int poison_init = dudect_ctx_init(&poisoned, "poisoned lane", 2);
+    for (int i = 0; i < 6; i++)
+        dudect_record(&poisoned, i & 1, 100.0 + i);
+    dudect_measurement_t pm = dudect_lane_finish(&poisoned);
+    dudect_ctx_free(&poisoned);
+    int poison_ok = poison_init && is_fatal_result(pm.t) && pm.delta_ns == 0.0;
+    printf("  %-58s %s\n", "a poisoned context becomes a fault, not a sub-floor pass",
+           poison_ok ? "ok" : "MISMATCH");
+    ok &= poison_ok;
+
+    /* ...and the same path leaves a healthy lane alone: a real statistic and
+     * its effect size pass through unchanged, so the guard cannot be
+     * satisfied by a helper that simply faults everything. */
+    dudect_ctx_t healthy;
+    int healthy_init = dudect_ctx_init(&healthy, "healthy lane", 64);
+    for (int i = 0; i < 32; i++) {
+        dudect_record(&healthy, 0, 100.0 + (i % 5));
+        dudect_record(&healthy, 1, 140.0 + (i % 5));
+    }
+    dudect_measurement_t hm = dudect_lane_finish(&healthy);
+    dudect_ctx_free(&healthy);
+    int healthy_ok = healthy_init && !is_fatal_result(hm.t) &&
+                     hm.t != DUDECT_CROP_FAILED && hm.delta_ns < -30.0;
+    printf("  %-58s %s\n", "a healthy lane keeps its statistic and its effect size",
+           healthy_ok ? "ok" : "MISMATCH");
+    ok &= healthy_ok;
 
     /* The sentinel band is BOUNDED — see is_fatal_result().  A statistic
      * above the band is a catastrophic separation, which is a leak; calling

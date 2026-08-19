@@ -104,6 +104,33 @@ lanes in `tests/c/test_dudect.c` and all 14 in `tools/constant_time/` populate
 the field today; this is what keeps the twenty-eighth from being the one that
 turns the gate off.
 
+The same floor had already turned one *live* path into a silent pass, and that
+one was not hypothetical. `dudect_cropped_compute()` returns
+`DUDECT_CROP_FAILED` (−1e308) when a context is poisoned — sample buffers
+unallocatable, or more samples pushed than the caller declared, which is the
+silently-truncated-and-therefore-biased-class path. `tests/c/test_dudect.c`
+read that value straight into a lane result at all 27 lanes, which is
+|t| = 1e308 with an effect size of exactly 0.0: over every threshold, in every
+round, always the same sign — and, against the new floor, a `SUB-FLOOR`
+excursion that does not fail a build. Before the floor that lane was a `LEAK`
+and the run was red, so the floor is what introduced it. A lane that could not
+measure *at all* would have reported as one whose difference was too small to
+matter.
+
+The two harnesses in `tools/constant_time/` already refuse exactly this, in
+`ttest_finish()` — *"produced no usable measurement. Refusing to report a
+verdict."* — and `dudect.h` already exposed `dudect_measurement_failed()` for
+it, which no caller had ever used. This is the third discipline the other two
+harnesses carried that had not been propagated to the file behind four of the
+six constant-time CI lanes. The conversion from a context to a measurement is
+now one function, `dudect_lane_finish()`, used by all 27 lanes rather than
+written inline 27 times — inline is how the two cases got conflated. It maps
+the failure onto `DUDECT_FATAL_SENTINEL`, conclusive on one sighting exactly
+as an allocation failure or a per-class rc mismatch already is, rather than
+calling `exit()`, so the remaining lanes still report and the operator sees
+the whole picture in one run. Mutation-checked: with the guard disabled the
+new case fails.
+
 **A timeout budget that could not cover the schedule its own verdict rule
 demands.** `test_dudect` runs up to `MAX_ROUNDS` rounds and refuses the early
 exit once any lane has tripped, but the Utility and X25519 jobs gave it 300 s
