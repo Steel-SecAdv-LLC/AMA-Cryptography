@@ -277,6 +277,30 @@ static inline void dudect_rounds_add(dudect_rounds_t *r,
             continue;
         }
         if (fabs(results[i].t_value) >= r->threshold) {
+            /* A tripped lane MUST carry an effect size.  The statistic IS
+             * `delta / se`, so |t| at or over the threshold with `delta_ns`
+             * exactly 0.0 is not a small effect — it is arithmetically
+             * impossible from a real measurement, and can only mean the
+             * harness never populated the field.  That matters because the
+             * floor below adjudicates on `max_trip_delta_ns`: without this
+             * check a lane whose harness omits the effect size would be
+             * classified SUB-FLOOR and could never fail a build, which is
+             * the silent-gate-erosion failure mode this whole rule exists to
+             * avoid.  It is a harness fault, and it is fatal.
+             *
+             * Info-only lanes are exempt, and deliberately so: they cannot
+             * reach the floor because dudect_lane_verdict() classifies them
+             * NOISE before it ever looks at an effect size, so a missing
+             * delta there erodes nothing.  The check is scoped to exactly the
+             * lanes whose verdict the floor decides. */
+            if (!results[i].is_info_only && results[i].delta_ns == 0.0) {
+                fprintf(stderr,
+                        "  FATAL: lane '%s' reports |t| = %.4f (>= %.4f) with no "
+                        "effect size. t = delta/se, so this cannot be a "
+                        "measurement; the harness did not set delta_ns.\n",
+                        results[i].name, results[i].t_value, r->threshold);
+                r->lanes[i].fatal = 1;
+            }
             r->lanes[i].rounds_failed++;
             /* Which direction the excursion went. A leak has a direction: one
              * class is systematically the faster one, so its t keeps its sign
@@ -358,6 +382,12 @@ static inline dudect_lane_verdict_t dudect_lane_verdict(
      * one.  See DUDECT_MIN_EFFECT_NS: below the floor this apparatus cannot
      * separate a leak from data-operand-dependent execution on the host, and
      * the deterministic instruction-count gates own that range. */
+    /* Defence in depth for callers that build evidence directly rather than
+     * through dudect_rounds_add(): no effect size behind a majority of
+     * consistently-signed trips is a harness fault, never a pass.  See the
+     * ingestion-side check for why t != 0 implies delta != 0. */
+    if (lane->max_trip_delta_ns == 0.0)
+        return DUDECT_LANE_FAULT;
     if (fabs(lane->max_trip_delta_ns) < DUDECT_MIN_EFFECT_NS)
         return DUDECT_LANE_SUB_FLOOR;
     return DUDECT_LANE_LEAK;
@@ -709,12 +739,14 @@ static inline int dudect_rounds_self_test(void) {
                              LANE(.name = "strict", .rounds_failed = 1, .fatal = 1,
                                   .max_trip_delta_ns = 0.001), 3,
                              DUDECT_LANE_FAULT);
-    /* A harness that supplies no effect size cannot fail a build on its own —
-     * stated as a case so the fallback is deliberate rather than incidental. */
-    ok &= dudect_rounds_verdict_case("no effect size supplied -> SUB_FLOOR, not LEAK",
+    /* A harness that trips the threshold without supplying an effect size is
+     * a FAULT, not a pass.  t = delta/se, so |t| >= threshold with delta
+     * exactly 0.0 cannot come from a measurement.  Classifying it SUB_FLOOR
+     * would make a harness omission silently unfailable. */
+    ok &= dudect_rounds_verdict_case("no effect size behind a majority -> FAULT",
                              LANE(.name = "strict", .rounds_failed = 3,
                                   .trips_positive = 3, .worst_t = 9.0), 3,
-                             DUDECT_LANE_SUB_FLOOR);
+                             DUDECT_LANE_FAULT);
 
     ok &= dudect_rounds_verdict_case("fatal outranks the direction rule",
                              LANE(.name = "strict", .rounds_failed = 2, .fatal = 1,
@@ -830,6 +862,50 @@ static inline int dudect_rounds_self_test(void) {
     printf("  %-58s %s\n", "a strict lane tripped -> early exit refused",
            busy ? "ok" : "MISMATCH");
     ok &= busy;
+
+    /* Ingestion side of the effect-size requirement.  A lane that trips the
+     * threshold and reports delta_ns == 0.0 has not measured anything —
+     * t = delta/se — so dudect_rounds_add() marks it fatal on the spot rather
+     * than letting the floor read it as a sub-floor pass.  Without this a
+     * harness that forgot to populate delta_ns would be permanently unable to
+     * fail a build, and would look green while measuring nothing. */
+    dudect_rounds_t z;
+    dudect_rounds_init(&z, 4.5);
+    dudect_lane_result_t noeffect[1] = {{.name = "a", .t_value = 41.72}};
+    dudect_rounds_add(&z, noeffect, 1);
+    int flagged = (z.lanes[0].fatal == 1 &&
+                   dudect_lane_verdict(&z.lanes[0], z.rounds_run) == DUDECT_LANE_FAULT &&
+                   !dudect_rounds_passed(&z));
+    printf("  %-58s %s\n", "a trip with no effect size is a fault, not a pass",
+           flagged ? "ok" : "MISMATCH");
+    ok &= flagged;
+
+    /* ...and the exemption is real: an info-only lane may trip without one,
+     * because it can never reach the floor in the first place. */
+    dudect_rounds_t zi;
+    dudect_rounds_init(&zi, 4.5);
+    dudect_lane_result_t infotrip[1] = {{.name = "info", .t_value = 900.0,
+                                         .is_info_only = 1}};
+    dudect_rounds_add(&zi, infotrip, 1);
+    int exempt = (zi.lanes[0].fatal == 0 &&
+                  dudect_lane_verdict(&zi.lanes[0], zi.rounds_run) == DUDECT_LANE_NOISE &&
+                  dudect_rounds_passed(&zi));
+    printf("  %-58s %s\n", "an info-only lane may trip without an effect size",
+           exempt ? "ok" : "MISMATCH");
+    ok &= exempt;
+
+    /* And a sub-threshold round with no effect size is untouched: only trips
+     * carry the requirement, so a quiet lane is not conscripted into it. */
+    dudect_rounds_t zq;
+    dudect_rounds_init(&zq, 4.5);
+    dudect_lane_result_t quietlane[1] = {{.name = "a", .t_value = 1.39}};
+    dudect_rounds_add(&zq, quietlane, 1);
+    int untouched = (zq.lanes[0].fatal == 0 &&
+                     dudect_lane_verdict(&zq.lanes[0], zq.rounds_run) == DUDECT_LANE_CLEAN &&
+                     dudect_rounds_passed(&zq));
+    printf("  %-58s %s\n", "a quiet lane needs no effect size",
+           untouched ? "ok" : "MISMATCH");
+    ok &= untouched;
 
     printf("\n%s\n", ok ? "verdict self-check: PASS" : "verdict self-check: FAIL");
     return ok ? 0 : 1;

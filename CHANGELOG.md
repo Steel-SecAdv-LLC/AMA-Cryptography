@@ -83,9 +83,26 @@ the other side. A sub-floor excursion is **not** reported as a pass: it gets
 its own `SUB-FLOOR` verdict, prints its difference, and names the
 deterministic instruction-count gates that own that range. Ten self-test cases pin the
 boundary, using the observed CI values verbatim, and pin that 8 ns and 500 ns
-differences are still `LEAK`, that direction disagreement and harness faults
-still outrank the floor, and that a harness supplying no effect size can never
-fail a build on its own.
+differences are still `LEAK` and that direction disagreement and harness faults
+still outrank the floor.
+
+The floor adjudicates on a number the harness supplies, so it introduces a way
+for the gate to be silently disabled: a lane whose harness forgot to populate
+`delta_ns` would trip the threshold, read as a zero effect, and classify
+`SUB-FLOOR` — permanently unable to fail a build while appearing to measure
+one. That is closed rather than documented. The statistic **is** `delta / se`,
+so |t| at or over the threshold with `delta_ns` exactly `0.0` is not a small
+effect, it is arithmetically impossible from a measurement; it can only mean
+the field was never set. `dudect_rounds_add()` marks such a lane fatal on the
+spot and names it on stderr, and `dudect_lane_verdict()` carries the same rule
+for callers that build evidence directly. Info-only lanes are exempt, and
+scoped deliberately: they are classified `NOISE` before the verdict ever
+reaches an effect size, so a missing difference there erodes nothing. Three
+further self-test cases pin all three halves — the fault, the exemption, and
+that a sub-threshold round is not conscripted into the requirement. All 27
+lanes in `tests/c/test_dudect.c` and all 14 in `tools/constant_time/` populate
+the field today; this is what keeps the twenty-eighth from being the one that
+turns the gate off.
 
 **A timeout budget that could not cover the schedule its own verdict rule
 demands.** `test_dudect` runs up to `MAX_ROUNDS` rounds and refuses the early
