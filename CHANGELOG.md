@@ -346,6 +346,33 @@ timeout, which is the 8m44s CI stall reproduced on a laptop in ninety seconds.
 It also asserts the genuine failure still fails — the retry does not paper over
 an apt that never succeeds.
 
+**The Wycheproof fetch fix was one of two sites.** `ACVP Validation Gate` then
+failed with `nist_vectors/results.json missing — harness crashed` and
+`Vectors tested: 0` against a floor of 1,215. The harness was not at fault: run
+locally with the vectors present it reports **1215/1215 pass**. The vectors
+were not there, because `nist_vectors/fetch_vectors.py` issues **ten**
+back-to-back requests to `raw.githubusercontent.com` — the same host, in the
+same burst shape, that had reset three of the Wycheproof fetcher's fifteen an
+hour earlier — with a single unretried `urlopen`.
+
+The retry was added to one of the two fetchers. That is the pattern this branch
+already has a name for, applied to itself: a fix applied to one of N identical
+sites is a sample, not a fix. So the policy now lives in `tools/http_fetch.py`
+once, and both callers use it — transport errors retried, 404/403 failing on
+the first attempt because they are answers about the resource, the final attempt
+unguarded, and nothing in the module ever seeing a digest, so bytes that arrive
+intact but wrong still fail at the caller's comparison.
+
+**The second defect was worse than the missing retry.** `fetch_acvp_vectors`
+caught every exception, printed `[ERROR]`, and continued; `main` then returned
+0 unconditionally. A fetch that acquired *nothing* reported success, the
+workflow step went green, and the failure surfaced two steps later blaming the
+validation harness — the wrong component and the wrong file. That is a
+fail-open gate on the evidence behind a published FIPS attestation, which is
+the one direction it must never fail in. Failures are now returned to the
+caller and `main` exits non-zero, mutation-checked: neutering the guard fails
+the test.
+
 **A timeout budget that could not cover the schedule its own verdict rule
 demands.** `test_dudect` runs up to `MAX_ROUNDS` rounds and refuses the early
 exit once any lane has tripped, but the Utility and X25519 jobs gave it 300 s

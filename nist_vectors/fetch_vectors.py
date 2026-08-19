@@ -17,7 +17,6 @@ import hashlib
 import json
 import os
 import sys
-import urllib.request
 from pathlib import Path
 from typing import Any, cast
 
@@ -38,6 +37,12 @@ VECTORS_DIR = Path(__file__).parent
 # .github/workflows/acvp_validation.yml; that workflow also cross-checks
 # the ref against docs/compliance/acvp_attestation.json::acvp_ref so the
 # attestation artifact and the CI run cannot silently drift apart.
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from tools import http_fetch  # noqa: E402 -- repo-root path insert above (FETCH-003)
+
 DEFAULT_ACVP_REF = "v1.1.0.42"
 
 
@@ -66,19 +71,32 @@ ACVP_FETCH_LIST: list[tuple[str, str]] = [
 
 
 def fetch_acvp_file(algo_dir: str, filename: str) -> dict[str, Any]:
-    """Download a JSON file from the ACVP-Server repository."""
+    """Download a JSON file from the ACVP-Server repository.
+
+    Ten of these are issued back to back and raw.githubusercontent.com answers a
+    burst by resetting some of it, so the transport is bounded and retried by
+    tools/http_fetch.py — the same policy the Wycheproof corpus fetch uses, and
+    the same module, because two copies of a retry policy is how the second site
+    goes unfixed.
+    """
     url = f"{ACVP_BASE}/{algo_dir}/{filename}"
     print(f"  Fetching {url}")
-    req = urllib.request.Request(  # noqa: S310
-        url, headers={"User-Agent": "AMA-Crypto-Vectors/1.0"}
-    )
-    with urllib.request.urlopen(req, timeout=60) as resp:  # noqa: S310
-        data = resp.read()
+    data = http_fetch.fetch_bytes(url, user_agent="AMA-Crypto-Vectors/1.0")
     return cast(dict[str, Any], json.loads(data))
 
 
-def fetch_acvp_vectors() -> None:
-    """Fetch all ACVP internalProjection.json files."""
+def fetch_acvp_vectors() -> list[str]:
+    """Fetch all ACVP internalProjection.json files.
+
+    Returns the algorithms that could not be fetched.  It returns them rather
+    than swallowing them: this function used to print `[ERROR]` and continue,
+    and `main()` returned 0 unconditionally, so a fetch that acquired NOTHING
+    reported success.  The failure then surfaced two steps later as
+    `nist_vectors/results.json missing — harness crashed`, which names the wrong
+    component and sends the reader to the wrong file.  A step whose whole job is
+    to acquire the vectors must fail when it has not acquired them.
+    """
+    failures: list[str] = []
     for out_name, algo_dir in ACVP_FETCH_LIST:
         out_path = VECTORS_DIR / out_name
         if out_path.exists():
@@ -91,6 +109,8 @@ def fetch_acvp_vectors() -> None:
             print(f"  -> Saved {out_name}")
         except Exception as e:
             print(f"  [ERROR] Failed to fetch {algo_dir}: {e}")
+            failures.append(algo_dir)
+    return failures
 
 
 def create_sha256_vectors() -> None:
@@ -226,13 +246,26 @@ def main() -> int:
     print("=== NIST Vector Fetching ===\n")
 
     print("1. Fetching ACVP-Server vectors...")
-    fetch_acvp_vectors()
+    failures = fetch_acvp_vectors()
 
     print("\n2. Creating SHA-256 (FIPS 180-4) vectors...")
     create_sha256_vectors()
 
     print("\n3. Creating AES-256-GCM (SP 800-38D) vectors...")
     create_aes256gcm_vectors()
+
+    if failures:
+        print(
+            f"\n=== FAILED === could not fetch {len(failures)} algorithm(s): "
+            f"{', '.join(failures)}",
+            file=sys.stderr,
+        )
+        print(
+            "Refusing to report success with vectors missing: the validation "
+            "step would fail on the absent file and blame the harness.",
+            file=sys.stderr,
+        )
+        return 1
 
     print("\n=== Done ===")
     return 0

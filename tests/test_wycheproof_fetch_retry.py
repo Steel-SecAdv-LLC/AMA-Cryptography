@@ -23,6 +23,7 @@ import importlib.util
 import io
 import sys
 import urllib.error
+import urllib.request
 from collections.abc import Callable, Iterator
 from email.message import Message
 from pathlib import Path
@@ -32,6 +33,11 @@ from typing import Any
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from tools import http_fetch  # noqa: E402 -- repo-root path insert above (FETCH-003)
+
 TOOL_PATH = REPO_ROOT / "tools" / "refresh_wycheproof_corpus.py"
 
 
@@ -78,7 +84,7 @@ def _urlopen_script(outcomes: list[Any]) -> tuple[Any, list[int]]:
 @pytest.fixture(autouse=True)
 def _no_sleep(monkeypatch: pytest.MonkeyPatch) -> None:
     """Backoff is a property of the policy, not something to sit through."""
-    monkeypatch.setattr(tool, "_FETCH_BACKOFF", 0.0)
+    monkeypatch.setattr(http_fetch, "DEFAULT_BACKOFF", 0.0)
 
 
 URL = "https://raw.githubusercontent.com/o/r/deadbeef/vectors/x_test.json"
@@ -127,8 +133,8 @@ def test_a_reset_connection_is_retried_and_survived(monkeypatch: pytest.MonkeyPa
     """The observed failure: reset once, then served."""
     reset = urllib.error.URLError(ConnectionResetError(104, "Connection reset by peer"))
     fake, calls = _urlopen_script([reset, b"payload"])
-    monkeypatch.setattr(tool.urllib.request, "urlopen", fake)
-    monkeypatch.setattr(tool, "_FETCH_ATTEMPTS", 3)
+    monkeypatch.setattr(urllib.request, "urlopen", fake)
+    monkeypatch.setattr(http_fetch, "DEFAULT_ATTEMPTS", 3)
     assert tool.fetch_bytes(URL) == b"payload"
     assert calls[0] == 2
 
@@ -137,8 +143,8 @@ def test_the_final_attempt_is_unguarded(monkeypatch: pytest.MonkeyPatch) -> None
     """A transport error that never clears still fails, and does not loop forever."""
     reset = urllib.error.URLError(ConnectionResetError(104, "Connection reset by peer"))
     fake, calls = _urlopen_script([reset])
-    monkeypatch.setattr(tool.urllib.request, "urlopen", fake)
-    monkeypatch.setattr(tool, "_FETCH_ATTEMPTS", 3)
+    monkeypatch.setattr(urllib.request, "urlopen", fake)
+    monkeypatch.setattr(http_fetch, "DEFAULT_ATTEMPTS", 3)
     with pytest.raises(urllib.error.URLError):
         tool.fetch_bytes(URL)
     assert calls[0] == 3
@@ -153,8 +159,8 @@ def test_a_permanent_status_is_not_retried(
     """A 404 is an answer about the resource. Asking again cannot change it."""
     err = http_error(status, "nope")
     fake, calls = _urlopen_script([err])
-    monkeypatch.setattr(tool.urllib.request, "urlopen", fake)
-    monkeypatch.setattr(tool, "_FETCH_ATTEMPTS", 3)
+    monkeypatch.setattr(urllib.request, "urlopen", fake)
+    monkeypatch.setattr(http_fetch, "DEFAULT_ATTEMPTS", 3)
     with pytest.raises(urllib.error.HTTPError):
         tool.fetch_bytes(URL)
     assert calls[0] == 1, "a permanent status must fail on the first attempt"
@@ -168,16 +174,16 @@ def test_a_transient_status_is_retried(
 ) -> None:
     err = http_error(status, "later")
     fake, calls = _urlopen_script([err, b"payload"])
-    monkeypatch.setattr(tool.urllib.request, "urlopen", fake)
-    monkeypatch.setattr(tool, "_FETCH_ATTEMPTS", 3)
+    monkeypatch.setattr(urllib.request, "urlopen", fake)
+    monkeypatch.setattr(http_fetch, "DEFAULT_ATTEMPTS", 3)
     assert tool.fetch_bytes(URL) == b"payload"
     assert calls[0] == 2
 
 
 def test_a_non_transport_error_is_not_retried(monkeypatch: pytest.MonkeyPatch) -> None:
     fake, calls = _urlopen_script([ValueError("something structural")])
-    monkeypatch.setattr(tool.urllib.request, "urlopen", fake)
-    monkeypatch.setattr(tool, "_FETCH_ATTEMPTS", 3)
+    monkeypatch.setattr(urllib.request, "urlopen", fake)
+    monkeypatch.setattr(http_fetch, "DEFAULT_ATTEMPTS", 3)
     with pytest.raises(ValueError):
         tool.fetch_bytes(URL)
     assert calls[0] == 1
@@ -188,7 +194,7 @@ def test_the_https_guard_is_checked_before_any_attempt(
 ) -> None:
     """The retry loop must not weaken the scheme guard into something retriable."""
     fake, calls = _urlopen_script([b"local file contents"])
-    monkeypatch.setattr(tool.urllib.request, "urlopen", fake)
+    monkeypatch.setattr(urllib.request, "urlopen", fake)
     with pytest.raises(ValueError):
         tool.fetch_bytes("file:///etc/passwd")
     assert calls[0] == 0
@@ -204,8 +210,8 @@ def test_a_wrong_digest_still_fails_and_is_never_retried(
     once, by verify_upstream, and reported as a provenance failure.
     """
     fake, calls = _urlopen_script([b"not the vendored bytes"])
-    monkeypatch.setattr(tool.urllib.request, "urlopen", fake)
-    monkeypatch.setattr(tool, "_FETCH_ATTEMPTS", 3)
+    monkeypatch.setattr(urllib.request, "urlopen", fake)
+    monkeypatch.setattr(http_fetch, "DEFAULT_ATTEMPTS", 3)
     manifest = {
         "upstream": {"repository": "https://github.com/C2SP/wycheproof", "path": "testvectors_v1"},
         "files": {"x_test.json": {"sha256": "00" * 32}},
@@ -239,7 +245,7 @@ def test_the_fixture_errors_own_no_operating_system_resource(
 def test_zero_attempts_still_makes_one(monkeypatch: pytest.MonkeyPatch) -> None:
     """A misconfigured attempt count must not silently skip the fetch entirely."""
     fake, calls = _urlopen_script([b"payload"])
-    monkeypatch.setattr(tool.urllib.request, "urlopen", fake)
-    monkeypatch.setattr(tool, "_FETCH_ATTEMPTS", 0)
+    monkeypatch.setattr(urllib.request, "urlopen", fake)
+    monkeypatch.setattr(http_fetch, "DEFAULT_ATTEMPTS", 0)
     assert tool.fetch_bytes(URL) == b"payload"
     assert calls[0] == 1
