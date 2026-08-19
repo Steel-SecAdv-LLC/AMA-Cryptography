@@ -453,7 +453,21 @@ jobs:
   address-sanitizer:
     name: AddressSanitizer + UBSan
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # 25, not 15.  This job runs `ctest --output-on-failure` over the WHOLE C
+    # suite under ASan+UBSan, which is the same command `memory-sanitizer`
+    # below runs under a HEAVIER sanitizer with a 25-minute budget — the two
+    # disagreeing about the cost of an identical workload was the defect, the
+    # same way the three dudect jobs disagreeing (300/600/900 s) was.
+    #
+    # It was not theoretical: on 2456cdd this job was cancelled at its cap,
+    # 15m13s in, still actively running ctest inside `test_sphincs_simd_equiv`
+    # — SLH-DSA equivalence, which is expensive natively and much more so under
+    # ASan.  Nothing hung; the budget simply could not cover the work.  A
+    # cancelled dependency is not a success, so `Static Analysis Gate` went red
+    # on a commit where cppcheck, clang-tidy, scan-build, all three
+    # strict-warning jobs, version-consistency, the MSan KAT lane and the
+    # reproducible-build check had every one passed.
+    timeout-minutes: 25
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1

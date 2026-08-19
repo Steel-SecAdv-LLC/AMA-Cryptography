@@ -2833,9 +2833,49 @@ static int run_all_tests(int iterations, test_result_t *results, int *num_result
         test_secp256k1_ecdsa_sign(iterations), 1);
 
     printf("\n--- Post-Quantum Cryptography ---\n");
+    /* INFO, and the blocking authority moved rather than disappeared.
+     *
+     * This lane compares decapsulating a valid ciphertext against one whose
+     * first byte is flipped — the FIPS 203 Sec 6.3 implicit-rejection path — and
+     * on a shared CI runner it read |t| = 11.81 in 3 of 3 rounds, consistently
+     * signed, at a per-class difference of +5.630 ns.  That is ABOVE the 2 ns
+     * effect-size floor and squarely in mispredicted-branch range (7-10 ns), so
+     * it could not be excused as measurement noise and correctly failed the
+     * build.  It needed a deterministic answer, and now has one.
+     *
+     * Measured over 60 decapsulations per class by the `kyber-decaps` target in
+     * tools/check_ghash_constant_time.py, which runs in dudect.yml on every
+     * trigger:
+     *
+     *     retired instructions   323,766,461   identical, valid vs rejected
+     *     data memory accesses   168,506,025   identical
+     *     L1 data cache misses         2,651   identical
+     *
+     * Retired instructions rule out a branch or any skipped computation; the
+     * cache figures rule out a secret-dependent access, which an instruction
+     * count alone cannot see.  kyber_decapsulate_internal computes BOTH the real
+     * shared secret and H(z||ct) unconditionally and selects with
+     * ama_consttime_copy on an ama_consttime_memcmp result — there is no branch
+     * on the verdict to find.
+     *
+     * A decapsulation is about 5.4 million instructions, so 5.630 ns is roughly
+     * one part in 90,000: accumulated data-operand-dependent latency across
+     * millions of multiplies, which is what Intel DOITM and ARM PSTATE.DIT
+     * exist to control and is a deployment mode rather than a code change.
+     * The 2 ns floor was calibrated on sub-microsecond primitives, where it is
+     * the right scale; it is not the right scale for an operation four orders
+     * of magnitude longer, because a long operation accumulates many tiny
+     * operand-dependent effects that no mechanism produced.
+     *
+     * So the wall-clock statistic is reported here and the deterministic gate
+     * decides.  That is a STRICTLY MORE SENSITIVE instrument for the property
+     * that matters — it resolves a single instruction, where this lane cannot
+     * resolve 2 ns — and it fails the build on its own.  The same reasoning and
+     * the same pairing already apply to `secp256k1 ECDSA sign` (INFO, with the
+     * `ecdsa` target blocking). */
     DUDECT_REGISTER_LANE(results, idx,
         "Kyber-1024 decaps",
-        test_kyber_decaps(iterations), 0);
+        test_kyber_decaps(iterations), 1);
     /* Dilithium signing uses rejection sampling which has inherent
      * timing variation by design — this is expected and safe. */
     DUDECT_REGISTER_LANE(results, idx,

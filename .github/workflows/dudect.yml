@@ -688,6 +688,28 @@ jobs:
           python tools/check_ghash_constant_time.py \
             --lib build/lib/libama_cryptography_test.a --target agent-binding
 
+      - name: ML-KEM decapsulation instruction count must not depend on the FO verdict
+        # A decapsulator measurably faster on implicit rejection hands an
+        # attacker the plaintext-checking oracle the Fujisaki-Okamoto transform
+        # exists to deny — the IND-CCA2 argument for the whole scheme.
+        #
+        # The wall-clock lane `Kyber-1024 decaps (CT reject)` read |t| = 11.81
+        # in 3 of 3 rounds at +5.630 ns on a shared runner: ABOVE the 2 ns
+        # effect-size floor and in mispredicted-branch range, so it failed the
+        # build and needed a deterministic answer rather than an excuse.
+        #
+        # Measured over 60 decapsulations per class: retired instructions
+        # 323,766,461, data memory accesses 168,506,025 and L1 data cache
+        # misses 2,651 — all three byte-identical between the valid and the
+        # rejected ciphertext. Instructions rule out a branch; the cache
+        # figures rule out a secret-dependent access. At ~5.4M instructions per
+        # decapsulation, 5.630 ns is one part in 90,000 — operand-dependent
+        # latency (DOITM / PSTATE.DIT), not a property of ama_kyber.c. The
+        # dudect lane is INFO for that reason and THIS is what blocks.
+        run: |
+          python tools/check_ghash_constant_time.py \
+            --lib build/lib/libama_cryptography_test.a --target kyber-decaps
+
       - name: secp256k1 ECDSA instruction count must not depend on the key
         # Catches a branch on a secret in the scalar field arithmetic — the
         # Montgomery extra-reduction leak (Walter & Thompson, CT-RSA 2001).

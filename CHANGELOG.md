@@ -235,6 +235,81 @@ way would have bypassed the apt gate silently, in the direction that passes.
 Both extensions now, with tests for a raw apt call in a `.yaml` workflow and
 for a `.yaml`-only tree.
 
+### Constant-time gate, fourth pass (2026-08-19) — a real above-floor excursion on ML-KEM, and what settled it
+
+The third pass ran clean on the Ascon lane and immediately surfaced a
+*different* lane, this time **above** the effect-size floor:
+`Kyber-1024 decaps` at |t| = 11.81 in 3 of 3 rounds, consistently signed, with
+a per-class difference of **+5.630 ns** against the 2 ns floor. The rule
+correctly refused to excuse it and failed the build. A difference in that range
+is what a mispredicted branch looks like (7–10 ns), and the two classes are the
+FIPS 203 §6.3 implicit-rejection outcomes — a decapsulator measurably faster on
+rejection hands an attacker the plaintext-checking oracle the
+Fujisaki–Okamoto transform exists to deny. This is the IND-CCA2 argument for
+the whole scheme, so it was treated as real until measurement said otherwise.
+
+**It is not a leak, and the evidence is deterministic rather than statistical.**
+`kyber_decapsulate_internal` computes both the real shared secret and
+`H(z‖ct)` unconditionally and selects between them with `ama_consttime_copy`
+on an `ama_consttime_memcmp` result — there is no branch on the verdict in the
+source. A new `kyber-decaps` instruction-count target confirms it over 60
+decapsulations per class:
+
+| quantity | valid ciphertext | rejected ciphertext |
+|---|---:|---:|
+| retired instructions | 323,766,461 | 323,766,461 |
+| data memory accesses | 168,506,025 | 168,506,025 |
+| L1 data cache misses | 2,651 | 2,651 |
+
+Instructions rule out a branch or any skipped computation. The cache figures
+rule out a secret-dependent memory access, which an instruction count alone
+cannot see — that check was added here because without it the argument had a
+hole. At roughly 5.4 million instructions per decapsulation, 5.630 ns is about
+**one part in 90,000**: accumulated data-operand-dependent latency across
+millions of multiplies, the thing DOITM and PSTATE.DIT exist to control.
+
+**A near-miss worth recording.** The first version of that driver handed the
+timed call `ct` for one class and `ct_bad` for the other — two distinct arrays
+at two distinct addresses. It reported 3,516 L1 misses for the valid class
+against 3,870 for the rejected one, perfectly reproducibly across runs: a
+354-miss "finding" that would have read as a cache-timing leak in ML-KEM.
+Staging the selected ciphertext through one aligned buffer first collapses it
+to zero. That is the same class/address confound
+`tools/check_dudect_class_staging.py` exists to prevent in the wall-clock
+harnesses, reproduced in the deterministic instrument by its author; a driver
+for a constant-time check has to be constant-time too.
+
+**What changed in the rule.** The `Kyber-1024 decaps` dudect lane is now INFO,
+and the blocking authority moved rather than disappearing: `kyber-decaps` runs
+in `dudect.yml` on every trigger and fails the build on a delta of a single
+instruction, where the wall-clock lane cannot resolve 2 ns on a shared runner.
+This is the pairing `secp256k1 ECDSA sign` (INFO, with the `ecdsa` target
+blocking) already uses. The 2 ns floor was calibrated on sub-microsecond
+primitives, where it is the right scale; it is not the right scale for an
+operation four orders of magnitude longer, which accumulates many tiny
+operand-dependent effects that no mechanism produced.
+
+**Two CI defects found alongside it.**
+
+`urllib.error.HTTPError` substitutes a stream when `fp` is None, and *what* it
+substitutes is interpreter-dependent: `io.BytesIO()` on Python 3.11, a
+`tempfile.TemporaryFile()` on 3.14. The ten `HTTPError` objects built by the
+new retry tests owned a file descriptor each on 3.14 and warned on collection,
+which pytest escalates and attributes to whichever test is running when the
+garbage collector fires — surfacing as one ExceptionGroup of ten
+sub-exceptions against an unrelated Wycheproof test, on 3.14 across all three
+operating systems, while 3.10 through 3.13 stayed green. The fixture now passes
+an explicit `BytesIO` and closes what it builds, and a test pins that the error
+owns no operating-system resource, so the property is checked on versions where
+its absence would not show.
+
+`AddressSanitizer + UBSan` was cancelled at its 15-minute cap, 15m13s in, still
+running `ctest` inside `test_sphincs_simd_equiv`. Nothing hung — the budget
+could not cover the work. `memory-sanitizer` runs the *identical*
+`ctest --output-on-failure` under a heavier sanitizer with 25 minutes; the two
+disagreeing about the cost of the same workload was the defect, the same shape
+as the three dudect jobs disagreeing at 300/600/900 s. ASan is now 25.
+
 **A timeout budget that could not cover the schedule its own verdict rule
 demands.** `test_dudect` runs up to `MAX_ROUNDS` rounds and refuses the early
 exit once any lane has tripped, but the Utility and X25519 jobs gave it 300 s

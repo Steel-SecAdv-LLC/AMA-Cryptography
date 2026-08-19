@@ -20,8 +20,10 @@ fails.
 from __future__ import annotations
 
 import importlib.util
+import io
 import sys
 import urllib.error
+from collections.abc import Callable, Iterator
 from email.message import Message
 from pathlib import Path
 from types import ModuleType
@@ -82,15 +84,43 @@ def _no_sleep(monkeypatch: pytest.MonkeyPatch) -> None:
 URL = "https://raw.githubusercontent.com/o/r/deadbeef/vectors/x_test.json"
 
 
-def _http_error(status: int, msg: str) -> urllib.error.HTTPError:
-    """An HTTPError built with the argument types urllib actually declares.
+@pytest.fixture
+def http_error() -> Iterator[Callable[[int, str], urllib.error.HTTPError]]:
+    """Build HTTPErrors that own no operating-system resource, and close them.
+
+    Two separate reasons this is a fixture rather than a bare constructor:
 
     `hdrs` is an email.message.Message and `fp` is an optional binary stream,
-    so passing a bare dict needs a type suppression to get past mypy --strict.
-    A suppression there would cover nothing but the convenience of not writing
-    this function, which is the kind INVARIANT-13 exists to keep out.
+    so passing a bare dict and None needs a type suppression to get past
+    mypy --strict. A suppression there would cover nothing but the convenience
+    of not writing this, which is the kind INVARIANT-13 exists to keep out.
+
+    And `fp` must be a real stream, not None. `urllib.error.HTTPError` fills a
+    missing `fp` in for you, but with WHAT depends on the interpreter: Python
+    3.11 uses `io.BytesIO()`, which owns nothing, while 3.14 uses
+    `tempfile.TemporaryFile()`, which owns a file descriptor and whose
+    `_TemporaryFileCloser.__del__` emits a ResourceWarning if it is collected
+    unclosed. pytest turns that warning into a PytestUnraisableExceptionWarning
+    and attributes it to whichever test happens to be running when the garbage
+    collector fires — so ten leaked errors from this file surfaced as a single
+    ExceptionGroup of ten sub-exceptions against
+    `test_wycheproof_gate.py::test_real_drivers_pass_the_tripwire`, on
+    Python 3.14 only, while 3.10 through 3.13 stayed green.
+
+    Passing an explicit BytesIO means no descriptor is ever allocated, and
+    closing at teardown means the release does not depend on when — or
+    whether — the collector runs.
     """
-    return urllib.error.HTTPError(URL, status, msg, Message(), None)
+    built: list[urllib.error.HTTPError] = []
+
+    def make(status: int, msg: str) -> urllib.error.HTTPError:
+        err = urllib.error.HTTPError(URL, status, msg, Message(), io.BytesIO(b""))
+        built.append(err)
+        return err
+
+    yield make
+    for err in built:
+        err.close()
 
 
 def test_a_reset_connection_is_retried_and_survived(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -115,9 +145,13 @@ def test_the_final_attempt_is_unguarded(monkeypatch: pytest.MonkeyPatch) -> None
 
 
 @pytest.mark.parametrize("status", [400, 401, 403, 404, 410])
-def test_a_permanent_status_is_not_retried(monkeypatch: pytest.MonkeyPatch, status: int) -> None:
+def test_a_permanent_status_is_not_retried(
+    monkeypatch: pytest.MonkeyPatch,
+    status: int,
+    http_error: Callable[[int, str], urllib.error.HTTPError],
+) -> None:
     """A 404 is an answer about the resource. Asking again cannot change it."""
-    err = _http_error(status, "nope")
+    err = http_error(status, "nope")
     fake, calls = _urlopen_script([err])
     monkeypatch.setattr(tool.urllib.request, "urlopen", fake)
     monkeypatch.setattr(tool, "_FETCH_ATTEMPTS", 3)
@@ -127,8 +161,12 @@ def test_a_permanent_status_is_not_retried(monkeypatch: pytest.MonkeyPatch, stat
 
 
 @pytest.mark.parametrize("status", [429, 500, 502, 503, 504])
-def test_a_transient_status_is_retried(monkeypatch: pytest.MonkeyPatch, status: int) -> None:
-    err = _http_error(status, "later")
+def test_a_transient_status_is_retried(
+    monkeypatch: pytest.MonkeyPatch,
+    status: int,
+    http_error: Callable[[int, str], urllib.error.HTTPError],
+) -> None:
+    err = http_error(status, "later")
     fake, calls = _urlopen_script([err, b"payload"])
     monkeypatch.setattr(tool.urllib.request, "urlopen", fake)
     monkeypatch.setattr(tool, "_FETCH_ATTEMPTS", 3)
@@ -176,6 +214,26 @@ def test_a_wrong_digest_still_fails_and_is_never_retried(
     assert len(problems) == 1
     assert "is not upstream's bytes" in problems[0]
     assert calls[0] == 1, "a digest mismatch must not be retried"
+
+
+def test_the_fixture_errors_own_no_operating_system_resource(
+    http_error: Callable[[int, str], urllib.error.HTTPError],
+) -> None:
+    """Pin the property whose absence broke Python 3.14, on every version.
+
+    `urllib.error.HTTPError` substitutes a stream when `fp` is None, and what
+    it substitutes is interpreter-dependent: `io.BytesIO()` on 3.11, a
+    `tempfile.TemporaryFile()` on 3.14. The second owns a file descriptor and
+    warns on collection if never closed, which pytest escalates into a failure
+    against an unrelated test. Asserting the stream we passed is the one in
+    place catches a revert to `None` on any version, including the ones where
+    the consequence would not show.
+    """
+    err = http_error(503, "later")
+    assert isinstance(err.fp, io.BytesIO), (
+        "HTTPError must be given an explicit BytesIO; letting urllib pick "
+        "yields a TemporaryFile on Python 3.14 and leaks a descriptor"
+    )
 
 
 def test_zero_attempts_still_makes_one(monkeypatch: pytest.MonkeyPatch) -> None:
