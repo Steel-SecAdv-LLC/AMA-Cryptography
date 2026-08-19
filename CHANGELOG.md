@@ -183,6 +183,20 @@ the rest are stated as what they already were, except one:
 * The AVX-512 KAT job in `ci.yml` moves to Release — a byte-identity claim
   about hand-written SIMD is a claim about emitted code.
 
+**Two primitives that no deterministic instrument covered now have one.** The
+`ecdsa` target measures `src/c/ama_secp256k1.c`; the NIST P-curves are a
+separate implementation with their own limb arithmetic, their own Montgomery
+multiply and their own group law, and nothing measured them — which is how the
+`nistp_mont_mul` leak above came to be sitting there unseen. `nistp-ecdsa`
+(P-256 deterministic signing, which exercises the arithmetic P-384 and P-521
+share) and `x25519` (the Montgomery ladder, whose conditional swap is
+predicated on one bit of the secret scalar per step) are now registered targets
+and run in `dudect.yml` on every trigger. Both are pinned by mutation: with
+`ama_ct_value_barrier_u64` neutered, `ecdsa` reports 9,424 and `nistp-ecdsa`
+827, and both exit 1. X25519 measures 0 with or without the barrier — it does
+not depend on one under clang 18 — so that target is a regression guard rather
+than a fix, which is what it is described as.
+
 **And it cannot recur silently.** `tools/check_workflow_commands.py` gains
 `check_cmake_build_type()`: every `cmake` *configure* in any workflow must
 state its optimization level, either with `-DCMAKE_BUILD_TYPE` or with an

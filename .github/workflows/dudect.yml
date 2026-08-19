@@ -730,6 +730,27 @@ jobs:
           python tools/check_ghash_constant_time.py \
             --lib build/lib/libama_cryptography_test.a --target kyber-decaps
 
+      - name: NIST P-256 ECDSA instruction count must not depend on the key
+        # The `ecdsa` step below measures src/c/ama_secp256k1.c. The NIST
+        # P-curves are a separate implementation with their own limb
+        # arithmetic, and nothing measured it — which is how clang 18 at -O3
+        # came to be making `nistp_mont_mul` key-dependent by 1,251 retired
+        # instructions over four signatures, branching on the Montgomery
+        # extra-reduction predicate. P-256, P-384 and P-521 share that
+        # arithmetic, so this covers the family's scalar core.
+        run: |
+          python tools/check_ghash_constant_time.py \
+            --lib build/lib/libama_cryptography_test.a --target nistp-ecdsa
+
+      - name: X25519 instruction count must not depend on the scalar
+        # The Montgomery ladder's conditional swap is predicated on one bit of
+        # the secret scalar per step. The dudect lane for X25519 is wall-clock
+        # on a shared runner; this is its deterministic counterpart, the same
+        # pairing `ecdsa` has with the `secp256k1 ECDSA sign` lane.
+        run: |
+          python tools/check_ghash_constant_time.py \
+            --lib build/lib/libama_cryptography_test.a --target x25519
+
       - name: secp256k1 ECDSA instruction count must not depend on the key
         # Catches a branch on a secret in the scalar field arithmetic — the
         # Montgomery extra-reduction leak (Walter & Thompson, CT-RSA 2001).
