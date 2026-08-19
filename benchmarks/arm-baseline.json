@@ -459,6 +459,18 @@
       {
         "path": "src/c/ama_slhdsa.c",
         "reason": "Call-site renames only (d14ad84): two ama_sha512 -> ama_sha512_oneshot calls. Same function, same instructions; SLH-DSA floors describe unchanged code."
+      },
+      {
+        "path": "src/c/ama_secp256k1.c",
+        "reason": "Value barrier applied to the seven secret-derived selection masks, removing a clang -O3 branch on the Montgomery extra-reduction predicate (see baseline.json's entry for the list and CHANGELOG 'fifth pass'). secp256k1_ecdsa_sign/verify are floored primitives here too; measured cost on the x86 review host was 1.6-4.5%, well inside this lane's tolerance, but the aarch64 floors are NOT vouched for by pre-change medians. Carried as a coarse floor pending the benchmark-regression job on this PR, which is the check that exercises it."
+      },
+      {
+        "path": "src/c/ama_nistp.c",
+        "reason": "Barrier inside nistp_mask64() plus zero-initialisation of nistp_mod_add's limb buffer. No P-curve primitive carries a floor in this file; recorded because the gate reads paths, not floors."
+      },
+      {
+        "path": "src/c/ama_consttime.c",
+        "reason": "Adds ama_build_optimization_probe() under AMA_TESTING_MODE only; the production library never compiles it, so no benchmarked call changes."
       }
     ]
   },

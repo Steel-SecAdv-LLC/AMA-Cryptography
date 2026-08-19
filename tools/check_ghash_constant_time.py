@@ -770,30 +770,32 @@ _KYBER_DECAPS_DRIVER = r"""
  * branch (7-10 ns) looks like, so it could not be waved away as measurement
  * noise; it needed a deterministic answer.
  *
- * The deterministic answer, measured over 60 decapsulations per class:
- *
- *     retired instructions   323,766,461   identical, valid vs rejected
- *     data memory accesses   168,506,025   identical
- *     L1 data cache misses         2,651   identical
- *
- * All three are byte-identical across the two classes and reproducible across
- * runs.  Retired instructions rule out a branch or any skipped computation; the
- * cache figures rule out a secret-dependent memory access, which an instruction
- * count alone cannot see.  A decapsulation here is about 5.4 million
- * instructions, so the 5.630 ns wall-clock difference is roughly one part in
- * 90,000 — accumulated data-operand-dependent latency across millions of
- * multiplies, which is what Intel's DOITM and ARM's PSTATE.DIT exist to control,
- * and not a property of src/c/ama_kyber.c.
+ * The deterministic answer, measured over 60 decapsulations per class on the
+ * Release (-O3) library the wheel ships: retired instructions, data
+ * references, D1 misses and LLd misses are all four byte-identical between
+ * the valid and the rejected ciphertext, under gcc 13 and clang 18 alike.
+ * Instructions rule out a branch or any skipped computation; the
+ * data-reference and miss figures rule out a secret-dependent memory access,
+ * which an instruction count alone cannot see.  (The absolute figures for the
+ * measuring commit are in CHANGELOG.md; the zero deltas are the invariant.
+ * An earlier revision of this comment quoted counts taken on an unoptimized
+ * build and argued the 5.630 ns was "one part in 90,000" of a decapsulation —
+ * withdrawn: a mispredicted branch costs a fixed 5-20 ns whatever surrounds
+ * it, so the ratio excludes nothing.  The identity above is the argument.)
+ * The residual wall-clock difference is consistent with data-operand-dependent
+ * latency, which Intel's DOITM and ARM's PSTATE.DIT exist to control, and not
+ * with any divergence this instrument can see in src/c/ama_kyber.c.
  *
  * THE STAGING BELOW IS LOAD-BEARING.  Handing the timed call `ct` for one class
  * and `ct_bad` for the other confounds the class with the ciphertext's ADDRESS:
- * measured that way this same driver reported 3,516 L1 misses for the valid
- * class against 3,870 for the rejected one, perfectly reproducibly — a 354-miss
- * "finding" that belongs entirely to the driver.  Copying the selected
- * ciphertext into one aligned buffer first collapses it to zero.  This is the
- * same defect tools/check_dudect_class_staging.py enforces against in the
- * wall-clock harnesses; a driver for a constant-time check has to be constant-time
- * too. */
+ * measured that way at -O3 this same driver reports a reproducible ~175-miss
+ * D1 delta with the instruction count unchanged — a "finding" that belongs
+ * entirely to the driver.  Copying the selected ciphertext into one aligned
+ * buffer first collapses it to zero.  This is the same defect
+ * tools/check_dudect_class_staging.py enforces against in the wall-clock
+ * harnesses; a driver for a constant-time check has to be constant-time
+ * too — and since the miss metrics landed, an unstaged driver FAILS this
+ * gate rather than merely misleading its reader. */
 int main(int argc, char **argv) {
     static uint8_t pk[AMA_KYBER_1024_PUBLIC_KEY_BYTES];
     static uint8_t sk[AMA_KYBER_1024_SECRET_KEY_BYTES];
