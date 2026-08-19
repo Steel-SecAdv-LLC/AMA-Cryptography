@@ -48,11 +48,7 @@ jobs:
       - name: Install AArch64 cross toolchain + QEMU
         run: |
           sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            cmake ninja-build \
-            gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev-arm64-cross \
-            qemu-user-static
+          .github/scripts/apt-install.sh --no-install-recommends cmake ninja-build gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev-arm64-cross qemu-user-static
 
       - name: Configure (aarch64 toolchain)
         run: |
@@ -111,11 +107,7 @@ jobs:
       - name: Install AArch64 cross toolchain + QEMU
         run: |
           sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            cmake ninja-build \
-            gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev-arm64-cross \
-            qemu-user-static
+          .github/scripts/apt-install.sh --no-install-recommends cmake ninja-build gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev-arm64-cross qemu-user-static
 
       - name: Configure (aarch64 toolchain, SVE2 kernels enabled)
         run: |

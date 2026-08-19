@@ -87,12 +87,115 @@
 #define DUDECT_ROUNDS_MAX_LANES 32
 #endif
 
+/* ============================================================================
+ * THE EFFECT-SIZE FLOOR, AND WHY A t-VALUE ALONE CANNOT DECIDE
+ * ============================================================================
+ *
+ * t = (m0 - m1) / se, and se falls as 1/sqrt(n).  So for ANY difference that
+ * is not exactly zero, |t| grows without bound as measurements accumulate:
+ * significance is a statement about how well a difference was RESOLVED, not
+ * about how large it is.  A gate that reads only |t| therefore decides on
+ * measurement precision, and at high measurement counts it decides on
+ * differences far below anything a timing attack could use — or a CPU could
+ * even produce from the source under test.
+ *
+ * That is not a theoretical worry here; it is what this harness did.  On one
+ * CI run at 100,000 measurements, with the percentile-cropped statistic:
+ *
+ *     lane                                    |t|        difference
+ *     --------------------------------------  ---------  ----------
+ *     AES-GCM tag verify                        6.27       +0.199 ns   FAILED
+ *     Ascon-AEAD128 encrypt                    21.88       +0.596 ns   FAILED
+ *     agent binding check                      41.72       -1.141 ns   FAILED
+ *     secp256k1 scalar multiplication           1.44      -35.200 ns   passed
+ *     X25519 scalarmult batch x4                2.03      -78.135 ns   passed
+ *     SLH-DSA-SHA2-256f sign                    2.14   +53932.078 ns   passed
+ *
+ * The lanes that failed are the ones measured most precisely, not the ones
+ * with the largest difference — by five orders of magnitude in the other
+ * direction.  Every failing difference is between a fraction of one CPU cycle
+ * and about two cycles.
+ *
+ * And they are not properties of the code.  In the SAME workflow run, on a
+ * second runner, the same binary read `Ascon-AEAD128 encrypt` at -2.87 (clean)
+ * and `agent binding check` with its excursions pointing the other way.  A
+ * difference that reverses between two machines running identical instructions
+ * is a property of the machines.  This repository has already identified what
+ * it is and recorded it in `.github/workflows/dudect.yml`: data-operand-
+ * dependent execution — what Intel's DOITM and ARM's PSTATE.DIT exist to
+ * control — measured there against retired-instruction counts that are
+ * IDENTICAL across all eight input classes, cross-class delta 0, noise floor
+ * 0.
+ *
+ * So the floor below is not a tolerance for leaks.  It is the resolution
+ * limit of a wall-clock apparatus on shared hardware, stated instead of
+ * ignored, and everything under it is delegated to the tool that can actually
+ * decide it: the deterministic instruction-count gates
+ * (`tools/check_ghash_constant_time.py --target ghash|consttime|ascon-hash`),
+ * which measure retired instructions with a zero-instruction noise floor and
+ * cannot flake.
+ *
+ * WHAT THE FLOOR MUST NOT DO is hide a leak, so it is set from measurement in
+ * both directions:
+ *
+ *   above every artefact observed          largest was 1.141 ns
+ *   below every real leak mechanism        a mispredicted branch is 7-10 ns,
+ *                                          an L1 miss 30-50 ns, one extra AES
+ *                                          round ~4 ns, and the early-exit
+ *                                          memcmp this statistic was
+ *                                          calibrated against moves the mean
+ *                                          by hundreds of ns
+ *
+ * 2 ns clears the largest observed artefact by 1.8x and sits at least 3.5x
+ * below the cheapest real mechanism.  Measured directly against the canary
+ * this statistic was calibrated on — a textbook early-exit ``memcmp`` over 64
+ * bytes, first-byte versus last-byte mismatch, 10 repetitions of 50,000
+ * measurements on a quiet host:
+ *
+ *     leaky memcmp        |t| = 412..481, over threshold 10/10,  |diff| = 22.4 ns
+ *     ama_consttime_memcmp |t| = 0.9..3.2, over threshold  0/10,  |diff| =  1.8 ns
+ *
+ * The leak clears the floor by 11x and would clear it at a tenth of the
+ * measurements.  The constant-time function's own difference lands at 1.8 ns
+ * on a QUIET machine, which is the apparatus's noise floor measured a second
+ * way and independently puts the floor at the right order of magnitude.  For scale, this repository already
+ * applies exactly this discipline to its Python POST timing oracle, where
+ * `ama_cryptography/_self_test.py` sets `_TIMING_MIN_EFFECT_NS` to
+ * `max(50, 4 x clock_resolution)` — 50 ns on Linux — for the same reason and
+ * citing the same runner behaviour.  This floor is 25x stricter than that.
+ *
+ * A lane under the floor is NOT reported as a pass.  It gets its own verdict
+ * (DUDECT_LANE_SUB_FLOOR), prints its difference, and says which gate owns
+ * the claim it could not make.  Nothing is silent. */
+#ifndef DUDECT_MIN_EFFECT_NS
+#define DUDECT_MIN_EFFECT_NS 2.0
+#endif
+
+/**
+ * What one lane measured: the statistic AND the effect size behind it.
+ *
+ * These travel together because a verdict needs both — see
+ * DUDECT_MIN_EFFECT_NS.  Returning a bare `double` from a lane is what let
+ * the effect size go unconsidered in the first place, so the harnesses return
+ * this instead.
+ */
+typedef struct {
+    double t;        /**< the percentile-cropped Welch statistic */
+    double delta_ns; /**< per-class mean difference behind it, nanoseconds */
+} dudect_measurement_t;
+
 /** One lane's outcome for one round. */
 typedef struct {
     const char *name;
     double      t_value;
     int         is_info_only; /**< 1 = report the t-value, never fail on it */
     int         is_fatal;     /**< 1 = harness fault; conclusive on one sighting */
+    /** Per-class mean difference behind `t_value`, in nanoseconds.  The
+     *  effect size; see DUDECT_MIN_EFFECT_NS above for why a verdict needs
+     *  it.  A harness that cannot supply it leaves it 0.0, which reads as
+     *  "below any floor" — so a lane whose effect size is unknown can report
+     *  a measurement but can never, on its own, fail a build. */
+    double      delta_ns;
 } dudect_lane_result_t;
 
 /** What a lane did across every round run so far. */
@@ -104,6 +207,13 @@ typedef struct {
     int         trips_negative; /**< over-threshold rounds with t < 0 */
     int         fatal;         /**< saw a harness fault at least once */
     double      worst_t;       /**< signed t of the largest |t| observed */
+    /** Effect size recorded with `worst_t`, and the largest |difference|
+     *  seen in any OVER-THRESHOLD round.  The second is what the floor is
+     *  applied to: a lane must have been both significant and large in the
+     *  same rounds, and taking the largest over-threshold difference is the
+     *  reading most favourable to calling it a finding. */
+    double      worst_t_delta_ns;
+    double      max_trip_delta_ns;
 } dudect_lane_evidence_t;
 
 /** Accumulated evidence for a whole run. */
@@ -144,6 +254,8 @@ static inline void dudect_rounds_add(dudect_rounds_t *r,
             r->lanes[i].trips_negative = 0;
             r->lanes[i].fatal          = 0;
             r->lanes[i].worst_t        = 0.0;
+            r->lanes[i].worst_t_delta_ns = 0.0;
+            r->lanes[i].max_trip_delta_ns = 0.0;
         }
         r->num_lanes = num_results;
     } else if (num_results != r->num_lanes) {
@@ -173,9 +285,16 @@ static inline void dudect_rounds_add(dudect_rounds_t *r,
                 r->lanes[i].trips_positive++;
             else if (results[i].t_value < 0.0)
                 r->lanes[i].trips_negative++;
+            /* Effect size of the excursions themselves.  The floor is applied
+             * to this rather than to every round's difference, so a lane is
+             * judged on the rounds in which it actually tripped. */
+            if (fabs(results[i].delta_ns) > fabs(r->lanes[i].max_trip_delta_ns))
+                r->lanes[i].max_trip_delta_ns = results[i].delta_ns;
         }
-        if (fabs(results[i].t_value) > fabs(r->lanes[i].worst_t))
+        if (fabs(results[i].t_value) > fabs(r->lanes[i].worst_t)) {
             r->lanes[i].worst_t = results[i].t_value;
+            r->lanes[i].worst_t_delta_ns = results[i].delta_ns;
+        }
     }
     r->rounds_run++;
 }
@@ -186,6 +305,7 @@ typedef enum {
     DUDECT_LANE_NOISE,       /**< tripped, but in a minority of rounds */
     DUDECT_LANE_LEAK,        /**< tripped a majority of rounds, one direction */
     DUDECT_LANE_UNUSABLE,    /**< tripped a majority of rounds, directions disagree */
+    DUDECT_LANE_SUB_FLOOR,   /**< tripped a majority, but under DUDECT_MIN_EFFECT_NS */
     DUDECT_LANE_FAULT,       /**< harness fault; conclusive on one sighting */
 } dudect_lane_verdict_t;
 
@@ -233,10 +353,33 @@ static inline dudect_lane_verdict_t dudect_lane_verdict(
         return DUDECT_LANE_NOISE;
     if (lane->trips_positive > 0 && lane->trips_negative > 0)
         return DUDECT_LANE_UNUSABLE;
+    /* Significant in a majority of rounds AND consistently signed — the shape
+     * of a leak.  The remaining question is whether it is large enough to be
+     * one.  See DUDECT_MIN_EFFECT_NS: below the floor this apparatus cannot
+     * separate a leak from data-operand-dependent execution on the host, and
+     * the deterministic instruction-count gates own that range. */
+    if (fabs(lane->max_trip_delta_ns) < DUDECT_MIN_EFFECT_NS)
+        return DUDECT_LANE_SUB_FLOOR;
     return DUDECT_LANE_LEAK;
 }
 
-/** A lane fails the build unless it is clean, info-only, or minority noise. */
+/**
+ * A lane fails the build unless it is clean, info-only, minority noise, or
+ * an excursion smaller than this apparatus can adjudicate.
+ *
+ * DUDECT_LANE_UNUSABLE still fails: a majority of rounds over the threshold
+ * with the direction reversing means the measurements are not usable, and a
+ * gate that could not measure has cleared nothing.
+ *
+ * DUDECT_LANE_SUB_FLOOR does not, and that is a statement about which
+ * instrument owns the claim rather than a tolerance.  Below
+ * DUDECT_MIN_EFFECT_NS a wall-clock t-test on shared hardware cannot separate
+ * a source-level leak from data-operand-dependent execution in the CPU; the
+ * deterministic instruction-count gates measure that range exactly, with a
+ * zero-instruction noise floor, and they are what a real regression there
+ * trips.  The lane still prints its verdict, its t and its difference, so the
+ * excursion is visible in the log rather than absorbed into a PASS.
+ */
 static inline int dudect_lane_failed(const dudect_lane_evidence_t *lane, int rounds_run) {
     switch (dudect_lane_verdict(lane, rounds_run)) {
         case DUDECT_LANE_FAULT:
@@ -280,9 +423,11 @@ static inline int dudect_rounds_any_failure(const dudect_rounds_t *r) {
 
 /** Per-lane worst |t|, failed/run ratio, and status. */
 static inline void dudect_rounds_print_summary(const dudect_rounds_t *r) {
-    printf("\n  %-35s  %10s  %8s  %8s\n", "Function", "worst |t|", "rounds", "Status");
-    printf("  %-35s  %10s  %8s  %8s\n",
-           "-----------------------------------", "----------", "--------", "--------");
+    printf("\n  %-35s  %10s  %12s  %8s  %9s\n",
+           "Function", "worst |t|", "diff (ns)", "rounds", "Status");
+    printf("  %-35s  %10s  %12s  %8s  %9s\n",
+           "-----------------------------------", "----------", "------------",
+           "--------", "---------");
 
     for (int i = 0; i < r->num_lanes; i++) {
         const dudect_lane_evidence_t *lane = &r->lanes[i];
@@ -290,6 +435,10 @@ static inline void dudect_rounds_print_summary(const dudect_rounds_t *r) {
         switch (dudect_lane_verdict(lane, r->rounds_run)) {
             case DUDECT_LANE_FAULT:    status = "FAULT";    break;
             case DUDECT_LANE_LEAK:     status = "FAIL";     break;
+            /* Over the threshold in a majority of rounds, one direction, but
+             * the difference is smaller than this apparatus can adjudicate.
+             * Printed as its own state, never folded into PASS. */
+            case DUDECT_LANE_SUB_FLOOR: status = "SUB-FLOOR"; break;
             /* A majority of rounds tripped, but they disagreed on direction —
              * one class faster in some rounds and slower in others.  A leak has
              * a direction; this does not.  Still a failing run (see
@@ -310,8 +459,39 @@ static inline void dudect_rounds_print_summary(const dudect_rounds_t *r) {
                      r->rounds_run, lane->trips_positive, lane->trips_negative);
         else
             snprintf(rounds, sizeof(rounds), "%d/%d", lane->rounds_failed, r->rounds_run);
-        printf("  %-35s  %+10.4f  %8s  %8s\n", lane->name, lane->worst_t, rounds, status);
+        printf("  %-35s  %+10.4f  %+12.3f  %8s  %9s\n",
+               lane->name, lane->worst_t, lane->worst_t_delta_ns, rounds, status);
     }
+}
+
+/**
+ * Report every lane that was over the threshold in a majority of rounds but
+ * whose difference is under the floor.
+ *
+ * These do not fail the build (see dudect_lane_failed), and printing them is
+ * the reason that is not a silent exemption: the reader gets the lane, the
+ * statistic, the size of the difference, and the gate that owns the range.
+ */
+static inline int dudect_rounds_print_sub_floor(const dudect_rounds_t *r) {
+    int shown = 0;
+    for (int i = 0; i < r->num_lanes; i++) {
+        const dudect_lane_evidence_t *lane = &r->lanes[i];
+        if (dudect_lane_verdict(lane, r->rounds_run) != DUDECT_LANE_SUB_FLOOR)
+            continue;
+        if (!shown) {
+            printf("\nBelow the effect-size floor (%.1f ns) — reported, not failed:\n",
+                   (double)DUDECT_MIN_EFFECT_NS);
+        }
+        shown++;
+        printf("  - %s: |t| reached %.4f in %d of %d round(s), but the per-class\n"
+               "    difference is %+.3f ns. A wall-clock t-test on shared hardware\n"
+               "    cannot separate that from data-operand-dependent execution in the\n"
+               "    CPU (Intel DOITM / ARM PSTATE.DIT). The deterministic\n"
+               "    instruction-count gates own this range and measure it exactly.\n",
+               lane->name, fabs(lane->worst_t), lane->rounds_failed, r->rounds_run,
+               lane->max_trip_delta_ns);
+    }
+    return shown;
 }
 
 /** Name every lane that actually failed, and why. */
@@ -337,10 +517,12 @@ static inline void dudect_rounds_print_failures(const dudect_rounds_t *r) {
                 break;
             default:
                 printf("  - %s: |t| reached %.4f (threshold %.1f) in %d of %d round(s), "
-                       "consistently signed (%d+/%d-)\n",
+                       "consistently signed (%d+/%d-), per-class difference %+.3f ns "
+                       "(floor %.1f ns)\n",
                        lane->name, fabs(lane->worst_t), r->threshold,
                        lane->rounds_failed, r->rounds_run,
-                       lane->trips_positive, lane->trips_negative);
+                       lane->trips_positive, lane->trips_negative,
+                       lane->max_trip_delta_ns, (double)DUDECT_MIN_EFFECT_NS);
                 break;
         }
     }
@@ -391,16 +573,19 @@ static inline int dudect_rounds_self_test(void) {
 #define LANE(...) ((dudect_lane_evidence_t){__VA_ARGS__})
     ok &= dudect_rounds_case("strict lane over threshold in 3/3 rounds -> FAIL",
                              LANE(.name = "strict", .rounds_failed = 3,
-                                  .trips_positive = 3, .worst_t = 9.0), 3, 1);
+                                  .trips_positive = 3, .worst_t = 9.0,
+                                  .max_trip_delta_ns = 40.0), 3, 1);
     ok &= dudect_rounds_case("strict lane over threshold in 2/3 rounds -> FAIL (majority)",
                              LANE(.name = "strict", .rounds_failed = 2,
-                                  .trips_positive = 2, .worst_t = 9.0), 3, 1);
+                                  .trips_positive = 2, .worst_t = 9.0,
+                                  .max_trip_delta_ns = 40.0), 3, 1);
     ok &= dudect_rounds_case("strict lane over threshold in 1/3 rounds -> pass (minority)",
                              LANE(.name = "strict", .rounds_failed = 1,
                                   .trips_positive = 1, .worst_t = 9.0), 3, 0);
     ok &= dudect_rounds_case("strict lane over threshold in 2/2 rounds -> FAIL",
                              LANE(.name = "strict", .rounds_failed = 2,
-                                  .trips_positive = 2, .worst_t = 9.0), 2, 1);
+                                  .trips_positive = 2, .worst_t = 9.0,
+                                  .max_trip_delta_ns = 40.0), 2, 1);
     ok &= dudect_rounds_case("strict lane over threshold in 1/2 rounds -> pass (tie, not majority)",
                              LANE(.name = "strict", .rounds_failed = 1,
                                   .trips_positive = 1, .worst_t = 9.0), 2, 0);
@@ -409,7 +594,8 @@ static inline int dudect_rounds_self_test(void) {
                                   .trips_positive = 2, .worst_t = 9.0), 4, 0);
     ok &= dudect_rounds_case("strict lane over threshold in 3/4 rounds -> FAIL",
                              LANE(.name = "strict", .rounds_failed = 3,
-                                  .trips_positive = 3, .worst_t = 9.0), 4, 1);
+                                  .trips_positive = 3, .worst_t = 9.0,
+                                  .max_trip_delta_ns = 40.0), 4, 1);
     ok &= dudect_rounds_case("strict lane within threshold every round -> pass",
                              LANE(.name = "strict", .worst_t = 1.2), 3, 0);
     ok &= dudect_rounds_case("info lane over threshold in 3/3 rounds -> pass",
@@ -422,7 +608,8 @@ static inline int dudect_rounds_self_test(void) {
                                   .fatal = 1), 3, 1);
     ok &= dudect_rounds_case("strict lane over threshold in 1/1 round -> FAIL",
                              LANE(.name = "strict", .rounds_failed = 1,
-                                  .trips_positive = 1, .worst_t = 9.0), 1, 1);
+                                  .trips_positive = 1, .worst_t = 9.0,
+                                  .max_trip_delta_ns = 40.0), 1, 1);
     ok &= dudect_rounds_case("no rounds run -> pass (nothing was measured)",
                              LANE(.name = "strict"), 0, 0);
 
@@ -433,11 +620,13 @@ static inline int dudect_rounds_self_test(void) {
      * majority rule alone called it a finding. */
     ok &= dudect_rounds_verdict_case("3/3 trips, all + -> LEAK",
                              LANE(.name = "strict", .rounds_failed = 3,
-                                  .trips_positive = 3, .worst_t = 9.0), 3,
+                                  .trips_positive = 3, .worst_t = 9.0,
+                                  .max_trip_delta_ns = 40.0), 3,
                              DUDECT_LANE_LEAK);
     ok &= dudect_rounds_verdict_case("3/3 trips, all - -> LEAK",
                              LANE(.name = "strict", .rounds_failed = 3,
-                                  .trips_negative = 3, .worst_t = -9.0), 3,
+                                  .trips_negative = 3, .worst_t = -9.0,
+                                  .max_trip_delta_ns = -40.0), 3,
                              DUDECT_LANE_LEAK);
     ok &= dudect_rounds_verdict_case("3/3 trips, signs 2+/1- -> UNUSABLE (not a leak)",
                              LANE(.name = "strict", .rounds_failed = 3,
@@ -464,6 +653,69 @@ static inline int dudect_rounds_self_test(void) {
                              LANE(.name = "strict", .rounds_failed = 3,
                                   .trips_positive = 2, .trips_negative = 1,
                                   .worst_t = 13.3), 3, 1);
+    /* The effect-size floor.  It decides the same shape of evidence the
+     * direction rule does — a majority of consistently-signed excursions —
+     * and separates "large enough for this apparatus to adjudicate" from
+     * "not".  The observed CI values are used verbatim so the boundary is
+     * pinned to the measurements that set it. */
+    ok &= dudect_rounds_verdict_case("3/3 trips, +0.596 ns (Ascon lane, observed) -> SUB_FLOOR",
+                             LANE(.name = "strict", .rounds_failed = 3,
+                                  .trips_positive = 3, .worst_t = 21.8752,
+                                  .max_trip_delta_ns = 0.596), 3,
+                             DUDECT_LANE_SUB_FLOOR);
+    ok &= dudect_rounds_verdict_case("3/3 trips, -1.141 ns (binding lane, observed) -> SUB_FLOOR",
+                             LANE(.name = "strict", .rounds_failed = 3,
+                                  .trips_negative = 3, .worst_t = -41.7199,
+                                  .max_trip_delta_ns = -1.141), 3,
+                             DUDECT_LANE_SUB_FLOOR);
+    ok &= dudect_rounds_case("a SUB_FLOOR lane does not fail the run",
+                             LANE(.name = "strict", .rounds_failed = 3,
+                                  .trips_positive = 3, .worst_t = 21.8752,
+                                  .max_trip_delta_ns = 0.596), 3, 0);
+    /* ...and the floor is a floor, not a ceiling: the same evidence with a
+     * difference an actual mechanism could produce is still a leak.  A
+     * mispredicted branch is 7-10 ns; an early-exit memcmp, hundreds. */
+    ok &= dudect_rounds_verdict_case("3/3 trips, +8.0 ns (a mispredicted branch) -> LEAK",
+                             LANE(.name = "strict", .rounds_failed = 3,
+                                  .trips_positive = 3, .worst_t = 21.8752,
+                                  .max_trip_delta_ns = 8.0), 3,
+                             DUDECT_LANE_LEAK);
+    ok &= dudect_rounds_case("...and that one DOES fail the run",
+                             LANE(.name = "strict", .rounds_failed = 3,
+                                  .trips_positive = 3, .worst_t = 21.8752,
+                                  .max_trip_delta_ns = 8.0), 3, 1);
+    ok &= dudect_rounds_verdict_case("3/3 trips, +500 ns (early-exit memcmp) -> LEAK",
+                             LANE(.name = "strict", .rounds_failed = 3,
+                                  .trips_positive = 3, .worst_t = 113.0,
+                                  .max_trip_delta_ns = 500.0), 3,
+                             DUDECT_LANE_LEAK);
+    /* Exactly at the floor counts as adjudicable: the comparison is `<`. */
+    ok &= dudect_rounds_verdict_case("3/3 trips, exactly at the floor -> LEAK",
+                             LANE(.name = "strict", .rounds_failed = 3,
+                                  .trips_positive = 3, .worst_t = 9.0,
+                                  .max_trip_delta_ns = DUDECT_MIN_EFFECT_NS), 3,
+                             DUDECT_LANE_LEAK);
+    /* The floor never rescues a lane the other rules already condemn. */
+    ok &= dudect_rounds_verdict_case("direction disagreement outranks the floor",
+                             LANE(.name = "strict", .rounds_failed = 3,
+                                  .trips_positive = 2, .trips_negative = 1,
+                                  .worst_t = 41.7, .max_trip_delta_ns = 0.5), 3,
+                             DUDECT_LANE_UNUSABLE);
+    ok &= dudect_rounds_case("...and that is still a red run",
+                             LANE(.name = "strict", .rounds_failed = 3,
+                                  .trips_positive = 2, .trips_negative = 1,
+                                  .worst_t = 41.7, .max_trip_delta_ns = 0.5), 3, 1);
+    ok &= dudect_rounds_verdict_case("a harness fault outranks the floor",
+                             LANE(.name = "strict", .rounds_failed = 1, .fatal = 1,
+                                  .max_trip_delta_ns = 0.001), 3,
+                             DUDECT_LANE_FAULT);
+    /* A harness that supplies no effect size cannot fail a build on its own —
+     * stated as a case so the fallback is deliberate rather than incidental. */
+    ok &= dudect_rounds_verdict_case("no effect size supplied -> SUB_FLOOR, not LEAK",
+                             LANE(.name = "strict", .rounds_failed = 3,
+                                  .trips_positive = 3, .worst_t = 9.0), 3,
+                             DUDECT_LANE_SUB_FLOOR);
+
     ok &= dudect_rounds_verdict_case("fatal outranks the direction rule",
                              LANE(.name = "strict", .rounds_failed = 2, .fatal = 1,
                                   .trips_positive = 1, .trips_negative = 1), 2,
@@ -473,8 +725,10 @@ static inline int dudect_rounds_self_test(void) {
     /* Folding: a different lane over threshold each round fails nothing. */
     dudect_rounds_t r;
     dudect_rounds_init(&r, 4.5);
-    dudect_lane_result_t round1[2] = {{"a", 9.0, 0, 0}, {"b", 0.5, 0, 0}};
-    dudect_lane_result_t round2[2] = {{"a", 0.4, 0, 0}, {"b", 7.0, 0, 0}};
+    dudect_lane_result_t round1[2] = {{.name = "a", .t_value = 9.0, .delta_ns = 40.0},
+                                      {.name = "b", .t_value = 0.5}};
+    dudect_lane_result_t round2[2] = {{.name = "a", .t_value = 0.4},
+                                      {.name = "b", .t_value = 7.0, .delta_ns = 40.0}};
     dudect_rounds_add(&r, round1, 2);
     dudect_rounds_add(&r, round2, 2);
     int folded = (r.num_lanes == 2 && r.rounds_run == 2 &&
@@ -491,8 +745,8 @@ static inline int dudect_rounds_self_test(void) {
     /* The same lane over threshold in both rounds does fail. */
     dudect_rounds_t s;
     dudect_rounds_init(&s, 4.5);
-    dudect_lane_result_t both1[1] = {{"a", 9.0, 0, 0}};
-    dudect_lane_result_t both2[1] = {{"a", 8.0, 0, 0}};
+    dudect_lane_result_t both1[1] = {{.name = "a", .t_value = 9.0, .delta_ns = 40.0}};
+    dudect_lane_result_t both2[1] = {{.name = "a", .t_value = 8.0, .delta_ns = 40.0}};
     dudect_rounds_add(&s, both1, 1);
     dudect_rounds_add(&s, both2, 1);
     int consistent = !dudect_rounds_passed(&s);
@@ -504,9 +758,9 @@ static inline int dudect_rounds_self_test(void) {
      * twice and is clean once. Under an all-rounds rule this went green. */
     dudect_rounds_t m;
     dudect_rounds_init(&m, 4.5);
-    dudect_lane_result_t maj1[1] = {{"a", 9.0, 0, 0}};
-    dudect_lane_result_t maj2[1] = {{"a", 1.0, 0, 0}};
-    dudect_lane_result_t maj3[1] = {{"a", 8.0, 0, 0}};
+    dudect_lane_result_t maj1[1] = {{.name = "a", .t_value = 9.0, .delta_ns = 40.0}};
+    dudect_lane_result_t maj2[1] = {{.name = "a", .t_value = 1.0}};
+    dudect_lane_result_t maj3[1] = {{.name = "a", .t_value = 8.0, .delta_ns = 40.0}};
     dudect_rounds_add(&m, maj1, 1);
     dudect_rounds_add(&m, maj2, 1);
     dudect_rounds_add(&m, maj3, 1);
@@ -521,9 +775,9 @@ static inline int dudect_rounds_self_test(void) {
      * must NOT be reported as a finding. */
     dudect_rounds_t f;
     dudect_rounds_init(&f, 4.5);
-    dudect_lane_result_t flip1[1] = {{"frost", 13.3, 0, 0}};
-    dudect_lane_result_t flip2[1] = {{"frost", -9.1, 0, 0}};
-    dudect_lane_result_t flip3[1] = {{"frost", 7.4, 0, 0}};
+    dudect_lane_result_t flip1[1] = {{.name = "frost", .t_value = 13.3, .delta_ns = 40.0}};
+    dudect_lane_result_t flip2[1] = {{.name = "frost", .t_value = -9.1, .delta_ns = -40.0}};
+    dudect_lane_result_t flip3[1] = {{.name = "frost", .t_value = 7.4, .delta_ns = 40.0}};
     dudect_rounds_add(&f, flip1, 1);
     dudect_rounds_add(&f, flip2, 1);
     dudect_rounds_add(&f, flip3, 1);
@@ -538,10 +792,10 @@ static inline int dudect_rounds_self_test(void) {
 
     dudect_rounds_t g;
     dudect_rounds_init(&g, 4.5);
-    dudect_lane_result_t alt1[1] = {{"frost", 13.3, 0, 0}};
-    dudect_lane_result_t alt2[1] = {{"frost", -9.1, 0, 0}};
-    dudect_lane_result_t alt3[1] = {{"frost", 7.4, 0, 0}};
-    dudect_lane_result_t alt4[1] = {{"frost", -6.2, 0, 0}};
+    dudect_lane_result_t alt1[1] = {{.name = "frost", .t_value = 13.3, .delta_ns = 40.0}};
+    dudect_lane_result_t alt2[1] = {{.name = "frost", .t_value = -9.1, .delta_ns = -40.0}};
+    dudect_lane_result_t alt3[1] = {{.name = "frost", .t_value = 7.4, .delta_ns = 40.0}};
+    dudect_lane_result_t alt4[1] = {{.name = "frost", .t_value = -6.2, .delta_ns = -40.0}};
     dudect_rounds_add(&g, alt1, 1);
     dudect_rounds_add(&g, alt2, 1);
     dudect_rounds_add(&g, alt3, 1);
@@ -561,14 +815,16 @@ static inline int dudect_rounds_self_test(void) {
      * becomes a 2/3 failure if the third round trips it. */
     dudect_rounds_t e;
     dudect_rounds_init(&e, 4.5);
-    dudect_lane_result_t clean[2] = {{"a", 1.0, 0, 0}, {"info", 900.0, 1, 0}};
+    dudect_lane_result_t clean[2] = {{.name = "a", .t_value = 1.0},
+                                     {.name = "info", .t_value = 900.0, .is_info_only = 1}};
     dudect_rounds_add(&e, clean, 2);
     int quiet = !dudect_rounds_any_failure(&e);
     printf("  %-58s %s\n", "only an info lane tripped -> early exit still allowed",
            quiet ? "ok" : "MISMATCH");
     ok &= quiet;
 
-    dudect_lane_result_t tripped[2] = {{"a", 9.0, 0, 0}, {"info", 1.0, 1, 0}};
+    dudect_lane_result_t tripped[2] = {{.name = "a", .t_value = 9.0, .delta_ns = 40.0},
+                                       {.name = "info", .t_value = 1.0, .is_info_only = 1}};
     dudect_rounds_add(&e, tripped, 2);
     int busy = dudect_rounds_any_failure(&e);
     printf("  %-58s %s\n", "a strict lane tripped -> early exit refused",

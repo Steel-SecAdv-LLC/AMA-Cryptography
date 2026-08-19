@@ -101,13 +101,14 @@ static void ttest_update(ttest_ctx_t *ctx, int class_idx, double value) {
  * it as a leak would be a false diagnosis; neither is acceptable, so the
  * harness stops and says so.
  */
-static double ttest_finish(ttest_ctx_t *ctx, const char *name) {
+static dudect_measurement_t ttest_finish(ttest_ctx_t *ctx, const char *name) {
     double t = dudect_cropped_compute(ctx);
     int rung = ctx->winning_rung;
     size_t kept0 = ctx->winning_kept[0];
     size_t kept1 = ctx->winning_kept[1];
     size_t total0 = ctx->n[0];
     size_t total1 = ctx->n[1];
+    double delta = ctx->winning_delta;
     dudect_cropped_free(ctx);
 
     if (t == DUDECT_CROP_FAILED) {
@@ -120,9 +121,14 @@ static double ttest_finish(ttest_ctx_t *ctx, const char *name) {
     /* Diagnosis, printed whether the lane passes or fails: rung 0 means the
      * statistic came from the tail, a high rung means it came from the bulk,
      * and a reviewer reading a failure needs to know which. */
-    printf("    statistic from rung %d (kept %zu/%zu and %zu/%zu)\n", rung, kept0, total0, kept1,
-           total1);
-    return t;
+    /* The effect size travels with the statistic.  |t| alone is not
+     * actionable: se falls as 1/sqrt(n), so at these sample counts the
+     * statistic resolves differences well under one CPU cycle, and only the
+     * difference itself says whether a finding could matter.  See
+     * DUDECT_MIN_EFFECT_NS in dudect_rounds.h. */
+    printf("    statistic from rung %d (kept %zu/%zu and %zu/%zu, class0-class1 = %+.3f ns)\n",
+           rung, kept0, total0, kept1, total1, delta);
+    return (dudect_measurement_t){.t = t, .delta_ns = delta};
 }
 
 /**
@@ -143,7 +149,7 @@ static void random_bytes(uint8_t *buf, size_t len) {
  * A constant-time implementation should show no timing difference
  * regardless of where the difference occurs or whether buffers match.
  */
-static double test_consttime_memcmp(int iterations) {
+static dudect_measurement_t test_consttime_memcmp(int iterations) {
     ttest_ctx_t ctx;
     ttest_init(&ctx, (size_t)iterations);
 
@@ -202,7 +208,7 @@ static double test_consttime_memcmp(int iterations) {
  * A constant-time implementation should take the same time
  * regardless of the condition value.
  */
-static double test_consttime_swap(int iterations) {
+static dudect_measurement_t test_consttime_swap(int iterations) {
     ttest_ctx_t ctx;
     ttest_init(&ctx, (size_t)iterations);
 
@@ -240,7 +246,7 @@ static double test_consttime_swap(int iterations) {
  * A constant-time implementation should take the same time
  * regardless of the buffer contents.
  */
-static double test_secure_memzero(int iterations) {
+static dudect_measurement_t test_secure_memzero(int iterations) {
     ttest_ctx_t ctx;
     ttest_init(&ctx, (size_t)iterations);
 
@@ -283,7 +289,7 @@ static double test_secure_memzero(int iterations) {
 #define TABLE_SIZE 16
 #define ELEM_SIZE 8
 
-static double test_consttime_lookup(int iterations) {
+static dudect_measurement_t test_consttime_lookup(int iterations) {
     ttest_ctx_t ctx;
     ttest_init(&ctx, (size_t)iterations);
 
@@ -328,7 +334,7 @@ static double test_consttime_lookup(int iterations) {
  * A constant-time implementation should take the same time
  * regardless of the condition value.
  */
-static double test_consttime_copy(int iterations) {
+static dudect_measurement_t test_consttime_copy(int iterations) {
     ttest_ctx_t ctx;
     ttest_init(&ctx, (size_t)iterations);
 
@@ -378,25 +384,35 @@ static void print_result(const char *name, double t_value) {
 static int run_round(int iterations, int round_num, dudect_lane_result_t *lanes) {
     printf("--- Round %d ---\n", round_num);
 
-    double t_memcmp = test_consttime_memcmp(iterations);
-    double t_swap = test_consttime_swap(iterations);
-    double t_memzero = test_secure_memzero(iterations);
-    double t_lookup = test_consttime_lookup(iterations);
-    double t_copy = test_consttime_copy(iterations);
+    dudect_measurement_t m_memcmp  = test_consttime_memcmp(iterations);
+    dudect_measurement_t m_swap    = test_consttime_swap(iterations);
+    dudect_measurement_t m_memzero = test_secure_memzero(iterations);
+    dudect_measurement_t m_lookup  = test_consttime_lookup(iterations);
+    dudect_measurement_t m_copy    = test_consttime_copy(iterations);
 
     printf("\nResults (round %d):\n", round_num);
-    print_result("ama_consttime_memcmp ", t_memcmp);
-    print_result("ama_consttime_swap   ", t_swap);
-    print_result("ama_secure_memzero   ", t_memzero);
-    print_result("ama_consttime_lookup ", t_lookup);
-    print_result("ama_consttime_copy   ", t_copy);
+    print_result("ama_consttime_memcmp ", m_memcmp.t);
+    print_result("ama_consttime_swap   ", m_swap.t);
+    print_result("ama_secure_memzero   ", m_memzero.t);
+    print_result("ama_consttime_lookup ", m_lookup.t);
+    print_result("ama_consttime_copy   ", m_copy.t);
 
     int n = 0;
-    lanes[n++] = (dudect_lane_result_t){"ama_consttime_memcmp", t_memcmp,  0, 0};
-    lanes[n++] = (dudect_lane_result_t){"ama_consttime_swap",   t_swap,    0, 0};
-    lanes[n++] = (dudect_lane_result_t){"ama_secure_memzero",   t_memzero, 0, 0};
-    lanes[n++] = (dudect_lane_result_t){"ama_consttime_lookup", t_lookup,  0, 0};
-    lanes[n++] = (dudect_lane_result_t){"ama_consttime_copy",   t_copy,    0, 0};
+    lanes[n++] = (dudect_lane_result_t){.name = "ama_consttime_memcmp",
+                                       .t_value = m_memcmp.t,
+                                       .delta_ns = m_memcmp.delta_ns};
+    lanes[n++] = (dudect_lane_result_t){.name = "ama_consttime_swap",
+                                       .t_value = m_swap.t,
+                                       .delta_ns = m_swap.delta_ns};
+    lanes[n++] = (dudect_lane_result_t){.name = "ama_secure_memzero",
+                                       .t_value = m_memzero.t,
+                                       .delta_ns = m_memzero.delta_ns};
+    lanes[n++] = (dudect_lane_result_t){.name = "ama_consttime_lookup",
+                                       .t_value = m_lookup.t,
+                                       .delta_ns = m_lookup.delta_ns};
+    lanes[n++] = (dudect_lane_result_t){.name = "ama_consttime_copy",
+                                       .t_value = m_copy.t,
+                                       .delta_ns = m_copy.delta_ns};
 
     int all_within = 1;
     for (int i = 0; i < n; i++) {
@@ -503,10 +519,14 @@ int main(int argc, char *argv[]) {
     printf("\n=======================================================\n");
     if (passed) {
         printf("Overall: PASS - No timing leakage detected\n");
+        /* A lane that cleared the threshold but not the effect-size floor
+         * is printed here rather than absorbed into the pass. */
+        (void)dudect_rounds_print_sub_floor(&rounds);
     } else {
         printf("Overall: FAIL - the following lane(s) were over the threshold in "
                "a majority of %d round(s):\n", rounds.rounds_run);
         dudect_rounds_print_failures(&rounds);
+        (void)dudect_rounds_print_sub_floor(&rounds);
         printf("\nA lane over the threshold in a minority of rounds is reported NOISE\n");
         printf("above and does not fail the run.\n");
     }

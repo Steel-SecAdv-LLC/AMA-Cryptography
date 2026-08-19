@@ -60,8 +60,7 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: |
           sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
-          sudo apt-get update
-          sudo apt-get install -y cmake libssl-dev ${{ matrix.cc }} ${{ matrix.cxx }}
+          .github/scripts/apt-install.sh cmake libssl-dev ${{ matrix.cc }} ${{ matrix.cxx }}
 
       - name: Install dependencies (macOS)
         if: matrix.os == 'macos-latest'
@@ -183,8 +182,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
-          sudo apt-get update
-          sudo apt-get install -y cmake gcc-13 g++-13
+          .github/scripts/apt-install.sh cmake gcc-13 g++-13
 
       - name: Configure CMake (native PQC disabled)
         run: |
@@ -261,8 +259,7 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: |
           sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
-          sudo apt-get update
-          sudo apt-get install -y build-essential python3-dev cmake libssl-dev
+          .github/scripts/apt-install.sh build-essential python3-dev cmake libssl-dev
 
       - name: Install system dependencies (macOS)
         if: matrix.os == 'macos-latest'
@@ -353,8 +350,7 @@ jobs:
           set -euo pipefail
           if [ "${RUNNER_OS}" = "Linux" ]; then
             sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
-            sudo apt-get update
-            sudo apt-get install -y --no-install-recommends softhsm2
+            .github/scripts/apt-install.sh --no-install-recommends softhsm2
             test -f /usr/lib/softhsm/libsofthsm2.so
           else
             brew install softhsm
@@ -654,8 +650,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
-          sudo apt-get update
-          sudo apt-get install -y build-essential cmake libssl-dev
+          .github/scripts/apt-install.sh build-essential cmake libssl-dev
 
       - name: Build wheel via PEP 517 (isolated build env, signed integrity)
         # `python -m build --wheel` runs the build in an isolated env that

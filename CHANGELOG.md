@@ -31,6 +31,93 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > Compare `[4.0.0]` below, which is dated because it *is* released: tag
 > `v4.0.0`, published 2026-08-02.
 
+### Constant-time gate, second pass (2026-08-19) — significance is not effect size, a budget that cannot cover its own schedule, and one apt fix that reached 1 of 38 sites
+
+Running the converted dudect suite on CI produced three findings, none of them
+about cryptographic code.
+
+**The verdict was decided by measurement precision, not by effect size.**
+`t = (m0 - m1) / se` and `se` falls as `1/sqrt(n)`, so for any difference that
+is not exactly zero |t| grows without bound — significance says how well a
+difference was *resolved*, not how large it is. With the cropped statistic at
+100,000 measurements that stopped being academic:
+
+| lane | \|t\| | difference | verdict |
+|---|---|---|---|
+| AES-GCM tag verify | 6.27 | +0.199 ns | FAILED |
+| Ascon-AEAD128 encrypt | 21.88 | +0.596 ns | FAILED |
+| agent binding check | 41.72 | −1.141 ns | FAILED |
+| secp256k1 scalar multiplication | 1.44 | −35.200 ns | passed |
+| X25519 scalarmult batch×4 | 2.03 | −78.135 ns | passed |
+| SLH-DSA-SHA2-256f sign | 2.14 | +53,932.078 ns | passed |
+
+The lanes that failed are the most precisely measured, not the ones with the
+largest difference — by five orders of magnitude the other way. Every failing
+difference is between a fraction of a cycle and about two cycles. And they are
+not properties of the code: in the *same* workflow run, on a second runner,
+the same binary read `Ascon-AEAD128 encrypt` at −2.87 (clean) and the binding
+lane's excursions pointing the other way. A difference that reverses between
+two machines executing identical instructions is a property of the machines.
+This repository had already identified it and recorded it in
+`.github/workflows/dudect.yml`: data-operand-dependent execution — what Intel's
+DOITM and ARM's PSTATE.DIT exist to control — against retired-instruction
+counts identical across all eight input classes, cross-class delta 0, noise
+floor 0.
+
+So a lane now fails only if it is significant **and** its per-class difference
+reaches `DUDECT_MIN_EFFECT_NS` (2 ns). The floor is set from measurement in
+both directions: above every artefact observed (largest 1.141 ns) and below
+every real mechanism (a mispredicted branch is 7–10 ns, an L1 miss 30–50 ns,
+one extra AES round ~4 ns, and the early-exit `memcmp` this statistic was
+calibrated against moves the mean by hundreds of ns). For scale, the Python
+POST oracle in `ama_cryptography/_self_test.py` has always applied this same
+discipline with a 50 ns floor, citing the same runner behaviour — this one is
+25× stricter. Measured directly against the canary this
+statistic was calibrated on — a textbook early-exit `memcmp` over 64 bytes,
+10 repetitions of 50,000 measurements on a quiet host — the leak reads
+|t| = 412–481 with |difference| = 22.4 ns (over threshold 10/10), clearing the
+floor by 11×, while `ama_consttime_memcmp` reads |t| ≤ 3.2 with
+|difference| = 1.8 ns (0/10). That 1.8 ns is the apparatus's noise floor
+measured a second way, and it puts 2 ns at the right order of magnitude from
+the other side. A sub-floor excursion is **not** reported as a pass: it gets
+its own `SUB-FLOOR` verdict, prints its difference, and names the
+deterministic instruction-count gates that own that range. Ten self-test cases pin the
+boundary, using the observed CI values verbatim, and pin that 8 ns and 500 ns
+differences are still `LEAK`, that direction disagreement and harness faults
+still outrank the floor, and that a harness supplying no effect size can never
+fail a build on its own.
+
+**A timeout budget that could not cover the schedule its own verdict rule
+demands.** `test_dudect` runs up to `MAX_ROUNDS` rounds and refuses the early
+exit once any lane has tripped, but the Utility and X25519 jobs gave it 300 s
+while a round of 100,000 measurements over 27 lanes takes about 100 s. So any
+single trip guaranteed the alarm would fire mid-round, and every lane after it
+was recorded as a harness fault: one marginal excursion became **nine FAULT
+lanes** and an unreadable verdict. The three jobs running the same binary at
+the same measurement count had disagreed on the budget (300 / 600 / 900 s);
+they now agree at 600 s, with the job wall-clock raised to match. The harness
+also refuses to *start* a round the remaining budget cannot finish — it judges
+on the rounds it completed and says so, instead of walking into truncation.
+Mid-lane truncation remains a harness fault; that path is untouched. The
+decision is a pure function with seven self-test cases, because a real alarm
+cannot be scheduled deterministically between two rounds.
+
+**`apt-get` hangs, and the fix had reached one of thirty-eight call sites.**
+`868c354` diagnosed an apt hang that consumed a job's whole `timeout-minutes`
+and got it cancelled — failing an aggregating gate on a commit whose every
+real check passed — and fixed it with a retry written inline in one step. On a
+later push three of the other thirty-seven hung at once: Cppcheck (10 min),
+Validate fuzz dictionaries (15), Fuzz Core Primitives/fuzz_aes_gcm (20), while
+sibling jobs finished the same step in 11 seconds. `Static Analysis Gate` and
+`Fuzzing Gate` both went red for it. A fix applied to one of thirty-eight
+identical sites is a sample, not a fix. The policy now lives in
+`.github/scripts/apt-install.sh`, every apt call in all 14 workflows goes
+through it, and `tools/check_apt_retry.py` fails the build if one does not.
+The retry cannot mask a real failure: the final attempt is unbounded and
+unguarded, so an unavailable package still fails the job — pinned by a test,
+along with the executable bit that a missing `chmod +x` would turn into
+"Permission denied" on every job.
+
 ### Constant-time gate (2026-08-19) — the red Ascon lane was the harness, and the threshold was never calibrated
 
 `dudect - Legacy Harnesses` failed on `191befb` with `Ascon-AEAD128 encrypt`
@@ -100,10 +187,15 @@ sd = 4.1 ns over ~22,000 samples per class, a standard error near 0.04 ns, and
 crosses the threshold on about 0.2 ns. Without the effect size a reviewer
 cannot tell that from an exploitable difference; with it, the informational
 AES-GCM decrypt-branch lane reads +29,893 ns and the constant-time lanes read
-±0.2 ns. No effect-size floor was added to the pass/fail rule: a
-secret-dependent cache line is a real leak at sub-nanosecond scale, and a
-floor large enough to suppress the artefact would have suppressed that too.
-The artefact is removed by experimental design instead.
+±0.2 ns.
+
+> **Superseded on the same day.** This entry originally went on to say that no
+> effect-size floor was added to the pass/fail rule, on the reasoning that a
+> secret-dependent cache line is a real leak at sub-nanosecond scale. Running
+> the converted suite on CI falsified the premise: on shared runners the
+> apparatus cannot resolve that range at all, and the reported effect sizes
+> made it visible for the first time. The floor, and the evidence for it, are
+> in the entry below.
 
 `CONSTANT_TIME_VERIFICATION.md`, `docs/constant-time-testing.md`,
 `tests/c/dudect/README.md`, `README.md` and `ENHANCED_FEATURES.md` are

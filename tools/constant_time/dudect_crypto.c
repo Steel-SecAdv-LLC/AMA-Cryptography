@@ -136,7 +136,7 @@ static void ttest_update(ttest_ctx_t *ctx, int class_idx, double value) {
  * produced no usable measurement aborts rather than returning a number:
  * t = 0.0 for an unmeasured lane reads as CLEAN, and reporting it as a leak
  * would be a false diagnosis. */
-static double ttest_finish(ttest_ctx_t *ctx, const char *name) {
+static dudect_measurement_t ttest_finish(ttest_ctx_t *ctx, const char *name) {
     double t = dudect_cropped_compute(ctx);
     int rung = ctx->winning_rung;
     size_t kept0 = ctx->winning_kept[0], kept1 = ctx->winning_kept[1];
@@ -160,7 +160,7 @@ static double ttest_finish(ttest_ctx_t *ctx, const char *name) {
      * cache line or extra round that produced it. */
     printf("    statistic from rung %d (kept %zu/%zu and %zu/%zu, class0-class1 = %+.3f ns)\n",
            rung, kept0, total0, kept1, total1, delta);
-    return t;
+    return (dudect_measurement_t){.t = t, .delta_ns = delta};
 }
 
 static void random_bytes(uint8_t *buf, size_t len) {
@@ -174,7 +174,7 @@ static void random_bytes(uint8_t *buf, size_t len) {
  * Class 0: sign with key derived from all-zero seed
  * Class 1: sign with key derived from all-0xFF seed
  * ------------------------------------------------------------------- */
-static double test_ed25519_sign(int iterations) {
+static dudect_measurement_t test_ed25519_sign(int iterations) {
     ttest_ctx_t ctx;
     ttest_init(&ctx, (size_t)iterations);
 
@@ -218,7 +218,7 @@ static double test_ed25519_sign(int iterations) {
  * Class 0: encrypt with all-zero key
  * Class 1: encrypt with all-0xFF key
  * ------------------------------------------------------------------- */
-static double test_aes_gcm_encrypt(int iterations) {
+static dudect_measurement_t test_aes_gcm_encrypt(int iterations) {
     ttest_ctx_t ctx;
     ttest_init(&ctx, (size_t)iterations);
 
@@ -298,7 +298,7 @@ static double test_aes_gcm_encrypt(int iterations) {
  * 15), so sensitivity to a real regression is preserved; only the artifact
  * is gone.
  * ------------------------------------------------------------------- */
-static double test_aes_gcm_tag_compare(int iterations) {
+static dudect_measurement_t test_aes_gcm_tag_compare(int iterations) {
     ttest_ctx_t ctx;
     ttest_init(&ctx, (size_t)iterations);
 
@@ -359,7 +359,7 @@ static double test_aes_gcm_tag_compare(int iterations) {
  * Class 0: decrypt with correct tag (full CTR pass)
  * Class 1: decrypt with incorrect tag (early-exit at consttime_memcmp)
  * ------------------------------------------------------------------- */
-static double test_aes_gcm_decrypt_branch(int iterations) {
+static dudect_measurement_t test_aes_gcm_decrypt_branch(int iterations) {
     ttest_ctx_t ctx;
     ttest_init(&ctx, (size_t)iterations);
 
@@ -408,7 +408,7 @@ static double test_aes_gcm_decrypt_branch(int iterations) {
  * Class 0: HKDF with all-zero IKM
  * Class 1: HKDF with all-0xFF IKM
  * ------------------------------------------------------------------- */
-static double test_hkdf(int iterations) {
+static dudect_measurement_t test_hkdf(int iterations) {
     ttest_ctx_t ctx;
     ttest_init(&ctx, (size_t)iterations);
 
@@ -471,7 +471,7 @@ static double test_hkdf(int iterations) {
  * idiom, so no lane depends on its operation being slow enough to hide a
  * measurement artifact.
  * ------------------------------------------------------------------- */
-static double test_sha3_256(int iterations) {
+static dudect_measurement_t test_sha3_256(int iterations) {
     ttest_ctx_t ctx;
     ttest_init(&ctx, (size_t)iterations);
 
@@ -512,7 +512,7 @@ static double test_sha3_256(int iterations) {
  * introduced a table or a secret-dependent branch.
  * ------------------------------------------------------------------- */
 
-static double test_ascon_aead_encrypt(int iterations) {
+static dudect_measurement_t test_ascon_aead_encrypt(int iterations) {
     ttest_ctx_t ctx;
     ttest_init(&ctx, (size_t)iterations);
 
@@ -566,7 +566,7 @@ static double test_ascon_aead_encrypt(int iterations) {
     return ttest_finish(&ctx, "test_ascon_aead_encrypt");
 }
 
-static double test_ascon_tag_compare(int iterations) {
+static dudect_measurement_t test_ascon_tag_compare(int iterations) {
     ttest_ctx_t ctx;
     ttest_init(&ctx, (size_t)iterations);
 
@@ -611,7 +611,7 @@ static double test_ascon_tag_compare(int iterations) {
     return ttest_finish(&ctx, "test_ascon_tag_compare");
 }
 
-static double test_ascon_hash256(int iterations) {
+static dudect_measurement_t test_ascon_hash256(int iterations) {
     ttest_ctx_t ctx;
     ttest_init(&ctx, (size_t)iterations);
 
@@ -660,26 +660,26 @@ static void print_result_info(const char *name, double t_value) {
 static int run_round(int iterations, int round_num, dudect_lane_result_t *lanes) {
     printf("\n--- Round %d ---\n", round_num);
 
-    double t_ed25519     = test_ed25519_sign(iterations);
-    double t_aes_enc     = test_aes_gcm_encrypt(iterations);
-    double t_aes_tagcmp  = test_aes_gcm_tag_compare(iterations);
-    double t_aes_decbr   = test_aes_gcm_decrypt_branch(iterations);
-    double t_hkdf        = test_hkdf(iterations);
-    double t_sha3        = test_sha3_256(iterations);
-    double t_ascon_enc   = test_ascon_aead_encrypt(iterations);
-    double t_ascon_tag   = test_ascon_tag_compare(iterations);
-    double t_ascon_hash  = test_ascon_hash256(iterations);
+    dudect_measurement_t m_ed25519    = test_ed25519_sign(iterations);
+    dudect_measurement_t m_aes_enc    = test_aes_gcm_encrypt(iterations);
+    dudect_measurement_t m_aes_tagcmp = test_aes_gcm_tag_compare(iterations);
+    dudect_measurement_t m_aes_decbr  = test_aes_gcm_decrypt_branch(iterations);
+    dudect_measurement_t m_hkdf       = test_hkdf(iterations);
+    dudect_measurement_t m_sha3       = test_sha3_256(iterations);
+    dudect_measurement_t m_ascon_enc  = test_ascon_aead_encrypt(iterations);
+    dudect_measurement_t m_ascon_tag  = test_ascon_tag_compare(iterations);
+    dudect_measurement_t m_ascon_hash = test_ascon_hash256(iterations);
 
     printf("\n  Results (round %d):\n", round_num);
-    print_result      ("Ed25519 sign           ", t_ed25519);
-    print_result      ("AES-GCM encrypt        ", t_aes_enc);
-    print_result      ("AES-GCM tag compare    ", t_aes_tagcmp);
-    print_result_info ("AES-GCM decrypt branch ", t_aes_decbr);
-    print_result      ("HKDF-SHA3-256          ", t_hkdf);
-    print_result      ("SHA3-256               ", t_sha3);
-    print_result      ("Ascon-AEAD128 encrypt  ", t_ascon_enc);
-    print_result      ("Ascon-AEAD128 tag cmp  ", t_ascon_tag);
-    print_result      ("Ascon-Hash256          ", t_ascon_hash);
+    print_result      ("Ed25519 sign           ", m_ed25519.t);
+    print_result      ("AES-GCM encrypt        ", m_aes_enc.t);
+    print_result      ("AES-GCM tag compare    ", m_aes_tagcmp.t);
+    print_result_info ("AES-GCM decrypt branch ", m_aes_decbr.t);
+    print_result      ("HKDF-SHA3-256          ", m_hkdf.t);
+    print_result      ("SHA3-256               ", m_sha3.t);
+    print_result      ("Ascon-AEAD128 encrypt  ", m_ascon_enc.t);
+    print_result      ("Ascon-AEAD128 tag cmp  ", m_ascon_tag.t);
+    print_result      ("Ascon-Hash256          ", m_ascon_hash.t);
 
     /* The AES-GCM "decrypt branch" test is informational by design — the
      * decrypt path skips CTR-mode plaintext recovery on tag failure (which
@@ -687,15 +687,42 @@ static int run_round(int iterations, int round_num, dudect_lane_result_t *lanes)
      * forged ciphertext).  The tag-compare test (test 3a) is the actual
      * side-channel-bearing measurement and IS counted in pass/fail. */
     int n = 0;
-    lanes[n++] = (dudect_lane_result_t){"Ed25519 sign",           t_ed25519,    0, 0};
-    lanes[n++] = (dudect_lane_result_t){"AES-GCM encrypt",        t_aes_enc,    0, 0};
-    lanes[n++] = (dudect_lane_result_t){"AES-GCM tag compare",    t_aes_tagcmp, 0, 0};
-    lanes[n++] = (dudect_lane_result_t){"AES-GCM decrypt branch", t_aes_decbr,  1, 0};
-    lanes[n++] = (dudect_lane_result_t){"HKDF-SHA3-256",          t_hkdf,       0, 0};
-    lanes[n++] = (dudect_lane_result_t){"SHA3-256",               t_sha3,       0, 0};
-    lanes[n++] = (dudect_lane_result_t){"Ascon-AEAD128 encrypt",  t_ascon_enc,  0, 0};
-    lanes[n++] = (dudect_lane_result_t){"Ascon-AEAD128 tag cmp",  t_ascon_tag,  0, 0};
-    lanes[n++] = (dudect_lane_result_t){"Ascon-Hash256",          t_ascon_hash, 0, 0};
+    lanes[n++] = (dudect_lane_result_t){.name = "Ed25519 sign",
+                                       .t_value = m_ed25519.t,
+                                       .is_info_only = 0,
+                                       .delta_ns = m_ed25519.delta_ns};
+    lanes[n++] = (dudect_lane_result_t){.name = "AES-GCM encrypt",
+                                       .t_value = m_aes_enc.t,
+                                       .is_info_only = 0,
+                                       .delta_ns = m_aes_enc.delta_ns};
+    lanes[n++] = (dudect_lane_result_t){.name = "AES-GCM tag compare",
+                                       .t_value = m_aes_tagcmp.t,
+                                       .is_info_only = 0,
+                                       .delta_ns = m_aes_tagcmp.delta_ns};
+    lanes[n++] = (dudect_lane_result_t){.name = "AES-GCM decrypt branch",
+                                       .t_value = m_aes_decbr.t,
+                                       .is_info_only = 1,
+                                       .delta_ns = m_aes_decbr.delta_ns};
+    lanes[n++] = (dudect_lane_result_t){.name = "HKDF-SHA3-256",
+                                       .t_value = m_hkdf.t,
+                                       .is_info_only = 0,
+                                       .delta_ns = m_hkdf.delta_ns};
+    lanes[n++] = (dudect_lane_result_t){.name = "SHA3-256",
+                                       .t_value = m_sha3.t,
+                                       .is_info_only = 0,
+                                       .delta_ns = m_sha3.delta_ns};
+    lanes[n++] = (dudect_lane_result_t){.name = "Ascon-AEAD128 encrypt",
+                                       .t_value = m_ascon_enc.t,
+                                       .is_info_only = 0,
+                                       .delta_ns = m_ascon_enc.delta_ns};
+    lanes[n++] = (dudect_lane_result_t){.name = "Ascon-AEAD128 tag cmp",
+                                       .t_value = m_ascon_tag.t,
+                                       .is_info_only = 0,
+                                       .delta_ns = m_ascon_tag.delta_ns};
+    lanes[n++] = (dudect_lane_result_t){.name = "Ascon-Hash256",
+                                       .t_value = m_ascon_hash.t,
+                                       .is_info_only = 0,
+                                       .delta_ns = m_ascon_hash.delta_ns};
 
     int all_pass = 1;
     for (int i = 0; i < n; i++) {
@@ -768,6 +795,9 @@ int main(int argc, char *argv[]) {
     printf("\n=======================================================\n");
     if (passed) {
         printf("Overall: PASS - No unexpected timing leakage in crypto primitives\n");
+        /* A lane that cleared the threshold but not the effect-size floor
+         * is printed here rather than absorbed into the pass. */
+        (void)dudect_rounds_print_sub_floor(&rounds);
         printf("Note: AES-GCM \"decrypt branch\" timing is informational only —\n");
         printf("      the bad-tag path skips CTR-mode decrypt by design, which is\n");
         printf("      the correct behaviour (do not release plaintext on forgery).\n");
@@ -777,6 +807,7 @@ int main(int argc, char *argv[]) {
         printf("Overall: FAIL - the following lane(s) were over the threshold in "
                "a majority of %d round(s):\n", rounds.rounds_run);
         dudect_rounds_print_failures(&rounds);
+        (void)dudect_rounds_print_sub_floor(&rounds);
         printf("\nA lane over the threshold in a minority of rounds is reported NOISE\n");
         printf("above and does not fail the run.\n");
     }

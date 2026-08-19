@@ -65,8 +65,7 @@ jobs:
       if: runner.os == 'Linux'
       run: |
         sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
-        sudo apt-get update
-        sudo apt-get install -y build-essential cmake
+        .github/scripts/apt-install.sh build-essential cmake
 
     - name: Install system dependencies (Windows)
       if: runner.os == 'Windows'
@@ -131,8 +130,7 @@ jobs:
       if: runner.os == 'Linux'
       run: |
         sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
-        sudo apt-get update
-        sudo apt-get install -y --no-install-recommends softhsm2
+        .github/scripts/apt-install.sh --no-install-recommends softhsm2
         test -f /usr/lib/softhsm/libsofthsm2.so
         command -v softhsm2-util
 
@@ -586,6 +584,28 @@ jobs:
       # missing input file, so it cannot decay into a no-op.
       run: |
         python tools/check_dudect_class_staging.py
+
+    - name: "Every apt call goes through the bounded-retry helper"
+      # apt-get hangs on hosted runners.  When it does the step consumes its
+      # job's whole timeout-minutes and the job is CANCELLED — and a cancelled
+      # dependency is not a success, so an aggregating gate goes red on a
+      # commit whose every real check passed.
+      #
+      # This was diagnosed once already (868c354) and fixed inline, in one of
+      # thirty-eight apt call sites.  On a later push three of the other
+      # thirty-seven hung at once — Cppcheck (10 min), Validate fuzz
+      # dictionaries (15), Fuzz Core Primitives/fuzz_aes_gcm (20) — taking
+      # `Static Analysis Gate` and `Fuzzing Gate` down with them while sibling
+      # jobs finished the same step in 11 seconds.  A fix applied to one of
+      # thirty-eight identical sites is a sample, not a fix.
+      #
+      # The policy now lives in .github/scripts/apt-install.sh and this gate
+      # keeps it there.  tests/test_apt_retry_gate.py pins both halves,
+      # including the one that matters most: the retry still fails the job
+      # when a package is genuinely unavailable, so it can never turn a real
+      # failure into a green run.
+      run: |
+        python tools/check_apt_retry.py
 
   docs-build:
     # Run sphinx-build with -W on every PR / push so any docstring-format
@@ -1175,8 +1195,7 @@ jobs:
     - name: Install system dependencies
       run: |
         sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
-        sudo apt-get update
-        sudo apt-get install -y build-essential cmake util-linux
+        .github/scripts/apt-install.sh build-essential cmake util-linux
 
     - name: Capture runner CPU class
       id: cpu_class
@@ -1301,8 +1320,7 @@ jobs:
     - name: Install build dependencies
       run: |
         sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
-        sudo apt-get update
-        sudo apt-get install -y build-essential cmake
+        .github/scripts/apt-install.sh build-essential cmake
 
     - name: Build C library
       run: |
@@ -1388,8 +1406,7 @@ jobs:
       if: steps.cpu.outputs.have_avx512 == '1'
       run: |
         sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
-        sudo apt-get update
-        sudo apt-get install -y cmake build-essential
+        .github/scripts/apt-install.sh cmake build-essential
 
     - name: Configure with AVX-512 enabled
       if: steps.cpu.outputs.have_avx512 == '1'
@@ -1446,8 +1463,7 @@ jobs:
 
     - name: Install build toolchain
       run: |
-        sudo apt-get update
-        sudo apt-get install -y build-essential cmake
+        .github/scripts/apt-install.sh build-essential cmake
 
     - name: Build donna backend (x86-64 default)
       run: |

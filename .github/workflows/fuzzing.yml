@@ -60,8 +60,7 @@ jobs:
         run: |
           # Remove non-essential third-party apt repos that may cause 403 errors on runners
           sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
-          sudo apt-get update
-          sudo apt-get install -y cmake clang libclang-rt-dev
+          .github/scripts/apt-install.sh cmake clang libclang-rt-dev
 
       - name: Build fuzz targets
         run: |
@@ -141,8 +140,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
-          sudo apt-get update
-          sudo apt-get install -y cmake clang libclang-rt-18-dev
+          .github/scripts/apt-install.sh cmake clang libclang-rt-18-dev
 
       - name: Build one fuzz target (dictionary parser host)
         run: |
@@ -193,8 +191,7 @@ jobs:
         run: |
           # Remove non-essential third-party apt repos that may cause 403 errors on runners
           sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
-          sudo apt-get update
-          sudo apt-get install -y cmake clang libclang-rt-dev
+          .github/scripts/apt-install.sh cmake clang libclang-rt-dev
 
       - name: Build fuzz targets
         run: |
@@ -278,8 +275,7 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
-          sudo apt-get update
-          sudo apt-get install -y cmake build-essential
+          .github/scripts/apt-install.sh cmake build-essential
 
       - name: Build the native library
         # The parsers call into the native backend for key derivation and the
@@ -346,8 +342,7 @@ jobs:
         run: |
           # Remove non-essential third-party apt repos that may cause 403 errors on runners
           sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
-          sudo apt-get update
-          sudo apt-get install -y cmake clang libclang-rt-dev
+          .github/scripts/apt-install.sh cmake clang libclang-rt-dev
 
       - name: Build with constant-time AES
         run: |
