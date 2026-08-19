@@ -375,21 +375,45 @@ static inline dudect_lane_verdict_t dudect_lane_verdict(
         return DUDECT_LANE_NOISE;
     if (lane->rounds_failed * 2 <= rounds_run)
         return DUDECT_LANE_NOISE;
-    if (lane->trips_positive > 0 && lane->trips_negative > 0)
-        return DUDECT_LANE_UNUSABLE;
-    /* Significant in a majority of rounds AND consistently signed — the shape
-     * of a leak.  The remaining question is whether it is large enough to be
-     * one.  See DUDECT_MIN_EFFECT_NS: below the floor this apparatus cannot
-     * separate a leak from data-operand-dependent execution on the host, and
-     * the deterministic instruction-count gates own that range. */
     /* Defence in depth for callers that build evidence directly rather than
-     * through dudect_rounds_add(): no effect size behind a majority of
-     * consistently-signed trips is a harness fault, never a pass.  See the
-     * ingestion-side check for why t != 0 implies delta != 0. */
+     * through dudect_rounds_add(): no effect size behind a majority of trips
+     * is a harness fault, never a pass.  This is checked BEFORE the floor and
+     * before the direction rule, because both of them read a number the
+     * harness has to have supplied.  See the ingestion-side check for why
+     * t != 0 implies delta != 0. */
     if (lane->max_trip_delta_ns == 0.0)
         return DUDECT_LANE_FAULT;
+
+    /* The floor is a PRECONDITION for adjudication, not a tie-breaker, so it
+     * is applied before the direction rule rather than after it.
+     *
+     * The direction rule's premise is that a real leak keeps a fixed sign
+     * because the statistic grows with measurements rather than oscillating.
+     * That premise presupposes the effect is RESOLVABLE.  Below
+     * DUDECT_MIN_EFFECT_NS it is not, and the consequence is not theoretical:
+     * `Ascon-AEAD128 encrypt` read 3/3 consistently signed at +0.596 ns on one
+     * CI runner and 2+/1- at +0.607 ns on another — same binary, same
+     * measurement count, same effect size to within 2%, opposite verdicts
+     * (SUB_FLOOR vs UNUSABLE, green vs red).  A sign-consistency test applied
+     * to a quantity whose sign is not reproducible is a coin flip, and a gate
+     * that decides a build on a coin flip is worse than one that abstains.
+     *
+     * Ordering it this way costs no sensitivity to a real leak.  The floor is
+     * set below every mechanism that can produce one — a mispredicted branch
+     * is 7-10 ns, an L1 miss 30-50 ns, one extra AES round ~4 ns, an
+     * early-exit memcmp hundreds — so at or above 2 ns direction disagreement
+     * still yields DUDECT_LANE_UNUSABLE and still fails the build, exactly as
+     * before.  What changes is confined to the range the floor already
+     * declares unadjudicable, where the deterministic instruction-count gates
+     * are the instrument: `ama_ascon_aead128_encrypt` retires 32,069,814
+     * instructions identically across all eight key classes (cross-class delta
+     * 0, noise floor 0), and `ama_agent_binding_check` 612,810,230 identically
+     * whether it accepts or rejects. */
     if (fabs(lane->max_trip_delta_ns) < DUDECT_MIN_EFFECT_NS)
         return DUDECT_LANE_SUB_FLOOR;
+
+    if (lane->trips_positive > 0 && lane->trips_negative > 0)
+        return DUDECT_LANE_UNUSABLE;
     return DUDECT_LANE_LEAK;
 }
 
@@ -520,6 +544,16 @@ static inline int dudect_rounds_print_sub_floor(const dudect_rounds_t *r) {
                "    instruction-count gates own this range and measure it exactly.\n",
                lane->name, fabs(lane->worst_t), lane->rounds_failed, r->rounds_run,
                lane->max_trip_delta_ns);
+        /* Say so when the excursions also disagreed on direction, rather than
+         * printing it identically to a consistently-signed one.  Above the
+         * floor that disagreement is DUDECT_LANE_UNUSABLE and fails the build;
+         * here it is a second, independent indication that the measurement is
+         * the host rather than the code, and the reader should see it. */
+        if (lane->trips_positive > 0 && lane->trips_negative > 0) {
+            printf("    The excursions also DISAGREED on direction (%d+/%d-), which\n"
+                   "    at or above the floor would be a red run on its own.\n",
+                   lane->trips_positive, lane->trips_negative);
+        }
     }
     return shown;
 }
@@ -661,19 +695,23 @@ static inline int dudect_rounds_self_test(void) {
     ok &= dudect_rounds_verdict_case("3/3 trips, signs 2+/1- -> UNUSABLE (not a leak)",
                              LANE(.name = "strict", .rounds_failed = 3,
                                   .trips_positive = 2, .trips_negative = 1,
-                                  .worst_t = 13.3), 3, DUDECT_LANE_UNUSABLE);
+                                  .worst_t = 13.3,
+                                  .max_trip_delta_ns = 40.0), 3, DUDECT_LANE_UNUSABLE);
     ok &= dudect_rounds_verdict_case("3/3 trips, signs 1+/2- -> UNUSABLE (not a leak)",
                              LANE(.name = "strict", .rounds_failed = 3,
                                   .trips_positive = 1, .trips_negative = 2,
-                                  .worst_t = -9.0), 3, DUDECT_LANE_UNUSABLE);
+                                  .worst_t = -9.0,
+                                  .max_trip_delta_ns = -40.0), 3, DUDECT_LANE_UNUSABLE);
     ok &= dudect_rounds_verdict_case("4/4 trips, signs 2+/2- -> UNUSABLE",
                              LANE(.name = "strict", .rounds_failed = 4,
                                   .trips_positive = 2, .trips_negative = 2,
-                                  .worst_t = 9.0), 4, DUDECT_LANE_UNUSABLE);
+                                  .worst_t = 9.0,
+                                  .max_trip_delta_ns = 40.0), 4, DUDECT_LANE_UNUSABLE);
     ok &= dudect_rounds_verdict_case("2/3 trips, signs 1+/1- -> UNUSABLE",
                              LANE(.name = "strict", .rounds_failed = 2,
                                   .trips_positive = 1, .trips_negative = 1,
-                                  .worst_t = 9.0), 3, DUDECT_LANE_UNUSABLE);
+                                  .worst_t = 9.0,
+                                  .max_trip_delta_ns = 40.0), 3, DUDECT_LANE_UNUSABLE);
     ok &= dudect_rounds_verdict_case("1/3 trips -> NOISE regardless of sign",
                              LANE(.name = "strict", .rounds_failed = 1,
                                   .trips_negative = 1, .worst_t = -9.0), 3,
@@ -682,7 +720,8 @@ static inline int dudect_rounds_self_test(void) {
     ok &= dudect_rounds_case("an UNUSABLE lane still fails the run",
                              LANE(.name = "strict", .rounds_failed = 3,
                                   .trips_positive = 2, .trips_negative = 1,
-                                  .worst_t = 13.3), 3, 1);
+                                  .worst_t = 13.3,
+                                  .max_trip_delta_ns = 40.0), 3, 1);
     /* The effect-size floor.  It decides the same shape of evidence the
      * direction rule does — a majority of consistently-signed excursions —
      * and separates "large enough for this apparatus to adjudicate" from
@@ -725,16 +764,44 @@ static inline int dudect_rounds_self_test(void) {
                                   .trips_positive = 3, .worst_t = 9.0,
                                   .max_trip_delta_ns = DUDECT_MIN_EFFECT_NS), 3,
                              DUDECT_LANE_LEAK);
-    /* The floor never rescues a lane the other rules already condemn. */
-    ok &= dudect_rounds_verdict_case("direction disagreement outranks the floor",
+    /* The floor is a PRECONDITION, so it is reached before the direction rule.
+     * Below it the sign is not reproducible — the same lane, same binary and
+     * same measurement count read 3/3 one-signed at +0.596 ns on one CI runner
+     * and 2+/1- at +0.607 ns on another — so a sign-consistency test there
+     * decides nothing. */
+    ok &= dudect_rounds_verdict_case("below the floor, direction disagreement is SUB_FLOOR",
                              LANE(.name = "strict", .rounds_failed = 3,
                                   .trips_positive = 2, .trips_negative = 1,
                                   .worst_t = 41.7, .max_trip_delta_ns = 0.5), 3,
-                             DUDECT_LANE_UNUSABLE);
-    ok &= dudect_rounds_case("...and that is still a red run",
+                             DUDECT_LANE_SUB_FLOOR);
+    ok &= dudect_rounds_case("...and that does not fail the run",
                              LANE(.name = "strict", .rounds_failed = 3,
                                   .trips_positive = 2, .trips_negative = 1,
-                                  .worst_t = 41.7, .max_trip_delta_ns = 0.5), 3, 1);
+                                  .worst_t = 41.7, .max_trip_delta_ns = 0.5), 3, 0);
+    /* The observed shape that forced the ordering: 3/3 at +0.607 ns, 2+/1-. */
+    ok &= dudect_rounds_verdict_case("3/3 2+/1- at +0.607 ns (Ascon lane, observed) -> SUB_FLOOR",
+                             LANE(.name = "strict", .rounds_failed = 3,
+                                  .trips_positive = 2, .trips_negative = 1,
+                                  .worst_t = 21.4230, .max_trip_delta_ns = 0.607), 3,
+                             DUDECT_LANE_SUB_FLOOR);
+    /* At and above the floor the direction rule is untouched: an excursion big
+     * enough to be a mechanism is big enough for its sign to mean something. */
+    ok &= dudect_rounds_verdict_case("at the floor, direction disagreement is UNUSABLE",
+                             LANE(.name = "strict", .rounds_failed = 3,
+                                  .trips_positive = 2, .trips_negative = 1,
+                                  .worst_t = 41.7,
+                                  .max_trip_delta_ns = DUDECT_MIN_EFFECT_NS), 3,
+                             DUDECT_LANE_UNUSABLE);
+    ok &= dudect_rounds_case("...and that IS still a red run",
+                             LANE(.name = "strict", .rounds_failed = 3,
+                                  .trips_positive = 2, .trips_negative = 1,
+                                  .worst_t = 41.7,
+                                  .max_trip_delta_ns = DUDECT_MIN_EFFECT_NS), 3, 1);
+    ok &= dudect_rounds_verdict_case("well above the floor, disagreement is UNUSABLE",
+                             LANE(.name = "strict", .rounds_failed = 3,
+                                  .trips_positive = 2, .trips_negative = 1,
+                                  .worst_t = 41.7, .max_trip_delta_ns = 40.0), 3,
+                             DUDECT_LANE_UNUSABLE);
     ok &= dudect_rounds_verdict_case("a harness fault outranks the floor",
                              LANE(.name = "strict", .rounds_failed = 1, .fatal = 1,
                                   .max_trip_delta_ns = 0.001), 3,

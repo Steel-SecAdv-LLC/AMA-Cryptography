@@ -648,6 +648,46 @@ jobs:
           python tools/check_ghash_constant_time.py \
             --lib build/lib/libama_cryptography_test.a --target ed25519-sign
 
+      - name: Ascon-AEAD128 encryption instruction count must not depend on the key
+        # The wall-clock lane `Ascon-AEAD128 encrypt (key-independent)` in
+        # tests/c/test_dudect.c crosses the threshold on shared runners with a
+        # per-class difference around +0.6 ns — under a quarter of the 2 ns
+        # effect-size floor — and the SAME binary at the SAME measurement count
+        # read 3/3 consistently signed (+0.596 ns) on one runner and 2+/1- on
+        # another (+0.607 ns).  A quantity whose sign is not reproducible
+        # between two machines executing identical instructions is not a
+        # property of the code.
+        #
+        # dudect declines to adjudicate that range on the stated grounds that
+        # these deterministic gates own it.  For Ascon ENCRYPT that was not
+        # true: `ascon-hash` covers Ascon-Hash256 and `aead-verify` covers the
+        # AEAD accept/reject pair, and neither covers this call — the exemption
+        # rested on coverage that did not exist.  This is that coverage.
+        #
+        # Measured here: 32,069,814 retired instructions, byte-identical across
+        # all eight key classes — cross-class delta 0, noise floor 0.
+        run: |
+          python tools/check_ghash_constant_time.py \
+            --lib build/lib/libama_cryptography_test.a --target ascon-encrypt
+
+      - name: Agent binding check instruction count must not depend on the verdict
+        # Same gap, same remedy, for the other lane observed reaching the
+        # sub-floor range: `agent binding check (verdict-independent)` read
+        # |t| = 41.72 in 3 of 3 rounds at -1.141 ns on a shared runner.
+        #
+        # Here the two classes are not two secrets but two VERDICTS — an
+        # authorization that verifies against one whose first byte is flipped.
+        # A verdict oracle is the leak that matters for this call: if rejecting
+        # costs less than accepting, an attacker learns whether a forged
+        # authorization was close.  That is the same defect `aead-verify` pins
+        # for the ciphers.
+        #
+        # Measured here: 612,810,230 retired instructions, byte-identical
+        # whether the check accepts or rejects — delta 0, noise floor 0.
+        run: |
+          python tools/check_ghash_constant_time.py \
+            --lib build/lib/libama_cryptography_test.a --target agent-binding
+
       - name: secp256k1 ECDSA instruction count must not depend on the key
         # Catches a branch on a secret in the scalar field arithmetic — the
         # Montgomery extra-reduction leak (Walter & Thompson, CT-RSA 2001).

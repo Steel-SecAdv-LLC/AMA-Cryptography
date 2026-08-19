@@ -143,6 +143,74 @@ waiting for its first caller. It is removed, the same way `6a22aa2` removed
 header has no per-lane verdict: a lane reports a *measurement*, and
 `dudect_rounds.h` is the single authority on what one means.
 
+### Constant-time gate, third pass (2026-08-19) — the floor's own claim was not true, and the deterministic instrument's subject was chosen by a stopwatch
+
+Running the second pass on CI produced one red lane and, chasing it, three
+findings — none of them in cryptographic code, all of them in the instruments.
+
+**A sub-floor excursion was being adjudicated by a rule that cannot resolve
+it.** `Ascon-AEAD128 encrypt` failed as `UNUSABLE` — over threshold in 3 of 3
+rounds with the signs disagreeing 2+/1− — at a per-class difference of
+**+0.607 ns**, under a third of the 2 ns floor. The previous run of the *same
+binary at the same measurement count* read that lane 3/3 **consistently
+signed** at **+0.596 ns**: same effect size to within 2%, opposite verdicts,
+green versus red. The direction rule's premise is that a real leak keeps a
+fixed sign because the statistic grows with measurements rather than
+oscillating — and that presupposes the effect is *resolvable*. Below the floor
+it is not, so a sign-consistency test there is a coin flip, and a gate that
+decides a build on a coin flip is worse than one that abstains. The floor is
+therefore applied as a **precondition for adjudication**, before the direction
+rule rather than after it. Sensitivity to a real leak is unchanged: the floor
+sits below every mechanism that can produce one, so at or above 2 ns direction
+disagreement is still `UNUSABLE` and still fails the build — pinned by cases at
+the floor exactly, and well above it. A sub-floor excursion whose signs
+disagreed now says so in the report instead of printing identically to a
+consistently-signed one.
+
+**The exemption's justification was not true for the lanes using it.**
+`SUB-FLOOR` is a pass because the deterministic instruction-count gates own
+that range. For two of the lanes observed reaching it, nothing did:
+`ascon-hash` covers Ascon-Hash256 and `aead-verify` covers the AEAD
+accept/reject pair, and neither covers `ama_ascon_aead128_encrypt`; nothing at
+all covered `ama_agent_binding_check`, which read |t| = 41.72 in 3/3 rounds at
+−1.141 ns. Rather than soften the claim, the coverage is added. Ascon-AEAD128
+encryption retires **32,069,814** instructions byte-identically across all
+eight key classes. The agent binding check retires **612,810,230** identically
+whether it accepts a valid authorization or rejects a corrupted one — a verdict
+oracle there would be the same defect `aead-verify` exists to pin for the
+ciphers. Cross-class delta 0 and noise floor 0 in both cases; both run in
+`dudect.yml` on every trigger.
+
+**The deterministic instrument was neither deterministic nor pinned to a
+subject.** `tools/check_ghash_constant_time.py` exists so a constant-time
+question can be answered without statistics and without a quiet machine. But
+on its first call into the dispatch table the library runs the SIMD-vs-scalar
+auto-tune — a best-of-N **wall-clock** benchmark of the Keccak, Kyber-NTT and
+Dilithium-NTT kernels — and every driver was paying it:
+
+- It costs **6,950,175,736** retired instructions against the **319,561** the
+  same program retires with it off, so 99.995% of every count was the
+  benchmark. And because its loop counts are clock-driven it is not
+  reproducible: two runs on one identical input differed by 9 instructions, and
+  eight runs of identical inputs spread over 27 — a wall-clock measurement
+  smuggled into the baseline of the instrument that exists to avoid one.
+- Worse, it chose the **subject**. On the host this was measured on, the
+  auto-tune found the SIMD Keccak slower than the scalar one (12,724,814 ns vs
+  1,063,456 ns) and reverted the slot, so the gate measured
+  `keccak_f1600 -> scalar (BMI1/BMI2)` at 19,416 instructions per SHA3-256
+  call; with the auto-tune off the same program measures
+  `keccak_f1600 -> SIMD` at 146,748. Which kernel any past run of this gate
+  actually tested was decided by a stopwatch reading on whatever machine
+  happened to run it, and was recorded nowhere.
+
+The drivers now run with `AMA_DISPATCH_NO_AUTOTUNE=1`, which makes the count
+bit-identical run to run and pins the subject to the library's default SIMD
+wiring, and **the report prints that wiring** so the evidence states what it
+covers. All eight targets pass under it with a noise floor of 0. This is a
+deliberate narrowing and is not claimed as more than it is: the scalar fallback
+is not covered by these counts — `AMA_DISPATCH_ONLY` pins individual slots, and
+the scalar AES-GCM invariance job covers that path directly.
+
 **A timeout budget that could not cover the schedule its own verdict rule
 demands.** `test_dudect` runs up to `MAX_ROUNDS` rounds and refuses the early
 exit once any lane has tripped, but the Utility and X25519 jobs gave it 300 s
