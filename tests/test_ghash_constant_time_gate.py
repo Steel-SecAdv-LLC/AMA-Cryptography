@@ -6,7 +6,7 @@ This gate shipped without any. INVARIANT-2 states the consequence in as many
 words — *"a gate with no negative control has not been shown to be a gate at
 all"* — and the consequence arrived on schedule.
 
-``_instruction_count`` parsed callgrind's ``I refs:`` line and never looked at
+``_measure`` (then named ``_instruction_count``) parsed callgrind's ``I refs:`` line and never looked at
 the driver's exit status. Callgrind prints that line for any process it
 supervises, including one that dies in the dynamic loader before reaching
 ``main``. Handing ``--lib`` a shared object rather than the static archive did
@@ -24,7 +24,7 @@ of a gate that gates nothing.
 So the properties pinned here are, in order of what actually failed:
 
 1. **A driver that did not run is INCONCLUSIVE, never PASS.** Both the
-   exit-status rule in ``_instruction_count`` and its propagation to the exit
+   exit-status rule in ``_measure`` and its propagation to the exit
    code of ``main``.
 2. **The verdict arithmetic.** Above threshold fails, below passes, and an
    unusable noise floor is inconclusive rather than either.
@@ -177,7 +177,9 @@ class TestADriverThatDidNotRunIsNotAMeasurement:
                 returncode=0,
                 stdout="",
                 # --cache-sim silently unavailable: I refs present, misses not.
-                stderr="==1== I   refs:      12,345\n==1== D   refs:      1,000 (1,000 rd + 0 wr)\n",
+                stderr=(
+                    "==1== I   refs:      12,345\n" "==1== D   refs:      1,000 (1,000 rd + 0 wr)\n"
+                ),
             ),
         )
         assert tool._measure(tmp_path / "driver", "A", tmp_path) is None

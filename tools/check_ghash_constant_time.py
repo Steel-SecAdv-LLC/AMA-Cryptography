@@ -1380,7 +1380,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         # A shared library named on the command line links fine but is not
         # found at load time without an rpath, which is how this check came to
         # report PASS over a driver that never started.  The exit-status check
-        # in _instruction_count() now catches that; embedding the rpath means
+        # in _measure() now catches that; embedding the rpath means
         # the caller does not hit it in the first place.  CI passes the static
         # archive, for which this is a no-op.
         if ".so" in args.lib.name or args.lib.suffix in (".dylib", ".so"):
