@@ -156,6 +156,106 @@ class TestSourceCheck:
         assert "refusing to report a clean scan of nothing" in violations[0].detail
 
 
+class TestCSourceCheck:
+    """The C tree is where the only vendor includes in this repository are.
+
+    ``src/c/vendor/ed25519-donna`` carries an OpenSSL SHA-512 and an OpenSSL
+    ``RAND_bytes`` as the ``#else`` arm of its hash and RNG selection.  They
+    are not compiled because ``src/c/ed25519_donna_shim.c`` defines
+    ``ED25519_REFHASH`` and ``ED25519_CUSTOMRANDOM`` first — two lines in one
+    file, previously verified by nothing, since the Python source scan has
+    never read ``src/c``.
+    """
+
+    @staticmethod
+    def _tree(tmp_path: Path, *, shim: str, vendor_header: str) -> Path:
+        root = tmp_path / "src" / "c"
+        (root / "vendor" / "donna").mkdir(parents=True)
+        (root / "vendor" / "donna" / "ed25519-hash.h").write_text(vendor_header)
+        (root / "shim.c").write_text(shim)
+        return tmp_path
+
+    def test_the_real_tree_is_clean(self) -> None:
+        assert gate.check_c_source(REPO_ROOT / "src" / "c", REPO_ROOT) == []
+
+    def test_a_vendor_include_outside_the_vendored_tree_is_flagged(self, tmp_path: Path) -> None:
+        root = tmp_path / "src" / "c"
+        root.mkdir(parents=True)
+        (root / "ama_thing.c").write_text("#include <openssl/evp.h>\n")
+        violations = gate.check_c_source(root, tmp_path)
+        assert any("OpenSSL" in v.detail for v in violations)
+
+    @pytest.mark.parametrize(
+        ("include", "vendor"),
+        [
+            ("<sodium.h>", "libsodium"),
+            ("<wolfssl/ssl.h>", "wolfSSL"),
+            ("<botan/ffi.h>", "Botan"),
+            ("<nettle/sha2.h>", "Nettle"),
+            ("<gcrypt.h>", "libgcrypt"),
+            ("<mbedtls/sha512.h>", "mbedTLS"),
+            ("<psa/crypto.h>", "mbedTLS"),
+        ],
+    )
+    def test_every_forbidden_vendor_is_recognised_in_c(
+        self, tmp_path: Path, include: str, vendor: str
+    ) -> None:
+        """A vendor with no C include root would be invisible to this check."""
+        root = tmp_path / "src" / "c"
+        root.mkdir(parents=True)
+        (root / "ama_thing.c").write_text(f"#include {include}\n")
+        violations = gate.check_c_source(root, tmp_path)
+        assert any(vendor in v.detail for v in violations)
+
+    def test_a_missing_disabling_macro_is_flagged(self, tmp_path: Path) -> None:
+        """The mutation that matters: the shim stops disabling the arm.
+
+        Verified against the real gate on the real tree by removing
+        ``#define ED25519_REFHASH`` from ``ed25519_donna_shim.c``, which the
+        gate rejects.
+        """
+        root = REPO_ROOT / "src" / "c"
+        shim = (root / "ed25519_donna_shim.c").read_text()
+        mutated = shim.replace("#define ED25519_REFHASH", "/* removed */")
+        assert mutated != shim, "the shim no longer defines the macro this test mutates"
+
+        staged = tmp_path / "src" / "c"
+        staged.mkdir(parents=True)
+        (staged / "ed25519_donna_shim.c").write_text(mutated)
+        for rel in gate.VENDORED_FALLBACK_INCLUDES:
+            src = REPO_ROOT / rel
+            dst = tmp_path / rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            dst.write_text(src.read_text())
+        violations = gate.check_c_source(staged, tmp_path)
+        assert any("ED25519_REFHASH" in v.detail for v in violations)
+
+    def test_a_stale_inventory_entry_is_flagged(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A declared fallback that no longer exists weakens the check."""
+        monkeypatch.setitem(
+            gate.VENDORED_FALLBACK_INCLUDES,
+            "src/c/vendor/absent/file.h",
+            ("OpenSSL", "SOME_MACRO"),
+        )
+        violations = gate.check_c_source(REPO_ROOT / "src" / "c", REPO_ROOT)
+        assert any("no such include was found" in v.detail for v in violations)
+
+    def test_an_empty_c_tree_is_not_a_clean_scan(self, tmp_path: Path) -> None:
+        root = tmp_path / "src" / "c"
+        root.mkdir(parents=True)
+        violations = gate.check_c_source(root, tmp_path)
+        assert violations
+        assert "refusing to report a clean scan of nothing" in violations[0].detail
+
+    def test_the_shim_still_defines_both_macros(self) -> None:
+        """Stated directly, because it is the whole boundary."""
+        shim = (REPO_ROOT / "src" / "c" / "ed25519_donna_shim.c").read_text()
+        assert "#define ED25519_REFHASH" in shim
+        assert "#define ED25519_CUSTOMRANDOM" in shim
+
+
 class TestShippedPackageIsClean:
     """The property itself, on the tree as committed."""
 

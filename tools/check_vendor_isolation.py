@@ -2,7 +2,7 @@
 # Copyright (C) 2025-2026 Steel Security Advisors LLC
 # SPDX-License-Identifier: Apache-2.0
 """
-AMA Cryptography — Vendor Isolation Gate (INVARIANT-1, enforced four ways)
+AMA Cryptography — Vendor Isolation Gate (INVARIANT-1, enforced five ways)
 
 INVARIANT-1 says no third-party cryptographic implementation may be linked,
 imported or called by the shipped library.  Until this script existed, that
@@ -36,6 +36,21 @@ Nothing checked the four things that actually decide the question:
     puts an OpenSSL binding in the process, and no ``import`` statement in
     this repository names it.
 
+``the C tree``
+    Where the only ``#include <openssl/...>`` lines in this repository
+    actually live.  The vendored ed25519-donna carries an OpenSSL SHA-512 and
+    an OpenSSL ``RAND_bytes`` as the ``#else`` arm of its hash and RNG
+    selection — the arm taken when nothing else is defined.  They are not
+    compiled, because ``src/c/ed25519_donna_shim.c`` defines
+    ``ED25519_REFHASH`` and ``ED25519_CUSTOMRANDOM`` first; two lines in one
+    file are the whole of what stands between the shipped library and OpenSSL
+    doing its Ed25519 hashing and its randomness.  Nothing verified those
+    lines were still there: the source scan below reads ``ama_cryptography``
+    and has never looked at ``src/c`` at all.  A build that lost them would
+    take the OpenSSL arm, and whether that then fails to link depends on
+    whether the headers happen to be installed on the machine — which is not
+    a boundary, it is a coincidence.
+
 ``the comparator boundary``
     ``benchmarks/`` is explicitly authorised to invoke peer implementations —
     that is what a comparative benchmark *is* — and ``benchmarks/requirements-
@@ -44,7 +59,7 @@ Nothing checked the four things that actually decide the question:
     comparators on their side of the line was that no package module happened
     to import ``benchmarks``.
 
-All four are checked here, and the binary formats are parsed in-tree with
+All five are checked here, and the binary formats are parsed in-tree with
 ``struct`` rather than by shelling out to ``readelf`` / ``otool`` /
 ``dumpbin``: this gate must run on every platform the wheels are built on,
 including runners where those tools are absent, and a gate that silently
@@ -130,6 +145,9 @@ class Vendor(NamedTuple):
     library_names: tuple[str, ...]
     #: Exported-symbol prefixes that identify it in a dynamic symbol table.
     symbol_prefixes: tuple[str, ...]
+    #: Header roots that identify it in a C `#include` — `<openssl/sha.h>`,
+    #: `<sodium.h>`, and so on.  Empty for a vendor with no C surface.
+    include_roots: tuple[str, ...] = ()
 
 
 VENDORS: tuple[Vendor, ...] = (
@@ -144,42 +162,49 @@ VENDORS: tuple[Vendor, ...] = (
         modules=frozenset({"OpenSSL", "cryptography"}),
         library_names=("libcrypto", "libssl", "libeay32", "ssleay32"),
         symbol_prefixes=("EVP_", "OPENSSL_", "SSL_", "X509_", "RAND_bytes"),
+        include_roots=("openssl",),
     ),
     Vendor(
         name="libsodium",
         modules=frozenset({"nacl"}),
         library_names=("libsodium",),
         symbol_prefixes=("sodium_", "crypto_sign_ed25519", "crypto_box_"),
+        include_roots=("sodium",),
     ),
     Vendor(
         name="wolfSSL",
         modules=frozenset({"wolfssl", "wolfcrypt"}),
         library_names=("libwolfssl", "wolfssl"),
         symbol_prefixes=("wolfSSL_", "wc_"),
+        include_roots=("wolfssl",),
     ),
     Vendor(
         name="Botan",
         modules=frozenset({"botan", "botan2", "botan3"}),
         library_names=("libbotan",),
         symbol_prefixes=("botan_",),
+        include_roots=("botan",),
     ),
     Vendor(
         name="Nettle",
         modules=frozenset({"nettle"}),
         library_names=("libnettle", "libhogweed"),
         symbol_prefixes=("nettle_",),
+        include_roots=("nettle",),
     ),
     Vendor(
         name="libgcrypt",
         modules=frozenset({"gcrypt"}),
         library_names=("libgcrypt",),
         symbol_prefixes=("gcry_",),
+        include_roots=("gcrypt",),
     ),
     Vendor(
         name="mbedTLS",
         modules=frozenset({"mbedtls"}),
         library_names=("libmbedcrypto", "libmbedtls", "libmbedx509"),
         symbol_prefixes=("mbedtls_",),
+        include_roots=("mbedtls", "psa"),
     ),
     # Not in the owner's forbidden list, but they are peer implementations
     # pinned by benchmarks/requirements-bench.txt and would be exactly as
@@ -205,6 +230,148 @@ class Violation(NamedTuple):
     check: str
     where: str
     detail: str
+
+
+# --------------------------------------------------------------------------
+# C source check
+# --------------------------------------------------------------------------
+#
+# The Python source check below scans the package.  It has never scanned
+# `src/c/`, which is where the only `#include <openssl/...>` lines in this
+# repository actually are: the vendored ed25519-donna carries OpenSSL arms for
+# its hash and its RNG, and both are the `#else` — the arm taken when no
+# alternative macro is defined.
+#
+#     ed25519-hash.h:197         #include <openssl/sha.h>     (SHA512_Init …)
+#     ed25519-randombytes.h:78   #include <openssl/rand.h>    (RAND_bytes)
+#
+# They are not compiled today, because `src/c/ed25519_donna_shim.c` defines
+# ED25519_REFHASH and ED25519_CUSTOMRANDOM before pulling the unit in.  That
+# is two lines in one file standing between the shipped library and OpenSSL
+# performing its Ed25519 hashing and its randomness — and until this check
+# existed, nothing verified they were still there.  A build that lost them
+# would take the OpenSSL arm; whether that then fails to link depends on
+# whether the headers happen to be installed, which is not a boundary.
+#
+# So the rule is positive rather than absentee: outside the vendored tree no
+# forbidden vendor header may be included at all, inside it every such
+# include must be a KNOWN fallback arm, and every in-tree translation unit
+# that compiles the vendored tree must define the macros that disable them.
+
+#: Vendored upstream files that legitimately carry a forbidden-vendor include
+#: in a fallback arm, and the macro that must be defined to avoid it.  A
+#: vendor include found anywhere else — or here but not listed — is a
+#: violation, so a new one cannot arrive unnoticed.
+VENDORED_FALLBACK_INCLUDES: dict[str, tuple[str, str]] = {
+    "src/c/vendor/ed25519-donna/ed25519-hash.h": ("OpenSSL", "ED25519_REFHASH"),
+    "src/c/vendor/ed25519-donna/ed25519-randombytes.h": ("OpenSSL", "ED25519_CUSTOMRANDOM"),
+}
+
+_C_INCLUDE_RE = re.compile(r"^\s*#\s*include\s*[<\"](?P<path>[^>\"]+)[>\"]", re.M)
+_C_DEFINE_RE = re.compile(r"^\s*#\s*define\s+(?P<name>[A-Za-z_]\w*)", re.M)
+
+
+def _c_sources(root: Path) -> list[Path]:
+    return sorted(list(root.rglob("*.c")) + list(root.rglob("*.h")))
+
+
+def _vendor_for_include(include_path: str) -> str | None:
+    head = include_path.split("/")[0]
+    stem = head[:-2] if head.endswith(".h") else head
+    for vendor in VENDORS:
+        for root in vendor.include_roots:
+            if stem == root:
+                return vendor.name
+    return None
+
+
+def check_c_source(c_root: Path, repo_root: Path) -> list[Violation]:
+    """No forbidden vendor may be reachable from the C tree."""
+    violations: list[Violation] = []
+    files = _c_sources(c_root)
+    if not files:
+        return [
+            Violation(
+                "c source",
+                str(c_root),
+                "no C sources found — refusing to report a clean scan of nothing",
+            )
+        ]
+
+    seen_fallbacks: set[str] = set()
+    for path in files:
+        rel = path.relative_to(repo_root).as_posix()
+        text = path.read_text(encoding="utf-8", errors="replace")
+        for match in _C_INCLUDE_RE.finditer(text):
+            vendor_name = _vendor_for_include(match.group("path"))
+            if vendor_name is None:
+                continue
+            line = text.count("\n", 0, match.start()) + 1
+            known = VENDORED_FALLBACK_INCLUDES.get(rel)
+            if known is not None and known[0] == vendor_name:
+                seen_fallbacks.add(rel)
+                continue
+            violations.append(
+                Violation(
+                    "c source",
+                    f"{rel}:{line}",
+                    f"includes <{match.group('path')}> — {vendor_name} may not perform "
+                    f"an internal operation. If this is a vendored upstream's fallback "
+                    f"arm, record it in VENDORED_FALLBACK_INCLUDES with the macro that "
+                    f"disables it, and make every translation unit that compiles the "
+                    f"vendored tree define that macro.",
+                )
+            )
+
+    for rel, (vendor_name, _macro) in VENDORED_FALLBACK_INCLUDES.items():
+        if rel not in seen_fallbacks:
+            violations.append(
+                Violation(
+                    "c source",
+                    rel,
+                    f"declared as carrying a {vendor_name} fallback arm, but no such "
+                    f"include was found. A stale entry here weakens the check: remove "
+                    f"it, or restore the file this gate is meant to be watching.",
+                )
+            )
+
+    required_macros = sorted({macro for _v, macro in VENDORED_FALLBACK_INCLUDES.values()})
+    compilers = [
+        path
+        for path in files
+        if "vendor" not in path.relative_to(repo_root).parts
+        and any(
+            "vendor/" in m.group("path")
+            for m in _C_INCLUDE_RE.finditer(path.read_text(encoding="utf-8", errors="replace"))
+        )
+    ]
+    if not compilers:
+        violations.append(
+            Violation(
+                "c source",
+                str(c_root),
+                "no translation unit includes the vendored tree, so the macros that "
+                "disable its forbidden-vendor arms are unverifiable. If the vendored "
+                "code is gone, remove VENDORED_FALLBACK_INCLUDES with it.",
+            )
+        )
+    for path in compilers:
+        rel = path.relative_to(repo_root).as_posix()
+        text = path.read_text(encoding="utf-8", errors="replace")
+        defined = {m.group("name") for m in _C_DEFINE_RE.finditer(text)}
+        for macro in required_macros:
+            if macro not in defined:
+                violations.append(
+                    Violation(
+                        "c source",
+                        rel,
+                        f"compiles the vendored tree without defining {macro}. Without "
+                        f"it the upstream takes its forbidden-vendor fallback arm, and "
+                        f"the boundary holds only by whichever headers happen to be "
+                        f"absent from the build machine.",
+                    )
+                )
+    return violations
 
 
 # --------------------------------------------------------------------------
@@ -1006,6 +1173,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument("--runtime", action="store_true", help="run only the runtime import check")
     parser.add_argument(
+        "--c-root",
+        type=Path,
+        default=Path("src/c"),
+        help="C source tree to scan (default: src/c)",
+    )
+    parser.add_argument(
         "--no-runtime",
         action="store_true",
         help="skip the runtime check (for trees with no built native library)",
@@ -1024,6 +1197,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     if selected_source:
         violations += check_source(args.package)
         ran.append(f"source ({args.package})")
+        violations += check_c_source(repo_root / args.c_root, repo_root)
+        ran.append(f"C source ({args.c_root})")
     if selected_build_config:
         violations += check_build_config(repo_root)
         ran.append("build config (CMake / setup.py link lines)")
