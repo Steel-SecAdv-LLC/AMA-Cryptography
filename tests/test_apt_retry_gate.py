@@ -64,7 +64,7 @@ def test_helper_exists_and_is_executable() -> None:
     assert os.access(HELPER_PATH, os.X_OK), "working tree copy is not executable"
 
     mode = subprocess.run(
-        ["git", "ls-files", "-s", str(HELPER_PATH.relative_to(REPO_ROOT))],
+        ["git", "ls-files", "-s", HELPER_PATH.relative_to(REPO_ROOT).as_posix()],
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
@@ -119,6 +119,26 @@ def test_gate_verdicts(line: str, expect_violation: bool, label: str) -> None:
 # --------------------------------------------------------------------------
 # The helper's own behaviour — the half that must never mask a failure
 # --------------------------------------------------------------------------
+#
+# These run on Linux only, and that is a statement about the subject rather
+# than a convenience: apt-install.sh drives `sudo`, `apt-get` and GNU
+# `timeout`, none of which exist on the Windows or macOS runners, and it is
+# invoked from Linux jobs exclusively.
+#
+# The first version of this file guarded them with `shutil.which("bash")`,
+# which is present on the Windows runners via Git Bash — so the guard did not
+# fire and all five failed with `[WinError 193] %1 is not a valid Win32
+# application`, taking every Windows job in two workflows down with them. The
+# script is now also invoked THROUGH bash rather than executed directly, so
+# the test does not depend on the OS honouring a shebang.
+#
+# The platform-independent assertions above — the gate's verdicts, the
+# helper's existence and its git-recorded executable bit — keep running
+# everywhere, because those are the properties that can break on any runner.
+_LINUX_ONLY = pytest.mark.skipif(
+    not sys.platform.startswith("linux") or shutil.which("bash") is None,
+    reason="apt-install.sh drives sudo/apt-get/timeout; only meaningful on Linux",
+)
 
 
 def _fake_sudo(tmp_path: Path) -> Path:
@@ -147,24 +167,24 @@ def _run_helper(tmp_path: Path, args: list[str], **env: str) -> subprocess.Compl
     e = dict(os.environ)
     e["PATH"] = f"{binroot}{os.pathsep}{e['PATH']}"
     e.update(env)
-    return subprocess.run([str(HELPER_PATH), *args], capture_output=True, text=True, env=e)
+    return subprocess.run(["bash", str(HELPER_PATH), *args], capture_output=True, text=True, env=e)
 
 
-@pytest.mark.skipif(shutil.which("bash") is None, reason="bash not available")
+@_LINUX_ONLY
 def test_helper_installs_on_the_happy_path(tmp_path: Path) -> None:
     r = _run_helper(tmp_path, ["cppcheck"])
     assert r.returncode == 0, r.stderr
     assert "cppcheck" in r.stdout
 
 
-@pytest.mark.skipif(shutil.which("bash") is None, reason="bash not available")
+@_LINUX_ONLY
 def test_helper_refuses_an_empty_package_list(tmp_path: Path) -> None:
     """A step that installs nothing silently stopped installing something."""
     r = _run_helper(tmp_path, [])
     assert r.returncode == 2
 
 
-@pytest.mark.skipif(shutil.which("bash") is None, reason="bash not available")
+@_LINUX_ONLY
 def test_helper_still_fails_when_the_package_is_unavailable(tmp_path: Path) -> None:
     """The property that makes the retry safe.
 
@@ -177,7 +197,7 @@ def test_helper_still_fails_when_the_package_is_unavailable(tmp_path: Path) -> N
     assert r.returncode != 0
 
 
-@pytest.mark.skipif(shutil.which("bash") is None, reason="bash not available")
+@_LINUX_ONLY
 def test_helper_retries_before_giving_up(tmp_path: Path) -> None:
     """Two bounded attempts, then one bare attempt whose failure is fatal."""
     r = _run_helper(
@@ -193,7 +213,7 @@ def test_helper_retries_before_giving_up(tmp_path: Path) -> None:
     assert "final attempt" in r.stdout
 
 
-@pytest.mark.skipif(shutil.which("bash") is None, reason="bash not available")
+@_LINUX_ONLY
 def test_helper_rejects_a_nonsense_attempt_count(tmp_path: Path) -> None:
     r = _run_helper(tmp_path, ["cmake"], APT_ATTEMPTS="0")
     assert r.returncode == 2

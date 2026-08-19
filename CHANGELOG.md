@@ -118,6 +118,20 @@ unguarded, so an unavailable package still fails the job — pinned by a test,
 along with the executable bit that a missing `chmod +x` would turn into
 "Permission denied" on every job.
 
+Those helper-behaviour tests were themselves guarded wrong on first writing,
+and the guard failed in the way guards usually do — by not firing. They asked
+`shutil.which("bash")`, which is truthy on the Windows runners because Git
+Bash is on `PATH`, so all five ran there, executed a `.sh` through the Windows
+loader and raised `[WinError 193] %1 is not a valid Win32 application`. Ten
+Windows jobs across two workflows went red on a commit whose other 5,373 tests
+passed. The guard now tests the platform it is actually making a claim about
+(`sys.platform` is Linux, *and* bash exists), and the helper is invoked
+*through* `bash` rather than executed directly, so the test no longer depends
+on the operating system honouring a shebang. The platform-independent
+assertions — the gate's verdicts, the helper's existence and its git-recorded
+`100755` mode — are unguarded and still run on every runner, because those are
+the properties that can break on any of them.
+
 ### Constant-time gate (2026-08-19) — the red Ascon lane was the harness, and the threshold was never calibrated
 
 `dudect - Legacy Harnesses` failed on `191befb` with `Ascon-AEAD128 encrypt`
