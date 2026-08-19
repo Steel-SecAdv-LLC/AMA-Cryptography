@@ -60,12 +60,7 @@ if str(_REPO_ROOT) not in sys.path:
 
 from tools import http_fetch  # noqa: E402 -- repo-root path insert above (FETCH-003)
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
-
-
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = _REPO_ROOT
 VECTORS_DIR = REPO_ROOT / "wycheproof_vectors"
 MANIFEST_PATH = VECTORS_DIR / "manifest.json"
 FILES_SUBDIR = "vectors"
