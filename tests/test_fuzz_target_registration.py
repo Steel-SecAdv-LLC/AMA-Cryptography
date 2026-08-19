@@ -116,6 +116,7 @@ def _tree(
     cmake: list[str],
     workflow: list[str],
     ossfuzz: list[str],
+    seeded: bool = True,
 ) -> Path:
     (tmp_path / "fuzz").mkdir()
     for name in harnesses:
@@ -123,6 +124,10 @@ def _tree(
             "int LLVMFuzzerTestOneInput(const uint8_t *d, size_t s) { return 0; }\n",
             encoding="utf-8",
         )
+        if seeded:
+            corpus = tmp_path / "fuzz" / "seed_corpus" / name
+            corpus.mkdir(parents=True)
+            (corpus / "seed-1.bin").write_bytes(b"\x00" * 40)
     entries = "\n".join(f"    {name}" for name in cmake)
     (tmp_path / "fuzz" / "CMakeLists.txt").write_text(
         f"set(FUZZ_CORE_TARGETS\n{entries}\n)\nset(FUZZ_PQC_TARGETS\n)\n",
@@ -170,6 +175,41 @@ def test_missing_from_cmake_is_reported(tmp_path: Path) -> None:
     failures = audit(root)
     assert len(failures) == 1
     assert "fuzz/CMakeLists.txt" in failures[0]
+
+
+def test_a_target_with_no_seed_corpus_is_reported(tmp_path: Path) -> None:
+    """The exact shape fuzz_ascon was in: registered everywhere, seeded nowhere.
+
+    The fuzz lanes guard corpus loading with `if [ -d ... ]`, so an absent
+    directory fails nothing and the campaign silently starts from zero.
+    """
+    root = _tree(
+        tmp_path,
+        harnesses=["fuzz_a"],
+        cmake=["fuzz_a"],
+        workflow=["fuzz_a"],
+        ossfuzz=["fuzz_a"],
+        seeded=False,
+    )
+    failures = audit(root)
+    assert len(failures) == 1
+    assert "seed_corpus/fuzz_a" in failures[0]
+
+
+def test_an_empty_seed_corpus_directory_is_reported(tmp_path: Path) -> None:
+    """A directory with no files loads exactly as much as no directory."""
+    root = _tree(
+        tmp_path,
+        harnesses=["fuzz_a"],
+        cmake=["fuzz_a"],
+        workflow=["fuzz_a"],
+        ossfuzz=["fuzz_a"],
+        seeded=False,
+    )
+    (root / "fuzz" / "seed_corpus" / "fuzz_a").mkdir(parents=True)
+    failures = audit(root)
+    assert len(failures) == 1
+    assert "seed_corpus/fuzz_a" in failures[0]
 
 
 def test_registry_naming_a_nonexistent_target_is_reported(tmp_path: Path) -> None:
