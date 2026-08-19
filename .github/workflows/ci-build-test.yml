@@ -800,7 +800,7 @@ jobs:
           echo "::warning::All 8 pull attempts for ${IMAGE} failed over ~340s; buildx setup will retry internally"
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c  # v4
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c  # v4.2.0
         with:
           # The base-image pulls (ubuntu:22.04, alpine:3.18) happen INSIDE the
           # BuildKit container, which does not share the runner's local image
@@ -833,7 +833,7 @@ jobs:
           password: ${{ env.DOCKERHUB_TOKEN }}
 
       - name: Build Ubuntu image
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7.3.0
         with:
           context: .
           file: docker/Dockerfile
@@ -844,7 +844,7 @@ jobs:
           cache-to: ${{ github.event_name == 'push' && 'type=gha,scope=ubuntu,mode=max' || '' }}
 
       - name: Build Alpine image
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7.3.0
         with:
           context: .
           file: docker/Dockerfile.alpine
