@@ -291,9 +291,17 @@ def test_apt_carries_its_own_acquire_timeouts(tmp_path: Path) -> None:
     """Bound the transfer inside apt, not only around it.
 
     An external kill turns a hang into a dead process; an acquire timeout turns
-    it into an ordinary, retriable apt failure with a real message. The final
-    attempt is unbounded in wall clock by design, so these are what stop it
-    hanging forever on a dead mirror.
+    it into an ordinary, retriable apt failure with a real message — the
+    difference between a job that reports what went wrong and one that reports
+    a dead process.
+
+    They are defence in depth rather than the bound. An earlier revision of
+    this docstring said the final attempt was "unbounded in wall clock by
+    design, so these are what stop it hanging forever"; that reasoning is
+    withdrawn, and the measurement that withdrew it is in the helper's own
+    header. `Acquire::*::Timeout` bounds a CONNECTION, not the operation, and
+    the dpkg configure phase carries none at all — so two jobs sat in this
+    script for twenty minutes and were cancelled. Every attempt is bounded now.
     """
     body = HELPER_PATH.read_text(encoding="utf-8")
     for opt in ("Acquire::http::Timeout", "Acquire::https::Timeout", "Acquire::Retries"):
@@ -326,8 +334,9 @@ def test_a_sigterm_ignoring_apt_is_actually_killed(tmp_path: Path) -> None:
 
     # `apt-get` that refuses to die on SIGTERM on its FIRST call, like apt
     # blocked in its http method child, and fails fast afterwards. The first
-    # call is the one under test; making later calls terminate keeps the final
-    # unbounded attempt from hanging this test the way it would hang a job.
+    # call is the one under test; making later calls terminate keeps the test
+    # short — the final attempt is bounded too, but by the remaining budget,
+    # which in a real job is minutes.
     marker = tmp_path / "apt_was_called"
     apt = binroot / "apt-get"
     apt.write_text(
@@ -370,6 +379,97 @@ def test_a_sigterm_ignoring_apt_is_actually_killed(tmp_path: Path) -> None:
     )
     # And the genuine failure still fails: the retry did not paper over it.
     assert proc.returncode != 0, "an apt that never succeeded must fail the job"
+
+
+@_LINUX_ONLY
+def test_the_total_budget_bounds_the_whole_script(tmp_path: Path) -> None:
+    """The property the previous version did not have.
+
+    Bounding every attempt but the last is not a bound: the last one inherits
+    whatever time the job has left, and a stalled mirror spends all of it. On
+    the run that prompted this, `dudect - X25519 AVX2 4-way` and `Scalar
+    AES-GCM instruction-count invariance` each sat in this script for 20
+    minutes and were cancelled at their job timeouts with every later step
+    skipped, taking `Constant-Time Gate` red — while sibling jobs on the same
+    commit finished the same step in 14 seconds to 5 minutes.
+
+    So this drives a fake apt that hangs on EVERY call, and requires the script
+    to give up inside its own stated budget rather than run until something
+    else stops it.
+    """
+    binroot = tmp_path / "bin"
+    binroot.mkdir(exist_ok=True)
+
+    sudo = binroot / "sudo"
+    sudo.write_text('#!/usr/bin/env bash\nexec "$@"\n')
+    sudo.chmod(sudo.stat().st_mode | stat.S_IXUSR)
+
+    # Hangs every time, and ignores SIGTERM, which is what a wedged apt does.
+    apt = binroot / "apt-get"
+    apt.write_text('#!/usr/bin/env bash\ntrap "" TERM\nsleep 600\n')
+    apt.chmod(apt.stat().st_mode | stat.S_IXUSR)
+
+    env = dict(os.environ)
+    env["PATH"] = f"{binroot}{os.pathsep}{env['PATH']}"
+    env.update(
+        APT_ATTEMPT_TIMEOUT="2",
+        APT_ATTEMPT_KILL_AFTER="1",
+        APT_ATTEMPTS="3",
+        APT_TOTAL_BUDGET="12",
+    )
+    start = time.monotonic()
+    proc = subprocess.run(
+        ["bash", str(HELPER_PATH), "cppcheck"],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=180,
+    )
+    elapsed = time.monotonic() - start
+
+    assert proc.returncode != 0, "an apt that never succeeded must fail the step"
+    # The budget is 12s; allow generous slack for the kill escalation and
+    # process teardown, but nothing like the 600s the fake would take.
+    assert elapsed < 90, (
+        f"took {elapsed:.1f}s against a 12s budget and a 600s fake — the total "
+        f"bound is not being enforced"
+    )
+
+
+def test_the_final_attempt_is_not_unbounded(tmp_path: Path) -> None:
+    """No arm of the helper may run apt without a `timeout`.
+
+    Textual, deliberately: the behavioural test above proves the bound holds
+    for one configuration, and this proves there is no second path around it.
+    """
+    body = HELPER_PATH.read_text(encoding="utf-8")
+    # Join backslash continuations first: the bound and the command it wraps
+    # are one shell statement split across lines, and reading them separately
+    # would report the second half as unbounded.
+    joined = body.replace("\\\n", " ")
+    for line in joined.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#") or "apt-get" not in stripped:
+            continue
+        assert "timeout" in stripped, f"apt-get without a timeout bound: {stripped!r}"
+    assert 'attempt_install ""' not in body, "an unbounded attempt arm is still reachable"
+
+
+def test_the_total_budget_fits_inside_the_shortest_job_that_uses_it() -> None:
+    """Read the shipped default, so raising it without re-checking fails here.
+
+    The shortest job budget among the callers is 3 minutes (`Constant-Time
+    Gate` itself); the shortest that actually installs packages is 10 minutes
+    (Cppcheck). Half of that, at most, may go to dependencies — otherwise a
+    stall leaves nothing for the work.
+    """
+    body = HELPER_PATH.read_text(encoding="utf-8")
+    match = re.search(r'TOTAL_BUDGET="\$\{APT_TOTAL_BUDGET:-(\d+)\}"', body)
+    assert match is not None, "could not find the total budget default"
+    assert int(match.group(1)) <= 600, (
+        f"total budget {match.group(1)}s leaves too little of a 10-minute job "
+        f"for the work the job exists to do"
+    )
 
 
 def test_the_bounded_phase_fits_inside_a_job_budget() -> None:

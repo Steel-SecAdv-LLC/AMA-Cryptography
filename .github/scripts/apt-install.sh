@@ -63,9 +63,37 @@
 #     usual case is an honest error rather than a process that has to be shot.
 #
 # Environment:
+# WHY THE FINAL ATTEMPT IS BOUNDED TOO
+# ------------------------------------
+# The version above bounded every attempt but the last, and left the last
+# unbounded on the reasoning that apt's own acquire timeouts would stop it
+# hanging forever.  They do not.  `Acquire::http::Timeout` bounds a single
+# CONNECTION, not the operation: apt can retry across mirrors and packages,
+# and the dpkg configure phase carries no acquire timeout at all.
+#
+# Measured, on the run that prompted this: two jobs on one commit
+# (`dudect - X25519 AVX2 4-way` and `Scalar AES-GCM instruction-count
+# invariance`) sat in this script for 20 minutes and were cancelled at their
+# job timeouts, with every later step skipped — while sibling jobs on the same
+# commit finished the same step in 14 seconds to 5 minutes.  `Constant-Time
+# Gate` then went red, because a cancelled dependency is not a success.  That
+# is the identical shape described at the top of this file, in the same
+# script written to prevent it: the bounded phase was fixed and the tail was
+# not.
+#
+# So the script now has a TOTAL wall-clock budget it cannot exceed.  Each
+# attempt, including the last, is bounded by whichever is smaller — the
+# per-attempt bound or what remains of the budget — and exhausting the budget
+# is an explicit non-zero exit with a diagnosis.  A stalled mirror therefore
+# produces a FAILED step that says what happened, inside a bound the job can
+# plan around, instead of a cancelled job that reads as "this gate could not
+# decide".
+#
+# Environment:
 #   APT_ATTEMPT_TIMEOUT   seconds to bound each non-final attempt (default 120)
 #   APT_ATTEMPT_KILL_AFTER  seconds after SIGTERM before SIGKILL (default 30)
-#   APT_ATTEMPTS          total attempts including the final bare one (default 3)
+#   APT_ATTEMPTS          total attempts including the final one (default 3)
+#   APT_TOTAL_BUDGET      seconds this script may consume in total (default 600)
 
 set -euo pipefail
 
@@ -83,6 +111,21 @@ fi
 ATTEMPT_TIMEOUT="${APT_ATTEMPT_TIMEOUT:-120}"
 KILL_AFTER="${APT_ATTEMPT_KILL_AFTER:-30}"
 ATTEMPTS="${APT_ATTEMPTS:-3}"
+
+# 600, against the 20-minute job budget the shortest caller has: half the job
+# for its dependencies is already generous, and it leaves the other half for
+# the build and the measurement the job exists to perform.  The jobs that were
+# cancelled had spent the WHOLE 20 minutes here and run none of their steps.
+TOTAL_BUDGET="${APT_TOTAL_BUDGET:-600}"
+SCRIPT_START="$SECONDS"
+
+# Seconds left of TOTAL_BUDGET; never negative.
+budget_left() {
+    local used=$((SECONDS - SCRIPT_START))
+    local left=$((TOTAL_BUDGET - used))
+    if [ "$left" -lt 0 ]; then left=0; fi
+    echo "$left"
+}
 
 # Bound the transfer inside apt as well as around it.  These make a stalled
 # mirror an ordinary apt failure — retriable, with a real message — instead of
@@ -106,40 +149,53 @@ fi
 sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list \
            /etc/apt/sources.list.d/azure-cli.list 2>/dev/null || true
 
+# Every attempt is bounded — there is no unbounded arm to fall through to.
+# --kill-after is the load-bearing flag: SIGTERM is a request, SIGKILL is not.
+# Without it a wedged apt outlives its own timeout.
 attempt_install() {
     local bound="$1"
     shift
-    if [ -n "$bound" ]; then
-        # --kill-after is the load-bearing flag: SIGTERM is a request, SIGKILL
-        # is not.  Without it a wedged apt outlives its own timeout.
+    sudo timeout --kill-after="$KILL_AFTER" "$bound" \
+        apt-get "${APT_NET_OPTS[@]}" update &&
         sudo timeout --kill-after="$KILL_AFTER" "$bound" \
-            apt-get "${APT_NET_OPTS[@]}" update &&
-            sudo timeout --kill-after="$KILL_AFTER" "$bound" \
-                apt-get "${APT_NET_OPTS[@]}" install -y "$@"
-    else
-        # The final attempt is deliberately unbounded in WALL CLOCK so a genuine
-        # failure is reported rather than truncated, but it still carries apt's
-        # own acquire timeouts so it cannot hang forever on a dead mirror.
-        sudo apt-get "${APT_NET_OPTS[@]}" update &&
-            sudo apt-get "${APT_NET_OPTS[@]}" install -y "$@"
-    fi
+            apt-get "${APT_NET_OPTS[@]}" install -y "$@"
 }
 
-# Every attempt but the last is bounded and its failure is recoverable.
+# Every attempt but the last is recoverable; all of them, including the last,
+# are bounded by whichever is smaller — the per-attempt bound or what is left
+# of the total budget.
 final=$((ATTEMPTS - 1))
 for attempt in $(seq 1 "$final"); do
-    if attempt_install "$ATTEMPT_TIMEOUT" "$@"; then
+    left="$(budget_left)"
+    if [ "$left" -le 0 ]; then
+        break
+    fi
+    bound="$ATTEMPT_TIMEOUT"
+    if [ "$bound" -gt "$left" ]; then bound="$left"; fi
+    if attempt_install "$bound" "$@"; then
         echo "apt-install.sh: installed on attempt ${attempt}: $*"
         exit 0
     fi
     delay=$((attempt * 15))
+    left="$(budget_left)"
+    if [ "$delay" -gt "$left" ]; then delay="$left"; fi
     echo "apt-install.sh: attempt ${attempt} failed or exceeded" \
-         "${ATTEMPT_TIMEOUT}s (SIGKILL ${KILL_AFTER}s later if it ignored" \
+         "${bound}s (SIGKILL ${KILL_AFTER}s later if it ignored" \
          "SIGTERM); retrying in ${delay}s"
-    sleep "$delay"
+    if [ "$delay" -gt 0 ]; then sleep "$delay"; fi
 done
 
-# The last attempt is unbounded and unguarded: if apt is genuinely broken or a
-# package genuinely does not exist, this is where the job finds out.
-echo "apt-install.sh: final attempt (its failure fails this job): $*"
-attempt_install "" "$@"
+# The last attempt gets whatever remains.  If nothing remains, say so and fail
+# — a job that is told its dependencies could not be installed within the
+# budget can act on that; a job cancelled at its own timeout cannot.
+left="$(budget_left)"
+if [ "$left" -le 0 ]; then
+    echo "apt-install.sh: exhausted its ${TOTAL_BUDGET}s total budget without" \
+         "installing: $*" >&2
+    echo "apt-install.sh: this is a FAILED step, not a cancelled job — apt did" \
+         "not complete on this runner within the budget." >&2
+    exit 1
+fi
+echo "apt-install.sh: final attempt, bounded by the ${left}s left of the" \
+     "${TOTAL_BUDGET}s budget (its failure fails this job): $*"
+attempt_install "$left" "$@"
