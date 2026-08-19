@@ -19,7 +19,10 @@
  *   9. Ascon-Hash256:            all-zero vs all-0xFF input
  *
  * Methodology: Welch's t-test on execution times (dudect, 2017).
- *   |t| < 4.5  =>  no detectable leakage at 99.999% confidence.
+ *   |t| < DUDECT_CROPPED_T_THRESHOLD  =>  no detectable leakage at
+ *   99.999% confidence.  The threshold is calibrated to the statistic this
+ *   harness actually computes — a maximum over 21 percentile rungs, not one
+ *   Welch t — in tests/c/dudect/dudect_percentile.h.
  *
  * Usage:
  *   make dudect_crypto
@@ -38,35 +41,59 @@
 #include "dudect_rounds.h"
 
 #define DEFAULT_ITERATIONS 100000
-#define T_THRESHOLD 4.5
+/* The decision threshold belongs to the statistic, and the statistic is
+ * defined in dudect_percentile.h — so the threshold is defined there too,
+ * with the null calibration that sets it.  This file used to carry its own
+ * `4.5`, as did dudect_harness.c and tests/c/dudect/dudect.h: three copies of
+ * one security-gate constant, which is how copies drift apart.  Same reason
+ * dudect_rounds.h exists. */
+#define T_THRESHOLD DUDECT_CROPPED_T_THRESHOLD
 /* Rounds are re-run to separate a reproducible finding from runner noise; the
  * verdict rule lives in dudect_rounds.h and is shared with the other two
  * harnesses in this repository.
  *
- * Five, not three, since the statistic gained percentile cropping.  Cropping
- * resolves the BULK of the timing distribution, which is what makes it detect
- * a real leak where the raw statistic could not — and it also stops averaging
- * the shared runner's noise away into an inflated variance, so a noisy round
- * now lands nearer the threshold than it used to.  Under a majority rule with
- * three rounds, two noise excursions of the same sign are a FAIL.
+ * Five rather than three, and the reason is the statistic, not the lanes.  A
+ * majority rule over three rounds turns two same-signed excursions into a
+ * FAIL, and this statistic's null is wider than a single Welch t's — it is a
+ * maximum over 21 rungs, measured at sd = 1.87 against a single t's 1.00 (see
+ * DUDECT_CROPPED_T_THRESHOLD).  Requiring three of five raises the evidence a
+ * verdict needs WITHOUT touching the threshold or the statistic, and it
+ * cannot hide a real leak: a leak reproduces in every round — the
+ * deliberately early-exiting memcmp used to validate this statistic reports
+ * |t| = 65..113 in each one — while noise has to clear the threshold three
+ * times with a consistent sign.  Clean runs are unaffected: the loop still
+ * exits after round 1 when nothing has tripped.
  *
- * Observed: `Ascon-AEAD128 encrypt` reached +6.4478 in 2 of 3 rounds on a CI
- * runner, on C code byte-identical to a run where the same job passed.  That
- * lane's true effect is ~0 and was measured to be so: |t| does not scale with
- * the sample count and its sign flips — -1.04 at 50,000 iterations, +1.36 at
- * 200,000, -1.75 at 800,000, where a genuine data-dependent effect would grow
- * as sqrt(n) (16x the samples, ~4x the statistic).  Its setup is already
- * symmetric: both keys built before the loop, branchless pointer select,
- * nothing class-dependent between the class choice and the timer.
+ * What five rounds do NOT fix, and what the staging discipline below does.
+ * ----------------------------------------------------------------------
+ * More rounds only help against excursions that are independent between
+ * rounds.  A per-class bias that is FIXED for a given binary on a given host
+ * reproduces in every round with the same sign, and no number of rounds and
+ * no threshold separates it from a leak — it looks exactly like one.
  *
- * Requiring three of five instead of two of three raises the evidence a
- * verdict needs WITHOUT touching the threshold or the statistic.  It cannot
- * hide a real leak: a leak reproduces in every round -- the deliberately
- * early-exiting memcmp used to validate this statistic reports |t| = 225-232
- * in each one -- while noise has to clear 4.5 three times with a consistent
- * sign.  Clean runs are unaffected: the loop still exits after round 1 when
- * nothing has tripped, so this costs nothing except on a run that is already
- * suspicious. */
+ * That is not hypothetical and it is not a leak.  Measured on this tree, with
+ * the Ascon-AEAD128-encrypt lane's own cipher call and with IDENTICAL key
+ * data in both classes, placing class 0's key so that it spans two cache
+ * lines while class 1's sits inside one produces |t| = 13.5 to 30.9, over
+ * threshold in 10 of 10 runs, all positive.  Restoring symmetric placement
+ * returns the same lane to |t| < 2.7 with a sign that varies.  The signal was
+ * the buffer geometry; the cipher never changed.
+ *
+ * The reason this became reachable is that percentile cropping resolves the
+ * BULK of the distribution.  Measured on this host, the Ascon lane's cropped
+ * bulk has sd = 4.1 ns over ~22,000 samples per class, so the standard error
+ * is about 0.04 ns and the threshold is crossed by a systematic difference of
+ * roughly 0.2 ns — under half a cycle at 2.1 GHz.  At that resolution the
+ * harness's own memory layout is a first-class confounder, and controlling it
+ * is part of measuring the primitive rather than the measurement.
+ *
+ * So every lane below stages both classes through ONE shared, cache-line-
+ * aligned buffer: the timed call reads the same address whichever class is
+ * being measured, and only the DATA differs.  Validated against the hostile
+ * placement above — staged, the same lane reports 0 of 10 runs over the
+ * threshold where the two-buffer form reports 10 of 10.  Sensitivity is
+ * untouched, because a data-dependent leak follows the data, which still
+ * differs by class. */
 #define MAX_ROUNDS 5
 
 /* High-resolution nanosecond timer */
@@ -114,6 +141,7 @@ static double ttest_finish(ttest_ctx_t *ctx, const char *name) {
     int rung = ctx->winning_rung;
     size_t kept0 = ctx->winning_kept[0], kept1 = ctx->winning_kept[1];
     size_t total0 = ctx->n[0], total1 = ctx->n[1];
+    double delta = ctx->winning_delta;
     dudect_cropped_free(ctx);
 
     if (t == DUDECT_CROP_FAILED) {
@@ -123,8 +151,15 @@ static double ttest_finish(ttest_ctx_t *ctx, const char *name) {
                 name);
         exit(EXIT_FAILURE);
     }
-    printf("    statistic from rung %d (kept %zu/%zu and %zu/%zu)\n", rung, kept0, total0, kept1,
-           total1);
+    /* The effect size, printed beside the rung.  |t| alone is not
+     * actionable: the standard error falls as 1/sqrt(n), so at these sample
+     * counts the statistic resolves differences well under one CPU cycle, and
+     * a reviewer cannot tell a sub-nanosecond measurement artefact from an
+     * exploitable difference without seeing the difference itself.  A leak
+     * worth acting on moves the mean by at least the cost of the branch,
+     * cache line or extra round that produced it. */
+    printf("    statistic from rung %d (kept %zu/%zu and %zu/%zu, class0-class1 = %+.3f ns)\n",
+           rung, kept0, total0, kept1, total1, delta);
     return t;
 }
 
@@ -143,15 +178,20 @@ static double test_ed25519_sign(int iterations) {
     ttest_ctx_t ctx;
     ttest_init(&ctx, (size_t)iterations);
 
-    uint8_t pk0[32], sk0[64], pk1[32], sk1[64];
+    uint8_t pk0[32], pk1[32];
     uint8_t sig[64];
 
-    /* Prepare two distinct keypairs */
-    memset(sk0, 0x00, 32);
-    ama_ed25519_keypair(pk0, sk0);
+    /* Class sources in one aligned block, and ONE staged key the timed call
+     * reads — see the staging note above MAX_ROUNDS. */
+    _Alignas(64) uint8_t sks[2][64];
+    _Alignas(64) uint8_t sk[64];
 
-    memset(sk1, 0xFF, 32);
-    ama_ed25519_keypair(pk1, sk1);
+    /* Prepare two distinct keypairs */
+    memset(sks[0], 0x00, 32);
+    ama_ed25519_keypair(pk0, sks[0]);
+
+    memset(sks[1], 0xFF, 32);
+    ama_ed25519_keypair(pk1, sks[1]);
 
     uint8_t msg[64];
 
@@ -160,7 +200,7 @@ static double test_ed25519_sign(int iterations) {
     for (int i = 0; i < iterations; i++) {
         random_bytes(msg, sizeof(msg));
         int class_idx = rand() & 1;
-        const uint8_t *sk = (class_idx == 0) ? sk0 : sk1;
+        memcpy(sk, sks[class_idx], sizeof sk);
 
         uint64_t start = get_time_ns();
         ama_ed25519_sign(sig, msg, sizeof(msg), sk);
@@ -182,9 +222,10 @@ static double test_aes_gcm_encrypt(int iterations) {
     ttest_ctx_t ctx;
     ttest_init(&ctx, (size_t)iterations);
 
-    uint8_t key0[32], key1[32];
-    memset(key0, 0x00, 32);
-    memset(key1, 0xFF, 32);
+    _Alignas(64) uint8_t keys[2][32];
+    _Alignas(64) uint8_t key[32];
+    memset(keys[0], 0x00, 32);
+    memset(keys[1], 0xFF, 32);
 
     uint8_t nonce[12];
     uint8_t pt[64], ct[64], tag[16];
@@ -195,7 +236,7 @@ static double test_aes_gcm_encrypt(int iterations) {
         random_bytes(nonce, sizeof(nonce));
         random_bytes(pt, sizeof(pt));
         int class_idx = rand() & 1;
-        const uint8_t *key = (class_idx == 0) ? key0 : key1;
+        memcpy(key, keys[class_idx], sizeof key);
 
         uint64_t start = get_time_ns();
         ama_aes256_gcm_encrypt(key, nonce, pt, sizeof(pt), NULL, 0, ct, tag);
@@ -262,7 +303,7 @@ static double test_aes_gcm_tag_compare(int iterations) {
     ttest_init(&ctx, (size_t)iterations);
 
     uint8_t reference_tag[16];
-    uint8_t probe[16];            /* ONE reused probe, fixed address */
+    _Alignas(64) uint8_t probe[16]; /* ONE reused probe, fixed address */
     random_bytes(reference_tag, 16);
     memcpy(probe, reference_tag, 16);
 
@@ -335,12 +376,21 @@ static double test_aes_gcm_decrypt_branch(int iterations) {
 
     uint8_t out[64];
 
+    /* Informational, but staged like every other lane: an info-only lane
+     * whose numbers move with buffer placement is a misleading log line, and
+     * the sanity check this lane exists for ("is the bad-tag class actually
+     * the shorter one?") is a comparison of the two classes' times. */
+    _Alignas(64) uint8_t tags[2][16];
+    _Alignas(64) uint8_t probe_tag[16];
+    memcpy(tags[0], tag, 16);
+    memcpy(tags[1], bad_tag, 16);
+
     printf("  Testing AES-GCM decrypt branch (informational, %d iterations)...\n",
            iterations);
 
     for (int i = 0; i < iterations; i++) {
         int class_idx = rand() & 1;
-        const uint8_t *probe_tag = (class_idx == 0) ? tag : bad_tag;
+        memcpy(probe_tag, tags[class_idx], sizeof probe_tag);
 
         uint64_t start = get_time_ns();
         ama_aes256_gcm_decrypt(key, nonce, ct, 64, NULL, 0, probe_tag, out);
@@ -362,9 +412,10 @@ static double test_hkdf(int iterations) {
     ttest_ctx_t ctx;
     ttest_init(&ctx, (size_t)iterations);
 
-    uint8_t ikm0[32], ikm1[32];
-    memset(ikm0, 0x00, 32);
-    memset(ikm1, 0xFF, 32);
+    _Alignas(64) uint8_t ikms[2][32];
+    _Alignas(64) uint8_t ikm[32];
+    memset(ikms[0], 0x00, 32);
+    memset(ikms[1], 0xFF, 32);
 
     uint8_t salt[32], okm[32];
     random_bytes(salt, 32);
@@ -376,7 +427,7 @@ static double test_hkdf(int iterations) {
 
     for (int i = 0; i < iterations; i++) {
         int class_idx = rand() & 1;
-        const uint8_t *ikm = (class_idx == 0) ? ikm0 : ikm1;
+        memcpy(ikm, ikms[class_idx], sizeof ikm);
 
         uint64_t start = get_time_ns();
         ama_hkdf(salt, 32, ikm, 32, info, info_len, okm, 32);
@@ -394,34 +445,43 @@ static double test_hkdf(int iterations) {
  * Class 0: hash all-zero input
  * Class 1: hash all-0xFF input
  *
- * The input pointer is selected OUTSIDE the timing region — the
- * pointer-select-out-of-timer pattern the CMake suite adopted after its
- * FROST scalar-negate lane leaked at ~+5 sigma purely from a
- * class-dependent `if (class_idx == 0)` inside the timer (see
- * tests/c/test_dudect.c).  This lane had the same defect: gcc -O2 kept
- * the class branch between the get_time_ns() calls and emitted two
- * separate call sites, so the classes executed different control flow
- * inside the measured window (taken vs not-taken conditional, distinct
- * call/return addresses, a trailing jump on one path only).  For an
- * operation this short — one Keccak-f[1600] plus the padding block, a
- * few hundred ns — that front-end asymmetry is a few ns of systematic
- * per-class bias, which at 50k samples reached t = 5-7 on the shared CI
- * runner: over the 4.5 gate in every round of one process (fixed
- * layout), absent on other hosts, the same layout-sensitive fingerprint
- * as the Ascon-AEAD128 encrypt setup asymmetry above.  Keccak-f[1600]
- * has no lookup tables and no data-dependent branches (ama_sha3.c), so
- * the property can only be measured honestly over identical control
- * flow.  The µs-scale lanes (Ed25519, AES-GCM, HKDF) sit far above this
- * bias but use the same idiom, so no lane depends on its operation
- * being slow enough to hide a measurement artifact.
+ * Two asymmetries had to be removed before this lane measures the hash
+ * rather than the harness, and both were worth a few nanoseconds — which
+ * for one Keccak-f[1600] plus a padding block is a systematic per-class
+ * bias big enough to cross the gate.
+ *
+ * CONTROL FLOW.  The class branch used to sit between the get_time_ns()
+ * calls: gcc -O2 emitted two separate call sites, so the classes ran
+ * different control flow inside the measured window (taken vs not-taken
+ * conditional, distinct call/return addresses, a trailing jump on one
+ * path only).  The class is now chosen before the timer.
+ *
+ * MEMORY GEOMETRY.  Choosing between two per-class input buffers leaves
+ * the two classes reading two different addresses, and an address is
+ * something a load's timing legitimately depends on.  Both classes now
+ * read ONE staged buffer at one address; only the DATA differs.  See the
+ * staging note above MAX_ROUNDS for the measurement that establishes how
+ * large this effect is (|t| = 13.5 to 30.9 from placement alone, on
+ * identical data).
+ *
+ * Keccak-f[1600] has no lookup tables and no data-dependent branches
+ * (ama_sha3.c), so the property can only be measured honestly over
+ * identical control flow and identical addresses.  The µs-scale lanes
+ * (Ed25519, AES-GCM, HKDF) sit far above this bias but use the same
+ * idiom, so no lane depends on its operation being slow enough to hide a
+ * measurement artifact.
  * ------------------------------------------------------------------- */
 static double test_sha3_256(int iterations) {
     ttest_ctx_t ctx;
     ttest_init(&ctx, (size_t)iterations);
 
-    uint8_t input0[136], input1[136];  /* One full SHA3-256 rate block */
-    memset(input0, 0x00, 136);
-    memset(input1, 0xFF, 136);
+    /* One full SHA3-256 rate block per class.  Stride padded to a multiple
+     * of the cache line so both sources start line-aligned and span the same
+     * number of lines; the timed call reads the staged copy either way. */
+    _Alignas(64) uint8_t inputs[2][192];
+    _Alignas(64) uint8_t input[136];
+    memset(inputs[0], 0x00, sizeof inputs[0]);
+    memset(inputs[1], 0xFF, sizeof inputs[1]);
 
     uint8_t hash[32];
 
@@ -429,7 +489,7 @@ static double test_sha3_256(int iterations) {
 
     for (int i = 0; i < iterations; i++) {
         int class_idx = rand() & 1;
-        const uint8_t *input = (class_idx == 0) ? input0 : input1;
+        memcpy(input, inputs[class_idx], sizeof input);
 
         uint64_t start = get_time_ns();
         ama_sha3_256(input, 136, hash);
@@ -456,30 +516,36 @@ static double test_ascon_aead_encrypt(int iterations) {
     ttest_ctx_t ctx;
     ttest_init(&ctx, (size_t)iterations);
 
-    /* Fixed-vs-fixed key, identical everything else — the same idiom every
-     * other keyed lane in this file uses (AES-GCM: key0 zeros / key1 0xFF;
-     * HKDF: ikm0 / ikm1).  Both keys are prepared ONCE, before the loop, and
-     * nothing class-dependent runs between the class choice and the timer.
+    /* Fixed-vs-fixed key, all-zero against all-0xFF: the maximal-contrast
+     * pair, and the same idiom every other keyed lane in this file uses.
+     * Both keys are prepared ONCE, before the loop; the class is chosen
+     * before the timer; and the timed call reads ONE staged buffer, so the
+     * two classes differ in the key's VALUE and in nothing else.
      *
-     * An earlier form generated a fresh random key for class 1 *inside* the
-     * loop, on class-1 iterations only, in the few nanoseconds before
-     * get_time_ns().  For a primitive that encrypts 64 bytes in a few hundred
-     * nanoseconds, that asymmetric pre-measurement work — 16 rand() draws and
-     * a store that lands key1 hot in L1 for class 1 but not class 0 — is a
-     * systematic per-class timing bias, not a property of the cipher.  It was
-     * platform-sensitive (near zero on some hosts, above the 4.5 gate on the
-     * shared CI runner, sign flipping between them), which is the fingerprint
-     * of a measurement artifact rather than a data-dependent branch.  A
-     * controlled A/B over the identical cipher call confirmed it: the
-     * asymmetric setup averaged |t| ~= 3.1 and crossed the gate, the setup
-     * below averaged |t| ~= 0.9 and never did.  Ascon has neither a lookup
-     * table nor a secret-dependent branch (see ama_ascon.c), so the only
-     * honest way to observe t -> 0 is to make the two classes' setup
-     * identical; all-zero vs all-0xFF is the maximal-contrast key pair. */
-    uint8_t key0[16], key1[16];
+     * This lane has been the harness's most reliable source of false
+     * findings, and each time the cause was the measurement.  An early form
+     * generated class 1's key inside the loop, on class-1 iterations only —
+     * 16 rand() draws and a store landing key1 hot in L1 for one class and
+     * not the other.  The form that replaced it prepared both keys up front
+     * but still handed the cipher one of TWO buffers, which is the geometry
+     * confounder: with identical key data in both classes, placing class 0's
+     * key across two cache lines drives this exact call to |t| = 13.5..30.9,
+     * over threshold in 10 of 10 runs, all one sign.  Staged through a single
+     * buffer, the same measurement reports 0 of 10.
+     *
+     * Ascon has neither a lookup table nor a secret-dependent branch (see
+     * ama_ascon.c — every branch is on a length, and the lengths are equal
+     * across classes here), so the true effect is zero and the only honest
+     * way to observe it is to leave the data as the classes' sole
+     * difference.  Confirmed on a quiet host: the cropped per-class mean
+     * difference falls as 1/sqrt(n) — +0.0283 ns at 50,000 measurements,
+     * -0.0056 at 200,000, -0.0010 at 800,000, +0.0004 at 3,200,000 — which
+     * is what a zero effect looks like, and is not what a leak looks like. */
+    _Alignas(64) uint8_t keys[2][16];
+    _Alignas(64) uint8_t key[16];
     uint8_t nonce[16], pt[64], ct[64], tag[16];
-    memset(key0, 0x00, sizeof key0);
-    memset(key1, 0xFF, sizeof key1);
+    memset(keys[0], 0x00, sizeof keys[0]);
+    memset(keys[1], 0xFF, sizeof keys[1]);
     memset(nonce, 0x5A, sizeof nonce);
     memset(pt, 0xA5, sizeof pt);
 
@@ -487,7 +553,7 @@ static double test_ascon_aead_encrypt(int iterations) {
 
     for (int i = 0; i < iterations; i++) {
         int class_idx = rand() & 1;
-        const uint8_t *key = (class_idx == 0) ? key0 : key1;
+        memcpy(key, keys[class_idx], sizeof key);
 
         uint64_t start = get_time_ns();
         ama_ascon_aead128_encrypt(key, nonce,
@@ -509,23 +575,30 @@ static double test_ascon_tag_compare(int iterations) {
      * byte, class 1 the last.  A memcmp-based verifier separates these
      * immediately; ama_consttime_memcmp must not. */
     uint8_t key[16], nonce[16], pt[64], ct[64], tag[16];
-    uint8_t forged_first[16], forged_last[16], out[64];
+    uint8_t out[64];
     memset(key, 0x11, sizeof key);
     memset(nonce, 0x22, sizeof nonce);
     memset(pt, 0x33, sizeof pt);
 
     ama_ascon_aead128_encrypt(key, nonce, pt, sizeof pt, NULL, 0, ct, tag);
-    memcpy(forged_first, tag, sizeof tag);
-    memcpy(forged_last, tag, sizeof tag);
-    forged_first[0] ^= 0x01;
-    forged_last[15] ^= 0x01;
+
+    /* ONE reused probe at a fixed address, rebuilt class-symmetrically every
+     * iteration: both end bytes are stored unconditionally and only the
+     * stored VALUE is class-dependent, so class 0 forges byte 0 and class 1
+     * forges byte 15 with identical addresses and control flow.  This is the
+     * pattern the AES-GCM tag-compare lane above already uses, and its
+     * rationale applies verbatim here.  An early-exit verifier still
+     * separates the classes, so sensitivity is preserved. */
+    _Alignas(64) uint8_t probe[16];
+    memcpy(probe, tag, sizeof tag);
 
     printf("  Testing Ascon-AEAD128 tag compare (%d iterations)...\n",
            iterations);
 
     for (int i = 0; i < iterations; i++) {
         int class_idx = rand() & 1;
-        const uint8_t *probe = (class_idx == 0) ? forged_first : forged_last;
+        probe[0] = (uint8_t)(tag[0] ^ (class_idx == 0));
+        probe[15] = (uint8_t)(tag[15] ^ (class_idx == 1));
 
         uint64_t start = get_time_ns();
         ama_ascon_aead128_decrypt(key, nonce, ct, sizeof ct, NULL, 0,
@@ -542,19 +615,21 @@ static double test_ascon_hash256(int iterations) {
     ttest_ctx_t ctx;
     ttest_init(&ctx, (size_t)iterations);
 
-    uint8_t input0[64], input1[64];  /* Eight full Ascon-Hash256 rate blocks */
+    /* Eight full Ascon-Hash256 rate blocks per class. */
+    _Alignas(64) uint8_t inputs[2][64];
+    _Alignas(64) uint8_t input[64];
     uint8_t digest[32];
-    memset(input0, 0x00, sizeof input0);
-    memset(input1, 0xFF, sizeof input1);
+    memset(inputs[0], 0x00, sizeof inputs[0]);
+    memset(inputs[1], 0xFF, sizeof inputs[1]);
 
     printf("  Testing Ascon-Hash256 (%d iterations)...\n", iterations);
 
     for (int i = 0; i < iterations; i++) {
         int class_idx = rand() & 1;
-        const uint8_t *input = (class_idx == 0) ? input0 : input1;
+        memcpy(input, inputs[class_idx], sizeof input);
 
         uint64_t start = get_time_ns();
-        ama_ascon_hash256(input, sizeof input0, digest);
+        ama_ascon_hash256(input, sizeof input, digest);
         uint64_t end = get_time_ns();
 
         ttest_update(&ctx, class_idx, (double)(end - start));
@@ -662,7 +737,9 @@ int main(int argc, char *argv[]) {
     printf("AMA Cryptography\n");
     printf("=======================================================\n\n");
     printf("Methodology: Welch's t-test on execution times\n");
-    printf("Threshold:   |t| < %.1f (99.999%% confidence)\n", T_THRESHOLD);
+    printf("Threshold:   |t| < %.1f (99.999%% confidence, calibrated for the\n"
+           "             max-over-21-rungs statistic; a single Welch t would be 4.5)\n",
+           T_THRESHOLD);
     printf("Iterations:  %d per test, up to %d rounds\n", iterations, MAX_ROUNDS);
 
     dudect_lane_result_t lanes[DUDECT_ROUNDS_MAX_LANES];

@@ -33,22 +33,27 @@
 #include <math.h>
 #include <time.h>
 
+/* The statistic, its calibrated threshold, and its self-test. */
+#include "dudect_percentile.h"
+
 /* --------------------------------------------------------------------------
  * Configuration
  * -------------------------------------------------------------------------- */
 
-#ifndef DUDECT_NUMBER_PERCENTILES
-#define DUDECT_NUMBER_PERCENTILES 100
-#endif
 
 #ifndef DUDECT_ENOUGH_MEASUREMENTS
 #define DUDECT_ENOUGH_MEASUREMENTS 10000
 #endif
 
-/* Threshold for the t-test. |t| > 4.5 indicates timing leakage
- * at the 99.999% confidence level. */
+/* Threshold for the t-test at the 99.999% confidence level.
+ *
+ * This is not 4.5 and must not be.  4.5 is the two-sided critical value of a
+ * single Welch t; the statistic this header computes is the maximum over 21
+ * percentile rungs (see dudect_percentile.h), whose null distribution is
+ * measurably wider.  The calibration, and the reason a single number now
+ * lives in one place instead of three, are in that header. */
 #ifndef DUDECT_T_THRESHOLD
-#define DUDECT_T_THRESHOLD 4.5
+#define DUDECT_T_THRESHOLD DUDECT_CROPPED_T_THRESHOLD
 #endif
 
 /* --------------------------------------------------------------------------
@@ -59,37 +64,90 @@
 #define DUDECT_NEED_MORE        -1
 
 /* --------------------------------------------------------------------------
- * Online statistics (Welch's t-test)
+ * Statistics
+ * --------------------------------------------------------------------------
+ * This used to be a streaming mean/variance pair feeding one Welch t over
+ * every raw sample.  That statistic is dominated by the timing distribution's
+ * heavy right tail — preemption, migration, frequency changes — which has
+ * nothing to do with the secret and which inflates the pooled variance until
+ * a systematic shift in the BULK disappears underneath it.
+ *
+ * Measured on this tree against a textbook early-exit ``memcmp`` — the most
+ * blatant timing leak there is — at 50,000 iterations, 12 repetitions per
+ * condition, on idle and contended cores:
+ *
+ *     raw Welch t (what was here)    detected the leak 19 / 48
+ *     percentile-cropped             detected the leak 48 / 48
+ *
+ * with neither firing on constant-time code.  A gate that misses an obvious
+ * leak in 60% of runs is close to no gate at all.
+ *
+ * The cropped statistic arrived in dudect_percentile.h with the two
+ * tools/constant_time harnesses converted to it and this one left behind, so
+ * every lane driven from this header — the ML-KEM, ML-DSA, secp256k1,
+ * X25519, ChaCha20-Poly1305, Argon2id and SIMD-sweep lanes, which is most of
+ * the constant-time evidence this repository publishes — kept running the
+ * statistic that misses leaks.  It runs the same statistic as the other two
+ * harnesses now.
+ *
+ * The cost is memory: cropping needs the samples, not a running summary, so a
+ * context now allocates and must be freed.  ``dudect_ctx_init`` takes the
+ * measurement budget and REPORTS FAILURE, which callers must check — a lane
+ * that could not allocate must not go on to report a clean t of 0.0.
  * -------------------------------------------------------------------------- */
-typedef struct {
-    double n[2];
-    double mean[2];
-    double m2[2];
-} dudect_ttest_ctx_t;
+typedef dudect_cropped_ctx_t dudect_ttest_ctx_t;
 
-static inline void dudect_ttest_init(dudect_ttest_ctx_t *ctx) {
-    memset(ctx, 0, sizeof(*ctx));
+/* Returns 0 on allocation failure; the context is poisoned and every
+ * subsequent operation on it fails closed. */
+static inline int dudect_ttest_init(dudect_ttest_ctx_t *ctx, size_t capacity) {
+    return dudect_cropped_init(ctx, capacity);
 }
 
 static inline void dudect_ttest_update(dudect_ttest_ctx_t *ctx, int class_idx, double value) {
-    ctx->n[class_idx]++;
-    double delta = value - ctx->mean[class_idx];
-    ctx->mean[class_idx] += delta / ctx->n[class_idx];
-    double delta2 = value - ctx->mean[class_idx];
-    ctx->m2[class_idx] += delta * delta2;
+    dudect_cropped_update(ctx, class_idx, value);
 }
 
 static inline double dudect_ttest_compute(dudect_ttest_ctx_t *ctx) {
-    if (ctx->n[0] < 2 || ctx->n[1] < 2) {
-        return 0.0;
-    }
-    double var0 = ctx->m2[0] / (ctx->n[0] - 1);
-    double var1 = ctx->m2[1] / (ctx->n[1] - 1);
-    double se = sqrt(var0 / ctx->n[0] + var1 / ctx->n[1]);
-    if (se < 1e-10) {
-        return 0.0;
-    }
-    return (ctx->mean[0] - ctx->mean[1]) / se;
+    return dudect_cropped_compute(ctx);
+}
+
+/* --------------------------------------------------------------------------
+ * Class staging
+ * --------------------------------------------------------------------------
+ * A lane compares two input classes, and the two classes must differ in the
+ * property under test and in NOTHING ELSE.  Handing the timed call one of two
+ * per-class buffers breaks that: the classes then differ in the input's
+ * ADDRESS as well as its value, and a load's timing legitimately depends on
+ * its address — which cache line it falls in, whether it spans two, which set
+ * it maps to.  That difference is fixed for a given binary on a given host,
+ * so it reproduces in every round with the same sign, which is exactly what a
+ * real leak looks like and exactly what no threshold or number of rounds can
+ * separate from one.
+ *
+ * Measured on this tree with the Ascon-AEAD128-encrypt lane's own cipher call
+ * and IDENTICAL key data in both classes, so the true effect is exactly zero:
+ * placing class 0's key across two cache lines while class 1's sits inside
+ * one drives the cropped statistic to |t| = 13.5..30.9, over threshold in 10
+ * of 10 runs, all one sign.  Staged through a single buffer the same
+ * measurement reports 0 of 10.
+ *
+ * This became reachable when the harnesses adopted percentile cropping, which
+ * resolves the BULK of the timing distribution: a lane measured here has a
+ * cropped bulk standard deviation of about 4 ns over ~22,000 samples per
+ * class, so the standard error is ~0.04 ns and the threshold is crossed by a
+ * systematic difference of roughly 0.2 ns — under half a cycle at 2.1 GHz.
+ * At that resolution the harness's own memory layout is a first-class
+ * confounder.
+ *
+ * So a lane copies the selected class's input into ONE shared, cache-line-
+ * aligned buffer and hands the timed call that.  Both classes then present
+ * the same address and the same alignment, and only the DATA differs.  The
+ * copy is identical work for both classes and happens outside the timed
+ * region.  Sensitivity is untouched: a data-dependent leak follows the data.
+ * -------------------------------------------------------------------------- */
+static inline const void *dudect_stage(void *staging, const void *src, size_t len) {
+    memcpy(staging, src, len);
+    return staging;
 }
 
 /* --------------------------------------------------------------------------
@@ -120,12 +178,31 @@ typedef struct {
     const char *name;              /* Test name for reporting */
     dudect_ttest_ctx_t ttest;      /* Statistical test context */
     int64_t total_measurements;    /* Total measurements taken */
+    double  t_cached;              /* Computed once; see dudect_get_t() */
+    int     computed;
 } dudect_ctx_t;
 
-static inline void dudect_ctx_init(dudect_ctx_t *ctx, const char *name) {
+/* Initialise a lane for at most `capacity` measurements.
+ *
+ * Returns 0 if the sample buffers could not be allocated.  CALLERS MUST
+ * CHECK: a lane that cannot store its measurements cannot measure, and the
+ * one thing it must not do is fall through to reporting t = 0.0, which every
+ * verdict rule in this tree reads as CLEAN.  test_dudect.c maps a failure
+ * here onto DUDECT_FATAL_SENTINEL, which is conclusive on one sighting.
+ *
+ * `capacity` is the lane's iteration bound.  Exceeding it poisons the context
+ * rather than dropping samples, because a silently truncated class is a
+ * biased class. */
+static inline int dudect_ctx_init(dudect_ctx_t *ctx, const char *name, size_t capacity) {
     ctx->name = name;
-    dudect_ttest_init(&ctx->ttest);
     ctx->total_measurements = 0;
+    ctx->t_cached = 0.0;
+    ctx->computed = 0;
+    return dudect_ttest_init(&ctx->ttest, capacity);
+}
+
+static inline void dudect_ctx_free(dudect_ctx_t *ctx) {
+    dudect_cropped_free(&ctx->ttest);
 }
 
 /* Record a single measurement.
@@ -138,20 +215,40 @@ static inline void dudect_record(dudect_ctx_t *ctx, int class_idx, double elapse
 
 /* Check current result.
  * Returns DUDECT_LEAKAGE_FOUND, DUDECT_NO_LEAKAGE_FOUND, or DUDECT_NEED_MORE */
+/* The cropped statistic sorts the pooled samples and sweeps 21 rungs, so it
+ * is O(n log n) rather than the O(1) read the streaming form allowed.  It is
+ * computed once per lane and cached; every accessor below goes through this.
+ * A lane that could not measure keeps DUDECT_CROP_FAILED, which is far outside
+ * any threshold and is never mistaken for a clean 0.0. */
+static inline double dudect_get_t(dudect_ctx_t *ctx) {
+    if (!ctx->computed) {
+        ctx->t_cached = dudect_ttest_compute(&ctx->ttest);
+        ctx->computed = 1;
+    }
+    return ctx->t_cached;
+}
+
+/* 1 iff the lane never produced a usable statistic. */
+static inline int dudect_measurement_failed(dudect_ctx_t *ctx) {
+    return dudect_get_t(ctx) == DUDECT_CROP_FAILED;
+}
+
+/* The effect size behind the statistic: the winning rung's per-class mean
+ * difference, in nanoseconds.  Only meaningful after dudect_get_t(). */
+static inline double dudect_get_delta_ns(dudect_ctx_t *ctx) {
+    (void)dudect_get_t(ctx);
+    return ctx->ttest.winning_delta;
+}
+
 static inline int dudect_check(dudect_ctx_t *ctx) {
     if (ctx->total_measurements < DUDECT_ENOUGH_MEASUREMENTS) {
         return DUDECT_NEED_MORE;
     }
-    double t = dudect_ttest_compute(&ctx->ttest);
-    if (fabs(t) > DUDECT_T_THRESHOLD) {
+    double t = dudect_get_t(ctx);
+    if (t == DUDECT_CROP_FAILED || fabs(t) > DUDECT_T_THRESHOLD) {
         return DUDECT_LEAKAGE_FOUND;
     }
     return DUDECT_NO_LEAKAGE_FOUND;
-}
-
-/* Get the current t-statistic value */
-static inline double dudect_get_t(dudect_ctx_t *ctx) {
-    return dudect_ttest_compute(&ctx->ttest);
 }
 
 /* Print the measurement for a single lane.
@@ -171,13 +268,27 @@ static inline double dudect_get_t(dudect_ctx_t *ctx) {
  * states what was measured.
  */
 static inline void dudect_print_result(dudect_ctx_t *ctx) {
-    double t = dudect_ttest_compute(&ctx->ttest);
+    double t = dudect_get_t(ctx);
+    if (t == DUDECT_CROP_FAILED) {
+        printf("  %-35s NO MEASUREMENT  (%ld recorded)\n",
+               ctx->name, (long)ctx->total_measurements);
+        return;
+    }
     int within = fabs(t) < DUDECT_T_THRESHOLD;
-    printf("  %-35s t = %+8.4f  [%s]  (%ld measurements)\n",
+    /* The per-class mean difference is printed beside the statistic.  |t|
+     * alone is not actionable: the standard error falls as 1/sqrt(n), so at
+     * these measurement counts the statistic resolves differences well under
+     * one CPU cycle, and a reviewer cannot tell a sub-nanosecond measurement
+     * artefact from an exploitable difference without seeing the difference
+     * itself. */
+    printf("  %-35s t = %+8.4f  [%s]  (%ld measurements, rung %d, "
+           "class0-class1 = %+.3f ns)\n",
            ctx->name,
            t,
            within ? "within threshold" : "OVER THRESHOLD",
-           (long)ctx->total_measurements);
+           (long)ctx->total_measurements,
+           ctx->ttest.winning_rung,
+           ctx->ttest.winning_delta);
 }
 
 #endif /* DUDECT_H */

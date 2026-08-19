@@ -13,7 +13,10 @@
  *
  * Methodology:
  *   - Welch's t-test on execution times between two input classes
- *   - |t| < 4.5 => no detectable leakage at 99.999% confidence
+ *   - |t| < DUDECT_T_THRESHOLD => no detectable leakage at 99.999%
+ *     confidence.  That threshold is calibrated in dudect_percentile.h for
+ *     the statistic actually computed here — a maximum over 21 percentile
+ *     rungs — and is NOT the 4.5 that belongs to a single Welch t.
  *   - Multiple rounds to reduce false positives from environmental noise
  *
  * Reference:
@@ -99,12 +102,21 @@ static void random_bytes(uint8_t *buf, size_t len) {
  * ----------------------------------------------------------------------- */
 static double test_consttime_memcmp(int iterations) {
     dudect_ctx_t ctx;
-    dudect_ctx_init(&ctx, "ama_consttime_memcmp");
+    if (!dudect_ctx_init(&ctx, "ama_consttime_memcmp", (size_t)iterations)) {
+        fprintf(stderr,
+                "  FATAL: lane '%s' could not allocate its sample buffers; "
+                "recording a harness fault, not a verdict\n",
+                "ama_consttime_memcmp");
+        return DUDECT_FATAL_SENTINEL;
+    }
 
     uint8_t a[BUFFER_SIZE];
     uint8_t b_equal[BUFFER_SIZE];
     uint8_t b_diff[BUFFER_SIZE];
 
+    /* One staged buffer, read by the timed call for BOTH classes, so
+     * the classes differ in data and not in address (dudect_stage). */
+    _Alignas(64) uint8_t b_use_stage[BUFFER_SIZE];
     for (int i = 0; i < iterations && !g_timeout_hit; i++) {
         /* Symmetric setup — same number of rand() draws, memcpys, and
          * conditional writes for both classes.  Performed BEFORE the
@@ -119,7 +131,8 @@ static double test_consttime_memcmp(int iterations) {
         int class_idx = rand() & 1;
         /* Pointer-select OUTSIDE the timing region (no class-correlated
          * branch in the timed window). */
-        const uint8_t *b_use = class_idx ? b_diff : b_equal;
+        const uint8_t *b_use =
+            dudect_stage(b_use_stage, class_idx ? b_diff : b_equal, sizeof b_use_stage);
 
         uint64_t start = dudect_get_time_ns();
         volatile int result = ama_consttime_memcmp(a, b_use, BUFFER_SIZE);
@@ -130,7 +143,9 @@ static double test_consttime_memcmp(int iterations) {
     }
 
     dudect_print_result(&ctx);
-    return dudect_get_t(&ctx);
+    double lane_t = dudect_get_t(&ctx);
+    dudect_ctx_free(&ctx);
+    return lane_t;
 }
 
 /* -----------------------------------------------------------------------
@@ -141,7 +156,13 @@ static double test_consttime_memcmp(int iterations) {
  * ----------------------------------------------------------------------- */
 static double test_consttime_swap(int iterations) {
     dudect_ctx_t ctx;
-    dudect_ctx_init(&ctx, "ama_consttime_swap");
+    if (!dudect_ctx_init(&ctx, "ama_consttime_swap", (size_t)iterations)) {
+        fprintf(stderr,
+                "  FATAL: lane '%s' could not allocate its sample buffers; "
+                "recording a harness fault, not a verdict\n",
+                "ama_consttime_swap");
+        return DUDECT_FATAL_SENTINEL;
+    }
 
     uint8_t a[BUFFER_SIZE], b[BUFFER_SIZE];
 
@@ -159,7 +180,9 @@ static double test_consttime_swap(int iterations) {
     }
 
     dudect_print_result(&ctx);
-    return dudect_get_t(&ctx);
+    double lane_t = dudect_get_t(&ctx);
+    dudect_ctx_free(&ctx);
+    return lane_t;
 }
 
 /* -----------------------------------------------------------------------
@@ -170,7 +193,13 @@ static double test_consttime_swap(int iterations) {
  * ----------------------------------------------------------------------- */
 static double test_secure_memzero(int iterations) {
     dudect_ctx_t ctx;
-    dudect_ctx_init(&ctx, "ama_secure_memzero");
+    if (!dudect_ctx_init(&ctx, "ama_secure_memzero", (size_t)iterations)) {
+        fprintf(stderr,
+                "  FATAL: lane '%s' could not allocate its sample buffers; "
+                "recording a harness fault, not a verdict\n",
+                "ama_secure_memzero");
+        return DUDECT_FATAL_SENTINEL;
+    }
 
     uint8_t buf[BUFFER_SIZE];
 
@@ -186,7 +215,9 @@ static double test_secure_memzero(int iterations) {
     }
 
     dudect_print_result(&ctx);
-    return dudect_get_t(&ctx);
+    double lane_t = dudect_get_t(&ctx);
+    dudect_ctx_free(&ctx);
+    return lane_t;
 }
 
 /* -----------------------------------------------------------------------
@@ -197,7 +228,13 @@ static double test_secure_memzero(int iterations) {
  * ----------------------------------------------------------------------- */
 static double test_consttime_lookup(int iterations) {
     dudect_ctx_t ctx;
-    dudect_ctx_init(&ctx, "ama_consttime_lookup");
+    if (!dudect_ctx_init(&ctx, "ama_consttime_lookup", (size_t)iterations)) {
+        fprintf(stderr,
+                "  FATAL: lane '%s' could not allocate its sample buffers; "
+                "recording a harness fault, not a verdict\n",
+                "ama_consttime_lookup");
+        return DUDECT_FATAL_SENTINEL;
+    }
 
     uint8_t table[TABLE_SIZE * ELEM_SIZE];
     uint8_t output[ELEM_SIZE];
@@ -228,7 +265,9 @@ static double test_consttime_lookup(int iterations) {
     }
 
     dudect_print_result(&ctx);
-    return dudect_get_t(&ctx);
+    double lane_t = dudect_get_t(&ctx);
+    dudect_ctx_free(&ctx);
+    return lane_t;
 }
 
 /* -----------------------------------------------------------------------
@@ -239,7 +278,13 @@ static double test_consttime_lookup(int iterations) {
  * ----------------------------------------------------------------------- */
 static double test_consttime_copy(int iterations) {
     dudect_ctx_t ctx;
-    dudect_ctx_init(&ctx, "ama_consttime_copy");
+    if (!dudect_ctx_init(&ctx, "ama_consttime_copy", (size_t)iterations)) {
+        fprintf(stderr,
+                "  FATAL: lane '%s' could not allocate its sample buffers; "
+                "recording a harness fault, not a verdict\n",
+                "ama_consttime_copy");
+        return DUDECT_FATAL_SENTINEL;
+    }
 
     uint8_t src[BUFFER_SIZE], dst[BUFFER_SIZE];
 
@@ -257,7 +302,9 @@ static double test_consttime_copy(int iterations) {
     }
 
     dudect_print_result(&ctx);
-    return dudect_get_t(&ctx);
+    double lane_t = dudect_get_t(&ctx);
+    dudect_ctx_free(&ctx);
+    return lane_t;
 }
 
 /* -----------------------------------------------------------------------
@@ -279,7 +326,13 @@ static double test_consttime_copy(int iterations) {
  * ----------------------------------------------------------------------- */
 static double test_ed25519_sign(int iterations) {
     dudect_ctx_t ctx;
-    dudect_ctx_init(&ctx, "Ed25519 sign (key-independent)");
+    if (!dudect_ctx_init(&ctx, "Ed25519 sign (key-independent)", (size_t)iterations)) {
+        fprintf(stderr,
+                "  FATAL: lane '%s' could not allocate its sample buffers; "
+                "recording a harness fault, not a verdict\n",
+                "Ed25519 sign (key-independent)");
+        return DUDECT_FATAL_SENTINEL;
+    }
 
     uint8_t pk0[32], sk0[64], pk1[32], sk1[64];
     uint8_t sig[64], msg[64];
@@ -292,16 +345,21 @@ static double test_ed25519_sign(int iterations) {
                 "  FAIL: Ed25519 dudect setup keypair failed; "
                 "sign lane never executed\n");
         dudect_print_result(&ctx);
+        dudect_ctx_free(&ctx);
         return DUDECT_FATAL_SENTINEL;
     }
 
     int rc_mismatches = 0;
 
+    /* One staged buffer, read by the timed call for BOTH classes, so
+     * the classes differ in data and not in address (dudect_stage). */
+    _Alignas(64) uint8_t sk_use_stage[64];
     for (int i = 0; i < iterations && !g_timeout_hit; i++) {
         random_bytes(msg, sizeof(msg));
         int class_idx = rand() & 1;
         /* Pointer-select OUTSIDE the timing region. */
-        const uint8_t *sk_use = class_idx ? sk1 : sk0;
+        const uint8_t *sk_use =
+            dudect_stage(sk_use_stage, class_idx ? sk1 : sk0, sizeof sk_use_stage);
 
         uint64_t start = dudect_get_time_ns();
         volatile ama_error_t rc =
@@ -320,11 +378,14 @@ static double test_ed25519_sign(int iterations) {
                 "seeds are valid)\n",
                 rc_mismatches);
         dudect_print_result(&ctx);
+        dudect_ctx_free(&ctx);
         return DUDECT_FATAL_SENTINEL;
     }
 
     dudect_print_result(&ctx);
-    return dudect_get_t(&ctx);
+    double lane_t = dudect_get_t(&ctx);
+    dudect_ctx_free(&ctx);
+    return lane_t;
 }
 
 /* -----------------------------------------------------------------------
@@ -364,7 +425,13 @@ static double test_ed25519_sign(int iterations) {
  * ----------------------------------------------------------------------- */
 static double test_aes_gcm_tag_verify(int iterations) {
     dudect_ctx_t ctx;
-    dudect_ctx_init(&ctx, "AES-GCM tag verify");
+    if (!dudect_ctx_init(&ctx, "AES-GCM tag verify", (size_t)iterations)) {
+        fprintf(stderr,
+                "  FATAL: lane '%s' could not allocate its sample buffers; "
+                "recording a harness fault, not a verdict\n",
+                "AES-GCM tag verify");
+        return DUDECT_FATAL_SENTINEL;
+    }
 
     uint8_t key[32], nonce[12];
     uint8_t aad[32];
@@ -384,6 +451,7 @@ static double test_aes_gcm_tag_verify(int iterations) {
                 "  FAIL: AES-GCM dudect setup encrypt failed; "
                 "tag-verify lane never executed\n");
         dudect_print_result(&ctx);
+        dudect_ctx_free(&ctx);
         return DUDECT_FATAL_SENTINEL;
     }
 
@@ -399,11 +467,15 @@ static double test_aes_gcm_tag_verify(int iterations) {
      * flipped tag) must return AMA_ERROR_VERIFY_FAILED. */
     int rc_mismatches = 0;
 
+    /* One staged buffer, read by the timed call for BOTH classes, so
+     * the classes differ in data and not in address (dudect_stage). */
+    _Alignas(64) uint8_t tag_use_stage[16];
     for (int i = 0; i < iterations && !g_timeout_hit; i++) {
         int class_idx = rand() & 1;
         /* Pointer select OUTSIDE the timing region to remove
          * class-correlated branch-predictor delta. */
-        const uint8_t *tag_use = class_idx ? bad_tag : tag;
+        const uint8_t *tag_use =
+            dudect_stage(tag_use_stage, class_idx ? bad_tag : tag, sizeof tag_use_stage);
 
         uint64_t start = dudect_get_time_ns();
         volatile ama_error_t rc =
@@ -425,11 +497,14 @@ static double test_aes_gcm_tag_verify(int iterations) {
                 "for tampered tag)\n",
                 rc_mismatches);
         dudect_print_result(&ctx);
+        dudect_ctx_free(&ctx);
         return DUDECT_FATAL_SENTINEL;
     }
 
     dudect_print_result(&ctx);
-    return dudect_get_t(&ctx);
+    double lane_t = dudect_get_t(&ctx);
+    dudect_ctx_free(&ctx);
+    return lane_t;
 }
 
 /* -----------------------------------------------------------------------
@@ -460,7 +535,13 @@ static double test_aes_gcm_tag_verify(int iterations) {
  * ----------------------------------------------------------------------- */
 static double test_aes_gcm_forgery_position(int iterations) {
     dudect_ctx_t ctx;
-    dudect_ctx_init(&ctx, "AES-GCM tag verify (forgery position)");
+    if (!dudect_ctx_init(&ctx, "AES-GCM tag verify (forgery position)", (size_t)iterations)) {
+        fprintf(stderr,
+                "  FATAL: lane '%s' could not allocate its sample buffers; "
+                "recording a harness fault, not a verdict\n",
+                "AES-GCM tag verify (forgery position)");
+        return DUDECT_FATAL_SENTINEL;
+    }
 
     uint8_t key[32], nonce[12];
     uint8_t aad[32];
@@ -479,6 +560,7 @@ static double test_aes_gcm_forgery_position(int iterations) {
                 "  FAIL: AES-GCM dudect setup encrypt failed; "
                 "forgery-position lane never executed\n");
         dudect_print_result(&ctx);
+        dudect_ctx_free(&ctx);
         return DUDECT_FATAL_SENTINEL;
     }
 
@@ -491,10 +573,14 @@ static double test_aes_gcm_forgery_position(int iterations) {
      * Ascon forgery-position lanes. */
     int rc_mismatches = 0;
 
+    /* One staged buffer, read by the timed call for BOTH classes, so
+     * the classes differ in data and not in address (dudect_stage). */
+    _Alignas(64) uint8_t tag_use_stage[16];
     for (int i = 0; i < iterations && !g_timeout_hit; i++) {
         int class_idx = rand() & 1;
         /* Pointer select OUTSIDE the timing region. */
-        const uint8_t *tag_use = class_idx ? tag_last : tag_first;
+        const uint8_t *tag_use =
+            dudect_stage(tag_use_stage, class_idx ? tag_last : tag_first, sizeof tag_use_stage);
 
         uint64_t start = dudect_get_time_ns();
         volatile ama_error_t rc =
@@ -512,11 +598,14 @@ static double test_aes_gcm_forgery_position(int iterations) {
                 "  FAIL: AES-GCM forgery-position lane saw %d "
                 "non-refusal(s); a forged tag was accepted\n", rc_mismatches);
         dudect_print_result(&ctx);
+        dudect_ctx_free(&ctx);
         return DUDECT_FATAL_SENTINEL;
     }
 
     dudect_print_result(&ctx);
-    return dudect_get_t(&ctx);
+    double lane_t = dudect_get_t(&ctx);
+    dudect_ctx_free(&ctx);
+    return lane_t;
 }
 
 /* -----------------------------------------------------------------------
@@ -537,7 +626,13 @@ static double test_aes_gcm_forgery_position(int iterations) {
  * ----------------------------------------------------------------------- */
 static double test_ed25519_verify(int iterations) {
     dudect_ctx_t ctx;
-    dudect_ctx_init(&ctx, "Ed25519 verify (vartime, info-only)");
+    if (!dudect_ctx_init(&ctx, "Ed25519 verify (vartime, info-only)", (size_t)iterations)) {
+        fprintf(stderr,
+                "  FATAL: lane '%s' could not allocate its sample buffers; "
+                "recording a harness fault, not a verdict\n",
+                "Ed25519 verify (vartime, info-only)");
+        return DUDECT_FATAL_SENTINEL;
+    }
 
     uint8_t pk[32], sk[64];
     uint8_t sig_good[64], sig_bad[64];
@@ -559,6 +654,7 @@ static double test_ed25519_verify(int iterations) {
                     "  FAIL: Ed25519 verify dudect setup "
                     "(keypair/sign) failed; verify lane never executed\n");
             dudect_print_result(&ctx);
+            dudect_ctx_free(&ctx);
             return DUDECT_FATAL_SENTINEL;
         }
     }
@@ -578,9 +674,13 @@ static double test_ed25519_verify(int iterations) {
      * regression is a real defect even in an info-only lane. */
     int rc_mismatches = 0;
 
+    /* One staged buffer, read by the timed call for BOTH classes, so
+     * the classes differ in data and not in address (dudect_stage). */
+    _Alignas(64) uint8_t sig_stage[64];
     for (int i = 0; i < iterations && !g_timeout_hit; i++) {
         int class_idx = rand() & 1;
-        const uint8_t *sig = class_idx ? sig_bad : sig_good;
+        const uint8_t *sig =
+            dudect_stage(sig_stage, class_idx ? sig_bad : sig_good, sizeof sig_stage);
 
         uint64_t start = dudect_get_time_ns();
         volatile ama_error_t rc =
@@ -601,11 +701,14 @@ static double test_ed25519_verify(int iterations) {
                 "AMA_ERROR_VERIFY_FAILED for tampered)\n",
                 rc_mismatches);
         dudect_print_result(&ctx);
+        dudect_ctx_free(&ctx);
         return DUDECT_FATAL_SENTINEL;
     }
 
     dudect_print_result(&ctx);
-    return dudect_get_t(&ctx);
+    double lane_t = dudect_get_t(&ctx);
+    dudect_ctx_free(&ctx);
+    return lane_t;
 }
 
 /* -----------------------------------------------------------------------
@@ -654,7 +757,13 @@ static double test_ed25519_verify(int iterations) {
  * ----------------------------------------------------------------------- */
 static double test_chacha20poly1305_tag_verify(int iterations) {
     dudect_ctx_t ctx;
-    dudect_ctx_init(&ctx, "ChaCha20-Poly1305 tag verify");
+    if (!dudect_ctx_init(&ctx, "ChaCha20-Poly1305 tag verify", (size_t)iterations)) {
+        fprintf(stderr,
+                "  FATAL: lane '%s' could not allocate its sample buffers; "
+                "recording a harness fault, not a verdict\n",
+                "ChaCha20-Poly1305 tag verify");
+        return DUDECT_FATAL_SENTINEL;
+    }
 
     uint8_t key[AMA_CHACHA20_KEY_BYTES];
     uint8_t nonce[AMA_CHACHA20_NONCE_BYTES];
@@ -681,6 +790,7 @@ static double test_chacha20poly1305_tag_verify(int iterations) {
                 "  FAIL: ChaCha20-Poly1305 dudect setup encrypt failed; "
                 "tag-verify lane never executed\n");
         dudect_print_result(&ctx);
+        dudect_ctx_free(&ctx);
         return DUDECT_FATAL_SENTINEL;
     }
 
@@ -696,10 +806,14 @@ static double test_chacha20poly1305_tag_verify(int iterations) {
      * lane would silently testify to nothing. */
     int rc_mismatches = 0;
 
+    /* One staged buffer, read by the timed call for BOTH classes, so
+     * the classes differ in data and not in address (dudect_stage). */
+    _Alignas(64) uint8_t tag_use_stage[AMA_POLY1305_TAG_BYTES];
     for (int i = 0; i < iterations && !g_timeout_hit; i++) {
         int class_idx = rand() & 1;
         /* Pointer select OUTSIDE the timing region. */
-        const uint8_t *tag_use = class_idx ? tag_bad : tag_good;
+        const uint8_t *tag_use =
+            dudect_stage(tag_use_stage, class_idx ? tag_bad : tag_good, sizeof tag_use_stage);
 
         uint64_t start = dudect_get_time_ns();
         volatile ama_error_t rc =
@@ -724,11 +838,14 @@ static double test_chacha20poly1305_tag_verify(int iterations) {
                 "for tampered tag)\n",
                 rc_mismatches);
         dudect_print_result(&ctx);
+        dudect_ctx_free(&ctx);
         return DUDECT_FATAL_SENTINEL;
     }
 
     dudect_print_result(&ctx);
-    return dudect_get_t(&ctx);
+    double lane_t = dudect_get_t(&ctx);
+    dudect_ctx_free(&ctx);
+    return lane_t;
 }
 
 /* -----------------------------------------------------------------------
@@ -756,7 +873,13 @@ static double test_chacha20poly1305_tag_verify(int iterations) {
  * ----------------------------------------------------------------------- */
 static double test_chacha20poly1305_forgery_position(int iterations) {
     dudect_ctx_t ctx;
-    dudect_ctx_init(&ctx, "ChaCha20-Poly1305 tag verify (forgery position)");
+    if (!dudect_ctx_init(&ctx, "ChaCha20-Poly1305 tag verify (forgery position)", (size_t)iterations)) {
+        fprintf(stderr,
+                "  FATAL: lane '%s' could not allocate its sample buffers; "
+                "recording a harness fault, not a verdict\n",
+                "ChaCha20-Poly1305 tag verify (forgery position)");
+        return DUDECT_FATAL_SENTINEL;
+    }
 
     uint8_t key[AMA_CHACHA20_KEY_BYTES];
     uint8_t nonce[AMA_CHACHA20_NONCE_BYTES];
@@ -778,6 +901,7 @@ static double test_chacha20poly1305_forgery_position(int iterations) {
                 "  FAIL: ChaCha20-Poly1305 dudect setup encrypt failed; "
                 "forgery-position lane never executed\n");
         dudect_print_result(&ctx);
+        dudect_ctx_free(&ctx);
         return DUDECT_FATAL_SENTINEL;
     }
 
@@ -791,10 +915,14 @@ static double test_chacha20poly1305_forgery_position(int iterations) {
      * nothing (same guard as the Ascon forgery-position lane). */
     int rc_mismatches = 0;
 
+    /* One staged buffer, read by the timed call for BOTH classes, so
+     * the classes differ in data and not in address (dudect_stage). */
+    _Alignas(64) uint8_t tag_use_stage[AMA_POLY1305_TAG_BYTES];
     for (int i = 0; i < iterations && !g_timeout_hit; i++) {
         int class_idx = rand() & 1;
         /* Pointer select OUTSIDE the timing region. */
-        const uint8_t *tag_use = class_idx ? tag_last : tag_first;
+        const uint8_t *tag_use =
+            dudect_stage(tag_use_stage, class_idx ? tag_last : tag_first, sizeof tag_use_stage);
 
         uint64_t start = dudect_get_time_ns();
         volatile ama_error_t rc =
@@ -812,11 +940,14 @@ static double test_chacha20poly1305_forgery_position(int iterations) {
                 "  FAIL: ChaCha20-Poly1305 forgery-position lane saw %d "
                 "non-refusal(s); a forged tag was accepted\n", rc_mismatches);
         dudect_print_result(&ctx);
+        dudect_ctx_free(&ctx);
         return DUDECT_FATAL_SENTINEL;
     }
 
     dudect_print_result(&ctx);
-    return dudect_get_t(&ctx);
+    double lane_t = dudect_get_t(&ctx);
+    dudect_ctx_free(&ctx);
+    return lane_t;
 }
 
 /* -----------------------------------------------------------------------
@@ -841,7 +972,13 @@ static double test_chacha20poly1305_forgery_position(int iterations) {
  * ----------------------------------------------------------------------- */
 static double test_argon2id_legacy_verify(int iterations) {
     dudect_ctx_t ctx;
-    dudect_ctx_init(&ctx, "Argon2id legacy verify");
+    if (!dudect_ctx_init(&ctx, "Argon2id legacy verify", (size_t)iterations)) {
+        fprintf(stderr,
+                "  FATAL: lane '%s' could not allocate its sample buffers; "
+                "recording a harness fault, not a verdict\n",
+                "Argon2id legacy verify");
+        return DUDECT_FATAL_SENTINEL;
+    }
 
     const uint8_t password[16] = "dudect-arg2pass";
     const uint8_t salt[16]     = "dudect-arg2salt!";
@@ -856,6 +993,7 @@ static double test_argon2id_legacy_verify(int iterations) {
                 "  FAIL: Argon2id dudect setup hash failed; "
                 "verify lane never executed\n");
         dudect_print_result(&ctx);
+        dudect_ctx_free(&ctx);
         return DUDECT_FATAL_SENTINEL;
     }
     memcpy(tag_bad, tag_good, sizeof(tag_good));
@@ -874,9 +1012,13 @@ static double test_argon2id_legacy_verify(int iterations) {
      * produce a clean t-value without witnessing the actual compare). */
     int rc_mismatches = 0;
 
+    /* One staged buffer, read by the timed call for BOTH classes, so
+     * the classes differ in data and not in address (dudect_stage). */
+    _Alignas(64) uint8_t tag_use_stage[32];
     for (int i = 0; i < local_iters && !g_timeout_hit; i++) {
         int class_idx = rand() & 1;
-        const uint8_t *tag_use = class_idx ? tag_bad : tag_good;
+        const uint8_t *tag_use =
+            dudect_stage(tag_use_stage, class_idx ? tag_bad : tag_good, sizeof tag_use_stage);
 
         uint64_t start = dudect_get_time_ns();
         volatile ama_error_t rc =
@@ -900,11 +1042,14 @@ static double test_argon2id_legacy_verify(int iterations) {
                 "for tampered tag)\n",
                 rc_mismatches);
         dudect_print_result(&ctx);
+        dudect_ctx_free(&ctx);
         return DUDECT_FATAL_SENTINEL;
     }
 
     dudect_print_result(&ctx);
-    return dudect_get_t(&ctx);
+    double lane_t = dudect_get_t(&ctx);
+    dudect_ctx_free(&ctx);
+    return lane_t;
 }
 
 /* -----------------------------------------------------------------------
@@ -926,7 +1071,13 @@ static double test_argon2id_legacy_verify(int iterations) {
  * ----------------------------------------------------------------------- */
 static double test_secp256k1_scalarmult(int iterations) {
     dudect_ctx_t ctx;
-    dudect_ctx_init(&ctx, "secp256k1 scalar multiplication");
+    if (!dudect_ctx_init(&ctx, "secp256k1 scalar multiplication", (size_t)iterations)) {
+        fprintf(stderr,
+                "  FATAL: lane '%s' could not allocate its sample buffers; "
+                "recording a harness fault, not a verdict\n",
+                "secp256k1 scalar multiplication");
+        return DUDECT_FATAL_SENTINEL;
+    }
 
     /* secp256k1 generator G = (Gx, Gy), big-endian. */
     static const uint8_t Gx[32] = {
@@ -965,9 +1116,13 @@ static double test_secp256k1_scalarmult(int iterations) {
      * longer witnessing the Montgomery ladder under test. */
     int rc_mismatches = 0;
 
+    /* One staged buffer, read by the timed call for BOTH classes, so
+     * the classes differ in data and not in address (dudect_stage). */
+    _Alignas(64) uint8_t k_stage[32];
     for (int i = 0; i < iterations && !g_timeout_hit; i++) {
         int class_idx = rand() & 1;
-        const uint8_t *k = class_idx ? k_high : k_low;
+        const uint8_t *k =
+            dudect_stage(k_stage, class_idx ? k_high : k_low, sizeof k_stage);
 
         uint64_t start = dudect_get_time_ns();
         volatile ama_error_t rc =
@@ -986,11 +1141,14 @@ static double test_secp256k1_scalarmult(int iterations) {
                 "expected for both)\n",
                 rc_mismatches);
         dudect_print_result(&ctx);
+        dudect_ctx_free(&ctx);
         return DUDECT_FATAL_SENTINEL;
     }
 
     dudect_print_result(&ctx);
-    return dudect_get_t(&ctx);
+    double lane_t = dudect_get_t(&ctx);
+    dudect_ctx_free(&ctx);
+    return lane_t;
 }
 
 /* -----------------------------------------------------------------------
@@ -1022,7 +1180,13 @@ static double test_secp256k1_scalarmult(int iterations) {
  * ----------------------------------------------------------------------- */
 static double test_secp256k1_ecdsa_sign(int iterations) {
     dudect_ctx_t ctx;
-    dudect_ctx_init(&ctx, "secp256k1 ECDSA sign (RFC 6979)");
+    if (!dudect_ctx_init(&ctx, "secp256k1 ECDSA sign (RFC 6979)", (size_t)iterations)) {
+        fprintf(stderr,
+                "  FATAL: lane '%s' could not allocate its sample buffers; "
+                "recording a harness fault, not a verdict\n",
+                "secp256k1 ECDSA sign (RFC 6979)");
+        return DUDECT_FATAL_SENTINEL;
+    }
 
     /* Fixed class: a valid private key in [1, n-1] and a fixed digest. */
     static const uint8_t d_fixed[32] = {
@@ -1046,6 +1210,12 @@ static double test_secp256k1_ecdsa_sign(int iterations) {
      * scalar arithmetic under test while still producing a clean t-value. */
     int rc_mismatches = 0;
 
+    /* One staged buffer, read by the timed call for BOTH classes, so
+     * the classes differ in data and not in address (dudect_stage). */
+    _Alignas(64) uint8_t m_stage[32];
+    /* One staged buffer, read by the timed call for BOTH classes, so
+     * the classes differ in data and not in address (dudect_stage). */
+    _Alignas(64) uint8_t d_stage[32];
     for (int i = 0; i < iterations && !g_timeout_hit; i++) {
         int class_idx = rand() & 1;
 
@@ -1076,8 +1246,10 @@ static double test_secp256k1_ecdsa_sign(int iterations) {
         d_rand[31] |= 0x01;
         random_bytes(msg_rand, sizeof(msg_rand));
 
-        const uint8_t *d = class_idx ? d_rand : d_fixed;
-        const uint8_t *m = class_idx ? msg_rand : msg_fixed;
+        const uint8_t *d =
+            dudect_stage(d_stage, class_idx ? d_rand : d_fixed, sizeof d_stage);
+        const uint8_t *m =
+            dudect_stage(m_stage, class_idx ? msg_rand : msg_fixed, sizeof m_stage);
 
         uint64_t start = dudect_get_time_ns();
         volatile ama_error_t rc =
@@ -1095,11 +1267,14 @@ static double test_secp256k1_ecdsa_sign(int iterations) {
                 "use valid keys in [1, n-1]; AMA_SUCCESS expected for both)\n",
                 rc_mismatches);
         dudect_print_result(&ctx);
+        dudect_ctx_free(&ctx);
         return DUDECT_FATAL_SENTINEL;
     }
 
     dudect_print_result(&ctx);
-    return dudect_get_t(&ctx);
+    double lane_t = dudect_get_t(&ctx);
+    dudect_ctx_free(&ctx);
+    return lane_t;
 }
 
 
@@ -1117,7 +1292,13 @@ static double test_secp256k1_ecdsa_sign(int iterations) {
  * ----------------------------------------------------------------------- */
 static double test_hkdf(int iterations) {
     dudect_ctx_t ctx;
-    dudect_ctx_init(&ctx, "HKDF-SHA3-256 (IKM-independent)");
+    if (!dudect_ctx_init(&ctx, "HKDF-SHA3-256 (IKM-independent)", (size_t)iterations)) {
+        fprintf(stderr,
+                "  FATAL: lane '%s' could not allocate its sample buffers; "
+                "recording a harness fault, not a verdict\n",
+                "HKDF-SHA3-256 (IKM-independent)");
+        return DUDECT_FATAL_SENTINEL;
+    }
 
     uint8_t ikm0[32], ikm1[32], salt[32], okm[32];
     memset(ikm0, 0x00, 32);
@@ -1129,10 +1310,14 @@ static double test_hkdf(int iterations) {
 
     int rc_mismatches = 0;
 
+    /* One staged buffer, read by the timed call for BOTH classes, so
+     * the classes differ in data and not in address (dudect_stage). */
+    _Alignas(64) uint8_t ikm_use_stage[32];
     for (int i = 0; i < iterations && !g_timeout_hit; i++) {
         int class_idx = rand() & 1;
         /* Pointer-select OUTSIDE the timing region. */
-        const uint8_t *ikm_use = class_idx ? ikm1 : ikm0;
+        const uint8_t *ikm_use =
+            dudect_stage(ikm_use_stage, class_idx ? ikm1 : ikm0, sizeof ikm_use_stage);
 
         uint64_t start = dudect_get_time_ns();
         volatile ama_error_t rc =
@@ -1151,11 +1336,14 @@ static double test_hkdf(int iterations) {
                 "IKMs are valid inputs)\n",
                 rc_mismatches);
         dudect_print_result(&ctx);
+        dudect_ctx_free(&ctx);
         return DUDECT_FATAL_SENTINEL;
     }
 
     dudect_print_result(&ctx);
-    return dudect_get_t(&ctx);
+    double lane_t = dudect_get_t(&ctx);
+    dudect_ctx_free(&ctx);
+    return lane_t;
 }
 
 /* -----------------------------------------------------------------------
@@ -1183,7 +1371,13 @@ static double test_hkdf(int iterations) {
  * ----------------------------------------------------------------------- */
 static double test_hmac_verify(int iterations) {
     dudect_ctx_t ctx;
-    dudect_ctx_init(&ctx, "HMAC-SHA3-256 verify (compute+compare)");
+    if (!dudect_ctx_init(&ctx, "HMAC-SHA3-256 verify (compute+compare)", (size_t)iterations)) {
+        fprintf(stderr,
+                "  FATAL: lane '%s' could not allocate its sample buffers; "
+                "recording a harness fault, not a verdict\n",
+                "HMAC-SHA3-256 verify (compute+compare)");
+        return DUDECT_FATAL_SENTINEL;
+    }
 
     uint8_t key[32], msg[64];
     uint8_t mac[32], bad_mac[32];
@@ -1199,6 +1393,7 @@ static double test_hmac_verify(int iterations) {
                 "  FAIL: HMAC-SHA3-256 dudect setup compute failed; "
                 "verify lane never executed\n");
         dudect_print_result(&ctx);
+        dudect_ctx_free(&ctx);
         return DUDECT_FATAL_SENTINEL;
     }
 
@@ -1211,11 +1406,15 @@ static double test_hmac_verify(int iterations) {
      * t-value because both classes would fail identically. */
     int rc_mismatches = 0;
 
+    /* One staged buffer, read by the timed call for BOTH classes, so
+     * the classes differ in data and not in address (dudect_stage). */
+    _Alignas(64) uint8_t test_mac_stage[32];
     for (int i = 0; i < iterations && !g_timeout_hit; i++) {
         int class_idx = rand() & 1;
         /* Pointer-select OUTSIDE the timing region to remove
          * class-correlated branch-predictor delta. */
-        const uint8_t *test_mac = class_idx ? bad_mac : mac;
+        const uint8_t *test_mac =
+            dudect_stage(test_mac_stage, class_idx ? bad_mac : mac, sizeof test_mac_stage);
         uint8_t computed[32];
 
         uint64_t start = dudect_get_time_ns();
@@ -1238,11 +1437,14 @@ static double test_hmac_verify(int iterations) {
                 "(key=32B, msg=64B) is always valid)\n",
                 rc_mismatches);
         dudect_print_result(&ctx);
+        dudect_ctx_free(&ctx);
         return DUDECT_FATAL_SENTINEL;
     }
 
     dudect_print_result(&ctx);
-    return dudect_get_t(&ctx);
+    double lane_t = dudect_get_t(&ctx);
+    dudect_ctx_free(&ctx);
+    return lane_t;
 }
 
 /* -----------------------------------------------------------------------
@@ -1273,7 +1475,13 @@ static double test_hmac_verify(int iterations) {
  * ----------------------------------------------------------------------- */
 static double test_ascon_tag_verify(int iterations) {
     dudect_ctx_t ctx;
-    dudect_ctx_init(&ctx, "Ascon-AEAD128 tag verify (forgery position)");
+    if (!dudect_ctx_init(&ctx, "Ascon-AEAD128 tag verify (forgery position)", (size_t)iterations)) {
+        fprintf(stderr,
+                "  FATAL: lane '%s' could not allocate its sample buffers; "
+                "recording a harness fault, not a verdict\n",
+                "Ascon-AEAD128 tag verify (forgery position)");
+        return DUDECT_FATAL_SENTINEL;
+    }
 
     uint8_t key[AMA_ASCON_AEAD128_KEY_LEN];
     uint8_t nonce[AMA_ASCON_AEAD128_NONCE_LEN];
@@ -1295,6 +1503,7 @@ static double test_ascon_tag_verify(int iterations) {
                 "  FAIL: Ascon dudect setup encrypt failed; "
                 "tag-verify lane never executed\n");
         dudect_print_result(&ctx);
+        dudect_ctx_free(&ctx);
         return DUDECT_FATAL_SENTINEL;
     }
 
@@ -1308,10 +1517,14 @@ static double test_ascon_tag_verify(int iterations) {
      * clean t while testifying to nothing. */
     int rc_mismatches = 0;
 
+    /* One staged buffer, read by the timed call for BOTH classes, so
+     * the classes differ in data and not in address (dudect_stage). */
+    _Alignas(64) uint8_t tag_use_stage[AMA_ASCON_AEAD128_TAG_LEN];
     for (int i = 0; i < iterations && !g_timeout_hit; i++) {
         int class_idx = rand() & 1;
         /* Pointer select OUTSIDE the timing region. */
-        const uint8_t *tag_use = class_idx ? tag_last : tag_first;
+        const uint8_t *tag_use =
+            dudect_stage(tag_use_stage, class_idx ? tag_last : tag_first, sizeof tag_use_stage);
 
         uint64_t start = dudect_get_time_ns();
         volatile ama_error_t rc =
@@ -1329,11 +1542,14 @@ static double test_ascon_tag_verify(int iterations) {
                 "  FAIL: Ascon tag-verify lane saw %d non-refusal(s); "
                 "a forged tag was accepted\n", rc_mismatches);
         dudect_print_result(&ctx);
+        dudect_ctx_free(&ctx);
         return DUDECT_FATAL_SENTINEL;
     }
 
     dudect_print_result(&ctx);
-    return dudect_get_t(&ctx);
+    double lane_t = dudect_get_t(&ctx);
+    dudect_ctx_free(&ctx);
+    return lane_t;
 }
 
 /* -----------------------------------------------------------------------
@@ -1356,7 +1572,13 @@ static double test_ascon_tag_verify(int iterations) {
  * ----------------------------------------------------------------------- */
 static double test_ascon_encrypt_key_independent(int iterations) {
     dudect_ctx_t ctx;
-    dudect_ctx_init(&ctx, "Ascon-AEAD128 encrypt (key-independent)");
+    if (!dudect_ctx_init(&ctx, "Ascon-AEAD128 encrypt (key-independent)", (size_t)iterations)) {
+        fprintf(stderr,
+                "  FATAL: lane '%s' could not allocate its sample buffers; "
+                "recording a harness fault, not a verdict\n",
+                "Ascon-AEAD128 encrypt (key-independent)");
+        return DUDECT_FATAL_SENTINEL;
+    }
 
     uint8_t key_zero[AMA_ASCON_AEAD128_KEY_LEN];
     uint8_t key_ones[AMA_ASCON_AEAD128_KEY_LEN];
@@ -1370,10 +1592,14 @@ static double test_ascon_encrypt_key_independent(int iterations) {
 
     int rc_failures = 0;
 
+    /* One staged buffer, read by the timed call for BOTH classes, so
+     * the classes differ in data and not in address (dudect_stage). */
+    _Alignas(64) uint8_t key_use_stage[AMA_ASCON_AEAD128_KEY_LEN];
     for (int i = 0; i < iterations && !g_timeout_hit; i++) {
         int class_idx = rand() & 1;
         /* Pointer select OUTSIDE the timing region. */
-        const uint8_t *key_use = class_idx ? key_ones : key_zero;
+        const uint8_t *key_use =
+            dudect_stage(key_use_stage, class_idx ? key_ones : key_zero, sizeof key_use_stage);
 
         uint64_t start = dudect_get_time_ns();
         volatile ama_error_t rc =
@@ -1390,11 +1616,14 @@ static double test_ascon_encrypt_key_independent(int iterations) {
         fprintf(stderr,
                 "  FAIL: Ascon encrypt lane saw %d failure(s)\n", rc_failures);
         dudect_print_result(&ctx);
+        dudect_ctx_free(&ctx);
         return DUDECT_FATAL_SENTINEL;
     }
 
     dudect_print_result(&ctx);
-    return dudect_get_t(&ctx);
+    double lane_t = dudect_get_t(&ctx);
+    dudect_ctx_free(&ctx);
+    return lane_t;
 }
 
 /* -----------------------------------------------------------------------
@@ -1405,7 +1634,13 @@ static double test_ascon_encrypt_key_independent(int iterations) {
  * ----------------------------------------------------------------------- */
 static double test_ascon_hash256_input_independent(int iterations) {
     dudect_ctx_t ctx;
-    dudect_ctx_init(&ctx, "Ascon-Hash256 (input-independent)");
+    if (!dudect_ctx_init(&ctx, "Ascon-Hash256 (input-independent)", (size_t)iterations)) {
+        fprintf(stderr,
+                "  FATAL: lane '%s' could not allocate its sample buffers; "
+                "recording a harness fault, not a verdict\n",
+                "Ascon-Hash256 (input-independent)");
+        return DUDECT_FATAL_SENTINEL;
+    }
 
     uint8_t input_zero[64], input_ones[64];
     uint8_t digest[AMA_ASCON_HASH256_DIGEST_LEN];
@@ -1415,10 +1650,14 @@ static double test_ascon_hash256_input_independent(int iterations) {
 
     int rc_failures = 0;
 
+    /* One staged buffer, read by the timed call for BOTH classes, so
+     * the classes differ in data and not in address (dudect_stage). */
+    _Alignas(64) uint8_t in_stage[64];
     for (int i = 0; i < iterations && !g_timeout_hit; i++) {
         int class_idx = rand() & 1;
         /* Pointer select OUTSIDE the timing region. */
-        const uint8_t *in = class_idx ? input_ones : input_zero;
+        const uint8_t *in =
+            dudect_stage(in_stage, class_idx ? input_ones : input_zero, sizeof in_stage);
 
         uint64_t start = dudect_get_time_ns();
         volatile ama_error_t rc =
@@ -1434,11 +1673,14 @@ static double test_ascon_hash256_input_independent(int iterations) {
         fprintf(stderr,
                 "  FAIL: Ascon-Hash256 lane saw %d failure(s)\n", rc_failures);
         dudect_print_result(&ctx);
+        dudect_ctx_free(&ctx);
         return DUDECT_FATAL_SENTINEL;
     }
 
     dudect_print_result(&ctx);
-    return dudect_get_t(&ctx);
+    double lane_t = dudect_get_t(&ctx);
+    dudect_ctx_free(&ctx);
+    return lane_t;
 }
 
 /* -----------------------------------------------------------------------
@@ -1469,7 +1711,13 @@ static double test_ascon_hash256_input_independent(int iterations) {
  * ----------------------------------------------------------------------- */
 static double test_agent_binding_check(int iterations) {
     dudect_ctx_t ctx;
-    dudect_ctx_init(&ctx, "agent binding check (verdict-independent)");
+    if (!dudect_ctx_init(&ctx, "agent binding check (verdict-independent)", (size_t)iterations)) {
+        fprintf(stderr,
+                "  FATAL: lane '%s' could not allocate its sample buffers; "
+                "recording a harness fault, not a verdict\n",
+                "agent binding check (verdict-independent)");
+        return DUDECT_FATAL_SENTINEL;
+    }
 
     ama_agent_binding_t good, bad;
     uint8_t instance_id[AMA_AGENT_INSTANCE_ID_BYTES];
@@ -1491,6 +1739,7 @@ static double test_agent_binding_check(int iterations) {
                 "  FAIL: agent-binding dudect setup failed; "
                 "check lane never executed\n");
         dudect_print_result(&ctx);
+        dudect_ctx_free(&ctx);
         return DUDECT_FATAL_SENTINEL;
     }
 
@@ -1499,10 +1748,14 @@ static double test_agent_binding_check(int iterations) {
 
     int rc_mismatches = 0;
 
+    /* One staged buffer, read by the timed call for BOTH classes, so
+     * the classes differ in data and not in address (dudect_stage). */
+    _Alignas(64) ama_agent_binding_t b_stage;
     for (int i = 0; i < iterations && !g_timeout_hit; i++) {
         int class_idx = rand() & 1;
         /* Pointer-select OUTSIDE the timing region. */
-        const ama_agent_binding_t *b = class_idx ? &bad : &good;
+        const ama_agent_binding_t *b =
+            dudect_stage(&b_stage, class_idx ? &bad : &good, sizeof b_stage);
 
         uint64_t start = dudect_get_time_ns();
         volatile ama_error_t rc =
@@ -1523,11 +1776,14 @@ static double test_agent_binding_check(int iterations) {
                 "AMA_ERROR_ETHICAL_BINDING)\n",
                 rc_mismatches);
         dudect_print_result(&ctx);
+        dudect_ctx_free(&ctx);
         return DUDECT_FATAL_SENTINEL;
     }
 
     dudect_print_result(&ctx);
-    return dudect_get_t(&ctx);
+    double lane_t = dudect_get_t(&ctx);
+    dudect_ctx_free(&ctx);
+    return lane_t;
 }
 
 #ifdef AMA_USE_NATIVE_PQC
@@ -1556,7 +1812,13 @@ static double test_x25519_scalarmult(int iterations) {
              ama_x25519_field_path());
 
     dudect_ctx_t ctx;
-    dudect_ctx_init(&ctx, label);
+    if (!dudect_ctx_init(&ctx, label, (size_t)iterations)) {
+        fprintf(stderr,
+                "  FATAL: lane '%s' could not allocate its sample buffers; "
+                "recording a harness fault, not a verdict\n",
+                label);
+        return DUDECT_FATAL_SENTINEL;
+    }
 
     uint8_t sk0[32], sk1[32], basepoint[32], out[32];
     memset(sk0, 0x00, 32);
@@ -1566,10 +1828,14 @@ static double test_x25519_scalarmult(int iterations) {
 
     int rc_mismatches = 0;
 
+    /* One staged buffer, read by the timed call for BOTH classes, so
+     * the classes differ in data and not in address (dudect_stage). */
+    _Alignas(64) uint8_t sk_use_stage[32];
     for (int i = 0; i < iterations && !g_timeout_hit; i++) {
         int class_idx = rand() & 1;
         /* Pointer-select OUTSIDE the timing region. */
-        const uint8_t *sk_use = class_idx ? sk1 : sk0;
+        const uint8_t *sk_use =
+            dudect_stage(sk_use_stage, class_idx ? sk1 : sk0, sizeof sk_use_stage);
 
         uint64_t start = dudect_get_time_ns();
         volatile ama_error_t rc =
@@ -1588,11 +1854,14 @@ static double test_x25519_scalarmult(int iterations) {
                 "scalars are valid post-clamp X25519 secrets)\n",
                 rc_mismatches);
         dudect_print_result(&ctx);
+        dudect_ctx_free(&ctx);
         return DUDECT_FATAL_SENTINEL;
     }
 
     dudect_print_result(&ctx);
-    return dudect_get_t(&ctx);
+    double lane_t = dudect_get_t(&ctx);
+    dudect_ctx_free(&ctx);
+    return lane_t;
 }
 
 /* -----------------------------------------------------------------------
@@ -1629,7 +1898,13 @@ static double test_x25519_scalarmult(int iterations) {
  * ----------------------------------------------------------------------- */
 static double test_x25519_scalarmult_x4(int iterations) {
     dudect_ctx_t ctx;
-    dudect_ctx_init(&ctx, "X25519 scalarmult batch×4 (scalar-independent)");
+    if (!dudect_ctx_init(&ctx, "X25519 scalarmult batch×4 (scalar-independent)", (size_t)iterations)) {
+        fprintf(stderr,
+                "  FATAL: lane '%s' could not allocate its sample buffers; "
+                "recording a harness fault, not a verdict\n",
+                "X25519 scalarmult batch×4 (scalar-independent)");
+        return DUDECT_FATAL_SENTINEL;
+    }
 
     uint8_t sk0[4][32], sk1[4][32], pts[4][32], out[4][32];
     memset(sk0, 0x00, sizeof(sk0));
@@ -1663,11 +1938,14 @@ static double test_x25519_scalarmult_x4(int iterations) {
                 "(expected AMA_SUCCESS on every iteration)\n",
                 rc_mismatches);
         dudect_print_result(&ctx);
+        dudect_ctx_free(&ctx);
         return DUDECT_FATAL_SENTINEL;
     }
 
     dudect_print_result(&ctx);
-    return dudect_get_t(&ctx);
+    double lane_t = dudect_get_t(&ctx);
+    dudect_ctx_free(&ctx);
+    return lane_t;
 }
 
 /* -----------------------------------------------------------------------
@@ -1690,7 +1968,13 @@ static double test_x25519_scalarmult_x4(int iterations) {
  * ----------------------------------------------------------------------- */
 static double test_kyber_decaps(int iterations) {
     dudect_ctx_t ctx;
-    dudect_ctx_init(&ctx, "Kyber-1024 decaps (CT reject)");
+    if (!dudect_ctx_init(&ctx, "Kyber-1024 decaps (CT reject)", (size_t)iterations)) {
+        fprintf(stderr,
+                "  FATAL: lane '%s' could not allocate its sample buffers; "
+                "recording a harness fault, not a verdict\n",
+                "Kyber-1024 decaps (CT reject)");
+        return DUDECT_FATAL_SENTINEL;
+    }
 
     uint8_t pk[AMA_KYBER_1024_PUBLIC_KEY_BYTES];
     uint8_t sk[AMA_KYBER_1024_SECRET_KEY_BYTES];
@@ -1709,6 +1993,7 @@ static double test_kyber_decaps(int iterations) {
                 "  FAIL: Kyber dudect setup (keypair/encapsulate) failed; "
                 "decaps lane never executed\n");
         dudect_print_result(&ctx);
+        dudect_ctx_free(&ctx);
         return DUDECT_FATAL_SENTINEL;
     }
 
@@ -1718,13 +2003,17 @@ static double test_kyber_decaps(int iterations) {
 
     int rc_mismatches = 0;
 
+    /* One staged buffer, read by the timed call for BOTH classes, so
+     * the classes differ in data and not in address (dudect_stage). */
+    _Alignas(64) uint8_t ct_use_stage[AMA_KYBER_1024_CIPHERTEXT_BYTES];
     for (int i = 0; i < iterations && !g_timeout_hit; i++) {
         int class_idx = rand() & 1;
         /* Pointer-select OUTSIDE the timing region.  Both class 0 and
          * class 1 must return AMA_SUCCESS — FIPS 203 implicit
          * rejection returns a pseudo-random shared secret on CT
          * tampering rather than surfacing the failure via rc. */
-        const uint8_t *ct_use = class_idx ? ct_bad : ct;
+        const uint8_t *ct_use =
+            dudect_stage(ct_use_stage, class_idx ? ct_bad : ct, sizeof ct_use_stage);
 
         uint64_t start = dudect_get_time_ns();
         volatile ama_error_t rc =
@@ -1744,11 +2033,14 @@ static double test_kyber_decaps(int iterations) {
                 "both classes — an rc divergence is itself a CT defect)\n",
                 rc_mismatches);
         dudect_print_result(&ctx);
+        dudect_ctx_free(&ctx);
         return DUDECT_FATAL_SENTINEL;
     }
 
     dudect_print_result(&ctx);
-    return dudect_get_t(&ctx);
+    double lane_t = dudect_get_t(&ctx);
+    dudect_ctx_free(&ctx);
+    return lane_t;
 }
 
 /* -----------------------------------------------------------------------
@@ -1775,18 +2067,28 @@ static const uint8_t SCALAR_NEGATE_MID[32] = {
 
 static double test_frost_scalar_negate_extremes(int iterations) {
     dudect_ctx_t ctx;
-    dudect_ctx_init(&ctx, "FROST scalar_negate (0x00 vs 0xFF)");
+    if (!dudect_ctx_init(&ctx, "FROST scalar_negate (0x00 vs 0xFF)", (size_t)iterations)) {
+        fprintf(stderr,
+                "  FATAL: lane '%s' could not allocate its sample buffers; "
+                "recording a harness fault, not a verdict\n",
+                "FROST scalar_negate (0x00 vs 0xFF)");
+        return DUDECT_FATAL_SENTINEL;
+    }
 
     uint8_t s0[32], s1[32], neg[32];
     memset(s0, 0x00, 32);
     memset(s1, 0xFF, 32);
 
+    /* One staged buffer, read by the timed call for BOTH classes, so
+     * the classes differ in data and not in address (dudect_stage). */
+    _Alignas(64) uint8_t s_stage[32];
     for (int i = 0; i < iterations && !g_timeout_hit; i++) {
         int class_idx = rand() & 1;
         /* Pointer select OUTSIDE the timing region so a branch on
          * `class_idx` cannot leak class membership via the
          * branch-predictor — same pattern as the secp256k1 lane. */
-        const uint8_t *s = class_idx ? s1 : s0;
+        const uint8_t *s =
+            dudect_stage(s_stage, class_idx ? s1 : s0, sizeof s_stage);
 
         uint64_t start = dudect_get_time_ns();
         ama_frost_test_scalar_negate(neg, s);
@@ -1796,12 +2098,20 @@ static double test_frost_scalar_negate_extremes(int iterations) {
     }
 
     dudect_print_result(&ctx);
-    return dudect_get_t(&ctx);
+    double lane_t = dudect_get_t(&ctx);
+    dudect_ctx_free(&ctx);
+    return lane_t;
 }
 
 static double test_frost_scalar_negate_midrange(int iterations) {
     dudect_ctx_t ctx;
-    dudect_ctx_init(&ctx, "FROST scalar_negate (0x00 vs mid-range)");
+    if (!dudect_ctx_init(&ctx, "FROST scalar_negate (0x00 vs mid-range)", (size_t)iterations)) {
+        fprintf(stderr,
+                "  FATAL: lane '%s' could not allocate its sample buffers; "
+                "recording a harness fault, not a verdict\n",
+                "FROST scalar_negate (0x00 vs mid-range)");
+        return DUDECT_FATAL_SENTINEL;
+    }
 
     /* Both reference scalars MUST live in the same memory class so
      * the kernel reads them through equivalent cache paths.  Pre-fix,
@@ -1819,6 +2129,9 @@ static double test_frost_scalar_negate_midrange(int iterations) {
     memset(s0, 0x00, 32);
     memcpy(s1, SCALAR_NEGATE_MID, 32);
 
+    /* One staged buffer, read by the timed call for BOTH classes, so
+     * the classes differ in data and not in address (dudect_stage). */
+    _Alignas(64) uint8_t s_stage[32];
     for (int i = 0; i < iterations && !g_timeout_hit; i++) {
         int class_idx = rand() & 1;
         /* Pointer select OUTSIDE the timing region; previously this
@@ -1829,7 +2142,8 @@ static double test_frost_scalar_negate_midrange(int iterations) {
          * (src/c/ama_frost.c).  Fixed: select the input pointer up
          * front so the timed region is one indirect call with no
          * class-correlated control flow. */
-        const uint8_t *s = class_idx ? s1 : s0;
+        const uint8_t *s =
+            dudect_stage(s_stage, class_idx ? s1 : s0, sizeof s_stage);
 
         uint64_t start = dudect_get_time_ns();
         ama_frost_test_scalar_negate(neg, s);
@@ -1839,7 +2153,9 @@ static double test_frost_scalar_negate_midrange(int iterations) {
     }
 
     dudect_print_result(&ctx);
-    return dudect_get_t(&ctx);
+    double lane_t = dudect_get_t(&ctx);
+    dudect_ctx_free(&ctx);
+    return lane_t;
 }
 
 /* -----------------------------------------------------------------------
@@ -1864,7 +2180,13 @@ static double test_frost_scalar_negate_midrange(int iterations) {
  * ----------------------------------------------------------------------- */
 static double test_dilithium_sign(int iterations) {
     dudect_ctx_t ctx;
-    dudect_ctx_init(&ctx, "ML-DSA-65 sign (msg-independent)");
+    if (!dudect_ctx_init(&ctx, "ML-DSA-65 sign (msg-independent)", (size_t)iterations)) {
+        fprintf(stderr,
+                "  FATAL: lane '%s' could not allocate its sample buffers; "
+                "recording a harness fault, not a verdict\n",
+                "ML-DSA-65 sign (msg-independent)");
+        return DUDECT_FATAL_SENTINEL;
+    }
 
     uint8_t pk[AMA_ML_DSA_65_PUBLIC_KEY_BYTES];
     uint8_t sk[AMA_ML_DSA_65_SECRET_KEY_BYTES];
@@ -1880,15 +2202,20 @@ static double test_dilithium_sign(int iterations) {
                 "  FAIL: ML-DSA-65 dudect setup keypair failed; "
                 "sign lane never executed\n");
         dudect_print_result(&ctx);
+        dudect_ctx_free(&ctx);
         return DUDECT_FATAL_SENTINEL;
     }
 
     int rc_mismatches = 0;
 
+    /* One staged buffer, read by the timed call for BOTH classes, so
+     * the classes differ in data and not in address (dudect_stage). */
+    _Alignas(64) uint8_t msg_use_stage[64];
     for (int i = 0; i < iterations && !g_timeout_hit; i++) {
         int class_idx = rand() & 1;
         /* Pointer-select OUTSIDE the timing region. */
-        const uint8_t *msg_use = class_idx ? msg1 : msg0;
+        const uint8_t *msg_use =
+            dudect_stage(msg_use_stage, class_idx ? msg1 : msg0, sizeof msg_use_stage);
         /* `signature_len` is in/out: the call reads it as the buffer
          * capacity before writing the actual signature length back.
          * Re-initialise per iteration so a stale shrunk value doesn't
@@ -1915,11 +2242,14 @@ static double test_dilithium_sign(int iterations) {
                 "FIPS 204 fixed-size signature)\n",
                 rc_mismatches, AMA_ML_DSA_65_SIGNATURE_BYTES);
         dudect_print_result(&ctx);
+        dudect_ctx_free(&ctx);
         return DUDECT_FATAL_SENTINEL;
     }
 
     dudect_print_result(&ctx);
-    return dudect_get_t(&ctx);
+    double lane_t = dudect_get_t(&ctx);
+    dudect_ctx_free(&ctx);
+    return lane_t;
 }
 
 /* -----------------------------------------------------------------------
@@ -1958,7 +2288,13 @@ static double test_dilithium_sign(int iterations) {
  * ----------------------------------------------------------------------- */
 static double test_slhdsa_sign(int iterations) {
     dudect_ctx_t ctx;
-    dudect_ctx_init(&ctx, "SLH-DSA-SHA2-256f sign (msg-independent)");
+    if (!dudect_ctx_init(&ctx, "SLH-DSA-SHA2-256f sign (msg-independent)", (size_t)iterations)) {
+        fprintf(stderr,
+                "  FATAL: lane '%s' could not allocate its sample buffers; "
+                "recording a harness fault, not a verdict\n",
+                "SLH-DSA-SHA2-256f sign (msg-independent)");
+        return DUDECT_FATAL_SENTINEL;
+    }
 
     uint8_t pk[AMA_SLHDSA_SHA2_256F_PUBLIC_KEY_BYTES];
     uint8_t sk[AMA_SLHDSA_SHA2_256F_SECRET_KEY_BYTES];
@@ -1975,6 +2311,7 @@ static double test_slhdsa_sign(int iterations) {
                 "  FAIL: SLH-DSA-SHA2-256f dudect setup keygen failed; "
                 "sign lane never executed\n");
         dudect_print_result(&ctx);
+        dudect_ctx_free(&ctx);
         return DUDECT_FATAL_SENTINEL;
     }
 
@@ -1990,9 +2327,13 @@ static double test_slhdsa_sign(int iterations) {
      * t-value and be marked INFO-only, masking a real defect. */
     int rc_mismatches = 0;
 
+    /* One staged buffer, read by the timed call for BOTH classes, so
+     * the classes differ in data and not in address (dudect_stage). */
+    _Alignas(64) uint8_t msg_use_stage[64];
     for (int i = 0; i < local_iters && !g_timeout_hit; i++) {
         int class_idx = rand() & 1;
-        const uint8_t *msg_use = class_idx ? msg1 : msg0;
+        const uint8_t *msg_use =
+            dudect_stage(msg_use_stage, class_idx ? msg1 : msg0, sizeof msg_use_stage);
         size_t siglen = sizeof(sig);
 
         uint64_t start = dudect_get_time_ns();
@@ -2018,11 +2359,14 @@ static double test_slhdsa_sign(int iterations) {
                 rc_mismatches,
                 (size_t)AMA_SLHDSA_SHA2_256F_SIGNATURE_BYTES);
         dudect_print_result(&ctx);
+        dudect_ctx_free(&ctx);
         return DUDECT_FATAL_SENTINEL;
     }
 
     dudect_print_result(&ctx);
-    return dudect_get_t(&ctx);
+    double lane_t = dudect_get_t(&ctx);
+    dudect_ctx_free(&ctx);
+    return lane_t;
 }
 
 #endif /* AMA_USE_NATIVE_PQC */
@@ -2391,11 +2735,21 @@ int main(int argc, char *argv[]) {
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--self-test") == 0) {
-            /* Both suites always run, so one failing cannot hide the
-             * other's report; either failing fails the binary. */
+            /* Every suite always runs, so one failing cannot hide the
+             * others' reports; any failing fails the binary.
+             *
+             * The percentile suite is here because this harness computes the
+             * percentile-cropped statistic (dudect.h delegates to
+             * dudect_percentile.h).  It carries the null calibration that the
+             * threshold rests on: the rung ladder and the max-over-rungs
+             * reduction decide what |t| means, and this binary's verdict is a
+             * comparison against DUDECT_T_THRESHOLD.  Checking the rule but
+             * not the statistic it consumes would leave the half that
+             * actually sets the false-positive rate unexercised. */
             int verdict_rc    = dudect_rounds_self_test();
+            int crop_rc       = dudect_cropped_self_test();
             int truncation_rc = timeout_truncation_self_test();
-            return (verdict_rc != 0 || truncation_rc != 0) ? 1 : 0;
+            return (verdict_rc != 0 || crop_rc != 0 || truncation_rc != 0) ? 1 : 0;
         }
     }
 

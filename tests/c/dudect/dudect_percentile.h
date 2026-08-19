@@ -27,7 +27,9 @@
  * dudect paper specifies and this tree had never implemented.
  * ``DUDECT_NUMBER_PERCENTILES`` sat defined-and-unused in ``dudect.h``:
  * upstream's configuration knob was carried over, the code that reads it was
- * not.
+ * not.  It has since been removed — this header's ``DUDECT_CROP_RUNGS`` is
+ * the knob that is actually read, and a second one that configured nothing
+ * was worse than none.
  *
  * Reparaz, Balasch & Verbauwhede, "Dude, is my code constant time?"
  * (eprint 2016/1123), §3.3: crop at a set of percentile thresholds and take
@@ -77,6 +79,47 @@
 #define DUDECT_CROP_RUNGS 20
 #endif
 
+/* Decision threshold for the statistic THIS HEADER computes.
+ *
+ * 4.5 is the two-sided critical value of ONE Welch t-test at p ~ 6.8e-6, and
+ * that is the number every harness in this tree compared against.  But the
+ * value returned by ``dudect_cropped_compute`` is not one t-test: it is the
+ * largest |t| over the uncropped rung and every usable cropped rung —
+ * ``DUDECT_CROP_RUNGS + 1`` = 21 statistics computed from the same samples.
+ * The maximum of 21 positively-correlated t's is stochastically much larger
+ * than any one of them, so comparing it to a single-test critical value
+ * states a confidence the construction does not have.  Upstream dudect takes
+ * the same maximum and, for the same reason, quotes thresholds of 10
+ * (moderate) and 500 (definite) rather than 4.5; this tree adopted the
+ * construction and kept the single-test number.
+ *
+ * Measured, not assumed.  Null replicates in which both classes are drawn
+ * from one distribution — so the true effect is exactly zero — put through
+ * this exact function, 6,000,000 replicates over four independent seeds:
+ *
+ *     E|t| = 1.618   sd = 1.717        (a single Welch t gives 0.798 / 1.000)
+ *     P(|t| >= 4.5) = 7.2e-5           (claimed: 1e-5)
+ *     P(|t| >= 5.0) = 6.5e-6
+ *     P(|t| >= 5.5) = 6.7e-7
+ *     P(|t| >= 6.0) = 0 / 6,000,000
+ *
+ * The null is distribution-free to within the Monte-Carlo error (normal and
+ * lognormal samples give E|t| within 3% of each other) and invariant in the
+ * sample count (E|t| = 1.60..1.62 from n = 2,000 to n = 50,000), so one
+ * calibration covers every lane and every measurement budget in this tree.
+ *
+ * 5.0 is therefore the value that delivers the 99.999% the documentation has
+ * always claimed.  This is a CORRECTION of a mis-stated confidence level, not
+ * a relaxation: the sensitivity that matters is unaffected, because a real
+ * leak does not sit between 4.5 and 5.0.  The early-exit ``memcmp`` this
+ * statistic was calibrated against reads |t| = 65..113, and the bulk-shift
+ * case in the self-test below clears 5.0 by more than an order of magnitude.
+ * A finding that would be lost by moving 4.5 to 5.0 was never distinguishable
+ * from this statistic's own null. */
+#ifndef DUDECT_CROPPED_T_THRESHOLD
+#define DUDECT_CROPPED_T_THRESHOLD 5.0
+#endif
+
 /* Minimum samples a class must retain for a rung to be trusted.  See the
  * header comment: below this, the variance estimate collapses and the
  * statistic becomes meaningless rather than merely noisy. */
@@ -99,12 +142,35 @@ typedef struct {
      * reviewer acts on the difference. */
     int winning_rung;
     size_t winning_kept[2];
+    /* The effect size behind the reported statistic: the winning rung's
+     * per-class mean difference, in whatever unit the caller recorded
+     * (nanoseconds, for every harness here), and the pooled within-class
+     * standard deviation it was divided by.
+     *
+     * A t-value alone cannot be acted on.  t = (m0 - m1) / se, and se falls
+     * as 1/sqrt(n), so at the sample counts these lanes run the statistic
+     * resolves differences far below one CPU cycle -- a lane measured here
+     * reaches |t| = 4.5 on a mean difference of 0.18 ns, about 0.4 cycles at
+     * 2.1 GHz.  Whether that is a cache line, a branch, or the harness's own
+     * memory layout is not visible in t, and IS visible in the difference.
+     * Reporting both is what lets a reviewer tell a 0.2 ns artefact from a
+     * 20 ns leak without re-running anything. */
+    double winning_delta;
+    double winning_sd;
 } dudect_cropped_ctx_t;
 
 /* Welch's t over two explicit arrays.  Returns 0.0 when the statistic is not
  * defined (too few samples, or a standard error indistinguishable from zero),
  * so an undefined rung contributes nothing to the maximum. */
-static inline double dudect_crop_welch(const double *s0, size_t n0, const double *s1, size_t n1) {
+static inline double dudect_crop_welch_ex(const double *s0, size_t n0,
+                                          const double *s1, size_t n1,
+                                          double *delta_out, double *sd_out) {
+    if (delta_out) {
+        *delta_out = 0.0;
+    }
+    if (sd_out) {
+        *sd_out = 0.0;
+    }
     if (n0 < 2 || n1 < 2) {
         return 0.0;
     }
@@ -136,7 +202,22 @@ static inline double dudect_crop_welch(const double *s0, size_t n0, const double
          * an infinity.  This is the 267c16c failure mode, guarded. */
         return 0.0;
     }
+    if (delta_out) {
+        *delta_out = m0 - m1;
+    }
+    if (sd_out) {
+        /* Pooled within-class standard deviation, so the caller can express
+         * the difference in units of the operation's own spread as well as in
+         * absolute time. */
+        *sd_out = sqrt((v0 * (double)(n0 - 1) + v1 * (double)(n1 - 1)) /
+                       (double)(n0 + n1 - 2));
+    }
     return (m0 - m1) / se;
+}
+
+/* Statistic only — the form the self-test and the tail-only comparison use. */
+static inline double dudect_crop_welch(const double *s0, size_t n0, const double *s1, size_t n1) {
+    return dudect_crop_welch_ex(s0, n0, s1, n1, NULL, NULL);
 }
 
 static inline int dudect_cropped_init(dudect_cropped_ctx_t *ctx, size_t capacity) {
@@ -145,6 +226,8 @@ static inline int dudect_cropped_init(dudect_cropped_ctx_t *ctx, size_t capacity
     ctx->poisoned = 0;
     ctx->winning_rung = 0;
     ctx->winning_kept[0] = ctx->winning_kept[1] = 0;
+    ctx->winning_delta = 0.0;
+    ctx->winning_sd = 0.0;
     /* Full capacity per class: class assignment is random, so either class
      * can take every sample.  Sizing each at half the total would make a
      * legitimate run overflow and silently drop measurements. */
@@ -202,10 +285,14 @@ static inline double dudect_cropped_compute(dudect_cropped_ctx_t *ctx) {
 
     /* Rung 0: uncropped.  Never dropped — see the header comment on
      * tail-only leaks. */
-    double best = dudect_crop_welch(ctx->sample[0], n0, ctx->sample[1], n1);
+    double best_delta = 0.0, best_sd = 0.0;
+    double best = dudect_crop_welch_ex(ctx->sample[0], n0, ctx->sample[1], n1,
+                                       &best_delta, &best_sd);
     ctx->winning_rung = 0;
     ctx->winning_kept[0] = n0;
     ctx->winning_kept[1] = n1;
+    ctx->winning_delta = best_delta;
+    ctx->winning_sd = best_sd;
 
     size_t np = n0 + n1;
     double *pooled = (double *)malloc(np * sizeof(double));
@@ -261,12 +348,15 @@ static inline double dudect_cropped_compute(dudect_cropped_ctx_t *ctx) {
         if (k0 < DUDECT_CROP_MIN_PER_CLASS || k1 < DUDECT_CROP_MIN_PER_CLASS) {
             continue;
         }
-        double t = dudect_crop_welch(keep0, k0, keep1, k1);
+        double rung_delta = 0.0, rung_sd = 0.0;
+        double t = dudect_crop_welch_ex(keep0, k0, keep1, k1, &rung_delta, &rung_sd);
         if (fabs(t) > fabs(best)) {
             best = t;
             ctx->winning_rung = r;
             ctx->winning_kept[0] = k0;
             ctx->winning_kept[1] = k1;
+            ctx->winning_delta = rung_delta;
+            ctx->winning_sd = rung_sd;
         }
     }
 
@@ -321,8 +411,8 @@ static inline int dudect_cropped_self_test(void) {
             dudect_cropped_update(&ctx, c, v);
         }
         double t = dudect_cropped_compute(&ctx);
-        ok &= dudect_crop_case("identical classes with a shared heavy tail stay under 4.5",
-                               fabs(t) < 4.5);
+        ok &= dudect_crop_case("identical classes with a shared heavy tail stay under threshold",
+                               fabs(t) < DUDECT_CROPPED_T_THRESHOLD);
         dudect_cropped_free(&ctx);
     } else {
         ok &= dudect_crop_case("null-case context allocates", 0);
@@ -342,7 +432,19 @@ static inline int dudect_cropped_self_test(void) {
         }
         double uncropped = dudect_crop_welch(ctx.sample[0], ctx.n[0], ctx.sample[1], ctx.n[1]);
         double t = dudect_cropped_compute(&ctx);
-        ok &= dudect_crop_case("a bulk shift under a heavy tail is detected", fabs(t) > 4.5);
+        ok &= dudect_crop_case("a bulk shift under a heavy tail is detected",
+                               fabs(t) > DUDECT_CROPPED_T_THRESHOLD);
+        /* Margin, not bare exceedance: the calibration below moved the
+         * threshold, and a leak case that only just cleared the old one
+         * would make that move look like a loss of sensitivity.  It is
+         * not — this case clears the new threshold several times over. */
+        ok &= dudect_crop_case("...with an order of magnitude of margin",
+                               fabs(t) > 10.0 * DUDECT_CROPPED_T_THRESHOLD);
+        /* The effect size is populated and points the same way as t.
+         * Class 1 is constructed 1.0 unit faster, so the winning rung's
+         * per-class difference must recover roughly that. */
+        ok &= dudect_crop_case("...and the reported effect size recovers the shift",
+                               ctx.winning_delta > 0.5 && ctx.winning_delta < 1.5);
         ok &= dudect_crop_case("...by a CROPPED rung", ctx.winning_rung > 0);
         /* The property that justifies this header existing: cropping must be
          * strictly more sensitive here than the statistic it supplements. */
@@ -369,12 +471,13 @@ static inline int dudect_cropped_self_test(void) {
         }
         double uncropped = dudect_crop_welch(ctx.sample[0], ctx.n[0], ctx.sample[1], ctx.n[1]);
         double t = dudect_cropped_compute(&ctx);
-        ok &= dudect_crop_case("a tail-only difference is still detected", fabs(t) > 4.5);
+        ok &= dudect_crop_case("a tail-only difference is still detected",
+                               fabs(t) > DUDECT_CROPPED_T_THRESHOLD);
         /* The reason rung 0 is never dropped: here the evidence is IN the
          * tail, so the uncropped statistic is the one that carries it.  A
          * cropped-only verdict would be blind to this whole class of leak. */
         ok &= dudect_crop_case("...and the UNCROPPED rung alone would find it",
-                               fabs(uncropped) > 4.5);
+                               fabs(uncropped) > DUDECT_CROPPED_T_THRESHOLD);
         dudect_cropped_free(&ctx);
     } else {
         ok &= dudect_crop_case("tail-only context allocates", 0);
@@ -382,19 +485,49 @@ static inline int dudect_cropped_self_test(void) {
 
     /* 4. The 267c16c failure mode: a rung that keeps too few samples must be
      *    skipped, not allowed to produce an enormous statistic from a
-     *    collapsed variance.  Constructed so that the extreme crop leaves
-     *    almost nothing: nearly all samples share one value, and the few that
-     *    differ sit far above it. */
+     *    collapsed variance.
+     *
+     *    The construction matters, and the first version of this case did not
+     *    have it.  It made nearly every sample share one value and the rest
+     *    sit ABOVE it, so `keep v < cut` retained nothing at every aggressive
+     *    rung and the guard was never reached — the case passed whether or
+     *    not DUDECT_CROP_MIN_PER_CLASS existed, which is the one thing it was
+     *    supposed to prove.
+     *
+     *    Here 99% of samples are the SAME value and the remaining 1% sit
+     *    BELOW it, so the aggressive rungs cut exactly at the tie and retain
+     *    only that 1% — about 100 samples per class, inside the guard's
+     *    window.  Those retained samples are quantised the way real
+     *    nanosecond timings are: class 0 is one value exactly, so its
+     *    variance is 0, and class 1 differs by one quantum in a handful of
+     *    samples.  That is a vanishing standard error under a one-quantum
+     *    mean difference — the shape that produced the enormous statistics
+     *    the revert recorded.  Mutation-checked: with the guard lowered to 2
+     *    this case reports |t| in the hundreds and fails. */
     if (dudect_cropped_init(&ctx, N)) {
+        size_t low_seen = 0;
         for (size_t i = 0; i < N; i++) {
             int c = (int)(dudect_crop_test_uniform(&rng) * 2.0) & 1;
-            double v = (i % 997 == 0) ? 900.0 + (double)c : 100.0;
+            double v;
+            if (dudect_crop_test_uniform(&rng) < 0.01) {
+                /* The retained-after-crop population: one quantum apart. */
+                v = 90.0;
+                if (c == 1 && (low_seen % 4) == 0) {
+                    v = 91.0;
+                }
+                low_seen++;
+            } else {
+                v = 100.0; /* the tie the aggressive rungs cut at */
+            }
             dudect_cropped_update(&ctx, c, v);
         }
         double t = dudect_cropped_compute(&ctx);
         ok &= dudect_crop_case("a degenerate crop yields no statistic, not a huge one",
-                               fabs(t) < 1.0e6);
+                               fabs(t) < DUDECT_CROPPED_T_THRESHOLD);
         ok &= dudect_crop_case("...and never the failure sentinel", t != DUDECT_CROP_FAILED);
+        ok &= dudect_crop_case("...and no rung below the sample floor was used",
+                               ctx.winning_kept[0] >= DUDECT_CROP_MIN_PER_CLASS &&
+                               ctx.winning_kept[1] >= DUDECT_CROP_MIN_PER_CLASS);
         dudect_cropped_free(&ctx);
     } else {
         ok &= dudect_crop_case("degenerate-crop context allocates", 0);
@@ -432,6 +565,107 @@ static inline int dudect_cropped_self_test(void) {
         dudect_cropped_free(&ctx);
     } else {
         ok &= dudect_crop_case("class-index context allocates", 0);
+    }
+
+    /* 8. The calibration this header's threshold rests on.
+     *
+     *    Case 1 draws ONE null replicate and checks it lands under the
+     *    threshold.  That cannot see a false-positive RATE, which is the
+     *    property the threshold actually encodes — one clean draw is
+     *    consistent with a gate that fires on a tenth of all healthy runs.
+     *    So the null is replicated here and its scale is pinned.
+     *
+     *    What this catches: any change to the rung ladder, the crop spacing,
+     *    the minimum-samples guard or the max-over-rungs reduction shifts
+     *    this null, and the threshold above stops meaning what it says.  A
+     *    single Welch t would read E|t| = 0.798 / sd = 1.000 here, so a
+     *    silent collapse back to one statistic fails this case loudly.
+     *
+     *    Reference values, measured on this construction:
+     *      gaussian / lognormal samples, 6,000,000 replicates
+     *          E|t| = 1.618  sd = 1.717
+     *      the uniform-bulk-plus-spike stream used below, 2,000 replicates
+     *          E|t| = 1.785  sd = 1.862
+     *      a REAL Ascon-AEAD128-encrypt timing stream, 1,500 replicates of
+     *      50,000 measurements, staged so class and buffer are not
+     *      confounded
+     *          E|t| = 1.788  sd = 1.868   worst |t| = 3.74
+     *
+     *    The synthetic stream below tracks the real one to three decimal
+     *    places, which is why it is a usable stand-in for a check that has
+     *    to run in milliseconds.  The bands are wide enough for libm
+     *    differences across platforms and for Monte-Carlo error at this
+     *    replicate count, and far too tight to survive a construction
+     *    change. */
+    {
+        const int    CAL_REPS = 2000;
+        const size_t CAL_N    = 2000;
+        unsigned long long crng = 0x9E3779B97F4A7C15ULL;
+        double sum_abs = 0.0, sum_sq = 0.0, worst_abs = 0.0;
+        int over_threshold = 0, replicates = 0, alloc_failed = 0;
+
+        for (int r = 0; r < CAL_REPS; r++) {
+            dudect_cropped_ctx_t cal;
+            if (!dudect_cropped_init(&cal, CAL_N)) {
+                alloc_failed = 1;
+                break;
+            }
+            for (size_t i = 0; i < CAL_N; i++) {
+                /* Both classes from ONE distribution: the true effect is
+                 * exactly zero by construction, tail included. */
+                int c = (int)(dudect_crop_test_uniform(&crng) * 2.0) & 1;
+                double v = 100.0 + dudect_crop_test_uniform(&crng) * 4.0;
+                if (dudect_crop_test_uniform(&crng) < 0.01) {
+                    v += 5000.0;
+                }
+                dudect_cropped_update(&cal, c, v);
+            }
+            double t = dudect_cropped_compute(&cal);
+            dudect_cropped_free(&cal);
+            if (t == DUDECT_CROP_FAILED) {
+                continue;
+            }
+            replicates++;
+            sum_abs += fabs(t);
+            sum_sq += t * t;
+            if (fabs(t) > worst_abs) {
+                worst_abs = fabs(t);
+            }
+            if (fabs(t) >= DUDECT_CROPPED_T_THRESHOLD) {
+                over_threshold++;
+            }
+        }
+
+        if (alloc_failed || replicates < CAL_REPS) {
+            ok &= dudect_crop_case("null calibration ran every replicate", 0);
+        } else {
+            double e_abs = sum_abs / (double)replicates;
+            double sd = sqrt(sum_sq / (double)replicates);
+            printf("    null calibration: E|t| = %.4f  sd = %.4f  worst = %.4f  "
+                   ">= %.1f in %d/%d\n",
+                   e_abs, sd, worst_abs, (double)DUDECT_CROPPED_T_THRESHOLD,
+                   over_threshold, replicates);
+            /* The scale of the null, which is what the threshold is set
+             * against.  A single Welch t reads 0.798 / 1.000 here. */
+            /* +/-3% of the measured values.  The sample stream is a pure
+             * integer xorshift with no libm in it, so it is bit-identical on
+             * every IEEE-754 host; the only platform freedom is a possible
+             * 1-ulp difference in the `pow` that sets a crop quantile, which
+             * moves a cut by at most one sample.  The band is therefore set
+             * by what a CONSTRUCTION change does, and that is much larger:
+             * measured on this stream, E|t| runs 1.4487 (5 rungs), 1.6248
+             * (10), 1.7135 (15), 1.7845 (20, shipped), 1.8629 (30), 1.9248
+             * (40).  Both neighbouring ladders fall outside. */
+            ok &= dudect_crop_case("null E|t| matches the calibrated scale",
+                                   e_abs > 1.73 && e_abs < 1.84);
+            ok &= dudect_crop_case("null sd matches the calibrated scale",
+                                   sd > 1.81 && sd < 1.92);
+            /* The false-positive rate the threshold claims.  At the measured
+             * tail this expects ~0 of 2,000; three would mean the null has
+             * moved far enough that the threshold no longer holds. */
+            ok &= dudect_crop_case("null replicates almost never reach the threshold",
+                                   over_threshold <= 2);
+        }
     }
 
     printf("\n  percentile-cropping self-check: %s\n", ok ? "PASS" : "FAIL");

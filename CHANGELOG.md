@@ -31,6 +31,87 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > Compare `[4.0.0]` below, which is dated because it *is* released: tag
 > `v4.0.0`, published 2026-08-02.
 
+### Constant-time gate (2026-08-19) — the red Ascon lane was the harness, and the threshold was never calibrated
+
+`dudect - Legacy Harnesses` failed on `191befb` with `Ascon-AEAD128 encrypt`
+at |t| = 7.32 in 4 of 5 rounds, consistently signed. Chasing it found two
+defects in the constant-time gate itself and a third in what the gate covers.
+The cipher was never at fault: `ama_ascon.c` has no key-dependent branch and
+no table — every branch is on a length, and the lengths are equal across
+classes — and on a quiet host the cropped per-class mean difference falls as
+1/sqrt(n) (+0.0283 ns at 50,000 measurements, -0.0056 at 200,000, -0.0010 at
+800,000, +0.0004 at 3,200,000), which is what a zero effect looks like.
+
+**The threshold was the critical value of a different statistic.**
+`dudect_cropped_compute()` reports the largest |t| over the uncropped rung and
+20 cropped ones — 21 statistics from the same samples — and all three
+harnesses compared that maximum against 4.5, which is the two-sided critical
+value of a *single* Welch t. The maximum of 21 correlated t-values has a wider
+null: measured over 6,000,000 null replicates in which both classes are drawn
+from one distribution, E|t| = 1.618 and sd = 1.717 against 0.798 and 1.000 for
+a single t, with `P(|t| >= 4.5)` = 7.2e-5 where the documented 99.999% asserts
+1e-5, and `P(|t| >= 5.0)` = 6.5e-6. The null is distribution-free to within
+Monte-Carlo error and invariant in the sample count, so one calibration covers
+every lane. The threshold is now `DUDECT_CROPPED_T_THRESHOLD` = 5.0, defined
+once beside the statistic it belongs to instead of three times across the
+tree, and `dudect_cropped_self_test()` re-derives the calibration on every run
+— it fails if a change to the rung ladder or the max-over-rungs reduction
+moves the null out of its measured band. Mutation-checked: collapsing to a
+single Welch t reads E|t| = 0.811 / sd = 1.009 and fails the case, as do rung
+ladders of 15 and 30.
+
+**The harness confounded the class with the input's address.** Selecting
+between two per-class buffers leaves the two classes reading two different
+addresses inside the timed region, and a load's timing legitimately depends on
+its address. Unlike scheduler noise that bias is fixed for a given binary on a
+given host, so it reproduces in every round with the same sign — precisely the
+shape the multi-round majority rule and the direction rule cannot tell apart
+from a leak, which is why raising the round count did not settle this lane.
+Measured with the Ascon lane's own cipher call and **identical key data in
+both classes**, so the true effect is exactly zero: placing class 0's key
+across two cache lines drives |t| to 13.5–30.9, over threshold in 10 of 10
+runs, all positive. Staged through one shared buffer the same measurement
+reports 0 of 10. Every lane now copies the selected class's input into a
+single cache-line-aligned buffer (`dudect_stage()`) before the timed call, so
+the classes differ in data and not in address; the tag-compare lanes use the
+stronger single-reused-probe form. This is not a new idea in the tree — the
+AES-GCM tag-compare lane was fixed for this exact defect and carries a comment
+describing it — it was simply never propagated, so it is now enforced by
+`tools/check_dudect_class_staging.py` rather than left to review.
+
+**The statistic was wired into two harnesses out of three.** `6a22aa2` added
+percentile cropping because the raw Welch t detected a textbook early-exit
+`memcmp` only 19 times in 48 against the cropped statistic's 48, and converted
+`tools/constant_time/`. `tests/c/test_dudect.c` was left on the raw statistic,
+and it is the harness behind four of the six constant-time CI lanes — the
+ML-KEM, ML-DSA, secp256k1, X25519, ChaCha20-Poly1305, Argon2id, FROST and
+SIMD-sweep coverage, which is most of the constant-time evidence this project
+publishes. All 27 of its lanes now run the same statistic as the other two,
+with the same staging discipline, checked capacity allocation (a lane that
+cannot store its measurements records a harness fault instead of a clean
+t = 0.0), and `--self-test` now exercises the statistic it consumes.
+`DUDECT_NUMBER_PERCENTILES`, which `6a22aa2` named as defined-and-unused, is
+removed.
+
+Each lane now prints the per-class mean difference in nanoseconds beside its
+t-value. |t| grows as sqrt(n), so at these measurement counts the statistic
+resolves differences under one CPU cycle — the Ascon lane's cropped bulk has
+sd = 4.1 ns over ~22,000 samples per class, a standard error near 0.04 ns, and
+crosses the threshold on about 0.2 ns. Without the effect size a reviewer
+cannot tell that from an exploitable difference; with it, the informational
+AES-GCM decrypt-branch lane reads +29,893 ns and the constant-time lanes read
+±0.2 ns. No effect-size floor was added to the pass/fail rule: a
+secret-dependent cache line is a real leak at sub-nanosecond scale, and a
+floor large enough to suppress the artefact would have suppressed that too.
+The artefact is removed by experimental design instead.
+
+`CONSTANT_TIME_VERIFICATION.md`, `docs/constant-time-testing.md`,
+`tests/c/dudect/README.md`, `README.md` and `ENHANCED_FEATURES.md` are
+corrected to the calibrated threshold and carry the measurements above.
+`ama_cryptography/_self_test.py` keeps 4.5: its POST oracle computes a single
+Welch t, for which 4.5 is correct, and it already pairs it with an
+effect-size floor.
+
 ### Post-audit remediation pass (2026-08-18) — five confirmed defects, and the claims that were wrong
 
 An independent audit of this branch verified the headline results (the

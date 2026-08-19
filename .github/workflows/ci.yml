@@ -561,6 +561,32 @@ jobs:
       run: |
         python tools/check_headers.py --check
 
+    - name: "dudect lanes stage their class input (no class/address confound)"
+      # A dudect lane that hands the timed call one of two per-class buffers
+      # confounds the class with the input's ADDRESS.  Unlike scheduler noise,
+      # that bias is fixed for a given binary on a given host, so it
+      # reproduces in every round with the same sign — which is exactly the
+      # shape the multi-round majority rule and the direction rule in
+      # dudect_rounds.h cannot tell apart from a leak.  Neither a threshold
+      # nor more rounds separates them; only the experiment's design does.
+      #
+      # Measured with the Ascon-AEAD128-encrypt lane's own cipher call and
+      # IDENTICAL key data in both classes, so the true effect is exactly
+      # zero: placing class 0's key across two cache lines drives the cropped
+      # statistic to |t| = 13.5..30.9, over threshold in 10 of 10 runs, all
+      # one sign.  Staged through a single buffer, 0 of 10.
+      #
+      # This is enforced rather than reviewed because it has already regressed
+      # once: the AES-GCM tag-compare lane was fixed for this exact defect and
+      # carries a comment describing it, the pattern was not propagated, and
+      # the Ascon-AEAD128-encrypt lane subsequently went red in CI for the
+      # reason that comment describes.  tests/test_dudect_staging_gate.py pins
+      # that the gate fails on the unstaged form, on the legacy
+      # `(class_idx == 0) ?` spelling, on an unaligned staging buffer and on a
+      # missing input file, so it cannot decay into a no-op.
+      run: |
+        python tools/check_dudect_class_staging.py
+
   docs-build:
     # Run sphinx-build with -W on every PR / push so any docstring-format
     # regression (e.g. malformed Raises: blocks, dangling indent) is caught

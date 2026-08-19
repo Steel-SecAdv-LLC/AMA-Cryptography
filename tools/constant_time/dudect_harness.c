@@ -17,8 +17,12 @@
  *   gcc -O2 -I../../include dudect_harness.c -o dudect_harness -lm
  *   ./dudect_harness [iterations]
  *
- * A t-value with |t| < 4.5 after 10^6 measurements suggests no
- * detectable timing leakage at the 99.999% confidence level.
+ * A t-value under DUDECT_CROPPED_T_THRESHOLD suggests no detectable timing
+ * leakage at the 99.999% confidence level.  That threshold is calibrated in
+ * dudect_percentile.h against the statistic this harness actually computes —
+ * a maximum over 21 percentile rungs.  4.5 is the critical value of a single
+ * Welch t, which is not what is being compared, and is what these harnesses
+ * used to test the maximum against.
  */
 
 #include <stdio.h>
@@ -39,8 +43,10 @@
 /* Buffer size for testing */
 #define BUFFER_SIZE 64
 
-/* Threshold for t-test (99.999% confidence) */
-#define T_THRESHOLD 4.5
+/* Threshold for the t-test (99.999% confidence).  Defined with the
+ * statistic it belongs to — see dudect_percentile.h.  This file used to
+ * carry its own copy of the constant. */
+#define T_THRESHOLD DUDECT_CROPPED_T_THRESHOLD
 
 /**
  * High-resolution timing using clock_gettime
@@ -425,8 +431,8 @@ static int run_round(int iterations, int round_num, dudect_lane_result_t *lanes)
  * verdict needs WITHOUT touching the threshold or the statistic.  It cannot
  * hide a real leak: a leak reproduces in every round -- the deliberately
  * early-exiting memcmp used to validate this statistic reports |t| = 225-232
- * in each one -- while noise has to clear 4.5 three times with a consistent
- * sign.  Clean runs are unaffected: the loop still exits after round 1 when
+ * in each one -- while noise has to clear the threshold three times with a
+ * consistent sign.  Clean runs are unaffected: the loop still exits after round 1 when
  * nothing has tripped, so this costs nothing except on a run that is already
  * suspicious. */
 #define MAX_ROUNDS 5
@@ -465,7 +471,9 @@ int main(int argc, char *argv[]) {
     printf("AMA Cryptography Cryptographic Library\n");
     printf("=======================================================\n\n");
     printf("Methodology: Welch's t-test on execution times\n");
-    printf("Threshold: |t| < %.1f (99.999%% confidence)\n", T_THRESHOLD);
+    printf("Threshold: |t| < %.1f (99.999%% confidence, calibrated for the\n"
+           "           max-over-21-rungs statistic; a single Welch t would be 4.5)\n",
+           T_THRESHOLD);
     printf("Iterations: %d per test, up to %d rounds\n\n", iterations, MAX_ROUNDS);
 
     dudect_lane_result_t lanes[DUDECT_ROUNDS_MAX_LANES];

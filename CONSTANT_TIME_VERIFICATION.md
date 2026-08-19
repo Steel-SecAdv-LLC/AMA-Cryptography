@@ -110,7 +110,16 @@ We provide a dudect-style timing analysis harness based on the methodology from:
 > "Dude, is my code constant time?"
 > https://eprint.iacr.org/2016/1123.pdf
 
-The harness uses Welch's t-test to compare execution times between two input classes. A t-value with |t| < 4.5 after 10^6 measurements suggests no detectable timing leakage at the 99.999% confidence level.
+The harness uses Welch's t-test to compare execution times between two input classes, with the percentile cropping the paper specifies in §3.3: the pooled samples are cut at a ladder of 20 thresholds and the reported statistic is the signed t of largest magnitude over those rungs and the uncropped one. Cropping is what lets the test see a systematic shift in the *bulk* of the distribution rather than losing it under the heavy right tail that preemption and frequency changes produce; measured against a textbook early-exit `memcmp` at 50,000 iterations, the cropped statistic detected the leak 48 times out of 48 where a single raw Welch t detected it 19 times.
+
+A t-value below `DUDECT_T_THRESHOLD` suggests no detectable timing leakage at the 99.999% confidence level. **That threshold is 5.0, not the 4.5 usually quoted**, because the statistic is a maximum over 21 rungs rather than one t-test, and the maximum of 21 correlated t-values has a wider null distribution: 6,000,000 null replicates put E|t| at 1.618 and sd at 1.717, against 0.798 and 1.000 for a single t. Under that null `P(|t| >= 4.5)` is 7.2e-5 — seven times the 1e-5 that "99.999%" asserts — while `P(|t| >= 5.0)` is 6.5e-6. The calibration is re-derived on every run by the harness self-test, which fails if a change to the rung ladder moves the null out of its measured band.
+
+Two properties of the measurement matter as much as the statistic:
+
+- **A verdict needs a majority of rounds.** A lane must exceed the threshold in more than half of the rounds run, with a consistent sign, before the run fails; excursions that disagree about direction are reported as unusable measurements rather than findings. See `tests/c/dudect/dudect_rounds.h`.
+- **Both classes are staged through one buffer.** Cropping resolves the bulk of the distribution, which at these sample counts means a standard error near 0.04 ns — finer than one CPU cycle. At that resolution the *address* of a lane's input is a confounder: with identical data in both classes, placing one class's key across two cache lines drives |t| to 13.5–30.9 with a consistent sign, which is what a leak looks like and is not one. Every lane therefore copies the selected class's input into a single cache-line-aligned buffer before the timed region, so the classes differ in data and not in address.
+
+Each lane also reports the per-class mean difference in nanoseconds beside its t-value, because |t| alone does not distinguish a 0.2 ns measurement artefact from an exploitable difference.
 
 ### Running the Verification
 
@@ -147,7 +156,8 @@ AMA Cryptography Cryptographic Library
 =======================================================
 
 Methodology: Welch's t-test on execution times
-Threshold: |t| < 4.5 (99.999% confidence)
+Threshold: |t| < 5.0 (99.999% confidence, calibrated for the
+           max-over-21-rungs statistic; a single Welch t would be 4.5)
 Iterations: 1000000 per test
 
 Testing ama_consttime_memcmp (1000000 iterations)...
@@ -169,11 +179,20 @@ Overall: PASS - No timing leakage detected
 
 | t-value | Interpretation |
 |---------|----------------|
-| |t| < 4.5 | No detectable timing leakage (PASS) |
-| 4.5 <= |t| < 10 | Potential leakage, investigate further |
-| |t| >= 10 | Strong evidence of timing leakage (FAIL) |
+| \|t\| < 5.0 | No detectable timing leakage (PASS) |
+| 5.0 <= \|t\| < 10 | Over threshold: a finding only if it reproduces in a majority of rounds with a consistent sign |
+| \|t\| >= 10 | Strong evidence of timing leakage (FAIL) |
 
-**Note**: Environmental factors such as CPU frequency scaling, interrupts, and cache effects can cause false positives. Run the test multiple times and consider disabling CPU frequency scaling for more accurate results.
+Read the reported per-class mean difference alongside the t-value. |t| grows
+as sqrt(n) for any non-zero difference, so at high measurement counts the
+statistic reaches the threshold on differences far below one CPU cycle, and
+the difference in nanoseconds is what says whether a finding is exploitable.
+A real leak mechanism — a mispredicted branch, an extra cache line, an extra
+round — costs nanoseconds to tens of nanoseconds; a lane reporting |t| over
+the threshold on a difference of 0.2 ns is measuring the harness or the host,
+not the primitive.
+
+**Note**: Environmental factors such as CPU frequency scaling, interrupts, and cache effects can cause false positives. The multi-round majority rule exists for exactly this and handles excursions that vary between rounds; it does **not** handle a bias that is fixed for a given binary and host, which reproduces every round with the same sign. That class is removed by construction instead — see the staging discipline below. Run the test multiple times and consider disabling CPU frequency scaling for more accurate results.
 
 ### Harness Setup-Symmetry Discipline
 
@@ -199,13 +218,44 @@ The post-fix pattern, codified at the top of each lane in
 2. Stage every reference input into the same memory class (typically
    the local stack frame) so the kernel reads them through equivalent
    cache paths.
-3. Pointer-select between the two staged inputs OUTSIDE the timing
-   region.  The timed window contains exactly one indirect call with
-   no class-correlated control flow.
+3. Choose the class OUTSIDE the timing region.  The timed window
+   contains exactly one call with no class-correlated control flow.
 
-Future dudect lanes should follow the same discipline.  Helper
-patterns: a `b_equal` / `b_diff` pair for compare-style primitives, a
-single stack-staged reference for scalar-input primitives.
+**Point 3 was necessary and not sufficient, and the missing half is now
+point 4.** Selecting a *pointer* outside the timer still leaves the two
+classes reading two different addresses inside it, and an address is
+something a load's timing legitimately depends on: which cache line it
+falls in, whether it spans two, which set it maps to.  Unlike scheduler
+noise, that difference is fixed for a given binary on a given host, so it
+reproduces in every round with the same sign — the shape the multi-round
+majority rule is specifically unable to distinguish from a leak.
+
+Measured with the Ascon-AEAD128-encrypt lane's own cipher call and
+**identical key data in both classes**, so the true effect is exactly zero:
+placing class 0's key across two cache lines while class 1's sits inside one
+drives the cropped statistic to |t| = 13.5–30.9, over threshold in 10 of 10
+runs, all one sign.  Staged through a single buffer, the same measurement
+reports 0 of 10.  This became reachable when the harnesses adopted percentile
+cropping: cropping resolves the bulk of the distribution, which for that lane
+means a bulk standard deviation of about 4 ns over ~22,000 samples per class,
+a standard error near 0.04 ns, and a threshold crossed by a systematic
+difference of roughly 0.2 ns — under half a cycle at 2.1 GHz.
+
+4. Copy the selected class's input into ONE shared, cache-line-aligned
+   buffer, and hand the timed call that buffer.  Both classes then present
+   the same address and the same alignment, and only the data differs.  The
+   copy is identical work for both classes and happens outside the timed
+   region.  `dudect_stage()` in `tests/c/dudect/dudect.h` is the helper; it
+   is used by every lane in `tests/c/test_dudect.c` and by the keyed lanes
+   in `tools/constant_time/dudect_crypto.c`.
+
+Sensitivity is untouched by point 4: a data-dependent leak follows the data,
+which still differs by class.  For compare-style primitives the equivalent —
+and stronger — form is a single reused probe whose bytes are rewritten
+class-symmetrically each iteration, which is what the AES-GCM and Ascon
+tag-compare lanes use.
+
+Future dudect lanes should follow all four points.
 
 ## ctgrind/Valgrind Verification
 

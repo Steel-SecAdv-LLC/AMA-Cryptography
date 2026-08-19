@@ -86,16 +86,16 @@ Measured as non-empty-allowed `wc -l` over source files in each scope.
 | Native C (`src/c/**/*.c`, `include/**/*.h`) | 109 | 52,451 |
 | Library total (Python + C + headers) | 137 | **88,877** |
 | Top-level Python (monitors, benchmarks, demos) | 2 | 1,030 |
-| Tests (`tests/**/*.py`) | 167 | 68,733 |
+| Tests (`tests/**/*.py`) | 168 | 68,928 |
 | Cython (`*.pyx`, `*.pxd`) | 7 | 1,873 |
-| **Whole project** (source + docs + config) | 600 | **330,124** |
+| **Whole project** (source + docs + config) | 602 | **331,539** |
 
 **Library total (the figure that most closely tracks "library size"):
 88,877 lines** across 137 files under `ama_cryptography/`, `src/c/`,
 and `include/`. This supersedes any "11,246 LoC" claim that may have
 appeared externally.
 
-**Whole-project total** (`330,124` lines across Python, C, headers,
+**Whole-project total** (`331,539` lines across Python, C, headers,
 Cython, Markdown, YAML/TOML/JSON config, CMake and Makefiles) is the
 broader figure some external claims may have been referencing. Reproduce
 it with:
@@ -146,7 +146,7 @@ excluded.
 
 ### Scope Composition
 
-The gap between "library" and "whole project" is informative: only **26.9%** of the repository is library code. The rest is tests, docs,
+The gap between "library" and "whole project" is informative: only **26.8%** of the repository is library code. The rest is tests, docs,
 config, vendored vector corpora, and scaffolding — verification
 artifacts outweighing library code is a healthy ratio for a security
 library that takes verification seriously, but the vendored share means
@@ -154,16 +154,16 @@ the whole-project figure overstates hand-written code.
 
 | Scope                                | Lines    | % of whole | Paths                                                   |
 |--------------------------------------|---------:|-----------:|---------------------------------------------------------|
-| Library (Python + C + headers) | 88,877 | 26.9% | `ama_cryptography/` + `src/c/` + `include/` |
-| Tests | 68,733 | 20.8% | `tests/**/*.py` |
+| Library (Python + C + headers) | 88,877 | 26.8% | `ama_cryptography/` + `src/c/` + `include/` |
+| Tests | 68,928 | 20.8% | `tests/**/*.py` |
 | Top-level Python | 1,030 | 0.3% | `*.py` at repo root |
 | Cython | 1,873 | 0.6% | `*.pyx` + `*.pxd` |
-| Everything else (remainder) | 169,611 | 51.4% | `*.md`, `*.yml`, `*.toml`, `*.json`, CMake, Makefile, plus `.c`/`.h`/`.py` outside the scopes above (`tests/c/`, `fuzz/`, `tools/`, `benchmarks/`, `examples/`) |
-| **Whole-project total** | **330,124** | **100%** | sum of the scopes above |
+| Everything else (remainder) | 170,831 | 51.5% | `*.md`, `*.yml`, `*.toml`, `*.json`, CMake, Makefile, plus `.c`/`.h`/`.py` outside the scopes above (`tests/c/`, `fuzz/`, `tools/`, `benchmarks/`, `examples/`) |
+| **Whole-project total** | **331,539** | **100%** | sum of the scopes above |
 
-Test code (20.8%) is roughly 0.8x the size of the library (26.9%) — i.e. the test-to-library ratio is roughly **0.77**, and that
+Test code (20.8%) is roughly 0.8x the size of the library (26.8%) — i.e. the test-to-library ratio is roughly **0.78**, and that
 counts only `tests/**/*.py`; the C test suite under `tests/c/` lands
-in the remainder row. The remainder (51.4%) is dominated by the
+in the remainder row. The remainder (51.5%) is dominated by the
 vendored NIST ACVP and Wycheproof JSON corpora (69,713 lines of `*.json` alone) and by this repository's Markdown, not by config.
 
 ### Reproduction
@@ -213,8 +213,8 @@ git ls-files -z | tr '\0' '\n' \
 
 | Scope | Count |
 |-------|------:|
-| Python test files under `tests/` matching the static regex | 164 |
-| Syntactic `def test_` matches under `tests/**/*.py` | **3,954** |
+| Python test files under `tests/` matching the static regex | 165 |
+| Syntactic `def test_` matches under `tests/**/*.py` | **3,961** |
 | `test_*.c` files under `tests/c/` (ctest-registered) | 59 |
 | `bench_*.c` files under `tests/c/` (standalone, not in ctest) | 1 |
 | `fuzz_*.c` sources under `fuzz/` | 16 |
@@ -242,7 +242,7 @@ pytest --collect-only -q | tail -1
 Stderr is intentionally left unsuppressed so collection/import errors
 remain visible during reproduction.
 
-The static count (3,954) and the dynamic collection count will differ.
+The static count (3,961) and the dynamic collection count will differ.
 Any external claim ("N tests") must state which count it is reporting.
 This supersedes the earlier "866+ tests collected across 39 files" figure
 in ARCHITECTURE.md and any "2,068 tests" figure that may have circulated

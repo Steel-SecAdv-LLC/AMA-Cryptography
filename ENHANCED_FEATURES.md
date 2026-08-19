@@ -662,7 +662,8 @@ All cryptographic comparisons and operations execute in constant time:
 ### Empirical Constant-Time Verification (dudect)
 
 All security-critical functions are empirically verified using the dudect methodology
-(Welch's t-test on execution times, |t| < 4.5 threshold):
+(Welch's t-test on execution times with percentile cropping, |t| < 5.0 threshold —
+calibrated for the max-over-21-rungs statistic; a single Welch t would use 4.5):
 
 ✓ `ama_consttime_memcmp` — memory comparison
 ✓ `ama_consttime_swap` — conditional swap
