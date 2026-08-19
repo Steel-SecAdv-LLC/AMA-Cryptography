@@ -154,7 +154,10 @@ static dudect_measurement_t test_consttime_memcmp(int iterations) {
     uint8_t b_diff[BUFFER_SIZE];
 
     /* One staged buffer, read by the timed call for BOTH classes, so
-     * the classes differ in data and not in address (dudect_stage). */
+     * the classes differ in data and in nothing else: both sources are
+     * read every iteration and merged under a mask, so neither the
+     * address stream nor a branch reaches the timer class-correlated
+     * (dudect_stage_select). */
     _Alignas(64) uint8_t b_use_stage[BUFFER_SIZE];
     for (int i = 0; i < iterations && !g_timeout_hit; i++) {
         /* Symmetric setup — same number of rand() draws, memcpys, and
@@ -171,7 +174,7 @@ static dudect_measurement_t test_consttime_memcmp(int iterations) {
         /* Pointer-select OUTSIDE the timing region (no class-correlated
          * branch in the timed window). */
         const uint8_t *b_use =
-            dudect_stage(b_use_stage, class_idx ? b_diff : b_equal, sizeof b_use_stage);
+            dudect_stage_select(b_use_stage, b_equal, b_diff, sizeof b_use_stage, class_idx);
 
         uint64_t start = dudect_get_time_ns();
         volatile int result = ama_consttime_memcmp(a, b_use, BUFFER_SIZE);
@@ -244,7 +247,14 @@ static dudect_measurement_t test_secure_memzero(int iterations) {
 
     for (int i = 0; i < iterations && !g_timeout_hit; i++) {
         int class_idx = rand() & 1;
-        memset(buf, class_idx ? 0xFF : 0x00, BUFFER_SIZE);
+        /* One memset, branchless: the fill byte is computed from the class
+         * rather than selected by a branch, so both classes execute the same
+         * instructions and reach the timer in the same state.  This lane's
+         * twin in tools/constant_time/dudect_harness.c measured the branchy
+         * form at mean t = +43.38 (over threshold 10/10, 50,000 iterations
+         * x 10) against +1.26 (0/10) for this one; the fix was applied there
+         * and not here. */
+        memset(buf, (int)(0xFFu * (unsigned)class_idx), BUFFER_SIZE);
 
         uint64_t start = dudect_get_time_ns();
         ama_secure_memzero(buf, BUFFER_SIZE);
@@ -391,14 +401,17 @@ static dudect_measurement_t test_ed25519_sign(int iterations) {
     int rc_mismatches = 0;
 
     /* One staged buffer, read by the timed call for BOTH classes, so
-     * the classes differ in data and not in address (dudect_stage). */
+     * the classes differ in data and in nothing else: both sources are
+     * read every iteration and merged under a mask, so neither the
+     * address stream nor a branch reaches the timer class-correlated
+     * (dudect_stage_select). */
     _Alignas(64) uint8_t sk_use_stage[64];
     for (int i = 0; i < iterations && !g_timeout_hit; i++) {
         random_bytes(msg, sizeof(msg));
         int class_idx = rand() & 1;
         /* Pointer-select OUTSIDE the timing region. */
         const uint8_t *sk_use =
-            dudect_stage(sk_use_stage, class_idx ? sk1 : sk0, sizeof sk_use_stage);
+            dudect_stage_select(sk_use_stage, sk0, sk1, sizeof sk_use_stage, class_idx);
 
         uint64_t start = dudect_get_time_ns();
         volatile ama_error_t rc =
@@ -507,14 +520,17 @@ static dudect_measurement_t test_aes_gcm_tag_verify(int iterations) {
     int rc_mismatches = 0;
 
     /* One staged buffer, read by the timed call for BOTH classes, so
-     * the classes differ in data and not in address (dudect_stage). */
+     * the classes differ in data and in nothing else: both sources are
+     * read every iteration and merged under a mask, so neither the
+     * address stream nor a branch reaches the timer class-correlated
+     * (dudect_stage_select). */
     _Alignas(64) uint8_t tag_use_stage[16];
     for (int i = 0; i < iterations && !g_timeout_hit; i++) {
         int class_idx = rand() & 1;
         /* Pointer select OUTSIDE the timing region to remove
          * class-correlated branch-predictor delta. */
         const uint8_t *tag_use =
-            dudect_stage(tag_use_stage, class_idx ? bad_tag : tag, sizeof tag_use_stage);
+            dudect_stage_select(tag_use_stage, tag, bad_tag, sizeof tag_use_stage, class_idx);
 
         uint64_t start = dudect_get_time_ns();
         volatile ama_error_t rc =
@@ -613,13 +629,16 @@ static dudect_measurement_t test_aes_gcm_forgery_position(int iterations) {
     int rc_mismatches = 0;
 
     /* One staged buffer, read by the timed call for BOTH classes, so
-     * the classes differ in data and not in address (dudect_stage). */
+     * the classes differ in data and in nothing else: both sources are
+     * read every iteration and merged under a mask, so neither the
+     * address stream nor a branch reaches the timer class-correlated
+     * (dudect_stage_select). */
     _Alignas(64) uint8_t tag_use_stage[16];
     for (int i = 0; i < iterations && !g_timeout_hit; i++) {
         int class_idx = rand() & 1;
         /* Pointer select OUTSIDE the timing region. */
         const uint8_t *tag_use =
-            dudect_stage(tag_use_stage, class_idx ? tag_last : tag_first, sizeof tag_use_stage);
+            dudect_stage_select(tag_use_stage, tag_first, tag_last, sizeof tag_use_stage, class_idx);
 
         uint64_t start = dudect_get_time_ns();
         volatile ama_error_t rc =
@@ -714,12 +733,15 @@ static dudect_measurement_t test_ed25519_verify(int iterations) {
     int rc_mismatches = 0;
 
     /* One staged buffer, read by the timed call for BOTH classes, so
-     * the classes differ in data and not in address (dudect_stage). */
+     * the classes differ in data and in nothing else: both sources are
+     * read every iteration and merged under a mask, so neither the
+     * address stream nor a branch reaches the timer class-correlated
+     * (dudect_stage_select). */
     _Alignas(64) uint8_t sig_stage[64];
     for (int i = 0; i < iterations && !g_timeout_hit; i++) {
         int class_idx = rand() & 1;
         const uint8_t *sig =
-            dudect_stage(sig_stage, class_idx ? sig_bad : sig_good, sizeof sig_stage);
+            dudect_stage_select(sig_stage, sig_good, sig_bad, sizeof sig_stage, class_idx);
 
         uint64_t start = dudect_get_time_ns();
         volatile ama_error_t rc =
@@ -846,13 +868,16 @@ static dudect_measurement_t test_chacha20poly1305_tag_verify(int iterations) {
     int rc_mismatches = 0;
 
     /* One staged buffer, read by the timed call for BOTH classes, so
-     * the classes differ in data and not in address (dudect_stage). */
+     * the classes differ in data and in nothing else: both sources are
+     * read every iteration and merged under a mask, so neither the
+     * address stream nor a branch reaches the timer class-correlated
+     * (dudect_stage_select). */
     _Alignas(64) uint8_t tag_use_stage[AMA_POLY1305_TAG_BYTES];
     for (int i = 0; i < iterations && !g_timeout_hit; i++) {
         int class_idx = rand() & 1;
         /* Pointer select OUTSIDE the timing region. */
         const uint8_t *tag_use =
-            dudect_stage(tag_use_stage, class_idx ? tag_bad : tag_good, sizeof tag_use_stage);
+            dudect_stage_select(tag_use_stage, tag_good, tag_bad, sizeof tag_use_stage, class_idx);
 
         uint64_t start = dudect_get_time_ns();
         volatile ama_error_t rc =
@@ -955,13 +980,16 @@ static dudect_measurement_t test_chacha20poly1305_forgery_position(int iteration
     int rc_mismatches = 0;
 
     /* One staged buffer, read by the timed call for BOTH classes, so
-     * the classes differ in data and not in address (dudect_stage). */
+     * the classes differ in data and in nothing else: both sources are
+     * read every iteration and merged under a mask, so neither the
+     * address stream nor a branch reaches the timer class-correlated
+     * (dudect_stage_select). */
     _Alignas(64) uint8_t tag_use_stage[AMA_POLY1305_TAG_BYTES];
     for (int i = 0; i < iterations && !g_timeout_hit; i++) {
         int class_idx = rand() & 1;
         /* Pointer select OUTSIDE the timing region. */
         const uint8_t *tag_use =
-            dudect_stage(tag_use_stage, class_idx ? tag_last : tag_first, sizeof tag_use_stage);
+            dudect_stage_select(tag_use_stage, tag_first, tag_last, sizeof tag_use_stage, class_idx);
 
         uint64_t start = dudect_get_time_ns();
         volatile ama_error_t rc =
@@ -1052,12 +1080,15 @@ static dudect_measurement_t test_argon2id_legacy_verify(int iterations) {
     int rc_mismatches = 0;
 
     /* One staged buffer, read by the timed call for BOTH classes, so
-     * the classes differ in data and not in address (dudect_stage). */
+     * the classes differ in data and in nothing else: both sources are
+     * read every iteration and merged under a mask, so neither the
+     * address stream nor a branch reaches the timer class-correlated
+     * (dudect_stage_select). */
     _Alignas(64) uint8_t tag_use_stage[32];
     for (int i = 0; i < local_iters && !g_timeout_hit; i++) {
         int class_idx = rand() & 1;
         const uint8_t *tag_use =
-            dudect_stage(tag_use_stage, class_idx ? tag_bad : tag_good, sizeof tag_use_stage);
+            dudect_stage_select(tag_use_stage, tag_good, tag_bad, sizeof tag_use_stage, class_idx);
 
         uint64_t start = dudect_get_time_ns();
         volatile ama_error_t rc =
@@ -1156,12 +1187,15 @@ static dudect_measurement_t test_secp256k1_scalarmult(int iterations) {
     int rc_mismatches = 0;
 
     /* One staged buffer, read by the timed call for BOTH classes, so
-     * the classes differ in data and not in address (dudect_stage). */
+     * the classes differ in data and in nothing else: both sources are
+     * read every iteration and merged under a mask, so neither the
+     * address stream nor a branch reaches the timer class-correlated
+     * (dudect_stage_select). */
     _Alignas(64) uint8_t k_stage[32];
     for (int i = 0; i < iterations && !g_timeout_hit; i++) {
         int class_idx = rand() & 1;
         const uint8_t *k =
-            dudect_stage(k_stage, class_idx ? k_high : k_low, sizeof k_stage);
+            dudect_stage_select(k_stage, k_low, k_high, sizeof k_stage, class_idx);
 
         uint64_t start = dudect_get_time_ns();
         volatile ama_error_t rc =
@@ -1250,10 +1284,16 @@ static dudect_measurement_t test_secp256k1_ecdsa_sign(int iterations) {
     int rc_mismatches = 0;
 
     /* One staged buffer, read by the timed call for BOTH classes, so
-     * the classes differ in data and not in address (dudect_stage). */
+     * the classes differ in data and in nothing else: both sources are
+     * read every iteration and merged under a mask, so neither the
+     * address stream nor a branch reaches the timer class-correlated
+     * (dudect_stage_select). */
     _Alignas(64) uint8_t m_stage[32];
     /* One staged buffer, read by the timed call for BOTH classes, so
-     * the classes differ in data and not in address (dudect_stage). */
+     * the classes differ in data and in nothing else: both sources are
+     * read every iteration and merged under a mask, so neither the
+     * address stream nor a branch reaches the timer class-correlated
+     * (dudect_stage_select). */
     _Alignas(64) uint8_t d_stage[32];
     for (int i = 0; i < iterations && !g_timeout_hit; i++) {
         int class_idx = rand() & 1;
@@ -1286,9 +1326,9 @@ static dudect_measurement_t test_secp256k1_ecdsa_sign(int iterations) {
         random_bytes(msg_rand, sizeof(msg_rand));
 
         const uint8_t *d =
-            dudect_stage(d_stage, class_idx ? d_rand : d_fixed, sizeof d_stage);
+            dudect_stage_select(d_stage, d_fixed, d_rand, sizeof d_stage, class_idx);
         const uint8_t *m =
-            dudect_stage(m_stage, class_idx ? msg_rand : msg_fixed, sizeof m_stage);
+            dudect_stage_select(m_stage, msg_fixed, msg_rand, sizeof m_stage, class_idx);
 
         uint64_t start = dudect_get_time_ns();
         volatile ama_error_t rc =
@@ -1350,13 +1390,16 @@ static dudect_measurement_t test_hkdf(int iterations) {
     int rc_mismatches = 0;
 
     /* One staged buffer, read by the timed call for BOTH classes, so
-     * the classes differ in data and not in address (dudect_stage). */
+     * the classes differ in data and in nothing else: both sources are
+     * read every iteration and merged under a mask, so neither the
+     * address stream nor a branch reaches the timer class-correlated
+     * (dudect_stage_select). */
     _Alignas(64) uint8_t ikm_use_stage[32];
     for (int i = 0; i < iterations && !g_timeout_hit; i++) {
         int class_idx = rand() & 1;
         /* Pointer-select OUTSIDE the timing region. */
         const uint8_t *ikm_use =
-            dudect_stage(ikm_use_stage, class_idx ? ikm1 : ikm0, sizeof ikm_use_stage);
+            dudect_stage_select(ikm_use_stage, ikm0, ikm1, sizeof ikm_use_stage, class_idx);
 
         uint64_t start = dudect_get_time_ns();
         volatile ama_error_t rc =
@@ -1446,14 +1489,17 @@ static dudect_measurement_t test_hmac_verify(int iterations) {
     int rc_mismatches = 0;
 
     /* One staged buffer, read by the timed call for BOTH classes, so
-     * the classes differ in data and not in address (dudect_stage). */
+     * the classes differ in data and in nothing else: both sources are
+     * read every iteration and merged under a mask, so neither the
+     * address stream nor a branch reaches the timer class-correlated
+     * (dudect_stage_select). */
     _Alignas(64) uint8_t test_mac_stage[32];
     for (int i = 0; i < iterations && !g_timeout_hit; i++) {
         int class_idx = rand() & 1;
         /* Pointer-select OUTSIDE the timing region to remove
          * class-correlated branch-predictor delta. */
         const uint8_t *test_mac =
-            dudect_stage(test_mac_stage, class_idx ? bad_mac : mac, sizeof test_mac_stage);
+            dudect_stage_select(test_mac_stage, mac, bad_mac, sizeof test_mac_stage, class_idx);
         uint8_t computed[32];
 
         uint64_t start = dudect_get_time_ns();
@@ -1557,13 +1603,16 @@ static dudect_measurement_t test_ascon_tag_verify(int iterations) {
     int rc_mismatches = 0;
 
     /* One staged buffer, read by the timed call for BOTH classes, so
-     * the classes differ in data and not in address (dudect_stage). */
+     * the classes differ in data and in nothing else: both sources are
+     * read every iteration and merged under a mask, so neither the
+     * address stream nor a branch reaches the timer class-correlated
+     * (dudect_stage_select). */
     _Alignas(64) uint8_t tag_use_stage[AMA_ASCON_AEAD128_TAG_LEN];
     for (int i = 0; i < iterations && !g_timeout_hit; i++) {
         int class_idx = rand() & 1;
         /* Pointer select OUTSIDE the timing region. */
         const uint8_t *tag_use =
-            dudect_stage(tag_use_stage, class_idx ? tag_last : tag_first, sizeof tag_use_stage);
+            dudect_stage_select(tag_use_stage, tag_first, tag_last, sizeof tag_use_stage, class_idx);
 
         uint64_t start = dudect_get_time_ns();
         volatile ama_error_t rc =
@@ -1632,13 +1681,16 @@ static dudect_measurement_t test_ascon_encrypt_key_independent(int iterations) {
     int rc_failures = 0;
 
     /* One staged buffer, read by the timed call for BOTH classes, so
-     * the classes differ in data and not in address (dudect_stage). */
+     * the classes differ in data and in nothing else: both sources are
+     * read every iteration and merged under a mask, so neither the
+     * address stream nor a branch reaches the timer class-correlated
+     * (dudect_stage_select). */
     _Alignas(64) uint8_t key_use_stage[AMA_ASCON_AEAD128_KEY_LEN];
     for (int i = 0; i < iterations && !g_timeout_hit; i++) {
         int class_idx = rand() & 1;
         /* Pointer select OUTSIDE the timing region. */
         const uint8_t *key_use =
-            dudect_stage(key_use_stage, class_idx ? key_ones : key_zero, sizeof key_use_stage);
+            dudect_stage_select(key_use_stage, key_zero, key_ones, sizeof key_use_stage, class_idx);
 
         uint64_t start = dudect_get_time_ns();
         volatile ama_error_t rc =
@@ -1690,13 +1742,16 @@ static dudect_measurement_t test_ascon_hash256_input_independent(int iterations)
     int rc_failures = 0;
 
     /* One staged buffer, read by the timed call for BOTH classes, so
-     * the classes differ in data and not in address (dudect_stage). */
+     * the classes differ in data and in nothing else: both sources are
+     * read every iteration and merged under a mask, so neither the
+     * address stream nor a branch reaches the timer class-correlated
+     * (dudect_stage_select). */
     _Alignas(64) uint8_t in_stage[64];
     for (int i = 0; i < iterations && !g_timeout_hit; i++) {
         int class_idx = rand() & 1;
         /* Pointer select OUTSIDE the timing region. */
         const uint8_t *in =
-            dudect_stage(in_stage, class_idx ? input_ones : input_zero, sizeof in_stage);
+            dudect_stage_select(in_stage, input_zero, input_ones, sizeof in_stage, class_idx);
 
         uint64_t start = dudect_get_time_ns();
         volatile ama_error_t rc =
@@ -1788,13 +1843,16 @@ static dudect_measurement_t test_agent_binding_check(int iterations) {
     int rc_mismatches = 0;
 
     /* One staged buffer, read by the timed call for BOTH classes, so
-     * the classes differ in data and not in address (dudect_stage). */
+     * the classes differ in data and in nothing else: both sources are
+     * read every iteration and merged under a mask, so neither the
+     * address stream nor a branch reaches the timer class-correlated
+     * (dudect_stage_select). */
     _Alignas(64) ama_agent_binding_t b_stage;
     for (int i = 0; i < iterations && !g_timeout_hit; i++) {
         int class_idx = rand() & 1;
         /* Pointer-select OUTSIDE the timing region. */
         const ama_agent_binding_t *b =
-            dudect_stage(&b_stage, class_idx ? &bad : &good, sizeof b_stage);
+            dudect_stage_select(&b_stage, &good, &bad, sizeof b_stage, class_idx);
 
         uint64_t start = dudect_get_time_ns();
         volatile ama_error_t rc =
@@ -1868,13 +1926,16 @@ static dudect_measurement_t test_x25519_scalarmult(int iterations) {
     int rc_mismatches = 0;
 
     /* One staged buffer, read by the timed call for BOTH classes, so
-     * the classes differ in data and not in address (dudect_stage). */
+     * the classes differ in data and in nothing else: both sources are
+     * read every iteration and merged under a mask, so neither the
+     * address stream nor a branch reaches the timer class-correlated
+     * (dudect_stage_select). */
     _Alignas(64) uint8_t sk_use_stage[32];
     for (int i = 0; i < iterations && !g_timeout_hit; i++) {
         int class_idx = rand() & 1;
         /* Pointer-select OUTSIDE the timing region. */
         const uint8_t *sk_use =
-            dudect_stage(sk_use_stage, class_idx ? sk1 : sk0, sizeof sk_use_stage);
+            dudect_stage_select(sk_use_stage, sk0, sk1, sizeof sk_use_stage, class_idx);
 
         uint64_t start = dudect_get_time_ns();
         volatile ama_error_t rc =
@@ -1953,12 +2014,25 @@ static dudect_measurement_t test_x25519_scalarmult_x4(int iterations) {
 
     int rc_mismatches = 0;
 
+    /* One staged buffer, read by the timed call for BOTH classes, so the
+     * classes differ in data and in nothing else: both sources are read
+     * every iteration and merged under a mask, so neither the address
+     * stream nor a branch reaches the timer class-correlated
+     * (dudect_stage_select).
+     *
+     * This lane previously bound `sk_use` straight from a class-selected
+     * ternary and described that as safe because the select sits "outside
+     * the timing region".  It is not: the branch is perfectly correlated
+     * with the class and its misprediction retires inside the measured
+     * region, and the two key blocks are 128 bytes apart, so the ladder's
+     * own loads were class-correlated as well. */
+    _Alignas(64) uint8_t sk_use_stage[4][32];
+
     for (int i = 0; i < iterations && !g_timeout_hit; i++) {
         int class_idx = rand() & 1;
-        /* Pointer-select OUTSIDE the timing region. */
-        const uint8_t (*sk_use)[32] = class_idx
-            ? (const uint8_t (*)[32])sk1
-            : (const uint8_t (*)[32])sk0;
+        const uint8_t (*sk_use)[32] = (const uint8_t (*)[32])
+            dudect_stage_select(sk_use_stage, sk0, sk1,
+                                sizeof sk_use_stage, class_idx);
 
         uint64_t start = dudect_get_time_ns();
         volatile ama_error_t rc =
@@ -2043,7 +2117,10 @@ static dudect_measurement_t test_kyber_decaps(int iterations) {
     int rc_mismatches = 0;
 
     /* One staged buffer, read by the timed call for BOTH classes, so
-     * the classes differ in data and not in address (dudect_stage). */
+     * the classes differ in data and in nothing else: both sources are
+     * read every iteration and merged under a mask, so neither the
+     * address stream nor a branch reaches the timer class-correlated
+     * (dudect_stage_select). */
     _Alignas(64) uint8_t ct_use_stage[AMA_KYBER_1024_CIPHERTEXT_BYTES];
     for (int i = 0; i < iterations && !g_timeout_hit; i++) {
         int class_idx = rand() & 1;
@@ -2052,7 +2129,7 @@ static dudect_measurement_t test_kyber_decaps(int iterations) {
          * rejection returns a pseudo-random shared secret on CT
          * tampering rather than surfacing the failure via rc. */
         const uint8_t *ct_use =
-            dudect_stage(ct_use_stage, class_idx ? ct_bad : ct, sizeof ct_use_stage);
+            dudect_stage_select(ct_use_stage, ct, ct_bad, sizeof ct_use_stage, class_idx);
 
         uint64_t start = dudect_get_time_ns();
         volatile ama_error_t rc =
@@ -2119,7 +2196,10 @@ static dudect_measurement_t test_frost_scalar_negate_extremes(int iterations) {
     memset(s1, 0xFF, 32);
 
     /* One staged buffer, read by the timed call for BOTH classes, so
-     * the classes differ in data and not in address (dudect_stage). */
+     * the classes differ in data and in nothing else: both sources are
+     * read every iteration and merged under a mask, so neither the
+     * address stream nor a branch reaches the timer class-correlated
+     * (dudect_stage_select). */
     _Alignas(64) uint8_t s_stage[32];
     for (int i = 0; i < iterations && !g_timeout_hit; i++) {
         int class_idx = rand() & 1;
@@ -2127,7 +2207,7 @@ static dudect_measurement_t test_frost_scalar_negate_extremes(int iterations) {
          * `class_idx` cannot leak class membership via the
          * branch-predictor — same pattern as the secp256k1 lane. */
         const uint8_t *s =
-            dudect_stage(s_stage, class_idx ? s1 : s0, sizeof s_stage);
+            dudect_stage_select(s_stage, s0, s1, sizeof s_stage, class_idx);
 
         uint64_t start = dudect_get_time_ns();
         ama_frost_test_scalar_negate(neg, s);
@@ -2169,7 +2249,10 @@ static dudect_measurement_t test_frost_scalar_negate_midrange(int iterations) {
     memcpy(s1, SCALAR_NEGATE_MID, 32);
 
     /* One staged buffer, read by the timed call for BOTH classes, so
-     * the classes differ in data and not in address (dudect_stage). */
+     * the classes differ in data and in nothing else: both sources are
+     * read every iteration and merged under a mask, so neither the
+     * address stream nor a branch reaches the timer class-correlated
+     * (dudect_stage_select). */
     _Alignas(64) uint8_t s_stage[32];
     for (int i = 0; i < iterations && !g_timeout_hit; i++) {
         int class_idx = rand() & 1;
@@ -2182,7 +2265,7 @@ static dudect_measurement_t test_frost_scalar_negate_midrange(int iterations) {
          * front so the timed region is one indirect call with no
          * class-correlated control flow. */
         const uint8_t *s =
-            dudect_stage(s_stage, class_idx ? s1 : s0, sizeof s_stage);
+            dudect_stage_select(s_stage, s0, s1, sizeof s_stage, class_idx);
 
         uint64_t start = dudect_get_time_ns();
         ama_frost_test_scalar_negate(neg, s);
@@ -2248,13 +2331,16 @@ static dudect_measurement_t test_dilithium_sign(int iterations) {
     int rc_mismatches = 0;
 
     /* One staged buffer, read by the timed call for BOTH classes, so
-     * the classes differ in data and not in address (dudect_stage). */
+     * the classes differ in data and in nothing else: both sources are
+     * read every iteration and merged under a mask, so neither the
+     * address stream nor a branch reaches the timer class-correlated
+     * (dudect_stage_select). */
     _Alignas(64) uint8_t msg_use_stage[64];
     for (int i = 0; i < iterations && !g_timeout_hit; i++) {
         int class_idx = rand() & 1;
         /* Pointer-select OUTSIDE the timing region. */
         const uint8_t *msg_use =
-            dudect_stage(msg_use_stage, class_idx ? msg1 : msg0, sizeof msg_use_stage);
+            dudect_stage_select(msg_use_stage, msg0, msg1, sizeof msg_use_stage, class_idx);
         /* `signature_len` is in/out: the call reads it as the buffer
          * capacity before writing the actual signature length back.
          * Re-initialise per iteration so a stale shrunk value doesn't
@@ -2367,12 +2453,15 @@ static dudect_measurement_t test_slhdsa_sign(int iterations) {
     int rc_mismatches = 0;
 
     /* One staged buffer, read by the timed call for BOTH classes, so
-     * the classes differ in data and not in address (dudect_stage). */
+     * the classes differ in data and in nothing else: both sources are
+     * read every iteration and merged under a mask, so neither the
+     * address stream nor a branch reaches the timer class-correlated
+     * (dudect_stage_select). */
     _Alignas(64) uint8_t msg_use_stage[64];
     for (int i = 0; i < local_iters && !g_timeout_hit; i++) {
         int class_idx = rand() & 1;
         const uint8_t *msg_use =
-            dudect_stage(msg_use_stage, class_idx ? msg1 : msg0, sizeof msg_use_stage);
+            dudect_stage_select(msg_use_stage, msg0, msg1, sizeof msg_use_stage, class_idx);
         size_t siglen = sizeof(sig);
 
         uint64_t start = dudect_get_time_ns();

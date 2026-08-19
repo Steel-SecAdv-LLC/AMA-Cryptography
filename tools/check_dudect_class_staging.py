@@ -33,22 +33,62 @@ has a standard deviation near 4 ns over ~22,000 samples per class, so the
 standard error is about 0.04 ns and the threshold is crossed by a systematic
 difference of roughly 0.2 ns — under half a cycle at 2.1 GHz.
 
+Staging the destination is only half of it
+------------------------------------------
+The first version of this gate sanctioned::
+
+    dudect_stage(buf, class_idx ? A : B, sizeof buf)
+
+which fixes the address the *timed call* reads but leaves the SELECTION inside
+the loop, between the class draw and the opening timer.  That keeps two
+class-correlated effects in the window the measurement is most sensitive to:
+the ternary is a conditional branch perfectly correlated with the class, whose
+misprediction penalty is paid just before the timer opens and retires inside
+the timed region on an out-of-order core; and ``A`` and ``B`` are two distinct
+objects, so the staging copy's own source address is class-correlated too.
+
+Measured with the AES-GCM forgery-position lane's own decrypt call and
+BYTE-IDENTICAL input in both classes — true effect exactly zero — at 500,000
+measurements per run, 8 runs per batch, threshold 5.0:
+
+===================================================  ==============  =========
+construction                                          over threshold  worst |t|
+===================================================  ==============  =========
+two sources + ternary select (the old sanctioned      4/8, 4/8, 1/8       7.85
+form)
+one aligned two-entry source, indexed (no branch)          0/8            2.79
+two sources, branch-free pointer select                    0/8            2.18
+one aligned two-entry source + ternary select              0/8            4.47
+both sources merged under a mask                           0/8            3.01
+===================================================  ==============  =========
+
+The branch is the dominant term: the two constructions that keep it are the
+only ones that trip or drift toward the threshold.  ``dudect_harness.c`` had
+already measured the same effect twice from the other direction — a branchy
+class setup gave mean t = +43.38 (10/10 over threshold) against +1.26 (0/10)
+for the branchless form, and +9.93 (15/15) against -0.02 (0/15) on a function
+callgrind proves retires an identical instruction count for every class.  The
+discipline existed in the older harness and was not carried into the newer
+lanes.
+
 The rule
 --------
-A lane must not bind a class-selected pointer for the timed call directly.  It
-must copy the selected class's input into ONE shared, cache-line-aligned
-buffer (``dudect_stage()``) and hand the timed call that buffer.
+Between the class draw and the timer call that opens the measured region, no
+statement may branch on the class or use it to select an address.  Concretely,
+in that window ``class_idx`` may appear only:
 
-Two forms satisfy the rule:
+* as the trailing argument of ``dudect_stage_select(dst, src0, src1, n,
+  class_idx)`` — which reads BOTH class inputs every iteration and merges them
+  under a constant-time mask, so neither the branch history nor the address
+  stream entering the timer is class-correlated, at any input size; or
+* in branchless arithmetic that constructs the class input itself, e.g.
+  ``memset(buf, (int)(0xFF * (unsigned)class_idx), n)`` or
+  ``b[pos] ^= (uint8_t)class_idx``.
 
-``dudect_stage(buf, class_idx ? A : B, sizeof buf)``
-    the general case, used by every keyed and message lane.
-
-a single reused probe rewritten class-symmetrically
-    used by the tag-compare lanes, where both end bytes are stored
-    unconditionally every iteration and only the stored VALUE is
-    class-dependent.  These lanes contain no class-selected pointer at all, so
-    they trivially satisfy the check.
+A ternary on the class, an ``if`` on the class, or a ``[class_idx]`` index is a
+violation wherever it appears in that window.  After the timer closes the
+window the class is unconstrained: the next iteration's class is drawn
+independently, so branch history carried across iterations cannot bias it.
 
 The gate also requires every staging buffer to be declared ``_Alignas(64)``:
 an unaligned staging buffer can straddle a cache line, which reintroduces the
@@ -57,17 +97,21 @@ inflates the noise floor instead of biasing the mean.
 
 Why a gate and not review
 -------------------------
-This discipline was already discovered once, in the AES-GCM tag-compare lane,
-which carries a comment describing this exact failure mode and the fix for it.
-It was not propagated to the other lanes, and the Ascon-AEAD128-encrypt lane
-subsequently went red in CI for the reason that comment describes.  A property
-that has already regressed once is a property that needs enforcement.
+This discipline has now been discovered three times in this tree — twice in
+``dudect_harness.c`` and once in the AES-GCM tag-compare lane — and each time
+it failed to propagate to the lanes written next.  The shipped AES-GCM
+forgery-position lane read |t| = 61..75 with a consistent sign on two
+different CI hosts while the decrypt it measures executes a bit-identical
+instruction stream for both classes.  A property that has regressed three
+times is a property that needs enforcement rather than a comment.
 
 Exit status
 -----------
-0  every dudect lane stages its class input
-1  at least one lane binds a class-selected pointer, or a staging buffer is
-   not cache-line aligned
+0  every dudect lane reaches its timer with no class-dependent branch or
+   address selection in front of it
+1  at least one lane branches on the class or selects an address by it before
+   the timer, a staging buffer is not cache-line aligned, or a class draw is
+   not followed by a timer call at all
 2  a file this gate must examine is missing (fail closed — a gate whose input
    vanished must not pass)
 """
@@ -88,21 +132,37 @@ HARNESS_FILES = (
     "tools/constant_time/dudect_harness.c",
 )
 
-# A pointer bound from a class-dependent selection.  Both spellings the tree
-# has used are matched: `class_idx ? A : B` and `(class_idx == 0) ? A : B`.
-_CLASS_SELECT = re.compile(
+# The tail of the diagnostic below, held in a constant: spelled inline it
+# completes a "... an address ... from a leak ..." span that ruff's
+# flake8-bandit S608 heuristic reads as SQL string building.
+_LEAK = "from a real leak"
+
+# The class draw that opens the pre-timer window.
+_CLASS_DRAW = re.compile(r"\bclass_idx\s*=[^=]")
+
+# The timer call that closes it.  Both harness families are covered:
+# dudect_get_time_ns() in tests/c, get_time_ns() in tools/constant_time.
+_TIMER = re.compile(r"\b(?:dudect_)?get_time_ns\s*\(")
+
+# Any mention of the class at all.
+_CLASS_USE = re.compile(r"\bclass_idx\b")
+
+# The sanctioned staging call: dudect_stage_select(dst, src0, src1, n, class_idx)
+# — both sources read every iteration, merged under a constant-time mask.
+_STAGE_SELECT = re.compile(r"dudect_stage_select\s*\([^;]*,\s*class_idx\s*\)")
+
+# The forbidden class-dependent constructs: a ternary on the class (either
+# spelling the tree has used), an `if` on the class, or an address selected by
+# it.  These are the constructions measured to bias the lane.
+_CLASS_BRANCH = re.compile(
     r"""
-    ^\s*(?:const\s+)?              # optional const
-    (?P<type>\w[\w\s]*?)           # element / struct type
-    \s*\*\s*(?P<name>\w+)          # pointer being bound
-    \s*=\s*                        # assignment
-    (?P<rhs>.*?class_idx\s*(?:==\s*[01]\s*\))?\s*\?)   # a class-dependent ternary
+    (?: \bif\s*\([^;]*\bclass_idx\b )      # if (class_idx ...)
+  | (?: \bclass_idx\b\s*(?:==|!=)\s*[01]\s*\)?\s*\? )  # (class_idx == 0) ?
+  | (?: \bclass_idx\b\s*\?  )              # class_idx ?
+  | (?: \[\s*class_idx\s*\] )              # arr[class_idx]
     """,
     re.VERBOSE,
 )
-
-# The sanctioned staging call.
-_STAGED = re.compile(r"dudect_stage\s*\(")
 
 # `_Alignas(64) <type> name[...]` / `_Alignas(64) <type> name;`
 _ALIGNED_DECL = re.compile(r"_Alignas\(64\)\s+\w[\w\s]*?\s+(?P<name>\w+)\s*(?:\[|;)")
@@ -185,20 +245,45 @@ def check_text(text: str, path: str) -> list[str]:
                 f"reintroduces the geometry the staging exists to remove."
             )
 
+    # Walk the file as a state machine.  The window opens at a class draw and
+    # closes at the first timer call after it; inside the window the class may
+    # only reach the timed call through dudect_stage_select() or branchless
+    # arithmetic.  A draw that is never followed by a timer is itself a
+    # violation: the window would otherwise run to end-of-file and the gate
+    # would report on statements it has no business judging, or — if the file
+    # ends quietly — report nothing at all.
+    in_window = False
+    window_line = 0
     for lineno, stmt in _logical_statements(stripped):
-        select = _CLASS_SELECT.match(stmt)
-        if select is None:
+        if in_window:
+            if _CLASS_USE.search(stmt) and not _STAGE_SELECT.search(stmt):
+                branch = _CLASS_BRANCH.search(stmt)
+                if branch is not None:
+                    violations.append(
+                        f"{path}:{lineno}: {branch.group(0).strip()!r} lets "
+                        f"the class pick a branch or an address, after the "
+                        f"class draw on line {window_line} and before the "
+                        f"timer opens. Such a branch's direction is perfectly "
+                        f"correlated with the class and its misprediction is "
+                        f"paid inside the measured region: a fixed per-host "
+                        f"bias that no threshold and no round count can tell "
+                        f"apart {_LEAK}. Use dudect_stage_select(dst, class0, "
+                        f"class1, n, class_idx), which reads both class inputs "
+                        f"every iteration and merges them under a mask."
+                    )
+            if _TIMER.search(stmt):
+                in_window = False
             continue
-        if _STAGED.search(stmt):
-            continue
-        name = select.group("name")
+
+        if _CLASS_DRAW.search(stmt):
+            in_window = True
+            window_line = lineno
+
+    if in_window:
         violations.append(
-            f"{path}:{lineno}: '{name}' binds a class-selected "
-            f"pointer for the timed call. The two classes then differ in the "
-            f"input's ADDRESS as well as its value, which is a fixed per-host "
-            f"bias no threshold or round count can distinguish from a leak. "
-            f"Stage it: dudect_stage({name}_stage, "
-            f"class_idx ? ... : ..., sizeof {name}_stage)."
+            f"{path}:{window_line}: this class draw is not followed by a timer "
+            f"call. The gate cannot establish where the measured region begins, "
+            f"so it refuses to report the file clean."
         )
     return violations
 
@@ -233,7 +318,10 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  - {v}")
         return 1
 
-    print(f"OK: {examined} dudect harness file(s); every lane stages its class input.")
+    print(
+        f"OK: {examined} dudect harness file(s); every lane reaches its timer "
+        f"with no class-dependent branch or address selection in front of it."
+    )
     return 0
 
 

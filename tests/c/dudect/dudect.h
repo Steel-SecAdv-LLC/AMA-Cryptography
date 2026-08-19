@@ -33,6 +33,8 @@
 #include <math.h>
 #include <time.h>
 
+/* Class-input staging, shared with the standalone harnesses. */
+#include "dudect_stage.h"
 /* The statistic, its calibrated threshold, and its self-test. */
 #include "dudect_percentile.h"
 
@@ -98,45 +100,6 @@ static inline void dudect_ttest_update(dudect_ttest_ctx_t *ctx, int class_idx, d
 
 static inline double dudect_ttest_compute(dudect_ttest_ctx_t *ctx) {
     return dudect_cropped_compute(ctx);
-}
-
-/* --------------------------------------------------------------------------
- * Class staging
- * --------------------------------------------------------------------------
- * A lane compares two input classes, and the two classes must differ in the
- * property under test and in NOTHING ELSE.  Handing the timed call one of two
- * per-class buffers breaks that: the classes then differ in the input's
- * ADDRESS as well as its value, and a load's timing legitimately depends on
- * its address — which cache line it falls in, whether it spans two, which set
- * it maps to.  That difference is fixed for a given binary on a given host,
- * so it reproduces in every round with the same sign, which is exactly what a
- * real leak looks like and exactly what no threshold or number of rounds can
- * separate from one.
- *
- * Measured on this tree with the Ascon-AEAD128-encrypt lane's own cipher call
- * and IDENTICAL key data in both classes, so the true effect is exactly zero:
- * placing class 0's key across two cache lines while class 1's sits inside
- * one drives the cropped statistic to |t| = 13.5..30.9, over threshold in 10
- * of 10 runs, all one sign.  Staged through a single buffer the same
- * measurement reports 0 of 10.
- *
- * This became reachable when the harnesses adopted percentile cropping, which
- * resolves the BULK of the timing distribution: a lane measured here has a
- * cropped bulk standard deviation of about 4 ns over ~22,000 samples per
- * class, so the standard error is ~0.04 ns and the threshold is crossed by a
- * systematic difference of roughly 0.2 ns — under half a cycle at 2.1 GHz.
- * At that resolution the harness's own memory layout is a first-class
- * confounder.
- *
- * So a lane copies the selected class's input into ONE shared, cache-line-
- * aligned buffer and hands the timed call that.  Both classes then present
- * the same address and the same alignment, and only the DATA differs.  The
- * copy is identical work for both classes and happens outside the timed
- * region.  Sensitivity is untouched: a data-dependent leak follows the data.
- * -------------------------------------------------------------------------- */
-static inline const void *dudect_stage(void *staging, const void *src, size_t len) {
-    memcpy(staging, src, len);
-    return staging;
 }
 
 /* --------------------------------------------------------------------------

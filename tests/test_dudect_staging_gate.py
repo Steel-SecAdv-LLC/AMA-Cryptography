@@ -2,18 +2,25 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tests for ``tools/check_dudect_class_staging.py``.
 
-The gate exists because a dudect lane that hands the timed call one of two
-per-class buffers confounds the class with the input's ADDRESS, and that bias
-is fixed for a given binary on a given host — so it reproduces every round
-with the same sign and is indistinguishable from a leak by any threshold or
-round count.  Measured on this tree, with identical key data in both classes,
-placing one class's key across two cache lines drives the cropped statistic to
+The gate exists because a dudect lane whose class reaches the timer through a
+branch or an address selection confounds the class with the harness's own
+machine state, and that bias is fixed for a given binary on a given host — so
+it reproduces every round with the same sign and is indistinguishable from a
+leak by any threshold or round count.
+
+Measured on this tree with byte-identical input in both classes (true effect
+exactly zero), 500,000 measurements per run, 8 runs, threshold 5.0: the
+ternary-select form the first version of this gate sanctioned trips in 4 of 8
+runs; the masked-merge form ``dudect_stage_select`` trips in 0 of 8.  Placing
+one class's key across two cache lines drives the same statistic to
 |t| = 13.5..30.9 in 10 of 10 runs.
 
 A gate is only worth its runtime if it fails on the thing it claims to catch,
-so every case below is a mutation: the gate must reject the unstaged form, the
-legacy ``(class_idx == 0) ?`` spelling, an unaligned staging buffer, and a
-missing input file, and must accept the staged form and the reused-probe form.
+so every case below is a mutation: the gate must reject a ternary on the class
+before the timer (in both spellings the tree has used), an ``if`` on the class,
+a ``[class_idx]`` address selection, an unaligned staging buffer, a class draw
+with no timer after it, and a missing input file — and must accept the
+masked-merge staging, the reused-probe form, and branchless class arithmetic.
 """
 
 from __future__ import annotations
@@ -84,7 +91,54 @@ static double test_lane(int iterations) {
     for (int i = 0; i < iterations; i++) {
         int class_idx = rand() & 1;
         const uint8_t *key = (class_idx == 0) ? key0 : key1;
+        uint64_t start = get_time_ns();
         crypt(key);
+        uint64_t end = get_time_ns();
+    }
+}
+"""
+
+# The form the first version of this gate sanctioned: the destination is
+# staged, but the SELECTION — a branch perfectly correlated with the class,
+# and two distinct source addresses — is still in front of the timer.
+STAGED_BUT_TERNARY_SELECTED = """
+static double test_lane(int iterations) {
+    _Alignas(64) uint8_t key_stage[16];
+    for (int i = 0; i < iterations; i++) {
+        int class_idx = rand() & 1;
+        const uint8_t *key =
+            dudect_stage(key_stage, class_idx ? key1 : key0, sizeof key_stage);
+        uint64_t start = get_time_ns();
+        crypt(key);
+        uint64_t end = get_time_ns();
+    }
+}
+"""
+
+# An `if` on the class before the timer is the same defect spelled out.
+BRANCH_ON_CLASS = """
+static double test_lane(int iterations) {
+    _Alignas(64) uint8_t key_stage[16];
+    for (int i = 0; i < iterations; i++) {
+        int class_idx = rand() & 1;
+        if (class_idx) { memcpy(key_stage, key1, 16); }
+        uint64_t start = get_time_ns();
+        crypt(key_stage);
+        uint64_t end = get_time_ns();
+    }
+}
+"""
+
+# An index by the class selects an address even without a branch.
+INDEXED_BY_CLASS = """
+static double test_lane(int iterations) {
+    _Alignas(64) uint8_t key_stage[16];
+    for (int i = 0; i < iterations; i++) {
+        int class_idx = rand() & 1;
+        memcpy(key_stage, keys[class_idx], sizeof key_stage);
+        uint64_t start = get_time_ns();
+        crypt(key_stage);
+        uint64_t end = get_time_ns();
     }
 }
 """
@@ -95,8 +149,10 @@ static double test_lane(int iterations) {
     for (int i = 0; i < iterations; i++) {
         int class_idx = rand() & 1;
         const uint8_t *key =
-            dudect_stage(key_stage, class_idx ? key1 : key0, sizeof key_stage);
+            dudect_stage_select(key_stage, key0, key1, sizeof key_stage, class_idx);
+        uint64_t start = get_time_ns();
         crypt(key);
+        uint64_t end = get_time_ns();
     }
 }
 """
@@ -107,8 +163,10 @@ static double test_lane(int iterations) {
     for (int i = 0; i < iterations; i++) {
         int class_idx = rand() & 1;
         const uint8_t *key =
-            dudect_stage(key_stage, class_idx ? key1 : key0, sizeof key_stage);
+            dudect_stage_select(key_stage, key0, key1, sizeof key_stage, class_idx);
+        uint64_t start = get_time_ns();
         crypt(key);
+        uint64_t end = get_time_ns();
     }
 }
 """
@@ -121,7 +179,23 @@ static double test_tag_compare(int iterations) {
         int class_idx = rand() & 1;
         probe[0]  = (uint8_t)(tag[0]  ^ (class_idx == 0));
         probe[15] = (uint8_t)(tag[15] ^ (class_idx == 1));
+        uint64_t start = get_time_ns();
         verify(probe);
+        uint64_t end = get_time_ns();
+    }
+}
+"""
+
+# Branchless arithmetic that builds the class input is the sanctioned way to
+# construct a class without a branch, and must not be flagged.
+BRANCHLESS_CLASS_ARITHMETIC = """
+static double test_lane(int iterations) {
+    for (int i = 0; i < iterations; i++) {
+        int class_idx = rand() & 1;
+        memset(buf, (int)(0xFFu * (unsigned)class_idx), BUFFER_SIZE);
+        uint64_t start = get_time_ns();
+        ama_secure_memzero(buf, BUFFER_SIZE);
+        uint64_t end = get_time_ns();
     }
 }
 """
@@ -132,8 +206,21 @@ static double test_binding(int iterations) {
     for (int i = 0; i < iterations; i++) {
         int class_idx = rand() & 1;
         const ama_agent_binding_t *b =
-            dudect_stage(&b_stage, class_idx ? &bad : &good, sizeof b_stage);
+            dudect_stage_select(&b_stage, &good, &bad, sizeof b_stage, class_idx);
+        uint64_t start = get_time_ns();
         check(b);
+        uint64_t end = get_time_ns();
+    }
+}
+"""
+
+# A class draw the gate cannot pair with a timer must fail closed: without a
+# window end the gate has no idea what it is judging.
+DRAW_WITHOUT_TIMER = """
+static double test_lane(int iterations) {
+    for (int i = 0; i < iterations; i++) {
+        int class_idx = rand() & 1;
+        crypt(keys[0], class_idx);
     }
 }
 """
@@ -144,9 +231,14 @@ static double test_binding(int iterations) {
     [
         (UNSTAGED, True, "unstaged class-selected pointer"),
         (UNSTAGED_LEGACY_SPELLING, True, "legacy (class_idx == 0) spelling"),
+        (STAGED_BUT_TERNARY_SELECTED, True, "destination staged, selection still branchy"),
+        (BRANCH_ON_CLASS, True, "if on the class before the timer"),
+        (INDEXED_BY_CLASS, True, "address indexed by the class"),
         (STAGED_UNALIGNED, True, "staging buffer not cache-line aligned"),
-        (STAGED, False, "staged, aligned"),
-        (REUSED_PROBE, False, "reused probe, no class-selected pointer"),
+        (DRAW_WITHOUT_TIMER, True, "class draw with no timer to close the window"),
+        (STAGED, False, "masked-merge staging, aligned"),
+        (REUSED_PROBE, False, "reused probe, no class-selected address"),
+        (BRANCHLESS_CLASS_ARITHMETIC, False, "branchless class arithmetic"),
         (STAGED_STRUCT, False, "staged struct by address"),
     ],
 )
@@ -189,6 +281,6 @@ def test_violation_message_names_the_binding_and_the_fix() -> None:
     violations = gate.check_text(UNSTAGED, "synthetic.c")
     assert len(violations) == 1
     message = violations[0]
-    assert "key" in message
-    assert "dudect_stage(" in message
+    assert "class_idx ?" in message
+    assert "dudect_stage_select(" in message
     assert "synthetic.c:" in message

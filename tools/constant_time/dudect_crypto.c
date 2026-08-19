@@ -37,6 +37,7 @@
 #include <time.h>
 
 #include "ama_cryptography.h"
+#include "dudect_stage.h"
 #include "dudect_percentile.h"
 #include "dudect_rounds.h"
 
@@ -200,7 +201,7 @@ static dudect_measurement_t test_ed25519_sign(int iterations) {
     for (int i = 0; i < iterations; i++) {
         random_bytes(msg, sizeof(msg));
         int class_idx = rand() & 1;
-        memcpy(sk, sks[class_idx], sizeof sk);
+        dudect_stage_select(sk, sks[0], sks[1], sizeof sk, class_idx);
 
         uint64_t start = get_time_ns();
         ama_ed25519_sign(sig, msg, sizeof(msg), sk);
@@ -236,7 +237,7 @@ static dudect_measurement_t test_aes_gcm_encrypt(int iterations) {
         random_bytes(nonce, sizeof(nonce));
         random_bytes(pt, sizeof(pt));
         int class_idx = rand() & 1;
-        memcpy(key, keys[class_idx], sizeof key);
+        dudect_stage_select(key, keys[0], keys[1], sizeof key, class_idx);
 
         uint64_t start = get_time_ns();
         ama_aes256_gcm_encrypt(key, nonce, pt, sizeof(pt), NULL, 0, ct, tag);
@@ -390,7 +391,7 @@ static dudect_measurement_t test_aes_gcm_decrypt_branch(int iterations) {
 
     for (int i = 0; i < iterations; i++) {
         int class_idx = rand() & 1;
-        memcpy(probe_tag, tags[class_idx], sizeof probe_tag);
+        dudect_stage_select(probe_tag, tags[0], tags[1], sizeof probe_tag, class_idx);
 
         uint64_t start = get_time_ns();
         ama_aes256_gcm_decrypt(key, nonce, ct, 64, NULL, 0, probe_tag, out);
@@ -427,7 +428,7 @@ static dudect_measurement_t test_hkdf(int iterations) {
 
     for (int i = 0; i < iterations; i++) {
         int class_idx = rand() & 1;
-        memcpy(ikm, ikms[class_idx], sizeof ikm);
+        dudect_stage_select(ikm, ikms[0], ikms[1], sizeof ikm, class_idx);
 
         uint64_t start = get_time_ns();
         ama_hkdf(salt, 32, ikm, 32, info, info_len, okm, 32);
@@ -489,7 +490,7 @@ static dudect_measurement_t test_sha3_256(int iterations) {
 
     for (int i = 0; i < iterations; i++) {
         int class_idx = rand() & 1;
-        memcpy(input, inputs[class_idx], sizeof input);
+        dudect_stage_select(input, inputs[0], inputs[1], sizeof input, class_idx);
 
         uint64_t start = get_time_ns();
         ama_sha3_256(input, 136, hash);
@@ -553,7 +554,7 @@ static dudect_measurement_t test_ascon_aead_encrypt(int iterations) {
 
     for (int i = 0; i < iterations; i++) {
         int class_idx = rand() & 1;
-        memcpy(key, keys[class_idx], sizeof key);
+        dudect_stage_select(key, keys[0], keys[1], sizeof key, class_idx);
 
         uint64_t start = get_time_ns();
         ama_ascon_aead128_encrypt(key, nonce,
@@ -626,7 +627,7 @@ static dudect_measurement_t test_ascon_hash256(int iterations) {
 
     for (int i = 0; i < iterations; i++) {
         int class_idx = rand() & 1;
-        memcpy(input, inputs[class_idx], sizeof input);
+        dudect_stage_select(input, inputs[0], inputs[1], sizeof input, class_idx);
 
         uint64_t start = get_time_ns();
         ama_ascon_hash256(input, sizeof input, digest);
