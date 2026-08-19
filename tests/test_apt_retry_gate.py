@@ -24,6 +24,7 @@ import stat
 import subprocess
 import sys
 import textwrap
+import time
 from pathlib import Path
 from types import ModuleType
 
@@ -297,6 +298,78 @@ def test_apt_carries_its_own_acquire_timeouts(tmp_path: Path) -> None:
     body = HELPER_PATH.read_text(encoding="utf-8")
     for opt in ("Acquire::http::Timeout", "Acquire::https::Timeout", "Acquire::Retries"):
         assert opt in body, f"helper does not set {opt}"
+
+
+@_LINUX_ONLY
+def test_a_sigterm_ignoring_apt_is_actually_killed(tmp_path: Path) -> None:
+    """Behavioural, not textual: prove the escalation ends a wedged process.
+
+    The other two tests assert `--kill-after` is spelled in the script. That is
+    not the property that failed — the property that failed is that a bound
+    which cannot be enforced is not a bound. So this drives the real GNU
+    `timeout` against a fake `apt-get` that installs `trap '' TERM` and sleeps
+    far longer than the bound, which is what a network-wedged apt behaves like.
+
+    Without escalation, SIGTERM is ignored and the helper hangs until something
+    outside it intervenes — on CI, the job's own timeout-minutes, which is
+    exactly the 8m44s stall that took two aggregating gates red. With it,
+    SIGKILL lands and the helper moves on. The assertion is wall-clock: the run
+    must finish in far less than the fake's sleep.
+    """
+    binroot = tmp_path / "bin"
+    binroot.mkdir(exist_ok=True)
+
+    # `sudo` that simply runs what it is given, so the REAL timeout executes.
+    sudo = binroot / "sudo"
+    sudo.write_text('#!/usr/bin/env bash\nexec "$@"\n')
+    sudo.chmod(sudo.stat().st_mode | stat.S_IXUSR)
+
+    # `apt-get` that refuses to die on SIGTERM on its FIRST call, like apt
+    # blocked in its http method child, and fails fast afterwards. The first
+    # call is the one under test; making later calls terminate keeps the final
+    # unbounded attempt from hanging this test the way it would hang a job.
+    marker = tmp_path / "apt_was_called"
+    apt = binroot / "apt-get"
+    apt.write_text(
+        "#!/usr/bin/env bash\n"
+        f'if [ ! -f "{marker}" ]; then\n'
+        f'  touch "{marker}"\n'
+        '  trap "" TERM\n'
+        "  sleep 120\n"
+        "fi\n"
+        "exit 100\n"
+    )
+    apt.chmod(apt.stat().st_mode | stat.S_IXUSR)
+
+    env = dict(os.environ)
+    env["PATH"] = f"{binroot}{os.pathsep}{env['PATH']}"
+    env.update(
+        APT_ATTEMPT_TIMEOUT="2",
+        APT_ATTEMPT_KILL_AFTER="1",
+        APT_ATTEMPTS="2",
+    )
+    start = time.monotonic()
+    proc = subprocess.run(
+        ["bash", str(HELPER_PATH), "cppcheck"],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=90,
+    )
+    elapsed = time.monotonic() - start
+
+    # Attempt 1 is bounded at 2s with SIGKILL 1s later, then a 15s backoff,
+    # then the final attempt, which now fails fast. Roughly 20s in total; the
+    # fake's own sleep is 120s, so anything near that means the kill did not
+    # land.
+    assert (
+        "attempt 1 failed or exceeded" in proc.stdout
+    ), f"the bounded attempt never terminated; stdout={proc.stdout!r}"
+    assert elapsed < 60, (
+        f"took {elapsed:.1f}s against a 120s fake — the SIGTERM-ignoring " f"attempt was not killed"
+    )
+    # And the genuine failure still fails: the retry did not paper over it.
+    assert proc.returncode != 0, "an apt that never succeeded must fail the job"
 
 
 def test_the_bounded_phase_fits_inside_a_job_budget() -> None:

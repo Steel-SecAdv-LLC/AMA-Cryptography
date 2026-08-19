@@ -334,8 +334,17 @@ to be shot — including on the final attempt, which is unbounded in wall clock
 by design. The per-attempt default drops from 300 s to 120 s: at 300 the
 bounded phase alone could consume 10.75 minutes of a 20-minute job, leaving
 nothing for the work the job exists to do, while a healthy `apt-get update` on
-these runners takes 10-60 seconds. Three tests pin it, the SIGKILL one
-mutation-checked.
+these runners takes 10-60 seconds. Four tests pin it. Three are textual — the escalation flag is present, apt's
+acquire timeouts are set, the shipped per-attempt default still fits a
+20-minute job — and the fourth is behavioural, because the property that failed
+was never a spelling. It drives the real GNU `timeout` against a fake
+`apt-get` that installs `trap "" TERM` and sleeps 120 s, which is what a
+network-wedged apt behaves like, and asserts the run finishes in under a
+minute. Mutation-checked both ways: with `--kill-after` it completes in 18 s
+and the log shows `Killed`; without it the helper hangs for the full harness
+timeout, which is the 8m44s CI stall reproduced on a laptop in ninety seconds.
+It also asserts the genuine failure still fails — the retry does not paper over
+an apt that never succeeds.
 
 **A timeout budget that could not cover the schedule its own verdict rule
 demands.** `test_dudect` runs up to `MAX_ROUNDS` rounds and refuses the early
