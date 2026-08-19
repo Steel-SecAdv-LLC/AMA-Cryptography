@@ -170,6 +170,18 @@ jobs:
           done
           exit $rc
 
+      - name: Generated seed corpora must match their generators
+        # Two corpora are produced by a script rather than by hand, so that
+        # what each seed covers is stated and reproducible.  Both scripts have
+        # a --check mode and NEITHER was wired to anything, which makes the
+        # generator and the committed bytes free to drift apart silently —
+        # and a corpus that no longer matches its documented rationale is a
+        # corpus whose rationale is fiction.  This is the step that notices.
+        run: |
+          set -euo pipefail
+          python tools/build_ascon_seed_corpus.py --check
+          python tools/build_kyber_seed_corpus.py --check
+
   fuzz-pqc:
     name: Fuzz PQC Primitives (${{ matrix.target }})
     runs-on: ubuntu-latest
