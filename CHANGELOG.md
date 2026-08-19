@@ -31,6 +31,180 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > Compare `[4.0.0]` below, which is dated because it *is* released: tag
 > `v4.0.0`, published 2026-08-02.
 
+### Constant-time gate, fifth pass (2026-08-19) — the gates were measuring an unoptimized library, and a live ECDSA leak was sitting behind that
+
+Every instruction-count constant-time target in `dudect.yml` was built by
+
+```
+cmake -B build -DAMA_USE_NATIVE_PQC=ON -DAMA_BUILD_TESTS=ON -DAMA_ENABLE_LTO=OFF
+```
+
+`CMakeLists.txt` sets no default `CMAKE_BUILD_TYPE`, and every optimization
+flag this project adds lives in `CMAKE_C_FLAGS_RELEASE`. That configure line
+therefore produces
+
+```
+C_FLAGS = -Wall -Wextra -Wpedantic -Wvla -Wformat=2 -Wformat-security
+          -Wstrict-prototypes -Wmissing-prototypes -fstack-protector-strong -std=c11
+```
+
+with **no `-O` flag at all**. All ten targets — `ghash`, `ecdsa`, `consttime`,
+`aead-verify`, `ascon-hash`, `ascon-encrypt`, `agent-binding`, `kyber-decaps`,
+`sha3-256`, `ed25519-sign` — ran against an unoptimized library, and every one
+of them exists to catch a transformation the **optimizer** performs: a mask the
+compiler can prove is `0` or `~0`, turned back into a branch on the secret
+predicate (`src/c/internal/ama_ct_barrier.h`). At `-O0` that transformation
+cannot occur, so the whole target set was reporting PASS over a program in
+which its own defect class is unreachable — in output indistinguishable from a
+PASS over the code that ships. `setup.py` compiles wheels at `-O3`.
+
+This is confirmed rather than inferred: the figure this branch recorded as the
+`kyber-decaps` evidence, 323,766,461 retired instructions, reproduces here to
+**323,766,220** on the no-build-type configuration and to **68,151,265** on
+`-DCMAKE_BUILD_TYPE=Release`. The recorded evidence was taken on the
+unoptimized build.
+
+**What was behind it.** Rebuilt at `-O3` and re-run, `--target ecdsa` under
+clang 18.1.3 measured a **9,424-instruction key-dependent spread** against its
+200-instruction threshold, deterministic and reproducible, with a
+zero-instruction noise floor. Attributed by `callgrind_annotate` to
+`sc_mont_mul` (+3,040 between two of the eight key classes) and `nistp`'s
+equivalent. Disassembly of `sc_mont_mul` in the clang object shows
+
+```
+    or   %r10,%r11
+    js   7114 <sc_mont_mul+0x2e4>      ; branch selects which register set to store
+```
+
+— clang had proved `sc_cond_sub_n`'s mask takes only `0` and `~0`, recognised
+the masked select as a choice between two register sets, and emitted a
+conditional jump over one of them. That is the Montgomery extra-reduction
+distinguisher of Walter & Thompson (CT-RSA 2001) reintroduced by codegen, on
+the ECDSA signing path, keyed on the RFC 6979 nonce. The arms differ by one
+instruction, which is why it shows as ~1 instruction per call across ~3,000
+calls; the timing exposure is the misprediction, not the instruction.
+
+The same shape was present in `ama_nistp.c` — **1,251 instructions** of
+key-dependent spread in `nistp_mont_mul` over four P-256 signatures, plus 2 in
+`nistp_jac_add` — and therefore on P-256, P-384 and P-521 alike, since they
+share the limb arithmetic. gcc 13 did not make either transformation, which is
+exactly the "which optimizer happens to be in use is not a security property"
+divergence `ama_ct_barrier.h` was written for. Wheels for macOS are built with
+clang.
+
+**Fixed at the mask, in both files.**
+
+* `src/c/ama_secp256k1.c` — `ama_ct_value_barrier_u64()` applied to all seven
+  secret-derived masks: `secp256k1_fe_normalize`'s conditional subtract of `p`,
+  the comb-table linear scan, `sc_cond_sub_n`, `sc_mont_mul`'s high-word fold,
+  `sc_add`'s carry fold, `sc_negate`, `sc_cond_negate`, and the four
+  exceptional-case selects in `secp256k1_jac_add`.
+* `src/c/ama_nistp.c` — applied inside `nistp_mask64()`, which is the single
+  constructor every mask in that file passes through, so the property holds for
+  present and future callers rather than for the two the sampling caught.
+
+Measured after, all eight key classes, both compilers at `-O3`:
+
+| target | before (clang) | after (clang) | after (gcc) |
+|---|---:|---:|---:|
+| `ecdsa` (secp256k1) | 9,424 | **16** | **24** |
+| P-256 ECDSA sign (probe) | 1,269 | **16** | **24** |
+
+The residue is `der_encode_integer`'s leading-zero handling, which is a
+function of `r` and `s` — public values the verifier receives — and is the
+benign term the target's threshold was calibrated against.
+
+Cost, best-of-5 over 400 operations on the measurement host:
+
+| operation | gcc before | gcc after | clang before | clang after |
+|---|---:|---:|---:|---:|
+| P-256 ECDSA sign | 130.8 µs | 132.5 µs (+1.3%) | 133.4 µs | 135.7 µs (+1.7%) |
+| secp256k1 ECDSA sign | 113.8 µs | 115.6 µs (+1.6%) | 123.6 µs | 129.1 µs (+4.5%) |
+| P-256 pubkey derive | 112.4 µs | 115.3 µs (+2.6%) | 116.2 µs | 114.6 µs (−1.4%) |
+
+Well inside the 45% tolerance the affected floors carry; the drift is itemised
+in `benchmarks/baseline.json`.
+
+**The gate can no longer be told what it is measuring.** `src/c/ama_consttime.c`
+gains `ama_build_optimization_probe()` under `AMA_TESTING_MODE`, declared in
+`src/c/internal/ama_testing_exports.h`, reporting whether the library was
+compiled with `__OPTIMIZE__`. `tools/check_ghash_constant_time.py` builds and
+runs it **before** any measurement and exits 2 — inconclusive, never a pass —
+unless the answer is 1. Verified in both directions: PASS on a Release archive,
+`CONSTANT-TIME CHECK INCONCLUSIVE` on the exact configure line CI used.
+
+**The instrument is stronger than it was.** It compared one number, `I refs`,
+and an instruction count cannot see a secret-dependent memory *access* — a
+table lookup indexed by a secret retires the same instructions whichever entry
+it touches. It now compares four figures per class under `--cache-sim=yes`:
+`I refs`, `D refs`, `D1 misses` and `LLd misses`, with the simulated cache
+geometry **pinned** (`--I1=32768,8,64 --D1=32768,8,64 --LL=8388608,16,64`)
+so the miss figures are a property of the code rather than of the runner's
+CPUID. Miss deltas carry a threshold of 0, which is measured and not
+aspirational: across all ten targets and both compilers, every cross-class miss
+delta and every same-class noise floor is exactly 0, including on `ecdsa`,
+the one target with a legitimate public-data spread. The new metric is live —
+re-measured at `-O3`, the class/address confound the `kyber-decaps` driver
+documents reproduces at **175 D1 misses** with the instruction count unchanged,
+so a driver written that way now fails the gate instead of being caught by
+inspection.
+
+**The wiring line named a configuration the counts did not cover.**
+`_dispatch_wiring()` ran the driver natively while the counts were taken under
+Valgrind, which emulates CPUID and reports only the ISA it implements. On an
+AVX-512 host the same binary reports `AVX2=1 AVX-512F=1 AVX-512-Keccak=1`
+natively and `AVX2=1 AVX-512F=0 AVX-512-Keccak=0` under callgrind — so the
+report named a wiring the numbers did not cover, the exact defect its own
+docstring says it exists to prevent. It now runs under `valgrind --tool=none`.
+The consequence is stated rather than hidden: with `-DAMA_ENABLE_AVX512=ON` no
+run of this tool can execute the AVX-512 `keccak_f1600_x4` kernel. In the
+shipped configuration the question is moot — `AMA_ENABLE_AVX512` defaults OFF
+and `setup.py` never sets it.
+
+**Nine other workflow configures had the same omission**, and each is now
+explicit about its optimization level rather than inheriting one this project
+does not define. The two that mattered are the instruction-count jobs above;
+the rest are stated as what they already were, except one:
+
+* **ASan + UBSan built at `-O0` while MemorySanitizer, ThreadSanitizer and
+  Valgrind all pinned `-O1`.** That is the root cause of the 15m13s timeout
+  this branch treated by raising the cap to 25 minutes — the note recorded at
+  the time said "memory-sanitizer runs the IDENTICAL `ctest` under a heavier
+  sanitizer with 25 minutes; the two disagreeing about the cost of the same
+  workload was the defect", and the disagreement was the optimization level.
+  Measured locally with gcc's ASan (clang's runtime is not installable in the
+  measurement container), 63/63 tests passing in both: **ctest 160 s at `-O0`
+  against 69 s at `-O1`**, a 2.3× difference, with build+test going 173 s →
+  97 s. The cap stays at 25 minutes and now has real headroom instead of being
+  sized to an unoptimized build.
+* `build-strict` states `-DCMAKE_BUILD_TYPE=None`: it is the deliberately
+  unoptimized half of a two-configuration warning sweep, and "no build type"
+  and "forgot the build type" were otherwise the same text.
+* The AVX-512 KAT job in `ci.yml` moves to Release — a byte-identity claim
+  about hand-written SIMD is a claim about emitted code.
+
+**And it cannot recur silently.** `tools/check_workflow_commands.py` gains
+`check_cmake_build_type()`: every `cmake` *configure* in any workflow must
+state its optimization level, either with `-DCMAKE_BUILD_TYPE` or with an
+explicit `-O` inside `CMAKE_C_FLAGS`. The rule is "must say", not "must be
+Release" — `None` is an accepted statement of intent. 41 configures are
+checked; the gate is pinned in both directions by 10 new cases in
+`tests/test_workflow_command_checks.py`, including that `apt-install.sh cmake
+clang` and `pip install 'cmake>=4.4.0'` are not configures, and a named
+assertion that the two instruction-count jobs build with `Release`.
+
+**Corrections to this branch's own recorded evidence.** The `kyber-decaps`
+figures were all taken on the unoptimized build and are replaced above with
+Release measurements; the row labelled "L1 data cache misses" was in fact the
+last-level figure (at `-O0` the D1 count is 36,502 and LLd is 2,231), and the
+host-dependence of both is now removed by pinning the geometry. The
+"one part in 90,000" argument is withdrawn: its denominator came from the same
+unoptimized build (the shipped build retires 1,100,410 instructions per
+decapsulation and takes 96.1 µs, making the excursion one part in ~17,000), and
+the argument does not work at any denominator, because a mispredicted branch
+costs a fixed 5–20 ns however long the surrounding operation is. The
+deterministic identity is the evidence; the ratio never was.
+
 ### Constant-time gate, second pass (2026-08-19) — significance is not effect size, a budget that cannot cover its own schedule, and one apt fix that reached 1 of 38 sites
 
 Running the converted dudect suite on CI produced three findings, none of them
@@ -252,21 +426,43 @@ the whole scheme, so it was treated as real until measurement said otherwise.
 `kyber_decapsulate_internal` computes both the real shared secret and
 `H(z‖ct)` unconditionally and selects between them with `ama_consttime_copy`
 on an `ama_consttime_memcmp` result — there is no branch on the verdict in the
-source. A new `kyber-decaps` instruction-count target confirms it over 60
-decapsulations per class:
+source. A new `kyber-decaps` target in `tools/check_ghash_constant_time.py`
+confirms it over 60 decapsulations per class, on the **Release (-O3)** library
+the wheel ships (see the correction below) and with the simulated cache
+geometry pinned so the miss figures are a property of the code and not of the
+runner:
 
-| quantity | valid ciphertext | rejected ciphertext |
-|---|---:|---:|
-| retired instructions | 323,766,461 | 323,766,461 |
-| data memory accesses | 168,506,025 | 168,506,025 |
-| L1 data cache misses | 2,651 | 2,651 |
+| quantity | valid ciphertext | rejected ciphertext | delta |
+|---|---:|---:|---:|
+| retired instructions | 68,151,220 | 68,151,220 | **0** |
+| data references | 20,799,855 | 20,799,855 | **0** |
+| D1 data-cache misses | 36,604 | 36,604 | **0** |
+| LLd data-cache misses | 2,207 | 2,207 | **0** |
 
-Instructions rule out a branch or any skipped computation. The cache figures
-rule out a secret-dependent memory access, which an instruction count alone
-cannot see — that check was added here because without it the argument had a
-hole. At roughly 5.4 million instructions per decapsulation, 5.630 ns is about
-**one part in 90,000**: accumulated data-operand-dependent latency across
-millions of multiplies, the thing DOITM and PSTATE.DIT exist to control.
+(gcc 13.3 `-O3`, LTO off, `--I1=32768,8,64 --D1=32768,8,64 --LL=8388608,16,64`;
+clang 18.1.3 `-O3` gives different absolute figures and the same four zeros.
+The **delta column is the invariant** — the absolute figures move with any
+change to the translation units linked in, and are quoted only to say what was
+measured. Per decapsulation, from differencing a 60-call driver against a
+120-call one: **1,100,410 retired instructions**, **96.1 µs** wall clock.)
+
+Instructions rule out a branch or any skipped computation; the data-reference
+and cache-miss figures rule out a secret-dependent memory *access*, which an
+instruction count alone cannot see.
+
+**The relative-size argument this entry used to make was wrong, and is
+withdrawn.** It said 5.630 ns is "one part in 90,000" of a decapsulation and
+therefore too small to be a branch. Both halves fail. The denominator came
+from an instruction count taken on an unoptimized build; the shipped build
+retires 1,100,410 instructions per decapsulation and takes **96.1 µs** on the
+measurement host, which makes 5.630 ns one part in ~17,000. And the argument
+does not work at any denominator: a mispredicted branch costs a fixed 5–20 ns
+*regardless* of how long the surrounding operation is, so a small ratio
+excludes nothing. What actually excludes a divergent path is the deterministic
+identity above, and what excludes a symmetric-arm branch is the construction —
+both values computed unconditionally, the select performed by
+`ama_consttime_copy` over `volatile` pointers, verified under two compilers at
+-O3.
 
 **A near-miss worth recording.** The first version of that driver handed the
 timed call `ct` for one class and `ct_bad` for the other — two distinct arrays

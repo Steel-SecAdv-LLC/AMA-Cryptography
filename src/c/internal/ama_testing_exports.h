@@ -83,4 +83,42 @@ int ama_kyber_debug_cpa_roundtrip(void);
  */
 uint32_t ama_kyber_compress_d_for_test(uint32_t x_normalized, unsigned d);
 
+/* --- src/c/ama_consttime.c ---------------------------------------------- */
+
+/**
+ * Report whether the library was built with compiler optimization enabled.
+ *
+ * @return 1 optimized (`__OPTIMIZE__`), 0 unoptimized, -1 toolchain cannot say.
+ *
+ * WHY A CRYPTOGRAPHIC LIBRARY EXPORTS ITS OWN OPTIMIZATION LEVEL
+ *
+ * The instruction-count constant-time gates in `tools/` exist to catch a
+ * defect the OPTIMIZER introduces: a mask the compiler can prove is 0 or ~0
+ * licenses it to replace a branch-free select with a branch on the secret
+ * predicate (see internal/ama_ct_barrier.h).  Compiled without optimization
+ * that transformation cannot happen at all, so the gate measures a program in
+ * which its own defect class is unreachable — and reports PASS.
+ *
+ * That is not hypothetical.  `dudect.yml` configured its library with
+ * `cmake -B build -DAMA_USE_NATIVE_PQC=ON -DAMA_BUILD_TESTS=ON
+ * -DAMA_ENABLE_LTO=OFF` and no `CMAKE_BUILD_TYPE`, which in this project
+ * yields `C_FLAGS` with no `-O` flag whatsoever.  Every instruction-count
+ * target ran against that build.  Re-run at `-O3`, the same `--target ecdsa`
+ * check that had been passing measured a 9,424-instruction key-dependent
+ * spread in `sc_mont_mul`/`sc_cond_sub_n` under clang 18 — a live Montgomery
+ * extra-reduction leak on the ECDSA signing path, invisible to the gate for
+ * as long as the gate built the library the way it did.
+ *
+ * A check cannot be trusted to be told what it is measuring, so it asks.
+ * `tools/check_ghash_constant_time.py` calls this before it measures anything
+ * and refuses to return a verdict (exit 2) unless the answer is 1.
+ *
+ * Scope: the value describes the translation unit it is compiled in.  CMake
+ * applies one set of C flags to every source in the library target, so it is
+ * representative of the whole archive; a hand-rolled build that optimized
+ * some files and not others is out of scope and the gate would report on
+ * this file's setting.
+ */
+int ama_build_optimization_probe(void);
+
 #endif /* AMA_TESTING_EXPORTS_H */

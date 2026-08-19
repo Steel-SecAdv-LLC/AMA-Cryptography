@@ -79,7 +79,11 @@ jobs:
 
       - name: Build the native library
         run: |
-          cmake -B build -DAMA_USE_NATIVE_PQC=ON -DAMA_BUILD_TESTS=OFF -DAMA_BUILD_EXAMPLES=OFF
+          # Release: this job signs and verifies an integrity artefact against a
+          # native library, so the library it builds should be the shape the
+          # wheel ships (setup.py compiles at -O3), not an unoptimized one.
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DAMA_USE_NATIVE_PQC=ON \
+            -DAMA_BUILD_TESTS=OFF -DAMA_BUILD_EXAMPLES=OFF
           cmake --build build -j"$(nproc)" --target ama_cryptography_shared
 
       - name: Re-sign the integrity artefact for this build's native library

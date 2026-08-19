@@ -31,6 +31,7 @@
 
 #include "../include/ama_cryptography.h"
 #include "internal/ama_once.h"
+#include "internal/ama_ct_barrier.h"
 #include <string.h>
 #include <stdint.h>
 
@@ -247,8 +248,14 @@ static void secp256k1_fe_normalize(secp256k1_fe *a) {
         borrow = (int64_t)s4 >> 63;
         s4 &= 0xFFFFFFFFFFFFULL;
 
-        /* mask = all-ones if borrow (a < p, keep original), 0 if no borrow (a >= p) */
-        mask = (uint64_t)borrow;
+        /* mask = all-ones if borrow (a < p, keep original), 0 if no borrow (a >= p).
+         *
+         * Laundered through the value barrier for the reason recorded in
+         * internal/ama_ct_barrier.h: a mask the optimizer can prove is 0 or ~0
+         * licenses it to replace the five selects below with a branch on
+         * `borrow`, which is a function of the field element being normalised —
+         * secret on every scalar-multiplication path. */
+        mask = ama_ct_value_barrier_u64((uint64_t)borrow);
 
         t0 = (t0 & mask) | (s0 & ~mask);
         t1 = (t1 & mask) | (s1 & ~mask);
@@ -1027,8 +1034,15 @@ static void secp256k1_jac_add(secp256k1_jac *r, const secp256k1_jac *p, const se
      * If h_is_zero && s_is_zero: use doubled
      * If h_is_zero && !s_is_zero: use infinity (P = -Q)
      * Otherwise: use out */
-    mask_h = (uint64_t)(0u - (uint64_t)h_is_zero);  /* all-ones if H==0; MSVC C4146-safe */
-    mask_s = (uint64_t)(0u - (uint64_t)s_is_zero);  /* all-ones if S==0; MSVC C4146-safe */
+    /* MSVC C4146-safe, and barriered: each of these masks selects between two
+     * whole point representations below, which is exactly the "block the
+     * optimizer can skip" shape internal/ama_ct_barrier.h describes.  Their
+     * predicates are the exceptional-case flags of the group law, reached from
+     * the comb digit — i.e. from the secret scalar.  Measured: without the
+     * barrier, clang 18 -O3 made this function's retired-instruction count
+     * key-dependent by 200 instructions over eight signatures. */
+    mask_h = ama_ct_value_barrier_u64((uint64_t)(0u - (uint64_t)h_is_zero));  /* all-ones if H==0 */
+    mask_s = ama_ct_value_barrier_u64((uint64_t)(0u - (uint64_t)s_is_zero));  /* all-ones if S==0 */
 
     /* When H==0 && S==0: select doubled; when H==0 && S!=0: select infinity */
     {
@@ -1057,8 +1071,9 @@ static void secp256k1_jac_add(secp256k1_jac *r, const secp256k1_jac *p, const se
 
     /* Handle infinity inputs: if P is infinity, result = Q; if Q is infinity, result = P */
     {
-        uint64_t mask_p = (uint64_t)(0u - (uint64_t)p_inf);  /* MSVC C4146-safe */
-        uint64_t mask_q = (uint64_t)(0u - (uint64_t)q_inf);  /* MSVC C4146-safe */
+        /* MSVC C4146-safe, barriered for the same reason as mask_h/mask_s. */
+        uint64_t mask_p = ama_ct_value_barrier_u64((uint64_t)(0u - (uint64_t)p_inf));
+        uint64_t mask_q = ama_ct_value_barrier_u64((uint64_t)(0u - (uint64_t)q_inf));
         int k;
         for (k = 0; k < SECP256K1_FE_LIMBS; k++) {
             out.X.v[k] = (q->X.v[k] & mask_p) | (out.X.v[k] & ~mask_p);
@@ -1348,7 +1363,10 @@ static void secp256k1_point_mul_generator(secp256k1_jac *result,
             uint64_t diff = (uint64_t)i ^ digit;
             /* is_zero == 1 iff diff == 0; same idiom as secp256k1_jac_is_infinity. */
             uint64_t is_zero = ((diff | (~diff + 1)) >> 63) ^ 1u;
-            uint64_t mask = (uint64_t)(0u - is_zero); /* MSVC C4146-safe */
+            /* MSVC C4146-safe, and barriered: the OR-accumulate below is a
+             * block the optimizer could skip when the mask is zero, and the
+             * predicate is the comb digit — four bits of the secret scalar. */
+            uint64_t mask = ama_ct_value_barrier_u64((uint64_t)(0u - is_zero));
             for (limb = 0; limb < SECP256K1_FE_LIMBS; limb++) {
                 sel.X.v[limb] |= SECP256K1_COMB_TABLE[i].X.v[limb] & mask;
                 sel.Y.v[limb] |= SECP256K1_COMB_TABLE[i].Y.v[limb] & mask;
@@ -1666,7 +1684,12 @@ static void sc_cond_sub_n(secp256k1_sc *r, const uint64_t a[SC_LIMBS]) {
         borrow = ((~a[i] & SC_N[i]) | ((~(a[i] ^ SC_N[i])) & d)) >> 63;
         t[i] = d;
     }
-    mask = 0ULL - borrow; /* all ones when a < n: keep a */
+    /* All ones when a < n: keep a.  Barriered — see internal/ama_ct_barrier.h.
+     * clang 18 at -O3 proved this mask is 0 or ~0, recognised the select as a
+     * choice between two register sets, and emitted `js` over the store of one
+     * of them; the two arms differ by one instruction, so the leak was visible
+     * as ~1 retired instruction per call. */
+    mask = ama_ct_value_barrier_u64(0ULL - borrow);
     for (i = 0; i < SC_LIMBS; i++)
         r->v[i] = (a[i] & mask) | (t[i] & ~mask);
 }
@@ -1774,8 +1797,11 @@ static void sc_mont_mul(secp256k1_sc *r, const secp256k1_sc *a, const secp256k1_
      * sweep for the rest, not evidence that there are none. */
     {
         const uint64_t hi = t[SC_LIMBS];
-        /* All-ones exactly when hi != 0, computed without a comparison. */
-        const uint64_t fold = (uint64_t)0 - ((hi | ((~hi) + 1u)) >> 63);
+        /* All-ones exactly when hi != 0, computed without a comparison, and
+         * laundered through the value barrier so the optimizer cannot recover
+         * the "0 or ~0" fact and reintroduce the branch this form removes. */
+        const uint64_t fold =
+            ama_ct_value_barrier_u64((uint64_t)0 - ((hi | ((~hi) + 1u)) >> 63));
         uint64_t borrow = 0;
         for (i = 0; i < SC_LIMBS; i++) {
             const uint64_t sub = SC_N[i] & fold;
@@ -1837,7 +1863,7 @@ static void sc_add(secp256k1_sc *r, const secp256k1_sc *a, const secp256k1_sc *b
         /* All-ones exactly when carry != 0, computed without a comparison.
          * `carry` is already 0 or 1, but deriving the mask arithmetically
          * keeps the form identical to sc_mont_mul's and independent of that. */
-        const uint64_t fold = (uint64_t)0 - (carry & 1u);
+        const uint64_t fold = ama_ct_value_barrier_u64((uint64_t)0 - (carry & 1u));
         uint64_t borrow = 0;
         for (i = 0; i < SC_LIMBS; i++) {
             const uint64_t sub = SC_N[i] & fold;
@@ -1859,7 +1885,7 @@ static void sc_negate(secp256k1_sc *r, const secp256k1_sc *a) {
         borrow = ((~SC_N[i] & a->v[i]) | ((~(SC_N[i] ^ a->v[i])) & d)) >> 63;
         t[i] = d;
     }
-    mask = 0ULL - (uint64_t)(sc_is_zero(a) ? 1 : 0);
+    mask = ama_ct_value_barrier_u64(0ULL - (uint64_t)(sc_is_zero(a) ? 1 : 0));
     for (i = 0; i < SC_LIMBS; i++)
         r->v[i] = t[i] & ~mask;
 }
@@ -1892,7 +1918,7 @@ static int sc_is_high(const secp256k1_sc *a) {
  * selected with an arithmetic mask, so the caller's `if` disappears. */
 static void sc_cond_negate(secp256k1_sc *r, const secp256k1_sc *a, uint64_t flag) {
     secp256k1_sc neg;
-    const uint64_t mask = (uint64_t)0 - (flag & 1u);
+    const uint64_t mask = ama_ct_value_barrier_u64((uint64_t)0 - (flag & 1u));
     int i;
     sc_negate(&neg, a);
     for (i = 0; i < SC_LIMBS; i++)

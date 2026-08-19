@@ -144,7 +144,12 @@ jobs:
 
       - name: Build one fuzz target (dictionary parser host)
         run: |
+          # Debug, matching every other fuzz configure in this file: the fuzz
+          # build carries its own sanitizer flags in CMAKE_C_FLAGS, and Release
+          # would append -fomit-frame-pointer after them and cost the stack
+          # traces a crash report is for.
           cmake -B build-fuzz -DAMA_BUILD_FUZZ=ON \
+            -DCMAKE_BUILD_TYPE=Debug \
             -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
             -DAMA_USE_NATIVE_PQC=ON
           cmake --build build-fuzz --target fuzz_sha3 -j$(nproc)

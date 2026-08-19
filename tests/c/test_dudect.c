@@ -2845,27 +2845,36 @@ static int run_all_tests(int iterations, test_result_t *results, int *num_result
      *
      * Measured over 60 decapsulations per class by the `kyber-decaps` target in
      * tools/check_ghash_constant_time.py, which runs in dudect.yml on every
-     * trigger:
-     *
-     *     retired instructions   323,766,461   identical, valid vs rejected
-     *     data memory accesses   168,506,025   identical
-     *     L1 data cache misses         2,651   identical
+     * trigger, against the Release (-O3) library the wheel ships.  Retired
+     * instructions, data references, D1 misses and LLd misses are all four
+     * byte-identical between the valid and the rejected ciphertext, under gcc
+     * 13 and clang 18 alike, with the simulated cache geometry pinned.  The
+     * zero deltas are the invariant; the absolute figures move with whatever
+     * is linked in and are recorded in CHANGELOG.md against their commit.
      *
      * Retired instructions rule out a branch or any skipped computation; the
-     * cache figures rule out a secret-dependent access, which an instruction
-     * count alone cannot see.  kyber_decapsulate_internal computes BOTH the real
-     * shared secret and H(z||ct) unconditionally and selects with
-     * ama_consttime_copy on an ama_consttime_memcmp result — there is no branch
-     * on the verdict to find.
+     * data-reference and miss figures rule out a secret-dependent access, which
+     * an instruction count alone cannot see.  kyber_decapsulate_internal
+     * computes BOTH the real shared secret and H(z||ct) unconditionally and
+     * selects with ama_consttime_copy — a masked loop over volatile pointers —
+     * on an ama_consttime_memcmp result.  There is no branch on the verdict to
+     * find, and two compilers at -O3 agree that none was introduced.
      *
-     * A decapsulation is about 5.4 million instructions, so 5.630 ns is roughly
-     * one part in 90,000: accumulated data-operand-dependent latency across
-     * millions of multiplies, which is what Intel DOITM and ARM PSTATE.DIT
-     * exist to control and is a deployment mode rather than a code change.
-     * The 2 ns floor was calibrated on sub-microsecond primitives, where it is
-     * the right scale; it is not the right scale for an operation four orders
-     * of magnitude longer, because a long operation accumulates many tiny
-     * operand-dependent effects that no mechanism produced.
+     * WHAT DOES *NOT* SETTLE IT, recorded because an earlier revision of this
+     * comment argued it: that 5.630 ns is a small FRACTION of a decapsulation.
+     * A decapsulation retires 1,100,410 instructions and takes ~96 us, so the
+     * excursion is about one part in 17,000 — but a mispredicted branch costs a
+     * fixed 5-20 ns whatever surrounds it, so the ratio excludes nothing at any
+     * denominator.  The deterministic identity above is the argument; the ratio
+     * is not.  (The earlier revision also quoted 5.4M instructions per
+     * decapsulation, which was an unoptimized build.)
+     *
+     * The residual 5.630 ns is consistent with data-operand-dependent execution
+     * latency across millions of multiplies over two different ciphertexts —
+     * what Intel DOITM and ARM PSTATE.DIT exist to control, a deployment mode
+     * rather than a code change — and that remains an inference from the
+     * absence of any divergence the deterministic instrument can see, not a
+     * direct measurement of the mechanism.
      *
      * So the wall-clock statistic is reported here and the deterministic gate
      * decides.  That is a STRICTLY MORE SENSITIVE instrument for the property

@@ -1326,7 +1326,12 @@ jobs:
       run: |
         mkdir -p build
         cd build
-        cmake ..
+        # The harnesses below do NOT link this build — tools/constant_time's own
+        # Makefile compiles the sources it needs at -O2.  The build type is
+        # pinned anyway so the configuration is stated rather than inherited
+        # from a default this project does not set (a bare configure yields
+        # C_FLAGS with no -O flag at all).
+        cmake .. -DCMAKE_BUILD_TYPE=Release
         make
 
     - name: Build and run dudect harnesses
@@ -1410,7 +1415,11 @@ jobs:
 
     - name: Configure with AVX-512 enabled
       if: steps.cpu.outputs.have_avx512 == '1'
-      run: cmake -S . -B build -DAMA_ENABLE_AVX512=ON -DAMA_BUILD_TESTS=ON
+      # Release: this job asserts the AVX-512 Keccak kernel is byte-identical to
+      # the scalar and AVX2 ones, and a byte-identity claim about hand-written
+      # SIMD is a claim about what the compiler emits.  Unoptimized, it compares
+      # code no build ships.
+      run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DAMA_ENABLE_AVX512=ON -DAMA_BUILD_TESTS=ON
 
     - name: Build AVX-512 KAT test
       if: steps.cpu.outputs.have_avx512 == '1'

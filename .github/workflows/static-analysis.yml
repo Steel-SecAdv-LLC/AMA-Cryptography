@@ -146,6 +146,7 @@ jobs:
             -enable-checker alpha.security.ReturnPtrRange \
             -enable-checker alpha.security.taint.TaintPropagation \
             cmake .. \
+              -DCMAKE_BUILD_TYPE=None \
               -DCMAKE_C_COMPILER=clang \
               -DAMA_USE_NATIVE_PQC=ON \
               -DAMA_BUILD_TESTS=OFF \
@@ -185,7 +186,11 @@ jobs:
 
       - name: Build C library for CodeQL
         run: |
+          # None: CodeQL and the clang static analyzer read the source the
+          # compiler is given, not the code it emits, so the optimizer plays no
+          # part.  Stated rather than defaulted.
           cmake -B build \
+            -DCMAKE_BUILD_TYPE=None \
             -DAMA_USE_NATIVE_PQC=ON \
             -DAMA_BUILD_TESTS=OFF \
             -DAMA_BUILD_EXAMPLES=OFF \
@@ -302,7 +307,14 @@ jobs:
           LC_ALL: C
         run: |
           set -o pipefail
+          # CMAKE_BUILD_TYPE=None states what this configure means: the
+          # UNOPTIMIZED half of the pair (the step below is the Release+LTO
+          # half), which is what makes the two logs a two-configuration
+          # warning sweep.  Stated explicitly because "no build type" and
+          # "forgot the build type" are otherwise the same text, and this
+          # project defaults neither.
           cmake -B build-strict \
+            -DCMAKE_BUILD_TYPE=None \
             -DCMAKE_C_COMPILER=${{ matrix.compiler }} \
             -DCMAKE_C_FLAGS="-Wall -Wextra -Wpedantic -Wshadow -Wformat=2 -Wconversion -Wno-sign-conversion \
                              -Werror=missing-prototypes -Werror=shadow -Werror=unused-function" \
@@ -478,10 +490,17 @@ jobs:
           .github/scripts/apt-install.sh cmake clang
 
       - name: Build with ASan + UBSan
+        # -O1 matches the MemorySanitizer, ThreadSanitizer and Valgrind jobs in
+        # this file, and it is the root cause of the timeout this job hit at
+        # 15m13s inside test_sphincs_simd_equiv.  This project sets no default
+        # CMAKE_BUILD_TYPE, so without an -O flag in CMAKE_C_FLAGS the library
+        # compiled unoptimized while MSan ran the IDENTICAL ctest at -O1 under a
+        # heavier sanitizer.  Raising the cap treated the symptom; the two jobs
+        # were not running the same workload.
         run: |
           cmake -B build-asan \
             -DCMAKE_C_COMPILER=clang \
-            -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer -g" \
+            -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer -g -O1" \
             -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined" \
             -DAMA_USE_NATIVE_PQC=ON \
             -DAMA_BUILD_TESTS=ON \
@@ -671,7 +690,10 @@ jobs:
 
       - name: Configure and generate compile_commands.json
         run: |
+          # None: clang-tidy consumes compile_commands.json, which records the
+          # compiler invocation and not its output.
           cmake -B build-tidy \
+            -DCMAKE_BUILD_TYPE=None \
             -DCMAKE_C_COMPILER=clang \
             -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
             -DAMA_USE_NATIVE_PQC=ON \

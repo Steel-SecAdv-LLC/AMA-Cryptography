@@ -222,8 +222,12 @@ jobs:
           .github/scripts/apt-install.sh build-essential cmake
 
       - name: Build C library
+        # The harnesses below do NOT link this build — tools/constant_time's
+        # own Makefile compiles the sources it needs at -O2.  The build type is
+        # pinned anyway so the configuration is stated rather than inherited
+        # from a default this project does not set.
         run: |
-          cmake -B build -DAMA_USE_NATIVE_PQC=ON -DAMA_ENABLE_LTO=OFF
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DAMA_USE_NATIVE_PQC=ON -DAMA_ENABLE_LTO=OFF
           cmake --build build -j$(nproc)
 
       - name: Build and run legacy dudect harnesses
@@ -547,11 +551,25 @@ jobs:
           python-version: '3.12'
 
       - name: Build the AMA_TESTING_MODE static library
+        # Release is load-bearing, not tidiness.  Every target in
+        # check_ghash_constant_time.py looks for a transformation the OPTIMIZER
+        # performs — a mask it can prove is 0 or ~0, turned back into a branch
+        # on the secret predicate (src/c/internal/ama_ct_barrier.h).  This
+        # project sets no default CMAKE_BUILD_TYPE, so the configure line that
+        # stood here produced C_FLAGS with no -O flag at all, and the gate
+        # measured a program in which its own defect class cannot occur.  It
+        # passed for that reason: re-run at -O3, `--target ecdsa` measured a
+        # 9,424-instruction key-dependent spread in the secp256k1 scalar
+        # arithmetic under clang 18, a live Montgomery extra-reduction leak.
+        # The tool now refuses an unoptimized library rather than trusting this
+        # line to be right (ama_build_optimization_probe).
+        #
         # LTO off: the check reads instruction counts out of this archive, and
         # link-time optimisation would let the driver's call site reshape the
         # very code under measurement.
         run: |
-          cmake -B build -DAMA_USE_NATIVE_PQC=ON -DAMA_BUILD_TESTS=ON -DAMA_ENABLE_LTO=OFF
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DAMA_USE_NATIVE_PQC=ON \
+            -DAMA_BUILD_TESTS=ON -DAMA_ENABLE_LTO=OFF
           cmake --build build -j"$(nproc)" --target ama_cryptography_test
 
       - name: Scalar AES-GCM instruction count must not depend on the key
@@ -698,14 +716,16 @@ jobs:
         # effect-size floor and in mispredicted-branch range, so it failed the
         # build and needed a deterministic answer rather than an excuse.
         #
-        # Measured over 60 decapsulations per class: retired instructions
-        # 323,766,461, data memory accesses 168,506,025 and L1 data cache
-        # misses 2,651 — all three byte-identical between the valid and the
-        # rejected ciphertext. Instructions rule out a branch; the cache
-        # figures rule out a secret-dependent access. At ~5.4M instructions per
-        # decapsulation, 5.630 ns is one part in 90,000 — operand-dependent
-        # latency (DOITM / PSTATE.DIT), not a property of ama_kyber.c. The
-        # dudect lane is INFO for that reason and THIS is what blocks.
+        # Over 60 decapsulations per class on the Release (-O3) library this
+        # job now builds, retired instructions, data references and both
+        # cache-miss counts are byte-identical between the valid and the
+        # rejected ciphertext, under gcc 13 and clang 18 alike — the deltas
+        # are the invariant; the absolute figures move with the build and are
+        # recorded in CHANGELOG.md against the commit that produced them.
+        # Instructions rule out a branch or skipped work; the data-reference
+        # and miss figures rule out a secret-dependent access, which an
+        # instruction count alone cannot see. The dudect wall-clock lane is
+        # INFO for that reason and THIS is what blocks.
         run: |
           python tools/check_ghash_constant_time.py \
             --lib build/lib/libama_cryptography_test.a --target kyber-decaps
@@ -759,7 +779,12 @@ jobs:
         # LTO off for the same reason as ghash-scalar-invariance: the
         # check reads instruction counts out of this archive.
         run: |
-          cmake -B build -DAMA_USE_NATIVE_PQC=ON -DAMA_BUILD_TESTS=ON -DAMA_ENABLE_LTO=OFF
+          # Release for the reason recorded on the x86 job above: an
+          # unoptimized library cannot exhibit the codegen this gate exists to
+          # catch, and the aarch64 defect it was built for — gcc 13 compiling a
+          # ternary return into a cbnz with unequal arms — is an -O decision.
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DAMA_USE_NATIVE_PQC=ON \
+            -DAMA_BUILD_TESTS=ON -DAMA_ENABLE_LTO=OFF
           cmake --build build -j"$(nproc)" --target ama_cryptography_test
 
       - name: AEAD accept/reject instruction counts must be equal

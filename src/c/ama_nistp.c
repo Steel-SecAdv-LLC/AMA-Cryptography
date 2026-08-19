@@ -70,6 +70,7 @@
 #include "ama_hmac_sha256.h"
 #include "ama_platform_rand.h"
 #include "internal/ama_once.h"
+#include "internal/ama_ct_barrier.h"
 
 #include <stdint.h>
 #include <string.h>
@@ -238,9 +239,22 @@ static const nistp_curve *nistp_lookup(ama_nist_curve_t curve) {
  * *values*; `nl` itself is a public curve parameter.
  * ============================================================================ */
 
-/** Mask of all ones when `c != 0`, all zeros when `c == 0`. */
+/** Mask of all ones when `c != 0`, all zeros when `c == 0`.
+ *
+ * Every mask in this file is produced here, so this is the one place the
+ * value barrier has to be applied.  Without it the optimizer knows the result
+ * is 0 or ~0, which licenses it to replace a masked select with a branch on
+ * the predicate — and the predicates here are the Montgomery extra-reduction
+ * carry, the group law's exceptional-case flags, and the comb digit, i.e.
+ * the ECDSA nonce and the long-term key.  Measured before this barrier
+ * existed, with clang 18 at -O3 over four P-256 signatures with a fixed
+ * digest: 1,251 retired instructions of key-dependent spread inside
+ * `nistp_mont_mul` alone, deterministic under callgrind.  That is the
+ * Montgomery extra-reduction distinguisher of Walter & Thompson (CT-RSA
+ * 2001) reintroduced by codegen, on the same scalar path secp256k1 carried
+ * it on.  See internal/ama_ct_barrier.h. */
 static inline uint64_t nistp_mask64(uint64_t c) {
-    return (uint64_t)0 - (uint64_t)((c | (~c + 1u)) >> 63);
+    return ama_ct_value_barrier_u64((uint64_t)0 - (uint64_t)((c | (~c + 1u)) >> 63));
 }
 
 /** 1 when every limb is zero, else 0.  Constant time. */
@@ -473,7 +487,16 @@ static void nistp_mont_sqr(uint64_t *r, const uint64_t *a,
 /** r = (a + b) mod m, for a, b < m. */
 static void nistp_mod_add(uint64_t *r, const uint64_t *a, const uint64_t *b,
                           const uint64_t *m, unsigned nl) {
-    uint64_t sum[AMA_NISTP_MAX_LIMBS];
+    /* Zero-initialised, not merely written: `nistp_add` fills `nl` limbs of a
+     * buffer sized for the widest curve, so limbs `nl..AMA_NISTP_MAX_LIMBS-1`
+     * are never assigned.  Every reader is bounded by the same `nl` and the
+     * tail is unreachable, but gcc 13 at -O3 cannot prove that across the
+     * inlining it performs once `nistp_mask64` carries a value barrier, and
+     * emits -Wmaybe-uninitialized on the call below.  Initialising the array
+     * is the fix at source: it costs a handful of stores against a modular
+     * addition, and it keeps uninitialised stack out of a buffer that feeds
+     * the constant-time conditional subtract. */
+    uint64_t sum[AMA_NISTP_MAX_LIMBS] = {0};
     uint64_t carry = nistp_add(sum, a, b, nl);
     nistp_cond_sub_mod(r, sum, carry, m, nl);
 }

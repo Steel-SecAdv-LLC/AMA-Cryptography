@@ -66,6 +66,14 @@ What is checked
     ``*_WINDOWS`` cibuildwheel variables, and ``run:`` steps declaring
     ``shell: cmd`` — must not use POSIX single-quoting around arguments.
 
+``cmake build type``
+    Every ``cmake`` *configure* in a ``run:`` block must state its optimization
+    level, either with ``-DCMAKE_BUILD_TYPE`` or with an explicit ``-O`` inside
+    ``CMAKE_C_FLAGS``.  This project sets no default build type, so a configure
+    that names neither compiles with no ``-O`` flag at all — which is how ten
+    instruction-count constant-time gates came to be measuring an unoptimized
+    library.  See :func:`check_cmake_build_type`.
+
 ``release publishing``
     Steps using ``softprops/action-gh-release`` must not silently overwrite
     release text a maintainer edited by hand, and must not publish a
@@ -249,6 +257,7 @@ class Report:
     windows_commands_checked: int = 0
     release_steps_checked: int = 0
     gated_binaries_checked: int = 0
+    cmake_configures_checked: int = 0
 
     @property
     def ok(self) -> bool:
@@ -770,6 +779,119 @@ def check_cmake_gated_binaries(path: Path, document: Any, report: Report) -> Non
                 )
 
 
+#: A `cmake` *configure* invocation: `cmake -B <dir>`, `cmake -S . -B <dir>`,
+#: `cmake -D... <src>`, or `cmake <path-to-source>`.
+#:
+#: The shape of the FIRST argument is what identifies it, and that is
+#: deliberate.  Matching the bare word `cmake` matches it as a package name in
+#: `apt-install.sh cmake clang`, as a pip requirement in `'cmake>=4.4.0'`, and
+#: in `cmake --build` / `--install` / `-E`, none of which take a build type.
+#: The lookbehind additionally keeps `>=`, `/` and `-` off the front so a
+#: version specifier or a path ending in `cmake` is not read as an invocation.
+_CMAKE_CONFIGURE_RE = re.compile(r"(?<![\w./>=-])cmake\s+(?:-[BSD]|\.\.?(?=$|[\s/])|/)")
+
+#: An explicit optimization level inside a `-DCMAKE_C_FLAGS=...` (or CXX) value.
+_EXPLICIT_OPT_RE = re.compile(r"-O(?:[0-3]|s|z|fast|g)\b")
+
+
+def _cmake_configure_commands(run_text: str) -> list[str]:
+    """Every cmake configure command in a run block, line continuations joined.
+
+    A configure spread over ten backslash-continued lines is one command, and
+    every flag on those lines belongs to it.  Reading line by line would report
+    a missing build type on the first line of every multi-line configure in the
+    tree.
+    """
+    joined: list[str] = []
+    buffer = ""
+    for raw in run_text.split("\n"):
+        line = raw.rstrip()
+        stripped = line.strip()
+        if buffer:
+            buffer += " " + stripped.rstrip("\\").strip()
+            if not line.endswith("\\"):
+                joined.append(buffer)
+                buffer = ""
+            continue
+        if stripped.startswith("#"):
+            continue
+        if not _CMAKE_CONFIGURE_RE.search(stripped):
+            continue
+        if line.endswith("\\"):
+            buffer = stripped.rstrip("\\").strip()
+        else:
+            joined.append(stripped)
+    if buffer:
+        joined.append(buffer)
+    return joined
+
+
+def check_cmake_build_type(path: Path, document: Any, report: Report) -> None:
+    """Every cmake configure in a workflow must state its optimization level.
+
+    Why this exists
+    ---------------
+    ``CMakeLists.txt`` sets no default ``CMAKE_BUILD_TYPE``, and every
+    optimization flag this project adds lives in ``CMAKE_C_FLAGS_RELEASE`` /
+    ``_DEBUG``.  A configure that names no build type therefore compiles the
+    library with **no** ``-O`` flag at all — not "the default", not "-O2", but
+    unoptimized — and nothing in the log says so.
+
+    That is not a style matter.  ``dudect.yml`` built the AMA_TESTING_MODE
+    archive that way and ran all ten instruction-count constant-time targets
+    against it.  Those targets exist to catch a transformation the *optimizer*
+    performs (see ``src/c/internal/ama_ct_barrier.h``), so at ``-O0`` there was
+    nothing for them to find and every one reported PASS.  Rebuilt at ``-O3``,
+    ``--target ecdsa`` immediately measured a 9,424-instruction key-dependent
+    spread in the secp256k1 scalar arithmetic under clang 18: a live Montgomery
+    extra-reduction leak on the ECDSA signing path, which the gate had been
+    passing over for as long as it had built the library the way it did.
+
+    A job may legitimately want the unoptimized configuration — the strict
+    warning sweep builds it deliberately, because some diagnostics only appear
+    without the optimizer and some only with it.  What it may not do is leave
+    that unstated: ``-DCMAKE_BUILD_TYPE=None`` says "no configuration flags, on
+    purpose" in CMake's own vocabulary, and is accepted here.  An explicit
+    ``-O`` inside ``CMAKE_C_FLAGS`` (what the sanitizer jobs pass) is likewise
+    a statement of intent and is accepted.
+
+    So the rule is not "must be Release" — it is "must say".
+    """
+    for job_id, job in _iter_jobs(document):
+        for _, index, step in _iter_steps({"jobs": {job_id: job}}):
+            if not isinstance(step, dict):
+                continue
+            run_text = step.get("run") or ""
+            if not isinstance(run_text, str) or not run_text:
+                continue
+            for command in _cmake_configure_commands(run_text):
+                report.cmake_configures_checked += 1
+                if "CMAKE_BUILD_TYPE" in command:
+                    continue
+                if _EXPLICIT_OPT_RE.search(command):
+                    continue
+                report.findings.append(
+                    Finding(
+                        workflow=path.name,
+                        location=f"jobs.{job_id}.steps[{index}]",
+                        message=(
+                            "cmake configure names neither -DCMAKE_BUILD_TYPE nor an "
+                            "explicit -O in CMAKE_C_FLAGS, so it builds the library "
+                            "with no optimization flag at all: "
+                            + (command[:110] + "..." if len(command) > 110 else command)
+                        ),
+                        remedy=(
+                            "add -DCMAKE_BUILD_TYPE=Release (or Debug / "
+                            "RelWithDebInfo), or -DCMAKE_BUILD_TYPE=None if the "
+                            "unoptimized build is the point. CMakeLists.txt sets no "
+                            "default, so omitting it is not 'the usual build' — it is "
+                            "-O0, and it silently invalidated every instruction-count "
+                            "constant-time gate in dudect.yml."
+                        ),
+                    )
+                )
+
+
 #: Every operator GitHub Actions' expression grammar admits.
 #:
 #: The list is short and closed: logical `!`, `&&`, `||`; the comparisons
@@ -878,6 +1000,7 @@ def sweep(workflows_dir: Path) -> Report:
         check_shell_parseable(path, document, report)
         check_release_publishing(path, document, report)
         check_cmake_gated_binaries(path, document, report)
+        check_cmake_build_type(path, document, report)
         check_expression_syntax(path, document, report)
     return report
 
@@ -902,6 +1025,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         f"{report.windows_commands_checked} Windows command string(s), "
         f"{report.release_steps_checked} release-publishing step(s), "
         f"{report.gated_binaries_checked} CMake-gated binary invocation(s), "
+        f"{report.cmake_configures_checked} cmake configure(s), "
         f"{report.expressions_checked} `${{{{ }}}}` expression(s)."
     )
     if report.labels_unresolved:

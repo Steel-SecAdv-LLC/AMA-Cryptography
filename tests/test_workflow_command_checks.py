@@ -45,6 +45,7 @@ from tools.check_workflow_commands import (
     RETIRED_LABELS,
     SUPPORTED_LABELS,
     Report,
+    check_cmake_build_type,
     check_expression_syntax,
     check_inline_python,
     check_release_publishing,
@@ -69,6 +70,7 @@ def run_checks(source: str, name: str = "test.yml") -> Report:
     check_shell_parseable(path, document, report)
     check_release_publishing(path, document, report)
     check_expression_syntax(path, document, report)
+    check_cmake_build_type(path, document, report)
     return report
 
 
@@ -628,6 +630,84 @@ class TestExpressionSyntax:
         assert report.ok, messages(report)
 
 
+class TestCmakeBuildType:
+    """A configure with no build type compiles with no -O flag at all.
+
+    That is not a hypothetical style rule.  ``dudect.yml`` configured the
+    AMA_TESTING_MODE archive without one and ran ten instruction-count
+    constant-time targets against the result; those targets look for a
+    transformation the optimizer performs, so at -O0 there was nothing to find
+    and all ten passed.  Rebuilt at -O3, the ecdsa target measured a
+    9,424-instruction key-dependent spread — a live Montgomery
+    extra-reduction leak in the secp256k1 scalar arithmetic under clang 18.
+    """
+
+    def _fragment(self, command: str) -> str:
+        return (
+            "name: p\non: push\njobs:\n  j:\n    runs-on: ubuntu-latest\n"
+            "    steps:\n      - name: build\n        run: |\n"
+            + "".join(f"          {line}\n" for line in command.split("\n"))
+        )
+
+    def test_missing_build_type_is_reported(self) -> None:
+        report = run_checks(self._fragment("cmake -B build -DAMA_USE_NATIVE_PQC=ON"))
+        assert not report.ok
+        assert "no optimization flag at all" in messages(report)
+
+    def test_release_is_accepted(self) -> None:
+        report = run_checks(
+            self._fragment("cmake -B build -DCMAKE_BUILD_TYPE=Release -DAMA_USE_NATIVE_PQC=ON")
+        )
+        assert report.ok, messages(report)
+
+    def test_none_states_the_unoptimized_intent_and_is_accepted(self) -> None:
+        """The strict-warning sweep wants -O0 deliberately; it must say so."""
+        report = run_checks(self._fragment("cmake -B build -DCMAKE_BUILD_TYPE=None"))
+        assert report.ok, messages(report)
+
+    def test_explicit_dash_o_in_c_flags_is_accepted(self) -> None:
+        """What the sanitizer jobs pass: the level is stated, just not as a type."""
+        report = run_checks(
+            self._fragment('cmake -B b -DCMAKE_C_FLAGS="-fsanitize=address -g -O1"')
+        )
+        assert report.ok, messages(report)
+
+    def test_line_continuations_are_one_command(self) -> None:
+        """Reading line by line would flag the first line of every multi-line configure."""
+        report = run_checks(
+            self._fragment(
+                "cmake -B build \\\n  -DAMA_USE_NATIVE_PQC=ON \\\n  -DCMAKE_BUILD_TYPE=Release"
+            )
+        )
+        assert report.ok, messages(report)
+
+    def test_build_and_install_and_script_mode_are_not_configures(self) -> None:
+        for command in ("cmake --build build -j4", "cmake --install build", "cmake -E rm -rf x"):
+            report = run_checks(self._fragment(command))
+            assert report.ok, f"{command}: {messages(report)}"
+        assert run_checks(self._fragment("cmake --build build")).cmake_configures_checked == 0
+
+    def test_cmake_as_a_package_or_requirement_is_not_a_configure(self) -> None:
+        """`apt-install.sh cmake clang` and `pip install 'cmake>=4.4.0'` are not builds."""
+        for command in (
+            ".github/scripts/apt-install.sh cmake clang valgrind",
+            "python -m pip install --upgrade pip 'cmake>=4.4.0' 'cython>=3.2.8'",
+        ):
+            report = run_checks(self._fragment(command))
+            assert report.ok, f"{command}: {messages(report)}"
+            assert run_checks(self._fragment(command)).cmake_configures_checked == 0
+
+    def test_source_dir_form_is_a_configure(self) -> None:
+        report = run_checks(self._fragment("cd build\ncmake .."))
+        assert not report.ok
+        assert report.cmake_configures_checked == 1
+
+    def test_a_commented_out_configure_is_not_checked(self) -> None:
+        report = run_checks(self._fragment("# cmake -B build"))
+        assert report.ok, messages(report)
+        assert report.cmake_configures_checked == 0
+
+
 class TestMalformedWorkflow:
     def test_unparseable_yaml_is_reported(self, tmp_path: Path) -> None:
         (tmp_path / "broken.yml").write_text("jobs: [unclosed\n", encoding="utf-8")
@@ -659,6 +739,30 @@ class TestRepositoryWorkflows:
         # workflow directory, a glob that stops matching).
         assert report.labels_checked > 0
         assert report.payloads_checked > 0
+        assert report.cmake_configures_checked > 0
+
+    def test_the_constant_time_gate_builds_an_optimized_library(self) -> None:
+        """The specific configure whose build type was missing, pinned by name.
+
+        The generic sweep above would also catch this, but not legibly: this is
+        the job whose ten instruction-count targets were measuring an -O0
+        library, and it is worth naming so a future edit that drops the flag
+        fails with the reason attached.
+        """
+        document = yaml.safe_load(
+            (REPO_ROOT / ".github" / "workflows" / "dudect.yml").read_text(encoding="utf-8")
+        )
+        for job_id in ("ghash-scalar-invariance", "aead-verify-invariance"):
+            steps = document["jobs"][job_id]["steps"]
+            configures = [
+                step["run"]
+                for step in steps
+                if isinstance(step, dict) and "cmake -B build" in (step.get("run") or "")
+            ]
+            assert configures, f"{job_id} no longer configures a build"
+            assert all(
+                "-DCMAKE_BUILD_TYPE=Release" in run for run in configures
+            ), f"{job_id} must build the library it measures with optimization enabled"
 
     def test_main_exits_zero_on_this_repository(self) -> None:
         assert main([]) == 0

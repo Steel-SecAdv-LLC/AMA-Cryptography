@@ -382,6 +382,18 @@
       {
         "path": "src/c/ama_slhdsa.c",
         "reason": "Call-site renames only (d14ad84): two ama_sha512 -> ama_sha512_oneshot calls. Same function, same instructions; SLH-DSA floors describe unchanged code."
+      },
+      {
+        "path": "src/c/ama_secp256k1.c",
+        "reason": "Value barrier applied to the seven secret-derived selection masks (fe_normalize's conditional subtract of p, the comb-table scan, sc_cond_sub_n, sc_mont_mul's high-word fold, sc_add's carry fold, sc_negate, sc_cond_negate, and jac_add's four exceptional-case masks), removing a clang -O3 branch on the Montgomery extra-reduction predicate. secp256k1_ecdsa_sign/verify are floored primitives and the change is on their path. Measured cost best-of-5 over 400 signatures on the review host: gcc 113.8 -> 115.6 us/op, clang 123.6 -> 129.1 us/op, i.e. 1.6-4.5% - inside the 45% tolerance but NOT vouched for by the pre-change medians. Carried as a coarse floor pending a canonical re-measure."
+      },
+      {
+        "path": "src/c/ama_nistp.c",
+        "reason": "Same class of change, applied inside nistp_mask64() so every mask in the file carries the barrier, plus zero-initialisation of nistp_mod_add's limb buffer to keep gcc 13 -O3 from emitting -Wmaybe-uninitialized after the barrier changed its inlining. No P-256/384/521 primitive carries a floor, so nothing floored dispatches here; recorded because the file changed and the gate reads paths, not floors. Measured: P-256 ECDSA sign gcc 130.8 -> 132.5 us/op, clang 133.4 -> 135.7 us/op."
+      },
+      {
+        "path": "src/c/ama_consttime.c",
+        "reason": "Adds ama_build_optimization_probe() under AMA_TESTING_MODE only. The production library is compiled without that macro, so no benchmarked call reaches it and no floored primitive changes."
       }
     ]
   },
