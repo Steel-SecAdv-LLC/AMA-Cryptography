@@ -75,6 +75,7 @@ int main(void) {
 
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <pthread.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -257,7 +258,98 @@ static int fail(const char *msg) {
     return 1;
 }
 
-int main(void) {
+/* ASan's fake stack relocates the frames this test exists to measure
+ * -------------------------------------------------------------------------
+ * With `detect_stack_use_after_return=1` — which
+ * `.github/workflows/static-analysis.yml` sets for the whole ASan ctest run —
+ * AddressSanitizer moves function frames off the real stack into a heap
+ * "fake stack" so it can detect a returned frame being used.  Frames larger
+ * than the runtime's largest fake-stack size class (clang: kMaxStackMallocSize,
+ * 1 << 16 = 64 KiB) stay on the real stack; everything smaller moves.
+ *
+ * That splits this test's subjects exactly in half.  Measured here under
+ * gcc 13 ASan, which does not relocate them: ML-DSA keygen 60,336-61,904 B,
+ * verify 57,264-58,832 B, the parser entry points at most 32,816 B — all
+ * under 64 KiB — and ML-DSA sign 152,048-153,616 B, over it.  Under clang's
+ * ASan in CI the first group reported 200-584 B while sign still reported
+ * 149,640 B: the small frames had been moved to the heap and the painted
+ * region never saw them, while the one frame too large to move measured
+ * intact.  The non-vacuity guards below caught it, which is what they are
+ * for, but the measurement was gone.
+ *
+ * So the test takes control of the one option that breaks its instrument and
+ * re-executes itself once with it off.  Every other ASan and UBSan check is
+ * untouched — this is not a sanitizer opt-out, it is the removal of a
+ * relocation that makes a stack measurement measure a different stack.  The
+ * use-after-return check itself is not lost to the suite: the other 62 tests
+ * in the ctest run keep it, and they cover the same library code.
+ *
+ * If the re-exec cannot happen the test does NOT skip: it runs, and the
+ * non-vacuity guards fail the run with the diagnosis, because a stack budget
+ * that cannot be measured must not report as met.
+ */
+/* gcc defines __SANITIZE_ADDRESS__; clang answers __has_feature.  The two
+ * cannot be tested in one expression: gcc has no __has_feature, and a
+ * `defined(__has_feature) && __has_feature(...)` conjunction still expands
+ * the second operand there, which is a preprocessor error rather than a
+ * false. */
+#if defined(__SANITIZE_ADDRESS__)
+#define AMA_PQ_STACK_UNDER_ASAN 1
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#define AMA_PQ_STACK_UNDER_ASAN 1
+#endif
+#endif
+
+#ifdef AMA_PQ_STACK_UNDER_ASAN
+/* Returns 0 if no re-exec was needed or it already happened, non-zero if the
+ * re-exec was attempted and failed. */
+static int asan_reexec_without_fake_stack(int argc, char **argv) {
+    const char *guard = getenv("AMA_PQ_STACK_ASAN_REEXEC");
+    const char *existing;
+    char opts[1024];
+    char self[PATH_MAX];
+    ssize_t n;
+    const char *image;
+
+    if (guard != NULL && guard[0] == '1') {
+        return 0; /* already re-executed once; do not loop */
+    }
+    if (argc < 1 || argv == NULL || argv[0] == NULL) {
+        return 1;
+    }
+
+    existing = getenv("ASAN_OPTIONS");
+    /* Appended, not replaced: detect_leaks and anything else the caller set
+     * must survive.  The last occurrence of a key is the one ASan honours. */
+    if (existing != NULL && existing[0] != '\0') {
+        if ((size_t)snprintf(opts, sizeof(opts),
+                             "%s:detect_stack_use_after_return=0",
+                             existing) >= sizeof(opts)) {
+            return 1;
+        }
+    } else {
+        snprintf(opts, sizeof(opts), "detect_stack_use_after_return=0");
+    }
+    if (setenv("ASAN_OPTIONS", opts, 1) != 0 ||
+        setenv("AMA_PQ_STACK_ASAN_REEXEC", "1", 1) != 0) {
+        return 1;
+    }
+
+    /* /proc/self/exe is exact where it exists; argv[0] is the portable
+     * fallback and is a path (not a PATH lookup) under ctest. */
+    image = argv[0];
+    n = readlink("/proc/self/exe", self, sizeof(self) - 1);
+    if (n > 0) {
+        self[n] = '\0';
+        image = self;
+    }
+    execv(image, argv);
+    return 1; /* execv only returns on failure */
+}
+#endif /* AMA_PQ_STACK_UNDER_ASAN */
+
+int main(int argc, char **argv) {
     static uint8_t dsa_pk[AMA_ML_DSA_MAX_PUBLIC_KEY_BYTES];
     static uint8_t dsa_sk[AMA_ML_DSA_MAX_SECRET_KEY_BYTES];
     static uint8_t kem_pk[AMA_ML_KEM_MAX_PUBLIC_KEY_BYTES];
@@ -273,6 +365,21 @@ int main(void) {
     job_t baseline_job;
     size_t baseline, worst = 0;
     unsigned int i;
+    int asan_fake_stack_may_be_active = 0;
+
+#ifdef AMA_PQ_STACK_UNDER_ASAN
+    /* Does not return when the re-exec succeeds. */
+    asan_fake_stack_may_be_active = asan_reexec_without_fake_stack(argc, argv);
+    if (asan_fake_stack_may_be_active) {
+        printf("NOTE: running under AddressSanitizer and could not re-exec "
+               "with detect_stack_use_after_return=0; if ASan's fake stack is "
+               "active the measurements below are of the wrong stack and the "
+               "non-vacuity guards will say so.\n");
+    }
+#else
+    (void)argc;
+    (void)argv;
+#endif
 
     for (i = 0; i < 32; i++) {
         seed[i] = (uint8_t)(0x40 + i);
@@ -460,6 +567,12 @@ int main(void) {
         if (op_worst < 4096 || sign_worst < 4096) {
             printf("FAIL: an ML-DSA operation measured implausibly small — the "
                    "measurement is not measuring anything\n");
+            if (asan_fake_stack_may_be_active) {
+                printf("       AddressSanitizer's fake stack is the known "
+                       "cause: it relocates every frame under 64 KiB off the "
+                       "real stack, which is where this test looks. Re-run "
+                       "with ASAN_OPTIONS=detect_stack_use_after_return=0.\n");
+            }
             return 1;
         }
         /* Signing genuinely is the largest of the three; if it ever stops
@@ -483,6 +596,12 @@ int main(void) {
     if (worst < 4096) {
         printf("FAIL: measured %zu bytes, which is implausibly small — the "
                "measurement is not measuring anything\n", worst);
+        if (asan_fake_stack_may_be_active) {
+            printf("      AddressSanitizer's fake stack is the known cause: "
+                   "it relocates every frame under 64 KiB off the real stack, "
+                   "which is where this test looks. Re-run with "
+                   "ASAN_OPTIONS=detect_stack_use_after_return=0.\n");
+        }
         return 1;
     }
     printf("PASS\n");
