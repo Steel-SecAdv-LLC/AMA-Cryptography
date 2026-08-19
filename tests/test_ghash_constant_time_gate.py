@@ -6,9 +6,10 @@ This gate shipped without any. INVARIANT-2 states the consequence in as many
 words — *"a gate with no negative control has not been shown to be a gate at
 all"* — and the consequence arrived on schedule.
 
-``_measure`` (then named ``_instruction_count``) parsed callgrind's ``I refs:`` line and never looked at
-the driver's exit status. Callgrind prints that line for any process it
-supervises, including one that dies in the dynamic loader before reaching
+``_measure`` (then named ``_instruction_count``) parsed callgrind's
+``I refs:`` line and never looked at the driver's exit status. Callgrind
+prints that line for any process it supervises, including one that dies in
+the dynamic loader before reaching
 ``main``. Handing ``--lib`` a shared object rather than the static archive did
 exactly that: the driver linked, failed to load, and every key class returned
 the same ~109,000 instructions of loader work. All classes agreed, the delta
