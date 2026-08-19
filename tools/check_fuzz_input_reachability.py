@@ -185,7 +185,7 @@ def _workflow_derives_its_ceiling() -> list[str]:
         if not value.startswith('"$') and not value.startswith("$"):
             problems.append(
                 f"-max_len={value} is written into the workflow. Derive it with "
-                f"`python tools/check_fuzz_input_reachability.py --max-len <target>` "
+                f"`python3 tools/check_fuzz_input_reachability.py --max-len <target>` "
                 f"so the fuzzer's ceiling comes from the harness rather than from a "
                 f"number that can fall behind it."
             )

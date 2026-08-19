@@ -108,7 +108,7 @@ jobs:
           # fuzz_sphincs' two SLH-DSA verify cases need 49,921 and 49,857,
           # against the 4,096 that used to be hard-coded here.  Those branches
           # had never executed in any run.
-          MAX_LEN="$(python tools/check_fuzz_input_reachability.py \
+          MAX_LEN="$(python3 tools/check_fuzz_input_reachability.py \
                        --max-len ${{ matrix.target }})"
           echo "Fuzzing ${{ matrix.target }} for ${FUZZ_DURATION}s (-max_len=$MAX_LEN)..."
           ./build-fuzz/bin/${{ matrix.target }} \
@@ -189,9 +189,9 @@ jobs:
         # corpus whose rationale is fiction.  This is the step that notices.
         run: |
           set -euo pipefail
-          python tools/build_ascon_seed_corpus.py --check
-          python tools/build_kyber_seed_corpus.py --check
-          python tools/build_pqc_verify_seed_corpus.py --check
+          python3 tools/build_ascon_seed_corpus.py --check
+          python3 tools/build_kyber_seed_corpus.py --check
+          python3 tools/build_pqc_verify_seed_corpus.py --check
 
       - name: Every harness branch must be reachable by its own lane
         # Registration (check_fuzz_target_registration.py) says a harness
@@ -201,7 +201,7 @@ jobs:
         # fuzz_dilithium's fully-fuzzed ML-DSA verify and both of
         # fuzz_sphincs' SLH-DSA verify cases sat above it and had never
         # executed.
-        run: python tools/check_fuzz_input_reachability.py
+        run: python3 tools/check_fuzz_input_reachability.py
 
   fuzz-pqc:
     name: Fuzz PQC Primitives (${{ matrix.target }})
@@ -271,7 +271,7 @@ jobs:
           # fuzz_sphincs' two SLH-DSA verify cases need 49,921 and 49,857,
           # against the 4,096 that used to be hard-coded here.  Those branches
           # had never executed in any run.
-          MAX_LEN="$(python tools/check_fuzz_input_reachability.py \
+          MAX_LEN="$(python3 tools/check_fuzz_input_reachability.py \
                        --max-len ${{ matrix.target }})"
           echo "Fuzzing ${{ matrix.target }} for ${FUZZ_DURATION}s (-max_len=$MAX_LEN)..."
           ./build-fuzz/bin/${{ matrix.target }} \
@@ -412,7 +412,7 @@ jobs:
           # Same derivation as the main lanes — see the comment there.  This
           # target's deepest branch fits well inside the floor, but a ceiling
           # written by hand is the defect, not the number it happens to hold.
-          MAX_LEN="$(python tools/check_fuzz_input_reachability.py \
+          MAX_LEN="$(python3 tools/check_fuzz_input_reachability.py \
                        --max-len fuzz_aes_gcm)"
           ./build-fuzz-ct/bin/fuzz_aes_gcm \
             -max_total_time=30 \
