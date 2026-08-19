@@ -131,6 +131,18 @@ calling `exit()`, so the remaining lanes still report and the operator sees
 the whole picture in one run. Mutation-checked: with the guard disabled the
 new case fails.
 
+Finally, `dudect.h` carried a **second verdict function**. `dudect_check()`,
+with `DUDECT_LEAKAGE_FOUND` / `DUDECT_NO_LEAKAGE_FOUND` / `DUDECT_NEED_MORE`
+and `DUDECT_ENOUGH_MEASUREMENTS`, decided a lane from one round's |t| against
+the threshold: no multi-round majority, no direction-consistency rule, no
+effect-size floor, and a strict `>` where `dudect_rounds.h` uses `>=`. Nothing
+in the tree had ever called it, which is the only reason it did no harm — it
+is a strictly weaker rule sitting beside the real one in the same header,
+waiting for its first caller. It is removed, the same way `6a22aa2` removed
+`DUDECT_NUMBER_PERCENTILES`, with a comment in its place recording why the
+header has no per-lane verdict: a lane reports a *measurement*, and
+`dudect_rounds.h` is the single authority on what one means.
+
 **A timeout budget that could not cover the schedule its own verdict rule
 demands.** `test_dudect` runs up to `MAX_ROUNDS` rounds and refuses the early
 exit once any lane has tripped, but the Utility and X25519 jobs gave it 300 s

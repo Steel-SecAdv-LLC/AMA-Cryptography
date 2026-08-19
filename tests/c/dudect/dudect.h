@@ -41,10 +41,6 @@
  * -------------------------------------------------------------------------- */
 
 
-#ifndef DUDECT_ENOUGH_MEASUREMENTS
-#define DUDECT_ENOUGH_MEASUREMENTS 10000
-#endif
-
 /* Threshold for the t-test at the 99.999% confidence level.
  *
  * This is not 4.5 and must not be.  4.5 is the two-sided critical value of a
@@ -55,13 +51,6 @@
 #ifndef DUDECT_T_THRESHOLD
 #define DUDECT_T_THRESHOLD DUDECT_CROPPED_T_THRESHOLD
 #endif
-
-/* --------------------------------------------------------------------------
- * Return codes
- * -------------------------------------------------------------------------- */
-#define DUDECT_LEAKAGE_FOUND    1
-#define DUDECT_NO_LEAKAGE_FOUND 0
-#define DUDECT_NEED_MORE        -1
 
 /* --------------------------------------------------------------------------
  * Statistics
@@ -213,8 +202,6 @@ static inline void dudect_record(dudect_ctx_t *ctx, int class_idx, double elapse
     ctx->total_measurements++;
 }
 
-/* Check current result.
- * Returns DUDECT_LEAKAGE_FOUND, DUDECT_NO_LEAKAGE_FOUND, or DUDECT_NEED_MORE */
 /* The cropped statistic sorts the pooled samples and sweeps 21 rungs, so it
  * is O(n log n) rather than the O(1) read the streaming form allowed.  It is
  * computed once per lane and cached; every accessor below goes through this.
@@ -233,22 +220,25 @@ static inline int dudect_measurement_failed(dudect_ctx_t *ctx) {
     return dudect_get_t(ctx) == DUDECT_CROP_FAILED;
 }
 
-/* The effect size behind the statistic: the winning rung's per-class mean
+/* There is deliberately NO per-lane verdict function in this header.
+ *
+ * There used to be: `dudect_check()`, returning DUDECT_LEAKAGE_FOUND /
+ * DUDECT_NO_LEAKAGE_FOUND / DUDECT_NEED_MORE from a single round's |t| against
+ * the threshold.  Nothing in the tree had ever called it, and that is the only
+ * reason it did no harm — it encoded a strictly weaker rule than the one every
+ * harness actually uses: no multi-round majority, no direction consistency, no
+ * effect-size floor, and a strict `>` where dudect_rounds.h uses `>=`.  A
+ * second, uncalibrated verdict path sitting beside the real one in the same
+ * header is a defect waiting for its first caller, so it is removed rather
+ * than left documented.  A lane reports a MEASUREMENT — a t and its effect
+ * size, via dudect_lane_finish() in the harness — and dudect_rounds.h is the
+ * single authority on what a measurement means.
+ *
+ * The effect size behind the statistic: the winning rung's per-class mean
  * difference, in nanoseconds.  Only meaningful after dudect_get_t(). */
 static inline double dudect_get_delta_ns(dudect_ctx_t *ctx) {
     (void)dudect_get_t(ctx);
     return ctx->ttest.winning_delta;
-}
-
-static inline int dudect_check(dudect_ctx_t *ctx) {
-    if (ctx->total_measurements < DUDECT_ENOUGH_MEASUREMENTS) {
-        return DUDECT_NEED_MORE;
-    }
-    double t = dudect_get_t(ctx);
-    if (t == DUDECT_CROP_FAILED || fabs(t) > DUDECT_T_THRESHOLD) {
-        return DUDECT_LEAKAGE_FOUND;
-    }
-    return DUDECT_NO_LEAKAGE_FOUND;
 }
 
 /* Print the measurement for a single lane.
