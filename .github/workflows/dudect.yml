@@ -726,6 +726,16 @@ jobs:
         # and miss figures rule out a secret-dependent access, which an
         # instruction count alone cannot see. The dudect wall-clock lane is
         # INFO for that reason and THIS is what blocks.
+        #
+        # The excursion that prompted this target has since been traced to the
+        # lane rather than to ML-KEM: it selected its ciphertext with a
+        # class-correlated ternary in front of the timer, and on a null
+        # experiment (byte-identical ciphertexts, true effect zero, 200,000
+        # measurements x 5 runs) that construction reads over threshold in 3
+        # of 5 runs, worst |t| = 6.99, all one sign. The lane now stages both
+        # classes under a mask and is 0 of 5. This target's verdict does not
+        # depend on that history — it never did — but the reason it was added
+        # was a measurement the harness produced on its own.
         run: |
           python tools/check_ghash_constant_time.py \
             --lib build/lib/libama_cryptography_test.a --target kyber-decaps

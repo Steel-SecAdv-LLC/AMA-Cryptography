@@ -2958,12 +2958,27 @@ static int run_all_tests(int iterations, test_result_t *results, int *num_result
      * is not.  (The earlier revision also quoted 5.4M instructions per
      * decapsulation, which was an unoptimized build.)
      *
-     * The residual 5.630 ns is consistent with data-operand-dependent execution
-     * latency across millions of multiplies over two different ciphertexts —
-     * what Intel DOITM and ARM PSTATE.DIT exist to control, a deployment mode
-     * rather than a code change — and that remains an inference from the
-     * absence of any divergence the deterministic instrument can see, not a
-     * direct measurement of the mechanism.
+     * WHERE THE RESIDUAL ACTUALLY CAME FROM.  An earlier revision attributed
+     * the 5.630 ns to data-operand-dependent execution latency — Intel DOITM,
+     * ARM PSTATE.DIT — and said so as an inference from the absence of any
+     * divergence the deterministic instrument could see.  That inference is
+     * withdrawn: it was never needed, because the lane's own construction
+     * produces the same reading with no effect present.
+     *
+     * This lane staged its ciphertext through one aligned buffer but selected
+     * the source with `class_idx ? ct_bad : ct`, leaving a branch perfectly
+     * correlated with the class between the class draw and the opening timer.
+     * Run as a NULL experiment — byte-identical ciphertexts in both classes,
+     * so the true effect is exactly zero — at 200,000 measurements, 5 runs:
+     * that construction is over threshold in 3 of 5 runs, worst |t| = 6.99,
+     * every excursion the same sign.  The masked-merge staging this lane now
+     * uses (dudect_stage_select, tests/c/dudect/dudect_stage.h) is 0 of 5 on
+     * the same experiment.  A consistently-signed over-threshold reading was
+     * therefore available from the harness alone, and the +5.630 ns is not
+     * evidence about ML-KEM one way or the other.
+     *
+     * The deterministic identity is what settles the primitive, and it is
+     * unaffected — it never depended on the wall-clock lane.
      *
      * So the wall-clock statistic is reported here and the deterministic gate
      * decides.  That is a STRICTLY MORE SENSITIVE instrument for the property

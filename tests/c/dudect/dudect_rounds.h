@@ -127,6 +127,20 @@
  * IDENTICAL across all eight input classes, cross-class delta 0, noise floor
  * 0.
  *
+ * That is one candidate, and it is the one this repository named first.  The
+ * candidate it has since MEASURED is closer to home: a class-correlated
+ * branch or address in the harness itself, between the class draw and the
+ * opening timer.  Run as a null experiment — byte-identical input in both
+ * classes, so the true effect is exactly zero — the ternary class select the
+ * lanes used to carry reads over threshold in 4 of 8 runs on the AES-GCM
+ * decrypt lane and 3 of 5 on the Kyber decapsulation lane, every excursion
+ * one sign, while the masked-merge staging that replaced it reads 0 of 8 and
+ * 0 of 5.  Both explanations produce a difference that is fixed for a binary
+ * on a host and reverses between hosts; the difference is that this one is
+ * the harness's to remove, and it has been.  Anything a lane reports now is
+ * measured with `dudect_stage_select` in front of it and
+ * `tools/check_dudect_class_staging.py` enforcing that nothing else gets in.
+ *
  * So the floor below is not a tolerance for leaks.  It is the resolution
  * limit of a wall-clock apparatus on shared hardware, stated instead of
  * ignored, and everything under it is delegated to the tool that can actually

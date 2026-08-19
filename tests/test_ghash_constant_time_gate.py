@@ -262,11 +262,24 @@ class TestVerdict:
     ) -> None:
         """The measured benign DER spread must not turn the gate red.
 
-        80 instructions on the archive build; 24 on a shared-library build.
+        24 instructions over 8 signatures under gcc 13 -O3 and 16 under clang
+        18 -O3, both on the archive build the workflow configures (Release,
+        LTO off). The 80 an earlier revision of this test used predates the
+        driver consuming a fixed byte count instead of iterating to `siglen`,
+        which the file's own calibration note records as ~9 instructions per
+        byte of measurement noise the driver was creating itself.
         """
         counts: dict[str, Optional[dict[str, int]]] = {k: _m(11_628_800) for k in tool.KEY_CLASSES}
-        counts[tool.KEY_CLASSES[-1]] = _m(11_628_800 + 80)
+        counts[tool.KEY_CLASSES[-1]] = _m(11_628_800 + 24)
         assert _run_main(tool, monkeypatch, tmp_path, counts) == 0
+
+    def test_a_delta_one_above_the_ecdsa_limit_fails(
+        self, tool: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """The one non-zero limit still has to be a limit."""
+        counts: dict[str, Optional[dict[str, int]]] = {k: _m(11_628_800) for k in tool.KEY_CLASSES}
+        counts[tool.KEY_CLASSES[-1]] = _m(11_628_800 + tool.THRESHOLDS["ecdsa"] + 1)
+        assert _run_main(tool, monkeypatch, tmp_path, counts) == 1
 
     def test_a_cache_miss_delta_fails_with_the_instruction_count_unchanged(
         self, tool: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -434,18 +447,88 @@ class TestAnUnoptimizedLibraryIsNotAMeasurement:
 
 
 class TestCalibration:
-    def test_ecdsa_threshold_would_catch_the_defect_it_missed(self, tool: ModuleType) -> None:
-        """2,952 on a git-reverted control build; 80 is the benign floor.
+    """The limits are measurements, and these tests are what keeps them so.
 
-        Both measured on the AMA_TESTING_MODE static archive, which is what
-        the dudect workflow builds. The threshold has to sit strictly between
-        them. At the original 3,000 it sat 48 instructions above the defect,
-        so the gate could not have fired on the thing it was added for.
+    A deterministic instrument that reserves a benign band it does not need
+    has bought the right to pass a real divergence of that size. Measured on
+    the AMA_TESTING_MODE static archive at -O3 under both compilers CI uses,
+    eleven of the twelve targets have a cross-class delta of exactly zero and
+    a same-class floor of exactly zero; only ``ecdsa`` has a benign term, and
+    it is the DER encoding of the public r and s.
+    """
+
+    #: Every target whose count is invariant by construction — measured 0/0
+    #: under gcc 13 and clang 18. Their limit must be 0.
+    INVARIANT_TARGETS = frozenset(
+        {
+            "ghash",
+            "consttime",
+            "aead-verify",
+            "ascon-hash",
+            "ascon-encrypt",
+            "agent-binding",
+            "kyber-decaps",
+            "sha3-256",
+            "ed25519-sign",
+            "nistp-ecdsa",
+            "x25519",
+        }
+    )
+
+    def test_every_invariant_target_reserves_no_benign_band(self, tool: ModuleType) -> None:
+        """Zero, for the same reason ``MISS_THRESHOLD`` is zero.
+
+        These targets state that two classes execute the same instructions.
+        One retired instruction of difference falsifies that, so there is
+        nothing for a threshold to be headroom for — and the same-class floor
+        check already reports INCONCLUSIVE rather than passing if a host
+        cannot reproduce itself.
         """
-        assert 80 < tool.THRESHOLDS["ecdsa"] < 2952
+        for target in self.INVARIANT_TARGETS:
+            assert tool.THRESHOLDS[target] == 0, target
 
-    def test_ghash_threshold_is_between_its_own_noise_and_defect(self, tool: ModuleType) -> None:
-        assert 26 < tool.THRESHOLDS["ghash"] < 3226
+    def test_the_invariant_set_is_every_target_but_ecdsa(self, tool: ModuleType) -> None:
+        """A new target must state its own limit and the measurement for it.
+
+        Without this, a target added with a copied non-zero limit would
+        inherit a benign band nobody measured.
+        """
+        assert set(tool.THRESHOLDS) - self.INVARIANT_TARGETS == {"ecdsa"}
+
+    def test_the_default_for_an_unlisted_target_is_zero(self, tool: ModuleType) -> None:
+        assert tool.DEFAULT_THRESHOLD == 0
+
+    def test_ecdsa_threshold_sits_above_its_benign_term_and_below_the_defect(
+        self, tool: ModuleType
+    ) -> None:
+        """24 is the benign DER delta; 2,952 is the defect on a reverted build.
+
+        secp256k1 exposes only the DER signing form, so the leading-zero
+        handling of the public r and s stays inside the count: 24 retired
+        instructions over 8 signatures under gcc 13 -O3, 16 under clang 18.
+        The limit has to clear that and stay far under the Montgomery
+        extra-reduction leak this target was added for. At the original 3,000
+        it sat 48 instructions ABOVE that defect; at the flat 200 that
+        replaced it, 8 signatures of amplification meant 25 instructions per
+        signature of real divergence still passed.
+        """
+        assert 24 < tool.THRESHOLDS["ecdsa"] < 2952
+
+    def test_nistp_reaches_zero_by_removing_der_not_by_tolerating_it(
+        self, tool: ModuleType
+    ) -> None:
+        """The raw entry point is what makes a limit of 0 honest there.
+
+        ``ama_nistp_ecdsa_sign_raw`` runs identical arithmetic to the DER
+        entry point and writes a fixed 64 octets, so the encoder's
+        key-dependent length term is not in the measurement at all. Signing
+        through the DER form again would put it back while the limit stayed
+        at 0, which would be a flaky gate rather than a strict one.
+        """
+        driver = tool._DRIVERS["nistp-ecdsa"]
+        assert "ama_nistp_ecdsa_sign_raw(" in driver
+        assert "ama_nistp_ecdsa_sign(" not in driver
+        assert tool.THRESHOLDS["nistp-ecdsa"] == 0
 
 
 class TestSamplingCannotSilentlyCollapse:

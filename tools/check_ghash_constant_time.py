@@ -58,8 +58,12 @@ clang -O3 with the value barrier             12
 same key, two runs (noise floor)       up to 25
 ===================================  ==================
 
-The default threshold of 200 sits an order of magnitude above the noise and
-an order of magnitude below the defect, so it is not tuned to either.
+Per-target limits are set from measurement, not from headroom: eleven of the
+twelve targets measure a cross-class delta of exactly zero under both gcc 13
+and clang 18 at -O3, with a same-class floor of exactly zero, and their limit
+is 0.  Only `ecdsa` carries a non-zero limit, for the one benign
+variable-time step it has (DER encoding of the public r and s).  The full
+measurement table and the reasoning are at ``THRESHOLDS`` below.
 
 Exit status
 -----------
@@ -81,8 +85,11 @@ import tempfile
 from pathlib import Path
 from typing import Optional, Sequence
 
-#: Instruction-count delta above which a key-dependent path is reported.
-DEFAULT_THRESHOLD = 200
+#: Fallback limit for a target with no entry in :data:`THRESHOLDS`.  Zero,
+#: because that is what a deterministic instrument measures on code with no
+#: benign variable-time step; a new target that genuinely has one states its
+#: own limit and the measurement behind it.
+DEFAULT_THRESHOLD = 0
 
 #: Key classes to compare.  Single characters so the driver's argument
 #: handling costs the same for each — a multi-character argument would make
@@ -128,12 +135,24 @@ KEY_CLASSES = ("A", "Z", "m", "q", "0", "~", "!", "5")
 #: build                                       cross-key delta
 #: ==========================================  ==================
 #: pre-fix secp256k1 (git-reverted control)    2,952 instructions
-#: fixed (shipped)                                80
+#: fixed (shipped), at the time                   80
+#: fixed (shipped), re-measured                   24  (gcc 13 -O3)
+#:                                                16  (clang 18 -O3)
 #: ==========================================  ==================
 #:
+#: The 80 predates the driver consuming a fixed byte count rather than
+#: iterating to `siglen`; that change removed the ~9 instructions per byte of
+#: noise the driver was creating itself, and what is left is the library's own
+#: DER encoding. Both re-measurements are on the archive build the workflow
+#: configures (Release, LTO off), which is the configuration the limit has to
+#: be safe for.
+#:
 #: The old threshold of 3,000 therefore sat **48 instructions above the
-#: defect it was measuring**.  It was never going to fire.  200 sits 2.5x
-#: above the benign floor and ~15x below the defect.
+#: defect it was measuring**.  It was never going to fire.  Its replacement,
+#: a flat 200, then sat 2.5x above the benign floor — and 8 signatures of
+#: amplification made that 25 instructions per signature of real divergence
+#: this target would still have passed.  The limit is now 64; see the
+#: measurement table below.
 #:
 #: (On a shared-library build the same comparison reads 576 against 24; the
 #: absolute numbers move with linkage and codegen, the ratio does not.  Quote
@@ -149,8 +168,8 @@ KEY_CLASSES = ("A", "Z", "m", "q", "0", "~", "!", "5")
 #: volatile pointers, so its retired count is invariant by construction —
 #: measured byte-identical (37,157,290) across all eight classes, covering the
 #: equal case and a first-difference at eight positions spread through a 4 KiB
-#: buffer. There is no benign spread to accommodate, so the shared 200 is pure
-#: headroom.
+#: buffer. There is no benign spread to accommodate, which is why its limit
+#: is 0 rather than a shared allowance.
 #:
 #: This target exists because the dudect lane for the same function is a
 #: *wall-clock* statistical test on a shared CI runner, and it flakes: it
@@ -161,47 +180,115 @@ KEY_CLASSES = ("A", "Z", "m", "q", "0", "~", "!", "5")
 #: on idle hardware" — so the durable answer to a flaky timing lane over a
 #: deterministic function is to also measure it deterministically. dudect stays
 #: as the wall-clock cross-check; this is what a real regression trips.
+#: THE LIMITS BELOW ARE MEASURED, NOT ROUNDED
+#: ------------------------------------------
+#: Every target used to share a flat 200, chosen for `ecdsa` and applied to
+#: the rest as "pure headroom".  Headroom in a deterministic instrument is not
+#: free: what it buys is the right to pass a real divergence.  A target's
+#: sensitivity is its limit divided by its amplification — the number of
+#: operations its driver runs — so a flat 200 meant:
+#:
+#: =============  =============  =====================================
+#: target         operations     per-operation divergence that PASSED
+#: =============  =============  =====================================
+#: nistp-ecdsa          4              50 instructions per signature
+#: ghash                8              25 per encryption
+#: ecdsa                8              25 per signature
+#: x25519               8              25 per scalar multiplication
+#: kyber-decaps        60               3 per decapsulation
+#: ed25519-sign       200               1 per signature
+#: aead-verify        500               0 (1 per call amplifies to 500)
+#: consttime         2000               0
+#: ascon-hash        2000               0
+#: ascon-encrypt     2000               0
+#: agent-binding     2000               0
+#: sha3-256          2000               0
+#: =============  =============  =====================================
+#:
+#: `ed25519-sign` is the sharpest: 200 operations against a limit of 200, and
+#: the verdict is `>` — so a one-instruction-per-signature key-dependent
+#: divergence, which is what a conditional branch on a secret bit looks like
+#: after the optimizer gets to it, passed this gate exactly.  The nistp leak
+#: this file already records was 313 instructions per signature; the same gate
+#: would not have seen it at 50.
+#:
+#: That is not an argument from arithmetic.  It was measured, by putting the
+#: defect back: one branch on `private_key[0] & 1`, executed once per
+#: signature, at the top of `ama_nistp_ecdsa_sign_raw` in src/c/ama_nistp.c,
+#: on the archive build the workflow configures.  The cross-key delta is 12
+#: retired instructions and 8 data references — and at a limit of 200 this
+#: tool printed
+#:
+#:     NISTP-ECDSA CONSTANT-TIME CHECK PASSED — instruction count, data
+#:     references and cache misses are all key-independent
+#:
+#: over code with a live branch on the private key, exit 0.  At the limits
+#: below it fails, exit 1, naming both metrics.  The mutation was reverted;
+#: what it establishes is that the old margin was not headroom, it was a
+#: blind spot of a size real defects come in.
+#:
+#: So each limit is now what the measurement supports.  Measured on this tree
+#: with the AMA_TESTING_MODE static archive, LTO off, 8 key classes, at -O3
+#: under both compilers CI uses:
+#:
+#: ===============  =================  ===================  ===============
+#: target           gcc 13  (I / D)    clang 18  (I / D)    same-class floor
+#: ===============  =================  ===================  ===============
+#: ghash                 0 / 0               0 / 0                0
+#: consttime             0 / 0               0 / 0                0
+#: aead-verify           0 / 0               0 / 0                0
+#: ascon-hash            0 / 0               0 / 0                0
+#: ascon-encrypt         0 / 0               0 / 0                0
+#: agent-binding         0 / 0               0 / 0                0
+#: kyber-decaps          0 / 0               0 / 0                0
+#: sha3-256              0 / 0               0 / 0                0
+#: ed25519-sign          0 / 0               0 / 0                0
+#: x25519                0 / 0               0 / 0                0
+#: nistp-ecdsa           0 / 0               0 / 0                0
+#: ecdsa                24 / 8              16 / 8                0
+#: ===============  =================  ===================  ===============
+#:
+#: Eleven of the twelve are exactly zero, on both compilers, with a same-class
+#: floor of exactly zero — which is what "deterministic instrument" has to
+#: mean.  Their limit is 0.  A single retired instruction of cross-class
+#: difference in any of them falsifies the property the target states, and
+#: there is nothing left for a threshold to be headroom FOR: the floor check
+#: already reports INCONCLUSIVE (exit 2) rather than passing if the
+#: environment cannot reproduce itself, so a host with real measurement noise
+#: is diagnosed instead of silently absorbed.
+#:
+#: `nistp-ecdsa` reached zero by construction rather than by luck: its driver
+#: now signs with `ama_nistp_ecdsa_sign_raw`, identical arithmetic to the DER
+#: entry point with a fixed-width 64-octet result, so the DER encoder's
+#: length variance — a public-value term, but a key-dependent one — is no
+#: longer inside the measurement at all.
+#:
+#: `ecdsa` is the one target with a benign term left.  secp256k1 exposes only
+#: the DER form, so the leading-zero handling of r and s stays in the count:
+#: 24 instructions over 8 signatures under gcc, 16 under clang, i.e. 2-3 per
+#: signature.  Its limit is 64 — 2.7x the worst measured benign delta, and a
+#: tolerance of 8 instructions per signature rather than 25.  THIS IS THE
+#: RESIDUAL AND IT IS STATED RATHER THAN ROUNDED AWAY: a secret-dependent
+#: divergence smaller than 8 instructions per secp256k1 signature is below
+#: what this target can resolve.  Closing it needs a fixed-width secp256k1
+#: signing entry point, the same remedy nistp-ecdsa just used.
 THRESHOLDS = {
-    "ghash": 200,
-    "ecdsa": 200,
-    "consttime": 200,
-    "aead-verify": 200,
-    # Ascon has no lookup table and no data-dependent branch (ama_ascon.c),
-    # so like `consttime` this count is invariant by construction and there is
-    # no benign spread to discount.
-    "ascon-hash": 200,
-    # Ascon-AEAD128 encryption is the same permutation over a fixed schedule,
-    # keyed: no table, no key-dependent branch (ama_ascon.c), so the count is
-    # invariant by construction and there is no benign spread to discount.
-    "ascon-encrypt": 200,
-    # ama_agent_binding_check compares the authorization with
-    # ama_consttime_memcmp and returns a masked verdict; accept and reject
-    # therefore execute the same instructions, and any spread is a real
-    # verdict oracle rather than a benign one.
-    "agent-binding": 200,
-    # ML-KEM decapsulation computes both the real and the rejection shared
-    # secret and selects between them with ama_consttime_copy, so the two FO
-    # outcomes execute the same instructions; there is no benign spread.
-    "kyber-decaps": 200,
-    # Keccak-f[1600] is table-free and branch-free (ama_sha3.c); like
-    # `consttime` and `ascon-hash` the count is invariant by construction.
-    "sha3-256": 200,
-    # Ed25519 signing is a fixed-window comb over the base point plus a
-    # branchless SHA-512; for a fixed message the count is a pure function of
-    # the key, and constant-time signing means that function is constant.
-    "ed25519-sign": 200,
-    # nistp: the NIST P-curve signing path has the same one legitimate
-    # variable-time step as secp256k1 — DER encoding of r and s, which are
-    # public — and with the driver consuming a fixed byte count that is 16-24
-    # instructions.  Measured after the mask barrier landed in nistp_mask64:
-    # 24 (gcc 13 -O3) and 16 (clang 18 -O3) against 1,251 for the leak the
-    # barrier removed, so 200 sits an order of magnitude either side.
-    "nistp-ecdsa": 200,
-    # x25519: the ladder is a fixed 255 steps with a masked conditional swap
-    # and no data-dependent branch, so the count is invariant by construction —
-    # measured byte-identical across all eight classes under both compilers.
-    # There is no benign spread to accommodate; the shared 200 is headroom.
-    "x25519": 200,
+    # One legitimate variable-time step: DER encoding of the public r and s.
+    # Measured 24 (gcc 13 -O3) and 16 (clang 18 -O3) over 8 signatures.
+    "ecdsa": 64,
+    # The remaining eleven are invariant by construction and measure exactly
+    # zero on both compilers; see the table above.
+    "ghash": 0,
+    "consttime": 0,
+    "aead-verify": 0,
+    "ascon-hash": 0,
+    "ascon-encrypt": 0,
+    "agent-binding": 0,
+    "kyber-decaps": 0,
+    "sha3-256": 0,
+    "ed25519-sign": 0,
+    "nistp-ecdsa": 0,
+    "x25519": 0,
 }
 
 #: Where to look first when a target fails.  Kept per-target so the message
@@ -491,9 +578,12 @@ void ama_test_force_aes_gcm_scalar(void);
  * adds no class-dependent branch inside the measured loops.
  *
  * 500 iterations: a one-instruction-per-call regression amplifies to a
- * 500-instruction cross-class delta — 2.5x the 200 threshold and ~25x
- * the measured same-class floor — while keeping the 10-run check
- * inside the ARM job's budget under valgrind. */
+ * 500-instruction cross-class delta, far above the measured same-class
+ * floor, while keeping the 10-run check inside the ARM job's budget under
+ * valgrind.  The amplification is no longer what carries the sensitivity —
+ * this target's limit is 0, so a single retired instruction of cross-class
+ * difference fails it — but it still separates a real per-call divergence
+ * from anything that could enter the count once, outside the loops. */
 enum { ITERS = 500 };
 
 int main(int argc, char **argv) {
@@ -782,9 +872,16 @@ _KYBER_DECAPS_DRIVER = r"""
  * build and argued the 5.630 ns was "one part in 90,000" of a decapsulation —
  * withdrawn: a mispredicted branch costs a fixed 5-20 ns whatever surrounds
  * it, so the ratio excludes nothing.  The identity above is the argument.)
- * The residual wall-clock difference is consistent with data-operand-dependent
- * latency, which Intel's DOITM and ARM's PSTATE.DIT exist to control, and not
- * with any divergence this instrument can see in src/c/ama_kyber.c.
+ * The residual wall-clock difference needs no exotic explanation and an
+ * earlier revision's appeal to data-operand-dependent latency (Intel DOITM,
+ * ARM PSTATE.DIT) is withdrawn.  The lane that produced it selected its
+ * ciphertext with `class_idx ? ct_bad : ct`, a branch perfectly correlated
+ * with the class sitting between the class draw and the opening timer.  Run
+ * as a null experiment — byte-identical ciphertexts in both classes, true
+ * effect exactly zero, 200,000 measurements, 5 runs — that construction is
+ * over threshold in 3 of 5 runs at worst |t| = 6.99, every excursion one
+ * sign; the masked-merge staging the lane now uses is 0 of 5.  The excursion
+ * was the instrument's, not the primitive's.
  *
  * THE STAGING BELOW IS LOAD-BEARING.  Handing the timed call `ct` for one class
  * and `ct_bad` for the other confounds the class with the ciphertext's ADDRESS:
@@ -975,10 +1072,21 @@ _NISTP_ECDSA_DRIVER = r"""
  *
  * P-256 rather than P-521: it is the widely deployed one, it is the fastest to
  * measure, and the limb code under test is shared.  RFC 6979 makes signing
- * deterministic, so with a fixed digest the only moving input is the key. */
+ * deterministic, so with a fixed digest the only moving input is the key.
+ *
+ * `ama_nistp_ecdsa_sign_raw`, NOT `ama_nistp_ecdsa_sign`.  The two run
+ * identical arithmetic and differ only in how they encode the result, and
+ * DER is length-variable on the leading-zero bytes of r and s — public
+ * values, but the encoder's cost tracks them, so the DER form put a
+ * key-dependent term into the count that the gate then had to tolerate:
+ * measured 32 retired instructions over four signatures under gcc 13 -O3
+ * and 16 under clang 18.  Tolerating it meant a limit no tighter than the
+ * benign term, and with only four signatures of amplification that limit
+ * admitted tens of instructions per signature of REAL divergence.  The raw
+ * form writes a fixed 64 octets, so the encoding contributes nothing and the
+ * limit for this target is 0. */
 int main(int argc, char **argv) {
-    uint8_t sk[32], pk[65], sig[128], digest[32];
-    size_t siglen;
+    uint8_t sk[32], pk[65], sig[64], digest[32];
     unsigned fill = (argc > 1) ? (unsigned)(unsigned char)argv[1][0] : 0x41u;
 
     /* Spread the class byte across the key — see the ghash driver. */
@@ -989,15 +1097,11 @@ int main(int argc, char **argv) {
 
     static volatile uint8_t sink;
     for (int i = 0; i < 4; i++) {
-        /* Clear the whole buffer so the bytes past the signature are
-         * deterministic, then consume a FIXED count below — iterating to
-         * `siglen` would make the driver itself variable-time on the DER
-         * length, which is public but is measurement noise the gate would
-         * then have to tolerate. */
         memset(sig, 0, sizeof sig);
-        siglen = sizeof sig;
-        if (ama_nistp_ecdsa_sign(AMA_NIST_CURVE_P256, digest, sizeof digest,
-                                 sk, sig, &siglen) != AMA_SUCCESS) return 1;
+        if (ama_nistp_ecdsa_sign_raw(AMA_NIST_CURVE_P256, digest, sizeof digest,
+                                     sk, sig) != AMA_SUCCESS) return 1;
+        /* Fixed count over a fixed-width signature: the consumption is
+         * identical for every class. */
         for (size_t j = 0; j < sizeof sig; j++) sink = (uint8_t)(sink ^ sig[j]);
     }
     return 0;
