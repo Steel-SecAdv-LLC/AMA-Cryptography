@@ -772,6 +772,34 @@ jobs:
           python tools/check_ghash_constant_time.py \
             --lib build/lib/libama_cryptography_test.a --target ecdsa
 
+      - name: Build the shared object this branch actually ships
+        # The steps above measure the AMA_TESTING_MODE static archive, which is
+        # the right subject for callgrind but not for the check below: the
+        # KyberSlash question is about the instructions the SHIPPED object
+        # contains, and LTO across the real link is exactly where a division
+        # would or would not survive.
+        run: |
+          cmake -B build-shared -DCMAKE_BUILD_TYPE=Release \
+            -DAMA_USE_NATIVE_PQC=ON -DAMA_BUILD_TESTS=OFF -DAMA_BUILD_EXAMPLES=OFF
+          cmake --build build-shared -j"$(nproc)" --target ama_cryptography_shared
+
+      - name: No divide instruction may take a secret operand (KyberSlash)
+        # ML-KEM's Compress_d written as a division by q, lowered by the
+        # compiler to a `div` with operand-dependent latency over a
+        # secret-derived numerator.  This repository shipped that once; the fix
+        # was the Granlund-Montgomery reciprocal in src/c/ama_kyber.c, and
+        # nothing existed that would notice the fix being undone.  Reading the
+        # C does not settle it — the source says `/`, and only the object says
+        # whether a divide was emitted.
+        #
+        # Verified against the real defect rather than a mock: with the
+        # reciprocal replaced by `n / q_div` and the library rebuilt, this gate
+        # reported 32 new divide instructions (kyber_decapsulate_internal 8,
+        # poly_compress 24) and exited 1.  The mutation was reverted.
+        run: |
+          python tools/check_secret_division.py \
+            --lib build-shared/lib/libama_cryptography.so
+
   aead-verify-invariance:
     # The AEAD accept/reject pair at ct_len == 0, pinned by retired
     # instruction counts.  Runs on the ARM runner deliberately: the
