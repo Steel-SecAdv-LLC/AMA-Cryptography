@@ -467,7 +467,6 @@ class TestValidityWindowCannotBeExtendedWithoutRemeasuring:
         after: dict[str, Any],
     ) -> Any:
         """Stub ``_run_git`` so the guard reads synthetic before/after files."""
-        import json
         import subprocess
 
         import benchmarks.check_baseline_justification as guard
@@ -697,8 +696,6 @@ class TestBothRecordsCarryProvenance:
 
     def test_the_shipped_json_record_has_provenance(self) -> None:
         """The committed record, not just a freshly generated one."""
-        import json
-
         path = Path(__file__).resolve().parent.parent / "benchmarks" / "benchmark-results.json"
         record = json.loads(path.read_text(encoding="utf-8"))
         provenance = record.get("provenance")
@@ -839,10 +836,8 @@ class TestPqcRowsAreHardGated:
 
     def test_no_populated_baseline_row_is_optional(self) -> None:
         """Both committed baseline files must carry optional=false everywhere."""
-        import json as _json
-
         for name in ("baseline.json", "arm-baseline.json"):
-            data = _json.loads((Path(br.__file__).parent / name).read_text(encoding="utf-8"))
+            data = json.loads((Path(br.__file__).parent / name).read_text(encoding="utf-8"))
             offenders = [
                 key
                 for key, row in data.get("pqc_benchmarks", {}).items()

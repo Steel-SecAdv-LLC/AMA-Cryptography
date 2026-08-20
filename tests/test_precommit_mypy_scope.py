@@ -44,7 +44,11 @@ def _mypy_hook() -> dict[str, Any]:
         for hook in repo.get("hooks", []):
             if hook["id"] == "mypy":
                 return dict(hook)
-    pytest.fail("the pre-commit mypy hook is gone")
+    # `raise`, not `pytest.fail()`: both fail the test, but only this one is a
+    # terminating statement to a reader that does not know pytest's NoReturn
+    # annotation, so the function has one exit shape rather than an explicit
+    # return beside an implicit fall-through None (CodeQL alert 635).
+    raise AssertionError("the pre-commit mypy hook is gone")
 
 
 def _ci_mypy_arguments() -> list[str]:

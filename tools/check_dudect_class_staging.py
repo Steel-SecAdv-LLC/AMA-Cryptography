@@ -154,14 +154,35 @@ _STAGE_SELECT = re.compile(r"dudect_stage_select\s*\([^;]*,\s*class_idx\s*\)")
 # The forbidden class-dependent constructs: a ternary on the class (either
 # spelling the tree has used), an `if` on the class, or an address selected by
 # it.  These are the constructions measured to bias the lane.
+#
+# Each alternative, in order:
+#   1. an `if` whose condition mentions the class
+#   2. a comparison of the class against 0 or 1, feeding a ternary
+#   3. a bare ternary on the class
+#   4. an array subscript by the class, which selects an ADDRESS and so biases
+#      the lane even when both arms retire the same instructions
+#
+# The alternatives are assembled from named parts rather than written as one
+# re.VERBOSE pattern with trailing `#` comments.  Verbose comments read as
+# pattern text to anything that does not model the flag — CodeQL parsed the
+# `arr[class_idx]` comment as a character class and reported a duplicate `s`
+# (alert 632) — and, worse, deleting `re.VERBOSE` would silently promote those
+# comments into the pattern.  Naming the parts removes both.
+_IF_ON_CLASS = r"\bif\s*\([^;]*\bclass_idx\b"
+_CLASS_COMPARE_TERNARY = r"\bclass_idx\b\s*(?:==|!=)\s*[01]\s*\)?\s*\?"
+_CLASS_TERNARY = r"\bclass_idx\b\s*\?"
+_CLASS_SUBSCRIPT = r"\[\s*class_idx\s*\]"
+
 _CLASS_BRANCH = re.compile(
-    r"""
-    (?: \bif\s*\([^;]*\bclass_idx\b )      # if (class_idx ...)
-  | (?: \bclass_idx\b\s*(?:==|!=)\s*[01]\s*\)?\s*\? )  # (class_idx == 0) ?
-  | (?: \bclass_idx\b\s*\?  )              # class_idx ?
-  | (?: \[\s*class_idx\s*\] )              # arr[class_idx]
-    """,
-    re.VERBOSE,
+    "|".join(
+        f"(?:{alternative})"
+        for alternative in (
+            _IF_ON_CLASS,
+            _CLASS_COMPARE_TERNARY,
+            _CLASS_TERNARY,
+            _CLASS_SUBSCRIPT,
+        )
+    )
 )
 
 # `_Alignas(64) <type> name[...]` / `_Alignas(64) <type> name;`
