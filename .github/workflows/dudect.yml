@@ -761,6 +761,28 @@ jobs:
           python tools/check_ghash_constant_time.py \
             --lib build/lib/libama_cryptography_test.a --target x25519
 
+      - name: Batched X25519 instruction count must not depend on the scalars
+        # `ama_x25519_scalarmult_batch` is a separate entry point from
+        # `ama_x25519_key_exchange`, with its own four-lane chunker, scalar
+        # tail, and an aggregated low-order rejection that must zero EVERY
+        # output when ANY lane rejects.  The step above reaches none of it.
+        #
+        # Its dudect lane (`X25519 scalarmult batch x4`) is info-only, and
+        # info-only is defensible exactly where a deterministic gate blocks
+        # instead — the pairing `Kyber-1024 decaps` and `secp256k1 ECDSA sign`
+        # both cite.  This lane had no such counterpart, so nothing could fail
+        # on a batch-path regression.
+        #
+        # Both wirings are measured, because which one runs is an environment
+        # choice: the second run opts the AVX2 4-way kernel in, and that kernel
+        # had never been measured by a deterministic instrument at all.
+        run: |
+          python tools/check_ghash_constant_time.py \
+            --lib build/lib/libama_cryptography_test.a --target x25519-batch
+          AMA_DISPATCH_USE_X25519_AVX2=1 \
+            python tools/check_ghash_constant_time.py \
+              --lib build/lib/libama_cryptography_test.a --target x25519-batch
+
       - name: secp256k1 ECDSA instruction count must not depend on the key
         # Catches a branch on a secret in the scalar field arithmetic — the
         # Montgomery extra-reduction leak (Walter & Thompson, CT-RSA 2001).

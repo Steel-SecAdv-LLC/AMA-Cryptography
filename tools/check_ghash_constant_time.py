@@ -244,11 +244,12 @@ KEY_CLASSES = ("A", "Z", "m", "q", "0", "~", "!", "5")
 #: sha3-256              0 / 0               0 / 0                0
 #: ed25519-sign          0 / 0               0 / 0                0
 #: x25519                0 / 0               0 / 0                0
+#: x25519-batch          0 / 0               0 / 0                0
 #: nistp-ecdsa           0 / 0               0 / 0                0
 #: ecdsa                 0 / 0               0 / 0                0
 #: ===============  =================  ===================  ===============
 #:
-#: All twelve are exactly zero, on both compilers, with a same-class floor of
+#: All thirteen are exactly zero, on both compilers, with a same-class floor of
 #: exactly zero — which is what "deterministic instrument" has to mean.  Their
 #: limit is 0.  A single retired instruction of cross-class
 #: difference in any of them falsifies the property the target states, and
@@ -283,8 +284,40 @@ KEY_CLASSES = ("A", "Z", "m", "q", "0", "~", "!", "5")
 #: back to (r, s) and compares it against r||s over 512 keys, and asserts the
 #: comparison saw at least one short DER signature so it cannot pass over
 #: full-length cases alone.
+#:
+#: `x25519-batch` is the thirteenth, and it exists because a lane can be
+#: informational only where something else blocks.  `tests/c/test_dudect.c`
+#: registers eight info-only wall-clock lanes, and each one that names a reason
+#: names a deterministic counterpart: `Kyber-1024 decaps` cites `kyber-decaps`,
+#: `secp256k1 ECDSA sign` cites `ecdsa`.  Two had none — `ML-DSA-65 sign` and
+#: `SLH-DSA-SHA2-256f sign`, both of which drive a rejection loop whose
+#: iteration count is a function of the secret, so a zero-delta instruction
+#: count is not merely absent but impossible (see CONSTANT_TIME_VERIFICATION.md,
+#: "Rejection sampling and what these gates cannot cover") — and a third,
+#: `X25519 scalarmult batch x4`, had none for no reason at all: the property is
+#: the same one `x25519` states, over a DIFFERENT entry point.
+#:
+#: `ama_x25519_scalarmult_batch` carries its own four-lane chunker, the AVX2
+#: 4-way kernel behind `AMA_DISPATCH_USE_X25519_AVX2`, a scalar tail, and an
+#: aggregated low-order rejection that must zero every output when any lane
+#: rejects.  The `x25519` target reaches none of that; it measures the
+#: single-shot entry point.  Measured on this tree at count = 4 (the smallest
+#: batch that takes the full-chunk path), all eight key classes byte-identical
+#: on all four metrics, on BOTH dispatch wirings:
+#:
+#:     gcc 13    scalar 4x sequential   34,562,888 I   6,818,496 D  2,034/1,622
+#:     gcc 13    SIMD (AVX2 4-way)      10,118,790 I   6,212,344 D  2,205/1,710
+#:     clang 18  scalar 4x sequential   17,213,720 I   3,222,067 D  2,197/1,738
+#:     clang 18  SIMD (AVX2 4-way)      10,036,821 I   3,603,683 D  2,320/1,772
+#:
+#: The AVX2 4-way kernel had never been measured by a deterministic instrument
+#: before; its only coverage was the info-only wall-clock lane.  The gate is
+#: verified to FAIL rather than assumed to work: a branch on
+#: `scalars[0][0] & 1` planted at the top of the batch entry point makes it
+#: report a 1,744-instruction / 1,024-data-reference cross-class delta and exit
+#: 1.  The mutation was reverted.
 THRESHOLDS = {
-    # Every one of the twelve is now invariant by construction and measures
+    # Every one of the thirteen is invariant by construction and measures
     # exactly zero on both compilers; see the table above.  `ecdsa` was the
     # last holdout at 64, for the DER length term, and reached zero the way
     # `nistp-ecdsa` did: by signing through a fixed-width entry point.
@@ -300,6 +333,11 @@ THRESHOLDS = {
     "ed25519-sign": 0,
     "nistp-ecdsa": 0,
     "x25519": 0,
+    # `ama_x25519_scalarmult_batch` — a separate entry point with its own
+    # chunker, AVX2 4-way kernel and aggregated low-order rejection, none of
+    # which the `x25519` target reaches.  Measured 0/0 on both compilers with
+    # a same-class floor of 0, like the other twelve.
+    "x25519-batch": 0,
 }
 
 #: Where to look first when a target fails.  Kept per-target so the message
@@ -393,6 +431,18 @@ _REMEDY = {
         "encoding: this target signs through ama_nistp_ecdsa_sign_raw, so the\n"
         "encoder is outside the measurement entirely and there is no benign\n"
         "component left to subtract. Any non-zero delta here is a defect."
+    ),
+    "x25519-batch": (
+        "The batch entry point adds code above the ladder that the `x25519`\n"
+        "target does not reach: the four-lane chunker and scalar tail in\n"
+        "ama_x25519_scalarmult_batch (src/c/ama_x25519.c), the AVX2 4-way\n"
+        "kernel behind AMA_DISPATCH_USE_X25519_AVX2, and the aggregated\n"
+        "low-order rejection that must zero EVERY output when ANY lane\n"
+        "rejects. Check that the rejection aggregation is a mask over all\n"
+        "lanes rather than an early return, that the tail loop count is a\n"
+        "function of `count` and not of any scalar, and that the 4-way\n"
+        "kernel's conditional swap is a mask. If `x25519` also fails, fix\n"
+        "that first: the fault is in the shared ladder, not in the batching."
     ),
     "x25519": (
         "The Montgomery ladder in src/c/ama_x25519.c must swap with a mask, not\n"
@@ -1172,6 +1222,63 @@ int main(int argc, char **argv) {
 """
 
 
+_X25519_BATCH_DRIVER = r"""
+/* Generated by tools/check_ghash_constant_time.py — do not edit. */
+#include <stdint.h>
+#include <string.h>
+#include "ama_cryptography.h"
+
+/* Batched X25519, four secret scalars varied by class against FIXED peer
+ * points.
+ *
+ * `ama_x25519_scalarmult_batch` is a separate public entry point from
+ * `ama_x25519_key_exchange`, with its own code above the ladder: a
+ * four-lane chunker, an AVX2 4-way kernel behind
+ * AMA_DISPATCH_USE_X25519_AVX2, a scalar tail, and an aggregated
+ * low-order rejection that zeroes EVERY output if ANY lane rejects.  None
+ * of that is reached by the `x25519` target, which measures the
+ * single-shot path.
+ *
+ * Its dudect lane (`X25519 scalarmult batch x4`) is info-only, and until
+ * this target existed it was one of two info-only lanes with no blocking
+ * deterministic counterpart at all — the pairing every other info-only
+ * lane in that file cites as the reason it may be informational.  The
+ * scalars ARE the secret here (255 conditional swaps each, one per bit),
+ * so the property is exactly the one the `x25519` target states, over
+ * different code.
+ *
+ * count = 4: the smallest batch that takes the full-chunk path rather than
+ * the scalar fallback the header documents for N of 1, 2 and 3.  The four
+ * scalars are distinct within a class so no lane can be a copy of another,
+ * and the peer points are fixed so the only moving input is secret. */
+int main(int argc, char **argv) {
+    uint8_t sk[4][32], peer[4][32], out[4][32];
+    unsigned fill = (argc > 1) ? (unsigned)(unsigned char)argv[1][0] : 0x41u;
+
+    for (unsigned lane = 0; lane < 4; lane++) {
+        for (unsigned i = 0; i < 32; i++) {
+            sk[lane][i] = (uint8_t)(fill * 31u + i * 167u + i * i * 13u + lane * 97u);
+            /* Fixed, valid peer public keys — distinct per lane, class-independent. */
+            peer[lane][i] = (uint8_t)(0x09u + i + lane * 5u);
+        }
+    }
+
+    static volatile uint8_t sink;
+    for (int r = 0; r < 8; r++) {
+        /* A non-SUCCESS return is a low-order rejection, i.e. a different
+         * amount of work — the exit status keeps that from being measured
+         * as though it were a completed batch. */
+        if (ama_x25519_scalarmult_batch(out, (const uint8_t (*)[32])sk,
+                                        (const uint8_t (*)[32])peer, 4) != AMA_SUCCESS)
+            return 1;
+        for (int lane = 0; lane < 4; lane++)
+            for (int j = 0; j < 32; j++) sink = (uint8_t)(sink ^ out[lane][j]);
+    }
+    return 0;
+}
+"""
+
+
 _DRIVERS = {
     "ghash": _DRIVER,
     "ecdsa": _ECDSA_DRIVER,
@@ -1185,6 +1292,7 @@ _DRIVERS = {
     "ed25519-sign": _ED25519_SIGN_DRIVER,
     "nistp-ecdsa": _NISTP_ECDSA_DRIVER,
     "x25519": _X25519_DRIVER,
+    "x25519-batch": _X25519_BATCH_DRIVER,
 }
 
 

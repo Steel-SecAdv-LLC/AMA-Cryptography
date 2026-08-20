@@ -465,9 +465,10 @@ class TestCalibration:
     A deterministic instrument that reserves a benign band it does not need
     has bought the right to pass a real divergence of that size. Measured on
     the AMA_TESTING_MODE static archive at -O3 under both compilers CI uses,
-    eleven of the twelve targets have a cross-class delta of exactly zero and
-    a same-class floor of exactly zero; only ``ecdsa`` has a benign term, and
-    it is the DER encoding of the public r and s.
+    all thirteen targets have a cross-class delta of exactly zero and a
+    same-class floor of exactly zero. ``ecdsa`` was the last to carry a benign
+    term — the DER encoding of the public r and s — and reached zero by
+    signing through a fixed-width entry point rather than by tolerating it.
     """
 
     #: Every target whose count is invariant by construction — measured 0/0
@@ -485,6 +486,7 @@ class TestCalibration:
             "ed25519-sign",
             "nistp-ecdsa",
             "x25519",
+            "x25519-batch",
             "ecdsa",
         }
     )

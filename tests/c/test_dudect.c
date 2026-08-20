@@ -2887,7 +2887,25 @@ static int run_all_tests(int iterations, test_result_t *results, int *num_result
      * branches, so it is structurally as constant-time as the scalar
      * path.  When AVX2 isn't available this lane falls through to four
      * sequential scalar ladders and the same constant-time argument
-     * applies. */
+     * applies.
+     *
+     * Info-only is defensible where a deterministic gate blocks instead —
+     * that is the pairing `Kyber-1024 decaps` and `secp256k1 ECDSA sign`
+     * both cite below.  This lane had no such counterpart: the `x25519`
+     * target measures `ama_x25519_key_exchange`, and the batch entry point
+     * carries its own four-lane chunker, AVX2 4-way kernel, scalar tail and
+     * aggregated low-order rejection that the single-shot path never
+     * reaches.  A regression in any of that failed nothing.
+     *
+     * `check_ghash_constant_time.py --target x25519-batch` is now that
+     * counterpart, and dudect.yml runs it on both wirings.  Measured at
+     * count = 4 over eight key classes: retired instructions, data
+     * references, D1 misses and LLd misses all four identical, under gcc 13
+     * and clang 18, with the AVX2 4-way kernel opted in and out — the first
+     * deterministic measurement that kernel has ever had.  Verified to fail
+     * rather than assumed: a branch on `scalars[0][0] & 1` at the top of the
+     * batch entry point makes it report a 1,744-instruction delta and exit
+     * 1. */
     DUDECT_REGISTER_LANE(results, idx,
         "X25519 scalarmult batch×4",
         test_x25519_scalarmult_x4(iterations), 1);
@@ -2989,8 +3007,44 @@ static int run_all_tests(int iterations, test_result_t *results, int *num_result
     DUDECT_REGISTER_LANE(results, idx,
         "Kyber-1024 decaps",
         test_kyber_decaps(iterations), 1);
-    /* Dilithium signing uses rejection sampling which has inherent
-     * timing variation by design — this is expected and safe. */
+    /* INFO, and — unlike every other info-only lane in this file — with no
+     * deterministic counterpart, because none can exist.  Stated here rather
+     * than left to be inferred from the flag.
+     *
+     * FIPS 204 Algorithm 2 signs inside a rejection loop.  `dil_sign_internal`
+     * (src/c/ama_dilithium.c) `continue`s on three norm checks — ||z||,
+     * ||w0 - c*s2||, ||c*t0|| — and on the hint-weight check, and each of
+     * those predicates is a function of the secret vectors s1, s2, t0 and of
+     * the message.  So both the NUMBER of attempts and the point at which an
+     * attempt aborts are secret-dependent control flow, by the standard's own
+     * construction and identically to the pq-crystals reference.  A
+     * zero-delta retired-instruction count is therefore not merely missing
+     * for this primitive, it is impossible: the loop does a different amount
+     * of work by design.
+     *
+     * What this lane measures is exactly that, and it is not subtle.  At
+     * 100,000 measurements against two constant messages under one key it
+     * reads t = -815.72 with a per-class difference of -48.7 us — five
+     * orders of magnitude above the 2 ns effect-size floor, and stable run to
+     * run.  Calling that "expected and safe" without saying what is expected,
+     * as an earlier revision of this comment did, is an assertion the tree
+     * cannot support with any measurement it takes.
+     *
+     * What IS covered, and by what:
+     *   - Every primitive the loop calls (NTT, pointwise Montgomery, the
+     *     norm checks, SHAKE) is branch-free on its own operands, which is
+     *     the property `sha3-256` and the KAT suite pin.
+     *   - The message is public and the attempt count is not secret in
+     *     itself; what it correlates with is the secret's norm distribution.
+     *     The standard accepts this and the literature treats the leak as
+     *     negligible for the ML-DSA parameter sets; AMA does not claim more
+     *     than the standard does.
+     *   - The scrubbing of every per-attempt intermediate IS pinned, by
+     *     tools/check_c_secret_zeroization.py and by the DIL_SIGN_SCRUB()
+     *     path this file's sibling tests exercise.
+     * See CONSTANT_TIME_VERIFICATION.md, "Rejection sampling and what these
+     * gates cannot cover", which carries the same statement so a reader who
+     * never opens this file gets it too. */
     DUDECT_REGISTER_LANE(results, idx,
         "ML-DSA-65 sign",
         test_dilithium_sign(iterations), 1);

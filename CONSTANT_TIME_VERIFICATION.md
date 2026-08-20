@@ -307,9 +307,63 @@ A clean run should show:
 The native C implementations provide constant-time operations:
 
 - All NTT and polynomial arithmetic use constant-time primitives
-- No secret-dependent branches or memory accesses
+- No secret-dependent branches or memory accesses **inside a primitive** —
+  see *Rejection sampling and what these gates cannot cover* immediately
+  below for the one place this does not extend to, which is the signing
+  loop the standards themselves define as variable-iteration
 - Validated through NIST KAT (Known Answer Test) vectors (FIPS 203/204/205)
 - Rejection sampling uses constant-time comparisons
+
+#### Rejection sampling and what these gates cannot cover
+
+The bullet above used to read "No secret-dependent branches or memory
+accesses", unqualified, for all three PQC algorithms. This repository's own
+dudect lane falsifies that for ML-DSA-65 signing, and has for as long as the
+lane has existed: at 100,000 measurements against two constant messages under
+one key, `ML-DSA-65 sign` reads **t = -815.72** at a per-class difference of
+**-48.7 us**. That is five orders of magnitude above the harness's 2 ns
+effect-size floor. Recording the unqualified claim beside a measurement that
+contradicts it is the documentation failure INVARIANT-16 exists to prevent, so
+the claim is narrowed to what the code delivers.
+
+**What is true.** FIPS 204 Algorithm 2 signs inside a rejection loop.
+`dil_sign_internal` (`src/c/ama_dilithium.c`) restarts on three norm checks —
+`||z||`, `||w0 - c*s2||`, `||c*t0||` — and on the hint-weight check, and every
+one of those predicates is a function of the secret vectors `s1`, `s2`, `t0`
+and of the message. Both the number of attempts and the point at which an
+attempt aborts are therefore secret-dependent control flow, **by the
+standard's construction** and identically to the pq-crystals reference
+implementation. SLH-DSA's WOTS+ chain lengths depend on the message digest,
+which depends on the secret PRF key through the randomiser `R`, in the same
+way. Neither is an AMA defect; both are properties of the algorithms as
+standardised.
+
+**What follows for the gates.** A deterministic zero-delta instruction count
+is not merely absent for these two primitives, it is *impossible*: the code
+does a different amount of work by design, so a target that demanded equality
+would fail on a correct implementation. `ML-DSA-65 sign` and
+`SLH-DSA-SHA2-256f sign` are consequently the only two info-only wall-clock
+lanes in `tests/c/test_dudect.c` with no blocking counterpart in
+`tools/check_ghash_constant_time.py`, and that is stated rather than left to
+be inferred from a flag. Every other info-only lane cites one:
+`Kyber-1024 decaps` cites `kyber-decaps`, `secp256k1 ECDSA sign` cites
+`ecdsa`, `X25519 scalarmult` cites `x25519`, and
+`X25519 scalarmult batch x4` cites `x25519-batch` — a target added because it
+was the third lane with no counterpart, and the only one of the three where a
+counterpart was possible.
+
+**What remains covered for ML-DSA and SLH-DSA.** Every primitive the loop
+calls — NTT, pointwise Montgomery multiplication, the norm checks, SHAKE — is
+branch-free on its own operands; the FIPS 203/204/205 KAT suites pin
+functional correctness; `tools/check_secret_division.py` proves no divide
+instruction in the linked object stands on a secret operand; and
+`tools/check_c_secret_zeroization.py` pins the scrubbing of every per-attempt
+intermediate, including the sponge contexts `dil_polyvec_uniform_eta` and
+`dil_polyvecl_uniform_gamma1` leave holding `rhoprime`.
+
+**What is not claimed.** That the attempt count leaks nothing. It correlates
+with the norm distribution of the secret vectors. The standard accepts this
+for the ML-DSA parameter sets and AMA claims no more than the standard does.
 
 ### Native Ed25519
 

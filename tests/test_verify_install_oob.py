@@ -309,9 +309,7 @@ class TestFailedArtefactDoesNotMisdescribeItself:
         assert match is not None, "artefact carries no pubkey"
         return match.group(1)
 
-    def test_a_wrong_anchor_does_not_claim_the_artefact_is_v1(
-        self, installed_tree: Path
-    ) -> None:
+    def test_a_wrong_anchor_does_not_claim_the_artefact_is_v1(self, installed_tree: Path) -> None:
         result = _run_tool(
             str(installed_tree),
             "--native-lib",
