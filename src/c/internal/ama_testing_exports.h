@@ -41,6 +41,7 @@
 #ifndef AMA_TESTING_EXPORTS_H
 #define AMA_TESTING_EXPORTS_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 /* --- src/c/ama_frost.c -------------------------------------------------- */
@@ -82,6 +83,46 @@ int ama_kyber_debug_cpa_roundtrip(void);
  * check working.
  */
 uint32_t ama_kyber_compress_d_for_test(uint32_t x_normalized, unsigned d);
+
+/**
+ * Shrink SampleNTT's INITIAL XOF window, so the continuation path can be
+ * reached deterministically.
+ *
+ * FIPS 203 Algorithm 7 squeezes until 256 coefficients are accepted.  The
+ * first window is four SHAKE128 blocks (448 candidates), which falls short
+ * with probability about 1e-39 — small enough that no seed a test can search
+ * for will ever exercise the loop that finishes the polynomial, and small
+ * enough that the previous implementation shipped without that loop at all.
+ * A branch that cannot be reached cannot be tested, and an untested branch on
+ * the matrix-expansion path is what let a truncating sampler survive every
+ * KAT in the tree.
+ *
+ * Setting `blocks` to 1 makes the first window 112 candidates, so EVERY seed
+ * needs at least two continuations; `tests/c/test_kyber_sample_ntt.c` then
+ * asserts the resulting matrix is byte-identical to the one the full window
+ * produces.  Values of 0 or > 4 reset to the shipped default rather than
+ * widening it: this switch exists to make the sampler work harder, never
+ * less.  Defined only under AMA_TESTING_MODE, so no production build carries
+ * the variable or the setter.
+ */
+void ama_kyber_test_set_sample_initial_blocks(unsigned int blocks);
+
+/** Report the current test-only initial window, in SHAKE128 blocks. */
+unsigned int ama_kyber_test_get_sample_initial_blocks(void);
+
+/**
+ * Test-only export of SampleNTT's resumable rejection loop.
+ *
+ * Lets the suite drive the loop across window boundaries with a crafted
+ * stream — including a window that accepts nothing — and check that the
+ * counter is carried, that coefficients land in order, and that nothing is
+ * written past `ctr`.  `coeffs` is the 256-entry array of the internal `poly`
+ * struct, which has no other member.
+ */
+unsigned int ama_kyber_test_rej_uniform_from_stream(int16_t coeffs[256],
+                                                    unsigned int ctr,
+                                                    const uint8_t *stream,
+                                                    size_t stream_len);
 
 /* --- src/c/ama_consttime.c ---------------------------------------------- */
 

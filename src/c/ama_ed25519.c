@@ -1573,6 +1573,10 @@ ama_error_t ama_ed25519_verify(
  * @param results  Output: 1=valid, 0=invalid per entry
  * @return AMA_SUCCESS if all valid, AMA_ERROR_VERIFY_FAILED if any invalid,
  *         AMA_ERROR_INVALID_PARAM on NULL inputs
+ *
+ * `results` is zeroed before any entry is verified, so every slot is written
+ * on every path that gets past the NULL check — see the public contract in
+ * include/ama_cryptography.h, which the donna shim honours identically.
  */
 ama_error_t ama_ed25519_batch_verify(
     const ama_ed25519_batch_entry *entries,
@@ -1584,6 +1588,15 @@ ama_error_t ama_ed25519_batch_verify(
     }
     if (count == 0) {
         return AMA_SUCCESS;
+    }
+
+    /* Same pre-zero as the donna shim: `results` is fully written before any
+     * per-entry work, so no path can leave a stale 1 from an earlier batch
+     * visible to a caller that reads the array before the return code.  The
+     * loop below overwrites every slot, so this costs one pass and buys the
+     * two implementations an identical, fail-closed output contract. */
+    for (size_t i = 0; i < count; i++) {
+        results[i] = 0;
     }
 
     int all_valid = 1;

@@ -277,6 +277,14 @@ if(AMA_USE_NATIVE_PQC)
     # unconditional; the argument for the reciprocal multiply otherwise lives
     # only in a comment.
     add_ama_test(test_kyber_compress test_kyber_compress.c)
+    # FIPS 203 Algorithm 7 (SampleNTT) squeezes the XOF *until* 256
+    # coefficients are accepted.  The sampler used to stop at a fixed
+    # four-block window and leave the rest of the polynomial at whatever the
+    # caller's storage held.  The shortfall has probability ~1e-39, so the
+    # continuation cannot be reached by searching seeds; this test shrinks the
+    # first window through an AMA_TESTING_MODE switch so it runs on every seed,
+    # and asserts the result is byte-identical to the full-window one.
+    add_ama_test(test_kyber_sample_ntt test_kyber_sample_ntt.c)
     add_ama_test(test_kyber_cbd2_equiv test_kyber_cbd2_equiv.c)
     # Returns 77 (CTest SKIP) when no dispatched CBD2 was exercised
     # (non-AVX2 hosts where the dispatch table leaves kyber_cbd2 NULL

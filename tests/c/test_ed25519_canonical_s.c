@@ -324,6 +324,49 @@ int main(void) {
               "SMOKE canonical public key still verifies in batch");
     }
 
+    /* The batch output contract: `results` is zeroed before any entry is
+     * verified, so no path can leave a stale 1 from an earlier batch visible
+     * to a caller that reads the array before checking the return code.  A
+     * verifier's error paths must fail towards "invalid", and a caller reusing
+     * one buffer across batches is the ordinary way to use this API.
+     *
+     * Pre-seeding the array with 1s is what makes this non-vacuous: without
+     * the zeroing the slot for a NULL-signature entry keeps the 1 it was
+     * handed, and the check below fails. */
+    {
+        ama_ed25519_batch_entry e[2];
+        int r[2] = { 1, 1 };
+        ama_error_t rc;
+
+        e[0].message = msg; e[0].message_len = sizeof(msg);
+        e[0].signature = sig; e[0].public_key = pk;
+        /* A second entry the batch must reject: the honest signature under a
+         * non-canonical public key. */
+        {
+            static uint8_t bad_pk[32];
+            memset(bad_pk, 0xff, sizeof(bad_pk));
+            bad_pk[0] = 0xed;
+            bad_pk[31] = 0x7f; /* y = p */
+            e[1].message = msg; e[1].message_len = sizeof(msg);
+            e[1].signature = sig; e[1].public_key = bad_pk;
+        }
+        rc = ama_ed25519_batch_verify(e, 2, r);
+        CHECK(rc == AMA_ERROR_VERIFY_FAILED,
+              "PIN   a batch with one bad entry returns AMA_ERROR_VERIFY_FAILED");
+        CHECK(r[0] == 1 && r[1] == 0,
+              "PIN   per-entry verdicts survive the pre-zeroing of results");
+
+        /* An argument rejection writes nothing — there is nothing safe to
+         * write — so the caller's array is left exactly as it was.  Stated as
+         * a test because the header states it. */
+        r[0] = 7; r[1] = 7;
+        rc = ama_ed25519_batch_verify(NULL, 2, r);
+        CHECK(rc == AMA_ERROR_INVALID_PARAM,
+              "PIN   a NULL entries array is AMA_ERROR_INVALID_PARAM");
+        CHECK(r[0] == 7 && r[1] == 7,
+              "PIN   an argument rejection leaves results untouched");
+    }
+
     printf("\n");
     if (failed) {
         printf("%d check(s) FAILED (%d passed)\n", failed, passed);

@@ -1668,12 +1668,18 @@ static dudect_measurement_t test_ascon_encrypt_key_independent(int iterations) {
         return (dudect_measurement_t){.t = DUDECT_FATAL_SENTINEL};
     }
 
-    uint8_t key_zero[AMA_ASCON_AEAD128_KEY_LEN];
+    /* Initialised at declaration rather than by a following memset.  The two
+     * spellings are equivalent here, but `memset(key_zero, 0, ...)` is the
+     * exact shape tools/check_c_secret_zeroization.py flags on a
+     * secret-named buffer, and this file is now inside that gate's scope.
+     * Distinguishing "set a test input to all-zero" from "scrub a live key"
+     * is not something a textual gate can do, so the declaration form keeps
+     * the intent unambiguous to both a reader and the gate. */
+    uint8_t key_zero[AMA_ASCON_AEAD128_KEY_LEN] = {0};
     uint8_t key_ones[AMA_ASCON_AEAD128_KEY_LEN];
     uint8_t nonce[AMA_ASCON_AEAD128_NONCE_LEN];
     uint8_t pt[64], ct[64], tag[AMA_ASCON_AEAD128_TAG_LEN];
 
-    memset(key_zero, 0x00, sizeof(key_zero));
     memset(key_ones, 0xFF, sizeof(key_ones));
     random_bytes(nonce, sizeof(nonce));
     memset(pt, 0xA5, sizeof(pt));

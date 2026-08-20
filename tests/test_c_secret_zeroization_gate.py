@@ -315,6 +315,31 @@ class TestScopeAndFailClosed:
         assert "ama_consttime.c" in names
         assert "ama_kyber.c" in names
 
+    def test_c_test_tree_is_in_scope(self) -> None:
+        """tests/c is scanned, not merely described as scanned.
+
+        The module docstring said "tests are deliberately in scope" while the
+        walk only ever visited ``src/c``.  Two real matches sat in ``tests/c``
+        unreported for as long as that was true.  This is the assertion that
+        makes the sentence enforceable: if the second root is ever dropped,
+        the gate stops reporting on the test tree and this fails.
+        """
+        scanned = gate.c_sources()
+        test_tree = REPO_ROOT / "tests" / "c"
+        from_tests = [p for p in scanned if test_tree in p.parents]
+        assert from_tests, "tests/c/ contributed no files to the scan"
+        names = {p.name for p in from_tests}
+        assert "test_dudect.c" in names
+        assert "test_secp256k1.c" in names
+
+    def test_both_roots_are_walked(self) -> None:
+        """Neither root may quietly stand in for the other."""
+        roots = gate.scan_roots()
+        assert gate.C_ROOT in roots
+        assert gate.TEST_C_ROOT in roots
+        for root in roots:
+            assert gate.c_sources(root), f"no C sources found under {root}"
+
     def test_missing_file_argument_is_a_usage_error(self, tmp_path: Path) -> None:
         assert gate.main([str(tmp_path / "does-not-exist.c")]) == 2
 
@@ -323,6 +348,26 @@ class TestScopeAndFailClosed:
         empty = tmp_path / "empty_src"
         empty.mkdir()
         monkeypatch.setattr(gate, "C_ROOT", empty)
+        assert gate.main([]) == 2
+
+    def test_empty_test_root_fails_closed(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An empty tests/c is an error too, even though src/c is populated.
+
+        Checking only the union would let one whole tree silently drop out of
+        the scan and still report a clean run on the strength of the other.
+        """
+        empty = tmp_path / "empty_tests_c"
+        empty.mkdir()
+        monkeypatch.setattr(gate, "TEST_C_ROOT", empty)
+        assert gate.main([]) == 2
+
+    def test_missing_test_root_fails_closed(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A tests/c that is not there at all is an error, not a skip."""
+        monkeypatch.setattr(gate, "TEST_C_ROOT", tmp_path / "absent")
         assert gate.main([]) == 2
 
 

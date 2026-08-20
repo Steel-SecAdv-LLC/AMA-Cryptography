@@ -51,15 +51,29 @@ generation — which is exactly why the first three families cannot test it:
 3. **Structured corruption** — single-bit flips across ``R``, ``S``, the
    message and the public key, plus out-of-range ``S`` values at the ``L``
    boundary.
-4. **Compressed-point decode** (INVARIANT-38) — canonical and non-canonical
-   encodings of the same curve point, put to ``ama_ed25519_point_add`` and
-   ``ama_ed25519_scalarmult_public`` rather than to verify.  Families 1-3
-   cannot test the canonical-``y`` rule: a non-canonical public key is not the
-   signer's key, so verify rejects it on the signature regardless and the two
-   backends agree without either having applied the rule.  Family 4 pairs
-   ``y = 0`` (must decode) with ``y = p`` — the same point, non-canonically
-   encoded (must be refused) — so a backend that dropped the rule, or applied
-   it on only some entry points, becomes a disagreement.
+4. **Compressed-point decode** (INVARIANT-38, and RFC 8032 §5.1.3) — canonical
+   and non-canonical encodings of the same curve point, put to
+   ``ama_ed25519_point_add`` and ``ama_ed25519_scalarmult_public`` rather than
+   to verify.  Families 1-3 cannot test either decode rule: a rejected
+   encoding is not the signer's key, so verify rejects it on the signature
+   regardless and the two backends agree without either having applied the
+   rule.  Family 4 pairs each must-reject encoding with a must-decode twin, so
+   a backend that dropped a rule — or applied it on only some entry points, or
+   "implemented" it by over-rejecting — becomes a disagreement:
+
+   * canonical ``y``: ``y = 0`` (must decode) against ``y = p``, the same point
+     non-canonically encoded (must be refused);
+   * the x-sign rule: ``y = 1`` and ``y = p - 1`` — the only two points with
+     ``x = 0``, hence the only two encodings §5.1.3 discriminates — each with
+     the sign bit set (must be refused) and clear (must decode), plus ``y = 0``
+     with the sign bit set (must decode, because ``x != 0`` there) and 2G in
+     both parities.
+
+   The x-sign entries were added after a measurement: with them absent, the
+   rule was removed from the fe51 sources only, and this gate reported "both
+   backends agree on every case" and exited 0 over two libraries that
+   demonstrably disagreed.  The corpus is the gate; an encoding it does not
+   contain is a rule it does not check.
 
 Exit status
 -----------
@@ -322,21 +336,56 @@ def build_cases(signer: Backend) -> list[Case]:
 #: only on one entry point) show up as a disagreement instead of a silent pass.
 _P_ENC = bytes([0xED] + [0xFF] * 30 + [0x7F])  # y = p, non-canonical
 _ZERO_ENC = bytes(32)  # y = 0, canonical, same point
-_ONE_ENC = bytes([1] + [0] * 31)  # y = 1, the identity
+_ONE_ENC = bytes([1] + [0] * 31)  # y = 1, the identity (x = 0)
 _MAX_ENC = bytes([0xFF] * 31 + [0x7F])  # y = 2^255 - 1, non-canonical
-_PM1_ENC = bytes([0xEC] + [0xFF] * 30 + [0x7F])  # y = p - 1, canonical
+_PM1_ENC = bytes([0xEC] + [0xFF] * 30 + [0x7F])  # y = p - 1 = -1, the order-2 point
 _TWO_SCALAR = bytes([2] + [0] * 31)  # small scalar for the scalarmult probe
 
+#: The two x = 0 points with the x-sign bit SET.  RFC 8032 §5.1.3 step 3: "if
+#: x = 0, and x_0 = 1, decoding fails."  These are the ONLY two encodings in
+#: the whole 2^255 space that the rule discriminates, because x = 0 holds for
+#: exactly two y values — y = 1 (the identity) and y = -1 (the order-2 point).
+#:
+#: They were missing from this corpus for the whole life of the rule they
+#: exist to police.  The gate's own docstring says a one-sided fix "on x86-64
+#: nothing would have noticed", and that is what happened to the gate itself:
+#: removing the rule from the fe51 backend only, rebuilding, and running this
+#: tool over the two libraries printed "both backends agree on every case" and
+#: exited 0.  The nearest thing the corpus did contain — y = p with the sign
+#: bit set — is refused by the OLDER canonical-y rule before the sign is ever
+#: consulted, so it discriminates nothing about this one.
+_ONE_SIGN_ENC = bytes([0x01] + [0x00] * 30 + [0x80])  # y = 1,   x_0 = 1
+_PM1_SIGN_ENC = bytes([0xEC] + [0xFF] * 30 + [0xFF])  # y = p-1, x_0 = 1
+
+#: y = 0 with the sign bit set.  The control for the pair above: y = 0 gives
+#: x^2 = -1, which is a non-zero square mod p, so x != 0 and §5.1.3 does NOT
+#: apply — this encoding must still decode.  A backend that "implemented" the
+#: rule by refusing every set sign bit passes the two rejects above and fails
+#: here, which is what keeps the rejects from being satisfiable by
+#: over-rejection.
+_ZERO_SIGN_ENC = bytes(31) + bytes([0x80])
+
+#: An ordinary on-curve point, 2G, in both sign parities.  Neither has x = 0,
+#: so both must decode; this catches a backend that over-rejects generally.
+#: Value from RFC 8032 §7.1's curve arithmetic, cross-checked against
+#: tests/test_ed25519_canonical_y.py.
+_TWO_G_ENC = bytes.fromhex("c9a3f86aae465f0e56513864510f3997561fa2c9e85ea21dc2292309f3cd6022")
+_TWO_G_SIGN_ENC = _TWO_G_ENC[:31] + bytes([_TWO_G_ENC[31] ^ 0x80])
+
 #: ``expected`` is True (must decode), False (must be refused), or None
-#: (no absolute requirement — the two backends must merely agree).  y = p-1 is
-#: canonical but is not on the curve, so only agreement is asserted for it.
+#: (no absolute requirement — the two backends must merely agree).
 DECODE_CASES: tuple[tuple[str, bytes, Optional[bool]], ...] = (
     ("y=0 (canonical, decodes)", _ZERO_ENC, True),
+    ("y=0 with sign bit set (x != 0, still decodes)", _ZERO_SIGN_ENC, True),
     ("y=1 (canonical identity, decodes)", _ONE_ENC, True),
+    ("y=1 with x-sign set (RFC 8032 5.1.3, x=0)", _ONE_SIGN_ENC, False),
+    ("y=p-1 (the order-2 point, decodes)", _PM1_ENC, True),
+    ("y=p-1 with x-sign set (RFC 8032 5.1.3, x=0)", _PM1_SIGN_ENC, False),
     ("y=p (non-canonical twin of y=0)", _P_ENC, False),
     ("y=p with sign bit set", bytes([0xED] + [0xFF] * 30 + [0xFF]), False),
     ("y=2^255-1 (non-canonical)", _MAX_ENC, False),
-    ("y=p-1 (largest canonical y, off-curve)", _PM1_ENC, None),
+    ("2G (ordinary on-curve point, decodes)", _TWO_G_ENC, True),
+    ("2G with the other sign parity (decodes)", _TWO_G_SIGN_ENC, True),
 )
 
 

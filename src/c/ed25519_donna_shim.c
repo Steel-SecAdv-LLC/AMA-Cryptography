@@ -244,6 +244,19 @@ ama_error_t ama_ed25519_batch_verify(
         return AMA_ERROR_INVALID_PARAM;
     }
 
+    /* Every return past this point leaves `results` fully written, so the
+     * header's "exactly `count` are written" holds on the error paths too.
+     * Without this, an allocation failure or the overflow rejection above
+     * returned with the caller's array untouched — and a caller that reuses
+     * one buffer across batches, or that reads `results` before checking the
+     * return code, would see stale 1s from an earlier successful batch and
+     * read them as valid signatures.  Zeroing first makes the failure mode
+     * "everything invalid", which is the direction a verifier must fail in.
+     * `results` is known non-NULL and `count` is bounded above. */
+    for (size_t i = 0; i < count; i++) {
+        results[i] = 0;
+    }
+
     /* Allocate pointer arrays for donna's batch verify interface */
     const unsigned char **msgs = (const unsigned char **)malloc(count * sizeof(const unsigned char *));
     size_t *mlens = (size_t *)malloc(count * sizeof(size_t));

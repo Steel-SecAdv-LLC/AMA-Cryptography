@@ -496,8 +496,13 @@ int main(void) {
              * untrue: the key-range rejection returned before reaching the
              * function's scrub, leaving both the caller's buffer and the
              * private-key scalar `d` untouched on the stack. */
-            uint8_t zero_priv[32], expect_zero[AMA_SECP256K1_ECDSA_RAW_SIG_LEN];
-            memset(zero_priv, 0, sizeof zero_priv);
+            /* `zero_priv` is initialised at declaration: this is a test
+             * INPUT set to the all-zero scalar, not a scrub of live key
+             * material, and the memset spelling is what
+             * tools/check_c_secret_zeroization.py flags on a secret-named
+             * buffer now that tests/c is inside its scope. */
+            uint8_t zero_priv[32] = {0};
+            uint8_t expect_zero[AMA_SECP256K1_ECDSA_RAW_SIG_LEN];
             memset(expect_zero, 0, sizeof expect_zero);
             memset(raw, 0xAA, sizeof raw);
             TEST_ASSERT(ama_secp256k1_ecdsa_sign_raw(raw, digest, zero_priv) != AMA_SUCCESS,

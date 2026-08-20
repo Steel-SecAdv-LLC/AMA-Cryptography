@@ -39,9 +39,13 @@ having it.
 memory barrier defeat the dead-store elimination the as-if rule permits on a
 plain ``memset`` whose result is never read (CWE-226).
 
-Scope: ``src/c/**/*.c`` and ``src/c/**/*.h``, excluding ``src/c/vendor/``
-(third-party code this project does not rewrite).  Tests are deliberately in
-scope — a test that bare-memsets a secret exercises the same anti-pattern.
+Scope: ``src/c/**`` and ``tests/c/**`` (``*.c`` and ``*.h``), excluding any
+``vendor/`` subtree (third-party code this project does not rewrite).  Tests
+are deliberately in scope — a test that bare-memsets a secret exercises the
+same anti-pattern.  That sentence predates the second root by some months: the
+scan walked ``src/c`` only, so the stated scope was an intention rather than a
+behaviour, and two matches in ``tests/c`` went unreported for as long as it
+said so.  ``tests/test_c_secret_zeroization_gate.py`` now pins both roots.
 
 Exit status: 0 when clean, 1 on any finding, 2 on a usage error.  A tree with
 no C sources is an error, not a pass: that means the scan pointed nowhere.
@@ -57,6 +61,13 @@ from typing import NamedTuple, Sequence
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 C_ROOT = REPO_ROOT / "src" / "c"
+#: The C test tree.  The module docstring has always said tests are in scope —
+#: "a test that bare-memsets a secret exercises the same anti-pattern" — but
+#: the scan only ever walked C_ROOT, so the sentence described an intention
+#: rather than the gate's behaviour.  Two real matches were sitting in
+#: tests/c/ the whole time.  A second root, walked with the same exclusions
+#: and the same fail-closed empty check, makes the stated scope the real one.
+TEST_C_ROOT = REPO_ROOT / "tests" / "c"
 EXCLUDED_DIRS = ("vendor",)
 
 # The destination-name test, character-for-character the semgrep rule's regex.
@@ -218,23 +229,39 @@ class Finding(NamedTuple):
         )
 
 
+def scan_roots() -> list[Path]:
+    """The directory trees this gate walks, read at CALL time.
+
+    Read at call time rather than bound as defaults so a test can rebind
+    :data:`C_ROOT` or :data:`TEST_C_ROOT` and have :func:`main`'s fail-closed
+    empty-scan guard actually see the rebinding.
+    """
+    return [C_ROOT, TEST_C_ROOT]
+
+
 def c_sources(root: Path | None = None) -> list[Path]:
     """Every first-party C source and header, vendored code excluded.
 
-    ``root`` defaults to :data:`C_ROOT` read at CALL time, not bound as a
-    default argument: a default would capture the module global at import and
-    then ignore any later rebinding, which would leave the fail-closed
-    empty-scan guard in :func:`main` unable to see the root it is guarding.
+    With no argument this walks BOTH scan roots — the library sources and the
+    C test tree — because a test that bare-memsets a secret exercises exactly
+    the anti-pattern INVARIANT-6 exists to prevent, and because a gate whose
+    documented scope is wider than its actual scope is a gate that reports
+    "clean" over code it never opened.
+
+    ``root`` selects a single tree, which is what the scope tests use.
     """
-    root = C_ROOT if root is None else root
+    roots = scan_roots() if root is None else [root]
     out: list[Path] = []
-    for path in sorted(root.rglob("*")):
-        if path.suffix not in (".c", ".h") or not path.is_file():
+    for scan_root in roots:
+        if not scan_root.is_dir():
             continue
-        if any(part in EXCLUDED_DIRS for part in path.relative_to(root).parts):
-            continue
-        out.append(path)
-    return out
+        for path in sorted(scan_root.rglob("*")):
+            if path.suffix not in (".c", ".h") or not path.is_file():
+                continue
+            if any(part in EXCLUDED_DIRS for part in path.relative_to(scan_root).parts):
+                continue
+            out.append(path)
+    return sorted(set(out))
 
 
 def blank_comments_and_literals(text: str) -> str:
@@ -388,13 +415,23 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(f"ERROR: not a file: {path}", file=sys.stderr)
             return 2
     else:
-        if not C_ROOT.is_dir():
-            print(f"ERROR: C source root not found: {C_ROOT}", file=sys.stderr)
+        missing_roots = [r for r in scan_roots() if not r.is_dir()]
+        if missing_roots:
+            for root in missing_roots:
+                print(f"ERROR: C source root not found: {root}", file=sys.stderr)
             return 2
+        # Fail closed PER ROOT, not on the union.  Checking only the total
+        # would let a walk that silently stopped covering one whole tree pass
+        # on the strength of the other — which is the failure this gate is
+        # being widened to fix, one level up.
+        for root in scan_roots():
+            if not c_sources(root):
+                print(f"ERROR: no C sources found under {root}", file=sys.stderr)
+                return 2
         targets = c_sources()
         if not targets:
             # Fail closed: an empty scan is a broken scan, not a clean tree.
-            print(f"ERROR: no C sources found under {C_ROOT}", file=sys.stderr)
+            print("ERROR: no C sources found under any scan root", file=sys.stderr)
             return 2
 
     findings = audit(targets)

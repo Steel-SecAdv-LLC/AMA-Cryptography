@@ -63,12 +63,16 @@ class _StubBackend:
         name: str,
         *,
         canonical_y: bool = True,
+        x_sign_rule: bool = True,
         verify_override: Optional[Callable[[bytes, bytes, bytes], bool]] = None,
         issued: Optional[set[tuple[bytes, bytes, bytes]]] = None,
     ) -> None:
         self.name = name
         self.path = Path(f"/stub/{name}.so")
         self.canonical_y = canonical_y
+        #: Whether this stub applies RFC 8032 §5.1.3.  Switchable so a test can
+        #: build the one-sided backend pair the gate exists to catch.
+        self.x_sign_rule = x_sign_rule
         self._verify_override = verify_override
         # Shared across the pair: the harness signs with each backend in turn
         # and cross-verifies every case with BOTH, so a signature minted by
@@ -99,12 +103,26 @@ class _StubBackend:
         return (message, signature, public_key) in self._issued
 
     def _decodes(self, encoding: bytes) -> bool:
+        """Model the two decode rules the shipped backends apply.
+
+        An earlier version of this stub returned ``y != P - 1``, on the belief
+        that ``y = p - 1`` was off-curve.  It is not: ``y = -1`` gives
+        ``x^2 = (y^2 - 1)/(d y^2 + 1) = 0``, so it is the order-2 point and both
+        real backends decode it (verified against
+        ``build/lib/libama_cryptography.so`` through ``ama_ed25519_point_add``).
+        Modelling it as a reject is what let DECODE_CASES carry ``None`` — no
+        absolute expectation — for one of the only two encodings the RFC 8032
+        §5.1.3 x-sign rule discriminates.
+        """
         y = int.from_bytes(encoding, "little") & ((1 << 255) - 1)
+        x_sign = encoding[31] >> 7
         if self.canonical_y and y >= P:
             return False
-        # y = p - 1 is canonical but off-curve; both backends reject it, and
-        # DECODE_CASES marks its expectation None for that reason.
-        return y != P - 1
+        # RFC 8032 §5.1.3: "if x = 0, and x_0 = 1, decoding fails".  x = 0 for
+        # exactly two y values, y = 1 and y = p - 1.
+        if x_sign and (y == 1 or y == P - 1) and self.x_sign_rule:
+            return False
+        return True
 
     def point_add(self, p_enc: bytes, q_enc: bytes) -> bool:
         return self._decodes(p_enc) and self._decodes(q_enc)
@@ -159,6 +177,22 @@ class TestDivergenceIsCaught:
         batch path was fixed.
         """
         rc = _run(tool, monkeypatch, *_pair(donna_canonical_y=True, fe51_canonical_y=False))
+        assert rc == 1
+
+    def test_one_backend_missing_the_x_sign_rule_fails(
+        self, tool: ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """RFC 8032 §5.1.3 applied to one backend only must be a disagreement.
+
+        This is the rule the branch added to BOTH backends independently, and
+        the corpus could not see it: with the x-sign cases absent, deleting the
+        rule from the fe51 sources, rebuilding, and running the real gate over
+        the two real libraries printed "both backends agree on every case" and
+        exited 0.  A gate whose whole purpose is catching a one-sided fix must
+        fail here, so this is the control that keeps the discriminating
+        encodings in DECODE_CASES.
+        """
+        rc = _run(tool, monkeypatch, *_pair(donna_x_sign_rule=True, fe51_x_sign_rule=False))
         assert rc == 1
 
     def test_a_backend_that_accepts_everything_fails(
@@ -259,6 +293,48 @@ class TestCorpusShape:
         expectations = {label: expected for label, _enc, expected in tool.DECODE_CASES}
         assert any("y=0" in label and expected is True for label, expected in expectations.items())
         assert any("y=p" in label and expected is False for label, expected in expectations.items())
+
+    def test_decode_cases_discriminate_the_x_sign_rule(self, tool: ModuleType) -> None:
+        """The x = 0 encodings, in both parities, with absolute expectations.
+
+        RFC 8032 §5.1.3 ("if x = 0, and x_0 = 1, decoding fails") is decided by
+        exactly two encodings, because x = 0 holds for exactly two y values:
+        y = 1 and y = p - 1.  Both must appear with the sign bit SET and an
+        expectation of False, and both must appear with it CLEAR and an
+        expectation of True — the paired accept is what stops a backend
+        satisfying the rejects by refusing every set sign bit.  y = 0 with the
+        sign bit set must be accepted for the same reason: x != 0 there, so the
+        rule does not apply to it.
+        """
+        one = bytes([0x01] + [0x00] * 31)
+        one_signed = bytes([0x01] + [0x00] * 30 + [0x80])
+        pm1 = bytes([0xEC] + [0xFF] * 30 + [0x7F])
+        pm1_signed = bytes([0xEC] + [0xFF] * 30 + [0xFF])
+        zero_signed = bytes(31) + bytes([0x80])
+
+        by_encoding = {enc: expected for _label, enc, expected in tool.DECODE_CASES}
+        assert by_encoding.get(one_signed) is False, "y=1 with x-sign set must be refused"
+        assert by_encoding.get(pm1_signed) is False, "y=p-1 with x-sign set must be refused"
+        assert by_encoding.get(one) is True, "y=1 must decode (the paired accept)"
+        assert by_encoding.get(pm1) is True, "y=p-1 is the order-2 point and must decode"
+        assert by_encoding.get(zero_signed) is True, "y=0 has x != 0; the rule must not apply"
+
+    def test_decode_cases_include_an_ordinary_point_in_both_parities(
+        self, tool: ModuleType
+    ) -> None:
+        """An over-rejecting backend must be caught, not only an under-rejecting one.
+
+        Every other decode case is a special point.  2G is an ordinary one, and
+        both sign parities of it are legal, so a backend that started refusing
+        set sign bits wholesale fails here.
+        """
+        two_g = bytes.fromhex(
+            "c9a3f86aae465f0e56513864510f3997561fa2c9e85ea21dc2292309f3cd6022"
+        )
+        two_g_flipped = two_g[:31] + bytes([two_g[31] ^ 0x80])
+        by_encoding = {enc: expected for _label, enc, expected in tool.DECODE_CASES}
+        assert by_encoding.get(two_g) is True
+        assert by_encoding.get(two_g_flipped) is True
 
     def test_with_s_rejects_an_oversized_scalar(self, tool: ModuleType) -> None:
         """A silent reduction mod 2^256 would change the case under test."""

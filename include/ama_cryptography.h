@@ -1309,7 +1309,33 @@ typedef struct {
  *                  0=invalid). There is no capacity parameter, so a
  *                  short array is undefined behaviour.
  * @return AMA_SUCCESS if all verified, AMA_ERROR_VERIFY_FAILED if any failed,
- *         AMA_ERROR_INVALID_PARAM if entries or results is NULL
+ *         AMA_ERROR_INVALID_PARAM if entries or results is NULL,
+ *         AMA_ERROR_MEMORY if the per-entry working arrays could not be
+ *         allocated, or AMA_ERROR_CRYPTO if the batch randomizers could not
+ *         be drawn.
+ *
+ * The last one is a fail-closed return and not merely an error to log: the
+ * donna batch path's soundness argument rests on unpredictable per-entry
+ * randomizers, and with an all-zero randomizer vector the aggregate check
+ * collapses to the identity and reports every entry valid. When the CSPRNG
+ * draw fails, every `results[i]` is set to 0 and this code is returned,
+ * ahead of the canonical-S and canonical-y loops. A caller MUST therefore
+ * treat any non-`AMA_SUCCESS` return as "nothing in this batch is verified"
+ * rather than switching only on `AMA_ERROR_VERIFY_FAILED`.
+ *
+ * Once the arguments are accepted, all `count` slots of `results` are
+ * written and none carries a 1 unless that entry verified — the array is
+ * zeroed up front, so the allocation-failure and CSPRNG-failure paths cannot
+ * leave a stale 1 from an earlier batch visible to a caller that reads
+ * `results` before the return code.
+ *
+ * The two argument-rejection returns write nothing, because at that point
+ * there is nothing safe to write: `AMA_ERROR_INVALID_PARAM` for a NULL
+ * `entries` or `results`, and for a `count` so large that `count *
+ * sizeof(void *)` would overflow — a `count` that by definition does not
+ * describe a real array, so touching `results[0..count)` would be the wild
+ * write the check exists to prevent. Both are caller errors detected before
+ * any work; on either, `results` holds whatever it held before the call.
  */
 AMA_API ama_error_t ama_ed25519_batch_verify(
     const ama_ed25519_batch_entry *entries,

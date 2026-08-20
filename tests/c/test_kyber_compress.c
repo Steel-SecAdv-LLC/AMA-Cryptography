@@ -37,7 +37,7 @@
  *   2. The `mod 2^d` contract — the helper, not the caller, applies the mask.
  *   3. No 64-bit intermediate can overflow anywhere in the domain.
  *   4. Why the single 64-bit constant, and not five 32-bit ones.
- *   5. The mask is defined (not UB) for every width the signature admits.
+ *   5. The declared width domain is exact, and widths outside it are refused.
  */
 
 #include "ama_cryptography.h"
@@ -266,33 +266,110 @@ static int test_derived_constant_vs_per_width(void) {
     return failures;
 }
 
-static int test_mask_is_defined_for_every_width(void) {
-    /* The helper takes `unsigned d`.  Nothing in the type system stops a
-     * future caller passing 32, and `(1u << 32)` is undefined behaviour
-     * (C11 6.5.7p3), not a wrap to zero.  The guard makes the mask defined;
-     * this asserts it is also SANE — a full-width mask, i.e. no truncation of
-     * a value the caller did not ask to have truncated. */
-    uint32_t x = 1u;
+/* The widest width the reciprocal is exact at; mirrors
+ * AMA_KYBER_COMPRESS_MAX_D in src/c/ama_kyber.c.  Transcribed rather than
+ * included because the constant lives in a .c file, and TEST 5 below is what
+ * keeps the transcription honest: it enumerates the boundary from both sides,
+ * so a change to the implementation's bound that is not mirrored here fails
+ * the test rather than passing quietly. */
+#define TEST_COMPRESS_MAX_D 18u
+
+static int test_declared_domain_is_exact(void) {
+    /* TEST 5 used to check ONE coefficient (x = 1) at d in [30, 34] and
+     * conclude the helper was correct at every width its `unsigned d`
+     * signature admits.  x = 1 is the wrong probe: the Granlund-Montgomery
+     * identity fails only once the numerator passes 2^40/e = 346,084,868, and
+     * with x = 1 that needs d >= 39 — so the check agreed with the
+     * specification for a reason that had nothing to do with the property it
+     * named, and it agreed for every x it never tried.  Enumerated over the
+     * real coefficient domain, the implementation of that era disagreed with
+     * FIPS 203 at 2,791 of 3,329 coefficients at d = 30.
+     *
+     * The helper now declares a bounded width domain and refuses outside it.
+     * This enumerates BOTH sides of that boundary:
+     *   - every (x, d) with x in [0, q-1] and d in [1, MAX_D] equals the spec;
+     *   - every width outside that range returns the documented refusal.
+     * That makes the bound a measured result rather than a claim, and it is
+     * the check that fails if the implementation's bound is ever widened past
+     * the interval where the reciprocal is exact. */
     unsigned d;
+    uint32_t x;
+    unsigned long long checked = 0;
     int failures = 0;
 
-    printf("TEST 5: the mask stays defined at widths the signature admits\n");
-    for (d = 30u; d <= 34u; d++) {
-        /* Keep the shift itself in range: x << d must be defined for the
-         * uint64_t it is performed in, which holds for d <= 63. */
-        uint32_t got = ama_kyber_compress_d_for_test(x, d);
-        uint64_t n = ((uint64_t)x << d) + (KYBER_Q / 2);
-        uint64_t quotient = n / (uint64_t)KYBER_Q;
-        uint64_t expected = (d >= 32u)
-                                ? (quotient & 0xFFFFFFFFULL)
-                                : (quotient & ((((uint64_t)1u) << d) - 1u));
-        if ((uint64_t)got != expected) {
-            printf("  FAIL d=%u: got %u expected %llu\n",
-                   d, (unsigned)got, (unsigned long long)expected);
+    printf("TEST 5: the declared width domain is exact, and outside it the "
+           "helper refuses\n");
+
+    for (d = 1u; d <= TEST_COMPRESS_MAX_D; d++) {
+        unsigned long long mismatches = 0;
+        for (x = 0; x < KYBER_Q; x++) {
+            uint32_t expected = spec_compress_d(x, d);
+            uint32_t actual = ama_kyber_compress_d_for_test(x, d);
+            if (expected != actual) {
+                if (mismatches < 3u) {
+                    printf("  FAIL d=%u x=%u: spec=%u impl=%u\n",
+                           d, (unsigned)x, (unsigned)expected, (unsigned)actual);
+                }
+                mismatches++;
+            }
+            checked++;
+        }
+        if (mismatches) {
+            printf("  d=%-2u  %llu mismatch(es)\n", d, mismatches);
             failures++;
         }
     }
-    printf("  d in [30, 34]  %s\n\n", failures ? "FAIL" : "OK");
+    printf("  d in [1, %u] x [0, %d]: %llu pairs, %s\n",
+           TEST_COMPRESS_MAX_D, KYBER_Q - 1, checked, failures ? "FAIL" : "OK");
+
+    /* Outside the declared domain: d = 0 (a zero-width compression is not a
+     * FIPS 203 operation) and every d from MAX_D+1 upward, including widths
+     * where the old code shifted into undefined behaviour. */
+    {
+        const unsigned refused[] = {0u, TEST_COMPRESS_MAX_D + 1u, 19u, 31u,
+                                    32u, 33u, 63u, 64u, 255u, 4096u};
+        unsigned i;
+        int refusal_failures = 0;
+        for (i = 0; i < (unsigned)(sizeof(refused) / sizeof(refused[0])); i++) {
+            for (x = 0; x < KYBER_Q; x += 337u) { /* stride: 10 probes per width */
+                uint32_t got = ama_kyber_compress_d_for_test(x, refused[i]);
+                if (got != 0u) {
+                    printf("  FAIL d=%u x=%u: expected the refusal value 0, got %u\n",
+                           refused[i], (unsigned)x, (unsigned)got);
+                    refusal_failures++;
+                }
+            }
+        }
+        printf("  widths outside [1, %u] refuse  %s\n",
+               TEST_COMPRESS_MAX_D, refusal_failures ? "FAIL" : "OK");
+        failures += refusal_failures ? 1 : 0;
+    }
+
+    /* And the boundary is TIGHT: one width past the declared maximum, the
+     * reciprocal really does disagree with the specification, so MAX_D is not
+     * silently leaving exact widths on the table either.  Computed here from
+     * the reciprocal's own constants rather than from the helper (which
+     * refuses at that width), because the point is the arithmetic, not the
+     * guard. */
+    {
+        const uint64_t M = 330282857ULL;
+        unsigned long long disagreements = 0;
+        for (x = 0; x < KYBER_Q; x++) {
+            uint64_t n = ((uint64_t)x << (TEST_COMPRESS_MAX_D + 1u)) + (KYBER_Q / 2);
+            uint32_t recip = (uint32_t)((n * M) >> 40);
+            uint32_t exact = (uint32_t)(n / (uint64_t)KYBER_Q);
+            if (recip != exact) {
+                disagreements++;
+            }
+        }
+        printf("  d=%u (one past the bound): %llu/%d coefficients disagree  %s\n\n",
+               TEST_COMPRESS_MAX_D + 1u, disagreements, KYBER_Q,
+               disagreements ? "OK (bound is tight)" : "FAIL (bound is too low)");
+        if (disagreements == 0u) {
+            failures++;
+        }
+    }
+
     return failures;
 }
 
@@ -305,7 +382,7 @@ int main(void) {
     failures += test_mod_2d_contract();
     failures += test_no_intermediate_overflow();
     failures += test_derived_constant_vs_per_width();
-    failures += test_mask_is_defined_for_every_width();
+    failures += test_declared_domain_is_exact();
 
     if (failures) {
         printf("=== FAILED (%d test group(s)) ===\n", failures);

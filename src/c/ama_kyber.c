@@ -302,48 +302,55 @@ static void polyvec_decompress(polyvec* r, const uint8_t* a, const kyber_params*
     }
 }
 
-/**
- * Sample polynomial uniformly from SHAKE128 stream (for matrix A)
- */
-static void kyber_poly_uniform(poly* a, const uint8_t seed[32], uint8_t x, uint8_t y) {
-    uint8_t buf[34];
-    uint8_t stream[672];  /* Sufficient for rejection sampling */
-    unsigned int ctr, pos;
-    uint16_t val0, val1;
-
-    memcpy(buf, seed, 32);
-    buf[32] = x;
-    buf[33] = y;
-
-    ama_shake128(buf, 34, stream, sizeof(stream));
-
-    ctr = 0;
-    pos = 0;
-    while (ctr < KYBER_N && pos + 3 <= sizeof(stream)) {
-        val0 = ((stream[pos] | ((uint16_t)stream[pos + 1] << 8)) & 0xFFF);
-        val1 = ((stream[pos + 1] >> 4) | ((uint16_t)stream[pos + 2] << 4)) & 0xFFF;
-        pos += 3;
-
-        if (val0 < KYBER_Q) {
-            a->coeffs[ctr++] = (int16_t)val0;
-        }
-        if (ctr < KYBER_N && val1 < KYBER_Q) {
-            a->coeffs[ctr++] = (int16_t)val1;
-        }
-    }
-}
-
-/**
- * Rejection-sample one polynomial from an already-squeezed SHAKE128
- * stream window.  Returns 1 if all KYBER_N coefficients were filled,
- * 0 if the stream was exhausted first.
+/* SHAKE128 rate, in bytes: the granularity at which SampleNTT extends its
+ * XOF window.  Stated as its own constant because two properties depend on
+ * the exact value and neither is obvious at a call site:
  *
- * Byte-for-byte equivalent to the rejection loop in kyber_poly_uniform().
+ *   - 168 is divisible by 3, so a 3-octet candidate group never straddles a
+ *     block boundary.  That is what lets the continuation below resume at
+ *     `pos = 0` in the fresh block with nothing carried over; FIPS 203
+ *     Algorithm 7 consumes the stream in 3-octet groups and a rate that was
+ *     NOT a multiple of 3 would require carrying the remainder forward.
+ *   - it must equal the 4-way kernel's rate, or the scalar and batched paths
+ *     would extend their windows by different amounts and diverge.
  */
-static int kyber_rej_uniform_from_stream(poly *a,
-                                          const uint8_t *stream, size_t stream_len)
+#define KYBER_XOF_BLOCKBYTES 168u
+
+/* The initial squeeze, in blocks.  4 blocks = 672 octets = 224 candidate
+ * groups = 448 candidates; at ML-KEM's 3329/4096 acceptance rate the expected
+ * yield is 364.2 with sd 8.25, so 256 is 13.1 sd below the mean.  This is the
+ * same first-window budget the pq-crystals reference uses (its
+ * GEN_MATRIX_NBLOCKS rounds up to 4 for a 168-octet rate) — but a budget is
+ * not a guarantee, which is what the continuation loops below exist for. */
+#define KYBER_XOF_INITIAL_BLOCKS 4u
+
+_Static_assert(KYBER_XOF_BLOCKBYTES % 3u == 0u,
+               "SampleNTT consumes the XOF in 3-octet groups; a rate that is "
+               "not a multiple of 3 would strand bytes at every block boundary");
+_Static_assert(KYBER_XOF_BLOCKBYTES == AMA_SHAKE128_X4_RATE,
+               "the scalar and 4-way SampleNTT paths must extend their XOF "
+               "windows by the same amount or their outputs diverge");
+
+/**
+ * Rejection-sample coefficients from an already-squeezed SHAKE128 window,
+ * continuing from `ctr`, and return the updated counter.
+ *
+ * FIPS 203 Algorithm 7 (SampleNTT) consumes the XOF in 3-octet groups, each
+ * carrying two 12-bit candidates, and accepts a candidate iff it is < q.
+ * `stream_len` must be a multiple of 3 (every caller passes a whole number of
+ * rate blocks, and KYBER_XOF_BLOCKBYTES is asserted divisible by 3 above), so
+ * no partial group is left behind for the next window to carry.
+ *
+ * Taking and returning the counter is what makes the sampler resumable: the
+ * caller squeezes another block and calls again, exactly as the reference
+ * implementation does.  The previous form returned a 1/0 "did it fit" flag
+ * and discarded the partial progress, which left the caller with no way to
+ * finish the polynomial.
+ */
+static unsigned int kyber_rej_uniform_from_stream(poly *a, unsigned int ctr,
+                                                 const uint8_t *stream,
+                                                 size_t stream_len)
 {
-    unsigned int ctr = 0;
     size_t pos = 0;
 
     while (ctr < KYBER_N && pos + 3 <= stream_len) {
@@ -359,7 +366,87 @@ static int kyber_rej_uniform_from_stream(poly *a,
         }
     }
 
-    return (ctr == KYBER_N) ? 1 : 0;
+    return ctr;
+}
+
+#ifdef AMA_TESTING_MODE
+/* Test-only window size for the initial squeeze, so the continuation path can
+ * be reached on EVERY seed rather than on none.  See the header declaration in
+ * src/c/internal/ama_testing_exports.h for why a probability-1e-39 branch
+ * needs a deterministic way in. */
+static unsigned int kyber_sample_initial_blocks = KYBER_XOF_INITIAL_BLOCKS;
+
+void ama_kyber_test_set_sample_initial_blocks(unsigned int blocks) {
+    kyber_sample_initial_blocks =
+        (blocks == 0u || blocks > KYBER_XOF_INITIAL_BLOCKS)
+            ? KYBER_XOF_INITIAL_BLOCKS
+            : blocks;
+}
+
+unsigned int ama_kyber_test_get_sample_initial_blocks(void) {
+    return kyber_sample_initial_blocks;
+}
+
+unsigned int ama_kyber_test_rej_uniform_from_stream(int16_t coeffs[256],
+                                                   unsigned int ctr,
+                                                   const uint8_t *stream,
+                                                   size_t stream_len) {
+    /* `poly` is a struct whose sole member is `int16_t coeffs[KYBER_N]`, so
+     * the cast below is the identity on layout; going through the real
+     * function keeps the test on the shipped rejection loop rather than a
+     * copy of it. */
+    return kyber_rej_uniform_from_stream((poly *)(void *)coeffs, ctr,
+                                         stream, stream_len);
+}
+#define KYBER_SAMPLE_INITIAL_BLOCKS ((size_t)kyber_sample_initial_blocks)
+#else
+#define KYBER_SAMPLE_INITIAL_BLOCKS ((size_t)KYBER_XOF_INITIAL_BLOCKS)
+#endif
+
+/**
+ * Sample one matrix entry uniformly from a SHAKE128 stream — FIPS 203
+ * Algorithm 7, SampleNTT.
+ *
+ * The XOF is streamed incrementally and the loop runs until all KYBER_N
+ * coefficients have been accepted.  The previous implementation squeezed a
+ * FIXED 672-octet window and stopped when it ran out, leaving
+ * `a->coeffs[ctr .. 255]` at whatever the caller's storage happened to hold —
+ * uninitialised stack for `mat[i].vec[j]` in kyber_gen_matrix().  A matrix
+ * entry that is partly stale bytes is not the A the key holder's counterpart
+ * derives from the same public rho, so keygen and encapsulation would agree
+ * with nobody; and because rho is public, an adversary can search seeds for
+ * the condition offline.  The event needs 448 candidates to yield fewer than
+ * 256 accepts (p is about 1e-39 for a well-behaved XOF), but "improbable" is
+ * not the property FIPS 203 states, and the reference implementations all
+ * loop here.  Termination is certain for any XOF with a non-degenerate output
+ * distribution: each additional block contributes 112 candidates, each
+ * accepted with probability 3329/4096.
+ *
+ * `ama_shake128_inc_*` can only fail on a NULL context or output pointer;
+ * both are stack objects here, so no error path exists to propagate.  This is
+ * the same contract dil_poly_uniform() in ama_dilithium.c already relies on.
+ */
+static void kyber_poly_uniform(poly* a, const uint8_t seed[32], uint8_t x, uint8_t y) {
+    uint8_t buf[34];
+    uint8_t stream[KYBER_XOF_BLOCKBYTES * KYBER_XOF_INITIAL_BLOCKS];
+    const size_t initial_len = KYBER_XOF_BLOCKBYTES * KYBER_SAMPLE_INITIAL_BLOCKS;
+    unsigned int ctr;
+    ama_sha3_ctx shake_ctx;
+
+    memcpy(buf, seed, 32);
+    buf[32] = x;
+    buf[33] = y;
+
+    ama_shake128_inc_init(&shake_ctx);
+    ama_shake128_inc_absorb(&shake_ctx, buf, 34);
+    ama_shake128_inc_finalize(&shake_ctx);
+    ama_shake128_inc_squeeze(&shake_ctx, stream, initial_len);
+
+    ctr = kyber_rej_uniform_from_stream(a, 0u, stream, initial_len);
+    while (ctr < KYBER_N) {
+        ama_shake128_inc_squeeze(&shake_ctx, stream, KYBER_XOF_BLOCKBYTES);
+        ctr = kyber_rej_uniform_from_stream(a, ctr, stream, KYBER_XOF_BLOCKBYTES);
+    }
 }
 
 /**
@@ -371,40 +458,70 @@ static int kyber_rej_uniform_from_stream(poly *a,
  * reference above.
  *
  * For Kyber-1024 (KYBER_K=4), the matrix has 16 polys → 4 full
- * groups of 4 with no trailing scalar work.  The initial 4-block
- * squeeze (672 bytes per lane) matches the scalar stream[672].
+ * groups of 4 with no trailing scalar work.  Both paths take the same
+ * KYBER_XOF_INITIAL_BLOCKS first window and extend it one
+ * KYBER_XOF_BLOCKBYTES block at a time until all 256 coefficients are
+ * accepted, so their outputs agree octet for octet at every seed.
  */
 /**
  * Flush one batch of exactly four matrix entries through the 4-way SHAKE128
  * kernel.  Split out of kyber_gen_matrix so the caller's loop carries nothing
  * but the (i, j) matrix indices — which is what lets both a reader and the
  * optimiser see that `mat[i].vec[j]` is in bounds.
+ *
+ * Each lane continues from its own counter, so a lane whose first window fell
+ * short is finished from the SAME sponge state rather than restarted.  The
+ * previous form called the scalar sampler as a "fallback", which could not
+ * help: the scalar path absorbs the identical seed||x||y and squeezes the
+ * identical first 672 octets, so it reproduced the shortfall exactly.  A
+ * fallback that is byte-identical to the path it rescues is not a fallback.
+ *
+ * Extending squeezes all four lanes — the 4-way kernel advances the four
+ * Keccak states in lockstep — but a lane that is already full ignores its
+ * extra block, and a lane's coefficients depend only on the prefix of its own
+ * stream that it consumed in order.  The output is therefore byte-identical
+ * to running four independent scalar SampleNTT streams, which is the contract
+ * internal/ama_sha3_x4.h states.
  */
-static void kyber_gen_matrix_flush4(uint8_t bufs[4][34],
-                                    poly *polys[4],
-                                    uint8_t xy[4][2],
-                                    const uint8_t seed[32]) {
-    /* 4 blocks matches the scalar kyber_poly_uniform stream[672] budget. */
-    const size_t kInitialBlocks = 4;
+static void kyber_gen_matrix_flush4(uint8_t bufs[4][34], poly *polys[4]) {
+    const size_t initial_blocks = KYBER_SAMPLE_INITIAL_BLOCKS;
     ama_shake128_x4_ctx ctx;
-    uint8_t streams[4][AMA_SHAKE128_X4_RATE * 4];
+    uint8_t streams[4][AMA_SHAKE128_X4_RATE * KYBER_XOF_INITIAL_BLOCKS];
+    unsigned int ctr[4];
     int lane;
+    int incomplete;
 
     ama_shake128_x4_absorb_once(&ctx,
         bufs[0], 34, bufs[1], 34, bufs[2], 34, bufs[3], 34);
     ama_shake128_x4_squeezeblocks(&ctx,
-        streams[0], streams[1], streams[2], streams[3], kInitialBlocks);
+        streams[0], streams[1], streams[2], streams[3], initial_blocks);
 
     for (lane = 0; lane < 4; lane++) {
-        int ok = kyber_rej_uniform_from_stream(polys[lane],
-                                               streams[lane],
-                                               AMA_SHAKE128_X4_RATE * kInitialBlocks);
-        if (!ok) {
-            /* Scalar fallback (effectively unreachable: ML-KEM's ~18.7 %
-             * rejection rate over 448 candidates per 4 blocks gives expected
-             * accepts >> 256, matching the scalar reference's one-shot
-             * squeeze budget exactly). */
-            kyber_poly_uniform(polys[lane], seed, xy[lane][0], xy[lane][1]);
+        ctr[lane] = kyber_rej_uniform_from_stream(polys[lane], 0u,
+                                                  streams[lane],
+                                                  AMA_SHAKE128_X4_RATE * initial_blocks);
+    }
+
+    for (;;) {
+        incomplete = 0;
+        for (lane = 0; lane < 4; lane++) {
+            if (ctr[lane] < KYBER_N) {
+                incomplete = 1;
+            }
+        }
+        if (!incomplete) {
+            break;
+        }
+
+        ama_shake128_x4_squeezeblocks(&ctx,
+            streams[0], streams[1], streams[2], streams[3], 1);
+
+        for (lane = 0; lane < 4; lane++) {
+            if (ctr[lane] < KYBER_N) {
+                ctr[lane] = kyber_rej_uniform_from_stream(polys[lane], ctr[lane],
+                                                          streams[lane],
+                                                          AMA_SHAKE128_X4_RATE);
+            }
         }
     }
 }
@@ -455,7 +572,7 @@ static void kyber_gen_matrix(polyvec *mat, const uint8_t seed[32],
             polys[pending] = &mat[i].vec[j];
 
             if (++pending == 4u) {
-                kyber_gen_matrix_flush4(bufs, polys, xy, seed);
+                kyber_gen_matrix_flush4(bufs, polys);
                 pending = 0;
             }
         }
@@ -2606,13 +2723,54 @@ static int16_t coeff_normalize(int16_t a) {
  * d in {1, 4, 5, 10, 11} — all 16_645 pairs agree, so the ciphertext bytes and
  * every KAT are unchanged by construction.  The 64-bit multiply is a
  * fixed-latency instruction on every supported target, unlike the divide it
- * replaces. */
+ * replaces.
+ *
+ * THE WIDTH IS PART OF THE CONTRACT, AND IT IS BOUNDED
+ *
+ * A reciprocal multiply substitutes for a division only over the interval
+ * where it is exact, and that interval is finite.  For M = ceil(2^40/q) the
+ * error term is e = M*q - 2^40 = 3177, and the Granlund-Montgomery condition
+ * gives exactness for every numerator n <= 2^40/e = 346_084_868.  With
+ * x <= q-1 that is satisfied for every d <= 16; enumerating the remaining
+ * widths shows the identity in fact survives to d = 18 and breaks at d = 19
+ * (first disagreement x = 1862).  By d = 30 it is wrong for 2_791 of the
+ * 3_329 coefficients.
+ *
+ * The previous revision of this function carried no width bound at all: it
+ * shifted first and then chose a mask on `d >= 32`, which (a) advertised
+ * support for every width up to 31 while returning wrong values from 19
+ * upwards, and (b) left `(uint64_t)x << d` undefined for d >= 64 (C11
+ * 6.5.7p3), since the guard protected only the mask.  The guard is now the
+ * first thing the function does and it names the real bound.
+ *
+ * FIPS 203 §4.2.1 defines Compress_d only for d < 12, and every call site in
+ * this file passes a literal in {1, 4, 5, 10, 11}, so the refusal arm is dead
+ * code that constant-folds away.  It exists so that a width outside the
+ * proven interval yields a value the callers' own range checks reject rather
+ * than a coefficient that is wrong by one — the failure mode that makes an
+ * interoperability break look like a decapsulation failure.
+ * tests/c/test_kyber_compress.c enumerates the ENTIRE declared domain
+ * (3_329 coefficients x 18 widths = 59_922 pairs, plus the refused widths),
+ * so the bound below is a result rather than an assertion. */
 #define AMA_KYBER_COMPRESS_MULT  330282857ULL  /* ceil(2^40 / KYBER_Q) */
 #define AMA_KYBER_COMPRESS_SHIFT 40
+/* Widest d for which the reciprocal above is exact for every x in [0, q-1].
+ * Verified by enumeration, not by the sufficient condition alone. */
+#define AMA_KYBER_COMPRESS_MAX_D 18u
+/* Returned for a width outside [1, AMA_KYBER_COMPRESS_MAX_D].  Unreachable at
+ * every call site; see the contract note above. */
+#define AMA_KYBER_COMPRESS_REFUSED 0u
 
 static inline uint32_t kyber_compress_d(uint32_t x_normalized, unsigned d) {
-    uint64_t n = ((uint64_t)x_normalized << d) + (KYBER_Q / 2);
-    uint32_t quotient = (uint32_t)((n * AMA_KYBER_COMPRESS_MULT) >> AMA_KYBER_COMPRESS_SHIFT);
+    uint64_t n;
+    uint32_t quotient;
+
+    if (d == 0u || d > AMA_KYBER_COMPRESS_MAX_D) {
+        return AMA_KYBER_COMPRESS_REFUSED;
+    }
+
+    n = ((uint64_t)x_normalized << d) + (KYBER_Q / 2);
+    quotient = (uint32_t)((n * AMA_KYBER_COMPRESS_MULT) >> AMA_KYBER_COMPRESS_SHIFT);
     /* The `mod 2^d` of the definition, applied HERE rather than left to the
      * caller.  It is not cosmetic at d = 1: x = q-1 = 3328 gives
      * round(2*3328/3329) = 2, and FIPS 203 Compress_1(3328) is 2 mod 2 = 0.
@@ -2627,11 +2785,11 @@ static inline uint32_t kyber_compress_d(uint32_t x_normalized, unsigned d) {
      * `d` is a plaintext parameter (the compression width, a literal at every
      * call site), never secret, so selecting the mask on it is not a timing
      * channel — and it folds away entirely, since this is `static inline` and
-     * every call passes a constant.  The `d >= 32` arm keeps the shift defined
-     * for a width this function is never called with; UB in a fallback is
-     * still UB (C11 6.5.7p3). */
-    uint32_t mask = (d >= 32u) ? 0xFFFFFFFFu : ((1u << d) - 1u);
-    return quotient & mask;
+     * every call passes a constant.  The shift below needs no width guard of
+     * its own: the refusal at the top of the function already bounds d by
+     * AMA_KYBER_COMPRESS_MAX_D (18), well inside the range where `1u << d` is
+     * defined (C11 6.5.7p3). */
+    return quotient & ((1u << d) - 1u);
 }
 
 #ifdef AMA_TESTING_MODE
