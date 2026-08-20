@@ -44,6 +44,40 @@ from pathlib import Path
 _SUPPRESSION_RE = re.compile(r"#\s*(noqa|nosec|nosemgrep|pylint:\s*disable|type:\s*ignore)")
 _NOSEMGREP_STRICT_RE = re.compile(r"^:\s*\S+")
 
+# The same requirement, for the two other markers that blanket-suppress a whole
+# scanner when written bare.  Adding them is not symmetry for its own sake:
+#
+# ``nosec``  bandit resolves ``# nosec <text>`` by parsing <text> as test ids
+#            (``NOSEC_COMMENT`` / ``NOSEC_COMMENT_TESTS`` in bandit's manager),
+#            warns "Test in comment: X is not a test name or id, ignoring" for
+#            every word it cannot resolve, and — this is the part that matters —
+#            treats an EMPTY resolved set as "no specific tests", i.e. blanket.
+#            So this repository's house style, ``# nosec -- reason (TAG-NNN)``,
+#            would read to a reviewer as a targeted suppression carrying its
+#            justification while silencing every bandit test on the line.  A
+#            ``B``-code makes the resolved set non-empty and the marker means
+#            what it looks like.  Verified against bandit 1.9.2.
+#
+# ``noqa``   ruff (and flake8) treat a bare ``# noqa`` as "all rules on this
+#            line"; only ``# noqa: <CODE>`` targets one.  Same catch-all, same
+#            audit-trail problem.
+#
+# ``type: ignore`` and ``pylint: disable`` are deliberately NOT held to this,
+# and the reason is stated rather than left as an omission: mypy's file-level
+# ``# type: ignore`` on line 1 is a legitimate bare form that
+# ``effective_suppressions`` keeps in scope on purpose, and mypy --strict's
+# ``warn_unused_ignores`` already reports an ignore that suppresses nothing.
+# Neither family has a bare occurrence in the tree today.
+_NOSEC_STRICT_RE = re.compile(r"^:?\s*B\d+", re.IGNORECASE)
+_NOQA_STRICT_RE = re.compile(r"^:\s*[A-Z]+\d+", re.IGNORECASE)
+
+#: Marker -> (pattern its targeted form must match, the form to write instead).
+_STRICT_FORMS: dict[str, tuple[re.Pattern[str], str]] = {
+    "nosemgrep": (_NOSEMGREP_STRICT_RE, "# nosemgrep: <rule_id> -- justification (TAG-NNN)"),
+    "nosec": (_NOSEC_STRICT_RE, "# nosec B105 -- justification (TAG-NNN)"),
+    "noqa": (_NOQA_STRICT_RE, "# noqa: S310 -- justification (TAG-NNN)"),
+}
+
 # Tracking ID pattern: parenthesised alphanumeric tag, e.g. (KM-001), (FIN-002)
 _TRACKING_ID_RE = re.compile(r"\([A-Z]+-\d+\)")
 
@@ -122,13 +156,19 @@ def check_source(filepath: str, source: str) -> list[str]:
                 violations.append(f"{tag}: suppression in forbidden directory")
                 break
             rest = comment[m.end() :]
-            # nosemgrep strict form: require ":<rule_id>" so the
-            # marker targets a specific rule rather than blanket-
-            # suppressing every semgrep rule on the line.
-            if m.group(1) == "nosemgrep" and not _NOSEMGREP_STRICT_RE.match(rest):
+            # Strict form: the marker must name the rule it silences, so a
+            # reviewer can verify WHICH check each suppression turns off.  A
+            # bare marker blanket-suppresses its whole scanner on that line,
+            # which is the catch-all the INVARIANT-13 audit trail exists to
+            # prevent.  See _STRICT_FORMS for why each family is or is not
+            # held to this.
+            marker = m.group(1)
+            strict = _STRICT_FORMS.get(marker)
+            if strict is not None and not strict[0].match(rest):
                 violations.append(
-                    f"{tag}: suppression 'nosemgrep' missing rule id "
-                    f"(expected '# nosemgrep: <rule_id> -- justification (TAG-NNN)')"
+                    f"{tag}: suppression '{marker}' missing rule id "
+                    f"(expected '{strict[1]}'); written bare it suppresses "
+                    f"every rule on the line"
                 )
                 continue
             if not _JUSTIFICATION_RE.search(rest):

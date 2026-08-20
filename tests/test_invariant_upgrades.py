@@ -500,6 +500,90 @@ class TestSuppressionScanPrecision:
         assert 'Path("tools")' in source, "tools/ dropped out of the scanned set"
         assert (repo_root / "tools").is_dir()
 
+    # -- The marker must name the rule it silences ------------------------
+
+    def test_a_bare_nosec_is_reported_even_when_fully_justified(self) -> None:
+        """The sharp case: it reads targeted and is not.
+
+        bandit parses everything after ``# nosec`` as test ids, warns on each
+        word it cannot resolve, and treats the resulting EMPTY set as "no
+        specific tests" — i.e. blanket.  So this repository's own house style,
+        ``# nosec -- reason (TAG-NNN)``, silences every bandit test on the line
+        while carrying a justification that says otherwise.
+
+        Measured against bandit 1.9.4 on two files differing only in the
+        marker: with ``# nosec -- prose (DEMO-002)`` on a
+        ``subprocess.call(..., shell=True)`` line, bandit reports nothing for
+        that line; with ``# nosec B105`` — a code that matches nothing there —
+        it still reports B607.
+        """
+        from tools.check_suppression_hygiene import check_source
+
+        violations = check_source("a.py", "PW = 'x'  # nosec -- placeholder (AB-001)\n")
+        assert any("missing rule id" in v for v in violations), violations
+
+    @pytest.mark.parametrize("marker", ["# nosec B105", "# nosec: B105"])
+    def test_both_targeted_nosec_spellings_are_accepted(self, marker: str) -> None:
+        from tools.check_suppression_hygiene import check_source
+
+        assert check_source("a.py", f"PW = 'x'  {marker} -- placeholder (AB-001)\n") == []
+
+    def test_a_bare_noqa_is_reported_even_when_fully_justified(self) -> None:
+        """ruff treats a bare ``# noqa`` as every rule on the line."""
+        from tools.check_suppression_hygiene import check_source
+
+        violations = check_source("a.py", "import os  # noqa -- reason (AB-001)\n")
+        assert any("missing rule id" in v for v in violations), violations
+
+    def test_a_targeted_noqa_is_accepted(self) -> None:
+        from tools.check_suppression_hygiene import check_source
+
+        assert check_source("a.py", "import os  # noqa: F401 -- reason (AB-001)\n") == []
+
+    def test_the_repositorys_own_stacked_marker_form_is_accepted(self) -> None:
+        """``# fmt: skip  # noqa: S311 # nosec B311 -- reason (NM-010)``.
+
+        Verbatim from ``ama_cryptography/_numeric.py``: three markers on one
+        line, two of them strict-form families.  A rule that rejected this
+        would be a rule the tree could not satisfy.
+        """
+        from tools.check_suppression_hygiene import check_source
+
+        source = (
+            "rng = Random()  # fmt: skip  # noqa: S311 # nosec B311 "
+            "-- non-crypto math only (NM-010)\n"
+        )
+        assert check_source("a.py", source) == []
+
+    def test_no_marker_in_the_tree_is_written_bare(self) -> None:
+        """Asserted against the tree, not only through the checker.
+
+        The strict-form rule was added on a tree that already satisfied it, so
+        this is the assertion that keeps it satisfied rather than evidence that
+        it was ever violated.
+        """
+        from tools.check_suppression_hygiene import (
+            _STRICT_FORMS,
+            _SUPPRESSION_RE,
+            effective_suppressions,
+        )
+
+        repo_root = Path(__file__).resolve().parent.parent
+        blanket: list[str] = []
+        for tree in ("ama_cryptography", "tests", "tools"):
+            for py_file in sorted((repo_root / tree).rglob("*.py")):
+                source = py_file.read_text(encoding="utf-8", errors="replace")
+                for lineno, comment in effective_suppressions(source):
+                    for match in _SUPPRESSION_RE.finditer(comment):
+                        strict = _STRICT_FORMS.get(match.group(1))
+                        if strict is None:
+                            continue
+                        if not strict[0].match(comment[match.end() :]):
+                            blanket.append(
+                                f"{py_file.relative_to(repo_root)}:{lineno}: {comment.strip()}"
+                            )
+        assert blanket == [], f"blanket suppression marker(s): {blanket}"
+
     def test_every_tools_suppression_carries_a_tracking_id(self) -> None:
         """Asserted directly against the tree, not only through the checker."""
         from tools.check_suppression_hygiene import _SUPPRESSION_RE, effective_suppressions

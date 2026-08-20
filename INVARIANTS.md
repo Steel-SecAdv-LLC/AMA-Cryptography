@@ -481,9 +481,11 @@ equivalent suppression marker is **prohibited** unless **all three** of the
 following conditions are met:
 
 1. The suppression is **line-scoped**, not file-scoped.
-2. It includes a **human-readable justification** and a **tracking reference**,
+2. It **names the rule it silences** — `# nosec B110`, `# noqa: S310`,
+   `# nosemgrep: <rule_id>` — never the bare marker.
+3. It includes a **human-readable justification** and a **tracking reference**,
    for example: `# nosec B110: __del__ must not raise (FIN-001)`.
-3. The suppressed line is **covered by tests** or a deterministic runtime check.
+4. The suppressed line is **covered by tests** or a deterministic runtime check.
 
 The **only** permitted exception is finalizers and destructors that must not
 raise, provided the reason is explicitly documented inline.
@@ -522,6 +524,26 @@ real, and it is kept in scope explicitly. The set of suppressions policed in
 `ama_cryptography/` and `tests/` is unchanged by this — 96 before and after —
 so the precision gain removed false positives only. Both directions are pinned
 by `tests/test_invariant_upgrades.py::TestSuppressionScanPrecision`.
+
+**Naming the rule (condition 2) is not style.** A bare marker blanket-suppresses
+its whole scanner on that line, and for `# nosec` the failure is worse than
+that: bandit parses everything after the marker as test ids, warns for each word
+it cannot resolve, and treats the resulting *empty* set as "no specific tests" —
+i.e. blanket. So this repository's own justification style, `# nosec -- reason
+(TAG-NNN)`, reads to a reviewer as targeted while silencing every bandit test on
+the line. Measured against bandit 1.9.4 on two files differing only in the
+marker: a `subprocess.call(..., shell=True)` line carrying `# nosec -- prose
+(DEMO-002)` produces no finding, while the same line carrying `# nosec B105` — a
+code that matches nothing there — still reports `B607`. `ruff` treats a bare
+`# noqa` the same way. Both are now required to name a rule, alongside the
+`nosemgrep` rule that already was; `# type: ignore` is deliberately exempt,
+because mypy's file-level form on line 1 is a legitimate bare spelling and
+`--strict`'s `warn_unused_ignores` already reports an ignore that suppresses
+nothing. The tree satisfied the rule before it existed — zero bare markers in
+`ama_cryptography/`, `tests/` and `tools/` — so this keeps the property rather
+than repairing a violation, and
+`TestSuppressionScanPrecision::test_no_marker_in_the_tree_is_written_bare`
+asserts it directly against the tree as well as through the checker.
 
 ## INVARIANT-14 — CVE Ignore-List Hygiene
 
