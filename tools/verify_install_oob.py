@@ -1206,18 +1206,41 @@ def main(argv: Optional[list[str]] = None) -> int:
         )
         return 1
 
-    failures, native_digest, binding_digests = _verify_artefact(pkg_dir, expected_pubkey)
+    artefact_failures, native_digest, binding_digests = _verify_artefact(pkg_dir, expected_pubkey)
+    failures: list[str] = list(artefact_failures)
     warnings: list[str] = []
 
-    native_failures, native_warnings = _verify_native_library(
-        pkg_dir, native_digest, args.native_lib
-    )
-    failures += native_failures
-    warnings += native_warnings
+    # The native and binding stages bind on-disk bytes to digests that come
+    # from the artefact.  When the artefact did not authenticate, there are no
+    # such digests — `_verify_artefact` returns None for both — and running the
+    # stages anyway made them describe the ARTEFACT rather than their own
+    # situation: an authentic v3 artefact whose pubkey simply was not the
+    # expected one produced "artefact binds none (v1 artefact)" and "the
+    # artefact predates v3 (no map)", two lines after the tool had printed
+    # `[artefact] schema v3; native bound: True; bindings: 6`.  Both statements
+    # were false, and an operator triaging a key mismatch would read them as
+    # "this installation carries an old artefact".  A verifier that states
+    # something untrue about the thing it is verifying is the failure mode this
+    # whole tool exists to remove, so the stages are skipped and the skip is
+    # reported for what it is.  (No verdict changes: every path that returns
+    # None also returns a failure, so the run was already FAIL.)
+    if artefact_failures:
+        warnings.append(
+            "native library and binding extensions: NOT CHECKED — the artefact "
+            "did not authenticate above, so no trusted digest exists to bind "
+            "them to. This says nothing about whether the artefact carries "
+            "them; resolve the failure above and re-run."
+        )
+    else:
+        native_failures, native_warnings = _verify_native_library(
+            pkg_dir, native_digest, args.native_lib
+        )
+        failures += native_failures
+        warnings += native_warnings
 
-    binding_failures, binding_warnings = _verify_binding_extensions(pkg_dir, binding_digests)
-    failures += binding_failures
-    warnings += binding_warnings
+        binding_failures, binding_warnings = _verify_binding_extensions(pkg_dir, binding_digests)
+        failures += binding_failures
+        warnings += binding_warnings
 
     pyc_failures, pyc_verified, pyc_skipped = _verify_all_bytecode_caches(pkg_dir)
     failures += pyc_failures

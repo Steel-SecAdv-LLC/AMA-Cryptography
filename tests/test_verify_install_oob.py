@@ -288,6 +288,68 @@ def installed_tree(tmp_path: Path) -> Path:
 
 @requires_signed_tree
 @requires_native_lib
+class TestFailedArtefactDoesNotMisdescribeItself:
+    """A verifier must not state something false about the thing it verifies.
+
+    On any artefact failure the signature stage returns ``None`` for both the
+    native digest and the binding map, and ``main`` used to run the downstream
+    stages anyway.  Handed ``None``, those stages report the only thing ``None``
+    means to them — "artefact binds none (v1 artefact)", "the artefact predates
+    v3 (no map)" — so a v3 artefact that merely carried the wrong key was
+    described to the operator as an old one, two lines after the tool printed
+    ``[artefact] schema v3; native bound: True; bindings: 6``.
+    """
+
+    @staticmethod
+    def _artefact_pubkey(tree: Path) -> str:
+        import re
+
+        text = (tree / "_integrity_signature.py").read_text(encoding="utf-8")
+        match = re.search(r'INTEGRITY_PUBKEY_HEX = "([0-9a-fA-F]+)"', text)
+        assert match is not None, "artefact carries no pubkey"
+        return match.group(1)
+
+    def test_a_wrong_anchor_does_not_claim_the_artefact_is_v1(
+        self, installed_tree: Path
+    ) -> None:
+        result = _run_tool(
+            str(installed_tree),
+            "--native-lib",
+            str(NATIVE_LIB),
+            "--expected-pubkey",
+            "00" * 32,
+        )
+        output = result.stdout + result.stderr
+        assert result.returncode == 1, output
+        assert "NOT the expected one" in output
+        assert "v1 artefact" not in output, (
+            "the tool described a v3 artefact as v1 because the signature stage "
+            f"returned no digests: {output}"
+        )
+        assert "predates v3" not in output, output
+        assert "NOT CHECKED" in output, (
+            "the skipped stages must say they were skipped, not stay silent: " + output
+        )
+
+    def test_the_downstream_stages_still_run_when_the_artefact_authenticates(
+        self, installed_tree: Path
+    ) -> None:
+        """The skip must be conditional, not a way to stop checking."""
+        result = _run_tool(
+            str(installed_tree),
+            "--native-lib",
+            str(NATIVE_LIB),
+            "--expected-pubkey",
+            self._artefact_pubkey(installed_tree),
+        )
+        output = result.stdout + result.stderr
+        assert result.returncode == 0, output
+        assert "[native]" in output or "native library" in output, output
+        assert "NOT CHECKED" not in output, output
+
+
+@requires_signed_tree
+@requires_native_lib
 class TestTrustAnchor:
     """The key must come from the operator, not from the tree being checked.
 
