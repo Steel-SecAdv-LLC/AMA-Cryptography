@@ -74,6 +74,38 @@ jobs:
         # from, verifies clean offline forever.
         run: python tools/build_keyformat_corpus.py --verify-upstream
 
+  vector-provenance:
+    name: Verify the published test vectors have not been rewritten
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Every NIST/Ascon/POST vector must match its recorded digest
+        # This repository's own pre-commit hooks rewrote these files.  The KAT
+        # format spells an empty field as a key followed by a trailing space,
+        # so `trailing-whitespace` turned `PT = ` into `PT =` across ML-KEM
+        # (FIPS 203), ML-DSA (FIPS 204), SLH-DSA (FIPS 205) and Ascon.  The
+        # hooks are scoped now; what made it worth a gate is that NOTHING
+        # detected it — on the rewritten tree the corpus generators' --check,
+        # check_corpus_originality.py, check_vendor_isolation.py and all 135
+        # KAT tests still passed.
+        #
+        # No network: these bytes are pinned by digest in
+        # tests/kat/PROVENANCE.json, the same shape wycheproof_vectors already
+        # uses.  The manifest alone is not the whole guard —
+        # tests/test_vector_provenance_gate.py pins four anchor digests in its
+        # own source, so regenerating the manifest over a corrupted file does
+        # not make it verify.
+        run: python tools/check_vector_provenance.py
+
+      - name: The manifest alone must not be sufficient (anchor digests)
+        run: python -m pytest tests/test_vector_provenance_gate.py -q
+
   corpus-provenance-gate:
     name: Corpus Provenance Gate
     # if: always() so it resolves to a definitive red/green even when the worker
@@ -82,6 +114,7 @@ jobs:
     needs:
       - provenance
       - keyformat-provenance
+      - vector-provenance
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:

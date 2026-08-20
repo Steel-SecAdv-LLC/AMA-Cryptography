@@ -182,6 +182,30 @@ DER signature back to (r, s) and compares it with `r||s` over 512 keys, and
 asserts the run saw at least one short DER signature so the comparison cannot
 pass over full-length cases alone.
 
+**The published vectors are now pinned by digest.** The corruption above —
+`trailing-whitespace` turning `PT = ` into `PT =` across 19 NIST/Ascon KAT
+files — was prevented by scoping the hook, but nothing would have *detected*
+it: on the rewritten tree the corpus generators' `--check`,
+`check_corpus_originality.py`, `check_vendor_isolation.py` and all 135 KAT
+tests passed. `tools/check_vector_provenance.py` and
+`tests/kat/PROVENANCE.json` close that, pinning a SHA-256 for each of 37
+files (50,614,912 bytes) across `tests/kat/`, `nist_vectors/` and
+`ama_cryptography/_post_kats/` — the shape `wycheproof_vectors/` already had.
+It fails on an edited file, a deleted one, and an *unpinned* new one, and
+fails closed below a 30-file floor so a clean report over a tree it could not
+read is impossible.
+
+Verified against the real corruption, not a mock: reapplying the whitespace
+strip to `tests/kat/ascon/ascon_aead128.kat` fails the gate with the path and
+the 260,253 → 260,220 byte delta named.
+
+A manifest committed beside the files it pins can be regenerated to match
+corrupted files. That is inherent, so it is not the whole guard:
+`tests/test_vector_provenance_gate.py` pins four anchor digests in its own
+source, one per published family. Demonstrated: regenerating the manifest
+over the corrupted Ascon file makes the gate report OK, and the anchor
+assertion still fails.
+
 **What is still open.** On Argon2id's data-dependent phase, `ref_lane = J2 %
 lanes` has a password-derived dividend. It is deliberately unchanged: RFC 9106
 §3.4 specifies that phase as data-dependent, and `memory[ref_index]` two lines
