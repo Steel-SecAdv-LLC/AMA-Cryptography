@@ -85,6 +85,15 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Install pytest
+        # The gate step below needs nothing but the standard library — that is
+        # the point of pinning by digest rather than by re-fetch.  The anchor
+        # test does need pytest, and the first revision of this job invoked it
+        # without installing it: `No module named pytest`, exit 1, on a job
+        # whose other two steps are plain scripts.  Pinned to the version
+        # ci.yml installs so the two agree.
+        run: pip install "pytest==9.1.1"
+
       - name: Every NIST/Ascon/POST vector must match its recorded digest
         # This repository's own pre-commit hooks rewrote these files.  The KAT
         # format spells an empty field as a key followed by a trailing space,
