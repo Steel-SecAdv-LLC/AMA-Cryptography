@@ -485,6 +485,7 @@ class TestCalibration:
             "ed25519-sign",
             "nistp-ecdsa",
             "x25519",
+            "ecdsa",
         }
     )
 
@@ -500,13 +501,22 @@ class TestCalibration:
         for target in self.INVARIANT_TARGETS:
             assert tool.THRESHOLDS[target] == 0, target
 
-    def test_the_invariant_set_is_every_target_but_ecdsa(self, tool: ModuleType) -> None:
+    def test_the_invariant_set_is_every_target(self, tool: ModuleType) -> None:
         """A new target must state its own limit and the measurement for it.
 
         Without this, a target added with a copied non-zero limit would
         inherit a benign band nobody measured.
+
+        This used to assert the difference was exactly ``{"ecdsa"}`` — the one
+        target allowed a tolerance. That carve-out passed only because it
+        encoded the world before secp256k1 got a fixed-width signing entry
+        point. It is empty now, and a target that appears outside the
+        invariant set has to come here and say why.
         """
-        assert set(tool.THRESHOLDS) - self.INVARIANT_TARGETS == {"ecdsa"}
+        assert set(tool.THRESHOLDS) - self.INVARIANT_TARGETS == set()
+        assert (
+            self.INVARIANT_TARGETS - set(tool.THRESHOLDS) == set()
+        ), "the invariant set names a target THRESHOLDS does not have"
 
     def test_the_default_for_an_unlisted_target_is_zero(self, tool: ModuleType) -> None:
         assert tool.DEFAULT_THRESHOLD == 0

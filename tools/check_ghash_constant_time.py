@@ -318,9 +318,11 @@ _REMEDY = {
         "predicate in sc_mont_mul, the carry fold in sc_add, and the low-s\n"
         "normalisation (sc_is_high must not short-circuit, and the negation is\n"
         "selected via sc_cond_negate). Disassemble each and look for a\n"
-        "conditional jump. DER encoding of r and s is legitimately variable on\n"
-        "public data, but with the driver consuming a fixed byte count that\n"
-        "accounts for only ~24 instructions — not hundreds."
+        "conditional jump. Do NOT discount any part of the delta as DER\n"
+        "encoding: this target signs through ama_secp256k1_ecdsa_sign_raw, so\n"
+        "the encoder is outside the measurement entirely and there is no\n"
+        "benign component left to subtract. Any non-zero delta here is a\n"
+        "defect."
     ),
     "ascon-hash": (
         "ama_ascon_hash256 in src/c/ama_ascon.c must absorb and permute over a\n"
@@ -387,8 +389,10 @@ _REMEDY = {
         "nistp_cond_sub_mod, the exceptional-case flags in nistp_jac_add, and\n"
         "the comb digit — the last two of which are functions of the RFC 6979\n"
         "nonce. Disassemble nistp_mont_mul and nistp_jac_add and look for a\n"
-        "conditional jump. DER encoding of r and s is legitimately variable on\n"
-        "public data and accounts for 16-24 instructions, not hundreds."
+        "conditional jump. Do NOT discount any part of the delta as DER\n"
+        "encoding: this target signs through ama_nistp_ecdsa_sign_raw, so the\n"
+        "encoder is outside the measurement entirely and there is no benign\n"
+        "component left to subtract. Any non-zero delta here is a defect."
     ),
     "x25519": (
         "The Montgomery ladder in src/c/ama_x25519.c must swap with a mask, not\n"

@@ -2219,6 +2219,20 @@ done:
     return rc;
 }
 
+/* Scrub the caller's scalar copies.
+ *
+ * r and s are the signature, so they are public and this leaks nothing
+ * either way.  It is restored because the split dropped an
+ * `ama_secure_memzero(s_bytes, ...)` the original ama_secp256k1_ecdsa_sign
+ * performed unconditionally, and this file's header states "proper cleanup of
+ * sensitive intermediates".  A cleanup claim that quietly stopped being true
+ * for one buffer is the kind of drift that makes the claim worthless for the
+ * buffers where it does matter. */
+static void secp256k1_scrub_scalars(uint8_t r_bytes[32], uint8_t s_bytes[32]) {
+    ama_secure_memzero(r_bytes, 32);
+    ama_secure_memzero(s_bytes, 32);
+}
+
 AMA_API ama_error_t ama_secp256k1_ecdsa_sign(uint8_t *signature, size_t *signature_len,
                                              const uint8_t message[32],
                                              const uint8_t private_key[32]) {
@@ -2231,6 +2245,7 @@ AMA_API ama_error_t ama_secp256k1_ecdsa_sign(uint8_t *signature, size_t *signatu
     rc = secp256k1_ecdsa_sign_scalars(r_bytes, s_bytes, message, private_key);
     if (rc == AMA_SUCCESS)
         *signature_len = der_encode_signature(signature, r_bytes, s_bytes);
+    secp256k1_scrub_scalars(r_bytes, s_bytes);
     return rc;
 }
 

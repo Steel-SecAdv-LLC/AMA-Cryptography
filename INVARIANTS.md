@@ -1071,10 +1071,20 @@ returning an all-zero shared secret.
 
 ## INVARIANT-28 — ECDSA Signatures Must Be Low-s and Strictly Encoded
 
-**Statement.** `ama_secp256k1_ecdsa_sign` must emit only the canonical low
+**Statement.** `ama_secp256k1_ecdsa_sign` **and
+`ama_secp256k1_ecdsa_sign_raw`** must emit only the canonical low
 representative (`s <= (n-1)/2`), and `ama_secp256k1_ecdsa_verify` must reject
 a high `s`, an `r` or `s` outside `[1, n-1]`, and any signature that is not
 minimal DER.
+
+Both signing entry points are named because they are one implementation:
+`secp256k1_ecdsa_sign_scalars()` performs the arithmetic, including the
+`sc_cond_negate` low-`s` selection, and the two public functions differ only
+in whether they DER-encode the result or return it as fixed-width `r || s`.
+`tests/c/test_secp256k1.c` decodes the DER form back to (r, s) and compares
+it against `r || s` over 512 keys, so a divergence between them — which is
+the only way one could satisfy this invariant while the other did not —
+fails there.
 
 The high-`s` rejection — and only that — is caller-selectable through
 `ama_secp256k1_ecdsa_verify_ex(..., flags)`: the strict default
@@ -1449,9 +1459,9 @@ confirm each is still caught.
 one control**. A curve's default must set both or neither, and any API that
 exposes them must expose both.
 
-- **secp256k1** sets both by default: `ama_secp256k1_ecdsa_sign` emits only the
-  low representative and `ama_secp256k1_ecdsa_verify` rejects the high twin
-  (INVARIANT-28). `AMA_SECP256K1_ECDSA_ALLOW_HIGH_S` relaxes the verifier for
+- **secp256k1** sets both by default: `ama_secp256k1_ecdsa_sign` and
+  `ama_secp256k1_ecdsa_sign_raw` emit only the low representative and
+  `ama_secp256k1_ecdsa_verify` rejects the high twin (INVARIANT-28). `AMA_SECP256K1_ECDSA_ALLOW_HIGH_S` relaxes the verifier for
   third-party X9.62 interop.
 - **P-256 / P-384 / P-521** set neither by default: `ama_nistp_ecdsa_sign`
   emits RFC 6979's `s` verbatim and `ama_nistp_ecdsa_verify` accepts either
