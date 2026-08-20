@@ -80,6 +80,17 @@ What is checked
     prerelease before its assets have uploaded.  The rules are derived from
     the action's own resolution logic; see :func:`check_release_publishing`.
 
+``pytest prerequisites``
+    Since 5.0.0 a failed FIPS 140-3 power-on self-test makes ``import
+    ama_cryptography`` *raise*, and ``tests/conftest.py`` performs that import
+    from ``pytest_configure``.  So a workflow step that invokes pytest in a job
+    that never built the native library does not run one test and report a
+    skip — it dies with ``INTERNALERROR`` and exit 3 before collection.  Every
+    pytest-invoking step must therefore be preceded, in its own job, either by
+    a step that builds the library or by ``AMA_POST_DIAGNOSTIC_IMPORT``, which
+    completes the import with cryptography still refused.  See
+    :func:`check_pytest_prerequisites`.
+
 Known limitation, stated plainly
 --------------------------------
 The runner-label set is curated, not queried: GitHub publishes no API that
@@ -258,6 +269,7 @@ class Report:
     release_steps_checked: int = 0
     gated_binaries_checked: int = 0
     cmake_configures_checked: int = 0
+    pytest_steps_checked: int = 0
 
     @property
     def ok(self) -> bool:
@@ -977,6 +989,248 @@ def check_expression_syntax(path: Path, document: Any, report: Report) -> None:
             )
 
 
+# --------------------------------------------------------------------------
+# pytest prerequisites.
+#
+# INVARIANT-39 made a failed POST raise instead of log, and tests/conftest.py
+# imports the package from ``pytest_configure`` to name the ``SecurityWarning``
+# category for pytest's ini ``filterwarnings``.  The consequence is that
+# `python -m pytest` in a job with no native library does not run and skip —
+# it exits 3 with INTERNALERROR before collecting anything.
+#
+# That is fail-closed behaviour working as designed; what is a defect is a job
+# that invokes pytest without providing what the package requires.  It has
+# happened twice on this branch: ci.yml's Security Checks job (fixed by adding
+# a build-and-bind pair) and corpus-provenance.yml's vector-provenance job,
+# whose preceding revision fixed `No module named pytest` and did not check
+# that the job could then run the test at all.  Both were only visible once CI
+# ran.  This check decides them on the pull request.
+# --------------------------------------------------------------------------
+
+#: Shell operators that end one command and begin another.  Splitting on these
+#: is what lets the check ask "is `pytest` the COMMAND here?" rather than "does
+#: the word appear?", so `pip install pytest` is not read as an invocation.
+_COMMAND_SEPARATOR_RE = re.compile(r"&&|\|\||[;|]")
+
+#: Interpreters that run a module with ``-m``.  ``py`` is the Windows launcher.
+_PYTHON_COMMANDS = frozenset({"python", "python3", "py", "python.exe", "python3.exe"})
+
+#: Environment variable that completes ``import ama_cryptography`` when POST
+#: fails, leaving the module in the ERROR state with every cryptographic
+#: operation refused.  This is the only escape that helps: ``AMA_BUILD_PIPELINE``
+#: deliberately does NOT, because it excuses only the stale-artefact stages
+#: (``integrity`` / a digest-refused ``native-backend``) and a job with no
+#: library at all fails ``native-backend`` for a reason no re-signing run
+#: repairs.  Encoding that difference here is the point: a gate that accepted
+#: either flag would pass a job the runner still cannot start.
+_POST_IMPORT_ESCAPE = "AMA_POST_DIAGNOSTIC_IMPORT"
+
+#: Truthy spellings ``ama_cryptography.__init__`` accepts for the escape.
+_ESCAPE_TRUE = frozenset({"1", "true", "yes", "on"})
+
+
+def _heredoc_stripped(run_text: str) -> str:
+    """``run_text`` with the BODY of every here-document removed.
+
+    A here-document is data handed to another interpreter, not commands for
+    this shell, so a Python payload containing the line ``pytest ...`` must not
+    be read as a pytest invocation — and a payload containing ``cmake --build``
+    in a string must not be read as a library build.  Only ``<<`` forms are
+    handled (``<<<`` is a here-string, which is one line and needs nothing).
+    """
+    lines = run_text.splitlines()
+    out: list[str] = []
+    terminator: Optional[str] = None
+    for line in lines:
+        if terminator is not None:
+            if line.strip() == terminator:
+                terminator = None
+            continue
+        out.append(line)
+        match = re.search(r"""<<-?\s*['"]?([A-Za-z_][A-Za-z0-9_]*)['"]?\s*$""", line)
+        if match and "<<<" not in line:
+            terminator = match.group(1)
+    return "\n".join(out)
+
+
+def _commands(run_text: str) -> Iterator[list[str]]:
+    """Yield the argv of every command in a ``run:`` block, leading
+    ``VAR=value`` assignments removed.
+
+    Line continuations are joined first so ``cmake --build`` split across two
+    lines is still one command.  Tokenizing with :mod:`shlex` (POSIX mode,
+    comments on) does the two things a regex sweep of the raw text cannot: it
+    removes ``#`` comments — so a step that merely *mentions* pytest in its
+    rationale is not read as running it — and it resolves quoting, so
+    ``pip install -e ".[dev,hsm]"`` tokenizes to the target ``.[dev,hsm]``.
+    A block shlex cannot tokenize (an unbalanced quote, PowerShell) falls back
+    to whitespace splitting rather than being skipped: a command this function
+    cannot read must not silently become a command that does not exist.
+    """
+    joined = _heredoc_stripped(run_text).replace("\\\n", " ")
+    for line in joined.splitlines():
+        for fragment in _COMMAND_SEPARATOR_RE.split(line):
+            fragment = fragment.strip()
+            if not fragment:
+                continue
+            try:
+                tokens = shlex.split(fragment, comments=True)
+            except ValueError:
+                tokens = [t for t in fragment.split() if not t.startswith("#")]
+            while tokens and "=" in tokens[0] and not tokens[0].startswith("-"):
+                # A leading NAME=value is an environment assignment, not the
+                # command; `AMA_CI_REQUIRE_BACKENDS=1 pytest tests/` runs pytest.
+                name = tokens[0].split("=", 1)[0]
+                if not name or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+                    break
+                tokens = tokens[1:]
+            if tokens:
+                yield tokens
+
+
+def _basename(token: str) -> str:
+    """The final path component of ``token``, for either separator."""
+    return token.replace("\\", "/").rsplit("/", 1)[-1]
+
+
+def _invokes_pytest(tokens: Sequence[str]) -> bool:
+    """Whether ``tokens`` is a pytest invocation.
+
+    Two forms: ``pytest ...`` as the command itself, and ``<python> -m pytest``.
+    Deliberately NOT a substring search — ``pip install pytest`` and
+    ``pip install "pytest==9.1.1"`` are how pytest gets *installed*, and reading
+    those as invocations would make the check fire on every job that has a test
+    dependency.
+    """
+    command = _basename(tokens[0])
+    if command == "pytest" or command == "pytest.exe":
+        return True
+    if command in _PYTHON_COMMANDS:
+        for index, argument in enumerate(tokens[1:-1], start=1):
+            if argument == "-m" and tokens[index + 1] == "pytest":
+                return True
+    return False
+
+
+def _builds_native_library(tokens: Sequence[str]) -> bool:
+    """Whether ``tokens`` produces a loadable ``libama_cryptography``.
+
+    The four routes this repository uses.  ``pip install .`` (with or without
+    ``-e``, with or without extras) runs ``setup.py``'s ``CMakeBuild``, which
+    both builds the library and copies it into the package directory — that is
+    why the test matrices need no separate cmake step.
+    """
+    command = _basename(tokens[0])
+    rest = tokens[1:]
+    if command in ("cmake", "cmake.exe") and "--build" in rest:
+        return True
+    if command in ("make", "gmake") and any(
+        target in rest for target in ("c", "build", "all", "install", "dev")
+    ):
+        return True
+    if command in _PYTHON_COMMANDS and "setup.py" in rest:
+        return any(token.startswith("build") for token in rest)
+    if command in ("pip", "pip3", "pip.exe") or (command in _PYTHON_COMMANDS and "pip" in rest[:2]):
+        if "install" not in rest:
+            return False
+        for token in rest:
+            if token.startswith("-"):
+                continue
+            stripped = token.rstrip("/")
+            if stripped == "." or stripped.startswith(".["):
+                return True
+            if stripped.endswith(".whl"):
+                return True
+    return False
+
+
+def _escape_is_set(*scopes: Any) -> bool:
+    """Whether ``AMA_POST_DIAGNOSTIC_IMPORT`` is truthy in any ``env:`` mapping.
+
+    Scopes are passed workflow-, job- then step-wide; any of them setting it is
+    enough, exactly as the runner composes them.  A value that is a ``${{ }}``
+    expression is NOT accepted: its value is decided on the runner, and a check
+    that guessed would report a job as covered that may not be.
+    """
+    for scope in scopes:
+        env = scope.get("env") if isinstance(scope, dict) else None
+        if not isinstance(env, dict):
+            continue
+        value = env.get(_POST_IMPORT_ESCAPE)
+        if value is None:
+            continue
+        if value is True:
+            return True
+        rendered = str(value).strip().lower()
+        if "${{" in rendered:
+            continue
+        if rendered in _ESCAPE_TRUE:
+            return True
+    return False
+
+
+def check_pytest_prerequisites(path: Path, document: Any, report: Report) -> None:
+    """Every pytest invocation must be able to start.
+
+    Walks each job's steps in order, remembering whether anything so far builds
+    the native library, and requires each pytest-invoking step to have either
+    that or the diagnostic-import escape.
+
+    Stated limitation, because a checker that hides one is worth less than the
+    check: a build step carrying an ``if:`` counts as satisfying the
+    requirement even though the runner may skip it.  Both test matrices split
+    their build across ``if: runner.os == 'Linux'`` / ``'Windows'`` pairs that
+    together cover every entry, and resolving that would mean evaluating
+    expressions against a matrix this checker only partially expands.  The
+    conservative direction was chosen deliberately: the defect this catches is
+    a job with NO build step at all, which is what both real occurrences were.
+    """
+    for job_id, job in _iter_jobs(document):
+        steps = job.get("steps")
+        if not isinstance(steps, list):
+            continue
+        library_built_by: Optional[str] = None
+        for index, step in enumerate(steps):
+            if not isinstance(step, dict):
+                continue
+            run_text = step.get("run")
+            if not isinstance(run_text, str):
+                continue
+            name = str(step.get("name") or f"steps[{index}]")
+            for tokens in _commands(run_text):
+                if library_built_by is None and _builds_native_library(tokens):
+                    library_built_by = name
+                if not _invokes_pytest(tokens):
+                    continue
+                report.pytest_steps_checked += 1
+                if library_built_by is not None:
+                    continue
+                if _escape_is_set(document, job, step):
+                    continue
+                report.findings.append(
+                    Finding(
+                        workflow=path.name,
+                        location=f"jobs.{job_id}.steps[{index}] ({name})",
+                        message=(
+                            f"`{' '.join(tokens[:4])} ...` runs pytest in a job that never "
+                            f"builds the native library. tests/conftest.py imports "
+                            f"ama_cryptography from pytest_configure, and since 5.0.0 a failed "
+                            f"POST raises, so this step exits 3 with INTERNALERROR before "
+                            f"collecting a single test — it does not skip, it does not run."
+                        ),
+                        remedy=(
+                            "either build the library earlier in the job "
+                            "(`cmake --build`, or `pip install -e .`) and bind it with "
+                            "`AMA_BUILD_PIPELINE=1 python -m ama_cryptography.integrity "
+                            "--update --sign`, or, when the step runs no cryptography, "
+                            f'give the step an env entry `{_POST_IMPORT_ESCAPE}: "1"` '
+                            "— the import then completes with the module in the ERROR "
+                            "state and every cryptographic operation still refused."
+                        ),
+                    )
+                )
+
+
 def sweep(workflows_dir: Path) -> Report:
     """Run every check across every workflow file."""
     report = Report()
@@ -1002,6 +1256,7 @@ def sweep(workflows_dir: Path) -> Report:
         check_cmake_gated_binaries(path, document, report)
         check_cmake_build_type(path, document, report)
         check_expression_syntax(path, document, report)
+        check_pytest_prerequisites(path, document, report)
     return report
 
 
@@ -1026,7 +1281,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         f"{report.release_steps_checked} release-publishing step(s), "
         f"{report.gated_binaries_checked} CMake-gated binary invocation(s), "
         f"{report.cmake_configures_checked} cmake configure(s), "
-        f"{report.expressions_checked} `${{{{ }}}}` expression(s)."
+        f"{report.expressions_checked} `${{{{ }}}}` expression(s), "
+        f"{report.pytest_steps_checked} pytest invocation(s)."
     )
     if report.labels_unresolved:
         # Reported, never counted as verified.  Silence here would read as

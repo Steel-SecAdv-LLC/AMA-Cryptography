@@ -48,6 +48,7 @@ from tools.check_workflow_commands import (
     check_cmake_build_type,
     check_expression_syntax,
     check_inline_python,
+    check_pytest_prerequisites,
     check_release_publishing,
     check_runner_labels,
     check_shell_parseable,
@@ -71,6 +72,7 @@ def run_checks(source: str, name: str = "test.yml") -> Report:
     check_release_publishing(path, document, report)
     check_expression_syntax(path, document, report)
     check_cmake_build_type(path, document, report)
+    check_pytest_prerequisites(path, document, report)
     return report
 
 
@@ -708,6 +710,255 @@ class TestCmakeBuildType:
         assert report.cmake_configures_checked == 0
 
 
+class TestPytestPrerequisites:
+    """A pytest step that cannot start is not a lane.
+
+    Since INVARIANT-39 a failed POST raises, and ``tests/conftest.py`` imports
+    the package from ``pytest_configure``, so pytest in a library-less job exits
+    3 with INTERNALERROR before collection.  Both real occurrences on this
+    branch reached CI before anyone noticed; these cases decide them statically.
+    """
+
+    def test_pytest_without_a_build_is_reported(self) -> None:
+        report = run_checks("""
+            jobs:
+              gate:
+                runs-on: ubuntu-latest
+                steps:
+                  - run: pip install "pytest==9.1.1"
+                  - run: python -m pytest tests/test_vector_provenance_gate.py -q
+        """)
+        assert len(report.findings) == 1, messages(report)
+        assert "never builds the native library" in report.findings[0].message
+        assert "AMA_POST_DIAGNOSTIC_IMPORT" in report.findings[0].remedy
+        assert report.pytest_steps_checked == 1
+
+    def test_the_exact_shape_that_shipped_at_725f2f1(self) -> None:
+        """The job as it stood when the Corpus Provenance Gate went red.
+
+        `Install pytest` fixed `No module named pytest` and nothing else; the
+        next step still died with `CryptoModuleError`, exit 3.  Reproduced
+        verbatim so a revert cannot pass.
+        """
+        report = run_checks("""
+            jobs:
+              vector-provenance:
+                runs-on: ubuntu-latest
+                steps:
+                  - uses: actions/checkout@v5
+                  - uses: actions/setup-python@v6
+                    with:
+                      python-version: "3.12"
+                  - name: Install pytest
+                    run: pip install "pytest==9.1.1"
+                  - name: Every NIST/Ascon/POST vector must match its recorded digest
+                    run: python tools/check_vector_provenance.py
+                  - name: The manifest alone must not be sufficient (anchor digests)
+                    run: python -m pytest tests/test_vector_provenance_gate.py -q
+        """)
+        assert len(report.findings) == 1, messages(report)
+        assert "vector-provenance" in report.findings[0].location
+
+    def test_the_diagnostic_escape_satisfies_it(self) -> None:
+        report = run_checks("""
+            jobs:
+              gate:
+                runs-on: ubuntu-latest
+                steps:
+                  - run: pip install "pytest==9.1.1"
+                  - env:
+                      AMA_POST_DIAGNOSTIC_IMPORT: "1"
+                    run: python -m pytest tests/test_vector_provenance_gate.py -q
+        """)
+        assert report.ok, messages(report)
+        assert report.pytest_steps_checked == 1
+
+    def test_the_escape_is_honoured_at_workflow_scope(self) -> None:
+        report = run_checks("""
+            env:
+              AMA_POST_DIAGNOSTIC_IMPORT: "1"
+            jobs:
+              gate:
+                runs-on: ubuntu-latest
+                steps:
+                  - run: python -m pytest tests/ -q
+        """)
+        assert report.ok, messages(report)
+
+    def test_the_escape_is_honoured_at_job_scope(self) -> None:
+        report = run_checks("""
+            jobs:
+              gate:
+                runs-on: ubuntu-latest
+                env:
+                  AMA_POST_DIAGNOSTIC_IMPORT: "1"
+                steps:
+                  - run: python -m pytest tests/ -q
+        """)
+        assert report.ok, messages(report)
+
+    def test_an_expression_valued_escape_is_not_accepted(self) -> None:
+        """A value decided on the runner is not evidence for a static check."""
+        report = run_checks("""
+            jobs:
+              gate:
+                runs-on: ubuntu-latest
+                steps:
+                  - env:
+                      AMA_POST_DIAGNOSTIC_IMPORT: ${{ matrix.diag }}
+                    run: python -m pytest tests/ -q
+        """)
+        assert len(report.findings) == 1, messages(report)
+
+    def test_build_pipeline_is_not_an_escape(self) -> None:
+        """AMA_BUILD_PIPELINE=1 excuses only stale-artefact stages.
+
+        A job with no library at all fails the ``native-backend`` stage for a
+        reason no re-signing run repairs, so the import still raises.  A gate
+        that accepted this flag would pass a job the runner cannot start.
+        """
+        report = run_checks("""
+            jobs:
+              gate:
+                runs-on: ubuntu-latest
+                steps:
+                  - env:
+                      AMA_BUILD_PIPELINE: "1"
+                    run: python -m pytest tests/ -q
+        """)
+        assert len(report.findings) == 1, messages(report)
+
+    @pytest.mark.parametrize(
+        "build",
+        [
+            "cmake --build build -j2",
+            'pip install -e ".[dev,hsm]"',
+            "pip install .",
+            "pip install dist/ama_cryptography-5.0.0-cp311-cp311-linux_x86_64.whl",
+            "python setup.py build_ext --inplace",
+            "make c",
+        ],
+    )
+    def test_a_preceding_build_satisfies_it(self, build: str) -> None:
+        report = run_checks(
+            "jobs:\n"
+            "  test:\n"
+            "    runs-on: ubuntu-latest\n"
+            "    steps:\n"
+            f"      - run: {build}\n"
+            "      - run: python -m pytest tests/ -q\n"
+        )
+        assert report.ok, messages(report)
+
+    def test_a_build_after_the_pytest_step_does_not_satisfy_it(self) -> None:
+        """Order matters: the library has to exist when pytest starts."""
+        report = run_checks("""
+            jobs:
+              test:
+                runs-on: ubuntu-latest
+                steps:
+                  - run: python -m pytest tests/ -q
+                  - run: cmake --build build -j2
+        """)
+        assert len(report.findings) == 1, messages(report)
+
+    def test_a_build_in_another_job_does_not_satisfy_it(self) -> None:
+        report = run_checks("""
+            jobs:
+              build:
+                runs-on: ubuntu-latest
+                steps:
+                  - run: cmake --build build -j2
+              test:
+                runs-on: ubuntu-latest
+                steps:
+                  - run: python -m pytest tests/ -q
+        """)
+        assert len(report.findings) == 1, messages(report)
+        assert "jobs.test" in report.findings[0].location
+
+    def test_installing_pytest_is_not_running_pytest(self) -> None:
+        """`pip install pytest` must not be read as an invocation.
+
+        The unpinned spelling is the sharp case: the token is exactly
+        ``pytest``, so a substring or bare-token search reports every job with
+        a test dependency.
+        """
+        report = run_checks("""
+            jobs:
+              gate:
+                runs-on: ubuntu-latest
+                steps:
+                  - run: pip install pytest
+                  - run: python -m pip install "pytest==9.1.1" pytest-cov
+        """)
+        assert report.ok, messages(report)
+        assert report.pytest_steps_checked == 0
+
+    def test_a_comment_mentioning_pytest_is_not_an_invocation(self) -> None:
+        report = run_checks("""
+            jobs:
+              gate:
+                runs-on: ubuntu-latest
+                steps:
+                  - run: |
+                      # pytest tests/ would need a library; this step does not run it
+                      echo ok
+        """)
+        assert report.ok, messages(report)
+        assert report.pytest_steps_checked == 0
+
+    def test_a_heredoc_body_is_not_read_as_commands(self) -> None:
+        """Payload handed to another interpreter is data, not this shell's work."""
+        report = run_checks("""
+            jobs:
+              gate:
+                runs-on: ubuntu-latest
+                steps:
+                  - run: |
+                      python - <<'PY'
+                      print("pytest tests/ -q")
+                      PY
+        """)
+        assert report.ok, messages(report)
+        assert report.pytest_steps_checked == 0
+
+    def test_a_leading_env_assignment_does_not_hide_the_command(self) -> None:
+        report = run_checks("""
+            jobs:
+              gate:
+                runs-on: ubuntu-latest
+                steps:
+                  - run: AMA_CI_REQUIRE_BACKENDS=1 pytest tests/ -q
+        """)
+        assert len(report.findings) == 1, messages(report)
+        assert report.pytest_steps_checked == 1
+
+    def test_a_chained_command_is_seen(self) -> None:
+        report = run_checks("""
+            jobs:
+              gate:
+                runs-on: ubuntu-latest
+                steps:
+                  - run: echo start && python -m pytest tests/ -q
+        """)
+        assert len(report.findings) == 1, messages(report)
+
+    def test_a_continuation_joined_build_counts(self) -> None:
+        """`cmake --build` split by a backslash continuation is still a build."""
+        report = run_checks(
+            "jobs:\n"
+            "  test:\n"
+            "    runs-on: ubuntu-latest\n"
+            "    steps:\n"
+            "      - run: |\n"
+            "          cmake \\\n"
+            "            --build build -j2\n"
+            "      - run: python -m pytest tests/ -q\n",
+        )
+        assert report.ok, messages(report)
+
+
 class TestMalformedWorkflow:
     def test_unparseable_yaml_is_reported(self, tmp_path: Path) -> None:
         (tmp_path / "broken.yml").write_text("jobs: [unclosed\n", encoding="utf-8")
@@ -740,6 +991,7 @@ class TestRepositoryWorkflows:
         assert report.labels_checked > 0
         assert report.payloads_checked > 0
         assert report.cmake_configures_checked > 0
+        assert report.pytest_steps_checked > 0
 
     def test_the_constant_time_gate_builds_an_optimized_library(self) -> None:
         """The specific configure whose build type was missing, pinned by name.

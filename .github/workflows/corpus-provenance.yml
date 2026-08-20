@@ -113,6 +113,30 @@ jobs:
         run: python tools/check_vector_provenance.py
 
       - name: The manifest alone must not be sufficient (anchor digests)
+        # AMA_POST_DIAGNOSTIC_IMPORT=1 because `tests/conftest.py` imports
+        # `ama_cryptography` from `pytest_configure` (to name the
+        # `SecurityWarning` category for the ini `filterwarnings` entry), and
+        # since 5.0.0 a failed POST RAISES rather than logging.  This job
+        # builds no native library — it hashes 37 tracked files with stdlib
+        # `hashlib` and performs no cryptography at all — so without the flag
+        # the run dies with `INTERNALERROR ... CryptoModuleError` and exit 3
+        # before collecting a single test.  That is what happened at
+        # `725f2f1`: the preceding revision fixed `No module named pytest` and
+        # did not check that the job could then actually run the test.
+        #
+        # The flag completes the import for introspection only — the module
+        # stays in the ERROR state and every cryptographic operation is still
+        # refused — which is exactly the precedent ci.yml's documented-counts
+        # step sets for a pytest invocation that runs no cryptography.  The
+        # alternative, building and binding the library, would spend ~90 s of
+        # a 10-minute budget to satisfy a warning-filter import.
+        #
+        # `tools/check_workflow_commands.py::check_pytest_prerequisites` now
+        # fails the workflow sweep if any pytest-invoking step has neither a
+        # preceding library build nor this flag, so this class of red lane is
+        # caught before it is pushed rather than by CI.
+        env:
+          AMA_POST_DIAGNOSTIC_IMPORT: "1"
         run: python -m pytest tests/test_vector_provenance_gate.py -q
 
   corpus-provenance-gate:
