@@ -2137,16 +2137,24 @@ static size_t der_encode_signature(uint8_t out[AMA_SECP256K1_ECDSA_MAX_SIG_LEN],
  * PUBLIC API
  * ============================================================================ */
 
-AMA_API ama_error_t ama_secp256k1_ecdsa_sign(uint8_t *signature, size_t *signature_len,
-                                             const uint8_t message[32],
-                                             const uint8_t private_key[32]) {
+/* The signing arithmetic, emitting the two fixed-width scalars.
+ *
+ * Split out of ama_secp256k1_ecdsa_sign so that the DER encoder is not the
+ * only way to reach it.  Everything here is fixed width: `r_bytes` and
+ * `s_bytes` are always 32 octets.  The variable-length step is
+ * `der_encode_signature`, and it is now the caller's, which is what lets
+ * `ama_secp256k1_ecdsa_sign_raw` be measured without it — see that function.
+ */
+static ama_error_t secp256k1_ecdsa_sign_scalars(uint8_t r_bytes[32], uint8_t s_bytes[32],
+                                                const uint8_t message[32],
+                                                const uint8_t private_key[32]) {
     secp256k1_sc d, k, kinv, z, r_sc, s_sc, tmp;
     secp256k1_jac R;
     secp256k1_aff Raff;
-    uint8_t k_bytes[32], r_bytes[32], s_bytes[32], x_bytes[32];
+    uint8_t k_bytes[32], x_bytes[32];
     ama_error_t rc = AMA_ERROR_INVALID_PARAM;
 
-    if (!signature || !signature_len || !message || !private_key)
+    if (!message || !private_key)
         return AMA_ERROR_INVALID_PARAM;
 
     /* d must be in [1, n-1]. */
@@ -2187,7 +2195,6 @@ AMA_API ama_error_t ama_secp256k1_ecdsa_sign(uint8_t *signature, size_t *signatu
 
     sc_to_bytes(r_bytes, &r_sc);
     sc_to_bytes(s_bytes, &s_sc);
-    *signature_len = der_encode_signature(signature, r_bytes, s_bytes);
     rc = AMA_SUCCESS;
 
 done:
@@ -2198,8 +2205,52 @@ done:
     ama_secure_memzero(&s_sc, sizeof(s_sc));
     ama_secure_memzero(&tmp, sizeof(tmp));
     ama_secure_memzero(k_bytes, sizeof(k_bytes));
-    ama_secure_memzero(s_bytes, sizeof(s_bytes));
+    if (rc != AMA_SUCCESS) {
+        /* Never hand back a half-written r/s on the failure path. */
+        ama_secure_memzero(r_bytes, 32);
+        ama_secure_memzero(s_bytes, 32);
+    }
     return rc;
+}
+
+AMA_API ama_error_t ama_secp256k1_ecdsa_sign(uint8_t *signature, size_t *signature_len,
+                                             const uint8_t message[32],
+                                             const uint8_t private_key[32]) {
+    uint8_t r_bytes[32], s_bytes[32];
+    ama_error_t rc;
+
+    if (!signature || !signature_len)
+        return AMA_ERROR_INVALID_PARAM;
+
+    rc = secp256k1_ecdsa_sign_scalars(r_bytes, s_bytes, message, private_key);
+    if (rc == AMA_SUCCESS)
+        *signature_len = der_encode_signature(signature, r_bytes, s_bytes);
+    return rc;
+}
+
+/* Fixed-width `r || s`, 64 octets.
+ *
+ * Same arithmetic as ama_secp256k1_ecdsa_sign; only the encoding differs —
+ * the pairing ama_nistp_ecdsa_sign / ama_nistp_ecdsa_sign_raw already has.
+ *
+ * It also closes the last residual in the deterministic constant-time gate.
+ * DER strips the leading zero octets of r and s, so a DER signature is 8 to
+ * 72 octets and its length is a function of the key.  That term is a public
+ * value, but it is key-correlated, and it lands inside a retired-instruction
+ * count taken over the whole call: measured, 24 instructions over 8
+ * signatures under gcc 13 and 16 under clang 18.  `check_ghash_constant_time`
+ * therefore had to hold `ecdsa` at a threshold of 64 while its other eleven
+ * targets sat at 0 — a tolerance of 8 instructions per signature inside which
+ * a real leak could hide.  Measured through this entry point the encoder is
+ * not in the count at all, so the target joins the other eleven at 0.  This
+ * is the same remedy `nistp-ecdsa` used to reach 0.
+ */
+AMA_API ama_error_t ama_secp256k1_ecdsa_sign_raw(uint8_t signature[64],
+                                                 const uint8_t message[32],
+                                                 const uint8_t private_key[32]) {
+    if (!signature)
+        return AMA_ERROR_INVALID_PARAM;
+    return secp256k1_ecdsa_sign_scalars(signature, signature + 32, message, private_key);
 }
 
 AMA_API ama_error_t ama_secp256k1_ecdsa_verify_ex(const uint8_t *signature, size_t signature_len,

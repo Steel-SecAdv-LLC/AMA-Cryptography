@@ -384,6 +384,101 @@ int main(void) {
         TEST_ASSERT(ok, "comb: d*G == ladder over 2000 random scalars");
     }
 
+    /* ---------------------------------------------------------------
+     * Fixed-width r||s must be the same signature the DER form carries.
+     *
+     * ama_secp256k1_ecdsa_sign_raw exists so the deterministic
+     * constant-time gate can measure the signing arithmetic without the
+     * DER encoder's key-dependent length in the count.  That is only
+     * sound if the two entry points really are the same arithmetic, so
+     * this decodes the DER signature back to (r, s) and compares.
+     * ------------------------------------------------------------- */
+    {
+        uint8_t priv[32], digest[32], raw_pub64[64], raw_pub33[33];
+        uint8_t der[AMA_SECP256K1_ECDSA_MAX_SIG_LEN];
+        uint8_t raw[AMA_SECP256K1_ECDSA_RAW_SIG_LEN];
+        size_t der_len = 0;
+        int trial, ok = 1, saw_short_der = 0;
+
+        for (trial = 0; trial < 512 && ok; trial++) {
+            _xs_fill(priv, 32);
+            priv[0] &= 0x7F;
+            if (priv[31] == 0) priv[31] = 1;
+            _xs_fill(digest, 32);
+
+            der_len = sizeof der;
+            if (ama_secp256k1_ecdsa_sign(der, &der_len, digest, priv) != AMA_SUCCESS)
+                continue;
+            if (ama_secp256k1_ecdsa_sign_raw(raw, digest, priv) != AMA_SUCCESS) {
+                ok = 0;
+                fprintf(stderr, "  raw signing failed where DER succeeded (trial %d)\n", trial);
+                break;
+            }
+
+            /* A DER signature shorter than the maximum is exactly the
+             * length variance this entry point removes; record that the
+             * comparison actually saw some, so a run in which every
+             * signature happened to be full length cannot pass silently. */
+            if (der_len < AMA_SECP256K1_ECDSA_MAX_SIG_LEN)
+                saw_short_der = 1;
+
+            /* Minimal DER: 30 L 02 Lr <r> 02 Ls <s>. Decode and right-align
+             * each INTEGER into 32 octets, then compare with r||s. */
+            {
+                const uint8_t *p = der;
+                uint8_t want[AMA_SECP256K1_ECDSA_RAW_SIG_LEN];
+                size_t i, lr, ls;
+                memset(want, 0, sizeof want);
+                if (p[0] != 0x30 || (size_t)p[1] + 2u != der_len) { ok = 0; break; }
+                p += 2;
+                if (p[0] != 0x02) { ok = 0; break; }
+                lr = p[1]; p += 2;
+                if (lr > 33) { ok = 0; break; }
+                for (i = 0; i < lr; i++)
+                    if (lr - i <= 32) want[32 - (lr - i)] = p[i];
+                p += lr;
+                if (p[0] != 0x02) { ok = 0; break; }
+                ls = p[1]; p += 2;
+                if (ls > 33) { ok = 0; break; }
+                for (i = 0; i < ls; i++)
+                    if (ls - i <= 32) want[64 - (ls - i)] = p[i];
+
+                if (memcmp(want, raw, sizeof want) != 0) {
+                    ok = 0;
+                    fprintf(stderr, "  raw != DER-decoded r||s at trial %d\n", trial);
+                }
+            }
+
+            /* And the raw signature must verify, once re-encoded. */
+            if (ok) {
+                if (ama_secp256k1_pubkey_from_privkey(priv, raw_pub33) != AMA_SUCCESS) continue;
+                if (ama_secp256k1_pubkey_decompress(raw_pub33, raw_pub64) != AMA_SUCCESS) continue;
+                if (ama_secp256k1_ecdsa_verify(der, der_len, digest, raw_pub64) != AMA_SUCCESS) {
+                    ok = 0;
+                    fprintf(stderr, "  DER signature did not verify at trial %d\n", trial);
+                }
+            }
+        }
+        TEST_ASSERT(ok, "raw r||s equals the DER signature over 512 keys");
+        TEST_ASSERT(saw_short_der,
+                    "the comparison saw at least one short DER signature");
+
+        /* Rejections mirror the DER entry point's. */
+        TEST_ASSERT(ama_secp256k1_ecdsa_sign_raw(NULL, digest, priv) == AMA_ERROR_INVALID_PARAM,
+                    "raw signing rejects a NULL output buffer");
+        TEST_ASSERT(ama_secp256k1_ecdsa_sign_raw(raw, NULL, priv) == AMA_ERROR_INVALID_PARAM,
+                    "raw signing rejects a NULL digest");
+        TEST_ASSERT(ama_secp256k1_ecdsa_sign_raw(raw, digest, NULL) == AMA_ERROR_INVALID_PARAM,
+                    "raw signing rejects a NULL private key");
+        {
+            uint8_t zero_priv[32];
+            memset(zero_priv, 0, sizeof zero_priv);
+            memset(raw, 0xAA, sizeof raw);
+            TEST_ASSERT(ama_secp256k1_ecdsa_sign_raw(raw, digest, zero_priv) != AMA_SUCCESS,
+                        "raw signing rejects the zero scalar");
+        }
+    }
+
     printf("\n===========================================\n");
     printf("All secp256k1 tests passed ✓\n");
     printf("===========================================\n");

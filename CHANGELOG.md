@@ -156,11 +156,38 @@ reasoning for ruff, and one `B324` that is a false positive on the argument —
 digests an ECDSA verification consumes, and declaring them non-security to
 satisfy a scanner would be false.
 
-**What is still open.** `ecdsa` retains a 64-instruction tolerance because
-secp256k1 exposes only the DER form; a secret-dependent divergence below 8
-instructions per signature is beneath what that target can resolve. Closing it
-needs a fixed-width secp256k1 signing entry point, the same remedy
-`nistp-ecdsa` used.
+**The last non-zero threshold, closed.** `ecdsa` had retained a 64-instruction
+tolerance because secp256k1 exposed only the DER form, whose length is a
+function of the key; a secret-dependent divergence below 8 instructions per
+signature was beneath what that target could resolve. `src/c/ama_secp256k1.c`
+now factors the signing arithmetic into a helper that emits the two
+fixed-width scalars, and `ama_secp256k1_ecdsa_sign_raw` returns them as a
+constant 64 octets — the same remedy `nistp-ecdsa` used, and the compact wire
+form in its own right. The DER entry point is unchanged for callers: it calls
+the same helper and encodes.
+
+Measured on this tree with the encoder outside the measurement, all eight key
+classes are byte-identical under both compilers:
+
+```
+gcc 13    11,645,734 I refs   2,082,049 D refs   1,706 D1   1,456 LLd
+clang 18  11,948,072 I refs   3,202,907 D refs   1,713 D1   1,464 LLd
+```
+
+with a same-class floor of zero. `THRESHOLDS["ecdsa"]` is now 0, so **all
+twelve deterministic constant-time targets sit at zero.**
+
+Equivalence is proved, not assumed: `tests/c/test_secp256k1.c` decodes the
+DER signature back to (r, s) and compares it with `r||s` over 512 keys, and
+asserts the run saw at least one short DER signature so the comparison cannot
+pass over full-length cases alone.
+
+**What is still open.** On Argon2id's data-dependent phase, `ref_lane = J2 %
+lanes` has a password-derived dividend. It is deliberately unchanged: RFC 9106
+§3.4 specifies that phase as data-dependent, and `memory[ref_index]` two lines
+later is a secret-indexed read into a multi-megabyte buffer — a far stronger
+channel on the same secret. It is recorded in `tools/check_secret_division.py`
+with that reasoning rather than removed.
 
 ### Constant-time gate, fifth pass (2026-08-19) — the gates were measuring an unoptimized library, and a live ECDSA leak was sitting behind that
 

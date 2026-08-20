@@ -257,26 +257,39 @@ class TestVerdict:
         counts[tool.KEY_CLASSES[-1]] = _m(11_628_800 + 2_952)
         assert _run_main(tool, monkeypatch, tmp_path, counts) == 1
 
-    def test_delta_below_threshold_passes(
+    def test_an_identical_count_across_every_class_passes(
         self, tool: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        """The measured benign DER spread must not turn the gate red.
+        """Zero delta is now the only thing that passes this target.
 
-        24 instructions over 8 signatures under gcc 13 -O3 and 16 under clang
-        18 -O3, both on the archive build the workflow configures (Release,
-        LTO off). The 80 an earlier revision of this test used predates the
-        driver consuming a fixed byte count instead of iterating to `siglen`,
-        which the file's own calibration note records as ~9 instructions per
-        byte of measurement noise the driver was creating itself.
+        An earlier revision asserted that a delta of 24 passed, because
+        secp256k1 exposed only the DER form and the leading-zero handling of
+        the public r and s stayed inside the count — 24 retired instructions
+        over 8 signatures under gcc 13 -O3, 16 under clang 18. That term is
+        gone: the driver signs through ``ama_secp256k1_ecdsa_sign_raw``, which
+        emits a constant 64 octets, and the limit is 0. Asserting that 24
+        still passes would now be asserting the gate is looser than it is.
+        """
+        counts: dict[str, Optional[dict[str, int]]] = {k: _m(11_628_800) for k in tool.KEY_CLASSES}
+        assert _run_main(tool, monkeypatch, tmp_path, counts) == 0
+
+    def test_the_old_benign_der_delta_now_fails(
+        self, tool: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """The tolerance really is gone, not merely renamed.
+
+        24 was the largest benign spread ever measured on this target and was
+        explicitly inside its old limit of 64. It has to be a failure now, or
+        removing the DER term bought nothing.
         """
         counts: dict[str, Optional[dict[str, int]]] = {k: _m(11_628_800) for k in tool.KEY_CLASSES}
         counts[tool.KEY_CLASSES[-1]] = _m(11_628_800 + 24)
-        assert _run_main(tool, monkeypatch, tmp_path, counts) == 0
+        assert _run_main(tool, monkeypatch, tmp_path, counts) == 1
 
     def test_a_delta_one_above_the_ecdsa_limit_fails(
         self, tool: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        """The one non-zero limit still has to be a limit."""
+        """A limit of zero still has to be a limit: one instruction fails."""
         counts: dict[str, Optional[dict[str, int]]] = {k: _m(11_628_800) for k in tool.KEY_CLASSES}
         counts[tool.KEY_CLASSES[-1]] = _m(11_628_800 + tool.THRESHOLDS["ecdsa"] + 1)
         assert _run_main(tool, monkeypatch, tmp_path, counts) == 1
@@ -498,21 +511,46 @@ class TestCalibration:
     def test_the_default_for_an_unlisted_target_is_zero(self, tool: ModuleType) -> None:
         assert tool.DEFAULT_THRESHOLD == 0
 
-    def test_ecdsa_threshold_sits_above_its_benign_term_and_below_the_defect(
+    def test_ecdsa_reaches_zero_by_removing_der_not_by_tolerating_it(
         self, tool: ModuleType
     ) -> None:
-        """24 is the benign DER delta; 2,952 is the defect on a reverted build.
+        """secp256k1's limit is 0, and the driver is why.
 
-        secp256k1 exposes only the DER signing form, so the leading-zero
-        handling of the public r and s stays inside the count: 24 retired
-        instructions over 8 signatures under gcc 13 -O3, 16 under clang 18.
-        The limit has to clear that and stay far under the Montgomery
-        extra-reduction leak this target was added for. At the original 3,000
-        it sat 48 instructions ABOVE that defect; at the flat 200 that
-        replaced it, 8 signatures of amplification meant 25 instructions per
-        signature of real divergence still passed.
+        The history this replaces: 2,952 is the Montgomery extra-reduction
+        leak this target was added for, measured on a reverted build. The
+        original limit of 3,000 sat 48 instructions ABOVE that defect. The
+        flat 200 that replaced it still let 25 instructions per signature of
+        real divergence pass. 64 — clearing the 24-instruction benign DER
+        spread under gcc 13 and 16 under clang 18 — still left 8 instructions
+        per signature of room.
+
+        The room is gone, and not by lowering a number over unchanged code:
+        ``ama_secp256k1_ecdsa_sign_raw`` runs identical arithmetic to the DER
+        entry point and writes a fixed 64 octets, so the encoder's
+        key-dependent length term is outside the measurement. Signing through
+        the DER form again would put it back while the limit stayed at 0,
+        which is a flaky gate rather than a strict one — so the driver is
+        asserted, not just the number. This is the pairing
+        ``nistp-ecdsa`` already had.
         """
-        assert 24 < tool.THRESHOLDS["ecdsa"] < 2952
+        driver = tool._DRIVERS["ecdsa"]
+        assert "ama_secp256k1_ecdsa_sign_raw(" in driver
+        assert "ama_secp256k1_ecdsa_sign(" not in driver
+        assert tool.THRESHOLDS["ecdsa"] == 0
+        assert tool.THRESHOLDS["ecdsa"] < 2952
+
+    def test_every_target_now_sits_at_zero(self, tool: ModuleType) -> None:
+        """The last non-zero threshold is gone.
+
+        Recorded as an assertion rather than prose so that reintroducing a
+        tolerance has to come here and say which target needs one and why.
+        """
+        nonzero = {k: v for k, v in tool.THRESHOLDS.items() if v != 0}
+        assert not nonzero, (
+            f"these targets carry a tolerance: {nonzero}. A non-zero limit is "
+            f"room a real divergence can hide in; if one is genuinely needed, "
+            f"state the benign term it covers and how it was measured."
+        )
 
     def test_nistp_reaches_zero_by_removing_der_not_by_tolerating_it(
         self, tool: ModuleType

@@ -1582,6 +1582,14 @@ AMA_API ama_error_t ama_secp256k1_pubkey_from_privkey(
 #define AMA_SECP256K1_ECDSA_MAX_SIG_LEN 72
 
 /**
+ * Length of a fixed-width secp256k1 ECDSA signature, in bytes.
+ *
+ * `r || s`, 32 octets each, leading zeros preserved. Unlike the DER
+ * form this length is constant and carries no information about the key.
+ */
+#define AMA_SECP256K1_ECDSA_RAW_SIG_LEN 64
+
+/**
  * @brief Sign a 32-byte message digest with ECDSA over secp256k1
  *
  * Deterministic per RFC 6979 §3.2 using HMAC-SHA-256: the nonce is
@@ -1627,6 +1635,35 @@ AMA_API ama_error_t ama_secp256k1_ecdsa_sign(
     const uint8_t message[32],
     const uint8_t private_key[32]
 );
+
+/**
+ * @brief Fixed-width secp256k1 ECDSA signature, `r || s`.
+ *
+ * Identical arithmetic to `ama_secp256k1_ecdsa_sign` — deterministic RFC 6979
+ * nonce, low-`s` normalisation — differing only in the encoding: exactly
+ * `AMA_SECP256K1_ECDSA_RAW_SIG_LEN` octets, `r` then `s`, each a 32-octet
+ * big-endian scalar with leading zeros preserved. This is the compact wire
+ * form; `ama_secp256k1_ecdsa_verify` consumes DER, so a signature produced
+ * here must be re-encoded before it is verified through that entry point.
+ *
+ * It is also what makes the deterministic constant-time gate exact for this
+ * curve. DER omits the leading zero octets of `r` and `s`, so a DER signature
+ * has a key-dependent length; that term is public, but it lands inside a
+ * retired-instruction count taken over the whole call and forced
+ * `check_ghash_constant_time.py` to hold the `ecdsa` target at a non-zero
+ * threshold. Measured through this entry point the encoder is outside the
+ * measurement and the target sits at 0, like the other eleven.
+ *
+ * @param signature   Output buffer of exactly 64 octets.
+ * @param message     32-octet digest. This function does NOT hash.
+ * @param private_key 32-octet scalar in [1, n-1].
+ * @return AMA_SUCCESS, or AMA_ERROR_INVALID_PARAM. On any non-success the
+ *         output buffer is zeroized rather than left partly written.
+ */
+AMA_API ama_error_t ama_secp256k1_ecdsa_sign_raw(
+    uint8_t signature[64],
+    const uint8_t message[32],
+    const uint8_t private_key[32]);
 
 /**
  * @brief Verify a DER-encoded ECDSA signature over secp256k1

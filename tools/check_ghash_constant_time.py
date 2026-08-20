@@ -245,12 +245,12 @@ KEY_CLASSES = ("A", "Z", "m", "q", "0", "~", "!", "5")
 #: ed25519-sign          0 / 0               0 / 0                0
 #: x25519                0 / 0               0 / 0                0
 #: nistp-ecdsa           0 / 0               0 / 0                0
-#: ecdsa                24 / 8              16 / 8                0
+#: ecdsa                 0 / 0               0 / 0                0
 #: ===============  =================  ===================  ===============
 #:
-#: Eleven of the twelve are exactly zero, on both compilers, with a same-class
-#: floor of exactly zero — which is what "deterministic instrument" has to
-#: mean.  Their limit is 0.  A single retired instruction of cross-class
+#: All twelve are exactly zero, on both compilers, with a same-class floor of
+#: exactly zero — which is what "deterministic instrument" has to mean.  Their
+#: limit is 0.  A single retired instruction of cross-class
 #: difference in any of them falsifies the property the target states, and
 #: there is nothing left for a threshold to be headroom FOR: the floor check
 #: already reports INCONCLUSIVE (exit 2) rather than passing if the
@@ -263,21 +263,32 @@ KEY_CLASSES = ("A", "Z", "m", "q", "0", "~", "!", "5")
 #: length variance — a public-value term, but a key-dependent one — is no
 #: longer inside the measurement at all.
 #:
-#: `ecdsa` is the one target with a benign term left.  secp256k1 exposes only
-#: the DER form, so the leading-zero handling of r and s stays in the count:
-#: 24 instructions over 8 signatures under gcc, 16 under clang, i.e. 2-3 per
-#: signature.  Its limit is 64 — 2.7x the worst measured benign delta, and a
-#: tolerance of 8 instructions per signature rather than 25.  THIS IS THE
-#: RESIDUAL AND IT IS STATED RATHER THAN ROUNDED AWAY: a secret-dependent
-#: divergence smaller than 8 instructions per secp256k1 signature is below
-#: what this target can resolve.  Closing it needs a fixed-width secp256k1
-#: signing entry point, the same remedy nistp-ecdsa just used.
+#: `ecdsa` was the last holdout and is now closed the same way.  secp256k1
+#: used to expose only the DER form, so the leading-zero handling of r and s
+#: stayed in the count — 24 instructions over 8 signatures under gcc, 16 under
+#: clang — and the target carried a limit of 64.  That was a tolerance of 8
+#: instructions per signature, and a secret-dependent divergence smaller than
+#: that was below what the target could resolve.
+#:
+#: `ama_secp256k1_ecdsa_sign_raw` emits a constant 64 octets from identical
+#: arithmetic, so the encoder is no longer inside the measurement.  Measured
+#: on this tree, all eight key classes are byte-identical under both
+#: compilers:
+#:
+#:     gcc 13    11,645,734 I refs   2,082,049 D refs   1,706 D1   1,456 LLd
+#:     clang 18  11,948,072 I refs   3,202,907 D refs   1,713 D1   1,464 LLd
+#:
+#: with a same-class floor of zero.  The limit is 0.  The two entry points are
+#: not assumed equivalent: tests/c/test_secp256k1.c decodes the DER signature
+#: back to (r, s) and compares it against r||s over 512 keys, and asserts the
+#: comparison saw at least one short DER signature so it cannot pass over
+#: full-length cases alone.
 THRESHOLDS = {
-    # One legitimate variable-time step: DER encoding of the public r and s.
-    # Measured 24 (gcc 13 -O3) and 16 (clang 18 -O3) over 8 signatures.
-    "ecdsa": 64,
-    # The remaining eleven are invariant by construction and measure exactly
-    # zero on both compilers; see the table above.
+    # Every one of the twelve is now invariant by construction and measures
+    # exactly zero on both compilers; see the table above.  `ecdsa` was the
+    # last holdout at 64, for the DER length term, and reached zero the way
+    # `nistp-ecdsa` did: by signing through a fixed-width entry point.
+    "ecdsa": 0,
     "ghash": 0,
     "consttime": 0,
     "aead-verify": 0,
@@ -478,8 +489,7 @@ _ECDSA_DRIVER = r"""
  * deterministic, so with a fixed message the only input that moves is the
  * key and the count is reproducible to the instruction. */
 int main(int argc, char **argv) {
-    uint8_t sk[32], pk[33], sig[80], msg[32];
-    size_t siglen;
+    uint8_t sk[32], pk[33], sig[AMA_SECP256K1_ECDSA_RAW_SIG_LEN], msg[32];
     unsigned fill = (argc > 1) ? (unsigned)(unsigned char)argv[1][0] : 0x41u;
 
     /* Spread the class byte across the key — see the ghash driver.  A
@@ -493,18 +503,24 @@ int main(int argc, char **argv) {
 
     static volatile uint8_t sink;
     for (int i = 0; i < 8; i++) {
-        /* Clear the whole buffer so the bytes past the signature are
-         * deterministic, then consume a FIXED count below. */
         memset(sig, 0, sizeof sig);
-        siglen = sizeof sig;
-        if (ama_secp256k1_ecdsa_sign(sig, &siglen, msg, sk) != AMA_SUCCESS) return 1;
-        /* Iterating to `siglen` would make the *driver* variable-time on the
-         * DER length.  That length is public, but it put ~9 instructions per
-         * byte of avoidable variance into the measurement, and a threshold
-         * padded to tolerate it is a threshold with room for a real leak
-         * underneath.  Consuming a fixed 80 bytes removes the term entirely
-         * and leaves only der_encode_signature's own public-data-dependent
-         * work, which is what drops the benign spread to single digits. */
+        /* The FIXED-WIDTH entry point, not the DER one.
+         *
+         * DER omits the leading zero octets of r and s, so a DER signature
+         * is 8 to 72 octets and its length is a function of the key.  The
+         * length is public, but it is key-correlated and it lands inside a
+         * count taken over the whole call, which is why this target had to
+         * sit at a threshold of 64 while the other eleven sat at 0 — a
+         * tolerance of 8 instructions per signature with room for a real
+         * leak underneath.  ama_secp256k1_ecdsa_sign_raw runs identical
+         * arithmetic and emits a constant 64 octets, so the encoder is
+         * outside the measurement and the threshold is 0.
+         *
+         * Equivalence is not assumed: tests/c/test_secp256k1.c decodes the
+         * DER signature back to (r, s) and compares it against r||s over 512
+         * keys, and asserts it saw at least one short DER signature so the
+         * comparison cannot pass over full-length cases alone. */
+        if (ama_secp256k1_ecdsa_sign_raw(sig, msg, sk) != AMA_SUCCESS) return 1;
         for (size_t j = 0; j < sizeof sig; j++) sink = (uint8_t)(sink ^ sig[j]);
     }
     return 0;
