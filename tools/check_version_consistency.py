@@ -389,6 +389,92 @@ def scan_c_constant_transcriptions(repo: Path, header: Path | None = None) -> tu
     return problems, checked
 
 
+# --------------------------------------------------------------------------
+# Invariant-register range claims.
+#
+# `INVARIANTS.md` is the canonical register, and five documents state its
+# extent as "INVARIANT-1 through INVARIANT-N".  N is a count in prose, so it
+# goes stale the way every other written-down count does — and this one did:
+# the branch that took the register from 38 to 42 corrected three of the four
+# files that named the old range, and `.github/copilot-instructions.md` was
+# still saying 42 after the register reached 43.
+#
+# A range anchored at INVARIANT-1 is a claim about the WHOLE register and is
+# checked.  Any other range — `INVARIANT-39 through INVARIANT-42` in
+# CHANGELOG.md, describing one release's scope — is a claim about a subset and
+# is deliberately left alone; forcing it to the register's maximum would make
+# release history wrong.
+#
+# The register itself is checked for contiguity, because "1 through N" is only
+# a true description of a set that has no gaps in it.
+# --------------------------------------------------------------------------
+
+#: `## INVARIANT-<n>` headings in the canonical register.
+_INVARIANT_HEADING_RE = re.compile(r"(?m)^## INVARIANT-(\d+)\b")
+
+#: A prose range whose lower bound is the first invariant.  Both dash forms and
+#: both English spellings are accepted; the bound is captured so the message
+#: can name what was written.  Bounded quantifiers only — no nested repetition
+#: — so this stays linear on adversarial input.
+_INVARIANT_RANGE_RE = re.compile(r"INVARIANT-1\s*(?:through|to|[-\u2013\u2014])\s*INVARIANT-(\d+)")
+
+
+def invariant_register_extent(path: Path) -> tuple[int, list[str]]:
+    """``(highest invariant, problems)`` for the canonical register.
+
+    Problems are gaps and duplicate headings: "INVARIANT-1 through
+    INVARIANT-N" describes a contiguous set, so a register with a hole in it
+    makes every document that states the range wrong in a way no count check
+    would catch.
+    """
+    text = _read(path)
+    numbers = [int(m.group(1)) for m in _INVARIANT_HEADING_RE.finditer(text)]
+    if not numbers:
+        return 0, [
+            f"  - {path.name} has no `## INVARIANT-<n>` headings; the register "
+            f"cannot be read, so no document's range claim can be checked"
+        ]
+    highest = max(numbers)
+    problems: list[str] = []
+    missing = sorted(set(range(1, highest + 1)) - set(numbers))
+    if missing:
+        problems.append(
+            f"  - {path.name}: the register is not contiguous — no heading for "
+            f"{', '.join(f'INVARIANT-{n}' for n in missing)}"
+        )
+    duplicates = sorted({n for n in numbers if numbers.count(n) > 1})
+    if duplicates:
+        problems.append(
+            f"  - {path.name}: duplicate heading(s) for "
+            f"{', '.join(f'INVARIANT-{n}' for n in duplicates)}"
+        )
+    return highest, problems
+
+
+def scan_invariant_range_claims(repo: Path, highest: int) -> tuple[list[str], int]:
+    """``(problems, claims checked)`` over every tracked Markdown file."""
+    problems: list[str] = []
+    checked = 0
+    for path in sorted(repo.rglob("*.md")):
+        if ".git" in path.parts or "node_modules" in path.parts:
+            continue
+        text = _read(path)
+        if not text:
+            continue
+        for match in _INVARIANT_RANGE_RE.finditer(text):
+            checked += 1
+            claimed = int(match.group(1))
+            if claimed == highest:
+                continue
+            line = text[: match.start()].count("\n") + 1
+            problems.append(
+                f"  - {repo_relative(path, repo)}:{line}: claims "
+                f"{match.group(0)!r}, but INVARIANTS.md defines "
+                f"INVARIANT-1 through INVARIANT-{highest}"
+            )
+    return problems, checked
+
+
 def extract(file: str, pattern: str) -> str | None:
     """Return the single capture group from `pattern`, or None if not found.
 
@@ -640,6 +726,23 @@ def main() -> int:
         )
     else:
         print("OK    .github/INVARIANTS.md -> ../INVARIANTS.md pointer")
+
+    # Every document that states the register's extent must state the real one.
+    highest_invariant, register_problems = invariant_register_extent(root_inv_path)
+    failures.extend(register_problems)
+    if highest_invariant:
+        range_problems, ranges_checked = scan_invariant_range_claims(REPO, highest_invariant)
+        if range_problems:
+            failures.append(
+                f"  - invariant-range claims disagree with INVARIANTS.md "
+                f"({len(range_problems)} stale):"
+            )
+            failures.extend(f"    {row}" for row in range_problems)
+        else:
+            print(
+                f"OK    invariant-range claims ({ranges_checked} checked)"
+                f"      = INVARIANT-1 through INVARIANT-{highest_invariant}"
+            )
 
     # C-source embedded-version-literal scan. The canonical anchor for
     # the C side is include/ama_cryptography.h's

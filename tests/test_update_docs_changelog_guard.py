@@ -296,3 +296,109 @@ class TestLocRegeneratorRefusesUnstagedAdditions:
         """Meta-check: this repository's own working tree is in the state the
         regenerator requires, so the guard above is not permanently tripped."""
         assert update_docs._unstaged_additions_that_would_count() == []
+
+
+class TestStaticTestCountRegenerator:
+    """The other half of the documented-counts gate now has a command too.
+
+    ``--loc`` regenerated the Lines-of-Code figures; the static
+    test-function/file claims across README.md, ARCHITECTURE.md and
+    docs/METRICS_REPORT.md had to be found and hand-edited, and the gate that
+    catches them named no command for them.  That asymmetry is the friction
+    that produces a stale count, which is what put thirty-odd CI jobs red on
+    this branch.
+
+    These drive a REAL tests/ tree rather than a stubbed measurement, so the
+    number written is the number the gate would measure.
+    """
+
+    @staticmethod
+    def _tree(tmp_path: Path) -> tuple[int, int]:
+        """A tests/ tree with 3 test functions across 2 files."""
+        tests = tmp_path / "tests"
+        tests.mkdir()
+        (tests / "test_a.py").write_text(
+            "def test_one():\n    pass\n\n\ndef test_two():\n    pass\n", encoding="utf-8"
+        )
+        (tests / "test_b.py").write_text("def test_three():\n    pass\n", encoding="utf-8")
+        (tests / "helper.py").write_text("def helper():\n    pass\n", encoding="utf-8")
+        return 3, 2
+
+    def test_the_rewrite_regex_matches_the_gate_it_serves(self) -> None:
+        """A regenerator that recognises a different set than the gate leaves
+        exactly the claims the gate fails on."""
+        counts = update_docs._counts_module()
+        samples = [
+            "4,085 test functions across 173 Python test files",
+            "4,085 Python test functions across 173 test files",
+            "4085 static Python test functions across 127 files",
+        ]
+        for sample in samples:
+            gate_hits = counts._AGGREGATE_RE.findall(sample)
+            rewrite_hits = update_docs._AGGREGATE_REWRITE_RE.findall(sample)
+            assert len(gate_hits) == len(rewrite_hits) == 1, sample
+            assert (gate_hits[0][0], gate_hits[0][1]) == (
+                rewrite_hits[0][0],
+                rewrite_hits[0][2],
+            ), sample
+
+    def test_a_stale_claim_is_rewritten_in_place(self, tmp_path: Path) -> None:
+        functions, files = self._tree(tmp_path)
+        readme = tmp_path / "README.md"
+        readme.write_text(
+            "- **Rigorous testing:** 1 test functions across 2 Python files plus 59 C suites\n",
+            encoding="utf-8",
+        )
+        assert update_docs.update_static_test_counts(root=tmp_path) is True
+        text = readme.read_text(encoding="utf-8")
+        assert f"{functions} test functions across {files} Python files" in text
+        assert "plus 59 C suites" in text, "the document's own wording must survive"
+
+    def test_a_revision_history_row_is_left_alone(self, tmp_path: Path) -> None:
+        """Rewriting a history row would falsify the record, not update a claim."""
+        self._tree(tmp_path)
+        doc = tmp_path / "README.md"
+        history = (
+            "| 3.5.0 | 2026-07-30 | Re-measured: 3,057 static Python test "
+            "functions across 127 files. |\n"
+        )
+        doc.write_text(history, encoding="utf-8")
+        assert update_docs.update_static_test_counts(root=tmp_path) is False
+        assert doc.read_text(encoding="utf-8") == history
+
+    def test_a_current_tree_reports_no_change(self, tmp_path: Path) -> None:
+        functions, files = self._tree(tmp_path)
+        doc = tmp_path / "README.md"
+        doc.write_text(
+            f"{functions} test functions across {files} Python files\n", encoding="utf-8"
+        )
+        assert update_docs.update_static_test_counts(root=tmp_path) is False
+
+    def test_dry_run_writes_nothing(self, tmp_path: Path) -> None:
+        self._tree(tmp_path)
+        doc = tmp_path / "README.md"
+        before = "1 test functions across 2 Python files\n"
+        doc.write_text(before, encoding="utf-8")
+        assert update_docs.update_static_test_counts(dry_run=True, root=tmp_path) is True
+        assert doc.read_text(encoding="utf-8") == before
+
+    def test_the_metrics_table_rows_are_rewritten(self, tmp_path: Path) -> None:
+        functions, files = self._tree(tmp_path)
+        (tmp_path / "docs").mkdir()
+        doc = tmp_path / "docs" / "METRICS_REPORT.md"
+        doc.write_text(
+            "| Python test files under `tests/` matching the static regex | 1 |\n"
+            "| Syntactic `def test_` matches under `tests/**/*.py` | **2** |\n",
+            encoding="utf-8",
+        )
+        assert update_docs.update_static_test_counts(root=tmp_path) is True
+        text = doc.read_text(encoding="utf-8")
+        assert f"| Python test files under `tests/` matching the static regex | {files} |" in text
+        assert f"| Syntactic `def test_` matches under `tests/**/*.py` | **{functions}** |" in text
+
+    def test_the_real_tree_is_current_after_a_regeneration(self) -> None:
+        """Meta-check: this repository's own aggregate claims are current, so
+        the command the gate recommends does leave the gate green."""
+        counts = update_docs._counts_module()
+        problems = counts.check_aggregate_test_counts(REPO_ROOT)
+        assert problems == [], problems

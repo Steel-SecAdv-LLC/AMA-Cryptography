@@ -65,7 +65,7 @@ import subprocess
 import sys
 from datetime import date
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 ROOT = Path(__file__).resolve().parent.parent
 CHANGELOG = ROOT / "CHANGELOG.md"
@@ -812,6 +812,92 @@ def update_loc_metrics(dry_run: bool = False) -> bool:
     return True
 
 
+#: The aggregate claim, with the connective text captured so a rewrite keeps
+#: each document's own wording ("4,085 test functions across 173 Python test
+#: files", "4,085 Python test functions across 173 test files", …).  Mirrors
+#: ``check_documented_counts._AGGREGATE_RE`` exactly, with groups added around
+#: the parts that must survive; the two are pinned equal by
+#: ``tests/test_documented_counts_gate.py``.  Every quantifier is bounded, for
+#: the reason recorded on the gate's copy.
+_AGGREGATE_REWRITE_RE = re.compile(
+    r"([\d,]{1,15})(\s{1,8}(?:static\s{1,8})?(?:Python\s{1,8})?"
+    r"test functions across\s{1,8})([\d,]{1,15})(\s{1,8}"
+    r"(?:Python\s{1,8})?(?:test\s{1,8})?files?)"
+)
+
+#: Documents carrying a gated static-test-count claim.
+_TEST_COUNT_DOCUMENTS = ("README.md", "ARCHITECTURE.md", "docs/METRICS_REPORT.md")
+
+
+def update_static_test_counts(dry_run: bool = False, root: Optional[Path] = None) -> bool:
+    """Re-measure and rewrite every gated static test-function/file count.
+
+    The LoC half of the documented-counts gate had a one-command fix
+    (``--loc``) and this half did not, so a commit that added a test left four
+    claims across three documents to be found and hand-edited — and the gate
+    that catches them names no command for them.  That asymmetry is what makes
+    a count gate feel like an obstacle instead of a tool, and this branch's own
+    CI went red on the LoC half for exactly the reason the other half would
+    have: a change landed and nobody re-measured.
+
+    Measured with ``check_documented_counts.measure_static_test_counts`` —
+    imported, never re-derived — so the regenerator and the gate cannot
+    disagree about what the number is.
+
+    Revision-history rows are skipped, on the same rule the gate applies: a row
+    like ``| 3.5.0 | 2026-07-30 | … 3,057 static Python test functions across
+    127 files … |`` records what was true at a past release, and rewriting it
+    would falsify the record rather than update a claim.
+
+    Args:
+        dry_run: report what would change and write nothing.
+        root: tree to measure and rewrite, defaulting to this repository.
+            An explicit parameter rather than a patched module global, so the
+            tests drive a real directory instead of redirecting the loader that
+            imports the gate module.
+    """
+    counts = _counts_module()
+    tree = ROOT if root is None else root
+    functions, files = counts.measure_static_test_counts(tree)
+    changed = False
+
+    for relative in _TEST_COUNT_DOCUMENTS:
+        path = tree / relative
+        if not path.is_file():
+            continue
+        original = path.read_text(encoding="utf-8")
+        rewritten_lines = []
+        for line in original.splitlines(keepends=True):
+            if counts._HISTORY_ROW_RE.match(line):
+                rewritten_lines.append(line)
+                continue
+            line = _AGGREGATE_REWRITE_RE.sub(
+                lambda m: f"{functions:,}{m.group(2)}{files:,}{m.group(4)}", line
+            )
+            line = counts._METRICS_FILES_RE.sub(
+                "| Python test files under `tests/` matching the static regex " f"| {files:,} |",
+                line,
+            )
+            line = counts._METRICS_FUNCS_RE.sub(
+                "| Syntactic `def test_` matches under `tests/**/*.py` " f"| **{functions:,}** |",
+                line,
+            )
+            rewritten_lines.append(line)
+        text = "".join(rewritten_lines)
+        if text == original:
+            continue
+        changed = True
+        if not dry_run:
+            path.write_text(text, encoding="utf-8", newline="")
+
+    if not changed:
+        print("   static test counts: already current")
+        return False
+    verb = "would be re-measured and rewritten" if dry_run else "re-measured and rewritten"
+    print(f"   static test counts ({functions:,} functions / {files:,} files): {verb}")
+    return True
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="AMA Cryptography auto-documentation updater")
     parser.add_argument(
@@ -830,6 +916,14 @@ def main() -> None:
         help="Only re-measure and rewrite the Lines-of-Code figures in "
         "docs/METRICS_REPORT.md (the one-command fix for a red LoC gate)",
     )
+    parser.add_argument(
+        "--counts",
+        action="store_true",
+        help="Only re-measure and rewrite every count the documented-counts "
+        "gate checks: the Lines-of-Code figures AND the static "
+        "test-function/file claims in README.md, ARCHITECTURE.md and "
+        "docs/METRICS_REPORT.md (the one-command fix for a red counts gate)",
+    )
     args = parser.parse_args()
 
     if args.dry_run:
@@ -837,7 +931,7 @@ def main() -> None:
 
     any_changed = False
 
-    if args.loc:
+    if args.loc or args.counts:
         print("LoC metrics")
         try:
             any_changed = update_loc_metrics(dry_run=args.dry_run)
@@ -846,6 +940,9 @@ def main() -> None:
             # git commit` must not proceed on figures the commit invalidates.
             print(f"   ERROR: {exc}", file=sys.stderr)
             raise SystemExit(1) from exc
+        if args.counts:
+            print("\nStatic test counts")
+            any_changed |= update_static_test_counts(dry_run=args.dry_run)
         print(
             "\n✓ Documentation updated" + (" (dry run)" if args.dry_run else "")
             if any_changed
@@ -872,6 +969,9 @@ def main() -> None:
         except UnstagedAdditionsError as exc:
             print(f"   ERROR: {exc}", file=sys.stderr)
             raise SystemExit(1) from exc
+
+        print("\n6. Static test counts")
+        any_changed |= update_static_test_counts(dry_run=args.dry_run)
 
     if any_changed:
         print("\n✓ Documentation updated" + (" (dry run)" if args.dry_run else ""))

@@ -57,6 +57,84 @@ def test_github_invariants_file_is_pointer() -> None:
     )
 
 
+class TestInvariantRangeClaims:
+    """ "INVARIANT-1 through INVARIANT-N" is a count in prose, and it went stale.
+
+    The branch that took the register from 38 to 42 corrected three of the four
+    documents naming the old range. By the time the register reached 43,
+    `.github/copilot-instructions.md` still said 42 — a canonical-register
+    extent that disagreed with the register, in the file that tells an
+    assistant what the register is.
+    """
+
+    def test_the_real_tree_agrees_with_the_register(self, tool_module: ModuleType) -> None:
+        repo = TOOL_PATH.resolve().parent.parent
+        highest, register_problems = tool_module.invariant_register_extent(repo / "INVARIANTS.md")
+        assert register_problems == [], register_problems
+        problems, checked = tool_module.scan_invariant_range_claims(repo, highest)
+        assert problems == [], problems
+        assert checked >= 4, "the range claims stopped being found — the check is vacuous"
+
+    def test_a_stale_range_is_reported(self, tool_module: ModuleType, tmp_path: Path) -> None:
+        (tmp_path / "doc.md").write_text(
+            "See INVARIANTS.md (INVARIANT-1 through INVARIANT-42).\n", encoding="utf-8"
+        )
+        problems, checked = tool_module.scan_invariant_range_claims(tmp_path, 43)
+        assert checked == 1
+        assert len(problems) == 1
+        assert "INVARIANT-43" in problems[0] and "doc.md:1" in problems[0]
+
+    @pytest.mark.parametrize("joiner", ["through", "to", "-", "\u2013", "\u2014"])
+    def test_every_range_spelling_is_recognised(
+        self, tool_module: ModuleType, tmp_path: Path, joiner: str
+    ) -> None:
+        (tmp_path / "doc.md").write_text(f"INVARIANT-1 {joiner} INVARIANT-9\n", encoding="utf-8")
+        problems, checked = tool_module.scan_invariant_range_claims(tmp_path, 43)
+        assert checked == 1, joiner
+        assert len(problems) == 1, joiner
+
+    def test_a_range_that_does_not_start_at_one_is_left_alone(
+        self, tool_module: ModuleType, tmp_path: Path
+    ) -> None:
+        """CHANGELOG.md's "INVARIANT-39 through INVARIANT-42" describes one
+        release's scope. Forcing it to the register's maximum would rewrite
+        release history into something false."""
+        (tmp_path / "doc.md").write_text(
+            "Security (INVARIANT-39 through INVARIANT-42)\n", encoding="utf-8"
+        )
+        problems, checked = tool_module.scan_invariant_range_claims(tmp_path, 43)
+        assert checked == 0
+        assert problems == []
+
+    def test_a_gap_in_the_register_is_reported(
+        self, tool_module: ModuleType, tmp_path: Path
+    ) -> None:
+        """ "1 through N" only describes a set with no holes in it."""
+        register = tmp_path / "INVARIANTS.md"
+        register.write_text("## INVARIANT-1 - a\n\n## INVARIANT-3 - c\n", encoding="utf-8")
+        highest, problems = tool_module.invariant_register_extent(register)
+        assert highest == 3
+        assert any("not contiguous" in row and "INVARIANT-2" in row for row in problems)
+
+    def test_a_duplicate_heading_is_reported(self, tool_module: ModuleType, tmp_path: Path) -> None:
+        register = tmp_path / "INVARIANTS.md"
+        register.write_text(
+            "## INVARIANT-1 - a\n\n## INVARIANT-2 - b\n\n## INVARIANT-2 - b again\n",
+            encoding="utf-8",
+        )
+        _highest, problems = tool_module.invariant_register_extent(register)
+        assert any("duplicate" in row for row in problems)
+
+    def test_an_unreadable_register_fails_rather_than_passes(
+        self, tool_module: ModuleType, tmp_path: Path
+    ) -> None:
+        register = tmp_path / "INVARIANTS.md"
+        register.write_text("# no headings here\n", encoding="utf-8")
+        highest, problems = tool_module.invariant_register_extent(register)
+        assert highest == 0
+        assert problems, "a register with nothing in it must not read as clean"
+
+
 def _match_header(tool_module: ModuleType, text: str) -> tuple[str, str] | None:
     """First (version, trailing-qualifier) pair any doc-header pattern finds."""
     for pat in tool_module.DOC_HEADER_PATTERNS:

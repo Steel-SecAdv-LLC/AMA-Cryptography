@@ -476,6 +476,14 @@ def check_loc_table_file_counts(repo: Path) -> list[str]:
     return problems
 
 
+#: Named on every count this gate can fail on, because a gate that reports a
+#: number without the command that fixes it is a gate people work around.  The
+#: LoC half already carried ``--loc``; the static test counts had to be found
+#: and hand-edited across three documents, which is the asymmetry
+#: ``update_docs.update_static_test_counts`` closes.
+_REMEASURE_HINT = "re-measure with: python tools/update_docs.py --counts"
+
+
 def measure_static_test_counts(repo: Path) -> tuple[int, int]:
     r"""Return ``(function_count, file_count)`` for ``tests/**/*.py``.
 
@@ -511,19 +519,25 @@ def check_aggregate_test_counts(repo: Path) -> list[str]:
             if _num(claimed_funcs) != functions:
                 problems.append(
                     f"{rel}: claims {claimed_funcs} test functions; "
-                    f"`grep -rE '^\\s*def test_' tests/` finds {functions}"
+                    f"`grep -rE '^\\s*def test_' tests/` finds {functions} "
+                    f"({_REMEASURE_HINT})"
                 )
             if _num(claimed_files) != files:
                 problems.append(
-                    f"{rel}: claims {claimed_files} test files; {files} contain a test function"
+                    f"{rel}: claims {claimed_files} test files; {files} contain a "
+                    f"test function ({_REMEASURE_HINT})"
                 )
         for claimed in _METRICS_FILES_RE.findall(live):
             if _num(claimed) != files:
-                problems.append(f"{rel}: table says {claimed} test files; measured {files}")
+                problems.append(
+                    f"{rel}: table says {claimed} test files; measured {files} "
+                    f"({_REMEASURE_HINT})"
+                )
         for claimed in _METRICS_FUNCS_RE.findall(live):
             if _num(claimed) != functions:
                 problems.append(
-                    f"{rel}: table says {claimed} `def test_` matches; measured {functions}"
+                    f"{rel}: table says {claimed} `def test_` matches; measured "
+                    f"{functions} ({_REMEASURE_HINT})"
                 )
     return problems
 

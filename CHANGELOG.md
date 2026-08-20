@@ -31,6 +31,139 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > Compare `[4.0.0]` below, which is dated because it *is* released: tag
 > `v4.0.0`, published 2026-08-02.
 
+### Verification pass, seventh (2026-08-20) — the whole check set was red, and two coverage gaps behind it
+
+At `725f2f1` this branch was red on **thirty-odd checks**, and the whole of it
+reduced to two causes.
+
+**1. Three stale line counts.** `725f2f1` added nine lines to
+`corpus-provenance.yml` and did not re-measure, so `check_documented_counts.py`
+reported `docs/METRICS_REPORT.md` claiming 339,965 whole-project lines against
+a measured 339,974. Every `Test <os> / Python <ver>` job, every
+`Python <ver> on <os>` job, `Security Checks`, `CI Gate` and `Build and Test
+Gate` failed on that one assertion — 5,555 tests passing and one count wrong.
+Re-measured at the end of this pass, so the figures describe the tree that
+ships.
+
+The gate had a one-command fix for half of what it checks and none for the
+other half: `--loc` regenerated the Lines-of-Code figures, while the static
+test-function and test-file claims across README.md, ARCHITECTURE.md and
+docs/METRICS_REPORT.md had to be found and hand-edited in four places — and
+the gate's own failure message named no command for them. That asymmetry is
+the friction a stale count grows in. `tools/update_docs.py --counts`
+regenerates both, measuring through the gate's own
+`measure_static_test_counts` so the two cannot disagree, skipping
+revision-history rows (rewriting `| 3.5.0 | 2026-07-30 | … 3,057 static
+Python test functions across 127 files |` would falsify the record, not
+update a claim), and every count message the gate can emit now names it.
+
+**2. A job that still could not run pytest.** `725f2f1`'s own subject was
+installing pytest in the `vector-provenance` job. The next run got further and
+died anyway: `tests/conftest.py` imports the package from `pytest_configure`,
+a failed POST raises since 5.0.0, and the job builds no native library —
+`INTERNALERROR ... CryptoModuleError`, exit 3, before a single test was
+collected. The half that gate exists for (four anchor digests living in the
+test source, which the manifest cannot vouch for) had never executed in CI.
+Fixed with `AMA_POST_DIAGNOSTIC_IMPORT: "1"` — the step hashes 37 tracked
+files with stdlib `hashlib` and performs no cryptography — and
+`check_workflow_commands.py` gained a fifth pass,
+`check_pytest_prerequisites`, so a pytest-invoking step with neither a
+preceding library build nor that flag now fails the workflow sweep. It reports
+both real occurrences on this branch by name.
+
+**Two coverage gaps found while verifying, both in gates rather than in code.**
+
+*The KyberSlash gate could not read an AArch64 object at all.*
+`check_secret_division.py` picked its disassembler by presence —
+`which("objdump")` — and a distribution's GNU objdump is built for the host
+architecture only, so it answered every AArch64 object with `can't disassemble
+for architecture UNKNOWN!` and the gate returned 2. Failing closed was
+correct; having never covered the architecture that carries the NEON and SVE2
+ML-KEM kernels was not, and the `udiv|sdiv` arm of its own regex had therefore
+never matched anything. It now tries each disassembler until one succeeds, and
+`arm-qemu.yml` runs it: 568 symbols, 59,520 instructions, three allowlisted
+divide sites within their ceilings, ML-KEM divide-free. Verified to fail by
+renaming a benign symbol in the real disassembly. `fdiv` joins the mnemonics
+(zero in both objects today).
+
+*Three info-only dudect lanes had no blocking gate, and one could have had
+one.* Info-only is defensible where a deterministic gate blocks instead, which
+is what the `Kyber-1024 decaps` and `secp256k1 ECDSA sign` comments spend
+their length establishing. `X25519 scalarmult batch x4` named nothing, and the
+`x25519` target does not reach the batch entry point's chunker, AVX2 4-way
+kernel, scalar tail or aggregated low-order rejection — so the 4-way kernel
+had never been measured by a deterministic instrument at all. New target
+`x25519-batch`, the thirteenth: all four metrics byte-identical across eight
+key classes on both compilers and both wirings, floor 0, limit 0, and verified
+to fail (a branch on `scalars[0][0] & 1` produces a 1,744-instruction delta).
+
+The other two — `ML-DSA-65 sign` and `SLH-DSA-SHA2-256f sign` — have no
+counterpart because none can exist: FIPS 204 Algorithm 2 restarts on ||z||,
+||w0 - c*s2|| and ||c*t0||, every one a function of the secret, so a zero-delta
+instruction count would fail a correct implementation.
+`CONSTANT_TIME_VERIFICATION.md` had been claiming "No secret-dependent
+branches or memory accesses" for all three PQC algorithms while this
+repository's own lane measured **t = -815.72** at -48.7 us on ML-DSA signing.
+The claim is narrowed to what the code delivers, with what remains covered and
+what is not claimed both stated.
+
+**Also corrected, each a claim the tree contradicted.**
+
+- `check_suppression_hygiene.py` required a rule id for `nosemgrep` only.
+  bandit parses everything after `# nosec` as test ids and treats the
+  resulting EMPTY set as blanket, so this repository's own house style —
+  `# nosec -- reason (TAG-NNN)` — reads as targeted while silencing every
+  bandit test on the line. Measured against bandit 1.9.4: the bare form
+  suppresses `B607` on a `subprocess.call(..., shell=True)` line that a
+  targeted `# nosec B105` leaves reported. `nosec` and `noqa` now require a
+  rule id; the tree already satisfied it.
+- `verify_install_oob.py` ran its native and binding stages with no digests
+  after any artefact failure, so a v3 artefact carrying the wrong key was
+  described to the operator as "artefact binds none (v1 artefact)" and "the
+  artefact predates v3" — two lines after the tool printed `schema v3; native
+  bound: True; bindings: 6`. The stages are now skipped, and say so.
+- `.github/copilot-instructions.md` still said the register was INVARIANT-1
+  through INVARIANT-42 after it reached 43. `check_version_consistency.py`
+  now derives the extent from `INVARIANTS.md`, requires it contiguous, and
+  checks every `INVARIANT-1 through INVARIANT-N` claim in tracked Markdown
+  against it. A range that does not start at 1 — CHANGELOG's "INVARIANT-39
+  through INVARIANT-42", describing one release's scope — is deliberately left
+  alone.
+- `enforce_sigma_quadratic_threshold`'s summary line still said "scale state
+  by sqrt(threshold/sigma)", the remedy its own `versionchanged:: 5.0` note
+  records as a provable no-op and removed. That line is what `help()` and
+  Sphinx show first. Replaced with what the function does — a norm-preserving
+  rotation toward E's dominant eigenvector by the smallest blend that reaches
+  the threshold — measured over 500 random states: 434 violated, every one
+  landed within 1e-15 of the threshold, worst relative norm change 3.3e-16.
+
+**No shipped C changed in this pass.** `src/c/` and `include/` are untouched,
+so the regression floors describe the same object they were measured against.
+The one `ama_cryptography/*.py` change is the docstring above, which is why
+`_integrity_digest.txt` and `_integrity_signature.py` move: a `.py` edit
+invalidates both, and the documented repair flow re-signs with a per-build
+ephemeral key exactly as the six preceding signature commits on this branch
+did.
+
+**Independent re-derivation of this branch's headline results.** Not
+re-stated from the commits that produced them — recomputed here:
+
+- ML-KEM `Compress_d`: `M = ceil(2^40/q) = 330282857`, `S = 40`, checked
+  against the specification's division form over all 16,645 (coefficient,
+  width) pairs — 0 mismatches, 0 64-bit overflows.
+- Kyber `barrett_reduce`: bit-identical to the pre-rewrite int16 accumulator
+  over all 65,536 int16_t inputs; quotient in [-10, 9] and output in [0, q]
+  exactly as the source comment states.
+- NEON AES-256 key expansion: `ama_aes256_expand_key_neon` disassembles to
+  **137 instructions, 0 calls, 0 stack stores** on the aarch64 cross build —
+  the 137 the branch claims, and nothing secret reaching memory.
+- `monitoring.EWMAStats._median_and_mad`: bit-identical to the naive
+  `sorted(abs(v - median))` form over 8,000 randomized windows including
+  duplicates, constants and 1e-9/1e9 dynamic range.
+- Vendor boundary: `ldd` on the built object lists only linux-vdso, libc and
+  ld-linux; its dynamic symbol table imports nothing matching `EVP_`, `SSL_`,
+  `CRYPTO_`, `sodium_`, `wc_`, `botan_`, `nettle_`, `gcry_` or `mbedtls_`.
+
 ### Verification pass, sixth (2026-08-19) — five gates that were green and could not fail, and the enforcement entry point nobody had run
 
 Every item here was found by RUNNING something rather than by reading it, and
