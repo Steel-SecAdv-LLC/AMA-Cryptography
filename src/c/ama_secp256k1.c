@@ -2154,12 +2154,18 @@ static ama_error_t secp256k1_ecdsa_sign_scalars(uint8_t r_bytes[32], uint8_t s_b
     uint8_t k_bytes[32], x_bytes[32];
     ama_error_t rc = AMA_ERROR_INVALID_PARAM;
 
+    /* Every failure path goes through `done`, so the scrub below and the
+     * output zeroization always run.  Two of these used to return directly:
+     * the key-range rejection left `d` — which sc_from_bytes has ALREADY
+     * loaded with the private key — unscrubbed on the stack, and the raw
+     * entry point's documented promise that a failed call zeroizes its output
+     * was not kept on either. */
     if (!message || !private_key)
-        return AMA_ERROR_INVALID_PARAM;
+        goto done;
 
     /* d must be in [1, n-1]. */
     if (!sc_from_bytes(&d, private_key) || sc_is_zero(&d))
-        return AMA_ERROR_INVALID_PARAM;
+        goto done;
 
     /* z = the leftmost 256 bits of the digest, reduced mod n.  For
      * SHA-256 the digest is exactly 256 bits, so this is a reduction only. */

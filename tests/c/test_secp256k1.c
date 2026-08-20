@@ -398,7 +398,8 @@ int main(void) {
         uint8_t der[AMA_SECP256K1_ECDSA_MAX_SIG_LEN];
         uint8_t raw[AMA_SECP256K1_ECDSA_RAW_SIG_LEN];
         size_t der_len = 0;
-        int trial, ok = 1, saw_short_der = 0;
+        int trial, ok = 1;
+        size_t der_lengths_seen = 0, distinct_der_lengths[8];
 
         for (trial = 0; trial < 512 && ok; trial++) {
             _xs_fill(priv, 32);
@@ -415,12 +416,27 @@ int main(void) {
                 break;
             }
 
-            /* A DER signature shorter than the maximum is exactly the
-             * length variance this entry point removes; record that the
-             * comparison actually saw some, so a run in which every
-             * signature happened to be full length cannot pass silently. */
-            if (der_len < AMA_SECP256K1_ECDSA_MAX_SIG_LEN)
-                saw_short_der = 1;
+            /* Record the DISTINCT DER lengths seen.
+             *
+             * An earlier revision asserted `der_len <
+             * AMA_SECP256K1_ECDSA_MAX_SIG_LEN`, which proves nothing: low-s
+             * normalisation caps s at (n-1)/2, so s never needs a 0x00 pad
+             * and its INTEGER is always 32 octets. The maximum is therefore
+             * 2 + 2+33 + 2+32 = 71, and the assertion was true by
+             * construction. Measured over 20,000 signatures the length is
+             * 69, 70 or 71 and never 72.
+             *
+             * What is worth asserting is that the length actually VARIED, so
+             * the equivalence comparison covered both a padded r and an
+             * unpadded one rather than one shape repeatedly. */
+            {
+                size_t li, known = 0;
+                for (li = 0; li < der_lengths_seen; li++)
+                    if (distinct_der_lengths[li] == der_len) known = 1;
+                if (!known && der_lengths_seen < (sizeof distinct_der_lengths /
+                                                  sizeof distinct_der_lengths[0]))
+                    distinct_der_lengths[der_lengths_seen++] = der_len;
+            }
 
             /* Minimal DER: 30 L 02 Lr <r> 02 Ls <s>. Decode and right-align
              * each INTEGER into 32 octets, then compare with r||s. */
@@ -460,8 +476,8 @@ int main(void) {
             }
         }
         TEST_ASSERT(ok, "raw r||s equals the DER signature over 512 keys");
-        TEST_ASSERT(saw_short_der,
-                    "the comparison saw at least one short DER signature");
+        TEST_ASSERT(der_lengths_seen >= 2,
+                    "the comparison saw DER signatures of at least two lengths");
 
         /* Rejections mirror the DER entry point's. */
         TEST_ASSERT(ama_secp256k1_ecdsa_sign_raw(NULL, digest, priv) == AMA_ERROR_INVALID_PARAM,
@@ -471,11 +487,29 @@ int main(void) {
         TEST_ASSERT(ama_secp256k1_ecdsa_sign_raw(raw, digest, NULL) == AMA_ERROR_INVALID_PARAM,
                     "raw signing rejects a NULL private key");
         {
-            uint8_t zero_priv[32];
+            /* The rejection AND the documented promise that goes with it.
+             *
+             * The header states that on any non-success the output buffer is
+             * zeroized rather than left partly written. An earlier revision
+             * of this block pre-filled the buffer with 0xAA and then never
+             * looked at it, so the promise was untested — and it was in fact
+             * untrue: the key-range rejection returned before reaching the
+             * function's scrub, leaving both the caller's buffer and the
+             * private-key scalar `d` untouched on the stack. */
+            uint8_t zero_priv[32], expect_zero[AMA_SECP256K1_ECDSA_RAW_SIG_LEN];
             memset(zero_priv, 0, sizeof zero_priv);
+            memset(expect_zero, 0, sizeof expect_zero);
             memset(raw, 0xAA, sizeof raw);
             TEST_ASSERT(ama_secp256k1_ecdsa_sign_raw(raw, digest, zero_priv) != AMA_SUCCESS,
                         "raw signing rejects the zero scalar");
+            TEST_ASSERT(memcmp(raw, expect_zero, sizeof raw) == 0,
+                        "a rejected raw signing zeroizes the output buffer");
+
+            memset(raw, 0xAA, sizeof raw);
+            TEST_ASSERT(ama_secp256k1_ecdsa_sign_raw(raw, NULL, priv) != AMA_SUCCESS,
+                        "raw signing rejects a NULL digest");
+            TEST_ASSERT(memcmp(raw, expect_zero, sizeof raw) == 0,
+                        "a NULL-digest rejection zeroizes the output buffer too");
         }
     }
 
