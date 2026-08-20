@@ -154,7 +154,13 @@ Implementation notes for the wired SVE2 surface:
 Automatic best-implementation selection at initialization:
 - **x86-64**: CPUID leaf 7 detection → AVX-512 > AVX2 > generic
 - **AArch64**: `getauxval(AT_HWCAP2)` detection → SVE2 > NEON > generic
-- `ama_get_dispatch_info()` API for querying active implementations
+- `ama_get_dispatch_info()` API for querying the **detected** capability tier
+  per subsystem. It is not a report of the kernel that was wired — ISA-bundle
+  gates, the `AMA_DISPATCH_NO_*` opt-outs, `AMA_DISPATCH_ONLY` and the
+  auto-tune reverts can all leave a slot on the portable path while detection
+  still reads SIMD. To ask what is actually running, NULL-check the slot in
+  `ama_get_dispatch_table()`, or call `ama_aes_gcm_active_backend()` /
+  `ama_dispatch_active_slot()`. See `include/ama_dispatch.h`.
 - CPU feature detection via extended `ama_cpuid.c`
 - Set `AMA_DISPATCH_VERBOSE=1` to enable diagnostic output during init
 - Set `AMA_DISPATCH_NO_AUTOTUNE=1` to skip the Keccak-f[1600]

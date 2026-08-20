@@ -420,9 +420,25 @@ def _expected_native_digest() -> Optional[bytes]:
     against and discovery proceeds as before (the POST integrity stage then
     reports the unverifiable state as it always has).
     """
+    # Read from source text, NOT through the import system: an ordinary import
+    # of the artefact resolves to its `__pycache__` bytecode, which nothing has
+    # validated at this point, so a poisoned `.pyc` carrying a forged digest
+    # made this check compare the tampered object against the tampered object's
+    # own digest.  See `_artefact_source` for the measured reproduction and for
+    # what this does and does not establish.
+    from ama_cryptography._artefact_source import ArtefactSourceError, load_artefact_fields
+
     try:
-        from ama_cryptography import _integrity_signature as sig_mod
-    except Exception:
+        sig_mod = load_artefact_fields()
+    except ArtefactSourceError:
+        # A present-but-unreadable artefact is handled by the gate in
+        # `__init__`, which runs before any load reaches here and refuses the
+        # import outright.  Returning None here would be the wrong answer for a
+        # caller that somehow arrives anyway, so refuse to supply a digest:
+        # `_try_load_library` treats None as "nothing to check against", and
+        # `__init__` has already made that state unreachable in practice.
+        return None
+    if sig_mod is None:
         return None
     digest_hex = getattr(sig_mod, "INTEGRITY_NATIVE_DIGEST_HEX", None)
     if not isinstance(digest_hex, str):

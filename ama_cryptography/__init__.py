@@ -142,9 +142,39 @@ def _refuse_tampered_bindings_before_import() -> None:
     import hashlib as _hashlib
     from pathlib import Path as _Path
 
+    from ama_cryptography._artefact_source import (
+        ArtefactSourceError as _ArtefactSourceError,
+    )
+    from ama_cryptography._artefact_source import load_artefact_fields as _load_fields
+
+    # The digest map is read from the artefact's SOURCE TEXT, not imported.
+    #
+    # `from ama_cryptography import _integrity_signature` reads
+    # `__pycache__/_integrity_signature.cpython-3XX.pyc` whenever a cache
+    # exists whose PEP 552 header matches the source's (mtime, size) — and
+    # nothing has validated that cache here, because the POST stage that binds
+    # cached bytecode to signed source runs long after this gate returns.
+    # Writing one poisoned `.pyc`, with `_integrity_signature.py` left
+    # byte-identical and its signature still valid, made this gate compare a
+    # tampered extension against the tampered extension's own digest and let it
+    # execute.  Measured, not theorised — see `_artefact_source`'s docstring for
+    # the reproduction.  Parsing the source removes the import system from the
+    # path entirely, so the literals come from bytes the signature covers.
     try:
-        from ama_cryptography import _integrity_signature as _sig
-    except Exception:
+        _sig = _load_fields()
+    except _ArtefactSourceError as exc:
+        # Present but not a file of literals any more.  Never a fallback: the
+        # one file every digest check trusts has stopped being what it claims.
+        raise ImportError(
+            "ama_cryptography refused to initialise: the signed integrity "
+            f"artefact could not be read as generated source.\n\n  {exc}\n\n"
+            "  This file is generated and contains only literal assignments. "
+            "Restore it from the wheel, or remove it and re-sign:\n"
+            "      rm <package-dir>/_integrity_signature.py && "
+            "AMA_BUILD_PIPELINE=1 python -m ama_cryptography.integrity "
+            "--update --sign"
+        ) from exc
+    if _sig is None:
         # No artefact (editable install, source checkout before the first
         # sign): nothing is signed, so nothing here is tampering. POST
         # reports the missing artefact.

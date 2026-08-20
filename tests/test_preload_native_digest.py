@@ -35,27 +35,113 @@ _REAL_SO = native_library_path(PKG_DIR)
 needs_native = pytest.mark.skipif(_REAL_SO is None, reason="native library not built in this tree")
 
 
-class TestExpectedNativeDigest:
-    def test_matches_the_artefact(self) -> None:
-        from ama_cryptography import _integrity_signature as sig_mod
+def _artefact_stub(tmp_path: Path, body: str) -> Path:
+    """A package directory carrying only a crafted ``_integrity_signature.py``."""
+    pkg = tmp_path / "pkg"
+    pkg.mkdir(exist_ok=True)
+    (pkg / "_artefact_source.py").write_text("", encoding="utf-8")
+    (pkg / "_integrity_signature.py").write_text(body, encoding="utf-8")
+    return pkg
 
+
+class TestExpectedNativeDigest:
+    """The digest comes from the artefact's SOURCE TEXT, not from an import.
+
+    These used to monkeypatch the imported ``_integrity_signature`` module.
+    That is no longer the object under test: reading the digest through the
+    import system meant reading ``__pycache__`` bytecode that nothing had
+    validated at pre-load time, so the checks below drive
+    ``load_artefact_fields`` against real files instead.
+    """
+
+    def test_matches_the_artefact(self) -> None:
+        from ama_cryptography._artefact_source import load_artefact_fields
+
+        fields = load_artefact_fields()
         expected = pb._expected_native_digest()
-        if getattr(sig_mod, "INTEGRITY_NATIVE_DIGEST_HEX", None) is None:
+        digest_hex = getattr(fields, "INTEGRITY_NATIVE_DIGEST_HEX", None) if fields else None
+        if digest_hex is None:
             assert expected is None
         else:
-            assert expected == bytes.fromhex(sig_mod.INTEGRITY_NATIVE_DIGEST_HEX)
+            assert expected == bytes.fromhex(digest_hex)
 
-    def test_malformed_hex_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from ama_cryptography import _integrity_signature as sig_mod
+    def test_the_digest_is_read_from_source_not_from_bytecode(self) -> None:
+        """The property the pre-load check depends on.
 
-        monkeypatch.setattr(sig_mod, "INTEGRITY_NATIVE_DIGEST_HEX", "not-hex", raising=False)
+        A poisoned ``__pycache__`` entry for the artefact must not be able to
+        change what this function returns. Pinned by comparing against the
+        source file parsed directly — if the implementation ever goes back to
+        importing the module, a stale or poisoned cache makes these differ.
+        """
+        import ast
+
+        from ama_cryptography._artefact_source import artefact_path
+
+        text = artefact_path().read_text(encoding="utf-8")
+        tree = ast.parse(text)
+        from_source = None
+        for node in tree.body:
+            if isinstance(node, ast.Assign):
+                targets: list[ast.expr] = list(node.targets)
+                value: ast.expr | None = node.value
+            elif isinstance(node, ast.AnnAssign):
+                targets = [node.target]
+                value = node.value
+            else:
+                continue
+            if value is None:
+                continue
+            for target in targets:
+                if isinstance(target, ast.Name) and target.id == "INTEGRITY_NATIVE_DIGEST_HEX":
+                    from_source = ast.literal_eval(value)
+        assert from_source is not None, "the artefact carries no native digest"
+        assert pb._expected_native_digest() == bytes.fromhex(from_source)
+
+    def test_malformed_hex_returns_none(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        from ama_cryptography import _artefact_source
+
+        pkg = _artefact_stub(tmp_path, 'INTEGRITY_NATIVE_DIGEST_HEX = "not-hex"\n')
+        stub = pkg / "_integrity_signature.py"
+        monkeypatch.setattr(_artefact_source, "artefact_path", lambda *_a, **_k: stub)
         assert pb._expected_native_digest() is None
 
-    def test_wrong_length_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from ama_cryptography import _integrity_signature as sig_mod
+    def test_wrong_length_returns_none(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        from ama_cryptography import _artefact_source
 
-        monkeypatch.setattr(sig_mod, "INTEGRITY_NATIVE_DIGEST_HEX", "ab" * 16, raising=False)
+        pkg = _artefact_stub(tmp_path, f'INTEGRITY_NATIVE_DIGEST_HEX = "{"ab" * 16}"\n')
+        stub = pkg / "_integrity_signature.py"
+        monkeypatch.setattr(_artefact_source, "artefact_path", lambda *_a, **_k: stub)
         assert pb._expected_native_digest() is None
+
+    def test_an_absent_artefact_returns_none(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        from ama_cryptography import _artefact_source
+
+        monkeypatch.setattr(
+            _artefact_source, "artefact_path", lambda *_a, **_k: tmp_path / "absent.py"
+        )
+        assert pb._expected_native_digest() is None
+
+    def test_a_non_literal_artefact_is_refused_not_ignored(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """A generated file of constants that is no longer one is tampering."""
+        from ama_cryptography import _artefact_source
+        from ama_cryptography._artefact_source import ArtefactSourceError, load_artefact_fields
+
+        pkg = _artefact_stub(
+            tmp_path,
+            "import os\nINTEGRITY_NATIVE_DIGEST_HEX = os.environ['X']\n",
+        )
+        stub = pkg / "_integrity_signature.py"
+        monkeypatch.setattr(_artefact_source, "artefact_path", lambda *_a, **_k: stub)
+        with pytest.raises(ArtefactSourceError):
+            load_artefact_fields()
 
 
 class TestDigestFd:

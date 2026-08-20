@@ -163,6 +163,60 @@ def tree_with_native(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return root
 
 
+#: The binding extensions ``TestCythonBindingsGated`` needs to exist for its
+#: probe to reach any Cython entry point at all.
+_REQUIRED_BINDING_STEMS = ("ed25519_binding", "hmac_binding", "sha3_binding")
+
+
+def _binding_extension_names(pkg_root: Path) -> set[str]:
+    """Compiled binding extensions present in ``pkg_root``, by module stem."""
+    stems: set[str] = set()
+    for suffix in (".so", ".pyd", ".dylib"):
+        for path in pkg_root.glob(f"*{suffix}"):
+            if path.name.startswith(("libama_cryptography", "ama_cryptography.dll")):
+                continue
+            stems.add(path.name.split(".", 1)[0])
+    return stems
+
+
+@pytest.fixture(scope="module")
+def tree_with_bindings(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A copy of the package that KEEPS its compiled binding extensions.
+
+    ``tree_with_native`` drops every extension the signed artefact does not
+    cover, and in a source tree ``INTEGRITY_BINDING_DIGESTS_HEX`` is ``{}`` by
+    design, so it drops ALL of them.  That is right for the tests that need an
+    internally consistent tree, and fatal for the one test whose subject is the
+    extensions themselves: its probe's ``import ... except ImportError`` arm
+    fired on every run, and the assertion's ``or "SKIP" in result.stdout``
+    escape turned that into a pass.  Measured on this tree — the fixture
+    removed all six extensions and the probe printed
+    ``SKIP: Cython bindings not compiled`` — so the only behavioural proof that
+    the Cython bindings inhibit output in the FIPS ERROR state had stopped
+    executing any of the code it names.
+
+    Keeping the extensions means this copy reports at below-full integrity
+    strength ("binding extensions PARTIALLY covered (developer build)"), which
+    is the CORRECT verdict for a tree carrying built-but-uncovered extensions
+    and is not what this test asserts on.  A genuinely unbuilt tree skips here,
+    in the parent process, so it is reported as ``skipped`` rather than passing
+    on a string the assertion happens to accept.
+    """
+    root = tmp_path_factory.mktemp("with_bindings")
+    shutil.copytree(PKG_DIR, root / "ama_cryptography")
+    if not native_library_present(root / "ama_cryptography"):
+        pytest.skip("native library not built in this tree")
+    present = _binding_extension_names(root / "ama_cryptography")
+    missing = [stem for stem in _REQUIRED_BINDING_STEMS if stem not in present]
+    if missing:
+        pytest.skip(
+            "Cython binding extensions not built in this tree "
+            f"(missing: {', '.join(missing)}); build with "
+            "`python setup.py build_ext --inplace`"
+        )
+    return root
+
+
 # ---------------------------------------------------------------------------
 # 1. A failed POST must fail the import
 # ---------------------------------------------------------------------------
@@ -771,44 +825,125 @@ class TestKeyFormatsInhibitsSecretExport:
 class TestCythonBindingsGated:
     """A direct importer of a binding submodule must not reach ungated crypto."""
 
-    def test_bindings_refuse_in_error_state(self, tree_with_native: Path) -> None:
+    def test_bindings_refuse_in_error_state(self, tree_with_bindings: Path) -> None:
+        """Every Cython entry point refuses once the module is faulted.
+
+        The import is NOT wrapped in ``try/except ImportError`` any more: the
+        fixture has already established that the extensions exist, so an
+        ImportError here is a real failure and must surface as one.  The
+        previous form swallowed it and printed a token the assertion accepted,
+        which is how this test came to run zero lines of the code it names.
+
+        The entry-point list is not hand-maintained either — it is derived from
+        each binding module's own ``cy_*`` surface, so a binding that grows a
+        new entry point is covered the day it lands rather than the day someone
+        remembers to add it here.
+        """
         result = _run_python(
             """
             import ama_cryptography as a
             import ama_cryptography._self_test as st
+            import ama_cryptography.ed25519_binding as eb
+            import ama_cryptography.hmac_binding as hb
+            import ama_cryptography.sha3_binding as sb
+            import ama_cryptography.hkdf_binding as kb
+            import ama_cryptography.dilithium_binding as db
 
-            try:
-                import ama_cryptography.ed25519_binding as eb
-                import ama_cryptography.hmac_binding as hb
-                import ama_cryptography.sha3_binding as sb
-            except ImportError:
-                print("SKIP: Cython bindings not compiled")
-            else:
-                pk, sk = eb.cy_ed25519_keypair(bytes(32))
-                st._set_error("simulated POST failure")
-                leaked = []
-                for label, fn in [
-                    ("cy_ed25519_sign", lambda: eb.cy_ed25519_sign(b"m", sk)),
-                    ("cy_ed25519_keypair", lambda: eb.cy_ed25519_keypair(bytes(32))),
-                    ("cy_hmac_sha3_256", lambda: hb.cy_hmac_sha3_256(bytes(32), b"m")),
-                    ("cy_sha3_256", lambda: sb.cy_sha3_256(b"m")),
-                ]:
-                    try:
-                        fn()
-                    except a.CryptoModuleError:
-                        pass
-                    except Exception as exc:
-                        leaked.append((label, repr(exc)))
-                    else:
-                        leaked.append((label, "PRODUCED OUTPUT"))
-                if leaked:
-                    raise SystemExit("LEAKED: %r" % (leaked,))
-                print("ALL REFUSED")
+            # Every probe is a call the entry point ACCEPTS when the module is
+            # healthy.  That matters: a call with the wrong arity raises
+            # TypeError during argument conversion, before the gate is ever
+            # consulted, so it would report "refused" without the gate having
+            # done anything.  Building the probe table against a healthy module
+            # first (below) is what rules that out.
+            pk, sk = eb.cy_ed25519_keypair(bytes(32))
+            sig = eb.cy_ed25519_sign(b"m", sk)
+            dpk, dsk = db.cy_dilithium_keygen()
+            dsig = db.cy_dilithium_sign(b"m", dsk)
+
+            probes = {
+                "ed25519_binding.cy_ed25519_keypair":
+                    lambda: eb.cy_ed25519_keypair(bytes(32)),
+                "ed25519_binding.cy_ed25519_sign":
+                    lambda: eb.cy_ed25519_sign(b"m", sk),
+                "ed25519_binding.cy_ed25519_verify":
+                    lambda: eb.cy_ed25519_verify(sig, b"m", pk),
+                "ed25519_binding.cy_ed25519_batch_verify":
+                    lambda: eb.cy_ed25519_batch_verify([(b"m", sig, pk)]),
+                "hmac_binding.cy_hmac_sha3_256":
+                    lambda: hb.cy_hmac_sha3_256(bytes(32), b"m"),
+                "sha3_binding.cy_sha3_256":
+                    lambda: sb.cy_sha3_256(b"m"),
+                "hkdf_binding.cy_hkdf":
+                    lambda: kb.cy_hkdf(bytes(32), 32, bytes(16), b"info"),
+                "dilithium_binding.cy_dilithium_keygen":
+                    lambda: db.cy_dilithium_keygen(),
+                "dilithium_binding.cy_dilithium_sign":
+                    lambda: db.cy_dilithium_sign(b"m", dsk),
+                "dilithium_binding.cy_dilithium_verify":
+                    lambda: db.cy_dilithium_verify(dsig, b"m", dpk),
+            }
+
+            modules = {
+                "ed25519_binding": eb,
+                "hmac_binding": hb,
+                "sha3_binding": sb,
+                "hkdf_binding": kb,
+                "dilithium_binding": db,
+            }
+            entry_points = []
+            for mod_name, mod in modules.items():
+                for attr in dir(mod):
+                    if attr.startswith("cy_") and callable(getattr(mod, attr)):
+                        entry_points.append(mod_name + "." + attr)
+            if not entry_points:
+                raise SystemExit("NO ENTRY POINTS DISCOVERED")
+
+            # Discovery drives the probe table, not the other way round: an
+            # entry point that grows without a probe is a hard failure here
+            # rather than a silent hole in the only behavioural coverage these
+            # bindings have.
+            unprobed = sorted(set(entry_points) - set(probes))
+            if unprobed:
+                raise SystemExit("UNPROBED ENTRY POINTS: %r" % (unprobed,))
+            stale = sorted(set(probes) - set(entry_points))
+            if stale:
+                raise SystemExit("PROBES FOR ABSENT ENTRY POINTS: %r" % (stale,))
+
+            # Each probe must SUCCEED while the module is healthy.  Without
+            # this, a probe that was wrong in some other way (bad argument
+            # types, a stale signature) would raise on the faulted run too and
+            # be scored as a refusal.
+            for name in entry_points:
+                probes[name]()
+
+            st._set_error("simulated POST failure")
+
+            leaked = []
+            for name in entry_points:
+                try:
+                    probes[name]()
+                except a.CryptoModuleError:
+                    pass
+                except Exception as exc:
+                    leaked.append((name, repr(exc)))
+                else:
+                    leaked.append((name, "PRODUCED OUTPUT"))
+            if leaked:
+                raise SystemExit("LEAKED: %r" % (leaked,))
+            print("ALL REFUSED (%d entry points)" % len(entry_points))
             """,
-            cwd=tree_with_native,
+            cwd=tree_with_bindings,
         )
         assert result.returncode == 0, result.stdout + result.stderr
-        assert "ALL REFUSED" in result.stdout or "SKIP" in result.stdout
+        assert "ALL REFUSED" in result.stdout, result.stdout + result.stderr
+        # Non-vacuity: the probe must have found entry points to call.  A run
+        # that discovered zero would print "ALL REFUSED (0 entry points)" and
+        # otherwise look identical to a successful one.
+        count = int(result.stdout.split("ALL REFUSED (")[1].split(" ")[0])
+        assert count >= len(_REQUIRED_BINDING_STEMS), (
+            f"only {count} Cython entry point(s) discovered",
+            result.stdout,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1120,7 +1255,7 @@ class TestIntegrityTriState:
     """ "Cannot verify" and "verification failed" are different claims."""
 
     def test_missing_artefact_is_not_a_tamper_verdict(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         """No artefact means "nothing was checked", not "the check failed"."""
         # ``None`` in sys.modules makes an import of that name raise
@@ -1137,8 +1272,17 @@ class TestIntegrityTriState:
         # pattern the code scanner flags.
         pkg = sys.modules["ama_cryptography"]
 
-        monkeypatch.setitem(sys.modules, "ama_cryptography._integrity_signature", None)
-        monkeypatch.delattr(pkg, "_integrity_signature", raising=False)
+        # Point the artefact reader at a path that does not exist.  Removing
+        # the module from ``sys.modules`` no longer simulates an unsigned tree:
+        # ``_verify_signed_integrity`` parses the artefact's SOURCE, because
+        # reading it through the import system meant reading unvalidated
+        # ``__pycache__`` bytecode at a point where nothing had checked it.
+        del pkg  # kept above for the import-style note; not the seam any more
+        from ama_cryptography import _artefact_source
+
+        monkeypatch.setattr(
+            _artefact_source, "artefact_path", lambda *_a, **_k: tmp_path / "absent.py"
+        )
         verdict, detail = st._verify_signed_integrity("00" * 32)
         assert (
             verdict is None

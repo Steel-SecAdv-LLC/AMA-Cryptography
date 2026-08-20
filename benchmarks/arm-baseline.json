@@ -326,7 +326,11 @@
     "floor_drift_acknowledged": [
       {
         "path": "src/c/ama_kyber.c",
-        "reason": "barrett_reduce rewritten with int32 intermediates for -Wconversion (94e4bd6). Proven bit-identical over all 65,536 inputs, but it is an NTT inner-loop function, so kyber_keygen/kyber_encapsulate throughput is NOT vouched for by the pre-change medians. Carried as a coarse floor pending a canonical re-measure; the benchmark-regression job on this PR is the check that exercises it."
+        "reason": "barrett_reduce rewritten with int32 intermediates for -Wconversion (94e4bd6). Proven bit-identical over all 65,536 inputs, but it is an NTT inner-loop function, so kyber_keygen/kyber_encapsulate throughput is NOT vouched for by the pre-change medians. Carried as a coarse floor pending a canonical re-measure; the benchmark-regression job on this PR is the check that exercises it. SampleNTT (FIPS 203 Algorithm 7) additionally now streams the XOF until the polynomial is full instead of stopping at a fixed 672-octet window (aff4861), so kyber_poly_uniform and kyber_gen_matrix_flush4 changed shape. No aarch64 valgrind was available on the runner this was measured from, so the dynamic figures are x86-64: kyber_keygen 736,964 -> 731,145 Ir (-0.79%), kyber_encapsulate 807,730 -> 801,942 Ir (-0.72%), both cheaper. The aarch64 evidence is static: aarch64-linux-gnu-gcc -O3 per-symbol disassembly confines the shape change to kyber_poly_uniform (68 -> 120 instructions) and kyber_gen_matrix_flush4 (96 -> 165), with 22 of 32 symbols byte-identical and every remaining delta 0 or -1. The sampler is architecture-independent scalar C in the shared translation unit and the NEON kernels it feeds are untouched."
+      },
+      {
+        "path": "src/c/ama_cpuid.c",
+        "reason": "detect_arm_features' non-Linux/non-Apple arm now reports AdvSIMD/NEON as present instead of absent \u2014 NEON is part of the AArch64 base architecture, so reporting 0 there was wrong rather than conservative. Measured rather than asserted: the translation unit is OBJECT-IDENTICAL before and after on both canonical runners \u2014 25 of 25 symbols byte-identical under x86-64 cc -O3 and under aarch64-linux-gnu-gcc -O3 \u2014 because the edited arm sits behind #else and neither ubuntu-latest (x86-64, no ARM detection) nor ubuntu-24.04-arm (Linux, the getauxval arm) compiles it. It cannot move a floor on either file."
       },
       {
         "path": "src/c/avx2/ama_kyber_avx2.c",
@@ -342,15 +346,15 @@
       },
       {
         "path": "src/c/ama_sha3.c",
-        "reason": "Cross-family squeeze-position guard added: two comparisons on entry to ama_shake{128,256}_inc_squeeze, outside the absorb/permute loops. sha3_256_hash and the SHAKE-driven PQC paths keep their per-block cost."
+        "reason": "Cross-family squeeze-position guard added: two comparisons on entry to ama_shake{128,256}_inc_squeeze, outside the absorb/permute loops. sha3_256_hash and the SHAKE-driven PQC paths keep their per-block cost. Revisited in this pass for the COMMENT only \u2014 the guard's justification was rewritten to name SHA3_CTX_CONSUMED as the live counter-example rather than calling the guard future insurance. Object-identical: 26 of 26 symbols byte-identical before and after under x86-64 cc -O3."
       },
       {
         "path": "src/c/ama_chacha20poly1305.c",
-        "reason": "Post-verify control flow unified with AES-GCM (7bc7e58): the tag compare is hoisted to a value and the decrypt length masked. chacha20poly1305_encrypt is the floored primitive and does not execute the verify path."
+        "reason": "Post-verify control flow unified with AES-GCM (7bc7e58): the tag compare is hoisted to a value and the decrypt length masked. chacha20poly1305_encrypt is the floored primitive and does not execute the verify path. Revisited in this pass for a COMMENT only (the Poly1305 rs[] limb note, which said 5 where the 44/44/42 limb split makes it 20). Object-identical: 7 of 7 symbols byte-identical before and after under x86-64 cc -O3."
       },
       {
         "path": "src/c/dispatch/ama_dispatch.c",
-        "reason": "Auto-tune verdict timings seed to -1 instead of 0 (d500783) so 'not measured' and 'measured zero' are distinguishable. One-time initialisation; per-operation dispatch is a function-pointer read either way."
+        "reason": "Auto-tune verdict timings seed to -1 instead of 0 (d500783) so 'not measured' and 'measured zero' are distinguishable. One-time initialisation; per-operation dispatch is a function-pointer read either way. The same file now also benchmarks the generic Keccak reference whenever a SIMD Keccak kernel is pinned, records keccak_fallback_regressed in the dispatch cache and bumps the cache fingerprint to v2. Measured rather than asserted: per-symbol disassembly confines the change to dispatch_init_internal (2,849 -> 2,843 instructions), ama_print_dispatch_info (146 -> 151, diagnostics only) and one new file-static bench helper; the remaining seven symbols, the dispatch-table getters among them, are byte-identical. One-time initialisation and diagnostic output only."
       },
       {
         "path": "include",
@@ -370,7 +374,7 @@
       },
       {
         "path": "src/c/sve2/ama_sha3_sve2.c",
-        "reason": "SVE2 Keccak theta fix. SVE2 is disabled in the benchmarked build configuration, so this kernel is not dispatched on either canonical runner."
+        "reason": "SVE2 Keccak theta fix. SVE2 is disabled in the benchmarked build configuration, so this kernel is not dispatched on either canonical runner. Revisited in this pass for COMMENTS only \u2014 the file header and the chi-loop comment described SVE intrinsics the shipped code does not contain. Object-identical: 2 of 2 symbols byte-identical before and after under aarch64-linux-gnu-gcc -O3 -march=armv9-a+sve2."
       },
       {
         "path": "src/c/internal/ama_testing_exports.h",
@@ -439,6 +443,10 @@
       {
         "path": "src/c/ama_ed25519.c",
         "reason": "-Wconversion fix on the Compress-sign line of ge25519_p3_tobytes: `s[31] ^= (uint8_t)(fe25519_isnegative(x) << 7)`. Value-equivalent for every input (the shifted value is {0, 0x80}), but NOT codegen-neutral \u2014 the narrower type changes what GCC can prove, and the function is static and inlined, so linked .text moves 469,124 -> 464,852 bytes at -O3 -funroll-loops with ama_ed25519.c.o the only object that changes. This file IS the Ed25519 backend on aarch64, so ed25519_sign / ed25519_verify throughput is not vouched for by the pre-change medians. Carried as a coarse floor pending a canonical re-measure; the benchmark-regression job on this PR is the check that exercises it. Correctness is pinned by ctest 64/64 under QEMU, including the RFC 8032 KATs and the donna-vs-fe51 differential."
+      },
+      {
+        "path": "src/c/ed25519_donna_shim.c",
+        "reason": "ama_ed25519_batch_verify pre-zeroes `results` before any per-entry work (aff4861), so the header's \"exactly `count` are written\" contract holds on the allocation-failure path too. Measured rather than asserted: compiling this translation unit from both revisions with the shipped Release flags and diffing per-symbol disassembly, exactly ONE symbol differs \u2014 ama_ed25519_batch_verify, 556 -> 562 instructions under x86-64 cc -O3 (1 of 49), and 295 -> 303 under aarch64-linux-gnu-gcc -O3 (1 of 48). Every other symbol is byte-identical, ed25519_keygen / ed25519_sign / ed25519_verify among them. No floored row reaches batch verify: its only callers are pqc_backends.native_ed25519_batch_verify and src/cython/ed25519_binding.pyx, while the floored Ed25519 rows go through legacy_compat.generate_ed25519_keypair / ed25519_sign / ed25519_verify. The added work is `count` zero-stores outside every signature verification."
       },
       {
         "path": "src/c/ama_sha512.c",

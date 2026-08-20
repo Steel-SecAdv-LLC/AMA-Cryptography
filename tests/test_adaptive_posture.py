@@ -13,6 +13,8 @@ Validates:
     - Monitor-disabled and no-monitor edge cases
 """
 
+import math
+from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -25,6 +27,8 @@ from ama_cryptography.adaptive_posture import (
     PostureEvaluator,
     ThreatLevel,
 )
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # ---------------------------------------------------------------------------
 # PostureEvaluator tests
@@ -75,20 +79,138 @@ class TestPostureEvaluator:
         )
 
     def test_critical_threshold(self) -> None:
-        """High severity alerts should eventually reach CRITICAL."""
+        """A composite that really is above the threshold reaches CRITICAL.
+
+        This test used to feed the SAME five alerts five times and rely on the
+        accumulator summing them past the bar — "Feed multiple rounds to
+        accumulate score past critical".  That is the defect, not the feature:
+        ``recent_alerts`` is a sliding window the evaluator does not drain, so
+        re-serving it is what a monitor does on every cycle with no new
+        activity, and treating that as escalation pinned clean deployments at
+        CRITICAL.  A single stale alert drove effective_score from 0.45 to 4.83
+        over fifteen cycles against a threshold of 0.80.
+
+        What CRITICAL is documented to mean is a 7-sigma composite in one
+        evaluation, so that is what this now builds: saturated timing AND
+        pattern AND resonance signals, giving a raw composite above the bar on
+        the evaluation that observes it.
+        """
         evaluator = PostureEvaluator(
             elevated_threshold=0.1, high_threshold=0.3, critical_threshold=0.5
         )
         anomaly = MagicMock()
         anomaly.severity = "critical"
         anomaly.deviation_sigma = 10.0
-        alerts = [{"type": "timing", "anomaly": anomaly} for _ in range(5)]
-        report = {"recent_alerts": alerts, "total_alerts": 50}
-        # Feed multiple rounds to accumulate score past critical
-        for _ in range(5):
-            result = evaluator.evaluate(report)
+        report: dict[str, Any] = {
+            "recent_alerts": [
+                {"type": "timing", "timestamp": 1000.0 + i, "anomaly": anomaly} for i in range(5)
+            ]
+            + [
+                {
+                    "type": "pattern",
+                    "timestamp": 1010.0 + i,
+                    "anomaly": {"z_score": 12.0, "severity": "critical"},
+                }
+                for i in range(5)
+            ],
+            "resonance_analysis": {"sign": {"resonance_ratio": 10.0}},
+            "total_alerts": 50,
+        }
+        # Escalation deliberately requires `escalation_count` consecutive
+        # evaluations above the bar (default 3), so the composite is sustained
+        # with NEW alerts each cycle — a continuing attack, which is what the
+        # control is for.  Re-serving the same alerts would not do it, and must
+        # not: that is the neighbouring regression test.
+        base_alerts: list[dict[str, Any]] = list(report["recent_alerts"])
+        for round_index in range(evaluator.escalation_count):
+            fresh: dict[str, Any] = {
+                "recent_alerts": [
+                    {
+                        "type": alert["type"],
+                        "timestamp": alert["timestamp"] + 100.0 * round_index,
+                        "anomaly": alert["anomaly"],
+                    }
+                    for alert in base_alerts
+                ],
+                "resonance_analysis": report["resonance_analysis"],
+                "total_alerts": report["total_alerts"],
+            }
+            result = evaluator.evaluate(fresh)
+            assert result.signals["raw_score"] > 0.5, result.signals
         assert result.threat_level == ThreatLevel.CRITICAL
         assert result.action == PostureAction.ROTATE_AND_SWITCH
+
+    def test_a_stale_alert_cannot_hold_the_posture_at_critical(self) -> None:
+        """The regression: re-serving one alert must not escalate at all.
+
+        ``get_security_report()`` returns ``self.alerts[-10:]``.  With no new
+        activity the same alert is present on every cycle, and both the timing
+        and pattern scorers re-scored it every time while the accumulator
+        compounded the repetition.  Measured before the fix: raw_score pinned at
+        0.4500 and effective_score climbing 0.45 -> 4.83 over fifteen cycles,
+        CRITICAL from cycle 4 onward with ROTATE_AND_SWITCH — on one alert and
+        no further activity.
+        """
+        evaluator = PostureEvaluator()
+        anomaly = MagicMock()
+        anomaly.severity = "critical"
+        anomaly.deviation_sigma = 269.8
+        report = {
+            "recent_alerts": [{"type": "timing", "timestamp": 1000.0, "anomaly": anomaly}],
+            "resonance_analysis": {},
+            "total_alerts": 1,
+        }
+
+        first = evaluator.evaluate(report)
+        assert first.signals["raw_score"] > 0.0, "the alert must be scored once"
+
+        # How long decay needs, derived rather than guessed: the effective
+        # score falls by `decay_rate` per cycle from `first`, and the level
+        # returns to NOMINAL once it is below `elevated_threshold`.  The
+        # de-escalation path also needs the score under
+        # (threshold - hysteresis_band), and `escalation_count` cycles are
+        # spent on the way up, so allow for both.
+        span = math.log(evaluator.elevated_threshold / first.signals["effective_score"])
+        cycles = math.ceil(span / math.log(evaluator.decay_rate)) + evaluator.escalation_count + 5
+
+        levels = []
+        for _ in range(cycles):
+            result = evaluator.evaluate(report)
+            levels.append(result.threat_level)
+            assert result.signals["raw_score"] == 0.0, (
+                "an alert already scored was scored again: " f"{result.signals}"
+            )
+            assert result.signals["effective_score"] <= first.signals["effective_score"], (
+                "the effective score rose with no new anomaly: " f"{result.signals}"
+            )
+            assert result.signals["effective_score"] <= 1.0, (
+                "effective_score left the [0, 1] range its thresholds are "
+                f"calibrated in: {result.signals}"
+            )
+        assert ThreatLevel.CRITICAL not in levels, levels
+        assert levels[-1] == ThreatLevel.NOMINAL, levels[-5:]
+
+    def test_the_effective_score_stays_inside_the_threshold_range(self) -> None:
+        """`effective_score` must be comparable to the calibrated thresholds.
+
+        The thresholds are documented as per-evaluation probabilities in
+        [0, 1] (``ELEVATED = 1 - Phi(3)``, ``CRITICAL ... 1-in-780B``).  The
+        old ``acc = acc * decay + score`` is a geometric series with a 20x gain
+        at the default decay, so a sustained score of 0.04 reached "7-sigma" in
+        the limit and the reported figure kept climbing past 1.0.
+        """
+        evaluator = PostureEvaluator()
+        anomaly = MagicMock()
+        anomaly.severity = "critical"
+        anomaly.deviation_sigma = 100.0
+        for i in range(50):
+            report = {
+                "recent_alerts": [{"type": "timing", "timestamp": 1000.0 + i, "anomaly": anomaly}],
+                "resonance_analysis": {},
+                "total_alerts": 50,
+            }
+            result = evaluator.evaluate(report)
+            assert 0.0 <= result.signals["effective_score"] <= 1.0, result.signals
 
     def test_decay_reduces_score(self) -> None:
         """Accumulated score should decay when fed clean reports."""
@@ -583,3 +705,60 @@ class TestAlgorithmFamilies:
         assert any(
             "Algorithm downgrade detected" in record.message for record in caplog.records
         ), "an unrankable current_algorithm must trip the downgrade alarm"
+
+
+class TestMonitoringDocMatchesTheCode:
+    """MONITORING.md's posture section must state what the code does.
+
+    It documented a three-signal 50/30/20 weighting (the code has four signals
+    at 45/25/15/15), a score table of 0.0-0.3 / 0.3-0.6 / 0.6-0.8 / 0.8-1.0
+    (the constants are 0.15 / 0.45 / 0.80), an ``evaluator.evaluate()`` that
+    takes no argument, and a ``controller.respond()`` that does not exist.
+    Every one of those is a reader acting on a number or a call that is not
+    there, which is the INVARIANT-16 failure mode.
+    """
+
+    @staticmethod
+    def _doc() -> str:
+        return (REPO_ROOT / "MONITORING.md").read_text(encoding="utf-8")
+
+    def test_the_documented_thresholds_are_the_constants(self) -> None:
+        doc = self._doc()
+        for value in (
+            PostureEvaluator.DEFAULT_ELEVATED_THRESHOLD,
+            PostureEvaluator.DEFAULT_HIGH_THRESHOLD,
+            PostureEvaluator.DEFAULT_CRITICAL_THRESHOLD,
+        ):
+            rendered = f"{value:.2f}"
+            assert rendered in doc, f"MONITORING.md does not state the threshold {rendered}"
+
+    def test_the_documented_weights_are_the_weights(self) -> None:
+        """Read the weights out of ``evaluate``'s source and require each one."""
+        import inspect
+        import re as _re
+
+        source = inspect.getsource(PostureEvaluator.evaluate)
+        weights = sorted(
+            {float(m) for m in _re.findall(r"_score \* (0\.\d+)", source)}, reverse=True
+        )
+        assert weights, "no signal weights found in PostureEvaluator.evaluate"
+        doc = self._doc()
+        for weight in weights:
+            percent = f"{round(weight * 100)}%"
+            assert percent in doc, f"MONITORING.md does not state the {percent} signal weight"
+
+    def test_the_documented_api_calls_exist(self) -> None:
+        import inspect
+
+        doc = self._doc()
+        assert "evaluator.evaluate(monitor.get_security_report())" in doc
+        assert "controller.evaluate_and_respond()" in doc
+        assert "controller.respond()" not in doc, "MONITORING.md calls a method that does not exist"
+        # And the signatures the snippet implies really are those signatures.
+        assert list(inspect.signature(PostureEvaluator.evaluate).parameters) == [
+            "self",
+            "monitor_report",
+        ]
+        assert list(inspect.signature(CryptoPostureController.evaluate_and_respond).parameters) == [
+            "self"
+        ]

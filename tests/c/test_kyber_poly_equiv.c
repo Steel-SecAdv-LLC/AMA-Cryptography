@@ -7,17 +7,22 @@
  *        dispatch slots against the inlined scalar reference in
  *        `src/c/ama_kyber.c`.
  *
- *        `poly_add` and `poly_sub` use **strict byte-identity**
- *        comparison (non-reducing int16 ops — the only valid output
- *        is a single bit pattern).  `poly_reduce` uses a
- *        **mod-q-tolerant** comparator (cmp_poly_modq below): the
- *        production scalar Barrett (floor-divide) and the SVE2
- *        kernel's centered Barrett can pick representatives that
- *        differ by an exact multiple of q for the same input —
- *        both valid under `output ≡ input (mod q)`, and the
- *        production pipeline always re-reduces before bit
- *        extraction so the difference is invisible to ML-KEM
- *        consumers.
+ *        ALL THREE slots use **strict byte-identity** comparison.
+ *
+ *        `poly_reduce` used to be compared with a mod-q-tolerant
+ *        comparator, justified by the SVE2 kernel using a *centered*
+ *        Barrett (a `+ (1 << 25)` rounding term) that could pick a
+ *        representative differing by exactly q.  That kernel no longer
+ *        exists: `src/c/sve2/ama_kyber_sve2.c::barrett_reduce_scalar`
+ *        is the truncating form, character-for-character the same
+ *        computation as `barrett_reduce` in `src/c/ama_kyber.c` and as
+ *        `barrett_reduce_neon`, and its own comment records the change.
+ *        A tolerance kept for a convention nothing implements is an
+ *        assertion weakened for no reason: it would accept a real
+ *        off-by-q from a future kernel as readily as the one it was
+ *        written for.  The range check that comparator also carried —
+ *        outputs must stay inside [-2q, 2q] — is kept, as
+ *        `check_reduce_range()`.
  *
  * Mirrors the multi-lane structure of `test_kyber_ntt_equiv.c`:
  *
@@ -81,25 +86,18 @@ extern void ama_kyber_poly_reduce_sve2(int16_t poly[256]);
  * yields t == -2 via arithmetic right shift, so the return value is
  * a - t*q == +q).  This is cryptographically correct because every
  * downstream consumer re-reduces before bit extraction, and
- * `cmp_poly_modq()` below is written to accept ±q representatives
+ * `check_reduce_range()` below bounds the representative at [-2q, 2q]
  * accordingly.
  *
- * NOTE on the centered-vs-floor split: the SVE2 kernel in
- * `src/c/sve2/ama_kyber_sve2.c::barrett_reduce_scalar` uses a
- * *centered* Barrett formula (`+ (1 << 25)` rounding term).  Both
- * conventions land in roughly the same small window, but for some
- * inputs they pick representatives that differ by exactly q
- * (semantically equal mod q).  The production code always re-reduces
- * before bit extraction so this difference is invisible to ML-KEM
- * consumers — and `poly_reduce`'s public contract (now stated in
- * include/ama_dispatch.h) only promises a small representative
- * congruent mod q, which both implementations satisfy.
- *
- * `cmp_poly_modq()` below accepts either representative; the looser
- * comparison is the correct one for `poly_reduce` and is future-proof
- * against NEON/AVX2 helpers that may pick a different Barrett
- * convention.  Strict byte-identity (`cmp_poly()`) is used for
- * `poly_add` / `poly_sub` since those are non-reducing int16 ops. */
+ * Every wired kernel computes this SAME truncating formula — the
+ * production scalar `barrett_reduce`, `barrett_reduce_neon` (vqdmulhq
+ * >>15 then >>11, also unrounded) and the SVE2
+ * `barrett_reduce_scalar` — so byte-identity is the right comparison
+ * for `poly_reduce` as much as for the non-reducing add/sub.  A kernel
+ * that adopts a different Barrett convention would be a deliberate
+ * change to what the dispatch table may substitute for what, and it
+ * should land with the comparison it needs rather than find a
+ * pre-loosened one waiting. */
 static int16_t barrett_reduce_ref(int16_t a) {
     const int32_t v = ((1 << 26) + KYBER_Q / 2) / KYBER_Q;
     int32_t t = (v * (int32_t)a) >> 26;
@@ -147,30 +145,25 @@ static int cmp_poly(const int16_t a[KYBER_N], const int16_t b[KYBER_N],
     return 0;
 }
 
-/* Mod-q-tolerant comparison for `poly_reduce`: accepts representatives
- * that differ by an exact multiple of q.  Required because the
- * production scalar Barrett (floor-divide, in `src/c/ama_kyber.c`)
- * and the SVE2 kernel's centered Barrett (`+ (1 << 25)` rounding)
- * can pick representatives differing by a multiple of q for the
- * same input — both valid under the `output ≡ input (mod q)`
- * contract.  Also asserts each output is small enough to feed back
- * into further mod-q int16 arithmetic without overflow (the
- * looser `[-2q, 2q]` bound rather than the canonical `[-q+1, q-1]`
- * — the production scalar Barrett can produce `±q` for some inputs
- * in the `[-(2q-2), 2q-2]` production range, which is still
- * cryptographically correct because every downstream consumer
- * re-reduces before bit extraction). */
-static int cmp_poly_modq(const int16_t a[KYBER_N], const int16_t b[KYBER_N],
-                         const char *label, int trial) {
+/* Range guard for `poly_reduce`, applied alongside the strict
+ * byte-identity comparison.
+ *
+ * This is the half of the old mod-q-tolerant comparator worth keeping:
+ * an output that agrees with the reference but has blown up in
+ * magnitude would still break the caller, and byte-identity alone
+ * cannot see that (both sides would have to be wrong the same way, but
+ * both sides ARE the same formula, so the check is on the formula's
+ * output range rather than on the two agreeing).
+ *
+ * The bound is [-2q, 2q] rather than the canonical [-q+1, q-1]: the
+ * production scalar Barrett can produce exactly ±q for some inputs in
+ * the [-(2q-2), 2q-2] production range (a == -q yields t == -2 via the
+ * arithmetic right shift, so the return value is a - t*q == +q), which
+ * is cryptographically correct because every downstream consumer
+ * re-reduces before bit extraction. */
+static int check_reduce_range(const int16_t a[KYBER_N], const int16_t b[KYBER_N],
+                              const char *label, int trial) {
     for (int i = 0; i < KYBER_N; i++) {
-        int diff = (int)a[i] - (int)b[i];
-        if (diff % KYBER_Q != 0) {
-            fprintf(stderr,
-                    "FAIL: %s trial %d, coeff %d: scalar=%d simd=%d "
-                    "(diff=%d, not ≡ 0 mod q)\n",
-                    label, trial, i, (int)a[i], (int)b[i], diff);
-            return 1;
-        }
         if (a[i] < -2 * KYBER_Q || a[i] > 2 * KYBER_Q ||
             b[i] < -2 * KYBER_Q || b[i] > 2 * KYBER_Q) {
             fprintf(stderr,
@@ -252,19 +245,19 @@ int main(void) {
                  * outputs of `poly_add` / `poly_sub`, whose inputs
                  * are already in [-q+1, q-1] — so the post-add/sub
                  * input range to `poly_reduce` is bounded by
-                 * [-(2q-2), 2q-2].  The production scalar
-                 * `barrett_reduce` (floor-divide) only guarantees
-                 * [-q+1, q-1] output on inputs within that range;
-                 * the SVE2 kernel's centered Barrett is correct on
-                 * the full int16 range but matching the production
-                 * contract here keeps the scalar reference honest. */
+                 * [-(2q-2), 2q-2].  The truncating Barrett every
+                 * kernel now shares only guarantees [-q+1, q-1]
+                 * output on inputs within that range, so drawing
+                 * inputs from it is what keeps the scalar reference
+                 * honest rather than generous. */
                 int v = (int)(xs_next() % (uint64_t)(2 * (2 * KYBER_Q - 2) + 1))
                          - (2 * KYBER_Q - 2);
                 poly_s[i] = poly_v[i] = (int16_t)v;
             }
             scalar_poly_reduce(poly_s);
             dt->kyber_poly_reduce(poly_v);
-            fail += cmp_poly_modq(poly_s, poly_v, "dispatched poly_reduce", trial);
+            fail += cmp_poly(poly_s, poly_v, "dispatched poly_reduce", trial);
+            fail += check_reduce_range(poly_s, poly_v, "dispatched poly_reduce", trial);
             if (fail && trial >= 2) break;
         }
         if (fail) return 1;
@@ -309,7 +302,8 @@ int main(void) {
             }
             scalar_poly_reduce(poly_s);
             ama_kyber_poly_reduce_sve2(poly_v);
-            fail += cmp_poly_modq(poly_s, poly_v, "direct SVE2 poly_reduce", trial);
+            fail += cmp_poly(poly_s, poly_v, "direct SVE2 poly_reduce", trial);
+            fail += check_reduce_range(poly_s, poly_v, "direct SVE2 poly_reduce", trial);
 
             if (fail && trial >= 2) break;
         }

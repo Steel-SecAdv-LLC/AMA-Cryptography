@@ -31,6 +31,249 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > Compare `[4.0.0]` below, which is dated because it *is* released: tag
 > `v4.0.0`, published 2026-08-02.
 
+### Verification pass, eighth (2026-08-20) — a truncated ML-KEM sampler, a poisonable trust artefact, and six gates that could not see the change they police
+
+Nine defects, each found by reading the code against the specification or the
+document it cites, and each verified by mutation — the fix is only established
+once the new check is shown to fail without it.
+
+**1. SampleNTT truncated its XOF window (FIPS 203 Algorithm 7).**
+`kyber_poly_uniform()` squeezed a FIXED four-block, 672-octet window and stopped
+when it ran out:
+
+```c
+while (ctr < KYBER_N && pos + 3 <= sizeof(stream)) { ... }
+```
+
+leaving `a->coeffs[ctr .. 255]` at whatever the caller's storage held —
+uninitialised stack for `mat[i].vec[j]` inside `kyber_gen_matrix()`. FIPS 203
+squeezes *until* 256 coefficients are accepted; the sibling `dil_poly_uniform()`
+in `ama_dilithium.c` already does. A matrix entry that is partly stale bytes is
+not the A the counterpart derives from the same public `rho`, and `rho` is public,
+so the condition can be searched for offline. The batched path's "scalar
+fallback" could not help: it absorbed the identical `seed||x||y` and squeezed the
+identical first 672 octets, reproducing the shortfall exactly.
+
+Both paths now stream incrementally and continue a block at a time until every
+coefficient is accepted. The 168-octet rate is a multiple of 3, so no candidate
+group straddles a window boundary — asserted with `_Static_assert` rather than
+assumed. Output is byte-identical at every seed; all KATs, ACVP and Wycheproof
+vectors are unchanged. Reaching the continuation needs 448 candidates to yield
+fewer than 256 accepts, p ~ 1e-39, so no searchable seed exercises it — which is
+exactly how a truncating sampler passed every KAT in the tree. A new
+`AMA_TESTING_MODE` switch shrinks the first window so the continuation runs on
+every seed, and `tests/c/test_kyber_sample_ntt.c` asserts byte-identity with the
+full-window result across all three parameter sets. Mutation-verified: with both
+continuation loops removed the new test fails on every parameter set. The first
+version of that test did *not* fail, because two back-to-back keygens reproduce
+the same stack contents and so agreed on the garbage; the stack is now painted
+before each run through a `volatile` function pointer so the paint cannot be
+inlined into the caller's frame and miss.
+
+Cost, measured rather than asserted — callgrind Ir over 64 deterministic seeds
+with the lazy dispatch auto-tune pre-warmed outside the collected window, x86-64
+`-O3` Release: `kyber_keygen` 736,964 -> 731,145 Ir (-0.79%) and
+`kyber_encapsulate` 807,730 -> 801,942 Ir (-0.72%). Both floored benchmark rows
+got *cheaper*.
+
+**2. `kyber_compress_d` claimed a width domain its arithmetic does not have.**
+The Granlund–Montgomery reciprocal (M = ceil(2^40/q), S = 40) is exact only while
+the numerator stays under 2^40/e = 346,084,868. With x <= q-1 that survives to
+d = 18 and breaks at d = 19; by d = 30 it is wrong for 2,791 of the 3,329
+coefficients. The function nonetheless carried a `d >= 32` mask arm — advertising
+support to 31 — and shifted `(uint64_t)x << d` BEFORE that guard, undefined for
+d >= 64 (C11 6.5.7p3). The guard is now the first statement and names the real
+bound. `tests/c/test_kyber_compress.c` TEST 5 claimed to check this and could
+not: it probed a single coefficient, x = 1, at d in [30, 34], and with x = 1 the
+identity does not fail until d >= 39. It now enumerates the entire declared
+domain (3,329 x 18 = 59,922 pairs), asserts every width outside it refuses, and
+asserts the bound is TIGHT by showing d = 19 disagrees. Mutation-verified:
+restoring the old mask arm fails it.
+
+**3. The signed integrity artefact was reachable through the import system.**
+`_integrity_signature.py` is generated *data* — digests, a public key, a
+signature — and three controls read it *before* the package's bytecode has been
+validated: the pre-import binding-extension gate in `__init__`, the pre-load
+native-library check in `pqc_backends`, and the POST `integrity` stage, which
+runs before the `execution-integrity` stage that binds cached bytecode to signed
+source. All three obtained it with `from ama_cryptography import
+_integrity_signature`. An ordinary import does not read the `.py`; it reads
+`__pycache__/_integrity_signature.cpython-3XX.pyc` whenever a cache exists whose
+PEP 552 header matches the source's `(mtime, size)`.
+
+Measured end to end in a scratch copy, on the code before the fix: flip one byte
+of a signed `hkdf_binding*.so`, then write a `.pyc` for the artefact with that
+one entry replaced by the tampered object's real digest, carrying the untouched
+source's `(mtime, size)`. `_integrity_signature.py` stays byte-identical, so its
+Ed25519 signature still verifies. The pre-import gate then compared the tampered
+object against the tampered object's own digest:
+
+```
+OUTCOME: CryptoModuleError: … power-on self-tests FAILED
+BINDING MODULES THAT EXECUTED: [… 'ama_cryptography.hkdf_binding' …]
+TAMPERED ONE EXECUTED: True
+```
+
+Writing one file in `__pycache__/` — no code poisoning, no re-signing — converted
+a pre-execution refusal into a post-hoc one. New `ama_cryptography/_artefact_source.py`
+parses the artefact's literals from SOURCE TEXT with `ast.literal_eval`, accepting
+only top-level literal assignments and *rejecting* any other top-level node rather
+than skipping it. After the fix the same inputs give:
+
+```
+OUTCOME: ImportError: … a signed binding extension does not match the artefact
+BINDING MODULES THAT EXECUTED: []
+```
+
+`tests/test_artefact_cache_poisoning.py` reproduces both directions, with the
+non-vacuity controls (the untampered tree must import, and a plainly tampered
+binding must be refused) that keep the attack test from passing for an unrelated
+reason. This does not, and cannot, defend against poisoning the *checker's* own
+bytecode — the boundary `SECURITY.md` already states — but the artefact is data
+this code consumes, not the code itself, and it had no business being reachable
+through the import system.
+
+**4. Posture escalation was permanent, and its accumulator was unbounded.**
+`monitoring.get_security_report()` returns `self.alerts[-10:]` — a sliding
+window, not a queue the evaluator drains — so the same alert was re-scored on
+every cycle until ten newer ones pushed it out. `PostureEvaluator` then fed that
+into `acc = acc * decay + score`, a geometric series converging to
+`score / (1 - decay)`: a gain of 20x at the default decay of 0.95, and unbounded
+above, while the thresholds it is compared against are documented in the class's
+own docstring as per-evaluation probabilities in [0, 1] topping out at 0.80.
+Measured on ONE stale critical alert with no further activity: `raw_score` pinned
+at 0.4500 forever, `effective_score` 0.45 -> 4.83 by the fifteenth cycle,
+reaching CRITICAL / `ROTATE_AND_SWITCH` at cycle 4 and never leaving.
+MONITORING.md's "Exponential decay prevents stale anomalies from driving
+permanent escalation" was precisely what did not happen. The evaluator now scores
+each alert once (a shared cursor advanced after every scorer has seen the new
+alerts, so the first scorer cannot consume them) and holds a decaying peak,
+`max(score, acc * decay)`: bounded in [0, 1], CRITICAL on the evaluation that
+observes a genuine 7-sigma composite rather than after four cycles of summation,
+and geometric decay when nothing new arrives. `test_critical_threshold` had
+encoded the defect — it fed the same five alerts five times to "accumulate score
+past critical" — and now builds a genuinely above-threshold composite with fresh
+timestamps.
+
+**5. The INVARIANT-6 C-zeroization gate never scanned the tree it documented.**
+`tools/check_c_secret_zeroization.py` has always said "Tests are deliberately in
+scope", while the walk only ever visited `src/c`. Two real matches were sitting
+in `tests/c` the whole time. The scan now covers both roots and fails closed per
+root, so one tree silently dropping out cannot be masked by the other. Both
+findings are fixed at source by initialising at declaration.
+
+**6. The Ed25519 backend-differential gate could not see this branch's own rule.**
+`tools/check_ed25519_backend_parity.py` exists to catch a fix applied to one
+backend and not the other. The RFC 8032 §5.1.3 rule ("if x = 0, and x_0 = 1,
+decoding fails") went into both backends independently — and `DECODE_CASES`
+contained neither of the two encodings that discriminate it, because x = 0 holds
+for exactly two y values, y = 1 and y = p-1. Measured, not argued: removing the
+rule from the fe51 sources only, rebuilding, and running the gate over the two
+real libraries printed "both backends agree on every case" and exited 0. With the
+encodings added it exits 1 and names the divergence; a control run with the rule
+intact still exits 0. The corpus also labelled y = p-1 "off-curve"; y = -1 gives
+x^2 = 0, so it is the order-2 point and both backends decode it. It now carries
+the expectation `True`, which is what makes the paired reject non-vacuous, and
+y = 0 with the sign bit set plus 2G in both parities were added so a backend that
+*over*-rejects is caught too.
+
+**7. `ama_ed25519_batch_verify`'s public contract omitted its fail-closed
+returns.** The header documented SUCCESS / VERIFY_FAILED / INVALID_PARAM; the
+donna path also returns `AMA_ERROR_CRYPTO` when the batch randomizers cannot be
+drawn and `AMA_ERROR_MEMORY` on allocation failure. The header further promised
+"exactly `count` are written", which the allocation-failure path did not honour:
+it returned with the caller's array untouched, so a caller reusing one buffer
+across batches could read stale 1s as valid signatures. Both implementations now
+zero `results` before any per-entry work, and the contract states which two
+argument rejections write nothing and why. Pinned non-vacuously in
+`tests/c/test_ed25519_canonical_s.c` — the array is pre-seeded with 1s.
+
+**8. The error-state gating audit excluded the module whose guard it could not
+see.** `tools/check_error_state_gating.py` is the exhaustive, static half of
+INVARIANT-39/40 output inhibition. It excluded `ascon.py` on the stated grounds
+that "a body-level scan cannot see the reach" — but the reach was always visible;
+it was the GUARD that was not, because `ascon`'s entry points call
+`lib.ama_ascon_*` in their own bodies while `check_crypto_permitted()` sits one
+level down in `_require_native()`. The tool now follows one level of delegation,
+and only a private helper whose FIRST executable statement is the guard call
+qualifies: a helper that guards inside a branch guards only sometimes. `ascon` is
+enforced statically, and the gated surface it reports is 89 native plus 10 Cython
+entry points — the figure INVARIANTS.md and this document now carry, replacing
+an 85 that had drifted. The gate had no test of its own, the gap INVARIANT-2
+names; `tests/test_error_state_gating_tool.py` supplies both directions plus a
+discovery floor under the hand-maintained `BINDING_PYX` list, so a sixth Cython
+binding cannot go unscanned.
+
+**9. The ctypes ABI gate's floor check was a tautology.** `main()` compared
+`REQUIRED_MODULES` against `ctypes_modules()`, which unions `REQUIRED_MODULES`
+in by construction — so the branch, and the comment explaining it ("Discovery
+lost a module the gate is known to cover: that is a checker bug or a deleted
+module, never a clean tree"), could not be taken. Discovery is now a separate
+function and the floor is evaluated against it, so an extractor change that
+stops recognising an `argtypes`/`restype` assignment lands there instead of being
+covered up.
+
+**Also corrected, each a claim the tree contradicted.**
+
+- `ama_shake128_inc_squeeze`'s position guard was documented as insurance
+  against a future family. `SHA3_CTX_CONSUMED` (200) is set by `ama_sha3_final()`
+  in the same translation unit and exceeds `SHAKE128_RATE` (168), so an
+  init/update/final followed by a squeeze reaches the guard with a position that
+  would underflow `available` and read past the state into caller-visible output.
+  The guard is load-bearing today; the comment now says so. Object-identical:
+  26 of 26 symbols byte-identical before and after under x86-64 `cc -O3`.
+- `ama_sha3_sve2.c` described "SVE2 scalable vectors for theta column-parity XOR
+  and chi step" after the vectors had been removed from both — a file describing
+  work it does not do is how a reader concludes the SVE2 tier earns something it
+  does not. Comments corrected; 2 of 2 symbols byte-identical under
+  `aarch64-linux-gnu-gcc -O3 -march=armv9-a+sve2`.
+- `ama_dispatch_info_t` labelled every field "Selected", which a caller could act
+  on: on a host where the AES-GCM ISA-bundle gate fails, the struct reports
+  `aes_gcm = AMA_IMPL_AVX2` while the table holds the constant-time bitsliced
+  path. Measured on one process with `AMA_DISPATCH_ONLY=argon2-g-avx2`: the
+  struct said AVX2 while `ama_aes_gcm_active_backend()` said `bitsliced-software`.
+  The fields are now documented as DETECTED tiers, with the four ways detection
+  and wiring diverge and the three calls that answer "what is actually running".
+- The dispatcher's Phase-3 auto-tune reverted a SIMD Keccak slot to a scalar
+  reference it had never measured. It now benchmarks the generic reference
+  whenever a SIMD Keccak kernel is pinned, records `keccak_fallback_regressed`,
+  and the dispatch-cache fingerprint moves to `v2` so a v1 cache is not read back
+  against the new schema. Per-symbol disassembly confines the change to
+  `dispatch_init_internal` (2,849 -> 2,843 instructions), `ama_print_dispatch_info`
+  (146 -> 151, diagnostics only) and one new file-static helper.
+- `detect_arm_features()`'s non-Linux/non-Apple arm reported NEON as *absent*.
+  AdvSIMD is part of the AArch64 base architecture and of the procedure call
+  standard — the compiler already emits it with no runtime check — so reporting 0
+  was wrong rather than conservative, and it cost the NEON kernels on every
+  AArch64 platform outside Linux and Apple, silently, the only symptom being a
+  slower tier. The translation unit is object-identical on both canonical CI
+  runners (25 of 25 symbols under x86-64 `cc -O3` and under
+  `aarch64-linux-gnu-gcc -O3`), because that arm sits behind `#else` and neither
+  runner compiles it.
+- The Poly1305 `rs[]` comment said "r[1]*5 and r[2]*5"; with 44/44/42-bit limbs
+  the 2^132 fold is *20. Comment only; 7 of 7 symbols byte-identical.
+- `check_ghash_constant_time.py` closed its noise floor only at the START of the
+  sweep. The sweep is one process per class in strict order, so a one-time cost
+  that falls away after the first few processes reads as a cross-class delta:
+  with every threshold at 0, `--target aead-verify` reported 456 I refs of
+  "key-dependent measurement" whose split followed the ORDER of measurement, not
+  the classes. The floor is now closed at both ends. `ecdsa` also reached a limit
+  of 0 — the last non-zero one — by signing through the fixed-width
+  `ama_secp256k1_ecdsa_sign_raw`, putting the DER encoder outside the measurement
+  instead of inside it with an allowance. All thirteen targets now measure a
+  cross-class delta of exactly zero under gcc 13 and clang 18 at -O3.
+- `check_documented_counts.py` gained two claim shapes it had no way to check:
+  the gated-surface entry-point figures (imported from the gate that owns them,
+  not re-derived) and `N C test suites (M translation units)`, which moved every
+  time a C test was added with nothing watching. Now 60 suites / 63 translation
+  units, measured.
+- Both benchmark baselines carry acknowledgements for every floored-code path
+  this branch has touched since the calibration commit, each backed by a
+  measurement rather than an assertion — per-symbol object comparison for the
+  translation units that changed shape, and callgrind Ir for the two ML-KEM rows.
+  `src/c/ed25519_donna_shim.c` and `src/c/ama_cpuid.c` were missing entirely; the
+  ML-KEM and dispatch entries described earlier edits than the ones now shipped.
+
 ### Verification pass, seventh (2026-08-20) — the whole check set was red, and two coverage gaps behind it
 
 At `725f2f1` this branch was red on **thirty-odd checks**, and the whole of it
@@ -1139,7 +1382,7 @@ unchanged but the work, the timing, or the failure mode is not.
 
 | # | Kind | Change | Migration |
 |---|---|---|---|
-| 1 | **Breaking** | `import ama_cryptography` raises `CryptoModuleError` when the FIPS 140-3 power-on self-tests fail, where 4.x logged CRITICAL and imported cleanly; the resulting ERROR state inhibits output on **every** surface — `pqc_backends`' 85 native entry points, the ten Cython binding entry points, `AmaContext`, Ascon, `secure_memory`, and the key-format secret exports (INVARIANT-39, INVARIANT-40) | correct the fault the message names; `AMA_POST_DIAGNOSTIC_IMPORT=1` imports for triage with cryptography still refused |
+| 1 | **Breaking** | `import ama_cryptography` raises `CryptoModuleError` when the FIPS 140-3 power-on self-tests fail, where 4.x logged CRITICAL and imported cleanly; the resulting ERROR state inhibits output on **every** surface — 89 native entry points across `pqc_backends` and `ascon`, the ten Cython binding entry points, `AmaContext`, Ascon, `secure_memory`, and the key-format secret exports (INVARIANT-39, INVARIANT-40) | correct the fault the message names; `AMA_POST_DIAGNOSTIC_IMPORT=1` imports for triage with cryptography still refused |
 | 2 | **Breaking** | Ed25519 rejects the two remaining non-canonical encodings — `x = 0` with the sign bit set (RFC 8032 §5.1.3), in both backends, at every public-key decode | none for conformant callers; the affected points are the identity and the order-2 point, neither a usable key |
 | 3 | **Breaking** | `CryptoPostureController` raises `ValueError` for an algorithm it cannot rank, which 4.x silently mapped onto the weakest rung (INVARIANT-35). Strength ladders are now per algorithm family: `KYBER_1024` and `HYBRID_KEM` rank on a KEM ladder (they previously ranked nowhere), and a posture escalation can no longer cross families and answer a KEM escalation with a signature scheme. `AES_256_GCM` remains unrankable — an AEAD with nothing stronger to escalate to | pass a name from `ALGORITHM_FAMILIES`; the error lists them by family |
 | 4 | Behavioural | every asymmetric keygen — random and seed-derived, on every surface — runs a FIPS 140-3 pairwise consistency test before the keypair is released (INVARIANT-41); sub-millisecond for every family except the hash-based signatures: ~220 ms for SPHINCS+-SHA2-256f, **~1.0 s for SLH-DSA-SHAKE-128s** | none; budget for keygen latency on the hash-based parameter sets — the cost is paid once, at the rare long-lived-key operation |
@@ -1882,7 +2125,7 @@ resolved here.  The ones that changed behaviour rather than prose:
 Documentation claims corrected against measurement rather than restated: the
 SoftHSM2 lane runs **one** real-token test (`test_full_lifecycle`), not 51; the
 C suite is 59 files / 62 translation units, not 58 / 61; the gated
-`pqc_backends` surface is what `tools/check_error_state_gating.py` reports (85
+gated surface is what `tools/check_error_state_gating.py` reports (89
 native plus 10 Cython entry points), replacing two documents that disagreed at
 80 and 81; the canonical-host performance tables understate 5.0.0 on the AEAD
 rows *and overstate it on every keygen row*, which now pay a pairwise

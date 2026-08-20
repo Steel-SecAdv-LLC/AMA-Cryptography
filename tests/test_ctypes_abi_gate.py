@@ -355,6 +355,39 @@ class TestScopeIsDiscoveredNotHandMaintained:
         empty.mkdir()
         assert set(gate.ctypes_modules(empty)) == set(gate.REQUIRED_MODULES)
 
+    def test_discovery_reports_only_what_it_found(self, tmp_path: Path) -> None:
+        """Discovery must be observable WITHOUT the floor mixed into it.
+
+        ``ctypes_modules()`` unions ``REQUIRED_MODULES`` into its result, so
+        ``main()``'s floor check — "required module(s) absent from the
+        discovered scope" — was comparing a set against something built to
+        contain it, and could never fire.  Keeping an un-floored view is what
+        makes that check reachable.
+        """
+        empty = tmp_path / "pkg"
+        empty.mkdir()
+        assert gate.ctypes_modules_discovered(empty) == ()
+        assert set(gate.ctypes_modules_discovered()) >= set(gate.REQUIRED_MODULES)
+
+    def test_the_floor_check_fires_when_discovery_loses_a_module(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The negative control for that branch: exit 2, not a clean pass.
+
+        Simulates the two conditions the branch names — a module deleted from
+        the package, or an extractor that stopped recognising its ctypes
+        assignments — by removing one entry from what discovery reports.  The
+        gate must refuse to return a verdict.
+        """
+        real = gate.ctypes_modules_discovered()
+        assert gate.REQUIRED_MODULES[0] in real
+        monkeypatch.setattr(
+            gate,
+            "ctypes_modules_discovered",
+            lambda *a, **k: tuple(m for m in real if m != gate.REQUIRED_MODULES[0]),
+        )
+        assert gate.main([]) == 2
+
     def test_a_new_ctypes_module_is_picked_up(self, tmp_path: Path) -> None:
         """The property that makes the list unnecessary."""
         pkg = tmp_path / "pkg"

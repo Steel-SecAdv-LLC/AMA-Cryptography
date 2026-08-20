@@ -126,8 +126,16 @@ REQUIRED_MODULES = (
 _CTYPES_ATTRS = ("argtypes", "restype")
 
 
-def ctypes_modules(package_root: Path | None = None) -> tuple[str, ...]:
-    """Every module in the package that assigns ``argtypes`` or ``restype``.
+def ctypes_modules_discovered(package_root: Path | None = None) -> tuple[str, ...]:
+    """Every module the AST scan actually FOUND, with no floor unioned in.
+
+    Split out from :func:`ctypes_modules` because the floor check in
+    :func:`main` has to be evaluated against discovery alone.  Comparing
+    ``REQUIRED_MODULES`` against a value that already contains
+    ``REQUIRED_MODULES`` by construction is a tautology: the check was
+    unreachable, and the comment on it — "Discovery lost a module the gate is
+    known to cover: that is a checker bug or a deleted module, never a clean
+    tree" — described a branch that could not be taken.
 
     Detection is by AST attribute assignment rather than a text search, so a
     mention inside a docstring or comment does not pull a module into scope.
@@ -158,7 +166,18 @@ def ctypes_modules(package_root: Path | None = None) -> tuple[str, ...]:
                 except ValueError:
                     found.add(path.as_posix())
                 break
-    return tuple(sorted(found | set(REQUIRED_MODULES)))
+    return tuple(sorted(found))
+
+
+def ctypes_modules(package_root: Path | None = None) -> tuple[str, ...]:
+    """The scan scope: what discovery found, with ``REQUIRED_MODULES`` as a floor.
+
+    The floor is what keeps an extractor bug from turning the gate into a
+    silent pass over an empty scope.  It is applied HERE and not inside
+    discovery, so :func:`main` can still ask discovery what it saw on its own
+    and fail when the floor had to do the work.
+    """
+    return tuple(sorted(set(ctypes_modules_discovered(package_root)) | set(REQUIRED_MODULES)))
 
 
 #: ctypes type names that marshal as an integer-class argument.
@@ -612,11 +631,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             # header only fills symbols the public one does not carry.
             header_protos.setdefault(symbol, proto)
 
+    # Evaluate the floor against DISCOVERY, not against the floored scope.
+    # `ctypes_modules()` unions REQUIRED_MODULES in, so asking it whether it
+    # contains REQUIRED_MODULES can only ever answer yes.
+    discovered = ctypes_modules_discovered()
     modules = ctypes_modules()
-    missing = [m for m in REQUIRED_MODULES if m not in modules]
+    missing = [m for m in REQUIRED_MODULES if m not in discovered]
     if missing:
         # Discovery lost a module the gate is known to cover: that is a
-        # checker bug or a deleted module, never a clean tree.
+        # checker bug or a deleted module, never a clean tree.  Reachable now:
+        # a module removed from the package, or an extractor change that stops
+        # recognising an `argtypes`/`restype` assignment, lands here instead of
+        # being covered up by the floor.
         print(
             f"ERROR: required module(s) absent from the discovered scope: " f"{', '.join(missing)}",
             file=sys.stderr,

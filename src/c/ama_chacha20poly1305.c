@@ -231,7 +231,9 @@ static void chacha20_xor(const uint8_t key[32], uint32_t initial_counter,
  */
 typedef struct {
     uint64_t r[3];       /* Clamped r key in 44/44/42-bit limbs */
-    uint64_t rs[2];      /* r[1]*5 and r[2]*5, precomputed for reduction */
+    uint64_t rs[2];      /* r[1]*20 and r[2]*20, the 2^132 fold — see
+                          * poly1305_init() for why 20 and not the 5 that
+                          * appears when limbs are aligned to 2^130 itself */
     uint64_t h[3];       /* Accumulator in 44/44/42-bit limbs */
     uint64_t pad[2];     /* s key (last 16 bytes of the OTK), little-endian */
     uint8_t buf[16];     /* Partial block buffer */

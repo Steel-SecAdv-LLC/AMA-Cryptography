@@ -481,28 +481,50 @@ evaluator.record_timing_anomaly(score=0.7)
 evaluator.record_pattern_anomaly(score=0.5)
 
 # Evaluate threat level
-level = evaluator.evaluate()
-# Returns: NOMINAL | ELEVATED | HIGH | CRITICAL
+evaluation = evaluator.evaluate(monitor.get_security_report())
+# PostureEvaluation(threat_level=..., action=..., confidence=..., signals=...)
+# threat_level: NOMINAL | ELEVATED | HIGH | CRITICAL
 
 # Controller automates responses
-controller = CryptoPostureController(evaluator)
-controller.respond()  # Key rotation, algorithm switching based on level
+controller = CryptoPostureController(evaluator=evaluator, monitor=monitor)
+controller.evaluate_and_respond()  # Key rotation / algorithm switching by level
 ```
 
-**Weighted Scoring Model:**
-- Timing anomalies: 50% weight (ResonanceTimingMonitor)
-- Pattern anomalies: 30% weight (RecursionPatternMonitor)
-- Resonance analysis: 20% weight
-- Exponential decay prevents stale anomalies from driving permanent escalation
+**Weighted Scoring Model** (the weights in `PostureEvaluator.evaluate`):
+- Timing anomalies: 45% (ResonanceTimingMonitor)
+- Pattern anomalies: 25% (RecursionPatternMonitor)
+- Resonance analysis: 15%
+- Lyapunov stability: 15% (double-helix divergence)
 
-**Automated Response Levels:**
+Each alert is scored **once**. `get_security_report()` returns a sliding
+window (`self.alerts[-10:]`) that the evaluator does not drain, so the same
+alert reappears on every cycle until ten newer ones displace it; the evaluator
+tracks a timestamp cursor and scores only what it has not seen. Without that,
+one stale alert kept the raw score pinned at its peak indefinitely.
 
-| Level | Score | Response |
-|-------|-------|----------|
-| NOMINAL | 0.0-0.3 | No action |
-| ELEVATED | 0.3-0.6 | Increase monitoring frequency |
-| HIGH | 0.6-0.8 | Rotate keys |
-| CRITICAL | 0.8-1.0 | Rotate keys + switch algorithm + alert |
+The accumulator is a **decaying peak-hold**, `acc = max(score, acc * decay)`,
+with `decay_rate = 0.95` by default. It is bounded in [0, 1], so the
+thresholds below mean what their calibration says; a genuine composite reaches
+its level on the evaluation that observes it (subject to `escalation_count`
+consecutive observations); and with no new anomalies the level decays
+geometrically. Exponential decay prevents stale anomalies from driving
+permanent escalation — which the previous `acc = acc * decay + score` form did
+not deliver: for a constant input it is a geometric series with a 20x gain at
+`decay = 0.95`, unbounded above, so a sustained score of 0.04 reached
+"CRITICAL" in the limit.
+
+**Automated Response Levels** (the constants in `PostureEvaluator`):
+
+| Level | Effective score | Response |
+|-------|-----------------|----------|
+| NOMINAL | < 0.15 | No action |
+| ELEVATED | 0.15-0.45 | Increase monitoring frequency |
+| HIGH | 0.45-0.80 | Rotate keys |
+| CRITICAL | >= 0.80 | Rotate keys + switch algorithm + alert |
+
+Escalation to a higher level requires `escalation_count` (default 3)
+consecutive evaluations at that level; de-escalation requires the score to
+fall below the threshold by `hysteresis_band` (default 0.05).
 
 ---
 

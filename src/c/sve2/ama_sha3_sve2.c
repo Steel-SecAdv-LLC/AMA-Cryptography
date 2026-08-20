@@ -58,10 +58,32 @@ static const int PI[25] = {
 };
 
 /* ============================================================================
- * SVE2-accelerated Keccak-f[1600]
+ * Keccak-f[1600] in the SVE2 translation unit — SCALAR, deliberately.
  *
- * Uses SVE2 scalable vectors for theta column-parity XOR and chi step.
- * The vector length adapts to the hardware (128, 256, 512, etc.).
+ * This function contains no SVE intrinsics.  It once did: theta's five-element
+ * column parity was strip-mined through one `svwhilelt_b64(0, 5)` predicate,
+ * which activates at most `min(5, svcntd())` lanes and therefore left 3 of the
+ * 5 parity words uninitialised at VL=128 and 1 at VL=256 — correct only at
+ * VL >= 320, which is why QEMU's default 2048-bit `max` CPU was the one
+ * environment where it was ever exercised.  The fix was to compute theta in
+ * scalar C, and the measurement that settled it is in the comment on the loop
+ * below: a vector-length-agnostic form of that five-element reduction is
+ * 15.9x slower at VL=128, 10.0x at VL=256 and 5.6x at VL=512 than the 20
+ * scalar XORs it would replace, because the time goes into predicate setup.
+ * rho/pi/chi/iota were always scalar.
+ *
+ * The header said "Uses SVE2 scalable vectors for theta column-parity XOR and
+ * chi step" and a comment on the chi loop said "use SVE2 for vectorized
+ * bic-and-xor", after the vectors had been removed from both.  A file that
+ * describes work it does not do is how a reader concludes the SVE2 tier is
+ * earning something here that it is not.
+ *
+ * What the SVE2 tier does earn in this file is `ama_sha3_256_sve2`'s
+ * lane-predicated rate-block absorb, which is genuinely vectorised.  The
+ * permutation is kept in this TU so that wrapper can call it directly, and
+ * because the dispatcher's Phase-3 auto-tune measures whatever pointer is
+ * installed: if this kernel is slower than the scalar baseline on a given
+ * host, the auto-tune now reverts to a tier it has ALSO measured.
  * ============================================================================ */
 void ama_keccak_f1600_sve2(uint64_t state[25]) {
     uint64_t C[5], D[5], B[25];
@@ -132,7 +154,9 @@ void ama_keccak_f1600_sve2(uint64_t state[25]) {
             B[PI[i]] = (r == 0) ? state[i] : ((state[i] << r) | (state[i] >> (64 - r)));
         }
 
-        /* Chi: use SVE2 for vectorized bic-and-xor */
+        /* Chi: scalar bic-and-xor.  (An earlier comment here said "use SVE2
+         * for vectorized bic-and-xor"; there are no vectors in these five
+         * lines and there never were in the shipped form.) */
         for (int y = 0; y < 25; y += 5) {
             state[y + 0] = B[y + 0] ^ (~B[y + 1] & B[y + 2]);
             state[y + 1] = B[y + 1] ^ (~B[y + 2] & B[y + 3]);

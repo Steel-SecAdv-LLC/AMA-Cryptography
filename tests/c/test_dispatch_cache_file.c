@@ -126,15 +126,25 @@ int main(void) {
     }
     /* Fingerprint must include arch + per-slot impl levels + CPU-feature
      * keys (verbatim names from include/ama_dispatch.h v3.2.0).  Any
-     * drift between docs and emitted key names would be caught here. */
+     * drift between docs and emitted key names would be caught here.
+     *
+     * The version prefix moved v1 -> v2 when the verdict record gained
+     * `keccak_fallback_regressed`.  That field decides whether a regressed
+     * top tier falls to the intermediate kernel or to the scalar baseline,
+     * and a v1 file does not carry it — an absent key parses as 0, i.e.
+     * "install the intermediate tier", which is the fail-open the field
+     * exists to close.  Bumping the prefix makes every v1 file miss and
+     * re-bench rather than replay an incomplete verdict, and pinning the
+     * prefix here is what stops a future field being added without one. */
     const char *required_keys[] = {
-        "fingerprint=v1|",
+        "fingerprint=v2|",
         "|sha3=", "|kyber=", "|dilithium=", "|aes_gcm=",
         "|chacha20=", "|argon2=", "|x25519=", "|ed25519=",
         "|sphincs=",
         "|avx2=", "|avx512f=", "|avx512kc=", "|aesni=",
         "|pclmul=", "|vaes=", "|arm_aes=", "|arm_pmull=",
         "keccak_regressed=",
+        "keccak_fallback_regressed=",
         "keccak_x4_regressed=",
         "kyber_ntt_regressed=",
         "kyber_invntt_regressed=",
@@ -142,6 +152,8 @@ int main(void) {
         "dilithium_invntt_regressed=",
         "keccak_simd_ns=",
         "keccak_generic_ns=",
+        "keccak_fallback_ns=",
+        "keccak_fallback_generic_ns=",
         NULL,
     };
     for (const char **p = required_keys; *p; ++p) {

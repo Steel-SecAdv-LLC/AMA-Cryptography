@@ -1057,11 +1057,21 @@ ama_error_t ama_shake128_inc_squeeze(ama_sha3_ctx* ctx, uint8_t* output, size_t 
     if (!ctx || !output) return AMA_ERROR_INVALID_PARAM;
     if (!ctx->finalized) return AMA_ERROR_INVALID_PARAM;
 
-    /* SHAKE128 has the largest rate of the four families sharing this context,
-     * so no legal same- or cross-family sequence can leave a position above it
-     * today.  The guard is here anyway: it is the invariant the extraction loop
-     * below depends on, and stating it symmetrically with SHAKE256 keeps a
-     * future family (or a larger rate) from silently reopening the underflow. */
+    /* SHAKE128 has the largest SQUEEZE rate of the four families sharing this
+     * context, but that is not the only value `buffer_len` can hold: a
+     * consumed one-shot digest context parks it at SHA3_CTX_CONSUMED (200,
+     * the full state width) — see the end of ama_sha3_final() and
+     * ama_sha3_512_final() — which is above SHAKE128_RATE (168).  So an
+     * init/update/final sequence followed by a squeeze on the same context
+     * reaches this guard with a position the extraction loop below could not
+     * survive: `available = SHAKE128_RATE - ctx->buffer_len` would underflow
+     * a size_t and the loop would read past the 200-byte state and off the end
+     * of the context into caller-visible output.
+     *
+     * The guard is therefore load-bearing TODAY, not only insurance against a
+     * future family or a larger rate.  An earlier revision of this comment
+     * said no legal sequence could exceed the rate; SHA3_CTX_CONSUMED in this
+     * same translation unit is the counter-example. */
     if (!sha3_squeeze_pos_ok(ctx, SHAKE128_RATE)) {
         return AMA_ERROR_INVALID_PARAM;  /* cross-family misuse — see sha3_squeeze_pos_ok */
     }

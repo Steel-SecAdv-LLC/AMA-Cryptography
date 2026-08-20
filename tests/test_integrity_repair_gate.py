@@ -35,6 +35,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import textwrap
 import types
 from pathlib import Path
@@ -42,6 +43,7 @@ from typing import Any, Iterator
 
 import pytest
 
+from ama_cryptography import _artefact_source
 from ama_cryptography import _self_test as st
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -104,25 +106,40 @@ def _package() -> types.ModuleType:
 
 
 def _install_artefact(monkeypatch: pytest.MonkeyPatch, **fields: Any) -> None:
-    """Put a synthetic ``_integrity_signature`` module in front of the real one.
+    """Put a synthetic artefact SOURCE FILE in front of the real one.
 
-    Both the ``sys.modules`` entry and the attribute on the package object have
-    to move: ``_verify_signed_integrity`` does ``from ama_cryptography import
-    _integrity_signature``, and once the submodule has been imported that
-    resolves through the already-bound package attribute without consulting
-    ``sys.modules`` at all.
+    This used to install a synthetic module object into ``sys.modules`` and
+    onto the package attribute, because ``_verify_signed_integrity`` reached
+    the artefact with ``from ama_cryptography import _integrity_signature``.
+    It no longer does: an ordinary import reads the artefact's ``__pycache__``
+    bytecode, which nothing has validated when the pre-load gates and the POST
+    ``integrity`` stage consult it, so the literals are now parsed from the
+    source text (see ``ama_cryptography._artefact_source``).
+
+    Writing a real file is therefore the right seam, and a strictly better one:
+    it exercises the parser these controls actually use, rather than handing
+    them an object that skips it.
     """
-    mod = types.ModuleType(_ARTEFACT)
-    for name, value in fields.items():
-        setattr(mod, name, value)
-    monkeypatch.setitem(sys.modules, _ARTEFACT, mod)
-    monkeypatch.setattr(_package(), "_integrity_signature", mod, raising=False)
+    lines = [f"{name} = {value!r}\n" for name, value in fields.items()]
+    path = _artefact_dir(monkeypatch) / "_integrity_signature.py"
+    path.write_text("".join(lines), encoding="utf-8")
+    monkeypatch.setattr(_artefact_source, "artefact_path", lambda *_a, **_k: path)
+
+
+def _artefact_dir(monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A per-test scratch directory for synthetic artefacts.
+
+    ``monkeypatch`` is taken (and unused) so every caller keeps the same shape
+    and the directory's lifetime is obviously tied to a single test.
+    """
+    del monkeypatch
+    return Path(tempfile.mkdtemp(prefix="ama-artefact-"))
 
 
 def _remove_artefact(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Make importing the artefact raise ImportError (a tree with no signature)."""
-    monkeypatch.setitem(sys.modules, _ARTEFACT, None)
-    monkeypatch.delattr(_package(), "_integrity_signature", raising=False)
+    """Point the reader at a path that does not exist (a tree with no signature)."""
+    missing = _artefact_dir(monkeypatch) / "absent.py"
+    monkeypatch.setattr(_artefact_source, "artefact_path", lambda *_a, **_k: missing)
 
 
 class TestFailureClassification:

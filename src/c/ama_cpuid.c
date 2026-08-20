@@ -552,10 +552,23 @@ static void detect_arm_features(void) {
 
 #else
 static void detect_arm_features(void) {
+    /* An AArch64 target with neither getauxval nor sysctl — FreeBSD, a
+     * Windows-on-ARM build, a bare-metal toolchain.  The OPTIONAL features
+     * cannot be probed here, so they answer 0 and the dispatcher declines
+     * their kernels, which is the correct fail-closed direction.
+     *
+     * NEON is not optional.  AdvSIMD is part of the AArch64 base
+     * architecture and of the standard procedure call standard: every
+     * conforming AArch64 implementation has it, and the compiler is already
+     * free to emit it without any runtime check.  Reporting 0 here was
+     * therefore not conservative, it was wrong — and it cost the NEON kernels
+     * on every platform outside Linux and Apple, silently, because the only
+     * symptom is a slower dispatch tier.  This is the same reasoning the two
+     * arms above already apply; they simply never reached this one. */
     has_arm_aes_cached = 0;
     has_arm_pmull_cached = 0;
     has_arm_sha2_cached = 0;
-    has_arm_neon_cached = 0;
+    has_arm_neon_cached = 1;
     has_arm_sve2_cached = 0;
 }
 #endif

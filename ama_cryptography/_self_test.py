@@ -1184,6 +1184,34 @@ def _integrity_strength_for(native_ok: bool, bindings_exact: bool) -> str:
     return "signed"
 
 
+def _artefact_or_error() -> Tuple[Optional[Any], Optional[Tuple[Optional[bool], str]]]:
+    """The artefact's literals, or the verdict to return instead.
+
+    Parsed from SOURCE TEXT rather than imported.  The POST ``integrity`` stage
+    runs BEFORE ``execution-integrity``, so at this point nothing has bound the
+    artefact's ``__pycache__`` bytecode to its signed source — and an ordinary
+    import reads that bytecode.  On an unanchored build a poisoned ``.pyc``
+    carrying a self-consistent forged (digest, pubkey, signature) triple would
+    verify here; on an anchored build the trust anchor catches the substituted
+    key, but the pre-load checks in ``__init__`` and ``pqc_backends`` have no
+    anchor at all, which is why they read the source too.  See
+    ``_artefact_source`` for the measured reproduction.
+
+    Split out of :func:`_verify_signed_integrity` so that function keeps its
+    complexity budget: the reader adds a second failure mode (present but not
+    literals) that the ``except ImportError`` it replaces did not have.
+    """
+    from ama_cryptography._artefact_source import ArtefactSourceError, load_artefact_fields
+
+    try:
+        fields = load_artefact_fields()
+    except ArtefactSourceError as exc:
+        return None, (False, f"signature module malformed: {exc}")
+    if fields is None:
+        return None, (None, "no signed-integrity artefact (digest-only fallback)")
+    return fields, None
+
+
 def _verify_signed_integrity(digest_hex: str) -> Tuple[Optional[bool], str]:
     """Verify the build-time Ed25519 signature over the .py digest.
 
@@ -1228,12 +1256,10 @@ def _verify_signed_integrity(digest_hex: str) -> Tuple[Optional[bool], str]:
         embedded fields were edited post-build to match a tampered .py
         digest), or the native verify call itself reports a bad sig
     """
-    try:
-        # Lazy import so a missing artefact doesn't surface as a hard
-        # ImportError on every call site of verify_module_integrity().
-        from ama_cryptography import _integrity_signature as sig_mod
-    except ImportError:
-        return None, "no signed-integrity artefact (digest-only fallback)"
+    sig_mod, artefact_error = _artefact_or_error()
+    if artefact_error is not None:
+        return artefact_error
+    assert sig_mod is not None  # narrowed by _artefact_or_error
 
     fields, fields_error = _load_artefact_fields(sig_mod, digest_hex)
     if fields is None:

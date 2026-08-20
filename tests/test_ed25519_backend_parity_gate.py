@@ -328,9 +328,7 @@ class TestCorpusShape:
         both sign parities of it are legal, so a backend that started refusing
         set sign bits wholesale fails here.
         """
-        two_g = bytes.fromhex(
-            "c9a3f86aae465f0e56513864510f3997561fa2c9e85ea21dc2292309f3cd6022"
-        )
+        two_g = bytes.fromhex("c9a3f86aae465f0e56513864510f3997561fa2c9e85ea21dc2292309f3cd6022")
         two_g_flipped = two_g[:31] + bytes([two_g[31] ^ 0x80])
         by_encoding = {enc: expected for _label, enc, expected in tool.DECODE_CASES}
         assert by_encoding.get(two_g) is True

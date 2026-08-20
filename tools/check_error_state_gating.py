@@ -96,6 +96,7 @@ import re
 import sys
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Optional
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TARGET = REPO_ROOT / "ama_cryptography" / "pqc_backends.py"
@@ -130,13 +131,30 @@ CYTHON_PREFIX = "_cy_"
 #: Modules the AST gate scans.  It reliably detects a DIRECT native call
 #: (``*.ama_*(...)`` or ``_cy_*(...)``) in a public function or method, which is
 #: how ``pqc_backends`` — including the whole ``AmaContext`` class — reaches the
-#: library.  Modules that reach native only INDIRECTLY through a private helper
-#: (``hybrid_combiner`` via ``_hkdf_native``, ``ascon`` via ``_require_native``)
-#: are not listed here, because a body-level scan cannot see the reach; those
-#: surfaces are enforced behaviourally instead — ``tests/test_post_failclosed.py``
-#: drives each in the ERROR state and asserts it refuses, which exercises the
-#: real code path rather than approximating it.
-MODULES = ("ama_cryptography/pqc_backends.py",)
+#: library.
+#:
+#: ``ascon`` is here now, and the reason it was not is worth recording because
+#: it was a wrong reason rather than a missing one.  The note that stood here
+#: said ``ascon`` reaches native "only INDIRECTLY through a private helper
+#: (``_require_native``) … because a body-level scan cannot see the reach".
+#: The reach was never the problem: ``ascon.hash256`` and the two AEAD entry
+#: points each call ``lib.ama_ascon_*(...)`` in their own bodies, and
+#: ``_native_call_lines`` is receiver-agnostic, so the scan saw every one of
+#: them.  What it could not see was the GUARD, which sits inside
+#: ``_require_native``.  :func:`guard_delegating_helpers` now follows exactly
+#: one level of that indirection — a private function whose FIRST executable
+#: statement is a guard call — so the module can be enforced statically
+#: instead of being excluded on a premise that did not hold.
+#:
+#: ``hybrid_combiner`` stays out, and for that one the original note IS
+#: accurate: it reaches native through ``_hkdf_native``, which is where both
+#: the guard and the native call live, so the public functions' bodies contain
+#: neither.  It is enforced behaviourally by ``tests/test_post_failclosed.py``,
+#: which drives each surface in the ERROR state and asserts it refuses.
+MODULES = (
+    "ama_cryptography/pqc_backends.py",
+    "ama_cryptography/ascon.py",
+)
 
 #: Functions/methods that reach a native symbol without the guard for a stated
 #: safe reason.  Keyed by ``name`` or ``Class.method``.  The check refuses to
@@ -305,7 +323,7 @@ def _calls_native(node: ast.AST) -> bool:
     return bool(_native_call_lines(node))
 
 
-def _calls_guard(node: ast.AST) -> bool:
+def _calls_guard(node: ast.AST, delegating: Optional[set[str]] = None) -> bool:
     """True when the body calls an error-state guard.
 
     Receiver-agnostic, mirroring ``_calls_native``: both the direct form the
@@ -319,11 +337,65 @@ def _calls_guard(node: ast.AST) -> bool:
     ``tests/test_post_failclosed.py`` proves the behaviour by driving each
     surface in the ERROR state.
     """
-    return bool(_guard_call_lines(node))
+    return bool(_guard_call_lines(node, delegating))
 
 
-def _guard_call_lines(node: ast.AST) -> list[int]:
-    """Line numbers of every error-state guard call in the body."""
+def guard_delegating_helpers(tree: ast.AST) -> set[str]:
+    """Module-local private functions that ARE a guard, for this gate's purpose.
+
+    A function qualifies when its first executable statement (a docstring does
+    not count) is a bare call to one of :data:`GUARDS`.  ``ascon._require_native``
+    is the shape:
+
+        def _require_native() -> Any:
+            check_crypto_permitted()
+            if not ASCON_AVAILABLE:
+                ...
+            return _lib
+
+    Every public Ascon entry point opens with ``lib = _require_native()`` and
+    then calls ``lib.ama_ascon_*`` in its own body — so ``_calls_native``, which
+    is receiver-agnostic, sees the native call, while ``_calls_guard`` did not
+    see the guard.  The module was therefore left out of ``MODULES`` with a
+    comment saying "a body-level scan cannot see the reach", which was true of
+    ``hybrid_combiner`` and not of ``ascon``: the reach was visible, the GUARD
+    was not.
+
+    "First executable statement" is the whole rule, deliberately.  A helper
+    that guards inside an ``if`` or after other work guards only sometimes, and
+    a gate that accepted that would be asserting something weaker than it says.
+    """
+    helpers: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        body = list(node.body)
+        if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant):
+            body = body[1:]  # docstring
+        if not body:
+            continue
+        first = body[0]
+        if not isinstance(first, ast.Expr) or not isinstance(first.value, ast.Call):
+            continue
+        fn = first.value.func
+        name = (
+            fn.id
+            if isinstance(fn, ast.Name)
+            else (fn.attr if isinstance(fn, ast.Attribute) else None)
+        )
+        if name in GUARDS:
+            helpers.add(node.name)
+    return helpers
+
+
+def _guard_call_lines(node: ast.AST, delegating: Optional[set[str]] = None) -> list[int]:
+    """Line numbers of every error-state guard call in the body.
+
+    ``delegating`` names module-local helpers that open with a guard call; see
+    :func:`guard_delegating_helpers`.  Calling one of those counts as calling
+    the guard, because it is one — with the ordering intact, since the helper
+    guards before it returns anything the caller can use.
+    """
     lines: list[int] = []
     for sub in ast.walk(node):
         if not isinstance(sub, ast.Call):
@@ -332,6 +404,8 @@ def _guard_call_lines(node: ast.AST) -> list[int]:
         if isinstance(fn, ast.Name) and fn.id in GUARDS:
             lines.append(sub.lineno)
         elif isinstance(fn, ast.Attribute) and fn.attr in GUARDS:
+            lines.append(sub.lineno)
+        elif delegating and isinstance(fn, ast.Name) and fn.id in delegating:
             lines.append(sub.lineno)
     return lines
 
@@ -368,6 +442,7 @@ def audit(
     if exempt is None:
         exempt = EXEMPT
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    delegating = guard_delegating_helpers(tree)
 
     ungated: list[tuple[str, int]] = []
     seen: set[str] = set()
@@ -381,7 +456,7 @@ def audit(
         if display in exempt:
             continue
         checked += 1
-        guard_lines = _guard_call_lines(node)
+        guard_lines = _guard_call_lines(node, delegating)
         if not guard_lines:
             ungated.append((display, node.lineno))
         elif min(native_lines) < min(guard_lines):
@@ -457,6 +532,35 @@ def _strip_leading_docstring(body: list[str]) -> list[str]:
                         return body[j + 1 :]
                 return body[i + 1 :]
     return body[i:]
+
+
+def entry_point_counts() -> tuple[int, int]:
+    """(native entry points, Cython binding entry points) that this gate covers.
+
+    Exposed so ``tools/check_documented_counts.py`` can compare the figures
+    published in INVARIANTS.md and CHANGELOG.md against the tool those
+    documents name as authoritative, instead of against a number someone typed.
+    Both had drifted to 85 while this tool reported 86 — the count moved when a
+    native symbol selected by a conditional expression started being tracked,
+    and the two documents did not follow.
+
+    Raises the same way ``main`` fails: a missing module is an error, not a
+    smaller count.
+    """
+    native = 0
+    for rel_mod in MODULES:
+        mod_path = REPO_ROOT / rel_mod
+        if not mod_path.is_file():
+            raise FileNotFoundError(f"module {rel_mod} not found")
+        _ungated, _stale, checked = audit(mod_path)
+        native += checked
+    cython = 0
+    for rel_pyx in BINDING_PYX:
+        pyx_path = REPO_ROOT / rel_pyx
+        if not pyx_path.is_file():
+            raise FileNotFoundError(f"binding {rel_pyx} not found")
+        cython += _count_cy_funcs(pyx_path)
+    return native, cython
 
 
 def main() -> int:

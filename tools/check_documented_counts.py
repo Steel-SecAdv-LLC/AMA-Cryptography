@@ -23,13 +23,23 @@ are *checked*.
 
 What is checked
 ---------------
-Three claim shapes, recognised anywhere under ``docs/``, ``tests/`` and the
+Five claim shapes, recognised anywhere under ``docs/``, ``tests/`` and the
 repository root:
 
 1. ``tests/<name>.py`` — N tests``  → pytest's own collection count.
 2. ``<name>.json`` — N records``    → the corpus file's ``records`` array.
 3. ``wycheproof_vectors/`` — N vectors across `a`, `b`, `c``
                                     → the manifest's per-file ``actualTests``.
+4. ``N native entry points`` / ``N Cython binding entry points``
+                                    → ``tools/check_error_state_gating.py``,
+                                      which those documents already name as
+                                      authoritative while carrying a figure
+                                      that had drifted away from it.
+5. ``N C test suites (M translation units)``
+                                    → ``tests/c/**/test_*.c`` and
+                                      ``tests/c/**/*.c``.  Adding a C test used
+                                      to move both numbers with nothing
+                                      watching.
 
 A claim naming a file that does not exist is a failure too: a count for a
 deleted corpus is the most misleading kind.
@@ -572,6 +582,155 @@ _FUZZ_COUNT_RE = re.compile(
 )
 
 
+#: "85 native entry points" / "10 Cython binding entry points" — the figures
+#: INVARIANTS.md and the CHANGELOG publish for the error-state gating surface,
+#: naming `tools/check_error_state_gating.py` as authoritative while carrying a
+#: number that had drifted away from it (85 published, 86 reported).
+_NATIVE_ENTRY_RE = re.compile(r"(\d[\d,]*) native (?:plus \d+ Cython )?entry points")
+_CYTHON_ENTRY_RE = re.compile(r"(\d[\d,]*) Cython (?:binding )?entry points")
+
+#: "59 C test suites (62 translation units)" and the bare "59 C test suites".
+_C_SUITE_PAREN_RE = re.compile(r"(\d[\d,]*) C test suites \((\d[\d,]*) translation units\)")
+_C_SUITE_BARE_RE = re.compile(r"(\d[\d,]*) C test suites")
+
+
+def count_error_state_entry_points() -> tuple[int, int]:
+    """The authoritative gated-surface counts, from the gate that owns them.
+
+    Imported rather than re-derived, for the reason this module exists: a fact
+    is declared once and every other mention is checked against it.
+    """
+    repo_root = str(Path(__file__).resolve().parent.parent)
+    if repo_root not in sys.path:
+        sys.path.insert(0, repo_root)
+    from tools import check_error_state_gating as gating
+
+    return gating.entry_point_counts()
+
+
+def measure_c_suite_counts(repo: Path) -> tuple[int, int]:
+    """(C test suites, C translation units) under ``tests/c``.
+
+    A "suite" is a ``tests/c/test_*.c`` — one executable per file.  A
+    "translation unit" is any ``.c`` under ``tests/c``, which additionally
+    counts the bench and equivalence helpers that are compiled but are not
+    themselves suites.  Both figures appear in README.md, and neither was
+    checked by anything: adding a C test moved them and no gate noticed.
+    """
+    suites = sum(1 for p in (repo / "tests" / "c").rglob("test_*.c"))
+    units = sum(1 for p in (repo / "tests" / "c").rglob("*.c"))
+    return suites, units
+
+
+#: The CHANGELOG is excluded from ``_markdown_files`` as "historical by
+#: definition", which is right for released sections and wrong for the one at
+#: the top: ``## [X.Y.Z] - Unreleased`` describes the release being built, and
+#: a wrong figure there is a wrong figure in the release notes, not a record of
+#: what was once true.  Both drifted counts this pair of checks was written for
+#: had an occurrence in exactly that section.
+_UNRELEASED_HEADING_RE = re.compile(r"^##\s*\[[^\]]+\]\s*-\s*Unreleased\s*$", re.I)
+_ANY_VERSION_HEADING_RE = re.compile(r"^##\s*\[")
+
+
+def changelog_unreleased_section(repo: Path) -> str:
+    """The text of the CHANGELOG's ``- Unreleased`` section, or ``""``.
+
+    Returns empty when there is no such section — which is the state right
+    after a release is dated — so the checks below simply find nothing rather
+    than failing on a file shape they did not expect.
+    """
+    path = repo / "CHANGELOG.md"
+    if not path.is_file():
+        return ""
+    lines = path.read_text(encoding="utf-8").splitlines()
+    out: list[str] = []
+    inside = False
+    for line in lines:
+        if _UNRELEASED_HEADING_RE.match(line):
+            inside = True
+            continue
+        if inside and _ANY_VERSION_HEADING_RE.match(line):
+            break
+        if inside:
+            out.append(line)
+    return "\n".join(out)
+
+
+def _live_documents(repo: Path) -> list[tuple[str, str]]:
+    """(display name, text) for every document these checks read.
+
+    Markdown under the documented roots, with history rows filtered, plus the
+    CHANGELOG's unreleased section.
+    """
+    docs: list[tuple[str, str]] = []
+    for path in _markdown_files(repo):
+        text = path.read_text(encoding="utf-8")
+        live = "\n".join(line for line in text.splitlines() if not _HISTORY_ROW_RE.match(line))
+        docs.append((str(path.relative_to(repo)), live))
+    unreleased = changelog_unreleased_section(repo)
+    if unreleased:
+        docs.append(("CHANGELOG.md [Unreleased]", unreleased))
+    return docs
+
+
+def check_entry_point_counts(repo: Path) -> list[str]:
+    problems: list[str] = []
+    try:
+        native, cython = count_error_state_entry_points()
+    except Exception as exc:  # gate absent or renamed — fail loud, never skip
+        return [f"cannot resolve the authoritative entry-point counts: {exc}"]
+
+    def _num(raw: str) -> int:
+        return int(raw.replace(",", ""))
+
+    for rel, live in _live_documents(repo):
+        for claimed in _NATIVE_ENTRY_RE.findall(live):
+            if _num(claimed) != native:
+                problems.append(
+                    f"{rel}: says {claimed} native entry points; "
+                    f"tools/check_error_state_gating.py reports {native}"
+                )
+        for claimed in _CYTHON_ENTRY_RE.findall(live):
+            if _num(claimed) != cython:
+                problems.append(
+                    f"{rel}: says {claimed} Cython binding entry points; "
+                    f"tools/check_error_state_gating.py reports {cython}"
+                )
+    return problems
+
+
+def check_c_suite_counts(repo: Path) -> list[str]:
+    problems: list[str] = []
+    suites, units = measure_c_suite_counts(repo)
+
+    def _num(raw: str) -> int:
+        return int(raw.replace(",", ""))
+
+    for rel, live in _live_documents(repo):
+        for claimed_suites, claimed_units in _C_SUITE_PAREN_RE.findall(live):
+            if _num(claimed_suites) != suites:
+                problems.append(
+                    f"{rel}: says {claimed_suites} C test suites; "
+                    f"`tests/c/**/test_*.c` counts {suites}"
+                )
+            if _num(claimed_units) != units:
+                problems.append(
+                    f"{rel}: says {claimed_units} C translation units; "
+                    f"`tests/c/**/*.c` counts {units}"
+                )
+        # The bare form, minus the ones the parenthesised pattern already saw.
+        paren_hits = {m[0] for m in _C_SUITE_PAREN_RE.findall(live)}
+        for claimed in _C_SUITE_BARE_RE.findall(live):
+            if claimed in paren_hits:
+                continue
+            if _num(claimed) != suites:
+                problems.append(
+                    f"{rel}: says {claimed} C test suites; "
+                    f"`tests/c/**/test_*.c` counts {suites}"
+                )
+    return problems
+
+
 def count_libfuzzer_entry_points(repo: Path) -> int:
     """The authoritative harness count, imported from the registration gate.
 
@@ -709,6 +868,9 @@ def audit(repo: Path = REPO) -> tuple[list[str], int]:
         checked += len(_AGGREGATE_RE.findall(text))
         checked += len(_METRICS_FILES_RE.findall(text))
         checked += len(_METRICS_FUNCS_RE.findall(text))
+        checked += len(_NATIVE_ENTRY_RE.findall(text))
+        checked += len(_CYTHON_ENTRY_RE.findall(text))
+        checked += len(_C_SUITE_BARE_RE.findall(text))
         live_lines = [line for line in text.splitlines() if not _HISTORY_ROW_RE.match(line)]
         for line in live_lines:
             if "fuzz" in line.lower():
@@ -742,6 +904,8 @@ def audit(repo: Path = REPO) -> tuple[list[str], int]:
     else:
         problems += check_fuzz_target_counts(repo, fuzz_authoritative)
     problems += check_breaking_change_counts(repo)
+    problems += check_entry_point_counts(repo)
+    problems += check_c_suite_counts(repo)
     return problems, checked
 
 

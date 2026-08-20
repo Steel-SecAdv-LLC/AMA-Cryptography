@@ -199,46 +199,26 @@ static ama_dispatch_table_t dispatch_table_post_init;
 
 #elif defined(__aarch64__) || defined(_M_ARM64)
 
-#if defined(__linux__)
-#include <sys/auxv.h>
-
-#ifndef HWCAP_NEON
-/* NEON is always available on AArch64, but define for completeness */
-#define HWCAP_NEON (1 << 1)
-#endif
-
-#ifndef HWCAP2_SVE2
-#define HWCAP2_SVE2 (1 << 1)
-#endif
-
-static int detect_neon(void) {
-    /* NEON is mandatory on AArch64 */
-    return 1;
-}
-
-static int detect_sve2(void) {
-    unsigned long hwcap2 = getauxval(AT_HWCAP2);
-    return (hwcap2 & HWCAP2_SVE2) ? 1 : 0;
-}
-
-#elif defined(__APPLE__)
-
-static int detect_neon(void) {
-    /* Apple Silicon always has NEON */
-    return 1;
-}
-
-static int detect_sve2(void) {
-    /* Apple Silicon does not support SVE2 as of M4 */
-    return 0;
-}
-
-#else
-
-static int detect_neon(void) { return 0; }
-static int detect_sve2(void) { return 0; }
-
-#endif /* __linux__ / __APPLE__ */
+/* AArch64 detection lives in ama_cpuid.c, reached through the header included
+ * above.  This file used to re-emit it: a `detect_neon()` that returned a
+ * constant, a `detect_sve2()` that issued its own `getauxval(AT_HWCAP2)` with
+ * its own `#define HWCAP2_SVE2 (1 << 1)`, and a third pair returning 0 on any
+ * target that was neither Linux nor Apple.  Three problems, all of them the
+ * kind the "one source of truth" note above exists to prevent:
+ *
+ *   - the duplicate probe skipped `arm_once`, so `getauxval` was re-issued on
+ *     every call instead of being cached with the rest of the ARM feature set;
+ *   - two copies of a HWCAP bit number can drift, and only one of them is
+ *     covered by ama_cpuid.c's tests;
+ *   - the non-Linux, non-Apple arm reported NEON as ABSENT, on an architecture
+ *     where AdvSIMD is part of the base ABI — so on, say, FreeBSD/aarch64 the
+ *     dispatcher would decline to wire kernels the CPU is required to have.
+ *     ama_cpuid.c now answers 1 there (see detect_arm_features()'s `#else`),
+ *     and deleting the copy here is what makes that answer the only one.
+ *
+ * The `_M_ARM64` (MSVC) case is covered by the same forwarding: ama_cpuid.c's
+ * non-Linux/non-Apple arm is what answers, rather than a second stub here.
+ */
 
 #endif /* __x86_64__ / __aarch64__ */
 
@@ -550,6 +530,33 @@ static apply_dispatch_only_result_t apply_dispatch_only(
             *resolved_label_out = "sha3-neon";
             return AMA_DISPATCH_ONLY_HONORED;
         }
+        /* A HIGHER tier already owns the slot.
+         *
+         * Every other branch here resolves against `saved` — the wiring as it
+         * stood before this function cleared the table — which is right when
+         * the question is "did this build+host wire that kernel".  For
+         * sha3-neon it asks the wrong question: on any build with
+         * AMA_HAVE_SVE2_IMPL running on an SVE2 host, `keccak_f1600` has
+         * already been overwritten with the SVE2 kernel, so the comparison
+         * above can never match and the slot answered UNSUPPORTED — with a
+         * diagnostic saying the CPU lacks the feature or the build did not
+         * compile the kernel, both of which are false.  AdvSIMD is mandatory
+         * on AArch64 and `ama_keccak_f1600_neon` is compiled whenever this
+         * branch is.  The SVE2 configuration is precisely where pinning the
+         * NEON kernel is most useful, since it is the only way to A/B the two
+         * tiers on one host — and `tests/c/test_dispatch_only_env.c`'s
+         * sha3-neon case skipped on exactly that build.
+         *
+         * `sha3_256` is deliberately left NULL: no NEON sha3_256 wrapper
+         * exists (only the SVE2 block ever sets that slot), so the portable
+         * one-shot path is the correct partner for a pinned NEON
+         * permutation — which is also what `saved.sha3_256` holds on a
+         * NEON-only host. */
+        if (ama_has_arm_neon()) {
+            dispatch_table.keccak_f1600 = ama_keccak_f1600_neon;
+            *resolved_label_out = "sha3-neon";
+            return AMA_DISPATCH_ONLY_HONORED;
+        }
         return AMA_DISPATCH_ONLY_UNSUPPORTED;
     }
 #endif
@@ -615,12 +622,26 @@ static apply_dispatch_only_result_t apply_dispatch_only(
  * ============================================================================ */
 typedef struct {
     int     keccak_regressed;
+    /* The single-state keccak revert can land on an INTERMEDIATE tier rather
+     * than on the scalar baseline: on a host that compiled and selected SVE2,
+     * `pre_sve2_keccak` is the NEON kernel, and reverting to it installs a
+     * kernel this phase never measured.  Phase 3's stated contract is that
+     * each slot is "benched independently against its scalar reference and
+     * reverted alone on a >10 % regression"; installing an unbenched kernel
+     * as the REMEDY does not meet it, and the configuration where it happens
+     * (SVE2 present) is exactly the one no CI job used to build.  This flag
+     * carries the second verdict: did the fallback tier ALSO regress against
+     * the scalar baseline?  On a NEON-only host there is no intermediate tier
+     * and it is never measured (the ns fields stay at the -1 "not measured"
+     * sentinel this struct uses everywhere). */
+    int     keccak_fallback_regressed;
     int     keccak_x4_regressed;
     int     kyber_ntt_regressed;
     int     kyber_invntt_regressed;
     int     dilithium_ntt_regressed;
     int     dilithium_invntt_regressed;
     int64_t keccak_simd_ns,        keccak_generic_ns;
+    int64_t keccak_fallback_ns,    keccak_fallback_generic_ns;
     int64_t keccak_x4_simd_ns,     keccak_x4_generic_ns;
     int64_t kyber_ntt_simd_ns,     kyber_ntt_generic_ns;
     int64_t kyber_invntt_simd_ns,  kyber_invntt_generic_ns;
@@ -871,9 +892,10 @@ static void dispatch_bench_dilithium_ntt(ama_dilithium_ntt_fn generic_fn,
  *
  * Format (text, one key=value per line, leading `#` are comments):
  *
- *     # AMA Cryptography dispatch auto-tune cache v1
+ *     # AMA Cryptography dispatch auto-tune cache v2
  *     fingerprint=<deterministic-string>
  *     keccak_regressed=<0|1>
+ *     keccak_fallback_regressed=<0|1>
  *     keccak_x4_regressed=<0|1>
  *     kyber_ntt_regressed=<0|1>
  *     kyber_invntt_regressed=<0|1>
@@ -1046,7 +1068,14 @@ static void dispatch_cache_fingerprint(char *out, size_t outlen) {
      * invalidates caches written by the previous release — the cache
      * key matches CHANGELOG / include/ama_dispatch.h verbatim. */
     snprintf(out, outlen,
-        "v1|%s|sha3=%d|kyber=%d|dilithium=%d|aes_gcm=%d|chacha20=%d|argon2=%d|"
+        /* v2: the verdict record gained `keccak_fallback_regressed`, which
+         * decides whether a regressed top tier falls to the intermediate
+         * kernel or to the scalar baseline.  A v1 cache file does not carry
+         * it, and an absent key parses as 0 = "did not regress" = "install
+         * the intermediate tier" — the exact fail-open the field was added to
+         * close.  Bumping the version makes every v1 file miss and re-bench
+         * instead of replaying a verdict that is silently incomplete. */
+        "v2|%s|sha3=%d|kyber=%d|dilithium=%d|aes_gcm=%d|chacha20=%d|argon2=%d|"
         "x25519=%d|ed25519=%d|sphincs=%d|"
         "avx2=%d|avx512f=%d|avx512kc=%d|aesni=%d|pclmul=%d|vaes=%d|"
         "kbmi=%d|arm_aes=%d|arm_pmull=%d",
@@ -1105,6 +1134,7 @@ static int dispatch_cache_load_at(int dfd, const char *basename,
         if (strcmp(key, "fingerprint") == 0) {
             fp_matched = (strcmp(val, fingerprint) == 0);
         } else if (strcmp(key, "keccak_regressed") == 0
+                   || strcmp(key, "keccak_fallback_regressed") == 0
                    || strcmp(key, "keccak_x4_regressed") == 0
                    || strcmp(key, "kyber_ntt_regressed") == 0
                    || strcmp(key, "kyber_invntt_regressed") == 0
@@ -1119,6 +1149,7 @@ static int dispatch_cache_load_at(int dfd, const char *basename,
                 flag = (int)parsed;
             }
             if      (strcmp(key, "keccak_regressed")            == 0) tmp.keccak_regressed            = flag;
+            else if (strcmp(key, "keccak_fallback_regressed")   == 0) tmp.keccak_fallback_regressed   = flag;
             else if (strcmp(key, "keccak_x4_regressed")         == 0) tmp.keccak_x4_regressed         = flag;
             else if (strcmp(key, "kyber_ntt_regressed")         == 0) tmp.kyber_ntt_regressed         = flag;
             else if (strcmp(key, "kyber_invntt_regressed")      == 0) tmp.kyber_invntt_regressed      = flag;
@@ -1128,6 +1159,10 @@ static int dispatch_cache_load_at(int dfd, const char *basename,
             tmp.keccak_simd_ns = (int64_t)strtoll(val, NULL, 10);
         } else if (strcmp(key, "keccak_generic_ns") == 0) {
             tmp.keccak_generic_ns = (int64_t)strtoll(val, NULL, 10);
+        } else if (strcmp(key, "keccak_fallback_ns") == 0) {
+            tmp.keccak_fallback_ns = (int64_t)strtoll(val, NULL, 10);
+        } else if (strcmp(key, "keccak_fallback_generic_ns") == 0) {
+            tmp.keccak_fallback_generic_ns = (int64_t)strtoll(val, NULL, 10);
         } else if (strcmp(key, "keccak_x4_simd_ns") == 0) {
             tmp.keccak_x4_simd_ns = (int64_t)strtoll(val, NULL, 10);
         } else if (strcmp(key, "keccak_x4_generic_ns") == 0) {
@@ -1194,11 +1229,12 @@ static void dispatch_cache_save_at(int dfd, const char *basename,
         (void)unlinkat(dfd, tmpbase, 0);
         return;
     }
-    fprintf(fp, "# AMA Cryptography dispatch auto-tune cache v1\n");
+    fprintf(fp, "# AMA Cryptography dispatch auto-tune cache v2\n");
     fprintf(fp, "# Generated automatically; safe to delete (a future "
                 "process will re-bench).\n");
     fprintf(fp, "fingerprint=%s\n", fingerprint);
     fprintf(fp, "keccak_regressed=%d\n",            v->keccak_regressed);
+    fprintf(fp, "keccak_fallback_regressed=%d\n",   v->keccak_fallback_regressed);
     fprintf(fp, "keccak_x4_regressed=%d\n",         v->keccak_x4_regressed);
     fprintf(fp, "kyber_ntt_regressed=%d\n",         v->kyber_ntt_regressed);
     fprintf(fp, "kyber_invntt_regressed=%d\n",      v->kyber_invntt_regressed);
@@ -1206,6 +1242,8 @@ static void dispatch_cache_save_at(int dfd, const char *basename,
     fprintf(fp, "dilithium_invntt_regressed=%d\n",  v->dilithium_invntt_regressed);
     fprintf(fp, "keccak_simd_ns=%lld\n",            (long long)v->keccak_simd_ns);
     fprintf(fp, "keccak_generic_ns=%lld\n",         (long long)v->keccak_generic_ns);
+    fprintf(fp, "keccak_fallback_ns=%lld\n",        (long long)v->keccak_fallback_ns);
+    fprintf(fp, "keccak_fallback_generic_ns=%lld\n", (long long)v->keccak_fallback_generic_ns);
     fprintf(fp, "keccak_x4_simd_ns=%lld\n",         (long long)v->keccak_x4_simd_ns);
     fprintf(fp, "keccak_x4_generic_ns=%lld\n",      (long long)v->keccak_x4_generic_ns);
     fprintf(fp, "kyber_ntt_simd_ns=%lld\n",         (long long)v->kyber_ntt_simd_ns);
@@ -1324,8 +1362,8 @@ static void dispatch_init_internal(void) {
 #elif defined(__aarch64__) || defined(_M_ARM64)
     dispatch_info.arch_name = "AArch64";
 
-    int has_neon = detect_neon();
-    int has_sve2 = detect_sve2();
+    int has_neon = ama_has_arm_neon();
+    int has_sve2 = ama_has_arm_sve2();
 
     ama_impl_level_t best = AMA_IMPL_GENERIC;
     if (has_neon) best = AMA_IMPL_NEON;
@@ -1540,7 +1578,7 @@ static void dispatch_init_internal(void) {
      *
      * The encrypt kernel existed before this PR; the decrypt kernel
      * and these wiring lines are new.  ChaCha20 and Argon2 only need
-     * baseline NEON, which is mandatory on AArch64 (`detect_neon()`
+     * baseline NEON, which is mandatory on AArch64 (`ama_has_arm_neon()`
      * always returns 1), so they wire unconditionally under
      * AMA_HAVE_NEON_IMPL.  Each kernel scrubs sensitive intermediate
      * state on every return path (INVARIANT-12). */
@@ -1694,7 +1732,14 @@ static void dispatch_init_internal(void) {
      * Phase 3: per-slot SIMD auto-tune.
      *
      * Each SIMD slot is benched independently against its scalar
-     * reference and reverted alone on a >10 % regression.  Only the
+     * reference and reverted alone on a >10 % regression.  Where a slot
+     * has an INTERMEDIATE tier to fall to — only `keccak_f1600` does
+     * today, when an SVE2 build displaced a NEON kernel — that tier is
+     * benched against the same scalar reference before it is installed,
+     * so the remedy for a regression cannot itself be one.  (It was:
+     * the revert took `pre_sve2_keccak` unmeasured, which meant the
+     * ">10 %" guarantee did not hold in the single configuration where
+     * a fallback tier exists at all.)  Only the
      * single-state `keccak_f1600` verdict carries a lockstep tie —
      * to `sha3_256` and `kyber_poly_{add,sub,reduce}` — because the
      * SVE2 `sha3_256` wrapper embeds `ama_keccak_f1600_sve2` directly
@@ -1741,6 +1786,7 @@ static void dispatch_init_internal(void) {
      * cache file say the same thing, so 0 means only what it should — a
      * measurement that came back zero, which is always a bug. */
     v.keccak_simd_ns = v.keccak_generic_ns = -1;
+    v.keccak_fallback_ns = v.keccak_fallback_generic_ns = -1;
     v.keccak_x4_simd_ns = v.keccak_x4_generic_ns = -1;
     v.kyber_ntt_simd_ns = v.kyber_ntt_generic_ns = -1;
     v.kyber_invntt_simd_ns = v.kyber_invntt_generic_ns = -1;
@@ -1832,6 +1878,35 @@ static void dispatch_init_internal(void) {
             v.keccak_regressed = bench_slot_regressed(simd_best, generic_best);
             v.keccak_simd_ns    = simd_best;
             v.keccak_generic_ns = generic_best;
+
+            /* Bench the FALLBACK tier too, when there is a distinct one.
+             *
+             * `pre_sve2_keccak` is what the revert below installs if the top
+             * tier regresses, and on an SVE2 host that is the NEON kernel —
+             * a different implementation, never compared against anything.
+             * Measuring it here (against the same scalar baseline, with the
+             * same warmup/trials/iters, so the two verdicts are commensurable)
+             * is what lets the revert choose between it and the scalar
+             * baseline instead of assuming it.
+             *
+             * Unconditional on there being a distinct tier, not on the top
+             * tier having regressed: the verdict is cached and replayed by
+             * later processes, and a cache entry that only sometimes carries
+             * the second measurement would make the replay depend on which
+             * process wrote it. */
+            if (pre_sve2_keccak != dispatch_table.keccak_f1600
+                && pre_sve2_keccak != keccak_scalar_baseline) {
+                int64_t fb_generic_best = -1, fb_best = -1;
+                memset(state, 0x42, sizeof(state));  // PUBLIC-DATA: state — bench scratch (PUBLIC)
+                dispatch_bench_keccak_single(
+                    keccak_scalar_baseline, pre_sve2_keccak,
+                    state,
+                    /*warmup=*/200, /*trials=*/5, /*iters=*/2000,
+                    &fb_generic_best, &fb_best);
+                v.keccak_fallback_regressed = bench_slot_regressed(fb_best, fb_generic_best);
+                v.keccak_fallback_ns         = fb_best;
+                v.keccak_fallback_generic_ns = fb_generic_best;
+            }
         }
 
         /* ----- Slot 2: keccak_f1600_x4 (batched 4-way permutation) ----
@@ -1961,7 +2036,19 @@ static void dispatch_init_internal(void) {
          * group; the keccak group carries the carved-out lockstep tie
          * for sha3_256 / kyber_poly_{add,sub,reduce} described above. */
         if (v.keccak_regressed) {
-            if (pre_sve2_keccak != dispatch_table.keccak_f1600) {
+            /* Fall to the intermediate tier ONLY if it was measured and did
+             * not itself regress.  Without this the revert installed
+             * `pre_sve2_keccak` unmeasured, so on an SVE2 host the remedy for
+             * a regression could be a larger regression — and the ">10 %"
+             * guarantee this phase advertises did not hold in the one
+             * configuration where a fallback tier exists at all.  On a
+             * NEON-only host the first condition is false (there is no
+             * distinct intermediate tier) and this reduces to the previous
+             * behaviour: straight to the scalar baseline. */
+            if (pre_sve2_keccak != dispatch_table.keccak_f1600
+                && pre_sve2_keccak != keccak_scalar_baseline
+                && !v.keccak_fallback_regressed
+                && v.keccak_fallback_ns >= 0) {
                 dispatch_table.keccak_f1600 = pre_sve2_keccak;
             } else {
                 dispatch_table.keccak_f1600 = keccak_scalar_baseline;
@@ -1995,12 +2082,15 @@ static void dispatch_init_internal(void) {
             fprintf(stderr,
                 "[AMA Dispatch] Auto-tune verdicts (regressed=1 reverted): "
                 "keccak=%d (simd=%lld ns vs generic=%lld ns), "
+                "keccak_fallback=%d (tier=%lld ns vs generic=%lld ns; "
+                "-1 = no distinct intermediate tier on this host), "
                 "keccak_x4=%d (simd=%lld ns vs generic=%lld ns), "
                 "kyber_ntt=%d (simd=%lld ns vs generic=%lld ns), "
                 "kyber_invntt=%d (simd=%lld ns vs generic=%lld ns), "
                 "dilithium_ntt=%d (simd=%lld ns vs generic=%lld ns), "
                 "dilithium_invntt=%d (simd=%lld ns vs generic=%lld ns)%s\n",
                 v.keccak_regressed,        (long long)v.keccak_simd_ns,        (long long)v.keccak_generic_ns,
+                v.keccak_fallback_regressed, (long long)v.keccak_fallback_ns,  (long long)v.keccak_fallback_generic_ns,
                 v.keccak_x4_regressed,     (long long)v.keccak_x4_simd_ns,     (long long)v.keccak_x4_generic_ns,
                 v.kyber_ntt_regressed,     (long long)v.kyber_ntt_simd_ns,     (long long)v.kyber_ntt_generic_ns,
                 v.kyber_invntt_regressed,  (long long)v.kyber_invntt_simd_ns,  (long long)v.kyber_invntt_generic_ns,
@@ -2383,9 +2473,18 @@ void ama_test_restore_dilithium_ntt(void) {
 void ama_print_dispatch_info(void) {
     const ama_dispatch_info_t *info = ama_get_dispatch_info();
 
+    /* The rows below are the DETECTED tiers, which is what
+     * ama_dispatch_info_t holds — not the kernels that ended up wired.  The
+     * banner says so, because a diagnostic that reads as "what ran" and is
+     * not is worse than no diagnostic: on a host where an ISA-bundle gate
+     * fails, or under AMA_DISPATCH_ONLY, or after an auto-tune revert, a row
+     * here can say AVX2 while the table holds the portable path.  See
+     * include/ama_dispatch.h for the four divergences and for the accessors
+     * that report the wiring. */
     fprintf(stderr, "\n");
     fprintf(stderr, "╔══════════════════════════════════════════════╗\n");
-    fprintf(stderr, "║   AMA Cryptography SIMD Dispatch Info       ║\n");
+    fprintf(stderr, "║  AMA Cryptography SIMD Dispatch — DETECTED   ║\n");
+    fprintf(stderr, "║  capability tiers, not the wired kernels     ║\n");
     fprintf(stderr, "╠══════════════════════════════════════════════╣\n");
     fprintf(stderr, "║  Architecture:       %-24s║\n", info->arch_name);
     fprintf(stderr, "║  SHA-3/Keccak:       %-24s║\n", ama_impl_level_name(info->sha3));

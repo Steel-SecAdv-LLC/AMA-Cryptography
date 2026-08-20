@@ -442,6 +442,167 @@ class TestBreakingChangeCounts:
         assert tool.check_breaking_change_counts(repo) == []
 
 
+class TestEntryPointCounts:
+    """The gated-surface figures must track the tool the documents cite.
+
+    INVARIANTS.md names ``tools/check_error_state_gating.py`` as "the
+    authoritative figure" and then published 85 while the tool reported 86; the
+    CHANGELOG's 5.0.0 section repeated the 85 in two places.  Nothing checked
+    the sentence against the tool it names, which is precisely the shape this
+    module exists to close.
+    """
+
+    def test_a_wrong_native_count_is_reported(self, tool: ModuleType, tmp_path: Path) -> None:
+        repo = tmp_path / "repo"
+        (repo / "docs").mkdir(parents=True)
+        native, _cython = tool.count_error_state_entry_points()
+        (repo / "docs" / "SURFACE.md").write_text(
+            f"The ERROR state inhibits {native + 7} native entry points.\n",
+            encoding="utf-8",
+        )
+        problems = tool.check_entry_point_counts(repo)
+        assert any("native entry points" in p for p in problems), problems
+
+    def test_the_right_native_count_passes(self, tool: ModuleType, tmp_path: Path) -> None:
+        repo = tmp_path / "repo"
+        (repo / "docs").mkdir(parents=True)
+        native, cython = tool.count_error_state_entry_points()
+        (repo / "docs" / "SURFACE.md").write_text(
+            f"The ERROR state inhibits {native} native entry points and "
+            f"{cython} Cython binding entry points.\n",
+            encoding="utf-8",
+        )
+        assert tool.check_entry_point_counts(repo) == []
+
+    def test_a_wrong_cython_count_is_reported(self, tool: ModuleType, tmp_path: Path) -> None:
+        repo = tmp_path / "repo"
+        (repo / "docs").mkdir(parents=True)
+        _native, cython = tool.count_error_state_entry_points()
+        (repo / "docs" / "SURFACE.md").write_text(
+            f"and {cython + 1} Cython binding entry points.\n", encoding="utf-8"
+        )
+        problems = tool.check_entry_point_counts(repo)
+        assert any("Cython binding entry points" in p for p in problems), problems
+
+
+class TestCSuiteCounts:
+    """`N C test suites (M translation units)` must track tests/c.
+
+    Both figures sit in README.md and neither was gated: adding one C test file
+    moved them and nothing noticed.
+    """
+
+    @staticmethod
+    def _repo_with_c_tests(tmp_path: Path, suites: int, helpers: int) -> Path:
+        repo = tmp_path / "repo"
+        (repo / "tests" / "c").mkdir(parents=True)
+        for i in range(suites):
+            (repo / "tests" / "c" / f"test_{i}.c").write_text(
+                "int main(void){return 0;}\n", encoding="utf-8"
+            )
+        for i in range(helpers):
+            (repo / "tests" / "c" / f"helper_{i}.c").write_text("int h;\n", encoding="utf-8")
+        return repo
+
+    def test_measurement_separates_suites_from_translation_units(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        repo = self._repo_with_c_tests(tmp_path, suites=5, helpers=2)
+        assert tool.measure_c_suite_counts(repo) == (5, 7)
+
+    def test_a_correct_claim_passes(self, tool: ModuleType, tmp_path: Path) -> None:
+        repo = self._repo_with_c_tests(tmp_path, suites=5, helpers=2)
+        (repo / "docs").mkdir(parents=True)
+        (repo / "docs" / "M.md").write_text(
+            "covered by 5 C test suites (7 translation units).\n", encoding="utf-8"
+        )
+        assert tool.check_c_suite_counts(repo) == []
+
+    def test_a_stale_suite_count_is_reported(self, tool: ModuleType, tmp_path: Path) -> None:
+        repo = self._repo_with_c_tests(tmp_path, suites=5, helpers=2)
+        (repo / "docs").mkdir(parents=True)
+        (repo / "docs" / "M.md").write_text(
+            "covered by 4 C test suites (7 translation units).\n", encoding="utf-8"
+        )
+        problems = tool.check_c_suite_counts(repo)
+        assert any("C test suites" in p for p in problems), problems
+
+    def test_a_stale_translation_unit_count_is_reported(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        repo = self._repo_with_c_tests(tmp_path, suites=5, helpers=2)
+        (repo / "docs").mkdir(parents=True)
+        (repo / "docs" / "M.md").write_text(
+            "covered by 5 C test suites (9 translation units).\n", encoding="utf-8"
+        )
+        problems = tool.check_c_suite_counts(repo)
+        assert any("translation units" in p for p in problems), problems
+
+    def test_the_bare_form_is_checked_too(self, tool: ModuleType, tmp_path: Path) -> None:
+        """README carries both `N C test suites (M TU)` and a bare `N C test suites`."""
+        repo = self._repo_with_c_tests(tmp_path, suites=5, helpers=2)
+        (repo / "docs").mkdir(parents=True)
+        (repo / "docs" / "M.md").write_text("anchored in 3 C test suites\n", encoding="utf-8")
+        problems = tool.check_c_suite_counts(repo)
+        assert any("C test suites" in p for p in problems), problems
+
+
+class TestTheChangelogUnreleasedSectionIsLive:
+    """`## [X.Y.Z] - Unreleased` describes the release being built, not history.
+
+    ``_markdown_files`` skips CHANGELOG.md entirely as "historical by
+    definition".  That is right for dated sections and wrong for the one at the
+    top: both counts these checks were written for had an occurrence there, and
+    a wrong figure in the release notes is a wrong figure, not a record.
+    """
+
+    @staticmethod
+    def _changelog(repo: Path, unreleased_body: str, released_body: str = "") -> None:
+        repo.mkdir(parents=True, exist_ok=True)
+        (repo / "CHANGELOG.md").write_text(
+            "# Changelog\n\n"
+            "## [9.9.9] - Unreleased\n\n"
+            f"{unreleased_body}\n\n"
+            "## [1.0.0] - 2020-01-01\n\n"
+            f"{released_body}\n",
+            encoding="utf-8",
+        )
+
+    def test_the_unreleased_section_is_extracted(self, tool: ModuleType, tmp_path: Path) -> None:
+        repo = tmp_path / "repo"
+        self._changelog(repo, "LIVE TEXT", "OLD TEXT")
+        section = tool.changelog_unreleased_section(repo)
+        assert "LIVE TEXT" in section
+        assert "OLD TEXT" not in section
+
+    def test_no_unreleased_section_yields_nothing(self, tool: ModuleType, tmp_path: Path) -> None:
+        """Right after a release is dated there is no such section."""
+        repo = tmp_path / "repo"
+        repo.mkdir(parents=True)
+        (repo / "CHANGELOG.md").write_text(
+            "# Changelog\n\n## [1.0.0] - 2020-01-01\n\nreleased\n", encoding="utf-8"
+        )
+        assert tool.changelog_unreleased_section(repo) == ""
+
+    def test_a_stale_count_in_the_unreleased_section_is_reported(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        repo = tmp_path / "repo"
+        native, _cython = tool.count_error_state_entry_points()
+        self._changelog(repo, f"inhibits {native + 5} native entry points")
+        problems = tool.check_entry_point_counts(repo)
+        assert any("CHANGELOG.md [Unreleased]" in p for p in problems), problems
+
+    def test_a_stale_count_in_a_released_section_is_not_reported(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        """Dated sections stay history: they record what was true then."""
+        repo = tmp_path / "repo"
+        native, _cython = tool.count_error_state_entry_points()
+        self._changelog(repo, "nothing to see", f"inhibits {native + 5} native entry points")
+        assert tool.check_entry_point_counts(repo) == []
+
+
 class TestTheGateIsNotVacuousOnThisRepository:
     def test_the_real_tree_matches_every_claim(self, tool: ModuleType) -> None:
         problems, checked = tool.audit(REPO_ROOT)

@@ -29,7 +29,47 @@ typedef enum {
     AMA_IMPL_SVE2    = 4,  /**< ARM64 SVE2 (scalable vectors). */
 } ama_impl_level_t;
 
-/** Dispatch info populated by ama_dispatch_init() (read-only after init).
+/** DETECTED capability tier per subsystem, populated by ama_dispatch_init()
+ * (read-only after init).
+ *
+ * WHAT THIS IS, AND WHAT IT IS NOT
+ *
+ * Every field is the tier the CPU-feature detection ADMITS for that
+ * subsystem.  It is NOT a report of the kernel the dispatcher ended up
+ * wiring, and the two can differ.  Each field carried the word "Selected"
+ * until 5.0.0, which was wrong in a way a caller could act on: a reader on a
+ * host where the AES-GCM ISA bundle gate fails sees `aes_gcm = AMA_IMPL_AVX2`
+ * and concludes hardware AES is running, while the table holds the
+ * constant-time bitsliced path.  Measured on one process with
+ * `AMA_DISPATCH_ONLY=argon2-g-avx2` set: this struct reported
+ * `aes_gcm = AVX2` while `ama_aes_gcm_active_backend()` reported
+ * `bitsliced-software`.
+ *
+ * Detection and wiring diverge in four ways, all of them by design:
+ *
+ *   1. ISA-bundle gates.  AVX2 admits the AES-GCM tier, but the kernel also
+ *      needs AES-NI and PCLMULQDQ; a hypervisor may advertise one without the
+ *      others.  The same shape guards the ARMv8-CE path.
+ *   2. Environment opt-outs — `AMA_DISPATCH_NO_CHACHA_AVX2`,
+ *      `AMA_DISPATCH_NO_ARGON2_AVX2` and friends — which clear a pointer
+ *      without changing what was detected.
+ *   3. `AMA_DISPATCH_ONLY=<slot>`, which clears the WHOLE table and re-wires
+ *      one slot.
+ *   4. The Phase-3 auto-tune, which reverts a slot whose SIMD kernel measured
+ *      slower than its scalar reference on this host.
+ *
+ * Two of the nine fields — `sphincs` and `ed25519` — have no dispatch-table
+ * slot at all, so for them "detected tier" is the only thing there is to
+ * report.  That is the structural reason this struct is a detection record
+ * rather than a wiring record.
+ *
+ * TO ASK WHAT IS ACTUALLY RUNNING, use one of:
+ *   - `ama_get_dispatch_table()` and NULL-check the slot you care about
+ *     (a NULL slot means the portable path is in use);
+ *   - `ama_aes_gcm_active_backend()`, which names the AES-GCM kernel by the
+ *     pointer actually installed;
+ *   - `ama_dispatch_active_slot()`, which reports the `AMA_DISPATCH_ONLY`
+ *     pin (or `"all-default-dispatch"`).
  *
  * ABI policy: append-only.  New fields land *after* `arch_name` so
  * binaries linked against older copies of this header still see the
@@ -37,16 +77,16 @@ typedef enum {
  * inserting fields earlier would silently break consumers compiled
  * against a previous release. */
 typedef struct {
-    ama_impl_level_t sha3;              /**< Selected SHA3 / Keccak-f[1600] path. */
-    ama_impl_level_t kyber;             /**< Selected Kyber NTT / pointwise path. */
-    ama_impl_level_t dilithium;         /**< Selected Dilithium NTT / pointwise path. */
-    ama_impl_level_t sphincs;           /**< Selected SPHINCS+ path. */
-    ama_impl_level_t aes_gcm;           /**< Selected AES-256-GCM path (AES-NI, etc.). */
-    ama_impl_level_t ed25519;           /**< Selected Ed25519 field-element path. */
-    ama_impl_level_t chacha20poly1305;  /**< Selected ChaCha20-Poly1305 path. */
-    ama_impl_level_t argon2;            /**< Selected Argon2 G compression path. */
+    ama_impl_level_t sha3;              /**< Detected SHA3 / Keccak-f[1600] tier. */
+    ama_impl_level_t kyber;             /**< Detected Kyber NTT / pointwise tier. */
+    ama_impl_level_t dilithium;         /**< Detected Dilithium NTT / pointwise tier. */
+    ama_impl_level_t sphincs;           /**< Detected SPHINCS+ tier (no table slot). */
+    ama_impl_level_t aes_gcm;           /**< Detected AES-256-GCM tier (AES-NI, etc.). */
+    ama_impl_level_t ed25519;           /**< Detected Ed25519 field-element tier (no table slot). */
+    ama_impl_level_t chacha20poly1305;  /**< Detected ChaCha20-Poly1305 tier. */
+    ama_impl_level_t argon2;            /**< Detected Argon2 G compression tier. */
     const char *arch_name;              /**< Human-readable architecture label (for diagnostics). */
-    ama_impl_level_t x25519;            /**< Selected X25519 4-way ladder path (batch API only; single-shot stays scalar). 3.0.0+. */
+    ama_impl_level_t x25519;            /**< Detected X25519 4-way ladder tier (batch API only; single-shot stays scalar). 3.0.0+. */
 } ama_dispatch_info_t;
 
 /* ============================================================================
@@ -93,17 +133,29 @@ typedef void (*ama_kyber_poly_sub_fn)(int16_t r[256],
  *
  *  Post-condition: each output coefficient is congruent to its input
  *  modulo q (= 3329) and small enough to feed back into further mod-q
- *  int16 arithmetic without overflow.  The actual representative is
- *  implementation-defined within roughly [-q, q]: the production
- *  scalar barrett_reduce() in src/c/ama_kyber.c can return +q (or -q)
- *  for some inputs at the extremes of its input range (e.g., a == -q
- *  yields t == (v*-q)>>26 == -2 via arithmetic right shift, producing
- *  a - t*q == +q), and the SVE2 kernel's *centered* Barrett (with the
- *  `+ (1 << 25)` rounding term) can pick a representative differing
- *  by exactly q from the scalar result.  Both are cryptographically
- *  correct because every downstream consumer re-reduces before bit
- *  extraction.  Callers needing a strict canonical form must follow
- *  with the FIPS 203 csubq / freeze step. */
+ *  int16 arithmetic without overflow.  The representative is bounded
+ *  by [-2q, 2q] rather than the canonical [-q+1, q-1]: the truncating
+ *  Barrett every kernel implements can return exactly +q (or -q) for
+ *  some inputs at the extremes of its range (a == -q yields
+ *  t == (v*-q)>>26 == -2 via the arithmetic right shift, producing
+ *  a - t*q == +q).  That is cryptographically correct because every
+ *  downstream consumer re-reduces before bit extraction.  Callers
+ *  needing a strict canonical form must follow with the FIPS 203
+ *  csubq / freeze step.
+ *
+ *  Every wired kernel picks the SAME representative: the production
+ *  scalar barrett_reduce() in src/c/ama_kyber.c, barrett_reduce_neon
+ *  and the SVE2 barrett_reduce_scalar all compute
+ *  `((v * a) >> 26) * q` with no rounding addend, and
+ *  tests/c/test_kyber_poly_equiv.c compares them byte-for-byte.  An
+ *  earlier revision of this paragraph said the SVE2 kernel used a
+ *  *centered* Barrett with a `+ (1 << 25)` term and could therefore
+ *  differ by exactly q; that kernel was corrected and this contract
+ *  was not, so the sentence outlived the code it described — and the
+ *  equivalence test had been loosened to a mod-q comparator on the
+ *  strength of it.  A kernel that wants a different convention is a
+ *  change to what the dispatch table may substitute for what, and
+ *  belongs here as a deliberate widening. */
 typedef void (*ama_kyber_poly_reduce_fn)(int16_t poly[256]);
 
 /** Kyber CBD2 noise sampler: 128-byte uniform stream -> 256 coefficients
@@ -229,7 +281,10 @@ typedef struct {
 /** Initialize dispatch (thread-safe, idempotent). */
 AMA_API void ama_dispatch_init(void);
 
-/** Get dispatch info (detection results). */
+/** Get the DETECTED capability tiers — not the wired kernels.
+ *
+ * See `ama_dispatch_info_t` above for the four ways the two diverge and for
+ * the accessors that report what is actually installed. */
 AMA_API const ama_dispatch_info_t *ama_get_dispatch_info(void);
 
 /** Get the dispatch function table. Calls ama_dispatch_init() if needed. */

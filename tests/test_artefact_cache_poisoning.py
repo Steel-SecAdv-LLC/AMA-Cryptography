@@ -1,0 +1,279 @@
+#!/usr/bin/env python3
+# Copyright (C) 2025-2026 Steel Security Advisors LLC
+# SPDX-License-Identifier: Apache-2.0
+"""A poisoned ``__pycache__`` for the integrity artefact must not disarm the
+pre-load gates.
+
+The two pre-load controls in this package exist for one reason: a compiled
+object runs code the moment it is mapped, so detection has to happen BEFORE the
+mapping or it prevents nothing.
+
+* ``__init__._refuse_tampered_bindings_before_import()`` — refuses a binding
+  extension whose bytes do not match the signed artefact, before importing it;
+* ``pqc_backends._expected_native_digest()`` — the same rule for
+  ``libama_cryptography`` itself.
+
+Both obtained the signed digests with ``from ama_cryptography import
+_integrity_signature``. That is an ordinary import, so what it reads is
+``__pycache__/_integrity_signature.cpython-3XX.pyc`` whenever a cache exists
+whose PEP 552 header matches the source's ``(mtime, size)`` — and nothing has
+validated that cache at either point, because the POST stage that binds cached
+bytecode to signed source (``execution-integrity``) runs after both.
+
+Measured against the code before the fix, in a scratch copy: with one poisoned
+``.pyc`` and ``_integrity_signature.py`` left byte-identical (so its Ed25519
+signature still verifies), the pre-import gate did not fire and the tampered
+extension's module-init function ran::
+
+    OUTCOME: CryptoModuleError: … power-on self-tests FAILED
+    BINDING MODULES THAT EXECUTED: [… 'ama_cryptography.hkdf_binding' …]
+    TAMPERED ONE EXECUTED: True
+
+POST caught it afterwards, which is exactly the ordering the gate was added to
+correct. After the fix the same inputs give::
+
+    OUTCOME: ImportError: … a signed binding extension does not match the artefact
+    BINDING MODULES THAT EXECUTED: []
+
+These tests reproduce that end to end. They are slow (a real sign, a real
+subprocess import) but there is no smaller seam: the property is about which
+code has executed by the time a decision is made, and only a fresh interpreter
+can answer that.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import importlib.util
+import marshal
+import os
+import re
+import shutil
+import struct
+import subprocess
+import sys
+import textwrap
+from pathlib import Path
+
+import pytest
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+PKG_DIR = REPO_ROOT / "ama_cryptography"
+
+pytestmark = pytest.mark.fips
+
+
+def _binding_extensions(pkg: Path) -> list[Path]:
+    out: list[Path] = []
+    for suffix in (".so", ".pyd", ".dylib"):
+        for path in pkg.glob(f"*{suffix}"):
+            if path.name.startswith(("libama_cryptography", "ama_cryptography.dll")):
+                continue
+            if "_binding" in path.name:
+                out.append(path)
+    return sorted(out)
+
+
+@pytest.fixture(scope="module")
+def signed_tree(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A package copy whose artefact actually BINDS the compiled extensions.
+
+    A source-tree artefact binds none by design, so the gate under test would
+    have nothing to check; ``--bind-extensions`` is the release-pipeline mode
+    that gives it something.
+    """
+    root = tmp_path_factory.mktemp("poison")
+    shutil.copytree(PKG_DIR, root / "ama_cryptography")
+    pkg = root / "ama_cryptography"
+    shutil.rmtree(pkg / "__pycache__", ignore_errors=True)
+
+    if not _binding_extensions(pkg):
+        pytest.skip(
+            "no compiled binding extensions in this tree; build with "
+            "`python setup.py build_ext --inplace`"
+        )
+    if not any(pkg.glob("libama_cryptography*")):
+        pytest.skip("native library not built in this tree")
+
+    env = dict(os.environ, AMA_BUILD_PIPELINE="1", PYTHONPATH=str(root))
+    proc = subprocess.run(
+        [sys.executable, "-m", "ama_cryptography._build_sign", "--bind-extensions"],
+        cwd=str(root),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=600,
+    )
+    if proc.returncode != 0:
+        pytest.skip(f"could not sign the scratch tree: {proc.stderr.strip()[-400:]}")
+    return root
+
+
+def _poison_artefact_cache(pkg: Path, replacements: dict[str, str]) -> None:
+    """Write a ``.pyc`` for the artefact with digests replaced, source untouched.
+
+    The header carries the UNMODIFIED source's ``(mtime, size)``, which is what
+    makes CPython accept the cache without recompiling — the whole mechanism of
+    the attack.
+    """
+    src = pkg / "_integrity_signature.py"
+    original = src.read_text(encoding="utf-8")
+    stat = src.stat()
+
+    poisoned = original
+    for name, digest in replacements.items():
+
+        def _swap(match: re.Match[str], replacement: str = digest) -> str:
+            return match.group(1) + replacement + match.group(3)
+
+        pattern = r'("' + re.escape(name) + r'":\s*")([0-9a-f]{64})(")'
+        poisoned, count = re.subn(pattern, _swap, poisoned)
+        if count == 0:
+            # The native digest is a bare assignment, not a dict entry.
+            poisoned, count = re.subn(
+                r"(" + re.escape(name) + r'\s*=\s*")([0-9a-f]{64})(")',
+                _swap,
+                poisoned,
+            )
+        assert count == 1, f"could not rewrite {name} in the artefact source"
+
+    code = compile(poisoned, str(src), "exec")
+    cache = Path(importlib.util.cache_from_source(str(src)))
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    with open(cache, "wb") as handle:
+        handle.write(importlib.util.MAGIC_NUMBER)
+        handle.write(struct.pack("<I", 0))  # PEP 552: timestamp-validated
+        handle.write(struct.pack("<I", int(stat.st_mtime) & 0xFFFFFFFF))
+        handle.write(struct.pack("<I", stat.st_size & 0xFFFFFFFF))
+        marshal.dump(code, handle)
+
+    assert src.read_text(encoding="utf-8") == original, "the source must stay byte-identical"
+
+
+def _import_and_report(root: Path) -> tuple[str, list[str], str]:
+    """Import the package in a fresh interpreter; report outcome, what ran, output."""
+    probe = textwrap.dedent("""
+        import sys
+        try:
+            import ama_cryptography
+            outcome = "IMPORTED"
+        except BaseException as exc:
+            outcome = type(exc).__name__
+        loaded = sorted(
+            m for m in sys.modules
+            if m.startswith("ama_cryptography.") and "binding" in m
+        )
+        print("OUTCOME=" + outcome)
+        print("EXECUTED=" + ",".join(loaded))
+        """)
+    proc = subprocess.run(
+        [sys.executable, "-c", probe],
+        cwd=str(root),
+        env=dict(os.environ, PYTHONPATH=str(root)),
+        capture_output=True,
+        text=True,
+        timeout=600,
+    )
+    outcome = ""
+    executed: list[str] = []
+    for line in proc.stdout.splitlines():
+        if line.startswith("OUTCOME="):
+            outcome = line.split("=", 1)[1]
+        elif line.startswith("EXECUTED="):
+            payload = line.split("=", 1)[1]
+            executed = [m for m in payload.split(",") if m]
+    assert outcome, proc.stdout + proc.stderr
+    return outcome, executed, proc.stdout + proc.stderr
+
+
+class TestTheGateIsRealBeforeTheAttack:
+    """Non-vacuity: the fixture's tree must import cleanly, and the gate must fire
+    on a plain tampered extension.  Without both, the attack test below could
+    pass for reasons unrelated to the poisoning."""
+
+    def test_the_untampered_tree_imports(self, signed_tree: Path) -> None:
+        outcome, executed, _output = _import_and_report(signed_tree)
+        assert outcome == "IMPORTED", outcome
+        assert executed, "no binding extension executed — the gate would have nothing to guard"
+
+    def test_a_tampered_binding_is_refused(self, signed_tree: Path, tmp_path: Path) -> None:
+        root = tmp_path / "plain"
+        shutil.copytree(signed_tree, root)
+        pkg = root / "ama_cryptography"
+        shutil.rmtree(pkg / "__pycache__", ignore_errors=True)
+        target = _binding_extensions(pkg)[0]
+        data = bytearray(target.read_bytes())
+        data[-1] ^= 0x01
+        target.write_bytes(bytes(data))
+
+        outcome, executed, _output = _import_and_report(root)
+        assert outcome == "ImportError", outcome
+        assert executed == [], f"a binding executed despite the refusal: {executed}"
+
+
+class TestPoisonedArtefactCacheCannotDisarmTheGate:
+    def test_a_forged_binding_digest_in_pycache_does_not_pass(
+        self, signed_tree: Path, tmp_path: Path
+    ) -> None:
+        """The regression this module exists for.
+
+        Tamper one signed extension, then write a ``.pyc`` for the artefact in
+        which that extension's entry carries the TAMPERED bytes' digest. The
+        source keeps its original digests and its valid signature. Nothing may
+        execute.
+        """
+        root = tmp_path / "poisoned"
+        shutil.copytree(signed_tree, root)
+        pkg = root / "ama_cryptography"
+        shutil.rmtree(pkg / "__pycache__", ignore_errors=True)
+
+        target = _binding_extensions(pkg)[0]
+        data = bytearray(target.read_bytes())
+        data[-1] ^= 0x01
+        target.write_bytes(bytes(data))
+        forged = hashlib.sha3_256(bytes(data)).hexdigest()
+
+        _poison_artefact_cache(pkg, {target.name: forged})
+
+        outcome, executed, _output = _import_and_report(root)
+        assert executed == [], (
+            "a poisoned artefact bytecode cache let a tampered binding extension "
+            f"execute: {executed}"
+        )
+        assert outcome == "ImportError", outcome
+
+    def test_a_forged_native_digest_in_pycache_does_not_pass(
+        self, signed_tree: Path, tmp_path: Path
+    ) -> None:
+        """The same attack against the pre-load check on the native library.
+
+        ``_expected_native_digest`` read the artefact the same way, so a forged
+        ``INTEGRITY_NATIVE_DIGEST_HEX`` in the cache would have let a tampered
+        ``libama_cryptography`` be mapped — which runs its ELF constructors.
+        """
+        root = tmp_path / "poisoned_native"
+        shutil.copytree(signed_tree, root)
+        pkg = root / "ama_cryptography"
+        shutil.rmtree(pkg / "__pycache__", ignore_errors=True)
+
+        libs = sorted(p for p in pkg.glob("libama_cryptography*") if p.is_file())
+        if not libs:
+            pytest.skip("no in-package native library to tamper with")
+        target = libs[0]
+        data = bytearray(target.read_bytes())
+        data[-1] ^= 0x01
+        target.write_bytes(bytes(data))
+        forged = hashlib.sha3_256(bytes(data)).hexdigest()
+
+        _poison_artefact_cache(pkg, {"INTEGRITY_NATIVE_DIGEST_HEX": forged})
+
+        outcome, _executed, output = _import_and_report(root)
+        # "not IMPORTED" is NOT the assertion: POST's integrity stage fails on
+        # the forged cache anyway, so a vacuous test would pass even with the
+        # pre-load check disarmed.  What must hold is that the refusal is the
+        # PRE-LOAD one — the object was never mapped.
+        assert "refused before mapping" in output, (
+            "the tampered native library was not refused before mapping; the "
+            "poisoned cache disarmed the pre-load digest check\n" + output[-2000:]
+        )
+        assert outcome != "IMPORTED", output[-2000:]

@@ -60,7 +60,7 @@ import re
 import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
-from typing import Optional
+from typing import Callable, Optional
 
 import pytest
 import yaml
@@ -389,6 +389,120 @@ class TestVerdict:
             ["--lib", str(tmp_path / "absent.a"), "--include", str(tmp_path), "--target", "ghash"]
         )
         assert rc == 2
+
+
+class TestAnOrderArtefactIsNotALeak:
+    """A delta that follows the ORDER of measurement must not read as a leak.
+
+    Every threshold in this gate is 0, and each class used to be measured
+    exactly once, in a fixed order, with the noise floor sampled only at the
+    start.  Any one-time cost that falls away after the first few processes —
+    a cache directory created on first use, a page-cache warm-up, an ASLR
+    layout that lands differently in the simulated cache — therefore attaches
+    itself entirely to the classes measured first and is indistinguishable, in
+    the report, from a key-dependent measurement.
+
+    Observed on a clean tree: `--target aead-verify` reported 456 I refs of
+    "key-dependent measurement" whose high/low split followed measurement order
+    (first three high, last six low) and cut across the accept/reject split the
+    driver actually varies — 1 false FAIL in 6 runs, against a driver that
+    showed zero variance over 24 standalone runs.
+
+    A leak is deterministic under callgrind and reproduces in either order.
+    These are the controls for that distinction.
+    """
+
+    @staticmethod
+    def _order_artefact(
+        tool: ModuleType, high_for_first: int, delta: int
+    ) -> Callable[[Path, str, Path], Optional[dict[str, int]]]:
+        """A ``_measure`` stub whose value depends on CALL ORDER, not on class."""
+        state = {"n": 0}
+
+        def _stub(driver: Path, key_class: str, workdir: Path) -> Optional[dict[str, int]]:
+            state["n"] += 1
+            base = 11_628_800
+            return _m(base + delta if state["n"] <= high_for_first else base)
+
+        return _stub
+
+    def test_an_order_dependent_delta_is_inconclusive_not_failed(
+        self, tool: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Exit 2, not 1: the instrument is what is wrong, and it says so."""
+        lib = tmp_path / "libama_cryptography_test.a"
+        lib.write_bytes(b"")
+        monkeypatch.setattr(tool.shutil, "which", lambda _name: "/usr/bin/stub")
+        monkeypatch.setattr(
+            tool.subprocess,
+            "run",
+            lambda *a, **k: SimpleNamespace(returncode=0, stdout="", stderr=""),
+        )
+        monkeypatch.setattr(tool, "_library_is_optimized", lambda *a, **k: 1)
+        # The first three measurements carry the artefact — floor_a, floor_b and
+        # the first non-floor class — exactly the shape observed on the tree.
+        # floor_a and floor_b agree with each other, so the opening floor check
+        # cannot see it; the cross-class comparison then does.
+        monkeypatch.setattr(tool, "_measure", self._order_artefact(tool, 3, 456))
+        rc = tool.main(["--lib", str(lib), "--include", str(tmp_path), "--target", "aead-verify"])
+        assert rc == 2, "an order-dependent delta must be INCONCLUSIVE, not a leak verdict"
+
+    def test_a_real_leak_still_fails_after_the_confirmation_sweep(
+        self, tool: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Sensitivity is unchanged: a class-keyed delta reproduces in reverse.
+
+        This is the other half of the control.  If the confirmation sweep had
+        made the gate merely quieter, this would now pass.
+        """
+        counts: dict[str, Optional[dict[str, int]]] = {k: _m(11_628_800) for k in tool.KEY_CLASSES}
+        counts[tool.KEY_CLASSES[-1]] = _m(11_628_800 + 456)
+        assert _run_main(tool, monkeypatch, tmp_path, counts, target="aead-verify") == 1
+
+    def test_the_closing_floor_is_measured_and_reported(
+        self,
+        tool: ModuleType,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """`drift` — the same-class difference across the whole sweep — is printed.
+
+        Without it, a bias that develops during the sweep is invisible: the
+        opening floor only says the instrument could reproduce itself before
+        any of the cross-class work began.
+        """
+        counts: dict[str, Optional[dict[str, int]]] = {k: _m(11_628_800) for k in tool.KEY_CLASSES}
+        assert _run_main(tool, monkeypatch, tmp_path, counts, target="aead-verify") == 0
+        out = capsys.readouterr().out
+        assert "  drift  " in out, out
+
+    def test_every_class_is_measured_at_least_twice_when_a_breach_is_seen(
+        self, tool: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """The confirmation sweep really runs, and really covers every class."""
+        lib = tmp_path / "libama_cryptography_test.a"
+        lib.write_bytes(b"")
+        monkeypatch.setattr(tool.shutil, "which", lambda _name: "/usr/bin/stub")
+        monkeypatch.setattr(
+            tool.subprocess,
+            "run",
+            lambda *a, **k: SimpleNamespace(returncode=0, stdout="", stderr=""),
+        )
+        monkeypatch.setattr(tool, "_library_is_optimized", lambda *a, **k: 1)
+
+        seen: list[str] = []
+
+        def _stub(driver: Path, key_class: str, workdir: Path) -> Optional[dict[str, int]]:
+            seen.append(key_class)
+            base = 11_628_800
+            return _m(base + 456 if key_class == tool.KEY_CLASSES[-1] else base)
+
+        monkeypatch.setattr(tool, "_measure", _stub)
+        rc = tool.main(["--lib", str(lib), "--include", str(tmp_path), "--target", "aead-verify"])
+        assert rc == 1
+        for key_class in tool.KEY_CLASSES:
+            assert seen.count(key_class) >= 2, (key_class, seen)
 
 
 class TestAnUnoptimizedLibraryIsNotAMeasurement:

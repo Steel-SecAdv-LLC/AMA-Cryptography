@@ -58,11 +58,13 @@ clang -O3 with the value barrier             12
 same key, two runs (noise floor)       up to 25
 ===================================  ==================
 
-Per-target limits are set from measurement, not from headroom: eleven of the
-twelve targets measure a cross-class delta of exactly zero under both gcc 13
-and clang 18 at -O3, with a same-class floor of exactly zero, and their limit
-is 0.  Only `ecdsa` carries a non-zero limit, for the one benign
-variable-time step it has (DER encoding of the public r and s).  The full
+Per-target limits are set from measurement, not from headroom: all THIRTEEN
+targets measure a cross-class delta of exactly zero under both gcc 13 and
+clang 18 at -O3, with a same-class floor of exactly zero, and every limit is
+0.  `ecdsa` was the last holdout — it carried a limit of 64 for the DER
+length term — and reached zero the way `nistp-ecdsa` did, by signing through
+the fixed-width `ama_secp256k1_ecdsa_sign_raw` entry point so the encoder is
+outside the measurement rather than inside it with an allowance.  The full
 measurement table and the reasoning are at ``THRESHOLDS`` below.
 
 Exit status
@@ -114,9 +116,15 @@ KEY_CLASSES = ("A", "Z", "m", "q", "0", "~", "!", "5")
 #: ghash: the scalar AES-GCM path is deterministic end to end, so anything
 #: above process noise is a defect.  Calibration in the module docstring.
 #:
-#: ecdsa: secp256k1 signing has one *legitimate* variable-time step — DER
+#: ecdsa: secp256k1 signing HAD one *legitimate* variable-time step — DER
 #: encoding of r and s, whose leading-zero handling depends on the signature
-#: values.  Those are public: the verifier receives them.
+#: values.  Those are public (the verifier receives them), which is why a
+#: non-zero limit was defensible.  It is history now, not the current
+#: rationale: this target signs through `ama_secp256k1_ecdsa_sign_raw`, a
+#: fixed-width 64-octet entry point, so the encoder is not in the measurement
+#: at all and the limit is 0 like every other target.  The paragraphs below
+#: record how that limit came down, because the numbers in them are the
+#: evidence for the value it came down to.
 #:
 #: This threshold was 3,000, calibrated against the Montgomery
 #: extra-reduction leak (33,354 instructions) and an apparent benign spread
@@ -1346,11 +1354,24 @@ _COUNT_METRICS = ("I refs", "D refs")
 #: numbers do, and those are what a reader checks.
 _CACHE_GEOMETRY = ("--I1=32768,8,64", "--D1=32768,8,64", "--LL=8388608,16,64")
 
+
+def _limit_for(metric: str, count_threshold: int) -> int:
+    """The limit that applies to one metric: the per-target count threshold
+    for instruction and data-reference counts, MISS_THRESHOLD for the two
+    cache-miss metrics.  Factored out because the sweep, the confirmation
+    sweep and the report must all apply the SAME rule; three transcriptions of
+    a threshold is how a gate ends up enforcing three different things."""
+    return count_threshold if metric in _COUNT_METRICS else MISS_THRESHOLD
+
+
 #: Miss-count threshold.  Zero, and that is measured rather than aspirational:
-#: across all ten targets at gcc 13 -O3 and clang 18 -O3, every cross-class
-#: miss delta and every same-class noise floor is exactly 0, including on the
-#: one target with a legitimate public-data spread (ecdsa moves 24 instructions
-#: and 8 data references, and 0 misses).  A non-zero delta here means the two
+#: across all thirteen targets at gcc 13 -O3 and clang 18 -O3, every
+#: cross-class miss delta and every same-class noise floor is exactly 0.  (An
+#: earlier revision of this note said "all ten targets" and cited ecdsa as
+#: "the one target with a legitimate public-data spread ... 24 instructions
+#: and 8 data references".  Both were stale: the inventory is thirteen, and
+#: ecdsa's spread went to zero when the target moved to
+#: `ama_secp256k1_ecdsa_sign_raw`.)  A non-zero delta here means the two
 #: classes walked different addresses, which is the finding this metric exists
 #: to make — so there is no benign band to reserve.
 MISS_THRESHOLD = 0
@@ -1701,6 +1722,73 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 return 2
             measured[key_class] = one
 
+        # Close the floor at the END of the sweep as well as the start.
+        #
+        # The floor above establishes that the instrument could reproduce
+        # itself at the moment the sweep began.  It says nothing about the
+        # moment it ended, and the sweep is one process per class in strict
+        # order — so any one-time cost that falls away after the first few
+        # processes (a cache directory created on first use, a page-cache warm
+        # up, an ASLR layout that changes the simulated cache sets) lands
+        # entirely on the classes measured first and reads as a cross-class
+        # delta.  That is not hypothetical: on this tree, with every threshold
+        # at 0, a run of `--target aead-verify` reported 456 I refs of
+        # "key-dependent measurement" whose split followed the ORDER of
+        # measurement (the first three high, the last six low) and not the
+        # accept/reject split the driver actually varies — 1 false FAIL in 6
+        # runs, on a tree whose driver, compiled standalone and run 24 times,
+        # showed zero variance.
+        #
+        # Re-measuring class 0 last turns that from an invisible bias into a
+        # visible number: `drift` is the same-class difference across the whole
+        # sweep, printed in the report next to `floor`.
+        floor_c = _measure(driver, KEY_CLASSES[0], workdir)
+        if floor_c is None:
+            print(
+                "CONSTANT-TIME CHECK INCONCLUSIVE — callgrind produced no "
+                "closing floor measurement.",
+                file=sys.stderr,
+            )
+            return 2
+        drift = {name: abs(floor_c[name] - floor_a[name]) for name in _METRICS}
+
+        # Decide provisionally, then CONFIRM before failing.
+        #
+        # A real leak is deterministic under callgrind: the same driver, the
+        # same inputs and the same simulated cache produce the same counts, so
+        # it reproduces in any order.  An artefact of measurement order does
+        # not.  Only a breach pays for the second sweep, so a green run costs
+        # exactly what it did before.
+        baseline_1 = measured[KEY_CLASSES[0]]
+        worst_1 = {
+            name: max(abs(values[name] - baseline_1[name]) for values in measured.values())
+            for name in _METRICS
+        }
+        breached_1 = [name for name in _METRICS if worst_1[name] > _limit_for(name, args.threshold)]
+
+        confirm: Optional[dict[str, dict[str, int]]] = None
+        breached_2: list[str] = []
+        if breached_1:
+            confirm = {}
+            for key_class in reversed(KEY_CLASSES):
+                one = _measure(driver, key_class, workdir)
+                if one is None:
+                    print(
+                        "CONSTANT-TIME CHECK INCONCLUSIVE — callgrind produced "
+                        f"no confirmation measurement for key class {key_class!r}.",
+                        file=sys.stderr,
+                    )
+                    return 2
+                confirm[key_class] = one
+            baseline_2 = confirm[KEY_CLASSES[0]]
+            worst_2 = {
+                name: max(abs(values[name] - baseline_2[name]) for values in confirm.values())
+                for name in _METRICS
+            }
+            breached_2 = [
+                name for name in _METRICS if worst_2[name] > _limit_for(name, args.threshold)
+            ]
+
     print(f"[{args.target}] deterministic measurements by key class:")
     for line in wiring:
         print(f"  wiring: {line}")
@@ -1713,31 +1801,49 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         row = "".join(f"{values[name]:>16,d}" for name in _METRICS)
         print(f"  0x{ord(key_class):02x}   {row}")
 
-    baseline = measured[KEY_CLASSES[0]]
-    worst = {
-        name: max(abs(values[name] - baseline[name]) for values in measured.values())
-        for name in _METRICS
-    }
+    worst = worst_1
     print("  floor  " + "".join(f"{floors[name]:>16,d}" for name in _METRICS))
+    print("  drift  " + "".join(f"{drift[name]:>16,d}" for name in _METRICS))
     print("  worst  " + "".join(f"{worst[name]:>16,d}" for name in _METRICS))
-    print(
-        "  limit  "
-        + "".join(
-            f"{(args.threshold if name in _COUNT_METRICS else MISS_THRESHOLD):>16,d}"
-            for name in _METRICS
-        )
-    )
+    print("  limit  " + "".join(f"{_limit_for(name, args.threshold):>16,d}" for name in _METRICS))
 
-    breached = [
-        name
-        for name in _METRICS
-        if worst[name] > (args.threshold if name in _COUNT_METRICS else MISS_THRESHOLD)
-    ]
+    if confirm is not None:
+        print("\n  confirmation sweep (classes measured in reverse order):")
+        for key_class in KEY_CLASSES:
+            row = "".join(f"{confirm[key_class][name]:>16,d}" for name in _METRICS)
+            print(f"  0x{ord(key_class):02x}   {row}")
+
+    breached = breached_1
+    if breached and sorted(breached_2) != sorted(breached_1):
+        # The two sweeps disagree about WHICH metrics carry a key-dependent
+        # delta.  A leak is deterministic under callgrind, so it cannot appear
+        # in one ordering and vanish in the other; a measurement-order artefact
+        # can and does.  Classify rather than collapse — the same rule the
+        # dudect verdict logic applies to a sign-flipping t-statistic.  Both
+        # outcomes still stop the run; what changes is the diagnosis, and that
+        # a clean tree is no longer told it has a leak.
+        print(
+            f"\n{args.target.upper()} CONSTANT-TIME CHECK INCONCLUSIVE — the two "
+            f"sweeps disagree.\n"
+            f"  forward sweep breached: {', '.join(breached_1) or 'nothing'}\n"
+            f"  reverse sweep breached: {', '.join(breached_2) or 'nothing'}\n"
+            f"  same-class drift across the sweep: "
+            + ", ".join(f"{name}={drift[name]:,}" for name in _METRICS)
+            + "\n"
+            "A key-dependent measurement is deterministic under callgrind and "
+            "reproduces in either order; a delta that follows the ORDER of "
+            "measurement does not. Re-run on a quiet host. If it persists, the "
+            "instrument — not the library — is what to fix.",
+            file=sys.stderr,
+        )
+        return 2
+
     if breached:
         detail = ", ".join(f"{name} by {worst[name]:,}" for name in breached)
         print(
             f"\n{args.target.upper()} CONSTANT-TIME CHECK FAILED — a key-dependent "
-            f"measurement was taken ({detail}).\n"
+            f"measurement was taken ({detail}), reproduced in a second sweep with "
+            f"the classes in reverse order.\n"
             + (
                 "A data-reference or cache-miss delta with an unchanged instruction "
                 "count is a secret-dependent memory ACCESS rather than a branch: "

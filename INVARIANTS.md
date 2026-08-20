@@ -1991,9 +1991,24 @@ internal modules do.  Each now calls `check_crypto_permitted()` first.
 
 The count is not written down here, because a number in prose is a number that
 goes stale: `tools/check_error_state_gating.py` enumerates the surface from the
-module's own AST and fails when any entry point is ungated, and its output is
-the authoritative figure (85 native entry points and 10 Cython binding entry
-points at the time of writing, with 2 documented exemptions).
+modules' own ASTs and fails when any entry point is ungated, and its output is
+the authoritative figure (89 native entry points across `pqc_backends` and
+`ascon`, plus 10 Cython binding entry points at the time of writing, with 2
+documented exemptions).
+
+The parenthesis above is now checked rather than trusted: it said 85 while the
+tool reported 86, having missed a commit that started tracking a native symbol
+selected by a conditional expression.  `tools/check_documented_counts.py` reads
+the figure from the tool and compares every published occurrence against it, so
+the sentence that calls the tool authoritative is now enforced by the tool.
+
+`ascon` joined the scanned modules once the gate learned to follow one level of
+guard delegation.  Its public entry points call `lib.ama_ascon_*(...)` in their
+own bodies, so the native reach was always visible; the guard was not, because
+it lives in the private `_require_native()` choke point every one of them
+passes through.  The module had been excluded on the stated grounds that "a
+body-level scan cannot see the reach", which was true of `hybrid_combiner` and
+not of this one.
 
 `check_crypto_permitted()` is deliberately weaker than `check_operational()`:
 it permits `SELF_TEST` **on the POST thread only**, because POST's Known Answer

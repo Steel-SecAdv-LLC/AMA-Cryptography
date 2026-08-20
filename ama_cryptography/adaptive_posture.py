@@ -211,15 +211,36 @@ class PostureEvaluator:
 
         signals: Dict[str, Any] = {}
 
-        # Score timing anomalies
+        # `recent_alerts` is a SLIDING window (monitoring.get_security_report
+        # returns `self.alerts[-10:]`), not a queue this evaluator drains.  The
+        # same alert is therefore present on every call until ten newer ones
+        # push it out — so scoring the window as given re-counts each alert up
+        # to ten times, and the raw score stays pinned at its peak long after
+        # the anomaly is over.
+        #
+        # `_score_lyapunov_stability` already de-duplicated by timestamp; the
+        # other two scorers did not, and the accumulator below then compounded
+        # the repetition.  Measured on one stale critical alert with no further
+        # activity: raw_score pinned at 0.4500 forever, effective_score 0.45 ->
+        # 4.83 by the fifteenth cycle against a CRITICAL threshold of 0.80,
+        # reaching CRITICAL / ROTATE_AND_SWITCH at cycle 4 and never leaving.
+        # MONITORING.md's "Exponential decay prevents stale anomalies from
+        # driving permanent escalation" was exactly what did not happen.
+        #
+        # The cursor is advanced ONCE per evaluation, after every scorer has
+        # seen the new alerts — sharing `_score_lyapunov_stability`'s cursor
+        # without that would let whichever scorer ran first consume the alerts
+        # and leave the others with nothing.
         recent_alerts = monitor_report.get("recent_alerts", [])
-        timing_alerts = [a for a in recent_alerts if a.get("type") == "timing"]
-        pattern_alerts = [a for a in recent_alerts if a.get("type") == "pattern"]
+        new_alerts = self._alerts_not_yet_scored(recent_alerts)
+        timing_alerts = [a for a in new_alerts if a.get("type") == "timing"]
+        pattern_alerts = [a for a in new_alerts if a.get("type") == "pattern"]
 
         timing_score = self._score_timing_alerts(timing_alerts)
         pattern_score = self._score_pattern_alerts(pattern_alerts)
         resonance_score = self._score_resonance(monitor_report.get("resonance_analysis", {}))
         lyapunov_score = self._score_lyapunov_stability(timing_alerts)
+        self._advance_alert_cursor(new_alerts)
 
         score = (
             timing_score * 0.45
@@ -235,8 +256,30 @@ class PostureEvaluator:
         signals["timing_alert_count"] = len(timing_alerts)
         signals["pattern_alert_count"] = len(pattern_alerts)
 
-        # Apply exponential decay to accumulated score
-        self._accumulated_score = self._accumulated_score * self.decay_rate + score
+        # Decaying peak-hold, NOT a decaying sum.
+        #
+        # `acc = acc * decay + score` is a geometric series: for a constant
+        # per-cycle score it converges to `score / (1 - decay)`, a gain of 20x
+        # at the default decay of 0.95, and it is unbounded above.  The
+        # thresholds it is compared against are documented — in this class's
+        # own docstring — as per-evaluation probabilities in [0, 1]
+        # ("ELEVATED = 1 - Phi(3)", "CRITICAL ... 1-in-780B"), and the table
+        # tops out at 0.80.  A steady per-cycle score of only 0.04 therefore
+        # reached "7-sigma, active side-channel" in the limit, and any sustained
+        # signal pinned the level at CRITICAL with an effective_score that kept
+        # climbing past 1.0 with nothing left to mean.
+        #
+        # max(score, acc * decay) keeps every property the old form was chosen
+        # for and none of the ones it did not intend:
+        #   * bounded in [0, 1], so the calibrated thresholds are comparable to
+        #     the quantity they are compared against;
+        #   * a genuine 7-sigma composite reaches CRITICAL on the evaluation
+        #     that observes it, rather than after four cycles of summation;
+        #   * with no new anomalies the level decays geometrically, which is
+        #     what MONITORING.md promises;
+        #   * `decay_rate=1.0` still means "no decay" (a running maximum), the
+        #     behaviour the scenario tests use for determinism.
+        self._accumulated_score = max(score, self._accumulated_score * self.decay_rate)
         self._evaluation_count += 1
         effective_score = self._accumulated_score
         signals["effective_score"] = effective_score
@@ -254,6 +297,34 @@ class PostureEvaluator:
             confidence=confidence,
             signals=signals,
         )
+
+    def _alerts_not_yet_scored(self, alerts: List[Dict]) -> List[Dict]:
+        """The alerts in the sliding window this evaluator has not scored yet.
+
+        An alert with no ``timestamp`` cannot be placed relative to the cursor,
+        so it is treated as new.  Every alert the monitor emits carries one —
+        each ``self.alerts.append`` in ``monitoring.py`` sets
+        ``"timestamp": time.time()`` — and ``tests/test_adaptive_posture.py``
+        pins that, so the un-timestamped case is a hand-built report rather
+        than anything the system produces.
+        """
+        return [
+            a
+            for a in alerts
+            if a.get("timestamp") is None or a.get("timestamp", 0.0) > self._last_processed_alert_ts
+        ]
+
+    def _advance_alert_cursor(self, scored: List[Dict]) -> None:
+        """Move the cursor past everything the scorers just saw.
+
+        Called once per evaluation, after all three scorers have run.  The
+        cursor only ever moves forward, so an out-of-order timestamp cannot
+        rewind it and cause a re-score.
+        """
+        for alert in scored:
+            ts = alert.get("timestamp")
+            if isinstance(ts, (int, float)) and ts > self._last_processed_alert_ts:
+                self._last_processed_alert_ts = float(ts)
 
     def _score_timing_alerts(self, alerts: List[Dict]) -> float:
         """Score timing alerts by severity."""
@@ -318,15 +389,19 @@ class PostureEvaluator:
         # drop off the front — so a positional index would become
         # stale.  Instead we compare each alert's timestamp against
         # the last one we processed.
+        # `timing_alerts` has ALREADY been filtered to the not-yet-scored set
+        # by `_alerts_not_yet_scored`, and the cursor is advanced once by
+        # `_advance_alert_cursor` after every scorer has run.  This function
+        # used to do both jobs itself, which is why it was the only scorer that
+        # did not double-count — and why moving the filter up had to take the
+        # cursor advance with it: three scorers sharing one cursor, each
+        # advancing it, means the first to run consumes the alerts and the
+        # other two see an empty list.
         for alert in timing_alerts:
-            ts = alert.get("timestamp", 0.0)
-            if ts <= self._last_processed_alert_ts:
-                continue
             anomaly = alert.get("anomaly")
             if anomaly is not None:
                 deviation = getattr(anomaly, "deviation_sigma", 0.0)
                 self._timing_deviation_history.append(deviation)
-            self._last_processed_alert_ts = ts
 
         if len(self._timing_deviation_history) < 5:
             return 0.0
