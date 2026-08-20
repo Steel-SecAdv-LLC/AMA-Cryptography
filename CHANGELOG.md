@@ -122,13 +122,15 @@ what is not claimed both stated.
   described to the operator as "artefact binds none (v1 artefact)" and "the
   artefact predates v3" — two lines after the tool printed `schema v3; native
   bound: True; bindings: 6`. The stages are now skipped, and say so.
-- `.github/copilot-instructions.md` still said the register was INVARIANT-1
-  through INVARIANT-42 after it reached 43. `check_version_consistency.py`
-  now derives the extent from `INVARIANTS.md`, requires it contiguous, and
-  checks every `INVARIANT-1 through INVARIANT-N` claim in tracked Markdown
-  against it. A range that does not start at 1 — CHANGELOG's "INVARIANT-39
-  through INVARIANT-42", describing one release's scope — is deliberately left
-  alone.
+- `.github/copilot-instructions.md` still described the register as ending at
+  INVARIANT-42 after it reached 43. `check_version_consistency.py` now derives
+  the extent from `INVARIANTS.md`, requires it contiguous, and checks every
+  range claim anchored at the first invariant in tracked Markdown against it.
+  A range that does not start at 1 — CHANGELOG's "INVARIANT-39 through
+  INVARIANT-42", describing one release's scope — is deliberately left alone.
+  (This paragraph names the stale value rather than spelling it as a range,
+  because the gate reads prose and cannot tell a quotation from a claim; that
+  is the correct direction for it to fail in.)
 - `enforce_sigma_quadratic_threshold`'s summary line still said "scale state
   by sqrt(threshold/sigma)", the remedy its own `versionchanged:: 5.0` note
   records as a provable no-op and removed. That line is what `help()` and

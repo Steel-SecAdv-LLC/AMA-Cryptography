@@ -467,10 +467,17 @@ def scan_invariant_range_claims(repo: Path, highest: int) -> tuple[list[str], in
             if claimed == highest:
                 continue
             line = text[: match.start()].count("\n") + 1
+            # Collapse the matched text: a claim that wrapped across a line
+            # would otherwise be reported with a literal newline in it.
+            quoted = " ".join(match.group(0).split())
             problems.append(
                 f"  - {repo_relative(path, repo)}:{line}: claims "
-                f"{match.group(0)!r}, but INVARIANTS.md defines "
-                f"INVARIANT-1 through INVARIANT-{highest}"
+                f"{quoted!r}, but INVARIANTS.md defines "
+                f"INVARIANT-1 through INVARIANT-{highest}. If this is prose "
+                f"QUOTING a range that used to be wrong rather than stating "
+                f"the current one, write it as 'ending at INVARIANT-N' — this "
+                f"check reads prose and cannot tell a quotation from a claim, "
+                f"and that is the direction it should fail in."
             )
     return problems, checked
 

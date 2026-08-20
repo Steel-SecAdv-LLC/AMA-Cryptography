@@ -106,6 +106,29 @@ class TestInvariantRangeClaims:
         assert checked == 0
         assert problems == []
 
+    def test_a_wrapped_claim_is_caught_and_reported_on_one_line(
+        self, tool_module: ModuleType, tmp_path: Path
+    ) -> None:
+        """A claim that wraps must not escape, and must not be quoted back with
+        a newline in it."""
+        (tmp_path / "doc.md").write_text(
+            "See INVARIANTS.md, INVARIANT-1\n  through INVARIANT-42.\n", encoding="utf-8"
+        )
+        problems, checked = tool_module.scan_invariant_range_claims(tmp_path, 43)
+        assert checked == 1
+        assert len(problems) == 1
+        assert "INVARIANT-1 through INVARIANT-42" in problems[0]
+        assert "\n" not in problems[0]
+
+    def test_the_message_says_how_to_write_a_historical_quotation(
+        self, tool_module: ModuleType, tmp_path: Path
+    ) -> None:
+        """The check reads prose and cannot tell a quotation from a claim, so
+        the message has to name the escape rather than leave a writer stuck."""
+        (tmp_path / "doc.md").write_text("INVARIANT-1 through INVARIANT-42\n", encoding="utf-8")
+        problems, _checked = tool_module.scan_invariant_range_claims(tmp_path, 43)
+        assert "ending at INVARIANT-N" in problems[0]
+
     def test_a_gap_in_the_register_is_reported(
         self, tool_module: ModuleType, tmp_path: Path
     ) -> None:
