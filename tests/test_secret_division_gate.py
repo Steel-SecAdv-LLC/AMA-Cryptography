@@ -21,7 +21,7 @@ from __future__ import annotations
 import importlib.util
 import sys
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
@@ -95,6 +95,114 @@ def test_a_mnemonic_that_merely_starts_with_div_is_not_counted(gate: ModuleType)
         "divss/divsd currently ARE counted; if that changes, this test must "
         "change with it so the behaviour stays stated rather than assumed"
     )
+
+
+def test_aarch64_fdiv_is_counted(gate: ModuleType) -> None:
+    """`fdiv` matched neither the ``i?div`` arm nor ``udiv``/``sdiv``.
+
+    There is no floating-point arithmetic anywhere in this library, so an
+    ``fdiv`` appearing at all is worth failing on rather than passing over.
+    Measured: zero in both the x86-64 and the AArch64 shared object, so the
+    widening changes no verdict today — it closes the mnemonic, not a finding.
+    """
+    text = _disassembly(("arm_fp_function", ["mov", "fdiv", "ret"]))
+    divides, _symbols, _instructions = gate.inventory(text)
+    assert divides == {"arm_fp_function": 1}
+
+
+class TestDisassemblerSelection:
+    """Presence is not ability.
+
+    ``which("objdump") or which("llvm-objdump")`` picked by presence and then
+    committed.  GNU objdump from a distribution's binutils is built for the
+    host architecture only, so on an x86-64 host it answers an AArch64 object
+    with ``can't disassemble for architecture UNKNOWN!`` and a non-zero exit —
+    and this gate, which fails closed, returned 2 rather than running, while
+    ``llvm-objdump`` sat on the same PATH and reads the object perfectly.  The
+    KyberSlash regression gate therefore could not cover the AArch64 build at
+    all: the one where the NEON and SVE2 ML-KEM kernels live.
+    """
+
+    @staticmethod
+    def _fake_run(outcomes: dict[str, tuple[int, str, str]]) -> object:
+        def run(cmd: list[str], **_kwargs: object) -> object:
+            tool = Path(cmd[0]).name
+            code, out, err = outcomes[tool]
+            return SimpleNamespace(returncode=code, stdout=out, stderr=err)
+
+        return run
+
+    def test_the_second_tool_is_tried_when_the_first_cannot_read_the_object(
+        self, gate: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        library = tmp_path / "libama_cryptography.so"
+        library.write_bytes(b"\x7fELF")
+        monkeypatch.setattr(gate.shutil, "which", lambda name: f"/usr/bin/{name}")
+        monkeypatch.setattr(
+            gate.subprocess,
+            "run",
+            self._fake_run(
+                {
+                    "objdump": (1, "", "objdump: can't disassemble for architecture UNKNOWN!"),
+                    "llvm-objdump": (0, _disassembly(("f", ["mov", "ret"])), ""),
+                    "aarch64-linux-gnu-objdump": (0, "unused", ""),
+                }
+            ),
+        )
+        assert "f" in gate.disassemble(library)
+
+    def test_an_empty_success_is_not_accepted_as_a_disassembly(
+        self, gate: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Exit 0 with nothing on stdout is a tool that read nothing."""
+        library = tmp_path / "libama_cryptography.so"
+        library.write_bytes(b"\x7fELF")
+        monkeypatch.setattr(gate.shutil, "which", lambda name: f"/usr/bin/{name}")
+        monkeypatch.setattr(
+            gate.subprocess,
+            "run",
+            self._fake_run(
+                {
+                    "objdump": (0, "   \n", ""),
+                    "llvm-objdump": (0, _disassembly(("f", ["mov", "ret"])), ""),
+                    "aarch64-linux-gnu-objdump": (0, "unused", ""),
+                }
+            ),
+        )
+        assert "f" in gate.disassemble(library)
+
+    def test_every_failure_is_named_when_they_all_fail(
+        self, gate: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """`objdump failed` alone sent a reader at the object, not the tool."""
+        library = tmp_path / "libama_cryptography.so"
+        library.write_bytes(b"\x7fELF")
+        monkeypatch.setattr(gate.shutil, "which", lambda name: f"/usr/bin/{name}")
+        monkeypatch.setattr(
+            gate.subprocess,
+            "run",
+            self._fake_run(
+                {
+                    "objdump": (1, "", "bad architecture"),
+                    "llvm-objdump": (1, "", "unsupported target"),
+                    "aarch64-linux-gnu-objdump": (1, "", "not an aarch64 object"),
+                }
+            ),
+        )
+        with pytest.raises(RuntimeError) as excinfo:
+            gate.disassemble(library)
+        message = str(excinfo.value)
+        for tool in gate._DISASSEMBLERS:
+            assert tool in message, message
+
+    def test_no_disassembler_at_all_is_a_distinct_failure(
+        self, gate: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        library = tmp_path / "libama_cryptography.so"
+        library.write_bytes(b"\x7fELF")
+        monkeypatch.setattr(gate.shutil, "which", lambda _name: None)
+        with pytest.raises(FileNotFoundError):
+            gate.disassemble(library)
 
 
 # --------------------------------------------------------------------------

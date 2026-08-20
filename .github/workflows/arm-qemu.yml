@@ -68,6 +68,27 @@ jobs:
       - name: Test (ctest under QEMU user-mode)
         run: ctest --test-dir build-arm --output-on-failure -j"$(nproc)"
 
+      - name: No divide instruction may take a secret operand (KyberSlash, AArch64)
+        # The same gate `dudect.yml` runs against the x86-64 shared object,
+        # against the OTHER architecture this library ships kernels for.  It
+        # had never run here, and not because nobody wired it: the gate picked
+        # its disassembler by presence — `which("objdump")` — and the
+        # host's GNU objdump is built for x86-64 only, so it answered an
+        # AArch64 object with `can't disassemble for architecture UNKNOWN!`
+        # and the gate (correctly failing closed) returned 2.  It now tries
+        # each disassembler until one succeeds, and this job already has one
+        # that can: `aarch64-linux-gnu-objdump`, installed as a dependency of
+        # the `gcc-aarch64-linux-gnu` the step above pulls in.  Nothing extra
+        # is added to the job for this, and it does not depend on
+        # `llvm-objdump` happening to be on the runner image.
+        #
+        # Worth having on this architecture specifically: ML-KEM has NEON and
+        # SVE2 kernels that x86-64 never compiles, and the KyberSlash class is
+        # about which instructions the OBJECT ends up containing.
+        run: |
+          python3 tools/check_secret_division.py \
+            --lib build-arm/lib/libama_cryptography.so
+
   arm-qemu-sve2:
     name: AArch64 SVE2 kernels (VL=128 and VL=256)
     runs-on: ubuntu-latest

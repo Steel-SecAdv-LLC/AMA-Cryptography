@@ -110,22 +110,66 @@ REQUIRED_CLEAN = (
 
 _SYMBOL_RE = re.compile(r"^[0-9a-f]+ <(?P<name>[^>]+)>:$")
 _INSN_RE = re.compile(r"^\s+[0-9a-f]+:\s+(?P<mnemonic>[a-z][a-z0-9.]*)")
-_DIVIDE_RE = re.compile(r"^(i?div[a-z]*|udiv|sdiv)$")
+#: Divide mnemonics across the two architectures this library ships.
+#:
+#: x86-64: ``div``/``idiv`` with their operand-size suffixes, and the SSE
+#: forms (``divss``, ``divsd``, ``divps``, ``divpd``) which the ``i?div[a-z]*``
+#: arm already covers.
+#: AArch64: ``udiv``/``sdiv``, plus ``fdiv`` — spelled out because it matches
+#: neither of the other two arms.  There is no floating-point arithmetic
+#: anywhere in this library, so an ``fdiv`` appearing at all is worth failing
+#: on; measured on this tree, both the x86-64 and the AArch64 shared objects
+#: contain zero.
+_DIVIDE_RE = re.compile(r"^(i?div[a-z]*|udiv|sdiv|fdiv[a-z]*)$")
+
+
+#: Disassemblers to try, in order.  Every one of them is tried until one
+#: SUCCEEDS — presence is not ability.
+#:
+#: The previous form was ``which("objdump") or which("llvm-objdump")``, which
+#: picks by presence and then commits.  GNU ``objdump`` from a distribution's
+#: ``binutils`` is built for the host architecture only, so on an x86-64 host
+#: it answers an AArch64 object with ``can't disassemble for architecture
+#: UNKNOWN!`` and a non-zero exit — and this gate, which fails closed, returned
+#: 2 rather than running.  That is the correct verdict for "could not read it"
+#: and the wrong outcome overall: ``llvm-objdump`` was installed on the same
+#: host and handles the object perfectly, and the gate already knew its name.
+#:
+#: The consequence was that the KyberSlash regression gate could not cover the
+#: AArch64 build at all — the one where the NEON and SVE2 ML-KEM kernels live.
+#: Measured on this tree with the fallback in place, the AArch64 shared object
+#: reads 580 symbols / 60,784 instructions, three allowlisted divide sites all
+#: within their recorded ceilings, and all three REQUIRED_CLEAN symbols present
+#: and divide-free.
+_DISASSEMBLERS = ("objdump", "llvm-objdump", "aarch64-linux-gnu-objdump")
 
 
 def disassemble(library: Path) -> str:
-    objdump = shutil.which("objdump") or shutil.which("llvm-objdump")
-    if objdump is None:
-        raise FileNotFoundError("objdump (or llvm-objdump) is not on PATH")
-    result = subprocess.run(
-        [objdump, "-d", "--no-show-raw-insn", str(library)],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"objdump failed on {library}: {result.stderr.strip()[:300]}")
-    return result.stdout
+    """Disassembly text from the first available tool that can read ``library``.
+
+    Raises ``FileNotFoundError`` when none of :data:`_DISASSEMBLERS` is on
+    PATH, and ``RuntimeError`` — naming every attempt and its diagnostic —
+    when they are all present and all fail.  Failing with the whole list is
+    deliberate: "objdump failed" alone sent a reader looking at the object
+    when the answer was the tool.
+    """
+    attempts: list[str] = []
+    for name in _DISASSEMBLERS:
+        path = shutil.which(name)
+        if path is None:
+            continue
+        result = subprocess.run(
+            [path, "-d", "--no-show-raw-insn", str(library)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout
+        attempts.append(f"{name}: {(result.stderr or result.stdout).strip()[:200] or 'no output'}")
+    if not attempts:
+        raise FileNotFoundError("no disassembler on PATH; tried " + ", ".join(_DISASSEMBLERS))
+    raise RuntimeError(f"every available disassembler failed on {library} — " + "; ".join(attempts))
 
 
 def inventory(disassembly: str) -> tuple[dict[str, int], set[str], int]:
