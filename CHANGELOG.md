@@ -322,6 +322,27 @@ targeted runs did not, precisely because the gate's own CLI passed.  Running
 after the change was not equivalent to running the suite, and the difference
 was a real defect.
 
+**AUD-13 — the same class, one attribute further down, and this copy had
+already drifted.**  Following AUD-12 through the rest of
+`TestSuppressionHygiene` found a second copy: the class re-spelled the gate's
+own marker pattern.
+
+    gate:  #\s*(noqa|nosec|nosemgrep|pylint:\s*disable|type:\s*ignore)
+    test:  #\s*(noqa|nosec|            pylint:\s*disable|type:\s*ignore)
+
+`nosemgrep` is in one and not the other, so
+`test_no_suppressions_in_forbidden_dirs` — the test that asserts INVARIANT-13's
+absolute rule, that the forbidden trees carry no suppression *regardless of
+justification* — would have passed a `# nosemgrep` sitting in one of them while
+`tools/check_suppression_hygiene.py` reported it.  Unlike AUD-12 this copy was
+measurably weaker today, not merely fragile: planting
+`x = 1  # nosemgrep: rule-id -- planted (AB-001)` in
+`ama_cryptography/backend/` fails the repaired test by name and passes the
+drifted copy.  The pattern is imported now rather than re-spelled.
+
+A sweep for the general shape found nothing else: no other test module in the
+tree names a gate it never loads while defining its own regexes.
+
 Two further classes this branch has seen were swept and recorded rather than
 assumed.  `py/multiple-definition` has one hit tree-wide — `_ = …` twice in a
 row in `tools/monitoring/ama_cryptography_monitor_demo.py`, the conventional

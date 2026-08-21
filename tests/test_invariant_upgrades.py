@@ -351,7 +351,19 @@ class TestConstantTimeRequirements:
 class TestSuppressionHygiene:
     """INVARIANT-13: all suppressions must have justification + tracking ID."""
 
-    _SUPPRESSION_RE = re.compile(r"#\s*(noqa|nosec|pylint:\s*disable|type:\s*ignore)")
+    #: The gate's own marker pattern, imported rather than re-spelled.
+    #:
+    #: The class carried its own copy, and it had already drifted: the gate
+    #: matches ``nosemgrep`` and the copy did not, so
+    #: ``test_no_suppressions_in_forbidden_dirs`` would have passed a
+    #: ``# nosemgrep`` sitting in a directory INVARIANT-13 forbids outright
+    #: while ``tools/check_suppression_hygiene.py`` reported it.  Same defect
+    #: as ``_scan_violations`` above, one attribute further down.
+    @staticmethod
+    def _suppression_re() -> re.Pattern[str]:
+        from tools.check_suppression_hygiene import _SUPPRESSION_RE
+
+        return _SUPPRESSION_RE
 
     _FORBIDDEN_DIRS = (
         "src/c/",
@@ -427,7 +439,7 @@ class TestSuppressionHygiene:
                 continue
             for py_file in target.rglob("*.py"):
                 content = py_file.read_text(encoding="utf-8", errors="replace")
-                assert not self._SUPPRESSION_RE.search(
+                assert not self._suppression_re().search(
                     content
                 ), f"INVARIANT-13: suppression found in forbidden dir: {py_file}"
 
