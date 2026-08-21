@@ -431,12 +431,16 @@ def _expected_native_digest() -> Optional[bytes]:
     try:
         sig_mod = load_artefact_fields()
     except ArtefactSourceError:
-        # A present-but-unreadable artefact is handled by the gate in
-        # `__init__`, which runs before any load reaches here and refuses the
-        # import outright.  Returning None here would be the wrong answer for a
-        # caller that somehow arrives anyway, so refuse to supply a digest:
-        # `_try_load_library` treats None as "nothing to check against", and
-        # `__init__` has already made that state unreachable in practice.
+        # There is no digest to return: the artefact is present but unreadable.
+        #
+        # None is what `_try_load_library` reads as "nothing to check against",
+        # so on this branch the pre-load comparison does not happen.  That is
+        # only safe because it is unreachable on the import path:
+        # `__init__._refuse_tampered_bindings_before_import` calls
+        # `load_artefact_fields` first and raises ImportError on exactly this
+        # exception, so a tree with an unreadable artefact never reaches a load.
+        # Raising here instead would turn an already-refused import into a
+        # second, less specific error from a lower layer.
         return None
     if sig_mod is None:
         return None

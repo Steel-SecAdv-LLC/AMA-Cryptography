@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import NamedTuple
 
 import pytest
 
@@ -295,9 +296,11 @@ class TestTheDispatchGatingMatchesThat:
         property changed; the test was pinned to where the code happened to
         live.  ``TestTheBackendAcrossBuildConfigurations`` measures the same
         property by building three configurations and probing the result, but
-        it skips off x86 and on hosts without AES-NI, so this structural check
-        is the coverage everywhere else — which is why it is repaired rather
-        than deleted.
+        it skips off x86 and where no compiler or CMake is available, so this
+        structural check is the coverage everywhere else — which is why it is
+        repaired rather than deleted.  It no longer skips on an x86 host
+        WITHOUT AES-NI: the probe reports the CPU's own answer and the test
+        asserts the software backend there instead.
         """
         terminal = 'return "bitsliced-software"'
         assert DISPATCH.count(terminal) == 1, (
@@ -356,10 +359,39 @@ class TestTheDispatchGatingMatchesThat:
 # ---------------------------------------------------------------------------
 _PROBE_C = """
 #include <stdio.h>
+#if defined(__x86_64__) || defined(__i386__)
+#include <cpuid.h>
+#endif
 #include "ama_dispatch.h"
+
+/* Whether THIS CPU has both AES-NI and PCLMULQDQ, asked of the CPU itself.
+ *
+ * This used to be `" aes" in /proc/cpuinfo and "pclmulqdq" in /proc/cpuinfo`,
+ * read from Python.  That file exists only on Linux, so the read raised
+ * OSError anywhere else, the helper answered "no AES-NI", and the backend
+ * assertion below was skipped on a host that has the ISA.  Measured on the
+ * ten windows-latest jobs, which are x86-64 with AES-NI and reported "host
+ * has no AES-NI/PCLMULQDQ"; the macOS runners never reached it because
+ * macos-latest is aarch64 and took the `not _x86_host()` branch instead.  An
+ * Intel Mac or any other non-Linux x86 host has the same hole.  CPUID leaf 1
+ * answers the question wherever the probe compiles at all, and the probe
+ * already needs a C compiler. */
+static int host_has_aes_ni(void) {
+#if defined(__x86_64__) || defined(__i386__)
+    unsigned int eax, ebx, ecx, edx;
+    if (!__get_cpuid(1u, &eax, &ebx, &ecx, &edx)) {
+        return 0;
+    }
+    return ((ecx & (1u << 25)) != 0u) && ((ecx & (1u << 1)) != 0u);
+#else
+    return 0;
+#endif
+}
+
 int main(void) {
     ama_dispatch_init();
-    printf("%s\\n", ama_aes_gcm_active_backend());
+    printf("HOST_AES_NI=%d\\n", host_has_aes_ni());
+    printf("BACKEND=%s\\n", ama_aes_gcm_active_backend());
     return 0;
 }
 """
@@ -379,22 +411,21 @@ _CONFIGURATIONS = (
 _HARDWARE_BACKENDS = frozenset({"aes-ni-pclmul", "vaes-avx2"})
 
 
+class _Probe(NamedTuple):
+    """What one built-and-run probe binary reported."""
+
+    host_has_aes_ni: bool
+    backend: str
+
+
 def _x86_host() -> bool:
     import platform
 
     return platform.machine().lower() in {"x86_64", "amd64", "i386", "i686"}
 
 
-def _has_aes_ni() -> bool:
-    """AES-NI and PCLMULQDQ, from the host's own CPU flags."""
-    try:
-        flags = Path("/proc/cpuinfo").read_text(encoding="utf-8")
-    except OSError:
-        return False
-    return " aes" in flags and "pclmulqdq" in flags
-
-
 @pytest.mark.slow
+@pytest.mark.requires_host_isa("x86")
 class TestTheBackendAcrossBuildConfigurations:
     """Build the library three ways and ask which AES-GCM kernel is installed.
 
@@ -403,7 +434,7 @@ class TestTheBackendAcrossBuildConfigurations:
     """
 
     @staticmethod
-    def _build_and_probe(tmp_path: Path, label: str, options: list[str]) -> tuple[str, Path]:
+    def _build_and_probe(tmp_path: Path, label: str, options: list[str]) -> tuple[_Probe, Path]:
         import shutil
         import subprocess
 
@@ -465,7 +496,11 @@ class TestTheBackendAcrossBuildConfigurations:
         assert link.returncode == 0, link.stderr[-2000:]
         run = subprocess.run([str(probe_bin)], capture_output=True, text=True, timeout=300)
         assert run.returncode == 0, run.stderr[-2000:]
-        return run.stdout.strip(), static_lib
+        fields = dict(line.split("=", 1) for line in run.stdout.splitlines() if "=" in line)
+        assert set(fields) == {"HOST_AES_NI", "BACKEND"}, run.stdout
+        return _Probe(host_has_aes_ni=fields["HOST_AES_NI"] == "1", backend=fields["BACKEND"]), (
+            static_lib
+        )
 
     @staticmethod
     def _defined_symbols(static_lib: Path) -> set[str]:
@@ -486,21 +521,35 @@ class TestTheBackendAcrossBuildConfigurations:
         self, tmp_path: Path, label: str, options: list[str]
     ) -> None:
         if not _x86_host():
+            # Declared on the class as `requires_host_isa("x86")`, so the CI
+            # backend-skip escalation in tests/conftest.py leaves this alone
+            # instead of reporting "build the C library" on an aarch64 runner.
             pytest.skip("AES-NI gating is an x86 property")
-        if not _has_aes_ni():
-            pytest.skip("host has no AES-NI/PCLMULQDQ, so no hardware path can install")
-        backend, static_lib = self._build_and_probe(tmp_path, label, options)
-        assert backend in _HARDWARE_BACKENDS, (
-            f"with {' '.join(options)} the active AES-GCM backend is {backend!r}. "
-            "Hardware AES must not depend on the SIMD or AVX2 build options — "
-            "CMakeLists.txt has said so since before it was true."
-        )
+        probe, static_lib = self._build_and_probe(tmp_path, label, options)
+        if probe.host_has_aes_ni:
+            assert probe.backend in _HARDWARE_BACKENDS, (
+                f"with {' '.join(options)} the active AES-GCM backend is "
+                f"{probe.backend!r}. Hardware AES must not depend on the SIMD or "
+                "AVX2 build options — CMakeLists.txt has said so since before it "
+                "was true."
+            )
+        else:
+            # Not a skip: "no hardware kernel may install on a CPU without the
+            # ISA" is a property of the dispatcher too, and it is checkable
+            # here.  The former code skipped the whole parametrisation on such
+            # a host and lost the symbol-level assertions below with it.
+            assert probe.backend not in _HARDWARE_BACKENDS, (
+                f"the host reports no AES-NI/PCLMULQDQ, yet the dispatcher wired "
+                f"{probe.backend!r} — a hardware kernel on a CPU that cannot run it"
+            )
 
-        # Non-vacuity, at the symbol level: the AES-NI kernel must be LINKED in
-        # every configuration, and the AVX2-only kernels must genuinely be
-        # absent from the two that turn AVX2 off.  Without this the three
-        # parameter sets could be building the same library and the test would
-        # pass on a coincidence.
+        # Non-vacuity, at the symbol level, and the build-time half of the
+        # finding: the AES-NI kernel must be LINKED in every configuration, and
+        # the AVX2-only kernels must genuinely be absent from the two that turn
+        # AVX2 off.  This does not depend on the host's CPU at all — which is
+        # why it now runs on every x86 host rather than only those with AES-NI.
+        # Without it the three parameter sets could be building the same library
+        # and the test would pass on a coincidence.
         symbols = self._defined_symbols(static_lib)
         assert (
             "ama_aes256_gcm_encrypt_avx2" in symbols

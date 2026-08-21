@@ -102,7 +102,10 @@ autodoc_default_options = {
     "exclude-members": "__weakref__",
 }
 autodoc_typehints = "description"
-autodoc_type_aliases: dict[str, str] = {}
+# autodoc_type_aliases is deliberately not set: Sphinx already defaults it to
+# {}, so assigning {} here was a no-op that no code and no builder ever read
+# (CodeQL: "Unused global variable").  Add it back with real entries the day a
+# type alias needs a display name.
 
 # Autosummary settings
 autosummary_generate = True
@@ -238,7 +241,8 @@ html_show_copyright = True
 htmlhelp_basename = "AmaCryptographydoc"
 
 # LaTeX output
-latex_elements: dict[str, str] = {}
+# latex_elements is deliberately not set: {} is Sphinx's own default, so the
+# assignment was a no-op nothing read (CodeQL: "Unused global variable").
 latex_documents = [
     (master_doc, "AmaCryptography.tex", f"{project} Documentation", author, "manual"),
 ]

@@ -77,7 +77,6 @@ NATIVE_LIB = _resolve_native_lib()
 
 pytestmark = pytest.mark.fips
 
-_ARTEFACT = "ama_cryptography._integrity_signature"
 _GOOD_DIGEST = "ab" * 32
 _OTHER_DIGEST = "cd" * 32
 

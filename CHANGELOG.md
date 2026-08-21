@@ -31,6 +31,241 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > Compare `[4.0.0]` below, which is dated because it *is* released: tag
 > `v4.0.0`, published 2026-08-02.
 
+### Verification pass, tenth (2026-08-21) — the checks this branch added, run in the twenty-seven jobs CI actually has
+
+The ninth pass was verified on one host: Linux, x86-64 with AES-NI, Python
+3.11, the pinned lint toolchain in the ambient interpreter.  CI runs the same
+suite in twenty-seven jobs over seventeen distinct (OS, Python) pairs, none of
+them carrying the lint pins: `ci.yml::test` is
+`{ubuntu-latest, windows-latest} x {3.10 … 3.14}` plus two `include` rows for
+`ubuntu-24.04-arm` (3.11 and 3.13) — twelve — and
+`ci-build-test.yml::python-package` is `{ubuntu, macos, windows}-latest x
+{3.10 … 3.14}` — fifteen.  All twenty-seven went red, and so did the two
+aggregating gates that depend on them; not one of the failures was a false
+alarm, and each named a check that could only pass on the host it was written
+on.  Four causes, all introduced by this branch, plus five CodeQL alerts and
+nine findings from a re-audit of the branch's own corrections.
+
+#### The type check moved back to the job that pins its toolchain
+
+**CI-RED-01 — `test_the_repository_is_fully_covered` ran `mypy --strict` over
+the whole tree and asserted exit 0.**  That is a pinned-toolchain lint gate
+inside a test executed by every one of those twenty-seven jobs, none of which
+provisions the lint environment, and the verdict was about the environment
+rather than about this repository:
+
+* the `[dev]` extra ships `mypy` but did not ship `types-PyYAML`, so thirteen
+  modules reported `Library stubs not installed for "yaml"` and the run exited
+  1 on every Linux and macOS job;
+* `[dev]` floats `mypy>=2.3.0` while the lint jobs pin `2.3.0`, and 2.3.1 hit
+  an `INTERNAL ERROR` on `benchmarks/generate_competitive.py` on the Windows
+  runners;
+* with `python_version = "3.10"`, mypy stopped at `numpy/__init__.pyi:737:
+  Type statement is only supported in Python 3.12 and greater` — "errors
+  prevented further checking", exit 2, a truncated coverage report.  Observed
+  on the Windows 3.12 job and on no Linux job in either run; the mechanism is
+  a NumPy whose own stubs use the 3.12 `type X = ...` statement, which is a
+  property of the wheel each runner resolved and is not recorded in the logs
+  these figures come from, so it is stated as what was seen rather than as a
+  diagnosis.
+
+None of those is a fact about the type-check SCOPE, which is what the gate
+defends.  The full-tree run stays in the one job that pins its toolchain, where
+`tools/check_type_check_scope.py` already reads the report it writes; the
+pytest module now pins that wiring instead, and does it on every platform
+without running mypy at all:
+
+* the scope gate really is wired to the report mypy writes, in the same job,
+  with neither step `continue-on-error` and no `if:` on the gate — in **both**
+  workflows;
+* the two workflows type-check the **same** set of paths (`ci-build-test.yml`
+  claims that in a comment and nothing checked it);
+* every tracked `.py` file is under one of the paths the invocation names —
+  the drift the gate exists for, caught one step earlier;
+* `[tool.mypy]` sets no `exclude` / `files` / `packages` / `modules` /
+  `follow_imports`, any of which could narrow the run below the paths the
+  workflows name without touching either workflow.
+
+Six mutations, each reverted after: dropping the gate step from `ci.yml`;
+narrowing `ci-build-test.yml`'s scope by one directory; adding a tracked
+`plugins/thing.py`; adding `exclude` to `[tool.mypy]`; marking the gate step
+`continue-on-error: true`; and removing `--linecoverage-report`.  All six fail
+the new tests.
+
+**DEP-01 — the `[dev]` extra could not run the lint it ships.**  `PyYAML` is
+imported directly by thirteen modules under `tests/` and `tools/` and arrived
+only as a transitive dependency of `bandit`; `types-PyYAML` is what
+`mypy --strict` needs to read them.  `requirements-dev.txt` declared both; the
+extra was the outlier.  Both are in it now, beside `types-setuptools`, which is
+there for the identical reason.
+
+#### An instruction set the host does not have is not a missing backend
+
+**CI-RED-02 — three x86-only parametrisations failed on every ARM, Windows and
+macOS job.**  `tests/conftest.py` converts any skip whose reason names a
+cryptographic backend into a hard CI failure, because a backend missing after a
+build is a defect.  `TestTheBackendAcrossBuildConfigurations` skips with
+"AES-NI gating is an x86 property" and "host has no AES-NI/PCLMULQDQ" — reasons
+that have to name AES-NI to be informative, and naming it is what matched
+`_mentions_backend`.  The escalation then told the operator to build the C
+library, which cannot produce an x86 AES-NI kernel on an aarch64 runner.
+
+The exemption added is a declared capability re-checked against the real host,
+not a reason-text pattern: `@pytest.mark.requires_host_isa("x86")` names a
+token from `HOST_ISA_PREDICATES`, and the hook asks the host.  On a host that
+HAS the capability the skip is escalated exactly as before, so the marker
+cannot hide a backend a build should have produced, and an unregistered token
+is not an exemption either, so a typo fails closed.  All three properties are
+pinned in `tests/test_conftest_backend_skip_scoping.py` and mutation-verified:
+making the exemption unconditional, making an unknown token exempt, and
+removing the hook's call each fail it.
+
+The second skip is gone rather than exempted.  `_has_aes_ni()` read
+`/proc/cpuinfo` and returned `False` on `OSError`, so on any non-Linux host it
+answered "no AES-NI" and silently disabled the assertion on a machine that has
+the ISA — measured on the ten windows-latest jobs, which are x86-64 with AES-NI
+and reported exactly that.  (The macOS runners never reached it: `macos-latest`
+is aarch64, and every macOS job took the `not _x86_host()` branch instead, which
+is how the logs distinguish the two.)  The probe binary the test already builds now asks CPUID
+leaf 1 directly, which answers wherever the probe compiles, and the test
+asserts in both directions: a hardware backend where the CPU has AES-NI, and
+`bitsliced-software` where it does not — a hardware kernel wired on a CPU that
+cannot run it is also a defect.  The symbol-level assertions (the AES-NI kernel
+linked in all three configurations, the AVX2 kernels absent from the two that
+disable AVX2) are the build-time half of the finding and no longer depend on
+the host's CPU at all, so they now run on every x86 host rather than only those
+with AES-NI.
+
+#### A library found by a name one platform does not use
+
+**CI-RED-03 — `tests/test_artefact_cache_poisoning.py` looked for
+`libama_cryptography*`.**  On Windows the file is `ama_cryptography.dll` — no
+`lib` prefix — so the fixture skipped, and the CI escalation turned all four
+tests in the module into errors on every windows-latest job.  On macOS the
+tamper target was `sorted(glob(...))[0]`, which is
+`libama_cryptography.5.0.0.dylib` because `.5` sorts before `.d`, while the
+loader opens `libama_cryptography.dylib`: the pre-load digest check compared an
+UNTAMPERED file, passed, and POST caught the poisoned cache one stage later, so
+`test_a_forged_native_digest_in_pycache_does_not_pass` failed on all five
+macos-latest jobs asserting "refused before mapping" — for the one reason that
+would also let a real tampered library through.
+
+Both now use `tests/conftest.py::native_library_path`, whose candidate list is
+`pqc_backends._get_lib_names()`'s, in that function's order — Windows first,
+because there CMake produces the unprefixed spelling and `_get_lib_names` tries
+it first.  A tree holding both spellings resolved to the wrong one before; the
+three platform orders are pinned by constructed names, so the runner this suite
+lands on can only exercise one of them and all three are still checked.
+
+#### CodeQL
+
+Five alerts, all raised by this branch's own edits.  `docs/conf.py` assigned
+`{}` to `autodoc_type_aliases` and `latex_elements` — Sphinx's own defaults for
+both, read by nothing; the annotations this branch added when the file entered
+the type check are what surfaced them, and the assignments are gone.  The two
+`_Absorbing` protocols in `_build_sign.py` and `_self_test.py` had `...`
+bodies, which is literally an expression statement with no effect; they carry a
+docstring instead, which says what the body is for rather than suppressing the
+rule.  `tests/test_integrity_repair_gate.py` carried an unused `_ARTEFACT`
+constant, now removed.
+
+#### Nine findings from re-auditing this branch's own corrections
+
+**AUD-01 — a comment that called its own code the wrong answer.**
+`pqc_backends._expected_native_digest`'s `except ArtefactSourceError` arm read
+"Returning None here would be the wrong answer ... so refuse to supply a
+digest" and then returned None, which is the same act — on the fail-open branch
+of a pre-load security check.  Rewritten to state what is actually true: None
+means the pre-load comparison does not happen, and that is safe only because
+`__init__._refuse_tampered_bindings_before_import` raises on this exception
+before any load reaches here.
+
+**AUD-02 — `check_suppression_hygiene` never saw `except ModuleNotFoundError`.**
+The optional-import pass short-circuited on `"ImportError" not in source`, and
+`"ModuleNotFoundError"` does not contain that substring, so a module guarded
+with that spelling was dropped before it was parsed — while the AST pass behind
+the filter has always accepted both.  Both call sites now use
+`_may_hold_a_guarded_import`.
+
+That pass had no tests, which is how it survived — and the distinction
+matters, because the module is not untested: `tests/test_invariant_upgrades.py`
+covers the first pass (`check_source`, `effective_suppressions`, `main`) and
+the second (`scan_c_tree`, `c_tree_files`) in both directions, and touches
+neither `scan_optional_imports` nor `_third_party_import_fallback_lines`.  A
+tool two-thirds covered reads as covered, which is the same shape as the
+"row whose neighbour is checked reads as checked" defect in DOC-06.
+`tests/test_suppression_hygiene_gate.py` closes the third pass: all four
+accepted spellings (`ImportError`, `ModuleNotFoundError`, a tuple clause, a
+nested try) driven through the pre-filter, the AST pass and the scan, plus the
+remedy the diagnostic names, plus the shipped tree.
+
+**AUD-03 — a denial in one clause exempted a live claim in another.**
+`check_verification_claim_honesty`'s formal-verification exemption was tested
+against the whole SENTENCE, so "This is not a claim of formal verification; the
+AES core is formally verified." passed on the strength of its first clause.
+Every exemption pattern quotes the claim it denies, so the test is now overlap
+with the claim's own span.  A second, narrower arm keeps the citation form this
+repository uses working — a claim inside a quotation, in a sentence that also
+carries a denial, is text being reported (Klein et al.'s paper title; the
+heading that "used to read" one) — and an UNQUOTED claim beside a denial is
+still reported, which is the laundering the sentence-wide rule allowed.
+
+**AUD-04 — a negation cue that suppressed nothing and could suppress anything.**
+`(said|stated|read|listed|recorded|documented|asserted|promised) ... was` over
+an eighty-character window: "read", "listed" and "recorded" are ordinary words,
+so "the verifier read the token and the result was returned" would silence
+every claim beside it.  Measured on the tree at the time: removing it changed
+the gate's output not at all — six OK lines, exit 0 — so its entire effect was
+latent over-suppression on a fail-open path.  Removed; the two cues that remain
+name the act of reporting ("told readers", "used to say") and cannot be written
+by accident.
+
+**AUD-05 — DOC-07 stated numbers that never appeared in the document.**  The
+entry said `docs/METRICS_REPORT.md` narrated 4,085 against a table row of
+4,168; the row was 4,180, and the "current figures" sentence quoted a third
+number that had already gone stale.  Corrected, and the absolute figure is
+dropped: it moves with every test added, and a number in a changelog entry is
+not a number anything re-measures.
+
+**AUD-06 — the "40 errors" that justified the Makefile toolchain change.**  The
+entry claimed the ambient `mypy` reported 40 errors the pinned one does not,
+"reproduced exactly by running mypy 2.3.0 with `--no-site-packages`".  Neither
+part reproduces: on the merge base that command reports the same 4 errors in 2
+files as the plain one, and `--no-site-packages` changes nothing at that scope.
+Re-measured with both binaries — over the scope `ci.yml` type-checks, 1.19.1
+reports 499 errors in 44 files where 2.3.0 reports 486 in 30 — and the entry and
+the `Makefile` comment both now say that.
+
+**AUD-07 — "every tool in the Makefile" was ten recipe lines short.**  Three
+were bare console scripts (`sphinx-build`, and `pip-audit` in both
+`security-audit` and `security-scan`) and seven were a hardcoded `python3`
+rather than `$(PYTHON)` — `setup.py build_ext`, `benchmark_suite.py`,
+`-m build`, both severity gates, `-m cProfile`, and the `pstats` one-liner.
+All ten now go through `$(RUN)` or `$(PYTHON)`.
+
+`semgrep` deliberately does not, and the first version of this entry gave a
+reason that was false — "not installed by any lane in this repository".  It is:
+`ci.yml`'s static-analysis job installs a pinned `semgrep==1.74.0` and invokes
+the console script.  The real reason is upstream's: semgrep 1.38.0 deprecated
+the module entry point ("Please simply run `semgrep` instead"), so routing it
+that way would pin a path upstream is removing, and matching what CI invokes is
+the better consistency.  The cost is stated at the call site rather than
+elided: `$(RUN)` exists to pick the interpreter's copy of a tool over a console
+script from another environment, and semgrep does not get that guarantee here.
+
+**AUD-08 — "eleven entry points" was thirteen.**  `INVARIANTS.md` and `ci.yml`
+both described `tests/test_keygen_pct.py` as driving a hand-written list of
+eleven keygen entry points; it drives thirteen.  The argument does not depend on
+the number — `tools/check_keygen_pct.py` discovers 19 from the module's AST,
+which is the point — but a count stated twice and wrong twice is still wrong.
+
+**AUD-09 — `src/c/internal/` holds eight headers, not five.**  `README.md`'s C
+inventory, which DOC-09 declared complete, listed five and omitted
+`ama_ct_barrier.h`, `ama_testing_exports.h` and `ama_x25519_fe64_mulx.h`.
+Completed, and now measured: `check_source_inventory_counts` reads both halves
+of that line against the tree, so the row that sat one line from two gated
+inventories is gated too.
+
 ### Verification pass, ninth (2026-08-21) — a resonance detector that could not say "no", a quadratic hot path, and twelve documents describing a tree that is not this one
 
 Thirty-seven findings, raised by reading each subsystem against the standard or
@@ -456,9 +691,12 @@ three corrected; the gate now recognises the C-suite spellings and gained
 is checked against the tree.
 
 **DOC-07** — `docs/METRICS_REPORT.md` contradicted its own gated table,
-narrating a static count of 4,085 next to a table row of 4,168.  Regenerated
-from `update_docs.py`; the current figures are 4,297 functions across 179
-files, and both the prose and the table come from the same generator.
+narrating a static count of 4,085 next to a table row of 4,180.  Regenerated
+from `update_docs.py`, so the prose and the table now come from one source and
+cannot disagree; the aggregate itself is checked against the report's own
+published reproduction command by `tools/check_documented_counts.py`.  No
+absolute figure is repeated here: it moves with every test added, and a number
+in a changelog entry is not a number anything re-measures.
 
 **DOC-09** — `README.md`'s C library inventory omitted two translation units
 and one Python module added on this branch.  Completed, and covered by the same
@@ -645,14 +883,24 @@ found the four `dna_codes` calls.
 `make lint` was running `mypy ama_cryptography/ --ignore-missing-imports`
 against the bare `mypy` on `PATH`, which resolved to a uv-managed tool install
 (`~/.local/share/uv/tools/mypy/bin/python`) at version **1.19.1** while the
-pinned toolchain is 2.3.0.  Two differences, and the one that mattered is not
-the version: that install has its own isolated site-packages containing mypy
-and nothing else, so it could not see the project's dependencies.  It reported
-**40 errors** the pinned mypy does not — reproduced exactly by running mypy
-2.3.0 with `--no-site-packages`, which is what isolates them.  A green
-`make lint` therefore said nothing about what CI would do, in either
-direction.  Every tool in the Makefile now runs as `$(PYTHON) -m <tool>`, so
-`make lint`, pre-commit and CI are the same toolchain by construction.
+pinned toolchain is 2.3.0 — and `[tool.mypy]` sets `python_version = "3.10"`,
+which mypy 1.x accepts with different semantics.  Measured on the merge base,
+over the scope `ci.yml` type-checks: **1.19.1 reports 499 errors in 44 files
+where 2.3.0 reports 486 in 30**.  Over the narrow scope `make lint` actually
+used, both report the same 4 errors in 2 files — which is the other half of the
+problem: the target was reading a third of the tree with an unpinned tool, so a
+green `make lint` said nothing about what CI would do, in either direction.
+
+(An earlier revision of this entry put the difference at "40 errors ...
+reproduced exactly by running mypy 2.3.0 with `--no-site-packages`".  Neither
+part reproduces: on the merge base that command reports the same 4 errors as
+the plain one, and `--no-site-packages` changes nothing at this scope.  The
+numbers above are what the two binaries actually print.)
+
+Every tool in the Makefile now runs as `$(PYTHON) -m <tool>`, so `make lint`,
+pre-commit and CI are the same toolchain by construction — with one exception,
+recorded at its call site: `semgrep` stays a console script because semgrep
+1.38.0 deprecated `python -m semgrep` upstream.
 
 The reverse hazard — green locally, red in CI — is the one the type-check step
 already warned about, and widening the scope walked straight into it.  The CI

@@ -307,16 +307,23 @@ NEGATION_CUES: tuple[re.Pattern[str], ...] = (
     # CHANGELOG entry that withdrew the RFC 3161 claims quotes each retired
     # sentence and refutes it in the NEXT one ('...was "Verify TSA signature and
     # time bounds". Neither happens.'), which the line rule happened to cover
-    # and a sentence rule does not.  Attribution to a named document in the past
-    # tense is the citation form this repository actually uses; recognising it
-    # is narrower than widening the negation window to the following sentence,
-    # which would re-open the over-suppression this scoping fixed.
+    # and a sentence rule does not.
+    #
+    # These two cues are the whole set, and both name the act of reporting
+    # ("told readers ...", "used to say ..."), which is why they cannot be
+    # written by accident.  A third was tried —
+    #
+    #     (said|stated|read|listed|recorded|documented|asserted|promised)
+    #     [^.]{0,80}?\bwas\b
+    #
+    # — and removed: "read", "listed" and "recorded" are ordinary words in this
+    # repository's prose, so an eighty-character window to any "was" made
+    # sentences like "the verifier read the token and the result was returned"
+    # suppress every claim beside them.  Measured on the tree at the time it was
+    # removed: it suppressed NOTHING (the gate reported the same six OK lines
+    # and exit 0 without it), so its entire effect was latent over-suppression
+    # on a fail-open path.
     _P(r"\btold readers\b", re.I),
-    _P(
-        r"\b(?:said|stated|read|listed|recorded|documented|asserted|promised)\b"
-        r"[^.]{0,80}?\bwas\b",
-        re.I,
-    ),
     _P(r"\bused\s+to\s+(?:say|read|state|claim|list|record|document)\b", re.I),
 )
 
@@ -678,10 +685,51 @@ _FORMAL_EXEMPT_RE = tuple(
 #: claim cannot be hidden from the exemption patterns by bolding one word.
 _MD_EMPHASIS_RE = re.compile(r"[*_`]+")
 
+#: A double-quoted span.  A claim inside one is text this document REPORTS —
+#: the title of a cited paper, a heading that used to read that way — not text
+#: it asserts.  Bounded length so an unbalanced quote cannot swallow the rest
+#: of a sentence and exempt everything in it.
+_QUOTED_SPAN_RE = re.compile(r"\"[^\"\n]{0,300}\"|“[^”\n]{0,300}”")
 
-def _formal_claim_is_qualified(text: str) -> bool:
+
+def unqualified_formal_claims(text: str) -> list[str]:
+    """The claims in ``text`` that no exemption covers, as matched substrings.
+
+    The exemption is tested against the CLAIM's own span, not against the
+    sentence.  Every pattern in :data:`_FORMAL_EXEMPT_RE` quotes the claim it
+    denies ("not been formally verified" contains "formally verified"), so an
+    overlap test is exact — and it closes a laundering hole the sentence-scoped
+    version had::
+
+        This is not a claim of formal verification; the AES core is formally
+        verified.
+
+    One sentence, one denial, one live claim, and the denial exempted both.
+    Markdown emphasis is stripped first, so ``**not** been formally verified``
+    is recognised; offsets are taken in the stripped text so the spans line up.
+    """
     plain = _MD_EMPHASIS_RE.sub("", text)
-    return any(pattern.search(plain) for pattern in _FORMAL_EXEMPT_RE)
+    exemptions = [
+        match.span() for pattern in _FORMAL_EXEMPT_RE for match in pattern.finditer(plain)
+    ]
+    quoted = [match.span() for match in _QUOTED_SPAN_RE.finditer(plain)]
+    unqualified: list[str] = []
+    for claim in _FORMAL_CLAIM_RE.finditer(plain):
+        start, end = claim.span()
+        if any(e_start < end and start < e_end for e_start, e_end in exemptions):
+            continue
+        # Second, narrower arm: the claim sits inside a quotation AND the
+        # sentence carries a denial elsewhere.  That is the citation form this
+        # repository uses — Klein et al.'s paper title, and the heading that
+        # "used to read 'Formal Verification Checklist'" — where the quoted
+        # words are the subject being discussed rather than a claim being made.
+        # Narrower than the sentence-wide rule this replaced, because an
+        # UNQUOTED claim beside a denial is still reported, which is the
+        # laundering the sentence-wide rule allowed.
+        if exemptions and any(q_start <= start and end <= q_end for q_start, q_end in quoted):
+            continue
+        unqualified.append(claim.group(0))
+    return unqualified
 
 
 #: Sentence boundary: a full stop, question or exclamation mark followed by
@@ -726,14 +774,12 @@ def scan_for_formal_verification_claims(repo: Path = REPO) -> list[str]:
         if not _FORMAL_CLAIM_RE.search(block):
             continue
         for sentence in _SENTENCE_SPLIT_RE.split(block):
-            if not _FORMAL_CLAIM_RE.search(sentence):
-                continue
-            if _formal_claim_is_qualified(sentence):
-                continue
-            problems.append(
-                f"{_rel(path, repo)}:{number}: claims formal verification, which "
-                f"this library has not undergone — {sentence.strip()[:160]}"
-            )
+            for claim in unqualified_formal_claims(sentence):
+                problems.append(
+                    f"{_rel(path, repo)}:{number}: claims formal verification "
+                    f"({claim!r}), which this library has not undergone — "
+                    f"{sentence.strip()[:160]}"
+                )
     return problems
 
 

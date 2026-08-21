@@ -1139,14 +1139,15 @@ jobs:
       # claimed tests/test_keygen_pct.py enforced this ("a new keygen path that
       # forgets the test fails the coverage assertion") and it does not: that
       # test monkeypatches the three helpers into recorders, calls a HAND-
-      # WRITTEN list of eleven entry points, builds `expected` alongside, and
-      # asserts the two lists match.  A twelfth keygen that omits its pairwise
-      # test is never called by it, so both lists are unchanged and it passes.
+      # WRITTEN list of thirteen entry points, builds `expected` alongside, and
+      # asserts the two lists match.  A fourteenth keygen that omits its
+      # pairwise test is never called by it, so both lists are unchanged and it
+      # passes.
       # Measured: adding an unwired `native_widget_keypair()` left that test at
       # 17 passed / exit 0 while this gate reported the violation by name.
       #
       # tools/check_keygen_pct.py discovers the entry points from the module's
-      # AST — 19 today, against the test's eleven — and fails on any that does
+      # AST — 19 today, against the test's thirteen — and fails on any that does
       # not reach pairwise_test_signature / _kem / _agreement, directly or
       # through one level of delegation.  Both directions are pinned by
       # tests/test_keygen_pct_gate.py.

@@ -325,6 +325,25 @@ _TYPE_IGNORE_RE = re.compile(r"#\s*type:\s*ignore")
 _FIRST_PARTY_PREFIXES = ("ama_cryptography", "ama_cryptography_monitor", "tools", "tests")
 
 
+def _may_hold_a_guarded_import(source: str) -> bool:
+    """Cheap pre-filter: could this file possibly hold a guarded optional import?
+
+    It must name at least one of the two spellings the AST pass accepts, and
+    carry a suppression at all.  The filter used to test
+    ``"ImportError" not in source``, and
+    ``"ModuleNotFoundError"`` does not contain that substring — so a module
+    whose optional import is guarded by the ``ModuleNotFoundError`` spelling
+    was dropped here and never reached
+    :func:`_third_party_import_fallback_lines`, which handles both.  The hazard
+    this pass exists for — a ``# type: ignore`` that is required where the
+    package is installed and an error under ``warn_unused_ignores`` where it is
+    not — is identical for either spelling.
+    """
+    if "type:" not in source:
+        return False
+    return "ImportError" in source or "ModuleNotFoundError" in source
+
+
 def _third_party_import_fallback_lines(source: str) -> set[int]:
     """1-based line numbers inside an ``except ImportError`` whose ``try``
     imports a module that is NOT first-party.
@@ -389,7 +408,7 @@ def scan_optional_imports(repo_root: Path) -> list[str]:
                 source = path.read_text(encoding="utf-8")
             except OSError:
                 continue
-            if "ImportError" not in source or "type:" not in source:
+            if not _may_hold_a_guarded_import(source):
                 continue
             covered = _third_party_import_fallback_lines(source)
             if not covered:
@@ -408,7 +427,7 @@ def scan_optional_imports(repo_root: Path) -> list[str]:
         if not path.is_file():
             continue
         source = path.read_text(encoding="utf-8")
-        if "ImportError" not in source or "type:" not in source:
+        if not _may_hold_a_guarded_import(source):
             continue
         covered = _third_party_import_fallback_lines(source)
         for lineno, line in enumerate(source.splitlines(), start=1):

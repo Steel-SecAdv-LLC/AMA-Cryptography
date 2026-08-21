@@ -54,11 +54,35 @@ import subprocess
 import sys
 import textwrap
 from pathlib import Path
+from typing import Any
 
 import pytest
 
+from tests.conftest import native_library_path
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PKG_DIR = REPO_ROOT / "ama_cryptography"
+
+#: Every assertion in this module is about the TEXT a refusal produced — which
+#: gate fired, and therefore how much code had run before it did.  Read through
+#: the runner's code page, that verdict depends on the console rather than on
+#: the package: the import-time diagnostics go out through ``logging``, whose
+#: handler turns a UnicodeEncodeError into "--- Logging error ---" and drops
+#: the record, so a refusal that DID happen would read as one that did not.
+#:
+#: ci.yml's Windows pytest step deliberately sets no PYTHONUTF8 (its
+#: tests/test_python_examples.py lane needs a real cp1252 console), so the
+#: guarantee is made here, per child, rather than assumed from the job.  Until
+#: this pass these four tests skipped on every Windows job — the fixture looked
+#: for `libama_cryptography*` and the DLL has no `lib` prefix — so the question
+#: had never arisen.
+_UTF8_CHILD_ENV = {"PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
+
+#: ``text=True`` alone decodes with the PARENT's locale encoding, which is the
+#: same lottery from the other end.  Pinned to UTF-8, with ``errors="replace"``
+#: so a stray undecodable byte degrades one character rather than raising out
+#: of ``subprocess.run`` and failing the test for a reason unrelated to it.
+_UTF8_PIPES: dict[str, Any] = {"text": True, "encoding": "utf-8", "errors": "replace"}
 
 pytestmark = pytest.mark.fips
 
@@ -92,17 +116,17 @@ def signed_tree(tmp_path_factory: pytest.TempPathFactory) -> Path:
             "no compiled binding extensions in this tree; build with "
             "`python setup.py build_ext --inplace`"
         )
-    if not any(pkg.glob("libama_cryptography*")):
+    if native_library_path(pkg) is None:
         pytest.skip("native library not built in this tree")
 
-    env = dict(os.environ, AMA_BUILD_PIPELINE="1", PYTHONPATH=str(root))
+    env = dict(os.environ, AMA_BUILD_PIPELINE="1", PYTHONPATH=str(root), **_UTF8_CHILD_ENV)
     proc = subprocess.run(
         [sys.executable, "-m", "ama_cryptography._build_sign", "--bind-extensions"],
         cwd=str(root),
         env=env,
         capture_output=True,
-        text=True,
         timeout=600,
+        **_UTF8_PIPES,
     )
     if proc.returncode != 0:
         pytest.skip(f"could not sign the scratch tree: {proc.stderr.strip()[-400:]}")
@@ -169,10 +193,10 @@ def _import_and_report(root: Path) -> tuple[str, list[str], str]:
     proc = subprocess.run(
         [sys.executable, "-c", probe],
         cwd=str(root),
-        env=dict(os.environ, PYTHONPATH=str(root)),
+        env=dict(os.environ, PYTHONPATH=str(root), **_UTF8_CHILD_ENV),
         capture_output=True,
-        text=True,
         timeout=600,
+        **_UTF8_PIPES,
     )
     outcome = ""
     executed: list[str] = []
@@ -256,10 +280,28 @@ class TestPoisonedArtefactCacheCannotDisarmTheGate:
         pkg = root / "ama_cryptography"
         shutil.rmtree(pkg / "__pycache__", ignore_errors=True)
 
-        libs = sorted(p for p in pkg.glob("libama_cryptography*") if p.is_file())
-        if not libs:
+        # `native_library_path`, not `sorted(glob("libama_cryptography*"))[0]`.
+        # Two reasons, both measured on CI:
+        #
+        #  * on Windows the file is `ama_cryptography.dll` — no `lib` prefix —
+        #    so the glob matched nothing, the fixture skipped, and the CI
+        #    escalation turned all four tests in this module into errors on
+        #    every windows-latest job;
+        #  * on macOS the copied tree holds `libama_cryptography.5.0.0.dylib`
+        #    and `libama_cryptography.dylib`, and `.5` sorts before `.d`, so
+        #    `[0]` tampered with the versioned copy while the loader opens the
+        #    bare name.  The pre-load check then compared an UNTAMPERED file,
+        #    passed, and POST caught the poisoned cache one stage later — the
+        #    test failed on all five macos-latest jobs asserting "refused
+        #    before mapping", for the one reason that would also make a real
+        #    attack succeed.
+        #
+        # `native_library_path` resolves the name `pqc_backends._get_lib_names`
+        # actually opens, which is also the file `_build_sign` hashed into
+        # INTEGRITY_NATIVE_DIGEST_HEX.
+        target = native_library_path(pkg)
+        if target is None:
             pytest.skip("no in-package native library to tamper with")
-        target = libs[0]
         data = bytearray(target.read_bytes())
         data[-1] ^= 0x01
         target.write_bytes(bytes(data))

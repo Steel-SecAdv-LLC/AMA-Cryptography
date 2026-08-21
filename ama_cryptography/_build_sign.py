@@ -108,7 +108,14 @@ class _Absorbing(Protocol):
     counts exactly — this helper takes a hasher, it does not construct one.
     """
 
-    def update(self, data: bytes, /) -> None: ...  # pragma: no cover - protocol
+    def update(self, data: bytes, /) -> None:  # pragma: no cover - protocol
+        """Absorb ``data``.  Never called: a Protocol body is a type, not code.
+
+        A docstring rather than ``...`` — the ellipsis is an expression
+        statement with no effect, which is exactly what CodeQL's
+        "Statement has no effect" rule reports, and a suppression comment
+        would hide the rule rather than answer it.
+        """
 
 
 def _absorb_entry(hasher: _Absorbing, section: bytes, name: str, content: bytes) -> None:

@@ -160,6 +160,19 @@ dev = [
     # `build_ext` base class is Any and every override on CMakeBuild goes
     # unchecked while the run still reports success.
     "types-setuptools>=84.0.0.20260812",
+    # PyYAML is imported directly by thirteen modules under tests/ and tools/
+    # (the workflow, gate-coverage, secret-scan and severity-gate checkers all
+    # parse YAML structurally rather than by regex).  It arrived only as a
+    # transitive dependency of bandit, so `pip install -e ".[dev]"` produced an
+    # environment whose imports happened to work.  types-PyYAML is the same
+    # case as types-setuptools above: `mypy --strict` ships in this extra and
+    # the CI type-check step runs it over those same modules, so without the
+    # stubs the declared developer environment cannot reproduce the gate --
+    # measured as 13 `Library stubs not installed for "yaml"` errors in every
+    # test job.  requirements-dev.txt already declared both; this extra was the
+    # outlier.
+    "PyYAML>=6.0.3",
+    "types-PyYAML>=6.0.12.20260724",
     "bandit>=1.7.0",
     # `safety` was removed in v3.2.0: it was a dev-deps inventory entry
     # that NO CI workflow ever invoked.  Vulnerability scanning is
@@ -530,6 +543,7 @@ markers = [
     "integration: marks integration tests",
     "fips: marks FIPS 140-3 self-test and compliance tests",
     "smoke: marks smoke tests that verify no exception is raised",
+    "requires_host_isa(token): the test's subject is an instruction-set extension; on a host without it the CI backend-skip escalation in tests/conftest.py leaves the skip alone (tokens: x86, x86-64, aarch64)",
 ]
 filterwarnings = [
     "error",

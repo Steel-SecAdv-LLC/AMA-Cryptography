@@ -33,7 +33,7 @@ c:
 # Build Python package with extensions
 python:
 	@echo "Building Python package..."
-	@python3 setup.py build_ext --inplace
+	@$(PYTHON) setup.py build_ext --inplace
 	@echo "✓ Python package built successfully"
 
 # Run tests
@@ -67,7 +67,7 @@ test-examples: c
 # Run benchmarks
 benchmark: python
 	@echo "Running benchmarks..."
-	@python3 benchmarks/benchmark_suite.py
+	@$(PYTHON) benchmarks/benchmark_suite.py
 	@$(RUN) pytest tests/ --benchmark-only
 
 # Clean build artifacts
@@ -114,14 +114,17 @@ dev-install:
 	@$(RUN) pip install -e ".[dev,all]"
 	@echo "✓ Development environment ready"
 
-# The interpreter's own tools, never the bare console scripts.
+# The interpreter's own tools, never the bare console scripts — with one
+# documented exception, semgrep, at its call site below.
 #
-# `mypy` on PATH here was 1.19.1 from a stale ~/.local install while the pinned
-# toolchain (requirements-lock.txt, both CI images, .pre-commit-config.yaml) is
-# 2.3.0 — and [tool.mypy] sets python_version = "3.10", which mypy 1.x accepts
-# with different semantics. `make lint` therefore reported 40 errors that CI
-# does not have and would not report ones it does. Same hazard for black and
-# ruff, whose formatting differs across versions.
+# `mypy` on PATH here was 1.19.1 from a uv-managed tool install while the
+# pinned toolchain (requirements-lock.txt, both CI images,
+# .pre-commit-config.yaml) is 2.3.0 — and [tool.mypy] sets
+# python_version = "3.10", which mypy 1.x accepts with different semantics.
+# Measured on the merge base, over the scope ci.yml type-checks: 1.19.1 reports
+# 499 errors in 44 files where 2.3.0 reports 486 in 30.  `make lint` therefore
+# could not tell you what CI would say, in either direction.  Same hazard for
+# black and ruff, whose formatting differs across versions.
 PYTHON ?= python3
 RUN := $(PYTHON) -m
 
@@ -161,7 +164,7 @@ lint:
 docs:
 	@echo "Generating documentation..."
 	@cd build && doxygen ../docs/Doxyfile
-	@AMA_SPHINX_BUILD=1 sphinx-build -W --keep-going -b html docs docs/_build/html
+	@AMA_SPHINX_BUILD=1 $(RUN) sphinx -W --keep-going -b html docs docs/_build/html
 	@echo "✓ Documentation generated"
 	@echo "  C API docs:      build/docs/html/index.html"
 	@echo "  Python API docs: docs/_build/html/index.html"
@@ -175,13 +178,13 @@ docker:
 # Create release distribution
 dist: clean
 	@echo "Creating distribution packages..."
-	@python3 -m build
+	@$(RUN) build
 	@echo "✓ Distribution packages created in dist/"
 
 # Security audit (basic)
 security-audit:
 	@echo "Running security audit..."
-	@pip-audit
+	@$(RUN) pip_audit
 	@$(RUN) bandit -r ama_cryptography/ -ll
 	@echo "✓ Security audit complete"
 
@@ -194,13 +197,26 @@ security-scan:
 	@# finds anything at the -ll floor); the gate below is what actually decides
 	@# pass/fail, fail-closed on a missing/erroring report.
 	@$(RUN) bandit -r ama_cryptography/ -ll -f json -o bandit-report.json || true
-	@python3 tools/check_bandit_severity.py bandit-report.json
+	@$(PYTHON) tools/check_bandit_severity.py bandit-report.json
 	@echo "[2/3] Running semgrep for cryptographic rules..."
 	@# semgrep scan exits 0 regardless of findings; the gate reads the JSON and
 	@# fails on ERROR-severity findings or a scan that did not run. No `|| echo`
 	@# swallowing a failure into a success line.
+	@#
+	@# The ONE tool here not run as `$$(PYTHON) -m <tool>`, and the exception
+	@# is upstream's: semgrep 1.38.0 deprecated the module entry point —
+	@# `python -m semgrep` prints "Using `python -m semgrep` to run Semgrep is
+	@# deprecated as of 1.38.0. Please simply run `semgrep` instead." — so
+	@# routing it that way would pin a path upstream is removing.
+	@#
+	@# ci.yml's static-analysis job does the same: it installs a pinned
+	@# `semgrep==1.74.0` and invokes the console script, so this line matches
+	@# what CI runs. Be clear about the cost: `$$(RUN)` exists to pick the
+	@# INTERPRETER's copy of a tool over a console script from some other
+	@# environment, and semgrep does not get that guarantee here. The version
+	@# it resolves is whatever is on PATH, which is why CI pins its own.
 	@semgrep --config .semgrep.yml ama_cryptography/ --json -o semgrep-report.json
-	@python3 tools/check_semgrep_severity.py semgrep-report.json
+	@$(PYTHON) tools/check_semgrep_severity.py semgrep-report.json
 	@echo "[3/3] Running pip-audit for dependency vulnerabilities..."
 	@# pip-audit exits non-zero when a known-vulnerable dependency is present;
 	@# let that propagate rather than masking it with `|| echo completed`.
@@ -209,7 +225,7 @@ security-scan:
 	@# whatever else the host image carries), so the target went red for reasons
 	@# nothing in this repository can fix. Same scoping ci.yml and security.yml
 	@# already use.
-	@pip-audit --strict --desc --requirement requirements-lock.txt
+	@$(RUN) pip_audit --strict --desc --requirement requirements-lock.txt
 	@echo "✓ Comprehensive security scan complete (bandit + semgrep + pip-audit all passed)"
 
 # Constant-time verification (dudect-style timing analysis)
@@ -289,8 +305,8 @@ docker-c-api:
 # Performance profiling
 profile: python
 	@echo "Profiling performance..."
-	@python3 -m cProfile -o profile.stats benchmarks/benchmark_suite.py
-	@python3 -c "import pstats; p = pstats.Stats('profile.stats'); p.sort_stats('cumulative'); p.print_stats(30)"
+	@$(RUN) cProfile -o profile.stats benchmarks/benchmark_suite.py
+	@$(PYTHON) -c "import pstats; p = pstats.Stats('profile.stats'); p.sort_stats('cumulative'); p.print_stats(30)"
 
 # Help
 help:

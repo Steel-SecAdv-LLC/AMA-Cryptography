@@ -1961,12 +1961,17 @@ not prevent a single one of them.
 The table is read with `ast` rather than by importing the module, so the gate
 runs in a lint job with nothing built.
 
-**Verification.** `tests/test_verification_claim_honesty_gate.py` — 61 tests —
+**Verification.** `tests/test_verification_claim_honesty_gate.py` — 71 tests —
 pins both directions: the repository as it stands, plus a reproduction of every
 violation class and, equally, the near-misses that must **not** fire. It also
 pins `test_flipping_a_capability_to_true_permits_its_claims`, which is the
 property the design rests on, and `test_ast_parsed_table_equals_the_imported_one`,
-so the gate's reading of the table and everyone else's cannot drift.
+so the gate's reading of the table and everyone else's cannot drift.  The ten
+added last pin the two scoping defects found in the gate itself: the
+formal-verification exemption was tested against the whole SENTENCE, so a
+denial in one clause exempted a live claim in another, and a past-tense
+attribution cue matched any of eight ordinary reporting verbs within eighty
+characters of a `was`.
 
 That suite has already earned its place. An early version of the pattern for
 the phrase this section will not repeat ended `(?:stamp|-stamp|stamping)?\b`,
@@ -2360,9 +2365,9 @@ family.
 This paragraph used to credit the second file with the first file's job — "a
 new keygen path that forgets the test fails the coverage assertion". It does
 not, and could not: that test monkeypatches the three helpers into recorders,
-calls a hand-written list of eleven entry points, builds its `expected` list
-alongside, and asserts the two match. A twelfth keygen that omits its pairwise
-test is never called by it, so both lists are unchanged and it passes.
+calls a hand-written list of thirteen entry points, builds its `expected` list
+alongside, and asserts the two match. A fourteenth keygen that omits its
+pairwise test is never called by it, so both lists are unchanged and it passes.
 Measured: an unwired `native_widget_keypair()` appended to `pqc_backends.py`
 left that test at 17 passed / exit 0 while the new gate named the violation
 and exited 1. This is the same gap INVARIANT-39 had before

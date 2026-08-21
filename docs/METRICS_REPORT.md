@@ -82,20 +82,20 @@ Measured as non-empty-allowed `wc -l` over source files in each scope.
 
 | Scope | Files | Lines |
 |-------|------:|------:|
-| Library Python (`ama_cryptography/*.py`) | 29 | 37,508 |
+| Library Python (`ama_cryptography/*.py`) | 29 | 37,526 |
 | Native C (`src/c/**/*.c`, `include/**/*.h`) | 109 | 53,188 |
-| Library total (Python + C + headers) | 138 | **90,696** |
+| Library total (Python + C + headers) | 138 | **90,714** |
 | Top-level Python (monitors, benchmarks, demos) | 2 | 1,060 |
-| Tests (`tests/**/*.py`) | 183 | 77,358 |
+| Tests (`tests/**/*.py`) | 184 | 78,304 |
 | Cython (`*.pyx`, `*.pxd`) | 7 | 1,873 |
-| **Whole project** (source + docs + config) | 632 | **353,163** |
+| **Whole project** (source + docs + config) | 633 | **354,503** |
 
 **Library total (the figure that most closely tracks "library size"):
-90,696 lines** across 138 files under `ama_cryptography/`, `src/c/`,
+90,714 lines** across 138 files under `ama_cryptography/`, `src/c/`,
 and `include/`. This supersedes any "11,246 LoC" claim that may have
 appeared externally.
 
-**Whole-project total** (`353,163` lines across Python, C, headers,
+**Whole-project total** (`354,503` lines across Python, C, headers,
 Cython, Markdown, YAML/TOML/JSON config, CMake and Makefiles) is the
 broader figure some external claims may have been referencing. Reproduce
 it with:
@@ -146,7 +146,7 @@ excluded.
 
 ### Scope Composition
 
-The gap between "library" and "whole project" is informative: only **25.7%** of the repository is library code. The rest is tests, docs,
+The gap between "library" and "whole project" is informative: only **25.6%** of the repository is library code. The rest is tests, docs,
 config, vendored vector corpora, and scaffolding — verification
 artifacts outweighing library code is a healthy ratio for a security
 library that takes verification seriously, but the vendored share means
@@ -154,16 +154,16 @@ the whole-project figure overstates hand-written code.
 
 | Scope                                | Lines    | % of whole | Paths                                                   |
 |--------------------------------------|---------:|-----------:|---------------------------------------------------------|
-| Library (Python + C + headers) | 90,696 | 25.7% | `ama_cryptography/` + `src/c/` + `include/` |
-| Tests | 77,358 | 21.9% | `tests/**/*.py` |
+| Library (Python + C + headers) | 90,714 | 25.6% | `ama_cryptography/` + `src/c/` + `include/` |
+| Tests | 78,304 | 22.1% | `tests/**/*.py` |
 | Top-level Python | 1,060 | 0.3% | `*.py` at repo root |
 | Cython | 1,873 | 0.5% | `*.pyx` + `*.pxd` |
-| Everything else (remainder) | 182,176 | 51.6% | `*.md`, `*.yml`, `*.toml`, `*.json`, CMake, Makefile, plus `.c`/`.h`/`.py` outside the scopes above (`tests/c/`, `fuzz/`, `tools/`, `benchmarks/`, `examples/`) |
-| **Whole-project total** | **353,163** | **100%** | sum of the scopes above |
+| Everything else (remainder) | 182,552 | 51.5% | `*.md`, `*.yml`, `*.toml`, `*.json`, CMake, Makefile, plus `.c`/`.h`/`.py` outside the scopes above (`tests/c/`, `fuzz/`, `tools/`, `benchmarks/`, `examples/`) |
+| **Whole-project total** | **354,503** | **100%** | sum of the scopes above |
 
-Test code (21.9%) is roughly 0.9x the size of the library (25.7%) — i.e. the test-to-library ratio is roughly **0.85**, and that
+Test code (22.1%) is roughly 0.9x the size of the library (25.6%) — i.e. the test-to-library ratio is roughly **0.86**, and that
 counts only `tests/**/*.py`; the C test suite under `tests/c/` lands
-in the remainder row. The remainder (51.6%) is dominated by the
+in the remainder row. The remainder (51.5%) is dominated by the
 vendored NIST ACVP and Wycheproof JSON corpora (69,911 lines of `*.json` alone) and by this repository's Markdown, not by config.
 
 ### Reproduction
@@ -213,8 +213,8 @@ git ls-files -z | tr '\0' '\n' \
 
 | Scope | Count |
 |-------|------:|
-| Python test files under `tests/` matching the static regex | 180 |
-| Syntactic `def test_` matches under `tests/**/*.py` | **4,341** |
+| Python test files under `tests/` matching the static regex | 181 |
+| Syntactic `def test_` matches under `tests/**/*.py` | **4,374** |
 | `test_*.c` files under `tests/c/` (ctest-registered) | 60 |
 | `bench_*.c` files under `tests/c/` (standalone, not in ctest) | 1 |
 | `fuzz_*.c` sources under `fuzz/` | 16 |
@@ -386,7 +386,7 @@ figures change.
 | 4.0.0 | 2026-08-01 | Post-review re-measure, after the engineering pass on PR #386 added `tests/test_numeric_ndarray_interop.py`, `tests/test_python_examples.py` and `tests/test_constant_time_length_precheck.py`: **3,318** static `def test_` matches across **138** files carrying one (was 3,203 / 135 earlier in this release), and the LoC table's Tests row 138 -> 141 files by the raw glob. Two figures were found wrong rather than merely stale. (1) The **whole-project total was 375,990 and measures 295,848** on a clean checkout — the previous figure was taken on a *built* tree, and the prose attributing its bulk to "the generated Cython translation units checked in under `src/cython/`" was doubly wrong: `.gitignore` line 178 excludes them, so they are not checked in and never were. Every derived percentage in the Scope Composition table moved with it (library 21.4% -> 27.5%, tests 14.5% -> 18.9%, remainder 63.3% -> 52.7%), and the remainder is dominated by the vendored NIST/Wycheproof JSON corpora (69,076 lines) and this repository's Markdown. (2) Library line totals were re-measured with the published commands: Python 29,744 -> 30,421, Native C 50,888 -> 50,899, library total 80,632 -> 81,320; file counts unchanged at 27 / 105 / 132. Whole-project and per-scope *line* totals remain ungated for the reason given in the row below — `wc -l` moves on every commit — but "ungated" is not "unowned", and a figure that cannot be reproduced from the command printed beside it is a defect regardless of whether a gate watches it. Adversarial-count figures were NOT re-measured for this entry and still carry their 3.5.0 values. |
 | 5.0.0 | 2026-08-16 | PR #394 completion pass 2: **3,738** static `def test_` matches across **157** files (was 3,682 / 154), and the LoC line totals, the Scope Composition table and every prose restatement became **gated** by `check_loc_table_file_counts` and regenerated by `python tools/update_docs.py --loc` from the same measurement functions — closing the deliberate 4.0.0 ungating whose totals drifted within two days. Makefiles joined the whole-project scope (the retired `find` form counted the three tracked Makefiles, 502 lines, while the `git` form did not; one command, one scope). The 1,807-line historical detector copy under `tools/monitoring/` and a committed libFuzzer `slow-unit-*` artifact were removed. |
 | 5.0.0 | 2026-08-17 | PR #394 completion pass 3 (independent full-diff review): **3,770** static `def test_` matches across **158** files, Tests 161 files / 65,216 lines, library Python 35,504, Native C 51,488, library total 86,992, whole-project **320,024**. The growth is the regression tests for the twenty-nine review findings — the SHA-3 squeeze guard, the integrity-failure classification and binding-strength downgrade, the PEP 552 `.pyc` header validation, the out-of-band verifier's trust anchor, the split rotation/switch throttles, the deterministic detector gates, and the two C-zeroization-gate bypasses. |
-| 5.0.0 | 2026-08-14 | PR #394 re-measure after the maintenance-audit sweep: library Python 32,869 -> 33,897 lines (28 files), Native C 50,899 -> 51,299 (105 files), library total 83,768 -> 85,196, Tests 58,979 -> 61,394 lines across 154 files, top-level Python 952 -> 968, whole-project 304,171 -> 309,239. The whole-project reproduction command now prunes `src/cython/*.c`: those are cythonize-generated translation units that appear in a built working tree but not in a pristine checkout, so the same command produced different totals depending on whether the tree had been built — measured 394,277 vs 309,239 on this tree, an 85k-line phantom. Percentages: library 27.5% -> 27.6%, tests 19.4% -> 19.9%, remainder 52.1% -> 51.7%, test-to-library ratio 0.70 -> 0.72. |
+| 5.0.0 | 2026-08-21 | PR #394 re-measure, final. Against the PR #391 baseline in the row below: library Python 32,869 -> 37,526 lines (28 -> 29 files), Native C 50,899 -> 53,188 (105 -> 109 files), library total 83,768 -> 90,714 (133 -> 138 files), Tests 58,979 -> 78,304 lines across 148 -> 184 files, top-level Python 952 -> 1,060 Cython 1,873 unchanged. The whole-project total, the remainder row and every derived percentage are NOT restated here, deliberately: this row is Markdown inside the very file those figures count, so any wording of it changes the number it would be asserting, and the first two revisions of this row went 45k lines stale exactly that way. Read them from the Lines-of-Code and Scope Composition tables above, which `python tools/update_docs.py --loc` writes and `tools/check_documented_counts.py` checks on every run; a figure that a gate re-measures does not need a second copy in prose, which is the lesson of DOC-06 and DOC-07 in this release. The whole-project reproduction command now prunes `src/cython/*.c`: those are cythonize-generated translation units that appear in a built working tree but not in a pristine checkout, so the same command produced different totals depending on whether the tree had been built — an 85k-line phantom when it was measured. |
 | 5.0.0 | 2026-08-13 | PR #391 re-measure with the published commands after the FIPS hardening sweep (INVARIANT-39 through -42) added tests, tools and documentation: library Python 30,422 -> 32,869 lines (28 files), library total 81,321 -> 83,768 (133 files, matching the prose that previously said 132 against the table's 133), Tests 56,101 -> 58,979 lines across 148 files, Cython 1,819 -> 1,873, top-level Python 945 -> 952, whole-project 296,728 -> 304,171. The whole-project figure previously had NO reproduction command printed beside it — the exemption the 2026-08-01 entry warned about — and now does; every derived percentage in the Scope Composition table moved with the new totals (library 27.4% -> 27.5%, tests 18.9% -> 19.4%, remainder 52.8% -> 52.1%, test-to-library ratio 0.69 -> 0.70). Native C is untouched by the sweep's Python-side commits and re-measures identically (50,899 lines, 105 files). |
 | 3.1.0 + Unreleased | 2026-05-16 | Re-measured static counts after PRs #301/#303/#305/#306/#307/#308/#309: 57,035 library LoC, 2,159 static Python test functions, 37 C test files, 14 fuzz harnesses, 156 / 258 adversarial tests. NIST ACVP vector count remains anchored separately at 1,215 / 1,215 / 0. |
 | 2.1.5 | 2026-04-18 | Initial version; anchored 46,235 library LoC, 2,028 test functions, 815 NIST vectors, 156 / 223 adversarial tests for that branch snapshot. Superseded unanchored "2,068 tests / 117 NIST / 180 adversarial / 11,246 LoC" figures. |

@@ -77,6 +77,14 @@ class _FakeMarker:
         self.kwargs: dict[str, Any] = {"reason": reason}
 
 
+class _FakeIsaMarker:
+    """Minimal stand-in for a ``requires_host_isa`` ``pytest.Mark``."""
+
+    def __init__(self, *tokens: str) -> None:
+        self.args: tuple[str, ...] = tokens
+        self.kwargs: dict[str, Any] = {}
+
+
 def test_is_backend_skip_matches_native_reason() -> None:
     """A skipif with a backend keyword in the reason is recognised."""
     marker = _FakeMarker(True, "Native AES-256-GCM library not available")
@@ -251,6 +259,188 @@ def test_backend_skipif_without_ci_env_stays_a_skip(
 
 
 # ---------------------------------------------------------------------------
+# The one exemption: an instruction set the host does not have
+# ---------------------------------------------------------------------------
+# "All cryptographic backends must be available in CI" is a claim about what a
+# build should have produced.  An x86 AES-NI kernel on an aarch64 runner is not
+# one of those, and the escalation's remedy ("build the C library") is not a
+# remedy for it.  Three x86-only parametrisations of
+# tests/test_aesni_is_not_gated_on_avx2.py failed every ubuntu-24.04-arm,
+# windows-latest and macos-latest job that way: the skip reason has to name
+# AES-NI to be informative, and naming it is what matched _mentions_backend.
+#
+# The exemption is a declared capability re-checked against the real host, not
+# a reason-text pattern.  These tests pin both halves — that it exempts, and
+# that it cannot be used to hide a backend a build should have produced.
+
+
+def _unsatisfied_isa_token() -> str:
+    """A token from the production table this host does NOT satisfy.
+
+    Derived rather than hardcoded: no host is both x86 and aarch64, so one
+    always exists, and the test stays honest on whichever runner it lands on.
+    """
+    from tests.conftest import HOST_ISA_PREDICATES
+
+    for token, predicate in HOST_ISA_PREDICATES.items():
+        if not predicate():
+            return token
+    raise AssertionError(
+        f"this host claims every instruction set in {sorted(HOST_ISA_PREDICATES)}, "
+        "which cannot be true — the table has lost its discriminating power"
+    )
+
+
+def test_host_isa_exempts_only_when_the_host_lacks_the_capability(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The predicate is re-asked, so the marker is not a blanket opt-out."""
+    from tests import conftest as production
+
+    monkeypatch.setitem(production.HOST_ISA_PREDICATES, "present", lambda: True)
+    monkeypatch.setitem(production.HOST_ISA_PREDICATES, "absent", lambda: False)
+
+    class _Item:
+        def __init__(self, *tokens: str) -> None:
+            self._tokens = tokens
+
+        def iter_markers(self, name: str) -> list[Any]:
+            assert name == "requires_host_isa"
+            return [_FakeIsaMarker(token) for token in self._tokens]
+
+    assert production.host_isa_exempts(_Item("absent")) is True
+    assert production.host_isa_exempts(_Item("present")) is False
+    assert production.host_isa_exempts(_Item()) is False
+    # Fail closed: a token nobody registered is not an exemption, so a typo
+    # escalates rather than silencing.
+    assert production.host_isa_exempts(_Item("x86_65")) is False
+    # One satisfied token does not cancel an unsatisfied one; the test cannot
+    # run on this host either way.
+    assert production.host_isa_exempts(_Item("present", "absent")) is True
+
+
+def test_a_backend_skip_on_a_host_without_the_isa_stays_a_skip(
+    isolated_conftest: pytest.Pytester,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The shape that broke every ARM, Windows and macOS job.
+
+    Built with whichever token THIS host lacks, so the mechanism is exercised
+    on every runner rather than only on the one the defect was found on.
+    """
+    monkeypatch.setenv("AMA_CI_REQUIRE_BACKENDS", "1")
+    isolated_conftest.makepyfile(f"""
+        import pytest
+
+        @pytest.mark.requires_host_isa({_unsatisfied_isa_token()!r})
+        def test_aes_ni_gating():
+            pytest.skip("AES-NI gating is an x86 property")
+        """)
+    result = isolated_conftest.runpytest_subprocess(*_inner_pytest_args())
+    result.assert_outcomes(skipped=1, failed=0, errors=0, passed=0)
+
+
+def test_a_backend_skip_on_a_host_that_does_have_the_isa_still_fails(
+    isolated_conftest: pytest.Pytester,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The half that keeps the exemption honest.
+
+    The predicate is registered as satisfied inside the sandbox, so this runs
+    identically on every runner — the point is that a satisfied capability
+    changes nothing: a missing backend on a host that can host it is still a
+    hard CI failure.
+    """
+    monkeypatch.setenv("AMA_CI_REQUIRE_BACKENDS", "1")
+    isolated_conftest.makepyfile("""
+        import pytest
+        import conftest
+
+        conftest.HOST_ISA_PREDICATES["probe-isa"] = lambda: True
+
+        @pytest.mark.requires_host_isa("probe-isa")
+        def test_kyber_kat():
+            pytest.skip("Kyber backend unavailable")
+        """)
+    result = isolated_conftest.runpytest_subprocess(*_inner_pytest_args())
+    result.assert_outcomes(failed=1, errors=0, skipped=0, passed=0)
+    result.stdout.fnmatch_lines(["*CI FAILURE: Kyber backend unavailable*"])
+
+
+def test_the_real_aesni_class_carries_the_marker_the_exemption_needs() -> None:
+    """The one link the sandbox tests above cannot cover.
+
+    They prove the hook exempts a marked item; this proves the item that
+    actually skips on an aarch64 runner is marked, and marked with a token the
+    production table knows.  ``pytest.mark`` on a class lands in
+    ``cls.pytestmark``, and ``item.iter_markers`` walks function -> class ->
+    module, so a marker here is a marker on every parametrisation of the three
+    tests that failed.
+    """
+    from tests import test_aesni_is_not_gated_on_avx2 as aesni
+    from tests.conftest import HOST_ISA_PREDICATES
+
+    marks = [
+        mark
+        for mark in getattr(aesni.TestTheBackendAcrossBuildConfigurations, "pytestmark", [])
+        if mark.name == "requires_host_isa"
+    ]
+    assert marks, (
+        "TestTheBackendAcrossBuildConfigurations no longer declares "
+        "requires_host_isa, so its x86-only skip is a hard CI failure again on "
+        "every aarch64 runner"
+    )
+    tokens = [token for mark in marks for token in mark.args]
+    assert tokens, "requires_host_isa was applied with no token, which exempts nothing"
+    unknown = [token for token in tokens if token not in HOST_ISA_PREDICATES]
+    assert not unknown, f"unregistered token(s) {unknown}; the exemption fails closed on those"
+
+
+def test_an_unregistered_isa_token_is_not_an_exemption(
+    isolated_conftest: pytest.Pytester,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A typo must not silence a backend gap."""
+    monkeypatch.setenv("AMA_CI_REQUIRE_BACKENDS", "1")
+    isolated_conftest.makepyfile("""
+        import pytest
+
+        @pytest.mark.requires_host_isa("x86_65")
+        def test_sphincs_kat():
+            pytest.skip("SPHINCS+ backend not available")
+        """)
+    result = isolated_conftest.runpytest_subprocess(*_inner_pytest_args())
+    result.assert_outcomes(failed=1, errors=0, skipped=0, passed=0)
+    result.stdout.fnmatch_lines(["*CI FAILURE: SPHINCS+ backend not available*"])
+
+
+def test_the_marker_is_registered_so_strict_markers_accepts_it(
+    pytestconfig: pytest.Config,
+) -> None:
+    """``--strict-markers`` is on; an unregistered marker is a collection error.
+
+    Asked of the running pytest rather than of ``pyproject.toml``: what matters
+    is the marker pytest actually loaded, and reading the file would also drag
+    ``tomllib`` — 3.11+ — into a tree whose floor is 3.10.
+    """
+    markers = pytestconfig.getini("markers")
+    assert any(m.startswith("requires_host_isa(") for m in markers), markers
+
+
+def test_every_registered_token_is_used_or_usable() -> None:
+    """Non-vacuity: the table must hold callables that actually answer."""
+    from tests.conftest import HOST_ISA_PREDICATES
+
+    assert HOST_ISA_PREDICATES, "the table is empty; the marker can exempt nothing"
+    answers = {token: predicate() for token, predicate in HOST_ISA_PREDICATES.items()}
+    assert all(isinstance(v, bool) for v in answers.values()), answers
+    assert any(answers.values()), (
+        f"no registered instruction set matches this host ({answers}); the table "
+        "cannot distinguish a capability the host has from one it does not"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Imperative skips
 # ---------------------------------------------------------------------------
 # The hook above reads ``item.iter_markers("skipif")``, which sees only
@@ -409,6 +599,92 @@ class TestNativeLibraryDetection:
             probe.mkdir()
             (probe / name).write_bytes(b"\x7fELF")
             assert native_library_present(probe), f"{name} is a real candidate but not recognised"
+
+    @pytest.mark.parametrize(
+        "names,expected",
+        [
+            (
+                ["libama_cryptography.5.0.0.dylib", "libama_cryptography.dylib"],
+                "libama_cryptography.dylib",
+            ),
+            (
+                [
+                    "libama_cryptography.so",
+                    "libama_cryptography.so.5",
+                    "libama_cryptography.so.5.0.0",
+                ],
+                "libama_cryptography.so",
+            ),
+            (["ama_cryptography.dll", "libama_cryptography.dll"], "ama_cryptography.dll"),
+        ],
+        ids=["macos", "linux", "windows"],
+    )
+    def test_the_name_the_loader_opens_wins_over_a_versioned_sibling(
+        self, tmp_path: Path, names: list[str], expected: str
+    ) -> None:
+        """A caller that MODIFIES the library has to land on the loaded file.
+
+        ``sorted(glob("libama_cryptography*"))[0]`` does not: on macOS
+        ``libama_cryptography.5.0.0.dylib`` sorts before
+        ``libama_cryptography.dylib`` because ``.5`` precedes ``.d``, so the
+        artefact-cache-poisoning test tampered with a copy nothing opens.  The
+        pre-load digest check then compared an untampered file and passed, and
+        the test's "refused before mapping" assertion failed on all five
+        macos-latest jobs — for the one reason that would also let a real
+        tampered library through.
+
+        Run on every platform against constructed names, because the runner
+        this suite happens to be on can only exercise one of the three.
+        """
+        from tests.conftest import native_library_path
+
+        for name in names:
+            (tmp_path / name).write_bytes(b"\x7fELF")
+        resolved = native_library_path(tmp_path)
+        assert resolved is not None and resolved.name == expected, resolved
+
+    def test_the_candidate_order_matches_the_loader_branch_for_branch(self) -> None:
+        """``_NATIVE_LIB_NAMES``'s order is the loader's, read from its source.
+
+        The constructed-name test above pins the three orders that exist
+        today; this one pins that they are still the LOADER's orders.
+        ``_get_lib_names`` returns a different list per platform and the first
+        name in each is the one the loader opens, so ``_NATIVE_LIB_NAMES`` must
+        be a linear extension of every one of those lists — reorder
+        ``_get_lib_names`` and a tamper-detection test starts modifying a file
+        nothing reads, which is precisely the macOS defect this table was
+        rewritten to fix, in a different guise.
+        """
+        import ast
+
+        from tests.conftest import _NATIVE_LIB_NAMES
+
+        repo_root = Path(__file__).resolve().parent.parent
+        source = (repo_root / "ama_cryptography" / "pqc_backends.py").read_text(encoding="utf-8")
+        function = next(
+            node
+            for node in ast.walk(ast.parse(source))
+            if isinstance(node, ast.FunctionDef) and node.name == "_get_lib_names"
+        )
+        branches = [
+            [ast.literal_eval(element) for element in node.value.elts]
+            for node in ast.walk(function)
+            if isinstance(node, ast.Return) and isinstance(node.value, ast.List)
+        ]
+        assert len(branches) >= 3, f"expected one return per platform, found {branches}"
+
+        for names in branches:
+            for name in names:
+                assert name in _NATIVE_LIB_NAMES, (
+                    f"{name!r} is a name the loader tries and _NATIVE_LIB_NAMES "
+                    "does not carry, so a tree holding only it reads as unbuilt"
+                )
+            positions = [_NATIVE_LIB_NAMES.index(name) for name in names]
+            assert positions == sorted(positions), (
+                f"the loader tries {names} in that order; _NATIVE_LIB_NAMES orders "
+                f"them {sorted(names, key=_NATIVE_LIB_NAMES.index)}, so a tree "
+                "holding more than one resolves to a file the loader does not open"
+            )
 
     def test_an_empty_tree_is_still_reported_as_missing(self, tmp_path: Path) -> None:
         """The probe must not become a tautology."""

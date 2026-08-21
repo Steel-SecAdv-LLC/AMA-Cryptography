@@ -629,6 +629,14 @@ _PACKAGE_MODULES_RE = re.compile(
     r"`ama_cryptography/`,\s*(\d[\d,]*) modules \+ `__init__` \+ `__main__`"
 )
 
+#: README's `src/c/internal/` line, which states both halves of that directory.
+#: It said "5 `.h`" against a tree holding eight, one row from inventories that
+#: ARE gated — the shape the 2026-08-01 METRICS_REPORT entry named: "a row whose
+#: neighbour is checked reads as checked".
+_SRC_C_INTERNAL_RE = re.compile(
+    r"`src/c/internal/`\s*[—-]\s*(\d[\d,]*) `\.c`.*?;\s*(\d[\d,]*) `\.h`"
+)
+
 
 def count_error_state_entry_points() -> tuple[int, int]:
     """The authoritative gated-surface counts, from the gate that owns them.
@@ -839,10 +847,19 @@ def measure_source_inventory(repo: Path) -> tuple[int, int]:
     return len(units), len(modules)
 
 
+def measure_internal_sources(repo: Path) -> tuple[int, int]:
+    """(``src/c/internal/*.c`` count, ``src/c/internal/*.h`` count)."""
+    return (
+        len(_tracked_or_globbed(repo, "src/c/internal/*.c")),
+        len(_tracked_or_globbed(repo, "src/c/internal/*.h")),
+    )
+
+
 def check_source_inventory_counts(repo: Path) -> list[str]:
     """README's version-stamped C and Python inventories, measured."""
     problems: list[str] = []
     units, modules = measure_source_inventory(repo)
+    internal_c, internal_h = measure_internal_sources(repo)
 
     def _num(raw: str) -> int:
         return int(raw.replace(",", ""))
@@ -859,6 +876,12 @@ def check_source_inventory_counts(repo: Path) -> list[str]:
                 problems.append(
                     f"{rel}: says {claimed} package modules besides __init__ and "
                     f"__main__; `ama_cryptography/*.py` counts {modules}"
+                )
+        for claimed_c, claimed_h in _SRC_C_INTERNAL_RE.findall(live):
+            if (_num(claimed_c), _num(claimed_h)) != (internal_c, internal_h):
+                problems.append(
+                    f"{rel}: says src/c/internal/ holds {claimed_c} .c and "
+                    f"{claimed_h} .h; the tree holds {internal_c} and {internal_h}"
                 )
     return problems
 
