@@ -2480,6 +2480,9 @@ void ama_test_restore_dilithium_ntt(void) {
 /**
  * Prints dispatch info to stderr (for diagnostics / benchmark output).
  */
+/* Defined below, next to ama_aes_gcm_active_backend which shares it. */
+static const char *aes_gcm_installed_backend(void);
+
 void ama_print_dispatch_info(void) {
     const ama_dispatch_info_t *info = ama_get_dispatch_info();
 
@@ -2501,7 +2504,24 @@ void ama_print_dispatch_info(void) {
     fprintf(stderr, "║  ML-KEM-1024:        %-24s║\n", ama_impl_level_name(info->kyber));
     fprintf(stderr, "║  ML-DSA-65:          %-24s║\n", ama_impl_level_name(info->dilithium));
     fprintf(stderr, "║  SPHINCS+-256f:      %-24s║\n", ama_impl_level_name(info->sphincs));
-    fprintf(stderr, "║  AES-256-GCM:        %-24s║\n", ama_impl_level_name(info->aes_gcm));
+    /* The INSTALLED backend, not `info->aes_gcm`.
+     *
+     * That field is a CPU-capability tier: `dispatch_info.aes_gcm = effective`,
+     * where `effective` comes from ama_has_avx2() and nothing else.  It says
+     * what the HOST can do, never what was compiled in or wired up — so on any
+     * AVX2-capable machine this line printed "AVX2" whatever the AES-GCM slot
+     * actually held.  Measured against the pre-fix tree at -DAMA_ENABLE_AVX2=OFF:
+     * it printed "AVX2" while AES-256-GCM ran the portable bitsliced path at
+     * 2.9 MB/s, against 2204.5 MB/s once the hardware kernel was installed —
+     * a 760x difference under a label that did not move.  A diagnostic an
+     * operator uses to confirm hardware acceleration must not be able to say
+     * "AVX2" about the software path.
+     *
+     * The capability tier is still printed, after the backend, because the two
+     * differing IS the interesting case (a host that could do more than this
+     * build wired up). */
+    fprintf(stderr, "║  AES-256-GCM:        %-16s%-8s║\n",
+            aes_gcm_installed_backend(), ama_impl_level_name(info->aes_gcm));
     fprintf(stderr, "║  Ed25519:            %-24s║\n", ama_impl_level_name(info->ed25519));
     fprintf(stderr, "║  ChaCha20-Poly1305:  %-24s║\n", ama_impl_level_name(info->chacha20poly1305));
     fprintf(stderr, "║  Argon2:             %-24s║\n", ama_impl_level_name(info->argon2));
@@ -2575,8 +2595,10 @@ void ama_print_dispatch_info(void) {
  * both sides — which it does (these are declared `extern` near the
  * top of this TU and defined as global functions in the AVX2 / NEON
  * source files).  No type-punning / dlsym is required. ============= */
-const char *ama_aes_gcm_active_backend(void) {
-    ama_dispatch_init();
+/* The pointer comparison, with no ama_dispatch_init() call, so a caller that
+ * is ITSELF inside the initialised path (ama_print_dispatch_info) can ask the
+ * same question without re-entering init. */
+static const char *aes_gcm_installed_backend(void) {
 #ifdef AMA_HAVE_AVX2_IMPL
 #if !defined(_MSC_VER)
     if (dispatch_table.aes_gcm_encrypt == ama_aes256_gcm_encrypt_vaes_avx2)
@@ -2610,6 +2632,12 @@ const char *ama_aes_gcm_active_backend(void) {
      * catch a regression. */
     return "table-insecure";
 #endif
+}
+
+
+const char *ama_aes_gcm_active_backend(void) {
+    ama_dispatch_init();
+    return aes_gcm_installed_backend();
 }
 
 /* ============================================================================

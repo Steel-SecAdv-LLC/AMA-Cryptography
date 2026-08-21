@@ -27,6 +27,7 @@ What must never regress, pinned here from both directions:
 from __future__ import annotations
 
 import ctypes
+from contextlib import ExitStack
 
 import pytest
 
@@ -82,12 +83,14 @@ class TestReleaseContract:
     def test_views_released_when_acquisition_fails_partway(self) -> None:
         backing = bytearray(b"k" * 32)
         two_dimensional = memoryview(bytearray(range(16))).cast("B", (4, 4))
-        with pytest.raises(TypeError, match="one-dimensional"):
-            with _CBufferViews(backing, two_dimensional):
-                # __enter__ raises, so this body never runs — pytest.raises
-                # enforces that: if it ran, no TypeError would propagate and
-                # the raises block itself would fail.
-                pass
+        # enter_context rather than a `with` body: `__enter__` is what raises,
+        # so a `with` body is a statement that can never run — CodeQL reported
+        # exactly that (alerts 617/618), and an explanatory comment would have
+        # left the unreachable statement in place. ExitStack also guarantees
+        # that whatever WAS entered before the failure is released, which is
+        # the property this test is about.
+        with pytest.raises(TypeError, match="one-dimensional"), ExitStack() as stack:
+            stack.enter_context(_CBufferViews(backing, two_dimensional))
         # The first view must have been released by the failure path.
         backing.extend(b"grow")
         assert len(backing) == 36
@@ -108,17 +111,15 @@ class TestReleaseContract:
 class TestValidation:
     def test_multidimensional_buffer_rejected(self) -> None:
         grid = memoryview(bytearray(range(16))).cast("B", (4, 4))
-        with pytest.raises(TypeError, match="one-dimensional"):
-            with _CBufferViews(grid):
-                pass
+        with pytest.raises(TypeError, match="one-dimensional"), ExitStack() as stack:
+            stack.enter_context(_CBufferViews(grid))
 
     def test_wide_itemsize_buffer_rejected(self) -> None:
         import array
 
         wide = memoryview(array.array("I", [1, 2, 3, 4]))
-        with pytest.raises(TypeError, match="one-dimensional byte buffer"):
-            with _CBufferViews(wide):
-                pass
+        with pytest.raises(TypeError, match="one-dimensional byte buffer"), ExitStack() as stack:
+            stack.enter_context(_CBufferViews(wide))
 
 
 class TestSingleBufferCompatibilityShim:

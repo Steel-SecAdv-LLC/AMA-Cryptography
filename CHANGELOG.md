@@ -200,6 +200,20 @@ configurations (SIMD on, SIMD off, AVX2 off) and probes the resulting library
 for the AES-NI symbol and the dispatcher's reported backend, rather than
 asserting on the shape of the CMake text.
 
+**What it was worth, measured rather than asserted.**  Both trees built at
+`-DAMA_ENABLE_AVX2=OFF`, same host, same flags, AES-256-GCM encryption over a
+64 KiB buffer, best of seven runs of 400 iterations:
+
+| Tree | AES-256-GCM |
+|------|------------:|
+| Before (`968d234`) | **2.9 MB/s** |
+| After | **2204.5 MB/s** |
+
+760x.  Turning off AVX2 — a flag that has nothing to do with AES-NI — took
+AES-256-GCM from hardware to the portable bitsliced path, which is
+constant-time and correspondingly slow.  Any build that disabled AVX2 for an
+unrelated reason shipped that.
+
 **BUILD-02 — published container images installed OpenSSL.**
 `docker/Dockerfile.c-api` installed `libssl-dev` and `libssl3` and
 `docker/Dockerfile.alpine` installed `openssl-dev`, in the same files that
@@ -654,12 +668,101 @@ that cried wolf on those would stop being read.  Mutation-verified in both
 directions and pinned by
 `tests/test_invariant_upgrades.py::TestOptionalImportSuppressions`.
 
+#### The dispatch report named the host's CPU, not the backend that was running
+
+Found by taking the measurement above rather than by reading code, and the
+reason it needed measuring: **the reported label did not move.**  Both trees
+printed
+
+```
+║  AES-256-GCM:        AVX2                    ║
+```
+
+while one ran at 2.9 MB/s and the other at 2204.5 MB/s.
+
+`ama_print_dispatch_info()` printed `dispatch_info.aes_gcm`, and that field is
+assigned once, from `ama_has_avx2()`:
+
+```c
+ama_impl_level_t effective = (best == AMA_IMPL_AVX512) ? AMA_IMPL_AVX2 : best;
+...
+dispatch_info.aes_gcm = effective;
+```
+
+It is a statement about the HOST's instruction set.  It is not consulted when
+the x86 AES-GCM kernel is installed, it does not know whether that kernel was
+compiled in, and nothing downstream makes it agree with the slot.  So on any
+AVX2-capable machine the line read "AVX2" whatever the AES-GCM function
+pointer actually held — including when it held the software path.  An operator
+reading that line to confirm hardware acceleration was reading a CPUID result
+dressed as a backend.
+
+The honest answer already existed three hundred lines below:
+`ama_aes_gcm_active_backend()` compares the installed function pointer against
+each kernel and returns `vaes-avx2`, `aes-ni-pclmul`, `arm-aes-pmull`,
+`bitsliced-software` or `table-insecure`.  The report simply did not use it.
+The pointer comparison is now a static helper both callers share — the public
+accessor keeps its `ama_dispatch_init()`, the reporter calls the helper
+directly since it is already past init — and the line prints the installed
+backend *and* the capability tier, because the two DISAGREEING is the
+interesting case:
+
+```
+║  AES-256-GCM:        aes-ni-pclmul   AVX2    ║
+```
+
+Non-vacuity is the whole difficulty here: a label that is a constant on this
+host looks identical to a correct one.  `tests/c/test_aes_gcm_backend_introspect.c`
+now forces the scalar slot through the existing `ama_test_force_aes_gcm_scalar()`
+hook and asserts the label stops naming a hardware kernel, then restores and
+asserts it comes back — so a reporter that went back to printing the CPU tier
+fails.  Mutation-verified: with the old `ama_impl_level_name(info->aes_gcm)`
+restored, the line prints `AVX2` on a build whose installed backend is
+`aes-ni-pclmul`.
+
+#### Two more, from pointing existing gates at build shapes CI does not use
+
+**`tools/check_secret_division.py` failed on the `AMA_TESTING_MODE` archive.**
+CI runs the KyberSlash gate against `build-shared/` and `build-arm/`, both
+shipped shared libraries, so it had never seen the static archive that
+`AMA_TESTING_MODE` produces.  Pointed at that archive it fails on
+`ama_ml_dsa_test_matrix_row_equiv`, a test-only export.  Read in full: the
+function takes no arguments, builds its `rho` in its own body from the
+constant `0x11 * (i + 1)`, and touches nothing but parameter-set fields and
+loop counters — every operand public, which is exactly the classification the
+gate's own failure message asks for.  Recorded with that reasoning and a
+ceiling of 14, which is the measured maximum across both compilers CI uses at
+-O3 (gcc 13 emits 14; clang 18 folds the expansion and emits none), not
+headroom.  The gate now exits 0 on the shipped `.so`, the gcc archive and the
+clang archive.
+
+**Three unreachable statements in `tests/test_c_buffer_views.py`.**  Two
+carried standing CodeQL alerts (617/618) whose threads were resolved by
+explaining the pattern rather than removing it — `with pytest.raises(...): with
+_CBufferViews(bad): pass`, where `__enter__` is what raises, so the body can
+never run.  They are now `ExitStack().enter_context(...)`, which has no body to
+be unreachable and additionally guarantees that whatever WAS entered before the
+failure is released — the property those tests are about.
+
 #### Deferred
 
-Nothing.  All thirty-seven confirmed audit findings are fixed here, the
-addressed set was compared programmatically against the confirmed set rather
-than by eye, and the type-checking work and the eleven suite failures above
-were raised and closed in the same pass rather than carried forward.
+All thirty-seven confirmed audit findings are fixed here, the addressed set was
+compared programmatically against the confirmed set rather than by eye, and
+everything the type-check widening, the whole-suite run and the AES-GCM
+measurement turned up was raised and closed in the same pass rather than
+carried forward.
+
+**One deliberate relaxation, named here because it is one.**  Two mypy flags —
+`disallow_subclassing_any` and `disallow_untyped_decorators` — are off for
+`examples/python/fastapi_integration.py` and `flask_integration.py`, and only
+those two flags for only those two files.  FastAPI, Flask and pydantic ship no
+type information in any image this project's checks run in, so their base
+classes and route decorators are `Any` and those two flags fire on that alone;
+nothing in this tree can answer them.  The fix that would — installing three
+web frameworks into the type-check job — introduces external dependencies,
+which this branch does not do without asking.  Everything else stays on for
+those files, which is what caught the four
+`create_crypto_package(dna_codes=…)` calls.
 
 ### Verification pass, eighth (2026-08-20) — a truncated ML-KEM sampler, a poisonable trust artefact, and six gates that could not see the change they police
 

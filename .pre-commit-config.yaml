@@ -106,14 +106,15 @@ repos:
         # checking with MyPy (--strict)" step gates.
         #
         # This was a hand-written list of the "surface CI gates", because the
-        # rest of the tree carried 412 pre-existing findings and letting them
-        # fail the hook is what a developer learns to skip past.  Those
-        # findings are fixed — 323 under benchmarks/ and tools/, the rest in
-        # setup.py, docs/conf.py and the two published web-framework examples,
-        # among them four `create_crypto_package(dna_codes=...)` calls naming a
-        # parameter the function has never had — so the narrowing has nothing
-        # left to protect against.  Any divergence from ci.yml is still a
-        # divergence, and tests/test_precommit_mypy_scope.py compares the two.
+        # rest of the tree carried pre-existing findings and letting them fail
+        # the hook is what a developer learns to skip past.  Measured before
+        # this pass: 323 under benchmarks/ and tools/, 82 under examples/,
+        # docs/ and fuzz/, and 33 in setup.py — 438 in all, among them four
+        # `create_crypto_package(dna_codes=...)` calls in the published
+        # integration examples naming a parameter the function has never had.
+        # They are fixed, so the narrowing has nothing left to protect
+        # against.  Any divergence from ci.yml is still a divergence, and
+        # tests/test_precommit_mypy_scope.py compares the two.
         files: \.py$
         # Pinned to the same versions the "Type checking with MyPy (--strict)"
         # step of ci.yml installs.  The hook runs in its own isolated venv, and

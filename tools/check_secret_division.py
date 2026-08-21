@@ -92,6 +92,22 @@ ALLOWED: dict[str, tuple[int, str]] = {
         "Removing the divide would deviate from RFC 9106 without changing "
         "the property. Recorded rather than silently dropped.",
     ),
+    "ama_ml_dsa_test_matrix_row_equiv": (
+        14,
+        "ama_dilithium.c:2714, compiled ONLY under AMA_TESTING_MODE and never "
+        "present in a shipped library — which is why CI, running against "
+        "build-shared/ and build-arm/, never saw it and this entry was added "
+        "only when the gate was pointed at the testing-mode static archive. "
+        "The function takes no arguments and has no secret in scope at all: "
+        "`rho` is built in its own body from the constant `0x11 * (i + 1)`, "
+        "and everything else is a parameter-set field (P->k, P->l) or a loop "
+        "counter. The divides are the index arithmetic of the two matrix "
+        "expansions it compares, whose divisor is P->l — public, and the same "
+        "quantity already recorded for dil_sign_internal. The ceiling is the "
+        "measured maximum across both compilers CI uses at -O3, not headroom: "
+        "gcc 13 emits 14 and clang 18 emits 0 (it folds the expansion), so a "
+        "fifteenth divide is a new one and has to be justified here.",
+    ),
 }
 
 #: The gate must have read at least this much before a clean result means

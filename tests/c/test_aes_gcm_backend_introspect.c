@@ -55,6 +55,9 @@ static int is_known_backend(const char *s) {
         || strcmp(s, "table-insecure")     == 0;
 }
 
+extern void ama_test_force_aes_gcm_scalar(void);
+extern void ama_test_restore_aes_gcm(void);
+
 int main(void) {
     /* Force dispatch init so the function pointers are populated. */
     ama_dispatch_init();
@@ -73,6 +76,41 @@ int main(void) {
     CHECK(backend && strcmp(backend, "table-insecure") != 0,
           "constant-time build did not land on table-insecure path");
 #endif
+
+    /* The label must TRACK THE INSTALLED POINTER, not the host's CPU tier.
+     *
+     * `ama_print_dispatch_info()` used to print `dispatch_info.aes_gcm` for
+     * this line, and that field is set from `ama_has_avx2()` alone — it
+     * describes the HOST, never what was compiled in or wired up.  Measured
+     * against the pre-fix tree at -DAMA_ENABLE_AVX2=OFF: the report said
+     * "AVX2" while AES-256-GCM ran the portable bitsliced path at 2.9 MB/s,
+     * against 2204.5 MB/s with the hardware kernel installed — 760x, under a
+     * label that did not move.
+     *
+     * Forcing the scalar slot is the only way to prove the label is not a
+     * constant on this host: if it still reads the same after the pointer is
+     * cleared, it is reporting the CPU again.  Restored immediately, and the
+     * restore is checked, so no later assertion runs against a forced slot. */
+    {
+        const char *forced;
+        const char *restored;
+
+        ama_test_force_aes_gcm_scalar();
+        forced = ama_aes_gcm_active_backend();
+        ama_test_restore_aes_gcm();
+        restored = ama_aes_gcm_active_backend();
+
+        printf("forced-scalar label -> %s ; restored -> %s\n",
+               forced ? forced : "(null)", restored ? restored : "(null)");
+        CHECK(is_known_backend(forced), "forced-scalar label is recognized");
+        CHECK(forced != NULL && strcmp(forced, "vaes-avx2") != 0
+                             && strcmp(forced, "aes-ni-pclmul") != 0
+                             && strcmp(forced, "arm-aes-pmull") != 0,
+              "forcing the scalar slot must stop the label naming a hardware kernel");
+        CHECK(restored != NULL && backend != NULL
+                               && strcmp(restored, backend) == 0,
+              "restore returns the label to what it was before the force");
+    }
 
     /* NIST SP 800-38D §5.2.1.1 plaintext bound: 2^36 - 32 bytes.
      * The macro lives inside ama_aes_gcm.c; we re-derive the literal
