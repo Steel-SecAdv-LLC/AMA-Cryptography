@@ -118,6 +118,32 @@ class TestTheBuildGatingMatchesThat:
         assert "set_source_files_properties(src/c/ama_aes_gcm.c" not in CMAKELISTS
 
 
+def _function_body(source: str, signature: str) -> str:
+    """The braced body of one C function, by brace matching.
+
+    A fixed character window past the signature is not a body: it runs into
+    whatever follows, so an assertion that the function CALLS something passes
+    on a call made by the next function down.  Measured — a first version of
+    ``test_the_public_accessor_and_the_report_share_one_answer`` used
+    ``reporter[:6000]`` and did not fail when the reporter's call was replaced
+    with a hardcoded label.
+
+    Comments must already be stripped; braces inside string literals would
+    break this, and there are none in the two functions it is used on.
+    """
+    start = source.index(signature)
+    open_brace = source.index("{", start)
+    depth = 0
+    for i in range(open_brace, len(source)):
+        if source[i] == "{":
+            depth += 1
+        elif source[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return source[open_brace : i + 1]
+    raise AssertionError(f"unbalanced braces after {signature!r}")
+
+
 class TestTheDispatchGatingMatchesThat:
     def test_the_install_is_under_the_aesni_macro(self) -> None:
         assert "#ifdef AMA_HAVE_X86_AESNI_IMPL" in DISPATCH
@@ -134,11 +160,68 @@ class TestTheDispatchGatingMatchesThat:
         assert "dispatch_info.aes_gcm >= AMA_IMPL_AVX2" not in _strip_c_comments(DISPATCH)
 
     def test_the_active_backend_reporter_can_see_it_without_avx2(self) -> None:
-        reporter = DISPATCH.split("const char *ama_aes_gcm_active_backend(void)")[1]
-        head = reporter[: reporter.index('return "bitsliced-software"')]
+        """The AES-NI arm of the backend reporter is under its OWN macro.
+
+        Anchored on ``return "bitsliced-software"`` — the reporter's terminal
+        fallback, and the one landmark in it that cannot move without the
+        reporter ceasing to be a reporter — rather than on the name of the
+        enclosing function.
+
+        That distinction is not hypothetical: this assertion used to split on
+        ``const char *ama_aes_gcm_active_backend(void)``, and it broke when the
+        pointer comparisons were factored into a static helper so
+        ``ama_print_dispatch_info`` could share them.  Nothing about the
+        property changed; the test was pinned to where the code happened to
+        live.  ``TestTheBackendAcrossBuildConfigurations`` measures the same
+        property by building three configurations and probing the result, but
+        it skips off x86 and on hosts without AES-NI, so this structural check
+        is the coverage everywhere else — which is why it is repaired rather
+        than deleted.
+        """
+        terminal = 'return "bitsliced-software"'
+        assert DISPATCH.count(terminal) == 1, (
+            "expected exactly one terminal software-fallback return in the "
+            "dispatcher; the anchor this test locates the reporter by has moved"
+        )
+        head = DISPATCH[: DISPATCH.index(terminal)]
+
         aesni_section = head.split("#ifdef AMA_HAVE_X86_AESNI_IMPL")
-        assert len(aesni_section) == 2, "the AES-NI arm is not under its own macro"
-        assert 'return "aes-ni-pclmul"' in aesni_section[1]
+        assert len(aesni_section) >= 2, "the AES-NI arm is not under its own macro"
+        assert 'return "aes-ni-pclmul"' in aesni_section[-1], (
+            "the AES-NI label is not returned from inside the "
+            "AMA_HAVE_X86_AESNI_IMPL arm that precedes the software fallback"
+        )
+
+        # ...and it is NOT nested inside the AVX2 arm, which is the whole
+        # finding.  The VAES label legitimately is; the AES-NI one must not be.
+        aesni_arm = aesni_section[-1]
+        aesni_return = aesni_arm.index('return "aes-ni-pclmul"')
+        assert "#ifdef AMA_HAVE_AVX2_IMPL" not in aesni_arm[:aesni_return], (
+            "the AES-NI label sits inside an AMA_HAVE_AVX2_IMPL block — the "
+            "exact coupling this finding removed"
+        )
+
+    def test_the_public_accessor_and_the_report_share_one_answer(self) -> None:
+        """Two callers, one pointer comparison.
+
+        ``ama_aes_gcm_active_backend()`` is the public accessor and
+        ``ama_print_dispatch_info()`` prints the wired backend on its own row.
+        If those ever grew separate comparison ladders they could disagree,
+        and the report is the one an operator reads.
+        """
+        stripped = _strip_c_comments(DISPATCH)
+        # Exactly one definition, called from both places.
+        assert stripped.count("static const char *aes_gcm_installed_backend(void) {") == 1
+
+        accessor = _function_body(stripped, "const char *ama_aes_gcm_active_backend(void)")
+        assert "return aes_gcm_installed_backend();" in accessor
+
+        reporter = _function_body(stripped, "void ama_print_dispatch_info(void)")
+        assert "aes_gcm_installed_backend()" in reporter, (
+            "ama_print_dispatch_info no longer asks aes_gcm_installed_backend() "
+            "for the wired-backend row; a second comparison ladder, or a "
+            "hardcoded label, can disagree with the public accessor"
+        )
 
     def test_the_vaes_upgrade_is_still_avx2_gated(self) -> None:
         """It genuinely needs AVX2; decoupling it would be a real bug."""
