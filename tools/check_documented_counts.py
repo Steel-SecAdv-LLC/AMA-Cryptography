@@ -608,7 +608,15 @@ _C_SUITE_TABLE_RE = re.compile(
     r"`test_\*\.c`\s+files\s+under\s+`tests/c/`[^|\n]*\|\s*(\d[\d,]*)\s*\|"
 )
 _C_SUITE_CTEST_RE = re.compile(r"(\d[\d,]*)\s+`test_\*\.c`\s+registered\s+via\s+ctest")
-_C_SUITE_FILES_UNITS_RE = re.compile(r"C suite is (\d[\d,]*) files / (\d[\d,]*) translation units")
+#: "suite files", not "files": a "suite" is a ``tests/c/test_*.c`` and a
+#: "translation unit" is any ``.c`` under ``tests/c``, so the second number is
+#: the file count and calling the first one "files" made the sentence read as
+#: "60 files / 63 files".  The optional group keeps the older spelling
+#: matching, so a document that has not been reworded is still checked rather
+#: than silently skipped.
+_C_SUITE_FILES_UNITS_RE = re.compile(
+    r"C suite is (\d[\d,]*) (?:suite )?files / (\d[\d,]*) translation units"
+)
 
 #: README's version-stamped C library inventory.  Two counts, neither checked:
 #: "Top-level `src/c/*.c` — 27 translation units" against a tree with 29 (both
