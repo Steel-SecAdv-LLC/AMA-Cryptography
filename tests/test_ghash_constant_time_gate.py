@@ -579,10 +579,18 @@ class TestCalibration:
     A deterministic instrument that reserves a benign band it does not need
     has bought the right to pass a real divergence of that size. Measured on
     the AMA_TESTING_MODE static archive at -O3 under both compilers CI uses,
-    all thirteen targets have a cross-class delta of exactly zero and a
+    all fourteen targets have a cross-class delta of exactly zero and a
     same-class floor of exactly zero. ``ecdsa`` was the last to carry a benign
     term — the DER encoding of the public r and s — and reached zero by
     signing through a fixed-width entry point rather than by tolerating it.
+
+    ``secp256k1-scalarmult`` is the fourteenth, added because the dudect lane
+    for that ladder was information-only and the file its comment named as
+    carrying the "fail-loud variant" contains no secp256k1 scalar-multiplication
+    case: a 256-step Montgomery ladder over a secret scalar was covered only by
+    a lane that cannot fail CI. Measured at limit 0 on all four metrics —
+    16,020,324 instruction references and 3,835,722 data references,
+    byte-identical across all eight classes, with identical D1 and LL misses.
     """
 
     #: Every target whose count is invariant by construction — measured 0/0
@@ -602,6 +610,7 @@ class TestCalibration:
             "x25519",
             "x25519-batch",
             "ecdsa",
+            "secp256k1-scalarmult",
         }
     )
 

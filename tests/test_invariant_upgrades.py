@@ -686,6 +686,98 @@ class TestSuppressionScanPrecision:
         assert unjustified == [], f"suppressions in tools/ without a tracking ID: {unjustified}"
 
 
+class TestOptionalImportSuppressions:
+    """A ``type: ignore`` that cannot be right in both type-check environments.
+
+    Where the optional third-party package IS installed, the name bound by the
+    ``try`` carries the module's type and ``name = None`` in the fallback needs
+    the ignore.  Where it is NOT — the CI type-check image carries the pinned
+    tools and nothing else — the import resolves to ``Any`` through
+    ``ignore_missing_imports``, the assignment is fine, and the same marker is
+    an ERROR under ``warn_unused_ignores``.  One file, two verdicts.
+
+    It appeared four times in this tree, each a latent CI break.  The fix is
+    never another suppression: declare the name before the ``try``.
+    """
+
+    @staticmethod
+    def _gate() -> Any:
+        import importlib.util
+
+        repo_root = Path(__file__).resolve().parent.parent
+        path = repo_root / "tools" / "check_suppression_hygiene.py"
+        spec = importlib.util.spec_from_file_location("_sup_gate_optional", path)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    THIRD_PARTY_FALLBACK = (
+        "try:\n"
+        "    import numpy as np\n"
+        "\n"
+        "    HAVE = True\n"
+        "except ImportError:\n"
+        "    np = None  # type: ignore[assignment]\n"
+        "    HAVE = False\n"
+    )
+
+    FIRST_PARTY_FALLBACK = (
+        "try:\n"
+        "    from ama_cryptography.rfc3161_timestamp import get_timestamp\n"
+        "except ImportError:\n"
+        "    get_timestamp = None  # type: ignore[assignment]\n"
+    )
+
+    DECLARED_FORM = (
+        "np: Any\n"
+        "try:\n"
+        "    import numpy as _np\n"
+        "\n"
+        "    np = _np\n"
+        "    HAVE = True\n"
+        "except ImportError:\n"
+        "    np = None\n"
+        "    HAVE = False\n"
+    )
+
+    def test_a_third_party_fallback_ignore_is_flagged(self) -> None:
+        gate = self._gate()
+        covered = gate._third_party_import_fallback_lines(self.THIRD_PARTY_FALLBACK)
+        assert covered, "the numpy fallback body was not recognised"
+        marked = [
+            i
+            for i, line in enumerate(self.THIRD_PARTY_FALLBACK.splitlines(), start=1)
+            if i in covered and "type: ignore" in line
+        ]
+        assert marked == [6], marked
+
+    def test_a_first_party_fallback_ignore_is_not_flagged(self) -> None:
+        """The precision half: an in-tree module resolves in every environment.
+
+        ``crypto_api.py`` carries exactly this shape for the in-tree RFC 3161
+        module, and those three ignores are needed unconditionally. A gate that
+        cried wolf on them would stop being read.
+        """
+        gate = self._gate()
+        assert gate._third_party_import_fallback_lines(self.FIRST_PARTY_FALLBACK) == set()
+
+    def test_the_declared_form_is_accepted(self) -> None:
+        gate = self._gate()
+        covered = gate._third_party_import_fallback_lines(self.DECLARED_FORM)
+        marked = [
+            i
+            for i, line in enumerate(self.DECLARED_FORM.splitlines(), start=1)
+            if i in covered and "type: ignore" in line
+        ]
+        assert marked == [], marked
+
+    def test_the_shipped_tree_carries_none(self) -> None:
+        gate = self._gate()
+        repo_root = Path(__file__).resolve().parent.parent
+        assert gate.scan_optional_imports(repo_root) == []
+
+
 # ---------------------------------------------------------------------------
 # Cross-cutting: INVARIANTS.md documentation
 # ---------------------------------------------------------------------------

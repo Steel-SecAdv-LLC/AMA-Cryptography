@@ -570,8 +570,8 @@ of justification:
 fail if a suppression is missing a justification, missing a tracking ID, or
 appears in a forbidden directory.
 
-**Scope.** `tools/check_suppression_hygiene.py` runs two passes, because this
-invariant states two different rules.
+**Scope.** `tools/check_suppression_hygiene.py` runs three passes, because this
+invariant states more than one rule.
 
 *The justified-and-tracked pass* covers `ama_cryptography/`, `tests/` **and
 `tools/`**. `tools/` was outside it until someone noticed what lives there: the
@@ -589,8 +589,27 @@ performs — and fails on the presence of `NOLINT*`, `cppcheck-suppress`,
 because that is what "regardless of justification" means. It fails closed on an
 empty scope: a glob that matches nothing is a checker fault, not a clean tree.
 
-That pass did not exist until 5.0.0, and the enforcement sentence above was
-false without it. The checker listed the forbidden directories and had a branch
+*The portability pass* covers every tracked Python file and fails on a
+`# type: ignore` sitting inside an `except ImportError` whose `try` imports a
+THIRD-PARTY module. Such a marker cannot be correct in both environments this
+project type-checks in: where the optional package is installed, the name bound
+by the `try` carries the module's type and `name = None` in the fallback needs
+the ignore; where it is not — the CI type-check image carries the pinned tools
+and nothing else — the import resolves to `Any` through
+`ignore_missing_imports`, the assignment is fine, and the same marker is an
+error under `warn_unused_ignores`. One file, two verdicts, and the one CI sees
+is the red one. The remedy is never another suppression: declare the name
+before the `try` (`np: Any`) and import under an alias.
+
+The third-party restriction is what makes the pass precise rather than noisy.
+`crypto_api.py` guards `from ama_cryptography.rfc3161_timestamp import …` — an
+in-tree module mypy resolves in every environment — so the three ignores in
+that handler are needed unconditionally and are correctly left alone. Both
+directions are pinned by `tests/test_invariant_upgrades.py`
+::`TestOptionalImportSuppressions`.
+
+Neither the C-tree pass nor the portability pass existed until 5.0.0, and the
+enforcement sentence above was false without the first of them. The checker listed the forbidden directories and had a branch
 that reported on them, but it only ever collected
 `ama_cryptography/**/*.py`, `tests/**/*.py` and `tools/**/*.py`, so no path
 under `src/c/` or `include/` could reach that branch — dead code for all four

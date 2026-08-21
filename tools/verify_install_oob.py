@@ -584,27 +584,68 @@ def parse_artefact_fields(path: Path) -> tuple[Optional[dict[str, object]], Opti
     return fields, None
 
 
+#: Format prefix of the package digest.  MUST equal
+#: ``_build_sign._PACKAGE_DIGEST_FORMAT`` and
+#: ``_self_test._PACKAGE_DIGEST_FORMAT`` byte for byte; all three are pinned
+#: equal by ``tests/test_native_integrity.py``.
+_PACKAGE_DIGEST_FORMAT = b"AMA-package-digest-v2\x00"
+
+
+def _absorb_entry(chunks: list[bytes], section: bytes, name: str, content: bytes) -> None:
+    """Append one (section, name, content) entry with every field framed.
+
+    Third mirror of ``_build_sign._absorb_entry``.  This tool deliberately
+    imports nothing from the tree it verifies — that is the whole point of an
+    out-of-band verifier — so the duplication is intentional, and the tests
+    are what keep the three copies identical.
+    """
+    name_bytes = name.encode("utf-8")
+    body = content.replace(b"\r\n", b"\n")
+    chunks.append(len(section).to_bytes(4, "big"))
+    chunks.append(section)
+    chunks.append(len(name_bytes).to_bytes(4, "big"))
+    chunks.append(name_bytes)
+    chunks.append(len(body).to_bytes(8, "big"))
+    chunks.append(body)
+
+
 def compute_package_digest(pkg_dir: Path) -> bytes:
     """SHA3-256 over the tree's ``.py`` files and ``_post_kats/`` vectors.
 
     Byte-for-byte the construction of ``_build_sign._compute_package_digest``
-    (== ``_self_test._compute_module_digest``): sorted top-level ``*.py``
-    excluding ``_integrity_signature.py``, each as name || content with CRLF
-    normalised to LF; then every ``_post_kats/`` file, sorted by name, each
-    prefixed ``b"_post_kats/"`` || name || normalised content.
+    (== ``_self_test._compute_module_digest``): a format prefix, then the count
+    and each of the sorted top-level ``*.py`` files excluding
+    ``_integrity_signature.py``, then the count and each ``_post_kats/`` file
+    sorted by name — every field length-prefixed and every section tagged, with
+    CRLF normalised to LF before the length is taken.
+
+    THE FRAMING IS LOAD-BEARING.  Until 5.0.0 each entry contributed
+    ``name || content`` with no length prefix and consecutive entries were
+    concatenated, so the hash committed to the concatenation rather than to the
+    (filename -> content) mapping and two different trees produced one digest.
+    This tool was the THIRD copy of that construction and was left behind when
+    the other two were framed, which turned it from a verifier into a tool that
+    rejected every correctly signed tree: computed and stored digests could
+    never agree again.  ``tests/test_native_integrity.py`` now pins all three
+    copies equal on the same input, so a future change to one of them fails CI
+    rather than breaking the out-of-band check in the field.
     """
-    chunks: list[bytes] = []
-    for py_file in sorted(pkg_dir.glob("*.py")):
-        if py_file.name == _ARTEFACT_NAME:
-            continue
-        chunks.append(py_file.name.encode("utf-8"))
-        chunks.append(py_file.read_bytes().replace(b"\r\n", b"\n"))
+    chunks: list[bytes] = [_PACKAGE_DIGEST_FORMAT]
+
+    py_files = [p for p in sorted(pkg_dir.glob("*.py")) if p.name != _ARTEFACT_NAME]
+    chunks.append(len(py_files).to_bytes(4, "big"))
+    for py_file in py_files:
+        _absorb_entry(chunks, b"py", py_file.name, py_file.read_bytes())
+
     kat_dir = pkg_dir / "_post_kats"
-    if kat_dir.is_dir():
-        for kat_file in sorted((p for p in kat_dir.iterdir() if p.is_file()), key=lambda p: p.name):
-            chunks.append(b"_post_kats/")
-            chunks.append(kat_file.name.encode("utf-8"))
-            chunks.append(kat_file.read_bytes().replace(b"\r\n", b"\n"))
+    kat_files = (
+        sorted((p for p in kat_dir.iterdir() if p.is_file()), key=lambda p: p.name)
+        if kat_dir.is_dir()
+        else []
+    )
+    chunks.append(len(kat_files).to_bytes(4, "big"))
+    for kat_file in kat_files:
+        _absorb_entry(chunks, b"post_kats", kat_file.name, kat_file.read_bytes())
     return sha3_256(b"".join(chunks))
 
 

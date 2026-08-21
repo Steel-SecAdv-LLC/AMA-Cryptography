@@ -400,6 +400,9 @@ module = [
     # so the verdict would depend on the environment rather than on the code.
     "cmake",
     "packaging.*",
+    # Cython.Build — setup.py imports it behind CYTHON_AVAILABLE, and the
+    # type-check image has no reason to carry a compiler toolchain.
+    "Cython.*",
     # Frameworks the integration EXAMPLES import.  They are not dependencies
     # of this library and are absent from every CI image; the examples are
     # inside `mypy --strict` so their calls into ama_cryptography are checked

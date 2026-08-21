@@ -563,20 +563,103 @@ cannot be answered from this tree.  Everything else stays on, which is what
 found the four `dna_codes` calls.
 
 `make lint` was running `mypy ama_cryptography/ --ignore-missing-imports`
-against a bare `mypy` on `PATH` that resolved to **1.19.1** from a stale
-`~/.local` install, while the pinned toolchain is 2.3.0 and `[tool.mypy]` sets
-`python_version = "3.10"` — a combination mypy 1.x reads differently.  A green
-`make lint` therefore said nothing about what CI would do, and reported 40
-errors CI does not have.  Every tool in the Makefile now runs as
-`$(PYTHON) -m <tool>`, so `make lint`, pre-commit and CI are the same
-toolchain by construction.
+against the bare `mypy` on `PATH`, which resolved to a uv-managed tool install
+(`~/.local/share/uv/tools/mypy/bin/python`) at version **1.19.1** while the
+pinned toolchain is 2.3.0.  Two differences, and the one that mattered is not
+the version: that install has its own isolated site-packages containing mypy
+and nothing else, so it could not see the project's dependencies.  It reported
+**40 errors** the pinned mypy does not — reproduced exactly by running mypy
+2.3.0 with `--no-site-packages`, which is what isolates them.  A green
+`make lint` therefore said nothing about what CI would do, in either
+direction.  Every tool in the Makefile now runs as `$(PYTHON) -m <tool>`, so
+`make lint`, pre-commit and CI are the same toolchain by construction.
+
+The reverse hazard — green locally, red in CI — is the one the type-check step
+already warned about, and widening the scope walked straight into it.  The CI
+image carries only the pinned tools: no numpy, no cryptography, no Cython, no
+matplotlib.  Verified by building a virtualenv with exactly the packages
+`ci.yml` installs and running the new invocation inside it, which found two
+failures a locally-green run could not:
+
+* `setup.py` imports `Cython.Build` behind a `CYTHON_AVAILABLE` guard, and the
+  type-check image has no reason to carry a compiler toolchain — now under
+  `ignore_missing_imports` with the other build-time optional imports.
+* `complete_demo.py` bound `np = None  # type: ignore[assignment]` in an
+  `except ImportError`.  That ignore is *required* where numpy is installed
+  and an *error* where it is not (`warn_unused_ignores`), so the file could not
+  be green in both places at once.  Declaring `np: Any` before the `try` — the
+  same shape `setup.py` and `benchmark_suite.py` now use for their optional
+  imports — makes the verdict environment-independent.
+
+Both environments now report the same thing: 293 modules, zero errors.
+
+#### What the whole-suite run caught, including one this pass caused
+
+The full Python suite — every test, no `-x` — was run against the exact commit
+rather than a subset, and it returned eleven failures.  All eleven were real.
+
+**The package digest had a THIRD mirror, and framing it broke the out-of-band
+verifier.**  The injective-encoding fix above (PY-3) updated `_self_test.py`
+and `_build_sign.py`, and the tests that pin those two equal passed.
+`tools/verify_install_oob.py` — the tool an operator runs against an
+*installed* tree, which deliberately imports nothing from the tree it is
+checking — carries its own copy, and it was left on the old unframed
+encoding.  The result was not a stale mirror that would drift someday: the
+computed and stored digests could never agree again, so the verifier reported
+`py digest MISMATCH` on every correctly signed tree, including this one.  A
+verifier that fails closed on the truth is as useless as one that passes on a
+lie.  The third copy is now framed identically, and
+`tests/test_native_integrity.py::TestAllThreeDigestMirrorsAgree` compares all
+three — the format tag, the entry framing, the whole digest over a staged
+tree, and the shipped tree against the real signed artefact.  Mutation-verified
+in the correct direction: restoring the unframed construction fails all four.
+
+**The constant-time gate's calibration test still described thirteen targets.**
+`secp256k1-scalarmult` was added to `THRESHOLDS` but not to the set the test
+asserts is measured-zero, so the test failed on the very target it should have
+been guarding.  Corrected with the measurement that justifies it.
+
+**The pre-commit hook was weaker than CI, and the test comparing them modelled
+pre-commit wrongly.**  `tests/test_precommit_mypy_scope.py` derives CI's file
+set from `ci.yml` so that a scope written twice cannot drift.  Two things were
+wrong with it once the scope moved.  Its extractor matched `^\s*mypy --strict`,
+which stopped matching when the invocation gained a `MYPYPATH=.` prefix — the
+test then failed with "this test has no subject", which is the right way to
+fail but still a failure.  And it treated the hook's `files` pattern with
+`re.match`, while pre-commit itself uses `re.search`; the two coincide for the
+`^(…)$`-anchored pattern the hook used to carry, so the difference stayed
+invisible until the pattern became an unanchored `\.py$` and the test reported
+every file in the tree as skipped.  Both fixed, and the extractor now also
+skips value-taking options so a report directory is not read as a path.
+
+The hook itself is now at true parity with CI: same files (every tracked
+`.py`), same flags.  `--ignore-missing-imports` and `--no-warn-unused-ignores`
+are gone, and their removal is the point rather than a tidy-up — they existed
+because a developer's checkout need not carry every stub and because three
+load-bearing `# type: ignore` comments read as unused under the first flag.
+Both causes are now answered at the source: every third-party module this tree
+imports is listed individually under `[[tool.mypy.overrides]]`, and the
+environment-dependent ignores are gone.  `types-setuptools` joins the hook's
+pinned dependencies for the same reason CI has it.
+
+**And a fourth suppression pass, because that ignore-flipping shape is a
+class.**  A `# type: ignore` inside an `except ImportError` whose `try`
+imports a THIRD-PARTY module cannot be correct in both environments this
+project type-checks in: required where the package is installed, an error
+where it is not.  It had appeared four times.
+`tools/check_suppression_hygiene.py` now fails on it, restricted to
+third-party imports so that `crypto_api.py`'s three ignores over the in-tree
+RFC 3161 module — needed unconditionally — are correctly left alone.  A gate
+that cried wolf on those would stop being read.  Mutation-verified in both
+directions and pinned by
+`tests/test_invariant_upgrades.py::TestOptionalImportSuppressions`.
 
 #### Deferred
 
-Nothing.  All thirty-seven confirmed audit findings are fixed here, and the
+Nothing.  All thirty-seven confirmed audit findings are fixed here, the
 addressed set was compared programmatically against the confirmed set rather
-than by eye; the type-checking work above was raised and closed in the same
-pass rather than carried forward.
+than by eye, and the type-checking work and the eleven suite failures above
+were raised and closed in the same pass rather than carried forward.
 
 ### Verification pass, eighth (2026-08-20) — a truncated ML-KEM sampler, a poisonable trust artefact, and six gates that could not see the change they police
 

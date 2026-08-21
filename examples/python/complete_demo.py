@@ -109,12 +109,20 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 # most callers arrive with, and AmaEquationEngine accepts it, so when it *is*
 # installed this demo uses it: that way the ndarray path is exercised by
 # running the example rather than only asserted about in a test.
+# Declared before the try, and imported under an alias, so the except branch
+# can bind None without an inline ignore.  An inline `# type: ignore` here is
+# environment-dependent: with numpy installed `np` is a module and the ignore
+# is REQUIRED, without it the import resolves to Any and the same ignore is an
+# ERROR under warn_unused_ignores.  The declaration makes the verdict the same
+# either way, which is what a CI image without numpy needs.
+np: Any
 try:
-    import numpy as np
+    import numpy as _np
 
+    np = _np
     HAVE_NUMPY = True
 except ImportError:  # pragma: no cover - exercised on installs without numpy
-    np = None  # type: ignore[assignment]
+    np = None
     HAVE_NUMPY = False
 
 from ama_cryptography import _numeric

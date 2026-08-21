@@ -52,14 +52,46 @@ def _mypy_hook() -> dict[str, Any]:
 
 
 def _ci_mypy_arguments() -> list[str]:
-    """The path arguments of ci.yml's `mypy --strict ...` invocation."""
+    """The path arguments of ci.yml's `mypy --strict ...` invocation.
+
+    The command may carry a leading environment assignment (`MYPYPATH=.`) and
+    option arguments that take a value (`--linecoverage-report <dir>`).  Both
+    are stripped here: this function's subject is the SET OF PATHS mypy is
+    pointed at, and a report directory is not one of them.  Matching only
+    an unprefixed ``mypy --strict`` at the start of a line missed the
+    invocation entirely once the env prefix
+    was added, and the assertion below turned that into "this test has no
+    subject" rather than a silent pass — which is why it is an assertion.
+    """
     text = CI_WORKFLOW.read_text(encoding="utf-8")
-    match = re.search(r"^\s*mypy --strict (?P<args>(?:.|\n)*?)(?=\n\s*\n|\n\s*-\s)", text, re.M)
+    match = re.search(
+        r"^\s*(?:[A-Z_]+=\S*\s+)*mypy --strict (?P<args>(?:.|\n)*?)(?=\n\s*\n|\n\s*-\s)",
+        text,
+        re.M,
+    )
     assert match, "no `mypy --strict` invocation found in ci.yml; this test has no subject"
     # Join the shell line continuations, then split as the shell would.
     joined = match.group("args").replace("\\\n", " ")
-    # Stop at the first line that is no longer part of the command.
-    return [a for a in shlex.split(joined) if not a.startswith("-")]
+
+    #: Options that consume the argument after them, so that argument is not a
+    #: path.  Listed rather than guessed: an unknown value-taking option would
+    #: otherwise have its value read as a path and fail the `is_file` check
+    #: below with a confusing message.
+    value_taking = {"--linecoverage-report", "--linecount-report", "--lineprecision-report"}
+
+    paths: list[str] = []
+    skip_next = False
+    for token in shlex.split(joined):
+        if skip_next:
+            skip_next = False
+            continue
+        if token in value_taking:
+            skip_next = True
+            continue
+        if token.startswith("-"):
+            continue
+        paths.append(token)
+    return paths
 
 
 def _expand(arguments: list[str]) -> set[str]:
@@ -99,11 +131,18 @@ def test_the_hook_declares_a_scope(hook: dict[str, Any]) -> None:
 
 
 def test_the_hook_and_ci_check_the_same_files(hook: dict[str, Any]) -> None:
+    # re.search, not re.match: that is what pre-commit itself does with a
+    # hook's `files` pattern (`filter_by_include_exclude` searches). The two
+    # coincide for a pattern anchored with `^(...)$`, which is what this hook
+    # used to carry, so the difference stayed invisible — and then reported
+    # every file in the tree as "the hook skips them" the moment the pattern
+    # became an unanchored `\.py$`. A test that models the tool wrongly
+    # reports on itself rather than on the subject.
     selector = re.compile(str(hook["files"]))
     ci_files = _expand(_ci_mypy_arguments())
     assert ci_files, "ci.yml's mypy step expanded to nothing; this test has no subject"
 
-    hook_misses = sorted(f for f in ci_files if not selector.match(f))
+    hook_misses = sorted(f for f in ci_files if not selector.search(f))
     assert not hook_misses, (
         f"ci.yml gates these files but the pre-commit hook skips them: "
         f"{hook_misses[:10]}. The hook is weaker than CI."
@@ -114,7 +153,7 @@ def test_the_hook_and_ci_check_the_same_files(hook: dict[str, Any]) -> None:
         for p in REPO_ROOT.rglob("*.py")
         if "__pycache__" not in p.parts and ".git" not in p.parts
     }
-    hook_extra = sorted(f for f in tracked - ci_files if selector.match(f))
+    hook_extra = sorted(f for f in tracked - ci_files if selector.search(f))
     assert not hook_extra, (
         f"the pre-commit hook checks files ci.yml does not: {hook_extra[:10]}. "
         f"Either add them to ci.yml or drop them here — a hook that reports "

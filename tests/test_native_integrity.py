@@ -40,6 +40,7 @@ import subprocess
 import sys
 import textwrap
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -181,6 +182,102 @@ class TestSignerVerifierAgreement:
         _self_test._absorb_entry(one, b"py", "a.py", b"body\r\nhere")
         _build_sign._absorb_entry(two, b"py", "a.py", b"body\r\nhere")
         assert one.digest() == two.digest()
+
+
+class TestAllThreeDigestMirrorsAgree:
+    """There is a THIRD copy of the package-digest construction.
+
+    ``tools/verify_install_oob.py`` is the out-of-band verifier an operator
+    runs against an installed tree.  It deliberately imports nothing from the
+    tree it is checking — that is the point of it — so it carries its own copy
+    of the digest, and the two tests above, which compare only ``_self_test``
+    and ``_build_sign``, could not see it.
+
+    When the construction was framed in 5.0.0 that third copy was left on the
+    old unframed encoding.  It did not merely go stale: computed and stored
+    digests could never agree again, so the verifier reported
+    ``py digest MISMATCH`` on every correctly signed tree — a verifier that
+    fails closed on the truth is as useless as one that passes on a lie, and
+    the whole-suite run is what caught it.
+
+    These tests compare all three on the same input, so the next change to one
+    of them fails here.
+    """
+
+    @staticmethod
+    def _oob() -> Any:
+        import importlib.util
+
+        repo_root = Path(__file__).resolve().parent.parent
+        path = repo_root / "tools" / "verify_install_oob.py"
+        spec = importlib.util.spec_from_file_location("_oob_verifier", path)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_the_format_tag_is_identical_in_all_three(self) -> None:
+        from ama_cryptography import _build_sign, _self_test
+
+        oob = self._oob()
+        assert oob._PACKAGE_DIGEST_FORMAT == _self_test._PACKAGE_DIGEST_FORMAT
+        assert oob._PACKAGE_DIGEST_FORMAT == _build_sign._PACKAGE_DIGEST_FORMAT
+
+    def test_entry_framing_is_identical_in_all_three(self) -> None:
+        import hashlib
+
+        from ama_cryptography import _build_sign
+
+        oob = self._oob()
+        reference = hashlib.sha3_256()
+        _build_sign._absorb_entry(reference, b"post_kats", "v.json", b"x\r\ny")
+
+        chunks: list[bytes] = []
+        oob._absorb_entry(chunks, b"post_kats", "v.json", b"x\r\ny")
+        assert hashlib.sha3_256(b"".join(chunks)).digest() == reference.digest()
+
+    def test_the_whole_digest_is_identical_on_a_staged_tree(self, tmp_path: Path) -> None:
+        """The assertion that would have caught the drift: same tree, same digest."""
+        from ama_cryptography import _build_sign
+
+        pkg = tmp_path / "ama_cryptography"
+        (pkg / "_post_kats").mkdir(parents=True)
+        (pkg / "a.py").write_text("alpha = 1\r\n", encoding="utf-8")
+        (pkg / "b.py").write_text("beta = 2\n", encoding="utf-8")
+        # Excluded from the digest by both implementations; present so the
+        # exclusion is exercised rather than assumed.
+        (pkg / "_integrity_signature.py").write_text("SIGNATURE = 'x'\n", encoding="utf-8")
+        (pkg / "_post_kats" / "one.json").write_text('{"v": 1}\n', encoding="utf-8")
+
+        oob = self._oob()
+        assert oob.compute_package_digest(pkg) == _build_sign._compute_package_digest(pkg)
+
+    def test_the_shipped_tree_verifies_out_of_band(self) -> None:
+        """End to end, against the real signed artefact.
+
+        The unit comparisons above would pass on two implementations that are
+        identically wrong.  This one is the ground truth: the digest the
+        out-of-band tool computes over the shipped package must be the digest
+        the artefact was signed over.
+        """
+        repo_root = Path(__file__).resolve().parent.parent
+        pkg = repo_root / "ama_cryptography"
+        if not (pkg / "_integrity_signature.py").exists():
+            pytest.skip("unsigned tree: nothing to verify against")
+
+        # Read through _artefact_source, not by importing the generated
+        # module: the artefact is parsed from SOURCE TEXT everywhere else in
+        # the tree precisely so a poisoned __pycache__ cannot supply the
+        # values, and a test that imports it would be checking a different
+        # thing from what the product checks.
+        from ama_cryptography._artefact_source import load_artefact_fields
+
+        fields = load_artefact_fields()
+        # None means no artefact on disk, which the guard above already ruled
+        # out — asserted rather than assumed so the failure names the cause.
+        assert fields is not None, "signed artefact present but not parseable"
+        oob = self._oob()
+        assert oob.compute_package_digest(pkg).hex() == fields.INTEGRITY_DIGEST_HEX
 
 
 class TestThePackageDigestIsAnInjectiveCommitment:

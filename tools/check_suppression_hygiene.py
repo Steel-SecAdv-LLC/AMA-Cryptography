@@ -14,6 +14,7 @@ Usage (CI):
 from __future__ import annotations
 
 import io
+import ast
 import os
 import re
 import sys
@@ -278,6 +279,147 @@ def scan_c_tree(repo_root: Path) -> list[str]:
     return violations
 
 
+# ---------------------------------------------------------------------------
+# Third pass: environment-dependent `type: ignore` in optional-import blocks
+# ---------------------------------------------------------------------------
+#
+# A `# type: ignore` inside an `except ImportError:` handler cannot be correct
+# in both of the environments this project type-checks in.  Where the optional
+# package IS installed, the name bound by the `try` has the imported module's
+# type and `name = None` needs the ignore.  Where it is NOT — the CI
+# type-check image carries the pinned tools and nothing else — the import
+# resolves to `Any` through `ignore_missing_imports`, `name = None` is fine,
+# and the same ignore is an ERROR under `warn_unused_ignores`.
+#
+# So the marker makes the file green in one place and red in the other, which
+# is the "green local mypy --strict reached a red CI" failure the type-check
+# step already warns about.  It appeared four times in this tree
+# (`setup.py` twice, `benchmarks/benchmark_suite.py`,
+# `examples/python/complete_demo.py`), each a latent CI break.
+#
+# The fix is never another suppression: DECLARE the name before the `try`
+# (`np: Any`) and import under an alias, which makes the verdict the same in
+# both environments.
+
+#: Files this pass reads.  Wider than the justification pass above, because
+#: the hazard is about where mypy runs, not about which tree the file is in.
+_OPTIONAL_IMPORT_SCAN_DIRS = (
+    "ama_cryptography",
+    "tests",
+    "tools",
+    "benchmarks",
+    "examples",
+    "fuzz",
+    "nist_vectors",
+    "schemas",
+    "wycheproof_vectors",
+)
+
+_TYPE_IGNORE_RE = re.compile(r"#\s*type:\s*ignore")
+
+
+#: Import prefixes that resolve identically in every environment this project
+#: type-checks in, because they live in this repository.  A fallback for one of
+#: these is not the hazard below: mypy finds the module either way, so an
+#: ignore that is needed is needed everywhere.
+_FIRST_PARTY_PREFIXES = ("ama_cryptography", "ama_cryptography_monitor", "tools", "tests")
+
+
+def _third_party_import_fallback_lines(source: str) -> set[int]:
+    """1-based line numbers inside an ``except ImportError`` whose ``try``
+    imports a module that is NOT first-party.
+
+    The first-party restriction is what makes this precise.
+    ``crypto_api.py`` guards ``from ama_cryptography.rfc3161_timestamp import
+    …`` — an in-tree module that mypy resolves in every environment — so the
+    three ignores in that handler are needed unconditionally and are not a
+    portability problem.  Flagging them would be a gate crying wolf on correct
+    code, which is how a gate stops being read.
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return set()
+
+    covered: set[int] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Try):
+            continue
+
+        third_party = False
+        for stmt in ast.walk(ast.Module(body=node.body, type_ignores=[])):
+            if isinstance(stmt, ast.Import):
+                modules = [alias.name for alias in stmt.names]
+            elif isinstance(stmt, ast.ImportFrom):
+                # A relative import (level > 0) is first-party by construction.
+                modules = [] if stmt.level else [stmt.module or ""]
+            else:
+                continue
+            for module in modules:
+                head = module.split(".", 1)[0]
+                if head and head not in _FIRST_PARTY_PREFIXES:
+                    third_party = True
+        if not third_party:
+            continue
+
+        for handler in node.handlers:
+            names: list[str] = []
+            exc = handler.type
+            if isinstance(exc, ast.Name):
+                names = [exc.id]
+            elif isinstance(exc, ast.Tuple):
+                names = [e.id for e in exc.elts if isinstance(e, ast.Name)]
+            if not any(n in ("ImportError", "ModuleNotFoundError") for n in names):
+                continue
+            for stmt in handler.body:
+                end = getattr(stmt, "end_lineno", stmt.lineno) or stmt.lineno
+                covered.update(range(stmt.lineno, end + 1))
+    return covered
+
+
+def scan_optional_imports(repo_root: Path) -> list[str]:
+    """Every ``type: ignore`` sitting inside an optional-import fallback."""
+    violations: list[str] = []
+    for directory in _OPTIONAL_IMPORT_SCAN_DIRS:
+        root = repo_root / directory
+        if not root.is_dir():
+            continue
+        for path in sorted(root.rglob("*.py")):
+            try:
+                source = path.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            if "ImportError" not in source or "type:" not in source:
+                continue
+            covered = _third_party_import_fallback_lines(source)
+            if not covered:
+                continue
+            for lineno, line in enumerate(source.splitlines(), start=1):
+                if lineno in covered and _TYPE_IGNORE_RE.search(line):
+                    violations.append(
+                        f"{path.relative_to(repo_root).as_posix()}:{lineno}: "
+                        f"`type: ignore` inside an except ImportError block — this "
+                        f"marker is REQUIRED where the optional package is installed "
+                        f"and an ERROR where it is not, so the file cannot be green "
+                        f"in both. Declare the name before the `try` "
+                        f"(e.g. `np: Any`) and import under an alias instead."
+                    )
+    for path in (repo_root / "setup.py", repo_root / "ama_cryptography_monitor.py"):
+        if not path.is_file():
+            continue
+        source = path.read_text(encoding="utf-8")
+        if "ImportError" not in source or "type:" not in source:
+            continue
+        covered = _third_party_import_fallback_lines(source)
+        for lineno, line in enumerate(source.splitlines(), start=1):
+            if lineno in covered and _TYPE_IGNORE_RE.search(line):
+                violations.append(
+                    f"{path.name}:{lineno}: `type: ignore` inside an except "
+                    f"ImportError block — see the note in this gate."
+                )
+    return violations
+
+
 def main() -> int:
     repo_root = Path(__file__).resolve().parent.parent
     os.chdir(repo_root)
@@ -310,6 +452,9 @@ def main() -> int:
     # The trees INVARIANT-13 calls absolute.  Separate pass, separate rule:
     # presence alone is the violation there.
     all_violations.extend(scan_c_tree(repo_root))
+
+    # Suppressions that cannot be right in both type-check environments.
+    all_violations.extend(scan_optional_imports(repo_root))
 
     if all_violations:
         print(f"INVARIANT-13 violations ({len(all_violations)}):\n")
