@@ -155,14 +155,36 @@ FOUR_LAYER_BREAKDOWN = [
 
 
 def load_live_data() -> Any:
-    """Load live benchmark data if available."""
-    if BENCH_FILE.exists():
-        try:
-            with open(BENCH_FILE) as f:
-                return json.load(f)
-        except (json.JSONDecodeError, KeyError):
-            pass
-    return None
+    """Live benchmark measurements, or ``None`` when none have been produced.
+
+    An *absent* ``benchmark_results.json`` means no benchmark has run, and the
+    caller legitimately charts the hardcoded baseline tables instead.  A file
+    that exists but cannot be read or parsed is a different state entirely,
+    and returning ``None`` for it made the two indistinguishable: a damaged
+    results file drew every chart from the baselines and published them as
+    though they had been measured.  Nothing in the output says which source
+    was used, so that substitution is invisible — it fails loudly instead.
+
+    The handler was also wrong in both directions.  ``json.load`` cannot raise
+    ``KeyError``, so that arm was unreachable; ``OSError`` — the failure that
+    genuinely occurs between ``exists()`` and ``open()``, and on a path that
+    is not a regular file — was not caught at all.  ``json.JSONDecodeError``
+    and ``UnicodeDecodeError`` are both ``ValueError``, which is why the read
+    is now pinned to UTF-8 rather than decoded against the host locale.
+    """
+    if not BENCH_FILE.exists():
+        return None
+    try:
+        with open(BENCH_FILE, encoding="utf-8") as handle:
+            return json.load(handle)
+    except (OSError, ValueError) as exc:
+        raise SystemExit(
+            f"{BENCH_FILE} exists but could not be read as JSON ({exc}). "
+            f"Charting would fall back to the hardcoded baseline constants "
+            f"and present them as measurements. Re-run the benchmarks to "
+            f"regenerate it, or remove the file to chart the baselines "
+            f"deliberately."
+        ) from exc
 
 
 # -- Professional dark theme -------------------------------------------------

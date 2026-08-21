@@ -495,6 +495,63 @@ Completed, and now measured: `check_source_inventory_counts` reads both halves
 of that line against the tree, so the row that sat one line from two gated
 inventories is gated too.
 
+**AUD-16 — three `except: pass` handlers, one of which was hiding a real
+substitution.**  CodeQL reported `py/empty-except` on
+`tests/test_artefact_cache_poisoning.py`; sweeping the rule class over all 293
+tracked `.py` files found three more sites it had not reported, because PR
+analysis only surfaces alerts on changed lines.  Each was examined
+individually rather than annotated:
+
+* `benchmarks/generate_charts.py::load_live_data` swallowed a damaged
+  `benchmark_results.json` and returned `None` — the same answer it gives when
+  no benchmark has ever run.  The caller (`if bench:`) cannot tell those apart,
+  so a corrupt results file drew every chart from the hardcoded baseline tables
+  and published them as measurements, with nothing in the output naming the
+  source.  That is the substitution this branch's verification rules exist to
+  prevent.  It now fails loudly.  The handler was also wrong in both
+  directions: `json.load` cannot raise the `KeyError` it caught, and the
+  `OSError` that genuinely occurs between `exists()` and `open()` was not
+  caught at all.  The read is pinned to UTF-8 rather than decoded against the
+  host locale — on windows-latest that is the ANSI codepage, so identical bytes
+  read back as different strings on different runners.
+* `tests/test_secure_memory.py::test_exception_still_zeros` used
+  `try/except ValueError: pass` around an exception its own body raises.  That
+  is a gate that cannot fail: had `SecureBuffer.__exit__` suppressed the
+  exception — a real defect for a context manager, and the precondition of what
+  the test asserts — the handler simply would not have run and the test would
+  still have passed.  Measured, not argued: with `__exit__` patched to return
+  `True`, the old form passes and the `pytest.raises` form now there fails with
+  "DID NOT RAISE".  An AST sweep of every `test_` function confirms this was the
+  only one of twenty-six swallow-only handlers whose `try` body raises the
+  exception it catches; the other twenty-five are availability probes where
+  either outcome is legitimate.
+* `tests/test_self_test_coverage.py` guarded a `delattr` with
+  `except AttributeError: pass` that could never fire.  The package's
+  module-level `__getattr__` raises for every name outside
+  `_CRYPTO_API_EXPORTS`/`_KEY_FORMAT_EXPORTS`, and `_integrity_signature` is in
+  neither, so `getattr` answering non-`None` proves the name is in
+  `pkg.__dict__` — exactly when `delattr` succeeds.  Removed rather than
+  commented.  Verified by execution, not by reading: the branch does not run
+  when the module is run alone, so it was exercised under a realistic ordering
+  (`test_native_integrity.py` first), where a `delattr` spy records one call
+  and it succeeds.
+
+`tests/test_benchmark_chart_inputs.py` is new and covers `load_live_data`,
+which had no test at all.  Four mutations, each caught: restoring the swallow
+fails four tests; gutting the diagnostic fails two; dropping `encoding="utf-8"`
+fails the locale test.  That last one is the reason the locale check runs in a
+subprocess with PEP 538 coercion and PEP 540 UTF-8 mode both disabled — on this
+host the preferred encoding is already UTF-8, so an in-process test could not
+have seen the difference, and the first version of it silently could not.
+
+Nothing was deferred in this item.  The CI-argument gates
+(`check_compiler_warnings`, `check_ed25519_backend_parity`,
+`check_secret_division`, `check_ghash_constant_time`) were not re-run because
+`git diff --name-only d495ff7` shows no `.c`, `.h`, `.cmake` or `CMakeLists`
+input changed since the battery that covered them; `check_release_tag` is
+release-only.
+
+
 ### Verification pass, ninth (2026-08-21) — a resonance detector that could not say "no", a quadratic hot path, and twelve documents describing a tree that is not this one
 
 Thirty-seven findings, raised by reading each subsystem against the standard or

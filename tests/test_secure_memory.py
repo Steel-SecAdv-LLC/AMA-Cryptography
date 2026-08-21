@@ -380,13 +380,17 @@ class TestSecureBuffer:
 
         buffer_ref = None
 
-        try:
+        # `pytest.raises`, not `try/except ValueError: pass`.  The latter was
+        # a gate that could not fail: had `SecureBuffer.__exit__` swallowed
+        # the exception — a real defect for a context manager, and exactly
+        # what "zeros data even if an exception occurs" is asserting around —
+        # the handler simply would not have run and the test still passed.
+        # This form fails if the exception does not propagate.
+        with pytest.raises(ValueError, match="Test exception"):
             with SecureBuffer(50) as buf:
                 buf[:] = b"sensitive" + b"\x00" * 41
                 buffer_ref = buf
                 raise ValueError("Test exception")
-        except ValueError:
-            pass
 
         # buf was zeroed by SecureBuffer.__exit__; buffer_ref is the same object
         assert buffer_ref is not None
