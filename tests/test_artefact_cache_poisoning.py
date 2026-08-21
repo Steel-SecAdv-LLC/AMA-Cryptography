@@ -277,3 +277,77 @@ class TestPoisonedArtefactCacheCannotDisarmTheGate:
             "poisoned cache disarmed the pre-load digest check\n" + output[-2000:]
         )
         assert outcome != "IMPORTED", output[-2000:]
+
+
+class TestTheParserFailsWithTheOneExceptionCallersHandle:
+    """Every unusable artefact must arrive as ``ArtefactSourceError``.
+
+    ``load_artefact_fields`` is the trust bootstrap: the pre-load gates call
+    it and are written to treat ``ArtefactSourceError`` as "no usable artefact,
+    refuse".  A different exception type escaping it is not a cosmetic
+    difference — it is an unhandled exception on the path that decides whether
+    a native object may be mapped.
+
+    ``UnicodeDecodeError`` derives from ``ValueError``, not ``OSError``, so a
+    non-UTF-8 artefact went straight past the ``except OSError`` handler and
+    out of the function raw.  Measured before the fix::
+
+        LEAKED UnicodeDecodeError: 'utf-8' codec can't decode byte 0xff …
+    """
+
+    @staticmethod
+    def _staged(tmp_path: Path, payload: bytes) -> Path:
+        pkg = tmp_path / "ama_cryptography"
+        pkg.mkdir(parents=True, exist_ok=True)
+        (pkg / "_integrity_signature.py").write_bytes(payload)
+        return pkg
+
+    def test_a_non_utf8_artefact_raises_artefact_source_error(self, tmp_path: Path) -> None:
+        from ama_cryptography._artefact_source import ArtefactSourceError, load_artefact_fields
+
+        pkg = self._staged(tmp_path, b"INTEGRITY_DIGEST_HEX = '\xff\xfe'\n")
+        with pytest.raises(ArtefactSourceError, match="is not UTF-8 text"):
+            load_artefact_fields(pkg)
+
+    def test_an_unparseable_artefact_raises_artefact_source_error(self, tmp_path: Path) -> None:
+        from ama_cryptography._artefact_source import ArtefactSourceError, load_artefact_fields
+
+        pkg = self._staged(tmp_path, b"INTEGRITY_DIGEST_HEX = (\n")
+        with pytest.raises(ArtefactSourceError, match="not parseable Python"):
+            load_artefact_fields(pkg)
+
+    def test_a_missing_artefact_is_none_not_an_error(self, tmp_path: Path) -> None:
+        """The one absence that is a normal state: an unsigned tree."""
+        from ama_cryptography._artefact_source import load_artefact_fields
+
+        pkg = tmp_path / "ama_cryptography"
+        pkg.mkdir(parents=True, exist_ok=True)
+        assert load_artefact_fields(pkg) is None
+
+    def test_every_failure_mode_is_one_exception_type(self, tmp_path: Path) -> None:
+        """Swept, so a new decode path cannot reintroduce a second type.
+
+        Each payload is a different way for the artefact to be unusable; none
+        may produce anything other than ArtefactSourceError.
+        """
+        from ama_cryptography._artefact_source import ArtefactSourceError, load_artefact_fields
+
+        payloads = (
+            b"\xff\xfe\x00\x00",
+            b"X = '\xc3'\n",
+            b"X = (\n",
+            b"import os\nX = os.environ\n",
+            b"",
+        )
+        for i, payload in enumerate(payloads):
+            pkg = self._staged(tmp_path / f"case{i}", payload)
+            try:
+                load_artefact_fields(pkg)
+            except ArtefactSourceError:
+                pass
+            except Exception as exc:
+                raise AssertionError(
+                    f"payload {payload!r} raised {type(exc).__name__}, not "
+                    f"ArtefactSourceError; a caller of the trust bootstrap "
+                    f"would see an unhandled exception"
+                ) from exc

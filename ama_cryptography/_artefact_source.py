@@ -149,6 +149,15 @@ def load_artefact_fields(package_dir: Optional[Path] = None) -> Optional[Artefac
         return None
     except OSError as exc:
         raise ArtefactSourceError(f"{path}: cannot be read ({exc})") from exc
+    except UnicodeDecodeError as exc:
+        # NOT an OSError — UnicodeDecodeError derives from ValueError, so the
+        # handler above does not catch it and a non-UTF-8 artefact escaped this
+        # function raw, past the one exception type every caller of the trust
+        # bootstrap is written to expect.  An artefact that is not text is
+        # exactly as unusable as one that cannot be opened, and the callers
+        # that treat ArtefactSourceError as "no usable artefact, refuse" must
+        # see it as such rather than as an unhandled exception.
+        raise ArtefactSourceError(f"{path}: is not UTF-8 text ({exc})") from exc
 
     try:
         tree = ast.parse(text, filename=str(path))

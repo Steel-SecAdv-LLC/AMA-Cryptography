@@ -708,10 +708,14 @@ def _compute_module_digest() -> str:
         digest(A) == digest(B) == 98aaca986290313a24078bb7c79f8ee8...
 
     One signature covered both trees.  ``_serialize_binding_digests`` in this
-    same module already got this right — "the NUL terminator makes the (name,
-    digest) framing unambiguous ... so no concatenation of entries collides
-    with any other map" — and the ``b"_post_kats/"`` section marker was itself
-    an unframed literal a crafted filename could reproduce.
+    same module already got this right, and its premise is worth stating rather
+    than quoting past: "the NUL terminator makes the (name, digest) framing
+    unambiguous ... so no concatenation of entries collides with any other map"
+    holds *because* a NUL cannot occur inside a filename and each digest is a
+    fixed 32 bytes, so the boundaries are recoverable.  The same sentence about
+    a length-free encoding whose fields could contain the delimiter would be
+    false.  Meanwhile the ``b"_post_kats/"`` section marker here was itself an
+    unframed literal a crafted filename could reproduce.
 
     Every field is now length-prefixed and every section tagged, and the whole
     is prefixed with a format version, so the encoding is injective: distinct
@@ -943,9 +947,19 @@ def _cached_code_for(src_path: str) -> Tuple[str, Optional[CodeType], Optional[s
 
     * timestamp caches (flag bit 0 clear) carry the source mtime and size, and
       are rejected when either disagrees with the source on disk;
-    * hash-based caches carry a source hash, but the interpreter only checks it
-      when the ``check_source`` flag (bit 1) is set — an unchecked hash cache is
-      always loaded, so it is always ours to judge.
+    * hash-based caches carry a source hash, and whether the interpreter checks
+      it depends on ``_imp.check_hash_based_pycs`` as well as on the
+      ``check_source`` flag (bit 1) — see :func:`_cache_header_is_live`, which
+      is where that decision is made.
+
+    An earlier version of this list said the interpreter "only checks it when
+    the ``check_source`` flag is set", which is the flag-bits-only model, and
+    it is wrong in both directions: under ``--check-hash-based-pycs never`` a
+    check-source cache is loaded WITHOUT validation, and under ``always`` an
+    unchecked cache IS validated.  Both are reproduced in
+    :func:`_cache_header_is_live`'s docstring.  The rule lives there; this
+    docstring defers to it rather than restating a second, contradicting
+    version of it.
 
     Judging a cache the interpreter would reject produced a false ``poisoned or
     stale .pyc`` verdict for the most ordinary state there is: edit a lazily

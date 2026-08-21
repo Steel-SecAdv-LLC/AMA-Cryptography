@@ -496,38 +496,78 @@ def _gershgorin_lower_bound(matrix: Mat) -> float:
     return 0.0 if best is math.inf else best
 
 
+def _symmetric_part(matrix: Mat) -> Mat:
+    """``(E + Eᵀ) / 2`` — the only part of ``E`` that σ_quadratic can see.
+
+    ``σ(x) = xᵀEx / xᵀx``, and ``xᵀEx`` is a scalar, so it equals its own
+    transpose ``xᵀEᵀx``; averaging gives ``xᵀEx = xᵀ((E + Eᵀ)/2)x`` for every
+    ``x``.  The skew part contributes exactly zero to the quadratic form.
+
+    That is why maximising σ is an eigenproblem on the SYMMETRIC PART and not
+    on ``E``: for a symmetric ``E`` the two coincide and this is the identity,
+    but for a non-symmetric one they do not, and iterating ``E`` answers a
+    different question than the caller asked.
+    """
+    n = matrix.rows
+    out = matrix.copy()
+    for i in range(n):
+        for j in range(matrix.cols):
+            out[i, j] = 0.5 * (float(matrix[i][j]) + float(matrix[j][i]))
+    return out
+
+
 def _dominant_eigenvector(
     matrix: Mat,
     *,
     iterations: int = 512,
     tol: float = 1e-13,
 ) -> Optional[Vec]:
-    """Unit eigenvector of ``matrix``'s largest ALGEBRAIC eigenvalue, or None.
+    """Unit vector maximising ``σ_quadratic(x) = xᵀ·matrix·x / xᵀx``, or None.
 
-    Power iteration converges to the largest-*magnitude* eigenvalue, and this
-    function's contract used to say so while its one caller used the result as
-    ``argmax_x σ_quadratic(x)``.  Those coincide only for a positive
-    semi-definite matrix.  ``E`` is *documented* as positive-definite (see
-    :func:`initialize_ethical_matrix`), but nothing on the public boundary
+    The contract is stated as the quantity the caller wants rather than as
+    "the dominant eigenvector", because two separate things had to be true
+    before those were the same vector, and neither was checked.
+
+    **1. It must be the largest ALGEBRAIC eigenvalue, not the largest by
+    magnitude.**  Power iteration converges to the largest-magnitude one, and
+    this function's contract used to say so while its one caller used the
+    result as ``argmax_x σ(x)``.  Those coincide only when no eigenvalue is
+    negative.  ``E`` is *documented* positive-definite (see
+    :func:`initialize_ethical_matrix`) but nothing on the public boundary
     checks it — ``calculate_sigma_quadratic`` and
     :func:`enforce_sigma_quadratic_threshold` both accept an arbitrary
     caller-supplied array — and the loop below already had explicit handling
     for a negative dominant eigenvalue, so the indefinite case was reachable
-    rather than excluded.
+    rather than excluded.  Measured on ``E = diag(-5, 1)``: it returned
+    ``[1, 0]``, where ``σ = -5``, while ``max_x σ(x) = +1`` at ``[0, 1]``, and
+    :func:`enforce_sigma_quadratic_threshold` then called threshold 0.5
+    unreachable for a threshold a real state meets.
 
-    Measured on ``E = diag(-5, 1)``: this returned ``[1, 0]``, where
-    ``σ = -5``, while ``max_x σ(x) = +1`` at ``[0, 1]``.
-    :func:`enforce_sigma_quadratic_threshold` then reported threshold 0.5
-    unreachable and returned the state uncorrected — for a threshold a real
-    state meets.
-
-    The fix is a Gershgorin shift: run the iteration on ``E + cI`` with
+    Answered by a Gershgorin shift: iterate ``M + cI`` with
     ``c = max(0, -λ_min_bound)``.  Shifting moves every eigenvalue by the same
     ``c`` and changes no eigenvector, and the shifted matrix has no negative
-    eigenvalue, so largest-magnitude and largest-algebraic coincide and the
-    direction that comes back is ``argmax_x σ(x)`` for the ORIGINAL matrix.
-    For a matrix that was already PSD the bound is >= 0, ``c`` is 0, and the
-    iteration is bit-identical to what it was.
+    eigenvalue, so largest-magnitude and largest-algebraic coincide.
+
+    **2. It must be an eigenproblem on the SYMMETRIC PART.**  The first
+    version of this fix shifted and iterated ``E`` itself, which is still the
+    wrong operator whenever ``E`` is not symmetric: ``σ`` cannot see the skew
+    part at all (see :func:`_symmetric_part`), so ``argmax σ`` is the top
+    eigenvector of ``(E + Eᵀ)/2``.  Measured on ``E = [[0, 4], [0, 1]]``,
+    which the shift alone does not help: it returned ``[0.970, 0.243]`` where
+    ``σ = 1.000``, while ``max_x σ(x) = 2.562`` at ``[0.615, 0.788]`` — the
+    same class of failure the shift was added to remove, reached through a
+    different input.  The iteration now runs on the symmetric part, which is
+    an identity for every symmetric ``E`` and therefore changes nothing for
+    the documented case.
+
+    A note on what the shift does NOT promise.  Gershgorin gives a *bound*,
+    not the spectrum: a positive-definite matrix can perfectly well have a
+    negative Gershgorin lower bound — ``[[1, 2], [2, 5]]`` has eigenvalues
+    ≈5.83 and ≈0.17 and a bound of −1 — so ``c`` is frequently non-zero on
+    exactly the matrices this function is documented to receive.  That is
+    harmless, because shifting preserves eigenvectors exactly, but it means
+    the arithmetic is NOT bit-identical to the pre-fix code on those inputs
+    and no claim here says otherwise.
 
     Returns None when the iteration cannot produce a direction (a zero matrix,
     or a start vector that lands exactly in the null space and stays there);
@@ -536,6 +576,11 @@ def _dominant_eigenvector(
     n = matrix.rows
     if n == 0 or matrix.cols != n:
         return None
+
+    # Symmetrise BEFORE bounding: the shift has to be computed from the
+    # operator that is actually iterated, or it can fail to clear the
+    # symmetric part's most negative eigenvalue.
+    matrix = _symmetric_part(matrix)
 
     shift = -_gershgorin_lower_bound(matrix)
     if shift > 0.0:

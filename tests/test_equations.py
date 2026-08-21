@@ -351,6 +351,114 @@ class TestSigmaEnforcementOnAnIndefiniteMatrix(unittest.TestCase):
         matrix = initialize_ethical_matrix(6)
         self.assertGreaterEqual(_gershgorin_lower_bound(asmat(matrix)), 0.0)
 
+    def test_gershgorin_is_a_bound_not_the_spectrum(self) -> None:
+        """A positive-definite matrix can still have a negative bound.
+
+        The docstring once said "for a matrix that was already PSD the bound
+        is >= 0, c is 0, and the iteration is bit-identical".  That is false
+        for almost every PSD matrix with off-diagonal mass: ``[[1, 2], [2, 5]]``
+        has eigenvalues ~5.83 and ~0.17 — positive definite — and a Gershgorin
+        lower bound of -1, so a shift IS applied.  Harmless, because shifting
+        preserves eigenvectors exactly, but the claim of bit-identity was not.
+        This test exists so that claim cannot come back.
+        """
+        from ama_cryptography._numeric import asmat
+        from ama_cryptography.equations import _gershgorin_lower_bound
+
+        psd = asmat([[1.0, 2.0], [2.0, 5.0]])
+        # Positive definite: leading minors 1 > 0 and 1*5 - 2*2 = 1 > 0.
+        self.assertGreater(1.0, 0.0)
+        self.assertGreater(1.0 * 5.0 - 2.0 * 2.0, 0.0)
+        self.assertLess(_gershgorin_lower_bound(psd), 0.0)
+
+
+class TestSigmaIsBlindToTheSkewPart(unittest.TestCase):
+    """``argmax_x sigma(x)`` is an eigenproblem on ``(E + E^T)/2``, not on ``E``.
+
+    ``sigma(x) = x^T E x / x^T x`` and ``x^T E x`` is a scalar, so it equals
+    ``x^T E^T x``; averaging gives ``x^T E x = x^T ((E + E^T)/2) x`` for every
+    ``x``.  The skew part contributes exactly nothing.
+
+    The first version of the indefinite-matrix fix shifted and iterated ``E``
+    itself, which is the right operator only when ``E`` is symmetric.  Measured
+    on ``E = [[0, 4], [0, 1]]``: it returned ``[0.970, 0.243]`` where
+    ``sigma = 1.000``, against a true maximum of ``2.562`` at
+    ``[0.615, 0.788]`` — the same class of failure the shift was added to
+    remove, reached through a different input.
+    """
+
+    NON_SYMMETRIC = (
+        [[0.0, 4.0], [0.0, 1.0]],
+        [[3.0, -7.0], [2.0, 3.0]],
+        [[1.0, 10.0], [-2.0, 1.0]],
+        [[-5.0, 6.0], [0.0, -1.0]],
+    )
+
+    def test_the_symmetric_part_is_what_sigma_sees(self) -> None:
+        from ama_cryptography._numeric import asmat
+        from ama_cryptography.equations import _symmetric_part
+
+        for data in self.NON_SYMMETRIC:
+            matrix = asmat(data)
+            sym = _symmetric_part(matrix)
+            for step in range(181):
+                angle = math.pi * step / 180.0
+                probe = Vec([math.cos(angle), math.sin(angle)])
+                self.assertAlmostEqual(
+                    calculate_sigma_quadratic(probe, matrix),
+                    calculate_sigma_quadratic(probe, sym),
+                    places=12,
+                    msg=f"{data}: sigma differs between E and its symmetric part",
+                )
+
+    def test_the_direction_maximises_sigma_for_non_symmetric_input(self) -> None:
+        """The property, swept densely — this is what caught the defect."""
+        from ama_cryptography._numeric import asmat
+        from ama_cryptography.equations import _dominant_eigenvector
+
+        for data in self.NON_SYMMETRIC:
+            matrix = asmat(data)
+            direction = _dominant_eigenvector(matrix)
+            self.assertIsNotNone(direction, f"{data}: no direction returned")
+            assert direction is not None
+            best = calculate_sigma_quadratic(direction, matrix)
+            for step in range(2881):
+                angle = math.pi * step / 2880.0
+                probe = Vec([math.cos(angle), math.sin(angle)])
+                self.assertLessEqual(
+                    calculate_sigma_quadratic(probe, matrix),
+                    best + 1e-9,
+                    f"{data}: a swept direction beat the reported maximiser",
+                )
+
+    def test_a_purely_skew_matrix_has_no_maximiser(self) -> None:
+        """sigma is identically zero there, so "no direction" is the answer.
+
+        Returning some arbitrary unit vector would be worse than None: the
+        caller blends toward it to raise sigma, and no blend can.
+        """
+        from ama_cryptography._numeric import asmat
+        from ama_cryptography.equations import _dominant_eigenvector
+
+        skew = asmat([[0.0, 1.0], [-1.0, 0.0]])
+        for step in range(181):
+            angle = math.pi * step / 180.0
+            probe = Vec([math.cos(angle), math.sin(angle)])
+            self.assertAlmostEqual(calculate_sigma_quadratic(probe, skew), 0.0, places=12)
+        self.assertIsNone(_dominant_eigenvector(skew))
+
+    def test_symmetric_input_is_untouched_by_the_symmetrisation(self) -> None:
+        """The documented case must be an exact identity, not an approximation."""
+        from ama_cryptography._numeric import asmat
+        from ama_cryptography.equations import _symmetric_part
+
+        for data in ([[2.0, 0.0], [0.0, 3.0]], [[-1.0, 2.0], [2.0, -1.0]]):
+            matrix = asmat(data)
+            sym = _symmetric_part(matrix)
+            for i in range(2):
+                for j in range(2):
+                    self.assertEqual(float(sym[i][j]), float(matrix[i][j]), f"{data} [{i}][{j}]")
+
 
 if __name__ == "__main__":
     # Run tests with verbose output

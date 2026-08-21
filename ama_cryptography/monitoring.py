@@ -1329,8 +1329,14 @@ class ResonanceTimingMonitor:
         self.max_operations = int(max_operations)
         self.max_ratio_operations = int(max_ratio_operations)
         #: Records dropped because the operation-name cap was hit.  Non-zero
-        #: means this monitor is not seeing everything; surfaced through
-        #: :meth:`snapshot_baselines` rather than silently absorbed.
+        #: means this monitor is not seeing everything, which is why it is
+        #: counted rather than silently absorbed.
+        #:
+        #: Read it from this attribute, or from ``dropped_operations`` in
+        #: :meth:`AmaCryptographyMonitor.get_security_report`.  It is NOT in
+        #: :meth:`snapshot_baselines`, which returns the per-operation baseline
+        #: mapping and nothing else — an earlier version of this comment said
+        #: it was, and pointed a reader at a method that never carried it.
         self.dropped_operations = 0
         self.use_ewma = use_ewma
         self.ewma_alpha = ewma_alpha
@@ -1364,7 +1370,10 @@ class ResonanceTimingMonitor:
         # rule with no budget, no calibration and no floor.
         self._ratio_dev_history: Dict[Tuple[str, str], Deque[float]] = {}
         self._ratio_dev_total: Dict[Tuple[str, str], int] = {}
-        self._ratio_threshold: Dict[Tuple[str, str], Tuple[int, float]] = {}
+        #: pair -> (ingest count at computation, budget it was computed for,
+        #: threshold).  The budget is in the key material, not just the value:
+        #: see the note in :meth:`_calibrated_ratio_threshold`.
+        self._ratio_threshold: Dict[Tuple[str, str], Tuple[int, float, float]] = {}
         # Priority 7: Frozen baselines for drift detection
         self._frozen_baselines: Dict[str, Tuple[float, float]] = {}  # (frozen_mean, frozen_std)
         # Empirical threshold calibration: robust scores observed per
@@ -1820,6 +1829,35 @@ class ResonanceTimingMonitor:
     #: quantile.  Same size and same reason as :attr:`_SCORE_HISTORY_LEN`.
     _RATIO_DEV_HISTORY_LEN: ClassVar[int] = 4096
 
+    #: Samples a PAIR must accumulate before its bar may alarm, as a multiple
+    #: of the point path's floor.
+    #:
+    #: The point path activates at ``max(100, ceil(1/alarm_budget))``.  The
+    #: ratio path needs more for the same quantile accuracy, and the reason is
+    #: structural rather than a matter of taste: a point score is a robust
+    #: z-score of one observation, while a ratio deviation is built from TWO
+    #: EWMA means, each already a smoothed function of its own history.  The
+    #: extra smoothing makes consecutive deviations more autocorrelated, and an
+    #: empirical quantile of autocorrelated samples under-covers — it has seen
+    #: less of the tail than its sample count suggests.
+    #:
+    #: Measured on two clean i.i.d. lognormal operations, 5,000 records each,
+    #: eight seeds, against a declared 1% budget:
+    #:
+    #:   floor x1  (the point path's)   mean 1.19%   worst 1.79%
+    #:   floor x4  (this)               mean 1.09%   worst 1.66%
+    #:   floor x10                      mean 1.04%   worst 1.51%
+    #:
+    #: The overspend is a warm-up effect, not a steady-state one: pooled over
+    #: the same runs by position in the stream, the first 40% of records
+    #: alarmed at 1.31% and 1.51% while the last 40% ran UNDER budget at 0.55%
+    #: and 0.83%.  x4 takes most of the available correction; x10 buys 0.04
+    #: points more for two and a half times the silence, which is not a trade
+    #: worth making on a supplementary signal — the point path covers these
+    #: same operations throughout, so a longer warm-up here delays a
+    #: cross-check rather than leaving anything unwatched.
+    _RATIO_ACTIVATION_FLOOR_MULTIPLE: ClassVar[int] = 4
+
     def _calibrated_ratio_threshold(
         self, pair: Tuple[str, str], alarm_budget: float
     ) -> Optional[float]:
@@ -1828,27 +1866,66 @@ class ResonanceTimingMonitor:
         estimate would be extrapolation.
 
         The same rule :meth:`_calibrated_score_threshold` applies to the point
-        path, for the same reason and with the same cadence.  ``None`` means
-        the pair may not alarm AT ALL yet: unlike the point path there is no
-        measured basis for a fixed sigma floor here — the ratio of two EWMA
-        means is not a robust z-score and never had a calibrated budget — so
-        the warmup posture is silence rather than an uncalibrated bar.
+        path, for the same reason and with the same cadence, but with a larger
+        activation floor — see :attr:`_RATIO_ACTIVATION_FLOOR_MULTIPLE` for the
+        measurement behind it.  ``None`` means the pair may not alarm AT ALL
+        yet: unlike the point path there is no measured basis for a fixed sigma
+        floor here — the ratio of two EWMA means is not a robust z-score and
+        never had a calibrated budget — so the warmup posture is silence rather
+        than an uncalibrated bar.
+
+        What this does NOT claim is that the spend equals the budget.  An
+        empirical quantile over a bounded rolling window is an estimate, and
+        this one measures at roughly 1.09% against a declared 1% across eight
+        seeds — the same kind of overshoot the point path shows (1.1% against
+        1%), and reported rather than rounded away.
         """
         history = self._ratio_dev_history.get(pair)
         if history is None or alarm_budget <= 0.0:
             return None
         n = len(history)
-        if n < max(100, math.ceil(1.0 / alarm_budget)):
+        floor = self._RATIO_ACTIVATION_FLOOR_MULTIPLE * max(100, math.ceil(1.0 / alarm_budget))
+        if n < floor:
             return None
         total = self._ratio_dev_total.get(pair, n)
         cached = self._ratio_threshold.get(pair)
-        if cached is not None and total - cached[0] < self._THRESHOLD_RECOMPUTE_INTERVAL:
-            return cached[1]
+        # The budget is part of the cache key, not just the cadence.  It was
+        # keyed on the pair alone, so the first budget to compute a bar owned
+        # it until the recompute interval elapsed — and with the budget taken
+        # from whichever operation happened to be recording, the bar a strict
+        # operation got was whatever a loose one had most recently produced.
+        # Measured on a pair of {"alarm_budget": 0.002} and 0.05 operations
+        # after 4,000 records each: 7.868 when computed under 0.002 and 5.011
+        # under 0.05, and the 5.011 was served to the 0.002 caller — a bar 36%
+        # too low for the operation that asked for the tighter one.
+        if (
+            cached is not None
+            and cached[1] == alarm_budget
+            and total - cached[0] < self._THRESHOLD_RECOMPUTE_INTERVAL
+        ):
+            return cached[2]
         ordered = sorted(history)
         k = min(n - 1, max(0, math.ceil((1.0 - alarm_budget) * (n + 1)) - 1))
         threshold = max(self.threshold, ordered[k])
-        self._ratio_threshold[pair] = (total, threshold)
+        self._ratio_threshold[pair] = (total, alarm_budget, threshold)
         return threshold
+
+    def _pair_alarm_budget(self, pair: Tuple[str, str]) -> float:
+        """The STRICTER of the two operations' budgets, so the pair's bar does
+        not depend on which side happened to record.
+
+        ``_update_timing_ratios`` used the budget of the operation currently
+        being recorded, which for a pair is an arbitrary choice between two —
+        the same pair got a different bar depending on the arrival order of its
+        two members.  Taking the minimum makes it deterministic, and makes it
+        the safe direction: a pair that includes an operation the caller asked
+        to watch tightly is not allowed to be looser than that operation.
+        """
+        budgets = [
+            float(self.anomaly_profiles.get(op, {}).get("alarm_budget", self.DEFAULT_ALARM_BUDGET))
+            for op in pair
+        ]
+        return min(budgets)
 
     def _update_timing_ratios(self, operation: str, current_mean: float) -> Optional[TimingAnomaly]:
         """
@@ -1885,9 +1962,6 @@ class ResonanceTimingMonitor:
                 return None
             self._ratio_ops.append(operation)
 
-        profile = self.anomaly_profiles.get(operation, {})
-        alarm_budget = float(profile.get("alarm_budget", self.DEFAULT_ALARM_BUDGET))
-
         for other_op in self._ratio_ops:
             if other_op == operation:
                 continue
@@ -1917,17 +1991,31 @@ class ResonanceTimingMonitor:
                 baseline_mean, baseline_std = self._ratio_baselines[pair]
                 if baseline_std > 0:
                     deviation = abs(ratio - baseline_mean) / baseline_std
-                    # Ingest FIRST, judge after: the quantile has to be an
-                    # estimate of the clean distribution, and a deviation
-                    # withheld because it was large is exactly the sample that
-                    # keeps the estimate honest.
+                    # JUDGE FIRST, then ingest — the ordering the point path
+                    # uses, and for its stated reason: "a sample can never
+                    # raise the threshold it is judged against".  This block
+                    # had them the other way round, so a large deviation was in
+                    # the history that set its own bar and could nudge that bar
+                    # up before being compared to it.  The effect on one sample
+                    # in 4,096 is small, but the property is not a matter of
+                    # degree, and having the two calibrated paths disagree on
+                    # it meant one of the two comments describing "the same
+                    # ordering" was wrong.
+                    #
+                    # Ingesting EVERY deviation, alarming ones included, is a
+                    # separate property and is preserved: a quantile over the
+                    # trailing window is robust to the alarm fraction itself,
+                    # and dropping flagged samples would be a ratchet that can
+                    # only tighten.  The point path says the same thing.
                     history = self._ratio_dev_history.get(pair)
                     if history is None:
                         history = deque(maxlen=self._RATIO_DEV_HISTORY_LEN)
                         self._ratio_dev_history[pair] = history
+                    # The PAIR's budget, derived from both members, not the
+                    # budget of whichever one is recording right now.
+                    bar = self._calibrated_ratio_threshold(pair, self._pair_alarm_budget(pair))
                     history.append(deviation)
                     self._ratio_dev_total[pair] = self._ratio_dev_total.get(pair, 0) + 1
-                    bar = self._calibrated_ratio_threshold(pair, alarm_budget)
                     if bar is not None and deviation > bar:
                         return TimingAnomaly(
                             operation=f"{pair[0]}/{pair[1]}",
@@ -3941,6 +4029,12 @@ class AmaCryptographyMonitor:
         report: Dict[str, Any] = {
             "status": "active",
             "timing_baseline": self.timing.snapshot_baselines(),
+            # Non-zero means the timing monitor hit its operation-name cap and
+            # is no longer seeing every operation.  In the report because a
+            # reader deciding how much to trust `timing_baseline` needs to know
+            # it is partial, and a counter nobody surfaces is a counter nobody
+            # acts on.
+            "dropped_operations": self.timing.dropped_operations,
             "pattern_analysis": self.patterns.analyze_patterns(),
             "recent_alerts": recent_alerts,
             "total_alerts": total_alerts,

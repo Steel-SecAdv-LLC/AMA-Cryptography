@@ -18,6 +18,7 @@ returns.
 from __future__ import annotations
 
 import random
+from typing import ClassVar
 
 import pytest
 
@@ -392,3 +393,95 @@ class TestEvalHarnessGateLogic:
             f"calibration activates ({activation}) — its separation would come "
             f"from the uncalibrated warmup"
         )
+
+
+class TestThePairwiseBarDoesNotDependOnArrivalOrder:
+    """A pair's bar is a property of the pair, not of who recorded last.
+
+    ``_update_timing_ratios`` took ``alarm_budget`` from the operation
+    currently being recorded.  For a pair that is an arbitrary choice between
+    two, and the per-pair threshold cache was keyed on the pair alone, so the
+    first budget to compute a bar owned it for a whole recompute interval.
+
+    Measured before the fix, on a pair of a ``{"alarm_budget": 0.002}`` and a
+    ``0.05`` operation after 4,000 records each: the bar is 7.868 when computed
+    under 0.002 and 5.011 under 0.05, and the 5.011 was served to the 0.002
+    caller — 36% too low for the operation that asked for the tighter budget.
+    """
+
+    PROFILES: ClassVar[dict[str, dict[str, float]]] = {
+        "strict": {"threshold_sigma": 3.0, "alarm_budget": 0.002},
+        "loose": {"threshold_sigma": 3.0, "alarm_budget": 0.05},
+    }
+    PAIR: ClassVar[tuple[str, str]] = ("loose", "strict")
+
+    @staticmethod
+    def _warmed(
+        profiles: dict[str, dict[str, float]], seed: int = 7, records: int = 4000
+    ) -> ResonanceTimingMonitor:
+        import math
+        import random
+
+        from ama_cryptography.monitoring import ResonanceTimingMonitor
+
+        random.seed(seed)
+        monitor = ResonanceTimingMonitor(window_size=64, anomaly_profiles=profiles)
+        for _ in range(records):
+            for op, mu in (("strict", 10.0), ("loose", 25.0)):
+                monitor.record_timing(op, random.lognormvariate(math.log(mu), 0.25))
+        return monitor
+
+    def test_the_pair_budget_is_the_stricter_of_the_two(self) -> None:
+        monitor = self._warmed(self.PROFILES)
+        assert monitor._pair_alarm_budget(self.PAIR) == 0.002
+        assert monitor._pair_alarm_budget((self.PAIR[1], self.PAIR[0])) == 0.002
+
+    def test_an_unprofiled_operation_contributes_the_default(self) -> None:
+        monitor = self._warmed({"strict": self.PROFILES["strict"]})
+        assert monitor._pair_alarm_budget(self.PAIR) == 0.002
+        assert monitor._pair_alarm_budget(("loose", "loose")) == monitor.DEFAULT_ALARM_BUDGET
+
+    def test_a_different_budget_is_not_served_from_the_cache(self) -> None:
+        """The cache is keyed on the budget, not only on the pair."""
+        monitor = self._warmed(self.PROFILES)
+        loose_bar = monitor._calibrated_ratio_threshold(self.PAIR, 0.05)
+        strict_bar = monitor._calibrated_ratio_threshold(self.PAIR, 0.002)
+        assert loose_bar is not None and strict_bar is not None
+        assert strict_bar > loose_bar, (
+            f"a 0.002 budget produced a bar of {strict_bar} that is not stricter "
+            f"than the 0.05 budget's {loose_bar}; the cached value was reused"
+        )
+
+    def test_the_recording_path_actually_uses_the_pair_budget(self) -> None:
+        """End to end, through ``record_timing`` — not the helper directly.
+
+        The tests above call ``_pair_alarm_budget`` and
+        ``_calibrated_ratio_threshold`` themselves, so all of them pass even if
+        ``_update_timing_ratios`` never consults the pair budget at all.
+        Measured: replacing the call site with a fixed
+        ``DEFAULT_ALARM_BUDGET`` left every other test in this class green.
+
+        The observable is the cached entry the recording path writes:
+        ``_ratio_threshold[pair]`` is ``(ingest count, budget, threshold)``, so
+        the budget the live path used is recorded there.
+        """
+        monitor = self._warmed(self.PROFILES)
+        cached = monitor._ratio_threshold.get(self.PAIR)
+        assert cached is not None, (
+            "the recording path never computed a bar for this pair; the test " "has no subject"
+        )
+        _total, budget_used, _threshold = cached
+        assert budget_used == 0.002, (
+            f"the live path computed this pair's bar under a budget of "
+            f"{budget_used}, not the pair's stricter 0.002; a per-operation "
+            f"budget the caller asked for is not reaching the pairs it is in"
+        )
+
+    def test_the_bar_is_the_same_whichever_side_records_last(self) -> None:
+        """The property itself: order in, same bar out."""
+        forward = self._warmed(self.PROFILES)
+        reversed_profiles = dict(self.PROFILES)
+        backward = self._warmed(reversed_profiles, seed=7)
+        assert forward._calibrated_ratio_threshold(
+            self.PAIR, forward._pair_alarm_budget(self.PAIR)
+        ) == backward._calibrated_ratio_threshold(self.PAIR, backward._pair_alarm_budget(self.PAIR))

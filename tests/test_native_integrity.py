@@ -224,17 +224,32 @@ class TestAllThreeDigestMirrorsAgree:
         assert oob._PACKAGE_DIGEST_FORMAT == _build_sign._PACKAGE_DIGEST_FORMAT
 
     def test_entry_framing_is_identical_in_all_three(self) -> None:
+        """All three, as the name says.
+
+        This compared the out-of-band copy against ``_build_sign`` only, so
+        the ``_self_test`` mirror — the one the RUNTIME verifier uses — was
+        named in the test title and absent from its body.  ``_self_test`` and
+        ``_build_sign`` are pinned equal by ``TestSignerVerifierAgreement``
+        above, so the three did agree transitively, but a test that says
+        "all three" must fail when any one of them drifts, not two of them.
+        """
         import hashlib
 
-        from ama_cryptography import _build_sign
+        from ama_cryptography import _build_sign, _self_test
 
         oob = self._oob()
-        reference = hashlib.sha3_256()
-        _build_sign._absorb_entry(reference, b"post_kats", "v.json", b"x\r\ny")
+        entry = (b"post_kats", "v.json", b"x\r\ny")
 
+        signer = hashlib.sha3_256()
+        _build_sign._absorb_entry(signer, *entry)
+        runtime = hashlib.sha3_256()
+        _self_test._absorb_entry(runtime, *entry)
         chunks: list[bytes] = []
-        oob._absorb_entry(chunks, b"post_kats", "v.json", b"x\r\ny")
-        assert hashlib.sha3_256(b"".join(chunks)).digest() == reference.digest()
+        oob._absorb_entry(chunks, *entry)
+        out_of_band = hashlib.sha3_256(b"".join(chunks))
+
+        assert signer.digest() == runtime.digest(), "signer and runtime mirrors differ"
+        assert signer.digest() == out_of_band.digest(), "signer and out-of-band mirrors differ"
 
     def test_the_whole_digest_is_identical_on_a_staged_tree(self, tmp_path: Path) -> None:
         """The assertion that would have caught the drift: same tree, same digest."""
@@ -250,7 +265,30 @@ class TestAllThreeDigestMirrorsAgree:
         (pkg / "_post_kats" / "one.json").write_text('{"v": 1}\n', encoding="utf-8")
 
         oob = self._oob()
-        assert oob.compute_package_digest(pkg) == _build_sign._compute_package_digest(pkg)
+        signer = _build_sign._compute_package_digest(pkg)
+        assert oob.compute_package_digest(pkg) == signer, "out-of-band digest differs from signer"
+
+        # ...and the runtime mirror over the same staged tree.  It derives its
+        # package directory from ``Path(__file__).resolve().parent``, so it is
+        # pointed at the staged tree the same way tests/test_build_sign.py does
+        # rather than being re-implemented here — a fourth transcription would
+        # be one more copy to keep in step by hand.
+        from unittest.mock import patch
+
+        from ama_cryptography import _self_test as st
+
+        class _FakeParent:
+            @property
+            def parent(self) -> Any:
+                return pkg
+
+        class _FakeFile:
+            def resolve(self) -> _FakeParent:
+                return _FakeParent()
+
+        with patch.object(st, "Path", lambda _p: _FakeFile()):
+            runtime_hex = st._compute_module_digest()
+        assert runtime_hex == signer.hex(), "runtime digest differs from signer over the same tree"
 
     def test_the_shipped_tree_verifies_out_of_band(self) -> None:
         """End to end, against the real signed artefact.

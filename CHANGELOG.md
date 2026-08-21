@@ -111,12 +111,46 @@ detector-quality gate could not see any of it, because its evaluation stream
 contains a single operation and the pairwise path needs two.
 
 The bar is now the empirical `(1 − alarm_budget)` quantile of that pair's own
-observed deviations, floored at `threshold` — the same construction, the same
-recompute cadence and the same "ingest first, judge after" ordering the point
-path already used.  Until the estimate would stop being extrapolation the pair
-does not alarm at all: unlike the point path there is no measured basis for a
-fixed sigma floor here, so the warmup posture is silence.  The evaluation
-stream now carries two operations, so the gate can observe the pairwise path.
+observed deviations, floored at `threshold`, with the same construction, the
+same recompute cadence and the same ordering the point path uses: **judge
+first, then ingest**, so a sample can never raise the threshold it is judged
+against.  Every deviation is ingested, alarming ones included — a quantile over
+the trailing window is robust to the alarm fraction itself, and dropping
+flagged samples would be a ratchet that can only tighten.  (The first draft of
+this path ingested before judging and this entry claimed that was "the same
+ordering the point path already used".  It was the opposite of it: the point
+path's own comment says "the observed score joins the calibration history AFTER
+the decision".  The path now does what the sentence says.)  Until the estimate
+would stop being extrapolation the pair does not
+alarm at all: unlike the point path there is no measured basis for a fixed
+sigma floor here, so the warmup posture is silence.  The evaluation stream now
+carries two operations, so the gate can observe the pairwise path.
+
+**What the calibrated bar actually spends**, because an earlier draft of this
+entry said "whatever the frozen reference is off by, the spend is the budget"
+and that is more than an empirical quantile can promise.  Measured on two clean
+i.i.d. lognormal operations, 5,000 records each, eight seeds, against a
+declared 1%:
+
+| Activation floor | Mean spend | Worst seed |
+|---|---:|---:|
+| ×1 — the point path's | 1.19% | 1.79% |
+| **×4 — shipped** | **1.09%** | **1.66%** |
+| ×10 | 1.04% | 1.51% |
+
+The overshoot is a warm-up effect rather than a steady state: pooled by
+position in the stream, the first 40% of records alarmed at 1.31% and 1.51%
+while the last 40% ran *under* budget at 0.55% and 0.83%.  A ratio deviation is
+built from two EWMA means, each already smoothed, so consecutive deviations are
+more autocorrelated than point scores and the quantile has seen less of the
+tail than its sample count suggests — which is why this path now activates at
+four times the point path's floor.  ×10 buys 0.04 points more for two and a
+half times the silence, which is not worth it on a supplementary signal: the
+point path covers the same operations throughout, so a longer warm-up here
+delays a cross-check rather than leaving anything unwatched.
+
+1.09% against 1% is the same kind of overshoot the point path already shows
+(1.1% against 1%), and it is reported here rather than rounded away.
 
 **MON-LANE-05 — `get_security_report()` handed out the live baseline dict.**
 It returned `self.baseline_stats` directly, three lines above the comment where
@@ -163,12 +197,44 @@ so the indefinite case was reachable rather than excluded.  Measured on
 `E = diag(-5, 1)`: the function returned `[1, 0]` where σ = −5, while
 `max_x σ(x) = +1` at `[0, 1]`; the enforcement routine then reported threshold
 0.5 unreachable and returned the state uncorrected, for a threshold a real
-state meets.  Fixed with a Gershgorin shift: the iteration runs on `E + cI`
-with `c = max(0, −λ_min_bound)` from the circle theorem.  Shifting moves every
-eigenvalue by the same `c` and changes no eigenvector, so the direction that
-comes back is `argmax_x σ(x)` for the original matrix; for a matrix that was
-already PSD the bound is ≥ 0, `c` is 0, and the iteration is bit-identical to
-before.
+state meets.
+
+Two things had to be true before the returned vector is `argmax_x σ(x)`, and
+the first version of this fix established only one of them.
+
+*The eigenvalue must be the largest ALGEBRAIC one.*  A Gershgorin shift does
+that: iterate `E + cI` with `c = max(0, −λ_min_bound)` from the circle theorem.
+Shifting moves every eigenvalue by the same `c` and changes no eigenvector, and
+the shifted matrix has no negative eigenvalue, so largest-magnitude and
+largest-algebraic coincide.
+
+*The operator must be the SYMMETRIC PART.*  `σ(x) = xᵀEx / xᵀx`, and `xᵀEx` is
+a scalar so it equals `xᵀEᵀx`; averaging gives `xᵀEx = xᵀ((E + Eᵀ)/2)x` for
+every `x`.  The skew part contributes exactly nothing, so `argmax σ` is the top
+eigenvector of `(E + Eᵀ)/2` — and shifting `E` itself does not make it one.
+The first version shifted and iterated `E`, which leaves the same class of
+failure reachable through a non-symmetric matrix.  Measured on
+`E = [[0, 4], [0, 1]]`: it returned `[0.970, 0.243]` where σ = 1.000, against a
+true maximum of 2.562 at `[0.615, 0.788]`.  The iteration now runs on the
+symmetric part, which is an exact identity for every symmetric `E` and so
+changes nothing for the documented case.  A purely skew `E` now correctly
+returns *no* direction: σ is identically zero there, and handing the caller an
+arbitrary unit vector to blend toward would be worse than admitting there is
+none.
+
+Both properties are swept against brute force over the unit circle in
+`tests/test_equations.py`, and mutation-verified three ways: removing the
+symmetrisation, removing the shift, and applying them in the wrong order each
+fail.
+
+One claim is withdrawn rather than restated.  "For a matrix that was already
+PSD the bound is ≥ 0, `c` is 0, and the iteration is bit-identical to before"
+is false for almost every PSD matrix with off-diagonal mass — Gershgorin gives
+a *bound*, not the spectrum.  `[[1, 2], [2, 5]]` is positive definite
+(eigenvalues ≈5.83 and ≈0.17) with a bound of −1, so a shift is applied.  It is
+harmless, because shifting preserves eigenvectors exactly, but bit-identity was
+not something this change could promise and nothing now says it did.
+`test_gershgorin_is_a_bound_not_the_spectrum` keeps the claim from returning.
 
 **MON-LANE-04 and MON-LANE-08 — MONITORING.md described a different
 implementation.** The 5.0.0 "Measured operating characteristics" block stated
@@ -737,6 +803,69 @@ _CBufferViews(bad): pass`, where `__enter__` is what raises, so the body can
 never run.  They are now `ExitStack().enter_context(...)`, which has no body to
 be unreachable and additionally guarantees that whatever WAS entered before the
 failure is released — the property those tests are about.
+
+#### What an adversarial re-read of this pass found in the pass itself
+
+Every dimension of the change was re-reviewed by independent agents whose
+instruction was to refute, and each finding was then verified against the code
+before it counted.  Seven survived, all of them defects in the corrections
+above rather than in the code they corrected.  They are listed here because a
+verification pass that only reports what it fixed in other people's work is
+not a verification pass.
+
+**The Gershgorin shift was half a fix** (see MON-LANE-10 above, now rewritten).
+Shifting makes largest-magnitude and largest-algebraic coincide; it does not
+make `E` the right operator.  `σ` cannot see the skew part, so `argmax σ` is
+the top eigenvector of `(E + Eᵀ)/2`, and for `E = [[0, 4], [0, 1]]` the shipped
+code returned a direction where σ = 1.000 against a true maximum of 2.562.  The
+iteration now runs on the symmetric part.  The claim that a PSD matrix takes no
+shift is withdrawn: `[[1, 2], [2, 5]]` is positive definite with a Gershgorin
+bound of −1.
+
+**The pairwise bar took its budget from whichever operation recorded last,**
+and the per-pair cache was keyed on the pair alone — so the first budget to
+compute a bar owned it for a whole recompute interval.  Measured on a pair of a
+`alarm_budget: 0.002` and a `0.05` operation after 4,000 records each: the bar
+is 7.868 under 0.002 and 5.011 under 0.05, and the 5.011 was being served to
+the 0.002 caller, 36% too low for the operation that asked for the tighter
+budget.  The pair's budget is now the stricter of its two members — the safe
+direction and, unlike "whoever recorded last", a property of the pair — and the
+budget is part of the cache key.
+
+**The ratio path ingested before judging**, letting a deviation help set the
+bar it was about to be compared against.  The point path does the opposite and
+says why: "the observed score joins the calibration history AFTER the
+decision", so a sample can never raise the threshold it is judged against.  The
+ratio path now matches it.  Ingesting *every* deviation, alarming ones
+included, is a separate property and is preserved in both.
+
+**A non-UTF-8 `_integrity_signature.py` escaped `load_artefact_fields` as a raw
+`UnicodeDecodeError`.**  That class derives from `ValueError`, not `OSError`,
+so it went straight past the handler and out of the trust bootstrap — the one
+function whose callers are written to treat `ArtefactSourceError` as "no usable
+artefact, refuse".  An artefact that is not text is exactly as unusable as one
+that cannot be opened; it now arrives as the same exception, and a sweep over
+five ways of being unusable asserts no second type can appear.
+
+**`dropped_operations` was documented as surfaced through `snapshot_baselines`
+and was surfaced nowhere.**  A counter nobody can read is a counter nobody acts
+on, and this one means the timing monitor has stopped seeing every operation —
+which is exactly what a reader of `timing_baseline` needs to know before
+trusting it.  It is now in `get_security_report`, and the comment points at
+where it actually is.
+
+**Two of the four "all three mirrors" digest tests only exercised two.**  They
+compared the out-of-band copy against `_build_sign` and never against
+`_self_test` — the mirror the *runtime* verifier uses.  The three did agree
+transitively through `TestSignerVerifierAgreement`, but a test that says "all
+three" must fail when any one drifts.  Mutation-verified per mirror now:
+changing the format tag in `_self_test.py`, `_build_sign.py` or
+`verify_install_oob.py` each fails three of the four.
+
+**`_cached_code_for`'s docstring still taught the flag-bits-only model** that
+the `--check-hash-based-pycs` fix disproved in both directions, contradicting
+`_cache_header_is_live` twelve lines away.  The rule lives in one place now and
+the caller defers to it.
 
 #### Deferred
 
