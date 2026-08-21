@@ -794,6 +794,29 @@ jobs:
           python tools/check_ghash_constant_time.py \
             --lib build/lib/libama_cryptography_test.a --target ecdsa
 
+      - name: secp256k1 scalar multiplication must not depend on the scalar
+        # The blocking counterpart to the `secp256k1 scalar multiplication`
+        # dudect lane, which is info-only (a 256-step ladder at ~200 us per
+        # iteration is dominated by runner noise) and had NO counterpart —
+        # while its own source comment claimed one, "fail-loud variants of this
+        # lane are intentionally surfaced separately via
+        # tests/c/test_consttime.c".  That file has no secp256k1
+        # scalar-multiplication case, so the primitive's constant-time property
+        # rested on a lane that cannot fail CI.
+        #
+        # `ecdsa` does not cover it: that target's ladder input is the RFC 6979
+        # nonce derived from a fixed digest, so the scalar is a hash output
+        # rather than a controlled bit pattern.  Here the two classes are a
+        # Hamming-weight contrast — k = 1 against a scalar just under n — so
+        # every ladder step takes the opposite cswap branch between classes.
+        #
+        # Measured at limit 0 on all four metrics: I refs 16,020,324 and D refs
+        # 3,835,722 byte-identical across all eight classes, D1 and LL misses
+        # identical too.
+        run: |
+          python tools/check_ghash_constant_time.py \
+            --lib build/lib/libama_cryptography_test.a --target secp256k1-scalarmult
+
       - name: Build the shared object this branch actually ships
         # The steps above measure the AMA_TESTING_MODE static archive, which is
         # the right subject for callgrind but not for the check below: the

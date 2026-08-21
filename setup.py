@@ -28,8 +28,9 @@ import platform
 import shutil
 import subprocess
 import sys
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 # D-9: Preflight version checks for every build-time dependency listed in
 # pyproject.toml's [build-system].requires.  Each floor here is kept IDENTICAL
@@ -74,7 +75,18 @@ _BUILD_REQS = {
 }
 
 
-def _parse_version(raw: str) -> tuple:
+def _pad3(parts: Sequence[int]) -> tuple[int, int, int]:
+    """Exactly three components, so ``(70, 0)`` compares as ``(70, 0, 0)``.
+
+    Indexed rather than concatenated with a padding tuple: ``tuple(x) + (0,) *
+    n`` has type ``tuple[int, ...]``, which says nothing about the arity the
+    comparisons below depend on.
+    """
+    padded = list(parts[:3]) + [0, 0, 0]
+    return (padded[0], padded[1], padded[2])
+
+
+def _parse_version(raw: str) -> tuple[int, int, int]:
     """Best-effort PEP 440 parse → 3-tuple of ints.
 
     Falls back to a tolerant digit-only split when ``packaging`` is not
@@ -83,19 +95,16 @@ def _parse_version(raw: str) -> tuple:
     ``(70, 0)`` by a naive ``split('.')`` (Copilot review #6).
     """
     try:
-        from packaging.version import Version  # type: ignore[import-not-found]
+        from packaging.version import Version
 
         v = Version(raw)
-        release = v.release
-        # Pad to exactly three components so ``(70, 0)`` compares the same
-        # as ``(70, 0, 0)``.
-        return tuple(release) + (0,) * max(0, 3 - len(release))
+        return _pad3(v.release)
     except Exception:  # pragma: no cover - packaging is in modern setuptools
         # Strip local/build segments and any pre/post markers; keep only
         # the leading dotted-numeric release portion.
         head = raw.split("+", 1)[0].split("-", 1)[0]
         digits = [int(x) for x in head.split(".") if x.isdigit()]
-        return tuple(digits[:3]) + (0,) * max(0, 3 - len(digits[:3]))
+        return _pad3(digits)
 
 
 _REMEDY = (
@@ -154,7 +163,7 @@ def _check_cmake_version() -> None:
     raw: Optional[str] = None
     # Path A: PyPI cmake shim (PEP 517 isolated build env).
     try:
-        import cmake as _cmake  # type: ignore[import-not-found]
+        import cmake as _cmake
 
         raw = getattr(_cmake, "__version__", None)
     except ImportError:
@@ -242,9 +251,14 @@ from setuptools.command.build_ext import build_ext  # noqa: E402
 # Check for Cython availability at the call-site level (the preflight
 # above only proves a minimum version; AMA_NO_CYTHON=1 still gates
 # whether Cython is actually invoked).
+# Declared before the import so the except branch can bind None: without the
+# declaration the name takes the imported function's type and `= None` is an
+# incompatible assignment.
+cythonize: Any
 try:
-    from Cython.Build import cythonize
+    from Cython.Build import cythonize as _cythonize
 
+    cythonize = _cythonize
     CYTHON_AVAILABLE = True
 except ImportError:  # pragma: no cover - preflight should have caught this
     # CodeQL flagged this as an empty except without explanation
@@ -260,9 +274,11 @@ except ImportError:  # pragma: no cover - preflight should have caught this
     cythonize = None
 
 # Check for NumPy availability (needed for C API headers)
+np: Any
 try:
-    import numpy as np
+    import numpy as _np
 
+    np = _np
     NUMPY_AVAILABLE = True
 except ImportError:  # pragma: no cover - preflight should have caught this
     # Same rationale as the Cython block above: the preflight enforces
@@ -291,7 +307,7 @@ PY_CMAKE_BUILD_DIR = Path("build") / "python-cmake"
 long_description = (Path(__file__).resolve().parent / "README.md").read_text(encoding="utf-8")
 
 
-def get_compiler_flags():
+def get_compiler_flags() -> tuple[list[str], list[str]]:
     """Get compiler flags based on platform and configuration."""
     flags = []
     link_flags = []
@@ -340,9 +356,9 @@ def get_compiler_flags():
     return flags, link_flags
 
 
-def get_extension_modules():
+def get_extension_modules() -> list[Extension]:
     """Build list of extension modules."""
-    extensions = []
+    extensions: list[Extension] = []
     compiler_flags, linker_flags = get_compiler_flags()
 
     if not USE_C_EXTENSIONS:
@@ -461,7 +477,7 @@ def get_extension_modules():
     return extensions
 
 
-def get_cythonized_extensions():
+def get_cythonized_extensions() -> list[Extension]:
     """Apply Cython to extensions if available."""
     extensions = get_extension_modules()
 
@@ -478,11 +494,17 @@ def get_cythonized_extensions():
             "linetrace": COVERAGE,
         }
 
-        return cythonize(
-            extensions,
-            compiler_directives=compiler_directives,
-            annotate=DEBUG,  # Generate HTML annotation files in debug mode
+        # list(): cythonize is untyped third-party, so its result is Any, and
+        # returning Any from a function declared to return list[Extension]
+        # silently erases the annotation for every caller.
+        cythonized: list[Extension] = list(
+            cythonize(
+                extensions,
+                compiler_directives=compiler_directives,
+                annotate=DEBUG,  # Generate HTML annotation files in debug mode
+            )
         )
+        return cythonized
 
     return extensions
 
@@ -505,7 +527,7 @@ class CMakeBuild(build_ext):
          Python builds opt out with AMA_NO_CYTHON=1.
     """
 
-    def run(self):
+    def run(self) -> None:
         self._build_cmake()
         self._copy_native_library_into_package()
 
@@ -539,7 +561,7 @@ class CMakeBuild(build_ext):
         # trust-pinned wheels with no extra release-pipeline step.
         self._run_integrity_signer()
 
-    def _run_integrity_signer(self):
+    def _run_integrity_signer(self) -> None:
         """Invoke ama_cryptography._build_sign when running under the wheel pipeline.
 
         The signer reads:
@@ -618,8 +640,8 @@ class CMakeBuild(build_ext):
     _EXTENSION_SUFFIXES = (".so", ".pyd", ".dylib")
     _NATIVE_LIB_PREFIXES = ("libama_cryptography", "ama_cryptography.dll")
 
-    def _iter_extension_files(self, pkg_dir):
-        out = []
+    def _iter_extension_files(self, pkg_dir: Optional[Path]) -> list[Path]:
+        out: list[Path] = []
         if pkg_dir is None or not pkg_dir.is_dir():
             return out
         for path in sorted(pkg_dir.iterdir()):
@@ -630,7 +652,9 @@ class CMakeBuild(build_ext):
             out.append(path)
         return out
 
-    def _sync_binding_extensions_into_source(self, src_pkg_dir, staged_pkg_dir):
+    def _sync_binding_extensions_into_source(
+        self, src_pkg_dir: Path, staged_pkg_dir: Optional[Path]
+    ) -> None:
         """Make the source dir's binding-extension set exactly the staged set.
 
         See the call site for why both directions matter.  A missing staging
@@ -649,7 +673,7 @@ class CMakeBuild(build_ext):
             print(f"Syncing binding extension into source package for signing: {name}")
             shutil.copy2(path, src_pkg_dir / name)
 
-    def _build_cmake(self):
+    def _build_cmake(self) -> None:
         """Build libama_cryptography via CMake."""
         # Check if CMake is available
         try:
@@ -761,7 +785,7 @@ class CMakeBuild(build_ext):
                     d for d in ext.library_dirs if d not in link_candidates and d != "build/lib"
                 ]
 
-    def _copy_native_library_into_package(self):
+    def _copy_native_library_into_package(self) -> None:
         """Bundle libama_cryptography.so* (and Windows DLL) into the package.
 
         D-1 — without this step the produced wheel ships only the Cython
@@ -786,9 +810,11 @@ class CMakeBuild(build_ext):
               picked them up and the install ended in a broken state.
 
         We preserve the SONAME chain
-            libama_cryptography.so -> .so.3 -> .so.3.0.0
-        so the dynamic loader resolves the binding extensions' NEEDED entry
-        correctly via DT_RUNPATH=$ORIGIN.
+            libama_cryptography.so -> .so.<major> -> .so.<major>.<minor>.<patch>
+        (`.so.5` -> `.so.5.0.0` at this release; CMake derives SOVERSION from
+        the project major, so the chain tracks the version rather than being a
+        fixed name) so the dynamic loader resolves the binding extensions'
+        NEEDED entry correctly via DT_RUNPATH=$ORIGIN.
         """
         is_windows = platform.system() == "Windows"
         cmake_root = PY_CMAKE_BUILD_DIR.absolute()
@@ -822,6 +848,8 @@ class CMakeBuild(build_ext):
                 ]
             )
 
+        shared_globs: tuple[str, ...]
+        archive_globs: tuple[str, ...]
         if is_windows:
             shared_globs = ("ama_cryptography*.dll", "libama_cryptography*.dll")
             archive_globs = ("ama_cryptography*.lib", "libama_cryptography*.lib")
@@ -852,7 +880,7 @@ class CMakeBuild(build_ext):
         # dirs (e.g., one populated by single-config CMake, one by a
         # leftover Visual Studio Release/ dir) doesn't overwrite the
         # newer artifact with an older one.
-        seen_basenames: set = set()
+        seen_basenames: set[str] = set()
         copied = []
         for pat in patterns:
             for src in sorted(glob.glob(pat)):
@@ -865,8 +893,10 @@ class CMakeBuild(build_ext):
                     if dst_path.is_symlink() or dst_path.exists():
                         dst_path.unlink()
                     if src_path.is_symlink() and not is_windows:
-                        # Preserve symlink so SONAME chain stays intact
-                        # (libama_cryptography.so -> .so.3 -> .so.3.0.0).
+                        # Preserve symlink so the SONAME chain stays intact
+                        # (libama_cryptography.so -> .so.<major> ->
+                        #  .so.<major>.<minor>.<patch>; `.so.5` at this
+                        #  release).
                         target = os.readlink(src)
                         os.symlink(target, dst_path)
                     else:

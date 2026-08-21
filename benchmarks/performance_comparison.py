@@ -23,7 +23,7 @@ from ama_cryptography.legacy_compat import (
 )
 
 
-def benchmark_native_ed25519(iterations=1000):
+def benchmark_native_ed25519(iterations: int = 1000) -> tuple[float, float]:
     """Benchmark native C Ed25519 via ctypes"""
     print("\n" + "=" * 70)
     print("NATIVE C Ed25519 (via ctypes)")
@@ -60,7 +60,7 @@ def benchmark_native_ed25519(iterations=1000):
     return sign_ops, verify_ops
 
 
-def benchmark_keygen(iterations=1000):
+def benchmark_keygen(iterations: int = 1000) -> float:
     """Benchmark Ed25519 key generation"""
     print("\n" + "=" * 70)
     print("Ed25519 KEY GENERATION")
@@ -80,7 +80,7 @@ def benchmark_keygen(iterations=1000):
     return ops
 
 
-def benchmark_message_sizes(iterations=100):
+def benchmark_message_sizes(iterations: int = 100) -> None:
     """Benchmark Ed25519 across different message sizes"""
     print("\n" + "=" * 70)
     print("Ed25519 PERFORMANCE BY MESSAGE SIZE")
@@ -121,7 +121,7 @@ def benchmark_message_sizes(iterations=100):
         )
 
 
-def main():
+def main() -> None:
     print("=" * 70)
     print("Ed25519 Native C Performance Analysis")
     print("=" * 70)

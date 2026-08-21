@@ -29,8 +29,8 @@
       "sha256": "cde92bc3362bb4e2f2c05de00b26c7a4a826cb9dd87be8618c7e78874257dfd2"
     },
     "nist_vectors/fetch_vectors.py": {
-      "bytes": 10960,
-      "sha256": "7533c4e9309e427d6a67f058d9abc2c00c80fd68f845c062542cc237c87d2185"
+      "bytes": 12636,
+      "sha256": "9181b44d174a044cc79afc5fd3c0200d7c75b53a26ad9f8c56f0c85186673513"
     },
     "nist_vectors/run_vectors.py": {
       "bytes": 54292,

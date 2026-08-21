@@ -277,7 +277,7 @@ extern void ama_keccak_f1600_x4_generic(uint64_t states[4][25]);
  * SIMD implementations (conditionally available at link time)
  * ============================================================================ */
 
-#ifdef AMA_HAVE_AVX2_IMPL
+#if defined(AMA_HAVE_AVX2_IMPL) || defined(AMA_HAVE_X86_AESNI_IMPL)
 #if defined(__x86_64__) || defined(_M_X64)
 /* Single source of truth for the AVX2/VAES kernel prototypes.  This
  * header is private to src/c/avx2/ and this dispatch TU; it carries
@@ -1460,6 +1460,56 @@ static void dispatch_init_internal(void) {
 #endif
 #endif
 
+#ifdef AMA_HAVE_X86_AESNI_IMPL
+    /* AES-GCM's hardware kernel, gated on AES-NI + PCLMULQDQ and on NOTHING
+     * ELSE.  src/c/avx2/ama_aes_gcm_avx2.c emits AESENC / AESENCLAST /
+     * AESKEYGENASSIST and PCLMULQDQ and no wider instruction — there is no
+     * _mm256_* intrinsic in it — so requiring AVX2 was a coupling the ISA does
+     * not have.  Until 5.0.0 it was compiled only inside
+     * `if(AMA_ENABLE_SIMD AND AMA_ENABLE_AVX2)` and installed only when
+     * `dispatch_info.aes_gcm >= AMA_IMPL_AVX2`, which cost hardware AES-GCM on
+     * every AES-NI CPU without AVX2 and in every build with SIMD or AVX2
+     * turned off — the dispatcher quietly kept the constant-time bitsliced
+     * software path, and CMakeLists.txt asserted the opposite in a comment.
+     *
+     * The feature bits are still checked individually rather than inferred: a
+     * hypervisor (or chicken-bit MSR) may advertise one of
+     * CPUID.(EAX=1):ECX[25] (AES-NI) and CPUID.(EAX=1):ECX[1] (PCLMULQDQ)
+     * while masking the other, and installing these pointers on such a host
+     * would SIGILL on the first AESENC — Copilot review #3140228457 /
+     * #3140228489. */
+    if (ama_has_aes_ni() && ama_has_pclmulqdq()) {
+        dispatch_table.aes_gcm_encrypt = ama_aes256_gcm_encrypt_avx2;
+        dispatch_table.aes_gcm_decrypt = ama_aes256_gcm_decrypt_avx2;
+#ifdef AMA_HAVE_AVX2_IMPL
+        /* PR A — VAES + VPCLMULQDQ YMM upgrade.  This one genuinely needs
+         * AVX2, so it stays inside the AVX2 build gate.  CPUID-gated; falls
+         * through to the AES-NI pointers above when the bundle (AVX2 + VAES +
+         * VPCLMULQDQ + AES-NI + AVX-OSXSAVE) is not present.
+         * ama_cpuid_has_vaes_aesgcm() also explicitly checks PCLMULQDQ since
+         * Devin Review #3140732664 (the kernel uses _mm_clmulepi64_si128 on
+         * single-block edge paths; baseline PCLMULQDQ —
+         * CPUID.(EAX=1):ECX[1] — is architecturally independent of
+         * VPCLMULQDQ — CPUID.(EAX=7,ECX=0):ECX[10] — even though every
+         * shipped CPU has both).  No reordering of dispatch_init_internal()
+         * calls — INVARIANT-15 unchanged. */
+#if !defined(_MSC_VER)
+        if (ama_cpuid_has_vaes_aesgcm()) {
+            dispatch_table.aes_gcm_encrypt = ama_aes256_gcm_encrypt_vaes_avx2;
+            dispatch_table.aes_gcm_decrypt = ama_aes256_gcm_decrypt_vaes_avx2;
+            if (dispatch_verbose())
+                fprintf(stderr, "[AMA Dispatch] AES-GCM: VAES+VPCLMULQDQ YMM path selected\n");
+        }
+#endif
+#endif
+    } else if (dispatch_verbose()) {
+        fprintf(stderr,
+            "[AMA Dispatch] AES-GCM: AES-NI=%d PCLMULQDQ=%d"
+            " — falling back to the constant-time software path\n",
+            ama_has_aes_ni(), ama_has_pclmulqdq());
+    }
+#endif
+
 #ifdef AMA_HAVE_AVX2_IMPL
     if (dispatch_info.kyber >= AMA_IMPL_AVX2) {
         dispatch_table.kyber_ntt       = ama_kyber_ntt_avx2;
@@ -1472,46 +1522,6 @@ static void dispatch_init_internal(void) {
         dispatch_table.dilithium_invntt      = ama_dilithium_invntt_avx2;
         dispatch_table.dilithium_pointwise   = ama_dilithium_poly_pointwise_avx2;
         dispatch_table.dilithium_rej_uniform = ama_dilithium_rej_uniform_avx2;
-    }
-    /* The AVX2 AES-GCM kernel emits AES-NI (AESENC / AESENCLAST /
-     * AESKEYGENASSIST) and PCLMULQDQ (CLMUL) opcodes in addition to
-     * VEX-encoded 128-bit loads/stores.  AVX2 alone is not a
-     * sufficient gate: a hypervisor (or chicken-bit MSR) may advertise
-     * CPUID.(EAX=7,ECX=0):EBX[5] while masking CPUID.(EAX=1):ECX[25]
-     * (AES-NI) or CPUID.(EAX=1):ECX[1] (PCLMULQDQ).  Installing the
-     * AVX2 AES-NI pointers on such a host would SIGILL on the first
-     * AESENC — Copilot review #3140228457 / #3140228489.  Require
-     * AVX2 + AES-NI + PCLMULQDQ explicitly here.  The VAES upgrade
-     * inside this block is gated separately by
-     * ama_cpuid_has_vaes_aesgcm(), which since Devin Review
-     * #3140732664 also explicitly checks PCLMULQDQ (the kernel uses
-     * _mm_clmulepi64_si128 on single-block edge paths;
-     * baseline PCLMULQDQ — CPUID.(EAX=1):ECX[1] — is architecturally
-     * independent of VPCLMULQDQ — CPUID.(EAX=7,ECX=0):ECX[10] — even
-     * though every shipped CPU has both). */
-    if (dispatch_info.aes_gcm >= AMA_IMPL_AVX2
-        && ama_has_aes_ni()
-        && ama_has_pclmulqdq()) {
-        dispatch_table.aes_gcm_encrypt = ama_aes256_gcm_encrypt_avx2;
-        dispatch_table.aes_gcm_decrypt = ama_aes256_gcm_decrypt_avx2;
-        /* PR A — VAES + VPCLMULQDQ YMM upgrade.  CPUID-gated; falls
-         * through to the AVX2 AES-NI pointers above when the bundle
-         * (AVX2 + VAES + VPCLMULQDQ + AES-NI + AVX-OSXSAVE) is not
-         * present.  No reordering of dispatch_init_internal() calls
-         * — INVARIANT-15 unchanged. */
-#if !defined(_MSC_VER)
-        if (ama_cpuid_has_vaes_aesgcm()) {
-            dispatch_table.aes_gcm_encrypt = ama_aes256_gcm_encrypt_vaes_avx2;
-            dispatch_table.aes_gcm_decrypt = ama_aes256_gcm_decrypt_vaes_avx2;
-            if (dispatch_verbose())
-                fprintf(stderr, "[AMA Dispatch] AES-GCM: VAES+VPCLMULQDQ YMM path selected\n");
-        }
-#endif
-    } else if (dispatch_verbose() && dispatch_info.aes_gcm >= AMA_IMPL_AVX2) {
-        fprintf(stderr,
-            "[AMA Dispatch] AES-GCM: AVX2 present but AES-NI=%d PCLMULQDQ=%d"
-            " — falling back to generic C path\n",
-            ama_has_aes_ni(), ama_has_pclmulqdq());
     }
     if (dispatch_info.chacha20poly1305 >= AMA_IMPL_AVX2) {
         /* Env override honored for A/B benchmarking and smoke-testing
@@ -2572,6 +2582,12 @@ const char *ama_aes_gcm_active_backend(void) {
     if (dispatch_table.aes_gcm_encrypt == ama_aes256_gcm_encrypt_vaes_avx2)
         return "vaes-avx2";
 #endif
+#endif
+#ifdef AMA_HAVE_X86_AESNI_IMPL
+    /* Under its own macro, not AVX2's: the AES-NI kernel now ships on every
+     * x86 build, including ones with SIMD or AVX2 disabled, and a reporter
+     * that could not see it would answer "bitsliced-software" while the
+     * hardware path was installed. */
     if (dispatch_table.aes_gcm_encrypt == ama_aes256_gcm_encrypt_avx2)
         return "aes-ni-pclmul";
 #endif

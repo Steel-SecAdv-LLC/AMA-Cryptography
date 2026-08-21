@@ -265,7 +265,7 @@ The system defines 4 ethical pillars, each governing a triad of three sub-proper
 
 **Pillar 4: Omnibenevolent — Triad of Integrity (Ethical Constraints)**
 - Ethical foundation: Cryptographic operations serve protective, non-malicious purposes
-- Mathematical correctness: Provably correct implementation with formal verification
+- Mathematical correctness: primitives implemented from the published standards and pinned to their published test vectors, with sanitizer, fuzz and differential coverage of the C core — testing evidence, not proof. This library has not been formally verified; see [§Design Philosophy](#design-philosophy) and [`docs/DESIGN_NOTES.md`](docs/DESIGN_NOTES.md)
 - Hybrid security: Classical + quantum resistance for long-term security
 
 ### Mathematical Integration
@@ -837,7 +837,7 @@ docker run ama-cryptography:latest
 | Category | Purpose | Coverage Target | Files |
 |----------|---------|-----------------|-------|
 | Unit Tests | Individual function validation | 80% line coverage | Python test files under `tests/` (count enforced by `tools/check_documented_counts.py` — see the verified totals below) |
-| C Unit Tests | Native library validation | All C functions | 59 `test_*.c` registered via ctest in `tests/c/` (+ 1 standalone `bench_*.c` + 2 standalone `x25519_equiv_*.c`) |
+| C Unit Tests | Native library validation | All C functions | 60 `test_*.c` registered via ctest in `tests/c/` (+ 1 standalone `bench_*.c` + 2 standalone `x25519_equiv_*.c`) |
 | Integration Tests | Cross-component workflows | All public APIs | `test_integration_e2e.py`, `test_comprehensive_system.py` |
 | Performance Tests | Benchmark regression detection | All critical paths | `test_performance.py`, `benchmarks/` |
 | Security Tests | Cryptographic correctness | 100% crypto functions | `test_crypto_core_penetration.py`, `test_memory_security.py` |
@@ -845,7 +845,7 @@ docker run ama-cryptography:latest
 | Fuzz Tests | Input mutation testing | 15 C targets | `fuzz/fuzz_*.c` (16 sources; `fuzz_rng.c` is a helper) |
 | NIST ACVP Vectors | Official vector validation | 1,215 vectors, 12 algorithms (815 AFT + 400 SHA-3 MCT) | `nist_vectors/` |
 
-**Total:** 4,180 Python test functions across 175 test files, plus the
+**Total:** 4,312 Python test functions across 180 test files, plus the
 ctest-registered C tests and standalone C benchmark under `tests/c/`
 (the exact C-test count varies with build options — `AMA_USE_NATIVE_PQC`
 gates `test_x25519`, `test_chacha20poly1305`, `test_argon2id`,
@@ -860,7 +860,12 @@ instructions.
 1. Code Quality
    - black --check (formatting)
    - ruff check (linting + import sorting, replaces flake8 + isort)
-   - mypy --strict (type checking, 0 errors)
+   - mypy --strict (type checking, 0 errors) over EVERY tracked `.py`
+     file — package, tests, gate scripts, generators, benchmarks,
+     examples, `setup.py`, `docs/conf.py`. That the run covered all of
+     them is itself checked, by `tools/check_type_check_scope.py`
+     against mypy's own coverage report, because an exit status says
+     nothing about what was looked at.
 
 2. Security Scanning
    - bandit (code security)
@@ -920,7 +925,7 @@ Cryptographic implementations are validated against:
 ### Code Quality Standards
 
 - PEP 8 style compliance (enforced via black)
-- Type hints throughout (validated via mypy)
+- Type hints throughout (validated via `mypy --strict`, whole tree; scope enforced by `tools/check_type_check_scope.py`)
 - Comprehensive docstrings (Google style)
 - Maximum line length: 100 characters
 - Maximum cyclomatic complexity: 15

@@ -13,13 +13,17 @@ Updates documentation targets from source-of-truth data:
                        cross-checked against ``benchmarks/baseline.json``
                        for the regression-floor secondary column. Pre-3.0.1
                        this generator pointed at ``baseline.json`` and so
-                       published the *floors* (~65% of measured) as if they
-                       were headline numbers — the wiki caption reflected
-                       that, calling the table "Regression Baselines".
-                       The published numbers now match what the suite
-                       actually measures on the canonical host; the floor
-                       remains visible as a secondary column so reviewers
-                       see both the headline and the CI safety net.
+                       published the *floors* as if they were headline
+                       numbers — the wiki caption reflected that, calling the
+                       table "Regression Baselines". The published numbers now
+                       match what the suite actually measures on the canonical
+                       host; the floor remains visible as a secondary column
+                       so reviewers see both the headline and the CI safety
+                       net. Since 5.0.0 the floor is a measured median on the
+                       runner class named in ``metadata.runner_cpu_class``,
+                       not a fraction of the headline, so the two columns are
+                       different hosts and the floor may legitimately exceed
+                       the measured figure.
   4. wiki/*.md       — update version and date stamps
 
 Usage:
@@ -77,9 +81,16 @@ README = ROOT / "README.md"
 #     ``.github/workflows/ci.yml``'s "Benchmark Regression Detection"
 #     step, which also flows ``benchmarks/benchmark-results.json`` and
 #     ``benchmark-report.md`` through to the workflow artifacts).
-#   * The regression floor (a deliberately-conservative ~65% of measured)
-#     stays in baseline.json and is shown in a secondary column so the
-#     reader can sanity-check that measured >> floor.
+#   * The regression floor stays in baseline.json and is shown in a
+#     secondary column.  Since 5.0.0 it is NOT a discount of the headline
+#     number: it is a measured median on the CI runner class named in
+#     `metadata.runner_cpu_class` (x86-64 slow-class median with a uniform
+#     45% tolerance; aarch64 homogeneous, 15%/25%).  The two columns are
+#     therefore different hosts, and a floor ABOVE a measured figure is an
+#     ordinary result — in wiki/Performance-Benchmarks.md it is the case on
+#     11 of 19 rows.  "Sanity-check that measured >> floor", which this
+#     comment used to say, is not a check the current scheme supports; the
+#     check is the tolerance, applied by the benchmark-regression job.
 BENCHMARK_RESULTS_JSON = ROOT / "benchmarks" / "benchmark-results.json"
 BASELINE_JSON = ROOT / "benchmarks" / "baseline.json"
 WIKI_DIR = ROOT / "wiki"

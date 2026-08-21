@@ -675,6 +675,98 @@ def check_build_config(repo_root: Path) -> list[Violation]:
     return violations
 
 
+#: Container recipes.  These are build inputs too — they decide what is present
+#: at build time and what ships in the runtime image — and nothing read them.
+#: ``docker/Dockerfile`` and ``docker/Dockerfile.alpine`` each carried an
+#: explicit INVARIANT-1 paragraph ("libssl-dev is NOT installed", "openssl-dev
+#: is deliberately absent") while ``docker/Dockerfile.c-api`` installed
+#: ``libssl-dev`` in its builder and ``libssl3`` in its output stage, and
+#: ``Dockerfile.alpine``'s own runtime stage installed ``libssl3`` — the
+#: runtime half of the thing its builder stage says is absent.  The
+#: build-config scan globbed CMake and setup.py only, so it reported clean
+#: over all three.
+_CONTAINER_GLOBS = ("docker/Dockerfile*", "oss-fuzz/Dockerfile*", "Dockerfile*")
+
+#: Package-manager invocations that put a library into an image.
+#: The line-continuation alternative comes FIRST.  With ``[^\n]`` first the
+#: engine consumes the backslash, then finds a bare newline that neither
+#: alternative can match, and the invocation is truncated at the end of its
+#: first physical line — which is where every package name in these files
+#: begins.  A Dockerfile ``RUN apk add --no-cache \`` would have been read as
+#: installing nothing at all.
+_PACKAGE_INSTALL_RE = re.compile(
+    r"\b(?:apt-get|apt|apk|dnf|yum|zypper|pacman)\b[^\n]*?"
+    r"\b(?:install|add)\b(?P<rest>(?:\\\n|[^\n])*)",
+    re.IGNORECASE,
+)
+
+#: One package name inside such an invocation.
+_PACKAGE_NAME_RE = re.compile(r"[A-Za-z0-9_.+-]+")
+
+#: Package-name affixes a distribution adds around the library it wraps:
+#: ``libssl-dev``, ``libssl3``, ``openssl-dev``, ``libsodium-dev``,
+#: ``libgcrypt20-dev``.  Stripped so the base name can be looked up in the
+#: same vendor table the linker scan uses, rather than maintaining a second
+#: table of distribution spellings that would drift from it.
+_PACKAGE_AFFIX_RE = re.compile(r"^(?:lib)?(?P<base>.+?)(?:-?\d[\w.+]*)?(?:-(?:dev|devel|libs))?$")
+
+
+def check_container_recipes(repo_root: Path) -> list[Violation]:
+    """No container recipe may install a forbidden vendor's package.
+
+    Installing OpenSSL does not link it — nothing in this tree does — but it
+    puts a CVE-prone library on disk in an image whose own comments say it is
+    not there, and a runtime image is exactly where a future `dlopen` would
+    find one.  The rule the Dockerfiles already state in prose is now checked.
+    """
+    tokens = _vendor_link_tokens()
+    violations: list[Violation] = []
+    paths: list[Path] = []
+    seen: set[Path] = set()
+    for pattern in _CONTAINER_GLOBS:
+        for path in sorted(repo_root.glob(pattern)):
+            resolved = path.resolve()
+            if not path.is_file() or resolved in seen:
+                continue
+            relative = path.relative_to(repo_root)
+            if set(relative.parts) & _BUILD_CONFIG_SKIP_DIRS:
+                continue
+            seen.add(resolved)
+            paths.append(path)
+
+    if not paths:
+        return [
+            Violation(
+                "container",
+                str(repo_root),
+                "no container recipes found — refusing to report clean having " "examined nothing",
+            )
+        ]
+
+    for path in paths:
+        where = str(path.relative_to(repo_root))
+        text = path.read_text(encoding="utf-8", errors="replace")
+        # Drop comment lines: these files explain the exclusion in prose, and a
+        # gate that fires on its own rationale is a gate that gets deleted.
+        scanned = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
+        for match in _PACKAGE_INSTALL_RE.finditer(scanned):
+            for name in _PACKAGE_NAME_RE.findall(match.group("rest")):
+                if name.startswith("-"):
+                    continue  # an option (--no-cache, -y), not a package
+                base = _PACKAGE_AFFIX_RE.sub(r"\g<base>", name.lower())
+                vendor = tokens.get(name.lower()) or tokens.get(base)
+                if vendor is not None:
+                    violations.append(
+                        Violation(
+                            "container",
+                            where,
+                            f"installs package {name!r} — {vendor} may not be "
+                            f"present in a shipped image (INVARIANT-1)",
+                        )
+                    )
+    return violations
+
+
 # --------------------------------------------------------------------------
 # Runtime check
 # --------------------------------------------------------------------------
@@ -1202,6 +1294,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     if selected_build_config:
         violations += check_build_config(repo_root)
         ran.append("build config (CMake / setup.py link lines)")
+        violations += check_container_recipes(repo_root)
+        ran.append("container recipes (Dockerfile package installs)")
     if selected_runtime:
         violations += check_runtime(repo_root)
         ran.append("runtime (import ama_cryptography)")

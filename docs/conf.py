@@ -102,7 +102,7 @@ autodoc_default_options = {
     "exclude-members": "__weakref__",
 }
 autodoc_typehints = "description"
-autodoc_type_aliases = {}
+autodoc_type_aliases: dict[str, str] = {}
 
 # Autosummary settings
 autosummary_generate = True
@@ -148,19 +148,22 @@ def _inventory_reachable(url: str) -> bool:
     try:
         req = urllib.request.Request(probe, method="HEAD")  # fmt: skip  # noqa: E501,S310  # nosec B310 -- static-scheme probe (DOCS-001)
         with urllib.request.urlopen(req, timeout=_INTERSPHINX_PROBE_TIMEOUT) as resp:  # fmt: skip  # noqa: E501,S310  # nosec B310 -- static-scheme probe (DOCS-001)
-            return 200 <= resp.status < 400
+            # int(): urlopen's response type is untyped here, so the
+            # comparison yields Any and the declared `-> bool` would be
+            # erased for every caller.
+            return 200 <= int(resp.status) < 400
     except (URLError, OSError, ValueError):
         return False
 
 
-def _build_intersphinx_mapping() -> dict:
+def _build_intersphinx_mapping() -> dict[str, tuple[str, str | None]]:
     """Assemble ``intersphinx_mapping`` using vendored > reachable > drop."""
     candidates = {
         "python": "https://docs.python.org/3",
         "numpy": "https://numpy.org/doc/stable/",
         "scipy": "https://docs.scipy.org/doc/scipy/",
     }
-    mapping: dict = {}
+    mapping: dict[str, tuple[str, str | None]] = {}
     for name, url in candidates.items():
         vendored = _vendored_inventory(name)
         if vendored is not None:
@@ -235,7 +238,7 @@ html_show_copyright = True
 htmlhelp_basename = "AmaCryptographydoc"
 
 # LaTeX output
-latex_elements = {}
+latex_elements: dict[str, str] = {}
 latex_documents = [
     (master_doc, "AmaCryptography.tex", f"{project} Documentation", author, "manual"),
 ]

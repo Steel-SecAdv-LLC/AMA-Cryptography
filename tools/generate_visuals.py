@@ -30,6 +30,7 @@ function AND adding the document reference that justifies it.
 import json
 import re
 from pathlib import Path
+from typing import Optional
 
 import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
@@ -42,15 +43,30 @@ plt.rcParams["font.size"] = 11
 
 REPO_ROOT = Path(__file__).parent.parent
 
+
 # Version read from the package, not written here. This footer used to carry a
 # hardcoded "v3.0.0" against a 3.4.0 library — the same defect that froze the
 # dashboard PNGs at v2.1.5 — so a regenerated chart asserted a version it had
 # no way to know had moved.
-_PKG_VERSION = re.search(
-    r'^__version__\s*=\s*"([^"]+)"',
-    (REPO_ROOT / "ama_cryptography" / "__init__.py").read_text(encoding="utf-8"),
-    re.M,
-).group(1)
+def _read_package_version() -> str:
+    """The version declared by the package, or a hard failure naming why.
+
+    Not `.group(1)` on an unchecked `re.search`: if the declaration ever moves,
+    that raises `AttributeError: 'NoneType' object has no attribute 'group'` at
+    import time, which reads as a broken tool rather than the one thing that
+    actually went wrong.
+    """
+    source = (REPO_ROOT / "ama_cryptography" / "__init__.py").read_text(encoding="utf-8")
+    match = re.search(r'^__version__\s*=\s*"([^"]+)"', source, re.M)
+    if match is None:
+        raise RuntimeError(
+            "ama_cryptography/__init__.py declares no __version__; refusing to "
+            "stamp a chart with a version that was not read from the package"
+        )
+    return match.group(1)
+
+
+_PKG_VERSION = _read_package_version()
 ASSETS_DIR = REPO_ROOT / "assets"
 ASSETS_DIR.mkdir(exist_ok=True)
 
@@ -58,7 +74,7 @@ PHASE0_JSON = REPO_ROOT / "benchmarks" / "phase0_baseline_results.json"
 TESTS_DIR = REPO_ROOT / "tests"
 
 
-def _load_phase0_medians():
+def _load_phase0_medians() -> dict[str, float]:
     """Load median latencies (microseconds) from the checked-in
     Python/ctypes-path benchmark snapshot.
 
@@ -180,7 +196,7 @@ _TEST_CATEGORY_RULES = [
 _DEF_TEST_RE = re.compile(r"^\s*def test_", re.MULTILINE)
 
 
-def _classify_test_file(basename):
+def _classify_test_file(basename: str) -> Optional[str]:
     """Return the display_label of the first category whose predicate
     list matches `basename` (a `test_*.py` filename), or None if no
     rule matches."""
@@ -190,7 +206,7 @@ def _classify_test_file(basename):
     return None
 
 
-def _count_test_functions_by_category():
+def _count_test_functions_by_category() -> tuple[list[int], int, list[tuple[str, int]]]:
     """Walk `tests/test_*.py`, count `def test_` matches per file, and
     bucket each file into one of `_TEST_CATEGORY_RULES`. Returns
     (counts_in_rule_order, total, unbucketed_files).
@@ -202,7 +218,7 @@ def _count_test_functions_by_category():
     """
     counts = [0] * len(_TEST_CATEGORY_RULES)
     label_to_idx = {label: i for i, (label, _) in enumerate(_TEST_CATEGORY_RULES)}
-    unbucketed = []
+    unbucketed: list[tuple[str, int]] = []
     for path in sorted(TESTS_DIR.glob("test_*.py")):
         n = len(_DEF_TEST_RE.findall(path.read_text(encoding="utf-8")))
         label = _classify_test_file(path.name)
@@ -213,7 +229,7 @@ def _count_test_functions_by_category():
     return counts, sum(counts), unbucketed
 
 
-def create_test_coverage():
+def create_test_coverage() -> None:
     """Create enhanced test coverage visualization with percentages and cumulative data."""
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 5), gridspec_kw={"width_ratios": [2, 1]})
 
@@ -332,7 +348,7 @@ def create_test_coverage():
     print(f"Created: {ASSETS_DIR / 'test_coverage.png'}")
 
 
-def create_ethical_binding_flow():
+def create_ethical_binding_flow() -> None:
     """Create comprehensive ethical binding diagram showing 4 pillars with weights."""
     fig, ax = plt.subplots(figsize=(18, 12))
     ax.set_xlim(0, 18)
@@ -699,7 +715,7 @@ def create_ethical_binding_flow():
     print(f"Created: {ASSETS_DIR / 'ethical_binding.png'}")
 
 
-def create_quantum_comparison():
+def create_quantum_comparison() -> None:
     """Create quantum vs classical security comparison."""
     fig, ax = plt.subplots(figsize=(10, 6))
 

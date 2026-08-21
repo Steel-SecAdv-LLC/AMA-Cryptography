@@ -2928,9 +2928,19 @@ static int run_all_tests(int iterations, test_result_t *results, int *num_result
      * Montgomery ladder is structurally constant-time
      * (`ama_consttime_swap`) but a 256-step ladder over a 256-bit
      * field still costs ~200 µs per iteration, so on shared CI
-     * runners environmental noise can dominate.  Mark info-only —
-     * fail-loud variants of this lane are intentionally surfaced
-     * separately via tests/c/test_consttime.c. */
+     * runners environmental noise can dominate.  Mark info-only.
+     *
+     * The blocking counterpart is `--target secp256k1-scalarmult` in
+     * tools/check_ghash_constant_time.py, a callgrind instruction-count gate
+     * over the same ladder with the same Hamming-weight class contrast,
+     * measured at limit 0 on all four metrics.
+     *
+     * This comment previously said "fail-loud variants of this lane are
+     * intentionally surfaced separately via tests/c/test_consttime.c".  That
+     * file contains no secp256k1 scalar-multiplication case and never did, so
+     * the sentence pointed at a counterpart that did not exist and the
+     * primitive's constant-time property rested on a lane that cannot fail
+     * CI. */
     DUDECT_REGISTER_LANE(results, idx,
         "secp256k1 scalar multiplication",
         test_secp256k1_scalarmult(iterations), 1);

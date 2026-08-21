@@ -555,6 +555,7 @@ jobs:
           # See the longer note in ci.yml::code-quality.
           pip install "black==26.5.1" "ruff==0.16.0" "mypy==2.3.0" \
                       "PyYAML==6.0.3" "types-PyYAML==6.0.12.20260724" \
+                      "types-setuptools==84.0.0.20260812" \
                       "pytest==9.1.1"
 
       - name: Lint (ruff)
@@ -564,8 +565,20 @@ jobs:
         run: black --check --diff .
 
       - name: Type check (mypy --strict)
-        run: mypy --strict ama_cryptography/ tests/
+        # Same scope as ci.yml::code-quality — every Python file in the
+        # repository, not just the shipped package and the test tree. The two
+        # jobs must agree, or one of them reports a verdict the other does not
+        # hold to.
+        run: |
+          MYPYPATH=. mypy --strict --explicit-package-bases \
+            --linecoverage-report .mypy-coverage \
+            ama_cryptography/ tests/ tools/ benchmarks/ examples/ \
+            fuzz/python/ nist_vectors/ schemas/ wycheproof_vectors/ \
+            docs/conf.py setup.py ama_cryptography_monitor.py
         continue-on-error: false
+
+      - name: "Type-check scope: every tracked .py file was actually checked"
+        run: python tools/check_type_check_scope.py .mypy-coverage/coverage.json
 
   # Security Audit
   security:

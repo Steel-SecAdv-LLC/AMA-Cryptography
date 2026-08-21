@@ -35,6 +35,7 @@ import sys
 import time
 from importlib.util import find_spec
 from pathlib import Path
+from typing import Any
 
 
 def _make_stdio_encodable() -> None:
@@ -132,7 +133,7 @@ from ama_cryptography.key_management import (
 )
 
 
-def random_state(size: int, scale: float = 1.0, seed: int = 0):
+def random_state(size: int, scale: float = 1.0, seed: int = 0) -> Any:
     """Build a random state vector, preferring numpy when it is installed.
 
     Returns a ``numpy.ndarray`` where numpy is available and an
@@ -151,7 +152,7 @@ def array_backend_name() -> str:
     return f"numpy.ndarray (numpy {np.__version__})" if HAVE_NUMPY else "_numeric.Vec"
 
 
-def demo_crypto_api():
+def demo_crypto_api() -> None:
     """Demonstrate algorithm-agnostic crypto API"""
     print("\n" + "=" * 70)
     print("1. ALGORITHM-AGNOSTIC CRYPTOGRAPHIC API")
@@ -197,7 +198,7 @@ def demo_crypto_api():
             print(f"  Error: {e}")
 
 
-def demo_kem():
+def demo_kem() -> None:
     """Demonstrate key encapsulation"""
     print("\n" + "=" * 70)
     print("2. KEY ENCAPSULATION MECHANISM (KEM)")
@@ -226,7 +227,7 @@ def demo_kem():
         print(f"  Error: {e}")
 
 
-def demo_hd_keys():
+def demo_hd_keys() -> None:
     """Demonstrate HD key derivation"""
     print("\n" + "=" * 70)
     print("3. HIERARCHICAL DETERMINISTIC KEY DERIVATION")
@@ -259,7 +260,7 @@ def demo_hd_keys():
     print(f"  Keys match: {'✓ PASS' if key1 == key2 else '✗ FAIL'}")
 
 
-def demo_key_rotation():
+def demo_key_rotation() -> None:
     """Demonstrate key rotation"""
     print("\n" + "=" * 70)
     print("4. KEY ROTATION AND LIFECYCLE MANAGEMENT")
@@ -305,7 +306,7 @@ def demo_key_rotation():
     print(f"  Rotation complete: {rotation_mgr.keys['signing-key-v1'].status.name}")
 
 
-def demo_secure_storage():
+def demo_secure_storage() -> None:
     """Demonstrate secure key storage"""
     print("\n" + "=" * 70)
     print("5. SECURE KEY STORAGE")
@@ -352,7 +353,7 @@ def demo_secure_storage():
         print("  Cleanup: ✓ All keys securely deleted")
 
 
-def demo_helix_engine():
+def demo_helix_engine() -> None:
     """Demonstrate double-helix evolution engine"""
     print("\n" + "=" * 70)
     print("6. DOUBLE-HELIX EVOLUTION ENGINE (18+ VARIANTS)")
@@ -409,7 +410,7 @@ def demo_helix_engine():
     print(f"  σ_quadratic: {sigma:.6f} ({'✓ PASS' if sigma >= 0.96 else '✗ FAIL'} ≥ 0.96)")
 
 
-def _pure_matrix_vector(matrix, vector):
+def _pure_matrix_vector(matrix: Any, vector: Any) -> list[float]:
     """A naive pure-Python matrix-vector product.
 
     The speed baseline for the Cython kernel below.  numpy's ``@`` is BLAS and
@@ -428,7 +429,7 @@ def _pure_matrix_vector(matrix, vector):
     return result
 
 
-def demo_performance():
+def demo_performance() -> None:
     """The pure-Python engine, and the Cython kernels that actually ship."""
     print("\n" + "=" * 70)
     print("7. PERFORMANCE BENCHMARKING")
@@ -491,7 +492,7 @@ def demo_performance():
     )
 
 
-def main():
+def main() -> int:
     """Run all demonstrations"""
     print("=" * 70)
     print("AMA CRYPTOGRAPHY COMPLETE FEATURE DEMONSTRATION")

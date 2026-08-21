@@ -29,13 +29,19 @@ FROM ubuntu:22.04@sha256:3b06811b2afd352be909dd088a004166d665dc76d38b13eada33522
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Install build dependencies
+#
+# INVARIANT-1: libssl-dev is NOT installed.  AMA's C sources link no OpenSSL —
+# CMakeLists.txt says the library is "deliberately NOT probed" and there is no
+# find_package(OpenSSL) anywhere in the tree — so it was a build-time
+# dependency that nothing consumed, in an image whose sibling Dockerfiles
+# document the exclusion by name.  The same rule keeps libssl3 out of the
+# output stage below.
 RUN apt-get update && apt-get install -y \
     build-essential \
     cmake \
     ninja-build \
     git \
     pkg-config \
-    libssl-dev \
     python3 \
     && rm -rf /var/lib/apt/lists/*
 
@@ -56,10 +62,12 @@ RUN mkdir -p build && cd build && \
 # Create output stage
 FROM ubuntu:22.04@sha256:3b06811b2afd352be909dd088a004166d665dc76d38b13eada33522a9d915c6f AS output
 
-# Install runtime dependencies
-RUN apt-get update && apt-get install -y \
-    libssl3 \
-    && rm -rf /var/lib/apt/lists/*
+# No runtime packages are installed.
+#
+# INVARIANT-1: libssl3 is NOT installed — the shipped .so needs only libc
+# (`readelf -d` lists libc.so.6 and nothing else), so OpenSSL in this stage was
+# a CVE-prone library on disk that nothing could load.  Ubuntu's base image
+# already carries libc.
 
 # Copy AMA Cryptography libraries and headers
 COPY --from=builder /ama-cryptography/build/lib* /usr/local/lib/

@@ -135,10 +135,18 @@ def parse_raw_c(path: Path) -> list[dict[str, Any]]:
 def build(bench: dict[str, Any], rawc: list[dict[str, Any]], baseline: dict[str, Any]) -> str:
     results = bench["results"]
     generated = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    version = re.search(
+    version_match = re.search(
         r'__version__\s*=\s*"([^"]+)"',
         (REPO / "ama_cryptography" / "__init__.py").read_text(encoding="utf-8"),
-    ).group(1)
+    )
+    if version_match is None:
+        # Not a fallback literal: a dashboard stamped with a version that was
+        # not read from the package is the defect this lookup exists to avoid.
+        raise RuntimeError(
+            "ama_cryptography/__init__.py declares no __version__; refusing to "
+            "label the dashboard with a version that was not read from the package"
+        )
+    version = version_match.group(1)
 
     payload = {
         "generated": generated,

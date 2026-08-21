@@ -278,3 +278,82 @@ def test_a_binary_name_that_only_appears_in_a_docstring_is_still_not_a_finding(
         'subprocess.run(["python3", "-c", "pass"], check=True)\n'
     )
     assert tool.scan_for_binary_invocations(tmp_path) == []
+
+
+class TestVectorGeneratorsComputeNothing:
+    """A "NIST vector" must come from NIST, not from whatever hashed it.
+
+    ``nist_vectors/fetch_vectors.py`` wrote ``SHA-256-FIPS180-4.json`` with
+    ``"source": "FIPS 180-4 Section B.1"`` and every digest in it produced by
+    ``hashlib.sha256(...).hexdigest()`` at generation time, while
+    ``nist_vectors/run_vectors.py`` validated AMA's SHA-256 against that file.
+    On any libcrypto-linked CPython — every manylinux wheel and every
+    mainstream distribution Python, as ``tools/check_stdlib_hash_boundary.py``
+    states — ``hashlib.sha256`` IS OpenSSL, so every regeneration would have
+    replaced the specification's vectors with OpenSSL's output under the
+    specification's name.  The committed values were correct; the source the
+    next regeneration would draw from was not.
+
+    The scan reads the GENERATORS, not the JSON: a digest sitting in a
+    committed file carries no evidence of where it came from, which is exactly
+    how this survived a gate whose stated subject is that question.
+    """
+
+    @staticmethod
+    def _generator(tmp_path: Path, body: str) -> Path:
+        directory = tmp_path / "nist_vectors"
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "fetch_vectors.py").write_text(body, encoding="utf-8")
+        return tmp_path
+
+    @pytest.mark.parametrize(
+        "body,label",
+        [
+            ('import hashlib\nD = hashlib.sha256(b"abc").hexdigest()\n', "plain call"),
+            ('D = __import__("hashlib").sha256(b"abc").hexdigest()\n', "__import__ call"),
+            ("import hashlib\n", "a bare import, with no call at all"),
+            ("from hashlib import sha256\n", "a from-import"),
+            ('import hmac\nD = hmac.new(b"k", b"m").hexdigest()\n', "hmac"),
+            ('import hashlib\nD = hashlib.new("sha256", b"abc").hexdigest()\n', "hashlib.new"),
+        ],
+    )
+    def test_a_stdlib_digest_in_a_generator_is_reported(
+        self, tool: ModuleType, tmp_path: Path, body: str, label: str
+    ) -> None:
+        problems = tool.scan_vector_generators(self._generator(tmp_path, body))
+        assert problems, f"accepted {label}"
+
+    def test_a_transcribing_generator_passes(self, tool: ModuleType, tmp_path: Path) -> None:
+        body = (
+            "import json\n"
+            "# FIPS 180-4 Appendix B.1, transcribed.\n"
+            'D = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"\n'
+        )
+        assert tool.scan_vector_generators(self._generator(tmp_path, body)) == []
+
+    def test_an_empty_scope_fails_closed(self, tool: ModuleType, tmp_path: Path) -> None:
+        problems = tool.scan_vector_generators(tmp_path)
+        assert problems and "examined nothing" in problems[0]
+
+    def test_the_repository_generators_are_clean(self, tool: ModuleType) -> None:
+        assert tool.scan_vector_generators() == []
+
+    def test_the_committed_sha256_vectors_are_the_published_ones(self) -> None:
+        """The values themselves, checked against FIPS 180-4 by transcription.
+
+        Independent of the gate: the gate says where the numbers may come
+        from, this says they are the right numbers.  Both digests below appear
+        in FIPS 180-4 Appendix B.1 and B.2; the empty-string digest is the
+        NIST CAVP SHAVS ShortMsg Len=0 value.
+        """
+        path = REPO_ROOT / "nist_vectors" / "SHA-256-FIPS180-4.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        digests = {t["msg"]: t["md"] for g in data["testGroups"] for t in g["tests"]}
+        assert digests["616263"] == (
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        )
+        assert digests[""] == ("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+        long_msg = next(k for k in digests if len(k) > 100)
+        assert digests[long_msg] == (
+            "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1"
+        )

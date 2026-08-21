@@ -34,6 +34,17 @@ algorithms with shipping code are listed — no aspirational entries.
 | ML-KEM-1024 (Kyber-1024) | FIPS 203 | ML-KEM-1024 (k=4, n=256, q=3329) | Final | https://csrc.nist.gov/pubs/fips/203/final |
 | ML-DSA-65 (Dilithium3) | FIPS 204 | ML-DSA-65 (k=6, l=5, η=4, γ₁=2¹⁹) | Final | https://csrc.nist.gov/pubs/fips/204/final |
 | SLH-DSA-SHA2-256f (SPHINCS+-256f) | FIPS 205 | SLH-DSA-SHA2-256f (n=32, h=68, d=17, w=16, fast) | Final | https://csrc.nist.gov/pubs/fips/205/final |
+| SLH-DSA-SHAKE-128s | FIPS 205 | SLH-DSA-SHAKE-128s (n=16, h=63, d=7, w=16, small) | Final | https://csrc.nist.gov/pubs/fips/205/final |
+| ML-KEM-512 (Kyber-512) | FIPS 203 | ML-KEM-512 (k=2, n=256, q=3329) | Final | https://csrc.nist.gov/pubs/fips/203/final |
+| ML-KEM-768 (Kyber-768) | FIPS 203 | ML-KEM-768 (k=3, n=256, q=3329) | Final | https://csrc.nist.gov/pubs/fips/203/final |
+| ML-DSA-44 (Dilithium2) | FIPS 204 | ML-DSA-44 (k=4, l=4, eta=2, gamma1=2^17) | Final | https://csrc.nist.gov/pubs/fips/204/final |
+| ML-DSA-87 (Dilithium5) | FIPS 204 | ML-DSA-87 (k=8, l=7, eta=2, gamma1=2^19) | Final | https://csrc.nist.gov/pubs/fips/204/final |
+| HMAC-SHA-384 | FIPS 198-1 | HMAC with SHA-384 (key <= block size 128 B) | Final | https://csrc.nist.gov/pubs/fips/198-1/final |
+| HMAC-SHA-512 | FIPS 198-1 | HMAC with SHA-512 (key <= block size 128 B) | Final | https://csrc.nist.gov/pubs/fips/198-1/final |
+| HMAC-SHA3-256 | FIPS 198-1 | HMAC with SHA3-256 as the underlying hash (FIPS 202; key <= block size / rate 136 B) | Final | https://csrc.nist.gov/pubs/fips/198-1/final |
+| ECDSA (P-256 / P-384 / P-521) | FIPS 186-5 | secp256r1 / secp384r1 / secp521r1; DER and fixed-width signatures; deterministic, hedged and randomised nonce policies | Final | https://csrc.nist.gov/pubs/fips/186-5/final |
+| ECDH (P-256 / P-384 / P-521) | NIST SP 800-56A rev. 3 | Ephemeral-unified and one-pass over the same three curves; cofactor 1 | Final | https://csrc.nist.gov/pubs/sp/800/56/a/r3/final |
+| LMS / HSS (verification only) | NIST SP 800-208 | Verification of LMS and HSS signatures; SIGNING IS NOT IMPLEMENTED (`ama_lms_signing_available()` returns 0), because a stateful hash-based signer that loses its one-time-key state forges trivially | Final | https://csrc.nist.gov/pubs/sp/800/208/final |
 
 ### 1.2 RFC-Only Algorithms (Not NIST Publications)
 

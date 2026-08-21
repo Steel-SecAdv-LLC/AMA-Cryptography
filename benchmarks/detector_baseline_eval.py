@@ -208,8 +208,12 @@ def synthetic_base(count: int, seed: int) -> List[float]:
     host, gating the shift path on live timings failed 7 runs in 30 with
     nothing wrong, and the delay and coverage numbers a passing run printed
     were not attributable to the injected anomaly.  On this stream the same
-    gate is exactly reproducible (measured: event at 26-40 samples, coverage
-    0.87-0.91, zero false shift events over eight seeds).
+    gate is exactly reproducible: identical output across repeated runs at one
+    sample count, and zero false shift events over eight seeds.  The delay and
+    coverage it reports depend on --samples, so they are quoted with it —
+    measured at 1,000 / 2,000 / 4,000 / 8,000 samples: delay 80 / 45 / 68 / 29 and coverage 0.73 / 0.85 / 0.77 / 0.90.  An earlier
+    revision of this comment said "26-40 samples, coverage 0.87-0.91" with no
+    sample count attached, and that pair describes none of the four.
 
     Live timings are still measured and reported on every run — that is the
     evidence — but the pass/fail decision is taken here, where a failure means
@@ -552,11 +556,13 @@ def gate_shift_detection(base: Sequence[float]) -> GateResult:
       1. NO shift event before the onset — otherwise what follows is being
          credited to an injection that did not exist yet;
       2. at least one shift EVENT at or after the onset;
-      3. the first such event lands within 150 samples of onset (measured
-         26-40 on this stream family; the re-baseline horizon is 300, so a
-         detection later than half of it is a regression);
-      4. the regime state covers >= 70% of the window onset..onset+300
-         (measured 0.87-0.91).
+      3. the first such event lands within 150 samples of onset (the
+         re-baseline horizon is 300, so a detection later than half of it is a
+         regression); measured delay 80 / 45 / 68 / 29 at 1,000 / 2,000 /
+         4,000 / 8,000 samples, 68 at the 4,000 CI runs;
+      4. the regime state covers >= 70% of the window onset..onset+300;
+         measured 0.73 / 0.85 / 0.77 / 0.90 at those same sample counts, 0.77
+         at the 4,000 CI runs.
     8d72b8c had no event concept and flagged 17.6% of the regime.
 
     Requirement 1 is the one that forced this gate onto a deterministic
@@ -599,12 +605,14 @@ def gate_spike_ranking(samples: int) -> Tuple[GateResult, float]:
     control of its own, so it is not deployable without one — which is why the
     contract is "same order of ranking quality", not "wins".
 
-    The floor is 0.85, from measurement with margin: over four independent
-    trials of five seeded streams the mean ratio was 0.947-0.963.  The
-    previous floor of 0.7 was set from live-timing runs whose mean ratio
-    ranged 0.652-1.123, i.e. it sat inside the statistic's own spread and one
-    run in 25 failed it with nothing wrong; the documented range of 0.80-0.98
-    did not describe those runs either.  Each stream gets its own base, so the
+    The floor is 0.85, from measurement with margin: the mean ratio is
+    0.960 / 0.989 / 0.987 / 0.978 at 1,000 / 2,000 / 4,000 / 8,000 samples
+    (0.987 at the 4,000 CI runs), and over four independent trials of five
+    seeded streams at a fixed count it was 0.947-0.963.  The previous floor of
+    0.7 was set from live-timing runs whose mean ratio ranged 0.652-1.123, i.e.
+    it sat inside the statistic's own spread and one run in 25 failed it with
+    nothing wrong; the range 0.80-0.98 that MONITORING.md published described
+    neither those runs nor these.  Each stream gets its own base, so the
     ratio is reproducible from the seeds alone.
 
     Returns the gate and the tie band derived from the same streams.

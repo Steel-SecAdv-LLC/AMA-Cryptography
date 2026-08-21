@@ -24,15 +24,24 @@
 # doesn't belong on the list, drop it explicitly, do not pretend it's
 # enforced).
 #
-# Inline `// NOLINT(check-name)` comments are subject to INVARIANT-13
-# (justification + tracking ID required) — same hygiene policy as
-# ruff `# noqa` / bandit `# nosec` markers.  As of the audit Issue 9
-# close-out the codebase carries exactly one NOLINT (in
-# `src/c/ed25519_donna_shim.c::ama_ed25519_point_from_scalar`,
-# suppressing a clang-analyzer false positive on vendor donna code).
-# Adding a new NOLINT to silence a category-wide noise pattern is the
-# wrong answer; either fix the code, or drop the category from
-# `Checks:` here with a rationale.
+# Inline suppression comments are FORBIDDEN in the trees this config
+# governs.  INVARIANT-13 words it as "absolutely forbidden ... regardless
+# of justification" for `src/c/` and `include/`, which is every file this
+# job runs over, and as of 5.0.0 `tools/check_suppression_hygiene.py`
+# enforces it: a second pass scans every non-vendored `.c`/`.h` under
+# those roots and fails on any suppression marker, with no justification
+# escape hatch.  (Until then that pass did not exist — the checker
+# collected Python files only, so the forbidden-directory branch was
+# unreachable and the tree carried one live suppression while the gate
+# printed "all suppressions are properly justified" and exited 0.)
+#
+# So the answer to a finding is to fix the code, or to drop the category
+# from `Checks:` below with a rationale.  The one suppression this
+# codebase used to carry — three clang-analyzer uninitialised-read checks
+# in `src/c/ed25519_donna_shim.c::ama_ed25519_point_from_scalar`, on
+# donna's macro-driven initialisation — was resolved the first way:
+# zero-initialising the two locals at declaration removes the analyzer's
+# premise, and clang-tidy 18 reports the file clean without it.
 
 Checks: >
   -*,

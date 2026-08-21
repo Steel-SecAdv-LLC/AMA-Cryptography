@@ -46,7 +46,7 @@ test-c: c
 
 test-python: python
 	@echo "Running Python tests..."
-	@pytest tests/ -v --cov=ama_cryptography --cov-report=term-missing
+	@$(RUN) pytest tests/ -v --cov=ama_cryptography --cov-report=term-missing
 	@echo "✓ Python tests passed"
 
 # Execute the shipped Python examples.
@@ -61,14 +61,14 @@ test-python: python
 # backend, and the Cython extensions are optional to them.
 test-examples: c
 	@echo "Running shipped Python examples..."
-	@pytest tests/test_python_examples.py -v
+	@$(RUN) pytest tests/test_python_examples.py -v
 	@echo "✓ Python examples ran to completion"
 
 # Run benchmarks
 benchmark: python
 	@echo "Running benchmarks..."
 	@python3 benchmarks/benchmark_suite.py
-	@pytest tests/ --benchmark-only
+	@$(RUN) pytest tests/ --benchmark-only
 
 # Clean build artifacts
 clean:
@@ -105,27 +105,47 @@ clean:
 install: all
 	@echo "Installing AMA Cryptography..."
 	@cd build && sudo $(MAKE) install
-	@pip3 install -e .
+	@$(RUN) pip install -e .
 	@echo "✓ Installed successfully"
 
 # Development install
 dev-install:
 	@echo "Installing development dependencies..."
-	@pip3 install -e ".[dev,all]"
+	@$(RUN) pip install -e ".[dev,all]"
 	@echo "✓ Development environment ready"
+
+# The interpreter's own tools, never the bare console scripts.
+#
+# `mypy` on PATH here was 1.19.1 from a stale ~/.local install while the pinned
+# toolchain (requirements-lock.txt, both CI images, .pre-commit-config.yaml) is
+# 2.3.0 — and [tool.mypy] sets python_version = "3.10", which mypy 1.x accepts
+# with different semantics. `make lint` therefore reported 40 errors that CI
+# does not have and would not report ones it does. Same hazard for black and
+# ruff, whose formatting differs across versions.
+PYTHON ?= python3
+RUN := $(PYTHON) -m
 
 # Format code
 format:
 	@echo "Formatting code..."
-	@black ama_cryptography/ tests/ *.py
-	@ruff check --select I --fix ama_cryptography/ tests/ *.py
+	@$(RUN) black .
+	@$(RUN) ruff check --select I --fix .
 	@echo "✓ Code formatted"
 
 # Lint code
+# The scope and the flags CI uses, so a green `make lint` means something.
+# This target ran `ruff check ama_cryptography/ tests/` and `mypy
+# ama_cryptography/ --ignore-missing-imports`, which is neither:
+# --ignore-missing-imports silences the missing-stub errors the pyproject
+# overrides answer file by file, and one directory is a third of the Python in
+# the tree.
 lint:
 	@echo "Linting code..."
-	@ruff check ama_cryptography/ tests/
-	@mypy ama_cryptography/ --ignore-missing-imports
+	@$(RUN) ruff check .
+	@MYPYPATH=. $(RUN) mypy --strict --explicit-package-bases \
+	  ama_cryptography/ tests/ tools/ benchmarks/ examples/ \
+	  fuzz/python/ nist_vectors/ schemas/ wycheproof_vectors/ \
+	  docs/conf.py setup.py ama_cryptography_monitor.py
 	@echo "✓ Lint passed"
 
 # Generate documentation
@@ -162,7 +182,7 @@ dist: clean
 security-audit:
 	@echo "Running security audit..."
 	@pip-audit
-	@bandit -r ama_cryptography/ -ll
+	@$(RUN) bandit -r ama_cryptography/ -ll
 	@echo "✓ Security audit complete"
 
 # Comprehensive security scan (bandit + semgrep + dependency scanning)
@@ -173,7 +193,7 @@ security-scan:
 	@# is only on the report-writing bandit run (bandit exits non-zero when it
 	@# finds anything at the -ll floor); the gate below is what actually decides
 	@# pass/fail, fail-closed on a missing/erroring report.
-	@bandit -r ama_cryptography/ -ll -f json -o bandit-report.json || true
+	@$(RUN) bandit -r ama_cryptography/ -ll -f json -o bandit-report.json || true
 	@python3 tools/check_bandit_severity.py bandit-report.json
 	@echo "[2/3] Running semgrep for cryptographic rules..."
 	@# semgrep scan exits 0 regardless of findings; the gate reads the JSON and

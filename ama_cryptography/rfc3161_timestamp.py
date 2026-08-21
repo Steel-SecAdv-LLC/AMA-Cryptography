@@ -56,7 +56,6 @@ Use Cases:
 import http.client
 import logging
 import os as _os_mod
-import secrets
 import struct
 import threading
 import time
@@ -94,6 +93,7 @@ from ama_cryptography._asn1 import (
     der_sequence,
     oid_from_string,
 )
+from ama_cryptography._module_state import secure_token_bytes
 from ama_cryptography.exceptions import AmaCryptographyError
 
 # ---------------------------------------------------------------------------
@@ -1217,7 +1217,15 @@ def get_timestamp(
     # A fresh 64-bit nonce per request, echoed back by the TSA into the TSTInfo.
     # RFC 3161 §2.4.2 makes the echo the client's only way to tell a fresh
     # response from a replayed one; `request_timestamp_token` checks it.
-    nonce = secrets.randbits(64)
+    #
+    # Drawn through secure_token_bytes, not secrets.randbits.  INVARIANT-41
+    # routes every draw in the shipped package through the continuous RNG
+    # health test, and this one had escaped it — not by exemption but because
+    # the sweep that enumerates "every bare draw" did not recognise
+    # `secrets.randbits` as a draw at all.  A replay nonce is exactly the kind
+    # of value a stuck generator ruins silently: repeat it and a replayed
+    # response passes the only freshness check the client has.
+    nonce = int.from_bytes(secure_token_bytes(8), "big")
     token = request_timestamp_token(data_hash, hash_algorithm, tsa_url, nonce=nonce, cert_req=True)
     return TimestampResult(
         token=token,

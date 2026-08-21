@@ -67,10 +67,17 @@ BENCH = REPO / "benchmarks"
 def _ama_version() -> str:
     import re
 
-    return re.search(
-        r'__version__\s*=\s*"([^"]+)"',
-        (REPO / "ama_cryptography" / "__init__.py").read_text(encoding="utf-8"),
-    ).group(1)
+    source = (REPO / "ama_cryptography" / "__init__.py").read_text(encoding="utf-8")
+    match = re.search(r'__version__\s*=\s*"([^"]+)"', source)
+    if match is None:
+        # Raise rather than fall back to a literal: a stamped version that is
+        # not the package's own is the exact failure this function was written
+        # to prevent, and a default would reintroduce it silently.
+        raise RuntimeError(
+            "ama_cryptography/__init__.py declares no __version__; refusing to "
+            "stamp the report with a version that was not read from the package"
+        )
+    return match.group(1)
 
 
 VERSIONS = {
@@ -109,6 +116,7 @@ PRIM_ORDER = [
     "ML-KEM-1024 decaps",
 ]
 
+
 # Stack-coverage matrix. Every cell is the result of a runtime capability probe
 # or a benchmark row, never recollection:
 #   * a benchmark row for that (primitive, library) pair proves YES;
@@ -116,24 +124,42 @@ PRIM_ORDER = [
 #     lookup for OpenSSL; `Botan::*::create` for Botan; curve-info lookup for
 #     mbedTLS; `wolfssl/options.h` build flags for wolfSSL.
 # "-" means the library does not implement it on this host and build.
+def _coverage_row(*flags: int) -> dict[str, bool]:
+    """One COVERAGE row, written as the readable 0/1 matrix above.
+
+    Two things a bare ``_coverage_row(...)`` did not do.  It produced
+    ``dict[str, int]`` under a ``dict[str, bool]`` annotation, so the declared
+    type was not the type; and ``zip`` stops at the shorter operand, so a row
+    with seven entries silently dropped mbedTLS and rendered it as "not
+    implemented" — a coverage claim about a library, made by a typo.  The
+    length is now checked.
+    """
+    if len(flags) != len(ORDER):
+        raise ValueError(
+            f"coverage row has {len(flags)} entries, expected {len(ORDER)} "
+            f"(one per library in ORDER: {', '.join(ORDER)})"
+        )
+    return {library: bool(flag) for library, flag in zip(ORDER, flags)}
+
+
 COVERAGE: dict[str, dict[str, bool]] = {
     #                      AMA   OSSL   sodium wolf   Botan  Nettle gcrypt mbed
-    "SHA3-256": dict(zip(ORDER, [1, 1, 0, 1, 1, 1, 1, 0])),
-    "HMAC-SHA3-256": dict(zip(ORDER, [1, 1, 0, 1, 1, 0, 1, 0])),
-    "HKDF": dict(zip(ORDER, [1, 1, 0, 1, 1, 1, 0, 1])),
-    "AES-256-GCM": dict(zip(ORDER, [1, 1, 1, 1, 1, 1, 1, 1])),
-    "ChaCha20-Poly1305": dict(zip(ORDER, [1, 1, 1, 1, 1, 1, 1, 1])),
-    "Ascon-128 AEAD": dict(zip(ORDER, [1, 0, 0, 0, 0, 0, 0, 0])),
-    "Argon2id": dict(zip(ORDER, [1, 0, 1, 0, 1, 0, 0, 0])),
-    "Ed25519": dict(zip(ORDER, [1, 1, 1, 1, 1, 1, 1, 0])),
-    "X25519": dict(zip(ORDER, [1, 1, 1, 1, 1, 1, 1, 1])),
-    "NIST P-256": dict(zip(ORDER, [1, 1, 0, 1, 1, 1, 1, 1])),
-    "secp256k1": dict(zip(ORDER, [1, 1, 0, 0, 1, 0, 1, 1])),
-    "ML-KEM (FIPS 203)": dict(zip(ORDER, [1, 0, 0, 0, 0, 0, 0, 0])),
-    "ML-DSA (FIPS 204)": dict(zip(ORDER, [1, 0, 0, 0, 0, 0, 0, 0])),
-    "SLH-DSA (FIPS 205)": dict(zip(ORDER, [1, 0, 0, 0, 0, 0, 0, 0])),
-    "LMS (SP 800-208)": dict(zip(ORDER, [1, 0, 0, 0, 0, 0, 0, 0])),
-    "FROST threshold": dict(zip(ORDER, [1, 0, 0, 0, 0, 0, 0, 0])),
+    "SHA3-256": _coverage_row(1, 1, 0, 1, 1, 1, 1, 0),
+    "HMAC-SHA3-256": _coverage_row(1, 1, 0, 1, 1, 0, 1, 0),
+    "HKDF": _coverage_row(1, 1, 0, 1, 1, 1, 0, 1),
+    "AES-256-GCM": _coverage_row(1, 1, 1, 1, 1, 1, 1, 1),
+    "ChaCha20-Poly1305": _coverage_row(1, 1, 1, 1, 1, 1, 1, 1),
+    "Ascon-128 AEAD": _coverage_row(1, 0, 0, 0, 0, 0, 0, 0),
+    "Argon2id": _coverage_row(1, 0, 1, 0, 1, 0, 0, 0),
+    "Ed25519": _coverage_row(1, 1, 1, 1, 1, 1, 1, 0),
+    "X25519": _coverage_row(1, 1, 1, 1, 1, 1, 1, 1),
+    "NIST P-256": _coverage_row(1, 1, 0, 1, 1, 1, 1, 1),
+    "secp256k1": _coverage_row(1, 1, 0, 0, 1, 0, 1, 1),
+    "ML-KEM (FIPS 203)": _coverage_row(1, 0, 0, 0, 0, 0, 0, 0),
+    "ML-DSA (FIPS 204)": _coverage_row(1, 0, 0, 0, 0, 0, 0, 0),
+    "SLH-DSA (FIPS 205)": _coverage_row(1, 0, 0, 0, 0, 0, 0, 0),
+    "LMS (SP 800-208)": _coverage_row(1, 0, 0, 0, 0, 0, 0, 0),
+    "FROST threshold": _coverage_row(1, 0, 0, 0, 0, 0, 0, 0),
 }
 
 # Engineering account of each result AMA does not lead. Written per primitive
@@ -367,13 +393,19 @@ def render(c: dict[str, Any], q: dict[str, Any]) -> str:
     # ── coverage matrix ──
     crows = []
     for prim, cells in COVERAGE.items():
-        tds = "".join(
+        # Not `tds`: that name is a list of cells in the benchmark-matrix loop
+        # above, and rebinding it to a joined string here made one name hold
+        # two types in one function.
+        cell_html = "".join(
             f'<td class="{"y" if cells[lib] else "x"}">{"●" if cells[lib] else "—"}</td>'
             for lib in ORDER
         )
         n = sum(cells[lib] for lib in ORDER)
         uniq = ' class="uniq"' if n == 1 and cells["AMA"] else ""
-        crows.append(f'<tr{uniq}><td class="p">{esc(prim)}</td>{tds}<td class="n">{n}/8</td></tr>')
+        crows.append(
+            f'<tr{uniq}><td class="p">{esc(prim)}</td>{cell_html}'
+            f'<td class="n">{n}/{len(ORDER)}</td></tr>'
+        )
     cov_rows = "\n".join(crows)
     cov_head = "".join(f"<th>{esc(lib)}</th>" for lib in ORDER)
 

@@ -194,6 +194,90 @@ def _scan_file(filepath: str) -> list[str]:
     return check_source(filepath, source)
 
 
+#: Trees where INVARIANT-13 states suppressions are "**absolutely forbidden**
+#: ... regardless of justification".  Scanned by :func:`scan_c_tree` below.
+#:
+#: They had never been scanned.  ``_FORBIDDEN_DIRS`` above listed them and
+#: ``_is_forbidden()`` reported on them, but ``main()`` only ever collected
+#: ``ama_cryptography/**/*.py``, ``tests/**/*.py`` and ``tools/**/*.py`` — no
+#: path under ``src/c/`` or ``include/`` could reach that branch, so it was
+#: dead code for every entry, and INVARIANTS.md's "CI scans the repository for
+#: suppression tokens and **must** fail if a suppression appears in a forbidden
+#: directory" was false.  A live suppression sat in ``src/c/`` while the gate
+#: printed "all suppressions are properly justified" and exited 0.
+_C_FORBIDDEN_ROOTS: tuple[str, ...] = ("src/c", "include")
+
+#: Vendored trees are excluded.  They are third-party code carried verbatim;
+#: INVARIANT-13 governs what THIS project writes, and rewriting a vendor
+#: comment would defeat the "no project-side modifications" property the
+#: vendor-isolation gate enforces separately.
+_C_VENDOR_MARKER = "vendor"
+
+#: Suppression markers recognised by the C/C++ analysers this project runs.
+#: ``NOLINT`` covers ``NOLINT``, ``NOLINTNEXTLINE`` and ``NOLINTBEGIN`` in one
+#: pattern because clang-tidy matches the token anywhere inside a comment —
+#: which is also why it is spelled here as a regex and never as prose in a C
+#: comment: writing it in a source comment ARMS it.
+_C_SUPPRESSION_RE = re.compile(
+    r"NOLINT(?:NEXTLINE|BEGIN|END)?\b|cppcheck-suppress|nosemgrep|coverity\s*\[|/\*\s*LINTED"
+)
+
+
+def c_tree_files(repo_root: Path) -> list[Path]:
+    """Every non-vendored ``.c``/``.h`` under the forbidden roots.
+
+    The same enumeration the clang-tidy CI job performs, so "the gate scans
+    what the analyser scans" is true by construction rather than by hope.
+    """
+    out: list[Path] = []
+    for root in _C_FORBIDDEN_ROOTS:
+        base = repo_root / root
+        if not base.is_dir():
+            continue
+        for pattern in ("**/*.c", "**/*.h"):
+            for path in base.glob(pattern):
+                if _C_VENDOR_MARKER in path.relative_to(repo_root).parts:
+                    continue
+                out.append(path)
+    return sorted(set(out))
+
+
+def scan_c_tree(repo_root: Path) -> list[str]:
+    """Violations in the trees where suppressions are absolutely forbidden.
+
+    No justification pass here, deliberately.  For the Python trees the rule
+    is "justified and tracked"; for these it is "none, regardless of
+    justification", so a well-argued suppression is still a violation and the
+    only correct outcomes are fixing the code or dropping the check category
+    in ``.clang-tidy`` — which is what that file's own header says.
+    """
+    violations: list[str] = []
+    files = c_tree_files(repo_root)
+    if not files:
+        # Fail closed: an empty scope means the layout moved or the glob broke,
+        # and reporting "clean" over nothing is how this gate was wrong before.
+        return [
+            "src/c and include contain no non-vendored .c/.h files — the scan "
+            "scope is empty, which is a checker fault, not a clean tree"
+        ]
+    for path in files:
+        rel = path.relative_to(repo_root).as_posix()
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:  # pragma: no cover - unreadable file
+            violations.append(f"{rel}: cannot be read ({exc})")
+            continue
+        for lineno, line in enumerate(text.splitlines(), start=1):
+            match = _C_SUPPRESSION_RE.search(line)
+            if match:
+                violations.append(
+                    f"{rel}:{lineno}: suppression marker {match.group(0)!r} in a "
+                    "tree where INVARIANT-13 forbids suppressions regardless of "
+                    "justification — fix the code or drop the check category"
+                )
+    return violations
+
+
 def main() -> int:
     repo_root = Path(__file__).resolve().parent.parent
     os.chdir(repo_root)
@@ -223,14 +307,26 @@ def main() -> int:
         filepath = str(path)
         all_violations.extend(_scan_file(filepath))
 
+    # The trees INVARIANT-13 calls absolute.  Separate pass, separate rule:
+    # presence alone is the violation there.
+    all_violations.extend(scan_c_tree(repo_root))
+
     if all_violations:
         print(f"INVARIANT-13 violations ({len(all_violations)}):\n")
         for v in all_violations:
             print(f"  {v}")
-        print(f"\n{len(all_violations)} suppression(s) need justification + tracking ID.")
+        print(
+            f"\n{len(all_violations)} suppression violation(s). Python-tree markers "
+            "need a justification and a tracking ID; markers under src/c or "
+            "include must be removed outright."
+        )
         return 1
 
-    print("INVARIANT-13: all suppressions are properly justified.")
+    print(
+        "INVARIANT-13: all suppressions are properly justified "
+        f"({len(targets)} Python files), and the {len(c_tree_files(repo_root))} "
+        "non-vendored C/H files under src/c and include carry none at all."
+    )
     return 0
 
 

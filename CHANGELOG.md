@@ -5,7 +5,7 @@
 | Property | Value |
 |----------|-------|
 | Applies to Release | 5.0.0 |
-| Last Updated | 2026-08-14 |
+| Last Updated | 2026-08-21 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -30,6 +30,553 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 >
 > Compare `[4.0.0]` below, which is dated because it *is* released: tag
 > `v4.0.0`, published 2026-08-02.
+
+### Verification pass, ninth (2026-08-21) — a resonance detector that could not say "no", a quadratic hot path, and twelve documents describing a tree that is not this one
+
+Thirty-seven findings, raised by reading each subsystem against the standard or
+the document it cites, then confirmed by execution before anything was changed.
+Every fix below is mutation-verified: the check that pins it was run with the
+fix reverted and shown to fail, then run again with it restored.  Grouped by
+subsystem; the identifiers are the audit's own.
+
+#### Monitoring and adaptive posture
+
+**MON-LANE-02 — `detect_resonance` reported resonance for a constant series.**
+`ResonanceTimingMonitor.detect_resonance` zero-padded the timing window to the
+next power of two and then tested `dominant_power > 3.0 * mean_power` over the
+non-DC bins.  Two independent errors, either of which alone makes the verdict
+meaningless:
+
+1. The series mean was never subtracted.  Zero-padding a series whose mean is
+   ~10 ms appends a rectangular step of amplitude ~mean, and the sinc-shaped
+   leakage from that step dominates every low-frequency bin.  Excluding bin 0
+   removes none of it.
+2. Even with no padding, the periodogram bins of i.i.d. noise are i.i.d.
+   exponential, so the expected ratio of the maximum of *m* bins to the mean
+   bin is about `ln(m) + γ` — roughly 5.4 at *m* = 127.  A fixed bar of 3.0
+   sits *below* the noise floor's own expected maximum, so the test was
+   structurally almost always true.
+
+Measured against the shipped code: i.i.d. lognormal timings scored 20.3, i.i.d.
+Gaussian with mean 10 scored 30.3, and a literally constant series (5.0 × 100 —
+zero variance, zero periodicity) scored 30.3.  All four reported
+`has_resonance=True`.
+
+The window is now mean-centred before padding, the scan covers bins 1 through
+`n/2` inclusive, and the bar is Fisher's g-test critical value for the
+periodogram maximum, `ln(m / α)` with `α = RESONANCE_FALSE_ALARM_RATE = 0.01`
+and *m* the number of bins actually scanned — so the bar grows with the window
+the way the noise maximum does, instead of being a constant the noise clears.
+On the same five series the detector now answers `False` on every one — the
+constant series scores exactly 0.0 — and it answers `True` on an injected
+sinusoid whose amplitude is 6% of the mean (0.6 against a noise σ of 1.0) at
+n = 256.  The report now carries `threshold_ratio`, `false_alarm_rate` and
+`scanned_bins` alongside the verdict, so a consumer can see what the bar was.
+Mutation-verified: with the centring removed the constant-series case returns
+`True` again; with the `ln(m/α)` bar replaced by 3.0 the i.i.d. cases return
+`True` again.
+
+**MON-LANE-06 — the pairwise ratio matrix was unbounded and quadratic, on the
+hot path.**  `ResonanceTimingMonitor` accepted an arbitrary operation name from
+`AmaCryptographyMonitor.monitor_crypto_operation` (public API, arbitrary
+string), keyed nine dictionaries on it, and capped none of them — while its
+siblings `VolumeSpikeDetector` and `RecursionPatternMonitor` both cap the
+caller-fed keys they hold, under the stated rule that a monitoring component
+must not become the memory-exhaustion vector.  Worse, `_update_timing_ratios`
+walked *all* of `baseline_stats` on every record, inside the hot-path lock,
+allocating a deque per unordered pair and never evicting one.  Measured at 300
+tracked names: 44,850 pair deques — exactly N(N−1)/2 — and per-record cost
+0.371 ms against 0.021 ms at a single name, a 17.7× regression against a
+documented "<2% overhead".
+
+Two caps, both constructor parameters: `max_operations` (default 256) bounds
+the tracked-name inventory, and `max_ratio_operations` (default 16) bounds the
+matrix at 120 pairs and the per-record walk at 15 comparisons — above the
+inventory the library itself uses.  Names beyond the cap are refused and
+**counted** in `dropped_operations`, so "this monitor is not seeing everything"
+is observable rather than silent.  Refusing is the only safe direction here:
+admitting an unbounded number of caller-supplied keys is the exhaustion vector.
+
+**MON-LANE-07 — the cross-operation path alarmed at ~1.9% with no budget.**
+The same path judged `abs(ratio − μ) / σ > 3.0` with μ and σ frozen after 30
+**consecutive** ratio samples.  That is not a 3-sigma test: consecutive values
+of `EWMA_mean(a) / EWMA_mean(b)` are heavily autocorrelated — an EWMA mean
+barely moves between adjacent observations — so the frozen σ measures
+short-term jitter rather than the long-run spread the bar must sit outside of,
+and it underestimates it for the life of the process.  Measured on two clean
+i.i.d. lognormal operations, 4,000 records each: the point path spent 1.1%
+against its declared 1% budget, while this path alarmed on 1.9% of the same
+stream from a rule with no budget, no calibration and no floor.  The CI
+detector-quality gate could not see any of it, because its evaluation stream
+contains a single operation and the pairwise path needs two.
+
+The bar is now the empirical `(1 − alarm_budget)` quantile of that pair's own
+observed deviations, floored at `threshold` — the same construction, the same
+recompute cadence and the same "ingest first, judge after" ordering the point
+path already used.  Until the estimate would stop being extrapolation the pair
+does not alarm at all: unlike the point path there is no measured basis for a
+fixed sigma floor here, so the warmup posture is silence.  The evaluation
+stream now carries two operations, so the gate can observe the pairwise path.
+
+**MON-LANE-05 — `get_security_report()` handed out the live baseline dict.**
+It returned `self.baseline_stats` directly, three lines above the comment where
+it copies `timing_history` to avoid exactly this.  `baseline_stats` gains a key
+on the 30th record of each new operation name, under the lock the reader does
+not hold; a consumer iterating the returned mapping raised
+`RuntimeError("dictionary changed size during iteration")` within four seconds
+against a writer issuing fresh names.  New `snapshot_baselines()` returns a
+copy taken under the lock, and copies the per-operation dicts too — returning
+only the outer copy would still hand out the inner ones the writer mutates in
+place.
+
+**MON-LANE-03 — an ESCALATION could select the weakest algorithm.**
+`UNRANKED_STRENGTH = -1` was introduced so an unknown current algorithm could
+not be treated as strong.  But `_trigger_algorithm_switch` then searched for
+the weakest algorithm *stronger than* the current strength, and every ranked
+algorithm is stronger than −1 — so an escalation from an unrecognised algorithm
+resolved to the lowest rung, ED25519.  That is the INVARIANT-35 downgrade the
+sentinel exists to prevent, and it is strictly worse than the behaviour it
+replaced.  The switch now refuses when the current strength is the sentinel:
+an algorithm whose strength is unknown cannot be ranked against, so no
+"stronger" claim can be made about the result, and the posture is left
+unchanged with the refusal reported.
+
+**MON-LANE-09 — `VolumeSpikeDetector.DEFAULT_OPERATIONS` was dead
+configuration.** The docstring described a filtering behaviour the detector did
+not implement: the constant was defined, documented as the set of operations
+watched, and never read.  It is now an opt-in filter — `operations=` selects
+which operation names participate, defaulting to *all* so existing behaviour is
+unchanged, with the count of records excluded surfaced as
+`filtered_operations`.  A constant that names a behaviour must either drive it
+or not exist.
+
+**MON-LANE-10 — `enforce_sigma_quadratic_threshold` declared reachable
+thresholds unreachable.** `_dominant_eigenvector` runs power iteration, which
+converges to the largest-**magnitude** eigenvalue, and its contract said so —
+while its one caller used the result as `argmax_x σ_quadratic(x)`, which is the
+largest-**algebraic** eigenvector.  Those coincide only for a positive
+semi-definite matrix.  `E` is *documented* positive-definite, but nothing on
+the public boundary checks it — both `calculate_sigma_quadratic` and
+`enforce_sigma_quadratic_threshold` accept an arbitrary caller-supplied array —
+and the loop already had explicit handling for a negative dominant eigenvalue,
+so the indefinite case was reachable rather than excluded.  Measured on
+`E = diag(-5, 1)`: the function returned `[1, 0]` where σ = −5, while
+`max_x σ(x) = +1` at `[0, 1]`; the enforcement routine then reported threshold
+0.5 unreachable and returned the state uncorrected, for a threshold a real
+state meets.  Fixed with a Gershgorin shift: the iteration runs on `E + cI`
+with `c = max(0, −λ_min_bound)` from the circle theorem.  Shifting moves every
+eigenvalue by the same `c` and changes no eigenvector, so the direction that
+comes back is `argmax_x σ(x)` for the original matrix; for a matrix that was
+already PSD the bound is ≥ 0, `c` is 0, and the iteration is bit-identical to
+before.
+
+**MON-LANE-04 and MON-LANE-08 — MONITORING.md described a different
+implementation.** The 5.0.0 "Measured operating characteristics" block stated
+sustained-shift numbers the cited gate script contradicts at the exact sample
+count CI runs, and quoted an F1 range that same script explicitly repudiates;
+the Adaptive Posture section documented weights, score bands and an API the
+shipped class does not have.  Both sections were rewritten from the code and
+from a fresh run of the gate, and the numbers now carry the sample count they
+were measured at.
+
+#### Build and packaging
+
+**BUILD-01 — the x86 AES-NI/PCLMULQDQ block was inert, and hardware AES was
+gated on AVX2.** `CMakeLists.txt` attached `-maes -mpclmul` to
+`src/c/ama_aes_gcm.c` — a file that contains no intrinsics — so the flags
+changed nothing, while the actual AES-NI/VAES implementations lived in the
+SIMD-conditional source list and the dispatcher installed the AES-NI backend
+only when `dispatch_info.aes_gcm >= AMA_IMPL_AVX2`.  The comment claimed the
+block was "independent of `AMA_ENABLE_SIMD`".  It was not: turning off SIMD, or
+turning off AVX2 alone, silently dropped hardware AES to the portable table
+path on a CPU that has AES-NI.  There is now a dedicated `AMA_X86_AESNI_SOURCES`
+list, gated on x86 architecture only and compiled with `-maes -mpclmul -mssse3
+-msse4.1`, signalled by `AMA_HAVE_X86_AESNI_IMPL`; the dispatcher installs
+AES-NI under that macro with no AVX2 precondition, and the VAES upgrade — which
+genuinely needs AVX2 — is nested inside the AVX2 block where it belongs.  The
+inert per-file flag on `ama_aes_gcm.c` is gone.  Pinned by
+`tests/test_aesni_is_not_gated_on_avx2.py`, which builds the tree in three
+configurations (SIMD on, SIMD off, AVX2 off) and probes the resulting library
+for the AES-NI symbol and the dispatcher's reported backend, rather than
+asserting on the shape of the CMake text.
+
+**BUILD-02 — published container images installed OpenSSL.**
+`docker/Dockerfile.c-api` installed `libssl-dev` and `libssl3` and
+`docker/Dockerfile.alpine` installed `openssl-dev`, in the same files that
+carry the INVARIANT-1 note about this library performing no cryptography
+through third-party providers.  Nothing in the tree links against them; they
+were inherited build-image boilerplate.  Both are removed from every stage, and
+`tools/check_vendor_isolation.py` gained `check_container_recipes`, which
+parses the package lists out of `RUN` lines in every container recipe and fails
+on any prohibited-vendor package.  Writing that scanner surfaced a second
+defect in the scanner itself: the line-continuation pattern `(?:[^\n]|\\\n)*`
+truncates at the first physical newline because the `[^\n]` alternative is
+tried first; reordered to `(?:\\\n|[^\n])*`, and option tokens beginning with
+`-` are skipped so a flag is never read as a package name.
+
+**BUILD-05 — `setup.py` documented the pre-5.0.0 SONAME chain.**  Two comments
+still described `libama_cryptography.so -> .so.3 -> .so.3.0.0` after the 5.0.0
+bump updated every other site.  CMake derives `SOVERSION` from the project
+major, so the chain is `.so.<major> -> .so.<major>.<minor>.<patch>` by
+construction; both comments now say that and name `.so.5` as this release's
+instance.  `tools/check_version_consistency.py` now also checks SONAME literals
+in prose, so the next bump fails CI instead of leaving the comment behind.
+
+#### CI gates
+
+Six gates could not fail for the thing they were written to catch.
+
+**CI-01 — INVARIANT-4 had no enforcement anywhere.**  The rule is that every
+third-party Action must be pinned to a full commit SHA rather than a mutable
+tag.  `check_action_pins.py` runs in CI, but under INVARIANT-24 and for a
+different property: its `_PIN_RE` matches only the already-correct form, so it
+verified that existing SHA pins RESOLVE upstream and was structurally blind to
+a reference carrying no SHA at all.  A workflow that pinned nothing passed, and
+`tests/test_action_pin_checks.py` recorded that gap in a comment rather than
+closing it.  New `find_unpinned()` enumerates every `uses:` reference across
+all workflows, skips local (`./…`) and `docker://` references, and fails closed
+on any third-party reference whose version is not 40 hex characters — before
+the upstream-resolution pass, and independently of `--offline`, since it needs
+no network.  One reference is exempt by path, not by prefix, with the reason
+written out: the SLSA generic generator verifies that its caller referenced it
+by a semantic-version tag and fails the build otherwise, because the tag is
+what its own provenance attests.
+
+**CI-02 — the coverage gate checked `needs:` membership and nothing else.**
+INVARIANT-31's rule is that an aggregating gate must actually fail when one of
+its inputs fails.  The checker confirmed the job was listed in `needs:` and
+stopped there, so a job added to `dudect-gate` or `static-analysis-gate` could
+fail while the aggregator reported green.  It now parses the aggregator's steps
+and reports any need whose result is never evaluated.  Finding that required
+fixing the checker's own tautology first — `_gate_body_text` serialised the
+`needs:` key into the text it then searched for need names, so every need
+appeared to be evaluated; the `needs` key is now excluded from that
+serialisation.  Six existing fixtures had no steps at all and so tripped the
+new rule; they now carry realistic
+`if: contains(needs.*.result, 'failure')` steps, which is what the rule is
+about.
+
+**CI-03 — INVARIANT-13's "suppressions absolutely forbidden in `src/c/` and
+`include/`" was unenforceable.** `check_suppression_hygiene.py` scanned the
+Python tree only; it had never read the C tree the invariant names, and a live
+suppression sat in `src/c` at HEAD.  The scanner now covers `src/c/` and
+`include/` for `NOLINT`, `cppcheck-suppress`, `coverity`, `#pragma GCC
+diagnostic ignored` and friends, with vendored subtrees identified explicitly
+rather than by heuristic.  The one live suppression was in
+`src/c/ed25519_donna_shim.c`, silencing a maybe-uninitialised warning on
+`bignum256modm s` and `ge25519 R`; both are now explicitly zero-initialised and
+the suppression is deleted, so the warning is answered rather than muted.
+
+**CI-04 — the apt retry-policy gate missed every `apt-get <options> install`
+spelling.** It matched only when the subcommand immediately followed
+`apt-get`, so `apt-get -y install …` — the spelling nearly every recipe uses —
+slipped through the raw-apt check the gate exists to enforce.  Options are now
+skipped before the subcommand is read.
+
+**CI-06 — one of three dudect harnesses got no alignment coverage.**  The
+cache-line-alignment half of `check_dudect_class_staging.py` matched only
+identifiers ending in `_stage`, so the harness whose staging buffer is named
+otherwise was silently exempt.  The check now resolves the staging destination
+through `_STAGE_CALL_DEST` — the buffer each `dudect_stage_select` call
+actually writes into — so it follows the call rather than a naming convention.
+
+**CI-07 — the claim-honesty gate was disarmed by any negation-flavoured word on
+the line.** INVARIANT-37's gate suppressed a claim if a negation word appeared
+anywhere on the same line, not if the claim itself was negated — so a sentence
+that made an unsupported claim and then mentioned something unrelated in the
+negative passed.  Negation is now scoped to the sentence containing the claim.
+The same gate gained a pass over the class of claim DOC-02 withdraws below.
+
+#### Documentation
+
+Twelve documents described a tree other than this one.  Each correction below
+is now backed by a gate, so the next drift fails CI rather than waiting for a
+reader.
+
+**DOC-02** — `ARCHITECTURE.md` still asserted the exact
+formal-verification-of-correctness claim that `AMA_CRYPTOGRAPHY_ETHICAL_PILLARS.md`
+withdrew earlier on this branch.  Withdrawn there too, and
+`check_verification_claim_honesty.py` now scans for that class of statement
+across the document set so one copy cannot survive the retraction of another.
+
+**DOC-01** — `CSRC_STANDARDS.md` states in its first paragraph that it maps
+every implemented primitive, and INVARIANT-1's Algorithm Registry addendum
+makes that binding ("updating CSRC_STANDARDS.md … before implementation is
+permitted").  Neither held, and nothing checked either: no file under `tools/`,
+`tests/` or `.github/workflows/` referenced the document at all.  New
+`tools/check_algorithm_registry.py` checks it at two levels, and both halves of
+"what ships" are discovered rather than written down.
+
+*Families* come from the `AMA_API` prototypes in `include/ama_cryptography.h`;
+each must map to one or more registry tokens, a tuple where the family spans
+two publications — `ama_nistp_*` is ECDSA under FIPS 186-5 *and* ECDH under
+SP 800-56A rev. 3, and a registry citing only the first describes half the
+family.
+
+*Parameter sets* come from the header's parameter-set enumerators
+(`AMA_ML_DSA_*`, `AMA_ML_KEM_*`, `AMA_SLHDSA_*`, `AMA_NIST_CURVE_*`) and from
+the `ama_hmac_<hash>` prototypes, and each must appear in the **Algorithm
+column** of a row of its own.  This level exists because the first is too
+coarse to see what the audit found: `ama_hmac_*` maps to FIPS 198-1, which the
+HMAC-SHA-256 row already satisfied, so the family read as covered while three
+further HMAC constructions shipped with no row; `ama_dilithium_*` maps to
+ML-DSA-65, which said nothing about ML-DSA-44 or ML-DSA-87.  The Algorithm
+column rather than the whole row, because "PBKDF2 with HMAC-SHA-512 PRF" in
+another algorithm's parameter-set cell would otherwise stand in for a missing
+HMAC-SHA-512 row — pinned by its own test.
+
+Run against the registry as it stood before this change the gate reports
+**18** violations by name: FIPS 186-5 and SP 800-56A rev. 3 both uncited with
+P-256, P-384 and P-521 each unrowed; SP 800-208 uncited for `ama_lms_*` and
+`ama_hss_*`; no row for ML-KEM-512, ML-KEM-768, ML-DSA-44, ML-DSA-87 or
+SLH-DSA-SHAKE-128s; and none for HMAC-SHA-384, HMAC-SHA-512 or HMAC-SHA3-256.
+The last two of those were not in the audit's list — the parameter-set level
+found them.  All the rows are added, and the gate runs in CI; every direction,
+including the fail-closed floors on a collapsed header scan and a truncated
+registry, is pinned by `tests/test_algorithm_registry_gate.py`.
+
+**DOC-08** — INVARIANT-41 claimed `tests/test_keygen_pct.py` enforces a
+pairwise consistency test on every keygen path, but that test drives a
+hand-written list of calls, so a new keygen path that skipped the pairwise
+check passed.  New `tools/check_keygen_pct.py` enumerates the keygen entry
+points from the source and fails on any that the pairwise test does not drive.
+
+**PY-4** — the INVARIANT-41 sweep claimed to enumerate "every bare draw" and
+did not recognise `secrets.randbits`, `secrets.token_hex`,
+`secrets.token_urlsafe`, `secrets.choice` or `random.getrandbits`.  Two live
+shipped sites minted the RFC 3161 replay nonce through `secrets.randbits(64)` —
+`rfc3161_timestamp.py` and `legacy_compat.py` — outside the health-tested
+wrapper, and so outside the FIPS 140-3 §4.9.2 continuous stuck-DRBG check and
+outside the error-state refusal, for the one value the module itself calls the
+client's only replay defence.  All five call shapes are added to the sweep and
+to its aliased-import guard, and both nonces now draw through
+`int.from_bytes(secure_token_bytes(8), "big")`.  The sentence in
+`secure_channel.py` is now true rather than removed.
+
+**DOC-03** — `CONSTANT_TIME_VERIFICATION.md`'s enumeration of information-only
+dudect lanes was wrong: two further lanes were information-only with no
+blocking counterpart.  Enumeration corrected against the workflow, and one of
+the two now has a blocking counterpart: `secp256k1-scalarmult` is added to
+`tools/check_ghash_constant_time.py` as its fourteenth target and measured to a
+limit of 0 on all four metrics — 16,020,324 instruction references and
+3,835,722 data references with identical D1 and LL misses across all eight
+secret classes.  Reaching that number required fixing an address-selection
+artefact in the measurement driver itself, which made two classes differ by
+allocation rather than by secret.
+
+**DOC-05** — INVARIANT-42 documented the ctypes-ABI gate as covering 4 modules
+and 124 symbols; it covers 7 and 136, and the CHANGELOG already said so.
+Corrected, and the counts are now generated.
+
+**DOC-06, TS-2** — the C test-suite size was published as 59 suites / 62
+translation units in three documents against a tree with 60 / 63, and
+`check_documented_counts.py` could not see any of the three phrasings.  All
+three corrected; the gate now recognises the C-suite spellings and gained
+`check_source_inventory_counts`, so a document that states a source inventory
+is checked against the tree.
+
+**DOC-07** — `docs/METRICS_REPORT.md` contradicted its own gated table,
+narrating a static count of 4,085 next to a table row of 4,168.  Regenerated
+from `update_docs.py`; the current figures are 4,297 functions across 179
+files, and both the prose and the table come from the same generator.
+
+**DOC-09** — `README.md`'s C library inventory omitted two translation units
+and one Python module added on this branch.  Completed, and covered by the same
+inventory gate as DOC-06.
+
+**DOC-10, BENCH-02** — `tools/update_docs.py` and `benchmarks/README.md` both
+still documented the abandoned "~65% of measured performance" floor convention,
+and `update_docs.py` told readers to "sanity-check that measured ≫ floor" —
+advice that is now wrong on 11 of 19 published rows, because the floors are
+measured medians on a named runner class rather than a discount of the current
+run.  Both rewritten to the convention the two shipped baseline files actually
+carry.
+
+#### Benchmarks
+
+**BENCH-03 — `full_package_create` was sampled 25 times and published as 5.**
+The row called `benchmark_operation_best_of(..., rounds=5)` while
+`_SAMPLING_REPEATS` *also* registered it for `_COMPOSITE_SAMPLED_ROUNDS` = 5.
+The two mechanisms compound: `_measure_benchmark` called the function 5 times
+and kept the maximum, and each of those calls ran `benchmark_operation` 5 more
+times, each over 3 windows — 25 whole measurements and 75 windows, against 5
+and 15 for its sibling `full_package_verify`, which carries the same
+`_SAMPLING_REPEATS` entry and calls plain `benchmark_operation`.  So the
+provenance line published "full_package_create ×5" for a row sampled 25 times,
+and the cost model in the `_EXTRA_SAMPLED_ROUNDS` docstring was out by ~4× for
+it.  The row now calls plain `benchmark_operation`, matching its sibling.
+Measured on the change: 17.7 s → 5.5 s for the row, and the reported rate moves
+1,446.8 → 1,371.7 ops/sec (−5.2%), because the maximum is now over 15 windows
+rather than 75.  The floor is 1,983 with a 45% tolerance — a 1,091 ops/sec
+minimum — so both numbers clear it with room, and the two composites are
+sampled identically, which is what makes them comparable at all.
+
+**BENCH-05 — the published report rendered a regression as an improvement.**
+The human-readable table's column was headed "Delta", which a reader takes to
+mean change-since-baseline, while the number under it is
+`regression = −pct_change` — positive when SLOWER.  A row 43% slower than its
+floor read as "+43.0%".  The machine-readable sibling named the same field
+`regression_percent` honestly, so only the artefact a human reads was
+ambiguous.  The column is renamed `Regression` and the table now carries an
+explicit sentence stating that positive means slower, that it is the same
+number as `regression_percent`, and that the floor is a measured median on
+another runner class rather than a discount of this run.
+
+**BENCH-04 — the "FIPS 180-4 Section B.1" SHA-256 vectors were generated
+locally.** `nist_vectors/fetch_vectors.py` wrote that KAT file from CPython's
+`hashlib`, which on the build hosts is backed by OpenSSL — a prohibited vendor
+producing a file that names a NIST publication as its source.  The generator
+now emits the published vectors as literals with the publication cited, and
+`tools/check_corpus_originality.py` gained `scan_vector_generators`, which
+fails on any vector generator that computes its expected values through a
+third-party provider instead of transcribing them.
+
+**TS-3 — `test_the_json_record_refuses_a_non_finite_value` exercised no
+repository code.** It asserted against a locally constructed `json.dumps` call
+rather than the writer under test, so it could not fail for any defect in the
+writer.  Rewritten to drive `benchmark_runner.main()`, which immediately
+exposed a real defect: `json.dump(..., allow_nan=False)` encodes incrementally
+into the open file and raises part way through, leaving a truncated JSON file
+on disk — measured, a report whose first benchmark carries an infinite rate
+left `{\n  "benchmarks": {\n    "widget": {\n      "ops_per_sec": ` behind, and
+a downstream step that checks whether the artefact exists would call that a
+run.  The writer now serialises with `json.dumps` first, so the failure happens
+before the file is created.
+
+**TS-4 — `test_verify_via_subprocess` accepted both outcomes.** It asserted the
+subprocess returned *either* success or failure, which is every possible
+outcome, so it could not fail.  It now asserts the specific exit status and the
+specific output the verification path produces.
+
+**BENCH-05 (rendering) — regenerating the report restamped its provenance.**
+Re-rendering `benchmark-report.md` from a stored `benchmark-results.json`
+stamped the *rendering* process's commit, host and argv onto someone else's
+measurements, so the artefact claimed to have been produced by whatever
+re-rendered it.  `generate_markdown_report` now prefers the provenance recorded
+in the report over the live one, falling back to the live one only for a report
+built moments earlier in the same process, where the two are the same thing.
+
+#### Integrity
+
+**PY-3 — the signed module digest was not an injective commitment.**  Each
+entry contributed `name || content` with no length prefix and no delimiter, and
+entries were concatenated.  A hash of a concatenation commits to the
+concatenation, not to the (filename → content) mapping, so two different
+package trees produce one digest — and that digest is exactly what the Ed25519
+artefact signs.  Demonstrated against the shipped signer: a tree with
+`a.py = b"X"`, `b.py = b"Y"` and a tree with a single `a.py = b"Xb.pyY"` hash
+identically, so one signature covered both.  Every field is now length-prefixed
+(4/4/8 bytes) and every section tagged, under a format prefix
+`AMA-package-digest-v2\0`, making the encoding injective by construction; the
+version prefix is also the domain separation, so no pre-5.0.0 signature
+verifies against a tree hashed this way.  Both mirrors — `_self_test.py` and
+`_build_sign.py` — carry the identical construction and are pinned equal.  The
+test that compares them used to re-implement the loop inline, a third copy kept
+in step by hand; it now calls the real runtime function against a staged tree,
+so it cannot agree with the signer by transcription.
+
+**PY-2 — a poisoned hash-based `.pyc` could execute unnoticed.**
+`_cache_header_is_live` decided whether a cached bytecode file was authoritative
+without consulting `_imp.check_hash_based_pycs`.  Under
+`--check-hash-based-pycs never` CPython honours a hash-based `.pyc` without
+validating its hash, while this function concluded there was nothing to bind
+and the execution-integrity stage recorded a pass.  The function now reads the
+interpreter's actual setting and treats `never` as the unchecked mode it is.
+Pinned by `tests/test_pyc_cache_liveness.py` across all three settings
+(`default`, `never`, `always`).
+
+#### Type checking, and what the excluded third of the tree was hiding
+
+Raised while checking the audit's own coverage rather than by the audit.
+`ARCHITECTURE.md` says "type hints throughout (validated via mypy)" and lists
+"mypy --strict (type checking, 0 errors)" in the CI pipeline; the type-check
+step ran against a **hand-written list** of paths — the shipped package, the
+test tree, the gate scripts, four benchmark files — with the chart, dashboard
+and comparative generators excluded in a comment as "demo tooling outside any
+control path ... annotating them adds churn without protecting anything".
+
+Two problems.  The list was maintained by hand, so a new tool joined the check
+only if someone remembered to add it.  And the excluded files were not inert.
+`mypy --strict` over `benchmarks/` and `tools/` reported **323 errors in 13
+files**, and among the annotation noise were real defects:
+
+* `generate_competitive.py`'s stack-coverage matrix was declared
+  `dict[str, dict[str, bool]]` and populated with `dict(zip(ORDER, [1, 0, …]))`
+  — ints under a bool annotation, and `zip` stops at the shorter operand, so a
+  row written with seven entries instead of eight would silently drop mbedTLS
+  from the comparison and publish it as "not implemented".  A coverage claim
+  about someone else's library, made by a typo.  Rows now go through
+  `_coverage_row(*flags)`, which checks the width.
+* Three `re.search(...).group(1)` version reads (`generate_competitive.py`,
+  `generate_dashboards.py`, `generate_visuals.py`, `generate_dashboard.py`)
+  raise `AttributeError: 'NoneType' object has no attribute 'group'` at import
+  time if the declaration ever moves — a broken tool rather than the one thing
+  that went wrong.  Each now fails with the reason, and none falls back to a
+  literal: a chart stamped with a version that was not read from the package is
+  the defect the lookup exists to prevent.
+* `benchmark_suite.py` dereferenced `kms.dilithium_keypair` — `Optional`, left
+  `None` when the ML-DSA backend is unavailable — inside three lambdas.  The
+  precondition is now checked once, in the open.
+* The same file imported `native_hkdf` **through** `legacy_compat`, which
+  imports it for its own use and does not list it in `__all__`; it now comes
+  from `pqc_backends`, where it is defined and exported.
+* `generate_dashboards.py`'s defense-layer figure was a list of dicts mixing
+  `str` and `float`, so it inferred as `dict[str, object]` and every
+  `layer["y"] - 0.6` in the drawing code was arithmetic on `object`.  Now a
+  `NamedTuple`, so the field names are checked too.
+* `pqc_comparative_bench.py` imported `cryptography.hazmat.primitives.asymmetric.mldsa`
+  unconditionally — a module that arrived in `cryptography` 46.0 — and died
+  with a bare `ImportError` on anything older.  It now fails with the version
+  requirement and what it is for.
+* Two loop-variable-capture `lambda x=value:` thunks became `functools.partial`:
+  same binding, but a lambda with defaults is also callable *with* arguments,
+  which a timing thunk is not.
+
+Then the published integration examples, which had never been type-checked at
+all: `examples/python/flask_integration.py` and `fastapi_integration.py` both
+call `create_crypto_package(dna_codes=…)` at two sites each.  The parameter is
+`codes`.  It has never been `dna_codes`.  All four calls raise `TypeError` the
+moment they run — in the two files a reader copies from to integrate this
+library with a web framework.
+
+`setup.py` was outside the check too, at 33 errors; among them `shared_globs`
+holding a different tuple arity per platform and `cythonize`'s untyped return
+erasing the declared `list[Extension]` for every caller.  `types-setuptools`
+is now pinned so `build_ext`'s base class is a real type rather than `Any`,
+which is what makes the overrides on `CMakeBuild` checkable at all.
+
+**The scope is now every tracked `.py` file — 292 of them, 293 modules
+analysed, zero errors — and that it *is* every one of them is checked rather
+than asserted.**  `mypy --linecoverage-report` names the files it actually
+analysed; `tools/check_type_check_scope.py` compares that list against
+`git ls-files '*.py'` and fails on any tracked file the run did not touch,
+because an exit status says nothing about what was looked at.
+Mutation-verified against the previous scope: `mypy --strict ama_cryptography/
+tests/` exits **0** while the gate names all 80 files it skipped.  The
+exemption list is empty and a test asserts it stays that way.
+
+Two mypy flags are relaxed for the two framework examples, and only those two:
+`disallow_subclassing_any` and `disallow_untyped_decorators`.  FastAPI, Flask
+and pydantic ship no stubs and are not dependencies of this library, so their
+base classes and route decorators are `Any` in every CI image — errors that
+cannot be answered from this tree.  Everything else stays on, which is what
+found the four `dna_codes` calls.
+
+`make lint` was running `mypy ama_cryptography/ --ignore-missing-imports`
+against a bare `mypy` on `PATH` that resolved to **1.19.1** from a stale
+`~/.local` install, while the pinned toolchain is 2.3.0 and `[tool.mypy]` sets
+`python_version = "3.10"` — a combination mypy 1.x reads differently.  A green
+`make lint` therefore said nothing about what CI would do, and reported 40
+errors CI does not have.  Every tool in the Makefile now runs as
+`$(PYTHON) -m <tool>`, so `make lint`, pre-commit and CI are the same
+toolchain by construction.
+
+#### Deferred
+
+Nothing.  All thirty-seven confirmed audit findings are fixed here, and the
+addressed set was compared programmatically against the confirmed set rather
+than by eye; the type-checking work above was raised and closed in the same
+pass rather than carried forward.
 
 ### Verification pass, eighth (2026-08-20) — a truncated ML-KEM sampler, a poisonable trust artefact, and six gates that could not see the change they police
 
@@ -2124,8 +2671,8 @@ resolved here.  The ones that changed behaviour rather than prose:
 
 Documentation claims corrected against measurement rather than restated: the
 SoftHSM2 lane runs **one** real-token test (`test_full_lifecycle`), not 51; the
-C suite is 59 files / 62 translation units, not 58 / 61; the gated
-gated surface is what `tools/check_error_state_gating.py` reports (89
+C suite is 60 files / 63 translation units, not 58 / 61; the gated
+surface is what `tools/check_error_state_gating.py` reports (89
 native plus 10 Cython entry points), replacing two documents that disagreed at
 80 and 81; the canonical-host performance tables understate 5.0.0 on the AEAD
 rows *and overstate it on every keygen row*, which now pay a pairwise

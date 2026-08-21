@@ -633,6 +633,42 @@ def main() -> int:
             print(f"OK    {desc:<60s} = {found}")
 
     # -------------------------------------------------------------------
+    # SONAME literals in the packaging prose.
+    #
+    # CMake derives SOVERSION from the project major, so the shipped chain is
+    # ``libama_cryptography.so -> .so.<major> -> .so.<major>.<minor>.<patch>``.
+    # Two statements in setup.py's `_copy_native_library_into_package`
+    # docstring still named `.so.3` two majors after the project left it —
+    # including the sentence that describes what the function guarantees ("We
+    # preserve the SONAME chain ...") — while the same bump had updated the
+    # Makefile.  A literal major in packaging prose is a version anchor, and
+    # every other kind is checked here.
+    #
+    # Naming the current value concretely is GOOD documentation — the two
+    # correct paragraphs in that same docstring write ``.so.<major>`` and then
+    # say "``.so.5`` at this release".  What is checked is agreement: a literal
+    # whose major differs from the canonical one is stale, and at the next bump
+    # a now-correct literal becomes stale and this reports it, which is the
+    # whole point.  ``CMakeLists.txt project() VERSION`` is asserted equal to
+    # ``canonical`` above, so the project major is the canonical major.
+    soname_major = canonical.split(".", 1)[0]
+    for rel in ("setup.py", "Makefile"):
+        text = _read(REPO / rel)
+        if not text:
+            continue
+        for match in re.finditer(r"\.so\.(\d+)(?:\.\d+)*", text):
+            if match.group(1) == soname_major:
+                continue
+            line = text.count("\n", 0, match.start()) + 1
+            desc = f"{rel}:{line} SONAME literal {match.group(0)!r}"
+            failures.append(
+                f"  - {desc}: names major {match.group(1)}, but CMake derives "
+                f"SOVERSION from the project major, currently {soname_major}. "
+                f"The shipped chain is libama_cryptography.so -> .so."
+                f"{soname_major} -> .so.{canonical}."
+            )
+
+    # -------------------------------------------------------------------
     # Git-tag install pins in Sphinx sources.
     #
     # The *.md sweep below cannot see docs/**/*.rst, so the Sphinx landing
@@ -702,7 +738,11 @@ def main() -> int:
         for pat in doc_header_pats:
             for m in pat.finditer(text):
                 doc_checked += 1
-                rel = md.relative_to(REPO)
+                # repo_relative, not relative_to: the message is a path a
+                # reviewer reads, and str(Path.relative_to(...)) spells it with
+                # backslashes on Windows while every other message here uses
+                # forward slashes.
+                rel = repo_relative(md, REPO)
                 if m.group(1) != canonical:
                     doc_stale.append(
                         f"{rel}: header version {m.group(1)!r} != canonical {canonical!r}"

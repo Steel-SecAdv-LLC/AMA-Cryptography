@@ -21,6 +21,7 @@ import copy
 import json
 import os
 from pathlib import Path
+from typing import Any
 
 # -- Paths -------------------------------------------------------------------
 ROOT = Path(__file__).parent.parent
@@ -153,7 +154,7 @@ FOUR_LAYER_BREAKDOWN = [
 ]
 
 
-def load_live_data():
+def load_live_data() -> Any:
     """Load live benchmark data if available."""
     if BENCH_FILE.exists():
         try:
@@ -171,7 +172,7 @@ TEXT_COLOR = "#e0e0e0"
 GRID_COLOR = "#2a2a4a"
 
 
-def apply_theme(plt):
+def apply_theme(plt: Any) -> None:
     """Apply professional dark theme to all charts."""
     plt.rcParams.update(
         {
@@ -678,7 +679,9 @@ def generate_text_summary() -> None:
 
     print("\nSignature Operations:")
     for name, data in SIGNATURE_OPS.items():
-        bar = "#" * min(50, data["ops_sec"] // 400)
+        # int(): the row values are int and float together, so the mapping
+        # infers as float and `"#" * <float>` is not a repetition.
+        bar = "#" * int(min(50, data["ops_sec"] // 400))
         print(f"  {name:20s} {bar} {data['ops_sec']:>8,} ops/sec")
 
     print("\nC vs Python:")

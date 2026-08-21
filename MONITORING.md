@@ -91,13 +91,19 @@ Both are **on by default**; see [Agentic Abuse Detectors](#agentic-abuse-detecto
 Ed25519 wall-clock timings through the shipped API):
 - clean-traffic point-alarm rate within the declared 1% budget
   (the pre-5.0.0 fixed Gaussian MAD rule measured 12.5%)
-- a 30% sustained regime change is alerted within ~40 samples and the regime
-  state covers >90% of the pre-re-baseline window (pre-5.0.0: 17.6% recall)
+- a 30% sustained regime change is alerted **68 samples** after onset with the
+  regime state covering **77%** of the pre-re-baseline window, at the
+  4,000-sample configuration CI runs
+  (`detector_baseline_eval.py --samples 4000 --gate`). Both figures depend on
+  the sample count — measured at 1,000 / 2,000 / 4,000 / 8,000 samples: delay 80 / 45 / 68 / 29 and coverage 0.73 / 0.85 / 0.77 / 0.90 — so they are quoted with it rather than as
+  properties of the detector. The gate's limits are 150 samples and a 0.70
+  coverage floor. (pre-5.0.0: 17.6% recall, and no event concept at all)
 - smaller `alarm_budget` and larger `threshold_sigma` each strictly reduce
   alarms (pre-5.0.0: sigma 2/3/5 produced identical alarm sets)
 - on isolated spikes at a matched alarm budget a top-N KNN baseline ranks
-  as well as or somewhat better than the calibrated point path (mean F1
-  ratio 0.80-0.98 across measured runs) — stated, not hidden.  The
+  as well as or somewhat better than the calibrated point path (mean shipped /
+  best-baseline F1 ratio 0.960 / 0.989 / 0.987 / 0.978 at 1,000 / 2,000 /
+  4,000 / 8,000 samples, against a 0.85 gate floor) — stated, not hidden.  The
   comparison hands that baseline the detector's own calibrated alarm count
   as an oracle; the detector's value over the baselines is the calibrated
   false-alarm budget itself and the sustained-shift event path, neither of
@@ -476,11 +482,11 @@ from ama_cryptography.adaptive_posture import PostureEvaluator, CryptoPostureCon
 # Create evaluator with weighted scoring
 evaluator = PostureEvaluator()
 
-# Feed anomalies from 3R monitor
-evaluator.record_timing_anomaly(score=0.7)
-evaluator.record_pattern_anomaly(score=0.5)
-
-# Evaluate threat level
+# The evaluator has no per-anomaly intake.  It reads the monitor's report,
+# which already carries the alerts, the resonance analysis and the pattern
+# analysis, and scores them.  Two per-anomaly "record" calls stood here and
+# neither exists on PostureEvaluator, so a reader following this block got an
+# AttributeError on its second line.
 evaluation = evaluator.evaluate(monitor.get_security_report())
 # PostureEvaluation(threat_level=..., action=..., confidence=..., signals=...)
 # threat_level: NOMINAL | ELEVATED | HIGH | CRITICAL

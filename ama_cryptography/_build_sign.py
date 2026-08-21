@@ -63,7 +63,7 @@ import hashlib
 import os
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Protocol, Tuple
 
 _BUILD_PIPELINE_ENV = "AMA_BUILD_PIPELINE"
 _INTEGRITY_SIGNING_SEED_ENV = "AMA_INTEGRITY_SIGNING_SEED_HEX"
@@ -92,31 +92,78 @@ def _require_build_pipeline() -> None:
         sys.exit(2)
 
 
+#: Format tag for the package digest.  MUST equal
+#: ``_self_test._PACKAGE_DIGEST_FORMAT`` byte for byte; pinned by
+#: ``tests/test_native_integrity.py``.  See the framing note in
+#: ``_self_test._compute_module_digest`` for what it separates and why.
+_PACKAGE_DIGEST_FORMAT = b"AMA-package-digest-v2\x00"
+
+
+class _Absorbing(Protocol):
+    """The only thing :func:`_absorb_entry` needs from a hash object.
+
+    A structural type rather than ``hashlib._Hash``: that name is private to
+    the standard library, and naming it here would also add a reference to the
+    ``hashlib`` module inside a file the INVARIANT-1 stdlib-hash boundary
+    counts exactly — this helper takes a hasher, it does not construct one.
+    """
+
+    def update(self, data: bytes, /) -> None: ...  # pragma: no cover - protocol
+
+
+def _absorb_entry(hasher: _Absorbing, section: bytes, name: str, content: bytes) -> None:
+    """Absorb one (section, name, content) entry with every field framed.
+
+    Byte-for-byte mirror of ``_self_test._absorb_entry``.  The two modules
+    deliberately do not import each other (build-time vs runtime separation,
+    INVARIANT-1), so the duplication is intentional and pinned by tests.
+    """
+    name_bytes = name.encode("utf-8")
+    body = content.replace(b"\r\n", b"\n")
+    hasher.update(len(section).to_bytes(4, "big"))
+    hasher.update(section)
+    hasher.update(len(name_bytes).to_bytes(4, "big"))
+    hasher.update(name_bytes)
+    hasher.update(len(body).to_bytes(8, "big"))
+    hasher.update(body)
+
+
 def _compute_package_digest(pkg_dir: Path) -> bytes:
     """Compute SHA3-256 over ``pkg_dir``'s ``.py`` files and POST KAT vectors.
 
     Mirrors ``_self_test._compute_module_digest`` byte-for-byte: the top-level
     ``*.py`` files (excluding the generated ``_integrity_signature.py``), then
     every file under ``_post_kats/`` ordered by name, each contributing its name
-    plus content with CRLF normalised to LF.  Covering ``_post_kats/`` binds the
-    Known Answer vectors so a swapped vector fails the import-time integrity
-    check.  Returns raw 32 bytes (the verifier compares raw, not hex).
+    plus content with CRLF normalised to LF, every field length-prefixed and
+    every section tagged.  Covering ``_post_kats/`` binds the Known Answer
+    vectors so a swapped vector fails the import-time integrity check.  Returns
+    raw 32 bytes (the verifier compares raw, not hex).
+
+    The framing is load-bearing — see the note in the runtime mirror.  Without
+    it this hash commits to the CONCATENATION of names and contents rather than
+    to the mapping, and two different package trees were demonstrated to
+    produce one digest, which one signature then covered.
     """
     hasher = hashlib.sha3_256()
-    for py_file in sorted(pkg_dir.glob("*.py")):
-        # Exclude the generated artefact from the digest — otherwise
-        # the digest would depend on the signature it covers, making
-        # the construction self-referential.
-        if py_file.name == "_integrity_signature.py":
-            continue
-        hasher.update(py_file.name.encode("utf-8"))
-        hasher.update(py_file.read_bytes().replace(b"\r\n", b"\n"))
+    hasher.update(_PACKAGE_DIGEST_FORMAT)
+
+    # Exclude the generated artefact from the digest — otherwise the digest
+    # would depend on the signature it covers, making the construction
+    # self-referential.
+    py_files = [p for p in sorted(pkg_dir.glob("*.py")) if p.name != "_integrity_signature.py"]
+    hasher.update(len(py_files).to_bytes(4, "big"))
+    for py_file in py_files:
+        _absorb_entry(hasher, b"py", py_file.name, py_file.read_bytes())
+
     kat_dir = pkg_dir / "_post_kats"
-    if kat_dir.is_dir():
-        for kat_file in sorted((p for p in kat_dir.iterdir() if p.is_file()), key=lambda p: p.name):
-            hasher.update(b"_post_kats/")
-            hasher.update(kat_file.name.encode("utf-8"))
-            hasher.update(kat_file.read_bytes().replace(b"\r\n", b"\n"))
+    kat_files = (
+        sorted((p for p in kat_dir.iterdir() if p.is_file()), key=lambda p: p.name)
+        if kat_dir.is_dir()
+        else []
+    )
+    hasher.update(len(kat_files).to_bytes(4, "big"))
+    for kat_file in kat_files:
+        _absorb_entry(hasher, b"post_kats", kat_file.name, kat_file.read_bytes())
     return hasher.digest()
 
 

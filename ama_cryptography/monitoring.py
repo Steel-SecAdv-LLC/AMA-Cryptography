@@ -46,7 +46,20 @@ from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, ClassVar, Deque, Dict, List, Optional, Sequence, Set, Tuple, Union
+from typing import (
+    Any,
+    ClassVar,
+    Deque,
+    Dict,
+    FrozenSet,
+    Iterable,
+    List,
+    Optional,
+    Sequence,
+    Set,
+    Tuple,
+    Union,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1251,6 +1264,8 @@ class ResonanceTimingMonitor:
         ewma_alpha: float = 0.1,
         anomaly_profiles: Optional[Dict[str, Dict[str, Any]]] = None,
         drift_check_interval: int = 50,
+        max_operations: int = 256,
+        max_ratio_operations: int = 16,
     ) -> None:
         """
         Initialize timing monitor.
@@ -1273,14 +1288,50 @@ class ResonanceTimingMonitor:
                 pre-5.0.0 drift check ran only every N samples; the
                 sustained-shift CUSUM that replaced it evaluates every
                 sample, so this parameter no longer drives detection.
+            max_operations: Cap on the number of distinct operation names
+                tracked.  ``operation`` reaches here from
+                ``AmaCryptographyMonitor.monitor_crypto_operation``, which is
+                public API taking an arbitrary string, and every per-operation
+                structure below is keyed on it — so without a cap a caller
+                passing a fresh name per call grows nine dicts without bound.
+                This is the same rule
+                :class:`VolumeSpikeDetector` and
+                :class:`RecursionPatternMonitor` already apply to the
+                caller-fed keys they hold ("a monitoring component must not
+                become the memory-exhaustion vector"); this class was the one
+                that did not.  Names beyond the cap are counted in
+                :attr:`dropped_operations` and otherwise ignored.
+            max_ratio_operations: Cap on how many operations participate in
+                the pairwise timing-ratio matrix.  That matrix is quadratic —
+                measured at 300 tracked names it held exactly 44,850 pair
+                deques (N(N-1)/2) and never evicted one — and it is walked
+                inside the hot-path lock on EVERY record, so its size is also
+                per-operation latency: the same measurement put per-record
+                cost at 0.371 ms with 300 names against 0.021 ms with one, a
+                17.7x regression against a documented "<2% overhead".  16
+                bounds the matrix at 120 pairs and the per-record walk at 15
+                comparisons, and is above the operation inventory the library
+                itself uses (fewer than a dozen).  Operations are admitted in
+                first-seen order.
 
         Performance Optimization:
             Uses collections.deque with maxlen for O(1) append and automatic
             pruning, and EWMA/Welford's algorithm for O(1) incremental statistics.
         """
+        if max_operations < 1:
+            raise ValueError("max_operations must be at least 1")
+        if max_ratio_operations < 1:
+            raise ValueError("max_ratio_operations must be at least 1")
+
         self.threshold = threshold_sigma
         self.window_size = window_size
         self.max_history = max_history
+        self.max_operations = int(max_operations)
+        self.max_ratio_operations = int(max_ratio_operations)
+        #: Records dropped because the operation-name cap was hit.  Non-zero
+        #: means this monitor is not seeing everything; surfaced through
+        #: :meth:`snapshot_baselines` rather than silently absorbed.
+        self.dropped_operations = 0
         self.use_ewma = use_ewma
         self.ewma_alpha = ewma_alpha
         self.drift_check_interval = drift_check_interval
@@ -1294,6 +1345,26 @@ class ResonanceTimingMonitor:
         # (mean_ratio, std_ratio) per operation pair
         self._ratio_baselines: Dict[Tuple[str, str], Tuple[float, float]] = {}
         self._ratio_samples: Dict[Tuple[str, str], Deque[float]] = {}
+        # Operations admitted to the ratio matrix, in first-seen order, capped
+        # at max_ratio_operations.  Kept as a list because the walk below is
+        # over it rather than over baseline_stats: iterating every tracked
+        # operation on every record is what made the hot-path cost grow with
+        # the name count.
+        self._ratio_ops: List[str] = []
+        # Per-pair history of |ratio - baseline_mean| / baseline_std, and the
+        # cached (sample_total, threshold) pair, so the cross-operation bar is
+        # an empirical quantile of what this pair actually does rather than a
+        # fixed 3.0 against a sigma estimated from 30 CONSECUTIVE EWMA ratios.
+        # Those 30 are heavily autocorrelated — an EWMA mean barely moves
+        # between adjacent observations — so the frozen sigma underestimates
+        # the long-run spread and the fixed bar is miscalibrated for the life
+        # of the process.  Measured on two clean i.i.d. lognormal operations,
+        # 4,000 records each: the point path spent 1.1% against its declared
+        # 1% budget while this path alarmed on 1.9% of the same stream, from a
+        # rule with no budget, no calibration and no floor.
+        self._ratio_dev_history: Dict[Tuple[str, str], Deque[float]] = {}
+        self._ratio_dev_total: Dict[Tuple[str, str], int] = {}
+        self._ratio_threshold: Dict[Tuple[str, str], Tuple[int, float]] = {}
         # Priority 7: Frozen baselines for drift detection
         self._frozen_baselines: Dict[str, Tuple[float, float]] = {}  # (frozen_mean, frozen_std)
         # Empirical threshold calibration: robust scores observed per
@@ -1376,6 +1447,15 @@ class ResonanceTimingMonitor:
         """
         # Initialize deque and stats for new operations
         if operation not in self.timing_history:
+            if len(self.timing_history) >= self.max_operations:
+                # Refuse the name rather than growing.  Dropping is the only
+                # safe direction: every structure below is keyed on a
+                # caller-supplied string, so admitting an unbounded number of
+                # them turns the monitor into the exhaustion vector it exists
+                # to watch for.  The drop is COUNTED, so "the detector is not
+                # seeing everything" is observable rather than silent.
+                self.dropped_operations += 1
+                return None
             self.timing_history[operation] = deque(maxlen=self.max_history)
             self._incremental_stats[operation] = IncrementalStats()
             self._ewma_stats[operation] = EWMAStats(
@@ -1701,6 +1781,24 @@ class ResonanceTimingMonitor:
         self._calibrated_threshold[operation] = (total, threshold)
         return threshold
 
+    def snapshot_baselines(self) -> Dict[str, Dict[str, float]]:
+        """A consistent COPY of the per-operation baseline statistics.
+
+        ``baseline_stats`` is mutated under :attr:`_lock` — a new key appears
+        on the 30th record of each new operation name — so handing the live
+        mapping to a reader that does not hold that lock is a race, not a
+        convenience.  ``get_security_report`` did exactly that, three lines
+        above the comment where it fixes the same race for ``timing_history``;
+        an ordinary consumer iterating the returned mapping raised
+        ``RuntimeError("dictionary changed size during iteration")`` within
+        four seconds against a writer issuing fresh names.
+
+        The per-operation dicts are copied too: returning the outer copy alone
+        would still hand out the inner ones the writer updates in place.
+        """
+        with self._lock:
+            return {op: dict(stats) for op, stats in self.baseline_stats.items()}
+
     def get_shift_state(self, operation: str) -> Optional[Dict[str, Any]]:
         """Snapshot of the sustained-shift detector for one operation.
 
@@ -1718,16 +1816,83 @@ class ResonanceTimingMonitor:
             state = self._shift_state.get(operation)
             return dict(state) if state is not None else None
 
+    #: Deviations retained per operation pair for the cross-operation
+    #: quantile.  Same size and same reason as :attr:`_SCORE_HISTORY_LEN`.
+    _RATIO_DEV_HISTORY_LEN: ClassVar[int] = 4096
+
+    def _calibrated_ratio_threshold(
+        self, pair: Tuple[str, str], alarm_budget: float
+    ) -> Optional[float]:
+        """Empirical ``(1 - alarm_budget)`` quantile of this pair's observed
+        deviations, floored at :attr:`threshold`, or ``None`` while the
+        estimate would be extrapolation.
+
+        The same rule :meth:`_calibrated_score_threshold` applies to the point
+        path, for the same reason and with the same cadence.  ``None`` means
+        the pair may not alarm AT ALL yet: unlike the point path there is no
+        measured basis for a fixed sigma floor here — the ratio of two EWMA
+        means is not a robust z-score and never had a calibrated budget — so
+        the warmup posture is silence rather than an uncalibrated bar.
+        """
+        history = self._ratio_dev_history.get(pair)
+        if history is None or alarm_budget <= 0.0:
+            return None
+        n = len(history)
+        if n < max(100, math.ceil(1.0 / alarm_budget)):
+            return None
+        total = self._ratio_dev_total.get(pair, n)
+        cached = self._ratio_threshold.get(pair)
+        if cached is not None and total - cached[0] < self._THRESHOLD_RECOMPUTE_INTERVAL:
+            return cached[1]
+        ordered = sorted(history)
+        k = min(n - 1, max(0, math.ceil((1.0 - alarm_budget) * (n + 1)) - 1))
+        threshold = max(self.threshold, ordered[k])
+        self._ratio_threshold[pair] = (total, threshold)
+        return threshold
+
     def _update_timing_ratios(self, operation: str, current_mean: float) -> Optional[TimingAnomaly]:
         """
         Priority 6: Update pairwise timing ratio matrix and detect
         cross-operation correlation anomalies.
+
+        Two properties this path did not have.
+
+        **The walk is bounded.**  It iterated all of ``baseline_stats`` on
+        every record, inside the hot-path lock, allocating a fresh deque per
+        unordered pair and never evicting one.  Measured at 300 tracked names:
+        44,850 pair deques (exactly N(N-1)/2) and per-record cost 0.371 ms
+        against 0.021 ms at a single name.  It now walks
+        :attr:`_ratio_ops`, admitted in first-seen order and capped at
+        ``max_ratio_operations``.
+
+        **The bar is calibrated.**  ``abs(ratio - mu) / sigma > 3.0`` with mu
+        and sigma frozen after 30 CONSECUTIVE ratio samples is not a 3-sigma
+        test: consecutive values of ``EWMA_mean(a) / EWMA_mean(b)`` are
+        heavily autocorrelated, so that sigma measures short-term jitter, not
+        the spread the bar is supposed to sit outside of.  Measured on two
+        clean i.i.d. lognormal operations at 4,000 records each, the path
+        alarmed on 1.9% of the stream — nearly triple the point path's
+        budgeted-and-gated 1% — with no budget, no calibration and no floor.
+        The bar is now the empirical ``(1 - alarm_budget)`` quantile of this
+        pair's own deviations, so whatever the frozen reference is off by, the
+        spend is the budget.
         """
         if current_mean <= 0:
             return None
 
-        for other_op, other_stats in self.baseline_stats.items():
+        if operation not in self._ratio_ops:
+            if len(self._ratio_ops) >= self.max_ratio_operations:
+                return None
+            self._ratio_ops.append(operation)
+
+        profile = self.anomaly_profiles.get(operation, {})
+        alarm_budget = float(profile.get("alarm_budget", self.DEFAULT_ALARM_BUDGET))
+
+        for other_op in self._ratio_ops:
             if other_op == operation:
+                continue
+            other_stats = self.baseline_stats.get(other_op)
+            if not other_stats:
                 continue
             other_mean = other_stats.get("mean", 0.0)
             if other_mean <= 0:
@@ -1752,7 +1917,18 @@ class ResonanceTimingMonitor:
                 baseline_mean, baseline_std = self._ratio_baselines[pair]
                 if baseline_std > 0:
                     deviation = abs(ratio - baseline_mean) / baseline_std
-                    if deviation > 3.0:
+                    # Ingest FIRST, judge after: the quantile has to be an
+                    # estimate of the clean distribution, and a deviation
+                    # withheld because it was large is exactly the sample that
+                    # keeps the estimate honest.
+                    history = self._ratio_dev_history.get(pair)
+                    if history is None:
+                        history = deque(maxlen=self._RATIO_DEV_HISTORY_LEN)
+                        self._ratio_dev_history[pair] = history
+                    history.append(deviation)
+                    self._ratio_dev_total[pair] = self._ratio_dev_total.get(pair, 0) + 1
+                    bar = self._calibrated_ratio_threshold(pair, alarm_budget)
+                    if bar is not None and deviation > bar:
                         return TimingAnomaly(
                             operation=f"{pair[0]}/{pair[1]}",
                             expected_ms=baseline_mean,
@@ -1777,14 +1953,53 @@ class ResonanceTimingMonitor:
             Dict with:
                 - dominant_frequency: Primary periodic component
                 - dominant_power: Power of dominant frequency
-                - mean_power: Average power across spectrum
+                - mean_power: Average power across the scanned spectrum
                 - resonance_ratio: Ratio of dominant to mean power
-                - has_resonance: Boolean flag (ratio > 3.0)
+                - threshold_ratio: The ratio ``has_resonance`` compares against
+                - false_alarm_rate: The per-call rate that threshold targets
+                - scanned_bins: Number of periodogram ordinates examined
+                - has_resonance: Boolean flag (ratio > threshold_ratio)
+
+        Two properties this had to acquire before the flag meant anything.
+
+        **The mean is removed first.**  The series was transformed as given, so
+        its DC component — the operation's baseline duration, always the
+        largest thing in the signal — leaked across the whole spectrum through
+        the zero-padding window.  The search then excluded bin 0 and found that
+        leakage instead.  Measured on the pre-fix code: a PERFECTLY CONSTANT
+        100-sample series (padded to 128) reported ``resonance_ratio`` 30.31 and
+        ``has_resonance`` True.  A constant series has no periodic component at
+        all; it was reporting the baseline it was supposed to be measured
+        against.  After centring, the same input gives ratio 0.0 and False.
+
+        **The threshold comes from the null distribution, not from 3.0.**  For
+        white noise the periodogram ordinates are iid exponential, so the
+        maximum-to-mean ratio over ``m`` of them concentrates near ``ln(m)`` —
+        4.16 at m = 64, already above the 3.0 bar.  The old flag therefore fired
+        on **88.4 % to 100 %** of clean aperiodic series across the sizes this
+        detector actually sees (2,000 trials each at n = 64/96/100/128, iid
+        Gaussian timings).  A detector that fires on everything distinguishes
+        nothing, and every one of those reports reached ``get_security_report``
+        and the posture evaluator as evidence.
+
+        The bar is now Fisher's g-test tail, ``ln(m / alpha)``, for a target
+        per-call false-alarm rate ``alpha`` = :attr:`RESONANCE_FALSE_ALARM_RATE`.
+        Measured against that same 2,000-trial sweep: 0.43 %-0.85 % observed
+        against a 1 % nominal, so the approximation is accurate and errs
+        conservative.  Detection power is unaffected — a period-2 probe on 64
+        samples scores 32.0 against a threshold of 8.07, and a period-8
+        sinusoid on 96 samples scores 48.0 against 8.76.
+
+        Only the non-redundant half of the spectrum is scanned (bins 1 through
+        ``n/2``).  A real signal's spectrum is conjugate-symmetric, so the upper
+        half is a mirror that contributes nothing but doubles the ordinate count
+        the threshold is derived from.  The Nyquist bin is KEPT: a strictly
+        alternating fast/slow probe — the reconnaissance shape this component
+        exists to see — puts all of its energy exactly there.
 
         Note:
             Requires minimum 8 samples. Returns empty dict if insufficient
-            data. This is an on-demand operation (not hot path) so numpy
-            array conversion is acceptable here.
+            data. This is an on-demand operation (not hot path).
         """
         if operation not in self.timing_history:
             return {}
@@ -1796,34 +2011,72 @@ class ResonanceTimingMonitor:
         if len(timings) < 8:
             return {}
 
+        # Centre the series.  Everything below measures periodic structure;
+        # the baseline duration is not periodic structure, and leaving it in
+        # is what made a constant series read as resonant.
+        baseline = _mean(timings)
+        centred = [value - baseline for value in timings]
+
         # Zero-pad to next power of 2 for Cooley-Tukey
-        n = len(timings)
+        n = len(centred)
         n_padded = 1
         while n_padded < n:
             n_padded <<= 1
-        x = [complex(v) for v in timings] + [complex(0)] * (n_padded - n)
+        x = [complex(v) for v in centred] + [complex(0)] * (n_padded - n)
 
         # FFT analysis (pure Python Cooley-Tukey)
         fft_result = _fft_cooley_tukey(x)
         freqs = _fftfreq(n_padded)
         power = [abs(c) ** 2 for c in fft_result]
 
-        # Find dominant frequency (excluding DC component at index 0)
-        power_no_dc = power[1:]
-        dominant_idx = power_no_dc.index(max(power_no_dc)) + 1
+        # Scan the non-redundant half only: bins 1 .. n/2, DC excluded (it is
+        # zero after centring) and the mirror image excluded (it carries no
+        # information but would double m and inflate the threshold).
+        scanned = power[1 : n_padded // 2 + 1]
+        if not scanned:
+            return {}
+        dominant_offset = scanned.index(max(scanned))
+        dominant_idx = dominant_offset + 1
         dominant_freq = freqs[dominant_idx]
         dominant_power = power[dominant_idx]
+        mean_power = _mean(scanned)
 
-        # Mean power excluding DC
-        mean_power = _mean(power_no_dc)
+        ratio = float(dominant_power / mean_power) if mean_power > 0 else 0.0
+        threshold = self._resonance_threshold(len(scanned))
 
         return {
             "dominant_frequency": float(dominant_freq),
             "dominant_power": float(dominant_power),
             "mean_power": float(mean_power),
-            "resonance_ratio": (float(dominant_power / mean_power) if mean_power > 0 else 0),
-            "has_resonance": dominant_power > 3.0 * mean_power,
+            "resonance_ratio": ratio,
+            "threshold_ratio": threshold,
+            "false_alarm_rate": self.RESONANCE_FALSE_ALARM_RATE,
+            "scanned_bins": len(scanned),
+            "has_resonance": ratio > threshold,
         }
+
+    #: Target per-call false-alarm rate for :meth:`detect_resonance`.  The
+    #: threshold is derived from it rather than fixed, because the null
+    #: distribution of a periodogram maximum depends on how many ordinates were
+    #: searched: the same bar that is strict at m = 8 is met by white noise at
+    #: m = 64.  1 % is the rate an operator can reason about — one spurious
+    #: resonance report per hundred evaluations of an operation — and the
+    #: measured rate across n = 64/96/100/128 is 0.43 %-0.85 %.
+    RESONANCE_FALSE_ALARM_RATE: ClassVar[float] = 0.01
+
+    @classmethod
+    def _resonance_threshold(cls, scanned_bins: int) -> float:
+        """Fisher g-test bar on max/mean for ``scanned_bins`` ordinates.
+
+        Under the null (no periodic component) the ordinates are iid
+        exponential, and P(max/mean > r) ~ m * exp(-r).  Inverting at
+        ``alpha`` gives ln(m / alpha).  Kept as a method so the value the flag
+        used is reported alongside it and a caller can normalise against the
+        same number rather than re-deriving one.
+        """
+        m = max(1, int(scanned_bins))
+        alpha = cls.RESONANCE_FALSE_ALARM_RATE
+        return math.log(m / alpha)
 
     def _prune_history(self, operation: str) -> None:
         """
@@ -2214,9 +2467,23 @@ class VolumeSpikeDetector:
     and an optional key fingerprint the caller has already truncated.
     """
 
-    #: Operations worth counting by default.  Everything else is ignored
-    #: unless the caller passes it explicitly, which keeps the detector off
-    #: unrelated call paths.
+    #: A ready-made allow-list of the KEM and signature operations this
+    #: detector's threat model is about, for a caller that wants to keep it off
+    #: unrelated call paths: ``VolumeSpikeDetector(operations=
+    #: VolumeSpikeDetector.DEFAULT_OPERATIONS)``.
+    #:
+    #: It is NOT the default, and the name is historical.  Until 5.0.0 nothing
+    #: read this tuple at all: ``record()`` counted whatever string it was
+    #: handed, the constructor took no ``operations`` argument, and there was
+    #: therefore no "unless the caller passes it explicitly" mechanism either —
+    #: the doc comment described a filter that did not exist, the same dead-
+    #: configuration shape this module's anomaly-profile table was cleaned of.
+    #: Making it the default would have been worse than dead: it would silently
+    #: stop counting every operation not on an eight-name list, including every
+    #: family added since, and a burst detector that has quietly stopped
+    #: watching is the failure mode this file is written against.  So the
+    #: filter is real and opt-in, and counting everything (bounded by
+    #: ``max_operations``) stays the default.
     DEFAULT_OPERATIONS: ClassVar[Tuple[str, ...]] = (
         "kyber_encaps",
         "kyber_decaps",
@@ -2239,6 +2506,7 @@ class VolumeSpikeDetector:
         max_fingerprints_per_bucket: int = 4096,
         history_buckets: int = 600,
         max_operations: int = 256,
+        operations: Optional[Iterable[str]] = None,
     ) -> None:
         """
         Args:
@@ -2264,6 +2532,15 @@ class VolumeSpikeDetector:
                 are counted in :attr:`dropped_operations` and otherwise
                 ignored; the cap is far above any real operation inventory
                 (the library itself uses fewer than a dozen).
+            operations: Optional allow-list.  ``None`` (the default) counts
+                every operation name, bounded by ``max_operations``.  Passing a
+                collection restricts counting to those names — see
+                :attr:`DEFAULT_OPERATIONS` for a ready-made one — and names
+                outside it are counted in :attr:`filtered_operations` and
+                otherwise ignored.  An EMPTY collection is rejected rather than
+                read as "filter nothing": a detector configured to watch
+                nothing is a configuration error, and silently treating it as
+                "watch everything" would hide it.
 
         Raises:
             ValueError: on a non-positive bucket width or an alpha outside
@@ -2277,7 +2554,19 @@ class VolumeSpikeDetector:
             raise ValueError("warmup_buckets must be at least 1")
         if max_operations < 1:
             raise ValueError("max_operations must be at least 1")
+        allowed: Optional[FrozenSet[str]] = None
+        if operations is not None:
+            allowed = frozenset(operations)
+            if not allowed:
+                raise ValueError(
+                    "operations must be None (count everything) or a non-empty "
+                    "collection of operation names"
+                )
 
+        self.operations = allowed
+        #: Records ignored because they were outside :attr:`operations`.  Zero
+        #: whenever no allow-list is configured.
+        self.filtered_operations = 0
         self.bucket_seconds = float(bucket_seconds)
         self.warmup_buckets = int(warmup_buckets)
         self.threshold_sigma = float(threshold_sigma)
@@ -2366,6 +2655,14 @@ class VolumeSpikeDetector:
         """
         if not isinstance(operation, str) or not operation:
             raise ValueError("operation must be a non-empty string")
+
+        if self.operations is not None and operation not in self.operations:
+            # Outside the configured allow-list.  Counted, not silent: a
+            # non-zero filtered_operations is how an operator learns that the
+            # detector is deliberately not watching part of the traffic.
+            with self._lock:
+                self.filtered_operations += 1
+            return None
 
         with self._lock:
             # The clock is read UNDER the lock, not before it.  time.monotonic()
@@ -2501,6 +2798,7 @@ class VolumeSpikeDetector:
             self._fired_bucket.clear()
             self._history.clear()
             self.dropped_operations = 0
+            self.filtered_operations = 0
 
 
 class NoteArtifactDetector:
@@ -3626,12 +3924,26 @@ class AmaCryptographyMonitor:
         if not self.enabled:
             return {"status": "monitoring_disabled"}
 
+        # Every mapping and list in this report is a COPY taken under the lock
+        # that guards it.  Handing out `self.timing.baseline_stats` was the
+        # same race this method already documents (and fixes) for
+        # `timing_history` a dozen lines below: a new operation name inserts a
+        # key on its 30th record under the timing monitor's lock, and a
+        # consumer iterating the returned mapping raised
+        # RuntimeError("dictionary changed size during iteration") within four
+        # seconds against a writer issuing fresh names.  The alert list is
+        # sliced under _alert_lock for the same reason -- _prune_alerts trims
+        # it IN PLACE with `del self.alerts[:excess]`.
+        with self._alert_lock:
+            recent_alerts = [dict(alert) for alert in self.alerts[-10:]]
+            total_alerts = len(self.alerts)
+            alerts_snapshot = list(self.alerts)
         report: Dict[str, Any] = {
             "status": "active",
-            "timing_baseline": self.timing.baseline_stats,
+            "timing_baseline": self.timing.snapshot_baselines(),
             "pattern_analysis": self.patterns.analyze_patterns(),
-            "recent_alerts": self.alerts[-10:],
-            "total_alerts": len(self.alerts),
+            "recent_alerts": recent_alerts,
+            "total_alerts": total_alerts,
             "recommendations": [],
         }
 
@@ -3664,14 +3976,14 @@ class AmaCryptographyMonitor:
         # pre-INVARIANT-30 report shape back, unchanged.
         if self.volume is not None:
             report["volume_baselines"] = self.volume.snapshot()
-            spikes = [a for a in self.alerts if a["type"] == "volume_spike"]
+            spikes = [a for a in alerts_snapshot if a["type"] == "volume_spike"]
             if spikes:
                 report["recommendations"].append(
                     f"{len(spikes)} operation-volume spike(s) detected. Review for "
                     "agentic reconnaissance or bulk artifact generation."
                 )
         if self.notes is not None:
-            flagged = [a for a in self.alerts if a["type"] == "note_artifact"]
+            flagged = [a for a in alerts_snapshot if a["type"] == "note_artifact"]
             if flagged:
                 report["note_artifacts"] = [a["anomaly"].label for a in flagged]
                 report["recommendations"].append(

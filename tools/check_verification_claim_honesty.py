@@ -302,6 +302,22 @@ NEGATION_CUES: tuple[re.Pattern[str], ...] = (
     _P(r"\bwrongly\b", re.I),
     _P(r"\bincorrect\w*", re.I),
     _P(r"\bclaimed\b", re.I),
+    # Past-tense attribution: the sentence reports what a document USED TO say.
+    # Needed once the scan became sentence-scoped rather than line-scoped: the
+    # CHANGELOG entry that withdrew the RFC 3161 claims quotes each retired
+    # sentence and refutes it in the NEXT one ('...was "Verify TSA signature and
+    # time bounds". Neither happens.'), which the line rule happened to cover
+    # and a sentence rule does not.  Attribution to a named document in the past
+    # tense is the citation form this repository actually uses; recognising it
+    # is narrower than widening the negation window to the following sentence,
+    # which would re-open the over-suppression this scoping fixed.
+    _P(r"\btold readers\b", re.I),
+    _P(
+        r"\b(?:said|stated|read|listed|recorded|documented|asserted|promised)\b"
+        r"[^.]{0,80}?\bwas\b",
+        re.I,
+    ),
+    _P(r"\bused\s+to\s+(?:say|read|state|claim|list|record|document)\b", re.I),
 )
 
 #: The retained-but-misnamed result key, in the form a copy-paste teaches.
@@ -434,21 +450,33 @@ def scan_for_unperformed_claims(
     if not active:
         return []
     problems: list[str] = []
-    for path, number, line in _iter_lines(_scanned_files(repo)):
-        if _is_negated(line):
-            continue
-        in_context = _has_rfc3161_context(line)
-        for capability, pattern, description, needs_context in active:
-            if needs_context and not in_context:
+    # The unit is the SENTENCE, inside a blank-line-delimited prose block.
+    #
+    # It used to be the physical line, with the negation test applied to the
+    # whole of it — so a single negation-flavoured word anywhere on a line
+    # suppressed every claim on that line, whatever it was attached to.  A line
+    # reading "The nonce is not echoed here. The TSA signature is verified."
+    # passed on the strength of the first sentence's "not".  And because this
+    # repository's prose is hard-wrapped, the same line rule cut the other way
+    # too: a genuinely negated claim whose negation wrapped onto the previous
+    # line was reported as a violation.  Blocks fix the wrapping; sentences fix
+    # the over-suppression.
+    for path, number, block in _iter_prose_blocks(_scanned_files(repo)):
+        for sentence in _SENTENCE_SPLIT_RE.split(block):
+            if _is_negated(sentence):
                 continue
-            match = pattern.search(line)
-            if match is None:
-                continue
-            problems.append(
-                f"{_rel(path, repo)}:{number} {description} — {match.group(0)!r} — while "
-                f"RFC3161_CAPABILITIES[{capability!r}] is False. Either negate the "
-                "claim on this line, or implement the check and flip the capability."
-            )
+            in_context = _has_rfc3161_context(sentence)
+            for capability, pattern, description, needs_context in active:
+                if needs_context and not in_context:
+                    continue
+                match = pattern.search(sentence)
+                if match is None:
+                    continue
+                problems.append(
+                    f"{_rel(path, repo)}:{number} {description} — {match.group(0)!r} — while "
+                    f"RFC3161_CAPABILITIES[{capability!r}] is False. Either negate the "
+                    "claim in this sentence, or implement the check and flip the capability."
+                )
     return problems
 
 
@@ -588,6 +616,127 @@ def check_pattern_coverage(capabilities: Mapping[str, bool] | None = None) -> li
     return problems
 
 
+# ---------------------------------------------------------------------------
+# Check 6 — no unqualified claim of formal verification
+# ---------------------------------------------------------------------------
+#
+# INVARIANT-16 ("Honest Compliance and Audit Claims") forbids this, and every
+# canonical statement in the tree already says the opposite:
+# AMA_CRYPTOGRAPHY_ETHICAL_PILLARS.md — "This library is **not** FIPS-validated
+# and has **not** been formally verified"; CSRC_STANDARDS.md — "No CAVP
+# certificate has been issued"; docs/DESIGN_NOTES.md — "has not undergone
+# independent formal verification".  Nothing checked the rest of the tree
+# against them, and ARCHITECTURE.md carried
+# "Mathematical correctness: Provably correct implementation with formal
+# verification" — the exact bullet this branch had already withdrawn from the
+# pillars document — for the whole of that time.
+#
+# The checks above cannot see it: they are scoped to the RFC 3161 capability
+# table by construction, as their own docstrings say.  This pass is separate
+# and phrase-based.
+
+#: Phrases that assert the library HAS been formally verified / proven.
+_FORMAL_CLAIM_RE = re.compile(
+    r"provably\s+correct|proven\s+correct|mathematically\s+proven|"
+    r"formally\s+verified|formal\s+verification|formal\s+proof",
+    re.IGNORECASE,
+)
+
+#: Exemptions, deliberately anchored to the CLAIM rather than to the presence
+#: of a negative word somewhere on the line.  A line saying "no timestamp is
+#: formally verified here, but the module is provably correct" contains "no"
+#: and must still fail, which is why a generic negation cue is not used: that
+#: looseness is a defect this repository has already found in one gate.
+#: Markdown emphasis is stripped before matching, so ``**not** been formally
+#: verified`` is recognised.
+_FORMAL_EXEMPT_RE = tuple(
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (
+        # Explicit denials.
+        r"\b(?:has|have|had|is|are|was|were)\s+not\s+(?:been\s+|yet\s+)?"
+        r"(?:formally\s+verified|undergone[^.]{0,40}?formal\s+verification)",
+        r"\bnot\s+(?:been\s+)?formally\s+verified\b",
+        r"\bnot\s+undergone[^.]{0,60}?formal\s+verification\b",
+        r"\bno\s+formal\s+(?:verification|proof)\b",
+        r"\bnever\s+(?:been\s+)?formally\s+verified\b",
+        r"\bwithout\s+formal\s+(?:verification|proof)\b",
+        # Naming the thing in order to distinguish this project from it.
+        r"\bnot\s+formal\s+(?:verification|proof)\b",
+        r"\brather\s+than\s+formal\s+(?:verification|proof)\b",
+        r"\bcited\s+as\s+the\s+reference\s+point\s+for\s+what\s+formal\s+verification",
+        r"\blacks?\s+formal\s+(?:verification|proof)\b",
+        r"\bindependent\s+audit,\s+formal\s+verification,\s+or\s+peer-reviewed\s+proof\b",
+        r"\bnot\s+a\s+(?:claim\s+of\s+)?(?:independent\s+)?formal\s+(?:proof|verification)\b",
+        r"\bnot\s+a\s+claim\s+of[^.]{0,60}?formal\s+(?:proof|verification)\b",
+        r"\bnot\s+(?:a\s+)?formal\s+proof\s+of\s+correctness\b",
+        # This gate itself, and the record of removing such claims.
+        r"\bclaimed\s+FIPS\s+validation,\s+formal\s+verification\b",
+    )
+)
+
+#: Markdown emphasis and inline-code markers, removed before matching so a
+#: claim cannot be hidden from the exemption patterns by bolding one word.
+_MD_EMPHASIS_RE = re.compile(r"[*_`]+")
+
+
+def _formal_claim_is_qualified(text: str) -> bool:
+    plain = _MD_EMPHASIS_RE.sub("", text)
+    return any(pattern.search(plain) for pattern in _FORMAL_EXEMPT_RE)
+
+
+#: Sentence boundary: a full stop, question or exclamation mark followed by
+#: whitespace.  Crude, and deliberately so — the alternative is a per-line
+#: scan, which reports the honest sentences in this repository as violations
+#: whenever the negation happens to wrap onto a different line.  Every one of
+#: the tree's five correctly-qualified statements is wrapped that way.
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+
+
+def _iter_prose_blocks(paths: Iterable[Path]) -> Iterable[tuple[Path, int, str]]:
+    """Yield ``(path, first_line_number, joined_text)`` per blank-line block.
+
+    Prose in this repository is hard-wrapped, so a claim and its qualifier
+    routinely sit on different physical lines.  Judging a claim by the line it
+    appears on is therefore not a strict reading — it is the wrong unit.
+    """
+    for path in paths:
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        block: list[str] = []
+        start: int | None = None
+        for number, line in enumerate(text.splitlines(), start=1):
+            if line.strip():
+                if start is None:
+                    start = number
+                block.append(line.strip())
+                continue
+            if block and start is not None:
+                yield path, start, " ".join(block)
+            block, start = [], None
+        if block and start is not None:
+            yield path, start, " ".join(block)
+
+
+def scan_for_formal_verification_claims(repo: Path = REPO) -> list[str]:
+    """Every unqualified claim of formal verification, with its location."""
+    problems: list[str] = []
+    for path, number, block in _iter_prose_blocks(_scanned_files(repo)):
+        if not _FORMAL_CLAIM_RE.search(block):
+            continue
+        for sentence in _SENTENCE_SPLIT_RE.split(block):
+            if not _FORMAL_CLAIM_RE.search(sentence):
+                continue
+            if _formal_claim_is_qualified(sentence):
+                continue
+            problems.append(
+                f"{_rel(path, repo)}:{number}: claims formal verification, which "
+                f"this library has not undergone — {sentence.strip()[:160]}"
+            )
+    return problems
+
+
 def main() -> int:
     try:
         capabilities = load_capabilities()
@@ -606,6 +755,7 @@ def main() -> int:
         ("refusing arguments documented as refusing", check_refusing_parameters()),
         ("removed third-party dependency", scan_for_removed_dependency()),
         ("capability/pattern coverage", check_pattern_coverage(capabilities)),
+        ("unqualified formal-verification claims", scan_for_formal_verification_claims()),
     )
     failures = [(title, problems) for title, problems in sections if problems]
     for title, problems in sections:

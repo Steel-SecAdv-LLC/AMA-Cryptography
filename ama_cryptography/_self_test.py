@@ -19,6 +19,7 @@ Author/Inventor: Andrew E. A.
 Version: 5.0.0
 """
 
+import _imp
 import ctypes
 import hashlib
 import importlib.machinery
@@ -34,7 +35,7 @@ import threading
 import time
 from pathlib import Path
 from types import CodeType
-from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterator, List, Optional, Protocol, Tuple
 
 # The FIPS state machine, the two output-inhibition guards, and the
 # health-tested CSPRNG draw live in ``_module_state`` — a leaf module every
@@ -630,6 +631,48 @@ def _load_integrity_trust_anchor() -> Tuple[Optional[str], Optional[str]]:
     return anchor_hex, None
 
 
+#: Format tag for the package digest.  Bumping it changes every digest, which
+#: is the domain separation for the framing change described in
+#: :func:`_compute_module_digest`: a digest computed under the old, unframed
+#: construction cannot equal one computed under this format, so no signature
+#: made over the old encoding verifies against a tree hashed under the new one.
+#: Duplicated verbatim in ``_build_sign._PACKAGE_DIGEST_FORMAT``; pinned equal
+#: by ``tests/test_native_integrity.py``.
+_PACKAGE_DIGEST_FORMAT = b"AMA-package-digest-v2\x00"
+
+
+class _Absorbing(Protocol):
+    """The only thing :func:`_absorb_entry` needs from a hash object.
+
+    A structural type rather than ``hashlib._Hash``: that name is private to
+    the standard library, and naming it here would also add a reference to the
+    ``hashlib`` module inside a file the INVARIANT-1 stdlib-hash boundary
+    counts exactly — this helper takes a hasher, it does not construct one.
+    """
+
+    def update(self, data: bytes, /) -> None: ...  # pragma: no cover - protocol
+
+
+def _absorb_entry(hasher: _Absorbing, section: bytes, name: str, content: bytes) -> None:
+    """Absorb one (section, name, content) entry with every field framed.
+
+    Length prefixes make the encoding injective: no sequence of entries can be
+    re-partitioned into a different sequence with the same bytes, which is the
+    property the unframed construction lacked.  Line endings are normalised
+    (CRLF -> LF) so the digest matches on Windows checkouts with
+    ``autocrlf=true``; the normalisation happens BEFORE the length is taken,
+    so the prefix describes the bytes that are actually absorbed.
+    """
+    name_bytes = name.encode("utf-8")
+    body = content.replace(b"\r\n", b"\n")
+    hasher.update(len(section).to_bytes(4, "big"))
+    hasher.update(section)
+    hasher.update(len(name_bytes).to_bytes(4, "big"))
+    hasher.update(name_bytes)
+    hasher.update(len(body).to_bytes(8, "big"))
+    hasher.update(body)
+
+
 def _compute_module_digest() -> str:
     """Compute SHA3-256 over the package's ``.py`` files and POST KAT vectors.
 
@@ -651,20 +694,50 @@ def _compute_module_digest() -> str:
 
     Mirrored byte-for-byte in ``_build_sign._compute_package_digest``; pinned
     equal by ``tests/test_native_integrity.py``.
+
+    FRAMING, and why it is not cosmetic.  Until 5.0.0 each entry contributed
+    ``name || content`` with no length prefix and no delimiter, and consecutive
+    entries were simply concatenated.  A hash of a concatenation commits to the
+    concatenation, not to the (filename -> content) MAPPING, so two different
+    package trees can produce one digest — and this digest is exactly what the
+    Ed25519 artefact signs.  Demonstrated against the shipped signer::
+
+        A/  a.py = b"X"          b.py = b"Y"
+        B/  a.py = b"Xb.pyY"     (b.py absent)
+
+        digest(A) == digest(B) == 98aaca986290313a24078bb7c79f8ee8...
+
+    One signature covered both trees.  ``_serialize_binding_digests`` in this
+    same module already got this right — "the NUL terminator makes the (name,
+    digest) framing unambiguous ... so no concatenation of entries collides
+    with any other map" — and the ``b"_post_kats/"`` section marker was itself
+    an unframed literal a crafted filename could reproduce.
+
+    Every field is now length-prefixed and every section tagged, and the whole
+    is prefixed with a format version, so the encoding is injective: distinct
+    (name, content) sequences map to distinct byte strings by construction.
+    The version prefix is also the domain separation for the change — a digest
+    computed the old way can never equal one computed the new way, so no
+    pre-5.0.0 signature verifies against a tree hashed this way.
     """
     pkg_dir = Path(__file__).resolve().parent
     hasher = hashlib.sha3_256()
-    for py_file in sorted(pkg_dir.glob("*.py")):
-        if py_file.name == "_integrity_signature.py":
-            continue
-        hasher.update(py_file.name.encode("utf-8"))
-        hasher.update(py_file.read_bytes().replace(b"\r\n", b"\n"))
+    hasher.update(_PACKAGE_DIGEST_FORMAT)
+
+    py_files = [p for p in sorted(pkg_dir.glob("*.py")) if p.name != "_integrity_signature.py"]
+    hasher.update(len(py_files).to_bytes(4, "big"))
+    for py_file in py_files:
+        _absorb_entry(hasher, b"py", py_file.name, py_file.read_bytes())
+
     kat_dir = pkg_dir / "_post_kats"
-    if kat_dir.is_dir():
-        for kat_file in sorted((p for p in kat_dir.iterdir() if p.is_file()), key=lambda p: p.name):
-            hasher.update(b"_post_kats/")
-            hasher.update(kat_file.name.encode("utf-8"))
-            hasher.update(kat_file.read_bytes().replace(b"\r\n", b"\n"))
+    kat_files = (
+        sorted((p for p in kat_dir.iterdir() if p.is_file()), key=lambda p: p.name)
+        if kat_dir.is_dir()
+        else []
+    )
+    hasher.update(len(kat_files).to_bytes(4, "big"))
+    for kat_file in kat_files:
+        _absorb_entry(hasher, b"post_kats", kat_file.name, kat_file.read_bytes())
     return hasher.hexdigest()
 
 
@@ -795,13 +868,40 @@ def _cache_header_is_live(src_path: str, header: bytes) -> bool:
     treats it exactly like a wrong-magic cache: nothing to bind.  Anything this
     function cannot resolve — an unreadable source, an unknown flag bit — is
     reported as live, so an odd cache is judged rather than waved through.
+
+    THE INTERPRETER'S OWN SETTING IS PART OF THE RULE.  CPython's
+    ``SourceLoader.get_code`` validates a hash-based cache only when
+    ``_imp.check_hash_based_pycs != "never" and (check_source or
+    _imp.check_hash_based_pycs == "always")``.  Reading the flag bits alone
+    models that condition wrongly in both directions, and both are reachable:
+
+    * under ``--check-hash-based-pycs never`` the interpreter loads a
+      check-source cache WITHOUT validating its hash, so a cache whose hash
+      does not match its source executes — while a bit-only reading of the
+      header calls it not-live and the ``execution-integrity`` stage records
+      it as a file that had no cached bytecode to bind.  Reproduced: a
+      ``flags == 0b11`` cache with an all-zero source hash, compiled from a
+      body the source does not contain, ran its poisoned constant under that
+      flag while this function returned False.
+    * under ``--check-hash-based-pycs always`` the interpreter DOES validate
+      an unchecked (``flags == 0b01``) cache, so an ordinary stale one is
+      rejected and recompiled — while returning True unconditionally for that
+      case turns a stale cache into a hard POST failure.
+
+    Neither is the default, so neither is a defect under a stock invocation;
+    both are a wrong answer under a flag CPython documents and ships.
     """
     flags = int.from_bytes(header[:4], "little")
     if flags & 0b1:
-        # Hash-based.  CPython validates the recorded hash only when the
-        # check_source bit is set; an unchecked hash cache is loaded blindly,
-        # so it always executes and must always be judged.
-        if not flags & 0b10:
+        # Hash-based.  Ask the interpreter what it will do, rather than
+        # inferring it from the flag bits alone.
+        mode = getattr(_imp, "check_hash_based_pycs", "default")
+        if mode == "never":
+            # No validation happens at all: the cache always executes, so it
+            # must always be judged.
+            return True
+        if mode != "always" and not flags & 0b10:
+            # 'default' with the check_source bit clear: loaded blindly.
             return True
         try:
             with open(src_path, "rb") as src_fh:

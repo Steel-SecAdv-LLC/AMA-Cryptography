@@ -771,7 +771,9 @@ print(f"✓ Ethical hash: {pkg_dict['ethical_hash'][:16]}...")
 
 ---
 
-## Formal Verification Checklist
+## Property Checklist
+
+Each box below is a property this document asserts and the repository tests for. The heading used to read "Formal Verification Checklist", which claimed a method that has not been applied to this library — see the verification-status block above: it has not been formally verified, and these are testing and design claims, not machine-checked proofs.
 
 ### Cryptographic Properties
 

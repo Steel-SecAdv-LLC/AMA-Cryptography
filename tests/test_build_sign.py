@@ -317,21 +317,27 @@ def test_compute_package_digest_matches_self_test(tmp_path: Any) -> None:
 
     digest_signer = bs._compute_package_digest(pkg).hex()
 
-    # The self-test side reads its own package dir, so we mock the path
-    # and reuse its private helper to compute the digest of the same
-    # files for an apples-to-apples comparison.
+    # The self-test side derives its package directory from
+    # ``Path(__file__).resolve().parent``, so point that at the staged tree and
+    # call the REAL function.
+    #
+    # This used to re-implement the digest loop inline, which made the
+    # assertion a comparison between the signer and the test's own
+    # transcription of the verifier — a third copy that has to be kept in step
+    # by hand and that silently stops testing the mirror the moment it drifts.
+    # It drifted with the framing change in 5.0.0.
     from ama_cryptography import _self_test as st
 
-    with patch.object(st, "Path"):
-        # _compute_module_digest uses Path(__file__).resolve().parent —
-        # mirror its CRLF normalisation manually using its public helpers.
-        import hashlib as _h
+    class _FakeFile:
+        def resolve(self) -> _FakeParent:
+            return _FakeParent()
 
-        hasher = _h.sha3_256()
-        for f in sorted(pkg.glob("*.py")):
-            hasher.update(f.name.encode("utf-8"))
-            content = f.read_bytes().replace(b"\r\n", b"\n")
-            hasher.update(content)
-        digest_self_test = hasher.hexdigest()
+    class _FakeParent:
+        @property
+        def parent(self) -> Any:
+            return pkg
+
+    with patch.object(st, "Path", lambda _path: _FakeFile()):
+        digest_self_test = st._compute_module_digest()
 
     assert digest_signer == digest_self_test

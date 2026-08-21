@@ -166,6 +166,110 @@ class TestSignerVerifierAgreement:
         assert base != st._composite_integrity_message(b"\x01" + b"\x00" * 31, b"\x11" * 32)
         assert base != st._composite_integrity_message(b"\x00" * 32, b"\x12" + b"\x11" * 31)
 
+    def test_package_digest_format_tag_is_identical(self) -> None:
+        from ama_cryptography import _build_sign, _self_test
+
+        assert _self_test._PACKAGE_DIGEST_FORMAT == _build_sign._PACKAGE_DIGEST_FORMAT
+
+    def test_entry_framing_is_identical(self) -> None:
+        """The two mirrors must absorb an entry into the same bytes."""
+        import hashlib
+
+        from ama_cryptography import _build_sign, _self_test
+
+        one, two = hashlib.sha3_256(), hashlib.sha3_256()
+        _self_test._absorb_entry(one, b"py", "a.py", b"body\r\nhere")
+        _build_sign._absorb_entry(two, b"py", "a.py", b"body\r\nhere")
+        assert one.digest() == two.digest()
+
+
+class TestThePackageDigestIsAnInjectiveCommitment:
+    """A hash of a concatenation commits to the concatenation, not to the map.
+
+    Until 5.0.0 each entry contributed ``name || content`` with no length
+    prefix and no delimiter, and consecutive entries were simply concatenated —
+    so a filename could be smuggled into a neighbouring file's body and the
+    digest could not tell the two trees apart.  This digest is exactly what the
+    Ed25519 artefact signs, so one signature covered both.
+
+    Measured against the shipped signer at the previous commit::
+
+        A/  a.py = b"X"          b.py = b"Y"
+        B/  a.py = b"Xb.pyY"     (b.py absent)
+
+        digest(A) == digest(B) == 98aaca986290313a24078bb7c79f8ee8...
+
+    The same module got it right one function away: ``_serialize_binding_digests``
+    frames each entry as ``name || 0x00 || digest`` for precisely this reason.
+    """
+
+    @staticmethod
+    def _tree(root: Path, files: dict[str, bytes], kats: dict[str, bytes] | None = None) -> Path:
+        root.mkdir(parents=True, exist_ok=True)
+        for name, body in files.items():
+            (root / name).write_bytes(body)
+        if kats:
+            kat_dir = root / "_post_kats"
+            kat_dir.mkdir()
+            for name, body in kats.items():
+                (kat_dir / name).write_bytes(body)
+        return root
+
+    def _digest(self, root: Path) -> str:
+        from ama_cryptography import _build_sign
+
+        return _build_sign._compute_package_digest(root).hex()
+
+    def test_the_demonstrated_collision_no_longer_holds(self, tmp_path: Path) -> None:
+        a = self._tree(tmp_path / "A", {"a.py": b"X", "b.py": b"Y"})
+        b = self._tree(tmp_path / "B", {"a.py": b"Xb.pyY"})
+        assert self._digest(a) != self._digest(b)
+
+    def test_a_same_count_collision_no_longer_holds(self, tmp_path: Path) -> None:
+        """The strongest form: one file each, so no entry count separates them.
+
+        Under the unframed construction both absorb the bytes ``b"a.pyb.py"`` —
+        the second tree's filename is a prefix of the first's and the remainder
+        is its content.  Verified to collide under the pre-5.0.0 encoding, and
+        it survives the entry-count prefixes, so it pins the FRAMING rather
+        than the counts.
+        """
+        a = self._tree(tmp_path / "A", {"a.pyb.py": b""})
+        b = self._tree(tmp_path / "B", {"a.py": b"b.py"})
+        assert self._digest(a) != self._digest(b)
+
+    def test_a_crafted_body_cannot_forge_the_post_kats_section(self, tmp_path: Path) -> None:
+        """``b"_post_kats/"`` was an unframed literal a body could reproduce.
+
+        Both trees hold exactly one ``.py`` file; the second writes the section
+        marker, the KAT's name and its content into that file's body.  Verified
+        to collide under the pre-5.0.0 encoding.
+        """
+        a = self._tree(tmp_path / "A", {"z.py": b""}, kats={"v.json": b"{}"})
+        b = self._tree(tmp_path / "B", {"z.py": b"_post_kats/v.json{}"})
+        assert self._digest(a) != self._digest(b)
+
+    def test_the_digest_is_stable_for_one_tree(self, tmp_path: Path) -> None:
+        """Non-vacuity: the construction must still be deterministic."""
+        a = self._tree(tmp_path / "A", {"a.py": b"X", "b.py": b"Y"}, kats={"k": b"Z"})
+        assert self._digest(a) == self._digest(a)
+
+    def test_content_still_changes_the_digest(self, tmp_path: Path) -> None:
+        a = self._tree(tmp_path / "A", {"a.py": b"X"})
+        b = self._tree(tmp_path / "B", {"a.py": b"Y"})
+        assert self._digest(a) != self._digest(b)
+
+    def test_crlf_is_still_normalised(self, tmp_path: Path) -> None:
+        """The Windows-checkout property the framing must not have broken."""
+        a = self._tree(tmp_path / "A", {"a.py": b"one\r\ntwo\r\n"})
+        b = self._tree(tmp_path / "B", {"a.py": b"one\ntwo\n"})
+        assert self._digest(a) == self._digest(b)
+
+    def test_the_generated_artefact_is_still_excluded(self, tmp_path: Path) -> None:
+        a = self._tree(tmp_path / "A", {"a.py": b"X"})
+        b = self._tree(tmp_path / "B", {"a.py": b"X", "_integrity_signature.py": b"anything"})
+        assert self._digest(a) == self._digest(b)
+
 
 # ---------------------------------------------------------------------------
 # 2. Native-library digest helper

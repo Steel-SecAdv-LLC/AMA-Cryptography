@@ -333,6 +333,141 @@ def check_reference_encoder(path: Path = REFERENCE_ENCODER) -> list[str]:
     return []
 
 
+#: Vector corpora AMA validates itself against.  Their expected values must be
+#: TRANSCRIBED from a specification or produced by AMA's own reference encoder
+#: — never computed by another implementation at generation time.
+VECTOR_ROOTS = ("nist_vectors",)
+
+#: Standard-library hash and HMAC constructors.  On any libcrypto-linked
+#: CPython — every manylinux wheel and every mainstream distribution Python,
+#: as ``tools/check_stdlib_hash_boundary.py``'s docstring states — these ARE
+#: OpenSSL.  A generator that computes an expected digest with one of them
+#: writes OpenSSL's output into a file labelled with a NIST publication, and
+#: the run then validates AMA against it.
+_STDLIB_DIGEST_CALLS = (
+    "hashlib.sha1",
+    "hashlib.sha224",
+    "hashlib.sha256",
+    "hashlib.sha384",
+    "hashlib.sha512",
+    "hashlib.sha3_224",
+    "hashlib.sha3_256",
+    "hashlib.sha3_384",
+    "hashlib.sha3_512",
+    "hashlib.shake_128",
+    "hashlib.shake_256",
+    "hashlib.blake2b",
+    "hashlib.blake2s",
+    "hashlib.md5",
+    "hashlib.new",
+    "hashlib.pbkdf2_hmac",
+    "hmac.new",
+    "hmac.digest",
+)
+
+#: The modules those calls live in.  Refused outright in a vector generator.
+_STDLIB_DIGEST_MODULES = frozenset({"hashlib", "hmac", "_hashlib"})
+
+
+def _dotted_call_name(node: ast.Call) -> str | None:
+    func = node.func
+    if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
+        return f"{func.value.id}.{func.attr}"
+    return None
+
+
+def scan_vector_generators(repo: Path = REPO) -> list[str]:
+    """No expected value in a vector corpus may be computed by the stdlib.
+
+    ``nist_vectors/fetch_vectors.py`` wrote ``SHA-256-FIPS180-4.json`` with
+    ``"source": "FIPS 180-4 Section B.1"`` and every digest in it produced by
+    ``hashlib.sha256(...).hexdigest()`` at generation time, and
+    ``nist_vectors/run_vectors.py`` validated AMA's SHA-256 against that file.
+    So on every regeneration the "NIST vectors" were OpenSSL's output wearing a
+    NIST label: a differential test against another implementation, presented
+    as conformance to a specification, in the one place this invariant exists
+    to keep clean.  The committed values happened to be right; where the next
+    regeneration would have got them was not.
+
+    The scan is over the GENERATORS rather than the JSON, because a digest in
+    a committed file carries no evidence of where it came from — which is
+    precisely how this survived.
+
+    Two rules, not one.  Enumerating call spellings catches
+    ``hashlib.sha256(...)`` and misses ``__import__("hashlib").sha256(...)``,
+    which is the usual fate of a name-matching scan.  So the IMPORT is refused
+    as well: nothing in this tree has a legitimate reason to reach a
+    stdlib digest — the corpora are transcribed from publications, and AMA's
+    own primitives are what the run validates, not what it validates against.
+    Neither file imports one today.  That is the same shape
+    ``tools/check_stdlib_hash_boundary.py`` applies to the package itself.
+    """
+    problems: list[str] = []
+    scanned = 0
+    for root in VECTOR_ROOTS:
+        base = repo / root
+        if not base.is_dir():
+            continue
+        for path in sorted(base.rglob("*.py")):
+            try:
+                tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            except (OSError, SyntaxError) as exc:  # pragma: no cover - unparseable
+                problems.append(f"{_rel(path)}: cannot be parsed ({exc})")
+                continue
+            scanned += 1
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    for alias in node.names:
+                        if alias.name.split(".")[0] in _STDLIB_DIGEST_MODULES:
+                            problems.append(
+                                f"{_rel(path)}:{node.lineno}: imports {alias.name!r}. "
+                                "A vector generator transcribes published values; a "
+                                "stdlib digest module here is a second implementation "
+                                "in the validation path."
+                            )
+                    continue
+                if isinstance(node, ast.ImportFrom):
+                    if (node.module or "").split(".")[0] in _STDLIB_DIGEST_MODULES:
+                        problems.append(
+                            f"{_rel(path)}:{node.lineno}: imports from "
+                            f"{node.module!r}. A vector generator transcribes "
+                            "published values; a stdlib digest module here is a "
+                            "second implementation in the validation path."
+                        )
+                    continue
+                if not isinstance(node, ast.Call):
+                    continue
+                if (
+                    isinstance(node.func, ast.Name)
+                    and node.func.id == "__import__"
+                    and node.args
+                    and isinstance(node.args[0], ast.Constant)
+                    and isinstance(node.args[0].value, str)
+                    and node.args[0].value.split(".")[0] in _STDLIB_DIGEST_MODULES
+                ):
+                    problems.append(
+                        f"{_rel(path)}:{node.lineno}: __import__"
+                        f"({node.args[0].value!r}) in a vector generator — the same "
+                        "rule as a plain import, spelled around it."
+                    )
+                    continue
+                name = _dotted_call_name(node)
+                if name in _STDLIB_DIGEST_CALLS:
+                    problems.append(
+                        f"{_rel(path)}:{node.lineno}: {name}() computes a value in a "
+                        "vector generator. On a libcrypto-linked CPython that is "
+                        "OpenSSL, so the corpus would record another "
+                        "implementation's output as the specification's. "
+                        "Transcribe the published value instead."
+                    )
+    if scanned == 0:
+        problems.append(
+            "no vector generators found under " + "/, ".join(VECTOR_ROOTS) + "/ — "
+            "refusing to report clean having examined nothing"
+        )
+    return problems
+
+
 def main() -> int:
     sections = (
         (
@@ -341,6 +476,7 @@ def main() -> int:
         ),
         ("vendored corpus provenance", scan_corpus_sources()),
         ("reference-encoder independence", check_reference_encoder()),
+        ("vector generators compute nothing", scan_vector_generators()),
     )
     failures = [(title, problems) for title, problems in sections if problems]
     for title, problems in sections:

@@ -11,7 +11,7 @@ one of the artifacts below (or to live output regenerated from them):
 
 | Artifact | Scope | Produced by |
 |----------|-------|-------------|
-| [`baseline.json`](baseline.json) | CI regression tolerances (65% of measured performance) | Edited manually when primitives land/change |
+| [`baseline.json`](baseline.json) | CI regression FLOORS. `baseline_value` IS a measured median on the runner class named in `metadata.runner_cpu_class` — not a discount of one — and `tolerance_percent` (45 on x86-64, 15/25 on aarch64) is the separate allowance. The pre-5.0.0 "65% of measured, then a 35-70% tolerance on top" convention compounded to a 34-94% blind spot and absorbed a 2.1x AES-GCM regression without firing; both baseline files now say so in their own `metadata.description`. | Re-measured on the canonical runner when primitives land/change |
 | [`phase0_baseline_results.json`](phase0_baseline_results.json) | Python/ctypes-path per-op medians | `python benchmarks/phase0_baseline.py` |
 | `benchmark_results.json` (runtime-only) | Suite output consumed by dashboards | `python benchmarks/benchmark_suite.py --json benchmarks/benchmark_results.json` |
 | `../build/bin/benchmark_c_raw` (runtime-only) | Raw C per-op medians (no ctypes overhead) | `cmake -B build -DAMA_USE_NATIVE_PQC=ON -DCMAKE_BUILD_TYPE=Release && cmake --build build --target benchmark_c_raw && build/bin/benchmark_c_raw --json` |

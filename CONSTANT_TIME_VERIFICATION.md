@@ -345,12 +345,49 @@ would fail on a correct implementation. `ML-DSA-65 sign` and
 `SLH-DSA-SHA2-256f sign` are consequently the only two info-only wall-clock
 lanes in `tests/c/test_dudect.c` with no blocking counterpart in
 `tools/check_ghash_constant_time.py`, and that is stated rather than left to
-be inferred from a flag. Every other info-only lane cites one:
-`Kyber-1024 decaps` cites `kyber-decaps`, `secp256k1 ECDSA sign` cites
-`ecdsa`, `X25519 scalarmult` cites `x25519`, and
-`X25519 scalarmult batch x4` cites `x25519-batch` — a target added because it
-was the third lane with no counterpart, and the only one of the three where a
-counterpart was possible.
+be inferred from a flag.
+
+`tests/c/test_dudect.c` registers **eight** info-only lanes, and here is every
+one of them with its counterpart, because a paragraph that lists some of them
+reads as listing all of them:
+
+| Info-only lane | Blocking counterpart |
+|----------------|----------------------|
+| `Kyber-1024 decaps` | `--target kyber-decaps` |
+| `secp256k1 ECDSA sign (RFC 6979)` | `--target ecdsa` |
+| `secp256k1 scalar multiplication` | `--target secp256k1-scalarmult` |
+| `X25519 scalarmult` | `--target x25519` |
+| `X25519 scalarmult batch x4` | `--target x25519-batch` |
+| `Ed25519 verify` | **none, and none is wanted** — verification is
+  variable-time by design (RFC 8032 §5.1.7 operates on the signature and the
+  public key, both public), so a target demanding equality would be asserting
+  a property the algorithm does not claim |
+| `ML-DSA-65 sign` | **none possible** — see above |
+| `SLH-DSA-SHA2-256f sign` | **none possible** — see above |
+
+An earlier version of this paragraph named six of the eight and asserted that
+`X25519 scalarmult batch x4` was "the third lane with no counterpart, and the
+only one of the three where a counterpart was possible". It omitted
+`Ed25519 verify` and `secp256k1 scalar multiplication` entirely. The second of
+those was a real gap rather than a documentation one: the lane's own source
+comment claimed "fail-loud variants of this lane are intentionally surfaced
+separately via `tests/c/test_consttime.c`", and that file contains no
+secp256k1 scalar-multiplication case — so a 256-step Montgomery ladder over a
+secret scalar was covered only by a lane that cannot fail CI. `--target
+secp256k1-scalarmult` closes it: the same ladder, the same Hamming-weight class
+contrast the dudect lane uses (k = 1 against a scalar just under n, so every
+ladder step takes the opposite `cswap` branch), measured at limit 0 on all four
+metrics — I refs 16,020,324 and D refs 3,835,722 byte-identical across all
+eight classes, D1 and LL misses identical too.
+
+That measurement took two attempts, which is worth recording. The first driver
+selected between two constant arrays with `k = (cls & 1) ? k_high : k_low`, and
+the miss columns split exactly along the odd/even classes at 1,661 vs 1,660
+while instruction and data-reference counts were already identical. The
+library was not leaking; the *driver* was, by handing the ladder a different
+address per class. Staging the scalar into one aligned buffer with a branchless
+select — the same thing `dudect_stage_select` does in `tests/c/test_dudect.c` —
+took all four columns to zero.
 
 **What remains covered for ML-DSA and SLH-DSA.** Every primitive the loop
 calls — NTT, pointwise Montgomery multiplication, the norm checks, SHAKE — is

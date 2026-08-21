@@ -42,6 +42,7 @@ import os
 import platform
 import re
 from pathlib import Path
+from typing import Any, NamedTuple
 
 import matplotlib
 
@@ -65,21 +66,36 @@ COMPARATIVE_FILE = ROOT / "benchmarks" / "comparative_benchmark_results.json"
 # "Linux x86_64, 4 cores"), so every regenerated image asserted the version
 # and host of whoever last edited this file. A dashboard that misstates the
 # version it describes is worse than one with no version on it.
-_PKG_VERSION = re.search(
-    r'__version__\s*=\s*"([^"]+)"',
-    (ROOT / "ama_cryptography" / "__init__.py").read_text(encoding="utf-8"),
-).group(1)
+def _read_package_version() -> str:
+    """The version declared by the package, or a hard failure.
+
+    Not `.group(1)` on an unchecked `re.search`: if the declaration ever moves,
+    that spelling raises `AttributeError: 'NoneType' object has no attribute
+    'group'` at import time, which reads as a broken tool rather than as the
+    one thing that actually went wrong.
+    """
+    source = (ROOT / "ama_cryptography" / "__init__.py").read_text(encoding="utf-8")
+    match = re.search(r'__version__\s*=\s*"([^"]+)"', source)
+    if match is None:
+        raise RuntimeError(
+            "ama_cryptography/__init__.py declares no __version__; refusing to "
+            "label a dashboard with a version that was not read from the package"
+        )
+    return match.group(1)
+
+
+_PKG_VERSION = _read_package_version()
 _PY_VERSION = platform.python_version()
 _PLATFORM = f"{platform.system()} {platform.machine()}, {os.cpu_count()} cores"
 
 
 # ── Load benchmark data ────────────────────────────────────────────────
-def load_json(path):
+def load_json(path: Path) -> Any:
     with open(path) as f:
         return json.load(f)
 
 
-def load_json_safe(path, default=None):
+def load_json_safe(path: Path, default: Any = None) -> Any:
     """Load JSON file, returning default if the file does not exist."""
     if not path.exists():
         return default
@@ -184,7 +200,7 @@ SHORT_CLAIM = {
 }
 
 
-def _wrap_key(name, limit=11):
+def _wrap_key(name: str, limit: int = 11) -> str:
     """Fallback label: split an unmapped snake_case key over at most 2 lines."""
     head, sep, tail = name.partition("_")
     if not sep or len(name) <= limit:
@@ -192,7 +208,7 @@ def _wrap_key(name, limit=11):
     return f"{head}\n{tail}"
 
 
-def _summary_line(artefact):
+def _summary_line(artefact: Any) -> str:
     """`passed/total passed`, or `not run` when the artefact is absent.
 
     Never `0/0 passed` and never a fabricated tally: an unrun suite and a suite
@@ -204,7 +220,7 @@ def _summary_line(artefact):
     return f"{s['passed']}/{s['total']} passed"
 
 
-def missing_artefact(ax, title, produce_cmd):
+def missing_artefact(ax: Any, title: str, produce_cmd: str) -> None:
     """Render a panel whose measurement artefact is absent.
 
     The alternative -- substituting plausible literals -- is what this module
@@ -229,7 +245,7 @@ def missing_artefact(ax, title, produce_cmd):
 # ═══════════════════════════════════════════════════════════════════════
 #  DASHBOARD 1: Performance Dashboard
 # ═══════════════════════════════════════════════════════════════════════
-def create_performance_dashboard():
+def create_performance_dashboard() -> None:
     # 3 rows x 4 columns = 12 cells, all filled. Was 3x3 across two separate
     # images (performance_dashboard + benchmark_report) whose panels overlapped
     # on throughput, signature latency and regression; see the merge note in
@@ -742,7 +758,23 @@ def create_performance_dashboard():
 # ═══════════════════════════════════════════════════════════════════════
 #  DASHBOARD 2: Defense Layers
 # ═══════════════════════════════════════════════════════════════════════
-def create_defense_layers():
+class _DefenseLayer(NamedTuple):
+    """One band of the defense-architecture figure.
+
+    A NamedTuple rather than a dict literal: the dict mixed str and float
+    values, so it inferred as ``dict[str, object]`` and every ``layer["y"] -
+    0.6`` in the drawing code was arithmetic on ``object``. The field names are
+    also checked now, which a string key never was.
+    """
+
+    name: str
+    color: str
+    desc: str
+    detail: str
+    y: float
+
+
+def create_defense_layers() -> None:
     fig, ax = plt.subplots(figsize=(14, 10))
     fig.patch.set_facecolor(DARK_BG)
     ax.set_facecolor(DARK_BG)
@@ -771,39 +803,39 @@ def create_defense_layers():
     )
 
     layers = [
-        {
-            "name": "Layer 1: SHA3-256 Content Hash",
-            "color": "#00d2ff",
-            "desc": "Quantum-resistant 256-bit hash of canonical data",
-            "detail": "FIPS 202 • Keccak sponge • AVX2/NEON accelerated",
-            "y": 7.8,
-        },
-        {
-            "name": "Layer 2: HMAC-SHA3-256 Authentication",
-            "color": "#7b2ff7",
-            "desc": "Keyed hash for tamper detection & origin auth",
-            "detail": "RFC 2104 • Ethical context binding • Side-channel safe",
-            "y": 6.0,
-        },
-        {
-            "name": "Layer 3: Ed25519 + ML-DSA-65 Dual Signatures",
-            "color": "#ff6b6b",
-            "desc": "Classical + post-quantum hybrid signature scheme",
-            "detail": "FIPS 186-5 + FIPS 204 • 128-bit classical + 192-bit PQ security",
-            "y": 4.2,
-        },
-        {
-            "name": "Layer 4: HKDF-SHA3-256 Key Derivation",
-            "color": "#6bcb77",
-            "desc": "Deterministic key re-derivation for verification",
-            "detail": "RFC 5869 • Ethical pillar binding • Empty-key guard (S1 fix)",
-            "y": 2.4,
-        },
+        _DefenseLayer(
+            name="Layer 1: SHA3-256 Content Hash",
+            color="#00d2ff",
+            desc="Quantum-resistant 256-bit hash of canonical data",
+            detail="FIPS 202 • Keccak sponge • AVX2/NEON accelerated",
+            y=7.8,
+        ),
+        _DefenseLayer(
+            name="Layer 2: HMAC-SHA3-256 Authentication",
+            color="#7b2ff7",
+            desc="Keyed hash for tamper detection & origin auth",
+            detail="RFC 2104 • Ethical context binding • Side-channel safe",
+            y=6.0,
+        ),
+        _DefenseLayer(
+            name="Layer 3: Ed25519 + ML-DSA-65 Dual Signatures",
+            color="#ff6b6b",
+            desc="Classical + post-quantum hybrid signature scheme",
+            detail="FIPS 186-5 + FIPS 204 • 128-bit classical + 192-bit PQ security",
+            y=4.2,
+        ),
+        _DefenseLayer(
+            name="Layer 4: HKDF-SHA3-256 Key Derivation",
+            color="#6bcb77",
+            desc="Deterministic key re-derivation for verification",
+            detail="RFC 5869 • Ethical pillar binding • Empty-key guard (S1 fix)",
+            y=2.4,
+        ),
     ]
 
     for i, layer in enumerate(layers):
-        y = layer["y"]
-        c = layer["color"]
+        y = layer.y
+        c = layer.color
         # Layer box
         rect = plt.Rectangle(
             (1.5, y - 0.6),
@@ -831,19 +863,17 @@ def create_defense_layers():
             zorder=4,
         )
         # Layer title
-        ax.text(3.2, y + 0.35, layer["name"], fontsize=13, fontweight="bold", color=c, zorder=3)
+        ax.text(3.2, y + 0.35, layer.name, fontsize=13, fontweight="bold", color=c, zorder=3)
         # Description
-        ax.text(3.2, y - 0.05, layer["desc"], fontsize=9.5, color="#cccccc", zorder=3)
+        ax.text(3.2, y - 0.05, layer.desc, fontsize=9.5, color="#cccccc", zorder=3)
         # Technical detail
-        ax.text(
-            3.2, y - 0.38, layer["detail"], fontsize=8, color="#888888", style="italic", zorder=3
-        )
+        ax.text(3.2, y - 0.38, layer.detail, fontsize=8, color="#888888", style="italic", zorder=3)
         # Arrow between layers
         if i < len(layers) - 1:
             ax.annotate(
                 "",
-                xy=(7, layer["y"] - 0.65),
-                xytext=(7, layers[i + 1]["y"] + 0.85),
+                xy=(7, layer.y - 0.65),
+                xytext=(7, layers[i + 1].y + 0.85),
                 arrowprops=dict(
                     arrowstyle="->",
                     color="#ffffff",

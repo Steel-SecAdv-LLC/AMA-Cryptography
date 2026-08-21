@@ -14,6 +14,7 @@ Validates:
 """
 
 import math
+import re
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -762,3 +763,132 @@ class TestMonitoringDocMatchesTheCode:
         assert list(inspect.signature(CryptoPostureController.evaluate_and_respond).parameters) == [
             "self"
         ]
+
+
+class TestAnUnrankableAlgorithmCannotProduceADowngrade:
+    """``UNRANKED_STRENGTH = -1`` was used as the bar to beat.
+
+    The constant exists because ``current_algorithm`` is a public attribute, so
+    a caller can assign a name from another family (or a typo) after
+    construction; -1 sits below every real rung, which is what makes the
+    downgrade alarm fire.  ``_trigger_algorithm_switch`` then read the same -1
+    as the current strength and took the first rung satisfying
+    ``strength > -1`` — the WEAKEST entry of the ascending ladder.  On the
+    signature ladder that is ED25519, a classical scheme, selected in response
+    to a detected threat, logged as an upgrade and handed to the caller's
+    ``on_algorithm_switch`` callback.
+
+    The pre-branch code (``ALGORITHM_STRENGTH.get(name, 0)``) resolved the same
+    input to the rung *above* 0, so the change made the selection strictly
+    weaker than the code it replaced — the exact INVARIANT-35 silent downgrade
+    it was introduced to prevent.
+    """
+
+    def test_escalating_from_a_cross_family_name_switches_nothing(self) -> None:
+        controller = CryptoPostureController(current_algorithm="ML_DSA_65")
+        switched: list[str] = []
+        controller.on_algorithm_switch = switched.append
+
+        # A KEM name on a signature controller: rankable by ALGORITHM_FAMILIES,
+        # not on THIS controller's ladder.
+        controller.current_algorithm = "KYBER_1024"
+        controller._trigger_algorithm_switch()
+
+        assert controller.current_algorithm == "KYBER_1024", "the controller moved"
+        assert switched == [], f"a switch was announced to the application: {switched}"
+        assert controller._switch_count == 0
+
+    def test_escalating_from_a_typo_switches_nothing(self) -> None:
+        controller = CryptoPostureController(current_algorithm="ML_DSA_65")
+        switched: list[str] = []
+        controller.on_algorithm_switch = switched.append
+
+        controller.current_algorithm = "ML_DSA_65_TYPO"
+        controller._trigger_algorithm_switch()
+
+        assert switched == [], switched
+        assert controller._switch_count == 0
+
+    def test_a_ranked_algorithm_still_escalates(self) -> None:
+        """Non-vacuity: the refusal must not have disabled escalation."""
+        controller = CryptoPostureController(current_algorithm="ML_DSA_65")
+        switched: list[str] = []
+        controller.on_algorithm_switch = switched.append
+
+        controller._trigger_algorithm_switch()
+
+        assert controller.current_algorithm == "SPHINCS_256F"
+        assert switched == ["SPHINCS_256F"]
+        assert controller._switch_count == 1
+
+    def test_the_weakest_rung_is_never_the_answer_to_an_escalation(self) -> None:
+        """States the property directly, independent of which names are used.
+
+        Whatever the ladder is, a controller asked to escalate must not end up
+        on its bottom rung unless it was already below it — and nothing is
+        below it.
+        """
+        controller = CryptoPostureController(current_algorithm="ML_DSA_65")
+        weakest = controller._sorted_algorithms[0][0]
+        for name in ("KYBER_1024", "HYBRID_KEM", "AES_256_GCM", "not-an-algorithm"):
+            controller.current_algorithm = name
+            controller._trigger_algorithm_switch()
+            assert controller.current_algorithm != weakest, (
+                f"escalating from the unrankable name {name!r} selected {weakest!r}, "
+                "the weakest rung on the ladder"
+            )
+
+
+class TestTheDocumentedSnippetRuns:
+    """MONITORING.md's posture example is EXECUTED, not read.
+
+    It documented three calls the shipped code does not have —
+    ``evaluator.record_timing_anomaly(score=0.7)``,
+    ``evaluator.record_pattern_anomaly(score=0.5)`` and ``controller.respond()``
+    — and called ``evaluate()`` with no argument where the real signature
+    requires ``monitor_report``.  A reader following it got an
+    ``AttributeError`` on the second line.
+
+    The class above checks that the document MENTIONS the right names; this one
+    runs the block, which is the only check that cannot be satisfied by prose
+    that merely contains the right substrings.
+    """
+
+    @staticmethod
+    def _snippet() -> str:
+        doc = (REPO_ROOT / "MONITORING.md").read_text(encoding="utf-8")
+        match = re.search(
+            r"```python\n(from ama_cryptography\.adaptive_posture import.*?)\n```",
+            doc,
+            re.DOTALL,
+        )
+        assert match is not None, "MONITORING.md no longer carries the posture snippet"
+        return match.group(1)
+
+    def test_the_snippet_executes_against_the_shipped_api(self) -> None:
+        from ama_cryptography.monitor import AmaCryptographyMonitor
+
+        monitor = AmaCryptographyMonitor()
+        for _ in range(40):
+            monitor.monitor_crypto_operation("sign", 1.0)
+
+        namespace: dict[str, Any] = {"monitor": monitor}
+        exec(self._snippet(), namespace)  # noqa: S102 -- executing our own documentation (DOC-001)
+
+        evaluation = namespace["evaluation"]
+        assert isinstance(evaluation, PostureEvaluation)
+        assert isinstance(evaluation.threat_level, ThreatLevel)
+        assert isinstance(evaluation.action, PostureAction)
+
+    def test_the_snippet_is_not_a_stub(self) -> None:
+        """Non-vacuity: the block must do the work, not just import."""
+        snippet = self._snippet()
+        assert "PostureEvaluator()" in snippet
+        assert "evaluate(monitor.get_security_report())" in snippet
+        assert "CryptoPostureController(" in snippet
+        assert "evaluate_and_respond()" in snippet
+
+    def test_the_withdrawn_calls_are_gone(self) -> None:
+        doc = (REPO_ROOT / "MONITORING.md").read_text(encoding="utf-8")
+        for absent in ("evaluator.record_timing_anomaly(", "evaluator.record_pattern_anomaly("):
+            assert doc.count(absent) == 0, f"MONITORING.md still calls {absent}"

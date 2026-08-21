@@ -164,6 +164,8 @@ venv.bak/
 
 # mypy
 .mypy_cache/
+# mypy --linecoverage-report output, consumed by tools/check_type_check_scope.py
+.mypy-coverage/
 .dmypy.json
 dmypy.json
 

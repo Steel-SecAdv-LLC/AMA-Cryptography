@@ -361,16 +361,45 @@ class PostureEvaluator:
                 score += min(0.2, z_score / 10.0)
         return min(1.0, score / max(1, len(alerts)))
 
+    #: Width of the resonance ramp, as a multiple of the detection threshold.
+    #: The score is 0 at the threshold and 1.0 at (1 + this) times it, which
+    #: reproduces the original "3.0 is threshold, 10.0 is alarming" ramp
+    #: exactly when the threshold is 3.0.
+    _RESONANCE_RAMP = 7.0 / 3.0
+
+    #: Threshold assumed for an analysis dict that does not carry one.
+    #: :meth:`ResonanceTimingMonitor.detect_resonance` reports
+    #: ``threshold_ratio`` since 5.0.0; a hand-built report (a test fixture, a
+    #: replayed record from an older build) may not, and 3.0 is the bar that
+    #: was hard-coded here before the detector derived its own.
+    _RESONANCE_DEFAULT_THRESHOLD = 3.0
+
     def _score_resonance(self, resonance_data: Dict[str, Any]) -> float:
-        """Score resonance analysis results."""
+        """Score resonance analysis results.
+
+        Normalised against the threshold the DETECTOR used, not against a
+        constant.  ``detect_resonance`` derives its bar from the number of
+        periodogram ordinates it searched (Fisher's g-test, ln(m / alpha)), so
+        a fixed 3.0 here scored an ordinary noise maximum at m = 64 — ratio
+        ~4.16 — as 0.17 of the way to "active side-channel" while the detector
+        itself had correctly declined to flag it.  Scoring against the reported
+        threshold keeps the two consistent by construction: 0 at the bar the
+        detector actually applied, 1.0 at 3.33x it.
+        """
         if not resonance_data:
             return 0.0
-        max_ratio = max(
-            (analysis.get("resonance_ratio", 0.0) for analysis in resonance_data.values()),
-            default=0.0,
-        )
-        # Normalize: ratio of 3.0 is threshold, 10.0 is alarming
-        return min(1.0, max(0.0, (max_ratio - 3.0) / 7.0))
+        scores = []
+        for analysis in resonance_data.values():
+            if not isinstance(analysis, dict):
+                continue
+            ratio = float(analysis.get("resonance_ratio", 0.0))
+            threshold = float(analysis.get("threshold_ratio", self._RESONANCE_DEFAULT_THRESHOLD))
+            if threshold <= 0.0:
+                threshold = self._RESONANCE_DEFAULT_THRESHOLD
+            scores.append(
+                min(1.0, max(0.0, (ratio - threshold) / (threshold * self._RESONANCE_RAMP)))
+            )
+        return max(scores, default=0.0)
 
     def _score_lyapunov_stability(self, timing_alerts: List[Dict]) -> float:
         """Score timing distribution stability using Lyapunov analysis.
@@ -996,8 +1025,39 @@ class CryptoPostureController:
         self._trigger_algorithm_switch()
 
     def _trigger_algorithm_switch(self) -> None:
-        """Switch to a stronger algorithm."""
+        """Switch to a stronger algorithm.
+
+        Refuses to act on an UNRANKABLE current algorithm.  ``UNRANKED_STRENGTH
+        = -1`` exists because ``current_algorithm`` is a public attribute and a
+        caller can assign a name from another family (or a typo) after
+        construction, where -1 always trips the downgrade alarm.  It did — and
+        then this method used the same -1 as the bar to beat, so
+        ``strength > -1`` matched the FIRST entry of the ascending ladder and
+        the controller "escalated" to its WEAKEST rung.  On the signature
+        ladder that is ED25519, a classical scheme, selected in response to a
+        detected threat, logged as an upgrade and handed to
+        ``on_algorithm_switch``.  The pre-branch code, ``ALGORITHM_STRENGTH.get(
+        name, 0)``, resolved the same input to the rung above 0 — so the
+        unrankable-name handling made the selection strictly weaker than what
+        it replaced, which is the INVARIANT-35 downgrade it was added to
+        prevent.
+
+        There is no defined "next rung above" a name that is not on the ladder,
+        so there is nothing to switch to.  The controller stays where it is and
+        says so at CRITICAL: an unrankable ``current_algorithm`` means the
+        posture machinery is operating on a value it cannot reason about, and
+        that is an operator-visible fault, not a routine skip.
+        """
         current_strength = self._family_strength(self.current_algorithm)
+        if current_strength == self.UNRANKED_STRENGTH:
+            logger.critical(
+                "Posture escalation refused: current_algorithm %r is not on the "
+                "%s strength ladder, so there is no next rung above it. The "
+                "controller is unchanged. Assign a name from ALGORITHM_FAMILIES.",
+                self.current_algorithm,
+                self._algorithm_family,
+            )
+            return
         # Use pre-sorted list (ascending strength) cached at init time
         new_algorithm = self.current_algorithm
         for alg, strength in self._sorted_algorithms:

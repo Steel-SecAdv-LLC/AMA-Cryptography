@@ -967,3 +967,95 @@ class TestVendorTableIsComplete:
         """
         screened_modules = {m for v in gate.VENDORS for m in v.modules}
         assert screened_modules.isdisjoint({"hashlib", "_hashlib", "_ssl", "ssl"})
+
+
+class TestContainerRecipes:
+    """Dockerfiles are build inputs, and nothing read them.
+
+    ``docker/Dockerfile`` and ``docker/Dockerfile.alpine`` each carried an
+    explicit INVARIANT-1 paragraph — "libssl-dev is NOT installed",
+    "openssl-dev is deliberately absent" — while ``docker/Dockerfile.c-api``
+    installed ``libssl-dev`` in its builder stage and ``libssl3`` in its output
+    stage, and ``Dockerfile.alpine``'s own runtime stage installed ``libssl3``:
+    the runtime half of the thing its builder stage says is absent.
+
+    ``_BUILD_CONFIG_GLOBS`` covered ``CMakeLists.txt``, ``**/CMakeLists.txt``,
+    ``cmake/**/*.cmake`` and ``setup.py``.  No Dockerfile could reach it, so
+    the gate reported clean over all three, and the rule lived only in prose in
+    the files that broke it.
+
+    Installing OpenSSL does not link it — nothing in this tree does — but it
+    puts a CVE-prone library on disk in an image whose own comments say it is
+    not there, and a runtime image is exactly where a future ``dlopen`` would
+    find one.
+    """
+
+    @staticmethod
+    def _recipe(tmp_path: Path, body: str, name: str = "Dockerfile") -> Path:
+        directory = tmp_path / "docker"
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / name).write_text(body, encoding="utf-8")
+        return tmp_path
+
+    @pytest.mark.parametrize(
+        "body,package",
+        [
+            (
+                "RUN apt-get update && apt-get install -y \\\n    libssl-dev \\\n    cmake\n",
+                "libssl-dev",
+            ),
+            (
+                "RUN apt-get update && apt-get install -y \\\n    libssl3 \\\n && rm -rf /x\n",
+                "libssl3",
+            ),
+            ("RUN apk add --no-cache \\\n    libsodium-dev \\\n    python3\n", "libsodium-dev"),
+            ("RUN apk add --no-cache openssl-dev musl-dev\n", "openssl-dev"),
+            ("RUN dnf install -y libgcrypt-devel\n", "libgcrypt-devel"),
+        ],
+    )
+    def test_a_vendor_package_install_is_reported(
+        self, tmp_path: Path, body: str, package: str
+    ) -> None:
+        root = self._recipe(tmp_path, body)
+        violations = gate.check_container_recipes(root)
+        assert violations, f"accepted an install of {package}"
+        assert package in violations[0].detail
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            "RUN apt-get update && apt-get install -y \\\n    cmake \\\n    python3\n",
+            "RUN apk add --no-cache python3 py3-pip musl-dev\n",
+            "# libssl-dev is NOT installed (INVARIANT-1)\nRUN apk add --no-cache python3\n",
+            "RUN apt-cache policy libssl-dev\n",
+        ],
+    )
+    def test_a_clean_recipe_passes(self, tmp_path: Path, body: str) -> None:
+        assert gate.check_container_recipes(self._recipe(tmp_path, body)) == []
+
+    def test_a_package_after_a_line_continuation_is_still_seen(self, tmp_path: Path) -> None:
+        """Every package name in these files is on a continued line.
+
+        With the continuation alternative ordered after ``[^\\n]`` the scan
+        stops at the end of the first physical line, so ``RUN apk add
+        --no-cache \\`` reads as installing nothing — the shape of every
+        install in this repository.
+        """
+        body = "RUN apk add --no-cache \\\n    python3 \\\n    libssl3 \\\n    py3-pip\n"
+        assert gate.check_container_recipes(self._recipe(tmp_path, body))
+
+    def test_options_are_not_mistaken_for_packages(self, tmp_path: Path) -> None:
+        body = "RUN apt-get install -y --no-install-recommends cmake\n"
+        assert gate.check_container_recipes(self._recipe(tmp_path, body)) == []
+
+    def test_an_empty_scope_fails_closed(self, tmp_path: Path) -> None:
+        violations = gate.check_container_recipes(tmp_path)
+        assert violations and "examined nothing" in violations[0].detail
+
+    def test_the_shipped_recipes_are_clean(self) -> None:
+        assert gate.check_container_recipes(REPO_ROOT) == []
+
+    def test_the_scan_is_not_vacuous_on_the_real_tree(self) -> None:
+        """Being "clean" must mean recipes were found and read."""
+        found = sorted(p.name for pattern in gate._CONTAINER_GLOBS for p in REPO_ROOT.glob(pattern))
+        assert len(found) >= 3, found

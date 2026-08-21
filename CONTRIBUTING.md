@@ -335,7 +335,7 @@ class TestEd25519Signatures:
    ```bash
    black .
    ruff check .
-   mypy ama_cryptography/
+   make lint    # ruff + mypy --strict, exactly the scope and flags CI uses
    pytest
    ```
 

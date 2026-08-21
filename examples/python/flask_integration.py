@@ -45,9 +45,11 @@ Then visit:
 
 import json
 import sys
+from collections.abc import Callable
 from datetime import datetime
 from functools import wraps
 from pathlib import Path
+from typing import Any
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -79,7 +81,7 @@ CRYPTO = AmaCryptography(algorithm=AlgorithmType.ED25519)
 KEYPAIR = CRYPTO.generate_keypair()
 
 
-def sign_response(f):
+def sign_response(f: Callable[..., Any]) -> Callable[..., Any]:
     """
     Decorator to sign API responses with Ed25519.
 
@@ -87,7 +89,7 @@ def sign_response(f):
     """
 
     @wraps(f)
-    def decorated_function(*args, **kwargs):
+    def decorated_function(*args: Any, **kwargs: Any) -> Any:
         response = f(*args, **kwargs)
 
         # Get response data
@@ -111,7 +113,7 @@ def sign_response(f):
     return decorated_function
 
 
-def require_hmac_auth(f):
+def require_hmac_auth(f: Callable[..., Any]) -> Callable[..., Any]:
     """
     Decorator to require HMAC authentication on requests.
 
@@ -119,7 +121,7 @@ def require_hmac_auth(f):
     """
 
     @wraps(f)
-    def decorated_function(*args, **kwargs):
+    def decorated_function(*args: Any, **kwargs: Any) -> Any:
         from ama_cryptography.legacy_compat import hmac_authenticate
         from ama_cryptography.secure_memory import constant_time_compare
 
@@ -143,7 +145,7 @@ def require_hmac_auth(f):
 
 @app.route("/api/health")
 @sign_response
-def health_check():
+def health_check() -> Any:
     """Health check endpoint with signed response."""
     capabilities = get_pqc_capabilities()
 
@@ -160,7 +162,7 @@ def health_check():
 
 @app.route("/api/sign", methods=["POST"])
 @sign_response
-def sign_data():
+def sign_data() -> Any:
     """
     Sign arbitrary data with AMA Cryptography.
 
@@ -188,7 +190,7 @@ def sign_data():
 
 
 @app.route("/api/verify", methods=["POST"])
-def verify_signature():
+def verify_signature() -> Any:
     """
     Verify a signature.
 
@@ -224,7 +226,7 @@ def verify_signature():
 
 @app.route("/api/protected-data", methods=["GET"])
 @sign_response
-def get_protected_data():
+def get_protected_data() -> Any:
     """
     Get cryptographically protected data package.
 
@@ -247,7 +249,7 @@ def get_protected_data():
 
     # Create protected package
     package = create_crypto_package(
-        dna_codes=data_str,
+        codes=data_str,
         helix_params=helix_params,
         kms=KMS,
         author="Flask API",
@@ -270,7 +272,7 @@ def get_protected_data():
 @app.route("/api/protected-data", methods=["POST"])
 @require_hmac_auth
 @sign_response
-def create_protected_data():
+def create_protected_data() -> Any:
     """
     Create a new protected data package.
 
@@ -287,7 +289,7 @@ def create_protected_data():
     helix_params = [(1.0, 2.0)]
 
     package = create_crypto_package(
-        dna_codes=data_str,
+        codes=data_str,
         helix_params=helix_params,
         kms=KMS,
         author="Flask API Client",
@@ -302,7 +304,7 @@ def create_protected_data():
 
 
 @app.route("/api/keys/public")
-def get_public_keys():
+def get_public_keys() -> Any:
     """Get server's public keys for client-side verification."""
     return jsonify(
         {
@@ -314,7 +316,7 @@ def get_public_keys():
 
 
 @app.errorhandler(500)
-def handle_error(error):
+def handle_error(error: Exception) -> Any:
     """Handle internal errors securely."""
     return (
         jsonify(
@@ -327,7 +329,7 @@ def handle_error(error):
     )
 
 
-def main():
+def main() -> None:
     """Run the Flask development server."""
     print("=" * 60)
     print("AMA CRYPTOGRAPHY - FLASK INTEGRATION EXAMPLE")

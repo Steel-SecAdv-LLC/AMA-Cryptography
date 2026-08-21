@@ -152,8 +152,12 @@ _MIN_SAMPLE_SECONDS = 0.15
 #: make an operation look slower, never faster -- so the fastest of several
 #: batches is the best available estimate of the machine's actual capability
 #: and is far more stable than the mean.  This is the estimator
-#: ``benchmark_operation_best_of`` already applied to the two composite
-#: package benchmarks; it is now what every benchmark gets.
+#: ``benchmark_operation_best_of`` was written for and applied to the two
+#: composite package benchmarks; it is now what every benchmark gets, from
+#: ``benchmark_operation`` itself, which is why neither composite calls
+#: ``benchmark_operation_best_of`` any more — doing so on top of
+#: ``_SAMPLING_REPEATS`` multiplied the two and sampled one row 25 times while
+#: publishing 5.
 _ROUNDS = 3
 
 #: Independent repeats of a whole benchmark, per primitive, beyond ``_ROUNDS``.
@@ -544,7 +548,26 @@ def run_full_package_create_benchmark(iterations: int = 20) -> float:
     def operation() -> None:
         create_crypto_package(next_content(), config)
 
-    return benchmark_operation_best_of(operation, iterations, warmup=2, rounds=5)
+    # Plain benchmark_operation, matching run_full_package_verify_benchmark.
+    #
+    # This used to be `benchmark_operation_best_of(..., rounds=5)` while
+    # `_SAMPLING_REPEATS` ALSO registered this row for
+    # `_COMPOSITE_SAMPLED_ROUNDS` (5).  The two mechanisms compound:
+    # `_measure_benchmark` calls this function 5 times and keeps the max, and
+    # each call ran `benchmark_operation` 5 more times, each of those 3
+    # windows — 25 whole measurements and 75 windows, against 5 and 15 for its
+    # sibling `full_package_verify`, which carries the SAME `_SAMPLING_REPEATS`
+    # entry and calls plain `benchmark_operation`.
+    #
+    # So the provenance line published "full_package_create x5" for a row
+    # sampled 25 times, and the cost model in the `_EXTRA_SAMPLED_ROUNDS`
+    # docstring was out by ~4x for it.  Measured on this change: 17.7 s -> 5.5 s
+    # for the row, and the reported rate moves 1,446.8 -> 1,371.7 ops/sec
+    # (-5.2%) because the maximum is now taken over 15 windows rather than 75.
+    # The floor is 1,983 with a 45% tolerance, i.e. a 1,091 ops/sec minimum, so
+    # both numbers clear it with room; the two composites are now sampled
+    # identically, which is what makes them comparable at all.
+    return benchmark_operation(operation, iterations, warmup=2)
 
 
 def run_full_package_verify_benchmark(iterations: int = 20) -> float:
@@ -1214,15 +1237,49 @@ def generate_markdown_report(results: List[BenchmarkResult], report: Dict[str, A
     lines.append("")
     lines.append("| Property | Value |")
     lines.append("|----------|-------|")
-    for key, value in _provenance():
-        lines.append(f"| {key} | {value} |")
+    # Prefer the provenance RECORDED IN THE REPORT over this process's own.
+    #
+    # A report rendered from a stored `benchmark-results.json` — regenerating
+    # the presentation without re-running the suite — otherwise stamped the
+    # rendering process's commit, host and argv onto someone else's
+    # measurements, so the artefact claimed to have been produced by whatever
+    # re-rendered it.  The recorded block is the one that describes the run the
+    # numbers came from; `_provenance()` is the fallback for a live run, where
+    # `report` was built by `generate_report()` moments earlier and the two are
+    # the same thing.
+    recorded = report.get("provenance")
+    if isinstance(recorded, dict) and recorded:
+        by_key = {_provenance_key(label): label for label, _ in _provenance()}
+        for key, value in recorded.items():
+            lines.append(f"| {by_key.get(key, key.replace('_', ' ').capitalize())} | {value} |")
+    else:
+        for key, value in _provenance():
+            lines.append(f"| {key} | {value} |")
     lines.append("")
 
     # Results table
+    #
+    # The column is named "Regression", matching the machine-readable field
+    # (`regression_percent` in benchmark-results.json) that carries the same
+    # number.  It was called "Delta", which reads as "change" and so inverts:
+    # `regression = -pct_change`, and `pct_change` is positive when FASTER, so
+    # a row 43% slower than its floor rendered as "+43.0%" under a heading a
+    # reader takes to mean improvement.  Nothing in the report said otherwise.
+    # The JSON sibling named the field honestly, so only the human-facing
+    # artefact was ambiguous — which is the one a human reads.
     lines.append("## Results")
     lines.append("")
-    lines.append("| Primitive | Ops/sec | Baseline | Delta | Tolerance | Status |")
-    lines.append("|-----------|--------:|---------:|------:|----------:|--------|")
+    lines.append(
+        "*Regression is measured against the floor: **positive means SLOWER** "
+        "than `baseline_value`, negative means faster. It is the same number as "
+        "`regression_percent` in `benchmark-results.json`. The floor is a "
+        "measured median on the runner class named in Provenance above, not a "
+        "discount of this run, so the two hosts differ and a positive value "
+        "within Tolerance is an ordinary result.*"
+    )
+    lines.append("")
+    lines.append("| Primitive | Ops/sec | Baseline | Regression | Tolerance | Status |")
+    lines.append("|-----------|--------:|---------:|-----------:|----------:|--------|")
     for r in results:
         status = "PASS" if r.passed else ("WARN" if r.optional else "**FAIL**")
         lines.append(
@@ -1340,13 +1397,24 @@ def main() -> int:
     report = generate_report(results)
 
     if args.output:
+        # SERIALISE FIRST, then write.
+        #
+        # allow_nan=False: the default emits `Infinity` / `NaN`, which are not
+        # JSON (RFC 8259).  A record a strict reader cannot parse is worse than
+        # no record, and a non-finite throughput would clear every regression
+        # floor it is compared against, so the write must fail rather than
+        # produce one.
+        #
+        # `json.dump(...)` alone does not deliver that: it encodes
+        # incrementally into the open file and raises PART WAY THROUGH, leaving
+        # a truncated JSON file on disk.  Measured: a report whose first
+        # benchmark carries an infinite rate left `{\n  "benchmarks": {\n
+        # "widget": {\n      "ops_per_sec": ` behind, and a downstream step
+        # that checks whether the artefact exists would call that a run.
+        # `json.dumps` raises before the file is created.
+        payload = json.dumps(report, indent=2, allow_nan=False)
         with open(args.output, "w") as f:
-            # allow_nan=False: the default emits `Infinity` / `NaN`, which are
-            # not JSON (RFC 8259).  A record a strict reader cannot parse is
-            # worse than no record, and a non-finite throughput would clear
-            # every regression floor it is compared against, so the write
-            # fails rather than producing one.
-            json.dump(report, f, indent=2, allow_nan=False)
+            f.write(payload)
         print(f"Report written to: {args.output}")
 
     if args.markdown:

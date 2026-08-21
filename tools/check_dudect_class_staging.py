@@ -199,6 +199,29 @@ _STAGE_DECL = re.compile(
     re.MULTILINE,
 )
 
+# The DESTINATION of every staging call — the first argument of
+# `dudect_stage_select(dest, a, b, len, class_idx)` / `dudect_stage(dest, ...)`.
+#
+# This is what the alignment rule is actually about, and keying it on the
+# `_stage` name suffix instead meant the rule was enforced on zero declarations
+# in one of the three governed harnesses.  `tests/c/test_dudect.c` happens to
+# name its destinations `tag_use_stage`, `sk_use_stage`, `k_stage`…, so the
+# suffix rule covered it by coincidence; `tools/constant_time/dudect_crypto.c`
+# names the same kind of buffer `sk`, `key`, `probe_tag`, `ikm`, `input`, and
+# not one of them was ever checked — while the module docstring stated the rule
+# with no qualification ("every staging buffer").  The destinations there do
+# carry `_Alignas(64)` today, so nothing was broken; the RULE was simply not
+# enforced, and an unaligned one added tomorrow would have passed.
+_STAGE_CALL_DEST = re.compile(r"\bdudect_stage(?:_select)?\s*\(\s*(?P<dest>\w+)\s*,")
+
+# Any declaration at all, so a destination that has one can be told apart from
+# a destination that is a function parameter or a file-scope symbol declared
+# elsewhere.  Used only to make the diagnostic accurate.
+_ANY_DECL = re.compile(
+    r"^[^\S\n]*(?:_Alignas\(\d+\)[^\S\n]+)?\w[\w ]*?[^\S\n]+\*?(?P<name>\w+)\s*(?:\[|;|=)",
+    re.MULTILINE,
+)
+
 
 def _logical_statements(text: str) -> list[tuple[int, str]]:
     """Join continuation lines so a statement split across lines is matched.
@@ -256,9 +279,37 @@ def check_text(text: str, path: str) -> list[str]:
     violations: list[str] = []
 
     aligned = {m.group("name") for m in _ALIGNED_DECL.finditer(stripped)}
+    declared = {m.group("name") for m in _ANY_DECL.finditer(stripped)}
+
+    # Rule 1 — every destination of a staging call must be aligned.  Derived
+    # from the calls, so it holds whatever the buffer is named.
+    reported: set[str] = set()
+    for m in _STAGE_CALL_DEST.finditer(stripped):
+        name = m.group("dest")
+        if name in aligned or name in reported:
+            continue
+        reported.add(name)
+        line = stripped.count("\n", 0, m.start()) + 1
+        if name in declared:
+            violations.append(
+                f"{path}:{line}: staging destination '{name}' is not declared "
+                f"_Alignas(64). A staging buffer that straddles a cache line "
+                f"reintroduces the geometry the staging exists to remove."
+            )
+        else:
+            violations.append(
+                f"{path}:{line}: staging destination '{name}' has no declaration "
+                f"in this file, so its alignment cannot be established here. "
+                f"Stage into a local _Alignas(64) buffer."
+            )
+
+    # Rule 2 — the naming convention, kept as an additional check.  A buffer
+    # named `*_stage` is a staging buffer whether or not this file happens to
+    # contain the call that uses it.
     for m in _STAGE_DECL.finditer(stripped):
         name = m.group("name")
-        if name not in aligned:
+        if name not in aligned and name not in reported:
+            reported.add(name)
             line = stripped.count("\n", 0, m.start()) + 1
             violations.append(
                 f"{path}:{line}: staging buffer '{name}' is not declared "

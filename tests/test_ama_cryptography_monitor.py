@@ -26,6 +26,7 @@ AI Co-Architects:
 """
 
 import ast
+import math
 import sys
 import time
 from typing import Any
@@ -44,6 +45,7 @@ from ama_cryptography.monitor import (
     RefactoringAnalyzer,
     ResonanceTimingMonitor,
     TimingAnomaly,
+    VolumeSpikeDetector,
 )
 
 
@@ -983,3 +985,329 @@ class TestMonitorIntegration:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "--tb=short"])
+
+
+class TestResonanceFlagIsCalibrated:
+    """``has_resonance`` must mean something, in both directions.
+
+    Two independent defects made it mean nothing before 5.0.0, and each is
+    pinned separately here so a regression in either is attributable.
+
+    1. **The DC component was never removed.**  The series was transformed as
+       given, so the operation's baseline duration — the largest thing in the
+       signal by orders of magnitude — leaked across the whole spectrum through
+       the zero-padding window, and the search, which excluded only bin 0,
+       found that leakage.  Measured on the pre-fix code, a PERFECTLY CONSTANT
+       100-sample series reported ``resonance_ratio`` 30.31 and
+       ``has_resonance`` True.
+
+    2. **The bar was a constant 3.0.**  For white noise the periodogram
+       ordinates are iid exponential, so the maximum-to-mean ratio over m of
+       them concentrates near ln(m) — 4.16 at m = 64, already past 3.0.
+       Measured over 2,000 iid-Gaussian trials at each of n = 64/96/100/128,
+       the old flag fired on 88.4 %, 100 %, 100 % and 99.1 % of clean series.
+
+    The same sweep against the current code gives 0.40 %-0.60 %, against a
+    nominal :attr:`ResonanceTimingMonitor.RESONANCE_FALSE_ALARM_RATE` of 1 %.
+    """
+
+    @staticmethod
+    def _feed(window: int, values: list[float]) -> dict[str, Any]:
+        monitor = ResonanceTimingMonitor(window_size=window)
+        for value in values:
+            monitor.record_timing("op", value)
+        return dict(monitor.detect_resonance("op"))
+
+    @staticmethod
+    def _lcg(seed: int) -> Any:
+        """A deterministic uniform stream, so the sweep below is reproducible
+        on every runner without depending on ``random``'s global state."""
+        state = seed & 0xFFFFFFFF
+
+        def nxt() -> float:
+            nonlocal state
+            state = (1103515245 * state + 12345) & 0x7FFFFFFF
+            return state / float(0x7FFFFFFF)
+
+        return nxt
+
+    def test_a_constant_series_does_not_resonate(self) -> None:
+        """The regression this class exists for.
+
+        A constant series has no periodic component whatsoever.  100 samples
+        is the interesting length: it pads to 128, and it was the padding that
+        spread the un-removed DC term.
+        """
+        for n in (12, 64, 100, 127):
+            result = self._feed(n, [1.0] * n)
+            assert result["resonance_ratio"] == 0.0, (n, result)
+            assert result["has_resonance"] is False, (n, result)
+
+    def test_a_periodic_probe_still_resonates(self) -> None:
+        """Non-vacuity: the fix must not have been "return False".
+
+        A strictly alternating fast/slow probe is the reconnaissance shape this
+        component exists to see, and it lands exactly on the Nyquist bin — the
+        one a naive "scan the lower half, drop the mirror" would discard.
+        """
+        result = self._feed(64, [1.0 if i % 2 == 0 else 2.0 for i in range(96)])
+        assert result["has_resonance"] is True, result
+        # Measured: ratio 32.0 against a threshold of 8.07, a margin of 3.96x.
+        # The bar is 3.5x so a real loss of sensitivity fails here rather than
+        # only in the boolean above, without pinning the exact measured value.
+        assert result["resonance_ratio"] > 3.5 * result["threshold_ratio"], result
+
+    def test_the_threshold_is_the_fisher_bar_for_the_bins_it_searched(self) -> None:
+        """The bar must depend on m; a constant bar is what failed."""
+        seen = set()
+        for n in (16, 64, 100, 128):
+            result = self._feed(n, [1.0 + 0.01 * (i % 7) for i in range(n)])
+            m = result["scanned_bins"]
+            expected = math.log(m / ResonanceTimingMonitor.RESONANCE_FALSE_ALARM_RATE)
+            assert result["threshold_ratio"] == pytest.approx(expected), (n, result)
+            seen.add(m)
+        assert len(seen) > 1, "the sweep must actually vary the ordinate count"
+
+    def test_clean_aperiodic_traffic_is_within_the_declared_false_alarm_rate(
+        self,
+    ) -> None:
+        """The property the ``alpha`` parameter promises, measured.
+
+        300 trials per size, deterministic. The bar is 5x the nominal rate: the
+        test must catch "fires on nearly everything" (the measured pre-fix
+        behaviour, 88-100 %) without failing on the binomial spread of a
+        300-trial estimate of a 1 % rate.
+        """
+        nominal = ResonanceTimingMonitor.RESONANCE_FALSE_ALARM_RATE
+        for n in (64, 100, 128):
+            nxt = self._lcg(0xA5A5 + n)
+            trials = 300
+            fired = 0
+            for _ in range(trials):
+                # Irwin-Hall(4): symmetric, finite-support, no dependence on
+                # the platform's normal-variate implementation.
+                series = [1.0 + 0.05 * (sum(nxt() for _ in range(4)) - 2.0) for _ in range(n)]
+                fired += bool(self._feed(n, series)["has_resonance"])
+            rate = fired / trials
+            assert rate <= 5.0 * nominal, (
+                f"n={n}: has_resonance fired on {rate * 100:.1f}% of clean aperiodic "
+                f"series against a declared {nominal * 100:.1f}% false-alarm rate"
+            )
+
+
+class TestTheMonitorIsBoundedAndItsReportIsASnapshot:
+    """Three properties this monitor claimed and did not have.
+
+    All three are about ``operation``, which reaches the monitor from
+    :meth:`AmaCryptographyMonitor.monitor_crypto_operation` — public API taking
+    an arbitrary string.  Its two sibling detectors in the same module already
+    bound what a caller can make them hold (``VolumeSpikeDetector`` caps
+    operation names, ``RecursionPatternMonitor`` caps tracked keys, both with
+    the same one-line rationale: a monitoring component must not become the
+    memory-exhaustion vector).  ``ResonanceTimingMonitor`` was the one that did
+    not.
+    """
+
+    @staticmethod
+    def _lcg(seed: int) -> Any:
+        state = seed & 0xFFFFFFFF
+
+        def nxt() -> float:
+            nonlocal state
+            state = (1103515245 * state + 12345) & 0x7FFFFFFF
+            return state / float(0x7FFFFFFF)
+
+        return nxt
+
+    def test_operation_names_are_capped_and_the_drops_are_counted(self) -> None:
+        """Nine per-operation dicts are keyed on a caller-supplied string."""
+        monitor = ResonanceTimingMonitor(max_operations=8)
+        for name in range(50):
+            for _ in range(3):
+                monitor.record_timing(f"op{name}", 1.0)
+        assert len(monitor.timing_history) == 8
+        assert monitor.dropped_operations == (50 - 8) * 3, monitor.dropped_operations
+        # Every keyed structure must respect the same bound, not just the one
+        # the admission test happens to consult.
+        assert len(monitor.baseline_stats) <= 8
+        assert len(monitor._incremental_stats) == 8
+        assert len(monitor._ewma_stats) == 8
+        assert len(monitor._score_history) == 8
+
+    def test_an_admitted_operation_is_unaffected_by_the_cap(self) -> None:
+        """Non-vacuity: the cap must not be "stop recording"."""
+        monitor = ResonanceTimingMonitor(max_operations=2)
+        for _ in range(40):
+            monitor.record_timing("kept", 1.0)
+        for _ in range(40):
+            monitor.record_timing("dropped_one", 1.0)
+            monitor.record_timing("dropped_two", 1.0)
+        assert len(monitor.timing_history["kept"]) == 40
+        anomaly = monitor.record_timing("kept", 50.0)
+        assert anomaly is not None, "a real anomaly on an admitted name must still fire"
+
+    def test_the_ratio_matrix_is_bounded_however_many_names_arrive(self) -> None:
+        """It held exactly N(N-1)/2 deques and evicted none.
+
+        Measured before the cap, at 300 names: 44,850 pair deques and a
+        per-record cost of 0.371 ms against 0.021 ms at a single name — paid
+        inside the lock that serialises every instrumented crypto call.
+        """
+        for names in (40, 300):
+            monitor = ResonanceTimingMonitor(max_ratio_operations=6)
+            for name in range(names):
+                for _ in range(31):
+                    monitor.record_timing(f"op{name}", 1.0 + 0.001 * name)
+            assert len(monitor._ratio_ops) == 6
+            assert len(monitor._ratio_samples) <= 6 * 5 // 2, len(monitor._ratio_samples)
+
+    def test_the_report_is_a_snapshot_not_the_live_state(self) -> None:
+        """``get_security_report`` handed out the monitor's live dict.
+
+        Three lines below the comment where it fixes exactly this race for
+        ``timing_history``.  An ordinary consumer iterating the returned
+        mapping raised ``RuntimeError("dictionary changed size during
+        iteration")`` within four seconds against a writer issuing fresh
+        operation names.
+        """
+        monitor = AmaCryptographyMonitor()
+        for _ in range(60):
+            monitor.monitor_crypto_operation("sign", 1.0)
+        # Force at least one alert so the alert assertions below are not
+        # vacuous: a report with an empty alert list proves nothing about
+        # whether the list it returns is the live one.
+        for _ in range(4):
+            monitor.monitor_crypto_operation("sign", 90.0)
+
+        report = monitor.get_security_report()
+        assert monitor.alerts, "the fixture failed to produce an alert"
+        assert report["recent_alerts"], "the report carried no alert to check"
+
+        assert report["timing_baseline"] is not monitor.timing.baseline_stats
+        for op, stats in report["timing_baseline"].items():
+            assert stats is not monitor.timing.baseline_stats[op], op
+        # Mutating the snapshot must not reach the monitor.
+        report["timing_baseline"]["injected"] = {"mean": 0.0}
+        assert "injected" not in monitor.timing.baseline_stats
+
+        assert report["recent_alerts"] is not monitor.alerts
+        for alert in report["recent_alerts"]:
+            assert all(
+                alert is not live for live in monitor.alerts
+            ), "the report shares alert dicts with the monitor's live list"
+
+    def test_cross_operation_alarms_stay_within_the_declared_budget(self) -> None:
+        """The ratio path had no budget, no calibration and no floor.
+
+        ``abs(ratio - mu) / sigma > 3.0`` with mu, sigma frozen after 30
+        CONSECUTIVE samples of ``EWMA_mean(a) / EWMA_mean(b)`` is not a
+        3-sigma test: adjacent EWMA ratios are heavily autocorrelated, so that
+        sigma measures short-term jitter rather than the spread the bar must
+        sit outside.  Measured on two clean i.i.d. lognormal operations at
+        4,000 records each, it alarmed on 1.9 % of the stream — nearly triple
+        the point path's budgeted-and-gated 1 %.  The same stream now spends
+        0.79 %.
+        """
+        nxt = self._lcg(0x5EED)
+        monitor = ResonanceTimingMonitor()
+        counts = {"point": 0, "shift": 0, "cross_operation": 0}
+        records = 1500
+        for _ in range(records):
+            for op, scale in (("sign", 0.020), ("verify", 0.041)):
+                # Irwin-Hall(4) jitter: deterministic, platform-independent.
+                jitter = sum(nxt() for _ in range(4)) - 2.0
+                anomaly = monitor.record_timing(op, scale * math.exp(0.25 * jitter))
+                if anomaly is not None:
+                    counts[anomaly.kind] = counts.get(anomaly.kind, 0) + 1
+        total = 2 * records
+        budget = ResonanceTimingMonitor.DEFAULT_ALARM_BUDGET
+        rate = counts["cross_operation"] / total
+        assert rate <= 3.0 * budget, (
+            f"cross-operation alarms spent {rate * 100:.2f}% of a clean stream "
+            f"against a declared {budget * 100:.1f}% budget: {counts}"
+        )
+
+    def test_a_real_cross_operation_divergence_still_alarms(self) -> None:
+        """Non-vacuity for the budget test above.
+
+        Calibrating the bar must not have turned the path off: a sustained
+        change in the RATIO of two operations, with each operation's own
+        distribution otherwise unremarkable, is the signal this path exists
+        for and it must still be reported.
+        """
+        nxt = self._lcg(0xC0FFEE)
+        monitor = ResonanceTimingMonitor()
+        for _ in range(1500):
+            for op, scale in (("sign", 0.020), ("verify", 0.041)):
+                jitter = sum(nxt() for _ in range(4)) - 2.0
+                monitor.record_timing(op, scale * math.exp(0.25 * jitter))
+        # 'verify' alone slows by 8x: each operation's own baseline shifts, and
+        # so does the pair ratio.
+        seen = set()
+        for _ in range(400):
+            for op, scale in (("sign", 0.020), ("verify", 0.041 * 8.0)):
+                jitter = sum(nxt() for _ in range(4)) - 2.0
+                anomaly = monitor.record_timing(op, scale * math.exp(0.25 * jitter))
+                if anomaly is not None:
+                    seen.add(anomaly.kind)
+        assert "cross_operation" in seen, seen
+
+
+class TestTheVolumeAllowListIsRealConfiguration:
+    """``DEFAULT_OPERATIONS`` described a filter nothing implemented.
+
+    Its doc comment said "Everything else is ignored unless the caller passes
+    it explicitly" while no code read the tuple, ``record()`` counted whatever
+    string it was handed, and the constructor took no ``operations`` argument —
+    so there was no "passes it explicitly" either.  Making the tuple the
+    DEFAULT would have been worse than leaving it dead: it would silently stop
+    counting every operation outside an eight-name list.  The filter is now
+    real, opt-in, and its skips are counted.
+    """
+
+    def test_no_allow_list_counts_everything(self) -> None:
+        detector = VolumeSpikeDetector()
+        assert detector.operations is None
+        for name in ("kyber_encaps", "some_new_kem", "x25519_scalarmult"):
+            detector.record(name, now=0.0)
+        assert detector.tracked_operations == 3
+        assert detector.filtered_operations == 0
+
+    def test_an_allow_list_filters_and_counts_the_skips(self) -> None:
+        detector = VolumeSpikeDetector(operations=("kyber_encaps", "dilithium_sign"))
+        for name in ("kyber_encaps", "dilithium_sign", "unrelated", "also_unrelated"):
+            detector.record(name, now=0.0)
+        assert detector.tracked_operations == 2
+        assert detector.filtered_operations == 2
+
+    def test_the_shipped_constant_is_usable_as_that_list(self) -> None:
+        detector = VolumeSpikeDetector(operations=VolumeSpikeDetector.DEFAULT_OPERATIONS)
+        for name in VolumeSpikeDetector.DEFAULT_OPERATIONS:
+            detector.record(name, now=0.0)
+        detector.record("not_in_the_list", now=0.0)
+        assert detector.tracked_operations == len(VolumeSpikeDetector.DEFAULT_OPERATIONS)
+        assert detector.filtered_operations == 1
+
+    def test_an_empty_allow_list_is_rejected_rather_than_read_as_no_filter(self) -> None:
+        """A detector configured to watch nothing is a configuration error."""
+        with pytest.raises(ValueError):
+            VolumeSpikeDetector(operations=())
+
+    def test_a_filtered_operation_cannot_produce_a_spike(self) -> None:
+        """Non-vacuity in the other direction: filtering must actually filter.
+
+        Drives a burst well past every gate the detector has — warmup,
+        min_burst_count, threshold_sigma — under a name outside the list.
+        """
+        detector = VolumeSpikeDetector(
+            operations=("watched",), warmup_buckets=2, min_burst_count=4, threshold_sigma=1.0
+        )
+        spikes = []
+        for bucket in range(6):
+            for _ in range(2):
+                spikes.append(detector.record("ignored", now=float(bucket)))
+        for _ in range(500):
+            spikes.append(detector.record("ignored", now=6.0))
+        assert all(s is None for s in spikes)
+        assert detector.tracked_operations == 0
+        assert detector.filtered_operations == 512

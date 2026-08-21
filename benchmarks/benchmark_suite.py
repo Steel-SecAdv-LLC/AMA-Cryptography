@@ -22,16 +22,23 @@ import json
 import os
 import platform
 import secrets
+import functools
 import statistics
 import time
 from datetime import datetime, timezone
+from collections.abc import Callable
 from typing import Any, Dict
 
-# psutil is optional — used for richer system info when available
+# psutil is optional — used for richer system info when available.
+#
+# Imported under an alias and then bound to the declared name: `import psutil`
+# directly under `psutil: Any` is a redefinition of an already-declared name,
+# and the declaration is what lets the except branch bind None.
 psutil: Any
 try:
-    import psutil
+    import psutil as _psutil
 
+    psutil = _psutil
     _HAS_PSUTIL = True
 except ImportError:
     psutil = None
@@ -56,22 +63,25 @@ from ama_cryptography.legacy_compat import (
     hmac_authenticate,
     hmac_verify,
     length_prefixed_encode,
-    native_hkdf,
     verify_crypto_package,
 )
-from ama_cryptography.pqc_backends import DILITHIUM_BACKEND, native_sha3_256
+
+# native_hkdf comes from pqc_backends, where it is defined and exported.
+# legacy_compat imports it for its own use but does not list it in __all__,
+# so importing it from there reached past that module's declared surface.
+from ama_cryptography.pqc_backends import DILITHIUM_BACKEND, native_hkdf, native_sha3_256
 
 
 class BenchmarkSuite:
     """Comprehensive performance benchmarking for AMA Cryptography."""
 
-    def __init__(self):
-        self.results = {}
+    def __init__(self) -> None:
+        self.results: Dict[str, Any] = {}
         self.system_info = self._get_system_info()
 
-    def _get_system_info(self) -> Dict:
+    def _get_system_info(self) -> Dict[str, Any]:
         """Collect system information for benchmark context."""
-        info: Dict = {
+        info: Dict[str, Any] = {
             "platform": platform.platform(),
             "processor": platform.processor(),
             "python_version": platform.python_version(),
@@ -86,8 +96,11 @@ class BenchmarkSuite:
         return info
 
     def benchmark_operation(
-        self, operation_name: str, operation_func, iterations: int = 1000
-    ) -> Dict:
+        self,
+        operation_name: str,
+        operation_func: Callable[[], object],
+        iterations: int = 1000,
+    ) -> Dict[str, Any]:
         """Benchmark a single operation with statistical analysis."""
         print(f"  📊 Benchmarking {operation_name} ({iterations} iterations)...")
 
@@ -118,7 +131,7 @@ class BenchmarkSuite:
         print(f"    ✓ Mean: {stats['mean_ms']}ms ({stats['ops_per_sec']} ops/sec)")
         return stats
 
-    def benchmark_key_generation(self) -> Dict:
+    def benchmark_key_generation(self) -> Dict[str, Any]:
         """Benchmark key generation operations."""
         print("🔑 Benchmarking Key Generation...")
 
@@ -158,7 +171,7 @@ class BenchmarkSuite:
 
         return results
 
-    def benchmark_cryptographic_operations(self) -> Dict:
+    def benchmark_cryptographic_operations(self) -> Dict[str, Any]:
         """Benchmark core cryptographic operations."""
         print("🔐 Benchmarking Cryptographic Operations...")
 
@@ -211,24 +224,37 @@ class BenchmarkSuite:
             iterations=1000,
         )
 
-        # Dilithium signing
+        # Dilithium signing.
+        #
+        # kms.dilithium_keypair is Optional — generate_key_management_system
+        # leaves it None when the backend is unavailable — and the three rows
+        # below dereference it. Checked once here so the failure names the
+        # cause instead of surfacing as AttributeError on NoneType inside a
+        # lambda five frames down.
+        dilithium_keypair = kms.dilithium_keypair
+        if dilithium_keypair is None:
+            raise RuntimeError(
+                "no Dilithium keypair on this key-management system: the ML-DSA "
+                "backend is unavailable, so the Dilithium rows cannot be measured"
+            )
+
         results["dilithium_sign"] = self.benchmark_operation(
             "Dilithium Signing",
-            lambda: dilithium_sign(test_data, kms.dilithium_keypair.secret_key),
+            lambda: dilithium_sign(test_data, dilithium_keypair.secret_key),
             iterations=100,
         )
 
         # Dilithium verification
-        dilithium_sig = dilithium_sign(test_data, kms.dilithium_keypair.secret_key)
+        dilithium_sig = dilithium_sign(test_data, dilithium_keypair.secret_key)
         results["dilithium_verify"] = self.benchmark_operation(
             "Dilithium Verification",
-            lambda: dilithium_verify(test_data, dilithium_sig, kms.dilithium_keypair.public_key),
+            lambda: dilithium_verify(test_data, dilithium_sig, dilithium_keypair.public_key),
             iterations=100,
         )
 
         return results
 
-    def benchmark_dna_operations(self) -> Dict:
+    def benchmark_dna_operations(self) -> Dict[str, Any]:
         """Benchmark Code-specific operations."""
         print("🧬 Benchmarking Code Operations...")
 
@@ -266,7 +292,7 @@ class BenchmarkSuite:
 
         return results
 
-    def benchmark_ethical_integration(self) -> Dict:
+    def benchmark_ethical_integration(self) -> Dict[str, Any]:
         """Benchmark ethical integration overhead."""
         print("⚖️ Benchmarking Ethical Integration...")
 
@@ -312,7 +338,7 @@ class BenchmarkSuite:
 
         return results
 
-    def benchmark_scalability(self) -> Dict:
+    def benchmark_scalability(self) -> Dict[str, Any]:
         """Benchmark scalability with different input sizes."""
         print("📈 Benchmarking Scalability...")
 
@@ -325,16 +351,21 @@ class BenchmarkSuite:
             codes = MASTER_CODES * size
             helix_params = MASTER_HELIX_PARAMS * size
 
-            # Bind codes/helix_params via default args to avoid closure-over-loop-variable bug
+            # functools.partial, not `lambda c=codes, h=helix_params:` — both
+            # bind the current loop values (the closure-over-loop-variable bug
+            # this guards against), but a lambda with defaults has no inferable
+            # type as a `Callable[[], object]` argument, and the default
+            # parameters are also callable by a caller who passes arguments,
+            # which is not what this is.
             results[f"dna_size_{size}"] = self.benchmark_operation(
                 f"Code Processing (size={size})",
-                lambda c=codes, h=helix_params: create_crypto_package(c, h, kms, "benchmark"),
+                functools.partial(create_crypto_package, codes, helix_params, kms, "benchmark"),
                 iterations=50,
             )
 
         return results
 
-    def run_comprehensive_benchmark(self) -> Dict:
+    def run_comprehensive_benchmark(self) -> Dict[str, Any]:
         """Run complete benchmark suite."""
         print("🚀 Starting Comprehensive AMA Cryptography Benchmark Suite...")
         print(f"System: {self.system_info['platform']}")
@@ -365,7 +396,7 @@ class BenchmarkSuite:
 
         return self.results
 
-    def save_results(self, filename: str = "benchmark_results.json"):
+    def save_results(self, filename: str = "benchmark_results.json") -> None:
         """Save benchmark results to JSON file."""
         with open(filename, "w") as f:
             json.dump(self.results, f, indent=2)
@@ -391,7 +422,7 @@ class BenchmarkSuite:
         lines.append("")
 
         # --- Helper to render a section as a markdown table ---
-        def _render_table(title: str, section_key: str, skip_keys: tuple = ()):
+        def _render_table(title: str, section_key: str, skip_keys: tuple[str, ...] = ()) -> None:
             section = self.results.get(section_key, {})
             if not section:
                 return
@@ -478,7 +509,7 @@ class BenchmarkSuite:
         return md_content
 
 
-def main():
+def main() -> None:
     """Run benchmark suite and save results."""
     import argparse
 

@@ -57,9 +57,28 @@ HELPER = ".github/scripts/apt-install.sh"
 WORKFLOW_GLOBS = (".github/workflows/*.yml", ".github/workflows/*.yaml")
 
 #: An apt invocation that reaches the network.  `apt-get` covers update,
-#: install, upgrade and remove; `apt install` is the interactive spelling that
-#: should never appear in CI but is caught here rather than left as a gap.
-_APT_CALL = re.compile(r"\bapt(?:-get)?\s+(?:update|install|upgrade|dist-upgrade)\b")
+#: install, upgrade and remove; `apt` is the interactive spelling that should
+#: never appear in CI but is caught here rather than left as a gap, and
+#: `aptitude` is the third front-end for the same archive.
+#:
+#: OPTIONS BETWEEN THE BINARY AND THE SUB-COMMAND ARE THE NORMAL SPELLING, and
+#: the previous pattern required the sub-command to follow the binary name
+#: immediately:
+#:
+#:     \bapt(?:-get)?\s+(?:update|install|upgrade|dist-upgrade)\b
+#:
+#: so `apt-get -y install pkg`, `apt-get -qq -y install pkg`,
+#: `apt-get --no-install-recommends install pkg` and
+#: `apt-get -o Acquire::Retries=3 update` all slipped through — every one of
+#: them a raw, unretried apt call, which is the single thing this gate exists
+#: to refuse.  The binary and the sub-command are now matched separately, with
+#: any run of option tokens (`-y`, `--no-install-recommends`,
+#: `-o Key=Value`, `-t bookworm-backports`) allowed between them.
+_APT_OPTION = r"(?:\s+-{1,2}[^\s]+(?:\s+[^\s-][^\s]*)?)*"
+_APT_SUBCOMMAND = r"(?:update|install|reinstall|upgrade|dist-upgrade|full-upgrade|build-dep)"
+_APT_CALL = re.compile(
+    r"\b(?:apt|apt-get|aptitude)\b" + _APT_OPTION + r"\s+" + _APT_SUBCOMMAND + r"\b"
+)
 
 
 def scan_text(text: str, path: str) -> list[str]:

@@ -593,6 +593,34 @@ _CYTHON_ENTRY_RE = re.compile(r"(\d[\d,]*) Cython (?:binding )?entry points")
 _C_SUITE_PAREN_RE = re.compile(r"(\d[\d,]*) C test suites \((\d[\d,]*) translation units\)")
 _C_SUITE_BARE_RE = re.compile(r"(\d[\d,]*) C test suites")
 
+#: The OTHER spellings of the same claim.  The two patterns above match the
+#: phrasing README.md happens to use; three live documents said the same thing
+#: differently and none of them was checked:
+#:
+#:   docs/METRICS_REPORT.md  | `test_*.c` files under `tests/c/` ... | 59 |
+#:   ARCHITECTURE.md         59 `test_*.c` registered via ctest in `tests/c/`
+#:   CHANGELOG.md            the C suite is 59 files / 62 translation units
+#:
+#: against a tree with 60 and 63 — and docs/METRICS_REPORT.md is the document
+#: README calls authoritative, whose own preamble says "if a documented count
+#: and this report disagree, the count is the bug".  Here the report was.
+_C_SUITE_TABLE_RE = re.compile(
+    r"`test_\*\.c`\s+files\s+under\s+`tests/c/`[^|\n]*\|\s*(\d[\d,]*)\s*\|"
+)
+_C_SUITE_CTEST_RE = re.compile(r"(\d[\d,]*)\s+`test_\*\.c`\s+registered\s+via\s+ctest")
+_C_SUITE_FILES_UNITS_RE = re.compile(r"C suite is (\d[\d,]*) files / (\d[\d,]*) translation units")
+
+#: README's version-stamped C library inventory.  Two counts, neither checked:
+#: "Top-level `src/c/*.c` — 27 translation units" against a tree with 29 (both
+#: ama_pbkdf2.c and ama_sha512.c were added on this branch and compiled
+#: unconditionally), and "25 modules + `__init__` + `__main__`" against 27.  An
+#: inventory presented with a version number should be measured, not
+#: transcribed.
+_SRC_C_UNITS_RE = re.compile(r"Top-level `src/c/\*\.c`\s*[—-]\s*(\d[\d,]*) translation units")
+_PACKAGE_MODULES_RE = re.compile(
+    r"`ama_cryptography/`,\s*(\d[\d,]*) modules \+ `__init__` \+ `__main__`"
+)
+
 
 def count_error_state_entry_points() -> tuple[int, int]:
     """The authoritative gated-surface counts, from the gate that owns them.
@@ -727,6 +755,63 @@ def check_c_suite_counts(repo: Path) -> list[str]:
                 problems.append(
                     f"{rel}: says {claimed} C test suites; "
                     f"`tests/c/**/test_*.c` counts {suites}"
+                )
+        # The three spellings the patterns above cannot see.
+        for claimed in _C_SUITE_TABLE_RE.findall(live) + _C_SUITE_CTEST_RE.findall(live):
+            if _num(claimed) != suites:
+                problems.append(
+                    f"{rel}: says {claimed} `test_*.c` files under tests/c/; "
+                    f"the tree has {suites}"
+                )
+        for claimed_suites, claimed_units in _C_SUITE_FILES_UNITS_RE.findall(live):
+            if _num(claimed_suites) != suites:
+                problems.append(
+                    f"{rel}: says the C suite is {claimed_suites} files; " f"the tree has {suites}"
+                )
+            if _num(claimed_units) != units:
+                problems.append(
+                    f"{rel}: says the C suite is {claimed_units} translation units; "
+                    f"the tree has {units}"
+                )
+    return problems
+
+
+def measure_source_inventory(repo: Path) -> tuple[int, int]:
+    """(top-level ``src/c/*.c`` count, package module count).
+
+    The module count excludes ``__init__.py`` and ``__main__.py``, matching the
+    README's own "N modules + ``__init__`` + ``__main__``" phrasing, and reads
+    the tracked set so a stray scratch file in a working tree is not counted.
+    """
+    units = len(list((repo / "src" / "c").glob("*.c")))
+    modules = [
+        path
+        for path in (repo / "ama_cryptography").glob("*.py")
+        if path.name not in {"__init__.py", "__main__.py"}
+    ]
+    return units, len(modules)
+
+
+def check_source_inventory_counts(repo: Path) -> list[str]:
+    """README's version-stamped C and Python inventories, measured."""
+    problems: list[str] = []
+    units, modules = measure_source_inventory(repo)
+
+    def _num(raw: str) -> int:
+        return int(raw.replace(",", ""))
+
+    for rel, live in _live_documents(repo):
+        for claimed in _SRC_C_UNITS_RE.findall(live):
+            if _num(claimed) != units:
+                problems.append(
+                    f"{rel}: says {claimed} top-level src/c translation units; "
+                    f"`src/c/*.c` counts {units}"
+                )
+        for claimed in _PACKAGE_MODULES_RE.findall(live):
+            if _num(claimed) != modules:
+                problems.append(
+                    f"{rel}: says {claimed} package modules besides __init__ and "
+                    f"__main__; `ama_cryptography/*.py` counts {modules}"
                 )
     return problems
 
@@ -906,6 +991,7 @@ def audit(repo: Path = REPO) -> tuple[list[str], int]:
     problems += check_breaking_change_counts(repo)
     problems += check_entry_point_counts(repo)
     problems += check_c_suite_counts(repo)
+    problems += check_source_inventory_counts(repo)
     return problems, checked
 
 

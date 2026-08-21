@@ -34,7 +34,6 @@ import base64
 import json
 import logging
 import os
-import secrets
 import struct
 import sys
 import threading
@@ -511,7 +510,9 @@ def get_rfc3161_timestamp(data: bytes, tsa_url: Optional[str] = None) -> Optiona
             _native_sha256(data),
             "sha256",
             tsa_url,
-            nonce=secrets.randbits(64),
+            # INVARIANT-41 health-tested draw; see the note at the other TSA
+            # nonce site in rfc3161_timestamp.py.
+            nonce=int.from_bytes(secure_token_bytes(8), "big"),
             cert_req=True,
         )
         return response

@@ -20,8 +20,10 @@
 
 ## Results
 
-| Primitive | Ops/sec | Baseline | Delta | Tolerance | Status |
-|-----------|--------:|---------:|------:|----------:|--------|
+*Regression is measured against the floor: **positive means SLOWER** than `baseline_value`, negative means faster. It is the same number as `regression_percent` in `benchmark-results.json`. The floor is a measured median on the runner class named in Provenance above, not a discount of this run, so the two hosts differ and a positive value within Tolerance is an ordinary result.*
+
+| Primitive | Ops/sec | Baseline | Regression | Tolerance | Status |
+|-----------|--------:|---------:|-----------:|----------:|--------|
 | AMA native C SHA3-256 hashing of 1KB data (FIPS 202, ctypes) | 289,692 | 327,222 | +11.5% | 45% | PASS |
 | HMAC-SHA3-256 authentication (native C via ctypes) | 187,325 | 215,299 | +13.0% | 45% | PASS |
 | Ed25519 key pair generation (native C) | 11,268 | 10,822 | -4.1% | 45% | PASS |
@@ -29,7 +31,7 @@
 | Ed25519 signature verification (native C) | 20,634 | 19,181 | -7.6% | 45% | PASS |
 | HKDF-SHA3-256 key derivation (3 keys) | 109,135 | 131,341 | +16.9% | 45% | PASS |
 | Complete crypto package creation (with PQC) | 1,515 | 1,983 | +23.6% | 45% | PASS |
-| Complete crypto package verification (with PQC) | 1,964 | 3,442 | +42.9% | 45% | PASS |
+| Complete crypto package verification (with PQC) | 1,964 | 3,442 | +43.0% | 45% | PASS |
 | secp256k1 ECDSA signing (native C, RFC 6979 deterministic nonce) | 8,352 | 8,068 | -3.5% | 45% | PASS |
 | secp256k1 ECDSA verification (native C, Shamir's-trick joint multiply, low-s + canonical-pubkey policy) | 3,675 | 3,302 | -11.3% | 45% | PASS |
 | ML-DSA-65 (Dilithium) key pair generation (native C) | 963 | 1,312 | +26.6% | 45% | PASS |
@@ -39,7 +41,7 @@
 | ML-KEM-1024 (Kyber) encapsulation (native C) | 8,436 | 11,994 | +29.7% | 45% | PASS |
 | AES-256-GCM encryption of 1KB data (native C) | 237,703 | 224,406 | -5.9% | 45% | PASS |
 | ChaCha20-Poly1305 encryption of 1KB data (native C) | 208,052 | 227,521 | +8.6% | 45% | PASS |
-| X25519 single-shot Diffie-Hellman scalar-mult (native C, default dispatch). Backed by fe64 (radix-2^64, MULX/ADX) on x86-64 hosts with BMI2+ADX, fe51 (radix-2^51) on 64-bit hosts without, and gf16 on 32-bit. The AVX2 4-way kernel is OPT-IN via AMA_DISPATCH_USE_X25519_AVX2=1 and is intentionally not faster than scalar fe64 on MULX/ADX hosts — see src/c/dispatch/ama_dispatch.c:478-502 and tests/test_x25519_dispatch_policy.py for the dispatch contract. Re-floored 5,000 → 13,000 (2026-04-27 audit) so the regression gate actually catches a >40% drop from canonical-host throughput rather than ignoring it. | 18,201 | 16,876 | -7.9% | 45% | PASS |
+| X25519 single-shot Diffie-Hellman scalar-mult (native C, default dispatch). Backed by fe64 (radix-2^64, MULX/ADX) on x86-64 hosts with BMI2+ADX, fe51 (radix-2^51) on 64-bit hosts without, and gf16 on 32-bit. The AVX2 4-way kernel is OPT-IN via AMA_DISPATCH_USE_X25519_AVX2=1 and is intentionally not faster than scalar fe64 on MULX/ADX hosts — see src/c/dispatch/ama_dispatch.c:478-502 and tests/test_x25519_dispatch_policy.py for the dispatch contract. Re-floored 5,000 → 13,000 (2026-04-27 audit) so the regression gate actually catches a >40% drop from canonical-host throughput rather than ignoring it. | 18,201 | 16,876 | -7.8% | 45% | PASS |
 | X25519 batch-4 Diffie-Hellman under default dispatch — measures BATCHES/SEC, not per-op rate. On MULX/ADX hosts this is roughly x25519_scalarmult / 4 plus the wrapper's per-batch overhead (canonical-host run measured ~4,100 batches/sec vs ~17,000 single-shot ops/sec). A significantly slower batches/sec number typically means the AVX2 4-way kernel was accidentally selected as the default — that is a regression on every shipped Broadwell+/Zen+ part (see PR #273 design note and ama_dispatch.c:478-502). The runner calls native_x25519_scalarmult_batch with count=4 so this baseline genuinely exercises the batch wrapper, not four sequential native_x25519_key_exchange calls. | 4,270 | 4,074 | -4.8% | 45% | PASS |
 
 ## Throughput Comparison

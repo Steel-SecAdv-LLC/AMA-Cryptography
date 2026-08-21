@@ -19,6 +19,7 @@ import sys
 import threading
 from collections.abc import Generator
 from pathlib import Path
+from typing import Any
 from unittest import mock
 
 import pytest
@@ -395,8 +396,24 @@ class TestSuppressionHygiene:
         )
 
     def test_no_suppressions_in_forbidden_dirs(self) -> None:
-        """Suppressions absolutely forbidden in src/c/, _primitive, backend, include/."""
+        """Suppressions absolutely forbidden in src/c/, _primitive, backend, include/.
+
+        This used to walk ``rglob("*.py")`` under each forbidden directory.
+        ``src/c/`` and ``include/`` hold no Python, and the other two entries
+        name directories that do not exist, so it asserted over an empty set —
+        the same vacuity the gate itself had, and it passed for years while a
+        live suppression sat in ``src/c/ed25519_donna_shim.c``.  It now drives
+        the gate's own C-tree scan, which is the thing CI runs.
+        """
         repo_root = Path(__file__).resolve().parent.parent
+        gate = self._load_gate()
+        files = gate.c_tree_files(repo_root)
+        assert len(files) > 50, (
+            f"the C-tree scan found only {len(files)} files — an empty or "
+            "collapsed scope is a checker fault, not a clean tree"
+        )
+        assert gate.scan_c_tree(repo_root) == []
+        # And the Python trees the other rule governs, unchanged.
         for fd in self._FORBIDDEN_DIRS:
             target = repo_root / fd
             if not target.exists():
@@ -406,6 +423,77 @@ class TestSuppressionHygiene:
                 assert not self._SUPPRESSION_RE.search(
                     content
                 ), f"INVARIANT-13: suppression found in forbidden dir: {py_file}"
+
+    @staticmethod
+    def _load_gate() -> Any:
+        import importlib.util
+
+        repo_root = Path(__file__).resolve().parent.parent
+        path = repo_root / "tools" / "check_suppression_hygiene.py"
+        spec = importlib.util.spec_from_file_location("_sup_gate", path)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_the_c_tree_scan_reports_a_planted_suppression(self) -> None:
+        """Negative control: the scan must not be a blanket pass.
+
+        Every marker form is planted, because the gate's value is that a
+        reviewer cannot reach for any of them.
+        """
+        import tempfile
+
+        gate = self._load_gate()
+        markers = (
+            "/* NOLINTNEXTLINE(clang-analyzer-core.uninitialized.Assign) */",
+            "int x = 0;  /* NOLINT */",
+            "/* cppcheck-suppress nullPointer */",
+            "/* nosemgrep: some-rule */",
+            "/* coverity[tainted_data] */",
+            "/* LINTED */",
+        )
+        for marker in markers:
+            with tempfile.TemporaryDirectory() as td:
+                root = Path(td)
+                (root / "src" / "c").mkdir(parents=True)
+                (root / "include").mkdir()
+                (root / "include" / "ama_x.h").write_text("int f(void);\n", encoding="utf-8")
+                (root / "src" / "c" / "x.c").write_text(
+                    f"int f(void) {{\n    {marker}\n    return 0;\n}}\n", encoding="utf-8"
+                )
+                found = gate.scan_c_tree(root)
+                assert found, f"the scan missed {marker!r}"
+                assert "x.c" in found[0], found
+
+    def test_the_c_tree_scan_fails_closed_on_an_empty_scope(self) -> None:
+        """A glob that matches nothing must never read as "clean"."""
+        import tempfile
+
+        gate = self._load_gate()
+        with tempfile.TemporaryDirectory() as td:
+            found = gate.scan_c_tree(Path(td))
+        assert found and "scan scope is empty" in found[0], found
+
+    def test_vendored_code_is_out_of_scope(self) -> None:
+        """INVARIANT-13 governs what this project writes.
+
+        Rewriting a vendor comment would defeat the "no project-side
+        modifications" property the vendor-isolation gate enforces separately.
+        """
+        import tempfile
+
+        gate = self._load_gate()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "src" / "c" / "vendor" / "thirdparty").mkdir(parents=True)
+            (root / "src" / "c" / "vendor" / "thirdparty" / "v.c").write_text(
+                "/* NOLINT */\nint g(void) { return 0; }\n", encoding="utf-8"
+            )
+            (root / "src" / "c" / "ours.c").write_text(
+                "int h(void) { return 0; }\n", encoding="utf-8"
+            )
+            assert gate.scan_c_tree(root) == []
 
     def test_ci_enforcement_script_exists(self) -> None:
         """The CI suppression hygiene script must exist."""

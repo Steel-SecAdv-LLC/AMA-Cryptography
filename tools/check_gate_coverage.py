@@ -72,6 +72,8 @@ Exits 0 when every workflow satisfies the invariant, 1 otherwise.
 
 from __future__ import annotations
 
+import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -119,6 +121,49 @@ def _needs(job: dict[str, Any]) -> set[str]:
     if isinstance(raw, str):
         return {raw}
     return {entry for entry in raw if isinstance(entry, str)}
+
+
+#: A gate step that consults ``needs.*.result`` evaluates EVERY dependency by
+#: construction — adding a job to ``needs:`` extends the check with no further
+#: edit.  Four of this repository's six aggregating gates are written that way.
+_WILDCARD_NEEDS_RE = re.compile(r"needs\.\*\.(?:result|outputs|conclusion)")
+
+
+def _gate_body_text(job: dict[str, Any]) -> str:
+    """Everything in a gate job that could reference a dependency by name.
+
+    Serialised rather than walked, because a reference can appear in a step's
+    ``run``, its ``if``, its ``env`` values, a ``with:`` input or the job-level
+    ``env`` — and the property being checked is only "is this id mentioned at
+    all", for which the flattened text is exactly right and cannot go stale as
+    the schema grows.
+
+    ``needs:`` itself is REMOVED first.  Leaving it in makes the check a
+    tautology — every id in the list appears in the serialisation of the list —
+    which is the same shape of vacuity as ``check_ctypes_abi``'s floor test
+    comparing REQUIRED_MODULES against a set that unions it in.
+    """
+    body = {key: value for key, value in job.items() if key != "needs"}
+    return json.dumps(body, default=str)
+
+
+def _unevaluated_needs(job: dict[str, Any]) -> list[str]:
+    """Dependencies the gate lists but never looks at.
+
+    ``needs:`` membership alone does not make a job blocking.  It makes the
+    gate WAIT for the job; whether the gate goes red when that job fails is
+    decided by the gate's own step, and two of this repository's gates —
+    ``dudect-gate`` and ``static-analysis-gate`` — hand-enumerate each
+    dependency into an ``env:`` block and call a shell ``check`` function once
+    per job.  A job added to ``needs:`` but not to that hand-written list
+    satisfies INVARIANT-31's coverage rule and is still never evaluated: the
+    gate carries ``if: always()``, so it runs anyway, ``rc`` stays 0, and the
+    final step prints that every job reached the state the trigger requires.
+    """
+    body = _gate_body_text(job)
+    if _WILDCARD_NEEDS_RE.search(body):
+        return []
+    return sorted(need for need in _needs(job) if need not in body)
 
 
 def _is_always(job: dict[str, Any]) -> bool:
@@ -183,6 +228,21 @@ def check_parsed(name: str, workflow: dict[Any, Any]) -> list[str]:
                 f"required context reporting 'skipped' never resolves — the pull "
                 f"request waits for a status that never arrives instead of going "
                 f"red."
+            )
+        unevaluated = _unevaluated_needs(gate)
+        if unevaluated:
+            failures.append(
+                f"{name}: gate job '{gate_id}' lists {len(unevaluated)} "
+                f"dependenc(y/ies) it never evaluates — {', '.join(unevaluated)}. "
+                f"`needs:` only makes the gate WAIT for a job; whether the gate "
+                f"goes red when it fails is decided by the gate's own step. This "
+                f"gate hand-enumerates its dependencies, so a job added to "
+                f"`needs:` and not to that list runs, fails, and leaves the gate "
+                f"green — with `if: always()` the gate runs regardless and its "
+                f"exit status never sees the failure. Reference each dependency "
+                f"in the gate's steps, or switch the gate to the "
+                f"`contains(needs.*.result, 'failure')` form, which cannot go "
+                f"stale."
             )
 
     missing = sorted(other_ids - covered)

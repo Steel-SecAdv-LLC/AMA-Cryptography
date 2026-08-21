@@ -70,6 +70,9 @@ def test_job_absent_from_gate_needs_is_reported() -> None:
             needs:
               - build
             runs-on: ubuntu-latest
+            steps:
+              - if: contains(needs.*.result, 'failure')
+                run: exit 1
         """)
     assert len(failures) == 1
     assert "build-no-native-pqc" in failures[0]
@@ -89,6 +92,9 @@ def test_gate_without_always_is_reported() -> None:
           ci-gate:
             needs: [build]
             runs-on: ubuntu-latest
+            steps:
+              - if: contains(needs.*.result, 'failure')
+                run: exit 1
         """)
     assert len(failures) == 1
     assert "always()" in failures[0]
@@ -120,6 +126,9 @@ def test_gate_needing_an_undefined_job_is_reported() -> None:
             if: always()
             needs: [build, typoed-job]
             runs-on: ubuntu-latest
+            steps:
+              - if: contains(needs.*.result, 'failure')
+                run: exit 1
         """)
     assert len(failures) == 1
     assert "typoed-job" in failures[0]
@@ -171,6 +180,9 @@ def test_always_accepts_the_expression_wrapped_form() -> None:
                 if: ${{ always() }}
                 needs: [build]
                 runs-on: ubuntu-latest
+                steps:
+                  - if: contains(needs.*.result, 'failure')
+                    run: exit 1
             """) == []
 
 
@@ -186,6 +198,9 @@ def test_needs_given_as_a_bare_string_is_accepted() -> None:
                 if: always()
                 needs: build
                 runs-on: ubuntu-latest
+                steps:
+                  - if: contains(needs.*.result, 'failure')
+                    run: exit 1
             """) == []
 
 
@@ -202,10 +217,16 @@ def test_coverage_may_be_split_across_several_gates() -> None:
                 if: always()
                 needs: [alpha]
                 runs-on: ubuntu-latest
+                steps:
+                  - if: contains(needs.*.result, 'failure')
+                    run: exit 1
               beta-gate:
                 if: always()
                 needs: [beta]
                 runs-on: ubuntu-latest
+                steps:
+                  - if: contains(needs.*.result, 'failure')
+                    run: exit 1
             """) == []
 
 
@@ -234,3 +255,121 @@ def test_c_library_no_native_pqc_is_wired_into_its_gate() -> None:
     jobs = workflow["jobs"]
     assert "c-library-no-native-pqc" in jobs
     assert "c-library-no-native-pqc" in jobs["ci-gate"]["needs"]
+
+
+# ---------------------------------------------------------------------------
+# `needs:` membership is not evaluation
+# ---------------------------------------------------------------------------
+#
+# Coverage used to be computed purely from `needs:`, and `needs:` only makes
+# the gate WAIT for a job.  Whether the gate goes red when that job fails is
+# decided by the gate's own step.  Four of this repository's six aggregating
+# gates use `contains(needs.*.result, 'failure')`, which is self-maintaining;
+# `dudect-gate` and `static-analysis-gate` instead hand-enumerate each
+# dependency into an `env:` block and call a shell `check` function once per
+# job.  A job added to `needs:` and not to that hand-written list satisfied
+# INVARIANT-31 and was never evaluated — and because the gate carries
+# `if: always()`, it ran anyway, `rc` stayed 0, and the gate printed that every
+# job reached the state the trigger requires.
+#
+# Measured: adding an always-failing `newly-added-lane` to dudect-gate's
+# `needs:` left the previous checker at exit 0.
+
+
+def test_a_dependency_the_gate_never_looks_at_is_reported() -> None:
+    failures = check("""
+        on:
+          pull_request:
+        jobs:
+          watched:
+            runs-on: ubuntu-latest
+          unwatched:
+            runs-on: ubuntu-latest
+          ci-gate:
+            if: always()
+            needs:
+              - watched
+              - unwatched
+            runs-on: ubuntu-latest
+            steps:
+              - env:
+                  R_WATCHED: ${{ needs.watched.result }}
+                run: |
+                  test "${R_WATCHED}" = success
+        """)
+    assert len(failures) == 1, failures
+    assert "unwatched" in failures[0]
+    assert "never evaluates" in failures[0]
+    assert "watched," not in failures[0], "the evaluated job was named as unevaluated"
+
+
+def test_the_wildcard_form_covers_every_dependency() -> None:
+    """`needs.*.result` cannot go stale, so it satisfies the rule outright."""
+    failures = check("""
+        on:
+          pull_request:
+        jobs:
+          one:
+            runs-on: ubuntu-latest
+          two:
+            runs-on: ubuntu-latest
+          ci-gate:
+            if: always()
+            needs: [one, two]
+            runs-on: ubuntu-latest
+            steps:
+              - if: contains(needs.*.result, 'failure')
+                run: exit 1
+        """)
+    assert failures == []
+
+
+def test_a_dependency_named_only_in_a_run_body_counts() -> None:
+    """The check is "is it referenced at all", not "is it in an env: block"."""
+    failures = check("""
+        on:
+          pull_request:
+        jobs:
+          alpha:
+            runs-on: ubuntu-latest
+          ci-gate:
+            if: always()
+            needs: [alpha]
+            runs-on: ubuntu-latest
+            steps:
+              - run: |
+                  echo "alpha=${{ needs.alpha.result }}"
+                  test "${{ needs.alpha.result }}" = success
+        """)
+    assert failures == []
+
+
+def test_listing_a_job_in_needs_is_not_self_satisfying() -> None:
+    """The tautology this check had to avoid.
+
+    Serialising the whole job would include its own ``needs:`` list, so every
+    id would trivially "appear" — the same shape of vacuity as a floor test
+    comparing a required set against a set that unions it in.
+    """
+    failures = check("""
+        on:
+          pull_request:
+        jobs:
+          alpha:
+            runs-on: ubuntu-latest
+          ci-gate:
+            if: always()
+            needs: [alpha]
+            runs-on: ubuntu-latest
+            steps:
+              - run: echo "the gate does nothing with its dependency"
+        """)
+    assert len(failures) == 1, failures
+    assert "alpha" in failures[0] and "never evaluates" in failures[0]
+
+
+def test_the_repository_gates_all_evaluate_what_they_wait_for() -> None:
+    """Non-vacuity for the rule against the real workflows."""
+    problems, examined = audit()
+    assert examined >= 10
+    assert [p for p in problems if "never evaluates" in p] == []

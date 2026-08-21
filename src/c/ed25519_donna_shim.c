@@ -367,21 +367,29 @@ ama_error_t ama_ed25519_batch_verify(
 
 AMA_API ama_error_t ama_ed25519_point_from_scalar(uint8_t point[32],
                                                   const uint8_t scalar[32]) {
-    bignum256modm s;
-    ge25519 ALIGN(16) R;
+    /* Both zero-initialised at declaration, and that is a FIX rather than a
+     * style choice.  This function used to carry the repository's only
+     * clang-tidy next-line suppression comment, silencing three
+     * clang-analyzer uninitialised-read checks: donna fills these through
+     * macros that the analyzer's interprocedural pass does not follow, so it
+     * read `s` and `R` as garbage at the call below.  INVARIANT-13 forbids
+     * suppressions under src/c/ "regardless of justification", and
+     * .clang-tidy's own header says the answer to a false positive is to fix
+     * the code or drop the category, never to silence a site.  Zeroing removes
+     * the analyzer's premise instead of arguing with it, costs two small stack
+     * objects once per call outside every loop, and changes no output:
+     * expand256_modm and ge25519_scalarmult_base_niels overwrite both in
+     * full.  (The suppression token itself is deliberately not spelled here:
+     * clang-tidy matches it anywhere in a comment, so writing it in prose
+     * would re-arm the very suppression this removed.) */
+    bignum256modm s = {0};
+    ge25519 ALIGN(16) R = {0};
     /* BREAKING in 4.0.0: returns ama_error_t so a NULL argument is an error
      * rather than a segfault.  Returning void left no honest fix — an early
      * return would leave `point` uninitialised, which is silent where the
      * crash at least was not.  See include/ama_cryptography.h. */
     if (!point || !scalar) return AMA_ERROR_INVALID_PARAM;
     expand256_modm(s, scalar, 32);
-    /* NOLINTNEXTLINE(clang-analyzer-core.UndefinedBinaryOperatorResult,clang-analyzer-core.uninitialized.Assign,clang-analyzer-core.uninitialized.UndefReturn): vendor (ed25519-donna) initialisation pattern.  donna's curve25519-donna-64bit.h
-     * line 85 reads `out[0] = a[0] + fourP0 - b[0]` with `a` filled by
-     * the donna macros above; the analyzer's interprocedural pass
-     * misses the macro write and flags `a[0]` as garbage.  donna is
-     * in src/c/vendor/, gets no project-side modifications, and is
-     * KAT-verified.  INVARIANT-13 justification: vendor false positive,
-     * tracked under audit Issue 9 close-out. */
     ge25519_scalarmult_base_niels(&R, ge25519_niels_base_multiples, s);
     ge25519_pack(point, &R);
     return AMA_SUCCESS;

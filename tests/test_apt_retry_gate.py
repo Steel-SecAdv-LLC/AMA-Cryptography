@@ -146,6 +146,25 @@ def test_missing_helper_fails(tmp_path: Path) -> None:
         ("      # This step has hung in `apt-get install` twice", False, "prose"),
         ("          apt-cache policy cmake", False, "apt-cache reads nothing remote"),
         ("          dpkg -l", False, "dpkg"),
+        # Options between the binary and the sub-command.  This is the NORMAL
+        # spelling — the repository's own helper is invoked as
+        # `apt-install.sh --no-install-recommends cmake ...` — and the gate's
+        # pattern required the sub-command to follow the binary name
+        # immediately, so every one of these raw calls passed.
+        ("          sudo apt-get -y install cmake", True, "-y before install"),
+        ("          sudo apt-get -qq -y install cmake", True, "two short options"),
+        (
+            "          apt-get --no-install-recommends install cmake",
+            True,
+            "long option before install",
+        ),
+        ("          apt-get -o Acquire::Retries=3 update", True, "-o Key=Value before update"),
+        ("          apt-get -t bookworm-backports install cmake", True, "-t suite before install"),
+        ("          sudo apt-get -y full-upgrade", True, "full-upgrade"),
+        ("          aptitude -y install cmake", True, "the third front-end"),
+        # Near misses that must stay accepted.
+        ("          echo 'adapt-get install nothing'", False, "a word ending in apt-get"),
+        ("          apt-mark hold cmake", False, "apt-mark touches no network"),
     ],
 )
 def test_gate_verdicts(line: str, expect_violation: bool, label: str) -> None:

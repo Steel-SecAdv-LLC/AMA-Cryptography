@@ -511,6 +511,7 @@ jobs:
         # against a pristine checkout — so this stays a fast, tool-only job.
         pip install "black==26.5.1" "ruff==0.16.0" "mypy==2.3.0" \
                     "PyYAML==6.0.3" "types-PyYAML==6.0.12.20260724" \
+                    "types-setuptools==84.0.0.20260812" \
                     "pytest==9.1.1"
 
     - name: Lint with ruff
@@ -524,25 +525,39 @@ jobs:
     - name: Type checking with MyPy (--strict)
       continue-on-error: false
       run: |
-        # Scope: the shipped package, the test tree, and the *enforcement
-        # surface* — every CI gate script, the SBOM/docs/corpus generators,
-        # and the benchmark files whose numbers become regression floors.
-        # These are the files whose silent breakage weakens a control, so
-        # they are held to the same standard as the library. The remaining
-        # benchmarks/ scripts (chart/dashboard/comparative generators) are
-        # demo tooling outside any control path and are deliberately not
-        # gated: annotating them adds churn without protecting anything.
-        mypy --strict ama_cryptography/ tests/ \
-          tools/check_*.py tools/generate_sbom.py tools/update_docs.py \
-          tools/build_post_kats.py tools/sanity_check.py \
-          tools/build_keyformat_corpus.py \
-          tools/build_ascon_seed_corpus.py tools/build_kyber_seed_corpus.py \
-          tools/build_pqc_verify_seed_corpus.py \
-          tools/verify_install_oob.py tools/resign_wheel.py \
-          benchmarks/benchmark_runner.py \
-          benchmarks/check_baseline_justification.py \
-          benchmarks/detector_baseline_eval.py \
-          benchmarks/validation_suite.py
+        # Scope: EVERY tracked Python file, verified rather than asserted.
+        #
+        # This used to be a hand-written list — the shipped package, the test
+        # tree, the gate scripts, four benchmark files — with the chart,
+        # dashboard and comparative generators left out as "demo tooling ...
+        # annotating them adds churn without protecting anything". The list
+        # was maintained by hand, so a new tool joined the check only if
+        # someone remembered; and the excluded third of the tree was not
+        # inert. It held a `dict[str, dict[str, bool]]` populated with ints, a
+        # zip-built coverage matrix that would silently drop a library from
+        # the comparison if one row were short, three
+        # `re.search(...).group(1)` version reads that raise AttributeError
+        # instead of reporting a missing version, a Dilithium keypair
+        # dereferenced without its Optional check, and four
+        # `create_crypto_package(dna_codes=...)` calls in the published
+        # integration examples naming a parameter the function never had.
+        #
+        # --explicit-package-bases (with MYPYPATH=.) so `schemas/` resolves as
+        # `schemas.crypto_package_v1`, the way tests/ imports it, rather than
+        # as a second top-level module of the same file.
+        #
+        # The coverage report feeds the scope gate below: mypy exiting 0 says
+        # nothing about what it looked at, and "every Python file" is a claim
+        # that has to be checked like any other.
+        MYPYPATH=. mypy --strict --explicit-package-bases \
+          --linecoverage-report .mypy-coverage \
+          ama_cryptography/ tests/ tools/ benchmarks/ examples/ \
+          fuzz/python/ nist_vectors/ schemas/ wycheproof_vectors/ \
+          docs/conf.py setup.py ama_cryptography_monitor.py
+
+    - name: "Type-check scope: every tracked .py file was actually checked"
+      run: |
+        python tools/check_type_check_scope.py .mypy-coverage/coverage.json
 
     - name: "INVARIANT-13: Suppression hygiene check"
       run: |
@@ -1095,6 +1110,48 @@ jobs:
       # Both directions are pinned by tests/test_post_failclosed.py.
       run: |
         python tools/check_error_state_gating.py
+
+    - name: "INVARIANT-1 Addendum: Algorithm registry completeness"
+      # CSRC_STANDARDS.md's first paragraph claims it maps EVERY implemented
+      # primitive, and INVARIANTS.md makes that binding ("updating
+      # CSRC_STANDARDS.md ... before implementation is permitted").  Nothing
+      # checked it, and it did not hold.  Run against the registry as it stood
+      # before this change, the gate reports 18 violations by name: FIPS 186-5
+      # and SP 800-56A rev. 3 both uncited and P-256/P-384/P-521 each without a
+      # row, SP 800-208 uncited for LMS and HSS, no row for ML-KEM-512,
+      # ML-KEM-768, ML-DSA-44, ML-DSA-87 or SLH-DSA-SHAKE-128s, and none for
+      # HMAC-SHA-384, HMAC-SHA-512 or HMAC-SHA3-256.
+      #
+      # Both the family list (from include/ama_cryptography.h's AMA_API
+      # prototypes) and the parameter-set list (from the header's parameter-set
+      # enums and the ama_hmac_<hash> prototypes) are DISCOVERED, so neither a
+      # new algorithm nor a new parameter set can be quietly left out of the
+      # registry or the gate's mapping.  The parameter-set level is what makes
+      # the three HMAC entries visible at all: a family-level check saw
+      # ama_hmac_* cite FIPS 198-1 through the HMAC-SHA-256 row and called the
+      # family covered.  Every direction is pinned by
+      # tests/test_algorithm_registry_gate.py.
+      run: |
+        python tools/check_algorithm_registry.py
+
+    - name: "INVARIANT-41: Keygen pairwise-consistency wiring"
+      # The same shape as the step above, for the same reason.  INVARIANTS.md
+      # claimed tests/test_keygen_pct.py enforced this ("a new keygen path that
+      # forgets the test fails the coverage assertion") and it does not: that
+      # test monkeypatches the three helpers into recorders, calls a HAND-
+      # WRITTEN list of eleven entry points, builds `expected` alongside, and
+      # asserts the two lists match.  A twelfth keygen that omits its pairwise
+      # test is never called by it, so both lists are unchanged and it passes.
+      # Measured: adding an unwired `native_widget_keypair()` left that test at
+      # 17 passed / exit 0 while this gate reported the violation by name.
+      #
+      # tools/check_keygen_pct.py discovers the entry points from the module's
+      # AST — 19 today, against the test's eleven — and fails on any that does
+      # not reach pairwise_test_signature / _kem / _agreement, directly or
+      # through one level of delegation.  Both directions are pinned by
+      # tests/test_keygen_pct_gate.py.
+      run: |
+        python tools/check_keygen_pct.py
 
     - name: "INVARIANT-23: Secret scan (in-house)"
       # tools/check_secrets.py is written in house rather than adopting a

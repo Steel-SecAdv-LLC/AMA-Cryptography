@@ -284,3 +284,91 @@ def test_violation_message_names_the_binding_and_the_fix() -> None:
     assert "class_idx ?" in message
     assert "dudect_stage_select(" in message
     assert "synthetic.c:" in message
+
+
+# ---------------------------------------------------------------------------
+# The alignment rule, derived from the calls rather than from a name suffix
+# ---------------------------------------------------------------------------
+class TestAlignmentIsCheckedOnEveryStagingDestination:
+    """The rule was stated without qualification and enforced on a naming convention.
+
+    The module docstring says "every staging buffer" must be ``_Alignas(64)``,
+    because an unaligned one can straddle a cache line and reintroduce exactly
+    the asymmetry the staging removes.  The implementation matched declarations
+    whose identifier ends in ``_stage``.  ``tests/c/test_dudect.c`` uses that
+    convention (``tag_use_stage``, ``sk_use_stage``, ``k_stage``…) so it was
+    covered by coincidence; ``tools/constant_time/dudect_crypto.c`` — one of
+    the three files in ``HARNESS_FILES`` — names its destinations ``sk``,
+    ``key``, ``probe_tag``, ``ikm``, ``input``, and the alignment rule applied
+    to **zero** declarations in it.
+
+    Measured against the gate as it stood: removing ``_Alignas(64)`` from
+    ``probe_tag`` in that file left the gate at exit 0.
+    """
+
+    ALIGNED = """
+static void probe(int class_idx) {
+    _Alignas(64) uint8_t dest[32];
+    uint8_t a[32], b[32];
+    dudect_stage_select(dest, a, b, sizeof dest, class_idx);
+    uint64_t t0 = get_time_ns();
+    consume(dest);
+    uint64_t t1 = get_time_ns();
+    ttest_update(&ctx, class_idx, (double)(t1 - t0));
+}
+"""
+
+    UNALIGNED = ALIGNED.replace("_Alignas(64) uint8_t dest[32];", "uint8_t dest[32];")
+
+    def test_an_unaligned_destination_is_reported(self) -> None:
+        gate = _load_gate()
+        violations = gate.check_text(self.UNALIGNED, "synthetic.c")
+        assert violations, "an unaligned staging destination was accepted"
+        assert "dest" in violations[0] and "_Alignas(64)" in violations[0]
+
+    def test_an_aligned_destination_is_accepted(self) -> None:
+        gate = _load_gate()
+        assert gate.check_text(self.ALIGNED, "synthetic.c") == []
+
+    def test_the_rule_does_not_depend_on_the_name(self) -> None:
+        """The whole point: no ``_stage`` suffix anywhere."""
+        gate = _load_gate()
+        assert "_stage" not in self.UNALIGNED.replace("dudect_stage_select", "")
+        assert gate.check_text(self.UNALIGNED, "synthetic.c")
+
+    def test_a_destination_with_no_local_declaration_is_reported(self) -> None:
+        """Staging into a caller's buffer cannot be verified here, so it fails.
+
+        Fail-closed: "I cannot tell" is not "it is fine".
+        """
+        gate = _load_gate()
+        source = """
+static void probe(uint8_t *dest, int class_idx) {
+    uint8_t a[32], b[32];
+    dudect_stage_select(dest, a, b, 32, class_idx);
+    uint64_t t0 = get_time_ns();
+    consume(dest);
+    uint64_t t1 = get_time_ns();
+    ttest_update(&ctx, class_idx, (double)(t1 - t0));
+}
+"""
+        violations = gate.check_text(source, "synthetic.c")
+        assert violations and "no declaration" in violations[0], violations
+
+    def test_the_real_crypto_harness_destinations_are_covered(self) -> None:
+        """Non-vacuity on the file the suffix rule could not see.
+
+        Being "in HARNESS_FILES" is not coverage; the destinations must
+        actually be found and checked.
+        """
+        gate = _load_gate()
+        text = (REPO_ROOT / "tools" / "constant_time" / "dudect_crypto.c").read_text(
+            encoding="utf-8"
+        )
+        destinations = {m.group("dest") for m in gate._STAGE_CALL_DEST.finditer(text)}
+        assert len(destinations) >= 5, destinations
+        assert not any(name.endswith("_stage") for name in destinations), (
+            "this file is the control precisely because none of its staging "
+            f"destinations carries the _stage suffix: {sorted(destinations)}"
+        )
+        assert gate.check_text(text, "tools/constant_time/dudect_crypto.c") == []

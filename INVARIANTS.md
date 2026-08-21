@@ -72,6 +72,44 @@ permitted. Algorithms whose governing standard has been deprecated or
 withdrawn must be removed from the library or explicitly documented with a
 migration timeline.
 
+**Enforcement.** `tools/check_algorithm_registry.py`, run in `ci.yml`, at two
+levels.
+
+1. **Families.** DISCOVERED from `include/ama_cryptography.h` — every `AMA_API`
+   prototype contributes its `ama_<family>_` prefix. Each family must carry a
+   mapping to one or more `CSRC_STANDARDS.md` tokens (a tuple where the family
+   spans two publications, as `ama_nistp_*` does: FIPS 186-5 for ECDSA and
+   SP 800-56A rev. 3 for ECDH), and each token must appear in that file's
+   tables.
+2. **Parameter sets.** Also discovered: the enumerators of the header's
+   parameter-set enums (`AMA_ML_DSA_*`, `AMA_ML_KEM_*`, `AMA_SLHDSA_*`,
+   `AMA_NIST_CURVE_*`) and the `ama_hmac_<hash>` prototypes. Each must map to a
+   token that appears in the **Algorithm column** of a row — its own row, not a
+   mention inside another algorithm's prose.
+
+At both levels an identifier the mapping does not know fails, which is the
+"before implementation is permitted" clause expressed as a check. The gate
+fails closed on a collapsed header scan, a header with no parameter sets, or a
+truncated registry, and every direction is pinned by
+`tests/test_algorithm_registry_gate.py`.
+
+The second level exists because the first is too coarse to see what the audit
+found. `ama_hmac_*` maps to FIPS 198-1, which the HMAC-SHA-256 row satisfies,
+so the family read as covered while three further HMAC constructions shipped
+with no row at all; `ama_dilithium_*` maps to ML-DSA-65, which said nothing
+about ML-DSA-44 or ML-DSA-87.
+
+Until 5.0.0 nothing checked this, and the registry did not hold. Run against
+`CSRC_STANDARDS.md` as it stood, the gate reports **18** violations by name:
+FIPS 186-5 and SP 800-56A rev. 3 both uncited and P-256/P-384/P-521 each
+without a row; SP 800-208 uncited for both LMS and HSS; ML-KEM-512, ML-KEM-768,
+ML-DSA-44, ML-DSA-87 and SLH-DSA-SHAKE-128s each without a row; and
+HMAC-SHA-384, HMAC-SHA-512 and HMAC-SHA3-256 the same — in a document whose
+first paragraph says it maps *every* primitive implemented in the library and
+lists no aspirational entries. The same pass that found this had itself added
+five other rows, so the rule was known and still not met, which is what a rule
+with no gate looks like.
+
 ### INVARIANT-1 Addendum — Vendoring Policy
 
 Vendoring public-domain source into `src/c/vendor/` and compiling it as part
@@ -160,7 +198,37 @@ query API.  All `__del__` methods in cryptographic classes must call
 ## INVARIANT-4 — Pinned Action References
 
 All third-party GitHub Actions used in security workflows **must** be pinned
-to a full commit SHA, not a mutable tag (`@main`, `@v1`, etc.).
+to a full commit SHA, not a mutable tag (`@main`, `@v1`, etc.). A tag is
+mutable: whoever controls the upstream repository can move it, and the workflow
+then runs different code with no diff in this repository.
+
+**Enforcement:** `tools/check_action_pins.py`, run with `--strict` in
+`ci.yml`. It performs two checks:
+
+1. **`find_unpinned()`** — every `uses:` reference whose ref is not a
+   40-character commit SHA is a violation. Local references (`./…`) and
+   `docker://` images are out of scope; anything else needs an entry in
+   `_PIN_EXEMPT` with a written reason.
+2. **`find_pins()` + `list_remote_refs()`** — every SHA pin must still resolve
+   upstream, and under `--strict` its trailing version comment must name a tag
+   the SHA actually carries.
+
+Check 1 did not exist until 5.0.0, and this invariant had **no enforcement
+anywhere** until then. The pin checker matched `uses: <action>@[0-9a-f]{40}`
+and nothing else, so a reference carrying no SHA was structurally invisible to
+it — the rule's only checker could not see its violations, and
+`tests/test_action_pin_checks.py` recorded that in a comment ("Non-detection:
+`@v1` is a different violation") rather than closing it. The gate also exited
+**0** when it found no pins at all; it now fails closed, like every other gate
+in `tools/`.
+
+**The one exemption**, named individually rather than by prefix:
+`slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0`.
+Upstream *refuses* a SHA reference — the generator verifies that its caller
+referenced it by a semantic-version tag and fails the build otherwise, because
+the tag is what its own provenance attests. Pinning it by SHA would not harden
+the supply chain; it would break the attestation that workflow exists to
+produce.
 
 ## INVARIANT-5 — Input Validation at Python/C Boundary
 
@@ -502,14 +570,40 @@ of justification:
 fail if a suppression is missing a justification, missing a tracking ID, or
 appears in a forbidden directory.
 
-**Scope.** `tools/check_suppression_hygiene.py` covers `ama_cryptography/`,
-`tests/` **and `tools/`**. `tools/` was outside it until someone noticed what
-lives there: the gate scripts themselves. A suppression in that tree silences a
-static analyser *inside the layer that enforces this invariant*, which is the
-last place an unexplained one belongs. Widening the scan found two bare
-`# noqa: S310` markers — no reason, no tracking ID — over `urllib` calls in the
-corpus fetchers that accepted `file:` and `ftp:` URLs; both now check the
-scheme, so the suppression states a fact rather than a hope.
+**Scope.** `tools/check_suppression_hygiene.py` runs two passes, because this
+invariant states two different rules.
+
+*The justified-and-tracked pass* covers `ama_cryptography/`, `tests/` **and
+`tools/`**. `tools/` was outside it until someone noticed what lives there: the
+gate scripts themselves. A suppression in that tree silences a static analyser
+*inside the layer that enforces this invariant*, which is the last place an
+unexplained one belongs. Widening the scan found two bare `# noqa: S310`
+markers — no reason, no tracking ID — over `urllib` calls in the corpus fetchers
+that accepted `file:` and `ftp:` URLs; both now check the scheme, so the
+suppression states a fact rather than a hope.
+
+*The absolutely-forbidden pass* covers every non-vendored `.c` and `.h` under
+`src/c/` and `include/` — the same enumeration the fail-closed clang-tidy job
+performs — and fails on the presence of `NOLINT*`, `cppcheck-suppress`,
+`nosemgrep`, `coverity[` or `LINTED`, with no justification escape hatch,
+because that is what "regardless of justification" means. It fails closed on an
+empty scope: a glob that matches nothing is a checker fault, not a clean tree.
+
+That pass did not exist until 5.0.0, and the enforcement sentence above was
+false without it. The checker listed the forbidden directories and had a branch
+that reported on them, but it only ever collected
+`ama_cryptography/**/*.py`, `tests/**/*.py` and `tools/**/*.py`, so no path
+under `src/c/` or `include/` could reach that branch — dead code for all four
+entries, two of which (`ama_cryptography/_primitive`, `ama_cryptography/backend`)
+name directories that do not exist. Meanwhile a live suppression sat in
+`src/c/ed25519_donna_shim.c`: a next-line marker silencing three
+clang-analyzer uninitialised-read checks on donna's macro-driven
+initialisation, while the gate printed "all suppressions are properly justified"
+and exited 0. It is gone — not moved or re-justified, but removed by making the
+analyzer's premise false, zero-initialising the two locals at declaration, after
+which clang-tidy 18 reports the file clean. The tree now carries **zero**
+suppressions under either root, and the gate is the thing that keeps it that
+way.
 
 Widening it also required the scanner to become precise about what a
 suppression *is*. It had been collecting the line numbers carrying a comment
@@ -1848,7 +1942,7 @@ not prevent a single one of them.
 The table is read with `ast` rather than by importing the module, so the gate
 runs in a lint job with nothing built.
 
-**Verification.** `tests/test_verification_claim_honesty_gate.py` — 46 tests —
+**Verification.** `tests/test_verification_claim_honesty_gate.py` — 61 tests —
 pins both directions: the repository as it stands, plus a reproduction of every
 violation class and, equally, the near-misses that must **not** fire. It also
 pins `test_flipping_a_capability_to_true_permits_its_claims`, which is the
@@ -2230,11 +2324,30 @@ the module ERROR state, which is reserved for a test that *ran and failed*. A
 failed pairwise test enters ERROR through the shared helpers and inhibits all
 further output (INVARIANT-39).
 
-**Enforcement.** `tests/test_keygen_pct.py` pins the wiring (every keygen
-entry point invokes its helper — a new keygen path that forgets the test
-fails the coverage assertion), both failure directions (a verify that lies →
-`CryptoModuleError` + ERROR state; the ERROR state then refuses further
-keygen), and the positive path on real keypairs for every fast family.
+**Enforcement.** Two halves, and until 5.0.0 only one of them existed.
+
+`tools/check_keygen_pct.py` is the coverage half: it DISCOVERS every keygen
+entry point from `ama_cryptography/pqc_backends.py`'s own AST — 19 today — and
+fails on any that does not reach `pairwise_test_signature` / `_kem` /
+`_agreement`, directly or through one level of delegation. Exemptions must
+name a reason and are checked for staleness. It runs in `ci.yml` and both
+directions are pinned by `tests/test_keygen_pct_gate.py`.
+
+`tests/test_keygen_pct.py` is the behaviour half: both failure directions (a
+verify that lies → `CryptoModuleError` + ERROR state; the ERROR state then
+refuses further keygen) and the positive path on real keypairs for every fast
+family.
+
+This paragraph used to credit the second file with the first file's job — "a
+new keygen path that forgets the test fails the coverage assertion". It does
+not, and could not: that test monkeypatches the three helpers into recorders,
+calls a hand-written list of eleven entry points, builds its `expected` list
+alongside, and asserts the two match. A twelfth keygen that omits its pairwise
+test is never called by it, so both lists are unchanged and it passes.
+Measured: an unwired `native_widget_keypair()` appended to `pqc_backends.py`
+left that test at 17 passed / exit 0 while the new gate named the violation
+and exited 1. This is the same gap INVARIANT-39 had before
+`tools/check_error_state_gating.py`, closed the same way.
 
 **Measured cost.** Sub-millisecond for every family except the hash-based
 signatures: ~220 ms for SPHINCS+-SHA2-256f, ~1.0 s for SLH-DSA-SHAKE-128s —
@@ -2253,8 +2366,12 @@ does carry is the contract the library was compiled from.
 
 **Two halves, static and runtime.** `tools/check_ctypes_abi.py` parses every
 `AMA_API` prototype out of the C headers and every `argtypes`/`restype`
-assignment out of the Python sources (`pqc_backends`, `ascon`,
-`agent_binding`, `secure_memory` — 124 symbols), and requires agreement on
+assignment out of every package module that declares one — the scope is
+DISCOVERED from the package's ASTs rather than enumerated, with
+`REQUIRED_MODULES` as a seven-module floor beneath it (`pqc_backends`,
+`ascon`, `agent_binding`, `secure_memory`, `hybrid_combiner`, `_build_sign`,
+`_self_test`; 136 symbols against 177 header prototypes today) — and requires
+agreement on
 arity and on a coarse class per position (pointer-like vs. integer-like,
 pointer/integer/void for returns) — the classes that decide call-frame
 layout. Coverage is closed in both directions: a symbol called without a

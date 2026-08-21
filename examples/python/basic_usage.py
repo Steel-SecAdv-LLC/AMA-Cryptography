@@ -44,7 +44,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 
-def example_1_simple_signing():
+def example_1_simple_signing() -> None:
     """
     Example 1: Simple Message Signing
 
@@ -90,7 +90,7 @@ def example_1_simple_signing():
         print("Build native C library for quantum resistance.")
 
 
-def example_2_key_management():
+def example_2_key_management() -> None:
     """
     Example 2: Key Management
 
@@ -153,7 +153,7 @@ def example_2_key_management():
         print(f"Key retrieved: {retrieved == test_key}")
 
 
-def example_3_data_protection():
+def example_3_data_protection() -> None:
     """
     Example 3: Complete Data Protection
 
@@ -232,7 +232,7 @@ def example_3_data_protection():
         raise RuntimeError(f"anchored verification failed: {results}")
 
 
-def example_4_humanitarian_use_case():
+def example_4_humanitarian_use_case() -> None:
     """
     Example 4: Humanitarian Use Case
 
@@ -310,7 +310,7 @@ def example_4_humanitarian_use_case():
         )
 
 
-def main():
+def main() -> int:
     """Run all examples."""
     print("=" * 60)
     print("AMA CRYPTOGRAPHY - BASIC USAGE EXAMPLES")

@@ -45,11 +45,33 @@ PACKAGE_DIR = Path(__file__).resolve().parent.parent / "ama_cryptography"
 #: Call shapes that reach OS entropy without the continuous health test.
 #: ``secrets.SystemRandom`` / ``random.SystemRandom`` are included so a
 #: draw cannot be laundered through an instance the sweep never sees.
+#:
+#: The list is the whole of the sweep's reach, so an omission is not a smaller
+#: version of this check — it is no check at all for that shape.  Five names
+#: were missing, and two shipped call sites drew through one of them:
+#: ``rfc3161_timestamp.py`` and ``legacy_compat.py`` minted the RFC 3161 replay
+#: nonce with ``secrets.randbits(64)`` — the value the code itself calls "the
+#: client's only way to tell a fresh response from a replayed one" — outside
+#: the health test, outside the allowlist, and structurally invisible to the
+#: gate that promises to enumerate "every bare draw".  Both now draw through
+#: ``secure_token_bytes``.
+#:
+#: ``secrets.randbits`` IS ``SystemRandom.getrandbits``; ``token_hex`` and
+#: ``token_urlsafe`` are ``token_bytes`` with an encoding on top; ``choice``
+#: and ``getrandbits`` are the same generator through a different accessor.
+#: None of them is a weaker draw — they are the same draw, spelled differently,
+#: which is precisely why a name-based sweep has to name them all.
 BARE_DRAW_CALLS = frozenset(
     {
         "secrets.token_bytes",
+        "secrets.token_hex",
+        "secrets.token_urlsafe",
+        "secrets.randbits",
+        "secrets.randbelow",
+        "secrets.choice",
         "os.urandom",
         "random.randbytes",
+        "random.getrandbits",
         "secrets.SystemRandom",
         "random.SystemRandom",
     }

@@ -84,4 +84,5 @@ rich==15.0.0
 sortedcontainers==2.4.0
 stevedore==5.8.0
 types-PyYAML==6.0.12.20260724
+types-setuptools==84.0.0.20260812
 typing_extensions==4.16.0

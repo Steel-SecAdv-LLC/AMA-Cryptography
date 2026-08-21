@@ -313,6 +313,18 @@ endif()
 # ============================================================================
 
 set(AMA_AVX2_SOURCES "")
+# AES-NI + PCLMULQDQ kernels.  A SEPARATE list from AMA_AVX2_SOURCES on
+# purpose: src/c/avx2/ama_aes_gcm_avx2.c emits AESENC / AESENCLAST /
+# AESKEYGENASSIST / PCLMULQDQ and NOTHING WIDER — no _mm256_* intrinsic
+# appears in it — so requiring AVX2 to compile it was a coupling the ISA does
+# not have.  It cost hardware AES-GCM on every x86 CPU with AES-NI but without
+# AVX2 (Westmere through Ivy Bridge, and any VM masking the AVX2 bit), and on
+# every build configured with -DAMA_ENABLE_AVX2=OFF or -DAMA_ENABLE_SIMD=OFF —
+# silently, since the dispatcher simply installs the constant-time bitsliced
+# software path instead.  The file keeps its src/c/avx2/ location so its
+# history, its warning-allowlist entries and its benchmark-baseline
+# acknowledgements stay attached to one path; only the gating moves.
+set(AMA_X86_AESNI_SOURCES "")
 set(AMA_AVX512_SOURCES "")
 set(AMA_NEON_SOURCES "")
 set(AMA_SVE2_SOURCES "")
@@ -326,7 +338,6 @@ if(AMA_ENABLE_SIMD AND AMA_ENABLE_AVX2)
             src/c/avx2/ama_kyber_avx2.c
             src/c/avx2/ama_dilithium_avx2.c
             src/c/avx2/ama_sphincs_avx2.c
-            src/c/avx2/ama_aes_gcm_avx2.c
             src/c/avx2/ama_aes_gcm_vaes_avx2.c
             src/c/avx2/ama_chacha20poly1305_avx2.c
             src/c/avx2/ama_argon2_avx2.c
@@ -524,11 +535,19 @@ if(AMA_ENABLE_SIMD AND AMA_ENABLE_SVE2)
     endif()
 endif()
 
-# AES-NI + PCLMULQDQ flags for x86 — applied per-file (not globally)
-# to prevent illegal instruction crashes on CPUs without AES-NI.
-# Runtime dispatch via ama_cpuid.c selects the correct path.
-# NOTE: Independent of AMA_ENABLE_SIMD — AES-NI is a distinct ISA extension
-# from AVX2/SSE. Disabling SIMD should not disable hardware AES acceleration.
+# AES-NI + PCLMULQDQ for x86 — applied per-file (not globally) to prevent
+# illegal-instruction crashes on CPUs without AES-NI.  Runtime dispatch via
+# ama_cpuid.c selects the correct path.
+#
+# Independent of AMA_ENABLE_SIMD, and now ACTUALLY so.  This block carried that
+# claim — "Disabling SIMD should not disable hardware AES acceleration" — while
+# the only x86 AES-NI kernel in the tree lived in AMA_AVX2_SOURCES, compiled
+# only inside `if(AMA_ENABLE_SIMD AND AMA_ENABLE_AVX2)`, and while the one
+# flag this block actually set went to src/c/ama_aes_gcm.c, which contains zero
+# SIMD intrinsics (grep: 0 occurrences of _mm_/_mm256_/__m128i) and from which
+# no compiler synthesises AESENC.  So the flag emitted nothing, the STATUS line
+# advertised an acceleration that was not being enabled, and the documented
+# independence was inverted: turning SIMD off turned hardware AES off.
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64|x86")
     # ama_sha256_ni.c is unconditionally compiled into the library on x86
     # (its body is #if-guarded to x86), so the SHA-NI compression kernel is
@@ -537,12 +556,18 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64|x86")
     # that do NOT link the kernel (e.g. the standalone dudect harness) leave
     # this undefined and fall back to the scalar SHA-256 core.
     add_compile_definitions(AMA_HAVE_X86_SHANI_IMPL)
+    # The AES-NI AES-GCM kernel, gated on the architecture alone.
+    set(AMA_X86_AESNI_SOURCES src/c/avx2/ama_aes_gcm_avx2.c)
+    add_compile_definitions(AMA_HAVE_X86_AESNI_IMPL)
     if(NOT MSVC)
-        set_source_files_properties(src/c/ama_aes_gcm.c PROPERTIES
-            COMPILE_FLAGS "-maes -mpclmul")
+        set_source_files_properties(${AMA_X86_AESNI_SOURCES} PROPERTIES
+            COMPILE_FLAGS "-maes -mpclmul -mssse3 -msse4.1")
         # Note: ama_aes_bitsliced.c intentionally does NOT get -maes/-mpclmul
-        # — it is the constant-time software fallback for CPUs without AES-NI.
-        message(STATUS "AES-NI/PCLMULQDQ: per-file flags for ama_aes_gcm.c only")
+        # — it is the constant-time software fallback for CPUs without AES-NI,
+        # and neither does src/c/ama_aes_gcm.c, which has no intrinsics to
+        # enable.
+        message(STATUS "AES-NI/PCLMULQDQ: per-file flags for ama_aes_gcm_avx2.c "
+                       "(architecture-gated, independent of AMA_ENABLE_SIMD)")
         # SHA-NI (Intel SHA Extensions) for the x86 SHA-256 compression kernel.
         # Per-file only — the whole-library scalar SHA-256 stays baseline so the
         # binary runs on CPUs without SHA-NI; ama_cpuid.c selects at runtime.
@@ -612,6 +637,7 @@ set(AMA_SOURCES
     src/c/ama_secure_memory.c
     ${AMA_DISPATCH_SOURCES}
     ${AMA_AVX2_SOURCES}
+    ${AMA_X86_AESNI_SOURCES}
     ${AMA_AVX512_SOURCES}
     ${AMA_X25519_MULX_SOURCES}
     ${AMA_KECCAK_BMI_SOURCES}

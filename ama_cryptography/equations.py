@@ -479,18 +479,55 @@ def calculate_sigma_quadratic(state: object, E: object) -> float:
     return float((x @ Ex) / x_norm_sq)
 
 
+def _gershgorin_lower_bound(matrix: Mat) -> float:
+    """A guaranteed lower bound on ``matrix``'s smallest eigenvalue.
+
+    Gershgorin: every eigenvalue lies in some disc centred on a diagonal entry
+    with radius the absolute row sum of the off-diagonal entries, so
+    ``min_i (a_ii - sum_{j != i} |a_ij|)`` is below all of them.  Cheap, exact
+    as a bound, and needs no assumption about definiteness — which is the point
+    here, since the assumption is what was wrong.
+    """
+    best = math.inf
+    for i in range(matrix.rows):
+        row = matrix[i]
+        radius = sum(abs(row[j]) for j in range(matrix.cols) if j != i)
+        best = min(best, float(row[i]) - radius)
+    return 0.0 if best is math.inf else best
+
+
 def _dominant_eigenvector(
     matrix: Mat,
     *,
     iterations: int = 512,
     tol: float = 1e-13,
 ) -> Optional[Vec]:
-    """Unit eigenvector of ``matrix``'s largest-magnitude eigenvalue, or None.
+    """Unit eigenvector of ``matrix``'s largest ALGEBRAIC eigenvalue, or None.
 
-    Power iteration.  ``E`` is a symmetric positive-definite constraint matrix
-    (see :func:`initialize_ethical_matrix`), so the dominant eigenvalue is real,
-    positive and equal to ``max_x σ_quadratic(x)`` — which is what makes this
-    the only direction that can raise σ toward a threshold.
+    Power iteration converges to the largest-*magnitude* eigenvalue, and this
+    function's contract used to say so while its one caller used the result as
+    ``argmax_x σ_quadratic(x)``.  Those coincide only for a positive
+    semi-definite matrix.  ``E`` is *documented* as positive-definite (see
+    :func:`initialize_ethical_matrix`), but nothing on the public boundary
+    checks it — ``calculate_sigma_quadratic`` and
+    :func:`enforce_sigma_quadratic_threshold` both accept an arbitrary
+    caller-supplied array — and the loop below already had explicit handling
+    for a negative dominant eigenvalue, so the indefinite case was reachable
+    rather than excluded.
+
+    Measured on ``E = diag(-5, 1)``: this returned ``[1, 0]``, where
+    ``σ = -5``, while ``max_x σ(x) = +1`` at ``[0, 1]``.
+    :func:`enforce_sigma_quadratic_threshold` then reported threshold 0.5
+    unreachable and returned the state uncorrected — for a threshold a real
+    state meets.
+
+    The fix is a Gershgorin shift: run the iteration on ``E + cI`` with
+    ``c = max(0, -λ_min_bound)``.  Shifting moves every eigenvalue by the same
+    ``c`` and changes no eigenvector, and the shifted matrix has no negative
+    eigenvalue, so largest-magnitude and largest-algebraic coincide and the
+    direction that comes back is ``argmax_x σ(x)`` for the ORIGINAL matrix.
+    For a matrix that was already PSD the bound is >= 0, ``c`` is 0, and the
+    iteration is bit-identical to what it was.
 
     Returns None when the iteration cannot produce a direction (a zero matrix,
     or a start vector that lands exactly in the null space and stays there);
@@ -499,6 +536,13 @@ def _dominant_eigenvector(
     n = matrix.rows
     if n == 0 or matrix.cols != n:
         return None
+
+    shift = -_gershgorin_lower_bound(matrix)
+    if shift > 0.0:
+        shifted = matrix.copy()
+        for i in range(n):
+            shifted[i, i] = float(shifted[i, i]) + shift
+        matrix = shifted
 
     # Start off-axis so a vector orthogonal to the dominant eigenvector is not
     # a fixed point of the iteration for a symmetric matrix with structured

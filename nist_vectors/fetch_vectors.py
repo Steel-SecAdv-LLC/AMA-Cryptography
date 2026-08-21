@@ -13,7 +13,6 @@ Vector sourcing rules:
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import sys
@@ -120,6 +119,25 @@ def create_sha256_vectors() -> None:
         print("  [SKIP] SHA-256-FIPS180-4.json already exists")
         return
 
+    # Every digest below is TRANSCRIBED from the publication named in
+    # ``source``, not computed here.
+    #
+    # They used to be ``hashlib.sha256(...).hexdigest()`` calls evaluated at
+    # generation time.  On any libcrypto-linked CPython — every manylinux wheel
+    # and every mainstream distribution Python, as
+    # ``tools/check_stdlib_hash_boundary.py``'s own docstring states —
+    # ``hashlib.sha256`` IS OpenSSL, so regenerating this file replaced the
+    # NIST vectors with OpenSSL's output wearing a NIST label, and
+    # ``nist_vectors/run_vectors.py`` then validated AMA's SHA-256 against
+    # them.  That is a differential test against another implementation
+    # presented as conformance to a specification, and it is the exact pattern
+    # ``tools/check_corpus_originality.py`` exists to forbid: "AMA is checked
+    # against specifications and its own reference encoder, not against another
+    # implementation."  It is also the vendor boundary INVARIANT-1 draws —
+    # OpenSSL may be a benchmark comparator and never a source of truth.
+    #
+    # The committed values were already correct; what was wrong was where the
+    # next regeneration would have got them.
     vectors = {
         "source": "FIPS 180-4 Section B.1",
         "url": "https://csrc.nist.gov/pubs/fips/180-4/upd1/final",
@@ -132,8 +150,10 @@ def create_sha256_vectors() -> None:
                     {
                         "tcId": 1,
                         "msg": "616263",
-                        "md": hashlib.sha256(b"abc").hexdigest(),
-                        "note": 'Input: "abc"',
+                        # Transcribed from FIPS 180-4 Appendix B.1, not
+                        # computed.  See the note above the dict.
+                        "md": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+                        "note": 'Input: "abc" (FIPS 180-4 Appendix B.1)',
                     },
                     {
                         "tcId": 2,
@@ -142,16 +162,18 @@ def create_sha256_vectors() -> None:
                             "666768696768696a68696a6b696a6b6c6a6b6c6d"
                             "6b6c6d6e6c6d6e6f6d6e6f706e6f7071"
                         ),
-                        "md": hashlib.sha256(
-                            b"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"
-                        ).hexdigest(),
-                        "note": "Input: 448-bit message",
+                        # FIPS 180-4 Appendix B.2.
+                        "md": "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1",
+                        "note": "Input: 448-bit message (FIPS 180-4 Appendix B.2)",
                     },
                     {
                         "tcId": 3,
                         "msg": "",
-                        "md": hashlib.sha256(b"").hexdigest(),
-                        "note": "Input: empty string",
+                        # SHA-256 of the empty string.  Not in Appendix B
+                        # (which starts at "abc"), so it is cited to its own
+                        # source: NIST CAVP SHA-256 ShortMsg, Len = 0.
+                        "md": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                        "note": "Input: empty string (NIST CAVP SHAVS ShortMsg, Len=0)",
                     },
                 ],
             }

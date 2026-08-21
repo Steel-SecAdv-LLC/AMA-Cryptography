@@ -93,21 +93,70 @@ def test_benchmark_operation_best_of_uses_fastest_round(
     assert br.benchmark_operation_best_of(lambda: None, iterations=20, warmup=2, rounds=3) == 42.0
 
 
-def test_full_package_create_uses_best_of_rounds(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The GC-heavy package-create benchmark samples multiple rounds."""
+def test_the_two_composites_are_sampled_identically(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``full_package_create`` and ``full_package_verify`` are compared to each
+    other and to their own floors, so they must be measured the same way.
 
-    calls: list[tuple[int, int, int]] = []
+    ``full_package_create`` used to call
+    ``benchmark_operation_best_of(..., rounds=5)`` while ``_SAMPLING_REPEATS``
+    ALSO registered it for ``_COMPOSITE_SAMPLED_ROUNDS`` (5).  The two compound:
+    ``_measure_benchmark`` calls the function 5 times and keeps the max, and
+    each call ran ``benchmark_operation`` 5 more times — 25 whole measurements
+    and 75 windows, against 5 and 15 for its sibling with the same registry
+    entry.  The published provenance said "x5".
 
-    def fake_best_of(
-        operation: Callable[[], object], iterations: int, warmup: int, rounds: int
+    Measured: 17.7 s -> 5.5 s for the row, and 1,446.8 -> 1,371.7 ops/sec
+    (-5.2%) against a floor of 1,983 with a 45% tolerance (1,091 minimum).
+    """
+    calls: list[tuple[int, int]] = []
+
+    def fake_operation(
+        operation: Callable[[], object], iterations: int = 100, warmup: int = 5
     ) -> float:
-        calls.append((iterations, warmup, rounds))
+        calls.append((iterations, warmup))
         return 123.0
 
-    monkeypatch.setattr("benchmarks.benchmark_runner.benchmark_operation_best_of", fake_best_of)
+    monkeypatch.setattr(br, "benchmark_operation", fake_operation)
 
     assert br.run_full_package_create_benchmark() == 123.0
-    assert calls == [(20, 2, 5)]
+    assert br.run_full_package_verify_benchmark() == 123.0
+    assert calls == [(20, 2), (20, 2)], calls
+
+
+def test_no_registered_benchmark_double_samples(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A row in ``_SAMPLING_REPEATS`` must not also take its own best-of.
+
+    Read statically, because the compounding is invisible at run time: each
+    mechanism is correct on its own and the product is what is wrong.
+    """
+    import ast
+    import inspect
+
+    source = inspect.getsource(br)
+    tree = ast.parse(source)
+    offenders: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        name = node.name
+        if not (name.startswith("run_") and name.endswith("_benchmark")):
+            continue
+        registry_key = name[len("run_") : -len("_benchmark")]
+        if registry_key not in br._SAMPLING_REPEATS:
+            continue
+        for inner in ast.walk(node):
+            if (
+                isinstance(inner, ast.Call)
+                and isinstance(inner.func, ast.Name)
+                and inner.func.id == "benchmark_operation_best_of"
+            ):
+                offenders.append(f"{name} (registry key {registry_key!r})")
+    assert offenders == [], (
+        "these benchmarks are sampled by _SAMPLING_REPEATS AND take their own "
+        f"best-of, so the two multiply: {offenders}"
+    )
 
 
 class TestSampleWindow:
@@ -338,17 +387,60 @@ class TestAnUnmeasurableBatchCannotBecomeAnInfiniteRate:
         assert rate == pytest.approx(1000.0, rel=0.05)
         assert rate != float("inf")
 
-    def test_the_json_record_refuses_a_non_finite_value(self, tmp_path: Path) -> None:
+    def test_the_json_record_refuses_a_non_finite_value(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """The writer is the second line, and it fails closed.
 
         Even if some future path produced a non-finite rate, the record must
-        not be written: `Infinity` in a results file is unparseable by a
-        strict reader and passes every floor it is compared against.
+        not be written: ``Infinity`` in a results file is unparseable by a
+        strict reader (RFC 8259) and clears every floor it is compared
+        against.
+
+        This drives ``benchmark_runner.main()``.  It used to be::
+
+            with pytest.raises(ValueError):
+                with open(out, "w") as handle:
+                    json.dump({"ops_per_sec": float("inf")}, handle, allow_nan=False)
+
+        which touches no repository code at all: it asserts that CPython's
+        ``json.dump`` raises on ``inf`` when the caller passes
+        ``allow_nan=False``.  No change to this repository could make it fail,
+        and it was counted as one of the tests pinning the control.
         """
         out = tmp_path / "results.json"
+        # Built from the runner's OWN report generator so the fixture cannot
+        # drift from the schema main() consumes, then poisoned in one field.
+        poisoned = br.generate_report([])
+        poisoned["benchmarks"] = {"widget": {"ops_per_sec": float("inf")}}
+        monkeypatch.setattr(br, "run_all_benchmarks", lambda *a, **k: {})
+        monkeypatch.setattr(br, "generate_report", lambda *a, **k: poisoned)
+        monkeypatch.setattr(sys, "argv", ["benchmark_runner.py", "--output", str(out)])
+
         with pytest.raises(ValueError):
-            with open(out, "w") as handle:
-                json.dump({"ops_per_sec": float("inf")}, handle, allow_nan=False)
+            br.main()
+
+        assert not out.exists(), (
+            "a truncated record was left on disk. json.dump() encodes into the "
+            "open file and raises part way through; a downstream step that "
+            "checks whether the artefact exists would call that a run. "
+            "Serialise with json.dumps() before opening the file."
+        )
+
+    def test_the_same_path_writes_a_finite_record(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Non-vacuity for the test above: ``main()`` must otherwise write."""
+        out = tmp_path / "results.json"
+        clean = br.generate_report([])
+        clean["benchmarks"] = {"widget": {"ops_per_sec": 1234.5}}
+        monkeypatch.setattr(br, "run_all_benchmarks", lambda *a, **k: {})
+        monkeypatch.setattr(br, "generate_report", lambda *a, **k: clean)
+        monkeypatch.setattr(sys, "argv", ["benchmark_runner.py", "--output", str(out)])
+
+        br.main()
+
+        assert json.loads(out.read_text(encoding="utf-8")) == clean
 
     def test_the_runner_writes_with_allow_nan_disabled(self) -> None:
         """Stated at the call site, because the default is the unsafe one."""
@@ -844,3 +936,73 @@ class TestPqcRowsAreHardGated:
                 if row.get("optional") is True
             ]
             assert offenders == [], f"{name}: rows opted back out of the gate: {offenders}"
+
+
+class TestTheReportDoesNotInvertItsOwnColumn:
+    """A row 43% slower than its floor rendered as ``+43.0%`` under "Delta".
+
+    ``regression_percent`` is ``-pct_change`` and ``pct_change`` is positive
+    when FASTER, so the number is positive when the primitive is SLOWER.  The
+    machine-readable sibling names the field honestly
+    (``regression_percent`` in ``benchmark-results.json``); the human-facing
+    table called the same number "Delta", which a reader takes to mean change
+    in throughput, and nothing in the header, legend or provenance block said
+    otherwise.  Only the artefact a person reads was ambiguous.
+    """
+
+    @staticmethod
+    def _render(rows: list[tuple[float, float, float]]) -> str:
+        results = [
+            br.BenchmarkResult(
+                name=f"row{i}",
+                description=f"row {i}",
+                ops_per_second=ops,
+                baseline_value=floor,
+                tolerance_percent=45.0,
+                regression_percent=regression,
+                passed=True,
+            )
+            for i, (ops, floor, regression) in enumerate(rows)
+        ]
+        return br.generate_markdown_report(results, br.generate_report(results))
+
+    def test_the_column_is_named_for_the_field_it_carries(self) -> None:
+        md = self._render([(100.0, 200.0, 50.0)])
+        assert "| Regression |" in md
+        assert "| Delta |" not in md
+
+    def test_the_legend_states_the_direction(self) -> None:
+        md = self._render([(100.0, 200.0, 50.0)])
+        assert "positive means SLOWER" in md
+
+    def test_a_slower_row_renders_positive_and_a_faster_row_negative(self) -> None:
+        """The property itself, in both directions.
+
+        Slower than the floor is ``+``; faster is ``-``.  Whichever convention
+        is chosen, the legend and the sign must agree, and this is what would
+        catch a future "fix" that negated one without the other.
+        """
+        md = self._render([(100.0, 200.0, 50.0), (300.0, 200.0, -50.0)])
+        slower = next(line for line in md.splitlines() if "| row 0 |" in line)
+        faster = next(line for line in md.splitlines() if "| row 1 |" in line)
+        assert "+50.0%" in slower, slower
+        assert "-50.0%" in faster, faster
+
+    def test_the_published_report_matches_the_generator(self) -> None:
+        """The committed artefact must be what the current generator emits.
+
+        Rendered from the committed ``benchmark-results.json``, so this
+        compares presentation only — the numbers are that run's, not this
+        host's.
+        """
+        data = json.loads(
+            (REPO_ROOT / "benchmarks" / "benchmark-results.json").read_text(encoding="utf-8")
+        )
+        results = [br.BenchmarkResult(**row) for row in data["results"]]
+        expected = br.generate_markdown_report(results, data)
+        published = (REPO_ROOT / "benchmark-report.md").read_text(encoding="utf-8")
+        assert published == expected, (
+            "benchmark-report.md is not what benchmark_runner would produce from "
+            "benchmarks/benchmark-results.json; regenerate it rather than editing "
+            "it by hand"
+        )

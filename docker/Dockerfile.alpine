@@ -94,8 +94,11 @@ LABEL maintainer="Steel Security Advisors LLC <steel.sa.llc@gmail.com>"
 LABEL description="AMA Cryptography - Quantum-Resistant Cryptographic Protection System (Alpine)"
 LABEL version="5.0.0"
 
+# INVARIANT-1: libssl3 is NOT installed.  This file's own builder stage already
+# says "openssl-dev is deliberately absent (INVARIANT-1): AMA's C sources link
+# no OpenSSL" — and then the runtime stage installed the runtime half of it.
+# The shipped .so needs only musl libc.
 RUN apk add --no-cache \
-    libssl3 \
     python3 \
     py3-pip
 

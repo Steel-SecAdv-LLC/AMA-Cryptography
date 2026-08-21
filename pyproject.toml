@@ -155,6 +155,11 @@ dev = [
     "black>=26.5.1",
     "ruff>=0.16.0",
     "mypy>=2.3.0",
+    # setup.py is inside `mypy --strict` (see ci.yml::code-quality), and
+    # setuptools ships no inline types — without these stubs its
+    # `build_ext` base class is Any and every override on CMakeBuild goes
+    # unchecked while the run still reports success.
+    "types-setuptools>=84.0.0.20260812",
     "bandit>=1.7.0",
     # `safety` was removed in v3.2.0: it was a dev-deps inventory entry
     # that NO CI workflow ever invoked.  Vulnerability scanning is
@@ -389,13 +394,53 @@ module = [
     "Crypto.*",
     "PyKCS11.*",
     "cryptography.*",
+    # Build-time optional imports in setup.py.  Listed here rather than
+    # suppressed at the import site: an inline `# type: ignore` is an ERROR
+    # under warn_unused_ignores on a machine where the package IS installed,
+    # so the verdict would depend on the environment rather than on the code.
+    "cmake",
+    "packaging.*",
+    # Frameworks the integration EXAMPLES import.  They are not dependencies
+    # of this library and are absent from every CI image; the examples are
+    # inside `mypy --strict` so their calls into ama_cryptography are checked
+    # (that is how four `create_crypto_package(dna_codes=...)` calls, a
+    # parameter the function has never had, were found), not so the frameworks
+    # themselves are.
+    "flask",
+    "flask.*",
+    "fastapi",
+    "fastapi.*",
+    "pydantic",
+    "pydantic.*",
+    "uvicorn",
+    "uvicorn.*",
+    # atheris — the libFuzzer driver, importable only under a fuzzing build.
+    "atheris",
+    "atheris.*",
 ]
 ignore_missing_imports = true
 
 
 # Cython extension modules — no .py source or PEP 561 stubs.
 [[tool.mypy.overrides]]
-module = "ama_cryptography.hmac_binding"
+module = [
+    "ama_cryptography.hmac_binding",
+    "ama_cryptography.math_engine",
+]
+ignore_missing_imports = true
+
+# Chart/report generators under benchmarks/ and tools/ import matplotlib and
+# psutil.  Neither ships type information and neither is a runtime dependency
+# of the library — they are dev-only, imported behind availability guards, and
+# absent from the CI type-check image.  Listed here for the same reason as the
+# block above: a missing third-party stub is not a typing defect in this tree.
+[[tool.mypy.overrides]]
+module = [
+    "matplotlib.*",
+    "matplotlib",
+    "psutil",
+    "psutil.*",
+]
 ignore_missing_imports = true
 
 # ama_cryptography_monitor — compatibility shim for production monitoring.
@@ -412,6 +457,30 @@ module = [
     "ama_cryptography.adaptive_posture",
 ]
 disallow_any_generics = false
+
+# examples/ — the two web-framework integrations. FastAPI/Flask/pydantic have
+# no stubs in any CI image (they are not dependencies of this library), so
+# their base classes and route decorators are Any. Two strict flags fire on
+# that alone and cannot be answered from this tree: subclassing an Any base,
+# and a decorator that erases the type of what it wraps. Relaxed HERE rather
+# than with inline ignores, and only these two flags — everything else stays
+# on, which is what caught four `create_crypto_package(dna_codes=...)` calls
+# naming a parameter the function has never had.
+#
+# Both spellings of each module: mypy derives the name from how it was
+# invoked, so `mypy examples/` sees `fastapi_integration` while the CI run
+# (`--explicit-package-bases`, needed so `schemas/` resolves the same way
+# `tests/` imports it) sees `examples.python.fastapi_integration`. An override
+# that matches only one spelling silently stops applying under the other.
+[[tool.mypy.overrides]]
+module = [
+    "fastapi_integration",
+    "flask_integration",
+    "examples.python.fastapi_integration",
+    "examples.python.flask_integration",
+]
+disallow_subclassing_any = false
+disallow_untyped_decorators = false
 
 # tests/ — pytest decorators (@pytest.fixture, @pytest.mark.*) are untyped;
 # relax decorator and call strictness for test modules.
