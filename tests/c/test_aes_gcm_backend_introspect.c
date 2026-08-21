@@ -79,18 +79,19 @@ int main(void) {
 
     /* The label must TRACK THE INSTALLED POINTER, not the host's CPU tier.
      *
-     * `ama_print_dispatch_info()` used to print `dispatch_info.aes_gcm` for
-     * this line, and that field is set from `ama_has_avx2()` alone — it
-     * describes the HOST, never what was compiled in or wired up.  Measured
-     * against the pre-fix tree at -DAMA_ENABLE_AVX2=OFF: the report said
-     * "AVX2" while AES-256-GCM ran the portable bitsliced path at 2.9 MB/s,
-     * against 2204.5 MB/s with the hardware kernel installed — 760x, under a
-     * label that did not move.
+     * `ama_print_dispatch_info()` now carries this accessor's answer on its
+     * own row, because the capability tier it reports beside it can be three
+     * orders of magnitude away from the truth about throughput: measured on
+     * the tree before the AES-NI gating fix, built at -DAMA_ENABLE_AVX2=OFF,
+     * the tier read "AVX2" (correctly, as a CPU tier) while AES-256-GCM ran
+     * the portable bitsliced path at 2.9 MB/s, against 2204.5 MB/s with the
+     * hardware kernel installed.
      *
-     * Forcing the scalar slot is the only way to prove the label is not a
+     * Forcing the scalar slot is the only way to prove this label is not a
      * constant on this host: if it still reads the same after the pointer is
-     * cleared, it is reporting the CPU again.  Restored immediately, and the
-     * restore is checked, so no later assertion runs against a forced slot. */
+     * cleared, it is reporting the CPU rather than the wiring.  Restored
+     * immediately, and the restore is checked, so no later assertion runs
+     * against a forced slot. */
     {
         const char *forced;
         const char *restored;

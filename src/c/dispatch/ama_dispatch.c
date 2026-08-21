@@ -2504,24 +2504,24 @@ void ama_print_dispatch_info(void) {
     fprintf(stderr, "║  ML-KEM-1024:        %-24s║\n", ama_impl_level_name(info->kyber));
     fprintf(stderr, "║  ML-DSA-65:          %-24s║\n", ama_impl_level_name(info->dilithium));
     fprintf(stderr, "║  SPHINCS+-256f:      %-24s║\n", ama_impl_level_name(info->sphincs));
-    /* The INSTALLED backend, not `info->aes_gcm`.
+    fprintf(stderr, "║  AES-256-GCM:        %-24s║\n", ama_impl_level_name(info->aes_gcm));
+    /* ...and, for this row only, the kernel that is actually WIRED.
      *
-     * That field is a CPU-capability tier: `dispatch_info.aes_gcm = effective`,
-     * where `effective` comes from ama_has_avx2() and nothing else.  It says
-     * what the HOST can do, never what was compiled in or wired up — so on any
-     * AVX2-capable machine this line printed "AVX2" whatever the AES-GCM slot
-     * actually held.  Measured against the pre-fix tree at -DAMA_ENABLE_AVX2=OFF:
-     * it printed "AVX2" while AES-256-GCM ran the portable bitsliced path at
-     * 2.9 MB/s, against 2204.5 MB/s once the hardware kernel was installed —
-     * a 760x difference under a label that did not move.  A diagnostic an
-     * operator uses to confirm hardware acceleration must not be able to say
-     * "AVX2" about the software path.
+     * The banner above is accurate — every row here is a detected capability
+     * tier — but for AES-GCM the gap between the tier and the wiring is the
+     * one an operator most often needs to close, and it is the widest.
+     * Measured on the tree as it stood before the AES-NI gating fix, built at
+     * -DAMA_ENABLE_AVX2=OFF: this row read "AVX2" (correctly, as a CPU tier)
+     * while AES-256-GCM ran the portable bitsliced path at 2.9 MB/s, against
+     * 2204.5 MB/s once the hardware kernel was installed — 760x, invisible
+     * from the report because the tier had not changed.
      *
-     * The capability tier is still printed, after the backend, because the two
-     * differing IS the interesting case (a host that could do more than this
-     * build wired up). */
-    fprintf(stderr, "║  AES-256-GCM:        %-16s%-8s║\n",
-            aes_gcm_installed_backend(), ama_impl_level_name(info->aes_gcm));
+     * `ama_aes_gcm_active_backend()` has always been able to answer this by
+     * comparing the installed function pointer; the report simply never asked
+     * it.  Its own line, rather than sharing this one, so the row above keeps
+     * meaning exactly what its neighbours mean and the frame stays aligned for
+     * the longest label ("bitsliced-software", 18 characters). */
+    fprintf(stderr, "║    wired backend:    %-24s║\n", aes_gcm_installed_backend());
     fprintf(stderr, "║  Ed25519:            %-24s║\n", ama_impl_level_name(info->ed25519));
     fprintf(stderr, "║  ChaCha20-Poly1305:  %-24s║\n", ama_impl_level_name(info->chacha20poly1305));
     fprintf(stderr, "║  Argon2:             %-24s║\n", ama_impl_level_name(info->argon2));

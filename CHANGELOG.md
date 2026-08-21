@@ -668,10 +668,10 @@ that cried wolf on those would stop being read.  Mutation-verified in both
 directions and pinned by
 `tests/test_invariant_upgrades.py::TestOptionalImportSuppressions`.
 
-#### The dispatch report named the host's CPU, not the backend that was running
+#### The 760x was invisible from the dispatch report, so the report now shows the wiring
 
 Found by taking the measurement above rather than by reading code, and the
-reason it needed measuring: **the reported label did not move.**  Both trees
+reason it needed measuring: **the reported line did not move.**  Both trees
 printed
 
 ```
@@ -680,45 +680,39 @@ printed
 
 while one ran at 2.9 MB/s and the other at 2204.5 MB/s.
 
-`ama_print_dispatch_info()` printed `dispatch_info.aes_gcm`, and that field is
-assigned once, from `ama_has_avx2()`:
+To be exact about what was and was not wrong here: that line is not a false
+statement.  The box says so itself — "DETECTED capability tiers, not the wired
+kernels" — and the comment above it already enumerates the divergences and
+names the accessors that report the wiring.  `dispatch_info.aes_gcm` is
+assigned once, from `ama_has_avx2()`, and reporting it is exactly what the row
+claims to do.
 
-```c
-ama_impl_level_t effective = (best == AMA_IMPL_AVX512) ? AMA_IMPL_AVX2 : best;
-...
-dispatch_info.aes_gcm = effective;
-```
-
-It is a statement about the HOST's instruction set.  It is not consulted when
-the x86 AES-GCM kernel is installed, it does not know whether that kernel was
-compiled in, and nothing downstream makes it agree with the slot.  So on any
-AVX2-capable machine the line read "AVX2" whatever the AES-GCM function
-pointer actually held — including when it held the software path.  An operator
-reading that line to confirm hardware acceleration was reading a CPUID result
-dressed as a backend.
-
-The honest answer already existed three hundred lines below:
-`ama_aes_gcm_active_backend()` compares the installed function pointer against
-each kernel and returns `vaes-avx2`, `aes-ni-pclmul`, `arm-aes-pmull`,
-`bitsliced-software` or `table-insecure`.  The report simply did not use it.
-The pointer comparison is now a static helper both callers share — the public
-accessor keeps its `ama_dispatch_init()`, the reporter calls the helper
-directly since it is already past init — and the line prints the installed
-backend *and* the capability tier, because the two DISAGREEING is the
-interesting case:
+What was wrong is that the wiring was reachable and the report never showed
+it.  `ama_aes_gcm_active_backend()` has always compared the installed function
+pointer and returned `vaes-avx2`, `aes-ni-pclmul`, `arm-aes-pmull`,
+`bitsliced-software` or `table-insecure`.  Of the four documented divergences
+this is the one an operator most often needs to close and the widest it can
+get — three orders of magnitude, with the tier unchanged — so the report now
+carries it, on its own row so the row above keeps meaning exactly what its
+neighbours mean:
 
 ```
-║  AES-256-GCM:        aes-ni-pclmul   AVX2    ║
+║  AES-256-GCM:        AVX2                    ║
+║    wired backend:    aes-ni-pclmul           ║
 ```
 
-Non-vacuity is the whole difficulty here: a label that is a constant on this
-host looks identical to a correct one.  `tests/c/test_aes_gcm_backend_introspect.c`
-now forces the scalar slot through the existing `ama_test_force_aes_gcm_scalar()`
-hook and asserts the label stops naming a hardware kernel, then restores and
-asserts it comes back — so a reporter that went back to printing the CPU tier
-fails.  Mutation-verified: with the old `ama_impl_level_name(info->aes_gcm)`
-restored, the line prints `AVX2` on a build whose installed backend is
-`aes-ni-pclmul`.
+Its own row rather than sharing one also keeps the frame aligned for the
+longest label, `bitsliced-software` at 18 characters — a first attempt packed
+both into the 24-column field and would have pushed the border out on exactly
+the build where the answer matters most.
+
+Non-vacuity is the whole difficulty: a label that is constant on this host
+looks identical to a correct one.  `tests/c/test_aes_gcm_backend_introspect.c`
+now forces the scalar slot through the existing
+`ama_test_force_aes_gcm_scalar()` hook and asserts the label stops naming a
+hardware kernel, then restores and asserts it comes back.  Mutation-verified:
+with the accessor's pointer comparison replaced by the capability tier, the
+line reads `AVX2` on a build whose installed backend is `aes-ni-pclmul`.
 
 #### Two more, from pointing existing gates at build shapes CI does not use
 
