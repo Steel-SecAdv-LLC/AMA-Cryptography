@@ -352,8 +352,6 @@ class TestSuppressionHygiene:
     """INVARIANT-13: all suppressions must have justification + tracking ID."""
 
     _SUPPRESSION_RE = re.compile(r"#\s*(noqa|nosec|pylint:\s*disable|type:\s*ignore)")
-    _TRACKING_ID_RE = re.compile(r"\([A-Z]+-\d+\)")
-    _JUSTIFICATION_RE = re.compile(r"[—–]|--|#\s*\S")
 
     _FORBIDDEN_DIRS = (
         "src/c/",
@@ -363,30 +361,39 @@ class TestSuppressionHygiene:
     )
 
     def _scan_violations(self, directory: str) -> list[str]:
+        """Drive the gate's own scan over ``directory``, not a copy of it.
+
+        This used to re-implement the rule with three regexes over raw lines.
+        A shadow copy of a gate drifts, and this one had drifted in BOTH
+        directions at once:
+
+        * it matched the whole LINE, so a marker inside a string literal or a
+          full-line prose comment counted.  ``check_source`` tokenises and
+          keeps the comment's own text, and only when the comment is
+          *trailing* — a full-line comment suppresses nothing, which is why
+          ``effective_suppressions`` was written.  That difference is not
+          theoretical: this test failed on a comment in ``key_formats.py``
+          that QUOTES the suppression it had just removed, while
+          ``tools/check_suppression_hygiene.py`` — the thing CI runs — passed
+          on the same file.
+        * it never applied ``_STRICT_FORMS``, so a bare ``noqa`` carrying a
+          justification and a tracking ID passed HERE and fails the gate.  The
+          copy was weaker than the original on every real suppression and
+          noisier than it on prose, and a copy that disagrees with the gate in
+          either direction is not a test of the gate.
+
+        ``test_no_suppressions_in_forbidden_dirs`` below was repaired the same
+        way in an earlier pass; this was the last copy in this class.
+        """
         repo_root = Path(__file__).resolve().parent.parent
-        target = repo_root / directory
+        gate = self._load_gate()
         violations: list[str] = []
-        for py_file in sorted(target.rglob("*.py")):
-            rel = str(py_file.relative_to(repo_root))
+        for py_file in sorted((repo_root / directory).rglob("*.py")):
             try:
-                lines = py_file.read_text(encoding="utf-8").splitlines()
+                source = py_file.read_text(encoding="utf-8")
             except (OSError, UnicodeDecodeError):
                 continue
-            for lineno, line in enumerate(lines, 1):
-                m = self._SUPPRESSION_RE.search(line)
-                if m is None:
-                    continue
-                # Check forbidden
-                for fd in self._FORBIDDEN_DIRS:
-                    if rel.startswith(fd):
-                        violations.append(f"{rel}:{lineno}: forbidden directory")
-                        break
-                else:
-                    rest = line[m.end() :]
-                    if not self._JUSTIFICATION_RE.search(rest):
-                        violations.append(f"{rel}:{lineno}: missing justification")
-                    elif not self._TRACKING_ID_RE.search(rest):
-                        violations.append(f"{rel}:{lineno}: missing tracking ID")
+            violations.extend(gate.check_source(py_file.relative_to(repo_root).as_posix(), source))
         return violations
 
     def test_ama_cryptography_suppressions_justified(self) -> None:

@@ -1837,8 +1837,13 @@ def jwk_thumbprint(jwk: Union[dict[str, Any], str], *, hash_name: str = "sha256"
     # digest_size == 0 check.
     # `_pb` is the module-level import at the top of this file, not a second
     # one.  This used to be a function-local `from ama_cryptography.pqc_backends
-    # import ...` under `# noqa: PLC0415  # deferred: import cycle via key
-    # module graph (KFM-001)`.  Nothing was deferred: the same module is
+    # import ...` under a `noqa: PLC0415` reading "deferred: import cycle via
+    # key module graph (KFM-001)" — the leading hash is omitted deliberately,
+    # because prose that spells a real directive IS one to every line-oriented
+    # scanner that reads it, which is the false-positive class
+    # `effective_suppressions` exists to avoid and which `main()` in
+    # tools/check_suppression_hygiene.py already documents.  Nothing was
+    # deferred: the same module is
     # imported unconditionally at module scope at line 112 — seventeen hundred
     # lines above, and already used fourteen times elsewhere in this file before
     # the six below — so the cycle, if there were one, is entered long before

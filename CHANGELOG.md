@@ -282,6 +282,67 @@ half-empty.  The sibling class `py/repeated-import` was swept too and was
 already empty, and `py/ineffectual-statement` is now provably empty: an AST
 pass over all 293 tracked files finds no bare `...` expression statement.
 
+**AUD-12 — the test guarding INVARIANT-13 was a shadow copy of the gate, and
+disagreed with it.**  Removing the `key_formats` suppression above surfaced
+this: `tests/test_invariant_upgrades.py::TestSuppressionHygiene` reported
+`key_formats.py:1840: missing tracking ID` while
+`tools/check_suppression_hygiene.py` — the script CI actually runs — exited 0
+on the same file.  One of the two was wrong about the same line.
+
+The gate was right.  `_scan_violations` re-implemented the rule with three
+regexes over RAW LINES; `effective_suppressions` tokenises and keeps only a
+comment's own text, and only when the comment is *trailing*, because a
+full-line comment suppresses nothing — it is prose.  That distinction was
+written after eight comments in `tools/` explaining what a `nosec` is were
+reported as unjustified suppressions, and "a gate that fires on its own
+documentation is one people learn to route around".  The copy had no such
+rule, so it fired on a comment that quotes the suppression it had just
+removed.
+
+The copy was also *weaker* than the gate in the direction that matters, and
+that is the finding rather than the false positive: it never applied
+`_STRICT_FORMS`, so a bare marker carrying a justification and a tracking ID
+passed the test and fails the gate.  Measured, by planting one: the repaired
+test reports `suppression 'noqa' missing rule id … written bare it suppresses
+every rule on the line`; the copy reported nothing.  Three mutations pin all
+three behaviours — an unjustified suppression fails, a bare-but-justified one
+fails, and prose quoting a directive passes.  `_scan_violations` now drives
+`check_source`, the way `test_no_suppressions_in_forbidden_dirs` beside it was
+repaired in an earlier pass; that was the last copy in the class.
+
+The comment that triggered it was also wrong on its own terms and is fixed:
+prose must not spell a real directive, because to every line-oriented scanner
+that reads it, it IS one.  `main()` in the gate already records that
+convention — "the leading hash is omitted above deliberately" — and the
+comment now follows it.
+
+Worth stating plainly about method: the full suite caught this and the
+targeted runs did not, precisely because the gate's own CLI passed.  Running
+`tools/check_suppression_hygiene.py` and the directly-affected test modules
+after the change was not equivalent to running the suite, and the difference
+was a real defect.
+
+Two further classes this branch has seen were swept and recorded rather than
+assumed.  `py/multiple-definition` has one hit tree-wide — `_ = …` twice in a
+row in `tools/monitoring/ama_cryptography_monitor_demo.py`, the conventional
+discard name, which is what that idiom looks like and not a redefinition of
+anything.  `py/catch-base-exception` has five, all in the shipped package and
+all deliberate:
+
+* `crypto_api._atomic_write_json` and `key_management._atomic_write_bytes` —
+  `os.fdopen` failing must close the raw descriptor even when the failure is a
+  `KeyboardInterrupt`, or the descriptor leaks; both re-`raise` immediately;
+* `pqc_backends`' ctypes buffer-export context manager, whose `__enter__` must
+  release every export it has taken if any later one fails, or the caller's
+  objects stay permanently locked;
+* the two Cython call sites (`native_sha3_256`, `native_hmac_sha3_256`), which
+  re-raise `Exception` and `(KeyboardInterrupt, SystemExit, GeneratorExit)`
+  untouched and convert only what is left — a Cython-level panic — into a
+  `RuntimeError` naming it.
+
+Narrowing any of the five to `Exception` would leak a descriptor, strand a
+buffer export, or turn a panic into a silent one.  Examined, and left.
+
 **AUD-11 — a benchmark table that ten charts do not read.**  Of the ten
 module-level data tables in `benchmarks/generate_charts.py`, `CRYPTO_OPS` was
 the only one never loaded: not copied in `generate_charts()`, not merged with
