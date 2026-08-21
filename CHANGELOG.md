@@ -708,6 +708,52 @@ No floor moved: no `baseline_value`, no tolerance and no
 deferred in this item.
 
 
+**AUD-20 — the Windows probe's symbol check depended on a plugin the runner
+does not register, and misreported it.**  With the `_WIN32` guards fixed, the
+windows-latest lane got all the way through: the library compiled, the probe
+linked, it ran, and it reported a hardware AES-GCM backend.  The remaining
+failure was the symbol assertion underneath, and its message was wrong:
+
+    AssertionError: simd-on: the AES-NI kernel is not in the library at all
+    assert 'ama_aes256_gcm_encrypt_avx2' in {'.bss', '.data',
+      '.gnu.lto_.decls.236640de', ...}
+
+The kernel was in the library.  `_defined_symbols` runs `nm --defined-only`,
+and the build carries `-flto=auto`, which makes GCC emit *slim* objects whose
+symbol table lives in GIMPLE.  GNU `nm` recovers it only by auto-loading
+`liblto_plugin.so` from a `bfd-plugins` directory.  Debian registers one —
+`/usr/lib/bfd-plugins/liblto_plugin.so` — which is why this passed on every
+Linux runner and locally; the MinGW-w64 distribution on windows-latest does
+not, so `nm` listed section names instead of functions.  Reproduced exactly by
+re-running the local `nm` with `--plugin /nonexistent`: 1,223 `.gnu.lto_*`
+entries and no `ama_aes256_gcm_encrypt_avx2`, which is the CI output.
+
+Two changes, and the second is the one that matters more.  The probe builds now
+configure `-DAMA_ENABLE_LTO=OFF`, which removes the dependency on plugin
+registration entirely; what those assertions ask is which translation units a
+configuration compiles in, and CMake's source lists decide that identically
+either way (verified on a MinGW cross-build with the plugin suppressed: zero
+`.gnu.lto_*` entries, `ama_aes256_gcm_encrypt_avx2` present in all three
+configurations, and `ama_kyber_ntt_avx2` / `ama_dilithium_ntt_avx2` correctly
+absent from the AVX2-off one).  And `_defined_symbols` now refuses a symbol set
+that is really LTO bytecode, naming that fact.  A wrong diagnosis is worse than
+a failure — this one asserted the absence of a kernel that was present, and
+cost a full windows-latest round trip.  Side effect: the module now runs in 25
+seconds rather than minutes, because the LTO link was the slow part.
+
+**CodeQL #643 — a group-readable mode in a test that did not need one.**  The
+new `test_the_mode_is_settled_before_the_rename` chmod'd its fixture to 0o640,
+which is a permissive literal CodeQL is right to flag.  The mode was arbitrary:
+it only has to differ from *both* `mkstemp`'s 0o600 and the 0o644 a default
+umask produces, so the assertion can tell "preserved" from either default.
+0o400 does that with no group or world bits at all.  All three permission
+mutations still discriminate identically after the change, re-run to confirm
+rather than assumed.  A tree-wide AST sweep for `chmod` literals carrying
+group/world bits finds no other site.
+
+Nothing was deferred in this item.
+
+
 ### Verification pass, ninth (2026-08-21) — a resonance detector that could not say "no", a quadratic hot path, and twelve documents describing a tree that is not this one
 
 Thirty-seven findings, raised by reading each subsystem against the standard or

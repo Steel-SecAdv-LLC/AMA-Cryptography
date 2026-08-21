@@ -410,7 +410,11 @@ def test_the_mode_is_settled_before_the_rename(tmp_path: Any, monkeypatch: Any) 
         pkg, b"\x01" * 32, b"\x02" * 32, {"a.so": b"\x0a" * 32}, b"\x03" * 32, b"\x04" * 64
     )
     artefact = pkg / "_integrity_signature.py"
-    os.chmod(artefact, 0o640)
+    # 0o400, not a group-readable mode: this only has to differ from BOTH
+    # mkstemp's 0o600 and the 0o644 a default umask produces, so that the
+    # assertion can tell 'preserved' from either default. Picking a mode
+    # with group bits made the point no better and tripped CodeQL #643.
+    os.chmod(artefact, 0o400)
 
     seen: list[int] = []
     real_replace = os.replace
@@ -424,7 +428,7 @@ def test_the_mode_is_settled_before_the_rename(tmp_path: Any, monkeypatch: Any) 
         pkg, b"\x05" * 32, b"\x06" * 32, {"a.so": b"\x0b" * 32}, b"\x07" * 32, b"\x08" * 64
     )
 
-    assert seen == [0o640], (
+    assert seen == [0o400], (
         f"staging file was renamed carrying {[oct(m) for m in seen]}; the "
         f"artefact's mode must be final before it becomes visible"
     )

@@ -600,6 +600,20 @@ class TestTheBackendAcrossBuildConfigurations:
                 *generator,
                 f"-DCMAKE_C_COMPILER={compiler}",
                 "-DCMAKE_BUILD_TYPE=Release",
+                # LTO off, so `nm` can read the archive on every runner rather
+                # than only where the toolchain registers its plugin.  With
+                # -flto GCC emits slim objects whose symbol table lives in
+                # GIMPLE; GNU nm recovers it only by auto-loading
+                # liblto_plugin.so from a bfd-plugins directory.  Debian
+                # registers one, so this passed locally; the MinGW-w64
+                # distribution on windows-latest does not, and `nm` there
+                # reported 1,300-odd `.gnu.lto_.decls.*` section names instead
+                # of any function — which the symbol assertion below then
+                # reported as "the AES-NI kernel is not in the library at all".
+                # What those assertions actually ask is which translation units
+                # the configuration compiles in, and CMake's source lists decide
+                # that identically with LTO on or off.
+                "-DAMA_ENABLE_LTO=OFF",
                 "-DAMA_USE_NATIVE_PQC=ON",
                 "-DAMA_BUILD_TESTS=OFF",
                 "-DAMA_BUILD_EXAMPLES=OFF",
@@ -692,7 +706,23 @@ class TestTheBackendAcrossBuildConfigurations:
             [nm, "--defined-only", str(static_lib)], capture_output=True, text=True, timeout=300
         )
         assert out.returncode == 0, out.stderr[-1000:]
-        return {line.split()[-1] for line in out.stdout.splitlines() if line.strip()}
+        symbols = {line.split()[-1] for line in out.stdout.splitlines() if line.strip()}
+        # Diagnose the environment before the caller misreads it.  Without the
+        # LTO plugin `nm` lists GIMPLE section names rather than functions, and
+        # every symbol assertion downstream then fails as though the kernel had
+        # not been compiled in.  A wrong diagnosis is worse than a failure: this
+        # one cost a full windows-latest round trip.
+        lto_sections = sum(1 for name in symbols if name.startswith(".gnu.lto_"))
+        assert lto_sections == 0, (
+            f"{static_lib} still holds LTO bytecode: nm reported {lto_sections} "
+            f".gnu.lto_* section name(s) and no usable symbol table, so this "
+            f"says nothing about which kernels were compiled in. The probe "
+            f"configures -DAMA_ENABLE_LTO=OFF precisely to avoid depending on "
+            f"whether this toolchain registers liblto_plugin.so in a "
+            f"bfd-plugins directory; if you are seeing this, that flag stopped "
+            f"taking effect."
+        )
+        return symbols
 
     @pytest.mark.parametrize("label,options", _CONFIGURATIONS, ids=[c[0] for c in _CONFIGURATIONS])
     def test_hardware_aes_survives_every_simd_configuration(
