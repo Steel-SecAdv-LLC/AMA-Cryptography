@@ -78,6 +78,19 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Continue'
 
+# Fail with a sentence rather than a symptom when Chocolatey itself is
+# absent.  Without this the loop still fails closed, but for the wrong reason:
+# `& choco` throws CommandNotFoundException, Set-StrictMode then makes every
+# read of the unset $LASTEXITCODE a terminating error that aborts each branch
+# statement in turn, and the diagnostic reads "no attempt was made" — which is
+# false, an attempt was made and could not be launched.  Observed on
+# windows-latest, where this script's own tests shim `choco` with a POSIX
+# shell script the runner cannot execute.
+if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
+    Write-Error "choco is not on PATH; Chocolatey is not installed on this runner."
+    exit 1
+}
+
 $chocoArgs = @($Package, '-y', '--no-progress')
 if ($InstallArgs -ne '') {
     $chocoArgs += @('--install-arguments', $InstallArgs)
@@ -88,6 +101,10 @@ $lastReason = 'no attempt was made'
 for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
     Write-Host "Attempt ${attempt}/${MaxAttempts}: choco install $Package..."
 
+    # Defined before the call so Set-StrictMode cannot turn a read of an
+    # unset $LASTEXITCODE into a terminating error that skips every branch
+    # below and leaves $lastReason at its placeholder.
+    $global:LASTEXITCODE = 0
     $output = (& choco install @chocoArgs 2>&1 | Out-String)
     $code = $LASTEXITCODE
     Write-Host $output

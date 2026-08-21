@@ -808,9 +808,37 @@ step name must avoid spelling the command it polices.  Pinned by three cases
 in `tests/test_choco_retry_gate.py`, including that an inline `run: choco
 install ...` on one line is still caught.
 
-Not fixed, deliberately: nothing in this item.  The Windows verdict on the
-LTO fix from AUD-20 remains unknown — those jobs died in setup before pytest,
-so the fix is neither confirmed nor refuted.
+**Outcome, measured on `93ee3d9`.**  The Windows lanes reached pytest for the
+first time in this sequence: `Attempt 1/5: choco install softhsm.install... /
+Successfully installed softhsm.install / SoftHSM2 resolved at C:\SoftHSM2`.
+Two things that had been open closed with it.
+
+*The AUD-20 LTO fix is verified on Windows.*
+`tests/test_aesni_is_not_gated_on_avx2.py` reports zero failures across all
+five windows-latest lanes — the assertion that had been unverifiable for three
+CI rounds, because the jobs kept dying before they could reach it.
+
+*This item's own tests were POSIX-only, and failed on Windows for that reason
+alone.*  They shim `choco` with a `#!/bin/sh` script on PATH, which Windows
+cannot execute: `& choco` throws CommandNotFoundException there.  Fixed two
+ways.  The helper now refuses with a sentence — "choco is not on PATH" —
+instead of a symptom, because `Set-StrictMode` had been turning every read of
+the unset `$LASTEXITCODE` into a terminating error that aborted each branch in
+turn and left the diagnostic reading "no attempt was made", which is false: an
+attempt was made and could not be launched.  `$LASTEXITCODE` is initialised
+before each call so strict mode cannot trip on it.  And the five
+helper-execution tests skip where the shim cannot run.
+
+That skip is not a coverage hole, and the alternative was worse.  The logic is
+platform-independent and PowerShell 7 evaluates it identically on Linux, where
+these tests do run; the helper's real Windows exercise is the actual install
+step in both workflows, which is not a fake — the `93ee3d9` run shows it
+resolving SoftHSM2 through this very script.  Writing a second, batch-file
+shim to fake `choco` on Windows was considered and rejected: it could not be
+executed anywhere in this environment, so it would have been untested code
+written to test something.
+
+Nothing was deferred in this item.
 
 
 ### Verification pass, ninth (2026-08-21) — a resonance detector that could not say "no", a quadratic hot path, and twelve documents describing a tree that is not this one

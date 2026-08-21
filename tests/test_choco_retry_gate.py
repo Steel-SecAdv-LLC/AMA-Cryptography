@@ -143,12 +143,32 @@ def test_gate_verdicts(line: str, expect_violation: bool, label: str) -> None:
 # --------------------------------------------------------------------------
 
 pwsh = shutil.which("pwsh")
-requires_pwsh = pytest.mark.skipif(
-    pwsh is None,
-    # Deliberately does NOT name a cryptographic backend: this is a missing
-    # shell, not a missing kernel, and tests/conftest.py's CI backend-skip
-    # escalation keys on backend words.
-    reason="PowerShell (pwsh) is not installed; the helper cannot be executed here",
+
+#: These exercise the helper by shimming `choco` with a `#!/bin/sh` script on
+#: PATH, which Windows cannot execute — `& choco` throws
+#: CommandNotFoundException there and the helper (correctly) refuses to run.
+#: The first version of this file did not skip, and all five failed on every
+#: windows-latest lane for that reason alone.
+#:
+#: Skipping is not a coverage hole.  The logic under test is
+#: platform-independent and PowerShell 7 evaluates it identically on Linux,
+#: where these run; and the helper's real Windows exercise is the actual
+#: install step in both workflows, which is not a fake — the run on 93ee3d9
+#: shows it resolving SoftHSM2 at C:\SoftHSM2 through this very script.
+#: Writing a second, batch-file shim to fake `choco` on Windows was the
+#: alternative and was rejected: it could not be executed anywhere in this
+#: environment, so it would be untested code written to test something.
+_POSIX_SHIM = os.name != "nt"
+requires_helper_run = pytest.mark.skipif(
+    pwsh is None or not _POSIX_SHIM,
+    # Names no cryptographic backend: this is a shell/platform condition, not
+    # a missing kernel, and tests/conftest.py's CI backend-skip escalation
+    # keys on backend words.
+    reason=(
+        "needs pwsh and a POSIX shell shim for `choco`; on Windows the shim "
+        "cannot be executed, and the helper's real exercise there is the "
+        "workflow install step rather than a fake"
+    ),
 )
 
 
@@ -185,7 +205,7 @@ _OUTAGE = (
 )
 
 
-@requires_pwsh
+@requires_helper_run
 def test_a_feed_outage_is_not_a_success(tmp_path: Path) -> None:
     """The exact CI failure: exit 0, nothing installed.
 
@@ -210,7 +230,7 @@ def test_a_feed_outage_is_not_a_success(tmp_path: Path) -> None:
     assert "0/0 packages" in r.stdout
 
 
-@requires_pwsh
+@requires_helper_run
 def test_a_transient_outage_recovers(tmp_path: Path) -> None:
     """Two 0/0 replies, then a real install: the job must go green."""
     counter = tmp_path / "n"
@@ -236,7 +256,7 @@ def test_a_transient_outage_recovers(tmp_path: Path) -> None:
     assert r.stdout.count("Attempt ") == 3
 
 
-@requires_pwsh
+@requires_helper_run
 def test_a_reported_success_without_the_payload_is_a_failure(tmp_path: Path) -> None:
     """`installed 1/1` to somewhere the caller cannot use is not success.
 
@@ -261,7 +281,7 @@ def test_a_reported_success_without_the_payload_is_a_failure(tmp_path: Path) -> 
     assert "does not exist" in r.stdout
 
 
-@requires_pwsh
+@requires_helper_run
 def test_a_genuinely_missing_package_still_fails(tmp_path: Path) -> None:
     """The half that matters most: retries must never turn red into green."""
     fakebin = _fake_choco(tmp_path, 'echo "ERROR: not successful."\nexit 1\n')
@@ -272,7 +292,7 @@ def test_a_genuinely_missing_package_still_fails(tmp_path: Path) -> None:
     assert r.stdout.count("Attempt ") == 2
 
 
-@requires_pwsh
+@requires_helper_run
 def test_a_clean_install_takes_one_attempt(tmp_path: Path) -> None:
     """No retry storm on the happy path."""
     fakebin = _fake_choco(tmp_path, 'echo "Chocolatey installed 1/1 packages."\nexit 0\n')
