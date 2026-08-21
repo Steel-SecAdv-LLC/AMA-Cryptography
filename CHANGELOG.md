@@ -754,6 +754,65 @@ group/world bits finds no other site.
 Nothing was deferred in this item.
 
 
+**AUD-21 — a five-way retry that could not see the failure it existed for.**
+On 2026-08-21 the Chocolatey community feed returned 503 and every Windows
+lane in both workflows went red on `3b9889b`.  The outage is external; taking
+the PR red was ours.
+
+Chocolatey v2 exits 0 when it installs nothing:
+
+    Failed to fetch results from V2 feed at '...' : 503 (Service Unavailable).
+    Unable to find package 'softhsm.install'.
+    Chocolatey installed 0/0 packages.
+
+`$LASTEXITCODE` was 0 for that run, and all four retry loops in the workflows
+were written `if ($LASTEXITCODE -eq 0) { Write-Host "Successfully installed";
+break }`.  So `Attempt 1/5` "succeeded", the loop broke, and the step failed
+one line later at its post-condition — with no retry ever attempted.  The
+tests never ran; the jobs died in setup.
+
+`.github/scripts/choco-install.ps1` now owns the policy, and its retries key
+on the OUTCOME: Chocolatey exited 0, *and* did not report `0/0 packages`, *and*
+`-RequirePath` (when given) exists.  That third condition matters
+independently — the Disig SoftHSM2 MSI parents its directory to ROOTDRIVE,
+which on GitHub's Windows runners is D:, not C:, so an install can "succeed"
+somewhere `HSMKeyStorage.PKCS11_PATHS` will never look.  All four call sites
+(two `cmake`, two `softhsm.install`, across `ci.yml` and `ci-build-test.yml`)
+now go through it, and `tools/check_choco_retry.py` fails the build on a bare
+`choco install`, exactly as `check_apt_retry.py` does for `apt-get`: a fix
+applied to one of four identical sites is a sample, not a fix.
+
+Executed, not reasoned about.  PowerShell 7.4.6 was installed in the container
+so the helper could actually be run against a fake `choco` reproducing each
+behaviour.  Five paths, each verified: the 503/`0-0` case retries and exits 1;
+two transient `0/0` replies followed by a real install exits 0 on attempt 3; a
+reported success whose payload is absent retries and exits 1; a genuine
+non-zero exit retries and exits 1; a clean install takes exactly one attempt.
+The discrimination against the old loop was measured directly — the previous
+code, run verbatim against the same fake `choco`, prints "Successfully
+installed" and exits 0 after one attempt.
+
+The direction of the original mistake is worth recording.
+`.github/scripts/apt-install.sh` states in its own header that it was modelled
+on "the pattern this repository already uses for the Windows Chocolatey
+install".  The apt script checks real failure; the Chocolatey pattern it cited
+trusts a lying exit code.  The model was the broken one, and nothing checked
+it — which is what the new gate changes.
+
+One defect in the new gate, found and fixed before it landed: it failed the
+build on its own CI step's *name* ("Chocolatey retry policy: no bare choco
+install in a workflow").  A YAML `name:` is a label and cannot install
+anything, so the gate skips those lines — the fix is in the gate rather than a
+renamed step, because the alternative is an unwritten rule that every future
+step name must avoid spelling the command it polices.  Pinned by three cases
+in `tests/test_choco_retry_gate.py`, including that an inline `run: choco
+install ...` on one line is still caught.
+
+Not fixed, deliberately: nothing in this item.  The Windows verdict on the
+LTO fix from AUD-20 remains unknown — those jobs died in setup before pytest,
+so the fix is neither confirmed nor refuted.
+
+
 ### Verification pass, ninth (2026-08-21) — a resonance detector that could not say "no", a quadratic hot path, and twelve documents describing a tree that is not this one
 
 Thirty-seven findings, raised by reading each subsystem against the standard or
