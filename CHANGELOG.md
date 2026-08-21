@@ -596,6 +596,69 @@ umask.
 Nothing was deferred in this item.
 
 
+**AUD-18 — "Windows" and "MSVC" were the same macro, and the library did not
+compile on one of them.**  All ten windows-latest jobs stayed red on `3ad6b02`
+after the generator fix.  The generator fix worked — Ninja configured, the
+compiler was found, the artefact path was discovered — and what it uncovered
+underneath was that `src/c/dispatch/ama_dispatch.c` does not compile with
+MinGW-w64 at all.
+
+Every platform guard in that file was written `#if defined(_MSC_VER)`, which
+asks which *compiler* is running, not which *operating system* it is targeting.
+MSVC therefore compiled the POSIX-only auto-tune cache out and MinGW did not —
+and MinGW has no `openat`, `unlinkat`, `renameat`, `O_CLOEXEC`, `F_GETFD`,
+`F_SETFD` or `FD_CLOEXEC`.  Nine hard errors.  Nothing in the tree had ever
+built with a Windows compiler that is not MSVC, so nothing caught it.  The
+guards now ask `_WIN32`, which MSVC and MinGW-w64 both define.
+
+`src/c/internal/ama_once.h` had the identical defect and its own documentation
+already said so: the header's doc block reads "Windows: InitOnceExecuteOnce"
+while the guard read `_MSC_VER`, so a MinGW build silently took the POSIX
+branch and linked against winpthreads for a primitive Windows supplies.  This
+is INVARIANT-15 code.  Fixed the same way; the Windows library now carries zero
+`pthread` references.
+
+The four `_MSC_VER` guards in `src/c/ama_cpuid.c` were examined and
+deliberately left alone: `<intrin.h>` vs `<cpuid.h>`, `_xgetbv` vs
+`__builtin_ia32_xgetbv`, `__cpuid` vs inline asm are genuinely compiler
+questions, and MinGW correctly takes the GCC branch of each.  Same for the
+three remaining `_MSC_VER` guards in `ama_dispatch.c`, which gate the
+VAES/VPCLMULQDQ kernel rather than the platform.
+
+Verified by cross-compilation rather than by another CI round trip.
+`cmake/toolchains/x86_64-w64-mingw32.cmake` is new and is how the check is
+reproduced in one command; a full `-k 0` build (ninja stops at the first
+failure by default, which would have reported one broken file when there might
+have been several) proves the damage was confined to that single translation
+unit and that every other file already compiled cleanly.  Both fixes are
+load-bearing under mutation: reverting the dispatch guards reproduces the nine
+errors exactly, and reverting the once guard builds but fails to link with
+`undefined reference to pthread_once`.
+
+On POSIX the change is provably inert: `gcc -E -P` output for both files is
+byte-identical before and after, because `!_MSC_VER` and `!_WIN32` are both
+true there.  The native battery was re-run anyway — ctest 64/64, the fe51
+backend 66/66, all fourteen constant-time instruction-count targets, the
+Ed25519 donna-vs-fe51 differential over 1,846 cases, and the vendor boundary at
+the linker (`NEEDED` is libc and the loader; zero undefined symbols matching any
+of the seven prohibited vendors).
+
+A third defect sat behind those two, in the test rather than the library: the
+probe linked the STATIC library without `-DAMA_BUILDING_STATIC`, so
+`include/ama_cryptography.h` expanded `AMA_API` to `__declspec(dllimport)` and
+every entry point resolved to `__imp_<name>`.  The macro was already correct —
+the probe just never told it which library it was linking.  Harmless on POSIX,
+where `AMA_API` is empty, which is why it had never mattered.  The link line is
+now platform-split the same way `CMakeLists.txt` splits it: `-lbcrypt` on
+Windows for `BCryptGenRandom` (MinGW ignores the `#pragma comment(lib, ...)`
+that gives it to MSVC), and no `-lpthread`, whose only use was the
+once-primitive that is now `InitOnceExecuteOnce`.
+
+Nothing was deferred in this item.  The Windows binaries are PE32+ and cannot
+execute on the build host, so this is a compile-and-link verification; running
+them is what the windows-latest lane does, and that lane is the regression gate.
+
+
 ### Verification pass, ninth (2026-08-21) — a resonance detector that could not say "no", a quadratic hot path, and twelve documents describing a tree that is not this one
 
 Thirty-seven findings, raised by reading each subsystem against the standard or

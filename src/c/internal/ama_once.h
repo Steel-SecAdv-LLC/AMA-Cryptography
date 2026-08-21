@@ -19,7 +19,7 @@
  * has to be *available* to every module, or the next one open-codes it too.
  *
  *   - POSIX (Linux, macOS, BSDs): pthread_once      (IEEE Std 1003.1)
- *   - Windows (MSVC):             InitOnceExecuteOnce (Vista+, synchapi.h)
+ *   - Windows (MSVC and MinGW):   InitOnceExecuteOnce (Vista+, synchapi.h)
  *
  * Both supply exactly-once execution *and* the happens-before edge that makes
  * everything the initialiser wrote visible to every later reader — which is
@@ -35,7 +35,17 @@
 #ifndef AMA_INTERNAL_ONCE_H
 #define AMA_INTERNAL_ONCE_H
 
-#if defined(_MSC_VER)
+/* `_WIN32`, not `_MSC_VER`: the question is which OS supplies the primitive,
+ * not which compiler is running.  Guarding on the compiler sent MinGW-w64 —
+ * Windows, but not MSVC — down the POSIX branch, where it pulled in
+ * <pthread.h> and linked against winpthreads for a facility Windows itself
+ * provides.  The doc block above always said "Windows"; only the guard said
+ * "MSVC".  `_WIN32` is defined by MSVC and by MinGW-w64 on both 32- and
+ * 64-bit targets, so it is the predicate that matches the documented design.
+ *
+ * Found when a MinGW cross-build of the static library failed to link with
+ * undefined references to `pthread_once`. */
+#if defined(_WIN32)
     /* Windows: InitOnceExecuteOnce (available since Vista / Server 2008) */
     #ifndef WIN32_LEAN_AND_MEAN
         #define WIN32_LEAN_AND_MEAN

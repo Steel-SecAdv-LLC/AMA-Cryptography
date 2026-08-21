@@ -77,7 +77,7 @@
 #include <string.h>
 #include <time.h>
 
-#if !defined(_MSC_VER)
+#if !defined(_WIN32)   /* POSIX file/exec APIs; see the note above */
 #include <errno.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -95,7 +95,7 @@
 #    include <sys/auxv.h>
 #  endif
 #endif
-#endif
+#endif /* !_WIN32 */
 
 /* Local bound for realpath() output.  POSIX.1-2008 guarantees PATH_MAX
  * via <limits.h> on all platforms we ship to; the fallback keeps the
@@ -135,7 +135,7 @@ extern void ama_dilithium_invntt_generic_ref(int32_t poly[256], const int32_t ze
 /* ============================================================================
  * Platform once-primitive (mirrors ama_cpuid.c — INVARIANT-15 compliant)
  * ============================================================================ */
-#if defined(_MSC_VER)
+#if defined(_WIN32)
     #define WIN32_LEAN_AND_MEAN
     #include <windows.h>
     #define AMA_ONCE_FLAG          INIT_ONCE
@@ -154,7 +154,7 @@ extern void ama_dilithium_invntt_generic_ref(int32_t poly[256], const int32_t ze
     #define AMA_ONCE_FLAG_INIT     PTHREAD_ONCE_INIT
     #define AMA_DISPATCH_CALL_ONCE(flag, fn) \
         pthread_once(&(flag), (fn))
-#endif
+#endif /* _WIN32 */
 
 /* ============================================================================
  * Static dispatch state
@@ -660,7 +660,7 @@ static int bench_slot_regressed(int64_t simd_best_ns, int64_t generic_best_ns) {
     return simd_best_ns > (generic_best_ns + generic_best_ns / 10);
 }
 
-#if !defined(_MSC_VER)
+#if !defined(_WIN32)
 static int64_t timespec_delta_ns(struct timespec a, struct timespec b) {
     return (int64_t)(b.tv_sec - a.tv_sec) * INT64_C(1000000000)
          + (int64_t)(b.tv_nsec - a.tv_nsec);
@@ -939,8 +939,8 @@ static void dispatch_bench_dilithium_ntt(ama_dilithium_ntt_fn generic_fn,
  * On platforms where none of these apply (MSVC builds skip the cache
  * entirely via the #else stub below), the gate degrades open. */
 static int dispatch_cache_env_is_safe(void) {
-#if defined(_MSC_VER)
-    return 1;   /* The cache code path is compiled out under MSVC. */
+#if defined(_WIN32)
+    return 1;   /* The cache code path is compiled out on Windows. */
 #else
     /* Prefer issetugid() where available (BSDs / Apple / musl). */
 #  if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || \
@@ -957,7 +957,7 @@ static int dispatch_cache_env_is_safe(void) {
     if (getgid()  != getegid()) return 0;
     return 1;
 #  endif
-#endif
+#endif /* _WIN32 */
 }
 
 /* Validate an opt-in AMA_DISPATCH_CACHE_FILE path string.  Returns 0
@@ -1268,7 +1268,7 @@ static void dispatch_cache_save_at(int dfd, const char *basename,
         return;
     }
 }
-#else  /* _MSC_VER — no POSIX clock_gettime, no microbench, no cache. */
+#else  /* _WIN32 — no POSIX *at family, no microbench, no cache. */
 static void dispatch_cache_fingerprint(char *out, size_t outlen) {
     if (out && outlen) out[0] = '\0';
 }
@@ -1283,7 +1283,7 @@ static void dispatch_cache_save_at(int dfd, const char *basename,
                                    const dispatch_autotune_verdicts_t *v) {
     (void)dfd; (void)basename; (void)fingerprint; (void)v;
 }
-#endif
+#endif /* !_WIN32 */
 
 /* ============================================================================
  * Dispatch initialization
@@ -1764,7 +1764,7 @@ static void dispatch_init_internal(void) {
      * `AMA_DISPATCH_NO_AUTOTUNE=1` bypasses every bench AND the cache.
      * MSVC skips the whole phase (no POSIX clock_gettime).
      * ==================================================================== */
-#if !defined(_MSC_VER)
+#if !defined(_WIN32)
     const char *no_autotune = getenv("AMA_DISPATCH_NO_AUTOTUNE");
     int autotune_disabled = (no_autotune && no_autotune[0] == '1');
 
@@ -2125,7 +2125,7 @@ static void dispatch_init_internal(void) {
             "[AMA Dispatch] Auto-tune: disabled via AMA_DISPATCH_NO_AUTOTUNE=1\n");
     }
     if (cache_dfd >= 0) close(cache_dfd);
-#endif /* !_MSC_VER */
+#endif /* !_WIN32 */
 
     if (dispatch_verbose()) {
         fprintf(stderr, "[AMA Dispatch] keccak_f1600 -> %s\n",

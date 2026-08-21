@@ -633,18 +633,33 @@ class TestTheBackendAcrossBuildConfigurations:
         probe_c = tmp_path / f"probe-{label}.c"
         probe_c.write_text(_PROBE_C, encoding="utf-8")
         probe_bin = tmp_path / f"probe-{label}"
+        # -DAMA_BUILDING_STATIC is not optional on Windows and is a no-op
+        # everywhere else.  `AMA_API` in include/ama_cryptography.h expands to
+        # __declspec(dllimport) for a Windows consumer that has not said it is
+        # linking the STATIC library, so without it every entry point resolves
+        # to `__imp_<name>` and the probe fails to link — measured, against a
+        # MinGW-w64 cross-build of this tree.  On POSIX `AMA_API` is empty, so
+        # passing it unconditionally keeps one code path instead of two.
+        #
+        # The library list is platform-split for the same reason CMakeLists.txt
+        # splits it: Windows needs bcrypt for BCryptGenRandom (ama_platform_rand
+        # gets it from `#pragma comment(lib, ...)` under MSVC, which MinGW
+        # ignores with a warning), and it must NOT be asked for -lpthread, whose
+        # only use was the once-primitive that now resolves to Win32
+        # InitOnceExecuteOnce.
+        platform_libs = ["-lbcrypt"] if os.name == "nt" else ["-lm", "-lpthread"]
         link = subprocess.run(
             [
                 compiler,
                 "-O2",
                 "-std=c11",
+                "-DAMA_BUILDING_STATIC",
                 f"-I{REPO_ROOT / 'include'}",
                 str(probe_c),
                 "-o",
                 str(probe_bin),
                 str(static_lib),
-                "-lm",
-                "-lpthread",
+                *platform_libs,
             ],
             capture_output=True,
             text=True,
