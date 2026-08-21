@@ -246,13 +246,23 @@ ama_error_t ama_ed25519_batch_verify(
 
     /* Every return past this point leaves `results` fully written, so the
      * header's "exactly `count` are written" holds on the error paths too.
-     * Without this, an allocation failure or the overflow rejection above
-     * returned with the caller's array untouched — and a caller that reuses
-     * one buffer across batches, or that reads `results` before checking the
-     * return code, would see stale 1s from an earlier successful batch and
-     * read them as valid signatures.  Zeroing first makes the failure mode
-     * "everything invalid", which is the direction a verifier must fail in.
-     * `results` is known non-NULL and `count` is bounded above. */
+     * Without this, an allocation failure returned with the caller's array
+     * untouched — and a caller that reuses one buffer across batches, or that
+     * reads `results` before checking the return code, would see stale 1s from
+     * an earlier successful batch and read them as valid signatures.  Zeroing
+     * first makes the failure mode "everything invalid", which is the
+     * direction a verifier must fail in.
+     *
+     * AFTER the overflow guard, deliberately, and this comment used to say
+     * "an allocation failure or the overflow rejection above" as though it
+     * covered both.  It does not cover the overflow rejection and MUST NOT: a
+     * `count` large enough to wrap `count * sizeof(...)` cannot describe a real
+     * array, so writing `results[0..count)` would be the very out-of-bounds
+     * write the guard exists to prevent.  The header says so
+     * ("touching `results[0..count)` would be the wild write"), and
+     * tests/c/test_ed25519_canonical_s.c pins that an argument rejection
+     * leaves the caller's array exactly as it was.  Only the sentence was
+     * wrong; the ordering is correct. */
     for (size_t i = 0; i < count; i++) {
         results[i] = 0;
     }

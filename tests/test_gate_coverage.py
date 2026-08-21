@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import textwrap
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -373,3 +374,72 @@ def test_the_repository_gates_all_evaluate_what_they_wait_for() -> None:
     problems, examined = audit()
     assert examined >= 10
     assert [p for p in problems if "never evaluates" in p] == []
+
+
+class TestAMentionIsNotAnEvaluation:
+    """``needs.<job>.result``, not the job's name appearing somewhere.
+
+    ``_unevaluated_needs`` tested ``need not in body`` -- a substring search
+    over the serialised gate.  A gate that merely echoes a job's name, or that
+    happens to depend on a job whose name is a substring of another, counted it
+    as evaluated.  That is the exact shape the function exists to reject: the
+    gate waits for the job and then never looks at how it ended.
+
+    Demonstrated against the substring version: a gate evaluating
+    ``needs.lint.result`` and only echoing the word "build" reported nothing
+    unevaluated.
+    """
+
+    @staticmethod
+    def _gate() -> Any:
+        import importlib.util
+
+        repo_root = Path(__file__).resolve().parent.parent
+        path = repo_root / "tools" / "check_gate_coverage.py"
+        spec = importlib.util.spec_from_file_location("_gate_cov_mention", path)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_an_echoed_job_name_is_not_an_evaluation(self) -> None:
+        gate = self._gate()
+        job = {
+            "needs": ["build", "lint"],
+            "steps": [
+                {
+                    "run": 'echo "build is important"; '
+                    'if [ "${{ needs.lint.result }}" != success ]; then exit 1; fi'
+                }
+            ],
+        }
+        assert gate._unevaluated_needs(job) == ["build"]
+
+    def test_a_real_result_reference_counts(self) -> None:
+        gate = self._gate()
+        job = {
+            "needs": ["build"],
+            "steps": [{"run": 'x=${{ needs.build.result }}; [ "$x" = success ]'}],
+        }
+        assert gate._unevaluated_needs(job) == []
+
+    def test_the_bracket_and_outcome_spellings_count(self) -> None:
+        """GitHub offers four spellings; all four are a real read."""
+        gate = self._gate()
+        for expr in (
+            "needs.build.result",
+            "needs.build.outcome",
+            "needs['build'].result",
+            'needs["build"].outcome',
+        ):
+            job = {"needs": ["build"], "steps": [{"run": "x=${{ " + expr + " }}"}]}
+            assert gate._unevaluated_needs(job) == [], expr
+
+    def test_a_substring_job_name_does_not_borrow_coverage(self) -> None:
+        """`build` must not be satisfied by `needs.build-test.result`."""
+        gate = self._gate()
+        job = {
+            "needs": ["build", "build-test"],
+            "steps": [{"run": 'x=${{ needs.build-test.result }}; [ "$x" = success ]'}],
+        }
+        assert gate._unevaluated_needs(job) == ["build"]

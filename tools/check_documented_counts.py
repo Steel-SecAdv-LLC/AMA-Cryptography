@@ -56,7 +56,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Optional
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -784,20 +784,59 @@ def check_c_suite_counts(repo: Path) -> list[str]:
     return problems
 
 
+def _git_tracked(repo: Path, pattern: str) -> Optional[list[str]]:
+    """Paths git tracks matching ``pattern``, or None when git cannot answer."""
+    try:
+        proc = subprocess.run(
+            # `:(glob)` pathspec magic: without it git's wildmatch lets `*`
+            # cross a `/`, so `src/c/*.c` also matched src/c/avx2/*.c and
+            # friends -- 61 files where the directory holds 29.  The gate
+            # caught it on the first run, which is what it is for.
+            ["git", "-C", str(repo), "ls-files", f":(glob){pattern}"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    return [line for line in proc.stdout.splitlines() if line.strip()]
+
+
+def _tracked_or_globbed(repo: Path, pattern: str) -> list[str]:
+    tracked = _git_tracked(repo, pattern)
+    if tracked is not None:
+        return tracked
+    return [p.as_posix() for p in sorted(repo.glob(pattern))]
+
+
+def _tracked_or_globbed_names(repo: Path, pattern: str) -> list[str]:
+    return [Path(p).name for p in _tracked_or_globbed(repo, pattern)]
+
+
 def measure_source_inventory(repo: Path) -> tuple[int, int]:
     """(top-level ``src/c/*.c`` count, package module count).
 
     The module count excludes ``__init__.py`` and ``__main__.py``, matching the
     README's own "N modules + ``__init__`` + ``__main__``" phrasing, and reads
-    the tracked set so a stray scratch file in a working tree is not counted.
+    the TRACKED set so a stray scratch file in a working tree is not counted.
+
+    That last sentence was here while the code globbed the filesystem, which is
+    the opposite: an untracked ``ama_cryptography/scratch.py`` moved the module
+    count and failed the gate against a README that was correct.  It now really
+    does ask git, and falls back to the glob only where git cannot answer — a
+    source tarball with no repository — because refusing to count at all there
+    would fail the gate for a reason that has nothing to do with the docs.
     """
-    units = len(list((repo / "src" / "c").glob("*.c")))
+    units = _tracked_or_globbed(repo, "src/c/*.c")
     modules = [
-        path
-        for path in (repo / "ama_cryptography").glob("*.py")
-        if path.name not in {"__init__.py", "__main__.py"}
+        name
+        for name in _tracked_or_globbed_names(repo, "ama_cryptography/*.py")
+        if name not in {"__init__.py", "__main__.py"}
     ]
-    return units, len(modules)
+    return len(units), len(modules)
 
 
 def check_source_inventory_counts(repo: Path) -> list[str]:

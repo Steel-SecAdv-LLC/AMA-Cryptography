@@ -336,4 +336,15 @@ class TestUnpinnedReferencesAreRefused:
         Every other gate in ``tools/`` refuses an empty scan. This repository
         pins 122 references, so an empty collection means the collector broke.
         """
-        assert tool.find_pins(_workflow(tmp_path, "      - run: echo hi\n")) == []
+        workflows = _workflow(tmp_path, "      - run: echo hi\n")
+        assert tool.find_pins(workflows) == [], "the collector found a pin where there is none"
+
+        # ...and the GATE refuses it.  Asserting only that the collector
+        # returns [] is a statement about the collector, not about failing
+        # closed, and this test is named for the latter: with the `if not pins`
+        # branch deleted the assertion above still held.
+        exit_code = tool.main(["--strict", "--root", str(tmp_path)])
+        assert exit_code != 0, (
+            "an empty pin set exited 0 — the gate passed vacuously on a tree "
+            "where the collector found nothing to check"
+        )

@@ -125,7 +125,11 @@ def _needs(job: dict[str, Any]) -> set[str]:
 
 #: A gate step that consults ``needs.*.result`` evaluates EVERY dependency by
 #: construction — adding a job to ``needs:`` extends the check with no further
-#: edit.  Four of this repository's six aggregating gates are written that way.
+#: edit.  Seven of this repository's NINE aggregating gates are written that
+#: way — counted rather than recalled: acvp-gate, arm-qemu-gate, ci-gate in
+#: both ci.yml and ci-build-test.yml, corpus-provenance-gate, dudect-gate,
+#: fuzzing-gate, security-gate and static-analysis-gate, of which seven use
+#: the `needs.*.result` wildcard form.
 _WILDCARD_NEEDS_RE = re.compile(r"needs\.\*\.(?:result|outputs|conclusion)")
 
 
@@ -147,6 +151,27 @@ def _gate_body_text(job: dict[str, Any]) -> str:
     return json.dumps(body, default=str)
 
 
+def _result_reference(need: str) -> str:
+    """Pattern matching a real read of ``need``'s outcome.
+
+    ``needs.<name>.result`` and ``needs.<name>.outcome`` are the two spellings
+    GitHub offers, in both the dotted and the bracketed context form.  Anything
+    else -- the job's name in a comment, in an echo, or as a substring of a
+    different job's name -- is a mention, not an evaluation.
+
+    The optional backslash before the bracket quotes is not decoration: the
+    body this is searched against is JSON-serialised, so a double-quoted
+    ``needs["job"].outcome`` arrives as ``needs[\\"job\\"].outcome`` and a
+    pattern expecting a bare quote misses it.  Measured -- that one spelling of
+    four was reported unevaluated until the escape was allowed for.
+    """
+    name = re.escape(need)
+    return (
+        r"needs\s*\.\s*" + name + r"\s*\.\s*(?:result|outcome)"
+        r"|needs\s*\[\s*(?:\\)?['\"]" + name + r"(?:\\)?['\"]\s*\]\s*\.\s*(?:result|outcome)"
+    )
+
+
 def _unevaluated_needs(job: dict[str, Any]) -> list[str]:
     """Dependencies the gate lists but never looks at.
 
@@ -163,7 +188,13 @@ def _unevaluated_needs(job: dict[str, Any]) -> list[str]:
     body = _gate_body_text(job)
     if _WILDCARD_NEEDS_RE.search(body):
         return []
-    return sorted(need for need in _needs(job) if need not in body)
+    # `needs.<job>.result`, not a bare mention of the job's NAME.  A substring
+    # test counts an echo -- `echo "build is important"` -- as an evaluation,
+    # which is precisely the shape this function exists to reject: the gate
+    # waits for the job and then never looks at how it ended.  Demonstrated
+    # against the substring version: a gate that evaluates `needs.lint.result`
+    # and only echoes the word "build" reported nothing unevaluated.
+    return sorted(need for need in _needs(job) if not re.search(_result_reference(need), body))
 
 
 def _is_always(job: dict[str, Any]) -> bool:

@@ -105,17 +105,123 @@ class TestTheBuildGatingMatchesThat:
         assert "ama_aes_gcm_vaes_avx2.c" in _block("AMA_AVX2_SOURCES")
 
     def test_the_aesni_kernel_is_gated_on_the_architecture_alone(self) -> None:
-        """It must be assigned inside the x86 block, not the SIMD/AVX2 one."""
-        arch_block = CMAKELISTS.split('if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64|x86")')
-        assert len(arch_block) >= 2, "the architecture-only block moved or was renamed"
-        assert "set(AMA_X86_AESNI_SOURCES src/c/avx2/ama_aes_gcm_avx2.c)" in arch_block[1]
-        assert "add_compile_definitions(AMA_HAVE_X86_AESNI_IMPL)" in arch_block[1]
+        """It must be assigned inside the x86 block, not the SIMD/AVX2 one.
+
+        Bounded by the block's own ``endif()``.  This used to split on the
+        opening line and assert against ``[1]`` — everything from there to the
+        END OF FILE — so the assertions held for any occurrence anywhere below,
+        inside the block or not.  The third window-reaches-past-its-subject
+        defect in this file; they are all bounded now.
+        """
+        opening = 'if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64|x86")'
+        assert CMAKELISTS.count(opening) == 1, "the architecture-only block moved or was renamed"
+        block = _cmake_block(CMAKELISTS, opening)
+        assert "set(AMA_X86_AESNI_SOURCES src/c/avx2/ama_aes_gcm_avx2.c)" in block
+        assert "add_compile_definitions(AMA_HAVE_X86_AESNI_IMPL)" in block
+
+    def test_the_aesni_kernel_is_64_bit_only(self) -> None:
+        """Narrower than the block it sits in, because its kernel is narrower.
+
+        The enclosing ``if(CMAKE_SYSTEM_PROCESSOR MATCHES ...)`` includes a
+        bare ``x86`` because ``ama_sha256_ni.c`` guards its body on
+        ``__x86_64__ || _M_X64 || __i386__ || _M_IX86`` and genuinely builds
+        32-bit.  ``ama_aes_gcm_avx2.c`` guards on ``__x86_64__ || _M_X64``
+        only, so defining ``AMA_HAVE_X86_AESNI_IMPL`` on a 32-bit target hands
+        the dispatcher a macro over an EMPTY translation unit and the
+        ``ama_aes256_gcm_encrypt_avx2`` reference it then compiles has nothing
+        to link against.  ``x86`` is what CMAKE_SYSTEM_PROCESSOR reports for a
+        32-bit MSVC target.
+
+        Measured with a toolchain file setting ``CMAKE_SYSTEM_PROCESSOR x86``:
+        before the fix the configure applied the AES-NI per-file flags and
+        defined the macro; after it, it reports the kernel as not compiled.
+        """
+        source = CMAKELISTS
+        anchor = "set(AMA_X86_AESNI_SOURCES src/c/avx2/ama_aes_gcm_avx2.c)"
+        assert source.count(anchor) == 1, "the AES-NI source assignment moved"
+        head = source[: source.index(anchor)]
+        # The nearest enclosing architecture test must exclude 32-bit x86.
+        guard = head.rfind("CMAKE_SYSTEM_PROCESSOR MATCHES")
+        assert guard != -1, "no architecture guard precedes the AES-NI source list"
+        line_end = head.index(")", guard)
+        condition = head[guard:line_end]
+        assert "x86_64" in condition, condition
+        assert not re.search(r"\|x86(?![_0-9])", condition), (
+            f"the AES-NI kernel is gated on {condition!r}, which matches 32-bit "
+            f"x86 — but the kernel's own body is #if-guarded to 64-bit, so the "
+            f"macro would be defined over an empty translation unit"
+        )
+
+    def test_sha_ni_flags_do_not_depend_on_the_aesni_kernel(self) -> None:
+        """SHA-NI builds 32-bit; its flags must not ride on the 64-bit gate.
+
+        A first version of the fix nested the SHA-NI ``set_source_files_properties``
+        inside ``if(AMA_X86_AESNI_SOURCES)``, which would have dropped ``-msha``
+        on exactly the 32-bit targets the enclosing ``x86`` alternative exists
+        to serve.
+        """
+        source = CMAKELISTS
+        anchor = "set_source_files_properties(src/c/ama_sha256_ni.c PROPERTIES"
+        assert source.count(anchor) == 1
+        head = source[: source.index(anchor)]
+        # Walk back to the nearest unclosed `if(`; it must not be the AES-NI one.
+        assert "if(AMA_X86_AESNI_SOURCES)" not in head.rsplit("if(NOT MSVC)", 1)[-1], (
+            "the SHA-NI per-file flags are inside if(AMA_X86_AESNI_SOURCES), so a "
+            "32-bit x86 build would lose -msha"
+        )
 
     def test_the_new_source_list_reaches_the_library_target(self) -> None:
         assert "${AMA_X86_AESNI_SOURCES}" in CMAKELISTS.split("set(AMA_X86_AESNI_SOURCES")[-1]
 
     def test_the_dead_flag_is_gone_from_the_portable_translation_unit(self) -> None:
         assert "set_source_files_properties(src/c/ama_aes_gcm.c" not in CMAKELISTS
+
+
+def _cmake_block(source: str, opening: str) -> str:
+    """The body of one CMake ``if(...)`` block, by ``endif()`` matching.
+
+    Nesting-aware, so an inner ``if()`` does not close the outer one.  Same
+    reason as :func:`_preprocessor_block`: "everything after the opening line"
+    is not a block, and an assertion scoped that way passes on text the block
+    does not contain.
+    """
+    start = source.index(opening) + len(opening)
+    depth = 1
+    out: list[str] = []
+    for line in source[start:].splitlines(keepends=True):
+        stripped = line.strip()
+        if stripped.startswith("if("):
+            depth += 1
+        elif stripped.startswith("endif("):
+            depth -= 1
+            if depth == 0:
+                return "".join(out)
+        out.append(line)
+    raise AssertionError(f"no endif() closes {opening!r}")
+
+
+def _preprocessor_block(source: str, opening: str) -> str:
+    """The text between ``opening`` and the ``#endif`` that closes it.
+
+    Nesting-aware: any ``#if``/``#ifdef``/``#ifndef`` inside increments the
+    depth, so an inner conditional does not terminate the block.  Written
+    because the alternative — a fixed character window, or a split on the
+    first ``#endif`` with a slack term bolted on — is what let an assertion
+    about "inside this block" pass on text outside it.
+    """
+    start = source.index(opening) + len(opening)
+    depth = 1
+    out: list[str] = []
+    for line in source[start:].splitlines(keepends=True):
+        stripped = line.lstrip()
+        if stripped.startswith(("#if", "#ifdef", "#ifndef")):
+            depth += 1
+        elif stripped.startswith("#endif"):
+            depth -= 1
+            if depth == 0:
+                return "".join(out)
+        out.append(line)
+    raise AssertionError(f"no #endif closes {opening!r}")
 
 
 def _function_body(source: str, signature: str) -> str:
@@ -146,9 +252,24 @@ def _function_body(source: str, signature: str) -> str:
 
 class TestTheDispatchGatingMatchesThat:
     def test_the_install_is_under_the_aesni_macro(self) -> None:
+        """Inside the ``#ifdef``, bounded by its own ``#endif``.
+
+        This asserted ``symbol in block.split("#endif")[0] + block[:4000]``.
+        The second term defeats the first: the symbol only has to appear
+        somewhere in the next four thousand characters, inside the block or
+        well past it, so the assertion could not fail for the thing it names.
+        Same shape as the ``reporter[:6000]`` window fixed in
+        ``test_the_public_accessor_and_the_report_share_one_answer`` — a fixed
+        character window is not a region.
+
+        ``_preprocessor_block`` tracks nesting, so the VAES arm's inner
+        ``#ifdef AMA_HAVE_AVX2_IMPL`` does not end the search early.
+        """
         assert "#ifdef AMA_HAVE_X86_AESNI_IMPL" in DISPATCH
-        block = DISPATCH.split("#ifdef AMA_HAVE_X86_AESNI_IMPL")[1]
-        assert "ama_aes256_gcm_encrypt_avx2" in block.split("#endif")[0] + block[:4000]
+        block = _preprocessor_block(DISPATCH, "#ifdef AMA_HAVE_X86_AESNI_IMPL")
+        assert "ama_aes256_gcm_encrypt_avx2" in block, (
+            "the AES-NI kernel is not installed inside the " "AMA_HAVE_X86_AESNI_IMPL block"
+        )
 
     def test_the_install_does_not_require_the_avx2_tier(self) -> None:
         """``dispatch_info.aes_gcm >= AMA_IMPL_AVX2`` was the runtime half.

@@ -255,9 +255,10 @@ KEY_CLASSES = ("A", "Z", "m", "q", "0", "~", "!", "5")
 #: x25519-batch          0 / 0               0 / 0                0
 #: nistp-ecdsa           0 / 0               0 / 0                0
 #: ecdsa                 0 / 0               0 / 0                0
+#: secp256k1-scalarmult  0 / 0               0 / 0                0
 #: ===============  =================  ===================  ===============
 #:
-#: All thirteen are exactly zero, on both compilers, with a same-class floor of
+#: All fourteen are exactly zero, on both compilers, with a same-class floor of
 #: exactly zero — which is what "deterministic instrument" has to mean.  Their
 #: limit is 0.  A single retired instruction of cross-class
 #: difference in any of them falsifies the property the target states, and

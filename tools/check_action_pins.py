@@ -223,9 +223,20 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "does not match a tag the pinned SHA actually points at"
         ),
     )
+    parser.add_argument(
+        "--root",
+        default=None,
+        help=(
+            "repository root to scan (default: this file's repository). Present "
+            "so the fail-closed branches can be exercised against a staged tree "
+            "-- without it the empty-pin-set path could only be asserted about, "
+            "not run, and tests/test_action_pin_checks.py was doing exactly "
+            "that. Every other gate in tools/ takes this option."
+        ),
+    )
     args = parser.parse_args(argv)
 
-    repo_root = Path(__file__).resolve().parent.parent
+    repo_root = Path(args.root) if args.root else Path(__file__).resolve().parent.parent
     workflows_dir = repo_root / ".github" / "workflows"
 
     # INVARIANT-4 itself, checked before anything else: a reference with no SHA

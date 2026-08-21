@@ -556,24 +556,50 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64|x86")
     # that do NOT link the kernel (e.g. the standalone dudect harness) leave
     # this undefined and fall back to the scalar SHA-256 core.
     add_compile_definitions(AMA_HAVE_X86_SHANI_IMPL)
-    # The AES-NI AES-GCM kernel, gated on the architecture alone.
-    set(AMA_X86_AESNI_SOURCES src/c/avx2/ama_aes_gcm_avx2.c)
-    add_compile_definitions(AMA_HAVE_X86_AESNI_IMPL)
+    # The AES-NI AES-GCM kernel, gated on the architecture alone — but on
+    # 64-bit x86 only, which is NARROWER than the enclosing block.
+    #
+    # The enclosing condition includes a bare `x86` because ama_sha256_ni.c
+    # guards its body on `__x86_64__ || _M_X64 || __i386__ || _M_IX86` and so
+    # genuinely builds 32-bit.  ama_aes_gcm_avx2.c does not: its guard is
+    # `__x86_64__ || _M_X64`.  Defining AMA_HAVE_X86_AESNI_IMPL on a 32-bit
+    # target would therefore hand the dispatcher a macro over an EMPTY
+    # translation unit, and the reference to ama_aes256_gcm_encrypt_avx2 it
+    # then compiles has nothing to link against.  `x86` is what
+    # CMAKE_SYSTEM_PROCESSOR reports for a 32-bit MSVC target, so this is
+    # reachable rather than theoretical.
+    #
+    # Matched to the kernel's own guard, not to its neighbour's.
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64")
+        set(AMA_X86_AESNI_SOURCES src/c/avx2/ama_aes_gcm_avx2.c)
+        add_compile_definitions(AMA_HAVE_X86_AESNI_IMPL)
+    else()
+        message(STATUS "AES-NI/PCLMULQDQ: ${CMAKE_SYSTEM_PROCESSOR} is not 64-bit x86 "
+                       "— kernel not compiled, dispatcher uses the bitsliced software path")
+    endif()
     if(NOT MSVC)
-        set_source_files_properties(${AMA_X86_AESNI_SOURCES} PROPERTIES
-            COMPILE_FLAGS "-maes -mpclmul -mssse3 -msse4.1")
-        # Note: ama_aes_bitsliced.c intentionally does NOT get -maes/-mpclmul
-        # — it is the constant-time software fallback for CPUs without AES-NI,
-        # and neither does src/c/ama_aes_gcm.c, which has no intrinsics to
-        # enable.
-        message(STATUS "AES-NI/PCLMULQDQ: per-file flags for ama_aes_gcm_avx2.c "
-                       "(architecture-gated, independent of AMA_ENABLE_SIMD)")
         # SHA-NI (Intel SHA Extensions) for the x86 SHA-256 compression kernel.
         # Per-file only — the whole-library scalar SHA-256 stays baseline so the
         # binary runs on CPUs without SHA-NI; ama_cpuid.c selects at runtime.
+        #
+        # NOT conditioned on AMA_X86_AESNI_SOURCES: ama_sha256_ni.c builds on
+        # 32-bit x86 too, so tying its flags to the 64-bit-only AES-NI kernel
+        # would silently drop -msha on exactly the targets the enclosing `x86`
+        # alternative exists to cover.
         set_source_files_properties(src/c/ama_sha256_ni.c PROPERTIES
             COMPILE_FLAGS "-msha -mssse3 -msse4.1")
         message(STATUS "SHA-NI: per-file flags for ama_sha256_ni.c only")
+
+        if(AMA_X86_AESNI_SOURCES)
+            set_source_files_properties(${AMA_X86_AESNI_SOURCES} PROPERTIES
+                COMPILE_FLAGS "-maes -mpclmul -mssse3 -msse4.1")
+            # Note: ama_aes_bitsliced.c intentionally does NOT get
+            # -maes/-mpclmul — it is the constant-time software fallback for
+            # CPUs without AES-NI, and neither does src/c/ama_aes_gcm.c, which
+            # has no intrinsics to enable.
+            message(STATUS "AES-NI/PCLMULQDQ: per-file flags for ama_aes_gcm_avx2.c "
+                           "(architecture-gated, independent of AMA_ENABLE_SIMD)")
+        endif()
     else()
         message(STATUS "AES-NI/PCLMULQDQ/SHA-NI: MSVC detected — intrinsics available by default")
     endif()

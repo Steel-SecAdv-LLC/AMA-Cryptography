@@ -55,7 +55,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 
 #: A report covering fewer files than this has broken, not shrunk.  The tree
-#: carries 289 checked files today; the floor sits well below that so ordinary
+#: carries 293 checked files today; the floor sits well below that so ordinary
 #: growth and pruning do not trip it, while a collapsed run (one file, or an
 #: empty map) cannot read as success.
 MIN_REPORTED_FILES = 200

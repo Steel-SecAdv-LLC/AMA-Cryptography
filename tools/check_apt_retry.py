@@ -56,8 +56,11 @@ HELPER = ".github/scripts/apt-install.sh"
 #: `check_workflow_commands.py` already glob both; this one did not.
 WORKFLOW_GLOBS = (".github/workflows/*.yml", ".github/workflows/*.yaml")
 
-#: An apt invocation that reaches the network.  `apt-get` covers update,
-#: install, upgrade and remove; `apt` is the interactive spelling that should
+#: An apt invocation that reaches the network: update, install, upgrade and
+#: dist-upgrade.  `remove` and `purge` are deliberately NOT here — they touch
+#: no archive, so a retry policy has nothing to retry, and listing them in this
+#: comment while leaving them out of the pattern (which is what it used to do)
+#: describes a gate this is not.  `apt` is the interactive spelling that should
 #: never appear in CI but is caught here rather than left as a gap, and
 #: `aptitude` is the third front-end for the same archive.
 #:
