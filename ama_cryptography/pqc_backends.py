@@ -3147,6 +3147,29 @@ _SPHINCS_UNAVAILABLE_MSG = (
 )
 
 
+def _declared_length_fits(buf: Any, declared: int) -> bool:
+    """Whether ``declared`` bytes fit in ``buf``, when ``buf`` knows its size.
+
+    ``ctypes`` arrays know their own size, so the check is made where it is
+    knowable; raw pointers do not, and are left to the caller's contract as
+    they always were — hence ``True`` rather than a refusal on ``TypeError``.
+
+    Split out of ``keypair_generate`` so each buffer is checked on its own
+    with a literal log message.  The loop this replaced iterated
+    ``(buf, declared, name)`` tuples, and CodeQL's clear-text-logging taint
+    follows the whole tuple: ``name`` — a literal ``"public_key"`` or
+    ``"secret_key"`` — arrived at the logger carrying the secret-key buffer's
+    taint and was reported as clear-text logging of sensitive data.  Nothing
+    but the parameter's NAME was ever logged; restructuring removes the flow
+    rather than explaining it.
+    """
+    try:
+        actual = ctypes.sizeof(buf)
+    except TypeError:
+        return True  # not a sized ctypes object — nothing to compare
+    return bool(declared <= actual)
+
+
 class AmaContext:
     """
     Python wrapper around the opaque ``ama_context_t`` C context.
@@ -3254,28 +3277,20 @@ class AmaContext:
         # buffer.  ctypes arrays know their own size, so check it when it is
         # knowable; buffers whose size cannot be determined (raw pointers) are
         # left to the caller's contract, as before.
-        for buf, declared, name in (
-            (public_key, public_key_len, "public_key"),
-            (secret_key, secret_key_len, "secret_key"),
-        ):
-            try:
-                actual = ctypes.sizeof(buf)
-            except TypeError:
-                continue  # not a sized ctypes object — nothing to compare
-            if declared > actual:
-                # Log WHICH parameter violated the contract and nothing
-                # numeric.  Neither size is key material, but both are
-                # expressions CodeQL's clear-text-logging taint reaches by
-                # name: `actual` derives from the secret-key buffer object,
-                # and `declared` binds from `secret_key_len` in the loop
-                # tuple.  The caller knows the lengths they passed; a log
-                # line a scanner must special-case is not worth two integers
-                # of context it already has.
-                logging.getLogger(__name__).error(
-                    "keypair_generate: %s_len exceeds the supplied buffer's size",
-                    name,
-                )
-                return -1  # AMA_ERROR_INVALID_PARAM
+        # One buffer at a time, each with a LITERAL message: see
+        # _declared_length_fits.  Nothing numeric is logged — the caller knows
+        # the lengths it passed, and a log line a scanner must special-case is
+        # not worth two integers of context it already has.
+        if not _declared_length_fits(public_key, public_key_len):
+            logging.getLogger(__name__).error(
+                "keypair_generate: public_key_len exceeds the supplied buffer's size"
+            )
+            return -1  # AMA_ERROR_INVALID_PARAM
+        if not _declared_length_fits(secret_key, secret_key_len):
+            logging.getLogger(__name__).error(
+                "keypair_generate: secret_key_len exceeds the supplied buffer's size"
+            )
+            return -1  # AMA_ERROR_INVALID_PARAM
         rc = int(
             _native_lib.ama_keypair_generate(
                 self._ctx, public_key, public_key_len, secret_key, secret_key_len

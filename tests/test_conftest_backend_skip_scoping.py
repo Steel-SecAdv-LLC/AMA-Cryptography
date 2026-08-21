@@ -62,9 +62,16 @@ def _inner_pytest_args() -> tuple[str, ...]:
     coverage options in ``PYTEST_ADDOPTS`` would otherwise have the inner run
     inherit them and write a second, partial coverage file over the outer run's.
     """
-    if importlib.util.find_spec("pytest_cov") is None:
-        return ("-v", "-p", "no:cacheprovider")
-    return ("-v", "--no-cov", "-p", "no:cacheprovider")
+    # Built up and returned once, rather than two literal tuples of different
+    # lengths: CodeQL reads those as a function returning tuples of differing
+    # shape (py/mixed-tuple-returns) even though the annotation is the
+    # homogeneous ``tuple[str, ...]``.  One return also makes the conditional
+    # part obvious.
+    args = ["-v"]
+    if importlib.util.find_spec("pytest_cov") is not None:
+        args.append("--no-cov")
+    args += ["-p", "no:cacheprovider"]
+    return tuple(args)
 
 
 class _FakeMarker:

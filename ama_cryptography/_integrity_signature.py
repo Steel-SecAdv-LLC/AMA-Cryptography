@@ -15,7 +15,7 @@ SECURITY.md "Module Integrity Verification" for the threat model.
 
 # SHA3-256 digest of the package's .py files at build time (raw 32 bytes,
 # hex-encoded for embeddability).
-INTEGRITY_DIGEST_HEX = "d0413c5616f2a87785ef7d084a3b8edca5fd41f3adea7d7ff6c2cfe16f8bf630"
+INTEGRITY_DIGEST_HEX = "ea6d0f8ef8783a8295a738055e800d4c0a91127f006aa3cd2bb1eb6af465f92f"
 
 # SHA3-256 digest of the native library (libama_cryptography) at build time.
 # This is what binds the shared object that performs every cryptographic
@@ -34,12 +34,12 @@ INTEGRITY_NATIVE_DIGEST_HEX = "f79adc7206c6a73445c859629e81fc4e3cfe09b343f507f93
 INTEGRITY_BINDING_DIGESTS_HEX: dict[str, str] = {}
 
 # Ephemeral build-time Ed25519 public key (raw 32 bytes, hex-encoded).
-INTEGRITY_PUBKEY_HEX = "f1bbdadf098bc380d133959bb0b1897d835ba41ba3389185707a7e4cbfda2e42"
+INTEGRITY_PUBKEY_HEX = "265cffc2c102c4fe7fc3aa2e9dfdb1ed868316d6d3059701d80daeee97327f89"
 
 # Ed25519 signature over SHA3-256(domain_v3 || py_digest || native_digest ||
 # serialized_binding_digests) — the v3 composite that makes all three
 # inseparable.  See ama_cryptography._self_test._composite_integrity_message_v3.
-INTEGRITY_SIGNATURE_HEX = "4f51c46e42b3f54040c40ee125de9345018b4f30bdc3f9914d9f0f2f3163de2e33c25e9b11fefc4cd4cf3c1c49742ab645c99a1fda446ab1adbda01385e8ed00"
+INTEGRITY_SIGNATURE_HEX = "2276e9f67475425dd187ff1496e1aedc364f751ef240f5102fbc0f56fe16ebffd83cf16008b38fad06cb50e447bd0f4f0cafb9cbf22dd9471a0cdf13c283df0a"
 
 # Build metadata — informational only, not part of the integrity contract.
 BUILD_PIPELINE_VERSION = "3"

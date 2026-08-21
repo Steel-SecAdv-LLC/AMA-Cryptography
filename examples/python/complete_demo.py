@@ -325,7 +325,12 @@ def demo_secure_storage() -> None:
 
     # Create temporary storage
     with tempfile.TemporaryDirectory() as tmpdir:
-        storage = SecureKeyStorage(Path(tmpdir), master_password="strong_master_password_123!")
+        # Generated, not literal.  A demo is copied, and a hardcoded master
+        # password is the wrong thing to copy — which is also why CodeQL
+        # reports it (py/hardcoded-credentials).  `secrets` is already
+        # imported above for the key material below.
+        master_password = secrets.token_urlsafe(32)
+        storage = SecureKeyStorage(Path(tmpdir), master_password=master_password)
 
         print(f"\nStorage path: {tmpdir}")
         print("-" * 70)
