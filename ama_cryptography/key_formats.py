@@ -1839,9 +1839,10 @@ def jwk_thumbprint(jwk: Union[dict[str, Any], str], *, hash_name: str = "sha256"
     # one.  This used to be a function-local `from ama_cryptography.pqc_backends
     # import ...` under `# noqa: PLC0415  # deferred: import cycle via key
     # module graph (KFM-001)`.  Nothing was deferred: the same module is
-    # imported unconditionally at module scope seventeen hundred lines above
-    # and used fourteen times, so the cycle — if there were one — is entered
-    # long before this function runs.  A suppression whose justification is not
+    # imported unconditionally at module scope at line 112 — seventeen hundred
+    # lines above, and already used fourteen times elsewhere in this file before
+    # the six below — so the cycle, if there were one, is entered long before
+    # this function runs.  A suppression whose justification is not
     # the reason is what INVARIANT-13 exists to catch.
     thumbprint_hashes: dict[str, Callable[[bytes], bytes]] = {
         "sha256": _pb.native_sha256,

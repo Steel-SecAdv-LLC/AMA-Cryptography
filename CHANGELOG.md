@@ -264,8 +264,9 @@ whose reason was not the reason.**  `key_formats.jwk_thumbprint` carried
 `from ama_cryptography.pqc_backends import (native_sha256, …)` under
 `# noqa: PLC0415  # deferred: import cycle via key module graph (KFM-001)`.
 The same module is imported unconditionally at module scope seventeen hundred
-lines above (`import ama_cryptography.pqc_backends as _pb`, used fourteen
-times), so nothing was deferred and no cycle was broken.  A suppression whose
+lines above — `import ama_cryptography.pqc_backends as _pb` at line 112,
+already used fourteen times elsewhere in the file before this change — so
+nothing was deferred and no cycle was broken.  A suppression whose
 justification is not the reason is INVARIANT-13's subject, not a style nit.
 The six names are read off `_pb` now — the identical objects, so the six
 thumbprint hashes and the rejection path are byte-for-byte unchanged — and the
@@ -289,8 +290,9 @@ file's own header block documented it as a fallback baseline alongside the
 four that are.  Its SHA3-256 and HKDF figures are the same ones `C_VS_PYTHON`
 carries and does plot.  Removed, with the header entry that advertised it;
 wiring it to a new chart would have been inventing scope.  `ACCENT_COLORS` in
-`tools/generate_dashboards.py` went the same way: the one theme constant of
-four with zero loads, beside three with 3, 5 and 15.
+`tools/generate_dashboards.py` went the same way: of the five theme constants
+it was the only one with zero loads, beside `DARK_BG` (3), `PANEL_BG` (4),
+`GRID_COLOR` (5) and `TEXT_COLOR` (15).
 
 Four more unreferenced module-level names were found and deliberately kept:
 `DIL_SK` in `tests/test_adversarial_security.py` and the `FAKE_PRIVATE_KEY` /
