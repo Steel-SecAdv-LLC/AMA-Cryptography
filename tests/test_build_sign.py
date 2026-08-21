@@ -19,6 +19,8 @@ Covers the four PR #306 review comments:
 from __future__ import annotations
 
 import ctypes
+import os
+import stat
 from typing import Any, ClassVar, cast
 from unittest.mock import patch
 
@@ -336,6 +338,96 @@ def test_a_failed_rewrite_leaves_the_previous_artefact_intact(
     )
     strays = sorted(pkg.glob("._integrity_signature.*"))
     assert strays == [], f"staging file(s) survived a failed write: {strays}"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission semantics")
+def test_a_rewrite_preserves_the_artefacts_existing_mode(tmp_path: Any) -> None:
+    """Re-signing must not widen the artefact's permissions.
+
+    ``Path.write_text`` — what the atomic writer replaced — opens an EXISTING
+    file with ``"w"``, which does not touch its mode: an artefact stored 0o600
+    on a hardened build host stayed 0o600 across every re-sign.  The atomic
+    path stages through ``mkstemp`` (0o600) and renames, so the staged file's
+    mode becomes the artefact's mode, and a hardcoded ``chmod(0o644)`` there
+    silently made the file world-readable on every rewrite regardless of how
+    the operator had stored it.  CodeQL flagged it as alert #642; it was a
+    real regression, not a false positive.
+    """
+    pkg = tmp_path / "ama_cryptography"
+    pkg.mkdir()
+    bs._write_signature_module(
+        pkg, b"\x01" * 32, b"\x02" * 32, {"a.so": b"\x0a" * 32}, b"\x03" * 32, b"\x04" * 64
+    )
+    artefact = pkg / "_integrity_signature.py"
+    os.chmod(artefact, 0o600)
+
+    bs._write_signature_module(
+        pkg, b"\x05" * 32, b"\x06" * 32, {"a.so": b"\x0b" * 32}, b"\x07" * 32, b"\x08" * 64
+    )
+
+    mode = stat.S_IMODE(artefact.stat().st_mode)
+    assert mode == 0o600, (
+        f"re-signing widened the artefact from 0o600 to 0o{mode:o}; a build host "
+        f"running `umask 077` gets permissions it never asked for"
+    )
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission semantics")
+def test_a_fresh_artefact_gets_the_mode_a_normal_write_would(tmp_path: Any) -> None:
+    """With no artefact to preserve, fall back to what creating a file gives.
+
+    Not to a constant: the point is that the operator's umask decides, which
+    is exactly what the hardcoded 0o644 overrode.
+    """
+    pkg = tmp_path / "ama_cryptography"
+    pkg.mkdir()
+    bs._write_signature_module(
+        pkg, b"\x01" * 32, b"\x02" * 32, {"a.so": b"\x0a" * 32}, b"\x03" * 32, b"\x04" * 64
+    )
+
+    mask = os.umask(0)
+    os.umask(mask)
+    expected = 0o666 & ~mask
+    mode = stat.S_IMODE((pkg / "_integrity_signature.py").stat().st_mode)
+    assert (
+        mode == expected
+    ), f"fresh artefact is 0o{mode:o}, umask {mask:03o} implies 0o{expected:o}"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission semantics")
+def test_the_mode_is_settled_before_the_rename(tmp_path: Any, monkeypatch: Any) -> None:
+    """No reader may ever observe the artefact at the staging mode.
+
+    ``mkstemp`` deliberately creates 0o600 so a half-written artefact is not
+    readable.  That is right for the staging file and wrong for the artefact,
+    so the mode has to be corrected on the temporary path and not after the
+    rename — otherwise every rewrite opens a window in which the installed
+    artefact is unreadable to the users who have to import it.
+    """
+    pkg = tmp_path / "ama_cryptography"
+    pkg.mkdir()
+    bs._write_signature_module(
+        pkg, b"\x01" * 32, b"\x02" * 32, {"a.so": b"\x0a" * 32}, b"\x03" * 32, b"\x04" * 64
+    )
+    artefact = pkg / "_integrity_signature.py"
+    os.chmod(artefact, 0o640)
+
+    seen: list[int] = []
+    real_replace = os.replace
+
+    def _spy(src: Any, dst: Any) -> None:
+        seen.append(stat.S_IMODE(os.stat(src).st_mode))
+        real_replace(src, dst)
+
+    monkeypatch.setattr("os.replace", _spy)
+    bs._write_signature_module(
+        pkg, b"\x05" * 32, b"\x06" * 32, {"a.so": b"\x0b" * 32}, b"\x07" * 32, b"\x08" * 64
+    )
+
+    assert seen == [0o640], (
+        f"staging file was renamed carrying {[oct(m) for m in seen]}; the "
+        f"artefact's mode must be final before it becomes visible"
+    )
 
 
 def test_signature_module_is_lf_terminated_on_every_platform(tmp_path: Any) -> None:

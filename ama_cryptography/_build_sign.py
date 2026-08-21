@@ -61,6 +61,7 @@ import contextlib
 import ctypes
 import hashlib
 import os
+import stat
 import sys
 import tempfile
 from pathlib import Path
@@ -570,6 +571,38 @@ def _binding_digests_literal(binding_digests: Dict[str, bytes]) -> str:
     return "{\n" + entries + ",\n}"
 
 
+def _artefact_mode(out_path: Path) -> int:
+    """The mode the rewritten ``_integrity_signature.py`` must end up with.
+
+    ``mkstemp`` creates the staging file 0o600 so a half-written artefact is
+    unreadable, which is right for the staging file and wrong for the artefact
+    every installed reader has to import.  The mode therefore has to be set
+    before the rename — but not to a constant.
+
+    A hardcoded ``0o644`` here was wrong in both directions, and CodeQL was
+    right to flag it (alert #642).  It ignored the operator's umask, so a
+    build host running ``umask 077`` got a world-readable artefact it never
+    asked for; and it discarded the mode an existing artefact already carried.
+    Neither matches ``Path.write_text``, which this atomic writer replaced:
+    ``"w"`` on an EXISTING file leaves its mode untouched, so an artefact
+    stored 0o600 stayed 0o600 across every re-sign.  Silently widening it was
+    a regression introduced with the atomic write, not a pre-existing state.
+
+    So: preserve the mode when there is an artefact to preserve, and otherwise
+    use exactly what creating a file would have produced.  Reading the umask
+    requires momentarily setting it, which is process-global; that is safe
+    here because this module runs only in the single-threaded
+    ``python -m ama_cryptography.integrity --update --sign`` build CLI, and it
+    is the same read-then-restore the standard library itself uses.
+    """
+    try:
+        return stat.S_IMODE(out_path.stat().st_mode)
+    except FileNotFoundError:
+        mask = os.umask(0)
+        os.umask(mask)
+        return 0o666 & ~mask
+
+
 def _write_signature_module(
     pkg_dir: Path,
     digest: bytes,
@@ -617,9 +650,9 @@ def _write_signature_module(
             handle.write(payload)
             handle.flush()
             os.fsync(handle.fileno())
-        # mkstemp creates 0o600; the artefact is world-readable package data,
-        # so widen to the umask-respecting mode a normal write would produce.
-        os.chmod(tmp_name, 0o644)
+        # Settle the mode on the STAGING path, before the rename makes the
+        # artefact visible: a reader must never see it at mkstemp's 0o600.
+        os.chmod(tmp_name, _artefact_mode(out_path))
         os.replace(tmp_name, out_path)
     except BaseException:
         if fd_is_ours:

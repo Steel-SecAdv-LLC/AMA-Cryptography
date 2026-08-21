@@ -552,6 +552,50 @@ input changed since the battery that covered them; `check_release_tag` is
 release-only.
 
 
+**AUD-17 — the atomic artefact writer widened permissions on every re-sign.**
+CodeQL alert #642 ("overly permissive mask in chmod sets file to world
+readable") landed on `ama_cryptography/_build_sign.py` in the CI run for
+`3ad6b02`.  It is correct, it is about code this branch added, and it is not a
+lint nit.
+
+`_write_signature_module` was made atomic earlier in this pass: stage through
+`tempfile.mkstemp`, then `os.replace`.  `mkstemp` creates 0o600, so the staged
+file's mode becomes the artefact's mode after the rename, and the writer
+widened it with a hardcoded `os.chmod(tmp_name, 0o644)`.  The comment beside
+that line called it "the umask-respecting mode a normal write would produce".
+It is not umask-respecting — it is a constant — and the claim was false in the
+place it mattered most.
+
+Measured rather than reasoned: `Path.write_text` (what the atomic writer
+replaced) opens an EXISTING file with `"w"`, which leaves its mode untouched —
+an artefact stored 0o600 comes back 0o600.  The atomic path turns that same
+0o600 artefact into 0o644.  So a build host running `umask 077`, or an
+operator who had deliberately narrowed the artefact, silently got a
+world-readable file back on every re-sign.  That is a permission regression
+introduced with the atomic write, not a pre-existing condition, and no
+suppression was added for it.
+
+`_artefact_mode()` now preserves the mode when there is an artefact to
+preserve and otherwise derives it from the process umask — exactly what
+creating a file would have produced.  The chmod stays on the staging path, so
+the mode is final before the rename makes the artefact visible; correcting it
+afterwards would open a window in which the installed artefact is unreadable
+to the users who must import it.
+
+Three tests in `tests/test_build_sign.py`, each discriminated by mutation:
+restoring the hardcoded 0o644 fails the preserve-mode and settled-before-rename
+tests; moving the chmod after the rename fails settled-before-rename alone;
+removing the chmod fails the fresh-artefact and settled-before-rename tests.
+Every mutation required a re-sign to get past the integrity gate, which is
+itself evidence the gate covers this file.  The confidentiality impact of the
+old behaviour was nil — the artefact carries a digest, an Ed25519 public key
+and a signature, all public verification material — but "the data happened not
+to be secret" is not a reason to leave a writer that ignores the operator's
+umask.
+
+Nothing was deferred in this item.
+
+
 ### Verification pass, ninth (2026-08-21) — a resonance detector that could not say "no", a quadratic hot path, and twelve documents describing a tree that is not this one
 
 Thirty-seven findings, raised by reading each subsystem against the standard or
