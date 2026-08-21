@@ -1835,22 +1835,21 @@ def jwk_thumbprint(jwk: Union[dict[str, Any], str], *, hash_name: str = "sha256"
     # near-universal choice is sha256, which is unchanged byte-for-byte.
     # XOFs are structurally excluded by the table, which subsumes the old
     # digest_size == 0 check.
-    from ama_cryptography.pqc_backends import (  # noqa: PLC0415  # deferred: import cycle via key module graph (KFM-001)
-        native_sha3_256,
-        native_sha3_384,
-        native_sha3_512,
-        native_sha256,
-        native_sha384,
-        native_sha512,
-    )
-
+    # `_pb` is the module-level import at the top of this file, not a second
+    # one.  This used to be a function-local `from ama_cryptography.pqc_backends
+    # import ...` under `# noqa: PLC0415  # deferred: import cycle via key
+    # module graph (KFM-001)`.  Nothing was deferred: the same module is
+    # imported unconditionally at module scope seventeen hundred lines above
+    # and used fourteen times, so the cycle — if there were one — is entered
+    # long before this function runs.  A suppression whose justification is not
+    # the reason is what INVARIANT-13 exists to catch.
     thumbprint_hashes: dict[str, Callable[[bytes], bytes]] = {
-        "sha256": native_sha256,
-        "sha384": native_sha384,
-        "sha512": native_sha512,
-        "sha3_256": native_sha3_256,
-        "sha3_384": native_sha3_384,
-        "sha3_512": native_sha3_512,
+        "sha256": _pb.native_sha256,
+        "sha384": _pb.native_sha384,
+        "sha512": _pb.native_sha512,
+        "sha3_256": _pb.native_sha3_256,
+        "sha3_384": _pb.native_sha3_384,
+        "sha3_512": _pb.native_sha3_512,
     }
     func = thumbprint_hashes.get(hash_name)
     if func is None:

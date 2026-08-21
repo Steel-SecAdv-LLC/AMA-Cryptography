@@ -21,8 +21,7 @@ import contextlib
 import ctypes
 import ctypes.util
 import sys
-import typing
-from typing import Any, Callable
+from typing import Any, Callable, ClassVar
 
 import pytest
 
@@ -338,7 +337,7 @@ class TestMlockNativeBranches:
             pytest.skip("Native mlock unavailable")
 
         class _FakeFn:
-            argtypes: typing.ClassVar[list[Any]] = []
+            argtypes: ClassVar[list[Any]] = []
             restype = None
 
             def __call__(self, *args: object) -> int:
@@ -357,7 +356,7 @@ class TestMlockNativeBranches:
             pytest.skip("Native munlock unavailable")
 
         class _FakeFn:
-            argtypes: typing.ClassVar[list[Any]] = []
+            argtypes: ClassVar[list[Any]] = []
             restype = None
 
             def __call__(self, *args: object) -> int:

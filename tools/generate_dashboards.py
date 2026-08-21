@@ -140,17 +140,6 @@ DARK_BG = "#1a1a2e"
 PANEL_BG = "#16213e"
 TEXT_COLOR = "#e0e0e0"
 GRID_COLOR = "#2a2a4a"
-ACCENT_COLORS = [
-    "#00d2ff",
-    "#7b2ff7",
-    "#ff6b6b",
-    "#ffd93d",
-    "#6bcb77",
-    "#4d96ff",
-    "#ff922b",
-    "#845ef7",
-]
-
 plt.rcParams.update(
     {
         "figure.facecolor": DARK_BG,

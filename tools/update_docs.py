@@ -67,7 +67,6 @@ import json
 import re
 import subprocess
 import sys
-from datetime import date
 from pathlib import Path
 from typing import Any, Optional
 
@@ -112,7 +111,7 @@ def _get_version() -> str:
 
 
 def _today() -> str:
-    return date.today().isoformat()
+    return _dt.date.today().isoformat()
 
 
 def _run_git(*args: str) -> str:

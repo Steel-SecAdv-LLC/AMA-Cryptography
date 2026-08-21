@@ -259,6 +259,48 @@ eleven keygen entry points; it drives thirteen.  The argument does not depend on
 the number — `tools/check_keygen_pct.py` discovers 19 from the module's AST,
 which is the point — but a count stated twice and wrong twice is still wrong.
 
+**AUD-10 — a deferred import that deferred nothing, under a suppression
+whose reason was not the reason.**  `key_formats.jwk_thumbprint` carried
+`from ama_cryptography.pqc_backends import (native_sha256, …)` under
+`# noqa: PLC0415  # deferred: import cycle via key module graph (KFM-001)`.
+The same module is imported unconditionally at module scope seventeen hundred
+lines above (`import ama_cryptography.pqc_backends as _pb`, used fourteen
+times), so nothing was deferred and no cycle was broken.  A suppression whose
+justification is not the reason is INVARIANT-13's subject, not a style nit.
+The six names are read off `_pb` now — the identical objects, so the six
+thumbprint hashes and the rejection path are byte-for-byte unchanged — and the
+suppression is gone.
+
+That was also the only file in the shipped package importing another module
+both ways, which is CodeQL's `py/import-and-import-from` — a rule that fired
+nine times on this branch already.  Sweeping the tree found four instances,
+two of them inside this change's diff; all four are fixed (`datetime` in
+`update_docs.py`, `typing` in `test_secure_memory_extra.py`, `array` in
+`test_agentic_abuse_detectors.py`), so the class is empty rather than
+half-empty.  The sibling class `py/repeated-import` was swept too and was
+already empty, and `py/ineffectual-statement` is now provably empty: an AST
+pass over all 293 tracked files finds no bare `...` expression statement.
+
+**AUD-11 — a benchmark table that ten charts do not read.**  Of the ten
+module-level data tables in `benchmarks/generate_charts.py`, `CRYPTO_OPS` was
+the only one never loaded: not copied in `generate_charts()`, not merged with
+live data, not plotted, not used by `generate_text_summary()` — while the
+file's own header block documented it as a fallback baseline alongside the
+four that are.  Its SHA3-256 and HKDF figures are the same ones `C_VS_PYTHON`
+carries and does plot.  Removed, with the header entry that advertised it;
+wiring it to a new chart would have been inventing scope.  `ACCENT_COLORS` in
+`tools/generate_dashboards.py` went the same way: the one theme constant of
+four with zero loads, beside three with 3, 5 and 15.
+
+Four more unreferenced module-level names were found and deliberately kept:
+`DIL_SK` in `tests/test_adversarial_security.py` and the `FAKE_PRIVATE_KEY` /
+`FAKE_PUBLIC_KEY` / `FAKE_SIGNATURE` trio in `tests/test_crypto_import_paths.py`.
+Each is one member of a coherent block of sibling constants whose other members
+are used — the ML-DSA-65 key/signature sizes, and a fixture triple — and
+deleting the odd one out would make the block less readable, not more.  Neither
+file is otherwise touched by this change.  Recorded here so the decision is
+visible rather than silent.
+
 **AUD-09 — `src/c/internal/` holds eight headers, not five.**  `README.md`'s C
 inventory, which DOC-09 declared complete, listed five and omitted
 `ama_ct_barrier.h`, `ama_testing_exports.h` and `ama_x25519_fe64_mulx.h`.

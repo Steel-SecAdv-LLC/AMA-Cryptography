@@ -542,10 +542,10 @@ class TestNoteArtifactDetection:
         scan budget and the head/tail offsets are counted in bytes whatever the
         caller hands in.
         """
-        import array
+        from array import array
 
         d = NoteArtifactDetector(max_scan_bytes=256)
-        wide = memoryview(array.array("I", range(4096)))  # itemsize 4
+        wide = memoryview(array("I", range(4096)))  # itemsize 4
         signal = d.inspect(wide)
         assert signal.scanned_bytes <= d.max_scan_bytes + 1
 

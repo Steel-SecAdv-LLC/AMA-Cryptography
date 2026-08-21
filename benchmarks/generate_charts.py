@@ -38,9 +38,17 @@ BENCH_FILE = ROOT / "benchmark_results.json"
 #                             (Python/ctypes path; median latencies)
 #   KEM_OPS                 : `build/bin/benchmark_c_raw --json`
 #                             (raw C path; phase0 has no KEM entries)
-#   CRYPTO_OPS / C_VS_PYTHON: ctypes values from phase0_baseline_results.json;
+#   C_VS_PYTHON             : ctypes values from phase0_baseline_results.json;
 #                             raw-C values from `build/bin/benchmark_c_raw`
 #                             (rerun after a cmake -B build build)
+#
+# A CRYPTO_OPS table was listed here too, and was the one table of the ten in
+# this file that nothing read: not copied in generate_charts(), not merged with
+# live data, not plotted, not in generate_text_summary().  Its SHA3-256 and
+# HKDF figures are the same ones C_VS_PYTHON carries and does plot.  A
+# documented data source that nothing reads is a claim about this file that is
+# not true of it, so the table and its entry here are gone rather than wired to
+# a chart nobody asked for.
 #   FOUR_LAYER_BREAKDOWN    : derived from SIGNATURE_OPS + SHA3 + HMAC + HKDF
 #                             ctypes medians (pipeline latency, serial add)
 #
@@ -48,14 +56,6 @@ BENCH_FILE = ROOT / "benchmark_results.json"
 # is build-time-only. Re-derive whenever either source artifact changes;
 # the live-data branch below will override individual entries when
 # benchmark_results.json exists.
-CRYPTO_OPS = {
-    "SHA3-256 (C, 32B)": {"ops_sec": 1_540_955, "category": "hash"},
-    "SHA3-256 (C, 1KB)": {"ops_sec": 232_458, "category": "hash"},
-    "SHA3-256 (Py ctypes, 1KB)": {"ops_sec": 18_395, "category": "hash"},
-    "HMAC-SHA3-256 (C, 1KB)": {"ops_sec": 154_699, "category": "mac"},
-    "HKDF-SHA3-256 (C, 96B)": {"ops_sec": 100_756, "category": "kdf"},
-}
-
 SIGNATURE_OPS = {
     "Ed25519 Sign": {"ops_sec": 5_335, "latency_ms": 0.187},
     "Ed25519 Verify": {"ops_sec": 2_785, "latency_ms": 0.359},
