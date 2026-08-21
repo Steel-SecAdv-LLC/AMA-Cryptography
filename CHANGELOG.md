@@ -658,6 +658,21 @@ Nothing was deferred in this item.  The Windows binaries are PE32+ and cannot
 execute on the build host, so this is a compile-and-link verification; running
 them is what the windows-latest lane does, and that lane is the regression gate.
 
+Two documentation statements carried the same confusion and are corrected with
+it.  `INVARIANTS.md`'s INVARIANT-15 listed the approved primitives as "POSIX:
+`pthread_once`" and "**Windows (MSVC)**: `InitOnceExecuteOnce`", and
+`ARCHITECTURE.md` restated it as "`InitOnceExecuteOnce` (MSVC)" — while the
+invariant's own heading says *platform* once-primitive.  The heading was right
+and the bullet was describing the guard rather than the requirement, which is
+how the guard came to be written that way.  Both now say Windows, MSVC and
+MinGW-w64 alike, and name `_WIN32` as the predicate.
+
+The invariant's stated scope ("all one-time initialization in `ama_cpuid.c`")
+was left as it stands.  It is narrower than the shared `ama_once.h` primitive
+this branch's predecessors introduced, but widening a security invariant's
+scope is a claim about every module in the tree, and nothing here measured
+that.  Recorded rather than silently changed.
+
 
 **AUD-19 — the floor-drift gate fired on the guard change, and the stale
 acknowledgement beside it was the worse finding.**  The full suite on `6a3f09e`

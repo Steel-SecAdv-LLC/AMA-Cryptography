@@ -689,7 +689,14 @@ exactly-once execution with full memory visibility across threads. The
 approved primitives are:
 
 - **POSIX** (Linux, macOS, BSDs): `pthread_once` (IEEE Std 1003.1)
-- **Windows** (MSVC): `InitOnceExecuteOnce` (`synchapi.h`, Vista+)
+- **Windows** (MSVC and MinGW-w64): `InitOnceExecuteOnce` (`synchapi.h`, Vista+)
+
+The selection is made on `_WIN32`, not on `_MSC_VER`: which primitive is
+available is a property of the operating system, not of the compiler.
+`src/c/internal/ama_once.h` and `src/c/dispatch/ama_dispatch.c` both asked
+the compiler until this was corrected, which sent MinGW-w64 — Windows, but
+not MSVC — down the POSIX branch to link `winpthreads` for a facility
+Windows itself supplies.
 
 Lockless flag + plain-variable patterns (e.g., `volatile int done` guarding a
 non-atomic shared variable) are **prohibited** — they constitute data races

@@ -786,7 +786,7 @@ All PRs touching `ama_cryptography/`, `.github/workflows/`, or `tests/` must sat
 2. **INVARIANT-2 — Fail-Closed CI**: Security-critical CI steps must not use `continue-on-error: true`.
 3. **INVARIANT-3 — Observable Failure States**: No bare `except: pass`, no silent `return`, no stderr suppression.
 4. **INVARIANT-4 — Pinned Action References**: All third-party GitHub Actions pinned to full commit SHA.
-5. **INVARIANT-15 — Thread-Safe CPU Dispatch**: `ama_cpuid.c` one-time init must use `pthread_once` (POSIX) or `InitOnceExecuteOnce` (MSVC); lockless flag + plain-variable patterns are prohibited.
+5. **INVARIANT-15 — Thread-Safe CPU Dispatch**: `ama_cpuid.c` one-time init must use `pthread_once` (POSIX) or `InitOnceExecuteOnce` (Windows — MSVC and MinGW-w64 alike, selected on `_WIN32` rather than `_MSC_VER`); lockless flag + plain-variable patterns are prohibited.
 
 See [`INVARIANTS.md`](INVARIANTS.md) for the complete set (INVARIANT-1 through INVARIANT-43) and vendoring policy.
 
