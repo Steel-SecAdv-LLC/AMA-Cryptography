@@ -62,6 +62,7 @@ import ctypes
 import hashlib
 import os
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Protocol, Tuple
 
@@ -577,23 +578,59 @@ def _write_signature_module(
     pubkey: bytes,
     signature: bytes,
 ) -> Path:
-    """Emit ``_integrity_signature.py`` as a Python literal module."""
+    """Emit ``_integrity_signature.py`` as a Python literal module.
+
+    Written to a sibling temporary file and renamed over the target, never
+    truncated in place.  ``Path.write_text`` opens with ``"w"``, which empties
+    the file before the first byte of the new content lands, so between those
+    two moments the artefact exists and is empty — and an empty artefact used
+    to parse to zero literals, answer ``None`` to every digest lookup, and send
+    both pre-load gates down their nothing-to-check branch.  ``_artefact_source``
+    now refuses a literal-free artefact outright, which is the right rule and
+    would have turned that window into a hard ImportError for any concurrent
+    import.  ``os.replace`` removes the window instead of relying on nobody
+    looking: readers see either the whole old artefact or the whole new one.
+
+    newline="\n" pins the artefact to LF on every platform.  Windows' default
+    text-mode translation would emit CRLF, making the working tree diverge from
+    the committed blob byte-for-byte — which the checkout byte-identity gate
+    (tools/check_line_endings.py) correctly rejects.  The bytes written are
+    identical to what ``write_text`` produced, so the reproducible-build
+    byte-equality gate is unaffected.
+    """
     out_path = pkg_dir / "_integrity_signature.py"
-    # newline="\n" pins the artefact to LF on every platform.  Windows'
-    # default text-mode translation would emit CRLF, making the working tree
-    # diverge from the committed blob byte-for-byte — which the checkout
-    # byte-identity gate (tools/check_line_endings.py) correctly rejects.
-    out_path.write_text(
-        _SIGNATURE_TEMPLATE.format(
-            digest_hex=digest.hex(),
-            native_digest_hex=native_digest.hex(),
-            binding_digests_literal=_binding_digests_literal(binding_digests),
-            pubkey_hex=pubkey.hex(),
-            signature_hex=signature.hex(),
-        ),
-        encoding="utf-8",
-        newline="\n",
+    payload = _SIGNATURE_TEMPLATE.format(
+        digest_hex=digest.hex(),
+        native_digest_hex=native_digest.hex(),
+        binding_digests_literal=_binding_digests_literal(binding_digests),
+        pubkey_hex=pubkey.hex(),
+        signature_hex=signature.hex(),
     )
+    fd, tmp_name = tempfile.mkstemp(
+        dir=str(out_path.parent), prefix="._integrity_signature.", suffix=".tmp"
+    )
+    fd_is_ours = True
+    try:
+        handle = os.fdopen(fd, "w", encoding="utf-8", newline="\n")
+        fd_is_ours = False  # ownership transferred to ``handle``
+        with handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        # mkstemp creates 0o600; the artefact is world-readable package data,
+        # so widen to the umask-respecting mode a normal write would produce.
+        os.chmod(tmp_name, 0o644)
+        os.replace(tmp_name, out_path)
+    except BaseException:
+        if fd_is_ours:
+            # fdopen never took the descriptor, so closing it here is correct
+            # and cannot double-close.
+            os.close(fd)
+        # Already consumed by os.replace, or never created: a missing staging
+        # file is the one benign case and the only one suppressed.
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(tmp_name)
+        raise
     # Drop any cached bytecode compiled from the PREVIOUS artefact.  CPython
     # validates a .pyc by (mtime-seconds, size) — and this rewrite produces a
     # file of IDENTICAL size (fixed-width hex fields), often within the same

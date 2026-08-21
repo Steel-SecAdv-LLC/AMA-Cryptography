@@ -283,6 +283,61 @@ def test_signature_rewrite_removes_stale_bytecode(tmp_path: Any) -> None:
     assert unrelated.exists(), "the invalidation must be surgical, not a cache wipe"
 
 
+def test_a_failed_rewrite_leaves_the_previous_artefact_intact(
+    tmp_path: Any, monkeypatch: Any
+) -> None:
+    """The rewrite is atomic: readers see the whole old file or the whole new one.
+
+    ``Path.write_text`` opens with ``"w"``, so the artefact is EMPTIED before
+    the first byte of the replacement lands.  In that window the file is
+    present and empty — and an empty artefact used to parse to zero literals
+    and answer ``None`` to every digest lookup, which sent both pre-load gates
+    (``__init__._refuse_tampered_bindings_before_import`` and
+    ``pqc_backends._expected_native_digest``) down their nothing-to-check
+    branch.  ``_artefact_source`` refuses a literal-free artefact now, which is
+    the right rule and would have turned this window into a hard ImportError
+    for any concurrent import.  Removing the window is the other half.
+
+    Injected at ``os.fsync`` because that is inside the write and before the
+    rename: the previous artefact must be byte-identical afterwards, and no
+    staging file may survive.
+    """
+    pkg = tmp_path / "ama_cryptography"
+    pkg.mkdir()
+    out = bs._write_signature_module(
+        pkg, b"\x01" * 32, b"\x02" * 32, {"a_binding.so": b"\x0a" * 32}, b"\x03" * 32, b"\x04" * 64
+    )
+    original = out.read_bytes()
+    assert original, "the first write must have produced a non-empty artefact"
+
+    class _InjectedWriteError(RuntimeError):
+        """Raised in place of ``os.fsync`` to fail the write mid-flight."""
+
+    def _explode(_fd: int) -> None:
+        raise _InjectedWriteError("injected mid-write failure")
+
+    # Patched on the `os` module itself, not through `bs.os`: `_build_sign`
+    # does not re-export `os`, and reaching for it as an attribute of another
+    # module is the kind of coupling that breaks on an unrelated import tidy-up.
+    monkeypatch.setattr("os.fsync", _explode)
+    with pytest.raises(_InjectedWriteError):
+        bs._write_signature_module(
+            pkg,
+            b"\x05" * 32,
+            b"\x06" * 32,
+            {"a_binding.so": b"\x0b" * 32},
+            b"\x07" * 32,
+            b"\x08" * 64,
+        )
+
+    assert out.read_bytes() == original, (
+        "a failed rewrite changed the artefact — the write is not atomic, so a "
+        "concurrent reader can see a truncated or partial artefact"
+    )
+    strays = sorted(pkg.glob("._integrity_signature.*"))
+    assert strays == [], f"staging file(s) survived a failed write: {strays}"
+
+
 def test_signature_module_is_lf_terminated_on_every_platform(tmp_path: Any) -> None:
     """The generated artefacts must be byte-identical wherever they are written.
 

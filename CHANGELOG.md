@@ -343,6 +343,59 @@ drifted copy.  The pattern is imported now rather than re-spelled.
 A sweep for the general shape found nothing else: no other test module in the
 tree names a gate it never loads while defining its own regexes.
 
+**AUD-14 — an empty integrity artefact disarmed both pre-load gates, and the
+sweep test written to catch exactly that could not see it.**  CodeQL flagged
+`tests/test_artefact_cache_poisoning.py:388` as an empty `except` with no
+explanatory comment.  The comment was the least of it.
+
+`test_every_failure_mode_is_one_exception_type` drives five payloads through
+`load_artefact_fields` and asserts each raises `ArtefactSourceError`.  Its
+accepting branch was a bare `pass`, so a payload that did not raise **at all**
+fell through it and that iteration asserted nothing.  One of the five is `b""`,
+and measured, it never raised: an empty artefact reads, parses, yields zero
+literals, and returns an `ArtefactFields` that answers `None` to every
+`getattr`.  The test's own docstring — "none may produce anything other than
+ArtefactSourceError" — was false for one fifth of its inputs, and had been
+since it was written.
+
+What that costs is not cosmetic.  With `None` for every field,
+`__init__._refuse_tampered_bindings_before_import` takes its
+`not signed -> return` branch and `pqc_backends._expected_native_digest`
+returns `None`, so **both pre-load gates pass without comparing anything** —
+before any shared object is mapped, which is the one moment they exist to act
+on.  A signed tree whose artefact has been truncated is not an unsigned tree;
+it is a signed tree with the signatures removed, and treating the two alike is
+the same shape as the poisoned-`.pyc` attack this module was written for.
+
+It was also reachable with no attacker present.  `_write_signature_module`
+used `Path.write_text`, which opens `"w"` and empties the file before the
+first byte of the replacement lands, so **every re-sign passed through this
+state**.
+
+Three changes, and all three are needed:
+
+* `_artefact_source.load_artefact_fields` refuses a present artefact that
+  parses to no literal assignments.  The generator always emits
+  `INTEGRITY_DIGEST_HEX` and four siblings, so a literal-free file is the same
+  "shape the generator never emits" the neighbouring branches already reject —
+  reached by subtraction rather than by addition.  `None` still means the one
+  documented benign absence: no file at all.
+* `_write_signature_module` writes to a sibling temporary file and `os.replace`s
+  it over the target.  Making the rule stricter without this would have turned
+  a transient state into a hard `ImportError` for a concurrent import; removing
+  the window is the honest half of the fix.  The bytes are unchanged, so the
+  reproducible-build byte-equality gate is unaffected.
+* The sweep's accepting branch is a `continue`, and a payload that returns
+  instead of raising is now an explicit failure naming what it returned.
+
+Mutation-verified in three directions.  Reverting the rule fails two tests.
+Restoring the bare `pass` *and* reverting the rule makes the sweep pass again —
+which is the original state, and is the proof that the blind branch is what hid
+it.  Reverting the atomic write fails
+`test_a_failed_rewrite_leaves_the_previous_artefact_intact`, which injects a
+mid-write failure and requires the previous artefact to survive byte-identical
+with no staging file left behind.
+
 Two further classes this branch has seen were swept and recorded rather than
 assumed.  `py/multiple-definition` has one hit tree-wide — `_ = …` twice in a
 row in `tools/monitoring/ama_cryptography_monitor_demo.py`, the conventional

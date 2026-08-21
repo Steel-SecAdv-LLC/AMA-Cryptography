@@ -131,10 +131,24 @@ def load_artefact_fields(package_dir: Optional[Path] = None) -> Optional[Artefac
     behaviour for that state.
 
     Raises :class:`ArtefactSourceError` when the file is present but does not
-    parse, or when a top-level assignment is not a literal.  A generated file
-    of constants that has stopped being a generated file of constants is
-    tampering, and refusing is the same fail-closed rule the callers apply to a
-    digest that does not match.
+    parse, when a top-level assignment is not a literal, or when it parses to
+    NO literal assignments at all.  A generated file of constants that has
+    stopped being a generated file of constants is tampering, and refusing is
+    the same fail-closed rule the callers apply to a digest that does not
+    match.
+
+    That last case is the one that was silent.  An empty (or literal-free)
+    artefact parses cleanly to zero values, and the ``ArtefactFields`` it used
+    to produce answered ``None`` to every ``getattr`` a caller makes — so
+    ``__init__._refuse_tampered_bindings_before_import`` took its
+    ``not signed -> return`` branch and ``pqc_backends._expected_native_digest``
+    returned ``None``, and BOTH pre-load gates passed without comparing
+    anything.  A signed tree whose artefact has been truncated is not an
+    unsigned tree; it is a signed tree with the signatures removed, and the
+    difference is exactly the one these gates exist to notice before a shared
+    object is mapped.  ``Path.write_text`` truncates in place, so the state was
+    reachable without an attacker at all — see ``_build_sign``, where the write
+    is now atomic.
 
     Only module-level ``NAME = <literal>`` and ``NAME: ann = <literal>`` forms
     are collected.  Anything else in the file — imports, functions, conditionals
@@ -165,6 +179,7 @@ def load_artefact_fields(package_dir: Optional[Path] = None) -> Optional[Artefac
         raise ArtefactSourceError(f"{path}: is not parseable Python ({exc})") from exc
 
     values: Dict[str, Any] = {}
+    saw_assignment = False
     for node in tree.body:
         if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant):
             continue  # the module docstring
@@ -196,5 +211,24 @@ def load_artefact_fields(package_dir: Optional[Path] = None) -> Optional[Artefac
             raise ArtefactSourceError(f"{path}: {names[0]} is not a literal ({exc})") from exc
         for name in names:
             values[name] = literal
+        saw_assignment = True
+
+    if not saw_assignment:
+        # Present, readable, parseable — and carrying nothing.  The generator
+        # always emits INTEGRITY_DIGEST_HEX and four siblings, so a file of
+        # zero literal assignments is not an artefact this reader models; it
+        # is the same "shape the generator never emits" the branches above
+        # refuse, reached by subtraction instead of by addition.  Returning
+        # fields here answered None to every digest lookup and took both
+        # pre-load gates down their nothing-to-check branch.
+        raise ArtefactSourceError(
+            f"{path}: parses to no literal assignments — the generated "
+            "artefact always defines INTEGRITY_DIGEST_HEX and its siblings, so "
+            "an empty one is a signed tree with its signatures removed, not an "
+            "unsigned tree.  Restore it from the wheel, or remove it and "
+            "re-sign: rm <package-dir>/_integrity_signature.py && "
+            "AMA_BUILD_PIPELINE=1 python -m ama_cryptography.integrity "
+            "--update --sign"
+        )
 
     return ArtefactFields(values)

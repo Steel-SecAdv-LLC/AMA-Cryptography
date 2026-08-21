@@ -358,6 +358,34 @@ class TestTheParserFailsWithTheOneExceptionCallersHandle:
         with pytest.raises(ArtefactSourceError, match="not parseable Python"):
             load_artefact_fields(pkg)
 
+    def test_an_empty_artefact_is_an_error_not_an_unsigned_tree(self, tmp_path: Path) -> None:
+        """A truncated artefact is a signed tree with its signatures removed.
+
+        It parses cleanly to zero literals, so it used to yield an
+        ``ArtefactFields`` that answered ``None`` to every digest lookup:
+        ``__init__._refuse_tampered_bindings_before_import`` took its
+        ``not signed -> return`` branch and
+        ``pqc_backends._expected_native_digest`` returned ``None``, and both
+        pre-load gates passed without comparing anything — before any shared
+        object was mapped, which is the moment they exist to act on.
+
+        Not hypothetical, and not only reachable by an attacker:
+        ``_write_signature_module`` used ``Path.write_text``, which truncates in
+        place, so every re-sign passed through this exact state.  That write is
+        atomic now, and this is the rule that makes the state refuse rather
+        than pass.
+        """
+        from ama_cryptography._artefact_source import ArtefactSourceError, load_artefact_fields
+
+        for label, payload in (
+            ("empty", b""),
+            ("docstring only", b'"""nothing here"""\n'),
+            ("comment only", b"# nothing here\n"),
+        ):
+            pkg = self._staged(tmp_path / label.replace(" ", "_"), payload)
+            with pytest.raises(ArtefactSourceError, match="no literal assignments"):
+                load_artefact_fields(pkg)
+
     def test_a_missing_artefact_is_none_not_an_error(self, tmp_path: Path) -> None:
         """The one absence that is a normal state: an unsigned tree."""
         from ama_cryptography._artefact_source import load_artefact_fields
@@ -384,12 +412,27 @@ class TestTheParserFailsWithTheOneExceptionCallersHandle:
         for i, payload in enumerate(payloads):
             pkg = self._staged(tmp_path / f"case{i}", payload)
             try:
-                load_artefact_fields(pkg)
+                returned = load_artefact_fields(pkg)
             except ArtefactSourceError:
-                pass
+                continue  # the one exception every caller of the gate handles
             except Exception as exc:
                 raise AssertionError(
                     f"payload {payload!r} raised {type(exc).__name__}, not "
                     f"ArtefactSourceError; a caller of the trust bootstrap "
                     f"would see an unhandled exception"
                 ) from exc
+            # Reaching here is the case this loop could not see.  The accepting
+            # branch was a bare `pass`, so a payload that did not raise AT ALL
+            # fell through it and the iteration asserted nothing — which is how
+            # `b""` sat in this list, returning an empty ArtefactFields, while
+            # the docstring above claimed every payload produced
+            # ArtefactSourceError.  An empty artefact answers None to every
+            # digest lookup, so both pre-load gates took their
+            # nothing-to-check branch.
+            raise AssertionError(
+                f"payload {payload!r} did not raise at all; "
+                f"load_artefact_fields returned {returned!r}. None is the "
+                f"documented answer for a MISSING artefact only — a present "
+                f"but unusable one must raise, or a caller that reads None as "
+                f"'nothing to check against' silently loses the check."
+            )
