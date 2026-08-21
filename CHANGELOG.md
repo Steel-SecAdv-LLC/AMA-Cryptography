@@ -659,6 +659,40 @@ execute on the build host, so this is a compile-and-link verification; running
 them is what the windows-latest lane does, and that lane is the regression gate.
 
 
+**AUD-19 — the floor-drift gate fired on the guard change, and the stale
+acknowledgement beside it was the worse finding.**  The full suite on `6a3f09e`
+failed one test: `benchmarks/check_baseline_justification.py` compares
+`origin/main..HEAD` and found `src/c/internal/ama_once.h` changed after the
+floors in `benchmarks/baseline.json` and `arm-baseline.json` were calibrated,
+while `applies_through_release` still claims `4.0.0` → `5.0.0` with nothing
+re-measured.  The gate working, not a false positive.
+
+Re-measuring would have been the dishonest remedy, not the diligent one: the
+floors are calibrated on the canonical runners named in
+`metadata.calibration_evidence`, and figures taken in this container would be
+worse than no figures.  The acknowledgement path is the mechanism the gate
+itself offers, and the reason recorded is verifiable rather than asserted —
+both baselines describe POSIX runners, where `!_MSC_VER` and `!_WIN32` are
+alike true, so `gcc -E -P` output for the header is byte-identical before and
+after and every benchmarked translation unit still expands to the same
+`pthread_once` with the same flag type.  A reviewer can re-run that diff; the
+entry says how.
+
+`src/c/dispatch/ama_dispatch.c` did *not* newly trip the gate, and that is the
+part worth recording.  The path was already acknowledged — for a different
+change ("auto-tune verdict timings seed to -1 instead of 0", `d500783`).
+Acknowledgements are keyed by path, so that entry silently covered this
+branch's guard rewrite with a reason that does not describe it, and a reviewer
+reading it would not learn that the file's platform guards had moved.  Left
+alone it would have become exactly the unchecked assertion this gate exists to
+replace.  Its reason is extended to state the guard change and how to verify
+it.
+
+No floor moved: no `baseline_value`, no tolerance and no
+`calibration_evidence` changed — only the acknowledgement list.  Nothing was
+deferred in this item.
+
+
 ### Verification pass, ninth (2026-08-21) — a resonance detector that could not say "no", a quadratic hot path, and twelve documents describing a tree that is not this one
 
 Thirty-seven findings, raised by reading each subsystem against the standard or
