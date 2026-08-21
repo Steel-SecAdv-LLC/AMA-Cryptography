@@ -396,6 +396,56 @@ it.  Reverting the atomic write fails
 mid-write failure and requires the previous artefact to survive byte-identical
 with no staging file left behind.
 
+**AUD-15 — removing a skip made the code underneath it my responsibility, and
+I only audited half of it.**  The CPUID change in CI-RED-02 deleted the
+`/proc/cpuinfo` skip that had kept
+`TestTheBackendAcrossBuildConfigurations` off every Windows runner since it was
+written.  The build helper underneath had never run there, and it is written
+for POSIX throughout.  All ten windows-latest jobs failed on:
+
+    AssertionError: no static library at
+      ...\build-simd-off\lib\libama_cryptography_static.a
+
+with the traceback naming what was actually produced —
+`...\build-simd-off\lib\Debug\ama_cryptography_static.lib` — and the
+compiler it found: `C:\mingw64\bin\cc.EXE`.  Three separate POSIX assumptions,
+of which the failing assertion was only the first:
+
+1. **The generator.**  CMake's default on Windows is Visual Studio, which is
+   MULTI-config: it ignores `CMAKE_BUILD_TYPE` and interposes a `Debug/`
+   directory.  A single-config generator is now named explicitly — Ninja where
+   available, MinGW Makefiles otherwise — and where neither exists the probe
+   skips with that reason rather than asserting.
+2. **The compiler.**  Even found, an MSVC `.lib` is not linkable by the MinGW
+   `cc` the probe uses.  The library is built with `-DCMAKE_C_COMPILER` set to
+   the probe's own compiler, so the two halves agree by construction.  This is
+   also why a GCC-family compiler forces the generator question: the two are
+   mutually exclusive.
+3. **The artefact name and the executable suffix.**  `libNAME.a` vs `NAME.lib`
+   is discovered rather than assumed, with a diagnostic listing what was
+   searched and what was present; and MinGW's gcc appends `.exe` to an `-o`
+   without an extension, so the path handed to the linker is not necessarily
+   the path that then exists.  That third one is three lines below the
+   assertion CI reported: fixing only what the log pointed at would have gone
+   red again on the next line.
+
+`TestTheBuildProbeIsPlatformCorrect` now pins all of it **without a toolchain**,
+so the logic is covered on every runner rather than only where the build
+happens to run — which is precisely why it went unexercised for so long.
+Mutation-verified three ways: replanting the hardcoded POSIX path, letting a
+multi-config generator through, and widening the artefact match to any
+`.a`/`.lib` each fail a different one of the three tests.
+
+A fourth defect surfaced in the test written to pin the third.  The first draft
+patched `os.name` to `"nt"` with `monkeypatch`; `pathlib` picks `WindowsPath`
+from `os.name` at instantiation, so pytest's own cache provider built a path
+flavour this interpreter cannot use and the run died in `pytest_sessionfinish`
+with `cannot instantiate 'WindowsPath' on your system` instead of reporting the
+assertion.  Caught by mutation-testing the function the test was written for —
+the mutation did not fail, it *crashed*, which is how it was noticed.
+`_single_config_generator` takes the platform as a parameter now and nothing is
+patched globally.
+
 Two further classes this branch has seen were swept and recorded rather than
 assumed.  `py/multiple-definition` has one hit tree-wide — `_ = …` twice in a
 row in `tools/monitoring/ama_cryptography_monitor_demo.py`, the conventional

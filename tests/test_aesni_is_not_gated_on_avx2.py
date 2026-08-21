@@ -42,6 +42,7 @@ the coupling was reintroduced, and a behaviour has to be checked by running it.
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 from typing import NamedTuple
@@ -418,10 +419,129 @@ class _Probe(NamedTuple):
     backend: str
 
 
+#: Static-library file names, across toolchains.  GCC-family toolchains emit
+#: `libNAME.a`; MSVC emits `NAME.lib`.  The probe can only link the former, but
+#: both are searched so the diagnostic can say WHICH one it found when the
+#: generator and the compiler disagree.
+_STATIC_LIB_NAMES = frozenset({"libama_cryptography_static.a", "ama_cryptography_static.lib"})
+
+
+def _single_config_generator(os_name: str | None = None) -> list[str] | None:
+    """CMake generator flags that honour ``CMAKE_BUILD_TYPE``, or ``None``.
+
+    ``os_name`` defaults to ``os.name`` and exists so a test can exercise the
+    Windows branch without patching ``os.name`` globally.  That patch is not
+    harmless: ``pathlib`` picks ``WindowsPath`` vs ``PosixPath`` from
+    ``os.name`` at instantiation, so anything constructing a ``Path`` while it
+    is patched — pytest's own cache provider, for one — gets a flavour this
+    interpreter cannot use.  Found by mutation-testing this very function: the
+    run died in ``pytest_sessionfinish`` with "cannot instantiate 'WindowsPath'
+    on your system" rather than reporting the assertion.
+
+    Returned as the argv fragment to splice in, so "use the platform default"
+    is the empty list rather than a sentinel the caller has to decode.
+
+    On POSIX the default generator (Unix Makefiles) is already single-config,
+    so nothing needs forcing.  On Windows the default is Visual Studio, which
+    is multi-config AND incompatible with the GCC-family compiler this probe
+    links with, so a generator must be named explicitly or the measurement
+    cannot be made at all.
+    """
+    import shutil
+
+    if shutil.which("ninja"):
+        return ["-G", "Ninja"]
+    if (os.name if os_name is None else os_name) != "nt":
+        return []
+    if shutil.which("mingw32-make"):
+        return ["-G", "MinGW Makefiles"]
+    return None
+
+
+def _find_static_library(build_dir: Path) -> Path | None:
+    """The built static library, wherever the generator put it.
+
+    Single-config generators write ``lib/libNAME.a``; multi-config generators
+    interpose a per-configuration directory (``lib/Release/NAME.lib``).  The
+    hardcoded single-config POSIX path is what all ten windows-latest jobs
+    failed on, so the layout is discovered rather than assumed.
+    """
+    for candidate in sorted(build_dir.rglob("*")):
+        if candidate.is_file() and candidate.name in _STATIC_LIB_NAMES:
+            return candidate
+    return None
+
+
 def _x86_host() -> bool:
     import platform
 
     return platform.machine().lower() in {"x86_64", "amd64", "i386", "i686"}
+
+
+class TestTheBuildProbeIsPlatformCorrect:
+    """The build helper's platform logic, checked where the build cannot run.
+
+    ``TestTheBackendAcrossBuildConfigurations`` below only reaches this code on
+    an x86 host with a compiler, so on every other runner the logic went
+    unexercised — and when it finally did run on windows-latest it asserted a
+    POSIX artefact path against a Visual Studio layout and failed all ten jobs.
+    These run everywhere and need no toolchain.
+    """
+
+    def test_the_generator_is_single_config_or_absent(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A multi-config generator ignores CMAKE_BUILD_TYPE; never return one.
+
+        The platform is passed in rather than patched onto ``os``: see
+        ``_single_config_generator``'s docstring for what patching it breaks.
+        """
+        import shutil as _shutil
+
+        monkeypatch.setattr(
+            _shutil, "which", lambda n, *a, **k: "/usr/bin/ninja" if n == "ninja" else None
+        )
+        assert _single_config_generator(os_name="posix") == ["-G", "Ninja"]
+        assert _single_config_generator(os_name="nt") == ["-G", "Ninja"]
+
+        # No ninja on POSIX: the platform default (Unix Makefiles) is already
+        # single-config, so nothing needs forcing.
+        monkeypatch.setattr(_shutil, "which", lambda n, *a, **k: None)
+        assert _single_config_generator(os_name="posix") == []
+
+        # Windows with neither: the only default is Visual Studio, which is
+        # multi-config AND cannot drive a GCC-family compiler.  Refusing is
+        # right; naming a generator that is not installed is not.
+        assert _single_config_generator(os_name="nt") is None
+
+        monkeypatch.setattr(
+            _shutil,
+            "which",
+            lambda n, *a, **k: "C:/mingw64/bin/mingw32-make.exe" if n == "mingw32-make" else None,
+        )
+        assert _single_config_generator(os_name="nt") == ["-G", "MinGW Makefiles"]
+
+    def test_the_artefact_is_found_in_either_layout(self, tmp_path: Path) -> None:
+        """Single-config writes lib/libNAME.a; multi-config writes lib/CONFIG/NAME.lib."""
+        posix = tmp_path / "posix" / "lib"
+        posix.mkdir(parents=True)
+        (posix / "libama_cryptography_static.a").write_bytes(b"stub")
+        found = _find_static_library(tmp_path / "posix")
+        assert found is not None and found.name == "libama_cryptography_static.a"
+
+        # The exact shape windows-latest produced, and the one the hardcoded
+        # path could not see.
+        msvc = tmp_path / "msvc" / "lib" / "Debug"
+        msvc.mkdir(parents=True)
+        (msvc / "ama_cryptography_static.lib").write_bytes(b"stub")
+        found = _find_static_library(tmp_path / "msvc")
+        assert found is not None and found.parent.name == "Debug"
+
+    def test_nothing_built_is_reported_as_nothing(self, tmp_path: Path) -> None:
+        """Must not invent a path: a missing library has to read as missing."""
+        (tmp_path / "lib").mkdir()
+        (tmp_path / "lib" / "unrelated.a").write_bytes(b"stub")
+        assert _find_static_library(tmp_path) is None
 
 
 @pytest.mark.slow
@@ -443,6 +563,32 @@ class TestTheBackendAcrossBuildConfigurations:
         if cmake is None or compiler is None:
             pytest.skip("cmake or a C compiler is unavailable")
 
+        # The library must be built by the SAME compiler the probe links with,
+        # and into a predictable layout.  Neither was true on Windows, and the
+        # test never reached the build there until this pass removed the
+        # /proc/cpuinfo skip that had been masking it:
+        #
+        #  * CMake's default Windows generator is Visual Studio, which is
+        #    MULTI-config.  It ignores CMAKE_BUILD_TYPE and writes
+        #    `lib/Debug/ama_cryptography_static.lib` — so the hardcoded
+        #    `lib/libama_cryptography_static.a` was simply absent, which is the
+        #    assertion all ten windows-latest jobs failed on.
+        #  * even found, an MSVC `.lib` is not linkable by the MinGW `cc` the
+        #    probe uses.  Building with `-DCMAKE_C_COMPILER` set to the probe's
+        #    own compiler is what makes the two halves agree.
+        #
+        # A GCC-family compiler and the Visual Studio generator are mutually
+        # exclusive, so an explicit single-config generator is required
+        # wherever the default is multi-config.
+        generator = _single_config_generator()
+        if generator is None:
+            pytest.skip(
+                "no single-config CMake generator (ninja / mingw32-make) is "
+                "available for the probe compiler; the multi-config default "
+                "would ignore CMAKE_BUILD_TYPE and emit a library this probe "
+                "cannot link"
+            )
+
         build_dir = tmp_path / f"build-{label}"
         configure = subprocess.run(
             [
@@ -451,6 +597,8 @@ class TestTheBackendAcrossBuildConfigurations:
                 str(REPO_ROOT),
                 "-B",
                 str(build_dir),
+                *generator,
+                f"-DCMAKE_C_COMPILER={compiler}",
                 "-DCMAKE_BUILD_TYPE=Release",
                 "-DAMA_USE_NATIVE_PQC=ON",
                 "-DAMA_BUILD_TESTS=OFF",
@@ -470,8 +618,17 @@ class TestTheBackendAcrossBuildConfigurations:
         )
         assert build.returncode == 0, build.stderr[-2000:]
 
-        static_lib = build_dir / "lib" / "libama_cryptography_static.a"
-        assert static_lib.is_file(), f"no static library at {static_lib}"
+        static_lib = _find_static_library(build_dir)
+        if static_lib is None:
+            present = sorted(
+                str(q.relative_to(build_dir))
+                for q in build_dir.rglob("*")
+                if q.is_file() and q.suffix in {".a", ".lib"}
+            )
+            raise AssertionError(
+                f"no static library under {build_dir}; searched for "
+                f"{sorted(_STATIC_LIB_NAMES)}, found {present}"
+            )
 
         probe_c = tmp_path / f"probe-{label}.c"
         probe_c.write_text(_PROBE_C, encoding="utf-8")
@@ -494,7 +651,13 @@ class TestTheBackendAcrossBuildConfigurations:
             timeout=300,
         )
         assert link.returncode == 0, link.stderr[-2000:]
-        run = subprocess.run([str(probe_bin)], capture_output=True, text=True, timeout=300)
+        # MinGW's gcc appends `.exe` when `-o` names a file without one, so the
+        # path handed to `-o` is not necessarily the path that now exists.
+        produced = probe_bin if probe_bin.is_file() else probe_bin.with_suffix(".exe")
+        assert (
+            produced.is_file()
+        ), f"the probe linked but produced neither {probe_bin} nor {produced}"
+        run = subprocess.run([str(produced)], capture_output=True, text=True, timeout=300)
         assert run.returncode == 0, run.stderr[-2000:]
         fields = dict(line.split("=", 1) for line in run.stdout.splitlines() if "=" in line)
         assert set(fields) == {"HOST_AES_NI", "BACKEND"}, run.stdout
