@@ -103,9 +103,6 @@ typedef void (*ama_keccak_f1600_fn)(uint64_t state[25]);
 typedef void (*ama_keccak_f1600_x4_fn)(uint64_t states[4][25]);
 
 /** SHA3-256: full hash (input, len) -> output[32] */
-typedef ama_error_t (*ama_sha3_256_fn)(const uint8_t *input, size_t input_len,
-                                        uint8_t output[32]);
-
 /** Kyber NTT forward transform */
 typedef void (*ama_kyber_ntt_fn)(int16_t poly[256], const int16_t zetas[128]);
 
@@ -234,10 +231,9 @@ typedef void (*ama_x25519_scalarmult_x4_fn)(uint8_t out[4][32],
  *     pointer always resolves — either to the AVX2 interleaved
  *     kernel or to ama_keccak_f1600_x4_generic, which invokes the
  *     single-state keccak four times.
- *     Wired when SIMD detected: sha3_256, kyber_ntt, kyber_invntt,
+ *     Wired when SIMD detected: kyber_ntt, kyber_invntt,
  *     kyber_pointwise, dilithium_ntt, dilithium_invntt,
- *     dilithium_pointwise (AVX2 and NEON; SVE2 wires keccak_f1600,
- *     kyber_*, and dilithium_* but not sha3_256).  kyber_cbd2 is
+ *     dilithium_pointwise.  kyber_cbd2 is
  *     AVX2-only today — it remains NULL on NEON and SVE2 tiers
  *     until a corresponding implementation is wired.
  *   - NULL: no dispatch available; caller must use its own inline generic
@@ -250,7 +246,6 @@ typedef void (*ama_x25519_scalarmult_x4_fn)(uint8_t out[4][32],
 typedef struct {
     ama_keccak_f1600_fn       keccak_f1600;        /**< Always non-NULL after init */
     ama_keccak_f1600_x4_fn    keccak_f1600_x4;     /**< Always non-NULL after init; 4-way batched permutation */
-    ama_sha3_256_fn           sha3_256;             /**< Non-NULL when SIMD detected; callers MUST NULL-check */
     ama_kyber_ntt_fn          kyber_ntt;            /**< Non-NULL when SIMD detected; callers MUST NULL-check */
     ama_kyber_ntt_fn          kyber_invntt;         /**< Non-NULL when SIMD detected; callers MUST NULL-check */
     ama_kyber_pointwise_fn    kyber_pointwise;      /**< Non-NULL when SIMD detected; callers MUST NULL-check */
@@ -406,9 +401,9 @@ AMA_API const char *ama_aes_gcm_active_backend(void);
  *   "argon2-g-avx2"        — argon2_g -> AVX2 BlaMka
  *   "aes-gcm-neon"         — aes_gcm_encrypt / decrypt -> ARMv8 AES + PMULL
  *   "chacha20-neon"        — chacha20_block_x8 -> NEON
- *   "sha3-neon"            — keccak_f1600 / sha3_256 -> NEON
+ *   "sha3-neon"            — keccak_f1600 -> NEON
  *   "kyber-sve2"           — kyber_ntt / invntt / pointwise / poly_{add,sub,reduce} -> SVE2
- *   "sha3-sve2"            — keccak_f1600 / sha3_256 -> SVE2
+ *   "sha3-sve2"            — keccak_f1600 -> SVE2
  *   "x25519-avx2"          — x25519_x4 -> AVX2 4-way ladder
  *                            (requires AMA_DISPATCH_USE_X25519_AVX2=1 also set)
  *

@@ -57,8 +57,6 @@ extern "C" {
  * SHA-3 / Keccak
  * ============================================================================ */
 void        ama_keccak_f1600_sve2(uint64_t state[25]);
-ama_error_t ama_sha3_256_sve2(const uint8_t *input, size_t input_len,
-                              uint8_t output[32]);
 
 /* ============================================================================
  * Kyber (ML-KEM)

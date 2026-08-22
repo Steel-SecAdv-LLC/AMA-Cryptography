@@ -526,7 +526,6 @@ static apply_dispatch_only_result_t apply_dispatch_only(
     if (strcmp(slot, "sha3-neon") == 0) {
         if (saved.keccak_f1600 == ama_keccak_f1600_neon) {
             dispatch_table.keccak_f1600 = saved.keccak_f1600;
-            dispatch_table.sha3_256     = saved.sha3_256;
             *resolved_label_out = "sha3-neon";
             return AMA_DISPATCH_ONLY_HONORED;
         }
@@ -547,11 +546,14 @@ static apply_dispatch_only_result_t apply_dispatch_only(
          * tiers on one host — and `tests/c/test_dispatch_only_env.c`'s
          * sha3-neon case skipped on exactly that build.
          *
-         * `sha3_256` is deliberately left NULL: no NEON sha3_256 wrapper
-         * exists (only the SVE2 block ever sets that slot), so the portable
-         * one-shot path is the correct partner for a pinned NEON
-         * permutation — which is also what `saved.sha3_256` holds on a
-         * NEON-only host. */
+         * There is no second slot to pin alongside it.  This paragraph used
+         * to say "`sha3_256` is deliberately left NULL: no NEON sha3_256
+         * wrapper exists (only the SVE2 block ever sets that slot)", and both
+         * halves were false — this file wired `dispatch_table.sha3_256 =
+         * ama_sha3_256_neon` below, and the wrapper was defined in
+         * src/c/neon/ama_sha3_neon.c — so the pin was labelled identically
+         * for two different configurations depending on the host.  The slot
+         * itself is gone; see the removal note above ama_dispatch_init. */
         if (ama_has_arm_neon()) {
             dispatch_table.keccak_f1600 = ama_keccak_f1600_neon;
             *resolved_label_out = "sha3-neon";
@@ -578,7 +580,6 @@ static apply_dispatch_only_result_t apply_dispatch_only(
     if (strcmp(slot, "sha3-sve2") == 0) {
         if (saved.keccak_f1600 == ama_keccak_f1600_sve2) {
             dispatch_table.keccak_f1600 = saved.keccak_f1600;
-            dispatch_table.sha3_256     = saved.sha3_256;
             *resolved_label_out = "sha3-sve2";
             return AMA_DISPATCH_ONLY_HONORED;
         }
@@ -1406,9 +1407,41 @@ static void dispatch_init_internal(void) {
      * ==================================================================== */
 
     resolve_keccak_scalar_baseline();
+    /* There is no `sha3_256` slot, and its removal is a measurement rather
+     * than a tidy-up.
+     *
+     * The table carried one, three tiers wired it (AVX2, NEON, SVE2), and
+     * NOTHING outside this file ever read it: the public `ama_sha3_256`
+     * (src/c/ama_sha3.c) absorbs inline and dispatches solely through
+     * `dt->keccak_f1600`.  Three comments -- here, in
+     * src/c/sve2/ama_sha3_sve2.c, and in include/ama_dispatch.h -- asserted
+     * that the FIPS 202 SHA3-256 KATs "flow through
+     * `dispatch_table.sha3_256`", which they structurally could not.  The
+     * `AMA_DISPATCH_ONLY=sha3-neon` branch above additionally claimed no NEON
+     * wrapper existed while this function wired one, so the same pin was
+     * labelled identically for two different configurations.
+     *
+     * Wiring it for real was measured on an AVX2 host (Xeon @ 2.10GHz,
+     * gcc 13 -O2) against the entry point that already dispatches its
+     * permutation:
+     *
+     *   len=  64   ama_sha3_256   281.0 ns   ama_sha3_256_avx2   1293.4 ns
+     *   len= 512   ama_sha3_256  1109.6 ns   ama_sha3_256_avx2   4891.0 ns
+     *   len=4096   ama_sha3_256  7967.3 ns   ama_sha3_256_avx2  37239.8 ns
+     *
+     * 4.4x-4.7x SLOWER, because the wrappers duplicate the same scalar
+     * absorb and then drive a permutation built for 4-way batching down a
+     * single lane.  They also disagree with the public contract:
+     * `ama_sha3_256(NULL, 0, out)` returns AMA_SUCCESS and every wrapper
+     * returns AMA_ERROR_INVALID_PARAM, so wiring them would have made a
+     * public API's NULL handling depend on the host CPU -- the same class of
+     * defect as two verifiers disagreeing on one signature.
+     *
+     * The slot could not be made true by wiring it, and leaving it wired but
+     * unread kept three false claims alive.  It is gone, with
+     * ama_sha3_256_{avx2,neon,sve2}: this table was their only caller. */
     dispatch_table.keccak_f1600      = keccak_scalar_baseline;
     dispatch_table.keccak_f1600_x4   = ama_keccak_f1600_x4_generic;
-    dispatch_table.sha3_256          = NULL;  /* dispatched via keccak_f1600 */
     dispatch_table.kyber_ntt         = NULL;  /* NULL = caller uses inline generic */
     dispatch_table.kyber_invntt      = NULL;
     dispatch_table.kyber_pointwise   = NULL;
@@ -1430,7 +1463,6 @@ static void dispatch_init_internal(void) {
     if (dispatch_info.sha3 >= AMA_IMPL_AVX2) {
         dispatch_table.keccak_f1600    = ama_keccak_f1600_avx2;
         dispatch_table.keccak_f1600_x4 = ama_keccak_f1600_x4_avx2;
-        dispatch_table.sha3_256        = ama_sha3_256_avx2;
     }
 #endif
 
@@ -1565,7 +1597,6 @@ static void dispatch_init_internal(void) {
 #ifdef AMA_HAVE_NEON_IMPL
     if (dispatch_info.sha3 >= AMA_IMPL_NEON) {
         dispatch_table.keccak_f1600 = ama_keccak_f1600_neon;
-        dispatch_table.sha3_256     = ama_sha3_256_neon;
     }
     if (dispatch_info.kyber >= AMA_IMPL_NEON) {
         dispatch_table.kyber_ntt       = ama_kyber_ntt_neon;
@@ -1620,14 +1651,6 @@ static void dispatch_init_internal(void) {
      * the auto-tuning fallback reverts to this rather than always
      * falling back to generic C — which would skip the NEON tier. */
     ama_keccak_f1600_fn pre_sve2_keccak = dispatch_table.keccak_f1600;
-    /* Save the pre-SVE2 sha3_256 slot the same way so the auto-tune
-     * revert below can keep the two slots in lockstep: the SVE2
-     * `ama_sha3_256_sve2` wrapper calls `ama_keccak_f1600_sve2`
-     * directly (not through the dispatch table), so if the auto-tune
-     * decides SVE2 keccak regressed on this host, sha3_256 must revert
-     * too — otherwise sha3_256 stays on the slow SVE2 path while
-     * keccak_f1600 has already moved off it. */
-    ama_sha3_256_fn pre_sve2_sha3_256 = dispatch_table.sha3_256;
     /* Save the pre-SVE2 kyber_poly_{add,sub,reduce} slots for the same
      * lockstep revert reason: today no other tier wires these (AVX2 /
      * NEON let the compiler auto-vectorise the trivial int16 add/sub
@@ -1635,8 +1658,7 @@ static void dispatch_init_internal(void) {
      * them anyway keeps the revert path future-proof: if a NEON or
      * AVX2 helper is wired in a later release, the SVE2 auto-tune
      * fallback will demote to that tier instead of all the way to
-     * scalar.  Mirrors the pre_sve2_keccak / pre_sve2_sha3_256
-     * pattern above. */
+     * scalar.  Mirrors the pre_sve2_keccak pattern above. */
     ama_kyber_poly_add_fn    pre_sve2_kyber_poly_add    = dispatch_table.kyber_poly_add;
     ama_kyber_poly_sub_fn    pre_sve2_kyber_poly_sub    = dispatch_table.kyber_poly_sub;
     ama_kyber_poly_reduce_fn pre_sve2_kyber_poly_reduce = dispatch_table.kyber_poly_reduce;
@@ -1644,13 +1666,6 @@ static void dispatch_init_internal(void) {
 #ifdef AMA_HAVE_SVE2_IMPL
     if (dispatch_info.sha3 >= AMA_IMPL_SVE2) {
         dispatch_table.keccak_f1600 = ama_keccak_f1600_sve2;
-        /* sha3_256 wrapper: reuses the SVE2 Keccak permutation above
-         * and adds a lane-predicated rate-block absorb.  Promoted from
-         * "compiled but unwired" to wired in this PR; pinned by the
-         * existing FIPS 202 SHA3-256 KATs which flow through
-         * `dispatch_table.sha3_256` on any host where this slot is
-         * non-NULL. */
-        dispatch_table.sha3_256     = ama_sha3_256_sve2;
     }
     if (dispatch_info.kyber >= AMA_IMPL_SVE2) {
         dispatch_table.kyber_ntt        = ama_kyber_ntt_sve2;
@@ -1692,8 +1707,6 @@ static void dispatch_init_internal(void) {
     }
     /* SVE2 wired surface (canonical as of this PR):
      *   - keccak_f1600  (single-state Keccak permutation)
-     *   - sha3_256      (SHA3-256 sponge using the above permutation;
-     *                    promoted from compiled-but-unwired in PR #312)
      *   - kyber_ntt / kyber_invntt / kyber_pointwise
      *   - kyber_poly_add / kyber_poly_sub / kyber_poly_reduce
      *                   (promoted from compiled-but-unwired in this
@@ -1751,10 +1764,9 @@ static void dispatch_init_internal(void) {
      * ">10 %" guarantee did not hold in the single configuration where
      * a fallback tier exists at all.)  Only the
      * single-state `keccak_f1600` verdict carries a lockstep tie —
-     * to `sha3_256` and `kyber_poly_{add,sub,reduce}` — because the
-     * SVE2 `sha3_256` wrapper embeds `ama_keccak_f1600_sve2` directly
-     * and the three `kyber_poly_*` slots share the SVE2 codegen tier
-     * with no independent kernel.  Every other slot stands alone.
+     * to `kyber_poly_{add,sub,reduce}` — because those three slots
+     * share the SVE2 codegen tier with no independent kernel.  Every
+     * other slot stands alone.
      *
      * `AMA_DISPATCH_CACHE_FILE=<path>` (opt-in): write the verdict
      * after a successful bench; subsequent processes with the same
@@ -2044,7 +2056,7 @@ static void dispatch_init_internal(void) {
     if (!autotune_disabled) {
         /* Apply per-slot verdicts.  Each block reverts at most one slot
          * group; the keccak group carries the carved-out lockstep tie
-         * for sha3_256 / kyber_poly_{add,sub,reduce} described above. */
+         * for kyber_poly_{add,sub,reduce} described above. */
         if (v.keccak_regressed) {
             /* Fall to the intermediate tier ONLY if it was measured and did
              * not itself regress.  Without this the revert installed
@@ -2062,10 +2074,6 @@ static void dispatch_init_internal(void) {
                 dispatch_table.keccak_f1600 = pre_sve2_keccak;
             } else {
                 dispatch_table.keccak_f1600 = keccak_scalar_baseline;
-            }
-            /* sha3_256 — SVE2 wrapper calls ama_keccak_f1600_sve2 directly */
-            if (pre_sve2_sha3_256 != dispatch_table.sha3_256) {
-                dispatch_table.sha3_256 = pre_sve2_sha3_256;
             }
             /* kyber_poly_{add,sub,reduce} — share the SVE2 codegen tier */
             if (pre_sve2_kyber_poly_add != dispatch_table.kyber_poly_add) {

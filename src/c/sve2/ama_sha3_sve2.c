@@ -8,12 +8,14 @@
  * Uses scalable vectors that adapt to hardware vector length.
  *
  * Wired surface (`src/c/dispatch/ama_dispatch.c`):
- *   - `ama_keccak_f1600_sve2` — single-state permutation (line ~589).
- *   - `ama_sha3_256_sve2`     — SHA3-256 wrapper (line ~590, this PR).
+ *   - `ama_keccak_f1600_sve2` — single-state permutation.
  *
- * The SHA3-256 wrapper reuses the wired Keccak permutation above; the
- * only SVE2-specific work is the rate-block absorb (predicated XOR via
- * `sveor_u64_x`).  Algorithmic correctness is straightforward (it is
+ * `ama_sha3_256_sve2` used to be listed here too, and its own comment said
+ * it was "pinned by the existing SHA3-256 KATs at every layer (the FIPS 202
+ * vectors flow through the dispatched `sha3_256` slot)".  Nothing outside
+ * src/c/dispatch ever read that slot, so the wrapper was unreachable and the
+ * claim could not be true; both are gone.  See the removal note in
+ * ama_dispatch.c.  Algorithmic correctness is straightforward (it is
  * literally FIPS 202's sponge construction at rate=136, padding 0x06)
  * and is pinned by every SHA3-256 KAT in the suite once the dispatch
  * pointer is set.
@@ -78,12 +80,14 @@ static const int PI[25] = {
  * describes work it does not do is how a reader concludes the SVE2 tier is
  * earning something here that it is not.
  *
- * What the SVE2 tier does earn in this file is `ama_sha3_256_sve2`'s
- * lane-predicated rate-block absorb, which is genuinely vectorised.  The
- * permutation is kept in this TU so that wrapper can call it directly, and
- * because the dispatcher's Phase-3 auto-tune measures whatever pointer is
- * installed: if this kernel is slower than the scalar baseline on a given
- * host, the auto-tune now reverts to a tier it has ALSO measured.
+ * That paragraph named `ama_sha3_256_sve2`'s lane-predicated rate-block
+ * absorb as what the SVE2 tier "does earn in this file".  It earned nothing:
+ * the wrapper was reachable only through a dispatch slot no caller read.
+ * What this file does contribute is the permutation itself, which IS wired
+ * and IS measured — the dispatcher's Phase-3 auto-tune benches whatever
+ * pointer is installed, and if this kernel is slower than the scalar
+ * baseline on a given host the auto-tune reverts to a tier it has ALSO
+ * measured.
  * ============================================================================ */
 void ama_keccak_f1600_sve2(uint64_t state[25]) {
     uint64_t C[5], D[5], B[25];
@@ -170,75 +174,12 @@ void ama_keccak_f1600_sve2(uint64_t state[25]) {
     }
 }
 
-/* ============================================================================
- * SVE2 SHA3-256 — single-shot hash (no streaming API).
- *
- * FIPS 202 sponge: absorb `input` at rate=136 bytes, pad with 0x06 ||
- * 0* || 0x80, run f1600 over the final block, squeeze 32 output bytes.
- * The absorb XOR is the only SVE2-vectorised step (lane-predicated
- * `svld1_u64` / `sveor_u64_x` pair over the rate-block lanes); the
- * permutation reuses `ama_keccak_f1600_sve2` above.
- *
- * Signature matches `ama_sha3_256_fn` in `include/ama_dispatch.h`
- * (returns `ama_error_t`) so the dispatcher can wire this function
- * directly into `dispatch_table.sha3_256`.  Pinned by the existing
- * SHA3-256 KATs at every layer (the FIPS 202 vectors flow through
- * the dispatched `sha3_256` slot).
- * ============================================================================ */
-ama_error_t ama_sha3_256_sve2(const uint8_t *input, size_t input_len, uint8_t output[32]) {
-    if (!output) return AMA_ERROR_INVALID_PARAM;
-    if (!input && input_len > 0) return AMA_ERROR_INVALID_PARAM;
-
-    uint64_t state[25];
-    memset(state, 0, sizeof(state));  // PUBLIC-DATA: state — SVE2 Keccak permutation buffer, pre-use init; post-use scrub via ama_secure_memzero at function exit
-    const size_t rate = 136;
-    size_t offset = 0;
-
-    while (offset + rate <= input_len) {
-        /* Absorb a full rate block using SVE2 lane-predicated XOR. */
-        size_t lanes = rate / 8;
-        size_t i = 0;
-        while (i < lanes) {
-            svbool_t pg = svwhilelt_b64((int64_t)i, (int64_t)lanes);
-            svuint64_t vs = svld1_u64(pg, &state[i]);
-            uint64_t temp[17];
-            for (size_t j = i; j < lanes && j < i + svcntd(); j++) {
-                memcpy(&temp[j - i], input + offset + j * 8, 8);
-            }
-            svuint64_t vi = svld1_u64(pg, temp);
-            svst1_u64(pg, &state[i], sveor_u64_x(pg, vs, vi));
-            i += svcntd();
-        }
-        ama_keccak_f1600_sve2(state);
-        offset += rate;
-    }
-
-    /* Final block with SHA-3 padding (0x06 marker + 0x80 sentinel). */
-    uint8_t block[200];
-    memset(block, 0, sizeof(block));  // PUBLIC-DATA: block — SVE2 SHA3 rate-block padding buffer, pre-use init filled by memcpy + 0x06/0x80 padding
-    size_t remaining = input_len - offset;
-    if (remaining > 0)
-        memcpy(block, input + offset, remaining);
-    block[remaining] = 0x06;
-    block[rate - 1] |= 0x80;
-
-    for (size_t i = 0; i < rate / 8; i++) {
-        uint64_t lane;
-        memcpy(&lane, block + i * 8, 8);
-        state[i] ^= lane;
-    }
-    ama_keccak_f1600_sve2(state);
-
-    memcpy(output, state, 32);
-
-    /* Scrub Keccak state and padding scratch buffer.  `ama_secure_memzero`
-     * is guaranteed not to be optimised away (audit finding MEM-1). */
-    ama_secure_memzero(state, sizeof(state));
-    ama_secure_memzero(block, sizeof(block));
-
-    return AMA_SUCCESS;
-}
-
+/* ama_sha3_256_sve2() was removed with the dispatch table's `sha3_256`
+ * slot, which was its only caller.  Nothing outside src/c/dispatch ever read
+ * that slot -- the public ama_sha3_256() absorbs inline and dispatches only
+ * `keccak_f1600` -- and the wrapper was 4.4x-4.7x slower than that path while
+ * rejecting `input == NULL, input_len == 0`, which the public entry point
+ * accepts.  See the removal note in src/c/dispatch/ama_dispatch.c. */
 #else
 typedef int ama_sha3_sve2_not_available;
 #endif /* __ARM_FEATURE_SVE2 */

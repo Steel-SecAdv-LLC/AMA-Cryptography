@@ -133,55 +133,12 @@ void ama_keccak_f1600_neon(uint64_t state[25]) {
     }
 }
 
-/* ============================================================================
- * NEON-accelerated SHA3-256 (single message)
- * ============================================================================ */
-ama_error_t ama_sha3_256_neon(const uint8_t *input, size_t input_len, uint8_t output[32]) {
-    if (!input || !output) return AMA_ERROR_INVALID_PARAM;
-
-    uint64_t state[25];
-    memset(state, 0, sizeof(state));  // PUBLIC-DATA: state — NEON Keccak permutation buffer, pre-use init
-
-    const size_t rate = 136;
-    size_t offset = 0;
-
-    while (offset + rate <= input_len) {
-        for (size_t i = 0; i < rate / 8; i++) {
-            uint64_t lane;
-            memcpy(&lane, input + offset + i * 8, 8);
-            state[i] ^= lane;
-        }
-        ama_keccak_f1600_neon(state);
-        offset += rate;
-    }
-
-    uint8_t block[200];
-    memset(block, 0, sizeof(block));  // PUBLIC-DATA: block — NEON SHA3 rate-block padding buffer, pre-use init
-    size_t remaining = input_len - offset;
-    if (remaining > 0)
-        memcpy(block, input + offset, remaining);
-
-    block[remaining] = 0x06;
-    block[rate - 1] |= 0x80;
-
-    for (size_t i = 0; i < rate / 8; i++) {
-        uint64_t lane;
-        memcpy(&lane, block + i * 8, 8);
-        state[i] ^= lane;
-    }
-    ama_keccak_f1600_neon(state);
-
-    memcpy(output, state, 32);
-
-    /* SECURITY FIX: Scrub Keccak state and padding block after use.
-     * Plain memset() can be optimized away by the compiler; use
-     * ama_secure_memzero() to guarantee zeroization (audit finding MEM-1). */
-    ama_secure_memzero(state, sizeof(state));
-    ama_secure_memzero(block, sizeof(block));
-
-    return AMA_SUCCESS;
-}
-
+/* ama_sha3_256_neon() was removed with the dispatch table's `sha3_256`
+ * slot, which was its only caller.  Nothing outside src/c/dispatch ever read
+ * that slot -- the public ama_sha3_256() absorbs inline and dispatches only
+ * `keccak_f1600` -- and the wrapper was 4.4x-4.7x slower than that path while
+ * rejecting `input == NULL, input_len == 0`, which the public entry point
+ * accepts.  See the removal note in src/c/dispatch/ama_dispatch.c. */
 #else
 typedef int ama_sha3_neon_not_available;
 #endif /* __aarch64__ */
