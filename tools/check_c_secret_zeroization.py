@@ -133,14 +133,82 @@ _SECRET_NAME_RE = re.compile(
 # each pointer ``*`` anchors its own optional whitespace run, and exactly one
 # trailing ``[ \t]*`` reaches the closing paren.  Every input therefore has a
 # single parse, which is what makes the scan linear rather than usually-fast.
+#
+# THREE further spellings were reaching past it, each verified as a silent
+# bypass on the tree as it stood and each pinned in both directions by
+# tests/test_c_secret_zeroization_gate.py:
+#
+#   * `memset(secret_key, 00, 32)` -- octal zero.  `0[uUlL]*` consumed one
+#     `0` and then required a comma, so a second `0` failed the match.  `0+`
+#     fixes it and cannot be ambiguous: it is followed by a suffix class that
+#     excludes digits.
+#   * `memset(secret_key, (0), 32)` -- a parenthesized zero, which C
+#     programmers write constantly inside macro bodies.
+#   * `memset(secret_key + 4, 0, 28)` -- pointer arithmetic on the
+#     destination.  Zeroing the tail of a secret buffer is still zeroing
+#     secret state, and _destination_name already resolves the leading
+#     identifier, so admitting the offset costs nothing but the match.
+#
+# The ReDoS constraint from the cast group governs each addition, and this
+# file has acquired that defect twice already:
+#   * `0+` sits alone before `[uUlL]*` (digits and suffix letters are
+#     disjoint), so a digit run has exactly one parse.
+#   * The optional parens around the value are a fixed pair with one `\s*`
+#     each, and the value alternation cannot match `(` or `)`, so no position
+#     is claimable by two quantifiers.
+#   * The offset tail is `(?:[ \t]*[-+][ \t]*<term>)*` where <term> starts
+#     with a character class disjoint from `[ \t]` and from `[-+]`, so a
+#     whitespace run again has one parse.
+# tests/test_c_secret_zeroization_gate.py pins the growth ratio at ~2.0x per
+# doubling (linear), which is what caught both earlier regressions.
 _MEMSET_RE = re.compile(
     r"\bmemset\s*\(\s*"
     r"(?:\(\s*[A-Za-z_][A-Za-z0-9_]*(?:[ \t]+[A-Za-z_][A-Za-z0-9_]*)*"
     r"(?:[ \t]*\*)*[ \t]*\)\s*)?"
+    r"(?:(?P<lparen>\()\s*)?"
     r"(?:(?P<amp>&)\s*)?"
     r"(?P<dst>[A-Za-z_][A-Za-z0-9_]*"
-    r"(?:(?:->|\.)[A-Za-z_][A-Za-z0-9_]*|\[[^\]]*\])*)"
-    r"\s*,\s*(?P<val>0[xX]0+[uUlL]*|0[uUlL]*|'\\0')\s*,"
+    r"(?:(?:->|\.)[A-Za-z_][A-Za-z0-9_]*|\[[^\]]*\])*"
+    r"(?:[ \t]*[-+][ \t]*[A-Za-z0-9_]+"
+    r"(?:(?:->|\.)[A-Za-z_][A-Za-z0-9_]*|\[[^\]]*\])*)*)"
+    r"(?:\s*\))?\s*,\s*"
+    r"(?:\(\s*)?"
+    r"(?P<val>0[xX]0+[uUlL]*|0+[uUlL]*|'\\0')"
+    r"(?:\s*\))?"
+    r"\s*,"
+)
+
+#: `#define NAME(p1, p2, ...) ... memset(pN, 0, ...) ...` -- a function-like
+#: macro whose body bare-memsets one of its OWN parameters.  Matched
+#: separately because the CALL SITE carries no `memset` token at all, so
+#: _MEMSET_RE is structurally blind to it.  Verified: scan_text returned 0
+#: findings for
+#:
+#:     #define CLR(x) memset((x),0,sizeof(x))
+#:     CLR(secret_key);
+#:
+#: The definition is not a finding on its own -- a parameter has no name to
+#: test -- and the call site is where the secret appears, so the call site is
+#: what gets reported.  This tool is the SOLE enforcement of INVARIANT-6 (the
+#: semgrep counterpart is documented in this module's docstring as unrunnable
+#: and cannot be made to run), so a one-line wrapper macro was a complete
+#: bypass of an ERROR-severity control.
+#:
+#: Deliberately NOT a preprocessor.  Nested expansion, token pasting and
+#: conditional definitions are out of scope; the one shape in scope is a bare
+#: memset hidden behind a name in a single expansion step.  A tool that covers
+#: one shape and says which one beats a tool that claims to cover C.
+_MACRO_DEFINE_RE = re.compile(
+    r"^[ \t]*#[ \t]*define[ \t]+(?P<name>[A-Za-z_][A-Za-z0-9_]*)"
+    r"\((?P<params>[^)\n]*)\)(?P<body>(?:\\\n|[^\n])*)",
+    re.MULTILINE,
+)
+
+#: `#define NAME memset` -- an object-like alias.  The same blindness one
+#: token earlier: the call site spells the alias, not `memset`.
+_MEMSET_ALIAS_RE = re.compile(
+    r"^[ \t]*#[ \t]*define[ \t]+(?P<name>[A-Za-z_][A-Za-z0-9_]*)[ \t]+memset[ \t]*$",
+    re.MULTILINE,
 )
 
 
@@ -164,6 +232,32 @@ def _destination_name(expression: str) -> str:
     into an identifier that was never in the source (``a[b]c`` -> ``ac``).
     They now yield ``a`` and ``c``.
     """
+    # An additive offset is not part of the name.  `_MEMSET_RE` now admits
+    # `memset(secret_key + 4, 0, 28)` — zeroing the tail of a secret buffer is
+    # still zeroing secret state — and the left-to-right "last identifier at
+    # depth 0" rule below resolved that expression to `4`, the offset, which
+    # names nothing and matches no secret pattern.  Two independent halves of
+    # the same bypass: the regex could not see the call, and the resolver
+    # would have named the wrong thing if it had.  Truncating at the first
+    # top-level `+`/`-` leaves the base object, which is what the destination
+    # is; the member-access rule (`ctx->hmac_key` -> `hmac_key`) then applies
+    # to that base unchanged.
+    depth = 0
+    for index, ch in enumerate(expression):
+        if ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth -= 1
+        elif ch in "+-" and depth == 0:
+            # `->` is a member access, not a subtraction.  Without this the
+            # truncation resolved `ctx->hmac_key + 8` to `ctx` — a base name
+            # the secret-name test does not match, which is the same class of
+            # miss the truncation was added to fix.
+            if ch == "-" and expression[index + 1 : index + 2] == ">":
+                continue
+            expression = expression[:index]
+            break
+
     depth = 0
     last = ""
     current: list[str] = []
@@ -358,6 +452,146 @@ def blank_comments_and_literals(text: str) -> str:
     return "".join(out)
 
 
+def _split_top_level(argument_text: str) -> list[str]:
+    """Split a C argument list on top-level commas.
+
+    Depth-tracking over `()`, `[]` and `{}` so `CLR(a[i, j])` and
+    `CLR(f(x, y))` stay single arguments.  A plain `.split(",")` would
+    mis-map every argument after a nested comma onto the wrong parameter,
+    which on this gate means testing the wrong identifier for secrecy.
+    """
+    parts: list[str] = []
+    depth = 0
+    current: list[str] = []
+    for ch in argument_text:
+        if ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth -= 1
+        if ch == "," and depth == 0:
+            parts.append("".join(current))
+            current = []
+            continue
+        current.append(ch)
+    parts.append("".join(current))
+    return [part.strip() for part in parts]
+
+
+def _match_call_arguments(text: str, open_paren: int) -> tuple[str, int] | None:
+    """The text between `text[open_paren] == '('` and its matching `)`.
+
+    Returns `(arguments, index_after_close)`, or None when the parenthesis is
+    never closed.  Depth-tracked rather than regex-matched: a `[^)]*` form
+    would stop at the first `)` inside a nested call and hand the caller a
+    truncated argument list.
+    """
+    depth = 0
+    i = open_paren
+    n = len(text)
+    while i < n:
+        if text[i] == "(":
+            depth += 1
+        elif text[i] == ")":
+            depth -= 1
+            if depth == 0:
+                return text[open_paren + 1 : i], i + 1
+        i += 1
+    return None
+
+
+class _ZeroingMacro(NamedTuple):
+    """A function-like macro that bare-memsets one of its own parameters."""
+
+    name: str
+    #: Index of the parameter the memset writes to.
+    parameter_index: int
+
+
+def _zeroing_macros(blanked: str) -> list[_ZeroingMacro]:
+    """Function-like macros whose body bare-memsets a parameter of their own.
+
+    See _MACRO_DEFINE_RE for why this exists and what it deliberately does not
+    attempt.  A macro whose memset targets a fixed symbol rather than a
+    parameter needs nothing here: the body carries both the `memset` token and
+    the symbol's name, so _MEMSET_RE already reports it at the definition.
+    """
+    macros: list[_ZeroingMacro] = []
+    for define in _MACRO_DEFINE_RE.finditer(blanked):
+        parameters = [
+            token.strip()
+            for token in define.group("params").split(",")
+            if token.strip()
+        ]
+        if not parameters:
+            continue
+        body = define.group("body")
+        for call in _MEMSET_RE.finditer(body):
+            target = _destination_name(call.group("dst"))
+            if target in parameters:
+                macros.append(_ZeroingMacro(define.group("name"), parameters.index(target)))
+                break
+    return macros
+
+
+def _memset_aliases(blanked: str) -> list[_ZeroingMacro]:
+    """`#define NAME memset` aliases, mapped to memset's own dst parameter."""
+    return [
+        _ZeroingMacro(define.group("name"), 0)
+        for define in _MEMSET_ALIAS_RE.finditer(blanked)
+    ]
+
+
+def _macro_call_findings(
+    blanked: str,
+    text: str,
+    path: Path,
+    lines: list[str],
+    line_starts: list[int],
+) -> list[Finding]:
+    """Call sites of zeroing macros whose mapped argument names a secret.
+
+    An alias (`#define CLR memset`) is only a finding when the call also
+    passes a zero value, because `CLR(buf, 0xff, n)` is not a zeroing call;
+    the alias's mapped index is memset's dst, so the zero test is re-applied
+    to the second argument.  A wrapper macro (`#define CLR(x) memset((x),0,…)`)
+    has already been proven to zero, so its call sites need no such test.
+    """
+    findings: list[Finding] = []
+    aliases = {macro.name for macro in _memset_aliases(blanked)}
+    macros = _zeroing_macros(blanked) + _memset_aliases(blanked)
+    if not macros:
+        return findings
+
+    by_name = {macro.name: macro for macro in macros}
+    name_pattern = re.compile(
+        r"\b(" + "|".join(re.escape(macro.name) for macro in macros) + r")\s*\("
+    )
+    for call in name_pattern.finditer(blanked):
+        macro = by_name[call.group(1)]
+        # The macro's own #define line is not a call site.
+        line_no = bisect_right(line_starts, call.start())
+        raw = lines[line_no - 1] if 0 < line_no <= len(lines) else ""
+        if raw.lstrip().startswith("#"):
+            continue
+        matched = _match_call_arguments(blanked, call.end() - 1)
+        if matched is None:
+            continue
+        arguments = _split_top_level(matched[0])
+        if macro.parameter_index >= len(arguments):
+            continue
+        if macro.name in aliases:
+            if len(arguments) < 2 or not re.fullmatch(
+                r"\(?\s*(?:0[xX]0+[uUlL]*|0+[uUlL]*|'\\0')\s*\)?", arguments[1]
+            ):
+                continue
+        expression = arguments[macro.parameter_index]
+        dst = _destination_name(expression)
+        if not dst or not _SECRET_NAME_RE.match(dst):
+            continue
+        findings.append(Finding(path, line_no, dst, raw, expression))
+    return findings
+
+
 def scan_text(text: str, path: Path) -> list[Finding]:
     """Findings in one file's text.
 
@@ -393,6 +627,11 @@ def scan_text(text: str, path: Path) -> list[Finding]:
         raw = lines[line_no - 1] if 0 < line_no <= len(lines) else ""
         expression = ("&" if match.group("amp") else "") + match.group("dst")
         findings.append(Finding(path, line_no, dst, raw, expression))
+
+    # Call sites of macros that wrap a bare memset — invisible to the regex
+    # above because they carry no `memset` token.  See _MACRO_DEFINE_RE.
+    findings.extend(_macro_call_findings(blanked, text, path, lines, line_starts))
+    findings.sort(key=lambda finding: (finding.line_no, finding.dst))
     return findings
 
 

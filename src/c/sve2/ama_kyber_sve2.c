@@ -62,6 +62,35 @@
 #if defined(__ARM_FEATURE_SVE2)
 #include <arm_sve.h>
 #include "ama_sve2_internal.h"
+#include "../../../include/ama_cryptography.h"
+
+/* SECRET SCRATCH — INVARIANT-6/12 applied to this file.
+ *
+ * Every kernel below stages coefficients through int16_t stack arrays,
+ * because SVE2's svmulh_s16 cannot produce the full 32-bit product Kyber's
+ * Montgomery reduction needs, so the reduction is done element-wise between a
+ * store and a reload.  Those coefficients are secret on two of the three
+ * paths: keygen NTTs the secret vector `s` and encaps NTTs the secret noise
+ * `sp`, both reaching here through poly_ntt -> dt->kyber_ntt.
+ *
+ * The file previously contained no ama_secure_memzero call at all, while the
+ * PR that added it scrubbed exactly this class of staging buffer in the AES
+ * kernels and cited INVARIANT-6/12 for doing so.
+ *
+ * The buffers are hoisted to function scope rather than scrubbed where they
+ * were declared, and that is the point of the restructuring: declared inside
+ * the butterfly loop, a scrub would place one compiler barrier per vector
+ * iteration in the hottest loop in the kernel — the trade
+ * src/c/neon/ama_aes_gcm_neon.c measured and rejected for key expansion.
+ * Hoisted, one scrub per public call erases every coefficient any iteration
+ * staged, because each iteration overwrites the same storage.  Cost is one
+ * barrier and three-to-four 256-byte clears per NTT of 256 coefficients.
+ *
+ * Not applied to ama_kyber_poly_{add,sub}_sve2 or
+ * ama_kyber_poly_pointwise_sve2: those hold no stack staging buffer — they
+ * operate register-to-memory on the caller's polynomials — and the stronger
+ * guarantee is not writing a secret down, not erasing it afterwards. */
+#define AMA_KYBER_SVE2_SCRUB(buf) ama_secure_memzero((buf), sizeof(buf))
 
 #define KYBER_Q  3329
 #define KYBER_N  256
@@ -108,14 +137,21 @@ static inline int16_t barrett_reduce_scalar(int16_t a) {
  * Barrett reduction.  The load/store and loop control are vectorized;
  * the reduction itself uses the proven scalar formula.
  * ============================================================================ */
-static inline svint16_t barrett_reduce_sve2(svbool_t pg, svint16_t a) {
-    int16_t buf[128];  /* Max VL = 2048 bits → 128 int16_t lanes */
-    svst1_s16(pg, buf, a);
+/* `scratch` is supplied by the caller rather than declared here, and that is
+ * a secret-hygiene requirement, not a style choice — see the SECRET SCRATCH
+ * note in this file's header.  The coefficients staged through it are the
+ * secret vector `s` during keygen and the secret noise `sp` during encaps, and
+ * an inline function's local cannot be scrubbed by the caller that ends up
+ * owning its stack slot.  Hoisting it to the caller makes exactly one scrub
+ * per public entry point erase every staged coefficient. */
+static inline svint16_t barrett_reduce_sve2(svbool_t pg, svint16_t a,
+                                            int16_t scratch[128]) {
+    svst1_s16(pg, scratch, a);
     uint64_t active = svcntp_b16(pg, pg);
     for (uint64_t e = 0; e < active; e++) {
-        buf[e] = barrett_reduce_scalar(buf[e]);
+        scratch[e] = barrett_reduce_scalar(scratch[e]);
     }
-    return svld1_s16(pg, buf);
+    return svld1_s16(pg, scratch);
 }
 
 /* ============================================================================
@@ -183,6 +219,9 @@ void ama_kyber_ntt_sve2(int16_t poly[KYBER_N],
     unsigned int len, start, j, k;
     int16_t zeta, t;
     const uint64_t vl_h = svcnth();  /* Number of int16_t lanes */
+    /* Function-scope so one scrub at the bottom covers every iteration.  Max
+     * VL = 2048 bits -> 128 int16_t lanes. */
+    int16_t hi_buf[128], t_buf[128], scratch[128];
 
     k = 1;
     for (len = 128; len >= 2; len >>= 1) {
@@ -202,7 +241,6 @@ void ama_kyber_ntt_sve2(int16_t poly[KYBER_N],
                     svint16_t hi = svld1_s16(pg, poly + start + len + i);
 
                     /* Montgomery reduce zeta * hi[e] for each active lane */
-                    int16_t hi_buf[128], t_buf[128];
                     svst1_s16(pg, hi_buf, hi);
                     for (uint64_t e = 0; e < active; e++) {
                         t_buf[e] = montgomery_reduce_scalar(
@@ -244,10 +282,14 @@ void ama_kyber_ntt_sve2(int16_t poly[KYBER_N],
         while (i < KYBER_N) {
             svbool_t pg = svwhilelt_b16((int64_t)i, (int64_t)KYBER_N);
             svint16_t v = svld1_s16(pg, poly + i);
-            svst1_s16(pg, poly + i, barrett_reduce_sve2(pg, v));
+            svst1_s16(pg, poly + i, barrett_reduce_sve2(pg, v, scratch));
             i += svcnth();
         }
     }
+
+    AMA_KYBER_SVE2_SCRUB(hi_buf);
+    AMA_KYBER_SVE2_SCRUB(t_buf);
+    AMA_KYBER_SVE2_SCRUB(scratch);
 }
 
 /* ============================================================================
@@ -264,6 +306,8 @@ void ama_kyber_invntt_sve2(int16_t poly[KYBER_N],
     int16_t t_scalar, zeta;
     const int16_t f = 1441;  /* f = 128^{-1} mod q, in Montgomery form */
     const uint64_t vl_h = svcnth();
+    /* Function-scope for the same reason as the forward NTT above. */
+    int16_t diff_buf[128], hi_out_buf[128], scratch[128], buf[128];
 
     k = 127;
     for (len = 2; len <= 128; len <<= 1) {
@@ -286,10 +330,9 @@ void ama_kyber_invntt_sve2(int16_t poly[KYBER_N],
                     svint16_t diff = svsub_s16_x(pg, hi, lo);
 
                     /* Barrett reduction of sum */
-                    svint16_t lo_out = barrett_reduce_sve2(pg, sum);
+                    svint16_t lo_out = barrett_reduce_sve2(pg, sum, scratch);
 
                     /* Montgomery reduction of zeta * diff */
-                    int16_t diff_buf[128], hi_out_buf[128];
                     svst1_s16(pg, diff_buf, diff);
                     for (uint64_t e = 0; e < active; e++) {
                         hi_out_buf[e] = montgomery_reduce_scalar(
@@ -322,7 +365,6 @@ void ama_kyber_invntt_sve2(int16_t poly[KYBER_N],
             svbool_t pg = svwhilelt_b16((int64_t)i, (int64_t)KYBER_N);
             uint64_t active = svcntp_b16(pg, pg);
 
-            int16_t buf[128];
             svint16_t va = svld1_s16(pg, poly + i);
             svst1_s16(pg, buf, va);
 
@@ -339,6 +381,11 @@ void ama_kyber_invntt_sve2(int16_t poly[KYBER_N],
             i += svcnth();
         }
     }
+
+    AMA_KYBER_SVE2_SCRUB(diff_buf);
+    AMA_KYBER_SVE2_SCRUB(hi_out_buf);
+    AMA_KYBER_SVE2_SCRUB(scratch);
+    AMA_KYBER_SVE2_SCRUB(buf);
 }
 
 /* ============================================================================
@@ -376,12 +423,14 @@ void ama_kyber_poly_pointwise_sve2(int16_t r[KYBER_N],
  * ============================================================================ */
 void ama_kyber_poly_reduce_sve2(int16_t poly[KYBER_N]) {
     size_t i = 0;
+    int16_t scratch[128];
     while (i < KYBER_N) {
         svbool_t pg = svwhilelt_b16((int64_t)i, (int64_t)KYBER_N);
         svint16_t va = svld1_s16(pg, poly + i);
-        svst1_s16(pg, poly + i, barrett_reduce_sve2(pg, va));
+        svst1_s16(pg, poly + i, barrett_reduce_sve2(pg, va, scratch));
         i += svcnth();
     }
+    AMA_KYBER_SVE2_SCRUB(scratch);
 }
 
 #else
