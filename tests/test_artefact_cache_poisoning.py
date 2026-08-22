@@ -112,8 +112,15 @@ def signed_tree(tmp_path_factory: pytest.TempPathFactory) -> Path:
     shutil.rmtree(pkg / "__pycache__", ignore_errors=True)
 
     if not _binding_extensions(pkg):
+        # "native" is load-bearing in this reason, not decoration: conftest's
+        # AMA_CI_REQUIRE_BACKENDS escalation matches skip reasons against
+        # _BACKEND_SKIP_REASONS, and neither "binding" nor "extensions" is in
+        # it — so this skip, in the ONLY end-to-end coverage of the pre-import
+        # binding gate and the __pycache__ poisoning attack, could not be
+        # escalated in CI.  The word is also the accurate one: these are the
+        # compiled native extension modules.
         pytest.skip(
-            "no compiled binding extensions in this tree; build with "
+            "no compiled native binding extensions in this tree; build with "
             "`python setup.py build_ext --inplace`"
         )
     if native_library_path(pkg) is None:
@@ -129,7 +136,13 @@ def signed_tree(tmp_path_factory: pytest.TempPathFactory) -> Path:
         **_UTF8_PIPES,
     )
     if proc.returncode != 0:
-        pytest.skip(f"could not sign the scratch tree: {proc.stderr.strip()[-400:]}")
+        # Same reason the reason names "native": signing runs the in-tree
+        # Ed25519 kernels through ctypes, so a signing failure IS a backend
+        # failure and CI must be able to escalate it.
+        pytest.skip(
+            "could not sign the scratch tree with the native Ed25519 signing "
+            f"kernels: {proc.stderr.strip()[-400:]}"
+        )
     return root
 
 

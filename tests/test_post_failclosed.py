@@ -47,7 +47,7 @@ import textwrap
 import threading
 from pathlib import Path
 from types import ModuleType
-from typing import Generator
+from typing import Any, Generator
 
 import pytest
 
@@ -92,6 +92,14 @@ def _run_python(
     env.pop("PYTHONPATH", None)
     # An installed copy of the package would shadow the tree under test.
     env["PYTHONPATH"] = str(cwd)
+    # ...and AMA_CRYPTO_LIB_PATH would hand the tree a native backend, which
+    # is the one thing this fixture exists to withhold.  The loader's own
+    # error message tells the reader to "point AMA_CRYPTO_LIB_PATH at an
+    # existing build", so running this suite the documented way exported it —
+    # and these subprocesses then found a backend, which silently falsified
+    # the "no native backend" premise and produced 5 failures that say nothing
+    # about the code.  Scrubbing PYTHONPATH and not this was half a fixture.
+    env.pop("AMA_CRYPTO_LIB_PATH", None)
     env.update(env_extra or {})
     argv = [sys.executable, "-S", "-c"] if isolated else [sys.executable, "-c"]
     return subprocess.run(
@@ -1476,6 +1484,31 @@ class TestContinuousRNGTest:
         the same stale ``previous``, both compare their identical stuck value
         against it, both pass, and two consecutive identical outputs are issued
         as key material with the control silently satisfied.
+
+        Eight threads on a ``Barrier`` are not enough to produce that
+        interleaving, and this test used to be exactly that.  The health digest
+        is computed BEFORE the critical section, so the unlocked check-then-act
+        window is about five pure-Python bytecodes; under the GIL a switch
+        lands inside it essentially never.  Measured against a build with
+        ``_rng_lock`` removed: 60 consecutive runs of the eight-thread
+        scenario, 0 failures.  The test asserted a property it could not
+        observe, and the branch's own description of it — "reverting the lock
+        makes all 8 threads receive the stuck value" — was false.
+
+        The window is now held open from inside, by instrumenting the state
+        the critical section reads rather than the code that reads it:
+        ``_rng_state`` is replaced with a mapping whose first eight reads of
+        ``previous`` rendezvous on a barrier before returning.  With the lock,
+        one thread is inside and the other seven are queued on the lock, so
+        that barrier can never fill and times out — one success, seven
+        refusals.  Without the lock, all eight are inside together, the
+        barrier fills immediately, all eight read ``None`` and all eight are
+        issued the identical stuck buffer.  The two outcomes are structurally
+        different rather than probabilistically different, which is what makes
+        this an assertion instead of a hope.
+
+        The timeout is the only cost, and it is paid only on the correct
+        build: 0.5 s once.
         """
         from ama_cryptography import _module_state as ms
         from ama_cryptography.exceptions import CryptoModuleError
@@ -1505,10 +1538,33 @@ class TestContinuousRNGTest:
 
             refusals: list[BaseException] = []
             successes: list[bytes] = []
-            barrier = threading.Barrier(8)
+            start = threading.Barrier(8)
+            # Filled only if eight threads are inside the critical section at
+            # once — which is precisely what the lock must prevent.
+            inside = threading.Barrier(8)
+
+            class _RendezvousState(dict):  # type: ignore[type-arg]
+                """A ``_rng_state`` that holds the check-then-act window open.
+
+                Only the ``previous`` read is instrumented, and only while the
+                threads are running; every other access behaves as a dict.
+                """
+
+                def __getitem__(self, key: str) -> Any:
+                    value = super().__getitem__(key)
+                    if key == "previous":
+                        try:
+                            inside.wait(timeout=0.5)
+                        except threading.BrokenBarrierError:
+                            # The lock is doing its job: the other seven
+                            # threads cannot get here.
+                            pass
+                    return value
+
+            monkeypatch.setattr(ms, "_rng_state", _RendezvousState(previous=None))
 
             def draw() -> None:
-                barrier.wait()
+                start.wait()
                 try:
                     successes.append(ms.secure_token_bytes(32))
                 except CryptoModuleError as exc:
@@ -1528,9 +1584,12 @@ class TestContinuousRNGTest:
                 "the continuous RNG test must catch consecutive identical outputs"
             )
             assert refusals, "a stuck RNG must trip the continuous test"
+            assert len(refusals) == 7, (
+                f"expected the other seven draws to be refused, got {len(refusals)}"
+            )
             assert ms.module_status() == "ERROR"
         finally:
-            # token_bytes is restored by monkeypatch's own teardown.
+            # token_bytes and _rng_state are restored by monkeypatch's teardown.
             ms._rng_state["previous"] = saved_previous
             ms._MODULE_STATE = saved_state
             ms._ERROR_REASON = saved_reason

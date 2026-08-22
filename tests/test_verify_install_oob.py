@@ -439,6 +439,12 @@ class TestTrustAnchor:
             assert result.returncode == 2, f"accepted a malformed anchor {bad!r}"
 
 
+# Both decorators, like every sibling in this file: the bodies below assert
+# `NATIVE_LIB is not None  # guaranteed by @requires_native_lib` and drive a
+# signed tree, so without them the guarantee they cite is not in force and
+# the assertion fails as an error rather than skipping.
+@requires_signed_tree
+@requires_native_lib
 class TestCliAgainstRepoTree:
     def test_clean_tree_passes(self, installed_tree: Path) -> None:
         assert NATIVE_LIB is not None  # guaranteed by @requires_native_lib
@@ -594,6 +600,12 @@ class TestArtefactIsLiteralDataOnly:
         assert error is not None and "more than literal data" in error
 
 
+# Both decorators, like every sibling in this file: the bodies below assert
+# `NATIVE_LIB is not None  # guaranteed by @requires_native_lib` and drive a
+# signed tree, so without them the guarantee they cite is not in force and
+# the assertion fails as an error rather than skipping.
+@requires_signed_tree
+@requires_native_lib
 class TestTamperDetection:
     def test_flipped_byte_in_py_fails_naming_the_file(self, tree_copy: tuple[Path, Path]) -> None:
         pkg_copy, native_copy = tree_copy

@@ -38,6 +38,7 @@ import pytest
 # Import the production helper rather than re-defining the keyword list — if
 # the production list shrinks (e.g., a backend is removed from coverage) the
 # tests below stay in lockstep automatically.
+from tests import conftest
 from tests.conftest import _is_backend_skip
 
 # pytester is built into pytest but is opt-in; declare the plugin so the
@@ -702,4 +703,69 @@ class TestNativeLibraryDetection:
         assert not native_library_present(tmp_path), (
             "a Cython binding is not the native library; matching it would make "
             "the integrity fixtures run against a tree with no C library"
+        )
+
+
+class TestEveryBackendSkipIsEscalatable:
+    """A skip reason CI cannot escalate is a skip CI cannot see.
+
+    ``AMA_CI_REQUIRE_BACKENDS=1`` turns backend-related skips into failures by
+    matching the recorded reason against ``conftest._BACKEND_SKIP_REASONS``.
+    That makes the wording of an imperative ``pytest.skip()`` a functional
+    property of the test, not prose — and two reasons in
+    ``tests/test_artefact_cache_poisoning.py`` matched no keyword:
+
+        "no compiled binding extensions in this tree; ..."
+        "could not sign the scratch tree: ..."
+
+    That module is the only end-to-end coverage of the pre-import binding gate
+    and the ``__pycache__`` poisoning attack, so a CI runner that failed to
+    build the extensions, or failed to sign, skipped all of it and reported
+    green.  Both now name what is actually missing, which is native.
+
+    This pins the property for the module rather than the two strings, so a
+    third skip added later is caught the same way.
+    """
+
+    #: The modules whose skips must all be escalatable.  Scoped rather than
+    #: repo-wide on purpose: plenty of skips elsewhere are legitimately not
+    #: about a backend (no network, no pwsh, no semgrep), and asserting over
+    #: those would force keyword-stuffing, which is the opposite of the point.
+    BACKEND_ONLY_MODULES = ("test_artefact_cache_poisoning.py",)
+
+    @pytest.mark.parametrize("module_name", BACKEND_ONLY_MODULES)
+    def test_every_literal_skip_reason_matches_a_backend_keyword(
+        self, module_name: str
+    ) -> None:
+        import ast
+
+        source_path = Path(__file__).resolve().parent / module_name
+        tree = ast.parse(source_path.read_text(encoding="utf-8"))
+
+        unescalatable: list[str] = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            if not (isinstance(func, ast.Attribute) and func.attr == "skip"):
+                continue
+            if not (isinstance(func.value, ast.Name) and func.value.id == "pytest"):
+                continue
+            if not node.args:
+                continue
+            # Reasons are built from literals and f-strings; collect every
+            # literal fragment, which is what conftest's keyword match sees.
+            text = " ".join(
+                part.value
+                for part in ast.walk(node.args[0])
+                if isinstance(part, ast.Constant) and isinstance(part.value, str)
+            )
+            if not any(keyword in text.lower() for keyword in conftest._BACKEND_SKIP_REASONS):
+                unescalatable.append(f"line {node.lineno}: {text[:90]!r}")
+
+        assert not unescalatable, (
+            f"{module_name} has pytest.skip() reasons that AMA_CI_REQUIRE_BACKENDS "
+            f"cannot escalate, so a CI runner missing the backend would skip this "
+            f"coverage and report green: {unescalatable}. Name what is missing "
+            f"using one of {sorted(conftest._BACKEND_SKIP_REASONS)}."
         )
