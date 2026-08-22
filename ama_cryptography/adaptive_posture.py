@@ -611,6 +611,15 @@ class CryptoPostureController:
         for name, strength in ladder.items()
     }
 
+    #: How many consecutive ATTEMPTED-and-FAILED rotations are tried before
+    #: the controller stops attempting automatically.  Six, because the
+    #: backoff ladder below doubles from ``rotation_cooldown / 32`` and
+    #: reaches exactly ``rotation_cooldown`` on the sixth failure: at the
+    #: default 300 s that is 9.4 s, 18.8 s, 37.5 s, 75 s, 150 s, 300 s —
+    #: roughly ten minutes of increasingly patient retrying before the
+    #: controller concludes the mechanism is not coming back.
+    MAX_CONSECUTIVE_ROTATION_FAILURES: int = 6
+
     @classmethod
     def family_of(cls, algorithm: str) -> Optional[str]:
         """The ladder ``algorithm`` belongs to, or None if it ranks in none."""
@@ -689,6 +698,15 @@ class CryptoPostureController:
         self.grace_period = grace_period
 
         self._last_rotation_time: float = 0.0
+        #: Consecutive rotations that were ATTEMPTED and FAILED.  Reset to 0
+        #: by any rotation that succeeds, and by reset().  See
+        #: _trigger_rotation for why a failure needs its own counter rather
+        #: than sharing ``_last_rotation_time``.
+        self._rotation_failure_streak: int = 0
+        #: Earliest time a retry after a failed rotation may be attempted —
+        #: the exponential backoff window.  Distinct from
+        #: ``_last_rotation_time``, which throttles SUCCESSFUL rotations.
+        self._rotation_retry_not_before: float = 0.0
         #: Throttles algorithm switches independently of rotations — see
         #: _execute_action for why one timer could not serve both.
         self._last_switch_time: float = 0.0
@@ -935,8 +953,83 @@ class CryptoPostureController:
             reason,
         )
 
+    def _rotation_retry_delay(self, streak: int) -> float:
+        """Backoff before retrying after ``streak`` consecutive failures.
+
+        Doubles per failure and lands exactly on ``rotation_cooldown`` at
+        ``MAX_CONSECUTIVE_ROTATION_FAILURES``, so the ladder is derived from
+        the throttle the caller already configured rather than from a second
+        knob nobody asked for.  Clamped at ``rotation_cooldown`` so a caller
+        who raises the cap cannot produce a delay longer than the cooldown a
+        SUCCESSFUL rotation would impose.
+        """
+        cap = max(1, self.MAX_CONSECUTIVE_ROTATION_FAILURES)
+        exponent = min(max(streak, 1), cap) - 1
+        return float(self.rotation_cooldown) * (2.0**exponent) / (2.0 ** (cap - 1))
+
     def _trigger_rotation(self) -> None:
-        """Trigger key rotation through existing infrastructure."""
+        """Trigger key rotation through existing infrastructure.
+
+        Failed rotations are throttled by their own exponential backoff and
+        capped, which is a different thing from the ``rotation_cooldown``
+        window a SUCCESSFUL rotation arms.
+
+        Both are needed, and the reason is a measurement.  Arming
+        ``_last_rotation_time`` unconditionally in ``_execute_action`` — which
+        is what this class did before — made the whole attempted/succeeded
+        distinction dead code and suppressed every retry of a rotation that
+        had never happened.  Deleting that line fixed the dead code and
+        removed the only throttle a FAILING rotation had: over 20 evaluation
+        cycles at sustained CRITICAL, a raising ``on_rotation`` callback was
+        invoked 20 times, ``_rotation_count`` reached 20, the cooldown was
+        never armed, and with a caller-supplied KMS-backed manager whose
+        ``initiate_rotation`` raises, 20 fresh ``posture-rotation-N`` keys
+        were registered — one per cycle, unbounded in the evaluation rate.
+        (The same run with a rotation that succeeds: 1 invocation, cooldown
+        armed.)
+
+        So: retryable, but not free.  Each consecutive failure doubles the
+        wait (see ``_rotation_retry_delay``), and after
+        ``MAX_CONSECUTIVE_ROTATION_FAILURES`` the controller stops attempting
+        and says so at CRITICAL.  Continuing to hammer a rotation mechanism
+        that has failed six times with growing backoff does not rotate
+        anything; it burns key identifiers and derivation indices, floods the
+        callback, and buries the operator's evidence. A rotation that
+        SUCCEEDS clears the streak, so a mechanism that comes back resumes
+        immediately, and ``reset()`` clears it for an operator who has fixed
+        the fault.
+
+        ``get_posture_summary()`` reports ``rotation_failure_streak`` and
+        ``rotation_suspended`` so the stopped state is readable rather than
+        silent.
+        """
+        now = time.time()
+
+        if self._rotation_failure_streak >= self.MAX_CONSECUTIVE_ROTATION_FAILURES:
+            # Logged at DEBUG, not WARNING: the CRITICAL below fires once when
+            # the cap is reached, and repeating it every evaluation would bury
+            # it under its own copies.  The state is on get_posture_summary().
+            logger.debug(
+                "Posture rotation suspended after %d consecutive failures; "
+                "not attempting. Fix the rotation mechanism and call reset().",
+                self._rotation_failure_streak,
+            )
+            return
+
+        if self._rotation_failure_streak and now < self._rotation_retry_not_before:
+            logger.info(
+                "Posture rotation retry suppressed: %.0fs of the %.0fs backoff "
+                "after %d consecutive failure(s) remain",
+                self._rotation_retry_not_before - now,
+                self._rotation_retry_delay(self._rotation_failure_streak),
+                self._rotation_failure_streak,
+            )
+            return
+
+        # AFTER the two guards: a suppressed attempt must not burn a key
+        # identifier or an HD derivation index.  Those are minted from this
+        # counter, and incrementing it per suppressed cycle would reintroduce
+        # the unbounded growth by another route.
         self._rotation_count += 1
 
         derivation_path: Optional[str] = None
@@ -1003,8 +1096,36 @@ class CryptoPostureController:
         # is unreachable) must NOT arm the cooldown: otherwise the posture
         # engine "believes it acted", suppressing every retry for the full
         # cooldown window while the threat that demanded rotation persists.
+        #
+        # A failed attempt instead arms the backoff, which is the same idea at
+        # a shorter and growing horizon: retryable, but not once per
+        # evaluation cycle.  The two are mutually exclusive by construction —
+        # a rotation either happened or it did not.
         if succeeded or not attempted:
             self._last_rotation_time = time.time()
+            self._rotation_failure_streak = 0
+            self._rotation_retry_not_before = 0.0
+            return
+
+        self._rotation_failure_streak += 1
+        self._rotation_retry_not_before = time.time() + self._rotation_retry_delay(
+            self._rotation_failure_streak
+        )
+        if self._rotation_failure_streak >= self.MAX_CONSECUTIVE_ROTATION_FAILURES:
+            logger.critical(
+                "Posture key rotation has failed %d consecutive times; the "
+                "controller will stop attempting it. The threat that demanded "
+                "rotation is NOT addressed. Repair the rotation mechanism and "
+                "call reset() to resume.",
+                self._rotation_failure_streak,
+            )
+        else:
+            logger.warning(
+                "Posture key rotation failed (%d consecutive); next attempt in "
+                "%.0fs",
+                self._rotation_failure_streak,
+                self._rotation_retry_delay(self._rotation_failure_streak),
+            )
 
     def _trigger_algorithm_switch_if_due(self) -> None:
         """Switch algorithms unless the switch throttle is still cooling down.
@@ -1091,6 +1212,14 @@ class CryptoPostureController:
                 recent[-1].threat_level.name if recent else ThreatLevel.NOMINAL.name
             ),
             "rotation_count": self._rotation_count,
+            # A controller that has stopped attempting rotation while the
+            # threat that demanded it persists is the most important thing an
+            # operator can know about this object, and until these two keys
+            # existed there was no way to read it off the public surface.
+            "rotation_failure_streak": self._rotation_failure_streak,
+            "rotation_suspended": (
+                self._rotation_failure_streak >= self.MAX_CONSECUTIVE_ROTATION_FAILURES
+            ),
             "switch_count": self._switch_count,
             "evaluation_count": len(self._history),
             "highest_algorithm_reached": self._highest_algorithm_reached,
@@ -1120,6 +1249,8 @@ class CryptoPostureController:
         """Reset controller state."""
         self.evaluator.reset()
         self._last_rotation_time = 0.0
+        self._rotation_failure_streak = 0
+        self._rotation_retry_not_before = 0.0
         self._last_switch_time = 0.0
         self._rotation_count = 0
         self._switch_count = 0

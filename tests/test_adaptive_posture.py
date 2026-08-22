@@ -526,7 +526,25 @@ class TestCryptoPostureController:
             "believes it acted and suppresses retries while the threat persists"
         )
 
-        # The retry is therefore free to run rather than being throttled out.
+        # Retryable, but not once per evaluation cycle.  This used to assert
+        # that an immediate second call runs, which is the same statement as
+        # "a failing rotation has no throttle at all" — and that is what it
+        # was pinning: 20 evaluation cycles at sustained CRITICAL produced 20
+        # callback invocations and 20 registered keys.  The property worth
+        # keeping is that the retry is not thrown away for the full cooldown,
+        # which TestFailedRotationBackoff below pins across the whole ladder.
+        controller._execute_action(PostureAction.ROTATE_KEYS)
+        assert on_rotation.call_count == 1, (
+            "an immediate retry must be held by the failure backoff, not run"
+        )
+        assert controller._rotation_retry_not_before > 0.0
+        assert controller._rotation_retry_not_before - controller._rotation_retry_delay(1) > 0.0
+
+        # ...and once the (short, first-rung) backoff elapses, it does run —
+        # well inside the 300 s cooldown a successful rotation would impose.
+        first_delay = controller._rotation_retry_delay(1)
+        assert first_delay < controller.rotation_cooldown
+        controller._rotation_retry_not_before = 0.0
         controller._execute_action(PostureAction.ROTATE_KEYS)
         assert on_rotation.call_count == 2
 
@@ -559,7 +577,9 @@ class TestCryptoPostureController:
         controller._execute_action(PostureAction.SWITCH_ALGORITHM)
         assert on_switch.call_count == 1, "a second switch inside the window must be suppressed"
 
-    def test_failed_rotation_does_not_unthrottle_the_paired_switch(self) -> None:
+    def test_failed_rotation_does_not_unthrottle_the_paired_switch(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """ROTATE_AND_SWITCH must not turn a failing rotation into a switch spin.
 
         ``_trigger_rotation`` deliberately leaves the rotation throttle unarmed
@@ -569,7 +589,21 @@ class TestCryptoPostureController:
         climbed another rung of the ladder and fired the switch callback again,
         with the KMS still unreachable.  The rotation stays retryable; the
         switch does not ride along.
+
+        Driven on a fake clock so the three rotation attempts are separated by
+        their backoff windows.  It used to fire them back to back and assert
+        three callback invocations, which only held while a failing rotation
+        had no throttle at all — the state
+        ``TestFailedRotationBackoff`` exists to rule out.  The subject of this
+        test is the SWITCH, and the switch cooldown is 300 s, far longer than
+        the whole rotation ladder, so advancing the clock strengthens the
+        assertion rather than weakening it.
         """
+        from ama_cryptography import adaptive_posture
+
+        clock = _FakeClock()
+        monkeypatch.setattr(adaptive_posture, "time", clock)
+
         on_rotation = MagicMock(side_effect=RuntimeError("KMS unreachable"))
         on_switch = MagicMock()
         controller = CryptoPostureController(
@@ -580,9 +614,9 @@ class TestCryptoPostureController:
         controller._last_rotation_time = 0.0
         controller._last_switch_time = 0.0
 
-        controller._execute_action(PostureAction.ROTATE_AND_SWITCH)
-        controller._execute_action(PostureAction.ROTATE_AND_SWITCH)
-        controller._execute_action(PostureAction.ROTATE_AND_SWITCH)
+        for attempt in range(1, 4):
+            controller._execute_action(PostureAction.ROTATE_AND_SWITCH)
+            clock.advance(controller._rotation_retry_delay(attempt))
 
         assert on_rotation.call_count == 3, "a failed rotation must remain retryable"
         assert on_switch.call_count == 1, (
@@ -614,6 +648,207 @@ class TestCryptoPostureController:
         # Every name the ladders do rank is accepted.
         for name in CryptoPostureController.ALGORITHM_STRENGTH:
             CryptoPostureController(current_algorithm=name)
+
+
+class _FakeClock:
+    """A monotonically advanced stand-in for ``time.time``.
+
+    The backoff is measured in seconds and the cap is reached after six
+    failures, so a real-clock test would either sleep for minutes or assert
+    nothing about the ladder.  Only ``time()`` is used by the module under
+    test; nothing else on the ``time`` module is referenced from
+    ``adaptive_posture``.
+    """
+
+    def __init__(self, start: float = 1_000_000.0) -> None:
+        self.now = start
+
+    def time(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+class TestFailedRotationBackoff:
+    """A failing rotation is retryable, throttled, and eventually stopped.
+
+    Deleting the unconditional ``self._last_rotation_time = time.time()`` from
+    ``_execute_action`` was correct — arming the throttle before the attempt
+    made the succeeded/attempted distinction dead code — but it left a FAILING
+    rotation with no throttle at all.  Measured over 20 evaluation cycles at
+    sustained CRITICAL with a raising ``on_rotation``: 20 callback
+    invocations, ``_rotation_count`` 20, cooldown never armed; and with a
+    caller-supplied KMS-backed manager whose ``initiate_rotation`` raises, 20
+    fresh ``posture-rotation-N`` identifiers registered, one per cycle.
+
+    Every assertion here fails against a build with the two guards at the top
+    of ``_trigger_rotation`` removed and the failure branch at its end reduced
+    to ``pass`` — i.e. against the code as it stood.
+    """
+
+    @staticmethod
+    def _controller(monkeypatch: pytest.MonkeyPatch, **kwargs: Any) -> Any:
+        from ama_cryptography import adaptive_posture
+
+        clock = _FakeClock()
+        monkeypatch.setattr(adaptive_posture, "time", clock)
+        controller = CryptoPostureController(rotation_cooldown=300.0, **kwargs)
+        return controller, clock
+
+    def test_repeated_failures_do_not_retry_once_per_cycle(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        on_rotation = MagicMock(side_effect=RuntimeError("KMS unreachable"))
+        controller, _clock = self._controller(monkeypatch, on_rotation=on_rotation)
+
+        for _ in range(20):
+            controller._execute_action(PostureAction.ROTATE_KEYS)
+
+        assert on_rotation.call_count == 1, (
+            "20 immediate rotation attempts invoked the failing callback "
+            f"{on_rotation.call_count} times; the backoff holds all but the first"
+        )
+        assert controller._rotation_count == 1, (
+            "a suppressed attempt must not burn a key identifier or an HD "
+            "derivation index — those are minted from _rotation_count"
+        )
+
+    def test_key_identifiers_are_not_burned_per_cycle(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The unbounded-key variant, with a manager that registers then fails."""
+        registered: list[str] = []
+
+        manager = MagicMock()
+        manager.get_active_key.return_value = "active-key"
+        manager.register_key.side_effect = lambda key_id, **_: registered.append(key_id)
+        manager.initiate_rotation.side_effect = RuntimeError("KMS unreachable")
+
+        controller, _clock = self._controller(monkeypatch, rotation_manager=manager)
+
+        for _ in range(20):
+            controller._execute_action(PostureAction.ROTATE_KEYS)
+
+        assert registered == ["posture-rotation-1"], (
+            f"20 cycles registered {len(registered)} keys: {registered[:5]}"
+        )
+
+    def test_the_backoff_doubles_and_lands_on_the_cooldown(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        controller, _clock = self._controller(monkeypatch, on_rotation=MagicMock())
+        cap = controller.MAX_CONSECUTIVE_ROTATION_FAILURES
+        delays = [controller._rotation_retry_delay(n) for n in range(1, cap + 1)]
+
+        assert delays == sorted(delays), "the ladder must be non-decreasing"
+        for earlier, later in zip(delays, delays[1:]):
+            assert later == pytest.approx(earlier * 2.0), "each rung doubles"
+        assert delays[-1] == pytest.approx(controller.rotation_cooldown), (
+            "the last rung must land exactly on rotation_cooldown, so the "
+            "ladder is derived from the throttle the caller configured"
+        )
+        assert delays[0] < controller.rotation_cooldown, (
+            "the first retry must come back well inside the cooldown window, or "
+            "a transient failure costs a full cooldown — the defect the "
+            "unconditional arming caused"
+        )
+
+    def test_each_failure_waits_longer_than_the_last(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        on_rotation = MagicMock(side_effect=RuntimeError("KMS unreachable"))
+        controller, clock = self._controller(monkeypatch, on_rotation=on_rotation)
+        cap = controller.MAX_CONSECUTIVE_ROTATION_FAILURES
+
+        for streak in range(1, cap + 1):
+            controller._execute_action(PostureAction.ROTATE_KEYS)
+            assert on_rotation.call_count == streak
+            assert controller._rotation_failure_streak == streak
+            due = controller._rotation_retry_delay(streak)
+            # One tick short of the window: still suppressed.
+            clock.advance(due - 1.0)
+            controller._execute_action(PostureAction.ROTATE_KEYS)
+            assert on_rotation.call_count == streak, (
+                f"an attempt 1s before the streak-{streak} backoff expired ran anyway"
+            )
+            clock.advance(1.0)
+
+    def test_the_cap_stops_further_attempts(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        on_rotation = MagicMock(side_effect=RuntimeError("KMS unreachable"))
+        controller, clock = self._controller(monkeypatch, on_rotation=on_rotation)
+        cap = controller.MAX_CONSECUTIVE_ROTATION_FAILURES
+
+        for streak in range(1, cap + 1):
+            controller._execute_action(PostureAction.ROTATE_KEYS)
+            clock.advance(controller._rotation_retry_delay(streak))
+
+        assert on_rotation.call_count == cap
+        assert controller._rotation_failure_streak == cap
+
+        # However long the operator waits, no further automatic attempt runs.
+        clock.advance(controller.rotation_cooldown * 100)
+        for _ in range(50):
+            controller._execute_action(PostureAction.ROTATE_KEYS)
+        assert on_rotation.call_count == cap, (
+            "attempts continued past the cap; a rotation mechanism that has "
+            "failed six times with growing backoff is not going to succeed on "
+            "the fiftieth, and each try burns a key identifier"
+        )
+
+        summary = controller.get_posture_summary()
+        assert summary["rotation_suspended"] is True
+        assert summary["rotation_failure_streak"] == cap
+
+    def test_a_success_clears_the_streak(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A mechanism that comes back resumes immediately."""
+        on_rotation = MagicMock(side_effect=RuntimeError("KMS unreachable"))
+        controller, clock = self._controller(monkeypatch, on_rotation=on_rotation)
+
+        controller._execute_action(PostureAction.ROTATE_KEYS)
+        assert controller._rotation_failure_streak == 1
+
+        on_rotation.side_effect = None
+        clock.advance(controller._rotation_retry_delay(1))
+        controller._execute_action(PostureAction.ROTATE_KEYS)
+
+        assert on_rotation.call_count == 2
+        assert controller._rotation_failure_streak == 0
+        assert controller._rotation_retry_not_before == 0.0
+        assert controller._last_rotation_time > 0.0, "a success arms the real cooldown"
+        assert controller.get_posture_summary()["rotation_suspended"] is False
+
+    def test_reset_clears_the_suspension(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The documented way out for an operator who fixed the fault."""
+        on_rotation = MagicMock(side_effect=RuntimeError("KMS unreachable"))
+        controller, clock = self._controller(monkeypatch, on_rotation=on_rotation)
+        cap = controller.MAX_CONSECUTIVE_ROTATION_FAILURES
+
+        for streak in range(1, cap + 1):
+            controller._execute_action(PostureAction.ROTATE_KEYS)
+            clock.advance(controller._rotation_retry_delay(streak))
+        assert controller.get_posture_summary()["rotation_suspended"] is True
+
+        controller.reset()
+        assert controller.get_posture_summary()["rotation_suspended"] is False
+
+        on_rotation.side_effect = None
+        controller._execute_action(PostureAction.ROTATE_KEYS)
+        assert on_rotation.call_count == cap + 1
+
+    def test_a_no_mechanism_trigger_is_not_a_failure(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No rotation_manager and no callback: nothing was attempted."""
+        controller, _clock = self._controller(monkeypatch)
+
+        for _ in range(5):
+            controller._execute_action(PostureAction.ROTATE_KEYS)
+
+        assert controller._rotation_failure_streak == 0, (
+            "a trigger with no mechanism to attempt is a no-op, not a failure; "
+            "counting it would suspend a controller that never tried anything"
+        )
 
 
 class TestAlgorithmFamilies:
