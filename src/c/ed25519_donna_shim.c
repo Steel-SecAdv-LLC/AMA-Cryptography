@@ -200,6 +200,18 @@ ama_error_t ama_ed25519_verify(
         return AMA_ERROR_VERIFY_FAILED;
     }
 
+    /* RFC 8032 §5.1.7 step 1 applies §5.1.3's decode rules to R as well as to
+     * A.  This path already rejected every non-canonical R, but by accident:
+     * ed25519_sign_open re-encodes [S]B - [h]A with ge25519_pack, which emits
+     * only canonical encodings, so the byte comparison could never match one.
+     * Stating the rule here rather than relying on the encoder's range makes
+     * the two verify paths in this file reject for the same stated reason —
+     * and the batch path below has no such comparison to lean on.  Accepts
+     * exactly what it accepted before; see internal/ama_ed25519_canonical.h. */
+    if (!ama_ed25519_signature_r_is_canonical(signature)) {
+        return AMA_ERROR_VERIFY_FAILED;
+    }
+
     /* donna returns 0 on success, -1 on failure */
     int result = ed25519_sign_open(message, message_len, public_key, signature);
 
@@ -347,8 +359,29 @@ ama_error_t ama_ed25519_batch_verify(
      * That is the same standing INVARIANT-38 has on the single-signature
      * path; the point is that both APIs enforce it, not that either is a
      * break. */
+    /* RFC 8032 §5.1.7 step 1 canonical-R enforcement (INVARIANT-38 applied to
+     * the signature's first half), per entry, for a reason the S and y checks
+     * above do NOT share: on those two, this loop restates a rule the
+     * single-signature path also applies.  On R it supplies one the batch
+     * path never had.
+     *
+     * ed25519-donna-batchverify.h decodes R with
+     * ge25519_unpack_negative_vartime and puts the decoded point into the
+     * aggregate group equation.  It never re-encodes and compares, which is
+     * the only thing that was rejecting a non-canonical R on the
+     * single-signature path.  unpack decodes `01 00..00` with bit 255 set to
+     * the identity and drops the set sign bit (x = 0 has a single root, so
+     * the conditional negate is a no-op), so that encoding satisfied the
+     * batch equation whenever [S]B - [h]A was the identity — which S = h*a
+     * mod L arranges with the signer's own key, no forgery required.  The
+     * result was a signature ama_ed25519_verify REJECTS reported VALID here.
+     *
+     * Only reachable at count >= 4: donna verifies per entry while num <= 3,
+     * and that fallback re-encodes.  tests/c/test_ed25519_canonical_r.c pins
+     * both sides of that boundary. */
     for (size_t i = 0; i < count; i++) {
         if (!ama_ed25519_signature_s_is_canonical(entries[i].signature) ||
+            !ama_ed25519_signature_r_is_canonical(entries[i].signature) ||
             !ama_ed25519_point_y_is_canonical(entries[i].public_key) ||
             !ama_ed25519_point_x_sign_is_admissible(entries[i].public_key)) {
             results[i] = 0;

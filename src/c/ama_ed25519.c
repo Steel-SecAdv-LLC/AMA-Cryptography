@@ -1490,6 +1490,24 @@ ama_error_t ama_ed25519_verify(
         return AMA_ERROR_VERIFY_FAILED;
     }
 
+    /* RFC 8032 §5.1.7 step 1 also says to DECODE the first half as a point,
+     * and §5.1.3 is what decoding means: y >= p fails, and x = 0 with the
+     * sign bit set fails.  This path already rejected every such R, but as a
+     * side effect of ge25519_p3_tobytes emitting only canonical encodings —
+     * the comparison at the bottom could never match a non-canonical R.
+     * Stating the rule explicitly costs one byte predicate on a public input,
+     * accepts exactly the set it accepted before (no legitimate R is
+     * produced by anything but that same encoder), and puts the two backends
+     * on one shared predicate rather than on two different accidents.
+     *
+     * It is not decorative here even though this path was already correct:
+     * ama_ed25519_batch_verify below is a loop over this function, so this is
+     * where the fe51 batch path inherits the rule that the donna batch path
+     * needed added by hand.  See internal/ama_ed25519_canonical.h. */
+    if (!ama_ed25519_signature_r_is_canonical(signature)) {
+        return AMA_ERROR_VERIFY_FAILED;
+    }
+
     /* Decode public key */
     if (ge25519_frombytes(&A, public_key) != 0) {
         return AMA_ERROR_VERIFY_FAILED;
@@ -1590,11 +1608,38 @@ ama_error_t ama_ed25519_batch_verify(
         return AMA_SUCCESS;
     }
 
+    /* The same `count` rejection the donna shim applies, on the same
+     * thresholds, BEFORE the pre-zero loop below.
+     *
+     * This path allocates nothing, so there is no wrapped malloc here to
+     * guard — but the guard was never only about the malloc.  The public
+     * contract in include/ama_cryptography.h states the rejection
+     * unconditionally, for both backends, and gives the reason in terms of
+     * `results`: a `count` large enough to wrap `count * sizeof(void *)`
+     * cannot describe a real array, so walking `results[0..count)` is itself
+     * the wild write.  Without this, fe51 began exactly that walk — and fe51
+     * is the default on every target CMakeLists.txt does not match against
+     * x86_64/amd64/AMD64, i.e. the shipped ARM build.
+     *
+     * The comment below used to claim this pre-zero "buys the two
+     * implementations an identical, fail-closed output contract".  It did
+     * not: the contract has two halves, and only the second was implemented
+     * here.  Both are now.
+     *
+     * The sizeof operands are the donna shim's, not this path's, on purpose:
+     * the threshold is part of the published argument contract and must not
+     * differ by backend.  A caller that gets AMA_ERROR_INVALID_PARAM from one
+     * build must get it from the other for the same `count`. */
+    if (count > SIZE_MAX / sizeof(const unsigned char *) ||
+        count > SIZE_MAX / sizeof(size_t)) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
+
     /* Same pre-zero as the donna shim: `results` is fully written before any
      * per-entry work, so no path can leave a stale 1 from an earlier batch
      * visible to a caller that reads the array before the return code.  The
-     * loop below overwrites every slot, so this costs one pass and buys the
-     * two implementations an identical, fail-closed output contract. */
+     * loop below overwrites every slot, so this costs one pass and completes
+     * the two implementations' identical, fail-closed output contract. */
     for (size_t i = 0; i < count; i++) {
         results[i] = 0;
     }

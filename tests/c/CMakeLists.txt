@@ -134,6 +134,25 @@ add_ama_test(test_ed25519 test_ed25519.c)
 # drives the batch API as well as the single-verify path.
 add_ama_test(test_ed25519_canonical_s test_ed25519_canonical_s.c)
 
+# INVARIANT-38 applied to the signature's R half (RFC 8032 §5.1.7 step 1 ->
+# §5.1.3).  Separate from test_ed25519_canonical_s because it discriminates a
+# different site: the S and public-key rules are enforced identically by
+# single and batch verify, while the R rule was enforced on the single path
+# only, and there only as a side effect of the re-encode comparison.  The
+# donna batch routine decodes R instead of re-encoding it, so it enforced
+# nothing — reachable only at count >= 4, since donna verifies per entry
+# while num <= 3.  Runs against whichever backend CMake selected; the PINs
+# are the counts above that boundary.
+add_ama_test(test_ed25519_canonical_r test_ed25519_canonical_r.c)
+# The backend selector is PRIVATE on the library target (see
+# ama_apply_donna_settings in the top-level CMakeLists.txt), so a test TU
+# cannot see it.  This test names the backend it exercised in its banner, and
+# a banner that says fe51 over a donna build is exactly the kind of claim
+# this file exists to stop, so mirror the selection onto the test.
+if(AMA_ED25519_ASSEMBLY)
+    target_compile_definitions(test_ed25519_canonical_r PRIVATE AMA_ED25519_ASSEMBLY)
+endif()
+
 # test_ed25519_comb_equiv validates the in-tree signed 4-bit window comb
 # (ge25519_scalarmult_base_comb_signed) against the variable-base wNAF
 # reference.  When AMA_ED25519_ASSEMBLY=ON (default on x86-64), the donna
