@@ -301,8 +301,54 @@ if not _post():
         for _name, _ok, _detail in _results
     )
     _diag_env = "AMA_POST_DIAGNOSTIC_IMPORT"
+    # Still named here because the remediation string below quotes it: the
+    # signer's own entry points require it alongside their launch identity.
+    # It is no longer read as a condition of this gate.
     _build_env = "AMA_BUILD_PIPELINE"
     _TRUE = {"1", "true", "yes", "on"}
+
+    def _process_is_the_signer() -> bool:
+        """True when this process IS the signing tool, running to write.
+
+        This gate used to read ``AMA_BUILD_PIPELINE`` directly, and that was
+        the last place in the import path where a bare environment variable
+        still bought execution.  With the variable present — a Dockerfile
+        ``ENV``, a CI environment, a systemd unit; SECURITY.md itself tells
+        release deployments to set ``AMA_FIPS_STRICT``, and build images
+        routinely carry the pipeline flag beside it — an attacker with write
+        access to the installed tree could edit any module imported after
+        POST, have ``_verify_signed_integrity`` classify the resulting .py
+        digest mismatch as a repairable stale binding
+        (``_self_test._parse_signature_fields``), and get the import to
+        complete with exit 0 in every process in that environment.  Nothing
+        the attacker had to run; the variable was already there.
+
+        Rounds 1 and 2 of this branch moved the native-load and signature
+        paths off the variable and onto launch identity
+        (``pqc_backends._process_is_the_integrity_signer``).  This site was
+        left on the variable, which made the surrounding comment — that no
+        environment variable may buy execution — stale prose rather than a
+        description of the code.  It is the same test now.
+
+        Secure-execution mode revokes it, at the call site, exactly as it
+        does for the native-load escape: a set-uid/set-gid or file-capability
+        process runs on behalf of a less-privileged caller, and that caller
+        must not be able to steer this decision at all.
+
+        Failing closed on any error is deliberate: an escape hatch that
+        cannot prove it is entitled to open is closed.
+        """
+        try:
+            from ama_cryptography.pqc_backends import (
+                _in_secure_execution_mode as _secure_mode,
+            )
+            from ama_cryptography.pqc_backends import (
+                _process_is_the_integrity_signer as _is_signer,
+            )
+
+            return bool(_is_signer()) and not _secure_mode()
+        except Exception:  # pragma: no cover - fail closed on any lookup fault
+            return False
 
     # The tools that REPAIR a failed integrity check — ``_build_sign`` and
     # ``integrity --update`` — live inside this package, so a hard raise here
@@ -399,18 +445,18 @@ if not _post():
             _diag_env,
             _reason,
         )
-    elif _all_failures_repairable and _os.environ.get(_build_env, "").strip().lower() in _TRUE:
+    elif _all_failures_repairable and _process_is_the_signer():
         _logging.getLogger(__name__).critical(
             "FIPS 140-3 POST FAILED only in stage(s) a re-signing run repairs "
-            "(%s) and %s=1: completing the import so the build-pipeline "
-            "integrity tooling can run. The module is in the ERROR state and "
+            "(%s) and this process IS the integrity signer running its "
+            "writing subcommand: completing the import so the signing tooling "
+            "can run. The module is in the ERROR state and "
             "every cryptographic operation through the public surface will be "
             "refused. Any native object mapped in this process was mapped "
             "under the signer's own load override and is digest-bound into "
             "the artefact this signing run produces; outside the signer "
             "identity, nothing unverified has been mapped. Root cause: %s",
             ", ".join(sorted(_repairable)),
-            _build_env,
             _reason,
         )
     else:

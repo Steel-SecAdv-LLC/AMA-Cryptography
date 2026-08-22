@@ -202,6 +202,19 @@ jobs:
           exit 1
         }
 
+    # MUST run before the install below.  `pip install -e .` runs setup.py's
+    # build_ext, which builds the native library and re-signs the artefact —
+    # and re-signing REWRITES ama_cryptography/_integrity_digest.txt in the
+    # source tree.  Reading that file afterwards and comparing it to a freshly
+    # computed digest compares the signer's own output to itself and can never
+    # disagree.  Snapshot the checked-out value first so the comparison below
+    # is against what the commit actually carries.
+    - name: Snapshot the committed .py integrity digest (before any build re-signs it)
+      shell: bash
+      run: |
+        cp ama_cryptography/_integrity_digest.txt "${RUNNER_TEMP}/committed_integrity_digest.txt"
+        echo "Committed digest recorded: $(cat "${RUNNER_TEMP}/committed_integrity_digest.txt")"
+
     - name: Install Python dependencies
       run: |
         python -m pip install --upgrade pip setuptools wheel
@@ -231,17 +244,25 @@ jobs:
     - name: Verify committed .py integrity digest is current (platform-independent)
       shell: bash
       # Catches the real thing the old committed-artefact check protected: a .py
-      # source edited without refreshing _integrity_digest.txt. AMA_BUILD_PIPELINE
-      # lets the import complete for this read even though the native digest does
-      # not match this build; the module stays in ERROR and refuses crypto.
-      env:
-        AMA_BUILD_PIPELINE: "1"
+      # source edited without refreshing _integrity_digest.txt.
+      #
+      # Compares the SNAPSHOT taken before the install (see that step for why)
+      # against the digest computed from the tree now.  The .py sources are not
+      # touched by the build, so a difference means the commit shipped a stale
+      # digest.
+      #
+      # No AMA_BUILD_PIPELINE here, and not because it was tidied away: the
+      # install above now signs and binds on every build, so this import needs
+      # no escape at all — POST passes outright.  The variable would not work
+      # anyway; __init__'s repairable-POST carve-out is gated on the process
+      # BEING the signer (pqc_backends._process_is_the_integrity_signer), and a
+      # `python -` heredoc is not.
       run: |
-        python - <<'PY'
+        python - "${RUNNER_TEMP}/committed_integrity_digest.txt" <<'PY'
+        import sys
         from pathlib import Path
-        import ama_cryptography as a
         from ama_cryptography._self_test import _compute_module_digest
-        committed = (Path(a.__file__).parent / "_integrity_digest.txt").read_text().strip()
+        committed = Path(sys.argv[1]).read_text().strip()
         computed = _compute_module_digest()
         if committed != computed:
             raise SystemExit(

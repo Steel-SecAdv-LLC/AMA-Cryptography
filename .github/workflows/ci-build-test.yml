@@ -430,6 +430,17 @@ jobs:
             exit 1
           }
 
+      # MUST run before the install below: `pip install -e .` runs setup.py's
+      # build_ext, which signs and thereby REWRITES
+      # ama_cryptography/_integrity_digest.txt in the source tree.  Reading it
+      # afterwards would compare the signer's own output to itself.  Same
+      # change, same reason, as in ci.yml.
+      - name: Snapshot the committed .py integrity digest (before any build re-signs it)
+        shell: bash
+        run: |
+          cp ama_cryptography/_integrity_digest.txt "${RUNNER_TEMP}/committed_integrity_digest.txt"
+          echo "Committed digest recorded: $(cat "${RUNNER_TEMP}/committed_integrity_digest.txt")"
+
       - name: Install Python dependencies + package (with [dev] extras)
         # Use the [dev] extras so hypothesis / pytest-cov / mypy / etc.
         # come in via the canonical pyproject.toml declaration rather
@@ -464,14 +475,17 @@ jobs:
       # same per-build re-sign setup.py's _run_integrity_signer does per wheel.
       - name: Verify committed .py integrity digest is current (platform-independent)
         shell: bash
-        env:
-          AMA_BUILD_PIPELINE: "1"
+        # Compares the pre-install SNAPSHOT against the digest computed now.
+        # No AMA_BUILD_PIPELINE: the install signs and binds on every build so
+        # POST passes outright, and the variable would not confer an import
+        # anyway — __init__'s repairable-POST carve-out is gated on the process
+        # BEING the signer, which a `python -` heredoc is not.
         run: |
-          python - <<'PY'
+          python - "${RUNNER_TEMP}/committed_integrity_digest.txt" <<'PY'
+          import sys
           from pathlib import Path
-          import ama_cryptography as a
           from ama_cryptography._self_test import _compute_module_digest
-          committed = (Path(a.__file__).parent / "_integrity_digest.txt").read_text().strip()
+          committed = Path(sys.argv[1]).read_text().strip()
           computed = _compute_module_digest()
           if committed != computed:
               raise SystemExit(

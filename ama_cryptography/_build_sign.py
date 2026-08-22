@@ -706,18 +706,21 @@ def main() -> int:
         "--bind-extensions",
         action="store_true",
         help=(
-            "Bind the compiled binding extensions into the signed artefact "
-            "(wheel pipeline only — setup.py passes this after syncing the "
-            "staged extensions into the package dir).  The repair flow "
-            "(`integrity --update --sign`) deliberately does NOT: binding "
-            "extensions are per-interpreter and not reproducible across "
-            "environments, so an artefact that binds one tree's extensions "
-            "would report a digest MISMATCH — a tampering verdict — on every "
-            "other machine's legitimately rebuilt extensions.  A source-tree "
-            "artefact therefore binds none, and the verifier reports built "
-            "extensions on such trees as covered-by-no-artefact (a warning "
-            "and a below-full integrity strength on developer builds, a hard "
-            "failure on anchored ones)."
+            "Bind the compiled binding extensions into the signed artefact. "
+            "Both callers pass it: setup.py after syncing the staged "
+            "extensions into the package dir, and the repair flow "
+            "(`integrity --update --sign`), which binds whatever the tree it "
+            "is repairing currently holds.  An artefact that does not bind "
+            "them leaves every extension in the tree reported as 'present "
+            "but not covered by the signed artefact' — a warning and a "
+            "below-full integrity strength on developer builds, a hard "
+            "failure on anchored ones — and those extensions execute at "
+            "import unverified.  This flag is what closes that, so a build "
+            "or repair that omits it produces the state the artefact exists "
+            "to prevent. "
+            "The flag remains explicit rather than implicit because "
+            "--digest-only and a bindings-free v3 artefact stay reachable "
+            "for the environments that genuinely have no extensions to bind."
         ),
     )
     args = parser.parse_args()
@@ -805,17 +808,18 @@ def main() -> int:
                 f"{loaded_path}. Refusing to sign a digest for an object other "
                 f"than the one this process is running."
             )
-        # Bind the compiled binding extensions into the same signature (v3) —
-        # in the wheel pipeline only (see --bind-extensions above for why the
-        # repair flow must not).  These load and execute before POST can
+        # Bind the compiled binding extensions into the same signature (v3).
+        # These load and execute before POST can
         # examine them, and the release pipeline ships them byte-identical to
         # the build (verified on the published v4.0.0 wheels: auditwheel and
         # delocate graft nothing — the library resolves in-package via
         # $ORIGIN/@loader_path — and Windows repair is disabled), so a
         # build-time digest is checkable at import time on every platform.
-        # A repair-flow artefact carries an EMPTY map (still v3): the message
-        # format stays schema-selected, and a source tree's built extensions
-        # are reported as uncovered rather than mis-verified.
+        # An artefact written without --bind-extensions carries an EMPTY map
+        # (still v3): the message format stays schema-selected.  That is now
+        # only reachable for a tree with no extensions to bind — both callers
+        # pass the flag — because an empty map over a tree that HAS extensions
+        # is the "present but not covered" state, not a neutral one.
         binding_digests = _compute_binding_digests(pkg_dir) if args.bind_extensions else {}
         signed_message = _composite_integrity_message_v3(digest, native_digest, binding_digests)
 

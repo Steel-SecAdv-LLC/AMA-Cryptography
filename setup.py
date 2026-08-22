@@ -247,6 +247,7 @@ else:
 
 from setuptools import Extension, find_packages, setup  # noqa: E402
 from setuptools.command.build_ext import build_ext  # noqa: E402
+from setuptools.dist import Distribution  # noqa: E402
 
 # Check for Cython availability at the call-site level (the preflight
 # above only proves a minimum version; AMA_NO_CYTHON=1 still gates
@@ -509,6 +510,47 @@ def get_cythonized_extensions() -> list[Extension]:
     return extensions
 
 
+class NativeDistribution(Distribution):
+    """Declares this distribution native, whether or not it has ext_modules.
+
+    Two things read ``Distribution.has_ext_modules()``, and both were wrong
+    for this package whenever ``ext_modules`` came back empty:
+
+    1. ``build.sub_commands`` gates ``build_ext`` on it.  Every one of the six
+       binding Extensions is declared inside ``if USE_CYTHON:`` in
+       ``get_extension_modules()``, so ``AMA_NO_CYTHON=1`` (and
+       ``AMA_NO_C_EXTENSIONS=1``) empties the list, setuptools skips
+       ``build_ext`` entirely, and ``CMakeBuild.run`` — the ONLY caller of
+       ``_build_cmake`` and ``_copy_native_library_into_package`` — never
+       runs.  The resulting wheel contained no ``libama_cryptography.so`` at
+       all, so the install imported straight into
+       ``CryptoModuleError: no native library found in any of 17 searched
+       directories``.  Measured on 3baf6c3 and on ``origin/main`` before it:
+       ``AMA_NO_CYTHON=1 pip install .`` exits 0 and produces an install that
+       cannot import.  README, ENHANCED_FEATURES.md and IMPLEMENTATION_GUIDE
+       all list the variable as a supported "pure Python" mode, and setup.py
+       itself prints ``AMA_NO_CYTHON=1 pip install .`` as the escape from a
+       fatal Cython error — an escape into a broken install.
+    2. ``bdist_wheel.root_is_pure`` derives from it, so that same build was
+       tagged ``py3-none-any``.  A pure tag on a distribution whose only
+       working form ships a platform-specific shared object is a wheel that
+       installs anywhere and works nowhere.  With this class it is tagged
+       ``cp3XX-cp3XX-<platform>``, which is over-specific rather than wrong:
+       without binding extensions the package would in fact run on any
+       CPython >= 3.10, but a native artefact must never carry ``any``.
+
+    There is no configuration in which this package is pure.  INVARIANT-7
+    forbids operating without the native backend, and POST enforces it at
+    import, so "pure Python AMA Cryptography" is not a degraded mode — it is
+    a module that refuses to initialise.  The Cython switches select whether
+    the optional Python BINDINGS are built; they never selected whether the
+    library itself is.
+    """
+
+    def has_ext_modules(self) -> bool:  # noqa: D102 - contract is the docstring above
+        return True
+
+
 class CMakeBuild(build_ext):
     """Custom build_ext command that builds CMake projects.
 
@@ -552,20 +594,13 @@ class CMakeBuild(build_ext):
                 )
             super().run()
 
-        # Build-pipeline-only Ed25519 signed-integrity hook.
-        # Gated on AMA_BUILD_PIPELINE=1 so plain `pip install .` from a source
-        # checkout is unaffected — those users get the digest-only fallback
-        # (logged WARNING at import time).  Release CI sets the env var to
-        # produce a signed wheel; combined with -DAMA_INTEGRITY_TRUST_ANCHOR_
-        # PUBKEY_HEX on the CMake invocation above this gives anchored,
-        # trust-pinned wheels with no extra release-pipeline step.
+        # Ed25519 signed-integrity hook.  Runs on EVERY build.
         self._run_integrity_signer()
 
     def _run_integrity_signer(self) -> None:
-        """Invoke ama_cryptography._build_sign when running under the wheel pipeline.
+        """Sign and bind this build's artefact.  Runs on every build.
 
         The signer reads:
-          - AMA_BUILD_PIPELINE=1                   (required gate)
           - AMA_INTEGRITY_SIGNING_SEED_HEX         (release-CI deterministic seed)
           - AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX  (env-var trust anchor; optional
               when the native library was compiled with a CMake anchor)
@@ -573,10 +608,32 @@ class CMakeBuild(build_ext):
         and writes the signed-integrity artefact into BOTH the source tree
         copy of the package and the staging build_lib copy so the wheel
         builder picks it up exactly the way it picks up _integrity_digest.txt.
-        """
-        if os.environ.get("AMA_BUILD_PIPELINE") != "1":
-            return
+        AMA_BUILD_PIPELINE=1 is set on the child below unconditionally: it is
+        _build_sign's own "a build, not a user re-blessing an installed tree"
+        gate, and this IS the build.
 
+        This used to return early unless the caller had already exported
+        AMA_BUILD_PIPELINE=1, on the stated ground that "plain `pip install .`
+        from a source checkout is unaffected — those users get the digest-only
+        fallback (logged WARNING at import time)".  Measured, that fallback is
+        not a warning-shaped inconvenience.  A plain `pip install .` shipped
+        six binding extensions with ``INTEGRITY_BINDING_DIGESTS_HEX = {}``,
+        which produced, per interpreter start: twelve "present but not covered
+        by the signed artefact" lines, a POST verdict of "1 of 13 tests were
+        SKIPPED — this module is NOT fully verified", and — because
+        _check_binding_extensions treats uncovered inventory as a hard failure
+        on any build carrying a trust anchor — a CryptoModuleError under
+        AMA_FIPS_STRICT=1, the variable SECURITY.md tells release deployments
+        to set.  README names `pip install .` the primary install channel and
+        it is the only one that works while PyPI is unpublished, so the
+        default path produced the loudest possible unverified state.
+
+        The native library is built unconditionally a few lines above (a
+        missing CMake is already FATAL), so there is no build that reaches
+        here without something to sign.  A signer failure therefore fails the
+        build rather than downgrading it: an artefact that cannot be produced
+        is a broken install, not a developer convenience.
+        """
         src_pkg_dir = Path(__file__).resolve().parent / "ama_cryptography"
         staged_pkg_dir = Path(self.build_lib) / "ama_cryptography" if self.build_lib else None
 
@@ -595,7 +652,57 @@ class CMakeBuild(build_ext):
         # artefact whose wheel does not contain it, failing POST as
         # "missing on disk").  The native library is excluded: it is synced
         # by _copy_native_library_into_package and bound separately.
+        # Prune the staging dir to exactly the extensions THIS build declares,
+        # before the source dir is synced from it.
+        #
+        # setuptools' build_lib persists across invocations in one tree, and
+        # nothing empties it.  So a tree previously built with Cython, rebuilt
+        # with AMA_NO_CYTHON=1, still has the six binding extensions sitting
+        # in build_lib: _sync_binding_extensions_into_source faithfully copies
+        # them back into the source dir, _compute_binding_digests signs them,
+        # and the wheel ships six binding extensions from a build that
+        # declared none.  Reproduced here — the same command produced a
+        # 3,124,336-byte wheel with `bindings = 6` in a dirty tree and a
+        # 1,788,629-byte wheel with `bindings = 0` in a clean one.  The
+        # extensions themselves were valid, which is what makes it worth
+        # closing: the artefact signs a set the build did not choose, so
+        # "signed" stops meaning "produced by this build".
+        #
+        # _sync_binding_extensions_into_source already enforces
+        # source-set == staged-set; this makes staged-set == declared-set, so
+        # the chain reaches declared-set end to end.
+        self._prune_staged_extensions_not_declared(staged_pkg_dir)
         self._sync_binding_extensions_into_source(src_pkg_dir, staged_pkg_dir)
+
+        # Delete the artefact this run is about to replace, BEFORE the signer
+        # process starts — the same delete-then-sign order
+        # tools/resign_wheel.py uses, and the one the package's own
+        # pre-import refusal prints as the remedy.
+        #
+        # `python -m ama_cryptography._build_sign` imports the package before
+        # _build_sign runs a line, and __init__'s
+        # _refuse_tampered_bindings_before_import compares every binding
+        # extension on disk against the artefact still sitting in the tree.
+        # A rebuild always changes those bytes, so a second build in a tree
+        # that already carries an artefact refuses the import with "digest
+        # MISMATCH", the signer exits 1, and the build fails.  That is not
+        # hypothetical: it is what cibuildwheel does — one /project, every
+        # Python version built sequentially — and it is what the three-way
+        # install check reproduced here the moment signing stopped being
+        # conditional.  The pre-import gate is right to refuse; what was
+        # wrong was asking it to adjudicate a tree mid-rebuild.
+        #
+        # Removing it first is safe and is not a downgrade: with no artefact,
+        # nothing is signed, so nothing reads as tampering; the .py digest is
+        # unaffected because the artefact is excluded from it by
+        # construction; and the signer writes a fresh one moments later or
+        # the build fails loudly.  __pycache__ goes too, so a compiled copy
+        # cannot shadow the deletion.
+        for _pkg_dir in (src_pkg_dir, staged_pkg_dir):
+            if _pkg_dir is None or not _pkg_dir.is_dir():
+                continue
+            (_pkg_dir / "_integrity_signature.py").unlink(missing_ok=True)
+            shutil.rmtree(_pkg_dir / "__pycache__", ignore_errors=True)
 
         # _build_sign loads the native library via _find_native_library,
         # which searches the in-tree package dir first.  We already copied
@@ -621,9 +728,11 @@ class CMakeBuild(build_ext):
         except subprocess.CalledProcessError as e:
             raise RuntimeError(
                 f"FATAL: integrity signer failed (exit {e.returncode}). "
-                "AMA_BUILD_PIPELINE=1 was set so the wheel must ship a "
-                "signed integrity artefact; refusing to produce an "
-                "unsigned release wheel."
+                "Every build must produce a signed integrity artefact that "
+                "covers the binding extensions it ships; an unsigned or "
+                "partially-covered build imports with POST reporting itself "
+                "NOT fully verified and fails outright under "
+                "AMA_FIPS_STRICT=1.  Refusing to produce one."
             ) from e
 
         # Mirror the freshly-written artefact into the staging dir so the
@@ -651,6 +760,36 @@ class CMakeBuild(build_ext):
                 continue
             out.append(path)
         return out
+
+    def _declared_extension_filenames(self) -> set[str]:
+        """Basenames of the binding extensions this build declares.
+
+        Empty when ``ext_modules`` is empty — which is the case the pruning
+        exists for, and why this is derived from ``self.extensions`` rather
+        than from whatever happens to be on disk.
+        """
+        names: set[str] = set()
+        for ext in self.extensions or []:
+            filename = self.get_ext_filename(self.get_ext_fullname(ext.name))
+            names.add(Path(filename).name)
+        return names
+
+    def _prune_staged_extensions_not_declared(self, staged_pkg_dir: Optional[Path]) -> None:
+        """Delete staged binding extensions no Extension in this build names.
+
+        See the call site.  A missing staging dir is a no-op for the same
+        reason it is in _sync_binding_extensions_into_source.
+        """
+        if staged_pkg_dir is None or not staged_pkg_dir.is_dir():
+            return
+        declared = self._declared_extension_filenames()
+        for path in self._iter_extension_files(staged_pkg_dir):
+            if path.name not in declared:
+                print(
+                    "Removing staged binding extension left by an earlier build "
+                    f"in this tree (not declared by this one): {path.name}"
+                )
+                path.unlink()
 
     def _sync_binding_extensions_into_source(
         self, src_pkg_dir: Path, staged_pkg_dir: Optional[Path]
@@ -978,6 +1117,9 @@ setup(
     # second copy here would be a silent source of drift (see audit 2c).
     ext_modules=get_cythonized_extensions(),
     cmdclass={"build_ext": CMakeBuild},
+    # See NativeDistribution: the native library is required in every
+    # configuration, including the ones that build no Python extensions.
+    distclass=NativeDistribution,
     include_package_data=True,
     # D-1: ship the native shared library alongside the Cython bindings so
     # the dynamic loader can resolve libama_cryptography via DT_RUNPATH=$ORIGIN.

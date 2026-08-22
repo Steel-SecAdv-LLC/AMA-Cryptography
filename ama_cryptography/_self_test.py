@@ -559,12 +559,26 @@ def _check_binding_extensions(
         if name not in binding_digests
     ]
 
+    # Two remedies, because two states need different ones and a hint that
+    # cannot be run as written is not a remedy.  Inventory drift (missing /
+    # uncovered / unreadable) leaves the pre-import binding gate satisfied,
+    # so the repair command imports the package and runs.  A digest MISMATCH
+    # does not: __init__._refuse_tampered_bindings_before_import refuses the
+    # import against those same digests before any CLI reaches main(), so the
+    # stale artefact has to go first.  That is the delete-then-sign order
+    # tools/resign_wheel.py and setup.py both use.
     resign_hint = (
         ". If you rebuilt the extensions, refresh the artefact with: "
         "AMA_BUILD_PIPELINE=1 python -m ama_cryptography.integrity --update --sign"
     )
+    resign_hint_after_mismatch = (
+        ". A digest mismatch also blocks the pre-import binding gate, so remove "
+        "the stale artefact first: rm <package-dir>/_integrity_signature.py && "
+        "AMA_BUILD_PIPELINE=1 python -m ama_cryptography.integrity --update --sign"
+    )
     if mismatches or (anchored and (missing or uncovered or unreadable)):
         problems = mismatches + unreadable + missing + uncovered
+        hint = resign_hint_after_mismatch if mismatches else resign_hint
         # Same classification as the native library: a rebuilt extension and a
         # modified one are indistinguishable from here, and the resign_hint
         # this very message carries is the documented repair, so the import
@@ -572,7 +586,7 @@ def _check_binding_extensions(
         return (
             False,
             _record_stale_binding_failure(
-                "binding-extension verification FAILED: " + "; ".join(problems) + resign_hint
+                "binding-extension verification FAILED: " + "; ".join(problems) + hint
             ),
             False,
         )

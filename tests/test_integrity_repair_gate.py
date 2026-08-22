@@ -370,7 +370,7 @@ class TestImportGateEndToEnd:
         return root
 
     @staticmethod
-    def _run(code: str, cwd: Path, **env_extra: str) -> subprocess.CompletedProcess[str]:
+    def _env(cwd: Path, **env_extra: str) -> dict[str, str]:
         env = dict(os.environ)
         env["PYTHONPATH"] = str(cwd)
         # The copied tree carries no shared object, and a missing native
@@ -379,10 +379,36 @@ class TestImportGateEndToEnd:
         if NATIVE_LIB is not None:
             env["AMA_CRYPTO_LIB_PATH"] = str(NATIVE_LIB)
         env.update(env_extra)
+        return env
+
+    @classmethod
+    def _run(cls, code: str, cwd: Path, **env_extra: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             [sys.executable, "-c", textwrap.dedent(code)],
             cwd=str(cwd),
-            env=env,
+            env=cls._env(cwd, **env_extra),
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+
+    @classmethod
+    def _run_signer(
+        cls, cwd: Path, *args: str, **env_extra: str
+    ) -> subprocess.CompletedProcess[str]:
+        """Launch the real signer the way every caller of it does.
+
+        ``python -m ama_cryptography._build_sign`` — not ``-c "import ..."``.
+        The distinction is the whole point of the gate these tests cover:
+        the carve-out is for the process that IS the signing tool, and
+        ``_process_is_the_integrity_signer`` reads ``sys.orig_argv`` and
+        ``__main__.__spec__`` to decide that.  A ``-c`` process passes
+        neither test no matter what it imports.
+        """
+        return subprocess.run(
+            [sys.executable, "-m", "ama_cryptography._build_sign", *args],
+            cwd=str(cwd),
+            env=cls._env(cwd, **env_extra),
             capture_output=True,
             text=True,
             timeout=300,
@@ -419,8 +445,32 @@ class TestImportGateEndToEnd:
         )
         assert "POST" in (diag.stdout + diag.stderr)
 
+    @staticmethod
+    def _make_source_digest_stale(root: Path) -> None:
+        """Edit a .py after signing — the canonical repairable failure."""
+        target = root / "ama_cryptography" / "exceptions.py"
+        target.write_text(
+            target.read_text(encoding="utf-8") + "\n# edited after signing\n", encoding="utf-8"
+        )
+
     def test_stale_source_digest_still_imports_for_the_signer(self, tmp_path: Path) -> None:
-        """The repair flow the carve-out exists for must keep working."""
+        """The repair flow the carve-out exists for must keep working.
+
+        Driven through ``python -m ama_cryptography._build_sign``, which is
+        what setup.py, tools/resign_wheel.py and
+        ``ama_cryptography.integrity --update --sign`` all launch.  The
+        package import happens inside that process, before _build_sign runs a
+        line, so a successful exit is proof the carve-out let the signer
+        through — and the artefact it writes is proof it got far enough to do
+        its job.
+
+        This used to be driven with ``python -c "import ama_cryptography"``
+        and ``AMA_BUILD_PIPELINE=1``, asserting exit 0.  That process is not
+        the signer and never was; what it actually pinned was that ANY
+        process in an environment carrying the variable imports through a
+        stale digest.  The companion test below now pins the opposite, which
+        is why this one had to start driving the real thing.
+        """
         artefact = PKG_DIR / "_integrity_signature.py"
         if not artefact.is_file():
             pytest.skip("no signed-integrity artefact in the source tree")
@@ -428,17 +478,56 @@ class TestImportGateEndToEnd:
             pytest.skip("no native library discoverable by the package loader")
 
         root = self._tree(tmp_path)
-        target = root / "ama_cryptography" / "exceptions.py"
-        target.write_text(
-            target.read_text(encoding="utf-8") + "\n# edited after signing\n", encoding="utf-8"
+        self._make_source_digest_stale(root)
+
+        result = self._run_signer(
+            root,
+            "--package-dir",
+            str(root / "ama_cryptography"),
+            AMA_BUILD_PIPELINE="1",
         )
+        assert result.returncode == 0, (
+            "the signer must still import through a stale source digest, or "
+            "the in-package re-signing tool cannot run: "
+            f"{result.stdout}{result.stderr}"
+        )
+        assert "Signed integrity artefact written" in result.stdout
+
+    def test_stale_source_digest_refuses_a_process_that_is_not_the_signer(
+        self, tmp_path: Path
+    ) -> None:
+        """``AMA_BUILD_PIPELINE=1`` alone must not buy an import.
+
+        The carve-out is for the signing TOOL, not for every process that
+        happens to run in an environment where the variable is set — a
+        Dockerfile ``ENV``, a CI environment, a systemd unit.  While the gate
+        read the variable directly, an attacker with write access to the
+        installed tree could edit any module imported after POST, have the
+        resulting .py digest mismatch classified as a repairable stale
+        binding, and get every such process to complete the import with exit
+        0 while POST had failed.  Nothing had to be run; the variable was
+        already there.
+
+        Same tree, same fault, same variable as the test above — only the
+        process identity differs, so a pass here and there together say the
+        gate discriminates on identity and on nothing else.
+        """
+        artefact = PKG_DIR / "_integrity_signature.py"
+        if not artefact.is_file():
+            pytest.skip("no signed-integrity artefact in the source tree")
+        if NATIVE_LIB is None:
+            pytest.skip("no native library discoverable by the package loader")
+
+        root = self._tree(tmp_path)
+        self._make_source_digest_stale(root)
 
         result = self._run(
             "import ama_cryptography; print('IMPORTED')", root, AMA_BUILD_PIPELINE="1"
         )
-        assert result.returncode == 0, (
-            "a stale source digest must still import under AMA_BUILD_PIPELINE=1, "
-            "or the in-package re-signing tool cannot run: "
+        assert result.returncode != 0, (
+            "a bare process imported through a failed POST because "
+            "AMA_BUILD_PIPELINE=1 was in its environment: "
             f"{result.stdout}{result.stderr}"
         )
-        assert "IMPORTED" in result.stdout
+        assert "IMPORTED" not in result.stdout
+        assert "power-on self-tests FAILED" in (result.stdout + result.stderr)
