@@ -507,12 +507,17 @@ static apply_dispatch_only_result_t apply_dispatch_only(
 
 #ifdef AMA_HAVE_NEON_IMPL
     if (strcmp(slot, "aes-gcm-neon") == 0) {
+#ifdef AMA_HAVE_NEON_CRYPTO_EXT_IMPL
         if (saved.aes_gcm_encrypt == ama_aes256_gcm_encrypt_neon) {
             dispatch_table.aes_gcm_encrypt = saved.aes_gcm_encrypt;
             dispatch_table.aes_gcm_decrypt = saved.aes_gcm_decrypt;
             *resolved_label_out = "aes-gcm-neon";
             return AMA_DISPATCH_ONLY_HONORED;
         }
+#endif
+        /* Without the Crypto Extensions this build has no NEON AES kernel to
+         * pin, which is UNSUPPORTED in exactly the sense this return means:
+         * the name is real, this build did not compile it. */
         return AMA_DISPATCH_ONLY_UNSUPPORTED;
     }
     if (strcmp(slot, "chacha20-neon") == 0) {
@@ -1624,8 +1629,10 @@ static void dispatch_init_internal(void) {
      * AMA_HAVE_NEON_IMPL.  Each kernel scrubs sensitive intermediate
      * state on every return path (INVARIANT-12). */
     if (dispatch_info.aes_gcm >= AMA_IMPL_NEON && ama_cpuid_has_arm_aes()) {
+#ifdef AMA_HAVE_NEON_CRYPTO_EXT_IMPL
         dispatch_table.aes_gcm_encrypt = ama_aes256_gcm_encrypt_neon;
         dispatch_table.aes_gcm_decrypt = ama_aes256_gcm_decrypt_neon;
+#endif
         if (dispatch_verbose())
             fprintf(stderr, "[AMA Dispatch] AES-GCM: NEON + ARMv8 Crypto Ext (AES + PMULL) selected\n");
     } else if (dispatch_verbose() && dispatch_info.aes_gcm >= AMA_IMPL_NEON) {
@@ -2622,7 +2629,11 @@ static const char *aes_gcm_installed_backend(void) {
         return "aes-ni-pclmul";
 #endif
 #ifdef AMA_HAVE_NEON_IMPL
+#ifdef AMA_HAVE_NEON_CRYPTO_EXT_IMPL
     if (dispatch_table.aes_gcm_encrypt == ama_aes256_gcm_encrypt_neon)
+#else
+    if (0)
+#endif
         return "arm-aes-pmull";
 #endif
     /* Compile-time S-box selection — the SIMD dispatch table left

@@ -112,6 +112,12 @@ void ama_dilithium_power2round_neon(int32_t a1[256],
 /* ============================================================================
  * AES-256-GCM — ARMv8 Crypto Extensions kernel
  * ============================================================================ */
+/* Defined only when the ARM Crypto Extensions are available to the compiler
+ * (see the AMA_HAVE_NEON_CRYPTO_EXT_IMPL block in CMakeLists.txt).  Declared
+ * under the same condition so a build that cannot define them cannot
+ * accidentally reference them either — that mismatch is what made every MSVC
+ * ARM64 build fail to link. */
+#ifdef AMA_HAVE_NEON_CRYPTO_EXT_IMPL
 void ama_aes256_gcm_encrypt_neon(const uint8_t *plaintext, size_t plaintext_len,
                                  const uint8_t *aad, size_t aad_len,
                                  const uint8_t key[32], const uint8_t nonce[12],
@@ -123,6 +129,7 @@ ama_error_t ama_aes256_gcm_decrypt_neon(const uint8_t *ciphertext,
                                         const uint8_t nonce[12],
                                         const uint8_t tag[16],
                                         uint8_t *plaintext);
+#endif /* AMA_HAVE_NEON_CRYPTO_EXT_IMPL */
 
 /* ============================================================================
  * ChaCha20

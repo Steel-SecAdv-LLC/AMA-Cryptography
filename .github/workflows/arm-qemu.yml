@@ -89,6 +89,63 @@ jobs:
           python3 tools/check_secret_division.py \
             --lib build-arm/lib/libama_cryptography.so
 
+  arm-qemu-no-crypto-ext:
+    name: AArch64 without ARM Crypto Extensions (the MSVC ARM64 condition)
+    runs-on: ubuntu-latest
+    # Every MSVC ARM64 build failed to link, and no lane could see it.
+    #
+    # src/c/neon/ama_aes_gcm_neon.c puts its whole body behind
+    # `#if defined(__ARM_FEATURE_AES)` — a GCC/Clang ACLE macro that MSVC
+    # never defines and that CMakeLists.txt only turns on via
+    # `-march=armv8-a+crypto`, a flag it explicitly skips `if(NOT MSVC)`.
+    # Meanwhile AMA_HAVE_NEON_IMPL is set for CMAKE_SYSTEM_PROCESSOR ARM64
+    # including MSVC, and the dispatcher took the two kernels' addresses
+    # under it.  Result: LNK2019, on the one platform no CI lane builds.
+    #
+    # AMA_FORCE_NO_ARM_CRYPTO reproduces exactly that state with the GCC
+    # cross-toolchain — AMA_HAVE_NEON_IMPL set, the crypto feature macros
+    # undefined — so the condition is now built and RUN on every push
+    # instead of being reasoned about.  It also covers any aarch64 distro
+    # targeting baseline armv8-a, which was equally broken.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Install AArch64 cross toolchain + QEMU
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
+          .github/scripts/apt-install.sh --no-install-recommends cmake ninja-build gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev-arm64-cross qemu-user-static
+
+      - name: Configure (aarch64, Crypto Extensions forced off)
+        run: |
+          cmake -S . -B build-arm-nocrypto -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/aarch64-linux-gnu.cmake \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DAMA_BUILD_TESTS=ON \
+            -DAMA_USE_NATIVE_PQC=ON \
+            -DAMA_AES_CONSTTIME=ON \
+            -DAMA_FORCE_NO_ARM_CRYPTO=ON \
+            -DAMA_BUILD_EXAMPLES=OFF \
+            -DAMA_BUILD_FUZZ=OFF \
+            -DAMA_ENABLE_LTO=OFF
+
+      - name: Build (this is the step that used to fail to link)
+        run: cmake --build build-arm-nocrypto -j"$(nproc)"
+
+      - name: Test (ctest under QEMU user-mode)
+        run: ctest --test-dir build-arm-nocrypto --output-on-failure -j"$(nproc)"
+
+      - name: "The NEON AES-GCM equivalence test must SKIP, not vanish"
+        # Its own header has always claimed it surfaces this configuration as
+        # Skipped.  It could not: it takes the kernels by address, so it did
+        # not link.  Assert the claim rather than trusting it.
+        shell: bash
+        run: |
+          ctest --test-dir build-arm-nocrypto -R '^test_aes_gcm_neon_equiv$' 2>&1 | tee /tmp/neon_aes.txt
+          if ! grep -q "Skipped" /tmp/neon_aes.txt; then
+            echo "::error::test_aes_gcm_neon_equiv did not report Skipped on a build without the ARM Crypto Extensions"
+            exit 1
+          fi
+
   arm-qemu-sve2:
     name: AArch64 SVE2 kernels (VL=128 and VL=256)
     runs-on: ubuntu-latest
@@ -162,6 +219,7 @@ jobs:
     needs:
       - arm-qemu-ctest
       - arm-qemu-sve2
+      - arm-qemu-no-crypto-ext
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:

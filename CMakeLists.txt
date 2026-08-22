@@ -503,9 +503,44 @@ if(AMA_ENABLE_SIMD AND AMA_ENABLE_NEON)
             src/c/neon/ama_chacha20poly1305_neon.c
             src/c/neon/ama_argon2_neon.c
         )
-        if(NOT MSVC)
+        if(NOT MSVC AND NOT AMA_FORCE_NO_ARM_CRYPTO)
             set_source_files_properties(${AMA_NEON_SOURCES} PROPERTIES
                 COMPILE_FLAGS "-march=armv8-a+crypto")
+            # The AES-GCM and SPHINCS+ NEON kernels are the two whose bodies
+            # sit behind ARM Crypto Extension feature macros
+            # (__ARM_FEATURE_AES / __ARM_FEATURE_SHA2), which only the
+            # +crypto flag above turns on.  This definition says "those
+            # kernels exist in this build", so the dispatcher can reference
+            # them; without it, src/c/dispatch/ama_dispatch.c took the
+            # address of ama_aes256_gcm_encrypt_neon / _decrypt_neon
+            # unconditionally under AMA_HAVE_NEON_IMPL while
+            # src/c/neon/ama_aes_gcm_neon.c compiled to a bare typedef.
+            #
+            # MSVC is the configuration that made that unlinkable: it never
+            # defines the ACLE feature macros (they are GCC/Clang spellings),
+            # takes no -march flag, and CMAKE_SYSTEM_PROCESSOR ARM64 sets
+            # AMA_HAVE_NEON_IMPL for it — so every MSVC ARM64 build ended in
+            # LNK2019 on two symbols the TU had not defined.  Reproduced here
+            # with the equivalent GCC condition: compiling that TU for
+            # aarch64 at -march=armv8-a (no +crypto) yields an object with
+            # ZERO defined global symbols.
+            #
+            # It is not only about MSVC.  Any aarch64 toolchain targeting
+            # baseline armv8-a without the Crypto Extensions reaches the same
+            # state, and this is what makes such a build link and run: the
+            # slots stay NULL and ama_aes256_gcm_encrypt falls through to its
+            # own scalar path, which is what NULL slots already mean
+            # everywhere else in this table.
+            add_compile_definitions(AMA_HAVE_NEON_CRYPTO_EXT_IMPL)
+            # Same fact as a CMake variable, so tests/c/CMakeLists.txt can
+            # decide whether to BUILD the kernels' equivalence test at all.
+            # SKIP_RETURN_CODE cannot help a binary that will not link.
+            set(AMA_NEON_CRYPTO_EXT ON)
+        else()
+            message(STATUS
+                "SIMD: MSVC ARM64 — NEON AES-GCM kernels not built (no ARM "
+                "Crypto Extension feature macros); AES-GCM uses the portable "
+                "path and the dispatch slots stay NULL")
         endif()
         message(STATUS "SIMD: ARM NEON hand-written intrinsics enabled (8 algorithms)")
         # Tell dispatch code that NEON implementations are linked in
