@@ -27,6 +27,7 @@ from __future__ import annotations
 import glob
 import re
 import shlex
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -116,6 +117,27 @@ def _expand(arguments: list[str]) -> set[str]:
     return files
 
 
+def _git_tracked_python_files() -> set[str]:
+    """Every ``.py`` path git tracks, which is pre-commit's real input.
+
+    Falls back to nothing useful rather than to an rglob: if git cannot answer
+    here, the comparison below has no honest subject and the test should say
+    so rather than substitute a set that means something else.
+    """
+    result = subprocess.run(
+        ["git", "ls-files", "-z", "--", "*.py"],
+        cwd=str(REPO_ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, (
+        "`git ls-files` failed, so pre-commit's real input set is unknown and "
+        f"this test has no subject: {result.stderr.strip()}"
+    )
+    return {entry for entry in result.stdout.split("\0") if entry}
+
+
 @pytest.fixture(scope="module")
 def hook() -> dict[str, Any]:
     return _mypy_hook()
@@ -148,11 +170,19 @@ def test_the_hook_and_ci_check_the_same_files(hook: dict[str, Any]) -> None:
         f"{hook_misses[:10]}. The hook is weaker than CI."
     )
 
-    tracked = {
-        p.relative_to(REPO_ROOT).as_posix()
-        for p in REPO_ROOT.rglob("*.py")
-        if "__pycache__" not in p.parts and ".git" not in p.parts
-    }
+    # From `git ls-files`, not from rglob over the working tree.  pre-commit
+    # only ever hands a hook files git knows about (staged paths on a commit,
+    # tracked paths under `--all-files`), so an rglob models the wrong input:
+    # it sweeps in every build artefact the tree happens to be carrying —
+    # `build/lib/ama_cryptography/*.py`, dropped there by setuptools on any
+    # `pip install -e .` or `python setup.py build`, plus any in-tree venv or
+    # `.tox`.  That made this assertion fail on every machine that had built
+    # the project, reporting ten build-output paths as "files the hook checks
+    # and ci.yml does not" when pre-commit would never see one of them.  The
+    # comment ten lines up warns about exactly this failure mode — a test that
+    # models the tool wrongly reports on itself rather than on the subject —
+    # and the variable was already named `tracked` for the set it was not.
+    tracked = _git_tracked_python_files()
     hook_extra = sorted(f for f in tracked - ci_files if selector.search(f))
     assert not hook_extra, (
         f"the pre-commit hook checks files ci.yml does not: {hook_extra[:10]}. "
