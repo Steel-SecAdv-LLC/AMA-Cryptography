@@ -9,12 +9,20 @@ derivation consumes through ``secure_token_bytes`` — the wrapper that runs
 the FIPS 140-3 §4.9.2 continuous stuck-DRBG check and refuses in the ERROR
 state.  The invariant was enforced by hand-sweeping the package for bare
 ``secrets.token_bytes`` / ``os.urandom`` calls and fixing what the sweep
-found.  That sweep missed exactly one site: the responder-side handshake
-session ID in ``secure_channel.py``, which is signed into the transcript
-and consumed by ``_derive_session`` — while the initiator side of the very
-same protocol drew through the health-tested wrapper.  A hand sweep that
-must be re-run perfectly after every change is not a control; this module
-is the control.
+found.  That sweep missed ``secure_channel.py`` entirely: at ``origin/main``
+the file contained no reference to ``secure_token_bytes`` at all, and both of
+its draws were bare — the AEAD nonce and the responder-side handshake session
+ID, the latter signed into the transcript and consumed by ``_derive_session``.
+
+(This paragraph used to say the sweep "missed exactly one site … while the
+initiator side of the very same protocol drew through the health-tested
+wrapper".  Neither half was true: the initiator does not generate a session ID
+at all — it receives one from the peer — and no draw in the file went through
+the wrapper before this branch.  A false account of how a control came to be
+needed is a bad reason to trust the control.)
+
+A hand sweep that must be re-run perfectly after every change is not a
+control; this module is the control.
 
 What it enforces
 ----------------
@@ -196,11 +204,14 @@ class TestInvariant41Sweep:
     def test_secure_channel_carries_no_bare_draw(self) -> None:
         """The regression this gate was built from, pinned directly.
 
-        The responder handshake session ID was drawn with bare
-        ``secrets.token_bytes`` while the initiator side used the gated
-        draw.  ``secure_channel.py`` has no legitimate bare-draw context,
-        so the file-level assertion is exact — this holds even if the
-        allowlist above is edited.
+        Both draws in ``secure_channel.py`` were bare at ``origin/main`` — the
+        AEAD nonce and the responder handshake session ID — and the file
+        referenced ``secure_token_bytes`` nowhere.  (This docstring used to say
+        the responder drew bare "while the initiator side used the gated draw";
+        there was no gated draw in the file, and the initiator does not
+        generate a session ID at all.)  ``secure_channel.py`` has no legitimate
+        bare-draw context, so the file-level assertion is exact — this holds
+        even if the allowlist above is edited.
         """
         tree = ast.parse((PACKAGE_DIR / "secure_channel.py").read_text(encoding="utf-8"))
         sites = [s for s in _bare_draw_sites(tree) if not s[3]]

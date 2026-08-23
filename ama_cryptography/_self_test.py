@@ -1551,14 +1551,26 @@ def _check_loaded_native_library(
     unverified); an unreadable object fails closed on an anchored build but only
     warns on a developer one; a digest mismatch is tampering and always fails.
 
-    The digest compared is, by preference, the one recorded by the PRE-LOAD
-    verification — computed from the very file descriptor the loader mapped,
-    so no post-load file swap can make this stage describe different bytes
-    than the ones executing.  Re-reading the path is the fallback for loads
-    that skipped pre-load hashing (an override, or a missing artefact).  A
-    match is reported as verified even under an override: bytes identical to
-    the signed bytes are the signed library, wherever the operator loaded it
-    from.
+    The digest compared is the one recorded by the PRE-LOAD verification ONLY
+    when the loader actually mapped the descriptor it hashed —
+    ``preload_digest_is_of_mapped_bytes``, which ``_try_load_library`` sets on
+    its ``/proc/self/fd`` branch and nowhere else.  There, no post-load file
+    swap can make this stage describe different bytes than the ones executing.
+
+    Everywhere else — Windows' ``CDLL(path, winmode=0)``, and the plain
+    ``CDLL(path)`` fallback used on macOS and on any Linux without procfs — the
+    loader performs a SECOND, independent path resolution, so the recorded
+    digest need not describe the mapped bytes and this stage re-reads the path
+    instead.  That re-read is the whole reason ``_try_load_library``'s
+    docstring can accept the hash-then-load window on those platforms: a file
+    swapped between the hash and the ``dlopen`` fails here.  Preferring the
+    recorded digest unconditionally removed that, and reported "native library
+    verified" for bytes nothing had verified.
+
+    Re-reading the path is also the fallback for loads that skipped pre-load
+    hashing (an override, or a missing artefact).  A match is reported as
+    verified even under an override: bytes identical to the signed bytes are
+    the signed library, wherever the operator loaded it from.
     """
     from ama_cryptography.pqc_backends import native_backend_diagnostics
 
@@ -1566,7 +1578,8 @@ def _check_loaded_native_library(
     loaded_path = diag.get("path")
     override = diag.get("override")
     preload_hex = diag.get("preload_digest_hex")
-    actual_native = bytes.fromhex(preload_hex) if preload_hex else None
+    preload_is_mapped = bool(diag.get("preload_digest_is_of_mapped_bytes"))
+    actual_native = bytes.fromhex(preload_hex) if (preload_hex and preload_is_mapped) else None
     if actual_native is None:
         actual_native = _compute_native_library_digest(loaded_path)
     if override and actual_native != native_digest_raw:

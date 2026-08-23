@@ -385,6 +385,21 @@ _LOAD_DIAGNOSTICS: dict = {
     # bytes actually executing; the integrity POST stage prefers it over
     # re-reading the path, which closes the hash-after-load race.
     "preload_digest_hex": None,
+    # bool: True only when the mapping went through /proc/self/fd on the very
+    # descriptor that was hashed, i.e. only when "preload_digest_hex" above
+    # really is the digest of the bytes now executing.  Every other branch —
+    # Windows' CDLL(path, winmode=0), and the plain CDLL(path) fallback used
+    # on macOS and on any Linux without procfs — performs a SECOND, independent
+    # path resolution, so the recorded digest describes bytes that need not be
+    # the mapped ones.
+    #
+    # This flag exists because the POST stage preferred preload_digest_hex
+    # unconditionally.  The docstring of _try_load_library says the window on
+    # non-procfs platforms is accepted precisely because "the POST stage
+    # re-verifies after load as before"; without this flag it no longer did,
+    # and a file swapped between the hash and the dlopen was reported "native
+    # library verified" on macOS and Windows.
+    "preload_digest_is_of_mapped_bytes": False,
     # list[str]: candidates refused by the PRE-LOAD digest check, as opposed to
     # refused by the loader.  A structured record rather than a substring of
     # the message, because __init__ distinguishes on it: a native-backend
@@ -398,8 +413,15 @@ _LOAD_DIAGNOSTICS: dict = {
     # Like "abi_rejection", this is deliberately OUTSIDE the per-run reset in
     # _find_native_library: discovery legitimately re-runs during import
     # (secure_memory's probes, the build signer), and a reset would erase the
-    # refusal before POST could classify it.  _reset_digest_refusals() clears
-    # it explicitly where a fresh verdict is wanted.
+    # refusal before POST could classify it.  It is append-only for the process
+    # lifetime; nothing clears it.
+    #
+    # This comment used to end "_reset_digest_refusals() clears it explicitly
+    # where a fresh verdict is wanted."  No such function has ever existed, and
+    # its absence was load-bearing rather than cosmetic: pairing a PERSISTENT
+    # refusal list with the PER-RUN "errors" list let a later discovery run
+    # that recorded no errors at all satisfy native_backend_refused_on_digest()
+    # vacuously — see the explicit non-empty requirement there.
     "digest_refused": [],
 }
 
@@ -721,8 +743,12 @@ def _try_load_library(lib_path: Path, verify_digest: bool = True) -> Optional[ct
     an attacker who could do that could have pre-written the file, which the
     hash catches — and platforms without procfs, where hash-then-load's
     window is accepted and the POST stage re-verifies after load as before.
-    The recorded ``preload_digest_hex`` is the digest of the mapped bytes,
-    which the POST integrity stage prefers over re-reading the path.
+    The recorded ``preload_digest_hex`` is the digest of the mapped bytes ON
+    THAT BRANCH ONLY, and ``preload_digest_is_of_mapped_bytes`` records which
+    branch was taken.  The POST integrity stage prefers the recorded digest
+    when that flag is set and re-reads the path when it is not — which is what
+    makes "the POST stage re-verifies after load as before" true on the
+    platforms this paragraph accepts the window for.
 
     One deliberate carve-out.  The ``AMA_CRYPTO_LIB_PATH`` override
     (``verify_digest=False``) is the operator's own substitution: its digest
@@ -757,6 +783,7 @@ def _try_load_library(lib_path: Path, verify_digest: bool = True) -> Optional[ct
     # Per-attempt state: a digest recorded for an earlier candidate that then
     # failed to map must not be attributed to this one.
     _LOAD_DIAGNOSTICS["preload_digest_hex"] = None
+    _LOAD_DIAGNOSTICS["preload_digest_is_of_mapped_bytes"] = False
     expected = _expected_native_digest()
     fd: Optional[int] = None
     try:
@@ -819,10 +846,16 @@ def _try_load_library(lib_path: Path, verify_digest: bool = True) -> Optional[ct
             proc_fd_path = f"/proc/self/fd/{fd}"
             if os.path.exists(proc_fd_path):
                 try:
-                    return ctypes.CDLL(proc_fd_path)
+                    handle = ctypes.CDLL(proc_fd_path)
                 except OSError as exc:
                     _LOAD_DIAGNOSTICS["errors"].append((str(lib_path), str(exc)))
                     return None
+                # Set ONLY here.  This is the one branch that maps the
+                # descriptor that was hashed, so it is the one branch on which
+                # the recorded digest describes the executing bytes.
+                if digest is not None:
+                    _LOAD_DIAGNOSTICS["preload_digest_is_of_mapped_bytes"] = True
+                return handle
         try:
             if platform.system() == "Windows":
                 # On Windows with Python 3.8+, DLL search paths are restricted.
@@ -1192,6 +1225,7 @@ def native_backend_diagnostics() -> dict:
         "native_version": _LOAD_DIAGNOSTICS["native_version"],
         "abi_rejection": _LOAD_DIAGNOSTICS["abi_rejection"],
         "preload_digest_hex": _NATIVE_LIB_PRELOAD_DIGEST_HEX,
+        "preload_digest_is_of_mapped_bytes": _NATIVE_LIB_PRELOAD_DIGEST_IS_MAPPED,
         "digest_refused": list(_LOAD_DIAGNOSTICS["digest_refused"]),
     }
 
@@ -1210,7 +1244,14 @@ def native_backend_refused_on_digest() -> bool:
 
     Requires that EVERY recorded candidate error be a digest refusal, not just
     one of them: a tree with one stale library and one genuinely corrupt one is
-    a broken build.
+    a broken build.  And requires that THIS run recorded at least one error at
+    all.  ``digest_refused`` is append-only for the process lifetime while
+    ``errors`` is reset at the top of every ``_find_native_library`` call, so
+    without the emptiness check a later run that found no library whatsoever
+    left ``all(...)`` vacuously true over an empty list and inherited an
+    earlier run's refusal — turning "no library at all", which this function's
+    own contract says must keep hard-failing, into a fault
+    ``AMA_BUILD_PIPELINE=1`` would excuse.
     """
     if _native_lib is not None:
         return False
@@ -1219,7 +1260,10 @@ def native_backend_refused_on_digest() -> bool:
         return False
     if _LOAD_DIAGNOSTICS["abi_rejection"]:
         return False
-    return all(err is _PRELOAD_MISMATCH_HINT for _, err in _LOAD_DIAGNOSTICS["errors"])
+    errors = _LOAD_DIAGNOSTICS["errors"]
+    if not errors:
+        return False
+    return all(err is _PRELOAD_MISMATCH_HINT for _, err in errors)
 
 
 def native_backend_load_summary() -> str:
@@ -2764,6 +2808,13 @@ _NATIVE_LIB_PRELOAD_DIGEST_HEX: Optional[str] = (
     _LOAD_DIAGNOSTICS["preload_digest_hex"] if _native_lib is not None else None
 )
 
+#: Whether the digest above is of the bytes actually mapped, snapshotted for
+#: the same reason.  False on every platform that does not map through
+#: /proc/self/fd, where POST must re-read the path instead of trusting it.
+_NATIVE_LIB_PRELOAD_DIGEST_IS_MAPPED: bool = bool(
+    _LOAD_DIAGNOSTICS["preload_digest_is_of_mapped_bytes"] if _native_lib is not None else False
+)
+
 # ---------------------------------------------------------------------------
 # ABI version handshake (audit finding #7 close-out).
 #
@@ -2872,7 +2923,7 @@ def _disown_rejected_native_library(reason: str) -> None:
     never attributed a mapped digest.
     """
     global _native_lib, _NATIVE_LIB_PATH, _NATIVE_LIB_VIA_OVERRIDE
-    global _NATIVE_LIB_PRELOAD_DIGEST_HEX
+    global _NATIVE_LIB_PRELOAD_DIGEST_HEX, _NATIVE_LIB_PRELOAD_DIGEST_IS_MAPPED
 
     logging.getLogger(__name__).critical("Native library %s rejected: %s", _NATIVE_LIB_PATH, reason)
     _LOAD_DIAGNOSTICS["errors"].append((_NATIVE_LIB_PATH or "<unknown>", reason))
@@ -2882,10 +2933,12 @@ def _disown_rejected_native_library(reason: str) -> None:
     _LOAD_DIAGNOSTICS["loaded"] = False
     _LOAD_DIAGNOSTICS["path"] = None
     _LOAD_DIAGNOSTICS["preload_digest_hex"] = None
+    _LOAD_DIAGNOSTICS["preload_digest_is_of_mapped_bytes"] = False
     _native_lib = None
     _NATIVE_LIB_PATH = None
     _NATIVE_LIB_VIA_OVERRIDE = None
     _NATIVE_LIB_PRELOAD_DIGEST_HEX = None
+    _NATIVE_LIB_PRELOAD_DIGEST_IS_MAPPED = False
 
 
 if _native_lib is not None:

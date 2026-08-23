@@ -91,11 +91,22 @@ if _sys.platform == "win32":
 # This closes that asymmetry for the case that is unambiguous tampering — a
 # file the artefact SIGNS whose bytes differ.  It runs here, at the top of
 # package initialisation, before any submodule import, so it is ahead of
-# every binding import in the tree (all are lazy inside functions except
-# ``monitoring``'s ``math_engine``, which this still precedes).  Verified by
-# construction: importing ``ama_cryptography.sha3_binding`` directly
-# initialises this package first, so there is no import path that reaches a
-# binding without passing through here.
+# every binding import in the tree.  Verified by construction: importing
+# ``ama_cryptography.sha3_binding`` directly initialises this package first,
+# so there is no import path that reaches a binding without passing through
+# here.
+#
+# The parenthetical here used to read "all are lazy inside functions except
+# ``monitoring``'s ``math_engine``".  That is wrong about five of them: the
+# ``_probe_cython_*`` helpers in ``pqc_backends`` are function BODIES but are
+# CALLED at module scope (``_probe_cython_ed25519``, ``_probe_cython_dilithium``
+# and ``_probe_cython_hkdf`` together, then ``_probe_cython_sha3`` and
+# ``_probe_cython_hmac``), so ``ed25519_binding``, ``dilithium_binding``,
+# ``hkdf_binding``, ``sha3_binding`` and ``hmac_binding`` all execute their
+# module-init functions during ``import ama_cryptography`` — the exact event
+# this gate exists to precede.  It does precede them, which is why the
+# placement is right; the reason given for it was not.  ``math_engine``, via
+# ``monitoring``, is the genuinely lazy one.
 #
 # Scope is deliberately narrow.
 #
@@ -446,17 +457,39 @@ if not _post():
             _reason,
         )
     elif _all_failures_repairable and _process_is_the_signer():
+        # The override, verbatim, when one is in effect.  This message used to
+        # end "outside the signer identity, nothing unverified has been
+        # mapped", which the loader does not guarantee: _find_native_library
+        # calls _try_load_library(..., verify_digest=False) for an
+        # AMA_CRYPTO_LIB_PATH file and for every candidate under an override
+        # directory, and with verify_digest=False the digest comparison is
+        # skipped outright — the object is mapped and its constructors run with
+        # no digest binding at all.  Nothing in this branch tested that no
+        # override was in effect, so the sentence was a claim about a
+        # configuration the code had not looked at.  Now it looks.
+        try:
+            from ama_cryptography.pqc_backends import (
+                native_backend_diagnostics as _nbd,
+            )
+
+            _override_in_effect = _nbd().get("override")
+        except Exception:  # pragma: no cover - pqc_backends is imported above
+            _override_in_effect = "<unknown: diagnostics unavailable>"
         _logging.getLogger(__name__).critical(
             "FIPS 140-3 POST FAILED only in stage(s) a re-signing run repairs "
             "(%s) and this process IS the integrity signer running its "
             "writing subcommand: completing the import so the signing tooling "
             "can run. The module is in the ERROR state and "
             "every cryptographic operation through the public surface will be "
-            "refused. Any native object mapped in this process was mapped "
-            "under the signer's own load override and is digest-bound into "
-            "the artefact this signing run produces; outside the signer "
-            "identity, nothing unverified has been mapped. Root cause: %s",
+            "refused. Native object load override: %s. Root cause: %s",
             ", ".join(sorted(_repairable)),
+            (
+                f"AMA_CRYPTO_LIB_PATH={_override_in_effect!r} — that object was "
+                "mapped WITHOUT digest verification"
+                if _override_in_effect
+                else "none; every mapped object passed pre-load digest "
+                "verification or was refused"
+            ),
             _reason,
         )
     else:

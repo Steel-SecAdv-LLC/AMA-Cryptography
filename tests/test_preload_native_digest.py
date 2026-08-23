@@ -19,6 +19,7 @@ pins for the pieces.
 from __future__ import annotations
 
 import os
+import platform
 import sys
 from pathlib import Path
 
@@ -446,6 +447,10 @@ class TestARejectedLibraryLeavesNoDigestBehind:
         monkeypatch.setattr(pb, "_NATIVE_LIB_PATH", "/opt/wrong/libama_cryptography.so")
         monkeypatch.setattr(pb, "_NATIVE_LIB_VIA_OVERRIDE", "/opt/wrong/libama_cryptography.so")
         monkeypatch.setattr(pb, "_NATIVE_LIB_PRELOAD_DIGEST_HEX", "ab" * 32)
+        # _disown_rejected_native_library clears this module global too, so it
+        # has to be under monkeypatch or the clobber outlives the test and the
+        # next one reads a False the real loader never wrote.
+        monkeypatch.setattr(pb, "_NATIVE_LIB_PRELOAD_DIGEST_IS_MAPPED", True)
         pb._LOAD_DIAGNOSTICS["preload_digest_hex"] = "ab" * 32
         pb._LOAD_DIAGNOSTICS["errors"] = []
 
@@ -468,6 +473,7 @@ class TestARejectedLibraryLeavesNoDigestBehind:
         monkeypatch.setattr(pb, "_native_lib", object(), raising=False)
         monkeypatch.setattr(pb, "_NATIVE_LIB_PATH", "/opt/wrong/libama_cryptography.so")
         monkeypatch.setattr(pb, "_NATIVE_LIB_PRELOAD_DIGEST_HEX", "cd" * 32)
+        monkeypatch.setattr(pb, "_NATIVE_LIB_PRELOAD_DIGEST_IS_MAPPED", True)
         pb._LOAD_DIAGNOSTICS["errors"] = []
 
         pb._disown_rejected_native_library("wrong major version")
@@ -494,6 +500,7 @@ class TestARejectedLibraryLeavesNoDigestBehind:
         monkeypatch.setattr(pb, "_native_lib", object(), raising=False)
         monkeypatch.setattr(pb, "_NATIVE_LIB_PATH", "/opt/wrong/libama_cryptography.so")
         monkeypatch.setattr(pb, "_NATIVE_LIB_PRELOAD_DIGEST_HEX", "ef" * 32)
+        monkeypatch.setattr(pb, "_NATIVE_LIB_PRELOAD_DIGEST_IS_MAPPED", True)
         pb._LOAD_DIAGNOSTICS["errors"] = []
 
         pb._disown_rejected_native_library("wrong major version")
@@ -508,6 +515,197 @@ class TestARejectedLibraryLeavesNoDigestBehind:
         # Absent bytes are unverifiable, and on an anchored build that is fatal.
         assert verdict is False
         assert "UNVERIFIABLE" in note, note
+
+
+class TestDigestRefusalNeedsThisRunsEvidence:
+    """A stale refusal from an earlier run must not answer for this one.
+
+    ``digest_refused`` is append-only for the process lifetime, deliberately:
+    discovery legitimately re-runs during import, and a reset would erase the
+    refusal before POST could classify it.  ``errors`` is per-run scratch,
+    emptied at the top of every ``_find_native_library``.
+
+    Pairing the two with ``all(...)`` made a later run that recorded NO errors
+    at all satisfy the predicate vacuously, inheriting an earlier run's
+    refusal.  "No library at all" is exactly the fault this function's own
+    contract says must keep hard-failing, so that turned it into one
+    ``AMA_BUILD_PIPELINE=1`` would excuse — a release container carrying the
+    flag for its whole lifetime could smoke-test a broken wheel and report
+    success.  The comment justifying the arrangement cited a
+    ``_reset_digest_refusals()`` that has never existed.
+    """
+
+    _SCRATCH_KEYS = ("digest_refused", "errors", "abi_rejection")
+
+    @pytest.fixture
+    def restore_diagnostics(self) -> object:
+        saved = {key: pb._LOAD_DIAGNOSTICS[key] for key in self._SCRATCH_KEYS}
+        saved["errors"] = list(saved["errors"])
+        saved["digest_refused"] = list(saved["digest_refused"])
+        yield
+        pb._LOAD_DIAGNOSTICS.update(saved)
+
+    def test_a_stale_refusal_with_no_errors_this_run_is_not_a_digest_refusal(
+        self, restore_diagnostics: object, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(pb, "_native_lib", None, raising=False)
+        pb._LOAD_DIAGNOSTICS["digest_refused"] = ["/opt/stale/libama_cryptography.so"]
+        pb._LOAD_DIAGNOSTICS["errors"] = []
+        pb._LOAD_DIAGNOSTICS["abi_rejection"] = None
+
+        assert pb.native_backend_refused_on_digest() is False, (
+            "a run that recorded no errors at all inherited an earlier run's "
+            "digest refusal, so 'no library found' read as 'stale artefact'"
+        )
+
+    def test_a_refusal_recorded_this_run_still_answers(
+        self, restore_diagnostics: object, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The control: the real case must keep working."""
+        monkeypatch.setattr(pb, "_native_lib", None, raising=False)
+        pb._LOAD_DIAGNOSTICS["digest_refused"] = ["/opt/stale/libama_cryptography.so"]
+        pb._LOAD_DIAGNOSTICS["errors"] = [
+            ("/opt/stale/libama_cryptography.so", pb._PRELOAD_MISMATCH_HINT)
+        ]
+        pb._LOAD_DIAGNOSTICS["abi_rejection"] = None
+
+        assert pb.native_backend_refused_on_digest() is True
+
+    def test_a_mixed_run_is_still_a_broken_build(
+        self, restore_diagnostics: object, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(pb, "_native_lib", None, raising=False)
+        pb._LOAD_DIAGNOSTICS["digest_refused"] = ["/opt/stale/libama_cryptography.so"]
+        pb._LOAD_DIAGNOSTICS["errors"] = [
+            ("/opt/stale/libama_cryptography.so", pb._PRELOAD_MISMATCH_HINT),
+            ("/opt/broken/libama_cryptography.so", "wrong ELF class"),
+        ]
+        pb._LOAD_DIAGNOSTICS["abi_rejection"] = None
+
+        assert pb.native_backend_refused_on_digest() is False
+
+
+class TestPostReReadsWhenThePreloadDigestIsNotOfMappedBytes:
+    """POST may only trust the pre-load digest where the loader mapped it.
+
+    ``_try_load_library`` hashes a descriptor and then, ON LINUX WITH PROCFS
+    ONLY, maps that same descriptor through ``/proc/self/fd/N``.  Everywhere
+    else — Windows' ``CDLL(path, winmode=0)``, and the plain ``CDLL(path)``
+    fallback used on macOS and on any Linux without procfs — it performs a
+    SECOND, independent path resolution, so the recorded digest describes
+    bytes that need not be the mapped ones.  Its own docstring accepts that
+    window explicitly, on the stated grounds that "the POST stage re-verifies
+    after load as before".
+
+    The POST stage had stopped doing so: it preferred
+    ``preload_digest_hex`` whenever one was recorded, and one is recorded for
+    every readable candidate.  A file swapped between the hash and the
+    ``dlopen`` was therefore reported "native library verified" on macOS and
+    Windows.  ``preload_digest_is_of_mapped_bytes`` is the flag that
+    distinguishes the two, and these tests drive both sides of it against the
+    real stage.
+    """
+
+    _SCRATCH_KEYS = ("preload_digest_hex", "preload_digest_is_of_mapped_bytes", "errors")
+
+    @pytest.fixture
+    def restore_diagnostics(self) -> object:
+        saved = {key: pb._LOAD_DIAGNOSTICS[key] for key in self._SCRATCH_KEYS}
+        saved["errors"] = list(saved["errors"])
+        yield
+        pb._LOAD_DIAGNOSTICS.update(saved)
+
+    @staticmethod
+    def _library(tmp_path: Path, payload: bytes) -> Path:
+        path = tmp_path / "libama_cryptography.so"
+        path.write_bytes(payload)
+        return path
+
+    def test_a_stale_recorded_digest_is_re_read_when_it_is_not_of_mapped_bytes(
+        self, restore_diagnostics: object, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """The macOS / Windows / no-procfs case: re-read, and pass on the truth."""
+        from ama_cryptography import _self_test
+
+        on_disk = self._library(tmp_path, b"the object that is actually there")
+        signed = _self_test._compute_native_library_digest(str(on_disk))
+        assert signed is not None
+
+        monkeypatch.setattr(pb, "_native_lib", object(), raising=False)
+        monkeypatch.setattr(pb, "_NATIVE_LIB_PATH", str(on_disk))
+        monkeypatch.setattr(pb, "_NATIVE_LIB_VIA_OVERRIDE", None)
+        # A recorded digest of DIFFERENT bytes, exactly what a swap between
+        # hash and dlopen leaves behind.
+        monkeypatch.setattr(pb, "_NATIVE_LIB_PRELOAD_DIGEST_HEX", "ab" * 32)
+        monkeypatch.setattr(pb, "_NATIVE_LIB_PRELOAD_DIGEST_IS_MAPPED", False)
+
+        verdict, note, native_ok = _self_test._check_loaded_native_library(signed, anchored=True)
+        assert native_ok is True, note
+        assert verdict is None
+        assert "verified" in note, note
+
+    def test_a_swapped_file_is_caught_by_the_re_read(
+        self, restore_diagnostics: object, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """The defect itself: bytes nothing verified must not read as verified.
+
+        The recorded digest MATCHES the signed one — the pre-load hash saw the
+        right file — and the file on disk does not, because it was swapped
+        before the ``dlopen``.  Trusting the record reports "verified"; the
+        re-read reports MISMATCH.
+        """
+        from ama_cryptography import _self_test
+
+        swapped = self._library(tmp_path, b"the object that was substituted")
+        signed = bytes.fromhex("11" * 32)
+
+        monkeypatch.setattr(pb, "_native_lib", object(), raising=False)
+        monkeypatch.setattr(pb, "_NATIVE_LIB_PATH", str(swapped))
+        monkeypatch.setattr(pb, "_NATIVE_LIB_VIA_OVERRIDE", None)
+        monkeypatch.setattr(pb, "_NATIVE_LIB_PRELOAD_DIGEST_HEX", signed.hex())
+        monkeypatch.setattr(pb, "_NATIVE_LIB_PRELOAD_DIGEST_IS_MAPPED", False)
+
+        verdict, note, native_ok = _self_test._check_loaded_native_library(signed, anchored=True)
+        assert native_ok is False, note
+        assert verdict is False
+        assert "MISMATCH" in note, note
+
+    def test_the_recorded_digest_is_trusted_when_it_is_of_mapped_bytes(
+        self, restore_diagnostics: object, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """The Linux/procfs case, and the control for the two above.
+
+        Same inputs as the test before it, with the flag set: the descriptor
+        that was hashed is the one that was mapped, so what the path holds now
+        is not what is executing, and the record is the authority.
+        """
+        from ama_cryptography import _self_test
+
+        swapped = self._library(tmp_path, b"the object that was substituted")
+        signed = bytes.fromhex("11" * 32)
+
+        monkeypatch.setattr(pb, "_native_lib", object(), raising=False)
+        monkeypatch.setattr(pb, "_NATIVE_LIB_PATH", str(swapped))
+        monkeypatch.setattr(pb, "_NATIVE_LIB_VIA_OVERRIDE", None)
+        monkeypatch.setattr(pb, "_NATIVE_LIB_PRELOAD_DIGEST_HEX", signed.hex())
+        monkeypatch.setattr(pb, "_NATIVE_LIB_PRELOAD_DIGEST_IS_MAPPED", True)
+
+        verdict, note, native_ok = _self_test._check_loaded_native_library(signed, anchored=True)
+        assert native_ok is True, note
+        assert verdict is None
+
+    def test_this_host_maps_through_the_hashed_descriptor(self) -> None:
+        """Non-vacuity: the flag is not simply always False.
+
+        On Linux with procfs the real loader must set it, or the two
+        re-read tests above would pass for the wrong reason on every platform.
+        """
+        if platform.system() != "Linux" or not Path("/proc/self/fd").is_dir():
+            pytest.skip("no procfs: this host cannot map through the hashed fd")
+        diag = pb.native_backend_diagnostics()
+        if not diag["loaded"]:
+            pytest.skip("native library not loaded in this environment")
+        assert diag["preload_digest_is_of_mapped_bytes"] is True
 
 
 class TestSigningScopeRequiresIntentNotJustIdentity:

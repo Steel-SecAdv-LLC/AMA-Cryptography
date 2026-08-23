@@ -1151,6 +1151,20 @@ class ResonanceTimingMonitor:
     # configuration; they are kept for external callers but the generic
     # names the API actually emits are now profiled too.
     #
+    # That coverage claim was written before it was true: hmac_verify, named
+    # inside the sentence making the claim, had no profile, and neither did
+    # the other two legacy_compat emitters hmac_auth and sha3_256_hash.  The
+    # consequence was not a crash — _record_timing_locked does
+    # `self.anomaly_profiles.get(operation, {})`, so those three fell back to
+    # self.threshold and DEFAULT_ALARM_BUDGET — but the block is the record of
+    # a deliberate inventory pass, and it documented a reconciliation that had
+    # not happened.  The three are added below at exactly the values the
+    # fallback already supplied, so this changes no runtime behaviour; what it
+    # changes is that the table now matches the claim, and
+    # tests/test_monitoring_profile_coverage.py enumerates every
+    # monitor_crypto_operation() name in the package and fails if one is
+    # missing, so the next emitter cannot be added without a profile.
+    #
     # threshold_sigma is the robust-score floor (governs on near-normal
     # data); alarm_budget is the calibrated false-alarm budget (governs on
     # heavy-tailed data).  Rejection-sampling signatures (ML-DSA) and
@@ -1182,6 +1196,21 @@ class ResonanceTimingMonitor:
         # — fixed-size operations, so size normalization does not apply.
         "encrypt": {"threshold_sigma": 3.0, "alarm_budget": 0.01, "normalize_by_size": False},
         "decrypt": {"threshold_sigma": 3.0, "alarm_budget": 0.01, "normalize_by_size": False},
+        # legacy_compat's remaining three emitters.  Values are exactly the
+        # fallback (self.threshold = 3.0, DEFAULT_ALARM_BUDGET = 0.01,
+        # normalize_by_size defaulting to False at the read site), so naming
+        # them here is a documentation fix rather than a retuning.
+        "hmac_auth": {"threshold_sigma": 3.0, "alarm_budget": 0.01, "normalize_by_size": False},
+        "hmac_verify": {
+            "threshold_sigma": 3.0,
+            "alarm_budget": 0.01,
+            "normalize_by_size": False,
+        },
+        "sha3_256_hash": {
+            "threshold_sigma": 3.0,
+            "alarm_budget": 0.01,
+            "normalize_by_size": False,
+        },
         # Kept for external callers (no in-tree emitter):
         "aes_gcm_encrypt": {
             "threshold_sigma": 3.0,

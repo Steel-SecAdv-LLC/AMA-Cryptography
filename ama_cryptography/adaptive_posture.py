@@ -190,6 +190,14 @@ class PostureEvaluator:
         # window slides (old alerts drop off the front), which would
         # invalidate a count-based offset.
         self._last_processed_alert_ts: float = -1.0
+        #: How many alerts bearing exactly ``_last_processed_alert_ts`` have
+        #: already been scored.  Without it the cursor's strict ``>`` dropped
+        #: every alert that TIED the cursor, and a tie is routine: monitoring
+        #: stamps with ``time.time()``, whose granularity is ~15.6 ms on
+        #: Windows and whose float64 ULP at the current epoch is ~238 ns.
+        #: Before the three scorers shared one cursor, a tied alert was still
+        #: scored by two of them; afterwards it was scored by nothing.
+        self._scored_at_cursor_ts: int = 0
 
     def evaluate(self, monitor_report: Dict[str, Any]) -> PostureEvaluation:
         """
@@ -301,18 +309,41 @@ class PostureEvaluator:
     def _alerts_not_yet_scored(self, alerts: List[Dict]) -> List[Dict]:
         """The alerts in the sliding window this evaluator has not scored yet.
 
-        An alert with no ``timestamp`` cannot be placed relative to the cursor,
-        so it is treated as new.  Every alert the monitor emits carries one —
-        each ``self.alerts.append`` in ``monitoring.py`` sets
-        ``"timestamp": time.time()`` — and ``tests/test_adaptive_posture.py``
-        pins that, so the un-timestamped case is a hand-built report rather
-        than anything the system produces.
+        An alert with no ``timestamp`` is placed at 0.0, which the cursor —
+        initialised to -1.0 — is behind exactly once.  It is therefore scored
+        on the first evaluation that sees it and skipped thereafter.  Treating
+        it as unconditionally new, which this did, meant
+        ``_score_lyapunov_stability`` re-appended the same deviation to
+        ``_timing_deviation_history`` on EVERY evaluation, growing the deque
+        by one entry per cycle until it held 50 copies of one stale deviation
+        and manufactured a Lyapunov instability signal out of a single alert.
+        Every alert the monitor emits carries a timestamp — each
+        ``self.alerts.append`` in ``monitoring.py`` sets
+        ``"timestamp": time.time()`` — but the hand-built shape is not
+        hypothetical: ``tests/test_adaptive_posture_scenarios.py`` emitted it,
+        so the whole scenario suite ran on the always-new path and pinned none
+        of the de-duplication this cursor exists to provide.
+
+        Alerts that TIE the cursor are counted rather than compared.  A strict
+        ``>`` dropped them permanently, and ties happen whenever two alerts
+        land in the same clock tick.  ``_scored_at_cursor_ts`` records how many
+        of the tied alerts have already been scored; the window preserves
+        arrival order and only ever drops from the front, so counting them off
+        in order is exact while the window still holds them, and fails towards
+        skipping (never towards double-counting) if it no longer does.
         """
-        return [
-            a
-            for a in alerts
-            if a.get("timestamp") is None or a.get("timestamp", 0.0) > self._last_processed_alert_ts
-        ]
+        fresh: List[Dict] = []
+        tie_index = 0
+        for a in alerts:
+            ts = a.get("timestamp")
+            ts_value = float(ts) if isinstance(ts, (int, float)) else 0.0
+            if ts_value > self._last_processed_alert_ts:
+                fresh.append(a)
+            elif ts_value == self._last_processed_alert_ts:
+                if tie_index >= self._scored_at_cursor_ts:
+                    fresh.append(a)
+                tie_index += 1
+        return fresh
 
     def _advance_alert_cursor(self, scored: List[Dict]) -> None:
         """Move the cursor past everything the scorers just saw.
@@ -320,11 +351,27 @@ class PostureEvaluator:
         Called once per evaluation, after all three scorers have run.  The
         cursor only ever moves forward, so an out-of-order timestamp cannot
         rewind it and cause a re-score.
+
+        Also maintains ``_scored_at_cursor_ts``, the number of alerts bearing
+        exactly the cursor timestamp that have been scored: when the cursor
+        advances it is reset to the count at the new timestamp, and when the
+        newest alert merely ties the existing cursor it is incremented.  An
+        alert with no timestamp is placed at 0.0, the same value the filter
+        gives it, so the pair stays consistent and it is consumed once.
         """
+        if not scored:
+            return
+        timestamps: List[float] = []
         for alert in scored:
-            ts = alert.get("timestamp")
-            if isinstance(ts, (int, float)) and ts > self._last_processed_alert_ts:
-                self._last_processed_alert_ts = float(ts)
+            raw = alert.get("timestamp")
+            timestamps.append(float(raw) if isinstance(raw, (int, float)) else 0.0)
+        newest = max(timestamps)
+        at_newest = sum(1 for ts in timestamps if ts == newest)
+        if newest > self._last_processed_alert_ts:
+            self._last_processed_alert_ts = newest
+            self._scored_at_cursor_ts = at_newest
+        elif newest == self._last_processed_alert_ts:
+            self._scored_at_cursor_ts += at_newest
 
     def _score_timing_alerts(self, alerts: List[Dict]) -> float:
         """Score timing alerts by severity."""
@@ -426,11 +473,43 @@ class PostureEvaluator:
         # cursor advance with it: three scorers sharing one cursor, each
         # advancing it, means the first to run consumes the alerts and the
         # other two see an empty list.
+        appended = 0
         for alert in timing_alerts:
             anomaly = alert.get("anomaly")
             if anomaly is not None:
                 deviation = getattr(anomaly, "deviation_sigma", 0.0)
                 self._timing_deviation_history.append(deviation)
+                appended += 1
+
+        if appended == 0:
+            # No new deviations this cycle: age the retained state instead of
+            # re-asserting instability from it.
+            #
+            # This deque was append-only and drained by nothing but reset().
+            # The scorer runs on EVERY evaluation, so once V_dot went positive
+            # the baseline froze (the deliberate "boiling frog" guard below)
+            # and `instability` returned the SAME non-zero value forever, with
+            # zero new alerts.  That put a permanent floor of
+            # 0.15 * instability under the composite score, and
+            # `max(score, acc * decay)` cannot decay below its own floor.  With
+            # instability saturated at 1.0 the floor is exactly 0.15 — the
+            # ELEVATED threshold — while de-escalation needs score < 0.15 -
+            # 0.05, so the evaluator was pinned at ELEVATED for the process
+            # lifetime.  It is the precise failure the accumulator rewrite was
+            # made to remove, moved one term to the left, and it falsified both
+            # the comment on the accumulator and MONITORING.md's "with no new
+            # anomalies the level decays geometrically".
+            #
+            # Dropping the oldest sample per quiet cycle means the state
+            # reflects recent evidence and nothing else: after as many quiet
+            # evaluations as the deque is long, there is no evidence left, and
+            # clearing the baseline there lets the next burst re-baseline
+            # rather than measure itself against a stale one.
+            if self._timing_deviation_history:
+                self._timing_deviation_history.popleft()
+            if not self._timing_deviation_history:
+                self._lyapunov_baseline = None
+            return 0.0
 
         if len(self._timing_deviation_history) < 5:
             return 0.0
@@ -492,13 +571,6 @@ class PostureEvaluator:
         else:
             candidate = ThreatLevel.NOMINAL
 
-        # Update consecutive counts
-        for level in ThreatLevel:
-            if level == candidate:
-                self._consecutive_counts[level] = self._consecutive_counts.get(level, 0) + 1
-            else:
-                self._consecutive_counts[level] = 0
-
         # Level ordering for comparison
         level_order = {
             ThreatLevel.NOMINAL: 0,
@@ -506,21 +578,69 @@ class PostureEvaluator:
             ThreatLevel.HIGH: 2,
             ThreatLevel.CRITICAL: 3,
         }
+        thresholds = {
+            ThreatLevel.ELEVATED: self.elevated_threshold,
+            ThreatLevel.HIGH: self.high_threshold,
+            ThreatLevel.CRITICAL: self.critical_threshold,
+        }
+
+        # Update consecutive counts, with the hysteresis band applied on the
+        # ESCALATION side as well as the de-escalation side.
+        #
+        # This counted evaluations at the EXACT candidate level and zeroed
+        # every other level.  Under the old unbounded accumulator
+        # (acc = acc*decay + score) any sustained signal climbed steadily and
+        # parked inside one band for many cycles, so the counter filled.  The
+        # bounded peak-hold (acc = max(score, acc*decay)) makes the effective
+        # score a SAWTOOTH instead: it jumps to the peak on an alert-bearing
+        # cycle and decays 5% on the quiet ones in between.  A peak between a
+        # threshold T and T/0.95^2 — about 10.8% above it, which is where a
+        # low-and-slow signal naturally sits, not a contrived value — makes the
+        # candidate alternate between that level and the one below on every
+        # cycle.  No level ever reached escalation_count consecutive hits, and
+        # a sustained anomaly stream that origin/main escalated to CRITICAL sat
+        # at NOMINAL for as long as it ran.
+        #
+        # A level that has already been touched keeps accumulating evidence
+        # while the score stays within hysteresis_band below its threshold —
+        # the same band, in the same direction, that de-escalation already
+        # required.  A level that has NOT been touched still needs the score to
+        # reach the threshold outright, so this cannot escalate on a signal
+        # that never crossed it.  A score that falls more than the band below
+        # resets the counter, as before.
+        for level in ThreatLevel:
+            if level is ThreatLevel.NOMINAL:
+                # Never an escalation target; kept in the mapping so the
+                # summary and reset() see a full, consistent table.
+                self._consecutive_counts[level] = (
+                    self._consecutive_counts.get(level, 0) + 1
+                    if candidate is ThreatLevel.NOMINAL
+                    else 0
+                )
+                continue
+            already_counting = self._consecutive_counts.get(level, 0) > 0
+            floor = thresholds[level] - (self.hysteresis_band if already_counting else 0.0)
+            if score >= floor:
+                self._consecutive_counts[level] = self._consecutive_counts.get(level, 0) + 1
+            else:
+                self._consecutive_counts[level] = 0
 
         current_ord = level_order[self._current_level]
         candidate_ord = level_order[candidate]
 
         if candidate_ord > current_ord:
-            # Escalation: require N consecutive evaluations
-            if self._consecutive_counts[candidate] >= self.escalation_count:
-                self._current_level = candidate
+            # Escalation: require N consecutive evaluations.  Take the HIGHEST
+            # level above the current one whose counter is satisfied — with
+            # at-or-above counting, several can be.
+            for level in (ThreatLevel.CRITICAL, ThreatLevel.HIGH, ThreatLevel.ELEVATED):
+                if (
+                    level_order[level] > current_ord
+                    and self._consecutive_counts[level] >= self.escalation_count
+                ):
+                    self._current_level = level
+                    break
         elif candidate_ord < current_ord:
             # De-escalation: require score below (threshold - hysteresis_band)
-            thresholds = {
-                ThreatLevel.ELEVATED: self.elevated_threshold,
-                ThreatLevel.HIGH: self.high_threshold,
-                ThreatLevel.CRITICAL: self.critical_threshold,
-            }
             current_threshold = thresholds.get(self._current_level, 0.0)
             if score < current_threshold - self.hysteresis_band:
                 self._current_level = candidate
@@ -544,6 +664,7 @@ class PostureEvaluator:
         self._timing_deviation_history.clear()
         self._lyapunov_baseline = None
         self._last_processed_alert_ts = -1.0
+        self._scored_at_cursor_ts = 0
 
 
 class CryptoPostureController:

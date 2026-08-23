@@ -220,6 +220,26 @@ if(AMA_USE_NATIVE_PQC)
         add_test(NAME test_x25519_field_equiv COMMAND test_x25519_field_equiv)
     endif()
 
+    # Field-arithmetic cross-validation: fe51 and fe64 against the ref10
+    # fe25519 path, plus a raw multiply/square benchmark.
+    #
+    # This file has existed since #370 and was referenced by NO build file:
+    # 434 lines of cross-validation that nothing ever compiled, while
+    # ARCHITECTURE.md and docs/METRICS_REPORT.md counted it among the
+    # `test_*.c` files "registered via ctest".  It compiles and its
+    # cross-validation passes (known values, then 10,000 random vectors each
+    # through frombytes/tobytes, mul, sq and add/sub, and 100 through invert),
+    # so the honest repair is to run it rather than to renumber around it.
+    #
+    # Same gate as test_x25519_field_equiv above: the TU includes
+    # src/c/fe64.h unconditionally, and fe64 needs a native 128-bit integer
+    # type (AMA_FE64_AVAILABLE — 64-bit GNU/Clang with __SIZEOF_INT128__).
+    if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang"
+       AND CMAKE_SIZEOF_VOID_P EQUAL 8
+       AND NOT MSVC)
+        add_ama_test(test_field_bench test_field_bench.c)
+    endif()
+
     # PR D (2026-04) — MULX+ADX kernel vs pure-C fe64 byte-equivalence.
     # The kernel TU lives in src/c/internal/ama_x25519_fe64_mulx.c and is
     # only compiled on x86-64 GCC/Clang non-MSVC (see top-level

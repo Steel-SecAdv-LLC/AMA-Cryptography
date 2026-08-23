@@ -1,5 +1,11 @@
 /* Copyright (C) 2025-2026 Steel Security Advisors LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
+/* clock_gettime / CLOCK_MONOTONIC are POSIX.1-2001 (POSIX.1b realtime).  The
+ * build compiles with -std=c11 rather than gnu11, so glibc hides them unless
+ * a feature-test macro asks for them.  Same declaration, same reason, as
+ * tests/c/test_benchmark.c. */
+#define _POSIX_C_SOURCE 199309L
+
 /**
  * Cross-validation and benchmark for field arithmetic implementations.
  *

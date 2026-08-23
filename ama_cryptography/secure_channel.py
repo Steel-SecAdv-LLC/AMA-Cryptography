@@ -1107,13 +1107,21 @@ class SecureChannelResponder:
         # secrets.token_bytes.  The session ID is signed into the handshake
         # transcript and is a _derive_session input, and INVARIANT-41's
         # contract is that every identifier a key derivation consumes passes
-        # the continuous stuck-DRBG check.  This was the one draw in the
-        # package the INVARIANT-41 sweep missed: the initiator-side ID was
-        # routed through secure_token_bytes while the responder side kept
-        # the bare draw, which no control would have flagged had the DRBG
-        # stuck.  tests/test_invariant41_rng_sweep.py now enumerates every
-        # bare draw in the shipped package against an allowlist, so the
-        # next missed site fails CI instead of waiting for a review.
+        # the continuous stuck-DRBG check.
+        #
+        # This comment used to say "the initiator-side ID was routed through
+        # secure_token_bytes while the responder side kept the bare draw".
+        # There was no such asymmetry to find.  At origin/main this file
+        # contained no reference to secure_token_bytes at all: BOTH draws in it
+        # were bare — the AEAD nonce at line 632 and this session ID at line
+        # 1098 — and the initiator never generates a session ID in the first
+        # place, it receives one from the peer (`self._derive_session(
+        # response.session_id, ...)`).  What the hand sweep missed was simply
+        # this whole file, both draws, and the honest lesson is the one the
+        # last sentence already drew: a hand sweep is not a control.
+        # tests/test_invariant41_rng_sweep.py enumerates every bare draw in
+        # the shipped package against an allowlist, so the next missed site
+        # fails CI instead of waiting for a review.
         session_id = secure_token_bytes(SESSION_ID_BYTES)
 
         # Sign the handshake transcript (proves we hold the static key).

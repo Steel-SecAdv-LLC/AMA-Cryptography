@@ -83,8 +83,13 @@ PACKAGE_DIR = REPO_ROOT / "ama_cryptography"
 ALLOWLIST: dict[str, tuple[int, str]] = {
     "__init__.py": (
         2,
-        "stale-source fast check: hashes .py files against the recorded "
-        "digest before the native library is trusted (import + 1 use)",
+        "pre-import binding gate: hashes each signed compiled binding "
+        "extension (.so/.pyd) against INTEGRITY_BINDING_DIGESTS_HEX before "
+        "its module-init function can run, ahead of the native library being "
+        "trusted (import + 1 use in _refuse_tampered_bindings_before_import). "
+        "This entry used to say 'stale-source fast check: hashes .py files "
+        "against the recorded digest'; no such check exists here and this "
+        "file hashes no .py files",
     ),
     "pqc_backends.py": (
         3,

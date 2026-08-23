@@ -37,6 +37,10 @@ TOOL_PATH = REPO_ROOT / "tools" / "check_ed25519_backend_parity.py"
 
 #: 2^255 - 19, the field prime.
 P = 2**255 - 19
+#: The Ed25519 group order.  The arithmetic family compares OUTPUT BYTES, so
+#: the stub needs an actual group to produce them; see _StubBackend's
+#: "pseudo-group" note.
+L = 2**252 + 27742317777372353535851937790883648493
 
 
 @pytest.fixture(scope="module")
@@ -65,6 +69,8 @@ class _StubBackend:
         canonical_y: bool = True,
         x_sign_rule: bool = True,
         batch_r_rule: bool = True,
+        scalar_reduction: bool = True,
+        joint_arithmetic: bool = True,
         verify_override: Optional[Callable[[bytes, bytes, bytes], bool]] = None,
         issued: Optional[set[tuple[bytes, bytes, bytes]]] = None,
     ) -> None:
@@ -78,6 +84,13 @@ class _StubBackend:
         #: Independent of the single path on purpose — that split is the
         #: defect the batch family exists to catch.
         self.batch_r_rule = batch_r_rule
+        #: Whether this stub's scalar mults depend on the scalar only through
+        #: `s mod L`.  False reproduces fe51's dropped wNAF carry.
+        self.scalar_reduction = scalar_reduction
+        #: Whether the joint double-scalar mult agrees with the split
+        #: composition of its halves.  False reproduces donna's stale
+        #: extended-t coordinate.
+        self.joint_arithmetic = joint_arithmetic
         self._verify_override = verify_override
         # Shared across the pair: the harness signs with each backend in turn
         # and cross-verifies every case with BOTH, so a signature minted by
@@ -186,6 +199,68 @@ class _StubBackend:
 
     def scalarmult_public(self, scalar: bytes, p_enc: bytes) -> bool:
         return self._decodes(p_enc)
+
+    # ---- the byte-exact arithmetic surface --------------------------------
+    #
+    # The four wrappers above answer "did it decode".  The gate's fifth family
+    # compares the 32 OUTPUT BYTES, because a backend that succeeds and returns
+    # the wrong group element is invisible to a verdict comparison — and both
+    # shipped backends did exactly that (donna summed two partial points with a
+    # stale extended-t; fe51 dropped the wNAF carry out of bit 255).
+    #
+    # Modelling that needs an actual group, so this stub uses a pseudo-group:
+    # a point IS its discrete logarithm base B, little-endian in the low 255
+    # bits, and the group law is addition mod L.  Every identity the family
+    # asserts — [s]P == [s mod L]P, and joint == point_add of the split halves
+    # — holds exactly in it, so a correct pair passes, while the two switches
+    # below reproduce the two real defects.
+
+    @staticmethod
+    def _dlog(encoding: bytes) -> int:
+        return (int.from_bytes(encoding, "little") & ((1 << 255) - 1)) % L
+
+    @staticmethod
+    def _encode(dlog: int) -> bytes:
+        return (dlog % L).to_bytes(32, "little")
+
+    def reduce32(self, scalar: bytes) -> bytes:
+        return (int.from_bytes(scalar, "little") % L).to_bytes(32, "little")
+
+    def point_from_scalar_bytes(self, scalar: bytes) -> Optional[bytes]:
+        return self._encode(int.from_bytes(scalar, "little"))
+
+    def point_add_bytes(self, p_enc: bytes, q_enc: bytes) -> Optional[bytes]:
+        if not self._decodes(p_enc) or not self._decodes(q_enc):
+            return None
+        return self._encode(self._dlog(p_enc) + self._dlog(q_enc))
+
+    def scalarmult_public_bytes(self, scalar: bytes, p_enc: bytes) -> Optional[bytes]:
+        if not self._decodes(p_enc):
+            return None
+        # ``scalar_reduction=False`` is fe51's dropped-carry defect: the scalar
+        # is consumed as a raw 256-bit integer minus 2**256 rather than reduced,
+        # so [s]P and [s mod L]P differ for every s that sets the top bits.
+        raw = int.from_bytes(scalar, "little")
+        if not self.scalar_reduction and raw >= L:
+            raw -= 1 << 256
+        return self._encode(raw * self._dlog(p_enc))
+
+    def double_scalarmult_public_bytes(
+        self, s1: bytes, p1_enc: bytes, s2: bytes, p2_enc: bytes
+    ) -> Optional[bytes]:
+        if not self._decodes(p1_enc) or not self._decodes(p2_enc):
+            return None
+        left = self.scalarmult_public_bytes(s1, p1_enc)
+        right = self.scalarmult_public_bytes(s2, p2_enc)
+        if left is None or right is None:
+            return None
+        total = self._dlog(left) + self._dlog(right)
+        # ``joint_arithmetic=False`` is donna's stale extended-t defect: the
+        # joint routine returns AMA_SUCCESS with an arbitrary point, so it
+        # disagrees with the split composition of its own two halves.
+        if not self.joint_arithmetic:
+            total += 1
+        return self._encode(total)
 
 
 def _pair(**kwargs: Any) -> tuple[_StubBackend, _StubBackend]:
@@ -405,6 +480,101 @@ class TestCorpusShape:
         """Renaming a label must not silently switch an assertion off."""
         case = tool.Case("renamed-by-someone", b"m", b"s", b"p", must_verify=True)
         assert case.must_verify is True
+
+
+class TestTheArithmeticFamilyIsNotVacuous:
+    """The family that was missing when two wrong-answer defects shipped.
+
+    Families 1-4 compare VERDICTS: did both backends accept, did both reject,
+    did both decode.  None of that can see a backend that returns
+    ``AMA_SUCCESS`` with the wrong group element, and both shipped backends
+    did:
+
+    * donna's ``ama_ed25519_double_scalarmult_public`` summed two PARTIAL
+      points with ``ge25519_add_p1p1``, whose third product is
+      ``p->t * q->t``, and neither ``t`` had been written — ``[7]B + [3]B``
+      returned ``906ebcd3…`` instead of ``[10]B``.
+    * fe51's ``sc25519_to_wnaf`` emitted 256 digits from eight 32-bit limbs and
+      discarded the carry out of bit 255, so it represented ``s - 2^256`` for
+      about 17% of uniform 32-byte scalars — ``[ff..ff]B`` returned ``-B``.
+
+    Neither was reachable from this gate: it compared ``rc == 0`` booleans, its
+    only scalar was ``2`` (smaller than either defect), and
+    ``double_scalarmult_public`` had no ctypes binding at all.  Run against the
+    real libraries before the fix, the extended gate reports 350
+    disagreements and exits 1; after, 3783 cases and exit 0.
+
+    These tests pin the family with stubs, so the property survives without a
+    build of both backends.
+    """
+
+    def test_a_correct_pair_passes(self, tool: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The control: correct arithmetic must not be reported as divergence."""
+        donna, fe51 = _pair()
+        assert _run(tool, monkeypatch, donna, fe51) == 0
+
+    def test_one_backend_that_does_not_reduce_the_scalar_is_caught(
+        self, tool: ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """fe51's dropped wNAF carry, as a divergence between the two."""
+        donna, fe51 = _pair(fe51_scalar_reduction=False)
+        assert _run(tool, monkeypatch, donna, fe51) == 1, (
+            "a backend whose scalar mult depends on more than the scalar mod L "
+            "was reported as agreeing with one that reduces"
+        )
+
+    def test_both_backends_failing_to_reduce_is_still_caught(
+        self, tool: ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Agreement is not correctness, in this family as in the others.
+
+        Two backends that BOTH consume the raw 256-bit scalar agree with each
+        other on every case, so a pure differential passes them.  The
+        reduction contract is asserted per backend, so it does not.
+        """
+        donna, fe51 = _pair(scalar_reduction=False)
+        assert _run(tool, monkeypatch, donna, fe51) == 1, (
+            "both backends violated [s]P == [s mod L]P and the gate reported " "agreement"
+        )
+
+    def test_one_backend_with_a_wrong_joint_mult_is_caught(
+        self, tool: ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """donna's stale extended-t, as a divergence between the two."""
+        donna, fe51 = _pair(donna_joint_arithmetic=False)
+        assert _run(tool, monkeypatch, donna, fe51) == 1
+
+    def test_both_backends_with_a_wrong_joint_mult_are_still_caught(
+        self, tool: ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The split-composition identity, asserted per backend."""
+        donna, fe51 = _pair(joint_arithmetic=False)
+        assert _run(tool, monkeypatch, donna, fe51) == 1, (
+            "both backends' joint mult disagreed with their own split "
+            "composition and the gate reported agreement"
+        )
+
+    def test_a_pair_that_produces_no_output_bytes_is_inconclusive(
+        self, tool: ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The vacuity guard: refusing everything is not agreeing.
+
+        Every comparison in the family tolerates ``None`` (a refusal), so a
+        pair that refused every input would agree on every case.  ``exit 2``,
+        not ``exit 0``.
+        """
+        donna, fe51 = _pair()
+        for backend in (donna, fe51):
+            monkeypatch.setattr(backend, "point_from_scalar_bytes", lambda _s: None)
+            monkeypatch.setattr(backend, "point_add_bytes", lambda _p, _q: None)
+            monkeypatch.setattr(backend, "scalarmult_public_bytes", lambda _s, _p: None)
+            monkeypatch.setattr(
+                backend, "double_scalarmult_public_bytes", lambda _a, _b, _c, _d: None
+            )
+        assert _run(tool, monkeypatch, donna, fe51) == 2, (
+            "a pair that produced no output bytes at all was reported as "
+            "agreeing rather than as inconclusive"
+        )
 
 
 class TestTheBatchFamilyIsNotVacuous:
