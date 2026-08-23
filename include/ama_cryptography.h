@@ -1301,7 +1301,16 @@ typedef struct {
  * @param entries   Array of `count` batch entries. Each entry's
  *                  `signature` and `public_key` must satisfy the
  *                  fixed-length contract documented on the struct above;
- *                  none of it is checked here.
+ *                  the LENGTHS cannot be checked here, because the struct
+ *                  does not record them. The POINTERS are: an entry with a
+ *                  NULL `signature`, a NULL `public_key`, or a NULL
+ *                  `message` with a non-zero `message_len` is rejected as
+ *                  an invalid entry (`results[i] = 0`, and the call returns
+ *                  `AMA_ERROR_VERIFY_FAILED`), which is the same verdict
+ *                  `ama_ed25519_verify` gives those arguments. Until this
+ *                  was added the donna backend dereferenced them and took
+ *                  SIGSEGV while the in-tree backend rejected cleanly, so
+ *                  the same call crashed on x86-64 and returned on aarch64.
  * @param count     Number of entries in `entries`, and the minimum number
  *                  of `int` slots in `results`.
  * @param results   Output: caller MUST supply at least `count` writable
@@ -1327,7 +1336,11 @@ typedef struct {
  * written and none carries a 1 unless that entry verified — the array is
  * zeroed up front, so the allocation-failure and CSPRNG-failure paths cannot
  * leave a stale 1 from an earlier batch visible to a caller that reads
- * `results` before the return code.
+ * `results` before the return code. The allocation-failure path is the only
+ * one where that zeroing is the sole writer, so it is the only one on which
+ * removing it is observable; `tests/c/test_ed25519_canonical_s.c` drives it
+ * through an `AMA_TESTING_MODE`-only hook rather than asserting the promise
+ * against a path that would write the slots anyway.
  *
  * The two argument-rejection returns write nothing, because at that point
  * there is nothing safe to write: `AMA_ERROR_INVALID_PARAM` for a NULL

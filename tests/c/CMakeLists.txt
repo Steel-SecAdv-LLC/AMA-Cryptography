@@ -133,6 +133,13 @@ add_ama_test(test_ed25519 test_ed25519.c)
 # test has to run against whichever backend CMake selected, and it
 # drives the batch API as well as the single-verify path.
 add_ama_test(test_ed25519_canonical_s test_ed25519_canonical_s.c)
+# The backend selector is PRIVATE on the library target, so mirror it: this
+# test drives the donna-only AMA_TESTING_MODE allocation-failure hook (the
+# only path on which the fail-closed pre-zeroing of `results` is observable),
+# and the in-tree backend, which allocates nothing, does not define it.
+if(AMA_ED25519_ASSEMBLY)
+    target_compile_definitions(test_ed25519_canonical_s PRIVATE AMA_ED25519_ASSEMBLY)
+endif()
 
 # INVARIANT-38 applied to the signature's R half (RFC 8032 §5.1.7 step 1 ->
 # §5.1.3).  Separate from test_ed25519_canonical_s because it discriminates a

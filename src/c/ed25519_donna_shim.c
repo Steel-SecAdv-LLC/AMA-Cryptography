@@ -45,6 +45,25 @@
  * indeterminate stack. */
 static _Thread_local int s_ed25519_batch_rng_failed = 0;
 
+#ifdef AMA_TESTING_MODE
+/**
+ * Allocation-failure hook for fail-closed testing.
+ *
+ * When non-zero, the next ama_ed25519_batch_verify() call behaves as though
+ * every malloc for donna's pointer arrays returned NULL, so a test can drive
+ * the AMA_ERROR_MEMORY return.  That return is the ONLY path on this backend
+ * where the caller's `results` array is written by the fail-closed pre-zeroing
+ * loop and by nothing else, so without this hook the pre-zeroing could be
+ * deleted outright and every assertion in the tree still passed — measured,
+ * not assumed.  The flag is cleared by the call it affects, so a test cannot
+ * leave it armed for the next one.
+ *
+ * Only available in test builds (AMA_TESTING_MODE); the shipped shared and
+ * static libraries never define it, and it appears in no public header.
+ */
+int ama_ed25519_batch_force_alloc_failure = 0;
+#endif
+
 static void
 ed25519_randombytes_unsafe(void *p, size_t len) {
     if (ama_randombytes((uint8_t *)p, len) != AMA_SUCCESS) {
@@ -279,13 +298,72 @@ ama_error_t ama_ed25519_batch_verify(
         results[i] = 0;
     }
 
+    /* Per-entry pointer validation, which this path did not have.
+     *
+     * ama_ed25519_verify rejects a NULL signature, a NULL public key, and a
+     * NULL message with message_len > 0 with AMA_ERROR_INVALID_PARAM in BOTH
+     * backends.  The fe51 batch path is a loop over that function, so it
+     * inherits the guard and turns a malformed entry into results[i] = 0 plus
+     * AMA_ERROR_VERIFY_FAILED.  This path handed entries[i].message /
+     * .signature / .public_key straight to ed25519_sign_open_batch, which
+     * dereferences all three unconditionally (ed25519-donna-batchverify.h
+     * expand256_modm(..., RS[i] + 32, 32) and ed25519_hram(..., m[i],
+     * mlen[i])), and the `num <= 3` tail dereferences them through
+     * ed25519_sign_open, so small batches faulted too.  The canonicality loop
+     * this branch added runs AFTER the batch call and dereferences the same
+     * fields itself, so it could not screen them either.
+     *
+     * Measured on a 6-entry batch with one field of entry 3 nulled: fe51
+     * returned AMA_ERROR_VERIFY_FAILED with results 111011 and exit 0, donna
+     * took SIGSEGV (exit 139), for message=NULL/message_len=5, for
+     * signature=NULL and for public_key=NULL alike.  Same library, same public
+     * API, crash on x86-64 and a clean rejection on aarch64 — and aarch64 CI
+     * runs fe51, so no lane could observe it.
+     *
+     * Falling back to the per-entry loop rather than screening in place is
+     * what makes the two backends byte-identical here: donna's batch API takes
+     * dense arrays with no room for a hole, and ama_ed25519_verify applies
+     * exactly the guards, canonicality rules and return code fe51's loop
+     * applies. */
+    int malformed_entry = 0;
+    for (size_t i = 0; i < count; i++) {
+        if (!entries[i].signature || !entries[i].public_key ||
+            (!entries[i].message && entries[i].message_len > 0)) {
+            malformed_entry = 1;
+            break;
+        }
+    }
+    if (malformed_entry) {
+        int fallback_all_valid = 1;
+        for (size_t i = 0; i < count; i++) {
+            ama_error_t rc = ama_ed25519_verify(
+                entries[i].signature,
+                entries[i].message,
+                entries[i].message_len,
+                entries[i].public_key
+            );
+            results[i] = (rc == AMA_SUCCESS) ? 1 : 0;
+            if (!results[i]) {
+                fallback_all_valid = 0;
+            }
+        }
+        return fallback_all_valid ? AMA_SUCCESS : AMA_ERROR_VERIFY_FAILED;
+    }
+
     /* Allocate pointer arrays for donna's batch verify interface */
     const unsigned char **msgs = (const unsigned char **)malloc(count * sizeof(const unsigned char *));
     size_t *mlens = (size_t *)malloc(count * sizeof(size_t));
     const unsigned char **pks = (const unsigned char **)malloc(count * sizeof(const unsigned char *));
     const unsigned char **sigs = (const unsigned char **)malloc(count * sizeof(const unsigned char *));
 
-    if (!msgs || !mlens || !pks || !sigs) {
+    int alloc_failed = (!msgs || !mlens || !pks || !sigs);
+#ifdef AMA_TESTING_MODE
+    if (ama_ed25519_batch_force_alloc_failure) {
+        ama_ed25519_batch_force_alloc_failure = 0;
+        alloc_failed = 1;
+    }
+#endif
+    if (alloc_failed) {
         /* Explicit (void *) casts: free() takes `void *` but `msgs` /
          * `pks` / `sigs` are `const unsigned char **`.  Without the
          * cast, clang-tidy's bugprone-multi-level-implicit-pointer-conversion
