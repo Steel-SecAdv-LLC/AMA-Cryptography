@@ -129,16 +129,24 @@ typedef void (*ama_kyber_poly_sub_fn)(int16_t r[256],
 /** Kyber polynomial Barrett reduction in place.
  *
  *  Post-condition: each output coefficient is congruent to its input
- *  modulo q (= 3329) and small enough to feed back into further mod-q
- *  int16 arithmetic without overflow.  The representative is bounded
- *  by [-2q, 2q] rather than the canonical [-q+1, q-1]: the truncating
- *  Barrett every kernel implements can return exactly +q (or -q) for
- *  some inputs at the extremes of its range (a == -q yields
- *  t == (v*-q)>>26 == -2 via the arithmetic right shift, producing
- *  a - t*q == +q).  That is cryptographically correct because every
- *  downstream consumer re-reduces before bit extraction.  Callers
- *  needing a strict canonical form must follow with the FIPS 203
- *  csubq / freeze step.
+ *  modulo q (= 3329) and lies in [0, q] — measured, by enumerating all
+ *  65,536 int16 inputs through `a - (((20159*a) >> 26) * q)`, which is
+ *  the formula every wired kernel computes.  Not [-q+1, q-1]: q itself
+ *  is attainable, for the nine inputs that are exact negative multiples
+ *  of q from -3329 down to -29961 (a == -q yields t == (v*-q)>>26 == -2
+ *  via the arithmetic right shift, producing a - t*q == +q).  So the
+ *  output is fully reduced except at that one value, and it is never
+ *  negative: the truncating shift floors toward -infinity and therefore
+ *  always undershoots the quotient.
+ *
+ *  This paragraph used to advertise [-2q, 2q] and "exactly +q (or -q)".
+ *  The bound was 4x looser than the truth on the positive side and the
+ *  "-q" half has no witness — no int16 input produces a negative output.
+ *  A caller sizing an overflow margin or a canonicality argument from
+ *  the old wording was reasoning about a range the function cannot
+ *  reach, in both directions.  Callers needing a strictly canonical
+ *  [0, q-1] must still follow with the FIPS 203 csubq / freeze step,
+ *  which is what removes the single q.
  *
  *  Every wired kernel picks the SAME representative: the production
  *  scalar barrett_reduce() in src/c/ama_kyber.c, barrett_reduce_neon

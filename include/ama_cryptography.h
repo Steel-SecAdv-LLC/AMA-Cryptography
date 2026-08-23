@@ -1629,8 +1629,17 @@ AMA_API ama_error_t ama_secp256k1_pubkey_from_privkey(
  *
  * 2 (SEQUENCE tag + length) + 2 * (2 (INTEGER tag + length) + 33 (a
  * 32-byte value plus a leading zero when its top bit is set)) = 72.
+ * That is the structural bound and it is what a caller must allocate.
+ *
+ * The value actually written is at most 71, because this implementation
+ * normalises to low `s`: s <= (n-1)/2 has its top bit clear, so its INTEGER
+ * never needs the leading 0x00 and the maximum is 2 + 2+33 + 2+32 = 71.
+ * `tests/c/test_secp256k1.c` measures 69, 70 or 71 over 20,000 signatures and
+ * never 72.  The constant stays 72 so the buffer contract does not depend on
+ * the low-s policy; it is a capacity, not a prediction.
+ *
  * The encoding is variable length: `ama_secp256k1_ecdsa_sign` writes
- * between 8 and 72 bytes and reports the exact count.
+ * between 8 and 71 bytes and reports the exact count.
  */
 #define AMA_SECP256K1_ECDSA_MAX_SIG_LEN 72
 
@@ -1674,8 +1683,10 @@ AMA_API ama_error_t ama_secp256k1_pubkey_from_privkey(
  *                       caller MUST provide that much space; the
  *                       function does not know the buffer's size and
  *                       cannot check it.
- * @param signature_len  Output: number of bytes actually written
- *                       (8..AMA_SECP256K1_ECDSA_MAX_SIG_LEN).
+ * @param signature_len  Output: number of bytes actually written (8..71 —
+ *                       see AMA_SECP256K1_ECDSA_MAX_SIG_LEN, which is the
+ *                       72-byte structural capacity a caller must allocate,
+ *                       not the maximum this function emits).
  * @param message        Exactly 32 bytes: the message *digest*, not the
  *                       message. This function does not hash its input.
  * @param private_key    Exactly 32 bytes, big-endian, in [1, n-1].
@@ -1705,7 +1716,7 @@ AMA_API ama_error_t ama_secp256k1_ecdsa_sign(
  * retired-instruction count taken over the whole call and forced
  * `check_ghash_constant_time.py` to hold the `ecdsa` target at a non-zero
  * threshold. Measured through this entry point the encoder is outside the
- * measurement and the target sits at 0, like the other eleven.
+ * measurement and the target sits at 0, like the other thirteen.
  *
  * @param signature   Output buffer of exactly 64 octets.
  * @param message     32-octet digest. This function does NOT hash.

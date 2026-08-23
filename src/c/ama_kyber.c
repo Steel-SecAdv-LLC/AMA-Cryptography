@@ -2425,11 +2425,16 @@ static int16_t montgomery_reduce(int32_t a) {
  */
 static int16_t barrett_reduce(int16_t a) {
     /* All intermediates in int32: v*a is at most 20159 * 32768 < 2^31, the
-     * shifted quotient t lies in [-10, 9] (exhaustively verified over every
-     * int16_t input), and a - t*q lies in [0, q] for in-contract inputs and
-     * within (-2q, 2q) for the full int16_t range — so the single narrowing
-     * cast at the return cannot change the value.  Bit-identical to the
-     * previous int16_t-accumulator form over all 65,536 inputs. */
+     * shifted quotient t lies in [-10, 9], and a - t*q lies in [0, q] — all
+     * three exhaustively verified over every int16_t input, not only over
+     * the in-contract range — so the single narrowing cast at the return
+     * cannot change the value.  q itself is attainable, at the nine inputs
+     * that are exact negative multiples of q from -3329 to -29961; negative
+     * outputs are not, because the truncating shift floors toward -infinity
+     * and always undershoots the quotient.  (This comment used to bound the
+     * full-range case at (-2q, 2q), which is true but 4x loose and admits a
+     * sign the formula cannot produce.)  Bit-identical to the previous
+     * int16_t-accumulator form over all 65,536 inputs. */
     const int32_t v = ((1 << 26) + KYBER_Q / 2) / KYBER_Q;
     int32_t t = (v * (int32_t)a) >> 26;
     t *= KYBER_Q;

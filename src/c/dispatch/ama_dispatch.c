@@ -942,28 +942,30 @@ static void dispatch_bench_dilithium_ntt(ama_dilithium_ntt_fn generic_fn,
  *                        that expose neither of the above.  Same
  *                        check for the gid pair.
  *
- * On platforms where none of these apply (MSVC builds skip the cache
- * entirely via the #else stub below), the gate degrades open. */
+ * On platforms exposing none of these the gate degrades open.  Windows is
+ * not one of those platforms, it is no platform at all here: this whole
+ * function sits inside the `#if !defined(_WIN32)` region opened above and
+ * closed by the `#else` stub near the end of the file, so it does not exist
+ * in a Windows build.  It used to open with `#if defined(_WIN32) return 1;`,
+ * which no configuration could ever select, and the paragraph above said
+ * "MSVC builds" while that guard said Windows.  Both are gone; the arms
+ * below are the only ones that were ever reachable. */
 static int dispatch_cache_env_is_safe(void) {
-#if defined(_WIN32)
-    return 1;   /* The cache code path is compiled out on Windows. */
-#else
     /* Prefer issetugid() where available (BSDs / Apple / musl). */
-#  if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || \
-      defined(__NetBSD__) || defined(__DragonFly__)
+#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || \
+    defined(__NetBSD__) || defined(__DragonFly__)
     if (issetugid()) return 0;
     return 1;
-#  elif defined(AT_SECURE)
+#elif defined(AT_SECURE)
     /* glibc / Bionic / recent musl. */
     if (getauxval(AT_SECURE) != 0) return 0;
     return 1;
-#  else
+#else
     /* Last-resort fallback. */
     if (getuid()  != geteuid()) return 0;
     if (getgid()  != getegid()) return 0;
     return 1;
-#  endif
-#endif /* _WIN32 */
+#endif
 }
 
 /* Validate an opt-in AMA_DISPATCH_CACHE_FILE path string.  Returns 0

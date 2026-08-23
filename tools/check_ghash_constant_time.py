@@ -294,7 +294,8 @@ KEY_CLASSES = ("A", "Z", "m", "q", "0", "~", "!", "5")
 #: comparison saw at least one short DER signature so it cannot pass over
 #: full-length cases alone.
 #:
-#: `x25519-batch` is the thirteenth, and it exists because a lane can be
+#: `x25519-batch` is the thirteenth of the fourteen, and it exists because a
+#: lane can be
 #: informational only where something else blocks.  `tests/c/test_dudect.c`
 #: registers eight info-only wall-clock lanes, and each one that names a reason
 #: names a deterministic counterpart: `Kyber-1024 decaps` cites `kyber-decaps`,
@@ -326,7 +327,7 @@ KEY_CLASSES = ("A", "Z", "m", "q", "0", "~", "!", "5")
 #: report a 1,744-instruction / 1,024-data-reference cross-class delta and exit
 #: 1.  The mutation was reverted.
 THRESHOLDS = {
-    # Every one of the thirteen is invariant by construction and measures
+    # Every one of the fourteen is invariant by construction and measures
     # exactly zero on both compilers; see the table above.  `ecdsa` was the
     # last holdout at 64, for the DER length term, and reached zero the way
     # `nistp-ecdsa` did: by signing through a fixed-width entry point.
@@ -345,7 +346,7 @@ THRESHOLDS = {
     # `ama_x25519_scalarmult_batch` — a separate entry point with its own
     # chunker, AVX2 4-way kernel and aggregated low-order rejection, none of
     # which the `x25519` target reaches.  Measured 0/0 on both compilers with
-    # a same-class floor of 0, like the other twelve.
+    # a same-class floor of 0, like the other thirteen.
     "x25519-batch": 0,
     # `ama_secp256k1_point_mul` — the Montgomery ladder the info-only
     # `secp256k1 scalar multiplication` dudect lane exercises, which had no
@@ -354,6 +355,25 @@ THRESHOLDS = {
     # n), so every ladder step takes the opposite cswap branch between them.
     "secp256k1-scalarmult": 0,
 }
+
+#: The prose above states this inventory's size in six places ("All fourteen
+#: are exactly zero", "the thirteenth of the fourteen", "Every one of the
+#: fourteen", "like the other thirteen", "the other thirteen sat at 0", "the
+#: inventory is fourteen") — and it drifted: at one point the same dict was
+#: described as eleven, twelve, thirteen and fourteen targets in four
+#: sentences of the same file, plus "the other eleven" in
+#: src/c/ama_secp256k1.c and include/ama_cryptography.h.  Nothing checked any
+#: of them.  This does.  A target added or removed without updating the prose
+#: stops the tool at import with the number to write.
+_DOCUMENTED_TARGET_COUNT = 14
+if len(THRESHOLDS) != _DOCUMENTED_TARGET_COUNT:
+    raise SystemExit(
+        f"check_ghash_constant_time.py: THRESHOLDS holds {len(THRESHOLDS)} "
+        f"targets but the module docstring, the THRESHOLDS comments, "
+        f"src/c/ama_secp256k1.c and include/ama_cryptography.h all say "
+        f"{_DOCUMENTED_TARGET_COUNT}. Update the prose and this constant "
+        f"together, or the counts drift apart again."
+    )
 
 #: Where to look first when a target fails.  Kept per-target so the message
 #: names the code that is actually implicated rather than a generic pointer.
@@ -585,10 +605,13 @@ int main(int argc, char **argv) {
         /* The FIXED-WIDTH entry point, not the DER one.
          *
          * DER omits the leading zero octets of r and s, so a DER signature
-         * is 8 to 72 octets and its length is a function of the key.  The
+         * is 8 to 71 octets and its length is a function of the key.  (Not
+         * 72: low-s normalisation caps s at (n-1)/2, so its INTEGER never
+         * needs a leading 0x00 pad; tests/c/test_secp256k1.c measures 69, 70
+         * or 71 and never 72 over 20,000 signatures.)  The
          * length is public, but it is key-correlated and it lands inside a
          * count taken over the whole call, which is why this target had to
-         * sit at a threshold of 64 while the other eleven sat at 0 — a
+         * sit at a threshold of 64 while the other thirteen sat at 0 — a
          * tolerance of 8 instructions per signature with room for a real
          * leak underneath.  ama_secp256k1_ecdsa_sign_raw runs identical
          * arithmetic and emits a constant 64 octets, so the encoder is
@@ -1467,7 +1490,7 @@ def _limit_for(metric: str, count_threshold: int) -> int:
 #: cross-class miss delta and every same-class noise floor is exactly 0.  (An
 #: earlier revision of this note said "all ten targets" and cited ecdsa as
 #: "the one target with a legitimate public-data spread ... 24 instructions
-#: and 8 data references".  Both were stale: the inventory is thirteen, and
+#: and 8 data references".  Both were stale: the inventory is fourteen, and
 #: ecdsa's spread went to zero when the target moved to
 #: `ama_secp256k1_ecdsa_sign_raw`.)  A non-zero delta here means the two
 #: classes walked different addresses, which is the finding this metric exists

@@ -104,7 +104,10 @@
 /* ============================================================================
  * Scalar Barrett reduction (matches generic C reference exactly)
  *
- * Reduces a to [-q+1, q-1] range.
+ * Reduces a to [0, q] — measured by enumerating all 65,536 int16 inputs, not
+ * the [-q+1, q-1] this line used to claim: the truncating form below never
+ * returns a negative value, and it does return q itself for the nine inputs
+ * that are exact negative multiples of q from -3329 to -29961.
  * NOTE: The pqcrystals reference uses v=20159 with >>26, NOT >>16.
  * SVE2 svmulh_s16 gives >>16, which is wrong for this parameter set.
  * We use scalar Barrett to guarantee correctness.
@@ -269,10 +272,23 @@ void ama_kyber_ntt_sve2(int16_t poly[KYBER_N],
 
     /* Canonicalising Barrett sweep.
      *
-     * The butterflies alone leave coefficients in [-q, q); the AVX2 and NEON
-     * kernels both finish with this sweep, which normalises to [-q/2, q/2],
-     * and the dispatch layer swaps these three implementations for one
-     * another.  Without it the SVE2 path returned a different (though
+     * The butterflies apply only montgomery_reduce and never a Barrett, so
+     * the magnitude grows layer by layer well past q: over 3,000 random
+     * polynomials with coefficients drawn from [0, q) the pre-sweep range is
+     * [-9344, +12863], i.e. -2.8q to +3.9q.  This sweep normalises that to
+     * [0, q] — the truncating `a - (((20159*a) >> 26) * q)` form, whose image
+     * over all 65,536 int16 inputs is exactly [0, 3329], q included.  The
+     * AVX2 (`_mm256_mulhi_epi16` then `srai 10`) and NEON (`vqdmulhq_s16`
+     * then `vshrq_n_s16 11`) kernels compute the identical `(a*v) >> 26` and
+     * land in the same place, which is what lets the dispatch layer swap
+     * these three implementations for one another.
+     *
+     * This comment used to say the butterflies leave [-q, q) and the sweep
+     * normalises to [-q/2, q/2].  Both halves were wrong: the centred
+     * representative is what the ROUNDED pq-crystals form yields, and this
+     * one deliberately has no `+ (1<<25)` addend.  A bounds argument derived
+     * from the old wording understates the worst case by 4x and assumes a
+     * sign the kernel never produces.  Without it the SVE2 path returned a different (though
      * congruent) representative from every other backend, which
      * tests/c/test_kyber_ntt_equiv.c reports as a lane mismatch — it was never
      * caught because AMA_ENABLE_SVE2 was off in every CI configuration, so

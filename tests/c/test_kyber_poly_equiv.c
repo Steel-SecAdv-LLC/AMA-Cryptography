@@ -79,15 +79,19 @@ extern void ama_kyber_poly_reduce_sve2(int16_t poly[256]);
 /* Barrett reduction reference — verbatim from `src/c/ama_kyber.c`
  * (the inline scalar in `poly_reduce`).
  *
- * Contract: output is congruent to `a` modulo q and small enough to
- * feed into further mod-q int16 arithmetic without overflow.  The
- * specific representative is *not* tightly bounded by [-q+1, q-1]:
- * for some inputs the formula produces ±q exactly (e.g., a == -q
- * yields t == -2 via arithmetic right shift, so the return value is
- * a - t*q == +q).  This is cryptographically correct because every
- * downstream consumer re-reduces before bit extraction, and
- * `check_reduce_range()` below bounds the representative at [-2q, 2q]
- * accordingly.
+ * Contract: output is congruent to `a` modulo q and lies in [0, q] —
+ * measured here by enumerating all 65,536 int16 inputs, not asserted.
+ * Not [-q+1, q-1]: q itself is attainable, for the nine inputs that are
+ * exact negative multiples of q from -3329 down to -29961 (a == -q
+ * yields t == -2 via the arithmetic right shift, so the return value is
+ * a - t*q == +q).  Never negative: the truncating shift floors toward
+ * -infinity and always undershoots the quotient.  `check_reduce_range()`
+ * below bounds the representative at exactly that, [0, q].
+ *
+ * It used to say "±q" and bound at [-2q, 2q].  The -q half has no
+ * witness, and the 4x-loose positive bound is the difference between a
+ * range check that can reject an off-by-q or sign-flipped kernel and one
+ * that cannot.
  *
  * Every wired kernel computes this SAME truncating formula — the
  * production scalar `barrett_reduce`, `barrett_reduce_neon` (vqdmulhq
@@ -155,21 +159,23 @@ static int cmp_poly(const int16_t a[KYBER_N], const int16_t b[KYBER_N],
  * both sides ARE the same formula, so the check is on the formula's
  * output range rather than on the two agreeing).
  *
- * The bound is [-2q, 2q] rather than the canonical [-q+1, q-1]: the
- * production scalar Barrett can produce exactly ±q for some inputs in
- * the [-(2q-2), 2q-2] production range (a == -q yields t == -2 via the
- * arithmetic right shift, so the return value is a - t*q == +q), which
- * is cryptographically correct because every downstream consumer
- * re-reduces before bit extraction. */
+ * The bound is [0, q] rather than the canonical [-q+1, q-1]: q itself is
+ * attainable (a == -q yields t == -2 via the arithmetic right shift, so
+ * the return value is a - t*q == +q), which is cryptographically correct
+ * because every downstream consumer re-reduces before bit extraction.
+ * Negative outputs are not attainable at all — the truncating shift
+ * floors toward -infinity and always undershoots the quotient — so the
+ * old [-2q, 2q] admitted a whole sign the formula cannot produce and was
+ * 4x loose on the side it could. */
 static int check_reduce_range(const int16_t a[KYBER_N], const int16_t b[KYBER_N],
                               const char *label, int trial) {
     for (int i = 0; i < KYBER_N; i++) {
-        if (a[i] < -2 * KYBER_Q || a[i] > 2 * KYBER_Q ||
-            b[i] < -2 * KYBER_Q || b[i] > 2 * KYBER_Q) {
+        if (a[i] < 0 || a[i] > KYBER_Q ||
+            b[i] < 0 || b[i] > KYBER_Q) {
             fprintf(stderr,
-                    "FAIL: %s trial %d, coeff %d: catastrophic range "
-                    "blowup (scalar=%d simd=%d, expected ~[-q,q])\n",
-                    label, trial, i, (int)a[i], (int)b[i]);
+                    "FAIL: %s trial %d, coeff %d: out of the measured "
+                    "Barrett image (scalar=%d simd=%d, expected [0,%d])\n",
+                    label, trial, i, (int)a[i], (int)b[i], KYBER_Q);
             return 1;
         }
     }

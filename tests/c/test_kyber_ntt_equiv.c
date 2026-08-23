@@ -122,9 +122,14 @@ static const int16_t kyb_zetas[128] = {
  * src/c/ama_kyber.c PLUS the final canonicalising barrett_reduce
  * sweep the AVX2 kernel adds at the bottom of its butterflies
  * (src/c/avx2/ama_kyber_avx2.c:158-162).  Without the trailing
- * barrett sweep the scalar path leaves coefficients in [-q, q) while
- * AVX2 normalises into [-q/2, q/2], so byte-identity at the
- * dispatch layer requires harmonising the post-condition.  The
+ * barrett sweep the butterflies leave coefficients well past q — over
+ * 3,000 random polynomials with coefficients in [0, q) the measured
+ * pre-sweep range is [-9344, +12863], i.e. -2.8q to +3.9q — while AVX2
+ * normalises into [0, q], so byte-identity at the dispatch layer
+ * requires harmonising the post-condition.  (This comment used to say
+ * [-q, q) before and [-q/2, q/2] after.  [-q/2, q/2] is what the
+ * ROUNDED pq-crystals Barrett yields; the form here has no `+ (1<<25)`
+ * addend, so its image is [0, q] with q attainable.)  The
  * higher-level production code reduces via polyvec_reduce() after
  * NTT, so the two conventions collapse to the same final state
  * before any external observation. */

@@ -2256,15 +2256,19 @@ AMA_API ama_error_t ama_secp256k1_ecdsa_sign(uint8_t *signature, size_t *signatu
  *
  * It also closes the last residual in the deterministic constant-time gate.
  * DER strips the leading zero octets of r and s, so a DER signature is 8 to
- * 72 octets and its length is a function of the key.  That term is a public
- * value, but it is key-correlated, and it lands inside a retired-instruction
- * count taken over the whole call: measured, 24 instructions over 8
- * signatures under gcc 13 and 16 under clang 18.  `check_ghash_constant_time`
- * therefore had to hold `ecdsa` at a threshold of 64 while its other eleven
- * targets sat at 0 — a tolerance of 8 instructions per signature inside which
- * a real leak could hide.  Measured through this entry point the encoder is
- * not in the count at all, so the target joins the other eleven at 0.  This
- * is the same remedy `nistp-ecdsa` used to reach 0.
+ * 71 octets and its length is a function of the key.  (Not 72: low-s
+ * normalisation caps s at (n-1)/2, so its INTEGER never needs a leading 0x00
+ * pad and the maximum is 2+2+33+2+32 = 71.  tests/c/test_secp256k1.c measures
+ * exactly that over 20,000 signatures — the length is 69, 70 or 71 and never
+ * 72.)  That term is a public value, but it is key-correlated, and it lands
+ * inside a retired-instruction count taken over the whole call: measured, 24
+ * instructions over 8 signatures under gcc 13 and 16 under clang 18.
+ * `check_ghash_constant_time` therefore had to hold `ecdsa` at a threshold of
+ * 64 while its other thirteen targets sat at 0 — a tolerance of 8
+ * instructions per signature inside which a real leak could hide.  Measured
+ * through this entry point the encoder is not in the count at all, so the
+ * target joins the other thirteen at 0.  This is the same remedy
+ * `nistp-ecdsa` used to reach 0.
  */
 AMA_API ama_error_t ama_secp256k1_ecdsa_sign_raw(uint8_t signature[64],
                                                  const uint8_t message[32],

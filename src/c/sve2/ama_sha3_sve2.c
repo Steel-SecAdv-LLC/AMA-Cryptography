@@ -2,10 +2,28 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /**
  * @file ama_sha3_sve2.c
- * @brief ARM SVE2-optimized Keccak-f[1600] permutation + SHA3-256 wrapper
+ * @brief Keccak-f[1600] permutation, SCALAR, in the SVE2 translation unit
  *
- * SVE2 (Scalable Vector Extension 2) for ARMv9 processors.
- * Uses scalable vectors that adapt to hardware vector length.
+ * This file is named for the tier it is dispatched under, not for what its
+ * permutation compiles to.  `ama_keccak_f1600_sve2` contains no SVE
+ * intrinsics: theta, rho, pi, chi and iota are all scalar C over
+ * `uint64_t C[5], D[5], B[25]`.  Theta once used `svwhilelt_b64(0, 5)` and
+ * that is exactly what was removed — see the block comment above the
+ * function, which records why a five-element reduction cannot be written
+ * vector-length-agnostically at any useful cost.
+ *
+ * The @brief and the two lines that followed it used to advertise "ARM
+ * SVE2-optimized Keccak-f[1600]", "SVE2 (Scalable Vector Extension 2) for
+ * ARMv9 processors" and "Uses scalable vectors that adapt to hardware vector
+ * length".  They survived the commit that deleted the last intrinsic and
+ * documented its removal 55 lines below, so the file contradicted itself.
+ *
+ * The dispatcher still installs this permutation over the genuinely
+ * vectorised `ama_keccak_f1600_neon` whenever `dispatch_info.sha3 >=
+ * AMA_IMPL_SVE2`, and `ama_print_dispatch_info` reports the SHA-3 row as
+ * "ARM SVE2".  That wiring is unchanged here — this comment describes it
+ * rather than hiding it, so a reader benchmarking the SHA-3 row on an SVE2
+ * part knows what they are measuring.
  *
  * Wired surface (`src/c/dispatch/ama_dispatch.c`):
  *   - `ama_keccak_f1600_sve2` — single-state permutation.

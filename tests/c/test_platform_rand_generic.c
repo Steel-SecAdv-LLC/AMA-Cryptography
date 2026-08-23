@@ -75,23 +75,49 @@ int main(void) {
     TEST_ASSERT(memcmp(draw_a, zeros, sizeof zeros) != 0,
                 "draw is not all zeros");
 
-    /* Large draw across the read loop.  Prefill with a canary and count
-     * survivors: a correctly filled buffer leaves ~len/256 bytes equal to
-     * the canary by chance (~4096 here); an unfilled tail leaves a run of
-     * them.  The len/64 bound (~16384) is ~4x the expectation — binomial
-     * tails put a false failure beyond 1 in 10^300 — while any partial
-     * fill of even 1% of the buffer (~10486 canary bytes) trips it. */
+    /* Large draw across the read loop.  Prefill with a canary and check two
+     * things: how many bytes survive, and how many survive CONSECUTIVELY.
+     *
+     * The count bound is len/64 = 16384, about 4x the ~4096 expected by
+     * chance from a correct fill, and binomial tails put a false failure
+     * beyond 1 in 10^300.  What it is NOT is sensitive to a small unfilled
+     * region.  With a fraction f of the buffer left holding the canary the
+     * expected count is f*L + (1-f)*L/256, so tripping len/64 needs
+     * f >= 3/255 = 1.18%.  At f = 1% the expectation is 14540 against a
+     * threshold of 16384 — 29 standard deviations below it (sigma = 63.6),
+     * i.e. a 1% unfilled tail passes essentially always.  This comment used
+     * to claim "any partial fill of even 1% of the buffer (~10486 canary
+     * bytes) trips it", which is arithmetically impossible: it named 10486
+     * and the 16384 bound in the same sentence.
+     *
+     * The run bound is what actually detects a short read.  An unfilled
+     * region is CONTIGUOUS — a read() that returns early leaves one span
+     * untouched — while chance survivors are isolated: the probability that
+     * a correct fill contains any run of 16 canary bytes is at most
+     * L * 256^-16 = 2^-108.  So a run bound of 16 rejects every real partial
+     * fill down to 16 bytes, three orders of magnitude below what the count
+     * bound can see, at a false-failure rate that rounds to zero. */
     memset(large_buf, 0xAA, sizeof large_buf);
     TEST_ASSERT(ama_randombytes(large_buf, sizeof large_buf) == AMA_SUCCESS,
                 "1 MiB + 17 draw returns AMA_SUCCESS");
     size_t canary_count = 0;
+    size_t canary_run = 0;
+    size_t canary_run_max = 0;
     for (size_t i = 0; i < sizeof large_buf; i++) {
         if (large_buf[i] == 0xAA) {
             canary_count++;
+            canary_run++;
+            if (canary_run > canary_run_max) {
+                canary_run_max = canary_run;
+            }
+        } else {
+            canary_run = 0;
         }
     }
     TEST_ASSERT(canary_count < (sizeof large_buf) / 64,
-                "large draw filled the whole buffer (no canary runs)");
+                "large draw left no gross excess of canary bytes");
+    TEST_ASSERT(canary_run_max < 16,
+                "large draw left no contiguous unfilled region");
 
     printf("All generic-POSIX /dev/urandom fallback tests passed\n");
     return 0;
