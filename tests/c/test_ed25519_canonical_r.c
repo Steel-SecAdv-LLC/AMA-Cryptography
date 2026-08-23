@@ -116,14 +116,18 @@ int main(void) {
     const size_t msg_len = sizeof(msg) - 1;
     size_t n;
 
-    printf("RFC 8032 canonical-R enforcement (INVARIANT-38 on the signature's R half)\n");
-    printf("Backend: %s\n\n",
+    /* Hoisted out of the printf argument list: under _FORTIFY_SOURCE
+     * (Release) printf is a macro, and a preprocessor directive inside a
+     * macro's arguments is undefined behaviour (clang -Wembedded-directive,
+     * fatal under the frozen warning allowlist). */
 #if defined(AMA_ED25519_ASSEMBLY)
-           "ed25519-donna"
+    static const char *const backend_name = "ed25519-donna";
 #else
-           "fe51 (in-tree)"
+    static const char *const backend_name = "fe51 (in-tree)";
 #endif
-    );
+
+    printf("RFC 8032 canonical-R enforcement (INVARIANT-38 on the signature's R half)\n");
+    printf("Backend: %s\n\n", backend_name);
 
     /* ama_ed25519_keypair does NOT generate the seed: its contract is
      * "caller provides the 32-byte seed in secret_key[0..31] ... We must NOT

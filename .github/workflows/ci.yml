@@ -239,7 +239,13 @@ jobs:
       shell: bash
       env:
         CPPFLAGS: "-DPyInt_FromLong=PyLong_FromLong"
-        CL: "/DPyInt_FromLong=PyLong_FromLong"
+        # -D, not /D: cl.exe accepts both, but Git Bash (this step's
+        # shell) applies MSYS path conversion to environment values that
+        # look like absolute POSIX paths, and "/DPyInt..." reached the
+        # compiler as "C:/Program Files/Git/DPyInt..." split across two
+        # bogus source-file arguments (job 97256304451). A leading dash
+        # is never path-converted.
+        CL: "-DPyInt_FromLong=PyLong_FromLong"
       run: |
         python -m pip install --upgrade pip setuptools wheel
         pip install "PyKCS11>=1.5.18"

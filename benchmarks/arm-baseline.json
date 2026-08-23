@@ -587,6 +587,10 @@
       {
         "path": "ama_cryptography/_integrity_signature.py",
         "reason": "Generated integrity artefact, rewritten by the signer on every build. It carries only literal assignments (a digest, a pubkey, a signature, a binding-digest map) and is read once at import by POST; no benchmarked call touches it. Named explicitly because the `ama_cryptography` directory prefix that used to cover it has been removed \u2014 a generated file is still a file, and the point of itemising is that nothing is covered by accident."
+      },
+      {
+        "path": "src/c/avx2/ama_x25519_avx2.c",
+        "reason": "Comment-only change: the file-header optimization marker was re-headed from TODO(AVX-512-IFMA) to an explicit design note in the 2026-08-23 maintenance pass; no statement outside comments was touched. Measured rather than asserted: the compiled .text section is byte-identical before and after under gcc -O3 -mavx2 (12,684 bytes, cmp exit 0). It cannot move a floor."
       }
     ]
   },

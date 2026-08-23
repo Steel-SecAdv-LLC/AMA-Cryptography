@@ -94,14 +94,18 @@ int main(void) {
     uint8_t B[32], one[32];
     small_scalar(one, 1);
 
-    printf("Ed25519 public scalar-multiplication contract\n");
-    printf("  backend: %s\n",
+    /* Hoisted out of the printf argument list: under _FORTIFY_SOURCE
+     * (Release) printf is a macro, and a preprocessor directive inside a
+     * macro's arguments is undefined behaviour (clang -Wembedded-directive,
+     * fatal under the frozen warning allowlist). */
 #ifdef AMA_ED25519_ASSEMBLY
-           "donna (AMA_ED25519_ASSEMBLY=ON)"
+    static const char *const backend_name = "donna (AMA_ED25519_ASSEMBLY=ON)";
 #else
-           "fe51 (in-tree)"
+    static const char *const backend_name = "fe51 (in-tree)";
 #endif
-    );
+
+    printf("Ed25519 public scalar-multiplication contract\n");
+    printf("  backend: %s\n", backend_name);
 
     if (ama_ed25519_point_from_scalar(B, one) != AMA_SUCCESS) {
         printf("  [FAIL] basepoint derivation\n");

@@ -235,6 +235,30 @@ path had moved 340 lines.  The one `TODO(...)` marker in the C tree
 AVX2 kernel is complete and verified, and the AVX-512-IFMA successor it
 sketches requires IFMA silicon to validate.
 
+#### What the first CI run of this pass found in the pass itself
+
+Three findings, none in the changes' logic, all three fixed the way the
+originals were.  The MSVC define was mangled before it reached the
+compiler: Git Bash applies MSYS path conversion to environment values that
+look like absolute POSIX paths, so `CL=/DPyInt_FromLong=...` arrived at
+cl.exe as `C:/Program Files/Git/DPyInt_FromLong=...` split across two
+bogus source-file arguments (job 97256304451) — cl accepts the dash form
+identically, and a leading dash is never path-converted, so the define is
+now `-D`.  The clang strict-warnings job had a second failure cause hidden
+behind the sixteen conversions: four `-Wembedded-directive` warnings from
+`#if` blocks inside `printf` argument lists in
+`tests/c/test_ed25519_canonical_r.c` and
+`tests/c/test_ed25519_scalarmult_contract.c` — `printf` is a macro under
+`_FORTIFY_SOURCE`, making the embedded directive undefined behaviour — now
+hoisted into a named constant ahead of the call (reproduced 2 -> 0 under
+clang with the workflow's flags).  And the baseline-justification gate did
+exactly what it exists to do: the design-note re-heading in
+`src/c/avx2/ama_x25519_avx2.c` is a post-calibration change to a floored
+path, so both baselines carry a `floor_drift_acknowledged` entry for it,
+with the reason measured rather than asserted — the compiled `.text`
+section is byte-identical before and after under gcc -O3 -mavx2 (12,684
+bytes, `cmp` exit 0).
+
 ### Debt-closure pass, eleventh (2026-08-22) — the 25 findings an independent audit left standing, and what closing them found
 
 An independent audit read all 302 non-corpus changed files of this branch's
