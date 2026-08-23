@@ -3901,7 +3901,7 @@ resolved here.  The ones that changed behaviour rather than prose:
 
 Documentation claims corrected against measurement rather than restated: the
 SoftHSM2 lane runs **one** real-token test (`test_full_lifecycle`), not 51; the
-C suite is 60 suite files / 63 translation units, not 58 / 61; the gated
+C suite is 61 suite files / 64 translation units, not 58 / 61 (60 / 63 when that pass measured it; the debt-closure pass added `tests/c/test_ed25519_canonical_r.c`); the gated
 surface is what `tools/check_error_state_gating.py` reports (89
 native plus 10 Cython entry points), replacing two documents that disagreed at
 80 and 81; the canonical-host performance tables understate 5.0.0 on the AEAD
