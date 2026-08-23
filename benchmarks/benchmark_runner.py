@@ -1196,6 +1196,19 @@ def _provenance() -> "list[tuple[str, str]]":
     repeated = ", ".join(f"{k} x{v}" for k, v in sorted(_SAMPLING_REPEATS.items()))
     return [
         ("Commit", f"`{commit}`{' (working tree DIRTY)' if dirty else ''}"),
+        # Cleanliness as its OWN row, not only as a suffix on the commit.
+        #
+        # The suffix reads correctly in the markdown, but _provenance_key()
+        # turns each label into a JSON key, so the JSON recorded
+        # `"commit": "<hash>"` for a clean run and
+        # `"commit": "<hash> (working tree DIRTY)"` for a dirty one — a
+        # consumer reading the field as a commit id gets a string that is not
+        # one, and a consumer comparing it to `git rev-parse HEAD` finds a
+        # mismatch it cannot interpret.  Neither notices the dirt.  A separate
+        # boolean-valued row says the thing outright in both artefacts, and
+        # "the numbers describe uncommitted code" is exactly the kind of fact
+        # a provenance block exists to make unmissable.
+        ("Tree", "clean" if not dirty else "DIRTY (uncommitted changes)"),
         ("Version", f"`{_package_version()}`"),
         ("Host", f"{platform.platform()} / {platform.machine()}"),
         ("CPU", f"{os.cpu_count()} logical processor(s)"),
