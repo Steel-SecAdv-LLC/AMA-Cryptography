@@ -267,9 +267,24 @@ class BenchmarkValidator:
         # implementation on CPython — so the claim was being "validated"
         # against a throughput AMA does not produce, and AMA's own SHA3 could
         # regress arbitrarily while this printed PASS (INVARIANT-36).
-        def sha3_hash() -> bytes:
-            from ama_cryptography.pqc_backends import native_sha3_256
+        #
+        # The import is hoisted OUT of the timed thunk, and that is a
+        # correctness fix, not tidying.  Inside it, every iteration
+        # re-executed the `from ... import` statement — a sys.modules lookup
+        # and an attribute bind — so the row that was rewritten "to measure
+        # AMA's SHA3, not hashlib" was measuring the harness instead.
+        # Measured on this host, 200,000 iterations, median of five runs:
+        #
+        #   thunk with the import inside : 2147.9 ns/op
+        #   thunk with it hoisted        : 1572.0 ns/op
+        #
+        # 575.9 ns, or 26.8% of the reported figure, against a documented
+        # claim of ~2 us.  Every other timed thunk in benchmarks/ already
+        # hoists its import; this was the only one that did not, and
+        # tests/test_benchmark_chart_inputs.py now pins the rule.
+        from ama_cryptography.pqc_backends import native_sha3_256
 
+        def sha3_hash() -> bytes:
             return native_sha3_256(test_data)
 
         stats = self.benchmark_operation("sha3_256", sha3_hash)

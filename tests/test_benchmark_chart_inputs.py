@@ -176,3 +176,60 @@ class TestTheReadIsUtf8RegardlessOfHostLocale:
         # raising still produces the wrong string, and that is the failure
         # windows-latest would have shown rather than an exception.
         assert json.loads(proc.stdout.decode("utf-8")) == payload
+
+
+class TestNoHarnessOverheadInsideATimedThunk:
+    """A benchmark that times its own import is measuring the harness.
+
+    ``benchmarks/validation_suite.py``'s SHA3-256 thunk was::
+
+        def sha3_hash() -> bytes:
+            from ama_cryptography.pqc_backends import native_sha3_256
+            return native_sha3_256(test_data)
+
+    so every iteration re-executed the ``from ... import`` — a sys.modules
+    lookup and an attribute bind — inside the timed region.  Measured on one
+    host, 200,000 iterations, median of five runs::
+
+        with the import inside : 2147.9 ns/op
+        with it hoisted        : 1572.0 ns/op
+
+    575.9 ns, 26.8% of the reported figure, against a documented claim of
+    about 2 us.  The row had been rewritten specifically "to measure AMA's
+    SHA3, not hashlib", and it was measuring the harness.
+
+    Every other timed thunk in the directory already hoisted its import, so
+    the rule below held everywhere except the one place it mattered.  A nested
+    function in ``benchmarks/`` is a timed thunk by construction — the drivers
+    define one and hand it to ``benchmark_operation`` / ``benchmark`` — so
+    "no nested function imports" is the property, stated where it can be
+    checked.
+    """
+
+    def test_no_nested_function_in_benchmarks_contains_an_import(self) -> None:
+        import ast
+
+        benchmarks_dir = Path(__file__).resolve().parent.parent / "benchmarks"
+        offenders: list[str] = []
+        for path in sorted(benchmarks_dir.glob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for outer in ast.walk(tree):
+                if not isinstance(outer, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                for node in ast.walk(outer):
+                    if node is outer:
+                        continue
+                    if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        continue
+                    for inner in ast.walk(node):
+                        if isinstance(inner, (ast.Import, ast.ImportFrom)):
+                            offenders.append(
+                                f"{path.name}:{inner.lineno} inside {node.name}()"
+                            )
+
+        assert not offenders, (
+            "these nested functions import inside what is almost certainly a timed "
+            f"thunk, so the reported figure includes the import: {offenders}. Hoist "
+            "the import into the enclosing driver — measured at 26.8% of the "
+            "reported number the last time this happened."
+        )

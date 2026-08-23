@@ -55,29 +55,64 @@ BENCH = REPO / "benchmarks"
 
 
 # Library versions on the measurement host. Read from the JSON where the
-# harness records them; pinned here for the ones it does not carry.  The
-# AMA version is never pinned — it is read from the package at render
-# time (same as generate_dashboard.py), so a release bump cannot leave a
-# stale stamp baked into the artefact (the 3.5.0 release found exactly
-# that: a hand-pinned "3.4.0" here survived the bump).  The corollary:
-# REGENERATE ONLY ALONGSIDE A MEASUREMENT RUN ON THE HOST — the stamp
-# asserts the version of the build that was measured, so an offline
-# re-render against old result JSONs would claim a build that was never
-# benchmarked (the committed artefact keeps the run's true version).
+# harness records them; pinned here for the ones it does not carry.
+#
+# The AMA version is read from the RESULT DATA, not from the working tree.
+# It used to be read from `ama_cryptography/__init__.py` at render time, with
+# a comment that named the hazard exactly — "REGENERATE ONLY ALONGSIDE A
+# MEASUREMENT RUN ON THE HOST ... an offline re-render against old result
+# JSONs would claim a build that was never benchmarked" — and relied on
+# whoever ran the generator to honour it.
+#
+# They did not, and the page said so: benchmarks/competitive.html was
+# regenerated at fe8b8ab (2026-08-21) and stamped "AMA 5.0.0", while both
+# source JSONs were last produced at 66d2073 (2026-07-29), where
+# __version__ was "3.4.0", and neither was touched by the work in between.
+# The page's own closing paragraph says every figure is read from those two
+# files and nothing is hand-entered — true of every number, and false of the
+# only label that says which build produced them.
+#
+# A convention a comment asks for is not a control. Reading the version from
+# the data makes an offline re-render harmless: it re-renders the version the
+# data was measured at. A re-measurement updates the JSON, and the stamp
+# follows it.
 def _ama_version() -> str:
-    import re
-
-    source = (REPO / "ama_cryptography" / "__init__.py").read_text(encoding="utf-8")
-    match = re.search(r'__version__\s*=\s*"([^"]+)"', source)
-    if match is None:
-        # Raise rather than fall back to a literal: a stamped version that is
-        # not the package's own is the exact failure this function was written
-        # to prevent, and a default would reintroduce it silently.
+    provenance = _source_provenance()
+    version = provenance.get("ama_version")
+    if not isinstance(version, str) or not version.strip():
+        # Raise rather than fall back to the working tree: falling back IS the
+        # defect this function was rewritten to remove.
         raise RuntimeError(
-            "ama_cryptography/__init__.py declares no __version__; refusing to "
-            "stamp the report with a version that was not read from the package"
+            "benchmarks/multi_library_results.json carries no "
+            "provenance.ama_version, so the version of the build these "
+            "measurements came from is unknown. Refusing to stamp the report "
+            "with the working tree's version — that is how a page measured on "
+            "3.4.0 came to be labelled 5.0.0. Re-run the harness (which "
+            "records it) or add the provenance block by hand from "
+            "`git log -1 -- benchmarks/multi_library_results.json`."
         )
-    return match.group(1)
+    return version
+
+
+def _source_provenance() -> dict:
+    """The provenance block of the primary result file.
+
+    Both result files carry one and they must agree: they are rendered onto
+    one page under one version stamp, so a page built from two different
+    builds' measurements has no honest label at all.
+    """
+    primary = json.loads((BENCH / "multi_library_results.json").read_text(encoding="utf-8"))
+    secondary = json.loads((BENCH / "pqc_results.json").read_text(encoding="utf-8"))
+    p1 = primary.get("provenance") or {}
+    p2 = secondary.get("provenance") or {}
+    if p1.get("ama_commit") != p2.get("ama_commit"):
+        raise RuntimeError(
+            "multi_library_results.json and pqc_results.json were measured at "
+            f"different commits ({p1.get('ama_commit')!r} vs "
+            f"{p2.get('ama_commit')!r}); one page cannot carry one honest "
+            "version stamp over two builds. Re-measure both."
+        )
+    return p1
 
 
 VERSIONS = {
@@ -415,7 +450,7 @@ def render(c: dict[str, Any], q: dict[str, Any]) -> str:
 
     ama_only = sum(1 for p, c_ in COVERAGE.items() if sum(c_.values()) == 1 and c_["AMA"])
 
-    # Fields and this mapping are a verified 1:1 bijection (18/18). Substitute
+    # Fields and this mapping are a verified 1:1 bijection (21/21). Substitute
     # with format_map(mapping) — the direct dict idiom — rather than
     # format(**kwargs): it renders byte-identically and keeps the call
     # unambiguous, with no keyword arguments to reconcile against the escaped
@@ -423,6 +458,12 @@ def render(c: dict[str, Any], q: dict[str, Any]) -> str:
     return TEMPLATE.format_map(
         {
             "gen": esc(gen),
+            # Read from the result files' provenance, never from the working
+            # tree — see _ama_version() for the page this distinction was
+            # written on top of.
+            "src_commit": esc(str(_source_provenance().get("ama_commit", "unknown"))),
+            "src_version": esc(str(_source_provenance().get("ama_version", "unknown"))),
+            "src_measured": esc(str(_source_provenance().get("measured_at", "unknown"))),
             "freq": f"{freq:.3f}",
             "host_line": host_line,
             "msg": f"{msg:,}",
@@ -662,10 +703,14 @@ python benchmarks/generate_competitive.py   # -> this page</pre>
 
 <p class="meta">
 Generated {gen} · message size {msg} bytes · measured clock {freq} GHz<br>
+Measured at commit <code>{src_commit}</code> ({src_measured}), AMA {src_version}<br>
 Host: {host_line}<br>
 {vers}<br>
 Every figure on this page is read from <code>benchmarks/multi_library_results.json</code>
-and <code>benchmarks/pqc_results.json</code>. Nothing is hand-entered.
+and <code>benchmarks/pqc_results.json</code>. Nothing is hand-entered — including
+the AMA version above, which is read from those files' provenance rather than
+from the working tree. Regenerating this page without re-running the harness
+re-renders the same measurements under the same stamp; it cannot relabel them.
 </p>
 
 </div></body></html>

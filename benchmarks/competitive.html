@@ -416,11 +416,15 @@ python benchmarks/pqc_comparative_bench.py  # -> pqc_results.json
 python benchmarks/generate_competitive.py   # -> this page</pre>
 
 <p class="meta">
-Generated 2026-08-21 01:18 UTC · message size 65,536 bytes · measured clock 2.801 GHz<br>
+Generated 2026-08-23 00:40 UTC · message size 65,536 bytes · measured clock 2.801 GHz<br>
+Measured at commit <code>66d207396c3bb5645486f28ffa084dda0c12799f</code> (2026-07-29T19:09:37-05:00), AMA 3.4.0<br>
 Host: Intel(R) Xeon(R) Processor @ 2.80GHz · aes_ni, pclmulqdq, avx2, avx512f, bmi2, adx · <b>absent:</b> vaes, vpclmulqdq, sha_ni<br>
-AMA 5.0.0 · OpenSSL 3.0.13 · OpenSSL 4.0.1 4.0.1 (via cryptography 49.0.0) · libsodium 1.0.18 · wolfSSL 5.6.6 · Botan 2.19.3 · Nettle 3.9 · libgcrypt 1.10.3 · mbedTLS 2.28.8<br>
+AMA 3.4.0 · OpenSSL 3.0.13 · OpenSSL 4.0.1 4.0.1 (via cryptography 49.0.0) · libsodium 1.0.18 · wolfSSL 5.6.6 · Botan 2.19.3 · Nettle 3.9 · libgcrypt 1.10.3 · mbedTLS 2.28.8<br>
 Every figure on this page is read from <code>benchmarks/multi_library_results.json</code>
-and <code>benchmarks/pqc_results.json</code>. Nothing is hand-entered.
+and <code>benchmarks/pqc_results.json</code>. Nothing is hand-entered — including
+the AMA version above, which is read from those files' provenance rather than
+from the working tree. Regenerating this page without re-running the harness
+re-renders the same measurements under the same stamp; it cannot relabel them.
 </p>
 
 </div></body></html>
