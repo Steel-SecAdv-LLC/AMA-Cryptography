@@ -259,6 +259,27 @@ with the reason measured rather than asserted — the compiled `.text`
 section is byte-identical before and after under gcc -O3 -mavx2 (12,684
 bytes, `cmp` exit 0).
 
+Two more from the runs after that.  The scripted edit that switched the
+define to `-D` emitted its comment and the `CL:` key at step depth instead
+of env depth in `ci-build-test.yml` — valid YAML, invalid workflow — and
+GitHub refused the file at startup: run 32665181542 completed as a failure
+with zero jobs, invisible to a `yaml.safe_load` check, so the step is now
+also verified structurally (its `env` must be exactly `{CPPFLAGS, CL}`,
+no stray step keys, in both workflows).  And the first macOS suite
+execution in this repository's history — 6,126 passed, 53 skipped, on
+Python 3.14 — failed exactly two tests, both the ReDoS linearity gate in
+`tests/test_c_secret_zeroization_gate.py`, which timed each input size
+ONCE and asserted consecutive ratios under 2.8x: one inflated
+millisecond-scale sample on the shared macOS runner read a genuinely
+linear pattern at 3.60x and 2.89x (job 97259726006).  Each size is now
+timed as the fastest of five runs — interference is one-sided, so the
+minimum is the estimate, the same estimator `benchmark_runner.py` uses —
+with the 2.8x ceiling untouched.  Verified in both directions: 137/137
+with the real pattern, and a planted second `[ \t]*` on the offset branch
+(the classic O(n^2) rejection shape) reads 3.99x through the floor
+estimator and fails the gate; a planted exponential alternation hangs the
+scan into pytest-timeout rather than passing.  Both mutations reverted.
+
 ### Debt-closure pass, eleventh (2026-08-22) — the 25 findings an independent audit left standing, and what closing them found
 
 An independent audit read all 302 non-corpus changed files of this branch's

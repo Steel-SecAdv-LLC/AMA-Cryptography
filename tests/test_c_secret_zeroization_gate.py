@@ -760,7 +760,7 @@ class TestPatternIsLinear:
         ],
     )
     def test_growth_is_linear_not_merely_fast(self, prefix: str) -> None:
-        """Ratio, not a wall-clock ceiling.
+        """Ratio, not a wall-clock ceiling — and a floor, not a single sample.
 
         A wall-clock threshold passes a quadratic pattern on a fast runner and
         fails a linear one on a loaded shared runner — this file already
@@ -769,9 +769,20 @@ class TestPatternIsLinear:
         time roughly doubles measures the property directly and is
         host-independent.
 
-        The ceiling is 2.8x rather than 2.0x because timing on a shared runner
-        is noisy; quadratic growth is 4x and cubic 8x, so the gap is wide
-        enough to discriminate.  Measured here at the time of writing:
+        Each size is timed as the fastest of five runs, not once.  Interference
+        on a shared runner is one-sided — it can only make a scan look slower,
+        never faster — so the minimum is the estimate of the machine's actual
+        cost, the same estimator benchmarks/benchmark_runner.py uses for the
+        same reason.  A single sample per size failed a genuinely linear
+        pattern on the shared macOS runner at 3.60x and 2.89x (job
+        97259726006: one inflated middle sample poisons both ratios it
+        appears in), while the pattern's floor doubles like it should; a
+        quadratic pattern's floor still quadruples, so the discrimination the
+        ceiling relies on is sharpened, not loosened.
+
+        The ceiling is 2.8x rather than 2.0x because even floor timings carry
+        residual noise; quadratic growth is 4x and cubic 8x, so the gap is
+        wide enough to discriminate.  Measured here at the time of writing:
         1.71-2.07x across all three shapes.
         """
         import time
@@ -780,15 +791,19 @@ class TestPatternIsLinear:
         timings: list[float] = []
         for exponent in (14, 15, 16):
             payload = prefix + pad * (2**exponent)
-            start = time.perf_counter()
-            gate.scan_text(payload, _INLINE)
-            timings.append(time.perf_counter() - start)
+            best = float("inf")
+            for _ in range(5):
+                start = time.perf_counter()
+                gate.scan_text(payload, _INLINE)
+                best = min(best, time.perf_counter() - start)
+            timings.append(best)
 
         for smaller, larger in itertools.pairwise(timings):
             if smaller < 1e-4:  # too fast to measure a ratio from
                 continue
             assert larger / smaller < 2.8, (
-                f"doubling the input multiplied the time by {larger / smaller:.2f}x "
+                f"doubling the input multiplied the floor time by "
+                f"{larger / smaller:.2f}x (fastest of five runs per size) "
                 f"for {prefix!r}; linear is ~2x and quadratic is ~4x, so the "
                 f"pattern has regained polynomial backtracking"
             )
