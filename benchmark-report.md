@@ -1,15 +1,16 @@
 # Benchmark Regression Report
 
-**Timestamp:** 2026-08-15T23:59:21.739814+00:00
+**Timestamp:** 2026-08-23T01:19:54.105155+00:00
 **Results:** 19/19 passed, 0 failed, 0 warnings
 
 ## Provenance
 
 | Property | Value |
 |----------|-------|
-| Commit | `0e97aefb09efa23672d5d0c5d651bdfe3b5a579c` |
+| Commit | `3ce4b5883f712a481228fd0119df58aa7c6d49e2` |
+| Tree | clean |
 | Version | `5.0.0` |
-| Host | Linux-6.18.5-fc-v20-x86_64-with-glibc2.39 / x86_64 |
+| Host | Linux-6.18.44-fc-v21-x86_64-with-glibc2.39 / x86_64 |
 | CPU | 4 logical processor(s) |
 | Python | 3.11.15 (CPython) |
 | Command | `python benchmarks/benchmark_runner.py --baseline benchmarks/baseline.json --output benchmarks/benchmark-results.json --markdown benchmark-report.md` |
@@ -24,46 +25,46 @@
 
 | Primitive | Ops/sec | Baseline | Regression | Tolerance | Status |
 |-----------|--------:|---------:|-----------:|----------:|--------|
-| AMA native C SHA3-256 hashing of 1KB data (FIPS 202, ctypes) | 289,692 | 327,222 | +11.5% | 45% | PASS |
-| HMAC-SHA3-256 authentication (native C via ctypes) | 187,325 | 215,299 | +13.0% | 45% | PASS |
-| Ed25519 key pair generation (native C) | 11,268 | 10,822 | -4.1% | 45% | PASS |
-| Ed25519 signature generation (native C, expanded key) | 56,299 | 53,885 | -4.5% | 45% | PASS |
-| Ed25519 signature verification (native C) | 20,634 | 19,181 | -7.6% | 45% | PASS |
-| HKDF-SHA3-256 key derivation (3 keys) | 109,135 | 131,341 | +16.9% | 45% | PASS |
-| Complete crypto package creation (with PQC) | 1,515 | 1,983 | +23.6% | 45% | PASS |
-| Complete crypto package verification (with PQC) | 1,964 | 3,442 | +43.0% | 45% | PASS |
-| secp256k1 ECDSA signing (native C, RFC 6979 deterministic nonce) | 8,352 | 8,068 | -3.5% | 45% | PASS |
-| secp256k1 ECDSA verification (native C, Shamir's-trick joint multiply, low-s + canonical-pubkey policy) | 3,675 | 3,302 | -11.3% | 45% | PASS |
-| ML-DSA-65 (Dilithium) key pair generation (native C) | 963 | 1,312 | +26.6% | 45% | PASS |
-| ML-DSA-65 (Dilithium) signature generation (native C) | 1,838 | 2,636 | +30.3% | 45% | PASS |
-| ML-DSA-65 (Dilithium) signature verification (native C) | 6,902 | 8,897 | +22.4% | 45% | PASS |
-| ML-KEM-1024 (Kyber) key pair generation (native C) | 1,900 | 2,726 | +30.3% | 45% | PASS |
-| ML-KEM-1024 (Kyber) encapsulation (native C) | 8,436 | 11,994 | +29.7% | 45% | PASS |
-| AES-256-GCM encryption of 1KB data (native C) | 237,703 | 224,406 | -5.9% | 45% | PASS |
-| ChaCha20-Poly1305 encryption of 1KB data (native C) | 208,052 | 227,521 | +8.6% | 45% | PASS |
-| X25519 single-shot Diffie-Hellman scalar-mult (native C, default dispatch). Backed by fe64 (radix-2^64, MULX/ADX) on x86-64 hosts with BMI2+ADX, fe51 (radix-2^51) on 64-bit hosts without, and gf16 on 32-bit. The AVX2 4-way kernel is OPT-IN via AMA_DISPATCH_USE_X25519_AVX2=1 and is intentionally not faster than scalar fe64 on MULX/ADX hosts — see src/c/dispatch/ama_dispatch.c:478-502 and tests/test_x25519_dispatch_policy.py for the dispatch contract. Re-floored 5,000 → 13,000 (2026-04-27 audit) so the regression gate actually catches a >40% drop from canonical-host throughput rather than ignoring it. | 18,201 | 16,876 | -7.8% | 45% | PASS |
-| X25519 batch-4 Diffie-Hellman under default dispatch — measures BATCHES/SEC, not per-op rate. On MULX/ADX hosts this is roughly x25519_scalarmult / 4 plus the wrapper's per-batch overhead (canonical-host run measured ~4,100 batches/sec vs ~17,000 single-shot ops/sec). A significantly slower batches/sec number typically means the AVX2 4-way kernel was accidentally selected as the default — that is a regression on every shipped Broadwell+/Zen+ part (see PR #273 design note and ama_dispatch.c:478-502). The runner calls native_x25519_scalarmult_batch with count=4 so this baseline genuinely exercises the batch wrapper, not four sequential native_x25519_key_exchange calls. | 4,270 | 4,074 | -4.8% | 45% | PASS |
+| AMA native C SHA3-256 hashing of 1KB data (FIPS 202, ctypes) | 371,588 | 327,222 | -13.6% | 45% | PASS |
+| HMAC-SHA3-256 authentication (native C via ctypes) | 277,594 | 215,299 | -28.9% | 45% | PASS |
+| Ed25519 key pair generation (native C) | 13,990 | 10,822 | -29.3% | 45% | PASS |
+| Ed25519 signature generation (native C, expanded key) | 69,080 | 53,885 | -28.2% | 45% | PASS |
+| Ed25519 signature verification (native C) | 26,071 | 19,181 | -35.9% | 45% | PASS |
+| HKDF-SHA3-256 key derivation (3 keys) | 200,087 | 131,341 | -52.3% | 45% | PASS |
+| Complete crypto package creation (with PQC) | 2,580 | 1,983 | -30.1% | 45% | PASS |
+| Complete crypto package verification (with PQC) | 3,036 | 3,442 | +11.8% | 45% | PASS |
+| secp256k1 ECDSA signing (native C, RFC 6979 deterministic nonce) | 10,336 | 8,068 | -28.1% | 45% | PASS |
+| secp256k1 ECDSA verification (native C, Shamir's-trick joint multiply, low-s + canonical-pubkey policy) | 4,326 | 3,302 | -31.0% | 45% | PASS |
+| ML-DSA-65 (Dilithium) key pair generation (native C) | 1,653 | 1,312 | -26.0% | 45% | PASS |
+| ML-DSA-65 (Dilithium) signature generation (native C) | 3,282 | 2,636 | -24.5% | 45% | PASS |
+| ML-DSA-65 (Dilithium) signature verification (native C) | 13,618 | 8,897 | -53.1% | 45% | PASS |
+| ML-KEM-1024 (Kyber) key pair generation (native C) | 4,569 | 2,726 | -67.6% | 45% | PASS |
+| ML-KEM-1024 (Kyber) encapsulation (native C) | 21,221 | 11,994 | -76.9% | 45% | PASS |
+| AES-256-GCM encryption of 1KB data (native C) | 347,040 | 224,406 | -54.6% | 45% | PASS |
+| ChaCha20-Poly1305 encryption of 1KB data (native C) | 307,461 | 227,521 | -35.1% | 45% | PASS |
+| X25519 single-shot Diffie-Hellman scalar-mult (native C, default dispatch). Backed by fe64 (radix-2^64, MULX/ADX) on x86-64 hosts with BMI2+ADX, fe51 (radix-2^51) on 64-bit hosts without, and gf16 on 32-bit. The AVX2 4-way kernel is OPT-IN via AMA_DISPATCH_USE_X25519_AVX2=1 and is intentionally not faster than scalar fe64 on MULX/ADX hosts — see src/c/dispatch/ama_dispatch.c:478-502 and tests/test_x25519_dispatch_policy.py for the dispatch contract. Re-floored 5,000 → 13,000 (2026-04-27 audit) so the regression gate actually catches a >40% drop from canonical-host throughput rather than ignoring it. | 21,893 | 16,876 | -29.7% | 45% | PASS |
+| X25519 batch-4 Diffie-Hellman under default dispatch — measures BATCHES/SEC, not per-op rate. On MULX/ADX hosts this is roughly x25519_scalarmult / 4 plus the wrapper's per-batch overhead (canonical-host run measured ~4,100 batches/sec vs ~17,000 single-shot ops/sec). A significantly slower batches/sec number typically means the AVX2 4-way kernel was accidentally selected as the default — that is a regression on every shipped Broadwell+/Zen+ part (see PR #273 design note and ama_dispatch.c:478-502). The runner calls native_x25519_scalarmult_batch with count=4 so this baseline genuinely exercises the batch wrapper, not four sequential native_x25519_key_exchange calls. | 5,206 | 4,074 | -27.8% | 45% | PASS |
 
 ## Throughput Comparison
 
 ```
-       ama_sha3_256_hash | ████████████████████████████████████████ 289,692
-           hmac_sha3_256 | █████████████████████████ 187,325
-          ed25519_keygen | █ 11,268
-            ed25519_sign | ███████ 56,299
-          ed25519_verify | ██ 20,634
-             hkdf_derive | ███████████████ 109,135
-     full_package_create |  1,515
-     full_package_verify |  1,964
-    secp256k1_ecdsa_sign | █ 8,352
-  secp256k1_ecdsa_verify |  3,675
-        dilithium_keygen |  963
-          dilithium_sign |  1,838
-        dilithium_verify |  6,902
-            kyber_keygen |  1,900
-       kyber_encapsulate | █ 8,436
-     aes_256_gcm_encrypt | ████████████████████████████████ 237,703
-chacha20poly1305_encrypt | ████████████████████████████ 208,052
-       x25519_scalarmult | ██ 18,201
-x25519_scalarmult_batch4 |  4,270
+       ama_sha3_256_hash | ████████████████████████████████████████ 371,588
+           hmac_sha3_256 | █████████████████████████████ 277,594
+          ed25519_keygen | █ 13,990
+            ed25519_sign | ███████ 69,080
+          ed25519_verify | ██ 26,071
+             hkdf_derive | █████████████████████ 200,087
+     full_package_create |  2,580
+     full_package_verify |  3,036
+    secp256k1_ecdsa_sign | █ 10,336
+  secp256k1_ecdsa_verify |  4,326
+        dilithium_keygen |  1,653
+          dilithium_sign |  3,282
+        dilithium_verify | █ 13,618
+            kyber_keygen |  4,569
+       kyber_encapsulate | ██ 21,221
+     aes_256_gcm_encrypt | █████████████████████████████████████ 347,040
+chacha20poly1305_encrypt | █████████████████████████████████ 307,461
+       x25519_scalarmult | ██ 21,893
+x25519_scalarmult_batch4 |  5,206
 ```
