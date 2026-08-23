@@ -93,6 +93,24 @@ int main(void) {
 #endif
     );
 
+    /* ama_ed25519_keypair does NOT generate the seed: its contract is
+     * "caller provides the 32-byte seed in secret_key[0..31] ... We must NOT
+     * overwrite secret_key[0..31] here" (src/c/ed25519_donna_shim.c).  Passing
+     * an uninitialised `sk` therefore hands it whatever is on the stack — a
+     * read of uninitialised memory, and a test whose key changes run to run.
+     *
+     * The first version of this file did exactly that, and every
+     * configuration passed: the garbage is still a usable seed.  MemorySanitizer
+     * is what caught it:
+     *
+     *   use-of-uninitialized-value in sha512_LOAD64_BE
+     *     ed25519_extsk -> ed25519_publickey -> ama_ed25519_keypair
+     *     Uninitialized value was created by an allocation of 'sk' in main
+     *
+     * A fixed seed, matching test_ed25519_canonical_s.c, also makes the whole
+     * file deterministic — which matters for a test whose failure mode is a
+     * specific 64-byte string. */
+    memset(sk, 0x42, 32);
     if (ama_ed25519_keypair(pk, sk) != AMA_SUCCESS) {
         printf("FATAL: ama_ed25519_keypair failed\n");
         return 2;
