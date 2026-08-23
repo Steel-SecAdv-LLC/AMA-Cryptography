@@ -303,12 +303,26 @@ def _floored_code_changed_since_calibration(
 
 
 def _drift_is_acknowledged(metadata: Dict[str, object], changed_path: str) -> bool:
-    """True when ``metadata.floor_drift_acknowledged`` covers ``changed_path``.
+    """True when ``metadata.floor_drift_acknowledged`` names ``changed_path``.
 
-    Each entry is ``{"path": <repo-relative file or directory prefix>,
-    "reason": <why the floors still hold>}``.  Both fields are required: a
-    path with no reason is an acknowledgement of nothing, and this gate exists
-    because an unchecked assertion is worth nothing.
+    Each entry is ``{"path": <repo-relative FILE>, "reason": <why the floors
+    still hold>}``.  Both fields are required: a path with no reason is an
+    acknowledgement of nothing, and this gate exists because an unchecked
+    assertion is worth nothing.
+
+    Exact file paths only.  This used to also match a directory PREFIX, and
+    two entries used it — ``include`` and ``ama_cryptography``, the two
+    largest floored paths in the tree.  A prefix entry does not acknowledge
+    the drift that was reviewed; it acknowledges all future drift anywhere
+    beneath it, including in a file that does run inside a benchmarked call.
+    The ``ama_cryptography`` entry's own reason was a careful list of what had
+    changed in that pass and why none of it was on a benchmarked path — a
+    statement about specific files, silently extended to every file the
+    package will ever contain.
+
+    The other 38 entries were already per file.  Both prefixes have been
+    itemised, and the prefix match is gone rather than merely unused, so it
+    cannot come back by someone writing the shorter form.
     """
     entries = metadata.get("floor_drift_acknowledged")
     if not isinstance(entries, list):
@@ -320,7 +334,7 @@ def _drift_is_acknowledged(metadata: Dict[str, object], changed_path: str) -> bo
         reason = entry.get("reason")
         if not isinstance(path, str) or not isinstance(reason, str) or not reason.strip():
             continue
-        if changed_path == path or changed_path.startswith(path.rstrip("/") + "/"):
+        if changed_path == path:
             return True
     return False
 
@@ -393,7 +407,8 @@ def _check_validity_window(base_ref: str, head_ref: str) -> List[str]:
                 f"calibration_evidence), or acknowledge each path explicitly in "
                 f"metadata.floor_drift_acknowledged — a list of "
                 f"{{path, reason}} entries, where path is a repo-relative file "
-                f"or directory prefix. The acknowledgement is reviewable; the "
+                f"— exact paths only, a directory prefix would acknowledge every "
+                f"future change beneath it. The acknowledgement is reviewable; the "
                 f"prose sentence it replaces was not checked by anything and "
                 f"was false when it was written."
             )
