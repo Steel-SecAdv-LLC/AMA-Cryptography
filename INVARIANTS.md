@@ -2194,11 +2194,24 @@ signature can be verified (the verifier is inside the library being loaded),
 so it defeats the `.so`-only attacker outright; the rewrites-both attacker is
 caught post-load by the unforgeable signature or the trust anchor, with the
 constructor residue that entails — that attacker remains the OS-code-signing
-boundary `SECURITY.md` documents. `AMA_BUILD_PIPELINE=1` (outside
-secure-execution mode) demotes the refusal to a warning so the in-package
-artefact-repair tools can import after a rebuild. Pinned by
-`tests/test_preload_native_digest.py` and the refused-before-mapping tamper
-case in `tests/test_native_integrity.py`.
+boundary `SECURITY.md` documents. The refusal is demoted to a
+warning only for a process that IS the signer: `_SIGNING_LOAD_OVERRIDE`, a
+module attribute `ama_cryptography._build_sign` sets around its own discovery
+call, or `_process_is_the_integrity_signer()`, which keys on `__main__`'s
+module name and `sys.orig_argv` — `ama_cryptography._build_sign`, or
+`ama_cryptography.integrity` running a WRITING subcommand — and in both cases
+only outside secure-execution mode.
+
+`AMA_BUILD_PIPELINE=1` does NOT demote it, which this paragraph used to say it
+did. The variable is read on every import, so any attacker who could set one
+environment variable in the victim's process would have turned a pre-execution
+refusal into a post-hoc report, with no code execution required. Setting a
+module attribute inside the victim's interpreter is not a capability an
+environment variable confers. Pinned by
+`tests/test_preload_native_digest.py` (including
+`TestSigningScopeRequiresIntentNotJustIdentity`, which drives the flag and a
+signer-module argv together) and the refused-before-mapping tamper case in
+`tests/test_native_integrity.py`.
 
 **CASTs precede the integrity test that relies on them.** FIPS 140-3
 (NIST IG 10.3.A) requires the algorithm self-test for any approved algorithm the

@@ -555,6 +555,8 @@ are as stated, zero failures.
 | ML-DSA-44 / ML-DSA-87 | FIPS 204 | `src/c/ama_dilithium.c`, parameter-driven (`ama_ml_dsa_*` over `ama_ml_dsa_param_set_t`); ML-DSA-65 unchanged | 3.5.0 | NIST ACVP-Server ML-DSA-{keyGen,sigGen}-FIPS204 `internalProjection.json` (master @ 2026-07-27) vendored as `tests/kat/fips204/ml_dsa_{44,87}.kat`; `tests/test_pqc_param_sets.py` — **79 passed, 0 failed** |
 | secp256k1 ECDSA | RFC 6979 (deterministic nonces); SEC 1 / SEC 2 (curve) | `ama_secp256k1_ecdsa_sign` / `_verify` in `src/c/ama_secp256k1.c` (the file predates the audit; its ECDSA surface is post-audit) | 3.4.0 | 476-vector Wycheproof `ecdsa_secp256k1_sha256_test.json` — **0 failures** |
 | HMAC-SHA-384 | FIPS 198-1 / RFC 2104, over FIPS 180-4 SHA-384 | `src/c/ama_hmac_sha384.c` (SHA-384 core shared from `src/c/internal/ama_sha2.h`) | 3.3.0 | 174-vector Wycheproof `hmac_sha384_test.json` — **0 failures** |
+| PBKDF2-HMAC-SHA-256 / PBKDF2-HMAC-SHA-512 | NIST SP 800-132; RFC 8018 §5.2 | `src/c/ama_pbkdf2.c` (`ama_pbkdf2_hmac_sha256`, `ama_pbkdf2_hmac_sha512`), over the HMAC cores in `src/c/internal/ama_sha2.h` | 5.0.0 | RFC 7914 §11 PBKDF2-HMAC-SHA256 vectors 1 and 2 and the official BIP39 vector; `tests/test_sha2_pbkdf2_native.py` — **35 passed, 0 failed** (re-run at this commit) |
+| SHA-512 / SHA-384 one-shot | FIPS 180-4 | `src/c/ama_sha512.c` (`ama_sha512_oneshot`, `ama_sha384_oneshot`), over the same shared core | 5.0.0 | FIPS 180-4 canonical vectors in `tests/test_sha2_pbkdf2_native.py` — **35 passed, 0 failed** (same suite as the row above) |
 
 The Wycheproof results above come from a full run of the vendored corpus on
 2026-07-30 (`wycheproof_vectors/run_wycheproof.py`, upstream C2SP/wycheproof

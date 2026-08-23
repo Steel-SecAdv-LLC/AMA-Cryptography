@@ -323,6 +323,69 @@ class TestSampleWindow:
         assert rate == 1_000.0, f"an undersized batch's {rate} ops/sec reached the report"
 
 
+class TestAnUnderSampledRunIsNotReported:
+    """The fallbacks below the sampling loop published numbers the loop refused.
+
+    ``benchmark_operation`` ends with the loop having either satisfied the
+    sampling rule (``completed >= rounds`` full-window batches) or not.  It used
+    to report a rate in both cases:
+
+      * ``if best > 0.0: return best`` returned the fastest FULL-WINDOW batch
+        even when fewer than ``rounds`` of them completed — a run sampled less
+        than the rule the docstring states.
+      * ``if observed > 0.0 ...: return observed`` returned the fastest
+        UNDER-TARGET batch, which is precisely what the docstring forbids:
+        "Only full-window batches are eligible to be reported. An undersized
+        batch can report a lucky-high rate off a very short window, and since
+        the baselines this feeds are *floors*, an inflated number makes the
+        gate weaker."
+
+    ``TestSampleWindow.test_undersized_batches_cannot_inflate_the_result``
+    pins the loop's own behaviour, and passed throughout: it scripts a run that
+    DOES reach ``rounds``, so the fallback is never taken.  These two cases are
+    the ones that reach it.
+    """
+
+    def test_a_never_full_window_run_raises_instead_of_reporting_a_short_batch(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No batch ever reaches the target, so only under-target rates exist."""
+        monkeypatch.setattr(br, "_required_batch", lambda rate: br._MAX_ITERATIONS + 1)
+        monkeypatch.setattr(br, "_timed_batch", lambda op, n: (9_999.0, 0.001))
+
+        with pytest.raises(RuntimeError, match="full-window batches"):
+            br.benchmark_operation(lambda: None, iterations=10, warmup=0, rounds=3)
+
+    def test_a_partly_sampled_run_raises_instead_of_reporting_fewer_rounds(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Full-window batches happen, but the streak never reaches ``rounds``.
+
+        Every second attempt is under-target, which resets the streak, so the
+        loop exhausts its attempt budget holding ``completed == 1`` and a
+        non-zero ``best``.  That is the input on which ``return best`` reported
+        a one-round measurement as if it were a three-round one.
+        """
+        calls = {"n": 0}
+
+        def alternating_target(rate: float) -> int:
+            calls["n"] += 1
+            return 1 if calls["n"] % 2 else br._MAX_ITERATIONS + 1
+
+        monkeypatch.setattr(br, "_required_batch", alternating_target)
+        monkeypatch.setattr(br, "_timed_batch", lambda op, n: (1_000.0, 0.2))
+
+        with pytest.raises(RuntimeError, match=r"completed 1 of 3 full-window"):
+            br.benchmark_operation(lambda: None, iterations=10, warmup=0, rounds=3)
+
+    def test_a_fully_sampled_run_still_returns(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The control: a run that satisfies the rule must not start raising."""
+        monkeypatch.setattr(br, "_required_batch", lambda rate: 1)
+        monkeypatch.setattr(br, "_timed_batch", lambda op, n: (1_000.0, 0.2))
+
+        assert br.benchmark_operation(lambda: None, iterations=10, warmup=0, rounds=3) == 1_000.0
+
+
 class TestAnUnmeasurableBatchCannotBecomeAnInfiniteRate:
     """`elapsed == 0` used to be reported as an infinite throughput.
 
@@ -1006,6 +1069,81 @@ class TestTheReportDoesNotInvertItsOwnColumn:
             "benchmarks/benchmark-results.json; regenerate it rather than editing "
             "it by hand"
         )
+
+
+class TestTheTwoPublishedArtefactsCannotDisagreeByARounding:
+    """The markdown must render the numbers the JSON record stores.
+
+    ``generate_report()`` quantises every published measurement to
+    ``PUBLISHED_DECIMALS`` (2); the table displays fewer digits than that.  The
+    table used to format the RAW value, so wherever the two roundings disagree
+    the pair contradicted itself: ``hkdf_derive``'s regression was 6.7477%,
+    which the table rendered ``+6.7%`` while the JSON stored ``6.75``, from
+    which the same generator renders ``+6.8%``.
+
+    ``test_the_published_report_matches_the_generator`` above caught that
+    instance, but only because the committed record happened to contain a
+    half-way value.  A later run whose numbers all round the same way would
+    make that assertion pass over the same defect, so the property is pinned
+    here directly, on values chosen to exercise it in both columns.
+    """
+
+    @staticmethod
+    def _rendered_both_ways(result: br.BenchmarkResult) -> tuple[str, str]:
+        """The page from live results, and from those results JSON round-tripped.
+
+        The same ``report`` dict feeds both renders, so the timestamp and
+        provenance are identical and any difference is the measurements.
+        """
+        report = br.generate_report([result])
+        from_live = br.generate_markdown_report([result], report)
+        stored = [br.BenchmarkResult(**row) for row in json.loads(json.dumps(report))["results"]]
+        return from_live, br.generate_markdown_report(stored, report)
+
+    def test_a_half_way_regression_renders_identically_from_both(self) -> None:
+        """6.7477 -> raw ``+6.7%``; stored as 6.75 -> ``+6.8%``."""
+        result = br.BenchmarkResult(
+            name="row0",
+            description="row 0",
+            ops_per_second=1000.0,
+            baseline_value=1072.0,
+            tolerance_percent=45.0,
+            regression_percent=6.7477,
+            passed=True,
+        )
+        from_live, from_json = self._rendered_both_ways(result)
+        assert from_live == from_json
+        assert "+6.8%" in from_live
+
+    def test_a_half_way_throughput_renders_identically_from_both(self) -> None:
+        """The Ops/sec column has the same hazard: 1.4999 -> ``1``; 1.5 -> ``2``."""
+        result = br.BenchmarkResult(
+            name="row0",
+            description="row 0",
+            ops_per_second=1.4999,
+            baseline_value=2.0,
+            tolerance_percent=45.0,
+            regression_percent=25.0,
+            passed=True,
+        )
+        from_live, from_json = self._rendered_both_ways(result)
+        assert from_live == from_json
+
+    def test_an_ordinary_row_is_unaffected(self) -> None:
+        """The control: quantising must not move a number that needs no rounding."""
+        result = br.BenchmarkResult(
+            name="row0",
+            description="row 0",
+            ops_per_second=1234.0,
+            baseline_value=1000.0,
+            tolerance_percent=45.0,
+            regression_percent=-23.4,
+            passed=True,
+        )
+        from_live, from_json = self._rendered_both_ways(result)
+        assert from_live == from_json
+        assert "| 1,234 |" in from_live
+        assert "-23.4%" in from_live
 
 
 class TestTheJsonProvenanceIsMachineReadable:

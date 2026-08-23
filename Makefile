@@ -12,7 +12,17 @@
 #   make install    - Install library system-wide
 #   make docker     - Build Docker image
 
-.PHONY: all c python test clean install docker help c-api constant-time-check security-scan fuzz fuzz-run
+# EVERY target here is a command, not a file.  `docs`, `docker` and `fuzz` are
+# also real directories in this tree, and GNU make treats a target that names an
+# existing file with no newer prerequisites as up to date: `make docs` printed
+# nothing and ran nothing, silently, including after the recipe was rewritten to
+# route sphinx through `$(RUN)`.  The other names are listed for the same
+# reason one step earlier — a directory added later must not be able to disable
+# a target by existing.
+.PHONY: all c python test test-c test-python test-examples benchmark clean \
+        install dev-install format lint docs docker dist security-audit \
+        security-scan constant-time-check constant-time-check-full fuzz \
+        fuzz-run c-api docker-c-api profile help
 
 # Default target
 all: c python
@@ -184,7 +194,7 @@ dist: clean
 # Security audit (basic)
 security-audit:
 	@echo "Running security audit..."
-	@$(RUN) pip_audit
+	@$(RUN) pip_audit --strict --desc --requirement requirements-lock.txt
 	@$(RUN) bandit -r ama_cryptography/ -ll
 	@echo "✓ Security audit complete"
 
@@ -291,7 +301,7 @@ c-api:
 		-DAMA_USE_NATIVE_PQC=ON && $(MAKE)
 	@echo "✓ C API built successfully"
 	@echo "  Shared library: build/lib/libama_cryptography.so"
-	@echo "  Static library: build/lib/libama_cryptography.a"
+	@echo "  Static library: build/lib/libama_cryptography_static.a"
 	@echo "  Headers: include/ama_cryptography.h"
 	@echo "  PQC: NATIVE (ML-DSA-65, Kyber-1024, SPHINCS+-256f)"
 

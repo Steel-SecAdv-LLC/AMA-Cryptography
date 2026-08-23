@@ -55,7 +55,6 @@ Use Cases:
 
 import http.client
 import logging
-import os as _os_mod
 import struct
 import threading
 import time
@@ -981,7 +980,15 @@ class MockTSA:
         algo_bytes = hash_algorithm.encode("utf-8")
         algo_len = struct.pack(">I", len(algo_bytes))
         ts = struct.pack(">d", time.time())
-        nonce = _os_mod.urandom(32)
+        # Through the health-tested draw, like the real TSA nonce at the bottom
+        # of this file.  It is an HMAC KEY — `_hmac_sha256(nonce, payload)` is
+        # the token's integrity tag — so a stuck DRBG makes every mock token
+        # forgeable by anyone who has seen one.  Written as `_os_mod.urandom`,
+        # it was also the one bare draw in the shipped package that
+        # tests/test_invariant41_rng_sweep.py could not see: the sweep matched
+        # the dotted SPELLING `os.urandom`, and this module imports
+        # `os as _os_mod`.
+        nonce = secure_token_bytes(32)
 
         payload = _MOCK_MAGIC + algo_len + algo_bytes + ts + data_hash
         # S3 fix: Use HMAC instead of raw SHA-256(nonce || payload) to

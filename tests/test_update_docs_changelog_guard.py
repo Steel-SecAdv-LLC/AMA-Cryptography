@@ -402,3 +402,130 @@ class TestStaticTestCountRegenerator:
         counts = update_docs._counts_module()
         problems = counts.check_aggregate_test_counts(REPO_ROOT)
         assert problems == [], problems
+
+
+class TestThePublishedBenchmarkTableTracksTheRecord:
+    """`wiki/Performance-Benchmarks.md`'s auto-table must match the record.
+
+    `benchmark-report.md` has this pin (``test_the_published_report_matches_
+    the_generator`` in tests/test_benchmark_baseline_infra.py), and it is what
+    caught a rounding disagreement between the two published artefacts.  The
+    WIKI page — the performance page README links, and the one an outside
+    reader is most likely to quote — had none: it is written only by
+    ``update_benchmark_docs``, nothing re-derived it, and a stale block or a
+    deleted marker pair was invisible.
+
+    The marker check is not decoration.  ``update_benchmark_docs`` substitutes
+    between ``BENCH_START`` and ``BENCH_END``; delete either and the function
+    silently stops writing the page while still exiting 0.
+    """
+
+    WIKI = REPO_ROOT / "wiki" / "Performance-Benchmarks.md"
+
+    def _block(self) -> str:
+        text = self.WIKI.read_text(encoding="utf-8")
+        assert update_docs.BENCH_START in text, (
+            f"{self.WIKI.name} has lost its {update_docs.BENCH_START} marker; "
+            f"update_docs.update_benchmark_docs() would stop maintaining the "
+            f"published table without reporting anything"
+        )
+        assert update_docs.BENCH_END in text, (
+            f"{self.WIKI.name} has lost its {update_docs.BENCH_END} marker; "
+            f"same consequence as a missing START marker"
+        )
+        start = text.index(update_docs.BENCH_START) + len(update_docs.BENCH_START)
+        end = text.index(update_docs.BENCH_END)
+        return text[start:end].strip("\n")
+
+    def test_the_committed_block_is_what_the_generator_emits(self) -> None:
+        expected = update_docs._generate_benchmark_table()
+        assert expected, "the generator produced no table from the committed results JSON"
+        assert self._block() == expected, (
+            "wiki/Performance-Benchmarks.md's AUTO-BENCHMARK-TABLE block is not what "
+            "tools/update_docs.py emits from benchmarks/benchmark-results.json; "
+            "regenerate it with `python tools/update_docs.py` rather than editing it"
+        )
+
+    def test_the_generator_reads_the_measurement_record_not_the_floors(self) -> None:
+        """The headline column must be the measured run, not baseline.json.
+
+        Before 3.0.1 this generator pointed at ``baseline.json`` and published
+        the regression FLOORS as headline throughput. The two files carry
+        different numbers for the same primitive, so reading one row back
+        against both is enough to say which one the table came from.
+        """
+        import json
+
+        results = json.loads(
+            (REPO_ROOT / "benchmarks" / "benchmark-results.json").read_text(encoding="utf-8")
+        )
+        block = self._block()
+        row = next(r for r in results["results"] if r["ops_per_second"] >= 10_000)
+        assert (
+            f"| {row['ops_per_second']:,.0f} |" in block
+        ), f"{row['name']}'s measured throughput is not in the published table"
+
+
+class TestTheBenchmarkStatusLineSaysWhatHappened:
+    """ "Already current" and "no markers found" are different outcomes.
+
+    ``update_benchmark_docs`` printed the second for both, because the message
+    was keyed to ``changed`` rather than to whether any file carried the
+    markers.  A run over an up-to-date tree therefore reported that the
+    AUTO-BENCHMARK-TABLE markers could not be found, in a tree where
+    `wiki/Performance-Benchmarks.md` carries them — and a genuinely DELETED
+    marker pair, which silently stops the published table tracking the
+    measurements, read exactly like that no-op.
+    """
+
+    @staticmethod
+    def _tree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, body: str) -> None:
+        import json
+
+        (tmp_path / "benchmarks").mkdir()
+        results = tmp_path / "benchmarks" / "benchmark-results.json"
+        results.write_text(
+            json.dumps(
+                {
+                    "provenance": {"captured": "2026-01-01", "host": "h", "cpu": "c"},
+                    "results": [
+                        {
+                            "name": "row_one",
+                            "ops_per_second": 12345.0,
+                            "baseline_value": 10000,
+                            "tolerance_percent": 45,
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        (tmp_path / "benchmarks" / "baseline.json").write_text("{}", encoding="utf-8")
+        (tmp_path / "page.md").write_text(body, encoding="utf-8")
+        monkeypatch.setattr(update_docs, "ROOT", tmp_path)
+        monkeypatch.setattr(update_docs, "BENCHMARK_RESULTS_JSON", results)
+        monkeypatch.setattr(update_docs, "BASELINE_JSON", tmp_path / "benchmarks" / "baseline.json")
+
+    def test_an_up_to_date_page_is_not_reported_as_missing_markers(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        self._tree(
+            tmp_path,
+            monkeypatch,
+            f"{update_docs.BENCH_START}\nplaceholder\n{update_docs.BENCH_END}\n",
+        )
+        assert update_docs.update_benchmark_docs() is True  # first run rewrites it
+        capsys.readouterr()
+
+        assert update_docs.update_benchmark_docs() is False  # second run is a no-op
+        out = capsys.readouterr().out
+        assert "already match" in out, out
+        assert "no files with AUTO-BENCHMARK-TABLE markers found" not in out, out
+
+    def test_a_page_without_markers_still_says_so(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        self._tree(tmp_path, monkeypatch, "no markers here\n")
+        assert update_docs.update_benchmark_docs() is False
+        out = capsys.readouterr().out
+        assert "no files with AUTO-BENCHMARK-TABLE markers found" in out, out

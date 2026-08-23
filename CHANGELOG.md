@@ -2992,7 +2992,8 @@ both classes**, so the true effect is exactly zero: placing class 0's key
 across two cache lines drives |t| to 13.5–30.9, over threshold in 10 of 10
 runs, all positive. Staged through one shared buffer the same measurement
 reports 0 of 10. Every lane now copies the selected class's input into a
-single cache-line-aligned buffer (`dudect_stage()`) before the timed call, so
+single cache-line-aligned buffer (`dudect_stage_select()`, in
+`tests/c/dudect/dudect_stage.h`) before the timed call, so
 the classes differ in data and not in address; the tag-compare lanes use the
 stronger single-reused-probe form. This is not a new idea in the tree — the
 AES-GCM tag-compare lane was fixed for this exact defect and carries a comment

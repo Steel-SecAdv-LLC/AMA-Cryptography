@@ -267,9 +267,19 @@ difference of roughly 0.2 ns — under half a cycle at 2.1 GHz.
    buffer, and hand the timed call that buffer.  Both classes then present
    the same address and the same alignment, and only the data differs.  The
    copy is identical work for both classes and happens outside the timed
-   region.  `dudect_stage()` in `tests/c/dudect/dudect.h` is the helper; it
-   is used by every lane in `tests/c/test_dudect.c` and by the keyed lanes
-   in `tools/constant_time/dudect_crypto.c`.
+   region.  `dudect_stage_select(dst, src0, src1, len, class_idx)` in
+   `tests/c/dudect/dudect_stage.h` is the helper; it is used by every lane
+   that feeds a buffer to the timed call, in `tests/c/test_dudect.c` and by
+   the keyed lanes in `tools/constant_time/dudect_crypto.c`.
+
+   These two lines used to name `dudect_stage()` in `dudect.h`.  No such
+   symbol exists, and the three-argument `dudect_stage(dst, src, len)` shape
+   they described is the construction this file's own headers document as
+   UNSAFE: copying only the selected class's bytes makes the SOURCE address
+   class-correlated, which is the leak the staging exists to remove.  The
+   five-argument form reads both sources every iteration and merges them
+   under a constant-time mask; `tools/check_dudect_class_staging.py` refuses
+   the one-source form outright.
 
 Sensitivity is untouched by point 4: a data-dependent leak follows the data,
 which still differs by class.  For compare-style primitives the equivalent —
@@ -356,9 +366,13 @@ is not merely absent for these two primitives, it is *impossible*: the code
 does a different amount of work by design, so a target that demanded equality
 would fail on a correct implementation. `ML-DSA-65 sign` and
 `SLH-DSA-SHA2-256f sign` are consequently the only two info-only wall-clock
-lanes in `tests/c/test_dudect.c` with no blocking counterpart in
-`tools/check_ghash_constant_time.py`, and that is stated rather than left to
-be inferred from a flag.
+lanes in `tests/c/test_dudect.c` whose blocking counterpart in
+`tools/check_ghash_constant_time.py` is IMPOSSIBLE rather than unwanted, and
+that is stated rather than left to be inferred from a flag.  There are three
+such lanes without a counterpart: the table below lists `Ed25519 verify` as
+the third, with "**none, and none is wanted**" — a different reason, and the
+sentence used to say "the only two ... with no blocking counterpart", which
+the table it introduces contradicts five lines later.
 
 `tests/c/test_dudect.c` registers **eight** info-only lanes, and here is every
 one of them with its counterpart, because a paragraph that lists some of them

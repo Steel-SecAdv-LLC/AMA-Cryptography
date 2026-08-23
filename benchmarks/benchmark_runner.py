@@ -48,7 +48,7 @@ import subprocess
 import sys
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, cast
@@ -69,6 +69,34 @@ class BenchmarkResult:
     regression_percent: float
     passed: bool
     optional: bool = False
+
+
+#: Decimal places every PUBLISHED measurement is quantised to.
+PUBLISHED_DECIMALS = 2
+
+
+def published(value: float) -> float:
+    """The quantised measurement both published records carry.
+
+    ``benchmarks/benchmark-results.json`` is the machine-readable authority and
+    stores ``round(x, PUBLISHED_DECIMALS)``; ``benchmark-report.md`` displays
+    FEWER digits than that.  So the table must format the quantised value, not
+    the raw one — otherwise the two artefacts disagree wherever the two
+    roundings do, and the markdown is no longer what the generator produces
+    from the JSON beside it.
+
+    Measured, on the record this repaired: `hkdf_derive`'s regression was
+    6.7477%.  The table formatted the raw value and rendered `+6.7%`; the JSON
+    stored `6.75`, from which the same generator renders `+6.8%`.  The published
+    pair contradicted itself by one displayed digit, and
+    `TestTheReportDoesNotInvertItsOwnColumn::test_the_published_report_matches_
+    the_generator` is what caught it.
+
+    Applied at the RENDERING boundary only.  The pass/fail decision
+    (`regression <= tolerance`) stays on the raw value, because a gate must not
+    move because a number was formatted.
+    """
+    return round(value, PUBLISHED_DECIMALS)
 
 
 def load_baseline(baseline_path: Path) -> Dict[str, Any]:
@@ -402,19 +430,40 @@ def benchmark_operation(
             completed = 0
             best = 0.0
 
-    if best > 0.0:
+    if completed >= rounds and best > 0.0:
         return best
-    if observed > 0.0 and observed != float("inf"):
-        return observed
-    # Every attempt timed as zero.  That is a broken clock rather than a fast
-    # operation, and a number this function cannot stand behind must not be
-    # returned as if it could — the JSON writer below refuses non-finite
-    # values for the same reason.
+
+    # Everything below is a failure to MEASURE, and every one of them used to
+    # return a number anyway.
+    #
+    # `if best > 0.0: return best` returned after fewer than `rounds`
+    # completed batches, and `if observed > 0.0: return observed` returned the
+    # rate of an UNDER-TARGET batch — which this function's own docstring
+    # forbids in as many words: "Only full-window batches are eligible to be
+    # reported. An undersized batch can report a lucky-high rate off a very
+    # short window, and since the baselines this feeds are *floors*, an
+    # inflated number makes the gate weaker."  A short window is exactly where
+    # a lucky-high rate comes from, so the fallback delivered the failure mode
+    # the paragraph above it describes.
+    if observed <= 0.0 or observed == float("inf"):
+        # Every attempt timed as zero.  That is a broken clock rather than a
+        # fast operation, and a number this function cannot stand behind must
+        # not be returned as if it could — the JSON writer below refuses
+        # non-finite values for the same reason.
+        raise RuntimeError(
+            "benchmark_operation could not obtain a measurable batch: every timed "
+            "batch reported zero elapsed time, up to "
+            f"{_MAX_ITERATIONS} iterations. The monotonic clock is not resolving "
+            "this operation."
+        )
     raise RuntimeError(
-        "benchmark_operation could not obtain a measurable batch: every timed "
-        "batch reported zero elapsed time, up to "
-        f"{_MAX_ITERATIONS} iterations. The monotonic clock is not resolving "
-        "this operation."
+        f"benchmark_operation completed {completed} of {rounds} full-window "
+        f"batches within {rounds + _MAX_SIZING_ATTEMPTS} attempts (batch size "
+        f"reached {batch:,}, fastest observed rate {observed:,.1f} ops/sec). "
+        "Reporting the fastest UNDER-TARGET batch instead would publish a rate "
+        "off a window shorter than the sampling rule requires, and these "
+        "numbers feed regression FLOORS: an inflated one makes the gate weaker. "
+        "Re-run on a quieter host, or raise the sampling budget."
     )
 
 
@@ -1072,9 +1121,9 @@ def generate_report(results: List[BenchmarkResult]) -> Dict[str, Any]:
             {
                 "name": r.name,
                 "description": r.description,
-                "ops_per_second": round(r.ops_per_second, 2),
+                "ops_per_second": published(r.ops_per_second),
                 "baseline_value": r.baseline_value,
-                "regression_percent": round(r.regression_percent, 2),
+                "regression_percent": published(r.regression_percent),
                 "tolerance_percent": r.tolerance_percent,
                 "passed": r.passed,
                 "optional": r.optional,
@@ -1280,6 +1329,19 @@ def _provenance() -> "list[tuple[str, str]]":
 
 def generate_markdown_report(results: List[BenchmarkResult], report: Dict[str, Any]) -> str:
     """Generate a markdown report with tables and bar chart."""
+    # Render from the PUBLISHED (quantised) measurements, so this page is a
+    # pure function of the JSON record beside it — see published().  Every
+    # subsequent use of `results` in this function, the table and the bar chart
+    # alike, therefore reads the same numbers a reader regenerating from
+    # benchmarks/benchmark-results.json would.
+    results = [
+        replace(
+            r,
+            ops_per_second=published(r.ops_per_second),
+            regression_percent=published(r.regression_percent),
+        )
+        for r in results
+    ]
     lines = []
     lines.append("# Benchmark Regression Report")
     lines.append("")

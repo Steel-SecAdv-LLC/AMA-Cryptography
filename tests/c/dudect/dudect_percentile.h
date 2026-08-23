@@ -131,6 +131,10 @@
  * callers must treat it as "no measurement", never as a pass. */
 #define DUDECT_CROP_FAILED (-1.0e308)
 
+/* `usable_rungs` value meaning "the crop sweep did not run", as distinct from
+ * "it ran and no rung was usable" (0).  Negative so no rung count collides. */
+#define DUDECT_CROP_RUNGS_UNRUN (-1)
+
 typedef struct {
     double *sample[2];
     size_t n[2];
@@ -157,7 +161,52 @@ typedef struct {
      * 20 ns leak without re-running anything. */
     double winning_delta;
     double winning_sd;
+    /* The UNCROPPED (rung 0) mean difference and its standard deviation,
+     * retained alongside the winning rung's.
+     *
+     * `winning_delta` is the difference AFTER cropping, and the verdict rule
+     * gates on it: dudect_lane_verdict() returns DUDECT_LANE_SUB_FLOOR — which
+     * does not fail the build — when |delta| < DUDECT_MIN_EFFECT_NS.  So a
+     * TAIL-BORNE leak, one whose whole effect lives in the samples cropping
+     * removes, could exceed the floor uncropped and be adjudicated on a
+     * cropped difference below it.
+     *
+     * This header already applies a "never less sensitive than uncropped" rule
+     * to the STATISTIC — rung 0 is retained and the max is taken over it —
+     * precisely because cropping can hide a tail effect.  The effect SIZE now
+     * gets the same rule, via dudect_cropped_effect_delta(). */
+    double uncropped_delta;
+    double uncropped_sd;
+    /* How many cropped rungs met DUDECT_CROP_MIN_PER_CLASS on both classes,
+     * or DUDECT_CROP_RUNGS_UNRUN when the sweep did not run at all.
+     *
+     * Zero means the reported statistic IS the uncropped Welch t and nothing
+     * else — the cropping this header exists for did not happen.  That is not
+     * hypothetical: a lane capped at 256 measurements splits to about 128 per
+     * class, and every crop keeps strictly fewer than the full class, so no
+     * rung can reach the 128-sample floor.  Without this counter the lane
+     * printed the same line as every other and dudect.h claimed "it runs the
+     * same statistic as the other two harnesses now".
+     *
+     * The negative sentinel is separate because the two causes call for
+     * different actions: zero is "this budget cannot support cropping, raise
+     * the measurement count", while the sentinel is "the crop buffers could
+     * not be allocated on this host".  Reporting the sample floor as the
+     * reason for an allocation failure would be a diagnosis the code has not
+     * established. */
+    int usable_rungs;
 } dudect_cropped_ctx_t;
+
+/* The lane's EFFECT SIZE: whichever of the uncropped and winning-rung mean
+ * differences is larger in magnitude, sign preserved.
+ *
+ * Same rule the maximum over rungs applies to the t statistic, for the same
+ * reason: a rung is an alternative view of the same data, and the verdict must
+ * not be less sensitive than the least aggressive of them. */
+static inline double dudect_cropped_effect_delta(const dudect_cropped_ctx_t *ctx) {
+    return (fabs(ctx->uncropped_delta) > fabs(ctx->winning_delta)) ? ctx->uncropped_delta
+                                                                  : ctx->winning_delta;
+}
 
 /* Welch's t over two explicit arrays.  Returns 0.0 when the statistic is not
  * defined (too few samples, or a standard error indistinguishable from zero),
@@ -228,6 +277,9 @@ static inline int dudect_cropped_init(dudect_cropped_ctx_t *ctx, size_t capacity
     ctx->winning_kept[0] = ctx->winning_kept[1] = 0;
     ctx->winning_delta = 0.0;
     ctx->winning_sd = 0.0;
+    ctx->uncropped_delta = 0.0;
+    ctx->uncropped_sd = 0.0;
+    ctx->usable_rungs = 0;
     /* Full capacity per class: class assignment is random, so either class
      * can take every sample.  Sizing each at half the total would make a
      * legitimate run overflow and silently drop measurements. */
@@ -293,6 +345,10 @@ static inline double dudect_cropped_compute(dudect_cropped_ctx_t *ctx) {
     ctx->winning_kept[1] = n1;
     ctx->winning_delta = best_delta;
     ctx->winning_sd = best_sd;
+    /* Kept for the whole run, whatever rung later wins the t maximum. */
+    ctx->uncropped_delta = best_delta;
+    ctx->uncropped_sd = best_sd;
+    ctx->usable_rungs = 0;
 
     size_t np = n0 + n1;
     double *pooled = (double *)malloc(np * sizeof(double));
@@ -308,6 +364,7 @@ static inline double dudect_cropped_compute(dudect_cropped_ctx_t *ctx) {
         fprintf(stderr,
                 "  dudect: cropping skipped (out of memory); reporting the "
                 "uncropped statistic only\n");
+        ctx->usable_rungs = DUDECT_CROP_RUNGS_UNRUN;
         return best;
     }
 
@@ -348,6 +405,7 @@ static inline double dudect_cropped_compute(dudect_cropped_ctx_t *ctx) {
         if (k0 < DUDECT_CROP_MIN_PER_CLASS || k1 < DUDECT_CROP_MIN_PER_CLASS) {
             continue;
         }
+        ctx->usable_rungs++;
         double rung_delta = 0.0, rung_sd = 0.0;
         double t = dudect_crop_welch_ex(keep0, k0, keep1, k1, &rung_delta, &rung_sd);
         if (fabs(t) > fabs(best)) {
@@ -481,6 +539,46 @@ static inline int dudect_cropped_self_test(void) {
         dudect_cropped_free(&ctx);
     } else {
         ok &= dudect_crop_case("tail-only context allocates", 0);
+    }
+
+    /* 3b. The EFFECT SIZE must be no less sensitive than the uncropped one.
+     *
+     *     A cropped rung wins the t maximum (a clean 1.0-unit bulk shift, low
+     *     variance once the tail is gone) while the UNCROPPED mean difference
+     *     is two orders of magnitude larger, because only class 0 carries a
+     *     rare 8000-unit tail.
+     *
+     *     This is the shape that made the floor unsound.  The verdict rule
+     *     gates on the reported delta — |delta| < DUDECT_MIN_EFFECT_NS is
+     *     SUB_FLOOR, which does NOT fail the build — and `winning_delta` is
+     *     the difference AFTER cropping.  Reporting it alone hands the verdict
+     *     the small number while the lane's real per-class difference is the
+     *     large one.  Same "never less sensitive than uncropped" rule this
+     *     header already applies to t, applied to the effect size. */
+    if (dudect_cropped_init(&ctx, N)) {
+        for (size_t i = 0; i < N; i++) {
+            int c = (int)(dudect_crop_test_uniform(&rng) * 2.0) & 1;
+            double v = 100.0 + dudect_crop_test_uniform(&rng) * 4.0 - (c ? 1.0 : 0.0);
+            if (!c && dudect_crop_test_uniform(&rng) < 0.02) {
+                v += 8000.0; /* only class 0 has this tail */
+            }
+            dudect_cropped_update(&ctx, c, v);
+        }
+        (void)dudect_cropped_compute(&ctx);
+        ok &= dudect_crop_case("a cropped rung wins the statistic", ctx.winning_rung > 0);
+        ok &= dudect_crop_case("...with a small CROPPED effect size",
+                               fabs(ctx.winning_delta) < 5.0);
+        ok &= dudect_crop_case("...and a large UNCROPPED one",
+                               fabs(ctx.uncropped_delta) > 50.0);
+        ok &= dudect_crop_case("...and the reported effect size is the larger",
+                               fabs(dudect_cropped_effect_delta(&ctx))
+                                   > fabs(ctx.winning_delta));
+        ok &= dudect_crop_case(
+            "...which is the uncropped difference",
+            fabs(dudect_cropped_effect_delta(&ctx) - ctx.uncropped_delta) < 1e-12);
+        dudect_cropped_free(&ctx);
+    } else {
+        ok &= dudect_crop_case("tail-asymmetric context allocates", 0);
     }
 
     /* 4. The 267c16c failure mode: a rung that keeps too few samples must be

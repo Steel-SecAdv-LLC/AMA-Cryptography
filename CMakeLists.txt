@@ -248,6 +248,28 @@ if(AMA_ENABLE_SANITIZERS AND NOT MSVC)
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=address,undefined -fno-omit-frame-pointer")
     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fsanitize=address,undefined")
     set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -fsanitize=address,undefined")
+
+    # ...and take -fomit-frame-pointer back OUT of the per-config flags.
+    #
+    # CMake emits `${CMAKE_C_FLAGS} ${CMAKE_C_FLAGS_<CONFIG>}` in that order,
+    # and GCC/Clang resolve conflicting -f options last-one-wins.  The Release
+    # block above appends `-fomit-frame-pointer`, so it landed AFTER the
+    # `-fno-omit-frame-pointer` set here and cancelled it — in exactly the
+    # "test what you ship" Release configuration the move to CMAKE_C_FLAGS was
+    # made for.  Without frame pointers ASan/UBSan still detect, but their
+    # stack traces degrade to the unwinder's best guess, which is the half of a
+    # sanitizer report a human uses.
+    #
+    # Stripped rather than re-appended, so there is one flag on the line and no
+    # dependence on the order two blocks happen to run in.
+    foreach(_ama_san_config C_FLAGS_RELEASE C_FLAGS_RELWITHDEBINFO C_FLAGS_MINSIZEREL
+                            CXX_FLAGS_RELEASE CXX_FLAGS_RELWITHDEBINFO CXX_FLAGS_MINSIZEREL)
+        string(REPLACE "-fomit-frame-pointer" "" _ama_san_stripped
+               "${CMAKE_${_ama_san_config}}")
+        set(CMAKE_${_ama_san_config} "${_ama_san_stripped}")
+    endforeach()
+    unset(_ama_san_stripped)
+    unset(_ama_san_config)
 endif()
 
 # Fuzzing instrumentation.

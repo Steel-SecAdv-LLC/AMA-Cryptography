@@ -120,19 +120,19 @@
     },
     {
       "type": "library",
-      "name": "ama_secp256k1",
-      "version": "5.0.0",
-      "description": "secp256k1 elliptic curve operations",
-      "scope": "required",
-      "purl": "pkg:generic/ama_secp256k1@5.0.0"
-    },
-    {
-      "type": "library",
       "name": "ama_pbkdf2",
       "version": "5.0.0",
       "description": "PBKDF2-HMAC-SHA256/512 key derivation (NIST SP 800-132)",
       "scope": "required",
       "purl": "pkg:generic/ama_pbkdf2@5.0.0"
+    },
+    {
+      "type": "library",
+      "name": "ama_secp256k1",
+      "version": "5.0.0",
+      "description": "secp256k1 elliptic curve operations",
+      "scope": "required",
+      "purl": "pkg:generic/ama_secp256k1@5.0.0"
     },
     {
       "type": "library",

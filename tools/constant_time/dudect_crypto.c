@@ -142,7 +142,10 @@ static dudect_measurement_t ttest_finish(ttest_ctx_t *ctx, const char *name) {
     int rung = ctx->winning_rung;
     size_t kept0 = ctx->winning_kept[0], kept1 = ctx->winning_kept[1];
     size_t total0 = ctx->n[0], total1 = ctx->n[1];
-    double delta = ctx->winning_delta;
+    /* The larger of the uncropped and winning-rung differences: the
+     * verdict gates on this, and cropping can remove the samples a
+     * tail-borne leak lives in.  See dudect_cropped_effect_delta(). */
+    double delta = dudect_cropped_effect_delta(ctx);
     dudect_cropped_free(ctx);
 
     if (t == DUDECT_CROP_FAILED) {

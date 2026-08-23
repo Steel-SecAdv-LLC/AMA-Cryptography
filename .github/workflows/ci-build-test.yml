@@ -811,9 +811,10 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c  # v4.2.0
         with:
-          # The base-image pulls (ubuntu:22.04, alpine:3.18) happen INSIDE the
-          # BuildKit container, which does not share the runner's local image
-          # cache — so the host-side pre-pull above cannot cover them, and
+          # The base-image pulls (the Dockerfiles' `FROM` bases, all
+          # digest-pinned) happen INSIDE the BuildKit container, which does
+          # not share the runner's local image cache — so the host-side
+          # pre-pull above cannot cover them, and
           # they were the part of this job still exposed to unauthenticated
           # Docker Hub. Docker Hub timeouts blocked PR #370 three times in one
           # day, all of them here.

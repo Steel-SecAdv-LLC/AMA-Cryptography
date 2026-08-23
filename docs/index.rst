@@ -81,6 +81,21 @@ Installation
 
 Install from a git tag — the primary channel, reproducible and index-free:
 
+.. note::
+
+   ``v5.0.0`` **is not tagged yet.**  ``CHANGELOG.md`` heads its section
+   ``[5.0.0] - Unreleased``, and the newest published tag is ``v4.0.0``.  The
+   command below resolves only for tags that exist, so until the release is
+   tagged, substitute the newest published tag, ``v4.0.0``, or install from a
+   source checkout as shown underneath.  (Written without the ``@`` on
+   purpose: ``tools/check_version_consistency.py`` requires every ``@vX.Y.Z``
+   git-tag pin in an ``.rst`` under ``docs/`` to name the canonical version,
+   and a prose substitution spelled as a pin is indistinguishable from the
+   stale-pin defect that gate exists to catch.)  ``README.md`` carries this
+   same warning above its identical
+   command; this page did not, which is how the two entry-point documents came
+   to disagree about whether the release exists.
+
 .. code-block:: bash
 
    pip install "git+https://github.com/Steel-SecAdv-LLC/AMA-Cryptography.git@v5.0.0"

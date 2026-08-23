@@ -209,12 +209,35 @@ def _guard_expression(guard: str) -> str:
     return parts[2] if len(parts) == 3 else guard
 
 
+#: Committed seed corpora, one directory per target.
+SEED_CORPUS_ROOT = REPO_ROOT / "fuzz" / "seed_corpus"
+
+
+def largest_seed(target: str) -> int:
+    """The size of `target`'s largest committed seed, or 0 if it has none.
+
+    libFuzzer applies ``-max_len`` to CORPUS FILES as well as to mutations: a
+    seed longer than the ceiling enters the in-memory corpus TRUNCATED.  The
+    ceiling was derived from the deepest guard alone, and the PQC verify seeds
+    are built as ``1 + bound + MESSAGE_BYTES`` — 5,278 and 49,937 bytes —
+    against derived ceilings of 5,263 and 49,922.  Every seed the corpus
+    builder writes for those two targets was therefore truncated on load, by
+    15 bytes, landing just short of the branch it was constructed to reach.
+    That is the same defect the ceiling derivation was introduced to fix,
+    reintroduced from the other side.
+    """
+    directory = SEED_CORPUS_ROOT / target
+    if not directory.is_dir():
+        return 0
+    return max((path.stat().st_size for path in directory.glob("*") if path.is_file()), default=0)
+
+
 def max_len_for(target: str) -> int:
     harness = FUZZ_DIR / f"{target}.c"
     if not harness.is_file():
         raise FileNotFoundError(harness)
     required, _ = _bound_for(harness)
-    return max(DEFAULT_MAX_LEN, required)
+    return max(DEFAULT_MAX_LEN, required, largest_seed(target))
 
 
 def _workflow_derives_its_ceiling() -> list[str]:
@@ -261,7 +284,7 @@ def main(argv: list[str] | None = None) -> int:
             return 2
 
         problems: list[str] = []
-        rows: list[tuple[str, int, int]] = []
+        rows: list[tuple[str, int, int, int]] = []
         for harness in harnesses:
             required, unresolved = _bound_for(harness)
             for guard in unresolved:
@@ -271,15 +294,20 @@ def main(argv: list[str] | None = None) -> int:
                     f"is obtained — a guard this gate skips is a branch that can go "
                     f"unreachable unnoticed."
                 )
-            ceiling = max(DEFAULT_MAX_LEN, required)
-            rows.append((harness.stem, required, ceiling))
+            # The ceiling the LANE uses, which is what max_len_for returns —
+            # the deepest guard AND the largest committed seed.  The table
+            # printed max(DEFAULT_MAX_LEN, required), so it reported a number
+            # the workflow does not pass.
+            seed = largest_seed(harness.stem)
+            ceiling = max(DEFAULT_MAX_LEN, required, seed)
+            rows.append((harness.stem, required, seed, ceiling))
 
         problems.extend(_workflow_derives_its_ceiling())
 
-        print(f"{'target':<24}{'deepest guard':>15}{'-max_len':>12}")
-        for name, required, ceiling in rows:
+        print(f"{'target':<24}{'deepest guard':>15}{'largest seed':>14}{'-max_len':>12}")
+        for name, required, seed, ceiling in rows:
             marker = "  <- raised" if ceiling > DEFAULT_MAX_LEN else ""
-            print(f"{name:<24}{required:>15,}{ceiling:>12,}{marker}")
+            print(f"{name:<24}{required:>15,}{seed:>14,}{ceiling:>12,}{marker}")
 
         if problems:
             print("\nFUZZ INPUT REACHABILITY CHECK FAILED:", file=sys.stderr)

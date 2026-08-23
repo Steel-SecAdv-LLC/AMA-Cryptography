@@ -63,15 +63,39 @@ def test_the_two_known_deep_targets_are_above_the_floor(gate: ModuleType) -> Non
     """
     assert gate.max_len_for("fuzz_dilithium") > gate.DEFAULT_MAX_LEN
     assert gate.max_len_for("fuzz_sphincs") > gate.DEFAULT_MAX_LEN
+
+    # The GUARD-derived part, which is what this test was written for.
     # 3,309 signature + 1,952 public key + 1 selector byte, past a `<` guard.
-    assert gate.max_len_for("fuzz_dilithium") == 3309 + 1952 + 1 + 1
+    required_dilithium, _ = gate._bound_for(gate.FUZZ_DIR / "fuzz_dilithium.c")
+    assert required_dilithium == 3309 + 1952 + 1 + 1
     # 49,856 signature + 64 public key + 1 selector byte, past a `<` guard.
-    assert gate.max_len_for("fuzz_sphincs") == 49856 + 64 + 1 + 1
+    required_sphincs, _ = gate._bound_for(gate.FUZZ_DIR / "fuzz_sphincs.c")
+    assert required_sphincs == 49856 + 64 + 1 + 1
+
+    # And the CEILING is the larger of that and the committed corpus, because
+    # libFuzzer applies -max_len to corpus files as well as to mutations.  The
+    # PQC verify seeds are `1 + bound + MESSAGE_BYTES`, 15 bytes past the
+    # guard-derived ceiling, so every one of them used to be truncated on load
+    # — landing just short of the branch it was built to reach.
+    assert gate.max_len_for("fuzz_dilithium") == required_dilithium + 15
+    assert gate.max_len_for("fuzz_sphincs") == required_sphincs + 15
 
 
 def test_a_shallow_target_keeps_the_floor(gate: ModuleType) -> None:
-    """Raising one ceiling must not lower another."""
-    assert gate.max_len_for("fuzz_sha3") == gate.DEFAULT_MAX_LEN
+    """Raising one ceiling must not lower another.
+
+    `fuzz_sha3` is the shallow-guard case (its deepest guard is 3 bytes), and
+    it does NOT sit at the floor: its committed corpus holds a 4,491-byte seed,
+    395 bytes past DEFAULT_MAX_LEN, so that seed was being truncated too.  The
+    seed rule found a third instance of the same defect the PQC corpus has.
+    """
+    required, _ = gate._bound_for(gate.FUZZ_DIR / "fuzz_sha3.c")
+    assert required < gate.DEFAULT_MAX_LEN, required
+    assert gate.max_len_for("fuzz_sha3") == gate.largest_seed("fuzz_sha3")
+    assert gate.max_len_for("fuzz_sha3") > gate.DEFAULT_MAX_LEN
+
+    # A target with a shallow guard AND no oversized seed does sit at the floor.
+    assert gate.max_len_for("fuzz_consttime") == gate.DEFAULT_MAX_LEN
 
 
 def test_every_harness_is_examined(gate: ModuleType) -> None:
@@ -346,3 +370,38 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
         assert unresolved, "the manual bound silenced a guard its reason never mentions"
         assert any("A_SECOND_UNKNOWN_MACRO" in guard for guard in unresolved), unresolved
         assert not any("DECLARED_IN_THE_REASON" in guard for guard in unresolved), unresolved
+
+
+class TestTheCeilingCoversTheCommittedSeeds:
+    """libFuzzer applies -max_len to CORPUS FILES, not only to mutations.
+
+    The ceiling was derived from the deepest guard alone.  The PQC verify
+    seeds are built as `1 + bound + MESSAGE_BYTES` — 5,278 and 49,937 bytes —
+    against derived ceilings of 5,263 and 49,922, so EVERY seed the corpus
+    builder writes for those two targets was truncated on load, by 15 bytes,
+    landing just short of the branch it was constructed to reach.  Same defect
+    the derivation was introduced to fix, from the other side.
+    """
+
+    @pytest.mark.parametrize("target", ["fuzz_dilithium", "fuzz_sphincs"])
+    def test_no_committed_seed_is_truncated(self, gate: ModuleType, target: str) -> None:
+        largest = gate.largest_seed(target)
+        assert largest > 0, f"{target} has no committed seed corpus; this case has no subject"
+        assert gate.max_len_for(target) >= largest, (
+            f"{target}'s -max_len is below its largest seed, so libFuzzer " f"truncates it on load"
+        )
+
+    def test_every_target_with_a_corpus_covers_it(self, gate: ModuleType) -> None:
+        checked = 0
+        for harness in gate._harnesses():
+            target = harness.stem
+            largest = gate.largest_seed(target)
+            if largest == 0:
+                continue
+            checked += 1
+            assert gate.max_len_for(target) >= largest, target
+        assert checked >= 2, "the seed-corpus sweep found nothing to check"
+
+    def test_a_target_without_a_corpus_is_unaffected(self, gate: ModuleType) -> None:
+        """The control: the seed rule must not raise a ceiling on its own."""
+        assert gate.largest_seed("fuzz_no_such_target") == 0

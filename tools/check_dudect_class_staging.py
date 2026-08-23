@@ -212,7 +212,15 @@ _STAGE_DECL = re.compile(
 # with no qualification ("every staging buffer").  The destinations there do
 # carry `_Alignas(64)` today, so nothing was broken; the RULE was simply not
 # enforced, and an unaligned one added tomorrow would have passed.
-_STAGE_CALL_DEST = re.compile(r"\bdudect_stage(?:_select)?\s*\(\s*(?P<dest>\w+)\s*,")
+#: The `&` and any parentheses are OPTIONAL.  Requiring a bare identifier meant
+#: `dudect_stage_select(&b_stage, &good, &bad, sizeof b_stage, class_idx)` —
+#: the form the agent-binding lane uses to stage a struct — never matched, so
+#: Rule 1 examined ZERO destinations for that call.  Rule 1 exists specifically
+#: to stop the alignment check depending on the `*_stage` naming convention;
+#: a spelling it cannot parse puts it back where it started, silently.
+_STAGE_CALL_DEST = re.compile(
+    r"\bdudect_stage(?:_select)?\s*\(\s*\(?\s*&?\s*(?P<dest>\w+)\s*[,)\]]"
+)
 
 # Any declaration at all, so a destination that has one can be told apart from
 # a destination that is a function parameter or a file-scope symbol declared
@@ -357,7 +365,31 @@ def check_text(text: str, path: str) -> list[str]:
             f"call. The gate cannot establish where the measured region begins, "
             f"so it refuses to report the file clean."
         )
+
     return violations
+
+
+def class_draw_count(text: str) -> int:
+    """How many class-draw windows this gate recognises in `text`.
+
+    `main` asserts this is non-zero for every governed harness, because a file
+    in which the gate recognised NOTHING is not a clean file.
+    `_CLASS_DRAW` is keyed to the literal identifier `class_idx`, and so are
+    `_CLASS_USE`, `_CLASS_BRANCH` and `_STAGE_SELECT`; a harness that names its
+    class variable anything else opens no window, produces no violations, and
+    was printed as "every lane reaches its timer with no class-dependent branch
+    or address selection in front of it" — over a file the gate had not read a
+    single lane of.  `main` counted FILES examined, never lanes, and the exit
+    contract failed closed for a missing file and for a draw with no timer, but
+    not for this.
+
+    Kept out of `check_text` deliberately: that function is a statement-level
+    checker applied to synthetic snippets in the test suite as well as to whole
+    harnesses, and a snippet with no class draw is a legitimate input to it.
+    The coverage floor belongs where the coverage CLAIM is made.
+    """
+    stripped = _strip_block_comments(text)
+    return len(_CLASS_DRAW.findall(stripped))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -376,13 +408,24 @@ def main(argv: list[str] | None = None) -> int:
 
     all_violations: list[str] = []
     examined = 0
+    examined_lanes = 0
     for rel in HARNESS_FILES:
         path = root / rel
         if not path.is_file():
             print(f"FATAL: {rel} is missing; refusing to report a clean gate.")
             return 2
-        all_violations.extend(check_text(path.read_text(encoding="utf-8"), rel))
+        text = path.read_text(encoding="utf-8")
+        all_violations.extend(check_text(text, rel))
+        lanes = class_draw_count(text)
+        if lanes == 0:
+            print(
+                f"FATAL: {rel} contains no class draw this gate recognises "
+                f"(`class_idx = ...`). Every rule here is keyed to that name, "
+                f"so reporting the file clean would be reporting on nothing."
+            )
+            return 2
         examined += 1
+        examined_lanes += lanes
 
     if all_violations:
         print(f"FAIL: {len(all_violations)} dudect class-staging violation(s):")
@@ -391,8 +434,9 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     print(
-        f"OK: {examined} dudect harness file(s); every lane reaches its timer "
-        f"with no class-dependent branch or address selection in front of it."
+        f"OK: {examined} dudect harness file(s), {examined_lanes} class draw(s); "
+        f"every lane reaches its timer with no class-dependent branch or "
+        f"address selection in front of it."
     )
     return 0
 

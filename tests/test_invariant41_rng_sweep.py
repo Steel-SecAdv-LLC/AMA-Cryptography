@@ -69,6 +69,10 @@ PACKAGE_DIR = Path(__file__).resolve().parent.parent / "ama_cryptography"
 #: and ``getrandbits`` are the same generator through a different accessor.
 #: None of them is a weaker draw — they are the same draw, spelled differently,
 #: which is precisely why a name-based sweep has to name them all.
+#: The stdlib modules a bare draw can come from.  Used to resolve IMPORT
+#: BINDINGS, so an alias cannot hide a draw — see `call_name`.
+_DRAW_MODULES = frozenset({"os", "secrets", "random"})
+
 BARE_DRAW_CALLS = frozenset(
     {
         "secrets.token_bytes",
@@ -110,6 +114,68 @@ ALLOWED_BARE_DRAWS: dict[tuple[str, str], str] = {
 }
 
 
+def _resolve_draw_aliases(tree: ast.AST) -> dict[str, str]:
+    """Map this module's local bindings back to the canonical draw names.
+
+    `call_name` used to return the literal text `<Name>.<attr>` and compare it
+    against BARE_DRAW_CALLS' dotted spellings.  That matches SPELLINGS, not
+    BINDINGS: `import os as _os_mod` makes the call name `_os_mod.urandom`,
+    which is not in the set, so the site was never recorded and the sweep
+    reported the tree clean — while the module docstring claims "every call
+    site of a bare OS-entropy draw in ama_cryptography/ must be on the
+    allowlist" and "the list is the whole of the sweep's reach".  The shipped
+    package contained exactly one such site: `_os_mod.urandom(32)` in
+    rfc3161_timestamp.py, the HMAC key of MockTSA's integrity tag.
+
+    Resolving bindings is what tools/check_stdlib_hash_boundary.py's
+    _GuardedModuleVisitor already does for hashlib in this same tree.
+
+    Two key shapes share the dict: a plain module binding maps
+    ``"_os_mod" -> "os"``, and a from-import maps ``"os:_u" -> "os.urandom"``
+    so a bare NAME call can be resolved without colliding with a module
+    binding of the same text.
+    """
+    aliases: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for entry in node.names:
+                if entry.name in _DRAW_MODULES:
+                    aliases[entry.asname or entry.name] = entry.name
+        elif isinstance(node, ast.ImportFrom) and node.module in _DRAW_MODULES:
+            # `from os import urandom as _u` — a bare NAME call, resolved below.
+            for entry in node.names:
+                aliases[f"{node.module}:{entry.asname or entry.name}"] = (
+                    f"{node.module}.{entry.name}"
+                )
+    return aliases
+
+
+def _call_name(node: ast.Call, aliases: dict[str, str]) -> str | None:
+    """The canonical dotted name ``node`` calls, or None if it is not a draw."""
+    func = node.func
+    if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
+        module = aliases.get(func.value.id, func.value.id)
+        return f"{module}.{func.attr}"
+    if isinstance(func, ast.Name):
+        # `from secrets import token_bytes` / `... as _tb`.
+        for key, dotted in aliases.items():
+            if ":" in key and key.split(":", 1)[1] == func.id:
+                return dotted
+    return None
+
+
+def _is_main_guard(node: ast.stmt) -> bool:
+    """True for an ``if __name__ == ...:`` statement."""
+    if not isinstance(node, ast.If):
+        return False
+    test = node.test
+    return (
+        isinstance(test, ast.Compare)
+        and isinstance(test.left, ast.Name)
+        and test.left.id == "__name__"
+    )
+
+
 def _bare_draw_sites(tree: ast.AST) -> list[tuple[int, str, str, bool]]:
     """Every bare-draw call in ``tree``.
 
@@ -119,22 +185,7 @@ def _bare_draw_sites(tree: ast.AST) -> list[tuple[int, str, str, bool]]:
     code inside an ``if __name__ == "__main__":`` block.
     """
     sites: list[tuple[int, str, str, bool]] = []
-
-    def call_name(node: ast.Call) -> str | None:
-        func = node.func
-        if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
-            return f"{func.value.id}.{func.attr}"
-        return None
-
-    def is_main_guard(node: ast.stmt) -> bool:
-        if not isinstance(node, ast.If):
-            return False
-        test = node.test
-        return (
-            isinstance(test, ast.Compare)
-            and isinstance(test.left, ast.Name)
-            and test.left.id == "__name__"
-        )
+    aliases = _resolve_draw_aliases(tree)
 
     def walk(node: ast.AST, stack: list[str], in_main: bool) -> None:
         for child in ast.iter_child_nodes(node):
@@ -142,10 +193,10 @@ def _bare_draw_sites(tree: ast.AST) -> list[tuple[int, str, str, bool]]:
             child_main = in_main
             if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
                 child_stack = [*stack, child.name]
-            if isinstance(child, ast.stmt) and is_main_guard(child):
+            if isinstance(child, ast.stmt) and _is_main_guard(child):
                 child_main = True
             if isinstance(child, ast.Call):
-                name = call_name(child)
+                name = _call_name(child, aliases)
                 if name in BARE_DRAW_CALLS:
                     sites.append(
                         (child.lineno, name, ".".join(child_stack) or "<module>", child_main)
@@ -310,3 +361,41 @@ class TestHealthDigestKernelResolution:
             ms.secure_token_bytes(32)
 
         assert ms.module_error_reason() is None
+
+
+class TestTheSweepResolvesBindingsNotSpellings:
+    """An aliased import must not hide a draw.
+
+    `call_name` compared the literal text `<Name>.<attr>` against
+    BARE_DRAW_CALLS' dotted spellings, so `import os as _os_mod` produced
+    `_os_mod.urandom`, which is not in the set — the site was never recorded
+    and the sweep reported the tree clean.  The shipped package contained
+    exactly one: `_os_mod.urandom(32)` in `rfc3161_timestamp.py`, the HMAC key
+    of MockTSA's integrity tag.  The module docstring meanwhile claims "every
+    call site of a bare OS-entropy draw in ``ama_cryptography/`` must be on the
+    allowlist below" and "the list is the whole of the sweep's reach".
+    """
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            "import os as _os_mod\n\ndef f():\n    return _os_mod.urandom(32)\n",
+            "import secrets as _s\n\ndef f():\n    return _s.token_bytes(32)\n",
+            "import random as _r\n\ndef f():\n    return _r.randbytes(32)\n",
+            "from os import urandom as _u\n\ndef f():\n    return _u(32)\n",
+            "from secrets import token_bytes\n\ndef f():\n    return token_bytes(32)\n",
+        ],
+    )
+    def test_an_aliased_draw_is_found(self, source: str) -> None:
+        sites = _bare_draw_sites(ast.parse(source))
+        assert sites, f"the sweep missed an aliased draw:\n{source}"
+
+    def test_an_unaliased_draw_is_still_found(self) -> None:
+        """The control: the ordinary spelling must keep working."""
+        source = "import os\n\ndef f():\n    return os.urandom(32)\n"
+        assert _bare_draw_sites(ast.parse(source))
+
+    def test_an_unrelated_module_is_not_a_draw(self) -> None:
+        """And a call that merely LOOKS like one must not be swept up."""
+        source = "import mymod\n\ndef f():\n    return mymod.urandom(32)\n"
+        assert _bare_draw_sites(ast.parse(source)) == []

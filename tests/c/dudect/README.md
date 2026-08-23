@@ -51,7 +51,12 @@ key data in both classes*: placing class 0's key across two cache lines drives
 |t| to 13.5–30.9, over threshold in 10 of 10 runs. Staged through one shared
 buffer the same measurement reports 0 of 10. Every lane therefore copies the
 selected class's input into a single cache-line-aligned buffer
-(`dudect_stage()`) before the timed region.
+(`dudect_stage_select(dst, src0, src1, len, class_idx)` in
+`dudect_stage.h`) before the timed region.  Both sources are read every
+iteration and merged under a constant-time mask; a one-source
+`dudect_stage(dst, src, len)` would leave the SOURCE address
+class-correlated, which is the leak the staging removes, and
+`tools/check_dudect_class_staging.py` refuses that form.
 
 ## Usage
 

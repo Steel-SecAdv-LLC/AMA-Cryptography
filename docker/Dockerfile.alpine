@@ -94,10 +94,21 @@ LABEL maintainer="Steel Security Advisors LLC <steel.sa.llc@gmail.com>"
 LABEL description="AMA Cryptography - Quantum-Resistant Cryptographic Protection System (Alpine)"
 LABEL version="5.0.0"
 
-# INVARIANT-1: libssl3 is NOT installed.  This file's own builder stage already
-# says "openssl-dev is deliberately absent (INVARIANT-1): AMA's C sources link
-# no OpenSSL" — and then the runtime stage installed the runtime half of it.
-# The shipped .so needs only musl libc.
+# INVARIANT-1: libssl3 is not installed EXPLICITLY, and AMA's own .so does not
+# need it.  This file's builder stage already says "openssl-dev is deliberately
+# absent (INVARIANT-1): AMA's C sources link no OpenSSL" — and the runtime stage
+# used to install the runtime half of it anyway.  That line is gone; the shipped
+# .so needs only musl libc, which the vendor-isolation gate checks by reading
+# its dynamic symbol table rather than by reading this comment.
+#
+# libssl3 and libcrypto3 are STILL IN THE IMAGE, transitively.  The `python3`
+# package below depends on both — CPython's `_ssl` and `_hashlib` link OpenSSL
+# — so Alpine pulls them in regardless (verified against the v3.23 main/x86_64
+# package index: python3 lists `libssl3`, `libcrypto3`, `so:libssl.so.3` and
+# `so:libcrypto.so.3`).  Removing the explicit line changes which apk pulls
+# them, not whether they are present.  That is outside INVARIANT-1's scope,
+# which is about what AMA LINKS, and the earlier wording — "libssl3 is NOT
+# installed" — claimed otherwise about the published image.
 RUN apk add --no-cache \
     python3 \
     py3-pip

@@ -115,7 +115,7 @@ No statistically significant timing difference detected between the two input cl
 
 ### OVER THRESHOLD (|t| >= 5.0)
 
-A single round over the threshold is not a verdict. A lane fails only if it exceeds the threshold in a **majority of rounds with a consistent sign, and the per-class mean difference is at least 2 ns**; excursions that disagree about direction are reported as unusable measurements rather than findings, and excursions below 2 ns are reported as `SUB-FLOOR` and do not fail.
+A single round over the threshold is not a verdict. A lane fails only if it exceeds the threshold in a **majority of rounds with a consistent sign, and the per-class mean difference is at least 2 ns**; excursions that disagree about direction are classified `UNUSABLE` rather than as a leak finding — but `UNUSABLE` still FAILS the build, because a gate that cannot measure has not cleared anything; what changes is the diagnosis and the operator's next action (re-run on a quiet host, versus audit the primitive). Excursions below 2 ns are reported as `SUB-FLOOR` and do NOT fail.
 
 The magnitude condition is load-bearing, not a rounding rule. Measured on one host, five consecutive runs of the same binary at 100,000 measurements: of the eleven lanes whose mean difference stayed under 2 ns, ten changed sign at least once. A sign-consistency test is meaningless where the sign is not reproducible — which is exactly the range the floor covers. Read the per-class mean difference the harness prints beside the t-value: |t| grows as sqrt(n), so at high measurement counts the statistic reaches the threshold on differences well under one CPU cycle, and the nanosecond figure is what says whether a difference is exploitable.
 

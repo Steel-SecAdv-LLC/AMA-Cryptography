@@ -74,8 +74,8 @@ C_COMPONENTS: list[tuple[str, str]] = [
     ("ama_kyber", "ML-KEM-512/-768/-1024 key encapsulation (NIST FIPS 203)"),
     ("ama_lms", "HSS/LMS hash-based signature verification (RFC 8554)"),
     ("ama_nistp", "ECDSA and ECDH over NIST P-256/P-384/P-521 (FIPS 186-5; RFC 6979 nonces)"),
-    ("ama_secp256k1", "secp256k1 elliptic curve operations"),
     ("ama_pbkdf2", "PBKDF2-HMAC-SHA256/512 key derivation (NIST SP 800-132)"),
+    ("ama_secp256k1", "secp256k1 elliptic curve operations"),
     ("ama_sha3", "SHA3-256/384/512, SHAKE128/256 (NIST FIPS 202)"),
     ("ama_sha512", "SHA-512/SHA-384 one-shot hashing (NIST FIPS 180-4)"),
     ("ama_slhdsa", "SLH-DSA-SHA2-256f + SHAKE-128s (NIST FIPS 205); legacy ama_sphincs_* API"),
@@ -114,6 +114,21 @@ def check_component_completeness() -> None:
     the failure mode that let Ascon, FROST, agent binding, HSS/LMS and
     the NIST prime curves ship unlisted between 3.4.0 and 3.5.0.
     """
+    # The manifest comment says "Order is alphabetical so a diff between two
+    # SBOM revisions is easy to read", and `render_sbom()` emits the list in
+    # list order without sorting.  Nothing checked it, and the list was not
+    # sorted: `ama_pbkdf2` sat after `ama_secp256k1`, and the committed
+    # docs/compliance/sbom-c-library.json carried the same misordering.  A
+    # documented convention nothing enforces is a convention that drifts.
+    ordered = [name for name, _ in C_COMPONENTS]
+    if ordered != sorted(ordered):
+        first = next((a, b) for a, b in zip(ordered, sorted(ordered), strict=True) if a != b)
+        raise SystemExit(
+            "ERROR: tools/generate_sbom.py: C_COMPONENTS is not in alphabetical "
+            f"order, which the manifest comment promises. First difference: "
+            f"{first[0]!r} where {first[1]!r} was expected."
+        )
+
     component_names = {name for name, _ in C_COMPONENTS}
     overlap = component_names & INTERNAL_SUPPORT
     if overlap:

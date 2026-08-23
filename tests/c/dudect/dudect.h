@@ -81,6 +81,14 @@
  * statistic that misses leaks.  It runs the same statistic as the other two
  * harnesses now.
  *
+ * With one qualification a lane cannot state for itself: cropping needs at
+ * least DUDECT_CROP_MIN_PER_CLASS (128) samples in BOTH classes AFTER the
+ * crop, so a lane whose budget is near that floor gets no usable rung and its
+ * reported statistic is the uncropped Welch t.  The SLH-DSA-SHA2-256f sign
+ * lane caps at 256 measurements — about 128 per class before any cropping —
+ * and is exactly that case.  dudect_print_result() now says "UNCROPPED" for
+ * such a lane instead of printing the same line as every other one.
+ *
  * The cost is memory: cropping needs the samples, not a running summary, so a
  * context now allocates and must be freed.  ``dudect_ctx_init`` takes the
  * measurement budget and REPORTS FAILURE, which callers must check — a lane
@@ -197,11 +205,18 @@ static inline int dudect_measurement_failed(dudect_ctx_t *ctx) {
  * size, via dudect_lane_finish() in the harness — and dudect_rounds.h is the
  * single authority on what a measurement means.
  *
- * The effect size behind the statistic: the winning rung's per-class mean
- * difference, in nanoseconds.  Only meaningful after dudect_get_t(). */
+ * The effect size behind the statistic, in nanoseconds: the LARGER in
+ * magnitude of the uncropped and the winning rung's per-class mean difference.
+ * Only meaningful after dudect_get_t().
+ *
+ * Not the winning rung's alone, which is what this returned.  The verdict rule
+ * gates on this number — |delta| < DUDECT_MIN_EFFECT_NS is SUB_FLOOR, which
+ * does not fail the build — so a leak whose effect lives in the tail cropping
+ * removes could clear the floor uncropped and be adjudicated on a cropped
+ * difference below it.  See dudect_cropped_effect_delta(). */
 static inline double dudect_get_delta_ns(dudect_ctx_t *ctx) {
     (void)dudect_get_t(ctx);
-    return ctx->ttest.winning_delta;
+    return dudect_cropped_effect_delta(&ctx->ttest);
 }
 
 /* Print the measurement for a single lane.
@@ -241,7 +256,21 @@ static inline void dudect_print_result(dudect_ctx_t *ctx) {
            within ? "within threshold" : "OVER THRESHOLD",
            (long)ctx->total_measurements,
            ctx->ttest.winning_rung,
-           ctx->ttest.winning_delta);
+           dudect_cropped_effect_delta(&ctx->ttest));
+    if (ctx->ttest.usable_rungs == 0) {
+        printf("    NOTE: UNCROPPED statistic — no cropped rung reached "
+               "DUDECT_CROP_MIN_PER_CLASS (%d) in both classes at %ld "
+               "measurements, so this lane ran the raw Welch t.\n",
+               (int)DUDECT_CROP_MIN_PER_CLASS, (long)ctx->total_measurements);
+    } else if (ctx->ttest.usable_rungs == DUDECT_CROP_RUNGS_UNRUN) {
+        /* A different cause with a different remedy, so it gets a different
+         * sentence: the crop buffers could not be allocated, which no
+         * measurement budget fixes.  dudect_cropped_compute() has already
+         * said so on stderr; this puts it beside the number it qualifies. */
+        printf("    NOTE: UNCROPPED statistic — the crop sweep could not "
+               "allocate its buffers on this host, so this lane ran the raw "
+               "Welch t.\n");
+    }
 }
 
 #endif /* DUDECT_H */

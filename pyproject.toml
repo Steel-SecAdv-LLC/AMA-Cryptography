@@ -156,9 +156,15 @@ dev = [
     "ruff>=0.16.0",
     "mypy>=2.3.0",
     # setup.py is inside `mypy --strict` (see ci.yml::code-quality), and
-    # setuptools ships no inline types — without these stubs its
-    # `build_ext` base class is Any and every override on CMakeBuild goes
-    # unchecked while the run still reports success.
+    # setuptools ships no `py.typed`.  Without these stubs the type-check job
+    # FAILS — measured, 5 errors in setup.py: `Library stubs not installed for
+    # "setuptools.command.build_ext"`, the same for `setuptools.dist`, and
+    # `Class cannot subclass "Distribution"/"build_ext" (has type "Any")`.
+    # (This comment used to say the base class "is Any and every override on
+    # CMakeBuild goes unchecked while the run still reports success".  There is
+    # no silent-Any outcome to have: reaching it would need an
+    # `ignore_missing_imports` override for setuptools, and the override list
+    # below does not contain one.)
     "types-setuptools>=84.0.0.20260812",
     # PyYAML is imported directly by thirteen modules under tests/ and tools/
     # (the workflow, gate-coverage, secret-scan and severity-gate checkers all

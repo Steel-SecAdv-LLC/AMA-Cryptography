@@ -372,3 +372,101 @@ static void probe(uint8_t *dest, int class_idx) {
             f"destinations carries the _stage suffix: {sorted(destinations)}"
         )
         assert gate.check_text(text, "tools/constant_time/dudect_crypto.c") == []
+
+
+class TestTheGateCannotPassOnWhatItCannotRead:
+    """Two ways this gate reported clean over something it had not examined."""
+
+    def test_an_ampersand_destination_is_examined(self) -> None:
+        """`dudect_stage_select(&dest, ...)` never matched Rule 1's pattern.
+
+        `_STAGE_CALL_DEST` required a bare identifier as the first argument.
+        tests/c/test_dudect.c stages a STRUCT — `dudect_stage_select(&b_stage,
+        &good, &bad, sizeof b_stage, class_idx)` — so the regex found nothing
+        and Rule 1 examined zero destinations for that call.  Rule 1 exists to
+        stop the alignment check depending on the `*_stage` naming convention;
+        a spelling it cannot parse puts it back where it started.
+        """
+        source = (
+            "static unsigned char misaligned_buf[64];\n"
+            "void lane(void) {\n"
+            "    int class_idx = draw();\n"
+            "    dudect_stage_select(&misaligned_buf, &a, &b, 64, class_idx);\n"
+            "    uint64_t start = get_time_ns();\n"
+            "}\n"
+        )
+        violations = gate.check_text(source, "synthetic.c")
+        assert any("misaligned_buf" in v for v in violations), violations
+
+    def test_a_parenthesised_ampersand_destination_is_examined(self) -> None:
+        source = (
+            "static unsigned char misaligned_buf[64];\n"
+            "void lane(void) {\n"
+            "    int class_idx = draw();\n"
+            "    dudect_stage_select( (&misaligned_buf), &a, &b, 64, class_idx);\n"
+            "    uint64_t start = get_time_ns();\n"
+            "}\n"
+        )
+        assert any("misaligned_buf" in v for v in gate.check_text(source, "synthetic.c"))
+
+    def test_an_aligned_ampersand_destination_still_passes(self) -> None:
+        """The control: the fix must not report a correctly aligned buffer."""
+        source = (
+            "static _Alignas(64) unsigned char ok_buf[64];\n"
+            "void lane(void) {\n"
+            "    int class_idx = draw();\n"
+            "    dudect_stage_select(&ok_buf, &a, &b, 64, class_idx);\n"
+            "    uint64_t start = get_time_ns();\n"
+            "}\n"
+        )
+        assert gate.check_text(source, "synthetic.c") == [], source
+
+    def test_a_file_with_no_recognised_class_draw_is_fatal(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The gate's whole state machine is keyed to the name `class_idx`.
+
+        `_CLASS_DRAW`, `_CLASS_USE`, `_CLASS_BRANCH` and `_STAGE_SELECT` all
+        hard-code it, and `main` counted FILES examined, never lanes.  A
+        harness that named its class variable anything else opened no window,
+        produced no violations, and was printed as "every lane reaches its
+        timer with no class-dependent branch or address selection in front of
+        it" — over a file the gate had not read a single lane of.
+
+        Driven through `main`, because that is where the coverage CLAIM is
+        made; `check_text` stays a statement-level checker whose synthetic
+        inputs legitimately have no class draw.
+        """
+        harness = tmp_path / "fake_harness.c"
+        harness.write_text(
+            "void lane(void) {\n    int which = draw();\n    uint64_t start = get_time_ns();\n}\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(gate, "HARNESS_FILES", ("fake_harness.c",))
+        assert gate.main(["--root", str(tmp_path)]) == 2
+
+    def test_a_harness_with_a_class_draw_is_examined(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The control: the coverage floor must not reject a real harness."""
+        harness = tmp_path / "fake_harness.c"
+        harness.write_text(
+            "void lane(void) {\n"
+            "    int class_idx = draw();\n"
+            "    uint64_t start = get_time_ns();\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(gate, "HARNESS_FILES", ("fake_harness.c",))
+        assert gate.main(["--root", str(tmp_path)]) == 0
+
+    def test_the_real_harnesses_all_yield_windows(self) -> None:
+        for rel in gate.HARNESS_FILES:
+            text = (REPO_ROOT / rel).read_text(encoding="utf-8")
+            assert gate.class_draw_count(text) > 0, rel
+
+    def test_every_governed_harness_is_clean(self) -> None:
+        """Non-vacuity on the real files, not only on synthetic ones."""
+        for rel in gate.HARNESS_FILES:
+            text = (REPO_ROOT / rel).read_text(encoding="utf-8")
+            assert gate.check_text(text, rel) == [], rel

@@ -552,6 +552,7 @@ def update_benchmark_docs(dry_run: bool = False) -> bool:
         return False
 
     changed = False
+    carrying = 0
 
     # Find all .md files that contain the markers
     md_files = list(ROOT.glob("*.md")) + list(ROOT.glob("wiki/*.md"))
@@ -559,6 +560,7 @@ def update_benchmark_docs(dry_run: bool = False) -> bool:
         text = md_file.read_text(encoding="utf-8")
         if BENCH_START not in text:
             continue
+        carrying += 1
 
         pattern = re.compile(
             re.escape(BENCH_START) + r".*?" + re.escape(BENCH_END),
@@ -576,7 +578,19 @@ def update_benchmark_docs(dry_run: bool = False) -> bool:
             changed = True
 
     if not changed:
-        print("  BENCHMARKS: no files with AUTO-BENCHMARK-TABLE markers found")
+        # Two different outcomes, and this used to print the second sentence
+        # for both: a run over an already-current wiki page reported that the
+        # markers could not be found, in a tree where `wiki/
+        # Performance-Benchmarks.md` carries them at lines 314 and 339.  A
+        # status line that says the table was not found is how a DELETED
+        # marker pair — which silently stops the published table tracking the
+        # measurements — reads exactly like a no-op.
+        if carrying:
+            print(
+                f"  BENCHMARKS: {carrying} file(s) already match " f"{BENCHMARK_RESULTS_JSON.name}"
+            )
+        else:
+            print("  BENCHMARKS: no files with AUTO-BENCHMARK-TABLE markers found")
 
     return changed
 
