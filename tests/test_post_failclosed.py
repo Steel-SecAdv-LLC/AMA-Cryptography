@@ -1543,7 +1543,7 @@ class TestContinuousRNGTest:
             # once — which is precisely what the lock must prevent.
             inside = threading.Barrier(8)
 
-            class _RendezvousState(dict):  # type: ignore[type-arg]
+            class _RendezvousState(dict[str, Any]):
                 """A ``_rng_state`` that holds the check-then-act window open.
 
                 Only the ``previous`` read is instrumented, and only while the

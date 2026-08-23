@@ -81,16 +81,28 @@ jobs:
           # constant-time intent at 12 sites for no behavioural change.
           #
           # uninitvar: false positives on out-parameters.  cppcheck cannot see
-          # through the helpers that fill them, so it flags `*r = out` in
-          # ama_nistp.c (out.X/Y/Z are each written by nistp_mont_mul /
-          # nistp_mod_sub first), `&mat[i].vec[j]` in ama_kyber.c (the address
-          # is taken so kyber_gen_matrix can write it), and w1_packed in
-          # ama_dilithium.c.  Scoped per file so the check stays live elsewhere.
+          # through the helpers that fill them.  Six sites, listed WITH their
+          # line numbers and their reasons in .cppcheck-suppressions.
           #
-          # arrayIndexOutOfBounds: cppcheck's own invented configuration.  With
-          # --force it tries a pass where PATH_MAX is defined but unknown,
-          # evaluates `char dir[AMA_DISPATCH_PATH_MAX]` as `dir[1]`, and reports
-          # the writes into it.  The real definition is 4096.
+          # They used to be three file-wide `--suppress=uninitvar:<file>`
+          # entries, and "Scoped per file so the check stays live elsewhere"
+          # undersold what that cost: a genuinely uninitialised read introduced
+          # later anywhere in ama_nistp.c — 1,100 lines of P-256/P-384/P-521
+          # field arithmetic — was reported and discarded.  Measured by
+          # injecting one:
+          #
+          #   file-wide suppression : 0 reports
+          #   per-site suppressions : src/c/ama_nistp.c:469:31: error:
+          #                           Uninitialized variable: ama_probe_uninit
+          #
+          # arrayIndexOutOfBounds: NOT suppressed any more, because it was
+          # never a cppcheck limitation.  With --force, cppcheck invents a
+          # configuration where PATH_MAX is defined but unknown, evaluates
+          # `char dir[AMA_DISPATCH_PATH_MAX]` as `dir[1]`, and reports the
+          # writes into it.  Passing the real value with -DPATH_MAX=4096 makes
+          # both findings disappear AND leaves the bounds check live on every
+          # `char[AMA_DISPATCH_PATH_MAX]` buffer in the file — which, being a
+          # file full of them, is the one place the suppression cost most.
           #
           # unknownMacro: a vendored donna header (mul64x64_128); -i excludes
           # vendor files from being CHECKED but not from being #included.
@@ -99,16 +111,14 @@ jobs:
             --suppress=missingIncludeSystem \
             --suppress=unusedFunction \
             --suppress=shiftTooManyBitsSigned \
-            --suppress=uninitvar:src/c/ama_nistp.c \
-            --suppress=uninitvar:src/c/ama_kyber.c \
-            --suppress=uninitvar:src/c/ama_dilithium.c \
-            --suppress=arrayIndexOutOfBounds:src/c/dispatch/ama_dispatch.c \
+            --suppressions-list=.cppcheck-suppressions \
             --suppress=unknownMacro:src/c/vendor/* \
             --error-exitcode=1 \
             --inline-suppr \
             --std=c11 \
             -I include/ \
             -DAMA_USE_NATIVE_PQC \
+            -DPATH_MAX=4096 \
             --force \
             -i src/c/vendor/ \
             src/c/ 2>&1 | tee cppcheck-report.txt
