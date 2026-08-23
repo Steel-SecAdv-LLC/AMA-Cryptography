@@ -169,7 +169,8 @@ heuristics — an agent that avoids the successor vocabulary is not flagged, and
 
 | Threat | Mitigation | Status | Evidence |
 |--------|-----------|--------|----------|
-| T4.1 | Zero external runtime dependencies | **BY DESIGN** | All crypto implemented in native C |
+| T4.1 | Zero external runtime dependencies | **BY DESIGN** | Production cryptography is native C: the shipped library links only libc and the loader, and carries no vendor symbol (`tools/check_vendor_isolation.py`) |
+| T4.1 | Trust-bootstrap hashing confined and gated | **IMPLEMENTED** | The import-time integrity and pre-load digests run before the native library may be mapped, so they use CPython's OpenSSL-backed `hashlib` SHA3-256; INVARIANT-1 confines that use to the named bootstrap files, `tools/check_stdlib_hash_boundary.py` enforces the confinement with exact per-file counts in CI, and POST cross-checks `hashlib` against the native kernel on fixed FIPS 202 vectors |
 | T4.1 | Dependency pinning and SBOM generation | **IMPLEMENTED** | `requirements-lock.txt`, SBOM workflow |
 | T4.2 | Multi-platform CI with security scanning | **IMPLEMENTED** | `ci.yml`, `security.yml`, `fuzzing.yml` |
 | T4.2 | Secret scanning (TruffleHog) | **IMPLEMENTED** | `.github/workflows/security.yml` |

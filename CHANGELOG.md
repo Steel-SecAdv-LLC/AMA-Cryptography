@@ -31,6 +31,210 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > Compare `[4.0.0]` below, which is dated because it *is* released: tag
 > `v4.0.0`, published 2026-08-02.
 
+### Maintenance pass, twelfth (2026-08-23) — the four red lanes at head 7432e0d, and the false claims standing behind green ones
+
+Every CI failure on the branch head was root-caused to a specific defect, and
+each fix below names the evidence.  None changes a wire format, a key format,
+a C API signature, or any library behaviour; the changes are to measurement
+infrastructure, CI, and repository-facing claims.
+
+#### The benchmark runner revoked measurements it had already taken
+
+`benchmark_operation` qualified a batch as full-window against an iteration
+target predicted from the fastest rate observed anywhere in the run, and
+every marginally faster observation raised the prediction, revoked the
+batches already credited, and restarted the count.  On a noisy shared runner
+the fastest-rate estimate keeps creeping upward, so the attempt budget
+drained on re-validation: the AArch64 benchmark lane died on its first
+benchmark with `completed 1 of 3 full-window batches within 15 attempts
+(batch size reached 64,073, fastest observed rate 427,150.8 ops/sec)` (job
+97221692527) — on a host that was producing genuine full-window batches the
+whole time, since most batches on a noisy host run *slower* than the fastest
+rate seen and therefore span *more* than the window.
+
+A batch now qualifies on its own measured elapsed time (`elapsed >=
+_MIN_SAMPLE_SECONDS`, or the `_MAX_ITERATIONS` cap — the same ceiling the
+predicted target always had), and a credit is never revoked: `rate = batch /
+elapsed` with `elapsed >=` the window *is* a full-window measurement,
+whatever runs after it.  Every batch the old rule credited satisfies the new
+rule (`batch >= target` with `target` derived from a rate at least this
+batch's own forces `elapsed > window`, by substitution), so no run that
+passed before can fail now; the runs that change outcome are exactly the
+ones failed by revocation.  Sizing still keys off the fastest observed rate,
+the under-sampled hard failure stays, and the silent fallback stays removed.
+Two tests in `tests/test_benchmark_baseline_infra.py` had scripted
+`(ops, elapsed)` pairs the real `_timed_batch` cannot produce (a 9,999
+ops/sec "undersized" batch over a 0.2 s window; finite rates beside
+`elapsed = 0.0`) — the incoherent mocks are what made the prediction rule
+look load-bearing, and both now script the identity `ops = n / elapsed`.
+The new regression test models the AArch64 failure (credits interleaved with
+new maxima) and fails under the old rule with `completed 1 of 3`; the full
+suite runs 79/79, and the whole 19-benchmark suite completes with exit 0 on
+a noisy shared sandbox host where the old rule died in two seconds.
+
+#### The PyKCS11 sdist stopped building, and it was SWIG that moved
+
+Every non-Windows-cp310–cp313 test lane died before one AMA test ran:
+`error: 'PyInt_FromLong' was not declared in this scope` compiling
+`pykcs11_wrap.cpp`.  Established against the 1.5.18 sdist: the sdist ships
+no pre-generated wrapper — the host SWIG regenerates it at build time — and
+`src/pykcs11.i:66` names the Python 2 `PyInt_FromLong` in a custom
+%typemap.  SWIG <= 4.2 emitted a Python 2 compatibility alias into every
+generated wrapper, which is why this ever compiled; SWIG 4.3 removed those
+aliases, the runner images now carry >= 4.3, and no PyKCS11 release is
+exempt (upstream master still carries the typemap), so a version pin cannot
+fix it — the variable is the SWIG version, not the PyKCS11 version.
+Reproduced in a clean sandbox with SWIG 4.5.0, then fixed by restoring the
+alias at the compiler command line in a dedicated install step
+(`CPPFLAGS=-DPyInt_FromLong=PyLong_FromLong` for POSIX, `CL=/D...` for
+MSVC — Windows cp314 builds the sdist too, and failed the same way at job
+97221692671), scoped so the define never reaches the ama-cryptography
+build; the patched sdist builds, imports and instantiates `PyKCS11Lib`.
+The `[hsm]` extra stays unconditional — the HSM lane keeps its coverage —
+and `pyproject.toml` documents the same command for source installs.  A
+comment in `ci-build-test.yml` claiming the Windows sdist build "is green"
+was true under SWIG <= 4.2 and is corrected.
+
+#### Sixteen -Wconversion warnings, and the LoC gate that failed only where a build had run
+
+`tests/c/test_field_bench.c` (first wired into the build by this branch)
+converted `struct timespec` fields to `double` implicitly at two sites; all
+three strict-warnings jobs (gcc, clang, AArch64 cross) failed their frozen
+allowlist on the same 16 diagnostics.  Fixed at source with the explicit
+casts `tests/c/test_benchmark.c` already uses — a benchmark's elapsed
+seconds and a sub-second nanosecond count both sit far inside double's
+53-bit mantissa.  Verified 8 -> 0 under both compilers with the workflow's
+exact flag set; the Static Analysis aggregator goes green as a consequence,
+with no allowlist change.
+
+The other failure the Windows lanes actually reached: the documented-counts
+gate read `ama_cryptography/*.py` at 38,202 lines against a documented
+38,195.  The +7 is `_integrity_signature.py` after `pip install -e .`
+re-signs it — the binding-digest dict is `{}` in a tree that has not built
+the binding extensions and one line per bound extension afterwards (six on a
+CI editable install) — so the same commit measured differently before and
+after a build, and differently across platforms.  A number that depends on
+whether a build has run is not a property of the commit: the two files the
+build rewrites in place are now excluded from every LoC row
+(`_LOC_BUILD_REWRITTEN` in `tools/check_documented_counts.py`), the tables
+are re-measured, and two tests pin the exclusion — one that mutates the
+artefact and asserts the measured table does not move, one that asserts the
+exclusion is a named list a sibling file does not inherit.  Both fail
+without the exclusion.
+
+#### Four deterministic constant-time gates for the utility primitives, and five sub-floor claims brought to truth
+
+The strict dudect lanes for `ama_consttime_lookup` / `_swap` / `_copy` and
+`ama_secure_memzero` spend their lives below the 2 ns adjudication floor —
+the five-run floor re-measurement recorded earlier read `ama_consttime_lookup`
+between −0.021 and +0.056 ns in all five runs — and nothing deterministic
+stood behind that abstention: the same coverage gap closed for
+`ascon-encrypt` and `agent-binding`, recurring for the lanes nobody
+re-checked.  Four callgrind targets close it (`consttime-lookup`,
+`consttime-swap`, `consttime-copy`, `secure-memzero` in
+`tools/check_ghash_constant_time.py`, wired into `dudect.yml`), measured
+byte-identical across all eight classes on all four metrics under gcc 13 and
+clang 18 (I refs respectively: lookup 99,715,167 / 99,730,903; swap
+98,548,267 / 98,584,191; copy 65,782,267 / 65,818,191; memzero 12,529,232 /
+19,761,950) with a same-class floor of 0, and each verified to FAIL before
+being trusted: a planted early return on the swap condition reported an
+81,930,000-instruction cross-class delta, a planted index-dependent scan
+truncation in lookup reported 54,488,000, both exit 1, both mutations
+reverted.  The inventory self-check moves 14 -> 18 with its prose.
+
+Five statements the floor made false are corrected rather than defended:
+INVARIANT-30's verification note claimed the agent-binding lane "fails CI on
+|t| >= 4.5" when the threshold is 5.0 and the lane's own measured behaviour
+(|t| = 41.72 in 3/3 rounds at −1.141 ns -> SUB-FLOOR -> exit 0) was the
+counterexample — it now names the actual adjudication rule and the
+deterministic gate that blocks; the INVARIANT-12 addendum's "a t-value
+regression on any slot is a hard fail, not a 'noise' excuse" now states the
+majority/sign/floor rule it is subject to; the harness's own sub-floor
+report no longer prints "the deterministic instruction-count gates own this
+range and measure it exactly" (the sentence the floor re-measurement
+withdrew elsewhere) and says instead what is true — sequence-visible
+differences are measured where a target covers the call, latency-only
+differences by neither instrument, and SUB-FLOOR means not adjudicable, not
+shown absent; `docs/constant-time-testing.md` carries the same correction it
+was recorded as already carrying; and this changelog's own "sensitivity to a
+real leak is unchanged" is narrowed to what the apparatus supports.  A stale
+"(4.5)" in a `test_dudect.c` comment reads "(5.0)".
+`CONSTANT_TIME_VERIFICATION.md` now also names the two strict lanes that
+remain wall-clock-only and why that is acceptable for each: `Argon2id legacy
+verify`, whose adjudicable component is the `ama_consttime_memcmp` compare
+covered at primitive level, and the `FROST scalar_negate` pair, whose
+branchless borrow loop contains no data-dependent instruction selection to
+count.
+
+#### The hashlib bootstrap boundary, described the way it is enforced
+
+The import-time trust bootstrap's dependence on CPython's OpenSSL-backed
+`hashlib` is INVARIANT-1-compliant by explicit construction and gate-enforced
+with exact per-file counts — and four sites still described the
+pre-tightening world.  `THREAT_MODEL.md`'s supply-chain table claimed "All
+crypto implemented in native C" with no mention of the bootstrap anywhere in
+the file; it now separates the two true statements (production cryptography
+is native C with vendor isolation checked by linkage; bootstrap hashing is
+confined, gated, and KAT-cross-checked).  `tools/check_vendor_isolation.py`
+cited the repealed "stdlib carve-out admits hashlib for hashing" as its
+reason for not screening `_hashlib`; it now cites the confinement.  An
+`ARCHITECTURE.md` bullet still said SHA3-256 ships "via hashlib"; it names
+the native FIPS 202 kernels and their SIMD dispatch.  This changelog's
+vendor-isolation entry carried the same repealed carve-out wording, and
+INVARIANT-1's bootstrap enumeration now includes the pre-import
+binding-extension digest gate in `__init__.py` that the five-file allowlist
+always contained.  `tools/check_stdlib_hash_boundary.py` runs clean after
+all of it.
+
+#### The competitive page is now gated as the pure function it claims to be
+
+`benchmarks/competitive.html` had drifted from its own generator: commit
+`4c3dcfa` corrected the generator's footer (the page said "nothing is
+hand-entered" on the line where eight of nine peer versions are string
+literals) and the page was never re-rendered.  Worse, the hand-written
+`NOTES` prose contradicted the generated badges in its own rows — "Last of
+six" for SHA3-256 where the measured rank in
+`benchmarks/multi_library_results.json` is 1 of 6 (6,562 vs libgcrypt's
+6,517 ops/sec), "5th of 8" for AES-256-GCM measured 3 of 8, "Fourth of
+five" for X25519 measured 3 of 5, "Within 7% of Botan and 1.16x faster than
+OpenSSL" for secp256k1 verify where AMA leads outright at 14.9% and 1.48x,
+and an HMAC note inheriting a "gap" that is a first-of-four lead.  All five
+are reconciled to the data beside them, the "every cell is a runtime
+capability probe, not recollection" claim (three sites) now says the matrix
+records probe results from the measurement run rather than implying a
+render-time probe, and the page is re-rendered — its 3.4.0/`66d2073`
+provenance stamp unchanged, since the version comes from the data by
+construction.  The control whose absence caused this exists now:
+`tests/test_competitive_page.py` fails when the committed page is not a
+fresh render (modulo the render timestamp) and when any rank phrase in
+`NOTES` disagrees with the measured rank; both directions
+mutation-verified.  `benchmarks/README.md`'s provenance table gains the two
+JSON records and the page itself, which it never listed.
+
+#### Smaller truths
+
+`README.md`'s performance preamble now gives the real measurement span
+(2026-04-25 to 2026-04-27 — the umbrella said -25 while the core table's own
+rows say -26/-27), the Ed25519 throughput bullet carries its row's date, the
+three table captions say `benchmark-results.json` holds a measured run plus
+the floors rather than floors alone, the "row by row" dating parenthetical
+is scoped to the one table it is true of, and the CI matrix row stops
+scoping the Python package to "Linux" when the matrix runs Linux, macOS,
+Windows and ARM.  `release.yml`'s `github-release` job — the one holding
+`contents: write` — now carries the `environment: release` gate the release
+narrative always claimed (the comment states plainly that referencing the
+environment creates it unprotected, and that the protection rules are
+repository settings the operator must configure once); the operator runbook
+now names the exact file set whose change invalidates a recorded dry run
+(this workflow, `setup.py`, `_build_sign.py`, `resign_wheel.py`,
+`wheel_smoke_test.py`, `check_release_tag.py`), because the omission
+produced a demonstrably wrong staleness rationale in the release narrative
+— release.yml was byte-identical to the recorded green run while the signer
+path had moved 340 lines.  The one `TODO(...)` marker in the C tree
+(`src/c/avx2/ama_x25519_avx2.c`) is re-headed as the design note it is: the
+AVX2 kernel is complete and verified, and the AVX-512-IFMA successor it
+sketches requires IFMA silicon to validate.
+
 ### Debt-closure pass, eleventh (2026-08-22) — the 25 findings an independent audit left standing, and what closing them found
 
 An independent audit read all 302 non-corpus changed files of this branch's
@@ -2671,10 +2875,15 @@ oscillating — and that presupposes the effect is *resolvable*. Below the floor
 it is not, so a sign-consistency test there is a coin flip, and a gate that
 decides a build on a coin flip is worse than one that abstains. The floor is
 therefore applied as a **precondition for adjudication**, before the direction
-rule rather than after it. Sensitivity to a real leak is unchanged: the floor
-sits below every mechanism that can produce one, so at or above 2 ns direction
-disagreement is still `UNUSABLE` and still fails the build — pinned by cases at
-the floor exactly, and well above it. A sub-floor excursion whose signs
+rule rather than after it. Sensitivity at and above the floor is unchanged:
+the floor sits below every mechanism measured to produce an adjudicable effect
+on this apparatus (a mispredicted branch costs 7-10 ns, an L1 miss 30-50 ns),
+so at or above 2 ns direction disagreement is still `UNUSABLE` and still fails
+the build — pinned by cases at the floor exactly, and well above it. Below the
+floor the wall-clock test abstains by construction, and a difference living
+only in operand-dependent latency is measured by neither this test nor the
+instruction-count gates; `SUB-FLOOR` records that abstention rather than a
+clearance. A sub-floor excursion whose signs
 disagreed now says so in the report instead of printing identically to a
 consistently-signed one.
 
@@ -3419,10 +3628,13 @@ indistinguishable from one that cannot:
 Measured on the tree as committed: the shipped `libama_cryptography.so.5.0.0`
 declares exactly two dependencies — `libc.so.6` and `ld-linux-x86-64.so.2` —
 imports no symbol carrying a vendor prefix, and defines none either (241
-exported symbols, all `ama_`-namespaced). CPython's `hashlib` remains
-permitted for hashing under INVARIANT-1's stdlib carve-out and is
-deliberately not screened; screening the interpreter's own accelerators would
-make the gate fail on a stock CPython rather than on an AMA defect.
+exported symbols, all `ama_`-namespaced). CPython's `hashlib` remains in use
+only inside the import-time trust bootstrap that INVARIANT-1 now confines it
+to (enforced with exact per-file counts by
+`tools/check_stdlib_hash_boundary.py`; the earlier general "stdlib carve-out
+for hashing" was repealed in the same release) and is deliberately not
+screened here; screening the interpreter's own accelerators would make the
+gate fail on a stock CPython rather than on an AMA defect.
 
 ##### Follow-up: the gate's own coverage gaps, found by running it everywhere
 

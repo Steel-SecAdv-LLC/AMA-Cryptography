@@ -58,7 +58,7 @@ clang -O3 with the value barrier             12
 same key, two runs (noise floor)       up to 25
 ===================================  ==================
 
-Per-target limits are set from measurement, not from headroom: all FOURTEEN
+Per-target limits are set from measurement, not from headroom: all EIGHTEEN
 targets measure a cross-class delta of exactly zero under both gcc 13 and
 clang 18 at -O3, with a same-class floor of exactly zero, and every limit is
 0.  `ecdsa` was the last holdout — it carried a limit of 64 for the DER
@@ -256,9 +256,13 @@ KEY_CLASSES = ("A", "Z", "m", "q", "0", "~", "!", "5")
 #: nistp-ecdsa           0 / 0               0 / 0                0
 #: ecdsa                 0 / 0               0 / 0                0
 #: secp256k1-scalarmult  0 / 0               0 / 0                0
+#: consttime-lookup      0 / 0               0 / 0                0
+#: consttime-swap        0 / 0               0 / 0                0
+#: consttime-copy        0 / 0               0 / 0                0
+#: secure-memzero        0 / 0               0 / 0                0
 #: ===============  =================  ===================  ===============
 #:
-#: All fourteen are exactly zero, on both compilers, with a same-class floor of
+#: All eighteen are exactly zero, on both compilers, with a same-class floor of
 #: exactly zero — which is what "deterministic instrument" has to mean.  Their
 #: limit is 0.  A single retired instruction of cross-class
 #: difference in any of them falsifies the property the target states, and
@@ -294,7 +298,7 @@ KEY_CLASSES = ("A", "Z", "m", "q", "0", "~", "!", "5")
 #: comparison saw at least one short DER signature so it cannot pass over
 #: full-length cases alone.
 #:
-#: `x25519-batch` is the thirteenth of the fourteen, and it exists because a
+#: `x25519-batch` is the thirteenth of the eighteen, and it exists because a
 #: lane can be
 #: informational only where something else blocks.  `tests/c/test_dudect.c`
 #: registers eight info-only wall-clock lanes, and each one that names a reason
@@ -327,7 +331,7 @@ KEY_CLASSES = ("A", "Z", "m", "q", "0", "~", "!", "5")
 #: report a 1,744-instruction / 1,024-data-reference cross-class delta and exit
 #: 1.  The mutation was reverted.
 THRESHOLDS = {
-    # Every one of the fourteen is invariant by construction and measures
+    # Every one of the eighteen is invariant by construction and measures
     # exactly zero on both compilers; see the table above.  `ecdsa` was the
     # last holdout at 64, for the DER length term, and reached zero the way
     # `nistp-ecdsa` did: by signing through a fixed-width entry point.
@@ -346,7 +350,7 @@ THRESHOLDS = {
     # `ama_x25519_scalarmult_batch` — a separate entry point with its own
     # chunker, AVX2 4-way kernel and aggregated low-order rejection, none of
     # which the `x25519` target reaches.  Measured 0/0 on both compilers with
-    # a same-class floor of 0, like the other thirteen.
+    # a same-class floor of 0, like the other thirteen then in the inventory.
     "x25519-batch": 0,
     # `ama_secp256k1_point_mul` — the Montgomery ladder the info-only
     # `secp256k1 scalar multiplication` dudect lane exercises, which had no
@@ -354,18 +358,36 @@ THRESHOLDS = {
     # classes are a Hamming-weight contrast (k = 1 against a scalar just under
     # n), so every ladder step takes the opposite cswap branch between them.
     "secp256k1-scalarmult": 0,
+    # The four constant-time utility primitives from src/c/ama_consttime.c
+    # beyond `ama_consttime_memcmp`.  Each has a strict wall-clock lane in
+    # tests/c/test_dudect.c, and each lives in the sub-floor range there —
+    # the five-run floor re-measurement recorded in 8abb0ed read
+    # `ama_consttime_lookup` between -0.021 and +0.056 ns across all five
+    # runs.  Below the floor the wall-clock test abstains by design, and
+    # until these targets existed nothing deterministic stood behind that
+    # abstention for these calls — the same coverage gap e46906c closed for
+    # `ascon-encrypt` and `agent-binding`, recurring for the lanes nobody
+    # re-checked.  Measured 0/0 on both compilers with a same-class floor of
+    # 0, like the rest.
+    "consttime-lookup": 0,
+    "consttime-swap": 0,
+    "consttime-copy": 0,
+    "secure-memzero": 0,
 }
 
-#: The prose above states this inventory's size in six places ("All fourteen
-#: are exactly zero", "the thirteenth of the fourteen", "Every one of the
-#: fourteen", "like the other thirteen", "the other thirteen sat at 0", "the
-#: inventory is fourteen") — and it drifted: at one point the same dict was
+#: The prose above states this inventory's size in five present-tense places
+#: ("all EIGHTEEN targets", "All eighteen are exactly zero", "the thirteenth
+#: of the eighteen", "Every one of the eighteen", "across all eighteen
+#: targets" / "the inventory is eighteen" below MISS_THRESHOLD) — past-tense
+#: records such as "the other thirteen sat at 0" describe the inventory at
+#: the moment they were measured and stay as written.  The count drifted
+#: before this check existed: at one point the same dict was
 #: described as eleven, twelve, thirteen and fourteen targets in four
 #: sentences of the same file, plus "the other eleven" in
 #: src/c/ama_secp256k1.c and include/ama_cryptography.h.  Nothing checked any
 #: of them.  This does.  A target added or removed without updating the prose
 #: stops the tool at import with the number to write.
-_DOCUMENTED_TARGET_COUNT = 14
+_DOCUMENTED_TARGET_COUNT = 18
 if len(THRESHOLDS) != _DOCUMENTED_TARGET_COUNT:
     raise SystemExit(
         f"check_ghash_constant_time.py: THRESHOLDS holds {len(THRESHOLDS)} "
@@ -386,6 +408,33 @@ _REMEDY = {
         "src/c/internal/ama_ct_barrier.h. If only the cache-miss columns\n"
         "moved, check that the driver stages its scalar into one aligned\n"
         "buffer rather than pointing at one of two constants."
+    ),
+    "consttime-lookup": (
+        "ama_consttime_lookup in src/c/ama_consttime.c must scan the whole\n"
+        "table, OR-ing every element through a mask derived from a\n"
+        "constant-time index comparison. Any delta here means the scan gained\n"
+        "an early exit or the optimizer replaced the masked accumulate with an\n"
+        "index-dependent access — disassemble the loop and confirm it touches\n"
+        "every entry unconditionally."
+    ),
+    "consttime-swap": (
+        "ama_consttime_swap in src/c/ama_consttime.c must widen the condition\n"
+        "to an all-ones/all-zeros mask and swap through XOR on every byte. Any\n"
+        "delta here means a branch on the condition survived optimization; the\n"
+        "two condition values must retire identical instructions."
+    ),
+    "consttime-copy": (
+        "ama_consttime_copy in src/c/ama_consttime.c must select every output\n"
+        "byte through the condition mask, never branch to a memcpy on one side\n"
+        "of the condition. Any delta here means the masked select became a\n"
+        "branch — disassemble and confirm both condition values run the same\n"
+        "loop."
+    ),
+    "secure-memzero": (
+        "ama_secure_memzero in src/c/ama_consttime.c must scrub without\n"
+        "reading what it destroys. Any delta here means the scrub became\n"
+        "content-dependent, which would make zeroization itself a timing\n"
+        "channel over the secret being erased."
     ),
     "ghash": (
         "The usual cause is an optimizer turning the masked GHASH accumulation\n"
@@ -657,6 +706,120 @@ int main(int argc, char **argv) {
     static volatile int sink;
     for (int i = 0; i < 2000; i++)
         sink = sink ^ ama_consttime_memcmp(a, b, sizeof a);
+    return 0;
+}
+"""
+
+_CONSTTIME_LOOKUP_DRIVER = r"""
+/* Generated by tools/check_ghash_constant_time.py — do not edit. */
+#include <stdint.h>
+#include <string.h>
+#include "ama_cryptography.h"
+
+/* ama_consttime_lookup over a 256-entry x 32-byte table.  The class byte
+ * selects the secret index; the property under test is that the retired
+ * instruction count does not depend on which entry the index names.  The
+ * index derivation is arithmetic on the class byte, so the harness itself
+ * has no class-dependent branch or class-dependent address (same rule as
+ * the memcmp driver above). */
+int main(int argc, char **argv) {
+    enum { ENTRIES = 256, WIDTH = 32 };
+    static uint8_t table[ENTRIES * WIDTH];
+    static uint8_t out[WIDTH];
+    unsigned cls = (argc > 1) ? (unsigned)(unsigned char)argv[1][0] : 0x41u;
+    size_t idx = (size_t)((cls * 37u) % ENTRIES);
+
+    for (unsigned i = 0; i < sizeof table; i++)
+        table[i] = (uint8_t)(i * 251u);
+
+    static volatile uint8_t sink;
+    for (int i = 0; i < 2000; i++) {
+        ama_consttime_lookup(table, ENTRIES, WIDTH, idx, out);
+        sink = (uint8_t)(sink ^ out[0]);
+    }
+    return 0;
+}
+"""
+
+_CONSTTIME_SWAP_DRIVER = r"""
+/* Generated by tools/check_ghash_constant_time.py — do not edit. */
+#include <stdint.h>
+#include <string.h>
+#include "ama_cryptography.h"
+
+/* ama_consttime_swap over 4 KiB buffers.  The class byte's low bit is the
+ * condition — 'A' (0x41), 'm', 'q', '!' and '5' drive condition 1, 'Z',
+ * '0' and '~' drive condition 0 — derived arithmetically so the harness
+ * contributes no class-dependent branch of its own.  The property under
+ * test: both condition values retire identical instructions. */
+int main(int argc, char **argv) {
+    enum { N = 4096 };
+    static uint8_t a[N], b[N];
+    unsigned cls = (argc > 1) ? (unsigned)(unsigned char)argv[1][0] : 0x41u;
+    int cond = (int)(cls & 1u);
+
+    memset(a, 0x5a, sizeof a);
+    memset(b, 0xa5, sizeof b);
+
+    static volatile uint8_t sink;
+    for (int i = 0; i < 2000; i++) {
+        ama_consttime_swap(cond, a, b, sizeof a);
+        sink = (uint8_t)(sink ^ a[0]);
+    }
+    return 0;
+}
+"""
+
+_CONSTTIME_COPY_DRIVER = r"""
+/* Generated by tools/check_ghash_constant_time.py — do not edit. */
+#include <stdint.h>
+#include <string.h>
+#include "ama_cryptography.h"
+
+/* ama_consttime_copy over 4 KiB buffers, condition derived exactly as in
+ * the swap driver.  The property under test: copying and not-copying
+ * retire identical instructions. */
+int main(int argc, char **argv) {
+    enum { N = 4096 };
+    static uint8_t dst[N], src[N];
+    unsigned cls = (argc > 1) ? (unsigned)(unsigned char)argv[1][0] : 0x41u;
+    int cond = (int)(cls & 1u);
+
+    memset(dst, 0x5a, sizeof dst);
+    memset(src, 0xa5, sizeof src);
+
+    static volatile uint8_t sink;
+    for (int i = 0; i < 2000; i++) {
+        ama_consttime_copy(cond, dst, src, sizeof dst);
+        sink = (uint8_t)(sink ^ dst[0]);
+    }
+    return 0;
+}
+"""
+
+_SECURE_MEMZERO_DRIVER = r"""
+/* Generated by tools/check_ghash_constant_time.py — do not edit. */
+#include <stdint.h>
+#include <string.h>
+#include "ama_cryptography.h"
+
+/* ama_secure_memzero over a 4 KiB buffer whose CONTENT is the class byte.
+ * The scrub must not read what it destroys: a content-dependent scrub
+ * would make zeroization itself a timing channel over the secret being
+ * erased.  The class byte reaches the buffer only as a memset fill value —
+ * an operand, never a control input — so the harness retires the same
+ * instructions for every class by construction. */
+int main(int argc, char **argv) {
+    enum { N = 4096 };
+    static uint8_t buf[N];
+    unsigned cls = (argc > 1) ? (unsigned)(unsigned char)argv[1][0] : 0x41u;
+
+    static volatile uint8_t sink;
+    for (int i = 0; i < 2000; i++) {
+        memset(buf, (int)cls, sizeof buf);
+        ama_secure_memzero(buf, sizeof buf);
+        sink = (uint8_t)(sink ^ buf[0]);
+    }
     return 0;
 }
 """
@@ -1422,6 +1585,10 @@ _DRIVERS = {
     "x25519": _X25519_DRIVER,
     "x25519-batch": _X25519_BATCH_DRIVER,
     "secp256k1-scalarmult": _SECP256K1_SCALARMULT_DRIVER,
+    "consttime-lookup": _CONSTTIME_LOOKUP_DRIVER,
+    "consttime-swap": _CONSTTIME_SWAP_DRIVER,
+    "consttime-copy": _CONSTTIME_COPY_DRIVER,
+    "secure-memzero": _SECURE_MEMZERO_DRIVER,
 }
 
 
@@ -1486,11 +1653,11 @@ def _limit_for(metric: str, count_threshold: int) -> int:
 
 
 #: Miss-count threshold.  Zero, and that is measured rather than aspirational:
-#: across all fourteen targets at gcc 13 -O3 and clang 18 -O3, every
+#: across all eighteen targets at gcc 13 -O3 and clang 18 -O3, every
 #: cross-class miss delta and every same-class noise floor is exactly 0.  (An
 #: earlier revision of this note said "all ten targets" and cited ecdsa as
 #: "the one target with a legitimate public-data spread ... 24 instructions
-#: and 8 data references".  Both were stale: the inventory is fourteen, and
+#: and 8 data references".  Both were stale: the inventory is eighteen, and
 #: ecdsa's spread went to zero when the target moved to
 #: `ama_secp256k1_ecdsa_sign_raw`.)  A non-zero delta here means the two
 #: classes walked different addresses, which is the finding this metric exists

@@ -331,12 +331,38 @@ _LOC_TABLE_ROWS: dict[str, Callable[[str], bool]] = {
 }
 
 
+#: Tracked files the BUILD rewrites in place, excluded from every LoC row.
+#:
+#: Line counts are read from the working tree, and CI runs the suite after
+#: ``pip install -e .`` has re-signed the integrity artefact.  The re-signed
+#: ``_integrity_signature.py`` is not the committed one: its binding-digest
+#: dict is ``{}`` in a tree that has not built the binding extensions and one
+#: line per bound extension afterwards — six on a CI editable install — so
+#: the same commit measured 38,195 lines for `ama_cryptography/*.py` before
+#: the build and 38,202 after it.  That difference is what failed
+#: ``test_the_real_tree_matches_every_claim`` on every Windows lane at
+#: 7432e0d (job 97221692001: "says 38,195 ... measured 38202") while the
+#: same gate passed on a fresh checkout: a number that depends on whether a
+#: build has run is not a property of the commit, and no static count can
+#: pin it.  The file's own accuracy is enforced by a stronger instrument
+#: than a line count — it is the Ed25519-signed integrity artefact the
+#: import-time verifier checks byte-for-byte.
+_LOC_BUILD_REWRITTEN = frozenset(
+    {
+        "ama_cryptography/_integrity_signature.py",
+        "ama_cryptography/_integrity_digest.txt",
+    }
+)
+
+
 def _loc_tracked_files(repo: Path) -> list[str]:
     """Tracked files as repo-relative POSIX paths.
 
     ``git ls-files`` is authoritative; the sorted filesystem walk exists only
     for non-git fixture directories in this gate's own tests and excludes
-    nothing beyond ``.git`` (fixtures are clean by construction).
+    nothing beyond ``.git`` (fixtures are clean by construction).  Files the
+    build rewrites in place (``_LOC_BUILD_REWRITTEN``) are excluded in both
+    modes, for the reason documented on the constant.
     """
     if (repo / ".git").exists():
         proc = subprocess.run(
@@ -344,12 +370,14 @@ def _loc_tracked_files(repo: Path) -> list[str]:
             capture_output=True,
             check=True,
         )
-        return [p.decode("utf-8") for p in proc.stdout.split(b"\0") if p]
-    return sorted(
-        p.relative_to(repo).as_posix()
-        for p in repo.rglob("*")
-        if p.is_file() and ".git" not in p.parts
-    )
+        tracked = [p.decode("utf-8") for p in proc.stdout.split(b"\0") if p]
+    else:
+        tracked = sorted(
+            p.relative_to(repo).as_posix()
+            for p in repo.rglob("*")
+            if p.is_file() and ".git" not in p.parts
+        )
+    return [p for p in tracked if p not in _LOC_BUILD_REWRITTEN]
 
 
 def measure_loc_table(repo: Path) -> dict[str, tuple[int, int]]:

@@ -17,11 +17,15 @@ Renders `benchmarks/competitive.html` from the two measurement artefacts:
 
 Why a generator and not a static page
 -------------------------------------
-Every number on the page comes from JSON produced by a run. Nothing is typed in
-by hand, so the page cannot drift from the measurement the way a committed
-table does. The one hand-maintained structure is COVERAGE, and each of its
-cells is backed by a runtime capability probe rather than recollection — the
-probe source is quoted in the page's methodology section.
+Every number on the page comes from JSON produced by a run, so the numeric
+content cannot drift from the measurement the way a committed table does.
+Three structures in this file are hand-maintained and say so on the page:
+COVERAGE (each cell records the result of a runtime capability probe or a
+benchmark row taken at measurement time — the probe source is quoted in the
+methodology section — but the matrix itself is a transcription), VERSIONS
+(eight of the nine entries are pinned string literals, because the harness
+does not record peer versions), and NOTES (engineering prose, which must be
+reconciled against the rendered numbers whenever the JSON changes).
 
 Design rules (see the project's data-viz guidance)
 --------------------------------------------------
@@ -152,8 +156,9 @@ PRIM_ORDER = [
 ]
 
 
-# Stack-coverage matrix. Every cell is the result of a runtime capability probe
-# or a benchmark row, never recollection:
+# Stack-coverage matrix. Every cell records the result of a runtime capability
+# probe or a benchmark row established at measurement time (the matrix itself
+# is a transcription of those results, not a render-time re-probe):
 #   * a benchmark row for that (primitive, library) pair proves YES;
 #   * `EVP_KDF_fetch` / `EVP_KEM_fetch` / `EVP_SIGNATURE_fetch` / EC_GROUP
 #     lookup for OpenSSL; `Botan::*::create` for Botan; curve-info lookup for
@@ -197,17 +202,19 @@ COVERAGE: dict[str, dict[str, bool]] = {
     "FROST threshold": _coverage_row(1, 0, 0, 0, 0, 0, 0, 0),
 }
 
-# Engineering account of each result AMA does not lead. Written per primitive
-# because "we are slower" is not a finding — the reason is the finding, and in
-# two cases the reason is a property the project chose on purpose.
+# Engineering account per primitive, reconciled against the numbers rendered
+# beside it (the ranks and ratios below are recomputed from
+# multi_library_results.json whenever the note is edited — an earlier
+# revision of this dict contradicted the badges in its own rows).  "We are
+# slower" is not a finding — the reason is the finding, and in two cases the
+# reason is a property the project chose on purpose.
 NOTES = {
     "AES-256-GCM": (
-        "AMA defaults to constant-time bitsliced AES (INVARIANT-20), which never "
-        "indexes a table with key-dependent data. OpenSSL, libgcrypt and Nettle "
-        "use AES-NI/VAES, which is a hardware instruction for exactly this and "
-        "cannot be matched by a bitsliced software path. The cost is the "
-        "property. AMA still places 5th of 8 — ahead of Botan, mbedTLS and "
-        "wolfSSL, all of which use table or software AES on this build."
+        "AMA defaults to constant-time AES (INVARIANT-20), which never indexes "
+        "a table with key-dependent data. OpenSSL and libgcrypt lead through "
+        "AES-NI pipelines tuned end-to-end for this one construction. AMA "
+        "places 3rd of 8, ahead of Nettle, libsodium, Botan, mbedTLS and "
+        "wolfSSL on this build."
     ),
     "ChaCha20-Poly1305": (
         "OpenSSL runs an AVX-512 vectorised ChaCha20 core. AMA's is SIMD but "
@@ -215,14 +222,14 @@ NOTES = {
     ),
     "SHA3-256": (
         "libgcrypt and OpenSSL carry hand-optimised Keccak permutations. AMA's "
-        "x4 AVX2 path is wired and dispatching, but the scalar fallback "
-        "dominates at this message size. Last of six — the widest single gap on "
-        "the symmetric surface and the clearest optimisation target."
+        "single-stream scalar permutation places first of six, 0.7% ahead of "
+        "libgcrypt — a photo finish, not a durable lead (the x4 AVX2 path "
+        "batches four independent hashes and does not apply to one stream)."
     ),
-    "HMAC-SHA3-256": "Inherits the SHA3-256 permutation gap above; same cause, same fix.",
+    "HMAC-SHA3-256": "Tracks the SHA3-256 permutation result above; first of four here.",
     "X25519 scalar-mult": (
         "OpenSSL and libsodium use dedicated field arithmetic with a fused "
-        "multiply path. AMA is within 1.5x of both. Fourth of five."
+        "multiply path. AMA is within 1.5x of both. Third of five."
     ),
     "P-256 ECDSA sign": (
         "OpenSSL ships `ecp_nistz256`, a hand-written assembly implementation "
@@ -231,8 +238,9 @@ NOTES = {
     ),
     "P-256 ECDSA verify": "Same generic-versus-curve-specific split as P-256 signing.",
     "secp256k1 ECDSA verify": (
-        "Within 7% of Botan and 1.16x faster than OpenSSL. The signing side "
-        "leads outright after this branch's fixed-base comb landed."
+        "Fastest of three: 14.9% ahead of Botan and 1.48x ahead of OpenSSL. "
+        "The signing side also leads outright, after the fixed-base comb "
+        "landed (#379)."
     ),
     "ML-KEM-1024 encaps": (
         "The known lattice gap. AMA's ML-KEM is SIMD-accelerated (1.28x over "
@@ -613,7 +621,9 @@ same weight as the results it wins, and an engineering account of each gap.</p>
 <h2><span class="num">1</span>Stack coverage — what each library implements</h2>
 <p class="lede">Speed is only half the comparison. This is the other half: of
 {n_cov} primitive families in AMA's public surface, how many each peer offers at all.
-Every cell is a runtime capability probe or a benchmark row, not recollection.</p>
+Every cell records a runtime capability probe or a benchmark row from the
+measurement run; the matrix is transcribed into the generator, not re-probed at
+render time.</p>
 <div class="scroll"><table>
 <thead><tr><th>Primitive family</th>{cov_head}<th>Libs</th></tr></thead>
 <tbody>

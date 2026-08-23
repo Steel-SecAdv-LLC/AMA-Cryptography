@@ -119,7 +119,18 @@ legacy = [
     "cryptography>=46.0.7",
 ]
 hsm = [
-    # PKCS#11 support for hardware security modules
+    # PKCS#11 support for hardware security modules.
+    #
+    # Build note for platforms without a PyKCS11 wheel (Linux, ARM, macOS
+    # arm64, Windows cp314): every PyKCS11 sdist regenerates its wrapper
+    # with the host SWIG, and its interface file names the Python 2
+    # `PyInt_FromLong` in a %typemap.  SWIG >= 4.3 removed the compatibility
+    # alias that made that compile, so the sdist build fails under a current
+    # SWIG regardless of the version pinned here.  Until upstream removes
+    # the Python 2 call, install with the alias restored at the compiler
+    # command line, exactly as CI does (see .github/workflows/ci.yml):
+    #   CPPFLAGS="-DPyInt_FromLong=PyLong_FromLong" pip install "PyKCS11>=1.5.18"
+    # (MSVC: set CL=/DPyInt_FromLong=PyLong_FromLong instead.)
     "PyKCS11>=1.5.18",
 ]
 benchmark = [

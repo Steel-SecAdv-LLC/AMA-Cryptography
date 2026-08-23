@@ -706,6 +706,40 @@ jobs:
           python tools/check_ghash_constant_time.py \
             --lib build/lib/libama_cryptography_test.a --target agent-binding
 
+      # The four steps below are the deterministic counterparts for the
+      # constant-time utility primitives beyond `ama_consttime_memcmp`
+      # (which the `consttime` target already covers).  Each has a strict
+      # wall-clock lane in tests/c/test_dudect.c, and each lives in the
+      # sub-floor range there — the five-run floor re-measurement recorded
+      # in 8abb0ed read `ama_consttime_lookup` between -0.021 and +0.056 ns
+      # in all five runs.  Below the floor the wall-clock test abstains by
+      # design, and until these targets existed nothing deterministic stood
+      # behind that abstention for these calls: the same coverage gap
+      # e46906c closed for ascon-encrypt and agent-binding, recurring for
+      # the lanes nobody re-checked.  Every primitive here is a mask-select
+      # loop whose count is invariant by construction — measured 0/0 on all
+      # four metrics under gcc 13 and clang 18, and each gate is verified
+      # to FAIL on a planted condition branch or scan truncation.
+      - name: Constant-time lookup instruction count must not depend on the index
+        run: |
+          python tools/check_ghash_constant_time.py \
+            --lib build/lib/libama_cryptography_test.a --target consttime-lookup
+
+      - name: Constant-time swap instruction count must not depend on the condition
+        run: |
+          python tools/check_ghash_constant_time.py \
+            --lib build/lib/libama_cryptography_test.a --target consttime-swap
+
+      - name: Constant-time copy instruction count must not depend on the condition
+        run: |
+          python tools/check_ghash_constant_time.py \
+            --lib build/lib/libama_cryptography_test.a --target consttime-copy
+
+      - name: Secure memzero instruction count must not depend on the buffer contents
+        run: |
+          python tools/check_ghash_constant_time.py \
+            --lib build/lib/libama_cryptography_test.a --target secure-memzero
+
       - name: ML-KEM decapsulation instruction count must not depend on the FO verdict
         # A decapsulator measurably faster on implicit rejection hands an
         # attacker the plaintext-checking oracle the Fujisaki-Okamoto transform

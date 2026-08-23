@@ -126,7 +126,9 @@ same weight as the results it wins, and an engineering account of each gap.</p>
 <h2><span class="num">1</span>Stack coverage — what each library implements</h2>
 <p class="lede">Speed is only half the comparison. This is the other half: of
 16 primitive families in AMA's public surface, how many each peer offers at all.
-Every cell is a runtime capability probe or a benchmark row, not recollection.</p>
+Every cell records a runtime capability probe or a benchmark row from the
+measurement run; the matrix is transcribed into the generator, not re-probed at
+render time.</p>
 <div class="scroll"><table>
 <thead><tr><th>Primitive family</th><th>AMA</th><th>OpenSSL</th><th>libsodium</th><th>wolfSSL</th><th>Botan</th><th>Nettle</th><th>libgcrypt</th><th>mbedTLS</th><th>Libs</th></tr></thead>
 <tbody>
@@ -317,18 +319,18 @@ entire field.</p>
 <thead><tr><th>Primitive</th><th>AMA ops/s</th><th>Best peer ops/s</th>
 <th>Ratio</th><th>Standing</th></tr></thead>
 <tbody>
-<tr><td class="p">SHA3-256<div class="note">libgcrypt and OpenSSL carry hand-optimised Keccak permutations. AMA&#x27;s x4 AVX2 path is wired and dispatching, but the scalar fallback dominates at this message size. Last of six — the widest single gap on the symmetric surface and the clearest optimisation target.</div></td><td class="n">6,562</td><td class="n">6,517</td><td class="n">1.01× libgcrypt</td><td><span class="b b-win">fastest of 6</span></td></tr>
-<tr><td class="p">HMAC-SHA3-256<div class="note">Inherits the SHA3-256 permutation gap above; same cause, same fix.</div></td><td class="n">6,590</td><td class="n">6,463</td><td class="n">1.02× libgcrypt</td><td><span class="b b-win">fastest of 4</span></td></tr>
-<tr><td class="p">AES-256-GCM<div class="note">AMA defaults to constant-time bitsliced AES (INVARIANT-20), which never indexes a table with key-dependent data. OpenSSL, libgcrypt and Nettle use AES-NI/VAES, which is a hardware instruction for exactly this and cannot be matched by a bitsliced software path. The cost is the property. AMA still places 5th of 8 — ahead of Botan, mbedTLS and wolfSSL, all of which use table or software AES on this build.</div></td><td class="n">47,643</td><td class="n">74,826</td><td class="n">0.64× OpenSSL</td><td><span class="b b-behind">3<span class="sup">of</span>8</span></td></tr>
+<tr><td class="p">SHA3-256<div class="note">libgcrypt and OpenSSL carry hand-optimised Keccak permutations. AMA&#x27;s single-stream scalar permutation places first of six, 0.7% ahead of libgcrypt — a photo finish, not a durable lead (the x4 AVX2 path batches four independent hashes and does not apply to one stream).</div></td><td class="n">6,562</td><td class="n">6,517</td><td class="n">1.01× libgcrypt</td><td><span class="b b-win">fastest of 6</span></td></tr>
+<tr><td class="p">HMAC-SHA3-256<div class="note">Tracks the SHA3-256 permutation result above; first of four here.</div></td><td class="n">6,590</td><td class="n">6,463</td><td class="n">1.02× libgcrypt</td><td><span class="b b-win">fastest of 4</span></td></tr>
+<tr><td class="p">AES-256-GCM<div class="note">AMA defaults to constant-time AES (INVARIANT-20), which never indexes a table with key-dependent data. OpenSSL and libgcrypt lead through AES-NI pipelines tuned end-to-end for this one construction. AMA places 3rd of 8, ahead of Nettle, libsodium, Botan, mbedTLS and wolfSSL on this build.</div></td><td class="n">47,643</td><td class="n">74,826</td><td class="n">0.64× OpenSSL</td><td><span class="b b-behind">3<span class="sup">of</span>8</span></td></tr>
 <tr><td class="p">ChaCha20-Poly1305<div class="note">OpenSSL runs an AVX-512 vectorised ChaCha20 core. AMA&#x27;s is SIMD but not vectorised to that width. Third of seven.</div></td><td class="n">14,791</td><td class="n">34,974</td><td class="n">0.42× OpenSSL</td><td><span class="b b-behind">3<span class="sup">of</span>7</span></td></tr>
 <tr><td class="p">Ascon-128 AEAD</td><td class="n">5,501</td><td class="n">—</td><td class="n">—</td><td><span class="b b-sole">sole implementer</span></td></tr>
 <tr><td class="p">Ed25519 sign</td><td class="n">68,179</td><td class="n">49,223</td><td class="n">1.39× libsodium</td><td><span class="b b-win">fastest of 6</span></td></tr>
 <tr><td class="p">Ed25519 verify</td><td class="n">21,988</td><td class="n">17,526</td><td class="n">1.25× libsodium</td><td><span class="b b-win">fastest of 6</span></td></tr>
-<tr><td class="p">X25519 scalar-mult<div class="note">OpenSSL and libsodium use dedicated field arithmetic with a fused multiply path. AMA is within 1.5x of both. Fourth of five.</div></td><td class="n">18,266</td><td class="n">26,723</td><td class="n">0.68× OpenSSL</td><td><span class="b b-behind">3<span class="sup">of</span>5</span></td></tr>
+<tr><td class="p">X25519 scalar-mult<div class="note">OpenSSL and libsodium use dedicated field arithmetic with a fused multiply path. AMA is within 1.5x of both. Third of five.</div></td><td class="n">18,266</td><td class="n">26,723</td><td class="n">0.68× OpenSSL</td><td><span class="b b-behind">3<span class="sup">of</span>5</span></td></tr>
 <tr><td class="p">P-256 ECDSA sign<div class="note">OpenSSL ships `ecp_nistz256`, a hand-written assembly implementation specific to this one curve. AMA uses its generic NIST-curve path, which serves P-256, P-384 and P-521 from one body of code.</div></td><td class="n">7,243</td><td class="n">37,346</td><td class="n">0.19× OpenSSL</td><td><span class="b b-behind">3<span class="sup">of</span>4</span></td></tr>
 <tr><td class="p">P-256 ECDSA verify<div class="note">Same generic-versus-curve-specific split as P-256 signing.</div></td><td class="n">3,933</td><td class="n">13,404</td><td class="n">0.29× OpenSSL</td><td><span class="b b-behind">3<span class="sup">of</span>4</span></td></tr>
 <tr><td class="p">secp256k1 ECDSA sign</td><td class="n">8,806</td><td class="n">4,970</td><td class="n">1.77× Botan</td><td><span class="b b-win">fastest of 3</span></td></tr>
-<tr><td class="p">secp256k1 ECDSA verify<div class="note">Within 7% of Botan and 1.16x faster than OpenSSL. The signing side leads outright after this branch&#x27;s fixed-base comb landed.</div></td><td class="n">3,662</td><td class="n">3,186</td><td class="n">1.15× Botan</td><td><span class="b b-win">fastest of 3</span></td></tr>
+<tr><td class="p">secp256k1 ECDSA verify<div class="note">Fastest of three: 14.9% ahead of Botan and 1.48x ahead of OpenSSL. The signing side also leads outright, after the fixed-base comb landed (#379).</div></td><td class="n">3,662</td><td class="n">3,186</td><td class="n">1.15× Botan</td><td><span class="b b-win">fastest of 3</span></td></tr>
 <tr><td class="p">ML-DSA-65 keygen<div class="note">Within 20%; signing and verification both lead.</div></td><td class="n">3,956</td><td class="n">4,831</td><td class="n">0.82× OpenSSL 4.0.1</td><td><span class="b b-behind">2<span class="sup">of</span>2</span></td></tr>
 <tr><td class="p">ML-DSA-65 sign</td><td class="n">2,665</td><td class="n">1,054</td><td class="n">2.53× OpenSSL 4.0.1</td><td><span class="b b-win">fastest of 2</span></td></tr>
 <tr><td class="p">ML-DSA-65 verify</td><td class="n">8,241</td><td class="n">5,211</td><td class="n">1.58× OpenSSL 4.0.1</td><td><span class="b b-win">fastest of 2</span></td></tr>
@@ -416,15 +418,17 @@ python benchmarks/pqc_comparative_bench.py  # -> pqc_results.json
 python benchmarks/generate_competitive.py   # -> this page</pre>
 
 <p class="meta">
-Generated 2026-08-23 00:40 UTC · message size 65,536 bytes · measured clock 2.801 GHz<br>
+Generated 2026-08-23 20:16 UTC · message size 65,536 bytes · measured clock 2.801 GHz<br>
 Measured at commit <code>66d207396c3bb5645486f28ffa084dda0c12799f</code> (2026-07-29T19:09:37-05:00), AMA 3.4.0<br>
 Host: Intel(R) Xeon(R) Processor @ 2.80GHz · aes_ni, pclmulqdq, avx2, avx512f, bmi2, adx · <b>absent:</b> vaes, vpclmulqdq, sha_ni<br>
 AMA 3.4.0 · OpenSSL 3.0.13 · OpenSSL 4.0.1 4.0.1 (via cryptography 49.0.0) · libsodium 1.0.18 · wolfSSL 5.6.6 · Botan 2.19.3 · Nettle 3.9 · libgcrypt 1.10.3 · mbedTLS 2.28.8<br>
 Every figure on this page is read from <code>benchmarks/multi_library_results.json</code>
-and <code>benchmarks/pqc_results.json</code>. Nothing is hand-entered — including
-the AMA version above, which is read from those files' provenance rather than
-from the working tree. Regenerating this page without re-running the harness
-re-renders the same measurements under the same stamp; it cannot relabel them.
+and <code>benchmarks/pqc_results.json</code>, including the AMA version above, which comes
+from those files' provenance rather than from the working tree. The PEER LIBRARY
+versions on the line above are pinned in <code>benchmarks/generate_competitive.py</code>,
+because the harness does not record them — eight of the nine entries there are
+string literals. Regenerating this page without re-running the harness re-renders
+the same measurements under the same stamp; it cannot relabel them.
 </p>
 
 </div></body></html>

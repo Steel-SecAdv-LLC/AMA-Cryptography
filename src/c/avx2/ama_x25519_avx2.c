@@ -46,13 +46,17 @@
  *   vectors against the scalar reference, matching the cross-check
  *   budget of `tests/c/test_x25519_field_equiv.c`).
  *
- * TODO(AVX-512-IFMA): the kernel's real home is AVX-512 IFMA
- * (`vpmadd52luq` / `vpmadd52huq` on Cannon Lake+, Ice Lake+,
- * Sapphire Rapids, Zen 5).  IFMA gives a 4-way 52-bit lane-wise
- * multiply that drops donna-32bit's ~100-cross-product schedule to
- * ~25 — the regime where 4× SIMD finally beats 4× scalar fe64.
- * The field layout, cswap, and dispatch glue carry over
- * unchanged; only `fe_mul_x4` / `fe_sqr_x4` swap to IFMA intrinsics.
+ * Design note — AVX-512-IFMA successor (deliberately not implemented
+ * here): the kernel's real home is AVX-512 IFMA (`vpmadd52luq` /
+ * `vpmadd52huq` on Cannon Lake+, Ice Lake+, Sapphire Rapids, Zen 5).
+ * IFMA gives a 4-way 52-bit lane-wise multiply that drops
+ * donna-32bit's ~100-cross-product schedule to ~25 — the regime where
+ * 4× SIMD finally beats 4× scalar fe64.  The field layout, cswap, and
+ * dispatch glue carry over unchanged; only `fe_mul_x4` / `fe_sqr_x4`
+ * swap to IFMA intrinsics.  This AVX2 kernel is complete as shipped;
+ * an IFMA kernel is new work that requires IFMA silicon to validate
+ * and is recorded here as the design direction, not as a defect in
+ * this one.
  *
  * AI Co-Architects: Eris + | Eden ~ | Devin * | Claude @
  */

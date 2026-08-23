@@ -365,32 +365,50 @@ def benchmark_operation(
     """
     Benchmark an operation and return operations per second.
 
-    ``iterations`` is a *floor*, not the batch size.  Batches are sized to span
-    at least ``_MIN_SAMPLE_SECONDS`` at the fastest rate observed so far, so a
-    cheap primitive gets many more iterations than an expensive one and both
-    are measured over a comparable window.  ``rounds`` full-window batches are
-    run and the fastest is reported (see ``_ROUNDS``).
+    ``iterations`` is a *floor*, not the batch size.  Batches are grown until
+    a timed batch spans at least ``_MIN_SAMPLE_SECONDS`` of measured
+    wall-clock time, so a cheap primitive gets many more iterations than an
+    expensive one and both are measured over a comparable window.  ``rounds``
+    full-window batches are collected and the fastest is reported (see
+    ``_ROUNDS``).
 
-    The target is recomputed after *every* batch rather than from one
-    up-front calibration.  Sizing once is not enough in either direction: a
-    calibration that lands during interference reports a low rate and sizes
-    the next batch too small, and — the subtler case — a batch that is slow
-    because it was unlucky satisfies the elapsed-time target with very few
-    iterations, so the undersized batch would then be reused for every
-    remaining round.  Keying the target off the fastest rate seen recovers
-    from both, because throughput noise is one-sided: interference can only
-    make an operation look slower than it is, never faster.
+    A batch qualifies as full-window on its own measured elapsed time, never
+    on a predicted iteration count.  The sampling rule exists to keep a
+    lucky-high rate off a short window out of the published number, and the
+    measured window enforces that directly: ``rate = batch / elapsed`` with
+    ``elapsed >= _MIN_SAMPLE_SECONDS`` *is* a full-window measurement,
+    whatever the fastest rate observed elsewhere in the run happens to be.
+    Qualification by predicted count (``batch >= fastest_rate * window``) was
+    tried first and hard-failed legitimate runs on shared runners: every
+    marginally faster observation raised the prediction, revoked the batches
+    already credited, and restarted the count, so the attempt budget drained
+    on re-validation instead of measurement.  A batch that spanned the window
+    when it ran does not stop having done so because a later batch ran
+    faster.  On a noisy host the two rules point in opposite directions —
+    most batches run *slower* than the fastest rate seen, which lengthens
+    their window (credit under this rule) while leaving their iteration count
+    under each newly raised prediction (revocation under the old one).
 
-    Only full-window batches are eligible to be reported.  An undersized
-    batch can report a lucky-high rate off a very short window, and since the
-    baselines this feeds are *floors*, an inflated number makes the gate
-    weaker — so those batches inform sizing and nothing else.
+    Sizing still keys off the fastest rate seen anywhere in the run, because
+    throughput noise is one-sided: interference can only make an operation
+    look slower than it is, never faster.  A slow batch therefore cannot
+    shrink the sizing target, and a small batch that spans the window only
+    because it stalled is credited (its rate can only be pessimistic, and the
+    fastest round is what ships) but does not lock in its size for the
+    remaining rounds.
+
+    An operation too cheap to span the window inside ``_MAX_ITERATIONS``
+    iterations is credited at the cap — the same ceiling
+    ``_required_batch`` has always applied to the predicted target.  An
+    under-sampled run still raises: fewer than ``rounds`` credited batches is
+    a failure to MEASURE, and this function does not return numbers it cannot
+    stand behind.
 
     Args:
         operation: Callable to benchmark
         iterations: Minimum iterations per timed batch
         warmup: Number of warmup iterations (not counted)
-        rounds: Full-window batches to run; the fastest is reported
+        rounds: Full-window batches to collect; the fastest is reported
 
     Returns:
         Operations per second
@@ -405,7 +423,7 @@ def benchmark_operation(
     for _attempt in range(rounds + _MAX_SIZING_ATTEMPTS):
         if completed >= rounds:
             break
-        ops, _elapsed = _timed_batch(operation, batch)
+        ops, elapsed = _timed_batch(operation, batch)
         if ops == float("inf"):
             # The clock could not resolve this batch at all (elapsed read as
             # exactly zero).  Returning that straight out was a fail-OPEN in
@@ -413,23 +431,28 @@ def benchmark_operation(
             # valid JSON (RFC 8259) and which a strict reader rejects, and an
             # infinite rate clears every regression FLOOR it is compared
             # against.  A batch too short to time is a sizing problem, so it
-            # is treated as one — grow and try again, exactly as an
-            # under-target batch is.
+            # is treated as one — grow and try again.  Checked before the
+            # cap-credit below: a zero-elapsed batch must never be credited,
+            # at the cap or anywhere else.
             batch = min(_MAX_ITERATIONS, max(batch + 1, batch * 8))
-            completed = 0
-            best = 0.0
             continue
         observed = max(observed, ops)
-        target = _required_batch(observed)
-        if batch >= target:
+        if elapsed >= _MIN_SAMPLE_SECONDS or batch >= _MAX_ITERATIONS:
+            # Credited on this batch's own measured window (or at the
+            # iteration cap, which bounds the job's runtime for operations
+            # too cheap to span the window at all).  A credit is never
+            # revoked: its validity is a fact about the batch that ran, not
+            # about the estimates that came after it.
             best = max(best, ops)
             completed += 1
-        else:
+        target = _required_batch(observed)
+        if batch < target:
             # Grow toward the target, capped at 8x a step so one wild
-            # extrapolation cannot jump straight to _MAX_ITERATIONS.
+            # extrapolation cannot jump straight to _MAX_ITERATIONS.  A
+            # credited batch grows too when it is under target — later
+            # batches should be sized for the fastest rate seen — it just
+            # keeps the credit it earned.
             batch = min(_MAX_ITERATIONS, max(batch + 1, min(target, batch * 8)))
-            completed = 0
-            best = 0.0
 
     if completed >= rounds and best > 0.0:
         return best
@@ -470,7 +493,7 @@ def benchmark_operation(
         f"benchmark_operation completed {completed} of {rounds} full-window "
         f"batches within {rounds + _MAX_SIZING_ATTEMPTS} attempts (batch size "
         f"reached {batch:,}, fastest observed rate {observed:,.1f} ops/sec). "
-        "Reporting the fastest UNDER-TARGET batch instead would publish a rate "
+        "Reporting the fastest SHORT-WINDOW batch instead would publish a rate "
         "off a window shorter than the sampling rule requires, and these "
         "numbers feed regression FLOORS: an inflated one makes the gate weaker. "
         "Re-run on a quieter host, or raise the sampling budget."
@@ -1319,7 +1342,8 @@ def _provenance() -> "list[tuple[str, str]]":
         ("Command", f"`{_invocation()}`"),
         (
             "Sampling",
-            f"batches sized to span >= {_MIN_SAMPLE_SECONDS:g}s at the fastest rate observed; "
+            f"batches grown (sized to the fastest rate observed) until a timed batch "
+            f"spans >= {_MIN_SAMPLE_SECONDS:g}s of measured wall-clock; "
             f"{_ROUNDS} full-window batches per call",
         ),
         ("Extra whole-run repeats", repeated or "none"),

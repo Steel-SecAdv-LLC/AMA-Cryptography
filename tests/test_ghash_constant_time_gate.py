@@ -579,7 +579,7 @@ class TestCalibration:
     A deterministic instrument that reserves a benign band it does not need
     has bought the right to pass a real divergence of that size. Measured on
     the AMA_TESTING_MODE static archive at -O3 under both compilers CI uses,
-    all fourteen targets have a cross-class delta of exactly zero and a
+    all eighteen targets have a cross-class delta of exactly zero and a
     same-class floor of exactly zero. ``ecdsa`` was the last to carry a benign
     term — the DER encoding of the public r and s — and reached zero by
     signing through a fixed-width entry point rather than by tolerating it.
@@ -591,6 +591,25 @@ class TestCalibration:
     a lane that cannot fail CI. Measured at limit 0 on all four metrics —
     16,020,324 instruction references and 3,835,722 data references,
     byte-identical across all eight classes, with identical D1 and LL misses.
+
+    ``consttime-lookup``, ``consttime-swap``, ``consttime-copy`` and
+    ``secure-memzero`` are the fifteenth through eighteenth: the strict
+    wall-clock lanes for the constant-time utility primitives live in the
+    sub-floor range (the five-run floor re-measurement in 8abb0ed read
+    ``ama_consttime_lookup`` between −0.021 and +0.056 ns in all five runs),
+    where the wall-clock test abstains by design and, until these targets
+    existed, nothing deterministic stood behind the abstention — the gap
+    e46906c closed for ``ascon-encrypt`` and ``agent-binding``, recurring
+    for the lanes nobody re-checked. Measured byte-identical across all
+    eight classes on all four metrics under both compilers (gcc 13 /
+    clang 18 I refs: lookup 99,715,167 / 99,730,903; swap 98,548,267 /
+    98,584,191; copy 65,782,267 / 65,818,191; memzero 12,529,232 /
+    19,761,950), same-class floor 0. Each gate is verified to FAIL rather
+    than assumed to work: an early return planted on ``ama_consttime_swap``'s
+    condition reported an 81,930,000-instruction cross-class delta and exit
+    1, and an index-dependent scan truncation planted in
+    ``ama_consttime_lookup`` reported 54,488,000 and exit 1; both mutations
+    were reverted.
     """
 
     #: Every target whose count is invariant by construction — measured 0/0
@@ -611,6 +630,10 @@ class TestCalibration:
             "x25519-batch",
             "ecdsa",
             "secp256k1-scalarmult",
+            "consttime-lookup",
+            "consttime-swap",
+            "consttime-copy",
+            "secure-memzero",
         }
     )
 

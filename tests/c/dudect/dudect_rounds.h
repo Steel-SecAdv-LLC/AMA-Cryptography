@@ -577,8 +577,12 @@ static inline int dudect_rounds_print_sub_floor(const dudect_rounds_t *r) {
         printf("  - %s: |t| reached %.4f in %d of %d round(s), but the per-class\n"
                "    difference is %+.3f ns. A wall-clock t-test on shared hardware\n"
                "    cannot separate that from data-operand-dependent execution in the\n"
-               "    CPU (Intel DOITM / ARM PSTATE.DIT). The deterministic\n"
-               "    instruction-count gates own this range and measure it exactly.\n",
+               "    CPU (Intel DOITM / ARM PSTATE.DIT). Where a deterministic\n"
+               "    instruction-count target covers this call, it measures the part\n"
+               "    of this range that changes the instruction sequence; a difference\n"
+               "    living only in operand-dependent latency is measured by NEITHER\n"
+               "    instrument. SUB-FLOOR means not adjudicable by this apparatus,\n"
+               "    not shown to be absent.\n",
                lane->name, fabs(lane->worst_t), lane->rounds_failed, r->rounds_run,
                lane->max_trip_delta_ns);
         /* Say so when the excursions also disagreed on direction, rather than

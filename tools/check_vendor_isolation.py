@@ -155,10 +155,13 @@ VENDORS: tuple[Vendor, ...] = (
         name="OpenSSL",
         # `cryptography` and `pyOpenSSL` are OpenSSL bindings; `_ssl` and
         # `_hashlib` are CPython's own OpenSSL-backed stdlib accelerators and
-        # are NOT listed — INVARIANT-1's stdlib carve-out admits `hashlib` for
-        # hashing, and excluding them here would make this gate fail on a
-        # stock interpreter rather than on an AMA defect.  See the module
-        # docstring in tools/check_corpus_originality.py for the boundary.
+        # are NOT listed — they are the interpreter's linkage, not AMA's.
+        # INVARIANT-1 confines stdlib `hashlib` to the import-time trust
+        # bootstrap (enforced with exact per-file counts by
+        # tools/check_stdlib_hash_boundary.py); listing the interpreter's
+        # own modules here would make this gate fail on a stock interpreter
+        # rather than on an AMA defect.  See the module docstring in
+        # tools/check_corpus_originality.py for the boundary.
         modules=frozenset({"OpenSSL", "cryptography"}),
         library_names=("libcrypto", "libssl", "libeay32", "ssleay32"),
         symbol_prefixes=("EVP_", "OPENSSL_", "SSL_", "X509_", "RAND_bytes"),

@@ -83,6 +83,21 @@ name: Release — Build, Sign, and Publish
 #      sees it — a dry run is the only thing that exercises the real repair
 #      step against the real matrix and runner fleet.
 #
+#      A recorded green dry run covers a COMMIT, not a branch, and this
+#      file is not the only input that invalidates it.  The release path
+#      the dry run exercises is: this workflow, `setup.py` (the
+#      AMA_BUILD_PIPELINE post-build signer cibuildwheel invokes),
+#      `ama_cryptography/_build_sign.py`, `tools/resign_wheel.py` (the
+#      Linux post-repair re-signer), `tools/wheel_smoke_test.py`
+#      (CIBW_TEST_COMMAND), and `tools/check_release_tag.py`.  If ANY of
+#      those changed since the last green dispatch run, the dry run is
+#      stale and must be re-run before tagging — this is a procedural
+#      obligation (INVARIANT-25 records why no static checker can
+#      discharge it), and it has been missed in the exact inverse
+#      direction before: a re-run was once demanded "because release.yml
+#      changed" when release.yml was byte-identical to the recorded run
+#      and it was setup.py that had moved.
+#
 #   2. Tag only after the dry run is green.  The tag MUST be annotated and
 #      signed — `-s`, not a bare `git tag` — and preflight now enforces it
 #      (tools/check_release_tag.py).  This is not ceremony either: of the
@@ -785,6 +800,20 @@ jobs:
       && needs['publish-pypi'].result != 'failure'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # The release narrative has always said publication happens "under the
+    # protected `release` environment", and until this block existed the
+    # workflow disagreed: `publish-pypi` carried `environment: pypi` while
+    # the job that actually creates the immutable release — the one holding
+    # `contents: write` — was gated by nothing but its `if:`.  Referencing
+    # the environment here creates it on first run WITHOUT protection
+    # rules; the required-reviewer / branch-and-tag protections must be
+    # configured once on the repository's Settings -> Environments page for
+    # the gate to hold anything.  Until they are, this line documents the
+    # intended gate rather than enforcing it, and the release runbook above
+    # treats configuring it as part of the tag-time procedure.
+    environment:
+      name: release
+      url: https://github.com/${{ github.repository }}/releases/tag/v${{ needs.preflight.outputs.version }}
     permissions:
       contents: write
     steps:

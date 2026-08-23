@@ -1716,7 +1716,7 @@ AMA_API ama_error_t ama_secp256k1_ecdsa_sign(
  * retired-instruction count taken over the whole call and forced
  * `check_ghash_constant_time.py` to hold the `ecdsa` target at a non-zero
  * threshold. Measured through this entry point the encoder is outside the
- * measurement and the target sits at 0, like the other thirteen.
+ * measurement and the target sits at 0, like the other seventeen.
  *
  * @param signature   Output buffer of exactly 64 octets.
  * @param message     32-octet digest. This function does NOT hash.

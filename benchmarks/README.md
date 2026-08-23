@@ -16,6 +16,9 @@ one of the artifacts below (or to live output regenerated from them):
 | `benchmark_results.json` (runtime-only) | Suite output consumed by dashboards | `python benchmarks/benchmark_suite.py --json benchmarks/benchmark_results.json` |
 | `../build/bin/benchmark_c_raw` (runtime-only) | Raw C per-op medians (no ctypes overhead) | `cmake -B build -DAMA_USE_NATIVE_PQC=ON -DCMAKE_BUILD_TYPE=Release && cmake --build build --target benchmark_c_raw && build/bin/benchmark_c_raw --json` |
 | [`../docs/compliance/CSRC_ALIGN_REPORT.md`](../docs/compliance/CSRC_ALIGN_REPORT.md) | NIST ACVP vector counts (1,215/1,215/0 — 815 AFT + 400 SHA-3 MCT) | Updated with each alignment run |
+| [`multi_library_results.json`](multi_library_results.json) | Competitive comparator measurements (AMA + 8 peer libraries, 12 primitives). `provenance` names the commit, AMA version and date of the measurement run | `python benchmarks/comparative_benchmark.py` on the measurement host |
+| [`pqc_results.json`](pqc_results.json) | Competitive PQC measurements (separate host; the page labels them as a prior record) | Same harness, PQC surface |
+| [`competitive.html`](competitive.html) | The rendered competitive page — a pure function of the two JSONs above plus the generator's pinned versions/coverage/notes. `tests/test_competitive_page.py` fails if the committed page is not a fresh render (modulo the render timestamp) | `python benchmarks/generate_competitive.py` |
 
 If a chart cannot cite one of these, it should not be in the repository.
 The fallback tables in [`generate_charts.py`](generate_charts.py) are

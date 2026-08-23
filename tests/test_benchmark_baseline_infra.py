@@ -282,19 +282,27 @@ class TestSampleWindow:
         """Sizing keys off the fastest rate seen, not the most recent one.
 
         With the target derived from the latest batch, one slow reading while
-        the batch is still small drops the requirement to almost nothing, and
-        that small batch is accepted — reporting the slow rate. Because
+        the batch is still small drops the requirement to almost nothing and
+        the batch never grows to span the window at the true rate. Because
         interference is one-sided, the fastest rate seen is the better
         estimate of what the batch must be to fill the window.
+
+        The scripted ``(ops, elapsed)`` pairs satisfy ``ops = n / elapsed``,
+        the identity the real ``_timed_batch`` guarantees; an earlier version
+        of this test scripted ``elapsed = 0.0`` beside finite rates, a state
+        the code under test cannot produce.
         """
         self._virtual_clock(monkeypatch)
-        # Fast, then a stall while the batch is still tiny, then fast again.
-        rates = iter([1_000.0, 10.0] + [1_000.0] * 40)
+        # Fast, then a stall while the batch is still small, then fast again.
+        # The stalled batch is slow but still under the window (8 iterations
+        # at 100 ops/sec is 0.08 s), so nothing may be credited off it.
+        rates = iter([1_000.0, 100.0] + [1_000.0] * 40)
         sizes: list[int] = []
 
         def scripted(op: Callable[[], object], n: int) -> tuple[float, float]:
             sizes.append(n)
-            return next(rates), 0.0
+            rate = next(rates)
+            return rate, n / rate
 
         monkeypatch.setattr(br, "_timed_batch", scripted)
 
@@ -311,16 +319,69 @@ class TestSampleWindow:
     ) -> None:
         """Baselines are floors, so a lucky short batch must not be reported.
 
-        The first batch is undersized and reports an implausibly high rate.
-        It may inform sizing; it must not be the number that ships.
+        The first batch reports an implausibly high rate off a window far
+        shorter than the sampling rule requires. It may inform sizing; it
+        must not be the number that ships.
+
+        The scripted pairs satisfy ``ops = n / elapsed``: the lucky batch is
+        10 iterations over 1 ms. An earlier version scripted the high rate
+        beside a 0.2 s window — a pair the real ``_timed_batch`` cannot
+        return, and one that would make the "undersized" batch a genuine
+        full-window measurement.
         """
         self._virtual_clock(monkeypatch)
-        rates = iter([9_999.0, 1_000.0, 1_000.0])
-        monkeypatch.setattr(br, "_required_batch", lambda rate: 50)
-        monkeypatch.setattr(br, "_timed_batch", lambda op, n: (next(rates), 0.2))
+        batches = iter([(9_999.0, 10 / 9_999.0), (1_000.0, 0.2), (1_000.0, 0.2)])
+        monkeypatch.setattr(br, "_timed_batch", lambda op, n: next(batches))
 
         rate = br.benchmark_operation(lambda: None, iterations=10, warmup=0, rounds=1)
         assert rate == 1_000.0, f"an undersized batch's {rate} ops/sec reached the report"
+
+    def test_a_faster_observation_does_not_revoke_batches_already_measured(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The AArch64 CI failure, reduced (job 97221692527 at 7432e0d).
+
+        On a shared runner the fastest observed rate creeps upward as
+        interference subsides.  Qualifying batches against a target predicted
+        from that fastest rate re-derived the requirement after every new
+        maximum and discarded every batch already credited, so the attempt
+        budget drained on re-validation and the run hard-failed with
+        ``completed 1 of 3`` — on a host that was producing genuine
+        full-window batches the whole time.  A batch that spanned the window
+        when it ran is a valid measurement whatever runs after it.
+
+        The script models the creep: after sizing settles, batches alternate
+        two-window-spanning-credits-then-a-new-maximum, so a streak-based
+        rule can never see three credits in a row, while a batch-owned rule
+        accumulates them.  Verified to raise ``completed \\d of 3`` under the
+        prediction-based rule this replaces.
+        """
+        state = {"attempt": 0, "peak": 1_000.0}
+
+        def creeping(op: Callable[[], object], n: int) -> tuple[float, float]:
+            state["attempt"] += 1
+            if state["attempt"] <= 2:
+                # Sizing phase: honest short batches at the initial rate.
+                return state["peak"], n / state["peak"]
+            if state["attempt"] % 3 == 0:
+                # Every third batch, interference subsides a little more and
+                # the batch beats the previous maximum — its own window comes
+                # up short of _MIN_SAMPLE_SECONDS as a consequence.
+                state["peak"] *= 1.01
+                return state["peak"], n / state["peak"]
+            # The common case: slightly slower than the peak, so the sized
+            # batch spans MORE than the window.  These are the measurements
+            # the old rule kept revoking.
+            rate = state["peak"] * 0.99
+            return rate, n / rate
+
+        monkeypatch.setattr(br, "_timed_batch", creeping)
+
+        rate = br.benchmark_operation(lambda: None, iterations=10, warmup=0, rounds=3)
+        assert rate == pytest.approx(state["peak"] * 0.99, rel=0.02), (
+            f"reported {rate}, not a credited full-window rate near the "
+            f"fastest observed {state['peak']}"
+        )
 
 
 class TestAnUnderSampledRunIsNotReported:
@@ -349,9 +410,23 @@ class TestAnUnderSampledRunIsNotReported:
     def test_a_never_full_window_run_raises_instead_of_reporting_a_short_batch(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """No batch ever reaches the target, so only under-target rates exist."""
-        monkeypatch.setattr(br, "_required_batch", lambda rate: br._MAX_ITERATIONS + 1)
-        monkeypatch.setattr(br, "_timed_batch", lambda op, n: (9_999.0, 0.001))
+        """No batch ever spans the window, so only short-window rates exist.
+
+        The one physical scenario a working clock permits here is a machine
+        that keeps looking faster: each batch is sized for the fastest rate
+        seen, and each batch then beats that rate by enough that its own
+        window falls short again.  The scripted pairs model exactly that —
+        every batch runs 20% faster than the previous maximum, so ``elapsed``
+        lands near ``window / 1.2`` every time — and satisfy the
+        ``ops = n / elapsed`` identity the real ``_timed_batch`` guarantees.
+        """
+        state = {"rate": 10_000.0}
+
+        def accelerating(op: Callable[[], object], n: int) -> tuple[float, float]:
+            state["rate"] *= 1.2
+            return state["rate"], n / state["rate"]
+
+        monkeypatch.setattr(br, "_timed_batch", accelerating)
 
         with pytest.raises(RuntimeError, match="full-window batches"):
             br.benchmark_operation(lambda: None, iterations=10, warmup=0, rounds=3)
@@ -359,30 +434,26 @@ class TestAnUnderSampledRunIsNotReported:
     def test_a_partly_sampled_run_raises_instead_of_reporting_fewer_rounds(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Full-window batches happen, but the streak never reaches ``rounds``.
+        """Full-window batches happen, but fewer than ``rounds`` of them.
 
-        Every second attempt is under-target, which resets the streak, so the
-        loop exhausts its attempt budget holding ``completed == 1`` and a
-        non-zero ``best``.  That is the input on which ``return best`` reported
-        a one-round measurement as if it were a three-round one.
-
-        ``_MAX_SIZING_ATTEMPTS`` is pinned rather than inherited: the loop runs
-        ``rounds + _MAX_SIZING_ATTEMPTS`` times, so which of the alternating
-        attempts is LAST — and therefore whether the run ends holding
-        ``completed == 1`` or ``completed == 0`` — is decided by the parity of
-        that sum.  Reading the shipped constant would make this assertion
-        change meaning if the constant ever moved by one, for a reason that has
-        nothing to do with the property under test.
+        One batch is credited, and every remaining attempt times faster than
+        the window (the machine is still ramping — each batch beats the
+        previous maximum, so its own window falls short), so the attempt
+        budget exhausts holding ``completed == 1`` and a non-zero ``best``.
+        That is the input on which ``return best`` once reported a one-round
+        measurement as if it were a three-round one.
         """
-        monkeypatch.setattr(br, "_MAX_SIZING_ATTEMPTS", 4)  # 3 + 4 = 7 attempts, odd
-        calls = {"n": 0}
+        state = {"rate": 0.0}
 
-        def alternating_target(rate: float) -> int:
-            calls["n"] += 1
-            return 1 if calls["n"] % 2 else br._MAX_ITERATIONS + 1
+        def one_credit_then_ramp(op: Callable[[], object], n: int) -> tuple[float, float]:
+            if state["rate"] == 0.0:
+                # The first batch spans the window: 10 iterations at 50/sec.
+                state["rate"] = 1_000.0
+                return 50.0, 0.2
+            state["rate"] *= 1.2
+            return state["rate"], n / state["rate"]
 
-        monkeypatch.setattr(br, "_required_batch", alternating_target)
-        monkeypatch.setattr(br, "_timed_batch", lambda op, n: (1_000.0, 0.2))
+        monkeypatch.setattr(br, "_timed_batch", one_credit_then_ramp)
 
         with pytest.raises(RuntimeError, match=r"completed 1 of 3 full-window"):
             br.benchmark_operation(lambda: None, iterations=10, warmup=0, rounds=3)

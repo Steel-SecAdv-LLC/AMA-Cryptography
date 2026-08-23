@@ -276,6 +276,54 @@ class TestLocTableFileCounts:
         assert any("Tests (`tests/**/*.py`)" in p for p in problems)
 
 
+class TestBuildRewrittenFilesAreNotCounted:
+    """``pip install -e .`` re-signs ``ama_cryptography/_integrity_signature.py``
+    in place, and the re-signed artefact's length is not the committed one:
+    the binding-digest dict is ``{}`` in a tree that has not built the binding
+    extensions and one line per bound extension afterwards — six on a CI
+    editable install.  Counting it made the LoC table a property of whether a
+    build had run: every Windows lane at 7432e0d failed the gate with
+    "says 38,195 ... measured 38202" (job 97221692001) while the same gate
+    passed on a fresh checkout.  A file the build rewrites must not
+    contribute to a statically pinned count.
+    """
+
+    def test_the_rewritten_artefact_does_not_move_the_measured_table(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        repo = _synthetic_repo(tool, tmp_path)
+        before = tool.measure_loc_table(repo)
+        sig = repo / "ama_cryptography" / "_integrity_signature.py"
+        # 52 lines, the size a six-binding re-sign produced in CI.
+        sig.write_text("DIGEST = '00'\n" * 52, encoding="utf-8")
+        after = tool.measure_loc_table(repo)
+        assert after == before, (
+            "a build-rewritten artefact moved the measured LoC table; the "
+            "gate would fail after `pip install -e .` on any tree whose "
+            "re-signed artefact differs in length from the committed one"
+        )
+
+    def test_the_exclusion_is_a_named_list_not_a_pattern(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        """Only the named build-rewritten files are excluded.
+
+        A sibling that merely looks related still counts — otherwise the
+        exclusion would be a hole a rename could widen silently.
+        """
+        repo = _synthetic_repo(tool, tmp_path)
+        for rel in tool._LOC_BUILD_REWRITTEN:
+            target = repo / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("x = 1\n", encoding="utf-8")
+        sibling = repo / "ama_cryptography" / "_integrity_helper.py"
+        sibling.write_text("x = 1\n", encoding="utf-8")
+
+        tracked = set(tool._loc_tracked_files(repo))
+        assert not tracked & tool._LOC_BUILD_REWRITTEN
+        assert "ama_cryptography/_integrity_helper.py" in tracked
+
+
 class TestAggregateTestCounts:
     def test_the_static_measure_ignores_files_without_a_test_function(
         self, tool: ModuleType, tmp_path: Path

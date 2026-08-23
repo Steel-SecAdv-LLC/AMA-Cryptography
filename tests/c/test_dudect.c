@@ -1238,7 +1238,7 @@ static dudect_measurement_t test_secp256k1_scalarmult(int iterations) {
  * early-exit in the Fermat inversion `sc_inv`, a nonce-value-dependent
  * HMAC-DRBG retry in `rfc6979_nonce`, a branch in the low-s `sc_negate`, or a
  * non-constant-time `sc_mont_mul` / `sc_mul` / `sc_add` — separates the two
- * timing distributions and Welch's t crosses DUDECT_T_THRESHOLD (4.5). This
+ * timing distributions and Welch's t crosses DUDECT_T_THRESHOLD (5.0). This
  * is the empirical measurement that closes the "read, didn't measure" gap for
  * the ECDSA-specific scalar arithmetic mod n.
  *

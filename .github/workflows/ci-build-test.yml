@@ -441,6 +441,24 @@ jobs:
           cp ama_cryptography/_integrity_digest.txt "${RUNNER_TEMP}/committed_integrity_digest.txt"
           echo "Committed digest recorded: $(cat "${RUNNER_TEMP}/committed_integrity_digest.txt")"
 
+      # Same step, same reason, as ci.yml: the PyKCS11 sdist's SWIG typemap
+      # names the Python 2 `PyInt_FromLong`, SWIG >= 4.3 (now on the runner
+      # images) no longer emits the compatibility alias that made that
+      # compile, and no PyKCS11 release is exempt.  The defines restore the
+      # alias at the compiler command line — CPPFLAGS for POSIX, CL for MSVC
+      # — scoped to this step so they never reach the ama-cryptography build.
+      # Wheels cover only Windows cp37-cp313 (+ macOS x86-64 cp313); every
+      # other entry in this matrix builds the sdist.  An earlier comment here
+      # claimed the sdist "builds from sdist against the runner's MSVC + swig
+      # ... and is green"; that was true under SWIG <= 4.2 and is exactly the
+      # build that now fails without the define.
+      - name: Install PyKCS11 (PKCS#11 binding for the HSM lane)
+        shell: bash
+        env:
+          CPPFLAGS: "-DPyInt_FromLong=PyLong_FromLong"
+          CL: "/DPyInt_FromLong=PyLong_FromLong"
+        run: pip install "PyKCS11>=1.5.18"
+
       - name: Install Python dependencies + package (with [dev] extras)
         # Use the [dev] extras so hypothesis / pytest-cov / mypy / etc.
         # come in via the canonical pyproject.toml declaration rather
@@ -448,10 +466,8 @@ jobs:
         #
         # [hsm] supplies PyKCS11: SoftHSM2 alone does not make the HSM lane
         # executable, because HSMKeyStorage reaches the token through that
-        # binding.  The token is now provisioned on all three OSes, so the
-        # extra is unconditional — Windows included, where PyKCS11 builds from
-        # sdist against the runner's MSVC + swig (ci.yml already installs
-        # [hsm] on every Windows entry, cp310–cp314, and is green).
+        # binding.  The token is provisioned on all three OSes, so the extra
+        # stays unconditional; the step above has already satisfied it.
         run: pip install -e ".[dev,hsm]"
         shell: bash
 
