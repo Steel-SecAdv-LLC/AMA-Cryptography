@@ -412,14 +412,34 @@ static inline dudect_lane_verdict_t dudect_lane_verdict(
      * to a quantity whose sign is not reproducible is a coin flip, and a gate
      * that decides a build on a coin flip is worse than one that abstains.
      *
-     * Ordering it this way costs no sensitivity to a real leak.  The floor is
-     * set below every mechanism that can produce one — a mispredicted branch
-     * is 7-10 ns, an L1 miss 30-50 ns, one extra AES round ~4 ns, an
-     * early-exit memcmp hundreds — so at or above 2 ns direction disagreement
-     * still yields DUDECT_LANE_UNUSABLE and still fails the build, exactly as
-     * before.  What changes is confined to the range the floor already
-     * declares unadjudicable, where the deterministic instruction-count gates
-     * are the instrument: `ama_ascon_aead128_encrypt` retires 32,069,814
+     * The floor is set below every mechanism that produces a different
+     * instruction SEQUENCE — a mispredicted branch is 7-10 ns, an L1 miss
+     * 30-50 ns, one extra AES round ~4 ns, an early-exit memcmp hundreds —
+     * so at or above 2 ns direction disagreement still yields
+     * DUDECT_LANE_UNUSABLE and still fails the build, exactly as before.
+     *
+     * It does cost something, and this paragraph used to open with "costs no
+     * sensitivity to a real leak".  A secret-dependent difference below 2 ns
+     * that comes from operand-dependent instruction LATENCY, rather than from
+     * a different instruction sequence, is measured by NEITHER instrument:
+     * this one cannot resolve it, and the callgrind gates named below count
+     * RETIRED INSTRUCTIONS, which are identical when only the latency
+     * differs.  That class is out of reach of the apparatus as built — not
+     * tolerated, not covered elsewhere — and the distinction matters to
+     * anyone reading a PASS.
+     *
+     * That the floor cannot simply be lowered was re-measured rather than
+     * assumed: five consecutive runs of this harness at 100,000
+     * measurements, one core, one host, one binary.  Eleven lanes stayed
+     * under 2 ns in every run and TEN of them changed sign at least once
+     * (`ama_consttime_lookup` +0.040, +0.014, +0.006, -0.021, +0.056 ns).
+     * The sign below the floor is not a property of the code, so more
+     * measurements do not recover it.
+     *
+     * What changes is confined to the range the floor already declares
+     * unadjudicable, where the deterministic instruction-count gates are the
+     * instrument for everything they CAN see:
+     * `ama_ascon_aead128_encrypt` retires 32,069,814
      * instructions identically across all eight key classes (cross-class delta
      * 0, noise floor 0), and `ama_agent_binding_check` 612,810,230 identically
      * whether it accepts or rejects. */
@@ -442,10 +462,13 @@ static inline dudect_lane_verdict_t dudect_lane_verdict(
  * DUDECT_LANE_SUB_FLOOR does not, and that is a statement about which
  * instrument owns the claim rather than a tolerance.  Below
  * DUDECT_MIN_EFFECT_NS a wall-clock t-test on shared hardware cannot separate
- * a source-level leak from data-operand-dependent execution in the CPU; the
- * deterministic instruction-count gates measure that range exactly, with a
- * zero-instruction noise floor, and they are what a real regression there
- * trips.  The lane still prints its verdict, its t and its difference, so the
+ * a source-level leak from data-operand-dependent execution in the CPU.  The
+ * deterministic instruction-count gates measure the part of that range that
+ * shows up as a different instruction SEQUENCE, with a zero-instruction noise
+ * floor, and they are what a real regression of that kind trips.  A
+ * difference that lives only in operand-dependent LATENCY appears in neither
+ * instrument, so SUB_FLOOR means "not adjudicable by this apparatus", not
+ * "shown to be absent".  The lane still prints its verdict, its t and its difference, so the
  * excursion is visible in the log rather than absorbed into a PASS.
  */
 static inline int dudect_lane_failed(const dudect_lane_evidence_t *lane, int rounds_run) {
