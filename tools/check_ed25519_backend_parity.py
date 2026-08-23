@@ -36,12 +36,13 @@ a differential catches "one was fixed and the other was not".
 
 Corpus
 ------
-Four families.  The first three are generated at run time from freshly minted
+Five families.  The first three are generated at run time from freshly minted
 keypairs, so the check needs no vendored data and stays meaningful as the code
 changes; the fourth is a fixed table of compressed-point encodings
 (``DECODE_CASES``), because the encodings that discriminate the canonical-``y``
 rule are specific constants derived from ``p`` and cannot be stumbled upon by
-generation — which is exactly why the first three families cannot test it:
+generation — which is exactly why the first three families cannot test it; the
+fifth compares output bytes rather than verdicts.
 
 1. **Honest signatures** — produced by each backend, cross-verified by the
    other.  This also pins that the two agree on *signing*, not just verifying.
@@ -75,6 +76,23 @@ generation — which is exactly why the first three families cannot test it:
    demonstrably disagreed.  The corpus is the gate; an encoding it does not
    contain is a rule it does not check.
 
+5. **Byte-exact arithmetic** — ``point_from_scalar``, ``scalarmult_public``,
+   ``point_add`` and ``double_scalarmult_public`` over a deterministic scalar
+   and point corpus, compared on their 32 OUTPUT BYTES.  Families 1-4 compare
+   verdicts, which cannot see a backend that returns ``AMA_SUCCESS`` with the
+   wrong group element — and both backends did exactly that.  donna's
+   ``ama_ed25519_double_scalarmult_public`` summed two PARTIAL points with
+   ``ge25519_add_p1p1``, whose third product is ``p->t * q->t``, and neither
+   ``t`` had been written: ``[7]B + [3]B`` returned ``906ebcd3…`` instead of
+   ``[10]B``.  fe51's ``sc25519_to_wnaf`` dropped the carry out of bit 255, so
+   ``[ff..ff]B`` returned ``-B``.  Neither was reachable from this gate as it
+   stood: it compared ``rc == 0`` booleans, its only scalar was ``2``, and
+   ``double_scalarmult_public`` had no ctypes binding at all.  The family also
+   asserts two identities per backend, so a pair that agrees on a wrong answer
+   is still caught: ``[s]P == [s mod l]P`` (the reduction contract stated in
+   ``include/ama_cryptography.h``) and ``[s1]P1 + [s2]P2 == point_add([s1]P1,
+   [s2]P2)`` (the identity donna's shim construction implements).
+
 Exit status
 -----------
 ``0`` when every case agrees and both non-vacuity guards were satisfied.
@@ -87,8 +105,9 @@ is not on its own evidence of correctness, so the assertions that do not
 depend on agreement are reported through the same exit code.
 
 ``2`` when the comparison could not be made to mean anything: a library that
-would not load, a corpus with no genuine signature in it, or a decode stage in
-which no absolute assertion ran.  An unrunnable comparison is never reported
+would not load, a corpus with no genuine signature in it, a decode stage in
+which no absolute assertion ran, or an arithmetic stage in which no case
+produced output bytes.  An unrunnable comparison is never reported
 as a passing one, and the distinct exit code keeps "inconclusive" from being
 read as "failed".
 """
@@ -187,6 +206,15 @@ class Backend:
             ctypes.c_char_p,
         ]
 
+        self.lib.ama_ed25519_double_scalarmult_public.restype = ctypes.c_int
+        self.lib.ama_ed25519_double_scalarmult_public.argtypes = [
+            ctypes.c_char_p,
+            ctypes.c_char_p,
+            ctypes.c_char_p,
+            ctypes.c_char_p,
+            ctypes.c_char_p,
+        ]
+
     def keypair(self) -> tuple[bytes, bytes]:
         public = ctypes.create_string_buffer(32)
         secret = ctypes.create_string_buffer(64)
@@ -222,6 +250,67 @@ class Backend:
             raise ValueError("scalar and compressed point must be exactly 32 bytes")
         out = ctypes.create_string_buffer(32)
         return bool(self.lib.ama_ed25519_scalarmult_public(out, scalar, point_enc) == 0)
+
+    # ---- byte-exact arithmetic surface -------------------------------
+    #
+    # Everything above compares VERDICTS: did both backends accept, did both
+    # reject.  That is blind to a backend that accepts and then returns the
+    # wrong group element, and both backends did exactly that.  donna's
+    # ama_ed25519_double_scalarmult_public added two PARTIAL points with
+    # ge25519_add_p1p1, whose third product is p->t * q->t, and neither t had
+    # been written — [7]B + [3]B returned 906ebcd3... instead of [10]B with
+    # AMA_SUCCESS.  fe51's sc25519_to_wnaf dropped the carry out of bit 255,
+    # so [ff..ff]B returned -B.  Both were invisible here: `ops` compared
+    # `rc == 0` booleans, its only scalar was _TWO_SCALAR = 2 (too small to
+    # reach either defect), and double_scalarmult_public had no binding at
+    # all.  These four wrappers return the OUTPUT BYTES, or None when the
+    # call refused, so the comparison below can see a wrong answer.
+
+    def point_from_scalar_bytes(self, scalar: bytes) -> Optional[bytes]:
+        """Compressed [scalar]B, or None when the call refused."""
+        if len(scalar) != 32:
+            raise ValueError("scalar must be exactly 32 bytes")
+        out = ctypes.create_string_buffer(32)
+        if self.lib.ama_ed25519_point_from_scalar(out, scalar) != 0:
+            return None
+        return out.raw[:32]
+
+    def point_add_bytes(self, p_enc: bytes, q_enc: bytes) -> Optional[bytes]:
+        """Compressed P + Q, or None when either operand refused to decode."""
+        if len(p_enc) != 32 or len(q_enc) != 32:
+            raise ValueError("compressed points must be exactly 32 bytes")
+        out = ctypes.create_string_buffer(32)
+        if self.lib.ama_ed25519_point_add(out, p_enc, q_enc) != 0:
+            return None
+        return out.raw[:32]
+
+    def scalarmult_public_bytes(self, scalar: bytes, point_enc: bytes) -> Optional[bytes]:
+        """Compressed [scalar]P, or None when the call refused."""
+        if len(scalar) != 32 or len(point_enc) != 32:
+            raise ValueError("scalar and compressed point must be exactly 32 bytes")
+        out = ctypes.create_string_buffer(32)
+        if self.lib.ama_ed25519_scalarmult_public(out, scalar, point_enc) != 0:
+            return None
+        return out.raw[:32]
+
+    def double_scalarmult_public_bytes(
+        self, s1: bytes, p1_enc: bytes, s2: bytes, p2_enc: bytes
+    ) -> Optional[bytes]:
+        """Compressed [s1]P1 + [s2]P2, or None when the call refused."""
+        if len({len(s1), len(p1_enc), len(s2), len(p2_enc)}) != 1:
+            raise ValueError("all four arguments must be exactly 32 bytes")
+        out = ctypes.create_string_buffer(32)
+        if self.lib.ama_ed25519_double_scalarmult_public(out, s1, p1_enc, s2, p2_enc) != 0:
+            return None
+        return out.raw[:32]
+
+    def reduce32(self, scalar: bytes) -> bytes:
+        """``scalar mod l``, via the library's own 64-byte reducer."""
+        if len(scalar) != 32:
+            raise ValueError("scalar must be exactly 32 bytes")
+        wide = ctypes.create_string_buffer(scalar + bytes(32), 64)
+        self.lib.ama_ed25519_sc_reduce(wide)
+        return wide.raw[:32]
 
     def batch_verify(self, entries: list[tuple[bytes, bytes, bytes]]) -> list[bool]:
         """Per-entry verdicts from ``ama_ed25519_batch_verify``.
@@ -662,6 +751,152 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             elif expected is not None:
                 decode_asserted += 1
 
+    # Byte-exact arithmetic parity.  The decode stage above compares
+    # verdicts; this one compares the 32 output bytes, which is the only
+    # thing that can see a backend that succeeds with the wrong answer.
+    #
+    # Scalar corpus.  _TWO_SCALAR = 2 was the gate's only scalar and it is
+    # smaller than every defect this stage exists to catch.  The entries
+    # below are deterministic (a fixed SHAKE-free xorshift stream, so the
+    # corpus is identical on every host and consumes no CSPRNG) and
+    # deliberately include values >= l and >= 2^255: the in-tree backend's
+    # wNAF recoding used to represent such a scalar as s - 2^256.
+    xs = 0x243F6A8885A308D3
+
+    def _next_word() -> int:
+        nonlocal xs
+        xs ^= (xs << 13) & 0xFFFFFFFFFFFFFFFF
+        xs ^= xs >> 7
+        xs ^= (xs << 17) & 0xFFFFFFFFFFFFFFFF
+        return xs
+
+    def _next_bytes(count: int) -> bytes:
+        return bytes((_next_word() >> 24) & 0xFF for _ in range(count))
+
+    arith_scalars: list[bytes] = [
+        bytes([2] + [0] * 31),  # the old corpus, kept
+        bytes([7] + [0] * 31),
+        bytes([3] + [0] * 31),
+        bytes([0] * 32),  # zero
+        bytes([0xFF] * 32),  # 2^256 - 1, unreduced
+        bytes([0x00] * 31 + [0x80]),  # 2^255, unreduced
+        bytes.fromhex(
+            "edd3f55c1a631258d69cf7a2def9de1400000000000000000000000000000010"
+        ),  # l itself
+    ]
+    arith_scalars.extend(_next_bytes(32) for _ in range(24))
+
+    arith_points: list[bytes] = [_ONE_ENC, _ZERO_ENC, _PM1_ENC, _TWO_G_ENC]
+    for _ in range(8):
+        seed = _next_bytes(32)
+        generated = donna.point_from_scalar_bytes(seed)
+        if generated is not None:
+            arith_points.append(generated)
+    arith_points.extend(_next_bytes(32) for _ in range(8))
+
+    arith_asserted = 0
+    arith_agreed = 0
+    for scalar in arith_scalars:
+        d_out = donna.point_from_scalar_bytes(scalar)
+        f_out = fe51.point_from_scalar_bytes(scalar)
+        checked += 1
+        if d_out != f_out:
+            disagreements.append(
+                f"  arith   op=point_from_scalar\n"
+                f"      donna={d_out.hex() if d_out else 'REFUSED'}\n"
+                f"      fe51 ={f_out.hex() if f_out else 'REFUSED'}\n"
+                f"      scalar={scalar.hex()}"
+            )
+        elif d_out is not None:
+            arith_agreed += 1
+        arith_asserted += 1
+
+    for point in arith_points:
+        for scalar in arith_scalars:
+            checked += 1
+            d_out = donna.scalarmult_public_bytes(scalar, point)
+            f_out = fe51.scalarmult_public_bytes(scalar, point)
+            if d_out != f_out:
+                disagreements.append(
+                    f"  arith   op=scalarmult_public\n"
+                    f"      donna={d_out.hex() if d_out else 'REFUSED'}\n"
+                    f"      fe51 ={f_out.hex() if f_out else 'REFUSED'}\n"
+                    f"      scalar={scalar.hex()} point={point.hex()}"
+                )
+            elif d_out is not None:
+                arith_agreed += 1
+            arith_asserted += 1
+
+            # The reduction contract stated in include/ama_cryptography.h:
+            # the result depends on the scalar only through scalar mod l.
+            # Asserted per backend, so a pair that agrees on a wrong answer
+            # is still caught.
+            reduced = donna.reduce32(scalar)
+            if reduced != scalar:
+                for backend in (donna, fe51):
+                    checked += 1
+                    arith_asserted += 1
+                    raw = backend.scalarmult_public_bytes(scalar, point)
+                    red = backend.scalarmult_public_bytes(reduced, point)
+                    if raw != red:
+                        disagreements.append(
+                            f"  arith   op=scalarmult_public/reduction-contract\n"
+                            f"      {backend.name}: [s]P != [s mod l]P\n"
+                            f"      [s]P     ={raw.hex() if raw else 'REFUSED'}\n"
+                            f"      [s mod l]P={red.hex() if red else 'REFUSED'}\n"
+                            f"      scalar={scalar.hex()} point={point.hex()}"
+                        )
+                    elif raw is not None:
+                        arith_agreed += 1
+
+    for index, point in enumerate(arith_points):
+        other = arith_points[(index + 1) % len(arith_points)]
+        for s1, s2 in (
+            (arith_scalars[1], arith_scalars[2]),
+            (arith_scalars[4], arith_scalars[0]),
+            (arith_scalars[5], arith_scalars[6]),
+            (arith_scalars[7], arith_scalars[8]),
+        ):
+            checked += 1
+            arith_asserted += 1
+            d_out = donna.double_scalarmult_public_bytes(s1, point, s2, other)
+            f_out = fe51.double_scalarmult_public_bytes(s1, point, s2, other)
+            if d_out != f_out:
+                disagreements.append(
+                    f"  arith   op=double_scalarmult_public\n"
+                    f"      donna={d_out.hex() if d_out else 'REFUSED'}\n"
+                    f"      fe51 ={f_out.hex() if f_out else 'REFUSED'}\n"
+                    f"      s1={s1.hex()} P1={point.hex()}\n"
+                    f"      s2={s2.hex()} P2={other.hex()}"
+                )
+            elif d_out is not None:
+                arith_agreed += 1
+
+            # [s1]P1 + [s2]P2 must equal the split composition, per backend.
+            # This is the identity donna's shim construction implements, and
+            # it failed on the first pair while both backends still "agreed"
+            # on the return code.
+            for backend in (donna, fe51):
+                checked += 1
+                arith_asserted += 1
+                joint = backend.double_scalarmult_public_bytes(s1, point, s2, other)
+                r1 = backend.scalarmult_public_bytes(s1, point)
+                r2 = backend.scalarmult_public_bytes(s2, other)
+                split = (
+                    backend.point_add_bytes(r1, r2) if r1 is not None and r2 is not None else None
+                )
+                if joint != split:
+                    disagreements.append(
+                        f"  arith   op=double_scalarmult_public/split-identity\n"
+                        f"      {backend.name}: joint != point_add(split halves)\n"
+                        f"      joint={joint.hex() if joint else 'REFUSED'}\n"
+                        f"      split={split.hex() if split else 'REFUSED'}\n"
+                        f"      s1={s1.hex()} P1={point.hex()}\n"
+                        f"      s2={s2.hex()} P2={other.hex()}"
+                    )
+                elif joint is not None:
+                    arith_agreed += 1
+
     print(f"Compared {checked} Ed25519 verification case(s) across both backends.")
     print(f"  donna: {args.donna}")
     print(f"  fe51 : {args.fe51}")
@@ -699,6 +934,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(
             "BACKEND DIFFERENTIAL INCONCLUSIVE — the decode stage asserted nothing,\n"
             "so the canonical-y rule (INVARIANT-38) was never tested.",
+            file=sys.stderr,
+        )
+        return 2
+
+    # Same fail-closed reasoning applied to the arithmetic stage.  Every
+    # comparison there tolerates None (a refusal), so a pair of backends that
+    # refused every input would agree on every case; `arith_agreed` only
+    # advances on a case where both produced actual output bytes.
+    if arith_agreed == 0:
+        print(
+            "BACKEND DIFFERENTIAL INCONCLUSIVE — the arithmetic stage compared\n"
+            f"{arith_asserted} case(s) but not one produced output bytes, so\n"
+            "byte-exact parity was never asserted.",
             file=sys.stderr,
         )
         return 2

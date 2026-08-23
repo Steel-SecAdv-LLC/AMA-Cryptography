@@ -1380,6 +1380,17 @@ AMA_API ama_error_t ama_ed25519_point_add(uint8_t result[32],
  *
  * Renamed from ama_ed25519_scalar_mult (audit finding C7) to make the
  * public-only constraint impossible to miss.
+ *
+ * SCALAR RANGE: any 32-byte little-endian value in [0, 2^256) is accepted,
+ * and the result depends on it only through `public_scalar mod l`, where l
+ * is the Ed25519 group order.  That is the same canonicalisation
+ * ama_ed25519_point_from_scalar has always applied, it is what the donna
+ * backend has always done (its scalar expansion reduces), and it is now
+ * enforced in the in-tree backend as well, so the two backends return
+ * byte-identical results for every input.  Callers holding an unreduced
+ * scalar do not need to reduce it first; callers relying on a distinction
+ * between s and s mod l (which differ on points outside the prime-order
+ * subgroup) will not find one here.
  */
 AMA_API ama_error_t ama_ed25519_scalarmult_public(uint8_t result[32],
     const uint8_t public_scalar[32], const uint8_t point[32]);
@@ -1398,6 +1409,9 @@ AMA_API ama_error_t ama_ed25519_scalarmult_public(uint8_t result[32],
  *
  * Exposed as a regression / equivalence-test surface and a
  * micro-benchmark target for tuning the wNAF window default.
+ *
+ * SCALAR RANGE: as for ama_ed25519_scalarmult_public — both scalars are
+ * taken modulo l, and both backends agree byte-for-byte on every input.
  */
 AMA_API ama_error_t ama_ed25519_double_scalarmult_public(
     uint8_t result[32],

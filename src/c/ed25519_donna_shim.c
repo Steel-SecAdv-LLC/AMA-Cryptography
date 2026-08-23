@@ -469,6 +469,38 @@ AMA_API ama_error_t ama_ed25519_point_add(uint8_t result[32],
     return AMA_SUCCESS;
 }
 
+/* donna's ge25519_double_scalarmult_vartime finishes its ladder with
+ * ge25519_p1p1_to_partial (vendor/ed25519-donna/ed25519-donna-impl-base.h),
+ * which writes x, y and z but NEVER t: the returned point's extended
+ * coordinate holds whatever an intermediate ge25519_p1p1_to_full left
+ * there.  That is harmless upstream, because donna only ever hands the
+ * result to ge25519_pack, which reads x, y and z alone.  It is NOT
+ * harmless here: ama_ed25519_double_scalarmult_public adds two such
+ * results with ge25519_add_p1p1, whose third product is
+ * curve25519_mul(c, p->t, q->t) — with two stale t's the sum is an
+ * arbitrary point and the function still returns AMA_SUCCESS.
+ *
+ * Restore a valid extended representation without an inversion by
+ * scaling the projective point by z:
+ *
+ *     (x : y : z)  ->  (x*z : y*z : z^2 : x*y)
+ *
+ * which denotes the same point and satisfies the extended-coordinate
+ * invariant X*Y == Z*T (both sides equal x*y*z^2).  Cost is three
+ * multiplications and one squaring; the alternative, packing and
+ * unpacking each summand, costs two field inversions. */
+static void ama_ge25519_restore_extended_t(ge25519 *r) {
+    bignum25519 ALIGN(16) xy, xz, yz, zz;
+    curve25519_mul(xy, r->x, r->y);
+    curve25519_mul(xz, r->x, r->z);
+    curve25519_mul(yz, r->y, r->z);
+    curve25519_square(zz, r->z);
+    curve25519_copy(r->x, xz);
+    curve25519_copy(r->y, yz);
+    curve25519_copy(r->z, zz);
+    curve25519_copy(r->t, xy);
+}
+
 /* Renamed from ama_ed25519_scalar_mult (audit finding C7).
  * NOT constant-time — public_scalar MUST be non-secret. */
 AMA_API ama_error_t ama_ed25519_scalarmult_public(uint8_t result[32],
@@ -525,6 +557,12 @@ AMA_API ama_error_t ama_ed25519_double_scalarmult_public(
      * with a zero basepoint scalar). */
     ge25519_double_scalarmult_vartime(&R1, &P1u, e1, zero);
     ge25519_double_scalarmult_vartime(&R2, &P2u, e2, zero);
+
+    /* Both results are PARTIAL points — t is stale.  ge25519_add_p1p1
+     * multiplies p->t by q->t, so it must be repaired first; see
+     * ama_ge25519_restore_extended_t above. */
+    ama_ge25519_restore_extended_t(&R1);
+    ama_ge25519_restore_extended_t(&R2);
 
     ge25519_add_p1p1(&sum, &R1, &R2);
     ge25519_p1p1_to_full(&R, &sum);

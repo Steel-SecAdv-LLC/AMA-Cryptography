@@ -153,6 +153,22 @@ if(AMA_ED25519_ASSEMBLY)
     target_compile_definitions(test_ed25519_canonical_r PRIVATE AMA_ED25519_ASSEMBLY)
 endif()
 
+# Public scalar-multiplication contract for ama_ed25519_scalarmult_public and
+# ama_ed25519_double_scalarmult_public.  Built UNCONDITIONALLY: the two
+# defects it pins are one per backend (donna's stale extended-t on the joint
+# routine, fe51's dropped wNAF carry out of bit 255), and the only in-tree
+# byte-identity test that could have caught either — test_ed25519_verify_equiv
+# — is built solely under `if(NOT AMA_ED25519_ASSEMBLY)` and reduces every
+# scalar before comparing.  Uses the public API only, so it discriminates
+# whichever backend CMake selected.
+add_ama_test(test_ed25519_scalarmult_contract test_ed25519_scalarmult_contract.c)
+# Same reason as test_ed25519_canonical_r above: the selector is PRIVATE on
+# the library target, and a banner naming the wrong backend is exactly the
+# kind of claim this file exists to stop.
+if(AMA_ED25519_ASSEMBLY)
+    target_compile_definitions(test_ed25519_scalarmult_contract PRIVATE AMA_ED25519_ASSEMBLY)
+endif()
+
 # test_ed25519_comb_equiv validates the in-tree signed 4-bit window comb
 # (ge25519_scalarmult_base_comb_signed) against the variable-base wNAF
 # reference.  When AMA_ED25519_ASSEMBLY=ON (default on x86-64), the donna

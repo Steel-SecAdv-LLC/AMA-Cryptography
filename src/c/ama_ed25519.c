@@ -477,15 +477,44 @@ static inline void ge25519_p3_to_p2(ge25519_p2 *r, const ge25519_p3 *p) {
 
 /* Compute width-w wNAF expansion of a 32-byte little-endian scalar.
  * Output: 256 signed digits in wnaf[], each odd in [-(2^(w-1)-1),
- * 2^(w-1)-1] or 0. */
+ * 2^(w-1)-1] or 0.
+ *
+ * Scalar range: accepts any 32-byte little-endian scalar in [0, 2^256),
+ * and reduces it mod l first — the same canonicalisation, for the same
+ * reason, as ge25519_scalarmult_base_comb_signed above.
+ *
+ * The reduction is load-bearing, not hygiene.  A width-w wNAF of a
+ * 256-bit integer needs up to 257 digits, and the compensation step for
+ * a negative digit ADDS to the running value, so a digit selected near
+ * the top of an unreduced scalar carries out of limb 7.  This loop has
+ * 256 slots and eight 32-bit limbs: that carry was discarded and the
+ * 257th digit never emitted, so the recoding silently represented
+ * s - 2^256 (a negative integer) instead of s for ~17% of uniform
+ * 32-byte scalars — ff..ff recoded as -1, making
+ * ama_ed25519_scalarmult_public(out, ff..ff, B) return -B with
+ * AMA_SUCCESS while the donna backend, which expands through
+ * expand256_modm, returned [s mod l]B.  After reducing, s < l < 2^253,
+ * so the expansion is at most 254 digits and the running value stays
+ * below 2^254: neither the slot count nor the limb count can overflow,
+ * and both backends compute the same function of the same input. */
 static void sc25519_to_wnaf(int8_t wnaf[256], const uint8_t scalar[32], int w) {
     uint32_t s[8];
+    /* Canonicalise mod l via sc25519_reduce, which expects a 64-byte
+     * little-endian integer.  Zero-pad the high half and reduce in a
+     * local buffer — the caller's scalar is not mutated.  The scrub is
+     * INVARIANT-6: sc25519_to_wnaf is documented public-scalar-only, but
+     * the buffer shares a scrub class with the digits below. */
+    uint8_t scalar_reduced[64];
+    memcpy(scalar_reduced, scalar, 32);
+    ama_secure_memzero(scalar_reduced + 32, 32);
+    sc25519_reduce(scalar_reduced);
     for (int i = 0; i < 8; i++) {
-        s[i] = (uint32_t)scalar[4*i]
-             | ((uint32_t)scalar[4*i+1] << 8)
-             | ((uint32_t)scalar[4*i+2] << 16)
-             | ((uint32_t)scalar[4*i+3] << 24);
+        s[i] = (uint32_t)scalar_reduced[4*i]
+             | ((uint32_t)scalar_reduced[4*i+1] << 8)
+             | ((uint32_t)scalar_reduced[4*i+2] << 16)
+             | ((uint32_t)scalar_reduced[4*i+3] << 24);
     }
+    ama_secure_memzero(scalar_reduced, sizeof(scalar_reduced));
     /* `wnaf` is the secret-scalar's signed digit expansion — every
      * non-zero entry leaks one bit of the secret scalar if observable.
      * Zero-initialise on the secure path so the bytes that stay zero
