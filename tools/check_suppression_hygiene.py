@@ -89,9 +89,12 @@ _NOSEMGREP_STRICT_RE = re.compile(r"^:\s*\S+")
 #            ``B``-code makes the resolved set non-empty and the marker means
 #            what it looks like.  Verified against bandit 1.9.2.
 #
-# ``noqa``   ruff (and flake8) treat a bare ``# noqa`` as "all rules on this
-#            line"; only ``# noqa: <CODE>`` targets one.  Same catch-all, same
-#            audit-trail problem.
+# ``noqa``   ruff (and flake8) treat a bare ``noqa`` comment as "all rules on
+#            this line"; only the ``noqa: <CODE>`` form targets one.  Same
+#            catch-all, same audit-trail problem.  (The marker is spelled here
+#            without its leading hash: ruff scans comment PROSE for the
+#            hash-prefixed form too, and reports the examples themselves as
+#            malformed directives — three warnings in every CI lint log.)
 #
 # ``type: ignore`` and ``pylint: disable`` are deliberately NOT held to this,
 # and the reason is stated rather than left as an omission: mypy's file-level
@@ -191,8 +194,9 @@ def check_source(filepath: str, source: str) -> list[str]:
     for lineno, comment in effective_suppressions(source):
         stripped = comment.strip()
         # File-scoped first, and unconditionally: INVARIANT-13 forbids the
-        # SCOPE.  A justification and a tracking id do not make
-        # `# ruff: noqa` line-scoped, so there is no form of it to accept.
+        # SCOPE.  A justification and a tracking id do not make a file-scoped
+        # `ruff: noqa` comment line-scoped, so there is no form of it to
+        # accept.
         #
         # `effective_suppressions` only surfaces these when they are
         # STANDALONE, so a trailing `# type: ignore[arg-type]` — the ordinary

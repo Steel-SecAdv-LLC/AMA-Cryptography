@@ -311,6 +311,33 @@ explicit `return` with an implicit fall-through — the function ended in
 function has one exit shape without depending on the reader knowing
 pytest's `NoReturn` annotation.
 
+Two more from a full local validation sweep of the branch (fresh builds
+under gcc, clang, ASan+UBSan with leak detection, strict warnings x4,
+valgrind memcheck on twelve core binaries, the whole Python suite, all
+gate scripts, and the 18 deterministic constant-time targets).  First:
+the ReDoS linearity gate's fastest-of-five floor still broke under
+sustained CPU saturation — 2 failures in 6 runs with all four cores
+loaded — because the five samples of one size ran back to back inside
+~2 ms, so a contention burst longer than that cluster inflated every
+sample the minimum is drawn from while the neighbouring size's floor
+stayed clean, and the ratio broke even though every individual sample
+obeyed the one-sided noise model.  The repeats are now interleaved by
+round — each round scans every size once, seven rounds, per-size minima
+across rounds — so a burst slows every size in a round together and is
+ratio-neutral.  Verified in both directions: 0 failures in 10 runs under
+the same saturation that failed the clustered form, and the planted
+two-adjacent-quantifier O(n^2) mutation still reads 4.00x through the
+interleaved floor and fails the gate (mutation reverted).  The 2.8x
+ceiling and the estimator's one-sided-noise rationale are untouched.
+Second: every CI lint log carried three ruff warnings — "Invalid
+`noqa` directive" — pointing at `tools/check_suppression_hygiene.py`'s
+own documentation, where the prose examples of the bare-noqa and
+file-scoped `ruff: noqa` markers were spelled with their leading hash
+and ruff's comment scanner parsed the examples themselves as malformed
+directives.  The examples are now spelled without the hash, with a note
+at the site saying why; the gate's verdict on all 276 Python files is
+byte-identical, and `ruff check .` is warning-free.
+
 ### Debt-closure pass, eleventh (2026-08-22) — the 25 findings an independent audit left standing, and what closing them found
 
 An independent audit read all 302 non-corpus changed files of this branch's

@@ -769,43 +769,56 @@ class TestPatternIsLinear:
         time roughly doubles measures the property directly and is
         host-independent.
 
-        Each size is timed as the fastest of five runs, not once.  Interference
-        on a shared runner is one-sided — it can only make a scan look slower,
-        never faster — so the minimum is the estimate of the machine's actual
-        cost, the same estimator benchmarks/benchmark_runner.py uses for the
-        same reason.  A single sample per size failed a genuinely linear
-        pattern on the shared macOS runner at 3.60x and 2.89x (job
-        97259726006: one inflated middle sample poisons both ratios it
-        appears in), while the pattern's floor doubles like it should; a
-        quadratic pattern's floor still quadruples, so the discrimination the
-        ceiling relies on is sharpened, not loosened.
+        Each size is timed as the fastest of seven runs, not once.
+        Interference on a shared runner is one-sided — it can only make a
+        scan look slower, never faster — so the minimum is the estimate of
+        the machine's actual cost, the same estimator
+        benchmarks/benchmark_runner.py uses for the same reason.  A single
+        sample per size failed a genuinely linear pattern on the shared
+        macOS runner at 3.60x and 2.89x (job 97259726006: one inflated
+        middle sample poisons both ratios it appears in), while the
+        pattern's floor doubles like it should; a quadratic pattern's floor
+        still quadruples, so the discrimination the ceiling relies on is
+        sharpened, not loosened.
 
-        The ceiling is 2.8x rather than 2.0x because even floor timings carry
-        residual noise; quadratic growth is 4x and cubic 8x, so the gap is
-        wide enough to discriminate.  Measured here at the time of writing:
-        1.71-2.07x across all three shapes.
+        The runs are interleaved by ROUND — each round scans every size
+        once — rather than exhausting one size's repeats back to back.
+        Back-to-back repeats of one size all complete inside ~2 ms, so a
+        contention burst longer than that cluster inflates every sample the
+        minimum is drawn from while leaving the neighbouring size's floor
+        clean, and the ratio breaks even though every individual sample
+        obeyed the one-sided model: measured on a 4-core host under full
+        synthetic saturation, the clustered form failed 2 of 6 runs.  A
+        burst that spans one interleaved round slows every size in that
+        round together — ratio-neutral — and each size's floor is then the
+        minimum over seven temporally separated rounds.  The same
+        saturation experiment on this form: 0 failures.
+
+        The ceiling is 2.8x rather than 2.0x because even floor timings
+        carry residual noise; quadratic growth is 4x and cubic 8x, so the
+        gap is wide enough to discriminate.  Measured here at the time of
+        writing: 1.71-2.07x across all three shapes.
         """
         import time
 
         pad = " " if not prefix.endswith(", ") else "0"
-        timings: list[float] = []
-        for exponent in (14, 15, 16):
-            payload = prefix + pad * (2**exponent)
-            best = float("inf")
-            for _ in range(5):
+        payloads = [prefix + pad * (2**exponent) for exponent in (14, 15, 16)]
+        timings = [float("inf")] * len(payloads)
+        for _ in range(7):
+            for index, payload in enumerate(payloads):
                 start = time.perf_counter()
                 gate.scan_text(payload, _INLINE)
-                best = min(best, time.perf_counter() - start)
-            timings.append(best)
+                timings[index] = min(timings[index], time.perf_counter() - start)
 
         for smaller, larger in itertools.pairwise(timings):
             if smaller < 1e-4:  # too fast to measure a ratio from
                 continue
             assert larger / smaller < 2.8, (
                 f"doubling the input multiplied the floor time by "
-                f"{larger / smaller:.2f}x (fastest of five runs per size) "
-                f"for {prefix!r}; linear is ~2x and quadratic is ~4x, so the "
-                f"pattern has regained polynomial backtracking"
+                f"{larger / smaller:.2f}x (fastest of seven interleaved "
+                f"rounds per size) for {prefix!r}; linear is ~2x and "
+                f"quadratic is ~4x, so the pattern has regained polynomial "
+                f"backtracking"
             )
 
     def test_casts_the_gate_exists_for_still_match(self) -> None:
