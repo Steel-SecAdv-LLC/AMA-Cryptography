@@ -81,7 +81,8 @@ jobs:
           # constant-time intent at 12 sites for no behavioural change.
           #
           # uninitvar: false positives on out-parameters.  cppcheck cannot see
-          # through the helpers that fill them.  Six sites, listed WITH their
+          # through the helpers that fill them.  Five sites (six reports: `src/c/ama_kyber.c:572` is emitted once per
+          # configuration `--force` invents), listed WITH their
           # line numbers and their reasons in .cppcheck-suppressions.
           #
           # They used to be three file-wide `--suppress=uninitvar:<file>`

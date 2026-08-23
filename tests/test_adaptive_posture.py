@@ -16,6 +16,8 @@ Validates:
 import itertools
 import math
 import re
+import time
+import uuid
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -534,12 +536,20 @@ class TestCryptoPostureController:
         # callback invocations and 20 registered keys.  The property worth
         # keeping is that the retry is not thrown away for the full cooldown,
         # which TestFailedRotationBackoff below pins across the whole ladder.
+        _now_at_arm = time.time()
         controller._execute_action(PostureAction.ROTATE_KEYS)
         assert (
             on_rotation.call_count == 1
         ), "an immediate retry must be held by the failure backoff, not run"
         assert controller._rotation_retry_not_before > 0.0
-        assert controller._rotation_retry_not_before - controller._rotation_retry_delay(1) > 0.0
+        # Which RUNG was armed, not merely "something was".  The line here used
+        # to read `_rotation_retry_not_before - _rotation_retry_delay(1) > 0.0`,
+        # subtracting a ~9 s duration from a ~1.79e9 epoch instant: it holds for
+        # every rung of the ladder and for a zero-length backoff alike, and adds
+        # nothing over the `> 0.0` above it.
+        assert controller._rotation_retry_not_before == pytest.approx(
+            _now_at_arm + controller._rotation_retry_delay(1), abs=1.0
+        ), "the FIRST rung of the backoff ladder must be the one armed"
 
         # ...and once the (short, first-rung) backoff elapses, it does run —
         # well inside the 300 s cooldown a successful rotation would impose.
@@ -683,9 +693,16 @@ class TestFailedRotationBackoff:
     caller-supplied KMS-backed manager whose ``initiate_rotation`` raises, 20
     fresh ``posture-rotation-N`` identifiers registered, one per cycle.
 
-    Every assertion here fails against a build with the two guards at the top
-    of ``_trigger_rotation`` removed and the failure branch at its end reduced
-    to ``pass`` — i.e. against the code as it stood.
+    Six of the eight tests here fail against a build with the two guards at the
+    top of ``_trigger_rotation`` removed and the failure branch at its end
+    reduced to ``pass`` — i.e. against the code as it stood.  The docstring
+    used to say "every assertion", which two of them cannot honour:
+    ``test_the_backoff_doubles_and_lands_on_the_cooldown`` exercises
+    ``_rotation_retry_delay`` alone, which that revert does not touch, and
+    ``test_a_no_mechanism_trigger_is_not_a_failure`` asserts
+    ``_rotation_failure_streak == 0``, which is trivially satisfied when
+    nothing ever increments it.  Those two pin the SHAPE of the ladder and the
+    rule that a no-op trigger is not a failure; the other six pin the guards.
     """
 
     @staticmethod
@@ -846,6 +863,123 @@ class TestFailedRotationBackoff:
             "a trigger with no mechanism to attempt is a no-op, not a failure; "
             "counting it would suspend a controller that never tried anything"
         )
+
+
+def _queue(controller: Any, action: PostureAction) -> Any:
+    """Put one action on the controller's confirmation queue.
+
+    The controller has no public enqueue: pending actions are created inside
+    ``evaluate_and_respond`` under ``confirmation_mode``.  Constructing the
+    dataclass directly is the smallest way to reach ``confirm_action`` without
+    driving a whole evaluation, and it uses the same fields that code does.
+    """
+    from ama_cryptography.adaptive_posture import PendingAction
+
+    pending = PendingAction(
+        action_id=str(uuid.uuid4()),
+        action=action,
+        reason="test",
+        timestamp=time.time(),
+    )
+    controller._pending_actions.append(pending)
+    return pending
+
+
+class TestASuppressedRotationIsNotReportedAsExecuted:
+    """A guard that drops the rotation must not be reported as an execution.
+
+    ``confirm_action`` documents "True if action was found and executed" and
+    logs "Confirmed and executed action" at INFO.  Both were honest before the
+    failure cap and the retry backoff existed: ``_trigger_rotation`` had no
+    early return, so the call always attempted.  Adding the two guards without
+    a way to signal back made an explicit HUMAN confirmation silently
+    consumable — the ``PendingAction`` popped, nothing rotated, the caller told
+    True, and the log line asserting an execution that did not happen.  The
+    documented remedy, ``reset()``, also wipes ``_pending_actions``,
+    ``_history``, ``_rotation_count`` and the evaluator, so there was no
+    recovery that preserved the queue.
+
+    ``_process_expired_pending_actions`` had the identical shape: it logged
+    "Auto-executing pending action" and dropped it from the queue.
+    """
+
+    @staticmethod
+    def _suspended_controller() -> Any:
+        """A controller whose rotation mechanism has failed to the cap."""
+        on_rotation = MagicMock(side_effect=RuntimeError("KMS unreachable"))
+        controller = CryptoPostureController(on_rotation=on_rotation, rotation_cooldown=300.0)
+        for _ in range(CryptoPostureController.MAX_CONSECUTIVE_ROTATION_FAILURES):
+            controller._rotation_retry_not_before = 0.0
+            controller._trigger_rotation()
+        assert (
+            controller._rotation_failure_streak
+            >= CryptoPostureController.MAX_CONSECUTIVE_ROTATION_FAILURES
+        ), "the fixture did not reach the suspension cap"
+        return controller, on_rotation
+
+    def test_trigger_rotation_reports_suppression(self) -> None:
+        controller, on_rotation = self._suspended_controller()
+        calls_before = on_rotation.call_count
+        assert (
+            controller._trigger_rotation() is False
+        ), "a suppressed rotation reported itself as an attempt"
+        assert (
+            on_rotation.call_count == calls_before
+        ), "the suspended controller invoked the rotation callback anyway"
+
+    def test_the_backoff_guard_also_reports_suppression(self) -> None:
+        """Not only the cap: the retry backoff suppresses too."""
+        on_rotation = MagicMock(side_effect=RuntimeError("KMS unreachable"))
+        controller = CryptoPostureController(on_rotation=on_rotation, rotation_cooldown=300.0)
+        assert controller._trigger_rotation() is True, "the first attempt must attempt"
+        assert controller._rotation_failure_streak == 1
+        assert (
+            controller._trigger_rotation() is False
+        ), "an attempt inside the backoff window reported itself as an attempt"
+
+    def test_confirm_action_does_not_consume_a_suppressed_action(self) -> None:
+        controller, _ = self._suspended_controller()
+        pending = _queue(controller, PostureAction.ROTATE_KEYS)
+        assert (
+            controller.confirm_action(pending.action_id) is False
+        ), "confirm_action reported True for a rotation the guards dropped"
+        assert any(
+            pa.action_id == pending.action_id for pa in controller._pending_actions
+        ), "the operator's pending action was consumed by a suppressed execution"
+        assert not pending.confirmed, "a suppressed action was marked confirmed"
+
+    def test_confirm_action_still_works_when_nothing_is_suppressed(self) -> None:
+        """The control: an ordinary confirmation must still execute and pop."""
+        on_rotation = MagicMock()
+        controller = CryptoPostureController(on_rotation=on_rotation, rotation_cooldown=300.0)
+        pending = _queue(controller, PostureAction.ROTATE_KEYS)
+        assert controller.confirm_action(pending.action_id) is True
+        assert on_rotation.call_count == 1
+        assert not controller._pending_actions
+
+    def test_reset_is_the_only_exit_from_suspension(self) -> None:
+        """A repaired mechanism cannot clear the streak on its own.
+
+        The cap guard returns before ``get_active_key`` or ``on_rotation`` is
+        touched and the streak is only cleared downstream of it, so there is no
+        "next success" to have.  The CHANGELOG's migration note told operators
+        a stopped controller "resumes on the next success or on reset()"; only
+        the second half is reachable.
+        """
+        controller, on_rotation = self._suspended_controller()
+        # Repair the mechanism.
+        on_rotation.side_effect = None
+        for _ in range(5):
+            controller._rotation_retry_not_before = 0.0
+            assert controller._trigger_rotation() is False
+        assert (
+            controller._rotation_failure_streak
+            >= CryptoPostureController.MAX_CONSECUTIVE_ROTATION_FAILURES
+        ), "a repaired mechanism cleared the streak without reset()"
+
+        controller.reset()
+        assert controller._rotation_failure_streak == 0
+        assert controller._trigger_rotation() is True
 
 
 class TestAlgorithmFamilies:

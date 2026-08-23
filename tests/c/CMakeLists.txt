@@ -148,8 +148,12 @@ endif()
 # only, and there only as a side effect of the re-encode comparison.  The
 # donna batch routine decodes R instead of re-encoding it, so it enforced
 # nothing — reachable only at count >= 4, since donna verifies per entry
-# while num <= 3.  Runs against whichever backend CMake selected; the PINs
-# are the counts above that boundary.
+# while num <= 3.  Runs against whichever backend CMake selected, but the
+# R-rule PINs discriminate on DONNA only: fe51's batch is a loop over
+# ama_ed25519_verify, whose re-encode comparison rejects a non-canonical R
+# with or without the predicate.  The test labels them accordingly (see
+# R_RULE_LABEL in the TU); this comment used to say "the PINs are the counts
+# above that boundary" without that qualification.
 add_ama_test(test_ed25519_canonical_r test_ed25519_canonical_r.c)
 # The backend selector is PRIVATE on the library target (see
 # ama_apply_donna_settings in the top-level CMakeLists.txt), so a test TU

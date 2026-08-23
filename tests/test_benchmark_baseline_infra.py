@@ -1006,3 +1006,52 @@ class TestTheReportDoesNotInvertItsOwnColumn:
             "benchmarks/benchmark-results.json; regenerate it rather than editing "
             "it by hand"
         )
+
+
+class TestTheJsonProvenanceIsMachineReadable:
+    """The JSON block's values must be values, not rendered markdown.
+
+    `_provenance()` renders ONE list for two artefacts, which is the point.
+    What it emits is markdown, and `generate_report()` copied it into the JSON
+    verbatim, so `provenance.commit` carried the markdown backticks and — on a
+    dirty tree — the ``(working tree DIRTY)`` suffix as well:
+
+        "commit": "`3ce4b588…`"                     (clean)
+        "commit": "`3ce4b588…` (working tree DIRTY)" (dirty)
+
+    Splitting cleanliness into its own "Tree" row was supposed to fix exactly
+    this, and did not touch the commit row.  A consumer comparing the field to
+    `git rev-parse HEAD` gets a mismatch it cannot interpret, in both states.
+    """
+
+    def test_commit_is_a_bare_hash_on_a_clean_tree(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(br, "_TREE_STATE", ("a" * 40, False))
+        provenance = br.generate_report([])["provenance"]
+        assert provenance["commit"] == "a" * 40, provenance["commit"]
+        assert provenance["tree"] == "clean"
+
+    def test_commit_is_a_bare_hash_on_a_dirty_tree(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(br, "_TREE_STATE", ("b" * 40, True))
+        provenance = br.generate_report([])["provenance"]
+        assert provenance["commit"] == "b" * 40, (
+            "the dirty marker is still glued to the commit id, which is what "
+            "the Tree row was added to stop"
+        )
+        assert "DIRTY" in provenance["tree"]
+
+    def test_the_markdown_still_shows_the_dirt_on_the_commit_row(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The human-facing rendering is unchanged: only the JSON was wrong."""
+        monkeypatch.setattr(br, "_TREE_STATE", ("c" * 40, True))
+        commit_cell = dict(br._provenance())["Commit"]
+        assert commit_cell.startswith("`c" + "c" * 39 + "`")
+        assert "working tree DIRTY" in commit_cell
+
+    def test_no_json_provenance_value_carries_markdown_ticks(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(br, "_TREE_STATE", ("d" * 40, False))
+        provenance = br.generate_report([])["provenance"]
+        ticked = {k: v for k, v in provenance.items() if isinstance(v, str) and "`" in v}
+        assert not ticked, f"markdown formatting reached the JSON block: {ticked}"

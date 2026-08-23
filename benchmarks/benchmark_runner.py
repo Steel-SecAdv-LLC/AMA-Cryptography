@@ -1055,9 +1055,13 @@ def generate_report(results: List[BenchmarkResult]) -> Dict[str, Any]:
     host or sampling rule produced the numbers. A measurement without its
     provenance is a number somebody quotes.
     """
+    json_overrides = _provenance_json_overrides()
     return {
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "provenance": {_provenance_key(label): value for label, value in _provenance()},
+        "provenance": {
+            _provenance_key(label): json_overrides.get(label, _provenance_json_value(value))
+            for label, value in _provenance()
+        },
         "summary": {
             "total": len(results),
             "passed": sum(1 for r in results if r.passed),
@@ -1125,6 +1129,46 @@ def _invocation() -> str:
     except Exception:
         argv[0] = Path(argv[0]).name
     return "python " + " ".join(shlex.quote(a) for a in argv)
+
+
+def _provenance_json_value(value: str) -> str:
+    """A provenance row's value with its MARKDOWN formatting removed.
+
+    `_provenance()` renders one list for two artefacts, which is the point: two
+    hand-kept copies drift.  What it emits is markdown, so the commit, version
+    and command rows are wrapped in backticks — and `generate_report()` copied
+    those straight into the JSON.  The JSON therefore recorded
+
+        "commit": "`3ce4b5883f712a481228fd0119df58aa7c6d49e2`"
+
+    which is not a commit id: a consumer comparing it to `git rev-parse HEAD`
+    gets a mismatch it cannot interpret.  That is the same defect the "Tree"
+    row was split out to fix, in the same field, and splitting the row did not
+    touch it — the commit message that introduced "Tree" asserted the JSON now
+    carried "a `commit` that equals `git rev-parse HEAD`", and it did not.
+
+    Stripping happens HERE, at the boundary, rather than by removing the
+    backticks from `_provenance()`: the markdown block is what a human reads,
+    and a bare 40-character hash in a table cell is worse for them.
+    """
+    stripped = value.strip()
+    if len(stripped) >= 2 and stripped.startswith("`") and stripped.endswith("`"):
+        return stripped[1:-1]
+    return stripped
+
+
+def _provenance_json_overrides() -> "dict[str, str]":
+    """Rows whose JSON value is not the markdown value with formatting removed.
+
+    "Commit" is the only one.  Its markdown value carries the
+    ``(working tree DIRTY)`` suffix, which reads well in a table and is what
+    the tests assert on, but is exactly what must NOT reach a field a tool
+    compares against ``git rev-parse HEAD``.  Adding the "Tree" row said the
+    same fact in a place a tool can read; it did not remove the suffix from
+    this one, so the JSON still recorded a non-commit for every dirty run.
+    """
+    commit, _dirty = _TREE_STATE if _TREE_STATE is not None else capture_tree_state()
+    return {"Commit": commit}
 
 
 def _provenance_key(label: str) -> str:
@@ -1263,8 +1307,18 @@ def generate_markdown_report(results: List[BenchmarkResult], report: Dict[str, A
     recorded = report.get("provenance")
     if isinstance(recorded, dict) and recorded:
         by_key = {_provenance_key(label): label for label, _ in _provenance()}
+        # The JSON holds the RAW value (see _provenance_json_value); put the
+        # code formatting back for the rows that carry it in a live render, so
+        # a report regenerated from a recorded block reads the same as the one
+        # written alongside the numbers.
+        ticked = {
+            _provenance_key(label)
+            for label, value in _provenance()
+            if value.strip().startswith("`")
+        }
         for key, value in recorded.items():
-            lines.append(f"| {by_key.get(key, key.replace('_', ' ').capitalize())} | {value} |")
+            shown = f"`{value}`" if key in ticked and not str(value).startswith("`") else value
+            lines.append(f"| {by_key.get(key, key.replace('_', ' ').capitalize())} | {shown} |")
     else:
         for key, value in _provenance():
             lines.append(f"| {key} | {value} |")

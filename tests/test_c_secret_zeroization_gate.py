@@ -385,18 +385,70 @@ class TestRealTree:
         assert findings == [], "\n".join(f.render() for f in findings)
 
 
-class TestSpellingsThatUsedToSlipPast:
-    """Every value and destination form the gate silently missed.
+class TestZeroValueAndDestinationSpellings:
+    """Every value and destination form the gate must recognise.
 
     This tool is the SOLE enforcement of INVARIANT-6 — the module docstring
     records that the semgrep counterpart does not run and cannot be made to —
-    so each of these was a complete bypass of an ERROR-severity control, not a
-    partial one.  All were verified as 0-finding on the gate as it stood.
+    so a form it does not recognise is a complete bypass of an ERROR-severity
+    control, not a partial one.
+
+    The class used to be named ``TestSpellingsThatUsedToSlipPast`` and its
+    docstring said "All were verified as 0-finding on the gate as it stood".
+    That is false for most of the corpus.  Measured by running the gate as it
+    stood at the PR head (3baf6c3) over these two tables:
+
+      ZERO_SPELLINGS, already flagged (9 of 16):
+          0, 0x00, 0X00, 0x0000, 0U, 0u, 0L, 0UL, '\0'
+      ZERO_SPELLINGS, silently missed (7):
+          00, 000, 00U, (0), ( 0 ), (0U), (0x00)
+
+      DESTINATION_FORMS, already flagged (5 of 11):
+          secret_key, &round_keys, ctx->hmac_key, (void *)ctx->hmac_key,
+          round_keys[i]
+      DESTINATION_FORMS, silently missed (6):
+          (secret_key), secret_key + 4, secret_key - 4,
+          secret_key  +  OFFSET, ctx->hmac_key + 8, round_keys[i] + 2
+
+    The already-flagged rows are regression guards — they are why the octal
+    and parenthesised additions can be made without quietly dropping a form
+    that used to be caught.  Only the second list of each pair was ever a
+    silent bypass, and the name and docstring now say so.
 
     Both directions are asserted for every form the value group exists to
     cover, because a gate that flags more is only an improvement if it still
     flags nothing it should not.
     """
+
+    #: The forms whose recognition this branch ADDED.  Measured, not assumed:
+    #: see the class docstring for the command and the split.
+    NEWLY_CLOSED_ZERO_SPELLINGS = frozenset({"00", "000", "00U", "(0)", "( 0 )", "(0U)", "(0x00)"})
+    NEWLY_CLOSED_DESTINATION_FORMS = frozenset(
+        {
+            "(secret_key)",
+            "secret_key + 4",
+            "secret_key - 4",
+            "secret_key  +  OFFSET",
+            "ctx->hmac_key + 8",
+            "round_keys[i] + 2",
+        }
+    )
+
+    def test_the_newly_closed_lists_are_subsets_of_the_corpus(self) -> None:
+        """The docstring's split must describe THESE tables, not a stale copy.
+
+        Without this the two frozensets are prose in another font: an entry
+        renamed in the corpus would leave the "newly closed" claim naming a
+        form the suite no longer drives.
+        """
+        assert self.NEWLY_CLOSED_ZERO_SPELLINGS <= set(self.ZERO_SPELLINGS)
+        assert self.NEWLY_CLOSED_DESTINATION_FORMS <= {
+            form for form, _expected in self.DESTINATION_FORMS
+        }
+        assert len(self.NEWLY_CLOSED_ZERO_SPELLINGS) < len(self.ZERO_SPELLINGS), (
+            "the class claims part of the corpus was already flagged; if every "
+            "entry is newly closed the docstring's split is wrong"
+        )
 
     ZERO_SPELLINGS = (
         "0",
@@ -542,6 +594,112 @@ class TestMemsetBehindAMacro:
     def test_the_definition_line_is_not_reported_as_a_call(self) -> None:
         findings = gate.scan_text("#define CLR(x) memset((x),0,sizeof(x))", _INLINE)
         assert findings == []
+
+
+class TestZeroingMacroScopeAndArity:
+    """Three ways the macro table let a call site through, or flagged a fixed one.
+
+    The table maps a function-like macro that bare-memsets one of its own
+    parameters to the argument index that parameter occupies, so a call site
+    naming a secret in that position is a finding.  As first written it had no
+    arity and no preprocessor scope.
+    """
+
+    def test_a_macro_that_wipes_two_parameters_maps_both(self) -> None:
+        """The collector ``break``ed on the first memset in the body.
+
+        With a single ``{name: macro}`` lookup on top of that, only one index
+        per name could ever be tested — every other argument at every call
+        site was a complete bypass, for exactly the macros that do the most
+        zeroing.  Measured before the fix: one finding, ``first_key``.
+        """
+        text = """
+#define WIPE2(a, b) do { memset((a), 0, 32); memset((b), 0, 32); } while (0)
+void f(void) {
+    unsigned char first_key[32], second_key[32];
+    WIPE2(first_key, second_key);
+}
+"""
+        found = {finding.dst for finding in gate.scan_text(text, Path("probe.c"))}
+        assert found == {"first_key", "second_key"}, found
+
+    def test_undef_cancels_the_definition(self) -> None:
+        """``#undef`` was invisible, so a remediated file still reported.
+
+        Measured before the fix: one finding, ``secret_key`` — an
+        ERROR-severity report on code that had already been fixed.
+        """
+        text = """
+#define WIPE(a) memset((a), 0, 32)
+#undef WIPE
+#define WIPE(a) ama_secure_memzero((a), 32)
+void f(void) {
+    unsigned char secret_key[32];
+    WIPE(secret_key);
+}
+"""
+        assert gate.scan_text(text, Path("probe.c")) == []
+
+    def test_a_non_zeroing_redefinition_supersedes(self) -> None:
+        """A redefinition that does not zero simply added no entry.
+
+        The original definition therefore stayed in force for the whole file.
+        Measured before the fix: one finding, ``secret_key``.
+        """
+        text = """
+#define WIPE(a) memset((a), 0, 32)
+#define WIPE(a) ama_secure_memzero((a), 32)
+void f(void) {
+    unsigned char secret_key[32];
+    WIPE(secret_key);
+}
+"""
+        assert gate.scan_text(text, Path("probe.c")) == []
+
+    def test_a_call_site_before_the_define_is_not_matched(self) -> None:
+        """Control: scope cuts both ways, and the common case still reports."""
+        text = """
+void early(void) {
+    unsigned char secret_key[32];
+    WIPE(secret_key);
+}
+#define WIPE(a) memset((a), 0, 32)
+void late(void) {
+    unsigned char secret_key[32];
+    WIPE(secret_key);
+}
+"""
+        findings = gate.scan_text(text, Path("probe.c"))
+        assert len(findings) == 1, [f.render() for f in findings]
+        assert findings[0].line_no > 6, findings[0].line_no
+
+    def test_unclosed_parentheses_stay_linear(self) -> None:
+        r"""The call-site scan was O(N * filesize) on unbalanced parentheses.
+
+        Every match of ``NAME\s*\(`` walked forward to the matching ``)`` and,
+        when there was none, to end of file.  Measured before the fix on this
+        exact input: 1594 ms / 6378 ms / 24828 ms at N = 2000 / 4000 / 8000 —
+        4x per doubling.  After: 7.6 / 14.6 / 30.0 ms, 2x per doubling.
+
+        This module's linearity is a stated, tested discipline (see
+        ``TestPatternIsLinear``); the helper the call-site pass added had no
+        case there, so the regression this file has already suffered twice was
+        reintroduced in the one code path that was new.
+        """
+        import time
+
+        timings = []
+        for count in (2000, 4000):
+            text = "#define WIPE(a) memset((a), 0, 32)\n" + "WIPE(secret_key\n" * count
+            start = time.perf_counter()
+            gate.scan_text(text, Path("probe.c"))
+            timings.append(time.perf_counter() - start)
+        assert timings[0] < 1.0, f"N=2000 took {timings[0]:.2f}s"
+        growth = timings[1] / max(timings[0], 1e-6)
+        assert growth < 3.0, (
+            f"doubling the input multiplied the time by {growth:.2f} — linear is "
+            f"~2.0x; the forward scan has regained its quadratic form"
+        )
 
 
 class TestPatternIsLinear:

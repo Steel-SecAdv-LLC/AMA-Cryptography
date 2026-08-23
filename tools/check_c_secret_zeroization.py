@@ -204,6 +204,15 @@ _MACRO_DEFINE_RE = re.compile(
     re.MULTILINE,
 )
 
+#: `#undef NAME`.  Without it the macro table had no notion of preprocessor
+#: scope: a name #undef'd (or redefined to something that does NOT zero) kept
+#: its zeroing definition in force for the whole file, so this ERROR-severity
+#: gate reported findings on already-remediated code.
+_MACRO_UNDEF_RE = re.compile(
+    r"^[ \t]*#[ \t]*undef[ \t]+(?P<name>[A-Za-z_][A-Za-z0-9_]*)",
+    re.MULTILINE,
+)
+
 #: `#define NAME memset` -- an object-like alias.  The same blindness one
 #: token earlier: the call site spells the alias, not `memset`.
 _MEMSET_ALIAS_RE = re.compile(
@@ -477,14 +486,47 @@ def _split_top_level(argument_text: str) -> list[str]:
     return [part.strip() for part in parts]
 
 
-def _match_call_arguments(text: str, open_paren: int) -> tuple[str, int] | None:
+def _paren_index(text: str) -> dict[int, int]:
+    """Offset of every `(` mapped to the offset of its matching `)`.
+
+    ONE left-to-right pass with a stack, so the whole file costs O(n) and each
+    lookup is O(1).  The obvious alternative — scanning forward from each `(`
+    until the depth returns to zero — is what this replaces: with N unclosed
+    occurrences of a macro name it costs O(N * filesize), and this module's
+    linearity is an explicit, tested discipline (see `_destination_name`, which
+    was rewritten for the same reason).  A `(` that is never closed simply has
+    no entry, which is exactly the None the caller needs.
+    """
+    index: dict[int, int] = {}
+    stack: list[int] = []
+    for position, character in enumerate(text):
+        if character == "(":
+            stack.append(position)
+        elif character == ")" and stack:
+            index[stack.pop()] = position
+    return index
+
+
+def _match_call_arguments(
+    text: str, open_paren: int, index: dict[int, int] | None = None
+) -> tuple[str, int] | None:
     """The text between `text[open_paren] == '('` and its matching `)`.
 
     Returns `(arguments, index_after_close)`, or None when the parenthesis is
     never closed.  Depth-tracked rather than regex-matched: a `[^)]*` form
     would stop at the first `)` inside a nested call and hand the caller a
     truncated argument list.
+
+    `index` is an optional precomputed `_paren_index(text)`; callers in a loop
+    pass it so the whole scan stays linear.  Without it this falls back to the
+    forward walk, which is correct but O(filesize) per unclosed paren — kept
+    only so the helper remains usable standalone.
     """
+    if index is not None:
+        close = index.get(open_paren)
+        if close is None:
+            return None
+        return text[open_paren + 1 : close], close + 1
     depth = 0
     i = open_paren
     n = len(text)
@@ -500,11 +542,33 @@ def _match_call_arguments(text: str, open_paren: int) -> tuple[str, int] | None:
 
 
 class _ZeroingMacro(NamedTuple):
-    """A function-like macro that bare-memsets one of its own parameters."""
+    """A definition (or un-definition) of a name that may zero its arguments.
+
+    `parameter_indices` holds EVERY parameter the body bare-memsets, not just
+    the first.  A macro that wipes two of its own parameters used to be
+    recorded as wiping one: the collector `break`ed on the first match and the
+    call-site lookup was a `{name: macro}` dict, so every other argument at
+    every call site went untested — a complete bypass of an ERROR-severity
+    gate for exactly the macros that do the most zeroing.
+
+    `offset` and `undef` give the table preprocessor scope.  Without them a
+    `#undef NAME`, or a redefinition that does NOT zero, left the original
+    definition in force for the rest of the file and the gate reported
+    findings on already-remediated code.  A call site resolves against the
+    LAST event for its name that precedes it.
+    """
 
     name: str
-    #: Index of the parameter the memset writes to.
-    parameter_index: int
+    #: Indices of every parameter the body memsets.  Empty for `undef`, and
+    #: for a redefinition that zeroes nothing.
+    parameter_indices: tuple[int, ...]
+    #: Byte offset of the `#define` / `#undef` in the blanked text.
+    offset: int
+    #: True for `#undef NAME`.
+    undef: bool = False
+    #: True for an object-like `#define NAME memset` alias, whose call sites
+    #: additionally have to pass a zero value.
+    alias: bool = False
 
 
 def _zeroing_macros(blanked: str) -> list[_ZeroingMacro]:
@@ -521,17 +585,40 @@ def _zeroing_macros(blanked: str) -> list[_ZeroingMacro]:
         if not parameters:
             continue
         body = define.group("body")
+        indices: list[int] = []
         for call in _MEMSET_RE.finditer(body):
             target = _destination_name(call.group("dst"))
             if target in parameters:
-                macros.append(_ZeroingMacro(define.group("name"), parameters.index(target)))
-                break
+                position = parameters.index(target)
+                if position not in indices:
+                    indices.append(position)
+        # Recorded even when `indices` is empty: a redefinition that zeroes
+        # nothing must SUPERSEDE an earlier zeroing one, not be invisible to
+        # the call-site lookup.
+        macros.append(
+            _ZeroingMacro(
+                define.group("name"),
+                tuple(sorted(indices)),
+                define.start(),
+            )
+        )
     return macros
 
 
 def _memset_aliases(blanked: str) -> list[_ZeroingMacro]:
     """`#define NAME memset` aliases, mapped to memset's own dst parameter."""
-    return [_ZeroingMacro(define.group("name"), 0) for define in _MEMSET_ALIAS_RE.finditer(blanked)]
+    return [
+        _ZeroingMacro(define.group("name"), (0,), define.start(), alias=True)
+        for define in _MEMSET_ALIAS_RE.finditer(blanked)
+    ]
+
+
+def _macro_undefs(blanked: str) -> list[_ZeroingMacro]:
+    """`#undef NAME` events, which cancel whatever definition preceded them."""
+    return [
+        _ZeroingMacro(undef.group("name"), (), undef.start(), undef=True)
+        for undef in _MACRO_UNDEF_RE.finditer(blanked)
+    ]
 
 
 def _macro_call_findings(
@@ -550,38 +637,58 @@ def _macro_call_findings(
     has already been proven to zero, so its call sites need no such test.
     """
     findings: list[Finding] = []
-    aliases = {macro.name for macro in _memset_aliases(blanked)}
-    macros = _zeroing_macros(blanked) + _memset_aliases(blanked)
-    if not macros:
+    events = sorted(
+        _zeroing_macros(blanked) + _memset_aliases(blanked) + _macro_undefs(blanked),
+        key=lambda macro: macro.offset,
+    )
+    zeroing_names = {macro.name for macro in events if macro.parameter_indices}
+    if not zeroing_names:
         return findings
 
-    by_name = {macro.name: macro for macro in macros}
+    # name -> its events, in source order.  A call site resolves against the
+    # LAST event for its name that precedes it, so an #undef or a
+    # non-zeroing redefinition cancels the earlier definition instead of
+    # leaving it in force for the whole file.
+    timeline: dict[str, list[_ZeroingMacro]] = {}
+    for event in events:
+        timeline.setdefault(event.name, []).append(event)
+
+    parens = _paren_index(blanked)
     name_pattern = re.compile(
-        r"\b(" + "|".join(re.escape(macro.name) for macro in macros) + r")\s*\("
+        r"\b(" + "|".join(re.escape(name) for name in sorted(zeroing_names)) + r")\s*\("
     )
     for call in name_pattern.finditer(blanked):
-        macro = by_name[call.group(1)]
+        history = timeline.get(call.group(1), [])
+        macro: _ZeroingMacro | None = None
+        for event in history:
+            if event.offset >= call.start():
+                break
+            macro = event
+        if macro is None or macro.undef or not macro.parameter_indices:
+            continue
         # The macro's own #define line is not a call site.
         line_no = bisect_right(line_starts, call.start())
         raw = lines[line_no - 1] if 0 < line_no <= len(lines) else ""
         if raw.lstrip().startswith("#"):
             continue
-        matched = _match_call_arguments(blanked, call.end() - 1)
+        matched = _match_call_arguments(blanked, call.end() - 1, parens)
         if matched is None:
             continue
         arguments = _split_top_level(matched[0])
-        if macro.parameter_index >= len(arguments):
-            continue
-        if macro.name in aliases:
+        if macro.alias:
             if len(arguments) < 2 or not re.fullmatch(
                 r"\(?\s*(?:0[xX]0+[uUlL]*|0+[uUlL]*|'\\0')\s*\)?", arguments[1]
             ):
                 continue
-        expression = arguments[macro.parameter_index]
-        dst = _destination_name(expression)
-        if not dst or not _SECRET_NAME_RE.match(dst):
-            continue
-        findings.append(Finding(path, line_no, dst, raw, expression))
+        # EVERY mapped parameter, not only the first.
+        for parameter_index in macro.parameter_indices:
+            if parameter_index >= len(arguments):
+                continue
+            expression = arguments[parameter_index]
+            dst = _destination_name(expression)
+            if not dst or not _SECRET_NAME_RE.match(dst):
+                continue
+            findings.append(Finding(path, line_no, dst, raw, expression))
     return findings
 
 

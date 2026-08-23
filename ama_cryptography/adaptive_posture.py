@@ -736,9 +736,15 @@ class CryptoPostureController:
     #: the controller stops attempting automatically.  Six, because the
     #: backoff ladder below doubles from ``rotation_cooldown / 32`` and
     #: reaches exactly ``rotation_cooldown`` on the sixth failure: at the
-    #: default 300 s that is 9.4 s, 18.8 s, 37.5 s, 75 s, 150 s, 300 s —
-    #: roughly ten minutes of increasingly patient retrying before the
-    #: controller concludes the mechanism is not coming back.
+    #: default 300 s the rungs are 9.4 s, 18.8 s, 37.5 s, 75 s, 150 s, 300 s.
+    #:
+    #: FIVE of those six are ever waited on, not six.  The cap guard in
+    #: ``_trigger_rotation`` runs BEFORE the backoff guard, so reaching streak
+    #: 6 IS the suspension and the 300 s armed by the sixth failure is never
+    #: served.  The window actually spent retrying is
+    #: 9.375 + 18.75 + 37.5 + 75 + 150 = 290.625 s — 4 min 51 s at the default
+    #: cooldown, not the "roughly ten minutes" this note used to claim from
+    #: summing all six rungs.
     MAX_CONSECUTIVE_ROTATION_FAILURES: int = 6
 
     @classmethod
@@ -951,8 +957,15 @@ class CryptoPostureController:
 
         return evaluation
 
-    def _execute_action(self, action: PostureAction) -> None:
+    def _execute_action(self, action: PostureAction) -> bool:
         """Execute a posture action immediately.
+
+        Returns False when the action's rotation half was SUPPRESSED by the
+        failure cap or the retry backoff and nothing else in the action ran —
+        i.e. when nothing happened.  Callers that report an execution to a
+        human (``confirm_action``) or that consume a queued action
+        (``_process_expired_pending_actions``) must not treat a suppressed
+        rotation as done.
 
         The two effects an action can have are throttled independently, by
         ``_last_rotation_time`` and ``_last_switch_time``, because they have
@@ -981,12 +994,19 @@ class CryptoPostureController:
         rotation the same threat had demanded.
         """
         if action == PostureAction.ROTATE_AND_SWITCH:
-            self._trigger_rotation()  # arms the rotation throttle iff it succeeded
+            # arms the rotation throttle iff it succeeded
+            rotated = self._trigger_rotation()
             self._trigger_algorithm_switch_if_due()
-        elif action == PostureAction.ROTATE_KEYS:
-            self._trigger_rotation()  # arms the rotation throttle iff it succeeded
-        elif action == PostureAction.SWITCH_ALGORITHM:
+            # False when the rotation half was suppressed: the action names two
+            # effects and only one of them was attempted.  The switch half has
+            # its own due-window, so a caller that re-tries this action later
+            # does not switch twice.
+            return rotated
+        if action == PostureAction.ROTATE_KEYS:
+            return self._trigger_rotation()  # arms the throttle iff it succeeded
+        if action == PostureAction.SWITCH_ALGORITHM:
             self._trigger_algorithm_switch_if_due()
+        return True
 
     def _process_expired_pending_actions(self) -> None:
         """Auto-execute pending actions that have exceeded the grace period.
@@ -1009,7 +1029,17 @@ class CryptoPostureController:
                     pa.action.name,
                     pa.action_id,
                 )
-                self._execute_action(pa.action)
+                if not self._execute_action(pa.action):
+                    # Same reason as confirm_action: a suppressed rotation did
+                    # not happen, so the action is not done and must not be
+                    # dropped from the queue.
+                    logger.warning(
+                        "Pending action %s (id=%s) was SUPPRESSED, not executed; "
+                        "it stays queued.",
+                        pa.action.name,
+                        pa.action_id,
+                    )
+                    still_pending.append(pa)
             else:
                 still_pending.append(pa)
         self._pending_actions = still_pending
@@ -1029,8 +1059,26 @@ class CryptoPostureController:
         """
         for i, pa in enumerate(self._pending_actions):
             if pa.action_id == action_id and not pa.confirmed:
+                if not self._execute_action(pa.action):
+                    # SUPPRESSED, not executed.  This used to set
+                    # pa.confirmed, pop the action, log "Confirmed and executed
+                    # action" and return True — consuming an explicit human
+                    # confirmation for a rotation that never ran, with no way
+                    # for the operator to tell.  The action stays pending and
+                    # unconfirmed so a later call can carry it out once the
+                    # backoff elapses, or so reset() can clear a suspension.
+                    logger.warning(
+                        "Confirmed action %s (id=%s) was SUPPRESSED, not executed: "
+                        "posture rotation is in backoff or suspended after %d "
+                        "consecutive failures. The action remains pending. See "
+                        "get_posture_summary()['rotation_suspended']; a suspended "
+                        "controller resumes only on reset().",
+                        pa.action.name,
+                        action_id,
+                        self._rotation_failure_streak,
+                    )
+                    return False
                 pa.confirmed = True
-                self._execute_action(pa.action)
                 self._pending_actions.pop(i)
                 logger.info("Confirmed and executed action %s (id=%s)", pa.action.name, action_id)
                 return True
@@ -1088,8 +1136,16 @@ class CryptoPostureController:
         exponent = min(max(streak, 1), cap) - 1
         return float(self.rotation_cooldown) * (2.0**exponent) / (2.0 ** (cap - 1))
 
-    def _trigger_rotation(self) -> None:
+    def _trigger_rotation(self) -> bool:
         """Trigger key rotation through existing infrastructure.
+
+        Returns True when an attempt was MADE (whether it then succeeded or
+        failed) or when there was no mechanism to attempt, and False when the
+        call was SUPPRESSED by the cap or the backoff guard.  The return value
+        exists because ``confirm_action`` reported True and logged "Confirmed
+        and executed action" for a suppressed rotation, popping the operator's
+        pending action for an execution that did not happen; the guards had no
+        way to say so.
 
         Failed rotations are throttled by their own exponential backoff and
         capped, which is a different thing from the ``rotation_cooldown``
@@ -1115,10 +1171,15 @@ class CryptoPostureController:
         and says so at CRITICAL.  Continuing to hammer a rotation mechanism
         that has failed six times with growing backoff does not rotate
         anything; it burns key identifiers and derivation indices, floods the
-        callback, and buries the operator's evidence. A rotation that
-        SUCCEEDS clears the streak, so a mechanism that comes back resumes
-        immediately, and ``reset()`` clears it for an operator who has fixed
-        the fault.
+        callback, and buries the operator's evidence.
+
+        A rotation that SUCCEEDS clears the streak, so a mechanism that comes
+        back resumes immediately — WHILE THE CONTROLLER IS STILL ATTEMPTING.
+        Once the cap is reached there is no next success to have: the guard
+        below returns before ``get_active_key`` or ``on_rotation`` is touched,
+        and the streak is only cleared downstream of it.  ``reset()`` is
+        therefore the sole exit from the suspended state, which is what the
+        CRITICAL log says and what this docstring used to imply otherwise.
 
         ``get_posture_summary()`` reports ``rotation_failure_streak`` and
         ``rotation_suspended`` so the stopped state is readable rather than
@@ -1135,7 +1196,7 @@ class CryptoPostureController:
                 "not attempting. Fix the rotation mechanism and call reset().",
                 self._rotation_failure_streak,
             )
-            return
+            return False
 
         if self._rotation_failure_streak and now < self._rotation_retry_not_before:
             logger.info(
@@ -1145,7 +1206,7 @@ class CryptoPostureController:
                 self._rotation_retry_delay(self._rotation_failure_streak),
                 self._rotation_failure_streak,
             )
-            return
+            return False
 
         # AFTER the two guards: a suppressed attempt must not burn a key
         # identifier or an HD derivation index.  Those are minted from this
@@ -1226,7 +1287,7 @@ class CryptoPostureController:
             self._last_rotation_time = time.time()
             self._rotation_failure_streak = 0
             self._rotation_retry_not_before = 0.0
-            return
+            return True
 
         self._rotation_failure_streak += 1
         self._rotation_retry_not_before = time.time() + self._rotation_retry_delay(
@@ -1246,6 +1307,9 @@ class CryptoPostureController:
                 self._rotation_failure_streak,
                 self._rotation_retry_delay(self._rotation_failure_streak),
             )
+        # Attempted and failed is still ATTEMPTED: the caller asked for a
+        # rotation and one was tried.  Only the two guards above suppress.
+        return True
 
     def _trigger_algorithm_switch_if_due(self) -> None:
         """Switch algorithms unless the switch throttle is still cooling down.

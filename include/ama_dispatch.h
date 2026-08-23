@@ -102,7 +102,6 @@ typedef void (*ama_keccak_f1600_fn)(uint64_t state[25]);
  *  amortizing theta/rho/pi/chi/iota across all four lanes. */
 typedef void (*ama_keccak_f1600_x4_fn)(uint64_t states[4][25]);
 
-/** SHA3-256: full hash (input, len) -> output[32] */
 /** Kyber NTT forward transform */
 typedef void (*ama_kyber_ntt_fn)(int16_t poly[256], const int16_t zetas[128]);
 

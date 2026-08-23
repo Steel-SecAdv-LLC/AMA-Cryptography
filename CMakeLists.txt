@@ -532,15 +532,22 @@ if(AMA_ENABLE_SIMD AND AMA_ENABLE_NEON)
             # own scalar path, which is what NULL slots already mean
             # everywhere else in this table.
             add_compile_definitions(AMA_HAVE_NEON_CRYPTO_EXT_IMPL)
-            # Same fact as a CMake variable, so tests/c/CMakeLists.txt can
-            # decide whether to BUILD the kernels' equivalence test at all.
-            # SKIP_RETURN_CODE cannot help a binary that will not link.
-            set(AMA_NEON_CRYPTO_EXT ON)
+            # The link problem this used to set a CMake variable for is solved
+            # at SOURCE level instead: tests/c/test_aes_gcm_neon_equiv.c puts
+            # its `extern` declarations and every call site behind
+            # `#if defined(AMA_HAVE_NEON_CRYPTO_EXT_IMPL)`, so the target links
+            # unconditionally and reports Skipped via SKIP_RETURN_CODE 77.
+            # `set(AMA_NEON_CRYPTO_EXT ON)` stood here with a comment saying
+            # tests/c/CMakeLists.txt used it to decide whether to build that
+            # test; nothing ever read the variable, and the test is added
+            # unconditionally.  Removed rather than left as dead configuration
+            # describing a mechanism that does not exist.
         else()
             message(STATUS
-                "SIMD: MSVC ARM64 — NEON AES-GCM kernels not built (no ARM "
-                "Crypto Extension feature macros); AES-GCM uses the portable "
-                "path and the dispatch slots stay NULL")
+                "SIMD: no ARM Crypto Extension feature macros (MSVC ARM64, or "
+                "AMA_FORCE_NO_ARM_CRYPTO) — NEON AES-GCM kernels not built; "
+                "AES-GCM uses the portable path and the dispatch slots stay "
+                "NULL")
         endif()
         message(STATUS "SIMD: ARM NEON hand-written intrinsics enabled (8 algorithms)")
         # Tell dispatch code that NEON implementations are linked in

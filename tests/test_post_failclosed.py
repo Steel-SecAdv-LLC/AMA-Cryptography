@@ -1513,13 +1513,23 @@ class TestContinuousRNGTest:
         from ama_cryptography import _module_state as ms
         from ama_cryptography.exceptions import CryptoModuleError
 
-        saved_previous = ms._rng_state["previous"]
+        # The REAL state object, captured before the monkeypatch below rebinds
+        # the attribute.  The finally-block used to write `saved_previous` back
+        # through `ms._rng_state`, which by then names the throwaway
+        # `_RendezvousState`: the restore landed on an object about to be
+        # discarded, monkeypatch rebound the original dict, and the `previous`
+        # this test had cleared to None was never put back — leaking a cleared
+        # continuous-RNG baseline into the rest of the session.  The comment
+        # said "_rng_state [is] restored by monkeypatch's teardown", which is
+        # true of the BINDING and not of the value the test mutated first.
+        real_rng_state = ms._rng_state
+        saved_previous = real_rng_state["previous"]
         saved_state = ms._MODULE_STATE
         saved_reason = ms._ERROR_REASON
         stuck = b"\xa5" * 32
 
         try:
-            ms._rng_state["previous"] = None
+            real_rng_state["previous"] = None
             ms._MODULE_STATE = "OPERATIONAL"
             ms._ERROR_REASON = None
 
@@ -1589,10 +1599,49 @@ class TestContinuousRNGTest:
             ), f"expected the other seven draws to be refused, got {len(refusals)}"
             assert ms.module_status() == "ERROR"
         finally:
-            # token_bytes and _rng_state are restored by monkeypatch's teardown.
-            ms._rng_state["previous"] = saved_previous
+            # token_bytes and the _rng_state BINDING are restored by
+            # monkeypatch's teardown; the value inside the original dict is
+            # this test's to put back, and only through the object captured
+            # before the patch.
+            real_rng_state["previous"] = saved_previous
             ms._MODULE_STATE = saved_state
             ms._ERROR_REASON = saved_reason
+
+    def test_the_stuck_drbg_test_restores_the_real_baseline(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The test above must leave the module's RNG baseline as it found it.
+
+        It clears `_rng_state["previous"]` on the REAL dict, then rebinds
+        `_rng_state` to a throwaway rendezvous object.  A finally-block written
+        as `ms._rng_state["previous"] = saved` therefore wrote into the
+        throwaway; monkeypatch then rebound the original dict, whose `previous`
+        stayed None.  Every later draw in the session then started from "no
+        baseline", so the continuous test could not catch a repeat of whatever
+        value had been issued before.
+
+        Asserted directly rather than by inspection, and ordered after the test
+        it checks so it observes that test's aftermath.
+        """
+        from ama_cryptography import _module_state as ms
+
+        sentinel = b"a-recognisable-32-byte-baseline!"
+        # The REAL dict, held across the call: the inner test rebinds
+        # ``ms._rng_state`` through the same monkeypatch fixture this test
+        # owns, so the binding is still the throwaway rendezvous object when
+        # the assertion runs.  Reading through ``ms._rng_state`` here would
+        # inspect that object and prove nothing about the module's own state.
+        real_rng_state = ms._rng_state
+        saved = real_rng_state["previous"]
+        try:
+            real_rng_state["previous"] = sentinel
+            self.test_compare_and_store_is_atomic_under_concurrency(monkeypatch)
+            assert real_rng_state["previous"] == sentinel, (
+                "the concurrency test cleared the module's continuous-RNG "
+                "baseline and did not restore it"
+            )
+        finally:
+            real_rng_state["previous"] = saved
 
     def test_health_state_does_not_retain_issued_key_material(self) -> None:
         """The health state stores a digest, never the bytes handed to the caller.

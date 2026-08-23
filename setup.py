@@ -692,17 +692,38 @@ class CMakeBuild(build_ext):
         # conditional.  The pre-import gate is right to refuse; what was
         # wrong was asking it to adjudicate a tree mid-rebuild.
         #
-        # Removing it first is safe and is not a downgrade: with no artefact,
-        # nothing is signed, so nothing reads as tampering; the .py digest is
-        # unaffected because the artefact is excluded from it by
-        # construction; and the signer writes a fresh one moments later or
-        # the build fails loudly.  __pycache__ goes too, so a compiled copy
-        # cannot shadow the deletion.
+        # Moved ASIDE, not deleted.  `_integrity_signature.py` is a git-TRACKED
+        # file, and an earlier form of this block unlinked it outright: any
+        # signer failure then left the developer's checkout with the artefact
+        # gone, a state `git checkout` is the only recovery from and which the
+        # RuntimeError below does not mention.  The rename is restored on every
+        # non-zero exit and on every exception, so a failed build leaves the
+        # tree exactly as it found it.  __pycache__ goes too, so a compiled
+        # copy cannot shadow the move.
+        #
+        # Removing it for the duration is safe and is not a downgrade: with no
+        # artefact, nothing is signed, so nothing reads as tampering; the .py
+        # digest is unaffected because the artefact is excluded from it by
+        # construction; and the signer writes a fresh one moments later or the
+        # build fails and the original comes back.
+        _stashed: list[tuple[Path, Path]] = []
         for _pkg_dir in (src_pkg_dir, staged_pkg_dir):
             if _pkg_dir is None or not _pkg_dir.is_dir():
                 continue
-            (_pkg_dir / "_integrity_signature.py").unlink(missing_ok=True)
+            _artefact = _pkg_dir / "_integrity_signature.py"
+            if _artefact.is_file():
+                _aside = _pkg_dir / "_integrity_signature.py.pre-sign"
+                _aside.unlink(missing_ok=True)
+                _artefact.rename(_aside)
+                _stashed.append((_artefact, _aside))
             shutil.rmtree(_pkg_dir / "__pycache__", ignore_errors=True)
+
+        def _restore_stashed_artefacts() -> None:
+            for _artefact, _aside in _stashed:
+                if _aside.is_file() and not _artefact.is_file():
+                    _aside.rename(_artefact)
+                else:
+                    _aside.unlink(missing_ok=True)
 
         # _build_sign loads the native library via _find_native_library,
         # which searches the in-tree package dir first.  We already copied
@@ -715,25 +736,53 @@ class CMakeBuild(build_ext):
             "ama_cryptography._build_sign",
             "--package-dir",
             str(src_pkg_dir),
-            # Wheel pipeline: bind the just-synced binding extensions into the
-            # signed artefact.  The repair flow (`integrity --update --sign`)
-            # deliberately omits this — see _build_sign's --bind-extensions
-            # help for why a source-tree artefact must bind none.
+            # Bind the just-synced binding extensions into the signed
+            # artefact.  BOTH callers pass this now — this one and the repair
+            # flow (`integrity --update --sign`), which sets the same argv.
+            # The flag stays explicit rather than becoming the default so
+            # `--digest-only` and genuinely extension-free trees remain
+            # reachable; see _build_sign's --bind-extensions help.
+            #
+            # This comment used to say the repair flow "deliberately omits
+            # this — ... why a source-tree artefact must bind none", which was
+            # true of the revision it was written for and was inverted by the
+            # change that made the repair flow bind too.  It pointed the reader
+            # at a help text that says the opposite.
             "--bind-extensions",
         ]
         env = os.environ.copy()
         env["AMA_BUILD_PIPELINE"] = "1"
+        # Scrubbed from the CHILD's environment only.  Both describe how the
+        # INSTALLED module must behave, not how the signer's own import must:
+        # the signer necessarily imports a tree whose artefact has just been
+        # moved aside, so POST records the integrity stage at `digest-only`
+        # strength.  AMA_FIPS_STRICT=1 escalates that SKIP to a hard failure,
+        # and AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR=1 fails the stage outright on
+        # an unanchored build.  Neither is a FAILED-and-repairable stage, so
+        # __init__'s signer carve-out cannot cover them — it keys on
+        # `_all_failures_repairable`, and a SKIP produces no failed row at all.
+        # An operator who exports either variable in their shell (the
+        # documented way to run a strict build) could not `pip install .`.
+        for _child_only in ("AMA_FIPS_STRICT", "AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR"):
+            env.pop(_child_only, None)
         try:
             subprocess.check_call(cmd, env=env)
-        except subprocess.CalledProcessError as e:
-            raise RuntimeError(
-                f"FATAL: integrity signer failed (exit {e.returncode}). "
-                "Every build must produce a signed integrity artefact that "
-                "covers the binding extensions it ships; an unsigned or "
-                "partially-covered build imports with POST reporting itself "
-                "NOT fully verified and fails outright under "
-                "AMA_FIPS_STRICT=1.  Refusing to produce one."
-            ) from e
+        except BaseException as e:
+            _restore_stashed_artefacts()
+            if isinstance(e, subprocess.CalledProcessError):
+                raise RuntimeError(
+                    f"FATAL: integrity signer failed (exit {e.returncode}). "
+                    "Every build must produce a signed integrity artefact that "
+                    "covers the binding extensions it ships; an unsigned or "
+                    "partially-covered build imports with POST reporting itself "
+                    "NOT fully verified and fails outright under "
+                    "AMA_FIPS_STRICT=1.  Refusing to produce one.  The tree's "
+                    "previous artefact has been restored."
+                ) from e
+            raise
+        else:
+            for _artefact, _aside in _stashed:
+                _aside.unlink(missing_ok=True)
 
         # Mirror the freshly-written artefact into the staging dir so the
         # wheel builder packages it.  The signer ran against src_pkg_dir.

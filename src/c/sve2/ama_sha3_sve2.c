@@ -33,10 +33,14 @@
  * vectors flow through the dispatched `sha3_256` slot)".  Nothing outside
  * src/c/dispatch ever read that slot, so the wrapper was unreachable and the
  * claim could not be true; both are gone.  See the removal note in
- * ama_dispatch.c.  Algorithmic correctness is straightforward (it is
- * literally FIPS 202's sponge construction at rate=136, padding 0x06)
- * and is pinned by every SHA3-256 KAT in the suite once the dispatch
- * pointer is set.
+ * ama_dispatch.c.
+ *
+ * The sentence that used to follow -- "Algorithmic correctness is
+ * straightforward ... and is pinned by every SHA3-256 KAT in the suite once
+ * the dispatch pointer is set" -- was left standing when the two above it
+ * were written, so the paragraph declared a claim impossible and then made it
+ * again, about a rate-136 / 0x06-padded sponge that no longer exists in this
+ * file.
  *
  * AI Co-Architects: Eris + | Eden ~ | Devin * | Claude @
  */
@@ -195,9 +199,14 @@ void ama_keccak_f1600_sve2(uint64_t state[25]) {
 /* ama_sha3_256_sve2() was removed with the dispatch table's `sha3_256`
  * slot, which was its only caller.  Nothing outside src/c/dispatch ever read
  * that slot -- the public ama_sha3_256() absorbs inline and dispatches only
- * `keccak_f1600` -- and the wrapper was 4.4x-4.7x slower than that path while
- * rejecting `input == NULL, input_len == 0`, which the public entry point
- * accepts.  See the removal note in src/c/dispatch/ama_dispatch.c. */
+ * `keccak_f1600`, so the wrapper was redundant.  (The removal note in
+ * src/c/dispatch/ama_dispatch.c carries the measured 4.4x-4.7x figure and its
+ * real cause, which is the Phase-3 auto-tune revert rather than anything about
+ * these wrappers.  The clause that used to sit here -- that the wrapper
+ * rejected `input == NULL, input_len == 0` "which the public entry point
+ * accepts" -- was false about THIS file: this wrapper guarded
+ * `if (!input && input_len > 0)`, byte-for-byte the public rule.  It was the
+ * AVX2 and NEON wrappers that diverged.) */
 #else
 typedef int ama_sha3_sve2_not_available;
 #endif /* __ARM_FEATURE_SVE2 */

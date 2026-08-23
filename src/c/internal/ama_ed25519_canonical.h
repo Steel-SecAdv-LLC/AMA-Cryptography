@@ -92,9 +92,13 @@ static inline int ama_ed25519_scalar_is_canonical(const uint8_t s[32]) {
  * is rejected by ama_ed25519_signature_r_is_canonical() below.  That last
  * clause used to read "a malleated R fails the re-encode comparison, so both
  * signature-malleability paths were already closed" -- true of the two
- * single-signature verifiers, false of the donna batch path, which decodes R
- * instead of re-encoding and so closed neither.  The R predicate exists
- * because the sentence did not hold everywhere it was written.
+ * single-signature verifiers, and half false of the donna batch path, which
+ * decodes R instead of re-encoding and so closed only the S one.  The S half
+ * was already covered there by the explicit canonical-S loop in the shim's
+ * post-batch override; nothing covered R.  The R predicate exists because
+ * that half of the sentence did not hold everywhere it was written.  (An
+ * earlier correction here said the batch path "closed neither", which
+ * overstates in the other direction.)
  *
  * The sign bit (bit 255) is masked off first -- it carries the sign of x, not
  * part of y. Public input, so constant time is not required, but the

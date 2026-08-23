@@ -1436,13 +1436,38 @@ static void dispatch_init_internal(void) {
      *   len= 512   ama_sha3_256  1109.6 ns   ama_sha3_256_avx2   4891.0 ns
      *   len=4096   ama_sha3_256  7967.3 ns   ama_sha3_256_avx2  37239.8 ns
      *
-     * 4.4x-4.7x SLOWER, because the wrappers duplicate the same scalar
-     * absorb and then drive a permutation built for 4-way batching down a
-     * single lane.  They also disagree with the public contract:
-     * `ama_sha3_256(NULL, 0, out)` returns AMA_SUCCESS and every wrapper
-     * returns AMA_ERROR_INVALID_PARAM, so wiring them would have made a
-     * public API's NULL handling depend on the host CPU -- the same class of
-     * defect as two verifiers disagreeing on one signature.
+     * 4.4x-4.7x SLOWER -- and the reason is NOT what this note first said.
+     * It claimed the wrappers "duplicate the same scalar absorb and then
+     * drive a permutation built for 4-way batching down a single lane".
+     * Both halves were wrong: `ama_sha3_256_avx2` called
+     * `ama_keccak_f1600_avx2`, the SINGLE-state permutation, and never
+     * referenced the 4-way `ama_keccak_f1600_x4_avx2`; and the absorb is not
+     * duplicated work either, since the public `ama_sha3_256` performs the
+     * identical scalar 17-lane XOR.
+     *
+     * The whole gap is the Phase-3 auto-tune.  On the measurement host it
+     * reverts `dispatch_table.keccak_f1600` OFF the AVX2 kernel, so
+     * `ama_sha3_256` ran the fast scalar/BMI baseline while the wrapper --
+     * which hard-linked `ama_keccak_f1600_avx2` -- did not.  Measured here
+     * with AMA_DISPATCH_VERBOSE=1:
+     *
+     *   Auto-tune verdicts (regressed=1 reverted):
+     *     keccak=1 (simd=2382407 ns vs generic=496411 ns)   -> 4.80x
+     *   keccak_f1600 -> scalar (BMI1/BMI2)
+     *
+     * and with AMA_DISPATCH_NO_AUTOTUNE=1: `keccak_f1600 -> SIMD`.  4.80x is
+     * the same ratio the wrapper timings show, so the wrapper was REDUNDANT,
+     * not slow: it bypassed a revert the public entry point benefits from.
+     * That is a property of the AVX2 Keccak kernel, which the auto-tune
+     * already handles.
+     *
+     * The AVX2 and NEON wrappers also disagreed with the public contract:
+     * `ama_sha3_256(NULL, 0, out)` returns AMA_SUCCESS and those two returned
+     * AMA_ERROR_INVALID_PARAM, so wiring them would have made a public API's
+     * NULL handling depend on the host CPU -- the same class of defect as two
+     * verifiers disagreeing on one signature.  Not "every wrapper": the SVE2
+     * one guarded `if (!input && input_len > 0)`, byte-for-byte the public
+     * rule, and accepted (NULL, 0).
      *
      * The slot could not be made true by wiring it, and leaving it wired but
      * unread kept three false claims alive.  It is gone, with
@@ -1631,12 +1656,24 @@ static void dispatch_init_internal(void) {
      * AMA_HAVE_NEON_IMPL.  Each kernel scrubs sensitive intermediate
      * state on every return path (INVARIANT-12). */
     if (dispatch_info.aes_gcm >= AMA_IMPL_NEON && ama_cpuid_has_arm_aes()) {
+        /* The diagnostic goes INSIDE the same #ifdef as the assignments.
+         * With only the assignments guarded, a build without the Crypto
+         * Extension kernels running on a host that reports ARM AES still took
+         * this branch, wired nothing, and announced "NEON + ARMv8 Crypto Ext
+         * (AES + PMULL) selected" -- exactly the defect class the sha3-neon
+         * pin above records: one label for two different configurations. */
 #ifdef AMA_HAVE_NEON_CRYPTO_EXT_IMPL
         dispatch_table.aes_gcm_encrypt = ama_aes256_gcm_encrypt_neon;
         dispatch_table.aes_gcm_decrypt = ama_aes256_gcm_decrypt_neon;
-#endif
         if (dispatch_verbose())
             fprintf(stderr, "[AMA Dispatch] AES-GCM: NEON + ARMv8 Crypto Ext (AES + PMULL) selected\n");
+#else
+        if (dispatch_verbose())
+            fprintf(stderr,
+                "[AMA Dispatch] AES-GCM: ARM AES reported by the CPU but this"
+                " build has no Crypto Extension kernel (AMA_HAVE_NEON_CRYPTO_EXT_IMPL"
+                " undefined) — portable path, slots stay NULL\n");
+#endif
     } else if (dispatch_verbose() && dispatch_info.aes_gcm >= AMA_IMPL_NEON) {
         fprintf(stderr,
             "[AMA Dispatch] AES-GCM: NEON present but ARM-AES=%d ARM-PMULL=%d"

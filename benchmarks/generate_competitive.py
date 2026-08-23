@@ -707,10 +707,12 @@ Measured at commit <code>{src_commit}</code> ({src_measured}), AMA {src_version}
 Host: {host_line}<br>
 {vers}<br>
 Every figure on this page is read from <code>benchmarks/multi_library_results.json</code>
-and <code>benchmarks/pqc_results.json</code>. Nothing is hand-entered — including
-the AMA version above, which is read from those files' provenance rather than
-from the working tree. Regenerating this page without re-running the harness
-re-renders the same measurements under the same stamp; it cannot relabel them.
+and <code>benchmarks/pqc_results.json</code>, including the AMA version above, which comes
+from those files' provenance rather than from the working tree. The PEER LIBRARY
+versions on the line above are pinned in <code>benchmarks/generate_competitive.py</code>,
+because the harness does not record them — eight of the nine entries there are
+string literals. Regenerating this page without re-running the harness re-renders
+the same measurements under the same stamp; it cannot relabel them.
 </p>
 
 </div></body></html>

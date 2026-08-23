@@ -146,6 +146,35 @@ jobs:
             exit 1
           fi
 
+      - name: "The dispatcher must not announce a selection it did not make"
+        # `dispatch_info.aes_gcm >= AMA_IMPL_NEON && ama_cpuid_has_arm_aes()`
+        # is TRUE on this lane — QEMU's CPU reports ARM AES — while the build
+        # has no Crypto Extension kernel to install.  With only the two
+        # assignments inside `#ifdef AMA_HAVE_NEON_CRYPTO_EXT_IMPL`, the branch
+        # was taken, nothing was wired, and the diagnostic still printed
+        # "NEON + ARMv8 Crypto Ext (AES + PMULL) selected".  This is the lane
+        # that reaches it, so this is where the claim gets checked.
+        shell: bash
+        run: |
+          cat > /tmp/di.c <<'EOF'
+          extern void ama_print_dispatch_info(void);
+          int main(void) { ama_print_dispatch_info(); return 0; }
+          EOF
+          aarch64-linux-gnu-gcc -O1 /tmp/di.c -o /tmp/di_arm \
+            -Lbuild-arm-nocrypto/lib -lama_cryptography
+          QEMU_CPU=max AMA_DISPATCH_VERBOSE=1 qemu-aarch64-static \
+            -L /usr/aarch64-linux-gnu \
+            -E LD_LIBRARY_PATH="$PWD/build-arm-nocrypto/lib" \
+            /tmp/di_arm 2>&1 | tee /tmp/di.txt
+          if grep -q "Crypto Ext (AES + PMULL) selected" /tmp/di.txt; then
+            echo "::error::the dispatcher announced an ARM Crypto Extension selection on a build that has no such kernel"
+            exit 1
+          fi
+          if ! grep -q "no Crypto Extension kernel" /tmp/di.txt; then
+            echo "::error::the dispatcher printed neither the selection message nor the no-kernel message; the branch may have moved"
+            exit 1
+          fi
+
   arm-qemu-sve2:
     name: AArch64 SVE2 kernels (VL=128 and VL=256)
     runs-on: ubuntu-latest

@@ -30,9 +30,20 @@
  *
  * Each assertion is marked PIN (fails against a build with
  * ama_ed25519_signature_r_is_canonical neutered to `return 1`), SMOKE (does
- * not — it guards against over-rejection), or RANGE (a direct unit test of
- * the predicate itself).  Verified by running exactly that mutation: see the
- * commit message for the pre-fix and neutered-build transcripts.
+ * not — it guards against over-rejection), RANGE (a direct unit test of the
+ * predicate itself), or PIN-COUNT (pins the count-overflow argument guard,
+ * which that mutation does not touch on either backend).
+ *
+ * PIN is emitted on the DONNA build only.  The R rule is enforceable-and-
+ * observable only where the batch path decides by the group equation over a
+ * decoded R; fe51's batch is a loop over ama_ed25519_verify, whose re-encode
+ * comparison rejects a non-canonical R whether or not the predicate exists.
+ * Measured, with the predicate neutered: donna 30 passed / 19 failed (15 PINs
+ * + 4 RANGE), fe51 45 passed / 4 failed — the four RANGE checks alone, with
+ * every one of the seventeen previously PIN-labelled lines printing [ OK ].
+ * This paragraph used to assert the PIN property unconditionally and to say it
+ * had been "verified by running exactly that mutation"; the mutation had been
+ * run on the donna build only.  See R_RULE_LABEL below.
  */
 
 #include "../../include/ama_cryptography.h"
@@ -53,6 +64,27 @@ static int passed = 0;
     } while (0)
 
 #define MAX_BATCH 8
+
+/* The R-rule PINs discriminate on the DONNA backend only.
+ *
+ * fe51's ama_ed25519_batch_verify is a loop over ama_ed25519_verify, which
+ * decides by re-encoding [S]B - [h]A with ge25519_p3_tobytes and comparing
+ * bytes; that encoder emits only canonical encodings, so a non-canonical R can
+ * never match with or without the predicate.  Measured: with
+ * ama_ed25519_signature_r_is_canonical neutered to `return 1`, the donna build
+ * reports 30 passed / 19 failed while the fe51 build reports 45 passed / 4
+ * failed — and all four fe51 failures are the [1] RANGE unit tests of the
+ * predicate itself.  Every one of the seventeen assertions this file used to
+ * label PIN printed [ OK ] on fe51.
+ *
+ * The label now names the backend it holds for, so the fe51/ARM CI lanes —
+ * which are the ones that run this binary by default on every non-x86-64
+ * target — do not print seventeen pins for a property they cannot test. */
+#ifdef AMA_ED25519_ASSEMBLY
+#define R_RULE_LABEL(count_above_boundary) ((count_above_boundary) ? "PIN" : "SMOKE")
+#else
+#define R_RULE_LABEL(count_above_boundary) ((void)(count_above_boundary), "SMOKE")
+#endif
 
 /* Run one batch of `n` entries whose first entry carries `first_sig` and
  * whose remaining entries carry `rest_sig`.  Returns the batch return code;
@@ -219,12 +251,12 @@ int main(void) {
 
         snprintf(label, sizeof(label),
                  "%-5s count=%zu: non-canonical R reported invalid",
-                 n > 3 ? "PIN" : "SMOKE", n);
+                 R_RULE_LABEL(n > 3), n);
         CHECK(r[0] == 0, label);
 
         snprintf(label, sizeof(label),
                  "%-5s count=%zu: batch returns AMA_ERROR_VERIFY_FAILED",
-                 n > 3 ? "PIN" : "SMOKE", n);
+                 R_RULE_LABEL(n > 3), n);
         CHECK(rc == AMA_ERROR_VERIFY_FAILED, label);
 
         if (n > 1) {
@@ -242,7 +274,7 @@ int main(void) {
         (void)run_batch(n, forged, honest, msg, msg_len, pk, r);
         snprintf(label, sizeof(label),
                  "%-5s count=%zu: batch verdict == single verdict",
-                 n > 3 ? "PIN" : "SMOKE", n);
+                 R_RULE_LABEL(n > 3), n);
         CHECK((r[0] == 1) == single, label);
     }
 
@@ -277,10 +309,14 @@ int main(void) {
         e.signature = honest; e.public_key = pk;
 
         rc = ama_ed25519_batch_verify(&e, (size_t)-1, sentinel);
+        /* These two pin the count-overflow guard, NOT the R rule — neutering
+         * ama_ed25519_signature_r_is_canonical does not move them on either
+         * backend, which the commit that added them recorded and the header
+         * then overstated.  Labelled for what they pin. */
         CHECK(rc == AMA_ERROR_INVALID_PARAM,
-              "PIN   count = SIZE_MAX is rejected as an argument error");
+              "PIN-COUNT count = SIZE_MAX is rejected as an argument error");
         CHECK(sentinel[0] == 0x5a5a && sentinel[1] == 0x5a5a,
-              "PIN   an argument rejection leaves `results` exactly as it was");
+              "PIN-COUNT an argument rejection leaves `results` exactly as it was");
     }
 
     printf("\n%d passed, %d failed\n", passed, failed);
