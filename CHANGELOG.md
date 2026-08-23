@@ -301,6 +301,16 @@ measurement recorded at the derivation.  The committed .py integrity
 digest is refreshed in the same change, as the staleness gate requires;
 60/60 POST and self-test-branch tests pass with the new floor.
 
+And one from the bot review of the pass: CodeQL flagged
+`_signer_source()` in `tests/test_setup_signer_contract.py` for mixing an
+explicit `return` with an implicit fall-through — the function ended in
+`pytest.fail(...)`, which never returns but does not read that way
+(alert 646, the same rule and the same shape as alert 635 in
+`test_precommit_mypy_scope.py`).  Fixed the way 635 was: a terminating
+`raise AssertionError(...)` with the reasoning at the site, so the
+function has one exit shape without depending on the reader knowing
+pytest's `NoReturn` annotation.
+
 ### Debt-closure pass, eleventh (2026-08-22) — the 25 findings an independent audit left standing, and what closing them found
 
 An independent audit read all 302 non-corpus changed files of this branch's

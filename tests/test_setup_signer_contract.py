@@ -63,7 +63,11 @@ def _signer_source() -> str:
     for node in ast.walk(tree):
         if isinstance(node, ast.FunctionDef) and node.name == "_run_integrity_signer":
             return ast.get_source_segment(SETUP_PY.read_text(encoding="utf-8"), node) or ""
-    pytest.fail("setup.py no longer defines _run_integrity_signer")
+    # `raise`, not `pytest.fail()`: both fail the test, but only this one is a
+    # terminating statement to a reader that does not know pytest's NoReturn
+    # annotation, so the function has one exit shape rather than an explicit
+    # return beside an implicit fall-through None (CodeQL alert 646).
+    raise AssertionError("setup.py no longer defines _run_integrity_signer")
 
 
 def test_the_method_still_exists() -> None:
