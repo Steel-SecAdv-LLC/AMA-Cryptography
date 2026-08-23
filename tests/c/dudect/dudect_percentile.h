@@ -616,9 +616,18 @@ static inline int dudect_cropped_self_test(void) {
         ok &= dudect_crop_case("at-the-floor context allocates", 0);
     }
 
-    /* 3d. ...and a budget one sample per class ABOVE the floor does produce
-     *     one, so the case above is a property of the budget rather than
-     *     something that is true of every input. */
+    /* 3d. ...and a budget comfortably ABOVE the floor does produce one, so the
+     *     case above is a property of the BUDGET rather than something that is
+     *     true of every input.
+     *
+     *     64 samples per class of margin, not one.  At a one-sample margin the
+     *     mildest rung (r = RUNGS keeps ~99.9%) drops about one pooled sample,
+     *     and WHICH class loses it is decided by the draw — so `usable_rungs`
+     *     would be 1 or 0 depending on the RNG, and this case would pass or
+     *     fail by luck.  (The comment here said "one sample per class ABOVE the
+     *     floor" while the code already used 64: the number that makes the case
+     *     deterministic is the whole point of it, so it is stated rather than
+     *     described wrongly.) */
     if (dudect_cropped_init(&ctx, 2 * (DUDECT_CROP_MIN_PER_CLASS + 64))) {
         for (size_t i = 0; i < DUDECT_CROP_MIN_PER_CLASS + 64; i++) {
             dudect_cropped_update(&ctx, 0, 100.0 + dudect_crop_test_uniform(&rng) * 4.0);

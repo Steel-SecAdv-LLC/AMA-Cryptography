@@ -1111,14 +1111,22 @@ class TestTheTwoPublishedArtefactsCannotDisagreeByARounding:
         return from_live, br.generate_markdown_report(stored, report)
 
     def test_a_half_way_regression_renders_identically_from_both(self) -> None:
-        """6.7478 -> raw ``+6.7%``; stored as 6.75 -> ``+6.8%``."""
+        """6.7478 -> raw ``+6.7%``; stored as 6.75 -> ``+6.8%``.
+
+        The three numbers are the repaired record's own: ``hkdf_derive`` at
+        122,478.37 ops/sec against a 131,341 floor is a regression of
+        6.747801524276505%.  ``BenchmarkResult`` does not derive
+        ``regression_percent`` from the other two, so a fixture is free to set
+        them inconsistently — this one does not, because a reader checking the
+        arithmetic should find it holds.
+        """
         result = br.BenchmarkResult(
             name="row0",
             description="row 0",
-            ops_per_second=1000.0,
-            baseline_value=1072.0,
+            ops_per_second=122478.37,
+            baseline_value=131341.0,
             tolerance_percent=45.0,
-            regression_percent=6.7478,
+            regression_percent=6.747801524276505,
             passed=True,
         )
         from_live, from_json = self._rendered_both_ways(result)
@@ -1133,7 +1141,7 @@ class TestTheTwoPublishedArtefactsCannotDisagreeByARounding:
             ops_per_second=1.4999,
             baseline_value=2.0,
             tolerance_percent=45.0,
-            regression_percent=25.0,
+            regression_percent=25.005,  # (2.0 - 1.4999) / 2.0 * 100, exactly
             passed=True,
         )
         from_live, from_json = self._rendered_both_ways(result)
