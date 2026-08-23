@@ -301,3 +301,39 @@ def test_a_clean_install_takes_one_attempt(tmp_path: Path) -> None:
     )
     assert r.returncode == 0
     assert r.stdout.count("Attempt ") == 1
+
+
+class TestLogicalLinesAndSegmentScopedExemption:
+    """Two ways a raw Chocolatey install was invisible to this gate.
+
+    ``scan_text`` iterated PHYSICAL lines, so a PowerShell backtick
+    continuation split the invocation past the regex.  And
+    ``if HELPER in raw: continue`` exempted the WHOLE line on substring
+    presence, so a compound command that named the helper and then fell back to
+    a raw call was skipped.  Measured on the gate as it stood, both returned no
+    violations.
+    """
+
+    def test_a_backtick_continuation_is_spliced(self) -> None:
+        text = "  run: |\n    choco `\n      install ninja\n"
+        found = gate.scan_text(text, "w.yml")
+        assert len(found) == 1, found
+        assert found[0].startswith("w.yml:2:"), found[0]
+
+    def test_a_raw_call_after_the_helper_is_not_exempt(self) -> None:
+        text = "  run: .github/scripts/choco-install.ps1 ninja; choco install cmake\n"
+        assert len(gate.scan_text(text, "w.yml")) == 1
+
+    def test_the_helper_alone_is_still_exempt(self) -> None:
+        text = "  run: .github/scripts/choco-install.ps1 ninja\n"
+        assert gate.scan_text(text, "w.yml") == []
+
+    def test_the_option_run_is_not_exponential(self) -> None:
+        """The same ambiguous option pattern, duplicated verbatim from the apt gate."""
+        import time
+
+        line = "  run: choco " + " ".join(["--x"] * 24) + " zzz\n"
+        start = time.perf_counter()
+        gate.scan_text(line, "w.yml")
+        elapsed = time.perf_counter() - start
+        assert elapsed < 1.0, f"24 option tokens took {elapsed:.2f}s"

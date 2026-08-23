@@ -151,6 +151,25 @@ def _gate_body_text(job: dict[str, Any]) -> str:
     return json.dumps(body, default=str)
 
 
+def _gate_condition_text(job: dict[str, Any]) -> str:
+    """Only the `if:` expressions of a gate job and of its steps.
+
+    A dependency's outcome is EVALUATED in a condition; everything else in the
+    job — `run`, `env`, `with` — can mention it without acting on it.  The
+    wildcard exemption is about evaluation, so it reads only the conditions.
+    """
+    conditions: list[str] = []
+    condition = job.get("if")
+    if condition is not None:
+        conditions.append(str(condition))
+    steps = job.get("steps")
+    if isinstance(steps, list):
+        for step in steps:
+            if isinstance(step, dict) and step.get("if") is not None:
+                conditions.append(str(step["if"]))
+    return "\n".join(conditions)
+
+
 def _result_reference(need: str) -> str:
     """Pattern matching a real read of ``need``'s outcome.
 
@@ -186,7 +205,14 @@ def _unevaluated_needs(job: dict[str, Any]) -> list[str]:
     final step prints that every job reached the state the trigger requires.
     """
     body = _gate_body_text(job)
-    if _WILDCARD_NEEDS_RE.search(body):
+    # The wildcard exemption applies only where the wildcard is EVALUATED: the
+    # gate job's own `if:`, or one of its steps' `if:`.  It used to search the
+    # whole flattened body, so an `echo "${{ join(needs.*.result, ', ') }}"` in
+    # a `run:` step — or the phrase inside a comment in a run script — disabled
+    # the per-dependency check for the entire job.  That is the same
+    # substring-vs-evaluation confusion this function's own comment below
+    # rejects for named dependencies.
+    if _WILDCARD_NEEDS_RE.search(_gate_condition_text(job)):
         return []
     # `needs.<job>.result`, not a bare mention of the job's NAME.  A substring
     # test counts an echo -- `echo "build is important"` -- as an evaluation,

@@ -415,6 +415,46 @@ class TestAMentionIsNotAnEvaluation:
         }
         assert gate._unevaluated_needs(job) == ["build"]
 
+    def test_an_echoed_wildcard_is_not_an_evaluation(self) -> None:
+        """`needs.*.result` in a `run:` disabled the whole per-dependency check.
+
+        `_unevaluated_needs` returned `[]` as soon as the wildcard appeared
+        anywhere in the JSON serialisation of the gate job — a
+        `join(needs.*.result, ', ')` inside an `echo`, or the phrase inside a
+        comment in a run script, was enough.  That is the same
+        substring-vs-evaluation confusion this class rejects for NAMED
+        dependencies, applied to the one construct that exempts all of them at
+        once.
+        """
+        gate = self._gate()
+        job = {
+            "needs": ["build", "lint"],
+            "steps": [
+                {"run": "echo \"results: ${{ join(needs.*.result, ', ') }}\""},
+            ],
+        }
+        assert gate._unevaluated_needs(job) == ["build", "lint"]
+
+    def test_a_wildcard_in_the_gate_condition_still_exempts(self) -> None:
+        """The control: a wildcard that IS evaluated must keep working."""
+        gate = self._gate()
+        job = {
+            "needs": ["build", "lint"],
+            "if": "always() && !contains(needs.*.result, 'failure')",
+            "steps": [{"run": "true"}],
+        }
+        assert gate._unevaluated_needs(job) == []
+
+    def test_a_wildcard_in_a_step_condition_still_exempts(self) -> None:
+        gate = self._gate()
+        job = {
+            "needs": ["build", "lint"],
+            "steps": [
+                {"if": "contains(needs.*.result, 'failure')", "run": "exit 1"},
+            ],
+        }
+        assert gate._unevaluated_needs(job) == []
+
     def test_a_real_result_reference_counts(self) -> None:
         gate = self._gate()
         job = {

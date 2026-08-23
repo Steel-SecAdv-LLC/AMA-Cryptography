@@ -42,7 +42,37 @@ from pathlib import Path
 #      meant to prevent.  Semgrep itself accepts both forms; this repo
 #      requires the colon + rule id form so reviewers can verify *which*
 #      rule each suppression silences.
-_SUPPRESSION_RE = re.compile(r"#\s*(noqa|nosec|nosemgrep|pylint:\s*disable|type:\s*ignore)")
+_SUPPRESSION_RE = re.compile(
+    r"#\s*(noqa|nosec|nosemgrep|pylint:\s*disable|type:\s*ignore|mypy:\s*\S+)"
+)
+
+#: FILE-SCOPED linter directives.  INVARIANT-13's FIRST condition is that a
+#: suppression be line-scoped, not file-scoped — and that condition had no
+#: enforcement anywhere.  Every one of these forms is a STANDALONE comment, and
+#: `effective_suppressions` discards standalone comments before
+#: `_SUPPRESSION_RE` ever sees them: the mechanism that stops the gate firing
+#: on its own prose is exactly what guaranteed the file-scoped forms were never
+#: examined.  `mypy:` was not in the marker set at all, so
+#: `# mypy: ignore-errors` was unrecognised even as a marker.
+#:
+#: These are refused UNCONDITIONALLY, justification or not: the invariant
+#: forbids the scope, not the absence of a reason.  A file-level
+#: `# type: ignore` on line 1 is mypy's whole-file form and is caught here too;
+#: the line-1 carve-out below exists so it is examined rather than skipped.
+_FILE_SCOPED_RE = re.compile(
+    r"^#\s*(?:"
+    r"ruff\s*:\s*noqa"
+    r"|flake8\s*:\s*noqa"
+    r"|mypy\s*:\s*(?:ignore-errors|disable-error-code)"
+    r"|pylint\s*:\s*(?:skip-file|disable-all)"
+    r")\b"
+)
+
+#: mypy's whole-file form: a STANDALONE `# type: ignore` on line 1.  Split out
+#: because the same spelling as a TRAILING comment is the ordinary line-scoped
+#: suppression this repository allows with a justification, so it cannot be
+#: matched by position-blind pattern alone.
+_FILE_LEVEL_TYPE_IGNORE_RE = re.compile(r"^#\s*type\s*:\s*ignore\b")
 _NOSEMGREP_STRICT_RE = re.compile(r"^:\s*\S+")
 
 # The same requirement, for the two other markers that blanket-suppress a whole
@@ -125,9 +155,13 @@ def effective_suppressions(source: str) -> list[tuple[int, str]]:
     that tree was included. A gate that fires on its own documentation is one
     people learn to route around.
 
-    The single standalone form that is real — mypy's file-level
-    ``# type: ignore``, which must be the first line — is kept in scope
-    explicitly rather than lost to the rule.
+    The standalone forms that are REAL — the file-scoped directives
+    ``_FILE_SCOPED_RE`` matches — are kept in scope explicitly rather than lost
+    to the rule.  That set used to be just mypy's line-1 ``# type: ignore``,
+    which meant ``# ruff: noqa``, ``# flake8: noqa`` and
+    ``# mypy: ignore-errors`` were structurally invisible: the gate could not
+    have reported them however they were written, and INVARIANT-13's first
+    condition — line-scoped, not file-scoped — had no enforcement at all.
     """
     results: list[tuple[int, str]] = []
     try:
@@ -139,8 +173,12 @@ def effective_suppressions(source: str) -> list[tuple[int, str]]:
             lineno, col = tok.start
             physical = lines[lineno - 1] if lineno - 1 < len(lines) else ""
             trailing = bool(physical[:col].strip())
-            file_level_type_ignore = lineno == 1 and tok.string.strip().startswith("# type: ignore")
-            if trailing or file_level_type_ignore:
+            standalone = not trailing
+            file_scoped = standalone and (
+                bool(_FILE_SCOPED_RE.match(tok.string.strip()))
+                or (lineno == 1 and bool(_FILE_LEVEL_TYPE_IGNORE_RE.match(tok.string.strip())))
+            )
+            if trailing or file_scoped:
                 results.append((lineno, tok.string))
     except (tokenize.TokenError, SyntaxError, IndentationError):
         return results  # unparseable file: report what was seen before the error
@@ -151,6 +189,23 @@ def check_source(filepath: str, source: str) -> list[str]:
     """Return violation messages for already-loaded Python ``source``."""
     violations: list[str] = []
     for lineno, comment in effective_suppressions(source):
+        stripped = comment.strip()
+        # File-scoped first, and unconditionally: INVARIANT-13 forbids the
+        # SCOPE.  A justification and a tracking id do not make
+        # `# ruff: noqa` line-scoped, so there is no form of it to accept.
+        #
+        # `effective_suppressions` only surfaces these when they are
+        # STANDALONE, so a trailing `# type: ignore[arg-type]` — the ordinary
+        # line-scoped form — never reaches this branch.
+        if _FILE_SCOPED_RE.match(stripped) or (
+            lineno == 1 and _FILE_LEVEL_TYPE_IGNORE_RE.match(stripped)
+        ):
+            violations.append(
+                f"{filepath}:{lineno}: FILE-SCOPED suppression '{stripped[:60]}' — "
+                f"INVARIANT-13 requires line-scoped suppressions; move it to the "
+                f"lines it applies to and justify each one"
+            )
+            continue
         for m in _SUPPRESSION_RE.finditer(comment):
             tag = f"{filepath}:{lineno}"
             if _is_forbidden(filepath):

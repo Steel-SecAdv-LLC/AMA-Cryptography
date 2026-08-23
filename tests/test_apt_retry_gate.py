@@ -671,3 +671,45 @@ def test_the_third_party_source_removal_is_not_extension_specific() -> None:
     assert "/etc/apt/sources.list.d/microsoft-prod.*" in body
     assert "/etc/apt/sources.list.d/azure-cli.*" in body
     assert "microsoft-prod.list " not in body, "the extension-specific form is back"
+
+
+class TestLogicalLinesAndSegmentScopedExemption:
+    """Two ways a raw apt call was invisible to this gate.
+
+    ``scan_text`` iterated PHYSICAL lines and required the binary and the
+    sub-command on the same one, so a POSIX backslash continuation split the
+    invocation past the regex.  And ``if HELPER in raw: continue`` exempted the
+    WHOLE line on substring presence, so a compound command that named the
+    helper and then fell back to a raw call was skipped entirely.  Measured on
+    the gate as it stood, both returned no violations.
+    """
+
+    def test_a_backslash_continuation_is_spliced(self) -> None:
+        text = "  run: |\n    apt-get \\\n      install -y cmake\n"
+        found = gate.scan_text(text, "w.yml")
+        assert len(found) == 1, found
+        assert found[0].startswith("w.yml:2:"), found[0]
+
+    def test_a_raw_call_after_the_helper_is_not_exempt(self) -> None:
+        text = "  run: .github/scripts/apt-install.sh cmake && apt-get install -y ninja\n"
+        assert len(gate.scan_text(text, "w.yml")) == 1
+
+    def test_the_helper_alone_is_still_exempt(self) -> None:
+        text = "  run: .github/scripts/apt-install.sh --no-install-recommends cmake\n"
+        assert gate.scan_text(text, "w.yml") == []
+
+    def test_the_option_run_is_not_exponential(self) -> None:
+        """``-{1,2}[^\\s]+`` gave every ``--x`` token two parses, so n had 2^n.
+
+        ``scan_text`` runs the search on EVERY non-comment line before any
+        exemption, so no line could opt out.  Measured on the ambiguous form:
+        1.96 ms / 30.1 ms / 447 ms / 7166 ms at n = 12 / 16 / 20 / 24; on the
+        unambiguous one, 0.007 / 0.009 / 0.014 / 0.015 ms.
+        """
+        import time
+
+        line = "  run: apt-get " + " ".join(["--x"] * 24) + " zzz\n"
+        start = time.perf_counter()
+        gate.scan_text(line, "w.yml")
+        elapsed = time.perf_counter() - start
+        assert elapsed < 1.0, f"24 option tokens took {elapsed:.2f}s"

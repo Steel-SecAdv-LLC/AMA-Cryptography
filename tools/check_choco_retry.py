@@ -83,7 +83,19 @@ WORKFLOW_GLOBS = (".github/workflows/*.yml", ".github/workflows/*.yaml")
 #: between, exactly as the apt gate learned to do after `apt-get -y install`
 #: slipped through a pattern that required the sub-command to follow the
 #: binary immediately.
-_CHOCO_OPTION = r"(?:\s+-{1,2}[^\s]+(?:\s+[^\s-][^\s]*)?)*"
+#: `-{1,2}[^\s]+` is AMBIGUOUS inside a repeated group: for a token
+#: spelled `--x` the `-{1,2}` can take one dash or two and `[^\s]+`
+#: absorbs the rest either way, so every token has two parses and a run
+#: of n tokens has 2^n.  With the sub-command unmatched the engine
+#: explores all of them, and `scan_text` runs this search on EVERY
+#: non-comment line before any exemption, so no line can opt out.
+#: Measured on `choco ` + n copies of `--x` + ` zzz`, the ambiguous form
+#: took 1.96 ms / 30.1 ms / 447 ms / 7166 ms at n = 12 / 16 / 20 / 24;
+#: the unambiguous one below took 0.007 / 0.009 / 0.014 / 0.015 ms.
+#: Requiring a non-dash after the dashes leaves exactly one parse per
+#: token and still matches `-y`, `--no-install-recommends`,
+#: `-o Key=Value` and `-t bookworm-backports`.
+_CHOCO_OPTION = r"(?:\s+--?[^\s-][^\s]*(?:\s+[^\s-][^\s]*)?)*"
 #: `upgrade` and `install` both reach the feed, so both need the policy.
 #: `uninstall` does not touch the network and is deliberately absent.
 _CHOCO_SUBCOMMAND = r"(?:install|upgrade)"
@@ -97,22 +109,75 @@ _CHOCO_CALL = re.compile(
 _YAML_NAME = re.compile(r"^-?\s*name\s*:")
 
 
+#: Shell separators that end one command and start another.  A logical line can
+#: hold several; only the segment the match falls in decides whether it was the
+#: helper that ran.
+_SEGMENT_SPLIT = re.compile(r"(?:&&|\|\||;|\|)")
+
+
+def _logical_lines(text: str, continuation: str) -> list[tuple[int, str]]:
+    """`(first_physical_line_number, spliced_text)` for each logical line.
+
+    `scan_text` iterated PHYSICAL lines and required the binary and the
+    sub-command on the same one, so a POSIX `\\` (or PowerShell backtick)
+    continuation split the invocation past the regex and the call was never
+    seen.  Splicing first makes the scan see what the shell sees; the reported
+    line number stays the first physical line, which is where a reader looks.
+    """
+    lines: list[tuple[int, str]] = []
+    pending: list[str] = []
+    start = 1
+    for number, raw in enumerate(text.split("\n"), start=1):
+        if not pending:
+            start = number
+        body = raw.rstrip()
+        if body.endswith(continuation):
+            pending.append(body[: -len(continuation)])
+            continue
+        pending.append(body)
+        lines.append((start, " ".join(part.strip() for part in pending)))
+        pending = []
+    if pending:
+        lines.append((start, " ".join(part.strip() for part in pending)))
+    return lines
+
+
+def _runs_through_helper(logical: str, match_start: int) -> bool:
+    """True when the command the match belongs to is the helper invocation.
+
+    `if HELPER in raw: continue` exempted the WHOLE line on substring presence,
+    so a compound command that named the helper and then fell back to a raw
+    call was skipped entirely.  The exemption now applies to the segment the
+    match actually sits in.
+    """
+    boundary = 0
+    for separator in _SEGMENT_SPLIT.finditer(logical):
+        if separator.start() > match_start:
+            break
+        boundary = separator.end()
+    segment_end = len(logical)
+    for separator in _SEGMENT_SPLIT.finditer(logical, match_start):
+        segment_end = separator.start()
+        break
+    return HELPER in logical[boundary:segment_end]
+
+
 def scan_text(text: str, path: str) -> list[str]:
     """Return one message per raw Chocolatey install in ``text``."""
     violations: list[str] = []
-    for lineno, raw in enumerate(text.split("\n"), start=1):
-        stripped = raw.strip()
+    for lineno, logical in _logical_lines(text, "`"):
+        stripped = logical.strip()
         if stripped.startswith("#"):
             continue
         # A YAML `name:` is a label, not a command.  See the module docstring:
         # this gate's own step name spells `choco install`.
         if _YAML_NAME.match(stripped):
             continue
-        if not _CHOCO_CALL.search(raw):
-            continue
-        if HELPER in raw:
-            continue
-        violations.append(f"{path}:{lineno}: raw choco call outside {HELPER}: {stripped[:90]}")
+        for call in _CHOCO_CALL.finditer(logical):
+            if _runs_through_helper(logical, call.start()):
+                continue
+            violations.append(f"{path}:{lineno}: raw choco call outside {HELPER}: {stripped[:90]}")
+            break
     return violations
 
 

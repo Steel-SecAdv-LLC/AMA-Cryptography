@@ -248,3 +248,67 @@ class TestCppcheckSuppressionsArePerSite:
             if line.strip() == "#"
         ]
         assert not bare, f"bare '#' lines cppcheck rejects, at lines {bare}"
+
+
+class TestFileScopedSuppressionsAreRefused:
+    """INVARIANT-13's FIRST condition had no enforcement anywhere.
+
+    The invariant states that a suppression must be "line-scoped, not
+    file-scoped".  Every file-level linter directive is a STANDALONE comment,
+    and ``effective_suppressions`` discarded standalone comments before
+    ``_SUPPRESSION_RE`` ever saw them — the mechanism that stops the gate
+    firing on its own prose is exactly what guaranteed the file-scoped forms
+    were never examined.  ``mypy:`` was not in the marker set at all, so
+    ``# mypy: ignore-errors`` was unrecognised even as a marker.
+
+    The tree carried one: ``tests/test_fuzzing.py`` opened with
+    ``# mypy: disable-error-code="misc"``.  It turned out to be dead — mypy
+    --strict passes over that file without it — which is the ordinary fate of
+    a suppression nothing checks.
+    """
+
+    FILE_SCOPED = (
+        '# mypy: disable-error-code="misc"',
+        "# mypy: ignore-errors",
+        "# ruff: noqa",
+        "# ruff: noqa: E501",
+        "# flake8: noqa",
+        "# pylint: skip-file",
+    )
+
+    @pytest.mark.parametrize("directive", FILE_SCOPED)
+    def test_a_file_scoped_directive_is_refused(self, gate: ModuleType, directive: str) -> None:
+        source = f"{directive}\n\n\ndef f() -> None:\n    pass\n"
+        found = gate.check_source("pkg/mod.py", source)
+        assert len(found) == 1, found
+        assert "FILE-SCOPED" in found[0], found[0]
+
+    @pytest.mark.parametrize("directive", FILE_SCOPED)
+    def test_a_justification_does_not_make_it_acceptable(
+        self, gate: ModuleType, directive: str
+    ) -> None:
+        """The invariant forbids the SCOPE, not the absence of a reason."""
+        source = f"{directive}  -- needed for X (TAG-001)\n\ndef f() -> None:\n    pass\n"
+        found = gate.check_source("pkg/mod.py", source)
+        assert found and "FILE-SCOPED" in found[0], found
+
+    def test_a_line_one_whole_file_type_ignore_is_refused(self, gate: ModuleType) -> None:
+        source = "# type: ignore\n\ndef f() -> None:\n    pass\n"
+        found = gate.check_source("pkg/mod.py", source)
+        assert len(found) == 1 and "FILE-SCOPED" in found[0], found
+
+    def test_a_trailing_type_ignore_is_still_line_scoped(self, gate: ModuleType) -> None:
+        """The control: the ordinary line-scoped form must not be swept up.
+
+        Same spelling, different position — so a position-blind pattern would
+        break every justified suppression in the tree.
+        """
+        source = "def f() -> None:\n    x = 1  # type: ignore[assignment]  -- why (TAG-001)\n"
+        assert gate.check_source("pkg/mod.py", source) == []
+
+    def test_prose_about_a_directive_is_not_a_directive(self, gate: ModuleType) -> None:
+        """A standalone comment that only DISCUSSES a directive is prose."""
+        source = (
+            "# A file-scoped `# ruff: noqa` would be refused here.\n\ndef f() -> None:\n    pass\n"
+        )
+        assert gate.check_source("pkg/mod.py", source) == []

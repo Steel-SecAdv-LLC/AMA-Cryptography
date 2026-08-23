@@ -60,7 +60,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import subprocess
 import sys
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -77,17 +79,76 @@ PROTECTED: dict[str, str] = {
     "ama_cryptography/_post_kats": "FIPS 140-3 power-on self-test vectors",
 }
 
+#: The file forms that ARE published vectors.  The roots above are directories,
+#: and `_tracked_files` used to hash everything in them: the manifest pinned
+#: `nist_vectors/run_vectors.py` (54 KB of first-party Python, "Copyright (C)
+#: 2025-2026 Steel Security Advisors LLC"), `nist_vectors/fetch_vectors.py`,
+#: `nist_vectors/.gitignore` and four `README.md` files — seven entries out of
+#: thirty-seven that no upstream publishes.
+#:
+#: That is not merely untidy.  The gate's whole claim is "these bytes are
+#: published elsewhere and must not drift", and the same branch put those
+#: Python files under black, ruff and `mypy --strict`: a formatter or a type
+#: annotation would fail a gate whose message says the file no longer matches
+#: what NIST published.  A gate whose failure names a cause the reader cannot
+#: reproduce is one they learn to route around.
+VECTOR_SUFFIXES: frozenset[str] = frozenset({".kat", ".rsp", ".json", ".txt", ".dat"})
+
 #: A clean report over a tree this gate could not really read means nothing.
 #: Set below the real figures so a normal checkout never trips it, and far
 #: enough above zero that an empty or partially-checked-out tree cannot pass.
-MIN_FILES = 30
+#:
+#: 30 when the sweep pinned every file under the protected roots; the tracked
+#: published-vector count is now exactly 30, so the floor moves to 20 to keep
+#: headroom.  20 is still an order of magnitude above what a partial checkout
+#: produces.
+MIN_FILES = 20
+
+
+@lru_cache(maxsize=1)
+def _git_tracked() -> frozenset[str]:
+    """Every path `git ls-files` reports, repo-relative and POSIX-separated.
+
+    This function is NAMED for git tracking and consulted neither git nor
+    `.gitignore`: it was `root.rglob("*")`.  One protected root is
+    `nist_vectors/`, whose own `.gitignore` enumerates twelve files the
+    tooling deliberately GENERATES there — the ten ACVP JSONs
+    `fetch_vectors.py` downloads, `results.json` from `run_vectors.py`, and
+    `validation_summary.json` / `acvp_badge.json` from the ACVP workflow.  Any
+    of them present made the gate report "<file> is not pinned. A vector that
+    is not in the manifest is a vector this gate cannot notice being
+    rewritten." and exit 1 — on a developer who had simply run the ACVP flow.
+
+    Falls back to "everything on disk qualifies" when git is unavailable (a
+    source tarball, a vendored copy), because refusing to run is worse than
+    running over a tree whose ignore rules cannot be consulted.
+    """
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(REPO_ROOT), "ls-files", "-z"],
+            capture_output=True,
+            check=True,
+        ).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return frozenset()
+    return frozenset(name.decode("utf-8") for name in out.split(b"\0") if name)
 
 
 def _tracked_files(root: Path) -> list[Path]:
+    """The tracked, PUBLISHED VECTOR files under `root`.
+
+    Two filters, for two different failures: git tracking (see `_git_tracked`)
+    and suffix (see VECTOR_SUFFIXES).
+    """
+    tracked = _git_tracked()
     return sorted(
         p
         for p in root.rglob("*")
-        if p.is_file() and "__pycache__" not in p.parts and p.name != MANIFEST_PATH.name
+        if p.is_file()
+        and "__pycache__" not in p.parts
+        and p.name != MANIFEST_PATH.name
+        and p.suffix.lower() in VECTOR_SUFFIXES
+        and (not tracked or p.relative_to(REPO_ROOT).as_posix() in tracked)
     )
 
 

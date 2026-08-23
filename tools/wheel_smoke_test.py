@@ -54,6 +54,7 @@ failing check named on stderr.
 
 from __future__ import annotations
 
+import re
 import sys
 import traceback
 from pathlib import Path
@@ -160,11 +161,34 @@ def check_binding_extensions_are_bound() -> None:
         "PARTIALLY covered" not in detail and "not covered by the signed artefact" not in detail,
         detail,
     )
+    # Parse the COUNT, not the sentence.  `_check_binding_extensions` returns
+    # f"{len(binding_digests)} binding extension(s) verified", so an artefact
+    # that binds nothing yields "0 binding extension(s) verified" — which
+    # contains the substring this used to test for.  The two checks above pass
+    # on that string too ("MISMATCH" absent, "PARTIALLY covered" absent), so all
+    # three assertions were green for a wheel whose integrity artefact covered
+    # no extension at all: exactly the "the wheel was built without
+    # --bind-extensions" pipeline fault this function's docstring claims to
+    # distinguish from a mismatch.
+    bound = _bound_extension_count(detail)
     check(
         "the artefact binds at least one binding extension",
-        "binding extension(s) verified" in detail,
-        f"expected a verified-bindings count; got: {detail}",
+        bound is not None and bound > 0,
+        f"expected a non-zero verified-bindings count; got: {detail}",
     )
+
+
+_BOUND_COUNT_RE = re.compile(r"(?<!\d)(\d+)\s+binding extension\(s\) verified")
+
+
+def _bound_extension_count(detail: str) -> int | None:
+    """The integer in ``"<n> binding extension(s) verified"``, or None.
+
+    None means the sentence is absent or unparseable, which the caller treats
+    as a failure — a smoke test that cannot read the count must not pass.
+    """
+    match = _BOUND_COUNT_RE.search(detail)
+    return int(match.group(1)) if match else None
 
 
 def check_no_fallback_backends() -> None:

@@ -19,8 +19,10 @@ fails.
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
 import io
+import ssl
 import sys
 import urllib.error
 import urllib.request
@@ -68,7 +70,16 @@ class _Resp:
 
 
 def _urlopen_script(outcomes: list[Any]) -> tuple[Any, list[int]]:
-    """A fake urlopen that plays `outcomes` in order, counting its calls."""
+    """A fake opener that plays `outcomes` in order, counting its calls.
+
+    Installed over ``tools.http_fetch._open_https`` rather than over
+    ``urllib.request.urlopen``: the fetcher now goes through an
+    OpenerDirector, because that is the only place a redirect handler can
+    re-apply the ``https://`` rule to a SECOND hop, and ``urlopen`` builds its
+    own opener per call.  ``_open_https`` is the network boundary's single
+    seam, so patching it keeps these tests about retry behaviour rather than
+    about urllib's internals.
+    """
     calls = [0]
 
     def fake(*_args: object, **_kwargs: object) -> _Resp:
@@ -133,7 +144,7 @@ def test_a_reset_connection_is_retried_and_survived(monkeypatch: pytest.MonkeyPa
     """The observed failure: reset once, then served."""
     reset = urllib.error.URLError(ConnectionResetError(104, "Connection reset by peer"))
     fake, calls = _urlopen_script([reset, b"payload"])
-    monkeypatch.setattr(urllib.request, "urlopen", fake)
+    monkeypatch.setattr(http_fetch, "_open_https", fake)
     monkeypatch.setattr(http_fetch, "DEFAULT_ATTEMPTS", 3)
     assert tool.fetch_bytes(URL) == b"payload"
     assert calls[0] == 2
@@ -143,7 +154,7 @@ def test_the_final_attempt_is_unguarded(monkeypatch: pytest.MonkeyPatch) -> None
     """A transport error that never clears still fails, and does not loop forever."""
     reset = urllib.error.URLError(ConnectionResetError(104, "Connection reset by peer"))
     fake, calls = _urlopen_script([reset])
-    monkeypatch.setattr(urllib.request, "urlopen", fake)
+    monkeypatch.setattr(http_fetch, "_open_https", fake)
     monkeypatch.setattr(http_fetch, "DEFAULT_ATTEMPTS", 3)
     with pytest.raises(urllib.error.URLError):
         tool.fetch_bytes(URL)
@@ -159,7 +170,7 @@ def test_a_permanent_status_is_not_retried(
     """A 404 is an answer about the resource. Asking again cannot change it."""
     err = http_error(status, "nope")
     fake, calls = _urlopen_script([err])
-    monkeypatch.setattr(urllib.request, "urlopen", fake)
+    monkeypatch.setattr(http_fetch, "_open_https", fake)
     monkeypatch.setattr(http_fetch, "DEFAULT_ATTEMPTS", 3)
     with pytest.raises(urllib.error.HTTPError):
         tool.fetch_bytes(URL)
@@ -174,7 +185,7 @@ def test_a_transient_status_is_retried(
 ) -> None:
     err = http_error(status, "later")
     fake, calls = _urlopen_script([err, b"payload"])
-    monkeypatch.setattr(urllib.request, "urlopen", fake)
+    monkeypatch.setattr(http_fetch, "_open_https", fake)
     monkeypatch.setattr(http_fetch, "DEFAULT_ATTEMPTS", 3)
     assert tool.fetch_bytes(URL) == b"payload"
     assert calls[0] == 2
@@ -182,7 +193,7 @@ def test_a_transient_status_is_retried(
 
 def test_a_non_transport_error_is_not_retried(monkeypatch: pytest.MonkeyPatch) -> None:
     fake, calls = _urlopen_script([ValueError("something structural")])
-    monkeypatch.setattr(urllib.request, "urlopen", fake)
+    monkeypatch.setattr(http_fetch, "_open_https", fake)
     monkeypatch.setattr(http_fetch, "DEFAULT_ATTEMPTS", 3)
     with pytest.raises(ValueError):
         tool.fetch_bytes(URL)
@@ -194,7 +205,7 @@ def test_the_https_guard_is_checked_before_any_attempt(
 ) -> None:
     """The retry loop must not weaken the scheme guard into something retriable."""
     fake, calls = _urlopen_script([b"local file contents"])
-    monkeypatch.setattr(urllib.request, "urlopen", fake)
+    monkeypatch.setattr(http_fetch, "_open_https", fake)
     with pytest.raises(ValueError):
         tool.fetch_bytes("file:///etc/passwd")
     assert calls[0] == 0
@@ -210,7 +221,7 @@ def test_a_wrong_digest_still_fails_and_is_never_retried(
     once, by verify_upstream, and reported as a provenance failure.
     """
     fake, calls = _urlopen_script([b"not the vendored bytes"])
-    monkeypatch.setattr(urllib.request, "urlopen", fake)
+    monkeypatch.setattr(http_fetch, "_open_https", fake)
     monkeypatch.setattr(http_fetch, "DEFAULT_ATTEMPTS", 3)
     manifest = {
         "upstream": {"repository": "https://github.com/C2SP/wycheproof", "path": "testvectors_v1"},
@@ -245,7 +256,71 @@ def test_the_fixture_errors_own_no_operating_system_resource(
 def test_zero_attempts_still_makes_one(monkeypatch: pytest.MonkeyPatch) -> None:
     """A misconfigured attempt count must not silently skip the fetch entirely."""
     fake, calls = _urlopen_script([b"payload"])
-    monkeypatch.setattr(urllib.request, "urlopen", fake)
+    monkeypatch.setattr(http_fetch, "_open_https", fake)
     monkeypatch.setattr(http_fetch, "DEFAULT_ATTEMPTS", 0)
     assert tool.fetch_bytes(URL) == b"payload"
     assert calls[0] == 1
+
+
+class TestRedirectsCannotLeaveHTTPS:
+    """The scheme guard must survive a 30x, not only the caller's string.
+
+    ``fetch_bytes`` validated the URL it was handed and then called
+    ``urllib.request.urlopen``, whose default ``HTTPRedirectHandler`` permits
+    any ``Location`` whose scheme is in ``("http", "https", "ftp", "")``.  So
+    the first hop was HTTPS and every hop after it could be plaintext — under a
+    docstring saying "the scheme is checked rather than assumed ... that guard
+    runs before any attempt, so the retry cannot widen it", and two
+    ``# nosec B310`` justifications reading "https enforced".
+    """
+
+    @staticmethod
+    def _handler() -> Any:
+        return http_fetch._HTTPSOnlyRedirectHandler()
+
+    @pytest.mark.parametrize(
+        "target",
+        [
+            "http://mirror.invalid/corpus.json",
+            "ftp://mirror.invalid/corpus.json",
+            "file:///etc/passwd",
+            "//mirror.invalid/corpus.json",
+        ],
+    )
+    def test_a_redirect_off_https_is_refused(self, target: str) -> None:
+        request = urllib.request.Request("https://origin.invalid/corpus.json")
+        with pytest.raises(ValueError) as excinfo:
+            self._handler().redirect_request(request, None, 302, "Found", {}, target)
+        assert "non-HTTPS redirect target" in str(excinfo.value)
+
+    def test_an_https_redirect_is_allowed(self) -> None:
+        """The control: the handler must not refuse every redirect."""
+        request = urllib.request.Request("https://origin.invalid/corpus.json")
+        follow = self._handler().redirect_request(
+            request, None, 302, "Found", Message(), "https://mirror.invalid/corpus.json"
+        )
+        assert follow is not None
+        assert follow.full_url == "https://mirror.invalid/corpus.json"
+
+    def test_the_fetcher_installs_the_handler(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Non-vacuity: the handler above must be the one actually in effect.
+
+        Asserted on the opener ``_open_https`` builds, because a handler that
+        exists and is not installed refuses nothing.
+        """
+        seen: list[Any] = []
+        real_build = urllib.request.build_opener
+
+        def capture(*handlers: Any) -> Any:
+            seen.extend(handlers)
+            return real_build(*handlers)
+
+        monkeypatch.setattr(urllib.request, "build_opener", capture)
+        request = urllib.request.Request("https://origin.invalid/x")
+        with contextlib.suppress(Exception):
+            # The connection is expected to fail; the OPENER is the subject.
+            http_fetch._open_https(request, timeout=1, context=ssl.create_default_context())
+
+        assert any(
+            isinstance(handler, http_fetch._HTTPSOnlyRedirectHandler) for handler in seen
+        ), f"the HTTPS-only redirect handler was not installed: {seen}"

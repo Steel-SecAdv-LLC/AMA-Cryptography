@@ -82,8 +82,26 @@ MANUAL_BOUNDS: dict[str, tuple[int, str]] = {
 }
 
 _DEFINE_RE = re.compile(r"^\s*#\s*define\s+(?P<name>[A-Za-z_]\w*)\s+(?P<value>\d+)\s*$", re.M)
+#: Every comparison of a length variable against something, not just `<` and
+#: `==`.
+#:
+#: The alternation used to be `(?P<op><|==)`, which matches `<` and then
+#: requires the expression to start with `[A-Za-z_0-9]`.  For `size <= 65536)`
+#: the `=` blocks that, so the pattern failed to match ANYWHERE on the guard —
+#: contributing neither a bound nor an entry in `unresolved`.  The fail-closed
+#: path only fires for guards that MATCH but will not resolve, so a guard the
+#: regex never matched produced no signal at all, under an error message
+#: reading "a guard this gate skips is a branch that can go unreachable
+#: unnoticed" and a success line reading "every harness branch is reachable
+#: under the ceiling its lane uses".  `>=`, `>` and `<=` are all ordinary ways
+#: to write a size floor.
+#:
+#: The two-character operators come FIRST in the alternation: regex
+#: alternation is ordered, so `<|<=` would match the `<` of `<=` and leave the
+#: `=` to fail the expression class all over again.
 _GUARD_RE = re.compile(
-    r"\b(?P<var>payload_len|size)\s*(?P<op><|==)\s*(?P<expr>[A-Za-z_0-9][A-Za-z_0-9 +]*?)\s*\)"
+    r"\b(?P<var>payload_len|size)\s*(?P<op><=|>=|==|<|>)\s*"
+    r"(?P<expr>[A-Za-z_0-9][A-Za-z_0-9 +]*?)\s*\)"
 )
 _PAYLOAD_OFFSET_RE = re.compile(r"payload_len\s*=\s*size\s*-\s*(?P<offset>\d+)")
 _WORKFLOW_MAX_LEN_RE = re.compile(r"-max_len=(?P<value>\S+)")
@@ -138,10 +156,19 @@ def required_max_len(harness: Path) -> tuple[int, list[str]]:
         if value is None:
             unresolved.append(f"{match.group('var')} {match.group('op')} {match.group('expr')}")
             continue
-        # `<` needs one more byte than the bound to get past it; `==` needs
-        # exactly the bound.  Both are relative to the payload for a
-        # payload_len guard, and to the whole input for a size guard.
-        needed = value + (1 if match.group("op") == "<" else 0)
+        # How many bytes make the guard's TRUE branch reachable, per operator:
+        #
+        #   size <  N   the branch is taken below N, so N-1 suffices — but the
+        #               FALSE branch needs N, and both must be reachable, so N.
+        #   size <= N   likewise, one more: N+1.
+        #   size == N   exactly N.
+        #   size >  N   N+1.
+        #   size >= N   N.
+        #
+        # Both are relative to the payload for a payload_len guard, and to the
+        # whole input for a size guard.
+        operator = match.group("op")
+        needed = value + (1 if operator in ("<", "<=", ">") else 0)
         if match.group("var") == "payload_len":
             needed += payload_offset
         required = max(required, needed)
@@ -153,12 +180,33 @@ def _harnesses() -> list[Path]:
 
 
 def _bound_for(harness: Path) -> tuple[int, list[str]]:
+    """The ceiling for one harness, and the guards still unaccounted for.
+
+    A MANUAL_BOUNDS entry used to clear `unresolved` OUTRIGHT.  Its reason
+    string explains ONE guard — the one whose expression this tool's arithmetic
+    cannot evaluate — but the assignment discarded every other unresolved guard
+    in the same harness, including ones added later.  So the moment a harness
+    needed one manual bound it stopped being checked at all, which is the
+    opposite of what an entry documenting a single exception should buy.
+
+    The declared bound still raises the ceiling; what it no longer does is
+    silence the rest of the file.
+    """
     required, unresolved = required_max_len(harness)
     manual = MANUAL_BOUNDS.get(harness.stem)
     if manual is not None:
         required = max(required, manual[0])
-        unresolved = []
+        # Drop only the guards the entry's own reason accounts for: those whose
+        # expression appears verbatim in it.  Anything else stays unresolved.
+        reason = manual[1]
+        unresolved = [guard for guard in unresolved if _guard_expression(guard) not in reason]
     return required, unresolved
+
+
+def _guard_expression(guard: str) -> str:
+    """The right-hand side of a rendered ``"<var> <op> <expr>"`` guard."""
+    parts = guard.split(None, 2)
+    return parts[2] if len(parts) == 3 else guard
 
 
 def max_len_for(target: str) -> int:

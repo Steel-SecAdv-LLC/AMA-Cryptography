@@ -192,7 +192,16 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
 """,
     )
     monkeypatch.setattr(gate, "FUZZ_DIR", tmp_path)
-    monkeypatch.setitem(gate.MANUAL_BOUNDS, "fuzz_synthetic", (777, "worked out by hand"))
+    # The reason must NAME the guard expression it accounts for.  It used to be
+    # free prose ("worked out by hand") and the entry cleared the whole
+    # unresolved list regardless, so one manual bound stopped the harness being
+    # checked at all — including for guards added later.  Naming the expression
+    # is what scopes the exemption to the guard it explains.
+    monkeypatch.setitem(
+        gate.MANUAL_BOUNDS,
+        "fuzz_synthetic",
+        (777, "`needed` is a runtime value bounded by construction; worked out by hand"),
+    )
     assert gate.main([]) == 0
     assert gate.max_len_for("fuzz_synthetic") == gate.DEFAULT_MAX_LEN
 
@@ -248,3 +257,92 @@ def test_no_harnesses_is_fail_closed_not_a_clean_pass(
 ) -> None:
     monkeypatch.setattr(gate, "FUZZ_DIR", tmp_path)
     assert gate.main([]) == 2
+
+
+class TestEveryComparisonOperatorIsSeen:
+    """`<=`, `>=` and `>` were invisible, not merely unhandled.
+
+    `_GUARD_RE`'s operator alternation was `(?P<op><|==)`.  For `size <= 65536)`
+    it matches the `<`, then requires the expression to start with
+    `[A-Za-z_0-9]` — and the `=` blocks that, so the pattern failed to match
+    anywhere on the guard.  A guard that never MATCHES contributes neither a
+    bound nor an entry in `unresolved`, and the gate's fail-closed path only
+    fires for guards that match and will not resolve.  So the guard produced no
+    signal at all, under an error message reading "a guard this gate skips is a
+    branch that can go unreachable unnoticed".
+    """
+
+    @pytest.mark.parametrize(
+        ("operator", "expected"),
+        [
+            ("<", 9002),
+            ("<=", 9002),
+            ("==", 9001),
+            (">", 9002),
+            (">=", 9001),
+        ],
+    )
+    def test_each_operator_produces_a_bound(
+        self, gate: ModuleType, tmp_path: Path, operator: str, expected: int
+    ) -> None:
+        source = (
+            "\nint LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {\n"
+            "    if (size < 2) return 0;\n"
+            "    size_t payload_len = size - 1;\n"
+            f"    if (payload_len {operator} 9000) return 0;\n"
+            "    return 0;\n"
+            "}\n"
+        )
+        harness = _write_harness(tmp_path, source)
+        required, unresolved = gate.required_max_len(harness)
+        assert not unresolved, unresolved
+        assert required == expected, (operator, required)
+
+    def test_an_unresolvable_two_character_guard_is_reported(
+        self, gate: ModuleType, tmp_path: Path
+    ) -> None:
+        """Fail-closed, which is what a never-matching guard could not be."""
+        harness = _write_harness(
+            tmp_path,
+            """
+int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
+    if (size <= SOME_UNKNOWN_MACRO) return 0;
+    return 0;
+}
+""",
+        )
+        _required, unresolved = gate.required_max_len(harness)
+        assert unresolved, "an unresolvable `<=` guard produced no signal at all"
+
+
+class TestAManualBoundClearsOnlyItsOwnGuard:
+    """A MANUAL_BOUNDS entry used to clear the WHOLE unresolved list.
+
+    Its reason string explains one guard — the one this tool's arithmetic
+    cannot evaluate — but the assignment discarded every other unresolved guard
+    in the same harness, including ones added afterwards.  A harness that needed
+    one manual bound stopped being checked at all.
+    """
+
+    def test_an_unrelated_unresolved_guard_survives(
+        self, gate: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        harness = _write_harness(
+            tmp_path,
+            """
+int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
+    if (size < DECLARED_IN_THE_REASON) return 0;
+    if (size < A_SECOND_UNKNOWN_MACRO) return 0;
+    return 0;
+}
+""",
+        )
+        monkeypatch.setitem(
+            gate.MANUAL_BOUNDS,
+            "fuzz_synthetic",
+            (1234, "the guard on DECLARED_IN_THE_REASON is bounded by construction"),
+        )
+        _required, unresolved = gate._bound_for(harness)
+        assert unresolved, "the manual bound silenced a guard its reason never mentions"
+        assert any("A_SECOND_UNKNOWN_MACRO" in guard for guard in unresolved), unresolved
+        assert not any("DECLARED_IN_THE_REASON" in guard for guard in unresolved), unresolved

@@ -16,10 +16,6 @@
       "bytes": 30763,
       "sha256": "d07f443b7dab059e6f61e5b862ccd46b1fb8595cdb9e3dabff2b899a3d296b3a"
     },
-    "nist_vectors/.gitignore": {
-      "bytes": 581,
-      "sha256": "1b2cc71400969a760c8408e9053841529d7b3175a4c40956825bc22e6aeec8e2"
-    },
     "nist_vectors/AES-256-GCM-SP800-38D.json": {
       "bytes": 2010,
       "sha256": "3d0fc923d65f538d2bc7264f73d2d98e6b6fe7fc8424c9eada807370e1d30ce9"
@@ -27,22 +23,6 @@
     "nist_vectors/SHA-256-FIPS180-4.json": {
       "bytes": 905,
       "sha256": "cde92bc3362bb4e2f2c05de00b26c7a4a826cb9dd87be8618c7e78874257dfd2"
-    },
-    "nist_vectors/fetch_vectors.py": {
-      "bytes": 12636,
-      "sha256": "9181b44d174a044cc79afc5fd3c0200d7c75b53a26ad9f8c56f0c85186673513"
-    },
-    "nist_vectors/run_vectors.py": {
-      "bytes": 54292,
-      "sha256": "f165b0c8d97dde3ab63fab44ec8db94d799a63ab35173ed7ea9fa0a7cf209319"
-    },
-    "tests/kat/README.md": {
-      "bytes": 4836,
-      "sha256": "e26c96039cd79ffa988b6bb560e3ec09709b2487e15576173aa1da99247808fb"
-    },
-    "tests/kat/ascon/README.md": {
-      "bytes": 3928,
-      "sha256": "18ef02001c0099a2c1360c3b37dbaecb3970d1896f72e326ce0cfdaf734e2f82"
     },
     "tests/kat/ascon/ascon_aead128.kat": {
       "bytes": 260253,
@@ -76,10 +56,6 @@
       "bytes": 1228176,
       "sha256": "abc204125f035427a9d66b95a31ea75689419525fe1c3da3b8564c6c8c3d3bc9"
     },
-    "tests/kat/fips205/README.md": {
-      "bytes": 2903,
-      "sha256": "7cce1c9192da9c97a72c34ecb7af62e18f52189f0267e5f243e5de6f15e5603a"
-    },
     "tests/kat/fips205/SLH-DSA-SHA2-256f-sigGen-FIPS205.json": {
       "bytes": 420185,
       "sha256": "0ba4c6018b8e2b1eb5c96288faddcb9257feeeeee3a72fb3a7b8c8c88f8c55e6"
@@ -91,10 +67,6 @@
     "tests/kat/fips205/SLH-DSA-sigVer-FIPS205.json": {
       "bytes": 30731848,
       "sha256": "a013fc2104f4ed4799d96d51141f65b965969b2cf10646626a021b6d456ce792"
-    },
-    "tests/kat/keyformats/README.md": {
-      "bytes": 9712,
-      "sha256": "6f955535b5e588ee7fb19a8b2a714c86683d11ee62fca2663a4d6ef513b44845"
     },
     "tests/kat/keyformats/jose_cose.json": {
       "bytes": 2188,
