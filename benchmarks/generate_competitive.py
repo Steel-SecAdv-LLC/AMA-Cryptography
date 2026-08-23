@@ -94,7 +94,7 @@ def _ama_version() -> str:
     return version
 
 
-def _source_provenance() -> dict:
+def _source_provenance() -> dict[str, Any]:
     """The provenance block of the primary result file.
 
     Both result files carry one and they must agree: they are rendered onto

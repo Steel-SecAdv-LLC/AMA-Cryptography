@@ -36,6 +36,7 @@ import importlib.util
 import sys
 from pathlib import Path
 from types import ModuleType
+from typing import ClassVar
 
 import pytest
 
@@ -163,14 +164,18 @@ class TestCppcheckSuppressionsArePerSite:
     #: IDs that are legitimately whole-run rather than per-site: they are about
     #: cppcheck's own environment or about vendored code, not about a finding
     #: in a file this project maintains.
-    RUN_WIDE_IDS = {"missingIncludeSystem", "unusedFunction", "shiftTooManyBitsSigned"}
+    RUN_WIDE_IDS: ClassVar[set[str]] = {
+        "missingIncludeSystem",
+        "unusedFunction",
+        "shiftTooManyBitsSigned",
+    }
 
     def test_the_suppressions_file_exists_and_is_referenced(self) -> None:
         assert self.SUPPRESSIONS.is_file(), "the per-site suppressions file is missing"
         text = self.WORKFLOW.read_text(encoding="utf-8")
-        assert "--suppressions-list=.cppcheck-suppressions" in text, (
-            "the workflow does not use the per-site suppressions file"
-        )
+        assert (
+            "--suppressions-list=.cppcheck-suppressions" in text
+        ), "the workflow does not use the per-site suppressions file"
 
     def test_no_file_wide_suppression_on_the_command_line(self) -> None:
         text = self.WORKFLOW.read_text(encoding="utf-8")

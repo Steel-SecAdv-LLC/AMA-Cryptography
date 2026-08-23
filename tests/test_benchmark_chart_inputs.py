@@ -223,9 +223,7 @@ class TestNoHarnessOverheadInsideATimedThunk:
                         continue
                     for inner in ast.walk(node):
                         if isinstance(inner, (ast.Import, ast.ImportFrom)):
-                            offenders.append(
-                                f"{path.name}:{inner.lineno} inside {node.name}()"
-                            )
+                            offenders.append(f"{path.name}:{inner.lineno} inside {node.name}()")
 
         assert not offenders, (
             "these nested functions import inside what is almost certainly a timed "

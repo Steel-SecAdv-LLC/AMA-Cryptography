@@ -1584,9 +1584,9 @@ class TestContinuousRNGTest:
                 "the continuous RNG test must catch consecutive identical outputs"
             )
             assert refusals, "a stuck RNG must trip the continuous test"
-            assert len(refusals) == 7, (
-                f"expected the other seven draws to be refused, got {len(refusals)}"
-            )
+            assert (
+                len(refusals) == 7
+            ), f"expected the other seven draws to be refused, got {len(refusals)}"
             assert ms.module_status() == "ERROR"
         finally:
             # token_bytes and _rng_state are restored by monkeypatch's teardown.

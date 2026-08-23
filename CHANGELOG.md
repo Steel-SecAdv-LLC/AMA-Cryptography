@@ -31,6 +31,90 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > Compare `[4.0.0]` below, which is dated because it *is* released: tag
 > `v4.0.0`, published 2026-08-02.
 
+### Debt-closure pass, eleventh (2026-08-22) — the 25 findings an independent audit left standing, and what closing them found
+
+An independent audit read all 302 non-corpus changed files of this branch's
+effective diff, verified each finding against the code, reproduced each by
+execution, and closed with 25 surviving findings: 0 critical, 4 major, 21
+minor.  It also measured that 38 of 203 commits on this branch fixed product
+code the same branch had written, with no downward trend across its life.
+
+That second number is the one this pass is aimed at.  Fixing 25 findings while
+introducing a 26th is not progress, so every fix below is pinned by a test
+that was WATCHED failing without it, and every claim carries the command that
+produced it.  Three defects were found by that discipline rather than by the
+audit — each surfaced while verifying a fix, and two of them were caused by a
+fix in this very pass and corrected before it was committed.
+
+**The four major findings.**
+
+`ama_ed25519_batch_verify` accepted a signature `ama_ed25519_verify` rejects.
+The donna batch routine decodes the signature's R half instead of re-encoding
+and comparing it, which is the only thing that had ever rejected a
+non-canonical R; the check is now stated as a rule on every verify path in
+both backends.  Reachable only at `count >= 4`, which is why nothing caught
+it: the existing batch coverage drove counts 1 and 3, below the boundary where
+donna leaves its per-entry fallback.  Glance-table row 14.
+
+A plain `pip install .` shipped six binding extensions outside the signed
+artefact, and the repair command the failure message prints could not fix it —
+`ama_cryptography.integrity --update --sign` omitted `--bind-extensions`, so
+it always wrote an empty binding map.  Both measured end to end against real
+installs.  Rows 19 and 20.  Closing them exposed a third: `AMA_NO_CYTHON=1
+pip install .` exits 0 and produces an install that cannot import at all,
+because every binding Extension is declared inside `if USE_CYTHON:`, so
+setuptools skipped `build_ext` and the native library was never built or
+shipped.  That one is not a regression from this branch — it reproduces on
+`origin/main` — but it is the third leg of the install matrix the other two
+fixes are verified against.
+
+A posture key rotation that fails retried on every evaluation cycle, forever.
+Row 22.
+
+**Findings whose resolution was a measurement, not a preference.**
+
+The dispatch table's `sha3_256` slot was wired by three tiers and read by
+nobody, and three comments said the FIPS 202 KATs flowed through it.  Wiring
+it for real was measured first: the kernels are 4.4x-4.7x slower than the path
+they would replace (they duplicate the same scalar absorb, then drive a
+4-way-batching permutation down one lane), and they reject
+`input == NULL, input_len == 0` where the public entry point accepts it — so
+wiring them would have made a public API's NULL handling depend on the host
+CPU.  The slot could not be made true by wiring it; it is removed.  Row 18.
+
+Every MSVC ARM64 build failed to link, because the NEON AES-GCM kernels sit
+behind a GCC/Clang feature macro MSVC never defines while the dispatcher
+referenced them unconditionally.  Reproduced with the equivalent GCC condition
+— an aarch64 build at `-march=armv8-a` — which showed the translation unit
+defining zero global symbols and the link failing on four references.  The
+references are now gated on the same condition as the definitions, so such a
+build links and uses the portable AES-GCM path, and a new `arm-qemu` lane
+builds and runs that configuration on every push.  What is NOT done, and is
+not claimed: teaching the kernel to compile under MSVC, which cannot be
+verified without an MSVC ARM64 runner.
+
+**Gates that could not fail.**
+
+`tools/check_c_secret_zeroization.py` is the sole enforcement of INVARIANT-6 —
+its own docstring records that the semgrep counterpart cannot run — and five
+spellings walked past it, including a `memset` reached through a
+function-like macro, which carries no `memset` token for a token-anchored
+pattern to find.  All five now flag, 16 zero spellings and 7 non-zero
+spellings are pinned in both directions, and the linearity assertion is a
+growth RATIO rather than a wall-clock ceiling: this file has acquired a ReDoS
+twice, and the first draft of this very change made it three times before the
+ratio measurement caught it.
+
+`src/c/sve2/ama_kyber_sve2.c` contained no `ama_secure_memzero` call at all
+while staging secret NTT coefficients through stack buffers, in the same
+branch that added exactly that scrub to the AES kernels.
+
+**Verified on hardware this branch had not reached.**  An aarch64
+cross-toolchain and qemu-user were installed for this pass, so the AArch64,
+SVE2 (VL=128 and VL=256) and no-Crypto-Extensions configurations were built
+and run rather than reasoned about — five C configurations in total, all
+green.
+
 ### Verification pass, tenth (2026-08-21) — the checks this branch added, run in the twenty-seven jobs CI actually has
 
 The ninth pass was verified on one host: Linux, x86-64 with AES-NI, Python
@@ -3074,14 +3158,28 @@ unchanged but the work, the timing, or the failure mode is not.
 | 11 | Behavioural | squeezing a one-shot digest context after `ama_sha3_final` / `ama_sha3_512_final` returns `AMA_ERROR_INVALID_PARAM`, where it previously returned `AMA_SUCCESS` with output read from the zeroized state — all zeros, then fixed permutations of the zero state | none for conformant callers; a caller that consumed that output was consuming constants |
 | 12 | Behavioural | the responder-side handshake session ID is drawn through the health-tested CSPRNG (INVARIANT-41), so a stuck DRBG now fails the handshake instead of silently issuing a repeated, transcript-signed session ID | none |
 | 13 | Behavioural | every AEAD decrypt (ChaCha20-Poly1305 and all four AES-256-GCM paths — scalar, AVX2, VAES, NEON) selects its public accept/reject return code by mask arithmetic instead of a compiler-chosen conditional branch, so the accept and reject outcomes retire identical instruction counts (CI-enforced by the `aead-verify` invariance gate); this closes the last class-dependent instruction the dudect ChaCha tag-verify lane could measure at `ct_len = 0` | none; return values are unchanged (`AMA_SUCCESS` / `AMA_ERROR_VERIFY_FAILED`) |
+| 14 | **Breaking** | `ama_ed25519_batch_verify` rejects a signature whose **R** half is a non-canonical point encoding (RFC 8032 §5.1.7 step 1 -> §5.1.3), in both backends. Until now the donna batch path decoded R instead of re-encoding it, so at `count >= 4` — where donna leaves its per-entry fallback for the multi-scalar routine — it reported VALID for a signature `ama_ed25519_verify` REJECTS. Producing one needs the signer's own key and no forgery, so a signer could mint a signature that batch verifiers accept and single verifiers reject | none for conformant callers; R is emitted only by canonical encoders. A caller that batch-verified attacker-supplied signatures should re-check anything it accepted at `count >= 4` |
+| 15 | **Breaking** | `key_formats.jwk_thumbprint`'s `hash_name` accepts exactly `sha256`, `sha384`, `sha512`, `sha3_256`, `sha3_384`, `sha3_512`. 4.x passed the name to `hashlib.new()`, so it accepted every algorithm the interpreter's OpenSSL build knew — MD5 and SHA-1 thumbprints included — and computed all of them through OpenSSL, which INVARIANT-1 forbids on a production path. `sha1`, `blake2b` and `sha512_256` now raise `KeyFormatError` | none for the default; `sha256` is unchanged byte-for-byte and is RFC 7638's own example. A caller pinning another name must move to one of the six |
+| 16 | **Breaking** | `create_crypto_package` raises `ValueError` for `num_derived_keys < 1`, where 4.x built the package and reported success. Such a package was rejected by `verify_crypto_package` — its own verifier, including in the creating process — while creation recorded `metadata["defense_layers"] = 4` | pass at least 1 (the default is 3) |
+| 17 | **Breaking** | an unrecognised `tsa_mode` raises `ValueError` instead of falling through to the ONLINE path. A typo — `"disable"`, `"off"` — used to send the content digest to an external timestamp authority from an air-gapped or privacy-sensitive deployment that had asked for the opposite | pass `"online"`, `"mock"` or `"disabled"`; the error lists them |
+| 18 | **Breaking** | `ama_dispatch_table_t` (`include/ama_dispatch.h`) loses its `sha3_256` member, and the `ama_sha3_256_fn` typedef is removed with it. Nothing outside the dispatcher ever read the slot — `ama_sha3_256` absorbs inline and dispatches only `keccak_f1600` — and the kernels behind it measured 4.4x-4.7x SLOWER than the path they would have replaced while disagreeing with the public NULL contract | none for callers of the public API; a consumer introspecting the table drops the field |
+| 19 | Behavioural | every build signs the integrity artefact and binds the binding extensions it ships, not only builds that already carried `AMA_BUILD_PIPELINE=1` in their environment. A plain `pip install .` previously produced `INTEGRITY_BINDING_DIGESTS_HEX = {}` over six shipped extensions: "not covered by the signed artefact" at every import, POST reporting "1 of 13 tests were SKIPPED", and `AMA_FIPS_STRICT=1` — the variable SECURITY.md prescribes for release deployments — failing outright. `AMA_NO_CYTHON=1` now also builds and ships the native library, which it did not: that install could not import at all | none; a source build that could not produce an artefact now fails loudly instead of shipping an unverifiable one |
+| 20 | Behavioural | `ama_cryptography.integrity --update --sign` binds the extensions present in the tree it repairs. It is the command `_check_binding_extensions` prints as the remedy for "present but not covered", and it previously wrote an empty binding map, so running the documented repair changed the artefact hash, printed "bindings = 0 extension(s) bound", and left the identical warnings and the identical `AMA_FIPS_STRICT=1` failure | none; the documented repair now clears the condition it is documented for |
+| 21 | **Breaking** | completing an import through a POST failure that a re-signing run would repair requires the process to BE the integrity signer (`pqc_backends._process_is_the_integrity_signer`, revoked by secure-execution mode), not merely to carry `AMA_BUILD_PIPELINE=1`. With the variable in a Dockerfile `ENV`, a CI environment or a systemd unit, an attacker with write access to the installed tree could edit any module imported after POST and have every process in that environment complete the import with exit 0 | build tooling is unaffected — `setup.py`, `tools/resign_wheel.py` and `integrity --update --sign` all launch the signer. A script that imported the package under that variable to inspect a failing tree uses `AMA_POST_DIAGNOSTIC_IMPORT=1` |
+| 22 | Behavioural | a posture key rotation that is attempted and FAILS now backs off exponentially (`rotation_cooldown/32` doubling to `rotation_cooldown`) and stops after six consecutive failures, reporting `rotation_suspended` on `get_posture_summary()`. It previously retried on every evaluation cycle with no throttle: measured over 20 cycles at sustained CRITICAL, 20 callback invocations and 20 registered `posture-rotation-N` key identifiers | none for a rotation mechanism that works; a controller that has stopped attempting resumes on the next success or on `reset()` |
 
-Rows 1, 3 and 7 are the ones a security reviewer should read first: all
-three are fail-closed changes that turn a silent weakness into a loud
-refusal — a failed power-on self-test now fails the import (1), an unknown
-algorithm name no longer resolves silently to the weakest rung (3), and a
-modified binding extension fails the import (7). Row 4 is the one a *user*
-is most likely to notice: SLH-DSA key generation visibly pauses for about a
-second while the fresh keypair proves its halves correspond.
+Rows 1, 3, 7, 14 and 21 are the ones a security reviewer should read first.
+Four are fail-closed changes that turn a silent weakness into a loud refusal —
+a failed power-on self-test now fails the import (1), an unknown algorithm
+name no longer resolves silently to the weakest rung (3), a modified binding
+extension fails the import (7), and an ambient environment variable no longer
+buys an import through a failed POST (21). Row 14 is different in kind and is
+the one to read first of all: it is the only row where the library was
+**accepting** something it should have rejected. Two verifiers in the same
+build disagreed on the same 64 bytes, and the disagreement was reachable by
+the signer with no forgery. Row 4 is the one a *user* is most likely to
+notice: SLH-DSA key generation visibly pauses for about a second while the
+fresh keypair proves its halves correspond.
 
 For C consumers of the installed shared library: the SONAME follows the
 major version by convention, so it moves `.so.4` -> `.so.5` and existing

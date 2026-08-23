@@ -136,9 +136,7 @@ class _StubBackend:
         self._equation_holds.add(signature)
         return signature
 
-    def batch_verify(
-        self, entries: "list[tuple[bytes, bytes, bytes]]"
-    ) -> "list[bool]":
+    def batch_verify(self, entries: list[tuple[bytes, bytes, bytes]]) -> list[bool]:
         """Per-entry verdicts, modelling the R rule independently of ``verify``.
 
         ``batch_r_rule`` is switchable for the same reason ``x_sign_rule`` is:
@@ -153,9 +151,7 @@ class _StubBackend:
                 # Without the rule the aggregate equation decides, and it
                 # holds — which is how a signature the single verifier
                 # rejects came to be reported valid.
-                verdicts.append(
-                    (not self.batch_r_rule) and signature in self._equation_holds
-                )
+                verdicts.append((not self.batch_r_rule) and signature in self._equation_holds)
                 continue
             verdicts.append(self.verify(message, signature, public_key))
         return verdicts
@@ -460,9 +456,7 @@ class TestTheBatchFamilyIsNotVacuous:
             "gate passed; agreement alone is not correctness"
         )
 
-    def test_a_correct_pair_passes(
-        self, tool: ModuleType, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_a_correct_pair_passes(self, tool: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
         """The over-rejection guard: the family must not fail a correct pair."""
         donna, fe51 = _pair()
         assert _run(tool, monkeypatch, donna, fe51) == 0

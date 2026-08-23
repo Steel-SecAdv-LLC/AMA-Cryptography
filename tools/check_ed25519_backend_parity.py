@@ -223,9 +223,7 @@ class Backend:
         out = ctypes.create_string_buffer(32)
         return bool(self.lib.ama_ed25519_scalarmult_public(out, scalar, point_enc) == 0)
 
-    def batch_verify(
-        self, entries: "list[tuple[bytes, bytes, bytes]]"
-    ) -> "list[bool]":
+    def batch_verify(self, entries: list[tuple[bytes, bytes, bytes]]) -> list[bool]:
         """Per-entry verdicts from ``ama_ed25519_batch_verify``.
 
         Exposed because the single-signature corpus cannot reach the batch
@@ -288,8 +286,7 @@ class Backend:
 
         r_half = bytes([0x01]) + bytes(30) + bytes([0x80])
         digest = ctypes.create_string_buffer(64)
-        self.lib.ama_ed25519_sha512(r_half + public.raw[:32] + message,
-                                    64 + len(message), digest)
+        self.lib.ama_ed25519_sha512(r_half + public.raw[:32] + message, 64 + len(message), digest)
         reduced = ctypes.create_string_buffer(digest.raw, 64)
         self.lib.ama_ed25519_sc_reduce(reduced)
         h = reduced.raw[:32]
@@ -577,13 +574,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         # The discriminating entry sits first among four honest ones, so a
         # backend that leaks a verdict between entries is caught too.
         entries = [(message, forged, public)] + [(message, honest, public)] * 3
-        a = donna.batch_verify(entries)
-        b = fe51.batch_verify(entries)
+        donna_verdicts = donna.batch_verify(entries)
+        fe51_verdicts = fe51.batch_verify(entries)
         checked += 1
-        if a != b:
+        if donna_verdicts != fe51_verdicts:
             disagreements.append(
                 f"  batch   signed-by={signer.name:<5} count=4\n"
-                f"      donna={a}  fe51={b}\n"
+                f"      donna={donna_verdicts}  fe51={fe51_verdicts}\n"
                 f"      sig[0]={forged.hex()}\n"
                 f"      pk    ={public.hex()}"
             )
@@ -591,7 +588,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         # Agreement is not correctness, exactly as for the single path: both
         # backends must REJECT the non-canonical R and ACCEPT the three
         # honest entries.
-        for name, verdicts in (("donna", a), ("fe51", b)):
+        for name, verdicts in (("donna", donna_verdicts), ("fe51", fe51_verdicts)):
             batch_asserted += 1
             if verdicts[0]:
                 disagreements.append(

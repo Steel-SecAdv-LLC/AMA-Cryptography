@@ -734,9 +734,7 @@ class TestEveryBackendSkipIsEscalatable:
     BACKEND_ONLY_MODULES = ("test_artefact_cache_poisoning.py",)
 
     @pytest.mark.parametrize("module_name", BACKEND_ONLY_MODULES)
-    def test_every_literal_skip_reason_matches_a_backend_keyword(
-        self, module_name: str
-    ) -> None:
+    def test_every_literal_skip_reason_matches_a_backend_keyword(self, module_name: str) -> None:
         import ast
 
         source_path = Path(__file__).resolve().parent / module_name

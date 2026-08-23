@@ -12,6 +12,7 @@ on purpose-built input, plus the real tree.
 
 from __future__ import annotations
 
+import itertools
 from pathlib import Path
 
 import pytest
@@ -19,6 +20,12 @@ import pytest
 from tools import check_c_secret_zeroization as gate
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+
+#: Stand-in path for text scanned inline rather than read from a file.  A real
+#: Path, not None: scan_text's signature says Path, mypy --strict enforces it,
+#: and widening the production signature to Optional so a test can pass None
+#: would be the test steering the code.
+_INLINE = Path("<inline test source>")
 
 
 def _write(tmp_path: Path, body: str, name: str = "probe.c") -> Path:
@@ -422,15 +429,15 @@ class TestSpellingsThatUsedToSlipPast:
 
     @pytest.mark.parametrize("value", ZERO_SPELLINGS)
     def test_every_zero_spelling_is_flagged(self, value: str) -> None:
-        findings = gate.scan_text(f"memset(secret_key, {value}, 32);", None)
+        findings = gate.scan_text(f"memset(secret_key, {value}, 32);", _INLINE)
         assert len(findings) == 1, f"memset(secret_key, {value}, 32) was not flagged"
         assert findings[0].dst == "secret_key"
 
     @pytest.mark.parametrize("value", NON_ZERO_SPELLINGS)
     def test_no_non_zero_spelling_is_flagged(self, value: str) -> None:
-        assert gate.scan_text(f"memset(secret_key, {value}, 32);", None) == [], (
-            f"memset(secret_key, {value}, 32) is not a zeroing call and must not be flagged"
-        )
+        assert (
+            gate.scan_text(f"memset(secret_key, {value}, 32);", _INLINE) == []
+        ), f"memset(secret_key, {value}, 32) is not a zeroing call and must not be flagged"
 
     DESTINATION_FORMS = (
         ("secret_key", "secret_key"),
@@ -447,10 +454,8 @@ class TestSpellingsThatUsedToSlipPast:
     )
 
     @pytest.mark.parametrize("expression,expected", DESTINATION_FORMS)
-    def test_destination_forms_resolve_to_the_object(
-        self, expression: str, expected: str
-    ) -> None:
-        findings = gate.scan_text(f"memset({expression}, 0, 32);", None)
+    def test_destination_forms_resolve_to_the_object(self, expression: str, expected: str) -> None:
+        findings = gate.scan_text(f"memset({expression}, 0, 32);", _INLINE)
         assert len(findings) == 1, f"memset({expression}, 0, 32) was not flagged"
         assert findings[0].dst == expected, (
             f"memset({expression}, ...) resolved to {findings[0].dst!r}; the "
@@ -464,14 +469,14 @@ class TestSpellingsThatUsedToSlipPast:
         assert gate._destination_name("ctx->hmac_key + 8") == "hmac_key"
 
     def test_a_non_secret_destination_with_an_offset_is_still_clean(self) -> None:
-        assert gate.scan_text("memset(buffer + 4, 0, 28);", None) == []
+        assert gate.scan_text("memset(buffer + 4, 0, 28);", _INLINE) == []
 
 
 class TestMemsetBehindAMacro:
     """A function-like macro wrapping memset was a total bypass.
 
     The call site carries no ``memset`` token, so the token-anchored
-    ``\bmemset\s*\(`` could not see it at all.  Verified on the gate as it
+    ``\bmemset\\s*\\(`` could not see it at all.  Verified on the gate as it
     stood: ``scan_text('#define CLR(x) memset((x),0,sizeof(x))\nCLR(secret_key);')``
     returned zero findings — the definition targets the non-secret parameter
     ``x`` and the call site carries no ``memset``.
@@ -479,7 +484,7 @@ class TestMemsetBehindAMacro:
 
     def test_wrapper_macro_call_site_is_flagged(self) -> None:
         findings = gate.scan_text(
-            "#define CLR(x) memset((x),0,sizeof(x))\nCLR(secret_key);", None
+            "#define CLR(x) memset((x),0,sizeof(x))\nCLR(secret_key);", _INLINE
         )
         assert len(findings) == 1
         assert findings[0].dst == "secret_key"
@@ -488,14 +493,14 @@ class TestMemsetBehindAMacro:
     def test_the_flagged_parameter_is_the_one_the_body_zeroes(self) -> None:
         """A macro whose memset target is its SECOND parameter."""
         findings = gate.scan_text(
-            "#define WIPE(n, p) memset((p), 0, (n))\nWIPE(32, secret_key);", None
+            "#define WIPE(n, p) memset((p), 0, (n))\nWIPE(32, secret_key);", _INLINE
         )
         assert len(findings) == 1
         assert findings[0].dst == "secret_key"
 
     def test_a_nested_comma_does_not_shift_the_parameter_mapping(self) -> None:
         findings = gate.scan_text(
-            "#define CLR(x) memset((x),0,sizeof(x))\nCLR(round_keys[f(1, 2)]);", None
+            "#define CLR(x) memset((x),0,sizeof(x))\nCLR(round_keys[f(1, 2)]);", _INLINE
         )
         assert len(findings) == 1
         assert findings[0].dst == "round_keys"
@@ -507,45 +512,40 @@ class TestMemsetBehindAMacro:
             "} while (0)\n"
             "CLR(secret_key);"
         )
-        findings = gate.scan_text(text, None)
+        findings = gate.scan_text(text, _INLINE)
         assert len(findings) == 1
         assert findings[0].dst == "secret_key"
 
     def test_an_object_like_alias_is_flagged(self) -> None:
-        findings = gate.scan_text("#define CLR memset\nCLR(secret_key, 0, 32);", None)
+        findings = gate.scan_text("#define CLR memset\nCLR(secret_key, 0, 32);", _INLINE)
         assert len(findings) == 1
         assert findings[0].dst == "secret_key"
 
     def test_an_alias_called_with_a_non_zero_value_is_not_flagged(self) -> None:
-        assert gate.scan_text("#define CLR memset\nCLR(secret_key, 0xff, 32);", None) == []
+        assert gate.scan_text("#define CLR memset\nCLR(secret_key, 0xff, 32);", _INLINE) == []
 
     def test_a_macro_that_does_not_zero_is_not_flagged(self) -> None:
         assert (
-            gate.scan_text(
-                "#define FILL(x) memset((x),0xff,sizeof(x))\nFILL(secret_key);", None
-            )
+            gate.scan_text("#define FILL(x) memset((x),0xff,sizeof(x))\nFILL(secret_key);", _INLINE)
             == []
         )
 
     def test_a_wrapper_called_with_a_non_secret_is_not_flagged(self) -> None:
         assert (
-            gate.scan_text(
-                "#define CLR(x) memset((x),0,sizeof(x))\nCLR(plaintext);", None
-            )
-            == []
+            gate.scan_text("#define CLR(x) memset((x),0,sizeof(x))\nCLR(plaintext);", _INLINE) == []
         )
 
     def test_an_undefined_macro_name_is_not_flagged(self) -> None:
         """No definition in this text: nothing is known to wrap memset."""
-        assert gate.scan_text("CLR(secret_key);", None) == []
+        assert gate.scan_text("CLR(secret_key);", _INLINE) == []
 
     def test_the_definition_line_is_not_reported_as_a_call(self) -> None:
-        findings = gate.scan_text("#define CLR(x) memset((x),0,sizeof(x))", None)
+        findings = gate.scan_text("#define CLR(x) memset((x),0,sizeof(x))", _INLINE)
         assert findings == []
 
 
 class TestPatternIsLinear:
-    """The scanner must not be the thing that hangs CI.
+    r"""The scanner must not be the thing that hangs CI.
 
     The first draft of ``_MEMSET_RE`` had two nullable quantifiers in sequence
     (``\\(\\s*&?\\s*``) and a starred group whose alternatives each began with
@@ -596,9 +596,9 @@ class TestPatternIsLinear:
     @pytest.mark.parametrize(
         "prefix",
         [
-            "memset((void",          # a failing cast
-            "memset(secret_key +",   # a failing destination offset
-            "memset(secret_key, ",   # a failing value
+            "memset((void",  # a failing cast
+            "memset(secret_key +",  # a failing destination offset
+            "memset(secret_key, ",  # a failing value
         ],
     )
     def test_growth_is_linear_not_merely_fast(self, prefix: str) -> None:
@@ -623,10 +623,10 @@ class TestPatternIsLinear:
         for exponent in (14, 15, 16):
             payload = prefix + pad * (2**exponent)
             start = time.perf_counter()
-            gate.scan_text(payload, None)
+            gate.scan_text(payload, _INLINE)
             timings.append(time.perf_counter() - start)
 
-        for smaller, larger in zip(timings, timings[1:]):
+        for smaller, larger in itertools.pairwise(timings):
             if smaller < 1e-4:  # too fast to measure a ratio from
                 continue
             assert larger / smaller < 2.8, (

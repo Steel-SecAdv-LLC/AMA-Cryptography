@@ -30,7 +30,7 @@ import subprocess
 import sys
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 # D-9: Preflight version checks for every build-time dependency listed in
 # pyproject.toml's [build-system].requires.  Each floor here is kept IDENTICAL
@@ -547,7 +547,7 @@ class NativeDistribution(Distribution):
     library itself is.
     """
 
-    def has_ext_modules(self) -> bool:  # noqa: D102 - contract is the docstring above
+    def has_ext_modules(self) -> bool:
         return True
 
 
@@ -770,7 +770,16 @@ class CMakeBuild(build_ext):
         """
         names: set[str] = set()
         for ext in self.extensions or []:
-            filename = self.get_ext_filename(self.get_ext_fullname(ext.name))
+            # setuptools' build_ext.get_ext_filename / get_ext_fullname are
+            # untyped in the installed stubs, so a direct call is "call to
+            # untyped function in typed context" under mypy --strict.  Both go
+            # through a locally-typed alias rather than a suppression:
+            # INVARIANT-13 wants the code fixed, not the report silenced, and
+            # the alias states the type the stub omits instead of asserting a
+            # stronger one.
+            ext_fullname: Callable[[str], str] = self.get_ext_fullname
+            ext_filename: Callable[[str], str] = self.get_ext_filename
+            filename = ext_filename(ext_fullname(ext.name))
             names.add(Path(filename).name)
         return names
 

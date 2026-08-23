@@ -1121,8 +1121,7 @@ class CryptoPostureController:
             )
         else:
             logger.warning(
-                "Posture key rotation failed (%d consecutive); next attempt in "
-                "%.0fs",
+                "Posture key rotation failed (%d consecutive); next attempt in " "%.0fs",
                 self._rotation_failure_streak,
                 self._rotation_retry_delay(self._rotation_failure_streak),
             )

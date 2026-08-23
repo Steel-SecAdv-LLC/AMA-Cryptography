@@ -517,11 +517,7 @@ def _zeroing_macros(blanked: str) -> list[_ZeroingMacro]:
     """
     macros: list[_ZeroingMacro] = []
     for define in _MACRO_DEFINE_RE.finditer(blanked):
-        parameters = [
-            token.strip()
-            for token in define.group("params").split(",")
-            if token.strip()
-        ]
+        parameters = [token.strip() for token in define.group("params").split(",") if token.strip()]
         if not parameters:
             continue
         body = define.group("body")
@@ -535,10 +531,7 @@ def _zeroing_macros(blanked: str) -> list[_ZeroingMacro]:
 
 def _memset_aliases(blanked: str) -> list[_ZeroingMacro]:
     """`#define NAME memset` aliases, mapped to memset's own dst parameter."""
-    return [
-        _ZeroingMacro(define.group("name"), 0)
-        for define in _MEMSET_ALIAS_RE.finditer(blanked)
-    ]
+    return [_ZeroingMacro(define.group("name"), 0) for define in _MEMSET_ALIAS_RE.finditer(blanked)]
 
 
 def _macro_call_findings(
