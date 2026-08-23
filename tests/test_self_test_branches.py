@@ -103,7 +103,7 @@ class TestTimingOracleBranches:
 
         This reproduces the shared-runner failure shape: |t| above 4.5 with
         a mean delta below the absolute-effect floor.  Under the post-RA7BN
-        platform-aware floor (``max(50, 4×perf_counter_resolution_ns)``),
+        platform-aware floor (``max(100, 4×perf_counter_resolution_ns)``),
         this pattern must be ABSORBED as scheduler / quantization noise
         rather than treated as a real leak — otherwise the module flips to
         ERROR and every subsequent crypto call is locked out for a non-
@@ -120,8 +120,8 @@ class TestTimingOracleBranches:
         """
 
         # Target delta: just under the host's auto-computed floor.  Reading
-        # ``_TIMING_MIN_EFFECT_NS`` rather than hard-coding 50 / 400 keeps
-        # this test correct on Linux (1 ns clock → 50 ns floor) and
+        # ``_TIMING_MIN_EFFECT_NS`` rather than hard-coding 100 / 400 keeps
+        # this test correct on Linux (1 ns clock → 100 ns floor) and
         # Windows (100 ns clock → 400 ns floor) without per-platform
         # branching.
         target_delta = st._TIMING_MIN_EFFECT_NS - 5.0
@@ -183,10 +183,14 @@ class TestTimingFloorScaling:
     """
 
     def test_floor_at_least_absolute_baseline(self) -> None:
-        # The module-import-time floor must never drop below the 50 ns
+        # The module-import-time floor must never drop below the 100 ns
         # absolute baseline regardless of platform — even a hypothetical
-        # zero-resolution clock would still produce a >= 50 ns floor.
-        assert st._TIMING_MIN_EFFECT_NS >= 50.0
+        # zero-resolution clock would still produce a >= 100 ns floor.
+        # (100 rather than the original 50: a shared ubuntu-latest runner
+        # produced delta=51 ns / |t|=11.48 of pure jitter — job
+        # 97259726191 — on a binary the deterministic callgrind
+        # `consttime` target measures at zero cross-class instructions.)
+        assert st._TIMING_MIN_EFFECT_NS >= 100.0
 
     def test_floor_scales_with_coarse_clock(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A 100 ns simulated resolution must yield a 400 ns floor."""
@@ -203,7 +207,7 @@ class TestTimingFloorScaling:
     def test_floor_uses_absolute_baseline_on_fine_clock(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A 1 ns simulated resolution must collapse to the 50 ns floor."""
+        """A 1 ns simulated resolution must collapse to the 100 ns floor."""
         from types import SimpleNamespace
 
         def fake_get_clock_info(name: str) -> SimpleNamespace:
@@ -213,7 +217,7 @@ class TestTimingFloorScaling:
         monkeypatch.setattr(time, "get_clock_info", fake_get_clock_info)
         floor = st._compute_timing_min_effect_ns()
         # 4 × 1 = 4 ns, below absolute baseline → use baseline.
-        assert floor == 50.0, f"expected 50 ns baseline; got {floor!r}"
+        assert floor == 100.0, f"expected 100 ns baseline; got {floor!r}"
 
     def test_floor_environment_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Operators can pin the floor explicitly for a deployment."""

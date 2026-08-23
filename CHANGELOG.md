@@ -280,6 +280,27 @@ with the real pattern, and a planted second `[ \t]*` on the offset branch
 estimator and fails the gate; a planted exponential alternation hangs the
 scan into pytest-timeout rather than passing.  Both mutations reverted.
 
+One more, and this one recalibrates a POST floor rather than an estimator.
+The FIPS POST timing oracle for `ama_consttime_memcmp` — a single
+deterministic 10,000-iteration pass, deliberately without retries, failing
+on |t| > 4.5 AND delta >= an absolute floor of 50 ns — tripped at
+delta=51 ns / |t|=11.48 on a shared ubuntu-latest runner (job
+97259726191), latched the module into the FIPS error state mid-suite, and
+failed ten unrelated tests as collateral.  The floor's own calibration
+note claimed Linux jitter deltas sit in the 25-45 ns band; 51 ns of pure
+jitter falsifies that in the field — the same binary's memcmp measures
+zero cross-class instructions under the deterministic callgrind
+`consttime` target, and the same POST passed on every sibling lane at the
+same commit, so a real early-exit (a >>500 ns signal against the ~1.15 us
+compare this oracle measures) is excluded by stronger instruments.  The
+absolute floor moves 50 -> 100 ns — ~2x the worst observed artefact, the
+same calibration rule the dudect floor uses, and still >=5x below the
+smallest real-leak signal the oracle's own documentation names — with the
+single-pass anti-amplifier design untouched and the falsifying
+measurement recorded at the derivation.  The committed .py integrity
+digest is refreshed in the same change, as the staleness gate requires;
+60/60 POST and self-test-branch tests pass with the new floor.
+
 ### Debt-closure pass, eleventh (2026-08-22) — the 25 findings an independent audit left standing, and what closing them found
 
 An independent audit read all 302 non-corpus changed files of this branch's

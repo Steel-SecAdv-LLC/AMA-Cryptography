@@ -2297,7 +2297,7 @@ _TIMING_BUFFER_SIZE = 256
 #: can silently switch off is not a control.
 #:
 #: The ceiling is set three orders of magnitude above any plausible legitimate
-#: floor (the auto-computed value is 50 ns on Linux/macOS and 400 ns on
+#: floor (the auto-computed value is 100 ns on Linux/macOS and 400 ns on
 #: Windows' 100 ns-resolution clock) rather than just above it.  The purpose
 #: here is to make the test impossible to *disable*, not to second-guess an
 #: operator tuning for a noisy host — a tighter bound would reject honest
@@ -2326,8 +2326,14 @@ def _compute_timing_min_effect_ns() -> float:
 
     * Linux / macOS:  resolution is typically 1 ns (CLOCK_MONOTONIC_RAW).
       Bias from runner jitter has been observed at delta=25 ns / |t|=8.34
-      on shared Ubuntu 3.11 GitHub-hosted runners.  A 50 ns absolute floor
-      catches this band.
+      on shared Ubuntu 3.11 GitHub-hosted runners, and a 50 ns floor was
+      then falsified in the field: delta=51 ns / |t|=11.48 of pure jitter
+      on a shared ubuntu-latest runner (job 97259726191, Python 3.13,
+      2026-08-23) failed a binary whose memcmp the deterministic callgrind
+      `consttime` target measures at zero cross-class instructions and
+      whose POST passed on every sibling lane at the same commit.  The
+      100 ns absolute floor is ~2x the worst observed artefact, the same
+      calibration rule the dudect floor uses.
     * Windows:  ``QueryPerformanceCounter`` reports a 100 ns resolution
       via ``time.get_clock_info('perf_counter').resolution`` even on
       modern hardware; quantization noise alone can produce mean deltas
@@ -2347,8 +2353,8 @@ def _compute_timing_min_effect_ns() -> float:
     leak over 256 bytes produces (the byte loop alone is ~256 ns even
     at 1 ns/byte memory throughput).
 
-    Linux/macOS:  ``max(50, 4*1) = 50 ns`` (absolute floor dominates)
-    Windows:      ``max(50, 4*100) = 400 ns`` (resolution floor dominates)
+    Linux/macOS:  ``max(100, 4*1) = 100 ns`` (absolute floor dominates)
+    Windows:      ``max(100, 4*100) = 400 ns`` (resolution floor dominates)
 
     The floor is computed once at module import.  Operators who need a
     different floor for a specific deployment can override via
@@ -2375,7 +2381,7 @@ def _compute_timing_min_effect_ns() -> float:
             #
             # What the ceiling bounds is precisely that — DISABLING the test —
             # and not masking in general.  It sits three orders of magnitude
-            # above the auto-computed floor (50 ns Linux/macOS, 400 ns
+            # above the auto-computed floor (100 ns Linux/macOS, 400 ns
             # Windows), which leaves an honoured override room to hide leaks
             # smaller than itself, the >500 ns early-exit memcmp signal
             # included.  That range is deliberately left to the operator: a
@@ -2410,7 +2416,7 @@ def _compute_timing_min_effect_ns() -> float:
                 _TIMING_MIN_EFFECT_OVERRIDDEN = True
                 return override_ns
 
-    absolute_floor_ns = 50.0
+    absolute_floor_ns = 100.0
     safety_multiplier = 4.0
     try:
         resolution_s = time.get_clock_info("perf_counter").resolution
@@ -2490,13 +2496,14 @@ def _timing_oracle_consttime() -> Tuple[Optional[bool], str]:
     t-statistic.  If |t| > ``_DUDECT_THRESHOLD`` (4.5), the comparison
     function may leak timing information through data-dependent early exit.
     POST also requires a small absolute effect-size floor before failing:
-    GitHub-hosted runners have produced |t| > 4.5 (with deltas in the 25-45 ns
-    band on Linux, and 100-200 ns on Windows where ``QueryPerformanceCounter``
-    has 100 ns granularity) from host jitter alone, while a real early-exit
+    GitHub-hosted runners have produced |t| > 4.5 (with deltas observed up to
+    51 ns on Linux — job 97259726191 — and 100-200 ns on Windows where
+    ``QueryPerformanceCounter`` has 100 ns granularity) from host jitter
+    alone, while a real early-exit
     memcmp over 256 bytes is orders of magnitude larger (>>500 ns).
     ``_TIMING_MIN_EFFECT_NS`` is computed at module import as
-    ``max(50, 4 × perf_counter_resolution_ns)`` so the floor scales with
-    the host clock — 50 ns on Linux/macOS (1 ns resolution), 400 ns on
+    ``max(100, 4 × perf_counter_resolution_ns)`` so the floor scales with
+    the host clock — 100 ns on Linux/macOS (1 ns resolution), 400 ns on
     Windows (100 ns resolution).  Both values stay well below any real-leak
     signal while keeping POST fail-closed for genuine leaks.  The
     deterministic single-pass design means the ``False`` outcome is
