@@ -64,6 +64,7 @@ class _StubBackend:
         *,
         canonical_y: bool = True,
         x_sign_rule: bool = True,
+        batch_r_rule: bool = True,
         verify_override: Optional[Callable[[bytes, bytes, bytes], bool]] = None,
         issued: Optional[set[tuple[bytes, bytes, bytes]]] = None,
     ) -> None:
@@ -73,12 +74,19 @@ class _StubBackend:
         #: Whether this stub applies RFC 8032 §5.1.3.  Switchable so a test can
         #: build the one-sided backend pair the gate exists to catch.
         self.x_sign_rule = x_sign_rule
+        #: Whether this stub applies the canonical-R rule on its BATCH path.
+        #: Independent of the single path on purpose — that split is the
+        #: defect the batch family exists to catch.
+        self.batch_r_rule = batch_r_rule
         self._verify_override = verify_override
         # Shared across the pair: the harness signs with each backend in turn
         # and cross-verifies every case with BOTH, so a signature minted by
         # one must verify under the other. A per-instance registry would make
         # two correct backends look like a total divergence.
         self._issued: set[tuple[bytes, bytes, bytes]] = set() if issued is None else issued
+        #: Signatures whose group equation holds even though their R encoding
+        #: is inadmissible — see non_canonical_r_signature.
+        self._equation_holds: set[bytes] = set()
         self._counter = 0
 
     def keypair(self) -> tuple[bytes, bytes]:
@@ -101,6 +109,59 @@ class _StubBackend:
         if self._verify_override is not None:
             return self._verify_override(message, signature, public_key)
         return (message, signature, public_key) in self._issued
+
+    #: R = `01 00..00 | 0x80`, the identity's sign-bit-set encoding: the one
+    #: input that discriminated the batch path from the single path.
+    NON_CANONICAL_R = bytes([0x01]) + bytes(30) + bytes([0x80])
+
+    def non_canonical_r_signature(self, message: bytes, secret: bytes) -> bytes:
+        """A signature whose R half is a non-canonical point encoding.
+
+        The real backend derives S so the group equation holds; this stub does
+        not need to, because ``batch_verify`` below decides by the same
+        registry ``verify`` uses.  What must be modelled is the SHAPE — an R
+        that RFC 8032 §5.1.3 requires a decoder to refuse — so a stub can be
+        built that enforces the rule on one path and not the other, which is
+        the pair the batch family exists to catch.
+        """
+        signature = self.NON_CANONICAL_R + (2).to_bytes(32, "little")
+        # The real S makes [S]B - [h]A equal the identity R decodes to, so the
+        # GROUP EQUATION holds while the ENCODING is inadmissible.  That split
+        # is the whole mechanism: donna's batch routine checks the equation
+        # over a decoded R and never re-encodes, so it accepted this; the
+        # single verifiers re-encode and could not match it.  Recording the
+        # signature here lets batch_verify below model "the equation holds"
+        # without doing curve arithmetic, while verify() keeps rejecting it —
+        # exactly the two behaviours.
+        self._equation_holds.add(signature)
+        return signature
+
+    def batch_verify(
+        self, entries: "list[tuple[bytes, bytes, bytes]]"
+    ) -> "list[bool]":
+        """Per-entry verdicts, modelling the R rule independently of ``verify``.
+
+        ``batch_r_rule`` is switchable for the same reason ``x_sign_rule`` is:
+        the defect this family was added for was a backend that applied the
+        canonical-R rule on its single-signature path and not on its batch
+        path, and a stub that cannot express that cannot test for it.
+        """
+        verdicts: list[bool] = []
+        for message, signature, public_key in entries:
+            if not self._r_is_canonical(signature):
+                # Rejected iff this backend applies the rule on THIS path.
+                # Without the rule the aggregate equation decides, and it
+                # holds — which is how a signature the single verifier
+                # rejects came to be reported valid.
+                verdicts.append(
+                    (not self.batch_r_rule) and signature in self._equation_holds
+                )
+                continue
+            verdicts.append(self.verify(message, signature, public_key))
+        return verdicts
+
+    def _r_is_canonical(self, signature: bytes) -> bool:
+        return signature[:32] != self.NON_CANONICAL_R
 
     def _decodes(self, encoding: bytes) -> bool:
         """Model the two decode rules the shipped backends apply.
@@ -348,3 +409,60 @@ class TestCorpusShape:
         """Renaming a label must not silently switch an assertion off."""
         case = tool.Case("renamed-by-someone", b"m", b"s", b"p", must_verify=True)
         assert case.must_verify is True
+
+
+class TestTheBatchFamilyIsNotVacuous:
+    """The family that was missing when a real divergence shipped.
+
+    Families 1-3 drive ``ama_ed25519_verify`` only.  The library exposes a
+    SECOND verifier, ``ama_ed25519_batch_verify``, whose two backends are
+    entirely different code: fe51's is a loop over the single verifier,
+    donna's is ``ed25519-donna-batchverify.h``'s multi-scalar routine, which
+    DECODES R rather than re-encoding and comparing it.  Nothing in this gate
+    ever put a signature to it, while the module docstring says it asserts the
+    backends "return the same verdict for every signature put to them".
+
+    Run against the real libraries with the canonical-R predicate neutered —
+    the code as it stood — the extended gate reports:
+
+        ED25519 BACKEND DIFFERENTIAL FAILED — 6 disagreement(s):
+          batch   signed-by=donna case=non-canonical R
+              batch and single disagree within one build:
+              donna single=False batch=True
+              fe51  single=False batch=False
+
+    These tests pin the family with stubs, so the property survives without a
+    build of both backends.
+    """
+
+    def test_a_backend_that_skips_the_r_rule_on_its_batch_path_is_caught(
+        self, tool: ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The exact shape of the shipped defect: one path enforces, one does not."""
+        donna, fe51 = _pair(donna_batch_r_rule=False)
+        assert _run(tool, monkeypatch, donna, fe51) == 1, (
+            "a backend applying the canonical-R rule on its single path but not "
+            "on its batch path was reported as agreeing with one that applies it "
+            "on both — which is the divergence that shipped"
+        )
+
+    def test_both_backends_skipping_it_is_still_caught(
+        self, tool: ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Agreement is not correctness — the same rule families 1-3 follow.
+
+        Two backends that both report a non-canonical R valid AGREE, and are
+        both wrong.  A differential that only compared them would pass.
+        """
+        donna, fe51 = _pair(batch_r_rule=False)
+        assert _run(tool, monkeypatch, donna, fe51) == 1, (
+            "both backends accepted a non-canonical R in batch verify and the "
+            "gate passed; agreement alone is not correctness"
+        )
+
+    def test_a_correct_pair_passes(
+        self, tool: ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The over-rejection guard: the family must not fail a correct pair."""
+        donna, fe51 = _pair()
+        assert _run(tool, monkeypatch, donna, fe51) == 0

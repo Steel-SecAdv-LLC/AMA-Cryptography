@@ -142,6 +142,37 @@ class Backend:
             ctypes.c_char_p,
         ]
 
+        self.lib.ama_ed25519_batch_verify.restype = ctypes.c_int
+        self.lib.ama_ed25519_batch_verify.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_size_t,
+            ctypes.POINTER(ctypes.c_int),
+        ]
+
+        self.lib.ama_ed25519_sha512.restype = None
+        self.lib.ama_ed25519_sha512.argtypes = [
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+        ]
+
+        self.lib.ama_ed25519_sc_reduce.restype = None
+        self.lib.ama_ed25519_sc_reduce.argtypes = [ctypes.c_char_p]
+
+        self.lib.ama_ed25519_sc_muladd.restype = None
+        self.lib.ama_ed25519_sc_muladd.argtypes = [
+            ctypes.c_char_p,
+            ctypes.c_char_p,
+            ctypes.c_char_p,
+            ctypes.c_char_p,
+        ]
+
+        self.lib.ama_ed25519_point_from_scalar.restype = ctypes.c_int
+        self.lib.ama_ed25519_point_from_scalar.argtypes = [
+            ctypes.c_char_p,
+            ctypes.c_char_p,
+        ]
+
         self.lib.ama_ed25519_point_add.restype = ctypes.c_int
         self.lib.ama_ed25519_point_add.argtypes = [
             ctypes.c_char_p,
@@ -191,6 +222,81 @@ class Backend:
             raise ValueError("scalar and compressed point must be exactly 32 bytes")
         out = ctypes.create_string_buffer(32)
         return bool(self.lib.ama_ed25519_scalarmult_public(out, scalar, point_enc) == 0)
+
+    def batch_verify(
+        self, entries: "list[tuple[bytes, bytes, bytes]]"
+    ) -> "list[bool]":
+        """Per-entry verdicts from ``ama_ed25519_batch_verify``.
+
+        Exposed because the single-signature corpus cannot reach the batch
+        path at all, and the batch path is where the two backends most
+        recently disagreed: donna runs a multi-scalar routine only while
+        `num > 3`, verifying per entry below that, and that routine decodes R
+        instead of re-encoding it.  A gate whose docstring says the backends
+        "return the same verdict for every signature put to them" has to put
+        signatures to every verifier the library ships.
+
+        `count` is driven above 3 by the caller for the same reason: at 1 or
+        3 donna's fallback re-encodes and the multi-scalar path is never
+        entered, which is exactly why the existing C coverage (counts 1 and 3)
+        could not see it.
+        """
+        count = len(entries)
+        messages = [ctypes.create_string_buffer(m) for m, _, _ in entries]
+
+        class _Entry(ctypes.Structure):
+            _fields_ = [
+                ("message", ctypes.c_char_p),
+                ("message_len", ctypes.c_size_t),
+                ("signature", ctypes.c_char_p),
+                ("public_key", ctypes.c_char_p),
+            ]
+
+        array = (_Entry * count)()
+        for index, (message, signature, public) in enumerate(entries):
+            if len(signature) != 64 or len(public) != 32:
+                raise ValueError("batch entry sizes must be 64-byte sig, 32-byte key")
+            array[index].message = ctypes.cast(messages[index], ctypes.c_char_p)
+            array[index].message_len = len(message)
+            array[index].signature = signature
+            array[index].public_key = public
+
+        results = (ctypes.c_int * count)()
+        self.lib.ama_ed25519_batch_verify(ctypes.byref(array), count, results)
+        return [bool(results[i] == 1) for i in range(count)]
+
+    def non_canonical_r_signature(self, message: bytes, secret: bytes) -> bytes:
+        """A signature whose R is the identity's sign-bit-set encoding.
+
+        R = `01 00..00 | 0x80` decodes to the identity and drops the set sign
+        bit (x = 0 has one root), and S = h * a mod L makes [S]B - [h]A the
+        identity.  So the group equation holds while the encoding is one RFC
+        8032 5.1.3 requires a decoder to refuse — the discriminating input for
+        the batch path, produced with the signer's own key and no forgery.
+        """
+        expanded = ctypes.create_string_buffer(64)
+        self.lib.ama_ed25519_sha512(secret[:32], 32, expanded)
+        scalar = bytearray(expanded.raw[:32])
+        scalar[0] &= 248
+        scalar[31] &= 63
+        scalar[31] |= 64
+        scalar_bytes = bytes(scalar)
+
+        public = ctypes.create_string_buffer(32)
+        if self.lib.ama_ed25519_point_from_scalar(public, scalar_bytes) != 0:
+            raise RuntimeError(f"{self.name}: ama_ed25519_point_from_scalar failed")
+
+        r_half = bytes([0x01]) + bytes(30) + bytes([0x80])
+        digest = ctypes.create_string_buffer(64)
+        self.lib.ama_ed25519_sha512(r_half + public.raw[:32] + message,
+                                    64 + len(message), digest)
+        reduced = ctypes.create_string_buffer(digest.raw, 64)
+        self.lib.ama_ed25519_sc_reduce(reduced)
+        h = reduced.raw[:32]
+
+        s_half = ctypes.create_string_buffer(32)
+        self.lib.ama_ed25519_sc_muladd(s_half, bytes(32), h, scalar_bytes)
+        return r_half + s_half.raw[:32]
 
     def verify(self, message: bytes, signature: bytes, public: bytes) -> bool:
         # ama_ed25519_verify takes `const uint8_t signature[64]` with no length
@@ -444,6 +550,88 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                         f"      sig={case.signature.hex()}\n"
                         f"      pk ={case.public_key.hex()}"
                     )
+
+    # Batch-verify parity.  Family 5, and the one whose absence let a real
+    # divergence ship.
+    #
+    # Families 1-3 drive ama_ed25519_verify only.  The library exposes a
+    # SECOND verifier, ama_ed25519_batch_verify, whose backends are entirely
+    # different code — fe51's is a loop over ama_ed25519_verify, donna's is
+    # ed25519-donna-batchverify.h's multi-scalar routine — and nothing here
+    # ever put a signature to it, while this file's own docstring says it
+    # asserts the backends "return the same verdict for every signature put to
+    # them".
+    #
+    # Count 4, not 1 or 3.  donna verifies per entry `while (num > 3)` is
+    # false, and that fallback re-encodes R; the multi-scalar routine, which
+    # decodes R instead, is only reached at 4 and above.  The existing C
+    # coverage in tests/c/test_ed25519_canonical_s.c drives batch at counts 1
+    # and 3, below the boundary, which is why it could not see this either.
+    batch_asserted = 0
+    for signer in (donna, fe51):
+        public, secret = signer.keypair()
+        message = b"backend parity: batch verify"
+        honest = signer.sign(message, secret)
+        forged = signer.non_canonical_r_signature(message, secret)
+
+        # The discriminating entry sits first among four honest ones, so a
+        # backend that leaks a verdict between entries is caught too.
+        entries = [(message, forged, public)] + [(message, honest, public)] * 3
+        a = donna.batch_verify(entries)
+        b = fe51.batch_verify(entries)
+        checked += 1
+        if a != b:
+            disagreements.append(
+                f"  batch   signed-by={signer.name:<5} count=4\n"
+                f"      donna={a}  fe51={b}\n"
+                f"      sig[0]={forged.hex()}\n"
+                f"      pk    ={public.hex()}"
+            )
+
+        # Agreement is not correctness, exactly as for the single path: both
+        # backends must REJECT the non-canonical R and ACCEPT the three
+        # honest entries.
+        for name, verdicts in (("donna", a), ("fe51", b)):
+            batch_asserted += 1
+            if verdicts[0]:
+                disagreements.append(
+                    f"  batch   signed-by={signer.name:<5} backend={name}\n"
+                    f"      a non-canonical R was reported VALID by batch verify\n"
+                    f"      (RFC 8032 5.1.7 step 1 -> 5.1.3)\n"
+                    f"      sig={forged.hex()}"
+                )
+            if not all(verdicts[1:]):
+                disagreements.append(
+                    f"  batch   signed-by={signer.name:<5} backend={name}\n"
+                    f"      genuine signatures were rejected in a batch: {verdicts}\n"
+                    f"      sig={honest.hex()}"
+                )
+
+        # And the property the divergence actually broke: batch and single
+        # must return the same verdict for the same input.
+        for label, signature in (("non-canonical R", forged), ("honest", honest)):
+            single_d = donna.verify(message, signature, public)
+            single_f = fe51.verify(message, signature, public)
+            batch_d = donna.batch_verify([(message, signature, public)] * 4)[0]
+            batch_f = fe51.batch_verify([(message, signature, public)] * 4)[0]
+            checked += 1
+            batch_asserted += 1
+            if single_d != batch_d or single_f != batch_f:
+                disagreements.append(
+                    f"  batch   signed-by={signer.name:<5} case={label}\n"
+                    f"      batch and single disagree within one build:\n"
+                    f"      donna single={single_d} batch={batch_d}\n"
+                    f"      fe51  single={single_f} batch={batch_f}\n"
+                    f"      sig={signature.hex()}"
+                )
+
+    if batch_asserted == 0:
+        print(
+            "FATAL: the batch-verify family asserted nothing. A family that "
+            "runs no assertion is a family that is not testing.",
+            file=sys.stderr,
+        )
+        return 2
 
     # Compressed-point decode parity (INVARIANT-38).  Runs on the two decode
     # entry points rather than on verify, for the reason recorded on
