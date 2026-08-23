@@ -13,19 +13,26 @@ this one is within a hundred of it:
 ## Why it lives here
 
 GitHub's PR description is written through a single whole-document parameter —
-there is no patch API — and this one is 65,521 characters against GitHub's
-65,536-character hard limit, with **15 characters of headroom**. Three things
+there is no patch API — and this one is at the ceiling. The exact figures, which
+`tests/test_pr_description_fits_github.py` checks rather than trusting:
+
+    PR-DESCRIPTION-HEADROOM: 5 characters
+
+against GitHub's 65,536-character hard limit. Three things
 follow, and all three are the reason the text is version-controlled rather than
 edited in place:
 
 1. **A whole-document rewrite is all-or-nothing.** A truncated or drifted write
    destroys the description; there is nothing to diff against afterwards unless
    the intended text exists somewhere. Now it does.
-2. **The next person to add a sentence breaks it.** Fifteen characters is not
-   one. A description at its ceiling cannot absorb a correction, which is part
-   of how the counts in it went stale — and it is why the corrections below are
-   phrased to be no longer than the claims they replace. Anything further added
-   here has to displace something.
+2. **The next person to add a sentence breaks it.** Five characters is not one
+   word. A description at its ceiling cannot absorb a correction, which is part
+   of how the counts in it went stale — and it is why every correction below is
+   phrased to be no longer than the claim it replaces. Anything further added
+   here has to displace something, and the repository owner may reasonably
+   decide the description should shed the narrative `CHANGELOG.md` already
+   carries in full. That is an editorial call on their document, not one made
+   here.
 3. **It can be reviewed.** A description is a claim about the change; keeping it
    in the tree puts it under the same review and the same gates as the code.
 

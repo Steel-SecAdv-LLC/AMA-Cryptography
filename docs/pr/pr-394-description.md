@@ -91,7 +91,7 @@ Also affected: FIPS 203 (ML-KEM compression), FIPS 205 (SLH-DSA ACVP corpora), R
 13. **`equations` — the σ_quadratic enforcement now enforces.** σ is a Rayleigh quotient, so scaling cannot change it; measured 0.1 before and after against a 0.96 threshold. Now rotates toward E's dominant eigenvector by the smallest blend reaching the threshold, and reports honestly when the threshold exceeds λ_max (unreachable by any state).
 14. **Fuzzing** — the `--atheris` lane wrote `(target, data)` tuples to disk and died with `TypeError` before Setup; seeds also lacked the selector byte the entry point strips. Both `fuzz_ed25519` seeds were 32 bytes against a 33-byte harness minimum, so neither executed any library code. The fuzz build also instrumented only the harness translation unit, not the library it linked; a dedicated instrumented target now gives libFuzzer real coverage feedback (per-target block coverage measured at 115–10,237, previously none).
 15. **Benchmarks (INVARIANT-36)** — `benchmark_suite.py` and `validation_suite.py` timed `hashlib.sha3_256` (OpenSSL on CPython) and published it as AMA's SHA3-256, with `validation_suite` "validating" the documented `sha3_256_hash` claim against it.
-16. **Documentation honesty (INVARIANT-16)** — `ETHICAL_PILLARS` listed "NIST FIPS validation" and "formally verified implementations" as achieved methods and claimed ">95% coverage" and "confidence ≥ 99.9%", contradicting its own text 480 lines later and the canonical disclaimers in `CSRC_STANDARDS.md`/`README.md`. Also corrected: `THREAT_MODEL` said hardware AES-NI was "not in this library" (it ships AES-NI, VAES and ARMv8-CE kernels) and that disabling constant-time AES "emits a warning" (it fails the configure unless explicitly acknowledged); `CONSTANT_TIME_VERIFICATION` described the default S-box as "algebraic bitsliced — no table" when it is a masked full-table scan; the invariant range was stale at 1–38 in three files (42 exist); the v4.0.0 rows said "BREAKING ×4" where the CHANGELOG enumerates six.
+16. **Documentation honesty (INVARIANT-16)** — `ETHICAL_PILLARS` listed "NIST FIPS validation" and "formally verified implementations" as achieved methods — this library has not been formally verified and holds no CAVP certificate — and claimed ">95% coverage" and "confidence ≥ 99.9%", contradicting its own text 480 lines later and the canonical disclaimers in `CSRC_STANDARDS.md`/`README.md`. Also corrected: `THREAT_MODEL` said hardware AES-NI was "not in this library" (it ships AES-NI, VAES and ARMv8-CE kernels) and that disabling constant-time AES "emits a warning" (it fails the configure unless explicitly acknowledged); `CONSTANT_TIME_VERIFICATION` described the default S-box as "algebraic bitsliced — no table" when it is a masked full-table scan; the invariant range was stale at 1–38 in three files (42 exist); the v4.0.0 rows said "BREAKING ×4" where the CHANGELOG enumerates six.
 
 ### Self-review findings
 
@@ -225,12 +225,12 @@ Where a fix could not be validated on this hardware, the configuration was repro
 **Breaking Changes:**
 - [x] Yes — **ten**, plus twelve behavioural changes
 
-This checkbox said "four", and the paragraph under it said "All eight are
-tabulated in `CHANGELOG.md`" while that glance table carried thirteen rows and
-now carries twenty-two. Two records disagreeing about how many changes a release
-makes is worse than any single row, so the enumeration is no longer duplicated
-here. `CHANGELOG.md`'s glance table is the one list, each row with its migration;
-this is its index.
+This said "four", under a paragraph saying "All eight are tabulated in
+`CHANGELOG.md`" while that glance table carried thirteen rows and now carries
+twenty-two. Two records disagreeing about how many changes a release makes is
+worse than either being wrong alone, so the list is no longer duplicated:
+`CHANGELOG.md`'s glance table is it, each row with its migration; this indexes
+it.
 
 **Breaking — rows 1, 2, 3, 7, 14, 15, 16, 17, 18, 21.** In order: POST failure
 raises on `import`; Ed25519 rejects `x = 0` with the sign bit set; an unrankable
@@ -247,16 +247,15 @@ row where the library was ACCEPTING something it should have rejected.**
 `ama_ed25519_batch_verify` now rejects a signature whose R half is a
 non-canonical point encoding (RFC 8032 §5.1.7 step 1 → §5.1.3), in both backends.
 The donna batch path decoded R instead of re-encoding and comparing it, so at
-`count >= 4` — where donna leaves its per-entry fallback for the multi-scalar
-routine — it reported VALID for a signature `ama_ed25519_verify` REJECTS. Two
-verifiers in one library disagreed on one input, and producing such a signature
-needs the signer's own key and no forgery. Migration: none for conformant
-callers; a caller that batch-verified attacker-supplied signatures should
-re-check anything it accepted at `count >= 4`.
+`count >= 4` — where donna leaves its per-entry fallback — it reported VALID for
+a signature `ama_ed25519_verify` REJECTS. Two verifiers in one library disagreed
+on one input, and producing such a signature needs the signer's own key and no
+forgery. Migration: none for conformant callers; a caller that batch-verified
+attacker-supplied signatures should re-check what it accepted at `count >= 4`.
 
-**Behavioural — rows 4, 5, 6, 8, 9, 10, 11, 12, 13, 19, 20, 22:** the same
-answer, different work, timing or failure mode. Rows 19 and 20 are the install
-fixes — `pip install .` now signs and binds the extensions it ships, and
+**Behavioural — rows 4, 5, 6, 8, 9, 10, 11, 12, 13, 19, 20, 22:** same answer,
+different work, timing or failure mode. Rows 19 and 20 are the install fixes:
+`pip install .` now signs and binds the extensions it ships, and
 `integrity --update --sign` binds what it repairs.
 For C consumers of the installed shared library: the SONAME follows the major version, so it moves `.so.4` → `.so.5` and existing binaries must be relinked. No C API signature changed.
 
@@ -271,7 +270,7 @@ For C consumers of the installed shared library: the SONAME follows the major ve
 
 Added, beyond the audit's own tests: `tests/c/test_kyber_compress.c` (exhaustive `Compress_d` equivalence, 16,645 pairs), `tests/test_update_docs_changelog_guard.py` (29 cases, including the platform-independent text-I/O gate), the `dudect_rounds.h` verdict-classification self-tests (10 new cases including the exact observed FROST shape), the pre-import binding-gate tests in `tests/test_preload_native_digest.py`, the family-ladder tests in `tests/test_adaptive_posture.py`, the expression-syntax gate tests in `tests/test_workflow_command_checks.py`, the SoftHSM2 availability and provisioning tests in `tests/test_hsm_integration.py`, the semgrep console-script probe tests in `tests/test_semgrep_severity_gate.py`, `tests/test_acvp_harness_library_discovery.py` (12 cases, none of which names a SONAME major), and the provenance/invocation tests in `tests/test_benchmark_baseline_infra.py`.
 
-The suite is **4,542 static test functions across 189 files** at the current head, of which **6,125** execute in the default configuration. `docs/METRICS_REPORT.md`, `README.md` and `ARCHITECTURE.md` are re-measured to match, and the documented-counts gate checks all 66 claims, on both columns of every lines-of-code row as well as the counts.
+The suite is **4,545 static test functions across 190 files** at the current head, of which **6,128** execute in the default configuration. `docs/METRICS_REPORT.md`, `README.md` and `ARCHITECTURE.md` are re-measured to match, and the documented-counts gate checks all 66 claims, on both columns of every lines-of-code row as well as the counts.
 
 ### Testing Performed
 
