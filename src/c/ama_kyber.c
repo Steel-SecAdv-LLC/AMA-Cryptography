@@ -1114,6 +1114,7 @@ static ama_error_t kyber_encapsulate_internal(
     }
 #else
     (void)public_key;
+    (void)m_in;
     (void)ciphertext;
     (void)ciphertext_len;
     (void)shared_secret;

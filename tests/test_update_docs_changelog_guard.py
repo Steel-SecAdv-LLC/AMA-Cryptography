@@ -460,7 +460,25 @@ class TestThePublishedBenchmarkTableTracksTheRecord:
             (REPO_ROOT / "benchmarks" / "benchmark-results.json").read_text(encoding="utf-8")
         )
         block = self._block()
-        row = next(r for r in results["results"] if r["ops_per_second"] >= 10_000)
+        # A row whose measured value and floor DIFFER, so finding the measured
+        # one in the table is evidence about which file the generator read.
+        # `>= 10_000` because that is the branch of the generator that formats
+        # with `,.0f`; below it the cell carries one decimal place.
+        row = next(
+            (
+                r
+                for r in results["results"]
+                if r["ops_per_second"] >= 10_000
+                and round(r["ops_per_second"]) != round(r["baseline_value"])
+            ),
+            None,
+        )
+        assert row is not None, (
+            "no row in benchmarks/benchmark-results.json has a measured value at "
+            "or above 10,000 ops/sec that differs from its floor, so this "
+            "assertion could not tell the two files apart — re-point it rather "
+            "than letting it pass vacuously"
+        )
         assert (
             f"| {row['ops_per_second']:,.0f} |" in block
         ), f"{row['name']}'s measured throughput is not in the published table"

@@ -85,12 +85,13 @@ def published(value: float) -> float:
     roundings do, and the markdown is no longer what the generator produces
     from the JSON beside it.
 
-    Measured, on the record this repaired: `hkdf_derive`'s regression was
-    6.7477%.  The table formatted the raw value and rendered `+6.7%`; the JSON
-    stored `6.75`, from which the same generator renders `+6.8%`.  The published
-    pair contradicted itself by one displayed digit, and
-    `TestTheReportDoesNotInvertItsOwnColumn::test_the_published_report_matches_
-    the_generator` is what caught it.
+    Measured, on the record this repaired: `hkdf_derive` was 122,478.37 ops/sec
+    against a 131,341 floor, i.e. a regression of 6.747801524276505%.  The table
+    formatted that raw value and rendered `+6.7%`; the JSON stored `6.75`, from
+    which the same generator renders `+6.8%`.  The published pair contradicted
+    itself by one displayed digit.  Caught by
+    `test_the_published_report_matches_the_generator` in
+    tests/test_benchmark_baseline_infra.py.
 
     Applied at the RENDERING boundary only.  The pass/fail decision
     (`regression <= tolerance`) stays on the raw value, because a gate must not
@@ -445,11 +446,20 @@ def benchmark_operation(
     # inflated number makes the gate weaker."  A short window is exactly where
     # a lucky-high rate comes from, so the fallback delivered the failure mode
     # the paragraph above it describes.
-    if observed <= 0.0 or observed == float("inf"):
-        # Every attempt timed as zero.  That is a broken clock rather than a
-        # fast operation, and a number this function cannot stand behind must
-        # not be returned as if it could — the JSON writer below refuses
-        # non-finite values for the same reason.
+    if observed <= 0.0:
+        # `observed` is only ever assigned from a FINITE rate: `_timed_batch`
+        # returns `inf` exactly when it read `elapsed <= 0`, and the loop above
+        # `continue`s on that before the `max()`.  So `observed == 0.0` says
+        # precisely one thing — no batch was ever timed at all — and there is
+        # no `observed == inf` case to test for.  (This condition carried that
+        # disjunct.  A guard for a state the code cannot reach is a guard
+        # nobody can check, which is the same objection this tree makes to a
+        # suppression marker for a finding that does not exist.)
+        #
+        # Every attempt timed as zero is a broken clock rather than a fast
+        # operation, and a number this function cannot stand behind must not be
+        # returned as if it could — the JSON writer below refuses non-finite
+        # values for the same reason.
         raise RuntimeError(
             "benchmark_operation could not obtain a measurable batch: every timed "
             "batch reported zero elapsed time, up to "

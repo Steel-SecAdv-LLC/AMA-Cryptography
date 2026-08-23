@@ -106,3 +106,77 @@ def test_the_c_api_target_names_the_library_the_build_produces() -> None:
     assert (
         "build/lib/libama_cryptography.a" not in makefile
     ), "`make c-api` advertises a static library path the build never produces"
+
+
+class TestTheDudectHarnessMakefileBuildsWhatItSaysItBuilds:
+    """``tools/constant_time/Makefile`` claims lockstep it did not deliver.
+
+    Its ``CRYPTO_SRCS`` comment says linking ``ama_kyber.c`` and
+    ``ama_dilithium.c`` "keep[s] the harness binary in lockstep with what
+    ``cmake -DAMA_USE_NATIVE_PQC=ON`` produces for the production build".
+    Linking those translation units WITHOUT defining the macro does not:
+    both compile their ``#else`` arms, so every ML-KEM and ML-DSA entry point
+    in the harness binary returned ``AMA_ERROR_NOT_IMPLEMENTED``, and the
+    dispatch auto-tune in ``ama_dispatch.c`` microbenched its NTT kernels
+    inside a binary whose PQC was stubbed out.
+
+    It also left 15 ``-Wall -Wextra`` warnings standing — fourteen ``defined
+    but not used`` statics whose only callers live inside the native arms, and
+    one unused parameter — which is how a real warning in this build goes
+    unnoticed.  Measured: ``make clean && make all`` emitted 15 before, 0 after.
+
+    The two halves are pinned together because each breaks the other: without
+    ``ama_slhdsa.c`` the macro makes the link fail on ``ama_sphincs_keypair``
+    / ``_sign`` / ``_verify`` (``ama_core.c`` references them under the macro),
+    and without the macro the extra source is dead weight and the comment is
+    false again.
+    """
+
+    HARNESS_MAKEFILE = REPO_ROOT / "tools" / "constant_time" / "Makefile"
+
+    def _assignment(self, name: str) -> str:
+        """The value of a (possibly ``\\``-continued) make variable, comments out.
+
+        Read from the ASSIGNMENT rather than by searching the file, because the
+        comment block above ``CFLAGS`` explains the flag by naming it — so a
+        whole-file ``in`` test passes with the flag deleted from the recipe,
+        which is what the first version of this class did.  A vacuous assertion
+        in a test written to close vacuous assertions is worth the extra parse.
+        """
+        lines = self.HARNESS_MAKEFILE.read_text(encoding="utf-8").splitlines()
+        for i, line in enumerate(lines):
+            if not line.startswith(f"{name} ") and not line.startswith(f"{name}="):
+                continue
+            value = line.split("=", 1)[1]
+            while value.rstrip().endswith("\\"):
+                i += 1
+                value = value.rstrip().rstrip("\\") + " " + lines[i]
+            # Continuation lines may carry their own trailing comments.
+            return " ".join(part.split("#", 1)[0] for part in value.splitlines())
+        raise AssertionError(f"{name} is not assigned in {self.HARNESS_MAKEFILE}")
+
+    def test_native_pqc_is_defined(self) -> None:
+        cflags = self._assignment("CFLAGS")
+        assert "-DAMA_USE_NATIVE_PQC" in cflags, (
+            "tools/constant_time/Makefile links the PQC translation units but does "
+            "not define AMA_USE_NATIVE_PQC in CFLAGS, so their entry points compile "
+            "to AMA_ERROR_NOT_IMPLEMENTED and the lockstep the CRYPTO_SRCS comment "
+            f"claims does not hold.  CFLAGS = {cflags!r}"
+        )
+
+    def test_the_slhdsa_source_the_macro_requires_is_linked(self) -> None:
+        srcs = self._assignment("CRYPTO_SRCS")
+        assert "ama_slhdsa.c" in srcs, (
+            "AMA_USE_NATIVE_PQC makes ama_core.c reference ama_sphincs_keypair / "
+            "_sign / _verify; without $(SRC_DIR)/ama_slhdsa.c in CRYPTO_SRCS the "
+            f"harness fails to link.  CRYPTO_SRCS = {srcs!r}"
+        )
+
+    def test_the_pqc_translation_units_the_comment_names_are_linked(self) -> None:
+        srcs = self._assignment("CRYPTO_SRCS")
+        for src in ("ama_kyber.c", "ama_dilithium.c"):
+            assert src in srcs, f"{src} left CRYPTO_SRCS; the lockstep claim needs it"
+
+    def test_the_constant_time_aes_flag_is_still_there(self) -> None:
+        """The control: the flag this line already carried must not be lost."""
+        assert "-DAMA_AES_CONSTTIME=ON" in self._assignment("CFLAGS")

@@ -10,7 +10,22 @@ CC = gcc
 # build).  Without this flag the harness silently exercised the table-based
 # S-box reference path and produced misleading "[KNOWN - table-based]"
 # attribution for failures actually unrelated to the S-box.
-CFLAGS = -O2 -Wall -Wextra -I../../include -I../../tests/c/dudect -DAMA_AES_CONSTTIME=ON
+#
+# -DAMA_USE_NATIVE_PQC for the same reason, and it was missing.  The
+# CRYPTO_SRCS comment below says linking ama_kyber.c / ama_dilithium.c
+# "keeps the harness binary in lockstep with what `cmake
+# -DAMA_USE_NATIVE_PQC=ON` produces for the production build".  Linking the
+# translation units without the macro does not: both compile their `#else`
+# arms, so every ML-KEM and ML-DSA entry point in this binary returned
+# AMA_ERROR_NOT_IMPLEMENTED, and the dispatch auto-tune in ama_dispatch.c
+# microbenched its NTT kernels inside a binary whose PQC was stubbed out.
+# It also left 15 -Wall -Wextra warnings standing (fourteen `defined but
+# not used` statics whose only callers are inside the native arms, plus one
+# unused parameter), which is how a real warning in this build would have
+# gone unnoticed.  Defining it costs one more source (ama_slhdsa.c, below --
+# ama_core.c references ama_sphincs_* under the macro) and the build is
+# warning-clean.
+CFLAGS = -O2 -Wall -Wextra -I../../include -I../../tests/c/dudect -DAMA_AES_CONSTTIME=ON -DAMA_USE_NATIVE_PQC
 LDFLAGS = -lm -lpthread
 
 # Source directories
@@ -71,6 +86,7 @@ CRYPTO_SRCS = $(SRC_DIR)/ama_consttime.c \
               $(SRC_DIR)/ama_cpuid.c \
               $(SRC_DIR)/ama_kyber.c \
               $(SRC_DIR)/ama_dilithium.c \
+              $(SRC_DIR)/ama_slhdsa.c \
               $(SRC_DIR)/ama_platform_rand.c \
               $(DISPATCH_DIR)/ama_dispatch.c
 

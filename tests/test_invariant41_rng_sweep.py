@@ -165,7 +165,16 @@ def _call_name(node: ast.Call, aliases: dict[str, str]) -> str | None:
 
 
 def _is_main_guard(node: ast.stmt) -> bool:
-    """True for an ``if __name__ == ...:`` statement."""
+    """True for an ``if __name__ == "__main__":`` statement.
+
+    This predicate EXEMPTS everything under it from the sweep, so it has to be
+    exactly the script-entry idiom and nothing adjacent to it.  It used to test
+    only that the left operand was the name ``__name__``, which also accepted
+    ``if __name__ != "__main__":`` — a block that runs on every IMPORT, i.e.
+    the opposite of the thing being exempted, and shipped-package code inside
+    one would have been waved through.  The operator and the compared literal
+    are now both checked.
+    """
     if not isinstance(node, ast.If):
         return False
     test = node.test
@@ -173,6 +182,11 @@ def _is_main_guard(node: ast.stmt) -> bool:
         isinstance(test, ast.Compare)
         and isinstance(test.left, ast.Name)
         and test.left.id == "__name__"
+        and len(test.ops) == 1
+        and isinstance(test.ops[0], ast.Eq)
+        and len(test.comparators) == 1
+        and isinstance(test.comparators[0], ast.Constant)
+        and test.comparators[0].value == "__main__"
     )
 
 
@@ -399,3 +413,39 @@ class TestTheSweepResolvesBindingsNotSpellings:
         """And a call that merely LOOKS like one must not be swept up."""
         source = "import mymod\n\ndef f():\n    return mymod.urandom(32)\n"
         assert _bare_draw_sites(ast.parse(source)) == []
+
+
+class TestTheMainGuardExemptionIsTheScriptIdiomAndNothingElse:
+    """Only ``if __name__ == "__main__":`` may exempt a draw.
+
+    ``_bare_draw_sites`` reports an ``under_main_guard`` flag and
+    ``_sweep_package`` skips every site carrying it, so this predicate decides
+    what the sweep does NOT look at.  It used to test only that the left
+    operand was the name ``__name__``, which accepted ``!=`` as readily as
+    ``==`` — and ``if __name__ != "__main__":`` guards a block that runs on
+    every IMPORT of a shipped module, which is exactly the code the sweep
+    exists to cover.
+    """
+
+    DRAW = "import os\n\n{guard}\n    x = os.urandom(32)\n"
+
+    def test_the_real_idiom_exempts(self) -> None:
+        sites = _bare_draw_sites(ast.parse(self.DRAW.format(guard='if __name__ == "__main__":')))
+        assert sites and all(under_main for *_, under_main in sites)
+
+    @pytest.mark.parametrize(
+        "guard",
+        [
+            'if __name__ != "__main__":',
+            'if __name__ == "__mai__":',
+            "if __name__ is None:",
+            'if __name__ == "__main__" == "x":',
+        ],
+    )
+    def test_a_near_miss_does_not_exempt(self, guard: str) -> None:
+        sites = _bare_draw_sites(ast.parse(self.DRAW.format(guard=guard)))
+        assert sites, f"the draw itself was lost under {guard!r}"
+        assert not any(under_main for *_, under_main in sites), (
+            f"{guard!r} exempted a draw from the INVARIANT-41 sweep; only "
+            f'if __name__ == "__main__": may do that'
+        )

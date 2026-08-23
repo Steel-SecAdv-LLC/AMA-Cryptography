@@ -365,7 +365,16 @@ class TestAnUnderSampledRunIsNotReported:
         loop exhausts its attempt budget holding ``completed == 1`` and a
         non-zero ``best``.  That is the input on which ``return best`` reported
         a one-round measurement as if it were a three-round one.
+
+        ``_MAX_SIZING_ATTEMPTS`` is pinned rather than inherited: the loop runs
+        ``rounds + _MAX_SIZING_ATTEMPTS`` times, so which of the alternating
+        attempts is LAST — and therefore whether the run ends holding
+        ``completed == 1`` or ``completed == 0`` — is decided by the parity of
+        that sum.  Reading the shipped constant would make this assertion
+        change meaning if the constant ever moved by one, for a reason that has
+        nothing to do with the property under test.
         """
+        monkeypatch.setattr(br, "_MAX_SIZING_ATTEMPTS", 4)  # 3 + 4 = 7 attempts, odd
         calls = {"n": 0}
 
         def alternating_target(rate: float) -> int:
@@ -1077,7 +1086,8 @@ class TestTheTwoPublishedArtefactsCannotDisagreeByARounding:
     ``generate_report()`` quantises every published measurement to
     ``PUBLISHED_DECIMALS`` (2); the table displays fewer digits than that.  The
     table used to format the RAW value, so wherever the two roundings disagree
-    the pair contradicted itself: ``hkdf_derive``'s regression was 6.7477%,
+    the pair contradicted itself: ``hkdf_derive``'s regression was
+    6.747801524276505%,
     which the table rendered ``+6.7%`` while the JSON stored ``6.75``, from
     which the same generator renders ``+6.8%``.
 
@@ -1101,14 +1111,14 @@ class TestTheTwoPublishedArtefactsCannotDisagreeByARounding:
         return from_live, br.generate_markdown_report(stored, report)
 
     def test_a_half_way_regression_renders_identically_from_both(self) -> None:
-        """6.7477 -> raw ``+6.7%``; stored as 6.75 -> ``+6.8%``."""
+        """6.7478 -> raw ``+6.7%``; stored as 6.75 -> ``+6.8%``."""
         result = br.BenchmarkResult(
             name="row0",
             description="row 0",
             ops_per_second=1000.0,
             baseline_value=1072.0,
             tolerance_percent=45.0,
-            regression_percent=6.7477,
+            regression_percent=6.7478,
             passed=True,
         )
         from_live, from_json = self._rendered_both_ways(result)

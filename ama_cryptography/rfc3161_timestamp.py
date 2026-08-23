@@ -986,8 +986,9 @@ class MockTSA:
         # forgeable by anyone who has seen one.  Written as `_os_mod.urandom`,
         # it was also the one bare draw in the shipped package that
         # tests/test_invariant41_rng_sweep.py could not see: the sweep matched
-        # the dotted SPELLING `os.urandom`, and this module imports
-        # `os as _os_mod`.
+        # the dotted SPELLING `os.urandom`, and this module imported `os as
+        # _os_mod`.  That import is gone with its last use, and the sweep now
+        # resolves BINDINGS, so neither half of the miss can recur.
         nonce = secure_token_bytes(32)
 
         payload = _MOCK_MAGIC + algo_len + algo_bytes + ts + data_hash

@@ -581,6 +581,57 @@ static inline int dudect_cropped_self_test(void) {
         ok &= dudect_crop_case("tail-asymmetric context allocates", 0);
     }
 
+    /* 3c. usable_rungs must count what it says it counts.
+     *
+     *     A lane whose budget leaves each class at exactly
+     *     DUDECT_CROP_MIN_PER_CLASS samples cannot have a usable rung: every
+     *     crop keeps STRICTLY fewer than the full class (`v < cut`), so each
+     *     rung falls under the floor and is skipped.  The reported statistic is
+     *     then the uncropped Welch t and nothing else, and dudect.h says so
+     *     rather than printing the same line as every other lane.  This is not
+     *     a synthetic corner: the SLH-DSA-SHA2-256f sign lane caps at 256
+     *     measurements and is exactly this case.
+     *
+     *     Classes are fed explicitly rather than drawn, so the split is 128/128
+     *     on every host and the counter's value is not a coin flip. */
+    if (dudect_cropped_init(&ctx, 2 * DUDECT_CROP_MIN_PER_CLASS)) {
+        for (size_t i = 0; i < DUDECT_CROP_MIN_PER_CLASS; i++) {
+            dudect_cropped_update(&ctx, 0, 100.0 + dudect_crop_test_uniform(&rng) * 4.0);
+            dudect_cropped_update(&ctx, 1, 100.0 + dudect_crop_test_uniform(&rng) * 4.0);
+        }
+        double t_floor = dudect_cropped_compute(&ctx);
+        ok &= dudect_crop_case("a budget at the floor yields no usable rung",
+                               ctx.usable_rungs == 0);
+        ok &= dudect_crop_case("...so the winning rung is the uncropped one",
+                               ctx.winning_rung == 0);
+        ok &= dudect_crop_case(
+            "...and the reported effect size is the uncropped difference",
+            fabs(dudect_cropped_effect_delta(&ctx) - ctx.uncropped_delta) < 1e-12);
+        ok &= dudect_crop_case("...on a real statistic, not the failure sentinel",
+                               t_floor != DUDECT_CROP_FAILED);
+        ok &= dudect_crop_case("...and 0 is distinct from the did-not-run sentinel",
+                               ctx.usable_rungs != DUDECT_CROP_RUNGS_UNRUN);
+        dudect_cropped_free(&ctx);
+    } else {
+        ok &= dudect_crop_case("at-the-floor context allocates", 0);
+    }
+
+    /* 3d. ...and a budget one sample per class ABOVE the floor does produce
+     *     one, so the case above is a property of the budget rather than
+     *     something that is true of every input. */
+    if (dudect_cropped_init(&ctx, 2 * (DUDECT_CROP_MIN_PER_CLASS + 64))) {
+        for (size_t i = 0; i < DUDECT_CROP_MIN_PER_CLASS + 64; i++) {
+            dudect_cropped_update(&ctx, 0, 100.0 + dudect_crop_test_uniform(&rng) * 4.0);
+            dudect_cropped_update(&ctx, 1, 100.0 + dudect_crop_test_uniform(&rng) * 4.0);
+        }
+        (void)dudect_cropped_compute(&ctx);
+        ok &= dudect_crop_case("a budget above the floor does yield usable rungs",
+                               ctx.usable_rungs > 0);
+        dudect_cropped_free(&ctx);
+    } else {
+        ok &= dudect_crop_case("above-the-floor context allocates", 0);
+    }
+
     /* 4. The 267c16c failure mode: a rung that keeps too few samples must be
      *    skipped, not allowed to produce an enormous statistic from a
      *    collapsed variance.

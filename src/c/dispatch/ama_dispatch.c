@@ -597,8 +597,16 @@ static apply_dispatch_only_result_t apply_dispatch_only(
      * or non-ARM hosts where AMA_HAVE_NEON_IMPL / AMA_HAVE_SVE2_IMPL
      * are undefined).  `saved` is read by every conditional branch,
      * so its address is observably used at the language level — but
-     * if all branches are #ifdef'd out, the compiler can't see that. */
+     * if all branches are #ifdef'd out, the compiler can't see that.
+     *
+     * `resolved_label_out` is in exactly the same position — every one of the
+     * twelve HONORED returns writes through it, and all twelve live inside
+     * those #ifdefs — and it was left out, so the configuration this line
+     * exists to keep clean still warned: `unused parameter
+     * 'resolved_label_out' [-Wunused-parameter]`, on the build
+     * tools/constant_time/Makefile performs for the dudect harnesses. */
     (void)saved;
+    (void)resolved_label_out;
 
     /* Reached only when no #ifdef'd branch above claimed the name.  A
      * name that IS in the inventory therefore belongs to a kernel this
