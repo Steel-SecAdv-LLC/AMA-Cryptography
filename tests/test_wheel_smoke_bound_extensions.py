@@ -21,7 +21,7 @@ from __future__ import annotations
 import importlib.util
 import sys
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
@@ -92,19 +92,25 @@ def _install_self_test_stub(
 
     ``check_integrity_anchoring`` does ``from ama_cryptography import _self_test``
     inside the function and consults that module's own anchor resolver and
-    env-flag helper.  Stubbing both attribute and sys.modules entry lets the
-    check run with no native library and no POST — the branches are what is
-    under test, not the resolver.
+    env-flag helper.  ``from ama_cryptography import _self_test`` resolves the
+    submodule as ``getattr(ama_cryptography, "_self_test")``, so setting that
+    attribute is enough to redirect it; the stub runs the check with no native
+    library and no POST, since the branches are what is under test.
+
+    A ``SimpleNamespace`` carries the three names as constructor kwargs, so the
+    stub needs no per-attribute assignment and therefore no ``# type: ignore``
+    (INVARIANT-13: this repository ships no unjustified suppressions, and a
+    suppression a ModuleType stub could avoid is not justified).
     """
     pkg = sys.modules.get("ama_cryptography")
     if pkg is None:
         pkg = ModuleType("ama_cryptography")
         monkeypatch.setitem(sys.modules, "ama_cryptography", pkg)
-    stub = ModuleType("ama_cryptography._self_test")
-    stub._INTEGRITY_REQUIRE_TRUST_ANCHOR_ENV = "AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR"  # type: ignore[attr-defined]
-    stub._load_integrity_trust_anchor = lambda: (anchor_hex, error)  # type: ignore[attr-defined]
-    stub._env_flag_enabled = lambda _name: required  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "ama_cryptography._self_test", stub)
+    stub = SimpleNamespace(
+        _INTEGRITY_REQUIRE_TRUST_ANCHOR_ENV="AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR",
+        _load_integrity_trust_anchor=lambda: (anchor_hex, error),
+        _env_flag_enabled=lambda _name: required,
+    )
     monkeypatch.setattr(pkg, "_self_test", stub, raising=False)
 
 

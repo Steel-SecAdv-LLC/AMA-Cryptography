@@ -65,7 +65,7 @@ if str(_REPO_ROOT) not in sys.path:
 # which already reads the same object".  Reusing its disassembler keeps the two
 # gates reading the object identically -- the multi-disassembler fallback that
 # lets the KyberSlash gate cover the AArch64 build applies here unchanged.
-from tools.check_secret_division import disassemble  # noqa: E402
+from tools.check_secret_division import disassemble  # noqa: E402 -- after sys.path setup (AVX-001)
 
 #: The gate must have read at least this much before a clean result means
 #: anything -- a stripped or truncated object could otherwise pass with zero

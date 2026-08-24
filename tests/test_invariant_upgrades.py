@@ -12,7 +12,6 @@ INVARIANT-3 (addendum): Finalizer Failures Must Be Observable
 from __future__ import annotations
 
 import gc
-import inspect
 import re
 import subprocess
 import sys
@@ -599,13 +598,30 @@ class TestSuppressionScanPrecision:
         assert any("forbidden" in v for v in violations)
 
     def test_tools_is_actually_in_the_scanned_set(self) -> None:
-        """A coverage extension that did not extend coverage would pass silently."""
-        from tools.check_suppression_hygiene import main
+        """A coverage extension that did not extend coverage would pass silently.
+
+        H8 replaced the hardcoded ``ama_cryptography/ + tests/ + tools/`` target
+        list with ``tracked_python_files()`` — every git-tracked ``.py`` — so a
+        source check for a literal ``Path("tools")`` no longer describes how
+        tools/ gets scanned.  Assert the BEHAVIOUR instead: the scanned set
+        actually reaches tools/, including the checker's own module.  Checking
+        the discovery function's output rather than its text means a future
+        refactor that keeps the coverage keeps this test green, and one that
+        drops tools/ fails it.
+        """
+        from tools.check_suppression_hygiene import tracked_python_files
 
         repo_root = Path(__file__).resolve().parent.parent
-        source = inspect.getsource(main)
-        assert 'Path("tools")' in source, "tools/ dropped out of the scanned set"
         assert (repo_root / "tools").is_dir()
+        scanned = tracked_python_files(repo_root)
+        tools_files = [p for p in scanned if "tools" in p.parts]
+        assert tools_files, (
+            "tracked_python_files() reaches no tools/ file — the suppression scan "
+            "no longer covers tools/, the tree the H8 widening was for"
+        )
+        assert any(
+            p.name == "check_suppression_hygiene.py" for p in tools_files
+        ), "the checker's own module is not in its scanned set"
 
     # -- The marker must name the rule it silences ------------------------
 
