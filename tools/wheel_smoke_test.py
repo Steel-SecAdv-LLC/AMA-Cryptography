@@ -191,6 +191,60 @@ def _bound_extension_count(detail: str) -> int | None:
     return int(match.group(1)) if match else None
 
 
+def check_integrity_anchoring() -> None:
+    """A canonical-repository release must ship an ANCHORED wheel (audit H3).
+
+    An anchored wheel compiles a long-lived trust-anchor public key into the
+    native library; the import-time integrity check then requires the
+    signature's key to equal it, so re-signing edited ``.py`` files with an
+    attacker-chosen key no longer verifies.  An unanchored wheel is signed with
+    a per-build ephemeral key and is self-referential — tamper-evident against
+    accidental corruption, not against a re-sign.
+
+    ``release.yml`` sets ``AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR`` iff the
+    trust-anchor variable is configured, and cibuildwheel forwards it into the
+    test environment, so it is the honest signal for "this build was meant to be
+    anchored".  Forks legitimately build unanchored, so anchoring is ENFORCED
+    only when that flag is set; otherwise the status is reported and allowed.
+
+    When the flag IS set, the build-time signer already refuses to emit an
+    unanchored artefact — this check is a second, independent confirmation that
+    the anchor actually reached the compiled ``.so`` (a forward-to-signer-only
+    bug would leave the signature anchored and the library not), which is the
+    property audit H3 is about.
+
+    ``ama_cryptography._self_test`` is a submodule of the INSTALLED wheel under
+    test, not a source-tree import; its ``_load_integrity_trust_anchor`` is the
+    same resolver POST and the signer consult, so reusing it (and the module's
+    own env-flag semantics) cannot drift from what the wheel itself enforces.
+    """
+    from ama_cryptography import _self_test
+
+    anchor_hex, error = _self_test._load_integrity_trust_anchor()
+    anchored = anchor_hex is not None and error is None
+    required = _self_test._env_flag_enabled(_self_test._INTEGRITY_REQUIRE_TRUST_ANCHOR_ENV)
+
+    status = "ANCHORED" if anchored else "unanchored (per-build ephemeral key)"
+    print(f"        integrity trust anchor: {status}" + (f" — {error}" if error else ""))
+
+    if required:
+        check(
+            "release wheel is anchored to a long-lived trust anchor",
+            anchored,
+            error
+            or "AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR is set but the compiled library carries no anchor",
+        )
+    else:
+        # Off the canonical path unanchored is allowed, but the status must be
+        # READABLE — a resolver error (a malformed anchor, a library that could
+        # not answer) is a real fault even when anchoring is not required.
+        check(
+            "integrity anchor status is readable (unanchored allowed off the canonical repo)",
+            error is None,
+            error or "",
+        )
+
+
 def check_no_fallback_backends() -> None:
     """INVARIANT-7: a shipped wheel must not degrade to a fallback backend.
 
@@ -350,6 +404,7 @@ def main() -> int:
         check_installed_not_source,
         check_module_health,
         check_binding_extensions_are_bound,
+        check_integrity_anchoring,
         check_no_fallback_backends,
         check_ml_kem,
         check_x25519,

@@ -79,3 +79,86 @@ def test_a_real_count_still_passes(tool: ModuleType) -> None:
     """The control: the assertion must still accept a correctly built wheel."""
     six = tool._bound_extension_count("6 binding extension(s) verified")
     assert six is not None and six > 0
+
+
+def _install_self_test_stub(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    anchor_hex: str | None,
+    error: str | None,
+    required: bool,
+) -> None:
+    """Put a stub ``ama_cryptography._self_test`` where the smoke test finds it.
+
+    ``check_integrity_anchoring`` does ``from ama_cryptography import _self_test``
+    inside the function and consults that module's own anchor resolver and
+    env-flag helper.  Stubbing both attribute and sys.modules entry lets the
+    check run with no native library and no POST — the branches are what is
+    under test, not the resolver.
+    """
+    pkg = sys.modules.get("ama_cryptography")
+    if pkg is None:
+        pkg = ModuleType("ama_cryptography")
+        monkeypatch.setitem(sys.modules, "ama_cryptography", pkg)
+    stub = ModuleType("ama_cryptography._self_test")
+    stub._INTEGRITY_REQUIRE_TRUST_ANCHOR_ENV = "AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR"  # type: ignore[attr-defined]
+    stub._load_integrity_trust_anchor = lambda: (anchor_hex, error)  # type: ignore[attr-defined]
+    stub._env_flag_enabled = lambda _name: required  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "ama_cryptography._self_test", stub)
+    monkeypatch.setattr(pkg, "_self_test", stub, raising=False)
+
+
+class TestIntegrityAnchoring:
+    """The release wheel must not silently ship unanchored (audit H3).
+
+    Anchoring is enforced only when ``AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR`` is set
+    — release.yml sets it iff the trust-anchor variable is configured, so forks
+    (which build unanchored) are unaffected while the canonical repository is.
+    """
+
+    def test_required_and_unanchored_fails(
+        self, tool: ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _install_self_test_stub(monkeypatch, anchor_hex=None, error=None, required=True)
+        tool._FAILURES.clear()
+        tool.check_integrity_anchoring()
+        assert tool._FAILURES, "an unanchored wheel passed while anchoring was required"
+
+    def test_required_and_anchored_passes(
+        self, tool: ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _install_self_test_stub(monkeypatch, anchor_hex="ab" * 32, error=None, required=True)
+        tool._FAILURES.clear()
+        tool.check_integrity_anchoring()
+        assert tool._FAILURES == [], "a correctly anchored wheel was rejected"
+
+    def test_not_required_and_unanchored_passes(
+        self, tool: ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The fork / pre-anchor path: unanchored is allowed when not required.
+        _install_self_test_stub(monkeypatch, anchor_hex=None, error=None, required=False)
+        tool._FAILURES.clear()
+        tool.check_integrity_anchoring()
+        assert tool._FAILURES == [], "unanchored must be allowed when not required"
+
+    def test_required_and_resolver_error_fails(
+        self, tool: ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _install_self_test_stub(
+            monkeypatch, anchor_hex=None, error="library could not answer", required=True
+        )
+        tool._FAILURES.clear()
+        tool.check_integrity_anchoring()
+        assert tool._FAILURES, "a resolver error must fail when anchoring is required"
+
+    def test_unreadable_status_fails_even_when_not_required(
+        self, tool: ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Fail-closed: even off the canonical path, a status that cannot be read
+        # (a malformed anchor, a library that could not answer) is a real fault.
+        _install_self_test_stub(
+            monkeypatch, anchor_hex=None, error="integrity trust anchor is not hex", required=False
+        )
+        tool._FAILURES.clear()
+        tool.check_integrity_anchoring()
+        assert tool._FAILURES, "an unreadable anchor status must not pass"

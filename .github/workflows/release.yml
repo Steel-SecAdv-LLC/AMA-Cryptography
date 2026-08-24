@@ -228,6 +228,47 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
+      - name: Refuse an unanchored release from the canonical repository (H3)
+        # The anchored/unanchored split is load-bearing: an anchored build
+        # compiles a long-lived trust anchor into the native library and the
+        # import-time check requires the signature key to equal it, so
+        # re-signing edited sources with another key no longer verifies; an
+        # unanchored build is signed with a per-build ephemeral key and is
+        # self-referential.  The unanchored path is a deliberate accommodation
+        # for FORKS and for the canonical repo BEFORE the key is installed --
+        # but nothing stopped a real tag on the canonical repository from
+        # taking it silently: verify-anchor is skipped when the variable is
+        # empty, build-wheels accepts the skip, and the wheel smoke test did
+        # not check anchoring either (audit H3).
+        #
+        # This step runs on EVERY tag push (not only when it will fail) so it
+        # can never silently skip the way the check it replaces effectively
+        # did; it prints the status every time and fails closed only on the
+        # canonical repository with no anchor configured.  GitHub repository
+        # names are case-insensitive, so both sides are lower-cased first.
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        env:
+          ANCHOR_PUBKEY: ${{ vars.AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX }}
+          CANONICAL_REPO: Steel-SecAdv-LLC/AMA-Cryptography
+        run: |
+          set -euo pipefail
+          if [ -n "${ANCHOR_PUBKEY}" ]; then
+            echo "Integrity anchoring: ANCHORED — trust-anchor variable is set for ${GITHUB_REPOSITORY}."
+            exit 0
+          fi
+          repo_lc=$(printf '%s' "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')
+          canon_lc=$(printf '%s' "${CANONICAL_REPO}" | tr '[:upper:]' '[:lower:]')
+          if [ "${repo_lc}" = "${canon_lc}" ]; then
+            echo "::error::Refusing to release ${GITHUB_REF##*/} from ${GITHUB_REPOSITORY} with no integrity trust anchor."
+            echo "         AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX is empty, so every wheel would ship a per-build"
+            echo "         ephemeral signing key and self-referential integrity — a re-sign of edited sources would"
+            echo "         verify, which is exactly what the anchor exists to prevent. Set the variable (Settings ->"
+            echo "         Secrets and variables -> Actions -> Variables) together with the AMA_INTEGRITY_SIGNING_SEED_HEX"
+            echo "         secret before tagging, or cut the release from a fork if an unanchored build is intended."
+            exit 1
+          fi
+          echo "Integrity anchoring: UNANCHORED on non-canonical repository ${GITHUB_REPOSITORY} — the supported fork / pre-anchor path."
+
       - name: Run version consistency check
         # Cross-validate that every other version anchor (CMakeLists.txt,
         # include/ama_cryptography.h, docs/conf.py, Dockerfiles, etc.)
@@ -863,6 +904,25 @@ jobs:
           echo "line=$line" >> "$GITHUB_OUTPUT"
           echo "PyPI publish result: ${PYPI_RESULT:-<none>}"
 
+      - name: Resolve the integrity anchoring line for the release notes
+        id: anchor_line
+        # Audit H3: the release notes must STATE whether the wheels are anchored,
+        # the same way the PyPI line above states whether they were published.
+        # The signal is the trust-anchor repository VARIABLE — the identical
+        # value that decides whether build-wheels compiled an anchor into the
+        # native library — so the notes describe what the assets actually are.
+        # Computed in a step, not inline, for the same reason as the PyPI line.
+        env:
+          ANCHOR_PUBKEY: ${{ vars.AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX }}
+        run: |
+          if [ -n "$ANCHOR_PUBKEY" ]; then
+            line="anchored — the import-time integrity check requires the signature key to equal a trust anchor compiled into the native library, so re-signing edited sources with another key does not verify."
+          else
+            line="unanchored — signed with a per-build ephemeral key and self-referential (tamper-evident against corruption, not against a re-sign). The supported fork / pre-anchor path; see SECURITY.md, Module Integrity Verification."
+          fi
+          echo "line=$line" >> "$GITHUB_OUTPUT"
+          echo "integrity anchoring for notes: ${ANCHOR_PUBKEY:+anchored}${ANCHOR_PUBKEY:+ }${ANCHOR_PUBKEY:-unanchored}"
+
       - name: Aggregate release assets
         run: |
           mkdir -p release-assets
@@ -962,6 +1022,7 @@ jobs:
             * SLSA v1 provenance attestations attached.
             * C-library SBOM (CycloneDX) attached; the Python SBOM is published per-commit by security.yml as the `sbom` workflow artifact.
             * PyPI: ${{ steps.pypi_line.outputs.line }}
+            * Integrity: ${{ steps.anchor_line.outputs.line }}
 
             Verify with:
 
