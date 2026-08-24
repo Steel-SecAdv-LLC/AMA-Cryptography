@@ -1698,6 +1698,17 @@ ama_error_t ama_ed25519_batch_verify(
  * All compressed points are 32-byte little-endian Y||sign(X).
  * ====================================================================== */
 
+/* Which Ed25519 backend this build selected: "donna" (x86-64 assembly shim) or
+ * "fe51" (the portable in-tree path).  The two are compile-time mutually
+ * exclusive -- CMake swaps the source file on AMA_ED25519_ASSEMBLY -- so each
+ * backend file defines this to name itself and exactly one is linked.  Exists
+ * so tools/check_ed25519_backend_parity.py can REFUSE to run unless the two
+ * objects it was handed actually report different backends: a differential that
+ * compares a library with itself passes vacuously (audit M14). */
+AMA_API const char *ama_ed25519_active_backend(void) {
+    return "fe51";
+}
+
 /**
  * Raw scalar-basepoint multiplication: point = scalar * G.
  *

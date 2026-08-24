@@ -1352,6 +1352,18 @@ AMA_API ama_error_t ama_ed25519_batch_verify(
     int *results
 );
 
+/**
+ * @brief Name the Ed25519 backend this build selected.
+ * @return A static string, "donna" (x86-64 assembly shim) or "fe51" (portable
+ *         in-tree path).  The two are compile-time mutually exclusive.
+ *
+ * Build introspection, not a cryptographic operation.  The backend differential
+ * (tools/check_ed25519_backend_parity.py) uses it to refuse to run unless the
+ * two libraries it compares report different backends — a differential handed
+ * one library twice passes vacuously (audit M14).
+ */
+AMA_API const char *ama_ed25519_active_backend(void);
+
 /* ----------------------------------------------------------------------------
  * Ed25519 Group Primitives (for FROST / Threshold Signatures)
  * ---------------------------------------------------------------------------- */

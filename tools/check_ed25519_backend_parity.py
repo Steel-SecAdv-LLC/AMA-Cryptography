@@ -424,6 +424,17 @@ class Backend:
         s_int = (r_int + h_int * a_int) % L
         return r_sig + s_int.to_bytes(32, "little")
 
+    def active_backend(self) -> Optional[str]:
+        """Which Ed25519 backend the library selected ("donna" / "fe51"), or None
+        if the library predates ``ama_ed25519_active_backend`` (audit M14)."""
+        fn = getattr(self.lib, "ama_ed25519_active_backend", None)
+        if fn is None:
+            return None
+        fn.restype = ctypes.c_char_p
+        fn.argtypes = []
+        raw = fn()
+        return raw.decode() if raw is not None else None
+
     def verify(self, message: bytes, signature: bytes, public: bytes) -> bool:
         # ama_ed25519_verify takes `const uint8_t signature[64]` with no length
         # parameter, so handing it a short buffer reads past the end.  This is
@@ -650,6 +661,34 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             f"BACKEND DIFFERENTIAL INCONCLUSIVE — could not load a library: {exc}", file=sys.stderr
         )
         print("An unrunnable comparison is not treated as a passing one.", file=sys.stderr)
+        return 2
+
+    # M14: refuse to run unless the two objects actually report DIFFERENT
+    # backends.  A differential handed one library twice -- or two builds that
+    # both fell back to fe51 (see the CMake FATAL_ERROR that now forbids the
+    # silent downgrade) -- compares a library with itself and passes vacuously,
+    # with none of the guards above able to notice.
+    donna_backend = donna.active_backend()
+    fe51_backend = fe51.active_backend()
+    if donna_backend is None or fe51_backend is None:
+        print(
+            "BACKEND DIFFERENTIAL INCONCLUSIVE — a library does not export "
+            "ama_ed25519_active_backend (build predates audit M14); rebuild both "
+            "libraries so the differential can confirm it compares two backends.",
+            file=sys.stderr,
+        )
+        return 2
+    if donna_backend == fe51_backend:
+        print(
+            f"BACKEND DIFFERENTIAL INCONCLUSIVE — both libraries report backend "
+            f"{donna_backend!r}; this compares a build with itself and passes "
+            f"vacuously (M14).\n"
+            f"  --donna {args.donna}\n"
+            f"  --fe51  {args.fe51}\n"
+            "Pass --donna a library built with AMA_ED25519_ASSEMBLY=ON and --fe51 "
+            "one built with AMA_ED25519_ASSEMBLY=OFF.",
+            file=sys.stderr,
+        )
         return 2
 
     disagreements: list[str] = []

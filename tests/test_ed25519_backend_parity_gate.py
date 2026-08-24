@@ -72,6 +72,8 @@ class _StubBackend:
         scalar_reduction: bool = True,
         joint_arithmetic: bool = True,
         verify_override: Optional[Callable[[bytes, bytes, bytes], bool]] = None,
+        backend_name: Optional[str] = None,
+        report_no_backend: bool = False,
         issued: Optional[set[tuple[bytes, bytes, bytes]]] = None,
     ) -> None:
         self.name = name
@@ -92,6 +94,11 @@ class _StubBackend:
         #: extended-t coordinate.
         self.joint_arithmetic = joint_arithmetic
         self._verify_override = verify_override
+        #: M14: which backend this stub reports from active_backend().  Defaults
+        #: to self.name, so a donna/fe51 pair differs and the identity guard
+        #: passes; a test can force them equal or absent.
+        self._backend_name = backend_name
+        self._report_no_backend = report_no_backend
         # Shared across the pair: the harness signs with each backend in turn
         # and cross-verifies every case with BOTH, so a signature minted by
         # one must verify under the other. A per-instance registry would make
@@ -101,6 +108,13 @@ class _StubBackend:
         #: is inadmissible — see non_canonical_r_signature.
         self._equation_holds: set[bytes] = set()
         self._counter = 0
+
+    def active_backend(self) -> Optional[str]:
+        # M14: the real Backend reports which backend the .so selected; the
+        # differential refuses to run unless the two libraries differ.
+        if self._report_no_backend:
+            return None
+        return self._backend_name if self._backend_name is not None else self.name
 
     def keypair(self) -> tuple[bytes, bytes]:
         self._counter += 1
@@ -148,6 +162,27 @@ class _StubBackend:
         # exactly the two behaviours.
         self._equation_holds.add(signature)
         return signature
+
+    def small_order_r_signature(
+        self,
+        message: bytes,
+        public: bytes,
+        secret: bytes,
+        torsion_enc: bytes,
+        seed: int = 0,
+    ) -> bytes:
+        """A stand-in for the torsion discriminator (audit B1).
+
+        The stub's pseudo-group (Z/L, prime order) has no small-order element, so
+        it cannot reproduce the real torsion divergence; it models only the SHAPE
+        the torsion family needs: an invalid signature with a CANONICAL R that
+        this backend rejects on both the single and batch paths (``verify()``
+        rejects anything it did not issue).  A correct pair rejects it everywhere
+        and the family passes; the real divergence is exercised against the
+        built ``.so``, not here.
+        """
+        r_half = (bytes([0x02, torsion_enc[0]]) + seed.to_bytes(4, "little")).ljust(32, b"\x05")
+        return r_half + (3).to_bytes(32, "little")
 
     def batch_verify(self, entries: list[tuple[bytes, bytes, bytes]]) -> list[bool]:
         """Per-entry verdicts, modelling the R rule independently of ``verify``.
@@ -288,6 +323,32 @@ def _run(
     backends = iter((donna, fe51))
     monkeypatch.setattr(tool, "Backend", lambda _name, _path: next(backends))
     return int(tool.main(["--donna", "/stub/donna.so", "--fe51", "/stub/fe51.so"]))
+
+
+class TestBackendIdentityGuard:
+    """M14: the differential must refuse to compare a library with itself.
+
+    Before this guard, handing the gate one library twice -- or two builds that
+    both fell back to fe51 -- compared a build with itself and passed vacuously:
+    the torsion, count-sweep and canonical corpora all agree when both objects
+    ARE the same object.
+    """
+
+    def test_same_backend_reported_twice_is_inconclusive(
+        self, tool: ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        shared: set[tuple[bytes, bytes, bytes]] = set()
+        donna = _StubBackend("donna", backend_name="donna", issued=shared)
+        fe51 = _StubBackend("fe51", backend_name="donna", issued=shared)  # same backend!
+        assert _run(tool, monkeypatch, donna, fe51) == 2
+
+    def test_a_library_without_the_backend_probe_is_inconclusive(
+        self, tool: ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        shared: set[tuple[bytes, bytes, bytes]] = set()
+        donna = _StubBackend("donna", report_no_backend=True, issued=shared)
+        fe51 = _StubBackend("fe51", issued=shared)
+        assert _run(tool, monkeypatch, donna, fe51) == 2
 
 
 class TestAgreeingBackendsPass:

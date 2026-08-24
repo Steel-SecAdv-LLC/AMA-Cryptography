@@ -796,8 +796,17 @@ if(AMA_ED25519_ASSEMBLY)
                 "Ed25519: donna x86-64 assembly scalar mult (vendored, public domain)")
         endif()
     else()
-        message(WARNING "AMA_ED25519_ASSEMBLY requires x86-64 — falling back to fe51")
-        set(AMA_ED25519_ASSEMBLY OFF)
+        # M14: an explicit -DAMA_ED25519_ASSEMBLY=ON on a non-x86-64 host used to
+        # WARN and silently fall back to fe51.  That silent downgrade is how the
+        # Ed25519 backend differential could end up comparing two fe51 builds (a
+        # library with itself) and pass vacuously.  The default on non-x86-64 is
+        # already OFF (_AMA_DONNA_DEFAULT above), so reaching this branch means ON
+        # was requested explicitly — make that a hard error, not a silent switch.
+        message(FATAL_ERROR
+            "AMA_ED25519_ASSEMBLY=ON was requested but the donna assembly scalar "
+            "multiply requires x86-64 (host is ${CMAKE_SYSTEM_PROCESSOR}). Build "
+            "with -DAMA_ED25519_ASSEMBLY=OFF for the portable fe51 backend on this "
+            "architecture.")
     endif()
 endif()
 
