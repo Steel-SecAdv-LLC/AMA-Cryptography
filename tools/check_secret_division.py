@@ -62,19 +62,30 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 #: on this tree and the reason the operands are public.  A divide anywhere
 #: else, or more of them here, fails.
 #:
-#: Counts are per-symbol and compiler-dependent (unrolling changes them), so
-#: they are ceilings rather than equalities: fewer is fine, more must be
-#: justified here before it can pass.  Each ceiling is the divide count MEASURED
-#: in the built object (gcc-13 / clang-18 at -O3) plus a +2 tolerance for
-#: cross-compiler and cross-arch unrolling spread -- NOT headroom.  Until 5.0.0
-#: these sat far above the measured counts -- dil_sign_internal 24 vs 14,
-#: lms_verify_parsed 16 vs 11, ama_argon2id_core 12 vs 6: 21 free slots into
-#: which a secret-operand divide could be added without tripping the gate
-#: (audit H1).  Re-measure and re-justify when a count legitimately moves,
-#: rather than widening the slack.
+#: These are EXACT measured counts, not measured+tolerance.  ``count > ceiling``
+#: is the failure condition (see below), so the clean object passes at equality
+#: and a single added divide trips the gate.  "Fewer is fine" still holds -- a
+#: compiler that folds a PUBLIC divide only lowers the count, and a divide on
+#: secret operands cannot be constant-folded -- so only an INCREASE fails.
+#:
+#: History (audit H1): these first sat far above the measured counts
+#: (dil_sign_internal 24 vs 14, lms_verify_parsed 16 vs 11, ama_argon2id_core
+#: 12 vs 6: 21 free slots), then were pinned to measured+2.  Even +2 was not
+#: free -- a minimised secret division lowers to exactly two machine divides, so
+#: ``count == ceiling`` at measured+2 let the very KyberSlash defect class this
+#: gate exists to catch pass.  The +2 was justified as cross-compiler/cross-arch
+#: unrolling spread, but there is none to tolerate for these symbols: the gate
+#: reads only gcc-built objects in CI (build-shared, x86-64, in dudect.yml;
+#: build-arm, aarch64, in arm-qemu.yml), and gcc-13 -O3 emits the IDENTICAL count
+#: on both -- 14/14, 11/11, 6/6 (measured on both shared objects, 2026-08).  A
+#: future toolchain that unrolls one of these loops differently will raise the
+#: count and fail LOUDLY: that is the correct place to require a human to
+#: re-confirm the new divides are still on public operands and re-measure this
+#: table under review, never a standing +N that quietly banks slack for an
+#: attacker.
 ALLOWED: dict[str, tuple[int, str]] = {
     "dil_sign_internal": (
-        16,  # measured 14 in this object (gcc-13/clang-18 -O3) + 2 tolerance
+        14,  # EXACT: gcc-13 -O3, identical on x86-64 and aarch64 shared objects
         "ama_dilithium.c:1562 `nonces[f] = ((f / P->l) << 8) + (f % P->l)`. "
         "The dividend is the loop counter and the divisor is the parameter "
         "set's dimension l (4, 5 or 7 for ML-DSA-44/65/87) — both public. "
@@ -82,13 +93,13 @@ ALLOWED: dict[str, tuple[int, str]] = {
         "register across the unrolled body while the dividend increments.",
     ),
     "lms_verify_parsed": (
-        13,  # measured 11 in this object (gcc-13/clang-18 -O3) + 2 tolerance
+        11,  # EXACT: gcc-13 -O3, identical on x86-64 and aarch64 shared objects
         "ama_lms.c:391. LMS/HSS verification takes only public inputs — the "
         "identifier, the type words, the public root, the message and the "
         "signature. No secret is in scope in this function.",
     ),
     "ama_argon2id_core": (
-        8,  # measured 6 in this object (gcc-13/clang-18 -O3) + 2 tolerance
+        6,  # EXACT: gcc-13 -O3, identical on x86-64 and aarch64 shared objects
         "ama_argon2.c:530 `ref_lane = J2 % lanes`. On Argon2id's "
         "data-INdependent phase J2 comes from the counter-driven address "
         "block and is public. On the data-dependent phase it is derived from "
@@ -100,7 +111,7 @@ ALLOWED: dict[str, tuple[int, str]] = {
         "the property. Recorded rather than silently dropped.",
     ),
     "ama_ml_dsa_test_matrix_row_equiv": (
-        16,  # measured 14 (gcc-13) / 0 (clang-18, folds it) + 2 tolerance
+        14,  # EXACT: gcc-13 -O3 (this symbol exists only under AMA_TESTING_MODE)
         "ama_dilithium.c:2714, compiled ONLY under AMA_TESTING_MODE and never "
         "present in a shipped library — which is why CI, running against "
         "build-shared/ and build-arm/, never saw it and this entry was added "
@@ -111,10 +122,8 @@ ALLOWED: dict[str, tuple[int, str]] = {
         "counter. The divides are the index arithmetic of the two matrix "
         "expansions it compares, whose divisor is P->l — public, and the same "
         "quantity already recorded for dil_sign_internal. The ceiling is the "
-        "measured count plus the same +2 tolerance as the other entries: gcc 13 "
-        "emits 14 and clang 18 emits 0 (it folds the expansion), so the ceiling "
-        "is 14 + 2 = 16 and a jump beyond the cross-compiler unrolling spread "
-        "has to be justified here.",
+        "EXACT gcc-13 -O3 count of 14; clang 18 folds the expansion to 0, a "
+        "lower count that therefore passes, since only an increase fails.",
     ),
 }
 
