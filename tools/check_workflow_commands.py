@@ -1231,6 +1231,12 @@ def check_pytest_prerequisites(path: Path, document: Any, report: Report) -> Non
                 )
 
 
+#: Non-vacuity floor (H7): the repository ships 14 workflow files.  Pinned so a
+#: deleted or wrong-path workflow set cannot leave the sweep reporting PASS over
+#: nothing -- the same zero-input vacuity the aggregating-gate audit carried.
+MIN_WORKFLOWS = 14
+
+
 def sweep(workflows_dir: Path) -> Report:
     """Run every check across every workflow file."""
     report = Report()
@@ -1257,6 +1263,26 @@ def sweep(workflows_dir: Path) -> Report:
         check_cmake_build_type(path, document, report)
         check_expression_syntax(path, document, report)
         check_pytest_prerequisites(path, document, report)
+
+    # Non-vacuity floor (H7): an empty (or near-empty) workflow directory left
+    # this sweep with no findings and reporting PASS -- the same zero-input
+    # vacuity check_gate_coverage.py carried.  Pin the file count so a deleted or
+    # wrong-path workflow set fails here rather than passing silently.
+    if len(paths) < MIN_WORKFLOWS:
+        report.findings.append(
+            Finding(
+                workflow="<sweep>",
+                location=str(workflows_dir),
+                message=(
+                    f"only {len(paths)} workflow file(s) found (floor {MIN_WORKFLOWS}); "
+                    "the command sweep has nothing, or almost nothing, to check"
+                ),
+                remedy=(
+                    "a workflow set this small is almost certainly a wrong path or a "
+                    "deletion; if intentional, lower MIN_WORKFLOWS under review."
+                ),
+            )
+        )
     return report
 
 

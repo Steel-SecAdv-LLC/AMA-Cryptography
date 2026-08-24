@@ -369,6 +369,43 @@ def test_listing_a_job_in_needs_is_not_self_satisfying() -> None:
     assert "alpha" in failures[0] and "never evaluates" in failures[0]
 
 
+def test_env_bound_dependency_never_read_in_run_is_reported() -> None:
+    """H7: binding a dependency into env: is not evaluating it.
+
+    dudect-gate / static-analysis-gate bind each dependency to a shell alias
+    (``R_X: ${{ needs.x.result }}``) and decide ``rc`` in a ``run:`` script.  A
+    job bound that way whose alias is never dereferenced runs, fails, and leaves
+    the gate green — the previous whole-body substring test saw
+    ``needs.planted.result`` in the env: value and called it evaluated.
+    """
+    failures = check("""
+        on: { pull_request: }
+        jobs:
+          watched: { runs-on: ubuntu-latest }
+          planted: { runs-on: ubuntu-latest }
+          ci-gate:
+            if: always()
+            needs: [watched, planted]
+            runs-on: ubuntu-latest
+            steps:
+              - env:
+                  R_WATCHED: ${{ needs.watched.result }}
+                  R_PLANTED: ${{ needs.planted.result }}
+                run: |
+                  test "${R_WATCHED}" = success
+        """)
+    assert len(failures) == 1, failures
+    assert "planted" in failures[0] and "never evaluates" in failures[0]
+    assert "watched," not in failures[0], "the read dependency was named as unevaluated"
+
+
+def test_vacuity_floor_fails_on_an_empty_workflow_dir(tmp_path: Path) -> None:
+    """H7: `rm .github/workflows/*.yml` must not leave the audit PASSing."""
+    failures, examined = audit(tmp_path)
+    assert examined == 0
+    assert any("MIN_WORKFLOWS" in f or "workflow file(s) examined" in f for f in failures)
+
+
 def test_the_repository_gates_all_evaluate_what_they_wait_for() -> None:
     """Non-vacuity for the rule against the real workflows."""
     problems, examined = audit()

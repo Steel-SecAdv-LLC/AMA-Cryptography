@@ -72,7 +72,6 @@ Exits 0 when every workflow satisfies the invariant, 1 otherwise.
 
 from __future__ import annotations
 
-import json
 import re
 import sys
 from pathlib import Path
@@ -87,6 +86,16 @@ import yaml
 GATE_SUFFIX = "-gate"
 
 WORKFLOW_DIR = Path(".github/workflows")
+
+#: Non-vacuity floors (H7).  Current tree: 14 workflow files, 72 jobs.  These are
+#: pinned so deleting workflows or jobs cannot silently shrink what the
+#: aggregating-gate audit inspects down to nothing -- the two ways this
+#: meta-gate was proven vacuous (an empty .github/workflows left `examined` 0 and
+#: the run PASS; a planted always-failing lane bound into env: passed too).
+#: Matching the MIN_* floors the rest of the gates carry: a real reduction must
+#: lower these under review rather than pass silently.
+MIN_WORKFLOWS = 14
+MIN_JOBS_INSPECTED = 40
 
 
 def _load(path: Path) -> dict[Any, Any]:
@@ -133,22 +142,61 @@ def _needs(job: dict[str, Any]) -> set[str]:
 _WILDCARD_NEEDS_RE = re.compile(r"needs\.\*\.(?:result|outputs|conclusion)")
 
 
-def _gate_body_text(job: dict[str, Any]) -> str:
-    """Everything in a gate job that could reference a dependency by name.
+def _run_text(job: dict[str, Any]) -> str:
+    """The shell bodies of a gate job's steps — where ``rc`` is computed.
 
-    Serialised rather than walked, because a reference can appear in a step's
-    ``run``, its ``if``, its ``env`` values, a ``with:`` input or the job-level
-    ``env`` — and the property being checked is only "is this id mentioned at
-    all", for which the flattened text is exactly right and cannot go stale as
-    the schema grows.
-
-    ``needs:`` itself is REMOVED first.  Leaving it in makes the check a
-    tautology — every id in the list appears in the serialisation of the list —
-    which is the same shape of vacuity as ``check_ctypes_abi``'s floor test
-    comparing REQUIRED_MODULES against a set that unions it in.
+    This is the EVALUATION surface for the hand-enumerated gates: they bind each
+    dependency into an ``env:`` alias and decide the exit code in a ``run:``
+    script.  The binding is not the evaluation (H7): a job can be bound into
+    ``env:`` and its alias never consulted, so ``rc`` never sees its failure.
+    Only what a ``run:`` script actually references counts.
     """
-    body = {key: value for key, value in job.items() if key != "needs"}
-    return json.dumps(body, default=str)
+    parts: list[str] = []
+    steps = job.get("steps")
+    if isinstance(steps, list):
+        for step in steps:
+            if isinstance(step, dict):
+                run = step.get("run")
+                if isinstance(run, str):
+                    parts.append(run)
+    return "\n".join(parts)
+
+
+#: ``needs.<dep>.result`` / ``.outcome`` inside a value, dotted or bracketed.
+_NEEDS_IN_VALUE_RE = re.compile(
+    r"needs\s*(?:\.\s*([A-Za-z0-9_-]+)|\[\s*['\"]([^'\"]+)['\"]\s*\])\s*\.\s*(?:result|outcome)"
+)
+
+
+def _env_alias_map(job: dict[str, Any]) -> dict[str, set[str]]:
+    """Map each dependency to the ``env:`` alias key(s) bound to its result.
+
+    Scans the job-level ``env:`` and every step's ``env:`` for values that
+    reference ``needs.<dep>.result`` and records the KEY they are bound to (the
+    shell variable name).  A dependency is only evaluated through such an alias
+    when a ``run:`` script dereferences that variable; the binding alone is not
+    evaluation, which is the vacuity H7 names.
+    """
+    alias_map: dict[str, set[str]] = {}
+
+    def _scan(env: Any) -> None:
+        if not isinstance(env, dict):
+            return
+        for key, value in env.items():
+            if not isinstance(key, str) or not isinstance(value, str):
+                continue
+            for match in _NEEDS_IN_VALUE_RE.finditer(value):
+                dep = match.group(1) or match.group(2)
+                if dep:
+                    alias_map.setdefault(dep, set()).add(key)
+
+    _scan(job.get("env"))
+    steps = job.get("steps")
+    if isinstance(steps, list):
+        for step in steps:
+            if isinstance(step, dict):
+                _scan(step.get("env"))
+    return alias_map
 
 
 def _gate_condition_text(job: dict[str, Any]) -> str:
@@ -204,23 +252,33 @@ def _unevaluated_needs(job: dict[str, Any]) -> list[str]:
     gate carries ``if: always()``, so it runs anyway, ``rc`` stays 0, and the
     final step prints that every job reached the state the trigger requires.
     """
-    body = _gate_body_text(job)
     # The wildcard exemption applies only where the wildcard is EVALUATED: the
-    # gate job's own `if:`, or one of its steps' `if:`.  It used to search the
-    # whole flattened body, so an `echo "${{ join(needs.*.result, ', ') }}"` in
-    # a `run:` step — or the phrase inside a comment in a run script — disabled
-    # the per-dependency check for the entire job.  That is the same
-    # substring-vs-evaluation confusion this function's own comment below
-    # rejects for named dependencies.
+    # gate job's own `if:`, or one of its steps' `if:`.
     if _WILDCARD_NEEDS_RE.search(_gate_condition_text(job)):
         return []
-    # `needs.<job>.result`, not a bare mention of the job's NAME.  A substring
-    # test counts an echo -- `echo "build is important"` -- as an evaluation,
-    # which is precisely the shape this function exists to reject: the gate
-    # waits for the job and then never looks at how it ended.  Demonstrated
-    # against the substring version: a gate that evaluates `needs.lint.result`
-    # and only echoes the word "build" reported nothing unevaluated.
-    return sorted(need for need in _needs(job) if not re.search(_result_reference(need), body))
+
+    # Read the EVALUATION, not the binding (H7).  A dependency's env: alias
+    # binding -- `R_X: ${{ needs.x.result }}` -- used to satisfy the old
+    # whole-body substring test even when the run: script that sets `rc` never
+    # consulted `$R_X`.  So look only at what actually decides the exit code:
+    #   (a) a direct read of `needs.<dep>.result` in an if: or a run:, OR
+    #   (b) an env: alias bound to the dep AND dereferenced ($X / ${X}) in run:.
+    evaluation_text = _gate_condition_text(job) + "\n" + _run_text(job)
+    run_text = _run_text(job)
+    alias_map = _env_alias_map(job)
+
+    unevaluated: list[str] = []
+    for need in _needs(job):
+        if re.search(_result_reference(need), evaluation_text):
+            continue
+        aliases = alias_map.get(need, set())
+        if any(
+            re.search(r"\$\{?" + re.escape(alias) + r"(?![A-Za-z0-9_])", run_text)
+            for alias in aliases
+        ):
+            continue
+        unevaluated.append(need)
+    return sorted(unevaluated)
 
 
 def _is_always(job: dict[str, Any]) -> bool:
@@ -330,8 +388,28 @@ def audit(workflow_dir: Path = WORKFLOW_DIR) -> tuple[list[str], int]:
     """Check every workflow. Returns (failures, number of files examined)."""
     paths = sorted(list(workflow_dir.glob("*.yml")) + list(workflow_dir.glob("*.yaml")))
     failures: list[str] = []
+    total_jobs = 0
     for path in paths:
-        failures.extend(check_workflow(path))
+        workflow = _load(path)
+        total_jobs += len(workflow.get("jobs") or {})
+        failures.extend(check_parsed(path.name, workflow))
+
+    # Non-vacuity floors (H7).  Proven two ways: `rm .github/workflows/*.yml`
+    # left `examined` 0 and the run PASS, and a partial deletion would shrink the
+    # job set with no complaint.  Pin both so a real reduction lowers the floor
+    # under review rather than passing silently.
+    if len(paths) < MIN_WORKFLOWS:
+        failures.append(
+            f"only {len(paths)} workflow file(s) examined (floor {MIN_WORKFLOWS}) — the "
+            f"aggregating-gate audit has nothing, or almost nothing, to check. If a "
+            f"workflow was intentionally removed, lower MIN_WORKFLOWS under review."
+        )
+    if total_jobs < MIN_JOBS_INSPECTED:
+        failures.append(
+            f"only {total_jobs} job(s) inspected across {len(paths)} workflow(s) (floor "
+            f"{MIN_JOBS_INSPECTED}) — too few for the coverage audit to mean anything. If "
+            f"jobs were intentionally removed, lower MIN_JOBS_INSPECTED under review."
+        )
     return failures, len(paths)
 
 
