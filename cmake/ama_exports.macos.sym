@@ -1,0 +1,12 @@
+# Copyright (C) 2025-2026 Steel Security Advisors LLC
+# SPDX-License-Identifier: Apache-2.0
+#
+# Mach-O exported-symbols list (audit B2).  Mach-O symbols carry a leading
+# underscore, so AMA's ama_* ABI is _ama_*.  Everything not matched here is
+# hidden from the dylib's export table.
+#
+# macOS already resolves symbols through a two-level namespace, so the ELF
+# flat-namespace interposition hazard the version script addresses does not
+# apply to the .dylib; this list restricts the export surface for parity with
+# the Linux .so so the un-prefixed vendor names are not published either.
+_ama_*

@@ -929,6 +929,39 @@ if(AMA_BUILD_SHARED)
     if(WIN32)
         target_link_libraries(ama_cryptography_shared PRIVATE bcrypt)
     endif()
+
+    # Export only the ama_* ABI from the shared library (audit B2).
+    #
+    # Off-Windows AMA_API expands to nothing, so the linked .so exported all of
+    # its ~246 defined symbols -- including six un-prefixed vendor names from the
+    # bundled ed25519-donna tree (ed25519_sign, ed25519_sign_open,
+    # ed25519_sign_open_batch, ed25519_publickey,
+    # curved25519_scalarmult_basepoint) and the mutable data symbol
+    # batch_point_buffer.  A process loading AMA alongside another ed25519-donna
+    # consumer could have AMA's Ed25519 silently serviced by the other copy (ELF
+    # flat-namespace interposition; a static consumer's symbols always win),
+    # bypassing the canonical-R/S/y hardening -- and once .so.5 publishes, every
+    # exported name becomes an ABI promise.  This is the release that must carry
+    # the fix, since the SONAME already moves .so.4 -> .so.5.
+    #
+    # A version script restricts the dynamic symbol table to ama_* and localises
+    # everything else; -Bsymbolic-functions binds AMA's own intra-library calls
+    # (e.g. ama_ed25519_verify -> the vendored ed25519_sign_open) internally so
+    # they are not interposable even before a SONAME consumer relinks.  MSVC
+    # controls exports through AMA_API/__declspec on the header; macOS uses a
+    # two-level namespace and the exported-symbols list for parity.
+    if(APPLE)
+        target_link_options(ama_cryptography_shared PRIVATE
+            "-Wl,-exported_symbols_list,${CMAKE_CURRENT_SOURCE_DIR}/cmake/ama_exports.macos.sym")
+        set_property(TARGET ama_cryptography_shared APPEND PROPERTY
+            LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/cmake/ama_exports.macos.sym")
+    elseif(NOT MSVC)
+        target_link_options(ama_cryptography_shared PRIVATE
+            "-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/cmake/ama_exports.map"
+            "-Wl,-Bsymbolic-functions")
+        set_property(TARGET ama_cryptography_shared APPEND PROPERTY
+            LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/cmake/ama_exports.map")
+    endif()
 endif()
 
 # Create static library

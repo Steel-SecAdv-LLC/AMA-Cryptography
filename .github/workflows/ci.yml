@@ -858,6 +858,20 @@ jobs:
         python tools/check_vendor_isolation.py \
           --library build/lib/libama_cryptography.so
 
+    - name: "audit B2: shared library exports only the ama_* ABI"
+      # Companion to the vendor-isolation gate above: that checks what the
+      # library pulls IN, this checks what it sends OUT.  Off-Windows AMA_API is
+      # empty, so before cmake/ama_exports.map the .so exported six un-prefixed
+      # ed25519-donna names (ed25519_sign / _sign_open / _sign_open_batch /
+      # _publickey / curved25519_scalarmult_basepoint) and the mutable data
+      # symbol batch_point_buffer, any of which a co-loaded donna consumer could
+      # interpose.  The version script now restricts exports to ama_*; this gate
+      # keeps them restricted (it fails on the pre-fix object, which exports the
+      # six names).
+      run: |
+        python tools/check_export_allowlist.py \
+          build/lib/libama_cryptography.so
+
     - name: Semgrep gate self-tests (the end-to-end case needs semgrep present)
       # tests/test_semgrep_severity_gate.py's only end-to-end assertion — that
       # the shipped package passes the gate on a report the gate generated
