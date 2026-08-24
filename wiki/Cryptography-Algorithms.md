@@ -4,6 +4,8 @@ Complete reference for all cryptographic algorithms used in AMA Cryptography, th
 
 > **Design Principle:** AMA Cryptography is built exclusively from standardized cryptographic primitives (NIST FIPS, IETF RFC). No custom ciphers, hash functions, or signature schemes. The composition protocol is an original design by Steel Security Advisors LLC.
 
+> **Performance figures on this page are point-in-time snapshots, not release measurements.** The per-algorithm ops/sec bullets below were captured on various hosts and dates (each bullet is dated), drift by more than ±20% across machines, are not re-measured per release, and are **not mutually consistent** with the other published tables — for Ed25519 key generation alone, this page (≈9,100 ops/sec), `wiki/Performance-Benchmarks.md` (33,073) and the README Performance section (55,716) quote three different numbers, none of them a 5.0.0 measurement. The authoritative, host-anchored numbers are the regression floors in `benchmarks/baseline.json` / `benchmarks/arm-baseline.json` and the generated `benchmark-report.md`; the README Performance section carries the full 4.x-vs-5.0.0 staleness note (INVARIANT-41 makes the keygen figures here optimistic). Read the bullets below as order-of-magnitude guidance only.
+
 ---
 
 ## Algorithm Summary

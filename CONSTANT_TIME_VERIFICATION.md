@@ -463,6 +463,19 @@ Two consequences worth stating rather than leaving implied:
   (x86-64 inline assembly for constant-time table selection, see
   `ed25519-donna-64bit-x86.h`).
 
+> **Sanitizer coverage caveat (audit M21).** When a sanitizer build is
+> configured (`AMA_ENABLE_SANITIZERS=ON`), CMake defines `ED25519_NO_INLINE_ASM`
+> (see `CMakeLists.txt`), which disables `ED25519_GCC_64BIT_X86_CHOOSE` — the
+> hand-written constant-time choose-niels conditional move donna's x86-64 scalar
+> multiply uses, and the code the default x86-64 wheel ships
+> (`AMA_ED25519_ASSEMBLY` defaults ON). So the ASan / MSan / UBSan / TSan lanes
+> exercise the **portable** donna C path, not the choose-niels assembly that
+> actually ships. The trade-off is deliberate — sanitizers cannot instrument
+> that asm meaningfully and it raises register pressure — but it means a
+> "67/67 under ASan+UBSan" figure is a statement about the portable path: the
+> shipping choose-niels asm is covered by the functional test suite and the
+> dudect constant-time lane, not by the sanitizers.
+
 #### The portable fe51 backend (`src/c/ama_ed25519.c`, AArch64 and generic)
 
 The native C Ed25519 implementation provides constant-time operations:

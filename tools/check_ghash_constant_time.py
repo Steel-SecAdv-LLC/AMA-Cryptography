@@ -47,8 +47,10 @@ Three measurements:
 * **Signal** — distinct key classes against each other.
 * **Verdict** — fail if any cross-key delta exceeds ``--threshold``.
 
-Calibration, measured on the reference build (x86-64, 8 encryptions of 512 B
-with 64 B AAD, scalar path forced):
+Calibration (x86-64, 8 encryptions of 512 B with 64 B AAD, scalar path forced).
+The table below is illustrative of the failure mode — a value-dependent branch
+the optimizer introduces around a masked accumulate, which the value barrier
+(``ama_ct_value_barrier_u64``) denies it:
 
 ===================================  ==================
 build                                cross-key delta
@@ -57,6 +59,18 @@ clang -O3 without the value barrier  3,226 instructions
 clang -O3 with the value barrier             12
 same key, two runs (noise floor)       up to 25
 ===================================  ==================
+
+**This "clang -O3" figure does not reproduce on the compilers available today
+(audit M24).** Removing the ``__asm__`` from ``ama_ct_value_barrier_u64`` and
+rebuilding ``ama_aes_gcm.c -O3 -DAMA_AES_CONSTTIME=1``: under ``clang 18.1.3`` the
+object is BYTE-IDENTICAL with and without the barrier; under ``gcc 13`` it differs
+only in register allocation, with the SAME conditional-branch count (100 vs 100).
+Neither currently-available compiler reintroduces the branch the 3,226 row
+describes, so that row is attributed to a compiler version / flag set no longer
+identified here.  The barrier is therefore kept as **forward insurance** against a
+compiler that does perform the conversion, not as a signal this gate reproduces on
+today's toolchain; the operative measurement is the per-target limits below (all
+zero), which the gate DOES reproduce on both gcc 13 and clang 18.
 
 Per-target limits are set from measurement, not from headroom: all EIGHTEEN
 targets measure a cross-class delta of exactly zero under both gcc 13 and
