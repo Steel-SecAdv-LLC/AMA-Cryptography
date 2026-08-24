@@ -57,6 +57,75 @@ def test_github_invariants_file_is_pointer() -> None:
     )
 
 
+class TestTagPins:
+    """README's own install commands must name the canonical version (M11).
+
+    The predecessor swept docs/**/*.rst only, so README's `@vX.Y.Z` install
+    pins — which are .md — went unchecked while the comment claimed to cover
+    them (INVARIANT-32).
+    """
+
+    def test_the_real_tree_covers_the_readme_and_landing_page_pins(
+        self, tool_module: ModuleType
+    ) -> None:
+        repo = TOOL_PATH.resolve().parent.parent
+        problems, checked = tool_module.scan_tag_pins(repo, "5.0.0")
+        assert problems == [], problems
+        # README ships two install pins and docs/index.rst one; a sweep that
+        # finds fewer has stopped seeing them — the vacuity M11 was about.
+        assert checked >= 3, f"the tag-pin sweep found only {checked} pins"
+
+    def test_a_stale_readme_style_md_pin_is_reported(
+        self, tool_module: ModuleType, tmp_path: Path
+    ) -> None:
+        (tmp_path / "README.md").write_text(
+            'pip install "git+https://github.com/Steel-SecAdv-LLC/'
+            'AMA-Cryptography.git@v4.0.0"\n',
+            encoding="utf-8",
+        )
+        problems, checked = tool_module.scan_tag_pins(tmp_path, "5.0.0")
+        assert checked == 1
+        assert problems and "@v4.0.0" in problems[0] and "README.md" in problems[0]
+
+    def test_a_matching_md_pin_passes(self, tool_module: ModuleType, tmp_path: Path) -> None:
+        # The requirements-style pin README also carries.
+        (tmp_path / "README.md").write_text(
+            "ama-cryptography @ git+https://github.com/Steel-SecAdv-LLC/"
+            "AMA-Cryptography.git@v5.0.0\n",
+            encoding="utf-8",
+        )
+        problems, checked = tool_module.scan_tag_pins(tmp_path, "5.0.0")
+        assert problems == [] and checked == 1
+
+    def test_a_third_party_action_pin_is_not_a_package_pin(
+        self, tool_module: ModuleType, tmp_path: Path
+    ) -> None:
+        """INVARIANTS.md pins slsa-github-generator@v2.1.0 — a different repo,
+        not the AMA package, so it must not be read as a stale version."""
+        (tmp_path / "INVARIANTS.md").write_text(
+            "uses: slsa-framework/slsa-github-generator/"
+            ".github/workflows/generator_generic_slsa3.yml@v2.1.0\n",
+            encoding="utf-8",
+        )
+        problems, checked = tool_module.scan_tag_pins(tmp_path, "5.0.0")
+        assert problems == [] and checked == 0
+
+    def test_changelog_and_compliance_pins_are_excluded(
+        self, tool_module: ModuleType, tmp_path: Path
+    ) -> None:
+        """A CHANGELOG entry or a dated attestation may pin an old tag."""
+        (tmp_path / "CHANGELOG.md").write_text(
+            "In v4.0.0, install with AMA-Cryptography.git@v4.0.0\n", encoding="utf-8"
+        )
+        compliance = tmp_path / "docs" / "compliance"
+        compliance.mkdir(parents=True)
+        (compliance / "OLD_ATTESTATION.md").write_text(
+            "Generated against AMA-Cryptography.git@v3.0.0\n", encoding="utf-8"
+        )
+        problems, checked = tool_module.scan_tag_pins(tmp_path, "5.0.0")
+        assert problems == [] and checked == 0
+
+
 class TestInvariantRangeClaims:
     """ "INVARIANT-1 through INVARIANT-N" is a count in prose, and it went stale.
 

@@ -482,6 +482,50 @@ def scan_invariant_range_claims(repo: Path, highest: int) -> tuple[list[str], in
     return problems, checked
 
 
+#: A git-tag install pin on the AMA repository, e.g.
+#: ``git+https://github.com/Steel-SecAdv-LLC/AMA-Cryptography.git@v5.0.0``.
+#: Anchored to the repo name so a THIRD-PARTY action pin (INVARIANTS.md cites
+#: ``slsa-github-generator/...@v2.1.0``) is not read as a stale package pin.
+#: Case-insensitive: the URLs spell it ``AMA-Cryptography``.
+_TAG_PIN_RE = re.compile(r"AMA-Cryptography(?:\.git)?@v(\d+\.\d+\.\d+)", re.IGNORECASE)
+
+
+def scan_tag_pins(repo: Path, canonical: str) -> tuple[list[str], int]:
+    """``(problems, pins checked)`` over the docs that carry an AMA git-tag pin.
+
+    Reads ``docs/**/*.rst`` AND every ``*.md`` except ``CHANGELOG.md`` and
+    ``docs/compliance/**`` — a historical changelog entry or a dated attestation
+    may legitimately pin an OLD tag, exactly as the document-header sweep
+    excludes them.  The predecessor read ``docs/**/*.rst`` only, so README's own
+    install commands (``pip install "git+...AMA-Cryptography.git@vX.Y.Z"`` and
+    the requirements-style ``ama-cryptography @ git+...@vX.Y.Z``) went
+    unchecked, though its comment claimed "the same contract as the README
+    install pins" — a ``.md`` was matched only by the document-HEADER pattern,
+    which does not see an install command (INVARIANT-32; audit M11).
+    """
+    docs = list((repo / "docs").rglob("*.rst"))
+    for md in repo.rglob("*.md"):
+        if any(part in {".git", "build", "node_modules"} for part in md.parts):
+            continue
+        if md.name == "CHANGELOG.md" or "compliance" in md.parts:
+            continue
+        docs.append(md)
+    problems: list[str] = []
+    checked = 0
+    for doc in sorted(docs):
+        text = _read(doc)
+        if not text:
+            continue
+        for m in _TAG_PIN_RE.finditer(text):
+            checked += 1
+            if m.group(1) != canonical:
+                problems.append(
+                    f"  - {repo_relative(doc, repo)} git-tag install pin: "
+                    f"@v{m.group(1)} != canonical {canonical!r}"
+                )
+    return problems, checked
+
+
 def extract(file: str, pattern: str) -> str | None:
     """Return the single capture group from `pattern`, or None if not found.
 
@@ -669,23 +713,22 @@ def main() -> int:
             )
 
     # -------------------------------------------------------------------
-    # Git-tag install pins in Sphinx sources.
-    #
-    # The *.md sweep below cannot see docs/**/*.rst, so the Sphinx landing
-    # page shipped a `pip install ...@v3.4.0` command into the 3.5.0
-    # release while this script printed "All declarations agree".  Any
-    # `@vX.Y.Z` git-tag pin in an .rst under docs/ must name the canonical
-    # version — same contract as the README install pins (INVARIANT-32).
-    for rst in sorted((REPO / "docs").rglob("*.rst")):
-        text = _read(rst)
-        if not text:
-            continue
-        for m in re.finditer(r"@v(\d+\.\d+\.\d+)", text):
-            desc = f"{repo_relative(rst, REPO)} git-tag pin"
-            if m.group(1) != canonical:
-                failures.append(f"  - {desc}: @v{m.group(1)} != canonical {canonical!r}")
-            else:
-                print(f"OK    {desc:<60s} = {m.group(1)}")
+    # Git-tag install pins in prose docs (.rst AND .md) — see scan_tag_pins.
+    # The predecessor read docs/**/*.rst only and missed README's own install
+    # commands, though its comment claimed to cover them (INVARIANT-32; M11).
+    pin_problems, pins_checked = scan_tag_pins(REPO, canonical)
+    failures.extend(pin_problems)
+    # Non-vacuity: the README and the Sphinx landing page both ship an install
+    # pin, so a sweep that finds none has stopped matching (a moved file, a
+    # broken pattern) rather than legitimately having nothing to check.
+    if pins_checked < 2:
+        failures.append(
+            f"  - git-tag install pins: found only {pins_checked}; the README and "
+            f"docs/index.rst install commands should yield at least 2. The pin "
+            f"sweep has stopped seeing them — check the pattern and the file set."
+        )
+    elif not pin_problems:
+        print(f"OK    git-tag install pins ({pins_checked} checked)".ljust(65) + f"= {canonical}")
 
     # -------------------------------------------------------------------
     # Documentation version headers.
