@@ -325,6 +325,10 @@
     },
     "floor_drift_acknowledged": [
       {
+        "path": "src/c/ama_ascon.c",
+        "reason": "ama_ascon_permutation_for_test dropped its AMA_API qualifier (a test-only function, now delocalised via cmake/ama_exports.map for the B2 export-hardening) and gained an explanatory comment. Measured rather than asserted: on ELF AMA_API expands to nothing (include/ama_cryptography.h), so the translation unit is OBJECT-IDENTICAL before and after -- the .text section is byte-identical and the full defined-symbol set is identical under x86-64 gcc -O3 -DNDEBUG -std=c11. The de-export is effected by the version script and -fvisibility=hidden at link time, not by this source edit, and the test hook is on no benchmarked path. It cannot move a floor on either file."
+      },
+      {
         "path": "src/c/ama_kyber.c",
         "reason": "barrett_reduce rewritten with int32 intermediates for -Wconversion (94e4bd6). Proven bit-identical over all 65,536 inputs, but it is an NTT inner-loop function, so kyber_keygen/kyber_encapsulate throughput is NOT vouched for by the pre-change medians. Carried as a coarse floor pending a canonical re-measure; the benchmark-regression job on this PR is the check that exercises it. SampleNTT (FIPS 203 Algorithm 7) additionally now streams the XOF until the polynomial is full instead of stopping at a fixed 672-octet window (aff4861), so kyber_poly_uniform and kyber_gen_matrix_flush4 changed shape. No aarch64 valgrind was available on the runner this was measured from, so the dynamic figures are x86-64: kyber_keygen 736,964 -> 731,145 Ir (-0.79%), kyber_encapsulate 807,730 -> 801,942 Ir (-0.72%), both cheaper. The aarch64 evidence is static: aarch64-linux-gnu-gcc -O3 per-symbol disassembly confines the shape change to kyber_poly_uniform (68 -> 120 instructions) and kyber_gen_matrix_flush4 (96 -> 165), with 22 of 32 symbols byte-identical and every remaining delta 0 or -1. The sampler is architecture-independent scalar C in the shared translation unit and the NEON kernels it feeds are untouched."
       },
