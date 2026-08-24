@@ -203,3 +203,101 @@ class TestTheCythonBindingInventoryHasAFloor:
         )
         stale = sorted(listed - {p.name for p in cython_dir.glob("*.pyx")})
         assert not stale, f"BINDING_PYX names files that do not exist: {stale}"
+
+
+class TestModuleDiscovery:
+    """Module-level discovery: no native-reaching module unaudited by omission (M16).
+
+    ``MODULES`` was hand-maintained against eleven modules that reach the native
+    library, so a new one was unaudited by default. Discovery now requires every
+    native-reaching module to be audited (MODULES) or exempted with a reason
+    (EXEMPT_MODULES).
+    """
+
+    def _mk(self, tmp_path: Path, name: str, body: str) -> Path:
+        pkg = tmp_path / "ama_cryptography"
+        pkg.mkdir(exist_ok=True)
+        (pkg / name).write_text(body, encoding="utf-8")
+        return tmp_path
+
+    def test_every_native_reaching_module_is_classified(self, tool: ModuleType) -> None:
+        discovered = set(tool.discover_native_reaching_modules(REPO_ROOT))
+        classified = set(tool.MODULES) | set(tool.EXEMPT_MODULES)
+        unclassified = sorted(discovered - classified)
+        assert not unclassified, (
+            "these modules reach the native library but are in neither MODULES nor "
+            f"EXEMPT_MODULES, so they are unaudited by omission: {unclassified}"
+        )
+
+    def test_discovery_finds_the_known_native_modules(self, tool: ModuleType) -> None:
+        """Non-vacuity: discovery must actually find the modules we know reach native."""
+        discovered = set(tool.discover_native_reaching_modules(REPO_ROOT))
+        for rel in (
+            "ama_cryptography/pqc_backends.py",
+            "ama_cryptography/ascon.py",
+            "ama_cryptography/agent_binding.py",
+            "ama_cryptography/secure_memory.py",
+            "ama_cryptography/_self_test.py",
+            "ama_cryptography/crypto_api.py",
+            "ama_cryptography/hybrid_combiner.py",
+            "ama_cryptography/key_management.py",
+            "ama_cryptography/legacy_compat.py",
+        ):
+            assert rel in discovered, f"discovery missed a native-reaching module: {rel}"
+
+    def test_exempt_modules_are_not_stale(self, tool: ModuleType) -> None:
+        discovered = set(tool.discover_native_reaching_modules(REPO_ROOT))
+        stale = sorted(m for m in tool.EXEMPT_MODULES if m not in discovered)
+        assert not stale, f"EXEMPT_MODULES names modules that no longer reach native: {stale}"
+
+    def test_agent_binding_and_secure_memory_are_audited_not_exempted(
+        self, tool: ModuleType
+    ) -> None:
+        """Both have a directly-auditable public native surface, so they belong in
+        MODULES (actively audited), not EXEMPT_MODULES."""
+        assert "ama_cryptography/agent_binding.py" in tool.MODULES
+        assert "ama_cryptography/secure_memory.py" in tool.MODULES
+        # The two page-locking functions emit no key material and are the reason
+        # secure_memory can be audited rather than exempted wholesale.
+        assert "secure_mlock" in tool.EXEMPT
+        assert "secure_munlock" in tool.EXEMPT
+
+    def test_an_unclassified_native_module_is_discovered(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        """Reproduce the M16 gap: a new module reaching native is discovered so
+        main() can refuse it until it is audited or exempted on purpose."""
+        repo = self._mk(
+            tmp_path,
+            "newthing.py",
+            "from ama_cryptography.pqc_backends import _native_lib\n"
+            "def do():\n    return _native_lib.ama_something()\n",
+        )
+        discovered = tool.discover_native_reaching_modules(repo)
+        assert "ama_cryptography/newthing.py" in discovered
+
+    def test_getattr_string_form_is_discovered(self, tool: ModuleType, tmp_path: Path) -> None:
+        repo = self._mk(
+            tmp_path,
+            "dyn.py",
+            "import sys\n"
+            "def probe():\n"
+            "    pb = sys.modules.get('ama_cryptography.pqc_backends')\n"
+            "    return getattr(pb, '_native_lib', None)\n",
+        )
+        assert "ama_cryptography/dyn.py" in tool.discover_native_reaching_modules(repo)
+
+    def test_comment_and_lookalike_are_not_false_positives(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        """A comment mentioning _native_lib, and the _find_native_library name
+        (which contains the substring), must not register as reaching native —
+        the reason discovery is AST-based rather than a grep."""
+        repo = self._mk(
+            tmp_path,
+            "innocent.py",
+            "# this module does not touch _native_lib at all\n"
+            "from ama_cryptography.pqc_backends import _find_native_library\n"
+            "def where():\n    return _find_native_library()\n",
+        )
+        assert "ama_cryptography/innocent.py" not in tool.discover_native_reaching_modules(repo)

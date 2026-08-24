@@ -82,6 +82,20 @@ Deliberate exemptions live in ``EXEMPT`` below, each with a stated reason.
 The exemption list is itself checked: an entry naming a function that no
 longer exists is an error, so the list cannot rot into a silent allowlist.
 
+Which modules are scanned
+-------------------------
+``MODULES`` was hand-maintained, which meant a new module reaching the native
+library was unaudited *by default* rather than by decision (audit M16).  A
+discovery step now AST-scans ``ama_cryptography/**/*.py`` for the forms that
+reach the library — ``_native_lib`` as a Name/Attribute, ``getattr(x,
+"_native_lib", …)``, or a ``_cy_*`` call — and requires every module it finds
+to appear in ``MODULES`` (audited) or in ``EXEMPT_MODULES`` (exempted with a
+reason for why the body-level AST audit is not its enforcement — indirect
+reach through a private helper, a presence check, or delegation to
+``pqc_backends``' gated wrappers).  A native-reaching module in neither list
+fails the check.  ``EXEMPT_MODULES`` is staleness-checked the same way
+``EXEMPT`` is: an entry that no longer reaches the library is an error.
+
 Usage
 -----
     python tools/check_error_state_gating.py
@@ -154,6 +168,16 @@ CYTHON_PREFIX = "_cy_"
 MODULES = (
     "ama_cryptography/pqc_backends.py",
     "ama_cryptography/ascon.py",
+    # Added by the discovery step below (audit M16): both have a directly
+    # auditable public native surface, so they are audited rather than exempted.
+    # ``agent_binding`` reaches ``_native_lib.ama_*`` in five public methods
+    # (derive_key, signing_context, authorize, …), each guarded with
+    # check_crypto_permitted().  ``secure_memory`` reaches native in
+    # secure_mlock/secure_munlock — page locking that emits no key material, so
+    # both are in EXEMPT below — and auditing the module means a future public
+    # function there that DOES emit cryptographic output is caught by default.
+    "ama_cryptography/agent_binding.py",
+    "ama_cryptography/secure_memory.py",
 )
 
 #: Functions/methods that reach a native symbol without the guard for a stated
@@ -171,6 +195,66 @@ EXEMPT: dict[str, str] = {
         "resource cleanup: frees the native context (ama_context_free) and must "
         "succeed in the ERROR state so a faulted module still releases memory. "
         "It produces no cryptographic output."
+    ),
+    "secure_mlock": (
+        "page locking: calls ama_secure_mlock to pin a page in RAM and returns a "
+        "status int. It emits no key material and produces no cryptographic "
+        "output, so it is outside INVARIANT-39's output-inhibition scope (audit "
+        "M16). The module's actual entropy surface, secure_random_bytes, routes "
+        "through secure_token_bytes and is gated."
+    ),
+    "secure_munlock": (
+        "page unlocking: the ama_secure_munlock counterpart to secure_mlock; "
+        "must succeed in the ERROR state so a faulted module still releases the "
+        "locked pages, and it emits no key material."
+    ),
+}
+
+#: Modules that reach the native library but are NOT in :data:`MODULES`, each
+#: with the reason the AST audit is not the right enforcement for them.  The
+#: discovery step in :func:`main` requires every native-reaching package module
+#: to appear in ``MODULES`` or here — so a NEW module that reaches the library is
+#: audited or exempted on purpose, not unaudited by silent omission (audit M16).
+#:
+#: These all reach native only INDIRECTLY — through a private helper, a presence
+#: check, or delegation to ``pqc_backends``' already-gated wrappers — so a
+#: body-level AST scan of their public functions sees no direct native call to
+#: require a guard on.  Their behaviour is enforced elsewhere, as noted.
+#:
+#: Like ``EXEMPT``, this list is staleness-checked: an entry naming a module that
+#: no longer reaches the native library is an error, so it cannot rot into a
+#: silent allowlist.
+EXEMPT_MODULES: dict[str, str] = {
+    "ama_cryptography/_self_test.py": (
+        "POST and integrity verification. Reaches native only through private "
+        "helpers (_load_integrity_trust_anchor reads the compiled trust anchor; "
+        "the signed-integrity path calls native Ed25519 verify) — this module "
+        "RUNS power-on self-test and SETS the error state, so gating it with "
+        "check_crypto_permitted would be circular. It emits no cryptographic "
+        "output on a caller's behalf."
+    ),
+    "ama_cryptography/crypto_api.py": (
+        "High-level API. Reaches native only through pqc_backends' guarded "
+        "wrappers (no direct _native_lib.ama_* call in any public function); its "
+        "own _native_lib references are the INVARIANT-7 presence check, and it "
+        "additionally calls check_operational() on its public methods."
+    ),
+    "ama_cryptography/hybrid_combiner.py": (
+        "Reaches native through _hkdf_native, where both the guard and the "
+        "native call live, so the public functions' own bodies contain neither. "
+        "Enforced behaviourally by tests/test_post_failclosed.py, which drives "
+        "each surface in the ERROR state and asserts it refuses."
+    ),
+    "ama_cryptography/key_management.py": (
+        "Reaches native only through pqc_backends' already-gated wrappers "
+        "(native_hmac_sha512, native_argon2id, native_secp256k1_pubkey_from_privkey, "
+        "…); its own _native_lib reference is the INVARIANT-7 call-time presence "
+        "check (_enforce_invariant7), which emits no cryptographic output."
+    ),
+    "ama_cryptography/legacy_compat.py": (
+        "Reaches native only through the INVARIANT-7 call-time presence check "
+        "(getattr(pqc_backends, '_native_lib', None) is None); all cryptographic "
+        "output is delegated to pqc_backends' gated wrappers."
     ),
 }
 
@@ -430,6 +514,63 @@ def _iter_public_functions(
                         yield f"{node.name}.{sub.name}", sub
 
 
+def _module_reaches_native(tree: ast.AST) -> bool:
+    """Whether a module reaches the native library by any form that could let a
+    public function emit cryptographic output.
+
+    Matched on the AST so comments and lookalike names (``_find_native_library``
+    contains the substring ``_native_lib``) are never false positives:
+
+    * ``_native_lib`` as a Name or an Attribute — the direct handle;
+    * ``getattr(x, "_native_lib", ...)`` — the dynamic-by-string re-read
+      ``crypto_api`` and ``legacy_compat`` use so ``sys.modules`` patches take
+      effect;
+    * a call to a ``_cy_*`` Cython binding — the fast path that bypasses the
+      ctypes wrappers.
+    """
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and node.id == "_native_lib":
+            return True
+        if isinstance(node, ast.Attribute) and node.attr == "_native_lib":
+            return True
+        if isinstance(node, ast.Call):
+            fn = node.func
+            if isinstance(fn, ast.Name) and fn.id.startswith(CYTHON_PREFIX):
+                return True
+            if (
+                isinstance(fn, ast.Name)
+                and fn.id == "getattr"
+                and len(node.args) >= 2
+                and isinstance(node.args[1], ast.Constant)
+                and node.args[1].value == "_native_lib"
+            ):
+                return True
+    return False
+
+
+def discover_native_reaching_modules(repo: Path) -> list[str]:
+    """Every package module that reaches the native library, repo-relative.
+
+    Scans ``ama_cryptography/**/*.py`` (skipping ``__pycache__``) so a module
+    added later cannot reach the library while escaping this gate simply by not
+    being listed — the silent omission the discovery exists to make impossible
+    (audit M16).  Each result must appear in :data:`MODULES` (audited) or
+    :data:`EXEMPT_MODULES` (exempted with a reason); :func:`main` enforces it.
+    """
+    pkg = repo / "ama_cryptography"
+    found: list[str] = []
+    for path in sorted(pkg.rglob("*.py")):
+        if "__pycache__" in path.parts:
+            continue
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        except SyntaxError:
+            continue
+        if _module_reaches_native(tree):
+            found.append(str(path.relative_to(repo)))
+    return found
+
+
 def audit(
     path: Path, exempt: dict[str, str] | None = None
 ) -> tuple[list[tuple[str, int]], list[str], int]:
@@ -606,6 +747,37 @@ def main() -> int:
             print(f"  - {name}", file=sys.stderr)
         return 1
 
+    # Discovery (audit M16): every package module that reaches the native
+    # library must be audited (MODULES) or exempted on purpose (EXEMPT_MODULES).
+    # Before this, MODULES was hand-maintained and a new native-reaching module
+    # was unaudited by default rather than by decision.
+    discovered = discover_native_reaching_modules(REPO_ROOT)
+    classified = set(MODULES) | set(EXEMPT_MODULES)
+    unclassified = sorted(m for m in discovered if m not in classified)
+    if unclassified:
+        print(
+            "ERROR: module(s) reach the native library but appear in neither "
+            "MODULES (to be audited) nor EXEMPT_MODULES (exempted with a reason). "
+            "A module reaching the library while unlisted is unaudited by "
+            "omission — decide on purpose:",
+            file=sys.stderr,
+        )
+        for name in unclassified:
+            print(f"  - {name}", file=sys.stderr)
+        return 1
+
+    stale_modules = sorted(m for m in EXEMPT_MODULES if m not in discovered)
+    if stale_modules:
+        print(
+            "ERROR: stale entries in EXEMPT_MODULES — these no longer reach the "
+            "native library, so the exemption is dead weight that would silently "
+            "cover a future module of the same path:",
+            file=sys.stderr,
+        )
+        for name in stale_modules:
+            print(f"  - {name}", file=sys.stderr)
+        return 1
+
     if total_ungated or pyx_ungated:
         n = len(total_ungated) + len(pyx_ungated)
         print(
@@ -631,7 +803,9 @@ def main() -> int:
     print(
         f"OK: all {total_checked} public native entry points across "
         f"{len(MODULES)} module(s) and {pyx_checked} Cython binding entry points "
-        f"are gated ({len(EXEMPT)} documented exemption(s))."
+        f"are gated ({len(EXEMPT)} documented function exemption(s)). "
+        f"Discovery: {len(discovered)} native-reaching module(s), all classified "
+        f"({len(MODULES)} audited, {len(EXEMPT_MODULES)} exempted with a reason)."
     )
     return 0
 
