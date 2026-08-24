@@ -78,16 +78,26 @@ class TestSignerVerifierAgreement:
         )
         assert _self_test._composite_integrity_message_v3(py, native, {}) != base
 
-    def test_serialization_is_order_independent_and_framed(self) -> None:
+    def test_serialization_is_order_independent_and_length_framed(self) -> None:
         a = {"x.so": b"\x01" * 32, "y.so": b"\x02" * 32}
         b = dict(reversed(list(a.items())))
         assert _self_test._serialize_binding_digests(a) == (
             _self_test._serialize_binding_digests(b)
         )
-        # NUL framing: name boundaries cannot be shifted between entries.
+        # Count prefix binds the map size, not just the entries.
+        assert _self_test._serialize_binding_digests({}) == (0).to_bytes(4, "big")
+        assert _self_test._serialize_binding_digests(a)[:4] == (2).to_bytes(4, "big")
+        # Length framing is unconditionally injective: two maps that share every
+        # digest but partition the name bytes differently serialize distinctly.
         assert _self_test._serialize_binding_digests(
-            {"ab.so": b"\x01" * 32}
-        ) != _self_test._serialize_binding_digests({"a": b"b" + b".so\x00" + b"\x01" * 31})
+            {"a": b"\x01" * 32, "bb": b"\x02" * 32}
+        ) != _self_test._serialize_binding_digests({"aa": b"\x01" * 32, "b": b"\x02" * 32})
+        # ...and it does not depend on filenames lacking NUL — a name that
+        # embeds NUL (which the old delimiter form could not have framed) still
+        # serializes distinctly from a shifted read.
+        assert _self_test._serialize_binding_digests(
+            {"a\x00b": b"\x03" * 32}
+        ) != _self_test._serialize_binding_digests({"a": b"\x00b" + b"\x03" * 30})
 
 
 def _setup_py_class_constant(name: str) -> tuple[str, ...]:

@@ -478,12 +478,23 @@ def _iter_extension_files(pkg_dir: Path) -> List[Path]:
 def _serialize_binding_digests(binding_digests: Dict[str, bytes]) -> bytes:
     """Canonical serialization of the binding-digest map (see _build_sign).
 
-    ``name || 0x00 || digest`` per entry, sorted by name.  Mirrored
-    byte-for-byte in ``_build_sign._serialize_binding_digests``.
+    Count- and length-prefixed, entries in sorted-name order, so the encoding
+    is UNCONDITIONALLY injective: no sequence of entries can be re-partitioned
+    into a different map with the same bytes, whatever a name or digest
+    contains.  This is the same framing :func:`_absorb_entry` uses for the
+    module digest; it replaces an earlier ``name || 0x00 || digest`` form whose
+    injectivity relied on the external invariant that a filename never contains
+    NUL.  Mirrored byte-for-byte in ``_build_sign._serialize_binding_digests``.
     """
     out = bytearray()
+    out += len(binding_digests).to_bytes(4, "big")
     for name in sorted(binding_digests):
-        out += name.encode("utf-8") + b"\x00" + binding_digests[name]
+        name_bytes = name.encode("utf-8")
+        digest = binding_digests[name]
+        out += len(name_bytes).to_bytes(4, "big")
+        out += name_bytes
+        out += len(digest).to_bytes(4, "big")
+        out += digest
     return bytes(out)
 
 

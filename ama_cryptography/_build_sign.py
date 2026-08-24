@@ -281,14 +281,23 @@ def _compute_binding_digests(pkg_dir: Path) -> Dict[str, bytes]:
 def _serialize_binding_digests(binding_digests: Dict[str, bytes]) -> bytes:
     """Canonical byte serialization of the binding-digest map.
 
-    ``name || 0x00 || digest`` per entry, entries in sorted-name order.  The
-    NUL terminator makes the (name, digest) framing unambiguous — filenames
-    cannot contain NUL — so no concatenation of entries collides with any
-    other map.  Mirrored byte-for-byte in ``_self_test``.
+    Count- and length-prefixed, entries in sorted-name order, so the framing
+    is UNCONDITIONALLY injective: no concatenation of entries collides with any
+    other map, regardless of what a name or digest contains.  This matches the
+    length-prefixed framing ``_self_test._absorb_entry`` uses for the module
+    digest and replaces the earlier ``name || 0x00 || digest`` form, whose
+    injectivity relied on filenames never containing NUL.  Mirrored
+    byte-for-byte in ``_self_test``.
     """
     out = bytearray()
+    out += len(binding_digests).to_bytes(4, "big")
     for name in sorted(binding_digests):
-        out += name.encode("utf-8") + b"\x00" + binding_digests[name]
+        name_bytes = name.encode("utf-8")
+        digest = binding_digests[name]
+        out += len(name_bytes).to_bytes(4, "big")
+        out += name_bytes
+        out += len(digest).to_bytes(4, "big")
+        out += digest
     return bytes(out)
 
 
