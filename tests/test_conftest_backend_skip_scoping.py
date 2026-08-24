@@ -28,6 +28,7 @@ tests pin that behavior so the regression cannot silently come back.
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import os
 from pathlib import Path
@@ -550,6 +551,190 @@ def test_imperative_backend_skip_without_ci_env_stays_a_skip(
         """)
     result = isolated_conftest.runpytest_subprocess(*_inner_pytest_args())
     result.assert_outcomes(skipped=1, failed=0, errors=0, passed=0)
+
+
+# ---------------------------------------------------------------------------
+# Interop-oracle escalation (audit M18)
+#
+# The nine backend keywords never matched the cross-implementation tests, whose
+# skip reasons name the REFERENCE library (PyCA cryptography / PyNaCl /
+# pycryptodome), not an AMA backend.  A failed `.[dev,legacy,benchmark]` install
+# in the require-backends lane muted every one of the only independent-oracle
+# checks and the report stayed green.  The fix is a `requires_interop_oracle`
+# marker the hook escalates, and a completeness guard so a new interop test
+# cannot silently escape it.
+# ---------------------------------------------------------------------------
+
+
+def test_interop_marked_skip_becomes_a_failure_in_ci(
+    isolated_conftest: pytest.Pytester,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A skipped test carrying ``requires_interop_oracle`` must become a hard
+    failure under ``AMA_CI_REQUIRE_BACKENDS=1`` — its reason names PyCA, not a
+    backend, so the keyword net never caught it (M18)."""
+    monkeypatch.setenv("AMA_CI_REQUIRE_BACKENDS", "1")
+    isolated_conftest.makepyfile("""
+        import pytest
+
+        @pytest.mark.requires_interop_oracle
+        @pytest.mark.skipif(True, reason="PyCA cryptography not available")
+        class TestInterop:
+            def test_cross_check(self):
+                raise AssertionError("must not run")
+        """)
+    result = isolated_conftest.runpytest_subprocess(*_inner_pytest_args())
+    result.assert_outcomes(errors=1, failed=0, skipped=0, passed=0)
+    result.stdout.fnmatch_lines(["*CI FAILURE: PyCA cryptography not available*"])
+
+
+def test_interop_marked_skip_without_ci_env_stays_a_skip(
+    isolated_conftest: pytest.Pytester,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Outside the require-backends lane a missing oracle is a legitimate skip."""
+    monkeypatch.delenv("AMA_CI_REQUIRE_BACKENDS", raising=False)
+    isolated_conftest.makepyfile("""
+        import pytest
+
+        @pytest.mark.requires_interop_oracle
+        @pytest.mark.skipif(True, reason="PyCA cryptography not available")
+        class TestInterop:
+            def test_cross_check(self):
+                raise AssertionError("must not run")
+        """)
+    result = isolated_conftest.runpytest_subprocess(*_inner_pytest_args())
+    result.assert_outcomes(skipped=1, failed=0, errors=0, passed=0)
+
+
+def test_an_unmarked_interop_skip_is_not_escalated(
+    isolated_conftest: pytest.Pytester,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The escalation is marker-gated, not prose-gated: a PyCA skip WITHOUT the
+    marker stays a skip (this is why the completeness guard below matters — the
+    marker, not the wording, is what escalates)."""
+    monkeypatch.setenv("AMA_CI_REQUIRE_BACKENDS", "1")
+    isolated_conftest.makepyfile("""
+        import pytest
+
+        @pytest.mark.skipif(True, reason="PyCA cryptography not available")
+        class TestInterop:
+            def test_cross_check(self):
+                raise AssertionError("must not run")
+        """)
+    result = isolated_conftest.runpytest_subprocess(*_inner_pytest_args())
+    result.assert_outcomes(skipped=1, failed=0, errors=0, passed=0)
+
+
+#: Tokens that identify a skip reason as gating on an external reference
+#: implementation rather than on an AMA backend.
+_INTEROP_ORACLE_TOKENS = ("pyca", "cryptography not", "pynacl", "pycryptodome", "cross-validation")
+
+
+def _reason_names_oracle(reason: str) -> bool:
+    low = reason.lower()
+    return any(tok in low for tok in _INTEROP_ORACLE_TOKENS)
+
+
+def _skipif_reason(call: ast.Call) -> str | None:
+    """The ``reason=`` string of a ``pytest.mark.skipif(...)`` call, or None."""
+    func = call.func
+    is_skipif = (isinstance(func, ast.Attribute) and func.attr == "skipif") or (
+        isinstance(func, ast.Name) and func.id == "skipif"
+    )
+    if not is_skipif:
+        return None
+    for kw in call.keywords:
+        if kw.arg == "reason" and isinstance(kw.value, ast.Constant):
+            return str(kw.value.value)
+    # positional reason: skipif(condition, reason)
+    if len(call.args) >= 2 and isinstance(call.args[1], ast.Constant):
+        return str(call.args[1].value)
+    return None
+
+
+def _interop_helper_names(tree: ast.AST) -> set[str]:
+    """Module-level names bound to a skipif whose reason names an oracle
+    (``skip_no_pyca = pytest.mark.skipif(..., reason="PyCA ...")``)."""
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Call):
+            reason = _skipif_reason(node.value)
+            if reason and _reason_names_oracle(reason):
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        names.add(target.id)
+    return names
+
+
+def _decorator_names(node: ast.AST) -> set[str]:
+    """The simple/attribute names of a def/class's decorators, for helper and
+    marker matching (``requires_interop_oracle``, ``skip_no_pyca``, …)."""
+    names: set[str] = set()
+    for dec in getattr(node, "decorator_list", []):
+        target = dec.func if isinstance(dec, ast.Call) else dec
+        if isinstance(target, ast.Name):
+            names.add(target.id)
+        elif isinstance(target, ast.Attribute):
+            names.add(target.attr)
+    return names
+
+
+def _has_interop_marker(node: ast.AST) -> bool:
+    return "requires_interop_oracle" in _decorator_names(node)
+
+
+def _decorated_defs(
+    tree: ast.AST,
+) -> list[ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef]:
+    out: list[ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef] = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            out.append(node)
+    return out
+
+
+def test_every_interop_reason_skip_in_the_tree_carries_the_marker() -> None:
+    """Completeness guard (M18): any test whose skip gates on an interop oracle —
+    inline reason OR a module-level skipif helper whose reason names one — must
+    carry ``requires_interop_oracle``, so a new cross-implementation test cannot
+    silently escape the escalation the way all of them did before this fix.
+
+    Non-vacuous: the assertion below also fails if the scan finds NO interop
+    skips at all, which would mean the pattern stopped matching."""
+    tests_dir = Path(__file__).resolve().parent
+    offenders: list[str] = []
+    interop_sites = 0
+    for path in sorted(tests_dir.glob("test_*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        helpers = _interop_helper_names(tree)
+        for node in _decorated_defs(tree):
+            dec_names = _decorator_names(node)
+            inline_oracle = any(
+                (_skipif_reason(dec) or "") and _reason_names_oracle(_skipif_reason(dec) or "")
+                for dec in getattr(node, "decorator_list", [])
+                if isinstance(dec, ast.Call)
+            )
+            via_helper = bool(dec_names & helpers)
+            if inline_oracle or via_helper:
+                interop_sites += 1
+                if "requires_interop_oracle" not in dec_names:
+                    offenders.append(f"{path.name}:{node.lineno}:{getattr(node, 'name', '?')}")
+    assert interop_sites >= 6, f"expected the known interop skip sites, found {interop_sites}"
+    assert not offenders, (
+        "these tests gate on an interop oracle but lack @pytest.mark.requires_interop_oracle, "
+        f"so a missing PyCA/PyNaCl/pycryptodome would mute them silently: {offenders}"
+    )
+
+
+def test_the_interop_marker_is_registered_so_strict_markers_accepts_it() -> None:
+    """--strict-markers is in addopts; an unregistered marker would fail the
+    whole suite. Pin that requires_interop_oracle is declared."""
+    pyproject = (Path(__file__).resolve().parent.parent / "pyproject.toml").read_text(
+        encoding="utf-8"
+    )
+    assert "requires_interop_oracle" in pyproject
 
 
 class TestNativeLibraryDetection:

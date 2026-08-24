@@ -216,6 +216,7 @@ requires_pyca = pytest.mark.skipif(
 
 
 @requires_pyca
+@pytest.mark.requires_interop_oracle  # M18: a skip here means a missing oracle
 class TestEd25519Interop:
     """Cross-implementation interop tests: native C <-> PyCA cryptography."""
 
@@ -406,6 +407,7 @@ class TestRFC8032Vectors:
         assert native_ed25519_verify(sig, message, pk)
 
     @requires_pyca
+    @pytest.mark.requires_interop_oracle  # M18: a skip here means a missing oracle
     @pytest.mark.parametrize(
         "vector",
         RFC8032_VECTORS[:3],

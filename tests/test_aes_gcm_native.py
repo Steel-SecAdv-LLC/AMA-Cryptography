@@ -336,6 +336,7 @@ class TestAESGCMNISTVectors:
 
 @skip_no_native
 @skip_no_pyca
+@pytest.mark.requires_interop_oracle  # M18: a skip here means a missing oracle
 class TestAESGCMInterop:
     """Interop tests between native and PyCA cryptography."""
 

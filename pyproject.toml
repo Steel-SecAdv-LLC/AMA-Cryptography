@@ -561,6 +561,7 @@ markers = [
     "fips: marks FIPS 140-3 self-test and compliance tests",
     "smoke: marks smoke tests that verify no exception is raised",
     "requires_host_isa(token): the test's subject is an instruction-set extension; on a host without it the CI backend-skip escalation in tests/conftest.py leaves the skip alone (tokens: x86, x86-64, aarch64)",
+    "requires_interop_oracle: the test cross-checks an AMA primitive against an external reference implementation (PyCA cryptography / PyNaCl / pycryptodome); under AMA_CI_REQUIRE_BACKENDS the require-backends lane installs those, so a skip means the oracle install broke and tests/conftest.py escalates it to a failure (audit M18)",
 ]
 filterwarnings = [
     "error",
