@@ -484,9 +484,22 @@ jobs:
         # in every CI lane because these libs were never installed.  They are
         # test-only references, NOT a runtime dependency (INVARIANT-1 forbids
         # product code importing them; the invariant lint enforces that only
-        # ama_cryptography/*.py stays clean).  Linux-gated to avoid cross-OS
-        # wheel flakiness on the primary differential lane.
-        if: runner.os == 'Linux'
+        # ama_cryptography/*.py stays clean).
+        #
+        # Installed on EVERY OS, not Linux only.  The "Run tests" step sets
+        # AMA_CI_REQUIRE_BACKENDS=1 on all three OSes, and tests/conftest.py
+        # escalates a skipped `requires_interop_oracle` test to a hard failure
+        # under that flag (audit M18) — its rationale states outright that "the
+        # require-backends lane installs all three".  Gating this step to Linux
+        # while requiring the oracle everywhere left the macOS and Windows lanes
+        # running the interop tests with no oracle present, so each errored on
+        # ~14 `requires_interop_oracle` cases (PyCA/PyNaCl/pycryptodome).  The
+        # earlier "cross-OS wheel flakiness" caveat predates current wheels:
+        # cryptography (cp39-abi3), PyNaCl (cp38-abi3 + cp314) and pycryptodome
+        # publish macosx_11_0_arm64 and win_amd64 binaries across the whole
+        # 3.10–3.14 matrix, so pip resolves wheels rather than building from
+        # source.  ci.yml::test already installs the same three unconditionally
+        # (via the [legacy,benchmark] extras) and its Windows lane is green.
         run: pip install cryptography pynacl pycryptodome
 
       # The signed artefact's native digest is specific to the exact build it
