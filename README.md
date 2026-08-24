@@ -253,7 +253,7 @@ NIST-standardized post-quantum algorithms:
 | NIST P-256 / P-384 / P-521 | Full | Full | FIPS 186-5 ECDSA + SP 800-56A ECDH; TLS/X.509/JOSE/COSE/WebAuthn interop. P-256 4-limb Montgomery MULX+ADCX/ADOX kernel; P-384/P-521 use the generic multi-limb CIOS path constant-folded to their limb counts. Strict minimal-DER with `r`,`s` in `[1, n-1]` unconditional; RFC 6979 `s` emitted verbatim and either representative accepted by default, low-`s` opt-in via `AMA_NISTP_ECDSA_SIGN_LOW_S` / `AMA_NISTP_ECDSA_REQUIRE_LOW_S` (INVARIANT-34); canonical field-element pubkey coordinates (INVARIANT-29). See [docs/NIST_PRIME_CURVES.md](docs/NIST_PRIME_CURVES.md) |
 | secp256k1 | Full | Full | RFC 6979 deterministic ECDSA; fixed-base comb over the compile-time generator (4-block, 16 entries) — pubkey derivation and signing scalar multiplications use the comb; caller-supplied bases keep the constant-time Montgomery ladder |
 | ML-KEM-512 / -768 / -1024 | Full (native) | Full | FIPS 203; Fujisaki–Okamoto transform, IND-CCA2; NTT q=3329 |
-| ML-DSA-44 / -65 / -87 | Full (native) | Full | FIPS 204; NTT q=8380417; rejection sampling; constant-time |
+| ML-DSA-44 / -65 / -87 | Full (native) | Full | FIPS 204; NTT q=8380417; constant-time NTT/arithmetic; signing's rejection-sampling loop has intentional timing variation by design (leaks no private-key material) |
 | SLH-DSA-SHA2-256f | Full (native) | Full | FIPS 205; WOTS+ / FORS / hypertree d=17 |
 | SLH-DSA-SHAKE-128s | Full (native) | Full | FIPS 205 |
 | LMS / HSS verify | Full | Full | SP 800-208; verification and parameter reads (`ama_lms_verify`, `ama_hss_verify`, `ama_lms_signature_length`, `ama_hss_pubkey_levels`) — signing is not exposed at the Python layer |
@@ -397,7 +397,7 @@ Additional C sources:
 | Operation | Throughput (Python API via ctypes) | Latency | Notes |
 |-----------|-----------|---------|-------|
 | **KeyGen** | 3,626 ops/sec | ~276µs | Native C, NTT q=8380417 |
-| **Sign** | 2,976 ops/sec | ~336µs | Rejection sampling, constant-time |
+| **Sign** | 2,976 ops/sec | ~336µs | Rejection sampling — intentional, by-design timing variation (leaks no key); NTT/arithmetic constant-time |
 | **Verify** | 7,576 ops/sec | ~132µs | Verified against NIST ACVP test vectors (self-attested) |
 
 *Source: canonical bench host (Linux x86-64 with AVX-512F/VL/BW/DQ/VBMI + VAES + VPCLMULQDQ), measured 2026-04-25. Reproducible with `python benchmarks/benchmark_runner.py` and `build/bin/benchmark_c_raw --json` on equivalent silicon (~4,845 KeyGen, ~3,929 Sign, ~7,773 Verify ops/sec raw C, no ctypes). The checked-in `benchmarks/benchmark-results.json` carries a measured run on the host its own provenance names plus the slow-runner CI regression floors in `baseline_value` — neither column is these canonical numbers; see [CHANGELOG.md](CHANGELOG.md#300---2026-04-27) and [docs/BENCHMARK_HISTORY.md](docs/BENCHMARK_HISTORY.md) for the dual-host methodology.*
@@ -1083,7 +1083,7 @@ These KAT tests validate the native C implementations against official NIST FIPS
 ### Key Implementation Details
 
 - **FIPS 203 (ML-KEM-1024):** Full Fujisaki-Okamoto transform with IND-CCA2 security, NTT-based polynomial multiplication (q=3329), implicit rejection for ciphertext validation
-- **FIPS 204 (ML-DSA-65):** Rejection sampling with NTT (q=8380417), constant-time operations, deterministic signing
+- **FIPS 204 (ML-DSA-65):** Constant-time NTT/arithmetic (q=8380417); signing's rejection-sampling loop has intentional timing variation by design (leaks no private-key material); deterministic (hedged-off) signing
 - **FIPS 205 (SPHINCS+-SHA2-256f-simple):** WOTS+ one-time signatures, FORS few-time signatures, hypertree (d=17) construction
 - **SHA3/SHAKE:** Incremental XOF (SHAKE128/SHAKE256) with proper multi-block squeeze for FIPS 203/204 compliance
 

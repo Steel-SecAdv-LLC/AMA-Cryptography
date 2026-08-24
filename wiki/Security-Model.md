@@ -116,12 +116,12 @@ The following operations are implemented in constant time:
 
 | Operation | Implementation | Status |
 |-----------|---------------|--------|
-| HMAC comparison | `ama_consttime_memcmp()` (C) / XOR accumulator (Python) | ✓ Constant-time |
-| Ed25519 signing | `ama_ed25519.c` with `fe25519_sq()` | ✓ Constant-time |
-| Ed25519 verification | Windowed scalar multiplication | ✓ Constant-time |
+| HMAC / tag comparison | `ama_consttime_memcmp()` (C); Python `constant_time_compare()` calls it via ctypes and raises if the native backend is unavailable — no pure-Python fallback | ✓ Constant-time |
+| Ed25519 signing | `ama_ed25519.c` with `fe25519_sq()` (secret scalar) | ✓ Constant-time |
+| Ed25519 verification | `ge25519_double_scalarmult_vartime` wNAF over **public** inputs (public key, signature, message) | Variable-time by design — inputs are public, so timing carries no secret (INVARIANT-12) |
 | AES-256-GCM (default) | Bitsliced S-box (`AMA_AES_CONSTTIME=ON`) | ✓ Constant-time |
 | AES-256-GCM (opt-out) | Table-based S-box (`-DAMA_AES_CONSTTIME=OFF -DAMA_AES_TABLE_INSECURE=ON`) | ⚠ NOT constant-time |
-| ML-DSA-65 | NTT operations | ✓ Constant-time |
+| ML-DSA-65 | NTT and polynomial arithmetic are constant-time; **signing** additionally uses rejection sampling | ◐ Arithmetic constant-time; sign has intentional timing variation by design (FIPS 204 rejection sampling), leaking no private-key material |
 | ML-KEM-1024 | NTT + Fujisaki-Okamoto | ✓ Constant-time |
 | Key zeroing | `secure_memzero()` multi-pass | ✓ Compiler-resistant |
 
