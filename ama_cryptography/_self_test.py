@@ -161,7 +161,25 @@ def module_attestation() -> Dict[str, Any]:
         ``error_reason``     — root cause when ``state`` is ERROR, else None.
         ``fully_verified``   — True only when the module is OPERATIONAL *and*
                                no self-test was skipped.  This is the flag a
-                               release gate should assert.
+                               release gate should assert.  It does NOT imply
+                               ``anchored``: a developer build signed with a
+                               per-build ephemeral key reports ``fully_verified:
+                               True`` exactly as a release wheel does, so a gate
+                               that must distinguish a release artefact has to
+                               assert ``anchored`` as well (audit M2).
+        ``integrity_strength`` — how the source integrity was established:
+                               ``"signed"`` (Ed25519 signature and native
+                               library both verified), ``"signed-native-
+                               unverified"`` (signature verified, native object
+                               not), ``"digest-only"`` (unsigned plaintext
+                               digest matched — corruption-evident, not tamper-
+                               evident), or None if no check completed.
+        ``anchored``         — True when the verified signature was made under
+                               the compiled trust anchor (a release build),
+                               False for a per-build/developer signature or the
+                               digest-only fallback, None when no integrity
+                               check completed.  The distinction that
+                               ``fully_verified`` alone cannot express.
         ``strict_mode``      — whether ``AMA_FIPS_STRICT`` was in force.
         ``tests_run`` / ``tests_passed`` / ``tests_skipped``.
         ``skipped``          — ``[(name, detail), ...]`` for each skipped test,
@@ -189,6 +207,8 @@ def module_attestation() -> Dict[str, Any]:
         "state": module_status(),
         "error_reason": module_error_reason(),
         "fully_verified": module_status() == "OPERATIONAL" and not skipped and not failed,
+        "integrity_strength": _INTEGRITY_STRENGTH,
+        "anchored": _INTEGRITY_ANCHORED,
         "strict_mode": _env_flag_enabled(_AMA_FIPS_STRICT_ENV),
         "tests_run": len(results),
         "tests_passed": n_pass,
@@ -264,6 +284,21 @@ _INTEGRITY_DIGEST_FILE = Path(__file__).resolve().parent / "_integrity_digest.tx
 #: file an attacker who edited the sources could rewrite in the same breath.  A
 #: gate cannot refuse a downgrade it cannot see.
 _INTEGRITY_STRENGTH: Optional[str] = None
+
+#: Whether the verified signature was made under the compiled trust anchor.
+#:
+#: ``_INTEGRITY_STRENGTH`` is a function of ``(native_ok, bindings_exact)`` only,
+#: so a release wheel signed under the long-lived anchor key and a developer
+#: build signed with a per-build ephemeral key BOTH report ``"signed"`` and
+#: ``fully_verified: True``.  The one distinction that separates a release
+#: artefact from a developer one — anchored vs unanchored — lived solely in the
+#: prose of the detail string ("trusted build pubkey" vs "build-time pubkey")
+#: and never left the verifier, so a programmatic consumer (a deployment health
+#: check, a release gate — see H3, where an unanchored release could be cut)
+#: could not read it.  This records it: ``True`` when the signing key matched the
+#: compiled anchor, ``False`` for a per-build/developer signature or the
+#: digest-only fallback, ``None`` when no integrity check completed (audit M2).
+_INTEGRITY_ANCHORED: Optional[bool] = None
 _INTEGRITY_REQUIRE_TRUST_ANCHOR_ENV = "AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR"
 _TRUE_ENV_VALUES = {"1", "true", "yes", "on"}
 
@@ -1502,8 +1537,9 @@ def _verify_signed_integrity(digest_hex: str) -> Tuple[Optional[bool], str]:
         )
 
     # Signature authentic.  Now bind it to the shared object actually loaded.
-    global _INTEGRITY_STRENGTH
+    global _INTEGRITY_STRENGTH, _INTEGRITY_ANCHORED
     anchored = trust_anchor_hex is not None
+    _INTEGRITY_ANCHORED = anchored
     if native_digest_raw is None:
         verdict, native_note, native_ok = (
             None,
@@ -1645,9 +1681,10 @@ def verify_module_integrity() -> Tuple[bool, str]:
     runtime cost is a single hash + (optionally) a single Ed25519
     verify, both well under 1 ms.
     """
-    global _INTEGRITY_STRENGTH, _INTEGRITY_FAILURE_KIND
+    global _INTEGRITY_STRENGTH, _INTEGRITY_FAILURE_KIND, _INTEGRITY_ANCHORED
     _INTEGRITY_STRENGTH = None
     _INTEGRITY_FAILURE_KIND = None
+    _INTEGRITY_ANCHORED = None
     current = _compute_module_digest()
 
     signed_ok, signed_detail = _verify_signed_integrity(current)
@@ -1763,6 +1800,34 @@ def verify_module_integrity() -> Tuple[bool, str]:
     # absent, fail there too rather than emitting an unsigned wheel.  This no
     # longer carries the runtime case — the anchor check above does.
     if _env_flag_enabled(_INTEGRITY_REQUIRE_TRUST_ANCHOR_ENV):
+        # Same signer carve-out as the compiled-anchor branch at the top of this
+        # block.  That branch only fires when the native library reports an
+        # anchor; when the requirement arrives via the environment but the
+        # library is not (yet) anchored — the "anchor in the env, not in the
+        # compiled object" configuration — control reaches HERE instead, with
+        # anchor_hex None.  resign_wheel.py deletes _integrity_signature.py and
+        # then invokes `python -m ama_cryptography._build_sign` with the release
+        # env (AMA_BUILD_PIPELINE=1 and the inherited REQUIRE_TRUST_ANCHOR)
+        # inherited untouched, so without this carve-out the signer's own import
+        # of the tree it is about to sign is classified as tampering and hard
+        # fails — the signer can never mint the artefact, and post-repair
+        # re-signing deadlocks (audit M13).  For the signer only, record a stale
+        # binding so __init__'s AMA_BUILD_PIPELINE escape can complete the import
+        # in the ERROR state (every cryptographic surface stays refused); for
+        # every other process the verdict stays tampering.  Identity is the
+        # process's own launch record, not an environment variable, and
+        # secure-execution mode revokes it — identical to the compiled-anchor
+        # sibling above.
+        if _integrity_signer_process():
+            return False, _record_stale_binding_failure(
+                "signed integrity could not be verified and "
+                f"{_INTEGRITY_REQUIRE_TRUST_ANCHOR_ENV}=1 forbids digest-only "
+                "fallback, in a process launched as the integrity signer with "
+                "AMA_BUILD_PIPELINE=1. A signing run begins from the artefact it "
+                "is about to replace being absent, so this is recorded as a stale "
+                "binding: the stage fails, the import may complete for the signer "
+                f"only, and every cryptographic surface stays refused. Cause: {signed_detail}"
+            )
         return False, _finalise_integrity_failure(
             "signed integrity could not be verified and "
             f"{_INTEGRITY_REQUIRE_TRUST_ANCHOR_ENV}=1 forbids digest-only "
@@ -1801,6 +1866,9 @@ def verify_module_integrity() -> Tuple[bool, str]:
         signed_detail,
     )
     _INTEGRITY_STRENGTH = "digest-only"
+    # An unsigned tree carries no signature and therefore no anchor: digest-only
+    # is unanchored by construction, distinct from None (no check completed).
+    _INTEGRITY_ANCHORED = False
     return True, f"Module integrity verified (digest-only fallback: {signed_detail})"
 
 
