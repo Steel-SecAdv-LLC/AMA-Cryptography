@@ -143,7 +143,7 @@ integration, expanded-key fast path) is in-house.
 | ML-DSA-65 KeyGen | FIPS 204 | ACVP-Server | 25 | 25 | 0 | 50 | ML-DSA-44/87 skipped |
 | ML-DSA-65 SigVer | FIPS 204 | ACVP-Server | 15 | 15 | 0 | 165 | External/pure TG 3; resolved via `ama_dilithium_verify_ctx` |
 | SLH-DSA-SHA2-256f SigVer | FIPS 205 | ACVP-Server | 14 | 14 | 0 | 490 | External/pure TG 5 only; resolved via FIPS 205 hash function alignment |
-| **TOTAL** | | | **1,215** | **1,215** | **0** | **5,789** | 4,757 AFT-filtered + 1,032 non-AFT (LDT+VOT) |
+| **TOTAL** | | | **1,215** | **1,215** | **0** | **5,789** | 4,667 AFT-filtered + 1,122 non-AFT (LDT+VOT+ML-KEM EncapDecap) |
 
 ### 2.2 Resolved: ML-DSA-65 SigVer (previously 3 failures, now 15/15 pass)
 

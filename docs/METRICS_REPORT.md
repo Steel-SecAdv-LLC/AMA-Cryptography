@@ -287,7 +287,7 @@ Authoritative anchor: [`CSRC_ALIGN_REPORT.md`](compliance/CSRC_ALIGN_REPORT.md).
 | Vectors tested | **1,215** | `docs/compliance/CSRC_ALIGN_REPORT.md` §Abstract |
 | Vectors passed | **1,215** | `docs/compliance/CSRC_ALIGN_REPORT.md` §Abstract |
 | Vectors failed | **0** | `docs/compliance/CSRC_ALIGN_REPORT.md` §Abstract |
-| Vectors skipped | 5,789 | `docs/compliance/CSRC_ALIGN_REPORT.md` §Abstract (4,757 AFT-filtered + 1,032 non-AFT) |
+| Vectors skipped | 5,789 | `docs/compliance/CSRC_ALIGN_REPORT.md` §Abstract (4,667 AFT-filtered + 1,122 non-AFT) |
 | SHA-3 Monte Carlo Test (MCT) vectors | **400** | 4 algos × 1 tcId × 100 outer iterations (FIPS-202 MCT spec) |
 | Algorithm functions tested | **12** | `docs/compliance/CSRC_ALIGN_REPORT.md` §1.1 |
 | NIST standards covered | **7** | 6 FIPS (180-4, 198-1, 202, 203, 204, 205) + SP 800-38D |
