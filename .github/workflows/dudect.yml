@@ -879,6 +879,24 @@ jobs:
           python tools/check_secret_division.py \
             --lib build-shared/lib/libama_cryptography.so
 
+      - name: AVX2/AVX-512 code must stay inside its scoped kernels (audit M3)
+        # Of the three SIMD-scoping principal findings, KyberSlash got the gate
+        # above and SVE2 got the arm-qemu-sve2 lane; the AVX2-scoping fix got
+        # only a CMake comment.  A library-wide -mavx2 auto-vectorises the whole
+        # object with YMM and reintroducing it builds clean and passes the
+        # functional suite — nothing kept the per-file scoping holding.  This
+        # reads the SAME shipped shared object as the KyberSlash gate and fails
+        # if any YMM/ZMM operand appears outside an AVX2/AVX-512 kernel.
+        #
+        # Verified against the real defect: rebuilt with -DCMAKE_C_FLAGS=-mavx2
+        # (global), this gate reported YMM/ZMM in dozens of non-kernel symbols
+        # (ama_aes_sbox_consttime, ama_argon2id_core, ama_ascon_*, ama_ed25519_*)
+        # and exited 1.  On the per-file-scoped build it reports 0 outside a
+        # kernel.
+        run: |
+          python tools/check_avx_scoping.py \
+            --lib build-shared/lib/libama_cryptography.so
+
   aead-verify-invariance:
     # The AEAD accept/reject pair at ct_len == 0, pinned by retired
     # instruction counts.  Runs on the ARM runner deliberately: the
