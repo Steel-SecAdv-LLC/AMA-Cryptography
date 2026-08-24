@@ -162,4 +162,26 @@ unsigned int ama_kyber_test_rej_uniform_from_stream(int16_t coeffs[256],
  */
 int ama_build_optimization_probe(void);
 
+/**
+ * Raw Ascon permutation, for the C KAT only.
+ *
+ * The KAT drives the permutation directly so a fault in the permutation
+ * cannot be cancelled by a compensating fault in the modes that wrap it.
+ * Not part of the supported API surface.
+ *
+ * This declaration lived in `include/ama_cryptography.h` until it was moved
+ * here.  The function deliberately carries no `AMA_API`, and
+ * `cmake/ama_exports.map` localises it, so it is absent from the shared
+ * library's dynamic symbol table (verified: `nm -D` finds nothing).  A
+ * downstream consumer that included the installed public header and called
+ * the function it declared therefore got an unresolved-symbol link failure
+ * against `libama_cryptography.so` — a declaration promising an ABI that the
+ * export map exists to withhold.  The C KAT reaches it by linking the static
+ * `ama_cryptography_test` archive, which is what this header is for.
+ *
+ * @param state  In/out: five 64-bit state words
+ * @param rounds Round count, 1..16; the call is a no-op outside that range
+ */
+void ama_ascon_permutation_for_test(uint64_t state[5], unsigned rounds);
+
 #endif /* AMA_TESTING_EXPORTS_H */

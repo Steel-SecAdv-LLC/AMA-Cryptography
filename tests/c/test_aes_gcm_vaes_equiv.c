@@ -233,7 +233,7 @@ int main(void) {
                "        and ACVP.\n",
                ama_has_aes_ni(), ama_has_pclmulqdq());
         printf("\nAll AES-GCM equivalence checks SKIPPED.\n");
-        return 0;
+        return 77;
     }
 #endif
 
@@ -246,7 +246,7 @@ int main(void) {
                "        src/c/ama_aes_gcm.c is already covered by test_kat\n"
                "        and ACVP.\n");
         printf("\nAll AES-GCM equivalence checks SKIPPED.\n");
-        return 0;
+        return 77;
     }
 
 #if defined(AMA_HAVE_AVX2_IMPL) && (defined(__x86_64__) || defined(_M_X64))
@@ -277,7 +277,7 @@ int main(void) {
                "        GCC/Clang build for meaningful VAES coverage.\n",
                ama_cpuid_has_vaes_aesgcm());
         printf("\nAll AES-GCM equivalence checks SKIPPED (VAES not active).\n");
-        return 0;
+        return 77;
     }
 
     /* Boundary plaintext lengths from the brief.  AAD is exercised
@@ -330,6 +330,6 @@ int main(void) {
      * main() handles that case separately). */
     (void)dt;
     printf("\nAll AES-GCM equivalence checks SKIPPED (no AVX2 build).\n");
-    return 0;
+    return 77;
 #endif
 }

@@ -360,6 +360,13 @@ if(AMA_USE_NATIVE_PQC)
     add_ama_test(test_dilithium_ntt_equiv test_dilithium_ntt_equiv.c)
     set_tests_properties(test_dilithium_ntt_equiv PROPERTIES SKIP_RETURN_CODE 77)
     add_ama_test(test_dilithium_rej_equiv test_dilithium_rej_equiv.c)
+    # SKIP_RETURN_CODE 77, matching test_dilithium_ntt_equiv directly above.
+    # dispatch_table.dilithium_rej_uniform is assigned only in the AVX2 block
+    # of ama_dispatch.c, so this test's skip branch is permanent on AArch64 —
+    # and without this property its skip (formerly `return 0`) was reported by
+    # CTest as "Passed", certifying ML-DSA rejection sampling on every ARM lane
+    # while executing zero checks.
+    set_tests_properties(test_dilithium_rej_equiv PROPERTIES SKIP_RETURN_CODE 77)
     # 2026-05 — public-API regression for `ama_dilithium_{ntt,invntt}_bench()`.
     # The two new benchmark wrappers route through `dil_{ntt,invntt}_cached`
     # with the dispatch slot bound explicitly. This test pairs the wrapper
@@ -376,6 +383,13 @@ if(AMA_USE_NATIVE_PQC)
     # tag against the AVX2 AES-NI reference, round-trip decrypt
     # correctness, and tag-tamper rejection.
     add_ama_test(test_aes_gcm_vaes_equiv test_aes_gcm_vaes_equiv.c)
+    # SKIP_RETURN_CODE 77, matching test_aes_gcm_neon_equiv below.  This test
+    # has four skip paths (no AES-NI/PCLMULQDQ, NULL dispatch slot, dispatcher
+    # chose the AES-NI reference rather than VAES, and non-AVX2 build); all
+    # four formerly returned 0, so CTest reported "Passed" on every AArch64
+    # lane and on any x86-64 host without VAES — a green AES-GCM equivalence
+    # result from a run that compared nothing.
+    set_tests_properties(test_aes_gcm_vaes_equiv PROPERTIES SKIP_RETURN_CODE 77)
 
     # AArch64-completeness PR (2026-05) — NEON AES-GCM kernel
     # equivalence test.  Pairs the dispatch-resolved NEON AES-GCM

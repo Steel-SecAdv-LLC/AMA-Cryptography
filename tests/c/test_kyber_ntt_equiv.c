@@ -64,6 +64,12 @@ extern void ama_kyber_ntt_sve2(int16_t poly[256], const int16_t zetas[128]);
 extern void ama_kyber_invntt_sve2(int16_t poly[256], const int16_t zetas[128]);
 #endif
 
+/* The SHIPPED scalar fallback — the implementation the dispatcher installs
+ * when a SIMD slot is NULL, and the one the auto-tune benches the SIMD slots
+ * against.  Lane 4 compares it directly; see the rationale there. */
+extern void ama_kyber_ntt_generic_ref(int16_t poly[256], const int16_t zetas[128]);
+extern void ama_kyber_invntt_generic_ref(int16_t poly[256], const int16_t zetas[128]);
+
 /* AMA_TESTING_MODE end-to-end forced-scalar parity hooks (resolved
  * at link time from libama_cryptography_test). */
 extern void ama_test_force_kyber_ntt_scalar(void);
@@ -168,9 +174,10 @@ static void scalar_kyber_invntt(int16_t r[KYBER_N]) {
         }
     }
     /* Final mul by f = 128^{-1} (Montgomery form) + canonicalise.
-     * AVX2 path emits montgomery_mul + barrett_reduce here; the
-     * scalar production path only emits montgomery, so we add the
-     * trailing barrett to match AVX2's canonical post-condition. */
+     * AVX2, NEON, SVE2 and — since the fallback was harmonised — the
+     * shipped scalar production path all emit montgomery_mul followed by
+     * barrett_reduce here, so every implementation shares the canonical
+     * [0, q] post-condition.  Lane 4 pins that the shipped one still does. */
     for (j = 0; j < KYBER_N; j++) {
         r[j] = montgomery_reduce_ref((int32_t)f * r[j]);
         r[j] = barrett_reduce_ref(r[j]);
@@ -388,8 +395,66 @@ int main(void) {
         printf("INFO: forced-scalar parity lane skipped (no SIMD wired)\n");
     }
 
+    /* --------------------------------------------------------------
+     * Lane 4: the SHIPPED scalar fallback vs this file's reference.
+     *
+     * WHY THIS LANE EXISTS.  Every lane above compares a SIMD kernel
+     * against `scalar_kyber_ntt` — a private copy living in this file.
+     * That left the one implementation the dispatcher actually installs
+     * when a SIMD slot is NULL (and the one the auto-tune benches the
+     * SIMD slots against), `ama_kyber_ntt_generic_ref`, compared to
+     * nothing at all.  It had drifted: it omitted the trailing
+     * canonicalising Barrett sweep that all three SIMD kernels and this
+     * file's reference apply, so it disagreed with every other
+     * implementation by exact multiples of q on roughly 58% of
+     * coefficients.  No wrong bytes reached a caller — production
+     * serialisation funnels through poly_reduce/coeff_normalize — but
+     * the divergence was invisible to this test precisely because the
+     * test never looked at the shipped function.  A reference that is
+     * not the shipped code cannot detect the shipped code drifting away
+     * from it.  This lane runs on every build, SIMD or not.
+     * -------------------------------------------------------------- */
+    for (int trial = 0; trial < N_TRIALS; trial++) {
+        for (int i = 0; i < KYBER_N; i++) {
+            int16_t r = (int16_t)(xs_next() % (2 * KYBER_Q - 1)) - (KYBER_Q - 1);
+            poly_s[i] = r;
+            poly_v[i] = r;
+        }
+        scalar_kyber_ntt(poly_s);
+        ama_kyber_ntt_generic_ref(poly_v, kyb_zetas);
+        fail += cmp_poly(poly_s, poly_v, "shipped generic_ref forward NTT", trial);
+
+        scalar_kyber_invntt(poly_s);
+        ama_kyber_invntt_generic_ref(poly_v, kyb_zetas);
+        fail += cmp_poly(poly_s, poly_v, "shipped generic_ref inverse NTT", trial);
+
+        /* The documented post-condition: canonical [0, q]. */
+        for (int i = 0; i < KYBER_N; i++) {
+            if (poly_v[i] < 0 || poly_v[i] > KYBER_Q) {
+                fprintf(stderr,
+                        "FAIL: generic_ref left coeff %d = %d outside [0, %d]\n",
+                        i, (int)poly_v[i], KYBER_Q);
+                fail++;
+                break;
+            }
+        }
+        if (fail && trial >= 2) {
+            break;
+        }
+    }
+    if (fail == 0) {
+        printf("PASS: shipped scalar fallback matches the reference (%d trials)\n",
+               N_TRIALS);
+    }
+
+    if (fail) {
+        printf("==========================================\n");
+        return 1;
+    }
+
     if (!any_lane_exercised) {
         printf("SKIP: no SIMD Kyber NTT kernel on this build/CPU\n");
+        printf("  (the shipped-fallback lane above still ran)\n");
         printf("==========================================\n");
         return 77;
     }

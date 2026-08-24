@@ -589,7 +589,11 @@ AMA_API ama_error_t ama_ascon_aead128_decrypt(
  */
 /* No AMA_API: test-only, deliberately not exported from the shared library
  * (also localised in cmake/ama_exports.map).  The C KAT links it statically
- * via ama_cryptography_test.  See the header for the rationale (audit Low). */
+ * via ama_cryptography_test.  Declared in internal/ama_testing_exports.h —
+ * NOT in the installed public header, which would promise an ABI the export
+ * map exists to withhold. */
+#include "internal/ama_testing_exports.h"
+
 void ama_ascon_permutation_for_test(uint64_t state[5], unsigned rounds) {
     ama_ascon_state_t s;
     unsigned i;

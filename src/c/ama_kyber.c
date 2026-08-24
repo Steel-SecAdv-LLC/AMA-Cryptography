@@ -2514,6 +2514,21 @@ static void kyber_ntt_scalar(int16_t coeffs[256], const int16_t zetas_tab[128]) 
             }
         }
     }
+
+    /* Canonicalising sweep into [0, q], matching the trailing barrett_reduce
+     * every SIMD kernel appends (avx2/ama_kyber_avx2.c, neon/ama_kyber_neon.c,
+     * sve2/ama_kyber_sve2.c).  Without it this function — the one the dispatch
+     * auto-tune benches the SIMD slots against, and the fallback installed
+     * whenever a SIMD slot is NULL — left coefficients unreduced and disagreed
+     * with all three kernels by exact multiples of q on ~58% of coefficients.
+     * No wrong bytes ever reached a caller, because every serialization path
+     * funnels through poly_reduce/coeff_normalize; but the post-condition this
+     * file documents as a "single source of truth" was not one, the
+     * auto-tune was comparing unequal work, and a future consumer of
+     * dt->kyber_ntt relying on the canonical range would have been wrong. */
+    for (j = 0; j < KYBER_N; j++) {
+        coeffs[j] = barrett_reduce(coeffs[j]);
+    }
 }
 
 static void kyber_invntt_scalar(int16_t coeffs[256], const int16_t zetas_tab[128]) {
@@ -2533,9 +2548,12 @@ static void kyber_invntt_scalar(int16_t coeffs[256], const int16_t zetas_tab[128
         }
     }
 
-    /* Multiply by f = 128^{-1} */
+    /* Multiply by f = 128^{-1}, then canonicalise — the SIMD inverse kernels
+     * apply barrett_reduce in this same final loop (see the montgomery_mul +
+     * barrett_reduce pair in ama_kyber_invntt_avx2 and its NEON/SVE2 twins).
+     * Same rationale as the forward sweep above. */
     for (j = 0; j < KYBER_N; j++) {
-        coeffs[j] = montgomery_reduce((int32_t)f * coeffs[j]);
+        coeffs[j] = barrett_reduce(montgomery_reduce((int32_t)f * coeffs[j]));
     }
 }
 
