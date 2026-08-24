@@ -270,6 +270,7 @@ class Report:
     gated_binaries_checked: int = 0
     cmake_configures_checked: int = 0
     pytest_steps_checked: int = 0
+    gate_required_jobs_checked: int = 0
 
     @property
     def ok(self) -> bool:
@@ -1231,6 +1232,104 @@ def check_pytest_prerequisites(path: Path, document: Any, report: Report) -> Non
                 )
 
 
+#: A step ``if:`` that consults ``steps.<id>.outputs.<name>`` — a value the job
+#: computes on the runner during its own run.  ``steps.<id>.outcome`` /
+#: ``.conclusion`` are deliberately NOT matched: a step gated on a PRIOR step's
+#: result is a diagnostic or cleanup handler, which cannot manufacture a vacuous
+#: success.  A step gated on a self-computed OUTPUT is the shape that can.
+_SELF_PROBE_IF_RE = re.compile(r"steps\.[A-Za-z0-9_\-]+\.outputs\.")
+
+
+def _normalize_needs(raw: Any) -> list[str]:
+    """A job's ``needs:`` as a list, whether written as a scalar or a sequence."""
+    if isinstance(raw, str):
+        return [raw]
+    if isinstance(raw, list):
+        return [str(item) for item in raw if isinstance(item, (str, int))]
+    return []
+
+
+def _gate_required_jobs(document: Any) -> set[str]:
+    """Job ids depended on by an aggregating ``*-gate`` job in this workflow.
+
+    ``needs:`` is workflow-local in GitHub Actions, so resolution stays within
+    one parsed document.  A gate is identified by the ``-gate`` id suffix, the
+    convention every aggregating status check in this repository already uses
+    (ci-gate, arm-qemu-gate, security-gate, static-analysis-gate, ...).
+    """
+    required: set[str] = set()
+    for job_id, job in _iter_jobs(document):
+        if job_id.endswith("-gate"):
+            required.update(_normalize_needs(job.get("needs")))
+    return required
+
+
+def check_gate_jobs_run_their_payload(path: Path, document: Any, report: Report) -> None:
+    """A gated job must not be able to report success without doing its work (H2).
+
+    The ``AVX-512 SHA3 4-way KAT`` job sat in ``ci-gate``'s ``needs:`` with no
+    job-level ``if:`` and every build/test step behind
+    ``if: steps.cpu.outputs.have_avx512 == '1'``.  ubuntu-latest rarely exposes
+    AVX-512, so on almost every run those steps skipped, the job reported
+    ``success`` (a job with no job-level ``if:`` whose steps all skip is not
+    itself ``skipped``), and the gate counted it green — a required check that
+    had never executed.
+
+    A job-level ``if:`` is the honest form of "run only sometimes": every
+    ``*-gate`` in this repository already fails on a ``skipped`` need.  A
+    self-probe on ``steps.*.outputs.*`` gating a step *inside* an otherwise
+    unconditional job is the form that manufactures a vacuous ``success``, so it
+    is what this check forbids for any job a gate depends on.  The fix is to run
+    the work unconditionally — under emulation when the runner lacks the
+    hardware, as test-avx512 now runs the kernel under Intel SDE and
+    arm-qemu.yml runs the AArch64 kernels under QEMU.
+    """
+    required = _gate_required_jobs(document)
+    if not required:
+        return
+    jobs = dict(_iter_jobs(document))
+    for job_id in sorted(required):
+        job = jobs.get(job_id)
+        if job is None:
+            continue
+        report.gate_required_jobs_checked += 1
+        if "if" in job:
+            # Job-level condition: when it is false the whole job is `skipped`,
+            # which every `*-gate` in this repo already treats as a failure.
+            continue
+        steps = job.get("steps")
+        if not isinstance(steps, list):
+            continue
+        for index, step in enumerate(steps):
+            if not isinstance(step, dict):
+                continue
+            condition = step.get("if")
+            if not isinstance(condition, str) or not _SELF_PROBE_IF_RE.search(condition):
+                continue
+            name = str(step.get("name") or f"steps[{index}]")
+            report.findings.append(
+                Finding(
+                    workflow=path.name,
+                    location=f"jobs.{job_id}.steps[{index}] ({name})",
+                    message=(
+                        f"job `{job_id}` is required by a `*-gate` but carries no "
+                        f"job-level `if:`, and this step is gated on a self-probe "
+                        f"(`{condition.strip()}`).  When the probe is false the step "
+                        f"skips while the job still reports `success`, so the gate counts "
+                        f"work that never ran as a pass — the way the AVX-512 KAT lane "
+                        f"became a required check that had never executed (audit H2)."
+                    ),
+                    remedy=(
+                        "make the whole job conditional with a job-level `if:` (a "
+                        "`skipped` job fails every `*-gate` here), or run the work "
+                        "unconditionally — under emulation when the runner lacks the "
+                        "hardware (test-avx512 runs the kernel under Intel SDE; "
+                        "arm-qemu.yml runs the AArch64 kernels under QEMU)."
+                    ),
+                )
+            )
+
+
 #: Non-vacuity floor (H7): the repository ships 14 workflow files.  Pinned so a
 #: deleted or wrong-path workflow set cannot leave the sweep reporting PASS over
 #: nothing -- the same zero-input vacuity the aggregating-gate audit carried.
@@ -1263,6 +1362,7 @@ def sweep(workflows_dir: Path) -> Report:
         check_cmake_build_type(path, document, report)
         check_expression_syntax(path, document, report)
         check_pytest_prerequisites(path, document, report)
+        check_gate_jobs_run_their_payload(path, document, report)
 
     # Non-vacuity floor (H7): an empty (or near-empty) workflow directory left
     # this sweep with no findings and reporting PASS -- the same zero-input
@@ -1308,7 +1408,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         f"{report.gated_binaries_checked} CMake-gated binary invocation(s), "
         f"{report.cmake_configures_checked} cmake configure(s), "
         f"{report.expressions_checked} `${{{{ }}}}` expression(s), "
-        f"{report.pytest_steps_checked} pytest invocation(s)."
+        f"{report.pytest_steps_checked} pytest invocation(s), "
+        f"{report.gate_required_jobs_checked} gate-required job(s)."
     )
     if report.labels_unresolved:
         # Reported, never counted as verified.  Silence here would read as

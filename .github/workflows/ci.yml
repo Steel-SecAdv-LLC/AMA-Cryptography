@@ -1500,44 +1500,66 @@ jobs:
         path: tools/constant_time/
 
   # ============================================================================
-  # AVX-512 SHA3 4-way KAT (PR C — 2026-04)
+  # AVX-512 SHA3 4-way KAT (PR C — 2026-04; made unconditional 2026-08, audit H2)
   #
-  # Best-effort gate: GitHub-hosted ubuntu-latest currently rotates among
-  # Cascade Lake / Ice Lake / Sapphire Rapids host CPUs, so AVX-512 hits
-  # only some fraction of runs.  We probe /proc/cpuinfo for the avx512f
-  # feature flag and skip honestly when it's missing — the build/test
-  # body itself never uses continue-on-error (INVARIANT-2: fail-closed
-  # CI on the steps that actually run).  Local validation ladder for
-  # pre-merge: SDE (`sde64 -spr -- ./test_sha3_avx512_kat`) plus a
-  # quarterly bare-metal bench post-merge.
+  # This lane asserts the in-house AVX-512 4-way Keccak kernel is byte-identical
+  # to the scalar and AVX2 kernels.  It used to probe /proc/cpuinfo and put
+  # EVERY build/test step behind `if: have_avx512 == '1'`.  GitHub-hosted
+  # ubuntu-latest rarely exposes AVX-512, so on almost every run all steps
+  # skipped, the job — which carries no job-level `if:` — went green having done
+  # nothing, and `ci-gate` (which needs this job) counted that as success.  A
+  # required check that never executed proved nothing about the kernel: the
+  # byte-identity claim was unverified by CI on every green run (audit H2).
+  #
+  # It now runs UNCONDITIONALLY under Intel SDE — the same "emulate the ISA the
+  # host lacks" approach arm-qemu.yml uses for the AArch64 and SVE2 kernels.
+  # qemu is not usable here: qemu 8.2 (ubuntu-latest) has no AVX-512 in its
+  # linux-user TCG — `-cpu max` reports AVX512F=0 and leaves XCR0 bits 5-7
+  # clear — so ama_cpuid_has_avx512_keccak() would self-skip under it.  SDE
+  # presents AVX-512F + AVX-512VL and enables the AVX-512 save area, and it
+  # executes the real EVEX opcodes the compiler emitted, so the CPUID bundle
+  # passes, the kernel actually runs, and a divergence fails the build.  Byte-
+  # identity of hand-written SIMD is a claim about emitted code, so the build is
+  # Release, as before.
+  #
+  # The kernel compiles on any x86-64 runner regardless of host CPU:
+  # CMakeLists.txt gates AMA_ENABLE_AVX512 on architecture (x86_64, not-MSVC),
+  # never on a host feature, and applies -mavx512f/-mavx512vl per source file.
+  # SDE is a CPU emulator used only as a test harness — it is not linked into
+  # the library and is not a crypto dependency (INVARIANT-1 unaffected), exactly
+  # as qemu-user-static is for the AArch64 lanes.  Local ladder unchanged:
+  # a native run on real AVX-512 silicon plus a quarterly bare-metal bench.
   # ============================================================================
   test-avx512:
     name: AVX-512 SHA3 4-way KAT
     runs-on: ubuntu-latest
     needs: test
+    timeout-minutes: 20
     steps:
     - name: Checkout code
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
-    - name: Probe /proc/cpuinfo for AVX-512F + AVX-512VL
-      id: cpu
-      run: |
-        if grep -q '\bavx512f\b' /proc/cpuinfo && grep -q '\bavx512vl\b' /proc/cpuinfo; then
-          echo "have_avx512=1" >> "$GITHUB_OUTPUT"
-          echo "::notice::ubuntu-latest runner reports AVX-512F + AVX-512VL — running KAT"
-        else
-          echo "have_avx512=0" >> "$GITHUB_OUTPUT"
-          echo "::notice::ubuntu-latest runner lacks AVX-512F or AVX-512VL — skipping KAT job"
-        fi
-
     - name: Install build dependencies
-      if: steps.cpu.outputs.have_avx512 == '1'
       run: |
         sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
-        .github/scripts/apt-install.sh cmake build-essential
+        .github/scripts/apt-install.sh cmake build-essential xz-utils
+
+    - name: Fetch Intel SDE (pinned version, checksum-verified)
+      # Pinned to an explicit version and SHA-256 so a mirror swap cannot change
+      # what runs — the same supply-chain discipline as the SHA-pinned actions.
+      # A download or checksum failure fails the job (fail-closed), it does not
+      # silently drop the lane the way the old /proc/cpuinfo probe did.
+      run: |
+        SDE_VER="9.48.0-2024-11-25"
+        SDE_TARBALL="sde-external-${SDE_VER}-lin.tar.xz"
+        SDE_URL="https://downloadmirror.intel.com/843185/${SDE_TARBALL}"
+        SDE_SHA256="3173d2a5369e3385226b488d8b75403951bc14af601435fe707d9f83e0b533e6"
+        curl -fsSL -o "$SDE_TARBALL" "$SDE_URL"
+        echo "${SDE_SHA256}  ${SDE_TARBALL}" | sha256sum -c -
+        tar xf "$SDE_TARBALL"
+        echo "SDE=$PWD/sde-external-${SDE_VER}-lin/sde64" >> "$GITHUB_ENV"
 
     - name: Configure with AVX-512 enabled
-      if: steps.cpu.outputs.have_avx512 == '1'
       # Release: this job asserts the AVX-512 Keccak kernel is byte-identical to
       # the scalar and AVX2 ones, and a byte-identity claim about hand-written
       # SIMD is a claim about what the compiler emits.  Unoptimized, it compares
@@ -1545,12 +1567,32 @@ jobs:
       run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DAMA_ENABLE_AVX512=ON -DAMA_BUILD_TESTS=ON
 
     - name: Build AVX-512 KAT test
-      if: steps.cpu.outputs.have_avx512 == '1'
       run: cmake --build build --target test_sha3_avx512_kat --parallel
 
-    - name: Run AVX-512 KAT test (byte-identity vs scalar + AVX2)
-      if: steps.cpu.outputs.have_avx512 == '1'
-      run: ctest --test-dir build -R test_sha3_avx512_kat --output-on-failure
+    - name: Run AVX-512 KAT under Intel SDE (byte-identity vs scalar + AVX2)
+      # -spr = Sapphire Rapids: presents AVX-512F + AVX-512VL and enables the
+      # AVX-512 save area in XCR0, so ama_cpuid_has_avx512_keccak() passes and
+      # the kernel executes rather than self-skipping (SKIP code 77).
+      run: |
+        rc=0
+        "$SDE" -spr -- ./build/bin/test_sha3_avx512_kat | tee /tmp/avx512_kat.out || rc=$?
+        # INVARIANT-3 (no silent passes): under SDE the CPUID gate ALWAYS holds,
+        # so a skip (code 77) can only mean SDE stopped presenting AVX-512 and
+        # the kernel never ran.  That is a failure of THIS lane, not a pass —
+        # the whole point of the change is that the kernel executes every run.
+        if grep -q "SKIP:" /tmp/avx512_kat.out; then
+          echo "::error::AVX-512 KAT reported SKIP under Intel SDE — the kernel did not execute; this lane must run it, not skip it"
+          exit 1
+        fi
+        if [ "$rc" -ne 0 ]; then
+          echo "::error::AVX-512 KAT exited $rc under Intel SDE — the AVX-512 kernel diverged from the scalar/AVX2 reference, or the test crashed"
+          exit 1
+        fi
+        if ! grep -Eq "Results: [0-9]+ checks, 0 failed" /tmp/avx512_kat.out; then
+          echo "::error::AVX-512 KAT did not report a clean '0 failed' result line under Intel SDE"
+          exit 1
+        fi
+        echo "AVX-512 KAT executed under Intel SDE and passed: scalar = AVX2 = AVX-512, byte-identical."
 
   ed25519-backend-differential:
     name: Ed25519 backend differential (donna vs fe51)

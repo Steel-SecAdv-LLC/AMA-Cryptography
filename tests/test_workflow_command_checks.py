@@ -41,12 +41,14 @@ import pytest
 import yaml
 
 from tools.check_workflow_commands import (
+    MIN_WORKFLOWS,
     RELEASE_ACTIONS,
     RETIRED_LABELS,
     SUPPORTED_LABELS,
     Report,
     check_cmake_build_type,
     check_expression_syntax,
+    check_gate_jobs_run_their_payload,
     check_inline_python,
     check_pytest_prerequisites,
     check_release_publishing,
@@ -73,6 +75,7 @@ def run_checks(source: str, name: str = "test.yml") -> Report:
     check_expression_syntax(path, document, report)
     check_cmake_build_type(path, document, report)
     check_pytest_prerequisites(path, document, report)
+    check_gate_jobs_run_their_payload(path, document, report)
     return report
 
 
@@ -959,15 +962,169 @@ class TestPytestPrerequisites:
         assert report.ok, messages(report)
 
 
+class TestGatedJobsRunTheirPayload:
+    """A job a ``*-gate`` depends on must not be able to succeed doing nothing.
+
+    This is the exact shape of audit H2: ``test-avx512`` sat in ``ci-gate``'s
+    ``needs:`` with no job-level ``if:`` and its build/test steps behind
+    ``if: steps.cpu.outputs.have_avx512 == '1'``.  On a runner without AVX-512
+    those steps skipped, the job reported ``success`` (not ``skipped``), and the
+    gate — which fails on ``skipped`` but not on a vacuous ``success`` — passed.
+    """
+
+    #: The defect: a gate-required job self-probes and gates its payload on the
+    #: result, with no job-level `if:` to make the skip honest.
+    DEFECT = """
+        jobs:
+          probe-gate:
+            needs: [worker]
+            runs-on: ubuntu-latest
+            steps:
+              - run: echo gate
+          worker:
+            runs-on: ubuntu-latest
+            steps:
+              - id: cpu
+                run: echo "have=1" >> "$GITHUB_OUTPUT"
+              - name: Build the thing
+                if: steps.cpu.outputs.have == '1'
+                run: cmake --build build
+    """
+
+    def test_self_probe_gated_payload_in_a_gated_job_is_reported(self) -> None:
+        report = run_checks(self.DEFECT)
+        assert not report.ok
+        joined = messages(report)
+        assert "worker" in joined
+        assert "audit H2" in joined
+        assert report.gate_required_jobs_checked == 1
+
+    def test_a_job_level_if_is_the_honest_form_and_passes(self) -> None:
+        """Job-level ``if:`` makes the skip a ``skipped`` result, which every
+        ``*-gate`` in this repo already fails on — so it is not the defect."""
+        source = """
+            jobs:
+              probe-gate:
+                needs: [worker]
+                runs-on: ubuntu-latest
+                steps:
+                  - run: echo gate
+              worker:
+                if: ${{ github.event_name == 'push' }}
+                runs-on: ubuntu-latest
+                steps:
+                  - id: cpu
+                    run: echo "have=1" >> "$GITHUB_OUTPUT"
+                  - name: Build the thing
+                    if: steps.cpu.outputs.have == '1'
+                    run: cmake --build build
+        """
+        report = run_checks(source)
+        assert report.ok, messages(report)
+
+    def test_unconditional_payload_passes(self) -> None:
+        """The fixed shape: the payload runs every time (as under emulation)."""
+        source = """
+            jobs:
+              probe-gate:
+                needs: [worker]
+                runs-on: ubuntu-latest
+                steps:
+                  - run: echo gate
+              worker:
+                runs-on: ubuntu-latest
+                steps:
+                  - name: Build the thing
+                    run: cmake --build build
+                  - name: Run it under the emulator
+                    run: sde64 -spr -- ./build/bin/test
+        """
+        report = run_checks(source)
+        assert report.ok, messages(report)
+
+    def test_outcome_gated_diagnostic_step_is_not_flagged(self) -> None:
+        """A step gated on a PRIOR step's ``.outcome`` is a failure handler; it
+        cannot manufacture a vacuous success, so it must not be flagged."""
+        source = """
+            jobs:
+              probe-gate:
+                needs: [worker]
+                runs-on: ubuntu-latest
+                steps:
+                  - run: echo gate
+              worker:
+                runs-on: ubuntu-latest
+                steps:
+                  - id: build
+                    run: cmake --build build
+                  - name: Dump logs if the build failed
+                    if: steps.build.outcome == 'failure'
+                    run: cat build/CMakeFiles/CMakeError.log
+        """
+        report = run_checks(source)
+        assert report.ok, messages(report)
+
+    def test_self_probe_in_a_non_gated_job_is_not_this_check(self) -> None:
+        """The scope is jobs a gate depends on.  A self-probe-gated step in a
+        job no gate needs is outside this check's remit (it is not a required
+        status), so it passes here."""
+        source = """
+            jobs:
+              standalone:
+                runs-on: ubuntu-latest
+                steps:
+                  - id: cpu
+                    run: echo "have=1" >> "$GITHUB_OUTPUT"
+                  - name: Build the thing
+                    if: steps.cpu.outputs.have == '1'
+                    run: cmake --build build
+        """
+        report = run_checks(source)
+        assert report.ok, messages(report)
+        assert report.gate_required_jobs_checked == 0
+
+
+def _valid_workflow(index: int) -> str:
+    """A minimal, structurally valid workflow — enough to clear the floor."""
+    return textwrap.dedent(f"""
+        name: filler-{index}
+        on: [push]
+        jobs:
+          noop:
+            runs-on: ubuntu-latest
+            steps:
+              - run: echo {index}
+        """).lstrip()
+
+
 class TestMalformedWorkflow:
     def test_unparseable_yaml_is_reported(self, tmp_path: Path) -> None:
+        # Fill to the floor with valid files so the parse error is the sole
+        # finding — otherwise the non-vacuity floor (below) would also fire and
+        # this test would be asserting two unrelated things at once.
+        for i in range(MIN_WORKFLOWS):
+            (tmp_path / f"ok-{i}.yml").write_text(_valid_workflow(i), encoding="utf-8")
         (tmp_path / "broken.yml").write_text("jobs: [unclosed\n", encoding="utf-8")
         report = sweep(tmp_path)
-        assert len(report.findings) == 1
-        assert "could not be parsed" in report.findings[0].message
+        parse_errors = [f for f in report.findings if "could not be parsed" in f.message]
+        assert len(parse_errors) == 1, messages(report)
+        assert parse_errors[0].workflow == "broken.yml"
 
-    def test_empty_directory_passes(self, tmp_path: Path) -> None:
-        assert sweep(tmp_path).ok
+    def test_empty_directory_fails_the_nonvacuity_floor(self, tmp_path: Path) -> None:
+        # H7: an empty (or wrong-path) workflow set must FAIL, not pass over
+        # nothing.  Before the floor this returned ok — the vacuity the floor
+        # exists to remove.
+        report = sweep(tmp_path)
+        assert not report.ok
+        assert any("floor" in f.message for f in report.findings), messages(report)
+
+    def test_a_workflow_set_at_the_floor_does_not_trip_it(self, tmp_path: Path) -> None:
+        # The floor must fire on too-few files and not on enough — a floor that
+        # always fired would be as useless as one that never did.
+        for i in range(MIN_WORKFLOWS):
+            (tmp_path / f"ok-{i}.yml").write_text(_valid_workflow(i), encoding="utf-8")
+        report = sweep(tmp_path)
+        assert not any("floor" in f.message for f in report.findings), messages(report)
 
 
 class TestRepositoryWorkflows:
@@ -992,6 +1149,7 @@ class TestRepositoryWorkflows:
         assert report.payloads_checked > 0
         assert report.cmake_configures_checked > 0
         assert report.pytest_steps_checked > 0
+        assert report.gate_required_jobs_checked > 0
 
     def test_the_constant_time_gate_builds_an_optimized_library(self) -> None:
         """The specific configure whose build type was missing, pinned by name.
