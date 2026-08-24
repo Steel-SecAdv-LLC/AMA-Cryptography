@@ -483,10 +483,30 @@ jobs:
           fi
           rc=0
           "$TEST_BIN" || rc=$?
+          # Which slots may legitimately answer "unsupported" (exit 77) on their
+          # runner: AVX-512 is absent on most hosted x86-64 runners, and SVE2
+          # depends on the specific AArch64 runner's silicon.  Every OTHER slot
+          # is mandated by the runner's base ISA — AVX2 on every GHA x86-64
+          # runner, NEON on every AArch64 runner — so for those a 77 is not a
+          # hardware fact but a dispatch-wiring regression that left a SHIPPED
+          # kernel unmeasured.  The old code exit 0'd on 77 for every slot, so
+          # such a regression rode a green gate with only a ::warning:: — the
+          # same "a gate slot that cannot fail" shape as the AVX-512 KAT lane
+          # (audit M26).  Fail the mandatory slots; skip only the optional ones.
+          OPTIONAL_SLOTS="sha3-avx512x4 kyber-sve2 sha3-sve2"
           if [ "$rc" -eq 77 ]; then
-            echo "supported=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::Slot '${{ matrix.slot }}' unsupported on this host — skipping dudect lane."
-            exit 0
+            case " ${OPTIONAL_SLOTS} " in
+              *" ${AMA_DISPATCH_ONLY} "*)
+                echo "supported=false" >> "$GITHUB_OUTPUT"
+                echo "::warning::Optional slot '${{ matrix.slot }}' unsupported on this runner's silicon — skipping dudect lane."
+                exit 0
+                ;;
+              *)
+                echo "supported=false" >> "$GITHUB_OUTPUT"
+                echo "::error::Slot '${{ matrix.slot }}' is mandated by this runner's base ISA (AVX2 on x86-64, NEON on AArch64) but the dispatcher could not honor it (exit 77). A shipped SIMD kernel would go unmeasured behind a green gate — this is a dispatch-wiring regression, not a hardware fact (M26)."
+                exit 1
+                ;;
+            esac
           elif [ "$rc" -ne 0 ]; then
             echo "supported=false" >> "$GITHUB_OUTPUT"
             echo "::error::Dispatch contract test failed for '${{ matrix.slot }}' (exit=$rc)"
