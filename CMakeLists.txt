@@ -1001,6 +1001,28 @@ if(AMA_BUILD_STATIC)
     if(WIN32)
         target_link_libraries(ama_cryptography_static PRIVATE bcrypt)
     endif()
+
+    # H4: the installed static archive must contain real MACHINE CODE, not just
+    # GCC LTO bytecode. With CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE on, every
+    # member of libama_cryptography_static.a was a thin -flto object (.text size
+    # 0), linkable only through the GCC driver's plugin: a downstream C consumer
+    # linking with clang/ld got "plugin needed to handle lto object" and
+    # undefined references. -ffat-lto-objects makes GCC (and clang >= 17) emit
+    # BOTH the bytecode and machine code, so the archive keeps LTO for a
+    # matching-toolchain consumer while staying universally linkable; a compiler
+    # without fat-LTO support falls back to no IPO on this target, which also
+    # guarantees machine code.
+    if(AMA_ENABLE_LTO)
+        include(CheckCCompilerFlag)
+        check_c_compiler_flag("-ffat-lto-objects" AMA_HAVE_FAT_LTO)
+        if(AMA_HAVE_FAT_LTO)
+            target_compile_options(ama_cryptography_static PRIVATE
+                $<$<CONFIG:Release>:-ffat-lto-objects>)
+        else()
+            set_target_properties(ama_cryptography_static PROPERTIES
+                INTERPROCEDURAL_OPTIMIZATION OFF)
+        endif()
+    endif()
 endif()
 
 # Examples

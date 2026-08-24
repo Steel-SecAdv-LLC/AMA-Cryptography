@@ -1629,6 +1629,50 @@ jobs:
           --donna build-donna/lib/libama_cryptography.so \
           --fe51  build-fe51/lib/libama_cryptography.so
 
+  c-consumer:
+    name: C consumer (install + link, gcc & clang, shared & static)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Install clang
+        run: sudo apt-get update && sudo apt-get install -y clang
+
+      - name: Install the library and link a downstream C consumer
+        # audit H4: nothing in CI ever installed the library and linked a
+        # downstream C consumer against it, so the static archive shipped as pure
+        # GCC LTO bytecode (.text size 0) -- unlinkable by any toolchain but a
+        # matching GCC + plugin -- and the generated ama_cryptography.pc was
+        # never validated. Install to a prefix and compile
+        # examples/c/simple_example.c against BOTH the shared and static
+        # libraries with BOTH gcc and clang via pkg-config, then run each.
+        run: |
+          set -euxo pipefail
+          PREFIX="$PWD/consumer-prefix"
+          cmake -B build-consumer -DCMAKE_BUILD_TYPE=Release -DAMA_USE_NATIVE_PQC=ON \
+            -DAMA_BUILD_TESTS=OFF -DAMA_BUILD_EXAMPLES=OFF \
+            -DCMAKE_INSTALL_PREFIX="$PREFIX"
+          cmake --build build-consumer \
+            --target ama_cryptography_shared ama_cryptography_static -j"$(nproc)"
+          cmake --install build-consumer
+          export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig"
+          pkg-config --exists ama_cryptography
+          echo "pkg-config: $(pkg-config --cflags --libs ama_cryptography)"
+          for cc in gcc clang; do
+            echo "== $cc: shared via pkg-config =="
+            "$cc" examples/c/simple_example.c \
+              $(pkg-config --cflags --libs ama_cryptography) -o "consumer_${cc}_shared"
+            LD_LIBRARY_PATH="$PREFIX/lib" "./consumer_${cc}_shared"
+            echo "== $cc: static =="
+            "$cc" examples/c/simple_example.c -I"$PREFIX/include" \
+              "$PREFIX/lib/libama_cryptography_static.a" -lpthread -lm \
+              -o "consumer_${cc}_static"
+            "./consumer_${cc}_static"
+          done
+          echo "OK: C consumer linked and ran under gcc and clang, shared and static."
+
   ci-gate:
     name: CI Gate
     # Single aggregating status check for this workflow. Branch protection
@@ -1652,6 +1696,7 @@ jobs:
       - constant-time-check
       - test-avx512
       - ed25519-backend-differential
+      - c-consumer
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
