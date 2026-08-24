@@ -239,6 +239,34 @@ jobs:
           QEMU_CPU: max,sve-max-vq=${{ matrix.sve_vq }}
         run: ctest --test-dir build-arm-sve2 --output-on-failure -j"$(nproc)"
 
+      - name: SVE2 dispatch wiring must run, not silently Skip (M4)
+        # The plain ctest above reports test_dispatch_only_{kyber,sha3}-sve2 as
+        # Skipped (SKIP_RETURN_CODE 77) if the dispatcher does not wire the SVE2
+        # slot — a regression, or the case this lane exists for: the phase-3
+        # auto-tune finding every SVE2 kernel regressed under QEMU and reverting
+        # it. ctest treats Skipped as a non-failure, so the SVE2 dispatch WIRING
+        # (as distinct from the direct-symbol equivalence lanes, which cover
+        # correctness) would go unverified behind a green job (audit M4). Those
+        # two tests carry AMA_DISPATCH_NO_AUTOTUNE=1 in their CTest ENVIRONMENT,
+        # so under QEMU_CPU=max (SVE2 present) they MUST report Passed; on a
+        # non-SVE2 host they Skip (verified both ways at VL=128/256 under QEMU).
+        # Assert Passed for both, and fail on any Skipped.
+        env:
+          QEMU_CPU: max,sve-max-vq=${{ matrix.sve_vq }}
+        run: |
+          set -euo pipefail
+          ctest --test-dir build-arm-sve2 \
+            -R '^test_dispatch_only_(kyber|sha3)-sve2$' \
+            --output-on-failure --no-tests=error | tee /tmp/sve2_wiring.txt
+          for slot in kyber sha3; do
+            grep -Eq "test_dispatch_only_${slot}-sve2 .*Passed" /tmp/sve2_wiring.txt \
+              || { echo "::error::${slot}-sve2 dispatch wiring not exercised (not Passed) — SVE2 dispatch regressed or auto-tune reverted it (M4)"; exit 1; }
+          done
+          if grep -qi 'Skipped' /tmp/sve2_wiring.txt; then
+            echo "::error::an SVE2 dispatch test reported Skipped — the SVE2 dispatch wiring was not exercised (M4)"
+            exit 1
+          fi
+
   arm-qemu-ubsan:
     name: AArch64 UBSan (ARM SIMD kernels sanitized under QEMU)
     runs-on: ubuntu-latest
