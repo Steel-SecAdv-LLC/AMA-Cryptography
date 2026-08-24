@@ -19,15 +19,42 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <string.h>
 
 #if defined(__ARM_FEATURE_SVE2)
 #include <arm_sve.h>
 #include "ama_sve2_internal.h"
+#include "../../../include/ama_cryptography.h"  /* ama_secure_memzero */
 
 #define DILITHIUM_Q     8380417
 #define DILITHIUM_N     256
 #define DILITHIUM_D     13
 #define DILITHIUM_QINV  58728449  /* q^{-1} mod 2^32 */
+
+/* SECRET SCRATCH — INVARIANT-6/12 applied to this file, mirroring
+ * ama_kyber_sve2.c.
+ *
+ * Each NTT/invNTT kernel below stages coefficients through int32_t stack
+ * arrays, because SVE2's svmullb/svmullt produce the 64-bit product Dilithium's
+ * Montgomery reduction needs only for even/odd element pairs, so the reduction
+ * is done element-wise between a store and a reload.  Those coefficients are
+ * secret on the signing path: ML-DSA-65 signing NTTs the secret vectors s1/s2
+ * and the secret mask y, all reaching here through the wired forward/inverse NTT
+ * dispatch slots (ama_dispatch.c) — the same class of secret staging buffer the
+ * PR that added the scrub erased in the AES and Kyber kernels while leaving this
+ * file, its identical twin, with none (audit M5).
+ *
+ * The buffers are hoisted to function scope rather than scrubbed where they were
+ * declared, exactly as ama_kyber_sve2.c does and for the same reason: declared
+ * inside the butterfly loop a scrub would place one compiler barrier per vector
+ * iteration in the hottest loop; hoisted, one scrub per public call erases every
+ * coefficient any iteration staged, because each iteration overwrites the same
+ * storage.
+ *
+ * Not applied to ama_dilithium_poly_pointwise_sve2: it holds no stack staging
+ * buffer — it operates register-to-memory on the caller's polynomials — and the
+ * stronger guarantee there is not writing a secret down, not erasing it after. */
+#define AMA_DILITHIUM_SVE2_SCRUB(buf) ama_secure_memzero((buf), sizeof(buf))
 
 /* ============================================================================
  * Scalar 64-bit Montgomery reduction for Dilithium
@@ -77,6 +104,10 @@ void ama_dilithium_ntt_sve2(int32_t poly[DILITHIUM_N],
     int32_t zeta, t;
     const uint64_t vl_w = svcntw();  /* Number of int32_t lanes */
 
+    /* Secret staging buffers, hoisted to function scope and scrubbed once on
+     * return — see SECRET SCRATCH above. */
+    int32_t hi_buf[64], t_buf[64];
+
     k = 0;
     for (len = 128; len > 0; len >>= 1) {
         for (start = 0; start < DILITHIUM_N; start += 2 * len) {
@@ -109,8 +140,8 @@ void ama_dilithium_ntt_sve2(int32_t poly[DILITHIUM_N],
 
                     /* Perform Montgomery reduction element-wise.
                      * Extract hi to memory, reduce, re-load.  lo is
-                     * used directly as an SVE register for butterfly. */
-                    int32_t hi_buf[64], t_buf[64];
+                     * used directly as an SVE register for butterfly.
+                     * hi_buf/t_buf are function-scope secret scratch. */
                     svst1_s32(pg, hi_buf, hi);
 
                     for (uint64_t e = 0; e < active; e++) {
@@ -134,6 +165,8 @@ void ama_dilithium_ntt_sve2(int32_t poly[DILITHIUM_N],
             }
         }
     }
+    AMA_DILITHIUM_SVE2_SCRUB(hi_buf);
+    AMA_DILITHIUM_SVE2_SCRUB(t_buf);
 }
 
 /* ============================================================================
@@ -149,6 +182,10 @@ void ama_dilithium_invntt_sve2(int32_t poly[DILITHIUM_N],
     int32_t t_scalar, zeta;
     const int32_t f = 41978;  /* Mont^(-1) * N^(-1) mod q */
     const uint64_t vl_w = svcntw();
+
+    /* Secret staging buffers, hoisted to function scope and scrubbed once on
+     * return — see SECRET SCRATCH above. */
+    int32_t diff_buf[64], hi_buf[64], buf[64];
 
     k = 256;
     for (len = 1; len < DILITHIUM_N; len <<= 1) {
@@ -171,8 +208,8 @@ void ama_dilithium_invntt_sve2(int32_t poly[DILITHIUM_N],
                     svint32_t sum  = svadd_s32_x(pg, lo, hi);
                     svint32_t diff = svsub_s32_x(pg, lo, hi);
 
-                    /* Montgomery reduction of zeta * diff */
-                    int32_t diff_buf[64], hi_buf[64];
+                    /* Montgomery reduction of zeta * diff.
+                     * diff_buf/hi_buf are function-scope secret scratch. */
                     svst1_s32(pg, diff_buf, diff);
 
                     for (uint64_t e = 0; e < active; e++) {
@@ -206,9 +243,8 @@ void ama_dilithium_invntt_sve2(int32_t poly[DILITHIUM_N],
             svbool_t pg = svwhilelt_b32((int64_t)i, (int64_t)DILITHIUM_N);
             uint64_t active = svcntp_b32(pg, pg);
 
-            int32_t buf[64];
             svint32_t va = svld1_s32(pg, poly + i);
-            svst1_s32(pg, buf, va);
+            svst1_s32(pg, buf, va);  /* buf is function-scope secret scratch */
 
             for (uint64_t e = 0; e < active; e++) {
                 buf[e] = dil_montgomery_reduce_scalar((int64_t)f * buf[e]);
@@ -219,6 +255,9 @@ void ama_dilithium_invntt_sve2(int32_t poly[DILITHIUM_N],
             i += svcntw();
         }
     }
+    AMA_DILITHIUM_SVE2_SCRUB(diff_buf);
+    AMA_DILITHIUM_SVE2_SCRUB(hi_buf);
+    AMA_DILITHIUM_SVE2_SCRUB(buf);
 }
 
 /* ============================================================================
