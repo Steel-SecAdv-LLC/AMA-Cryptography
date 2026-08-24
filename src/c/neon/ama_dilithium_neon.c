@@ -25,6 +25,18 @@
 #define DILITHIUM_D     13
 #define DILITHIUM_QINV  58728449  /* q^{-1} mod 2^32 */
 
+/* Low 32 bits of a signed 32x32 lane multiply, computed on unsigned lanes.
+ *
+ * GCC/Clang implement vmulq_s32 as `__a * __b` on a signed vector type
+ * (arm_neon.h), so a low-half-only multiply whose product exceeds int32 — the
+ * Barrett step and the Montgomery `mod 2^32` step below both do — is signed
+ * integer overflow.  That is undefined behaviour that `-fsanitize=undefined`
+ * aborts on (audit H15).  The unsigned multiply emits the SAME MUL instruction
+ * and has defined wraparound, so the low 32 bits are bit-for-bit identical. */
+static inline int32x4_t mullo_s32(int32x4_t a, int32x4_t b) {
+    return vreinterpretq_s32_u32(vmulq_u32(vreinterpretq_u32_s32(a), vreinterpretq_u32_s32(b)));
+}
+
 /* ============================================================================
  * NEON Barrett reduction for Dilithium (q = 8380417)
  * ============================================================================ */
@@ -32,7 +44,7 @@ static inline int32x4_t barrett_reduce_dil_neon(int32x4_t a) {
     const int32x4_t q = vdupq_n_s32(DILITHIUM_Q);
     /* t = round(a / q) approximated via arithmetic shift */
     int32x4_t t = vshrq_n_s32(a, 23);
-    t = vmulq_s32(t, q);
+    t = mullo_s32(t, q);               /* t * q (low 32 bits; see mullo_s32) */
     return vsubq_s32(a, t);
 }
 
@@ -68,7 +80,7 @@ static inline int32x4_t montgomery_mul_dil_neon(int32x4_t a, int32x4_t b) {
     int32x4_t prod_lo32 = vuzp1q_s32(vreinterpretq_s32_s64(prod_lo),
                                        vreinterpretq_s32_s64(prod_hi));
     /* t = (prod_lo32 * qinv) mod 2^32 */
-    int32x4_t t = vmulq_s32(prod_lo32, qinv);
+    int32x4_t t = mullo_s32(prod_lo32, qinv);
 
     /* t * q (need high 32 bits) */
     int64x2_t tq_lo = vmull_s32(vget_low_s32(t), vget_low_s32(q));

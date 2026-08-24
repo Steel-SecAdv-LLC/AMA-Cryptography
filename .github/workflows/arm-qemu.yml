@@ -239,6 +239,70 @@ jobs:
           QEMU_CPU: max,sve-max-vq=${{ matrix.sve_vq }}
         run: ctest --test-dir build-arm-sve2 --output-on-failure -j"$(nproc)"
 
+  arm-qemu-ubsan:
+    name: AArch64 UBSan (ARM SIMD kernels sanitized under QEMU)
+    runs-on: ubuntu-latest
+    # UBSan-instrumented ctest under QEMU is slow: the full 68-case suite
+    # measured ~17.5 min locally (SPHINCS-256f KATs dominate), plus the
+    # cross-build.  45 leaves headroom on a cold runner without masking a hang.
+    timeout-minutes: 45
+    # WHY THIS JOB EXISTS
+    #
+    # Every sanitizer job in static-analysis.yml runs on ubuntu-latest — x86-64,
+    # where src/c/neon/*.c and src/c/sve2/*.c compile to a bare
+    # `typedef int ama_..._not_available;` and are linked out entirely.  So the
+    # hand-written ARM SIMD kernels had ZERO ASan/UBSan/MSan coverage on any
+    # lane (audit H16).  That is not hypothetical: GCC compiles vmulq_s16 /
+    # vmulq_s32 as `__a * __b` on a signed vector type, so the NEON Kyber and
+    # Dilithium Montgomery/Barrett steps — low-half multiplies whose products
+    # exceed the lane width by design — were signed integer overflow, undefined
+    # behaviour that shipped unseen (audit H15): 29 of 68 ctest cases aborted
+    # under UBSan, all on the identical `arm_neon.h` diagnostic.
+    #
+    # This lane cross-compiles the tree for aarch64 with
+    # -fsanitize=undefined -fno-sanitize-recover=all and runs the full ctest
+    # under QEMU, so any UB on the ARM path aborts the test and fails the build.
+    # SVE2 is enabled so those TUs are instrumented too, and QEMU_CPU=max
+    # presents the widest vector so any SVE2 code a test reaches is sanitized;
+    # the SVE2 dispatch wiring itself is covered by arm-qemu-sve2 above.
+    #
+    # Verified against the real defect: reverting the mullo_s16 / mullo_s32 fix
+    # reproduces `arm_neon.h: runtime error: signed integer overflow: 91 * 640
+    # cannot be represented in type 'short int'` on test_kyber_ntt_equiv and
+    # test_dilithium_ntt_equiv here and fails the job; with the fix the full
+    # ctest is UBSan-clean.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Install AArch64 cross toolchain + QEMU
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
+          .github/scripts/apt-install.sh --no-install-recommends cmake ninja-build gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev-arm64-cross qemu-user-static
+
+      - name: Configure (aarch64, UBSan, NEON + SVE2 instrumented)
+        run: |
+          cmake -S . -B build-arm-ubsan -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/aarch64-linux-gnu.cmake \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DAMA_BUILD_TESTS=ON \
+            -DAMA_USE_NATIVE_PQC=ON \
+            -DAMA_AES_CONSTTIME=ON \
+            -DAMA_ENABLE_SVE2=ON \
+            -DAMA_BUILD_EXAMPLES=OFF \
+            -DAMA_BUILD_FUZZ=OFF \
+            -DAMA_ENABLE_LTO=OFF \
+            -DCMAKE_C_FLAGS="-fsanitize=undefined -fno-sanitize-recover=all" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=undefined"
+
+      - name: Build (aarch64, UBSan)
+        run: cmake --build build-arm-ubsan -j"$(nproc)"
+
+      - name: Test (ctest under QEMU; UBSan fails closed)
+        env:
+          QEMU_CPU: max
+          UBSAN_OPTIONS: halt_on_error=1:abort_on_error=1:print_stacktrace=1
+        run: ctest --test-dir build-arm-ubsan --output-on-failure -j"$(nproc)"
+
   arm-qemu-gate:
     name: ARM QEMU Gate
     # Single aggregating status check for this workflow (see the matching gate
@@ -249,6 +313,7 @@ jobs:
       - arm-qemu-ctest
       - arm-qemu-sve2
       - arm-qemu-no-crypto-ext
+      - arm-qemu-ubsan
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
@@ -258,7 +323,7 @@ jobs:
         # stopped running.
         if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'skipped') || contains(needs.*.result, 'cancelled') }}
         run: |
-          echo "::error::ARM QEMU Gate failed — an AArch64 cross-test job did not succeed (baseline ctest, or the SVE2 kernels at VL=128/256)."
+          echo "::error::ARM QEMU Gate failed — an AArch64 cross-test job did not succeed (baseline ctest, the SVE2 kernels at VL=128/256, or the UBSan sanitizer lane)."
           echo "Dependency results: ${{ join(needs.*.result, ', ') }}"
           exit 1
       - name: AArch64 cross-tests succeeded

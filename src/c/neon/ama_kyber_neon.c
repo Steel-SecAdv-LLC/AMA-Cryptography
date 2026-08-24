@@ -64,6 +64,19 @@ static inline int16_t barrett_reduce_scalar(int16_t a) {
 /* Barrett constant: floor(2^26 / q) + 1 */
 #define KYBER_BARRETT_V  20159
 
+/* Low 16 bits of a signed 16x16 lane multiply, computed on unsigned lanes.
+ *
+ * GCC/Clang implement vmulq_s16 as `__a * __b` on a signed vector type
+ * (arm_neon.h), so a low-half-only multiply whose product exceeds int16 — every
+ * Montgomery and Barrett step below does, by design — is signed integer
+ * overflow.  That is undefined behaviour: `-fsanitize=undefined` aborts on it
+ * ("cannot be represented in type 'short int'", audit H15).  The unsigned
+ * multiply emits the SAME MUL instruction and has defined wraparound, so the
+ * low-half result is bit-for-bit identical while the UB is gone. */
+static inline int16x8_t mullo_s16(int16x8_t a, int16x8_t b) {
+    return vreinterpretq_s16_u16(vmulq_u16(vreinterpretq_u16_s16(a), vreinterpretq_u16_s16(b)));
+}
+
 /* ============================================================================
  * NEON Barrett reduction for Kyber (q = 3329)
  *
@@ -86,7 +99,7 @@ static inline int16x8_t barrett_reduce_neon(int16x8_t a) {
      * then >> 11 more => total >> 26 */
     int16x8_t t = vqdmulhq_s16(a, v);   /* (a*v) >> 15 */
     t = vshrq_n_s16(t, 11);             /* >> 11 more => total >> 26 */
-    t = vmulq_s16(t, q);                /* t * q */
+    t = mullo_s16(t, q);                /* t * q (low 16 bits; see mullo_s16) */
     return vsubq_s16(a, t);             /* a - t*q */
 }
 
@@ -97,9 +110,9 @@ static inline int16x8_t barrett_reduce_neon(int16x8_t a) {
  *
  * The NEON ISA lacks a direct "high 16 bits of 16x16 multiply" intrinsic
  * like AVX2's _mm256_mulhi_epi16.  Instead we use:
- *   lo = vmulq_s16(a, b)            -- low 16 bits of a*b
+ *   lo = mullo_s16(a, b)           -- low 16 bits of a*b (unsigned lanes, no UB)
  *   hi = vqdmulhq_s16(a, b)         -- 2 * high16(a*b), saturated
- *   t  = vmulq_s16(lo, qinv)        -- t = lo * qinv mod 2^16
+ *   t  = mullo_s16(lo, qinv)       -- t = lo * qinv mod 2^16
  *   u  = vqdmulhq_s16(t, q)         -- 2 * high16(t*q)
  *   result = vhsubq_s16(hi, u)      -- (hi - u) >> 1
  *
@@ -113,9 +126,9 @@ static inline int16x8_t montgomery_mul_neon(int16x8_t a, int16x8_t b) {
     const int16x8_t q    = vdupq_n_s16(KYBER_Q);
     const int16x8_t qinv = vdupq_n_s16((int16_t)KYBER_QINV);
 
-    int16x8_t lo = vmulq_s16(a, b);           /* low 16 bits of a*b */
+    int16x8_t lo = mullo_s16(a, b);           /* low 16 bits of a*b */
     int16x8_t hi = vqdmulhq_s16(a, b);        /* 2 * high16(a*b) */
-    int16x8_t t  = vmulq_s16(lo, qinv);       /* t = lo * qinv mod 2^16 */
+    int16x8_t t  = mullo_s16(lo, qinv);       /* t = lo * qinv mod 2^16 */
     int16x8_t u  = vqdmulhq_s16(t, q);        /* u = 2 * high16(t*q) */
     return vhsubq_s16(hi, u);                  /* (hi - u) >> 1 */
 }
