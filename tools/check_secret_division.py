@@ -63,11 +63,18 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 #: else, or more of them here, fails.
 #:
 #: Counts are per-symbol and compiler-dependent (unrolling changes them), so
-#: they are ceilings rather than equalities: fewer is fine, more is a new
-#: divide that has to be justified here before it can pass.
+#: they are ceilings rather than equalities: fewer is fine, more must be
+#: justified here before it can pass.  Each ceiling is the divide count MEASURED
+#: in the built object (gcc-13 / clang-18 at -O3) plus a +2 tolerance for
+#: cross-compiler and cross-arch unrolling spread -- NOT headroom.  Until 5.0.0
+#: these sat far above the measured counts -- dil_sign_internal 24 vs 14,
+#: lms_verify_parsed 16 vs 11, ama_argon2id_core 12 vs 6: 21 free slots into
+#: which a secret-operand divide could be added without tripping the gate
+#: (audit H1).  Re-measure and re-justify when a count legitimately moves,
+#: rather than widening the slack.
 ALLOWED: dict[str, tuple[int, str]] = {
     "dil_sign_internal": (
-        24,
+        16,  # measured 14 in this object (gcc-13/clang-18 -O3) + 2 tolerance
         "ama_dilithium.c:1562 `nonces[f] = ((f / P->l) << 8) + (f % P->l)`. "
         "The dividend is the loop counter and the divisor is the parameter "
         "set's dimension l (4, 5 or 7 for ML-DSA-44/65/87) — both public. "
@@ -75,13 +82,13 @@ ALLOWED: dict[str, tuple[int, str]] = {
         "register across the unrolled body while the dividend increments.",
     ),
     "lms_verify_parsed": (
-        16,
+        13,  # measured 11 in this object (gcc-13/clang-18 -O3) + 2 tolerance
         "ama_lms.c:391. LMS/HSS verification takes only public inputs — the "
         "identifier, the type words, the public root, the message and the "
         "signature. No secret is in scope in this function.",
     ),
     "ama_argon2id_core": (
-        12,
+        8,  # measured 6 in this object (gcc-13/clang-18 -O3) + 2 tolerance
         "ama_argon2.c:530 `ref_lane = J2 % lanes`. On Argon2id's "
         "data-INdependent phase J2 comes from the counter-driven address "
         "block and is public. On the data-dependent phase it is derived from "
@@ -93,7 +100,7 @@ ALLOWED: dict[str, tuple[int, str]] = {
         "the property. Recorded rather than silently dropped.",
     ),
     "ama_ml_dsa_test_matrix_row_equiv": (
-        14,
+        16,  # measured 14 (gcc-13) / 0 (clang-18, folds it) + 2 tolerance
         "ama_dilithium.c:2714, compiled ONLY under AMA_TESTING_MODE and never "
         "present in a shipped library — which is why CI, running against "
         "build-shared/ and build-arm/, never saw it and this entry was added "
@@ -104,9 +111,10 @@ ALLOWED: dict[str, tuple[int, str]] = {
         "counter. The divides are the index arithmetic of the two matrix "
         "expansions it compares, whose divisor is P->l — public, and the same "
         "quantity already recorded for dil_sign_internal. The ceiling is the "
-        "measured maximum across both compilers CI uses at -O3, not headroom: "
-        "gcc 13 emits 14 and clang 18 emits 0 (it folds the expansion), so a "
-        "fifteenth divide is a new one and has to be justified here.",
+        "measured count plus the same +2 tolerance as the other entries: gcc 13 "
+        "emits 14 and clang 18 emits 0 (it folds the expansion), so the ceiling "
+        "is 14 + 2 = 16 and a jump beyond the cross-compiler unrolling spread "
+        "has to be justified here.",
     ),
 }
 
