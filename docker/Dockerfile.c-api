@@ -69,9 +69,14 @@ FROM ubuntu:22.04@sha256:3b06811b2afd352be909dd088a004166d665dc76d38b13eada33522
 # a CVE-prone library on disk that nothing could load.  Ubuntu's base image
 # already carries libc.
 
-# Copy AMA Cryptography libraries and headers
+# Copy AMA Cryptography libraries and headers.  Both public headers must be
+# shipped: CMake installs ama_cryptography.h AND ama_dispatch.h as PUBLIC_HEADER
+# (see the install() targets in CMakeLists.txt), and ama_cryptography.h's
+# dispatch declarations are only complete with ama_dispatch.h present — an image
+# carrying only the first ships an incomplete header set (audit Low).
 COPY --from=builder /ama-cryptography/build/lib* /usr/local/lib/
 COPY --from=builder /ama-cryptography/include/ama_cryptography.h /usr/local/include/
+COPY --from=builder /ama-cryptography/include/ama_dispatch.h /usr/local/include/
 
 # Update library cache
 RUN ldconfig

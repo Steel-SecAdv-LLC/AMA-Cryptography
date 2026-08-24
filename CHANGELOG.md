@@ -5,7 +5,7 @@
 | Property | Value |
 |----------|-------|
 | Applies to Release | 5.0.0 |
-| Last Updated | 2026-08-21 |
+| Last Updated | 2026-08-24 |
 | Classification | Public |
 | Maintainer | Steel Security Advisors LLC |
 
@@ -4908,8 +4908,11 @@ reason — nothing exercised the configuration in which they are reachable:
   fallback that exists *for* CPUs without AES-NI, which overwhelmingly also
   lack AVX2. The crash landed inside the very path the CPUID dispatcher
   correctly selected. Per-file kernel flags stay; the global contamination is
-  gone, and the linked library now carries zero AVX opcodes outside
-  `src/c/avx2` / `src/c/avx512`.
+  gone from the default build, and the linked library now carries zero AVX
+  opcodes outside `src/c/avx2` / `src/c/avx512`. (The opt-in
+  `AMA_ENABLE_NATIVE_ARCH`, OFF by default and set by no wheel or release path,
+  deliberately re-applies `-march=native` globally for host-tuned benchmark
+  builds — the one exception, never on a shipped artefact.)
 - **ML-KEM carried the KyberSlash division pattern on secret operands** — the
   Compress_1 message decode in decapsulation and `poly_compress` inside the
   FO re-encryption. Replaced with an exact Granlund–Montgomery reciprocal

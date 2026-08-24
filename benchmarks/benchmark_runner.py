@@ -1301,6 +1301,35 @@ def capture_tree_state() -> "tuple[str, bool]":
 _TREE_STATE: "tuple[str, bool] | None" = None
 
 
+def _native_backend_summary() -> str:
+    """Identify the native library actually measured.
+
+    The single most load-bearing variable behind these numbers is how the
+    native library was built — the CI figures are produced with
+    ``-DAMA_ENABLE_AVX512=ON -DAMA_ENABLE_NATIVE_ARCH=ON`` while the wheels
+    users install are built with neither, and nothing else in this block
+    distinguished the two (audit Low).  There is no runtime accessor for the
+    configure flags, but the mapped-bytes SHA3-256 of the loaded object pins
+    the exact binary — a different build has a different digest — and it is the
+    same value the integrity artefact signs, so a reader can match a figure to
+    the object that produced it.  Falls back to a plain marker if the
+    attestation is unavailable, so provenance never fails for want of a detail.
+    """
+    try:
+        from ama_cryptography._self_test import module_attestation
+
+        nb = module_attestation().get("native_backend") or {}
+        if not nb.get("loaded"):
+            return "not loaded (pure-Python / ctypes-fallback measurement)"
+        digest = nb.get("preload_digest_hex") or ""
+        version = nb.get("native_version") or "?"
+        path = nb.get("path") or "?"
+        digest_str = f"digest {digest[:16]}…" if digest else "digest unavailable"
+        return f"v{version} · {digest_str} · {path}"
+    except Exception:  # pragma: no cover - provenance must never raise
+        return "unavailable"
+
+
 def _provenance() -> "list[tuple[str, str]]":
     """Everything needed to reproduce or discard this report.
 
@@ -1339,6 +1368,8 @@ def _provenance() -> "list[tuple[str, str]]":
         ("Host", f"{platform.platform()} / {platform.machine()}"),
         ("CPU", f"{os.cpu_count()} logical processor(s)"),
         ("Python", f"{platform.python_version()} ({platform.python_implementation()})"),
+        # Which native binary produced the numbers — the digest pins the build.
+        ("Native backend", _native_backend_summary()),
         ("Command", f"`{_invocation()}`"),
         (
             "Sampling",
