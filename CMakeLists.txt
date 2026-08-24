@@ -1056,7 +1056,21 @@ if(AMA_BUILD_STATIC)
     # guarantees machine code.
     if(AMA_ENABLE_LTO)
         include(CheckCCompilerFlag)
-        check_c_compiler_flag("-ffat-lto-objects" AMA_HAVE_FAT_LTO)
+        # Apple clang is NOT trustworthy through check_c_compiler_flag here: it
+        # accepts a bare `-ffat-lto-objects` probe (no LTO mode, no target
+        # arch), so the check returns TRUE, but the real static-library compile
+        # — `-arch arm64 -flto=thin -ffat-lto-objects` — dies with
+        # "clang: error: unsupported option '-ffat-lto-objects' for target
+        # arm64-apple-darwin*" on Xcode 26 / darwin25.  `-ffat-lto-objects` is a
+        # GCC feature that upstream LLVM clang >= 17 also implements, but Apple's
+        # fork does not for this target.  Exclude AppleClang explicitly and fall
+        # back to no-IPO on the static target, which delivers the same
+        # machine-code guarantee the fat-LTO path exists for (H4).
+        if(CMAKE_C_COMPILER_ID STREQUAL "AppleClang")
+            set(AMA_HAVE_FAT_LTO FALSE)
+        else()
+            check_c_compiler_flag("-ffat-lto-objects" AMA_HAVE_FAT_LTO)
+        endif()
         if(AMA_HAVE_FAT_LTO)
             target_compile_options(ama_cryptography_static PRIVATE
                 $<$<CONFIG:Release>:-ffat-lto-objects>)
