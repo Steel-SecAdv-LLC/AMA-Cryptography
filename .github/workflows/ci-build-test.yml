@@ -668,7 +668,7 @@ jobs:
           echo "::warning::All 8 pull attempts for ${IMAGE} failed over ~340s; buildx setup will retry internally"
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c  # v4
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e  # v4
         with:
           # The base-image pulls (ubuntu:22.04, alpine:3.18) happen INSIDE the
           # BuildKit container, which does not share the runner's local image
@@ -695,7 +695,7 @@ jobs:
         # set but token missing) would otherwise reach docker/login-action
         # and fail noisily, defeating the "optional" intent of the step.
         if: env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != ''
-        uses: docker/login-action@371161bbe7024a29a25c5e19bfcbc0804fe9ad2c  # v4.5.2
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f  # v4.6.0
         with:
           username: ${{ env.DOCKERHUB_USERNAME }}
           password: ${{ env.DOCKERHUB_TOKEN }}
