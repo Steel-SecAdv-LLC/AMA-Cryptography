@@ -6,7 +6,13 @@ AMA Cryptography — Ed25519 Backend Differential (INVARIANT-26 support)
 ======================================================================
 
 Asserts that this repository's two Ed25519 backends return the **same verdict**
-for every signature put to them.
+for every signature in its differential corpus — single verify, batch verify at
+counts spanning donna's multi-scalar boundary, and canonically-encoded
+small-order (torsion) signatures repeated across counts so a *probabilistic*
+divergence cannot pass as one lucky sample. It does not claim to have tried
+every possible signature; it claims the two backends — and single vs batch
+within each — cannot disagree on the corpus that exercises the paths either
+verifier takes.
 
 Why
 ---
@@ -384,6 +390,40 @@ class Backend:
         self.lib.ama_ed25519_sc_muladd(s_half, bytes(32), h, scalar_bytes)
         return r_half + s_half.raw[:32]
 
+    def small_order_r_signature(
+        self, message: bytes, public: bytes, secret: bytes, torsion_enc: bytes, seed: int = 0
+    ) -> bytes:
+        """A signature whose R carries a canonically-encoded small-order point.
+
+        This is the B1 discriminator.  R = [r]B + T and S = r + h*a, built with
+        the signer's OWN key and canonical encodings throughout — no forgery.
+        Then [S]B - [h]A = [r + h*a]B - [h]A = [r]B = R - T, so single verify
+        re-encodes R - T, compares it to R (which is R - T + T) and REJECTS.
+        donna's retired aggregate summed r_i * (S_i*B - h_i*A_i - R_i) = r_i *
+        (-T), neutral iff ord(T) | r_i, so it reported the entry VALID with
+        probability ~1/ord over its uniform randomizer.  T is a fixed
+        small-order encoding (order-2 y = p-1, or order-4 y = 0); both decode.
+
+        Scalar arithmetic is done here in Python mod l rather than through the
+        library, so the discriminator does not depend on the very code paths it
+        is meant to police; only the group operations ([r]B, +T) go through the
+        backend, and the derived scalar is checked to reproduce the public key.
+        """
+        a = _clamp_scalar(secret[:32])
+        if self.point_from_scalar_bytes(a) != public:
+            raise RuntimeError(f"{self.name}: derived scalar does not reproduce the public key")
+        a_int = int.from_bytes(a, "little") % L
+        r_int = int.from_bytes(_deterministic_bytes(seed, 32), "little") % L
+        r_base = self.point_from_scalar_bytes(r_int.to_bytes(32, "little"))
+        if r_base is None:
+            raise RuntimeError(f"{self.name}: [r]B refused")
+        r_sig = self.point_add_bytes(r_base, torsion_enc)
+        if r_sig is None:
+            raise RuntimeError(f"{self.name}: [r]B + T refused (T={torsion_enc.hex()})")
+        h_int = int.from_bytes(hashlib.sha512(r_sig + public + message).digest(), "little") % L
+        s_int = (r_int + h_int * a_int) % L
+        return r_sig + s_int.to_bytes(32, "little")
+
     def verify(self, message: bytes, signature: bytes, public: bytes) -> bool:
         # ama_ed25519_verify takes `const uint8_t signature[64]` with no length
         # parameter, so handing it a short buffer reads past the end.  This is
@@ -410,6 +450,15 @@ def _deterministic_bytes(seed: int, length: int) -> bytes:
         out += hashlib.sha256(f"ama-ed25519-parity:{seed}:{counter}".encode()).digest()
         counter += 1
     return bytes(out[:length])
+
+
+def _clamp_scalar(seed32: bytes) -> bytes:
+    """The RFC 8032 secret scalar a = clamp(SHA-512(seed)[:32])."""
+    h = bytearray(hashlib.sha512(seed32).digest()[:32])
+    h[0] &= 248
+    h[31] &= 127
+    h[31] |= 64
+    return bytes(h)
 
 
 def _flip_bit(data: bytes, bit: int) -> bytes:
@@ -711,10 +760,75 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     f"      sig={signature.hex()}"
                 )
 
+    # Batch-verify parity, torsion corpus.  Family 5b — the one that would have
+    # caught B1.  The family above samples ONCE at count=4 with a NON-canonical
+    # R; B1's divergence is a CANONICALLY encoded small-order (torsion) residue,
+    # which donna's retired aggregate accepted with probability ~1/ord over its
+    # uniform randomizer while single verify and fe51 always reject it.  One
+    # sample is a coin flip, not a measurement, so sweep donna's multi-scalar
+    # boundary (it verifies per entry while num <= 3, aggregate at >= 4) and
+    # repeat each batch enough that a probabilistic accept cannot hide behind a
+    # lucky draw: P(all 32 reject | 50% accept) < 1e-9.
+    torsion_counts = (1, 2, 3, 4, 5, 8, 16, 63, 64, 65, 80)
+    torsion_repeats = 32
+    torsion_asserted = 0
+    for signer in (donna, fe51):
+        public, secret = signer.keypair()
+        message = b"backend parity: torsion R"
+        honest = signer.sign(message, secret)
+        for tlabel, tenc in (("order-2 y=p-1", _PM1_ENC), ("order-4 y=0", _ZERO_ENC)):
+            forged = signer.small_order_r_signature(message, public, secret, tenc, seed=0xB1)
+            # Precondition: single verify MUST reject this in both backends.  If
+            # either accepts it the construction is wrong, and a family that
+            # cannot build its discriminator is not testing — fail closed.
+            sd = donna.verify(message, forged, public)
+            sf = fe51.verify(message, forged, public)
+            checked += 1
+            torsion_asserted += 1
+            if sd or sf:
+                disagreements.append(
+                    f"  torsion signed-by={signer.name:<5} case={tlabel}\n"
+                    f"      construction error: a torsion signature single verify must\n"
+                    f"      reject was accepted (donna={sd} fe51={sf})\n"
+                    f"      sig={forged.hex()}"
+                )
+                continue
+            case_failed = False
+            for count in torsion_counts:
+                for _ in range(torsion_repeats):
+                    entries = [(message, forged, public)] + [(message, honest, public)] * (
+                        count - 1
+                    )
+                    dv = donna.batch_verify(entries)
+                    fv = fe51.batch_verify(entries)
+                    checked += 1
+                    torsion_asserted += 1
+                    # Index 0 is the torsion entry; both backends must reject it
+                    # every time, and must agree, matching single verify.
+                    if dv[0] or fv[0] or dv != fv:
+                        disagreements.append(
+                            f"  torsion signed-by={signer.name:<5} case={tlabel} count={count}\n"
+                            f"      a canonically-encoded torsion signature single verify\n"
+                            f"      rejects was reported VALID by batch verify, or the two\n"
+                            f"      backends disagreed:  donna={dv}  fe51={fv}\n"
+                            f"      sig[0]={forged.hex()}  pk={public.hex()}"
+                        )
+                        case_failed = True
+                        break
+                if case_failed:
+                    break
+
     if batch_asserted == 0:
         print(
             "FATAL: the batch-verify family asserted nothing. A family that "
             "runs no assertion is a family that is not testing.",
+            file=sys.stderr,
+        )
+        return 2
+
+    if torsion_asserted == 0:
+        print(
+            "FATAL: the torsion batch corpus asserted nothing — the B1 " "discriminator never ran.",
             file=sys.stderr,
         )
         return 2

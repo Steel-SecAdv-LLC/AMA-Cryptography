@@ -210,10 +210,12 @@ static inline int ama_ed25519_point_encoding_is_canonical(const uint8_t p[32]) {
  * count >= 4 (donna falls back to per-entry verify while num <= 3), see
  * tests/c/test_ed25519_canonical_r.c.
  *
- * Applying the rule explicitly on every verify path -- single and batch, both
- * backends -- replaces the accident with the rule.  No legitimate signature
- * is affected: R is produced by the same canonical encoders whose output the
- * comparison already required. */
+ * Applying the rule explicitly on the single-verify path -- which the batch
+ * verifier now calls per entry in BOTH backends (B1, 5.0.0 pre-tag audit) --
+ * puts it on every verify path by construction: the batch path no longer has a
+ * separate aggregate decode of R that could disagree with single verify.  No
+ * legitimate signature is affected: R is produced by the same canonical
+ * encoders whose output the comparison already required. */
 static inline int ama_ed25519_signature_r_is_canonical(const uint8_t sig[64]) {
     return ama_ed25519_point_encoding_is_canonical(sig);
 }

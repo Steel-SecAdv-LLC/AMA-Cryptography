@@ -32,42 +32,20 @@
  * but needed to compile). Backed by AMA's platform CSPRNG. */
 #include "ama_platform_rand.h"
 
-/* Batch verification draws its per-signature randomizers through this hook.
- * ama_randombytes is NOT all-or-nothing (it returns AMA_ERROR_CRYPTO and may
- * leave the buffer partially or never written), and donna's void-returning
- * hook signature cannot report that.  Dropping the status is a fail-OPEN:
- * with garbage randomizers the Bos-Carter multi-scalar check loses its
- * soundness, and in the degenerate all-zero case the aggregate collapses to
- * the identity and the routine reports EVERY signature valid regardless of
- * whether it is genuine.  Latch the failure in a thread-local flag that
- * ama_ed25519_batch_verify inspects and fails closed on; zero-fill the buffer
- * so the discarded computation is at least deterministic rather than reading
- * indeterminate stack. */
-static _Thread_local int s_ed25519_batch_rng_failed = 0;
-
-#ifdef AMA_TESTING_MODE
-/**
- * Allocation-failure hook for fail-closed testing.
- *
- * When non-zero, the next ama_ed25519_batch_verify() call behaves as though
- * every malloc for donna's pointer arrays returned NULL, so a test can drive
- * the AMA_ERROR_MEMORY return.  That return is the ONLY path on this backend
- * where the caller's `results` array is written by the fail-closed pre-zeroing
- * loop and by nothing else, so without this hook the pre-zeroing could be
- * deleted outright and every assertion in the tree still passed — measured,
- * not assumed.  The flag is cleared by the call it affects, so a test cannot
- * leave it armed for the next one.
- *
- * Only available in test builds (AMA_TESTING_MODE); the shipped shared and
- * static libraries never define it, and it appears in no public header.
- */
-int ama_ed25519_batch_force_alloc_failure = 0;
-#endif
-
+/* donna's ed25519_sign_open_batch() draws its per-signature randomizers
+ * through this hook.  As of the 5.0.0 pre-tag audit (B1), AMA no longer calls
+ * that routine at all: ama_ed25519_batch_verify below is a per-entry loop over
+ * ama_ed25519_verify, so no AMA verify path reaches a randomized aggregate.
+ * The hook remains defined only because ed25519_sign_open_batch is still
+ * compiled from the vendored donna unit and the linker requires the symbol; on
+ * the off chance that routine is ever exercised, a failed CSPRNG draw
+ * zero-fills the buffer so the result is deterministic rather than
+ * indeterminate stack.  AMA's batch soundness no longer depends on it, so the
+ * former fail-closed latch and the AMA_TESTING_MODE allocation-failure hook are
+ * gone with the aggregate path they guarded. */
 static void
 ed25519_randombytes_unsafe(void *p, size_t len) {
     if (ama_randombytes((uint8_t *)p, len) != AMA_SUCCESS) {
-        s_ed25519_batch_rng_failed = 1;
         memset(p, 0, len);
     }
 }
@@ -238,21 +216,17 @@ ama_error_t ama_ed25519_verify(
 }
 
 /* ============================================================================
- * BATCH VERIFICATION — donna Bos-Carter multi-scalar multiplication
+ * BATCH VERIFICATION — per-entry loop over ama_ed25519_verify
  *
- * donna's ed25519_sign_open_batch() uses a binary heap for multi-scalar
- * multiplication (Bos-Carter method), supporting up to 64 signatures per
- * batch for ~2.5x throughput vs sequential verify.
- *
- * donna's API expects separate arrays of pointers:
- *   const unsigned char **m     — messages
- *   size_t              *mlen   — message lengths
- *   const unsigned char **pk    — 32-byte public keys
- *   const unsigned char **RS    — 64-byte signatures (R || S)
- *   size_t               num    — number of entries
- *   int                 *valid  — per-entry result (1=valid, 0=invalid)
- *
- * We convert from AMA's ama_ed25519_batch_entry struct array.
+ * donna ships a Bos-Carter multi-scalar batch verifier
+ * (ed25519_sign_open_batch), but AMA no longer uses it: its randomized
+ * aggregate predicate is not the one single verify decides, so it accepted
+ * canonically encoded small-order residues that single verify rejects (B1,
+ * 5.0.0 pre-tag audit).  This function is now a per-entry loop over
+ * ama_ed25519_verify — byte-for-byte the fe51 backend's implementation in
+ * src/c/ama_ed25519.c — so the two backends cannot disagree on any signature,
+ * and batch verify cannot disagree with single verify.  The trade is donna's
+ * batch throughput, which is the right price for one verdict per signature.
  * ============================================================================ */
 
 ama_error_t ama_ed25519_batch_verify(
@@ -267,9 +241,12 @@ ama_error_t ama_ed25519_batch_verify(
         return AMA_SUCCESS;
     }
 
-    /* SECURITY FIX: Guard against integer overflow in ALL allocation sizes.
-     * Each malloc below uses count * sizeof(...); validate each size so no
-     * allocation can wrap to a smaller-than-expected buffer (audit C-MEM-1). */
+    /* Oversized-count rejection, retained from the allocating path this
+     * function used to have (audit C-MEM-1).  The per-entry loop below no
+     * longer allocates, but the threshold is part of the published argument
+     * contract and MUST NOT differ by backend: fe51 keeps the identical guard
+     * (src/c/ama_ed25519.c), so a caller that gets AMA_ERROR_INVALID_PARAM for
+     * a given `count` from one build gets it from the other. */
     if (count > SIZE_MAX / sizeof(const unsigned char *) ||
         count > SIZE_MAX / sizeof(size_t)) {
         return AMA_ERROR_INVALID_PARAM;
@@ -277,205 +254,67 @@ ama_error_t ama_ed25519_batch_verify(
 
     /* Every return past this point leaves `results` fully written, so the
      * header's "exactly `count` are written" holds on the error paths too.
-     * Without this, an allocation failure returned with the caller's array
-     * untouched — and a caller that reuses one buffer across batches, or that
-     * reads `results` before checking the return code, would see stale 1s from
-     * an earlier successful batch and read them as valid signatures.  Zeroing
-     * first makes the failure mode "everything invalid", which is the
-     * direction a verifier must fail in.
+     * The per-entry loop below writes every slot, so this pre-zero is
+     * belt-and-braces — but it keeps donna byte-identical to fe51 (which has
+     * the same loop for the same reason) and it fixes the fail direction: a
+     * caller that reuses one buffer across batches, or reads `results` before
+     * checking the return code, sees "everything invalid" rather than stale 1s
+     * from an earlier successful batch, which is the direction a verifier must
+     * fail in.
      *
-     * AFTER the overflow guard, deliberately, and this comment used to say
-     * "an allocation failure or the overflow rejection above" as though it
-     * covered both.  It does not cover the overflow rejection and MUST NOT: a
-     * `count` large enough to wrap `count * sizeof(...)` cannot describe a real
-     * array, so writing `results[0..count)` would be the very out-of-bounds
-     * write the guard exists to prevent.  The header says so
+     * AFTER the overflow guard, deliberately: a `count` large enough to wrap
+     * `count * sizeof(...)` in the argument-contract check above cannot describe
+     * a real array, so writing `results[0..count)` would be the very
+     * out-of-bounds write the guard exists to prevent.  The header says so
      * ("touching `results[0..count)` would be the wild write"), and
-     * tests/c/test_ed25519_canonical_s.c pins that an argument rejection
-     * leaves the caller's array exactly as it was.  Only the sentence was
-     * wrong; the ordering is correct. */
+     * tests/c/test_ed25519_canonical_s.c pins that an argument rejection leaves
+     * the caller's array exactly as it was. */
     for (size_t i = 0; i < count; i++) {
         results[i] = 0;
     }
 
-    /* Per-entry pointer validation, which this path did not have.
+    /* Per-entry verification, unconditionally.
      *
-     * ama_ed25519_verify rejects a NULL signature, a NULL public key, and a
-     * NULL message with message_len > 0 with AMA_ERROR_INVALID_PARAM in BOTH
-     * backends.  The fe51 batch path is a loop over that function, so it
-     * inherits the guard and turns a malformed entry into results[i] = 0 plus
-     * AMA_ERROR_VERIFY_FAILED.  This path handed entries[i].message /
-     * .signature / .public_key straight to ed25519_sign_open_batch, which
-     * dereferences all three unconditionally (ed25519-donna-batchverify.h
-     * expand256_modm(..., RS[i] + 32, 32) and ed25519_hram(..., m[i],
-     * mlen[i])), and the `num <= 3` tail dereferences them through
-     * ed25519_sign_open, so small batches faulted too.  The canonicality loop
-     * this branch added runs AFTER the batch call and dereferences the same
-     * fields itself, so it could not screen them either.
+     * B1 (5.0.0 pre-tag audit).  This path formerly handed the batch to
+     * ed25519-donna-batchverify.h's multi-scalar routine, whose aggregate
+     * predicate -- Sum_i r_i * (S_i*B - h_i*A_i - R_i) is neutral -- is NOT the
+     * predicate ama_ed25519_verify decides.  Single verify is cofactorless: it
+     * re-encodes [S]B - [h]A and compares bytes, demanding S*B - h*A - R == 0
+     * exactly.  A canonically encoded small-order residue in one entry makes
+     * the aggregate vanish with probability ~1/ord over the uniform randomizer
+     * r_i, so batch verify reported VALID -- non-deterministically, at count
+     * >= 4 -- for signatures single verify rejects, with the signer's own key
+     * and no forgery.  The per-entry canonical-R/S/y/x loop this path used to
+     * run AFTER the aggregate screened non-canonical ENCODINGS; it could not
+     * screen a canonically encoded torsion point, which is the real divergence.
      *
-     * Measured on a 6-entry batch with one field of entry 3 nulled: fe51
-     * returned AMA_ERROR_VERIFY_FAILED with results 111011 and exit 0, donna
-     * took SIGSEGV (exit 139), for message=NULL/message_len=5, for
-     * signature=NULL and for public_key=NULL alike.  Same library, same public
-     * API, crash on x86-64 and a clean rejection on aarch64 — and aarch64 CI
-     * runs fe51, so no lane could observe it.
-     *
-     * Falling back to the per-entry loop rather than screening in place is
-     * what makes the two backends byte-identical here: donna's batch API takes
-     * dense arrays with no room for a hole, and ama_ed25519_verify applies
-     * exactly the guards, canonicality rules and return code fe51's loop
-     * applies. */
-    int malformed_entry = 0;
+     * The only way two verifiers of one API cannot disagree on the same 64
+     * bytes is for the batch verifier to BE the single verifier, per entry.
+     * That is what the fe51 backend already does (src/c/ama_ed25519.c) and what
+     * this shim already did for its malformed-entry fallback.  Doing it
+     * unconditionally costs donna's multi-scalar speedup -- the correct trade
+     * against two APIs that disagree -- and needs none of the pointer arrays,
+     * the randomizer draw, or the post-hoc override loops the old path carried.
+     * ama_ed25519_verify applies every pointer guard (NULL signature / public
+     * key / message-with-length), canonicality rule (S, R, y, x-sign) and
+     * return code by construction, so this preserves the single-verify accept
+     * set exactly and makes the two backends byte-identical here.  The
+     * torsion/count-sweep corpus in tools/check_ed25519_backend_parity.py fails
+     * on the old aggregate path and passes on this one. */
+    int all_valid = 1;
     for (size_t i = 0; i < count; i++) {
-        if (!entries[i].signature || !entries[i].public_key ||
-            (!entries[i].message && entries[i].message_len > 0)) {
-            malformed_entry = 1;
-            break;
+        ama_error_t rc = ama_ed25519_verify(
+            entries[i].signature,
+            entries[i].message,
+            entries[i].message_len,
+            entries[i].public_key
+        );
+        results[i] = (rc == AMA_SUCCESS) ? 1 : 0;
+        if (!results[i]) {
+            all_valid = 0;
         }
     }
-    if (malformed_entry) {
-        int fallback_all_valid = 1;
-        for (size_t i = 0; i < count; i++) {
-            ama_error_t rc = ama_ed25519_verify(
-                entries[i].signature,
-                entries[i].message,
-                entries[i].message_len,
-                entries[i].public_key
-            );
-            results[i] = (rc == AMA_SUCCESS) ? 1 : 0;
-            if (!results[i]) {
-                fallback_all_valid = 0;
-            }
-        }
-        return fallback_all_valid ? AMA_SUCCESS : AMA_ERROR_VERIFY_FAILED;
-    }
-
-    /* Allocate pointer arrays for donna's batch verify interface */
-    const unsigned char **msgs = (const unsigned char **)malloc(count * sizeof(const unsigned char *));
-    size_t *mlens = (size_t *)malloc(count * sizeof(size_t));
-    const unsigned char **pks = (const unsigned char **)malloc(count * sizeof(const unsigned char *));
-    const unsigned char **sigs = (const unsigned char **)malloc(count * sizeof(const unsigned char *));
-
-    int alloc_failed = (!msgs || !mlens || !pks || !sigs);
-#ifdef AMA_TESTING_MODE
-    if (ama_ed25519_batch_force_alloc_failure) {
-        ama_ed25519_batch_force_alloc_failure = 0;
-        alloc_failed = 1;
-    }
-#endif
-    if (alloc_failed) {
-        /* Explicit (void *) casts: free() takes `void *` but `msgs` /
-         * `pks` / `sigs` are `const unsigned char **`.  Without the
-         * cast, clang-tidy's bugprone-multi-level-implicit-pointer-conversion
-         * fires (audit Issue 9 fail-closed). */
-        free((void *)msgs);
-        free((void *)mlens);
-        free((void *)pks);
-        free((void *)sigs);
-        return AMA_ERROR_MEMORY;
-    }
-
-    /* Convert ama_ed25519_batch_entry structs to donna's separate arrays */
-    for (size_t i = 0; i < count; i++) {
-        msgs[i] = entries[i].message;
-        mlens[i] = entries[i].message_len;
-        pks[i] = entries[i].public_key;
-        sigs[i] = entries[i].signature;
-    }
-
-    /* donna's batch verify: returns 0 if all valid, nonzero otherwise.
-     * Per-entry results are written to the valid[] array (1=valid, 0=invalid).
-     * Clear the CSPRNG-failure latch first so it reflects only this call's
-     * randomizer draw (see ed25519_randombytes_unsafe). */
-    s_ed25519_batch_rng_failed = 0;
-    int ret = ed25519_sign_open_batch(msgs, mlens, pks, sigs, count, results);
-
-    /* Fail closed if the randomizer draw failed: the batch soundness argument
-     * depends on unpredictable randomizers, so a batch that could not draw
-     * them cannot report any entry valid.  Mark every entry invalid and force
-     * an error return, ahead of (and overriding) the canonical-S/y loop and
-     * the success mapping below. */
-    if (s_ed25519_batch_rng_failed) {
-        for (size_t i = 0; i < count; i++) {
-            results[i] = 0;
-        }
-        free((void *)msgs);
-        free((void *)mlens);
-        free((void *)pks);
-        free((void *)sigs);
-        return AMA_ERROR_CRYPTO;
-    }
-
-    /* RFC 8032 §5.1.7 canonical-S enforcement, applied per entry.
-     *
-     * This cannot be delegated to the single-signature path: donna's batch
-     * routine calls its own ed25519_sign_open() internally (see
-     * ed25519-donna-batchverify.h), never ama_ed25519_verify(), so the check
-     * added there does not reach here.  Without this loop, batch verification
-     * would accept malleable signatures that single verification rejects —
-     * a difference in accepted-signature sets between two APIs documented to
-     * agree, which is worse than either behaviour on its own.
-     *
-     * Applied after the batch rather than before it so donna's multi-scalar
-     * arithmetic runs over the inputs it was handed; the override below is
-     * what decides the result.  S is public, so no timing property is at
-     * stake in overriding rather than skipping. */
-    /* RFC 8032 §5.1.3 canonical-y enforcement (INVARIANT-38), applied per
-     * entry for exactly the reason spelled out above for canonical S.
-     *
-     * ama_ed25519_verify() gained this check, but donna's batch routine
-     * reaches ge25519_unpack_negative_vartime() through its own internal
-     * ed25519_sign_open(), so nothing added there reaches here.  Leaving it
-     * out would make batch verification accept a public-key encoding that
-     * single verification rejects — and would also split the two Ed25519
-     * backends, since the fe51 batch path (ama_ed25519.c) is a loop over
-     * ama_ed25519_verify() and therefore already enforces it.
-     *
-     * Only the 19 encodings with y in [p, 2^255) are affected, and a
-     * legitimate key can collide with one only if its y is below 19, so this
-     * is an encoding-uniqueness guarantee rather than a reachable forgery.
-     * That is the same standing INVARIANT-38 has on the single-signature
-     * path; the point is that both APIs enforce it, not that either is a
-     * break. */
-    /* RFC 8032 §5.1.7 step 1 canonical-R enforcement (INVARIANT-38 applied to
-     * the signature's first half), per entry, for a reason the S and y checks
-     * above do NOT share: on those two, this loop restates a rule the
-     * single-signature path also applies.  On R it supplies one the batch
-     * path never had.
-     *
-     * ed25519-donna-batchverify.h decodes R with
-     * ge25519_unpack_negative_vartime and puts the decoded point into the
-     * aggregate group equation.  It never re-encodes and compares, which is
-     * the only thing that was rejecting a non-canonical R on the
-     * single-signature path.  unpack decodes `01 00..00` with bit 255 set to
-     * the identity and drops the set sign bit (x = 0 has a single root, so
-     * the conditional negate is a no-op), so that encoding satisfied the
-     * batch equation whenever [S]B - [h]A was the identity — which S = h*a
-     * mod L arranges with the signer's own key, no forgery required.  The
-     * result was a signature ama_ed25519_verify REJECTS reported VALID here.
-     *
-     * Only reachable at count >= 4: donna verifies per entry while num <= 3,
-     * and that fallback re-encodes.  tests/c/test_ed25519_canonical_r.c pins
-     * both sides of that boundary. */
-    for (size_t i = 0; i < count; i++) {
-        if (!ama_ed25519_signature_s_is_canonical(entries[i].signature) ||
-            !ama_ed25519_signature_r_is_canonical(entries[i].signature) ||
-            !ama_ed25519_point_y_is_canonical(entries[i].public_key) ||
-            !ama_ed25519_point_x_sign_is_admissible(entries[i].public_key)) {
-            results[i] = 0;
-            ret = -1;
-        }
-    }
-
-    /* Same explicit (void *) casts as the early-error path above —
-     * bugprone-multi-level-implicit-pointer-conversion (audit Issue 9). */
-    free((void *)msgs);
-    free((void *)mlens);
-    free((void *)pks);
-    free((void *)sigs);
-
-    /* Map donna's return: 0 = all valid, nonzero = at least one invalid */
-    return (ret == 0) ? AMA_SUCCESS : AMA_ERROR_VERIFY_FAILED;
+    return all_valid ? AMA_SUCCESS : AMA_ERROR_VERIFY_FAILED;
 }
 
 /* ============================================================================

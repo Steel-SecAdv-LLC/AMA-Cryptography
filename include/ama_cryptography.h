@@ -1318,29 +1318,25 @@ typedef struct {
  *                  0=invalid). There is no capacity parameter, so a
  *                  short array is undefined behaviour.
  * @return AMA_SUCCESS if all verified, AMA_ERROR_VERIFY_FAILED if any failed,
- *         AMA_ERROR_INVALID_PARAM if entries or results is NULL,
- *         AMA_ERROR_MEMORY if the per-entry working arrays could not be
- *         allocated, or AMA_ERROR_CRYPTO if the batch randomizers could not
- *         be drawn.
+ *         AMA_ERROR_INVALID_PARAM if `entries` or `results` is NULL, or if
+ *         `count` is large enough that `count * sizeof(void *)` would overflow.
  *
- * The last one is a fail-closed return and not merely an error to log: the
- * donna batch path's soundness argument rests on unpredictable per-entry
- * randomizers, and with an all-zero randomizer vector the aggregate check
- * collapses to the identity and reports every entry valid. When the CSPRNG
- * draw fails, every `results[i]` is set to 0 and this code is returned,
- * ahead of the canonical-S and canonical-y loops. A caller MUST therefore
- * treat any non-`AMA_SUCCESS` return as "nothing in this batch is verified"
- * rather than switching only on `AMA_ERROR_VERIFY_FAILED`.
+ * Batch verification is a per-entry loop over `ama_ed25519_verify`, identical
+ * in both backends (the fe51 path always was; the donna path became one in
+ * 5.0.0 — see B1 in the pre-tag audit, which retired donna's randomized
+ * multi-scalar aggregate because its predicate accepted canonically encoded
+ * small-order residues that single verify rejects). The batch verdict for an
+ * entry is therefore exactly the single-verify verdict for the same 64 bytes:
+ * there is no separate aggregate predicate, no randomizer draw and no
+ * working-array allocation, and so no `AMA_ERROR_MEMORY` or `AMA_ERROR_CRYPTO`
+ * return. A caller MUST treat any non-`AMA_SUCCESS` return as "at least one
+ * entry in this batch did not verify" and read `results` per entry rather than
+ * switching only on `AMA_ERROR_VERIFY_FAILED`.
  *
- * Once the arguments are accepted, all `count` slots of `results` are
- * written and none carries a 1 unless that entry verified — the array is
- * zeroed up front, so the allocation-failure and CSPRNG-failure paths cannot
- * leave a stale 1 from an earlier batch visible to a caller that reads
- * `results` before the return code. The allocation-failure path is the only
- * one where that zeroing is the sole writer, so it is the only one on which
- * removing it is observable; `tests/c/test_ed25519_canonical_s.c` drives it
- * through an `AMA_TESTING_MODE`-only hook rather than asserting the promise
- * against a path that would write the slots anyway.
+ * Once the arguments are accepted, all `count` slots of `results` are written
+ * and none carries a 1 unless that entry verified — the array is zeroed up
+ * front so no path can leave a stale 1 from an earlier batch visible to a
+ * caller that reads `results` before the return code.
  *
  * The two argument-rejection returns write nothing, because at that point
  * there is nothing safe to write: `AMA_ERROR_INVALID_PARAM` for a NULL

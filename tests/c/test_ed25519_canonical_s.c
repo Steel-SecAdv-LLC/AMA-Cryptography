@@ -40,8 +40,11 @@
  *     red.  The old y = p assertions are kept and relabelled SMOKE, which is
  *     what they always were.
  *
- * Covers single verify and batch verify; the fix has a third site in the
- * donna batch wrapper, which calls its own ed25519_sign_open.
+ * Covers single verify and batch verify.  As of B1 (5.0.0 pre-tag audit) both
+ * backends' batch verify is a per-entry loop over ama_ed25519_verify, so the
+ * canonical-S rule reaches the batch path through single verify rather than a
+ * separate batch site — a batch entry is rejected for exactly the reason the
+ * same bytes are rejected by single verify.
  */
 
 #include "../../include/ama_cryptography.h"
@@ -54,15 +57,6 @@
 
 #include <stdio.h>
 #include <string.h>
-
-#ifdef AMA_ED25519_ASSEMBLY
-/* AMA_TESTING_MODE-only allocation-failure hook, defined in
- * src/c/ed25519_donna_shim.c and deliberately absent from every public
- * header.  It exists so the AMA_ERROR_MEMORY path — the only path where the
- * fail-closed pre-zeroing of `results` is observable — can be driven from a
- * test.  The in-tree backend allocates nothing and does not define it. */
-extern int ama_ed25519_batch_force_alloc_failure;
-#endif
 
 static int failed = 0;
 static int passed = 0;
@@ -439,21 +433,12 @@ int main(void) {
      * verifier's error paths must fail towards "invalid", and a caller reusing
      * one buffer across batches is the ordinary way to use this API.
      *
-     * This comment used to claim the pre-seeding made the two checks below
-     * non-vacuous, "without the zeroing the slot for a NULL-signature entry
-     * keeps the 1 it was handed".  There is no NULL-signature entry here —
-     * e[1].signature is the honest `sig`; only e[1].public_key is
-     * non-canonical — and because e[1] is well-formed, EVERY path writes
-     * results[1] unconditionally: fe51's loop assigns every slot, donna's
-     * post-batch canonical loop assigns this one.  Measured: deleting the
-     * pre-zeroing loop from both backends left all four checks below green.
-     *
-     * The path the pre-zeroing actually protects is donna's AMA_ERROR_MEMORY
-     * return, which writes `results` nowhere else; in the fe51 backend, which
-     * allocates nothing and assigns every slot, the loop is unconditional
-     * defence in depth with no observable effect.  So the real pin is the
-     * allocation-failure block further down, and these four are relabelled
-     * SMOKE to say what they measure. */
+     * These are SMOKE, not PIN: both backends now verify batches with the same
+     * per-entry loop over ama_ed25519_verify (B1, 5.0.0 pre-tag audit), which
+     * assigns every slot unconditionally, so the pre-zeroing is belt-and-braces
+     * with no observable effect here — deleting it leaves all four checks green.
+     * The one contract the pre-zeroing still owns on its own is the
+     * argument-rejection path, which writes nothing; that is the PIN below. */
     {
         ama_ed25519_batch_entry e[2];
         int r[2] = { 1, 1 };
@@ -493,14 +478,15 @@ int main(void) {
     /* Per-entry pointer validation, and the two backends agreeing on it.
      *
      * ama_ed25519_verify rejects a NULL signature, a NULL public key, and a
-     * NULL message with message_len > 0.  The fe51 batch path is a loop over
-     * that function and inherits the guard; the donna batch path handed the
-     * raw pointers to ed25519_sign_open_batch, which dereferences all three.
-     * Measured on a 6-entry batch with one field of entry 3 nulled: fe51
-     * returned AMA_ERROR_VERIFY_FAILED with results 111011 and exit 0, donna
-     * took SIGSEGV (exit 139) for each of the three fields.  These are PINs
-     * on donna and SMOKEs on fe51 — the fault was one-sided, the contract is
-     * not, and this file runs against whichever backend CMake selected. */
+     * NULL message with message_len > 0.  Both batch backends are now a loop
+     * over that function (B1, 5.0.0 pre-tag audit), so both inherit the guard
+     * and turn a malformed entry into results[i] = 0 plus
+     * AMA_ERROR_VERIFY_FAILED.  Historically donna's batch path handed the raw
+     * pointers to ed25519_sign_open_batch, which dereferenced all three: a
+     * 6-entry batch with one field of entry 3 nulled had fe51 return
+     * AMA_ERROR_VERIFY_FAILED (results 111011) while donna took SIGSEGV (exit
+     * 139).  This block pins that batch verify stays NULL-safe on whichever
+     * backend CMake selected. */
     {
         ama_ed25519_batch_entry e[4];
         int r[4];
@@ -532,54 +518,6 @@ int main(void) {
             CHECK(ok, field_label[which]);
         }
     }
-
-#ifdef AMA_ED25519_ASSEMBLY
-    /* The real pin for the fail-closed pre-zeroing.
-     *
-     * donna's AMA_ERROR_MEMORY return is the only path in either backend that
-     * leaves `results` written by the pre-zeroing loop and by nothing else,
-     * so it is the only path on which deleting that loop is observable.
-     * ama_ed25519_batch_force_alloc_failure (AMA_TESTING_MODE only, declared
-     * in no public header) drives it.  Pre-seed the array with 1s, as a
-     * caller reusing one buffer across batches would: with the pre-zeroing
-     * present every slot reads 0 after the failure; without it every slot
-     * still reads 1, and a caller that checks `results` before the return
-     * code reads stale valid verdicts for signatures that were never
-     * verified.
-     *
-     * fe51 has no allocating path, so it compiles this block out rather than
-     * asserting something it cannot reach. */
-    {
-        ama_ed25519_batch_entry e[3];
-        int r[3] = { 1, 1, 1 };
-        ama_error_t rc;
-        size_t i;
-
-        for (i = 0; i < 3; i++) {
-            e[i].message = msg;
-            e[i].message_len = sizeof(msg);
-            e[i].signature = sig;
-            e[i].public_key = pk;
-        }
-
-        ama_ed25519_batch_force_alloc_failure = 1;
-        rc = ama_ed25519_batch_verify(e, 3, r);
-        CHECK(rc == AMA_ERROR_MEMORY,
-              "SMOKE the allocation-failure hook reaches AMA_ERROR_MEMORY");
-        CHECK(r[0] == 0 && r[1] == 0 && r[2] == 0,
-              "PIN   an allocation failure leaves results fully zeroed");
-        CHECK(ama_ed25519_batch_force_alloc_failure == 0,
-              "SMOKE the allocation-failure hook disarms itself");
-
-        /* And the batch that follows it still works — the hook is one-shot,
-         * so a build where it leaked would fail here rather than silently
-         * disabling every later batch. */
-        r[0] = r[1] = r[2] = 9;
-        rc = ama_ed25519_batch_verify(e, 3, r);
-        CHECK(rc == AMA_SUCCESS && r[0] == 1 && r[1] == 1 && r[2] == 1,
-              "SMOKE the next batch after a forced allocation failure succeeds");
-    }
-#endif
 
     printf("\n");
     if (failed) {
