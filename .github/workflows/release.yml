@@ -571,6 +571,24 @@ jobs:
       - name: Build sdist
         run: python -m build --sdist
 
+      - name: Install the sdist from source and smoke-test it
+        # audit B3/H6.  The sdist is the artefact this release signs, attests
+        # and publishes to PyPI, and the channel every user on --no-binary or a
+        # platform without a matching wheel takes.  It shipped uninstallable
+        # before MANIFEST.in existed (no CMakeLists.txt, no src/c, no .pyx), and
+        # nothing in the pipeline ever tried to install it.  Build the wheel
+        # FROM the tarball in a throwaway venv and run the release smoke test
+        # against the installed distribution, so a missing build input is a red
+        # build here rather than a signed, attested, unbuildable release.
+        run: |
+          set -euxo pipefail
+          python -m venv /tmp/sdist-venv
+          /tmp/sdist-venv/bin/python -m pip install --upgrade pip
+          /tmp/sdist-venv/bin/pip install dist/*.tar.gz
+          # Run from OUTSIDE the checkout so wheel_smoke_test.py's source-tree
+          # guard resolves `import ama_cryptography` to the installed wheel.
+          ( cd /tmp && /tmp/sdist-venv/bin/python "$GITHUB_WORKSPACE/tools/wheel_smoke_test.py" )
+
       - name: Upload sdist artefact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:

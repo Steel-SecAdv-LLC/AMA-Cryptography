@@ -1,0 +1,51 @@
+# Copyright (C) 2025-2026 Steel Security Advisors LLC
+# SPDX-License-Identifier: Apache-2.0
+#
+# sdist build inputs (audit B3).
+#
+# setuptools' default sdist ships only the Python packages, their package-data
+# and the project metadata; it omits every NATIVE build input.  Without this
+# file the published `ama_cryptography-<v>.tar.gz` could not be installed:
+# setup.py's Extension("...math_engine.pyx") had no source in the archive
+# (`pip install` failed with "src/cython/math_engine.pyx doesn't match any
+# files"), and even past that the CMakeBuild command had no CMakeLists.txt or
+# src/c tree to compile.  The `git+https://…@vX.Y.Z` install channel was
+# unaffected because it uses the whole tree; the *signed, attested* sdist on
+# PyPI / the GitHub Release was the broken artefact.  Everything grafted here
+# is required to build the wheel from source; H6 (build-sdist installs and
+# smoke-tests the archive in CI) is what keeps this file honest.
+
+# --- project metadata that must ride along -----------------------------------
+include CMakeLists.txt
+include ama_cryptography.pc.in
+include LICENSE
+include README.md
+include CHANGELOG.md
+
+# --- native build tree -------------------------------------------------------
+graft src/c
+graft include
+graft cmake
+# CMakeLists.txt builds benchmark_c_raw from benchmarks/benchmark_c_raw.c
+# UNCONDITIONALLY on non-Windows native builds (it is NOT gated by
+# AMA_BUILD_TESTS / AMA_BUILD_EXAMPLES, both of which the pip build turns off),
+# so the source install configures that target and the sdist must carry its
+# source or CMake fails at generate.  Match any benchmark C source/header so a
+# newly-referenced one is caught by H6 rather than by a broken release.
+recursive-include benchmarks *.c *.h
+
+# --- Cython SOURCES (not the cythonize-generated C) ---------------------------
+# Cython is a build-system requirement (pyproject [build-system].requires), so
+# the .c is regenerated from the .pyx at build time.  Shipping the derived .c
+# in place of the .pyx source is exactly what the audit flagged, so ship the
+# source and drop the generated intermediate.
+recursive-include src/cython *.pyx *.pxd *.pxi
+exclude src/cython/*.c
+
+# --- never ship build artefacts, caches or local build trees -----------------
+global-exclude *.so *.so.* *.o *.a *.dylib *.dll *.pyd
+global-exclude *.pyc *.pyo
+global-exclude .DS_Store
+prune build
+prune dist
+prune **/__pycache__
