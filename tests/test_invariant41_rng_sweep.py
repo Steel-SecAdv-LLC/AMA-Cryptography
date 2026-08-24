@@ -89,27 +89,37 @@ BARE_DRAW_CALLS = frozenset(
     }
 )
 
-#: (module filename, dotted enclosing context) -> reason the bare draw is
-#: legitimate THERE.  A new bare draw anywhere else fails the sweep; a
-#: stale entry (code moved or was fixed) fails the allowlist-rot test.
-ALLOWED_BARE_DRAWS: dict[tuple[str, str], str] = {
+#: (module filename, dotted enclosing context) -> (expected_count, reason).
+#: The COUNT is load-bearing (audit H9): the sweep asserts each entry is
+#: witnessed EXACTLY this many times.  Keying the exemption on (module, context)
+#: with no count let an entry granted for ONE justified draw permanently exempt
+#: that function for any number of FUTURE draws of any kind -- including real
+#: key material -- while still reporting the entry witnessed.  A new bare draw
+#: anywhere else fails the sweep; a stale entry fails the count assertion at 0;
+#: a new draw added beside an exempt one now fails too, instead of being
+#: absorbed.  Bump the count here, with its own reason, only under review.
+ALLOWED_BARE_DRAWS: dict[tuple[str, str], tuple[int, str]] = {
     ("_module_state.py", "secure_token_bytes"): (
+        1,
         "the health-tested wrapper itself — this call IS the entropy source "
-        "the continuous check wraps"
+        "the continuous check wraps",
     ),
     ("_self_test.py", "_run_rng_stage"): (
+        2,
         "POST's RNG stage draws bare on purpose: it is the test that decides "
-        "whether the gated wrapper may be trusted at all"
+        "whether the gated wrapper may be trusted at all",
     ),
     ("_build_sign.py", "_generate_keypair_and_sign"): (
+        2,
         "build-time ephemeral signer; runs while the package may be mid-"
         "re-sign with POST structurally unavailable, and carries its own "
-        "two-draw stuck-entropy check at the call site"
+        "two-draw stuck-entropy check at the call site",
     ),
     ("key_management.py", "SecureKeyStorage.delete_key"): (
+        1,
         "random overwrite passes for secure deletion; the bytes are never "
         "secret and predictability is not load-bearing (zeros would satisfy "
-        "the same contract)"
+        "the same contract)",
     ),
 }
 
@@ -255,16 +265,35 @@ class TestInvariant41Sweep:
         violations, _ = _sweep_package()
         assert not violations, "\n" + "\n".join(violations)
 
-    def test_the_allowlist_carries_no_rot(self) -> None:
-        """Every allowlist entry must still be witnessed by real code.
+    def test_each_allowlist_entry_is_witnessed_its_exact_granted_count(self) -> None:
+        """Every allowlist entry must be witnessed the exact number of times
+        it was granted for — no fewer, no more.
 
-        A stale entry means the code it excused moved or was fixed; leaving
-        it behind would silently pre-authorise a future bare draw at that
-        (module, context) pair.
+        Fewer (a count of zero) means the code the entry excused moved or was
+        fixed; leaving the entry behind would silently pre-authorise a future
+        bare draw at that (module, context) pair.
+
+        More means a new bare draw was added inside a function that already
+        held an exemption for a *different* draw.  Keying the exemption on
+        (module, context) with no count made that new draw invisible: the key
+        was already ``in seen``, so the sweep counted it and moved on, and a
+        real key-material draw could be laundered through a context exempted
+        for one unrelated overwrite.  Asserting the exact count is what forces
+        the new draw to surface for review (audit H9).
         """
         _, seen = _sweep_package()
-        stale = [key for key, count in seen.items() if count == 0]
-        assert not stale, f"allowlist entries no longer witnessed by any code: {stale}"
+        mismatches = {
+            key: {"seen": seen[key], "expected": expected}
+            for key, (expected, _reason) in ALLOWED_BARE_DRAWS.items()
+            if seen[key] != expected
+        }
+        assert not mismatches, (
+            "allowlist entries witnessed a different number of times than granted: "
+            f"{mismatches}. A seen count of 0 means the entry is stale — remove it. "
+            "A count above expected means a bare draw was added beside an exempt one "
+            "— route it through secure_token_bytes, or, if it is legitimately exempt, "
+            "raise the count here with its own reason under review."
+        )
 
     def test_secure_channel_carries_no_bare_draw(self) -> None:
         """The regression this gate was built from, pinned directly.
