@@ -1315,10 +1315,12 @@ Verify the module integrity digest (runs POST as part of normal import):
 python -m ama_cryptography.integrity --verify
 ```
 
-**Continuous RNG Test:** Use `ama_cryptography.secure_token_bytes(n)` instead
-of `secrets.token_bytes(n)` for random byte generation with continuous health
-testing. This wrapper detects consecutive identical outputs and enters ERROR
-state if the RNG fails.
+**Repeated-output CSPRNG check:** Use `ama_cryptography.secure_token_bytes(n)`
+instead of `secrets.token_bytes(n)` for random byte generation with a
+defence-in-depth sanity check. This wrapper detects consecutive identical
+outputs from the OS CSPRNG and enters ERROR state. It is not the SP 800-90B
+health-test suite (Repetition Count, Adaptive Proportion) FIPS 140-3 specifies,
+nor an approved SP 800-90A DRBG — see `CSRC_STANDARDS.md` §3.1(e).
 
 > **Note:** This implementation has NOT been submitted for CMVP validation and is NOT FIPS 140-3 certified. These controls represent design alignment with FIPS 140-3 Level 1 technical requirements.
 

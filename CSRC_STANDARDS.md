@@ -172,3 +172,15 @@ not undergone formal FIPS 140-3 evaluation by an accredited laboratory.
    environment changes materially. CMVP validation certificates have a
    defined validity period and historical algorithm transitions (e.g.,
    3DES deprecation) require timely migration.
+
+6. **Approved Random-Bit Generation (SP 800-90A/90B/90C):** Random values are
+   currently drawn from the operating-system CSPRNG via Python's
+   `secrets.token_bytes`, which is not an approved SP 800-90A DRBG instantiated
+   inside the module boundary, and there is no entropy source with the
+   SP 800-90B startup and continuous health tests (Repetition Count, Adaptive
+   Proportion) that FIPS 140-3 requires — the repeated-output check in
+   `secure_token_bytes` is a defence-in-depth sanity check on the OS CSPRNG,
+   not that health-test suite, and POST carries no DRBG KAT. A validated module
+   would instantiate an approved SP 800-90A DRBG seeded from an SP 800-90B
+   entropy source (SP 800-90C construction) within the boundary and add a DRBG
+   KAT to the power-on self-tests.

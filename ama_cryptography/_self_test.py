@@ -181,7 +181,14 @@ def module_attestation() -> Dict[str, Any]:
                                check completed.  The distinction that
                                ``fully_verified`` alone cannot express.
         ``strict_mode``      — whether ``AMA_FIPS_STRICT`` was in force.
-        ``tests_run`` / ``tests_passed`` / ``tests_skipped``.
+        ``tests_run`` / ``tests_passed`` / ``tests_skipped`` — counts of the POST
+                               STAGES that ran, not a per-approved-algorithm
+                               coverage fraction: the POST KAT set is a subset of
+                               the approved primitives the module exposes, so a
+                               "0 skipped" run means every stage executed, not
+                               that every approved algorithm was exercised. See
+                               ``CSRC_ALIGN_REPORT.md`` §4.1 for the coverage
+                               boundary (audit M8).
         ``skipped``          — ``[(name, detail), ...]`` for each skipped test,
                                so the log line names what was not covered.
         ``failed``           — ``[(name, detail), ...]``; at most one entry,

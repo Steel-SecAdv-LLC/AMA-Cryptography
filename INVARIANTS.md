@@ -506,7 +506,15 @@ attacker-observable.
 
 4. **No secret-dependent branching:** Branching, table indexing, loop counts,
    and memory access patterns dependent on secret data are **prohibited** in
-   both C and Python cryptographic paths.
+   both C and Python cryptographic paths, with one carve-out mandated by the
+   standards themselves: **the FIPS 204 (ML-DSA) and FIPS 205 (SLH-DSA)
+   signing loops reject and resample by construction, so their iteration count
+   is secret-dependent.** This is not a defect and not fixable without
+   diverging from the standard; `CONSTANT_TIME_VERIFICATION.md` §"ML-DSA /
+   SLH-DSA signing" documents it, the dudect lane measures it (info-only, with
+   its deterministic counterpart gate), and it leaks no private-key material —
+   only a timing signal on the number of rejections for a given message. Every
+   *other* secret-dependent construct remains prohibited.
 
 **Enforcement:** CI runs constant-time verification checks (dudect, ctgrind,
 custom timing harnesses, static structural scans) and **must** fail on
@@ -1780,10 +1788,15 @@ derives its list from the modules rather than from a hand-written literal.
 ## INVARIANT-36 — AMA Is Not Measured Against Another Implementation
 
 **Statement.** No other cryptographic implementation's output may serve as an
-answer key for AMA's correctness, and no test or development tool may invoke
-another cryptographic binary. Where a specification publishes no worked example,
-the substitute is a reference derived **from the specification text**, written
-in this repository.
+answer key for AMA's correctness, and no code under `ama_cryptography/`,
+`tests/` or `tools/` — the runtime, correctness and gate surfaces the gate below
+scans — may invoke another cryptographic binary. Where a specification publishes
+no worked example, the substitute is a reference derived **from the specification
+text**, written in this repository. The one recorded exception is `benchmarks/`,
+which deliberately links and drives reference implementations (OpenSSL,
+libsodium, wolfSSL, Botan, Nettle, libgcrypt, mbedTLS) **solely to measure AMA
+against them**; it is on no correctness, runtime or release path, feeds no answer
+key, and is outside the gate's scope by design (see the exception note below).
 
 **Why.** AMA's stated position is that it depends on no other cryptographic
 implementation: the README says "zero external crypto deps", `CMakeLists.txt`
@@ -1843,13 +1856,24 @@ implementers to run — the same category as a specification's worked example, a
 they keep their own provenance gates (INVARIANT-24's sibling machinery in
 `.github/workflows/corpus-provenance.yml`).
 
-**No exceptions are recorded.** One used to be — `ama_cryptography/legacy_compat.py`
-shelling out to `openssl ts` for RFC 3161 timestamping, described here as "a
-shipped interop feature, not a validation path". It is gone: AMA encodes and
-decodes RFC 3161 on its own DER codec, `rfc3161_timestamp.py` no longer imports
-`rfc3161ng` either, and the gate below scans `ama_cryptography/` precisely so
-neither can return. An invariant register that still names a removed exception
-is worse than one that names none, because a reader takes it as current.
+**One exception is recorded: `benchmarks/` (audit M22).** The benchmark harness
+links and drives the reference implementations named in the Statement to measure
+AMA's throughput against them. That is the sole place external cryptographic code
+is invoked anywhere in the tree; it is intentional — the project benchmarks
+*against* these vendors, it does not use them in any operation — it feeds no
+answer key, and it is deliberately outside the gate's scope (the gate scans
+`ama_cryptography/`, `tests/` and `tools/`, not `benchmarks/`). Recording it is
+the point: an absolute "no exceptions" that omits a live one is the converse of
+the failure this register warns against below — as misleading as a named-but-
+removed exception, because a reader takes the register as complete.
+
+A former exception is gone: `ama_cryptography/legacy_compat.py` shelled out to
+`openssl ts` for RFC 3161 timestamping, described here as "a shipped interop
+feature, not a validation path". It is gone: AMA encodes and decodes RFC 3161 on
+its own DER codec, `rfc3161_timestamp.py` no longer imports `rfc3161ng` either,
+and the gate below scans `ama_cryptography/` precisely so neither can return. An
+invariant register that still names a removed exception is worse than one that
+names none, because a reader takes it as current.
 
 **Enforcement.** `tools/check_corpus_originality.py`, run in the
 `security-checks` job of `ci.yml`. Three checks:
@@ -2376,6 +2400,23 @@ or encaps/decaps), and the BIP32 master and child derivations in
 the Ed25519 seed, the BIP32 master seed, the Ascon key and nonce — now
 routes through the §4.9.2 health-tested, error-state-gated CSPRNG draw
 rather than a bare `secrets.token_bytes` / `os.urandom`.
+
+**Scope — the Python API surface, not the bare `.so` (audit M1).** This
+pairwise test, POST (INVARIANT-39) and the error-state output inhibition are
+properties of the `ama_cryptography` **Python package**, which wraps every
+approved operation behind `check_crypto_permitted()` and runs POST at import.
+They are **not** properties of `libama_cryptography.so` linked directly:
+`check_crypto_permitted` appears throughout `pqc_backends.py` and nowhere in
+`src/c/`, and the C library's `ama_ed25519_keypair()` performs no pairwise test
+(C-side PCT exists for ML-KEM only). `tools/check_keygen_pct.py` enforces this
+over `pqc_backends.py`'s AST — the Python surface — alone. A C consumer that
+links the shared object directly — the audience the SONAME, the pkg-config file
+and `Dockerfile.c-api` serve — gets the constant-time primitives but **not**
+POST, the error-state inhibition, or the PCT; those are supplied by the Python
+wrapper. This invariant, and the FIPS-140-3-alignment claims in README and the
+`CSRC_*` documents, are therefore scoped to the Python API surface until the
+controls are either moved into the C boundary or the boundary is formally
+defined as the Python package (INVARIANT-16, honest compliance claims).
 
 The test is deliberately **unconditional**. Gating it behind an environment
 flag would make the default configuration the non-compliant one; validation

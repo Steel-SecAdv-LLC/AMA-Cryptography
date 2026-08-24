@@ -1093,13 +1093,15 @@ KAT vectors are sourced from NIST PQC standardization and validate that the nati
 
 The module implements technical controls aligned with FIPS 140-3 Security Level 1 requirements:
 
-- **Power-On Self-Tests (POST):** KATs for SHA3-256, HMAC-SHA3-256, AES-256-GCM, ML-KEM-1024, ML-DSA-65, SLH-DSA, and Ed25519 run at module import (~260ms)
+- **Power-On Self-Tests (POST):** KATs for SHA3-256, HMAC-SHA3-256, AES-256-GCM, ML-KEM-1024, ML-DSA-65, SLH-DSA, and Ed25519 run at module import (~260ms). This is a **subset** of the approved primitives, not full per-algorithm coverage — see `CSRC_ALIGN_REPORT.md` §4.1 for the algorithms POST does and does not cover
 - **Module Integrity Verification:** SHA3-256 digest of all source files checked at startup
 - **Error State Machine:** OPERATIONAL / ERROR / SELF_TEST with automatic lockout on failure
-- **Continuous RNG Test:** Detects consecutive identical random outputs
+- **Repeated-output CSPRNG check:** Detects consecutive identical outputs from the OS CSPRNG (defence-in-depth; not the SP 800-90B health tests FIPS 140-3 specifies — see `CSRC_STANDARDS.md` §3.1(e))
 - **Pairwise Consistency Tests:** Sign-verify / encaps-decaps after key generation
 
 > **Important:** This library implements algorithms specified in FIPS 203, FIPS 204, and FIPS 205. This implementation has **NOT** been submitted for CMVP validation and is **NOT** FIPS 140-3 certified. The controls above represent design alignment with FIPS 140-3 Level 1 technical requirements as a step toward future CMVP validation. See `CSRC_STANDARDS.md` for details.
+>
+> **Scope:** These controls (POST, error-state output inhibition, pairwise consistency tests) are properties of the **`ama_cryptography` Python package**, which wraps every approved operation behind an error-state guard and runs POST at import. They are **not** properties of `libama_cryptography.so` linked directly: a C consumer of the shared object (via the pkg-config file or `Dockerfile.c-api`) gets the constant-time primitives but not POST, the error-state inhibition, or the PCT. See INVARIANT-41 in `INVARIANTS.md` for the boundary.
 
 </details>
 

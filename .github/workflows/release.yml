@@ -49,9 +49,13 @@ name: Release — Build, Sign, and Publish
 #                          repo = Steel-SecAdv-LLC/AMA-Cryptography
 #                          workflow = release.yml
 #                          environment = pypi
-#                        Until this is configured on PyPI, publish-pypi
-#                        is gated by the `environment: pypi` block on the
-#                        deployment that requires manual approval.
+#                        publish-pypi carries `environment: pypi`, but
+#                        referencing an environment does NOT by itself require
+#                        approval: the required-reviewer protection must be
+#                        configured on Settings -> Environments (same as the
+#                        `release` environment note on github-release below).
+#                        Until it is, the block documents the intended gate
+#                        rather than enforcing it (audit M10).
 #
 #   7. github-release  — create the GitHub Release with the changelog,
 #                        attach the wheels + sdist + provenance +
@@ -772,10 +776,14 @@ jobs:
   # =========================================================================
   # PyPI Trusted Publishing — no long-lived token.  Requires the PyPI
   # project to have a "trusted publisher" configured for this repo /
-  # workflow / environment trio.  The `environment: pypi` block gates
-  # publishing on a maintainer approval click in the GitHub Actions
-  # UI — that's an intentional human-in-the-loop barrier between a
-  # tag push and a published release.
+  # workflow / environment trio.  The `environment: pypi` block is the HOOK
+  # for a maintainer-approval barrier between a tag push and a published
+  # release — but, exactly as the `release` environment note on github-release
+  # below records, referencing an environment creates it WITHOUT protection
+  # rules: the required-reviewer protection must be configured once on the
+  # repository's Settings -> Environments page for the approval to be
+  # enforced.  Until it is, this block documents the intended gate rather than
+  # enforcing it (audit M10).
   # =========================================================================
   publish-pypi:
     name: Publish to PyPI (Trusted Publishing)

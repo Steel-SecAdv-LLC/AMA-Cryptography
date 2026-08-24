@@ -391,6 +391,19 @@ load:
 **POST Budget:** All self-tests complete in <300ms (measured ~260ms on
 4-core Linux), well within the 500ms budget.
 
+**POST coverage boundary.** The table above is the set of approved algorithms
+that carry a power-on KAT; it is a **subset** of the approved primitives the
+module exposes, not full per-algorithm coverage, and a "0 skipped" attestation
+means every one of *these* stages ran, not that every approved algorithm was
+exercised. `module_attestation()`'s `tests_run` / `tests_skipped` count these
+stages. FIPS 140-3 §4.9.1 expects a self-test per approved algorithm in the
+boundary; the following approved primitives the module exposes do **not** yet
+carry a POST KAT, and a validated module would add one for each: HKDF-SHA2,
+HMAC-SHA2 (256/384/512), ChaCha20-Poly1305, X25519, ECDSA over secp256k1 and the
+NIST P-curves, PBKDF2, Argon2id, and LMS. These are exercised by the functional
+test suite and, where a NIST suite exists, by ACVP self-attestation — but not by
+POST.
+
 ### 4.2 Module Integrity Verification
 
 At startup, SHA3-256 is computed over all `.py` files in the
@@ -439,13 +452,22 @@ the keypair. Covered algorithms:
 These helpers do **not** automatically intercept every key generation;
 they must be called explicitly by application code or wrapper functions.
 
-### 4.5 Continuous RNG Test
+### 4.5 Repeated-output check on the OS CSPRNG
 
 `secure_token_bytes(n)` wraps `secrets.token_bytes(n)` with a comparison
 to the previous output. If two consecutive calls return identical bytes,
-the module enters ERROR state immediately. This is aligned with the
-continuous random number generator testing described in FIPS 140-3
-Section 4.9.2.
+the module enters ERROR state immediately.
+
+This is a defence-in-depth sanity check on the operating system's CSPRNG,
+**not** a FIPS 140-3 RNG health test, and the earlier text here mis-cited it
+as one. The two-consecutive-identical-blocks continuous RNG test (CRNGT) was
+a **FIPS 140-2** requirement; the FIPS 140-3 transition removed it in favour
+of the SP 800-90B startup and continuous health tests (Repetition Count and
+Adaptive Proportion) applied to a noise source. `secrets.token_bytes` is the
+operating-system CSPRNG, not an approved SP 800-90A DRBG instantiated inside a
+defined cryptographic boundary, and POST carries no DRBG KAT. Approved
+SP 800-90A DRBG / SP 800-90B entropy-source instantiation is listed among the
+outstanding prerequisites in `CSRC_STANDARDS.md` Section 3.1(e).
 
 > **Note:** This is a design-aligned implementation, not a CMVP-validated module. See Section 3 of `CSRC_STANDARDS.md` for full compliance status.
 
