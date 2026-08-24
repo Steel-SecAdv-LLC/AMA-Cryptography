@@ -1,11 +1,14 @@
 # AMA Cryptography — Verified Metrics Report
 
 **Version:** 5.0.0
-**Measurement Date:** test-function counts **and** lines-of-code figures
-re-measured **2026-08-16**. Adversarial-test figures still carry their
-**2026-07-30** (3.5.0) measurement — see the caveat below. Benchmark figures
-are refreshed separately.
-**Last Reviewed:** 2026-08-16
+**Measurement Date:** lines-of-code figures re-measured **2026-08-24**.
+Test-function counts are re-derived on every PR by
+`tools/check_documented_counts.py` (last verified green at the head this
+report describes), so they carry no separate measurement date.
+Adversarial-test figures still carry their **2026-07-30** (3.5.0)
+measurement — see the caveat below. Benchmark figures are refreshed
+separately.
+**Last Reviewed:** 2026-08-24
 **Repository snapshot:** re-run the reproduction commands after any rebase,
 squash, or large merge so the figures continue to match the shipped tree. If a
 documented count and this report disagree, the count is the bug.
@@ -94,14 +97,14 @@ Measured as non-empty-allowed `wc -l` over source files in each scope.
 | Top-level Python (monitors, benchmarks, demos) | 2 | 1,260 |
 | Tests (`tests/**/*.py`) | 197 | 84,939 |
 | Cython (`*.pyx`, `*.pxd`) | 7 | 1,873 |
-| **Whole project** (source + docs + config) | 652 | **369,550** |
+| **Whole project** (source + docs + config) | 652 | **369,635** |
 
 **Library total (the figure that most closely tracks "library size"):
 91,722 lines** across 137 files under `ama_cryptography/`, `src/c/`,
 and `include/`. This supersedes any "11,246 LoC" claim that may have
 appeared externally.
 
-**Whole-project total** (`369,550` lines across Python, C, headers,
+**Whole-project total** (`369,635` lines across Python, C, headers,
 Cython, Markdown, YAML/TOML/JSON config, CMake and Makefiles) is the
 broader figure some external claims may have been referencing. Reproduce
 it with:
@@ -164,12 +167,12 @@ the whole-project figure overstates hand-written code.
 | Tests | 84,939 | 23.0% | `tests/**/*.py` |
 | Top-level Python | 1,260 | 0.3% | `*.py` at repo root |
 | Cython | 1,873 | 0.5% | `*.pyx` + `*.pxd` |
-| Everything else (remainder) | 189,756 | 51.3% | `*.md`, `*.yml`, `*.toml`, `*.json`, CMake, Makefile, plus `.c`/`.h`/`.py` outside the scopes above (`tests/c/`, `fuzz/`, `tools/`, `benchmarks/`, `examples/`) |
-| **Whole-project total** | **369,550** | **100%** | sum of the scopes above |
+| Everything else (remainder) | 189,841 | 51.4% | `*.md`, `*.yml`, `*.toml`, `*.json`, CMake, Makefile, plus `.c`/`.h`/`.py` outside the scopes above (`tests/c/`, `fuzz/`, `tools/`, `benchmarks/`, `examples/`) |
+| **Whole-project total** | **369,635** | **100%** | sum of the scopes above |
 
 Test code (23.0%) is roughly 0.9x the size of the library (24.8%) — i.e. the test-to-library ratio is roughly **0.93**, and that
 counts only `tests/**/*.py`; the C test suite under `tests/c/` lands
-in the remainder row. The remainder (51.3%) is dominated by the
+in the remainder row. The remainder (51.4%) is dominated by the
 vendored NIST ACVP and Wycheproof JSON corpora (70,486 lines of `*.json` alone) and by this repository's Markdown, not by config.
 
 ### Reproduction
@@ -178,10 +181,24 @@ Every scope enumerates **tracked** files (`git ls-files`), matching the
 gate's own measurement exactly — the retired `find`-based forms walked the
 working tree, where a build directory that `! -path './build/*'` did not
 anticipate (`build-strict/`, `build-arm/`…) silently inflated the count.
+Two files are excluded from every scope below, exactly as
+`_LOC_BUILD_REWRITTEN` in `tools/check_documented_counts.py` excludes them:
+`ama_cryptography/_integrity_signature.py` and
+`ama_cryptography/_integrity_digest.txt` are rewritten in place by the build's
+integrity signer, so their line count depends on whether the tree has been
+built. (Their accuracy is enforced by a stronger instrument than a line count —
+the Ed25519-signed artefact the import-time verifier checks byte-for-byte.)
+Omitting this exclusion is why an earlier revision of this section did not
+reproduce its own table.
+
 One helper shared by all scopes:
 
 ```bash
+# Keep this pattern in sync with _LOC_BUILD_REWRITTEN.
+build_rewritten='^ama_cryptography/_integrity_(signature\.py|digest\.txt)$'
+
 loc() { git ls-files -z | tr '\0' '\n' | grep -E "$1" \
+        | grep -Ev "$build_rewritten" \
         | tr '\n' '\0' | xargs -0 cat | wc -l; }
 
 # Library Python
@@ -207,6 +224,7 @@ loc '\.(pyx|pxd)$'
 git ls-files -z | tr '\0' '\n' \
   | grep -E '\.(py|c|h|pyx|pxd|md|yml|yaml|toml|json|cmake)$|(^|/)CMakeLists\.txt$|(^|/)Makefile$' \
   | grep -v '^src/cython/.*\.c$' \
+  | grep -Ev "$build_rewritten" \
   | tr '\n' '\0' | xargs -0 cat | wc -l
 ```
 

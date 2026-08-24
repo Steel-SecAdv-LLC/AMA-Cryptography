@@ -54,7 +54,11 @@ Ethical constraints are mathematically bound to cryptographic operations through
 Built exclusively from standardized cryptographic primitives (NIST FIPS, IETF RFC). No custom ciphers, hash functions, or signature schemes. The composition protocol is an original design by Steel Security Advisors LLC.
 
 ### Performance Efficiency
-Cryptographic operations maintain throughput exceeding 1,000 operations per second with monitoring overhead measured per environment.
+Throughput is per-primitive, not uniform: the fast signers and KEMs exceed 1,000
+operations per second, while SLH-DSA-SHAKE-128s sign is ~1,250 ms (under 1 op/s)
+by design — FIPS 205 trades sign time for the most conservative assumption. See
+[Performance-Benchmarks](Performance-Benchmarks.md) for per-algorithm figures;
+monitoring overhead is measured per environment.
 
 ---
 

@@ -849,8 +849,9 @@ docker run ama-cryptography:latest
 ctest-registered C tests and standalone C benchmark under `tests/c/`
 (the exact C-test count varies with build options — `AMA_USE_NATIVE_PQC`
 gates `test_x25519`, `test_chacha20poly1305`, `test_argon2id`,
-`test_kyber_debug`, `test_kyber_cpa`, and `OPENSSL_FOUND` additionally
-gates `test_kat`; see `tests/c/CMakeLists.txt` for the canonical list).
+`test_kyber_debug`, `test_kyber_cpa`, and `test_kat`, which additionally
+requires `AMA_AES_CONSTTIME` because it drives its KAT DRBG from AMA's own
+constant-time AES-256; see `tests/c/CMakeLists.txt` for the canonical list).
 See [`docs/METRICS_REPORT.md`](docs/METRICS_REPORT.md) for reproduction
 instructions.
 
@@ -910,7 +911,6 @@ Cryptographic implementations are validated against:
 | NIST FIPS 203 | ML-KEM (Kyber) Standard | Algorithm implemented | **10/10 KAT pass** |
 | NIST FIPS 204 | ML-DSA (Dilithium) Standard | Algorithm implemented | **10/10 KAT pass** |
 | NIST FIPS 205 | SLH-DSA (SPHINCS+) Standard | Algorithm implemented | Native implementation |
-| NIST SP 800-108 | Key Derivation Functions | Algorithm implemented | — |
 | RFC 2104 | HMAC Specification | Algorithm implemented | — |
 | RFC 5869 | HKDF Specification | Algorithm implemented | — |
 | RFC 8032 | Ed25519 Specification | Algorithm implemented | — |

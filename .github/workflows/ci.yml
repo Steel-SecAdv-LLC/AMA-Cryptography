@@ -1583,6 +1583,15 @@ jobs:
       # -spr = Sapphire Rapids: presents AVX-512F + AVX-512VL and enables the
       # AVX-512 save area in XCR0, so ama_cpuid_has_avx512_keccak() passes and
       # the kernel executes rather than self-skipping (SKIP code 77).
+      #
+      # `shell: bash` is load-bearing: the default `bash -e {0}` has no
+      # `pipefail`, so in `"$SDE" ... | tee ... || rc=$?` the captured status
+      # is `tee`'s (always 0) and the `[ "$rc" -ne 0 ]` branch below could
+      # never be taken.  The "Results: ... 0 failed" grep still caught a crash,
+      # so the lane was not vacuous — but a guard that reads as live protection
+      # must actually be live.  `shell: bash` selects `-eo pipefail`, so `rc`
+      # now carries the test binary's exit status.
+      shell: bash
       run: |
         rc=0
         "$SDE" -spr -- ./build/bin/test_sha3_avx512_kat | tee /tmp/avx512_kat.out || rc=$?

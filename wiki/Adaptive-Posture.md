@@ -60,7 +60,7 @@ monitor_signals = {
 
 evaluation = evaluator.evaluate(monitor_signals)
 print(f"Threat level: {evaluation.threat_level}")
-print(f"Recommended action: {evaluation.recommended_action}")
+print(f"Recommended action: {evaluation.action}")
 print(f"Confidence: {evaluation.confidence}")
 ```
 

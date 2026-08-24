@@ -986,7 +986,7 @@ GitHub Actions automatically tests:
 | Static Analysis (C) | `static-analysis.yml` | cppcheck, clang-analyzer, CodeQL, Werror, ASan+UBSan, MSan-KAT, clang-tidy fail-closed |
 | Fuzzing (libFuzzer) | `fuzzing.yml` | C fuzz harnesses (15 targets) + dictionary-validity gate |
 | dudect Constant-Time | `dudect.yml` | Welch's t-test on execution timings |
-| ACVP Vector Validation | `acvp_validation.yml` | 1,215 / 1,215 gate, every push + weekly |
+| ACVP Vector Validation | `acvp_validation.yml` | 1,215 / 1,215 gate; pushes to `main`/`develop`/`feature/**`/`fix/**` and `v*` tags, PRs to `main`/`develop`, + weekly |
 | Vendored Corpus Provenance | `corpus-provenance.yml` | Wycheproof + NIST digest manifest gate |
 | ARM (QEMU) Cross-Test | `arm-qemu.yml` | AArch64 test lane under QEMU |
 | Baseline Change Guard | `baseline-guard.yml` | Enforces baseline-justification on any `benchmarks/baseline.json` edit |

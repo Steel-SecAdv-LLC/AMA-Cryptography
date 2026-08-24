@@ -719,6 +719,19 @@ jobs:
 
       - name: Compute base64 subjects
         id: hash
+        # `shell: bash` is REQUIRED, not cosmetic.  The default shell for a
+        # `run:` block is `bash -e {0}` — which has `-e` but NOT `pipefail`.
+        # In `sha256sum ... | sort > subjects.txt` the pipeline's status is
+        # `sort`'s, and `sort` exits 0 on empty input.  So if either
+        # download-artifact step yielded nothing, sha256sum failed, `-e` did
+        # not fire, subjects.txt was empty, and the base64 of an empty file
+        # was handed to slsa-github-generator as the subject set: green
+        # provenance attesting to NOTHING, on a release tag.  `shell: bash`
+        # selects `bash --noprofile --norc -eo pipefail {0}`, so the failing
+        # sha256sum now fails the step.  The explicit emptiness assertion
+        # below is the second line of defence, because a subject set that is
+        # empty for ANY reason must never reach the generator.
+        shell: bash
         run: |
           # The SLSA generator expects a single base64-encoded string
           # containing one "DIGEST  FILENAME" line per artefact, in
@@ -728,7 +741,17 @@ jobs:
           sha256sum *.whl *.tar.gz | LC_ALL=C sort > ../subjects.txt
           cd ..
           cat subjects.txt
+          if [ ! -s subjects.txt ]; then
+            echo "::error::subjects.txt is empty — no wheel or sdist artefact was" \
+                 "downloaded, so the SLSA provenance would attest to nothing." >&2
+            exit 1
+          fi
           subjects_b64=$(base64 --wrap=0 subjects.txt)
+          if [ -z "$subjects_b64" ]; then
+            echo "::error::base64 subject encoding is empty; refusing to emit an" \
+                 "empty SLSA subject set." >&2
+            exit 1
+          fi
           echo "subjects=$subjects_b64" >> "$GITHUB_OUTPUT"
 
   provenance:

@@ -45,7 +45,7 @@ AMA Cryptography implements defense-in-depth with multiple independent security 
 2. **HMAC-SHA3-256 Authentication** (RFC 2104)
 3. **Ed25519 Digital Signatures** (RFC 8032, C11 atomics hardened)
 4. **ML-DSA-65 Quantum-Resistant Signatures** (NIST FIPS 204)
-5. **HKDF-SHA3-256 Key Derivation** (RFC 5869, NIST SP 800-108)
+5. **HKDF-SHA3-256 Key Derivation** (RFC 5869)
 6. **RFC 3161 Timestamp Binding** — *not an independent layer.* AMA verifies the §2.4.2 message-imprint binding only. It does not verify the TSA's CMS `SignerInfo` signature or validate its certificate chain, so an adversary who can supply a token satisfies this check unaided, with any `genTime` they choose, using no key. It contributes no adversarial resistance and must not be counted toward the security bound. See [INVARIANT-37](INVARIANTS.md#invariant-37--a-verification-api-must-not-claim-a-check-it-does-not-perform) and [ARCHITECTURE.md § Scope: RFC 3161 attestation is not implemented](ARCHITECTURE.md#scope-rfc-3161-attestation-is-not-implemented).
 
 ### Additional Cryptographic Capabilities
@@ -1012,14 +1012,24 @@ AMA Cryptography is designed to comply with:
 - **NIST FIPS 204** - Module-Lattice-Based Digital Signature Standard (ML-DSA / Dilithium)
 - **NIST FIPS 205** - Stateless Hash-Based Digital Signature Standard (SLH-DSA / SPHINCS+)
 - **NIST SP 800-38D** - Recommendation for Block Cipher Modes: GCM (AES-256-GCM)
-- **NIST SP 800-108** - Recommendation for Key Derivation Using Pseudorandom Functions
 - **NIST SP 800-57** - Recommendation for Key Management
 - **RFC 2104** - HMAC: Keyed-Hashing for Message Authentication
 - **RFC 5869** - HMAC-based Extract-and-Expand Key Derivation Function (HKDF)
 - **RFC 8032** - Edwards-Curve Digital Signature Algorithm (EdDSA)
-- **RFC 3161** - Internet X.509 Public Key Infrastructure Time-Stamp Protocol
 
-Non-compliance with these standards should be reported as a high-severity security issue.
+**Partial, and deliberately so:**
+
+- **RFC 3161** - Time-Stamp Protocol. AMA verifies the §2.4.2 message-imprint
+  binding *only*. It does **not** verify the TSA's CMS `SignerInfo` signature,
+  does **not** validate the signing certificate chain, and therefore treats
+  `TSTInfo.genTime` as attacker-chosen data — see the explicit `tsa_signature`
+  / `tsa_certificate_chain` / `gen_time` `False` declarations in
+  `ama_cryptography/rfc3161_timestamp.py`, item 6 of the layer list above, and
+  [INVARIANT-37](INVARIANTS.md#invariant-37--a-verification-api-must-not-claim-a-check-it-does-not-perform).
+  It contributes no adversarial resistance and must not be counted toward the
+  security bound.
+
+Non-compliance with the fully-implemented standards above should be reported as a high-severity security issue.
 
 ## Contact
 
