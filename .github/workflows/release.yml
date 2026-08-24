@@ -157,6 +157,7 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
       tag_clean: ${{ steps.version.outputs.tag_clean }}
+      is_prerelease: ${{ steps.version.outputs.is_prerelease }}
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -185,9 +186,26 @@ jobs:
               sys.exit('pyproject.toml has no [project].version')
           print(m.group(1))
           ")
+          # Classify the release channel from the CANONICAL pyproject version,
+          # not from the tag string.  The tag must equal pyproject exactly
+          # (the equality gate below), and pyproject is PEP 440 — where a
+          # pre-release is `rcN`/`aN`/`bN` and a dev release is `.devN`, with
+          # NO hyphen.  The GitHub-release job used to sniff the tag for the
+          # SemVer spellings `-rc`/`-alpha`/`-beta`, which a PEP 440 tag such
+          # as v5.0.0rc1 never contains, so an rc tag published as a full,
+          # non-draft release.  Deriving the flag here, from the same string
+          # the equality gate anchors on, closes that gap.  `.postN` is a
+          # final release, not a pre-release, and must NOT match.
+          is_prerelease=$(AMA_PYPROJECT_VERSION="$pyproject_version" python -c "
+          import os, re
+          v = os.environ['AMA_PYPROJECT_VERSION']
+          # PEP 440 pre-release (aN/bN/rcN) or dev-release (.devN) segment.
+          print('true' if re.search(r'(?:a|b|rc)[0-9]+|\.dev[0-9]+', v) else 'false')
+          ")
           echo "Tag (raw):           $tag"
           echo "Tag (clean):         $tag_clean"
           echo "pyproject.toml:      $pyproject_version"
+          echo "Pre-release channel: $is_prerelease"
           if [ "${{ github.event_name }}" = "push" ]; then
             if [ "$tag_clean" != "$pyproject_version" ]; then
               echo "::error::Tag $tag_clean does not match pyproject.toml version $pyproject_version."
@@ -199,6 +217,7 @@ jobs:
           {
             echo "version=$pyproject_version"
             echo "tag_clean=$tag_clean"
+            echo "is_prerelease=$is_prerelease"
           } >> "$GITHUB_OUTPUT"
 
       - name: Require an annotated, signed tag (INVARIANT-10)
@@ -1082,12 +1101,19 @@ jobs:
           # Draft the PRERELEASE case only.  A non-prerelease resolves to false
           # and is published by finalizeRelease() once the assets are attached
           # (the v3.4.0 path).  A prerelease must stay a draft instead: the
-          # action only auto-drafts non-prereleases, so a published `-rc` would
-          # be frozen by immutable releases before its assets uploaded and the
-          # job would die on "Cannot upload assets to an immutable release".
+          # action only auto-drafts non-prereleases, so a published pre-release
+          # would be frozen by immutable releases before its assets uploaded and
+          # the job would die on "Cannot upload assets to an immutable release".
           # This mirrors the guidance in the action's own `draft` input docs.
           # Consequence: a prerelease is left as a draft for a maintainer to
           # publish by hand, and it fires `release.published` rather than
           # `release.prereleased`.
-          draft: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-alpha') || contains(github.ref_name, '-beta') }}
-          prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-alpha') || contains(github.ref_name, '-beta') }}
+          #
+          # The flag comes from preflight, which derives it from the PEP 440
+          # pyproject version (rcN/aN/bN/.devN) — the same string the tag must
+          # equal.  It deliberately does NOT sniff github.ref_name for SemVer
+          # `-rc`/`-alpha`/`-beta`: a PEP 440 tag (v5.0.0rc1) has no hyphen, so
+          # that older test never fired and every rc would have shipped as a
+          # full, non-draft release.
+          draft: ${{ needs.preflight.outputs.is_prerelease == 'true' }}
+          prerelease: ${{ needs.preflight.outputs.is_prerelease == 'true' }}
