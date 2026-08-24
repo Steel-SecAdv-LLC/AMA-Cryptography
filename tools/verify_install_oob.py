@@ -650,11 +650,26 @@ def compute_package_digest(pkg_dir: Path) -> bytes:
 
 
 def _serialize_binding_digests(binding_digests: dict[str, bytes]) -> bytes:
-    """``name || 0x00 || digest`` per entry, sorted by name (v3 canonical
-    serialization — mirrored byte-for-byte from ``_build_sign``)."""
+    """Count- and length-prefixed binding-digest map, sorted by name.
+
+    Third mirror of ``_build_sign._serialize_binding_digests`` (== the verifier
+    in ``_self_test``), pinned byte-for-byte by ``tests/test_native_integrity``.
+    A 4-byte entry count, then per entry a length-prefixed name and a
+    length-prefixed digest — unconditionally injective, whatever a name or
+    digest contains.  It replaced an earlier ``name || 0x00 || digest`` form
+    whose injectivity leaned on filenames never containing NUL; leaving this
+    copy on the old form would turn the out-of-band verifier into a tool that
+    rejects every correctly signed v3 tree, exactly as the package-digest
+    framing note above warns."""
     out = bytearray()
+    out += len(binding_digests).to_bytes(4, "big")
     for name in sorted(binding_digests):
-        out += name.encode("utf-8") + b"\x00" + binding_digests[name]
+        name_bytes = name.encode("utf-8")
+        digest = binding_digests[name]
+        out += len(name_bytes).to_bytes(4, "big")
+        out += name_bytes
+        out += len(digest).to_bytes(4, "big")
+        out += digest
     return bytes(out)
 
 
