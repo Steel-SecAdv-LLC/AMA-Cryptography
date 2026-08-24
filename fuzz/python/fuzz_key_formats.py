@@ -598,7 +598,7 @@ def _write_artifact(directory: Path, finding: FindingError) -> Path:
 
 
 def run_campaign(seconds: float, seed: int, artifact_dir: Path, corpus_dir: Path | None) -> int:
-    rng = random.Random(seed)  # noqa: S311 -- deterministic fuzz-input generation, not key material (FKF-002)
+    rng = random.Random(seed)  # fmt: skip  # noqa: S311,E501 -- deterministic fuzz-input generation, not key material (FKF-002)
     seeds = build_seed_corpus(corpus_dir)
     pool = [data for _, data in seeds]
     print(f"seed={seed} corpus={len(seeds)} targets={len(TARGETS)} budget={seconds}s")

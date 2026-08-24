@@ -432,7 +432,7 @@ class ComparativeBenchmark:
             if check.returncode != 0:
                 raise ImportError("PyNaCl not importable")
 
-            from nacl.signing import SigningKey, VerifyKey  # noqa: F401 -- imported only to probe PyNaCl availability for the comparison benchmark (CB-001)
+            from nacl.signing import SigningKey, VerifyKey  # fmt: skip  # noqa: F401 -- imported only to probe PyNaCl availability for the comparison benchmark (CB-001)
 
             test_data = b"Test message for benchmarking performance" * 10
 

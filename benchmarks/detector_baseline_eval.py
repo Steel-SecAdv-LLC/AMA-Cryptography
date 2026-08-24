@@ -153,7 +153,7 @@ def collect_real_timings(count: int) -> Tuple[List[float], str, str]:
         # SHAPE of a timing distribution for a measurement harness, never key
         # material.  A seeded Mersenne Twister is what makes the fallback
         # reproducible, which is the property this needs.
-        rng = random.Random(20260816)  # noqa: S311 -- deterministic baseline data, not key material (DBE-002)
+        rng = random.Random(20260816)  # fmt: skip  # noqa: S311 -- deterministic baseline data, not key material (DBE-002)
         out = [rng.lognormvariate(-3.9, 0.22) for _ in range(count)]
         return (
             out,
@@ -166,7 +166,7 @@ def inject_spikes(base: Sequence[float], *, rate: float, magnitude: float, seed:
     # noqa rationale as above: choosing WHICH samples to corrupt in a
     # benchmark stream is not a cryptographic draw, and seeding it is what
     # makes the evaluation reproducible run to run.
-    rng = random.Random(seed)  # noqa: S311 -- deterministic baseline data, not key material (DBE-002)
+    rng = random.Random(seed)  # fmt: skip  # noqa: S311 -- deterministic baseline data, not key material (DBE-002)
     values = list(base)
     anomalies: Set[int] = set()
     for i in range(len(values)):
@@ -219,7 +219,7 @@ def synthetic_base(count: int, seed: int) -> List[float]:
     evidence — but the pass/fail decision is taken here, where a failure means
     the detector changed.
     """
-    rng = random.Random(seed)  # noqa: S311 -- deterministic baseline data, not key material (DBE-002) -- evaluation stream, not key material (DBE-001)
+    rng = random.Random(seed)  # fmt: skip  # noqa: S311 -- deterministic evaluation stream, not key material (DBE-001)
     out: List[float] = []
     for _ in range(count):
         value = rng.lognormvariate(-3.9, 0.22)
@@ -267,7 +267,7 @@ def run_shipped(
     stronger z-branch than production shipped; measuring a re-implementation
     is how the sigma-inertness defect stayed invisible.)
     """
-    from ama_cryptography.monitoring import ResonanceTimingMonitor  # noqa: PLC0415 -- deferred import keeps the optional backend off the module-load path (DBE-001)
+    from ama_cryptography.monitoring import ResonanceTimingMonitor  # fmt: skip  # noqa: PLC0415 -- deferred import keeps the optional backend off the module-load path (DBE-001)
 
     monitor = ResonanceTimingMonitor(
         anomaly_profiles={
@@ -528,7 +528,7 @@ def gate_sigma_floor_live() -> GateResult:
     assertion (``>=``) did not enforce.  This is the direct regression gate on
     the 8d72b8c finding that sigma 2/3/5 produced exactly the same 497 alarms.
     """
-    rng = random.Random(7)  # noqa: S311 -- deterministic baseline data, not key material (DBE-002) -- deterministic evaluation stream (DBE-002)
+    rng = random.Random(7)  # fmt: skip  # noqa: S311 -- deterministic evaluation stream (DBE-002)
     values: List[float] = []
     for _ in range(3000):
         x = 10.0 + 0.1483 * rng.gauss(0, 1)
@@ -699,7 +699,7 @@ def main() -> int:
         "eval_start": EVAL_START,
         "streams": [],
     }
-    streams_out: List[Dict[str, object]] = payload["streams"]  # type: ignore[assignment] -- JSON-decoded payload narrowed to its checked concrete type (DBE-003)
+    streams_out: List[Dict[str, object]] = payload["streams"]  # type: ignore[assignment]  # JSON-decoded payload narrowed to its checked concrete type (DBE-003)
 
     # Seeded spike streams (for the comparison and the derived tie band) and
     # the sustained shift stream.
