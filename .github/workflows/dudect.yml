@@ -50,6 +50,13 @@ on:
       - 'ama_cryptography/**'
       - 'tests/c/test_dudect.c'
       - 'tests/c/dudect/**'
+      # The constant-time gate scripts and the workflow itself: a PR that only
+      # raises a threshold, edits a lane, or changes this file must still
+      # re-run dudect, or the change ships unexercised (audit Low).
+      - 'tools/check_ghash_constant_time.py'
+      - 'tools/check_secret_division.py'
+      - 'tools/constant_time/**'
+      - '.github/workflows/dudect.yml'
   schedule:
     # Run weekly on Sundays at 02:00 UTC (existing schedule).
     - cron: '0 2 * * 0'

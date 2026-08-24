@@ -347,7 +347,12 @@ jobs:
     needs: [preflight]
     if: vars.AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX != ''
     uses: ./.github/workflows/integrity-anchor-check.yml
-    secrets: inherit
+    # Forward ONLY the seed the anchor check reads, not the whole secret set
+    # (`secrets: inherit`) — this is the one job handling long-lived signing-key
+    # material, so it gets least privilege.  The trust-anchor value it also
+    # reads is a repo variable (vars.*), inherited automatically.
+    secrets:
+      AMA_INTEGRITY_SIGNING_SEED_HEX: ${{ secrets.AMA_INTEGRITY_SIGNING_SEED_HEX }}
 
   build-wheels:
     name: cibuildwheel ${{ matrix.os }}

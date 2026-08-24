@@ -19,11 +19,20 @@ fail is not a gate; it is a green light wired to nothing.
 
 This mirrors ``tools/check_bandit_severity.py``: apply the policy to the JSON
 data rather than to an exit code the scanner never sets.  The policy blocks on
-any finding at or above ERROR severity — the config's ``insecure-random-usage``,
-``weak-hash-algorithm``, ``deprecated-cryptography-api``, ``private-key-logging``,
-``unsafe-pickle-usage`` and ``bare-memset-zero-secret-named-buffer`` rules — so
-a genuinely dangerous pattern fails CI while the existing WARNING-level
-constant-time advisories do not (they are tracked, not merge-blocking).
+any finding at or above ERROR severity — the config's Python ERROR rules
+``insecure-random-usage``, ``weak-hash-algorithm``, ``deprecated-cryptography-api``,
+``private-key-logging`` and ``unsafe-pickle-usage`` — so a genuinely dangerous
+pattern fails CI while the existing WARNING-level constant-time advisories do
+not (they are tracked, not merge-blocking).
+
+.. note::
+   ``.semgrep.yml`` also declares ``bare-memset-zero-secret-named-buffer`` at
+   ERROR, but that C rule does NOT run under this gate and cannot: semgrep's C
+   parser chokes on the AMA_API export macro, and the rule is scoped to
+   ``src/c/`` which this scan never targets (see the rule's ENFORCEMENT NOTE in
+   ``.semgrep.yml``).  The property it states is enforced by
+   ``tools/check_c_secret_zeroization.py`` instead.  It is listed here as a
+   control that is live in the repo, just not via this gate.
 
 Fail-closed conditions — anything meaning "the scan did not actually run over
 the tree" is a failure, not a pass:

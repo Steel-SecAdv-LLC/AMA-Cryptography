@@ -625,11 +625,12 @@ jobs:
   valgrind-memcheck:
     name: Valgrind memcheck (defense-in-depth)
     # Complements ASan with a different leak/uninit reader.  Slow —
-    # ~5x runtime — so scheduled only.  The test suite that runs here
-    # is the same one ctest runs in the ASan job; Valgrind's strength
-    # is that it catches uninit reads that ASan misses (different
-    # implementation strategy) and gives us a second opinion on the
-    # ASan reports for free.
+    # ~5x runtime — so scheduled only.  This lane runs a FOCUSED subset
+    # (the six most coverage-rich binaries listed in the run step), not the
+    # full ctest suite the ASan job runs — Valgrind over the whole suite would
+    # exceed the runner timeout.  Its strength is catching uninit reads ASan
+    # misses (different implementation strategy) and giving a second opinion on
+    # the ASan reports for free.
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 40
@@ -657,12 +658,16 @@ jobs:
 
       - name: Run a focused subset under Valgrind memcheck
         run: |
+          set -euo pipefail
           cd build-valgrind
           # Run the most coverage-rich subset under Valgrind — the
           # PQC primitives and AEAD tests exercise the largest stack
           # / heap surface.  Running the full ctest suite under
           # Valgrind would exceed the runner timeout.
-          for test in bin/test_consttime bin/test_core bin/test_aes_gcm_scalar_kat bin/test_chacha20poly1305 bin/test_ed25519 bin/test_sha3; do
+          tests="bin/test_consttime bin/test_core bin/test_aes_gcm_scalar_kat bin/test_chacha20poly1305 bin/test_ed25519 bin/test_sha3"
+          expected=6
+          ran=0
+          for test in $tests; do
             if [ -x "$test" ]; then
               echo "=== valgrind: $test ==="
               valgrind \
@@ -672,8 +677,19 @@ jobs:
                 --errors-for-leak-kinds=definite \
                 --track-origins=yes \
                 "$test"
+              ran=$((ran + 1))
+            else
+              echo "::error::Valgrind target not found or not executable: $test"
             fi
           done
+          # Non-vacuity floor: a renamed target or a moved bin/ would otherwise
+          # let this lane pass with zero invocations while the row still read
+          # "6/6" (audit Low).  Require every expected binary to have run.
+          if [ "$ran" -ne "$expected" ]; then
+            echo "::error::Valgrind ran $ran/$expected targets — refusing to report success on a partial run."
+            exit 1
+          fi
+          echo "Valgrind memcheck clean across all $ran/$expected targets."
 
   clang-tidy:
     name: clang-tidy (security + correctness, fail-closed)

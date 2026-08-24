@@ -82,9 +82,11 @@ jobs:
         # is added to the job for this, and it does not depend on
         # `llvm-objdump` happening to be on the runner image.
         #
-        # Worth having on this architecture specifically: ML-KEM has NEON and
-        # SVE2 kernels that x86-64 never compiles, and the KyberSlash class is
-        # about which instructions the OBJECT ends up containing.
+        # Worth having on this architecture specifically: ML-KEM has NEON
+        # kernels that x86-64 never compiles, and the KyberSlash class is about
+        # which instructions the OBJECT ends up containing.  This build has
+        # SVE2 OFF (the default), so it covers the NEON kernels; the SVE2 ML-KEM
+        # kernels are checked in the SVE2 job below, against build-arm-sve2.
         run: |
           python3 tools/check_secret_division.py \
             --lib build-arm/lib/libama_cryptography.so
@@ -231,6 +233,16 @@ jobs:
 
       - name: Build (aarch64, SVE2)
         run: cmake --build build-arm-sve2 -j"$(nproc)"
+
+      - name: No secret-dependent division in the SVE2 kernels
+        # The build-arm job runs check_secret_division against the NEON-only
+        # object; the SVE2 ML-KEM kernels (the KyberSlash class) exist only in
+        # this SVE2-enabled object, so cover them here.  Static objdump on the
+        # .so — it inspects which instructions the object contains and needs no
+        # SVE2 at runtime, so it is independent of the QEMU vector length.
+        run: |
+          python3 tools/check_secret_division.py \
+            --lib build-arm-sve2/lib/libama_cryptography.so
 
       - name: Test at VL=${{ matrix.vl_bits }} bits
         # QEMU_CPU reaches qemu-aarch64-static through binfmt, so every test

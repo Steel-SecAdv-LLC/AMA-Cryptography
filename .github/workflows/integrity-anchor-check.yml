@@ -45,6 +45,14 @@ name: Integrity anchor check
 on:
   workflow_dispatch:
   workflow_call:
+    # This reusable workflow reads exactly one secret.  Declaring it lets the
+    # caller forward only that secret instead of `secrets: inherit` (which would
+    # hand this job the entire secret set — audit Low).  Optional: the job below
+    # validates presence and fails closed with a clear message when it is unset,
+    # and fork PRs have no secrets to forward.
+    secrets:
+      AMA_INTEGRITY_SIGNING_SEED_HEX:
+        required: false
   pull_request:
     paths:
       - '.github/workflows/integrity-anchor-check.yml'

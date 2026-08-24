@@ -775,7 +775,11 @@ jobs:
     # One unfiltered `--exit-zero` scan now feeds both the artefact and the
     # gate, matching the other two workflows exactly.
     - name: Security linting with Bandit (unfiltered JSON report)
-      run: bandit -r ama_cryptography/ -f json -o bandit-report.json --exit-zero
+      # Scope covers the runtime package AND the build/release Python CI trusts
+      # to be honest: setup.py runs the integrity signer on every wheel build,
+      # and tools/ holds resign_wheel.py plus the ~40 gate scripts.  Scanning
+      # only ama_cryptography/ left those unscanned (audit Low).
+      run: bandit -r ama_cryptography/ setup.py tools/ -f json -o bandit-report.json --exit-zero
 
     - name: Bandit severity gate (fail-closed)
       run: python3 tools/check_bandit_severity.py bandit-report.json
@@ -793,14 +797,20 @@ jobs:
       # merge-blocking step could not fail on a finding, or even on a rule that
       # failed to evaluate.  tools/check_semgrep_severity.py applies the policy
       # to the JSON: fail closed on a missing/erroring scan, and block on any
-      # finding at or above ERROR severity (the config's insecure-random,
-      # weak-hash, deprecated-crypto-api, private-key-logging, unsafe-pickle and
-      # bare-memset rules).  Mirrors the Bandit gate already in this job; both
+      # finding at or above ERROR severity (the config's Python ERROR rules
+      # insecure-random, weak-hash, deprecated-crypto-api, private-key-logging
+      # and unsafe-pickle).  The config's bare-memset C rule is NOT enforced by
+      # this gate — semgrep's C parser cannot handle the AMA_API macro and the
+      # rule targets src/c/, which this scan does not — so that property is
+      # enforced by tools/check_c_secret_zeroization.py (see .semgrep.yml's
+      # ENFORCEMENT NOTE).  Mirrors the Bandit gate already in this job; both
       # directions are pinned by tests/test_semgrep_severity_gate.py.
       continue-on-error: false
       run: |
         python -m pip install semgrep==1.74.0
-        semgrep --config .semgrep.yml ama_cryptography/ --json -o semgrep-report.json
+        # Same broadened scope as the Bandit gate above: setup.py and tools/ run
+        # during build/release and are trusted, so they are scanned too (audit Low).
+        semgrep --config .semgrep.yml ama_cryptography/ setup.py tools/ --json -o semgrep-report.json
         python tools/check_semgrep_severity.py semgrep-report.json
 
     - name: Build the native library (pytest cannot start without it)
