@@ -593,9 +593,33 @@ if(AMA_ENABLE_SIMD AND AMA_ENABLE_SVE2)
         if(NOT MSVC)
             set_source_files_properties(${AMA_SVE2_SOURCES} PROPERTIES
                 COMPILE_FLAGS "-march=armv9-a+sve2")
+            # AMA_HAVE_SVE2_IMPL says "the SVE2 kernels exist in this build", so
+            # src/c/dispatch/ama_dispatch.c may take the addresses of the ten
+            # SVE2 kernel symbols.  It MUST sit inside this NOT-MSVC guard,
+            # beside the +sve2 flag, for the same reason the NEON block above
+            # conditions AMA_HAVE_NEON_CRYPTO_EXT_IMPL: every SVE2 TU guards its
+            # whole body on __ARM_FEATURE_SVE2, which ONLY -march=...+sve2
+            # defines.  MSVC never takes that flag and never defines the ACLE
+            # macro, yet CMAKE_SYSTEM_PROCESSOR ARM64 reached this block — so
+            # with the definition outside the guard every SVE2 TU compiled to an
+            # object with zero defined symbols while the dispatcher still
+            # referenced all ten under AMA_HAVE_SVE2_IMPL: LNK2019 unresolved
+            # externals, the exact MSVC ARM64 break the NEON rewrite removed
+            # (audit H5).  Reproduced with the equivalent GCC condition:
+            # compiling any SVE2 TU for aarch64 WITHOUT +sve2 yields an object
+            # with zero defined global symbols.
+            add_compile_definitions(AMA_HAVE_SVE2_IMPL)
+            message(STATUS "SIMD: ARM SVE2 hand-written intrinsics enabled (8 algorithms)")
+        else()
+            # Same fall-through the NEON block documents: the SVE2 sources still
+            # compile (to empty objects), the dispatcher does not reference them,
+            # and the SVE2 dispatch slots stay NULL — every kernel falls through
+            # to the path a NULL slot already means everywhere else in the table.
+            message(STATUS
+                "SIMD: no SVE2 feature macro (MSVC ARM64 takes no -march flag and "
+                "never defines __ARM_FEATURE_SVE2) — SVE2 kernels not built; the "
+                "dispatcher does not reference them and the SVE2 slots stay NULL")
         endif()
-        add_compile_definitions(AMA_HAVE_SVE2_IMPL)
-        message(STATUS "SIMD: ARM SVE2 hand-written intrinsics enabled (8 algorithms)")
     endif()
 endif()
 
