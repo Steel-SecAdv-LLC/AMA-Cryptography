@@ -17,6 +17,7 @@ import io
 import ast
 import os
 import re
+import subprocess
 import sys
 import tokenize
 from pathlib import Path
@@ -498,29 +499,40 @@ def scan_optional_imports(repo_root: Path) -> list[str]:
     return violations
 
 
+def tracked_python_files(root: Path) -> list[Path]:
+    """Every ``*.py`` file git tracks, relative to ``root``.
+
+    git rather than a filesystem walk or hard-coded roots: a walk needs a
+    hand-maintained list of directories to skip (``build/``, ``.venv/``,
+    ``*.egg-info/``, whichever ``build-*`` a local run left behind), and that
+    list is exactly the kind of thing that drifts and quietly narrows the check.
+    Same discovery ``check_type_check_scope.py`` uses, for the same reason.
+    """
+    proc = subprocess.run(
+        ["git", "-C", str(root), "ls-files", "*.py"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(f"git ls-files failed ({proc.returncode}): {proc.stderr.strip()}")
+    return [Path(line) for line in proc.stdout.splitlines() if line.strip()]
+
+
 def main() -> int:
     repo_root = Path(__file__).resolve().parent.parent
     os.chdir(repo_root)
 
-    # Collect all Python files under ama_cryptography/, tests/ and tools/.
+    # Every tracked *.py file, via git rather than three hard-coded rglob roots.
     #
-    # ``tools/`` was outside the scan until it was noticed that it holds the
-    # gates themselves — the scripts whose whole purpose is to enforce this
-    # repository's security policy. A suppression there silences a static
-    # analyser inside the enforcement layer, which is the last place an
-    # unexplained one belongs, and it was the only tree where they went
-    # unpoliced. Two bare ``noqa: S310`` markers were sitting in the corpus
-    # fetchers when the scan was widened: no reason, no tracking ID, over
-    # (the leading hash is omitted above deliberately — ruff parses a real
-    # directive out of prose that spells one, which is the same false-positive
-    # class ``effective_suppressions`` exists to avoid)
-    # ``urllib`` calls that accepted ``file:`` and ``ftp:`` URLs. They now
-    # check the scheme, so the suppression states a fact.
-    targets = (
-        list(Path("ama_cryptography").rglob("*.py"))
-        + list(Path("tests").rglob("*.py"))
-        + list(Path("tools").rglob("*.py"))
-    )
+    # The scan was ama_cryptography/ + tests/ + tools/ -- 276 of the 303 tracked
+    # Python files. setup.py (shipped in the sdist and executed on every source
+    # install), the fuzz harnesses, the benchmark scripts and the wycheproof
+    # vector runner sat OUTSIDE it, carrying real suppressions the enforcement
+    # layer never saw (audit H8). The comment here used to justify adding tools/
+    # on the grounds it "was the only tree where they went unpoliced"; it was
+    # not.  git ls-files closes the gap and cannot silently narrow.
+    targets = tracked_python_files(repo_root)
 
     all_violations: list[str] = []
     for path in sorted(targets):

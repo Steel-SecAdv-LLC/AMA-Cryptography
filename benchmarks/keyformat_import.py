@@ -54,8 +54,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-import ama_cryptography.key_formats as kf  # noqa: E402 -- follows the sys.path insert
-import ama_cryptography.pqc_backends as pb  # noqa: E402 -- same
+import ama_cryptography.key_formats as kf  # noqa: E402 -- follows the sys.path insert (KFI-001)
+import ama_cryptography.pqc_backends as pb  # noqa: E402 -- same (KFI-001)
 
 
 def _time(fn: Callable[[], Any], repeats: int) -> float:

@@ -86,7 +86,7 @@ REPO_ROOT = VECTORS_DIR.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from ama_cryptography.pqc_backends import (  # noqa: E402
+from ama_cryptography.pqc_backends import (  # noqa: E402 -- import follows the repo-root sys.path insert above (WP-001)
     native_aes256_gcm_decrypt,
     native_chacha20poly1305_decrypt,
     native_ed25519_verify,

@@ -245,9 +245,9 @@ else:
         "preflight (the math_engine accelerator will not be built).\n"
     )
 
-from setuptools import Extension, find_packages, setup  # noqa: E402
-from setuptools.command.build_ext import build_ext  # noqa: E402
-from setuptools.dist import Distribution  # noqa: E402
+from setuptools import Extension, find_packages, setup  # noqa: E402 -- follows preflight (SU-001)
+from setuptools.command.build_ext import build_ext  # noqa: E402 -- follows preflight (SU-001)
+from setuptools.dist import Distribution  # noqa: E402 -- follows preflight (SU-001)
 
 # Check for Cython availability at the call-site level (the preflight
 # above only proves a minimum version; AMA_NO_CYTHON=1 still gates
