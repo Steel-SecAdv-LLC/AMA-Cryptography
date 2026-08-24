@@ -653,11 +653,50 @@ class TestTheChangelogUnreleasedSectionIsLive:
 
 class TestTheGateIsNotVacuousOnThisRepository:
     def test_the_real_tree_matches_every_claim(self, tool: ModuleType) -> None:
-        problems, checked = tool.audit(REPO_ROOT)
+        problems, family_counts = tool.audit(REPO_ROOT)
         assert problems == []
-        assert checked >= tool.MIN_CLAIMS
+        assert sum(family_counts.values()) >= tool.MIN_CLAIMS
 
     def test_the_claim_patterns_still_match_something(self, tool: ModuleType) -> None:
         """A reformat that stopped every pattern matching would otherwise pass."""
-        _problems, checked = tool.audit(REPO_ROOT)
-        assert checked > 10
+        _problems, family_counts = tool.audit(REPO_ROOT)
+        assert sum(family_counts.values()) > 10
+
+    def test_every_family_meets_its_floor_on_the_real_tree(self, tool: ModuleType) -> None:
+        """The M15 guarantee: no family is silently below its non-vacuity floor."""
+        _problems, family_counts = tool.audit(REPO_ROOT)
+        below = tool.families_below_floor(family_counts)
+        assert below == [], f"claim families below their floor: {below}"
+
+    def test_every_floored_family_is_actually_produced_by_audit(self, tool: ModuleType) -> None:
+        """A floor for a family the counter never emits would be dead — it could
+        never rise above 0 and the tree could never pass. Every floored family
+        must be a real key ``count_claim_families`` produces."""
+        produced = set(tool.count_claim_families(REPO_ROOT))
+        floored = set(tool.CLAIM_FAMILY_FLOORS)
+        assert floored <= produced, f"floors for families never counted: {floored - produced}"
+
+
+class TestPerFamilyFloor:
+    """A family going silent must fail even while the total stays high (M15)."""
+
+    def test_a_family_dropping_to_zero_is_caught(self, tool: ModuleType) -> None:
+        """Reproduce the M15 gap: one family at 0, the rest healthy, aggregate
+        far above the old MIN_CLAIMS — the old single-counter check passed; the
+        per-family floor fails."""
+        healthy = dict(tool.CLAIM_FAMILY_FLOORS)
+        healthy["test_count"] = 0  # the six test-count claims reworded away
+        below = tool.families_below_floor(healthy)
+        assert ("test_count", 0, tool.CLAIM_FAMILY_FLOORS["test_count"]) in below
+        # And the aggregate is still far above the old flat floor of 5, which is
+        # exactly why the flat floor could not catch this.
+        assert sum(healthy.values()) > 5
+
+    def test_a_missing_family_key_is_treated_as_zero(self, tool: ModuleType) -> None:
+        below = tool.families_below_floor({})
+        below_families = {fam for fam, _c, _f in below}
+        assert below_families == set(tool.CLAIM_FAMILY_FLOORS)
+
+    def test_meeting_every_floor_passes(self, tool: ModuleType) -> None:
+        exact = dict(tool.CLAIM_FAMILY_FLOORS)
+        assert tool.families_below_floor(exact) == []

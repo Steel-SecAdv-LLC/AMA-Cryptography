@@ -1034,37 +1034,40 @@ def check_breaking_change_counts(repo: Path) -> list[str]:
     return problems
 
 
-def audit(repo: Path = REPO) -> tuple[list[str], int]:
-    """Returns ``(problems, claims_checked)``.
+def count_claim_families(repo: Path = REPO) -> dict[str, int]:
+    """How many documented-count claims each family's pattern matches.
 
-    The second value is the non-vacuity guard: if the claim patterns stop
-    matching — because a document was reformatted, say — the checker would
-    otherwise pass by finding nothing to check.
+    The non-vacuity guard, per family.  A single aggregate counter (the old
+    ``checked`` int) could not tell "42 metrics-table rows still match, so the
+    total is healthy" from "the six test-count claims were reworded to em-dashes
+    and now match nothing" — the family that went silent hid behind the families
+    that did not, and a flatly false test count would then pass because the
+    pattern that would have caught it no longer fired (audit M15).  Keyed by
+    family so :data:`CLAIM_FAMILY_FLOORS` can floor each one independently.
     """
-    problems: list[str] = []
-    checked = 0
+    counts: dict[str, int] = dict.fromkeys(CLAIM_FAMILY_FLOORS, 0)
     for path in _markdown_files(repo):
         text = path.read_text(encoding="utf-8")
-        checked += len(_TEST_COUNT_RE.findall(text))
-        checked += len(_RECORD_COUNT_RE.findall(text))
-        checked += len(_WYCHEPROOF_RE.findall(text))
-        checked += len(_AGGREGATE_RE.findall(text))
-        checked += len(_METRICS_FILES_RE.findall(text))
-        checked += len(_METRICS_FUNCS_RE.findall(text))
-        checked += len(_NATIVE_ENTRY_RE.findall(text))
-        checked += len(_CYTHON_ENTRY_RE.findall(text))
-        checked += len(_C_SUITE_BARE_RE.findall(text))
+        counts["test_count"] += len(_TEST_COUNT_RE.findall(text))
+        counts["record_count"] += len(_RECORD_COUNT_RE.findall(text))
+        counts["wycheproof"] += len(_WYCHEPROOF_RE.findall(text))
+        counts["aggregate"] += len(_AGGREGATE_RE.findall(text))
+        counts["metrics_files"] += len(_METRICS_FILES_RE.findall(text))
+        counts["metrics_funcs"] += len(_METRICS_FUNCS_RE.findall(text))
+        counts["native_entry"] += len(_NATIVE_ENTRY_RE.findall(text))
+        counts["cython_entry"] += len(_CYTHON_ENTRY_RE.findall(text))
+        counts["c_suite_bare"] += len(_C_SUITE_BARE_RE.findall(text))
         live_lines = [line for line in text.splitlines() if not _HISTORY_ROW_RE.match(line)]
         for line in live_lines:
             if "fuzz" in line.lower():
-                checked += len(_FUZZ_COUNT_RE.findall(line))
-        checked += len(_BREAKING_CLAIM_RE.findall("\n".join(live_lines)))
+                counts["fuzz"] += len(_FUZZ_COUNT_RE.findall(line))
+        counts["breaking"] += len(_BREAKING_CLAIM_RE.findall("\n".join(live_lines)))
         if path.name == "METRICS_REPORT.md":
             # Each LoC-table row contributes two gated claims (Files, Lines);
             # each Scope Composition row contributes two (Lines, %); the
             # *.json prose figure contributes one.
             for label in _LOC_TABLE_ROWS:
-                checked += 2 * len(_loc_row_re(label).findall(text))
+                counts["loc_rows"] += 2 * len(_loc_row_re(label).findall(text))
             for comp_label in (
                 "Library (Python + C + headers)",
                 "Tests",
@@ -1073,8 +1076,21 @@ def audit(repo: Path = REPO) -> tuple[list[str], int]:
                 "Everything else (remainder)",
                 "**Whole-project total**",
             ):
-                checked += 2 * len(_composition_row_re(comp_label).findall(text))
-            checked += len(re.findall(r"\((\d[\d,]*) lines of\s*`\*\.json`", text))
+                counts["comp_rows"] += 2 * len(_composition_row_re(comp_label).findall(text))
+            counts["json_lines"] += len(re.findall(r"\((\d[\d,]*) lines of\s*`\*\.json`", text))
+    return counts
+
+
+def audit(repo: Path = REPO) -> tuple[list[str], dict[str, int]]:
+    """Returns ``(problems, family_counts)``.
+
+    ``family_counts`` is the non-vacuity guard, per claim family: if any
+    family's pattern stops matching — because a document was reformatted, a count
+    reworded to prose, or a backtick moved — :func:`main` fails it against
+    :data:`CLAIM_FAMILY_FLOORS` even while other families keep the total high.
+    """
+    problems: list[str] = []
+    family_counts = count_claim_families(repo)
     problems += check_record_counts(repo)
     problems += check_wycheproof_counts(repo)
     problems += check_test_counts(repo)
@@ -1090,30 +1106,80 @@ def audit(repo: Path = REPO) -> tuple[list[str], int]:
     problems += check_entry_point_counts(repo)
     problems += check_c_suite_counts(repo)
     problems += check_source_inventory_counts(repo)
-    return problems, checked
+    return problems, family_counts
 
 
-#: Non-vacuity floor. Eight claims resolve today across KEY_FORMATS.md,
-#: NIST_PRIME_CURVES.md and the corpus README.
-MIN_CLAIMS = 5
+#: Per-family non-vacuity floors (audit M15).  Each is the minimum number of
+#: claims that family's pattern must match across the scanned documents.  A
+#: single aggregate floor could not notice one family going silent while the
+#: metrics tables kept the total near 42; these floor each family so a reworded
+#: test-count claim, a moved backtick, or a line-wrap that splits "entry points"
+#: across two lines fails the gate instead of quietly leaving a claim unchecked.
+#:
+#: The values are pinned to the counts the current tree carries — they are
+#: MINIMUMS, so adding a claim never trips them; only removing or rewording one
+#: below the floor does, which is the deliberate, visible act pinning is for.
+#: Lower a floor only when a claim is genuinely retired, the same discipline
+#: ``tools/check_stdlib_hash_boundary.py`` uses for its per-file pinned counts.
+CLAIM_FAMILY_FLOORS: dict[str, int] = {
+    "test_count": 6,
+    "record_count": 7,
+    "wycheproof": 1,
+    "aggregate": 4,
+    "metrics_files": 1,
+    "metrics_funcs": 1,
+    "native_entry": 1,
+    "cython_entry": 1,
+    "c_suite_bare": 2,
+    "fuzz": 11,
+    "breaking": 4,
+    "loc_rows": 14,
+    "comp_rows": 12,
+    "json_lines": 1,
+}
+
+#: Kept as the aggregate floor's derived value so external references (and the
+#: OK line) have a single "total claims expected" number.  Per-family flooring
+#: below subsumes it, but a mismatch between the sum and this constant would mean
+#: a family was added to one and not the other.
+MIN_CLAIMS = sum(CLAIM_FAMILY_FLOORS.values())
+
+
+def families_below_floor(family_counts: dict[str, int]) -> list[tuple[str, int, int]]:
+    """``[(family, count, floor), …]`` for every family under its floor.
+
+    Includes a family absent from ``family_counts`` (treated as 0), so a family
+    whose pattern was deleted outright is caught rather than skipped.
+    """
+    below: list[tuple[str, int, int]] = []
+    for family, floor in CLAIM_FAMILY_FLOORS.items():
+        count = family_counts.get(family, 0)
+        if count < floor:
+            below.append((family, count, floor))
+    return below
 
 
 def main() -> int:
-    problems, checked = audit()
+    problems, family_counts = audit()
     if problems:
         print(f"FAIL: {len(problems)} documented count(s) have drifted:", file=sys.stderr)
         for problem in problems:
             print(f"  - {problem}", file=sys.stderr)
         return 1
-    if checked < MIN_CLAIMS:
+    below = families_below_floor(family_counts)
+    if below:
         print(
-            f"FAIL: only {checked} documented count(s) matched the claim patterns, "
-            f"below the floor of {MIN_CLAIMS}. A checker that finds nothing to "
-            "check passes vacuously.",
+            f"FAIL: {len(below)} claim family(ies) matched fewer documented counts "
+            "than their non-vacuity floor — a claim was reworded, moved, or "
+            "wrapped so its pattern no longer fires, and a checker that finds "
+            "nothing to check passes vacuously:",
             file=sys.stderr,
         )
+        for family, count, floor in below:
+            print(f"  - {family}: matched {count}, floor {floor}", file=sys.stderr)
         return 1
-    print(f"OK    documented counts ({checked} checked)")
+    total = sum(family_counts.values())
+    print(f"OK    documented counts ({total} checked across {len(family_counts)} families)")
     return 0
 
 
