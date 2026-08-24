@@ -277,6 +277,30 @@ jobs:
         # belt-and-suspenders pattern INVARIANT-11 expects.
         run: python tools/check_version_consistency.py
 
+      - name: Refuse a tag whose own docs still call the release unreleased (M12)
+        # The gates above check the tag SHAPE, the tag↔pyproject version and
+        # cross-file version consistency — but none checks whether the shipped
+        # prose still says the release has not happened.  A tag pushed while
+        # CHANGELOG.md carries "## [x.y.z] - Unreleased", or the README says
+        # "v5.0.0 is not tagged yet", ships a document that contradicts the tag
+        # (audit M12).  Tag-state markers become false the instant this tag
+        # exists (the push triggered this run), so they are enforced always.
+        # The PyPI availability rows are decoupled: publish-pypi is opt-in on
+        # vars.AMA_PUBLISH_TO_PYPI, so on a release that does NOT publish to PyPI
+        # those rows are correct and must not be flipped — they are enforced with
+        # --require-published only when this run does publish.
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+          PUBLISH_TO_PYPI: ${{ vars.AMA_PUBLISH_TO_PYPI }}
+        run: |
+          set -euo pipefail
+          if [ "${PUBLISH_TO_PYPI}" = "true" ]; then
+            python tools/check_release_state.py --version "${RELEASE_VERSION}" --require-published
+          else
+            python tools/check_release_state.py --version "${RELEASE_VERSION}"
+          fi
+
       - name: Regenerate + check SBOM
         # Audit Issue 2: SBOM is driven from pyproject.toml.  We
         # regenerate fresh and require the committed copy match,
