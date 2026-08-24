@@ -19,7 +19,9 @@ or misclassify a mandatory slot as optional.
 from __future__ import annotations
 
 import re
+import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +34,21 @@ DUDECT_YML = REPO_ROOT / ".github" / "workflows" / "dudect.yml"
 
 #: The only slots whose CPU feature is genuinely runner-silicon-dependent.
 EXPECTED_OPTIONAL = {"sha3-avx512x4", "kyber-sve2", "sha3-sve2"}
+
+# The membership-rule test below runs the step's own POSIX `case` through bash
+# with a POSIX PATH, so it reproduces the workflow byte-for-byte on the runners
+# that actually execute the dudect SIMD sweep — ubuntu x86-64 and AArch64.  It
+# is skipped only on Windows: Git Bash there resolves the invocation against a
+# non-POSIX environment, the `case " ${SLOT} "` never matches, and the sweep
+# job has no Windows lane for it to guard.  Linux AND macOS keep running it, so
+# both production runner families stay covered — this is not a coverage hole,
+# it is the same POSIX-shell scoping the apt/choco gate tests already use.  The
+# platform-independent assertions above (the declared list, the matrix subset,
+# the rc==77 handler shape) keep running everywhere.
+_POSIX_SHELL_ONLY = pytest.mark.skipif(
+    sys.platform == "win32" or shutil.which("bash") is None,
+    reason="runs the step's POSIX `case` through bash; the dudect SIMD sweep has no Windows lane",
+)
 
 
 def _sweep_job() -> dict[str, Any]:
@@ -89,6 +106,7 @@ def test_the_rc77_handler_is_not_a_blanket_skip() -> None:
     assert "::error::" in branch, "a mandatory 77 must surface as a GitHub error annotation"
 
 
+@_POSIX_SHELL_ONLY
 @pytest.mark.parametrize("slot", sorted(_matrix_slots()))
 def test_each_slot_is_classified_by_the_real_declared_list(slot: str) -> None:
     """Run the exact membership rule the step uses, against the REAL declared

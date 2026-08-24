@@ -567,7 +567,12 @@ def discover_native_reaching_modules(repo: Path) -> list[str]:
         except SyntaxError:
             continue
         if _module_reaches_native(tree):
-            found.append(str(path.relative_to(repo)))
+            # as_posix(), not str(): MODULES / EXEMPT_MODULES and every caller
+            # compare against forward-slash repo-relative keys, but str() on a
+            # WindowsPath yields backslashes, so on Windows every discovered
+            # module missed its classification and the gate reported the whole
+            # package as unaudited-by-omission.
+            found.append(path.relative_to(repo).as_posix())
     return found
 
 
