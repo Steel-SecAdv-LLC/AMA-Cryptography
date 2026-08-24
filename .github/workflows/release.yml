@@ -877,6 +877,38 @@ jobs:
           cp docs/compliance/sbom-c-library.json release-assets/
           ls -la release-assets/
 
+          # audit H14: `find` exits 0 when it matches nothing, so an empty
+          # artefacts/ tree (a broken download, a renamed upstream artefact, a
+          # sign job whose output pattern drifted) would copy only the committed
+          # SBOM and publish a release whose notes promise "signed wheels" and
+          # "SLSA provenance" over an asset list of one JSON file — and the
+          # release is IMMUTABLE, so it cannot be repaired. Assert every asset
+          # CLASS is present, in the expected quantity, before the freeze.
+          #
+          # EXPECTED_WHEELS is the build-wheels matrix size: 5 CPython
+          # (cp310-cp314) x 5 platform-arches (ubuntu-latest, ubuntu-24.04-arm,
+          # macos-15-intel, macos-15, windows-latest). Update it here, under
+          # review, whenever that matrix changes.
+          EXPECTED_WHEELS=25
+          n_whl=$(find release-assets -name '*.whl' | wc -l)
+          n_sdist=$(find release-assets -name '*.tar.gz' | wc -l)
+          n_sig=$(find release-assets -name '*.sigstore*' | wc -l)
+          n_prov=$(find release-assets -name '*.intoto.jsonl' | wc -l)
+          n_sbom=$(find release-assets -name 'sbom-c-library.json' | wc -l)
+          echo "asset inventory: wheels=$n_whl sdist=$n_sdist signatures=$n_sig provenance=$n_prov sbom=$n_sbom"
+          fail=0
+          [ "$n_whl" -eq "$EXPECTED_WHEELS" ] || { echo "::error::expected $EXPECTED_WHEELS wheels, found $n_whl"; fail=1; }
+          [ "$n_sdist" -eq 1 ] || { echo "::error::expected 1 sdist, found $n_sdist"; fail=1; }
+          # sigstore signs every wheel and the sdist, so there is at least one
+          # signature per distributable; fewer means a whole class went missing.
+          [ "$n_sig" -ge "$((EXPECTED_WHEELS + 1))" ] || { echo "::error::expected >= $((EXPECTED_WHEELS + 1)) sigstore signatures, found $n_sig"; fail=1; }
+          [ "$n_prov" -ge 1 ] || { echo "::error::expected >= 1 SLSA provenance attestation, found $n_prov"; fail=1; }
+          [ "$n_sbom" -eq 1 ] || { echo "::error::expected the committed SBOM, found $n_sbom"; fail=1; }
+          if [ "$fail" -ne 0 ]; then
+            echo "::error::release asset inventory incomplete — refusing to publish an immutable release with a missing asset class"
+            exit 1
+          fi
+
       # IMMUTABLE RELEASES: assets freeze at publish, so every asset must be
       # attached while the release is still a draft.  At the pinned v3.0.1 this
       # holds without further configuration, and the ordering is worth stating
