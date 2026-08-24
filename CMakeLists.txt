@@ -8,6 +8,12 @@ project(AmaCryptography
     LANGUAGES C CXX
 )
 
+# GNU install-directory conventions: gives CMAKE_INSTALL_LIBDIR (lib vs lib64
+# vs lib/<triplet>) and CMAKE_INSTALL_INCLUDEDIR so install destinations and
+# the generated .pc track the host's multilib layout instead of a hardcoded
+# `lib` a distro packager would otherwise have to patch (audit Low).
+include(GNUInstallDirs)
+
 # Build options
 option(AMA_BUILD_SHARED "Build shared library" ON)
 option(AMA_BUILD_STATIC "Build static library" ON)
@@ -221,11 +227,22 @@ else()
     set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -fomit-frame-pointer")
 
     # -march=native enables the full ISA of the build host (AVX2, SHA-NI,
-    # AES-NI, BMI2, AVX-512 etc.). Guarded by AMA_ENABLE_NATIVE_ARCH so CI
-    # can disable it for portable builds.
+    # AES-NI, BMI2, AVX-512 etc.).  It is appended to the GLOBAL
+    # CMAKE_C_FLAGS_RELEASE, so it deliberately applies to every TU — a strict
+    # superset of the per-file SIMD scoping the default build relies on.  That
+    # is intentional and confined to one use: host-tuned benchmark/local builds,
+    # where the numbers must reflect the microarchitecture users run on.
+    #
+    # AMA_ENABLE_NATIVE_ARCH is OFF by default (see option() above) and is set
+    # ON by exactly one CI lane — the benchmark build in .github/workflows/ci.yml
+    # (AMA_BUILD_TESTS=OFF) — and by NO wheel, sdist, release or static-analysis
+    # path.  So the CHANGELOG's "zero AVX opcodes outside src/c/avx2 /
+    # src/c/avx512" and the objdump scoping gate describe the DEFAULT build,
+    # which is what ships; this knob is the one documented exception — opt-in,
+    # global by design, and never on a release artefact.
     if(AMA_ENABLE_NATIVE_ARCH)
         set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -march=native")
-        message(STATUS "Native arch: -march=native enabled (host-optimized)")
+        message(STATUS "Native arch: -march=native enabled (host-optimized, GLOBAL; benchmark/local only)")
     endif()
 
     # -funroll-loops helps the Keccak-f[1600] 24-round permutation loop
@@ -337,9 +354,10 @@ endif()
 set(AMA_AVX2_SOURCES "")
 # AES-NI + PCLMULQDQ kernels.  A SEPARATE list from AMA_AVX2_SOURCES on
 # purpose: src/c/avx2/ama_aes_gcm_avx2.c emits AESENC / AESENCLAST /
-# AESKEYGENASSIST / PCLMULQDQ and NOTHING WIDER — no _mm256_* intrinsic
-# appears in it — so requiring AVX2 to compile it was a coupling the ISA does
-# not have.  It cost hardware AES-GCM on every x86 CPU with AES-NI but without
+# AESKEYGENASSIST / PCLMULQDQ plus SSSE3 pshufb (the GCM byte-swap) and
+# NOTHING WIDER — no _mm256_* intrinsic appears in it — so requiring AVX2 to
+# compile it was a coupling the ISA does not have.  Its per-file flags below
+# are -maes -mpclmul -mssse3 -msse4.1 (never -mavx2).  It cost hardware AES-GCM on every x86 CPU with AES-NI but without
 # AVX2 (Westmere through Ivy Bridge, and any VM masking the AVX2 bit), and on
 # every build configured with -DAMA_ENABLE_AVX2=OFF or -DAMA_ENABLE_SIMD=OFF —
 # silently, since the dispatcher simply installs the constant-time bitsliced
@@ -1122,17 +1140,17 @@ endif()
 # Installation
 if(AMA_BUILD_SHARED)
     install(TARGETS ama_cryptography_shared
-        LIBRARY DESTINATION lib
-        ARCHIVE DESTINATION lib
-        PUBLIC_HEADER DESTINATION include
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        PUBLIC_HEADER DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
     )
 endif()
 
 if(AMA_BUILD_STATIC)
     install(TARGETS ama_cryptography_static
-        LIBRARY DESTINATION lib
-        ARCHIVE DESTINATION lib
-        PUBLIC_HEADER DESTINATION include
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        PUBLIC_HEADER DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
     )
 endif()
 
@@ -1143,7 +1161,7 @@ configure_file(
     @ONLY
 )
 install(FILES ${CMAKE_BINARY_DIR}/ama_cryptography.pc
-    DESTINATION lib/pkgconfig
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig
 )
 
 # Print configuration summary

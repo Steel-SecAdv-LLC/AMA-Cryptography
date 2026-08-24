@@ -1533,11 +1533,17 @@ static void dispatch_init_internal(void) {
 #endif
 
 #ifdef AMA_HAVE_X86_AESNI_IMPL
-    /* AES-GCM's hardware kernel, gated on AES-NI + PCLMULQDQ and on NOTHING
-     * ELSE.  src/c/avx2/ama_aes_gcm_avx2.c emits AESENC / AESENCLAST /
-     * AESKEYGENASSIST and PCLMULQDQ and no wider instruction — there is no
-     * _mm256_* intrinsic in it — so requiring AVX2 was a coupling the ISA does
-     * not have.  Until 5.0.0 it was compiled only inside
+    /* AES-GCM's hardware kernel, gated on AES-NI + PCLMULQDQ.  It needs no ISA
+     * WIDER than 128-bit: src/c/avx2/ama_aes_gcm_avx2.c emits AESENC /
+     * AESENCLAST / AESKEYGENASSIST, PCLMULQDQ and SSSE3 pshufb
+     * (_mm_shuffle_epi8, for the GCM<->PCLMULQDQ byte-swap), and no _mm256_*
+     * intrinsic — so requiring AVX2 was a coupling the ISA does not have.
+     * SSSE3, and the -msse4.1 the TU is built with, are not CPUID-gated
+     * separately here: every part that reports AES-NI (Westmere, 2010) also
+     * reports SSSE3 (2006) and SSE4.1 (2007), so the AES-NI bit already implies
+     * them.  The split-bit hazard the two checks below guard against is
+     * specific to AES-NI vs PCLMULQDQ, which a chicken-bit MSR can toggle
+     * independently.  Until 5.0.0 it was compiled only inside
      * `if(AMA_ENABLE_SIMD AND AMA_ENABLE_AVX2)` and installed only when
      * `dispatch_info.aes_gcm >= AMA_IMPL_AVX2`, which cost hardware AES-GCM on
      * every AES-NI CPU without AVX2 and in every build with SIMD or AVX2

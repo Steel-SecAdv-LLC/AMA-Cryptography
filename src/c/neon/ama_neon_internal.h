@@ -68,11 +68,12 @@ void        ama_keccak_f1600_neon(uint64_t state[25]);
 /* ============================================================================
  * Kyber (ML-KEM)
  *
- * ntt / invntt / poly_pointwise are dispatch-facing.  poly_add / poly_sub
- * have no caller today: the dispatch table's kyber_poly_add / kyber_poly_sub
- * slots are wired for SVE2 only (see src/c/dispatch/ama_dispatch.c), and the
- * NEON tier reaches the same arithmetic through the compiler's
- * auto-vectorisation of the scalar loops in src/c/ama_kyber.c.
+ * ntt / invntt / poly_pointwise are dispatch-facing.  There is no NEON
+ * kyber_poly_add / kyber_poly_sub: the dispatch table's kyber_poly_* slots are
+ * wired for SVE2 only (see src/c/dispatch/ama_dispatch.c), and the NEON tier
+ * reaches the same arithmetic through the compiler's auto-vectorisation of the
+ * scalar int16 loops in src/c/ama_kyber.c.  The unwired NEON helpers that used
+ * to sit here were removed as unexercised dead code (audit Low).
  * ============================================================================ */
 void ama_kyber_ntt_neon(int16_t poly[256], const int16_t zetas[128]);
 void ama_kyber_invntt_neon(int16_t poly[256], const int16_t zetas[128]);
@@ -80,34 +81,22 @@ void ama_kyber_poly_pointwise_neon(int16_t r[256],
                                    const int16_t a[256],
                                    const int16_t b[256],
                                    const int16_t zetas[128]);
-void ama_kyber_poly_add_neon(int16_t r[256],
-                             const int16_t a[256],
-                             const int16_t b[256]);
-void ama_kyber_poly_sub_neon(int16_t r[256],
-                             const int16_t a[256],
-                             const int16_t b[256]);
 
 /* ============================================================================
  * Dilithium (ML-DSA)
  *
- * ntt / invntt / poly_pointwise are dispatch-facing; poly_add, poly_sub and
- * power2round are kept in-tree for a future dispatch-graph extension and
- * have no caller today.
+ * ntt / invntt / poly_pointwise are dispatch-facing.  The unwired poly_add,
+ * poly_sub and power2round helpers that used to sit here were removed: dead
+ * code (no caller/test), and the power2round one was additionally incorrect —
+ * it failed the FIPS 204 reconstruction and did not match the production
+ * scalar dil_power2round (audit Low).  A future dispatch-graph extension must
+ * add a correct, tested slot rather than resurrect them.
  * ============================================================================ */
 void ama_dilithium_ntt_neon(int32_t poly[256], const int32_t zetas[256]);
 void ama_dilithium_invntt_neon(int32_t poly[256], const int32_t zetas[256]);
-void ama_dilithium_poly_add_neon(int32_t r[256],
-                                 const int32_t a[256],
-                                 const int32_t b[256]);
-void ama_dilithium_poly_sub_neon(int32_t r[256],
-                                 const int32_t a[256],
-                                 const int32_t b[256]);
 void ama_dilithium_poly_pointwise_neon(int32_t r[256],
                                        const int32_t a[256],
                                        const int32_t b[256]);
-void ama_dilithium_power2round_neon(int32_t a1[256],
-                                    int32_t a0[256],
-                                    const int32_t a[256]);
 
 /* ============================================================================
  * AES-256-GCM — ARMv8 Crypto Extensions kernel

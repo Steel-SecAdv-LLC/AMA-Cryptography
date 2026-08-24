@@ -221,28 +221,11 @@ void ama_dilithium_invntt_neon(int32_t poly[DILITHIUM_N],
     }
 }
 
-/* ============================================================================
- * Polynomial arithmetic (NEON)
- * ============================================================================ */
-void ama_dilithium_poly_add_neon(int32_t r[DILITHIUM_N],
-                                  const int32_t a[DILITHIUM_N],
-                                  const int32_t b[DILITHIUM_N]) {
-    for (int i = 0; i < 64; i++) {
-        int32x4_t va = vld1q_s32(a + i * 4);
-        int32x4_t vb = vld1q_s32(b + i * 4);
-        vst1q_s32(r + i * 4, vaddq_s32(va, vb));
-    }
-}
-
-void ama_dilithium_poly_sub_neon(int32_t r[DILITHIUM_N],
-                                  const int32_t a[DILITHIUM_N],
-                                  const int32_t b[DILITHIUM_N]) {
-    for (int i = 0; i < 64; i++) {
-        int32x4_t va = vld1q_s32(a + i * 4);
-        int32x4_t vb = vld1q_s32(b + i * 4);
-        vst1q_s32(r + i * 4, vsubq_s32(va, vb));
-    }
-}
+/* ama_dilithium_poly_add_neon / ama_dilithium_poly_sub_neon were removed:
+ * unwired, untested, uncalled (the header's "kept for a future dispatch-graph
+ * extension" note went with them).  Removed alongside the buggy
+ * power2round below rather than shipped unexercised (audit Low); git history
+ * carries them for a future PR that wires and tests a NEON slot. */
 
 /* ============================================================================
  * Polynomial pointwise multiplication (NTT domain, NEON)
@@ -260,25 +243,15 @@ void ama_dilithium_poly_pointwise_neon(int32_t r[DILITHIUM_N],
     }
 }
 
-/* ============================================================================
- * Vectorized power2round (NEON)
- * ============================================================================ */
-void ama_dilithium_power2round_neon(int32_t a1[DILITHIUM_N],
-                                     int32_t a0[DILITHIUM_N],
-                                     const int32_t a[DILITHIUM_N]) {
-    const int32x4_t d_mask = vdupq_n_s32((1 << DILITHIUM_D) - 1);
-    const int32x4_t half_d = vdupq_n_s32(1 << (DILITHIUM_D - 1));
-
-    for (int i = 0; i < 64; i++) {
-        int32x4_t va = vld1q_s32(a + i * 4);
-        int32x4_t va0 = vandq_s32(va, d_mask);
-        va0 = vsubq_s32(va0, half_d);
-        int32x4_t va1 = vsubq_s32(va, va0);
-        va1 = vshrq_n_s32(va1, DILITHIUM_D);
-        vst1q_s32(a0 + i * 4, va0);
-        vst1q_s32(a1 + i * 4, va1);
-    }
-}
+/* ama_dilithium_power2round_neon was removed: it was dead code (no caller, no
+ * test, no benchmark) AND incorrect — it computed a0 = (a mod 2^d) - 2^(d-1)
+ * and a1 = (a - a0) >> d, which does NOT satisfy the FIPS 204 Power2Round
+ * reconstruction a == a1*2^d + a0 (it yields a - 2^(d-1)) and does not match
+ * the production scalar dil_power2round in src/c/ama_dilithium.c.  Wiring it
+ * would have produced wrong ML-DSA public keys.  "Kept for a future extension"
+ * cannot justify retaining a broken kernel, so it is dropped rather than
+ * shipped unexercised (audit Low); a future NEON slot must be written correctly
+ * against dil_power2round and tested. */
 
 #else
 typedef int ama_dilithium_neon_not_available;

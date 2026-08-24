@@ -4,19 +4,23 @@
  * @file ama_kyber_sve2.c
  * @brief ARM SVE2-optimized ML-KEM-1024 (Kyber) NTT / invNTT
  *
- * SVE2 scalable-vector intrinsics for Kyber polynomial arithmetic.
- * Vector length adapts to hardware; processes more coefficients on
- * wider implementations (256-bit, 512-bit, 1024-bit, 2048-bit).
+ * SVE2 scalable-vector intrinsics for Kyber polynomial arithmetic.  Two
+ * things scale with vector length and one deliberately does not; the split
+ * matters, so state it plainly rather than as a blanket "SIMD" claim:
  *
- * All butterfly loops use VL-agnostic predicated iteration via
- * svwhilelt / svcnth so the same binary runs correctly on any
- * SVE2-capable core regardless of vector width.
+ *   VECTOR (scales with VL): coefficient load/store and add/sub, i.e.
+ *   svld1_s16 / svst1_s16 / svadd_s16_x / svsub_s16_x over
+ *   svwhilelt_b16-predicated ranges stepped by svcnth().  The loops are
+ *   VL-agnostic, so a wider core processes more coefficients per iteration
+ *   and the same binary runs on any width (256 / 512 / 1024 / 2048-bit).
  *
- * Montgomery reduction uses scalar reduce within vectorized load/store
- * loops.  SVE2's svmulh_s16 computes (a*b)>>16 but Kyber Montgomery
- * needs the full 32-bit product (a*b), then (a*b - u*q)>>16.  Using
- * scalar reduction avoids the svmul/svmulh signed-borrow pitfall
- * entirely and is provably equivalent to the generic C reference.
+ *   SCALAR (does NOT scale with VL): the Montgomery and Barrett reductions.
+ *   Both are done extract-reduce-reload over a stack buffer — see
+ *   barrett_reduce_sve2() and the montgomery_reduce_scalar loops inside the
+ *   butterflies below.  SVE2's svmulh_s16 gives only (a*b)>>16, but Kyber
+ *   Montgomery needs the full 32-bit product (a*b) then (a*b - u*q)>>16;
+ *   reducing scalar sidesteps the svmul/svmulh signed-borrow pitfall
+ *   entirely and is provably equivalent to the generic C reference.
  *
  * Wired surface (matches the SVE2 block in src/c/dispatch/ama_dispatch.c):
  *   - `ama_kyber_ntt_sve2`

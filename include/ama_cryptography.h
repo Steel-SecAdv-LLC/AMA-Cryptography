@@ -2718,10 +2718,15 @@ AMA_API ama_error_t ama_ascon_aead128_decrypt(
  * only through the modes would let a fault in one cancel a fault in the
  * other.  Not part of the supported API surface.
  *
+ * Deliberately NOT exported from the shared library: it carries no AMA_API,
+ * and cmake/ama_exports.map localises it, so a co-loaded consumer cannot call
+ * a raw permutation against libama_cryptography.so.  The C KAT reaches it by
+ * linking the static ama_cryptography_test archive (audit Low).
+ *
  * @param state  In/out: five 64-bit state words
  * @param rounds Round count, 1..16; the call is a no-op outside that range
  */
-AMA_API void ama_ascon_permutation_for_test(uint64_t state[5], unsigned rounds);
+void ama_ascon_permutation_for_test(uint64_t state[5], unsigned rounds);
 
 /* ============================================================================
  * HSS / LMS — RFC 8554 hash-based signature VERIFICATION

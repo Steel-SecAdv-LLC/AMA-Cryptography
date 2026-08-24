@@ -156,10 +156,12 @@ void ama_keccak_f1600_sve2(uint64_t state[25]) {
          * and the right one at VL=512, exactly as the lane analysis predicts.
          *
          * So the scalar form is kept — it is both correct at every VL and the
-         * faster of the two on all shipping SVE2 silicon.  The permutation's
-         * real vector work is elsewhere.  The absorb loop below is separately
-         * strip-mined (it reduces over 17 lanes, which does fill a vector) and
-         * is not affected. */
+         * faster of the two on all shipping SVE2 silicon.  rho/pi/chi/iota are
+         * scalar as well (see the file header), so this permutation is scalar
+         * throughout; its value to the SVE2 tier is being wired and auto-tuned,
+         * not per-step vectorisation.  There is no absorb loop in this file: the
+         * rate-block absorb an earlier version of this note pointed at went with
+         * ama_sha3_256_sve2() (see the removal note further below). */
         for (int i = 0; i < 5; i++) {
             C[i] = state[i] ^ state[i + 5] ^ state[i + 10] ^ state[i + 15] ^ state[i + 20];
         }

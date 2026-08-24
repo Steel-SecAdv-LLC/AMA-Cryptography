@@ -16,5 +16,13 @@
     global:
         ama_*;
     local:
+        # Test-only raw Ascon permutation (see include/ama_cryptography.h).
+        # Deliberately kept OUT of the exported ABI: a raw permutation in a
+        # FIPS-aligned module's public surface invites non-approved
+        # constructions.  The C KAT (tests/c/test_ascon.c) reaches it through
+        # the static ama_cryptography_test archive, so it needs no dynamic
+        # export.  An exact name overrides the `ama_*` wildcard above (audit
+        # Low).
+        ama_ascon_permutation_for_test;
         *;
 };

@@ -587,7 +587,10 @@ AMA_API ama_error_t ama_ascon_aead128_decrypt(
  * permutation verified only indirectly through the modes would let a fault in
  * one cancel a fault in the other.
  */
-AMA_API void ama_ascon_permutation_for_test(uint64_t state[5], unsigned rounds) {
+/* No AMA_API: test-only, deliberately not exported from the shared library
+ * (also localised in cmake/ama_exports.map).  The C KAT links it statically
+ * via ama_cryptography_test.  See the header for the rationale (audit Low). */
+void ama_ascon_permutation_for_test(uint64_t state[5], unsigned rounds) {
     ama_ascon_state_t s;
     unsigned i;
 

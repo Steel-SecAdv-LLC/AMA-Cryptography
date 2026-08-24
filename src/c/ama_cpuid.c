@@ -143,10 +143,17 @@ static int xcr0_has_avx_state(void) {
      *     legacy harnesses (tools/constant_time/Makefile) compile with
      *     plain `-O2` and would link-fail on the builtin.
      *
-     * Strategy: use the intrinsic when __XSAVE__ is defined (CMake
-     * AVX2 build sets this transitively via -mavx2), otherwise the raw
-     * .byte sequence — same XGETBV opcode, no compile-time feature
-     * dependency, so the legacy dudect Makefile keeps building. */
+     * Strategy: use the intrinsic when __XSAVE__ is defined, otherwise the
+     * raw .byte sequence — same XGETBV opcode, no compile-time feature
+     * dependency, so the legacy dudect Makefile keeps building.
+     *
+     * In first-party builds __XSAVE__ is normally UNSET for this TU: 5.0.0
+     * removed the global -mavx2 that used to define it transitively (SIMD
+     * flags are per-file now, and ama_cpuid.c is a baseline TU with none), so
+     * the .byte fallback below is the branch these builds compile.  The
+     * intrinsic branch is taken only when this TU is built with -mxsave /
+     * -march=native — e.g. an AMA_ENABLE_NATIVE_ARCH=ON host-tuned build, or
+     * an external consumer's own flags. */
     unsigned long long xcr0;
 #if defined(_MSC_VER)
     xcr0 = _xgetbv(0);

@@ -2,14 +2,19 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /**
  * @file ama_aes_gcm_avx2.c
- * @brief AVX2/AES-NI optimized AES-256-GCM with pipelined rounds and GHASH
+ * @brief AES-NI/PCLMULQDQ AES-256-GCM with pipelined rounds and GHASH
+ *        (lives in the avx2/ tree for historical layout; needs no AVX2)
  *
  * Enhances the existing AES-NI path with:
  *   - Pipelined AES-NI rounds (process 8 blocks simultaneously)
  *   - Vectorized GHASH using PCLMULQDQ with Karatsuba multiplication
  *   - Interleaved AES-CTR + GHASH for maximum throughput
  *
- * Requires: AES-NI + PCLMULQDQ + AVX2
+ * Requires: AES-NI + PCLMULQDQ + SSSE3 (pshufb, for the GCM<->PCLMULQDQ
+ * byte-swap below).  Built with -maes -mpclmul -mssse3 -msse4.1.  It does
+ * NOT require AVX2 — no 256- or 512-bit (_mm256_ / _mm512_) intrinsic appears
+ * here, so the dispatcher installs it on any AES-NI + PCLMULQDQ host, with or
+ * without AVX2 (see src/c/dispatch/ama_dispatch.c).
  *
  * AI Co-Architects: Eris + | Eden ~ | Devin * | Claude @
  */

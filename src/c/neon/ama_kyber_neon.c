@@ -274,31 +274,12 @@ void ama_kyber_poly_pointwise_neon(int16_t r[KYBER_N],
     }
 }
 
-/* ============================================================================
- * Polynomial addition (NEON)
- * ============================================================================ */
-void ama_kyber_poly_add_neon(int16_t r[KYBER_N],
-                              const int16_t a[KYBER_N],
-                              const int16_t b[KYBER_N]) {
-    for (int i = 0; i < 32; i++) {
-        int16x8_t va = vld1q_s16(a + i * 8);
-        int16x8_t vb = vld1q_s16(b + i * 8);
-        vst1q_s16(r + i * 8, vaddq_s16(va, vb));
-    }
-}
-
-/* ============================================================================
- * Polynomial subtraction (NEON)
- * ============================================================================ */
-void ama_kyber_poly_sub_neon(int16_t r[KYBER_N],
-                              const int16_t a[KYBER_N],
-                              const int16_t b[KYBER_N]) {
-    for (int i = 0; i < 32; i++) {
-        int16x8_t va = vld1q_s16(a + i * 8);
-        int16x8_t vb = vld1q_s16(b + i * 8);
-        vst1q_s16(r + i * 8, vsubq_s16(va, vb));
-    }
-}
+/* ama_kyber_poly_add_neon / ama_kyber_poly_sub_neon were removed: they had no
+ * caller, no test and no benchmark, and the NEON tier already gets this
+ * arithmetic from -O3 auto-vectorisation of the scalar int16 loops in
+ * src/c/ama_kyber.c (only the SVE2 slots are dispatch-wired).  Shipping
+ * unexercised kernels is the gap this drop closes (audit Low); git history
+ * carries them if a future PR wires and tests a NEON kyber_poly_* slot. */
 
 #else
 typedef int ama_kyber_neon_not_available;
