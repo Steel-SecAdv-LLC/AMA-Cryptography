@@ -971,9 +971,16 @@ failure message gave could not clear the condition it was given for.  The
 paragraph now states the policy the code has, records the withdrawn claim
 rather than quietly deleting it, and explains the empty map the repository
 commits: a source checkout ships no built extensions, so there are none to
-bind.  Measured on a built tree here, the same command binds six.  The gate in
-`test_setup_signer_contract.py` now covers SECURITY.md as well, and fails on
-the reverted wording.
+bind.  Measured on a built tree here, the same command binds six.
+
+Fixing SECURITY.md alone was not enough, and an independent audit of this
+branch caught the rest: `ARCHITECTURE.md`'s 5.0.0 release row carried the
+identical assertion compressed into one clause -- "wheel pipeline binds, repair
+flow binds none" -- so the repository still contradicted itself in the document
+a reader reaches first, and a SECURITY.md-only check could not see it.
+Corrected, and the gate in `test_setup_signer_contract.py` is parametrised over
+both documents and matches the short clause too.  It fails when either wording
+is restored.
 
 #### Twelve documented source paths that did not exist, seven of them genuine
 

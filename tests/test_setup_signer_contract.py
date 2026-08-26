@@ -144,8 +144,9 @@ def test_the_bind_extensions_comment_matches_the_repair_flow() -> None:
     )
 
 
-def test_security_md_does_not_carry_the_withdrawn_binding_claim() -> None:
-    """The same stale claim outlived its correction in SECURITY.md.
+@pytest.mark.parametrize("document", ["SECURITY.md", "ARCHITECTURE.md"])
+def test_the_documents_do_not_carry_the_withdrawn_binding_claim(document: str) -> None:
+    """The same stale claim outlived its correction in more than one document.
 
     ``setup.py``'s comment was fixed when the repair flow started binding, and
     the test above pins it.  SECURITY.md's "Two artefact states exist by design"
@@ -155,19 +156,28 @@ def test_security_md_does_not_carry_the_withdrawn_binding_claim() -> None:
     conclude a locally re-signed tree binds nothing; measured, ``integrity
     --update --sign`` binds every extension present -- six on a built tree
     here, and zero only in a checkout that has none.
+
+    Fixing SECURITY.md alone was not enough.  ARCHITECTURE.md's 5.0.0 release
+    row carried the identical assertion compressed into one clause -- "wheel
+    pipeline binds, repair flow binds none" -- which a SECURITY.md-only check
+    could not see, so the repository still contradicted itself in the document
+    a reader reaches first.  Both are checked here.
     """
-    security = (Path(__file__).resolve().parent.parent / "SECURITY.md").read_text(encoding="utf-8")
+    text = (Path(__file__).resolve().parent.parent / document).read_text(encoding="utf-8")
     # The historical wording survives only inside the sentence that withdraws
     # it, so match the assertion, not the phrase.
     for claim in (
         "--sign` — the artefact this repository commits) binds none",
         "A source tree's binding coverage is therefore not an\nattestation claim at all",
+        # ARCHITECTURE.md's release row compressed the same assertion into one
+        # clause, which a SECURITY.md-only check could not see.
+        "repair flow binds none",
     ):
-        assert claim not in security, (
-            f"SECURITY.md still asserts {claim!r}. The repair flow passes "
+        assert claim not in text, (
+            f"{document} still asserts {claim!r}. The repair flow passes "
             f"--bind-extensions (ama_cryptography/integrity.py), so it binds every "
             f"extension beside the artefact."
         )
     assert (
-        "**Both** signing callers bind." in security
-    ), "SECURITY.md does not state the policy the code actually has"
+        "signing callers bind" in text
+    ), f"{document} does not state the policy the code actually has"
