@@ -219,6 +219,70 @@ else()
         set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,-z,noexecstack")
     endif()
 
+    # Control-flow integrity, per architecture — and NOT left to the toolchain.
+    #
+    # The MSVC branch above has carried /guard:cf since this file was written.
+    # On ELF the property was arriving by accident where it arrived at all:
+    # Ubuntu patches GCC to enable -fcf-protection by default, so every AMA
+    # x86-64 object happened to carry IBT + shadow stack (measured: `readelf
+    # -nW` on the built .so reports "x86 feature: IBT, SHSTK", and so does a
+    # flagless `int main(void){return 0;}` compiled with the same gcc — the
+    # flag is the distribution's, not this project's).  A toolchain without
+    # that patch — upstream GCC, or the musl/Alpine image this repository
+    # ships a Dockerfile for — produces the same sources with no CET at all,
+    # and nothing here would have noticed.
+    #
+    # AArch64 had no such accident to inherit.  The same probe against
+    # aarch64-linux-gnu-gcc emits no AArch64 GNU property, and neither did
+    # libama_cryptography.so on that architecture: **every arm64 wheel shipped
+    # with no branch-target identification and no return-address signing while
+    # the x86-64 wheel shipped with full CET.**  That asymmetry was not a
+    # decision recorded anywhere; it was the absence of one.
+    #
+    #   -fcf-protection=full        x86: ENDBR64 landing pads (IBT) + shadow
+    #                               stack (SHSTK).
+    #   -mbranch-protection=standard AArch64: `bti c` landing pads (FEAT_BTI)
+    #                               + PAC-RET return-address signing
+    #                               (FEAT_PAuth), which is what `standard`
+    #                               expands to.
+    #
+    # Both are backwards-compatible by construction, which is why this is a
+    # free hardening rather than a portability trade: ENDBR64 decodes as a
+    # multi-byte NOP on pre-CET x86, and `bti`/`paciasp`/`autiasp` sit in the
+    # AArch64 hint (NOP) space on pre-Armv8.3/8.5 cores.  A binary built with
+    # them runs unchanged on hardware that has neither.
+    #
+    # Neither is secret-dependent: the inserted instructions are unconditional
+    # and data-independent, so INVARIANT-12 is unaffected (confirmed by the
+    # constant-time suites after the change).
+    #
+    # BTI in particular is all-or-nothing at link time — the linker emits the
+    # output property only if EVERY input object carries it — so this must stay
+    # a global flag rather than a per-file one.  This tree has no hand-written
+    # assembly translation unit (`git ls-files '*.S' '*.s'` is empty), so there
+    # is no object that cannot carry the marking.
+    #
+    # Probed rather than assumed, matching the linker-flag checks above: a
+    # toolchain that does not accept the flag still configures.
+    include(CheckCCompilerFlag)
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64")
+        check_c_compiler_flag("-mbranch-protection=standard" AMA_HAVE_BRANCH_PROTECTION)
+        if(AMA_HAVE_BRANCH_PROTECTION)
+            set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mbranch-protection=standard")
+            message(STATUS "CFI: AArch64 BTI + PAC-RET (-mbranch-protection=standard)")
+        else()
+            message(STATUS "CFI: -mbranch-protection=standard unsupported — AArch64 CFI off")
+        endif()
+    elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64|i[3-6]86|x86")
+        check_c_compiler_flag("-fcf-protection=full" AMA_HAVE_CF_PROTECTION)
+        if(AMA_HAVE_CF_PROTECTION)
+            set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fcf-protection=full")
+            message(STATUS "CFI: x86 IBT + shadow stack (-fcf-protection=full)")
+        else()
+            message(STATUS "CFI: -fcf-protection=full unsupported — x86 CFI off")
+        endif()
+    endif()
+
     # Position-independent code: scoped to shared library target only
     # (see set_target_properties on ama_cryptography_shared below)
 
