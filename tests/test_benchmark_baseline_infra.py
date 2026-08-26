@@ -1331,3 +1331,180 @@ class TestTheJsonProvenanceIsMachineReadable:
         provenance = br.generate_report([])["provenance"]
         ticked = {k: v for k, v in provenance.items() if isinstance(v, str) and "`" in v}
         assert not ticked, f"markdown formatting reached the JSON block: {ticked}"
+
+
+class TestARunThatMeasuredNothingIsNotAPass:
+    """The regression gate must not exit 0 on zero measured rows.
+
+    Every ``continue`` in :func:`run_all_benchmarks` — a baseline that does not
+    name the benchmark, a primitive absent from the build — is silent to the
+    exit code.  With all of them taken, ``main()`` printed "All benchmarks
+    within acceptable range" and returned 0, so the CI job was green *because*
+    it had stopped measuring.
+
+    Reproduced before the fix against a copy of the shipped baseline with every
+    key renamed, which passes ``--require-populated-baseline`` (that flag only
+    rejects zero ``baseline_value``s): **19 populated floors, 0 benchmarks
+    measured, exit 0**.
+
+    The three states below are separated because they mean different things. A
+    baseline name with no function behind it is a rename — the floor is still
+    in the JSON, still justified, and can never fire again — so it is fatal
+    everywhere. A name whose function exists but produced no measurement is the
+    documented "primitive absent from this build" skip: legitimate locally,
+    never true of the CI job, so it is fatal exactly under
+    ``--require-populated-baseline``.
+    """
+
+    @staticmethod
+    def _baseline(core: dict[str, Any], pqc: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "metadata": {"runner_cpu_class": "x86_64"},
+            "thresholds": {"regression_threshold_percent": 10},
+            "benchmarks": core,
+            "pqc_benchmarks": pqc,
+        }
+
+    @staticmethod
+    def _entry(value: float = 1000.0) -> dict[str, Any]:
+        return {"description": "synthetic", "baseline_value": value, "tolerance_percent": 15}
+
+    def _run(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        baseline: dict[str, Any],
+        *,
+        strict: bool,
+        rate: float | None = 1000.0,
+    ) -> int:
+        path = tmp_path / "baseline.json"
+        path.write_text(json.dumps(baseline), encoding="utf-8")
+        argv = ["benchmark_runner.py", "--baseline", str(path)]
+        if strict:
+            argv.append("--require-populated-baseline")
+        monkeypatch.setattr(sys, "argv", argv)
+        monkeypatch.setattr(br, "_measure_benchmark", lambda name, func: rate)
+        return br.main()
+
+    def test_a_healthy_run_still_passes(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Non-vacuity: without this, every assertion below could pass on a
+        ``main()`` that had simply become unable to return 0."""
+        name = next(iter(br.BENCHMARK_FUNCTIONS))
+        rc = self._run(
+            monkeypatch, tmp_path, self._baseline({name: self._entry()}, {}), strict=True
+        )
+        assert rc == 0, "a measured, in-tolerance row must still exit 0"
+
+    def test_a_baseline_naming_no_known_benchmark_is_fatal(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """A rename leaves the floor in the JSON and unenforceable forever."""
+        rc = self._run(
+            monkeypatch,
+            tmp_path,
+            self._baseline({"renamed_ed25519_sign": self._entry()}, {}),
+            strict=False,
+        )
+        assert rc != 0, (
+            "a baseline entry no benchmark function answers to is a floor that "
+            "can never fire; the run skipped it and exited 0"
+        )
+
+    def test_it_is_fatal_without_the_strict_flag_too(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """The rename case does not depend on how the run was invoked."""
+        rc = self._run(
+            monkeypatch,
+            tmp_path,
+            self._baseline({}, {"renamed_kyber_keygen": self._entry()}),
+            strict=False,
+        )
+        assert rc != 0
+
+    def test_an_empty_baseline_is_fatal(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Nothing requested, nothing measured, nothing compared."""
+        rc = self._run(monkeypatch, tmp_path, self._baseline({}, {}), strict=False)
+        assert rc != 0, "a run that compared nothing against anything is not a pass"
+
+    def test_an_unmeasured_primitive_is_fatal_under_the_strict_flag(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """``rate=None`` is the "primitive absent from this build" skip."""
+        name = next(iter(br.BENCHMARK_FUNCTIONS))
+        rc = self._run(
+            monkeypatch,
+            tmp_path,
+            self._baseline({name: self._entry()}, {}),
+            strict=True,
+            rate=None,
+        )
+        assert rc != 0, (
+            "--require-populated-baseline is the CI invocation; a floor that was "
+            "skipped there cannot fire and must not read as a pass"
+        )
+
+    def test_the_same_run_is_tolerated_without_the_flag(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A local build that knowingly covers less is still usable — but says so.
+
+        This is the other half of the test above: without it, the strict-flag
+        assertion would pass equally against a runner that rejected every
+        unmeasured entry, which would make a developer build unusable.
+        """
+        name = next(iter(br.BENCHMARK_FUNCTIONS))
+        rc = self._run(
+            monkeypatch,
+            tmp_path,
+            self._baseline({name: self._entry()}, {}),
+            strict=False,
+            rate=None,
+        )
+        assert rc != 0, "zero measured rows is fatal regardless of the flag"
+        assert "NO BENCHMARK WAS MEASURED" in capsys.readouterr().out
+
+    def test_a_partial_measurement_without_the_flag_only_notes_it(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """One measured and one skipped: usable locally, and reported."""
+        measured, skipped = list(br.BENCHMARK_FUNCTIONS)[:2]
+        path = tmp_path / "baseline.json"
+        path.write_text(
+            json.dumps(self._baseline({measured: self._entry(), skipped: self._entry()}, {})),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(sys, "argv", ["benchmark_runner.py", "--baseline", str(path)])
+        monkeypatch.setattr(
+            br, "_measure_benchmark", lambda name, func: 1000.0 if name == measured else None
+        )
+        rc = br.main()
+        out = capsys.readouterr().out
+        assert rc == 0, "one good row on a partial build is a usable local run"
+        assert (
+            skipped in out and "not measured" in out
+        ), "a skipped floor must be named, or the run silently covers less than it claims"
+
+    def test_the_dispatch_tables_are_module_level_and_populated(self) -> None:
+        """The coverage check reads them; empty tables would make it vacuous."""
+        assert len(br.BENCHMARK_FUNCTIONS) >= 8
+        assert len(br.PQC_BENCHMARK_FUNCTIONS) >= 8
+        overlap = set(br.BENCHMARK_FUNCTIONS) & set(br.PQC_BENCHMARK_FUNCTIONS)
+        assert not overlap, f"a name in both tables is ambiguous: {sorted(overlap)}"
+
+    def test_every_shipped_baseline_name_has_a_benchmark_behind_it(self) -> None:
+        """The check above is what CI runs; this is the standing state of the tree."""
+        runnable = set(br.BENCHMARK_FUNCTIONS) | set(br.PQC_BENCHMARK_FUNCTIONS)
+        for name in ("baseline.json", "arm-baseline.json"):
+            doc = json.loads((REPO_ROOT / "benchmarks" / name).read_text(encoding="utf-8"))
+            requested = set(doc.get("benchmarks", {})) | set(doc.get("pqc_benchmarks", {}))
+            assert requested, f"{name} names no benchmarks at all"
+            assert not (requested - runnable), (
+                f"{name} names {sorted(requested - runnable)}, which no benchmark "
+                f"function answers to — those floors cannot fire"
+            )

@@ -972,50 +972,57 @@ def run_secp256k1_ecdsa_verify_benchmark(iterations: int = 100) -> Optional[floa
         return None
 
 
+#: The benchmark a baseline name maps to.  Module level, not local to
+#: :func:`run_all_benchmarks`, because :func:`main` has to answer a question the
+#: loop cannot: whether a name the baseline asks for is one this runner is even
+#: able to run.  A name only the baseline knows is a rename that silently
+#: deleted a floor, and until the coverage check in main() nothing distinguished
+#: it from a benchmark that passed.
+BENCHMARK_FUNCTIONS: dict[str, Callable[[], Optional[float]]] = {
+    "ama_sha3_256_hash": run_sha3_256_benchmark,
+    "hmac_sha3_256": run_hmac_sha3_256_benchmark,
+    "ed25519_keygen": run_ed25519_keygen_benchmark,
+    "ed25519_sign": run_ed25519_sign_benchmark,
+    "ed25519_verify": run_ed25519_verify_benchmark,
+    "hkdf_derive": run_hkdf_derive_benchmark,
+    "full_package_create": run_full_package_create_benchmark,
+    "full_package_verify": run_full_package_verify_benchmark,
+    # secp256k1 ECDSA sign/verify are HARD-gated (core, not the soft PQC
+    # loop): the signing path (RFC 6979 nonce + base-point ladder + Fermat
+    # inversion mod n) and the verify path (two scalar mults + canonical-
+    # pubkey + curve checks). A regression in the ECDSA-specific scalar
+    # arithmetic fails the build, not merely warns — the pubkey ladder the C
+    # reporting harness covered is not enough. They return None only on a
+    # build without native secp256k1 (never the benchmark CI job, which is
+    # AMA_USE_NATIVE_PQC=ON); the None-skip below handles that gracefully.
+    "secp256k1_ecdsa_sign": run_secp256k1_ecdsa_sign_benchmark,
+    "secp256k1_ecdsa_verify": run_secp256k1_ecdsa_verify_benchmark,
+}
+
+PQC_BENCHMARK_FUNCTIONS: dict[str, Callable[[], Optional[float]]] = {
+    "dilithium_keygen": run_dilithium_keygen_benchmark,
+    "dilithium_sign": run_dilithium_sign_benchmark,
+    "dilithium_verify": run_dilithium_verify_benchmark,
+    "kyber_keygen": run_kyber_keygen_benchmark,
+    "kyber_encapsulate": run_kyber_encapsulate_benchmark,
+    "aes_256_gcm_encrypt": run_aes_gcm_benchmark,
+    "chacha20poly1305_encrypt": run_chacha20poly1305_benchmark,
+    "x25519_scalarmult": run_x25519_benchmark,
+    # PR #277, Devin review #10: x25519_scalarmult_batch4 pins the
+    # batch wrapper's throughput so a future change that flips the
+    # AVX2 4-way kernel to default-on is caught by CI rather than
+    # silently regressing per-batch latency.
+    "x25519_scalarmult_batch4": run_x25519_batch4_benchmark,
+}
+
+
 def run_all_benchmarks(baseline: Dict[str, Any], verbose: bool = False) -> List[BenchmarkResult]:
     """Run all benchmarks and compare against baseline."""
     results = []
     threshold = baseline["thresholds"]["regression_threshold_percent"]
 
-    benchmark_functions: dict[str, Callable[[], Optional[float]]] = {
-        "ama_sha3_256_hash": run_sha3_256_benchmark,
-        "hmac_sha3_256": run_hmac_sha3_256_benchmark,
-        "ed25519_keygen": run_ed25519_keygen_benchmark,
-        "ed25519_sign": run_ed25519_sign_benchmark,
-        "ed25519_verify": run_ed25519_verify_benchmark,
-        "hkdf_derive": run_hkdf_derive_benchmark,
-        "full_package_create": run_full_package_create_benchmark,
-        "full_package_verify": run_full_package_verify_benchmark,
-        # secp256k1 ECDSA sign/verify are HARD-gated (core, not the soft PQC
-        # loop): the signing path (RFC 6979 nonce + base-point ladder + Fermat
-        # inversion mod n) and the verify path (two scalar mults + canonical-
-        # pubkey + curve checks). A regression in the ECDSA-specific scalar
-        # arithmetic fails the build, not merely warns — the pubkey ladder the C
-        # reporting harness covered is not enough. They return None only on a
-        # build without native secp256k1 (never the benchmark CI job, which is
-        # AMA_USE_NATIVE_PQC=ON); the None-skip below handles that gracefully.
-        "secp256k1_ecdsa_sign": run_secp256k1_ecdsa_sign_benchmark,
-        "secp256k1_ecdsa_verify": run_secp256k1_ecdsa_verify_benchmark,
-    }
-
-    pqc_benchmark_functions: dict[str, Callable[[], Optional[float]]] = {
-        "dilithium_keygen": run_dilithium_keygen_benchmark,
-        "dilithium_sign": run_dilithium_sign_benchmark,
-        "dilithium_verify": run_dilithium_verify_benchmark,
-        "kyber_keygen": run_kyber_keygen_benchmark,
-        "kyber_encapsulate": run_kyber_encapsulate_benchmark,
-        "aes_256_gcm_encrypt": run_aes_gcm_benchmark,
-        "chacha20poly1305_encrypt": run_chacha20poly1305_benchmark,
-        "x25519_scalarmult": run_x25519_benchmark,
-        # PR #277, Devin review #10: x25519_scalarmult_batch4 pins the
-        # batch wrapper's throughput so a future change that flips the
-        # AVX2 4-way kernel to default-on is caught by CI rather than
-        # silently regressing per-batch latency.
-        "x25519_scalarmult_batch4": run_x25519_batch4_benchmark,
-    }
-
     # Run standard benchmarks
-    for name, func in benchmark_functions.items():
+    for name, func in BENCHMARK_FUNCTIONS.items():
         if name not in baseline["benchmarks"]:
             continue
 
@@ -1069,7 +1076,7 @@ def run_all_benchmarks(baseline: Dict[str, Any], verbose: bool = False) -> List[
 
     # Run PQC benchmarks (hard-gated when measured; skipped when the
     # native backend is absent — see the None path below)
-    for name, pqc_func in pqc_benchmark_functions.items():
+    for name, pqc_func in PQC_BENCHMARK_FUNCTIONS.items():
         if name not in baseline.get("pqc_benchmarks", {}):
             continue
 
@@ -1625,6 +1632,67 @@ def main() -> int:
     print(f"  Failed: {summary['failed']}")
     print(f"  Warnings (optional): {summary['warnings']}")
     print()
+
+    # Coverage, before verdicts.
+    #
+    # Every `continue` in run_all_benchmarks is silent to the exit code, so a
+    # run that measured NOTHING printed "All benchmarks within acceptable
+    # range" and returned 0.  Reproduced against a copy of the shipped baseline
+    # with every key renamed — which passes --require-populated-baseline, since
+    # that only rejects zero `baseline_value`s: 19 populated floors, 0
+    # benchmarks measured, exit 0.  A gate in that state is green precisely
+    # because it stopped checking.
+    #
+    # Two distinct losses are separated here because they mean different
+    # things.  A baseline name with no function behind it is a RENAME: the
+    # floor still sits in the JSON, is still justified, and can never fire
+    # again.  That is a defect on any host, so it fails unconditionally.  A
+    # name that has a function but produced no measurement is the documented
+    # "primitive absent from this build" skip — legitimate on a developer
+    # machine, and never true of the CI job, which is why it is fatal exactly
+    # under --require-populated-baseline, the flag CI already passes to mean
+    # "this run must be worth trusting".
+    measured = {r.name for r in results}
+    runnable = set(BENCHMARK_FUNCTIONS) | set(PQC_BENCHMARK_FUNCTIONS)
+    requested = set(baseline.get("benchmarks", {})) | set(baseline.get("pqc_benchmarks", {}))
+
+    orphaned = sorted(requested - runnable)
+    if orphaned:
+        print("BASELINE NAMES NOTHING THIS RUNNER CAN RUN!")
+        print("-" * 60)
+        for name in orphaned:
+            print(f"  {name}: in the baseline, but no benchmark function has that name")
+        print()
+        print("Each of these floors is unenforceable: the run skips the name and")
+        print("still exits 0. Rename the baseline entry to match the function, or")
+        print("delete the entry if the benchmark is gone.")
+        return 2
+
+    if not results:
+        print("NO BENCHMARK WAS MEASURED!")
+        print("-" * 60)
+        print(f"The baseline names {len(requested)} benchmark(s) and none of them ran, so")
+        print("this run compared nothing against anything. That is not a pass.")
+        return 2
+
+    unmeasured = sorted(requested - measured)
+    if unmeasured and args.require_populated_baseline:
+        print("BASELINE ENTRIES WERE NOT MEASURED!")
+        print("-" * 60)
+        for name in unmeasured:
+            print(f"  {name}: skipped — the primitive is absent from this build")
+        print()
+        print("--require-populated-baseline says this run must be worth trusting,")
+        print("and a floor that was skipped cannot fire. Build with the backend")
+        print("these benchmarks need, or drop --require-populated-baseline for a")
+        print("local run that knowingly covers less.")
+        return 2
+    if unmeasured:
+        print(
+            f"NOTE: {len(unmeasured)} baseline entr(y/ies) not measured on this build: "
+            f"{', '.join(unmeasured)}"
+        )
+        print()
 
     # Check for failures
     failed = [r for r in results if not r.passed and not r.optional]
