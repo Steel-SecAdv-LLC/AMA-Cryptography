@@ -129,6 +129,16 @@ add_test(NAME test_lms COMMAND test_lms
          WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 add_ama_test(test_ed25519 test_ed25519.c)
 
+# The header states exactly one requirement of `ama_ed25519_verify`'s buffers —
+# "exactly 32 / 64 readable bytes" — and nothing about alignment, so an
+# unaligned caller buffer is a legal call.  Until this test, every test in the
+# tree handed the library a `uint8_t[32]` local or static, which every compiler
+# in use aligns to at least 8, so donna's `*(uint64_t *)(in + 0)` in
+# curve25519_expand was never given an address that could expose it.  This one
+# walks 16 offsets and asserts both verdicts at each.  See
+# tests/c/test_ed25519_unaligned_input.c.
+add_ama_test(test_ed25519_unaligned_input test_ed25519_unaligned_input.c)
+
 # RFC 8032 5.1.7 canonical-S enforcement (INVARIANT-26).  Built
 # UNCONDITIONALLY, unlike test_ed25519_verify_equiv below: the fix
 # lands at three sites — ama_ed25519_verify in each backend plus the

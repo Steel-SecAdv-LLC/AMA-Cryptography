@@ -607,6 +607,18 @@
       {
         "path": "src/c/PROVENANCE.md",
         "reason": "A Markdown file. _FLOORED_CODE_PATHS matches the src/c prefix, so every file beneath it is reported, documentation included. The edit corrects a sentence that named a tests/test_constant_time.py -- a file that has never existed in this repository -- as where the dudect regression tests run; they run from tests/c/test_dudect.c (built with -DAMA_ENABLE_DUDECT=ON) and the standalone harnesses under tools/constant_time/. Measured rather than asserted: the file appears in no CMake source list and in no build script (grep over CMakeLists.txt and cmake/ returns nothing), and no translation unit includes it -- the five matches under src/c are prose inside comments, not #include directives. It reaches no compiled artefact, so it cannot move a floor on either file."
+      },
+      {
+        "path": "src/c/vendor/ed25519-donna/curve25519-donna-64bit.h",
+        "reason": "Not compiled on AArch64 at all, so it cannot move an arm64 benchmark: AMA_ED25519_ASSEMBLY defaults ON only for x86_64 (build-arm/CMakeCache.txt records it OFF), the donna shim is added to AMA_SOURCES only inside the x86_64 branch, and this target builds src/c/ama_ed25519.c (fe51) instead -- grep for ed25519_donna_shim in build-arm/build.ninja returns 0. The change itself replaces four *(uint64_t *)(in + n) loads in curve25519_expand with memcpy of the same spans, and on x86-64 -- where it IS compiled -- the linked library is byte-identical before and after (md5 831a0934cb230e2a009e59a0291f461f, control 48cd36a1f63492daa2be50802c883d10)."
+      },
+      {
+        "path": "src/c/vendor/ed25519-donna/curve25519-donna-32bit.h",
+        "reason": "Not compiled on AArch64 at all, so it cannot move an arm64 benchmark: AMA_ED25519_ASSEMBLY defaults ON only for x86_64 (build-arm/CMakeCache.txt records it OFF), the donna shim is added to AMA_SOURCES only inside the x86_64 branch, and this target builds src/c/ama_ed25519.c (fe51) instead -- grep for ed25519_donna_shim in build-arm/build.ninja returns 0. It is additionally unselected on every platform: ED25519_SSE2 and ED25519_FORCE_32BIT are defined 0 times across CMakeLists.txt, cmake/, setup.py and the Makefile."
+      },
+      {
+        "path": "src/c/vendor/ed25519-donna/curve25519-donna-sse2.h",
+        "reason": "Not compiled on AArch64 at all, so it cannot move an arm64 benchmark: AMA_ED25519_ASSEMBLY defaults ON only for x86_64 (build-arm/CMakeCache.txt records it OFF), the donna shim is added to AMA_SOURCES only inside the x86_64 branch, and this target builds src/c/ama_ed25519.c (fe51) instead -- grep for ed25519_donna_shim in build-arm/build.ninja returns 0. It is additionally unselected on every platform: ED25519_SSE2 is defined 0 times across CMakeLists.txt, cmake/, setup.py and the Makefile."
       }
     ]
   },
