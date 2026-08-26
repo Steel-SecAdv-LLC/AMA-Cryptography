@@ -393,16 +393,37 @@ class TestCppcheckSuppressionsStillPointAtRealFindings:
             capture_output=True,
             text=True,
         )
+        combined = proc.stdout + proc.stderr
+
+        # Being on PATH is not the same as working.  The Windows runners carry
+        # a cppcheck inside Strawberry Perl whose std.cfg path was baked at
+        # build time to a directory that exists only on the machine that built
+        # it (R:/winlibs64ucrt_stage/...), so it loads no configuration,
+        # analyses nothing, and says so.  Every Windows lane failed here on the
+        # commit that added this check, for a reason that is a property of that
+        # runner's toolchain rather than of this repository's pins.
+        #
+        # The skip is keyed to cppcheck's own words rather than to "the report
+        # was empty", so a cppcheck that really ran and found nothing still
+        # fails the assertion below — which is the whole point of having it.
+        if "installation is broken" in combined or "Failed to load std.cfg" in combined:
+            first = next((ln for ln in combined.splitlines() if ln.strip()), "no output")
+            _pytest.skip(
+                f"the cppcheck at {cppcheck} cannot load its own std.cfg, so it "
+                f"analysed nothing: {first.strip()[:200]}"
+            )
+
         reported = set()
-        for raw in (proc.stderr + proc.stdout).splitlines():
+        for raw in combined.splitlines():
             m = self._REPORT.match(raw.strip())
             if m:
                 reported.add((m.group("id"), m.group("file"), int(m.group("line"))))
 
         assert reported, (
             "cppcheck reported nothing at all over "
-            f"{files} — the invocation is wrong, so this check would pass "
-            "vacuously. stderr:\n" + proc.stderr[:2000]
+            f"{files} — either the invocation is wrong or this cppcheck did not "
+            "analyse anything, and in both cases the check below would pass "
+            "vacuously. Output:\n" + combined[:2000]
         )
 
         stale = [p for p in pinned if p not in reported]
