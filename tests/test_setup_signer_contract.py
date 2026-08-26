@@ -142,3 +142,32 @@ def test_the_bind_extensions_comment_matches_the_repair_flow() -> None:
         "the repair flow no longer passes --bind-extensions; setup.py's comment "
         "must be updated with it rather than left describing the old policy"
     )
+
+
+def test_security_md_does_not_carry_the_withdrawn_binding_claim() -> None:
+    """The same stale claim outlived its correction in SECURITY.md.
+
+    ``setup.py``'s comment was fixed when the repair flow started binding, and
+    the test above pins it.  SECURITY.md's "Two artefact states exist by design"
+    paragraph was not, so the security document and the CHANGELOG's own 5.0.0
+    entry ("every build signs and binds, including the repair flow") said
+    opposite things about the same command.  A reader of SECURITY.md would
+    conclude a locally re-signed tree binds nothing; measured, ``integrity
+    --update --sign`` binds every extension present -- six on a built tree
+    here, and zero only in a checkout that has none.
+    """
+    security = (Path(__file__).resolve().parent.parent / "SECURITY.md").read_text(encoding="utf-8")
+    # The historical wording survives only inside the sentence that withdraws
+    # it, so match the assertion, not the phrase.
+    for claim in (
+        "--sign` — the artefact this repository commits) binds none",
+        "A source tree's binding coverage is therefore not an\nattestation claim at all",
+    ):
+        assert claim not in security, (
+            f"SECURITY.md still asserts {claim!r}. The repair flow passes "
+            f"--bind-extensions (ama_cryptography/integrity.py), so it binds every "
+            f"extension beside the artefact."
+        )
+    assert (
+        "**Both** signing callers bind." in security
+    ), "SECURITY.md does not state the policy the code actually has"

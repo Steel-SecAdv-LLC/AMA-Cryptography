@@ -226,11 +226,11 @@ runtime so an operator can pin to scalar without rebuilding.
 | Primitive | Engineered path | Build / runtime gate | Speedup vs scalar | Reference |
 |-----------|-----------------|----------------------|------------------:|-----------|
 | Keccak-f[1600] (SHA3, SHAKE) | AVX-512 4-way (`vprolq` + `vpternlogq`, EVEX-encoded YMM, no ZMM in the hot path) | Build: `-DAMA_ENABLE_AVX512=ON` (default OFF). Runtime: `ama_cpuid_has_avx512_keccak()` (AVX-512F + VL + BW + DQ + XCR0 5+6+7) | ~1.6× over AVX2 4-way on Sapphire Rapids; falls back cleanly to AVX2 4-way otherwise | `docs/AVX512_KECCAK_ADR.md`, `src/c/avx512/ama_sha3_x4_avx512.c`, `tests/c/test_sha3_avx512_kat.c` |
-| Keccak-f[1600] (SHA3, SHAKE) | AVX2 4-way (Keccak-f[1600] across 4 SIMD lanes) | Build: default ON. Runtime: `ama_cpuid_has_avx2()` | ~3-4× over scalar Keccak | `src/c/avx2/ama_sha3_x4_avx2.c` |
-| AES-256-GCM | VAES + VPCLMULQDQ on YMM (4 blocks per AES round, 4-way GHASH reduction) | Build: default ON. Runtime: `ama_cpuid_has_vaes_aesgcm()` (VAES + VPCLMULQDQ + AVX2 + XCR0). Opt-out: `AMA_DISPATCH_NO_VAES=1` | ~1.5-2× at ≥4 KB messages on Ice Lake+ / Zen 4 | `src/c/avx2/ama_aes_gcm_vaes.c`, `tests/c/test_aes_gcm_vaes_equiv.c` |
+| Keccak-f[1600] (SHA3, SHAKE) | AVX2 4-way (Keccak-f[1600] across 4 SIMD lanes) | Build: default ON. Runtime: `ama_cpuid_has_avx2()` | ~3-4× over scalar Keccak | `src/c/avx2/ama_sha3_avx2.c` |
+| AES-256-GCM | VAES + VPCLMULQDQ on YMM (4 blocks per AES round, 4-way GHASH reduction) | Build: default ON. Runtime: `ama_cpuid_has_vaes_aesgcm()` (VAES + VPCLMULQDQ + AVX2 + XCR0). No env opt-out (unlike the ChaCha20 and Argon2 rows below); pin a different slot with `AMA_DISPATCH_ONLY` to A/B it | ~1.5-2× at ≥4 KB messages on Ice Lake+ / Zen 4 | `src/c/avx2/ama_aes_gcm_vaes_avx2.c`, `tests/c/test_aes_gcm_vaes_equiv.c` |
 | AES-256-GCM (S-box) | Bitsliced (tower field GF((2^4)^2)) — constant-time **default** | Build: `-DAMA_AES_CONSTTIME=ON` (default ON). Hardware fallback also available where AES-NI is present | n/a (correctness — eliminates cache-timing channel) | `src/c/ama_aes_bitsliced.c` |
-| ChaCha20-Poly1305 | 8-way AVX2 ChaCha20 block function (512 B keystream per kernel invocation) | Runtime: `ama_cpuid_has_avx2()`. Opt-out: `AMA_DISPATCH_NO_CHACHA_AVX2=1` | 2.11× at 1 KB, 2.24× at 4 KB, 2.29× at 64 KB; messages < 512 B stay on scalar | `src/c/avx2/ama_chacha20_x8_avx2.c`, `tests/c/test_chacha20poly1305.c` |
-| Argon2id | 4-way BlaMka G AVX2 (`_mm256_mul_epu32` for the multiplication-hardened add; `_mm256_permute4x64_epi64` for the diagonal pass) | Runtime: `ama_cpuid_has_avx2()`. Opt-out: `AMA_DISPATCH_NO_ARGON2_AVX2=1` | 1.31× at m=64 KiB, 1.34× at m=1 MiB | `src/c/avx2/ama_argon2_g_avx2.c`, `tests/c/test_argon2id.c` |
+| ChaCha20-Poly1305 | 8-way AVX2 ChaCha20 block function (512 B keystream per kernel invocation) | Runtime: `ama_cpuid_has_avx2()`. Opt-out: `AMA_DISPATCH_NO_CHACHA_AVX2=1` | 2.11× at 1 KB, 2.24× at 4 KB, 2.29× at 64 KB; messages < 512 B stay on scalar | `src/c/avx2/ama_chacha20poly1305_avx2.c`, `tests/c/test_chacha20poly1305.c` |
+| Argon2id | 4-way BlaMka G AVX2 (`_mm256_mul_epu32` for the multiplication-hardened add; `_mm256_permute4x64_epi64` for the diagonal pass) | Runtime: `ama_cpuid_has_avx2()`. Opt-out: `AMA_DISPATCH_NO_ARGON2_AVX2=1` | 1.31× at m=64 KiB, 1.34× at m=1 MiB | `src/c/avx2/ama_argon2_avx2.c`, `tests/c/test_argon2id.c` |
 | Ed25519 sign | Base-point comb table (radix-2^51 fe51 field arithmetic) | Default ON for x86-64 GCC/Clang (`fe51.h`) | Sign ~5× faster vs the previous scalar path on this host class | `src/c/ama_ed25519.c` (PR #261) |
 | Ed25519 verify | Width-5 wNAF + Shamir's trick (double-scalar-mult variable-time on public-only inputs) | Default ON for x86-64 GCC/Clang | Verify ~2× faster on this host class | `src/c/ama_ed25519.c` (PR #265) |
 | X25519 scalar-mult | fe64 schoolbook + MULX/ADCX/ADOX in-house inline assembly (4-limb radix-2^64 with dual-carry-chain interleave) | Build: per-file `-mbmi2 -madx`. Runtime: `ama_cpuid_has_x25519_mulx()` (BMI2 + ADX). Pure-C `fe64.h` is the fallback | ~21% over pure-C fe64 on the local sandbox; literature 1.8-2.2× on uncontended Skylake+ / Zen+ | `src/c/internal/ama_x25519_fe64_mulx.c`, `tests/c/test_x25519_fe64_mulx_equiv.c` |
@@ -268,7 +268,7 @@ python3 benchmarks/benchmark_suite.py
 python3 benchmarks/benchmark_runner.py -v
 ```
 
-Results are saved to `benchmark_results.json`, `BENCHMARKS.md`, and `benchmarks/regression_results.json`.
+`benchmark_suite.py` writes `benchmark_results.json` and `BENCHMARKS.md` in the working directory — the defaults of its `--json` and `--markdown` flags. `benchmark_runner.py` writes only what it is asked for: its `--output` (JSON) and `--markdown` flags have no defaults, so a plain `-v` run prints a summary and writes nothing.
 
 ---
 

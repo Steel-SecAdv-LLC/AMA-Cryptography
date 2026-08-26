@@ -84,7 +84,9 @@ all 50 applicable ACVP vectors. Non-normative differences:
 
 **Side-channel posture:** All secret-dependent operations use the
 constant-time helpers in `ama_consttime.c`. dudect regression tests are
-run under `tests/test_constant_time.py`.
+run from `tests/c/test_dudect.c` (built with `-DAMA_ENABLE_DUDECT=ON`) and the
+standalone harnesses under `tools/constant_time/`; the deterministic
+instruction-count counterpart is `tools/check_ghash_constant_time.py`.
 
 ---
 

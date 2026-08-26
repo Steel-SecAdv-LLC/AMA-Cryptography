@@ -531,18 +531,45 @@ signature failure, not a downgrade. The signer refuses to sign a tree
 containing an extension module outside its inventory, so a new binding
 cannot ship uncovered by omission.
 
-Two artefact states exist by design, because Cython extensions are
-per-interpreter and not reproducible across environments: the **wheel
-pipeline** (`--bind-extensions`) binds exactly the extensions shipped
-beside the artefact, and the **repair flow** (`integrity --update
---sign` — the artefact this repository commits) binds none, since a
-committed map of one machine's extension digests would read as a
-tampering verdict against every other machine's legitimately rebuilt
-extensions. A source tree's binding coverage is therefore not an
-attestation claim at all — source trees sit inside the checker-poisoning
-boundary, where in-process attestation of locally built artifacts adds
-no adversarial resistance. The binding guarantee is a shipped-wheel
-property, where it is exact-or-fatal.
+**Both** signing callers bind. `tools/resign_wheel.py` passes
+`--bind-extensions`, and so does the repair flow — `integrity --update
+--sign` sets it unconditionally before delegating to `_build_sign`
+(`ama_cryptography/integrity.py`). Only `_build_sign` invoked directly
+without the flag writes an empty map.
+
+An earlier revision of this paragraph said the opposite: that the repair
+flow "binds none, since a committed map of one machine's extension
+digests would read as a tampering verdict against every other machine's
+legitimately rebuilt extensions", and concluded that a source tree's
+binding coverage "is not an attestation claim at all". That was true of
+the revision it was written for and was inverted when the repair flow
+started binding too. It was inverted for a reason: `integrity --update
+--sign` is the exact command `_self_test._check_binding_extensions`
+prints as the remedy for "present but not covered by the signed
+artefact", and without the flag it wrote an empty map, changed the
+artefact hash, printed "bindings = 0 extension(s) bound", and reproduced
+the identical warning on the next import. The one instruction the failure
+message gave could not clear the condition it was given for. The same
+stale claim was corrected in `setup.py`'s comment and is pinned there by
+`tests/test_setup_signer_contract.py`.
+
+Binding is the correct scope for a repair artefact. It is local by
+construction — re-signed with this machine's ephemeral key, replacing
+whatever release signature the tree carried — so the "would read as a
+tampering verdict on another machine" objection describes copying a
+repaired tree elsewhere, where a mismatch is the accurate verdict and
+carries this same repair hint. It matches how the native library is
+already treated: rebuild it without re-signing and import fails closed,
+because the artefact names bytes that are no longer there.
+
+The artefact this repository commits carries an empty binding map, but
+not by policy: a source checkout ships no built extensions, so there are
+none to bind. Sign the same tree after building them and the map is
+populated — measured, six extensions on this platform. The binding
+guarantee remains exact-or-fatal in a shipped wheel, where the artefact
+and the extensions are produced by one pipeline; in a source tree a
+listed-but-missing or present-but-uncovered extension stays a logged
+warning on developer builds, per the severity split above.
 
 An earlier revision of this section recorded the gap as blocked on a
 release-pipeline change, on the claim that repair tools rewrite the

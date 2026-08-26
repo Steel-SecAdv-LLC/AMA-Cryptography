@@ -105,7 +105,7 @@ Hand-written SIMD implementations for all 8 core cryptographic algorithms across
 | SLH-DSA-SHA2-256f | `ama_sphincs_avx2.c` | 4-way parallel SHA-256 compression, vectorized WOTS+ chains, Merkle tree hashing |
 | SHA3/Keccak | `ama_sha3_avx2.c` | Keccak-f[1600] with vectorized theta/rho/pi/chi/iota, 4-way parallel hashing |
 | AES-256-GCM | `ama_aes_gcm_avx2.c` | Pipelined AES-NI (8 blocks), PCLMULQDQ GHASH with Karatsuba, interleaved CTR+GHASH |
-| Ed25519 | `ama_ed25519_avx2.c` | Vectorized radix-2^51 field arithmetic, 4-way parallel scalar multiplication |
+| X25519 (batch) | `ama_x25519_avx2.c` | 4-way Montgomery ladder (RFC 7748), radix-2^25.5 field arithmetic packed as 10 x `__m256i`. Opt-in (`AMA_DISPATCH_USE_X25519_AVX2=1`) and additive: only full 4-lane chunks of `ama_x25519_scalarmult_batch` reach it — `ama_x25519_key_exchange` and short batches stay on the scalar fe64/fe51 path. Ed25519 has no AVX2 translation unit at all; its fast path is the fe51 comb table in `src/c/ama_ed25519.c`. |
 | ChaCha20-Poly1305 | `ama_chacha20poly1305_avx2.c` | 8-way parallel quarter-rounds, vectorized Poly1305 with lazy reduction |
 | Argon2 | `ama_argon2_avx2.c` | Vectorized Blake2b compression, vectorized G function, parallel lane processing |
 
@@ -491,9 +491,12 @@ docker run --rm ama-cryptography
 Minimal production image:
 
 ```dockerfile
-FROM alpine:3.18
+FROM alpine:3.23
 # ~50MB final size
 ```
+
+`docker/Dockerfile.alpine` pins that base by `@sha256:` digest as well as by
+tag; see the file for the current digest.
 
 Build and run:
 ```bash
@@ -505,10 +508,14 @@ docker run --rm ama-cryptography:alpine
 
 Multi-service deployment:
 
+The compose file lives in `docker/`, and its `context: ..` and `../data`
+paths resolve relative to it, so pass it with `-f` from the repository root
+(or `cd docker` first):
+
 ```bash
-docker-compose up -d        # Start all services
-docker-compose down         # Stop all services
-docker-compose ps           # Check status
+docker compose -f docker/docker-compose.yml up -d     # Start all services
+docker compose -f docker/docker-compose.yml down      # Stop all services
+docker compose -f docker/docker-compose.yml ps        # Check status
 ```
 
 Services:
@@ -570,19 +577,34 @@ Tests:
 
 ### Security (`security.yml`)
 
+Jobs: Python Security Audit, SBOM Generation (CycloneDX), Secret Scanning, and
+the Security Gate that requires all three.
+
 Checks:
 - Dependency vulnerabilities (pip-audit)
 - Code security (bandit)
-- Static analysis
-- License compliance
+- Secret scanning
+- CycloneDX SBOM
 
-### Docker (`docker.yml`)
+Static analysis is a separate workflow, not part of this one:
+`static-analysis.yml` runs cppcheck, clang-tidy, the Clang Static Analyzer,
+CodeQL, the sanitizer lanes and the strict-warnings lanes. There is no
+license-compliance check in this repository — the only `License` string in
+`security.yml` is its own SPDX header.
 
-Builds:
-- Ubuntu-based images
-- Alpine-based images
-- Multi-architecture (amd64, arm64)
-- Security scanning
+### Docker (the `docker` job in `ci-build-test.yml`)
+
+There is no standalone Docker workflow file. The Docker build is a job inside
+`ci-build-test.yml`, and the Build and Test Gate requires it.
+
+Builds and smoke-tests two images on the runner's own architecture:
+- Ubuntu-based (`docker/Dockerfile`)
+- Alpine-based (`docker/Dockerfile.alpine`)
+
+It is **not** multi-architecture and runs **no** image scanner: the job sets
+no `platforms:`, installs no QEMU, and invokes no scanning action.
+`docker/Dockerfile.c-api` is not built in CI either — it is covered by the
+digest-pin, version-consistency, header and vendor-isolation gates instead.
 
 ## Performance Benchmarking
 

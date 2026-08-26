@@ -828,6 +828,232 @@ directives.  The examples are now spelled without the hash, with a note
 at the site saying why; the gate's verdict on all 276 Python files is
 byte-identical, and `ruff check .` is warning-free.
 
+#### A secure wipe sized in items, not bytes, left three quarters of the secret
+
+`secure_memzero` accepts a `bytearray` or a `memoryview`, and every native
+back-end sized its wipe with `len(data)`.  `len()` on a memoryview counts
+ITEMS, not bytes.  For a `bytearray`, and for the byte-format views this
+module is usually handed, the two agree — which is exactly why it went
+unnoticed.  `ctypes.from_buffer` accepts a length SMALLER than the buffer, so
+nothing raised.  Measured on `memoryview(array('I', [0xDEADBEEF] * 8))` — 8
+items, 32 bytes — the wipe cleared **8 bytes and returned normally, leaving 24
+of 32 secret bytes intact**.  A wipe that reports success while three quarters
+of the secret survives is worse than no wipe at all, because the caller stops
+worrying (INVARIANT-6).  `secure_mlock`/`secure_munlock` had the same defect
+with a different consequence: locking `len()` bytes of a wider buffer leaves
+the remaining pages swappable, so secret material could still reach disk.
+
+A `_byte_length` helper now sizes all six sites from `.nbytes`.  The pure-Python
+fallback was already correct and is untouched: it indexes items and assigns
+items, so it covered the whole buffer — meaning the wipe's completeness
+depended on which back-end was selected.  Non-contiguous views are now refused
+with `SecureMemoryError` rather than mis-wiped: a strided view's bytes are not
+the `nbytes` bytes at its address, so any address+length wipe clears memory the
+caller did not pass and misses memory it did.  `ctypes.from_buffer` already
+rejected them with `TypeError`; making it this module's own documented failure
+type also makes the refusal uniform across back-ends instead of
+back-end-dependent.  Twelve tests, seven of which fail against the old sizing.
+
+#### A rejected handshake kept the shared secret, and one wire field raised past the documented type
+
+`SecureChannelInitiator.complete_handshake` cleared `_shared_secret` and
+`_handshake_hash` in a block at the END of the method, reached only on success.
+Every failure path left the negotiated shared secret live in the initiator for
+the lifetime of the object — including the two paths that raise
+`HandshakeError` deliberately, a pinned-key mismatch and a failed signature.
+Measured: after a rejected handshake, `initiator._shared_secret is not None`.
+
+A peer could also reach a path that raised something else entirely.
+`HybridSignatureProvider.verify` splits the peer-supplied public key at a fixed
+offset and hands the tail to `MLDSAProvider.verify`, which returns
+`dilithium_verify(...)` with no exception handling, and that raises
+`ValueError` for any length other than 1952.  A responder returning a
+wrong-length `responder_public_key` therefore made `complete_handshake` raise a
+raw `ValueError` — not the documented `HandshakeError` — on input that arrives
+entirely over the wire, which a caller's `except HandshakeError` does not
+catch.  Reproduced end to end against a real responder: one byte short gives
+`ValueError: Invalid public key length: expected 1952, got 1951`.
+
+Completion now runs inside a handler that drops the handshake state on every
+exit: `HandshakeError` re-raised, `ValueError`/`TypeError` re-typed as the
+documented `HandshakeError`, and anything else — a key-derivation failure, an
+`OSError` from the native HKDF, an interrupt — re-raised unchanged after the
+same clear, because INVARIANT-6 is about exit paths and not about the exception
+types anticipated.  The channel moves to `CLOSED`, so a handshake that failed
+cannot be completed by a second attempt with a different response.  The
+responder has no counterpart defect: its shared secret is a local, never stored
+on the object.  Ten tests, eight of which fail against the old flow.
+
+#### Thirty-three of thirty-eight C prototypes in the wiki were wrong, and the dangerous ones compiled
+
+`wiki/C-API-Reference.md` is the page a C consumer reads before writing a line
+against this library, and nothing checked it against `include/ama_cryptography.h`.
+Four of the functions it named do not exist (`ama_random_bytes`,
+`ama_kyber_enc`, `ama_kyber_dec`, `ama_shake256_inc_ctx_release`) and ten of
+the macros do not either (the whole `AMA_DILITHIUM_*`, `AMA_KYBER_*` and
+`AMA_SPHINCS_*` size families), so the page's examples could not compile at
+all.  Those fail loudly.  The ones that compiled are the finding:
+
+* `ama_ed25519_keypair(uint8_t pk[32], uint8_t sk[32])` — the secret key is
+  **64** bytes (RFC 8032 expanded form, `AMA_ED25519_SECRET_KEY_BYTES`).  A
+  reader who sized that buffer from the wiki overflowed it by 32 bytes on every
+  keypair and every sign.
+* Both AEADs were documented as `(plaintext, pt_len, aad, aad_len, key, nonce,
+  ...)`.  The real order is `(key, nonce, plaintext, pt_len, aad, aad_len,
+  ...)`.  Every one of those parameters is a `const uint8_t *`, so a caller
+  following the wiki passes the plaintext where the key belongs and the
+  compiler says nothing.
+* `ama_dilithium_verify` and `ama_sphincs_verify` were documented signature-
+  first; the real order is message-first.  Also silent.
+* `ama_consttime_swap` and `ama_consttime_copy` were documented with
+  `condition` last; it is first.
+
+Every prototype on the page is regenerated from the header, including the
+return type (`ama_error_t`, not `int`) and the context type (`ama_sha3_ctx`,
+not `ama_sha3_ctx_t`/`ama_shake256incctx`).  The Random Number Generation
+section named a function that has never existed; the real entry point is
+`ama_randombytes`, and the page now says out loud that it is declared in
+`src/c/ama_platform_rand.h` and is **not** in the installed public header set,
+so an out-of-tree caller must declare it.  `wiki/Cryptography-Algorithms.md`
+had drifted the same way on the Argon2id legacy shim (`p_cost` for
+`parallelism`, `out` for `output`) and is corrected too.
+
+`tests/test_documented_c_prototypes_match_headers.py` is the gate: every
+prototype-shaped declaration in a ```c fence, in every tracked `.md` file, must
+match a header declaration verbatim after whitespace normalisation — parameter
+names included, because a reader copying `uint8_t sk[32]` is copying a claim
+about size.  A second, independent test feeds the page's own declarations to a
+C compiler after the real header, so a conflicting redeclaration is a hard
+error rather than a diff the parser has to notice.  Both fail on the reverted
+`ama_ed25519_keypair`.
+
+#### SECURITY.md still carried a claim setup.py had already withdrawn
+
+SECURITY.md's "Two artefact states exist by design" paragraph said the repair
+flow — `integrity --update --sign` — "binds none", and concluded that a source
+tree's binding coverage "is not an attestation claim at all".  The CHANGELOG's
+own 5.0.0 entry says the opposite ("every build signs and binds, including the
+repair flow"), and the code agrees with the CHANGELOG: `integrity.py` sets
+`--bind-extensions` unconditionally before delegating to `_build_sign`.  The
+identical stale claim was found and corrected in `setup.py`'s comment, and
+`tests/test_setup_signer_contract.py` pins it there — SECURITY.md was simply
+not covered.
+
+Why it was inverted is on the record in `integrity.py`: `integrity --update
+--sign` is the exact command `_self_test._check_binding_extensions` prints as
+the remedy for "present but not covered by the signed artefact", and without
+the flag it wrote an empty map, printed "bindings = 0 extension(s) bound", and
+reproduced the identical warning on the next import — the one instruction the
+failure message gave could not clear the condition it was given for.  The
+paragraph now states the policy the code has, records the withdrawn claim
+rather than quietly deleting it, and explains the empty map the repository
+commits: a source checkout ships no built extensions, so there are none to
+bind.  Measured on a built tree here, the same command binds six.  The gate in
+`test_setup_signer_contract.py` now covers SECURITY.md as well, and fails on
+the reverted wording.
+
+#### Twelve documented source paths that did not exist, seven of them genuine
+
+`tools/check_documented_counts.py` verifies the NUMBERS in the documentation
+and says nothing about the file names beside them, so a renamed or imagined
+source file could sit in a document indefinitely — and did.  Measured across
+the 56 tracked `.md` files (`CHANGELOG.md` excluded as a historical record):
+215 distinct cited source paths, 12 of which did not resolve.  Five are
+run-produced outputs and one quoted placeholder; the other seven were wrong.
+`wiki/Performance-Benchmarks.md` cited four AVX2 kernels by names no file has
+ever had — the "Reference" column a reader consults to find the kernel behind a
+number — and promised results in `benchmarks/regression_results.json`, which
+nothing writes (`benchmark_runner.py`'s `--output` has no default, so a plain
+`-v` run writes nothing at all; `benchmark_suite.py`'s `--json`/`--markdown`
+do).  The same table credited AES-GCM VAES with an `AMA_DISPATCH_NO_VAES`
+opt-out that does not exist — the three that do are `AMA_DISPATCH_NO_AUTOTUNE`,
+`AMA_DISPATCH_NO_CHACHA_AVX2` and `AMA_DISPATCH_NO_ARGON2_AVX2`.
+`src/c/PROVENANCE.md` stated that the dudect regression tests "are run under
+`tests/test_constant_time.py`", a file that does not exist, in the document
+that records the side-channel posture of the vendored C sources.
+`INVARIANTS.md` cited `tests/c/test_ed25519_canonical_y.c`, which never
+existed.  `tests/test_documented_source_paths_exist.py` enforces the rule with
+a non-vacuity guard on both the file list and the citation count, and an
+allowlist whose every entry names the command that writes the path.
+
+#### Two more documented files that never existed, and the gate that could not see them
+
+The path gate above only sees a citation spelled with its directory, and two
+of this repository's were not.  `ENHANCED_FEATURES.md`'s AVX2 table credited
+Ed25519 with a kernel file, `ama_ed25519_avx2.c`, that has never existed —
+Ed25519 has no AVX2 translation unit at all, and the AVX2 curve kernel in that
+directory is `ama_x25519_avx2.c`, a 4-way X25519 Montgomery ladder that is
+opt-in (`AMA_DISPATCH_USE_X25519_AVX2=1`) and reached only by full 4-lane
+chunks of `ama_x25519_scalarmult_batch`.  The row is now the kernel that is
+actually there.  The same file's CI section documented a `docker.yml`
+workflow; there is no such file, the Docker build is a job inside
+`ci-build-test.yml`, and the section also claimed multi-architecture builds
+and security scanning that the job does not do — it sets no `platforms:`,
+installs no QEMU, and invokes no scanner.  Its Security section claimed a
+license-compliance check that exists nowhere in the repository, and
+attributed static analysis to `security.yml` when that is a separate workflow.
+All corrected to what the workflows run, with the license gap stated rather
+than dropped.
+
+Two more from the same sweep.  The Alpine image was documented as
+`alpine:3.18` against a digest-pinned `alpine:3.23` — and the provenance is
+`tools/check_docker_pins.py` itself, whose end-of-support half is what forced
+that bump; the document simply kept printing the base the project had already
+left.  `tests/test_docker_pins_gate.py` now compares them: every `FROM` line a
+tracked document shows must name a base one of the tracked Dockerfiles
+actually uses, with non-vacuity guards on both corpora.  It fails when
+`alpine:3.18` is put back.  And both this file and `README.md` gave
+`docker-compose up -d` as a repository-root command when the compose file
+lives in `docker/` — its `context: ..` and `../data` paths resolve relative to
+that directory, so the working invocation is
+`docker compose -f docker/docker-compose.yml`.
+
+`tests/test_documented_source_paths_exist.py` now also checks bare filenames
+by basename against `git ls-files`, with a `NOT_IN_TREE` allowlist whose ten
+entries each say which kind of non-file they are: runtime artefacts
+(`.kdf_metadata.json`, `CRYPTO_PACKAGE.json`, `seed.txt`), run-produced
+outputs, an external Windows SDK header, an upstream ACVP artefact, and one
+deliberate historical reference that the citing sentence itself dates.  The
+new property caught both real defects on its first run — and then caught the
+corrections, which had spelled the non-existent names in backticks while
+denying them.
+
+Negative results from the same sweep, recorded because they were checked: all
+83 documented Python import names resolve, all 30 documented dotted
+`ama_cryptography.*` paths resolve, all 18 documented script/flag pairs exist,
+66 of 68 documented `AMA_*` identifiers appear in the tree (the two that do
+not are the shorthand macro families the C API page names in order to deny
+them), all 43 invariants are defined and all 42 cited ones resolve, and the
+"15 libFuzzer entry points against 16 `fuzz_*.c` files" discrepancy is not one
+— `fuzz_rng.c` is a support translation unit, which `check_documented_counts.py`
+already distinguishes by name.
+#### Two gates the ML-DSA invNTT fix broke, repaired with measurement rather than assertion
+
+The three `dil_*_reduce` calls added above tripped two gates that pin against
+`ama_dilithium.c`.  `.cppcheck-suppressions` pins by exact line, and the +137
+lines moved the `w1_packed` uninitvar site from 2219 to 2355; re-pinned, and
+verified in both directions — the full CI invocation exits 0 with no findings,
+and with the dilithium line removed cppcheck reports the warning at 2355:51
+exactly.  `check_baseline_justification.py` refuses an extended validity window
+when floored code changed after the calibration commit, so both baselines carry
+a `floor_drift_acknowledged` entry.  Wall-clock could not resolve the change on
+this host — an interleaved best-of-6 A/B put the untouched `dilithium_verify`
+at −4.09% against a 9.9–12.9% run-to-run spread — so the figures are callgrind
+instruction counts with the per-op cost isolated as `(Ir at n=20 − Ir at n=4) /
+16`, cancelling process startup and the FIPS 140-3 POST exactly:
+`dilithium_keygen` 1,552,881 → 1,557,464 Ir (+0.295%), `dilithium_sign`
+5,413,012 → 5,435,056 Ir (+0.407%), and the control `dilithium_verify`
+1,577,424 → 1,577,424 Ir (−0.6 instructions, the instrument's resolution).  The
+sign-to-keygen delta ratio is 4.81, matching the mean ML-DSA-65
+rejection-attempt count.  For AArch64, per-symbol disassembly under
+`aarch64-linux-gnu-gcc -O3 -mbranch-protection=standard` leaves 42 of 47
+symbols instruction-identical after branch-target normalisation, the four that
+changed are the three functions holding the new call sites plus gcc's constprop
+clone of the signing one, and the fifth delta is a single alignment `nop`.  The
+benchmarked operation is unchanged: over 64 deterministic seeds the public key,
+secret key, signature and pubkey-from-privkey output are byte-identical between
+the two builds and every signature verifies.
+
 ### Debt-closure pass, eleventh (2026-08-22) — the 25 findings an independent audit left standing, and what closing them found
 
 An independent audit read all 302 non-corpus changed files of this branch's

@@ -2098,8 +2098,8 @@ encodings, which the Ed25519 backend-differential job depends on.
 **Not a constant-time requirement.** The `y` coordinate arrives in a public
 key and is public. The comparison is branch-free regardless.
 
-**Verification.** `tests/c/test_ed25519_canonical_y.c`-style coverage lives in
-`tests/c/test_ed25519_canonical_s.c` alongside the `S < L` cases: the full
+**Verification.** The canonical-`y` coverage lives in
+`tests/c/test_ed25519_canonical_s.c`, alongside the `S < L` cases: the full
 19-value band, the `p-1` / `p` boundary, sign-bit independence in both
 directions, and integration assertions through single and batch verify.
 `tests/test_ed25519_canonical_y.py` drives the policy through the Python

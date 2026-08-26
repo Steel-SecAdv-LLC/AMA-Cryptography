@@ -932,12 +932,73 @@ class SecureChannelInitiator:
             Established SecureSession for encrypted communication
 
         Raises:
-            HandshakeError: If signature verification fails
+            HandshakeError: If signature verification fails, or if any field of
+                ``response`` is malformed.  Every field arrives over the wire,
+                so a malformed one must surface as the type this method
+                documents — see ``_abandon_handshake`` for what went wrong when
+                it did not.
             ChannelError: If not in HANDSHAKE_SENT state
         """
         if self._state != ChannelState.HANDSHAKE_SENT:
             raise ChannelError(f"Cannot complete handshake in state {self._state}")
 
+        try:
+            return self._complete_handshake_inner(response)
+        except HandshakeError:
+            # Documented failure: still an abandoned handshake, and the state
+            # below must go with it.
+            self._abandon_handshake()
+            raise
+        except (ValueError, TypeError) as exc:
+            # An undocumented type escaping from a peer-supplied field.
+            self._abandon_handshake()
+            raise HandshakeError(f"Malformed handshake response from the peer: {exc}") from exc
+        except BaseException:
+            # Anything else — a key-derivation failure, an OSError from the
+            # native HKDF, an interrupt landing between the signature check and
+            # the state clear.  INVARIANT-6 is about exit paths, not about the
+            # exception types we happened to anticipate, so the secret is
+            # dropped here too.  Re-raised unchanged: only the two peer-data
+            # cases above are re-typed, because only those are the peer's doing.
+            self._abandon_handshake()
+            raise
+
+    def _abandon_handshake(self) -> None:
+        """Drop handshake state after a failed ``complete_handshake``.
+
+        Every failure path used to leave it in place.  The block that clears
+        ``_shared_secret`` and ``_handshake_hash`` sat at the END of
+        ``complete_handshake``, reached only on success, so a rejected
+        handshake left the negotiated shared secret live in the initiator for
+        the lifetime of the object — including on the two paths that raise
+        ``HandshakeError`` deliberately (a pinned-key mismatch and a failed
+        signature).  Measured: after a rejected handshake,
+        ``initiator._shared_secret is not None``.
+
+        A peer could also reach a path that raised something else entirely.
+        ``HybridSignatureProvider.verify`` splits the peer-supplied public key
+        at a fixed offset and hands the tail to ``MLDSAProvider.verify``, which
+        returns ``dilithium_verify(...)`` with no exception handling, and that
+        raises ``ValueError`` for any length other than 1952.  So a responder
+        returning a wrong-length ``responder_public_key`` made
+        ``complete_handshake`` raise a raw ``ValueError`` — not the documented
+        ``HandshakeError`` — which a caller's ``except HandshakeError`` does not
+        catch.  Reproduced end to end against a real responder: one byte short
+        gives ``ValueError: Invalid public key length: expected 1952, got 1951``
+        and leaves the shared secret live.
+
+        ``_shared_secret`` is ``bytes`` and cannot be wiped in place; dropping
+        the reference is what the success path does and is all that is
+        available here.  The channel moves to CLOSED rather than back to
+        HANDSHAKE_SENT: a handshake that failed must not be completable by a
+        second attempt with a different response.
+        """
+        self._shared_secret = None
+        self._handshake_hash = None
+        self._state = ChannelState.CLOSED
+
+    def _complete_handshake_inner(self, response: HandshakeResponse) -> SecureSession:
+        """The handshake completion proper; see :meth:`complete_handshake`."""
         from ama_cryptography.crypto_api import HybridSignatureProvider
 
         sig_provider = HybridSignatureProvider()

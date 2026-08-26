@@ -328,14 +328,14 @@ verify stored tags without forking the old code.
 ama_error_t ama_argon2id_legacy(
     const uint8_t *password, size_t pwd_len,
     const uint8_t *salt,     size_t salt_len,
-    uint32_t t_cost, uint32_t m_cost, uint32_t p_cost,
-    uint8_t *out, size_t out_len);
+    uint32_t t_cost, uint32_t m_cost, uint32_t parallelism,
+    uint8_t *output, size_t out_len);
 
 /* Constant-time compare expected_tag against the legacy derivation. */
 ama_error_t ama_argon2id_legacy_verify(
     const uint8_t *password, size_t pwd_len,
     const uint8_t *salt,     size_t salt_len,
-    uint32_t t_cost, uint32_t m_cost, uint32_t p_cost,
+    uint32_t t_cost, uint32_t m_cost, uint32_t parallelism,
     const uint8_t *expected_tag, size_t tag_len);
 ```
 

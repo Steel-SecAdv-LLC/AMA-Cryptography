@@ -11,11 +11,20 @@ exercised on purpose-built input as well as on the real tree.
 
 The end-of-support half is checked against an injected date rather than the
 system clock: a test that passes only until some future morning is not a test.
+
+A third property lives here because this gate is what moved the base: when
+``alpine:3.18`` was bumped to ``alpine:3.23`` for end-of-support,
+``ENHANCED_FEATURES.md`` kept printing ``FROM alpine:3.18`` in its "Alpine-based
+Image" example. Nothing compared the two, so the document went on describing a
+base the project had already left. Every ``FROM`` line a tracked document shows
+must now name a base one of the tracked Dockerfiles actually uses.
 """
 
 from __future__ import annotations
 
 import datetime as _dt
+import re as _re
+import subprocess as _subprocess
 from pathlib import Path
 
 import pytest
@@ -248,3 +257,70 @@ class TestScopeAndFailClosed:
         empty.mkdir()
         monkeypatch.setattr(gate, "REPO_ROOT", empty)
         assert gate.main([]) == 2
+
+
+class TestDocumentedBaseImagesMatchTheDockerfiles:
+    """A ``FROM`` line in a document is a claim about a Dockerfile in this tree."""
+
+    _FROM = _re.compile(r"^\s*FROM\s+([A-Za-z0-9_./:-]+)", _re.M)
+
+    @staticmethod
+    def _tracked(pattern: str) -> list[Path]:
+        out = _subprocess.run(
+            ["git", "ls-files", pattern],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.split()
+        return [REPO_ROOT / f for f in out]
+
+    @classmethod
+    def _real_bases(cls) -> set[str]:
+        bases: set[str] = set()
+        for name in ("Dockerfile*", "*/Dockerfile*", "*/*/Dockerfile*"):
+            for path in cls._tracked(name):
+                text = path.read_text(encoding="utf-8", errors="replace")
+                for base in cls._FROM.findall(text):
+                    bases.add(base.split("@", 1)[0])
+        return bases
+
+    @classmethod
+    def _documented(cls) -> dict[Path, set[str]]:
+        found: dict[Path, set[str]] = {}
+        for doc in cls._tracked("*.md"):
+            if doc.name == "CHANGELOG.md":  # historical record; see the path gate
+                continue
+            text = doc.read_text(encoding="utf-8", errors="replace")
+            for base in cls._FROM.findall(text):
+                # A stage reference (``FROM builder``) is not an image claim.
+                if ":" not in base and "/" not in base:
+                    continue
+                found.setdefault(doc, set()).add(base.split("@", 1)[0])
+        return found
+
+    def test_the_dockerfile_corpus_is_not_empty(self) -> None:
+        """Non-vacuity: an empty base set would make the comparison pass on anything."""
+        bases = self._real_bases()
+        assert len(bases) >= 3, f"only {len(bases)} base images found across the Dockerfiles"
+
+    def test_at_least_one_document_shows_a_base_image(self) -> None:
+        """Non-vacuity: if the pattern stopped matching, nothing would be checked."""
+        documented = self._documented()
+        assert documented, "no document shows a FROM line; the pattern has stopped matching"
+
+    def test_every_documented_base_is_one_the_tree_uses(self) -> None:
+        real = self._real_bases()
+        problems: list[str] = []
+        for doc, bases in sorted(self._documented().items()):
+            for base in sorted(bases):
+                if base not in real:
+                    problems.append(f"{doc.relative_to(REPO_ROOT)}: FROM {base}")
+        assert not problems, (
+            "these documents show a base image no tracked Dockerfile uses:\n"
+            + "".join(f"    {p}\n" for p in problems)
+            + f"  Bases in the tree: {sorted(real)}\n"
+            "  ENHANCED_FEATURES.md kept printing FROM alpine:3.18 after this very "
+            "gate forced the bump to 3.23. Update the document, or stop showing a "
+            "version it does not track."
+        )
