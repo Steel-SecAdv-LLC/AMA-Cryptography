@@ -413,6 +413,9 @@ static const char *const AMA_DISPATCH_ONLY_SLOTS[] = {
     "aes-gcm-neon",
     "chacha20-neon",
     "sha3-neon",
+    "kyber-ntt-neon",
+    "dilithium-ntt-neon",
+    "argon2-g-neon",
     "kyber-sve2",
     "sha3-sve2",
     "x25519-avx2",
@@ -562,6 +565,71 @@ static apply_dispatch_only_result_t apply_dispatch_only(
         if (ama_has_arm_neon()) {
             dispatch_table.keccak_f1600 = ama_keccak_f1600_neon;
             *resolved_label_out = "sha3-neon";
+            return AMA_DISPATCH_ONLY_HONORED;
+        }
+        return AMA_DISPATCH_ONLY_UNSUPPORTED;
+    }
+    /* The ML-KEM NTT, ML-DSA NTT and Argon2-G NEON kernels.
+     *
+     * These three ship in every AArch64 build and every arm64 wheel, and until
+     * these branches existed they could not be pinned — so the nightly dudect
+     * SIMD sweep could not measure them even in principle, and
+     * CONSTANT_TIME_VERIFICATION.md carried them as an open coverage gap.  The
+     * gap was a missing dispatch name, not a hardware limit: the hosted
+     * `ubuntu-24.04-arm` runners execute NEON natively and already run the
+     * three NEON slots above.
+     *
+     * Each resolves the way `sha3-neon` does rather than the way the AVX2 and
+     * SVE2 branches do, and the difference is not cosmetic.  Those branches
+     * ask `saved.<slot> == <kernel>` — "did this build+host wire that kernel
+     * by default" — which is the right question only where the kernel's
+     * presence is conditional (AVX2 on an x86-64 host, FEAT_AES+FEAT_PMULL for
+     * `aes-gcm-neon`, SVE2 silicon).  For these three it is the wrong
+     * question, in two reachable configurations:
+     *
+     *   - On an SVE2 build running on SVE2 silicon, `kyber_ntt` and
+     *     `dilithium_ntt` have already been overwritten with the SVE2 kernels
+     *     by the time apply_dispatch_only() runs, so a `saved ==` test can
+     *     never match and the slot would answer UNSUPPORTED — with a
+     *     diagnostic blaming the CPU or the build, both false.  That is
+     *     exactly the defect recorded above this line for `sha3-neon`, and
+     *     the SVE2 configuration is where pinning the NEON tier is *most*
+     *     useful, since it is the only way to A/B the two tiers on one host.
+     *   - `argon2_g` is left NULL when `AMA_DISPATCH_NO_ARGON2_AVX2=1` is set,
+     *     and any of the three may be demoted by the auto-tune microbench on
+     *     a noisy host.  A pin exists precisely to override the default
+     *     selection, so neither is a reason to refuse it.
+     *
+     * AdvSIMD is architecturally mandatory on AArch64 (`ama_has_arm_neon()`
+     * always returns 1 there) and these kernels are compiled whenever this
+     * branch is, so the check is the honest one: the kernel exists, wire it.
+     * The companion slots pinned alongside each NTT mirror the set the default
+     * NEON wiring assigns together, so a pinned table is a subset of a real
+     * one rather than a mixture no dispatch path produces. */
+    if (strcmp(slot, "kyber-ntt-neon") == 0) {
+        if (ama_has_arm_neon()) {
+            dispatch_table.kyber_ntt       = ama_kyber_ntt_neon;
+            dispatch_table.kyber_invntt    = ama_kyber_invntt_neon;
+            dispatch_table.kyber_pointwise = ama_kyber_poly_pointwise_neon;
+            *resolved_label_out = "kyber-ntt-neon";
+            return AMA_DISPATCH_ONLY_HONORED;
+        }
+        return AMA_DISPATCH_ONLY_UNSUPPORTED;
+    }
+    if (strcmp(slot, "dilithium-ntt-neon") == 0) {
+        if (ama_has_arm_neon()) {
+            dispatch_table.dilithium_ntt       = ama_dilithium_ntt_neon;
+            dispatch_table.dilithium_invntt    = ama_dilithium_invntt_neon;
+            dispatch_table.dilithium_pointwise = ama_dilithium_poly_pointwise_neon;
+            *resolved_label_out = "dilithium-ntt-neon";
+            return AMA_DISPATCH_ONLY_HONORED;
+        }
+        return AMA_DISPATCH_ONLY_UNSUPPORTED;
+    }
+    if (strcmp(slot, "argon2-g-neon") == 0) {
+        if (ama_has_arm_neon()) {
+            dispatch_table.argon2_g = ama_argon2_g_neon;
+            *resolved_label_out = "argon2-g-neon";
             return AMA_DISPATCH_ONLY_HONORED;
         }
         return AMA_DISPATCH_ONLY_UNSUPPORTED;

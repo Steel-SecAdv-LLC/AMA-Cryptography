@@ -45,13 +45,22 @@ static inline int16_t montgomery_reduce_scalar(int32_t a) {
 /* ============================================================================
  * Scalar Barrett reduction (for sub-register fallback paths)
  *
- * Reduces a mod q for values up to 2^26.
- * Matches the generic C implementation in ama_kyber.c.
+ * Domain is the whole int16_t range.  This block used to say "values up to
+ * 2^26", which names a domain the parameter type cannot express — 2^26 does
+ * not fit an int16_t.  The 2^26 is the scaling constant of the reciprocal
+ * (`v = round(2^26 / q)`), not an input bound; the sentence came from
+ * ama_kyber.c, where it has also been corrected.
  * ============================================================================ */
 static inline int16_t barrett_reduce_scalar(int16_t a) {
-    /* Same int32-accumulator form as ama_kyber.c's barrett_reduce: t lies in
-     * [-10, 9] and a - t*q within (-2q, 2q) over the full int16_t domain, so
-     * the narrowing cast is value-preserving (exhaustively verified).  The
+    /* Same int32-accumulator form as ama_kyber.c's barrett_reduce, and the
+     * same measured bounds: t lies in [-10, 9] and the result in [0, q] over
+     * the full int16_t domain — exhaustively verified, so the narrowing cast
+     * is value-preserving.  q itself is attained, at the nine inputs that are
+     * exact negative multiples of q from -3329 to -29961; negative outputs
+     * are not, because the truncating shift floors toward -infinity and
+     * always undershoots the quotient.  (This comment used to bound the
+     * result at (-2q, 2q) — true, but 4x loose and admitting a sign the
+     * formula cannot produce.)  The
      * old int16_t-accumulator form was the exact -Wconversion pattern fixed
      * in the generic and AVX2 twins — latent here only because no ARM lane
      * compiles with -Wconversion. */

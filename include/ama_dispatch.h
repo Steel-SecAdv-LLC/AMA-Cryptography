@@ -409,6 +409,9 @@ AMA_API const char *ama_aes_gcm_active_backend(void);
  *   "aes-gcm-neon"         — aes_gcm_encrypt / decrypt -> ARMv8 AES + PMULL
  *   "chacha20-neon"        — chacha20_block_x8 -> NEON
  *   "sha3-neon"            — keccak_f1600 -> NEON
+ *   "kyber-ntt-neon"       — kyber_ntt / invntt / pointwise -> NEON
+ *   "dilithium-ntt-neon"   — dilithium_ntt / invntt / pointwise -> NEON
+ *   "argon2-g-neon"        — argon2_g -> NEON BlaMka
  *   "kyber-sve2"           — kyber_ntt / invntt / pointwise / poly_{add,sub,reduce} -> SVE2
  *   "sha3-sve2"            — keccak_f1600 -> SVE2
  *   "x25519-avx2"          — x25519_x4 -> AVX2 4-way ladder

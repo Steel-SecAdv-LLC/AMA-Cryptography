@@ -37,16 +37,26 @@ static inline int32x4_t mullo_s32(int32x4_t a, int32x4_t b) {
     return vreinterpretq_s32_u32(vmulq_u32(vreinterpretq_u32_s32(a), vreinterpretq_u32_s32(b)));
 }
 
-/* ============================================================================
- * NEON Barrett reduction for Dilithium (q = 8380417)
- * ============================================================================ */
-static inline int32x4_t barrett_reduce_dil_neon(int32x4_t a) {
-    const int32x4_t q = vdupq_n_s32(DILITHIUM_Q);
-    /* t = round(a / q) approximated via arithmetic shift */
-    int32x4_t t = vshrq_n_s32(a, 23);
-    t = mullo_s32(t, q);               /* t * q (low 32 bits; see mullo_s32) */
-    return vsubq_s32(a, t);
-}
+/* There is deliberately no NEON Barrett reduction here.
+ *
+ * A `barrett_reduce_dil_neon` used to sit at this point, unreferenced by any
+ * translation unit in the repository — `static inline` with no caller, which
+ * is the one shape neither gcc nor clang warns about, so nothing surfaced it.
+ * It was also wrong: it computed `t = a >> 23; return a - t*q`, omitting the
+ * `+ (1 << 22)` rounding term that `dil_reduce32` in src/c/ama_dilithium.c
+ * carries.  Measured against that scalar reference over 400,000 values drawn
+ * from [-5q, 5q], it disagreed on 50.0% of them and returned |result| >= q on
+ * 0.1% — up to 1.004q.  A routine that can return a value at or above q is
+ * not a reduction, and dead-but-plausible arithmetic is worse than none: the
+ * next author to need a vector reduction here would have wired it.
+ *
+ * The NEON ML-DSA kernels below need no Barrett step.  They reduce through
+ * `montgomery_reduce_dil_neon`, exactly as the scalar and AVX2 ML-DSA paths
+ * do, and the canonicalisation the callers need is `dil_poly_reduce` /
+ * `dil_polyveck_reduce` on the scalar side.  If a vector Barrett is ever
+ * wanted, it must be written to match `dil_reduce32` and pinned by an
+ * equivalence test, the way `tests/c/test_dilithium_ntt_equiv.c` pins the NTT.
+ */
 
 /* ============================================================================
  * Conditional add q (reduce to [0, q))

@@ -2422,7 +2422,16 @@ static int16_t montgomery_reduce(int32_t a) {
 
 /**
  * Barrett reduction
- * Reduces a mod q for values up to 2^26
+ *
+ * Domain is the whole `int16_t` range and the image is [0, q] — both
+ * exhaustively verified over all 65,536 inputs; see the body comment for the
+ * intermediate bounds and for the nine inputs at which q itself is attained.
+ *
+ * This header used to read "reduces a mod q for values up to 2^26", which
+ * named a domain the parameter type cannot express: 2^26 does not fit an
+ * int16_t, so no caller could ever supply such a value.  The 2^26 is the
+ * scaling constant of the reciprocal (`v = round(2^26 / q)`), not an input
+ * bound, and the two SIMD copies of this routine inherited the same sentence.
  */
 static int16_t barrett_reduce(int16_t a) {
     /* All intermediates in int32: v*a is at most 20159 * 32768 < 2^31, the

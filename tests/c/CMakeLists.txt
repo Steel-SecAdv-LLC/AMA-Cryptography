@@ -56,6 +56,9 @@ foreach(slot
     aes-gcm-neon
     chacha20-neon
     sha3-neon
+    kyber-ntt-neon
+    dilithium-ntt-neon
+    argon2-g-neon
     kyber-sve2
     sha3-sve2)
     add_test(NAME test_dispatch_only_${slot}
@@ -357,6 +360,17 @@ if(AMA_USE_NATIVE_PQC)
     # by design — generic inline path is exercised elsewhere by
     # test_kat / test_kyber_cpa).
     set_tests_properties(test_kyber_cbd2_equiv PROPERTIES SKIP_RETURN_CODE 77)
+    # The ML-DSA inverse NTT does not reduce the additive half of its
+    # butterfly, so the accumulating coefficient's bound doubles at each of its
+    # 8 levels and the structural worst case is 256x the input bound.  |input|
+    # < q is therefore a real precondition (256q is 0.1% under INT32_MAX), and
+    # it belongs to the CALL SITES rather than to the transform.  Three sites
+    # feed an l-fold accumulator bounded by nothing tighter than l*q and each
+    # reduces first; dropping one leaves every signature verifying and every
+    # KAT passing, changing only the overflow margin.  Unconditional, and
+    # never a SKIP: it reads a counter maintained at the dispatch wrapper, so
+    # it holds for whichever kernel this host runs.
+    add_ama_test(test_dilithium_invntt_bound test_dilithium_invntt_bound.c)
     add_ama_test(test_dilithium_ntt_equiv test_dilithium_ntt_equiv.c)
     set_tests_properties(test_dilithium_ntt_equiv PROPERTIES SKIP_RETURN_CODE 77)
     add_ama_test(test_dilithium_rej_equiv test_dilithium_rej_equiv.c)

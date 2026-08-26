@@ -184,4 +184,41 @@ int ama_build_optimization_probe(void);
  */
 void ama_ascon_permutation_for_test(uint64_t state[5], unsigned rounds);
 
+/* --- src/c/ama_dilithium.c ---------------------------------------------- */
+
+/**
+ * Reset / read the largest |coefficient| observed at any ML-DSA inverse-NTT
+ * entry on this thread.
+ *
+ * The inverse NTT does not reduce the additive half of its butterfly, so the
+ * bound on the accumulating coefficient doubles at each of its 8 levels and
+ * the structural worst case is 256x the input bound.  |input| < q is
+ * therefore a real precondition — 256q is 0.1% under INT32_MAX — and it is a
+ * precondition of the CALL SITES, which the transform cannot enforce on
+ * itself.  Three sites in this file feed an l-fold accumulator (keygen, the
+ * secret-key consistency check, and w = A*NTT(y) in signing), bounded by
+ * nothing tighter than l*q, and each reduces first for exactly this reason.
+ *
+ * Dropping one of those reductions is invisible to every functional test:
+ * signatures still verify and every KAT still passes, because the transform
+ * is linear modulo q and the results are reduced downstream — only the
+ * overflow margin changes.  This counter makes it observable, and
+ * `tests/c/test_dilithium_invntt_bound.c` asserts it stays under q across
+ * keygen, signing and verification.
+ *
+ * Thread-local, so a parallel ctest run cannot make one test observe
+ * another's arithmetic.  Maintained only under `AMA_TESTING_MODE`, which
+ * CMake sets PRIVATE on `ama_cryptography_test`; the shipped libraries carry
+ * neither the counter nor the loop that maintains it.
+ *
+ * The accumulator is DISARMED until `..._reset()` is called.  The same archive
+ * is linked by `tests/c/test_dudect.c`, whose `ML-DSA-65 sign` lane runs
+ * through this path, and the accumulator's inner comparison branches on a
+ * secret-derived magnitude; unconditional, it would put a data-dependent
+ * branch inside a lane that exists to prove there is none.  A dudect binary
+ * never calls `..._reset()`, so the loop never runs there.
+ */
+void ama_dilithium_test_invntt_bound_reset(void);
+int32_t ama_dilithium_test_invntt_bound_get(void);
+
 #endif /* AMA_TESTING_EXPORTS_H */
