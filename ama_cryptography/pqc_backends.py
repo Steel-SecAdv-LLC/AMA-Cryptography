@@ -4951,8 +4951,48 @@ def native_ed25519_sign(message: bytes, secret_key: Union[bytes, bytearray]) -> 
     return bytes(sig_buf)
 
 
+def _binding_imports_permitted() -> bool:
+    """May this process import a Cython binding extension?
+
+    Only if the native library was verified and loaded first — and this is a
+    memory-safety gate, not a convenience check.
+
+    Every one of the five binding extensions carries
+    ``DT_NEEDED [libama_cryptography.so.5]`` and
+    ``RUNPATH [$ORIGIN:...]`` (verified with ``readelf -dW``).  Importing one
+    therefore makes the dynamic loader map ``libama_cryptography.so.5`` out of
+    the package directory, and a shared object runs its ELF constructors the
+    moment it is mapped.  The loader performs no digest check; it cannot.
+
+    ``_find_native_library`` exists to make sure that never happens to an
+    unverified object: it opens the candidate, hashes the bytes, and loads it
+    through ``/proc/self/fd/N`` so the bytes mapped are the bytes hashed, and
+    on a mismatch it refuses and returns ``None`` **without mapping** — the
+    refusal message says exactly that.
+
+    The probes below then ran unconditionally, so on the refusal path the
+    package imported ``ed25519_binding`` a few statements later and the loader
+    mapped the very object that had just been rejected.  Measured, with one
+    byte flipped in the in-package ``libama_cryptography.so.5.0.0`` and the
+    other candidates removed: the import raises ``CryptoModuleError`` as it
+    should, and ``/proc/self/maps`` nevertheless contains the tampered library,
+    whose constructors have run.  An attacker able to replace that file got
+    code execution in the victim's process *despite* the integrity check
+    correctly detecting the tampering — which is the whole of what the pre-load
+    refusal was for.
+
+    So: no verified native library, no binding import.  A binding cannot work
+    without the library in any case (it is a DT_NEEDED, not a soft dependency),
+    so nothing is lost, and the docs-build override that reaches OPERATIONAL
+    with no native library simply runs without the Cython accelerators.
+    """
+    return _native_lib is not None
+
+
 def _probe_cython_ed25519() -> "tuple[Any, Any]":
     """Detect Cython Ed25519 bindings at module load time."""
+    if not _binding_imports_permitted():
+        return None, None
     try:
         from ama_cryptography.ed25519_binding import (  # type: ignore[import-not-found, unused-ignore]  # optional Cython .so, cmake -DAMA_USE_NATIVE_PQC=ON (PQC-004)
             cy_ed25519_sign,
@@ -4966,6 +5006,8 @@ def _probe_cython_ed25519() -> "tuple[Any, Any]":
 
 def _probe_cython_dilithium() -> "tuple[Any, Any]":
     """Detect Cython Dilithium bindings at module load time."""
+    if not _binding_imports_permitted():
+        return None, None
     try:
         from ama_cryptography.dilithium_binding import (  # type: ignore[import-not-found, unused-ignore]  # optional Cython .so, cmake -DAMA_USE_NATIVE_PQC=ON (PQC-005)
             cy_dilithium_sign,
@@ -4979,6 +5021,8 @@ def _probe_cython_dilithium() -> "tuple[Any, Any]":
 
 def _probe_cython_hkdf() -> "Any":
     """Detect Cython HKDF binding at module load time."""
+    if not _binding_imports_permitted():
+        return None
     try:
         from ama_cryptography.hkdf_binding import (  # type: ignore[import-not-found, unused-ignore]  # optional Cython .so, cmake -DAMA_USE_NATIVE_PQC=ON (PQC-006)
             cy_hkdf,
@@ -5462,6 +5506,8 @@ def native_hkdf_sha512(
 
 def _probe_cython_sha3() -> "Optional[Callable[[bytes], bytes]]":
     """Detect Cython SHA3-256 binding at module load time."""
+    if not _binding_imports_permitted():
+        return None
     try:
         from ama_cryptography.sha3_binding import cy_sha3_256
 
@@ -6059,6 +6105,8 @@ def native_hmac_sha256_2(key: bytes, msg1: bytes, msg2: bytes) -> bytes:
 
 def _probe_cython_hmac() -> "Optional[Callable[[bytes, bytes], bytes]]":
     """Detect Cython HMAC-SHA3-256 binding at module load time."""
+    if not _binding_imports_permitted():
+        return None
     try:
         from ama_cryptography.hmac_binding import cy_hmac_sha3_256
 

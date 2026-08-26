@@ -587,11 +587,33 @@ AMA_API ama_error_t ama_ascon_aead128_decrypt(
  * permutation verified only indirectly through the modes would let a fault in
  * one cancel a fault in the other.
  */
-/* No AMA_API: test-only, deliberately not exported from the shared library
- * (also localised in cmake/ama_exports.map).  The C KAT links it statically
- * via ama_cryptography_test.  Declared in internal/ama_testing_exports.h —
- * NOT in the installed public header, which would promise an ABI the export
- * map exists to withhold. */
+/* Compiled ONLY into the AMA_TESTING_MODE archive, so it is absent from every
+ * shipped library by construction rather than by export control.
+ *
+ * It carries no AMA_API, is declared in internal/ama_testing_exports.h rather
+ * than the installed public header, and `cmake/ama_exports.map` localises its
+ * exact name so the `ama_*` wildcard above it cannot publish it — because a
+ * raw permutation in a FIPS-aligned module's public surface invites
+ * non-approved constructions.
+ *
+ * That reasoning was enforced on ELF only.  `cmake/ama_exports.macos.sym` is a
+ * Mach-O exported-symbols list, and a Mach-O list is an ALLOW-list with no
+ * exclusion form: its single `_ama_*` entry matches
+ * `_ama_ascon_permutation_for_test` and would publish from the .dylib exactly
+ * the symbol the version script withholds from the .so.  Two platform-specific
+ * export mechanisms encoding one security decision is a divergence waiting to
+ * happen, and it had happened.
+ *
+ * Adding an `-unexported_symbols_list` would have patched the macOS side and
+ * left the class intact.  Not compiling the function outside the test archive
+ * removes it: there is nothing for either mechanism to publish, on any
+ * platform, and no way for the two to disagree again.  The `local:` entry in
+ * the version script stays as defence in depth.
+ *
+ * `tests/c/test_ascon.c` is the only caller in the repository and links
+ * `ama_cryptography_test`, which is the one target CMake gives
+ * AMA_TESTING_MODE. */
+#ifdef AMA_TESTING_MODE
 #include "internal/ama_testing_exports.h"
 
 void ama_ascon_permutation_for_test(uint64_t state[5], unsigned rounds) {
@@ -611,3 +633,4 @@ void ama_ascon_permutation_for_test(uint64_t state[5], unsigned rounds) {
         state[i] = s.x[i];
     }
 }
+#endif /* AMA_TESTING_MODE */
