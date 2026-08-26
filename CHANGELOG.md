@@ -1006,6 +1006,82 @@ existed.  `tests/test_documented_source_paths_exist.py` enforces the rule with
 a non-vacuity guard on both the file list and the citation count, and an
 allowlist whose every entry names the command that writes the path.
 
+#### A live data race in the shipped library, under a ThreadSanitizer lane that could not fail
+
+`nistp_use_mulx4()` in `src/c/ama_nistp.c` cached its CPUID verdict in a plain
+`int`, lazily, on a path any thread doing P-curve arithmetic can reach first —
+the "lockless flag + plain variable" shape that INVARIANT-15 and
+`src/c/internal/ama_once.h` prohibit **outright**, in a file whose other
+one-time state already goes through `AMA_CALL_ONCE`.  The comment above it
+argued the case for leaving it that way, and both halves of the argument were
+wrong: an idempotent value does not stop concurrent unsynchronised read and
+write from being a data race (C11 5.1.2.4p25 makes it UB regardless of what the
+store does in hardware), and the CPUID getters' `pthread_once` orders nothing
+about *this* object.  It also called a plain `int` access "a single relaxed
+load", which it is not.
+
+Why it stayed invisible is an accident of which entry point runs first.  On
+keygen/sign/verify the first write happens inside `nistp_comb_build()` under
+`NISTP_COMB_ONCE`, so nothing races.  `ama_nistp_point_decode` and
+`ama_nistp_pubkey_validate` — **both attacker-input paths** — reach the gate
+through `nistp_load_point` with no once in the way.
+
+And the lane that exists to catch this class could not.  The
+`thread-sanitizer` job's own comment names it ("a data race on the dispatch
+table ... TSan is the only sanitiser that detects this class"), but TSan reports
+a race only when two threads touch a location at the same time, and no C test
+ever had two threads running at once: of all the C test files exactly one
+created a thread, and it called `pthread_join` on the next statement.  The lane
+instrumented correctly and then watched a single-threaded program.
+
+`tests/c/test_concurrent_init.c` gives it something to observe: eight threads
+released together on a barrier, entering the dispatch table, the CPUID probes,
+the NIST-P and secp256k1 generator combs and the Ed25519 base-point tables at
+once — and, first in each round and deliberately from cold, the two P-256
+decode/validate paths that bypass the comb's once.  The ordering is the whole
+point; the first version of this test called `ama_nistp_keypair` and TSan
+reported **nothing**, because keygen writes the gate under the once.
+
+Both directions measured, on the shipped code:
+
+  before the fix   2 data races, exit 66 — `nistp_use_mulx4 ama_nistp.c:400`
+                   under `ama_nistp_point_decode -> ama_nistp_pubkey_validate
+                   -> nistp_load_point -> nistp_to_mont -> nistp_mont_mul`
+  after the fix    0 data races, exit 0
+
+The gate is now `_Atomic int` with `memory_order_relaxed` on both accesses,
+which is the correct order — it publishes no other data, and a reader that
+misses the write recomputes the same answer — and which finally makes the
+comment true.  No portability shim was needed: the block sits inside
+`AMA_HAVE_NISTP_MONT_MULX_IMPL`, which `CMakeLists.txt` defines only for
+x86-64 GCC/Clang (`AND NOT MSVC`), and both provide C11 `<stdatomic.h>`.
+
+The hot path does not pay for it, measured rather than asserted: under
+`gcc -O3` all 46 symbols in the translation unit have identical instruction
+counts before and after, and the only difference anywhere in `.text` is five
+bytes — the same five `mov` instructions with two stack spill slots permuted
+(`0x40(%rsp)` and `0x30(%rsp)` exchanged).  No extra instruction, no fence.
+
+The lane is now non-vacuous structurally as well: it asserts
+`test_concurrent_init` is registered before trusting its own green, the same
+shape the Valgrind lane already uses for its target count.
+
+Suites at this commit: 72/72 x86, 72/72 ASan+UBSan with 0 diagnostics, and
+72/72 under ThreadSanitizer with 0 races.
+
+One more thing came out of making the change: `.cppcheck-suppressions` pins by
+exact `id:file:line`, and the +32 net lines this fix added to `ama_nistp.c`
+shifted all three of its entries (667/769/1136 -> 699/801/1168), turning them
+into suppressions of nothing and the findings they cover back into hard CI
+failures.  That is the second time in this pass — `ama_dilithium.c` did the
+same thing at 2219 -> 2355 — and both were found by CI rather than locally,
+because the hygiene gate checked only that an entry *names* a line, never that
+the line is still the site.  It checks that now: scoped to the three files that
+carry pinned entries, it runs cppcheck without the suppressions list and
+asserts every pinned `(id, file, line)` is among what is actually reported,
+with a non-vacuity assertion that cppcheck reported something at all and a skip
+where cppcheck is not installed.  Three seconds, and it fails when any pin is
+reverted to its pre-shift line.
 #### The interleaved ReDoS estimator was still one-sided, and CI proved it
 
 `tests/test_c_secret_zeroization_gate.py`'s linearity check failed on the
@@ -5020,7 +5096,7 @@ resolved here.  The ones that changed behaviour rather than prose:
 
 Documentation claims corrected against measurement rather than restated: the
 SoftHSM2 lane runs **one** real-token test (`test_full_lifecycle`), not 51; the
-C suite is 63 suite files / 66 translation units, not 58 / 61 (60 / 63 when that pass measured it, 62 / 65 after it; the eleventh debt-closure pass added `tests/c/test_ed25519_canonical_r.c` and `tests/c/test_ed25519_scalarmult_contract.c`, and registered `tests/c/test_field_bench.c`, which had existed unbuilt since #370, and the thirteenth added `tests/c/test_dilithium_invntt_bound.c`); the gated
+C suite is 64 suite files / 67 translation units, not 58 / 61 (60 / 63 when that pass measured it, 62 / 65 after it; the eleventh debt-closure pass added `tests/c/test_ed25519_canonical_r.c` and `tests/c/test_ed25519_scalarmult_contract.c`, and registered `tests/c/test_field_bench.c`, which had existed unbuilt since #370, and the thirteenth added `tests/c/test_dilithium_invntt_bound.c` and `tests/c/test_concurrent_init.c`); the gated
 surface is what `tools/check_error_state_gating.py` reports (89
 native plus 10 Cython entry points), replacing two documents that disagreed at
 80 and 81; the canonical-host performance tables understate 5.0.0 on the AEAD

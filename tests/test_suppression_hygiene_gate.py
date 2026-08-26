@@ -33,12 +33,16 @@ passes of three read as a covered tool.
 from __future__ import annotations
 
 import importlib.util
+import re as _re
+import shutil as _shutil
+import subprocess as _subprocess
 import sys
 from pathlib import Path
 from types import ModuleType
 from typing import ClassVar
 
 import pytest
+import pytest as _pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 GATE_PATH = REPO_ROOT / "tools" / "check_suppression_hygiene.py"
@@ -312,3 +316,100 @@ class TestFileScopedSuppressionsAreRefused:
             "# A file-scoped `# ruff: noqa` would be refused here.\n\ndef f() -> None:\n    pass\n"
         )
         assert gate.check_source("pkg/mod.py", source) == []
+
+
+class TestCppcheckSuppressionsStillPointAtRealFindings:
+    """A pinned suppression must name the line cppcheck actually reports.
+
+    ``.cppcheck-suppressions`` pins by exact ``id:file:line``.  The class above
+    already checks that every entry NAMES a line, which was the previous
+    failure mode, but nothing checked that the named line is still the site.
+    It stops matching the moment code above it moves, and then the finding it
+    was written for comes back as a hard CI failure with no local warning --
+    twice in one working session: ``src/c/ama_dilithium.c`` when three
+    ``dil_*_reduce`` calls were inserted (2219 -> 2355), and
+    ``src/c/ama_nistp.c`` when ``nistp_mulx_gate`` became atomic
+    (667/769/1136 -> 699/801/1168).  Both were found by CI, both were a wasted
+    cycle, and both are exactly what this checks locally in about three
+    seconds.
+
+    Scoped to the files that carry pinned entries rather than the whole tree,
+    and skipped where cppcheck is not installed -- the Static Analysis job
+    always has it, so the enforcement is not lost, and a developer who has it
+    gets the answer before pushing.
+    """
+
+    _ENTRY = _re.compile(r"^(?P<id>[a-zA-Z]+):(?P<file>[^:]+):(?P<line>\d+)\s*$")
+    _REPORT = _re.compile(r"^(?P<file>[^:]+):(?P<line>\d+):\d+: \w+: .*\[(?P<id>\w+)\]\s*$")
+
+    @staticmethod
+    def _repo_root() -> Path:
+        return Path(__file__).resolve().parent.parent
+
+    @classmethod
+    def _pinned(cls) -> list[tuple[str, str, int]]:
+        text = (cls._repo_root() / ".cppcheck-suppressions").read_text(encoding="utf-8")
+        out: list[tuple[str, str, int]] = []
+        for raw in text.splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            m = cls._ENTRY.match(line)
+            if m:
+                out.append((m.group("id"), m.group("file"), int(m.group("line"))))
+        return out
+
+    def test_there_are_pinned_entries_to_check(self) -> None:
+        """Non-vacuity: an empty parse would make the check below pass on anything."""
+        pinned = self._pinned()
+        assert len(pinned) >= 3, f"only {len(pinned)} line-pinned suppressions parsed"
+
+    def test_every_pinned_line_is_still_the_line_cppcheck_reports(self) -> None:
+        cppcheck = _shutil.which("cppcheck")
+        if cppcheck is None:
+            _pytest.skip("cppcheck is not installed (no `cppcheck` on PATH)")
+
+        root = self._repo_root()
+        pinned = self._pinned()
+        files = sorted({f for _id, f, _ln in pinned})
+        assert files, "no files carry a pinned suppression"
+
+        proc = _subprocess.run(
+            [
+                cppcheck,
+                "--enable=warning,performance,portability",
+                "--suppress=missingIncludeSystem",
+                "--suppress=unusedFunction",
+                "--suppress=shiftTooManyBitsSigned",
+                "--inline-suppr",
+                "--std=c11",
+                "-Iinclude/",
+                "-DAMA_USE_NATIVE_PQC",
+                "-DPATH_MAX=4096",
+                "--force",
+                *files,
+            ],
+            cwd=root,
+            capture_output=True,
+            text=True,
+        )
+        reported = set()
+        for raw in (proc.stderr + proc.stdout).splitlines():
+            m = self._REPORT.match(raw.strip())
+            if m:
+                reported.add((m.group("id"), m.group("file"), int(m.group("line"))))
+
+        assert reported, (
+            "cppcheck reported nothing at all over "
+            f"{files} — the invocation is wrong, so this check would pass "
+            "vacuously. stderr:\n" + proc.stderr[:2000]
+        )
+
+        stale = [p for p in pinned if p not in reported]
+        assert not stale, (
+            "these suppressions name a line cppcheck no longer reports, so they "
+            "suppress nothing and the finding they were written for will fail CI:\n"
+            + "".join(f"    {i}:{f}:{ln}\n" for i, f, ln in stale)
+            + "  Re-pin each to the line now reported for that id in that file. "
+            "Lines shift whenever code above them is inserted or removed."
+        )

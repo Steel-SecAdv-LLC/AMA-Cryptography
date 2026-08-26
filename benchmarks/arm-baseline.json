@@ -474,7 +474,7 @@
       },
       {
         "path": "src/c/ama_nistp.c",
-        "reason": "Barrier inside nistp_mask64() plus zero-initialisation of nistp_mod_add's limb buffer. No P-curve primitive carries a floor in this file; recorded because the gate reads paths, not floors."
+        "reason": "Barrier inside nistp_mask64() plus zero-initialisation of nistp_mod_add's limb buffer. No P-curve primitive carries a floor in this file; recorded because the gate reads paths, not floors.  Extended for a second change to this file: nistp_mulx_gate became `_Atomic int` with memory_order_relaxed accesses, closing a data race on the lazily-resolved MULX/ADX predicate (INVARIANT-15). Measured rather than asserted, twice over. (1) Cost: under gcc -O3 all 46 symbols in the translation unit have IDENTICAL instruction counts before and after, and the only difference anywhere in .text is five bytes -- the same five `mov` instructions with two stack spill slots exchanged (0x40(%rsp) and 0x30(%rsp)); cross-compiled for AArch64 the objects are byte-identical, because the whole block sits inside AMA_HAVE_NISTP_MONT_MULX_IMPL, which CMakeLists.txt defines only for x86-64 GCC/Clang. (2) Reach: a live call counter wrapped around every native_nistp_* entry point and run over all 19 benchmarked operations recorded 0 calls -- and the counter is not vacuous, since it increments on a direct native_nistp_keypair call. The structural claim above is therefore confirmed by measurement rather than inherited: no floored row reaches this file."
       },
       {
         "path": "src/c/ama_consttime.c",
