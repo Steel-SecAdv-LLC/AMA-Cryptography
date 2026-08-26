@@ -837,7 +837,7 @@ docker run ama-cryptography:latest
 | Category | Purpose | Coverage Target | Files |
 |----------|---------|-----------------|-------|
 | Unit Tests | Individual function validation | 80% line coverage | Python test files under `tests/` (count enforced by `tools/check_documented_counts.py` — see the verified totals below) |
-| C Unit Tests | Native library validation | All C functions | 64 `test_*.c` registered via ctest in `tests/c/` (+ 1 standalone `bench_*.c` + 2 standalone `x25519_equiv_*.c`) |
+| C Unit Tests | Native library validation | All C functions | 65 `test_*.c` registered via ctest in `tests/c/` (+ 1 standalone `bench_*.c` + 2 standalone `x25519_equiv_*.c`) |
 | Integration Tests | Cross-component workflows | All public APIs | `test_integration_e2e.py`, `test_comprehensive_system.py` |
 | Performance Tests | Benchmark regression detection | All critical paths | `test_performance.py`, `benchmarks/` |
 | Security Tests | Cryptographic correctness | 100% crypto functions | `test_crypto_core_penetration.py`, `test_memory_security.py` |

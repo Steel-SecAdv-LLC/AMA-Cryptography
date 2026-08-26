@@ -290,10 +290,28 @@ curve25519_expand(bignum25519 out, const unsigned char *in) {
 	uint64_t x0,x1,x2,x3;
 
 	if (endian_check.s == 1) {
-		x0 = *(uint64_t *)(in + 0);
-		x1 = *(uint64_t *)(in + 8);
-		x2 = *(uint64_t *)(in + 16);
-		x3 = *(uint64_t *)(in + 24);
+		/* AMA-PATCH: memcpy, not `*(uint64_t *)(in + n)`.
+		 *
+		 * `in` is caller memory — `ama_ed25519_verify`'s `public_key`, or a
+		 * `pk[i]` / `RS[i]` entry on the batch path — and the AMA header
+		 * requires of it only "exactly 32 readable bytes".  It states no
+		 * alignment requirement, and `const uint8_t *` imposes none, so an
+		 * unaligned buffer is a legal call.  The cast then loaded a `uint64_t`
+		 * from an address that need not be 8-aligned: undefined behaviour
+		 * under C11 6.3.2.3p7, reported by UBSan, and this project's
+		 * ASan+UBSan lane runs with `halt_on_error=1`, so a caller passing
+		 * `packet + 3` turned a signature check into an abort.  Reproduced
+		 * through `ama_ed25519_verify` before the change and gone after; see
+		 * `tests/c/test_ed25519_unaligned_input.c`.
+		 *
+		 * `memcpy` of a fixed 8 bytes is the standard spelling and compiles to
+		 * the same single `mov` on x86-64 — measured, not assumed, in the
+		 * commit that made this change.  The `else` branch below is unchanged;
+		 * it was already byte-wise and already correct. */
+		memcpy(&x0, in +  0, sizeof(x0));
+		memcpy(&x1, in +  8, sizeof(x1));
+		memcpy(&x2, in + 16, sizeof(x2));
+		memcpy(&x3, in + 24, sizeof(x3));
 	} else {
 		#define F(s)                         \
 			((((uint64_t)in[s + 0])      ) | \

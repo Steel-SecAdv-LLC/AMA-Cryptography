@@ -1082,6 +1082,60 @@ asserts every pinned `(id, file, line)` is among what is actually reported,
 with a non-vacuity assertion that cppcheck reported something at all and a skip
 where cppcheck is not installed.  Three seconds, and it fails when any pin is
 reverted to its pre-shift line.
+#### Ed25519 read the caller's public key with a load its own header does not let it require
+
+`include/ama_cryptography.h` states exactly one requirement of
+`ama_ed25519_verify`'s buffers: "exactly 64 readable bytes" and "exactly 32
+readable bytes".  It says nothing about alignment, and `const uint8_t *`
+imposes none, so `verify(sig, msg, len, packet + 3)` is a call the API
+promises to serve.
+
+It did not.  On x86-64 the default backend is ed25519-donna
+(`AMA_ED25519_ASSEMBLY` defaults ON there, so `src/c/ama_ed25519.c` is dropped
+from the source list), and donna's `curve25519_expand` read the key with
+`*(uint64_t *)(in + 0)` — a load requiring 8-byte alignment from a pointer that
+carries none.  That is undefined behaviour under C11 6.3.2.3p7.  Reproduced
+through the public API:
+
+```
+curve25519-donna-64bit.h:293:8: runtime error: load of misaligned address
+0x562f05f089e1 for type 'uint64_t', which requires 8 byte alignment
+    #0 curve25519_expand
+    #1 ge25519_unpack_negative_vartime
+    #2 ed25519_sign_open
+    #3 ama_ed25519_verify
+```
+
+The `AddressSanitizer + UBSan` job runs `UBSAN_OPTIONS=halt_on_error=1`, so for
+a caller holding an unaligned buffer this was not a diagnostic to be read
+later — a signature check became a process abort.  The batch path reaches the
+same expand twice more, on `pk[i]` and on the `RS[i]` signature halves.
+
+Nothing saw it because nothing tried.  Every existing test hands the library a
+`uint8_t[32]` local or static, which every compiler in use aligns to at least
+8, so the whole suite exercised the one alignment the contract does not
+promise.  `tests/c/test_ed25519_unaligned_input.c` walks 16 consecutive
+offsets in a slab and asserts the verdict in both directions at each — a good
+signature must verify, a corrupted signature and a corrupted key must not — so
+it is a behavioural check in an ordinary build and the UB tripwire under the
+sanitizers.  Against the unpatched library at CI's own setting it exits 1 on
+the UBSan report; against the patched one it passes.
+
+The fix is `memcpy`, in all three `curve25519_expand` variants (64-bit, 32-bit,
+SSE2), marked `AMA-PATCH:` and recorded in `src/c/PROVENANCE.md` beside the
+existing donna patch — which was the same class of finding, a UBSan-reported UB
+in vendored code.  donna's own byte-wise `else` branch was already correct and
+is untouched.
+
+It costs nothing, and that is measured rather than asserted: the linked
+`libama_cryptography.so` is **byte-identical** before and after, under the
+release build.  The control matters as much as the result — an edit at the same
+site that really does change behaviour (`x0 ^= in[31]`) moves the digest to
+`48cd36a1`, so the identical digest is evidence about the change and not about
+a build that failed to notice it.  An earlier control, `x0 ^= (in[0] & 0)`, was
+folded away by the optimiser and proved nothing; it was replaced rather than
+believed.
+
 #### Every non-canonical-coordinate test on the prime curves passed against a build with the check deleted
 
 `tests/test_nistp_curves.py` asserted that a coordinate `>= p` is "rejected,
@@ -5181,7 +5235,7 @@ resolved here.  The ones that changed behaviour rather than prose:
 
 Documentation claims corrected against measurement rather than restated: the
 SoftHSM2 lane runs **one** real-token test (`test_full_lifecycle`), not 51; the
-C suite is 64 suite files / 67 translation units, not 58 / 61 (60 / 63 when that pass measured it, 62 / 65 after it; the eleventh debt-closure pass added `tests/c/test_ed25519_canonical_r.c` and `tests/c/test_ed25519_scalarmult_contract.c`, and registered `tests/c/test_field_bench.c`, which had existed unbuilt since #370, and the thirteenth added `tests/c/test_dilithium_invntt_bound.c` and `tests/c/test_concurrent_init.c`); the gated
+C suite is 65 suite files / 68 translation units, not 58 / 61 (60 / 63 when that pass measured it, 62 / 65 after it; the eleventh debt-closure pass added `tests/c/test_ed25519_canonical_r.c` and `tests/c/test_ed25519_scalarmult_contract.c`, and registered `tests/c/test_field_bench.c`, which had existed unbuilt since #370, and the thirteenth added `tests/c/test_dilithium_invntt_bound.c`, `tests/c/test_concurrent_init.c` and `tests/c/test_ed25519_unaligned_input.c`); the gated
 surface is what `tools/check_error_state_gating.py` reports (89
 native plus 10 Cython entry points), replacing two documents that disagreed at
 80 and 81; the canonical-host performance tables understate 5.0.0 on the AEAD
