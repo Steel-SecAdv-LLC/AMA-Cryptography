@@ -51,4 +51,4 @@ uninitvar:src/c/ama_nistp.c:1136
 uninitvar:src/c/ama_kyber.c:572
 
 # ama_dilithium.c — w1_packed is filled by polyveck_pack_w1 through a pointer.
-uninitvar:src/c/ama_dilithium.c:2219
+uninitvar:src/c/ama_dilithium.c:2355
