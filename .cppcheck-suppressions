@@ -41,9 +41,9 @@
 # nistp_mont_mul / nistp_mod_sub, which write every limb before any read.
 # cppcheck does not follow through those helpers, so it sees `*r = out` as a
 # read of an uninitialised object.
-uninitvar:src/c/ama_nistp.c:667
-uninitvar:src/c/ama_nistp.c:769
-uninitvar:src/c/ama_nistp.c:1136
+uninitvar:src/c/ama_nistp.c:699
+uninitvar:src/c/ama_nistp.c:801
+uninitvar:src/c/ama_nistp.c:1168
 
 # ama_kyber.c — `&mat[i].vec[j]` takes the address of a matrix entry so
 # kyber_gen_matrix can fill it.  Taking the address of an object in order to
