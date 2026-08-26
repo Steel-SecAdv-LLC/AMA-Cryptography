@@ -47,7 +47,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Set, Tuple
 
 BASELINE_PATH = "benchmarks/baseline.json"
 
@@ -134,68 +134,146 @@ def _changed_baseline_values(
     return changes
 
 
-def _collect_commit_text(base_ref: str, head_ref: str) -> str:
-    """Concatenate every commit message in ``base_ref..head_ref`` that touches
-    a baseline JSON (x86 or arm).  We only inspect the commits that
-    actually modified one of the baseline files — unrelated commit
-    messages would be noise.
-
-    A shallow clone or an unreachable base ref yields a CalledProcessError
-    from git; return an empty string in that case so the check falls back
-    to requiring the full justification to live in the PR body.
-    """
+def _commit_parents(sha: str) -> List[str]:
+    """The parents of ``sha``.  Empty for a root commit."""
     try:
-        return _run_git(
-            "log",
-            f"{base_ref}..{head_ref}",
-            "--pretty=format:%H%n%B%n---END-COMMIT---",
-            "--",
-            *ALL_BASELINE_PATHS,
-        )
-    except subprocess.CalledProcessError as exc:
-        print(
-            f"WARN: `git log {base_ref}..{head_ref}` failed "
-            f"({exc.stderr.strip() or 'no stderr'}); falling back to "
-            "PR body only for justification scanning. This usually means "
-            "the clone is shallow — CI should use fetch-depth: 0.",
-            file=sys.stderr,
-        )
-        return ""
+        line = _run_git("rev-list", "--parents", "-n", "1", sha).strip()
+    except subprocess.CalledProcessError:
+        return []
+    return line.split()[1:]
 
 
-def _check_justification(
-    changes: List[Tuple[str, object, object]],
-    combined_text: str,
+def _commits_touching_baselines(base_ref: str, head_ref: str) -> List[str]:
+    """SHAs in ``base_ref..head_ref`` that modified a baseline JSON, oldest first."""
+    return _run_git(
+        "log",
+        "--reverse",
+        "--pretty=format:%H",
+        f"{base_ref}..{head_ref}",
+        "--",
+        *ALL_BASELINE_PATHS,
+    ).split()
+
+
+def _commit_message(sha: str) -> str:
+    return _run_git("log", "-1", "--pretty=format:%B", sha)
+
+
+def _values_at(ref: str) -> Dict[str, object]:
+    """Every ``baseline_value`` visible at ``ref``, keyed ``path::primitive``.
+
+    Keyed by path as well as name because the two baselines carry the same
+    nineteen primitives with different numbers; merging them would let a change
+    in one file be cancelled by the other.
+    """
+    out: Dict[str, object] = {}
+    for path in ALL_BASELINE_PATHS:
+        for name, entry in _load_baseline_at(ref, path).items():
+            out[f"{path}::{name}"] = entry.get("baseline_value")
+    return out
+
+
+def _changes_introduced_by(sha: str) -> Set[str]:
+    """The ``path::primitive`` keys whose ``baseline_value`` THIS commit changed.
+
+    A merge counts only what it introduces itself: a key qualifies when it
+    differs from EVERY parent, so a floor merged in from the base branch is
+    attributed to the commit that actually wrote it and not to the merge that
+    carried it past.
+    """
+    parents = _commit_parents(sha)
+    after = _values_at(sha)
+    if not parents:
+        return {k for k, v in after.items() if v is not None}
+    befores = [_values_at(parent) for parent in parents]
+    return {
+        key for key, value in after.items() if all(before.get(key) != value for before in befores)
+    } | {key for before in befores for key in before if key not in after}
+
+
+def _text_justifies(text: str, primitive: str) -> bool:
+    """One text is a line-item justification for one primitive.
+
+    All three requirements must hold in the SAME text.  Splitting them across
+    texts is exactly the hole this replaced: see the module docstring.
+    """
+    return (
+        primitive in text
+        and bool(_MEASUREMENT_RE.search(text))
+        and any(token in text.lower() for token in _RUNNER_TOKENS)
+    )
+
+
+def _check_justification_attributed(
+    base_ref: str,
+    head_ref: str,
+    net_changes: List[Tuple[str, str, object, object]],
+    pr_body: str,
 ) -> List[str]:
-    """Return a list of human-readable failures (empty list = all good)."""
+    """Require each net change to be justified by text that ACCOUNTS for it.
+
+    ``net_changes`` is [(path, primitive, before, after)].  A change is
+    justified when a single text -- the PR body, or the message of a commit
+    that actually moved that number -- names the primitive, cites a
+    measurement, and identifies a runner.  Commit messages from elsewhere in
+    the branch do not count, which is the whole point.
+    """
     failures: List[str] = []
+    try:
+        shas = _commits_touching_baselines(base_ref, head_ref)
+    except subprocess.CalledProcessError as exc:
+        return [
+            "Could not list the commits that changed a baseline JSON "
+            f"({exc.stderr.strip() or 'no stderr'}), so no change could be "
+            "attributed to the commit that made it. This usually means a "
+            "shallow clone; CI must use fetch-depth: 0. Put the full "
+            "justification in the PR body, or fix the checkout."
+        ]
 
-    if not _MEASUREMENT_RE.search(combined_text):
+    # key -> the LAST commit that moved it, which is the one whose value stands.
+    #
+    # Not "any commit that ever touched it".  An earlier commit justified the
+    # number it wrote, and a later commit that moves the same floor again is a
+    # new claim needing its own evidence -- measured: with `any`, a "wip"
+    # commit halving ed25519_sign still passed, riding on the recalibration
+    # commit that had set the previous value and named the primitive.
+    attributed: Dict[str, Tuple[str, str]] = {}
+    for sha in shas:
+        try:
+            keys = _changes_introduced_by(sha)
+        except subprocess.CalledProcessError:
+            continue
+        if not keys:
+            continue
+        message = _commit_message(sha)
+        for key in keys:
+            attributed[key] = (sha, message)
+
+    for path, name, before, after in net_changes:
+        key = f"{path}::{name}"
+        if _text_justifies(pr_body, name):
+            continue
+        source = attributed.get(key)
+        if source is not None and _text_justifies(source[1], name):
+            continue
+        if source is None:
+            failures.append(
+                f"{path}: `{name}` moved {before!r} -> {after!r}, but no commit "
+                f"in {base_ref}..{head_ref} accounts for it (it may have arrived "
+                f"through a merge). Justify it in the PR body: name it, cite a "
+                f"measured number, and identify the runner."
+            )
+            continue
         failures.append(
-            "No measurement value found. The justification must cite at "
-            "least one numeric reading (e.g. '12,450 ops/sec', '62 us', "
-            "'0.45 ms')."
+            f"{path}: `{name}` moved {before!r} -> {after!r}, last written by "
+            f"{source[0][:8]}, and "
+            f"neither that commit's message nor the PR body is a line-item "
+            f"justification for it -- one single text must name `{name}`, cite "
+            f"a measured number, AND identify the runner. Justification "
+            f"scattered across other commits on this branch does not count: "
+            f"the guard used to concatenate every commit message on the branch, "
+            f"which on a long branch made the requirement unfalsifiable."
         )
-
-    lower = combined_text.lower()
-    if not any(tok in lower for tok in _RUNNER_TOKENS):
-        failures.append(
-            "No CI-runner identifier found. The justification must name the "
-            "runner where the measurement was produced (one of: "
-            + ", ".join(sorted(_RUNNER_TOKENS))
-            + ")."
-        )
-
-    unmentioned = [name for (name, _b, _a) in changes if name not in combined_text]
-    if unmentioned:
-        failures.append(
-            "The following primitives had `baseline_value` changes but were "
-            "not mentioned by name in any commit message or the PR body:\n"
-            + "\n".join(f"  - {n}" for n in unmentioned)
-            + "\nAdd a line-item entry for each in the commit message or "
-            "PR body so a reviewer can audit the new number."
-        )
-
     return failures
 
 
@@ -506,17 +584,29 @@ def main(argv: List[str]) -> int:
         )
         return 0
 
-    changes: List[Tuple[str, object, object]] = []
+    net_changes: List[Tuple[str, str, object, object]] = []
     for path, ch_p in per_path_changes:
         print(f"Detected {len(ch_p)} baseline_value change(s) in {path}:")
         for name, b, a in ch_p:
             print(f"  - {name}: {b!r} -> {a!r}")
-        changes.extend(ch_p)
+            net_changes.append((path, name, b, a))
 
-    commit_text = _collect_commit_text(args.base_ref, args.head_ref)
-    combined_text = commit_text + "\n\n" + (args.pr_body or "")
-
-    failures = _check_justification(changes, combined_text)
+    # Each change is justified by text that ACCOUNTS for it: the PR body, or
+    # the message of a commit that actually moved that number.
+    #
+    # This used to concatenate every commit message on the branch that touched
+    # a baseline JSON and scan the blob for "a name, a number, a runner"
+    # anywhere.  On a long branch that is unfalsifiable, and measured on this
+    # one it already was: 25 commits, 86,892 bytes of accumulated message text,
+    # containing a measurement, a runner token, and all 19 primitive names
+    # before any new commit was written.  A commit whose entire message was
+    # "wip", halving ed25519_sign's floor, passed with an empty PR body and
+    # exit 0 -- the guard reporting that "every changed baseline is named, a
+    # measurement value is cited, and a CI runner is identified", all of it
+    # from text written for unrelated changes.
+    failures = _check_justification_attributed(
+        args.base_ref, args.head_ref, net_changes, args.pr_body or ""
+    )
     if failures:
         print("\n" + "=" * 72, file=sys.stderr)
         print(

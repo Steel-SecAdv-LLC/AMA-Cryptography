@@ -1082,6 +1082,69 @@ asserts every pinned `(id, file, line)` is among what is actually reported,
 with a non-vacuity assertion that cppcheck reported something at all and a skip
 where cppcheck is not installed.  Three seconds, and it fails when any pin is
 reverted to its pre-shift line.
+#### The baseline guard was unfalsifiable on a long branch, and this branch was long enough
+
+`benchmarks/check_baseline_justification.py` enforces that a moved benchmark
+floor is accompanied by a line-item justification: the primitive named, a
+measured number, a CI runner identified.  It gathered that evidence by
+concatenating **every** commit message on the branch that touched a baseline
+JSON and scanning the blob for those three things *anywhere in it*.
+
+On a long branch that requirement cannot fail.  Measured on this one, before
+any new commit was written:
+
+```
+  25 commits touch a baseline JSON
+  commit-text bytes: 86892
+  measurement token present: True
+  runner token present:      True
+  primitive names (19) already present: 19   missing: []
+```
+
+Every requirement already satisfied by text written for unrelated changes. So
+a commit that moves a floor and says nothing at all inherits all of it.
+Demonstrated end to end on the real branch — one commit, message `wip`,
+halving `ed25519_sign`'s floor, empty PR body:
+
+```
+  - ed25519_sign: 33000 -> 26942.5
+OK: every changed baseline is named, a measurement value is cited, and a CI
+runner is identified.
+$ echo $?
+0
+```
+
+That is the guard reporting success on the exact pattern
+`docs/BENCHMARK_HISTORY.md` records it as existing to prevent.
+
+Each change is now **attributed**: a floor is justified only by a single text
+that names it, cites a number *and* identifies a runner — the PR body, or the
+message of the commit that last wrote that number.
+
+"Last", not "any", and the distinction is not theoretical.  The first version
+of this fix accepted any commit that had ever touched the key, and the `wip`
+commit still passed: it rode on the recalibration commit that had set the
+previous value and named the primitive.  An earlier commit justifies the number
+*it* wrote; a later commit moving the same floor is a new claim and needs its
+own evidence.  A merge is credited only with what it introduces itself — a key
+that differs from every parent — so a floor merged in from the base branch is
+attributed to the commit that wrote it, not to the merge that carried it past.
+
+It is strictly stronger and costs the branch nothing: against the real history
+with an empty PR body the guard still exits 0, because the one commit that
+actually moved floors (`37d8b3b`, all 38 of them across both files) names every
+one, cites its numbers, and identifies the runner. Of the 25 commits touching a
+baseline JSON, that is the only one that moved a value; the other 24 changed
+metadata, and metadata needs no measurement.
+
+Eight tests build real throwaway git repositories rather than stubbing git, and
+one of them reproduces the replaced algorithm alongside the new one on the same
+history — it calls that history justified, and the guard now does not.  Pinning
+the comparison, rather than describing it, is the point: the next person to find
+the concatenation simpler has the evidence in front of them.  The two dead
+helpers it left behind (`_collect_commit_text`, `_check_justification`) are
+deleted rather than kept, so the file describes one algorithm.
+
 #### The benchmark regression gate exited 0 on a run that measured nothing
 
 Every `continue` in `benchmark_runner.py`'s `run_all_benchmarks` — a baseline
