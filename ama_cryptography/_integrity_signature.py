@@ -15,14 +15,14 @@ SECURITY.md "Module Integrity Verification" for the threat model.
 
 # SHA3-256 digest of the package's .py files at build time (raw 32 bytes,
 # hex-encoded for embeddability).
-INTEGRITY_DIGEST_HEX = "ec562b78003bb60ecab77e5cf9483e40981b3f6b1cae2711b7466ea1ea4ab323"
+INTEGRITY_DIGEST_HEX = "31d20641fb2577fc97ee926a561cf88c0b55e82b190100219ab667801a7cea37"
 
 # SHA3-256 digest of the native library (libama_cryptography) at build time.
 # This is what binds the shared object that performs every cryptographic
 # operation into the same signature that covers the .py files — without it the
 # signature attested to the Python wrapper only, and the implementation the
 # wrapper calls into was covered by nothing.
-INTEGRITY_NATIVE_DIGEST_HEX = "44cc326466a7383b9fc060a4528cfab8174f9be43a56540b916b27a61cee2010"
+INTEGRITY_NATIVE_DIGEST_HEX = "8d9ed9531fa13788b1347a17ab9171f5c5c9c1552fabc1ab68bbcbd8fc1833b0"
 
 # SHA3-256 digests of the compiled binding extensions at build time, keyed by
 # exact filename.  These modules contain compiled kernels and execute at import
@@ -34,12 +34,12 @@ INTEGRITY_NATIVE_DIGEST_HEX = "44cc326466a7383b9fc060a4528cfab8174f9be43a56540b9
 INTEGRITY_BINDING_DIGESTS_HEX: dict[str, str] = {}
 
 # Ephemeral build-time Ed25519 public key (raw 32 bytes, hex-encoded).
-INTEGRITY_PUBKEY_HEX = "e5e13474f5cdac072d4a00b23bc7c36b310b89c251f0187f14cfa2cbf0d36658"
+INTEGRITY_PUBKEY_HEX = "783dc634fb6553d2ec08f80c0a3b308cf1ce940522933423d6fe881a63c56a8d"
 
 # Ed25519 signature over SHA3-256(domain_v3 || py_digest || native_digest ||
 # serialized_binding_digests) — the v3 composite that makes all three
 # inseparable.  See ama_cryptography._self_test._composite_integrity_message_v3.
-INTEGRITY_SIGNATURE_HEX = "8ec5deffca6a7062ee9ce87f456b75517a9e31a8a07c395e243297a358756ed3d6a62841d788e2f337cf2e6d96027303f2018be7c4e634ef4359f3b3be643705"
+INTEGRITY_SIGNATURE_HEX = "4225cb9db0b1291dcca5a88e222e9803f2f6b37b3db6a94df21ed8f815bd2e4d9aefe4be23578a4a8b4649378ae2d7c9947d559267a13f49bce5277fc4da0209"
 
 # Build metadata — informational only, not part of the integrity contract.
 BUILD_PIPELINE_VERSION = "3"
