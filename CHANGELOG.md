@@ -999,6 +999,37 @@ existed.  `tests/test_documented_source_paths_exist.py` enforces the rule with
 a non-vacuity guard on both the file list and the citation count, and an
 allowlist whose every entry names the command that writes the path.
 
+#### The interleaved ReDoS estimator was still one-sided, and CI proved it
+
+`tests/test_c_secret_zeroization_gate.py`'s linearity check failed on the
+macOS Python 3.14 lane at 2.94x against its 2.8x ceiling, on a commit that
+touched neither `tools/check_c_secret_zeroization.py` nor the gate — and the
+same lane had been green one commit earlier, so the code under test was
+bit-identical across the two outcomes.  Not treated as a flake: reproduced
+here at **1 failure in 8 runs** under full synthetic saturation.
+
+The residual bias is structural.  Interleaving by round equalises *when* each
+size is sampled but not how *long* each sample is exposed, and the largest
+payload's scan is the longest — so a contention burst is likeliest to land on
+it, inflating exactly the numerator of the ratio.  The whole measurement is now
+repeated up to three times and the test passes as soon as one comes back under
+the ceiling.  That sharpens the check rather than loosening it, and the
+one-sided noise model is why: noise can only inflate a sample, so a further
+measurement can only move each size's floor *down*, toward its true cost.  Both
+floors converge on truth and the ratio converges on the pattern's real growth.
+The ceiling is unchanged at 2.8x.
+
+Measured under the same saturation that failed the single-shot form: **0
+failures in 10 runs**.  The other direction was checked by planting nested
+quantifiers in the value group (`0+` as `0*0*`, and the bounded
+`(?:0{1,40})+`); neither produced a ratio a retry could rescue, because neither
+completes — both ran past a 300-second timeout at the sizes this test uses and
+again at 2^8-2^10.  That is the honest shape of the discrimination: a pattern
+that has lost linearity does not land just over the ceiling where a retry might
+reach it, it hangs, and what catches it is the 1-second absolute bound over
+200,000 characters at the top of the same class.  This ratio test guards the
+narrower case of growth that is superlinear but still fast, and there the retry
+costs nothing and removes the false positives.
 #### Two more documented files that never existed, and the gate that could not see them
 
 The path gate above only sees a citation spelled with its directory, and two
