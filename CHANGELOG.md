@@ -31,6 +31,496 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > Compare `[4.0.0]` below, which is dated because it *is* released: tag
 > `v4.0.0`, published 2026-08-02.
 
+### Maintenance pass, thirteenth (2026-08-26) — the constant-time gap this branch documented instead of closing
+
+`496f80e` added three entries to the coverage-gap list in
+`CONSTANT_TIME_VERIFICATION.md` and called the third of them "the gap on this
+list most cheaply closed".  It was, and it is closed here.  Nothing in this
+pass changes a wire format, a key format, a C API signature, or any library
+behaviour; the change is to what the project can measure about itself, plus one
+static-analysis finding resolved at source.
+
+#### Three NEON kernels shipped in every arm64 wheel with no timing measurement, because no dispatch name reached them
+
+`AMA_DISPATCH_ONLY=<slot>` exists so the nightly dudect SIMD sweep can pin one
+SIMD kernel and attribute a t-value to it alone.  The inventory carried
+`aes-gcm-neon`, `chacha20-neon` and `sha3-neon`, and those three were measured
+on every AArch64 sweep.  It carried no name that resolved to the NEON ML-KEM
+NTT, ML-DSA NTT or Argon2-G kernels — so those three could not be pinned, and
+therefore could not be measured, on any commit in this project's history.  They
+are not marginal code: they are wired by default on every AArch64 host
+(`dispatch_info.kyber/dilithium/argon2 >= AMA_IMPL_NEON`) and ship in every
+arm64 wheel, and the dudect suite already has the lanes that would exercise them
+— `Kyber-1024 decaps`, `ML-DSA-65 sign`, `Argon2id legacy verify`.
+
+This was not a hardware limitation, which is what separates it from the two
+SVE2 cells and `sha3-avx512x4` above it on that list.  The hosted
+`ubuntu-24.04-arm` runners execute NEON natively and already run the three NEON
+slots that did exist.  It was a missing name.
+
+`kyber-ntt-neon`, `dilithium-ntt-neon` and `argon2-g-neon` now exist, in all
+five places the inventory's own source-of-truth comment requires to stay in
+step: `AMA_DISPATCH_ONLY_SLOTS[]` and the resolution branches in
+`src/c/dispatch/ama_dispatch.c`, `KNOWN_SLOTS[]` in
+`tests/c/test_dispatch_only_env.c`, the `foreach(slot ...)` in
+`tests/c/CMakeLists.txt`, the slot inventory in the installed header
+`include/ama_dispatch.h`, and the sweep matrix in
+`.github/workflows/dudect.yml`.  The operator-facing UNRECOGNISED diagnostic
+enumerates `AMA_DISPATCH_ONLY_SLOTS[]` directly, so it picked up the three new
+names with no second edit.
+
+**They are mandatory sweep cells, not optional ones.**  `OPTIONAL_SLOTS` in
+`dudect.yml` is `sha3-avx512x4 kyber-sve2 sha3-sve2` — the three whose CPU
+feature is genuinely runner-silicon-dependent, where a 77 is a hardware fact.
+AdvSIMD is architecturally guaranteed on AArch64, so a 77 from one of these
+three is a dispatch-wiring regression that left a shipped kernel unmeasured, and
+the confirm step fails the lane on it.  `tests/test_dudect_simd_sweep_gate.py`
+parametrises over the real matrix and executes the real shell classification
+logic, so it picked the three up automatically and now asserts that
+classification: 15 tests before, 18 after, all passing.
+
+**Why they resolve differently from the AVX2 and SVE2 branches.**  Those ask
+`saved.<slot> == <kernel>` — "did this build and host wire that kernel by
+default" — which is the right question only where the kernel's presence is
+conditional: AVX2 on an x86-64 host, FEAT_AES + FEAT_PMULL for `aes-gcm-neon`,
+SVE2 silicon.  For these three it is the wrong question in two reachable
+configurations.  On an SVE2 build running on SVE2 silicon the SVE2 block has
+already overwritten `kyber_ntt` and `dilithium_ntt` by the time
+`apply_dispatch_only()` runs, so the comparison can never match and the slot
+would answer UNSUPPORTED behind a diagnostic blaming the CPU or the build — both
+false, and it is the SVE2 configuration where pinning the NEON tier is *most*
+useful, since it is the only way to A/B the two tiers on one host.  That is the
+same defect already recorded in this file for `sha3-neon`, and these branches
+take the same remedy.  Separately, `argon2_g` is left NULL when
+`AMA_DISPATCH_NO_ARGON2_AVX2=1` is set, and any of the three may be demoted by
+the auto-tune microbench on a noisy host; a pin exists precisely to override the
+default selection, so neither is a reason to refuse it.  The check is therefore
+`ama_has_arm_neon()` — the kernel is compiled whenever the branch is, and
+AdvSIMD is mandatory on AArch64.  Each pin installs the same companion slots the
+default NEON wiring assigns together, so a pinned table is a subset of a real
+one rather than a mixture no dispatch path produces.
+
+Verified rather than reasoned, on an `aarch64-linux-gnu` cross build executed
+under `qemu-aarch64-static` — the configuration `arm-qemu.yml` uses:
+
+* All three resolve HONORED; `ama_dispatch_active_slot()` returns the requested
+  label in each case.
+* `test_kat` exits 0 under each of the three pins, so the pinned dispatch table
+  is functionally correct and not merely wired.
+* AArch64 `ctest` goes **68/68 → 71/71**, the three new tests being the three
+  new slots.
+* Non-vacuity by mutation: making the `kyber-ntt-neon` branch unreachable turns
+  that one test from Passed to Skipped while `dilithium-ntt-neon` still passes,
+  so each test observes its own branch.
+* On x86-64 the same three names report UNSUPPORTED (exit 77 → CTest Skipped),
+  not UNRECOGNISED — the inventory is architecture-independent and the branches
+  are `#ifdef`-guarded, which is the distinction `apply_dispatch_only_result_t`
+  documents.  x86-64 `ctest` goes 67/67 → 70/70.
+* Exported symbols unchanged at 240 (`check_export_allowlist` exit 0): the
+  resolution is internal, and no new ABI is promised.
+
+`CONSTANT_TIME_VERIFICATION.md` records the gap as closed rather than deleting
+it, and states what remains on that list: the two SVE2 cells and
+`sha3-avx512x4`, both genuine hardware-availability limits rather than missing
+wiring.
+
+#### A refused native library was mapped anyway, by the package's own next import
+
+**This is the security-relevant change in this pass, and reviewers should read
+it first.**  It is a defeat of the pre-load integrity refusal, not a
+documentation or measurement issue.
+
+`_find_native_library` does not merely check a digest and then open a path: it
+opens the candidate, hashes the bytes it holds open, and loads it through
+`/proc/self/fd/N`, so the bytes mapped are the bytes hashed and no TOCTOU
+window exists.  On a mismatch it refuses and returns `None` **without
+mapping**, and its refusal message states why in as many words — *"refused
+before mapping ... a shared object executes its constructors the moment it is
+mapped."*
+
+That guarantee was defeated a few statements later by this package's own import
+sequence.  All five Cython binding extensions carry
+`DT_NEEDED [libama_cryptography.so.5]` and `RUNPATH [$ORIGIN:...]` (`readelf
+-dW`), and `pqc_backends` probed all five at module scope **unconditionally**,
+on the refusal path as well as the healthy one.  Importing `ed25519_binding`
+made the dynamic loader map the very object the digest check had just rejected,
+resolving it out of the package directory via `$ORIGIN`, with no check of any
+kind — and an ELF object runs its constructors the moment it is mapped.
+
+Reproduced rather than reasoned.  One byte flipped in the in-package
+`libama_cryptography.so.5.0.0`, the other candidate paths removed so only the
+tampered copy resolves, and the import traced against `/proc/self/maps` at each
+submodule boundary:
+
+| submodule imported | library mapped at that point? |
+|---|---|
+| `ama_cryptography.pqc_backends` | no |
+| `ama_cryptography._finalizer_health` | no |
+| `ama_cryptography.ed25519_binding` | **no — and this import is what maps it** |
+| `ama_cryptography.dilithium_binding` | **yes** |
+
+The import raises `CryptoModuleError` exactly as designed, and
+`/proc/self/maps` nevertheless contains the tampered library with its
+constructors already run.  An attacker able to replace that file obtained code
+execution in the victim's process *despite* the integrity check correctly
+detecting the tampering — which is the entire purpose of a pre-load refusal.
+On the healthy path the same trace shows the intended order: the verified
+`ctypes.CDLL` on `/proc/self/fd/3` happens first, and the later `DT_NEEDED` is
+satisfied from that already-mapped SONAME rather than by a second, unchecked
+open.
+
+Fixed by gating every probe on `_binding_imports_permitted()` — i.e. on the
+native library having been verified and loaded.  Nothing is lost: a binding
+extension cannot function without the library, because it is a hard
+`DT_NEEDED`, not a soft dependency; and the docs-build override that reaches
+OPERATIONAL with no native library simply runs without the Cython accelerators.
+The rule is written once, in one predicate, and applied inside each of the five
+probes rather than at their call sites, so a probe cannot be reached without
+it.
+
+Verified on the healthy path as well as the failing one: import is
+`OPERATIONAL`, `_native_lib` is loaded, and all five of
+`_cy_ed25519_sign_fn`, `_cy_dilithium_sign_fn`, `_cy_hkdf_fn`, `_cy_sha3_fn`
+and `_cy_hmac_fn` still resolve, with all five binding modules in
+`sys.modules` — so no accelerator was lost to the gate.
+
+`tests/test_native_library_never_mapped_unverified.py` pins it end to end: a
+tampered copy of the package, imported in a subprocess, must be refused **and**
+must leave `/proc/self/maps` free of the library.  It carries a positive
+control — an intact copy must import and *must* show the mapping — so it cannot
+pass because the `/proc` probe stopped working.  Proven discriminating: with
+the five guards removed the mapping assertion fails while the positive control
+still passes; with them restored, both pass.  The test works on a copy of the
+package rather than in place, because flipping a byte under a mapping the
+running interpreter already holds segfaults it.
+
+#### The gate written for the SIGILL finding covered one of the seven ISAs the build scopes
+
+Principal finding 1 of this release is that `-mavx2` was applied to
+`CMAKE_C_FLAGS` for every translation unit, so the compiler auto-vectorised
+ordinary C and a shipped wheel could `SIGILL` on pre-AVX2 x86-64 inside the very
+portable path the CPUID dispatcher selects *because* the CPU lacks AVX2.  The
+remedy was per-file scoping plus `tools/check_avx_scoping.py`, which
+disassembles the built object and fails on a YMM/ZMM operand outside an
+AVX2/AVX-512 kernel.
+
+`CMakeLists.txt` scopes **seven** families of CPUID-gated instructions per file,
+not one: AVX/AVX2/AVX-512, AES-NI (`-maes`, `-mvaes`), PCLMULQDQ (`-mpclmul`,
+`-mvpclmulqdq`), SHA-NI (`-msha`), BMI1/BMI2/ADX (`-mbmi -mbmi2`, `-mbmi2
+-madx`), SSSE3 (`-mssse3`) and SSE4.1 (`-msse4.1`).  Every one raises the same
+hazard in the same way.  The gate checked YMM/ZMM only, so six of the seven were
+left to a CMake comment — which is exactly the state the audit found `-mavx2`
+in.
+
+Measured rather than argued.  A build with
+`-maes -mpclmul -msha -mssse3 -msse4.1 -mbmi -mbmi2 -madx` applied globally puts
+those instructions in **172 non-kernel symbols** — `ama_ascon_hash256`,
+`ama_ed25519_point_add`, `ama_ge25519_restore_extended_t`, `x25519_scalarmult`
+and 168 more — split BMI/ADX 100, SSE4.1 52, SSSE3 20.  Run against that object,
+the AVX-only gate printed *"OK: every YMM/ZMM operand in the object is inside an
+AVX2/AVX-512 kernel"* and **exited 0**: a clean report over the precise
+regression class it exists to catch, because none of the leaks were YMM.  The
+extended gate exits 1 and names all 172.
+
+The gate is now a table of ISA families, each with its instruction pattern, the
+kernel-name markers that may carry it (`_avx2`/`_avx512`, `_shani`,
+`_bmi`/`_mulx`), and the symbols whose presence proves the gate read a build in
+which that family exists — `ama_aes256_gcm_encrypt_avx2`,
+`ama_sha256_compress_x86_shani`, `ama_keccak_f1600_bmi`, alongside the three
+AVX2 kernels it already required.  On the shipped object it now accounts for
+**5,360** CPUID-gated instructions across 7 families, 0 outside a kernel.
+
+Two deliberate exclusions, stated rather than silent.  `tzcnt`, `lzcnt` and
+`popcnt` are not flagged: `tzcnt` is encoded as `rep bsf` and executes as `bsf`
+on a CPU without BMI1 — wrong for a zero input, never a fault — so flagging it
+would report a hazard that does not exist, and `lzcnt`/`popcnt` sit behind
+ABM/POPCNT rather than behind any flag this build scopes per file.  XMM operands
+remain excluded because 128-bit SSE2 is baseline x86-64.  SSSE3 and SSE4.1 *are*
+checked, because `-march=x86-64` is SSE2 and neither is baseline.
+
+Matching against the mnemonic column rather than the whole disassembly line is
+load-bearing and pinned by its own test: objdump renders a call as
+`call ... <ama_aes256_gcm_encrypt_avx2>`, so a whole-line match would turn every
+*caller* of a kernel into a reported leak — and the callers are, by
+construction, exactly the non-kernel symbols.
+
+`tests/test_avx_scoping_gate.py` grew from 18 tests to 53.  Each family is
+parametrised over three properties: its pattern matches its own instruction, it
+owns its own required kernels, and a planted occurrence in a non-kernel symbol
+fails the gate.  The synthetic "clean object" fixture was itself a casualty —
+it described a build with no AES-NI, SHA-NI or BMI kernel at all, which the gate
+must now reject rather than pass.
+
+#### Control-flow integrity was arriving by accident on x86-64 and not at all on AArch64
+
+The MSVC branch of `CMakeLists.txt` has carried `/guard:cf` since the file was
+written.  On ELF, nothing here asked for the equivalent — and the reason every
+x86-64 build had it anyway is that Ubuntu patches GCC to enable
+`-fcf-protection` by default.  Measured: `readelf -nW` on the built
+`libama_cryptography.so` reports `x86 feature: IBT, SHSTK`, and so does a
+flagless `int main(void){return 0;}` compiled by the same `gcc`.  The property
+was the distribution's, not this project's, so a toolchain without that patch —
+upstream GCC, or the musl/Alpine image this repository ships a Dockerfile for —
+produced the same sources with no CET at all and nothing would have noticed.
+
+AArch64 had no such accident to inherit.  The same probe against
+`aarch64-linux-gnu-gcc` emits no AArch64 GNU property, and neither did the
+AArch64 `libama_cryptography.so`: **every arm64 wheel shipped with no
+branch-target identification and no return-address signing while the x86-64
+wheel shipped with full CET.**  That asymmetry was not a decision recorded
+anywhere; it was the absence of one.
+
+Both are now requested explicitly, per architecture and probed for support the
+way the RELRO/noexecstack linker flags above them already are:
+`-fcf-protection=full` on x86, `-mbranch-protection=standard` — which is
+`bti` + `pac-ret` — on AArch64.
+
+This is free hardening rather than a portability trade, and that is by
+construction: `ENDBR64` decodes as a multi-byte NOP on pre-CET x86, and
+`bti` / `paciasp` / `autiasp` sit in the AArch64 hint (NOP) space on
+pre-Armv8.3/8.5 cores.  A binary built with them runs unchanged on hardware that
+has neither.  Neither flag is secret-dependent — the inserted instructions are
+unconditional and data-independent — and all **18** deterministic
+instruction-count constant-time targets pass with them enabled, cross-class
+delta unchanged.
+
+BTI is all-or-nothing at link time (the linker emits the output property only
+if every input object carries it), so it must stay a global flag rather than a
+per-file one.  This tree has no hand-written assembly translation unit
+(`git ls-files '*.S' '*.s'` is empty), so no object is unable to carry the
+marking, and all 37 objects of the AArch64 shared library do.
+
+**What is verifiable here, stated exactly.**  The AArch64 shared object built
+by this container's *cross* toolchain gains 133 `bti` landing pads and 612
+`paciasp`/`autiasp` return-address-signing instructions where it had none — and
+PAC-RET is effective on its own, because signing and authentication are
+self-contained in each function's prologue and epilogue and need no loader
+property.  The linked image nevertheless carries no `GNU_PROPERTY_AARCH64_
+FEATURE_1_BTI`, and that is a property of this sysroot rather than of the
+change: `crti.o` and `crt1.o` from Ubuntu's `libc6-dev-arm64-cross` carry no
+BTI/PAC property, and a trivial one-function `.so` built with the same flag
+loses the property identically.  BTI *enforcement* therefore follows the CRT
+objects of whichever sysroot links the artefact; the release arm64 wheels are
+built natively on `ubuntu-24.04-arm` rather than cross-compiled, and confirming
+the property on that image is a CI observation this container cannot make.  The
+landing pads are emitted either way, and are inert where unenforced.
+
+Verified: AArch64 `ctest` 72/72 under QEMU with the flag on; x86-64 `ctest`
+71/71 with 386 `endbr64` landing pads and the `IBT, SHSTK` property intact;
+both strict-warning AArch64 configurations (NEON and SVE2) build clean and the
+frozen warning allowlist is unchanged at 74 allowlisted `int128-extension`
+diagnostics; the ISA-scoping gate still reports every CPUID-gated instruction
+inside a kernel scoped for it (`ENDBR64` and `bti` are baseline-safe and belong
+to no gated family); exported symbols unchanged at 240.
+
+#### The test-only Ascon permutation shipped in the static archive on every platform
+
+`cmake/ama_exports.map` localises `ama_ascon_permutation_for_test` by exact
+name, overriding the `ama_*` wildcard above it, and says why: *"a raw
+permutation in a FIPS-aligned module's public surface invites non-approved
+constructions."*  `496f80e` went further and moved its declaration out of the
+installed public header into `src/c/internal/ama_testing_exports.h`, because a
+public declaration promises an ABI the export map exists to withhold.
+
+Both controls govern the **shared object**.  The shipped **static archive** has
+no export control at all, and `nm libama_cryptography_static.a` found the
+function there as a defined `T` symbol — on x86-64 and on AArch64 alike.  A
+consumer linking `libama_cryptography_static.a`, which this project installs and
+its pkg-config file names, could call the raw permutation directly. The
+reasoning behind the `local:` entry applied to that consumer exactly as much as
+to a `.so` one; the mechanism did not.
+
+`cmake/ama_exports.macos.sym` is the same decision expressed a third time, and
+it is expressed wrongly: a Mach-O exported-symbols list is an ALLOW-list with no
+exclusion form, so its single `_ama_*` entry matches
+`_ama_ascon_permutation_for_test` and publishes from the `.dylib` precisely the
+symbol the version script withholds from the `.so`.
+
+Adding an `-unexported_symbols_list` would have patched the macOS side and left
+the class standing — one security decision encoded in three platform-specific
+mechanisms that can each drift.  The function is now compiled only under
+`AMA_TESTING_MODE`, so there is nothing for any of them to publish: absent from
+the shared library and the static archive on both architectures, present only in
+`libama_cryptography_test.a`, which is the one target CMake gives that macro and
+the one `tests/c/test_ascon.c` — the sole caller in the repository — links.  The
+`local:` entry stays as defence in depth.
+
+Verified per artefact rather than per platform, which is what makes the
+conclusion portable: before, `nm …_static.a` reported the symbol on both the
+x86-64 and the AArch64 build; after, `nm -D` on the shared object, `nm` on the
+static archive and `nm` on the AArch64 static archive all report zero, while the
+test archive still defines it and `test_ascon` passes.  Exported symbols
+unchanged at 240.
+
+#### Five workflows could not run on the change that breaks them
+
+A `paths:` filter decides whether a workflow runs at all, and a gate that is
+correct, non-vacuous and green is worth nothing on a change that never triggers
+it.  That failure mode is silent in the most misleading way available: the pull
+request shows no red check, because it shows no check.
+
+The sharpest case guards the finding above.  `dudect.yml` is the only workflow
+that runs `check_avx_scoping.py`, and the property that gate enforces is set
+entirely by `set_source_files_properties(... COMPILE_FLAGS ...)` in the root
+`CMakeLists.txt` — which appeared in **neither** of that workflow's filters.  A
+pull request reintroducing a library-wide `-mavx2`, the exact audit-M3
+regression, touches only that file, and so would not have run the gate written
+for it.  `tools/check_avx_scoping.py` was not listed either, though its two
+sibling gates were, under a comment stating precisely why they had to be.
+
+Four more, found by checking the property across every workflow rather than
+stopping at the reported one:
+
+* `arm-qemu.yml` is the only place `check_secret_division.py` — the KyberSlash
+  gate — runs against an **AArch64** object, and did not list it.
+* `baseline-guard.yml` watches two baseline files without listing
+  `benchmarks/check_baseline_justification.py`, the script that adjudicates
+  them.
+* `corpus-provenance.yml` did not list `tools/check_vector_provenance.py`, the
+  gate it runs over its corpora.
+* `integrity-anchor-check.yml` configures and builds through CMake without
+  listing `CMakeLists.txt`.
+
+And `dudect.yml`'s two filters had drifted apart — six patterns on `push`
+against nine on `pull_request` — so the three gate scripts were re-verified when
+a change arrived as a pull request and skipped when the same change was pushed
+to `main`, `develop` or a feature branch.  The same change, gated on how it
+arrived.
+
+All five are fixed, and `tests/test_workflow_path_filters.py` pins the property
+so it cannot drift back: for every path-filtered workflow, every repository
+script named in a `run:` block is matched by that workflow's own patterns, a
+workflow that drives CMake lists `CMakeLists.txt`, and `push` and
+`pull_request` filters are identical where both exist.  Only paths that resolve
+to a tracked file are required, so a shell word that merely looks like a path
+cannot fail it.  Proven discriminating by reverting each fix in turn: dropping
+`CMakeLists.txt` from `dudect.yml`, dropping `check_avx_scoping.py`, dropping
+`check_secret_division.py` from `arm-qemu.yml`, and re-introducing the
+push/pull_request asymmetry each fail the test, and it passes on the tree.
+
+#### ML-DSA ran its inverse NTT outside the input bound that keeps it inside int32
+
+`dil_invntt_scalar`, and every SIMD kernel the dispatcher installs in its
+place, performs no modular reduction on the additive half of its butterfly.  At
+each of its 8 levels `a[j] = a[j] + a[j + len]` adds two values that were
+themselves sums at the level below, so the bound on the accumulating position
+doubles per level and the structural worst case is 2^8 = 256x the input bound.
+With `|input| < q` that is 256q = 2,145,386,752 — under `INT32_MAX` by 0.1%.
+The FIPS 204 reference states this as `poly_invntt_tomont`'s precondition in as
+many words ("input coefficients need to be less than Q in absolute value"), and
+places a `polyveck_reduce` immediately before each such call to establish it.
+
+Three call sites in `src/c/ama_dilithium.c` fed the transform an l-fold
+accumulator without that reduction: keygen's `t = A*s1`, the secret-key
+consistency check in `dil_pubkey_from_sk` (reached from
+`ama_ml_dsa_pubkey_from_privkey` and `ama_ml_dsa_privkey_check`), and
+`w = A*NTT(y)` inside signing's rejection loop.  Each is a sum of l Montgomery
+products; each product is in `(-q, q)` by `dil_montgomery_reduce`'s own bound
+and `dil_poly_add` does not reduce, so those inputs were bounded by nothing
+tighter than `l*q` — 5q for ML-DSA-65.  256 * 5q = 10,726,933,760 exceeds
+`INT32_MAX` by roughly 5x, and signed overflow is undefined behaviour rather
+than a wrap this code could rely on.  Verification was already correct: it
+carries the reduction, as do the three single-pointwise-product sites in
+signing whose inputs are `< q` by construction.
+
+Measured rather than argued, with a 64-bit shadow of both additive results so
+the probe reports the true mathematical magnitude even where the int32
+expression would wrap.  Over 36,990 inverse-NTT calls from 400
+keygen/sign/verify cycles: entry reached **2.415q** and the largest
+intermediate **0.167 * INT32_MAX** — a 6x observed headroom that is sign
+cancellation in the sampled data, not a bound.  No overflow was observed, and
+this project does not rest a memory-safety property on that.  After the three
+reductions: entry **0.510q**, intermediates **0.0796 * INT32_MAX**, headroom
+**12.6x**, and the worst case becomes provable — `dil_reduce32`'s image was
+enumerated over a >= 6q-wide band as `[-4235259, 4235258]`, so 256 * 4235259 =
+1,084,226,304 with a 1.98x margin.
+
+**No output changes.**  Reduction is the identity modulo q, the inverse NTT is
+linear over Z_q, and the results are reduced and `caddq`'d downstream
+regardless.  Verified rather than asserted: the SHA3-256 digest over the public
+and secret keys of **64 distinct seeds** is byte-identical with and without the
+three calls, and sign/verify round-trips 64/64 either way.
+
+Pinned by `tests/c/test_dilithium_invntt_bound.c`, which asserts that no
+inverse-NTT entry on any of the four paths carries `|coeff| >= q`.  Nothing
+functional could have caught this — the transform is linear mod q and its
+results are reduced downstream, so signatures still verify and every KAT still
+passes with a reduction removed; only the overflow margin changes.  The bound
+is read through an `AMA_TESTING_MODE` counter maintained at the **dispatch
+wrapper**, so the assertion covers whichever kernel the host actually runs
+rather than only the portable one, and `AMA_TESTING_MODE` is PRIVATE to the
+`ama_cryptography_test` target so no shipped library carries it.  Proven
+discriminating by mutation: removing each of the three reductions in turn fails
+exactly its own phase (keygen 2.273q, sign 2.349q, privkey-check 2.130q) while
+the other three phases still pass.  The privkey-check phase exists because the
+first version of the test passed with that site's reduction removed — it is
+reached from neither keygen nor signing.
+
+#### Three reduction routines documented a range they do not have
+
+Each was enumerated rather than re-quoted.
+
+* `dil_reduce32` (`src/c/ama_dilithium.c`) was documented as "Reduces a to
+  range [0, q)".  It returns the **centred** representative and is negative for
+  roughly half of all inputs — which is what makes the `dil_caddq` in
+  `dil_freeze` necessary rather than decorative.  Its real image is
+  `[-4235259, 4235258]` over the >= 6q-wide band this file uses, widening to
+  `[-6282956, 6282505]` over the whole int32 domain.  Any bound derived from
+  the old claim would have been wrong by a factor of two in the wrong
+  direction, and the inverse-NTT argument above depends on the true figure.
+* `barrett_reduce` (`src/c/ama_kyber.c`) was headed "Reduces a mod q for values
+  up to 2^26" — a domain the parameter type cannot express, since 2^26 does not
+  fit an `int16_t`.  The 2^26 is the reciprocal's scaling constant
+  (`v = round(2^26 / q)`), not an input bound.  This PR had already tightened
+  the *body* comment to the exhaustively verified `[0, q]`; the doc header
+  above it was left behind, as were both SIMD copies.
+* The AVX2 and NEON copies of `barrett_reduce_scalar` still bounded their
+  result at `(-2q, 2q)` — the loose, sign-admitting form `ama_kyber.c`'s own
+  comment records as having been replaced, noting it "admits a sign the formula
+  cannot produce".  Re-verified here exhaustively over all 65,536 `int16_t`
+  inputs: the quotient lies in `[-10, 9]`, the image is `[0, 3329]`, there are
+  **zero** negative outputs, and q itself is attained at exactly nine inputs
+  (the negative multiples of q from -3329 to -29961).  All three copies now
+  carry the same measured statement.
+
+#### A dead NEON reduction that was not a reduction
+
+`barrett_reduce_dil_neon` in `src/c/neon/ama_dilithium_neon.c` had zero callers
+anywhere in the repository — `static inline` with no caller, the one shape
+neither gcc nor clang warns about, which is why it survived the dead-NEON-kernel
+sweep in `d96fb08`.  It was also wrong: it computed `t = a >> 23; a - t*q`,
+omitting the `+ (1 << 22)` rounding term that `dil_reduce32` carries.  Measured
+against that scalar reference over 400,000 values drawn from `[-5q, 5q]`, it
+disagreed on **50.0%** of them and returned `|result| >= q` on 0.1%, up to
+1.004q.  A routine that can return a value at or above q is not a reduction,
+and dead-but-plausible arithmetic is worse than none: the next author needing a
+vector reduction here would have wired it.  Removed, with a note at the site
+recording why there is deliberately none and what a correct one would have to
+be pinned against.
+
+#### One CodeQL finding resolved at source, and the class swept
+
+CodeQL alert 647 (`py/import-and-import-from`) on
+`tests/test_avx_scoping_gate.py:23`: the module was bound both as
+`import tools.check_avx_scoping as gate` and as
+`from tools.check_avx_scoping import inventory, is_kernel_symbol`.  The
+`from`-import is gone and both names now go through the module alias, which is
+the form `tests/test_benchmark_baseline_infra.py` and
+`tests/test_timing_detector_calibration.py` already settled on for this rule.
+No suppression, no dismissal.
+
+Swept the class rather than the one flagged site: an AST pass over all 310
+tracked `.py` files, collecting each module imported by `import X` and by
+`from X import ...` and intersecting them, found exactly one more —
+`tools/wheel_smoke_test.py`, which binds `ama_cryptography` at module scope with
+a plain `import` and then reaches `_self_test` through a call-time
+`from ama_cryptography import _self_test`.  CodeQL has not flagged it, but it is
+the same shape, and the deferral that import exists for is preserved: it is now
+`import ama_cryptography._self_test as _self_test` at the same point in the same
+function, so the module under test still completes its own import, POST
+included, before the smoke test reaches into it.  The sweep now reports zero
+sites tree-wide.
+
 ### Maintenance pass, twelfth (2026-08-23) — the four red lanes at head 7432e0d, and the false claims standing behind green ones
 
 Every CI failure on the branch head was root-caused to a specific defect, and
@@ -4217,7 +4707,7 @@ resolved here.  The ones that changed behaviour rather than prose:
 
 Documentation claims corrected against measurement rather than restated: the
 SoftHSM2 lane runs **one** real-token test (`test_full_lifecycle`), not 51; the
-C suite is 62 suite files / 65 translation units, not 58 / 61 (60 / 63 when that pass measured it; the eleventh debt-closure pass added `tests/c/test_ed25519_canonical_r.c` and `tests/c/test_ed25519_scalarmult_contract.c`, and registered `tests/c/test_field_bench.c`, which had existed unbuilt since #370); the gated
+C suite is 63 suite files / 66 translation units, not 58 / 61 (60 / 63 when that pass measured it, 62 / 65 after it; the eleventh debt-closure pass added `tests/c/test_ed25519_canonical_r.c` and `tests/c/test_ed25519_scalarmult_contract.c`, and registered `tests/c/test_field_bench.c`, which had existed unbuilt since #370, and the thirteenth added `tests/c/test_dilithium_invntt_bound.c`); the gated
 surface is what `tools/check_error_state_gating.py` reports (89
 native plus 10 Cython entry points), replacing two documents that disagreed at
 80 and 81; the canonical-host performance tables understate 5.0.0 on the AEAD
