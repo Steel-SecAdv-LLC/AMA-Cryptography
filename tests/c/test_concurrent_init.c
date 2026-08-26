@@ -25,7 +25,7 @@
  * gate was then made atomic and the report went away.  Both directions are
  * recorded in the commit that introduced this file.
  *
- * The shape is deliberate.  Every thread waits on a barrier before touching
+ * The shape is deliberate.  Every thread waits at a start gate before touching
  * anything, so the lazy initialisers are entered from N threads at genuinely
  * the same moment rather than one after another; a test that merely spawns
  * threads sequentially reproduces the old vacuity with more code.  The
@@ -33,12 +33,6 @@
  * table, the CPUID probes behind it, the NIST-P and secp256k1 generator
  * combs, and the Ed25519 base-point tables.
  */
-
-/* pthread_barrier_* is XSI/POSIX.1-2001; without this the barrier type and
- * functions are hidden under the default feature-test macros on glibc. */
-#ifndef _POSIX_C_SOURCE
-#define _POSIX_C_SOURCE 200809L
-#endif
 
 #include <pthread.h>
 #include <stdio.h>
@@ -68,7 +62,32 @@ static const uint8_t P256_GENERATOR[65] = {
     0xCB, 0xB6, 0x40, 0x68, 0x37, 0xBF, 0x51, 0xF5
 };
 
-static pthread_barrier_t start_line;
+/* A single-use start gate, built from a mutex and a condition variable.
+ *
+ * NOT pthread_barrier_*.  Barriers are the _POSIX_BARRIERS *option*, not a
+ * requirement of the base standard: macOS ships pthreads without them, and
+ * the first version of this file named the type unconditionally and failed to
+ * compile on both macOS C lanes.  Mutexes and condition variables are
+ * mandatory wherever pthreads exists, so this is the portable spelling of the
+ * same rendezvous — the last thread to arrive releases all of them at once,
+ * which is the property the test needs. */
+static pthread_mutex_t gate_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t gate_open = PTHREAD_COND_INITIALIZER;
+static int gate_arrived = 0;
+static int gate_released = 0;
+
+static void gate_wait(void) {
+    pthread_mutex_lock(&gate_lock);
+    if (++gate_arrived == THREADS) {
+        gate_released = 1;
+        pthread_cond_broadcast(&gate_open);
+    } else {
+        while (!gate_released)
+            pthread_cond_wait(&gate_open, &gate_lock);
+    }
+    pthread_mutex_unlock(&gate_lock);
+}
+
 static int failures = 0;
 static pthread_mutex_t failures_lock = PTHREAD_MUTEX_INITIALIZER;
 
@@ -84,7 +103,7 @@ static void record_failure(const char *what) {
  * N threads enter the initialisers together. */
 static void *worker(void *arg) {
     (void)arg;
-    pthread_barrier_wait(&start_line);
+    gate_wait();
 
     for (int round = 0; round < ROUNDS; ++round) {
         /* FIRST, from cold: the two attacker-input P-256 paths that reach the
@@ -172,11 +191,6 @@ int main(void) {
            THREADS, ROUNDS);
     printf("  Under -fsanitize=thread this is what makes the lane non-vacuous.\n");
 
-    if (pthread_barrier_init(&start_line, NULL, THREADS) != 0) {
-        fprintf(stderr, "pthread_barrier_init failed\n");
-        return 1;
-    }
-
     for (int i = 0; i < THREADS; ++i) {
         if (pthread_create(&threads[i], NULL, worker, NULL) != 0) {
             fprintf(stderr, "pthread_create failed at %d\n", i);
@@ -186,7 +200,6 @@ int main(void) {
     for (int i = 0; i < THREADS; ++i) {
         pthread_join(threads[i], NULL);
     }
-    pthread_barrier_destroy(&start_line);
 
     if (failures != 0) {
         fprintf(stderr, "FAILED: %d error(s) across %d threads\n", failures, THREADS);

@@ -1082,6 +1082,91 @@ asserts every pinned `(id, file, line)` is among what is actually reported,
 with a non-vacuity assertion that cppcheck reported something at all and a skip
 where cppcheck is not installed.  Three seconds, and it fails when any pin is
 reverted to its pre-shift line.
+#### Every non-canonical-coordinate test on the prime curves passed against a build with the check deleted
+
+`tests/test_nistp_curves.py` asserted that a coordinate `>= p` is "rejected,
+never reduced" using `x = p`, `x = p + 1` and `x = 2^(8*nbytes) - 1`.  None of
+the three can make that claim.  Each reduces to a value that is *not* on the
+curve — `p` reduces to 0, and `(0, y)` needs `y^2 = b` — so an implementation
+that reduced its input first would decline the point anyway, for the other
+reason, and the test could not tell the two apart.  The same three vectors back
+the ECDH invalid-curve test and the SEC 1 decode test.
+
+Measured rather than argued.  A build of `libama_cryptography.so` with the
+`xs < p || ys < p` guard in `nistp_load_point` deleted (`if (0)`) was put under
+the module:
+
+```
+  shipped library                      97 passed
+  guard deleted, shipped test module   97 passed      <- the defect is invisible
+  guard deleted, with the new test      3 failed, 94 passed
+```
+
+The new `test_second_encodings_of_a_valid_point_are_rejected` builds a
+coordinate that is both `>= p` and reduces onto a *real* point, which is the
+only shape that separates rejection from reduction.  That needs a small
+coordinate, because `2^256 - p` is only about `2^224` on P-256 and `2^384 - p`
+about `2^128` on P-384, so the module now derives two reference points per
+curve from the curve equation alone: the lowest `x` (a square-root test) and
+the lowest `y` (a root of `t^3 - 3t + (b - y^2)` over `F_p`, found as
+`gcd(t^p - t, f)` when that gcd is linear).  P-256 gives `x = 5` and `y = 5`,
+P-384 `x = 2` and `y = 1`, P-521 `x = 1` and `y = 1`; 56 ms for all six,
+cached.  Both coordinates are then put to `ama_nistp_pubkey_validate`, and the
+`x` case additionally to `ama_nistp_point_decode` and `ama_nistp_ecdh`, each
+beside the canonical encoding of the same point as the paired accepting
+control.  This is the rule `tests/test_ed25519_canonical_y.py` already states
+in its own docstring — "a rejection is only evidence when something that
+differs from it in exactly one respect is accepted" — applied to the curves
+that had not had it.
+
+The decode path's own `nistp_lt` guard turns out to be pure defence in depth:
+deleting it alone changes nothing observable, because the tail re-validates the
+reconstructed key.  Only deleting both guards changes decode's answer.  Noted
+in the test rather than left for the next reader to rediscover.
+
+Sweeping the class found one more, on secp256k1.  `ama_secp256k1_pubkey_
+decompress` is the entry point `ama_cryptography.key_formats` uses to import
+the compressed public keys SPKI, COSE and the Bitcoin/Ethereum ecosystems
+carry, and the header promises of it that "a value >= p is rejected, never
+reduced".  With its `secp256k1_fe_bytes_canonical` call deleted it accepted
+`x = p + 1` and returned a 64-octet key whose X half was the non-canonical
+encoding — and **591 Python tests and the whole `test_secp256k1` C suite
+passed anyway**.  Test 10 of that C suite does isolate the `[0, p)` predicate,
+but calls it directly, so it cannot notice a caller that stops consulting it.
+The module's own note that a "reduces to a valid, verifying point" control is
+not constructible for secp256k1 is true of *verify* — that would need the
+ECDLP — but decompress needs no signature, and `1^3 + 7 = 8` is a quadratic
+residue, so `x = 1` and `x = 1 + p` are a usable twin pair.  Added, and the
+note corrected to say which entry point it was about.
+
+#### The two lanes the previous commit turned red
+
+`5171ef2` was verified on Linux only, and broke two platforms it never ran on.
+
+`tests/c/test_concurrent_init.c` used `pthread_barrier_t`, whose comment
+claimed a feature-test macro was all it needed.  Barriers are the
+`_POSIX_BARRIERS` *option*, not part of the base standard, and macOS ships
+pthreads without them, so both macOS C lanes failed at `error: unknown type
+name 'pthread_barrier_t'`.  The rendezvous is now a mutex and a condition
+variable, which are mandatory wherever pthreads exists.  It is the same
+rendezvous, and the test still has exactly the power it was written for:
+against the pre-fix `nistp_use_mulx4`, TSan reports **2 data races, exit 66**,
+at the same `ama_nistp_pubkey_validate -> nistp_load_point -> nistp_to_mont ->
+nistp_mont_mul` stack as before; against the shipped gate, 0 and exit 0.
+
+All six Windows lanes failed on the suppression-liveness check added in the
+same commit.  The runners carry a cppcheck inside Strawberry Perl whose
+`std.cfg` path was baked at build time to a directory that exists only on the
+machine that built it, so it loads no configuration and analyses nothing —
+being on `PATH` is not the same as working.  The check skipped only when
+cppcheck was *absent*, so it read the empty report as a wrong invocation and
+failed.  It now skips on cppcheck's own words ("installation is broken" /
+"Failed to load std.cfg") and on nothing else: a cppcheck that really runs and
+reports nothing still fails, which is the entire point of that assertion.
+Verified in all three states with a stub on `PATH` — working cppcheck passes,
+self-reportedly broken skips with the reason quoted, silent-but-not-broken
+fails.
+
 #### The interleaved ReDoS estimator was still one-sided, and CI proved it
 
 `tests/test_c_secret_zeroization_gate.py`'s linearity check failed on the
