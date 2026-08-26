@@ -1082,6 +1082,61 @@ asserts every pinned `(id, file, line)` is among what is actually reported,
 with a non-vacuity assertion that cppcheck reported something at all and a skip
 where cppcheck is not installed.  Three seconds, and it fails when any pin is
 reverted to its pre-shift line.
+#### The benchmark regression gate exited 0 on a run that measured nothing
+
+Every `continue` in `benchmark_runner.py`'s `run_all_benchmarks` — a baseline
+that does not name the benchmark, a primitive absent from the build — is silent
+to the exit code.  With all of them taken, `main()` printed *"All benchmarks
+within acceptable range"* and returned 0.  The job is green because it stopped
+measuring.
+
+Reproduced against a copy of the shipped baseline with every key renamed, which
+passes `--require-populated-baseline` — that flag rejects only zero
+`baseline_value`s, never a name nothing answers to:
+
+```
+$ python benchmarks/benchmark_runner.py --baseline renamed-baseline.json \
+      --require-populated-baseline --require-runner-class x86_64
+  Total benchmarks: 0
+  Passed: 0
+  Failed: 0
+All benchmarks within acceptable range.
+$ echo $?
+0
+```
+
+Nineteen populated floors, none of them compared against anything, exit 0.
+
+`main()` now answers the question the loop cannot, which needs the two dispatch
+tables at module scope (`BENCHMARK_FUNCTIONS`, `PQC_BENCHMARK_FUNCTIONS`) rather
+than as locals of `run_all_benchmarks`.  Three states, separated because they
+mean different things:
+
+* **A baseline name no benchmark function answers to** is a *rename*.  The floor
+  is still in the JSON, still carries its justification, and can never fire
+  again.  Fatal on any host, with or without flags.
+* **Zero rows measured** is fatal unconditionally.  A run that compared nothing
+  against anything is not a pass, whatever it was invoked with.
+* **A name whose function exists but produced no measurement** is the documented
+  "primitive absent from this build" skip.  Legitimate on a developer machine,
+  never true of the CI job — so it is fatal exactly under
+  `--require-populated-baseline`, the flag CI already passes to mean "this run
+  must be worth trusting", and a plain local run prints which floors it did not
+  cover instead of quietly covering less than it claims.
+
+Nothing about the measurement changes: the new code runs after every rate is
+recorded, and no sampling constant, batch size, warmup or timing window is
+touched.  Against the real baseline the run still reports 19 of 19 rows, the
+same set as before.  Both shipped baselines name the same 19, all of them
+runnable, and a test now pins that as a standing property of the tree rather
+than something CI would discover on the day a rename lands.
+
+Nine tests cover it, and six of the nine fail when the check is removed.  The
+other three are the controls that keep them honest — a healthy run must still
+exit 0, the dispatch tables must be non-empty, and a partial local build must
+stay usable — because a `main()` that had simply become unable to return 0
+would satisfy the first six perfectly.
+
 #### Ed25519 read the caller's public key with a load its own header does not let it require
 
 `include/ama_cryptography.h` states exactly one requirement of
