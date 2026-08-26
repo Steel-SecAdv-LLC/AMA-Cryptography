@@ -1054,6 +1054,32 @@ benchmarked operation is unchanged: over 64 deterministic seeds the public key,
 secret key, signature and pubkey-from-privkey output are byte-identical between
 the two builds and every signature verifies.
 
+The same gate then caught two more files this pass had moved:
+`ama_cryptography/secure_memory.py` and `src/c/PROVENANCE.md` — the second a
+Markdown file, because `_FLOORED_CODE_PATHS` matches the `src/c` prefix and
+every file beneath it is reported.  Both are acknowledged with measurement.
+For `secure_memory.py` the measurement is that the edited functions are on **no**
+benchmarked path at all: a live call counter around `secure_memzero`,
+`secure_mlock` and `secure_munlock`, run over every one of the 19 benchmarked
+operations, recorded 0 calls to each — and the counter is not vacuous, since the
+same instrumentation records 2 `secure_memzero` calls during
+`SecureSession.close()`.  The helper's own cost, were it ever on such a path, is
+67 ns per call over the `len()` it replaced (best of 7 × 2,000,000 timeit
+rounds: 101.18 ns against 34.05 ns).  For `PROVENANCE.md` the measurement is
+that it reaches no compiled artefact: no CMake source list and no build script
+names it, and the five matches under `src/c` are prose inside comments rather
+than `#include` directives.
+
+Both were found by CI rather than locally, and the reason is worth recording:
+`tests/test_benchmark_baseline_infra.py::test_the_current_tree_satisfies_the_rule`
+compares `origin/main` to **HEAD**, so it can only see drift that is already
+committed — which is a push too late.  A companion test now runs the same rule
+against the working tree (`git diff <calibration-commit> --` with no second ref
+includes uncommitted changes, and reads the acknowledgement list from the file on
+disk), so the failure arrives while the edit is still local.  In CI, where the
+working tree is clean, the two are the same assertion.  It fails when either new
+acknowledgement is removed.
+
 ### Debt-closure pass, eleventh (2026-08-22) — the 25 findings an independent audit left standing, and what closing them found
 
 An independent audit read all 302 non-corpus changed files of this branch's

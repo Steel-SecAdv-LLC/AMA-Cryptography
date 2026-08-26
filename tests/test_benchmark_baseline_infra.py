@@ -766,6 +766,55 @@ class TestValidityWindowCannotBeExtendedWithoutRemeasuring:
         except subprocess.CalledProcessError:  # pragma: no cover - shallow clone
             pytest.skip("origin/main is not available in this checkout")
 
+    def test_the_working_tree_satisfies_it_too(self) -> None:
+        """The same rule, one commit earlier.
+
+        The test above compares ``origin/main`` to ``HEAD``, so it can only see
+        drift that has already been committed — which is a push too late.  A
+        branch that edits a floored file and pushes before acknowledging it gets
+        the answer from CI, on a red check, after the fact; that happened on this
+        branch, twice, for ``src/c/ama_dilithium.c`` and then for
+        ``ama_cryptography/secure_memory.py`` and ``src/c/PROVENANCE.md``.
+
+        ``git diff <commit> -- <paths>`` with no second ref includes the working
+        tree, so this one fails while the edit is still local.  In CI the working
+        tree is clean and the two tests are the same assertion.
+        """
+        import subprocess
+
+        import benchmarks.check_baseline_justification as guard
+
+        repo_root = Path(__file__).resolve().parent.parent
+        for path in guard.ALL_BASELINE_PATHS:
+            # The metadata comes from the file on disk, not from HEAD: this is a
+            # working-tree check, and the acknowledgement is written in the same
+            # edit that causes the drift.
+            baseline = repo_root / path
+            if not baseline.is_file():  # pragma: no cover - baseline absent
+                pytest.skip(f"{path} is not present in the working tree")
+            metadata = json.loads(baseline.read_text(encoding="utf-8")).get("metadata", {})
+            assert metadata, f"{path} carries no metadata block"
+            commit = guard._calibration_commit(metadata)
+            assert commit is not None, f"{path} records no calibration commit"
+            try:
+                changed = guard._run_git(
+                    "diff", "--name-only", commit, "--", *guard._FLOORED_CODE_PATHS
+                )
+            except subprocess.CalledProcessError:  # pragma: no cover - shallow clone
+                pytest.skip(f"calibration commit {commit} is not in this checkout")
+            unacknowledged = sorted(
+                name
+                for name in (line.strip() for line in changed.splitlines())
+                if name and not guard._drift_is_acknowledged(metadata, name)
+            )
+            assert not unacknowledged, (
+                f"{path}: these floored files differ from the calibration commit "
+                f"{commit} and are not in metadata.floor_drift_acknowledged:\n"
+                + "".join(f"    {name}\n" for name in unacknowledged)
+                + "  Add a {path, reason} entry for each — measured, not asserted — "
+                "before committing. Leaving it to CI costs a red check and a cycle."
+            )
+
 
 class TestReleaseParsing:
     """The release parser must be exact, and must not be quadratic.
