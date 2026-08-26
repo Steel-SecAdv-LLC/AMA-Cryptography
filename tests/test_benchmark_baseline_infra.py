@@ -1508,3 +1508,245 @@ class TestARunThatMeasuredNothingIsNotAPass:
                 f"{name} names {sorted(requested - runnable)}, which no benchmark "
                 f"function answers to — those floors cannot fire"
             )
+
+
+class TestJustificationMustAccountForTheChange:
+    """A floor change is justified by text that explains *that* change.
+
+    The guard used to concatenate every commit message on the branch that
+    touched a baseline JSON and scan the blob for "a name, a number, a runner"
+    anywhere in it.  On a long branch that is unfalsifiable, and measured on
+    this one it already was: 25 commits, 86,892 bytes of accumulated message
+    text, already containing a measurement, a runner token, and all 19
+    primitive names before any new commit was written.
+
+    Demonstrated end to end against the real branch — a commit whose entire
+    message was ``wip``, halving ``ed25519_sign``'s floor, passed with an empty
+    PR body and **exit 0**, the guard reporting that "every changed baseline is
+    named, a measurement value is cited, and a CI runner is identified".  All
+    of it came from text written for unrelated changes.
+
+    Each change is now attributed to the commit that last wrote that number.
+    "Last", not "any": an earlier commit justified the value it wrote, and a
+    later commit moving the same floor is a new claim needing its own evidence.
+    That distinction is not theoretical — the first version of this fix used
+    ``any`` and the ``wip`` commit still passed, riding on the recalibration
+    commit that had set the previous value.
+    """
+
+    JUSTIFIED = "recalibrate: ed25519_sign measured at 53885 ops/sec on ubuntu-latest"
+
+    @staticmethod
+    def _git(repo: Path, *args: str) -> str:
+        return subprocess.run(
+            ["git", *args], cwd=repo, capture_output=True, text=True, check=True
+        ).stdout
+
+    def _repo(self, tmp_path: Path) -> Path:
+        repo = tmp_path / "repo"
+        (repo / "benchmarks").mkdir(parents=True)
+        self._git(repo.parent, "init", "-q", "repo")
+        self._git(repo, "config", "user.email", "t@example.com")
+        self._git(repo, "config", "user.name", "t")
+        return repo
+
+    def _write(self, repo: Path, value: float) -> None:
+        (repo / "benchmarks" / "baseline.json").write_text(
+            json.dumps(
+                {
+                    "metadata": {},
+                    "thresholds": {"regression_threshold_percent": 10},
+                    "benchmarks": {"ed25519_sign": {"description": "d", "baseline_value": value}},
+                    "pqc_benchmarks": {},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    def _commit(self, repo: Path, value: float, message: str) -> None:
+        self._write(repo, value)
+        self._git(repo, "add", "-A")
+        self._git(repo, "commit", "-q", "-m", message)
+
+    def _run(self, repo: Path, pr_body: str = "") -> int:
+        script = REPO_ROOT / "benchmarks" / "check_baseline_justification.py"
+        base = self._git(repo, "rev-parse", "HEAD~1").strip()
+        proc = subprocess.run(
+            [
+                sys.executable,
+                str(script),
+                "--base-ref",
+                base,
+                "--head-ref",
+                "HEAD",
+                "--pr-body",
+                pr_body,
+            ],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+        )
+        return proc.returncode
+
+    def test_a_justified_change_passes(self, tmp_path: Path) -> None:
+        """Non-vacuity: without this, every failure below could be the guard
+        having become unable to pass anything at all."""
+        repo = self._repo(tmp_path)
+        self._commit(repo, 33000, "seed")
+        self._commit(repo, 53885, self.JUSTIFIED)
+        assert self._run(repo) == 0
+
+    def test_an_unjustified_change_fails(self, tmp_path: Path) -> None:
+        repo = self._repo(tmp_path)
+        self._commit(repo, 33000, "seed")
+        self._commit(repo, 53885, "wip")
+        assert self._run(repo) == 1
+
+    def test_a_later_commit_cannot_ride_on_an_earlier_justification(self, tmp_path: Path) -> None:
+        """The exact shape the branch exhibited, and what ``any`` got wrong."""
+        repo = self._repo(tmp_path)
+        self._commit(repo, 33000, "seed")
+        self._commit(repo, 53885, self.JUSTIFIED)
+        self._commit(repo, 26942, "wip")
+        base = self._git(repo, "rev-parse", "HEAD~2").strip()
+        script = REPO_ROOT / "benchmarks" / "check_baseline_justification.py"
+        proc = subprocess.run(
+            [
+                sys.executable,
+                str(script),
+                "--base-ref",
+                base,
+                "--head-ref",
+                "HEAD",
+                "--pr-body",
+                "",
+            ],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+        )
+        assert proc.returncode == 1, (
+            "the halving commit rode on the earlier recalibration's "
+            "justification; a floor moved again is a new claim"
+        )
+        assert "ed25519_sign" in proc.stderr
+
+    def test_another_commits_message_does_not_justify_this_change(self, tmp_path: Path) -> None:
+        """Justification from a sibling commit is what made the guard vacuous."""
+        repo = self._repo(tmp_path)
+        self._commit(repo, 33000, "seed")
+        # A commit that says all the right words but moves nothing...
+        (repo / "notes.txt").write_text("x", encoding="utf-8")
+        self._git(repo, "add", "-A")
+        self._git(repo, "commit", "-q", "-m", self.JUSTIFIED)
+        # ...and the commit that actually moves the floor, saying nothing.
+        self._commit(repo, 53885, "wip")
+        base = self._git(repo, "rev-parse", "HEAD~2").strip()
+        script = REPO_ROOT / "benchmarks" / "check_baseline_justification.py"
+        proc = subprocess.run(
+            [
+                sys.executable,
+                str(script),
+                "--base-ref",
+                base,
+                "--head-ref",
+                "HEAD",
+                "--pr-body",
+                "",
+            ],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+        )
+        assert proc.returncode == 1
+
+    def test_the_pr_body_still_justifies(self, tmp_path: Path) -> None:
+        """The documented escape hatch: a body written for THIS pull request."""
+        repo = self._repo(tmp_path)
+        self._commit(repo, 33000, "seed")
+        self._commit(repo, 53885, "wip")
+        assert self._run(repo, pr_body=self.JUSTIFIED) == 0
+
+    def test_all_three_requirements_must_share_one_text(self, tmp_path: Path) -> None:
+        """A name here and a number there is not a line-item justification."""
+        repo = self._repo(tmp_path)
+        self._commit(repo, 33000, "seed")
+        self._commit(repo, 53885, "ed25519_sign was re-measured")  # no number, no runner
+        assert self._run(repo) == 1
+        assert self._run(repo, pr_body="53885 ops/sec on ubuntu-latest") == 1, (
+            "splitting the name from the number and runner across two texts is "
+            "the blend the attributed check exists to refuse"
+        )
+
+    def test_an_unchanged_baseline_still_needs_nothing(self, tmp_path: Path) -> None:
+        """A commit that touches the file without moving a floor is not a claim."""
+        repo = self._repo(tmp_path)
+        self._commit(repo, 33000, "seed")
+        self._write(repo, 33000)
+        (repo / "benchmarks" / "baseline.json").write_text(
+            (repo / "benchmarks" / "baseline.json").read_text(encoding="utf-8") + "\n",
+            encoding="utf-8",
+        )
+        self._git(repo, "add", "-A")
+        self._git(repo, "commit", "-q", "-m", "whitespace")
+        assert self._run(repo) == 0
+
+    def test_the_replaced_algorithm_would_have_passed_the_same_history(
+        self, tmp_path: Path
+    ) -> None:
+        """The two algorithms, side by side, on one repository.
+
+        The old one is reproduced here rather than described: concatenate every
+        commit message in ``base..head`` that touched a baseline JSON, then look
+        for a name, a number and a runner token anywhere in the blob.  That is
+        what shipped, and it calls this history justified.  The guard now
+        rejects it.  Without this test the class above would pin the new
+        behaviour without recording what it replaced, and the next person to
+        find the concatenation "simpler" has no evidence in front of them.
+        """
+        repo = self._repo(tmp_path)
+        self._commit(repo, 33000, "seed")
+        self._commit(repo, 53885, self.JUSTIFIED)
+        self._commit(repo, 26942, "wip")
+        base = self._git(repo, "rev-parse", "HEAD~2").strip()
+
+        import benchmarks.check_baseline_justification as guard
+
+        blob = subprocess.run(
+            ["git", "log", f"{base}..HEAD", "--pretty=format:%B", "--", "benchmarks/baseline.json"],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+        old_verdict = (
+            "ed25519_sign" in blob
+            and bool(guard._MEASUREMENT_RE.search(blob))
+            and any(t in blob.lower() for t in guard._RUNNER_TOKENS)
+        )
+        assert old_verdict, (
+            "the reproduction of the old algorithm no longer accepts this "
+            "history, so the comparison below proves nothing — fix the "
+            "reproduction, not the assertion"
+        )
+
+        script = REPO_ROOT / "benchmarks" / "check_baseline_justification.py"
+        proc = subprocess.run(
+            [
+                sys.executable,
+                str(script),
+                "--base-ref",
+                base,
+                "--head-ref",
+                "HEAD",
+                "--pr-body",
+                "",
+            ],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+        )
+        assert proc.returncode == 1, (
+            "same history, same repository: the blob scan calls it justified "
+            "and the attributed check must not"
+        )
