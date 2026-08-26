@@ -218,7 +218,13 @@ def check_integrity_anchoring() -> None:
     same resolver POST and the signer consult, so reusing it (and the module's
     own env-flag semantics) cannot drift from what the wheel itself enforces.
     """
-    from ama_cryptography import _self_test
+    # Deferred to call time (the module under test must have completed its own
+    # import, POST included, before this runs) and spelled as a submodule
+    # ``import`` rather than ``from ama_cryptography import _self_test``:
+    # module scope already binds ``ama_cryptography`` with a plain ``import``,
+    # and mixing the two forms for one module is CodeQL's
+    # py/import-and-import-from (the class swept with alert 647).
+    import ama_cryptography._self_test as _self_test
 
     anchor_hex, error = _self_test._load_integrity_trust_anchor()
     anchored = anchor_hex is not None and error is None

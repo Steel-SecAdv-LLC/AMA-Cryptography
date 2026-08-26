@@ -33,6 +33,10 @@ name: CI - dudect Constant-Time Verification
 # fires, so the per-PR coverage shrinks to "changed code" and the
 # full SIMD dispatch-table sweep happens out of the critical path.
 on:
+  # The push and pull_request filters are deliberately IDENTICAL.  They were
+  # not: push carried six patterns and pull_request nine, so the three gate
+  # scripts were re-verified on a PR and skipped on a direct push to main,
+  # develop or a feature branch — the same change, gated on how it arrived.
   push:
     branches: [ main, develop, 'feature/**', 'fix/**' ]
     paths:
@@ -41,6 +45,21 @@ on:
       - 'ama_cryptography/**'
       - 'tests/c/test_dudect.c'
       - 'tests/c/dudect/**'
+      # tests/c/CMakeLists.txt registers test_dudect and sets its build flags;
+      # the root CMakeLists.txt is where the per-file ISA scoping this
+      # workflow's `check_avx_scoping.py` step verifies is actually set.  A PR
+      # that reintroduces a library-wide `-mavx2` or `-maes` touches ONLY that
+      # file — so without it here, the gate written for exactly that regression
+      # did not run on the change that causes it.
+      - 'tests/c/CMakeLists.txt'
+      - 'CMakeLists.txt'
+      # The constant-time gate scripts and the workflow itself: a PR that only
+      # raises a threshold, edits a lane, or changes this file must still
+      # re-run dudect, or the change ships unexercised (audit Low).
+      - 'tools/check_ghash_constant_time.py'
+      - 'tools/check_secret_division.py'
+      - 'tools/check_avx_scoping.py'
+      - 'tools/constant_time/**'
       - '.github/workflows/dudect.yml'
   pull_request:
     branches: [ main, develop ]
@@ -50,11 +69,20 @@ on:
       - 'ama_cryptography/**'
       - 'tests/c/test_dudect.c'
       - 'tests/c/dudect/**'
+      # tests/c/CMakeLists.txt registers test_dudect and sets its build flags;
+      # the root CMakeLists.txt is where the per-file ISA scoping this
+      # workflow's `check_avx_scoping.py` step verifies is actually set.  A PR
+      # that reintroduces a library-wide `-mavx2` or `-maes` touches ONLY that
+      # file — so without it here, the gate written for exactly that regression
+      # did not run on the change that causes it.
+      - 'tests/c/CMakeLists.txt'
+      - 'CMakeLists.txt'
       # The constant-time gate scripts and the workflow itself: a PR that only
       # raises a threshold, edits a lane, or changes this file must still
       # re-run dudect, or the change ships unexercised (audit Low).
       - 'tools/check_ghash_constant_time.py'
       - 'tools/check_secret_division.py'
+      - 'tools/check_avx_scoping.py'
       - 'tools/constant_time/**'
       - '.github/workflows/dudect.yml'
   schedule:
@@ -372,6 +400,15 @@ jobs:
           - aes-gcm-neon
           - chacha20-neon
           - sha3-neon
+          # The ML-KEM NTT, ML-DSA NTT and Argon2-G NEON kernels.  They ship in
+          # every arm64 wheel and had no timing measurement on any commit,
+          # because no AMA_DISPATCH_ONLY name resolved to them; the names now
+          # exist (src/c/dispatch/ama_dispatch.c).  Mandatory on this side, not
+          # optional: AdvSIMD is architecturally guaranteed on AArch64, so a 77
+          # from one of these is a dispatch-wiring regression, never silicon.
+          - kyber-ntt-neon
+          - dilithium-ntt-neon
+          - argon2-g-neon
           - kyber-sve2
           - sha3-sve2
           - x25519-avx2
@@ -388,13 +425,19 @@ jobs:
           - os: ubuntu-latest
             slot: sha3-neon
           - os: ubuntu-latest
+            slot: kyber-ntt-neon
+          - os: ubuntu-latest
+            slot: dilithium-ntt-neon
+          - os: ubuntu-latest
+            slot: argon2-g-neon
+          - os: ubuntu-latest
             slot: kyber-sve2
           - os: ubuntu-latest
             slot: sha3-sve2
           # AArch64 hosts (ubuntu-24.04-arm): exclude AVX-* slots and
           # the AVX2 X25519 lane.  Same rationale as above, with
-          # `aes-gcm-neon` / `chacha20-neon` / `sha3-neon` retained
-          # on this side because AArch64 mandates NEON.  SVE2 slots
+          # the six NEON slots retained on this side because AArch64
+          # mandates NEON.  SVE2 slots
           # are KEPT on this side: the build step now passes
           # -DAMA_ENABLE_SVE2=ON, so a 77 (Skipped) here means the
           # RUNNER'S SILICON lacks SVE2 — a real audit trail — rather

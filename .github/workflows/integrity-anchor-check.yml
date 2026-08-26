@@ -58,6 +58,9 @@ on:
       - '.github/workflows/integrity-anchor-check.yml'
       - '.github/workflows/release.yml'
       - 'ama_cryptography/_build_sign.py'
+      # This workflow configures and builds through CMake to produce the object
+      # whose anchor it checks, so a CMake change can change what it verifies.
+      - 'CMakeLists.txt'
 
 permissions:
   contents: read

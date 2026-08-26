@@ -28,6 +28,9 @@ on:
       - "tools/refresh_wycheproof_corpus.py"
       - "tests/kat/keyformats/**"
       - "tools/build_keyformat_corpus.py"
+      # The gate this workflow runs over those corpora.  Listed for the same
+      # reason its two builders are.
+      - "tools/check_vector_provenance.py"
       - ".github/workflows/corpus-provenance.yml"
   workflow_dispatch:
 

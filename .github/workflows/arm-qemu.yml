@@ -23,6 +23,10 @@ on:
       - "tests/c/**"
       - "CMakeLists.txt"
       - "cmake/toolchains/**"
+      # This workflow is the ONLY place check_secret_division.py runs against
+      # an AArch64 object; a change to the gate must re-run the lane that uses
+      # it, or the change ships unexercised.
+      - "tools/check_secret_division.py"
       - ".github/workflows/arm-qemu.yml"
   pull_request:
     paths:
@@ -31,6 +35,10 @@ on:
       - "tests/c/**"
       - "CMakeLists.txt"
       - "cmake/toolchains/**"
+      # This workflow is the ONLY place check_secret_division.py runs against
+      # an AArch64 object; a change to the gate must re-run the lane that uses
+      # it, or the change ships unexercised.
+      - "tools/check_secret_division.py"
       - ".github/workflows/arm-qemu.yml"
   workflow_dispatch:
 
