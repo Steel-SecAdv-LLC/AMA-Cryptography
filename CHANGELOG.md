@@ -923,9 +923,32 @@ prototype-shaped declaration in a ```c fence, in every tracked `.md` file, must
 match a header declaration verbatim after whitespace normalisation — parameter
 names included, because a reader copying `uint8_t sk[32]` is copying a claim
 about size.  A second, independent test feeds the page's own declarations to a
-C compiler after the real header, so a conflicting redeclaration is a hard
-error rather than a diff the parser has to notice.  Both fail on the reverted
+C compiler after the real header.  Both fail on the reverted
 `ama_ed25519_keypair`.
+
+The gate's own first CI run failed on all six Windows lanes, and both causes
+were in the gate rather than in the documentation.  `str(Path)` spells a header
+`src\c\ama_platform_rand.h` there, against an allowlist written with forward
+slashes — now compared through `Path.as_posix()`, with a test that pins the
+allowlist's spelling.  And on Windows `AMA_API` expands to
+`__declspec(dllimport)` for an external consumer of the DLL, so the probe's
+undecorated redeclaration tripped `-Werror=attributes`; the probe now defines
+`AMA_BUILDING_STATIC`, the header's own arm that makes the macro empty
+(verified by preprocessing both ways).  Dropping `-Wall -Wextra -Werror` was
+tried first and reverted by its own mutation test: a conflicting return type is
+not always an error — `ama_error_t` carries a negative enumerator, so gcc makes
+it compatible with `int` — and the diagnostic that actually catches the
+dangerous class, `-Warray-parameter` on `uint8_t[32]` against a declared
+`uint8_t[64]`, is a warning.  Silencing it would have left the Ed25519 defect
+this gate was written for undetectable by the compiler half.  The include path
+is `-isystem` rather than `-I`, so `-Werror` covers the probe's own
+redeclarations and not whatever the header might emit under a compiler this
+repository does not otherwise build with; verified in both directions, the
+mutated bound is still rejected.  The separator half of this was avoidable
+twice over: `tests/test_docker_pins_gate.py` already compared through
+`as_posix()`, and `tests/test_benchmark_baseline_infra.py` already carried a
+test about `str(Path(...))` yielding backslashes on Windows.  The pattern was
+in the tree; the new gate simply did not follow it.
 
 #### SECURITY.md still carried a claim setup.py had already withdrawn
 

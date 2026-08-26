@@ -231,7 +231,10 @@ def test_a_documented_internal_entry_point_is_declared_as_such(
     if name not in PROTOTYPES:
         pytest.skip("absence is the other test's failure")
     _, header = PROTOTYPES[name]
-    rel = str(header.relative_to(REPO_ROOT))
+    # as_posix(), not str(): on Windows str() spells this "src\\c\\ama_platform_rand.h"
+    # and the allowlist is written with forward slashes, so the comparison failed
+    # on three Windows lanes while passing everywhere else.
+    rel = header.relative_to(REPO_ROOT).as_posix()
     if header.is_relative_to(PUBLIC_INCLUDE):
         assert name not in INTERNAL_HEADER_DOCUMENTED, (
             f"INTERNAL_HEADER_DOCUMENTED lists {name}, but {rel} is a public header; "
@@ -276,13 +279,31 @@ def test_the_documented_prototypes_compile_against_the_real_header() -> None:
     ]
     assert len(public) > 30, f"only {len(public)} public declarations to compile"
 
+    # AMA_BUILDING_STATIC, because on Windows AMA_API expands to
+    # __declspec(dllimport) for an external consumer of the DLL, and a
+    # redeclaration without that attribute is -Wattributes ("redeclared without
+    # dllimport attribute").  The documentation prints the prototype without the
+    # AMA_API decoration -- correctly, since it is a linkage macro and not part
+    # of the signature a reader types -- so the probe must compile in the mode
+    # where the macro is empty.  The header's own static-library arm does that
+    # (include/ama_cryptography.h: "#elif defined(AMA_BUILDING_STATIC)").
     source = (
+        "#define AMA_BUILDING_STATIC 1\n"
         "#include <stddef.h>\n#include <stdint.h>\n"
         '#include "ama_cryptography.h"\n' + "".join(f"{d};\n" for d in public)
     )
     with tempfile.TemporaryDirectory() as tmp:
         src = Path(tmp) / "wiki_prototypes.c"
         src.write_text(source, encoding="utf-8")
+        # -Wall -Wextra -Werror stays.  Dropping it was tried and reverted: a
+        # conflicting return type is not always an error (ama_error_t carries a
+        # negative enumerator, so gcc makes it compatible with int), and the
+        # diagnostic that actually catches the dangerous class here --
+        # -Warray-parameter on "uint8_t[32]" against a declared "uint8_t[64]",
+        # which is exactly the Ed25519 secret-key defect -- is a warning.  The
+        # Windows failure came from the dllimport attribute, and the
+        # AMA_BUILDING_STATIC define above removes it at the source rather than
+        # by silencing a whole warning class.
         proc = subprocess.run(
             [
                 cc,
@@ -291,7 +312,15 @@ def test_the_documented_prototypes_compile_against_the_real_header() -> None:
                 "-Wall",
                 "-Wextra",
                 "-Werror",
-                f"-I{PUBLIC_INCLUDE}",
+                # -isystem, not -I: it suppresses warnings that originate inside
+                # the header while still reporting the ones attributed to this
+                # probe's own redeclarations -- verified in both directions, the
+                # mutated ama_ed25519_keypair is rejected either way.  -Werror
+                # then covers exactly what this test checks, and a warning the
+                # header happens to emit under some compiler this repository
+                # does not otherwise build with cannot fail it.
+                "-isystem",
+                str(PUBLIC_INCLUDE),
                 str(src),
             ],
             capture_output=True,
@@ -301,3 +330,18 @@ def test_the_documented_prototypes_compile_against_the_real_header() -> None:
         "the prototypes printed in the documentation do not agree with "
         "include/ama_cryptography.h:\n" + proc.stderr
     )
+
+
+def test_the_internal_allowlist_is_spelled_with_forward_slashes() -> None:
+    """The comparison is against ``Path.as_posix()``; the allowlist must match.
+
+    This failed on three Windows lanes and nowhere else, because ``str(Path)``
+    there spells the header ``src\\c\\ama_platform_rand.h``.  Pinning the
+    spelling keeps the next entry from reintroducing a platform-only failure.
+    """
+    for name, header in INTERNAL_HEADER_DOCUMENTED.items():
+        assert "\\" not in header, (
+            f"INTERNAL_HEADER_DOCUMENTED[{name!r}] is spelled {header!r}; use forward "
+            f"slashes, which is what Path.as_posix() produces on every platform"
+        )
+        assert not header.startswith("/"), f"{header!r} must be repo-relative"
