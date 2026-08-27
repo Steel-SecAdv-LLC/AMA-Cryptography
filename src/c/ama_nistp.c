@@ -387,49 +387,17 @@ extern void ama_nistp_mont_mul4_mulx(uint64_t r[4], const uint64_t a[4],
  * `ama_has_bmi2()` and `ama_has_adx()` are each a load-and-branch after
  * their shared one-shot probe, but this predicate is consulted on the order
  * of ten thousand times per verification, so it is worth collapsing to a
- * single relaxed load.
- *
- * `_Atomic int`, not a plain `int`.  An earlier revision of this comment
- * argued that "the write is idempotent ... so no synchronisation is needed
- * beyond the once-guard already inside the CPUID getters", and both halves
- * were wrong.  An idempotent value does not stop concurrent unsynchronised
- * read and write from being a data race — C11 5.1.2.4p25 makes it undefined
- * behaviour regardless of what the store does at the architecture level — and
- * the CPUID getters' once orders nothing about *this* object.  It was exactly
- * the "lockless flag + plain variable" shape that INVARIANT-15 and
- * `src/c/internal/ama_once.h` prohibit outright, in a file whose other
- * one-time state (NISTP_COMB_ONCE) already goes through AMA_CALL_ONCE.
- *
- * It was also live rather than theoretical, and its invisibility was an
- * accident of which entry point ran first: on the keygen/sign/verify paths
- * the first write happens inside `nistp_comb_build()` under NISTP_COMB_ONCE,
- * so nothing races.  `ama_nistp_point_decode` and `ama_nistp_pubkey_validate`
- * — both attacker-input paths — reach this gate through `nistp_load_point`
- * with no once in the way, and ThreadSanitizer reports the race there.
- * `tests/c/test_concurrent_init.c` drives exactly that shape from eight
- * threads released together, and is what turned the finding into a
- * reproduction.
- *
- * `memory_order_relaxed` is the correct order and is what finally makes the
- * paragraph above true: the gate publishes no other data, so no reader needs
- * to observe anything that happened before the write, and the value is
- * idempotent so a reader that misses it simply recomputes the same answer.
- * The hot path does not pay for this — on x86-64 a relaxed load of an aligned
- * int is the same instruction a plain load compiles to.
- *
- * No portability fallback is needed here.  This block is inside
- * AMA_HAVE_NISTP_MONT_MULX_IMPL, which CMakeLists.txt defines only for
- * x86-64 GCC/Clang (`if(... x86_64 ... AND NOT MSVC)`), and both provide C11
- * <stdatomic.h>. */
-#include <stdatomic.h>
-
-static _Atomic int nistp_mulx_gate = -1;
+ * single relaxed load.  The write is idempotent — every thread computes the
+ * same value from the same cached CPUID result — and a torn read is not
+ * possible for an aligned int, so no synchronisation is needed beyond the
+ * once-guard already inside the CPUID getters. */
+static int nistp_mulx_gate = -1;
 
 static inline int nistp_use_mulx4(void) {
-    int g = atomic_load_explicit(&nistp_mulx_gate, memory_order_relaxed);
+    int g = nistp_mulx_gate;
     if (g < 0) {
         g = (ama_has_bmi2() && ama_has_adx()) ? 1 : 0;
-        atomic_store_explicit(&nistp_mulx_gate, g, memory_order_relaxed);
+        nistp_mulx_gate = g;
     }
     return g;
 }

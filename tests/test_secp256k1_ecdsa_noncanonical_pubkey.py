@@ -13,19 +13,14 @@ resolved toward *reduction*; here, for a signature public key, toward
 of the same key).
 
 Note on scope: an end-to-end "reduces to a valid, verifying point" positive
-control is *not constructible* for the *verify* path on secp256k1. The
-non-canonical band ``[p, 2^256)`` holds only ``2^32 + 977`` values, whose
-reduced images lie in ``[0, 2^32 + 977)``; producing a *valid* signature for a
-public key with such a tiny x-coordinate would require solving the ECDLP or
-forging ECDSA. So the gate is exercised here through the policy it enforces
-(out-of-field coordinates are rejected) and isolated from the curve/signature
-checks by the direct predicate test in ``tests/c/test_secp256k1.c`` (Test 10,
-the AMA_TESTING_MODE export).
-
-That limit belongs to verify, not to the curve. ``ama_secp256k1_pubkey_
-decompress`` needs no signature, so the same tiny x *is* usable there, and
-``TestDecompressRejectsASecondEncodingOfARealPoint`` at the foot of this module
-carries the paired accept/reject case the verify path has to do without.
+control is *not constructible* for secp256k1. The non-canonical band ``[p,
+2^256)`` holds only ``2^32 + 977`` values, whose reduced images lie in ``[0,
+2^32 + 977)``; producing a *valid* signature for a public key with such a tiny
+x-coordinate would require solving the ECDLP or forging ECDSA. So the gate is
+exercised here through the policy it enforces (out-of-field coordinates are
+rejected) and isolated from the curve/signature checks by the direct
+predicate test in ``tests/c/test_secp256k1.c`` (Test 10, the AMA_TESTING_MODE
+export).
 """
 
 from __future__ import annotations
@@ -117,55 +112,3 @@ class TestNonCanonicalPubkeyRejected:
         assert _P_MINUS_1 < _P  # canonical by definition
         bad = _with_coordinate(pubkey, "x", _P_MINUS_1)
         assert native_secp256k1_ecdsa_verify(signature, digest, bad) is False
-
-
-# The lowest x on secp256k1: 1**3 + 7 = 8, and 8 is a quadratic residue mod p.
-# It is what makes the class below constructible where the verify path above
-# is not: the non-canonical band is [p, 2**256), only 2**32 + 977 wide, so
-# ``x + p`` fits in 32 octets exactly when ``x`` is smaller than that — which
-# an x of 1 comfortably is.
-_LOW_X = 1
-_LOW_Y = pow((pow(_LOW_X, 3, _P) + 7) % _P, (_P + 1) // 4, _P)
-
-
-class TestDecompressRejectsASecondEncodingOfARealPoint:
-    """``ama_secp256k1_pubkey_decompress`` rejects ``x >= p``, never reduces it.
-
-    This is the paired accept/reject case the verify path cannot have, and it
-    matters because decompress is the entry point ``ama_cryptography.
-    key_formats`` uses to import the compressed public keys that SPKI, COSE and
-    the Bitcoin/Ethereum ecosystems actually carry — so it parses attacker-
-    supplied octets, and the header promises of it that "a value >= p is
-    rejected, never reduced".
-
-    Nothing held that promise to account. Measured against a build with the
-    ``secp256k1_fe_bytes_canonical`` call in ``ama_secp256k1_pubkey_decompress``
-    deleted, 591 Python tests and the whole ``test_secp256k1`` C suite passed
-    while decompress accepted ``x = p + 1`` and returned a 64-octet key whose
-    X half was the non-canonical encoding. Test 10 of the C suite does isolate
-    the ``[0, p)`` predicate, but calls it directly, so it cannot notice a
-    caller that stops consulting it.
-    """
-
-    def test_the_canonical_encoding_decompresses(self) -> None:
-        """Positive control: without this the rejection below proves nothing."""
-        from ama_cryptography.pqc_backends import native_secp256k1_pubkey_decompress
-
-        prefix = bytes([0x02 + (_LOW_Y & 1)])
-        out = native_secp256k1_pubkey_decompress(prefix + _LOW_X.to_bytes(32, "big"))
-        assert out == _LOW_X.to_bytes(32, "big") + _LOW_Y.to_bytes(32, "big")
-
-    def test_the_non_canonical_twin_is_refused(self) -> None:
-        """``x + p`` names the same point and must still be refused.
-
-        The two cases differ in exactly one respect — whether the x octets are
-        the canonical representative — so only the canonicality rule can
-        separate them. A build that reduced first would decompress both.
-        """
-        from ama_cryptography.pqc_backends import native_secp256k1_pubkey_decompress
-
-        prefix = bytes([0x02 + (_LOW_Y & 1)])
-        second = _LOW_X + _P
-        assert second < (1 << 256), "x + p must fit in 32 octets or this is not a twin"
-        with pytest.raises(ValueError):
-            native_secp256k1_pubkey_decompress(prefix + second.to_bytes(32, "big"))

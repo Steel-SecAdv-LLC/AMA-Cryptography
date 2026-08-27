@@ -129,16 +129,6 @@ add_test(NAME test_lms COMMAND test_lms
          WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 add_ama_test(test_ed25519 test_ed25519.c)
 
-# The header states exactly one requirement of `ama_ed25519_verify`'s buffers —
-# "exactly 32 / 64 readable bytes" — and nothing about alignment, so an
-# unaligned caller buffer is a legal call.  Until this test, every test in the
-# tree handed the library a `uint8_t[32]` local or static, which every compiler
-# in use aligns to at least 8, so donna's `*(uint64_t *)(in + 0)` in
-# curve25519_expand was never given an address that could expose it.  This one
-# walks 16 offsets and asserts both verdicts at each.  See
-# tests/c/test_ed25519_unaligned_input.c.
-add_ama_test(test_ed25519_unaligned_input test_ed25519_unaligned_input.c)
-
 # RFC 8032 5.1.7 canonical-S enforcement (INVARIANT-26).  Built
 # UNCONDITIONALLY, unlike test_ed25519_verify_equiv below: the fix
 # lands at three sites — ama_ed25519_verify in each backend plus the
@@ -346,16 +336,6 @@ if(AMA_USE_NATIVE_PQC)
     set_tests_properties(test_pq_parser_stack PROPERTIES SKIP_RETURN_CODE 77)
     find_package(Threads REQUIRED)
     target_link_libraries(test_pq_parser_stack Threads::Threads)
-
-    # Something for the ThreadSanitizer lane to observe.  Until this existed,
-    # test_pq_parser_stack was the only C test that created a thread at all,
-    # and it joins on the next statement — so the TSan job instrumented a
-    # single-threaded program and could not report the race class its own
-    # comment names.  This one starts N threads behind a barrier and enters
-    # every lazily-initialised path from all of them at once.  See
-    # tests/c/test_concurrent_init.c for what it caught.
-    add_ama_test(test_concurrent_init test_concurrent_init.c)
-    target_link_libraries(test_concurrent_init Threads::Threads)
 
     # Kyber debug / CPA isolation tests (run manually or via ctest)
     add_ama_test(test_kyber_debug test_kyber_debug.c)

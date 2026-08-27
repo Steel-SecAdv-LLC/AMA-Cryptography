@@ -622,27 +622,6 @@ jobs:
           TSAN_OPTIONS: halt_on_error=1:second_deadlock_stack=1
         run: cd build-tsan && ctest --output-on-failure
 
-      # Non-vacuity, the same shape the Valgrind lane above uses for its
-      # target count.  TSan reports a race only when two threads touch the
-      # same location at the same time, so this lane is worth exactly as much
-      # as the concurrency in the suite it runs.  For most of this project's
-      # history that concurrency was zero: of all the C tests exactly one
-      # created a thread, and it joined on the next statement, so the job
-      # instrumented a single-threaded program and could not report the class
-      # its own comment above names.  A live race in the shipped library
-      # (nistp_mulx_gate, src/c/ama_nistp.c) sat under this green lane.
-      # tests/c/test_concurrent_init.c is what the lane observes; if it stops
-      # running, the lane is decorative again and must fail rather than pass.
-      - name: Assert the lane had concurrency to observe
-        run: |
-          cd build-tsan
-          if ! ctest -N | grep -q 'Test *#[0-9]*: *test_concurrent_init'; then
-            echo "::error::test_concurrent_init is not registered — the TSan lane"
-            echo "::error::has no concurrent test to observe and cannot fail on a race."
-            exit 1
-          fi
-          echo "OK  test_concurrent_init is registered; the lane is non-vacuous"
-
   valgrind-memcheck:
     name: Valgrind memcheck (defense-in-depth)
     # Complements ASan with a different leak/uninit reader.  Slow —

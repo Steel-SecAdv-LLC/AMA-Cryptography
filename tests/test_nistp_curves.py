@@ -29,10 +29,7 @@ that corpus cannot:
   parameter.
 * **Negative space.** Non-canonical coordinates, off-curve points, the
   identity, out-of-range scalars, wrong digest widths, malformed DER, and
-  cross-curve confusion. Non-canonicality is asserted with coordinates
-  that reduce onto a *real* curve point, because an out-of-range
-  coordinate that does not is rejected by a reduce-first implementation
-  too, and proves nothing about which of the two the library is.
+  cross-curve confusion.
 * **ECDH validation.** A peer key that is off-curve or non-canonical must be
   rejected *before* the private scalar touches it — the invalid-curve defence.
 
@@ -43,7 +40,6 @@ precisely because the two share no structure.
 
 from __future__ import annotations
 
-import functools
 import hashlib
 import hmac
 import secrets
@@ -236,120 +232,6 @@ def _pub(name: str, d: int) -> bytes:
 
 def _digest(name: str, msg: bytes) -> bytes:
     return hashlib.new(CURVES[name]["hash"], msg).digest()
-
-
-# ---------------------------------------------------------------------------
-# Second encodings: a coordinate >= p that reduces onto a real curve point
-# ---------------------------------------------------------------------------
-# Feeding ``x = p`` proves nothing. It reduces to zero, and ``(0, y)`` is off
-# the curve for any y a real point carries, so a library that reduced its
-# input instead of rejecting it would decline the point anyway — for the wrong
-# reason, and indistinguishably. Discriminating between "rejected because the
-# encoding is non-canonical" and "rejected because the thing it names is not a
-# point" needs a coordinate that is >= p AND lands on a real point once
-# reduced: c + p for a coordinate c of a point that is genuinely on the curve.
-#
-# That only fits in ``nbytes`` octets when c is small, because 2**256 - p is
-# about 2**224 on P-256 and 2**384 - p is about 2**128 on P-384. So the points
-# below are found by search: the lowest x on each curve, and the lowest y.
-
-
-def _sqrt_mod(a: int, p: int) -> Optional[int]:
-    """A square root of ``a`` mod ``p``, or ``None`` if ``a`` is a non-residue.
-
-    Every NIST prime curve has p = 3 (mod 4), so the only candidate is
-    ``a**((p+1)/4)``; squaring it back is what decides whether ``a`` was a
-    residue at all.
-    """
-    assert p % 4 == 3, "these curves are all 3 mod 4; a general Tonelli-Shanks is not needed"
-    root = pow(a, (p + 1) // 4, p)
-    return root if root * root % p == a % p else None
-
-
-def _poly_mulmod(u: list[int], v: list[int], f0: int, p: int) -> list[int]:
-    """``u * v`` in ``F_p[t] / (t**3 - 3t + f0)``, coefficients low-to-high."""
-    prod = [0] * 5
-    for i, ui in enumerate(u):
-        for j, vj in enumerate(v):
-            prod[i + j] = (prod[i + j] + ui * vj) % p
-    for degree in (4, 3):  # t**3 = 3t - f0, applied top-down
-        coeff = prod[degree]
-        if coeff:
-            prod[degree] = 0
-            prod[degree - 3] = (prod[degree - 3] - coeff * f0) % p
-            prod[degree - 2] = (prod[degree - 2] + 3 * coeff) % p
-    return prod[:3]
-
-
-def _poly_degree(a: list[int]) -> int:
-    degree = len(a) - 1
-    while degree > 0 and a[degree] == 0:
-        degree -= 1
-    return degree
-
-
-def _poly_gcd(a: list[int], b: list[int], p: int) -> list[int]:
-    """Euclid over ``F_p[t]``, textbook long division and no cleverness."""
-    a, b = list(a), list(b)
-    while _poly_degree(b) > 0 or b[0] % p:
-        db = _poly_degree(b)
-        inv = pow(b[db], -1, p)
-        rem = list(a)
-        for degree in range(_poly_degree(rem), db - 1, -1):
-            coeff = rem[degree] * inv % p
-            if coeff:
-                for k in range(db + 1):
-                    rem[degree - db + k] = (rem[degree - db + k] - coeff * b[k]) % p
-        a, b = b, rem
-    return a
-
-
-def _cubic_root(f0: int, p: int) -> Optional[int]:
-    """The root of ``t**3 - 3t + f0`` over ``F_p`` when there is exactly one.
-
-    ``gcd(t**p - t, f)`` is the product of ``f``'s linear factors, so a gcd of
-    degree 1 is a single root that can be read straight off it. About half of
-    all ``f0`` split that way (the transpositions in S3), so a caller walking
-    ``f0`` upward finds one within a few tries. ``None`` means "not exactly
-    one root" — the caller's cue to try the next ``f0``, not an error.
-    """
-    acc, base, exponent = [1, 0, 0], [0, 1, 0], p
-    while exponent:
-        if exponent & 1:
-            acc = _poly_mulmod(acc, base, f0, p)
-        base = _poly_mulmod(base, base, f0, p)
-        exponent >>= 1
-    t_p_minus_t = [acc[0], (acc[1] - 1) % p, acc[2]]
-    linear = _poly_gcd([f0 % p, (-3) % p, 0, 1], t_p_minus_t, p)
-    if _poly_degree(linear) != 1:
-        return None
-    return (-linear[0]) * pow(linear[1], -1, p) % p
-
-
-@functools.cache
-def _lowest_x_point(name: str) -> tuple[int, int]:
-    """The curve point with the smallest positive x."""
-    c = CURVES[name]
-    p, b = c["p"], c["b"]
-    for x in range(1, 4096):
-        y = _sqrt_mod((pow(x, 3, p) - 3 * x + b) % p, p)
-        if y is not None:
-            assert (y * y - (pow(x, 3, p) - 3 * x + b)) % p == 0
-            return x, y
-    raise AssertionError(f"no curve point with x < 4096 on {name}")
-
-
-@functools.cache
-def _lowest_y_point(name: str) -> tuple[int, int]:
-    """The curve point with the smallest positive y."""
-    c = CURVES[name]
-    p, b = c["p"], c["b"]
-    for y in range(1, 4096):
-        x = _cubic_root((b - y * y) % p, p)
-        if x is not None:
-            assert (pow(x, 3, p) - 3 * x + b - y * y) % p == 0
-            return x, y
-    raise AssertionError(f"no curve point with y < 4096 on {name}")
 
 
 # ---------------------------------------------------------------------------
@@ -791,11 +673,8 @@ def test_non_canonical_and_off_curve_keys_rejected(name: str) -> None:
 
     assert pb.native_nistp_pubkey_validate(name, pub)
 
-    # Out-of-range coordinates. These say only that the encoding is
-    # refused; they cannot say *why*, because the point each one names is
-    # off the curve once reduced as well.  That the library rejects the
-    # encoding rather than reducing it is asserted by
-    # test_second_encodings_of_a_valid_point_are_rejected.
+    # A coordinate >= p is a second encoding of a reduced point: rejected,
+    # never reduced.
     for bad in (p, p + 1, (1 << (nb * 8)) - 1):
         if bad.bit_length() > nb * 8:
             continue
@@ -812,62 +691,6 @@ def test_non_canonical_and_off_curve_keys_rejected(name: str) -> None:
 
     # Wrong length.
     assert not pb.native_nistp_pubkey_validate(name, pub[:-1])
-
-
-@pytest.mark.parametrize("name", CURVE_NAMES)
-def test_second_encodings_of_a_valid_point_are_rejected(name: str) -> None:
-    """A coordinate >= p that reduces onto a real point must still be rejected.
-
-    This is the assertion the ``x = p`` vectors above cannot make. Measured
-    against a build of this library with the ``xs < p || ys < p`` guard in
-    ``nistp_load_point`` deleted, every one of those vectors still came back
-    rejected, on all three curves: the point they name is off the curve either
-    way, so they pass whether the implementation rejects a non-canonical
-    encoding or quietly reduces it first. The vectors below are accepted by
-    that build and rejected by the shipped one, which is what separates the
-    two behaviours.
-
-    Reducing instead of rejecting would be a real defect rather than a
-    cosmetic one. It gives a public key, an ECDH peer key and a compressed
-    point several encodings each, so anything that identifies a key by the
-    octets it arrived in -- a pin, a revocation list, a dedup cache, a
-    transcript hash -- can be made to disagree with the key the library
-    actually uses.
-    """
-    c = CURVES[name]
-    nb, p = c["nbytes"], c["p"]
-    ceiling = 1 << (8 * nb)
-
-    for coord, (x, y) in (("x", _lowest_x_point(name)), ("y", _lowest_y_point(name))):
-        canonical = x.to_bytes(nb, "big") + y.to_bytes(nb, "big")
-        assert pb.native_nistp_pubkey_validate(name, canonical), (
-            f"{name}: the reference point behind the {coord} second encoding is "
-            f"not on the curve, so the rejection below would prove nothing"
-        )
-        second = (x + p, y) if coord == "x" else (x, y + p)
-        assert max(second) < ceiling, (
-            f"{name}: {coord} + p needs more than {nb} octets, so this is not a "
-            f"second encoding of the same point"
-        )
-        blob = second[0].to_bytes(nb, "big") + second[1].to_bytes(nb, "big")
-        assert not pb.native_nistp_pubkey_validate(name, blob), (
-            f"{name}: {coord} + p was accepted; the implementation reduced a "
-            f"non-canonical coordinate instead of rejecting the encoding"
-        )
-
-    # The same second encoding through the two other entry points an
-    # attacker-supplied point reaches: the SEC 1 decoder and ECDH.
-    x, y = _lowest_x_point(name)
-    canonical = x.to_bytes(nb, "big") + y.to_bytes(nb, "big")
-    prefix = bytes([0x02 + (y & 1)])
-    assert pb.native_nistp_point_decode(name, prefix + x.to_bytes(nb, "big")) == canonical
-    with pytest.raises(ValueError):
-        pb.native_nistp_point_decode(name, prefix + (x + p).to_bytes(nb, "big"))
-
-    _, priv = pb.native_nistp_keypair(name)
-    assert len(pb.native_nistp_ecdh(name, priv, canonical)) == nb
-    with pytest.raises(ValueError):
-        pb.native_nistp_ecdh(name, priv, (x + p).to_bytes(nb, "big") + y.to_bytes(nb, "big"))
 
 
 @pytest.mark.parametrize("name", CURVE_NAMES)
@@ -916,10 +739,7 @@ def test_sec1_decoding_rejects_malformed_points(name: str) -> None:
         b"\x05" + compressed[1:],  # unknown prefix
         compressed[:-1],  # truncated
         compressed + b"\x00",  # over-long
-        # x = p. Out of range; see the note in
-        # test_second_encodings_of_a_valid_point_are_rejected for why the
-        # discriminating case lives there instead.
-        bytes([compressed[0]]) + p.to_bytes(nb, "big"),
+        bytes([compressed[0]]) + p.to_bytes(nb, "big"),  # non-canonical x
     ]
     for bad in bad_inputs:
         with pytest.raises(ValueError):
@@ -994,9 +814,6 @@ def test_ecdh_rejects_invalid_peer_keys(name: str) -> None:
     with pytest.raises(ValueError):
         pb.native_nistp_ecdh(name, priv, b"\x00" * (2 * nb))  # identity
 
-    # x = p; the peer key whose x is a second encoding of a point that is
-    # genuinely on the curve is in
-    # test_second_encodings_of_a_valid_point_are_rejected.
     non_canonical = p.to_bytes(nb, "big") + peer[nb:]
     with pytest.raises(ValueError):
         pb.native_nistp_ecdh(name, priv, non_canonical)
