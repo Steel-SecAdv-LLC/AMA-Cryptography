@@ -64,6 +64,16 @@ int main(void) {
 
     printf("Ed25519 unaligned-caller-buffer test (%d offsets)\n", OFFSETS);
 
+    /* ama_ed25519_keypair does NOT generate the seed: its contract is
+     * "caller provides the 32-byte seed in secret_key[0..31] ... We must NOT
+     * overwrite secret_key[0..31] here" (src/c/ed25519_donna_shim.c).  The
+     * first revision of this file passed `sk` uninitialised and every
+     * ordinary configuration passed — garbage is still a usable seed — which
+     * is the exact defect test_ed25519_canonical_r.c documents MemorySanitizer
+     * catching (use-of-uninitialized-value in sha512_LOAD64_BE under
+     * ed25519_extsk).  A fixed seed also makes every offset's verdict
+     * deterministic, which matters for a test that asserts both directions. */
+    memset(sk, 0x42, 32);
     if (ama_ed25519_keypair(pk, sk) != AMA_SUCCESS) {
         fprintf(stderr, "FAILED: ama_ed25519_keypair\n");
         return 1;

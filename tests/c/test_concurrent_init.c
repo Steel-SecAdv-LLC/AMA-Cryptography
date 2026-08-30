@@ -153,6 +153,13 @@ static void *worker(void *arg) {
         {
             uint8_t pk[32], sk[64], sig[64];
             const uint8_t msg[3] = { 'a', 'b', 'c' };
+            /* The keypair contract is "caller provides the 32-byte seed in
+             * secret_key[0..31]" (src/c/ed25519_donna_shim.c) — an
+             * uninitialised `sk` here is a read of uninitialised memory, the
+             * defect test_ed25519_canonical_r.c records MemorySanitizer
+             * catching.  Same fixed-seed idiom as that file; the secp256k1
+             * block above already does this for the same reason. */
+            memset(sk, 0x42, 32);
             if (ama_ed25519_keypair(pk, sk) != AMA_SUCCESS) {
                 record_failure("ama_ed25519_keypair");
             } else if (ama_ed25519_sign(sig, msg, sizeof(msg), sk) != AMA_SUCCESS) {
