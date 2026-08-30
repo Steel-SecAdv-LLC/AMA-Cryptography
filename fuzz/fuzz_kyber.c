@@ -110,10 +110,21 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
             ct, &ct_len, ss_enc, sizeof(ss_enc));
         if (rc != AMA_SUCCESS) break;
 
-        /* Corrupt ciphertext using fuzz data */
-        if (payload_len > 0) {
-            size_t pos = payload[0] % ct_len;
-            ct[pos] ^= (payload_len > 1) ? payload[1] : 0x01;
+        /* Corrupt ciphertext using fuzz data.
+         *
+         * Two big-endian position bytes, then the XOR mask.  A single
+         * position byte capped the corruption position at byte 255 of a
+         * 1,568-byte ciphertext: all of v (bytes 1408..1567) and the tail
+         * of u were unreachable through this case, while the seed corpus
+         * carried files NAMED for those positions ("corrupt-u-v-boundary",
+         * "corrupt-last-byte") that actually hit bytes 128 and 31.
+         * tools/build_kyber_seed_corpus.py writes the matching layout. */
+        if (payload_len >= 2) {
+            size_t pos = (((size_t)payload[0] << 8) | payload[1]) % ct_len;
+            ct[pos] ^= (payload_len > 2) ? payload[2] : 0x01;
+        } else if (payload_len == 1) {
+            /* One payload byte: position only (mod 256), default mask. */
+            ct[payload[0] % ct_len] ^= 0x01;
         }
 
         /* Decapsulate with corrupted ciphertext — must not crash

@@ -21,6 +21,7 @@ maintainer to "fix" a repository that was already correct.
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 import pytest
@@ -255,13 +256,41 @@ def test_support_file_without_entry_point_is_ignored(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("missing_path", ["fuzz", "oss-fuzz/build.sh"])
 def test_main_refuses_outside_the_repository_root(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, missing_path: str
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    missing_path: str,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """Running from the wrong directory must fail loudly, not report clean."""
+    """Running from the wrong directory must fail loudly, not report clean.
+
+    Every path main() probes for is created EXCEPT the parametrized one, so
+    each case exercises the refusal on exactly the path it names.  The
+    parametrization used to be dead: nothing read ``missing_path``, so both
+    cases ran the identical empty-directory scenario and only the first
+    probe (``fuzz``) was ever the one refusing.
+    """
     from tools.check_fuzz_target_registration import main
+
+    (tmp_path / "fuzz").mkdir()
+    (tmp_path / "fuzz" / "CMakeLists.txt").write_text("", encoding="utf-8")
+    workflow_dir = tmp_path / ".github" / "workflows"
+    workflow_dir.mkdir(parents=True)
+    (workflow_dir / "fuzzing.yml").write_text("", encoding="utf-8")
+    (tmp_path / "oss-fuzz").mkdir()
+    (tmp_path / "oss-fuzz" / "build.sh").write_text("", encoding="utf-8")
+
+    target = tmp_path / missing_path
+    if target.is_dir():
+        shutil.rmtree(target)
+    else:
+        target.unlink()
 
     monkeypatch.chdir(tmp_path)
     assert main() == 1
+    assert missing_path in capsys.readouterr().out, (
+        "the refusal must name the path that is missing, and it must be the "
+        "one this case removed"
+    )
 
 
 # ---------------------------------------------------------------------------

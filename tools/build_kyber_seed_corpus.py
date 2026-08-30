@@ -57,10 +57,15 @@ harness's contracts is length-gated:
   taken from inside the key over arbitrary bytes, which is what a malformed
   imported key file does.
 * **case 1, one-byte ciphertext corruption** — the first byte, the last byte
-  of the u section, the last byte of the whole ciphertext, and the
-  ``payload_len == 1`` path where the harness supplies the 0x01 mask itself.
-  ``payload_len == 0`` is not generated: the harness returns at ``size < 2``,
-  so an empty payload is unreachable for every case.
+  of the u section, the first byte of the v section, the last byte of the
+  whole ciphertext, and the ``payload_len == 1`` path where the harness
+  supplies the 0x01 mask itself.  The payload is two big-endian position
+  bytes then the mask: the harness's original single position byte
+  (``pos = payload[0] % ct_len``) could not reach past byte 255, so the
+  boundary and tail seeds this list has always named were actually hitting
+  bytes 128 and 31 — the names were fiction until the position field was
+  widened.  ``payload_len == 0`` is not generated: the harness returns at
+  ``size < 2``, so an empty payload is unreachable for every case.
 * **case 2, keygen from seed** — 64 bytes exactly (the minimum the case
   accepts) and 63 (one below, which must break out cleanly).
 * **case 0, round-trip** — one minimal seed; the case takes no input.
@@ -98,10 +103,27 @@ CT_U_BYTES = 1408
 _CASES: list[tuple[str, int, object, int]] = [
     # case 0 — round-trip; the case reads no payload.
     ("roundtrip", 0, b"\x00", 1),
-    # case 1 — one-byte ciphertext corruption at chosen positions.
-    ("corrupt-first-byte", 1, bytes([0, 0x01]), 2),
-    ("corrupt-u-v-boundary", 1, bytes([CT_U_BYTES % 256, 0x80]), 2),
-    ("corrupt-last-byte", 1, bytes([(CT_BYTES - 1) % 256, 0xFF]), 2),
+    # case 1 — one-byte ciphertext corruption at chosen positions.  The
+    # payload is two BIG-ENDIAN position bytes then the XOR mask; the
+    # harness widened the position field from one byte because pos =
+    # payload[0] % ct_len capped corruption at byte 255 of a 1,568-byte
+    # ciphertext — these seeds carried the boundary/tail NAMES while
+    # actually hitting bytes 128 and 31, and every position in v was
+    # unreachable through this case.
+    ("corrupt-first-byte", 1, bytes([0, 0, 0x01]), 3),
+    (
+        "corrupt-u-v-boundary",
+        1,
+        bytes([(CT_U_BYTES - 1) >> 8, (CT_U_BYTES - 1) & 0xFF, 0x80]),
+        3,
+    ),
+    (
+        "corrupt-last-byte",
+        1,
+        bytes([(CT_BYTES - 1) >> 8, (CT_BYTES - 1) & 0xFF, 0xFF]),
+        3,
+    ),
+    ("corrupt-first-v-byte", 1, bytes([CT_U_BYTES >> 8, CT_U_BYTES & 0xFF, 0x80]), 3),
     ("corrupt-default-mask", 1, bytes([7]), 1),
     # case 2 — deterministic keygen from a 64-byte seed pair.
     ("keygen-seed-exact", 2, "prng", 64),

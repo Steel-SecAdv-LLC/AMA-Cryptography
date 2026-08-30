@@ -44,7 +44,10 @@ plus one seed a single byte SHORT of the guard, which must take the
 ``break`` and is the cheapest regression test that the guard still guards.
 
 A trailing message is appended to the exact-length seeds so ``msg_len`` is
-non-zero on the branch; the harness computes it as the remainder.
+non-zero on the branch; the harness computes it as the remainder.  The one
+exception is ``fuzz_sphincs`` case 2 (fuzzed signature against the cached
+public key), which verifies a fixed literal message — its seeds are the
+exact signature length with no tail.
 
 Determinism
 -----------
@@ -76,10 +79,28 @@ SPHINCS_256F_PUBLIC_KEY_BYTES = 64
 #: `msg_len` remainder is non-zero on the reached branch.
 MESSAGE_BYTES = 16
 
-#: target -> (selector byte for the fully-fuzzed verify case, payload bound)
-_TARGETS: dict[str, tuple[int, int]] = {
-    "fuzz_dilithium": (1, ML_DSA_65_SIGNATURE_BYTES + ML_DSA_65_PUBLIC_KEY_BYTES),
-    "fuzz_sphincs": (1, SPHINCS_256F_SIGNATURE_BYTES + SPHINCS_256F_PUBLIC_KEY_BYTES),
+#: target -> list of (name prefix, selector byte, payload bound, tail bytes)
+#: — one entry per length-gated fuzzed-verify case in that harness.  The
+#: tail is the trailing message appended past the exact bound so the case's
+#: ``msg_len`` remainder is non-zero; cases that verify a fixed message
+#: (fuzz_sphincs case 2 uses the literal "fuzz") take no tail.  The mapping
+#: used to carry exactly one case per target, which left fuzz_sphincs case 2
+#: (fuzzed-signature verify against the cached pk, gated at 49,856 bytes)
+#: with no seed at all — reachable from the case-1 seeds only via a 1-byte
+#: selector mutation, not "on the first pass" as this file promises.
+_TARGETS: dict[str, list[tuple[str, int, int, int]]] = {
+    "fuzz_dilithium": [
+        ("verify", 1, ML_DSA_65_SIGNATURE_BYTES + ML_DSA_65_PUBLIC_KEY_BYTES, MESSAGE_BYTES),
+    ],
+    "fuzz_sphincs": [
+        (
+            "verify",
+            1,
+            SPHINCS_256F_SIGNATURE_BYTES + SPHINCS_256F_PUBLIC_KEY_BYTES,
+            MESSAGE_BYTES,
+        ),
+        ("verify-fuzzed-sig", 2, SPHINCS_256F_SIGNATURE_BYTES, 0),
+    ],
 }
 
 _FILLS = ("zero", "ff", "prng")
@@ -101,13 +122,13 @@ def _payload(name: str, fill: str, length: int) -> bytes:
 
 
 def _seeds_for(target: str) -> dict[str, bytes]:
-    selector, bound = _TARGETS[target]
     seeds: dict[str, bytes] = {}
-    for fill in _FILLS:
-        name = f"verify-exact-{fill}"
-        seeds[f"{name}.bin"] = bytes([selector]) + _payload(name, fill, bound + MESSAGE_BYTES)
-    name = "verify-one-short"
-    seeds[f"{name}.bin"] = bytes([selector]) + _payload(name, "prng", bound - 1)
+    for prefix, selector, bound, tail in _TARGETS[target]:
+        for fill in _FILLS:
+            name = f"{prefix}-exact-{fill}"
+            seeds[f"{name}.bin"] = bytes([selector]) + _payload(name, fill, bound + tail)
+        name = f"{prefix}-one-short"
+        seeds[f"{name}.bin"] = bytes([selector]) + _payload(name, "prng", bound - 1)
     return seeds
 
 

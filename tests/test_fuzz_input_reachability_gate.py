@@ -201,6 +201,97 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     assert "does not resolve to a constant" in capsys.readouterr().err
 
 
+def test_a_guard_on_a_derived_length_variable_is_modeled(gate: ModuleType, tmp_path: Path) -> None:
+    """`tail_len = size - K;` then `if (tail_len < N)` used to be invisible.
+
+    The guard alternation was the literal `payload_len|size`, so a harness
+    that derived any other length name and gated on it produced no bound AND
+    no `unresolved` entry — the exact no-signal failure mode the gate's own
+    comments document for `<=` guards, one level up.  fuzz_agent_binding
+    already derives `tail_len = size - FUZZ_HEADER_BYTES`; only the guard was
+    hypothetical.
+    """
+    harness = _write_harness(
+        tmp_path,
+        """
+#define SYN_HEADER_BYTES 8
+int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
+    if (size < 9) return 0;
+    size_t tail_len = size - SYN_HEADER_BYTES;
+    if (tail_len < 9000) return 0;
+    return 0;
+}
+""",
+    )
+    required, unresolved = gate.required_max_len(harness)
+    assert not unresolved
+    # 9,000 to pass a `<` guard is 9,001, plus the 8-byte offset.
+    assert required == 9009
+
+
+def test_a_data_dependent_length_is_reported_not_modeled(gate: ModuleType, tmp_path: Path) -> None:
+    """`pt_len = payload_len - aad_len` can be small at ANY input size.
+
+    Its guards are not input-length floors, so they contribute no bound —
+    but they must be visible (unmodeled_guards feeds main()'s notes), not
+    silently dropped.  A clamp assignment (`pt_len = 4096;`-style) must not
+    fool the tracker into treating the variable as a clean offset either.
+    """
+    harness = _write_harness(
+        tmp_path,
+        """
+int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
+    if (size < 3) return 0;
+    size_t payload_len = size - 1;
+    size_t aad_len = data[1];
+    size_t pt_len = payload_len - aad_len;
+    if (pt_len > 9000) pt_len = 9000;
+    return 0;
+}
+""",
+    )
+    required, unresolved = gate.required_max_len(harness)
+    assert not unresolved
+    assert required < 9000, "a data-dependent clamp must not become a floor"
+    assert "pt_len > 9000" in " ".join(gate.unmodeled_guards(harness))
+
+
+def test_a_parenthesised_sum_resolves_and_a_product_fails_closed(
+    gate: ModuleType, tmp_path: Path
+) -> None:
+    """`size < (N + 1)` resolves; `size < 2 * N` lands in unresolved.
+
+    Both spellings used to fall outside the expression class entirely and
+    produced no signal at all; now the sum is evaluated (parentheses cannot
+    change a sum) and the product is a MANUAL_BOUNDS decision rather than a
+    silently wrong bound.
+    """
+    harness = _write_harness(
+        tmp_path,
+        """
+int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
+    if (size < (9000 + 1)) return 0;
+    return 0;
+}
+""",
+    )
+    required, unresolved = gate.required_max_len(harness)
+    assert not unresolved
+    assert required == 9002
+
+    harness = _write_harness(
+        tmp_path,
+        """
+int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
+    if (size < 2 * 4500) return 0;
+    return 0;
+}
+""",
+    )
+    _required, unresolved = gate.required_max_len(harness)
+    assert unresolved, "a multiplicative bound must fail closed, not vanish"
+
+
 def test_a_declared_bound_clears_the_unresolved_guard(
     gate: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
