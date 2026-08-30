@@ -229,7 +229,13 @@ jobs:
   python-package:
     name: Python ${{ matrix.python-version }} on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    # The 4-core Intel macOS runners need ~19-26 minutes end to end
+    # (measured: the 3.12 lane finished at 19.5, the 3.10 and 3.11 lanes
+    # were killed by the former flat 20 with the suite mid-run), so that
+    # architecture gets headroom while every faster lane keeps the
+    # tighter bound.  A timeout is an infrastructure ceiling, not a
+    # gate: the tests themselves still have to pass identically.
+    timeout-minutes: ${{ matrix.os == 'macos-15-intel' && 35 || 20 }}
     strategy:
       fail-fast: false
       matrix:
