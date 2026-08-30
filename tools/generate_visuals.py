@@ -34,22 +34,25 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-# matplotlib is needed only to RENDER.  `--check` recomputes the numbers the
-# committed charts assert and diffs them against assets/visuals_manifest.json,
-# which must be possible in a CI job that has no plotting stack installed —
-# the check is precisely for environments that cannot regenerate.
+# matplotlib and numpy are needed only to RENDER.  `--check` recomputes the
+# numbers the committed charts assert and diffs them against
+# assets/visuals_manifest.json, which must be possible in a CI job that has no
+# plotting stack installed — the check is precisely for environments that
+# cannot regenerate.  numpy sits inside the same guard because a bare
+# module-level import made `--check` crash in exactly the environment the
+# flag exists for (matplotlib requires numpy, so the render path loses
+# nothing by pairing them).
 try:
     import matplotlib.patches as mpatches
     import matplotlib.pyplot as plt
+    import numpy as np
 
     plt.style.use("seaborn-v0_8-whitegrid")
     plt.rcParams["font.family"] = "DejaVu Sans"
     plt.rcParams["font.size"] = 11
     _HAVE_MATPLOTLIB = True
-except ImportError:  # pragma: no cover - exercised only where mpl is absent
+except ImportError:  # pragma: no cover - exercised only where the stack is absent
     _HAVE_MATPLOTLIB = False
-
-import numpy as np
 
 REPO_ROOT = Path(__file__).parent.parent
 

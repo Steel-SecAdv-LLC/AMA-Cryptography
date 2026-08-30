@@ -25,7 +25,9 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -146,3 +148,52 @@ class TestWiredIntoCI:
             "the visuals check is not wired into ci.yml; without it the "
             "committed PNGs return to rotting silently"
         )
+
+
+class TestCheckNeedsNoPlottingStack:
+    """The CI job that runs ``--check`` installs no matplotlib and no numpy —
+    by design: the check is for environments that cannot regenerate.  A bare
+    module-level ``import numpy`` broke exactly that job (ModuleNotFoundError
+    before argparse ever ran), while every local environment with the stack
+    installed called the tool healthy.  These tests run the tool in a real
+    subprocess with both imports blocked, the way CI actually runs it.
+    """
+
+    @pytest.fixture()
+    def blocked_stack(self, tmp_path: Path) -> dict[str, str]:
+        for name in ("numpy", "matplotlib"):
+            pkg = tmp_path / name
+            pkg.mkdir()
+            (pkg / "__init__.py").write_text(
+                f'raise ImportError("{name} deliberately absent for this test")\n'
+            )
+        env = dict(os.environ)
+        env["PYTHONPATH"] = str(tmp_path)
+        return env
+
+    def test_check_passes_without_numpy_or_matplotlib(self, blocked_stack: dict[str, str]) -> None:
+        result = subprocess.run(
+            [sys.executable, str(TOOL_PATH), "--check"],
+            capture_output=True,
+            text=True,
+            env=blocked_stack,
+            cwd=REPO_ROOT,
+        )
+        assert (
+            result.returncode == 0
+        ), f"--check must work without the plotting stack; stderr:\n{result.stderr}"
+        assert "OK" in result.stdout
+
+    def test_render_refuses_politely_without_the_stack(self, blocked_stack: dict[str, str]) -> None:
+        """No traceback: the guarded import must turn a missing stack into the
+        documented exit-2 message, for the render path too."""
+        result = subprocess.run(
+            [sys.executable, str(TOOL_PATH)],
+            capture_output=True,
+            text=True,
+            env=blocked_stack,
+            cwd=REPO_ROOT,
+        )
+        assert result.returncode == 2, result.stderr
+        assert "matplotlib is required to render" in result.stderr
+        assert "Traceback" not in result.stderr
