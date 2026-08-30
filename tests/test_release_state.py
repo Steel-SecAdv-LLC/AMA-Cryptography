@@ -183,6 +183,39 @@ class TestVersionScopingAndMissing:
         assert scanned == len(tool.RELEASE_STATE_FILES) - 1
         assert any("SECURITY.md" in p and "not found" in p for p in problems)
 
+    def test_a_historical_marker_about_another_version_is_not_flagged(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        """The two "tagged" phrase markers are version-scoped, like the heading.
+
+        They used to carry no version anchor while ``scan()`` pointed them at
+        the whole of CHANGELOG.md — the file most likely to legitimately
+        discuss PAST unreleased states, and the exact over-broad sweep the
+        curated file list's docstring says it exists to avoid.  A 5.0.0
+        release note recording "v4.0.0 was not yet tagged when this landed"
+        would have failed the release-day preflight.
+        """
+        _released_tree(tmp_path, "5.0.0")
+        changelog = (tmp_path / "CHANGELOG.md").read_text(encoding="utf-8")
+        (tmp_path / "CHANGELOG.md").write_text(
+            changelog + "\n- v4.0.0 was not yet tagged when this landed.\n",
+            encoding="utf-8",
+        )
+        problems, _ = tool.scan(tmp_path, "5.0.0", require_published=False)
+        assert problems == [], problems
+
+    def test_a_marker_about_the_version_under_release_is_still_flagged(
+        self, tool: ModuleType, tmp_path: Path
+    ) -> None:
+        """The control: scoping must not weaken the live-marker catch."""
+        _released_tree(tmp_path, "5.0.0")
+        changelog = (tmp_path / "CHANGELOG.md").read_text(encoding="utf-8")
+        (tmp_path / "CHANGELOG.md").write_text(
+            changelog + "\n- v5.0.0 is not yet tagged.\n", encoding="utf-8"
+        )
+        problems, _ = tool.scan(tmp_path, "5.0.0", require_published=False)
+        assert any("not yet tagged" in p for p in problems), problems
+
 
 # --------------------------------------------------------------------------
 # main() exit codes — the contract release.yml relies on.

@@ -225,6 +225,82 @@ static double test_lane(int iterations) {
 }
 """
 
+# The Yoda spelling of the same branch: `(0 == class_idx) ? a : b`.  The
+# enforced pattern used to require `class_idx (==|!=) [01]` in that operand
+# order, so flipping the operands passed the gate while executing the exact
+# construction the module's measurement table shows tripping the lane.
+YODA_TERNARY = """
+static double test_lane(int iterations) {
+    for (int i = 0; i < iterations; i++) {
+        int class_idx = rand() & 1;
+        const uint8_t *sk = (0 == class_idx) ? sk_a : sk_b;
+        uint64_t start = get_time_ns();
+        crypt(sk);
+        uint64_t end = get_time_ns();
+    }
+}
+"""
+
+# A relational comparison feeding the ternary: `class_idx > 0 ? a : b`.
+RELATIONAL_TERNARY = """
+static double test_lane(int iterations) {
+    for (int i = 0; i < iterations; i++) {
+        int class_idx = rand() & 1;
+        const uint8_t *sk = class_idx > 0 ? sk_a : sk_b;
+        uint64_t start = get_time_ns();
+        crypt(sk);
+        uint64_t end = get_time_ns();
+    }
+}
+"""
+
+# A branch table is still a branch.
+SWITCH_ON_CLASS = """
+static double test_lane(int iterations) {
+    for (int i = 0; i < iterations; i++) {
+        int class_idx = rand() & 1;
+        const uint8_t *sk = sk_a;
+        switch (class_idx) {
+        case 1: sk = sk_b; break;
+        default: break;
+        }
+        uint64_t start = get_time_ns();
+        crypt(sk);
+        uint64_t end = get_time_ns();
+    }
+}
+"""
+
+# The subscript's bias spelled as pointer arithmetic: the class selects an
+# ADDRESS even though no comparison and no `[]` appears.
+POINTER_ARITH_SELECT = """
+static double test_lane(int iterations) {
+    for (int i = 0; i < iterations; i++) {
+        int class_idx = rand() & 1;
+        const uint8_t *sk = sk_base + (size_t)class_idx * SK_BYTES;
+        uint64_t start = get_time_ns();
+        crypt(sk);
+        uint64_t end = get_time_ns();
+    }
+}
+"""
+
+# The same arithmetic computing a classed input VALUE is the sanctioned
+# branchless form both harness families use for the lookup lane (measured:
+# branchy mean t = -8.68, 9/10 over threshold; this form -0.85, 0/10).
+VALUE_INDEX_ARITHMETIC = """
+static double test_lane(int iterations) {
+    for (int i = 0; i < iterations; i++) {
+        int class_idx = rand() & 1;
+        size_t index =
+            (size_t)class_idx * (TABLE_SIZE / 2) + (size_t)(rand() % (TABLE_SIZE / 2));
+        uint64_t start = get_time_ns();
+        ama_consttime_lookup(table, TABLE_SIZE, ELEM_SIZE, index, output);
+        uint64_t end = get_time_ns();
+    }
+}
+"""
+
 
 @pytest.mark.parametrize(
     "source,expect_violation,label",
@@ -236,6 +312,11 @@ static double test_lane(int iterations) {
         (INDEXED_BY_CLASS, True, "address indexed by the class"),
         (STAGED_UNALIGNED, True, "staging buffer not cache-line aligned"),
         (DRAW_WITHOUT_TIMER, True, "class draw with no timer to close the window"),
+        (YODA_TERNARY, True, "Yoda comparison (0 == class_idx) feeding a ternary"),
+        (RELATIONAL_TERNARY, True, "relational class_idx > 0 feeding a ternary"),
+        (SWITCH_ON_CLASS, True, "switch on the class"),
+        (POINTER_ARITH_SELECT, True, "address selected by pointer arithmetic"),
+        (VALUE_INDEX_ARITHMETIC, False, "sanctioned classed-input value arithmetic"),
         (STAGED, False, "masked-merge staging, aligned"),
         (REUSED_PROBE, False, "reused probe, no class-selected address"),
         (BRANCHLESS_CLASS_ARITHMETIC, False, "branchless class arithmetic"),

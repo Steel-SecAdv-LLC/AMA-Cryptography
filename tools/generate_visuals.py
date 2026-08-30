@@ -27,19 +27,29 @@ wrong is not an asset. Regenerating any of them means restoring the
 function AND adding the document reference that justifies it.
 """
 
+import argparse
 import json
 import re
+import sys
 from pathlib import Path
 from typing import Optional
 
-import matplotlib.patches as mpatches
-import matplotlib.pyplot as plt
-import numpy as np
+# matplotlib is needed only to RENDER.  `--check` recomputes the numbers the
+# committed charts assert and diffs them against assets/visuals_manifest.json,
+# which must be possible in a CI job that has no plotting stack installed —
+# the check is precisely for environments that cannot regenerate.
+try:
+    import matplotlib.patches as mpatches
+    import matplotlib.pyplot as plt
 
-# Set style
-plt.style.use("seaborn-v0_8-whitegrid")
-plt.rcParams["font.family"] = "DejaVu Sans"
-plt.rcParams["font.size"] = 11
+    plt.style.use("seaborn-v0_8-whitegrid")
+    plt.rcParams["font.family"] = "DejaVu Sans"
+    plt.rcParams["font.size"] = 11
+    _HAVE_MATPLOTLIB = True
+except ImportError:  # pragma: no cover - exercised only where mpl is absent
+    _HAVE_MATPLOTLIB = False
+
+import numpy as np
 
 REPO_ROOT = Path(__file__).parent.parent
 
@@ -105,13 +115,13 @@ RAW_C_MEDIANS_US = {
 # Category buckets for the test-coverage chart. Each entry is
 # (display_label, list_of_filename_substring_predicates). A test file
 # (basename) is assigned to the FIRST category whose predicate matches.
-# Files that match no predicate are tracked separately as uncategorized
-# (returned from `_count_test_functions_by_category()` as the third
-# tuple element) and are NOT included in the bucketed counts or the
-# chart's `total_tests`. `create_test_coverage()` surfaces any such
-# files to the build log so a new `test_*.py` added without a matching
-# rule is visible at chart-generation time instead of silently dropping
-# off the chart.
+# Files that match no predicate are charted under the trailing `Other`
+# bucket (see _OTHER_LABEL) so the chart's total always covers every
+# walked file; they are also returned from
+# `_count_test_functions_by_category()` as the third tuple element and
+# `create_test_coverage()` lists them in the build log, so a new
+# `test_*.py` added without a matching rule is visible at
+# chart-generation time rather than silently lumped away.
 _TEST_CATEGORY_RULES = [
     (
         "Core Crypto\n& NIST KATs",
@@ -206,17 +216,28 @@ def _classify_test_file(basename: str) -> Optional[str]:
     return None
 
 
+#: The catch-all bucket for files no `_TEST_CATEGORY_RULES` predicate claims.
+#: Load-bearing for the chart's honesty: without it, `total_tests` summed only
+#: the bucketed files while the title and footer claimed to describe every
+#: `tests/test_*.py` file — and 46% of the suite (114 of 200 files, 2,159 of
+#: 4,702 test functions when measured) was silently dropped from a chart whose
+#: only signal was a stdout WARN that nothing in CI ever ran.
+_OTHER_LABEL = "Other"
+
+
 def _count_test_functions_by_category() -> tuple[list[int], int, list[tuple[str, int]]]:
     """Walk `tests/test_*.py`, count `def test_` matches per file, and
-    bucket each file into one of `_TEST_CATEGORY_RULES`. Returns
-    (counts_in_rule_order, total, unbucketed_files).
+    bucket each file into one of `_TEST_CATEGORY_RULES`, with files that
+    match no rule collected under the trailing `Other` bucket.  Returns
+    (counts_in_rule_order_plus_other, total, other_files).
 
     `def test_` matches in `conftest.py` are intentionally excluded —
-    they are pytest fixtures, not tests. This count therefore equals
-    the 2,026-across-69 subset of docs/METRICS_REPORT.md's headline
-    2,028-across-70 figure.
+    they are pytest fixtures, not tests.  The total is therefore the
+    same top-level count docs/METRICS_REPORT.md's static-test figure
+    records (every `tests/test_*.py`, conftest excluded); the split into
+    named buckets vs. `Other` is presentation, never exclusion.
     """
-    counts = [0] * len(_TEST_CATEGORY_RULES)
+    counts = [0] * (len(_TEST_CATEGORY_RULES) + 1)
     label_to_idx = {label: i for i, (label, _) in enumerate(_TEST_CATEGORY_RULES)}
     unbucketed: list[tuple[str, int]] = []
     for path in sorted(TESTS_DIR.glob("test_*.py")):
@@ -224,6 +245,7 @@ def _count_test_functions_by_category() -> tuple[list[int], int, list[tuple[str,
         label = _classify_test_file(path.name)
         if label is None:
             unbucketed.append((path.name, n))
+            counts[-1] += n
             continue
         counts[label_to_idx[label]] += n
     return counts, sum(counts), unbucketed
@@ -239,22 +261,23 @@ def create_test_coverage() -> None:
     # module scope) by filename predicate; `def test_` matches per file
     # are counted via regex. conftest.py is excluded (its `def test_`
     # entries are pytest fixtures, not tests).
-    categories = [label for label, _ in _TEST_CATEGORY_RULES]
+    categories = [label for label, _ in _TEST_CATEGORY_RULES] + [_OTHER_LABEL]
     test_counts, total_tests, unbucketed = _count_test_functions_by_category()
     # File count is derived once here and reused in both the suptitle
     # and the footer so they cannot disagree if tests are added or
-    # removed. It matches the set walked by `_count_test_functions_by_category()`.
+    # removed. It matches the set walked by `_count_test_functions_by_category()`,
+    # and with the Other bucket the total genuinely covers every one of them.
     n_files = len(list(TESTS_DIR.glob("test_*.py")))
     if unbucketed:
-        # Surface in the build log so a new test file added without a
-        # matching rule is noticed instead of silently dropped.
-        print("WARN: test files without a category rule (will be excluded " "from chart):")
+        # Surface in the build log so a new test file without a matching
+        # rule is noticed; it is charted under Other either way.
+        print("WARN: test files without a category rule (charted under 'Other'):")
         for name, n in unbucketed:
             print(f"  - {name} ({n} tests)")
     percentages = (
         [100 * c / total_tests for c in test_counts] if total_tests else [0] * len(categories)
     )
-    colors = ["#22C55E", "#3B82F6", "#8B5CF6", "#F59E0B", "#EF4444"]
+    colors = ["#22C55E", "#3B82F6", "#8B5CF6", "#F59E0B", "#EF4444", "#6B7280"]
 
     # === Left Panel: Horizontal bar chart with percentages ===
     bars = ax1.barh(categories, test_counts, color=colors, edgecolor="white", linewidth=2)
@@ -810,7 +833,116 @@ def create_quantum_comparison() -> None:
     print(f"Created: {ASSETS_DIR / 'quantum_comparison.png'}")
 
 
-if __name__ == "__main__":
+#: The numbers the committed charts assert, recorded beside the PNGs so drift
+#: is checkable without re-rendering.  The five committed assets sat frozen
+#: and version-stamped at v3.4.0 for two major releases because neither
+#: generator had a --check mode and nothing in CI ran either one — a chart
+#: nobody regenerates decays into a false claim with a version label on it.
+MANIFEST_PATH = ASSETS_DIR / "visuals_manifest.json"
+
+#: The PNGs this tool owns; defense_layers.png and performance_dashboard.png
+#: belong to tools/generate_dashboards.py, which merges its own entry into the
+#: manifest when it renders.
+_OWNED_OUTPUTS = ("test_coverage.png", "ethical_binding.png", "quantum_comparison.png")
+
+
+def _live_manifest_entry() -> dict[str, object]:
+    """What this tool's charts assert, computed from the working tree now."""
+    counts, total_tests, unbucketed = _count_test_functions_by_category()
+    labels = [label for label, _ in _TEST_CATEGORY_RULES] + [_OTHER_LABEL]
+    return {
+        "version": _PKG_VERSION,
+        "test_coverage": {
+            "counts": dict(zip(labels, counts)),
+            "total_tests": total_tests,
+            "n_files": len(list(TESTS_DIR.glob("test_*.py"))),
+            "uncategorised_files": sorted(name for name, _ in unbucketed),
+        },
+    }
+
+
+def check_manifest() -> list[str]:
+    """Drift between the committed assets and the tree, as failure messages."""
+    problems: list[str] = []
+    if not MANIFEST_PATH.is_file():
+        return [
+            f"{MANIFEST_PATH} is missing; regenerate with "
+            f"`python tools/generate_visuals.py` (and commit the PNGs it writes)."
+        ]
+    recorded = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
+    live = _live_manifest_entry()
+    for key, value in live.items():
+        if recorded.get(key) != value:
+            problems.append(
+                f"visuals_manifest.json {key!r} does not match the tree:\n"
+                f"    recorded: {json.dumps(recorded.get(key), sort_keys=True)}\n"
+                f"    tree:     {json.dumps(value, sort_keys=True)}\n"
+                f"  The committed charts assert numbers the tree no longer has. "
+                f"Regenerate with `python tools/generate_visuals.py` and commit "
+                f"the PNGs and manifest together."
+            )
+    for name in _OWNED_OUTPUTS:
+        if not (ASSETS_DIR / name).is_file():
+            problems.append(f"assets/{name} is missing while the manifest describes it.")
+    # The dashboards' entry is measurement-derived and cannot be recomputed on
+    # a clean checkout, but its VERSION can be held to the package's: the
+    # committed performance dashboard carried a v3.4.0 title into a 5.0.0
+    # tree for two majors precisely because nothing compared these.
+    dashboards = recorded.get("dashboards")
+    if not isinstance(dashboards, dict):
+        problems.append(
+            "visuals_manifest.json carries no 'dashboards' entry; run "
+            "tools/generate_dashboards.py (it merges its entry when it renders)."
+        )
+    elif dashboards.get("version") != _PKG_VERSION:
+        problems.append(
+            f"assets/performance_dashboard.png and defense_layers.png were "
+            f"generated at v{dashboards.get('version')}, package is "
+            f"v{_PKG_VERSION}. Regenerate with tools/generate_dashboards.py "
+            f"(produce its measurement inputs first — see its module docstring)."
+        )
+    return problems
+
+
+def _write_manifest() -> None:
+    recorded: dict[str, object] = {}
+    if MANIFEST_PATH.is_file():
+        recorded = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
+    recorded.update(_live_manifest_entry())
+    MANIFEST_PATH.write_text(json.dumps(recorded, indent=2, sort_keys=True) + "\n")
+    print(f"Wrote: {MANIFEST_PATH}")
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help=(
+            "verify the committed charts' manifest against the tree instead of "
+            "rendering; works without matplotlib, for CI"
+        ),
+    )
+    args = parser.parse_args(argv)
+
+    if args.check:
+        problems = check_manifest()
+        if problems:
+            print("VISUAL ASSETS CHECK FAILED:", file=sys.stderr)
+            for problem in problems:
+                print(f"  - {problem}", file=sys.stderr)
+            return 1
+        print("OK: committed visual assets match the numbers the tree produces.")
+        return 0
+
+    if not _HAVE_MATPLOTLIB:
+        print(
+            "matplotlib is required to render (pip install matplotlib); "
+            "--check works without it.",
+            file=sys.stderr,
+        )
+        return 2
+
     print("Generating AMA Cryptography visual diagrams...")
     print("=" * 50)
 
@@ -818,6 +950,12 @@ if __name__ == "__main__":
     create_test_coverage()
     create_ethical_binding_flow()
     create_quantum_comparison()
+    _write_manifest()
 
     print("=" * 50)
     print(f"All visuals saved to: {ASSETS_DIR}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

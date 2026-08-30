@@ -526,13 +526,24 @@ def _module_reaches_native(tree: ast.AST) -> bool:
       ``crypto_api`` and ``legacy_compat`` use so ``sys.modules`` patches take
       effect;
     * a call to a ``_cy_*`` Cython binding — the fast path that bypasses the
-      ctypes wrappers.
+      ctypes wrappers;
+    * importing ``_native_lib`` under ANY alias —
+      ``from .pqc_backends import _native_lib as lib``.  An aliased import is
+      an ``ast.alias`` node, never a Name or Attribute, and every later use is
+      ``lib.ama_x`` — so without this arm such a module reached the library
+      while appearing in neither MODULES nor EXEMPT_MODULES, exactly the
+      unaudited-by-omission state the discovery claims to make impossible.
+      (The un-aliased form was already caught: its uses are Name nodes.)
     """
     for node in ast.walk(tree):
         if isinstance(node, ast.Name) and node.id == "_native_lib":
             return True
         if isinstance(node, ast.Attribute) and node.attr == "_native_lib":
             return True
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            for alias in node.names:
+                if alias.name == "_native_lib" or alias.name.endswith("._native_lib"):
+                    return True
         if isinstance(node, ast.Call):
             fn = node.func
             if isinstance(fn, ast.Name) and fn.id.startswith(CYTHON_PREFIX):

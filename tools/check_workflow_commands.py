@@ -814,29 +814,24 @@ def _cmake_configure_commands(run_text: str) -> list[str]:
     every flag on those lines belongs to it.  Reading line by line would report
     a missing build type on the first line of every multi-line configure in the
     tree.
+
+    Continuations are joined BEFORE matching, the way :func:`_commands`
+    already does: the previous matcher only started buffering when the FIRST
+    physical line matched ``_CMAKE_CONFIGURE_RE``, so a configure written as
+    a bare ``cmake \\`` with every flag on continuation lines was never seen
+    at all — neither counted (deflating the non-vacuity floor's input) nor
+    checked for a build type, which is this gate's whole subject.  The flag
+    position in the source text must not decide whether the command is seen.
     """
-    joined: list[str] = []
-    buffer = ""
-    for raw in run_text.split("\n"):
-        line = raw.rstrip()
-        stripped = line.strip()
-        if buffer:
-            buffer += " " + stripped.rstrip("\\").strip()
-            if not line.endswith("\\"):
-                joined.append(buffer)
-                buffer = ""
-            continue
+    joined_text = run_text.replace("\\\n", " ")
+    commands: list[str] = []
+    for raw in joined_text.split("\n"):
+        stripped = raw.strip()
         if stripped.startswith("#"):
             continue
-        if not _CMAKE_CONFIGURE_RE.search(stripped):
-            continue
-        if line.endswith("\\"):
-            buffer = stripped.rstrip("\\").strip()
-        else:
-            joined.append(stripped)
-    if buffer:
-        joined.append(buffer)
-    return joined
+        if _CMAKE_CONFIGURE_RE.search(stripped):
+            commands.append(stripped)
+    return commands
 
 
 def check_cmake_build_type(path: Path, document: Any, report: Report) -> None:

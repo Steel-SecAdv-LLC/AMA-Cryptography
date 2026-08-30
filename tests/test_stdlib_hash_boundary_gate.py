@@ -138,6 +138,36 @@ class TestTheFourSilentBypassesAreClosed:
         tree = ast.parse("from hashlib import sha256\nsha256 = None\n")
         assert gate.count_hash_references(tree) == 1
 
+    def test_rebinding_the_module_root_is_followed(self) -> None:
+        """The fifth bypass: old walker counted 2 (import + aliasing load).
+
+        ``_h = hashlib`` bound the module to a name outside ``_module_roots``,
+        so every later ``_h.sha3_256(...)`` moved the pinned count by zero —
+        inside an allowlisted file that bought unlimited extra OpenSSL uses
+        with the gate green.  Now: import (1) + the aliasing load (1) + each
+        use through the alias (2) = 4.
+        """
+        tree = ast.parse(
+            "import hashlib\n"
+            "_h = hashlib\n"
+            "a = _h.sha3_256(b'x').digest()\n"
+            "b = _h.sha3_256(b'y').digest()\n"
+        )
+        assert gate.count_hash_references(tree) == 4
+
+    def test_getattr_on_a_guarded_root_counts(self) -> None:
+        """Old walker: 1 (the import) — the receiver was a Call argument,
+        not an Attribute value, so ``getattr(hashlib, "sha3_256")()`` was
+        free.  The bare load of the root is the reference."""
+        tree = ast.parse("import hashlib\nf = getattr(hashlib, 'sha3_256')\nd = f(b'x')\n")
+        assert gate.count_hash_references(tree) == 2
+
+    def test_an_attribute_use_is_still_one_reference_not_two(self) -> None:
+        """Counting root loads must not double-count ``hashlib.sha256``:
+        the Name inside a counted Attribute is consumed by it."""
+        tree = ast.parse("import hashlib\ny = hashlib.new('sha256')\n")
+        assert gate.count_hash_references(tree) == 2
+
 
 class TestTheScanReachesEveryFile:
     def test_a_subpackage_cannot_hide_a_use(self, tmp_path: Path) -> None:

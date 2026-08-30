@@ -48,7 +48,7 @@ uninitvar:src/c/ama_nistp.c:1168
 # ama_kyber.c — `&mat[i].vec[j]` takes the address of a matrix entry so
 # kyber_gen_matrix can fill it.  Taking the address of an object in order to
 # have it written is the operation cppcheck cannot distinguish from reading it.
-uninitvar:src/c/ama_kyber.c:572
+uninitvar:src/c/ama_kyber.c:577
 
 # ama_dilithium.c — w1_packed is filled by polyveck_pack_w1 through a pointer.
-uninitvar:src/c/ama_dilithium.c:2355
+uninitvar:src/c/ama_dilithium.c:2363

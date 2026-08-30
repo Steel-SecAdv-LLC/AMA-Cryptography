@@ -57,10 +57,22 @@ enforcement INVARIANT-1 has on the Python side:
    invisible entirely, module object bound to an arbitrary name.
 4. Anything under a subpackage — the scan used a non-recursive ``glob``.
 
+Closing those four still left a fifth and sixth of the same species, closed
+since:
+
+5. ``_h = hashlib`` — the module root rebound to a plain name.  The RHS was
+   a bare Name load (counted by nothing) and ``_h`` never entered the root
+   set, so one aliasing line bought unlimited ``_h.sha3_256(...)`` uses with
+   the pinned count unchanged.  Assignments from a root are now followed,
+   and a BARE load of a root counts as the reference — which also covers
+6. ``getattr(hashlib, "sha3_256")`` and ``f(hashlib)`` — the module handed
+   to a callee this gate cannot follow, counted at the load exactly as a
+   dynamic import is counted at the call.
+
 The walker below therefore resolves *bindings* rather than matching a
 spelling: it tracks which local names refer to a guarded module (through any
-alias), which names were imported directly out of one, and flags dynamic
-imports by the module string.  ``hmac`` is guarded alongside ``hashlib``
+alias or re-assignment), which names were imported directly out of one, and
+flags dynamic imports by the module string.  ``hmac`` is guarded alongside ``hashlib``
 because stdlib ``hmac`` on a libcrypto build is OpenSSL performing an AMA
 MAC — the same violation, and one the docstrings in ``crypto_api`` and
 ``pqc_backends`` already name explicitly.  The scan is recursive so a future
@@ -146,6 +158,9 @@ class _GuardedModuleVisitor(ast.NodeVisitor):
         self.count = 0
         self._module_roots: set[str] = set()
         self._direct_names: set[str] = set()
+        #: Name nodes already counted as part of an enclosing Attribute, so
+        #: `hashlib.sha256` is one reference, not two.
+        self._consumed: set[int] = set()
 
     def visit_Import(self, node: ast.Import) -> None:
         for alias in node.names:
@@ -161,15 +176,45 @@ class _GuardedModuleVisitor(ast.NodeVisitor):
                 self._direct_names.add(alias.asname or alias.name)
         self.generic_visit(node)
 
+    def visit_Assign(self, node: ast.Assign) -> None:
+        # `h = hashlib` rebinds the module root to another name.  The RHS is
+        # a plain Name load (counted by visit_Name below), and without
+        # following the binding every later `h.sha3_256(...)` was invisible:
+        # inside an allowlisted file one aliasing line bought an unlimited
+        # number of extra uses with the pinned count unchanged — the fifth
+        # bypass, closed like the four the docstring already enumerates.
+        if isinstance(node.value, ast.Name) and node.value.id in self._module_roots:
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    self._module_roots.add(target.id)
+        self.generic_visit(node)
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+        if (
+            isinstance(node.value, ast.Name)
+            and node.value.id in self._module_roots
+            and isinstance(node.target, ast.Name)
+        ):
+            self._module_roots.add(node.target.id)
+        self.generic_visit(node)
+
     def visit_Attribute(self, node: ast.Attribute) -> None:
         if isinstance(node.value, ast.Name) and node.value.id in self._module_roots:
             self.count += 1
+            self._consumed.add(id(node.value))
         self.generic_visit(node)
 
     def visit_Name(self, node: ast.Name) -> None:
         # Only loads: rebinding the name locally is not a use of the import.
-        if isinstance(node.ctx, ast.Load) and node.id in self._direct_names:
-            self.count += 1
+        # A BARE load of a module root counts too — `h = hashlib`,
+        # `getattr(hashlib, "sha3_256")`, `f(hashlib)` all hand the module to
+        # a binding or callee this gate cannot follow, so the load itself is
+        # the reference (the same reasoning that makes a dynamic import count
+        # at the call).  Loads consumed by an enclosing counted Attribute are
+        # excluded above.
+        if isinstance(node.ctx, ast.Load) and id(node) not in self._consumed:
+            if node.id in self._direct_names or node.id in self._module_roots:
+                self.count += 1
         self.generic_visit(node)
 
     def visit_Call(self, node: ast.Call) -> None:

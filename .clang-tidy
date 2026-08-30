@@ -115,10 +115,11 @@ Checks: >
 #     as "garbage".  The kernel is KAT-verified and vendor code gets
 #     no project-side modifications.  Dropping ONLY this one check
 #     keeps the rest of `clang-analyzer-*` (the security-bearing
-#     family) enforced.  Note: a NOLINT on the calling line in
-#     ed25519_donna_shim.c is preserved for the older clang-tidy
-#     releases that report the warning at the call site rather than
-#     at the vendor source location.
+#     family) enforced.  (No NOLINT survives at the call site:
+#     inline suppressions under src/c/ are forbidden and enforced by
+#     tools/check_suppression_hygiene.py — see the header of this
+#     file; an earlier revision of this note claimed one was
+#     "preserved", contradicting that policy.)
 
 # WarningsAsErrors flips every enabled check above to an ERROR.  See
 # the header for the audit Issue 9 close-out rationale.  PRs that
@@ -132,7 +133,20 @@ WarningsAsErrors: '*'
 #   under src/c/vendor/ and third-party headers under /usr/include are
 #   excluded — clang-tidy would otherwise drown the output in third-
 #   party-noise.
-HeaderFilterRegex: '^(.*/)?(src/c|include)/(?!vendor/).*\.h$'
+#
+#   POSITIVE alternation over the real header directories, in POSIX ERE.
+#   The previous spelling excluded vendor/ with a lookahead —
+#   '(?!vendor/)' — which llvm::Regex does not support: the pattern
+#   compiled invalid, Regex::match() answered false for EVERYTHING, no
+#   error was printed, and clang-tidy silently suppressed every
+#   diagnostic originating in the project's own headers.  Reproduced with
+#   clang-tidy 18.1.3: a bugprone-assignment-in-if-condition planted in a
+#   src/c header was reported 0 times under the lookahead filter and
+#   reported under this one — so the fail-closed `WarningsAsErrors: '*'`
+#   gate below covered no header code at all.  Enumerating the permitted
+#   subdirectories also means a NEW subdirectory gets a deliberate
+#   decision here instead of the default.
+HeaderFilterRegex: '^(.*/)?(include/.*\.h|src/c/[^/]+\.h|src/c/(avx2|internal|neon|sve2)/[^/]+\.h)$'
 
 # Format style — match the project's clang-format config.
 FormatStyle: file

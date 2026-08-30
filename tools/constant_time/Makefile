@@ -25,7 +25,19 @@ CC = gcc
 # gone unnoticed.  Defining it costs one more source (ama_slhdsa.c, below --
 # ama_core.c references ama_sphincs_* under the macro) and the build is
 # warning-clean.
-CFLAGS = -O2 -Wall -Wextra -I../../include -I../../tests/c/dudect -DAMA_AES_CONSTTIME=ON -DAMA_USE_NATIVE_PQC
+#
+# The optimization flags match CMAKE_C_FLAGS_RELEASE (CMakeLists.txt:
+# -O3 -DNDEBUG -fomit-frame-pointer -funroll-loops), because the lockstep
+# claim above is empty if the codegen differs: the optimization level is
+# load-bearing for exactly this class of measurement — rebuilding an
+# instruction-count constant-time target at a different level immediately
+# measured a 9,424-instruction key-dependent spread in the secp256k1 scalar
+# arithmetic (see check_workflow_commands.check_cmake_build_type).  This
+# harness compiled at plain -O2 with no NDEBUG while the comment above
+# claimed lockstep with the shipped library; now the flags and the claim
+# agree.  (IPO/LTO is the remaining divergence: the CMake build may add it
+# when AMA_ENABLE_LTO is on; a plain Makefile link does not.)
+CFLAGS = -O3 -DNDEBUG -fomit-frame-pointer -funroll-loops -Wall -Wextra -I../../include -I../../tests/c/dudect -DAMA_AES_CONSTTIME=ON -DAMA_USE_NATIVE_PQC
 LDFLAGS = -lm -lpthread
 
 # Source directories

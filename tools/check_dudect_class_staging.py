@@ -157,10 +157,22 @@ _STAGE_SELECT = re.compile(r"dudect_stage_select\s*\([^;]*,\s*class_idx\s*\)")
 #
 # Each alternative, in order:
 #   1. an `if` whose condition mentions the class
-#   2. a comparison of the class against 0 or 1, feeding a ternary
-#   3. a bare ternary on the class
-#   4. an array subscript by the class, which selects an ADDRESS and so biases
+#   2. a comparison with the class on the LEFT (equality or relational),
+#      feeding a ternary
+#   3. a comparison with the class on the RIGHT — the Yoda spelling
+#      `(0 == class_idx) ? a : b` — feeding a ternary
+#   4. a bare ternary on the class
+#   5. a `switch` on the class — a branch table is still a branch
+#   6. an array subscript by the class, which selects an ADDRESS and so biases
 #      the lane even when both arms retire the same instructions
+#   7. the same address selection spelled as pointer arithmetic —
+#      `src + class_idx * n`, `base + n * class_idx`, `p - class_idx`
+#
+# The module rule is broader than any one spelling — "a ternary on the class
+# is a violation wherever it appears in that window" — and alternatives 3, 5
+# and 7 exist because the enforced patterns had drifted narrower than the
+# rule: only `class_idx (==|!=) [01] ?` in that operand order was caught, so
+# every ordinary rewrite of the same branch passed the gate.
 #
 # The alternatives are assembled from named parts rather than written as one
 # re.VERBOSE pattern with trailing `#` comments.  Verbose comments read as
@@ -169,8 +181,10 @@ _STAGE_SELECT = re.compile(r"dudect_stage_select\s*\([^;]*,\s*class_idx\s*\)")
 # (alert 632) — and, worse, deleting `re.VERBOSE` would silently promote those
 # comments into the pattern.  Naming the parts removes both.
 _IF_ON_CLASS = r"\bif\s*\([^;]*\bclass_idx\b"
-_CLASS_COMPARE_TERNARY = r"\bclass_idx\b\s*(?:==|!=)\s*[01]\s*\)?\s*\?"
+_CLASS_COMPARE_TERNARY = r"\bclass_idx\b\s*(?:==|!=|[<>]=?)[^;?]*\?"
+_YODA_COMPARE_TERNARY = r"(?:==|!=|[<>]=?)\s*\(?\s*class_idx\b[^;?]*\?"
 _CLASS_TERNARY = r"\bclass_idx\b\s*\?"
+_SWITCH_ON_CLASS = r"\bswitch\s*\([^;]*\bclass_idx\b"
 _CLASS_SUBSCRIPT = r"\[\s*class_idx\s*\]"
 
 _CLASS_BRANCH = re.compile(
@@ -179,11 +193,32 @@ _CLASS_BRANCH = re.compile(
         for alternative in (
             _IF_ON_CLASS,
             _CLASS_COMPARE_TERNARY,
+            _YODA_COMPARE_TERNARY,
             _CLASS_TERNARY,
+            _SWITCH_ON_CLASS,
             _CLASS_SUBSCRIPT,
         )
     )
 )
+
+# Class arithmetic: `src + class_idx * n`, `base + n * class_idx`,
+# `p - class_idx`.  Unlike the constructs above this is CONTEXTUAL — it is a
+# violation when it selects an ADDRESS (the same bias as a subscript, spelled
+# with pointer arithmetic), but it is exactly the sanctioned branchless form
+# when it computes a classed INPUT VALUE: both harness families build
+# `size_t index = (size_t)class_idx * (TABLE_SIZE / 2) + ...` for the lookup
+# lane, with the measurement that justifies it recorded beside the code
+# (branchy form mean t = -8.68, over threshold 9/10; this form -0.85, 0/10),
+# and the memzero lane computes a fill byte as `0xFFu * (unsigned)class_idx`.
+# So the arithmetic alternative fires only in a statement that ASSIGNS A
+# POINTER — the canonical address-selection spelling `const uint8_t *src =
+# base + class_idx * n;` — where the value reading is impossible.
+_CLASS_ARITH = re.compile(
+    r"[+\-]\s*(?:\(\s*[\w ]+\s*\)\s*)?class_idx\b"
+    r"|\bclass_idx\s*\*"
+    r"|\*\s*(?:\(\s*[\w ]+\s*\)\s*)?class_idx\b"
+)
+_POINTER_ASSIGN = re.compile(r"\*\s*(?:const\s+)?\w+\s*=[^=]")
 
 # `_Alignas(64) <type> name[...]` / `_Alignas(64) <type> name;`
 _ALIGNED_DECL = re.compile(r"_Alignas\(64\)\s+\w[\w\s]*?\s+(?P<name>\w+)\s*(?:\[|;)")
@@ -338,6 +373,12 @@ def check_text(text: str, path: str) -> list[str]:
         if in_window:
             if _CLASS_USE.search(stmt) and not _STAGE_SELECT.search(stmt):
                 branch = _CLASS_BRANCH.search(stmt)
+                if branch is None and _POINTER_ASSIGN.search(stmt):
+                    # Class arithmetic in a pointer assignment selects an
+                    # ADDRESS — a subscript spelled with pointer arithmetic;
+                    # in value context it is the sanctioned branchless
+                    # classed-input form — see _CLASS_ARITH.
+                    branch = _CLASS_ARITH.search(stmt)
                 if branch is not None:
                     violations.append(
                         f"{path}:{lineno}: {branch.group(0).strip()!r} lets "

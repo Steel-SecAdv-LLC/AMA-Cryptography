@@ -276,6 +276,24 @@ class TestModuleDiscovery:
         discovered = tool.discover_native_reaching_modules(repo)
         assert "ama_cryptography/newthing.py" in discovered
 
+    def test_an_aliased_import_is_discovered(self, tool: ModuleType, tmp_path: Path) -> None:
+        """``from .pqc_backends import _native_lib as lib`` reaches native.
+
+        An aliased import is an ``ast.alias`` node — never a Name or an
+        Attribute — and every later use is ``lib.ama_x``, so the Name/
+        Attribute/getattr arms all miss it.  Before the Import/ImportFrom arm
+        was added, such a module reached the library while appearing in
+        neither MODULES nor EXEMPT_MODULES: the unaudited-by-omission state
+        discovery exists to make impossible.
+        """
+        repo = self._mk(
+            tmp_path,
+            "aliased.py",
+            "from ama_cryptography.pqc_backends import _native_lib as lib\n"
+            "def do():\n    return lib.ama_something()\n",
+        )
+        assert "ama_cryptography/aliased.py" in tool.discover_native_reaching_modules(repo)
+
     def test_getattr_string_form_is_discovered(self, tool: ModuleType, tmp_path: Path) -> None:
         repo = self._mk(
             tmp_path,

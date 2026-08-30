@@ -41,12 +41,14 @@ import json
 import os
 import platform
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, NamedTuple
 
 import matplotlib
 
 matplotlib.use("Agg")
+import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 import numpy as np
@@ -55,7 +57,11 @@ import numpy as np
 ROOT = Path(__file__).parent.parent
 ASSETS_DIR = ROOT / "assets"
 ASSETS_DIR.mkdir(exist_ok=True)
-BENCH_FILE = ROOT / "benchmark_results.json"
+# Where the DOCUMENTED producer writes (benchmarks/README.md:
+# `python benchmarks/benchmark_suite.py --json benchmarks/benchmark_results.json`).
+# This used to read the repo ROOT, so following the documented command left
+# the generator still unable to start.
+BENCH_FILE = ROOT / "benchmarks" / "benchmark_results.json"
 REGRESSION_FILE = ROOT / "benchmarks" / "regression_results.json"
 VALIDATION_FILE = ROOT / "benchmarks" / "validation_results.json"
 COMPARATIVE_FILE = ROOT / "benchmarks" / "comparative_benchmark_results.json"
@@ -103,6 +109,19 @@ def load_json_safe(path: Path, default: Any = None) -> Any:
         return json.load(f)
 
 
+# The primary artefact gets no fallback (see the deliberate-no-fallback
+# block below) but it does get a diagnosis: `benchmark_results.json` is a
+# gitignored transient, so on every clean checkout this file is absent and a
+# bare open() died with an undecorated FileNotFoundError at IMPORT time —
+# before argparse, before any panel's missing_artefact() remedy could
+# render.  A missing measurement must name the command that produces it.
+if not BENCH_FILE.exists():
+    raise SystemExit(
+        f"{BENCH_FILE.relative_to(ROOT)} is missing (it is a gitignored "
+        f"transient, absent on every clean checkout). Produce it first:\n"
+        f"    python benchmarks/benchmark_suite.py --json "
+        f"benchmarks/benchmark_results.json"
+    )
 bench = load_json(BENCH_FILE)
 regression = load_json_safe(REGRESSION_FILE)
 validation = load_json_safe(VALIDATION_FILE)
@@ -737,7 +756,7 @@ def create_performance_dashboard() -> None:
         ),
     )
 
-    plt.tight_layout(rect=[0, 0, 1, 0.96])
+    plt.tight_layout(rect=(0, 0, 1, 0.96))
     out = ASSETS_DIR / "performance_dashboard.png"
     fig.savefig(out, dpi=150, facecolor=fig.get_facecolor(), bbox_inches="tight")
     plt.close(fig)
@@ -826,7 +845,7 @@ def create_defense_layers() -> None:
         y = layer.y
         c = layer.color
         # Layer box
-        rect = plt.Rectangle(
+        rect = mpatches.Rectangle(
             (1.5, y - 0.6),
             11,
             1.4,
@@ -838,7 +857,7 @@ def create_defense_layers() -> None:
         )
         ax.add_patch(rect)
         # Layer number badge
-        badge = plt.Circle((2.3, y + 0.1), 0.35, color=c, zorder=3)
+        badge = mpatches.Circle((2.3, y + 0.1), 0.35, color=c, zorder=3)
         ax.add_patch(badge)
         ax.text(
             2.3,
@@ -884,11 +903,13 @@ def create_defense_layers() -> None:
         style="italic",
     )
 
-    # Footer
+    # Footer.  The version comes from the package, never a literal: this line
+    # carried a hardcoded "v3.0.0" after the module's own header comment
+    # declared that class of literal removed — the one place it survived.
     ax.text(
         7,
         0.25,
-        "v3.0.0  •  "
+        f"v{_PKG_VERSION}  •  "
         "SIMD Acceleration: AVX2 (x86-64) | NEON (AArch64) | SVE2 (ARMv9)"
         "  •  Zero external dependencies  •  FIPS 202/203/204/205 compliant",
         ha="center",
@@ -902,9 +923,35 @@ def create_defense_layers() -> None:
     print(f"  Created {out}")
 
 
+def _merge_manifest_entry() -> None:
+    """Record what these two PNGs assert in assets/visuals_manifest.json.
+
+    The dashboards' numbers are measurement-derived and cannot be recomputed
+    on a clean checkout, so what the shared manifest holds for them is the
+    attributable part: the version and date they were rendered at, and the
+    timestamp of the measurement artefact they rendered.
+    ``tools/generate_visuals.py --check`` (CI-wired) holds the recorded
+    version to the package's — the committed performance dashboard carried a
+    v3.4.0 title into a 5.0.0 tree for two majors because nothing did.
+    """
+    manifest_path = ASSETS_DIR / "visuals_manifest.json"
+    recorded: dict[str, Any] = {}
+    if manifest_path.is_file():
+        recorded = json.loads(manifest_path.read_text(encoding="utf-8"))
+    recorded["dashboards"] = {
+        "version": _PKG_VERSION,
+        "generated": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+        "bench_timestamp": bench.get("timestamp"),
+        "outputs": ["performance_dashboard.png", "defense_layers.png"],
+    }
+    manifest_path.write_text(json.dumps(recorded, indent=2, sort_keys=True) + "\n")
+    print(f"  Updated {manifest_path}")
+
+
 # ═══════════════════════════════════════════════════════════════════════
 if __name__ == "__main__":
     print("Generating AMA Cryptography dashboard images...")
     create_performance_dashboard()
     create_defense_layers()
+    _merge_manifest_entry()
     print("\nDone. Dashboard images saved to assets/")

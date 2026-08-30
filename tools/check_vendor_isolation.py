@@ -1111,6 +1111,7 @@ def _parse_pe(data: bytes) -> BinaryInfo:
     (magic,) = struct.unpack_from("<H", data, opt_off)
     # 0x20B = PE32+, 0x10B = PE32; the data-directory offset differs.
     dd_off = opt_off + (112 if magic == 0x20B else 96)
+    export_rva, _export_size = struct.unpack_from("<II", data, dd_off)
     import_rva, _import_size = struct.unpack_from("<II", data, dd_off + 8)
 
     sec_off = opt_off + opt_size
@@ -1126,7 +1127,18 @@ def _parse_pe(data: bytes) -> BinaryInfo:
                 return int(raw_ptr) + (rva - int(virt_addr))
         return None
 
+    # Imports: the descriptor's DLL name feeds `dependencies`, and its
+    # Import Lookup Table's hint/name entries feed `undefined_symbols` —
+    # they are what the image pulls in by name.  This used to return
+    # empty symbol tuples, which left the 'undefined symbols' and 'defined
+    # external symbols' legs of check_library inert on PE: a statically
+    # linked libcrypto inside ama_cryptography.dll produced zero violations
+    # while the identical Mach-O gap had already earned a dedicated fix
+    # (_read_macho_symbols).
+    thunk_size = 8 if magic == 0x20B else 4
+    ordinal_flag = 1 << (thunk_size * 8 - 1)
     dependencies: list[str] = []
+    undefined: list[str] = []
     if import_rva:
         table = rva_to_off(import_rva)
         if table is not None:
@@ -1134,13 +1146,51 @@ def _parse_pe(data: bytes) -> BinaryInfo:
                 entry = data[table : table + 20]
                 if len(entry) < 20 or entry == b"\0" * 20:
                     break
+                (ilt_rva,) = struct.unpack_from("<I", entry, 0)
                 (name_rva,) = struct.unpack_from("<I", entry, 12)
+                (iat_rva,) = struct.unpack_from("<I", entry, 16)
                 name_off = rva_to_off(name_rva)
                 if name_off is not None:
                     stop = data.index(b"\0", name_off)
                     dependencies.append(data[name_off:stop].decode("utf-8", "replace"))
+                # The ILT (OriginalFirstThunk) survives binding; images that
+                # zero it still carry the same entries in the IAT.
+                thunk_off = rva_to_off(ilt_rva or iat_rva) if (ilt_rva or iat_rva) else None
+                while thunk_off is not None and thunk_off + thunk_size <= len(data):
+                    (thunk,) = struct.unpack_from(
+                        "<Q" if thunk_size == 8 else "<I", data, thunk_off
+                    )
+                    if thunk == 0:
+                        break
+                    if not thunk & ordinal_flag:
+                        # Hint/name entry: 2-byte hint, then the NUL-terminated
+                        # name.  Ordinal imports carry no name and are skipped.
+                        hint_off = rva_to_off(thunk & 0x7FFFFFFF)
+                        if hint_off is not None:
+                            stop = data.index(b"\0", hint_off + 2)
+                            undefined.append(data[hint_off + 2 : stop].decode("utf-8", "replace"))
+                    thunk_off += thunk_size
                 table += 20
-    return BinaryInfo("PE", tuple(dependencies), ())
+
+    # Exports: the names this image defines for others to import — the trace
+    # a statically linked vendor leaves when nothing imports it.
+    defined: list[str] = []
+    if export_rva:
+        export_off = rva_to_off(export_rva)
+        if export_off is not None and export_off + 40 <= len(data):
+            (num_names,) = struct.unpack_from("<I", data, export_off + 24)
+            (names_rva,) = struct.unpack_from("<I", data, export_off + 32)
+            names_off = rva_to_off(names_rva)
+            if names_off is not None:
+                for i in range(num_names):
+                    if names_off + 4 * i + 4 > len(data):
+                        break
+                    (entry_rva,) = struct.unpack_from("<I", data, names_off + 4 * i)
+                    entry_off = rva_to_off(entry_rva)
+                    if entry_off is not None:
+                        stop = data.index(b"\0", entry_off)
+                        defined.append(data[entry_off:stop].decode("utf-8", "replace"))
+    return BinaryInfo("PE", tuple(dependencies), tuple(undefined), tuple(defined))
 
 
 def parse_binary(path: Path) -> BinaryInfo:

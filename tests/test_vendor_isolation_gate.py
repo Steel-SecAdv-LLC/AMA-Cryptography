@@ -747,6 +747,114 @@ class TestMachOParsing:
             gate.parse_binary(path)
 
 
+def tiny_pe(
+    *,
+    dll: str = "KERNEL32.dll",
+    import_name: str | None = None,
+    export_name: str | None = None,
+) -> bytes:
+    """A minimal PE32+ image with one import descriptor and optional exports.
+
+    One section whose virtual address equals its file offset, so RVAs in the
+    payload region are file offsets too.  Enough structure for _parse_pe:
+    DOS stub -> PE signature -> COFF header -> PE32+ optional header with
+    16 data directories -> one section header -> payload holding the import
+    descriptor table, ILT/IAT, hint/name entries, DLL name, and (optionally)
+    an export directory with one named export.
+    """
+    payload_base = 0x200
+    payload = bytearray(0x400)
+
+    def put(rva: int, blob: bytes) -> None:
+        payload[rva - payload_base : rva - payload_base + len(blob)] = blob
+
+    ilt_rva, dllname_rva, hint_rva = 0x240, 0x280, 0x2A0
+    export_dir_rva, names_arr_rva, expname_rva = 0x300, 0x340, 0x350
+
+    # Import descriptor: ILT, timestamp, forwarder, name, IAT — then the
+    # all-zero terminator.
+    put(payload_base, struct.pack("<IIIII", ilt_rva, 0, 0, dllname_rva, ilt_rva))
+    put(dllname_rva, dll.encode("ascii") + b"\0")
+    if import_name is not None:
+        put(ilt_rva, struct.pack("<Q", hint_rva))  # name thunk, high bit clear
+        put(hint_rva, b"\0\0" + import_name.encode("ascii") + b"\0")
+    export_size = 0
+    if export_name is not None:
+        directory = bytearray(40)
+        struct.pack_into("<I", directory, 24, 1)  # NumberOfNames
+        struct.pack_into("<I", directory, 32, names_arr_rva)  # AddressOfNames
+        put(export_dir_rva, bytes(directory))
+        put(names_arr_rva, struct.pack("<I", expname_rva))
+        put(expname_rva, export_name.encode("ascii") + b"\0")
+        export_size = 40
+
+    dos = bytearray(64)
+    dos[:2] = b"MZ"
+    struct.pack_into("<I", dos, 0x3C, 0x40)
+
+    coff = struct.pack("<HHIIIHH", 0x8664, 1, 0, 0, 0, 240, 0x2022)
+
+    opt = bytearray(240)
+    struct.pack_into("<H", opt, 0, 0x20B)  # PE32+ magic
+    struct.pack_into("<H", opt, 108, 16)  # NumberOfRvaAndSizes... (unread)
+    dd = 112  # data directories offset inside the optional header
+    struct.pack_into("<II", opt, dd, export_dir_rva if export_name else 0, export_size)
+    struct.pack_into("<II", opt, dd + 8, payload_base, 40)  # import table
+
+    section = bytearray(40)
+    section[:6] = b".rdata"
+    struct.pack_into("<IIII", section, 8, len(payload), payload_base, len(payload), payload_base)
+
+    image = bytearray(dos) + b"PE\0\0" + coff + opt + section
+    image += b"\0" * (payload_base - len(image))
+    image += payload
+    return bytes(image)
+
+
+class TestPEParsing:
+    """The PE legs of the screen, previously inert.
+
+    ``_parse_pe`` returned ``BinaryInfo("PE", deps, ())`` — no undefined and
+    no defined symbols — so on PE only the dependency-record leg of
+    check_library did anything: a statically linked libcrypto inside
+    ``ama_cryptography.dll`` produced zero violations, the same gap that
+    earned Mach-O a dedicated fix (``_read_macho_symbols``) while this
+    branch kept it undisclosed.
+    """
+
+    def _write(self, tmp_path: Path, data: bytes) -> Path:
+        path = tmp_path / "image.dll"
+        path.write_bytes(data)
+        return path
+
+    def test_a_clean_image_yields_dependencies_and_both_symbol_sets(self, tmp_path: Path) -> None:
+        path = self._write(
+            tmp_path,
+            tiny_pe(dll="KERNEL32.dll", import_name="HeapAlloc", export_name="ama_kem_keypair"),
+        )
+        info = gate.parse_binary(path)
+        assert info.fmt == "PE"
+        assert info.dependencies == ("KERNEL32.dll",)
+        assert info.undefined_symbols == ("HeapAlloc",)
+        assert info.defined_symbols == ("ama_kem_keypair",)
+        assert gate.check_library(path) == []
+
+    def test_an_imported_vendor_symbol_is_flagged(self, tmp_path: Path) -> None:
+        path = self._write(tmp_path, tiny_pe(import_name="EVP_DigestInit_ex"))
+        violations = gate.check_library(path)
+        assert any("OpenSSL" in v.detail for v in violations), violations
+
+    def test_a_statically_linked_vendor_is_flagged(self, tmp_path: Path) -> None:
+        """Exports are the one linkage trace a static vendor leaves."""
+        path = self._write(tmp_path, tiny_pe(export_name="sodium_init"))
+        violations = gate.check_library(path)
+        assert any("libsodium" in v.detail for v in violations), violations
+
+    def test_a_vendor_dll_dependency_is_flagged(self, tmp_path: Path) -> None:
+        path = self._write(tmp_path, tiny_pe(dll="libcrypto-3-x64.dll"))
+        assert any("OpenSSL" in v.detail for v in gate.check_library(path))
+
+
 class TestBuildConfigCheck:
     """A vendor linked by the build files leaves no trace to find later.
 

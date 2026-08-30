@@ -686,6 +686,24 @@ class TestCmakeBuildType:
         )
         assert report.ok, messages(report)
 
+    def test_a_bare_cmake_with_every_flag_on_continuation_lines_is_seen(self) -> None:
+        """`cmake \\` used to be invisible — neither counted nor checked.
+
+        The matcher only started buffering when the FIRST physical line
+        matched the configure pattern, and `cmake \\` does not (the character
+        after the whitespace is a backslash).  So this spelling escaped the
+        gate whose whole subject is the silently-unoptimized build.
+        Continuations are now joined before matching.
+        """
+        missing = run_checks(self._fragment("cmake \\\n  -B build \\\n  -DAMA_USE_NATIVE_PQC=ON"))
+        assert not missing.ok, "a build type is missing and must be reported"
+        assert "no optimization flag at all" in messages(missing)
+        assert missing.cmake_configures_checked == 1
+
+        stated = run_checks(self._fragment("cmake \\\n  -B build \\\n  -DCMAKE_BUILD_TYPE=Release"))
+        assert stated.ok, messages(stated)
+        assert stated.cmake_configures_checked == 1
+
     def test_build_and_install_and_script_mode_are_not_configures(self) -> None:
         for command in ("cmake --build build -j4", "cmake --install build", "cmake -E rm -rf x"):
             report = run_checks(self._fragment(command))

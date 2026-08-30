@@ -78,12 +78,28 @@ def tag_state_markers(version: str) -> list[tuple[re.Pattern[str], str]]:
 
     Tight phrasings, matched case-insensitively, so ordinary prose in these
     files is not swept up: only the specific tag-state claims the pre-tag tree
-    carries.  The CHANGELOG heading is version-scoped; the rest are the exact
-    "not (yet) tagged" forms the shipped docs use.  A compound assertion like
-    SECURITY.md's "not yet tagged or published" is caught here on its
-    "not yet tagged" half — correct, because *that half* is false at tag time.
+    carries.  EVERY marker is version-scoped, the CHANGELOG heading by its
+    bracket and the two "not (yet) tagged" forms by requiring the current
+    version on the same line as the phrase — which is how every shipped
+    document writes them ("`v5.0.0` is not tagged yet", "5.0.0 is prepared
+    but **not yet tagged or published**").  The two phrase markers used to
+    carry no version anchor at all while ``scan()`` pointed them at the whole
+    of CHANGELOG.md, so a 5.0.0 release note recording "v4.0.0 was not yet
+    tagged when this landed" would have failed the release-day preflight —
+    the over-broad sweep the RELEASE_STATE_FILES docstring says the curated
+    list exists to avoid.  A compound assertion like SECURITY.md's "not yet
+    tagged or published" is caught on its "not yet tagged" half — correct,
+    because *that half* is false at tag time.
     """
     v = re.escape(version)
+    tagged_yet = r"not[ \t]+tagged[ \t]+yet"
+    yet_tagged = r"not[ \t]+yet[ \t]+tagged"
+
+    def scoped(phrase: str) -> re.Pattern[str]:
+        # The version may sit before or after the phrase, but on its line:
+        # a marker about ANOTHER version (historical prose) must not match.
+        return re.compile(rf"(?:v?{v}[^\n]*?(?:{phrase})|(?:{phrase})[^\n]*?v?{v})", re.IGNORECASE)
+
     return [
         (
             # The dated heading (## [x.y.z] - 2026-08-24) drops "Unreleased"; match
@@ -92,8 +108,8 @@ def tag_state_markers(version: str) -> list[tuple[re.Pattern[str], str]]:
             re.compile(rf"##\s*\[{v}\][^\n]*Unreleased", re.IGNORECASE),
             f"CHANGELOG heading still reads '## [{version}] - Unreleased'",
         ),
-        (re.compile(r"not[ \t]+tagged[ \t]+yet", re.IGNORECASE), "'not tagged yet'"),
-        (re.compile(r"not[ \t]+yet[ \t]+tagged", re.IGNORECASE), "'not yet tagged'"),
+        (scoped(tagged_yet), f"'not tagged yet' about {version}"),
+        (scoped(yet_tagged), f"'not yet tagged' about {version}"),
     ]
 
 

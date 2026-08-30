@@ -57,6 +57,46 @@ def test_github_invariants_file_is_pointer() -> None:
     )
 
 
+class TestSonameLiterals:
+    """The SONAME sweep must count what it checked, or it can go vacuous.
+
+    The sweep's loop only ever appended failures: zero matches produced zero
+    output and no OK line, so rewording setup.py's docstring to say
+    ``.so.<major>`` everywhere silently removed the check — while the
+    git-tag-pin sweep added in the same commit asserts a floor
+    (``pins_checked < 2``).  Extracted to ``scan_soname_literals`` and
+    floored the same way.
+    """
+
+    def test_the_real_tree_carries_at_least_two_literals(self, tool_module: ModuleType) -> None:
+        repo = TOOL_PATH.resolve().parent.parent
+        problems, checked = tool_module.scan_soname_literals(repo, "5.0.0")
+        assert problems == [], problems
+        assert checked >= 2, f"the SONAME sweep found only {checked} literals"
+
+    def test_a_stale_literal_is_reported(self, tool_module: ModuleType, tmp_path: Path) -> None:
+        (tmp_path / "setup.py").write_text(
+            "# We preserve the SONAME chain libama_cryptography.so.3 here\n",
+            encoding="utf-8",
+        )
+        (tmp_path / "Makefile").write_text("# ships .so.5 today\n", encoding="utf-8")
+        problems, checked = tool_module.scan_soname_literals(tmp_path, "5.0.0")
+        assert checked == 2
+        assert len(problems) == 1 and ".so.3" in problems[0] and "setup.py" in problems[0]
+
+    def test_a_reword_that_removes_every_literal_yields_a_zero_count(
+        self, tool_module: ModuleType, tmp_path: Path
+    ) -> None:
+        """The vacuity case: main() floors this count at 2 and fails below it."""
+        (tmp_path / "setup.py").write_text(
+            "# We preserve the SONAME chain .so.<major> everywhere\n", encoding="utf-8"
+        )
+        (tmp_path / "Makefile").write_text("# no literal here either\n", encoding="utf-8")
+        problems, checked = tool_module.scan_soname_literals(tmp_path, "5.0.0")
+        assert problems == []
+        assert checked == 0
+
+
 class TestTagPins:
     """README's own install commands must name the canonical version (M11).
 

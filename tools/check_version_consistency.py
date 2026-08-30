@@ -490,6 +490,37 @@ def scan_invariant_range_claims(repo: Path, highest: int) -> tuple[list[str], in
 _TAG_PIN_RE = re.compile(r"AMA-Cryptography(?:\.git)?@v(\d+\.\d+\.\d+)", re.IGNORECASE)
 
 
+def scan_soname_literals(repo: Path, canonical: str) -> tuple[list[str], int]:
+    """SONAME literals in packaging prose vs. the canonical major.
+
+    Returns (problems, literals_checked).  The caller enforces the
+    non-vacuity floor on the count, exactly as with :func:`scan_tag_pins` —
+    extracted as a function for the same reason that one is: an inline sweep
+    whose problems list only ever grows cannot be unit-tested for the case
+    where it silently stops matching.
+    """
+    soname_major = canonical.split(".", 1)[0]
+    problems: list[str] = []
+    checked = 0
+    for rel in ("setup.py", "Makefile"):
+        text = _read(repo / rel)
+        if not text:
+            continue
+        for match in re.finditer(r"\.so\.(\d+)(?:\.\d+)*", text):
+            checked += 1
+            if match.group(1) == soname_major:
+                continue
+            line = text.count("\n", 0, match.start()) + 1
+            desc = f"{rel}:{line} SONAME literal {match.group(0)!r}"
+            problems.append(
+                f"  - {desc}: names major {match.group(1)}, but CMake derives "
+                f"SOVERSION from the project major, currently {soname_major}. "
+                f"The shipped chain is libama_cryptography.so -> .so."
+                f"{soname_major} -> .so.{canonical}."
+            )
+    return problems, checked
+
+
 def scan_tag_pins(repo: Path, canonical: str) -> tuple[list[str], int]:
     """``(problems, pins checked)`` over the docs that carry an AMA git-tag pin.
 
@@ -695,22 +726,26 @@ def main() -> int:
     # a now-correct literal becomes stale and this reports it, which is the
     # whole point.  ``CMakeLists.txt project() VERSION`` is asserted equal to
     # ``canonical`` above, so the project major is the canonical major.
-    soname_major = canonical.split(".", 1)[0]
-    for rel in ("setup.py", "Makefile"):
-        text = _read(REPO / rel)
-        if not text:
-            continue
-        for match in re.finditer(r"\.so\.(\d+)(?:\.\d+)*", text):
-            if match.group(1) == soname_major:
-                continue
-            line = text.count("\n", 0, match.start()) + 1
-            desc = f"{rel}:{line} SONAME literal {match.group(0)!r}"
-            failures.append(
-                f"  - {desc}: names major {match.group(1)}, but CMake derives "
-                f"SOVERSION from the project major, currently {soname_major}. "
-                f"The shipped chain is libama_cryptography.so -> .so."
-                f"{soname_major} -> .so.{canonical}."
-            )
+    soname_problems, sonames_checked = scan_soname_literals(REPO, canonical)
+    failures.extend(soname_problems)
+    # Non-vacuity, mirroring the pin sweep below: setup.py's
+    # `_copy_native_library_into_package` docstring and the Makefile each
+    # name the concrete `.so.<major>` at least once — the block above argues
+    # that naming the value is GOOD documentation.  A sweep that finds none
+    # has stopped matching (a reword to `.so.<major>` everywhere, a moved
+    # file), not legitimately run out of literals — and its disappearance
+    # would otherwise leave this check verifying nothing, silently.
+    if sonames_checked < 2:
+        failures.append(
+            f"  - SONAME literals: found only {sonames_checked}; setup.py and "
+            f"Makefile should yield at least 2. The sweep has stopped seeing "
+            f"them — check the pattern and the file set."
+        )
+    elif not soname_problems:
+        soname_major = canonical.split(".", 1)[0]
+        print(
+            f"OK    SONAME literals ({sonames_checked} checked)".ljust(65) + f"= .so.{soname_major}"
+        )
 
     # -------------------------------------------------------------------
     # Git-tag install pins in prose docs (.rst AND .md) — see scan_tag_pins.
