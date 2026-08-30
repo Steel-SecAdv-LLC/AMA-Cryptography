@@ -1,4 +1,13 @@
 {
+  "dashboards": {
+    "bench_timestamp": null,
+    "generated": "2026-08-30 19:56 UTC",
+    "outputs": [
+      "performance_dashboard.png",
+      "defense_layers.png"
+    ],
+    "version": "5.0.0"
+  },
   "test_coverage": {
     "counts": {
       "Core Crypto\n& NIST KATs": 821,
