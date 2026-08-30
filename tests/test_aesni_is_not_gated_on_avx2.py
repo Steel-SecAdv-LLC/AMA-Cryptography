@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import os
 import re
+import sys
 from pathlib import Path
 from typing import NamedTuple
 
@@ -713,6 +714,26 @@ class TestTheBackendAcrossBuildConfigurations:
         )
 
     @staticmethod
+    def _c_names(symbols: set[str], *, macho: bool) -> set[str]:
+        """nm's spellings, mapped back to the C-level names the asserts use.
+
+        Mach-O prepends exactly one underscore to every C symbol, so on the
+        macos-15-intel lane `nm` reports ``_ama_aes256_gcm_encrypt_avx2`` and
+        the un-normalized lookup for ``ama_aes256_gcm_encrypt_avx2`` could
+        never succeed — all three parametrizations failed with "the AES-NI
+        kernel is not in the library at all" the first time any pytest lane
+        ran on an Intel Mac.  The negative half was worse than the failure:
+        with no name ever matching, "the AVX2 kernels are genuinely absent"
+        held vacuously on a platform where it measured nothing.  Stripping
+        the one underscore is the exact inverse of the Mach-O C mangling;
+        assembler-local labels (``LCPI*``) carry no underscore and pass
+        through untouched.
+        """
+        if not macho:
+            return symbols
+        return {name[1:] if name.startswith("_") else name for name in symbols}
+
+    @staticmethod
     def _defined_symbols(static_lib: Path) -> set[str]:
         import shutil
         import subprocess
@@ -725,6 +746,9 @@ class TestTheBackendAcrossBuildConfigurations:
         )
         assert out.returncode == 0, out.stderr[-1000:]
         symbols = {line.split()[-1] for line in out.stdout.splitlines() if line.strip()}
+        symbols = TestTheBackendAcrossBuildConfigurations._c_names(
+            symbols, macho=sys.platform == "darwin"
+        )
         # Diagnose the environment before the caller misreads it.  Without the
         # LTO plugin `nm` lists GIMPLE section names rather than functions, and
         # every symbol assertion downstream then fails as though the kernel had
@@ -791,3 +815,29 @@ class TestTheBackendAcrossBuildConfigurations:
                 f"{label}: AVX2 kernels {sorted(avx2_only & symbols)} are linked, "
                 "so AVX2 was not actually disabled and the test proves nothing"
             )
+
+
+class TestMachOSymbolNormalization:
+    """The macos-15-intel lane's failure, pinned as a platform-free unit.
+
+    The build-and-probe test above is the integration witness, but it only
+    exercises the Mach-O path on a macOS x86_64 runner.  These cases drive the
+    normalization with the exact spellings that lane's ``nm`` produced, so the
+    regression fails on every host, not just an Intel Mac.
+    """
+
+    _NORM = staticmethod(TestTheBackendAcrossBuildConfigurations._c_names)
+
+    def test_macho_spellings_resolve_to_their_c_names(self) -> None:
+        macho = {"_ama_aes256_gcm_encrypt_avx2", "_ama_kyber_ntt_avx2", "LCPI0_1"}
+        names = self._NORM(macho, macho=True)
+        assert "ama_aes256_gcm_encrypt_avx2" in names
+        assert "ama_kyber_ntt_avx2" in names, (
+            "the negative assertions above compare against C names; unmapped "
+            "Mach-O spellings made 'the AVX2 kernels are absent' vacuously true"
+        )
+        assert "LCPI0_1" in names, "assembler-local labels carry no underscore to strip"
+
+    def test_elf_spellings_pass_through_untouched(self) -> None:
+        elf = {"ama_aes256_gcm_encrypt_avx2", "_AMA_ASCON_RC"}
+        assert self._NORM(elf, macho=False) == elf
