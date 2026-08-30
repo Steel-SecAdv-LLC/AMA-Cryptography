@@ -330,7 +330,11 @@ def main() -> int:
     root = Path.cwd()
     for required in (FUZZ_DIR, CMAKE_PATH, WORKFLOW_PATH, OSSFUZZ_PATH):
         if not (root / required).exists():
-            print(f"ERROR: {required} not found — run from the repository root.")
+            # .as_posix(): repo-relative paths are spelled with forward
+            # slashes everywhere this repo names them (docs, workflows, this
+            # tool's own audit output); on Windows a bare Path renders with
+            # backslashes and the refusal named a spelling nothing else uses.
+            print(f"ERROR: {required.as_posix()} not found — run from the repository root.")
             return 1
 
     failures = audit(root)
