@@ -26,9 +26,12 @@ on:
   # (Copilot review #322).
   workflow_dispatch:
 
+# security-events: write is granted on the codeql job alone, not here — a
+# workflow-level grant hands SARIF-upload rights to every job in the file
+# when exactly one needs it (least privilege, same rule as the other
+# workflows' contents: read default).
 permissions:
   contents: read
-  security-events: write  # Required for CodeQL SARIF upload
 
 # Collapse overlapping runs on the same ref; main and scheduled runs
 # (the weekly extended sanitizer matrix) are preserved.
@@ -184,6 +187,11 @@ jobs:
     name: CodeQL Security Analysis
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # The one job that uploads SARIF carries the one write grant the
+    # workflow used to hand to all of its jobs.
+    permissions:
+      contents: read
+      security-events: write
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -209,9 +217,13 @@ jobs:
           cmake --build build -j$(nproc)
 
       - name: Perform CodeQL Analysis
+        # No explicit category: this job initializes TWO languages, and the
+        # action derives a distinct per-language category for each SARIF it
+        # uploads when none is pinned.  The previous
+        # `category: "/language:c-cpp"` stamped the python run's upload with
+        # the c-cpp label as well, so both languages' alerts filed under one
+        # analysis identity.
         uses: github/codeql-action/analyze@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81  # v4.37.3
-        with:
-          category: "/language:c-cpp"
 
   compiler-warnings:
     name: Strict Compiler Warnings

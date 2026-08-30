@@ -25,6 +25,9 @@ jobs:
   security-audit:
     name: Python Security Audit
     runs-on: ubuntu-latest
+    # Bounded like every other gate job: without this a hang on a network
+    # fetch runs to the 360-minute default while the Security Gate waits.
+    timeout-minutes: 15
 
     steps:
     - name: Checkout code
@@ -115,6 +118,7 @@ jobs:
   sbom:
     name: SBOM Generation (CycloneDX)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
     - name: Checkout code
@@ -234,6 +238,8 @@ jobs:
   secret-scanning:
     name: Secret Scanning
     runs-on: ubuntu-latest
+    # 20, not 15: the full-history TruffleHog scan grows with the repo.
+    timeout-minutes: 20
 
     steps:
     - name: Checkout code

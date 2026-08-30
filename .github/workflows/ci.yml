@@ -32,11 +32,23 @@ jobs:
         os: [ubuntu-latest, windows-latest]
         python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
         include:
-          # ARM64 (AArch64) runners — GitHub-hosted ubuntu arm64
+          # ARM64 (AArch64) runners — GitHub-hosted ubuntu arm64.  All five
+          # interpreters, not a sample: release.yml builds aarch64 wheels for
+          # cp310-cp314, and its matrix comment states the invariant that a
+          # wheel for a platform and interpreter no CI lane exercises ships
+          # untested.  Until 3.10/3.12/3.14 were added here, three of the
+          # five aarch64 wheels shipped with only cibuildwheel's import
+          # smoke test.
+          - os: ubuntu-24.04-arm
+            python-version: "3.10"
           - os: ubuntu-24.04-arm
             python-version: "3.11"
           - os: ubuntu-24.04-arm
+            python-version: "3.12"
+          - os: ubuntu-24.04-arm
             python-version: "3.13"
+          - os: ubuntu-24.04-arm
+            python-version: "3.14"
 
     steps:
     - name: Checkout code
@@ -1454,7 +1466,10 @@ jobs:
 
     - name: Upload benchmark results
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
-      if: success()
+      # always(), not success(): a success()-gated upload withholds the
+      # evidence exactly when the gate fails and somebody needs it — the
+      # same defect the Bandit report upload above documents and fixes.
+      if: always()
       with:
         name: benchmark-results-${{ matrix.runner_cpu_class }}
         path: |
@@ -1524,7 +1539,9 @@ jobs:
 
     - name: Upload timing analysis results
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
-      if: success()
+      # always(), not success(): the timing artefacts matter most on the run
+      # where a dudect stage failed — same rationale as the Bandit upload.
+      if: always()
       with:
         name: constant-time-results
         path: tools/constant_time/

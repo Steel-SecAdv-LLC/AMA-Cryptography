@@ -233,7 +233,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        # macos-15-intel (x86_64) sits beside macos-latest (arm64) because
+        # release.yml builds wheels on BOTH macOS architectures and its
+        # matrix comment states the invariant: a wheel for a platform and
+        # interpreter no CI lane exercises ships untested.  Until this entry
+        # existed, all five macOS x86_64 wheels shipped with only
+        # cibuildwheel's import smoke test — no pytest lane anywhere ran on
+        # an Intel Mac.  The SoftHSM/PyKCS11 provisioning below is already
+        # prefix-relative (brew --prefix), so the x86_64 lane runs the same
+        # real-token lifecycle as the arm64 one.
+        os: [ubuntu-latest, macos-latest, macos-15-intel, windows-latest]
         python-version: ['3.10', '3.11', '3.12', '3.13', '3.14']
 
     steps:
@@ -262,7 +271,9 @@ jobs:
           .github/scripts/apt-install.sh build-essential python3-dev cmake libssl-dev
 
       - name: Install system dependencies (macOS)
-        if: matrix.os == 'macos-latest'
+        # startsWith, not equality: this job's matrix carries both macOS
+        # architectures (macos-latest arm64, macos-15-intel x86_64).
+        if: startsWith(matrix.os, 'macos')
         run: brew install cmake
 
       - name: Install system dependencies (Windows)

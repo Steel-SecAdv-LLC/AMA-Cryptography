@@ -144,9 +144,12 @@ permissions:
 # Avoid clobbering an in-flight release if a maintainer accidentally
 # pushes a second tag while the first is still building.  Cancellation
 # is OFF — we never cancel a release in progress; the second tag must
-# wait.
+# wait.  The group is STATIC for exactly that reason: a per-ref group
+# (the previous `release-${{ github.ref }}`) serialized only re-pushes
+# of the SAME tag, while two different tags — the accident this block's
+# own comment names — ran fully in parallel.
 concurrency:
-  group: release-${{ github.ref }}
+  group: release
   cancel-in-progress: false
 
 jobs:
@@ -413,6 +416,19 @@ jobs:
           # interpreter no CI lane exercises ships untested, so cp314 was
           # added to ci.yml and ci-build-test.yml in the same commit as
           # this line. Keep the three in step.
+          #
+          # The equality is per (runner architecture x interpreter), not
+          # merely per Python range — this matrix ships five OS/arch rows,
+          # and each one must have a pytest lane somewhere: linux x86_64 and
+          # windows run all five interpreters in ci.yml AND ci-build-test;
+          # linux aarch64 runs all five in ci.yml's ubuntu-24.04-arm
+          # includes; macOS arm64 (macos-latest) and macOS x86_64
+          # (macos-15-intel) each run all five in ci-build-test.  Before
+          # the aarch64 includes were completed and the macos-15-intel
+          # column existed, 8 of these 25 wheels — every macOS x86_64
+          # wheel and aarch64 cp310/cp312/cp314 — shipped with only
+          # cibuildwheel's import smoke test.  Extend the test matrices in
+          # the same commit as any extension here.
           #
           # Skip PyPy and 32-bit musllinux variants; the native build under
           # setup.py CMakeBuild is x86-64 / arm64 only, and the ctypes shims

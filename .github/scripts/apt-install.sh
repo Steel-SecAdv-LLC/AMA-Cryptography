@@ -166,9 +166,24 @@ sudo rm -f /etc/apt/sources.list.d/microsoft-prod.* \
 attempt_install() {
     local bound="$1"
     shift
+    local rc
     sudo timeout --kill-after="$KILL_AFTER" "$bound" \
-        apt-get "${APT_NET_OPTS[@]}" update &&
-        install_only "$bound" "$@"
+        apt-get "${APT_NET_OPTS[@]}" update
+    rc=$?
+    # Propagate update's own status (124/137 mean a stalled mirror, and the
+    # final-attempt diagnosis below reads them), never collapse it to 1.
+    if [ "$rc" -ne 0 ]; then return "$rc"; fi
+    # Re-clamp before the install half.  `update` and `install` are two
+    # separately bounded commands; giving EACH the full remaining budget let
+    # one attempt legitimately spend close to twice it — the total-budget
+    # contract stated at the top of this script held per command, not per
+    # attempt, and the worst case re-created the cancelled-at-job-cap
+    # failure this script exists to prevent.
+    local left
+    left="$(budget_left)"
+    if [ "$left" -le 0 ]; then return 124; fi
+    if [ "$bound" -gt "$left" ]; then bound="$left"; fi
+    install_only "$bound" "$@"
 }
 
 install_only() {

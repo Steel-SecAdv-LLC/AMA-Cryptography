@@ -23,6 +23,9 @@ on:
       - "tests/c/**"
       - "CMakeLists.txt"
       - "cmake/toolchains/**"
+      # The linker version script shapes the .so this workflow objdumps and
+      # symbol-checks; an export-map change must re-run these gates.
+      - "cmake/ama_exports.map"
       # This workflow is the ONLY place check_secret_division.py runs against
       # an AArch64 object; a change to the gate must re-run the lane that uses
       # it, or the change ships unexercised.
@@ -35,6 +38,9 @@ on:
       - "tests/c/**"
       - "CMakeLists.txt"
       - "cmake/toolchains/**"
+      # The linker version script shapes the .so this workflow objdumps and
+      # symbol-checks; an export-map change must re-run these gates.
+      - "cmake/ama_exports.map"
       # This workflow is the ONLY place check_secret_division.py runs against
       # an AArch64 object; a change to the gate must re-run the lane that uses
       # it, or the change ships unexercised.
@@ -102,6 +108,9 @@ jobs:
   arm-qemu-no-crypto-ext:
     name: AArch64 without ARM Crypto Extensions (the MSVC ARM64 condition)
     runs-on: ubuntu-latest
+    # Bounded like its siblings: without this a hang runs to the 360-minute
+    # default and leaves the ARM QEMU Gate pending for six hours.
+    timeout-minutes: 30
     # Every MSVC ARM64 build failed to link, and no lane could see it.
     #
     # src/c/neon/ama_aes_gcm_neon.c puts its whole body behind

@@ -53,8 +53,11 @@ See `CSRC_STANDARDS.md` for the complete mapping.
 
 Always regenerate the FIPS 140-3 integrity digest:
 ```bash
-python -m ama_cryptography.integrity --update
+AMA_BUILD_PIPELINE=1 python -m ama_cryptography.integrity --update --sign
 ```
+(The bare `--update` form exits 2: the refresh is gated on the build-pipeline
+variable and must re-sign what it rewrites. This is the same command CI's own
+failure message prints.)
 
 Failure to do so will cause the Power-On Self-Test to fail, blocking all
 cryptographic operations.
