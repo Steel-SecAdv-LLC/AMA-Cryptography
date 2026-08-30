@@ -309,7 +309,7 @@ def test_the_refusal_spells_the_path_posix_on_every_platform(
     ``.as_posix()`` in the message this test fails on Linux the same way the
     parametrized case failed on Windows.
     """
-    import tools.check_fuzz_target_registration as mod
+    from tools import check_fuzz_target_registration as mod
 
     (tmp_path / "fuzz").mkdir()
     monkeypatch.setattr(mod, "CMAKE_PATH", PureWindowsPath("fuzz/CMakeLists.txt"))
