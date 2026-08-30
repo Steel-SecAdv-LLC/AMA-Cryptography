@@ -199,6 +199,69 @@ int main(void) {
     rc = ama_secp256k1_point_mul(privkey, Gx, Gy, out_x, out_y);
     TEST_ASSERT(rc == AMA_ERROR_INVALID_PARAM, "zero scalar rejected by point_mul");
 
+    /* Test 6b: the caller-supplied point is validated, not trusted.
+     *
+     * point_mul is the one entry point in this file's public API that pairs
+     * a caller-supplied point with a SECRET scalar, so an unvalidated point
+     * here was the invalid-curve surface: the a = 0 add/double formulas
+     * never reference b, so an off-curve input runs valid arithmetic on
+     * whatever curve y^2 = x^3 + (y^2 - x^3) the attacker chose.  Each
+     * rejection is paired with the accepting control immediately above
+     * (tests 1-5 accept G and multiples), the rule
+     * tests/test_ed25519_canonical_y.py states.
+     */
+    be32(privkey, 1);
+    {
+        uint8_t bad[32];
+
+        /* Off-curve: G with y+1 satisfies no curve equation of interest. */
+        memcpy(bad, Gy, 32);
+        bad[31] = (uint8_t)(bad[31] + 1u);
+        rc = ama_secp256k1_point_mul(privkey, Gx, bad, out_x, out_y);
+        TEST_ASSERT(rc == AMA_ERROR_INVALID_PARAM,
+                    "off-curve point (Gy+1) rejected by point_mul");
+
+        /* Non-canonical coordinate, the only shape that separates
+         * "rejected" from "silently reduced" (the rule the nistp
+         * second-encoding tests state): a coordinate >= p that reduces
+         * ONTO a real curve point.  x = 1 is on the curve
+         * (1 + 7 = 8 is a QR mod p), so x_bytes = p + 1 is the second
+         * encoding of that point's x — an implementation that reduces
+         * first would accept it and compute the same product as the
+         * canonical control, which must itself be ACCEPTED. */
+        {
+            /* p + 1, big-endian. */
+            static const uint8_t X_P_PLUS_1[32] = {
+                0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+                0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+                0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+                0xFF, 0xFF, 0xFF, 0xFE, 0xFF, 0xFF, 0xFC, 0x30,
+            };
+            /* x = 1, big-endian. */
+            static const uint8_t X_ONE[32] = {
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
+            };
+            /* y = sqrt(8) mod p (the even root's smaller representative),
+             * derived from the curve equation alone. */
+            static const uint8_t Y_OF_ONE[32] = {
+                0x42, 0x18, 0xF2, 0x0A, 0xE6, 0xC6, 0x46, 0xB3,
+                0x63, 0xDB, 0x68, 0x60, 0x58, 0x22, 0xFB, 0x14,
+                0x26, 0x4C, 0xA8, 0xD2, 0x58, 0x7F, 0xDD, 0x6F,
+                0xBC, 0x75, 0x0D, 0x58, 0x7E, 0x76, 0xA7, 0xEE,
+            };
+
+            rc = ama_secp256k1_point_mul(privkey, X_ONE, Y_OF_ONE,
+                                         out_x, out_y);
+            TEST_ASSERT(rc == AMA_SUCCESS,
+                        "canonical control (x=1, sqrt(8)) accepted by point_mul");
+            rc = ama_secp256k1_point_mul(privkey, X_P_PLUS_1, Y_OF_ONE,
+                                         out_x, out_y);
+            TEST_ASSERT(rc == AMA_ERROR_INVALID_PARAM,
+                        "non-canonical x (p + 1) rejected by point_mul, not reduced");
+        }
+    }
+
     /* Test 7: NULL parameters rejected */
     be32(privkey, 1);
     rc = ama_secp256k1_point_mul(NULL, Gx, Gy, out_x, out_y);

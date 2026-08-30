@@ -154,6 +154,13 @@ static void sha256_compress_scalar(uint32_t state[8], const uint8_t block[64]) {
     /* Compute intermediate hash (Step 4) */
     state[0] += a; state[1] += b; state[2] += c; state[3] += d;
     state[4] += e; state[5] += f; state[6] += g; state[7] += h;
+
+    /* W[0..15] is the input block VERBATIM — for an HMAC that is K^ipad or
+     * K^opad, for PBKDF2 it is password-derived — and it outlives the
+     * return in this frame's dead stack otherwise, defeating the k_pad
+     * scrubs the callers perform (INVARIANT-6).  ~256 bytes against a
+     * multi-thousand-cycle compress. */
+    ama_secure_memzero(W, sizeof(W));
 }
 
 /* Runtime-dispatched single-block compression.  The CPU-feature probe is

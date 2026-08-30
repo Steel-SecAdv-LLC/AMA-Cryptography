@@ -7,7 +7,7 @@
  * PRIVATE to src/c/sve2/, the dispatch layer and the C tests that pin
  * individual kernels; not installed, never exposed to consumers.  The SVE2
  * counterpart of src/c/avx2/ama_avx2_internal.h and
- * src/c/neon/ama_neon_internal.h, created for the same reason: the eleven
+ * src/c/neon/ama_neon_internal.h, created for the same reason: the ten
  * SVE2 entry points were defined with no visible prototype, which
  * `-Wmissing-prototypes` reports at every definition and which the
  * strict-warnings gate makes fatal.

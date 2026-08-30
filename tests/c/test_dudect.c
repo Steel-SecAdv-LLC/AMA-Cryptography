@@ -2774,7 +2774,7 @@ static int timeout_truncation_self_test(void) {
     return ok ? 0 : 1;
 }
 
-static int run_all_tests(int iterations, test_result_t *results, int *num_results) {
+static void run_all_tests(int iterations, test_result_t *results, int *num_results) {
     int idx = 0;
 
     /* All lane registrations go through DUDECT_REGISTER_LANE, which
@@ -3078,22 +3078,15 @@ static int run_all_tests(int iterations, test_result_t *results, int *num_result
 
     *num_results = idx;
 
-    /* Check strict tests.  Two failure conditions:
-     *   1. Strict (non-info) lanes whose t-value exceeds the threshold.
-     *   2. Any lane that returned the fatal sentinel (rc mismatch or
-     *      setup failure) — this overrides is_info_only because a
-     *      lane that did not actually witness its invariant is a
-     *      real defect, not a timing-noise artefact. */
-    int all_pass = 1;
-    for (int i = 0; i < idx; i++) {
-        if (is_fatal_result(results[i].t_value)) {
-            all_pass = 0;
-        } else if (!results[i].is_info_only &&
-                   fabs(results[i].t_value) >= DUDECT_T_THRESHOLD) {
-            all_pass = 0;
-        }
-    }
-    return all_pass;
+    /* No verdict is computed here, deliberately.  This function used to
+     * fold a second pass/fail rule (fatal sentinel + per-lane
+     * |t| >= DUDECT_T_THRESHOLD) into a return value that main() discarded
+     * — the run's real verdict is dudect_rounds_passed(), which applies the
+     * majority rule, the direction rule and the effect-size floor.  A
+     * second, uncalibrated verdict path sitting unconsumed beside the real
+     * one is exactly the pattern dudect.h removed dudect_check() for: a
+     * defect waiting for its first caller, who would inherit a strictly
+     * different rule than the one this suite is calibrated on. */
 }
 
 /* -----------------------------------------------------------------------

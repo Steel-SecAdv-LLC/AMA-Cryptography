@@ -245,6 +245,11 @@ static void blake2b_final(blake2b_state *S, uint8_t *out)
         store64_le(buffer + i * 8, S->h[i]);
     }
     memcpy(out, buffer, S->outlen);
+    /* The full 64-byte serialization outlives the memcpy when outlen < 64,
+     * and for the H0 computation it IS the password-derived pre-hash — the
+     * callers scrub their state structs (INVARIANT-6) but could not reach
+     * this local. */
+    ama_secure_memzero(buffer, sizeof(buffer));
 }
 
 /**

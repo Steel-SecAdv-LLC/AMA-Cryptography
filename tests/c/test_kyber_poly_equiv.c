@@ -80,7 +80,8 @@ extern void ama_kyber_poly_reduce_sve2(int16_t poly[256]);
  * (the inline scalar in `poly_reduce`).
  *
  * Contract: output is congruent to `a` modulo q and lies in [0, q] —
- * measured here by enumerating all 65,536 int16 inputs, not asserted.
+ * measured here by check_reduce_image_exhaustive() below, which
+ * enumerates all 65,536 int16 inputs; not asserted.
  * Not [-q+1, q-1]: q itself is attainable, for the nine inputs that are
  * exact negative multiples of q from -3329 down to -29961 (a == -q
  * yields t == -2 via the arithmetic right shift, so the return value is
@@ -182,6 +183,47 @@ static int check_reduce_range(const int16_t a[KYBER_N], const int16_t b[KYBER_N]
     return 0;
 }
 
+/* The [0, q] output-image contract, measured by enumeration.
+ *
+ * The reference's contract comment says the image "is measured here by
+ * enumerating all 65,536 int16 inputs, not asserted" — and for a while no
+ * enumeration existed anywhere in the file; check_reduce_range() only
+ * inspects outputs of the randomly drawn production-range inputs.  A
+ * claimed-but-absent enumeration is the same defect class as a
+ * claimed-but-absent test.  This IS the enumeration: every int16 input,
+ * asserting both halves of the contract — the [0, q] image and
+ * congruence mod q.  Microseconds of work. */
+static int check_reduce_image_exhaustive(void) {
+    int fail = 0;
+    int q_witnesses = 0;
+    for (int32_t input = INT16_MIN; input <= INT16_MAX; input++) {
+        int16_t out = barrett_reduce_ref((int16_t)input);
+        if (out < 0 || out > KYBER_Q) {
+            printf("  [FAIL] barrett_reduce_ref(%d) = %d outside [0, %d]\n",
+                   (int)input, (int)out, KYBER_Q);
+            fail++;
+        }
+        if (((int32_t)out - input) % KYBER_Q != 0) {
+            printf("  [FAIL] barrett_reduce_ref(%d) = %d not congruent mod q\n",
+                   (int)input, (int)out);
+            fail++;
+        }
+        if (out == KYBER_Q) q_witnesses++;
+    }
+    /* The comment's sharpest claim: q itself is attained, by exactly the
+     * nine exact negative multiples of q from -3329 down to -29961. */
+    if (q_witnesses != 9) {
+        printf("  [FAIL] expected exactly 9 inputs reducing to q, measured %d\n",
+               q_witnesses);
+        fail++;
+    }
+    if (fail == 0) {
+        printf("  [ OK ] all 65,536 int16 inputs land in [0, %d], congruent, "
+               "9 attain q\n", KYBER_Q);
+    }
+    return fail;
+}
+
 int main(void) {
     printf("Kyber poly_{add,sub,reduce} multi-lane equivalence\n");
     printf("==========================================\n");
@@ -190,6 +232,9 @@ int main(void) {
     int fail = 0;
     const int N_TRIALS = 1024;
     int any_lane_exercised = 0;
+
+    printf("\n[0] barrett_reduce_ref output image, exhaustively\n");
+    fail += check_reduce_image_exhaustive();
 
     /* Working buffers.  Inputs are drawn from xs_next() over the
      * full [-q+1, q-1] coefficient range — the worst case for the
@@ -321,6 +366,13 @@ int main(void) {
     }
 #endif
 
+    /* The exhaustive reference enumeration ([0]) runs on EVERY build; a
+     * failure there is a broken reference, which the SIMD-lane skip must
+     * not convert into exit 77. */
+    if (fail) {
+        printf("==========================================\n");
+        return 1;
+    }
     if (!any_lane_exercised) {
         printf("SKIP: no SIMD Kyber poly helper on this build/CPU\n");
         printf("==========================================\n");

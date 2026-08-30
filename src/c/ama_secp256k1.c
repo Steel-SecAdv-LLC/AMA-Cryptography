@@ -1400,6 +1400,44 @@ static void secp256k1_point_mul_generator(secp256k1_jac *result,
  * @param out_y     Output: 32-byte big-endian Y coordinate of result
  * @return AMA_SUCCESS or error code
  */
+/* Canonical coordinate bytes, on the curve, and — cofactor 1 — therefore in
+ * the prime-order group.  Returns 1 and fills *P; 0 otherwise.  Shared by
+ * ama_secp256k1_point_mul and ECDSA verify, which take caller-supplied
+ * points: without the on-curve half, the a = 0 add/double formulas (which
+ * never reference b) run valid arithmetic on whatever curve
+ * y^2 = x^3 + (y^2 - x^3) the input lies on — the textbook invalid-curve
+ * attack the nistp ECDH comment in ama_nistp.c names and defends against in
+ * nistp_load_point; without the canonical half, a coordinate >= p is a
+ * second byte encoding of the reduced point, the INVARIANT-29 class this
+ * release closed in ECDSA verify, decompression, nistp and Ed25519.
+ * Variable time — point coordinates are public inputs on both call paths
+ * (a peer's share, a signer's public key); only the scalar is secret, and
+ * it is not consulted here. */
+static int secp256k1_aff_from_bytes_checked(secp256k1_aff *P,
+                                            const uint8_t x[32],
+                                            const uint8_t y[32]) {
+    secp256k1_fe lhs, rhs, t;
+    uint8_t a[32], b[32];
+
+    if (!secp256k1_fe_bytes_canonical(x) || !secp256k1_fe_bytes_canonical(y))
+        return 0;
+    secp256k1_fe_from_bytes(&P->x, x);
+    secp256k1_fe_from_bytes(&P->y, y);
+    secp256k1_fe_sqr(&lhs, &P->y);                /* y^2 */
+    secp256k1_fe_sqr(&t, &P->x);
+    secp256k1_fe_mul(&rhs, &t, &P->x);            /* x^3 */
+    {
+        secp256k1_fe seven = SECP256K1_FE_ZERO;
+        seven.v[0] = 7;
+        secp256k1_fe_add(&rhs, &rhs, &seven);     /* x^3 + 7 */
+    }
+    secp256k1_fe_normalize(&lhs);
+    secp256k1_fe_normalize(&rhs);
+    secp256k1_fe_to_bytes(a, &lhs);
+    secp256k1_fe_to_bytes(b, &rhs);
+    return memcmp(a, b, 32) == 0;
+}
+
 ama_error_t ama_secp256k1_point_mul(const uint8_t scalar[32],
                                      const uint8_t point_x[32],
                                      const uint8_t point_y[32],
@@ -1418,9 +1456,13 @@ ama_error_t ama_secp256k1_point_mul(const uint8_t scalar[32],
         return AMA_ERROR_INVALID_PARAM;
     }
 
-    /* Deserialize input point */
-    secp256k1_fe_from_bytes(&P.x, point_x);
-    secp256k1_fe_from_bytes(&P.y, point_y);
+    /* Deserialize AND validate the caller's point.  This entry point takes
+     * the one secret scalar in the file's public API, so an unvalidated
+     * point here was the invalid-curve surface: every other caller-supplied
+     * point in this file was already checked. */
+    if (!secp256k1_aff_from_bytes_checked(&P, point_x, point_y)) {
+        return AMA_ERROR_INVALID_PARAM;
+    }
 
     /* Perform scalar multiplication using Montgomery ladder */
     secp256k1_point_mul_ladder(&R, scalar, &P);
@@ -2211,6 +2253,14 @@ done:
     ama_secure_memzero(&s_sc, sizeof(s_sc));
     ama_secure_memzero(&tmp, sizeof(tmp));
     ama_secure_memzero(k_bytes, sizeof(k_bytes));
+    /* The nonce point and its serialization too: R.x is public as `r`, but
+     * the nistp twin scrubs its R (ama_nistp.c) and this label's comment
+     * promises complete cleanup — an intermediate exempted by an argument
+     * rather than wiped is the INVARIANT-6 shape this release closed
+     * elsewhere. */
+    ama_secure_memzero(&R, sizeof(R));
+    ama_secure_memzero(&Raff, sizeof(Raff));
+    ama_secure_memzero(x_bytes, sizeof(x_bytes));
     if (rc != AMA_SUCCESS) {
         /* Never hand back a half-written r/s on the failure path. */
         ama_secure_memzero(r_bytes, 32);
@@ -2289,7 +2339,6 @@ AMA_API ama_error_t ama_secp256k1_ecdsa_verify_ex(const uint8_t *signature, size
     secp256k1_aff Raff;
     uint8_t x_bytes[32];
     secp256k1_sc xr;
-    secp256k1_fe lhs, rhs, t;
 
     if (!signature || !message || !public_key)
         return AMA_ERROR_INVALID_PARAM;
@@ -2322,30 +2371,11 @@ AMA_API ama_error_t ama_secp256k1_ecdsa_verify_ex(const uint8_t *signature, size
      * secp256k1_fe_bytes_canonical).  Wycheproof ships no out-of-field-point
      * ECDSA vectors, so this path is covered by tests/test_secp256k1_ecdsa_
      * noncanonical_pubkey.py and tests/c/test_secp256k1_ecdsa.c instead. */
-    if (!secp256k1_fe_bytes_canonical(public_key) ||
-        !secp256k1_fe_bytes_canonical(public_key + 32))
+    /* Canonical-bytes + on-curve, via the same helper
+     * ama_secp256k1_point_mul uses (secp256k1_aff_from_bytes_checked) —
+     * one validation, two callers, so the two paths cannot drift. */
+    if (!secp256k1_aff_from_bytes_checked(&Q, public_key, public_key + 32))
         return AMA_ERROR_VERIFY_FAILED;
-
-    /* Public key must be a point on the curve, and not the identity. */
-    secp256k1_fe_from_bytes(&Q.x, public_key);
-    secp256k1_fe_from_bytes(&Q.y, public_key + 32);
-    secp256k1_fe_sqr(&lhs, &Q.y);                 /* y^2 */
-    secp256k1_fe_sqr(&t, &Q.x);
-    secp256k1_fe_mul(&rhs, &t, &Q.x);             /* x^3 */
-    {
-        secp256k1_fe seven = SECP256K1_FE_ZERO;
-        seven.v[0] = 7;
-        secp256k1_fe_add(&rhs, &rhs, &seven);     /* x^3 + 7 */
-    }
-    secp256k1_fe_normalize(&lhs);
-    secp256k1_fe_normalize(&rhs);
-    {
-        uint8_t a[32], b[32];
-        secp256k1_fe_to_bytes(a, &lhs);
-        secp256k1_fe_to_bytes(b, &rhs);
-        if (memcmp(a, b, 32) != 0)
-            return AMA_ERROR_VERIFY_FAILED;
-    }
 
     (void)sc_from_bytes(&z, message);
 

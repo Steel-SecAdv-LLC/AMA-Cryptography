@@ -1431,11 +1431,17 @@ ama_error_t ama_ed25519_sign(
     if (message_len <= ED25519_STACK_THRESHOLD) {
         buf = stack_buf;
     } else {
+        /* Both early exits fire AFTER the expansion above, so `hash`
+         * already holds the clamped secret scalar and the PRF key —
+         * scrub it on the way out, as the secp256k1 signer's error exits
+         * do (INVARIANT-6). */
         if (message_len > SIZE_MAX - 64) {
+            ama_secure_memzero(hash, sizeof(hash));
             return AMA_ERROR_INVALID_PARAM;
         }
         buf = (uint8_t *)malloc(64 + message_len);
         if (!buf) {
+            ama_secure_memzero(hash, sizeof(hash));
             return AMA_ERROR_MEMORY;
         }
         buf_on_heap = 1;

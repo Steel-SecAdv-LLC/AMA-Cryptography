@@ -238,12 +238,14 @@ static int32_t dil_montgomery_reduce(int64_t a) {
  * header used to claim [0, q), and every bound derived from that claim would
  * have been wrong by a factor of two in the wrong direction.
  *
- * Image, enumerated rather than quoted: over a >= 6q-wide band of the input
- * domain — which covers every value this file passes it, the widest being the
- * l-fold accumulator bounded by l*q — the result lies in [-4235259, 4235258],
- * i.e. |t| <= 0.506q.  Over the whole int32 domain it widens to
- * [-6282956, 6282505], |t| <= 0.750q.  The inverse-NTT precondition argued at
- * the keygen call site rests on the first of those two figures.
+ * Image, enumerated rather than quoted: over |a| <= 7q — which covers every
+ * value this file passes it, the widest being the l-fold accumulator bounded
+ * by l*q with l = 7 on ML-DSA-87 — the result lies in [-4243450, 4243449],
+ * i.e. |t| <= 0.507q.  (An earlier revision enumerated |a| <= 6q, giving
+ * [-4235259, 4235258], and claimed that band covered every caller; it did
+ * not cover ML-DSA-87's seven-fold accumulator.)  Over the whole int32
+ * domain it widens to [-6283009, 6283008], |t| <= 0.750q.  The inverse-NTT
+ * precondition argued at the keygen call site rests on the 7q-band figure.
  */
 static int32_t dil_reduce32(int32_t a) {
     int32_t t;
@@ -1814,13 +1816,14 @@ static ama_error_t dil_keygen_internal(const dil_params *P,
      * 6x observed headroom is sign cancellation in the sampled data, not a
      * bound, and this project does not rest a memory-safety property on it.
      *
-     * `dil_reduce32`'s image was enumerated rather than quoted: exhaustively
-     * over a >= 6q-wide band of its input domain it lands in [-4235259,
-     * 4235258], so after this call the worst case is 256 * 4235259 =
-     * 1,084,226,304 — inside int32 with a 1.98x margin, and provable rather
-     * than probabilistic.  (Its image over the whole int32 domain is wider,
-     * |t| <= 6282956, which still gives 256 * 6282956 = 1,608,436,736 and a
-     * 1.33x margin; the tighter figure is the one that applies here.)
+     * `dil_reduce32`'s image was enumerated rather than quoted: over
+     * |a| <= 7q — the widest input any caller produces, ML-DSA-87's l = 7
+     * accumulator — it lands in [-4243450, 4243449], so after this call the
+     * worst case is 256 * 4243450 = 1,086,323,200 — inside int32 with a
+     * 1.98x margin, and provable rather than probabilistic.  (Its image over
+     * the whole int32 domain is wider, |t| <= 6283009, which still gives
+     * 256 * 6283009 = 1,608,450,304 and a 1.33x margin; the tighter figure
+     * is the one that applies here.)
      *
      * The three single-pointwise-product sites in signing need no such call:
      * a lone `dil_montgomery_reduce` output is already in (-q, q), and 256 *
@@ -1880,12 +1883,17 @@ static ama_error_t dil_keygen_internal(const dil_params *P,
                         &t0.vec[i]);
     }
 
-    /* Scrub sensitive data */
+    /* Scrub sensitive data.  `t` too: t1 is public (it is packed into the
+     * public key) but t = A*s1 + s2 in full, and t0 = t - t1*2^d is the
+     * secret half the sk carries — a dead frame holding t hands t0 to
+     * anyone who can read the stack, which is exactly why t0 itself is on
+     * this list (INVARIANT-12). */
     ama_secure_memzero(seedbuf, sizeof(seedbuf));
     ama_secure_memzero(&s1, sizeof(s1));
     ama_secure_memzero(&s1hat, sizeof(s1hat));
     ama_secure_memzero(&s2, sizeof(s2));
     ama_secure_memzero(&t0, sizeof(t0));
+    ama_secure_memzero(&t, sizeof(t));
 
     return AMA_SUCCESS;
 }

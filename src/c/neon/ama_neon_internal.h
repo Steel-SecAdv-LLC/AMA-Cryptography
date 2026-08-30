@@ -60,6 +60,22 @@ extern "C" {
  * target to be meaningful. */
 #if defined(__aarch64__) || defined(_M_ARM64)
 
+/* The NEON tier is little-endian only, and this guard makes that fail
+ * CLOSED for the whole tier.  It used to be enforced per-file, in
+ * ama_aes_gcm_neon.c alone, and that guard's advice —
+ * -DAMA_FORCE_NO_ARM_CRYPTO=ON — produced a build that still compiled and
+ * dispatch-wired every OTHER NEON kernel, including a ChaCha20 kernel
+ * that serialized its keystream host-order (silently wrong ciphertext on
+ * aarch64_be for every message >= 512 bytes; fixed since, but never
+ * validated on big-endian hardware: no CI lane builds aarch64_be).  A
+ * kernel tier whose correctness on an ordering has never been executed
+ * does not get installed on that ordering.  -DAMA_ENABLE_NEON=OFF is the
+ * escape hatch that is actually correct: it removes the tier entirely and
+ * every primitive uses its endianness-neutral portable path. */
+#if defined(__AARCH64EB__) || (defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__)
+#error "ama_neon_internal.h: the NEON kernel tier is little-endian only and has never been validated on big-endian AArch64; configure with -DAMA_ENABLE_NEON=OFF to build the portable paths instead"
+#endif
+
 /* ============================================================================
  * SHA-3 / Keccak — dispatch-facing
  * ============================================================================ */

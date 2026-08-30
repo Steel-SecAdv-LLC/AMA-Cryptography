@@ -456,39 +456,51 @@ static apply_dispatch_only_result_t apply_dispatch_only(
 #endif
 
 #ifdef AMA_HAVE_AVX2_IMPL
+    /* These four resolve the way the NEON NTT branches do — on the FEATURE
+     * question, wiring the kernels directly — not with the `saved ==` test
+     * an earlier revision used.  The NEON block's doctrine (see the long
+     * comment there) applies verbatim: this pin runs AFTER the auto-tune
+     * microbench and the AMA_DISPATCH_NO_*_AVX2 env opt-outs, so on an AVX2
+     * host whose slot was demoted or opted out, `saved.<slot>` no longer
+     * holds the AVX2 kernel and the old test answered UNSUPPORTED — with a
+     * "CPU feature not present" diagnostic that was false on both counts,
+     * and a skipped dudect sweep as the visible cost (CI worked around it
+     * with AMA_DISPATCH_NO_AUTOTUNE=1).  A pin exists precisely to override
+     * the default selection.  The kernels are compiled whenever this branch
+     * is, so ama_has_avx2() is the whole of the host condition. */
     if (strcmp(slot, "kyber-ntt-avx2") == 0) {
-        if (saved.kyber_ntt == ama_kyber_ntt_avx2) {
-            dispatch_table.kyber_ntt       = saved.kyber_ntt;
-            dispatch_table.kyber_invntt    = saved.kyber_invntt;
-            dispatch_table.kyber_pointwise = saved.kyber_pointwise;
-            dispatch_table.kyber_cbd2      = saved.kyber_cbd2;
+        if (ama_has_avx2()) {
+            dispatch_table.kyber_ntt       = ama_kyber_ntt_avx2;
+            dispatch_table.kyber_invntt    = ama_kyber_invntt_avx2;
+            dispatch_table.kyber_pointwise = ama_kyber_poly_pointwise_avx2;
+            dispatch_table.kyber_cbd2      = ama_kyber_cbd2_avx2;
             *resolved_label_out = "kyber-ntt-avx2";
             return AMA_DISPATCH_ONLY_HONORED;
         }
         return AMA_DISPATCH_ONLY_UNSUPPORTED;
     }
     if (strcmp(slot, "dilithium-ntt-avx2") == 0) {
-        if (saved.dilithium_ntt == ama_dilithium_ntt_avx2) {
-            dispatch_table.dilithium_ntt         = saved.dilithium_ntt;
-            dispatch_table.dilithium_invntt      = saved.dilithium_invntt;
-            dispatch_table.dilithium_pointwise   = saved.dilithium_pointwise;
-            dispatch_table.dilithium_rej_uniform = saved.dilithium_rej_uniform;
+        if (ama_has_avx2()) {
+            dispatch_table.dilithium_ntt         = ama_dilithium_ntt_avx2;
+            dispatch_table.dilithium_invntt      = ama_dilithium_invntt_avx2;
+            dispatch_table.dilithium_pointwise   = ama_dilithium_poly_pointwise_avx2;
+            dispatch_table.dilithium_rej_uniform = ama_dilithium_rej_uniform_avx2;
             *resolved_label_out = "dilithium-ntt-avx2";
             return AMA_DISPATCH_ONLY_HONORED;
         }
         return AMA_DISPATCH_ONLY_UNSUPPORTED;
     }
     if (strcmp(slot, "chacha20-avx2x8") == 0) {
-        if (saved.chacha20_block_x8 == ama_chacha20_block_x8_avx2) {
-            dispatch_table.chacha20_block_x8 = saved.chacha20_block_x8;
+        if (ama_has_avx2()) {
+            dispatch_table.chacha20_block_x8 = ama_chacha20_block_x8_avx2;
             *resolved_label_out = "chacha20-avx2x8";
             return AMA_DISPATCH_ONLY_HONORED;
         }
         return AMA_DISPATCH_ONLY_UNSUPPORTED;
     }
     if (strcmp(slot, "argon2-g-avx2") == 0) {
-        if (saved.argon2_g == ama_argon2_g_avx2) {
-            dispatch_table.argon2_g = saved.argon2_g;
+        if (ama_has_avx2()) {
+            dispatch_table.argon2_g = ama_argon2_g_avx2;
             *resolved_label_out = "argon2-g-avx2";
             return AMA_DISPATCH_ONLY_HONORED;
         }
@@ -579,13 +591,18 @@ static apply_dispatch_only_result_t apply_dispatch_only(
      * `ubuntu-24.04-arm` runners execute NEON natively and already run the
      * three NEON slots above.
      *
-     * Each resolves the way `sha3-neon` does rather than the way the AVX2 and
-     * SVE2 branches do, and the difference is not cosmetic.  Those branches
-     * ask `saved.<slot> == <kernel>` — "did this build+host wire that kernel
-     * by default" — which is the right question only where the kernel's
-     * presence is conditional (AVX2 on an x86-64 host, FEAT_AES+FEAT_PMULL for
-     * `aes-gcm-neon`, SVE2 silicon).  For these three it is the wrong
-     * question, in two reachable configurations:
+     * Each resolves the way `sha3-neon` does rather than with a `saved ==`
+     * test, and the difference is not cosmetic.  A `saved.<slot> ==
+     * <kernel>` test asks "did this build+host wire that kernel by default"
+     * — which is the right question only where a FEATURE PROBE cannot
+     * answer it (none of the current slots; the AVX2 NTT branches above
+     * used it and were converted to `ama_has_avx2()` for exactly the
+     * demotion/opt-out reason below, and the remaining `saved ==` users —
+     * `aes-gcm-neon` on FEAT_AES+FEAT_PMULL, the SVE2 slots on SVE2
+     * silicon — are equivalent to their probes only while nothing demotes
+     * them, which their auto-tune exclusion currently guarantees).  For
+     * these three it is the wrong question, in two reachable
+     * configurations:
      *
      *   - On an SVE2 build running on SVE2 silicon, `kyber_ntt` and
      *     `dilithium_ntt` have already been overwritten with the SVE2 kernels
@@ -1108,10 +1125,22 @@ static int dispatch_cache_path_split(const char *path,
     return 0;
 }
 
+/* Museum-platform shim, the ama_platform_rand.c pattern: without it, the
+ * unconditional O_CLOEXEC references below fail COMPILATION on a platform
+ * that lacks the flag, so the `#if` fcntl fallbacks that followed each
+ * open() were compile-error-masked — never buildable on the one platform
+ * class they were written for.  The shim makes such a platform build with
+ * flag 0, and AMA_DISPATCH_NEED_FD_CLOEXEC_FALLBACK marks it so the
+ * fcntl(FD_CLOEXEC) arm actually compiles there. */
+#ifndef O_CLOEXEC
+#define O_CLOEXEC 0
+#define AMA_DISPATCH_NEED_FD_CLOEXEC_FALLBACK 1
+#endif
+
 static int dispatch_cache_open_dir(const char *dirpath) {
     int dfd = open(dirpath, O_RDONLY | O_CLOEXEC);
     if (dfd < 0) return -1;
-#if !defined(O_CLOEXEC)
+#if defined(AMA_DISPATCH_NEED_FD_CLOEXEC_FALLBACK)
     int flags = fcntl(dfd, F_GETFD, 0);
     if (flags >= 0) (void)fcntl(dfd, F_SETFD, flags | FD_CLOEXEC);
 #endif
@@ -1187,7 +1216,7 @@ static int dispatch_cache_load_at(int dfd, const char *basename,
                                   dispatch_autotune_verdicts_t *v) {
     int fd = openat(dfd, basename, O_RDONLY | O_CLOEXEC);
     if (fd < 0) return -1;
-#if !defined(O_CLOEXEC)
+#if defined(AMA_DISPATCH_NEED_FD_CLOEXEC_FALLBACK)
     int flags = fcntl(fd, F_GETFD, 0);
     if (flags >= 0) (void)fcntl(fd, F_SETFD, flags | FD_CLOEXEC);
 #endif
@@ -2075,19 +2104,32 @@ static void dispatch_init_internal(void) {
          * `ama_keccak_f1600_x4_generic` ≈ 4× generic), making the
          * x4 SIMD look faster than it really is and potentially
          * masking an x4 regression — Copilot review #326 r3276471155.
-         * Pinning the baseline to the generic kernel keeps the
-         * comparison apples-to-apples regardless of slot 1's
-         * outcome, since `ama_keccak_f1600_x4_generic` is itself
-         * `4 × ama_keccak_f1600_generic` by definition.  Fewer iters
-         * than slot 1 because each call permutes 4× the state. */
+         * The baseline must be what the revert would actually run, and
+         * `ama_keccak_f1600_x4_generic` is NOT `4 x
+         * ama_keccak_f1600_generic by definition` (an earlier revision of
+         * this comment said so): per its own definition in ama_sha3.c and
+         * the extern note at the top of this file, it calls the WIRED
+         * single-state pointer four times.  So the honest baseline follows
+         * slot 1's verdict — if slot 1 regressed, the future
+         * dispatch_table.keccak_f1600 is the portable kernel and the old
+         * pinned-generic baseline is right; if slot 1 held, the revert
+         * path is 4 x the live SIMD single-state kernel, and benching
+         * against 4 x portable understated it (on a BMI host, enough to
+         * keep an x4 kernel slower than its real fallback — the exact
+         * scalar-baseline discipline this file states at the slot-1
+         * bench).  Fewer iters than slot 1 because each call permutes
+         * 4x the state. */
         if (dispatch_table.keccak_f1600_x4 != ama_keccak_f1600_x4_generic) {
             uint64_t states[4][25];
             memset(states, 0x42, sizeof(states));  // PUBLIC-DATA: states — bench scratch (PUBLIC)
 
+            ama_keccak_f1600_fn x4_fallback_single =
+                v.keccak_regressed ? ama_keccak_f1600_generic
+                                   : dispatch_table.keccak_f1600;
             int64_t generic_best = -1, simd_best = -1;
             dispatch_bench_keccak_x4(
                 dispatch_table.keccak_f1600_x4,
-                ama_keccak_f1600_generic,
+                x4_fallback_single,
                 states,
                 /*warmup=*/100, /*trials=*/5, /*iters=*/500,
                 &generic_best, &simd_best);

@@ -526,7 +526,11 @@ typedef struct {
     uint64_t state[25];     /**< Keccak state (1600 bits) */
     uint8_t buffer[168];    /**< Rate buffer (168 bytes max for SHAKE128; 136 for SHA3-256/SHAKE256) */
     size_t buffer_len;      /**< Current bytes in buffer */
-    int finalized;          /**< Set to 1 after final() called */
+    int finalized;          /**< 0 before final(); afterwards the finalizing
+                             *   family's rate in bytes (nonzero), so a
+                             *   squeeze through a different family's entry
+                             *   point is rejected rather than emitting
+                             *   another sponge's capacity bytes */
 } ama_sha3_ctx;
 
 /**
@@ -1601,6 +1605,16 @@ AMA_API ama_error_t ama_aes256_gcm_decrypt(
  * @brief Scalar multiplication on secp256k1
  *
  * Computes out = scalar * (point_x, point_y) using a constant-time Montgomery ladder.
+ *
+ * The input point is validated before any secret-dependent arithmetic runs:
+ * a coordinate >= p (a non-canonical encoding of the reduced value) or a
+ * point not on y^2 = x^3 + 7 is rejected with AMA_ERROR_INVALID_PARAM,
+ * never reduced or multiplied.  The a = 0 formulas never reference b, so an
+ * off-curve input would otherwise run valid arithmetic on a different curve
+ * chosen by whoever supplied the point — the invalid-curve attack — under
+ * the one secret scalar this file's public API takes.  secp256k1's cofactor
+ * is 1, so on-curve is also in-group.  A zero scalar is rejected the same
+ * way.
  *
  * @param scalar    32-byte big-endian scalar
  * @param point_x   32-byte big-endian X coordinate of input point

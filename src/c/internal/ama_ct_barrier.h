@@ -20,17 +20,23 @@
  * Nothing in the C standard forbids this: timing is not an observable
  * behaviour, so a source-level mask carries no guarantee.
  *
- * This is not hypothetical.  clang 18 at -O2 and -O3 does exactly that to
- * the GHASH accumulation in ama_aes_gcm.c, emitting
+ * The concrete shape this defends against, at the GHASH accumulation in
+ * ama_aes_gcm.c, would be
  *
  *     bt   %r14d, %ebp        ; test bit i of the running accumulator
  *     jae  .Lskip             ; ...and branch over the accumulation
  *
  * where the accumulator is a function of the secret GHASH subkey H from
- * the second block onward.  gcc 13 at the same levels leaves the mask
- * branch-free.  Relying on which optimizer happens to be in use is not a
- * security property, and the divergence is silent — both builds pass every
- * functional test, because the results are identical.
+ * the second block onward.  An earlier revision of this comment asserted
+ * clang 18 emitted exactly that without the barrier; the audit M24
+ * re-measurement (see the barrier's use site in ama_aes_gcm.c) could not
+ * reproduce it on clang 18.1.3 — removing the barrier there is
+ * byte-identical — and the claim is withdrawn in both places.  The barrier
+ * is FORWARD INSURANCE: nothing stops the next optimizer release from
+ * making the transformation, the divergence would be silent (both builds
+ * pass every functional test, because the results are identical), and
+ * relying on which optimizer happens to be in use is not a security
+ * property.
  *
  * WHAT THE BARRIER DOES
  *

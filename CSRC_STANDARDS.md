@@ -59,7 +59,7 @@ FIPS or SP publications. They are included for completeness.
 | Argon2id | RFC 9106 | Configurable: t_cost, m_cost, parallelism, tag length | Memory-hard KDF; not a NIST publication |
 | HKDF (with SHA3-256) | RFC 5869 | Extract-then-Expand with HMAC-SHA3-256, max output 8160 B | KDF construction; not a NIST publication. Uses SHA3-256 as the underlying hash |
 | secp256k1 | SEC 2 v2 / BIP-32 | 256-bit prime field, compressed SEC1 public keys (33 B) | Certicom/Bitcoin curve; not a NIST publication. Used for BIP-32 HD key derivation |
-| FROST(Ed25519, SHA-512) | RFC 9591 | t-of-n threshold Ed25519, Shamir secret sharing over Ed25519 scalar field | Flexible Round-Optimized Schnorr Threshold signatures; not a NIST publication |
+| FROST(Ed25519, SHA-512) | RFC 9591-style | t-of-n threshold Ed25519, Shamir secret sharing over Ed25519 scalar field | Flexible Round-Optimized Schnorr Threshold signatures; not a NIST publication. Protocol structure per RFC 9591, but the hash derivations omit the ciphersuite's "FROST-ED25519-SHA512-v1" contextString and per-role H1/H2 domain separation (`src/c/ama_frost.c`, Standards note), so partial signatures are not interoperable with RFC 9591 ciphersuite implementations; the aggregated signature is standard RFC 8032 Ed25519 |
 
 ---
 

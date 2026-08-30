@@ -134,6 +134,12 @@ static void ama_sha512_transform(uint64_t state[8], const uint8_t block[AMA_SHA5
 
     state[0] += a; state[1] += b; state[2] += c; state[3] += d;
     state[4] += e; state[5] += f; state[6] += g; state[7] += h;
+
+    /* Same rationale as sha256_compress_scalar: W[0..15] is the verbatim
+     * input block (an HMAC's K^ipad/K^opad, HKDF's keyed inputs), left on
+     * the dead frame otherwise while the callers scrub their own k_pad
+     * (INVARIANT-6). */
+    ama_secure_memzero(W, sizeof(W));
 }
 
 /* ============================================================================

@@ -236,13 +236,18 @@ static void polyvec_reduce(polyvec* r, unsigned int k) {
  *   suite, but only after producing wrong ciphertexts on encaps.
  *
  *   Similar audit results in the generic C path:
- *     - poly_invntt's final montgomery_reduce(f * x) is the only
- *       reduction; output is in (-q, q), exactly what the callers
- *       (poly_add, poly_sub, coeff_normalize) tolerate.  No pair.
+ *     - poly_invntt's final montgomery_reduce(f * x) now carries a
+ *       barrett_reduce in the same loop (kyber_invntt_scalar), so its
+ *       output is canonical [0, q], matching the SIMD inverse kernels.
+ *       No interior pair.
  *     - poly_ntt's per-butterfly montgomery_reduce keeps |coeff|
- *       bounded by q + |a|/R.  After log2(KYBER_N)=8 layers the
- *       bound is ≲ 9q (per Bos–Friedberger §3.3); the trailing
- *       polyvec_reduce in callers covers it.  No interior pair.
+ *       bounded by q + |a|/R — ≲ 9q after log2(KYBER_N)=8 layers (per
+ *       Bos–Friedberger §3.3) — and kyber_ntt_scalar now ends with its
+ *       own canonicalising barrett_reduce sweep into [0, q], the
+ *       post-condition the SIMD forward kernels already established.
+ *       An earlier revision of this note said the trailing
+ *       polyvec_reduce in callers covered the 9q band instead; that
+ *       described the pre-sweep layout.  No interior pair.
  *
  *   The generic-C reduction layout is already algorithmically minimal
  *   at q=3329 / int16 coefficients.
@@ -2208,12 +2213,17 @@ static ama_error_t kyber_pubkey_from_sk(const kyber_params *P,
     if (rc != AMA_SUCCESS) {
         ama_secure_memzero(ss_enc, sizeof(ss_enc));
         ama_secure_memzero(ss_dec, sizeof(ss_dec));
+        ama_secure_memzero(ct, sizeof(ct));
         return rc;
     }
 
     mismatch = ama_consttime_memcmp(ss_enc, ss_dec, sizeof(ss_enc));
     ama_secure_memzero(ss_enc, sizeof(ss_enc));
     ama_secure_memzero(ss_dec, sizeof(ss_dec));
+    /* The pairwise-check ciphertext as well: the doc comment above this
+     * function promises "the ciphertext and both shared secrets are
+     * scrubbed before return", and until this line only the secrets were. */
+    ama_secure_memzero(ct, sizeof(ct));
     if (mismatch != 0) {
         return AMA_ERROR_VERIFY_FAILED;
     }

@@ -21,29 +21,33 @@
  * forgery, which is the point: the SIGNER can mint a signature that batch
  * verifiers accept and single verifiers reject.
  *
- * The count matters.  ed25519-donna-batchverify.h runs its multi-scalar
- * routine only `while (num > 3)` and verifies per entry otherwise, and the
- * per-entry fallback re-encodes.  So counts 1..3 rejected before the fix and
- * counts >= 4 accepted; a test that only drove small batches — as
- * test_ed25519_canonical_s.c's batch cases do, at counts 1 and 3 — could not
- * see this at all.  Every PIN below therefore states its count.
+ * The count used to matter.  ed25519-donna-batchverify.h ran its
+ * multi-scalar routine only `while (num > 3)` and verified per entry
+ * otherwise, so counts 1..3 rejected before the fix and counts >= 4
+ * accepted — which is why every batch assertion below states its count.
+ * B1 (commit 0cd6bb3, 5.0.0 pre-tag audit) then removed the aggregate path
+ * entirely: donna's ama_ed25519_batch_verify is now an unconditional
+ * per-entry loop over ama_ed25519_verify (src/c/ed25519_donna_shim.c),
+ * exactly like fe51's.  There is no count boundary left, and single
+ * verify's re-encode comparison rejects a non-canonical R on both backends
+ * whether or not the predicate exists.
  *
- * Each assertion is marked PIN (fails against a build with
- * ama_ed25519_signature_r_is_canonical neutered to `return 1`), SMOKE (does
- * not — it guards against over-rejection), RANGE (a direct unit test of the
- * predicate itself), or PIN-COUNT (pins the count-overflow argument guard,
- * which that mutation does not touch on either backend).
+ * Each assertion is therefore marked SMOKE (behavioral: the batch path
+ * rejects these signatures, on every backend, but a neutered
+ * ama_ed25519_signature_r_is_canonical does NOT make it fail), RANGE (a
+ * direct unit test of the predicate itself — the assertions that DO fail
+ * under that mutation), or PIN-COUNT (pins the count-overflow argument
+ * guard, which the mutation does not touch).
  *
- * PIN is emitted on the DONNA build only.  The R rule is enforceable-and-
- * observable only where the batch path decides by the group equation over a
- * decoded R; fe51's batch is a loop over ama_ed25519_verify, whose re-encode
- * comparison rejects a non-canonical R whether or not the predicate exists.
- * Measured, with the predicate neutered: donna 30 passed / 19 failed (15 PINs
- * + 4 RANGE), fe51 45 passed / 4 failed — the four RANGE checks alone, with
- * every one of the seventeen previously PIN-labelled lines printing [ OK ].
- * This paragraph used to assert the PIN property unconditionally and to say it
- * had been "verified by running exactly that mutation"; the mutation had been
- * run on the donna build only.  See R_RULE_LABEL below.
+ * Measured, post-B1, with the predicate neutered to `return 1` on the
+ * donna-assembly build: 45 passed / 4 failed — the four RANGE checks
+ * alone, with every batch line printing [ OK ].  That is the same result
+ * the fe51 build has always given, and it is WHY the batch lines are
+ * SMOKE: the file's earlier claim that they discriminate on donna at
+ * count >= 4 (measured pre-B1 as 30 passed / 19 failed) described the
+ * aggregate path B1 deleted.  The predicate stays load-bearing at the
+ * verify entry (an explicit §5.1.3 decision, cheaper and earlier than the
+ * re-encode fallback) and the RANGE block is its pin.
  */
 
 #include "../../include/ama_cryptography.h"
@@ -65,26 +69,22 @@ static int passed = 0;
 
 #define MAX_BATCH 8
 
-/* The R-rule PINs discriminate on the DONNA backend only.
+/* The batch R-rule assertions are SMOKE on every backend, post-B1.
  *
- * fe51's ama_ed25519_batch_verify is a loop over ama_ed25519_verify, which
- * decides by re-encoding [S]B - [h]A with ge25519_p3_tobytes and comparing
- * bytes; that encoder emits only canonical encodings, so a non-canonical R can
- * never match with or without the predicate.  Measured: with
- * ama_ed25519_signature_r_is_canonical neutered to `return 1`, the donna build
- * reports 30 passed / 19 failed while the fe51 build reports 45 passed / 4
- * failed — and all four fe51 failures are the [1] RANGE unit tests of the
- * predicate itself.  Every one of the seventeen assertions this file used to
- * label PIN printed [ OK ] on fe51.
- *
- * The label now names the backend it holds for, so the fe51/ARM CI lanes —
- * which are the ones that run this binary by default on every non-x86-64
- * target — do not print seventeen pins for a property they cannot test. */
-#ifdef AMA_ED25519_ASSEMBLY
-#define R_RULE_LABEL(count_above_boundary) ((count_above_boundary) ? "PIN" : "SMOKE")
-#else
+ * Both backends' ama_ed25519_batch_verify is now a per-entry loop over
+ * ama_ed25519_verify, which decides by re-encoding [S]B - [h]A and comparing
+ * bytes; that encoder emits only canonical encodings, so a non-canonical R
+ * can never match with or without the predicate.  Measured on THIS tree with
+ * ama_ed25519_signature_r_is_canonical neutered to `return 1`: the
+ * donna-assembly build reports 45 passed / 4 failed, and all four failures
+ * are the [1] RANGE unit tests of the predicate itself — every batch line
+ * prints [ OK ].  The pre-B1 donna aggregate path, where these lines
+ * genuinely discriminated at count >= 4 (30 passed / 19 failed under the
+ * same mutation), was deleted by commit 0cd6bb3; a PIN label kept from that
+ * architecture would be a claim the test can no longer cash.  The count
+ * argument is retained so the labels keep stating which side of the OLD
+ * boundary each case exercised — the per-entry rewrite must hold on both. */
 #define R_RULE_LABEL(count_above_boundary) ((void)(count_above_boundary), "SMOKE")
-#endif
 
 /* Run one batch of `n` entries whose first entry carries `first_sig` and
  * whose remaining entries carry `rest_sig`.  Returns the batch return code;

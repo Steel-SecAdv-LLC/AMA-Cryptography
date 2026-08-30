@@ -106,7 +106,11 @@ static inline int sha3_squeeze_pos_ok(const ama_sha3_ctx *ctx, size_t rate) {
  * both squeeze guards reject it with the same cross-family error.  200 is
  * the Keccak state size — self-documentingly larger than any rate, and
  * stored in the existing field, so the public ama_sha3_ctx layout (ABI)
- * is unchanged. */
+ * is unchanged.  (Since the family-tag guard landed — `finalized` carries
+ * the finalizing rate, and each squeeze entry point requires its own —
+ * a digest context is rejected by the tag as well; this sentinel stays as
+ * the position-level backstop and the guard for any context whose tag a
+ * caller forges.) */
 #define SHA3_CTX_CONSUMED ((size_t)200)
 
 /* Forward declaration: generic 4-way Keccak-f[1600] exported for the
@@ -717,8 +721,9 @@ ama_error_t ama_sha3_final(ama_sha3_ctx* ctx, uint8_t* output) {
         store64_le(output + i * 8, ctx->state[i]);
     }
 
-    /* Mark as finalized and scrub sensitive data */
-    ctx->finalized = 1;
+    /* Mark as finalized — with the family's rate as the tag, matching the
+     * SHAKE finalizers — and scrub sensitive data */
+    ctx->finalized = (int)SHA3_256_RATE;
     ama_secure_memzero(ctx->state, sizeof(ctx->state));
     ama_secure_memzero(ctx->buffer, sizeof(ctx->buffer));
     ama_secure_memzero(block, sizeof(block));
@@ -835,7 +840,7 @@ ama_error_t ama_sha3_512_final(ama_sha3_ctx* ctx, uint8_t* output) {
         store64_le(output + i * 8, ctx->state[i]);
     }
 
-    ctx->finalized = 1;
+    ctx->finalized = (int)SHA3_512_RATE;
     ama_secure_memzero(ctx->state, sizeof(ctx->state));
     ama_secure_memzero(ctx->buffer, sizeof(ctx->buffer));
     ama_secure_memzero(block, sizeof(block));
@@ -930,7 +935,11 @@ ama_error_t ama_shake256_inc_finalize(ama_sha3_ctx* ctx) {
     }
     keccak_f1600(ctx->state);
 
-    ctx->finalized = 1;
+    /* The rate, not a bare 1: `finalized` doubles as the finalizing
+     * family's tag, so a squeeze through the OTHER family's entry point is
+     * rejected instead of emitting this sponge's capacity bytes (any
+     * nonzero value still reads as finalized everywhere else). */
+    ctx->finalized = (int)SHAKE256_RATE;
     ctx->buffer_len = 0;  /* Reuse buffer_len as squeeze position */
     return AMA_SUCCESS;
 }
@@ -939,6 +948,19 @@ ama_error_t ama_shake256_inc_squeeze(ama_sha3_ctx* ctx, uint8_t* output, size_t 
     size_t i, available, tocopy;
     if (!ctx || !output) return AMA_ERROR_INVALID_PARAM;
     if (!ctx->finalized) return AMA_ERROR_INVALID_PARAM;
+
+    /* Same family only: `finalized` carries the finalizing entry point's
+     * rate.  The position guard alone could not close the OTHER direction
+     * of the cross-family replay — a SHAKE256-finalized context handed to
+     * ama_shake128_inc_squeeze sat at a position that is legal at rate 168,
+     * and the extraction loop there would emit state bytes 136..167: this
+     * sponge's CAPACITY half, which must never be output.  Digest contexts
+     * (ama_sha3_final / ama_sha3_512_final) carry their own tags and are
+     * rejected here twice over — wrong tag, and the SHA3_CTX_CONSUMED
+     * position. */
+    if (ctx->finalized != (int)SHAKE256_RATE) {
+        return AMA_ERROR_INVALID_PARAM;  /* cross-family misuse */
+    }
 
     if (!sha3_squeeze_pos_ok(ctx, SHAKE256_RATE)) {
         return AMA_ERROR_INVALID_PARAM;  /* cross-family misuse — see sha3_squeeze_pos_ok */
@@ -1047,7 +1069,8 @@ ama_error_t ama_shake128_inc_finalize(ama_sha3_ctx* ctx) {
     }
     keccak_f1600(ctx->state);
 
-    ctx->finalized = 1;
+    /* Family tag, as in ama_shake256_inc_finalize. */
+    ctx->finalized = (int)SHAKE128_RATE;
     ctx->buffer_len = 0;
     return AMA_SUCCESS;
 }
@@ -1056,6 +1079,15 @@ ama_error_t ama_shake128_inc_squeeze(ama_sha3_ctx* ctx, uint8_t* output, size_t 
     size_t i, available, tocopy;
     if (!ctx || !output) return AMA_ERROR_INVALID_PARAM;
     if (!ctx->finalized) return AMA_ERROR_INVALID_PARAM;
+
+    /* Same family only — see ama_shake256_inc_squeeze.  This is the entry
+     * point whose 168-byte rate made the position guard alone insufficient:
+     * every legal SHAKE256 squeeze position is also legal here, so a
+     * SHAKE256-finalized context passed both existing guards and this loop
+     * emitted its capacity bytes (state[136..167]) with AMA_SUCCESS. */
+    if (ctx->finalized != (int)SHAKE128_RATE) {
+        return AMA_ERROR_INVALID_PARAM;  /* cross-family misuse */
+    }
 
     /* SHAKE128 has the largest SQUEEZE rate of the four families sharing this
      * context, but that is not the only value `buffer_len` can hold: a

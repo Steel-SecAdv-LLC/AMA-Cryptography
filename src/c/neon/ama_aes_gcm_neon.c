@@ -25,13 +25,12 @@
  * vgetq_lane_u32 and applies RotWord as a shift-rotate (aes_key_assist_neon),
  * which assumes little-endian lane/byte ordering; on a big-endian AArch64
  * target that assumption is wrong and the schedule would be silently
- * incorrect.  Refuse to build the Crypto-Extension kernel there rather than
- * emit wrong ciphertext — configure with -DAMA_FORCE_NO_ARM_CRYPTO=ON to drop
- * these kernels and use the endianness-neutral portable AES-GCM path (dispatch
- * slots stay NULL, exactly as on baseline armv8-a without +crypto). */
-#if defined(__AARCH64EB__) || (defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__)
-#error "ama_aes_gcm_neon.c: NEON AES-GCM Crypto-Extension kernel is little-endian only; build big-endian AArch64 with -DAMA_FORCE_NO_ARM_CRYPTO=ON"
-#endif
+ * incorrect.  A file-local #error used to refuse the build here, but its
+ * advice — -DAMA_FORCE_NO_ARM_CRYPTO=ON — only dropped THIS kernel while
+ * every other NEON kernel stayed compiled and dispatch-wired, so following
+ * it traded a loud build failure for silently-unvalidated crypto.  The
+ * guard now covers the whole tier, in ama_neon_internal.h (included above),
+ * and names the hatch that is actually correct: -DAMA_ENABLE_NEON=OFF. */
 
 /* ============================================================================
  * AES-256 single-block encryption using ARMv8 Crypto Extensions

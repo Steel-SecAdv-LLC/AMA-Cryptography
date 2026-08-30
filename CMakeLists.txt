@@ -1139,8 +1139,20 @@ if(AMA_BUILD_STATIC)
             target_compile_options(ama_cryptography_static PRIVATE
                 $<$<CONFIG:Release>:-ffat-lto-objects>)
         else()
+            # The PER-CONFIG property, not the generic one: the target was
+            # born with INTERPROCEDURAL_OPTIMIZATION_RELEASE=TRUE (inherited
+            # from the CMAKE_ variable set before add_library), and CMake
+            # consults the per-config property first — so the generic
+            # `INTERPROCEDURAL_OPTIMIZATION OFF` this line used to set was a
+            # no-op for Release, and the AppleClang arm two branches up
+            # (which deliberately lands here) still shipped a bytecode-only
+            # static archive: the exact H4 breakage this fallback exists to
+            # prevent.  Reproduced on CMake 3.28.3 with a minimal project —
+            # generic OFF leaves `-flto=auto` in C_FLAGS, `_RELEASE OFF`
+            # removes it.
             set_target_properties(ama_cryptography_static PROPERTIES
-                INTERPROCEDURAL_OPTIMIZATION OFF)
+                INTERPROCEDURAL_OPTIMIZATION OFF
+                INTERPROCEDURAL_OPTIMIZATION_RELEASE OFF)
         endif()
     endif()
 endif()

@@ -112,6 +112,32 @@ int main(void) {
     TEST_ASSERT(rc == AMA_ERROR_INVALID_PARAM,
                 "shake256 squeeze on a SHAKE128-positioned context must be refused");
 
+    /* Test 7b: the OTHER direction of the same replay — the one the position
+     * guard alone could not close.  Every legal SHAKE256 squeeze position
+     * ([0, 136]) is also legal at SHAKE128's rate ([0, 168]), so a
+     * SHAKE256-finalized context handed to ama_shake128_inc_squeeze passed
+     * the position check and the extraction loop emitted state bytes
+     * 136..167 with AMA_SUCCESS — the SHAKE256 sponge's CAPACITY half,
+     * which must never be output.  Closed by the family tag `finalized`
+     * carries since the finalizers started storing their rate there; the
+     * accepting same-family control is the squeeze immediately above and
+     * throughout this file. */
+    {
+        ama_sha3_ctx cap_ctx;
+        uint8_t cap_out[168];
+
+        rc = ama_shake256_inc_init(&cap_ctx);
+        TEST_ASSERT(rc == AMA_SUCCESS, "shake256 inc_init (capacity) should succeed");
+        rc = ama_shake256_inc_absorb(&cap_ctx, (const uint8_t*)"abc", 3);
+        TEST_ASSERT(rc == AMA_SUCCESS, "shake256 inc_absorb (capacity) should succeed");
+        rc = ama_shake256_inc_finalize(&cap_ctx);
+        TEST_ASSERT(rc == AMA_SUCCESS, "shake256 inc_finalize (capacity) should succeed");
+        rc = ama_shake128_inc_squeeze(&cap_ctx, cap_out, sizeof(cap_out));
+        TEST_ASSERT(rc == AMA_ERROR_INVALID_PARAM,
+                    "shake128 squeeze on a SHAKE256-finalized context must be "
+                    "refused, not emit the sponge's capacity bytes");
+    }
+
     /* Test 8: the squeeze guard admits position == rate.
      *
      * The squeeze position's legal range is [0, rate], not [0, rate), because

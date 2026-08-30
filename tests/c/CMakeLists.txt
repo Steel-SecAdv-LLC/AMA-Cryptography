@@ -155,18 +155,19 @@ if(AMA_ED25519_ASSEMBLY)
 endif()
 
 # INVARIANT-38 applied to the signature's R half (RFC 8032 §5.1.7 step 1 ->
-# §5.1.3).  Separate from test_ed25519_canonical_s because it discriminates a
-# different site: the S and public-key rules are enforced identically by
-# single and batch verify, while the R rule was enforced on the single path
-# only, and there only as a side effect of the re-encode comparison.  The
-# donna batch routine decodes R instead of re-encoding it, so it enforced
-# nothing — reachable only at count >= 4, since donna verifies per entry
-# while num <= 3.  Runs against whichever backend CMake selected, but the
-# R-rule PINs discriminate on DONNA only: fe51's batch is a loop over
+# §5.1.3).  Separate from test_ed25519_canonical_s because it was written for
+# a different site: donna's old batch routine decoded R instead of
+# re-encoding it, so at count >= 4 (its multi-scalar boundary) nothing
+# enforced the R rule there.  B1 (commit 0cd6bb3) deleted that path: both
+# backends' batch verify is now an unconditional per-entry loop over
 # ama_ed25519_verify, whose re-encode comparison rejects a non-canonical R
-# with or without the predicate.  The test labels them accordingly (see
-# R_RULE_LABEL in the TU); this comment used to say "the PINs are the counts
-# above that boundary" without that qualification.
+# with or without the predicate.  Post-B1 the batch assertions are
+# behavioral SMOKEs on every backend (measured: neutering the predicate on
+# the donna-assembly build fails only the four RANGE unit tests of the
+# predicate itself), and the RANGE block is the predicate's pin — see
+# R_RULE_LABEL in the TU.  An earlier revision of this comment described the
+# pre-B1 aggregate path and claimed the PINs discriminate on donna; that
+# stopped being true when the path was removed.
 add_ama_test(test_ed25519_canonical_r test_ed25519_canonical_r.c)
 # The backend selector is PRIVATE on the library target (see
 # ama_apply_donna_settings in the top-level CMakeLists.txt), so a test TU

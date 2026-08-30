@@ -158,6 +158,14 @@ void ama_dilithium_ntt_neon(int32_t poly[DILITHIUM_N],
         vst1q_s32(poly + i * 4, f[i]);
     }
 
+    /* SECRET SCRATCH (INVARIANT-6/12): f staged the complete polynomial —
+     * s1/s2 and the signing mask y on the ML-DSA signing path.  1 KiB is
+     * twice the AArch64 vector register file, so most of it lives in the
+     * frame; erase it before returning, exactly as the SVE2 twin
+     * (src/c/sve2/ama_dilithium_sve2.c) erases its staging buffers.  One
+     * barrier per public call, same cost argument as there. */
+    ama_secure_memzero(f, sizeof(f));
+
     /* Layers len=2, len=1: intra-register, use scalar */
     for (int len = 2; len > 0; len >>= 1) {
         for (int start = 0; start < DILITHIUM_N; start += 2 * len) {
@@ -229,6 +237,10 @@ void ama_dilithium_invntt_neon(int32_t poly[DILITHIUM_N],
     for (int i = 0; i < 64; i++) {
         vst1q_s32(poly + i * 4, f[i]);
     }
+
+    /* SECRET SCRATCH (INVARIANT-6/12): same staging buffer as the forward
+     * NTT above — erase before returning. */
+    ama_secure_memzero(f, sizeof(f));
 }
 
 /* ama_dilithium_poly_add_neon / ama_dilithium_poly_sub_neon were removed:
