@@ -118,8 +118,33 @@ def main() -> None:
     bench("ML-KEM-1024 decaps", "OpenSSL 4.0.1", lambda i=0: mkey.decapsulate(mct))
 
     out = "pqc_results.json"
+    # Same provenance contract as comparative_benchmark.py: the competitive
+    # page refuses to render result files whose measuring build is unknown,
+    # and it cross-checks that BOTH files carry the same ama_commit.
+    # Imported package-qualified — the one spelling mypy --strict resolves
+    # under MYPYPATH=. — with the repository root put on sys.path first,
+    # because the documented way of running this file is as a script, where
+    # sys.path[0] is benchmarks/ itself and the `benchmarks` package is not
+    # importable.  (A bare `from comparative_benchmark import ...` fallback
+    # would need a type-ignore, which INVARIANT-13 forbids here.)
+    import sys
+    from pathlib import Path
+
+    repo_root = str(Path(__file__).resolve().parent.parent)
+    if repo_root not in sys.path:
+        sys.path.insert(0, repo_root)
+    from benchmarks.comparative_benchmark import _measurement_provenance
+
     with open(out, "w") as f:
-        json.dump({"rounds": ROUNDS, "results": rows}, f, indent=2)
+        json.dump(
+            {
+                "provenance": _measurement_provenance(),
+                "rounds": ROUNDS,
+                "results": rows,
+            },
+            f,
+            indent=2,
+        )
     print(f"\nwrote {out} ({len(rows)} rows)")
 
 

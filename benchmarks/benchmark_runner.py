@@ -69,6 +69,17 @@ class BenchmarkResult:
     regression_percent: float
     passed: bool
     optional: bool = False
+    #: Signed raw distance to the gate, ``tolerance - regression``: the
+    #: quantity ``passed`` was actually decided on.  Derived at construction
+    #: when not supplied; a row reconstructed from benchmark-results.json
+    #: supplies the stored value, which must be preserved as-is — the row's
+    #: ``regression_percent`` is published() (2-dp) while the margin is raw,
+    #: so recomputing here would silently change the published record.
+    margin_percent: Optional[float] = None
+
+    def __post_init__(self) -> None:
+        if self.margin_percent is None:
+            self.margin_percent = self.tolerance_percent - self.regression_percent
 
 
 #: Decimal places every PUBLISHED measurement is quantised to.
@@ -1165,6 +1176,16 @@ def generate_report(results: List[BenchmarkResult]) -> Dict[str, Any]:
                 "baseline_value": r.baseline_value,
                 "regression_percent": published(r.regression_percent),
                 "tolerance_percent": r.tolerance_percent,
+                # Raw, not published(): `passed` is decided on the raw
+                # regression (regression <= tolerance), and 2-dp rounding at
+                # the boundary can publish regression == tolerance beside
+                # passed:false — a record contradicting its own verdict
+                # (round(45.001, 2) == 45.0 while 45.001 <= 45 is False).
+                # The signed raw margin is the verdict's own quantity, so the
+                # record carries the number the decision was made on — taken
+                # from the field (not recomputed) so a JSON round-trip
+                # preserves it beside the published regression.
+                "margin_percent": r.margin_percent,
                 "passed": r.passed,
                 "optional": r.optional,
             }
@@ -1653,19 +1674,40 @@ def main() -> int:
     # under --require-populated-baseline, the flag CI already passes to mean
     # "this run must be worth trusting".
     measured = {r.name for r in results}
-    runnable = set(BENCHMARK_FUNCTIONS) | set(PQC_BENCHMARK_FUNCTIONS)
     requested = set(baseline.get("benchmarks", {})) | set(baseline.get("pqc_benchmarks", {}))
 
-    orphaned = sorted(requested - runnable)
-    if orphaned:
+    # Per SECTION, not the union of both: the measuring loops read each
+    # section against its own function table, so a floor filed in the wrong
+    # section is skipped by its loop while a union check counts it runnable
+    # — never measured, never orphaned, exit 0.  A misplaced-but-runnable
+    # name gets its own message because the remedy differs (move it, don't
+    # rename it).
+    orphaned = []
+    misplaced = []
+    for section, table, other in (
+        ("benchmarks", BENCHMARK_FUNCTIONS, PQC_BENCHMARK_FUNCTIONS),
+        ("pqc_benchmarks", PQC_BENCHMARK_FUNCTIONS, BENCHMARK_FUNCTIONS),
+    ):
+        for name in sorted(set(baseline.get(section, {})) - set(table)):
+            if name in other:
+                misplaced.append((section, name))
+            else:
+                orphaned.append((section, name))
+    if orphaned or misplaced:
         print("BASELINE NAMES NOTHING THIS RUNNER CAN RUN!")
         print("-" * 60)
-        for name in orphaned:
-            print(f"  {name}: in the baseline, but no benchmark function has that name")
+        for section, name in orphaned:
+            print(f"  {name}: in [{section}], but no benchmark function has that name")
+        for section, name in misplaced:
+            print(
+                f"  {name}: in [{section}], but its function lives in the OTHER "
+                f"table — the [{section}] loop never measures it"
+            )
         print()
         print("Each of these floors is unenforceable: the run skips the name and")
-        print("still exits 0. Rename the baseline entry to match the function, or")
-        print("delete the entry if the benchmark is gone.")
+        print("still exits 0. Rename the baseline entry to match the function (or")
+        print("move it to the section whose loop runs it), or delete the entry if")
+        print("the benchmark is gone.")
         return 2
 
     if not results:

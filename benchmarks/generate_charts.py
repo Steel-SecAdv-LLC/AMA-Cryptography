@@ -235,11 +235,15 @@ def generate_charts(output_dir: str) -> None:
     os.makedirs(output_dir, exist_ok=True)
     bench = load_live_data()
 
-    # Update data from live benchmarks if available
-    sig_ops = dict(SIGNATURE_OPS)
-    kem_ops = dict(KEM_OPS)
-    c_vs_py = dict(C_VS_PYTHON)
-    scaling = dict(SCALING)
+    # Update data from live benchmarks if available.  deepcopy, not dict():
+    # a shallow copy shares the nested per-row dicts, so the live-data
+    # override below wrote through into the module-level anchored tables —
+    # the exact aliasing hazard the deepcopy at the bottom of this file
+    # already guards against for the same tables.
+    sig_ops = copy.deepcopy(SIGNATURE_OPS)
+    kem_ops = copy.deepcopy(KEM_OPS)
+    c_vs_py = copy.deepcopy(C_VS_PYTHON)
+    scaling = copy.deepcopy(SCALING)
 
     if bench:
         ops = bench.get("cryptographic_operations", {})
@@ -685,7 +689,7 @@ def generate_charts(output_dir: str) -> None:
         style="italic",
     )
 
-    plt.tight_layout(rect=[0, 0, 1, 0.97])
+    plt.tight_layout(rect=(0, 0, 1, 0.97))
     plt.savefig(os.path.join(output_dir, "pqc_benchmark_overview.svg"), format="svg")
     plt.close()
     print(f"  Created {output_dir}/pqc_benchmark_overview.svg (2x2 collage)")

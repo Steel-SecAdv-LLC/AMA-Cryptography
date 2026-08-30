@@ -1,7 +1,9 @@
 <!--
   Template for benchmarks/generate_dashboard.py. The `/*__DATA__*/` marker is
   replaced with the measured JSON at generation time; __VERSION__ and
-  __GENERATED__ are substituted as text. Everything is inline — no external
+  __GENERATED__ are substituted as text, and __MEASURED__ as a pre-escaped
+  HTML clause naming the commit/version/time the numbers were MEASURED at
+  (distinct from when the page was generated). Everything is inline — no external
   fonts, scripts, styles, or images — so the page renders identically offline
   and inside a strict CSP.
 -->
@@ -177,7 +179,7 @@
       Every number on this page is read from a measurement artefact at generation
       time — the regression-gated suite (<code>benchmark_runner.py</code>) and the raw C
       harness (<code>benchmark_c_raw</code>) — so the page cannot drift from the run the way a
-      committed PNG can. Generated __GENERATED__.
+      committed PNG can. __MEASURED__ Page generated __GENERATED__.
     </p>
   </header>
 

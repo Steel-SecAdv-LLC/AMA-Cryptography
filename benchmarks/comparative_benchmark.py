@@ -224,12 +224,19 @@ class ComparativeBenchmark:
 
         print(f"  Using: {binary}")
         try:
-            # Harness is fast (~8s total); 60s is a generous ceiling.
+            # The ceiling follows the harness's own cost model, not the "~8s
+            # total" an earlier comment asserted: SLH-DSA keygen alone is
+            # ITERS_SLOW (200) x ~164 ms ≈ 33 s, and the full run measures
+            # 109 s on a 4-core x86-64 sandbox (2026-08-30, Release build).
+            # The old timeout=60 therefore expired on every run since the
+            # SLH-DSA rows landed, silently degrading the entire raw-C
+            # column to "harness error: TimeoutExpired".  600 s is ~5.5x the
+            # measured total, headroom for slower shared runners.
             completed = subprocess.run(
                 [str(binary), "--json"],
                 capture_output=True,
                 text=True,
-                timeout=60,
+                timeout=600,
                 check=True,
             )
             data = json.loads(completed.stdout)
@@ -776,6 +783,13 @@ class ComparativeBenchmark:
             ],
             "comparisons": self.calculate_comparative_metrics(),
         }
+        # The provenance block generate_competitive.py hard-requires.  Its
+        # error message has always said "re-run the harness (which records
+        # it)" — until this line, the harness recorded no such thing and the
+        # committed block existed only because someone once added it by
+        # hand, so the very next regeneration would have detached the page
+        # from any honest version stamp.
+        data["provenance"] = _measurement_provenance()
 
         output_path = Path(__file__).parent / filename
         with open(output_path, "w") as f:
@@ -783,6 +797,32 @@ class ComparativeBenchmark:
 
         print(f"\n✓ Results saved to {output_path}")
         return data
+
+
+def _measurement_provenance() -> "dict[str, str]":
+    """The block generate_competitive.py refuses to render without.
+
+    Version from the imported package (the build actually measured, not the
+    working tree's source text), commit from git at measurement time.
+    """
+    import subprocess
+    from datetime import datetime, timezone
+
+    import ama_cryptography
+
+    commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=True,
+        cwd=Path(__file__).parent,
+    ).stdout.strip()
+    return {
+        "ama_version": ama_cryptography.__version__,
+        "ama_commit": commit,
+        "measured_at": datetime.now(timezone.utc).isoformat(),
+        "note": "written by the harness at measurement time",
+    }
 
 
 def main() -> None:

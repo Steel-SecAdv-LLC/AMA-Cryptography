@@ -17,6 +17,7 @@ Version: 3.0.0
 Project: AMA Cryptography Performance Validation
 """
 
+import argparse
 import json
 import platform
 import secrets
@@ -47,6 +48,18 @@ class ValidationResult:
     std_dev: float
 
 
+# Documented claims that have no hot-path measurement BY DESIGN: pattern
+# analysis runs on-demand for security reports (see
+# run_3r_monitoring_benchmarks), not on every crypto operation, so a
+# per-operation overhead row would time a code path the library does not
+# execute per operation. Claims listed here are reported as "exempt
+# (on-demand)" in the coverage accounting instead of counting as unmeasured
+# under --require-complete. Any documented claim that is neither measured,
+# skipped-with-reason, nor listed here is a validator defect — that is
+# exactly the hole --require-complete exists to close.
+ON_DEMAND_CLAIMS: frozenset[str] = frozenset({"pattern_analysis_overhead"})
+
+
 class BenchmarkValidator:
     """
     Validates documented performance claims against live measurements.
@@ -66,6 +79,13 @@ class BenchmarkValidator:
         self.iterations = iterations
         self.warmup = warmup
         self.results: List[ValidationResult] = []
+        # Documented claims this run could NOT measure, with the reason.
+        # Every SKIP path must record the claims it forfeits here: the
+        # verdict in main() is computed over `results`, so a skip that
+        # only prints leaves no trace in the accounting and the run can
+        # report "all claims validated" after validating almost none of
+        # them (the exit-0-measured-nothing failure mode).
+        self.skipped: List[Tuple[str, str]] = []
 
         # Documented claims from BENCHMARKS.md
         # Format: claim_name -> (value, unit, tolerance_pct)
@@ -189,6 +209,39 @@ class BenchmarkValidator:
         self.results.append(result)
         return result
 
+    def record_skip(self, reason: str, *claim_names: str) -> None:
+        """
+        Record documented claims this run could not measure.
+
+        Args:
+            reason: Why the measurement was skipped (printed and reported)
+            *claim_names: The documented_claims entries the skip forfeits
+        """
+        for name in claim_names:
+            self.skipped.append((name, reason))
+
+    def unmeasured_claims(self) -> Dict[str, str]:
+        """
+        Documented claims this run produced no measurement for.
+
+        Returns:
+            Mapping of claim name -> reason, excluding claims listed in
+            ON_DEMAND_CLAIMS (measured on-demand only, by design). A claim
+            that was skipped carries its recorded skip reason; a claim no
+            code path even attempted carries a fixed diagnostic, because
+            that state means the validator itself has a coverage hole.
+        """
+        measured = {r.claim_name for r in self.results}
+        skip_reasons = dict(self.skipped)
+        reasons: Dict[str, str] = {}
+        for name in self.documented_claims:
+            if name in measured or name in ON_DEMAND_CLAIMS:
+                continue
+            reasons[name] = skip_reasons.get(
+                name, "no measurement block in this suite attempted this claim"
+            )
+        return reasons
+
     def run_key_generation_benchmarks(self) -> None:
         """Benchmark key generation operations."""
         print("\n" + "=" * 70)
@@ -217,6 +270,7 @@ class BenchmarkValidator:
             result = self.validate_claim("hkdf_derivation", stats["mean_ms"], stats["std_ms"])
             print(f"  {result.message}")
         except ImportError:
+            self.record_skip("native HKDF not available", "hkdf_derivation")
             print("  SKIP: native HKDF not available")
 
         # Ed25519 key generation (native C backend)
@@ -230,6 +284,7 @@ class BenchmarkValidator:
             result = self.validate_claim("ed25519_keygen", stats["mean_ms"], stats["std_ms"])
             print(f"  {result.message}")
         except ImportError:
+            self.record_skip("native Ed25519 not available", "ed25519_keygen")
             print("  SKIP: native Ed25519 not available")
 
         # Dilithium key generation (native C backend)
@@ -240,6 +295,7 @@ class BenchmarkValidator:
             )
 
             if not DILITHIUM_AVAILABLE:
+                self.record_skip("Dilithium not available in native backend", "dilithium_keygen")
                 print("  SKIP: Dilithium not available in native backend")
             else:
 
@@ -250,7 +306,91 @@ class BenchmarkValidator:
                 result = self.validate_claim("dilithium_keygen", stats["mean_ms"], stats["std_ms"])
                 print(f"  {result.message}")
         except (ImportError, Exception) as e:
+            self.record_skip(f"Dilithium benchmark unavailable: {e}", "dilithium_keygen")
             print(f"  SKIP: Dilithium benchmark unavailable: {e}")
+
+        # Complete KMS generation — the documented `full_kms` claim
+        # (Section 1.1, "all key types"). Mirrors benchmark_suite.py's
+        # kms_generation row. Until 5.0.0 this claim, and all of Section
+        # 1.3 below, sat in documented_claims with no measurement block —
+        # and because the verdict counted only measured rows, the suite
+        # printed "All benchmark claims validated successfully!" without
+        # ever measuring them.
+        try:
+            from ama_cryptography.legacy_compat import generate_key_management_system
+
+            def full_kms_gen() -> Any:
+                return generate_key_management_system("benchmark")
+
+            stats = self.benchmark_operation("full_kms", full_kms_gen)
+            result = self.validate_claim("full_kms", stats["mean_ms"], stats["std_ms"])
+            print(f"  {result.message}")
+        except ImportError:
+            self.record_skip("KMS generation not available", "full_kms")
+            print("  SKIP: KMS generation not available")
+
+    def run_package_operation_benchmarks(self) -> None:
+        """Benchmark code-package operations (BENCHMARKS.md Section 1.3)."""
+        print("\n" + "=" * 70)
+        print("CODE PACKAGE OPERATION BENCHMARKS")
+        print("=" * 70)
+
+        # The operations behind these four claims mirror
+        # benchmark_suite.py's benchmark_dna_operations rows exactly, so a
+        # claim validated here is validated against the same operation the
+        # reporting suite publishes numbers for.
+        section_claims = (
+            "canonical_encoding",
+            "code_hash",
+            "package_creation",
+            "package_verification",
+        )
+        try:
+            from ama_cryptography.legacy_compat import (
+                MASTER_CODES,
+                MASTER_HELIX_PARAMS,
+                canonical_hash_code,
+                create_crypto_package,
+                generate_key_management_system,
+                length_prefixed_encode,
+                verify_crypto_package,
+            )
+        except ImportError as e:
+            self.record_skip(f"package operations not available: {e}", *section_claims)
+            print(f"  SKIP: package operations not available: {e}")
+            return
+
+        def canonical_encode() -> Any:
+            return length_prefixed_encode("Code", MASTER_CODES, "HELIX", "test")
+
+        stats = self.benchmark_operation("canonical_encoding", canonical_encode)
+        result = self.validate_claim("canonical_encoding", stats["mean_ms"], stats["std_ms"])
+        print(f"  {result.message}")
+
+        def code_hash() -> Any:
+            return canonical_hash_code(MASTER_CODES, MASTER_HELIX_PARAMS)
+
+        stats = self.benchmark_operation("code_hash", code_hash)
+        result = self.validate_claim("code_hash", stats["mean_ms"], stats["std_ms"])
+        print(f"  {result.message}")
+
+        kms = generate_key_management_system("benchmark")
+
+        def package_create() -> Any:
+            return create_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, kms, "benchmark")
+
+        stats = self.benchmark_operation("package_creation", package_create)
+        result = self.validate_claim("package_creation", stats["mean_ms"], stats["std_ms"])
+        print(f"  {result.message}")
+
+        pkg = create_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, kms, "benchmark")
+
+        def package_verify() -> Any:
+            return verify_crypto_package(MASTER_CODES, MASTER_HELIX_PARAMS, pkg, kms.hmac_key)
+
+        stats = self.benchmark_operation("package_verification", package_verify)
+        result = self.validate_claim("package_verification", stats["mean_ms"], stats["std_ms"])
+        print(f"  {result.message}")
 
     def run_crypto_operation_benchmarks(self) -> None:
         """Benchmark cryptographic operations."""
@@ -304,6 +444,7 @@ class BenchmarkValidator:
             result = self.validate_claim("hmac_sha3_auth", stats["mean_ms"], stats["std_ms"])
             print(f"  {result.message}")
         except Exception as e:
+            self.record_skip(f"HMAC benchmark failed: {e}", "hmac_sha3_auth")
             print(f"  SKIP: HMAC benchmark failed: {e}")
 
         # Ed25519 sign/verify (native C backend)
@@ -332,6 +473,7 @@ class BenchmarkValidator:
             result = self.validate_claim("ed25519_verify", stats["mean_ms"], stats["std_ms"])
             print(f"  {result.message}")
         except ImportError:
+            self.record_skip("native Ed25519 not available", "ed25519_sign", "ed25519_verify")
             print("  SKIP: native Ed25519 not available")
 
         # Dilithium sign/verify (native C backend)
@@ -344,6 +486,11 @@ class BenchmarkValidator:
             )
 
             if not DILITHIUM_AVAILABLE:
+                self.record_skip(
+                    "Dilithium not available in native backend",
+                    "dilithium_sign",
+                    "dilithium_verify",
+                )
                 print("  SKIP: Dilithium not available in native backend")
             else:
                 kp = generate_dilithium_keypair()
@@ -364,6 +511,9 @@ class BenchmarkValidator:
                 result = self.validate_claim("dilithium_verify", stats["mean_ms"], stats["std_ms"])
                 print(f"  {result.message}")
         except (ImportError, Exception) as e:
+            self.record_skip(
+                f"Dilithium benchmark unavailable: {e}", "dilithium_sign", "dilithium_verify"
+            )
             print(f"  SKIP: Dilithium benchmark unavailable: {e}")
 
     def run_3r_monitoring_benchmarks(self) -> None:
@@ -402,14 +552,33 @@ class BenchmarkValidator:
             print(f"  As % of 0.30ms package:  {timing_overhead_pct:.2f}%")
             print(f"  {result.message}")
 
+            # Total hot-path 3R overhead. Pattern analysis runs on-demand
+            # (see note below), so the per-operation total is the timing
+            # instrumentation measured above: validating the documented
+            # total against it validates the claim against everything 3R
+            # actually executes per operation, under the total's own
+            # (tighter) tolerance.
+            result = self.validate_claim("total_3r_overhead", timing_overhead_pct, 0.0)
+            print(f"  {result.message}")
+
             # Note: Pattern analysis (record_package_signing) includes analyze_patterns()
             # which is intentionally more expensive for security analysis. This runs
-            # on-demand for security reports, not on every crypto operation.
+            # on-demand for security reports, not on every crypto operation —
+            # which is why `pattern_analysis_overhead` sits in ON_DEMAND_CLAIMS
+            # rather than getting a per-operation row here.
             print("  Note: Pattern analysis runs on-demand for security reports")
 
         except ImportError as e:
+            self.record_skip(
+                f"Could not import required modules: {e}",
+                "timing_monitor_overhead",
+                "total_3r_overhead",
+            )
             print(f"  SKIP: Could not import required modules: {e}")
         except Exception as e:
+            self.record_skip(
+                f"Benchmark failed: {e}", "timing_monitor_overhead", "total_3r_overhead"
+            )
             print(f"  SKIP: Benchmark failed: {e}")
 
     def generate_report(self) -> str:
@@ -422,6 +591,9 @@ class BenchmarkValidator:
         passed = sum(1 for r in self.results if r.passed)
         total = len(self.results)
         pass_rate = (passed / total * 100) if total > 0 else 0
+        documented = len(self.documented_claims)
+        measured = len({r.claim_name for r in self.results})
+        unmeasured = self.unmeasured_claims()
 
         report = []
         report.append("# AMA Cryptography Benchmark Validation Report")
@@ -431,9 +603,27 @@ class BenchmarkValidator:
         report.append(f"- **Date**: {datetime.now().isoformat()}")
         report.append(f"- **Iterations**: {self.iterations}")
         report.append(f"- **Pass Rate**: {passed}/{total} ({pass_rate:.1f}%)")
+        report.append(f"- **Coverage**: {measured}/{documented} documented claims measured")
         report.append(f"- **Python Version**: {platform.python_version()}")
         report.append(f"- **Platform**: {platform.platform()}")
         report.append("")
+        if unmeasured:
+            report.append("## Unmeasured Claims")
+            report.append("")
+            report.append(
+                "The pass rate above covers measured rows only; these documented "
+                "claims produced no measurement this run:"
+            )
+            report.append("")
+            for name, reason in sorted(unmeasured.items()):
+                report.append(f"- **{name}**: {reason}")
+            report.append("")
+        if ON_DEMAND_CLAIMS:
+            report.append(
+                "Exempt (measured on-demand only, by design): "
+                + ", ".join(sorted(ON_DEMAND_CLAIMS))
+            )
+            report.append("")
         report.append("## Results")
         report.append("")
         report.append("| Claim | Documented | Measured | Status |")
@@ -476,10 +666,15 @@ class BenchmarkValidator:
                 "processor": platform.processor(),
             },
             "results": [asdict(r) for r in self.results],
+            "skipped": [{"claim_name": n, "reason": r} for n, r in self.skipped],
+            "unmeasured": self.unmeasured_claims(),
+            "exempt_on_demand": sorted(ON_DEMAND_CLAIMS),
             "summary": {
                 "total": len(self.results),
                 "passed": sum(1 for r in self.results if r.passed),
                 "failed": sum(1 for r in self.results if not r.passed),
+                "documented": len(self.documented_claims),
+                "measured": len({r.claim_name for r in self.results}),
             },
         }
 
@@ -490,8 +685,24 @@ class BenchmarkValidator:
         print(f"\nResults saved to {output_path}")
 
 
-def main() -> int:
+def main(argv: "List[str] | None" = None) -> int:
     """Run benchmark validation suite."""
+    parser = argparse.ArgumentParser(
+        description="Validate documented performance claims against live measurements."
+    )
+    parser.add_argument(
+        "--require-complete",
+        action="store_true",
+        help=(
+            "Exit non-zero when any documented claim produced no measurement "
+            "(mirrors benchmark_runner.py's --require-populated-baseline: a run "
+            "that validated almost nothing must not be allowed to look like a "
+            "clean bill of health). Without the flag, coverage gaps are still "
+            "reported but the exit code reflects only the measured rows."
+        ),
+    )
+    args = parser.parse_args(argv)
+
     print("=" * 70)
     print("AMA Cryptography - Benchmark Validation Suite")
     print("=" * 70)
@@ -502,6 +713,7 @@ def main() -> int:
     # Run all benchmark categories
     validator.run_key_generation_benchmarks()
     validator.run_crypto_operation_benchmarks()
+    validator.run_package_operation_benchmarks()
     validator.run_3r_monitoring_benchmarks()
 
     # Generate and save report
@@ -513,24 +725,51 @@ def main() -> int:
 
     validator.save_results()
 
-    # Summary
+    # Summary. The verdict has two independent axes and conflating them was
+    # this suite's historic defect: `passed == total` over self.results says
+    # nothing when the SKIP paths kept claims out of self.results entirely —
+    # a build with no native backend used to validate 1-2 of the documented
+    # claims, print "Pass rate: 100.0%", and exit 0.
     passed = sum(1 for r in validator.results if r.passed)
     total = len(validator.results)
+    documented = len(validator.documented_claims)
+    measured = len({r.claim_name for r in validator.results})
+    unmeasured = validator.unmeasured_claims()
 
     print("\n" + "=" * 70)
     print("VALIDATION SUMMARY")
     print("=" * 70)
-    print(f"  Total claims validated: {total}")
+    print(f"  Documented claims:      {documented}")
+    print(f"  Measured this run:      {measured}")
+    print(f"  Exempt (on-demand):     {len(ON_DEMAND_CLAIMS)}")
     print(f"  Passed: {passed}")
     print(f"  Failed: {total - passed}")
     print(f"  Pass rate: {passed / total * 100:.1f}%" if total > 0 else "  No results")
 
-    if passed == total:
-        print("\n  All benchmark claims validated successfully!")
-        return 0
-    else:
+    exit_code = 0
+    if passed != total:
         print("\n  Some benchmark claims need review.")
-        return 1
+        exit_code = 1
+
+    if unmeasured:
+        print(f"\n  {len(unmeasured)} documented claim(s) produced no measurement:")
+        for name, reason in sorted(unmeasured.items()):
+            print(f"    - {name}: {reason}")
+        if args.require_complete:
+            print(
+                "\n  --require-complete: a documented claim without a measurement"
+                "\n  is a validation gap, not a pass. Failing."
+            )
+            exit_code = 1
+        elif exit_code == 0:
+            print(
+                "\n  Measured rows all passed, but the run is incomplete;"
+                "\n  re-run with --require-complete to fail on coverage gaps."
+            )
+    elif exit_code == 0:
+        print("\n  All measurable documented claims validated successfully!")
+
+    return exit_code
 
 
 if __name__ == "__main__":

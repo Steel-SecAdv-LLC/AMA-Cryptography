@@ -755,6 +755,60 @@ class TestValidityWindowCannotBeExtendedWithoutRemeasuring:
         )
         assert guard._check_validity_window("BASE", "HEAD") == [], why
 
+    def test_drift_failure_names_the_calibration_commit_not_a_false_no_remeasure(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The drift branch fires even when floors WERE re-measured — by design:
+        a re-measurement that leaves ``calibration_evidence`` naming the old
+        commit has not answered the drift question.  But the message used to
+        assert "with no floor re-measured" on every firing, false in exactly
+        that case — a maintainer who had just re-measured everything and
+        advanced ``baseline_source_release`` was told they had measured
+        nothing.  The message must state what the check established: the
+        evidence still names the old commit, and floored code changed since
+        it.
+        """
+        import subprocess
+
+        import benchmarks.check_baseline_justification as guard
+
+        def calibrated(through: str, source: str, value: int) -> dict[str, Any]:
+            data = self._baseline(through, source, value)
+            data["metadata"]["calibration_evidence"] = {"runs": {"p1": "300 (abc1234, release)"}}
+            return data
+
+        before = calibrated("4.0.0", "3.1.0", 100)
+        # Floors re-measured AND source advanced — yet calibration_evidence
+        # still names abc1234, and a floored file changed since it.
+        after = calibrated("5.0.0", "5.0.0", 150)
+
+        def fake_run_git(*args: str) -> str:
+            if args[0] == "cat-file":
+                return ""
+            if args[0] == "diff":
+                return "src/c/ama_sha3.c\n"
+            ref, _, path = args[1].partition(":")
+            if path != guard.ARM_BASELINE_PATH:
+                raise subprocess.CalledProcessError(1, "git")
+            return json.dumps(before if ref == "BASE" else after)
+
+        monkeypatch.setattr(guard, "_run_git", fake_run_git)
+        failures = guard._check_validity_window("BASE", "HEAD")
+        assert len(failures) == 1, failures
+        message = failures[0]
+        assert "calibration_evidence still names commit 'abc1234'" in message
+        assert "src/c/ama_sha3.c" in message
+        assert "no floor re-measured" not in message
+        assert "no floor was re-measured" not in message
+
+        # And the acknowledgement route still clears it: with the drift
+        # acknowledged and the floors genuinely re-measured, the extension
+        # stands.
+        after["metadata"]["floor_drift_acknowledged"] = [
+            {"path": "src/c/ama_sha3.c", "reason": "re-measured in this pass"}
+        ]
+        assert guard._check_validity_window("BASE", "HEAD") == []
+
     def test_the_current_tree_satisfies_the_rule(self) -> None:
         """This branch must not itself be extending a window silently."""
         import subprocess
@@ -986,6 +1040,47 @@ class TestBothRecordsCarryProvenance:
         assert provenance, f"{path.name} was regenerated without provenance"
         assert provenance.get("commit", "").strip("`") not in ("", "unknown")
         assert "version" in provenance and "host" in provenance
+
+    def test_the_shipped_records_code_derived_rows_match_the_generator(self) -> None:
+        """Rows that are pure functions of runner code must match that code.
+
+        ``sampling``, ``extra_whole_run_repeats``, ``aggregation`` and
+        ``reading_these_numbers`` do not describe the host or the moment of
+        the run — they describe the measurement METHOD, and the method is the
+        runner's code.  When the estimator changes and the record is not
+        regenerated, the committed numbers were produced by a rule the record
+        no longer states — the shipped record carried ``"batches sized to
+        span >= 0.15s"`` (the predicted-count qualification rule) after the
+        runner had replaced that estimator with measured-wall-clock credit,
+        and no test could see it: the markdown round-trip test renders from
+        the recorded block, so both artefacts agreed with each other while
+        both disagreed with the code.
+
+        Host-dependent rows (commit, host, cpu, python, native backend,
+        command, timestamp) are deliberately NOT compared: they legitimately
+        differ between the measurement run and whoever runs this test.
+        """
+        path = Path(__file__).resolve().parent.parent / "benchmarks" / "benchmark-results.json"
+        recorded = json.loads(path.read_text(encoding="utf-8"))["provenance"]
+        live = dict(br._provenance())
+        for label in (
+            "Sampling",
+            "Extra whole-run repeats",
+            "Aggregation",
+            "Reading these numbers",
+        ):
+            key = br._provenance_key(label)
+            expected = br._provenance_json_value(live[label])
+            assert recorded.get(key) == expected, (
+                f"benchmark-results.json provenance.{key} does not match what "
+                f"benchmark_runner.py would record today:\n"
+                f"  recorded: {recorded.get(key)!r}\n"
+                f"  code:     {expected!r}\n"
+                f"The numbers in the record were produced under a different "
+                f"measurement rule than the record describes. Re-run "
+                f"benchmark_runner.py to regenerate benchmark-results.json and "
+                f"benchmark-report.md together rather than editing the field."
+            )
 
 
 class TestTheRecordedCommandIsTheCommandThatRan:

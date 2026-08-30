@@ -223,12 +223,14 @@ enum {
     ITERS_VSLOW      = 50,    /* 1 ms+ ops */
     /* SLH-DSA-SHAKE-128s sign is ~1.25 s / op on a modern x86-64 core — three
      * to four orders of magnitude beyond ITERS_VSLOW's intended 1 ms+ band.
-     * A dedicated, much smaller count keeps the sign row inside the ~60 s
-     * wall-clock ceiling downstream runners enforce (see
-     * benchmarks/comparative_benchmark.py: `timeout=60` on this harness).  At
-     * 5 iters the sign row is ~6 s — within budget, and the harness emits
-     * min / median / max / stddev so a 5-sample median still surfaces a gross
-     * regression even if it is not statistically tight. */
+     * A dedicated, much smaller count keeps the sign row proportionate to
+     * the harness's measured ~109 s total (2026-08-30, 4-core x86-64
+     * sandbox), against which benchmarks/comparative_benchmark.py now sets
+     * its 600 s ceiling — the previous 60 s ceiling predated the SLH-DSA
+     * rows and expired on every run.  At 5 iters the sign row is ~6 s, and
+     * the harness emits min / median / max / stddev so a 5-sample median
+     * still surfaces a gross regression even if it is not statistically
+     * tight. */
     ITERS_SLH_SIGN   = 5       /* seconds-scale ops (SLH-DSA Sign only) */
 };
 

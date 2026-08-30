@@ -122,8 +122,20 @@ def _changed_baseline_values(
     before: Dict[str, Dict[str, object]], after: Dict[str, Dict[str, object]]
 ) -> List[Tuple[str, object, object]]:
     """Return [(name, before_value, after_value)] for every primitive whose
-    ``baseline_value`` differs between the two snapshots. Includes adds and
-    removes so a silent entry deletion is also flagged."""
+    effective floor moved between the two snapshots.  Includes adds and
+    removes so a silent entry deletion is also flagged.
+
+    ``tolerance_percent`` is watched with the same weight as
+    ``baseline_value``, because the runner's verdict is
+    ``regression <= tolerance`` (benchmark_runner.run_all_benchmarks): the
+    tolerance is exactly as load-bearing as the floor, and this gate used to
+    read only the floor — so cutting ``dilithium_sign``'s ARM floor from
+    3316 to 2653 demanded a named, measured, runner-identified line item,
+    while raising its ``tolerance_percent`` from 25 to 40 produced the same
+    2487 ops/sec effective minimum and printed ``OK: … no baseline_value
+    changes``.  Nothing else in the tree watches the field.  A tolerance
+    change is reported as its own pseudo-entry so the failure message names
+    what actually moved."""
     changes: List[Tuple[str, object, object]] = []
     keys = set(before) | set(after)
     for name in sorted(keys):
@@ -131,6 +143,10 @@ def _changed_baseline_values(
         a = after.get(name, {}).get("baseline_value")
         if b != a:
             changes.append((name, b, a))
+        b_tol = before.get(name, {}).get("tolerance_percent")
+        a_tol = after.get(name, {}).get("tolerance_percent")
+        if b_tol != a_tol:
+            changes.append((f"{name} tolerance_percent", b_tol, a_tol))
     return changes
 
 
@@ -170,6 +186,12 @@ def _values_at(ref: str) -> Dict[str, object]:
     for path in ALL_BASELINE_PATHS:
         for name, entry in _load_baseline_at(ref, path).items():
             out[f"{path}::{name}"] = entry.get("baseline_value")
+            # The tolerance under the same attribution rules as the floor:
+            # the runner's verdict is `regression <= tolerance`, so a
+            # tolerance raise IS a floor cut, and it must be attributable to
+            # the single commit whose value stands.  The pseudo-name matches
+            # the entries _changed_baseline_values emits for it.
+            out[f"{path}::{name} tolerance_percent"] = entry.get("tolerance_percent")
     return out
 
 
@@ -196,9 +218,24 @@ def _text_justifies(text: str, primitive: str) -> bool:
 
     All three requirements must hold in the SAME text.  Splitting them across
     texts is exactly the hole this replaced: see the module docstring.
+
+    The name must appear as a whole identifier, not a substring: with a bare
+    ``in``, ``x25519_scalarmult`` was justified by any text that named only
+    ``x25519_scalarmult_batch4`` — one primitive's line item silently
+    covering its differently-floored sibling.  A pseudo-name like
+    ``foo tolerance_percent`` (emitted by _changed_baseline_values for a
+    tolerance move) is justified by prose that names BOTH identifiers
+    anywhere in the same text — "tolerances become derived ... foo:
+    12,450 ops/sec on ubuntu-latest" reads naturally; requiring the two
+    words adjacent would make the rule unpayable by any real message.
     """
+
+    def _named(identifier: str) -> bool:
+        pattern = r"(?<![A-Za-z0-9_])" + re.escape(identifier) + r"(?![A-Za-z0-9_])"
+        return re.search(pattern, text) is not None
+
     return (
-        primitive in text
+        all(_named(part) for part in primitive.split())
         and bool(_MEASUREMENT_RE.search(text))
         and any(token in text.lower() for token in _RUNNER_TOKENS)
     )
@@ -467,16 +504,25 @@ def _check_validity_window(base_ref: str, head_ref: str) -> List[str]:
         # nothing checked it, and it was false: the Kyber barrett_reduce
         # rewrite landed in the same commit that carried the extension.  So it
         # is checked here, against the commit the calibration evidence names.
+        # The drift branch is deliberately unconditional — it fires whether or
+        # not this diff also re-measured floors.  A re-measurement that leaves
+        # metadata.calibration_evidence naming the old commit has not answered
+        # the drift question: the evidence still says the floors describe that
+        # older tree, and the changed files below are changed relative to it.
+        # Only the message may not claim more than the check established, and
+        # it used to: it said "with no floor re-measured" on every firing,
+        # false in exactly the case a maintainer who had just re-measured and
+        # forgotten calibration_evidence would hit.
         drifted = _floored_code_changed_since_calibration(after_meta, head_ref)
         drifted = [name for name in drifted if not _drift_is_acknowledged(after_meta, name)]
         if drifted:
             failures.append(
                 f"{path}: applies_through_release moved "
                 f"{before_meta.get('applies_through_release')!r} -> "
-                f"{after_meta.get('applies_through_release')!r} with no floor "
-                f"re-measured, but code the floors describe has changed since "
-                f"the calibration commit recorded in "
-                f"metadata.calibration_evidence:\n"
+                f"{after_meta.get('applies_through_release')!r}, but "
+                f"metadata.calibration_evidence still names commit "
+                f"{_calibration_commit(after_meta)!r} and code the floors "
+                f"describe has changed since it:\n"
                 + "".join(f"    {name}\n" for name in drifted[:12])
                 + (f"    ... and {len(drifted) - 12} more\n" if len(drifted) > 12 else "")
                 + f"  A floor that describes a tree the branch no longer ships "

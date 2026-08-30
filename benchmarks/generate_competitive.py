@@ -122,7 +122,7 @@ def _source_provenance() -> dict[str, Any]:
 VERSIONS = {
     "AMA": _ama_version(),
     "OpenSSL": "3.0.13",
-    "OpenSSL 4.0.1": "4.0.1 (via cryptography 49.0.0)",
+    "OpenSSL 4.0.1": "(via cryptography 49.0.0)",
     "libsodium": "1.0.18",
     "wolfSSL": "5.6.6",
     "Botan": "2.19.3",
@@ -452,6 +452,9 @@ def render(c: dict[str, Any], q: dict[str, Any]) -> str:
     cov_rows = "\n".join(crows)
     cov_head = "".join(f"<th>{esc(lib)}</th>" for lib in ORDER)
 
+    # The key already carries the version for the PQC-oracle entry, so its
+    # VALUE is only the parenthetical — the old value repeated "4.0.1" and
+    # the page rendered "OpenSSL 4.0.1 4.0.1 (via cryptography 49.0.0)".
     vers = " · ".join(
         f"{esc(k)} {esc(v)}" for k, v in VERSIONS.items() if k in libs_in or "4.0.1" in k
     )
