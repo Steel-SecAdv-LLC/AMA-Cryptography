@@ -349,10 +349,28 @@ class TestTheDispatchGatingMatchesThat:
         )
 
     def test_the_vaes_upgrade_is_still_avx2_gated(self) -> None:
-        """It genuinely needs AVX2; decoupling it would be a real bug."""
-        block = DISPATCH.split("#ifdef AMA_HAVE_X86_AESNI_IMPL")[1][:4000]
+        """It genuinely needs AVX2; decoupling it would be a real bug.
+
+        Bounded by ``_preprocessor_block``, not by ``[:4000]``: this was the
+        one test left on the fixed-character-window shape this very file
+        documents as a defect class twice over ("a fixed character window is
+        not a region").  The guard is asserted within the VAES call's own
+        nested block, so an unrelated ``#ifdef AMA_HAVE_AVX2_IMPL``
+        occurrence elsewhere in the window cannot satisfy it.
+        """
+        block = _preprocessor_block(DISPATCH, "#ifdef AMA_HAVE_X86_AESNI_IMPL")
         vaes_index = block.index("ama_aes256_gcm_encrypt_vaes_avx2")
-        assert "#ifdef AMA_HAVE_AVX2_IMPL" in block[:vaes_index]
+        guard_index = block.rfind("#ifdef AMA_HAVE_AVX2_IMPL", 0, vaes_index)
+        assert guard_index != -1, (
+            "the VAES install is no longer preceded by an AVX2 gate inside " "the AES-NI block"
+        )
+        # And the guard actually encloses the call: its block, opened at the
+        # guard, must still be open at the call site.
+        inner = _preprocessor_block(block[guard_index:], "#ifdef AMA_HAVE_AVX2_IMPL")
+        assert "ama_aes256_gcm_encrypt_vaes_avx2" in inner, (
+            "the AVX2 #ifdef closes before the VAES install — the call sits "
+            "outside the gate it appears to be under"
+        )
 
 
 # ---------------------------------------------------------------------------

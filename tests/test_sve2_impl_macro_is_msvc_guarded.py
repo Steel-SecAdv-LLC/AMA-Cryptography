@@ -156,8 +156,15 @@ def _strip_ifdef_blocks(source: str, macro: str) -> str:
 
     Nesting-aware on the preprocessor conditionals so an inner ``#if`` does not
     end the block early.  Used to ask what remains referenced when ``macro`` is
-    undefined.  ``#ifndef``/``#else`` on the same macro are not the shape this
-    dispatcher uses for SVE2, so they are not modelled.
+    undefined.  A depth-1 ``#else`` (or ``#elif``) RESUMES emission: that arm
+    is exactly what compiles when the macro is undefined, so a dispatcher
+    edited into ``#ifdef AMA_HAVE_SVE2_IMPL … #else <sve2 ref> #endif`` shape
+    leaks the reference into the stripped view and fails the gate — the
+    previous version dropped the else-arm with the guarded one, so that
+    shape's unresolved external stayed invisible.  ``#ifndef <macro>`` is
+    still not modelled (its body would need the inverse treatment); the
+    dispatcher does not use it for SVE2, and if it starts to, the non-vacuity
+    test alongside keeps the symbols themselves pinned.
     """
     lines = source.splitlines(keepends=True)
     out: list[str] = []
@@ -172,6 +179,55 @@ def _strip_ifdef_blocks(source: str, macro: str) -> str:
                 skip_depth += 1
             elif stripped.startswith("#endif"):
                 skip_depth -= 1
+            elif skip_depth == 1 and stripped.startswith(("#else", "#elif")):
+                # The macro-undefined arm: emit until this conditional closes.
+                skip_depth = 0
+                out.append(line)
             continue
         out.append(line)
     return "".join(out)
+
+
+class TestTheStripperModelsElseArms:
+    """The stripper is itself a model, and a model with a hole is a gate off.
+
+    ``#ifdef AMA_HAVE_SVE2_IMPL … #else <ref> #endif``: the else-arm is what
+    compiles when the macro is UNDEFINED, so a symbol there is exactly the
+    unresolved external the gate exists to catch — and the stripper used to
+    drop the else-arm along with the guarded one.
+    """
+
+    def test_a_reference_in_an_else_arm_survives_stripping(self) -> None:
+        source = (
+            "#ifdef AMA_HAVE_SVE2_IMPL\n"
+            "  use(ama_keccak_f1600_sve2);\n"
+            "#else\n"
+            "  use(ama_keccak_f1600_sve2); /* leaks when undefined */\n"
+            "#endif\n"
+        )
+        stripped = _strip_ifdef_blocks(source, "AMA_HAVE_SVE2_IMPL")
+        assert "ama_keccak_f1600_sve2" in stripped
+
+    def test_the_guarded_arm_is_still_removed(self) -> None:
+        source = (
+            "#ifdef AMA_HAVE_SVE2_IMPL\n"
+            "  use(ama_keccak_f1600_sve2);\n"
+            "#endif\n"
+            "outside();\n"
+        )
+        stripped = _strip_ifdef_blocks(source, "AMA_HAVE_SVE2_IMPL")
+        assert "ama_keccak_f1600_sve2" not in stripped
+        assert "outside();" in stripped
+
+    def test_an_inner_else_does_not_resume_emission(self) -> None:
+        source = (
+            "#ifdef AMA_HAVE_SVE2_IMPL\n"
+            "#if OTHER\n"
+            "  a();\n"
+            "#else\n"
+            "  use(ama_keccak_f1600_sve2);\n"
+            "#endif\n"
+            "#endif\n"
+        )
+        stripped = _strip_ifdef_blocks(source, "AMA_HAVE_SVE2_IMPL")
+        assert "ama_keccak_f1600_sve2" not in stripped

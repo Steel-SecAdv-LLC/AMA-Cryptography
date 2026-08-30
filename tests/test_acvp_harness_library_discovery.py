@@ -26,6 +26,7 @@ would itself need editing at 6.0.0 — the defect it is meant to prevent.
 
 from __future__ import annotations
 
+import importlib.util
 import sys
 from pathlib import Path
 from typing import Any
@@ -33,9 +34,38 @@ from typing import Any
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO_ROOT / "nist_vectors"))
 
-run_vectors = pytest.importorskip("run_vectors", reason="nist_vectors harness not importable")
+
+def _load_run_vectors() -> Any:
+    """The tracked harness, imported from its tracked path — or a FAILURE.
+
+    ``pytest.importorskip("run_vectors")`` silently skipped this whole gate
+    module whenever the harness was deleted, renamed, or broken — turning
+    "the ACVP harness cannot even be imported" into a green run, the exact
+    skip-to-pass shape this repository's verification rules exist to
+    forbid.  ``nist_vectors/run_vectors.py`` is a git-tracked file: its
+    absence is a broken checkout, never an optional dependency.  (Loading by
+    path also drops the session-wide ``sys.path`` mutation the importorskip
+    needed.)
+    """
+    path = REPO_ROOT / "nist_vectors" / "run_vectors.py"
+    if not path.is_file():
+        pytest.fail(
+            f"{path} is missing — the tracked ACVP harness is gone or renamed; "
+            f"this is a broken checkout, not a skippable optional"
+        )
+    spec = importlib.util.spec_from_file_location("run_vectors", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+    except Exception as exc:  # any import failure is the finding
+        pytest.fail(f"{path} failed to import: {exc!r} — the ACVP harness is broken")
+    return module
+
+
+run_vectors = _load_run_vectors()
 
 
 class _FakeCDLL:

@@ -249,6 +249,12 @@ def _run_helper(tmp_path: Path, args: list[str], **env: str) -> subprocess.Compl
     e = dict(os.environ)
     e["PATH"] = f"{binroot}{os.pathsep}{e['PATH']}"
     e.update(env)
+    # These tests exercise ordering, bounding and message content — not the
+    # wall clock.  Without this override every retrying case sat through the
+    # script's real 15s-per-attempt backoff, adding roughly a minute to every
+    # full run; the 15s CI default itself is pinned by
+    # test_the_backoff_default_is_fifteen_seconds below.
+    e.setdefault("APT_RETRY_BACKOFF", "0")
     return subprocess.run(["bash", str(HELPER_PATH), *args], capture_output=True, text=True, env=e)
 
 
@@ -386,6 +392,7 @@ def test_a_sigterm_ignoring_apt_is_actually_killed(tmp_path: Path) -> None:
         APT_ATTEMPT_TIMEOUT="2",
         APT_ATTEMPT_KILL_AFTER="1",
         APT_ATTEMPTS="2",
+        APT_RETRY_BACKOFF="1",
     )
     start = time.monotonic()
     proc = subprocess.run(
@@ -397,10 +404,10 @@ def test_a_sigterm_ignoring_apt_is_actually_killed(tmp_path: Path) -> None:
     )
     elapsed = time.monotonic() - start
 
-    # Attempt 1 is bounded at 2s with SIGKILL 1s later, then a 15s backoff,
-    # then the final attempt, which now fails fast. Roughly 20s in total; the
-    # fake's own sleep is 120s, so anything near that means the kill did not
-    # land.
+    # Attempt 1 is bounded at 2s with SIGKILL 1s later, then the (overridden,
+    # 1s) backoff, then the final attempt, which now fails fast. Roughly 6s in
+    # total; the fake's own sleep is 120s, so anything near that means the
+    # kill did not land.
     assert (
         "attempt 1 failed or exceeded" in proc.stdout
     ), f"the bounded attempt never terminated; stdout={proc.stdout!r}"
@@ -409,6 +416,25 @@ def test_a_sigterm_ignoring_apt_is_actually_killed(tmp_path: Path) -> None:
     )
     # And the genuine failure still fails: the retry did not paper over it.
     assert proc.returncode != 0, "an apt that never succeeded must fail the job"
+
+
+def test_the_backoff_default_is_fifteen_seconds() -> None:
+    """The CI backoff policy, pinned at the source.
+
+    ``_run_helper`` overrides ``APT_RETRY_BACKOFF`` to 0 so the behaviour
+    tests do not sit through real sleeps — which means nothing above ever
+    exercises the default.  This pins the default and its use, so the
+    override cannot silently become the CI behaviour and the linear
+    escalation cannot be dropped.
+    """
+    body = HELPER_PATH.read_text(encoding="utf-8")
+    assert 'BACKOFF_UNIT="${APT_RETRY_BACKOFF:-15}"' in body, (
+        "the 15s CI backoff default changed or moved; the retry-behaviour "
+        "tests run with it overridden to 0 and rely on this pin"
+    )
+    assert "delay=$((attempt * BACKOFF_UNIT))" in body, (
+        "the linear per-attempt escalation no longer uses the overridable " "backoff unit"
+    )
 
 
 @_LINUX_ONLY

@@ -1038,14 +1038,36 @@ def test_pykcs11_broken_windows_wheels_stay_excluded() -> None:
             "release are measured working (sdist on Linux, universal2 wheels on macOS)"
         )
 
+    # The workflow half, SCOPED to the branch it claims to describe: a bare
+    # whole-file substring check would stay green with the exclusion moved
+    # into the non-Windows arm (or into a comment) — asserting the spelling
+    # exists somewhere is not asserting Windows installs it.  The branch
+    # shape is pinned structurally: the RUNNER_OS==Windows arm carries the
+    # exclusion, and the arm that follows `else` does not.
+    branch_re = re.compile(
+        r'if \[ "\$\{RUNNER_OS\}" = "Windows" \]; then\s*\n'
+        r"(?P<windows>(?:.*\n)*?)\s*else\s*\n"
+        r"(?P<other>(?:.*\n)*?)\s*fi",
+    )
     workflows = pathlib.Path(__file__).resolve().parent.parent / ".github" / "workflows"
     for name in ("ci.yml", "ci-build-test.yml"):
         text = (workflows / name).read_text(encoding="utf-8")
-        assert 'pip install "PyKCS11>=1.5.18,!=1.5.19"' in text, (
-            f"{name}'s PyKCS11 step no longer excludes 1.5.19 on its Windows "
-            "path; the next Windows run resolves the broken wheels and every "
-            "Windows job dies in the SoftHSM lifecycle again"
+        arms = [m for m in branch_re.finditer(text) if "PyKCS11" in m.group(0)]
+        assert arms, (
+            f"{name} no longer installs PyKCS11 through a RUNNER_OS==Windows "
+            "branch; re-scope this test to the new step shape"
         )
+        for match in arms:
+            assert 'pip install "PyKCS11>=1.5.18,!=1.5.19"' in match.group("windows"), (
+                f"{name}'s PyKCS11 Windows arm no longer excludes 1.5.19; the "
+                "next Windows run resolves the broken wheels and every Windows "
+                "job dies in the SoftHSM lifecycle again"
+            )
+            assert "!=1.5.19" not in match.group("other"), (
+                f"{name}'s non-Windows arm now carries the 1.5.19 exclusion, "
+                "which the Linux/macOS artefacts of that release do not need "
+                "— it belongs to the Windows arm only"
+            )
 
 
 @pytest.mark.skipif(not _SOFTHSM_AVAILABLE, reason=_softhsm_unavailable_reason())

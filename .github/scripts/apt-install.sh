@@ -111,6 +111,12 @@ fi
 ATTEMPT_TIMEOUT="${APT_ATTEMPT_TIMEOUT:-120}"
 KILL_AFTER="${APT_ATTEMPT_KILL_AFTER:-30}"
 ATTEMPTS="${APT_ATTEMPTS:-3}"
+# Seconds of backoff PER ATTEMPT NUMBER (attempt N sleeps N*this).  15 in CI;
+# overridable so the retry-behaviour tests do not sit through real sleeps —
+# they exercise ordering, bounding and message content, and the backoff
+# POLICY (this default, and the budget clamp) is pinned by its own tests
+# against the text and arithmetic, not by waiting it out.
+BACKOFF_UNIT="${APT_RETRY_BACKOFF:-15}"
 
 # 600, against the 20-minute job budget the shortest caller has: half the job
 # for its dependencies is already generous, and it leaves the other half for
@@ -245,7 +251,7 @@ for attempt in $(seq 1 "$final"); do
         echo "apt-install.sh: installed on attempt ${attempt}: $*"
         exit 0
     fi
-    delay=$((attempt * 15))
+    delay=$((attempt * BACKOFF_UNIT))
     left="$(budget_left)"
     if [ "$delay" -gt "$left" ]; then delay="$left"; fi
     echo "apt-install.sh: attempt ${attempt} failed or exceeded" \

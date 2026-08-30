@@ -366,9 +366,13 @@ class TestSigmaEnforcementOnAnIndefiniteMatrix(unittest.TestCase):
         from ama_cryptography.equations import _gershgorin_lower_bound
 
         psd = asmat([[1.0, 2.0], [2.0, 5.0]])
-        # Positive definite: leading minors 1 > 0 and 1*5 - 2*2 = 1 > 0.
-        self.assertGreater(1.0, 0.0)
-        self.assertGreater(1.0 * 5.0 - 2.0 * 2.0, 0.0)
+        # Positive definite by Sylvester's criterion — derived from the
+        # MATRIX, not restated as literals: `assertGreater(1.0, 0.0)` was a
+        # compile-time truth that kept passing however `psd` was edited,
+        # leaving the load-bearing Gershgorin assertion attached to a
+        # premise nothing checked.
+        self.assertGreater(psd[0][0], 0.0)
+        self.assertGreater(psd[0][0] * psd[1][1] - psd[0][1] * psd[1][0], 0.0)
         self.assertLess(_gershgorin_lower_bound(psd), 0.0)
 
 

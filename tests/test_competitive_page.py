@@ -167,9 +167,27 @@ class TestNotesAgreeWithTheData:
         assert not problems, "\n".join(problems)
 
     def test_the_rank_reconciliation_is_not_vacuous(self, generator: ModuleType) -> None:
-        """At least some notes must carry a rank phrase, or the test above
-        passes over an empty set and stops pinning anything."""
-        with_phrase = [
+        """At least some notes must carry a rank phrase AND be reconcilable.
+
+        Counting phrase-bearing notes alone was not enough: the test above
+        does ``if primitive not in ranks: continue``, so a primitive renamed
+        in benchmarks/multi_library_results.json detached every one of its
+        notes from the measured ranks — the reconciliation then checked zero
+        rows while this floor, satisfied by the phrases alone, stayed green.
+        The floor now counts notes that actually intersect the measured set,
+        and any phrase-bearing note that does NOT is itself a failure: a
+        rank claim about a primitive the results no longer name is exactly
+        the unreconciled prose this class exists to forbid.
+        """
+        ranks = _ranks()
+        with_phrase = {
             primitive for primitive, note in generator.NOTES.items() if _RANK_PHRASE_RE.search(note)
-        ]
-        assert len(with_phrase) >= 3, with_phrase
+        }
+        reconcilable = sorted(with_phrase & set(ranks))
+        orphaned = sorted(with_phrase - set(ranks))
+        assert not orphaned, (
+            f"these NOTES carry rank phrases but their primitives are absent from "
+            f"multi_library_results.json, so the reconciliation cannot check them: "
+            f"{orphaned}"
+        )
+        assert len(reconcilable) >= 3, reconcilable

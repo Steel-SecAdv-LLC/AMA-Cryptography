@@ -95,7 +95,12 @@ def test_protected_roots_are_excluded(
     sample = next((p for p in sorted(directory.rglob("*")) if p.is_file()), None)
     assert sample is not None, f"{root} is empty; this test guards nothing"
     relative = sample.relative_to(REPO_ROOT).as_posix()
-    assert excludes[hook_id].match(relative), f"{hook_id} would rewrite {relative} — {reason}"
+    # .search, not .match: pre-commit applies `files`/`exclude` with
+    # re.search, so .match here would model stricter semantics than the tool
+    # runs — in the negative test below that direction can pass while
+    # coverage is actually lost (a pattern matching mid-string excludes the
+    # file for pre-commit but not for a .match-based assertion).
+    assert excludes[hook_id].search(relative), f"{hook_id} would rewrite {relative} — {reason}"
 
 
 @pytest.mark.parametrize("hook_id", REWRITING_HOOKS)
@@ -105,7 +110,7 @@ def test_ordinary_sources_are_still_checked(
 ) -> None:
     """The exclusion must be a scope, not an off switch."""
     assert (REPO_ROOT / path).is_file(), f"{path} has moved; pick another representative"
-    assert not excludes[hook_id].match(
+    assert not excludes[hook_id].search(
         path
     ), f"{hook_id} no longer runs on {path}; the hook has been disabled rather than scoped"
 

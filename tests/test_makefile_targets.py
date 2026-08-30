@@ -87,11 +87,20 @@ def test_the_targets_that_shadow_a_directory_still_run(name: str) -> None:
 
 
 def test_every_pip_audit_invocation_is_scoped() -> None:
-    """An unscoped pip-audit reports CVEs in packages this project does not ship."""
+    """An unscoped pip-audit reports CVEs in packages this project does not ship.
+
+    Both spellings are matched: the Makefile invokes the module form
+    (``pip_audit``) today, but the tool's common CLI name is ``pip-audit``,
+    and a future edit switching spellings would otherwise carry an unscoped
+    invocation straight past a filter keyed to one substring.
+    """
     unscoped = [
         line.strip()
         for line in MAKEFILE.read_text(encoding="utf-8").splitlines()
-        if "pip_audit" in line and "--requirement" not in line
+        if re.search(r"pip[-_]audit", line) and "--requirement" not in line
+        # Prose is not an invocation: echo lines and comments name the tool
+        # without running it.
+        and not re.match(r"\s*@?(#|echo\b)", line)
     ]
     assert not unscoped, unscoped
 
@@ -180,3 +189,32 @@ class TestTheDudectHarnessMakefileBuildsWhatItSaysItBuilds:
     def test_the_constant_time_aes_flag_is_still_there(self) -> None:
         """The control: the flag this line already carried must not be lost."""
         assert "-DAMA_AES_CONSTTIME=ON" in self._assignment("CFLAGS")
+
+    def test_the_optimization_level_matches_the_release_build(self) -> None:
+        """The lockstep claim extends to codegen, not just feature macros.
+
+        The harness compiled at plain ``-O2`` with no NDEBUG while its own
+        comment claimed the flags exist "so the timing measurements
+        faithfully reflect what end users get" from the canonical Release
+        build (``-O3 -DNDEBUG -fomit-frame-pointer -funroll-loops``).  The
+        optimization level is load-bearing for exactly this class of
+        measurement: rebuilding an instruction-count constant-time target at
+        a different level immediately measured a 9,424-instruction
+        key-dependent spread in the secp256k1 scalar arithmetic (recorded in
+        check_workflow_commands.check_cmake_build_type).  A timing harness
+        measuring different codegen than the shipped library measures the
+        wrong artefact.
+        """
+        cflags = self._assignment("CFLAGS")
+        for flag in ("-O3", "-DNDEBUG", "-fomit-frame-pointer", "-funroll-loops"):
+            assert flag in cflags, (
+                f"{flag} left tools/constant_time/Makefile CFLAGS; the harness no "
+                f"longer compiles the codegen the canonical Release library ships, "
+                f"so its timing measurements describe a different binary.  "
+                f"CFLAGS = {cflags!r}"
+            )
+        for stale in ("-O0", "-O1", "-O2"):
+            assert stale not in cflags.split(), (
+                f"{stale} in CFLAGS overrides the Release optimization level "
+                f"(last -O wins with gcc).  CFLAGS = {cflags!r}"
+            )

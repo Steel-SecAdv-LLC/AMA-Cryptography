@@ -106,12 +106,45 @@ def test_the_rc77_handler_is_not_a_blanket_skip() -> None:
     assert "::error::" in branch, "a mandatory 77 must surface as a GitHub error annotation"
 
 
+#: The membership idiom the classification tests model: padded, quoted
+#: substring match of the slot inside the space-joined optional list.  Kept
+#: as one pattern so the idiom-pin test below and the executable model in
+#: test_each_slot_is_classified_by_the_real_declared_list cannot drift
+#: apart separately.
+_MEMBERSHIP_IDIOM_RE = re.compile(
+    r'case\s+" \$\{OPTIONAL_SLOTS\} "\s+in\s+.{0,80}?\*" \$\{AMA_DISPATCH_ONLY\} "\*\)',
+    re.DOTALL,
+)
+
+
+@_POSIX_SHELL_ONLY
+def test_the_workflow_still_uses_the_modeled_membership_idiom() -> None:
+    """The classification test below runs a COPY of the step's case rule.
+
+    A copy validates itself: if the workflow's pattern were edited — the
+    quotes dropped (`*${AMA_DISPATCH_ONLY}*`, which turns substring slots
+    into false members), the padding spaces removed — the copy would keep
+    passing while modeling a rule the workflow no longer runs.  So the exact
+    padded-quoted idiom is pinned against dudect.yml's own run body here,
+    and the copy is only trusted while this holds.
+    """
+    run = _confirm_step_run()
+    assert _MEMBERSHIP_IDIOM_RE.search(run), (
+        "dudect.yml's confirm step no longer uses the padded-quoted "
+        'membership idiom (`case " ${OPTIONAL_SLOTS} " in *" ${AMA_DISPATCH_ONLY} "*`); '
+        "update test_each_slot_is_classified_by_the_real_declared_list to model "
+        "the new rule — it currently executes a copy of the old one."
+    )
+
+
 @_POSIX_SHELL_ONLY
 @pytest.mark.parametrize("slot", sorted(_matrix_slots()))
 def test_each_slot_is_classified_by_the_real_declared_list(slot: str) -> None:
-    """Run the exact membership rule the step uses, against the REAL declared
+    """Run the membership rule the step uses, against the REAL declared
     OPTIONAL_SLOTS, and assert each slot's 77-classification: optional slots
-    skip (exit 0), mandatory slots fail (exit 1)."""
+    skip (exit 0), mandatory slots fail (exit 1).  The rule is a copy of the
+    workflow's; test_the_workflow_still_uses_the_modeled_membership_idiom
+    pins the workflow to the idiom this copy models."""
     optional = " ".join(sorted(_declared_optional_slots()))
     script = (
         f'OPTIONAL_SLOTS="{optional}"; '
