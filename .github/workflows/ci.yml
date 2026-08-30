@@ -215,26 +215,42 @@ jobs:
         cp ama_cryptography/_integrity_digest.txt "${RUNNER_TEMP}/committed_integrity_digest.txt"
         echo "Committed digest recorded: $(cat "${RUNNER_TEMP}/committed_integrity_digest.txt")"
 
-    # PyKCS11 is installed in its own step because its sdist no longer builds
-    # on a current runner without help, and the failure kills the entire test
-    # job before one AMA test runs.  Root cause, established against the
-    # 1.5.18 sdist: src/pykcs11.i:66 uses `PyInt_FromLong` (a Python 2 API)
-    # inside a custom %typemap, and the sdist ships no pre-generated wrapper —
-    # SWIG regenerates it at build time.  SWIG <= 4.2 emitted a Python 2
+    # PyKCS11 is installed in its own step because its sdist can need help to
+    # build on a current runner, and the failure kills the entire test job
+    # before one AMA test runs.  Root cause, established against the 1.5.18
+    # sdist: src/pykcs11.i:66 uses `PyInt_FromLong` (a Python 2 API) inside a
+    # custom %typemap, and the sdist ships no pre-generated wrapper — SWIG
+    # regenerates it at build time.  SWIG <= 4.2 emitted a Python 2
     # compatibility shim (`#define PyInt_FromLong PyLong_FromLong`) into every
     # generated wrapper, which is why this ever compiled; SWIG 4.3 removed
-    # those aliases, and the runner images now carry >= 4.3.  No PyKCS11
-    # release is exempt — upstream master still carries the typemap — so a
-    # version pin cannot fix this; the variable is the SWIG version, not the
-    # PyKCS11 version.  Wheels exist only for Windows cp37-cp313 (and one
-    # macOS x86-64 cp313), so Linux, ARM, macOS-arm64 and Windows cp314 all
-    # build the sdist.  The two defines below restore, at the compiler
-    # command line, exactly the alias SWIG's own shim used to provide:
-    # CPPFLAGS for POSIX compilers, CL for MSVC (cl.exe reads it from the
-    # environment); each is inert on the other platform, and inert entirely
-    # when pip resolves a wheel.  Scoped to this step so the define never
-    # reaches the ama-cryptography build.  Retire the step when a PyKCS11
-    # release ships whose pykcs11.i no longer names PyInt_FromLong.
+    # those aliases, and the runner images now carry >= 4.3.  The two defines
+    # below restore, at the compiler command line, exactly the alias SWIG's
+    # own shim used to provide: CPPFLAGS for POSIX compilers, CL for MSVC
+    # (cl.exe reads it from the environment); each is inert on the other
+    # platform, and inert entirely when pip resolves a wheel.  Scoped to this
+    # step so the define never reaches the ama-cryptography build.  The
+    # 1.5.19 sdist (2026-08-27) ends the class: it self-provisions SWIG >=
+    # 4.5 through its pyproject build requirements and compiles without the
+    # alias, so the defines matter only when pip falls back to the 1.5.18
+    # sdist — which the Windows exclusion below makes it do on cp314.
+    #
+    # Windows excludes 1.5.19: that release's win32/win_amd64 wheels
+    # (published 2026-08-26T13:44Z) crash the interpreter with an access
+    # violation inside PyKCS11Lib.load() of SoftHSM2's x64 module, on every
+    # Windows matrix entry, cp310 through cp314.  Measured both ways on this
+    # branch with no HSM-relevant change between the runs: at 9811476 (run
+    # 32968055782, before the wheels existed) all five Windows jobs pass on
+    # PyKCS11 1.5.18; at 6e42de8 (run 33031586700, e.g. job 98385102886)
+    # pip resolves the new 1.5.19 wheels on the same runner image
+    # (win25-vs2026/20260824.214) and every Windows job dies in
+    # TestSoftHSMIntegration::test_full_lifecycle.  The same release is fine
+    # where its artefacts differ — macOS universal2 wheels passed in the red
+    # run itself, and the sdist passes the same lifecycle against SoftHSM2
+    # 2.6.1 on Linux — so the exclusion is scoped to win32, where pip would
+    # otherwise prefer the broken wheels.  A future 1.5.20 is deliberately
+    # left resolvable so the first Windows run against it re-verifies the
+    # lane.  pyproject.toml's [hsm] extra carries the same split, and
+    # tests/test_hsm_integration.py pins both.
     - name: Install PyKCS11 (PKCS#11 binding for the HSM lane)
       shell: bash
       env:
@@ -248,7 +264,11 @@ jobs:
         CL: "-DPyInt_FromLong=PyLong_FromLong"
       run: |
         python -m pip install --upgrade pip setuptools wheel
-        pip install "PyKCS11>=1.5.18"
+        if [ "${RUNNER_OS}" = "Windows" ]; then
+          pip install "PyKCS11>=1.5.18,!=1.5.19"
+        else
+          pip install "PyKCS11>=1.5.18"
+        fi
 
     - name: Install Python dependencies
       run: |

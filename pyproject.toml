@@ -121,17 +121,31 @@ legacy = [
 hsm = [
     # PKCS#11 support for hardware security modules.
     #
-    # Build note for platforms without a PyKCS11 wheel (Linux, ARM, macOS
-    # arm64, Windows cp314): every PyKCS11 sdist regenerates its wrapper
-    # with the host SWIG, and its interface file names the Python 2
-    # `PyInt_FromLong` in a %typemap.  SWIG >= 4.3 removed the compatibility
-    # alias that made that compile, so the sdist build fails under a current
-    # SWIG regardless of the version pinned here.  Until upstream removes
-    # the Python 2 call, install with the alias restored at the compiler
-    # command line, exactly as CI does (see .github/workflows/ci.yml):
-    #   CPPFLAGS="-DPyInt_FromLong=PyLong_FromLong" pip install "PyKCS11>=1.5.18"
-    # (MSVC: set CL=/DPyInt_FromLong=PyLong_FromLong instead.)
-    "PyKCS11>=1.5.18",
+    # 1.5.19 is excluded on Windows because its win32/win_amd64 wheels
+    # (published 2026-08-26, PyPI) crash the process with an access
+    # violation inside PyKCS11Lib.load() — measured against SoftHSM2's
+    # x64 module on all of cp310-cp314 (CI run 33031586700, e.g. job
+    # 98385102886), on the same runner image and commit where the 1.5.18
+    # wheels and the 1.5.18 sdist build pass.  The same release's sdist
+    # and macOS wheels are unaffected (sdist verified against SoftHSM2
+    # 2.6.1 on Linux; macOS wheels green in the same CI run), so the
+    # exclusion is scoped to the platform whose artefacts are broken.
+    # tests/test_hsm_integration.py pins this split against both this
+    # extra and the CI install steps.
+    #
+    # Build note for platforms resolving the 1.5.18 sdist (no wheel for
+    # the interpreter, with 1.5.19 excluded): that sdist regenerates its
+    # wrapper with the host SWIG, and its interface file names the
+    # Python 2 `PyInt_FromLong` in a %typemap.  SWIG >= 4.3 removed the
+    # compatibility alias that made that compile, so install with the
+    # alias restored at the compiler command line, exactly as CI does
+    # (see .github/workflows/ci.yml):
+    #   CPPFLAGS="-DPyInt_FromLong=PyLong_FromLong" pip install "PyKCS11>=1.5.18,!=1.5.19"
+    # (MSVC: set CL=-DPyInt_FromLong=PyLong_FromLong instead.)
+    # From 1.5.19 the sdist self-provisions SWIG >= 4.5 through its build
+    # requirements and compiles without the alias.
+    "PyKCS11>=1.5.18,!=1.5.19; sys_platform == 'win32'",
+    "PyKCS11>=1.5.18; sys_platform != 'win32'",
 ]
 benchmark = [
     # Peer cryptographic libraries for benchmarks/comparative_benchmark.py.

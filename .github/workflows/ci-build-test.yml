@@ -441,17 +441,19 @@ jobs:
           cp ama_cryptography/_integrity_digest.txt "${RUNNER_TEMP}/committed_integrity_digest.txt"
           echo "Committed digest recorded: $(cat "${RUNNER_TEMP}/committed_integrity_digest.txt")"
 
-      # Same step, same reason, as ci.yml: the PyKCS11 sdist's SWIG typemap
-      # names the Python 2 `PyInt_FromLong`, SWIG >= 4.3 (now on the runner
-      # images) no longer emits the compatibility alias that made that
-      # compile, and no PyKCS11 release is exempt.  The defines restore the
-      # alias at the compiler command line — CPPFLAGS for POSIX, CL for MSVC
-      # — scoped to this step so they never reach the ama-cryptography build.
-      # Wheels cover only Windows cp37-cp313 (+ macOS x86-64 cp313); every
-      # other entry in this matrix builds the sdist.  An earlier comment here
-      # claimed the sdist "builds from sdist against the runner's MSVC + swig
-      # ... and is green"; that was true under SWIG <= 4.2 and is exactly the
-      # build that now fails without the define.
+      # Same step, same reasons, as ci.yml — see the comment block there for
+      # both records in full.  Short form: the CPPFLAGS/CL defines restore
+      # the Python 2 alias the 1.5.18 sdist's SWIG typemap needs under SWIG
+      # >= 4.3 (the 1.5.19 sdist self-provisions SWIG >= 4.5 and no longer
+      # needs them), and Windows excludes 1.5.19 because that release's
+      # Windows wheels crash the interpreter with an access violation inside
+      # PyKCS11Lib.load() of SoftHSM2's x64 module — measured on cp310-cp314
+      # at run 33031586721 (e.g. job 98385102879) against the same commit,
+      # runner image and SoftHSM2 install that pass on 1.5.18 (run
+      # 32968055782's ci-build-test twin).  macOS wheels and the sdist of the
+      # same release are unaffected, so the exclusion is scoped to win32.
+      # pyproject.toml's [hsm] extra carries the same split, and
+      # tests/test_hsm_integration.py pins both.
       - name: Install PyKCS11 (PKCS#11 binding for the HSM lane)
         shell: bash
         env:
@@ -463,7 +465,12 @@ jobs:
           # bogus source-file arguments (job 97256304451). A leading dash
           # is never path-converted.
           CL: "-DPyInt_FromLong=PyLong_FromLong"
-        run: pip install "PyKCS11>=1.5.18"
+        run: |
+          if [ "${RUNNER_OS}" = "Windows" ]; then
+            pip install "PyKCS11>=1.5.18,!=1.5.19"
+          else
+            pip install "PyKCS11>=1.5.18"
+          fi
 
       - name: Install Python dependencies + package (with [dev] extras)
         # Use the [dev] extras so hypothesis / pytest-cov / mypy / etc.

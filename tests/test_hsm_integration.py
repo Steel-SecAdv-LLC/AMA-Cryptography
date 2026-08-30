@@ -15,6 +15,7 @@ library is present on the system.
 
 import os
 import pathlib
+import re
 import shutil
 import sys
 from typing import Any, Optional
@@ -951,6 +952,100 @@ def test_the_workflow_still_provisions_softhsm() -> None:
         "skip; without it the SoftHSM2 lane — the only real PKCS#11 coverage in the "
         "tree — returns to skipping everywhere while this suite stays green."
     )
+
+
+def _hsm_extra_requirements() -> "list[str]":
+    """The requirement strings of pyproject.toml's ``[hsm]`` extra.
+
+    Parsed with ``tomllib`` where it exists, and with a line scan of the one
+    array this test needs on the project's Python 3.10 floor, where
+    ``tomllib`` is unavailable — the same split, and the same static
+    ``sys.version_info`` narrowing for mypy's ``python_version = "3.10"``
+    pin, as ``tools/check_documented_extras``.  The fallback skips comment
+    lines: the extra's own comment block quotes ``pip install`` commands,
+    which a bare quoted-string scan would misread as declared requirements.
+    """
+    pyproject = pathlib.Path(__file__).resolve().parent.parent / "pyproject.toml"
+    text = pyproject.read_text(encoding="utf-8")
+    if sys.version_info >= (3, 11):
+        import tomllib
+
+        data = tomllib.loads(text)
+        return list(data["project"]["optional-dependencies"]["hsm"])
+    block = re.search(r"^hsm\s*=\s*\[(.*?)^\]", text, re.S | re.M)
+    assert block is not None, "pyproject.toml no longer declares an [hsm] extra"
+    reqs = []
+    for line in block.group(1).splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        quoted = re.match(r'"([^"]+)"', line)
+        if quoted:
+            reqs.append(quoted.group(1))
+    return reqs
+
+
+def test_pykcs11_broken_windows_wheels_stay_excluded() -> None:
+    """PyKCS11 1.5.19 must stay uninstallable on Windows — and only there.
+
+    1.5.19's win32/win_amd64 wheels (PyPI, 2026-08-26T13:44Z) crash the
+    interpreter with an access violation inside ``PyKCS11Lib.load()`` of
+    SoftHSM2's x64 module.  Measured with no HSM-relevant change between the
+    runs: every Windows job green on 1.5.18 at 9811476 (run 32968055782),
+    every Windows job dead in ``TestSoftHSMIntegration::test_full_lifecycle``
+    at 6e42de8 (run 33031586700) after pip resolved the freshly published
+    1.5.19 wheels on the same runner image.  The same release is fine where
+    its artefacts differ — its macOS wheels passed in the red run itself, and
+    its sdist passes the same lifecycle against SoftHSM2 2.6.1 on Linux — so
+    the exclusion must not leak beyond win32, and it must not become a cap
+    that would keep a fixed 1.5.20 from re-verifying the lane.
+
+    Both declaration sites are pinned: the ``[hsm]`` extra (what a user
+    installs) and the two workflows' install steps (what CI runs).  Evaluated
+    through ``packaging`` rather than string-matched, so any re-spelling that
+    preserves the semantics passes and one that reopens the hole fails.
+    """
+    from packaging.requirements import Requirement
+
+    pykcs11 = [
+        req
+        for req in (Requirement(r) for r in _hsm_extra_requirements())
+        if req.name.lower() == "pykcs11"
+    ]
+    assert pykcs11, "the [hsm] extra no longer names PyKCS11"
+
+    def allowed(version: str, sys_platform: str) -> bool:
+        env = {"sys_platform": sys_platform}
+        applicable = [r for r in pykcs11 if r.marker is None or r.marker.evaluate(environment=env)]
+        assert applicable, f"no PyKCS11 requirement applies when sys_platform={sys_platform}"
+        return all(r.specifier.contains(version, prereleases=False) for r in applicable)
+
+    assert not allowed("1.5.19", "win32"), (
+        "the [hsm] extra lets pip resolve PyKCS11 1.5.19 on Windows, whose "
+        "wheels access-violate inside load() — pip install ama-cryptography[hsm] "
+        "on Windows crashes on first HSMKeyStorage construction"
+    )
+    assert allowed(
+        "1.5.18", "win32"
+    ), "the exclusion took the known-good 1.5.18 with it; Windows has nothing left to install"
+    assert allowed("1.5.20", "win32"), (
+        "the exclusion is a cap: a fixed upstream release could never be adopted "
+        "or re-verified by the Windows lane"
+    )
+    for platform in ("linux", "darwin"):
+        assert allowed("1.5.19", platform), (
+            f"the 1.5.19 exclusion leaked to {platform}, whose artefacts of that "
+            "release are measured working (sdist on Linux, universal2 wheels on macOS)"
+        )
+
+    workflows = pathlib.Path(__file__).resolve().parent.parent / ".github" / "workflows"
+    for name in ("ci.yml", "ci-build-test.yml"):
+        text = (workflows / name).read_text(encoding="utf-8")
+        assert 'pip install "PyKCS11>=1.5.18,!=1.5.19"' in text, (
+            f"{name}'s PyKCS11 step no longer excludes 1.5.19 on its Windows "
+            "path; the next Windows run resolves the broken wheels and every "
+            "Windows job dies in the SoftHSM lifecycle again"
+        )
 
 
 @pytest.mark.skipif(not _SOFTHSM_AVAILABLE, reason=_softhsm_unavailable_reason())
