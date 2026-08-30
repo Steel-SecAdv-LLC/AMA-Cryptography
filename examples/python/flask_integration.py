@@ -92,6 +92,15 @@ def sign_response(f: Callable[..., Any]) -> Callable[..., Any]:
     def decorated_function(*args: Any, **kwargs: Any) -> Any:
         response = f(*args, **kwargs)
 
+        # A (body, status) tuple — the way every 400 in this file is
+        # returned — passes through unsigned: re-serializing it below would
+        # json.dumps a Response object and turn each documented 400 into a
+        # 500.  Only success bodies carry the signature header, which is
+        # also the honest contract (a client verifies data it will use, and
+        # error bodies carry no payload worth signing).
+        if isinstance(response, tuple):
+            return response
+
         # Get response data
         if hasattr(response, "get_json"):
             data = response.get_json()

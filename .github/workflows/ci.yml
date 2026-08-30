@@ -737,6 +737,22 @@ jobs:
         AMA_SPHINX_BUILD: '1'
       run: sphinx-build -W --keep-going -b html docs docs/_build/html
 
+    - name: Build Doxygen HTML (C API) — the half `make docs` runs first
+      # `make docs` was broken end to end and nothing in CI would have
+      # noticed: it cd'd into a build/ nothing creates, and even with
+      # build/ present doxygen resolved the Doxyfile's relative INPUT and
+      # OUTPUT_DIRECTORY against that subdirectory — reading absent source
+      # dirs and writing somewhere other than the path the recipe printed.
+      # The recipe now runs doxygen from the repository root; this step
+      # executes the same invocation and asserts the output lands at the
+      # documented path, so the target cannot silently regress again.
+      run: |
+        sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
+        .github/scripts/apt-install.sh doxygen graphviz
+        mkdir -p build
+        doxygen docs/Doxyfile
+        test -f build/docs/html/index.html
+
   security-checks:
     name: Security Checks
     runs-on: ubuntu-latest
@@ -1104,6 +1120,19 @@ jobs:
         AMA_POST_DIAGNOSTIC_IMPORT: "1"
       run: |
         python tools/check_documented_counts.py
+
+    - name: "Committed visual assets must match the numbers the tree produces"
+      # The five README-embedded PNGs are produced only by two manual
+      # generators; with no --check and no CI wiring the committed assets sat
+      # frozen and version-stamped at v3.4.0 two majors behind HEAD, and the
+      # coverage chart silently dropped 46% of the test suite while its title
+      # claimed to describe all of it.  The generators now write
+      # assets/visuals_manifest.json beside the PNGs; this step re-derives
+      # the tree-computable numbers and holds the measurement-derived
+      # dashboards to the package version.  Needs no matplotlib — the check
+      # is for environments that cannot regenerate.
+      run: |
+        python tools/generate_visuals.py --check
 
     - name: "INVARIANT-36: No third-party cryptographic implementation in the validation path"
       # AMA is built from standardised primitives and its own code, and ships

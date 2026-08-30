@@ -222,6 +222,15 @@ dev = [
     "Cython>=3.2.8",
     "numpy>=1.24.0",
     "scipy>=1.11.0",
+    # Build and packaging — mirrors requirements-dev.txt's "Build and
+    # packaging" block, which documents the two files as equivalent.  These
+    # were missing here, so the documented developer setup (`make
+    # dev-install` -> pip install -e ".[dev,all]") could not run the
+    # documented release target (`make dist` -> python -m build): "No
+    # module named build".
+    "build>=1.5.0",
+    "setuptools>=83.0.0",
+    "wheel>=0.47.0",
 ]
 # Umbrella extra — aggregates the non-overlapping extras above via PEP 508
 # self-reference so a single `pip install ama-cryptography[all]` pulls in

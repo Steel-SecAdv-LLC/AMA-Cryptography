@@ -211,9 +211,9 @@ def _check_cmake_version() -> None:
 # for any setup.py invocation regardless of whether Cython is enabled.
 # Cython and numpy are only required when the math_engine Cython
 # extension is being built; the documented ``AMA_NO_CYTHON=1`` opt-out
-# (and its companion ``AMA_NO_C_EXTENSIONS=1``, which short-circuits all
-# native build paths including the Cython one) must therefore skip those
-# preflight checks.  Copilot reviews #12/#15/#22 and Devin review #13
+# (and its companion ``AMA_NO_C_EXTENSIONS=1``, which empties the Cython
+# extension list — the native library itself is built via CMake in every
+# configuration) must therefore skip those preflight checks.  Copilot reviews #12/#15/#22 and Devin review #13
 # observed that the previous form ran every floor unconditionally,
 # turning a documented opt-out into an unconditional FATAL when the
 # environment lacked Cython/numpy (e.g. minimal embedded builders or
@@ -225,17 +225,21 @@ for _name in ("setuptools", "wheel"):
     _check_build_dependency(_name)
 
 # cmake is needed for the C-side build (CMakeBuild → cmake_minimum_required
-# in CMakeLists.txt).  Skip only when the entire native build is opted out
-# (AMA_NO_C_EXTENSIONS=1); AMA_NO_CYTHON=1 alone still builds C extensions
-# that go through cmake.  Copilot review @ setup.py:150 + Devin review
-# @ setup.py:63 caught the drift where pyproject.toml [build-system].requires
-# was bumped to cmake>=4.3.2 but setup.py's preflight hadn't matched —
-# documented "kept in lockstep" only became true when this check landed.
-_SKIP_C_PREFLIGHT = bool(os.getenv("AMA_NO_C_EXTENSIONS"))
-if not _SKIP_C_PREFLIGHT:
-    _check_cmake_version()
+# in CMakeLists.txt) — UNCONDITIONALLY.  This used to be skipped under
+# AMA_NO_C_EXTENSIONS=1 on the premise that the flag opts out of "the entire
+# native build"; that premise stopped holding when NativeDistribution made
+# has_ext_modules() return True in every configuration: `build` always
+# schedules build_ext, CMakeBuild.run() calls _build_cmake() before it ever
+# looks at self.extensions, and the native library is built for every wheel.
+# So the env var was silently bypassing the supply-chain version floor while
+# cmake was still invoked — the flag now selects only whether the CYTHON
+# binding extensions are built (see USE_C_EXTENSIONS below), never whether
+# cmake runs.  Copilot review @ setup.py:150 + Devin review @ setup.py:63
+# caught the original drift where pyproject.toml [build-system].requires was
+# bumped to cmake>=4.3.2 but setup.py's preflight hadn't matched.
+_check_cmake_version()
 
-_SKIP_CYTHON_PREFLIGHT = bool(os.getenv("AMA_NO_CYTHON")) or _SKIP_C_PREFLIGHT
+_SKIP_CYTHON_PREFLIGHT = bool(os.getenv("AMA_NO_CYTHON")) or bool(os.getenv("AMA_NO_C_EXTENSIONS"))
 if not _SKIP_CYTHON_PREFLIGHT:
     for _name in ("Cython", "numpy"):
         _check_build_dependency(_name)

@@ -31,6 +31,203 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > Compare `[4.0.0]` below, which is dated because it *is* released: tag
 > `v4.0.0`, published 2026-08-02.
 
+### Maintenance pass, fourteenth (2026-08-30) — full-diff audit remediation: every confirmed finding fixed, none deferred
+
+An exhaustive review of this branch's entire change set (18 subsystem review
+groups covering all 1,037 changed files, every finding adversarially
+verified before action) produced ~78 confirmed defects; this pass fixes all
+of them.  Each fix landed with regression coverage falsified against the
+unfixed code — run red on the defect, green on the repair — and the three C
+suites (Release, ThreadSanitizer, ASan+UBSan) pass 73/73 after every C
+change.  The verification currency throughout is the branch's own: a
+property that is only argued can regress.
+
+#### C library
+
+- **secp256k1 point validation is one function, applied at both public
+  entries.** `ama_secp256k1_point_mul` and ECDSA verify now share
+  `secp256k1_aff_from_bytes_checked()`: non-canonical coordinates (a byte
+  string ≥ p) and off-curve points are REJECTED, not silently reduced —
+  on an a=0 curve, accepting reduced coordinates is the invalid-curve
+  shape.  Pinned by distinguishing pairs the old tests could not see
+  (x = 1 vs its p+1 encoding: same point after reduction, opposite
+  verdicts required).  The sign path's `done:` now scrubs `R`/`Raff`/
+  `x_bytes` (INVARIANT-6).
+- **A SHAKE stream can no longer be squeezed at the wrong rate.**  The
+  incremental SHA-3 finalizers store the family's rate in the (previously
+  boolean) `finalized` field, and both squeeze entry points reject a
+  context finalized for the other family — a cross-family squeeze read
+  state past the wrong capacity boundary.  ABI-unchanged; falsified: the
+  new capacity-direction test FAILS on the pre-fix tree.
+- **ML-DSA NTT secret staging is erased on the AVX2 and NEON tiers**, as
+  the SVE2 twin already did (INVARIANT-6/12): both kernels staged the
+  complete polynomial — s1/s2 and the signing mask y — in a 1 KiB frame
+  array and returned without scrubbing.  Measured cost (benchmark_c_raw,
+  3 runs/side): NTT dispatch median 1.27 → 1.42–1.43 µs; bounds to ~1–2%
+  of an ML-DSA-65 sign, recorded as measured
+  `floor_drift_acknowledged` entries in both baselines.
+- **The NEON ChaCha20 4-way kernel serializes its keystream little-endian
+  explicitly**, matching the portable reference's `store32_le()`.  It
+  memcpy'd host-order words: on aarch64_be every 4 keystream bytes came
+  out reversed for messages ≥ 512 B while shorter messages took the
+  correct scalar path — one key/nonce, two ciphertexts, by length.  And
+  because no CI lane has ever executed big-endian AArch64, the NEON tier
+  now fails CLOSED there: a tier-wide `#error` in `ama_neon_internal.h`
+  naming `-DAMA_ENABLE_NEON=OFF` — the hatch that actually produces a
+  correct build — replacing a per-file guard whose advice
+  (`-DAMA_FORCE_NO_ARM_CRYPTO=ON`) left every other unvalidated NEON
+  kernel installed.
+- **The fat-LTO fallback now actually strips bytecode from the static
+  archive**: `INTERPROCEDURAL_OPTIMIZATION OFF` alone cannot override the
+  per-config `INTERPROCEDURAL_OPTIMIZATION_RELEASE` the target was
+  created with (probe-verified on CMake 3.28.3); both are now set.
+
+#### Fuzzing
+
+- `fuzz_kyber` case 1 takes a two-byte big-endian corruption position:
+  `payload[0] % ct_len` capped corruption at byte 255 of a 1,568-byte
+  ciphertext, so the committed seeds NAMED `corrupt-u-v-boundary` and
+  `corrupt-last-byte` actually hit bytes 128 and 31, and no case-1 input
+  could reach the v section at all.  Corpus regenerated (positions now
+  true, `corrupt-first-v-byte` added); all 26 seeds executed clean under
+  ASan+UBSan.  `fuzz_sphincs` case 2 (fuzzed-signature verify, 49,856-byte
+  gate) gets first-pass seeds — it was reachable only via a 1-byte
+  selector mutation while the corpus builder's docstring promised
+  otherwise.
+- `tools/check_fuzz_input_reachability.py` models derived length
+  variables (`tail_len = size - K`) and fails closed on guards it cannot
+  parse (parenthesised, multiplicative, deep-nested); a guard on such a
+  variable used to contribute no bound and no `unresolved` entry — the
+  no-signal state the gate exists to prevent.  Bounds table verified
+  byte-identical to the old tool on the tree as it stands.
+
+#### Gates that could not fail, made falsifiable
+
+- `benchmarks/validation_suite.py` printed "All benchmark claims
+  validated successfully!" after measuring as few as 1–2 of its 18
+  documented claims (every SKIP path left the verdict's denominator), and
+  7 claims had no measurement block at all.  It now measures 17 of 18
+  (full-KMS and the four code-package claims gained real blocks mirroring
+  benchmark_suite.py's operations; pattern-analysis is exempt-by-design
+  and says so), tracks every skip with its reason, reports
+  measured/documented coverage, and fails under `--require-complete`
+  when a documented claim produced no measurement.
+- `.clang-tidy`'s `HeaderFilterRegex` used a negative lookahead that
+  llvm::Regex does not support: the pattern compiled invalid, matched
+  NOTHING, printed no error — so the fail-closed `WarningsAsErrors: '*'`
+  gate covered no header code at all.  Reproduced (a planted
+  header defect: reported 0 times before, reported after), replaced with
+  a positive POSIX-ERE alternation over the real header directories, and
+  the full sweep of the tree under the fixed filter is clean (rc 0).
+- The baseline-justification gate now demands line-item justification for
+  `tolerance_percent` changes exactly as for `baseline_value` — widening
+  a tolerance was the one unjustified edit that silently weakened the
+  regression gate.  Its floored-code-drift diagnostic states the actual
+  condition (calibration_evidence still names commit X and floored code
+  changed since it) instead of asserting "no floor re-measured" on every
+  firing.
+- `tools/generate_visuals.py` charts every test file (an `Other` bucket;
+  the coverage chart silently dropped 46% of the suite — 2,159 of 4,702
+  test functions — while titled as describing all of it), and the five
+  README-embedded PNGs get what froze them at v3.4.0 for two majors
+  removed: the generators write `assets/visuals_manifest.json` beside the
+  PNGs, `--check` re-derives the tree-computable numbers (no matplotlib
+  needed) and holds the measurement-derived dashboards to the package
+  version, and ci.yml runs it.
+- `tools/generate_dashboard.py` labels measurements with THEIR provenance
+  (the artefact's commit/version/timestamp, dirty-tree flagged) instead
+  of stamping the render-time tree's; the fallback for pre-provenance
+  inputs says so on the page.  `benchmark-results.json` rows carry the
+  raw signed `margin_percent` the verdict was decided on, round-trip
+  preserved.
+- Smaller closures of the same class: the SONAME-literal sweep gains the
+  non-vacuity floor its sibling pin sweep already had; the stdlib-hash
+  boundary follows module-root rebinding (`_h = hashlib`) and counts bare
+  root loads; the error-state gate discovers aliased imports of
+  `_native_lib`; the dudect class-staging patterns catch Yoda/relational
+  ternaries, `switch`, and pointer-arithmetic address selection (value
+  arithmetic on a plain scalar stays sanctioned, per the measured
+  branchless idiom both harnesses document); `check_workflow_commands`
+  joins line continuations before matching so a bare `cmake \` configure
+  is seen; `check_release_state`'s "not yet tagged" markers are
+  version-scoped so a historical note about another version cannot fail
+  release day; `check_vendor_isolation` parses PE import name-thunks and
+  the export directory, closing on Windows the same statically-linked-
+  vendor blindness Mach-O had already had fixed.
+
+#### Test suite corrections
+
+- `tests/c/test_ed25519_canonical_r.c`'s batch PIN labels described the
+  pre-B1 donna aggregate path that commit 0cd6bb3 deleted; measured on
+  this tree with the predicate neutered, every batch line printed OK and
+  only the four RANGE unit tests failed.  The labels are now SMOKE with
+  the measurement recorded, the RANGE block remains the predicate's pin,
+  and the CMake registration comment matches.  `test_kyber_poly_equiv.c`
+  now actually runs the 65,536-input enumeration its contract comment
+  claimed ("measured here"), asserting the [0, q] image, congruence, and
+  the nine inputs attaining q — and a reference failure can no longer be
+  masked by the SIMD-lane skip's exit 77.  `test_dudect.c`'s
+  `run_all_tests` returns void: its unconsumed duplicate verdict (no
+  majority rule, no direction rule, no effect-size floor) was a second,
+  uncalibrated verdict path waiting for its first caller.
+- Vacuous or mis-aimed assertions replaced by discriminating ones across
+  the Python suite: the competitive-page rank floor counts reconcilable
+  notes (and orphaned rank phrases fail); the dudect sweep membership
+  idiom is pinned against dudect.yml's own run body; the last
+  fixed-4000-char window becomes a real preprocessor-block bound; the
+  Gershgorin premise derives its minors from the matrix instead of
+  asserting `1.0 > 0.0`; pre-commit exclusion tests use `re.search` as
+  pre-commit does; the PyKCS11 workflow assertion is scoped to the
+  RUNNER_OS==Windows arm it names; a dead `missing_path` parametrization
+  now removes exactly the path each case names; the ACVP gate module
+  FAILS (not skips) when the tracked harness is missing or broken; the
+  `#else` arm of a stripped `#ifdef` is modeled as the code that compiles
+  when the macro is undefined; the apt-retry suite stops sleeping through
+  real 15 s backoffs (overridable `APT_RETRY_BACKOFF`, CI default pinned
+  at source; ~1 minute saved per full run).
+
+#### Python package
+
+- `CryptoPostureController._execute_action` reports `False` for a
+  SWITCH_ALGORITHM the cooldown suppressed, so `confirm_action` keeps the
+  operator's pending action instead of consuming the confirmation and
+  logging "Confirmed and executed" for a switch that never ran — the
+  same consumed-confirmation defect the rotation half had already fixed.
+- `secure_memory._python_fallback_memzero` wipes and verifies over a
+  `cast("B")` byte view: the item-wise passes raised mid-wipe on a
+  signed-char view and at the verification barrier on a float view — the
+  items-vs-bytes defect `_byte_length()` closed for every native backend,
+  left open on the opt-in fallback.
+- The package-integrity digest, the bytecode binding and the release
+  signer enumerate `.py` files RECURSIVELY, keyed by package-relative
+  path: a subpackage module would have been silently unsigned (and
+  outside the poisoned-`.pyc` check, and accepted by the substitution
+  detector).  For the flat 5.0.0 layout no digest byte changes and every
+  existing signature still verifies; falsified on a synthetic tree, where
+  a subpackage edit now changes the digest and did not before.
+  `detect_resonance()` snapshots its deque under the monitor lock like
+  its two sibling readers — measured first: CPython's `list(deque)` is a
+  single C call under the GIL and never raised, so the lock buys the
+  stated invariant rather than a witnessed crash, and the comment says
+  exactly that.
+
+#### Packaging and developer targets
+
+- `make docs` works end to end (doxygen runs from the repository root, so
+  the Doxyfile's relative INPUT/OUTPUT resolve as intended and the output
+  lands at the path the recipe prints; verified locally, and ci.yml's
+  docs job now executes the doxygen half).  `make security-scan` runs
+  bandit and semgrep over the same three paths CI scans
+  (`ama_cryptography/ setup.py tools/`) with the same unfiltered report.
+  The `[dev]` extra carries build/setuptools/wheel, so the documented
+  `make dev-install` → `make dist` path works.  `setup.py` runs the
+  cmake version preflight unconditionally — `AMA_NO_C_EXTENSIONS=1`
+  was skipping the supply-chain floor while CMake was still invoked for
+  every wheel.  The constant-time harness Makefile compiles at the
+  Release codegen it claims lockstep with (`-O3 -DNDEBUG
+  -fomit-frame-pointer -funroll-loops`; the optimization level is
+  load-bearing for exactly this class of measurement).
+
 ### Maintenance pass, thirteenth (2026-08-26) — the constant-time gap this branch documented instead of closing
 
 `496f80e` added three entries to the coverage-gap list in
@@ -6125,7 +6322,10 @@ input is exactly `bytes` (no view to take, no release obligation), because
 even the hand-written context manager measured as a 14% toll on ChaCha's
 cheap call; one FFI expression serves both paths per wrapper so the
 marshalling cannot drift. Net measured effect at 1 KiB on the same host:
-AES-256-GCM one-shot 123k → 234k ops/sec.
+AES-256-GCM one-shot 132k → 234k ops/sec (the "before" is the ~132k
+delivered rate this entry's own opening paragraph measures against the
+stale floor; an earlier revision wrote 123k here, disagreeing with both
+that paragraph and README's quotation of the same A/B).
 
 Two further hot-path taxes fell in the same pass. Hybrid signing re-expanded
 the Ed25519 seed on every call — and that expansion is a key *generation*, so

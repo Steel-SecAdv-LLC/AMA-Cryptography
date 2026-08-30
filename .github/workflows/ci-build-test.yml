@@ -775,6 +775,7 @@ jobs:
           "
           python "$SRCDIR/benchmarks/benchmark_runner.py" \
             --verbose \
+            --require-populated-baseline \
             --baseline "$SRCDIR/benchmarks/baseline.json" \
             --output "$SRCDIR/benchmarks/regression_results.json" \
             --markdown "$SRCDIR/benchmarks/regression_report.md"

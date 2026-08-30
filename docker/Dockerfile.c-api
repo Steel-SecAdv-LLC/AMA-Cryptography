@@ -84,10 +84,17 @@ RUN ldconfig
 # Create output directory for extraction
 WORKDIR /output
 
-# Default command: copy built artifacts to mounted volume
+# Default command: copy built artifacts to mounted volume.
+# Both public headers, not one: a consumer compiling against
+# ama_cryptography.h with runtime dispatch introspection also includes
+# ama_dispatch.h — exporting half the header set reproduced, at /output,
+# the exact incomplete-install defect fixed at /usr/local/include.  And no
+# `|| true` on the lib copy: with sh's && / || precedence the old form made
+# the ENTIRE chain up to that point best-effort, so a build that produced
+# no library still printed the success banner and exited 0.
 CMD ["sh", "-c", "mkdir -p /output/lib /output/include && \
-    cp /usr/local/lib/libama_cryptography* /output/lib/ || true && \
-    cp /usr/local/include/ama_cryptography.h /output/include/ && \
+    cp /usr/local/lib/libama_cryptography* /output/lib/ && \
+    cp /usr/local/include/ama_cryptography.h /usr/local/include/ama_dispatch.h /output/include/ && \
     echo 'AMA Cryptography C API libraries exported to /output' && \
     echo 'Contents:' && \
     ls -la /output/lib/ /output/include/"]

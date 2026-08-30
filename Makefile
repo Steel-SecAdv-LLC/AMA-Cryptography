@@ -173,7 +173,16 @@ lint:
 # collecting the full list, so docstring regressions fail the build.
 docs:
 	@echo "Generating documentation..."
-	@cd build && doxygen ../docs/Doxyfile
+	@# Doxygen runs from the REPOSITORY ROOT: docs/Doxyfile's relative
+	@# INPUT (include/ src/c/) and OUTPUT_DIRECTORY (build/docs) resolve
+	@# against the directory doxygen is STARTED in, not the Doxyfile's.
+	@# The previous recipe did `cd build && doxygen ../docs/Doxyfile`,
+	@# which died on a clean checkout (nothing creates build/ here) and,
+	@# when build/ existed, pointed INPUT at build/include and build/src/c
+	@# (absent) and wrote the output to build/build/docs — not the path
+	@# the recipe then printed.  mkdir -p is for OUTPUT_DIRECTORY only.
+	@mkdir -p build
+	@doxygen docs/Doxyfile
 	@AMA_SPHINX_BUILD=1 $(RUN) sphinx -W --keep-going -b html docs docs/_build/html
 	@echo "✓ Documentation generated"
 	@echo "  C API docs:      build/docs/html/index.html"
@@ -202,11 +211,16 @@ security-audit:
 security-scan:
 	@echo "Running comprehensive security scan..."
 	@echo "[1/3] Running bandit for Python security issues..."
-	@# Produce the JSON, then apply the SAME severity gate CI uses. The `|| true`
-	@# is only on the report-writing bandit run (bandit exits non-zero when it
-	@# finds anything at the -ll floor); the gate below is what actually decides
-	@# pass/fail, fail-closed on a missing/erroring report.
-	@$(RUN) bandit -r ama_cryptography/ -ll -f json -o bandit-report.json || true
+	@# Produce the JSON, then apply the SAME severity gate CI uses — over the
+	@# SAME scope and the same unfiltered report.  This ran over
+	@# ama_cryptography/ alone with -ll while ci.yml scans
+	@# `ama_cryptography/ setup.py tools/` with no severity pre-filter
+	@# (the gate below is the filter), so a green local run did not mean a
+	@# green gate.  --exit-zero replaces the old `|| true`: same effect
+	@# (bandit's own exit status is not the verdict), stated as a flag the
+	@# gate's comment in ci.yml already explains rather than swallowed in
+	@# shell.
+	@$(RUN) bandit -r ama_cryptography/ setup.py tools/ -f json -o bandit-report.json --exit-zero
 	@$(PYTHON) tools/check_bandit_severity.py bandit-report.json
 	@echo "[2/3] Running semgrep for cryptographic rules..."
 	@# semgrep scan exits 0 regardless of findings; the gate reads the JSON and
@@ -225,7 +239,7 @@ security-scan:
 	@# INTERPRETER's copy of a tool over a console script from some other
 	@# environment, and semgrep does not get that guarantee here. The version
 	@# it resolves is whatever is on PATH, which is why CI pins its own.
-	@semgrep --config .semgrep.yml ama_cryptography/ --json -o semgrep-report.json
+	@semgrep --config .semgrep.yml ama_cryptography/ setup.py tools/ --json -o semgrep-report.json
 	@$(PYTHON) tools/check_semgrep_severity.py semgrep-report.json
 	@echo "[3/3] Running pip-audit for dependency vulnerabilities..."
 	@# pip-audit exits non-zero when a known-vulnerable dependency is present;
