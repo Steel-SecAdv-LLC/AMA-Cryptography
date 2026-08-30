@@ -163,6 +163,9 @@ def build(bench: dict[str, Any], rawc: list[dict[str, Any]], baseline: dict[str,
                     .strftime("%Y-%m-%d %H:%M UTC")
                 )
             except ValueError:
+                # A timestamp that does not parse is still a measurement; the
+                # page keeps the pre-set "an unrecorded time" rather than
+                # failing the whole dashboard over one malformed string.
                 pass
         measured_html = (
             f"Measured at commit <code>{html.escape(commit_id[:12])}</code> "
