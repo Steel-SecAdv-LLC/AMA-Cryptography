@@ -685,20 +685,48 @@ void late(void) {
         ``TestPatternIsLinear``); the helper the call-site pass added had no
         case there, so the regression this file has already suffered twice was
         reintroduced in the one code path that was new.
+
+        Measured with the same floor-over-interleaved-rounds estimator, and
+        the same retry rule, as ``TestPatternIsLinear`` — the first revision
+        of this test took ONE sample per size against a 3.0x ceiling, the
+        exact single-shot methodology whose one-sided contention bias that
+        class's docstring records producing 2.89x-3.6x on a healthy linear
+        pattern (1 failure in 8 under saturation) and replaces.  Noise only
+        inflates a sample, so each size's floor over the rounds discards all
+        but the least-disturbed one, and a retry can only move floors toward
+        their true cost; a quadratic scan cannot be retried under the
+        ceiling.
         """
         import time
 
-        timings = []
-        for count in (2000, 4000):
-            text = "#define WIPE(a) memset((a), 0, 32)\n" + "WIPE(secret_key\n" * count
-            start = time.perf_counter()
-            gate.scan_text(text, Path("probe.c"))
-            timings.append(time.perf_counter() - start)
-        assert timings[0] < 1.0, f"N=2000 took {timings[0]:.2f}s"
-        growth = timings[1] / max(timings[0], 1e-6)
-        assert growth < 3.0, (
-            f"doubling the input multiplied the time by {growth:.2f} — linear is "
-            f"~2.0x; the forward scan has regained its quadratic form"
+        payloads = [
+            "#define WIPE(a) memset((a), 0, 32)\n" + "WIPE(secret_key\n" * count
+            for count in (2000, 4000)
+        ]
+
+        def growth() -> float:
+            """Adjacent floor ratio from one full interleaved measurement."""
+            timings = [float("inf")] * len(payloads)
+            for _ in range(_LINEARITY_ROUNDS):
+                for index, payload in enumerate(payloads):
+                    start = time.perf_counter()
+                    gate.scan_text(payload, Path("probe.c"))
+                    timings[index] = min(timings[index], time.perf_counter() - start)
+            assert timings[0] < 1.0, f"N=2000 floor took {timings[0]:.2f}s"
+            return timings[1] / max(timings[0], 1e-6)
+
+        best = float("inf")
+        for _ in range(_LINEARITY_ATTEMPTS):
+            best = min(best, growth())
+            if best < _LINEARITY_CEILING:
+                return
+
+        raise AssertionError(
+            f"doubling the unbalanced-parenthesis input multiplied the floor time "
+            f"by {best:.2f}x — the best of {_LINEARITY_ATTEMPTS} independent "
+            f"measurements, each the fastest of {_LINEARITY_ROUNDS} interleaved "
+            f"rounds per size — linear is ~2x; the forward scan has regained its "
+            f"quadratic form"
         )
 
 

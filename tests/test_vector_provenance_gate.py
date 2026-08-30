@@ -208,8 +208,9 @@ def test_a_deleted_vector_fails(
     shrunk below the floor is reported as unreadable (exit 2) before any
     per-file comparison, because a comparison over a tree that was not really
     read is the failure this gate's floor exists to prevent. The real tree
-    holds 37 files against a floor of 30, so an ordinary deletion lands here,
-    at exit 1, with the path named.
+    holds 30 files against a floor of 20 (tests/kat/PROVENANCE.json vs
+    MIN_FILES), so an ordinary deletion lands here, at exit 1, with the path
+    named.
     """
     root = tmp_path / "vectors"
     root.mkdir()

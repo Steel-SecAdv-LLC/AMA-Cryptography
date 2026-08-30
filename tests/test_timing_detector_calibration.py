@@ -416,20 +416,40 @@ class TestThePairwiseBarDoesNotDependOnArrivalOrder:
     PAIR: ClassVar[tuple[str, str]] = ("loose", "strict")
 
     @staticmethod
-    def _warmed(
-        profiles: dict[str, dict[str, float]], seed: int = 7, records: int = 4000
-    ) -> ResonanceTimingMonitor:
+    def _samples(seed: int = 7, records: int = 4000) -> list[tuple[str, float]]:
+        """The warm-up stream as explicit (operation, value) pairs.
+
+        Materialised rather than drawn inline so a test can re-interleave the
+        SAME values: reordering an inline RNG loop would also reassign which
+        draws each operation receives, and the comparison would no longer
+        isolate arrival order.
+        """
         import math
         import random
 
-        from ama_cryptography.monitoring import ResonanceTimingMonitor
-
         random.seed(seed)
-        monitor = ResonanceTimingMonitor(window_size=64, anomaly_profiles=profiles)
+        out: list[tuple[str, float]] = []
         for _ in range(records):
             for op, mu in (("strict", 10.0), ("loose", 25.0)):
-                monitor.record_timing(op, random.lognormvariate(math.log(mu), 0.25))
+                out.append((op, random.lognormvariate(math.log(mu), 0.25)))
+        return out
+
+    @staticmethod
+    def _warmed_from(
+        profiles: dict[str, dict[str, float]], samples: list[tuple[str, float]]
+    ) -> ResonanceTimingMonitor:
+        from ama_cryptography.monitoring import ResonanceTimingMonitor
+
+        monitor = ResonanceTimingMonitor(window_size=64, anomaly_profiles=profiles)
+        for op, value in samples:
+            monitor.record_timing(op, value)
         return monitor
+
+    @classmethod
+    def _warmed(
+        cls, profiles: dict[str, dict[str, float]], seed: int = 7, records: int = 4000
+    ) -> ResonanceTimingMonitor:
+        return cls._warmed_from(profiles, cls._samples(seed, records))
 
     def test_the_pair_budget_is_the_stricter_of_the_two(self) -> None:
         monitor = self._warmed(self.PROFILES)
@@ -477,11 +497,48 @@ class TestThePairwiseBarDoesNotDependOnArrivalOrder:
             f"budget the caller asked for is not reaching the pairs it is in"
         )
 
-    def test_the_bar_is_the_same_whichever_side_records_last(self) -> None:
-        """The property itself: order in, same bar out."""
-        forward = self._warmed(self.PROFILES)
-        reversed_profiles = dict(self.PROFILES)
-        backward = self._warmed(reversed_profiles, seed=7)
-        assert forward._calibrated_ratio_threshold(
-            self.PAIR, forward._pair_alarm_budget(self.PAIR)
-        ) == backward._calibrated_ratio_threshold(self.PAIR, backward._pair_alarm_budget(self.PAIR))
+    def test_the_live_budget_is_the_same_whichever_side_records_last(self) -> None:
+        """The order property: the live path's budget does not follow the recorder.
+
+        Two monitors ingest the SAME (operation, value) pairs; only the
+        interleaving differs — every per-iteration pair is swapped, so the
+        operation that records last flips from ``loose`` to ``strict`` while
+        each operation's own sample stream is identical.  The observable is
+        the recording path's cached ``(count, budget, bar)`` triple, for the
+        same reason ``test_the_recording_path_actually_uses_the_pair_budget``
+        reads it: a direct ``_calibrated_ratio_threshold`` call supplies the
+        budget itself, so it cannot see an order-dependent budget at all.
+        The first revision of this test compared direct calls on two monitors
+        built by the same seeded loop — bit-identical constructions — and
+        stayed green with the arrival-order fix reverted.
+
+        Only ``(count, budget)`` is compared across the two orders.  The bar
+        itself is a quantile over the pair's deviation history, and each
+        deviation is computed against the windows as they stood at that
+        instant, so its numeric value legitimately depends on interleaving —
+        measured here: 7.868 with loose recording last against 7.027 with
+        strict last, both under the pair's 0.002 budget.  What the
+        arrival-order fix guarantees, and what reverting it breaks, is the
+        budget: taken from whichever operation is recording, the two orders
+        cache 0.05 and 0.002 respectively and this assertion fails.
+        """
+        samples = self._samples()
+        swapped = [s for i in range(0, len(samples), 2) for s in (samples[i + 1], samples[i])]
+        assert swapped != samples and sorted(swapped) == sorted(samples)
+        assert samples[-1][0] != swapped[-1][0], "the swap did not flip the last recorder"
+
+        forward = self._warmed_from(self.PROFILES, samples)
+        backward = self._warmed_from(self.PROFILES, swapped)
+
+        fwd = forward._ratio_threshold.get(self.PAIR)
+        bwd = backward._ratio_threshold.get(self.PAIR)
+        assert (
+            fwd is not None and bwd is not None
+        ), "the recording path never computed a bar for this pair; the test has no subject"
+        assert fwd[2] is not None and bwd[2] is not None
+        assert fwd[:2] == bwd[:2], (
+            f"the live path's (count, budget) depends on which side recorded "
+            f"last: {fwd[:2]} when loose records last, {bwd[:2]} when strict "
+            f"does; the bar is being computed under the recorder's own budget "
+            f"rather than the pair's"
+        )
