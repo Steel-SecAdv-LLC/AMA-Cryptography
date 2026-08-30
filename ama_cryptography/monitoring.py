@@ -2118,11 +2118,25 @@ class ResonanceTimingMonitor:
             Requires minimum 8 samples. Returns empty dict if insufficient
             data. This is an on-demand operation (not hot path).
         """
-        if operation not in self.timing_history:
-            return {}
-
-        # Slice to window_size (on-demand, not hot path)
-        history_list = list(self.timing_history[operation])
+        # Snapshot under the monitor lock: record_timing() appends to this
+        # same deque under self._lock on every instrumented operation, and
+        # this was the one cross-thread reader of it that took no lock.
+        # Measured before judging it a crash: on CPython, list(deque) is a
+        # single C call under the GIL, so a concurrent append CANNOT land
+        # mid-copy and the unlocked read never raised — unlike the
+        # dict-keys walk in get_security_report and the
+        # _check_kernel_consistency reader, whose Python-level loops did
+        # (both reproduced as RuntimeError and are locked for that reason).
+        # The lock here buys the invariant, not a witnessed crash: the
+        # snapshot's atomicity stops being an implementation detail of one
+        # runtime's copy path and survives any refactor that turns this
+        # into a Python-level loop.  RLock, so the get_security_report
+        # caller that already holds it re-enters freely; the FFT below runs
+        # on the copy, outside the lock (on-demand, not hot path).
+        with self._lock:
+            if operation not in self.timing_history:
+                return {}
+            history_list = list(self.timing_history[operation])
         timings = history_list[-self.window_size :]
 
         if len(timings) < 8:

@@ -492,3 +492,82 @@ def test_compute_package_digest_matches_self_test(tmp_path: Any) -> None:
         digest_self_test = st._compute_module_digest()
 
     assert digest_signer == digest_self_test
+
+
+class TestPackageDigestCoversSubpackages:
+    """A .py under a subdirectory must be inside signature coverage.
+
+    Both digest enumerations (this signer's and the runtime mirror in
+    ``_self_test._compute_module_digest``) used a non-recursive
+    ``glob("*.py")``, so on the day a subpackage of .py code is added it
+    would be silently UNSIGNED — outside the digest, outside the bytecode
+    binding, and accepted by ``_detect_module_substitution`` (which allows
+    any module resolved under the package directory).  The enumeration is
+    now recursive and keyed by the package-relative path; for the current
+    flat layout that changes no byte of any digest.
+    """
+
+    @staticmethod
+    def _tree(tmp_path: Any) -> Any:
+        pkg = tmp_path / "pkg"
+        (pkg / "sub").mkdir(parents=True)
+        (pkg / "__init__.py").write_text("x = 1\n", encoding="utf-8")
+        (pkg / "sub" / "__init__.py").write_text("", encoding="utf-8")
+        (pkg / "sub" / "mod.py").write_text("secret = 2\n", encoding="utf-8")
+        return pkg
+
+    def test_a_subpackage_edit_changes_the_digest(self, tmp_path: Any) -> None:
+        pkg = self._tree(tmp_path)
+        before = bs._compute_package_digest(pkg)
+        (pkg / "sub" / "mod.py").write_text("secret = 3\n", encoding="utf-8")
+        assert bs._compute_package_digest(pkg) != before, (
+            "a subpackage .py changed and the signed digest did not — the "
+            "file is outside signature coverage"
+        )
+
+    def test_same_basename_in_two_directories_cannot_collide(self, tmp_path: Any) -> None:
+        """The path key, not the bare name, is what keeps the encoding injective."""
+        pkg = self._tree(tmp_path)
+        (pkg / "mod.py").write_text("top = 1\n", encoding="utf-8")
+        a = bs._compute_package_digest(pkg)
+        # Swap the two files' contents; a name-keyed absorption in sorted
+        # order could see the same (name, content) multiset.
+        (pkg / "mod.py").write_text("secret = 2\n", encoding="utf-8")
+        (pkg / "sub" / "mod.py").write_text("top = 1\n", encoding="utf-8")
+        assert bs._compute_package_digest(pkg) != a
+
+    def test_pycache_is_not_absorbed(self, tmp_path: Any) -> None:
+        pkg = self._tree(tmp_path)
+        before = bs._compute_package_digest(pkg)
+        cache = pkg / "__pycache__"
+        cache.mkdir()
+        (cache / "stray.py").write_text("ignored = 1\n", encoding="utf-8")
+        assert bs._compute_package_digest(pkg) == before
+
+    def test_runtime_and_signer_agree_on_the_real_tree(self) -> None:
+        """The two mirrors must stay byte-for-byte, or POST rejects the sign."""
+        from pathlib import Path
+
+        import ama_cryptography._self_test as st
+
+        pkg = Path(st.__file__).resolve().parent
+        assert st._compute_module_digest() == bs._compute_package_digest(pkg).hex()
+
+    def test_no_tracked_package_py_escapes_the_enumeration(self) -> None:
+        """The omission pin: every .py under the package is in the signed set."""
+        from pathlib import Path
+
+        import ama_cryptography._self_test as st
+
+        pkg = Path(st.__file__).resolve().parent
+        expected = {
+            p.relative_to(pkg).as_posix()
+            for p in pkg.rglob("*.py")
+            if p.name != "_integrity_signature.py" and "__pycache__" not in p.parts
+        }
+        enumerated = {
+            p.relative_to(pkg).as_posix()
+            for p in sorted(pkg.rglob("*.py"))
+            if p.name != "_integrity_signature.py" and "__pycache__" not in p.parts
+        }
+        assert expected == enumerated and expected, "the signed set must be non-empty"

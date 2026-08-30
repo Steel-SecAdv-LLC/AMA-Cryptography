@@ -1005,7 +1005,11 @@ class CryptoPostureController:
         if action == PostureAction.ROTATE_KEYS:
             return self._trigger_rotation()  # arms the throttle iff it succeeded
         if action == PostureAction.SWITCH_ALGORITHM:
-            self._trigger_algorithm_switch_if_due()
+            # False when the cooldown suppressed the switch: confirm_action
+            # keeps the pending action instead of popping it and telling the
+            # operator a switch ran that never did — mirroring the rotation
+            # half above.
+            return self._trigger_algorithm_switch_if_due()
         return True
 
     def _process_expired_pending_actions(self) -> None:
@@ -1069,8 +1073,9 @@ class CryptoPostureController:
                     # backoff elapses, or so reset() can clear a suspension.
                     logger.warning(
                         "Confirmed action %s (id=%s) was SUPPRESSED, not executed: "
-                        "posture rotation is in backoff or suspended after %d "
-                        "consecutive failures. The action remains pending. See "
+                        "the rotation throttle/backoff (after %d consecutive "
+                        "failures) or the algorithm-switch cooldown declined it. "
+                        "The action remains pending. See "
                         "get_posture_summary()['rotation_suspended']; a suspended "
                         "controller resumes only on reset().",
                         pa.action.name,
@@ -1311,8 +1316,16 @@ class CryptoPostureController:
         # rotation and one was tried.  Only the two guards above suppress.
         return True
 
-    def _trigger_algorithm_switch_if_due(self) -> None:
+    def _trigger_algorithm_switch_if_due(self) -> bool:
         """Switch algorithms unless the switch throttle is still cooling down.
+
+        Returns ``True`` when a switch attempt was allowed through, ``False``
+        when the cooldown suppressed it — so a caller consuming a pending
+        ``SWITCH_ALGORITHM`` action can tell "executed" from "skipped at
+        DEBUG level".  ``confirm_action`` used to pop the operator's pending
+        switch and log "Confirmed and executed action" for a switch this
+        method silently declined: the same consumed-confirmation defect the
+        rotation half already had fixed.
 
         Arms ``_last_switch_time`` on every switch attempt that is allowed
         through — not only on ones that changed the algorithm — so a controller
@@ -1325,9 +1338,10 @@ class CryptoPostureController:
                 self.rotation_cooldown - (now - self._last_switch_time),
                 self.rotation_cooldown,
             )
-            return
+            return False
         self._last_switch_time = now
         self._trigger_algorithm_switch()
+        return True
 
     def _trigger_algorithm_switch(self) -> None:
         """Switch to a stronger algorithm.

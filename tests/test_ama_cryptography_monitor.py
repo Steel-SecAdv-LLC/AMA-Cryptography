@@ -654,6 +654,54 @@ class TestSharedMonitorConcurrency:
             t.join()
         assert errors == [], f"report reader raced first-time inserts: {errors!r}"
 
+    def test_detect_resonance_survives_concurrent_recording(self) -> None:
+        """The third cross-thread reader of the class, now locked like its siblings.
+
+        ``detect_resonance()`` did ``list(self.timing_history[operation])``
+        with no lock while ``record_timing()`` appends to the same deque
+        under ``self._lock``.  Unlike the two sibling races above, this one
+        was measured NOT to crash on CPython — ``list(deque)`` is a single C
+        call under the GIL, so an append cannot land mid-copy — which makes
+        this a behavioural smoke rather than a pre-fix-crash pin: it holds
+        the locked snapshot to "no exception and no deadlock under
+        concurrent writers" (the reader takes the same RLock the writer
+        holds, and get_security_report calls it while already holding that
+        lock).  The lock exists so the snapshot's atomicity is the module's
+        own invariant instead of one runtime's copy-path detail; if a
+        refactor turns the snapshot into a Python-level loop, this test is
+        positioned to catch the regression the siblings caught.
+        """
+        import threading
+
+        monitor = AmaCryptographyMonitor()
+        # A long history makes each unprotected list() traversal wide enough
+        # for a concurrent append to land inside it.
+        for _ in range(4000):
+            monitor.monitor_crypto_operation("hot-op", 0.01)
+        stop = threading.Event()
+        errors: list[Exception] = []
+
+        def writer() -> None:
+            while not stop.is_set():
+                monitor.monitor_crypto_operation("hot-op", 0.01)
+
+        threads = [threading.Thread(target=writer) for _ in range(4)]
+        for t in threads:
+            t.start()
+        try:
+            deadline = time.time() + 2.0
+            while time.time() < deadline:
+                try:
+                    monitor.timing.detect_resonance("hot-op")
+                except Exception as exc:
+                    errors.append(exc)
+                    break
+        finally:
+            stop.set()
+            for t in threads:
+                t.join()
+        assert errors == [], f"detect_resonance raced concurrent recording: {errors!r}"
+
 
 class TestRefactoringAnalyzer:
     """Test suite for RefactoringEngine code analysis."""

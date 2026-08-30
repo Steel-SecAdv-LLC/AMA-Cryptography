@@ -35,7 +35,6 @@ import os
 import shutil
 import subprocess
 import sys
-import tempfile
 import textwrap
 import types
 from pathlib import Path
@@ -104,7 +103,7 @@ def _package() -> types.ModuleType:
     return sys.modules["ama_cryptography"]
 
 
-def _install_artefact(monkeypatch: pytest.MonkeyPatch, **fields: Any) -> None:
+def _install_artefact(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, **fields: Any) -> None:
     """Put a synthetic artefact SOURCE FILE in front of the real one.
 
     This used to install a synthetic module object into ``sys.modules`` and
@@ -120,24 +119,30 @@ def _install_artefact(monkeypatch: pytest.MonkeyPatch, **fields: Any) -> None:
     them an object that skips it.
     """
     lines = [f"{name} = {value!r}\n" for name, value in fields.items()]
-    path = _artefact_dir(monkeypatch) / "_integrity_signature.py"
+    path = _artefact_dir(tmp_path) / "_integrity_signature.py"
     path.write_text("".join(lines), encoding="utf-8")
     monkeypatch.setattr(_artefact_source, "artefact_path", lambda *_a, **_k: path)
 
 
-def _artefact_dir(monkeypatch: pytest.MonkeyPatch) -> Path:
+def _artefact_dir(tmp_path: Path) -> Path:
     """A per-test scratch directory for synthetic artefacts.
 
-    ``monkeypatch`` is taken (and unused) so every caller keeps the same shape
-    and the directory's lifetime is obviously tied to a single test.
+    Backed by pytest's ``tmp_path`` so its lifetime really is tied to the
+    test — the previous version called ``tempfile.mkdtemp`` (taking and
+    deleting a ``monkeypatch`` parameter "so every caller keeps the same
+    shape") and registered no cleanup: every test in
+    ``TestFailureClassification`` leaked an ``ama-artefact-*`` directory,
+    holding a synthetic ``_integrity_signature.py``, into the system temp
+    dir on every run, while the docstring claimed otherwise.
     """
-    del monkeypatch
-    return Path(tempfile.mkdtemp(prefix="ama-artefact-"))
+    directory = tmp_path / "ama-artefact"
+    directory.mkdir(exist_ok=True)
+    return directory
 
 
-def _remove_artefact(monkeypatch: pytest.MonkeyPatch) -> None:
+def _remove_artefact(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Point the reader at a path that does not exist (a tree with no signature)."""
-    missing = _artefact_dir(monkeypatch) / "absent.py"
+    missing = _artefact_dir(tmp_path) / "absent.py"
     monkeypatch.setattr(_artefact_source, "artefact_path", lambda *_a, **_k: missing)
 
 
@@ -148,11 +153,14 @@ class TestFailureClassification:
         st._INTEGRITY_FAILURE_KIND = None
         assert st.integrity_failure_was_stale_binding() is False
 
-    def test_stale_source_digest_is_repairable(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_stale_source_digest_is_repairable(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
         """A .py file changed post-build: the state ``--update --sign`` clears."""
         monkeypatch.setattr(st, "_compute_module_digest", lambda: _OTHER_DIGEST)
         _install_artefact(
             monkeypatch,
+            tmp_path,
             INTEGRITY_DIGEST_HEX=_GOOD_DIGEST,
             INTEGRITY_PUBKEY_HEX="00" * 32,
             INTEGRITY_SIGNATURE_HEX="00" * 64,
@@ -162,10 +170,13 @@ class TestFailureClassification:
         assert "signed digest mismatch" in detail
         assert st.integrity_failure_was_stale_binding() is True
 
-    def test_missing_field_is_tampering(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_missing_field_is_tampering(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
         monkeypatch.setattr(st, "_compute_module_digest", lambda: _GOOD_DIGEST)
         _install_artefact(
             monkeypatch,
+            tmp_path,
             INTEGRITY_DIGEST_HEX=_GOOD_DIGEST,
             INTEGRITY_PUBKEY_HEX="00" * 32,
             # INTEGRITY_SIGNATURE_HEX deliberately absent
@@ -175,10 +186,13 @@ class TestFailureClassification:
         assert "malformed" in detail
         assert st.integrity_failure_was_stale_binding() is False
 
-    def test_non_hex_fields_are_tampering(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_non_hex_fields_are_tampering(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
         monkeypatch.setattr(st, "_compute_module_digest", lambda: _GOOD_DIGEST)
         _install_artefact(
             monkeypatch,
+            tmp_path,
             INTEGRITY_DIGEST_HEX=_GOOD_DIGEST,
             INTEGRITY_PUBKEY_HEX="zz" * 32,
             INTEGRITY_SIGNATURE_HEX="00" * 64,
@@ -187,10 +201,13 @@ class TestFailureClassification:
         assert ok is False
         assert st.integrity_failure_was_stale_binding() is False
 
-    def test_wrong_field_sizes_are_tampering(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_wrong_field_sizes_are_tampering(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
         monkeypatch.setattr(st, "_compute_module_digest", lambda: _GOOD_DIGEST)
         _install_artefact(
             monkeypatch,
+            tmp_path,
             INTEGRITY_DIGEST_HEX=_GOOD_DIGEST,
             INTEGRITY_PUBKEY_HEX="00" * 16,  # 16 bytes, not 32
             INTEGRITY_SIGNATURE_HEX="00" * 64,
@@ -199,7 +216,9 @@ class TestFailureClassification:
         assert ok is False
         assert st.integrity_failure_was_stale_binding() is False
 
-    def test_trust_anchor_mismatch_is_tampering(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_trust_anchor_mismatch_is_tampering(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
         """An artefact signed under a key the compiled anchor does not name."""
         monkeypatch.setattr(st, "_compute_module_digest", lambda: _GOOD_DIGEST)
         monkeypatch.setattr(
@@ -209,6 +228,7 @@ class TestFailureClassification:
         )
         _install_artefact(
             monkeypatch,
+            tmp_path,
             INTEGRITY_DIGEST_HEX=_GOOD_DIGEST,
             INTEGRITY_PUBKEY_HEX="00" * 32,
             INTEGRITY_SIGNATURE_HEX="00" * 64,
@@ -218,7 +238,9 @@ class TestFailureClassification:
         assert "trust anchor mismatch" in detail
         assert st.integrity_failure_was_stale_binding() is False
 
-    def test_bad_signature_is_tampering(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_bad_signature_is_tampering(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
         """The headline case: the artefact verifies against nothing.
 
         Requires the native Ed25519 verifier, since a signature that fails to
@@ -231,6 +253,7 @@ class TestFailureClassification:
         monkeypatch.setattr(st, "_compute_module_digest", lambda: _GOOD_DIGEST)
         _install_artefact(
             monkeypatch,
+            tmp_path,
             INTEGRITY_DIGEST_HEX=_GOOD_DIGEST,
             INTEGRITY_PUBKEY_HEX="11" * 32,
             INTEGRITY_SIGNATURE_HEX="22" * 64,
@@ -251,7 +274,7 @@ class TestFailureClassification:
         digest_file.write_text(_GOOD_DIGEST, encoding="utf-8")
         monkeypatch.setattr(st, "_compute_module_digest", lambda: _OTHER_DIGEST)
         monkeypatch.setattr(st, "_INTEGRITY_DIGEST_FILE", digest_file)
-        _remove_artefact(monkeypatch)
+        _remove_artefact(monkeypatch, tmp_path)
 
         ok, detail = st.verify_module_integrity()
         assert ok is False
@@ -264,7 +287,7 @@ class TestFailureClassification:
         """Neither artefact nor digest file: nothing a re-sign is repairing."""
         monkeypatch.setattr(st, "_compute_module_digest", lambda: _OTHER_DIGEST)
         monkeypatch.setattr(st, "_INTEGRITY_DIGEST_FILE", tmp_path / "absent.txt")
-        _remove_artefact(monkeypatch)
+        _remove_artefact(monkeypatch, tmp_path)
 
         ok, detail = st.verify_module_integrity()
         assert ok is False
@@ -284,7 +307,7 @@ class TestFailureClassification:
         digest_file.write_text(_GOOD_DIGEST, encoding="utf-8")
         monkeypatch.setattr(st, "_compute_module_digest", lambda: _GOOD_DIGEST)
         monkeypatch.setattr(st, "_INTEGRITY_DIGEST_FILE", digest_file)
-        _remove_artefact(monkeypatch)
+        _remove_artefact(monkeypatch, tmp_path)
 
         ok, _detail = st.verify_module_integrity()
         assert ok is True

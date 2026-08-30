@@ -159,10 +159,20 @@ def _compute_package_digest(pkg_dir: Path) -> bytes:
     # Exclude the generated artefact from the digest — otherwise the digest
     # would depend on the signature it covers, making the construction
     # self-referential.
-    py_files = [p for p in sorted(pkg_dir.glob("*.py")) if p.name != "_integrity_signature.py"]
+    #
+    # RECURSIVE and keyed by package-relative POSIX path, byte-for-byte with
+    # the runtime mirror (_self_test._compute_module_digest): a non-recursive
+    # glob would leave a subpackage .py silently unsigned, and a name-only
+    # key would collide `a/x.py` with `b/x.py`.  For the current flat layout
+    # the relative path equals the name, so no existing signature changes.
+    py_files = [
+        p
+        for p in sorted(pkg_dir.rglob("*.py"))
+        if p.name != "_integrity_signature.py" and "__pycache__" not in p.parts
+    ]
     hasher.update(len(py_files).to_bytes(4, "big"))
     for py_file in py_files:
-        _absorb_entry(hasher, b"py", py_file.name, py_file.read_bytes())
+        _absorb_entry(hasher, b"py", py_file.relative_to(pkg_dir).as_posix(), py_file.read_bytes())
 
     kat_dir = pkg_dir / "_post_kats"
     kat_files = (

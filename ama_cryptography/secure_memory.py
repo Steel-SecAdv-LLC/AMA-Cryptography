@@ -373,14 +373,26 @@ def _python_fallback_memzero(data: Union[bytearray, memoryview]) -> None:
     below forces the final zero pass to be materialized: every byte must be
     observed as zero, so the JIT/optimizer cannot discard the pass without
     breaking the assertion's value dependency.
+
+    The passes run over a ``'B'``-format byte view, never over the caller's
+    item view: ``len(data)`` on a memoryview counts ITEMS, and item-wise
+    stores carry item semantics — on a signed-char view the ``0xFF`` pass
+    raised ``ValueError`` mid-wipe, and on a float view all three passes
+    "succeeded" (0.0 is the all-zero-bytes double) and then the ``acc |=``
+    barrier raised ``TypeError``.  That is the same items-vs-bytes defect
+    ``_byte_length()`` was added to close for every native backend; the
+    opt-in Python fallback was the one wiper left item-wise.  ``cast("B")``
+    requires C-contiguity, which ``_byte_length`` has already enforced by
+    the time any backend is called.
     """
-    length = len(data)
+    view = memoryview(data).cast("B")
+    length = len(view)
     for i in range(length):
-        data[i] = 0
+        view[i] = 0
     for i in range(length):
-        data[i] = 0xFF
+        view[i] = 0xFF
     for i in range(length):
-        data[i] = 0
+        view[i] = 0
     # Dead-store-elimination barrier: any optimizer that wanted to drop the
     # final zero-pass would have to prove ``acc`` is unused, which it can't —
     # the ``if acc != 0`` check below has a visible side effect (a
@@ -389,7 +401,7 @@ def _python_fallback_memzero(data: Union[bytearray, memoryview]) -> None:
     # ``PYTHONOPTIMIZE`` which would silently defeat the barrier.
     acc = 0
     for i in range(length):
-        acc |= data[i]
+        acc |= view[i]
     if acc != 0:
         raise SecureMemoryError(
             "_python_fallback_memzero: post-wipe verification failed "

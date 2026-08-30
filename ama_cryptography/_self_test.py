@@ -802,10 +802,23 @@ def _compute_module_digest() -> str:
     hasher = hashlib.sha3_256()
     hasher.update(_PACKAGE_DIGEST_FORMAT)
 
-    py_files = [p for p in sorted(pkg_dir.glob("*.py")) if p.name != "_integrity_signature.py"]
+    # RECURSIVE, and keyed by the package-relative POSIX path.  A
+    # non-recursive glob left any .py in a subpackage outside signature
+    # coverage entirely — silently unsigned rather than flagged as drift,
+    # on the day one is added.  For today's flat layout the relative path
+    # of every file IS its name, so this changes no byte of the digest and
+    # every existing signature still verifies; the path key is what keeps
+    # the encoding injective once `a/x.py` and `b/x.py` can both exist.
+    # The signer (_build_sign._compute_package_digest) mirrors this
+    # byte-for-byte.
+    py_files = [
+        p
+        for p in sorted(pkg_dir.rglob("*.py"))
+        if p.name != "_integrity_signature.py" and "__pycache__" not in p.parts
+    ]
     hasher.update(len(py_files).to_bytes(4, "big"))
     for py_file in py_files:
-        _absorb_entry(hasher, b"py", py_file.name, py_file.read_bytes())
+        _absorb_entry(hasher, b"py", py_file.relative_to(pkg_dir).as_posix(), py_file.read_bytes())
 
     kat_dir = pkg_dir / "_post_kats"
     kat_files = (
@@ -1169,7 +1182,11 @@ def _check_execution_integrity() -> Tuple[bool, int, int, List[str]]:
     skipped = 0
     problems: List[str] = []
 
-    for py_file in sorted(pkg_dir.glob("*.py")):
+    # Recursive, matching _compute_module_digest: a subpackage .py outside
+    # this walk would be outside the bytecode-poisoning check as well as the
+    # signature (and _detect_module_substitution accepts any module under
+    # pkg_dir, so nothing else would look at it).
+    for py_file in sorted(p for p in pkg_dir.rglob("*.py") if "__pycache__" not in p.parts):
         status, error = _verify_source_file_bytecode(py_file)
         if error is not None:
             problems.append(error)

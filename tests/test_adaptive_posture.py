@@ -588,6 +588,57 @@ class TestCryptoPostureController:
         controller._execute_action(PostureAction.SWITCH_ALGORITHM)
         assert on_switch.call_count == 1, "a second switch inside the window must be suppressed"
 
+    def test_a_cooldown_suppressed_switch_reports_false(self) -> None:
+        """``_execute_action`` must not report a suppressed switch as executed.
+
+        It used to return True unconditionally for SWITCH_ALGORITHM, so
+        ``confirm_action`` popped the operator's pending action and logged
+        "Confirmed and executed action" for a switch the cooldown silently
+        declined at DEBUG level — the same consumed-confirmation defect the
+        rotation half already had fixed.
+        """
+        on_switch = MagicMock()
+        controller = CryptoPostureController(on_algorithm_switch=on_switch, rotation_cooldown=300)
+        controller._last_switch_time = 0.0
+
+        assert controller._execute_action(PostureAction.SWITCH_ALGORITHM) is True
+        assert on_switch.call_count == 1
+
+        assert controller._execute_action(PostureAction.SWITCH_ALGORITHM) is False, (
+            "a switch the cooldown suppressed must report False so a pending "
+            "confirmation is not consumed for an action that never ran"
+        )
+        assert on_switch.call_count == 1
+
+    def test_confirming_a_cooldown_suppressed_switch_keeps_it_pending(self) -> None:
+        """The operator-facing half of the same defect, end to end."""
+        on_switch = MagicMock()
+        controller = CryptoPostureController(
+            on_algorithm_switch=on_switch,
+            rotation_cooldown=300,
+            confirmation_mode=True,
+        )
+        # Arm the switch cooldown as a just-executed switch would.
+        controller._last_switch_time = time.time()
+
+        from ama_cryptography.adaptive_posture import PendingAction
+
+        pending = PendingAction(
+            action_id="switch-1",
+            action=PostureAction.SWITCH_ALGORITHM,
+            reason="test: cooldown-suppressed confirm",
+            timestamp=time.time(),
+        )
+        controller._pending_actions.append(pending)
+
+        assert controller.confirm_action("switch-1") is False, (
+            "confirm_action must not report success for a switch the cooldown " "suppressed"
+        )
+        assert on_switch.call_count == 0
+        assert any(
+            pa.action_id == "switch-1" and not pa.confirmed for pa in controller._pending_actions
+        ), "the suppressed action must remain pending for a later confirm"
+
     def test_failed_rotation_does_not_unthrottle_the_paired_switch(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
