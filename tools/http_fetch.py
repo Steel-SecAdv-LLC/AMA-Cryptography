@@ -103,7 +103,11 @@ class _HTTPSOnlyRedirectHandler(urllib.request.HTTPRedirectHandler):
             # 3.14's finalizer handling escalated into a failure (unraisable
             # inside a deallocator) the first time this path ran end to end.
             # Close-then-raise keeps the refusal a refusal, leaking nothing.
-            fp.close()
+            # Guarded: the live opener always hands a real fp, but the
+            # handler's unit tests legitimately drive this policy check with
+            # fp=None, where there is no transfer to release.
+            if fp is not None:
+                fp.close()
             raise ValueError(
                 f"refusing a non-HTTPS redirect target: {newurl!r} "
                 f"(HTTP {code} from {req.full_url!r})"
