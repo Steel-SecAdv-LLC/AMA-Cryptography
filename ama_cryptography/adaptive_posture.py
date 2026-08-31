@@ -249,7 +249,9 @@ class PostureEvaluator:
         # input cannot double-count.  (2026-08 v5 audit, item 15 — alert-window
         # suppression.)
         scorable = monitor_report.get("scorable_alerts")
-        source_alerts = scorable if scorable is not None else monitor_report.get("recent_alerts", [])
+        source_alerts = (
+            scorable if scorable is not None else monitor_report.get("recent_alerts", [])
+        )
         new_alerts = self._alerts_not_yet_scored(source_alerts)
         timing_alerts = [a for a in new_alerts if a.get("type") == "timing"]
         pattern_alerts = [a for a in new_alerts if a.get("type") == "pattern"]
@@ -350,9 +352,7 @@ class PostureEvaluator:
         # incoming alert predates the cursor, the clock regressed: re-baseline
         # so the new alerts are scored (re-scoring at most the retained window).
         incoming = [
-            float(a["timestamp"])
-            for a in alerts
-            if isinstance(a.get("timestamp"), (int, float))
+            float(a["timestamp"]) for a in alerts if isinstance(a.get("timestamp"), (int, float))
         ]
         if incoming and max(incoming) < self._last_processed_alert_ts:
             self._last_processed_alert_ts = -1.0

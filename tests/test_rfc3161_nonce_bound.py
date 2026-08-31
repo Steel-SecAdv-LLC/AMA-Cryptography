@@ -11,6 +11,7 @@ CPython's ``int_max_str_digits`` (4300) and raised a RAW ``ValueError`` that
 escaped the documented ``TimestampError``-only contract (and could be a minor
 DoS). ``tst_info_nonce`` now refuses an implausibly-large nonce as malformed.
 """
+
 from __future__ import annotations
 
 import pytest

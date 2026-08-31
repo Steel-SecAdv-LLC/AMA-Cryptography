@@ -67,7 +67,9 @@ except Exception as _monitor_persist_exc:  # noqa: BLE001 -- degrade, never bric
     )
     try:
         _monitor = AmaCryptographyMonitor(enabled=True, nonce_persist_path=os.devnull)
-    except Exception:  # noqa: BLE001 -- last resort: monitoring off, library still imports (AUDIT-15)
+    except (
+        Exception
+    ):  # noqa: BLE001 -- last resort: monitoring off, library still imports (AUDIT-15)
         _monitor = create_monitor(enabled=False)
 
 # Import HMAC and HKDF from pqc_backends (native C) with pure-Python fallback

@@ -19,6 +19,7 @@ dominates so the streak accrues and the cap eventually trips.  Callback-only
 deployments (no ``rotation_manager``) keep counting the callback as the
 mechanism.
 """
+
 from __future__ import annotations
 
 from unittest.mock import MagicMock
@@ -53,9 +54,9 @@ class TestRotationSuccessAccounting:
             "a broken KMS with a healthy notifier was accounted as a success — "
             "the notifier masked the failure"
         )
-        assert ctl._last_rotation_time == 0.0, (
-            "the cooldown was armed on a rotation that never rotated a key"
-        )
+        assert (
+            ctl._last_rotation_time == 0.0
+        ), "the cooldown was armed on a rotation that never rotated a key"
 
     def test_masked_failure_streak_eventually_trips_the_cap(self) -> None:
         # The security property the mask defeated: with a healthy notifier over

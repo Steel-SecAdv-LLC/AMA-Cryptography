@@ -19,6 +19,7 @@ These tests pin BOTH halves: that the monitor emits the full list, and that the
 evaluator scores the buried critical from it — with the fallback path retained
 as an explicit witness of the pre-fix suppression.
 """
+
 from __future__ import annotations
 
 import types
@@ -54,9 +55,9 @@ class TestAlertWindowSuppression:
             "total_alerts": 11,
         }
         result = ev.evaluate(report)
-        assert result.signals["timing_alert_count"] == 1, (
-            "the buried timing critical was not scored even from scorable_alerts"
-        )
+        assert (
+            result.signals["timing_alert_count"] == 1
+        ), "the buried timing critical was not scored even from scorable_alerts"
         assert result.signals["timing_score"] > 0.0
 
     def test_fallback_to_recent_alerts_reproduces_the_suppression(self) -> None:
@@ -77,9 +78,7 @@ class TestAlertWindowSuppression:
         # Append alerts in exactly the shape monitoring.py itself appends them
         # ({type, anomaly, timestamp}); get_security_report copies self.alerts.
         for i in range(15):
-            mon.alerts.append(
-                {"type": "volume_spike", "anomaly": {}, "timestamp": 1000.0 + i}
-            )
+            mon.alerts.append({"type": "volume_spike", "anomaly": {}, "timestamp": 1000.0 + i})
         report = mon.get_security_report()
         assert len(report["recent_alerts"]) == 10
         assert len(report["scorable_alerts"]) == report["total_alerts"] >= 15

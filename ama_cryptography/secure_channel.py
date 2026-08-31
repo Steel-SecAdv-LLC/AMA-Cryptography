@@ -245,9 +245,7 @@ class ChannelMessage:
         # do: a frame with bytes past the tag is malformed, and silently
         # ignoring them invites parser-differential ambiguity.
         if offset != len(data):
-            raise ChannelError(
-                f"Malformed ChannelMessage: {len(data) - offset} trailing bytes"
-            )
+            raise ChannelError(f"Malformed ChannelMessage: {len(data) - offset} trailing bytes")
 
         return cls(
             session_id=session_id,

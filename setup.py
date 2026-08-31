@@ -601,6 +601,28 @@ class CMakeBuild(build_ext):
         # Ed25519 signed-integrity hook.  Runs on EVERY build.
         self._run_integrity_signer()
 
+    @staticmethod
+    def _stash_artefacts_aside(*pkg_dirs: Optional[Path]) -> list[tuple[Path, Path]]:
+        """Move each dir's artefact to ``.pre-sign`` and drop ``__pycache__``.
+
+        Extracted verbatim from _run_integrity_signer when the
+        --require-trust-anchor re-carry pushed that method over the C901
+        complexity ceiling; behaviour is unchanged and the restore/cleanup
+        paths still operate on the returned (artefact, aside) pairs.
+        """
+        stashed: list[tuple[Path, Path]] = []
+        for pkg_dir in pkg_dirs:
+            if pkg_dir is None or not pkg_dir.is_dir():
+                continue
+            artefact = pkg_dir / "_integrity_signature.py"
+            if artefact.is_file():
+                aside = pkg_dir / "_integrity_signature.py.pre-sign"
+                aside.unlink(missing_ok=True)
+                artefact.rename(aside)
+                stashed.append((artefact, aside))
+            shutil.rmtree(pkg_dir / "__pycache__", ignore_errors=True)
+        return stashed
+
     def _run_integrity_signer(self) -> None:
         """Sign and bind this build's artefact.  Runs on every build.
 
@@ -710,17 +732,7 @@ class CMakeBuild(build_ext):
         # digest is unaffected because the artefact is excluded from it by
         # construction; and the signer writes a fresh one moments later or the
         # build fails and the original comes back.
-        _stashed: list[tuple[Path, Path]] = []
-        for _pkg_dir in (src_pkg_dir, staged_pkg_dir):
-            if _pkg_dir is None or not _pkg_dir.is_dir():
-                continue
-            _artefact = _pkg_dir / "_integrity_signature.py"
-            if _artefact.is_file():
-                _aside = _pkg_dir / "_integrity_signature.py.pre-sign"
-                _aside.unlink(missing_ok=True)
-                _artefact.rename(_aside)
-                _stashed.append((_artefact, _aside))
-            shutil.rmtree(_pkg_dir / "__pycache__", ignore_errors=True)
+        _stashed = self._stash_artefacts_aside(src_pkg_dir, staged_pkg_dir)
 
         def _restore_stashed_artefacts() -> None:
             for _artefact, _aside in _stashed:

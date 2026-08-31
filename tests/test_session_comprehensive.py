@@ -195,9 +195,7 @@ class TestSessionState:
         assert session.rekey_count == 0
 
     def test_send_path_fails_closed_on_expired_session(self) -> None:
-        session = SessionState(
-            session_id=secrets.token_bytes(SESSION_ID_BYTES), ttl_seconds=0.0
-        )
+        session = SessionState(session_id=secrets.token_bytes(SESSION_ID_BYTES), ttl_seconds=0.0)
         assert session.is_expired
         with pytest.raises(SessionExpiredError, match="expired"):
             session.next_send_seq()

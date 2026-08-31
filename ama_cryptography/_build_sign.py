@@ -865,8 +865,7 @@ def main() -> int:
             seed_override=seed_override,
             trusted_pubkey=trusted_pubkey_env,
             require_trust_anchor=(
-                args.require_trust_anchor
-                or _env_flag_enabled(_INTEGRITY_REQUIRE_TRUST_ANCHOR_ENV)
+                args.require_trust_anchor or _env_flag_enabled(_INTEGRITY_REQUIRE_TRUST_ANCHOR_ENV)
             ),
             native_lib=native_lib,
         )

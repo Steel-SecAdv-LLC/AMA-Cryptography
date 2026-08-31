@@ -15,6 +15,7 @@ a logged warning) instead of aborting import. These tests run in a subprocess
 with an isolated HOME so the module-level ``_monitor`` is built fresh against a
 planted ledger.
 """
+
 from __future__ import annotations
 
 import subprocess
@@ -26,8 +27,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-_IMPORT_PROBE = textwrap.dedent(
-    """
+_IMPORT_PROBE = textwrap.dedent("""
     import ama_cryptography as ama
     import ama_cryptography.crypto_api as capi
     # library must be importable AND operational despite the corrupt ledger
@@ -35,8 +35,7 @@ _IMPORT_PROBE = textwrap.dedent(
     # the module monitor exists (degraded to in-memory, not None)
     assert capi._monitor is not None
     print("IMPORT_OK")
-    """
-)
+    """)
 
 
 def _import_with_home(tmp_home: Path) -> subprocess.CompletedProcess[str]:
