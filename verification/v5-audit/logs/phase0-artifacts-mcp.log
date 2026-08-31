@@ -1,0 +1,16 @@
+Source: GitHub MCP tool mcp__github__actions_list, method=list_workflow_run_artifacts,
+resource_id=33338946996, called 2026-08-31T18:04Z. Direct curl to api.github.com is
+blocked by the session proxy ("builtin injection failed (github)"), so this check ran
+through the MCP layer; response transcribed verbatim below (digests + expiry only).
+
+run 33338946996  head_branch=steel/systempqc-maint1  head_sha=32c3e0de27b7c21ceb8067c3e79fdaad1c4565d4
+ama-cryptography.intoto.jsonl  expired=false expires=2026-09-04T22:34:50Z sha256:3067a2e98868878bb38e68ea3c1a5f4e7fa7f17b3b81f7a1101fdb690e99389d
+signed-distribution            expired=false expires=2026-11-28T22:21:54Z sha256:bd57a92e032bfd1c0abbb86e980eb8efbde1d6cd32018b57499ac5aa5792e06b
+signing-artifacts-sign         expired=false expires=2026-11-28T22:21:54Z sha256:3a2da6399c6da6dff73deb39b449bf20248cefbb4a761bfc8a8d8e31e5465172
+wheels-windows-latest          expired=false expires=2026-09-29T22:34:07Z sha256:73264d931a66f19b6ec8105271c85dded5a3da339827bb1cffd782ec62ea2f5f
+wheels-macos-15-intel          expired=false expires=2026-09-29T22:29:37Z sha256:3f45f1f234225745a67c4756d00e48198a31d1b486ba139654415830afa5e557
+wheels-ubuntu-latest           expired=false expires=2026-09-29T22:27:17Z sha256:7ec554c8b678bcb3f6ad3da0705c45762232210bdbe03aaa9c28d29feb40cb15
+wheels-ubuntu-24.04-arm        expired=false expires=2026-09-29T22:26:34Z sha256:bc54c10ef6e55fe58d74fe63fbd874e628594675179a4c34663d0341c7cc944b
+wheels-macos-15                expired=false expires=2026-09-29T22:24:58Z sha256:6df58dbb513c7eba5336a30744836be84d1fb9c977d72311a1024a56f79f5d7e
+sdist                          expired=false expires=2026-09-29T22:23:00Z sha256:616b01f3a7462bf7872e5d3679eade112023e453fd4ae8de6dd4fac165b49b66
+VERDICT INPUT: both required artifacts (provenance, signed-distribution) expired=false -> exit 0

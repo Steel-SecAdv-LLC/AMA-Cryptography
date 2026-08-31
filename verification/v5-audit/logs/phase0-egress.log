@@ -1,0 +1,6 @@
+https://rekor.sigstore.dev/api/v1/log -> 200
+https://tuf-repo-cdn.sigstore.dev/ -> 200
+https://pypi.org/simple/ -> 200
+https://registry-1.docker.io/v2/ -> 401
+https://storage.googleapis.com/ -> 400
+https://freetsa.org/ -> 302
