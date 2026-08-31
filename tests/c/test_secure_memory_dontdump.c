@@ -17,6 +17,12 @@
  * Exit codes: 0 pass, 1 fail, 77 skip (non-Linux, or the environment
  * cannot mlock at all).
  */
+
+/* madvise() and MADV_DONTDUMP need _DEFAULT_SOURCE visibility under the
+ * strict -std=c11 lanes (same class as this suite's _POSIX_C_SOURCE
+ * fixes: gnu-mode gcc exposes them silently, strict mode does not). */
+#define _DEFAULT_SOURCE 1
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -88,6 +94,35 @@ int main(void) {
 
     const uintptr_t lo = (uintptr_t)target & ~((uintptr_t)page - 1u);
     const uintptr_t hi = ((uintptr_t)target + len + page - 1) & ~((uintptr_t)page - 1u);
+
+    /* Instrument calibration: prove this environment can RECORD the
+     * property before measuring the library against it.  A page-aligned
+     * madvise(MADV_DONTDUMP) on a fresh mmap page is unquestionably
+     * correct usage; if the kernel record this test reads (smaps "dd")
+     * does not reflect it — as under qemu-user, where /proc/self/smaps
+     * describes the emulator's own host mappings at translated addresses
+     * and target madvise advice may be discarded — then no outcome below
+     * could distinguish a library defect from an emulator artefact.
+     * Exit 77 exactly like this suite's other environment-gated skips.
+     * On a real Linux kernel this probe always sees the flag, so the
+     * test proceeds at full strength everywhere the measurement means
+     * something (the x86 lanes exercise it on real kernels every run). */
+    void *probe = mmap(NULL, page, PROT_READ | PROT_WRITE,
+                       MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (probe == MAP_FAILED) { printf("FAIL: mmap calibration probe\n"); free(raw); return 1; }
+    int probe_dd = -1;
+    if (madvise(probe, page, MADV_DONTDUMP) == 0) {
+        probe_dd = range_has_dontdump((uintptr_t)probe, (uintptr_t)probe + page);
+    }
+    munmap(probe, page);
+    if (probe_dd != 1) {
+        printf("SKIP: this environment does not surface MADV_DONTDUMP in "
+               "/proc/self/smaps for a direct page-aligned madvise "
+               "(qemu-user address-space translation?); the kernel-record "
+               "verification is impossible here\n");
+        free(raw);
+        return 77;
+    }
 
     /* Baseline: a fresh anonymous allocation must not already be marked,
      * otherwise this test proves nothing on this host. */
