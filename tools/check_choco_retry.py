@@ -123,6 +123,12 @@ def _logical_lines(text: str, continuation: str) -> list[tuple[int, str]]:
     continuation split the invocation past the regex and the call was never
     seen.  Splicing first makes the scan see what the shell sees; the reported
     line number stays the first physical line, which is where a reader looks.
+
+    A COMMENT line never continues.  Neither PowerShell nor a POSIX shell
+    carries a comment across a newline, so a trailing continuation character
+    inside one is comment text, not a splice — and honouring it swallowed the
+    NEXT physical line into a ``#``-prefixed logical line that ``scan_text``
+    skips, so a comment ending in a backtick hid the raw call under it.
     """
     lines: list[tuple[int, str]] = []
     pending: list[str] = []
@@ -131,7 +137,7 @@ def _logical_lines(text: str, continuation: str) -> list[tuple[int, str]]:
         if not pending:
             start = number
         body = raw.rstrip()
-        if body.endswith(continuation):
+        if body.endswith(continuation) and not body.lstrip().startswith("#"):
             pending.append(body[: -len(continuation)])
             continue
         pending.append(body)

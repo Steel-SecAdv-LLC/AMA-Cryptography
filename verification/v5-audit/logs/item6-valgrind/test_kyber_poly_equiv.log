@@ -1,0 +1,10 @@
+Kyber poly_{add,sub,reduce} multi-lane equivalence
+==========================================
+
+[0] barrett_reduce_ref output image, exhaustively
+  [ OK ] all 65,536 int16 inputs land in [0, 3329], congruent, 9 attain q
+INFO: dispatcher leaves kyber_poly_add NULL on this build/CPU
+INFO: dispatcher leaves kyber_poly_sub NULL on this build/CPU
+INFO: dispatcher leaves kyber_poly_reduce NULL on this build/CPU
+SKIP: no SIMD Kyber poly helper on this build/CPU
+==========================================

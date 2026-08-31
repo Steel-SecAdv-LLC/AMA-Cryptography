@@ -320,6 +320,19 @@ class TestLogicalLinesAndSegmentScopedExemption:
         assert len(found) == 1, found
         assert found[0].startswith("w.yml:2:"), found[0]
 
+    def test_a_comment_ending_in_a_backtick_does_not_swallow_the_next_line(self) -> None:
+        """PowerShell comments end at the physical line, always.
+
+        A trailing backtick inside a comment is comment text, not a
+        continuation — but the splice honoured it, folded the next line into a
+        ``#``-prefixed logical line, and ``scan_text`` skipped the lot.  The
+        choco call on the following line ran on the runner unexamined.
+        """
+        text = "  run: |\n    # retry rationale `\n    choco install cmake -y\n"
+        found = gate.scan_text(text, "w.yml")
+        assert len(found) == 1, found
+        assert found[0].startswith("w.yml:3:"), found[0]
+
     def test_a_raw_call_after_the_helper_is_not_exempt(self) -> None:
         text = "  run: .github/scripts/choco-install.ps1 ninja; choco install cmake\n"
         assert len(gate.scan_text(text, "w.yml")) == 1

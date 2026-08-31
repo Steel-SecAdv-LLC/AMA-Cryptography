@@ -1,0 +1,1 @@
+PASS: unaligned ama_secure_mlock yields kernel-recorded 'dd' (MADV_DONTDUMP) over the full range

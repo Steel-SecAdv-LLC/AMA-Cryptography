@@ -43,13 +43,6 @@
 
 #include "ama_dispatch.h"
 
-/* Detect a MemorySanitizer build (clang __has_feature). */
-#if defined(__has_feature)
-#  if __has_feature(memory_sanitizer)
-#    define AMA_TEST_UNDER_MSAN 1
-#  endif
-#endif
-
 #if defined(_MSC_VER)
 int main(void) {
     /* The dispatch cache code path is compiled out under MSVC (no

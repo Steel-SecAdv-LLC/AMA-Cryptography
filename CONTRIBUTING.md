@@ -197,28 +197,32 @@ ruff check .
 All functions must include comprehensive type hints:
 
 ```python
-from typing import List, Tuple, Optional
+from typing import Union
+
+from ama_cryptography.crypto_api import AmaCryptography, Signature
 
 def create_signature(
+    crypto: AmaCryptography,
     data: bytes,
-    private_key: ed25519.Ed25519PrivateKey
-) -> bytes:
+    secret_key: Union[bytes, bytearray]
+) -> Signature:
     """
-    Create Ed25519 signature for data.
+    Create signature for data using the configured algorithm.
 
     Args:
+        crypto: Configured AmaCryptography instance
         data: Raw bytes to sign
-        private_key: Ed25519 private key
+        secret_key: Secret key bytes (e.g. KeyPair.secret_key)
 
     Returns:
-        64-byte signature
+        Signature container holding the signature bytes and metadata
 
     Raises:
         ValueError: If data is empty
     """
     if not data:
         raise ValueError("Cannot sign empty data")
-    return private_key.sign(data)
+    return crypto.sign(data, secret_key)
 ```
 
 ### Documentation Requirements

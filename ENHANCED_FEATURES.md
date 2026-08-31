@@ -77,7 +77,7 @@ Helix evolution step      3.4 ms      0.18 ms    18.9x
 
 ### C Constant-Time Primitives
 
-All cryptographic operations execute in constant time:
+Secret-dependent comparisons, scrubbing, and swaps route through dedicated constant-time primitives:
 
 1. **ama_consttime_memcmp()**: Timing-attack resistant comparison
    - Volatile pointer usage prevents optimization
@@ -226,7 +226,7 @@ Automatic best-implementation selection at initialization:
 - IV/Nonce: 96 bits
 - Tag: 128 bits
 - Security: IND-CPA + INT-CTXT (128-bit quantum via Grover's bound)
-- **Note:** Lookup-table S-box, not constant-time for cache-timing in shared-tenant environments
+- **Note:** Constant-time by default — `AMA_AES_CONSTTIME=ON` builds the bitsliced (masked full-scan) S-box, and AES-NI / VAES / ARMv8-Crypto hardware kernels dispatch where available; the cache-timing-unsafe table S-box is built only by explicit opt-out (`-DAMA_AES_CONSTTIME=OFF` plus the `-DAMA_AES_TABLE_INSECURE=ON` acknowledgement, INVARIANT-20)
 
 ### X25519 (Key Exchange)
 
@@ -247,7 +247,7 @@ Automatic best-implementation selection at initialization:
 - Tag: 128 bits
 - Security: IND-CPA + INT-CTXT (128-bit quantum via Grover's bound)
 - **Constant-time by design** — no table lookups, no cache-timing concerns
-- Recommended alternative to AES-256-GCM in shared-tenant environments
+- Alternative AEAD to AES-256-GCM (whose default build is likewise constant-time via `AMA_AES_CONSTTIME=ON`)
 
 ### Argon2id (Password Hashing)
 
@@ -663,13 +663,16 @@ Note: C extensions may require additional setup on Windows.
 
 ### Constant-Time Operations
 
-All cryptographic comparisons and operations execute in constant time:
+Constant-time execution is guaranteed for — and scoped to — the surfaces verified in
+[CONSTANT_TIME_VERIFICATION.md](CONSTANT_TIME_VERIFICATION.md); operations whose
+inputs are public, such as Ed25519 signature verification, are variable-time by design:
 
 ✓ Memory comparisons (ama_consttime_memcmp)
 ✓ Conditional swaps (ama_consttime_swap)
 ✓ Array lookups (ama_consttime_lookup)
-✓ Signature verification
-✓ Key generation
+✓ Ed25519 signing (key-independent timing)
+✓ AES-GCM tag verification / HMAC-SHA256 verification comparison
+✓ ML-KEM-1024 decapsulation (constant-time implicit rejection)
 
 ### Memory Safety
 

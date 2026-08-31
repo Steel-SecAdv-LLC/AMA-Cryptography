@@ -562,14 +562,19 @@ carries this same repair hint. It matches how the native library is
 already treated: rebuild it without re-signing and import fails closed,
 because the artefact names bytes that are no longer there.
 
-The artefact this repository commits carries an empty binding map, but
-not by policy: a source checkout ships no built extensions, so there are
-none to bind. Sign the same tree after building them and the map is
-populated — measured, six extensions on this platform. The binding
-guarantee remains exact-or-fatal in a shipped wheel, where the artefact
-and the extensions are produced by one pipeline; in a source tree a
-listed-but-missing or present-but-uncovered extension stays a logged
-warning on developer builds, per the severity split above.
+The artefact this repository commits carries a populated binding map:
+six extensions, signed on the platform that built them, keyed by exact
+filename (ABI tag included). It is a local artefact in the sense above,
+and it stays valid only while the tree carries the bytes it names:
+rebuild an extension without re-signing and import fails closed on the
+digest mismatch — the same treatment the native library gets — while a
+checkout whose extensions are not built at all sees six
+listed-but-missing entries, a logged warning on developer builds per
+the severity split above. Both states are refreshed the same way:
+`AMA_BUILD_PIPELINE=1` with `integrity --update --sign` re-signs the
+tree as it stands and rewrites the map. The binding guarantee remains
+exact-or-fatal in a shipped wheel, where the artefact and the
+extensions are produced by one pipeline.
 
 An earlier revision of this section recorded the gap as blocked on a
 release-pipeline change, on the claim that repair tools rewrite the
@@ -702,11 +707,18 @@ is load-bearing for your deployment:
   `_integrity_digest.txt`, a plaintext file with no signature at all.
   This is inherent to any self-contained self-check — the anchor is what
   breaks the circularity.
-- **NOT covered at all:** the native shared library. The digest is
-  computed over the package's `.py` files only
-  (`_self_test._compute_module_digest`), so a substituted or patched
-  `libama_cryptography` is invisible to it. See the
-  `AMA_CRYPTO_LIB_PATH` note below.
+- **Also covered (v2/v3 artefacts):** the native shared library and the
+  compiled binding extensions. `_self_test._compute_module_digest`
+  hashes the `.py` files, but the signed composite additionally binds
+  the SHA3-256 of `libama_cryptography` — enforced before the object is
+  mapped (see "Pre-load native-library verification" above) — and the
+  per-file digest map of the binding extensions, so a substituted or
+  patched shared object is refused, not invisible. The same
+  write-capable-adversary caveat as the previous bullet applies: re-sign
+  the whole artefact and only a compiled trust anchor catches it. The
+  one deliberate exception is an operator's `AMA_CRYPTO_LIB_PATH`
+  override, reported UNVERIFIED when its bytes differ; see the note
+  below.
 
 A build is only tamper-evident against a write-capable adversary when
 `AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX` is compiled into the native

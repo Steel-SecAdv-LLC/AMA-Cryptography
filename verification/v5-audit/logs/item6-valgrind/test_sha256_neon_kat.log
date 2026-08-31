@@ -1,0 +1,1 @@
+SKIP: test_sha256_neon_kat — non-AArch64 host (ama_sha256_compress_neon not built)

@@ -1,0 +1,14 @@
+== trufflehog full-history ==
+trufflehog exit: 183 (0 = no findings, 183 = findings)
+TRUFFLEHOG FINDINGS PRESENT
+== gitleaks full-history ==
+gitleaks exit: 9 (0 = no findings, 9 = findings)
+gitleaks findings: 1224  FP1(vector material): 1209  FP2(identifier): 8  unclassified: 7
+UNCLASSIFIED: ('private-key', 'tests/kat/keyformats/openssl/Ed25519.key.pem', 1, '-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYD')
+UNCLASSIFIED: ('private-key', 'tests/kat/keyformats/openssl/P-521.key.pem', 1, '-----BEGIN PRIVATE KEY-----\nMIHuAgEAMBAG')
+UNCLASSIFIED: ('private-key', 'tests/kat/keyformats/openssl/P-384.key.pem', 1, '-----BEGIN PRIVATE KEY-----\nMIG2AgEAMBAG')
+UNCLASSIFIED: ('private-key', 'tests/kat/keyformats/openssl/P-256.key.pem', 1, '-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMG')
+UNCLASSIFIED: ('private-key', 'tests/kat/keyformats/openssl/X25519.key.pem', 1, '-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYD')
+UNCLASSIFIED: ('private-key', 'tests/kat/keyformats/openssl/secp256k1.key.pem', 1, '-----BEGIN PRIVATE KEY-----\nMIGEAgEAMBAG')
+UNCLASSIFIED: ('generic-api-key', 'COMPLETION_REPORT.md', 309, 'BIP32-compatible')
+ITEM9: NOT CLEAN (trufflehog=183 classifier=1)

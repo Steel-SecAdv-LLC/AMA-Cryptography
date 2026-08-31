@@ -722,6 +722,22 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--require-trust-anchor",
+        action="store_true",
+        help=(
+            "Refuse to sign unless the signature verifies against a "
+            "configured trust anchor — the same enforcement "
+            "AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR=1 requests via the "
+            "environment.  setup.py passes this flag when the INSTALLING "
+            "environment had that variable enabled: the variable itself is "
+            "scrubbed from the signer child (it would otherwise fail the "
+            "child's own import-time POST, which necessarily runs against a "
+            "tree whose artefact has just been moved aside), and without "
+            "this flag the scrub silently dropped the operator's demanded "
+            "anchor enforcement along with it."
+        ),
+    )
+    parser.add_argument(
         "--bind-extensions",
         action="store_true",
         help=(
@@ -848,7 +864,10 @@ def main() -> int:
             signed_message,
             seed_override=seed_override,
             trusted_pubkey=trusted_pubkey_env,
-            require_trust_anchor=_env_flag_enabled(_INTEGRITY_REQUIRE_TRUST_ANCHOR_ENV),
+            require_trust_anchor=(
+                args.require_trust_anchor
+                or _env_flag_enabled(_INTEGRITY_REQUIRE_TRUST_ANCHOR_ENV)
+            ),
             native_lib=native_lib,
         )
     except Exception as exc:

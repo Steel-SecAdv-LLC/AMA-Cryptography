@@ -31,6 +31,71 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > Compare `[4.0.0]` below, which is dated because it *is* released: tag
 > `v4.0.0`, published 2026-08-02.
 
+### Maintenance pass, fifteenth (2026-08-31) — independent v5 pre-merge audit: core-dump protection made real, signer anchor demand un-dropped, four gate bypasses closed
+
+An operator-directed 21-item verification pass over the whole PR (evidence
+ledger, negative controls, and logs committed under `verification/v5-audit/`).
+Every behaviour change below tightens toward fail-closed; each is pinned by a
+test verified to fail against the unfixed code.
+
+- **`ama_secure_mlock()` now actually applies `MADV_DONTDUMP` — the
+  documented core-dump protection had never existed in any Linux binary.**
+  Two stacked causes: the build's strict ISO C mode (`-std=c11`,
+  `__STRICT_ANSI__`) hides `MADV_*` from `<sys/mman.h>`, so the
+  `#ifdef MADV_DONTDUMP` block compiled out silently; and even when compiled,
+  `madvise(2)` EINVALs on the non-page-aligned addresses `malloc` returns
+  (`mlock(2)` accepts them, so the asymmetry was invisible).  Fixed with
+  `_DEFAULT_SOURCE` scoped to the TU, page-aligned outward-rounded advice, and
+  fail-closed reporting (lock undone, `AMA_ERROR_MEMORY` returned) when the
+  advice cannot be applied.  Proven against the kernel's own record:
+  `tests/c/test_secure_memory_dontdump.c` requires the `dd` VmFlag over a
+  locked, deliberately unaligned buffer, and fails against the old code.
+- **Post-free scrub proven at the byte level.**
+  `tests/c/test_secure_free_scrub.c` plants a 32-byte sentinel key in an
+  `ama_secure_alloc()` buffer and scans every anonymous rw mapping via
+  `/proc/self/mem` after release: plain `free()` leaves the sentinel findable
+  (the harness's negative control), `ama_secure_free()` leaves zero copies.
+- **`pip install .` no longer silently drops
+  `AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR=1`.**  setup.py scrubs that variable
+  from the signer child so the child's own import survives the artefact-less
+  tree — but the same variable is the signer's refuse-to-sign-unanchored
+  gate, so an anchored release pipeline got an unanchored signature with no
+  error.  The operator's demand now rides an explicit
+  `--require-trust-anchor` signer flag appended before the scrub
+  (`tests/test_build_sign.py::TestRequireTrustAnchorCliFlag`).
+- **Four CI-gate bypasses closed**, each with the bypass shape pinned red:
+  `tools/check_apt_retry.py` and `tools/check_choco_retry.py` no longer let a
+  comment ending in a continuation character swallow the next line (shell and
+  PowerShell comments do not continue, so a raw `apt-get`/`choco` there ran
+  unexamined); `tools/check_vector_provenance.py` now fails on ANY
+  unmanifested tracked file under a protected root instead of only
+  vector-suffixed ones (a `.hex`/`.bin` vector was silently outside the
+  gate), with a documented 7-entry housekeeping allowlist;
+  `tools/build_keyformat_corpus.py` routes through the hardened
+  `tools/http_fetch` helper so a redirect can never downgrade the corpus
+  transport off HTTPS on any hop.
+- **Kernel stack hygiene**: the SPHINCS scalar SHA-256 fallback
+  (`ama_sphincs_neon.c`) scrubs its message schedule (`w[0..15]` is the
+  verbatim HMAC `K^ipad`/`K^opad` block when reached via runtime dispatch),
+  and both Argon2 G kernels (`ama_argon2_avx2.c`, `ama_argon2_neon.c`) scrub
+  their password-derived `R`/`Z`/`scratch` staging, matching the treatment
+  the dilithium and AES-GCM kernels already had.  The vendored donna shim's
+  `ed25519_randombytes_unsafe` aborts on CSPRNG failure instead of
+  zero-filling (dead code held to the live-code fail-closed bar: all-zero
+  randomizers would make a hypothetically revived batch path accept forged
+  combinations).
+- **Tests made truthful**: the package-digest enumeration test was a
+  tautology (both sides built from the same `rglob`) and now pins the
+  signer's real file set; a secret-division gate test asserted the opposite
+  of its name; a key-format OID test carried a dead disjunct; each now states
+  and asserts the property it actually pins.
+- Documentation corrected against measurement in 14 files (stale AES S-box
+  claims vs the `AMA_AES_CONSTTIME=ON` default, SECURITY.md's pre-v3
+  "native library not covered" bullet vs the shipped six-entry binding map,
+  the `integrity --update` command that exits 2 as documented, CONTRIBUTING's
+  INVARIANT-1-violating PyCA example, and the wiki's pure-Python
+  constant-time fallback that the code deliberately refuses to have).
+
 ### Maintenance pass, fourteenth (2026-08-30) — full-diff audit remediation: every confirmed finding fixed, none deferred
 
 An exhaustive review of this branch's entire change set (18 subsystem review
@@ -5550,7 +5615,7 @@ resolved here.  The ones that changed behaviour rather than prose:
 
 Documentation claims corrected against measurement rather than restated: the
 SoftHSM2 lane runs **one** real-token test (`test_full_lifecycle`), not 51; the
-C suite is 65 suite files / 68 translation units, not 58 / 61 (60 / 63 when that pass measured it, 62 / 65 after it; the eleventh debt-closure pass added `tests/c/test_ed25519_canonical_r.c` and `tests/c/test_ed25519_scalarmult_contract.c`, and registered `tests/c/test_field_bench.c`, which had existed unbuilt since #370, and the thirteenth added `tests/c/test_dilithium_invntt_bound.c`, `tests/c/test_concurrent_init.c` and `tests/c/test_ed25519_unaligned_input.c`); the gated
+C suite is 67 suite files / 70 translation units (65 / 68 when the twelfth pass measured it; the 2026-08-31 v5 pre-merge audit added `tests/c/test_secure_memory_dontdump.c` and `tests/c/test_secure_free_scrub.c`), not 58 / 61 (60 / 63 when that pass measured it, 62 / 65 after it; the eleventh debt-closure pass added `tests/c/test_ed25519_canonical_r.c` and `tests/c/test_ed25519_scalarmult_contract.c`, and registered `tests/c/test_field_bench.c`, which had existed unbuilt since #370, and the thirteenth added `tests/c/test_dilithium_invntt_bound.c`, `tests/c/test_concurrent_init.c` and `tests/c/test_ed25519_unaligned_input.c`); the gated
 surface is what `tools/check_error_state_gating.py` reports (89
 native plus 10 Cython entry points), replacing two documents that disagreed at
 80 and 81; the canonical-host performance tables understate 5.0.0 on the AEAD

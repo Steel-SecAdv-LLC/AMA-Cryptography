@@ -57,11 +57,21 @@ import json
 from typing import Any
 import re
 import sys
-import urllib.request
 from pathlib import Path
 
+# Executed directly as a script, so `tools/` lands on sys.path but the repo root
+# does not; the shared fetch policy lives in the root's `tools` package.  The
+# same insert `tools/refresh_wycheproof_corpus.py` uses, for the same reason.
 REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from tools import http_fetch  # noqa: E402 -- repo-root path insert above (FETCH-003)
+
 CORPUS = REPO_ROOT / "tests" / "kat" / "keyformats"
+
+_HTTP_TIMEOUT = 120
+_USER_AGENT = "AMA-Crypto-KeyFormat-Corpus/1.0"
 
 # Every source document, with the exact revision the vendored bytes came from.
 SOURCES = {
@@ -101,17 +111,21 @@ def fetch(url: str) -> str:
     file's contents extracted into the corpus and then compared against itself.
     INVARIANT-36 requires every corpus source to be an IETF document; this is
     the half of that requirement which holds at fetch time.
+
+    The check below covers only the URL the caller supplied — the FIRST hop.
+    ``urllib.request``'s default redirect handler then follows any later
+    ``Location:`` hop, including one to ``http://`` or ``ftp://``, and this
+    function once used it bare, under a ``# nosec B310 -- https enforced``
+    that was true of one hop only.  So the transport is the shared one in
+    ``tools/http_fetch.py``, whose ``_HTTPSOnlyRedirectHandler`` re-applies the
+    rule to every redirect target — the same policy the Wycheproof and ACVP
+    fetchers already ride (FETCH-001), rather than a third private copy for the
+    next fetch-policy repair to miss.
     """
     if not url.startswith("https://"):
         raise ValueError(f"refusing a non-HTTPS corpus source URL: {url!r}")
-    # The suppression sits on the `urlopen` line, not on the closing `as
-    # response:` line — that is where ruff anchors S310, and a trailing
-    # comment on the wrong line of a wrapped call silently disarms it.
-    with urllib.request.urlopen(  # noqa: S310  # nosec B310 -- https enforced directly above (KFC-001)
-        url, timeout=120
-    ) as response:
-        text: str = response.read().decode("utf-8", "replace")
-    return text
+    raw = http_fetch.fetch_bytes(url, user_agent=_USER_AGENT, timeout=_HTTP_TIMEOUT)
+    return raw.decode("utf-8", "replace")
 
 
 def strip_page_furniture(text: str) -> str:

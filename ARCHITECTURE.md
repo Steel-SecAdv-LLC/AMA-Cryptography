@@ -143,7 +143,7 @@ AMA Cryptography is designed as a standalone cryptographic library. Any Python o
 | Constant-Time Utilities | memcmp, memzero, swap, lookup, copy | — | Side-channel resistance | **Full** (ama_consttime.c) |
 | Platform CSPRNG | getrandom/getentropy/BCryptGenRandom | — | Entropy source | **Full** (ama_platform_rand.c) |
 
-**C Library Source Files — measured 2026-05-16: 22 top-level `.c` files, 2 internal headers, 1 internal `.c`, and 4 public headers across `src/c/` and `include/`:**
+**C Library Source Files — measured 2026-08-31: 29 top-level `.c` files, 8 internal headers, 1 internal `.c`, and 4 public headers across `src/c/` and `include/`. Principal modules:**
 
 Core primitives:
 - `src/c/ama_core.c` - Library initialization, version info, feature detection, shared utilities
@@ -763,7 +763,7 @@ be compiled.
 
 ### Build System Architecture
 
-The C library uses CMake (`CMakeLists.txt`, ~270 lines) with the following key configuration:
+The C library uses CMake (`CMakeLists.txt`, ~1,300 lines) with the following key configuration:
 
 | Option | Default | Effect |
 |--------|---------|--------|
@@ -771,8 +771,9 @@ The C library uses CMake (`CMakeLists.txt`, ~270 lines) with the following key c
 | `AMA_AES_CONSTTIME` | ON | Add bitsliced AES S-box (`ama_aes_bitsliced.c`) for cache-timing hardening |
 | `AMA_BUILD_TESTS` | ON | Build C test suite (`tests/c/`) |
 | `AMA_BUILD_EXAMPLES` | ON | Build C examples (`examples/c/`) |
-| `AMA_TESTING_MODE` | OFF | Build test-only library with internal symbol visibility |
-| `AMA_ENABLE_AVX2` | OFF | Auto-detect and enable AVX2 SIMD optimizations |
+| `AMA_ENABLE_AVX2` | ON | Auto-detect and enable AVX2 SIMD optimizations |
+
+`AMA_TESTING_MODE` is not a user-facing `option()`: when `AMA_BUILD_TESTS=ON`, it is applied as a private compile definition on the separate `ama_cryptography_test` static library, exposing internal symbols (e.g. `randombytes` hooks for deterministic KAT testing) without contaminating the installable production libraries.
 
 When `AMA_USE_NATIVE_PQC=OFF`, the PQC source files are excluded and the library provides only classical primitives (SHA3, Ed25519, HKDF, AES-GCM).
 
@@ -837,7 +838,7 @@ docker run ama-cryptography:latest
 | Category | Purpose | Coverage Target | Files |
 |----------|---------|-----------------|-------|
 | Unit Tests | Individual function validation | 80% line coverage | Python test files under `tests/` (count enforced by `tools/check_documented_counts.py` — see the verified totals below) |
-| C Unit Tests | Native library validation | All C functions | 65 `test_*.c` registered via ctest in `tests/c/` (+ 1 standalone `bench_*.c` + 2 standalone `x25519_equiv_*.c`) |
+| C Unit Tests | Native library validation | All C functions | 67 `test_*.c` registered via ctest in `tests/c/` (+ 1 standalone `bench_*.c` + 2 standalone `x25519_equiv_*.c`) |
 | Integration Tests | Cross-component workflows | All public APIs | `test_integration_e2e.py`, `test_comprehensive_system.py` |
 | Performance Tests | Benchmark regression detection | All critical paths | `test_performance.py`, `benchmarks/` |
 | Security Tests | Cryptographic correctness | 100% crypto functions | `test_crypto_core_penetration.py`, `test_memory_security.py` |
@@ -845,7 +846,7 @@ docker run ama-cryptography:latest
 | Fuzz Tests | Input mutation testing | 15 C targets | `fuzz/fuzz_*.c` (16 sources; `fuzz_rng.c` is a helper) |
 | NIST ACVP Vectors | Official vector validation | 1,215 vectors, 12 algorithms (815 AFT + 400 SHA-3 MCT) | `nist_vectors/` |
 
-**Total:** 4,769 Python test functions across 204 test files, plus the
+**Total:** 4,782 Python test functions across 204 test files, plus the
 ctest-registered C tests and standalone C benchmark under `tests/c/`
 (the exact C-test count varies with build options — `AMA_USE_NATIVE_PQC`
 gates `test_x25519`, `test_chacha20poly1305`, `test_argon2id`,

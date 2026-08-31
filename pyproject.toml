@@ -401,6 +401,18 @@ ignore = [
     "RUF059",
     "S603", "S607",
 ]
+# verification/v5-audit/*: audit harnesses (NOT shipped, NOT imported by the
+# package). The refleak soak's build_ops is a deliberately flat catalogue of
+# public-API operations (one branch per module) and main is a linear
+# CLI-dispatch + slope-verdict; splitting either to satisfy McCabe would
+# obscure the flow. S/subprocess and assert rules do not apply to test-only
+# verification tooling.
+"verification/*" = [
+    "C901",
+    "S101", "S110", "S311", "S603", "S607",
+    "BLE001",
+    "E501",
+]
 
 # mccabe complexity threshold (replaces flake8 --max-complexity=15)
 [tool.ruff.lint.mccabe]

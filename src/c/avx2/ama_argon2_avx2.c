@@ -188,8 +188,8 @@ void ama_argon2_g_avx2(uint64_t out[128],
     /* Column-wise BlaMka: gather non-contiguous stride-16 pairs into a
      * scratch buffer, run blamka_round16, scatter back. The 8 column
      * groups each take two consecutive qwords per row (2c, 2c+1). */
+    uint64_t scratch[16];
     for (int col = 0; col < 8; col++) {
-        uint64_t scratch[16];
         for (int row = 0; row < 8; row++) {
             scratch[2 * row    ] = Z[2 * col + row * 16    ];
             scratch[2 * row + 1] = Z[2 * col + row * 16 + 1];
@@ -209,6 +209,14 @@ void ama_argon2_g_avx2(uint64_t out[128],
         __m256i vr = _mm256_loadu_si256((const __m256i *)(R + i));
         _mm256_storeu_si256((__m256i *)(out + i), _mm256_xor_si256(vz, vr));
     }
+
+    /* R/Z/scratch hold password-derived block material; the driver scrubs
+     * its heap matrix (ama_argon2.c) but the last invocation's stack frame
+     * would otherwise survive.  Same INVARIANT-6/12 treatment the AVX2
+     * dilithium/AES-GCM kernels give their staging buffers. */
+    ama_secure_memzero(R, sizeof(R));
+    ama_secure_memzero(Z, sizeof(Z));
+    ama_secure_memzero(scratch, sizeof(scratch));
 }
 
 #else

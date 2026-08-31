@@ -24,14 +24,25 @@ from __future__ import annotations
 
 import base64
 import importlib.util
+import io
 import json
 import shutil
+import sys
+import urllib.request
+import urllib.response
+from email import message_from_string
 from pathlib import Path
 from types import ModuleType
+from typing import Any
 
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from tools import http_fetch  # noqa: E402 -- repo-root path insert above (FETCH-003)
+
 TOOL_PATH = REPO_ROOT / "tools" / "build_keyformat_corpus.py"
 CORPUS = REPO_ROOT / "tests" / "kat" / "keyformats"
 
@@ -270,3 +281,86 @@ def test_a_jose_record_stripped_of_its_members_is_caught(tool: ModuleType, tmp_p
     path.write_text(json.dumps(data))
     problems = tool.verify_offline(corpus)
     assert len(problems) >= 2, problems
+
+
+# ---------------------------------------------------------------------------
+# The fetch transport: HTTPS on every hop, through the shared policy
+# ---------------------------------------------------------------------------
+class TestFetchTransportPolicy:
+    """``fetch`` must ride ``tools/http_fetch.py``, not its own ``urlopen``.
+
+    ``fetch`` validated the URL it was handed and then called
+    ``urllib.request.urlopen``, whose default ``HTTPRedirectHandler`` follows a
+    ``Location:`` whose scheme is in ``("http", "https", "ftp", "")`` — so the
+    first hop was HTTPS and every hop after it could be plaintext, under a
+    ``# nosec B310 -- https enforced directly above`` that was true of one hop.
+    The hardened transport (HTTPS re-checked on every redirect target by
+    ``_HTTPSOnlyRedirectHandler``, bounded retry) lives once, in
+    ``tools/http_fetch.py``; these tests pin the delegation and drive the
+    previously-bypassing input — a 302 off HTTPS — through ``fetch`` itself.
+    """
+
+    def test_the_fetch_goes_through_the_shared_policy(self) -> None:
+        """Source-level pin, exactly as ``tests/test_acvp_fetch_fails_closed.py``
+        pins the ACVP fetcher: this defect class has now appeared three times
+        against the same helper, and a private transport is how it returns."""
+        body = TOOL_PATH.read_text(encoding="utf-8")
+        assert "http_fetch.fetch_bytes" in body, "corpus fetch bypasses the shared policy"
+        assert "urlopen" not in body, "corpus fetch has grown its own unhardened transport"
+
+    def test_fetch_delegates_at_runtime(
+        self, tool: ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Non-vacuity for the source pin: the delegation must actually run."""
+        seen: list[str] = []
+
+        def fake(url: str, *, user_agent: str, timeout: int = 0, **_: Any) -> bytes:
+            assert user_agent, "the shared policy requires an identifying User-Agent"
+            seen.append(url)
+            return "answer key é".encode()
+
+        monkeypatch.setattr(http_fetch, "fetch_bytes", fake)
+        text = tool.fetch("https://www.rfc-editor.org/rfc/rfc9881.txt")
+        assert text == "answer key é"
+        assert seen == ["https://www.rfc-editor.org/rfc/rfc9881.txt"]
+
+    def test_a_non_https_source_url_is_refused(self, tool: ModuleType) -> None:
+        """The first-hop guard that always existed must survive the delegation."""
+        with pytest.raises(ValueError, match="non-HTTPS corpus source URL"):
+            tool.fetch("file:///etc/passwd")
+
+    def test_a_redirect_off_https_is_refused_end_to_end(
+        self, tool: ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The bypassing input: first hop HTTPS, ``Location: http://``.
+
+        The fakes stand in for the network one layer below the redirect logic,
+        so the real opener chain — including whatever redirect handler the
+        transport actually installs — is what processes the 302. Before the
+        delegation, this request was followed onto the recorded plaintext hop;
+        now it must be refused with the reason, and the plaintext handler must
+        never run.
+        """
+        followed: list[str] = []
+
+        def _response(req: urllib.request.Request, code: int, msg: str, headers: str) -> Any:
+            resp: Any = urllib.response.addinfourl(
+                io.BytesIO(b""), message_from_string(headers), req.full_url, code
+            )
+            resp.msg = msg
+            return resp
+
+        class RedirectingHTTPSHandler(urllib.request.HTTPSHandler):
+            def https_open(self, req: urllib.request.Request) -> Any:
+                return _response(req, 302, "Found", "Location: http://mirror.invalid/rfc9881.txt\n")
+
+        class RecordingHTTPHandler(urllib.request.HTTPHandler):
+            def http_open(self, req: urllib.request.Request) -> Any:
+                followed.append(req.full_url)
+                return _response(req, 200, "OK", "")
+
+        monkeypatch.setattr(urllib.request, "HTTPSHandler", RedirectingHTTPSHandler)
+        monkeypatch.setattr(urllib.request, "HTTPHandler", RecordingHTTPHandler)
+        with pytest.raises(ValueError, match="non-HTTPS redirect target"):
+            tool.fetch("https://www.rfc-editor.org/rfc/rfc9881.txt")
+        assert followed == [], f"the plaintext hop was followed: {followed}"

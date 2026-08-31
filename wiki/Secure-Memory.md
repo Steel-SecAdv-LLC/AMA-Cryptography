@@ -234,7 +234,12 @@ When the AMA native C library is available (built via CMake), the secure memory 
 - `secure_mlock()` / `secure_munlock()` via `ama_secure_mlock()` / `ama_secure_munlock()`
 - `constant_time_compare()` via `ama_consttime_memcmp()`
 
-Without the native C library, POSIX `mlock()`/`munlock()` and a pure-Python XOR accumulator are used as fallbacks.
+Without the native C library, `secure_mlock()`/`secure_munlock()` fall back to
+POSIX `mlock()`/`munlock()` via ctypes (and raise on non-POSIX hosts).
+`constant_time_compare()` has **no fallback** — it refuses to operate without
+the native library, for the reasons in the Implementation section above: the
+old pure-Python XOR accumulator was constant-time only in shape, and a
+fallback documented as constant-time that is not is worse than no fallback.
 
 ---
 

@@ -1,0 +1,39 @@
+=================================================
+AVX-512 4-way Keccak ↔ AVX2 ↔ scalar byte-identity
+=================================================
+
+  PASS: SHAKE128 ML-DSA-style scalar=AVX2 (lanes 0-3, nblocks=1)
+  PASS: SHAKE128 ML-DSA-style scalar=AVX-512 (lanes 0-3, nblocks=1)
+  PASS: SHAKE128 ML-DSA-style AVX2=AVX-512 (lanes 0-3, nblocks=1)
+  PASS: SHAKE128 ML-DSA-style scalar=AVX2 (lanes 0-3, nblocks=5)
+  PASS: SHAKE128 ML-DSA-style scalar=AVX-512 (lanes 0-3, nblocks=5)
+  PASS: SHAKE128 ML-DSA-style AVX2=AVX-512 (lanes 0-3, nblocks=5)
+  PASS: SHAKE128 ML-DSA-style scalar=AVX2 (lanes 0-3, nblocks=8)
+  PASS: SHAKE128 ML-DSA-style scalar=AVX-512 (lanes 0-3, nblocks=8)
+  PASS: SHAKE128 ML-DSA-style AVX2=AVX-512 (lanes 0-3, nblocks=8)
+  PASS: SHAKE128 1-byte inputs scalar=AVX2 (lanes 0-3, nblocks=2)
+  PASS: SHAKE128 1-byte inputs scalar=AVX-512 (lanes 0-3, nblocks=2)
+  PASS: SHAKE128 1-byte inputs AVX2=AVX-512 (lanes 0-3, nblocks=2)
+  PASS: SHAKE256 ML-DSA-style scalar=AVX2 (lanes 0-3, nblocks=1)
+  PASS: SHAKE256 ML-DSA-style scalar=AVX-512 (lanes 0-3, nblocks=1)
+  PASS: SHAKE256 ML-DSA-style AVX2=AVX-512 (lanes 0-3, nblocks=1)
+  PASS: SHAKE256 ML-DSA-style scalar=AVX2 (lanes 0-3, nblocks=4)
+  PASS: SHAKE256 ML-DSA-style scalar=AVX-512 (lanes 0-3, nblocks=4)
+  PASS: SHAKE256 ML-DSA-style AVX2=AVX-512 (lanes 0-3, nblocks=4)
+  PASS: SHAKE256 ML-DSA-style scalar=AVX2 (lanes 0-3, nblocks=7)
+  PASS: SHAKE256 ML-DSA-style scalar=AVX-512 (lanes 0-3, nblocks=7)
+  PASS: SHAKE256 ML-DSA-style AVX2=AVX-512 (lanes 0-3, nblocks=7)
+  PASS: SHAKE256 empty inputs scalar=AVX2 (lanes 0-3, nblocks=2)
+  PASS: SHAKE256 empty inputs scalar=AVX-512 (lanes 0-3, nblocks=2)
+  PASS: SHAKE256 empty inputs AVX2=AVX-512 (lanes 0-3, nblocks=2)
+  PASS: SHAKE128 heterogeneous lane lengths scalar=AVX2 (lanes 0-3, nblocks=3)
+  PASS: SHAKE128 heterogeneous lane lengths scalar=AVX-512 (lanes 0-3, nblocks=3)
+  PASS: SHAKE128 heterogeneous lane lengths AVX2=AVX-512 (lanes 0-3, nblocks=3)
+  PASS: SHA3-256 byte-identical via AVX-512 lane 0 (empty FIPS 202 KAT)
+  PASS: SHA3-256 byte-identical via AVX-512 lane 0 ("abc" FIPS 202 KAT)
+  PASS: SHA3-256 byte-identical via AVX-512 lane 0 (32-byte seed)
+  PASS: SHA3-256 byte-identical via AVX-512 lane 0 (135-byte (rate-1) block)
+
+=================================================
+Results: 31 checks, 0 failed
+=================================================

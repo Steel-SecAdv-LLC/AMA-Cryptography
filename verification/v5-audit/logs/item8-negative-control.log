@@ -1,0 +1,3 @@
+pre-release sentinel hits: 2
+post-plain-free sentinel hits: 1
+PASS(negative): unscrubbed secret remains visible on the heap — inspector proven able to detect a scrub failure

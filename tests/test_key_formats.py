@@ -2497,11 +2497,15 @@ def test_an_oid_edit_that_names_another_algorithm_is_accepted_as_that_one() -> N
     ed_spki = public.to_spki()
     x_spki = kf.PublicKey("X25519", public.key).to_spki()
 
+    assert len(ed_spki) == len(x_spki), "the two SPKIs should be the same length"
     differing = [i for i in range(len(ed_spki)) if ed_spki[i] != x_spki[i]]
-    assert differing == [len(differing) - 1 + differing[0]] or len(differing) == 1, (
-        "the Ed25519 and X25519 SPKI encodings should differ in exactly the OID "
-        f"octet; they differ at {differing}"
+    # Both encodings open with the fixed DER prefix 30 2A 30 05 06 03 2B 65 xx,
+    # so the final OID arc (112 vs 110) sits at index 8.
+    assert differing == [8], (
+        "the Ed25519 and X25519 SPKI encodings should differ in exactly the final "
+        f"OID octet at index 8; they differ at {differing}"
     )
+    assert (ed_spki[8], x_spki[8]) == (0x70, 0x6E)
     assert kf.load_spki(x_spki).algorithm == "X25519"
     assert kf.load_spki(ed_spki).algorithm == "Ed25519"
     assert kf.load_spki(x_spki).key == public.key

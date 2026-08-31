@@ -1,0 +1,15 @@
+==32173== Memcheck, a memory error detector
+==32173== Copyright (C) 2002-2022, and GNU GPL'd, by Julian Seward et al.
+==32173== Using Valgrind-3.22.0 and LibVEX; rerun with -h for copyright info
+==32173== Command: /home/user/AMA-Cryptography/build-release/bin/test_dispatch_only_env
+==32173== 
+OK: AMA_DISPATCH_ONLY='argon2-g-avx2' honored (active='argon2-g-avx2')
+==32173== 
+==32173== HEAP SUMMARY:
+==32173==     in use at exit: 0 bytes in 0 blocks
+==32173==   total heap usage: 1 allocs, 1 frees, 4,096 bytes allocated
+==32173== 
+==32173== All heap blocks were freed -- no leaks are possible
+==32173== 
+==32173== For lists of detected and suppressed errors, rerun with: -s
+==32173== ERROR SUMMARY: 0 errors from 0 contexts (suppressed: 0 from 0)

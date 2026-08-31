@@ -1303,11 +1303,18 @@ Check state: `ama_cryptography.module_status()`
 self-tests. If they pass, the module returns to OPERATIONAL.
 
 **Integrity Digest:** The module's source files are hashed at startup and
-compared to a stored digest. After legitimate code changes, regenerate:
+compared to a stored digest. After legitimate code changes, regenerate
+(build pipeline only):
 
 ```bash
-python -m ama_cryptography.integrity --update
+AMA_BUILD_PIPELINE=1 python -m ama_cryptography.integrity --update --sign
 ```
+
+A bare `--update` exits 2: the refresh is gated behind
+`AMA_BUILD_PIPELINE=1` so a post-install user cannot silently re-bless
+tampered sources, and `--sign` also regenerates the signed
+`_integrity_signature.py` artefact, which takes precedence over the plain
+digest at import. See `SECURITY.md` ("`--update` is build-pipeline-only").
 
 Verify the module integrity digest (runs POST as part of normal import):
 

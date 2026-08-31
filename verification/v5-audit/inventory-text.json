@@ -1,0 +1,2664 @@
+{
+ "files": [
+  {
+   "path": ".clang-format",
+   "status": "M",
+   "purpose": "C style reference; PR fixes invalid 'Language: C' (rejected by clang-format <20) to 'Cpp' and documents do-not-reformat scope",
+   "findings": []
+  },
+  {
+   "path": ".clang-tidy",
+   "status": "M",
+   "purpose": "Fail-closed clang-tidy config; PR replaces an unsupported lookahead HeaderFilterRegex (which silently matched nothing) with a positive alternation and removes a stale NOLINT claim",
+   "findings": []
+  },
+  {
+   "path": ".cppcheck-suppressions",
+   "status": "A",
+   "purpose": "Per-site cppcheck suppressions (5 uninitvar false positives with line pins) replacing four file-wide command-line suppressions; line pins verified to match current sources",
+   "findings": []
+  },
+  {
+   "path": ".github/CODEOWNERS",
+   "status": "M",
+   "purpose": "Ownership map (all @Steel-SecAdv-LLC); PR change is a trailing-blank-line removal only",
+   "findings": []
+  },
+  {
+   "path": ".github/copilot-instructions.md",
+   "status": "M",
+   "purpose": "AI-assistant guidance; PR corrects the integrity-refresh command to AMA_BUILD_PIPELINE=1 --update --sign and the invariant range to 43",
+   "findings": []
+  },
+  {
+   "path": ".github/scripts/apt-install.sh",
+   "status": "A",
+   "purpose": "Bounded, retrying apt update+install helper with total wall-clock budget, SIGKILL escalation, and fail-closed final attempt; cannot convert a failure into a pass",
+   "findings": []
+  },
+  {
+   "path": ".github/scripts/choco-install.ps1",
+   "status": "A",
+   "purpose": "Chocolatey install helper whose retries key on outcome (exit code AND not '0/0 packages' AND -RequirePath exists), closing the choco-exits-0-on-503 false success",
+   "findings": []
+  },
+  {
+   "path": ".github/workflows/acvp_validation.yml",
+   "status": "M",
+   "purpose": "1,215-vector ACVP self-attestation with floor + attestation-JSON cross-check and strict aggregating gate; PR routes apt through the retry helper",
+   "findings": []
+  },
+  {
+   "path": ".github/workflows/arm-qemu.yml",
+   "status": "M",
+   "purpose": "AArch64 cross-compile + QEMU ctest; PR adds no-Crypto-Ext lane, SVE2 VL=128/256 matrix, UBSan lane, KyberSlash secret-division gate on AArch64 objects, and path filters for the gate scripts",
+   "findings": []
+  },
+  {
+   "path": ".github/workflows/baseline-guard.yml",
+   "status": "M",
+   "purpose": "Benchmark-baseline justification gate; PR adds check_baseline_justification.py itself to the path filter so a weakened adjudicator re-runs the gate",
+   "findings": []
+  },
+  {
+   "path": ".github/workflows/ci-build-test.yml",
+   "status": "M",
+   "purpose": "C/Python build+test matrix, SoftHSM2/PyKCS11 HSM lanes on all 3 OSes, wheel-install benchmark gate, Docker smoke; PR fixes an rc=0 build-status bug, scopes Docker Hub secrets to the login step, widens mypy to whole tree",
+   "findings": []
+  },
+  {
+   "path": ".github/workflows/ci.yml",
+   "status": "M",
+   "purpose": "Primary test + code-quality workflow: full matrix incl. arm64, ~30 fail-closed gate scripts, Intel-SDE AVX-512 KAT (was silently skipped), Ed25519 donna/fe51 differential, C consumer link test, strict CI gate",
+   "findings": []
+  },
+  {
+   "path": ".github/workflows/corpus-provenance.yml",
+   "status": "M",
+   "purpose": "Vendored-corpus provenance (Wycheproof, key-format, and new NIST/Ascon/POST vector digest gates) with strict gate; PR adds the vector-provenance job and path filter for its gate script",
+   "findings": []
+  },
+  {
+   "path": ".github/workflows/dudect.yml",
+   "status": "M",
+   "purpose": "Constant-time verification: 4 legacy dudect lanes, per-slot nightly SIMD sweep with mandatory-vs-optional slot classification, 18 deterministic callgrind targets, KyberSlash and AVX-scoping gates; gate re-derives each job's trigger condition",
+   "findings": []
+  },
+  {
+   "path": ".github/workflows/fuzzing.yml",
+   "status": "M",
+   "purpose": "libFuzzer matrix (core + PQC), dictionary-validity gate, harness-reachability-derived max_len (was hardcoded 4096 truncating ML-DSA/SLH-DSA verify paths), Python parser fuzz lane, strict gate",
+   "findings": []
+  },
+  {
+   "path": ".github/workflows/integrity-anchor-check.yml",
+   "status": "M",
+   "purpose": "Verifies signing seed derives the configured trust anchor without printing the seed; PR scopes workflow_call secrets (no inherit), builds Release, adds CMakeLists.txt path filter",
+   "findings": []
+  },
+  {
+   "path": ".github/workflows/release.yml",
+   "status": "M",
+   "purpose": "Tag-only release pipeline: preflight (signed-tag shape, anchor refusal on canonical repo, version/SBOM/release-state coherence), cibuildwheel with post-repair re-sign, SLSA provenance, sigstore, opt-in PyPI, asset-inventory-checked immutable GitHub release",
+   "findings": []
+  },
+  {
+   "path": ".github/workflows/security.yml",
+   "status": "M",
+   "purpose": "pip-audit strict on lock file, unfiltered-Bandit + JSON severity gate, SBOM drift gate, TruffleHog with justified Lob exclusion; PR adds timeouts and widens Bandit scope to setup.py + tools/",
+   "findings": []
+  },
+  {
+   "path": ".github/workflows/static-analysis.yml",
+   "status": "M",
+   "purpose": "cppcheck (now fail-closed with pipefail), scan-build, CodeQL, two-config strict-warnings x86 + AArch64 NEON/SVE2, ASan/MSan/TSan/Valgrind with non-vacuity asserts, fail-closed clang-tidy, reproducible-build byte-equality, trigger-aware gate",
+   "findings": [
+    {
+     "severity": "info",
+     "location": ".github/workflows/static-analysis.yml:114 (cppcheck --enable=warning,performance,portability)",
+     "description": "The PR drops the 'style' category from cppcheck's --enable list (previously warning,style,performance,portability). This is a deliberate, documented scope reduction: the comment records 78 style findings, all opinion-class (variableScope, unusedStructMember, constParameterPointer), and notes that substantive C analysis is carried by fail-closed clang-tidy, scan-build, CodeQL and -Werror lanes. Reported so the operator sees the one place this PR narrows (rather than strengthens) a scanner; the trade appears sound since keeping style at --error-exitcode=1 made the gate permanently red and it was previously inert anyway (tee without pipefail meant the gate could never fail at all)."
+    }
+   ]
+  },
+  {
+   "path": ".gitignore",
+   "status": "M",
+   "purpose": "Standard Python/CMake ignores; PR adds .mypy-coverage/ and libFuzzer artifact patterns (slow-unit-*, crash-*, oom-*, timeout-*, leak-*) after one slow-unit file was accidentally committed and removed",
+   "findings": []
+  },
+  {
+   "path": ".pre-commit-config.yaml",
+   "status": "M",
+   "purpose": "Pre-commit hooks; PR scopes the file-rewriting hooks away from verbatim corpora (KAT vectors, seeds, vendor), brings the mypy hook to exact CI parity (flags, scope, pinned deps), keeps in-house secret and fdopen gates",
+   "findings": []
+  },
+  {
+   "path": ".semgrep.yml",
+   "status": "M",
+   "purpose": "Custom Python/C semgrep rules; PR adds honest comments: exact hardcoded-secret name list, and an ENFORCEMENT NOTE stating the C bare-memset rule cannot run under semgrep and is enforced by tools/check_c_secret_zeroization.py instead",
+   "findings": []
+  },
+  {
+   "path": "AMA_CRYPTOGRAPHY_ETHICAL_PILLARS.md",
+   "status": "M",
+   "purpose": "Original ethical-policy framework layered over FIPS primitives; PR replaces 'formally verified implementations' and the >=99.9% confidence figure with an explicit not-FIPS-validated / not-formally-verified status block and renames the 'Formal Verification Checklist'",
+   "findings": []
+  },
+  {
+   "path": "ARCHITECTURE.md",
+   "status": "M",
+   "purpose": "System architecture reference; PR corrects hashlib/INVARIANT-1 wording, invariant range to 43, RFC 3161 non-attestation boundary, test totals, and adds the 5.0.0 history row",
+   "findings": [
+    {
+     "severity": "minor",
+     "location": "ARCHITECTURE.md:766-777 (Build System Architecture) and ARCHITECTURE.md:146",
+     "description": "Stale build-system facts in a document this PR restamps to version 5.0.0 / 2026-08-24: CMakeLists.txt is described as '~270 lines' (actual: 1,318); the options table lists AMA_ENABLE_AVX2 default OFF (actual default in CMakeLists.txt:23 is ON) and lists AMA_TESTING_MODE as a CMake option with default OFF (no such option() exists \u2014 it is a target-level compile definition on ama_cryptography_test); the '22 top-level .c files, measured 2026-05-16' inventory predates several added translation units. All under-claim rather than over-claim capability, but the repository's own INVARIANT-16/documented-counts discipline is what makes restamped-but-stale rows worth flagging."
+    }
+   ]
+  },
+  {
+   "path": "CHANGELOG.md",
+   "status": "M",
+   "purpose": "PR adds the entire ~6,368-line [5.0.0]-Unreleased section: fourteen maintenance/verification passes with measured evidence, a breaking/behavioural changes table (22 rows), and audit remediation records; pre-5.0.0 history unchanged",
+   "findings": []
+  },
+  {
+   "path": "CMakeLists.txt",
+   "status": "M",
+   "purpose": "Build system 4.0.0->5.0.0: removes global -mavx2 (SIGILL fix) in favour of per-file ISA scoping across 7 families, adds RELRO/noexecstack/CET/BTI+PAC-RET hardening, export map + -Bsymbolic-functions, table-AES opt-in acknowledgement, fatal error on donna-on-non-x86, fat-LTO static-archive fix",
+   "findings": []
+  },
+  {
+   "path": "CODE_OF_CONDUCT.md",
+   "status": "M",
+   "purpose": "Contributor Covenant 2.1 with security-specific guidelines; PR change is version/date restamp only",
+   "findings": []
+  },
+  {
+   "path": "CONSTANT_TIME_VERIFICATION.md",
+   "status": "M",
+   "purpose": "Constant-time methodology: calibrated 5.0 threshold for max-over-21-rungs statistic, 2 ns effect-size floor with measured derivation and stated limits, staging discipline, per-lane info/blocking-counterpart table, honest ML-DSA/SLH-DSA variable-time carve-out, SVE2/AVX-512 coverage gaps stated",
+   "findings": []
+  },
+  {
+   "path": "CONTRIBUTING.md",
+   "status": "M",
+   "purpose": "Contribution guidelines; PR restamps version and points the lint step at 'make lint' (CI-exact scope/flags)",
+   "findings": [
+    {
+     "severity": "info",
+     "location": "CONTRIBUTING.md:200-221 (Type Hints example)",
+     "description": "The contributor-facing type-hints example demonstrates signing with PyCA cryptography's ed25519.Ed25519PrivateKey (private_key.sign(data)) \u2014 the exact third-party crypto dependency INVARIANT-1 forbids in this tree and that tools/check_vendor_isolation.py exists to keep out. Pre-existing text, but the document was restamped to 5.0.0 by this PR and this is a copy-paste template new contributors will follow; an in-house native_ed25519_* example (as used in AMA_CRYPTOGRAPHY_ETHICAL_PILLARS.md's example) would remove the hazard."
+    }
+   ]
+  },
+  {
+   "path": "CRYPTOGRAPHY.md",
+   "status": "M",
+   "purpose": "Algorithm overview and standards mapping; PR change is version/date restamp only",
+   "findings": [
+    {
+     "severity": "minor",
+     "location": "CRYPTOGRAPHY.md:170 (AES-256-GCM Implementation note); also CRYPTOGRAPHY.md:341",
+     "description": "Restamped to 5.0.0 while still stating AES-256-GCM 'Uses 256-byte lookup table S-box \u2014 not constant-time with respect to cache-timing', which has been false-by-default since AMA_AES_CONSTTIME=ON became the CMake default (INVARIANT-20: bitsliced constant-time S-box, with AES-NI/VAES/ARMv8 hardware dispatch); CONSTANT_TIME_VERIFICATION.md:505-527 documents the correct posture and even records this exact class of stale claim as having been corrected elsewhere. Direction is conservative (understates security) but two canonical docs now contradict each other. Line 341's flat algorithm ladder (ED25519->ML_DSA_65->SPHINCS_256F->HYBRID_SIG) also predates the 5.0.0 per-family ladders described in CHANGELOG glance row 3."
+    }
+   ]
+  },
+  {
+   "path": "CRYPTO_REVIEW_CHECKLIST.md",
+   "status": "M",
+   "purpose": "Mandatory review gate checklist for crypto-touching changes, with automated-gate cross-reference table; PR change is version/date restamp only",
+   "findings": []
+  },
+  {
+   "path": "CSRC_STANDARDS.md",
+   "status": "M",
+   "purpose": "Algorithm-to-standard registry; PR adds 15 missing rows (closing the 18 violations check_algorithm_registry.py found), corrects FROST to 'RFC 9591-style' with the domain-separation divergence stated, and adds the SP 800-90A/B/C RNG disclaimer",
+   "findings": []
+  },
+  {
+   "path": "ENHANCED_FEATURES.md",
+   "status": "M",
+   "purpose": "Feature overview; PR fixes the phantom ama_ed25519_avx2.c row, dispatch-info detected-vs-wired clarification, alpine 3.23 digest pin, compose invocation, and corrects the CI-workflow descriptions (no docker.yml, no license scan, no multi-arch)",
+   "findings": [
+    {
+     "severity": "minor",
+     "location": "ENHANCED_FEATURES.md:229; ENHANCED_FEATURES.md:664-688 (Security Guarantees); ENHANCED_FEATURES.md:763-765",
+     "description": "Three stale/overbroad claims survive in a doc restamped to 5.0.0: (1) line 229 repeats the 'Lookup-table S-box, not constant-time' AES description that contradicts the bitsliced AMA_AES_CONSTTIME=ON default (same defect as CRYPTOGRAPHY.md:170); (2) the Security Guarantees checklist asserts 'All cryptographic comparisons and operations execute in constant time' including '\u2713 Key generation' plus '\u2713 Power analysis resistance' and '\u2713 Fault injection detection' \u2014 CONSTANT_TIME_VERIFICATION.md:348-438 explicitly documents ML-DSA/SLH-DSA signing as variable-time by standard construction, and no fault-injection-detection mechanism exists in the tree, so this is the unqualified-claim shape INVARIANT-16/37 exist to prevent; (3) the version-compatibility table's 'GCC 9+ / Clang 10+' contradicts the INVARIANT-8 toolchain floor (GCC>=12, Clang>=15) that CMakeLists.txt enforces with FATAL_ERROR."
+    }
+   ]
+  },
+  {
+   "path": "IMPLEMENTATION_GUIDE.md",
+   "status": "M",
+   "purpose": "Deployment/integration guide; PR narrows the RNG claim ('continuous health testing' -> defence-in-depth repeated-output check, explicitly not SP 800-90B) and restamps version",
+   "findings": [
+    {
+     "severity": "minor",
+     "location": "IMPLEMENTATION_GUIDE.md:1305-1310 (Integrity Digest)",
+     "description": "The documented digest-refresh command 'python -m ama_cryptography.integrity --update' no longer works under 5.0.0: per this same PR's .github/copilot-instructions.md change, the bare --update form exits 2 (the refresh is gated on AMA_BUILD_PIPELINE=1 and must re-sign with --sign), and every workflow/doc updated by the PR uses 'AMA_BUILD_PIPELINE=1 python -m ama_cryptography.integrity --update --sign'. Failure is loud (exit 2), so this cannot silently mislead, but the operator guide documents a repair command that refuses to run."
+    }
+   ]
+  },
+  {
+   "path": "INVARIANTS.md",
+   "status": "M",
+   "purpose": "Canonical register INVARIANT-1..43; PR tightens the hashlib confinement, adds unpinned-action detection (INV-4), C-tree suppression pass + bare-marker rule (INV-13), _WIN32 vs _MSC_VER once-primitive (INV-15), benchmarks/ exception recorded for INV-36, sign_raw coverage for INV-28, corrected threshold/floor wording for INV-30, and PCT coverage-gate honesty for INV-41",
+   "findings": []
+  },
+  {
+   "path": "MANIFEST.in",
+   "status": "A",
+   "purpose": "sdist manifest grafting native build inputs (src/c, include, cmake, Cython sources) while excluding generated C and binaries",
+   "findings": []
+  },
+  {
+   "path": "MONITORING.md",
+   "status": "M",
+   "purpose": "3R monitoring guide rewritten for 5.0.0 measured-characteristics posture; ama_cryptography_monitor shim referenced in examples verified to exist at repo root",
+   "findings": []
+  },
+  {
+   "path": "Makefile",
+   "status": "M",
+   "purpose": "Build/test/lint/security targets; adds .PHONY coverage and PYTHON?=python3 / RUN:=$(PYTHON) -m indirection (lazily expanded, ordering safe)",
+   "findings": []
+  },
+  {
+   "path": "README.md",
+   "status": "M",
+   "purpose": "Project overview with 5.0.0 honesty updates (4.x-era figures labeled, PyPI-unregistered warning, v5.0.0-not-tagged note)",
+   "findings": [
+    {
+     "severity": "info",
+     "location": "line 1628 (footer) vs line 77 (header)",
+     "description": "Footer says 'Last updated: 2026-07-30' while the header block says 2026-08-24; the footer date was not refreshed by this PR's README edits."
+    }
+   ]
+  },
+  {
+   "path": "SECURITY.md",
+   "status": "M",
+   "purpose": "Security policy: integrity artefact v1/v2/v3 design, signer identity rules, trust-anchor guidance, threat coverage tables",
+   "findings": [
+    {
+     "severity": "minor",
+     "location": "lines 705-709, 'What the integrity check does and does not defend against' bullet",
+     "description": "Stale claim that the native shared library is 'NOT covered at all' and 'the digest is computed over the package's .py files only'. This is contradicted by the v2/v3 native-digest binding described earlier in the same file (lines ~313-351, ~469-511) and implemented in _self_test._verify_signed_integrity/_check_loaded_native_library plus the pre-load digest verification in pqc_backends._try_load_library. The doc under-claims coverage (fails safe), but an operator reading this section would draw the wrong conclusion about what a substituted libama_cryptography triggers."
+    },
+    {
+     "severity": "minor",
+     "location": "lines 565-568",
+     "description": "Claim that 'The artefact this repository commits carries an empty binding map' is contradicted by the committed ama_cryptography/_integrity_signature.py at PR head 32c3e0d, whose INTEGRITY_BINDING_DIGESTS_HEX carries six cpython-311-x86_64-linux-gnu .so entries. The sentence describes a source-checkout state the committed artefact no longer reflects."
+    }
+   ]
+  },
+  {
+   "path": "THREAT_MODEL.md",
+   "status": "M",
+   "purpose": "Threat catalog updated for v5: AES-NI marked implemented, trust-bootstrap row, INVARIANT-20 acknowledgment, safety-row correction",
+   "findings": []
+  },
+  {
+   "path": "ama_cryptography.pc.in",
+   "status": "M",
+   "purpose": "pkg-config template; fixes libdir/includedir to substitute @CMAKE_INSTALL_LIBDIR@/@CMAKE_INSTALL_INCLUDEDIR@",
+   "findings": []
+  },
+  {
+   "path": "ama_cryptography/__init__.py",
+   "status": "M",
+   "purpose": "Package init: pre-import tamper gate for Cython binding extensions (_refuse_tampered_bindings_before_import via AST-read artefact), POST fail-closed import with narrowed diagnostic/signer escapes, lazy exports",
+   "findings": []
+  },
+  {
+   "path": "ama_cryptography/_artefact_source.py",
+   "status": "A",
+   "purpose": "AST-literal reader of the integrity artefact SOURCE text (never imports it), defeating poisoned __pycache__ .pyc substitution; rejects non-literal constructs and empty artefacts",
+   "findings": []
+  },
+  {
+   "path": "ama_cryptography/_build_sign.py",
+   "status": "M",
+   "purpose": "Wheel-build integrity signer: framed injective package digest v2, v3 composite binding native lib + binding-extension digests, --bind-extensions, atomic artefact write with pyc unlink, stuck-entropy double-draw check",
+   "findings": [
+    {
+     "severity": "minor",
+     "location": "docstring lines 394-395 vs _generate_keypair lines 477-484",
+     "description": "Docstring claims the private key is 'held only in a local bytearray and overwritten with secure_memzero before return so it does not survive on the build host's heap', but the 32-byte seed is first materialized as the immutable bytes object second_draw (os.urandom(32) at line 478), which is copied into the wiped bytearray and never itself wiped (immutable bytes cannot be). The wipe claim is overstated; exposure is limited to the signer process lifetime on the build host."
+    }
+   ]
+  },
+  {
+   "path": "ama_cryptography/_integrity_digest.txt",
+   "status": "M",
+   "purpose": "Plaintext fallback SHA3-256 package digest; consistent with the committed artefact's INTEGRITY_DIGEST_HEX at PR head",
+   "findings": []
+  },
+  {
+   "path": "ama_cryptography/_integrity_signature.py",
+   "status": "M",
+   "purpose": "Committed v3 integrity artefact: py digest, native-library digest, six binding-extension digests, ephemeral Ed25519 pubkey and v3 composite signature, BUILD_PIPELINE_VERSION=3",
+   "findings": []
+  },
+  {
+   "path": "ama_cryptography/_module_state.py",
+   "status": "M",
+   "purpose": "FIPS 140-3 state leaf: SELF_TEST/OPERATIONAL/ERROR machine, check_crypto_permitted, health-tested secure_token_bytes (digest-compare continuous test with injected native SHA-256 kernel), pairwise-consistency-test helpers",
+   "findings": []
+  },
+  {
+   "path": "ama_cryptography/_self_test.py",
+   "status": "M",
+   "purpose": "POST orchestrator: pre-integrity KATs, v1/v2/v3 signed-integrity verification with native-library and binding-extension digest checks, execution-integrity (recompiled code-object comparison incl. co_exceptiontable, hash-based pyc liveness), KAT/oracle/RNG stages",
+   "findings": []
+  },
+  {
+   "path": "ama_cryptography/adaptive_posture.py",
+   "status": "M",
+   "purpose": "Adaptive security posture: PostureEvaluator (decaying peak-hold accumulator, hysteresis, alert cursor) and CryptoPostureController (per-family algorithm ladders, rotation failure backoff)",
+   "findings": []
+  },
+  {
+   "path": "ama_cryptography/ascon.py",
+   "status": "M",
+   "purpose": "Ascon-AEAD128/Hash256 ctypes surface; key/nonce generation rerouted through health-tested secure_token_bytes with error-state gating",
+   "findings": []
+  },
+  {
+   "path": "ama_cryptography/crypto_api.py",
+   "status": "M",
+   "purpose": "Algorithm-agnostic API: providers, keypair cache, file-locked AES-GCM nonce counter slots, create/verify_crypto_package with add-on layer honesty (present-but-unverifiable recorded False) and key-pinning requirement for all_valid",
+   "findings": []
+  },
+  {
+   "path": "ama_cryptography/double_helix_engine.py",
+   "status": "M",
+   "purpose": "Non-cryptographic math engine; version bump, ASCII-safe log strings, converge() rollback logic",
+   "findings": []
+  },
+  {
+   "path": "ama_cryptography/equations.py",
+   "status": "M",
+   "purpose": "Non-cryptographic math helpers; adds Gershgorin lower bound / symmetric part / dominant eigenvector and fixes enforce_sigma_quadratic_threshold's previous Rayleigh-quotient no-op scaling",
+   "findings": []
+  },
+  {
+   "path": "ama_cryptography/exceptions.py",
+   "status": "M",
+   "purpose": "Exception hierarchy; version bump only",
+   "findings": []
+  },
+  {
+   "path": "ama_cryptography/hybrid_combiner.py",
+   "status": "M",
+   "purpose": "Bindel-style dual-PRF HKDF hybrid KEM combiner; version bump only",
+   "findings": []
+  },
+  {
+   "path": "ama_cryptography/integrity.py",
+   "status": "M",
+   "purpose": "Integrity CLI; --update --sign now forwards --bind-extensions to the signer via runpy argv",
+   "findings": []
+  },
+  {
+   "path": "ama_cryptography/key_formats.py",
+   "status": "M",
+   "purpose": "Strict DER/PEM/JWK/COSE key codecs with canonical-encoding enforcement and RFC 9881 PQ private-key CHOICE handling; jwk_thumbprint moved from hashlib.new to a native fixed-hash table (MD5/SHA-1 no longer accepted)",
+   "findings": []
+  },
+  {
+   "path": "ama_cryptography/key_management.py",
+   "status": "M",
+   "purpose": "HD derivation (BIP32/BIP39 on native PBKDF2-HMAC-SHA512), rotation manager, SecureKeyStorage with KDF policy floors and v3 AAD binding plus crash-safe KDF migration, SoftHSM path additions",
+   "findings": []
+  },
+  {
+   "path": "ama_cryptography/legacy_compat.py",
+   "status": "M",
+   "purpose": "Legacy package API: hashlib/secrets purged to native + secure_token_bytes, INVARIANT-35 refusals for unknown hash_version and signature_format_version (previously fell through to weaker V1 construction), rfc3161 result-key deprecation shim",
+   "findings": []
+  },
+  {
+   "path": "ama_cryptography/monitoring.py",
+   "status": "M",
+   "purpose": "3R monitoring: calibrated robust-MAD timing monitor with sign CUSUM and Fisher g-test, fail-closed NonceTracker persistence, Anscombe volume spike detector, note-artifact detector, fail-closed refactoring baseline, lock-consistent alert pruning",
+   "findings": []
+  },
+  {
+   "path": "ama_cryptography/pqc_backends.py",
+   "status": "M",
+   "purpose": "Native backend hub: pre-load digest-verified library loading (/proc/self/fd mapping), ABI v5 handshake with full disown of rejected objects, binding-import memory-safety gate, ctypes surfaces and wrappers for ML-KEM/ML-DSA/SLH-DSA/Ed25519/X25519/NIST-P/secp256k1/LMS/AEAD/hash/HMAC/KDF families with INVARIANT-41 pairwise tests and INVARIANT-6 borrow/wipe discipline",
+   "findings": []
+  },
+  {
+   "path": "ama_cryptography/rfc3161_timestamp.py",
+   "status": "M",
+   "purpose": "In-tree RFC 3161 client/codec: capability table, TokenVerification with raising __bool__ (INVARIANT-37 binding-only honesty), thread-local MockTSA gating, bounded TSA reads, native hash table",
+   "findings": []
+  },
+  {
+   "path": "ama_cryptography/secure_channel.py",
+   "status": "M",
+   "purpose": "Noise-NK-style channel: handshake state abandoned on all failure paths, epoch-bound AAD, rekey budget enforcement, constant-time length-pinned comparisons",
+   "findings": []
+  },
+  {
+   "path": "ama_cryptography/secure_memory.py",
+   "status": "M",
+   "purpose": "Secure wipe and constant-time compare: _byte_length fixed to memoryview nbytes (non-contiguous refused), cast-view python fallback, min-length-bounded native memcmp, mlock/munlock",
+   "findings": []
+  },
+  {
+   "path": "ama_cryptography/session.py",
+   "status": "M",
+   "purpose": "SessionStore: token generation moved from secrets to health-tested secure_token_bytes with fail-closed collision handling",
+   "findings": []
+  },
+  {
+   "path": "assets/visuals_manifest.json",
+   "status": "A",
+   "purpose": "Provenance manifest for generated charts/dashboards: generation timestamps, output list, test-count inputs with uncategorised-file inventory",
+   "findings": [
+    {
+     "severity": "info",
+     "location": "test_coverage.total_tests / n_files (lines 20-21)",
+     "description": "Manifest records total_tests=4767 across n_files=203 while README.md cites 4,769 tests / 204 files; a small count drift between the generated manifest and the prose it substantiates."
+    }
+   ]
+  },
+  {
+   "path": "benchmark-report.md",
+   "status": "M",
+   "purpose": "Regenerated benchmark report with provenance block (commit, host, exact command) and regression-vs-floor semantics",
+   "findings": []
+  },
+  {
+   "path": "benchmarks/README.md",
+   "status": "M",
+   "purpose": "Benchmark provenance policy and competitive-artifact inventory rows",
+   "findings": []
+  },
+  {
+   "path": "benchmarks/__init__.py",
+   "status": "A",
+   "purpose": "Package marker making benchmarks a real package for mypy --strict module mapping",
+   "findings": []
+  },
+  {
+   "path": "benchmarks/_dashboard_template.html",
+   "status": "reviewed (M)",
+   "purpose": "Self-contained HTML template for generate_dashboard.py; PR adds a __MEASURED__ placeholder so the page names the commit/version/time the numbers were measured at, distinct from render time.",
+   "findings": [
+    {
+     "severity": "info",
+     "description": "The page header (lines 178-183) claims 'Every number on this page is read from a measurement artefact at generation time', but the SECP before/after pairs (const SECP, lines 283-287), the stat-tile figures ('4.26x', '355 -> 83 us/op', '12.0x tightest re-floor', lines 288-294) and the OLD_FLOORS table (lines 359-367) are hardcoded in the template's JS. Pre-existing, not introduced by this PR (the PR touched only the provenance line), but the self-description overstates the page's data-driven-ness.",
+     "location": "benchmarks/_dashboard_template.html:178-183 vs :283-294, :359-367"
+    }
+   ]
+  },
+  {
+   "path": "benchmarks/arm-baseline.json",
+   "status": "reviewed (M)",
+   "purpose": "AArch64 (ubuntu-24.04-arm) regression baseline; PR carries the 2026-08-14 full recalibration (baseline_value = measured median, tolerance 15/25), 5-run calibration evidence, and an itemised per-file floor_drift_acknowledged list.",
+   "findings": []
+  },
+  {
+   "path": "benchmarks/baseline.json",
+   "status": "reviewed (M)",
+   "purpose": "x86-64 (ubuntu-latest) regression baseline; same recalibration structure as the ARM file with tolerance 45 (coarse safety net), calibration_evidence, and drift acknowledgements verified by check_baseline_justification.py.",
+   "findings": []
+  },
+  {
+   "path": "benchmarks/benchmark-results.json",
+   "status": "reviewed (M)",
+   "purpose": "Latest benchmark_runner.py output (19/19 pass against the recalibrated floors); PR adds a full provenance block (commit 611a41f \u2014 verified an ancestor of the PR head \u2014 tree state, host, command, sampling rule) and margin_percent per row.",
+   "findings": []
+  },
+  {
+   "path": "benchmarks/benchmark_c_raw.c",
+   "status": "reviewed (M)",
+   "purpose": "Raw C benchmark harness (no FFI); PR adds a fail-closed BENCH_REQUIRE/BENCH_FATAL contract so failed calls end the run instead of being timed, in-struct row labels, _Static_asserts binding iteration tiers to MAX_SAMPLES, and the ITERS_SLH_SIGN tier.",
+   "findings": [
+    {
+     "severity": "minor",
+     "description": "Two comments still assert that the SLH-DSA rows keep the harness 'inside the ~60 s subprocess timeout' of comparative_benchmark.py and point at 'its timeout=60 argument' \u2014 but this same PR raised that timeout to 600 s (benchmarks/comparative_benchmark.py:239) precisely because the full run measures ~109 s, and the ITERS_SLH_SIGN comment in this same file (lines 224-234) states the 600 s ceiling. The PR updated one of three referring comments and left these two contradicting both the code and the file's own tier comment.",
+     "location": "benchmarks/benchmark_c_raw.c:1150-1156 (bench_slhdsa block header) and :1728-1732 (SLH-DSA call-site comment in main)"
+    }
+   ]
+  },
+  {
+   "path": "benchmarks/benchmark_runner.py",
+   "status": "reviewed (M)",
+   "purpose": "CI regression gate: PR repairs the harness (window-sized batches, fastest-of-3, per-primitive whole-run repeats, 256-input cycling for rejection-sampled ML-DSA), makes PQC rows hard-gated (optional=False), refuses short-window/non-finite results, serialises JSON before writing, adds provenance capture, and fails runs whose baseline names nothing measurable (orphaned/misplaced/unmeasured coverage checks).",
+   "findings": []
+  },
+  {
+   "path": "benchmarks/benchmark_suite.py",
+   "status": "reviewed (M)",
+   "purpose": "Reporting benchmark suite; PR switches the SHA3-256 row from hashlib (OpenSSL) to AMA's native_sha3_256 (INVARIANT-36 fix), adds a None-guard on kms.dilithium_keypair, functools.partial in the scalability loop, and typing.",
+   "findings": []
+  },
+  {
+   "path": "benchmarks/check_baseline_justification.py",
+   "status": "reviewed (M)",
+   "purpose": "Baseline-change CI guard; PR replaces the concatenated-commit-text scan (shown unfalsifiable at 86 KB of accumulated messages) with per-commit attributed justification, watches tolerance_percent with the same weight as baseline_value, gates validity-window extensions on re-measurement, and verifies floor_drift_acknowledged against git diff from the calibration commit with exact-file (no prefix) matching. Gate is strengthened, not weakened.",
+   "findings": []
+  },
+  {
+   "path": "benchmarks/comparative_benchmark.py",
+   "status": "reviewed (M)",
+   "purpose": "AMA vs PyNaCl/cryptography/raw-C comparison; PR fixes the raw-C subprocess timeout 60->600 s (the old ceiling expired on every run since the SLH-DSA rows landed, silently degrading the column), adds the provenance block generate_competitive.py requires, and typing.",
+   "findings": []
+  },
+  {
+   "path": "benchmarks/competitive.html",
+   "status": "reviewed (M)",
+   "purpose": "Generated competitive-position page; PR re-renders it with a measurement-provenance stamp (measured at 66d2073, AMA 3.4.0) instead of the working tree's 5.0.0, fixes standings notes to match the badges (AES-GCM 3-of-8, X25519 3-of-5), and documents that peer versions are pinned literals. Internal counts (8 wins / 9 behind / 1 sole over 18 primitives) verified consistent with the data tables.",
+   "findings": []
+  },
+  {
+   "path": "benchmarks/detector_baseline_eval.py",
+   "status": "reviewed (A)",
+   "purpose": "New 3R timing-anomaly-detector efficacy measurement plus five deterministic regression gates (clean-FAR budget, budget monotonic, sigma-floor live, shift detection, spike-ranking floor 0.85), wired into ci.yml; explicitly labels its evidence class as synthetic injection, not attack traffic.",
+   "findings": []
+  },
+  {
+   "path": "benchmarks/generate_charts.py",
+   "status": "reviewed (M)",
+   "purpose": "SVG chart generator; PR makes a damaged benchmark_results.json fail loudly instead of silently charting hardcoded baselines as measurements, deep-copies anchored tables to prevent live-data write-through, and removes the unread CRYPTO_OPS table.",
+   "findings": []
+  },
+  {
+   "path": "benchmarks/generate_competitive.py",
+   "status": "reviewed (M)",
+   "purpose": "Renders competitive.html; PR reads the AMA version stamp from the result files' provenance (refusing to render without it, and refusing when the two source JSONs disagree on ama_commit) \u2014 closing the relabelling defect where a 3.4.0 measurement was stamped 5.0.0 \u2014 and length-checks coverage rows so a typo cannot mark a library 'not implemented'.",
+   "findings": []
+  },
+  {
+   "path": "benchmarks/generate_dashboard.py",
+   "status": "reviewed (M)",
+   "purpose": "Dashboard generator; PR takes version/measured-at from the bench artefact's provenance block (tree lookup survives only as a labelled fallback, raising rather than inventing a version), and passes the provenance through into the page's embedded data.",
+   "findings": []
+  },
+  {
+   "path": "benchmarks/keyformat_import.py",
+   "status": "reviewed (M)",
+   "purpose": "Measures PKCS#8 import cost and the PQ consistency-check ratio (the sized DoS lever on the parser path); PR swaps default-arg lambdas for functools.partial timing thunks.",
+   "findings": []
+  },
+  {
+   "path": "benchmarks/multi_library_results.json",
+   "status": "reviewed (M)",
+   "purpose": "Multi-library C harness results (8 libraries, 18 primitives); PR adds the retrospective provenance block (commit 66d2073, AMA 3.4.0) and host CPU-feature record that makes cross-host AES-GCM comparisons interpretable.",
+   "findings": []
+  },
+  {
+   "path": "benchmarks/performance_comparison.py",
+   "status": "reviewed (M)",
+   "purpose": "Ed25519 native-C ctypes performance demo script; PR changes are type annotations only.",
+   "findings": []
+  },
+  {
+   "path": "benchmarks/performance_suite.py",
+   "status": "reviewed (M)",
+   "purpose": "Lyapunov/matrix/helix/const-time benchmark suite (non-crypto-path); PR changes are type annotations only.",
+   "findings": []
+  },
+  {
+   "path": "benchmarks/phase0_baseline.py",
+   "status": "reviewed (M)",
+   "purpose": "Phase-0 direct-ctypes baseline profiler; PR changes are type annotations plus a documented dict-copy for the float|str result mapping.",
+   "findings": []
+  },
+  {
+   "path": "benchmarks/pqc_comparative_bench.py",
+   "status": "reviewed (M)",
+   "purpose": "ML-KEM/ML-DSA head-to-head vs OpenSSL 4.0.1 via cryptography; PR adds an importlib guard naming the >=46.0 requirement, self-verify raises instead of assert (python -O safe), and writes the provenance block via comparative_benchmark._measurement_provenance.",
+   "findings": []
+  },
+  {
+   "path": "benchmarks/pqc_results.json",
+   "status": "reviewed (M)",
+   "purpose": "PQC head-to-head results; PR adds the retrospective provenance block (same commit/version as multi_library_results.json, which generate_competitive.py cross-checks) and a trailing newline.",
+   "findings": []
+  },
+  {
+   "path": "benchmarks/validation_suite.py",
+   "status": "reviewed (M)",
+   "purpose": "Validates BENCHMARKS.md claims against live measurement; PR closes the exit-0-measured-nothing hole: every SKIP records the claims it forfeits, unmeasured claims are reported with reasons, --require-complete fails on coverage gaps, full_kms and Section 1.3 claims gain measurement blocks, SHA3 claim now measures AMA's own kernel with the import hoisted out of the timed thunk.",
+   "findings": []
+  },
+  {
+   "path": "cmake/ama_exports.macos.sym",
+   "status": "reviewed (A)",
+   "purpose": "New Mach-O exported-symbols list restricting the dylib export surface to _ama_* (parity with the ELF version script); referenced from CMakeLists.txt:1070-1072.",
+   "findings": []
+  },
+  {
+   "path": "cmake/ama_exports.map",
+   "status": "reviewed (A)",
+   "purpose": "New GNU ld/lld version script: global ama_*, everything else (vendored ed25519-donna symbols, internal helpers, and the test-only ama_ascon_permutation_for_test by exact-name override) localised; referenced from CMakeLists.txt:1075-1078 and the arm-qemu workflow. Anonymous node, visibility only \u2014 no symbol versioning.",
+   "findings": []
+  },
+  {
+   "path": "cmake/toolchains/x86_64-w64-mingw32.cmake",
+   "status": "reviewed (A)",
+   "purpose": "New MinGW-w64 cross-compile toolchain file (compile-and-link reproduction of the windows-latest lane that exposed the _MSC_VER-vs-_WIN32 guard confusion); standard find-root policy, no emulator by design.",
+   "findings": []
+  },
+  {
+   "path": "docker/Dockerfile",
+   "status": "reviewed (M)",
+   "purpose": "Ubuntu multi-stage production image; PR pins both FROM lines by digest (with a base-eol marker read by tools/check_docker_pins.py, which exists) and bumps the version label to 5.0.0.",
+   "findings": [
+    {
+     "severity": "info",
+     "description": "The runtime stage runs 'AMA_BUILD_PIPELINE=1 python3 -m ama_cryptography.integrity --update --sign' to re-sign the module-integrity artefact for the image's own native build, then asserts POST OPERATIONAL. This is documented and mirrors the wheel signer's per-platform re-sign, but operators should note the image's tamper-detection anchor is re-bound at image build time under the AMA_BUILD_PIPELINE bypass \u2014 in-image integrity is only as strong as this build step. Same pattern in docker/Dockerfile.alpine:137.",
+     "location": "docker/Dockerfile:126-138 (RUN AMA_BUILD_PIPELINE=1 ... --update --sign)"
+    }
+   ]
+  },
+  {
+   "path": "docker/Dockerfile.alpine",
+   "status": "reviewed (M)",
+   "purpose": "Alpine image; PR moves the base from EOL alpine:3.18 (support ended 2025-05-09) to digest-pinned 3.23, adds required --break-system-packages for PEP 668, drops the explicit libssl3 install and honestly documents that libssl3/libcrypto3 remain transitively via python3 (correcting the prior 'libssl3 is NOT installed' claim), bumps setuptools floor to >=78.1.1.",
+   "findings": []
+  },
+  {
+   "path": "docker/Dockerfile.c-api",
+   "status": "reviewed (M)",
+   "purpose": "C-API build/export image; PR digest-pins the bases, removes libssl-dev/libssl3 (nothing consumed them; INVARIANT-1), ships both public headers (ama_dispatch.h was missing), and removes a '|| true' whose sh precedence made the entire export CMD best-effort \u2014 a build with no library still printed the success banner. Fail-open fixed, not introduced.",
+   "findings": []
+  },
+  {
+   "path": "docs/DESIGN_NOTES.md",
+   "status": "reviewed (M)",
+   "purpose": "Security design notes for the two original non-cryptographic subsystems and the composition protocol; PR change is the 4.0.0 -> 5.0.0 version stamp only.",
+   "findings": []
+  },
+  {
+   "path": "docs/Doxyfile",
+   "status": "reviewed (M)",
+   "purpose": "Doxygen configuration for the C API docs; PR change is PROJECT_NUMBER 4.0.0 -> 5.0.0 only.",
+   "findings": []
+  },
+  {
+   "path": "docs/METRICS_REPORT.md",
+   "status": "reviewed (M)",
+   "purpose": "Anchored quantitative-claims report; PR gates the LoC line totals and Scope Composition (closing the deliberate 4.0.0 ungating whose totals drifted in two days), replaces find-based reproduction commands with git ls-files forms, corrects the whole-project figure and its explanation, and adds 5.0.0 change-log rows. Verified at this checkout: 4,769 def test_ across 204 files, 65 C test files, 16 fuzz sources all reproduce exactly.",
+   "findings": [
+    {
+     "severity": "info",
+     "description": "The working tree carries uncommitted modifications to this file (Whole-project row 666/379,290 -> 668/379,396 and derived percentages) \u2014 these are the audit orchestrator's own regeneration after adding tracked verification/ files, not part of PR #394; the PR-head version is internally consistent and reproduces.",
+     "location": "docs/METRICS_REPORT.md:100 (Whole project row; uncommitted local diff)"
+    }
+   ]
+  },
+  {
+   "path": "docs/NIST_PRIME_CURVES.md",
+   "status": "reviewed (M)",
+   "purpose": "P-256/384/521 design and validation document; PR updates the test_nistp_curves.py row from 94 to 97 tests and describes the added non-canonical-coordinate rejection coverage.",
+   "findings": []
+  },
+  {
+   "path": "docs/compliance/ACVP_SELF_ATTESTATION.md",
+   "status": "reviewed (M)",
+   "purpose": "Customer-facing ACVP self-attestation; PR corrects the skip-bucket split (4,757/1,032 -> 4,667/1,122), moving the 90 ML-KEM-1024 EncapDecap groups to the non-AFT bucket to match how run_vectors.py actually counts them, with the correction recorded in-line. Totals (1,215/1,215/0, 5,789 skipped) unchanged and cross-consistent with the JSON and CSRC report.",
+   "findings": []
+  },
+  {
+   "path": "docs/compliance/CSRC_ALIGN_REPORT.md",
+   "status": "reviewed (M)",
+   "purpose": "Technical ACVP evidence report; PR corrects the same skip split in the summary row, adds an honest POST-coverage-boundary paragraph (naming the approved primitives that carry no power-on KAT), re-labels the RNG check as a defence-in-depth CSPRNG sanity check rather than a FIPS 140-3 health test (correcting the prior mis-citation), and adds PBKDF2 and SHA-512/384 one-shot rows to the additions table.",
+   "findings": [
+    {
+     "severity": "info",
+     "description": "Pre-existing internal inconsistency the PR does not resolve: the header says 'Version: 4.0.0' while the Re-validation Addendum states 'The header's version stamp is rolled to 3.5.0 on the basis of the checks recorded here and only those checks' (INVARIANT-16). Additionally, the two PR-added table rows (PBKDF2, SHA-512/384 one-shot, release 5.0.0, 're-run at this commit') sit under a preamble stating the suites 'were re-executed on 2026-07-30 against the v3.5.0 native library'; the rows carry their own re-run note but the preamble no longer describes every row.",
+     "location": "docs/compliance/CSRC_ALIGN_REPORT.md:3 (header) vs :479-486 (addendum preamble); :565-581 (additions table)"
+    }
+   ]
+  },
+  {
+   "path": "docs/compliance/acvp_attestation.json",
+   "status": "reviewed (M)",
+   "purpose": "Machine-readable attestation; PR applies the same skip-bucket correction with a dated coverage_changelog entry showing the re-derivation (4,667 + 1,122 = 5,789, itemised 4+4+512+512+90) and moves the ML-KEM encapsulation entry between skip-category lists accordingly. Verified arithmetically consistent with both markdown documents.",
+   "findings": []
+  },
+  {
+   "path": "docs/compliance/sbom-c-library.json",
+   "status": "modified",
+   "purpose": "CycloneDX SBOM for the C library; PR bumps 4.0.0 to 5.0.0, adds ama_pbkdf2 and ama_sha512 components, fixes SHA3 description",
+   "findings": []
+  },
+  {
+   "path": "docs/conf.py",
+   "status": "modified",
+   "purpose": "Sphinx config; PR bumps version to 5.0.0, removes two no-op globals CodeQL flagged, adds typed intersphinx helpers and a nosec marker on the HEAD probe",
+   "findings": []
+  },
+  {
+   "path": "docs/constant-time-testing.md",
+   "status": "modified",
+   "purpose": "dudect methodology guide; PR documents the 21-rung cropped-t ladder, the calibrated 5.0 threshold (with measured null statistics), and the UNUSABLE/SUB-FLOOR verdict taxonomy \u2014 claims verified to match tests/c/test_dudect.c (DUDECT_T_THRESHOLD=5.0, SUB-FLOOR handling present)",
+   "findings": []
+  },
+  {
+   "path": "docs/index.rst",
+   "status": "modified",
+   "purpose": "Sphinx landing page; PR bumps install pin to v5.0.0 and adds an honest 'v5.0.0 is not tagged yet' note mirroring README",
+   "findings": []
+  },
+  {
+   "path": "examples/python/basic_usage.py",
+   "status": "modified",
+   "purpose": "Demo of quick_sign/verify, key management, crypto packages; PR adds return-type annotations only",
+   "findings": []
+  },
+  {
+   "path": "examples/python/complete_demo.py",
+   "status": "modified",
+   "purpose": "Full feature walkthrough; PR adds typing, replaces the hardcoded demo master password with secrets.token_urlsafe(32), and fixes the numpy optional-import typing pattern",
+   "findings": [
+    {
+     "severity": "minor",
+     "description": "Module docstring warning still says 'master_password=\"strong_master_password_123!\" is hardcoded; a real deployment must source the passphrase ...' but this PR changed demo_secure_storage() to generate the password with secrets.token_urlsafe(32), so the warning now describes code that no longer exists \u2014 a stale doc introduced by this PR's own change.",
+     "location": "examples/python/complete_demo.py:22-24 (docstring) vs :328-333 (demo_secure_storage)"
+    }
+   ]
+  },
+  {
+   "path": "examples/python/fastapi_integration.py",
+   "status": "modified",
+   "purpose": "FastAPI integration demo; PR adds annotations and renames create_crypto_package kwarg dna_codes->codes (verified: legacy_compat.create_crypto_package takes 'codes')",
+   "findings": []
+  },
+  {
+   "path": "examples/python/flask_integration.py",
+   "status": "modified",
+   "purpose": "Flask integration demo; PR adds annotations, the same dna_codes->codes kwarg fix, and a tuple-passthrough in sign_response so (body, 400) returns are not re-serialized into 500s",
+   "findings": []
+  },
+  {
+   "path": "fuzz/fuzz_kyber.c",
+   "status": "modified",
+   "purpose": "libFuzzer harness for ML-KEM-1024; PR widens corruption-position addressing to 16 bits and adds three new attacker-input cases (full ciphertext, full encapsulation key, full secret key) asserting the FIPS 203 implicit-rejection return-code contract via __builtin_trap \u2014 strictly strengthens coverage",
+   "findings": []
+  },
+  {
+   "path": "fuzz/python/fuzz_key_formats.py",
+   "status": "modified",
+   "purpose": "Self-contained hostile-input fuzzer for DER/CBOR/JSON/PEM key parsers; PR extends the PKCS#8 canonicality contract to PEM-carried DER bodies, fixes the previously-broken --atheris lane (seed pairs written raw crashed Setup; instrument_imports gave zero coverage) \u2014 strengthens the gate",
+   "findings": []
+  },
+  {
+   "path": "include/ama_cryptography.h",
+   "status": "modified",
+   "purpose": "Public C API header; PR bumps to 5.0.0, adds ama_sha3_384/ama_sha512/ama_sha384/PBKDF2/ed25519_active_backend/secp256k1 sign_raw declarations (all implementations verified present), documents batch-verify NULL-entry and count-overflow contracts, scalar-mod-l canonicalisation, and moves ama_ascon_permutation_for_test out of the public surface (no dangling references; test uses internal/ama_testing_exports.h)",
+   "findings": []
+  },
+  {
+   "path": "include/ama_dispatch.h",
+   "status": "modified",
+   "purpose": "Runtime SIMD dispatch header; PR reframes ama_dispatch_info_t as DETECTED-not-wired tiers, corrects the Barrett-reduce range contract to the enumerated [0,q] image, and removes the sha3_256 dispatch slot",
+   "findings": [
+    {
+     "severity": "info",
+     "description": "The PR deletes the sha3_256 member from the middle of ama_dispatch_table_t (between keccak_f1600_x4 and kyber_ntt), shifting the offset of every later slot. This is exactly the layout change the same file's ABI comments ('append-only ... inserting fields earlier would silently break consumers') forbid. No in-tree references remain (only explanatory comments in src/c/dispatch/ama_dispatch.c), and the 4.0.0->5.0.0 major bump legitimises an ABI break, but any external consumer compiled against a 4.x header running against the 5.x shared object will read wrong function pointers. Deliberate per the version bump; flagged for operator awareness only.",
+     "location": "include/ama_dispatch.h:253-277 (ama_dispatch_table_t)"
+    }
+   ]
+  },
+  {
+   "path": "nist_vectors/fetch_vectors.py",
+   "status": "modified",
+   "purpose": "Fetches pinned ACVP vectors; PR routes downloads through tools/http_fetch (bounded/retried), makes fetch failures fail the step instead of returning 0, and replaces generation-time hashlib.sha256 calls with transcribed FIPS 180-4 digests (removing an OpenSSL-as-oracle regeneration hazard) \u2014 verified digests are the correct published values",
+   "findings": []
+  },
+  {
+   "path": "nist_vectors/run_vectors.py",
+   "status": "modified",
+   "purpose": "Runs ACVP vectors against libama_cryptography via ctypes; PR fixes the stale libama_cryptography.so.2 fallback by discovering the highest versioned .so.N instead \u2014 verdict logic (empty/errored/missing-result algorithms fail the run) unchanged and sound",
+   "findings": []
+  },
+  {
+   "path": "oss-fuzz/Dockerfile",
+   "status": "modified",
+   "purpose": "OSS-Fuzz project Dockerfile; PR only adds a comment explaining why the base-builder image is deliberately not digest-pinned",
+   "findings": []
+  },
+  {
+   "path": "pyproject.toml",
+   "status": "modified",
+   "purpose": "Project metadata and tool config; PR bumps to 5.0.0, splits the PyKCS11 pin per-platform (documented Windows 1.5.19 crash), adds missing dev-extra deps (types-setuptools, PyYAML, build/setuptools/wheel), narrow mypy overrides for stub-less third-party modules, and two new pytest markers \u2014 no gate weakened",
+   "findings": []
+  },
+  {
+   "path": "requirements-dev.txt",
+   "status": "modified",
+   "purpose": "Dev dependency floors; PR adds types-setuptools so the documented alternative install path can run make lint",
+   "findings": []
+  },
+  {
+   "path": "requirements-lock.txt",
+   "status": "modified",
+   "purpose": "Pinned dev closure consumed by pip-audit --strict; PR adds the matching types-setuptools pin",
+   "findings": []
+  },
+  {
+   "path": "setup.py",
+   "status": "modified",
+   "purpose": "Build script: D-9 preflight version gates, CMake native build, NativeDistribution (never py3-none-any), staged-extension prune/sync, and the integrity signer now runs on EVERY build with stash/restore of the tracked artefact",
+   "findings": [
+    {
+     "severity": "major",
+     "description": "The new _run_integrity_signer() scrubs AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR (and AMA_FIPS_STRICT) from the child environment before invoking `python -m ama_cryptography._build_sign`, but that variable is the signer's own fail-closed gate, not just import-time POST policy: ama_cryptography/_build_sign.py:851 passes require_trust_anchor=_env_flag_enabled(AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR) into _generate_keypair_and_sign(), which raises when no anchor exists (:440-444). With the scrub, a release pipeline that exports AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR=1 and runs `pip install .`/`python -m build` while the anchor is missing or mistyped now silently produces an UNANCHORED signed artefact instead of failing the build \u2014 a fail-open regression of a documented fail-closed switch (the docstring at setup.py:608-611 still lists the variable among what 'the signer reads', which is no longer true on this path). The legitimate deadlock the scrub solves (the signer child imports the package with the artefact stashed aside) could be solved without discarding the signing policy, e.g. by translating the parent's env var into a --require-trust-anchor argv flag. Mitigation: strict deployments that also set the variable at import time still fail at POST, and a pipeline that sets the anchor pubkey var is unaffected; the lost protection is the build-time typo/misconfiguration net.",
+     "location": "setup.py:770-771 (env.pop loop in CMakeBuild._run_integrity_signer); stale docstring setup.py:608-611"
+    }
+   ]
+  },
+  {
+   "path": "src/c/PROVENANCE.md",
+   "status": "modified",
+   "purpose": "Per-primitive provenance record; PR corrects the dudect test location and adds the curve25519_expand unaligned-load AMA-PATCH row (byte-identical release binary, UBSan-driven)",
+   "findings": []
+  },
+  {
+   "path": "src/c/ama_aes_gcm.c",
+   "status": "modified",
+   "purpose": "Scalar AES-256-GCM with branch-free word-level GHASH; PR honestly downgrades the ct-barrier claim to 'forward insurance' (withdrawing an unreproducible clang-18 assertion) and converts the decrypt return to a masked selection with a _Static_assert \u2014 tag-verify fail-closed contract preserved",
+   "findings": []
+  },
+  {
+   "path": "src/c/ama_argon2.c",
+   "status": "modified",
+   "purpose": "Argon2id (RFC 9106) with inline BLAKE2b and legacy-verify migration path; PR scrubs the blake2b_final serialization buffer (held the H0 pre-hash) and rejects pwd/salt lengths above UINT32_MAX (H0 length-field truncation hazard)",
+   "findings": []
+  },
+  {
+   "path": "src/c/ama_ascon.c",
+   "status": "modified",
+   "purpose": "Ascon-AEAD128/Hash256 (SP 800-232), verify-then-decrypt two-pass; PR compiles ama_ascon_permutation_for_test only under AMA_TESTING_MODE, closing the macOS allow-list export divergence that would have published the raw permutation from the dylib",
+   "findings": []
+  },
+  {
+   "path": "src/c/ama_chacha20poly1305.c",
+   "status": "modified",
+   "purpose": "ChaCha20-Poly1305 (RFC 8439) with radix-2^44/2^26 Poly1305; PR scrubs r_bytes in the 2^26 init branch, unifies verify-pass/fail control flow behind a mask-bounded decrypt length, and masks the return-code selection (dudect chacha20-neon |t|=8.08 residue closed); corrected rs[] comment matches the code, which already multiplied by 20",
+   "findings": []
+  },
+  {
+   "path": "src/c/ama_consttime.c",
+   "status": "modified",
+   "purpose": "Constant-time memcmp/memzero/swap/lookup/copy primitives; PR adds a test-only ama_build_optimization_probe() (AMA_TESTING_MODE, __OPTIMIZE__ probe) for the instruction-count gate",
+   "findings": []
+  },
+  {
+   "path": "src/c/ama_cpuid.c",
+   "status": "modified",
+   "purpose": "CPU feature detection with XCR0 gates and AEAD backend selection; PR documents the __XSAVE__ fallback reality after per-file SIMD flags, and reports NEON=1 on the getauxval/sysctl-less AArch64 arm (correct: AdvSIMD is architecturally mandatory on AArch64; the branch is inside the __aarch64__ guard)",
+   "findings": []
+  },
+  {
+   "path": "src/c/ama_dilithium.c",
+   "status": "modified",
+   "purpose": "ML-DSA-44/65/87 (FIPS 204) parameter-driven implementation; PR fixes a real latent int32 signed-overflow UB by reducing l-fold accumulators before every inverse NTT (keygen, sk-check, signing w=A*NTT(y)), corrects the dil_reduce32 image documentation to the enumerated 7q-band, scrubs x4 sponge states and the full t vector, and adds test-only invNTT input-bound instrumentation gated off the dudect lane",
+   "findings": []
+  },
+  {
+   "path": "src/c/ama_ed25519.c",
+   "status": "modified",
+   "purpose": "In-tree fe51 Ed25519 backend; PR adds RFC 8032 x=0/sign-bit-set decoding rejection, explicit canonical-R check in verify (covers batch), mod-l reduction in sc25519_to_wnaf fixing a real wrong-result bug for unreduced scalars in ama_ed25519_scalarmult_public (ff..ff recoded as -1), the donna-parity count-overflow guard and results pre-zero in batch_verify, hash scrub on sign's early exits, and ama_ed25519_active_backend()",
+   "findings": []
+  },
+  {
+   "path": "src/c/ama_frost.c",
+   "status": "modified",
+   "purpose": "FROST threshold Ed25519; PR honestly relabels the implementation 'RFC 9591-style, not ciphersuite-conformant' (partial signatures not interoperable \u2014 accurate: no contextString/H1..H5 domain separation in compute_binding_factor/compute_challenge) and scrubs the Horner intermediate in poly_eval",
+   "findings": []
+  },
+  {
+   "path": "src/c/ama_hkdf.c",
+   "status": "modified",
+   "purpose": "HKDF-SHA3-256 plus HKDF-SHA-256/384/512 variants and HMAC wrappers; PR adds NULL-with-nonzero-length rejection for salt/info in ama_hkdf (previously a NULL info with info_len>0 reached memcpy from NULL)",
+   "findings": []
+  },
+  {
+   "path": "src/c/ama_hmac_sha384.c",
+   "status": "modified",
+   "purpose": "HMAC-SHA-384 on the shared internal SHA-512 core; PR renames the internal one-shot call to ama_sha384_oneshot, freeing the ama_sha384 name for the new public symbol in ama_sha512.c",
+   "findings": []
+  },
+  {
+   "path": "src/c/ama_kyber.c",
+   "status": "modified",
+   "purpose": "ML-KEM-512/768/1024 (FIPS 203) parameter-driven implementation; PR makes SampleNTT properly resumable (the fixed 672-octet window could leave coefficients uninitialised on pathological seeds, and the 4-way 'fallback' reproduced the identical shortfall), replaces all secret-operand Compress_d divisions with an exact Granlund-Montgomery reciprocal (KyberSlash class, verified by exhaustive enumeration), adds canonicalising Barrett sweeps to the scalar NTT/invNTT matching the SIMD kernels, widens barrett_reduce intermediates to int32 with an enumerated [0,q] image, and closes several INVARIANT-12 scrub gaps (CBD seed buffers, x4 sponge states, pairwise-check ciphertext)",
+   "findings": []
+  },
+  {
+   "path": "src/c/ama_nistp.c",
+   "status": "modified",
+   "purpose": "P-256/384/521 ECDSA+ECDH: Montgomery CIOS, comb fixed-base, RFC 6979 nonces, strict DER; PR routes nistp_mask64 through the ct value barrier (measured Walter-Thompson extra-reduction leak under clang -O3), converts the MULX gate to _Atomic with relaxed ordering (TSan-reproduced race on attacker-input paths), and zero-inits nistp_mod_add's sum buffer",
+   "findings": []
+  },
+  {
+   "path": "src/c/ama_pbkdf2.c",
+   "status": "added",
+   "purpose": "New PBKDF2-HMAC-SHA256/512 (SP 800-132 / RFC 8018) on in-tree SHA-2 cores with hoisted HMAC key schedule; brings BIP39/KEK derivation in-house per INVARIANT-1. Reviewed in full: correct block-counter/accumulator structure, correct SP 800-132 output bound, NULL/zero-length validation, all key-derived state scrubbed on exit; declared in the public header and registered in the SBOM",
+   "findings": []
+  },
+  {
+   "path": "src/c/ama_platform_rand.c",
+   "status": "modified",
+   "purpose": "Platform CSPRNG (getrandom/getentropy/BCryptGenRandom//dev/urandom); PR chunks the Windows draw so a >4GiB request cannot silently truncate through the ULONG cast, and replaces the stdio /dev/urandom fallback with raw O_CLOEXEC open/read (no unzeroized FILE heap buffer), with EINTR retry",
+   "findings": []
+  },
+  {
+   "path": "src/c/ama_secp256k1.c",
+   "status": "M \u2014 read in full, diff reviewed",
+   "purpose": "secp256k1 field/group arithmetic, CT comb+ladder scalar mult, RFC6979 ECDSA sign/verify, DER, decompression",
+   "findings": [
+    {
+     "severity": "info",
+     "location": "secp256k1_aff_from_bytes_checked / ama_secp256k1_point_mul (~line 1416-1465)",
+     "description": "PR fixes a real invalid-curve/canonical-encoding gap: ama_secp256k1_point_mul (the one API taking a secret scalar) previously deserialized the caller's point with no on-curve or canonical check; validation is now shared with ECDSA verify. Change verified correct (rejects x/y >= p, off-curve points, (0,0)); note for the audit ledger that the pre-PR exposure existed."
+    },
+    {
+     "severity": "info",
+     "location": "ct-barrier sites (secp256k1_fe_normalize:258, secp256k1_jac_add:1044-1076, comb scan:1369, sc_cond_sub_n:1734, sc_mont_mul:1845, sc_add:1908, sc_negate:1930, sc_cond_negate:1963)",
+     "description": "All secret-derived select masks are now laundered through ama_ct_value_barrier_u64, closing the measured clang-18 Montgomery extra-reduction / group-law-flag branch leaks described in the in-file comments; sign path also gains unified done: cleanup that scrubs d on the key-range-reject path and zeroizes r/s outputs on failure, plus a fixed-width sign_raw entry point (declared in include/ama_cryptography.h, covered by the ama_* export wildcard). Verified coherent."
+    }
+   ]
+  },
+  {
+   "path": "src/c/ama_sha256.c",
+   "status": "M \u2014 read in full, diff reviewed",
+   "purpose": "Scalar SHA-256 (FIPS 180-4) with runtime SHA-NI/ARM-SHA2 kernel dispatch; used by SLH-DSA/HMAC/PBKDF2",
+   "findings": []
+  },
+  {
+   "path": "src/c/ama_sha256_ni.c",
+   "status": "M \u2014 read in full, diff reviewed",
+   "purpose": "x86 SHA-NI single-block SHA-256 compression kernel (canonical Intel round schedule); non-x86 placeholder typedef added",
+   "findings": []
+  },
+  {
+   "path": "src/c/ama_sha3.c",
+   "status": "M \u2014 read in full, diff reviewed",
+   "purpose": "SHA3-256/384/512, SHAKE128/256 one-shot + incremental APIs, 4-way SHAKE batching over dispatched Keccak-f[1600]",
+   "findings": [
+    {
+     "severity": "minor",
+     "location": "ama_shake256_inc_squeeze comment, lines ~957-960",
+     "description": "Comment claims consumed digest contexts are \"rejected here twice over \u2014 wrong tag, and the SHA3_CTX_CONSUMED position\", but ama_sha3_final sets finalized=(int)SHA3_256_RATE=136 which EQUALS SHAKE256_RATE, so for a consumed SHA3-256 digest context the family-tag check passes and only the SHA3_CTX_CONSUMED position sentinel (buffer_len=200 > 136) rejects it. Code fails closed (sentinel is load-bearing), but the comment overstates the defense-in-depth \u2014 exactly the comment-vs-code drift this PR elsewhere corrects."
+    }
+   ]
+  },
+  {
+   "path": "src/c/ama_sha512.c",
+   "status": "A \u2014 read in full (new file)",
+   "purpose": "Public one-shot ama_sha512/ama_sha384 exports over the internal SHA-512 core (closes Python hashlib/OpenSSL reach-around)",
+   "findings": []
+  },
+  {
+   "path": "src/c/ama_slhdsa.c",
+   "status": "M \u2014 read in full, diff reviewed",
+   "purpose": "FIPS 205 SLH-DSA (SHA2-256f + SHAKE-128s) parameter-driven core plus legacy SPHINCS+ compat API; diff is only the ama_sha512\u2192ama_sha512_oneshot rename at two call sites",
+   "findings": []
+  },
+  {
+   "path": "src/c/avx2/ama_aes_gcm_avx2.c",
+   "status": "M \u2014 read in full, diff reviewed",
+   "purpose": "AES-NI/PCLMULQDQ AES-256-GCM (8-way pipelined CTR + deferred-reduction GHASH); verify-before-decrypt with masked bounds",
+   "findings": [
+    {
+     "severity": "info",
+     "location": "encrypt partial-block scrub (~509), ghash_acc scrub (~564), masked return (~775)",
+     "description": "PR adds pad_pt scrub on the encrypt partial-block path, scrubs ghash_acc (== tag ^ enc_j0, so a spilled copy reveals the tag mask), and replaces the ternary accept/reject return with a masked selection guarded by _Static_assert(AMA_SUCCESS==0). All verified sound; decrypt remains fail-closed (bounded_full/bounded_remaining masked to 0 on tag mismatch, no plaintext written)."
+    }
+   ]
+  },
+  {
+   "path": "src/c/avx2/ama_aes_gcm_vaes_avx2.c",
+   "status": "M \u2014 read in full, diff reviewed",
+   "purpose": "VAES+VPCLMULQDQ YMM AES-256-GCM kernel (4-block fold), MSVC skipped by design; same scrub/masked-return hardening as the AES-NI kernel",
+   "findings": []
+  },
+  {
+   "path": "src/c/avx2/ama_avx2_internal.h",
+   "status": "M \u2014 read in full, diff reviewed",
+   "purpose": "Private prototypes for AVX2/VAES kernels shared by kernels + dispatch; PR removes the now-deleted ama_sha3_256_avx2 declaration",
+   "findings": []
+  },
+  {
+   "path": "src/c/avx2/ama_dilithium_avx2.c",
+   "status": "M \u2014 read in full, diff reviewed",
+   "purpose": "AVX2 ML-DSA-65 NTT/invNTT (merged-layer), pointwise, and OOB-safe LUT-compacted rejection sampler",
+   "findings": [
+    {
+     "severity": "info",
+     "location": "ama_dilithium_ntt_avx2:274 / ama_dilithium_invntt_avx2:442",
+     "description": "PR adds ama_secure_memzero of the 1 KiB __m256i f[32] staging array (holds s1/s2/mask y on the signing path) in both NTT directions, matching the SVE2/NEON twins \u2014 INVARIANT-6/12 hardening, verified placed after the last read of f."
+    }
+   ]
+  },
+  {
+   "path": "src/c/avx2/ama_kyber_avx2.c",
+   "status": "M \u2014 read in full, diff reviewed",
+   "purpose": "AVX2 ML-KEM NTT/invNTT/basemul/CBD2; diff tightens barrett_reduce_scalar to the exhaustively-verified int32-accumulator form with corrected bounds comment",
+   "findings": []
+  },
+  {
+   "path": "src/c/avx2/ama_sha3_avx2.c",
+   "status": "M \u2014 read in full, diff reviewed",
+   "purpose": "AVX2 Keccak-f[1600] single-state + 4-way kernels; unreachable/slower ama_sha3_256_avx2 wrapper removed with the dispatch slot (no dangling references remain \u2014 grep-verified)",
+   "findings": []
+  },
+  {
+   "path": "src/c/avx2/ama_x25519_avx2.c",
+   "status": "M \u2014 read in full, diff reviewed",
+   "purpose": "Opt-in AVX2 4-way X25519 Montgomery ladder (donna-32bit limbs, CT cswap, single-struct scrub, VZEROUPPER); diff converts a TODO into a design note only",
+   "findings": []
+  },
+  {
+   "path": "src/c/dispatch/ama_dispatch.c",
+   "status": "M \u2014 read in full, diff reviewed",
+   "purpose": "Runtime SIMD dispatch: feature detection via ama_cpuid, kernel wiring (AVX2/AVX-512/AES-NI/VAES/NEON/SVE2), per-slot auto-tune with measured fallback tier, sanitized opt-in verdict cache, AMA_DISPATCH_ONLY isolation, test hooks",
+   "findings": [
+    {
+     "severity": "info",
+     "location": "dispatch_init_internal (~1632-1686) and sha3_256 slot removal note (~1522-1579)",
+     "description": "Two deliberate behavior changes verified sound: (1) AES-GCM hardware kernel now gates on AES-NI+PCLMULQDQ instead of requiring AVX2 (installs the AES-NI kernel on non-AVX2 hosts \u2014 previously silently ran 760x-slower bitsliced path); (2) the dead dispatch_table.sha3_256 slot and its three tier wrappers are removed with an evidence-backed note; no dangling references remain. Cache format bumped to v2 so v1 files cannot replay a verdict missing keccak_fallback_regressed (explicit fail-open closure); cache path handling is setuid/AT_SECURE-gated, sanitized, and openat-relative."
+    }
+   ]
+  },
+  {
+   "path": "src/c/ed25519_donna_shim.c",
+   "status": "M \u2014 read in full, diff reviewed",
+   "purpose": "AMA API shim over vendored ed25519-donna: sign/verify with canonical S/R/y/x-sign gates, batch verify as per-entry loop over single verify, FROST group-op helpers with stale-t repair",
+   "findings": [
+    {
+     "severity": "info",
+     "location": "ed25519_randombytes_unsafe, lines 46-51",
+     "description": "On CSPRNG failure the hook zero-fills the randomizer buffer. It is only reachable from donna's ed25519_sign_open_batch, which no in-tree code calls any more (grep-verified; batch verify is now a per-entry loop), but zero randomizers would make the Bos-Carter aggregate accept-all if that vendored routine were ever re-wired \u2014 the previous fail-closed latch was removed with the aggregate path. Documented in-file; flagging so any future re-introduction of donna batch verification restores a fail-closed randomizer path."
+    },
+    {
+     "severity": "info",
+     "location": "ama_ge25519_restore_extended_t (~420) and ama_ed25519_batch_verify (~232)",
+     "description": "Two substantive fixes verified correct: (1) ge25519_double_scalarmult_vartime returns partial points with stale t; the new (x:y:z)->(xz:yz:z^2:xy) repair restores X*Y==Z*T before ge25519_add_p1p1 in double_scalarmult_public (previously produced arbitrary points with AMA_SUCCESS); (2) batch verify now IS the single verifier per entry, eliminating the small-order-residue aggregate divergence, with results[] pre-zeroed after the overflow guard (fail-toward-invalid)."
+    }
+   ]
+  },
+  {
+   "path": "src/c/internal/ama_ct_barrier.h",
+   "status": "M \u2014 read in full, diff reviewed",
+   "purpose": "Optimizer value barrier (asm register laundering) for CT select masks; diff honestly withdraws an unreproducible clang-18 claim and reframes the barrier as forward insurance",
+   "findings": []
+  },
+  {
+   "path": "src/c/internal/ama_ed25519_canonical.h",
+   "status": "M \u2014 read in full, diff reviewed",
+   "purpose": "Header-only RFC 8032 canonicality predicates: S<L, y<p, x-sign admissibility (x=0 rule), combined point-encoding and R-half checks shared by both Ed25519 backends; logic verified against RFC 8032 5.1.3/5.1.7",
+   "findings": []
+  },
+  {
+   "path": "src/c/internal/ama_once.h",
+   "status": "M \u2014 read in full, diff reviewed",
+   "purpose": "Shared once-init primitive (pthread_once / InitOnceExecuteOnce); diff fixes MinGW by guarding on _WIN32 instead of _MSC_VER",
+   "findings": []
+  },
+  {
+   "path": "src/c/internal/ama_sha2.h",
+   "status": "M \u2014 read in full, diff reviewed",
+   "purpose": "Header-only SHA-512/384 core + streaming ctx + HMAC-SHA-512; diff adds W[] scrub in the transform (INVARIANT-6) and renames one-shots to *_oneshot to free the public names (no dangling users of old names \u2014 grep-verified)",
+   "findings": []
+  },
+  {
+   "path": "src/c/internal/ama_testing_exports.h",
+   "status": "M \u2014 read in full, diff reviewed",
+   "purpose": "Single declaration point for AMA_TESTING_MODE-only exports (FROST scalar ops, Kyber compress/SampleNTT hooks, optimization probe, Ascon permutation, ML-DSA invNTT bound counter), preventing per-consumer extern drift",
+   "findings": []
+  },
+  {
+   "path": "src/c/neon/ama_aes_gcm_neon.c",
+   "status": "M \u2014 read in full, diff reviewed",
+   "purpose": "ARMv8 Crypto Extensions AES-256-GCM; PR reworks key expansion to stay entirely in NEON registers (removing unscrubbed round-key stack staging), adds encrypt pad scrub, ghash_acc scrub, masked return, and honest CT-property comments; key-schedule math (SubWord broadcast, RotWord rot-right-8, prefix-XOR cascade) verified correct",
+   "findings": []
+  },
+  {
+   "path": "src/c/neon/ama_argon2_neon.c",
+   "status": "M \u2014 read in full, diff reviewed",
+   "purpose": "NEON Argon2 BlaMka G (row+column passes, NEON XOR edges, scalar BlaMka core) + Blake2b compression; diff only adds the internal-header include",
+   "findings": [
+    {
+     "severity": "info",
+     "location": "ama_argon2_g_neon, locals R[128]/Z[128] (~lines 221-259)",
+     "description": "2 KiB of password-derived block data staged in stack arrays is not scrubbed at return. Consistent with the AVX2 twin and mitigated by the driver scrubbing its whole heap matrix (ama_argon2.c:845), but inconsistent with this PR's INVARIANT-6 sweep that scrubbed the analogous NTT staging buffers; worth a follow-up sweep."
+    }
+   ]
+  },
+  {
+   "path": "src/c/neon/ama_chacha20poly1305_neon.c",
+   "status": "M \u2014 read in full, diff reviewed",
+   "purpose": "NEON ChaCha20 4-way/8-way block kernels; diff fixes keystream serialization to explicit little-endian byte stores (host-order memcpy was wrong on aarch64_be), complementing the new tier-wide big-endian #error",
+   "findings": []
+  },
+  {
+   "path": "src/c/neon/ama_dilithium_neon.c",
+   "status": "M \u2014 read in full, diff reviewed",
+   "purpose": "NEON ML-DSA NTT/invNTT/pointwise; diff adds mullo_s32 (removes signed-overflow UB in low-half multiplies), scrubs f[] staging, and deletes dead-and-wrong barrett/power2round/poly_add/sub helpers with evidence notes",
+   "findings": []
+  },
+  {
+   "path": "src/c/neon/ama_ed25519_neon.c",
+   "status": "M \u2014 read in full, diff reviewed",
+   "purpose": "2-way fe51 field primitives (add/sub/carry/mul) for a future NEON Ed25519 ladder; fe51_neon type moved to the shared internal header; no in-tree caller (declared as dispatch-graph material)",
+   "findings": []
+  },
+  {
+   "path": "src/c/neon/ama_kyber_neon.c",
+   "status": "M \u2014 read in full, diff reviewed",
+   "purpose": "NEON ML-KEM NTT/invNTT/basemul; diff adds mullo_s16 (removes vmulq_s16 signed-overflow UB, audit H15), corrects barrett bounds comments, removes dead poly_add/sub",
+   "findings": []
+  },
+  {
+   "path": "src/c/neon/ama_neon_internal.h",
+   "status": "A \u2014 read in full (new file)",
+   "purpose": "Single source of truth for NEON kernel prototypes (fixes -Wmissing-prototypes and cross-TU signature-drift UB risk); carries the fail-closed little-endian-only tier guard (#error on aarch64_be) and the crypto-ext-gated AES-GCM declarations",
+   "findings": []
+  },
+  {
+   "path": "src/c/neon/ama_sha3_neon.c",
+   "status": "M \u2014 read in full, diff reviewed",
+   "purpose": "NEON-assisted Keccak-f[1600] (theta pairs vectorized, chi scalar); unreachable ama_sha3_256_neon wrapper removed with the dispatch slot",
+   "findings": []
+  },
+  {
+   "path": "src/c/neon/ama_sphincs_neon.c",
+   "status": "M \u2014 read in full, diff reviewed",
+   "purpose": "ARM SHA2-CE single-block SHA-256 compression (dispatched by ama_sha256.c) with scalar fallback, plus an admitted-dead WOTS chain helper; diff only adds the internal-header include",
+   "findings": [
+    {
+     "severity": "minor",
+     "location": "ama_sha256_compress_neon scalar fallback (#else branch, lines 166-196), w[64]",
+     "description": "The non-__ARM_FEATURE_SHA2 fallback leaves w[64] \u2014 whose first 16 words are the verbatim input block, i.e. HMAC K^ipad/K^opad when reached via ama_sha256.c's runtime dispatch (ama_has_arm_sha2() can be true at runtime while the TU was compiled without +sha2) \u2014 on the dead stack frame. This PR added exactly this scrub to sha256_compress_scalar (ama_sha256.c:163) and ama_sha512_transform (ama_sha2.h:142) citing INVARIANT-6, but the same-named NEON fallback was missed; inconsistent hardening on a reachable path."
+    },
+    {
+     "severity": "info",
+     "location": "ama_sphincs_wots_chain_neon, lines 202-234",
+     "description": "Dead helper (production slh_wots_chain uses the scalar SHA-256 pipeline) that does not implement the FIPS 205 chaining function \u2014 pub_seed is ignored ((void)pub_seed) and a single raw compression is used. File header openly documents it as dead; retained only so the pinned compression primitive has a neighbor. Must not be wired as-is."
+    }
+   ]
+  },
+  {
+   "path": "src/c/sve2/ama_dilithium_sve2.c",
+   "status": "M \u2014 read in full, diff reviewed",
+   "purpose": "SVE2 ML-DSA NTT/invNTT/pointwise (VL-agnostic loads, element-wise scalar Montgomery); diff hoists and scrubs the secret staging buffers (audit M5) and documents removed dead helpers",
+   "findings": []
+  },
+  {
+   "path": "src/c/sve2/ama_kyber_sve2.c",
+   "status": "M \u2014 read in full, diff reviewed",
+   "purpose": "SVE2 ML-KEM NTT/invNTT/basemul/poly add/sub/reduce; diff fixes a real cross-backend correctness bug (rounded Barrett '+ (1<<25)' made SVE2 return representatives differing by q from every other backend \u2014 never caught because no CI built SVE2), adds the canonicalising Barrett sweeps to match AVX2/NEON post-conditions, and adds caller-owned scrubbed scratch",
+   "findings": []
+  },
+  {
+   "path": "src/c/sve2/ama_sha3_sve2.c",
+   "status": "M \u2014 read in full, diff reviewed",
+   "purpose": "Keccak-f[1600] in the SVE2 TU \u2014 deliberately scalar (the old svwhilelt(0,5) theta was wrong at VL=128/256 and a correct VLA form measured 5.6-15.9x slower); diff makes the file header stop claiming vectorization it does not do",
+   "findings": []
+  },
+  {
+   "path": "src/c/sve2/ama_sve2_internal.h",
+   "status": "A \u2014 read in full (new file)",
+   "purpose": "Single declaration point for the ten SVE2 kernel entry points, dual-guarded (__ARM_FEATURE_SVE2 for defining TUs, AMA_HAVE_SVE2_IMPL for the dispatch consumer)",
+   "findings": []
+  },
+  {
+   "path": "src/c/vendor/ed25519-donna/curve25519-donna-32bit.h",
+   "status": "M \u2014 read in full, diff reviewed",
+   "purpose": "Vendored donna 32-bit radix-2^25.5 field arithmetic; PR change is a clearly-marked AMA-PATCH replacing unaligned *(uint32_t*) loads in curve25519_expand with memcpy (UBSan-reported C11 6.3.2.3p7 UB on unaligned caller buffers)",
+   "findings": []
+  },
+  {
+   "path": "src/c/vendor/ed25519-donna/curve25519-donna-64bit.h",
+   "status": "M \u2014 read in full, diff reviewed",
+   "purpose": "Vendored donna 64-bit radix-2^51 field arithmetic; same AMA-PATCH (memcpy for unaligned uint64_t loads in curve25519_expand); rest byte-identical upstream donna",
+   "findings": []
+  },
+  {
+   "path": "src/c/vendor/ed25519-donna/curve25519-donna-sse2.h",
+   "status": "M",
+   "purpose": "Vendored ed25519-donna SSE2 curve25519 field arithmetic; PR replaces type-punned uint32 loads in curve25519_expand with memcpy (misaligned-load UB fix, AMA-PATCH annotated, provenance recorded)",
+   "findings": []
+  },
+  {
+   "path": "tests/c/CMakeLists.txt",
+   "status": "M",
+   "purpose": "C test registration; PR adds ~10 new tests (ed25519 unaligned/canonical-R/scalarmult-contract, kyber compress/sample_ntt, dilithium invntt bound, concurrent init, platform-rand generic, field_bench wiring), 3 new NEON dispatch-only slots, and SKIP_RETURN_CODE fixes; nothing removed",
+   "findings": [
+    {
+     "severity": "minor",
+     "location": "tests/c/CMakeLists.txt lines ~503-516 (comment above add_executable(test_kyber_poly_equiv))",
+     "description": "Stale comment: it still says poly_reduce 'uses a mod-q-tolerant comparator because the production scalar Barrett and the SVE2 centered Barrett can pick representatives that differ by an exact multiple of q'. This PR rewrote tests/c/test_kyber_poly_equiv.c to strict byte-identity for all three helpers and its header explicitly documents removing that comparator; the build-file comment now contradicts the test it registers."
+    }
+   ]
+  },
+  {
+   "path": "tests/c/dudect/README.md",
+   "status": "M",
+   "purpose": "Vendored-dudect provenance doc; PR documents the recalibrated 5.0 threshold (max over 21 correlated rungs) and the masked-merge class-staging discipline with measured evidence",
+   "findings": []
+  },
+  {
+   "path": "tests/c/dudect/dudect.h",
+   "status": "M",
+   "purpose": "dudect core header; PR replaces the streaming raw Welch t with the percentile-cropped statistic (allocating, fail-closed contexts), removes the never-called dudect_check() verdict path, and makes print_result report measurements (with UNCROPPED notes) rather than verdicts",
+   "findings": []
+  },
+  {
+   "path": "tests/c/dudect/dudect_percentile.h",
+   "status": "A",
+   "purpose": "New percentile-cropping statistic (eprint 2016/1123 \u00a73.3): max signed t over uncropped + 20 cropped rungs, min-samples/degenerate-variance guards, fail-closed poisoning, and a self-test that re-derives the null calibration every run",
+   "findings": [
+    {
+     "severity": "info",
+     "location": "tests/c/dudect/dudect_percentile.h line 120 (DUDECT_CROPPED_T_THRESHOLD 5.0) and lines 82-118 rationale",
+     "description": "The dudect decision threshold moves from 4.5 to 5.0. This is a raise on a leak-detection gate, but it is argued as a confidence-level correction for the max-over-21-correlated-rungs statistic, backed by a 6,000,000-replicate null calibration (P(|t|>=4.5)=7.2e-5 vs claimed 1e-5; P(|t|>=5.0)=6.5e-6), and the accompanying cropped statistic is far more sensitive than the old raw Welch t (measured 48/48 vs 19/48 detection of an early-exit memcmp). dudect_cropped_self_test() pins the calibration (E|t|, sd, FP-rate bands) so a construction change that invalidates the threshold fails loudly. Net effect is a stronger gate; recorded for the audit because a threshold raise on a security gate always merits operator eyes."
+    }
+   ]
+  },
+  {
+   "path": "tests/c/dudect/dudect_rounds.h",
+   "status": "M",
+   "purpose": "Shared multi-round verdict rule (majority + direction + effect-size floor + fatal handling) with an exhaustive synthetic self-test; PR adds direction-consistency (UNUSABLE), the 2 ns effect-size floor (SUB_FLOOR), and delta_ns==0-on-trip fault detection",
+   "findings": [
+    {
+     "severity": "info",
+     "location": "tests/c/dudect/dudect_rounds.h DUDECT_MIN_EFFECT_NS (line 185) and dudect_lane_verdict() lines 398-451",
+     "description": "Gate-semantics change introduced by this PR: a lane over the t-threshold in a majority of rounds with a consistent sign no longer fails the build when its per-class mean difference is under 2 ns (DUDECT_LANE_SUB_FLOOR, printed but green). Three lanes that previously failed CI (AES-GCM tag verify +0.199 ns, Ascon encrypt +0.596 ns, agent binding -1.141 ns) are exactly the cases this turns green. The change is heavily measured (floor sits 1.8x above the largest observed harness artefact and >=3.5x below the cheapest real leak mechanism; the calibration memcmp leak clears it 11x), never silent (dudect_rounds_print_sub_floor names each lane), and delegated to blocking deterministic instruction-count gates. The header honestly acknowledges a residual blind spot: sub-2ns operand-dependent-latency leaks are covered by neither instrument. Also note a hardening in the same file: a trip with delta_ns==0.0 is now a FAULT so a harness omitting effect sizes cannot become permanently unfailable."
+    }
+   ]
+  },
+  {
+   "path": "tests/c/dudect/dudect_stage.h",
+   "status": "A",
+   "purpose": "New shared class-input staging helper (dudect_stage_select): reads both class sources every iteration and merges under a volatile-laundered constant-time mask into one cache-line-aligned buffer, removing class-correlated branches/addresses ahead of the timer (with measured A/B evidence)",
+   "findings": []
+  },
+  {
+   "path": "tests/c/test_aes_gcm_backend_introspect.c",
+   "status": "M",
+   "purpose": "AES-GCM backend-label introspection + SP 800-38D length-limit regression test; PR adds a force-scalar/restore probe proving the label tracks the installed pointer rather than the CPU tier",
+   "findings": []
+  },
+  {
+   "path": "tests/c/test_aes_gcm_neon_equiv.c",
+   "status": "M",
+   "purpose": "NEON AES-256-GCM vs generic-C byte-identity (boundary lattice + 1024 random tuples, round-trip, tag-tamper); PR adds AMA_HAVE_NEON_CRYPTO_EXT_IMPL to the guards to fix a link failure on armv8-a-without-crypto builds",
+   "findings": []
+  },
+  {
+   "path": "tests/c/test_aes_gcm_vaes_equiv.c",
+   "status": "M",
+   "purpose": "Dispatched (VAES) vs AVX2 AES-NI reference AES-GCM equivalence; PR converts all four skip paths from return 0 to return 77 (paired with SKIP_RETURN_CODE in CMake) so skips no longer report as Passed, and guards the PRNG for -Werror=unused-function",
+   "findings": []
+  },
+  {
+   "path": "tests/c/test_argon2_g_avx2_equiv.c",
+   "status": "M",
+   "purpose": "AVX2 Argon2 BlaMka G kernel vs inlined scalar RFC 9106 reference (boundary set + 1024 random blocks); PR guards helpers for strict-warnings and replaces the %p function-pointer cast with a uintptr_t cast",
+   "findings": []
+  },
+  {
+   "path": "tests/c/test_argon2_g_neon_equiv.c",
+   "status": "M",
+   "purpose": "NEON Argon2 BlaMka G kernel vs inlined scalar reference, mirror of the AVX2 variant; PR replaces the pedantic (void*) function-pointer cast with a memcpy-to-uintmax_t diagnostic",
+   "findings": []
+  },
+  {
+   "path": "tests/c/test_ascon.c",
+   "status": "M",
+   "purpose": "Ascon-AEAD128/Hash256 suite: SP 800-232 Table 6 S-box check, Appendix A.3 permutation anchor, full LWC KAT corpora, forgery/fail-closed/nonce-reuse/NULL-empty-input contracts; PR only adds the ama_testing_exports.h include",
+   "findings": []
+  },
+  {
+   "path": "tests/c/test_benchmark.c",
+   "status": "M",
+   "purpose": "Manual performance benchmark (SHA3, HKDF, consttime utils, Ed25519 sign); PR adds explicit long-to-double casts for -Wconversion",
+   "findings": []
+  },
+  {
+   "path": "tests/c/test_chacha20_x8_avx2_equiv.c",
+   "status": "M",
+   "purpose": "AVX2 8-way ChaCha20 keystream vs 8 sequential scalar RFC 8439 block calls over 1024 random tuples; PR wraps the reference/PRNG in the AVX2 guard for the strict-warnings gate",
+   "findings": []
+  },
+  {
+   "path": "tests/c/test_concurrent_init.c",
+   "status": "A",
+   "purpose": "New TSan-target test: 8 threads behind a cond-var start gate concurrently enter every lazily-initialised path (dispatch table, CPUID, NIST-P/secp256k1 combs, Ed25519 tables, P-256 decode-from-cold); documents the nistp_use_mulx4 race it caught",
+   "findings": []
+  },
+  {
+   "path": "tests/c/test_dilithium_invntt_bound.c",
+   "status": "A",
+   "purpose": "New ML-DSA invariant test: asserts max |coeff| at inverse-NTT entry stays < q across keygen/sign/privkey-check/verify via a dispatch-wrapper counter, pinning the call-site reductions that no KAT can observe",
+   "findings": []
+  },
+  {
+   "path": "tests/c/test_dilithium_rej_equiv.c",
+   "status": "M",
+   "purpose": "Dispatched ML-DSA rejection sampler vs scalar FIPS 204 \u00a77.3 reference (256 random trials + short-buflen/small-outlen edges); PR changes the permanent-on-ARM skip from return 0 to return 77",
+   "findings": []
+  },
+  {
+   "path": "tests/c/test_dispatch_cache_file.c",
+   "status": "M",
+   "purpose": "AMA_DISPATCH_CACHE_FILE contract test: mode 0600, v2 fingerprint schema, -1-sentinel timing fields, ownership, and path-sanitizer accept/reject/canonicalisation cases; PR removes the whole-file MSan skip and tightens the timing contract (0 forbidden)",
+   "findings": [
+    {
+     "severity": "minor",
+     "location": "tests/c/test_dispatch_cache_file.c lines 46-51 (AMA_TEST_UNDER_MSAN)",
+     "description": "Dead code left by this PR: the __has_feature(memory_sanitizer) block still defines AMA_TEST_UNDER_MSAN, but the only consumer (the #elif MSan skip main()) was removed in this PR; the macro is now referenced only in a comment."
+    }
+   ]
+  },
+  {
+   "path": "tests/c/test_dudect.c",
+   "status": "M",
+   "purpose": "The dudect harness: 27 lanes (utility, AEAD tag/forgery-position, Ed25519, HKDF/HMAC, agent binding, X25519, FROST, secp256k1, Kyber, ML-DSA, SLH-DSA) rebuilt on the cropped statistic, dudect_stage_select staging, fail-closed lane_finish, bounded fatal-sentinel band, timeout/budget fail-closed rules and their self-tests",
+   "findings": [
+    {
+     "severity": "info",
+     "location": "tests/c/test_dudect.c run_all_tests(), 'Kyber-1024 decaps' registration (~line 3023-3025)",
+     "description": "This PR flips the Kyber-1024 decapsulation dudect lane from strict to info-only (register flag 0 -> 1), so a wall-clock timing excursion on ML-KEM implicit rejection no longer fails the build by itself. The 60-line comment justifies it: the prior +5.630 ns/|t|=11.81 finding was reproduced as a harness artefact in a null experiment (byte-identical ciphertexts, old ternary select: 3/5 over threshold; new masked staging: 0/5), and the blocking authority moved to the deterministic callgrind gate 'kyber-decaps' in tools/check_ghash_constant_time.py, which I verified exists (limit 0 on all four metrics, wired in .github/workflows/dudect.yml at lines ~845). Compensated and documented, but it is a strictness reduction on a crypto CT gate and belongs in the audit record."
+    },
+    {
+     "severity": "info",
+     "location": "tests/c/test_dudect.c main() lines 3095-3140 (srand(time(NULL)))",
+     "description": "Class assignment and inputs use libc rand() seeded from wall clock, so individual measurement runs are not reproducible run-to-run (self-test paths are deterministic). Pre-existing behavior, not introduced by this PR; noted only because the sibling equivalence tests all use fixed-seed PRNGs."
+    }
+   ]
+  },
+  {
+   "path": "tests/c/test_ed25519_canonical_r.c",
+   "status": "A",
+   "purpose": "New RFC 8032 \u00a75.1.3/\u00a75.1.7-step-1 canonical-R test: direct RANGE unit tests of the predicate, the identity-sign-bit forged-signature reproducer, batch/single agreement at counts 1..8, and the count=SIZE_MAX argument guard; labels (SMOKE/RANGE/PIN-COUNT) verified by mutation",
+   "findings": []
+  },
+  {
+   "path": "tests/c/test_ed25519_canonical_s.c",
+   "status": "M",
+   "purpose": "Canonical-S (INVARIANT-26) + canonical-y test; PR fixes previously-vacuous PINs (measured), relabels them SMOKE, and adds genuine universal-forgery pins (R=[5]B,S=5 under y=p+1 and the x-sign-set identity encoding) plus batch NULL-entry survival checks",
+   "findings": []
+  },
+  {
+   "path": "tests/c/test_ed25519_scalarmult_contract.c",
+   "status": "A",
+   "purpose": "New public scalar-mult contract test pinning two backend defects (donna stale extended-t in double_scalarmult, fe51 dropped wNAF carry representing s-2^256 for ~17% of scalars): KAT reproducers, fixed-vs-variable-base agreement, mod-l reduction contract, joint-vs-split identity, linearity, argument guards",
+   "findings": []
+  },
+  {
+   "path": "tests/c/test_ed25519_unaligned_input.c",
+   "status": "A",
+   "purpose": "New alignment-contract test: walks 16 byte offsets for signature and pubkey buffers asserting both verify verdicts at each, serving as the UBSan tripwire for donna's former misaligned uint64 loads in curve25519_expand",
+   "findings": []
+  },
+  {
+   "path": "tests/c/test_ed25519_verify_equiv.c",
+   "status": "M",
+   "purpose": "fe51-only Ed25519 verify equivalence (behavioral parity, Shamir-vs-split byte identity, zero/l-1 edges, strict-encoding rejections, RFC 8032 KAT); PR is a comment-only correction retracting the false 'no <2^253 precondition' claim and pointing at the new contract test",
+   "findings": []
+  },
+  {
+   "path": "tests/c/test_field_bench.c",
+   "status": "M",
+   "purpose": "fe51/fe64 cross-validation (known values, 10k random frombytes/mul/sq/add/sub, 100 inverts) plus a mul/sq cycle benchmark \u2014 newly wired into CTest by this PR after being dead since #370; PR adds _POSIX_C_SOURCE and explicit double casts",
+   "findings": []
+  },
+  {
+   "path": "tests/c/test_keccak_bmi_equiv.c",
+   "status": "M",
+   "purpose": "BMI1/BMI2 Keccak-f[1600] build vs portable build: published all-zero-state anchor, 4096 random states, 4096-deep iterated chain; PR guards the helpers/constant behind AMA_TEST_HAVE_KECCAK_BMI for the strict-warnings gate",
+   "findings": []
+  },
+  {
+   "path": "tests/c/test_kyber_compress.c",
+   "status": "A",
+   "purpose": "New exhaustive proof that the division-free (KyberSlash-fix) Compress_d equals FIPS 203 over all 16,645 (coeff,width) pairs, applies its own mod 2^d, cannot overflow, justifies the single 64-bit reciprocal, and pins the exact d<=18 validity boundary from both sides",
+   "findings": []
+  },
+  {
+   "path": "tests/c/test_kyber_ntt_equiv.c",
+   "status": "M",
+   "purpose": "Multi-lane ML-KEM NTT equivalence (dispatched, direct AVX2/NEON/SVE2, end-to-end forced-scalar KEM parity); PR adds Lane 4 comparing the SHIPPED scalar fallback ama_kyber_ntt_generic_ref (which had drifted by multiples of q) and corrects the Barrett-reference arithmetic and range comments",
+   "findings": []
+  },
+  {
+   "path": "tests/c/test_kyber_poly_equiv.c",
+   "status": "M",
+   "purpose": "kyber_poly_{add,sub,reduce} dispatch-slot equivalence; PR replaces the mod-q-tolerant poly_reduce comparator with strict byte-identity (the centered-Barrett kernel it excused no longer exists), tightens the range guard from [-2q,2q] to the measured [0,q] image, and adds an exhaustive 65,536-input enumeration of the Barrett contract",
+   "findings": []
+  },
+  {
+   "path": "tests/c/test_kyber_sample_ntt.c",
+   "status": "A",
+   "purpose": "New SampleNTT (FIPS 203 Alg 7) continuation test: uses an AMA_TESTING_MODE window-shrink switch (clamped, never widens) to force the ~1e-39-probability XOF continuation on every seed, with stack-painting via a volatile-pointer non-inlined helper to defeat vacuous agreement-on-garbage, plus keygen byte-identity at all window sizes and a round-trip",
+   "findings": []
+  },
+  {
+   "path": "tests/c/test_platform_rand_generic.c",
+   "status": "A",
+   "purpose": "New execution coverage for the generic-POSIX /dev/urandom fallback of ama_platform_rand.c, compiled with -U__linux__ -U__APPLE__ (pinned by an #error); contract cases plus a 1 MiB canary draw with count and contiguous-run bounds that detect short reads down to 16 bytes",
+   "findings": []
+  },
+  {
+   "path": "tests/c/test_pq_parser_stack.c",
+   "status": "M",
+   "purpose": "Stack high-water-mark measurement of parser-reachable PQ entry points and the three ML-DSA operations against stated budgets; PR reworks the harness to a shm double-mapping (Valgrind-clean paint readback) and adds an ASan re-exec that disables only detect_stack_use_after_return",
+   "findings": [
+    {
+     "severity": "info",
+     "location": "tests/c/test_pq_parser_stack.c asan_reexec_without_fake_stack() lines 304-350",
+     "description": "Under AddressSanitizer the test re-executes itself with 'detect_stack_use_after_return=0' appended to ASAN_OPTIONS (guarded against loops via AMA_PQ_STACK_ASAN_REEXEC). This deliberately narrows one sanitizer feature for this one binary because ASan's fake stack relocates sub-64KiB frames off the stack being measured (demonstrated: 200-584 B readings under clang ASan). The change fails closed \u2014 if the re-exec cannot happen, the <4096-byte non-vacuity guards fail the run with the diagnosis rather than skipping \u2014 and the use-after-return check remains active for the other tests in the suite. Reported for visibility since a test mutating sanitizer options is the kind of thing an operator should sign off on; as implemented it is sound."
+    }
+   ]
+  },
+  {
+   "path": "tests/c/test_secp256k1.c",
+   "status": "M",
+   "purpose": "secp256k1 suite (SEC1 KATs, parity, zero/NULL guards, ECDSA RFC 6979 round-trip, canonicality gate, Shamir-vs-ladder differential, comb-vs-ladder single-bit sweep); PR additively appends the off-curve/non-canonical point_mul rejections (invalid-curve surface) and the raw r||s vs DER equivalence block with zeroize-on-reject checks",
+   "findings": []
+  },
+  {
+   "path": "tests/c/test_sha256_neon_kat.c",
+   "status": "reviewed (M)",
+   "purpose": "FIPS 180-4 KAT pinning ama_sha256_compress_neon; PR swaps a local extern re-declaration for the NEON private header include so the test cannot re-type the signature it pins",
+   "findings": []
+  },
+  {
+   "path": "tests/c/test_sha3.c",
+   "status": "reviewed (M)",
+   "purpose": "SHA3-256 KATs; PR adds cross-family squeeze/absorb replay refusal tests (capacity-byte leak, OOB read), position==rate boundary, and consumed-context sentinel tests \u2014 all strengthen coverage of new C-side guards",
+   "findings": []
+  },
+  {
+   "path": "tests/c/test_sphincs_simd_equiv.c",
+   "status": "reviewed (M)",
+   "purpose": "SLH-DSA SIMD-vs-scalar Keccak parity plus AVX2 wots_chain byte-identity; PR only adds #if guards around the scalar SHA-256 reference to fix -Werror=unused-function on non-x86 builds and a (void)exercised",
+   "findings": []
+  },
+  {
+   "path": "tests/conftest.py",
+   "status": "reviewed (M)",
+   "purpose": "Shared fixtures plus the AMA_CI_REQUIRE_BACKENDS skip-to-failure hook; PR extends escalation to imperative pytest.skip reasons and interop-oracle-marked tests, adds host-verified requires_host_isa exemption and the native_library_path resolver",
+   "findings": [
+    {
+     "severity": "info",
+     "location": "tests/conftest.py:97-110 host_isa_exempts",
+     "description": "The requires_host_isa exemption suppresses escalation of ANY skip on a marked test when the host lacks the declared ISA, even a skip whose actual cause is an unrelated missing backend. This is documented and fail-closed on hosts that do have the ISA (and on unknown tokens), so it is a deliberate, narrow tradeoff \u2014 noted for the operator, not a defect."
+    }
+   ]
+  },
+  {
+   "path": "tests/kat/PROVENANCE.json",
+   "status": "reviewed (A)",
+   "purpose": "SHA-256 + size pin manifest for all 30 KAT/vector files (POST vectors, NIST vectors, tests/kat corpus); every digest and byte count was re-verified against the checked-out files and matches; referenced tools/check_vector_provenance.py exists",
+   "findings": []
+  },
+  {
+   "path": "tests/test_action_pin_checks.py",
+   "status": "reviewed (M)",
+   "purpose": "Negative controls for tools/check_action_pins.py; PR flips the empty-pin-set case from exit-0 to fail-closed and adds INVARIANT-4 unpinned-reference detection tests incl. the path-exact SLSA exemption",
+   "findings": []
+  },
+  {
+   "path": "tests/test_acvp_fetch_fails_closed.py",
+   "status": "reviewed (A)",
+   "purpose": "Pins that nist_vectors/fetch_vectors.py returns per-algorithm fetch failures and main() exits 1 when vectors are missing, and that it uses the shared retry transport (no bare urlopen)",
+   "findings": []
+  },
+  {
+   "path": "tests/test_acvp_harness_library_discovery.py",
+   "status": "reviewed (A)",
+   "purpose": "Pins run_vectors.py SONAME-agnostic library discovery (any major, numeric ordering, unparseable suffixes rejected) and forbids re-hardcoding a major; import failure is a FAIL, not a skip",
+   "findings": []
+  },
+  {
+   "path": "tests/test_adaptive_posture.py",
+   "status": "reviewed (M)",
+   "purpose": "PostureEvaluator/CryptoPostureController tests; PR is purely additive (964+/6-): stale-alert de-dup, bounded effective_score, failed-rotation backoff ladder+cap, suppressed-action reporting, family-scoped algorithm ladders, MONITORING.md executable-snippet checks",
+   "findings": []
+  },
+  {
+   "path": "tests/test_adaptive_posture_decay_and_escalation.py",
+   "status": "reviewed (A)",
+   "purpose": "Pins the four repaired PostureEvaluator properties: real decay of the Lyapunov floor, sawtooth streams still escalate, cursor-tie alerts scored, un-timestamped alerts scored exactly once",
+   "findings": []
+  },
+  {
+   "path": "tests/test_adaptive_posture_scenarios.py",
+   "status": "reviewed (M)",
+   "purpose": "Scenario tests for escalation/de-escalation; PR adds a deterministic monotonic timestamp counter to the alert helpers so the suite exercises the new alert-dedup cursor instead of the always-new path",
+   "findings": []
+  },
+  {
+   "path": "tests/test_aes_gcm_native.py",
+   "status": "reviewed (M)",
+   "purpose": "Native AES-256-GCM roundtrip/auth-failure/NIST-vector/interop/provider tests; PR change is one line \u2014 the requires_interop_oracle marker on TestAESGCMInterop (audit M18)",
+   "findings": []
+  },
+  {
+   "path": "tests/test_aesni_is_not_gated_on_avx2.py",
+   "status": "reviewed (A)",
+   "purpose": "Proves hardware AES-GCM is decoupled from AMA_ENABLE_SIMD/AVX2: structural CMake/dispatcher checks plus a slow 3-configuration build-and-probe with CPUID host check, single-config generator handling, LTO-off nm symbol assertions, and Mach-O underscore normalization",
+   "findings": []
+  },
+  {
+   "path": "tests/test_agentic_abuse_detectors.py",
+   "status": "reviewed (M)",
+   "purpose": "VolumeSpikeDetector and NoteArtifactDetector behaviour, corpus-derived calibration, and Cython/Python kernel equivalence; PR change is trivial (from-import of array, dudect threshold wording)",
+   "findings": [
+    {
+     "severity": "info",
+     "location": "tests/test_agentic_abuse_detectors.py:324-337 SUCCESSOR_NOTES",
+     "description": "The file embeds four synthetic 'notes for the next instance' payloads (e.g. 'persist the seed... avoid the egress monitor') as detector-training fixtures. Instruction-like text embedded in repo content \u2014 deliberate test data for the successor-note detector, reported per audit policy and not acted on."
+    }
+   ]
+  },
+  {
+   "path": "tests/test_agentic_load_adversarial.py",
+   "status": "reviewed (M)",
+   "purpose": "End-to-end adversarial load scenarios (concurrency, future-version note, lateral probe, fail-closed persistence refusal) with dudect-style timing check on the binding verdict; PR change is a two-line docstring update",
+   "findings": [
+    {
+     "severity": "info",
+     "location": "tests/test_agentic_load_adversarial.py:401-412 SYNTHETIC_NOTE",
+     "description": "Embedded synthetic agent 'handover note' fixture (instruction-like text) used to drive the note detector and ethical-binding refusal tests. Deliberate test data; reported per audit policy, not followed."
+    }
+   ]
+  },
+  {
+   "path": "tests/test_algorithm_registry_gate.py",
+   "status": "reviewed (A)",
+   "purpose": "Negative controls for tools/check_algorithm_registry.py: family and parameter-set completeness of CSRC_STANDARDS.md, own-Algorithm-cell matching, unmapped names fail, truncated/collapsed scans fail closed",
+   "findings": []
+  },
+  {
+   "path": "tests/test_ama_cryptography_monitor.py",
+   "status": "reviewed (M)",
+   "purpose": "3R monitor suite; PR adds concurrency-race pins (analyze/report/detect_resonance vs writers), Fisher-bar resonance calibration with measured false-alarm rate, bounded operation-name/ratio-matrix maps, snapshot-not-live report, cross-op alarm budget, real volume allow-list; only two conditionally-vacuous 'if anomaly:' asserts were replaced by unconditional ones",
+   "findings": []
+  },
+  {
+   "path": "tests/test_apt_retry_gate.py",
+   "status": "reviewed (A)",
+   "purpose": "Gate + executed-behaviour tests for .github/scripts/apt-install.sh: no bare apt calls in workflows, SIGKILL escalation proven behaviourally, total budget enforced, fast-path list reuse, retry never converts failure to pass, diagnosis text on timeout",
+   "findings": []
+  },
+  {
+   "path": "tests/test_artefact_cache_poisoning.py",
+   "status": "reviewed (A)",
+   "purpose": "End-to-end proof that a poisoned __pycache__ of _integrity_signature cannot disarm the pre-import binding gate or the pre-mapping native digest check; plus ArtefactSourceError normalization sweep including the empty-artefact fail-closed rule",
+   "findings": []
+  },
+  {
+   "path": "tests/test_avx_scoping_gate.py",
+   "status": "reviewed (A)",
+   "purpose": "Negative controls for tools/check_avx_scoping.py across all seven per-file ISA families (leak in any family fails, missing required kernel fails, call-sites not counted, floors fail closed)",
+   "findings": []
+  },
+  {
+   "path": "tests/test_benchmark_baseline_freshness.py",
+   "status": "reviewed (M)",
+   "purpose": "Fails when baseline floors outlive applies_through_release; PR replaces the ReDoS-shaped regex release parser with an ASCII-checked split parser",
+   "findings": []
+  },
+  {
+   "path": "tests/test_benchmark_baseline_infra.py",
+   "status": "reviewed (M)",
+   "purpose": "Massively expanded (+1787) benchmark-runner infrastructure suite: batch/window sampling rules, under-sampled runs raise, no Infinity in records, per-primitive repeats, validity-window extension guard, provenance snapshot/machine-readability, PQC rows hard-gated, zero-measured-rows fatal, per-commit-attributed baseline justification",
+   "findings": []
+  },
+  {
+   "path": "tests/test_benchmark_chart_inputs.py",
+   "status": "reviewed (A)",
+   "purpose": "generate_charts.load_live_data must distinguish absent from corrupt results (corrupt/undecodable/unreadable all SystemExit, absent is None), UTF-8 read regardless of locale, and no imports inside timed thunks in benchmarks/",
+   "findings": []
+  },
+  {
+   "path": "tests/test_benchmark_validation_coverage.py",
+   "status": "reviewed (A)",
+   "purpose": "validation_suite coverage accounting: unmeasured claims tracked, --require-complete fails incomplete runs, all-clear banner withheld, every SKIP print must call record_skip (AST-enforced)",
+   "findings": []
+  },
+  {
+   "path": "tests/test_binding_integrity.py",
+   "status": "reviewed (A)",
+   "purpose": "v3 integrity artefact: signer/verifier mirrored constructions byte-identical, length-framed injective serialization, four-way enumeration-criteria agreement (setup.py, oob verifier), tree-state self-check, per-direction _check_binding_extensions failures, signer inventory fail-closed",
+   "findings": []
+  },
+  {
+   "path": "tests/test_build_sign.py",
+   "status": "reviewed (M)",
+   "purpose": "_build_sign signer tests; PR adds atomic-rewrite (fsync-injection), mode-preservation, stale-.pyc invalidation, and recursive subpackage digest coverage tests",
+   "findings": [
+    {
+     "severity": "minor",
+     "location": "tests/test_build_sign.py:556-573 TestPackageDigestCoversSubpackages.test_no_tracked_package_py_escapes_the_enumeration",
+     "description": "Vacuous test introduced by this PR: 'expected' and 'enumerated' are both built from the same pkg.rglob('*.py') with identical filters (sorted() is erased by the set comprehension), so 'expected == enumerated' is a tautology that cannot fail on any enumeration regression in _build_sign/_self_test. The docstring claims it pins 'every .py under the package is in the signed set' but it never consults either module's enumeration. Real coverage exists in the sibling tests (test_a_subpackage_edit_changes_the_digest, test_runtime_and_signer_agree_on_the_real_tree), so this is a misleading no-op rather than a coverage hole."
+    }
+   ]
+  },
+  {
+   "path": "tests/test_c_buffer_views.py",
+   "status": "reviewed (A)",
+   "purpose": "_CBufferViews batched borrow: bytes pass-through, in-place writable borrow (no secret copy), release on normal/failed/raising exit, multi-dim and wide-itemsize rejection, ChaCha wipeable-key contract parity",
+   "findings": []
+  },
+  {
+   "path": "tests/test_c_secret_zeroization_gate.py",
+   "status": "reviewed (A)",
+   "purpose": "INVARIANT-6 gate tests: every memset-zero spelling/destination form (casts, suffixes, octal, parens, offsets), multi-line calls, comment/literal blanking, macro wrappers with arity+#undef scope, linearity (interleaved floor-of-rounds methodology) \u2014 detection AND non-detection driven, real tree clean",
+   "findings": []
+  },
+  {
+   "path": "tests/test_choco_retry_gate.py",
+   "status": "reviewed (A)",
+   "purpose": "Chocolatey retry: gate forbids bare choco install in workflows; helper executed via pwsh + POSIX shim proving the 0/0-exit-0 outage retries and fails, RequirePath enforced, real failures never converted to green",
+   "findings": []
+  },
+  {
+   "path": "tests/test_code_quality_additions.py",
+   "status": "reviewed (M)",
+   "purpose": "SecureMemoryError/logging/key-management/constant-time tests; PR change replaces a literal fixture master_password with secrets.token_urlsafe(32) (CodeQL py/hardcoded-credentials)",
+   "findings": []
+  },
+  {
+   "path": "tests/test_competitive_page.py",
+   "status": "reviewed (A)",
+   "purpose": "benchmarks/competitive.html must be a fresh render of its generator+JSON (modulo timestamp) and NOTES rank prose must reconcile with measured ranks, with orphaned rank claims failing",
+   "findings": []
+  },
+  {
+   "path": "tests/test_compiler_warning_gate.py",
+   "status": "reviewed (A)",
+   "purpose": "tools/check_compiler_warnings.py: allowlist admits its classes in both quote spellings, real warnings fail, missing/empty logs fatal, clang summary lines ignored, interleaved parallel output tolerated without widening exemptions, workflow wiring and .clang-format loadability pinned",
+   "findings": []
+  },
+  {
+   "path": "tests/test_conftest_backend_skip_scoping.py",
+   "status": "reviewed (M)",
+   "purpose": "pytester-driven coverage of the conftest CI escalation hook; PR adds the requires_host_isa exemption tests (both halves), imperative-skip escalation, interop-oracle marker escalation + AST completeness guard, and the native-library name-resolution table tests incl. loader-order pinning",
+   "findings": []
+  },
+  {
+   "path": "tests/test_corpus_originality.py",
+   "status": "reviewed (M)",
+   "purpose": "INVARIANT-36 gate tests; PR adds TestVectorGeneratorsComputeNothing \u2014 generators may not compute 'NIST' digests via hashlib/hmac (OpenSSL-backed), transcription passes, empty scope fails closed, committed SHA-256 vectors checked against FIPS 180-4 values (verified correct)",
+   "findings": []
+  },
+  {
+   "path": "tests/test_ctypes_abi_gate.py",
+   "status": "reviewed (M)",
+   "purpose": "INVARIANT-42 ctypes ABI gate; PR adds main() exit-code wiring tests, local-binding idiom extraction, discovered-not-hand-maintained scope with floor-check negative control, tight 126-signature vacuity floor, and header-pattern linearity tests",
+   "findings": []
+  },
+  {
+   "path": "tests/test_dashboard_provenance.py",
+   "status": "A",
+   "purpose": "Pins that the benchmark dashboard labels measurements with the artefact's own provenance (commit/version/timestamp/dirty flag) instead of the working tree's",
+   "findings": []
+  },
+  {
+   "path": "tests/test_differential.py",
+   "status": "M",
+   "purpose": "Differential tests of AMA AES-GCM/Ed25519 against pycryptodome/pynacl; PR adds requires_interop_oracle markers (M18)",
+   "findings": [
+    {
+     "severity": "minor",
+     "description": "TestEd25519Differential.test_signature_verification_cross_library's docstring claims 'Sign with pynacl, verify with AMA' but the body only asserts signature (64) and key (32) lengths \u2014 no AMA verification ever runs. Pre-existing weakness, but this PR stamps the class requires_interop_oracle ('a skip here means a missing oracle'), which overstates the coverage the oracle actually buys: even when pynacl is present the test exercises no cross-library verification. Real interop is covered elsewhere (test_ed25519_native.py), so this is misleading rather than a coverage hole.",
+     "location": "tests/test_differential.py:96-113 (TestEd25519Differential.test_signature_verification_cross_library)"
+    }
+   ]
+  },
+  {
+   "path": "tests/test_docker_pins_gate.py",
+   "status": "A",
+   "purpose": "Negative controls for tools/check_docker_pins.py: digest pinning, base-image EOL window (injected date), exemption prose, fail-closed empty scan, and documented FROM lines matching real Dockerfiles",
+   "findings": []
+  },
+  {
+   "path": "tests/test_documented_c_prototypes_match_headers.py",
+   "status": "A",
+   "purpose": "Verifies every C prototype printed in tracked markdown matches the real header declaration verbatim, plus a compiler second opinion (-Werror, -Warray-parameter) and internal-header allowlist hygiene",
+   "findings": []
+  },
+  {
+   "path": "tests/test_documented_counts_gate.py",
+   "status": "M",
+   "purpose": "Negative controls for tools/check_documented_counts.py over synthetic trees: LoC table rows/lines, scope composition, aggregate test counts, fuzz-target counts, breaking-change counts, entry-point counts, C-suite counts, CHANGELOG Unreleased liveness, per-family claim floors",
+   "findings": []
+  },
+  {
+   "path": "tests/test_documented_extras.py",
+   "status": "M",
+   "purpose": "Tests tools/check_documented_extras.py: documented pip install extras must exist in pyproject (PEP 685 normalisation, both detection directions, dev extra carries build/setuptools/wheel)",
+   "findings": []
+  },
+  {
+   "path": "tests/test_documented_source_paths_exist.py",
+   "status": "A",
+   "purpose": "Every backtick-quoted source path or bare source filename cited in tracked markdown must resolve to a real tracked file, with reviewable RUN_PRODUCED/NOT_IN_TREE allowlists and staleness checks on both",
+   "findings": []
+  },
+  {
+   "path": "tests/test_dudect_simd_sweep_gate.py",
+   "status": "A",
+   "purpose": "Pins the dudect SIMD-sweep slot split (audit M26): AVX2/NEON exit-77 must FAIL as dispatch regressions, only AVX-512/SVE2 may skip; models and pins the workflow's POSIX case membership idiom",
+   "findings": []
+  },
+  {
+   "path": "tests/test_dudect_staging_gate.py",
+   "status": "A",
+   "purpose": "Mutation controls for tools/check_dudect_class_staging.py: class-selected branches/addresses before the timer must be rejected, masked-merge staging accepted, alignment checked on every staging destination, unparseable/class-draw-free files fail closed",
+   "findings": []
+  },
+  {
+   "path": "tests/test_ed25519_backend_parity_gate.py",
+   "status": "M",
+   "purpose": "Stub-driven negative controls for tools/check_ed25519_backend_parity.py: divergence fails, vacuous corpora are inconclusive, agreement is not correctness, backend-identity guard (M14), arithmetic (byte-exact) and batch-path canonical-R families",
+   "findings": []
+  },
+  {
+   "path": "tests/test_ed25519_canonical_y.py",
+   "status": "M",
+   "purpose": "INVARIANT-38 canonical-y rejection via the two decode entry points, with the y=0/y=p discriminating pair, x=0 sign-bit rule (RFC 8032 \u00a75.1.3), 19-value band sweep, and NULL-pointer guards on point_add/scalarmult/point_from_scalar",
+   "findings": []
+  },
+  {
+   "path": "tests/test_ed25519_native.py",
+   "status": "M",
+   "purpose": "Native C Ed25519 tests: keypair/sign/verify, PyCA interop both directions, byte-identical determinism, RFC 8032 \u00a77.1 vectors, provider integration; PR adds requires_interop_oracle markers",
+   "findings": []
+  },
+  {
+   "path": "tests/test_equations.py",
+   "status": "M",
+   "purpose": "Math framework tests (helix invariants, Lyapunov, golden ratio, sigma-quadratic); PR adds indefinite-matrix and skew-part correctness classes for _dominant_eigenvector/enforce_sigma_quadratic_threshold with dense sweeps",
+   "findings": []
+  },
+  {
+   "path": "tests/test_error_state_gating_tool.py",
+   "status": "A",
+   "purpose": "Negative controls for tools/check_error_state_gating.py: guard delegation (first-statement rule), ascon in scope, Cython binding inventory floor, M16 module discovery incl. aliased imports and getattr-string form",
+   "findings": []
+  },
+  {
+   "path": "tests/test_execution_integrity.py",
+   "status": "M",
+   "purpose": "Bytecode-vs-signed-source integrity: _code_matches (incl. new co_exceptiontable comparison), stale-cache skip rules (timestamp/checked-hash) vs unchecked-hash judgement, truncated-header fault, end-to-end poisoned .pyc import refusal",
+   "findings": []
+  },
+  {
+   "path": "tests/test_fuzz_input_reachability_gate.py",
+   "status": "A",
+   "purpose": "Tests tools/check_fuzz_input_reachability.py: -max_len derived from harness guards and largest committed seed, all comparison operators seen, unresolved guards fail closed, MANUAL_BOUNDS scoped to the named guard, hardcoded workflow max_len fails",
+   "findings": []
+  },
+  {
+   "path": "tests/test_fuzz_target_registration.py",
+   "status": "M",
+   "purpose": "Tests tools/check_fuzz_target_registration.py: CMake/fuzzing.yml/oss-fuzz build.sh agreement, seed-corpus presence, documented exclusions, POSIX path spelling in refusals; PR adds the Python-lane (run-step, not prose/if-false) checks",
+   "findings": []
+  },
+  {
+   "path": "tests/test_fuzzing.py",
+   "status": "M",
+   "purpose": "Hypothesis property tests over legacy_compat: length-prefixed encoding, HMAC, Ed25519, Dilithium, secure_wipe, domain separation, crypto packages; PR removes a stale file-level mypy misc suppression",
+   "findings": []
+  },
+  {
+   "path": "tests/test_gate_coverage.py",
+   "status": "M",
+   "purpose": "Tests tools/check_gate_coverage.py: every CI job must be in an aggregating gate's needs AND actually evaluated (needs.<job>.result, wildcard rules, env-bound-but-unread detection, H7 vacuity floor)",
+   "findings": []
+  },
+  {
+   "path": "tests/test_ghash_constant_time_gate.py",
+   "status": "M",
+   "purpose": "Negative controls for tools/check_ghash_constant_time.py: non-running driver is inconclusive, cache-miss/data-ref metrics, order-artefact confirmation sweep, unoptimized-library guard, all 18 targets pinned at zero threshold, CI wiring",
+   "findings": []
+  },
+  {
+   "path": "tests/test_handshake_failure_clears_state.py",
+   "status": "A",
+   "purpose": "A failed secure-channel handshake must raise HandshakeError (not raw ValueError from wire-controlled input), clear _shared_secret/_handshake_hash, and CLOSE the channel against second attempts",
+   "findings": []
+  },
+  {
+   "path": "tests/test_hkdf_sha3_256.py",
+   "status": "M",
+   "purpose": "HKDF/HMAC-SHA3-256 derivation tests: determinism, key independence, NIST FIPS 202 vectors, RFC 5869 structure via PyCA, project HMAC vectors, ethical-context integration; PR adds requires_interop_oracle markers",
+   "findings": [
+    {
+     "severity": "minor",
+     "description": "test_hkdf_sha3_256_project_vector is titled 'Project-specific HKDF-SHA3-256 test vector' but hardcodes no expected output \u2014 it only derives twice through PyCA's HKDF and asserts determinism and length, so it pins neither AMA's implementation nor any vector, unlike the two HMAC project vectors beside it which do hardcode digests. Pre-existing; the PR only added the requires_interop_oracle marker.",
+     "location": "tests/test_hkdf_sha3_256.py:408-446 (TestProjectSpecificVectors.test_hkdf_sha3_256_project_vector)"
+    }
+   ]
+  },
+  {
+   "path": "tests/test_hsm_integration.py",
+   "status": "M",
+   "purpose": "HSMKeyStorage tests over mocked PyKCS11 plus a real SoftHSM2 lifecycle; PR adds provisioning enforcement (AMA_CI_REQUIRE_BACKENDS lanes, workflow install steps pinned incl. Windows choco), PyKCS11 1.5.19 Windows-wheel exclusion evaluated via packaging, probe/resolver agreement",
+   "findings": []
+  },
+  {
+   "path": "tests/test_integrity.py",
+   "status": "M",
+   "purpose": "Integrity CLI tests: --update gated on AMA_BUILD_PIPELINE, --verify/--show, flag exclusion; PR replaces a vacuous returncode-in-(0,1) subprocess check with a real clean-pass + tampered-copy-refused pair",
+   "findings": []
+  },
+  {
+   "path": "tests/test_integrity_repair_gate.py",
+   "status": "A",
+   "purpose": "Classifies integrity failures as repairable stale-binding vs tampering: only the signer process (python -m _build_sign) may import through a stale digest; bad signature/anchor/malformed artefact refuse even with AMA_BUILD_PIPELINE=1; binding-strength downgrade semantics",
+   "findings": []
+  },
+  {
+   "path": "tests/test_invariant41_rng_sweep.py",
+   "status": "A",
+   "purpose": "INVARIANT-41 AST sweep: every bare OS-entropy draw in the shipped package must be on a counted allowlist (H9 exact counts), alias/binding resolution, strict __main__-guard exemption, health-digest kernel re-resolution",
+   "findings": []
+  },
+  {
+   "path": "tests/test_invariant_upgrades.py",
+   "status": "M",
+   "purpose": "Invariant upgrades A-D: finalizer-failure observability, no crypto fallbacks (stdlib hmac / third-party crypto import bans), INVARIANT-13 suppression hygiene now driven through the gate's own scan instead of drifting shadow copies, optional-import type-ignore rule",
+   "findings": []
+  },
+  {
+   "path": "tests/test_key_formats.py",
+   "status": "M",
+   "purpose": "Key interop conformance: RFC 9881/LAMPS/8410/8037/8152/9500 vendored answer keys both directions, independent reference encoder, extensive negative space (DER/JWK/COSE/PEM), mutation sweeps with canonicality/localisation contracts, OID codec bijection; PR adds explicit UTF-8 read of ref_keyformat.py for Windows cp1252 lanes",
+   "findings": [
+    {
+     "severity": "minor",
+     "description": "In test_an_oid_edit_that_names_another_algorithm_is_accepted_as_that_one the assertion `assert differing == [len(differing) - 1 + differing[0]] or len(differing) == 1` is a convoluted expression whose first disjunct is dead: it can only be true when len(differing)==1, which the second disjunct already states. The intended property ('the two SPKIs differ in exactly one octet') holds, but the dead disjunct obscures it and invites a wrong edit later. Pre-existing; not touched by this PR.",
+     "location": "tests/test_key_formats.py:2501 (test_an_oid_edit_that_names_another_algorithm_is_accepted_as_that_one)"
+    }
+   ]
+  },
+  {
+   "path": "tests/test_keygen_pct_gate.py",
+   "status": "A",
+   "purpose": "Negative controls for tools/check_keygen_pct.py: AST-discovered keygen entry points must invoke a pairwise consistency test (one delegation hop max), exemptions must exist with reasons, collapsed scope fails closed",
+   "findings": []
+  },
+  {
+   "path": "tests/test_log_message_encodability_gate.py",
+   "status": "A",
+   "purpose": "Both directions of INVARIANT-43 (cp1252-encodable log/warn text): unencodable chars in logger/warnings/f-strings/inline getLogger caught, cp1252-encodable and non-logging text not policed, real tree clean and non-vacuous",
+   "findings": []
+  },
+  {
+   "path": "tests/test_makefile_targets.py",
+   "status": "A",
+   "purpose": "Makefile hygiene: every target .PHONY (docs/docker/fuzz directory shadowing), scoped pip-audit, c-api names the produced static lib, and the dudect harness Makefile really builds native PQC at Release codegen (-O3 -DNDEBUG lockstep)",
+   "findings": []
+  },
+  {
+   "path": "tests/test_monitoring_mad.py",
+   "status": "A",
+   "purpose": "Pins EWMAStats._median_and_mad: single-sort merged MAD bit-identical to the naive double-sort across randomized/duplicate/parity windows, memoization cache hit/invalidation, anomaly answers unchanged",
+   "findings": []
+  },
+  {
+   "path": "tests/test_monitoring_profile_coverage.py",
+   "status": "A",
+   "purpose": "Every monitor_crypto_operation name emitted in the package must have an anomaly profile, and every profile must be emitted or on the declared external-only list (dead-config guard)",
+   "findings": []
+  },
+  {
+   "path": "tests/test_native_integrity.py",
+   "status": "M",
+   "purpose": "v2 native-library integrity binding: signer/runtime/out-of-band digest mirrors pinned equal, injective framed package digest (collision regressions), tampered .so refused pre-mapping, embedded-digest rewrite breaks the signature, override verified-by-bytes semantics, POST KAT provenance and FIPS stage ordering",
+   "findings": []
+  },
+  {
+   "path": "tests/test_native_lib_override_hardening.py",
+   "status": "M",
+   "purpose": "AMA_CRYPTO_LIB_PATH and LD/DYLD_LIBRARY_PATH ignored under secure-execution (setuid/setgid/AT_SECURE/issetugid/getauxval probes, fail-open vs unknown distinctions); PR updates stubs for the new verify_digest parameter of _try_load_library",
+   "findings": []
+  },
+  {
+   "path": "tests/test_native_library_never_mapped_unverified.py",
+   "status": "A",
+   "purpose": "Subprocess test proving a digest-refused native library is never mapped by binding-extension DT_NEEDED imports, with its own positive control",
+   "findings": []
+  },
+  {
+   "path": "tests/test_nistp_curves.py",
+   "status": "M",
+   "purpose": "P-256/384/521 ECDSA+ECDH vs pure-Python reference, RFC 6979 vectors, low-s truth table; PR adds second-encoding (x+p on a real point) rejection tests backed by a small cubic-root search",
+   "findings": []
+  },
+  {
+   "path": "tests/test_post_failclosed.py",
+   "status": "M",
+   "purpose": "FIPS POST fail-closed suite: import fails on failed POST, ERROR state inhibits all output (incl. Cython bindings), tri-state integrity verdicts, continuous-RNG atomicity; PR removes the SKIP escape that let the binding test pass vacuously and adds gate-tool negative controls",
+   "findings": []
+  },
+  {
+   "path": "tests/test_pqc_kat.py",
+   "status": "M",
+   "purpose": "NIST FIPS 203/204/205 KATs and byte-exact ACVP sigGen/sigVer vectors for ML-KEM/ML-DSA/SLH-DSA; PR converts missing/empty vector-corpus skips into hard failures",
+   "findings": [
+    {
+     "severity": "info",
+     "description": "Stale prose (pre-existing, not touched by this PR): test_acvp_siggen_randomizer_byte_exact's docstring still says of SHA2-256f 'the divergence is strictly downstream, in the FORS/WOTS+/hypertree body' while the class docstring and test_acvp_siggen_byte_exact in the same class assert the signer is now fully byte-identical to NIST; the parenthetical describes a corrected historical state.",
+     "location": "tests/test_pqc_kat.py:939-956 (TestSLHDSA_SHA2_256f_ACVP_sigGen.test_acvp_siggen_randomizer_byte_exact)"
+    }
+   ]
+  },
+  {
+   "path": "tests/test_precommit_mypy_scope.py",
+   "status": "A",
+   "purpose": "Pins the pre-commit mypy hook scope to exactly ci.yml's mypy --strict path set (derived, not restated), plus --explicit-package-bases and stub-package parity",
+   "findings": []
+  },
+  {
+   "path": "tests/test_precommit_verbatim_bytes.py",
+   "status": "A",
+   "purpose": "Asserts trailing-whitespace/end-of-file-fixer hooks exclude KAT vectors, fuzz corpus, vendored C and POST KATs, that ordinary sources stay covered, and that the exclusions are load-bearing",
+   "findings": []
+  },
+  {
+   "path": "tests/test_preload_native_digest.py",
+   "status": "A",
+   "purpose": "Unit pins for pre-dlopen native-library digest verification: refusal before mapping, signing-override scoping, structural refusal records, mapped-bytes flag driving POST re-read, and argv-based signer-identity hardening",
+   "findings": []
+  },
+  {
+   "path": "tests/test_pyc_cache_liveness.py",
+   "status": "A",
+   "purpose": "Proves _cache_header_is_live agrees with CPython's actual hash-based .pyc validation across the (flags x --check-hash-based-pycs) matrix, with a non-degeneracy control",
+   "findings": []
+  },
+  {
+   "path": "tests/test_release_matrix_coverage.py",
+   "status": "A",
+   "purpose": "Cross-checks release.yml's cibuildwheel matrix against ci.yml/ci-build-test.yml pytest lanes per (arch x interpreter); also forbids success()-gated artifact uploads tree-wide",
+   "findings": []
+  },
+  {
+   "path": "tests/test_release_state.py",
+   "status": "A",
+   "purpose": "Tests tools/check_release_state.py on synthetic released/unreleased trees: tag-state vs PyPI-publish-state markers, version scoping, exit codes, real-tree witness",
+   "findings": []
+  },
+  {
+   "path": "tests/test_release_tag_gate.py",
+   "status": "M",
+   "purpose": "Negative controls for the signed-annotated-tag shape gate; PR adds TestTheUnanchoredReleaseGuardIsWired pinning the release.yml preflight guard against unanchored canonical-repo releases",
+   "findings": []
+  },
+  {
+   "path": "tests/test_resign_wheel.py",
+   "status": "A",
+   "purpose": "Pins tools/resign_wheel.py: wheel discovery fail-loud modes, signer subprocess env contract, out-of-root native-digest guard, RECORD-regenerating repack, end-to-end with stubbed signer",
+   "findings": []
+  },
+  {
+   "path": "tests/test_secp256k1_ecdsa_noncanonical_pubkey.py",
+   "status": "M",
+   "purpose": "INVARIANT-29 out-of-field coordinate rejection for secp256k1 ECDSA verify; PR adds the paired accept/reject second-encoding case through pubkey_decompress (x+p of the x=1 point)",
+   "findings": []
+  },
+  {
+   "path": "tests/test_secret_division_gate.py",
+   "status": "A",
+   "purpose": "Tests the KyberSlash div-instruction disassembly gate: inventory attribution, disassembler fallback selection, fail-closed verdicts, allowlist hygiene",
+   "findings": [
+    {
+     "severity": "minor",
+     "description": "Test name contradicts the behaviour it pins: test_a_mnemonic_that_merely_starts_with_div_is_not_counted and its docstring ('divss and divsd are floating point and have no integer secret here') assert divides == 2, i.e. divss/divsd ARE counted; only the assertion message admits the inversion. A reader skimming names/docstrings gets the opposite of the pinned policy.",
+     "location": "tests/test_secret_division_gate.py:86-97 (test_a_mnemonic_that_merely_starts_with_div_is_not_counted)"
+    }
+   ]
+  },
+  {
+   "path": "tests/test_secure_memory.py",
+   "status": "M",
+   "purpose": "secure_memory basics: memzero, mlock availability contract, constant-time compare, SecureBuffer lifecycle; PR replaces a try/except-swallowing exception test with pytest.raises so a swallowed __exit__ exception now fails",
+   "findings": []
+  },
+  {
+   "path": "tests/test_secure_memory_backends.py",
+   "status": "M",
+   "purpose": "Backend selection and SecureBuffer tests; PR adds TestPythonFallbackByteSemantics proving _python_fallback_memzero wipes bytes (via cast('B')) on signed-char/wide-item views",
+   "findings": []
+  },
+  {
+   "path": "tests/test_secure_memory_extra.py",
+   "status": "M",
+   "purpose": "Branch coverage for mlock/munlock paths, INVARIANT-7 refusal of constant_time_compare without the native backend, libc probes; PR change is an import-style cleanup only (typing.ClassVar)",
+   "findings": []
+  },
+  {
+   "path": "tests/test_secure_wipe_byte_length.py",
+   "status": "A",
+   "purpose": "Pins that secure_memzero sizes wipes by .nbytes not len() on wide-itemsize memoryviews, refuses non-contiguous views, and keeps byte-shaped inputs working",
+   "findings": []
+  },
+  {
+   "path": "tests/test_self_test_branches.py",
+   "status": "M",
+   "purpose": "POST branch coverage: timing-oracle detection and false-positive floor, KAT failure paths, _run_self_tests error branches, RNG health; PR raises the timing min-effect floor from 50 to 100 ns",
+   "findings": [
+    {
+     "severity": "info",
+     "description": "The PR raises the POST timing-oracle absolute minimum-effect floor from 50 ns to 100 ns (tests updated at three sites), i.e. cross-class timing deltas between 50-100 ns no longer trip the runtime leak detector. The change is documented against a measured CI jitter incident (delta=51 ns / |t|=11.48 on job 97259726191) and cross-checked by a deterministic callgrind gate measuring zero cross-class instructions, and the leak-detection positive control injects deltas far above the floor \u2014 but it is a deliberate detection-threshold relaxation the operator should sign off on.",
+     "location": "tests/test_self_test_branches.py:185-220 (TestTimingFloorScaling.test_floor_at_least_absolute_baseline and siblings)"
+    }
+   ]
+  },
+  {
+   "path": "tests/test_self_test_coverage.py",
+   "status": "M",
+   "purpose": "Coverage closure for _self_test: state machine, integrity verification incl. trust-anchor branches, KATs, pairwise tests, timing oracle tri-state; PR removes a never-firing except AttributeError guard with an explanatory comment",
+   "findings": []
+  },
+  {
+   "path": "tests/test_semgrep_severity_gate.py",
+   "status": "M",
+   "purpose": "Negative controls for the Semgrep ERROR-floor gate plus CI wiring checks; PR fixes the semgrep availability probe (console script instead of the deprecated python -m entry point) and adds tests proving the probe can no longer mute the end-to-end run",
+   "findings": []
+  },
+  {
+   "path": "tests/test_setup_signer_contract.py",
+   "status": "A",
+   "purpose": "Structural pins on setup.py's _run_integrity_signer: rename-not-delete of the tracked artefact, BaseException restore, strictness-variable scrubbing, and stale-claim checks in SECURITY.md/ARCHITECTURE.md",
+   "findings": []
+  },
+  {
+   "path": "tests/test_sha2_pbkdf2_native.py",
+   "status": "A",
+   "purpose": "FIPS 180-4/202 and RFC 7914/BIP39 KATs plus hashlib differentials for the native SHA-512/384, SHA3-384 and PBKDF2 exports, with parameter-contract and C-kernel defence-in-depth checks",
+   "findings": []
+  },
+  {
+   "path": "tests/test_signing_keypair_normalization.py",
+   "status": "A",
+   "purpose": "Pins crypto_api's memoized signing-secret normalization: element-identity memo keying (list container swap), caller-format preservation, mismatched-key rejection at create time, seed/expanded form agreement",
+   "findings": []
+  },
+  {
+   "path": "tests/test_stdlib_hash_boundary_gate.py",
+   "status": "A",
+   "purpose": "Tests the INVARIANT-1 hashlib/hmac boundary gate: live-recomputed allowlist counts, five silent-bypass closures (from-import names, aliases, dynamic import, module rebinding, getattr), recursive scan",
+   "findings": []
+  },
+  {
+   "path": "tests/test_suppression_hygiene_gate.py",
+   "status": "A",
+   "purpose": "Negative controls for suppression hygiene: the ModuleNotFoundError pre-filter fix, per-site cppcheck suppressions (with a live line-drift check), and refusal of file-scoped linter directives",
+   "findings": []
+  },
+  {
+   "path": "tests/test_sve2_impl_macro_is_msvc_guarded.py",
+   "status": "A",
+   "purpose": "Structural CMake/dispatcher check that AMA_HAVE_SVE2_IMPL is defined only inside the NOT-MSVC +sve2 block and every SVE2 symbol reference sits under the macro, with a tested nesting-aware #ifdef stripper",
+   "findings": []
+  },
+  {
+   "path": "tests/test_timing_detector_calibration.py",
+   "status": "A",
+   "purpose": "Pins the 5.0.0 ResonanceTimingMonitor contract: update-after-test z-score, calibrated budgets, deque-saturation recompute cadence, CUSUM shift detection and pre-lock drift guard, pair-budget arrival-order independence, eval-harness gate logic",
+   "findings": []
+  },
+  {
+   "path": "tests/test_trust_anchor_pinning.py",
+   "status": "M",
+   "purpose": "Trust-anchor pinning for package verify and Noise-NK handshake plus anchored-build integrity refusals; PR adds signer-process classification carve-outs (stale-binding vs tampering), attestation anchored/integrity_strength keys, and orig_argv signer-identity window tests",
+   "findings": []
+  },
+  {
+   "path": "tests/test_type_check_scope_gate.py",
+   "status": "A",
+   "purpose": "Tests tools/check_type_check_scope.py and the CI wiring: mypy --strict scope equals every tracked .py in both workflows, gate wired to the coverage report unskippably, config narrows nothing; gate logic fail-closed in both directions",
+   "findings": []
+  },
+  {
+   "path": "tests/test_update_docs_changelog_guard.py",
+   "status": "A",
+   "purpose": "Pins tools/update_docs.py: undated-heading changelog parsing (duplicate-section corruption), encoding/newline discipline via AST, unstaged-additions guard for --loc, static test-count regenerator, benchmark wiki table sync",
+   "findings": []
+  },
+  {
+   "path": "tests/test_vector_provenance_gate.py",
+   "status": "A",
+   "purpose": "Tests the KAT-vector provenance manifest gate with test-source-resident anchor digests (so regenerating the manifest cannot launder corruption) and mutation/deletion/unpinned-growth negative controls",
+   "findings": []
+  },
+  {
+   "path": "tests/test_vector_provenance_scope.py",
+   "status": "A",
+   "purpose": "Pins that the provenance manifest covers only published vector files (no first-party source), honours git tracking so ACVP-generated files do not trip it, and still scans without git",
+   "findings": []
+  },
+  {
+   "path": "tests/test_vendor_isolation_gate.py",
+   "status": "A",
+   "purpose": "INVARIANT-1 vendor-isolation gate tests: Python/C source scans, ELF/Mach-O/PE parsers validated against constructed images and platform tools, build-config and Dockerfile screens, CI wiring, runtime residency check",
+   "findings": []
+  },
+  {
+   "path": "tests/test_verification_claim_honesty_gate.py",
+   "status": "M",
+   "purpose": "INVARIANT-37 negative controls for the claim-honesty gate (RFC3161 capability-derived prohibitions); PR adds sentence-scoped negation, formal-verification claim scanning, and span-anchored exemption tests",
+   "findings": []
+  },
+  {
+   "path": "tests/test_verify_install_oob.py",
+   "status": "A \u2014 reviewed in full",
+   "purpose": "Tests for tools/verify_install_oob.py: self-KATs, SHA3/SHA-512 hashlib-oracle parity, RFC 8032 Ed25519 verify vectors, trust-anchor enforcement, artefact literal-data-only shape rule, and tamper/poisoned-pyc detection on copied trees.",
+   "findings": []
+  },
+  {
+   "path": "tests/test_version_consistency.py",
+   "status": "M \u2014 reviewed in full + diff (purely additive, +210)",
+   "purpose": "Tests for tools/check_version_consistency.py; PR adds SONAME-literal, tag-pin, and INVARIANT-range-claim test classes with non-vacuity floors.",
+   "findings": []
+  },
+  {
+   "path": "tests/test_visual_assets_gate.py",
+   "status": "A \u2014 reviewed in full",
+   "purpose": "Tests pinning tools/generate_visuals.py: chart totals cover every test file (Other bucket), visuals manifest freshness, CI wiring, and --check working without numpy/matplotlib.",
+   "findings": []
+  },
+  {
+   "path": "tests/test_wheel_smoke_bound_extensions.py",
+   "status": "A \u2014 reviewed in full",
+   "purpose": "Tests that the wheel smoke test parses the bound-extension count (0 is not a pass) and enforces integrity anchoring per AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR, via a stubbed _self_test.",
+   "findings": []
+  },
+  {
+   "path": "tests/test_workflow_command_checks.py",
+   "status": "M \u2014 reviewed in full + diff (+629/-4; empty-dir-passes test replaced by fail-closed floor test)",
+   "purpose": "Tests for tools/check_workflow_commands.py: runner labels, inline-python payloads, Windows quoting, release-publishing inputs, expression syntax, cmake build type, pytest prerequisites, gate-payload vacuity, and repository-wide sweep.",
+   "findings": []
+  },
+  {
+   "path": "tests/test_workflow_path_filters.py",
+   "status": "A \u2014 reviewed in full",
+   "purpose": "Asserts every path-filtered workflow lists the scripts it runs, CMake workflows list CMakeLists.txt, and push/pull_request filters are identical; fails closed on unmatched patterns.",
+   "findings": []
+  },
+  {
+   "path": "tests/test_wycheproof_fetch_retry.py",
+   "status": "A \u2014 reviewed in full",
+   "purpose": "Tests the Wycheproof fetch retry policy in tools/http_fetch via refresh_wycheproof_corpus: transient statuses retried, permanent/non-transport not retried, digest mismatch never retried, HTTPS-only redirect handler installed and effective.",
+   "findings": []
+  },
+  {
+   "path": "tools/build_ascon_seed_corpus.py",
+   "status": "A \u2014 reviewed in full",
+   "purpose": "Deterministic seed-corpus generator for fuzz_ascon (rate-boundary lengths, split regimes, forged-bit selectors) with a --check drift mode.",
+   "findings": []
+  },
+  {
+   "path": "tools/build_keyformat_corpus.py",
+   "status": "M \u2014 reviewed in full + diff (typing/encoding modernization; logic unchanged)",
+   "purpose": "Rebuilds and verifies the vendored key-format conformance corpus from RFC/I-D answer keys (RFC 9881, LAMPS ML-KEM, RFC 8410, RFC 9500, RFC 8554, JOSE/COSE transcriptions); offline shape/provenance checks plus online upstream re-derivation.",
+   "findings": [
+    {
+     "severity": "minor",
+     "location": "fetch(), lines 96-114",
+     "description": "fetch() checks the https:// scheme only on the caller-supplied URL and then uses plain urllib.request.urlopen, whose default HTTPRedirectHandler will follow a redirect to http:// or ftp:// on a second hop; the inline '# nosec B310 -- https enforced directly above' overstates the guarantee. This PR fixed exactly this defect class in tools/http_fetch (_HTTPSOnlyRedirectHandler, pinned by tests/test_wycheproof_fetch_retry.py::TestRedirectsCannotLeaveHTTPS) but left this duplicated fetcher unhardened. Practical exposure is low (hard-coded rfc-editor.org/ietf.org sources over TLS, output cross-checked by verify_upstream), but the fetch logic is duplicated instead of routed through the hardened tools/http_fetch."
+    }
+   ]
+  },
+  {
+   "path": "tools/build_kyber_seed_corpus.py",
+   "status": "A \u2014 reviewed in full",
+   "purpose": "Deterministic seed-corpus generator for fuzz_kyber covering the fully-fuzzed ct/pk/sk cases at exact/\u00b11 lengths, widened 2-byte corruption positions, and keygen seeds; --check drift mode.",
+   "findings": []
+  },
+  {
+   "path": "tools/build_pqc_verify_seed_corpus.py",
+   "status": "A \u2014 reviewed in full",
+   "purpose": "Deterministic seeds for the fully-fuzzed verify branches of fuzz_dilithium/fuzz_sphincs (exact-length zero/ff/prng plus one-short), making previously unreachable branches executable from the first pass.",
+   "findings": []
+  },
+  {
+   "path": "tools/check_action_pins.py",
+   "status": "M \u2014 reviewed in full + diff (adds unpinned-uses INVARIANT-4 enforcement, --root, and fail-closed empty-pin-set; previously returned 0 on no pins)",
+   "purpose": "Verifies every SHA-pinned GitHub Action resolves upstream via git ls-remote, flags unpinned uses: references (with a documented exemption list), and optionally checks version comments in --strict mode.",
+   "findings": []
+  },
+  {
+   "path": "tools/check_algorithm_registry.py",
+   "status": "A \u2014 reviewed in full",
+   "purpose": "INVARIANT-1 addendum gate: discovers primitive families and parameter sets from the public C header and requires each to map to a CSRC_STANDARDS.md row (Algorithm column for parameter sets), with collapse floors.",
+   "findings": []
+  },
+  {
+   "path": "tools/check_apt_retry.py",
+   "status": "A \u2014 reviewed in full",
+   "purpose": "Gate requiring every network-bound apt invocation in workflows to route through .github/scripts/apt-install.sh; splices continuations, applies helper exemption per shell segment, ReDoS-hardened option matching, fails closed on empty scan.",
+   "findings": [
+    {
+     "severity": "minor",
+     "location": "_logical_lines()/scan_text(), lines 105-167",
+     "description": "A comment line ending in a backslash is spliced with the following physical line, and the joined logical line starts with '#' so it is skipped \u2014 but in a POSIX shell a backslash inside a comment does not continue the line, so an apt-get call on the next physical line would execute while the gate ignores it. A contrived but real gate-bypass shape for a workflow-hygiene control; consider only splicing lines whose first spliced segment is not a comment."
+    }
+   ]
+  },
+  {
+   "path": "tools/check_avx_scoping.py",
+   "status": "A \u2014 reviewed in full",
+   "purpose": "Disassembles the built object and requires every CPUID-gated instruction (AVX2/AVX-512, AES-NI, PCLMUL, SHA-NI, BMI/ADX, SSSE3, SSE4.1) to live in a kernel scoped for its ISA, with required-symbol non-vacuity per family and read floors.",
+   "findings": []
+  },
+  {
+   "path": "tools/check_bandit_severity.py",
+   "status": "M \u2014 reviewed in full + diff (type-annotation-only change)",
+   "purpose": "Fail-closed gate on Bandit JSON reports: applies severity/confidence thresholds itself, rejects pre-filtered reports via totals cross-check, fails on scan errors and zero-LOC scans.",
+   "findings": []
+  },
+  {
+   "path": "tools/check_c_secret_zeroization.py",
+   "status": "A \u2014 reviewed in full",
+   "purpose": "INVARIANT-6 gate: flags bare memset-to-zero of secret-named buffers in src/c and tests/c (comment/literal-blanked whole-file scan, macro-wrapper and alias call-site tracking with #undef scoping, ReDoS-hardened regexes), directing to ama_secure_memzero.",
+   "findings": []
+  },
+  {
+   "path": "tools/check_choco_retry.py",
+   "status": "A \u2014 reviewed in full",
+   "purpose": "Gate requiring every choco install/upgrade (and cinst) in workflows to route through .github/scripts/choco-install.ps1, motivated by Chocolatey v2's lying exit code; skips comments and YAML name: labels.",
+   "findings": [
+    {
+     "severity": "minor",
+     "location": "_logical_lines()/scan_text(), lines 118-181",
+     "description": "Same comment-continuation splice as check_apt_retry.py: a comment line ending in a backtick swallows the next physical line into a '#'-prefixed logical line and skips it, though PowerShell comments do not continue across lines, so a choco call on the following line would run unexamined."
+    }
+   ]
+  },
+  {
+   "path": "tools/check_compiler_warnings.py",
+   "status": "A \u2014 reviewed in full",
+   "purpose": "Frozen compiler-warning allowlist enforcement over build logs (vendored sources, __int128 pedantic, overlength asm literal), failing closed on missing/empty logs and reporting per-exemption match counts.",
+   "findings": []
+  },
+  {
+   "path": "tools/check_corpus_originality.py",
+   "status": "M \u2014 reviewed in full + diff (adds vector-generator stdlib-digest scan and name-binding resolution; near-purely additive)",
+   "purpose": "INVARIANT-36 gate: no third-party crypto binary invoked in package/tests/tools (AST-based, with bound-name resolution), corpus sources restricted to standards bodies, reference encoder independent, and vector generators forbidden from computing expected values via hashlib/hmac.",
+   "findings": []
+  },
+  {
+   "path": "tools/check_ctypes_abi.py",
+   "status": "M \u2014 reviewed in full + diff (discovery-based module scope with REQUIRED_MODULES floor, extra private headers, ReDoS-hardened prototype regex)",
+   "purpose": "Cross-checks every ctypes argtypes/restype in the package against AMA_API prototypes in the public (and two private) headers on arity and coarse pointer/int/void classes; completeness enforced in both directions with fail-closed zero-checked guard.",
+   "findings": []
+  },
+  {
+   "path": "tools/check_docker_pins.py",
+   "status": "A \u2014 reviewed in full",
+   "purpose": "Requires container base images to be digest-pinned (@sha256:), stage-reference aware, with a declared '# base-eol:' date failing inside a 60-day grace window and after EOL; documented exemption for oss-fuzz/Dockerfile.",
+   "findings": []
+  },
+  {
+   "path": "tools/check_documented_counts.py",
+   "status": "M \u2014 reviewed in full + diff (+779: gates LoC line totals and scope composition, entry-point/C-suite/source-inventory/fuzz/breaking-change counts, per-family non-vacuity floors, bounded regexes)",
+   "purpose": "Verifies every count documentation pins (test counts, corpus records, Wycheproof totals, LoC tables, entry points, C suites, fuzz targets, breaking changes) against the artifact that owns it, with per-claim-family vacuity floors.",
+   "findings": []
+  },
+  {
+   "path": "tools/check_dudect_class_staging.py",
+   "status": "A \u2014 reviewed in full",
+   "purpose": "Gate over the three dudect harness files: between the class draw and the timer no statement may branch on class_idx or select an address by it (dudect_stage_select or branchless arithmetic only); staging destinations must be _Alignas(64); per-file lane-count non-vacuity.",
+   "findings": []
+  },
+  {
+   "path": "tools/check_ed25519_backend_parity.py",
+   "status": "M \u2014 reviewed in full + diff (+680: batch-verify and torsion-batch families, x-sign decode cases, byte-exact arithmetic family, M14 active-backend self-comparison refusal)",
+   "purpose": "Differential gate between the donna and fe51 Ed25519 backends: honest/malleable/corrupted signatures, batch verify across the multi-scalar boundary with torsion-R discriminators, RFC 8032 \u00a75.1.3 decode cases, and byte-exact arithmetic with reduction/split identities; multiple fail-closed non-vacuity guards.",
+   "findings": []
+  },
+  {
+   "path": "tools/check_error_state_gating.py",
+   "status": "M \u2014 reviewed in full + diff (+533: guard-before-native ordering, alias/IfExp binding tracking, module discovery with EXEMPT_MODULES, guard-delegating helpers, entry_point_counts export)",
+   "purpose": "FIPS 140-3 \u00a74.9.2 gate: every public native entry point in the audited modules and every cy_* Cython binding must call an error-state guard before its first native call; discovery makes unlisted native-reaching modules a failure; exemption lists are staleness-checked.",
+   "findings": []
+  },
+  {
+   "path": "tools/check_export_allowlist.py",
+   "status": "A \u2014 reviewed in full",
+   "purpose": "Audit-B2 gate: the built shared object may export only ama_* symbols (plus linker markers), with a 150-symbol non-vacuity floor against stripped/wrong objects; motivated by leaked ed25519-donna exports.",
+   "findings": []
+  },
+  {
+   "path": "tools/check_fuzz_input_reachability.py",
+   "status": "A \u2014 reviewed in full",
+   "purpose": "Derives each fuzz harness's minimum -max_len from its own length guards (macro-resolved, derived-length offsets, MANUAL_BOUNDS for unresolvable guards, largest committed seed) and requires the workflow to derive its ceiling from this tool; unparseable guards fail closed.",
+   "findings": []
+  },
+  {
+   "path": "tools/check_fuzz_target_registration.py",
+   "status": "M \u2014 reviewed in full + diff (adds seeded-corpus requirement per target and POSIX path spelling in the refusal)",
+   "purpose": "INVARIANT-33 gate: fuzz harness sources (C and Python, identified by entry-point definition) must agree with the CMake lists, workflow matrix, and oss-fuzz build.sh, and every target must have a non-empty committed seed corpus.",
+   "findings": []
+  },
+  {
+   "path": "tools/check_gate_coverage.py",
+   "status": "M \u2014 reviewed in full + diff (+197: unevaluated-needs H7 evaluation-vs-binding analysis, env-alias dereference tracking, MIN_WORKFLOWS/MIN_JOBS floors)",
+   "purpose": "INVARIANT-31 gate: every pull-request job must be reachable from its workflow's aggregating *-gate needs:, gates must carry if: always(), every listed dependency must actually be evaluated by the gate's conditions or run scripts, with non-vacuity floors.",
+   "findings": []
+  },
+  {
+   "path": "tools/check_ghash_constant_time.py",
+   "status": "M \u2014 reviewed in full + diff (+1791: inventory grown from 3 targets at threshold 200 to 18 targets at threshold 0; four callgrind metrics with pinned cache geometry; optimization probe; dispatch-wiring report; opening/closing floors and reverse-order confirmation sweep)",
+   "purpose": "Deterministic constant-time gate: callgrind retired-instruction/data-ref/cache-miss invariance across key/verdict classes for 18 targets (GHASH, ECDSA raw, X25519 single+batch, Ed25519 sign, NIST-P ECDSA, Kyber decaps FO, Ascon, SHA3, agent binding, consttime primitives, secure memzero), each with a class-symmetric staged driver.",
+   "findings": []
+  },
+  {
+   "path": "tools/check_keygen_pct.py",
+   "status": "A \u2014 reviewed in full",
+   "purpose": "INVARIANT-41 gate: AST-discovers every keygen/keypair entry point in pqc_backends.py and requires each to reach a pairwise consistency test directly or via one delegating helper; documented exemptions and a 10-entry-point discovery floor.",
+   "findings": []
+  },
+  {
+   "path": "tools/check_log_message_encodability.py",
+   "status": "A \u2014 reviewed in full",
+   "purpose": "INVARIANT-43 gate: every literal string handed to logging/warnings in the shipped package must be cp1252-encodable, so a default Windows FileHandler cannot silently drop records (the key-rotation U+2192 loss); covers the inline getLogger(...).level(...) idiom.",
+   "findings": []
+  },
+  {
+   "path": "tools/check_release_state.py",
+   "status": "A \u2014 reviewed in full",
+   "purpose": "Release preflight gate (audit M12): on a tag push, refuses to release while shipped docs still carry version-scoped 'Unreleased'/'not yet tagged' markers; PyPI-publish markers enforced only under --require-published; missing release-state docs fail.",
+   "findings": []
+  },
+  {
+   "path": "tools/check_secret_division.py",
+   "status": "A \u2014 reviewed in full",
+   "purpose": "KyberSlash regression gate: disassembles the built library (multi-disassembler fallback for AArch64), attributes every div/idiv/udiv/sdiv/fdiv to its symbol, and compares against an exact-count public-operand allowlist with REQUIRED_CLEAN ML-KEM symbols and read floors.",
+   "findings": []
+  },
+  {
+   "path": "tools/check_semgrep_severity.py",
+   "status": "M \u2014 reviewed",
+   "purpose": "Fail-closed CI gate over semgrep-report.json (blocks at/above ERROR, fails on scan errors, empty scans, unknown severities)",
+   "findings": []
+  },
+  {
+   "path": "tools/check_stdlib_hash_boundary.py",
+   "status": "A \u2014 reviewed",
+   "purpose": "INVARIANT-1 gate pinning every stdlib hashlib/_hashlib/hmac reference in ama_cryptography/ to an exact-count trust-bootstrap allowlist, via AST binding resolution (aliases, from-imports, dynamic imports, module-root rebinding all counted)",
+   "findings": []
+  },
+  {
+   "path": "tools/check_suppression_hygiene.py",
+   "status": "M \u2014 reviewed",
+   "purpose": "INVARIANT-13 suppression gate; PR widens scope to every git-tracked .py, adds file-scoped-directive refusal, bare nosec/noqa strict forms, a first-ever scan of src/c+include (absolute prohibition), and an optional-import type:ignore pass",
+   "findings": []
+  },
+  {
+   "path": "tools/check_type_check_scope.py",
+   "status": "A \u2014 reviewed",
+   "purpose": "Gate asserting every git-tracked .py appears in mypy --strict's linecoverage report (floor of 200 files against collapsed runs; EXEMPT list empty by design)",
+   "findings": []
+  },
+  {
+   "path": "tools/check_vector_provenance.py",
+   "status": "A \u2014 reviewed",
+   "purpose": "SHA-256 manifest gate (tests/kat/PROVENANCE.json) over tests/kat, nist_vectors and ama_cryptography/_post_kats so published KAT bytes cannot drift; explicit --update, MIN_FILES floor, anchor digests pinned separately in tests",
+   "findings": [
+    {
+     "severity": "minor",
+     "location": "VECTOR_SUFFIXES (line 95) / _tracked_files (lines 137-152)",
+     "description": "The gate's third stated failure mode ('a file with no manifest entry \u2014 a vector added without being pinned') only holds for files with suffixes in VECTOR_SUFFIXES (.kat/.rsp/.json/.txt/.dat). A future vector file added under a protected root with any other suffix (.hex, .bin, .req, ...) is neither pinned nor flagged \u2014 silently outside the gate, contradicting the docstring's claim. Introduced by this PR (new file)."
+    }
+   ]
+  },
+  {
+   "path": "tools/check_vendor_isolation.py",
+   "status": "A \u2014 reviewed",
+   "purpose": "Five-way INVARIANT-1 gate: Python-source imports/ctypes loads, C-tree vendor #includes with fallback-macro verification, CMake/setup.py link commands, Dockerfile package installs, runtime sys.modules probe, and in-tree ELF/Mach-O(fat)/PE linkage parsing for forbidden-vendor deps/symbols (static-link detection via defined symbols)",
+   "findings": []
+  },
+  {
+   "path": "tools/check_verification_claim_honesty.py",
+   "status": "M \u2014 reviewed",
+   "purpose": "INVARIANT-37/16 docs-honesty gate: forbids claims of unperformed RFC 3161 checks (driven by RFC3161_CAPABILITIES), the deprecated result key, un-refused refusing parameters, rfc3161ng install instructions; PR adds sentence/block scoping, two past-tense-attribution cues, and a new check 6 for unqualified formal-verification claims",
+   "findings": [
+    {
+     "severity": "info",
+     "location": "NEGATION_CUES (lines 269-328) used by _is_negated() in scan_for_unperformed_claims (line 473)",
+     "description": "Check 1 still suppresses every claim in a sentence that contains any generic negation-flavoured word ('no', 'not', 'partial', 'claimed', 'false*', ...). Check 6's own comment (lines 653-657) names exactly this looseness as 'a defect this repository has already found in one gate' and anchors its exemptions to the claim's span instead \u2014 check 1 was not given the same treatment. Sentence scoping (new in this PR) narrows the fail-open window relative to the previous line scoping, but a sentence like 'No nonce is echoed, and the TSA signature is verified' would still be suppressed. Documentation-honesty gate only; not attacker-reachable."
+    }
+   ]
+  },
+  {
+   "path": "tools/check_version_consistency.py",
+   "status": "M \u2014 reviewed",
+   "purpose": "Release-consistency gate: canonical __version__ vs 13 named anchors, doc headers, SONAME literals, git-tag install pins (widened to *.md), NEW invariant-register range/contiguity checks, C-source version literals, C-constant transcriptions with non-vacuity floors",
+   "findings": []
+  },
+  {
+   "path": "tools/check_workflow_commands.py",
+   "status": "M \u2014 reviewed",
+   "purpose": "INVARIANT-25 static workflow verifier; PR adds cmake-build-type check (the -O0 dudect finding), expression-arithmetic check (arm-qemu.yml parse failure), pytest-prerequisite check, gate-required-job self-probe check (audit H2), and a MIN_WORKFLOWS=14 non-vacuity floor",
+   "findings": []
+  },
+  {
+   "path": "tools/constant_time/Makefile",
+   "status": "M \u2014 reviewed",
+   "purpose": "Builds the two dudect harnesses; PR aligns CFLAGS with CMAKE_C_FLAGS_RELEASE (-O3 -DNDEBUG...) and adds -DAMA_USE_NATIVE_PQC + ama_slhdsa.c so the harness binary actually matches the production build it claims lockstep with",
+   "findings": []
+  },
+  {
+   "path": "tools/constant_time/dudect_crypto.c",
+   "status": "M \u2014 reviewed",
+   "purpose": "dudect timing harness for crypto primitives (Ed25519, AES-GCM, HKDF, SHA3, Ascon x3); PR moves to the cropped percentile statistic, single staged cache-line-aligned buffers per lane (removes address-geometry confounders), and the shared rounds verdict",
+   "findings": [
+    {
+     "severity": "info",
+     "location": "MAX_ROUNDS (line 98), T_THRESHOLD (line 51), sub-floor reporting (lines 802-816)",
+     "description": "The pass/fail bar of this timing gate moved in the lenient direction in this PR: rounds 3->5 with a 3-of-5 majority rule, the threshold replaced by DUDECT_CROPPED_T_THRESHOLD=5.0 (tests/c/dudect/dudect_percentile.h; calibrated for the max-over-21-rungs statistic vs the old single-Welch 4.5), and lanes over threshold but under DUDECT_MIN_EFFECT_NS=2.0 ns are 'reported, not failed'. Each relaxation carries recorded measurements justifying it (the cropped statistic detects the reference leak 48/48 vs 19/48 for the old one), and the verdict machinery is synthetically self-tested \u2014 but the deciding constants live outside this chunk (tests/c/dudect/dudect_rounds.h / dudect_percentile.h); the reviewer of that chunk should confirm the calibration."
+    }
+   ]
+  },
+  {
+   "path": "tools/constant_time/dudect_harness.c",
+   "status": "M \u2014 reviewed",
+   "purpose": "dudect timing harness for the constant-time utility functions (memcmp/swap/memzero/lookup/copy); PR removes class-asymmetric setup (branchy memset, class-1-only rand/store) that was measured producing false positives, and adopts the shared cropped statistic + rounds verdict",
+   "findings": []
+  },
+  {
+   "path": "tools/generate_dashboards.py",
+   "status": "M \u2014 reviewed",
+   "purpose": "Renders assets/performance_dashboard.png (12 panels) and defense_layers.png from benchmark JSON artefacts; PR removes hardcoded version/host literals, fails loudly on missing inputs instead of fabricating fallbacks, and records a manifest entry checked by generate_visuals.py --check",
+   "findings": [
+    {
+     "severity": "info",
+     "location": "NIST FIPS panel (lines 693-718) and footer (lines 909-918)",
+     "description": "The 'NIST FIPS Standard Compliance' panel renders hardcoded full-height bars ([1]*6) labelled 'Full' with checkmarks for FIPS 180-4/202/186-5/203/204/205, and the defense-layers footer says 'FIPS 202/203/204/205 compliant' \u2014 assertions driven by no data source, in a repo whose own honesty gates and wiki pages carefully distinguish spec-conformance from validation ('Not FIPS-validated: no CAVP/CMVP certificate'). Pre-existing content (this PR only added type annotations around it), but a published image claiming 'Full compliance' with no qualifier sits in tension with INVARIANT-16's posture; worth an explicit 'implements, not validated' caption."
+    }
+   ]
+  },
+  {
+   "path": "tools/generate_sbom.py",
+   "status": "M \u2014 reviewed",
+   "purpose": "Deterministic CycloneDX C-library SBOM generator with --check drift gate; PR adds ama_pbkdf2/ama_sha512 components, fixes the SHA3 description, and enforces the promised alphabetical ordering of C_COMPONENTS",
+   "findings": []
+  },
+  {
+   "path": "tools/generate_visuals.py",
+   "status": "M \u2014 reviewed",
+   "purpose": "Renders test_coverage/ethical_binding/quantum_comparison PNGs; PR adds visuals_manifest.json plus a matplotlib-free --check mode wired into CI so committed charts can no longer silently go stale (they sat at v3.4.0 for two majors)",
+   "findings": [
+    {
+     "severity": "info",
+     "location": "_load_phase0_medians (lines 90-101) and RAW_C_MEDIANS_US (lines 104-115)",
+     "description": "Dead code: both helpers' only consumers (performance_comparison.png et al.) were removed before this PR's base, yet the loader, the PHASE0_JSON path and the hardcoded raw-C medians snapshot remain \u2014 the PR even added type annotations to the dead loader rather than deleting it. The module docstring itself documents RAW_C_MEDIANS_US as the source of a chart that 'rendered an impossible result'. Pre-existing debt, not introduced by this PR."
+    }
+   ]
+  },
+  {
+   "path": "tools/http_fetch.py",
+   "status": "A \u2014 reviewed",
+   "purpose": "Single shared bounded-retry HTTPS fetcher for corpus/vector downloads: HTTPS-only on first hop and on every redirect (custom RedirectHandler), retries transport errors and 429/5xx only, final attempt propagates, never sees a digest",
+   "findings": []
+  },
+  {
+   "path": "tools/monitoring/ama_cryptography_monitor.py",
+   "status": "D \u2014 reviewed",
+   "purpose": "DELETED: 1,807-line 3R runtime anomaly monitor (EWMA/MAD/FFT timing analysis); implementation now lives at ama_cryptography/monitoring.py (shipped in the wheel) per CHANGELOG \u2014 grep shows no dangling references outside CHANGELOG history and the audit file lists; the demo's import was updated accordingly",
+   "findings": []
+  },
+  {
+   "path": "tools/monitoring/ama_cryptography_monitor_demo.py",
+   "status": "M \u2014 reviewed",
+   "purpose": "3R monitoring demo driving AmaCryptographyMonitor (now imported from ama_cryptography.monitoring) through timing/pattern/resonance/report phases; PR change is the docstring version stamp 4.0.0 -> 5.0.0",
+   "findings": []
+  },
+  {
+   "path": "tools/refresh_wycheproof_corpus.py",
+   "status": "M \u2014 reviewed",
+   "purpose": "Verify/refresh the vendored Wycheproof corpus against manifest.json and upstream C2SP/wycheproof at the pinned commit; PR delegates fetching to tools/http_fetch (shared retry + HTTPS policy) with digest comparison unchanged and local",
+   "findings": []
+  },
+  {
+   "path": "tools/resign_wheel.py",
+   "status": "A \u2014 reviewed",
+   "purpose": "Post-auditwheel-repair wheel re-signer for the Linux release lane: unpacks, deletes the stale artefact, runs ama_cryptography._build_sign in a pinned environment, byte-verifies the signed native digest resolves inside the unpacked tree, and repacks replaying the original zip inventory with regenerated RECORD (refuses detached RECORD signatures, atomic os.replace)",
+   "findings": []
+  },
+  {
+   "path": "tools/update_docs.py",
+   "status": "M \u2014 reviewed",
+   "purpose": "Docs regenerator (CHANGELOG/README/wiki stamps, benchmark auto-table from benchmark-results.json + baseline floors); PR adds --loc/--counts one-command re-measurement sharing the documented-counts gate's own functions, an unstaged-additions refusal, and provenance-honest table headers",
+   "findings": []
+  },
+  {
+   "path": "tools/verify_install_oob.py",
+   "status": "A \u2014 reviewed",
+   "purpose": "Stdlib-only out-of-band verifier for an installed tree: self-implemented SHA3-256/SHA-512/Ed25519 (startup KATs incl. a negative control, fail-closed exit 3), artefact parsed as literal-data-only AST (closes the unhashed-file executable-code hole), package/native/binding digest verification, --expected-pubkey anchoring with explicit UNANCHORED downgrade, and .pyc-vs-source execution-integrity incl. co_exceptiontable",
+   "findings": []
+  },
+  {
+   "path": "tools/wheel_smoke_test.py",
+   "status": "M \u2014 reviewed",
+   "purpose": "cibuildwheel per-wheel gate: installed-not-source guard, POST OPERATIONAL, no fallback backends, algorithm round-trips + tamper rejection; PR adds binding-extension digest coverage (parses the verified-bindings COUNT so a zero-binding artefact fails) and trust-anchor confirmation gated on AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR (audit H3)",
+   "findings": []
+  },
+  {
+   "path": "wiki/Adaptive-Posture.md",
+   "status": "M \u2014 reviewed",
+   "purpose": "Adaptive posture system docs; PR fixes API drift (evaluation.action not .recommended_action; evaluate_and_respond() not the nonexistent execute_action())",
+   "findings": [
+    {
+     "severity": "info",
+     "location": "Monitoring Integration Loop example, imports lines 196-200 vs use at line 223",
+     "description": "The copy-pasteable monitoring-loop example references PostureAction.NONE but its own import list (PostureEvaluator, CryptoPostureController, ThreatLevel) omits PostureAction, so pasted verbatim it raises NameError. Pre-existing (the old revision had the same gap); the PR edited this exact block without closing it."
+    }
+   ]
+  },
+  {
+   "path": "wiki/Architecture.md",
+   "status": "M \u2014 reviewed",
+   "purpose": "System architecture page; PR corrects the uniform '1,000 ops/sec' throughput claim (SLH-DSA sign is <1 op/s by design), updates the monitor's module path after the relocation, and adds the explicit 'Not FIPS-validated: no CAVP/CMVP certificate' disclaimer",
+   "findings": []
+  },
+  {
+   "path": "wiki/C-API-Reference.md",
+   "status": "M \u2014 reviewed",
+   "purpose": "Native C API reference; PR replaces previously wrong signatures with header-accurate ones (spot-checked against include/ama_cryptography.h) \u2014 notably Ed25519 secret key documented 32->64 bytes (old doc induced caller buffer overflow), correct SHA3/SHAKE context types, ML-DSA/ML-KEM/SPHINCS parameter-macro names, verify argument order warnings, and the full ama_error_t enum",
+   "findings": []
+  },
+  {
+   "path": "wiki/Cryptography-Algorithms.md",
+   "status": "M \u2014 reviewed",
+   "purpose": "Algorithm reference; PR adds a prominent staleness/inconsistency disclaimer on all per-algorithm performance bullets (three mutually inconsistent Ed25519 keygen figures named explicitly) and fixes the Argon2id legacy-shim prototypes to the shipped parameter names",
+   "findings": []
+  },
+  {
+   "path": "wiki/Home.md",
+   "status": "M \u2014 reviewed",
+   "purpose": "Wiki landing page; PR change is the status-snapshot version 4.0.0 -> 5.0.0",
+   "findings": []
+  },
+  {
+   "path": "wiki/Performance-Benchmarks.md",
+   "status": "M \u2014 reviewed",
+   "purpose": "Benchmark snapshot page; PR regenerates the auto-table from the 2026-08-30 run with host provenance in the header (replacing the 'sanity-check headroom' framing that wrongly compared cross-host columns), fixes SIMD-table source paths to real files, and corrects the VAES opt-out claim (none exists; AMA_DISPATCH_ONLY is the A/B mechanism)",
+   "findings": []
+  },
+  {
+   "path": "wiki/Post-Quantum-Cryptography.md",
+   "status": "M \u2014 reviewed",
+   "purpose": "PQC deep-dive; PR replaces 'Full NIST KAT validation' with the honest statement that harnesses exercise the first 10 records of each 100-vector vendored corpus, citing the exact caps in tests/c/test_kat.c and tests/test_nist_kat.py",
+   "findings": []
+  },
+  {
+   "path": "wiki/Secure-Memory.md",
+   "status": "M \u2014 reviewed",
+   "purpose": "Secure-memory module docs; PR rewrites the constant_time_compare() Implementation section: native-only (no Python fallback, INVARIANT-7), cost bounded by the shorter operand (removes the attacker-driven max-length padding allocation)",
+   "findings": [
+    {
+     "severity": "major",
+     "location": "'Native C Backend' section, line 237",
+     "description": "Internal contradiction left standing by this PR: line 237 still says 'Without the native C library, POSIX mlock()/munlock() and a pure-Python XOR accumulator are used as fallbacks', while the Implementation section this PR rewrote (lines 136-142) \u2014 and the actual code (ama_cryptography/secure_memory.py:625, which raises when the native backend is absent) \u2014 state there is no pure-Python fallback and that the removed XOR accumulator was not in fact constant-time. The page thus documents a security-relevant fallback the code deliberately refuses to have; a reader could deploy without the native library believing tag comparison still works constant-time. One-line fix: drop the XOR-accumulator clause (the mlock POSIX-fallback half remains true)."
+    }
+   ]
+  },
+  {
+   "path": "wiki/Security-Model.md",
+   "status": "M \u2014 reviewed",
+   "purpose": "Threat model / side-channel page; PR updates version/support tables to 5.0.x and makes the constant-time table honest (Ed25519 verify variable-time by design on public inputs; ML-DSA sign rejection-sampling timing; comparison row now states native-only with no Python fallback)",
+   "findings": []
+  },
+  {
+   "path": "wiki/_Footer.md",
+   "status": "M \u2014 reviewed",
+   "purpose": "Wiki footer badge; PR change is v4.0.0 -> v5.0.0 (release badge is also pinned by check_version_consistency.py)",
+   "findings": []
+  },
+  {
+   "path": "wycheproof_vectors/README.md",
+   "status": "M \u2014 reviewed",
+   "purpose": "Vendored Wycheproof corpus docs; PR adds the three NIST P-curve ECDSA files to the coverage table and corrects the total 2,733 -> 4,263 (matches manifest.json totalVectors=4263), with the under-reporting history stated",
+   "findings": []
+  },
+  {
+   "path": "wycheproof_vectors/run_wycheproof.py",
+   "status": "M \u2014 reviewed",
+   "purpose": "Offline fail-closed Wycheproof gate: manifest digest/count verification in both directions, per-schema drivers, exact-count scope/acceptable/divergence policy tables, and a hollow-driver tripwire (flips one input byte per family, ECDSA corruption inside the s integer to reach curve math); PR change is the bandit B324 justification on the SHA-2-allowlisted hashlib.new call",
+   "findings": []
+  },
+  {
+   "path": "tests/c/test_dispatch_only_env.c",
+   "status": "A",
+   "purpose": "AMA_DISPATCH_ONLY end-to-end contract test: honors requested slot or reports the all-default sentinel; exit 77 skip on unsupported hosts; KNOWN_SLOTS drift fails loudly (reviewed directly by the audit orchestrator after its chunk agent missed it)",
+   "findings": []
+  }
+ ],
+ "notes": [
+  "Chunk_00 (35 files: repo-root configs, .github scripts+workflows, and 13 root docs) fully read at PR head 32c3e0d with per-file diffs against merge base 2dcef5c. Overall verdict: this slice of PR #394 is a substantial, consistent strengthening of the CI/gate surface \u2014 no critical or major findings. Specifically verified: (1) no gate was deleted or routed around; every workflow diff removes a fail-open defect (tee-without-pipefail swallowing exit codes, rc-always-0 build capture, /proc/cpuinfo-gated AVX-512 job that skipped itself green, choco/apt retry loops that could not see their failure) and replaces skipped-tolerant aggregators with strict or trigger-condition-re-deriving gates; (2) the two new install scripts (apt-install.sh, choco-install.ps1) are fail-closed \u2014 retries bound hangs but a genuine failure still fails the job; (3) release.yml adds preflight refusals (unsigned/lightweight tag, unanchored canonical-repo release, stale release-state prose, wrong asset inventory before immutable publish) and post-auditwheel re-signing; (4) integrity-anchor-check passes the seed via env only and never prints it; (5) no secret material, no committed credentials, and no instruction-like injected text found in any file (CHANGELOG's ~6,368 added lines were read; the pre-existing 4.0.0-and-earlier tail was scanned for secrets/markers and its only PGP marker is a quoted tag-signature header in prose); (6) the single deliberate scanner narrowing (cppcheck 'style' category dropped) is documented with compensating controls and reported as info. Residual debt is confined to stale prose in four docs the PR restamped to 5.0.0 without fully re-editing (AES table-S-box claims contradicting the constant-time default, an overbroad constant-time/fault-injection guarantees checklist, stale CMake option table, and a repair command that now exits 2) \u2014 all minor, none security-weakening in the dangerous direction. The .cppcheck-suppressions line pins were spot-verified against the current sources and match.",
+  "All 35 files in chunk_01 were read completely at the current checkout; every M file's diff over 2dcef5c..32c3e0d was reviewed (for the two largest, monitoring.py and pqc_backends.py, every hunk header plus all removed lines and logic hunks were inspected). No D files in this chunk. No critical or major findings: the PR is overwhelmingly hardening (pre-load native-digest verification before dlopen, ABI v5 handshake that fully disowns rejected libraries including their preload digest, a binding-import gate closing a confirmed unverified-.so-mapped-despite-refusal hole, INVARIANT-35 selector refusals, hashlib/secrets purges onto native kernels, fail-closed conversions, FIPS PCTs on every keygen path). The four recorded findings are documentation-consistency issues (2 minor in SECURITY.md, 1 minor in _build_sign.py, 2 info). Environment notes: checkout HEAD is 3fbbdf7 (one audit-ledger commit past PR head 32c3e0d) with unstaged working-tree changes to _integrity_signature.py/_integrity_digest.txt from a local rebuild/re-sign; the committed values at 32c3e0d are internally consistent and were the review target. Excluded as pre-existing (present at 2dcef5c, not introduced by this PR): crypto_api.py's except-KeyError fallback to AlgorithmType.HYBRID_SIG (~line 3208) and pqc_backends.py's bytes(secret_key) immutable copies on the Cython sign fast paths (lines 3888/4935).",
+  "Chunk_02 review complete: 35/35 files read in full at the PR head checkout (steel/systempqc-maint1), with git diff 2dcef5c..32c3e0d examined for all 32 modified files and the 3 added files checked for wiring (cmake export maps referenced from CMakeLists.txt:1070-1078 and workflows; the MinGW toolchain is standalone by design; detector_baseline_eval.py is invoked from .github/workflows/ci.yml). No critical or major findings. The dominant pattern in this chunk is the PR strengthening gates and honesty of published records rather than weakening them: the baseline-justification guard moved from an unfalsifiable concatenated-text scan to per-commit attribution and now watches tolerance_percent and validity-window extensions; benchmark_runner.py hard-gates the formerly warn-only PQC rows and refuses to exit 0 on runs that measured nothing; benchmark_c_raw.c became fail-closed on every AMA return code; the docker c-api image's '|| true' fail-open export was removed; compliance docs were corrected toward less favorable but accurate claims (CRNGT mis-citation withdrawn, POST coverage boundary stated, skip-bucket split re-derived). Verified independently: METRICS_REPORT test/file counts reproduce exactly at this checkout (4,769/204/65/16); acvp skip arithmetic is consistent across all three compliance artifacts; competitive.html standings match its own data tables; benchmark-results.json provenance commit 611a41f is an ancestor of the PR head. Findings are 1 minor (two stale timeout=60 comments in benchmark_c_raw.c contradicting the PR's own 600 s change) and 5 info items, none merge-blocking. docs/METRICS_REPORT.md carries uncommitted working-tree edits from the audit itself (LoC regeneration after audit files were added) \u2014 not PR content.",
+  "Chunk 03: all 35 files read in full at the PR head and every M-file diffed against 2dcef5c..32c3e0d (no D files in this chunk). Cross-checks performed: new public symbols in ama_cryptography.h all have implementations; removed ama_ascon_permutation_for_test and the sha3_256 dispatch slot have no dangling references (test uses internal/ama_testing_exports.h; only explanatory comments mention the old slot); constant-time-testing.md claims match test_dudect.c constants; examples' codes= kwarg matches legacy_compat.create_crypto_package; tools/http_fetch.py exists for fetch_vectors.py. The C-side changes are uniformly hardening or genuine bug fixes (Dilithium invNTT int32-overflow UB, Ed25519 unreduced-scalar wNAF wrong-result fix, Kyber SampleNTT uninitialised-coefficient fix and KyberSlash division removal, NIST-P value barrier and TSan race fix, Windows RNG truncation fix) with no weakened tests or gates. One major finding: setup.py's new signer invocation scrubs AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR from the _build_sign child environment, silently disabling the signer's documented fail-closed no-anchor refusal on the setup.py-driven build path (the variable is consumed at _build_sign.py:851, not only by import-time POST); recommend passing the requirement through argv instead of scrubbing. One minor: complete_demo.py's docstring still describes the hardcoded demo password this same PR removed. One info: the sha3_256 slot removal is a mid-struct ABI layout change contradicting the header's own append-only rule \u2014 legitimate at the 5.0.0 major bump but worth noting for external consumers.",
+  "Chunk_04 review complete: all 35 files (3 added, 32 modified, 0 deleted) read in full at PR head (32c3e0d; working tree for src/c identical to PR head) with per-file diffs against base 2dcef5c examined. Overall verdict: this chunk is overwhelmingly hardening work and it holds up under adversarial reading \u2014 no critical or major findings survived verification. The substantive security-relevant changes verified correct: (1) secp256k1 gains point validation on the secret-scalar path (invalid-curve fix), value-barriered CT masks closing measured callgrind leaks (Montgomery extra-reduction, group-law flags, low-s), unified sign cleanup and a fixed-width sign_raw; (2) the Ed25519 donna shim replaces the divergent Bos-Carter batch verifier with a per-entry loop over single verify and adds R-canonicality and x-sign gates plus a stale-extended-t repair; (3) donna's curve25519_expand unaligned-load UB is patched via memcpy; (4) SHA-3 streaming contexts gain fail-closed cross-family absorb/squeeze guards and a consumed-context sentinel; (5) the SVE2 Kyber Barrett rounding-addend divergence (a genuine cross-backend correctness bug hidden by SVE2 never running in CI) is fixed and pinned; (6) NEON kernels lose signed-multiply UB and gain a fail-closed big-endian tier guard; (7) new internal prototype headers eliminate cross-TU signature-drift (indirect-call UB class); (8) AES-GCM kernels gain ghash_acc/pad_pt scrubs and masked accept/reject returns; dispatch gains a measured fallback tier, v2 fail-closed cache, and honest diagnostics. Two minor findings (a misleading double-rejection comment in ama_sha3.c; a missed W[] scrub in the NEON SHA-256 scalar fallback that the PR added everywhere else) and a handful of info items (zero-fill randombytes hook that would be fail-open only if the currently-dead vendored batch path were re-wired; unscrubbed argon2 R/Z stack staging; admitted-dead non-conformant WOTS helper). No test/gate deletions, no fail-open paths, no secrets, and no instruction-like text directed at tooling were found in these files; the removed dispatch sha3_256 slot and dead SIMD helpers were verified to leave no dangling references.",
+  "Chunk_05 review complete: all 35 files read end-to-end at the PR head (16,191 lines total), with git diff 2dcef5c..32c3e0d examined for every M file. No critical or major findings. The chunk is overwhelmingly test-strengthening work: new exhaustive/contract tests (kyber compress, sample-NTT continuation, dilithium invntt bound, ed25519 canonical-R/scalarmult-contract/unaligned, concurrent-init for TSan, platform-rand fallback execution), skip-as-77 conversions that stop vacuous green results, previously-dead test_field_bench wired into CTest, vacuous PINs honestly relabeled after mutation testing, and a mod-q-tolerant comparator tightened to byte-identity. The one vendor-code change (curve25519-donna-sse2.h) is a correct memcpy fix for misaligned-load UB. The items that most merit the operator's eyes are the three deliberate, documented dudect gate-semantics changes, all introduced by this PR: (1) t-threshold 4.5 -> 5.0 with a 6M-replicate null calibration and a self-test pinning the FP rate (paired with the far more sensitive percentile-cropped statistic \u2014 48/48 vs 19/48 leak detection \u2014 so net stronger); (2) the 2 ns effect-size floor (SUB_FLOOR does not fail the build) which turns exactly the three previously-failing sub-nanosecond CI lanes green, with the residual sub-2ns operand-latency blind spot explicitly acknowledged; (3) the Kyber-1024 decaps lane flipped strict -> info-only, with the blocking authority moved to the deterministic callgrind gate (tools/check_ghash_constant_time.py --target kyber-decaps, verified present and wired in dudect.yml). All three are defensible, measured, and loudly documented rather than silent; none looks like green-forcing, but they change what can block a merge and should be acknowledged in the final report. Remaining findings are two minor debt items (stale mod-q comparator comment in tests/c/CMakeLists.txt; dead AMA_TEST_UNDER_MSAN macro in test_dispatch_cache_file.c) and two info notes (test_dudect's pre-existing srand(time(NULL)); test_pq_parser_stack's scoped ASan option re-exec). No instruction-like embedded text, no secrets, no deleted or weakened assertions were found anywhere in the chunk.",
+  "Chunk_06: 35 files (12 M, 23 A per list; actual 18 M / 17 A per git status letters), all test-suite content plus tests/kat/PROVENANCE.json. Every file read in full; every M file's diff against 2dcef5c..32c3e0d inspected. Verification performed beyond reading: all 30 SHA-256+size pins in PROVENANCE.json recomputed against the checkout (all match); FIPS 180-4 digests quoted in tests confirmed against the standard's known values; marker registrations (requires_host_isa, requires_interop_oracle) confirmed present in pyproject.toml under --strict-markers; src/c/neon/ama_neon_internal.h confirmed to exist; nist_vectors/fetch_vectors.py confirmed to have no import-time side effects for the module-level test load. Direction of change is uniformly gate-strengthening: empty scans now fail closed, imperative and interop-oracle skips are escalated in CI, previously conditionally-vacuous assertions were made unconditional, and no assertion, test, or gate was removed (the only removed asserts were 'if anomaly:'-guarded ones replaced by stronger unconditional forms). Findings: 1 minor (a newly added vacuous self-comparing test in test_build_sign.py), 1 info on the documented scope of the host-ISA skip exemption in conftest.py, and 2 info entries flagging instruction-like successor-note fixtures embedded as detector test data (reported per policy; not followed). No critical or major findings in this chunk.",
+  "Chunk 07: 35 files (16 added, 19 modified, 0 deleted), all under tests/. Every file was read in full at the PR head (32c3e0d checkout on steel/systempqc-maint1) and every M file's diff against 2dcef5c was inspected. No critical or major findings. No test or gate was deleted or weakened to force green \u2014 the pattern across the chunk is the opposite: vacuous assertions were replaced with bidirectional (detect + non-detect) controls, thresholds were tightened to zero with measured justification (test_ghash_constant_time_gate), shadow copies of gate logic were replaced by driving the gates' own code (test_invariant_upgrades), and suppressions were removed (test_fuzzing mypy header). The three minor findings are pre-existing weaknesses the PR brushed against but did not introduce: two tests whose docstrings claim more verification than their bodies perform (test_differential Ed25519 'cross-library' length-only check, test_hkdf_sha3_256 'project vector' that pins no vector), and one dead disjunct in a key-formats assertion. Diff-deletion scan confirmed removed assertions were strict-strengthening replacements (old ecdsa/ghash benign bands 80<x<2952 and 26<x<3226 now 0; test_integrity's returncode-in-(0,1) replaced with a real pass/tamper pair; test_native_integrity's post-load MISMATCH assertion replaced by the stronger pre-mapping refusal). Inventory check-off: 35/35 files reviewed.",
+  "Chunk_08: 35 files (13 M, 22 A, 0 D), all under tests/. Every file read in full at the PR head (32c3e0d); every M file's diff vs 2dcef5c inspected. The chunk uniformly strengthens the test suite: skips on missing KAT corpora become hard failures (test_pqc_kat.py), a vacuous Cython-binding gating test that could pass via an ImportError SKIP token is replaced with a fixture-gated, discovery-driven probe (test_post_failclosed.py), a semgrep availability probe that had muted the only end-to-end gate test everywhere is fixed and pinned (test_semgrep_severity_gate.py), and many new negative-control suites are added for repository gates (secret-division/KyberSlash, vendor isolation, vector provenance, suppression hygiene, type-check scope, stdlib-hash boundary, release matrix/state/tag). No deleted tests, no weakened assertions, no committed secrets, no instruction-like embedded text requiring escalation. Three findings total: one minor (a test whose name/docstring says divss/divsd are 'not counted' while it pins that they ARE counted), one info (deliberate, documented raise of the POST timing-oracle min-effect floor 50->100 ns \u2014 operator should acknowledge the detection-threshold relaxation), and one info (pre-existing stale docstring parenthetical in test_pqc_kat.py contradicting the now byte-exact SHA2-256f signer).",
+  "Chunk_09: 35/35 files reviewed completely (7 tests/, 28 tools/; 22 added, 13 modified, 0 deleted). Every modified file's diff (2dcef5c..32c3e0d) was inspected; removals uniformly replaced weaker logic with stronger (e.g. check_action_pins' \"no pins found -> exit 0\" became fail-closed exit 1; check_workflow_command tests' \"empty directory passes\" became a non-vacuity-floor failure; check_ghash thresholds went from a flat 200 over 3 targets to measured 0 over 18 targets; check_ctypes_abi/check_error_state_gating moved from hand-maintained scopes to discovery with floors). No critical or major findings: no fail-open paths, no weakened or deleted gates, no secrets, no introduced skip/xfail/TODO markers, and no instruction-like embedded text. Three minor findings: (1) tools/build_keyformat_corpus.py fetch() lacks the HTTPS-only redirect guard this same PR added to tools/http_fetch, under a '# nosec -- https enforced' claim (duplicated fetch logic, low practical exposure); (2)+(3) check_apt_retry.py and check_choco_retry.py: a comment line ending in the continuation character splices the next physical line into a skipped comment, though shells do not continue comments, giving a contrived skip path past the retry-policy gates.",
+  "Chunk 10: 35 files (6 added, 28 modified, 1 deleted) \u2014 the tools/ gate scripts, dudect harnesses, doc/dashboard generators, wiki pages, and the Wycheproof corpus runner. Every file was read in full at the PR head; every M file's 2dcef5c..32c3e0d diff was inspected; the D file (tools/monitoring/ama_cryptography_monitor.py, 1,807 lines) was characterized via git show and grep confirms no dangling references \u2014 its implementation relocated into the shipped package (ama_cryptography/monitoring.py) and the demo's import was updated. Overall direction of the PR in this chunk is strongly gate-STRENGTHENING: new fail-closed gates (vendor isolation, vector provenance, stdlib-hash boundary, type-check scope, out-of-band installed-tree verifier, post-repair wheel re-signer), widened scopes with non-vacuity floors, and honesty corrections to docs (KAT caps, constant-time table, FIPS-validation disclaimers, corrected C signatures). No test or gate was found deleted or routed around; no secrets; no fail-open path in crypto/integrity code. The single major finding is a documentation contradiction the PR left behind in wiki/Secure-Memory.md (line 237 still advertises the removed pure-Python constant-time-compare fallback that the same page's rewritten section and the code explicitly refuse). The dudect verdict parameters (3->5 rounds, 3-of-5 majority, threshold 5.0 for the cropped statistic, 2.0 ns effect floor) moved lenient with extensive recorded justification; the deciding constants live in tests/c/dudect/ outside this chunk and should be cross-checked by that chunk's reviewer. Instruction-like text embedded in repo content (gate remediation messages, allowlist edit instructions, wiki runbooks) was reported-not-followed; nothing resembling a prompt-injection payload was found in these files."
+ ]
+}

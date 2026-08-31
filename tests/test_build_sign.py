@@ -553,21 +553,178 @@ class TestPackageDigestCoversSubpackages:
         pkg = Path(st.__file__).resolve().parent
         assert st._compute_module_digest() == bs._compute_package_digest(pkg).hex()
 
-    def test_no_tracked_package_py_escapes_the_enumeration(self) -> None:
-        """The omission pin: every .py under the package is in the signed set."""
+    @staticmethod
+    def _independent_py_walk(pkg: Any) -> set[str]:
+        """Enumerate tracked package .py files via ``os.walk``, not ``rglob``.
+
+        The expectation side must not share the implementation's traversal
+        primitive, or the comparison collapses into a tautology that passes
+        no matter what the digest actually covers.
+        """
+        found: set[str] = set()
+        for dirpath, dirnames, filenames in os.walk(pkg):
+            dirnames[:] = [d for d in dirnames if d != "__pycache__"]
+            for filename in filenames:
+                if not filename.endswith(".py") or filename == "_integrity_signature.py":
+                    continue
+                rel = os.path.relpath(os.path.join(dirpath, filename), str(pkg))
+                found.add(rel.replace(os.sep, "/"))
+        return found
+
+    def test_no_tracked_package_py_escapes_the_enumeration(
+        self, tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The omission pin: every .py under the package is in the signed set.
+
+        The signed set is CAPTURED from the digest computation itself — both
+        mirrors funnel every hashed file through their module-level
+        ``_absorb_entry``, so a delegating spy on that seam records exactly
+        what the digest commits to — and compared against an independent
+        ``os.walk`` enumeration.  (An earlier version of this test built both
+        sides from the same ``rglob`` with the same filters, a tautology that
+        could not fail on any enumeration regression.)  The staged tree holds
+        a subpackage, a ``__pycache__`` stray, and a ``_integrity_signature.py``,
+        so a silent fallback to a non-recursive ``glob("*.py")`` — or a filter
+        that swallows a subdirectory — fails here even while the shipped
+        layout is flat.
+        """
+        pkg = self._tree(tmp_path)
+        (pkg / "__pycache__").mkdir()
+        (pkg / "__pycache__" / "stray.py").write_text("ignored = 1\n", encoding="utf-8")
+        (pkg / "_integrity_signature.py").write_text("generated = 0\n", encoding="utf-8")
+
+        hashed: list[str] = []
+        real_absorb = bs._absorb_entry
+
+        def _spy(hasher: Any, section: bytes, name: str, content: bytes) -> None:
+            if section == b"py":
+                hashed.append(name)
+            real_absorb(hasher, section, name, content)
+
+        monkeypatch.setattr(bs, "_absorb_entry", _spy)
+        bs._compute_package_digest(pkg)
+
+        expected = self._independent_py_walk(pkg)
+        assert "sub/mod.py" in expected, "the staged tree must exercise a subpackage"
+        assert set(hashed) == expected, (
+            f"the signer hashes {sorted(set(hashed))} but the tree holds "
+            f"{sorted(expected)} — a tracked .py escaped signature coverage"
+        )
+
+        # Same pin for the runtime mirror, on the REAL installed tree: every
+        # .py under ama_cryptography/ must be inside what the verifier rehashes.
         from pathlib import Path
 
         import ama_cryptography._self_test as st
 
-        pkg = Path(st.__file__).resolve().parent
-        expected = {
-            p.relative_to(pkg).as_posix()
-            for p in pkg.rglob("*.py")
-            if p.name != "_integrity_signature.py" and "__pycache__" not in p.parts
-        }
-        enumerated = {
-            p.relative_to(pkg).as_posix()
-            for p in sorted(pkg.rglob("*.py"))
-            if p.name != "_integrity_signature.py" and "__pycache__" not in p.parts
-        }
-        assert expected == enumerated and expected, "the signed set must be non-empty"
+        real_pkg = Path(st.__file__).resolve().parent
+        hashed_runtime: list[str] = []
+        real_absorb_st = st._absorb_entry
+
+        def _spy_runtime(hasher: Any, section: bytes, name: str, content: bytes) -> None:
+            if section == b"py":
+                hashed_runtime.append(name)
+            real_absorb_st(hasher, section, name, content)
+
+        monkeypatch.setattr(st, "_absorb_entry", _spy_runtime)
+        st._compute_module_digest()
+
+        expected_runtime = self._independent_py_walk(real_pkg)
+        assert set(hashed_runtime) == expected_runtime and expected_runtime, (
+            f"the verifier rehashes {sorted(set(hashed_runtime))} but the "
+            f"installed package holds {sorted(expected_runtime)} — the signed "
+            f"set must be non-empty and cover every tracked .py"
+        )
+
+
+class TestRequireTrustAnchorCliFlag:
+    """The CLI half of the anchor demand (2026-08 v5 audit, item 15).
+
+    setup.py scrubs AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR from the signer
+    child's environment (the child's own import-time POST would otherwise
+    fail against the artefact-less tree), so the operator's refuse-unanchored
+    demand must ride the command line instead.  Before the fix, the scrub
+    silently dropped the enforcement: an anchored release pipeline got an
+    unanchored signature and no error.
+    """
+
+    def test_cli_flag_carries_the_demand_through_the_env_scrub(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import sys
+        from pathlib import Path
+
+        captured: dict[str, bool] = {}
+
+        def _capture_and_stop(
+            message: bytes,
+            seed_override: bytes | None = None,
+            trusted_pubkey: bytes | None = None,
+            require_trust_anchor: bool = False,
+            native_lib: ctypes.CDLL | None = None,
+        ) -> tuple[bytes, bytes, str]:
+            captured["require"] = require_trust_anchor
+            raise RuntimeError("test capture: stop before any artefact write")
+
+        monkeypatch.setattr(bs, "_generate_keypair_and_sign", _capture_and_stop)
+        monkeypatch.delenv("AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR", raising=False)
+        monkeypatch.setenv("AMA_BUILD_PIPELINE", "1")
+        pkg = Path(bs.__file__).resolve().parent
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "_build_sign",
+                "--package-dir",
+                str(pkg),
+                "--bind-extensions",
+                "--require-trust-anchor",
+            ],
+        )
+        assert bs.main() == 1  # the capture RuntimeError takes the exit-1 path
+        assert captured["require"] is True, (
+            "--require-trust-anchor did not reach _generate_keypair_and_sign: "
+            "the env scrub in setup.py would silently drop the operator's "
+            "anchor enforcement"
+        )
+
+    def test_without_flag_or_env_the_demand_is_absent(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import sys
+        from pathlib import Path
+
+        captured: dict[str, bool] = {}
+
+        def _capture_and_stop(
+            message: bytes,
+            seed_override: bytes | None = None,
+            trusted_pubkey: bytes | None = None,
+            require_trust_anchor: bool = False,
+            native_lib: ctypes.CDLL | None = None,
+        ) -> tuple[bytes, bytes, str]:
+            captured["require"] = require_trust_anchor
+            raise RuntimeError("test capture: stop before any artefact write")
+
+        monkeypatch.setattr(bs, "_generate_keypair_and_sign", _capture_and_stop)
+        monkeypatch.delenv("AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR", raising=False)
+        monkeypatch.setenv("AMA_BUILD_PIPELINE", "1")
+        pkg = Path(bs.__file__).resolve().parent
+        monkeypatch.setattr(
+            sys, "argv", ["_build_sign", "--package-dir", str(pkg), "--bind-extensions"]
+        )
+        assert bs.main() == 1
+        assert captured["require"] is False
+
+    def test_setup_py_forwards_the_flag_before_scrubbing(self) -> None:
+        """Source contract: setup.py must decide the flag from the PARENT
+        environment and append it to the signer command BEFORE popping
+        AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR from the child env."""
+        from pathlib import Path
+
+        setup_src = (Path(__file__).resolve().parent.parent / "setup.py").read_text(
+            encoding="utf-8"
+        )
+        append_idx = setup_src.index('cmd.append("--require-trust-anchor")')
+        scrub_idx = setup_src.index("env.pop(_child_only, None)")
+        assert append_idx < scrub_idx

@@ -295,3 +295,11 @@ crash-*
 oom-*
 timeout-*
 leak-*
+
+# v5-audit local downloads — reproducible verification tool binaries and
+# fetched release artefacts (cosign, gitleaks, trufflehog, slsa-verifier,
+# scorecard, the run-33338946996 wheels). NEVER committed: audit-local,
+# re-downloadable, and hundreds of MB. Evidence lives in ledger.csv + logs/.
+verification/v5-audit/tools/
+verification/v5-audit/artifacts/
+verification/v5-audit/*.tgz

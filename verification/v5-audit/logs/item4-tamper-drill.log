@@ -1,0 +1,17 @@
+=== tampered ed25519_binding.cpython-311-x86_64-linux-gnu.so (byte @ 329496) ===
+  If you rebuilt the extensions from source, remove the stale artefact and re-sign:
+      rm <package-dir>/_integrity_signature.py && AMA_BUILD_PIPELINE=1 python -m ama_cryptography.integrity --update --sign
+  For an installed wheel, reinstall it (pip install --force-reinstall) — a wheel's bindings never legitimately change beneath its signature.
+DRILL OK: tampered ed25519_binding.cpython-311-x86_64-linux-gnu.so refused (rc=1)
+=== tampered libama_cryptography.so (byte @ 386920) ===
+  Diagnosis: set AMA_POST_DIAGNOSTIC_IMPORT=1 to import anyway (crypto stays refused) and call module_attestation().
+  Stale digest after editing package sources? Refresh it with:
+      AMA_BUILD_PIPELINE=1 python -m ama_cryptography.integrity --update --sign
+DRILL OK: tampered libama_cryptography.so refused (rc=1)
+=== tampered crypto_api.py (byte @ 66805) ===
+  Diagnosis: set AMA_POST_DIAGNOSTIC_IMPORT=1 to import anyway (crypto stays refused) and call module_attestation().
+  Stale digest after editing package sources? Refresh it with:
+      AMA_BUILD_PIPELINE=1 python -m ama_cryptography.integrity --update --sign
+DRILL OK: tampered crypto_api.py refused (rc=1)
+=== restored; clean import must succeed again ===
+status: OPERATIONAL

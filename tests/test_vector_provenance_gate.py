@@ -195,6 +195,59 @@ def test_an_unpinned_new_vector_fails(
     assert "not pinned" in capsys.readouterr().err
 
 
+def test_an_unknown_suffix_file_under_a_protected_root_fails(
+    gate: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A suffix the filter does not know must not be an exemption.
+
+    VECTOR_SUFFIXES decides what gets pinned; it must not also decide what
+    gets noticed.  A vector added as `.hex` (or `.bin`, or `.req`) under a
+    protected root used to be neither pinned nor flagged — silently outside
+    the gate.  Only NON_VECTOR_ALLOWLIST, by exact path, may excuse a
+    non-vector file, and the smuggled file is not on it.
+    """
+    root = tmp_path / "vectors"
+    root.mkdir()
+    for i in range(gate.MIN_FILES):
+        (root / f"v{i}.kat").write_text(f"x{i}\n", encoding="utf-8")
+    monkeypatch.setattr(gate, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(gate, "MANIFEST_PATH", tmp_path / "PROVENANCE.json")
+    monkeypatch.setattr(gate, "PROTECTED", {"vectors": "synthetic"})
+    assert gate.main(["--update"]) == 0
+    assert gate.main([]) == 0
+
+    (root / "smuggled.hex").write_text("deadbeef\n", encoding="utf-8")
+    assert gate.main([]) == 1
+    err = capsys.readouterr().err
+    assert "vectors/smuggled.hex" in err
+    assert "NON_VECTOR_ALLOWLIST" in err
+
+
+def test_the_allowlist_is_exactly_the_tracked_non_vector_files(gate: ModuleType) -> None:
+    """The allowlist must hold nothing stale and nothing speculative.
+
+    Every entry must exist, be git-tracked, and not carry a vector suffix —
+    a vector suffix on the allowlist would excuse an unpinned vector, which
+    is the exact hole the stray sweep closes.
+    """
+    tracked = gate._git_tracked()
+    for relative in sorted(gate.NON_VECTOR_ALLOWLIST):
+        path = REPO_ROOT / relative
+        assert path.is_file(), f"{relative} is allowlisted but gone; prune the allowlist"
+        assert not tracked or relative in tracked, f"{relative} is allowlisted but untracked"
+        assert Path(relative).suffix.lower() not in gate.VECTOR_SUFFIXES, (
+            f"{relative} has a vector suffix; it must be pinned in the manifest, "
+            f"never allowlisted"
+        )
+        assert any(relative.startswith(root + "/") for root in gate.PROTECTED), (
+            f"{relative} is allowlisted but lives under no protected root; "
+            f"the entry is dead weight"
+        )
+
+
 def test_a_deleted_vector_fails(
     gate: ModuleType,
     tmp_path: Path,

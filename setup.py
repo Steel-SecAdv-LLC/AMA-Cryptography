@@ -767,6 +767,22 @@ class CMakeBuild(build_ext):
         # `_all_failures_repairable`, and a SKIP produces no failed row at all.
         # An operator who exports either variable in their shell (the
         # documented way to run a strict build) could not `pip install .`.
+        #
+        # AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR is dual-use, though: besides the
+        # import-time POST policy above, _build_sign reads the SAME variable
+        # as its own refuse-to-sign-unanchored gate.  Scrubbing it therefore
+        # silently dropped the operator's demanded anchor enforcement from
+        # the very signing step it was exported to constrain.  The intent is
+        # re-carried explicitly: when the installing environment had the
+        # variable enabled, the signer gets --require-trust-anchor on its
+        # command line, so the child imports leniently but still refuses to
+        # produce an unanchored signature.  (2026-08 v5 audit, item 15.)
+        _true_env_values = {"1", "true", "yes", "on"}  # mirrors _build_sign
+        if (
+            os.environ.get("AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR", "").strip().lower()
+            in _true_env_values
+        ):
+            cmd.append("--require-trust-anchor")
         for _child_only in ("AMA_FIPS_STRICT", "AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR"):
             env.pop(_child_only, None)
         try:

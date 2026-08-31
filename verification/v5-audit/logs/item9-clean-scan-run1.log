@@ -1,0 +1,7 @@
+== trufflehog full-history ==
+trufflehog exit: 183 (0 = no findings, 183 = findings)
+trufflehog findings outside FP3 class: 0
+== gitleaks full-history ==
+gitleaks exit: 9 (0 = no findings, 9 = findings)
+gitleaks findings: 1224  FP1(vector material): 1209  FP2(identifier): 9  FP3(historical fixtures): 6  unclassified: 0
+ITEM9: CLEAN (trufflehog findings all in FP3; all gitleaks findings in documented FP classes)

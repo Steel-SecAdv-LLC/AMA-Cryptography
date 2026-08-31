@@ -1,0 +1,5 @@
+===============================================
+NEON ChaCha20 8-way vs scalar single-block test
+===============================================
+
+  SKIP: NEON ChaCha20 sources not compiled in.

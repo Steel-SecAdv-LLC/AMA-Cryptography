@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright (C) 2025-2026 Steel Security Advisors LLC
+# SPDX-License-Identifier: Apache-2.0
 # Phase 0.3: require avx512f, avx512vl, vaes, vpclmulqdq in lscpu flags.
 set -u
 flags=$(lscpu)

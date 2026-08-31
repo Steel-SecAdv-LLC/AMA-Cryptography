@@ -167,7 +167,7 @@ AES-256-GCM provides authenticated encryption with associated data (AEAD).
 
 **Standard:** NIST SP 800-38D
 
-**Implementation:** Native C (`ama_aes_gcm.c`). Uses 256-byte lookup table S-box — **not** constant-time with respect to cache-timing in shared-tenant environments. For such deployments, hardware AES-NI or bitsliced implementations are recommended.
+**Implementation:** Native C (`ama_aes_gcm.c`). The default build (`AMA_AES_CONSTTIME=ON`) uses the constant-time bitsliced S-box (`ama_aes_bitsliced.c`), and the runtime dispatcher promotes to a hardware AES kernel where available (VAES+AVX2, AES-NI+PCLMULQDQ, or ARMv8 AES+PMULL). The cache-timing-unsafe 256-byte lookup table S-box is built only when explicitly opted in via `-DAMA_AES_CONSTTIME=OFF -DAMA_AES_TABLE_INSECURE=ON`; the active backend is reported at runtime by `ama_aes_gcm_active_backend()`.
 
 ### SHA3-256
 
@@ -377,7 +377,7 @@ ChaCha20-Poly1305 provides authenticated encryption as an alternative to AES-256
 
 **Standard:** RFC 8439
 
-**Implementation:** Native C (`ama_chacha20poly1305.c`). Software-only, constant-time — recommended for shared-tenant environments where AES cache-timing is a concern.
+**Implementation:** Native C (`ama_chacha20poly1305.c`). Software-only, constant-time — preferred over AES-GCM in environments without hardware AES acceleration, or in builds where `AMA_AES_CONSTTIME` has been explicitly disabled.
 
 ### Argon2id (Password Hashing)
 

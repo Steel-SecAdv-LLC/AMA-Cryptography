@@ -1,0 +1,77 @@
+==29446== Memcheck, a memory error detector
+==29446== Copyright (C) 2002-2022, and GNU GPL'd, by Julian Seward et al.
+==29446== Using Valgrind-3.22.0 and LibVEX; rerun with -h for copyright info
+==29446== Command: /home/user/AMA-Cryptography/build-release/bin/test_chacha20poly1305
+==29446== 
+===========================================
+ChaCha20-Poly1305 KAT + AVX2 cross-check
+===========================================
+
+PASS: RFC 8439 encrypt returns SUCCESS
+PASS: RFC 8439 plaintext length matches expected_ct array
+PASS: RFC 8439 ciphertext bytes match spec
+PASS: RFC 8439 tag bytes match spec
+PASS: RFC 8439 decrypt returns SUCCESS
+PASS: RFC 8439 plaintext round-trip matches
+PASS: size-sweep 1 B: encrypt SUCCESS
+PASS: size-sweep 1 B: ciphertext byte-identical to scalar reference
+PASS: size-sweep 1 B: decrypt round-trip matches
+PASS: size-sweep 63 B: encrypt SUCCESS
+PASS: size-sweep 63 B: ciphertext byte-identical to scalar reference
+PASS: size-sweep 63 B: decrypt round-trip matches
+PASS: size-sweep 64 B: encrypt SUCCESS
+PASS: size-sweep 64 B: ciphertext byte-identical to scalar reference
+PASS: size-sweep 64 B: decrypt round-trip matches
+PASS: size-sweep 65 B: encrypt SUCCESS
+PASS: size-sweep 65 B: ciphertext byte-identical to scalar reference
+PASS: size-sweep 65 B: decrypt round-trip matches
+PASS: size-sweep 127 B: encrypt SUCCESS
+PASS: size-sweep 127 B: ciphertext byte-identical to scalar reference
+PASS: size-sweep 127 B: decrypt round-trip matches
+PASS: size-sweep 128 B: encrypt SUCCESS
+PASS: size-sweep 128 B: ciphertext byte-identical to scalar reference
+PASS: size-sweep 128 B: decrypt round-trip matches
+PASS: size-sweep 255 B: encrypt SUCCESS
+PASS: size-sweep 255 B: ciphertext byte-identical to scalar reference
+PASS: size-sweep 255 B: decrypt round-trip matches
+PASS: size-sweep 256 B: encrypt SUCCESS
+PASS: size-sweep 256 B: ciphertext byte-identical to scalar reference
+PASS: size-sweep 256 B: decrypt round-trip matches
+PASS: size-sweep 511 B: encrypt SUCCESS
+PASS: size-sweep 511 B: ciphertext byte-identical to scalar reference
+PASS: size-sweep 511 B: decrypt round-trip matches
+PASS: size-sweep 512 B: encrypt SUCCESS
+PASS: size-sweep 512 B: ciphertext byte-identical to scalar reference
+PASS: size-sweep 512 B: decrypt round-trip matches
+PASS: size-sweep 513 B: encrypt SUCCESS
+PASS: size-sweep 513 B: ciphertext byte-identical to scalar reference
+PASS: size-sweep 513 B: decrypt round-trip matches
+PASS: size-sweep 1023 B: encrypt SUCCESS
+PASS: size-sweep 1023 B: ciphertext byte-identical to scalar reference
+PASS: size-sweep 1023 B: decrypt round-trip matches
+PASS: size-sweep 1024 B: encrypt SUCCESS
+PASS: size-sweep 1024 B: ciphertext byte-identical to scalar reference
+PASS: size-sweep 1024 B: decrypt round-trip matches
+PASS: size-sweep 1025 B: encrypt SUCCESS
+PASS: size-sweep 1025 B: ciphertext byte-identical to scalar reference
+PASS: size-sweep 1025 B: decrypt round-trip matches
+PASS: size-sweep 2048 B: encrypt SUCCESS
+PASS: size-sweep 2048 B: ciphertext byte-identical to scalar reference
+PASS: size-sweep 2048 B: decrypt round-trip matches
+PASS: size-sweep 4096 B: encrypt SUCCESS
+PASS: size-sweep 4096 B: ciphertext byte-identical to scalar reference
+PASS: size-sweep 4096 B: decrypt round-trip matches
+PASS: tag-mismatch setup encrypt SUCCESS
+PASS: flipped-tag decrypt returns VERIFY_FAILED
+PASS: flipped-tag decrypt leaves canary intact
+
+57 checks, 0 failures
+==29446== 
+==29446== HEAP SUMMARY:
+==29446==     in use at exit: 0 bytes in 0 blocks
+==29446==   total heap usage: 5 allocs, 5 frees, 20,480 bytes allocated
+==29446== 
+==29446== All heap blocks were freed -- no leaks are possible
+==29446== 
+==29446== For lists of detected and suppressed errors, rerun with: -s
+==29446== ERROR SUMMARY: 0 errors from 0 contexts (suppressed: 0 from 0)

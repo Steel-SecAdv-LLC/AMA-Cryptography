@@ -940,8 +940,9 @@ class TestSLHDSA_SHA2_256f_ACVP_sigGen:
         """The 32-byte message randomizer R IS byte-exact to NIST for both modes.
 
         R = PRF_msg(SK.prf, opt_rand, M') — proves the SHA-512-based message
-        digest path of SHA2-256f matches FIPS 205 exactly (the divergence is
-        strictly downstream, in the FORS/WOTS+/hypertree body).
+        digest path of SHA2-256f matches FIPS 205 in isolation, so a future
+        regression is localized to it rather than the FORS/WOTS+/hypertree
+        body (covered in full by ``test_acvp_siggen_byte_exact``).
         """
         det = hedged = 0
         for v in vectors:

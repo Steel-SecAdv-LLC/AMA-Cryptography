@@ -28,12 +28,16 @@ verifies it.  Three trees had no equivalent.  This is that equivalent.
 What it checks
 --------------
 For each protected root, every tracked file's SHA-256 against
-:data:`MANIFEST_PATH`.  Three ways to fail, not one:
+:data:`MANIFEST_PATH`.  Four ways to fail, not one:
 
 * a digest that does not match — the file was edited;
 * a manifest entry with no file — a vector was deleted or renamed;
 * a file with no manifest entry — a vector was added without being pinned,
-  which is how a tree drifts out from under its own gate.
+  which is how a tree drifts out from under its own gate;
+* a tracked file whose suffix is not in :data:`VECTOR_SUFFIXES` and whose
+  path is not in :data:`NON_VECTOR_ALLOWLIST` — a suffix filter alone would
+  let a ``.hex`` or ``.bin`` vector live under a protected root, unpinned
+  and unflagged, silently outside the gate.
 
 Why the digests are not the whole story
 ---------------------------------------
@@ -51,7 +55,8 @@ to remove.  Two things narrow it:
 Exit status
 -----------
 0  every protected file matches its recorded digest
-1  a file changed, went missing, or is unpinned
+1  a file changed, went missing, is unpinned, or is a stray — a tracked file
+   under a protected root that is neither a pinned vector nor allowlisted
 2  the gate could not read what it needs, or read too little to be believed
 """
 
@@ -94,6 +99,27 @@ PROTECTED: dict[str, str] = {
 #: reproduce is one they learn to route around.
 VECTOR_SUFFIXES: frozenset[str] = frozenset({".kat", ".rsp", ".json", ".txt", ".dat"})
 
+#: The suffix filter's fail-closed companion.  A suffix filter alone has a
+#: blind spot: a vector added under a protected root as `.hex`, `.bin` or
+#: `.req` is neither pinned nor flagged — silently outside the gate.  So the
+#: gate walks EVERY tracked file under the protected roots, and one that is
+#: neither vector-suffixed (pinned above) nor named here, exactly, is a
+#: failure.  This is the complete list of tracked non-vector housekeeping
+#: under the roots: the first-party ACVP tooling, its ignore rules for the
+#: files that tooling generates, and the README per vector family.  Adding a
+#: housekeeping file is a deliberate act that appears here, in the diff.
+NON_VECTOR_ALLOWLIST: frozenset[str] = frozenset(
+    {
+        "nist_vectors/.gitignore",
+        "nist_vectors/fetch_vectors.py",
+        "nist_vectors/run_vectors.py",
+        "tests/kat/README.md",
+        "tests/kat/ascon/README.md",
+        "tests/kat/fips205/README.md",
+        "tests/kat/keyformats/README.md",
+    }
+)
+
 #: A clean report over a tree this gate could not really read means nothing.
 #: Set below the real figures so a normal checkout never trips it, and far
 #: enough above zero that an empty or partially-checked-out tree cannot pass.
@@ -134,11 +160,10 @@ def _git_tracked() -> frozenset[str]:
     return frozenset(name.decode("utf-8") for name in out.split(b"\0") if name)
 
 
-def _tracked_files(root: Path) -> list[Path]:
-    """The tracked, PUBLISHED VECTOR files under `root`.
+def _all_tracked_files(root: Path) -> list[Path]:
+    """Every tracked file under `root` (see `_git_tracked`), vector or not.
 
-    Two filters, for two different failures: git tracking (see `_git_tracked`)
-    and suffix (see VECTOR_SUFFIXES).
+    The manifest itself and `__pycache__` are excluded; nothing else is.
     """
     tracked = _git_tracked()
     return sorted(
@@ -147,9 +172,33 @@ def _tracked_files(root: Path) -> list[Path]:
         if p.is_file()
         and "__pycache__" not in p.parts
         and p.name != MANIFEST_PATH.name
-        and p.suffix.lower() in VECTOR_SUFFIXES
         and (not tracked or p.relative_to(REPO_ROOT).as_posix() in tracked)
     )
+
+
+def _tracked_files(root: Path) -> list[Path]:
+    """The tracked, PUBLISHED VECTOR files under `root`.
+
+    Two filters, for two different failures: git tracking (see `_git_tracked`)
+    and suffix (see VECTOR_SUFFIXES).
+    """
+    return [p for p in _all_tracked_files(root) if p.suffix.lower() in VECTOR_SUFFIXES]
+
+
+def _stray_files(root: Path) -> list[Path]:
+    """Tracked files under `root` that are neither vectors nor allowlisted.
+
+    The complement of `_tracked_files` minus NON_VECTOR_ALLOWLIST: what the
+    suffix filter cannot see and no one has vouched for.  Every entry is a
+    gate failure — otherwise a vector added as `.hex` or `.bin` would sit
+    under a protected root unpinned and unflagged.
+    """
+    return [
+        p
+        for p in _all_tracked_files(root)
+        if p.suffix.lower() not in VECTOR_SUFFIXES
+        and p.relative_to(REPO_ROOT).as_posix() not in NON_VECTOR_ALLOWLIST
+    ]
 
 
 def digest(path: Path) -> str:
@@ -242,6 +291,15 @@ def main(argv: list[str] | None = None) -> int:
             )
     for relative in sorted(set(pinned) - set(current["files"])):
         problems.append(f"{relative} is pinned but missing from the tree.")
+    for root in sorted(PROTECTED):
+        for path in _stray_files(REPO_ROOT / root):
+            relative = path.relative_to(REPO_ROOT).as_posix()
+            problems.append(
+                f"{relative} is under a protected root but is neither a pinned vector "
+                f"nor in NON_VECTOR_ALLOWLIST. A suffix this gate does not recognize "
+                f"is not an exemption; give the file a vector suffix and pin it with "
+                f"--update, or allowlist it deliberately."
+            )
 
     total = sum(entry["bytes"] for entry in current["files"].values())
     print(f"{'root':<34}{'files':>8}{'bytes':>14}")

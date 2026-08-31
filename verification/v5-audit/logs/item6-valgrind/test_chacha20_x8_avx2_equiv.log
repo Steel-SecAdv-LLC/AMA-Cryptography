@@ -1,0 +1,22 @@
+==29905== Memcheck, a memory error detector
+==29905== Copyright (C) 2002-2022, and GNU GPL'd, by Julian Seward et al.
+==29905== Using Valgrind-3.22.0 and LibVEX; rerun with -h for copyright info
+==29905== Command: /home/user/AMA-Cryptography/build-release/bin/test_chacha20_x8_avx2_equiv
+==29905== 
+===============================================
+AVX2 ChaCha20 8-way vs scalar single-block test
+===============================================
+
+
+===============================================
+All 1024 ChaCha20 8-way equivalence checks passed
+===============================================
+==29905== 
+==29905== HEAP SUMMARY:
+==29905==     in use at exit: 0 bytes in 0 blocks
+==29905==   total heap usage: 1 allocs, 1 frees, 4,096 bytes allocated
+==29905== 
+==29905== All heap blocks were freed -- no leaks are possible
+==29905== 
+==29905== For lists of detected and suppressed errors, rerun with: -s
+==29905== ERROR SUMMARY: 0 errors from 0 contexts (suppressed: 0 from 0)

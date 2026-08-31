@@ -1150,9 +1150,10 @@ static bench_result_t bench_dilithium_invntt(int iters, int warmup, int use_disp
  * (seconds-scale — three to four orders of magnitude beyond the
  * `iters_vslow` 1 ms+ tier), Verify ~1.15 ms. Call sites therefore
  * use `iters_slh_sign` (5) for the sign row and `iters_slow` (200)
- * for keygen / verify so the family stays inside the ~60 s subprocess
+ * for keygen / verify so the family stays inside the 600 s subprocess
  * timeout the downstream `benchmarks/comparative_benchmark.py` runner
- * enforces (see its `timeout=60` argument on the raw-C subprocess).
+ * enforces (see its `timeout=600` argument on the raw-C subprocess;
+ * the full harness run measures ~109 s on this sandbox).
  *
  * Warmup is capped *locally* per call (see SLH_KEYGEN_WARMUP_MAX /
  * SLH_SIGN_WARMUP_MAX / SLH_VERIFY_WARMUP_MAX below) so that the
@@ -1728,7 +1729,8 @@ int main(int argc, char **argv) {
     /* --- SLH-DSA SHAKE-128s (FIPS 205, NIST L1) ---
      * KeyGen ~164 ms, Sign ~1.25 s, Verify ~1.15 ms on this sandbox.
      * Sign uses the dedicated `iters_slh_sign` (5) tier so the row
-     * lands at ~6 s and stays inside the 60 s subprocess timeout that
+     * lands at ~6 s, keeping the full run (~109 s measured) inside
+     * the 600 s subprocess timeout that
      * `benchmarks/comparative_benchmark.py` enforces on the harness. */
     BENCH_ROW(bench_slhdsa_shake128s_keygen(iters_slow,     warmup));
     BENCH_ROW(bench_slhdsa_shake128s_sign(iters_slh_sign,   warmup));

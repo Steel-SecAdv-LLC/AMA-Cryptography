@@ -39,14 +39,16 @@
  * The hook remains defined only because ed25519_sign_open_batch is still
  * compiled from the vendored donna unit and the linker requires the symbol; on
  * the off chance that routine is ever exercised, a failed CSPRNG draw
- * zero-fills the buffer so the result is deterministic rather than
- * indeterminate stack.  AMA's batch soundness no longer depends on it, so the
- * former fail-closed latch and the AMA_TESTING_MODE allocation-failure hook are
- * gone with the aggregate path they guarded. */
+ * aborts the process: the randomizers exist to prevent adversarial signature
+ * cancellation in the aggregate check, and all-zero randomizers would turn a
+ * hypothetically revived batch path into one that accepts forged combinations
+ * — the earlier zero-fill made the failure deterministic but fail-OPEN.
+ * (2026-08 v5 audit: dead code held to the same fail-closed bar as live
+ * code.)  AMA's own batch verify is a per-entry loop and never draws here. */
 static void
 ed25519_randombytes_unsafe(void *p, size_t len) {
     if (ama_randombytes((uint8_t *)p, len) != AMA_SUCCESS) {
-        memset(p, 0, len);
+        abort();
     }
 }
 

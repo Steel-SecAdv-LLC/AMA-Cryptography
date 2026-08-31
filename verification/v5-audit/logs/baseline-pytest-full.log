@@ -1,0 +1,146 @@
+........................................................................ [  1%]
+........................................................................ [  2%]
+........................................................................ [  3%]
+.........................ss............................................. [  4%]
+........................................................................ [  5%]
+........................................................................ [  6%]
+........................................................................ [  7%]
+........................................................................ [  8%]
+...........................................................s............ [  9%]
+........................................................................ [ 10%]
+........................................................................ [ 11%]
+........................................................................ [ 12%]
+........................................................................ [ 14%]
+........................................................................ [ 15%]
+..sssss................................................................. [ 16%]
+........................................................................ [ 17%]
+........................................................................ [ 18%]
+........................................................................ [ 19%]
+........................................................................ [ 20%]
+........................................................................ [ 21%]
+........................................................................ [ 22%]
+...................s.................................................... [ 23%]
+...........ss........................................................... [ 24%]
+........................................................................ [ 25%]
+........................................................................ [ 26%]
+........................................................................ [ 28%]
+........................................................................ [ 29%]
+........................................................................ [ 30%]
+........................................................................ [ 31%]
+........................................................................ [ 32%]
+....................................sssss...sss.................. [ 33%]
+........................................................................ [ 34%]
+........................................................................ [ 35%]
+........................................................................ [ 36%]
+........................................................................ [ 37%]
+........................................................................ [ 38%]
+.....F......................................s..s........................ [ 39%]
+..............................s..s...................................... [ 40%]
+........................................................................ [ 41%]
+........................................................................ [ 43%]
+........................................................................ [ 44%]
+........................................................................ [ 45%]
+........................................................................ [ 46%]
+........................................................................ [ 47%]
+........................................................................ [ 48%]
+........................................................................ [ 49%]
+........................................................................ [ 50%]
+........................................................................ [ 51%]
+........................................................................ [ 52%]
+........................................................................ [ 53%]
+........................................................................ [ 54%]
+........................................................................ [ 55%]
+........................................................................ [ 57%]
+........................................................................ [ 58%]
+........................................................................ [ 59%]
+........................................................................ [ 60%]
+........................................................................ [ 61%]
+........................................................................ [ 62%]
+........................................................................ [ 63%]
+........................................................................ [ 64%]
+........................................................................ [ 65%]
+........................................................................ [ 66%]
+........................................................................ [ 67%]
+........................................................................ [ 68%]
+........................................................................ [ 69%]
+........................................................................ [ 71%]
+........................................................................ [ 72%]
+........................................................................ [ 73%]
+........................................................................ [ 74%]
+........................................................................ [ 75%]
+........................................................................ [ 76%]
+........................................................................ [ 77%]
+........................................................................ [ 78%]
+........................................................................ [ 79%]
+........................................................................ [ 80%]
+........................................................................ [ 81%]
+........................................................................ [ 82%]
+........................................................................ [ 83%]
+........................................................................ [ 85%]
+........................................................................ [ 86%]
+........................................................................ [ 87%]
+...............................................sss...................... [ 88%]
+........................................................................ [ 89%]
+........................................................................ [ 90%]
+..............................s......................................... [ 91%]
+........................................................................ [ 92%]
+........................................................................ [ 93%]
+..s..........................................s.......................... [ 94%]
+........................................................................ [ 95%]
+........................................................................ [ 96%]
+........................................................................ [ 97%]
+......................................................................ss [ 99%]
+..s.ss.ss.....s................................................          [100%]
+=================================== FAILURES ===================================
+___________________________ test_real_tree_is_clean ____________________________
+tests/test_headers.py:110: in test_real_tree_is_clean
+    assert tool_module.main(["--check", "--root", str(REPO_ROOT)]) == 0
+E   AssertionError: assert 1 == 0
+E    +  where 1 = <function main at 0x7f014998fb00>(['--check', '--root', '/home/user/AMA-Cryptography'])
+E    +    where <function main at 0x7f014998fb00> = <module 'check_headers' from '/home/user/AMA-Cryptography/tools/check_headers.py'>.main
+        tool_module = <module 'check_headers' from '/home/user/AMA-Cryptography/tools/check_headers.py'>
+----------------------------- Captured stderr call -----------------------------
+FAIL: 3 of 552 files carry a non-canonical header:
+  - verification/v5-audit/check_diff.sh: missing license header
+  - verification/v5-audit/check_silicon.sh: missing license header
+  - verification/v5-audit/run.sh: missing license header
+
+Run `python tools/check_headers.py --apply` to normalize them.
+=========================== short test summary info ============================
+SKIPPED [1] tests/test_aes_gcm_native.py:343: PyCA cryptography not available
+SKIPPED [1] tests/test_aes_gcm_native.py:360: PyCA cryptography not available
+SKIPPED [1] tests/test_avx_scoping_gate.py:239: SSE4.1 declares no required kernel by design
+SKIPPED [1] tests/test_choco_retry_gate.py:208: needs pwsh and a POSIX shell shim for `choco`; on Windows the shim cannot be executed, and the helper's real exercise there is the workflow install step rather than a fake
+SKIPPED [1] tests/test_choco_retry_gate.py:233: needs pwsh and a POSIX shell shim for `choco`; on Windows the shim cannot be executed, and the helper's real exercise there is the workflow install step rather than a fake
+SKIPPED [1] tests/test_choco_retry_gate.py:259: needs pwsh and a POSIX shell shim for `choco`; on Windows the shim cannot be executed, and the helper's real exercise there is the workflow install step rather than a fake
+SKIPPED [1] tests/test_choco_retry_gate.py:284: needs pwsh and a POSIX shell shim for `choco`; on Windows the shim cannot be executed, and the helper's real exercise there is the workflow install step rather than a fake
+SKIPPED [1] tests/test_choco_retry_gate.py:295: needs pwsh and a POSIX shell shim for `choco`; on Windows the shim cannot be executed, and the helper's real exercise there is the workflow install step rather than a fake
+SKIPPED [1] tests/test_crypto_import_paths.py:574: Live TSA integration test — requires network and a TSA endpoint. Enable by providing TSA_URL env var and running with -m integration.
+SKIPPED [1] tests/test_differential.py:61: Requires AMA C library and pycryptodome for cross-validation
+SKIPPED [1] tests/test_differential.py:99: Requires AMA C library and pynacl for cross-validation
+SKIPPED [1] tests/test_ed25519_native.py:223: PyCA cryptography not installed — skipping interop tests
+SKIPPED [1] tests/test_ed25519_native.py:231: PyCA cryptography not installed — skipping interop tests
+SKIPPED [1] tests/test_ed25519_native.py:241: PyCA cryptography not installed — skipping interop tests
+SKIPPED [1] tests/test_ed25519_native.py:253: PyCA cryptography not installed — skipping interop tests
+SKIPPED [1] tests/test_ed25519_native.py:276: PyCA cryptography not installed — skipping interop tests
+SKIPPED [3] tests/test_ed25519_native.py:409: PyCA cryptography not installed — skipping interop tests
+SKIPPED [1] tests/test_hkdf_sha3_256.py:322: PyCA cryptography not installed
+SKIPPED [1] tests/test_hkdf_sha3_256.py:408: PyCA cryptography not installed
+SKIPPED [1] tests/test_hsm_integration.py:889: AMA_CI_REQUIRE_BACKENDS is not set — local run
+SKIPPED [1] tests/test_hsm_integration.py:1183: SoftHSM2 integration unavailable: missing SoftHSM2 module (apt-get install softhsm2 / brew install softhsm / choco install softhsm.install), softhsm2-util, PyKCS11 (pip install '.[hsm]')
+SKIPPED [1] tests/test_semgrep_severity_gate.py:313: semgrep is not installed (no `semgrep` on PATH)
+SKIPPED [1] tests/test_semgrep_severity_gate.py:363: semgrep is genuinely not installed in this environment
+SKIPPED [1] tests/test_semgrep_severity_gate.py:370: semgrep is not installed (no `semgrep` on PATH)
+SKIPPED [1] tests/test_suppression_hygiene_gate.py:370: cppcheck is not installed (no `cppcheck` on PATH)
+SKIPPED [1] tests/test_vendor_isolation_gate.py:378: not a CI job that promises a built library
+SKIPPED [1] tests/test_vendor_isolation_gate.py:981: could not import 'cryptography': No module named 'cryptography'
+SKIPPED [1] tests/test_workflow_path_filters.py:172: baseline-guard.yml does not configure or drive CMake
+SKIPPED [1] tests/test_workflow_path_filters.py:172: corpus-provenance.yml does not configure or drive CMake
+SKIPPED [1] tests/test_workflow_path_filters.py:172: wiki-sync.yml does not configure or drive CMake
+SKIPPED [1] tests/test_workflow_path_filters.py:187: baseline-guard.yml filters only one event
+SKIPPED [1] tests/test_workflow_path_filters.py:187: corpus-provenance.yml filters only one event
+SKIPPED [1] tests/test_workflow_path_filters.py:187: integrity-anchor-check.yml filters only one event
+SKIPPED [1] tests/test_workflow_path_filters.py:187: wiki-sync.yml filters only one event
+SKIPPED [1] tests/test_wycheproof_corpus_provenance.py:113: network-dependent; set AMA_WYCHEPROOF_ONLINE=1 to check upstream bytes
+FAILED tests/test_headers.py::test_real_tree_is_clean - AssertionError: asser...
+1 failed, 6642 passed, 37 skipped, 7 subtests passed in 630.20s (0:10:30)

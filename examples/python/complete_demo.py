@@ -19,9 +19,10 @@ Comprehensive demonstration of all AMA Cryptography capabilities:
 
    This walkthrough favours a single readable script over safe operations:
 
-   * ``master_password="strong_master_password_123!"`` is hardcoded; a real
-     deployment must source the passphrase from an operator prompt, a secrets
-     manager, or an HSM.
+   * The key-store ``master_password`` is a throwaway generated with
+     ``secrets.token_urlsafe(32)`` and never persisted; a real deployment must
+     source the passphrase from an operator prompt, a secrets manager, or an
+     HSM.
    * The key store is created inside a temporary directory that is deleted on
      exit — keys created here are unrecoverable by design.
    * The double-helix / 3R sections are **non-cryptographic** analytics and

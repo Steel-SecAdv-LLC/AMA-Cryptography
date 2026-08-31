@@ -955,9 +955,11 @@ ama_error_t ama_shake256_inc_squeeze(ama_sha3_ctx* ctx, uint8_t* output, size_t 
      * ama_shake128_inc_squeeze sat at a position that is legal at rate 168,
      * and the extraction loop there would emit state bytes 136..167: this
      * sponge's CAPACITY half, which must never be output.  Digest contexts
-     * (ama_sha3_final / ama_sha3_512_final) carry their own tags and are
-     * rejected here twice over — wrong tag, and the SHA3_CTX_CONSUMED
-     * position. */
+     * (ama_sha3_final / ama_sha3_512_final) carry their own tags, but
+     * SHA3-256's rate equals SHAKE256's (136), so a consumed ama_sha3_final
+     * context passes this tag check and is rejected only by the
+     * SHA3_CTX_CONSUMED position guard below; ama_sha3_512_final's tag (72)
+     * fails both checks. */
     if (ctx->finalized != (int)SHAKE256_RATE) {
         return AMA_ERROR_INVALID_PARAM;  /* cross-family misuse */
     }

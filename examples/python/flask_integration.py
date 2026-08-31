@@ -210,10 +210,13 @@ def verify_signature() -> Any:
             "public_key": "hex public key"
         }
     """
-    data = request.get_json()
+    data = request.get_json(silent=True)
     required = ["data", "signature", "public_key"]
 
-    if not all(k in data for k in required):
+    # A JSON `null` (or a non-object) body makes get_json return None/a
+    # non-dict; `k in data` would raise TypeError and surface as an
+    # unhandled 500.  Refuse it as a clean 400, matching /api/sign.
+    if not isinstance(data, dict) or not all(k in data for k in required):
         return jsonify({"error": f"Missing required fields: {required}"}), 400
 
     try:

@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright (C) 2025-2026 Steel Security Advisors LLC
+# SPDX-License-Identifier: Apache-2.0
 # verification/v5-audit/run.sh — ledger-recording command runner for the v5.0 audit.
 #
 # Usage: run.sh <item-id> <threshold-description> <log-basename> -- <command> [args...]

@@ -716,6 +716,21 @@ class TestLogicalLinesAndSegmentScopedExemption:
         assert len(found) == 1, found
         assert found[0].startswith("w.yml:2:"), found[0]
 
+    def test_a_comment_backslash_does_not_hide_the_next_line(self) -> None:
+        """A comment never continues, so the apt call after it is a real call.
+
+        In POSIX shell a comment runs to the end of the physical line; a
+        trailing ``\\`` inside it is comment text, not a continuation.  The
+        splicer joined ``# foo \\`` and the raw ``apt-get`` below it into one
+        logical line starting with ``#``, which ``scan_text`` skipped while
+        the shell EXECUTED the apt-get — a gate bypass.  Measured on the gate
+        as it stood, this text returned no violations.
+        """
+        text = "  run: |\n    # refresh the lists first \\\n    apt-get install -y cmake\n"
+        found = gate.scan_text(text, "w.yml")
+        assert len(found) == 1, found
+        assert found[0].startswith("w.yml:3:"), found[0]
+
     def test_a_raw_call_after_the_helper_is_not_exempt(self) -> None:
         text = "  run: .github/scripts/apt-install.sh cmake && apt-get install -y ninja\n"
         assert len(gate.scan_text(text, "w.yml")) == 1

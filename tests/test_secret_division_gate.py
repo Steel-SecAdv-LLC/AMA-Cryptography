@@ -83,18 +83,19 @@ def test_aarch64_divide_mnemonics_are_recognised(gate: ModuleType) -> None:
     assert divides == {"arm_function": 2}
 
 
-def test_a_mnemonic_that_merely_starts_with_div_is_not_counted(gate: ModuleType) -> None:
-    """`divss` and `divsd` are floating point and have no integer secret here.
+def test_x86_floating_point_divides_are_counted(gate: ModuleType) -> None:
+    """`divss` and `divsd` ARE counted, deliberately, by the ``i?div[a-z]*`` arm.
 
-    Recorded as a deliberate decision rather than an accident of the regex:
-    this gate is about integer division on secret operands.
+    There is no floating-point arithmetic anywhere in this library, so an SSE
+    divide appearing at all is worth failing on rather than passing over — the
+    same reasoning ``test_aarch64_fdiv_is_counted`` records for the AArch64
+    lane.  Pinned so the behaviour stays stated rather than assumed: if the
+    regex is ever narrowed to integer divides only, this test must change with
+    it, under review.
     """
     text = _disassembly(("fp_function", ["divss", "divsd", "mov"]))
     divides, _symbols, _instructions = gate.inventory(text)
-    assert divides.get("fp_function", 0) == 2, (
-        "divss/divsd currently ARE counted; if that changes, this test must "
-        "change with it so the behaviour stays stated rather than assumed"
-    )
+    assert divides == {"fp_function": 2}
 
 
 def test_aarch64_fdiv_is_counted(gate: ModuleType) -> None:

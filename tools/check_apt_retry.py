@@ -110,6 +110,14 @@ def _logical_lines(text: str, continuation: str) -> list[tuple[int, str]]:
     continuation split the invocation past the regex and the call was never
     seen.  Splicing first makes the scan see what the shell sees; the reported
     line number stays the first physical line, which is where a reader looks.
+
+    A COMMENT line never continues: the shell's comment runs to the end of the
+    physical line, so a trailing continuation character inside it is comment
+    text, not a continuation.  Splicing it anyway joined `# foo \\` and the
+    `apt-get install x` below it into one logical line starting with `#`,
+    which `scan_text` then skipped while the shell EXECUTED the apt-get — a
+    gate bypass.  Only the first physical line can start the comment; a `#`
+    on a continued line is an ordinary word mid-command.
     """
     lines: list[tuple[int, str]] = []
     pending: list[str] = []
@@ -118,7 +126,8 @@ def _logical_lines(text: str, continuation: str) -> list[tuple[int, str]]:
         if not pending:
             start = number
         body = raw.rstrip()
-        if body.endswith(continuation):
+        is_comment = not pending and body.lstrip().startswith("#")
+        if body.endswith(continuation) and not is_comment:
             pending.append(body[: -len(continuation)])
             continue
         pending.append(body)

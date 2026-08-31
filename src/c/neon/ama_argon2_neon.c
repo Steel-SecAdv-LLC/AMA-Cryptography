@@ -46,6 +46,10 @@
 #include <arm_neon.h>
 #include "ama_neon_internal.h"
 
+/* Defined in ama_consttime.c; forward-declared to avoid pulling the full
+ * public header into this kernel TU (mirrors src/c/ama_sha256.c). */
+extern void ama_secure_memzero(void *ptr, size_t len);
+
 static const uint64_t BLAKE2B_IV[8] = {
     0x6a09e667f3bcc908ULL, 0xbb67ae8584caa73bULL,
     0x3c6ef372fe94f82bULL, 0xa54ff53a5f1d36f1ULL,
@@ -238,8 +242,8 @@ void ama_argon2_g_neon(uint64_t out[128],
     /* Column-wise BlaMka: gather non-contiguous stride-16 pairs into a
      * scratch buffer, run blamka_round, scatter back.  Mirrors the
      * AVX2 column-pass scratch idiom verbatim. */
+    uint64_t scratch[16];
     for (int col = 0; col < 8; col++) {
-        uint64_t scratch[16];
         for (int row = 0; row < 8; row++) {
             scratch[2 * row    ] = Z[2 * col + row * 16    ];
             scratch[2 * row + 1] = Z[2 * col + row * 16 + 1];
@@ -257,6 +261,14 @@ void ama_argon2_g_neon(uint64_t out[128],
         uint64x2_t vr = vld1q_u64(R + i);
         vst1q_u64(out + i, veorq_u64(vz, vr));
     }
+
+    /* R/Z/scratch hold password-derived block material; the driver scrubs
+     * its heap matrix (ama_argon2.c) but the last invocation's stack frame
+     * would otherwise survive.  Same INVARIANT-6/12 treatment the AVX2
+     * dilithium/AES-GCM kernels give their staging buffers. */
+    ama_secure_memzero(R, sizeof(R));
+    ama_secure_memzero(Z, sizeof(Z));
+    ama_secure_memzero(scratch, sizeof(scratch));
 }
 
 #else

@@ -14,6 +14,19 @@ endmacro()
 # Core tests
 add_ama_test(test_consttime test_consttime.c)
 add_ama_test(test_core test_core.c)
+# Item-10 core-dump hygiene (2026-08 v5 audit): ama_secure_mlock() must leave
+# the kernel's own "dd" (MADV_DONTDUMP) VmFlag on every page of a locked,
+# page-UNALIGNED buffer — madvise(2) EINVALs on unaligned addresses, so a
+# call sequence containing madvise proves nothing by itself.  Linux-only;
+# skips (77) elsewhere or when mlock is impossible (RLIMIT_MEMLOCK).
+add_ama_test(test_secure_memory_dontdump test_secure_memory_dontdump.c)
+set_tests_properties(test_secure_memory_dontdump PROPERTIES SKIP_RETURN_CODE 77)
+# Item-8 post-free scrub (2026-08 v5 audit): heap inspection via
+# /proc/self/mem proving ama_secure_free() leaves no copy of a planted
+# 32-byte sentinel key anywhere in anonymous rw memory.  Its negative mode
+# (plain free) is exercised by the audit harness, not by CTest.
+add_ama_test(test_secure_free_scrub test_secure_free_scrub.c)
+set_tests_properties(test_secure_free_scrub PROPERTIES SKIP_RETURN_CODE 77)
 add_ama_test(test_aes_gcm_scalar_kat test_aes_gcm_scalar_kat.c)
 # Standalone SHA-512 (FIPS 180-4) byte-exact KAT over the exported
 # ama_ed25519_sha512 one-shot (the shipped FIPS 180-4 SHA-512 core shared by
@@ -505,13 +518,13 @@ if(AMA_USE_NATIVE_PQC)
     # slots (SVE2 today; future NEON/AVX2 helpers ride the same
     # multi-lane harness).  Two lanes: dispatched-pointer + direct
     # per-ISA SVE2 symbol.  1024 random polynomials per helper over
-    # the full [-q+1, q-1] coefficient range.  poly_add / poly_sub
-    # use strict byte-identity comparison; poly_reduce uses a
-    # mod-q-tolerant comparator because the production scalar Barrett
-    # and the SVE2 centered Barrett can pick representatives that
-    # differ by an exact multiple of q (both valid; production code
-    # always re-reduces before bit extraction — see the file header
-    # in tests/c/test_kyber_poly_equiv.c for the full rationale).
+    # the full [-q+1, q-1] coefficient range.  All three helpers use
+    # strict byte-identity comparison: every wired kernel computes
+    # the same truncating Barrett as the scalar reference, so the
+    # old mod-q-tolerant comparator for poly_reduce is gone; a
+    # tightened [0, q] range guard on the Barrett output survives
+    # as check_reduce_range() (see the file header in
+    # tests/c/test_kyber_poly_equiv.c for the full rationale).
     # SKIPs with 77 when no SIMD helper is wired AND no direct-symbol
     # lane runs (truly scalar build on a scalar runtime).
     add_executable(test_kyber_poly_equiv test_kyber_poly_equiv.c)
