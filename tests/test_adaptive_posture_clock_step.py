@@ -14,6 +14,8 @@ the future by a regression, converting a permanent wedge into a bounded delay.
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from ama_cryptography import adaptive_posture
@@ -40,7 +42,7 @@ class _EmptyMonitor:
     """Minimal monitor stub: a quiet security report drives evaluate_and_respond
     through its cooldown guard without needing the real 3R monitor."""
 
-    def get_security_report(self) -> dict:
+    def get_security_report(self) -> dict[str, Any]:
         return {"recent_alerts": [], "total_alerts": 0, "timing_history": {}}
 
 
