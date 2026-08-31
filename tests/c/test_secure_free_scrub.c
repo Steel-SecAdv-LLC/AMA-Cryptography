@@ -20,6 +20,14 @@
  *
  * Exit codes: 0 pass, 1 fail, 77 skip (non-Linux).
  */
+
+/* pread() needs POSIX visibility under strict -std=c11: gnu-mode gcc
+ * declares it by default, so the gcc lanes compiled while every strict
+ * lane (clang -Werror, ASan, the AArch64 cross builds) failed with an
+ * implicit-declaration error.  Same macro the other /proc-reading tests
+ * in this directory already carry. */
+#define _POSIX_C_SOURCE 200809L
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
