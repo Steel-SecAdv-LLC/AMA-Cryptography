@@ -924,9 +924,24 @@ AMA_API ama_error_t ama_hkdf_sha512(
  *       constant time against an authority key K_auth supplied by the caller.
  *
  * K_auth is held by the human-controlled supervisor that issues bindings, not
- * by the agent.  An agent that has escaped its sandbox still cannot mint a
- * persistent binding: it has enc(b) but not K_auth, and the check is a MAC
- * verification, not a flag test.
+ * by the agent.  The check is a MAC verification, not a flag test: it recomputes
+ * HMAC-SHA3-256(K_auth, 0x01 || enc(b)) using the K_auth the VERIFIER supplies
+ * at check time and compares it to `authorization`.  The security property is
+ * therefore relative to the verifier's key: against a verifier that supplies
+ * the supervisor's real K_auth, an escaped agent cannot present a binding that
+ * verifies, because it has enc(b) but not K_auth and so cannot produce the
+ * matching tag.
+ *
+ * This is NOT a claim that the binding is self-proving.  An escaped agent that
+ * drives this API can `authorize()` a binding under ITS OWN key and `check()`
+ * it under that same key — a self-consistent but empty act: such a binding
+ * verifies only against the agent's key, is rejected by any verifier pinning
+ * K_auth, and confers nothing, since the derived key (ama_hkdf_agent_bound) and
+ * signing context (ama_agent_binding_context) are public functions of enc(b)
+ * that the agent could compute without this library and that do not
+ * incorporate `authorization`.  A caller MUST verify a binding under the
+ * supervisor's K_auth (never under a key the untrusted producer chose) for the
+ * check to mean "the supervisor authorized this".
  *
  * Everything here is fail-closed: a NULL argument, a malformed record, a
  * reserved byte that is not zero, an absent authority key, or a tag mismatch

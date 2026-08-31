@@ -10,15 +10,15 @@
   },
   "test_coverage": {
     "counts": {
-      "Core Crypto\n& NIST KATs": 821,
-      "Key Management\n& Rotation": 261,
+      "Core Crypto\n& NIST KATs": 834,
+      "Key Management\n& Rotation": 265,
       "Memory Security\n& Fuzzing": 332,
-      "Other": 2231,
-      "PQC Backends\n& Integration": 769,
-      "Performance\n& Monitoring": 366
+      "Other": 2232,
+      "PQC Backends\n& Integration": 771,
+      "Performance\n& Monitoring": 376
     },
-    "n_files": 203,
-    "total_tests": 4780,
+    "n_files": 209,
+    "total_tests": 4810,
     "uncategorised_files": [
       "test_action_pin_checks.py",
       "test_acvp_attestation_coverage.py",

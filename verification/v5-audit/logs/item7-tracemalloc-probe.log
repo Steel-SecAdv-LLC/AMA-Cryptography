@@ -1,0 +1,31 @@
+it=500 rss=56112KiB traced=339KiB
+it=1000 rss=56124KiB traced=1600KiB
+it=1500 rss=56132KiB traced=1657KiB
+it=2000 rss=56156KiB traced=1738KiB
+it=2500 rss=56196KiB traced=1788KiB
+it=3000 rss=56208KiB traced=1823KiB
+it=3500 rss=56232KiB traced=1865KiB
+it=4000 rss=56248KiB traced=1896KiB
+it=4500 rss=56256KiB traced=1930KiB
+it=5000 rss=56268KiB traced=1960KiB
+it=5500 rss=56272KiB traced=1984KiB
+it=6000 rss=56288KiB traced=2021KiB
+it=6500 rss=56300KiB traced=2043KiB
+it=7000 rss=56300KiB traced=2067KiB
+it=7500 rss=56316KiB traced=2093KiB
+it=8000 rss=56320KiB traced=2121KiB
+it=8500 rss=56320KiB traced=2150KiB
+it=9000 rss=56320KiB traced=2172KiB
+it=9500 rss=56336KiB traced=2223KiB
+it=10000 rss=56336KiB traced=2250KiB
+it=10500 rss=56344KiB traced=2286KiB
+it=11000 rss=56344KiB traced=2311KiB
+it=11500 rss=56344KiB traced=2336KiB
+it=12000 rss=57180KiB traced=2363KiB
+Signed integrity check failed: signed digest mismatch: stored=f9e650c454d9d20b... computed=804df459c8c17f2b... — a .py file or a POST KAT vector under _post_kats/ changed post-build
+Traceback (most recent call last):
+  File "/tmp/claude-0/-home-user-AMA-Cryptography/fddc154c-21ed-54f1-853f-c58812191014/scratchpad/tracemalloc_probe.py", line 45, in <module>
+    fn()
+  File "/home/user/AMA-Cryptography/verification/v5-audit/refleak_soak.py", line 270, in op_integrity
+    raise RuntimeError(f"module integrity: {reason}")
+RuntimeError: module integrity: signed digest mismatch: stored=f9e650c454d9d20b... computed=804df459c8c17f2b... — a .py file or a POST KAT vector under _post_kats/ changed post-build

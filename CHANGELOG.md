@@ -84,11 +84,57 @@ test verified to fail against the unfixed code.
   zero-filling (dead code held to the live-code fail-closed bar: all-zero
   randomizers would make a hypothetically revived batch path accept forged
   combinations).
+- **Adversarial subsystem review remediations** (per-subsystem hostile reads
+  under `verification/v5-audit/memos/`; every fixable finding closed in code,
+  each pinned by a test that fails against the unfixed path):
+  - *monitoring*: the note-artifact detector sampled only head+tail of a
+    payload over `max_scan_bytes`, so a successor note centred in a large blob
+    scored coverage 0 and was never inspected; `_sample` now covers head +
+    middle + tail, closing the trivial "centre it" bypass.  The module-level
+    monitor built at `crypto_api` import bricked the whole library on a torn or
+    hostile `$HOME` nonce ledger; it now degrades to an ephemeral monitor
+    instead of raising at import.  `get_security_report` exposes the full
+    retained alert list (`scorable_alerts`) so a flood of low-value alerts can
+    no longer evict a genuine critical from the last-10 window before it is
+    scored.
+  - *adaptive-posture*: wall-clock ordering/throttling with a forward-only
+    cursor let one backward clock step silently blind detection, mute response
+    and freeze the fail-safe; the cursor, cooldown, grace period and
+    retry-backoff now re-anchor a stamp left in the future by a regression.
+    Rotation success accounting OR-ed the `on_rotation` notifier with the
+    KMS-backed mechanism, so a healthy notifier over a broken KMS reported
+    success and the consecutive-failure cap never tripped; the notifier can now
+    only confirm success when the key-rotating mechanism did not fail.
+  - *rfc3161*: a malicious TSA's oversized `TSTInfo` nonce made the mismatch
+    report `str()` a >4300-digit integer and raise a raw `ValueError` past the
+    `TimestampError`-only contract; `tst_info_nonce` now refuses an
+    implausibly-large nonce as malformed.
+  - *secure-channel*: the receive path did not bound ciphertext size before the
+    AEAD, and `ChannelMessage.deserialize` lacked the field ceiling and
+    trailing-byte rejection the handshake frames already carried; `decrypt`
+    now rejects a ciphertext over `MAX_MESSAGE_SIZE` up front and the frame
+    parser mirrors the handshake bounds.
+  - *session*: `ReplayWindow` accepted a non-positive `window_size` that raised
+    mid-slide; it is now rejected at construction.  The send path
+    (`next_send_seq`/`record_rekey`) and `SessionStore.get` skipped the
+    liveness checks the receive path already had; all three now fail closed on
+    an expired or closed session.
+  - *agent-binding*: the header's INVARIANT-30 prose claimed an escaped agent
+    "still cannot mint a persistent binding", but the operator-authorization
+    tag is verified against a caller-supplied key while the derived key and
+    signing context carry no tag; the claim is corrected to state the property
+    is relative to a verifier holding the real `K_auth` (binding the tag into
+    the outputs would change shipped derivations and is out of scope under the
+    feature freeze — recorded as residual).
 - **Tests made truthful**: the package-digest enumeration test was a
   tautology (both sides built from the same `rglob`) and now pins the
   signer's real file set; a secret-division gate test asserted the opposite
   of its name; a key-format OID test carried a dead disjunct; each now states
-  and asserts the property it actually pins.
+  and asserts the property it actually pins.  The note-detector corpus
+  allow-list gained `tests/test_agent_binding.py` and
+  `tests/test_agentic_abuse_detectors.py`, which carry literal successor-note
+  fixtures the new middle sample now correctly surfaces — true positives on
+  literal note content, excluded from the benign-prose comparison.
 - Documentation corrected against measurement in 14 files (stale AES S-box
   claims vs the `AMA_AES_CONSTTIME=ON` default, SECURITY.md's pre-v3
   "native library not covered" bullet vs the shipped six-entry binding map,

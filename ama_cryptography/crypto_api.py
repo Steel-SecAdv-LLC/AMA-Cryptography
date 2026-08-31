@@ -42,8 +42,33 @@ from ama_cryptography._module_state import check_operational as _check_operation
 from ama_cryptography._module_state import secure_token_bytes
 from ama_cryptography.monitor import AmaCryptographyMonitor, create_monitor
 
-# Module-level 3R monitor instance — feeds timing data to anomaly detection
-_monitor: AmaCryptographyMonitor = create_monitor(enabled=True)
+# Module-level 3R monitor instance — feeds timing data to anomaly detection.
+#
+# A corrupt / torn / oversized / unwritable persisted nonce ledger
+# (~/.ama_cryptography/nonce_tracker.dat) must NOT brick the entire library at
+# import.  The persistent ledger is a cross-restart defense-in-depth feature
+# whose history is already unrecoverable once the file is corrupt (a torn
+# append after a crash or power-loss needs no attacker), and an unresolvable or
+# read-only HOME is an environment fault, not a cryptographic one — so a
+# failure to load it degrades the monitor to in-memory-only nonce tracking with
+# a logged warning rather than aborting `import ama_cryptography`.  The strict
+# fail-closed RuntimeError still fires for a caller who explicitly constructs a
+# persistent NonceTracker / monitor with a good path.  (2026-08 v5 audit,
+# item 15 — corrupt-ledger availability defect.)
+try:
+    _monitor: AmaCryptographyMonitor = create_monitor(enabled=True)
+except Exception as _monitor_persist_exc:  # noqa: BLE001 -- degrade, never brick import (AUDIT-15)
+    logging.getLogger(__name__).warning(
+        "monitor persistence unavailable (%s: %s); continuing with in-memory-only "
+        "nonce tracking. Persistent cross-restart nonce-reuse detection is disabled "
+        "until the backing file is repaired or removed.",
+        type(_monitor_persist_exc).__name__,
+        _monitor_persist_exc,
+    )
+    try:
+        _monitor = AmaCryptographyMonitor(enabled=True, nonce_persist_path=os.devnull)
+    except Exception:  # noqa: BLE001 -- last resort: monitoring off, library still imports (AUDIT-15)
+        _monitor = create_monitor(enabled=False)
 
 # Import HMAC and HKDF from pqc_backends (native C) with pure-Python fallback
 from ama_cryptography.pqc_backends import (

@@ -445,7 +445,7 @@ class TestFlaskIntegrationSurface:
     the pre-fix code.
     """
 
-    def _client(self):  # type: ignore[no-untyped-def]  # returns (module, flask test client)
+    def _client(self):  # type: ignore[no-untyped-def]  # dynamic (module, Flask test client) tuple; typing the import adds no value in a skip-guarded helper (VAUDIT-001)
         flask = pytest.importorskip("flask")
         _ = flask
         sys.path.insert(0, str(EXAMPLES.parent.parent))

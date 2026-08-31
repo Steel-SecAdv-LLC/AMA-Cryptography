@@ -239,8 +239,18 @@ class PostureEvaluator:
         # seen the new alerts — sharing `_score_lyapunov_stability`'s cursor
         # without that would let whichever scorer ran first consume the alerts
         # and leave the others with nothing.
-        recent_alerts = monitor_report.get("recent_alerts", [])
-        new_alerts = self._alerts_not_yet_scored(recent_alerts)
+        # Score from the FULL retained alert list when the monitor provides it
+        # (``scorable_alerts``), falling back to the last-10 display window.
+        # An attacker who floods >=10 non-scored-type alerts (volume_spike,
+        # note_artifact, ...) after a genuine timing/pattern critical could
+        # otherwise push that critical out of the 10-entry ``recent_alerts``
+        # window before the next poll and suppress escalation.  The cursor
+        # filter below still scores each alert exactly once, so widening the
+        # input cannot double-count.  (2026-08 v5 audit, item 15 — alert-window
+        # suppression.)
+        scorable = monitor_report.get("scorable_alerts")
+        source_alerts = scorable if scorable is not None else monitor_report.get("recent_alerts", [])
+        new_alerts = self._alerts_not_yet_scored(source_alerts)
         timing_alerts = [a for a in new_alerts if a.get("type") == "timing"]
         pattern_alerts = [a for a in new_alerts if a.get("type") == "pattern"]
 
@@ -332,6 +342,22 @@ class PostureEvaluator:
         in order is exact while the window still holds them, and fails towards
         skipping (never towards double-counting) if it no longer does.
         """
+        # Backward-clock-step guard (2026-08 v5 audit, item 15): the monitor
+        # stamps alerts with the wall clock (monitoring.time.time()).  If it
+        # steps back, every freshly-created alert carries a timestamp below this
+        # forward-only cursor and is silently dropped from scoring — the
+        # adaptive defense goes blind under a still-detected attack.  When every
+        # incoming alert predates the cursor, the clock regressed: re-baseline
+        # so the new alerts are scored (re-scoring at most the retained window).
+        incoming = [
+            float(a["timestamp"])
+            for a in alerts
+            if isinstance(a.get("timestamp"), (int, float))
+        ]
+        if incoming and max(incoming) < self._last_processed_alert_ts:
+            self._last_processed_alert_ts = -1.0
+            self._scored_at_cursor_ts = 0
+
         fresh: List[Dict] = []
         tie_index = 0
         for a in alerts:
@@ -915,6 +941,16 @@ class CryptoPostureController:
 
         # Enforce cooldown
         now = time.time()
+        # A backward wall-clock step (NTP step via chronyd/ntpd -g, a manual
+        # date set, a VM snapshot restore, or a container clock adjustment)
+        # makes ``now < self._last_rotation_time`` — a NEGATIVE delta that reads
+        # as "still in cooldown" indefinitely and silently mutes protective
+        # rotations for the whole step.  Detect the regression and re-anchor the
+        # arm-time so the cooldown counts real elapsed seconds from here; the
+        # worst case becomes one extra cooldown of delay, never a permanent
+        # wedge.  (2026-08 v5 audit, item 15 — clock-step deaf-and-dumb wedge.)
+        if now < self._last_rotation_time:
+            self._last_rotation_time = now
         cooldown_active = (now - self._last_rotation_time) < self.rotation_cooldown
 
         destructive_actions = {
@@ -1019,10 +1055,20 @@ class CryptoPostureController:
         multiple simultaneously-expired actions do not bypass throttling.
         """
         now = time.time()
+        # Same backward-clock-step guard as evaluate_and_respond: a step makes
+        # ``now < pa.timestamp`` (the action was queued at a higher clock), so
+        # ``now - pa.timestamp`` is negative and the grace period never elapses
+        # — the queued protective action would never auto-execute.  Re-anchor
+        # the queue time on a detected regression so the grace period counts
+        # forward.  (2026-08 v5 audit, item 15.)
+        if now < self._last_rotation_time:
+            self._last_rotation_time = now
         still_pending = []
         for pa in self._pending_actions:
             if pa.confirmed:
                 continue
+            if now < pa.timestamp:
+                pa.timestamp = now
             if (now - pa.timestamp) >= self.grace_period:
                 # Respect cooldown between auto-executed actions
                 if (now - self._last_rotation_time) < self.rotation_cooldown:
@@ -1203,6 +1249,15 @@ class CryptoPostureController:
             )
             return False
 
+        # Backward-clock-step guard (2026-08 v5 audit, item 15): the retry
+        # backoff never exceeds rotation_cooldown (it doubles from
+        # rotation_cooldown/32 and caps at rotation_cooldown on the sixth
+        # failure), so a remaining backoff larger than that is impossible under
+        # a monotonic clock and means the wall clock stepped back, leaving a
+        # stale future deadline.  Clear it rather than suppress retries for the
+        # step's duration.
+        if self._rotation_retry_not_before - now > self.rotation_cooldown:
+            self._rotation_retry_not_before = now
         if self._rotation_failure_streak and now < self._rotation_retry_not_before:
             logger.info(
                 "Posture rotation retry suppressed: %.0fs of the %.0fs backoff "
@@ -1221,10 +1276,23 @@ class CryptoPostureController:
 
         derivation_path: Optional[str] = None
         # ``attempted`` = a rotation mechanism was actually invoked;
-        # ``succeeded`` = it completed without raising.  These gate whether the
-        # cooldown timer is armed (see the end of the method).
+        # ``succeeded`` = a mechanism that ACTUALLY ROTATES KEYS completed
+        # without raising.  These gate whether the cooldown timer is armed
+        # (see the end of the method).
+        #
+        # The key-rotating mechanism (``rotation_manager``) is tracked
+        # SEPARATELY from the ``on_rotation`` notifier.  ``on_rotation`` is
+        # documented as a callback ("invoked when key rotation is triggered"),
+        # not a rotation mechanism, so a notifier that returns normally must NOT
+        # mark the rotation successful when the KMS-backed rotation was
+        # attempted and failed — otherwise a healthy notifier over a broken KMS
+        # reports success, arms the cooldown, clears the failure streak, and the
+        # MAX_CONSECUTIVE_ROTATION_FAILURES cap never trips on an unmitigated
+        # threat (2026-08 v5 audit, item 15 — rotation success accounting).
         attempted = False
         succeeded = False
+        manager_attempted = False
+        manager_succeeded = False
 
         if self.rotation_manager is not None:
             # Guarded like every other rotation_manager call in this flow.
@@ -1242,9 +1310,9 @@ class CryptoPostureController:
             except Exception as e:
                 logger.warning("Posture key rotation failed: could not read the active key: %s", e)
                 active_key = None
-                attempted = True
+                manager_attempted = True
             if active_key is not None:
-                attempted = True
+                manager_attempted = True
                 new_key_id = f"posture-rotation-{self._rotation_count}"
 
                 # Derive new key material via BIP32 if HD derivation is available
@@ -1265,15 +1333,26 @@ class CryptoPostureController:
                     )
                     self.rotation_manager.initiate_rotation(active_key, new_key_id)
                     logger.info("Posture-triggered key rotation: %s -> %s", active_key, new_key_id)
-                    succeeded = True
+                    manager_succeeded = True
                 except Exception as e:
                     logger.warning("Posture key rotation failed: %s", e)
+
+        attempted = manager_attempted
+        succeeded = manager_succeeded
 
         if self.on_rotation is not None:
             attempted = True
             try:
                 self.on_rotation()
-                succeeded = True
+                # The notifier can only CONFIRM success when the key-rotating
+                # mechanism did not fail.  If a rotation_manager was attempted
+                # and failed, the notifier does not rescue it (the KMS failure
+                # dominates, so the streak/backoff still accrues); if no
+                # rotation_manager is configured, the callback is the only
+                # mechanism and its success stands — preserving the
+                # callback-only deployment.
+                if not (manager_attempted and not manager_succeeded):
+                    succeeded = True
             except Exception as e:
                 logger.warning("Rotation callback failed: %s", e)
 
@@ -1332,6 +1411,11 @@ class CryptoPostureController:
         already at the top of its ladder cannot spin the callback either.
         """
         now = time.time()
+        # Backward-clock-step guard (2026-08 v5 audit, item 15): re-anchor a
+        # switch-time that a clock regression left in the future, so the switch
+        # cooldown cannot wedge on a negative delta.
+        if now < self._last_switch_time:
+            self._last_switch_time = now
         if (now - self._last_switch_time) < self.rotation_cooldown:
             logger.debug(
                 "Algorithm switch suppressed: %.0fs of the %.0fs switch cooldown remain",

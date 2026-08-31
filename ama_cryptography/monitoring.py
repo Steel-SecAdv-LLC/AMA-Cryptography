@@ -3264,8 +3264,24 @@ class NoteArtifactDetector:
                 view = view.cast("B")
         if len(view) <= self.max_scan_bytes:
             return bytes(view)
-        half = self.max_scan_bytes // 2
-        return bytes(view[:half]) + b"\n" + bytes(view[-half:])
+        # A pure head+tail sample let a successor note hide in the MIDDLE of a
+        # >max_scan_bytes payload: bytes in [half, N-half) were never
+        # materialised, so a centred note scored coverage=0 and never flagged
+        # (2026-08 v5 audit, item 15 — note-artifact middle evasion).  Sample
+        # head + MIDDLE + tail at a third of the budget each so a centred note
+        # is covered too, while keeping the copy proportional to the budget
+        # rather than the payload.  This is a sampling heuristic, still
+        # advisory and still defeatable by an attacker who splits a note across
+        # the gaps — but the trivial "centre it" bypass is closed.
+        third = self.max_scan_bytes // 3
+        mid_start = (len(view) - third) // 2
+        return (
+            bytes(view[:third])
+            + b"\n"
+            + bytes(view[mid_start : mid_start + third])
+            + b"\n"
+            + bytes(view[-third:])
+        )
 
     def inspect(
         self, payload: Union[bytes, bytearray, memoryview], label: str = "payload"
@@ -4080,6 +4096,12 @@ class AmaCryptographyMonitor:
             "dropped_operations": self.timing.dropped_operations,
             "pattern_analysis": self.patterns.analyze_patterns(),
             "recent_alerts": recent_alerts,
+            # The full retained alert list (up to the retention cap), for a
+            # consumer that scores alerts and must not have a genuine critical
+            # evicted from the last-10 display window by a flood of low-value
+            # alerts before it is scored.  recent_alerts stays the human-facing
+            # summary.  (2026-08 v5 audit, item 15 — alert-window suppression.)
+            "scorable_alerts": [dict(alert) for alert in alerts_snapshot],
             "total_alerts": total_alerts,
             "recommendations": [],
         }

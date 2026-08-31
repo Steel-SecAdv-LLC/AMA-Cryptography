@@ -129,6 +129,19 @@ class TestReplayWindow:
         with pytest.raises(ReplayDetectedError):
             rw.check_and_accept(0)
 
+    @pytest.mark.parametrize("bad", [0, -1, -256])
+    def test_nonpositive_window_size_rejected_at_construction(self, bad: int) -> None:
+        """A window_size < 1 fails closed at construction, not mid-slide.
+
+        2026-08 v5 audit, item 15 (window_size validation): a negative
+        window_size made the slide's ``min(self._seen)`` raise AFTER a seq had
+        already entered ``_seen`` (a torn window), and 0 degenerated to a window
+        that tracks nothing.  ReplayWindow is a public constructor, so the value
+        is rejected up front.
+        """
+        with pytest.raises(ValueError, match="window_size must be >= 1"):
+            ReplayWindow(window_size=bad)
+
 
 # ---------------------------------------------------------------------------
 # SessionState Tests
@@ -160,6 +173,38 @@ class TestSessionState:
         assert session.next_send_seq() == 1
         assert session.next_send_seq() == 2
         assert session.messages_sent == 3
+
+    def test_send_path_fails_closed_on_closed_session(self) -> None:
+        """next_send_seq/record_rekey refuse a closed session.
+
+        2026-08 v5 audit, item 15 (send path skipped liveness checks): the
+        receive path guarded is_expired/_closed, but the send path minted
+        sequence numbers and bumped last_activity on a dead session, misleading
+        a caller that reads those to infer liveness.  Both now fail closed, as
+        accept_recv_seq already does.
+        """
+        session = SessionState(session_id=secrets.token_bytes(SESSION_ID_BYTES))
+        session.close()
+        with pytest.raises(SessionError, match="closed"):
+            session.next_send_seq()
+        with pytest.raises(SessionError, match="closed"):
+            session.record_rekey()
+        # State must be untouched by the refused calls.
+        assert session.send_seq == 0
+        assert session.messages_sent == 0
+        assert session.rekey_count == 0
+
+    def test_send_path_fails_closed_on_expired_session(self) -> None:
+        session = SessionState(
+            session_id=secrets.token_bytes(SESSION_ID_BYTES), ttl_seconds=0.0
+        )
+        assert session.is_expired
+        with pytest.raises(SessionExpiredError, match="expired"):
+            session.next_send_seq()
+        with pytest.raises(SessionExpiredError, match="expired"):
+            session.record_rekey()
+        assert session.send_seq == 0
+        assert session.rekey_count == 0
 
     def test_accept_recv_seq(self) -> None:
         """accept_recv_seq validates and records received sequences."""
@@ -346,6 +391,21 @@ class TestSessionStore:
 
         with pytest.raises(SessionNotFoundError):
             store.get(sid)
+
+    def test_get_in_place_closed_session_raises(self) -> None:
+        """get() refuses a session closed in place, not via store.close().
+
+        2026-08 v5 audit, item 15 (get() skipped the is_closed check): a caller
+        holding the SessionState can close it directly, leaving a closed object
+        in the store whose send/recv paths now fail closed.  Handing it back as
+        if it were live is misleading, so get() drops and refuses it.
+        """
+        store = SessionStore()
+        session = store.create()
+        session.close()  # closed in place; still in the store
+
+        with pytest.raises(SessionError, match="closed"):
+            store.get(session.session_id)
 
     def test_close_nonexistent_raises(self) -> None:
         """Store raises SessionNotFoundError when closing unknown session."""

@@ -223,10 +223,31 @@ class ChannelMessage:
                 f"but only {len(data) - offset - TAG_BYTES} bytes available"
             )
 
+        # Ceiling the declared ciphertext length BEFORE slicing, so a hostile
+        # 32-bit ct_len cannot drive a large receive-side allocation — the
+        # size-cap symmetry HandshakeMessage/HandshakeResponse already enforce
+        # but this frame lacked.  GCM ciphertext length equals plaintext
+        # length, so MAX_MESSAGE_SIZE (the ceiling encrypt() imposes on the
+        # send side) is the tight bound (2026-08 v5 audit, item 15 — receive
+        # path size-cap asymmetry).
+        if ct_len > MAX_MESSAGE_SIZE:
+            raise ChannelError(
+                f"ChannelMessage: ct_len={ct_len} exceeds maximum {MAX_MESSAGE_SIZE}"
+            )
+
         ciphertext = data[offset : offset + ct_len]
         offset += ct_len
 
         tag = data[offset : offset + TAG_BYTES]
+        offset += TAG_BYTES
+
+        # Reject trailing bytes, exactly as HandshakeMessage/HandshakeResponse
+        # do: a frame with bytes past the tag is malformed, and silently
+        # ignoring them invites parser-differential ambiguity.
+        if offset != len(data):
+            raise ChannelError(
+                f"Malformed ChannelMessage: {len(data) - offset} trailing bytes"
+            )
 
         return cls(
             session_id=session_id,
@@ -691,6 +712,20 @@ class SecureSession:
                 raise SessionExpiredError("Session TTL expired")
             if msg.session_id != self.session_id:
                 raise ChannelError("Session ID mismatch")
+
+            # Bound the receive-side AEAD work.  native_aes256_gcm_decrypt
+            # allocates a plaintext buffer the size of the ciphertext and runs
+            # the full GHASH+CTR pass BEFORE the tag is checked, so an oversized
+            # frame is proportional allocation + AEAD work an on-path attacker
+            # who knows the cleartext session_id can force per fresh-seq frame.
+            # encrypt() already refuses plaintext > MAX_MESSAGE_SIZE; mirror
+            # that ceiling here (GCM ciphertext length == plaintext length) so
+            # the receive path is not the asymmetric one (2026-08 v5 audit,
+            # item 15 — decrypt-path resource exhaustion).
+            if len(msg.ciphertext) > MAX_MESSAGE_SIZE:
+                raise ValueError(
+                    f"Ciphertext too large: {len(msg.ciphertext)} > {MAX_MESSAGE_SIZE}"
+                )
 
             # Replay detection: sliding window — read AND mutated under
             # the same lock, so two concurrent decrypts cannot both

@@ -265,7 +265,7 @@ def build_ops() -> dict[str, Callable[[], None]]:
     ops["hybrid_combiner.combine"] = op_hybrid
 
     def op_integrity() -> None:
-        ok, reason = integ.verify_module_integrity()  # type: ignore[attr-defined]
+        ok, reason = integ.verify_module_integrity()  # type: ignore[attr-defined]  # public helper not in integrity.__all__, resolved at runtime (VAUDIT-002)
         if not ok:
             raise RuntimeError(f"module integrity: {reason}")
 

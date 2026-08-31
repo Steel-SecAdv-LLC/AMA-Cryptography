@@ -652,8 +652,26 @@ def tst_info_nonce(tst_info: bytes) -> Optional[int]:
         if info.peek_tag() == 0x01:  # ordering BOOLEAN
             info.skip_any()
         if info.peek_tag() == 0x02:  # nonce
-            return int(info.read_integer())
+            nonce = int(info.read_integer())
+            # A hostile/compromised TSA can return a well-formed, GRANTED token
+            # whose nonce INTEGER is thousands of bytes.  The value is only ever
+            # equality-compared against the client's 64-bit request nonce, so an
+            # oversized one is definitionally a mismatch — but converting it with
+            # str() (as the mismatch-report path does) trips CPython's
+            # int_max_str_digits (4300) and raises a RAW ValueError that escapes
+            # the documented TimestampError-only contract.  Refuse an
+            # implausibly-large nonce here as malformed (fail-closed): 512 bits
+            # is ~8x the largest nonce any real TSA emits.  (2026-08 v5 audit,
+            # item 15 — rfc3161 nonce contract/DoS.)
+            if nonce.bit_length() > 512:
+                raise TimestampError(
+                    "TSTInfo nonce is implausibly large "
+                    f"({nonce.bit_length()} bits); refusing a malformed token"
+                )
+            return nonce
         return None
+    except TimestampError:
+        raise
     except Exception as exc:
         raise TimestampError(f"malformed TSTInfo in RFC 3161 token: {exc}") from None
 
