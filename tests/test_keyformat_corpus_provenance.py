@@ -342,12 +342,23 @@ class TestFetchTransportPolicy:
         never run.
         """
         followed: list[str] = []
+        bodies: list[io.BytesIO] = []
+        # The responses are kept ALIVE here on purpose: CPython's refcounting
+        # otherwise collects the abandoned 302 the instant the refusal
+        # propagates, and addinfourl.__del__ closes the body silently — which
+        # made a naive closed-check pass against a leaking implementation.
+        # With the response pinned, only an explicit close on the refusal
+        # path can mark the body closed.
+        responses: list[Any] = []
 
         def _response(req: urllib.request.Request, code: int, msg: str, headers: str) -> Any:
+            body = io.BytesIO(b"")
+            bodies.append(body)
             resp: Any = urllib.response.addinfourl(
-                io.BytesIO(b""), message_from_string(headers), req.full_url, code
+                body, message_from_string(headers), req.full_url, code
             )
             resp.msg = msg
+            responses.append(resp)
             return resp
 
         class RedirectingHTTPSHandler(urllib.request.HTTPSHandler):
@@ -364,3 +375,15 @@ class TestFetchTransportPolicy:
         with pytest.raises(ValueError, match="non-HTTPS redirect target"):
             tool.fetch("https://www.rfc-editor.org/rfc/rfc9881.txt")
         assert followed == [], f"the plaintext hop was followed: {followed}"
+        # The refusal must also RELEASE the abandoned 302 transfer: an fp left
+        # to the garbage collector is the ResourceWarning that Python 3.14's
+        # finalizer handling escalated into a deallocator-unraisable failure
+        # on the arm64 3.14 lane the first time this test ran there.  Pinned
+        # deterministically so every interpreter enforces it, not just the
+        # one whose GC happens to notice.
+        assert bodies, "the fake transport was never driven"
+        unclosed = [i for i, body in enumerate(bodies) if not body.closed]
+        assert not unclosed, (
+            f"the refusal path abandoned open response(s) {unclosed} to the "
+            f"garbage collector instead of closing them"
+        )

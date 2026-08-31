@@ -97,6 +97,13 @@ class _HTTPSOnlyRedirectHandler(urllib.request.HTTPRedirectHandler):
         newurl: str,
     ) -> urllib.request.Request | None:
         if not newurl.startswith("https://"):
+            # The refusal abandons the in-flight 302 transfer, so its response
+            # must be released HERE: no caller ever sees it, and an fp left to
+            # the garbage collector is exactly the ResourceWarning that Python
+            # 3.14's finalizer handling escalated into a failure (unraisable
+            # inside a deallocator) the first time this path ran end to end.
+            # Close-then-raise keeps the refusal a refusal, leaking nothing.
+            fp.close()
             raise ValueError(
                 f"refusing a non-HTTPS redirect target: {newurl!r} "
                 f"(HTTP {code} from {req.full_url!r})"
