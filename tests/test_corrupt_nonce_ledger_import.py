@@ -18,6 +18,7 @@ planted ledger.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import textwrap
@@ -39,11 +40,19 @@ _IMPORT_PROBE = textwrap.dedent("""
 
 
 def _import_with_home(tmp_home: Path) -> subprocess.CompletedProcess[str]:
-    env = {
-        "HOME": str(tmp_home),
-        "PATH": "/usr/bin:/bin",
-        "PYTHONPATH": str(REPO_ROOT),
-    }
+    # A full-environment copy, not a three-key allowlist: a child Python on
+    # Windows cannot even INITIALIZE without SYSTEMROOT (the OS RNG that
+    # seeds hash randomization reads it), so the allowlisted env killed every
+    # Windows lane with _Py_HashRandomization_Init before the probe ran a
+    # line — and its hardcoded POSIX PATH was wrong there anyway.  The
+    # isolation this test actually needs is narrower: the child must resolve
+    # Path.home() to the scratch home (HOME on POSIX, USERPROFILE on Windows;
+    # both set, both harmless cross-platform) and must not inherit AMA_*
+    # overrides from the runner.
+    env = {k: v for k, v in os.environ.items() if not k.startswith("AMA_")}
+    env["HOME"] = str(tmp_home)
+    env["USERPROFILE"] = str(tmp_home)
+    env["PYTHONPATH"] = str(REPO_ROOT)
     return subprocess.run(
         [sys.executable, "-c", _IMPORT_PROBE],
         cwd=REPO_ROOT,
