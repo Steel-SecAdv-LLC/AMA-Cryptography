@@ -34,9 +34,34 @@
 
 #include "../../include/ama_cryptography.h"
 
+/* AddressSanitizer detection, both spellings (gcc defines the macro, clang
+ * answers __has_feature). */
+#if defined(__SANITIZE_ADDRESS__)
+#define TSFS_UNDER_ASAN 1
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#define TSFS_UNDER_ASAN 1
+#endif
+#endif
+
 #if !defined(__linux__)
 int main(void) {
     printf("SKIP: /proc/self/mem heap inspection is Linux-only\n");
+    return 77;
+}
+#elif defined(TSFS_UNDER_ASAN)
+/* Under ASan both halves of this test measure the wrong thing: the
+ * allocator is ASan's (freed memory is quarantined and poisoned with the
+ * sanitizer's own pattern, so post-free bytes are its semantics, not
+ * libc's), and the whole-address-space /proc/self/mem scan must walk the
+ * terabytes-sparse shadow — measured on the ASan CI lane as a hang that
+ * ran to the job's 25-minute timeout, hidden until then behind
+ * supersede cancellations.  The scrub property is verified at full
+ * strength by every non-sanitizer lane on every push. */
+int main(void) {
+    printf("SKIP: AddressSanitizer replaces the allocator and maps a "
+           "terabytes-sparse shadow; the heap-byte scan is neither sound "
+           "nor tractable here\n");
     return 77;
 }
 #else
