@@ -392,7 +392,8 @@ def test_apply_keeps_a_block_comment_openable(tool_module: ModuleType) -> None:
     # continuation line is left dangling outside one.
     assert out.count("/*") == out.count("*/"), out
     body_line = next(
-        i for i, line in enumerate(out.splitlines())
+        i
+        for i, line in enumerate(out.splitlines())
         if "Descriptive text that must survive." in line
     )
     opened = "\n".join(out.splitlines()[:body_line]).count("/*")
