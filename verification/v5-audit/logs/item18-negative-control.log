@@ -1,0 +1,40 @@
+ITEM 18 NEGATIVE CONTROL — pre-stated criterion:
+  A deliberate unsynchronised data race across 64 threads MUST be reported.
+  TSan     : PASS iff exit != 0 (halt_on_error=1) AND 'data race' in output.
+  Helgrind : PASS iff --error-exitcode=1 yields exit != 0 AND a race is reported.
+  A detector that reports this clean is uninstrumented and its clean verdict is void.
+
+=== TSan on seeded race ===
+tsan_exit=66
+  data-race reports: 2
+==================
+WARNING: ThreadSanitizer: data race (pid=7816)
+  Write of size 8 at 0x55cbe6039698 by thread T2:
+    #0 worker /home/user/AMA-Cryptography/verification/v5-audit/item18/nc_seeded_race.c:22:18 (nc_seeded_race_tsan+0xded07) (BuildId: 8f57f6c5e4bde0fa4301a8393ee919f7a5c9cc48)
+
+  Previous write of size 8 at 0x55cbe6039698 by thread T1:
+    #0 worker /home/user/AMA-Cryptography/verification/v5-audit/item18/nc_seeded_race.c:22:18 (nc_seeded_race_tsan+0xded07) (BuildId: 8f57f6c5e4bde0fa4301a8393ee919f7a5c9cc48)
+
+  Location is global 'g_shared' of size 8 at 0x55cbe6039698 (nc_seeded_race_tsan+0x148a698)
+
+  Thread T2 (tid=7819, running) created by main thread at:
+    #0 pthread_create <null> (nc_seeded_race_tsan+0x605ef) (BuildId: 8f57f6c5e4bde0fa4301a8393ee919f7a5c9cc48)
+
+=== Helgrind on seeded race (ITERS reduced 20000->200; Helgrind is ~100x slower,
+    and the control tests DETECTOR CAPABILITY, not volume) ===
+helgrind_exit=1
+  possible-data-race reports: 2
+==9044== ---Thread-Announcement------------------------------------------
+==9044== 
+==9044== Thread #3 was created
+==9044==    at 0x4995B53: clone (clone.S:76)
+==9044==    by 0x4995CD2: __clone_internal_fallback (clone-internal.c:64)
+==9044==    by 0x4995CD2: __clone_internal (clone-internal.c:109)
+==9044==    by 0x490862F: create_thread (pthread_create.c:297)
+==9044==    by 0x4909284: pthread_create@@GLIBC_2.34 (pthread_create.c:836)
+==9044==    by 0x4854975: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==9044==    by 0x10923F: main (nc_seeded_race_small.c:31)
+==9044== 
+==9044== ---Thread-Announcement------------------------------------------
+==9044== 
+==9044== Thread #2 was created

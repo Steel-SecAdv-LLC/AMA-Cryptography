@@ -1,0 +1,23 @@
+CRITERION (pre-stated, mechanical): for each of the four flags
+  avx512f avx512vl vaes vpclmulqdq
+grep the lscpu Flags line; record grep's exit status (0=present, 1=absent).
+This script exits 0 iff lscpu ran and all four were tested; it does NOT
+exit nonzero for an absent flag -- absence is a recorded fact, not a failure.
+Item 17 gating rule: the VAES lane is measurable IFF vaes==present AND
+vpclmulqdq==present.
+
+lscpu exit=0
+--- model ---
+Architecture:                            x86_64
+CPU(s):                                  4
+Model name:                              Intel(R) Xeon(R) Processor @ 2.80GHz
+Thread(s) per core:                      1
+--- per-flag grep exit codes ---
+  avx512f      grep_exit=0  PRESENT
+  avx512vl     grep_exit=0  PRESENT
+  vaes         grep_exit=1  ABSENT
+  vpclmulqdq   grep_exit=1  ABSENT
+--- full AVX-512 family present ---
+avx512_vnni avx512bw avx512cd avx512dq avx512f avx512vl 
+
+ITEM17_VAES_LANE=ENVIRONMENT_IMPOSSIBLE (vaes_exit=1 vpclmulqdq_exit=1)

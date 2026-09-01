@@ -20,8 +20,8 @@ new files, never edits to committed history.
 - `dismissals.csv` — every finding dismissed as flaky/environmental/false
   positive, with its ≥3 logged reproduction attempts and external-cause
   evidence.  Empty file means no dismissals were made.
-- `memos/` — per-subsystem adversarial-review memos (item 15) and other
-  narrative evidence artefacts.
+- (removed) narrative memos/report documents: audit prose is delivered to the
+  operator, not committed to this repository. Only mechanical evidence lives here.
 
 ## Item numbering
 

@@ -1,0 +1,9 @@
+CRITERION (pre-stated): record the exact collected count from
+  ./.venv/bin/python -m pytest --collect-only -q ; exit 0 iff pytest exits 0.
+  Directive figure to compare against: 4,769.
+--- command ---
+tests/test_x25519_dispatch_policy.py::test_low_order_rejection_uniform
+
+6734 tests collected in 10.42s
+--- pytest exit: 0 ---
+exit=0 collected=6734 directive=4769 drift=1965

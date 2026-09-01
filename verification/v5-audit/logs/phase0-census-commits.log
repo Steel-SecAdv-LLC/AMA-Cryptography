@@ -1,0 +1,7 @@
+CRITERION (pre-stated): exit 0 iff 'git rev-list --count base..head' runs;
+  record the count and its drift from the directive figure 347.
+base=2dcef5c6ccf7aa95a00a460e525dfb500f59ea87 head=d50ec6cb0e753676d0266dee200b54b0d4a4a4de
+--- command: git rev-list --count $BASE..$H ---
+count=361 exit=0 directive=347 drift=14
+GITHUB_API_commits=361 (PR object, head d50ec6c)
+note: GitHub counts 361 at head d50ec6c; git counts 361 for base..d50ec6cb0e753676d0266dee200b54b0d4a4a4de.

@@ -1,0 +1,47 @@
+Resume-protocol gap 1: ledger completeness + hash re-verification
+CRITERION (pre-stated): every row carrying a log hash must match its
+archived log byte-for-byte (sha256). Rows with no exit code or no hash
+are not evidence and are named here.
+
+  HASH MISMATCH row  41 11.fuzz_aes_gcm          stored=6d6a19b8f61e3644 actual=9353770780560acb
+  HASH MISMATCH row  42 11.fuzz_ed25519          stored=5f258b90e7909ea0 actual=fb99f7599559ad1c
+  MISSING LOG  row  52 7-summary                verification/v5-audit/memos/item7-refleak-attribution.md
+rows total          : 62
+hash VERIFIED       : 56
+hash MISMATCH       : 2
+log MISSING         : 1
+no hash recorded    : 3
+    row  15 11nc-correction          verification/v5-audit/logs/item11-negative-control.log
+    row  49 15-summary               verification/v5-audit/memos/
+    row  55 0.7-ledger-integrity     verification/v5-audit/logs/phase0-ledger-verify.log
+no exit code        : 3
+    row  15 11nc-correction
+    row  53 15-summary-VOID
+    row  54 7-summary-VOID
+
+DISPOSITION of the rows that are not evidence:
+  11nc-correction : an append-only VOID marker, not a command. The run it
+                    corrects was re-done as 11nc-v3 (exit 1, PASS, hash verified).
+  15-summary      : withdrawn by 15-summary-VOID (its log_path was a directory).
+  7-summary       : withdrawn by 7-summary-VOID (cited a narrative memo, now removed).
+  *-VOID rows     : withdrawal markers; they carry no exit code by construction.
+
+VERDICT: exit 0 iff MISMATCH==0 and MISSING==0.
+LEDGER_VERIFY_EXIT=1
+
+DISPOSITION of the 2 hash mismatches (rows 41, 42):
+  11.fuzz_aes_gcm and 11.fuzz_ed25519 are the FIRST TWO TARGETS of the
+  in-flight item-11 re-soak launched this session.  fuzz_soak.sh writes each
+  target's log to logs/item11-<target>.log, so those two files are being
+  rewritten right now by the running 2 h jobs (PIDs 6812, 6813).  The stored
+  hashes belong to the earlier interrupted (exit 137) runs, whose rows those
+  are.  When each re-soak finishes, the driver appends a NEW row with the new
+  log's hash, superseding the interrupted row.
+  This is a live-rewrite condition, NOT a tampered or lost log.  It is recorded
+  as a genuine exit-1 rather than excluded from the criterion, and a final
+  re-verification must be run once the long jobs are complete.
+
+STANDING RULE ESTABLISHED BY THIS GAP:
+  a run whose log path collides with a previously-hashed log invalidates that
+  hash.  Re-soaks must therefore be re-verified at the end of the session, and
+  this check is the gate that catches it.

@@ -1,0 +1,52 @@
+Phase-0 gap 4: root cause of the 174-line additions drift (git vs GitHub)
+base=2dcef5c6ccf7aa95a00a460e525dfb500f59ea87 head=d50ec6cb0e753676d0266dee200b54b0d4a4a4de  (merge-base == base; origin/main unmoved)
+
+OBSERVED, both heads, identical offset:
+  head 32c3e0d : GitHub 83,074  vs git 82,900  -> +174 additions
+  head d50ec6c : GitHub 113,073 vs git 112,899 -> +174 additions
+  deletions and changed-file count match EXACTLY at both heads (7,583 / 1,228 here).
+
+ELIMINATED (each measured, see commands below):
+  two-dot vs three-dot ......... identical (112899/7583/1228)
+  renames/copies (-M0, --no-renames, --find-copies-harder) ... identical
+  diff algorithm (myers/minimal/patience/histogram) ... none yields 113073;
+                                and all move additions AND deletions together,
+                                whereas the observed drift is additions-only
+  submodules / symlinks / mode changes ... none present (940 A, 1 D, 287 M)
+  'No newline at end of file' markers ... only 2 in the whole diff
+  stale or moved base .......... origin/main == base == merge-base
+
+ROOT CAUSE (exact, reproduced):
+  .gitattributes sets '* -text' (byte-identical checkouts, see its header).
+  '-text' makes git treat EVERY file as non-text, so 'git diff --numstat'
+  reports '-' (binary, 0 lines) for all 678 corpus blobs in the diff.
+  GitHub does NOT honour '-text' for additions accounting; it sniffs content
+  for NUL bytes.  162 of the newly-added fuzz seed-corpus blobs contain NO
+  NUL byte, so GitHub counts them as TEXT and charges their lines as additions.
+  They are all ADDED files, which is why deletions are unaffected, and git
+  already counts them as changed files, which is why the file count matches.
+
+ARITHMETIC:
+  binary-per-git added blobs : 673
+  of those, NUL-free (text to GitHub) : 162
+  embedded newlines in them  : 13
+  final partial lines (no trailing newline) : 161
+  GitHub-style total additions : 174   == OBSERVED DRIFT 174
+
+  first 10 contributing blobs (path, bytes, newlines, github_lines):
+    1  0      1B  fuzz/seed_corpus/fuzz_agent_binding/516b9783fca517eecbd1d064da2d165310b19759
+    1  0      1B  fuzz/seed_corpus/fuzz_argon2/a42c6cf1de3abfdea9b95f34687cbbe92b9a7383
+    1  0     49B  fuzz/seed_corpus/fuzz_ascon/aead-rate-all-ad.bin
+    1  0     49B  fuzz/seed_corpus/fuzz_ascon/aead-rate-all-pt.bin
+    1  0     48B  fuzz/seed_corpus/fuzz_ascon/aead-rate-minus-1-all-ad.bin
+    2  1     50B  fuzz/seed_corpus/fuzz_ascon/aead-rate-plus-1-all-ad.bin
+    1  0     50B  fuzz/seed_corpus/fuzz_ascon/aead-rate-plus-1-all-pt.bin
+    1  0     41B  fuzz/seed_corpus/fuzz_ascon/hash-rate-all-pt.bin
+    1  0     42B  fuzz/seed_corpus/fuzz_ascon/hash-rate-plus-1-all-pt.bin
+    2  1    162B  fuzz/seed_corpus/fuzz_ascon/many-blocks-mid-split.bin
+
+DISPOSITION: neither figure is wrong; they are different conventions.
+  git (82,900 / 112,899) is adopted as ground truth for this audit's line
+  accounting because '-text' is this repository's deliberate, documented
+  policy and every in-tree gate measures the committed bytes under it.
+  The +174 is fully attributed: 174 lines across 162 NUL-free corpus blobs.

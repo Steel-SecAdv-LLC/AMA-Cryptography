@@ -303,3 +303,11 @@ leak-*
 verification/v5-audit/tools/
 verification/v5-audit/artifacts/
 verification/v5-audit/*.tgz
+
+# v5-audit item-18 concurrency harness binaries (compiled locally per-run;
+# the .c sources are committed, the ELF objects are build artefacts).
+verification/v5-audit/item18/thread_stress_tsan
+verification/v5-audit/item18/thread_stress_plain
+verification/v5-audit/item18/nc_seeded_race_tsan
+verification/v5-audit/item18/nc_seeded_race_plain
+verification/v5-audit/item18/nc_seeded_race_small

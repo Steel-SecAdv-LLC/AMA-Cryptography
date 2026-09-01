@@ -21,6 +21,13 @@ targets=(fuzz_kyber fuzz_dilithium fuzz_ed25519 fuzz_aes_gcm fuzz_sphincs
          fuzz_x25519 fuzz_chacha20poly1305 fuzz_sha3 fuzz_hkdf
          fuzz_secp256k1 fuzz_frost fuzz_argon2 fuzz_agent_binding
          fuzz_consttime fuzz_ascon)
+# Optional whitespace-separated override, so a resumed session can re-soak only
+# the targets that lack a full-floor row without re-running ones already at the
+# floor with a verified log hash.  Unset => the full 15-target set above.
+if [ -n "${FUZZ_TARGETS:-}" ]; then read -r -a targets <<<"$FUZZ_TARGETS"; fi
+# Concurrency: 2 workers by default; this host also carries the item-7 and
+# item-18 lanes, so leave headroom.
+WORKERS="${FUZZ_WORKERS:-2}"
 
 run_one() {
   t="$1"
@@ -45,5 +52,5 @@ run_one() {
 export -f run_one
 export repo here bin seeds dicts work arts logs budget
 
-printf '%s\n' "${targets[@]}" | xargs -P2 -I{} bash -c 'run_one "$@"' _ {}
+printf '%s\n' "${targets[@]}" | xargs -P"$WORKERS" -I{} bash -c 'run_one "$@"' _ {}
 echo "ALL_TARGETS_DISPATCHED_AND_COMPLETE"
