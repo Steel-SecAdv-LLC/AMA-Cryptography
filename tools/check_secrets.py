@@ -73,6 +73,16 @@ _ALLOWED_PREFIXES: tuple[tuple[str, str], ...] = (
         "vendored public-domain ed25519-donna reference tables (public constants)",
     ),
     (
+        "docs/audit/logs/",
+        "committed raw output logs of the PR #394 readiness-falsification "
+        "audit (docs/audit/): every ledger row's evidence. Logs quote the "
+        "hex digests, signatures and planted-defect strings the probed gates "
+        "and negative controls print, and must reproduce verbatim so the "
+        "operator can rerun-and-compare-hash. Same rationale as the "
+        "verification/v5-audit/logs/ entry below. Not shipped code; nothing "
+        "here is a live credential.",
+    ),
+    (
         "verification/v5-audit/logs/",
         "committed output logs of the v5 pre-merge audit's OWN secret scanners "
         "(gitleaks/trufflehog) and their negative controls: by construction "
