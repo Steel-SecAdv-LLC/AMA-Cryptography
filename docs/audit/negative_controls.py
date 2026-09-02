@@ -562,7 +562,11 @@ class _Snapshot:
 
 def run_control(c: Control) -> tuple[str, str, str]:
     env_prefix = f"export NC_SCRATCH={SCRATCH}; export PATH=/opt/ama-venv/bin:$PATH; "
-    violated = clean = "not-run"
+    # `violated` keeps "not-run" when the setup raises; `clean` is always
+    # assigned below (its `finally` runs whatever the command did), so it is
+    # annotated rather than pre-seeded with a value nothing reads.
+    violated = "not-run"
+    clean: str
     # Files the recipe would `git checkout` are snapshotted from the WORKING
     # TREE first and put back byte-for-byte; the git command is never run.
     snapshot = _Snapshot((_checkout_paths(c.teardown) or []) + (_checkout_paths(c.cleanup) or []))

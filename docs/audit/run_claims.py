@@ -85,7 +85,9 @@ def main() -> int:
 
     entries = []
     for f in args.extracted:
-        for block in json.load(open(f, encoding="utf-8")):
+        with open(f, encoding="utf-8") as handle:
+            blocks = json.load(handle)
+        for block in blocks:
             for c in block["claims"]:
                 entries.append(c)
     print(f"{len(entries)} claims loaded", flush=True)
