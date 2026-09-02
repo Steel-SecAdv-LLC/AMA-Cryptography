@@ -3,12 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 """A notifier callback must not mask a failing key-rotation mechanism.
 
-2026-08 v5 audit, item 15 (adaptive-posture): ``_trigger_rotation`` OR-ed a
-single ``succeeded`` flag across the KMS-backed ``rotation_manager`` AND the
-``on_rotation`` notifier.  If the KMS raised (``register_key`` /
-``initiate_rotation``) but a configured ``on_rotation()`` returned normally,
-``succeeded`` was ``True``: the cooldown armed, the failure streak cleared, and
-``get_posture_summary()['rotation_suspended']`` stayed ``False`` — so
+``_trigger_rotation`` OR-ed a single ``succeeded`` flag across the KMS-backed
+``rotation_manager`` AND the ``on_rotation`` notifier.  If the KMS raised
+(``register_key`` / ``initiate_rotation``) but a configured ``on_rotation()``
+returned normally, ``succeeded`` was ``True``: the cooldown armed, the failure
+streak cleared, and ``get_posture_summary()['rotation_suspended']`` stayed
+``False`` — so
 ``MAX_CONSECUTIVE_ROTATION_FAILURES`` never tripped even though NO key ever
 rotated.  The docstring frames ``on_rotation`` as a notifier, so "notifier
 healthy, KMS broken" is a realistic deployment.

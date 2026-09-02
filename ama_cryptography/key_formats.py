@@ -1843,11 +1843,10 @@ def jwk_thumbprint(jwk: Union[dict[str, Any], str], *, hash_name: str = "sha256"
     # scanner that reads it, which is the false-positive class
     # `effective_suppressions` exists to avoid and which `main()` in
     # tools/check_suppression_hygiene.py already documents.  Nothing was
-    # deferred: the same module is
-    # imported unconditionally at module scope at line 112 — seventeen hundred
-    # lines above, and already used fourteen times elsewhere in this file before
-    # the six below — so the cycle, if there were one, is entered long before
-    # this function runs.  A suppression whose justification is not
+    # deferred: `ama_cryptography.pqc_backends` is imported unconditionally at
+    # module scope as `_pb`, far above this function and already used many
+    # times elsewhere in this file, so the cycle, if there were one, would be
+    # entered long before this function runs.  A suppression whose justification is not
     # the reason is what INVARIANT-13 exists to catch.
     thumbprint_hashes: dict[str, Callable[[bytes], bytes]] = {
         "sha256": _pb.native_sha256,

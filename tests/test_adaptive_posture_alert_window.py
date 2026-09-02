@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """A flood of low-value alerts must not evict a genuine critical before scoring.
 
-2026-08 v5 audit, item 15 (alert-window suppression): ``get_security_report``
-returned only ``recent_alerts`` — the last TEN entries — and the posture
+Alert-window suppression: ``get_security_report`` returned only
+``recent_alerts`` — the last TEN entries — and the posture
 evaluator scored that window.  An attacker who emits >=10 non-scored-type
 alerts (``volume_spike``, ``note_artifact``, ...) immediately after a real
 timing/pattern critical pushes that critical out of the ten-entry window before

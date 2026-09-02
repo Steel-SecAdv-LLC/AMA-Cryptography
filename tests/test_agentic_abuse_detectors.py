@@ -541,12 +541,12 @@ class TestNoteArtifactDetection:
         assert d.inspect(padded).flagged is True
 
     def test_note_hidden_in_the_middle_is_found(self) -> None:
-        # 2026-08 v5 audit, item 15 (note-artifact middle evasion): a pure
-        # head+tail sample never materialised the CENTRE of a payload larger
-        # than max_scan_bytes, so a note buried exactly there scored coverage 0
-        # and slipped through unflagged.  The head+MIDDLE+tail sample closes the
-        # trivial "centre it" bypass: the same note that flags on its own must
-        # still flag when the head and tail are benign filler.
+        # Note-artifact middle evasion: a pure head+tail sample never
+        # materialised the CENTRE of a payload larger than max_scan_bytes, so a
+        # note buried exactly there scored coverage 0 and slipped through
+        # unflagged.  The head+MIDDLE+tail sample closes the trivial "centre
+        # it" bypass: the same note that flags on its own must still flag when
+        # the head and tail are benign filler.
         d = NoteArtifactDetector()
         note = SUCCESSOR_NOTES[0]
         filler = b"A" * 50_000

@@ -12,8 +12,8 @@
  *
  * Run with argument "negative": the buffer is released with plain free()
  * (no scrub) and the test PASSES iff the sentinel IS found — proving the
- * inspector can see unscrubbed heap bytes (the negative control demanded
- * by the audit's verification-integrity rules).
+ * inspector can see unscrubbed heap bytes.  A clean run is evidence only
+ * if the inspector is first shown capable of detecting a scrub failure.
  *
  * Run with no argument: the buffer is released with ama_secure_free() and
  * the test PASSES iff the sentinel is NOT found anywhere.

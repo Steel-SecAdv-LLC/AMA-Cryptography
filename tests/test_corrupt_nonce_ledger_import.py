@@ -3,12 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 """A corrupt persisted nonce ledger must not brick the library at import.
 
-2026-08 v5 audit, item 15 (monitoring): ``crypto_api`` constructs a module-level
-disk-backed monitor at import; ``NonceTracker._load_persisted`` deliberately
-raises ``RuntimeError`` on any malformed line (a forgotten nonce could allow
-reuse). Before the fix that RuntimeError propagated out of ``import
-ama_cryptography.crypto_api`` — a torn final append after a crash/power-loss, or
-a read-only/unresolvable HOME, took the ENTIRE cryptographic library offline.
+``crypto_api`` constructs a module-level disk-backed monitor at import, and
+``NonceTracker._load_persisted`` deliberately raises ``RuntimeError`` on any
+malformed line (a forgotten nonce could allow reuse). Before the fix that
+RuntimeError propagated out of ``import ama_cryptography.crypto_api`` — a torn
+final append after a crash or power loss, or a read-only or unresolvable HOME,
+took the ENTIRE cryptographic library offline.
 
 The fix degrades the import-time monitor to in-memory-only nonce tracking (with
 a logged warning) instead of aborting import. These tests run in a subprocess

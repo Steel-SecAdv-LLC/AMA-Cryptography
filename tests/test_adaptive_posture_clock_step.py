@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """A backward wall-clock step must not permanently wedge the adaptive posture.
 
-2026-08 v5 audit, item 15 (adaptive-posture): the cooldown, grace-period,
-retry-backoff and alert-scoring cursor all did wall-clock duration arithmetic.
+The cooldown, grace-period, retry-backoff and alert-scoring cursor all did
+wall-clock duration arithmetic.
 A backward step (NTP step, VM snapshot restore, container clock adjustment) made
 ``now - stored`` negative, which read as "still in cooldown" / "grace not
 elapsed" forever and silently muted protective actions and blinded alert

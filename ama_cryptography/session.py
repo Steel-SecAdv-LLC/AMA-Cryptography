@@ -99,8 +99,7 @@ class ReplayWindow:
         # degenerates to a window that can track nothing.  Not reachable through
         # SessionStore/SessionState (both use the fixed default), but
         # ReplayWindow is a public constructor and must reject the value at
-        # construction rather than at the first slide (2026-08 v5 audit,
-        # item 15 — window_size validation).
+        # construction rather than at the first slide.
         if self.window_size < 1:
             raise ValueError(f"window_size must be >= 1, got {self.window_size}")
 
@@ -198,8 +197,7 @@ class SessionState:
         # the receive path.  A dead (expired or closed) session that keeps
         # minting sequence numbers and bumping ``last_activity`` misleads any
         # caller that reads those to infer the session is alive; fail closed so
-        # "the session issued a seq" cannot mean "on a session that is gone"
-        # (2026-08 v5 audit, item 15 — send path skipped liveness checks).
+        # "the session issued a seq" cannot mean "on a session that is gone".
         if self.is_expired:
             raise SessionExpiredError(f"Session {self.session_id.hex()[:16]} expired")
         if self._closed:
@@ -237,8 +235,7 @@ class SessionState:
             SessionError: If the session has been closed.
         """
         # Same liveness gate as the send path: a rekey recorded against a dead
-        # session is bookkeeping on something that is gone (2026-08 v5 audit,
-        # item 15 — send path skipped liveness checks).
+        # session is bookkeeping on something that is gone.
         if self.is_expired:
             raise SessionExpiredError(f"Session {self.session_id.hex()[:16]} expired")
         if self._closed:
@@ -373,8 +370,7 @@ class SessionStore:
             # close() pops the session, so an in-store session is normally open;
             # but a caller holding the SessionState can close it in place, and
             # handing back a closed session (whose send/recv paths now fail
-            # closed) as if it were live is misleading.  Drop and refuse it
-            # (2026-08 v5 audit, item 15 — get() skipped the is_closed check).
+            # closed) as if it were live is misleading.  Drop and refuse it.
             if session.is_closed:
                 del self._sessions[session_id]
                 raise SessionError(f"Session {session_id.hex()[:16]} is closed")

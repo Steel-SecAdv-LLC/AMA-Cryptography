@@ -369,13 +369,12 @@ def test_data_files_are_not_selected(tool_module: ModuleType) -> None:
 def test_apply_keeps_a_block_comment_openable(tool_module: ModuleType) -> None:
     """Normalising a header that OPENS a longer block must not orphan the body.
 
-    2026-09 v5 audit: ``--apply`` deleted every license line in a mixed block,
-    including the ``/*`` opener when the copyright sat on it.  The surviving
-    ``* ...`` lines then became code, so the rewritten C no longer compiled —
-    and ``--check`` reported the corrupted file as clean, because the canonical
-    header was present.  The gate's own remedy silently broke three source
-    files before this was caught.  The opener is now kept as a bare ``/*``.
-    """
+    ``--apply`` deleted every license line in a mixed block, including the
+    ``/*`` opener when the copyright sat on it.  The surviving ``* ...`` lines
+    then became code, so the rewritten C no longer compiled — and ``--check``
+    reported the corrupted file as clean, because the canonical header was
+    present.  The gate's own remedy silently broke three source files before
+    this was caught.  The opener is now kept as a bare ``/*``."""
     src = (
         "/* Copyright (C) 2025-2026 Steel Security Advisors LLC\n"
         " * SPDX-License-Identifier: Apache-2.0\n"

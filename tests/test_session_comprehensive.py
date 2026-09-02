@@ -133,12 +133,11 @@ class TestReplayWindow:
     def test_nonpositive_window_size_rejected_at_construction(self, bad: int) -> None:
         """A window_size < 1 fails closed at construction, not mid-slide.
 
-        2026-08 v5 audit, item 15 (window_size validation): a negative
-        window_size made the slide's ``min(self._seen)`` raise AFTER a seq had
-        already entered ``_seen`` (a torn window), and 0 degenerated to a window
-        that tracks nothing.  ReplayWindow is a public constructor, so the value
-        is rejected up front.
-        """
+        Window_size validation: a negative window_size made the slide's
+        ``min(self._seen)`` raise AFTER a seq had already entered ``_seen`` (a
+        torn window), and 0 degenerated to a window that tracks nothing.
+        ReplayWindow is a public constructor, so the value is rejected up
+        front."""
         with pytest.raises(ValueError, match="window_size must be >= 1"):
             ReplayWindow(window_size=bad)
 
@@ -177,12 +176,11 @@ class TestSessionState:
     def test_send_path_fails_closed_on_closed_session(self) -> None:
         """next_send_seq/record_rekey refuse a closed session.
 
-        2026-08 v5 audit, item 15 (send path skipped liveness checks): the
-        receive path guarded is_expired/_closed, but the send path minted
-        sequence numbers and bumped last_activity on a dead session, misleading
-        a caller that reads those to infer liveness.  Both now fail closed, as
-        accept_recv_seq already does.
-        """
+        Send path skipped liveness checks: the receive path guarded
+        is_expired/_closed, but the send path minted sequence numbers and
+        bumped last_activity on a dead session, misleading a caller that reads
+        those to infer liveness.  Both now fail closed, as accept_recv_seq
+        already does."""
         session = SessionState(session_id=secrets.token_bytes(SESSION_ID_BYTES))
         session.close()
         with pytest.raises(SessionError, match="closed"):
@@ -393,10 +391,10 @@ class TestSessionStore:
     def test_get_in_place_closed_session_raises(self) -> None:
         """get() refuses a session closed in place, not via store.close().
 
-        2026-08 v5 audit, item 15 (get() skipped the is_closed check): a caller
-        holding the SessionState can close it directly, leaving a closed object
-        in the store whose send/recv paths now fail closed.  Handing it back as
-        if it were live is misleading, so get() drops and refuses it.
+        ``get()`` skipped the ``is_closed`` check: a caller holding the
+        SessionState can close it directly, leaving a closed object in the store
+        whose send/recv paths now fail closed.  Handing it back as if it were
+        live is misleading, so ``get()`` drops and refuses it.
         """
         store = SessionStore()
         session = store.create()

@@ -661,8 +661,7 @@ def tst_info_nonce(tst_info: bytes) -> Optional[int]:
             # int_max_str_digits (4300) and raises a RAW ValueError that escapes
             # the documented TimestampError-only contract.  Refuse an
             # implausibly-large nonce here as malformed (fail-closed): 512 bits
-            # is ~8x the largest nonce any real TSA emits.  (2026-08 v5 audit,
-            # item 15 — rfc3161 nonce contract/DoS.)
+            # is ~8x the largest nonce any real TSA emits.
             if nonce.bit_length() > 512:
                 raise TimestampError(
                     "TSTInfo nonce is implausibly large "

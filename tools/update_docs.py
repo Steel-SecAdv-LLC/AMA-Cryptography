@@ -578,13 +578,12 @@ def update_benchmark_docs(dry_run: bool = False) -> bool:
             changed = True
 
     if not changed:
-        # Two different outcomes, and this used to print the second sentence
-        # for both: a run over an already-current wiki page reported that the
-        # markers could not be found, in a tree where `wiki/
-        # Performance-Benchmarks.md` carries them at lines 314 and 339.  A
-        # status line that says the table was not found is how a DELETED
-        # marker pair — which silently stops the published table tracking the
-        # measurements — reads exactly like a no-op.
+        # Two different outcomes, distinguished here because a single message
+        # for both is misleading: a page that is already current, and a page
+        # whose AUTO-BENCHMARK-TABLE-START/END markers are absent.  Reporting
+        # "table not found" for the first is how a DELETED marker pair — which
+        # silently stops the published table tracking the measurements — reads
+        # exactly like a no-op.
         if carrying:
             print(
                 f"  BENCHMARKS: {carrying} file(s) already match " f"{BENCHMARK_RESULTS_JSON.name}"

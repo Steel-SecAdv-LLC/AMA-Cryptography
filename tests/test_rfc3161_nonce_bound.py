@@ -3,14 +3,13 @@
 # SPDX-License-Identifier: Apache-2.0
 """A hostile TSA's oversized TSTInfo nonce must fail closed as TimestampError.
 
-2026-08 v5 audit, item 15 (rfc3161): a malicious/compromised TSA can return a
-well-formed, GRANTED token whose nonce INTEGER is thousands of bytes. The value
-is only ever equality-compared to the client's 64-bit request nonce, so it is a
-guaranteed mismatch — but ``str()``-ing it in the mismatch report tripped
-CPython's ``int_max_str_digits`` (4300) and raised a RAW ``ValueError`` that
-escaped the documented ``TimestampError``-only contract (and could be a minor
-DoS). ``tst_info_nonce`` now refuses an implausibly-large nonce as malformed.
-"""
+Rfc3161: a malicious/compromised TSA can return a well-formed, GRANTED token
+whose nonce INTEGER is thousands of bytes. The value is only ever
+equality-compared to the client's 64-bit request nonce, so it is a guaranteed
+mismatch — but ``str()``-ing it in the mismatch report tripped CPython's
+``int_max_str_digits`` (4300) and raised a RAW ``ValueError`` that escaped the
+documented ``TimestampError``-only contract (and could be a minor DoS).
+``tst_info_nonce`` now refuses an implausibly-large nonce as malformed."""
 
 from __future__ import annotations
 

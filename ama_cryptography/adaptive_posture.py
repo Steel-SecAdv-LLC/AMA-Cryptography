@@ -246,8 +246,7 @@ class PostureEvaluator:
         # otherwise push that critical out of the 10-entry ``recent_alerts``
         # window before the next poll and suppress escalation.  The cursor
         # filter below still scores each alert exactly once, so widening the
-        # input cannot double-count.  (2026-08 v5 audit, item 15 — alert-window
-        # suppression.)
+        # input cannot double-count.
         scorable = monitor_report.get("scorable_alerts")
         source_alerts = (
             scorable if scorable is not None else monitor_report.get("recent_alerts", [])
@@ -344,7 +343,7 @@ class PostureEvaluator:
         in order is exact while the window still holds them, and fails towards
         skipping (never towards double-counting) if it no longer does.
         """
-        # Backward-clock-step guard (2026-08 v5 audit, item 15): the monitor
+        # Backward-clock-step guard: the monitor
         # stamps alerts with the wall clock (monitoring.time.time()).  If it
         # steps back, every freshly-created alert carries a timestamp below this
         # forward-only cursor and is silently dropped from scoring — the
@@ -948,7 +947,7 @@ class CryptoPostureController:
         # rotations for the whole step.  Detect the regression and re-anchor the
         # arm-time so the cooldown counts real elapsed seconds from here; the
         # worst case becomes one extra cooldown of delay, never a permanent
-        # wedge.  (2026-08 v5 audit, item 15 — clock-step deaf-and-dumb wedge.)
+        # wedge.
         if now < self._last_rotation_time:
             self._last_rotation_time = now
         cooldown_active = (now - self._last_rotation_time) < self.rotation_cooldown
@@ -1060,7 +1059,7 @@ class CryptoPostureController:
         # ``now - pa.timestamp`` is negative and the grace period never elapses
         # — the queued protective action would never auto-execute.  Re-anchor
         # the queue time on a detected regression so the grace period counts
-        # forward.  (2026-08 v5 audit, item 15.)
+        # forward.
         if now < self._last_rotation_time:
             self._last_rotation_time = now
         still_pending = []
@@ -1249,7 +1248,7 @@ class CryptoPostureController:
             )
             return False
 
-        # Backward-clock-step guard (2026-08 v5 audit, item 15): the retry
+        # Backward-clock-step guard: the retry
         # backoff never exceeds rotation_cooldown (it doubles from
         # rotation_cooldown/32 and caps at rotation_cooldown on the sixth
         # failure), so a remaining backoff larger than that is impossible under
@@ -1288,7 +1287,7 @@ class CryptoPostureController:
         # attempted and failed — otherwise a healthy notifier over a broken KMS
         # reports success, arms the cooldown, clears the failure streak, and the
         # MAX_CONSECUTIVE_ROTATION_FAILURES cap never trips on an unmitigated
-        # threat (2026-08 v5 audit, item 15 — rotation success accounting).
+        # threat.
         attempted = False
         succeeded = False
         manager_attempted = False
@@ -1411,7 +1410,7 @@ class CryptoPostureController:
         already at the top of its ladder cannot spin the callback either.
         """
         now = time.time()
-        # Backward-clock-step guard (2026-08 v5 audit, item 15): re-anchor a
+        # Backward-clock-step guard: re-anchor a
         # switch-time that a clock regression left in the future, so the switch
         # cooldown cannot wedge on a negative delta.
         if now < self._last_switch_time:

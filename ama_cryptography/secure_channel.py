@@ -228,8 +228,7 @@ class ChannelMessage:
         # size-cap symmetry HandshakeMessage/HandshakeResponse already enforce
         # but this frame lacked.  GCM ciphertext length equals plaintext
         # length, so MAX_MESSAGE_SIZE (the ceiling encrypt() imposes on the
-        # send side) is the tight bound (2026-08 v5 audit, item 15 — receive
-        # path size-cap asymmetry).
+        # send side) is the tight bound.
         if ct_len > MAX_MESSAGE_SIZE:
             raise ChannelError(
                 f"ChannelMessage: ct_len={ct_len} exceeds maximum {MAX_MESSAGE_SIZE}"
@@ -718,8 +717,7 @@ class SecureSession:
             # who knows the cleartext session_id can force per fresh-seq frame.
             # encrypt() already refuses plaintext > MAX_MESSAGE_SIZE; mirror
             # that ceiling here (GCM ciphertext length == plaintext length) so
-            # the receive path is not the asymmetric one (2026-08 v5 audit,
-            # item 15 — decrypt-path resource exhaustion).
+            # the receive path is not the asymmetric one.
             if len(msg.ciphertext) > MAX_MESSAGE_SIZE:
                 raise ValueError(
                     f"Ciphertext too large: {len(msg.ciphertext)} > {MAX_MESSAGE_SIZE}"
@@ -1203,19 +1201,14 @@ class SecureChannelResponder:
         # contract is that every identifier a key derivation consumes passes
         # the continuous stuck-DRBG check.
         #
-        # This comment used to say "the initiator-side ID was routed through
-        # secure_token_bytes while the responder side kept the bare draw".
-        # There was no such asymmetry to find.  At origin/main this file
-        # contained no reference to secure_token_bytes at all: BOTH draws in it
-        # were bare — the AEAD nonce at line 632 and this session ID at line
-        # 1098 — and the initiator never generates a session ID in the first
-        # place, it receives one from the peer (`self._derive_session(
-        # response.session_id, ...)`).  What the hand sweep missed was simply
-        # this whole file, both draws, and the honest lesson is the one the
-        # last sentence already drew: a hand sweep is not a control.
-        # tests/test_invariant41_rng_sweep.py enumerates every bare draw in
-        # the shipped package against an allowlist, so the next missed site
-        # fails CI instead of waiting for a review.
+        # The module has two random draws — this identifier and the AEAD
+        # nonce — and only the responder generates a session ID; the initiator
+        # receives one from its peer and passes it to `_derive_session`.
+        #
+        # Both draws are covered by enforcement rather than by review:
+        # tests/test_invariant41_rng_sweep.py enumerates every bare draw in the
+        # shipped package against an allowlist, so an unrouted site fails CI
+        # instead of waiting to be noticed.
         session_id = secure_token_bytes(SESSION_ID_BYTES)
 
         # Sign the handshake transcript (proves we hold the static key).

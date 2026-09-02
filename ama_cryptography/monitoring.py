@@ -3267,8 +3267,8 @@ class NoteArtifactDetector:
         # A pure head+tail sample let a successor note hide in the MIDDLE of a
         # >max_scan_bytes payload: bytes in [half, N-half) were never
         # materialised, so a centred note scored coverage=0 and never flagged
-        # (2026-08 v5 audit, item 15 — note-artifact middle evasion).  Sample
-        # head + MIDDLE + tail at a third of the budget each so a centred note
+        # at all.  Sample head + MIDDLE + tail at a third of the budget each
+        # so a centred note
         # is covered too, while keeping the copy proportional to the budget
         # rather than the payload.  This is a sampling heuristic, still
         # advisory and still defeatable by an attacker who splits a note across
@@ -4100,7 +4100,7 @@ class AmaCryptographyMonitor:
             # consumer that scores alerts and must not have a genuine critical
             # evicted from the last-10 display window by a flood of low-value
             # alerts before it is scored.  recent_alerts stays the human-facing
-            # summary.  (2026-08 v5 audit, item 15 — alert-window suppression.)
+            # summary.
             "scorable_alerts": [dict(alert) for alert in alerts_snapshot],
             "total_alerts": total_alerts,
             "recommendations": [],

@@ -98,9 +98,9 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-# The audit's instruction is to wire this "beside check_secret_division.py,
-# which already reads the same object".  Reusing its disassembler keeps the two
-# gates reading the object identically -- the multi-disassembler fallback that
+# This gate sits beside check_secret_division.py, which already reads the same
+# object.  Reusing its disassembler keeps the two gates reading that object
+# identically -- the multi-disassembler fallback that
 # lets the KyberSlash gate cover the AArch64 build applies here unchanged.
 from tools.check_secret_division import disassemble  # noqa: E402 -- after sys.path setup (AVX-001)
 

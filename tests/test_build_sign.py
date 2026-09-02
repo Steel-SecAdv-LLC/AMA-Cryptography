@@ -638,7 +638,7 @@ class TestPackageDigestCoversSubpackages:
 
 
 class TestRequireTrustAnchorCliFlag:
-    """The CLI half of the anchor demand (2026-08 v5 audit, item 15).
+    """The CLI half of the anchor demand.
 
     setup.py scrubs AMA_INTEGRITY_REQUIRE_TRUST_ANCHOR from the signer
     child's environment (the child's own import-time POST would otherwise

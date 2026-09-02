@@ -53,8 +53,7 @@ from ama_cryptography.monitor import AmaCryptographyMonitor, create_monitor
 # failure to load it degrades the monitor to in-memory-only nonce tracking with
 # a logged warning rather than aborting `import ama_cryptography`.  The strict
 # fail-closed RuntimeError still fires for a caller who explicitly constructs a
-# persistent NonceTracker / monitor with a good path.  (2026-08 v5 audit,
-# item 15 — corrupt-ledger availability defect.)
+# persistent NonceTracker / monitor with a good path.
 try:
     _monitor: AmaCryptographyMonitor = create_monitor(enabled=True)
 except Exception as _monitor_persist_exc:  # noqa: BLE001 -- degrade, never brick import (AUDIT-15)

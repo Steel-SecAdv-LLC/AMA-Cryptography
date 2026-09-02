@@ -43,8 +43,8 @@
  * cancellation in the aggregate check, and all-zero randomizers would turn a
  * hypothetically revived batch path into one that accepts forged combinations
  * — the earlier zero-fill made the failure deterministic but fail-OPEN.
- * (2026-08 v5 audit: dead code held to the same fail-closed bar as live
- * code.)  AMA's own batch verify is a per-entry loop and never draws here. */
+ * Dead code is held to the same fail-closed bar as live code.  AMA's own
+ * batch verify is a per-entry loop and never draws here. */
 static void
 ed25519_randombytes_unsafe(void *p, size_t len) {
     if (ama_randombytes((uint8_t *)p, len) != AMA_SUCCESS) {

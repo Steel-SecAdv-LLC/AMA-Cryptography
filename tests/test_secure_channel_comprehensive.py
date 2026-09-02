@@ -379,10 +379,10 @@ class TestSecureSessionEncryption:
     ) -> None:
         """decrypt() bounds ciphertext size BEFORE the AEAD, mirroring encrypt().
 
-        2026-08 v5 audit, item 15 (decrypt-path resource exhaustion): the
-        receive path fed the ciphertext straight into native_aes256_gcm_decrypt,
-        which allocates a plaintext-sized buffer and runs the full GHASH+CTR
-        pass before the tag check.  An on-path attacker who knows the cleartext
+        Decrypt-path resource exhaustion: the receive path fed the ciphertext
+        straight into native_aes256_gcm_decrypt, which allocates a
+        plaintext-sized buffer and runs the full GHASH+CTR pass before the tag
+        check.  An on-path attacker who knows the cleartext
         session_id could force that work per fresh-seq frame.  decrypt() now
         rejects a ciphertext larger than MAX_MESSAGE_SIZE up front.
         """
@@ -484,12 +484,11 @@ class TestChannelMessageSerialization:
     def test_oversized_ct_len_rejected(self) -> None:
         """A ct_len over MAX_MESSAGE_SIZE is rejected before the slice.
 
-        2026-08 v5 audit, item 15 (receive-side size-cap asymmetry):
-        ChannelMessage.deserialize bounded ct_len only by the actual buffer, so
-        a hostile 32-bit length that DID come with matching bytes drove a large
-        slice allocation.  It now applies the same MAX_MESSAGE_SIZE ceiling the
-        handshake frames already carry.
-        """
+        Receive-side size-cap asymmetry: ChannelMessage.deserialize bounded
+        ct_len only by the actual buffer, so a hostile 32-bit length that DID
+        come with matching bytes drove a large slice allocation.  It now
+        applies the same MAX_MESSAGE_SIZE ceiling the handshake frames already
+        carry."""
         from ama_cryptography.secure_channel import (
             MAX_MESSAGE_SIZE,
             NONCE_BYTES,
@@ -516,7 +515,7 @@ class TestChannelMessageSerialization:
     def test_trailing_bytes_rejected(self) -> None:
         """Bytes past the tag make the frame malformed, as for the handshake.
 
-        2026-08 v5 audit, item 15: ChannelMessage.deserialize silently ignored
+        ChannelMessage.deserialize silently ignored
         trailing bytes (unlike HandshakeMessage/HandshakeResponse), a
         parser-differential ambiguity.  It now rejects them.
         """
