@@ -438,15 +438,63 @@ not happened.
 preflight stage before any wheel is built. It checks *shape* — the ref
 resolves, names a tag object rather than a commit, and the object contains an
 OpenPGP, SSH, or X.509 signature block — and states in its own output that it
-does **not** verify the signature, since verification needs a trust store this
-repository deliberately does not ship (publishing an `allowed_signers` file
-would assert a key binding only the account owner can establish). GitHub's
-verified/unverified verdict is the complementary half; it is account-level
+does **not** verify the signature. That is a division of labour rather than a
+gap: preflight's job is the properties that were wrong on all eleven historical
+tags, and it needs no key material, no `ssh-keygen` and no network to do it,
+which is what lets it run first, before anything is built. Verification is a
+separate check with a separate input, and it exists — see the addendum below.
+GitHub's verified/unverified verdict is the third half; it is account-level
 state, so preflight reports it rather than gating on it.
 `tests/test_release_tag_gate.py` supplies the negative controls for each
 rejected shape, including one asserting that a fabricated signature block
 passes — so a future reader cannot mistake this gate's PASS for a
 cryptographic result.
+
+### INVARIANT-10 Addendum — The Trust Store, and a Correction
+
+Until 5.0.0 the paragraph above ended differently. It said verification needs a
+trust store "this repository deliberately does not ship", because "publishing an
+`allowed_signers` file would assert a key binding only the account owner can
+establish".
+
+The reasoning was sound; the conclusion was false when it was written. The
+account owner had already established the binding: the release signing key was
+registered on the account the same day v4.0.0 was tagged, and v4.0.0 — tagged
+twenty-eight minutes after that sentence was committed — is signed with it. What
+got recorded as a property of the project was really the author's inability to
+read account-level state. **An unverifiable claim and a claim that must not be
+published are not the same thing**, and a repository that enforces INVARIANT-37
+against its own APIs is the last place that confusion belongs. The sentence then
+propagated into `tools/check_release_tag.py` and
+`tests/test_release_tag_gate.py`, which is how a reasoned aside becomes a
+project policy nobody re-examines.
+
+**What ships instead.** `.github/allowed_signers` carries the binding, scoped
+`namespaces="git"`. It is a mirror of an owner-established fact, not the
+repository vouching for itself — and on its own it would still be worth exactly
+as much as the repository carrying it, which is why it does not stand on its
+own:
+
+**Enforcement:** `tests/test_release_tag_trust_store.py` verifies the v4.0.0 tag
+object against the published key on every run, with negative controls for a
+substituted key, a substituted principal, a tampered payload and a wrong
+signature namespace. The tag object is embedded in the test rather than read
+through `git`, because `actions/checkout` does not fetch tags at its default
+depth and a check that silently skips on the runners that matter is not a check.
+Ed25519 verification is implemented there in the standard library alone, pinned
+by the RFC 8032 §7.1 known-answer vector; INVARIANT-1's refusal of external
+cryptographic dependencies is a poor thing to honour everywhere except in the
+test that checks the release key. A fingerprint copied from a settings page
+proves nothing. A signature checked against the bytes it covers does.
+
+Consumers verify a release tag with
+
+```bash
+git -c gpg.ssh.allowedSignersFile=.github/allowed_signers verify-tag v5.0.0
+```
+
+documented in `README.md` beside the Sigstore and SLSA commands. That check is
+offline: no GitHub account, no network, no trust in this repository's hosting.
 
 ## INVARIANT-11 — SBOM as Release Gate
 

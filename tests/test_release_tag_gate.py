@@ -19,12 +19,18 @@ annotated, X.509-signed PASS
 
 The three passing fixtures embed a signature *block* that is not a real
 signature. That is deliberate and it is exactly what the tool claims to check:
-its docstring states it verifies shape, not cryptography, because verification
-needs a trust store the repository does not ship. A fixture that had to carry a
-genuine signature would need a private key in the test suite, which
-INVARIANT-17 forbids outright. The line these tests draw is the line the tool
-draws — and the ``test_a_real_signature_is_not_required`` case says so out loud
-so nobody later reads a PASS here as a cryptographic result.
+its docstring states it verifies shape, not cryptography. A fixture that had to
+carry a genuine signature would need a private key in the test suite, which
+INVARIANT-17 forbids outright.
+
+(The repository *does* ship a trust store — ``.github/allowed_signers`` — and
+``tests/test_release_tag_trust_store.py`` performs the real cryptographic check
+against it, on a real signature, with no private key anywhere. This module and
+that one draw different lines on purpose: shape here, attribution there.)
+
+The line these tests draw is the line the tool draws — and the
+``test_a_real_signature_is_not_required`` case says so out loud so nobody later
+reads a PASS here as a cryptographic result.
 
 Tag objects are written with ``git hash-object -t tag`` rather than
 ``git tag -s`` for the same reason: ``git tag -s`` would need a configured

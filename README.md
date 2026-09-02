@@ -609,6 +609,49 @@ slsa-verifier verify-artifact <WHEEL_FILENAME> \
   --source-uri github.com/Steel-SecAdv-LLC/AMA-Cryptography
 ```
 
+Both of those attest to the *build*: Sigstore proves which workflow produced the
+artifact, SLSA proves which commit it was produced from. Neither says a human
+authorized the release. That is what the signed tag is for, and it is the only
+link in the chain a compromised CI account cannot forge:
+
+```bash
+# The maintainer's signature over the release tag — offline, no GitHub account.
+git clone https://github.com/Steel-SecAdv-LLC/AMA-Cryptography
+cd AMA-Cryptography
+git -c gpg.ssh.allowedSignersFile=.github/allowed_signers verify-tag <TAG>
+# -> Good "git" signature for steel.sa.llc@gmail.com with ED25519 key SHA256:1MSk...
+```
+
+Requires git 2.34+ (SSH signature verification). The trust store is
+[`.github/allowed_signers`](.github/allowed_signers), holding one Ed25519 key,
+scoped to git signatures:
+
+    SHA256:1MSkOHmeGP16tdSg705wY6rwFm+odfU3cUo0UwlfAP4
+
+A trust store is only as good as your reason to believe it, and a key published
+in the same repository whose tags it signs is not, by itself, a root of trust:
+whoever could rewrite the tag could rewrite this file. Nobody should tell you
+otherwise. What makes it worth something is that it is not the only copy, and
+the others do not come from here:
+
+- **GitHub attests to it independently.** The key is registered on the
+  maintainer's account as a signing key, which is what makes signed tags render
+  **Verified** on github.com. That verdict is GitHub's, not this repository's,
+  and it is visible on the release page without cloning anything.
+- **It has history.** The same key signed v4.0.0. An attacker substituting a key
+  has to explain the discontinuity across releases, not just forge one tag.
+- **A swap is visible.** The fingerprint lives in this file's commit history, so
+  changing it produces a diff rather than a silent substitution.
+
+Check the **Verified** badge on the release page against the fingerprint above.
+If they agree, two independent parties are telling you the same thing.
+
+The chain, end to end: the **signed tag** says the maintainer authorized this
+commit; **SLSA provenance** says the wheel was built from that commit;
+**Sigstore** says the release workflow is what built it; and the package's own
+runtime integrity artefact (`python -m ama_cryptography.integrity --verify`)
+says the copy you installed has not been altered since.
+
 #### 3. PyPI — planned, not yet published
 
 > [!WARNING]
@@ -958,7 +1001,7 @@ The test suite includes:
 
 ![Test Suite Coverage](assets/test_coverage.png)
 
-*4,813 test functions across 210 Python test files plus 67 C test suites (70 translation units) covering core crypto and NIST KATs (including the new AVX-512 4-way Keccak KAT, fe51-vs-fe64 X25519 byte-equivalence, MULX+ADX equivalence, VAES AES-GCM equivalence, FROST threshold signing, Ed25519 Shamir verify and base-point comb equivalence, and Dilithium / Kyber sampling-equivalence pinning), PQC backends, key management, adaptive posture, hybrid combiner, memory security, fuzz harnesses, and performance/monitoring. See [docs/METRICS_REPORT.md](docs/METRICS_REPORT.md) for the authoritative count and reproduction command (`grep -rE "^\s*def test_" tests/ --include='*.py' | wc -l`).*
+*4,827 test functions across 211 Python test files plus 67 C test suites (70 translation units) covering core crypto and NIST KATs (including the new AVX-512 4-way Keccak KAT, fe51-vs-fe64 X25519 byte-equivalence, MULX+ADX equivalence, VAES AES-GCM equivalence, FROST threshold signing, Ed25519 Shamir verify and base-point comb equivalence, and Dilithium / Kyber sampling-equivalence pinning), PQC backends, key management, adaptive posture, hybrid combiner, memory security, fuzz harnesses, and performance/monitoring. See [docs/METRICS_REPORT.md](docs/METRICS_REPORT.md) for the authoritative count and reproduction command (`grep -rE "^\s*def test_" tests/ --include='*.py' | wc -l`).*
 
 </details>
 
@@ -1583,7 +1626,7 @@ The human architect does not hold formal credentials in cryptography. The AI con
 
 - **Standards-based design:** Built on NIST FIPS 202/204, RFC 2104/5869/8032/3161—not custom cryptography
 - **Quantified claims:** All performance metrics are measured and reproducible (see [benchmarks/](benchmarks/))
-- **Rigorous testing:** 4,813 test functions across 210 Python files plus 67 C test suites, anchored in [docs/METRICS_REPORT.md](docs/METRICS_REPORT.md); CI includes security scanning, NIST ACVP validation (1,215/1,215 — 815 AFT + 400 SHA-3 MCT), and tiered benchmark-regression checks
+- **Rigorous testing:** 4,827 test functions across 211 Python files plus 67 C test suites, anchored in [docs/METRICS_REPORT.md](docs/METRICS_REPORT.md); CI includes security scanning, NIST ACVP validation (1,215/1,215 — 815 AFT + 400 SHA-3 MCT), and tiered benchmark-regression checks
 - **Regression detection:** Tiered benchmark tolerances calibrated for CI environments
 - **Transparent limitations:** Security analysis explicitly distinguishes self-assessed vs. audited claims
 - **Defense-in-depth:** Security bounded by weakest layer (~128-bit classical), not inflated aggregate claims
