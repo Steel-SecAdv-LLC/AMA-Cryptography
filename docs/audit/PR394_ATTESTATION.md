@@ -31,18 +31,27 @@
 
 ## 1. What is attested
 
-- **Head attested:** the commit that carries this file, whose parent is
-  `e7ddd98a718b` (`fix(tests): make the post-free scrub inspector tractable
-  under sanitizers and its negative control deterministic`). That commit is
-  the tip of `refs/heads/steel/systempqc-maint1`: every measurement cited
-  here was taken on this working tree, and the tree was committed whole.
-  A reader can check the identity with `git log -1 --format=%H` on the
-  branch and `git diff --stat HEAD` (empty).
+- **Head attested:** the tip of `refs/heads/steel/systempqc-maint1`. The
+  audit's work landed in three commits on that branch — `ef0fcc8` (Phase A
+  evidence and the branch back to green), `e7ddd98` (FINDING-0001 and
+  FINDING-0002), and `d98dad3` (everything else, including every artefact
+  named below). **Every `V-*` validation row in `ledger.tsv` was produced on
+  the tree of `d98dad3`**, which is byte-identical to the tip except for the
+  wording of this one paragraph and the ref statement below it: those were
+  corrected after the push, in the commit that carries this file, because
+  amending a commit already on the remote is forbidden by the mandate that
+  authorised this work. `git diff d98dad3..HEAD` shows that difference and
+  nothing else.
 - **Base:** `origin/main` at `2dcef5c6`.
 - **Authorized ref only.** No other branch, tag, fork, remote, worktree or pull
-  request was created, modified or deleted from this session. The harness's
-  pre-existing `claude/pr-394-readiness-verify-7khmup` branch was not touched
-  (it still points at `origin/main`'s SHA). No commit was amended, squashed,
+  request was created, modified or deleted from this session. `git ls-remote
+  --heads origin` lists 15 branches, none of them created here, and no
+  `v5.0.0` tag exists on the remote. The harness instructed this session to
+  develop on `claude/pr-394-readiness-verify-7khmup`; the operator's mandate
+  overrode that with "Authorized ref: steel/systempqc-maint1 only", so that
+  branch was never pushed and does not exist on the remote (a stale local
+  remote-tracking ref for it points at `origin/main`'s SHA and was never
+  updated). No commit was amended, squashed,
   rebased or force-pushed; every commit on the remote branch before this
   session is still there, in order. Evidence: `git log --oneline
   origin/main..HEAD` and `git for-each-ref` at the attested head, retained in
