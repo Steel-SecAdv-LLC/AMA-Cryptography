@@ -153,7 +153,10 @@ Every unresolved item is one of the rows of `PR394_EXCEPTIONS.md`, each with
 its blocking constraint, evidence, residual risk, closure condition and owner
 action:
 
-1. Merge approval — absent authority (owner).
+1. Merge approval — absent authority (owner). The technical side is clear:
+   every repository workflow is green on the attested head (eleven runs,
+   enumerated in `PR394_EXCEPTIONS.md` row 1), and the pull request's
+   `blocked` state is the approving review.
 2. Signed v5.0.0 tag — absent authority for creation; verification proven
    (NC-35, NC-35b, preflight).
 3. PyPI publication — absent authority for the publish step; the dry run

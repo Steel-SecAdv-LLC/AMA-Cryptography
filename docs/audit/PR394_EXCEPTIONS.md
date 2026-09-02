@@ -26,15 +26,46 @@ every cited log is under `docs/audit/logs/`.
 *Blocker.* Only the repository owner can approve and merge; branch protection
 reports `mergeable_state: blocked` on the pull request.
 
-*Technical side.* At the head this audit started from (`be1af0f`) the Python
-test jobs were red on every platform (check runs of 2026-09-02 03:32–04:09
-UTC: 24 `Python x.y on <os>` / `Test <os> / Python x.y` failures; C, fuzz,
-dudect, ARM, static-analysis, security and provenance gates green). The
-cause was the audit's own first commit (documented in
-`PR394_CAPABILITIES.md`, session 1 defects) and is fixed in `ef0fcc8`;
-the pushed head of this audit must show every required check green before
-this row's technical side is clear. The attestation records the check-run
-state of the attested head.
+*Technical side: clear.* At the head this audit started from (`be1af0f`) the
+Python test jobs were red on every platform (check runs of 2026-09-02
+03:32–04:09 UTC: 24 `Python x.y on <os>` / `Test <os> / Python x.y`
+failures; C, fuzz, dudect, ARM, static-analysis, security and provenance
+gates green). The cause was the audit's own first commit (documented in
+`PR394_CAPABILITIES.md`, session 1 defects) and was fixed in `ef0fcc8`.
+
+At the attested head `d1800bf` **every repository workflow is green**:
+
+| Workflow | Run | Conclusion |
+|---|---|---|
+| CI - Testing and Code Quality | 33667338639 | success |
+| CI - Build and Test | 33667338515 | success |
+| CI - Static Analysis (C Code) | 33667338514 | success |
+| CI - Fuzzing (libFuzzer) | 33667338483 | success |
+| CI - dudect Constant-Time Verification | 33667338323 | success |
+| ARM (QEMU) Cross-Test | 33667338628 | success |
+| ACVP Vector Validation | 33667338430 | success |
+| Vendored Corpus Provenance | 33667338544 | success |
+| Security Scanning | 33667338458 | success |
+| Integrity anchor check | 33667338399 | success |
+| Baseline Change Guard | 33667338394 | success |
+
+The twelfth run on that head, "Running Copilot Code Review" (33667353537),
+is GitHub's own reviewer app rather than a repository gate; it reports
+`cancelled` here as it did on the pre-audit head.
+
+Three genuine failures surfaced on the audit's own commits between the first
+push and this state, each fixed with its evidence: the documented
+line-of-code table going stale after a docs edit (`a8f15a1`), two CodeQL
+alerts on the audit drivers (`da493ea`, alerts 654 and 655), and
+`Test windows-latest / Python 3.14` cancelled at its 20-minute cap with no
+test failure (`d1800bf`; the overrun is 4.2 minutes of Windows setup, and
+the leg only reached the later steps once the suite stopped failing early).
+Every other failure event on this branch during the audit was a run
+superseded by a later push — `cancel-in-progress` — verified in each job log
+by its `Dependency results: ... cancelled` line.
+
+The pull request reports `mergeable_state: blocked` with those checks green,
+which is the approving review, not a technical obstacle.
 
 *Residual risk.* None beyond the owner's review.  *Closure.* Owner approves
 and merges.  *Owner action.* Review and merge.
