@@ -25,7 +25,27 @@ jobs:
   test:
     name: Test ${{ matrix.os }} / Python ${{ matrix.python-version }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    # Windows gets 30, everything else keeps 20.  Measured on one run
+    # (33664217074, head da493ea), where `Test windows-latest / Python 3.14`
+    # was CANCELLED at 20.1 minutes with no test failure — 30 seconds into the
+    # examples step, having passed the whole suite — and took `CI Gate` red
+    # with it, exactly the "a cancelled dependency is not a success" shape the
+    # apt-retry gate below documents.  Its siblings in the same run:
+    #
+    #   windows 3.14  20.1 min (cancelled)   windows 3.13  14.2 min (success)
+    #   windows 3.12  14.3 min               windows 3.11  14.5 min
+    #   windows 3.10  14.6 min               ubuntu worst  14.7 min
+    #
+    # The overrun is SETUP, not tests: against 3.13 on the same runner image,
+    # 3.14 spends +1.3 min building the native library, +1.2 installing
+    # SoftHSM2, +1.2 installing PyKCS11 (no cp314 wheel, so it compiles from
+    # source) and +0.5 on dependencies — 4.2 minutes of overhead before pytest
+    # starts, which then runs 11.4 min against 3.13's 10.2.  So the cap was
+    # always a minute or two from cancelling a green Windows leg; what changed
+    # is that the suite now PASSES, so the job reaches the steps after it
+    # instead of exiting early on a failure.  A timeout is a resource budget,
+    # not a correctness threshold: nothing here is made easier to pass.
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && 30 || 20 }}
     strategy:
       fail-fast: false
       matrix:
