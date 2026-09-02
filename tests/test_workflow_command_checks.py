@@ -615,6 +615,45 @@ class TestExpressionSyntax:
         )
         assert report.ok, messages(report)
 
+    @pytest.mark.parametrize(
+        "condition",
+        [
+            # The shape a negative control injected into ci.yml (NC-29b): a
+            # bare `if:` carries no `${{`, so the first version of this check
+            # never looked at it, and `=` was outside its rule anyway.
+            "steps.setup-python.outcome = 'failure'",
+            "${{ steps.setup-python.outcome = 'failure' }}",
+            "matrix.n * 2",
+            "github.event_name = 'push' && github.ref == 'refs/heads/main'",
+        ],
+    )
+    def test_a_lone_equals_and_a_bare_if_are_rejected(self, condition: str) -> None:
+        report = run_checks(
+            "name: p\non: workflow_dispatch\njobs:\n  j:\n    runs-on: ubuntu-latest\n"
+            f"    if: {condition}\n    steps:\n      - run: echo hi\n"
+        )
+        assert not report.ok, f"{condition} was accepted"
+        assert any("WHOLE FILE" in f.message for f in report.findings), messages(report)
+
+    @pytest.mark.parametrize(
+        "condition",
+        [
+            "steps.setup-python.outcome == 'failure'",
+            "github.ref != 'refs/heads/main' && github.event_name != 'schedule'",
+            "matrix.python-version >= '3.11' || matrix.os <= 'z'",
+            "always()",
+            "contains(github.ref, 'refs/tags/v=')",
+            "github.event.inputs.tag == ''",
+        ],
+    )
+    def test_legitimate_bare_conditions_are_not_flagged(self, condition: str) -> None:
+        report = run_checks(
+            "name: p\non: workflow_dispatch\njobs:\n  j:\n    runs-on: ubuntu-latest\n"
+            f"    if: {condition}\n    steps:\n      - run: echo hi\n"
+        )
+        assert report.ok, messages(report)
+        assert report.expressions_checked == 1
+
     def test_the_check_inspects_something(self) -> None:
         """A silent no-op would pass every workflow in the tree."""
         report = sweep(REPO_ROOT / ".github" / "workflows")

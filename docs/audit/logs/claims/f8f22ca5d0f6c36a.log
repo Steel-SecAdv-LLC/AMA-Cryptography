@@ -1,0 +1,3 @@
+$ python -c "from ama_cryptography._numeric import asmat; from ama_cryptography.equations import _dominant_eigenvector as d, calculate_sigma_quadratic as s; m=asmat([[0.0,4.0],[0.0,1.0]]); v=d(m); print([round(float(x),3) for x in v], round(s(v,m),3))"
+# exit=0 duration=0.462s
+[0.615, 0.788] 2.562

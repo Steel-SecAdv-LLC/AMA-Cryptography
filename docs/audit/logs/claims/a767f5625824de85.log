@@ -1,0 +1,3 @@
+$ /opt/ama-venv/bin/python -c "import tools.check_c_secret_zeroization as g;from pathlib import Path;print('MACRO',len(g.scan_text('#define WIPE(a) memset((a), 0, 32)\nWIPE(secret_key);\n',Path('p.c'))),'OCTAL',len(g.scan_text('memset(secret_key, 00, 32);',Path('p.c'))),'PAREN',len(g.scan_text('memset((secret_key), 0, 32);',Path('p.c'))))"
+# exit=0 duration=0.042s
+MACRO 1 OCTAL 1 PAREN 1

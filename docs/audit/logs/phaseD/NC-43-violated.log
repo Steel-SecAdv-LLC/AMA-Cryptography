@@ -1,0 +1,5 @@
+ERROR: SBOM drift detected at /home/user/AMA-Cryptography/docs/compliance/sbom-c-library.json.
+Package version (pyproject.toml): '5.0.0'
+Rerun: python tools/generate_sbom.py
+Commit the regenerated artefact.
+

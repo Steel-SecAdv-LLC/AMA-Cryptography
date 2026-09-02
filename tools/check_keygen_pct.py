@@ -41,6 +41,19 @@ pairwise test.  ``AmaContext`` generates its keypairs through
 followed: a gate that traces arbitrarily far stops being checkable by reading
 it, and nothing in this module needs more than one hop.
 
+A function that dispatches on key family — ``if kem: pairwise_test_kem(...)
+else: pairwise_test_signature(...)`` — releases a keypair from EVERY arm, so
+every arm of such a conditional must run a pairwise test or raise.  Name-set
+matching alone cannot see one arm going dark: the function still calls
+``pairwise_test_kem`` somewhere, so it still "reaches a helper".  Measured
+before this rule existed (docs/audit/PR394_NEGATIVE_CONTROLS.tsv, NC-17):
+replacing the signature arm's call in ``_keypair_pairwise_test`` with a no-op
+left this gate at exit 0 while ``AmaContext.keypair_generate`` released
+untested ML-DSA, SLH-DSA and hybrid keypairs.  Only explicit arms are judged
+(``if``/``elif``/``else`` and ``match`` cases): an ``if`` with no ``else``
+opens no comparison, because its fall-through path may run the test in a
+later statement, and deciding that needs path analysis this gate does not do.
+
 Exit codes
 ----------
 * 0 — every discovered keygen entry point reaches a pairwise test.
@@ -100,16 +113,52 @@ def _calls(node: ast.AST) -> set[str]:
     return names
 
 
+def _terminates(arm: list[ast.stmt]) -> bool:
+    """True when ``arm`` ends by raising: no keypair leaves through it."""
+    return bool(arm) and isinstance(arm[-1], ast.Raise)
+
+
+def arms_without_pct(node: ast.AST) -> list[int]:
+    """Line numbers of conditional arms that skip the test a sibling arm runs.
+
+    Judged for every ``if``/``else`` and ``match`` under ``node`` in which at
+    least one arm calls a pairwise test.  An arm passes when it calls one too
+    or ends in ``raise``; anything else is a path that releases the keypair
+    untested.  See "WHAT COUNTS AS REACHING THE HELPER" in the module
+    docstring for why name matching cannot do this and for the stated limit.
+    """
+    missing: list[int] = []
+    for child in ast.walk(node):
+        arms: list[list[ast.stmt]]
+        if isinstance(child, ast.If):
+            if not child.orelse:
+                continue
+            arms = [child.body, child.orelse]
+        elif isinstance(child, ast.Match):
+            arms = [case.body for case in child.cases]
+        else:
+            continue
+        tested = [any(_calls(stmt) & PCT_HELPERS for stmt in arm) for arm in arms]
+        if not any(tested):
+            continue
+        for arm, ok in zip(arms, tested):
+            if not ok and not _terminates(arm):
+                missing.append(arm[0].lineno)
+    return sorted(missing)
+
+
 def pct_delegating_helpers(tree: ast.AST) -> set[str]:
-    """Functions and methods whose body calls a pairwise test.
+    """Functions and methods whose body calls a pairwise test on every path.
 
     Collected across the whole module, methods included, so a keygen that
-    delegates to ``self._keypair_pairwise_test`` is recognised.
+    delegates to ``self._keypair_pairwise_test`` is recognised.  A helper
+    with a conditional arm that skips the test is not a helper — delegating
+    to it proves nothing for the family that arm serves.
     """
     helpers: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            if _calls(node) & PCT_HELPERS:
+            if _calls(node) & PCT_HELPERS and not arms_without_pct(node):
                 helpers.add(node.name)
     return helpers
 
@@ -137,16 +186,22 @@ def audit(path: Path) -> tuple[list[tuple[str, int]], int]:
     """``(unwired entry points, number examined)`` for one module."""
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     helpers = pct_delegating_helpers(tree)
-    unwired: list[tuple[str, int]] = []
+    unwired: set[tuple[str, int]] = set()
     entry_points = keygen_entry_points(tree)
     for name, lineno, node in entry_points:
         called = _calls(node)
-        if called & PCT_HELPERS:
-            continue
-        if called & helpers:
-            continue
-        unwired.append((name, lineno))
-    return unwired, len(entry_points)
+        if not (called & PCT_HELPERS or called & helpers):
+            unwired.add((name, lineno))
+        for arm_line in arms_without_pct(node):
+            unwired.add((f"{name} [conditional arm]", arm_line))
+    # A delegated helper with a dark arm is named as well as its callers, so
+    # the diagnostic points at the line to fix and not only at its effect.
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if _calls(node) & PCT_HELPERS:
+                for arm_line in arms_without_pct(node):
+                    unwired.add((f"{node.name} [conditional arm]", arm_line))
+    return sorted(unwired, key=lambda item: (item[1], item[0])), len(entry_points)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -182,8 +237,10 @@ def main(argv: list[str] | None = None) -> int:
         print(
             "\nCall pairwise_test_signature / pairwise_test_kem / "
             "pairwise_test_agreement before the keypair is returned, or delegate "
-            "to a helper that does. If the function generates no key material, "
-            "add it to EXEMPT in this file with the reason.",
+            "to a helper that does. A conditional arm named above is a path that "
+            "releases the keypair without the test its sibling arm runs: give it "
+            "the family's test, or make it raise. If the function generates no "
+            "key material, add it to EXEMPT in this file with the reason.",
             file=sys.stderr,
         )
         return 1

@@ -1,0 +1,4 @@
+$ ctest --test-dir build-release -R 'test_dispatch_only_(kyber-ntt-neon|dilithium-ntt-neon|argon2-g-neon)$' | grep -c '(Skipped)'; AMA_DISPATCH_ONLY=kyber-ntt-neon ./build-release/bin/test_dispatch_only_env 2>&1 | grep -c 'is recognised, but the required CPU feature is not present'
+# exit=77 duration=0.270s
+3
+1

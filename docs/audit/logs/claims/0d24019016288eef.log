@@ -1,0 +1,3 @@
+$ python -c "import json;d=json.load(open('assets/visuals_manifest.json'))['test_coverage'];print(d['total_tests'],d['counts']['Other'])"
+# exit=0 duration=0.038s
+4837 2247

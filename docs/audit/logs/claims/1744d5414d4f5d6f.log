@@ -1,0 +1,4 @@
+$ grep -nA1 'cmake -B build-strict \\' .github/workflows/static-analysis.yml
+# exit=0 duration=0.004s
+339:          cmake -B build-strict \
+340-            -DCMAKE_BUILD_TYPE=None \

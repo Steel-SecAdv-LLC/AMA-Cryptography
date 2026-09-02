@@ -1,0 +1,4 @@
+$ grep -c "if not _may_hold_a_guarded_import(source)" tools/check_suppression_hygiene.py; /opt/ama-venv/bin/python -c "from tools.check_suppression_hygiene import _may_hold_a_guarded_import as f;print('MNFE',f('try:\n    import x\nexcept ModuleNotFoundError:\n    x = None  # type: ignore[assignment]\n'))"
+# exit=0 duration=0.043s
+2
+MNFE True

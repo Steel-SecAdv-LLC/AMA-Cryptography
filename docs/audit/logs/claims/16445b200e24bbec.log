@@ -1,0 +1,3 @@
+$ python -c "from ama_cryptography._numeric import asmat, Vec; from ama_cryptography.equations import enforce_sigma_quadratic_threshold as e, calculate_sigma_quadratic as s; m=asmat([[-5.0,0.0],[0.0,1.0]]); ok, v = e(Vec([1.0,0.0]), m, 0.5); print(ok, round(s(v,m),3))"
+# exit=0 duration=0.462s
+False 0.5

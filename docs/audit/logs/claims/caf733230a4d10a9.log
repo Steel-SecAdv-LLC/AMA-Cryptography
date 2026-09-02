@@ -1,0 +1,3 @@
+$ /opt/ama-venv/bin/python -c "import yaml;d=yaml.safe_load(open('.github/workflows/arm-qemu.yml'));on=d.get(True) or d.get('on');print('PUSH',on.get('push'))"
+# exit=0 duration=0.075s
+PUSH {'branches': ['main'], 'paths': ['src/c/**', 'include/**', 'tests/c/**', 'CMakeLists.txt', 'cmake/toolchains/**', 'cmake/ama_exports.map', 'tools/check_secret_division.py', '.github/workflows/arm-qemu.yml']}

@@ -1,0 +1,4 @@
+$ grep -c "fuzz/seed_corpus/.\*|\|tests/kat/.\*|\|src/c/vendor/.\*|\|ama_cryptography/_post_kats/.\*|" .pre-commit-config.yaml; grep -c "exclude: \*verbatim_bytes\|exclude: &verbatim_bytes" .pre-commit-config.yaml
+# exit=0 duration=0.006s
+4
+2

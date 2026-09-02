@@ -1,0 +1,3 @@
+INVARIANT-1 Addendum violation — the algorithm registry is incomplete:
+  - CSRC_STANDARDS.md: no row mentions 'ML-KEM-1024', which family 'ama_kyber_*' maps to. The document's own first paragraph says it lists every implemented primitive.
+  - CSRC_STANDARDS.md: no row's Algorithm column names 'ML-KEM-1024', the parameter set AMA_ML_KEM_1024 ships. A family-level citation is not enough: the document says it maps every primitive to its parameter set.

@@ -1,0 +1,3 @@
+$ grep -c "test_dilithium_sign(iterations), 1);\|test_slhdsa_sign(iterations), 1);" tests/c/test_dudect.c
+# exit=0 duration=0.007s
+2

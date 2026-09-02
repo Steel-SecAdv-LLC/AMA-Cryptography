@@ -1,0 +1,4 @@
+$ grep -c 're\.search' tests/test_precommit_mypy_scope.py tests/test_precommit_verbatim_bytes.py
+# exit=0 duration=0.004s
+tests/test_precommit_mypy_scope.py:2
+tests/test_precommit_verbatim_bytes.py:2

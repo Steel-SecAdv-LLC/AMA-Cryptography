@@ -1,0 +1,3 @@
+$ grep -c "if not _binding_imports_permitted():" ama_cryptography/pqc_backends.py
+# exit=0 duration=0.006s
+5

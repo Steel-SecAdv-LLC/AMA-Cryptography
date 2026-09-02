@@ -1,0 +1,5 @@
+$ ls fuzz/seed_corpus/fuzz_sphincs/ | grep -c '^verify-fuzzed-sig-'; grep -n 'if (payload_len < AMA_SPHINCS_256F_SIGNATURE_BYTES) break;' fuzz/fuzz_sphincs.c; grep -n '#define AMA_SPHINCS_256F_SIGNATURE_BYTES 49856' include/ama_cryptography.h
+# exit=0 duration=0.008s
+4
+99:        if (payload_len < AMA_SPHINCS_256F_SIGNATURE_BYTES) break;
+163:#define AMA_SPHINCS_256F_SIGNATURE_BYTES 49856

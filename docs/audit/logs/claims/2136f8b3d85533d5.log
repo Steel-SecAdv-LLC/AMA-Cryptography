@@ -1,0 +1,5 @@
+$ grep -n '("simd-on"\|("avx2-off"\|("simd-off"' tests/test_aesni_is_not_gated_on_avx2.py
+# exit=0 duration=0.004s
+423:    ("simd-on", ["-DAMA_ENABLE_SIMD=ON", "-DAMA_ENABLE_AVX2=ON"]),
+424:    ("avx2-off", ["-DAMA_ENABLE_SIMD=ON", "-DAMA_ENABLE_AVX2=OFF"]),
+425:    ("simd-off", ["-DAMA_ENABLE_SIMD=OFF"]),

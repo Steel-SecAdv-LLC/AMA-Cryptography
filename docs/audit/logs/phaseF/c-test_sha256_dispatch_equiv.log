@@ -1,0 +1,2 @@
+SHA-256 dispatch backend under test: scalar
+PASS: dispatched SHA-256 (scalar) byte-identical to reference + FIPS 180-4

@@ -1,0 +1,4 @@
+$ grep -n 'define DUDECT_MIN_EFFECT_NS 2.0\|a SUB_FLOOR lane does not fail the run' tests/c/dudect/dudect_rounds.h
+# exit=0 duration=0.005s
+185:#define DUDECT_MIN_EFFECT_NS 2.0
+781:    ok &= dudect_rounds_case("a SUB_FLOOR lane does not fail the run",

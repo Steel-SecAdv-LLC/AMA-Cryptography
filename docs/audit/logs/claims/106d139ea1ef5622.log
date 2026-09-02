@@ -1,0 +1,4 @@
+$ grep -n "aborts the run rather" tools/constant_time/dudect_harness.c; grep -n "aborts rather than returning a number" tools/constant_time/dudect_crypto.c
+# exit=0 duration=0.007s
+98: * A lane that produced no usable measurement aborts the run rather than
+137: * produced no usable measurement aborts rather than returning a number:

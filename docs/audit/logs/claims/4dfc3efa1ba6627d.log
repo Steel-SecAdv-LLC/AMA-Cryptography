@@ -1,0 +1,5 @@
+$ grep -nF '(?:[ \t]+[A-Za-z_][A-Za-z0-9_]*)*' tools/check_c_secret_zeroization.py; grep -nF '(?:[ \t]*\*)*[ \t]*\)' tools/check_c_secret_zeroization.py; python -c "import sys,time; sys.path.insert(0,'.'); import importlib; m=importlib.import_module('tools.check_c_secret_zeroization'); rx=m._MEMSET_RE; s='memset((void'+' '*32768; t=time.perf_counter(); rx.search(s); a=(time.perf_counter()-t)*1000; s2='memset((void'+' '*65536; t=time.perf_counter(); rx.search(s2); b=(time.perf_counter()-t)*1000; print(f'{a:.2f} ms {b/a:.2f}x')"
+# exit=0 duration=0.048s
+166:    r"(?:\(\s*[A-Za-z_][A-Za-z0-9_]*(?:[ \t]+[A-Za-z_][A-Za-z0-9_]*)*"
+167:    r"(?:[ \t]*\*)*[ \t]*\)\s*)?"
+2.49 ms 1.12x

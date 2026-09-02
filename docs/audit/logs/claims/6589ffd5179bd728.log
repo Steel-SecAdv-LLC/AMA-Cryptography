@@ -1,0 +1,3 @@
+$ python -c "from array import array; from ama_cryptography.secure_memory import secure_memzero; a=array('I',[0xDEADBEEF]*8); secure_memzero(memoryview(a)); print('all_zero', bytes(a)==bytes(32))"
+# exit=0 duration=0.470s
+all_zero True

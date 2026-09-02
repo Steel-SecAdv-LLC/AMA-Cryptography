@@ -1,0 +1,61 @@
+$ sed -n 917,975p .github/workflows/release.yml
+# exit=0 duration=0.004s
+  github-release:
+    name: Create GitHub Release
+    # MUST depend on publish-pypi (Copilot review #322).  Without it,
+    # a tag push that succeeds at sign+provenance but fails at PyPI
+    # upload (rejected by the trusted-publisher rule, environment
+    # approval timeout, transient PyPI 5xx) would still publish the
+    # GitHub Release with body text "Published to PyPI" — false
+    # advertising and a credibility hit.  Sequencing via `needs` makes
+    # the release announcement strictly downstream of the PyPI upload.
+    needs: [preflight, sign, provenance, publish-pypi]
+    #
+    # The original guard was a bare `needs: [... publish-pypi]`, which is
+    # correct about the hazard (never announce a PyPI upload that failed) but
+    # conflates two different outcomes. `needs` treats SKIPPED the same as
+    # FAILED, so with PyPI publishing opt-in (see publish-pypi above) a
+    # deliberately unconfigured PyPI would silently suppress the GitHub
+    # Release too — no assets, no signatures, no provenance published, for a
+    # tag that built everything successfully.
+    #
+    # This condition keeps the safety property and drops the conflation:
+    #   * publish-pypi FAILED   -> no release  (the original hazard)
+    #   * publish-pypi SKIPPED  -> release proceeds, notes say PyPI was skipped
+    #   * sign / provenance not successful -> no release, unconditionally
+    #
+    # Bracket indexing, not dot notation: `needs.publish-pypi.result` asks an
+    # expression grammar in which `-` is also subtraction to read a hyphenated
+    # job id as a single identifier.  No other workflow here dereferences a
+    # hyphenated job name, so there is no in-repo evidence the dot form is
+    # safe, and this file only ever executes on a tag push — the one place a
+    # wrong guess is discovered at the worst moment.  `needs['publish-pypi']`
+    # is unambiguous under any reading.
+    if: >-
+      !cancelled()
+      && github.event_name == 'push'
+      && startsWith(github.ref, 'refs/tags/v')
+      && needs.sign.result == 'success'
+      && needs.provenance.result == 'success'
+      && needs['publish-pypi'].result != 'failure'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # The release narrative has always said publication happens "under the
+    # protected `release` environment", and until this block existed the
+    # workflow disagreed: `publish-pypi` carried `environment: pypi` while
+    # the job that actually creates the immutable release — the one holding
+    # `contents: write` — was gated by nothing but its `if:`.  Referencing
+    # the environment here creates it on first run WITHOUT protection
+    # rules; the required-reviewer / branch-and-tag protections must be
+    # configured once on the repository's Settings -> Environments page for
+    # the gate to hold anything.  Until they are, this line documents the
+    # intended gate rather than enforcing it, and the release runbook above
+    # treats configuring it as part of the tag-time procedure.
+    environment:
+      name: release
+      url: https://github.com/${{ github.repository }}/releases/tag/v${{ needs.preflight.outputs.version }}
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1

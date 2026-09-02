@@ -1,0 +1,4 @@
+$ grep -nE '^\s*(extern\s+)?(void|int|uint[0-9]+_t)\s+ama_[a-z0-9_]+_(neon|sve2)\s*\(' src/c/dispatch/ama_dispatch.c src/c/ama_sha256.c tests/c/test_sha256_neon_kat.c | wc -l; grep -L "ama_neon_internal.h" src/c/neon/*.c | wc -l
+# exit=0 duration=0.008s
+0
+0

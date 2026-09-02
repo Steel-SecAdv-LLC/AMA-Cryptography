@@ -1,0 +1,4 @@
+$ grep -n -B20 '^static int32_t dil_reduce32' src/c/ama_dilithium.c | grep -ciE 'centred|centered'; grep -n -B20 '^static int32_t dil_reduce32' src/c/ama_dilithium.c | grep -cE '\[0, q\)'
+# exit=0 duration=0.008s
+1
+2

@@ -1,0 +1,4 @@
+$ grep -n "a body-level scan cannot see the reach" tools/check_error_state_gating.py
+# exit=0 duration=0.004s
+153:#: (``_require_native``) … because a body-level scan cannot see the reach".
+444:    comment saying "a body-level scan cannot see the reach", which was true of

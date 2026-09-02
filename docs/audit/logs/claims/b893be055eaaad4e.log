@@ -1,0 +1,4 @@
+$ grep -n "6,950,175,736 retired instructions against the 319,561" tools/check_ghash_constant_time.py; python -c "print(round(100*(1-319561/6950175736),3))"
+# exit=0 duration=0.034s
+1810:    6,950,175,736 retired instructions against the 319,561 the same program
+99.995

@@ -1,0 +1,3 @@
+$ grep -n 'alerts 617/618' tests/test_c_buffer_views.py
+# exit=0 duration=0.004s
+88:        # exactly that (alerts 617/618), and an explanatory comment would have

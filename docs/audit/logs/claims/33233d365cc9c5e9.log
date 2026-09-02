@@ -1,0 +1,4 @@
+$ grep -n "bignum256modm s = {0};\|ge25519 ALIGN(16) R = {0};" src/c/ed25519_donna_shim.c
+# exit=0 duration=0.005s
+358:    bignum256modm s = {0};
+359:    ge25519 ALIGN(16) R = {0};

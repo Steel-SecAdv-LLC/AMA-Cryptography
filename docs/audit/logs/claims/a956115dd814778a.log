@@ -1,0 +1,4 @@
+$ grep -n 'recorded = report.get("provenance")\|^def generate_markdown_report' benchmarks/benchmark_runner.py
+# exit=0 duration=0.004s
+1423:def generate_markdown_report(results: List[BenchmarkResult], report: Dict[str, Any]) -> str:
+1462:    recorded = report.get("provenance")

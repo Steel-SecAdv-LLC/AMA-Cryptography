@@ -1,0 +1,3 @@
+$ sed -n '/^def _get_lib_names/,/^def /p' ama_cryptography/pqc_backends.py | grep -n 'return \["ama_cryptography.dll", "libama_cryptography.dll"\]'
+# exit=0 duration=0.006s
+7:        return ["ama_cryptography.dll", "libama_cryptography.dll"]

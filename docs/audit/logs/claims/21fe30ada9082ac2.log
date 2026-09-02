@@ -1,0 +1,3 @@
+$ grep -n "^ALLOWLIST: dict\[str, tuple\[int, str\]\]" tools/check_stdlib_hash_boundary.py
+# exit=0 duration=0.005s
+95:ALLOWLIST: dict[str, tuple[int, str]] = {

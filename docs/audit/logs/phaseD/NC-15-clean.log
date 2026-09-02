@@ -1,0 +1,3 @@
+INVARIANT-31: aggregating gate coverage
+  workflows examined: 14
+  PASS — every pull-request job is reachable from its workflow's gate.

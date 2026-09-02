@@ -1,0 +1,4 @@
+$ grep -n 'define MAX_ROUNDS' tests/c/test_dudect.c; grep -n 'a strict lane tripped -> early exit refused' tests/c/dudect/dudect_rounds.h
+# exit=0 duration=0.006s
+52:#define MAX_ROUNDS           3
+970:    printf("  %-58s %s\n", "a strict lane tripped -> early exit refused",

@@ -1,0 +1,11 @@
+RFC3161_CAPABILITIES performed: message_imprint_binding, nonce_echo, pki_status, signer_present
+RFC3161_CAPABILITIES withheld : gen_time, tsa_certificate_chain, tsa_signature
+OK    deprecated result key in documentation
+OK    refusing arguments documented as refusing
+OK    removed third-party dependency
+OK    capability/pattern coverage
+OK    unqualified formal-verification claims
+
+FAIL: INVARIANT-37 — something claims a verification check AMA does not perform.
+  claims of unperformed checks:
+    - README.md:1677 claims the TSA's signature is verified — 'verifies the TSA signature' — while RFC3161_CAPABILITIES['tsa_signature'] is False. Either negate the claim in this sentence, or implement the check and flip the capability.

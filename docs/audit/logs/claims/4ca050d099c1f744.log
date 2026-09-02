@@ -1,0 +1,3 @@
+$ grep -c "_gate_body_text" tools/check_gate_coverage.py
+# exit=1 duration=0.003s
+0

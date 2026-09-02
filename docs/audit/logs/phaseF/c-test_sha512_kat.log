@@ -1,0 +1,12 @@
+=== SHA-512 (FIPS 180-4) byte-exact KAT ===
+  PASS: empty (FIPS 180-4)
+  PASS: abc (FIPS 180-4)
+  PASS: len111 (pad boundary)
+  PASS: len112 (pad boundary)
+  PASS: len113 (pad boundary)
+  PASS: len127 (block edge)
+  PASS: len128 (block edge)
+  PASS: len129 (block edge +1)
+  PASS: len256 (multi-block)
+
+26 passed, 0 failed

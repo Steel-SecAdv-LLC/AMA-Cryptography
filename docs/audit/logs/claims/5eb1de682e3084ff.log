@@ -1,0 +1,3 @@
+$ grep -n 'if (n >= MAX_RESULTS) BENCH_FATAL("MAX_RESULTS exceeded")' benchmarks/benchmark_c_raw.c
+# exit=0 duration=0.005s
+1622:            if (n >= MAX_RESULTS) BENCH_FATAL("MAX_RESULTS exceeded");        \

@@ -1,0 +1,36 @@
+==31480== Memcheck, a memory error detector
+==31480== Copyright (C) 2002-2022, and GNU GPL'd, by Julian Seward et al.
+==31480== Using Valgrind-3.22.0 and LibVEX; rerun with -h for copyright info
+==31480== Command: /home/user/AMA-Cryptography/build-valgrind/bin/test_ed25519
+==31480== 
+===========================================
+Ed25519 Test Suite (RFC 8032)
+===========================================
+
+PASS: ed25519_keypair: should succeed
+PASS: ed25519_keypair: public key matches RFC 8032 vector 1
+PASS: ed25519_sign: empty message should succeed
+PASS: ed25519_sign: signature matches RFC 8032 vector 1 (empty msg)
+PASS: ed25519_verify: empty message roundtrip OK
+PASS: ed25519_sign: longer message should succeed
+PASS: ed25519_verify: longer message roundtrip OK
+PASS: ed25519_verify: tampered signature correctly rejected
+PASS: ed25519_verify: tampered message correctly rejected
+PASS: ed25519_sign: NULL signature should fail
+PASS: ed25519_verify: NULL public key should fail
+PASS: ed25519_sign: first deterministic sign should succeed
+PASS: ed25519_sign: second deterministic sign should succeed
+PASS: ed25519_sign: deterministic signatures
+
+===========================================
+All Ed25519 tests passed (including RFC 8032 KAT + roundtrip)!
+===========================================
+==31480== 
+==31480== HEAP SUMMARY:
+==31480==     in use at exit: 0 bytes in 0 blocks
+==31480==   total heap usage: 1 allocs, 1 frees, 4,096 bytes allocated
+==31480== 
+==31480== All heap blocks were freed -- no leaks are possible
+==31480== 
+==31480== For lists of detected and suppressed errors, rerun with: -s
+==31480== ERROR SUMMARY: 0 errors from 0 contexts (suppressed: 0 from 0)

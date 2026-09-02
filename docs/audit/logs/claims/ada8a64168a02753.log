@@ -1,0 +1,3 @@
+$ grep -n '_C_FORBIDDEN_ROOTS: tuple\[str, \.\.\.\] = ("src/c", "include")' tools/check_suppression_hygiene.py
+# exit=0 duration=0.003s
+269:_C_FORBIDDEN_ROOTS: tuple[str, ...] = ("src/c", "include")

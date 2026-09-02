@@ -1,0 +1,3 @@
+$ nm build-release/lib/libama_cryptography_static.a | grep -c ama_ascon_permutation_for_test
+# exit=1 duration=0.028s
+0

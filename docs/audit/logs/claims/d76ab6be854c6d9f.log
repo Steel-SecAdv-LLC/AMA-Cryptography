@@ -1,0 +1,4 @@
+$ git grep -n "urlopen(.*nosec B310" a80a2c5 -- '*.py' | wc -l; git grep -c "nosec B324" a80a2c5 -- '*.py' | awk -F: '{s+=$NF} END{print s}'
+# exit=0 duration=0.058s
+3
+1

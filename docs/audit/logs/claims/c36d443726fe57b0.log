@@ -1,0 +1,4 @@
+$ grep -nE "ED25519_PK_SIZE = 32|pqc_pk = public_key\[self\.ED25519_PK_SIZE :\]" ama_cryptography/crypto_api.py
+# exit=0 duration=0.005s
+1613:    ED25519_PK_SIZE = 32
+1767:        pqc_pk = public_key[self.ED25519_PK_SIZE :]

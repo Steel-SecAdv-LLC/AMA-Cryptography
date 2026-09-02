@@ -1,0 +1,3 @@
+$ grep -c "via hashlib" ARCHITECTURE.md
+# exit=1 duration=0.005s
+0

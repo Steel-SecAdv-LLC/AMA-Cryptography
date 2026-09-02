@@ -1,0 +1,4 @@
+$ grep -n "memory\[ref_index\]" src/c/ama_argon2.c
+# exit=0 duration=0.005s
+817:                                 &memory[ref_index]);
+821:                                     &memory[ref_index]);

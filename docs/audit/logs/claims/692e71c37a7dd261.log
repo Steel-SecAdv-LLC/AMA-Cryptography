@@ -1,0 +1,3 @@
+$ grep -n "versionchanged:: 5.0" ama_cryptography/equations.py
+# exit=0 duration=0.004s
+663:    .. versionchanged:: 5.0

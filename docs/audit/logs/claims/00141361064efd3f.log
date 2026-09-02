@@ -1,0 +1,3 @@
+$ grep -n "check_algorithm_registry.py" .github/workflows/ci.yml
+# exit=0 duration=0.004s
+1272:        python tools/check_algorithm_registry.py

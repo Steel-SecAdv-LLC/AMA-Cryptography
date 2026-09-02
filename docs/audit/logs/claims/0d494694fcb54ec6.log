@@ -1,0 +1,3 @@
+$ grep -c '"secrets.token_hex"\|"secrets.token_urlsafe"\|"secrets.randbits"\|"secrets.choice"\|"random.getrandbits"' tests/test_invariant41_rng_sweep.py
+# exit=0 duration=0.005s
+5

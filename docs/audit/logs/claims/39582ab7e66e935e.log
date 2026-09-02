@@ -1,0 +1,5 @@
+$ grep -n 'static inline const void \*dudect_stage_select' tests/c/dudect/dudect_stage.h; grep -c '^ *dudect_stage_select(' tests/c/test_dudect.c; grep -c 'dudect_stage_select(' tools/constant_time/dudect_crypto.c
+# exit=0 duration=0.007s
+102:static inline const void *dudect_stage_select(void *staging,
+24
+7

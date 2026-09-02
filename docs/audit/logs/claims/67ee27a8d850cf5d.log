@@ -1,0 +1,4 @@
+$ grep -n "option(AMA_ENABLE_SVE2" CMakeLists.txt; grep -n "AMA_ENABLE_SVE2=ON" .github/workflows/static-analysis.yml
+# exit=0 duration=0.005s
+74:option(AMA_ENABLE_SVE2 "Enable ARM SVE2 optimizations (ARMv9)" OFF)
+459:            -DAMA_ENABLE_SVE2=ON \

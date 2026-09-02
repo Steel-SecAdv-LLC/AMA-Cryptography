@@ -1,0 +1,3 @@
+$ grep -cE "^\s*- name: Build with strict warnings" .github/workflows/static-analysis.yml
+# exit=0 duration=0.006s
+4

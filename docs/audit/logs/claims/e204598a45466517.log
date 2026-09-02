@@ -1,0 +1,9 @@
+$ python -c "import yaml;d=yaml.safe_load(open('.github/workflows/ci-build-test.yml'))
+for jn,j in d['jobs'].items():
+    for st in j.get('steps',[]):
+        if 'PyKCS11' in str(st.get('name','')): print(jn, st['name'], sorted((st.get('env') or {}).keys()))
+    if 'CPPFLAGS' in str(j.get('env','')): print('JOB-LEVEL CPPFLAGS in', jn)
+print('top env', d.get('env'))"
+# exit=0 duration=0.088s
+python-package Install PyKCS11 (PKCS#11 binding for the HSM lane) ['CL', 'CPPFLAGS']
+top env None

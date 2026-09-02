@@ -1,0 +1,6 @@
+$ /opt/ama-venv/bin/python -c "exec('import yaml\nfor wf in (\".github/workflows/ci.yml\",\".github/workflows/ci-build-test.yml\"):\n for jn,j in yaml.safe_load(open(wf))[\"jobs\"].items():\n  for s in j.get(\"steps\",[]):\n   r=str(s.get(\"run\") or \"\")\n   if \"check_type_check_scope.py\" in r or (\"mypy --strict\" in r and \"--linecoverage-report\" in r): print(wf,jn,\"if=\",s.get(\"if\"),\"coe=\",s.get(\"continue-on-error\"))')"
+# exit=0 duration=0.146s
+.github/workflows/ci.yml code-quality if= None coe= False
+.github/workflows/ci.yml code-quality if= None coe= None
+.github/workflows/ci-build-test.yml lint if= None coe= False
+.github/workflows/ci-build-test.yml lint if= None coe= None

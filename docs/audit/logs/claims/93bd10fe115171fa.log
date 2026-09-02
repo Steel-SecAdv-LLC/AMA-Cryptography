@@ -1,0 +1,8 @@
+$ grep -nE 'return "(vaes-avx2|aes-ni-pclmul|arm-aes-pmull|bitsliced-software|table-insecure)";' src/c/dispatch/ama_dispatch.c; git show 2dcef5c:include/ama_dispatch.h | grep -c ama_aes_gcm_active_backend
+# exit=0 duration=0.007s
+2783:        return "vaes-avx2";
+2792:        return "aes-ni-pclmul";
+2800:        return "arm-aes-pmull";
+2807:    return "bitsliced-software";
+2815:    return "table-insecure";
+1

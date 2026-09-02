@@ -1,0 +1,17 @@
+==6447== Memcheck, a memory error detector
+==6447== Copyright (C) 2002-2022, and GNU GPL'd, by Julian Seward et al.
+==6447== Using Valgrind-3.22.0 and LibVEX; rerun with -h for copyright info
+==6447== Command: /home/user/AMA-Cryptography/build-valgrind/bin/test_nistp_mont_mulx_equiv
+==6447== 
+NIST P-256 4-limb MULX/ADX Montgomery multiply equivalence
+=========================================================
+SKIP: host does not report BMI2+ADX
+==6447== 
+==6447== HEAP SUMMARY:
+==6447==     in use at exit: 0 bytes in 0 blocks
+==6447==   total heap usage: 1 allocs, 1 frees, 4,096 bytes allocated
+==6447== 
+==6447== All heap blocks were freed -- no leaks are possible
+==6447== 
+==6447== For lists of detected and suppressed errors, rerun with: -s
+==6447== ERROR SUMMARY: 0 errors from 0 contexts (suppressed: 0 from 0)

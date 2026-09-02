@@ -1,0 +1,3 @@
+$ grep -c 'dudect_ctx_init(&ctx, "Kyber-1024 decaps (CT reject)"\|dudect_ctx_init(&ctx, "secp256k1 ECDSA sign (RFC 6979)"\|"X25519 scalarmult batch×4\|"ML-DSA-65 sign (msg-independent)"\|"SLH-DSA-SHA2-256f sign (msg-independent)"' tests/c/test_dudect.c
+# exit=0 duration=0.004s
+9

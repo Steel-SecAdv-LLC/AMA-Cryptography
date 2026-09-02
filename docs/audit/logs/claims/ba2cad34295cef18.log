@@ -1,0 +1,3 @@
+$ nm -D --defined-only build-release/lib/libama_cryptography.so | wc -l
+# exit=0 duration=0.022s
+240

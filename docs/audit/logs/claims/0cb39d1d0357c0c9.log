@@ -1,0 +1,4 @@
+$ grep -n "./dudect_harness 50000\|./dudect_crypto 50000" .github/workflows/dudect.yml
+# exit=0 duration=0.005s
+283:          taskset -c 0 $NICE_PREFIX ./dudect_harness 50000
+285:          taskset -c 0 $NICE_PREFIX ./dudect_crypto 50000

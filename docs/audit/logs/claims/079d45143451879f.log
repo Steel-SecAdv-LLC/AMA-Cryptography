@@ -1,0 +1,3 @@
+$ git diff bc85e53^ bc85e53 -- benchmarks/baseline.json benchmarks/arm-baseline.json | grep -cE '^[+-]\s*"(baseline_value|tolerance_percent|calibration_evidence)"'
+# exit=1 duration=0.007s
+0

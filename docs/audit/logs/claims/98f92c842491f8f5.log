@@ -1,0 +1,3 @@
+$ /opt/ama-venv/bin/python -c "from tools.check_suppression_hygiene import check_source;print('PROSE',check_source('a.py','# noqa: PLC0415 reading deferred (KFM-001)\nx = 1\n'))"
+# exit=0 duration=0.041s
+PROSE []

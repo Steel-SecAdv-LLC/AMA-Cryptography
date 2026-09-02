@@ -1,0 +1,9 @@
+$ grep -nE "if optimized != 1|compiled WITHOUT optimization|CONSTANT-TIME CHECK INCONCLUSIVE — \{reason\}" tools/check_ghash_constant_time.py; grep -nE "def test_(unoptimized_library_is_inconclusive_not_passing|an_unanswerable_probe_is_inconclusive_not_passing|an_optimized_library_still_passes|the_probe_reads_the_library_not_the_driver)" tests/test_ghash_constant_time_gate.py
+# exit=0 duration=0.009s
+1957:        if optimized != 1:
+1960:                    "the library was compiled WITHOUT optimization "
+1974:                f"CONSTANT-TIME CHECK INCONCLUSIVE — {reason}\n"
+524:    def test_unoptimized_library_is_inconclusive_not_passing(
+530:    def test_an_unanswerable_probe_is_inconclusive_not_passing(
+538:    def test_an_optimized_library_still_passes(
+545:    def test_the_probe_reads_the_library_not_the_driver(self, tool: ModuleType) -> None:

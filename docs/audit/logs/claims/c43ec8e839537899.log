@@ -1,0 +1,5 @@
+$ grep -nE '^\s+(CPPFLAGS|CL): "-DPyInt_FromLong=PyLong_FromLong"|name: Install PyKCS11' .github/workflows/ci-build-test.yml
+# exit=0 duration=0.005s
+474:      - name: Install PyKCS11 (PKCS#11 binding for the HSM lane)
+477:          CPPFLAGS: "-DPyInt_FromLong=PyLong_FromLong"
+484:          CL: "-DPyInt_FromLong=PyLong_FromLong"

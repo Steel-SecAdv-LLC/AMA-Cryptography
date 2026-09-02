@@ -1,0 +1,6 @@
+$ grep -n 'ama_test_force_aes_gcm_scalar();\|ama_test_restore_aes_gcm();\|must stop the label naming a hardware kernel\|restore returns the label' tests/c/test_aes_gcm_backend_introspect.c
+# exit=0 duration=0.004s
+99:        ama_test_force_aes_gcm_scalar();
+101:        ama_test_restore_aes_gcm();
+110:              "forcing the scalar slot must stop the label naming a hardware kernel");
+113:              "restore returns the label to what it was before the force");

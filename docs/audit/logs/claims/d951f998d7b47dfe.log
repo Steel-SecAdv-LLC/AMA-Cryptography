@@ -1,0 +1,6 @@
+$ grep -n "^MIN_FAMILIES = \|^MIN_PARAM_SETS = \|^MIN_REGISTRY_ROWS = " tools/check_algorithm_registry.py && grep -c "def test_a_truncated_registry_fails_closed\|def test_a_collapsed_header_scan_fails_closed" tests/test_algorithm_registry_gate.py
+# exit=0 duration=0.006s
+177:MIN_REGISTRY_ROWS = 30
+180:MIN_FAMILIES = 20
+184:MIN_PARAM_SETS = 12
+2

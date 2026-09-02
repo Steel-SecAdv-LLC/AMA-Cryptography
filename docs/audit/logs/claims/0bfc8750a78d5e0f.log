@@ -1,0 +1,3 @@
+$ grep -n 'list(REMOVE_ITEM AMA_SOURCES src/c/ama_ed25519.c)' CMakeLists.txt
+# exit=0 duration=0.005s
+889:        list(REMOVE_ITEM AMA_SOURCES src/c/ama_ed25519.c)

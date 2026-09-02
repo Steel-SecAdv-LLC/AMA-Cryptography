@@ -1,0 +1,4 @@
+$ ls src/cython/*_binding.pyx | wc -l; sed -n '/^BINDING_PYX = (/,/^)/p' tools/check_error_state_gating.py | grep -c "_binding.pyx"
+# exit=0 duration=0.007s
+5
+5

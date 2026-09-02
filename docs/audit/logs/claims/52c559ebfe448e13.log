@@ -1,0 +1,4 @@
+$ grep -n "tools/check_keygen_pct.py" .github/workflows/ci.yml
+# exit=0 duration=0.005s
+1286:      # tools/check_keygen_pct.py discovers the entry points from the module's
+1292:        python tools/check_keygen_pct.py

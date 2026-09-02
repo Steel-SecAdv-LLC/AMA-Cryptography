@@ -1,0 +1,2 @@
+FAIL: 1 documented count(s) have drifted:
+  - README.md: claims 4,864 test functions; `grep -rE '^\s*def test_' tests/` finds 4865 (re-measure with: python tools/update_docs.py --counts)

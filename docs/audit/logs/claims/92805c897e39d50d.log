@@ -1,0 +1,4 @@
+$ awk '/^\[tool.mypy\]/,/^\[\[tool.mypy.overrides\]\]/' pyproject.toml | grep -c ignore_missing_imports; grep -c '^ignore_missing_imports = true' pyproject.toml
+# exit=0 duration=0.007s
+0
+3

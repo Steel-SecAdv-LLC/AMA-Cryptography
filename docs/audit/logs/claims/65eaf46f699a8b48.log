@@ -1,0 +1,8 @@
+$ git show d96fb08:src/c/neon/ama_dilithium_neon.c | grep -A5 'barrett_reduce_dil_neon('
+# exit=0 duration=0.006s
+static inline int32x4_t barrett_reduce_dil_neon(int32x4_t a) {
+    const int32x4_t q = vdupq_n_s32(DILITHIUM_Q);
+    /* t = round(a / q) approximated via arithmetic shift */
+    int32x4_t t = vshrq_n_s32(a, 23);
+    t = mullo_s32(t, q);               /* t * q (low 32 bits; see mullo_s32) */
+    return vsubq_s32(a, t);

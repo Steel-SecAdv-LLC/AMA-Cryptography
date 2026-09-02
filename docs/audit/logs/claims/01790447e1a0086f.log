@@ -1,0 +1,3 @@
+$ python -c "import sys; sys.path.insert(0,'tools'); import check_compiler_warnings as g; print([bool(g._WARNING_RE.search(s)) for s in ['1 warning generated.','x.c:1:1: warning: y','x.c(1): warning C4244: z']])"
+# exit=0 duration=0.040s
+[False, True, True]

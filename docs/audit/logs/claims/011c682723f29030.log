@@ -1,0 +1,3 @@
+$ grep -n 'WinError 193\|all five failed' tests/test_apt_retry_gate.py
+# exit=0 duration=0.005s
+189:# fire and all five failed with `[WinError 193] %1 is not a valid Win32

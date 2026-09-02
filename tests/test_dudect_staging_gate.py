@@ -541,6 +541,146 @@ class TestTheGateCannotPassOnWhatItCannotRead:
         monkeypatch.setattr(gate, "HARNESS_FILES", ("fake_harness.c",))
         assert gate.main(["--root", str(tmp_path)]) == 0
 
+    def test_a_violation_is_exit_1_through_the_cli(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Found by mutation: `return 1` -> `return None` on the violation path survived.
+
+        Every violation test above drives `check_text`; nothing pinned that
+        `main` turns a violation into a non-zero exit, which is the only thing
+        CI can see.
+        """
+        harness = tmp_path / "fake_harness.c"
+        harness.write_text(BRANCH_ON_CLASS, encoding="utf-8")
+        monkeypatch.setattr(gate, "HARNESS_FILES", ("fake_harness.c",))
+        assert gate.main(["--root", str(tmp_path)]) == 1
+
+    @pytest.mark.parametrize(
+        ("source", "line"),
+        [
+            # The `if` sits on line 6 of the fixture (line 1 is blank).
+            (BRANCH_ON_CLASS, 6),
+            # A statement split across lines is reported at the line it
+            # STARTS on: the `const uint8_t *key =` line, not the ternary's.
+            (STAGED_BUT_TERNARY_SELECTED, 6),
+        ],
+    )
+    def test_the_reported_line_is_the_statement_start(self, source: str, line: int) -> None:
+        """Found by mutation: every off-by-one in the line accounting survived."""
+        violations = gate.check_text(source, "synthetic.c")
+        assert len(violations) == 1, violations
+        assert violations[0].startswith(f"synthetic.c:{line}: "), violations[0]
+
+    def test_every_unaligned_destination_is_reported_not_just_the_first(self) -> None:
+        """Found by mutation: `continue` -> `break` in the destination loop survived."""
+        source = (
+            "void lane(void) {\n"
+            "    unsigned char first_buf[64];\n"
+            "    unsigned char second_buf[64];\n"
+            "    int class_idx = draw();\n"
+            "    dudect_stage_select(first_buf, a, b, 64, class_idx);\n"
+            "    dudect_stage_select(second_buf, c, d, 64, class_idx);\n"
+            "    uint64_t start = get_time_ns();\n"
+            "}\n"
+        )
+        violations = gate.check_text(source, "synthetic.c")
+        named = {v.split("'")[1] for v in violations if "not declared _Alignas(64)" in v}
+        assert named == {"first_buf", "second_buf"}, violations
+
+    def test_an_aligned_destination_does_not_end_the_destination_scan(self) -> None:
+        """Found by mutation: `continue` -> `break` survived the two-unaligned test.
+
+        The skip for an already-aligned destination must move on to the next
+        call, and the unaligned one after it is reported at ITS line.
+        """
+        source = (
+            "void lane(void) {\n"
+            "    _Alignas(64) unsigned char good_buf[64];\n"
+            "    unsigned char bad_buf[64];\n"
+            "    int class_idx = draw();\n"
+            "    dudect_stage_select(good_buf, a, b, 64, class_idx);\n"
+            "    dudect_stage_select(bad_buf, c, d, 64, class_idx);\n"
+            "    uint64_t start = get_time_ns();\n"
+            "}\n"
+        )
+        violations = gate.check_text(source, "synthetic.c")
+        assert len(violations) == 1, violations
+        assert violations[0].startswith("synthetic.c:6: staging destination 'bad_buf'"), violations
+
+    def test_an_unaligned_stage_buffer_is_reported_even_when_never_staged_into(self) -> None:
+        """Found by mutation: Rule 2's `name not in reported` flipped and survived.
+
+        Rule 2 exists for a `*_stage` buffer this file declares but does not
+        stage into (the call may live elsewhere).  Every earlier fixture also
+        used its buffer as a destination, so Rule 1 reported it first and
+        Rule 2 was never the rule that fired.
+        """
+        source = (
+            "void lane(void) {\n"
+            "    unsigned char orphan_stage[64];\n"
+            "    int class_idx = draw();\n"
+            "    uint64_t start = get_time_ns();\n"
+            "}\n"
+        )
+        violations = gate.check_text(source, "synthetic.c")
+        assert len(violations) == 1, violations
+        assert violations[0].startswith("synthetic.c:2: staging buffer 'orphan_stage'"), violations
+
+    def test_block_comments_are_ignored_and_keep_their_line_count(self) -> None:
+        """A ternary on the class inside `/* ... */` is prose; lines after it keep their numbers."""
+        source = (
+            "void lane(void) {\n"
+            "    /* the old form was\n"
+            "       dudect_stage(buf, class_idx ? a : b, n);\n"
+            "       which is a branch */\n"
+            "    _Alignas(64) unsigned char buf[64];\n"
+            "    int class_idx = draw();\n"
+            "    if (class_idx) { touch(buf); }\n"
+            "    uint64_t start = get_time_ns();\n"
+            "}\n"
+        )
+        violations = gate.check_text(source, "synthetic.c")
+        assert len(violations) == 1, violations
+        assert violations[0].startswith("synthetic.c:7: "), violations[0]
+
+    def test_an_unterminated_block_comment_swallows_the_rest_without_crashing(self) -> None:
+        source = "void lane(void) {\n    /* never closed\n    int class_idx = draw();\n"
+        assert gate.check_text(source, "synthetic.c") == []
+
+    def test_class_use_before_any_draw_is_outside_every_window(self) -> None:
+        """The rule is stated from the draw: a helper that takes the class as a
+        parameter and branches on it is not inside a window of this file."""
+        source = (
+            "static void fill(unsigned char *b, int class_idx) {\n"
+            "    if (class_idx) { b[0] = 1; }\n"
+            "}\n"
+            "void lane(void) {\n"
+            "    _Alignas(64) unsigned char buf[64];\n"
+            "    int class_idx = draw();\n"
+            "    dudect_stage_select(buf, a, b, 64, class_idx);\n"
+            "    uint64_t start = get_time_ns();\n"
+            "}\n"
+        )
+        assert gate.check_text(source, "synthetic.c") == []
+
+    def test_an_empty_harness_list_is_exit_2(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(gate, "HARNESS_FILES", ())
+        assert gate.main(["--root", str(tmp_path)]) == 2
+
+    def test_the_clean_report_counts_every_file_and_lane(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """The OK line is a coverage claim; its numbers must be the real ones."""
+        assert gate.main(["--root", str(REPO_ROOT)]) == 0
+        out = capsys.readouterr().out
+        lanes = sum(
+            gate.class_draw_count((REPO_ROOT / rel).read_text(encoding="utf-8"))
+            for rel in gate.HARNESS_FILES
+        )
+        assert f"OK: {len(gate.HARNESS_FILES)} dudect harness file(s), {lanes} class draw(s)" in out
+
     def test_the_real_harnesses_all_yield_windows(self) -> None:
         for rel in gate.HARNESS_FILES:
             text = (REPO_ROOT / rel).read_text(encoding="utf-8")

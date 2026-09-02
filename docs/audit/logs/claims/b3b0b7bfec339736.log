@@ -1,0 +1,3 @@
+$ grep -c 'AMA_DILITHIUM_SVE2_SCRUB' src/c/sve2/ama_dilithium_sve2.c
+# exit=0 duration=0.004s
+6

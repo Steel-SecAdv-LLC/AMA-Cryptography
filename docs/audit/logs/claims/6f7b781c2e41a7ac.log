@@ -1,0 +1,5 @@
+$ git show 27337e5:tools/check_compiler_warnings.py | grep -c 'name="'; grep -c 'name="' tools/check_compiler_warnings.py; git diff 27337e5^ 27337e5 -- src/c tests/c benchmarks | grep -c '^+.*pragma'
+# exit=1 duration=0.020s
+3
+3
+0

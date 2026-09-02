@@ -1,0 +1,6 @@
+$ grep -n '#define KYBER_XOF_BLOCKBYTES 168u\|#define KYBER_XOF_INITIAL_BLOCKS 4u\|_Static_assert(KYBER_XOF_BLOCKBYTES % 3u == 0u' src/c/ama_kyber.c; python -c 'print(4*168, 672//3*2)'
+# exit=0 duration=0.034s
+322:#define KYBER_XOF_BLOCKBYTES 168u
+330:#define KYBER_XOF_INITIAL_BLOCKS 4u
+332:_Static_assert(KYBER_XOF_BLOCKBYTES % 3u == 0u,
+672 448

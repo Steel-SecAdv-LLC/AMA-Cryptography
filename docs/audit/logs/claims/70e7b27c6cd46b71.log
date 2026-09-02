@@ -1,0 +1,4 @@
+$ grep -nP "^\t@semgrep " Makefile; grep -n "semgrep==1.74.0" .github/workflows/ci.yml
+# exit=0 duration=0.006s
+242:	@semgrep --config .semgrep.yml ama_cryptography/ setup.py tools/ --json -o semgrep-report.json
+861:        python -m pip install semgrep==1.74.0

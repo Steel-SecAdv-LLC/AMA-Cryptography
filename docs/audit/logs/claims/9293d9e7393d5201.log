@@ -1,0 +1,8 @@
+$ cppcheck --enable=warning,performance,portability --suppress=missingIncludeSystem --suppress=unusedFunction --suppress=shiftTooManyBitsSigned --inline-suppr --std=c11 -Iinclude/ -DAMA_USE_NATIVE_PQC -DPATH_MAX=4096 --force src/c/ama_nistp.c src/c/ama_kyber.c src/c/ama_dilithium.c 2>&1 | grep -E '^src/c/.*\[uninitvar\]'
+# exit=0 duration=15.561s
+src/c/ama_nistp.c:699:10: error: Uninitialized variable: out [uninitvar]
+src/c/ama_nistp.c:801:10: warning: Uninitialized variable: out [uninitvar]
+src/c/ama_nistp.c:1168:10: error: Uninitialized variable: out [uninitvar]
+src/c/ama_kyber.c:577:31: warning: Uninitialized variable: mat [uninitvar]
+src/c/ama_kyber.c:577:31: warning: Uninitialized variable: mat [uninitvar]
+src/c/ama_dilithium.c:2363:51: warning: Uninitialized variable: w1_packed [uninitvar]

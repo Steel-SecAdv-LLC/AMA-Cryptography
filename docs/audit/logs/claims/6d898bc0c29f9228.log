@@ -1,0 +1,3 @@
+$ python -c "from ama_cryptography.monitoring import ResonanceTimingMonitor as R; m=R(); [m.record_timing('op',5.0) for _ in range(100)]; r=m.detect_resonance('op'); print(sorted(k for k in r if k in ('threshold_ratio','false_alarm_rate','scanned_bins')))"
+# exit=0 duration=0.542s
+['false_alarm_rate', 'scanned_bins', 'threshold_ratio']

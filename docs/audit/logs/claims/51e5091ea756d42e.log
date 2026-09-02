@@ -1,0 +1,4 @@
+$ grep -c 'stack.enter_context(_CBufferViews' tests/test_c_buffer_views.py; python -c "import re;s=open('tests/test_c_buffer_views.py').read();print(len(re.findall(r'with pytest\.raises\([^\n]*\):\n\s*with _CBufferViews\([^\n]*\):\n\s*pass', s)))"
+# exit=0 duration=0.035s
+3
+0

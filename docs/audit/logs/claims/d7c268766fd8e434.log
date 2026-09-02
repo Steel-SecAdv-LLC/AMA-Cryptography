@@ -1,0 +1,4 @@
+$ grep -n 'ON_DEMAND_CLAIMS: frozenset\[str\] = frozenset({"pattern_analysis_overhead"})\|"--require-complete",' benchmarks/validation_suite.py
+# exit=0 duration=0.004s
+60:ON_DEMAND_CLAIMS: frozenset[str] = frozenset({"pattern_analysis_overhead"})
+694:        "--require-complete",

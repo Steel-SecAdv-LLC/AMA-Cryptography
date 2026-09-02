@@ -1,0 +1,4 @@
+$ python -c "q=3329;M=330282857;S=40;ds=(1,4,5,10,11)
+print('M_ok',M==-(-2**40//q),'pairs',sum(1 for d in ds for x in range(q)),'mismatches',sum(1 for d in ds for x in range(q) if ((((x<<d)+q//2)*M)>>S)&((1<<d)-1)!=((((x<<d)+q//2)//q))&((1<<d)-1)),'overflows',sum(1 for d in ds for x in range(q) if ((x<<d)+q//2)*M>=2**64))"
+# exit=0 duration=0.037s
+M_ok True pairs 16645 mismatches 0 overflows 0

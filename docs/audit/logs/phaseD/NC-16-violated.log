@@ -1,0 +1,4 @@
+FAIL: 1 of 581 files carry a non-canonical header:
+  - tools/nc_probe_noheader.py: missing license header
+
+Run `python tools/check_headers.py --apply` to normalize them.

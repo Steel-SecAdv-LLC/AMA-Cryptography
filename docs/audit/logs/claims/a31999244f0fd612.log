@@ -1,0 +1,3 @@
+$ grep -cE "^\s+except AttributeError" tests/test_self_test_coverage.py
+# exit=1 duration=0.004s
+0

@@ -1,0 +1,3 @@
+$ grep -n 'six extensions, signed on the platform that built them' SECURITY.md
+# exit=0 duration=0.005s
+566:six extensions, signed on the platform that built them, keyed by exact

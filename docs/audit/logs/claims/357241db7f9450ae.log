@@ -1,0 +1,4 @@
+$ git ls-files -s .github/scripts/apt-install.sh; grep -n 'assert mode\[0\] == "100755"' tests/test_apt_retry_gate.py
+# exit=0 duration=0.007s
+100755 9463ce5c64e3864e2ac1fdd18947cbe7ed455e81 0	.github/scripts/apt-install.sh
+76:    assert mode[0] == "100755", f"git records mode {mode[0]}, not 100755"

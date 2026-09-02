@@ -1,0 +1,4 @@
+$ sed -n '/def test_every_failure_mode_is_one_exception_type/,/^        )/p' tests/test_artefact_cache_poisoning.py | grep -cE '^\s+b"'; sed -n '/def test_every_failure_mode_is_one_exception_type/,/raise AssertionError/p' tests/test_artefact_cache_poisoning.py | grep -c "continue  # the one exception"
+# exit=0 duration=0.007s
+5
+1

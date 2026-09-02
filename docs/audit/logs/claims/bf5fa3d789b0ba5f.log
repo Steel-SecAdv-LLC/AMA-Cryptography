@@ -1,0 +1,3 @@
+$ sed -n '/^## INVARIANT-15/,/^## INVARIANT-16/p' INVARIANTS.md | grep -cE 'Windows\*\* \(MSVC and MinGW-w64\): `InitOnceExecuteOnce`|selection is made on `_WIN32`, not on `_MSC_VER`'
+# exit=0 duration=0.006s
+2

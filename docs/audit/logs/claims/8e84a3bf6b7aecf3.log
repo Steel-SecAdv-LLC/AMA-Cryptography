@@ -1,0 +1,5 @@
+$ grep -n -A14 '^def _absorb_entry' tools/verify_install_oob.py | grep 'to_bytes'
+# exit=0 duration=0.004s
+604-    chunks.append(len(section).to_bytes(4, "big"))
+606-    chunks.append(len(name_bytes).to_bytes(4, "big"))
+608-    chunks.append(len(body).to_bytes(8, "big"))

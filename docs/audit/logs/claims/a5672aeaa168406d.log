@@ -1,0 +1,5 @@
+$ grep -nE "^_TIMING_ITERATIONS = |^_DUDECT_THRESHOLD = |^# Single deterministic pass" ama_cryptography/_self_test.py
+# exit=0 duration=0.004s
+2379:_DUDECT_THRESHOLD = 4.5
+2380:# Single deterministic pass with high statistical power.  The previous
+2389:_TIMING_ITERATIONS = 10000

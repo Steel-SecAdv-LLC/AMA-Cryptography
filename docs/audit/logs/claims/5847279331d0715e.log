@@ -1,0 +1,3 @@
+$ git show 131de51~1:.github/workflows/fuzzing.yml | grep -c "max_len=4096"
+# exit=0 duration=0.005s
+3

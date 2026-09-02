@@ -1,0 +1,4 @@
+$ python -c 'import numpy as np;E=np.array([[0,4],[0,1]],float);print("max_sigma=%.3f"%max(np.linalg.eigvalsh((E+E.T)/2)))'; grep -n 'matrix = _symmetric_part(matrix)' ama_cryptography/equations.py
+# exit=0 duration=0.160s
+max_sigma=2.562
+583:    matrix = _symmetric_part(matrix)

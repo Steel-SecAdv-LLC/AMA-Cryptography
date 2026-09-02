@@ -1,0 +1,4 @@
+$ grep -n '"--build-config",\|selected_build_config = args.build_config or not explicit' tools/check_vendor_isolation.py
+# exit=0 duration=0.005s
+1315:        "--build-config",
+1335:    selected_build_config = args.build_config or not explicit

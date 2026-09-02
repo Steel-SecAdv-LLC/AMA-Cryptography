@@ -1,0 +1,4 @@
+$ grep -nE "ama_ed25519_keypair\(uint8_t public_key\[32\], uint8_t secret_key\[64\]\);" include/ama_cryptography.h wiki/C-API-Reference.md
+# exit=0 duration=0.004s
+include/ama_cryptography.h:1220:AMA_API ama_error_t ama_ed25519_keypair(uint8_t public_key[32], uint8_t secret_key[64]);
+wiki/C-API-Reference.md:248:ama_error_t ama_ed25519_keypair(uint8_t public_key[32], uint8_t secret_key[64]);

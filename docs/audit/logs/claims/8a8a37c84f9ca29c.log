@@ -1,0 +1,3 @@
+$ grep -n 'value_taking = {"--linecoverage-report"' tests/test_precommit_mypy_scope.py
+# exit=0 duration=0.004s
+81:    value_taking = {"--linecoverage-report", "--linecount-report", "--lineprecision-report"}

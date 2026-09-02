@@ -1,0 +1,4 @@
+$ grep -nE "a poisoned context becomes a fault, not a sub-floor pass|a healthy lane keeps its statistic and its effect size" tests/c/test_dudect.c
+# exit=0 duration=0.004s
+2716:    printf("  %-58s %s\n", "a poisoned context becomes a fault, not a sub-floor pass",
+2733:    printf("  %-58s %s\n", "a healthy lane keeps its statistic and its effect size",

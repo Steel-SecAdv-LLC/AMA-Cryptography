@@ -1,0 +1,3 @@
+$ grep -n "define DUDECT_CROP_FAILED" tests/c/dudect/dudect_percentile.h
+# exit=0 duration=0.004s
+132:#define DUDECT_CROP_FAILED (-1.0e308)

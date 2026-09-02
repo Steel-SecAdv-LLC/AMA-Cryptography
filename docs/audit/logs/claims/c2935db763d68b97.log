@@ -1,0 +1,3 @@
+$ grep -n "unexpected top-level" ama_cryptography/_artefact_source.py
+# exit=0 duration=0.004s
+196:                f"{path}: unexpected top-level {type(node).__name__} — the "

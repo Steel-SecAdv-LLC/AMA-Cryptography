@@ -1,0 +1,7 @@
+$ grep -n -- '-DAMA_ENABLE_SVE2=ON' .github/workflows/dudect.yml; grep -n 'option(AMA_ENABLE_SVE2' CMakeLists.txt; grep -n 'kyber-sve2\|sha3-sve2' .github/workflows/dudect.yml | head -2
+# exit=0 duration=0.009s
+442:          # -DAMA_ENABLE_SVE2=ON, so a 77 (Skipped) here means the
+497:            -DAMA_ENABLE_SVE2=ON \
+74:option(AMA_ENABLE_SVE2 "Enable ARM SVE2 optimizations (ARMv9)" OFF)
+412:          - kyber-sve2
+413:          - sha3-sve2

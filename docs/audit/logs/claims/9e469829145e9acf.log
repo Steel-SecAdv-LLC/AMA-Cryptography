@@ -1,0 +1,3 @@
+$ grep -c ACCENT_COLORS tools/generate_dashboards.py
+# exit=1 duration=0.005s
+0

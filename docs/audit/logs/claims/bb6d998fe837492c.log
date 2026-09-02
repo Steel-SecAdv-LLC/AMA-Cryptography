@@ -1,0 +1,3 @@
+$ grep -n "enumerates every bare draw" ama_cryptography/secure_channel.py
+# exit=0 duration=0.004s
+1209:        # tests/test_invariant41_rng_sweep.py enumerates every bare draw in the

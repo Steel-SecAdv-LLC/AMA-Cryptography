@@ -1,0 +1,3 @@
+$ python -c "import json; b=json.load(open('benchmarks/baseline.json'))['benchmarks']['full_package_create']; print(b['baseline_value'], b['tolerance_percent'], round(b['baseline_value']*(1-b['tolerance_percent']/100)))"
+# exit=0 duration=0.033s
+1983 45 1091

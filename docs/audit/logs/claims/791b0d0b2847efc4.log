@@ -1,0 +1,3 @@
+$ grep -n "python tools/check_action_pins.py" .github/workflows/ci.yml
+# exit=0 duration=0.006s
+968:        python tools/check_action_pins.py --strict

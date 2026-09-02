@@ -1,0 +1,6 @@
+$ grep -n 'SENTINEL\[32\]\|open("/proc/self/mem"\|ama_secure_alloc(' tests/c/test_secure_free_scrub.c
+# exit=0 duration=0.006s
+9: * ama_secure_alloc() buffer and, after release, scans every readable
+60:static const unsigned char SENTINEL[32] = {
+169:    int mem = open("/proc/self/mem", O_RDONLY);
+206:    unsigned char *buf = (unsigned char *)ama_secure_alloc(size);

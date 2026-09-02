@@ -1,0 +1,4 @@
+$ python tools/check_compiler_warnings.py /nonexistent-warnings.log >/dev/null 2>&1; echo missing_rc=$?; python tools/check_compiler_warnings.py /dev/null >/dev/null 2>&1; echo empty_rc=$?
+# exit=0 duration=0.087s
+missing_rc=1
+empty_rc=1

@@ -1,0 +1,4 @@
+$ grep -n 'def get_security_report\|"scorable_alerts": \[dict(alert) for alert in alerts_snapshot\]' ama_cryptography/monitoring.py
+# exit=0 duration=0.006s
+4057:    def get_security_report(self) -> Dict:
+4104:            "scorable_alerts": [dict(alert) for alert in alerts_snapshot],

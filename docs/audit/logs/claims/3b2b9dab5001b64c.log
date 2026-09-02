@@ -1,0 +1,3 @@
+$ grep -n "the fatal sentinel is a bounded band, not an open ray" tests/c/test_dudect.c
+# exit=0 duration=0.005s
+2750:    printf("  %-58s %s\n", "the fatal sentinel is a bounded band, not an open ray",

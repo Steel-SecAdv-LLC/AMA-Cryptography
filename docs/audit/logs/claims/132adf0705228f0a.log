@@ -1,0 +1,3 @@
+$ python -c "from array import array; mv=memoryview(array('I',[0xDEADBEEF]*8)); print(len(mv), mv.nbytes)"
+# exit=0 duration=0.030s
+8 32

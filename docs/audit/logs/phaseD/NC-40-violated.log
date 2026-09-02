@@ -1,0 +1,1 @@
+ERROR: ml_kem_1024_kat.json: pinned vector does not match the vendored NIST source. Re-run tools/build_post_kats.py, or investigate the drift.

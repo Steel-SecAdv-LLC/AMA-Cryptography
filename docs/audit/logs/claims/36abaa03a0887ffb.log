@@ -1,0 +1,5 @@
+$ grep -n "mean t = +9.93\|mean t = +43.38\|mean t = -8.68" tools/constant_time/dudect_harness.c
+# exit=0 duration=0.004s
+185:         * of 50,000 iterations: the asymmetric form gives mean t = +9.93
+267:         * form measured mean t = +43.38 (over threshold 10/10, 50,000
+312:         * pair of code paths.  The branchy form measured mean t = -8.68 (over

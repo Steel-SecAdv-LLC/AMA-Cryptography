@@ -1,0 +1,3 @@
+$ grep -c 'qemu-aarch64-static\|cmake/toolchains/aarch64-linux-gnu.cmake' .github/workflows/arm-qemu.yml
+# exit=0 duration=0.006s
+6

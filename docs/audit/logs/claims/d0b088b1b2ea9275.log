@@ -1,0 +1,7 @@
+$ grep -n '{AMA_ML_KEM_512, "ML-KEM-512"}\|{AMA_ML_KEM_768, "ML-KEM-768"}\|{AMA_ML_KEM_1024, "ML-KEM-1024"}\|TEST 5: deterministic keygen is byte-identical' tests/c/test_kyber_sample_ntt.c; ctest --test-dir build-release -N | grep -c test_kyber_sample_ntt
+# exit=0 duration=0.111s
+312:        {AMA_ML_KEM_512, "ML-KEM-512"},
+313:        {AMA_ML_KEM_768, "ML-KEM-768"},
+314:        {AMA_ML_KEM_1024, "ML-KEM-1024"},
+319:    printf("TEST 5: deterministic keygen is byte-identical at every window size\n");
+1

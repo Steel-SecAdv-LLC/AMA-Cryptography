@@ -1,0 +1,3 @@
+$ grep -c '"margin_percent"' benchmarks/benchmark-results.json
+# exit=0 duration=0.005s
+19

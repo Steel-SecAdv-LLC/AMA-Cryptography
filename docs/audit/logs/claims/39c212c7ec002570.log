@@ -1,0 +1,4 @@
+$ grep -n 'exits 2' SECURITY.md
+# exit=0 duration=0.005s
+457:is. Without `--expected-pubkey` the tool exits 2 rather than reporting a
+656:   gate the command exits 2 with a remediation message.  See

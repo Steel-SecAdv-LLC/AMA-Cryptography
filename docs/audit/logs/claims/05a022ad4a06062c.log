@@ -1,0 +1,4 @@
+$ grep -nE "deliberately not read from the manifest|def test_anchor_files_still_hash_to_their_recorded_digest" tests/test_vector_provenance_gate.py
+# exit=0 duration=0.004s
+113:# The anchors — deliberately not read from the manifest
+118:def test_anchor_files_still_hash_to_their_recorded_digest(

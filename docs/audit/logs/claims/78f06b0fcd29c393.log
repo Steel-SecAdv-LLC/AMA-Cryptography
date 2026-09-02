@@ -1,0 +1,3 @@
+$ grep -n 'degrade, never brick import (AUDIT-15)' ama_cryptography/crypto_api.py
+# exit=0 duration=0.005s
+59:except Exception as _monitor_persist_exc:  # noqa: BLE001 -- degrade, never brick import (AUDIT-15)

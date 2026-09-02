@@ -1,0 +1,5 @@
+$ grep -n "asymmetr" tools/constant_time/dudect_crypto.c | head -3
+# exit=0 duration=0.004s
+283: * fixed-sign asymmetry a real first-vs-last-byte leak would show).
+300: * asymmetry and no class-dependent branch feeds the timed region.  A leaky
+452: * Two asymmetries had to be removed before this lane measures the hash

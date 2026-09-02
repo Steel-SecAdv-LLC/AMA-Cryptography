@@ -1,0 +1,4 @@
+$ grep -c 'barrett_reduce_dil_neon(' src/c/neon/ama_dilithium_neon.c; grep -n 'There is deliberately no NEON Barrett reduction here' src/c/neon/ama_dilithium_neon.c
+# exit=0 duration=0.006s
+0
+40:/* There is deliberately no NEON Barrett reduction here.

@@ -1,0 +1,3 @@
+$ readelf -d build-release/lib/libama_cryptography.so | grep NEEDED | sed 's/.*\[\(.*\)\]/\1/' | sort | tr '\n' ' '
+# exit=0 duration=0.009s
+ld-linux-x86-64.so.2 libc.so.6 

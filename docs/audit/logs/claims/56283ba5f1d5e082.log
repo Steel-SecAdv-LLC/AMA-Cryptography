@@ -1,0 +1,4 @@
+$ grep -n 'BACKOFF_UNIT="${APT_RETRY_BACKOFF:-15}"' .github/scripts/apt-install.sh tests/test_apt_retry_gate.py
+# exit=0 duration=0.005s
+.github/scripts/apt-install.sh:119:BACKOFF_UNIT="${APT_RETRY_BACKOFF:-15}"
+tests/test_apt_retry_gate.py:431:    assert 'BACKOFF_UNIT="${APT_RETRY_BACKOFF:-15}"' in body, (

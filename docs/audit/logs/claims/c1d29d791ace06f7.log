@@ -1,0 +1,6 @@
+$ grep -n "_SENTENCE_SPLIT_RE = re.compile\|for sentence in _SENTENCE_SPLIT_RE.split(block):\|if _is_negated(sentence):" tools/check_verification_claim_honesty.py
+# exit=0 duration=0.004s
+472:        for sentence in _SENTENCE_SPLIT_RE.split(block):
+473:            if _is_negated(sentence):
+740:_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+776:        for sentence in _SENTENCE_SPLIT_RE.split(block):

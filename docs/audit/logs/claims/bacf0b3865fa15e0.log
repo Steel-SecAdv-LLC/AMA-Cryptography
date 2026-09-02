@@ -1,0 +1,39 @@
+$ python benchmarks/check_baseline_justification.py --help
+# exit=0 duration=0.054s
+usage: check_baseline_justification.py [-h] [--base-ref BASE_REF]
+                                       [--head-ref HEAD_REF]
+                                       [--pr-body PR_BODY]
+                                       [--pr-body-file PR_BODY_FILE]
+
+Baseline.json change guard. Purpose ------- Enforce that every modification to
+`benchmarks/baseline.json` is accompanied, in the PR's commit messages and/or
+PR body, by: 1. A **line-item justification per primitive** — each primitive
+whose `baseline_value` changed must be mentioned by its JSON key. 2. A
+**measured ops/sec (or latency) number** — at least one numeric measurement
+must appear in the justification text so reviewers can audit the new baseline
+against a reproducible measurement. 3. A **CI-runner identifier** — the text
+must name the runner on which the measurement was produced (e.g. ``ubuntu-
+latest``, ``macos-14``, ``self-hosted``, ``benchmark_c_raw``, an explicit
+hardware string). The goal is to prevent silent baseline adjustments that mask
+real regressions (the pattern documented in docs/BENCHMARK_HISTORY.md as
+commits `c9f4722` and `6b2cf82`). Usage ----- Runs in CI
+(`.github/workflows/baseline-guard.yml`) but is fully reproducible locally::
+python benchmarks/check_baseline_justification.py \ --base-ref origin/main \
+--head-ref HEAD \ --pr-body "$(cat /tmp/pr-body.md)" Exit codes ---------- * 0
+— baseline.json either unchanged, or all changes are justified. * 1 —
+baseline.json changed but at least one requirement is unmet. * 2 — internal
+error (bad refs, JSON parse failure, git unavailable).
+
+options:
+  -h, --help            show this help message and exit
+  --base-ref BASE_REF   Base git ref to compare against (default:
+                        origin/main).
+  --head-ref HEAD_REF   Head git ref (default: HEAD).
+  --pr-body PR_BODY     Optional PR body text, appended to the commit log for
+                        justification scanning. Mutually exclusive with --pr-
+                        body-file.
+  --pr-body-file PR_BODY_FILE
+                        Path to a file containing the PR body. Preferred over
+                        --pr-body in CI because it avoids shell-quoting
+                        hazards when the body contains $, ", backticks, or
+                        backslashes.

@@ -1,0 +1,3 @@
+$ grep -n 'target = tmp_path / missing_path' tests/test_fuzz_target_registration.py
+# exit=0 duration=0.004s
+282:    target = tmp_path / missing_path

@@ -1,0 +1,4 @@
+$ grep -n "^#if defined(__ARM_FEATURE_AES)" src/c/neon/ama_aes_gcm_neon.c
+# exit=0 duration=0.004s
+22:#if defined(__ARM_FEATURE_AES)
+83:#if defined(__ARM_FEATURE_AES) /* PMULL is part of Crypto Extensions */

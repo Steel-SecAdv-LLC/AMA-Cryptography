@@ -1,0 +1,3 @@
+$ sed -n '/^done:/,/^}/p' src/c/ama_secp256k1.c | grep -c 'memzero(&R,\|memzero(&Raff,\|memzero(x_bytes'
+# exit=0 duration=0.007s
+3

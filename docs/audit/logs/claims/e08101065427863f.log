@@ -1,0 +1,5 @@
+$ grep -c '"--defined-only"' tests/test_aesni_is_not_gated_on_avx2.py; grep -c "flto=auto" CMakeLists.txt; grep -E "^AMA_ENABLE_LTO" build-release/CMakeCache.txt
+# exit=0 duration=0.009s
+1
+1
+AMA_ENABLE_LTO:BOOL=ON

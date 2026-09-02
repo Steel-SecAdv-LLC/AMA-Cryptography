@@ -1,0 +1,9 @@
+$ grep -nE "^def test_" tests/test_documented_c_prototypes_match_headers.py
+# exit=0 duration=0.005s
+184:def test_the_header_corpus_is_substantial() -> None:
+192:def test_the_page_declares_a_substantial_api() -> None:
+206:def test_every_documented_prototype_matches_the_header(case: tuple[Path, str]) -> None:
+225:def test_a_documented_internal_entry_point_is_declared_as_such(
+252:def test_the_internal_allowlist_has_no_stale_entry() -> None:
+262:def test_the_documented_prototypes_compile_against_the_real_header() -> None:
+335:def test_the_internal_allowlist_is_spelled_with_forward_slashes() -> None:

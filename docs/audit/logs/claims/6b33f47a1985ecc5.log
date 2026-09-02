@@ -1,0 +1,5 @@
+$ grep -n "thirteen entry points" INVARIANTS.md .github/workflows/ci.yml; grep -n "eleven" INVARIANTS.md .github/workflows/ci.yml | grep -i "keygen\|entry point"; echo rc=$?
+# exit=0 duration=0.007s
+INVARIANTS.md:2496:calls a hand-written list of thirteen entry points, builds its `expected` list
+.github/workflows/ci.yml:1279:      # WRITTEN list of thirteen entry points, builds `expected` alongside, and
+rc=1

@@ -1,0 +1,4 @@
+$ grep -n "def test_elf_defined_symbols_match_nm\|\"--defined-only\"" tests/test_vendor_isolation_gate.py
+# exit=0 duration=0.005s
+504:    def test_elf_defined_symbols_match_nm(self) -> None:
+521:            [nm, "-D", "--defined-only", str(built)],

@@ -1,0 +1,3 @@
+$ python -c "import sys; sys.path.insert(0,'benchmarks'); import check_baseline_justification as c; from collections import Counter; ch=c._changes_introduced_by('37d8b3b'); print(len(ch), sorted(Counter(k.split('::')[0] for k in ch).items()))"
+# exit=0 duration=0.063s
+76 [('benchmarks/arm-baseline.json', 38), ('benchmarks/baseline.json', 38)]

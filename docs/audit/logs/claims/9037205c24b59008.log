@@ -1,0 +1,3 @@
+$ grep -n 'check_bound("privkey check' tests/c/test_dilithium_invntt_bound.c
+# exit=0 duration=0.006s
+129:    check_bound("privkey check (t = A*s1 + s2)");

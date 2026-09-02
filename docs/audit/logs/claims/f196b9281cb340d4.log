@@ -1,0 +1,5 @@
+$ grep -nE "def test_the_committed_page_matches_the_generator_modulo_timestamp|def test_every_rank_phrase_in_notes_matches_the_measured_rank|def test_the_rank_reconciliation_is_not_vacuous" tests/test_competitive_page.py
+# exit=0 duration=0.004s
+106:    def test_the_committed_page_matches_the_generator_modulo_timestamp(
+135:    def test_every_rank_phrase_in_notes_matches_the_measured_rank(
+169:    def test_the_rank_reconciliation_is_not_vacuous(self, generator: ModuleType) -> None:

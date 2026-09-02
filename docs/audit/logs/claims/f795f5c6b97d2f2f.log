@@ -1,0 +1,4 @@
+$ grep -n -B1 'COMPILE_FLAGS "-maes -mpclmul -mssse3 -msse4.1"' CMakeLists.txt
+# exit=0 duration=0.005s
+764-            set_source_files_properties(${AMA_X86_AESNI_SOURCES} PROPERTIES
+765:                COMPILE_FLAGS "-maes -mpclmul -mssse3 -msse4.1")

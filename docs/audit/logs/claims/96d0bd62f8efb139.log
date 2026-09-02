@@ -1,0 +1,4 @@
+$ grep -n 'ExceptionGroup of ten sub-exceptions\|Python 3.14 only, while 3.10 through 3.13 stayed green' tests/test_wycheproof_fetch_retry.py
+# exit=0 duration=0.004s
+123:    ExceptionGroup of ten sub-exceptions against
+125:    Python 3.14 only, while 3.10 through 3.13 stayed green.

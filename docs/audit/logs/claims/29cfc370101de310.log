@@ -1,0 +1,6 @@
+$ grep -n '^        raise CryptoModuleError(\|_diag_env = "AMA_POST_DIAGNOSTIC_IMPORT"' ama_cryptography/__init__.py; grep -n '^## INVARIANT-39\|^## INVARIANT-40' INVARIANTS.md
+# exit=0 duration=0.007s
+314:    _diag_env = "AMA_POST_DIAGNOSTIC_IMPORT"
+496:        raise CryptoModuleError(
+2161:## INVARIANT-39 — A Failed POST Must Fail the Import, and the Error State Must Inhibit Output
+2355:## INVARIANT-40 — The Executed Bytecode Must Match the Signed Source

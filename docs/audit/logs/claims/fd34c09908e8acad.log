@@ -1,0 +1,4 @@
+$ git show -s --format=%B 47ce5ef | grep -nE 'recorded 0 calls to each|2 secure_memzero calls'
+# exit=0 duration=0.006s
+14:pqc_benchmark_functions — recorded 0 calls to each.  The counter is not
+15:vacuous: the same instrumentation records 2 secure_memzero calls during

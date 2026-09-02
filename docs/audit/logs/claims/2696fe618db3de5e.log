@@ -1,0 +1,3 @@
+$ grep -n "ama_build_optimization_probe" src/c/internal/ama_testing_exports.h
+# exit=0 duration=0.006s
+163:int ama_build_optimization_probe(void);

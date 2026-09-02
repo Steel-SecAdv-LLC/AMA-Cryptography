@@ -1,0 +1,4 @@
+$ grep -nE 'getenv\("AMA_DISPATCH_NO_AUTOTUNE"\)|Auto-tune: disabled via AMA_DISPATCH_NO_AUTOTUNE=1' src/c/dispatch/ama_dispatch.c
+# exit=0 duration=0.004s
+1937:    const char *no_autotune = getenv("AMA_DISPATCH_NO_AUTOTUNE");
+2303:            "[AMA Dispatch] Auto-tune: disabled via AMA_DISPATCH_NO_AUTOTUNE=1\n");

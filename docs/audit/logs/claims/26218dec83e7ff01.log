@@ -1,0 +1,5 @@
+$ grep -n '"find_package",\|"target_link_libraries",\|def _strip_cmake_comments' tools/check_vendor_isolation.py
+# exit=0 duration=0.005s
+482:    "find_package",
+486:    "target_link_libraries",
+507:def _strip_cmake_comments(text: str) -> str:

@@ -1,0 +1,4 @@
+$ grep -n 'install(TARGETS ama_cryptography_static' CMakeLists.txt; grep -c '_static' ama_cryptography.pc.in
+# exit=1 duration=0.006s
+1240:    install(TARGETS ama_cryptography_static
+0

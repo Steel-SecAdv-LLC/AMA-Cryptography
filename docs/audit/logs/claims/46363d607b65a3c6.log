@@ -1,0 +1,3 @@
+$ grep -c "python3 tools/check_secret_division.py" .github/workflows/arm-qemu.yml
+# exit=0 duration=0.005s
+2

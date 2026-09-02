@@ -1,0 +1,3 @@
+$ grep -n 'Valgrind ran $ran/$expected targets' .github/workflows/static-analysis.yml
+# exit=0 duration=0.004s
+722:            echo "::error::Valgrind ran $ran/$expected targets — refusing to report success on a partial run."

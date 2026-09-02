@@ -1,0 +1,570 @@
+-- The C compiler identification is GNU 13.3.0
+-- The CXX compiler identification is GNU 13.3.0
+-- Detecting C compiler ABI info
+-- Detecting C compiler ABI info - done
+-- Check for working C compiler: /usr/bin/cc - skipped
+-- Detecting C compile features
+-- Detecting C compile features - done
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: /usr/bin/c++ - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- Performing Test AMA_HAVE_RELRO_NOW
+-- Performing Test AMA_HAVE_RELRO_NOW - Success
+-- Performing Test AMA_HAVE_NOEXECSTACK
+-- Performing Test AMA_HAVE_NOEXECSTACK - Success
+-- Performing Test AMA_HAVE_CF_PROTECTION
+-- Performing Test AMA_HAVE_CF_PROTECTION - Success
+-- CFI: x86 IBT + shadow stack (-fcf-protection=full)
+-- SIMD: AVX2 hand-written intrinsics enabled (8 algorithms incl. VAES AES-GCM)
+-- X25519: MULX+ADX fe64 kernel enabled (BMI2 + ADX, x86-64 GCC/Clang)
+-- NIST P-curves: 4-limb Montgomery MULX+ADX kernel enabled
+-- SHA-3: Keccak-f[1600] BMI1/BMI2 kernel enabled (x86 GCC/Clang)
+-- SHA-NI: per-file flags for ama_sha256_ni.c only
+-- AES-NI/PCLMULQDQ: per-file flags for ama_aes_gcm_avx2.c (architecture-gated, independent of AMA_ENABLE_SIMD)
+-- Native PQC enabled: ML-DSA-65, Kyber-1024, SPHINCS+-256f (zero OpenSSL dependency)
+-- Ed25519: donna x86-64 assembly scalar mult (vendored, public domain)
+-- AES backend: constant-time bitsliced S-box (cache-timing safe)
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD - Success
+-- Found Threads: TRUE
+-- Performing Test AMA_HAVE_FAT_LTO
+-- Performing Test AMA_HAVE_FAT_LTO - Success
+-- 
+-- AMA Cryptography Configuration Summary
+-- =====================================
+-- Version:          5.0.0
+-- Build type:       Release
+-- C compiler:       /usr/bin/cc
+-- Install prefix:   /usr/local
+-- 
+-- Build options:
+--   Shared library: ON
+--   Static library: ON
+--   Tests:          ON
+--   Examples:       OFF
+--   SIMD:           ON
+--   AVX2:           ON
+--   AVX-512:        OFF
+--   NEON:           ON (requested; inactive on this target)
+--   SVE2:           OFF
+--   Sanitizers:     OFF
+--   Fuzzing:        OFF
+--   dudect:         OFF
+--   AES consttime:  ON
+--   AES table-insecure opt-in: OFF
+--   Kyber diagnostics: OFF (forced ON for tests target only)
+--   LTO:            ON
+--   Ed25519 donna:  ON
+-- 
+-- Post-Quantum Cryptography:
+--   Native PQC:     ON
+--   PQC backend:    NATIVE
+--   PQC algorithms: ML-DSA-65 (ama_dilithium.c), Kyber-1024 (ama_kyber.c), SLH-DSA-SHA2-256f / SPHINCS+-256f (ama_slhdsa.c)
+--   FIPS compliance: FIPS 203 (ML-KEM), FIPS 204 (ML-DSA), FIPS 205 (SLH-DSA)
+-- 
+-- Configuring done (0.7s)
+-- Generating done (0.1s)
+-- Build files have been written to: /home/user/AMA-Cryptography/build-donna
+[  0%] Building C object CMakeFiles/ama_cryptography_shared.dir/src/c/ama_core.c.o
+[  0%] Building C object tests/c/CMakeFiles/test_platform_rand_generic.dir/test_platform_rand_generic.c.o
+[  0%] Building C object CMakeFiles/ama_cryptography_static.dir/src/c/ama_core.c.o
+[  1%] Building C object CMakeFiles/ama_cryptography_test.dir/src/c/ama_core.c.o
+[  1%] Building C object tests/c/CMakeFiles/test_platform_rand_generic.dir/__/__/src/c/ama_platform_rand.c.o
+[  1%] Building C object CMakeFiles/ama_cryptography_shared.dir/src/c/ama_consttime.c.o
+[  1%] Building C object CMakeFiles/ama_cryptography_test.dir/src/c/ama_consttime.c.o
+[  2%] Linking C executable ../../bin/test_platform_rand_generic
+[  3%] Building C object CMakeFiles/ama_cryptography_shared.dir/src/c/ama_sha3.c.o
+[  3%] Building C object CMakeFiles/ama_cryptography_test.dir/src/c/ama_sha3.c.o
+[  4%] Building C object CMakeFiles/ama_cryptography_static.dir/src/c/ama_consttime.c.o
+[  4%] Building C object CMakeFiles/ama_cryptography_shared.dir/src/c/ama_hkdf.c.o
+[  4%] Building C object CMakeFiles/ama_cryptography_static.dir/src/c/ama_sha3.c.o
+[  5%] Building C object CMakeFiles/ama_cryptography_test.dir/src/c/ama_hkdf.c.o
+[  5%] Built target test_platform_rand_generic
+[  5%] Building C object CMakeFiles/ama_cryptography_test.dir/src/c/ama_agent_binding.c.o
+[  5%] Building C object CMakeFiles/ama_cryptography_shared.dir/src/c/ama_agent_binding.c.o
+[  5%] Building C object CMakeFiles/ama_cryptography_static.dir/src/c/ama_hkdf.c.o
+[  6%] Building C object CMakeFiles/ama_cryptography_test.dir/src/c/ama_ascon.c.o
+[  7%] Building C object CMakeFiles/ama_cryptography_shared.dir/src/c/ama_ascon.c.o
+[  7%] Building C object CMakeFiles/ama_cryptography_test.dir/src/c/ama_sha256.c.o
+[  7%] Building C object CMakeFiles/ama_cryptography_shared.dir/src/c/ama_sha256.c.o
+[  7%] Building C object CMakeFiles/ama_cryptography_test.dir/src/c/ama_sha256_ni.c.o
+[  8%] Building C object CMakeFiles/ama_cryptography_shared.dir/src/c/ama_sha256_ni.c.o
+[  9%] Building C object CMakeFiles/ama_cryptography_test.dir/src/c/ama_hmac_sha256.c.o
+[  9%] Building C object CMakeFiles/ama_cryptography_test.dir/src/c/ama_hmac_sha384.c.o
+[ 10%] Building C object CMakeFiles/ama_cryptography_static.dir/src/c/ama_agent_binding.c.o
+[ 10%] Building C object CMakeFiles/ama_cryptography_test.dir/src/c/ama_sha512.c.o
+[ 10%] Building C object CMakeFiles/ama_cryptography_shared.dir/src/c/ama_hmac_sha256.c.o
+[ 11%] Building C object CMakeFiles/ama_cryptography_test.dir/src/c/ama_pbkdf2.c.o
+[ 11%] Building C object CMakeFiles/ama_cryptography_static.dir/src/c/ama_ascon.c.o
+[ 11%] Building C object CMakeFiles/ama_cryptography_shared.dir/src/c/ama_hmac_sha384.c.o
+[ 11%] Building C object CMakeFiles/ama_cryptography_test.dir/src/c/ama_lms.c.o
+[ 12%] Building C object CMakeFiles/ama_cryptography_shared.dir/src/c/ama_sha512.c.o
+[ 12%] Building C object CMakeFiles/ama_cryptography_shared.dir/src/c/ama_pbkdf2.c.o
+[ 13%] Building C object CMakeFiles/ama_cryptography_test.dir/src/c/ama_aes_gcm.c.o
+[ 14%] Building C object CMakeFiles/ama_cryptography_shared.dir/src/c/ama_lms.c.o
+[ 14%] Building C object CMakeFiles/ama_cryptography_test.dir/src/c/ama_cpuid.c.o
+[ 14%] Building C object CMakeFiles/ama_cryptography_test.dir/src/c/ama_secure_memory.c.o
+[ 14%] Building C object CMakeFiles/ama_cryptography_shared.dir/src/c/ama_aes_gcm.c.o
+[ 14%] Building C object CMakeFiles/ama_cryptography_shared.dir/src/c/ama_cpuid.c.o
+[ 15%] Building C object CMakeFiles/ama_cryptography_test.dir/src/c/dispatch/ama_dispatch.c.o
+[ 16%] Building C object CMakeFiles/ama_cryptography_shared.dir/src/c/ama_secure_memory.c.o
+[ 16%] Building C object CMakeFiles/ama_cryptography_shared.dir/src/c/dispatch/ama_dispatch.c.o
+[ 16%] Building C object CMakeFiles/ama_cryptography_test.dir/src/c/avx2/ama_sha3_avx2.c.o
+[ 17%] Building C object CMakeFiles/ama_cryptography_static.dir/src/c/ama_sha256.c.o
+[ 17%] Building C object CMakeFiles/ama_cryptography_static.dir/src/c/ama_sha256_ni.c.o
+[ 17%] Building C object CMakeFiles/ama_cryptography_static.dir/src/c/ama_hmac_sha256.c.o
+[ 18%] Building C object CMakeFiles/ama_cryptography_shared.dir/src/c/avx2/ama_sha3_avx2.c.o
+[ 19%] Building C object CMakeFiles/ama_cryptography_test.dir/src/c/avx2/ama_kyber_avx2.c.o
+[ 20%] Building C object CMakeFiles/ama_cryptography_static.dir/src/c/ama_hmac_sha384.c.o
+[ 20%] Building C object CMakeFiles/ama_cryptography_test.dir/src/c/avx2/ama_dilithium_avx2.c.o
+[ 20%] Building C object CMakeFiles/ama_cryptography_static.dir/src/c/ama_sha512.c.o
+[ 21%] Building C object CMakeFiles/ama_cryptography_static.dir/src/c/ama_pbkdf2.c.o
+[ 21%] Building C object CMakeFiles/ama_cryptography_static.dir/src/c/ama_lms.c.o
+[ 21%] Building C object CMakeFiles/ama_cryptography_shared.dir/src/c/avx2/ama_kyber_avx2.c.o
+[ 21%] Building C object CMakeFiles/ama_cryptography_test.dir/src/c/avx2/ama_sphincs_avx2.c.o
+[ 21%] Building C object CMakeFiles/ama_cryptography_shared.dir/src/c/avx2/ama_dilithium_avx2.c.o
+[ 21%] Building C object CMakeFiles/ama_cryptography_static.dir/src/c/ama_aes_gcm.c.o
+[ 22%] Building C object CMakeFiles/ama_cryptography_static.dir/src/c/ama_cpuid.c.o
+[ 23%] Building C object CMakeFiles/ama_cryptography_test.dir/src/c/avx2/ama_aes_gcm_vaes_avx2.c.o
+[ 23%] Building C object CMakeFiles/ama_cryptography_static.dir/src/c/ama_secure_memory.c.o
+[ 24%] Building C object CMakeFiles/ama_cryptography_shared.dir/src/c/avx2/ama_sphincs_avx2.c.o
+[ 24%] Building C object CMakeFiles/ama_cryptography_test.dir/src/c/avx2/ama_chacha20poly1305_avx2.c.o
+[ 24%] Building C object CMakeFiles/ama_cryptography_static.dir/src/c/dispatch/ama_dispatch.c.o
+[ 24%] Building C object CMakeFiles/ama_cryptography_shared.dir/src/c/avx2/ama_aes_gcm_vaes_avx2.c.o
+[ 25%] Building C object CMakeFiles/ama_cryptography_static.dir/src/c/avx2/ama_sha3_avx2.c.o
+[ 26%] Building C object CMakeFiles/ama_cryptography_test.dir/src/c/avx2/ama_argon2_avx2.c.o
+[ 26%] Building C object CMakeFiles/ama_cryptography_shared.dir/src/c/avx2/ama_chacha20poly1305_avx2.c.o
+[ 26%] Building C object CMakeFiles/ama_cryptography_test.dir/src/c/avx2/ama_x25519_avx2.c.o
+[ 27%] Building C object CMakeFiles/ama_cryptography_shared.dir/src/c/avx2/ama_argon2_avx2.c.o
+[ 27%] Building C object CMakeFiles/ama_cryptography_static.dir/src/c/avx2/ama_kyber_avx2.c.o
+[ 27%] Building C object CMakeFiles/ama_cryptography_test.dir/src/c/avx2/ama_aes_gcm_avx2.c.o
+[ 27%] Building C object CMakeFiles/ama_cryptography_shared.dir/src/c/avx2/ama_x25519_avx2.c.o
+[ 28%] Building C object CMakeFiles/ama_cryptography_static.dir/src/c/avx2/ama_dilithium_avx2.c.o
+[ 29%] Building C object CMakeFiles/ama_cryptography_shared.dir/src/c/avx2/ama_aes_gcm_avx2.c.o
+[ 30%] Building C object CMakeFiles/ama_cryptography_test.dir/src/c/internal/ama_x25519_fe64_mulx.c.o
+[ 30%] Building C object CMakeFiles/ama_cryptography_test.dir/src/c/x86/ama_keccak_f1600_bmi.c.o
+[ 30%] Building C object CMakeFiles/ama_cryptography_test.dir/src/c/x86/ama_nistp_mont_mulx.c.o
+[ 31%] Building C object CMakeFiles/ama_cryptography_test.dir/src/c/ama_platform_rand.c.o
+[ 31%] Building C object CMakeFiles/ama_cryptography_test.dir/src/c/ama_kyber.c.o
+[ 32%] Building C object CMakeFiles/ama_cryptography_test.dir/src/c/ama_dilithium.c.o
+[ 32%] Building C object CMakeFiles/ama_cryptography_static.dir/src/c/avx2/ama_sphincs_avx2.c.o
+[ 32%] Building C object CMakeFiles/ama_cryptography_test.dir/src/c/ama_slhdsa.c.o
+[ 32%] Building C object CMakeFiles/ama_cryptography_test.dir/src/c/ama_secp256k1.c.o
+[ 32%] Building C object CMakeFiles/ama_cryptography_shared.dir/src/c/internal/ama_x25519_fe64_mulx.c.o
+[ 32%] Building C object CMakeFiles/ama_cryptography_shared.dir/src/c/x86/ama_keccak_f1600_bmi.c.o
+[ 33%] Building C object CMakeFiles/ama_cryptography_shared.dir/src/c/x86/ama_nistp_mont_mulx.c.o
+[ 34%] Building C object CMakeFiles/ama_cryptography_test.dir/src/c/ama_nistp.c.o
+[ 34%] Building C object CMakeFiles/ama_cryptography_shared.dir/src/c/ama_platform_rand.c.o
+[ 35%] Building C object CMakeFiles/ama_cryptography_shared.dir/src/c/ama_kyber.c.o
+[ 35%] Building C object CMakeFiles/ama_cryptography_static.dir/src/c/avx2/ama_aes_gcm_vaes_avx2.c.o
+[ 35%] Building C object CMakeFiles/ama_cryptography_shared.dir/src/c/ama_dilithium.c.o
+[ 35%] Building C object CMakeFiles/ama_cryptography_test.dir/src/c/ama_frost.c.o
+[ 36%] Building C object CMakeFiles/ama_cryptography_test.dir/src/c/ama_x25519.c.o
+In file included from /home/user/AMA-Cryptography/src/c/ama_x25519.c:51:
+/home/user/AMA-Cryptography/src/c/fe51.h: In function ‘fe51_mul_121665’:
+/home/user/AMA-Cryptography/src/c/fe51.h:188:22: warning: ISO C does not support ‘__int128’ types [-Wpedantic]
+  188 |     typedef unsigned __int128 uint128_t;
+      |                      ^~~~~~~~
+/home/user/AMA-Cryptography/src/c/fe51.h: In function ‘fe51_mul’:
+/home/user/AMA-Cryptography/src/c/fe51.h:258:22: warning: ISO C does not support ‘__int128’ types [-Wpedantic]
+  258 |     typedef unsigned __int128 uint128_t;
+      |                      ^~~~~~~~
+/home/user/AMA-Cryptography/src/c/fe51.h: In function ‘fe51_sq’:
+/home/user/AMA-Cryptography/src/c/fe51.h:311:22: warning: ISO C does not support ‘__int128’ types [-Wpedantic]
+  311 |     typedef unsigned __int128 uint128_t;
+      |                      ^~~~~~~~
+In file included from /home/user/AMA-Cryptography/src/c/ama_x25519.c:52:
+/home/user/AMA-Cryptography/src/c/fe64.h: At top level:
+/home/user/AMA-Cryptography/src/c/fe64.h:31:18: warning: ISO C does not support ‘__int128’ types [-Wpedantic]
+   31 | typedef unsigned __int128 uint128_t;
+      |                  ^~~~~~~~
+[ 36%] Building C object CMakeFiles/ama_cryptography_shared.dir/src/c/ama_slhdsa.c.o
+[ 36%] Building C object CMakeFiles/ama_cryptography_test.dir/src/c/ama_argon2.c.o
+[ 37%] Building C object CMakeFiles/ama_cryptography_static.dir/src/c/avx2/ama_chacha20poly1305_avx2.c.o
+[ 37%] Building C object CMakeFiles/ama_cryptography_test.dir/src/c/ama_chacha20poly1305.c.o
+[ 38%] Building C object CMakeFiles/ama_cryptography_shared.dir/src/c/ama_secp256k1.c.o
+[ 39%] Building C object CMakeFiles/ama_cryptography_test.dir/src/c/ed25519_donna_shim.c.o
+In file included from /home/user/AMA-Cryptography/src/c/vendor/ed25519-donna/ed25519-donna.h:12,
+                 from /home/user/AMA-Cryptography/src/c/vendor/ed25519-donna/ed25519_unit.h:17,
+                 from /home/user/AMA-Cryptography/src/c/vendor/ed25519-donna/ama_donna_unit.h:25,
+                 from /home/user/AMA-Cryptography/src/c/ed25519_donna_shim.c:70:
+/home/user/AMA-Cryptography/src/c/vendor/ed25519-donna/ed25519-donna-portable.h:50:42: warning: ISO C does not support ‘__int128’ types [-Wpedantic]
+   50 |                         typedef unsigned __int128 uint128_t;
+      |                                          ^~~~~~~~
+In file included from /home/user/AMA-Cryptography/src/c/vendor/ed25519-donna/ed25519-donna.h:56:
+/home/user/AMA-Cryptography/src/c/vendor/ed25519-donna/modm-donna-64bit.h: In function ‘sub256_modm_batch’:
+/home/user/AMA-Cryptography/src/c/vendor/ed25519-donna/modm-donna-64bit.h:13:35: warning: a label can only be part of a statement and a declaration is not a statement [-Wpedantic]
+   13 | #    define AMA_DONNA_FALLTHROUGH __attribute__((fallthrough))
+      |                                   ^~~~~~~~~~~~~
+/home/user/AMA-Cryptography/src/c/vendor/ed25519-donna/modm-donna-64bit.h:314:25: note: in expansion of macro ‘AMA_DONNA_FALLTHROUGH’
+  314 |                 case 0: AMA_DONNA_FALLTHROUGH;
+      |                         ^~~~~~~~~~~~~~~~~~~~~
+[ 39%] Building C object CMakeFiles/ama_cryptography_shared.dir/src/c/ama_nistp.c.o
+[ 40%] Building C object CMakeFiles/ama_cryptography_shared.dir/src/c/ama_frost.c.o
+[ 40%] Building C object CMakeFiles/ama_cryptography_test.dir/src/c/ama_aes_bitsliced.c.o
+[ 40%] Building C object CMakeFiles/ama_cryptography_shared.dir/src/c/ama_x25519.c.o
+In file included from /home/user/AMA-Cryptography/src/c/ama_x25519.c:51:
+/home/user/AMA-Cryptography/src/c/fe51.h: In function ‘fe51_mul_121665’:
+/home/user/AMA-Cryptography/src/c/fe51.h:188:22: warning: ISO C does not support ‘__int128’ types [-Wpedantic]
+  188 |     typedef unsigned __int128 uint128_t;
+      |                      ^~~~~~~~
+/home/user/AMA-Cryptography/src/c/fe51.h: In function ‘fe51_mul’:
+/home/user/AMA-Cryptography/src/c/fe51.h:258:22: warning: ISO C does not support ‘__int128’ types [-Wpedantic]
+  258 |     typedef unsigned __int128 uint128_t;
+      |                      ^~~~~~~~
+/home/user/AMA-Cryptography/src/c/fe51.h: In function ‘fe51_sq’:
+/home/user/AMA-Cryptography/src/c/fe51.h:311:22: warning: ISO C does not support ‘__int128’ types [-Wpedantic]
+  311 |     typedef unsigned __int128 uint128_t;
+      |                      ^~~~~~~~
+In file included from /home/user/AMA-Cryptography/src/c/ama_x25519.c:52:
+/home/user/AMA-Cryptography/src/c/fe64.h: At top level:
+/home/user/AMA-Cryptography/src/c/fe64.h:31:18: warning: ISO C does not support ‘__int128’ types [-Wpedantic]
+   31 | typedef unsigned __int128 uint128_t;
+      |                  ^~~~~~~~
+[ 41%] Linking C static library lib/libama_cryptography_test.a
+[ 41%] Built target ama_cryptography_test
+[ 41%] Building C object CMakeFiles/ama_cryptography_static.dir/src/c/avx2/ama_argon2_avx2.c.o
+[ 42%] Building C object CMakeFiles/ama_cryptography_static.dir/src/c/avx2/ama_x25519_avx2.c.o
+[ 42%] Building C object CMakeFiles/ama_cryptography_shared.dir/src/c/ama_argon2.c.o
+[ 42%] Building C object tests/c/CMakeFiles/test_consttime.dir/test_consttime.c.o
+[ 43%] Linking C executable ../../bin/test_consttime
+[ 44%] Building C object CMakeFiles/ama_cryptography_shared.dir/src/c/ama_chacha20poly1305.c.o
+[ 44%] Building C object CMakeFiles/ama_cryptography_shared.dir/src/c/ed25519_donna_shim.c.o
+In file included from /home/user/AMA-Cryptography/src/c/vendor/ed25519-donna/ed25519-donna.h:12,
+                 from /home/user/AMA-Cryptography/src/c/vendor/ed25519-donna/ed25519_unit.h:17,
+                 from /home/user/AMA-Cryptography/src/c/vendor/ed25519-donna/ama_donna_unit.h:25,
+                 from /home/user/AMA-Cryptography/src/c/ed25519_donna_shim.c:70:
+/home/user/AMA-Cryptography/src/c/vendor/ed25519-donna/ed25519-donna-portable.h:50:42: warning: ISO C does not support ‘__int128’ types [-Wpedantic]
+   50 |                         typedef unsigned __int128 uint128_t;
+      |                                          ^~~~~~~~
+In file included from /home/user/AMA-Cryptography/src/c/vendor/ed25519-donna/ed25519-donna.h:56:
+/home/user/AMA-Cryptography/src/c/vendor/ed25519-donna/modm-donna-64bit.h: In function ‘sub256_modm_batch’:
+/home/user/AMA-Cryptography/src/c/vendor/ed25519-donna/modm-donna-64bit.h:13:35: warning: a label can only be part of a statement and a declaration is not a statement [-Wpedantic]
+   13 | #    define AMA_DONNA_FALLTHROUGH __attribute__((fallthrough))
+      |                                   ^~~~~~~~~~~~~
+/home/user/AMA-Cryptography/src/c/vendor/ed25519-donna/modm-donna-64bit.h:314:25: note: in expansion of macro ‘AMA_DONNA_FALLTHROUGH’
+  314 |                 case 0: AMA_DONNA_FALLTHROUGH;
+      |                         ^~~~~~~~~~~~~~~~~~~~~
+[ 44%] Built target test_consttime
+[ 44%] Building C object CMakeFiles/ama_cryptography_static.dir/src/c/avx2/ama_aes_gcm_avx2.c.o
+[ 44%] Building C object CMakeFiles/ama_cryptography_shared.dir/src/c/ama_aes_bitsliced.c.o
+[ 45%] Linking C shared library lib/libama_cryptography.so
+[ 45%] Building C object CMakeFiles/ama_cryptography_static.dir/src/c/internal/ama_x25519_fe64_mulx.c.o
+[ 46%] Building C object CMakeFiles/ama_cryptography_static.dir/src/c/x86/ama_keccak_f1600_bmi.c.o
+[ 46%] Building C object tests/c/CMakeFiles/test_core.dir/test_core.c.o
+[ 47%] Linking C executable ../../bin/test_core
+[ 47%] Building C object CMakeFiles/ama_cryptography_static.dir/src/c/x86/ama_nistp_mont_mulx.c.o
+[ 48%] Building C object CMakeFiles/ama_cryptography_static.dir/src/c/ama_platform_rand.c.o
+[ 48%] Building C object CMakeFiles/ama_cryptography_static.dir/src/c/ama_kyber.c.o
+[ 48%] Built target test_core
+[ 48%] Building C object tests/c/CMakeFiles/test_secure_memory_dontdump.dir/test_secure_memory_dontdump.c.o
+[ 49%] Linking C executable ../../bin/test_secure_memory_dontdump
+[ 49%] Building C object tests/c/CMakeFiles/test_secure_free_scrub.dir/test_secure_free_scrub.c.o
+[ 50%] Linking C executable ../../bin/test_secure_free_scrub
+[ 50%] Built target test_secure_memory_dontdump
+[ 50%] Building C object tests/c/CMakeFiles/test_aes_gcm_scalar_kat.dir/test_aes_gcm_scalar_kat.c.o
+[ 50%] Built target test_secure_free_scrub
+[ 51%] Building C object tests/c/CMakeFiles/test_sha512_kat.dir/test_sha512_kat.c.o
+[ 51%] Linking C executable ../../bin/test_aes_gcm_scalar_kat
+[ 51%] Linking C executable ../../bin/test_sha512_kat
+[ 51%] Built target test_sha512_kat
+[ 51%] Building C object tests/c/CMakeFiles/test_aes_gcm_backend_introspect.dir/test_aes_gcm_backend_introspect.c.o
+[ 52%] Linking C executable ../../bin/test_aes_gcm_backend_introspect
+[ 52%] Building C object CMakeFiles/ama_cryptography_static.dir/src/c/ama_dilithium.c.o
+[ 52%] Built target test_aes_gcm_scalar_kat
+[ 52%] Built target test_aes_gcm_backend_introspect
+[ 53%] Building C object tests/c/CMakeFiles/test_dispatch_only_env.dir/test_dispatch_only_env.c.o
+[ 53%] Building C object tests/c/CMakeFiles/test_dispatch_cache_file.dir/test_dispatch_cache_file.c.o
+[ 54%] Building C object CMakeFiles/ama_cryptography_static.dir/src/c/ama_slhdsa.c.o
+[ 54%] Linking C executable ../../bin/test_dispatch_only_env
+[ 54%] Linking C executable ../../bin/test_dispatch_cache_file
+[ 54%] Built target ama_cryptography_shared
+[ 54%] Building C object CMakeFiles/ama_cryptography_static.dir/src/c/ama_secp256k1.c.o
+[ 55%] Building C object tests/c/CMakeFiles/test_sha3.dir/test_sha3.c.o
+[ 55%] Linking C executable ../../bin/test_sha3
+[ 55%] Building C object CMakeFiles/ama_cryptography_static.dir/src/c/ama_nistp.c.o
+[ 55%] Built target test_dispatch_only_env
+[ 56%] Building C object CMakeFiles/ama_cryptography_static.dir/src/c/ama_frost.c.o
+[ 56%] Built target test_dispatch_cache_file
+[ 56%] Building C object CMakeFiles/ama_cryptography_static.dir/src/c/ama_x25519.c.o
+In file included from /home/user/AMA-Cryptography/src/c/ama_x25519.c:51:
+/home/user/AMA-Cryptography/src/c/fe51.h: In function ‘fe51_mul_121665’:
+/home/user/AMA-Cryptography/src/c/fe51.h:188:22: warning: ISO C does not support ‘__int128’ types [-Wpedantic]
+  188 |     typedef unsigned __int128 uint128_t;
+      |                      ^~~~~~~~
+/home/user/AMA-Cryptography/src/c/fe51.h: In function ‘fe51_mul’:
+/home/user/AMA-Cryptography/src/c/fe51.h:258:22: warning: ISO C does not support ‘__int128’ types [-Wpedantic]
+  258 |     typedef unsigned __int128 uint128_t;
+      |                      ^~~~~~~~
+/home/user/AMA-Cryptography/src/c/fe51.h: In function ‘fe51_sq’:
+/home/user/AMA-Cryptography/src/c/fe51.h:311:22: warning: ISO C does not support ‘__int128’ types [-Wpedantic]
+  311 |     typedef unsigned __int128 uint128_t;
+      |                      ^~~~~~~~
+In file included from /home/user/AMA-Cryptography/src/c/ama_x25519.c:52:
+/home/user/AMA-Cryptography/src/c/fe64.h: At top level:
+/home/user/AMA-Cryptography/src/c/fe64.h:31:18: warning: ISO C does not support ‘__int128’ types [-Wpedantic]
+   31 | typedef unsigned __int128 uint128_t;
+      |                  ^~~~~~~~
+[ 56%] Building C object tests/c/CMakeFiles/test_sha3_512_stream.dir/test_sha3_512_stream.c.o
+[ 57%] Linking C executable ../../bin/test_sha3_512_stream
+[ 58%] Building C object tests/c/CMakeFiles/test_sha3_x4.dir/test_sha3_x4.c.o
+[ 58%] Linking C executable ../../bin/test_sha3_x4
+[ 58%] Built target test_sha3
+[ 58%] Building C object tests/c/CMakeFiles/test_hkdf.dir/test_hkdf.c.o
+[ 58%] Linking C executable ../../bin/test_hkdf
+[ 59%] Building C object CMakeFiles/ama_cryptography_static.dir/src/c/ama_argon2.c.o
+[ 59%] Building C object CMakeFiles/ama_cryptography_static.dir/src/c/ama_chacha20poly1305.c.o
+[ 59%] Building C object CMakeFiles/ama_cryptography_static.dir/src/c/ed25519_donna_shim.c.o
+In file included from /home/user/AMA-Cryptography/src/c/vendor/ed25519-donna/ed25519-donna.h:12,
+                 from /home/user/AMA-Cryptography/src/c/vendor/ed25519-donna/ed25519_unit.h:17,
+                 from /home/user/AMA-Cryptography/src/c/vendor/ed25519-donna/ama_donna_unit.h:25,
+                 from /home/user/AMA-Cryptography/src/c/ed25519_donna_shim.c:70:
+/home/user/AMA-Cryptography/src/c/vendor/ed25519-donna/ed25519-donna-portable.h:50:42: warning: ISO C does not support ‘__int128’ types [-Wpedantic]
+   50 |                         typedef unsigned __int128 uint128_t;
+      |                                          ^~~~~~~~
+In file included from /home/user/AMA-Cryptography/src/c/vendor/ed25519-donna/ed25519-donna.h:56:
+/home/user/AMA-Cryptography/src/c/vendor/ed25519-donna/modm-donna-64bit.h: In function ‘sub256_modm_batch’:
+/home/user/AMA-Cryptography/src/c/vendor/ed25519-donna/modm-donna-64bit.h:13:35: warning: a label can only be part of a statement and a declaration is not a statement [-Wpedantic]
+   13 | #    define AMA_DONNA_FALLTHROUGH __attribute__((fallthrough))
+      |                                   ^~~~~~~~~~~~~
+/home/user/AMA-Cryptography/src/c/vendor/ed25519-donna/modm-donna-64bit.h:314:25: note: in expansion of macro ‘AMA_DONNA_FALLTHROUGH’
+  314 |                 case 0: AMA_DONNA_FALLTHROUGH;
+      |                         ^~~~~~~~~~~~~~~~~~~~~
+[ 59%] Built target test_sha3_512_stream
+[ 60%] Building C object CMakeFiles/ama_cryptography_static.dir/src/c/ama_aes_bitsliced.c.o
+[ 61%] Building C object tests/c/CMakeFiles/test_agent_binding.dir/test_agent_binding.c.o
+[ 61%] Linking C executable ../../bin/test_agent_binding
+[ 61%] Built target test_sha3_x4
+[ 62%] Building C object tests/c/CMakeFiles/test_ascon.dir/test_ascon.c.o
+[ 62%] Linking C executable ../../bin/test_ascon
+[ 62%] Built target test_hkdf
+[ 63%] Building C object tests/c/CMakeFiles/test_lms.dir/test_lms.c.o
+[ 63%] Linking C executable ../../bin/test_lms
+[ 63%] Built target test_ascon
+[ 64%] Building C object tests/c/CMakeFiles/test_ed25519.dir/test_ed25519.c.o
+[ 64%] Linking C executable ../../bin/test_ed25519
+[ 64%] Built target test_lms
+[ 65%] Building C object tests/c/CMakeFiles/test_ed25519_unaligned_input.dir/test_ed25519_unaligned_input.c.o
+[ 65%] Linking C executable ../../bin/test_ed25519_unaligned_input
+[ 65%] Linking C static library lib/libama_cryptography_static.a
+[ 65%] Built target ama_cryptography_static
+[ 65%] Building C object tests/c/CMakeFiles/test_ed25519_canonical_s.dir/test_ed25519_canonical_s.c.o
+[ 66%] Linking C executable ../../bin/test_ed25519_canonical_s
+[ 66%] Built target test_agent_binding
+[ 66%] Building C object tests/c/CMakeFiles/test_ed25519_canonical_r.dir/test_ed25519_canonical_r.c.o
+[ 67%] Linking C executable ../../bin/test_ed25519_canonical_r
+[ 67%] Built target test_ed25519
+[ 67%] Building C object tests/c/CMakeFiles/test_ed25519_scalarmult_contract.dir/test_ed25519_scalarmult_contract.c.o
+[ 67%] Linking C executable ../../bin/test_ed25519_scalarmult_contract
+[ 67%] Built target test_ed25519_unaligned_input
+[ 67%] Building C object tests/c/CMakeFiles/test_x25519.dir/test_x25519.c.o
+[ 68%] Linking C executable ../../bin/test_x25519
+[ 68%] Built target test_ed25519_canonical_r
+[ 68%] Built target test_ed25519_canonical_s
+[ 68%] Building C object tests/c/CMakeFiles/test_x25519_path.dir/test_x25519_path.c.o
+[ 69%] Building C object tests/c/CMakeFiles/test_x25519_field_equiv.dir/test_x25519_field_equiv.c.o
+In file included from /home/user/AMA-Cryptography/tests/c/test_x25519_path.c:37:
+/home/user/AMA-Cryptography/tests/c/../../src/c/fe51.h: In function ‘fe51_mul_121665’:
+/home/user/AMA-Cryptography/tests/c/../../src/c/fe51.h:188:22: warning: ISO C does not support ‘__int128’ types [-Wpedantic]
+  188 |     typedef unsigned __int128 uint128_t;
+      |                      ^~~~~~~~
+/home/user/AMA-Cryptography/tests/c/../../src/c/fe51.h: In function ‘fe51_mul’:
+/home/user/AMA-Cryptography/tests/c/../../src/c/fe51.h:258:22: warning: ISO C does not support ‘__int128’ types [-Wpedantic]
+  258 |     typedef unsigned __int128 uint128_t;
+      |                      ^~~~~~~~
+/home/user/AMA-Cryptography/tests/c/../../src/c/fe51.h: In function ‘fe51_sq’:
+/home/user/AMA-Cryptography/tests/c/../../src/c/fe51.h:311:22: warning: ISO C does not support ‘__int128’ types [-Wpedantic]
+  311 |     typedef unsigned __int128 uint128_t;
+      |                      ^~~~~~~~
+In file included from /home/user/AMA-Cryptography/tests/c/test_x25519_path.c:38:
+/home/user/AMA-Cryptography/tests/c/../../src/c/fe64.h: At top level:
+/home/user/AMA-Cryptography/tests/c/../../src/c/fe64.h:31:18: warning: ISO C does not support ‘__int128’ types [-Wpedantic]
+   31 | typedef unsigned __int128 uint128_t;
+      |                  ^~~~~~~~
+[ 70%] Linking C executable ../../bin/test_x25519_path
+[ 70%] Building C object tests/c/CMakeFiles/test_x25519_field_equiv.dir/x25519_equiv_fe51.c.o
+In file included from /home/user/AMA-Cryptography/tests/c/../../src/c/ama_x25519.c:51,
+                 from /home/user/AMA-Cryptography/tests/c/x25519_equiv_fe51.c:24:
+/home/user/AMA-Cryptography/tests/c/../../src/c/fe51.h: In function ‘fe51_mul_121665’:
+/home/user/AMA-Cryptography/tests/c/../../src/c/fe51.h:188:22: warning: ISO C does not support ‘__int128’ types [-Wpedantic]
+  188 |     typedef unsigned __int128 uint128_t;
+      |                      ^~~~~~~~
+/home/user/AMA-Cryptography/tests/c/../../src/c/fe51.h: In function ‘fe51_mul’:
+/home/user/AMA-Cryptography/tests/c/../../src/c/fe51.h:258:22: warning: ISO C does not support ‘__int128’ types [-Wpedantic]
+  258 |     typedef unsigned __int128 uint128_t;
+      |                      ^~~~~~~~
+/home/user/AMA-Cryptography/tests/c/../../src/c/fe51.h: In function ‘fe51_sq’:
+/home/user/AMA-Cryptography/tests/c/../../src/c/fe51.h:311:22: warning: ISO C does not support ‘__int128’ types [-Wpedantic]
+  311 |     typedef unsigned __int128 uint128_t;
+      |                      ^~~~~~~~
+In file included from /home/user/AMA-Cryptography/tests/c/../../src/c/ama_x25519.c:52:
+/home/user/AMA-Cryptography/tests/c/../../src/c/fe64.h: At top level:
+/home/user/AMA-Cryptography/tests/c/../../src/c/fe64.h:31:18: warning: ISO C does not support ‘__int128’ types [-Wpedantic]
+   31 | typedef unsigned __int128 uint128_t;
+      |                  ^~~~~~~~
+[ 71%] Building C object tests/c/CMakeFiles/test_x25519_field_equiv.dir/x25519_equiv_fe64.c.o
+[ 71%] Built target test_x25519_path
+In file included from /home/user/AMA-Cryptography/tests/c/../../src/c/ama_x25519.c:51,
+                 from /home/user/AMA-Cryptography/tests/c/x25519_equiv_fe64.c:19:
+/home/user/AMA-Cryptography/tests/c/../../src/c/fe51.h: In function ‘fe51_mul_121665’:
+/home/user/AMA-Cryptography/tests/c/../../src/c/fe51.h:188:22: warning: ISO C does not support ‘__int128’ types [-Wpedantic]
+  188 |     typedef unsigned __int128 uint128_t;
+      |                      ^~~~~~~~
+/home/user/AMA-Cryptography/tests/c/../../src/c/fe51.h: In function ‘fe51_mul’:
+/home/user/AMA-Cryptography/tests/c/../../src/c/fe51.h:258:22: warning: ISO C does not support ‘__int128’ types [-Wpedantic]
+  258 |     typedef unsigned __int128 uint128_t;
+      |                      ^~~~~~~~
+/home/user/AMA-Cryptography/tests/c/../../src/c/fe51.h: In function ‘fe51_sq’:
+/home/user/AMA-Cryptography/tests/c/../../src/c/fe51.h:311:22: warning: ISO C does not support ‘__int128’ types [-Wpedantic]
+  311 |     typedef unsigned __int128 uint128_t;
+      |                      ^~~~~~~~
+In file included from /home/user/AMA-Cryptography/tests/c/../../src/c/ama_x25519.c:52:
+/home/user/AMA-Cryptography/tests/c/../../src/c/fe64.h: At top level:
+/home/user/AMA-Cryptography/tests/c/../../src/c/fe64.h:31:18: warning: ISO C does not support ‘__int128’ types [-Wpedantic]
+   31 | typedef unsigned __int128 uint128_t;
+      |                  ^~~~~~~~
+[ 71%] Building C object tests/c/CMakeFiles/test_field_bench.dir/test_field_bench.c.o
+In file included from /home/user/AMA-Cryptography/tests/c/test_field_bench.c:17:
+/home/user/AMA-Cryptography/tests/c/../../src/c/fe51.h: In function ‘fe51_mul_121665’:
+/home/user/AMA-Cryptography/tests/c/../../src/c/fe51.h:188:22: warning: ISO C does not support ‘__int128’ types [-Wpedantic]
+  188 |     typedef unsigned __int128 uint128_t;
+      |                      ^~~~~~~~
+/home/user/AMA-Cryptography/tests/c/../../src/c/fe51.h: In function ‘fe51_mul’:
+/home/user/AMA-Cryptography/tests/c/../../src/c/fe51.h:258:22: warning: ISO C does not support ‘__int128’ types [-Wpedantic]
+  258 |     typedef unsigned __int128 uint128_t;
+      |                      ^~~~~~~~
+/home/user/AMA-Cryptography/tests/c/../../src/c/fe51.h: In function ‘fe51_sq’:
+/home/user/AMA-Cryptography/tests/c/../../src/c/fe51.h:311:22: warning: ISO C does not support ‘__int128’ types [-Wpedantic]
+  311 |     typedef unsigned __int128 uint128_t;
+      |                      ^~~~~~~~
+In file included from /home/user/AMA-Cryptography/tests/c/test_field_bench.c:18:
+/home/user/AMA-Cryptography/tests/c/../../src/c/fe64.h: At top level:
+/home/user/AMA-Cryptography/tests/c/../../src/c/fe64.h:31:18: warning: ISO C does not support ‘__int128’ types [-Wpedantic]
+   31 | typedef unsigned __int128 uint128_t;
+      |                  ^~~~~~~~
+[ 71%] Linking C executable ../../bin/test_x25519_field_equiv
+[ 72%] Linking C executable ../../bin/test_field_bench
+[ 72%] Built target test_ed25519_scalarmult_contract
+[ 72%] Building C object tests/c/CMakeFiles/test_x25519_fe64_mulx_equiv.dir/test_x25519_fe64_mulx_equiv.c.o
+In file included from /home/user/AMA-Cryptography/tests/c/test_x25519_fe64_mulx_equiv.c:49:
+/home/user/AMA-Cryptography/tests/c/../../src/c/fe64.h:31:18: warning: ISO C does not support ‘__int128’ types [-Wpedantic]
+   31 | typedef unsigned __int128 uint128_t;
+      |                  ^~~~~~~~
+[ 72%] Linking C executable ../../bin/test_x25519_fe64_mulx_equiv
+[ 72%] Built target test_x25519_fe64_mulx_equiv
+[ 72%] Building C object tests/c/CMakeFiles/test_x25519_mulx_override.dir/test_x25519_mulx_override.c.o
+[ 73%] Linking C executable ../../bin/test_x25519_mulx_override
+[ 73%] Built target test_x25519
+[ 74%] Building C object tests/c/CMakeFiles/test_chacha20poly1305.dir/test_chacha20poly1305.c.o
+[ 74%] Linking C executable ../../bin/test_chacha20poly1305
+[ 74%] Built target test_x25519_field_equiv
+[ 74%] Building C object tests/c/CMakeFiles/test_argon2id.dir/test_argon2id.c.o
+[ 74%] Linking C executable ../../bin/test_argon2id
+[ 74%] Built target test_x25519_mulx_override
+[ 75%] Building C object tests/c/CMakeFiles/test_secp256k1.dir/test_secp256k1.c.o
+[ 75%] Linking C executable ../../bin/test_secp256k1
+[ 75%] Built target test_field_bench
+[ 75%] Building C object tests/c/CMakeFiles/test_frost.dir/test_frost.c.o
+[ 76%] Linking C executable ../../bin/test_frost
+[ 76%] Built target test_secp256k1
+[ 76%] Building C object tests/c/CMakeFiles/test_nistp.dir/test_nistp.c.o
+[ 77%] Linking C executable ../../bin/test_nistp
+[ 77%] Built target test_chacha20poly1305
+[ 78%] Building C object tests/c/CMakeFiles/test_aes_bitsliced.dir/test_aes_bitsliced.c.o
+[ 78%] Linking C executable ../../bin/test_aes_bitsliced
+[ 78%] Built target test_argon2id
+[ 79%] Building C object tests/c/CMakeFiles/test_kat.dir/test_kat.c.o
+[ 79%] Built target test_aes_bitsliced
+[ 80%] Building C object tests/c/CMakeFiles/test_pq_privkey_check_determinism.dir/test_pq_privkey_check_determinism.c.o
+[ 80%] Linking C executable ../../bin/test_kat
+[ 80%] Linking C executable ../../bin/test_pq_privkey_check_determinism
+[ 80%] Built target test_frost
+[ 80%] Building C object tests/c/CMakeFiles/test_pq_parser_stack.dir/test_pq_parser_stack.c.o
+[ 80%] Linking C executable ../../bin/test_pq_parser_stack
+[ 80%] Built target test_nistp
+[ 81%] Building C object tests/c/CMakeFiles/test_concurrent_init.dir/test_concurrent_init.c.o
+[ 81%] Linking C executable ../../bin/test_concurrent_init
+[ 81%] Built target test_kat
+[ 81%] Building C object tests/c/CMakeFiles/test_kyber_debug.dir/test_kyber_debug.c.o
+[ 82%] Linking C executable ../../bin/test_kyber_debug
+[ 82%] Built target test_pq_privkey_check_determinism
+[ 83%] Building C object tests/c/CMakeFiles/test_kyber_cpa.dir/test_kyber_cpa.c.o
+[ 83%] Linking C executable ../../bin/test_kyber_cpa
+[ 83%] Built target test_pq_parser_stack
+[ 83%] Building C object tests/c/CMakeFiles/test_kyber_compress.dir/test_kyber_compress.c.o
+[ 83%] Linking C executable ../../bin/test_kyber_compress
+[ 83%] Built target test_kyber_compress
+[ 84%] Building C object tests/c/CMakeFiles/test_kyber_sample_ntt.dir/test_kyber_sample_ntt.c.o
+[ 84%] Linking C executable ../../bin/test_kyber_sample_ntt
+[ 84%] Built target test_concurrent_init
+[ 84%] Building C object tests/c/CMakeFiles/test_kyber_cbd2_equiv.dir/test_kyber_cbd2_equiv.c.o
+[ 85%] Linking C executable ../../bin/test_kyber_cbd2_equiv
+[ 85%] Built target test_kyber_debug
+[ 85%] Building C object tests/c/CMakeFiles/test_dilithium_invntt_bound.dir/test_dilithium_invntt_bound.c.o
+[ 85%] Linking C executable ../../bin/test_dilithium_invntt_bound
+[ 85%] Built target test_kyber_cpa
+[ 85%] Building C object tests/c/CMakeFiles/test_dilithium_ntt_equiv.dir/test_dilithium_ntt_equiv.c.o
+[ 86%] Linking C executable ../../bin/test_dilithium_ntt_equiv
+[ 86%] Built target test_kyber_sample_ntt
+[ 86%] Building C object tests/c/CMakeFiles/test_dilithium_rej_equiv.dir/test_dilithium_rej_equiv.c.o
+[ 87%] Linking C executable ../../bin/test_dilithium_rej_equiv
+[ 87%] Built target test_kyber_cbd2_equiv
+[ 88%] Building C object tests/c/CMakeFiles/test_dilithium_ntt_bench.dir/test_dilithium_ntt_bench.c.o
+[ 88%] Linking C executable ../../bin/test_dilithium_ntt_bench
+[ 88%] Built target test_dilithium_invntt_bound
+[ 89%] Building C object tests/c/CMakeFiles/test_aes_gcm_vaes_equiv.dir/test_aes_gcm_vaes_equiv.c.o
+[ 89%] Linking C executable ../../bin/test_aes_gcm_vaes_equiv
+[ 89%] Built target test_dilithium_rej_equiv
+[ 89%] Built target test_dilithium_ntt_equiv
+[ 89%] Building C object tests/c/CMakeFiles/test_aes_gcm_neon_equiv.dir/test_aes_gcm_neon_equiv.c.o
+[ 89%] Building C object tests/c/CMakeFiles/test_chacha20_x8_avx2_equiv.dir/test_chacha20_x8_avx2_equiv.c.o
+[ 90%] Linking C executable ../../bin/test_aes_gcm_neon_equiv
+[ 91%] Linking C executable ../../bin/test_chacha20_x8_avx2_equiv
+[ 91%] Built target test_aes_gcm_neon_equiv
+[ 91%] Building C object tests/c/CMakeFiles/test_argon2_g_neon_equiv.dir/test_argon2_g_neon_equiv.c.o
+[ 92%] Linking C executable ../../bin/test_argon2_g_neon_equiv
+[ 92%] Built target test_argon2_g_neon_equiv
+[ 92%] Building C object tests/c/CMakeFiles/test_argon2_g_avx2_equiv.dir/test_argon2_g_avx2_equiv.c.o
+[ 93%] Linking C executable ../../bin/test_argon2_g_avx2_equiv
+[ 93%] Built target test_dilithium_ntt_bench
+[ 93%] Building C object tests/c/CMakeFiles/test_chacha20_x8_neon_equiv.dir/test_chacha20_x8_neon_equiv.c.o
+[ 93%] Linking C executable ../../bin/test_chacha20_x8_neon_equiv
+[ 93%] Built target test_chacha20_x8_neon_equiv
+[ 93%] Building C object tests/c/CMakeFiles/test_kyber_ntt_equiv.dir/test_kyber_ntt_equiv.c.o
+[ 94%] Linking C executable ../../bin/test_kyber_ntt_equiv
+[ 94%] Built target test_aes_gcm_vaes_equiv
+[ 94%] Building C object tests/c/CMakeFiles/test_kyber_poly_equiv.dir/test_kyber_poly_equiv.c.o
+[ 94%] Linking C executable ../../bin/test_kyber_poly_equiv
+[ 94%] Built target test_chacha20_x8_avx2_equiv
+[ 94%] Building C object tests/c/CMakeFiles/test_keccak_equiv.dir/test_keccak_equiv.c.o
+[ 95%] Linking C executable ../../bin/test_keccak_equiv
+[ 95%] Built target test_argon2_g_avx2_equiv
+[ 96%] Building C object tests/c/CMakeFiles/test_keccak_bmi_equiv.dir/test_keccak_bmi_equiv.c.o
+[ 96%] Linking C executable ../../bin/test_keccak_bmi_equiv
+[ 96%] Built target test_keccak_bmi_equiv
+[ 96%] Building C object tests/c/CMakeFiles/test_nistp_mont_mulx_equiv.dir/test_nistp_mont_mulx_equiv.c.o
+[ 97%] Linking C executable ../../bin/test_nistp_mont_mulx_equiv
+[ 97%] Built target test_nistp_mont_mulx_equiv
+[ 97%] Building C object tests/c/CMakeFiles/test_sha3_wrapper_equiv.dir/test_sha3_wrapper_equiv.c.o
+[ 97%] Linking C executable ../../bin/test_sha3_wrapper_equiv
+[ 97%] Built target test_kyber_ntt_equiv
+[ 97%] Building C object tests/c/CMakeFiles/test_sphincs_simd_equiv.dir/test_sphincs_simd_equiv.c.o
+[ 98%] Linking C executable ../../bin/test_sphincs_simd_equiv
+[ 98%] Built target test_kyber_poly_equiv
+[ 99%] Building C object tests/c/CMakeFiles/test_sha256_neon_kat.dir/test_sha256_neon_kat.c.o
+[ 99%] Linking C executable ../../bin/test_sha256_neon_kat
+[ 99%] Built target test_sha256_neon_kat
+[ 99%] Building C object tests/c/CMakeFiles/test_sha256_dispatch_equiv.dir/test_sha256_dispatch_equiv.c.o
+[ 99%] Linking C executable ../../bin/test_sha256_dispatch_equiv
+[ 99%] Built target test_sha256_dispatch_equiv
+[ 99%] Building C object tests/c/CMakeFiles/test_benchmark.dir/test_benchmark.c.o
+[100%] Linking C executable ../../bin/test_benchmark
+[100%] Built target test_keccak_equiv
+[100%] Building C object CMakeFiles/benchmark_c_raw.dir/benchmarks/benchmark_c_raw.c.o
+[100%] Linking C executable bin/benchmark_c_raw
+[100%] Built target test_sha3_wrapper_equiv
+[100%] Built target test_sphincs_simd_equiv
+[100%] Built target test_benchmark
+[100%] Built target benchmark_c_raw

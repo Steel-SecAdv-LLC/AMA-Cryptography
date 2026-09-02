@@ -1,0 +1,2 @@
+$ grep -n "ctypes" tools/update_docs.py tools/check_documented_counts.py
+# exit=1 duration=0.004s

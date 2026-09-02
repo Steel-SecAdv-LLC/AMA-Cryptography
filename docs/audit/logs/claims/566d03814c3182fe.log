@@ -1,0 +1,23 @@
+$ sed -n 975,995p ama_cryptography/secure_channel.py
+# exit=0 duration=0.004s
+
+        try:
+            return self._complete_handshake_inner(response)
+        except HandshakeError:
+            # Documented failure: still an abandoned handshake, and the state
+            # below must go with it.
+            self._abandon_handshake()
+            raise
+        except (ValueError, TypeError) as exc:
+            # An undocumented type escaping from a peer-supplied field.
+            self._abandon_handshake()
+            raise HandshakeError(f"Malformed handshake response from the peer: {exc}") from exc
+        except BaseException:
+            # Anything else — a key-derivation failure, an OSError from the
+            # native HKDF, an interrupt landing between the signature check and
+            # the state clear.  INVARIANT-6 is about exit paths, not about the
+            # exception types we happened to anticipate, so the secret is
+            # dropped here too.  Re-raised unchanged: only the two peer-data
+            # cases above are re-typed, because only those are the peer's doing.
+            self._abandon_handshake()
+            raise

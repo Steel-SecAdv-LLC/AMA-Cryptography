@@ -1,0 +1,3 @@
+$ grep -n 'def test_the_workflow_still_uses_the_modeled_membership_idiom' tests/test_dudect_simd_sweep_gate.py
+# exit=0 duration=0.004s
+121:def test_the_workflow_still_uses_the_modeled_membership_idiom() -> None:

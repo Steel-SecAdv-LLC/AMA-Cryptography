@@ -1,0 +1,3 @@
+$ grep -rlE "^(PT|CT|AD|Msg|Ad) = $" tests/kat ama_cryptography/_post_kats | wc -l
+# exit=0 duration=0.024s
+2

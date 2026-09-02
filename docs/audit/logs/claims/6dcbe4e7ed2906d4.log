@@ -1,0 +1,3 @@
+$ git show 2dcef5c:ama_cryptography/_self_test.py | grep -c check_hash_based_pycs
+# exit=1 duration=0.006s
+0

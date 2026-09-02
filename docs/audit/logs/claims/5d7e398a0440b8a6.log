@@ -1,0 +1,4 @@
+$ grep -nE "leaky memcmp\s+\|t\| = 412..481, over threshold 10/10,\s+\|diff\| = 22.4 ns|ama_consttime_memcmp \|t\| = 0.9..3.2, over threshold\s+0/10,\s+\|diff\| =\s+1.8 ns" tests/c/dudect/dudect_rounds.h
+# exit=0 duration=0.007s
+169: *     leaky memcmp        |t| = 412..481, over threshold 10/10,  |diff| = 22.4 ns
+170: *     ama_consttime_memcmp |t| = 0.9..3.2, over threshold  0/10,  |diff| =  1.8 ns

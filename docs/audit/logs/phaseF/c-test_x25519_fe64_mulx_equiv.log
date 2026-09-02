@@ -1,0 +1,5 @@
+X25519 fe64 MULX+ADX vs pure-C byte-equivalence
+  vectors:  4096
+  rng seed: 0x00c25519babe2026 (deterministic)
+
+PASS: 4096 / 4096 vectors byte-identical: fused MULX+ADX kernel vs pure-C fe64 reference and vs two-stage composition (mul + sq).

@@ -1,0 +1,4 @@
+$ grep -n 'cryptography` >= 46.0\|raise SystemExit' benchmarks/pqc_comparative_bench.py
+# exit=0 duration=0.004s
+34:    raise SystemExit(
+35:        "this benchmark needs `cryptography` >= 46.0 for ML-DSA / ML-KEM "

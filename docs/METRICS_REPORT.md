@@ -95,16 +95,16 @@ Measured as non-empty-allowed `wc -l` over source files in each scope.
 | Native C (`src/c/**/*.c`, `include/**/*.h`) | 109 | 54,196 |
 | Library total (Python + C + headers) | 137 | **92,918** |
 | Top-level Python (monitors, benchmarks, demos) | 2 | 1,292 |
-| Tests (`tests/**/*.py`) | 215 | 91,205 |
+| Tests (`tests/**/*.py`) | 218 | 91,682 |
 | Cython (`*.pyx`, `*.pxd`) | 7 | 1,873 |
-| **Whole project** (source + docs + config) | 688 | **386,299** |
+| **Whole project** (source + docs + config) | 704 | **412,792** |
 
 **Library total (the figure that most closely tracks "library size"):
 92,918 lines** across 137 files under `ama_cryptography/`, `src/c/`,
 and `include/`. This supersedes any "11,246 LoC" claim that may have
 appeared externally.
 
-**Whole-project total** (`386,299` lines across Python, C, headers,
+**Whole-project total** (`412,792` lines across Python, C, headers,
 Cython, Markdown, YAML/TOML/JSON config, CMake and Makefiles) is the
 broader figure some external claims may have been referencing. Reproduce
 it with:
@@ -155,7 +155,7 @@ excluded.
 
 ### Scope Composition
 
-The gap between "library" and "whole project" is informative: only **24.1%** of the repository is library code. The rest is tests, docs,
+The gap between "library" and "whole project" is informative: only **22.5%** of the repository is library code. The rest is tests, docs,
 config, vendored vector corpora, and scaffolding — verification
 artifacts outweighing library code is a healthy ratio for a security
 library that takes verification seriously, but the vendored share means
@@ -163,17 +163,17 @@ the whole-project figure overstates hand-written code.
 
 | Scope                                | Lines    | % of whole | Paths                                                   |
 |--------------------------------------|---------:|-----------:|---------------------------------------------------------|
-| Library (Python + C + headers) | 92,918 | 24.1% | `ama_cryptography/` + `src/c/` + `include/` |
-| Tests | 91,205 | 23.6% | `tests/**/*.py` |
+| Library (Python + C + headers) | 92,918 | 22.5% | `ama_cryptography/` + `src/c/` + `include/` |
+| Tests | 91,682 | 22.2% | `tests/**/*.py` |
 | Top-level Python | 1,292 | 0.3% | `*.py` at repo root |
 | Cython | 1,873 | 0.5% | `*.pyx` + `*.pxd` |
-| Everything else (remainder) | 199,011 | 51.5% | `*.md`, `*.yml`, `*.toml`, `*.json`, CMake, Makefile, plus `.c`/`.h`/`.py` outside the scopes above (`tests/c/`, `fuzz/`, `tools/`, `benchmarks/`, `examples/`) |
-| **Whole-project total** | **386,299** | **100%** | sum of the scopes above |
+| Everything else (remainder) | 225,027 | 54.5% | `*.md`, `*.yml`, `*.toml`, `*.json`, CMake, Makefile, plus `.c`/`.h`/`.py` outside the scopes above (`tests/c/`, `fuzz/`, `tools/`, `benchmarks/`, `examples/`) |
+| **Whole-project total** | **412,792** | **100%** | sum of the scopes above |
 
-Test code (23.6%) is roughly 1.0x the size of the library (24.1%) — i.e. the test-to-library ratio is roughly **0.98**, and that
+Test code (22.2%) is roughly 1.0x the size of the library (22.5%) — i.e. the test-to-library ratio is roughly **0.99**, and that
 counts only `tests/**/*.py`; the C test suite under `tests/c/` lands
-in the remainder row. The remainder (51.5%) is dominated by the
-vendored NIST ACVP and Wycheproof JSON corpora (73,402 lines of `*.json` alone) and by this repository's Markdown, not by config.
+in the remainder row. The remainder (54.5%) is dominated by the
+vendored NIST ACVP and Wycheproof JSON corpora (73,405 lines of `*.json` alone) and by this repository's Markdown, not by config.
 
 ### Reproduction
 
@@ -237,8 +237,8 @@ git ls-files -z | tr '\0' '\n' \
 
 | Scope | Count |
 |-------|------:|
-| Python test files under `tests/` matching the static regex | 212 |
-| Syntactic `def test_` matches under `tests/**/*.py` | **4,839** |
+| Python test files under `tests/` matching the static regex | 215 |
+| Syntactic `def test_` matches under `tests/**/*.py` | **4,865** |
 | `test_*.c` files under `tests/c/` (ctest-registered) | 67 |
 | `bench_*.c` files under `tests/c/` (standalone, not in ctest) | 1 |
 | `fuzz_*.c` sources under `fuzz/` | 16 |

@@ -1,0 +1,5 @@
+INVARIANT-13 violations (1):
+
+  tools/nc_probe_nosec.py:5: suppression 'nosec' missing rule id (expected '# nosec B105 -- justification (TAG-NNN)'); written bare it suppresses every rule on the line
+
+1 suppression violation(s). Python-tree markers need a justification and a tracking ID; markers under src/c or include must be removed outright.

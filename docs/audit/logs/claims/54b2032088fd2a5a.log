@@ -1,0 +1,4 @@
+$ grep -c "'--explicit-package-bases'" .pre-commit-config.yaml; git show a80a2c5~1:.pre-commit-config.yaml | grep -c "explicit-package-bases"
+# exit=1 duration=0.006s
+1
+0

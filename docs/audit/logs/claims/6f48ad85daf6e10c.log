@@ -1,0 +1,3 @@
+$ grep '^HeaderFilterRegex:' .clang-tidy | grep -c '(?!'
+# exit=1 duration=0.006s
+0

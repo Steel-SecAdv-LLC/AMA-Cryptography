@@ -1,0 +1,5 @@
+$ grep -n '#define AMA_KYBER_COMPRESS_MULT  330282857ULL\|#define AMA_KYBER_COMPRESS_SHIFT 40' src/c/ama_kyber.c; python -c 'q=3329;M=-(-(1<<40)//q);print(M,M*q-(1<<40),(1<<40)//(M*q-(1<<40)))'
+# exit=0 duration=0.033s
+2798:#define AMA_KYBER_COMPRESS_MULT  330282857ULL  /* ceil(2^40 / KYBER_Q) */
+2799:#define AMA_KYBER_COMPRESS_SHIFT 40
+330282857 3177 346084868

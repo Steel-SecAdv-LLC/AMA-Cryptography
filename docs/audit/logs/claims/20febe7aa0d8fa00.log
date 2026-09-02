@@ -1,0 +1,4 @@
+$ grep -n '"tools/check_vector_provenance.py"' .github/workflows/corpus-provenance.yml; grep -n 'run: python tools/check_vector_provenance.py' .github/workflows/corpus-provenance.yml
+# exit=0 duration=0.007s
+33:      - "tools/check_vector_provenance.py"
+116:        run: python tools/check_vector_provenance.py

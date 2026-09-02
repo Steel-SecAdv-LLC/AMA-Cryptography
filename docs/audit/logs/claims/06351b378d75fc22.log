@@ -1,0 +1,3 @@
+$ grep -c "scan_optional_imports\|_third_party_import_fallback_lines" tests/test_invariant_upgrades.py
+# exit=0 duration=0.004s
+4

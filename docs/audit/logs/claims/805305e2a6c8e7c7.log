@@ -1,0 +1,4 @@
+$ grep -n "AMA_CI_REQUIRE_BACKENDS" tests/conftest.py | head -3
+# exit=0 duration=0.006s
+33:# When AMA_CI_REQUIRE_BACKENDS=1 is set (by our ci.yml after building the
+39:_CI = os.environ.get("AMA_CI_REQUIRE_BACKENDS", "").lower() in ("true", "1", "yes")

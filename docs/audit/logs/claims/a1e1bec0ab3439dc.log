@@ -1,0 +1,3 @@
+$ grep -c '6.3.2.3p7' src/c/PROVENANCE.md
+# exit=0 duration=0.004s
+1

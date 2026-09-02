@@ -1,0 +1,3 @@
+$ python -c "import sys; sys.path.insert(0,'tools'); from pathlib import Path; import check_action_pins as m; u=m.find_unpinned(Path('.github/workflows')); print('unpinned', len(u), [x.ref for x in u])"
+# exit=0 duration=0.070s
+unpinned 0 []

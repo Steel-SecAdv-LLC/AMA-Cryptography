@@ -1,0 +1,4 @@
+$ grep -n "19 / 48\|48 / 48" tests/c/dudect/dudect.h
+# exit=0 duration=0.005s
+70: *     raw Welch t (what was here)    detected the leak 19 / 48
+71: *     percentile-cropped             detected the leak 48 / 48

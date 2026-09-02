@@ -1,0 +1,33 @@
+$ sed -n 2430,2460p ama_cryptography/_self_test.py
+# exit=0 duration=0.005s
+    * Linux / macOS:  resolution is typically 1 ns (CLOCK_MONOTONIC_RAW).
+      Bias from runner jitter has been observed at delta=25 ns / |t|=8.34
+      on shared Ubuntu 3.11 GitHub-hosted runners, and a 50 ns floor was
+      then falsified in the field: delta=51 ns / |t|=11.48 of pure jitter
+      on a shared ubuntu-latest runner (job 97259726191, Python 3.13,
+      2026-08-23) failed a binary whose memcmp the deterministic callgrind
+      `consttime` target measures at zero cross-class instructions and
+      whose POST passed on every sibling lane at the same commit.  The
+      100 ns absolute floor is ~2x the worst observed artefact, the same
+      calibration rule the dudect floor uses.
+    * Windows:  ``QueryPerformanceCounter`` reports a 100 ns resolution
+      via ``time.get_clock_info('perf_counter').resolution`` even on
+      modern hardware; quantization noise alone can produce mean deltas
+      that round up to 100-200 ns under coverage-instrumented Python
+      3.11.  A 50 ns floor is *below* the platform's native granularity
+      there — every paired-difference observation snaps to a multiple
+      of 100 ns, so the smallest non-zero delta the oracle can ever see
+      is 100 ns, and a constant 50 ns floor cannot filter it.
+
+    Fix: scale the floor to ``max(absolute_floor, K * resolution_ns)``
+    where ``K=4`` is a conservative safety multiplier over the per-sample
+    quantization step.  With 10 000 paired samples the standard error
+    of the mean is roughly ``resolution_ns / sqrt(n) ≈ resolution_ns/100``;
+    K=4 puts the floor at ~400× SEM on a coarse-clock host, well above
+    where pure quantization noise can drive the mean delta, while
+    remaining well below the >>500 ns signal a real early-exit memcmp
+    leak over 256 bytes produces (the byte loop alone is ~256 ns even
+    at 1 ns/byte memory throughput).
+
+    Linux/macOS:  ``max(100, 4*1) = 100 ns`` (absolute floor dominates)
+    Windows:      ``max(100, 4*100) = 400 ns`` (resolution floor dominates)

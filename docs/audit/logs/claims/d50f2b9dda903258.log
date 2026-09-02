@@ -1,0 +1,3 @@
+$ grep -c "def test_a_package_after_a_line_continuation_is_still_seen\|def test_options_are_not_mistaken_for_packages\|def test_the_shipped_recipes_are_clean" tests/test_vendor_isolation_gate.py
+# exit=0 duration=0.006s
+3

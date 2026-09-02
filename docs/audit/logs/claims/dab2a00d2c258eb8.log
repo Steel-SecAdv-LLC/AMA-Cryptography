@@ -1,0 +1,3 @@
+$ grep -c 'cryptography.hazmat\|from cryptography\|import cryptography' CONTRIBUTING.md
+# exit=1 duration=0.005s
+0

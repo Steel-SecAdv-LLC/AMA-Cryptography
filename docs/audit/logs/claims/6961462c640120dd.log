@@ -1,0 +1,5 @@
+$ grep -n 'ama_ml_dsa_test_matrix_row_equiv(void)\|rho\[i\] = (uint8_t)(0x11 \* (i + 1));' src/c/ama_dilithium.c
+# exit=0 duration=0.005s
+2857:int ama_ml_dsa_test_matrix_row_equiv(void);
+2858:int ama_ml_dsa_test_matrix_row_equiv(void) {
+2865:        rho[i] = (uint8_t)(0x11 * (i + 1));

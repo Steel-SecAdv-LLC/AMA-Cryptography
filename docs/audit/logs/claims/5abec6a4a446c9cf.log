@@ -1,0 +1,5 @@
+$ grep -c 'AMA-PATCH: memcpy' src/c/vendor/ed25519-donna/curve25519-donna-64bit.h src/c/vendor/ed25519-donna/curve25519-donna-32bit.h src/c/vendor/ed25519-donna/curve25519-donna-sse2.h
+# exit=0 duration=0.004s
+src/c/vendor/ed25519-donna/curve25519-donna-64bit.h:1
+src/c/vendor/ed25519-donna/curve25519-donna-32bit.h:1
+src/c/vendor/ed25519-donna/curve25519-donna-sse2.h:1

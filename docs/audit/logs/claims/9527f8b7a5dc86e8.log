@@ -1,0 +1,4 @@
+$ python -c 'print(len("bitsliced-software"))'; grep -c '%-24s║' src/c/dispatch/ama_dispatch.c
+# exit=0 duration=0.032s
+18
+11

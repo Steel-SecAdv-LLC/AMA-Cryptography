@@ -1,0 +1,3 @@
+$ diff <(git show 6a3f09e^:src/c/dispatch/ama_dispatch.c | gcc -E -P -Iinclude -Isrc/c -Isrc/c/internal -Isrc/c/dispatch -DAMA_USE_NATIVE_PQC=1 -std=c11 -x c - 2>/dev/null) <(git show 6a3f09e:src/c/dispatch/ama_dispatch.c | gcc -E -P -Iinclude -Isrc/c -Isrc/c/internal -Isrc/c/dispatch -DAMA_USE_NATIVE_PQC=1 -std=c11 -x c - 2>/dev/null) >/dev/null && echo IDENTICAL_DISPATCH
+# exit=0 duration=0.043s
+IDENTICAL_DISPATCH

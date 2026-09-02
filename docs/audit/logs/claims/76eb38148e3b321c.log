@@ -1,0 +1,3 @@
+$ grep -c "| 3.5.0 | 2026-07-30 | Re-measured all static counts on the v3.5.0 release tree: 78,910 library LoC (129 files), 367,877 whole-project LoC, 3,057 static Python test functions across 127 files" docs/METRICS_REPORT.md
+# exit=0 duration=0.005s
+1

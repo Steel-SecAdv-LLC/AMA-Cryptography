@@ -1,0 +1,7 @@
+$ grep -nE "\-\-target (ascon-encrypt|agent-binding)$" .github/workflows/dudect.yml; python tools/check_ghash_constant_time.py --lib build-release/lib/libama_cryptography_test.a --target ascon-encrypt | grep -E "^\s+(floor|worst)|PASSED"
+# exit=0 duration=3.597s
+759:            --lib build/lib/libama_cryptography_test.a --target ascon-encrypt
+777:            --lib build/lib/libama_cryptography_test.a --target agent-binding
+  floor                 0               0               0               0
+  worst                 0               0               0               0
+ASCON-ENCRYPT CONSTANT-TIME CHECK PASSED — instruction count, data references and cache misses are all key-independent.

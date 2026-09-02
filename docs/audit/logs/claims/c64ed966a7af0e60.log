@@ -1,0 +1,6 @@
+$ gcc -march=x86-64 -Q --help=target | grep -E '^\s+-m(ssse3|sse4\.1|sse2)\s'; python -c "import tools.check_avx_scoping as g; print([f.name for f in g.ISA_FAMILIES if f.name in ('SSSE3','SSE4.1')])"
+# exit=0 duration=0.053s
+  -msse2                      		[enabled]
+  -msse4.1                    		[disabled]
+  -mssse3                     		[disabled]
+['SSSE3', 'SSE4.1']

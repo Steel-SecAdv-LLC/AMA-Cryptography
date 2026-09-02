@@ -1,0 +1,6 @@
+Inspected /home/user/AMA-Cryptography/build/lib/libama_cryptography.so.5.0.0
+  exported (defined) symbols : 240
+  ama_* ABI symbols          : 240
+  non-ama offenders          : 0
+
+EXPORT ALLOWLIST PASSED — all 240 exported symbols are the ama_* ABI.

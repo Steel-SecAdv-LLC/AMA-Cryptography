@@ -1,0 +1,1 @@
+OK: all 94 public native entry points across 4 module(s) and 10 Cython binding entry points are gated (4 documented function exemption(s)). Discovery: 9 native-reaching module(s), all classified (4 audited, 5 exempted with a reason).

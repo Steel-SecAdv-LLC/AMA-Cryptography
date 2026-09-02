@@ -1,0 +1,5 @@
+$ grep -n "except BaseException:" -A 2 ama_cryptography/pqc_backends.py | head -3
+# exit=0 duration=0.005s
+211:        except BaseException:
+212-            self.__exit__(None, None, None)
+213-            raise

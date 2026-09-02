@@ -1,0 +1,8 @@
+$ grep -nE "Only transport errors are retried|final attempt is unguarded|Nothing here ever sees a digest|if attempt == total or not is_retriable\(exc\)|delay = attempt \* wait" tools/http_fetch.py; grep -n "the vendored copy is not upstream's bytes" tools/refresh_wycheproof_corpus.py
+# exit=0 duration=0.006s
+35:  * Only transport errors are retried.  A 404 or a 403 is an ANSWER about the
+38:  * The final attempt is unguarded and its exception propagates.
+39:  * Nothing here ever sees a digest.  Content that arrives intact but WRONG is
+164:            if attempt == total or not is_retriable(exc):
+166:            delay = attempt * wait
+186:                f"{meta['sha256']} — the vendored copy is not upstream's bytes"

@@ -1,0 +1,3 @@
+$ ls benchmarks/generate_competitive.py
+# exit=0 duration=0.004s
+benchmarks/generate_competitive.py

@@ -1,0 +1,3 @@
+$ git diff --name-only 2dcef5c HEAD -- tests/test_adversarial_security.py tests/test_crypto_import_paths.py | wc -l
+# exit=0 duration=0.006s
+0

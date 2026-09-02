@@ -1,0 +1,4 @@
+$ ./build-release/bin/test_secp256k1 2>&1 | grep -E "512 keys|two lengths"
+# exit=0 duration=3.998s
+PASS: raw r||s equals the DER signature over 512 keys
+PASS: the comparison saw DER signatures of at least two lengths

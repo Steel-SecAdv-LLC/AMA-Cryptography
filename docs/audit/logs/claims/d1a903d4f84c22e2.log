@@ -1,0 +1,4 @@
+$ grep -c "12,684 bytes, cmp exit 0" benchmarks/baseline.json benchmarks/arm-baseline.json
+# exit=0 duration=0.004s
+benchmarks/baseline.json:1
+benchmarks/arm-baseline.json:1

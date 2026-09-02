@@ -1,0 +1,4 @@
+$ grep -n 'NO BENCHMARK WAS MEASURED!' benchmarks/benchmark_runner.py && grep -n 'def test_an_empty_baseline_is_fatal' tests/test_benchmark_baseline_infra.py
+# exit=0 duration=0.008s
+1714:        print("NO BENCHMARK WAS MEASURED!")
+1523:    def test_an_empty_baseline_is_fatal(

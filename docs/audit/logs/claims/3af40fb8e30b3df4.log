@@ -1,0 +1,3 @@
+$ grep -n "^Language: Cpp" .clang-format
+# exit=0 duration=0.005s
+28:Language: Cpp

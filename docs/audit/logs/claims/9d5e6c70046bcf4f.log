@@ -1,0 +1,3 @@
+$ grep -n 'def test_each_bounded_attempt_escalates_to_sigkill\|def test_apt_carries_its_own_acquire_timeouts\|def test_the_bounded_phase_fits_inside_a_job_budget\|def test_a_sigterm_ignoring_apt_is_actually_killed' tests/test_apt_retry_gate.py | wc -l
+# exit=0 duration=0.005s
+4

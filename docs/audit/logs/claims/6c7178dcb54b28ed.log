@@ -1,0 +1,4 @@
+$ grep -n "def test_a_vendor_in_a_non_first_slice_is_still_found\|def test_a_universal_binary_of_clean_slices_is_clean" tests/test_vendor_isolation_gate.py
+# exit=0 duration=0.005s
+692:    def test_a_vendor_in_a_non_first_slice_is_still_found(self, tmp_path: Path, wide: bool) -> None:
+708:    def test_a_universal_binary_of_clean_slices_is_clean(self, tmp_path: Path) -> None:

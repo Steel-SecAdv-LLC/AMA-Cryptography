@@ -1,0 +1,4 @@
+$ git cat-file -t 0cd6bb3; git log -1 --format='%s' 0cd6bb3
+# exit=0 duration=0.008s
+commit
+security(crypto): batch Ed25519 verify decides per entry, matching single verify (B1)

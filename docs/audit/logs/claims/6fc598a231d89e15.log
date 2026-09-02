@@ -1,0 +1,5 @@
+$ awk '/name: Security Checks/,/audit B2/' .github/workflows/ci.yml | grep -n "cmake -B build\|integrity --update --sign\|check_vendor_isolation.py"
+# exit=0 duration=0.005s
+122:        cmake -B build -DCMAKE_BUILD_TYPE=Release -DAMA_USE_NATIVE_PQC=ON \
+132:      run: python -m ama_cryptography.integrity --update --sign
+160:        python tools/check_vendor_isolation.py \

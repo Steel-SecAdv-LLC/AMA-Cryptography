@@ -1,0 +1,3 @@
+$ grep -c "^| ML-KEM-512\|^| ML-KEM-768\|^| ML-DSA-44\|^| ML-DSA-87\|^| SLH-DSA-SHAKE-128s\|^| HMAC-SHA-384\|^| HMAC-SHA-512\|^| HMAC-SHA3-256\|^| ECDSA (P-256\|^| ECDH (P-256\|^| LMS / HSS" CSRC_STANDARDS.md
+# exit=0 duration=0.005s
+11

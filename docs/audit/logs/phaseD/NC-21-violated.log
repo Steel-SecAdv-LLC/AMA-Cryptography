@@ -1,0 +1,7 @@
+RELEASE STATE CHECK FAILED — 5.0.0 is being tagged, but its own shipped documents still call it unreleased:
+  - CHANGELOG.md:22: still says CHANGELOG heading still reads '## [5.0.0] - Unreleased' ('## [5.0.0] - Unreleased')
+  - README.md:539: still says 'not tagged yet' about 5.0.0 ('v5.0.0` is not tagged yet')
+  - SECURITY.md:26: still says 'not yet tagged' about 5.0.0 ('5.0.0 is prepared but **not yet tagged')
+  - docs/index.rst:86: still says 'not tagged yet' about 5.0.0 ('v5.0.0`` **is not tagged yet')
+
+Update these before pushing the tag: move the CHANGELOG heading to a dated release, and flip the availability rows and the Sphinx landing page to 'released'. A tag that ships while the docs say it has not happened is the defect this gate exists to stop.

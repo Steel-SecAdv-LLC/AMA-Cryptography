@@ -1,0 +1,3 @@
+$ grep -A1 '"path": "src/c/dispatch/ama_dispatch.c"' benchmarks/baseline.json | grep -cE "seed to -1 instead of 0 \(d500783\).*PLATFORM guards from ._MSC_VER. to ._WIN32..*gcc -E -P"
+# exit=0 duration=0.005s
+1

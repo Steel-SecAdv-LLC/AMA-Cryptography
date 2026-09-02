@@ -1,0 +1,5 @@
+$ grep -nE '#define DIL_N 256|for \(len = 1; len < DIL_N; len <<= 1\)|a\[j\] = t \+ a\[j \+ len\];' src/c/ama_dilithium.c
+# exit=0 duration=0.006s
+83:#define DIL_N 256
+323:    for (len = 1; len < DIL_N; len <<= 1) {
+328:                a[j] = t + a[j + len];

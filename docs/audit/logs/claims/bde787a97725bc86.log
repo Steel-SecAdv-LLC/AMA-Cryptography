@@ -1,0 +1,4 @@
+$ grep -n "1,251" .github/workflows/dudect.yml tools/check_ghash_constant_time.py
+# exit=0 duration=0.004s
+.github/workflows/dudect.yml:851:        # came to be making `nistp_mont_mul` key-dependent by 1,251 retired
+tools/check_ghash_constant_time.py:1362: * made `nistp_mont_mul` key-dependent by 1,251 retired instructions over four

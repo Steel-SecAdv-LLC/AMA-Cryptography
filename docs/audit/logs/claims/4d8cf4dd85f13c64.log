@@ -1,0 +1,4 @@
+$ grep -n '| Primitive | Ops/sec | Baseline | Regression | Tolerance | Status |\|positive means SLOWER' benchmarks/benchmark_runner.py
+# exit=0 duration=0.005s
+1495:        "*Regression is measured against the floor: **positive means SLOWER** "
+1503:    lines.append("| Primitive | Ops/sec | Baseline | Regression | Tolerance | Status |")

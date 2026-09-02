@@ -1,0 +1,3 @@
+$ sed -n '/^\*\*DOC-07\*\*/,/^$/p' CHANGELOG.md | grep -c "No absolute figure is repeated here"
+# exit=1 duration=0.006s
+0

@@ -1,0 +1,3 @@
+$ grep -n 'posture-rotation-N.. identifiers registered, one per cycle' tests/test_adaptive_posture.py
+# exit=0 duration=0.006s
+745:    fresh ``posture-rotation-N`` identifiers registered, one per cycle.

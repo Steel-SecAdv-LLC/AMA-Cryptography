@@ -66,7 +66,8 @@ jobs:
         run: |
           cmake -B build-fuzz \
             -DCMAKE_C_COMPILER=clang \
-            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_C_FLAGS_RELWITHDEBINFO="-O2 -g" \
             -DAMA_BUILD_FUZZ=ON \
             -DAMA_BUILD_TESTS=OFF \
             -DAMA_BUILD_EXAMPLES=OFF \
@@ -154,12 +155,24 @@ jobs:
 
       - name: Build one fuzz target (dictionary parser host)
         run: |
-          # Debug, matching every other fuzz configure in this file: the fuzz
-          # build carries its own sanitizer flags in CMAKE_C_FLAGS, and Release
-          # would append -fomit-frame-pointer after them and cost the stack
-          # traces a crash report is for.
+          # -O2 -g with NDEBUG stripped, matching every other fuzz configure
+          # in this file.  This was `Debug` (-O0) on the stated ground that
+          # "Release would append -fomit-frame-pointer after them and cost the
+          # stack traces a crash report is for" — measured false: CMake appends
+          # the target's own flags AFTER CMAKE_C_FLAGS_<CONFIG>, and
+          # fuzz/CMakeLists.txt ends its FUZZ_FLAGS with -fno-omit-frame-pointer,
+          # so the frame pointer survives at every build type (checked in the
+          # emitted flags.make of a Release fuzz configure).  What -O0 did cost
+          # is depth: at 60 s per target, one seed corpus and the same -max_len,
+          # -O2 -g reached 3.0x to 16.7x more executions per target than -O0
+          # (docs/audit/PR394_FUZZ_DEPTH.tsv vs PR394_FUZZ_DEPTH_O2G.tsv;
+          # fuzz_sphincs 20 -> 116, fuzz_frost 515 -> 5,627, fuzz_dilithium
+          # 1,748 -> 7,167).  NDEBUG is left OUT so assert() stays live exactly
+          # as it was under Debug — the ONLY semantic difference between the two
+          # configurations is the optimisation level.
           cmake -B build-fuzz -DAMA_BUILD_FUZZ=ON \
-            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_C_FLAGS_RELWITHDEBINFO="-O2 -g" \
             -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
             -DAMA_USE_NATIVE_PQC=ON
           cmake --build build-fuzz --target fuzz_sha3 -j$(nproc)
@@ -235,7 +248,8 @@ jobs:
         run: |
           cmake -B build-fuzz \
             -DCMAKE_C_COMPILER=clang \
-            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_C_FLAGS_RELWITHDEBINFO="-O2 -g" \
             -DAMA_BUILD_FUZZ=ON \
             -DAMA_BUILD_TESTS=OFF \
             -DAMA_BUILD_EXAMPLES=OFF \
@@ -396,7 +410,8 @@ jobs:
         run: |
           cmake -B build-fuzz-ct \
             -DCMAKE_C_COMPILER=clang \
-            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_C_FLAGS_RELWITHDEBINFO="-O2 -g" \
             -DAMA_BUILD_FUZZ=ON \
             -DAMA_BUILD_TESTS=OFF \
             -DAMA_BUILD_EXAMPLES=OFF \

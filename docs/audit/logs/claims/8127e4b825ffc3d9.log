@@ -1,0 +1,4 @@
+$ grep -n '_SELF_TEST_RESULTS.append(("integrity", True\|_SELF_TEST_RESULTS.append(("execution-integrity", False' ama_cryptography/_self_test.py | head -2
+# exit=0 duration=0.005s
+2826:    _SELF_TEST_RESULTS.append(("integrity", True, integrity_detail))
+2847:        _SELF_TEST_RESULTS.append(("execution-integrity", False, f"Exception: {exc}"))

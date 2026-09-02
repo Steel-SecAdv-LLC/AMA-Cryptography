@@ -1,0 +1,13 @@
+$ python -c "import random
+from ama_cryptography.monitoring import EWMAStats
+r=random.Random(20260902);bad=0
+for i in range(8000):
+    w=r.randint(1,60);s=EWMAStats(alpha=0.1,window_size=w);n=r.randint(1,w)
+    vals=[r.uniform(-1e9,1e9) for _ in range(n)] if i%4==0 else [r.choice([1e-9,1e9,0.0,3.5]) for _ in range(n)] if i%4==1 else [7.25]*n if i%4==2 else [r.choice([1.0,2.0,2.0,3.0,1e-9]) for _ in range(n)]
+    for v in vals: s.update(v)
+    vs=sorted(s._recent_values);m=len(vs);med=vs[m//2] if m%2 else (vs[m//2-1]+vs[m//2])/2.0
+    dv=sorted(abs(v-med) for v in vs);mad=dv[m//2] if m%2 else (dv[m//2-1]+dv[m//2])/2.0
+    bad+=(s._median_and_mad()!=(med,mad))
+print('windows 8000 mismatches',bad)"
+# exit=0 duration=0.677s
+windows 8000 mismatches 0

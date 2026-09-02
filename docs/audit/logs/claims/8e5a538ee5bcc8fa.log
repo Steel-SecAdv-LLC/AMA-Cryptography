@@ -1,0 +1,3 @@
+$ grep -c 'dudect_ctx_init(&ctx, "Kyber-1024 decaps\|dudect_ctx_init(&ctx, "ML-DSA-65 sign\|dudect_ctx_init(&ctx, "Argon2id legacy verify"' tests/c/test_dudect.c
+# exit=0 duration=0.008s
+3

@@ -1,0 +1,5 @@
+$ grep -n "sitecustomize.py" tests/test_vendor_isolation_gate.py; grep -n "is resident after importing the package" tools/check_vendor_isolation.py
+# exit=0 duration=0.007s
+984:        (inject / "sitecustomize.py").write_text("import cryptography\n", encoding="utf-8")
+822:            f"{module!r} is resident after importing the package — " f"{_MODULE_TO_VENDOR[module]}",
+831:                f"{COMPARATOR_PACKAGE!r} is resident after importing the package",

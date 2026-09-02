@@ -1,0 +1,6 @@
+$ grep -nE "^\s+os: \[.*windows-latest.*\]|^\s+python-version: \[" .github/workflows/ci.yml .github/workflows/ci-build-test.yml
+# exit=0 duration=0.005s
+.github/workflows/ci.yml:32:        os: [ubuntu-latest, windows-latest]
+.github/workflows/ci.yml:33:        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+.github/workflows/ci-build-test.yml:251:        os: [ubuntu-latest, macos-latest, macos-15-intel, windows-latest]
+.github/workflows/ci-build-test.yml:252:        python-version: ['3.10', '3.11', '3.12', '3.13', '3.14']

@@ -1,0 +1,4 @@
+$ grep -cE '^\s+"[0-9a-f]{64}",' tests/test_vector_provenance_gate.py; grep -n "assert len(families) >= 4" tests/test_vector_provenance_gate.py
+# exit=0 duration=0.006s
+4
+144:    assert len(families) >= 4, f"anchors only cover {families}"

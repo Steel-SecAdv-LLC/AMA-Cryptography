@@ -1,0 +1,20 @@
+Checkout byte-identity check FAILED
+
+  1 file(s) differ from the committed blob only in line
+  endings. This is what an existing clone looks like after pulling the
+  `* -text` rule: git rewrites a working-tree file on checkout only
+  when its content changed, so everything the merge did not touch keeps
+  the CRLF it was written with — and `git status` reports the tree
+  clean, because the stat cache means it never re-hashes those paths.
+
+  Local runs read these bytes. Byte-sensitive tests (the note-detector
+  calibration, corpus digests) will disagree with CI until it is fixed.
+
+    git rm --cached -r . && git reset --hard
+
+  Not `git add --renormalize .`: with `-text` there is no clean filter,
+  so that stages the CRLF verbatim and commits the problem.
+
+  First few: CONTRIBUTING.md
+
+1 violation(s) across 1690 tracked file(s).

@@ -1,0 +1,5 @@
+$ grep -c 'ama_ed25519_avx2' ENHANCED_FEATURES.md; ls src/c/avx2/ | grep -c ed25519; git log --all --oneline -- src/c/avx2/ama_ed25519_avx2.c | wc -l
+# exit=0 duration=0.040s
+0
+0
+2

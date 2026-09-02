@@ -1,0 +1,4 @@
+$ sed -n 112p ama_cryptography/key_formats.py; /opt/ama-venv/bin/python -c "import re;s=open('ama_cryptography/key_formats.py').read();b=re.search(r'^def jwk_thumbprint\(.*?(?=^def |\Z)',s,re.S|re.M).group(0);t=len(re.findall(r'\b_pb\.',b));print('THUMB',t,'ELSEWHERE',len(re.findall(r'\b_pb\.',s))-t,sorted(set(re.findall(r'\b_pb\.(\w+)',b))))"
+# exit=0 duration=0.037s
+import ama_cryptography.pqc_backends as _pb
+THUMB 6 ELSEWHERE 14 ['native_sha256', 'native_sha384', 'native_sha3_256', 'native_sha3_384', 'native_sha3_512', 'native_sha512']

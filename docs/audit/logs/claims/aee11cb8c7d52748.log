@@ -1,0 +1,4 @@
+$ grep -c "benchmark_c_raw --json" README.md wiki/Performance-Benchmarks.md
+# exit=0 duration=0.004s
+README.md:4
+wiki/Performance-Benchmarks.md:1

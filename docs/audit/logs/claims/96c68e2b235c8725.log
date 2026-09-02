@@ -1,0 +1,14 @@
+$ sed -n 91,102p tests/c/test_dudect.c
+# exit=0 duration=0.004s
+static dudect_measurement_t dudect_lane_finish(dudect_ctx_t *ctx) {
+    if (dudect_measurement_failed(ctx)) {
+        fprintf(stderr,
+                "  FATAL: lane '%s' produced no usable statistic (the context "
+                "was poisoned: allocation failure, or more samples than its "
+                "declared capacity). Refusing to report a verdict for it.\n",
+                ctx->name);
+        return (dudect_measurement_t){.t = DUDECT_FATAL_SENTINEL};
+    }
+    return (dudect_measurement_t){.t = dudect_get_t(ctx),
+                                  .delta_ns = dudect_get_delta_ns(ctx)};
+}

@@ -1,0 +1,3 @@
+$ python -c "import ama_cryptography.equations as e; from ama_cryptography._numeric import asmat; e._symmetric_part = lambda m: m; d = e._dominant_eigenvector(asmat([[0.0,4.0],[0.0,1.0]])); print('no-symmetrisation', [round(float(x),3) for x in d])"
+# exit=0 duration=0.468s
+no-symmetrisation [0.97, 0.243]

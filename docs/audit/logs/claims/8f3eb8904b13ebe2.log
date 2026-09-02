@@ -1,0 +1,5 @@
+$ grep -n -- '--timeout 600\|DUDECT_TIMEOUT=600' .github/workflows/dudect.yml | wc -l; awk '/^  dudect-utility:/,/^    steps:/' .github/workflows/dudect.yml | grep timeout-minutes; awk '/^  dudect-x25519-avx2-batch:/,/^    steps:/' .github/workflows/dudect.yml | grep timeout-minutes
+# exit=0 duration=0.008s
+3
+    timeout-minutes: 20
+    timeout-minutes: 20

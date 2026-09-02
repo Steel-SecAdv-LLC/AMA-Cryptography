@@ -1,0 +1,5 @@
+$ readelf -dW ama_cryptography/ed25519_binding.cpython-311-x86_64-linux-gnu.so | grep -E 'NEEDED|RUNPATH'
+# exit=0 duration=0.006s
+ 0x0000000000000001 (NEEDED)             Shared library: [libama_cryptography.so.5]
+ 0x0000000000000001 (NEEDED)             Shared library: [libc.so.6]
+ 0x000000000000001d (RUNPATH)            Library runpath: [$ORIGIN:$ORIGIN/../build/lib:$ORIGIN/../../build/lib]

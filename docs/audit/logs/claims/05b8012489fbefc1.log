@@ -1,0 +1,5 @@
+$ grep -n -A2 "^_PIN_EXEMPT: dict\[str, str\] = {" tools/check_action_pins.py
+# exit=0 duration=0.005s
+122:_PIN_EXEMPT: dict[str, str] = {
+123-    "slsa-framework/slsa-github-generator/.github/workflows/"
+124-    "generator_generic_slsa3.yml": (

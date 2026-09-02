@@ -1,0 +1,6 @@
+$ grep -nE "DOITM|PSTATE.DIT" .github/workflows/dudect.yml | head -4
+# exit=0 duration=0.005s
+675:        # to the CPU's data-operand-dependent execution — what Intel's DOITM
+676:        # and ARM's PSTATE.DIT exist to control — not to src/c/ama_ascon.c.
+712:        # belongs to the CPU's data-operand-dependent execution (DOITM /
+713:        # PSTATE.DIT), not to src/c/ama_sha3.c.  This gate is what a real

@@ -1,0 +1,4 @@
+$ git log --format='%ad' --date=short -- assets/performance_dashboard.png | tail -1; git log -1 --format='%ad' --date=short v3.4.0
+# exit=0 duration=0.031s
+2026-04-24
+2026-07-26

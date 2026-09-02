@@ -1,0 +1,15 @@
+==25497== Memcheck, a memory error detector
+==25497== Copyright (C) 2002-2022, and GNU GPL'd, by Julian Seward et al.
+==25497== Using Valgrind-3.22.0 and LibVEX; rerun with -h for copyright info
+==25497== Command: /home/user/AMA-Cryptography/build-valgrind/bin/test_secure_memory_dontdump
+==25497== 
+PASS: unaligned ama_secure_mlock yields kernel-recorded 'dd' (MADV_DONTDUMP) over the full range
+==25497== 
+==25497== HEAP SUMMARY:
+==25497==     in use at exit: 0 bytes in 0 blocks
+==25497==   total heap usage: 8 allocs, 8 frees, 24,968 bytes allocated
+==25497== 
+==25497== All heap blocks were freed -- no leaks are possible
+==25497== 
+==25497== For lists of detected and suppressed errors, rerun with: -s
+==25497== ERROR SUMMARY: 0 errors from 0 contexts (suppressed: 0 from 0)

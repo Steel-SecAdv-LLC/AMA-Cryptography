@@ -1,0 +1,6 @@
+$ grep -nE "^FAKE_|^DIL_SK" tests/test_crypto_import_paths.py tests/test_adversarial_security.py
+# exit=0 duration=0.004s
+tests/test_crypto_import_paths.py:93:FAKE_PRIVATE_KEY = b"K" * 4032  # 4032 bytes for ML-DSA-65 secret key
+tests/test_crypto_import_paths.py:94:FAKE_PUBLIC_KEY = b"P" * 1952  # 1952 bytes for ML-DSA-65 public key
+tests/test_crypto_import_paths.py:95:FAKE_SIGNATURE = b"S" * 3309  # 3309 bytes for ML-DSA-65 signature
+tests/test_adversarial_security.py:45:DIL_SK = 4032

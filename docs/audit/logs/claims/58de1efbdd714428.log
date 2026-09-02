@@ -1,0 +1,5 @@
+$ python -c "import tools.check_avx_scoping as g; print(len(g.ISA_FAMILIES), [f.name for f in g.ISA_FAMILIES], list(g.IsaFamily.__dataclass_fields__.keys()))"
+# exit=1 duration=0.044s
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+AttributeError: type object 'IsaFamily' has no attribute '__dataclass_fields__'

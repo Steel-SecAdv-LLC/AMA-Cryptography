@@ -1,0 +1,3 @@
+$ python -c "import math; from ama_cryptography.monitoring import ResonanceTimingMonitor as R; print(R._resonance_threshold(127)==math.log(127/0.01), round(R._resonance_threshold(127),2), R.RESONANCE_FALSE_ALARM_RATE)"
+# exit=0 duration=0.539s
+True 9.45 0.01

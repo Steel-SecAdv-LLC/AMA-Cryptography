@@ -1,0 +1,3 @@
+$ python -c "import urllib.error, sys; e=urllib.error.HTTPError('https://x', 503, 'm', {}, None); print(sys.version_info[:2], type(e.fp).__name__); e.close()"
+# exit=0 duration=0.034s
+(3, 11) BytesIO

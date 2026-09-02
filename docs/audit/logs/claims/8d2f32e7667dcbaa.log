@@ -1,0 +1,3 @@
+$ grep -cE "^def test_(a_feed_outage_is_not_a_success|a_transient_outage_recovers|a_reported_success_without_the_payload_is_a_failure|a_genuinely_missing_package_still_fails|a_clean_install_takes_one_attempt)" tests/test_choco_retry_gate.py
+# exit=0 duration=0.004s
+5

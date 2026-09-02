@@ -1,0 +1,4 @@
+$ grep -nE "^(PyYAML|types-PyYAML)>=" requirements-dev.txt
+# exit=0 duration=0.004s
+34:PyYAML>=6.0.3
+35:types-PyYAML>=6.0.12.20260724

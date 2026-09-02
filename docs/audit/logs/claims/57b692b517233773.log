@@ -1,0 +1,5 @@
+$ grep -nE "define DUDECT_MIN_EFFECT_NS|fabs\(lane->max_trip_delta_ns\) < DUDECT_MIN_EFFECT_NS|return DUDECT_LANE_SUB_FLOOR;" tests/c/dudect/dudect_rounds.h
+# exit=0 duration=0.005s
+185:#define DUDECT_MIN_EFFECT_NS 2.0
+446:    if (fabs(lane->max_trip_delta_ns) < DUDECT_MIN_EFFECT_NS)
+447:        return DUDECT_LANE_SUB_FLOOR;

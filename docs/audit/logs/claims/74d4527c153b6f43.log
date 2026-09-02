@@ -1,0 +1,3 @@
+$ grep -c "keccak_fallback_regressed" src/c/dispatch/ama_dispatch.c
+# exit=0 duration=0.004s
+9

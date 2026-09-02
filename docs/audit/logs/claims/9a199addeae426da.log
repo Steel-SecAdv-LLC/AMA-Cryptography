@@ -1,0 +1,3 @@
+$ grep -c "fdiv" tools/check_secret_division.py
+# exit=0 duration=0.007s
+3

@@ -1,0 +1,3 @@
+$ readelf -nW build-arm/lib/libama_cryptography.so | grep -c 'AArch64 feature'
+# exit=1 duration=0.004s
+0

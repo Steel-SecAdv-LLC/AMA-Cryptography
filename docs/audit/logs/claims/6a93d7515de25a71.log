@@ -1,0 +1,3 @@
+$ python -c "import ama_cryptography; from ama_cryptography import _self_test; print(len(_self_test._SELF_TEST_RESULTS))"
+# exit=0 duration=0.643s
+13

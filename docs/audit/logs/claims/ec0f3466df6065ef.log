@@ -1,0 +1,3 @@
+$ git show 6a22aa2^:tools/constant_time/dudect_harness.c | grep -c "if (class_idx"
+# exit=0 duration=0.006s
+3

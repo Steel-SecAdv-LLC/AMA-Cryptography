@@ -1,0 +1,5 @@
+$ sed -n '/^def _atomic_write_json/,/^def /p' ama_cryptography/crypto_api.py | grep -nE "except BaseException|os\.close\(fd\)|^\s+raise$"
+# exit=0 duration=0.006s
+18:    except BaseException:
+19:        os.close(fd)
+24:        raise

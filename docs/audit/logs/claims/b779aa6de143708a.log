@@ -1,0 +1,4 @@
+$ ls ama_cryptography/*_binding.cpython-*.so | wc -l; for f in ama_cryptography/*_binding.cpython-*.so; do readelf -dW "$f" | grep -c 'NEEDED.*\[libama_cryptography\.so\.5\]\|RUNPATH.*\[\$ORIGIN'; done | tr '\n' ' '
+# exit=0 duration=0.026s
+5
+2 2 2 2 2 

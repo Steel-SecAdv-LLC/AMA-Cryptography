@@ -1,0 +1,3 @@
+$ grep -n 'Enumerate tracked package .py files via ``os.walk``, not ``rglob``' tests/test_build_sign.py
+# exit=0 duration=0.005s
+558:        """Enumerate tracked package .py files via ``os.walk``, not ``rglob``.

@@ -1,0 +1,4 @@
+$ grep -c 'raise SessionError("Session is closed")' ama_cryptography/session.py; awk '/class SessionStore/,0' ama_cryptography/session.py | grep -c 'if session.is_expired:'
+# exit=0 duration=0.009s
+3
+1

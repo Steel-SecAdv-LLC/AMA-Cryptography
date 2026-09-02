@@ -1,0 +1,4 @@
+$ grep -c "results\[i\] = 0;" src/c/ama_ed25519.c src/c/ed25519_donna_shim.c
+# exit=0 duration=0.004s
+src/c/ama_ed25519.c:1
+src/c/ed25519_donna_shim.c:1

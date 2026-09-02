@@ -1,0 +1,3 @@
+$ grep -n "^WarningsAsErrors: '\*'" .clang-tidy
+# exit=0 duration=0.005s
+129:WarningsAsErrors: '*'

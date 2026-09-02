@@ -1,0 +1,6 @@
+$ S=/tmp/claude-0/-home-user-AMA-Cryptography/7da6a6a3-7996-5d8d-a052-37df782d45a9/scratchpad/cet; mkdir -p $S && echo 'int main(void){return 0;}' > $S/m.c && aarch64-linux-gnu-gcc -mbranch-protection=standard -c $S/m.c -o $S/m_a64b.o && readelf -nW $S/m_a64b.o
+# exit=0 duration=0.031s
+
+Displaying notes found in: .note.gnu.property
+  Owner                Data size 	Description
+  GNU                  0x00000010	NT_GNU_PROPERTY_TYPE_0	      Properties: AArch64 feature: BTI, PAC

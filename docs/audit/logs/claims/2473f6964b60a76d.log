@@ -1,0 +1,4 @@
+$ nm -D --defined-only build-release/lib/libama_cryptography.so | wc -l; nm -D --defined-only build-release/lib/libama_cryptography.so | awk '{print $3}' | grep -vc '^ama_'
+# exit=1 duration=0.046s
+240
+0

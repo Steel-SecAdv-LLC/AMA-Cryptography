@@ -1,0 +1,3 @@
+$ grep -c "An earlier revision of this paragraph said the opposite" SECURITY.md
+# exit=0 duration=0.005s
+1

@@ -1,0 +1,10 @@
+$ grep -cE '^\s*check_bound\("' tests/c/test_dilithium_invntt_bound.c; ctest --test-dir build-release -R '^test_dilithium_invntt_bound$' --output-on-failure
+# exit=0 duration=0.295s
+4
+Test project /home/user/AMA-Cryptography/build-release
+    Start 57: test_dilithium_invntt_bound
+1/1 Test #57: test_dilithium_invntt_bound ......   Passed    0.19 sec
+
+100% tests passed out of 1
+
+Total Test time (real) =   0.20 sec

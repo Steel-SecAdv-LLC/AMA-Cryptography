@@ -1,0 +1,4 @@
+$ grep -c 'dudect_ctx_init(&ctx, "' tests/c/test_dudect.c; grep -n 'over 27 lanes takes about 100 s' .github/workflows/dudect.yml
+# exit=0 duration=0.006s
+26
+175:          # a round of 100,000 measurements over 27 lanes takes about 100 s on

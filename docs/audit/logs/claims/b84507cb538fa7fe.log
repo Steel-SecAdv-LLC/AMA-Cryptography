@@ -1,0 +1,7 @@
+$ grep -n -A3 '    while (ctr < KYBER_N) {' src/c/ama_kyber.c; grep -c 'ama_shake128_x4_squeezeblocks(' src/c/ama_kyber.c
+# exit=0 duration=0.006s
+451:    while (ctr < KYBER_N) {
+452-        ama_shake128_inc_squeeze(&shake_ctx, stream, KYBER_XOF_BLOCKBYTES);
+453-        ctr = kyber_rej_uniform_from_stream(a, ctr, stream, KYBER_XOF_BLOCKBYTES);
+454-    }
+2

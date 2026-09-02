@@ -1,0 +1,4 @@
+$ grep -c "own this range and measure it exactly" tests/c/dudect/dudect_rounds.h tests/c/test_dudect.c
+# exit=1 duration=0.004s
+tests/c/dudect/dudect_rounds.h:0
+tests/c/test_dudect.c:0

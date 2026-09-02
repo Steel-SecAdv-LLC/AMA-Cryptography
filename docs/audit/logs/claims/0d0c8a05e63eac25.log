@@ -1,0 +1,6 @@
+$ git show --stat --format=%h 4c3dcfa -- benchmarks/generate_competitive.py
+# exit=0 duration=0.005s
+4c3dcfa
+
+ benchmarks/generate_competitive.py | 10 ++++++----
+ 1 file changed, 6 insertions(+), 4 deletions(-)

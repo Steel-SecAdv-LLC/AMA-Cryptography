@@ -1,0 +1,4 @@
+$ find build-release -name 'ama_ed25519.c.o' | wc -l; find build-release -name 'ed25519_donna_shim.c.o' | wc -l
+# exit=0 duration=0.010s
+0
+3

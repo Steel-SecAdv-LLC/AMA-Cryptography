@@ -1,0 +1,4 @@
+OK: no compiler warnings outside the frozen allowlist.
+  allowlisted [vendored-source]: 6
+  allowlisted [int128-extension]: 0
+  allowlisted [overlength-asm-literal]: 6

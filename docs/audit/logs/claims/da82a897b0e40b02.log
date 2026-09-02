@@ -1,0 +1,20 @@
+$ S=/tmp/claude-0/-home-user-AMA-Cryptography/7da6a6a3-7996-5d8d-a052-37df782d45a9/scratchpad/oldreg; mkdir -p $S/include && git show fe8b8ab^:CSRC_STANDARDS.md > $S/CSRC_STANDARDS.md && cp include/ama_cryptography.h $S/include/ && python -c "import sys; sys.path.insert(0,'tools'); from pathlib import Path; import check_algorithm_registry as g; print('\n'.join(g.audit(Path('$S'))))"
+# exit=0 duration=0.045s
+CSRC_STANDARDS.md: no row mentions 'NIST SP 800-208', which family 'ama_hss_*' maps to. The document's own first paragraph says it lists every implemented primitive.
+CSRC_STANDARDS.md: no row mentions 'ML-KEM-768', which family 'ama_kem_*' maps to. The document's own first paragraph says it lists every implemented primitive.
+CSRC_STANDARDS.md: no row mentions 'NIST SP 800-208', which family 'ama_lms_*' maps to. The document's own first paragraph says it lists every implemented primitive.
+CSRC_STANDARDS.md: no row mentions 'ML-KEM-512', which family 'ama_ml_*' maps to. The document's own first paragraph says it lists every implemented primitive.
+CSRC_STANDARDS.md: no row mentions 'FIPS 186-5', which family 'ama_nistp_*' maps to. The document's own first paragraph says it lists every implemented primitive.
+CSRC_STANDARDS.md: no row mentions 'NIST SP 800-56A', which family 'ama_nistp_*' maps to. The document's own first paragraph says it lists every implemented primitive.
+CSRC_STANDARDS.md: no row mentions 'SLH-DSA-SHAKE-128s', which family 'ama_slhdsa_*' maps to. The document's own first paragraph says it lists every implemented primitive.
+CSRC_STANDARDS.md: no row's Algorithm column names 'ML-DSA-44', the parameter set AMA_ML_DSA_44 ships. A family-level citation is not enough: the document says it maps every primitive to its parameter set.
+CSRC_STANDARDS.md: no row's Algorithm column names 'ML-DSA-87', the parameter set AMA_ML_DSA_87 ships. A family-level citation is not enough: the document says it maps every primitive to its parameter set.
+CSRC_STANDARDS.md: no row's Algorithm column names 'ML-KEM-512', the parameter set AMA_ML_KEM_512 ships. A family-level citation is not enough: the document says it maps every primitive to its parameter set.
+CSRC_STANDARDS.md: no row's Algorithm column names 'ML-KEM-768', the parameter set AMA_ML_KEM_768 ships. A family-level citation is not enough: the document says it maps every primitive to its parameter set.
+CSRC_STANDARDS.md: no row's Algorithm column names 'P-256', the parameter set AMA_NIST_CURVE_P256 ships. A family-level citation is not enough: the document says it maps every primitive to its parameter set.
+CSRC_STANDARDS.md: no row's Algorithm column names 'P-384', the parameter set AMA_NIST_CURVE_P384 ships. A family-level citation is not enough: the document says it maps every primitive to its parameter set.
+CSRC_STANDARDS.md: no row's Algorithm column names 'P-521', the parameter set AMA_NIST_CURVE_P521 ships. A family-level citation is not enough: the document says it maps every primitive to its parameter set.
+CSRC_STANDARDS.md: no row's Algorithm column names 'SLH-DSA-SHAKE-128s', the parameter set AMA_SLHDSA_SHAKE_128S ships. A family-level citation is not enough: the document says it maps every primitive to its parameter set.
+CSRC_STANDARDS.md: no row's Algorithm column names 'HMAC-SHA-384', the parameter set ama_hmac_sha384 ships. A family-level citation is not enough: the document says it maps every primitive to its parameter set.
+CSRC_STANDARDS.md: no row's Algorithm column names 'HMAC-SHA3-256', the parameter set ama_hmac_sha3_256 ships. A family-level citation is not enough: the document says it maps every primitive to its parameter set.
+CSRC_STANDARDS.md: no row's Algorithm column names 'HMAC-SHA-512', the parameter set ama_hmac_sha512 ships. A family-level citation is not enough: the document says it maps every primitive to its parameter set.

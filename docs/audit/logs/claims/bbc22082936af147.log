@@ -1,0 +1,4 @@
+$ sed -n '/^\*\*DOC-07\*\*/,/^$/p' CHANGELOG.md | grep -c "table row of 4,180"; grep -c "4,168" CHANGELOG.md
+# exit=0 duration=0.008s
+1
+1

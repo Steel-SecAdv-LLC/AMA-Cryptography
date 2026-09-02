@@ -1,0 +1,4 @@
+$ grep -c "^import hashlib" tools/check_vector_provenance.py; grep -c "import ama_cryptography\|from ama_cryptography" tools/check_vector_provenance.py
+# exit=1 duration=0.009s
+1
+0

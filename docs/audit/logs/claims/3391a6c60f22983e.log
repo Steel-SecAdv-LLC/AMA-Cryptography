@@ -1,0 +1,4 @@
+$ grep -n 'selector.search\|selector.match' tests/test_precommit_mypy_scope.py
+# exit=0 duration=0.004s
+167:    hook_misses = sorted(f for f in ci_files if not selector.search(f))
+186:    hook_extra = sorted(f for f in tracked - ci_files if selector.search(f))

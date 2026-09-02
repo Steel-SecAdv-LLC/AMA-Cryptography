@@ -1,0 +1,3 @@
+$ nm -D --undefined-only build-release/lib/libama_cryptography.so | grep -ciE "EVP_|sodium|wolf|botan|nettle|gcry|mbedtls|SSL_|CRYPTO_"
+# exit=1 duration=0.022s
+0

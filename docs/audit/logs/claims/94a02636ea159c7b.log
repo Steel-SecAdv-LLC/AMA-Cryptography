@@ -1,0 +1,4 @@
+$ awk '/^class TestJustificationMustAccountForTheChange/{f=1;next} f&&/^class /{exit} f&&/^    def test_/{n++} END{print n}' tests/test_benchmark_baseline_infra.py; grep -c '"init", "-q"' tests/test_benchmark_baseline_infra.py
+# exit=0 duration=0.008s
+8
+1

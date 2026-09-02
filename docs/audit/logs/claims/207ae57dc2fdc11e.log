@@ -1,0 +1,5 @@
+$ grep -c PROVENANCE CMakeLists.txt; grep -rn PROVENANCE src/c --include='*.c' --include='*.h' | wc -l; grep -rn '#include.*PROVENANCE' src/c | wc -l
+# exit=1 duration=0.013s
+0
+6
+0

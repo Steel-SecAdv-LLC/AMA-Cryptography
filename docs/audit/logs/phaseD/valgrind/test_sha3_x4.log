@@ -1,0 +1,76 @@
+==30733== Memcheck, a memory error detector
+==30733== Copyright (C) 2002-2022, and GNU GPL'd, by Julian Seward et al.
+==30733== Using Valgrind-3.22.0 and LibVEX; rerun with -h for copyright info
+==30733== Command: /home/user/AMA-Cryptography/build-valgrind/bin/test_sha3_x4
+==30733== 
+===========================================
+4-way SHAKE128/SHAKE256 vs scalar equivalence test
+===========================================
+
+  PASS: shake128 x4 absorb returns success
+  PASS: shake128 x4 squeeze returns success
+  PASS: DSA matrix seeds lane 0 byte-identical (nblocks=5)
+  PASS: DSA matrix seeds lane 1 byte-identical (nblocks=5)
+  PASS: DSA matrix seeds lane 2 byte-identical (nblocks=5)
+  PASS: DSA matrix seeds lane 3 byte-identical (nblocks=5)
+  PASS: shake128 x4 absorb returns success
+  PASS: shake128 x4 squeeze returns success
+  PASS: KEM matrix seeds lane 0 byte-identical (nblocks=4)
+  PASS: KEM matrix seeds lane 1 byte-identical (nblocks=4)
+  PASS: KEM matrix seeds lane 2 byte-identical (nblocks=4)
+  PASS: KEM matrix seeds lane 3 byte-identical (nblocks=4)
+  PASS: shake128 split-squeeze absorb returns success
+  PASS: shake128 first partial squeeze (2 blocks)
+  PASS: shake128 second partial squeeze (3 blocks)
+  PASS: shake128 split-squeeze lane 0 byte-identical
+  PASS: shake128 split-squeeze lane 1 byte-identical
+  PASS: shake128 split-squeeze lane 2 byte-identical
+  PASS: shake128 split-squeeze lane 3 byte-identical
+  PASS: shake128 absorb rejects input > rate
+  PASS: shake128 absorb rejects input == rate
+  PASS: shake128 absorb rejects in_len == rate on lane 1
+  PASS: shake128 absorb rejects in_len == rate on lane 2
+  PASS: shake128 absorb rejects in_len == rate on lane 3
+  PASS: shake256 x4 absorb returns success
+  PASS: shake256 x4 squeeze returns success
+  PASS: DSA eta seeds lane 0 byte-identical (nblocks=2)
+  PASS: DSA eta seeds lane 1 byte-identical (nblocks=2)
+  PASS: DSA eta seeds lane 2 byte-identical (nblocks=2)
+  PASS: DSA eta seeds lane 3 byte-identical (nblocks=2)
+  PASS: shake256 x4 absorb returns success
+  PASS: shake256 x4 squeeze returns success
+  PASS: DSA gamma1 seeds lane 0 byte-identical (nblocks=5)
+  PASS: DSA gamma1 seeds lane 1 byte-identical (nblocks=5)
+  PASS: DSA gamma1 seeds lane 2 byte-identical (nblocks=5)
+  PASS: DSA gamma1 seeds lane 3 byte-identical (nblocks=5)
+  PASS: shake256 x4 absorb returns success
+  PASS: shake256 x4 squeeze returns success
+  PASS: KEM gennoise seeds lane 0 byte-identical (nblocks=1)
+  PASS: KEM gennoise seeds lane 1 byte-identical (nblocks=1)
+  PASS: KEM gennoise seeds lane 2 byte-identical (nblocks=1)
+  PASS: KEM gennoise seeds lane 3 byte-identical (nblocks=1)
+  PASS: shake256 split-squeeze absorb returns success
+  PASS: shake256 first partial squeeze (1 block)
+  PASS: shake256 second partial squeeze (1 block)
+  PASS: shake256 split-squeeze lane 0 byte-identical
+  PASS: shake256 split-squeeze lane 1 byte-identical
+  PASS: shake256 split-squeeze lane 2 byte-identical
+  PASS: shake256 split-squeeze lane 3 byte-identical
+  PASS: shake256 absorb rejects input > rate
+  PASS: shake256 absorb rejects input == rate
+  PASS: shake256 absorb rejects in_len == rate on lane 1
+  PASS: shake256 absorb rejects in_len == rate on lane 2
+  PASS: shake256 absorb rejects in_len == rate on lane 3
+
+===========================================
+All 4-way SHAKE128/SHAKE256 equivalence tests passed!
+===========================================
+==30733== 
+==30733== HEAP SUMMARY:
+==30733==     in use at exit: 0 bytes in 0 blocks
+==30733==   total heap usage: 41 allocs, 41 frees, 24,896 bytes allocated
+==30733== 
+==30733== All heap blocks were freed -- no leaks are possible
+==30733== 
+==30733== For lists of detected and suppressed errors, rerun with: -s
+==30733== ERROR SUMMARY: 0 errors from 0 contexts (suppressed: 0 from 0)

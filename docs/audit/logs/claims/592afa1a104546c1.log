@@ -1,0 +1,4 @@
+$ grep -c 'timeout --kill-after="$KILL_AFTER"' .github/scripts/apt-install.sh; grep -n 'KILL_AFTER="${APT_ATTEMPT_KILL_AFTER:-' .github/scripts/apt-install.sh
+# exit=0 duration=0.006s
+2
+112:KILL_AFTER="${APT_ATTEMPT_KILL_AFTER:-30}"

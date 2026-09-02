@@ -1,0 +1,3 @@
+$ grep -cE "\bama_random_bytes\b|\bama_kyber_enc\b|\bama_kyber_dec\b|ama_shake256_inc_ctx_release" include/ama_cryptography.h
+# exit=1 duration=0.004s
+0

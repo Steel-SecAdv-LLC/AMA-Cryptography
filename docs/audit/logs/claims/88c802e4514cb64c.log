@@ -1,0 +1,4 @@
+$ git log -1 --format='%h %s' d96fb08; git show d96fb08:src/c/neon/ama_dilithium_neon.c | grep -c 'barrett_reduce_dil_neon('
+# exit=0 duration=0.010s
+d96fb08 fix(native): correct SIMD/ISA comments, drop dead NEON kernels, de-export test hook
+1

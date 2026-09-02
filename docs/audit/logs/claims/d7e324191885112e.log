@@ -1,0 +1,4 @@
+$ readelf -d build-release/lib/libama_cryptography.so.5.0.0 | grep NEEDED
+# exit=0 duration=0.005s
+ 0x0000000000000001 (NEEDED)             Shared library: [libc.so.6]
+ 0x0000000000000001 (NEEDED)             Shared library: [ld-linux-x86-64.so.2]

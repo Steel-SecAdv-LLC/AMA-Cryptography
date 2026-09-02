@@ -1,0 +1,5 @@
+$ grep -n '^from ama_cryptography.pqc_backends import.*native_hkdf' benchmarks/benchmark_suite.py; grep -c 'legacy_compat import.*native_hkdf' benchmarks/benchmark_suite.py; awk '/^__all__/,/^\]/' ama_cryptography/legacy_compat.py | grep -c native_hkdf
+# exit=1 duration=0.009s
+72:from ama_cryptography.pqc_backends import DILITHIUM_BACKEND, native_hkdf, native_sha3_256
+0
+0

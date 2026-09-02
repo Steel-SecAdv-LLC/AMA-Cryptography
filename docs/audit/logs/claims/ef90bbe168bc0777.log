@@ -1,0 +1,3 @@
+$ grep -c "def test_a_trailing_marker_without_justification_is_reported\|def test_a_bare_noqa_is_reported_even_when_fully_justified\|def test_prose_describing_a_marker_is_not_a_suppression" tests/test_invariant_upgrades.py
+# exit=0 duration=0.004s
+3

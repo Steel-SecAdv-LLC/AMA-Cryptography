@@ -1,0 +1,37 @@
+Wycheproof corpus — upstream https://github.com/C2SP/wycheproof
+  commit b61843a9a5115bb758134b6a1f5d5e502d445342
+  15 vendored file(s), 4263 vectors run
+
+    316  aes_gcm_test.json
+    325  chacha20_poly1305_test.json
+    476  ecdsa_secp256k1_sha256_test.json
+    484  ecdsa_secp256r1_sha256_test.json
+    504  ecdsa_secp384r1_sha384_test.json
+    542  ecdsa_secp521r1_sha512_test.json
+    150  ed25519_test.json
+     86  hkdf_sha256_test.json
+     83  hkdf_sha384_test.json
+     83  hkdf_sha512_test.json
+    174  hmac_sha256_test.json
+    174  hmac_sha384_test.json
+    174  hmac_sha3_256_test.json
+    174  hmac_sha512_test.json
+    518  x25519_test.json
+
+  pass                3912
+  acceptable            31
+  out-of-scope         248
+  policy-divergence     72
+  fail                   0
+
+Policy buckets (each vector claimed by a named, counted rule):
+  x25519/zero-shared-secret-rejected: 31 vector(s)
+      The public key has low order, so the shared secret is the all-zero value and carries no contribution from our private key. RFC 7748 §6.1 explicitly permits rejecting this, and AMA does: `ama_x25519_key_exchange` returns an error rather than a usable-looking 32 zero bytes. Wycheproof scores the case `acceptable` because returning the zeros is also permitted; rejecting is the stronger behaviour and is what this library commits to. Pinned by tests/test_x25519_canonical_u.py.
+  aes-gcm/key-size-not-256: 211 vector(s)
+      AMA ships AES-256-GCM only — there is no AES-128 or AES-192 key schedule in the library, so these vectors address an algorithm that is not present rather than one that is wrong. `native_aes256_gcm_decrypt` rejects the key length outright.
+  aes-gcm/iv-size-not-96-expecting-success: 37 vector(s)
+      AMA requires the 96-bit IV that SP 800-38D §5.2.1.1 recommends and does not implement the GHASH-based derivation GCM defines for other IV lengths. A vector that expects a *successful* decryption under a non-96-bit IV therefore cannot be driven at all. The corresponding `invalid` vectors are NOT in this bucket: they are run, and AMA's rejection of the IV length is scored as a genuine pass.
+  ecdsa/high-s-rejected: 72 vector(s)
+      Wycheproof scores these `valid` because plain X9.62 ECDSA accepts either of `s` and `n - s`. That is precisely signature malleability: given any valid (r, s), anyone can emit (r, n - s) — a different byte string that also verifies for the same message, with no access to the private key. It is the same defect class as the Ed25519 non-canonical-S bug this branch fixed. `ama_secp256k1_ecdsa_verify` therefore rejects high `s`, and `ama_secp256k1_ecdsa_sign` never emits it. Note tc5's own comment is 'signature malleability' — Wycheproof is describing the case accurately and scoring it against the weaker standard. The stricter policy is stated in include/ama_cryptography.h and pinned by tests/test_secp256k1_ecdsa.py.
+
+OK: every vendored Wycheproof vector is accounted for.

@@ -1,0 +1,3 @@
+$ grep -ciE '^(fastapi|flask|pydantic)\b' requirements-lock.txt
+# exit=1 duration=0.004s
+0

@@ -372,6 +372,14 @@ ignore = [
 # benchmarks/benchmark_suite.py: E402 because psutil optional-import block precedes ama_cryptography imports
 "benchmarks/benchmark_suite.py" = ["C901", "UP006", "UP035", "E501", "E402"]  # C901: generate_markdown complexity
 "setup.py" = ["E501", "RUF005", "S603", "S607"]
+# docs/audit/: PR #394 readiness-falsification drivers (negative controls, claim
+# reproductions, sweeps).
+#   E501: each negative-control recipe is one shell string, kept whole so the
+#         ledger's `command` column is the exact text that ran.
+#   S603/S607: the drivers exist to run repository gates by name (python, git, cmake).
+#   S311: the 3R efficacy sweep draws anomaly-injection positions from a seeded
+#         PRNG so the experiment is reproducible; nothing cryptographic is drawn.
+"docs/audit/**/*.py" = ["E501", "S603", "S607", "S311"]
 # benchmarks/* — chart generation and bench-harness scripts:
 #   C901: matplotlib chart builders unavoidably exceed McCabe complexity (many panels, axes, annotations).
 #   RUF001: chart captions and axis labels use the Unicode multiplication sign (×) and Greek letters intentionally.

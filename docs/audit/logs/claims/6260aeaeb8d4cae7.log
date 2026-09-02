@@ -1,0 +1,5 @@
+$ grep -n "add_compile_definitions(AMA_HAVE_NEON_CRYPTO_EXT_IMPL)\|COMPILE_FLAGS \"-march=armv8-a+crypto\"\|NOT MSVC AND NOT AMA_FORCE_NO_ARM_CRYPTO" CMakeLists.txt
+# exit=0 duration=0.007s
+610:        if(NOT MSVC AND NOT AMA_FORCE_NO_ARM_CRYPTO)
+612:                COMPILE_FLAGS "-march=armv8-a+crypto")
+638:            add_compile_definitions(AMA_HAVE_NEON_CRYPTO_EXT_IMPL)

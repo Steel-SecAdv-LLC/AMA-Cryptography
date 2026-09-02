@@ -1,0 +1,5 @@
+$ git log -1 --format='%h %ad %s' --date=short 191befb; grep -n 'name: dudect - Legacy Harnesses' .github/workflows/dudect.yml; grep -n 'Ascon-AEAD128 encrypt:' tools/constant_time/dudect_crypto.c
+# exit=0 duration=0.010s
+191befb 2026-08-18 Fix two confirmed defects adversarial review found in this branch's own security code
+243:    name: dudect - Legacy Harnesses (tools/constant_time)
+17: *   7. Ascon-AEAD128 encrypt:    key class 0 (zeros) vs class 1 (0xFF)

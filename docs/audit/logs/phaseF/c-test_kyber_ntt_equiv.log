@@ -1,0 +1,7 @@
+Kyber NTT multi-lane equivalence
+==========================================
+PASS: dispatched lane, 1024 trials
+PASS: direct AVX2 lane, 1024 trials
+PASS: end-to-end SIMD<->scalar encap/decap cross-parity
+PASS: shipped scalar fallback matches the reference (1024 trials)
+==========================================

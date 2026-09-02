@@ -1,0 +1,4 @@
+$ grep -n '"full_package_create": _COMPOSITE_SAMPLED_ROUNDS,\|"full_package_verify": _COMPOSITE_SAMPLED_ROUNDS,' benchmarks/benchmark_runner.py
+# exit=0 duration=0.004s
+275:    "full_package_create": _COMPOSITE_SAMPLED_ROUNDS,
+276:    "full_package_verify": _COMPOSITE_SAMPLED_ROUNDS,

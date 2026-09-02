@@ -1,0 +1,13 @@
+symbol                              divides  operands
+ama_argon2id_core                         6  ALLOWLISTED
+ama_kyber_decapsulate                     1  *** NOT ALLOWLISTED ***
+dil_sign_internal                        14  ALLOWLISTED
+lms_verify_parsed                        11  ALLOWLISTED
+
+read 491 symbol(s), 147,548 instruction(s); 32 divide(s) in 4 symbol(s)
+  kyber_decapsulate_internal: 0 divide(s)
+  ama_kyber_decapsulate: 1 divide(s)
+  ama_kyber_encapsulate: 0 divide(s)
+
+SECRET-DIVISION CHECK FAILED:
+  - ama_kyber_decapsulate: 1 divide instruction(s), and this symbol is not allowlisted. If its operands are public, add it to ALLOWED with the reasoning. If they are not, this is the KyberSlash defect class and the division must be replaced with a reciprocal multiply, as src/c/ama_kyber.c does for Compress_d.

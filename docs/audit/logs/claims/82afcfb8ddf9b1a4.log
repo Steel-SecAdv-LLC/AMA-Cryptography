@@ -1,0 +1,4 @@
+$ grep -n -A1 'a rejection is only evidence when something that differs' tests/test_ed25519_canonical_y.py
+# exit=0 duration=0.005s
+29:stating plainly: **a rejection is only evidence when something that differs
+30-from it in exactly one respect is accepted.** A test whose expected result is

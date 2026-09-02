@@ -1,0 +1,5 @@
+$ grep -n '"types-setuptools>=\|"PyYAML>=\|"types-PyYAML>=' pyproject.toml
+# exit=0 duration=0.005s
+193:    "types-setuptools>=84.0.0.20260812",
+205:    "PyYAML>=6.0.3",
+206:    "types-PyYAML>=6.0.12.20260724",

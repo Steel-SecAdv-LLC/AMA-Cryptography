@@ -1,0 +1,3 @@
+$ grep -n 'Test 10: the \[0, p) canonicality gate in isolation' tests/c/test_secp256k1.c
+# exit=0 duration=0.003s
+328:        /* Test 10: the [0, p) canonicality gate in isolation (INVARIANT-29).

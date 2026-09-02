@@ -1,0 +1,8 @@
+root                                 files         bytes
+ama_cryptography/_post_kats              4       164,862
+nist_vectors                             2         2,915
+tests/kat                               24    50,359,924
+total                                   30    50,527,701
+
+VECTOR PROVENANCE CHECK FAILED:
+  - tests/kat/ascon/ascon_aead128.kat CHANGED: recorded bbbc34692fe05e5f..., found 1f9f956c3251debd... (260253 -> 260254 bytes). These bytes are published elsewhere; if this edit is deliberate, say so and re-pin with --update.

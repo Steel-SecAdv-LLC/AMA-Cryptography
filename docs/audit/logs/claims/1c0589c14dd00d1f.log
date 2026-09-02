@@ -1,0 +1,3 @@
+$ grep -n "add_ama_test(test_ed25519_verify_equiv" tests/c/CMakeLists.txt
+# exit=0 duration=0.004s
+226:    add_ama_test(test_ed25519_verify_equiv test_ed25519_verify_equiv.c)

@@ -1,0 +1,3 @@
+$ git show --numstat --format= 725f2f1
+# exit=0 duration=0.004s
+9	0	.github/workflows/corpus-provenance.yml

@@ -1,0 +1,4 @@
+$ grep -n "_FAT_MAGIC = 0xCAFEBABE\|_FAT_MAGIC_64 = 0xCAFEBABF" tools/check_vendor_isolation.py
+# exit=0 duration=0.004s
+955:_FAT_MAGIC = 0xCAFEBABE
+956:_FAT_MAGIC_64 = 0xCAFEBABF

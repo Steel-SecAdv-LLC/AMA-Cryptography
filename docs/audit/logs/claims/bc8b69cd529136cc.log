@@ -1,0 +1,3 @@
+$ grep -c "os.chmod(tmp_name, 0o644)" ama_cryptography/_build_sign.py
+# exit=1 duration=0.003s
+0

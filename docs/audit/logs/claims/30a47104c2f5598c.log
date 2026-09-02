@@ -1,0 +1,3 @@
+$ grep -n 'Documented silent changes' docs/BENCHMARK_HISTORY.md
+# exit=0 duration=0.004s
+46:## Documented silent changes (pre-guard)

@@ -1,0 +1,4 @@
+$ grep -n 't lies in \[-10, 9\] and the result in \[0, q\]' src/c/avx2/ama_kyber_avx2.c src/c/neon/ama_kyber_neon.c | wc -l; grep -c 'shifted quotient t lies in \[-10, 9\], and a - t\*q lies in \[0, q\]' src/c/ama_kyber.c
+# exit=0 duration=0.006s
+2
+1

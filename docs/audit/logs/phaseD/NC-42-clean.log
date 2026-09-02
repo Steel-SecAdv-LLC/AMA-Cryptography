@@ -1,0 +1,4 @@
+Offline integrity (vendored corpus vs manifest.json):
+  ok  15 files, 4263 vectors, digests + counts match
+
+OK: vendored Wycheproof corpus is intact and matches upstream provenance.

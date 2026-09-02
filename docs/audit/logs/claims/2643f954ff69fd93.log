@@ -1,0 +1,4 @@
+$ grep -n "^static dudect_measurement_t dudect_lane_finish(dudect_ctx_t \*ctx)" tests/c/test_dudect.c; grep -c "= dudect_lane_finish(&ctx)" tests/c/test_dudect.c
+# exit=0 duration=0.005s
+91:static dudect_measurement_t dudect_lane_finish(dudect_ctx_t *ctx) {
+27

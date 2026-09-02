@@ -1,0 +1,6 @@
+$ grep -n 'GUARDED_MODULES = ("hashlib", "_hashlib", "hmac")\|_DYNAMIC_IMPORTERS = ("import_module", "__import__")\|package_dir.rglob("\*.py")\|self._direct_names.add(alias.asname or alias.name)' tools/check_stdlib_hash_boundary.py
+# exit=0 duration=0.004s
+136:GUARDED_MODULES = ("hashlib", "_hashlib", "hmac")
+139:_DYNAMIC_IMPORTERS = ("import_module", "__import__")
+176:                self._direct_names.add(alias.asname or alias.name)
+245:    py_files = sorted(path for path in package_dir.rglob("*.py") if "__pycache__" not in path.parts)

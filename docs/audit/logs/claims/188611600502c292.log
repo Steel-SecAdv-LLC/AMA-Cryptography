@@ -1,0 +1,5 @@
+$ grep -n 'def _third_party_import_fallback_lines\|inside an except ImportError block\|^_FIRST_PARTY_PREFIXES =' tools/check_suppression_hygiene.py
+# exit=0 duration=0.005s
+385:_FIRST_PARTY_PREFIXES = ("ama_cryptography", "ama_cryptography_monitor", "tools", "tests")
+407:def _third_party_import_fallback_lines(source: str) -> set[int]:
+480:                        f"`type: ignore` inside an except ImportError block — this "

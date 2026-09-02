@@ -1,0 +1,3 @@
+$ python -c "import sys;sys.path.insert(0,'tools');import check_secret_division as m;print(len(m.ALLOWED), m.REQUIRED_CLEAN)"
+# exit=0 duration=0.039s
+4 ('kyber_decapsulate_internal', 'ama_kyber_decapsulate', 'ama_kyber_encapsulate')

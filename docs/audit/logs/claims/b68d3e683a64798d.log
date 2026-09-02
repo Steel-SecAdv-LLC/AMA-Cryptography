@@ -1,0 +1,6 @@
+$ grep -c 'ama_secure_memzero' src/c/avx2/ama_aes_gcm_avx2.c src/c/neon/ama_aes_gcm_neon.c src/c/avx2/ama_dilithium_avx2.c src/c/neon/ama_dilithium_neon.c
+# exit=0 duration=0.006s
+src/c/avx2/ama_aes_gcm_avx2.c:16
+src/c/neon/ama_aes_gcm_neon.c:12
+src/c/avx2/ama_dilithium_avx2.c:2
+src/c/neon/ama_dilithium_neon.c:2

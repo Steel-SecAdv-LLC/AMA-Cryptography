@@ -1,0 +1,4 @@
+$ grep -n 'ge25519_unpack_negative_vartime(&batch.points\[.*\], pk\[i\])\|ge25519_unpack_negative_vartime(&batch.points\[.*\], RS\[i\])' src/c/vendor/ed25519-donna/ed25519-donna-batchverify.h
+# exit=0 duration=0.004s
+243:			if (!ge25519_unpack_negative_vartime(&batch.points[i+1], pk[i]))
+246:			if (!ge25519_unpack_negative_vartime(&batch.points[batchsize+i+1], RS[i]))

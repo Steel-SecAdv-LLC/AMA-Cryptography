@@ -1,0 +1,4 @@
+$ grep -n '"Cython\.\*",' pyproject.toml; awk '/^\[tool.mypy\]/,/^\[\[tool.mypy.overrides\]\]/' pyproject.toml | grep -c ignore_missing_imports
+# exit=1 duration=0.006s
+479:    "Cython.*",
+0

@@ -1,0 +1,4 @@
+$ ls tools/check_compiler_warnings.py tools/check_ed25519_backend_parity.py tools/check_secret_division.py tools/check_ghash_constant_time.py tools/check_release_tag.py | wc -l; grep -l "check_release_tag" .github/workflows/*.yml
+# exit=0 duration=0.007s
+5
+.github/workflows/release.yml

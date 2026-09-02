@@ -1,0 +1,8 @@
+$ grep -n 'failures.append(algo_dir)\|    return failures\|    if failures:\|        return 1' nist_vectors/fetch_vectors.py; grep -n 'def test_a_failed_fetch_is_returned_not_swallowed\|def test_main_fails_when_vectors_are_missing' tests/test_acvp_fetch_fails_closed.py
+# exit=0 duration=0.008s
+111:            failures.append(algo_dir)
+112:    return failures
+279:    if failures:
+290:        return 1
+45:def test_a_failed_fetch_is_returned_not_swallowed(
+61:def test_main_fails_when_vectors_are_missing(

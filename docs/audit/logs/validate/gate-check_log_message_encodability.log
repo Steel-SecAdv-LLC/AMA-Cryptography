@@ -1,0 +1,3 @@
+INVARIANT-43: log message encodability (cp1252)
+  files scanned: 29; emission sites: 191
+  PASS — every logged literal survives a cp1252 handler.

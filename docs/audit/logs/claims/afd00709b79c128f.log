@@ -1,0 +1,5 @@
+$ grep -n 'def test_a_later_commit_cannot_ride_on_an_earlier_justification\|def test_the_pr_body_still_justifies\|def test_another_commits_message_does_not_justify_this_change' tests/test_benchmark_baseline_infra.py
+# exit=0 duration=0.005s
+1700:    def test_a_later_commit_cannot_ride_on_an_earlier_justification(self, tmp_path: Path) -> None:
+1729:    def test_another_commits_message_does_not_justify_this_change(self, tmp_path: Path) -> None:
+1758:    def test_the_pr_body_still_justifies(self, tmp_path: Path) -> None:

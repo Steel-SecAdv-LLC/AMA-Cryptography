@@ -1,0 +1,6 @@
+INVARIANT-31: aggregating gate coverage
+  workflows examined: 14
+  FAIL — 1 finding(s):
+
+    ::error::ci.yml: 1 job(s) absent from the 'ci-gate' needs: list — nc-orphan-job. Each still runs and still reports its own result, but branch protection evaluates only the gate context, so none of them can block a merge.
+

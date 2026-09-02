@@ -1,0 +1,4 @@
+$ grep -n "AVX2=1 AVX-512F=0 AVX-512-Keccak=0" tools/check_ghash_constant_time.py; python tools/check_ghash_constant_time.py --lib build-release/lib/libama_cryptography_test.a --target kyber-decaps | grep -m1 "wiring: \[AMA Dispatch\] x86-64"
+# exit=0 duration=13.992s
+1698:    reports ``AVX2=1 AVX-512F=0 AVX-512-Keccak=0``.  This function used to run
+  wiring: [AMA Dispatch] x86-64: AVX2=1 AVX-512F=0 AVX-512-Keccak=0 => level=1 (sha3=1)

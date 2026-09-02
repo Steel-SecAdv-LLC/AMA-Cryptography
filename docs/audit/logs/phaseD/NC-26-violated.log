@@ -1,0 +1,2 @@
+TYPE-CHECK SCOPE GATE FAILED:
+  - the coverage report lists only 1 file(s) (expected at least 200) — a collapsed run, not a clean tree

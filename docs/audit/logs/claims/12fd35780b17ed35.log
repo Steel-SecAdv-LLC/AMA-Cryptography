@@ -1,0 +1,3 @@
+$ grep -cE "timings\[index\] = min\(timings\[index\], time\.perf_counter\(\) - start\)" tests/test_c_secret_zeroization_gate.py
+# exit=0 duration=0.004s
+2

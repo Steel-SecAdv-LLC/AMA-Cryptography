@@ -1,0 +1,3 @@
+$ git show 3f64834:tools/check_ghash_constant_time.py | grep -c '"ecdsa": 64,'
+# exit=0 duration=0.006s
+1

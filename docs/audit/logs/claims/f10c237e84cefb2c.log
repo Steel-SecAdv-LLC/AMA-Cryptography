@@ -1,0 +1,3 @@
+$ sed -n '/^def load_live_data/,/^def /p' benchmarks/generate_charts.py | grep -cE "^\s*except.*KeyError"
+# exit=1 duration=0.005s
+0

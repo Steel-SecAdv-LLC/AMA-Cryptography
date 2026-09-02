@@ -1,0 +1,3 @@
+$ grep -n 'The rule lives there; this' ama_cryptography/_self_test.py
+# exit=0 duration=0.005s
+1047:    :func:`_cache_header_is_live`'s docstring.  The rule lives there; this

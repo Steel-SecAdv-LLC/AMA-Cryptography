@@ -1,0 +1,4 @@
+$ grep -c '(double)(ts1.tv_sec - ts0.tv_sec)' tests/c/test_field_bench.c; grep -c '(double)' tests/c/test_benchmark.c
+# exit=0 duration=0.007s
+2
+2

@@ -1,0 +1,4 @@
+$ grep -n "dispatch auto-tune cache v2" src/c/dispatch/ama_dispatch.c
+# exit=0 duration=0.005s
+994: *     # AMA Cryptography dispatch auto-tune cache v2
+1345:    fprintf(fp, "# AMA Cryptography dispatch auto-tune cache v2\n");

@@ -1,0 +1,6 @@
+$ grep -nE 'ama_\*;|local:|invites non-approved|ama_ascon_permutation_for_test;' cmake/ama_exports.map
+# exit=0 duration=0.004s
+17:        ama_*;
+18:    local:
+21:        # FIPS-aligned module's public surface invites non-approved
+26:        ama_ascon_permutation_for_test;

@@ -1,0 +1,5 @@
+$ grep -n 'bandit -r ama_cryptography/ setup.py tools/ -f json\|semgrep --config .semgrep.yml ama_cryptography/ setup.py tools/' Makefile; grep -n 'bandit -r ama_cryptography/ setup.py tools/' .github/workflows/*.yml | head -1
+# exit=0 duration=0.009s
+223:	@$(RUN) bandit -r ama_cryptography/ setup.py tools/ -f json -o bandit-report.json --exit-zero
+242:	@semgrep --config .semgrep.yml ama_cryptography/ setup.py tools/ --json -o semgrep-report.json
+.github/workflows/ci-build-test.yml:689:        run: bandit -r ama_cryptography/ setup.py tools/ -f json -o bandit-report.json --exit-zero

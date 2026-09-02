@@ -1,0 +1,3 @@
+$ grep -n 'python -m ama_cryptography.integrity --update --sign' ama_cryptography/__init__.py | cut -c1-30
+# exit=0 duration=0.004s
+505:            f"      {_buil

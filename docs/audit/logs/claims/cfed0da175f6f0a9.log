@@ -1,0 +1,3 @@
+$ python -c "import sys; sys.path.insert(0,'tools'); import check_apt_retry as m; print(bool(m._APT_CALL.search('apt-get -y install foo')), bool(m._APT_CALL.search('apt-get -qq -y install foo')), bool(m._APT_CALL.search('apt-get --no-install-recommends install foo')))"
+# exit=0 duration=0.032s
+True True True

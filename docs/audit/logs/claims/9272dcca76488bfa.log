@@ -1,0 +1,3 @@
+$ sed -n '/^foreach(slot/,/)/p' tests/c/CMakeLists.txt | grep -c '^\s*kyber-ntt-neon\s*$\|^\s*dilithium-ntt-neon\s*$\|^\s*argon2-g-neon\s*$'
+# exit=0 duration=0.005s
+3

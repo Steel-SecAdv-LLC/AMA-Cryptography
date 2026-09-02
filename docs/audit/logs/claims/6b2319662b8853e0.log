@@ -1,0 +1,115 @@
+$ ./build-dudect/bin/test_dudect --self-test
+# exit=0 duration=0.704s
+dudect verdict self-check
+
+  strict lane over threshold in 3/3 rounds -> FAIL           ok
+  strict lane over threshold in 2/3 rounds -> FAIL (majority) ok
+  strict lane over threshold in 1/3 rounds -> pass (minority) ok
+  strict lane over threshold in 2/2 rounds -> FAIL           ok
+  strict lane over threshold in 1/2 rounds -> pass (tie, not majority) ok
+  strict lane over threshold in 2/4 rounds -> pass (tie, not majority) ok
+  strict lane over threshold in 3/4 rounds -> FAIL           ok
+  strict lane within threshold every round -> pass           ok
+  info lane over threshold in 3/3 rounds -> pass             ok
+  fatal harness fault seen once in 3 rounds -> FAIL          ok
+  fatal harness fault on an info lane -> FAIL                ok
+  strict lane over threshold in 1/1 round -> FAIL            ok
+  no rounds run -> pass (nothing was measured)               ok
+  3/3 trips, all + -> LEAK                                   ok
+  3/3 trips, all - -> LEAK                                   ok
+  3/3 trips, signs 2+/1- -> UNUSABLE (not a leak)            ok
+  3/3 trips, signs 1+/2- -> UNUSABLE (not a leak)            ok
+  4/4 trips, signs 2+/2- -> UNUSABLE                         ok
+  2/3 trips, signs 1+/1- -> UNUSABLE                         ok
+  1/3 trips -> NOISE regardless of sign                      ok
+  an UNUSABLE lane still fails the run                       ok
+  3/3 trips, +0.596 ns (Ascon lane, observed) -> SUB_FLOOR   ok
+  3/3 trips, -1.141 ns (binding lane, observed) -> SUB_FLOOR ok
+  a SUB_FLOOR lane does not fail the run                     ok
+  3/3 trips, +8.0 ns (a mispredicted branch) -> LEAK         ok
+  ...and that one DOES fail the run                          ok
+  3/3 trips, +500 ns (early-exit memcmp) -> LEAK             ok
+  3/3 trips, exactly at the floor -> LEAK                    ok
+  below the floor, direction disagreement is SUB_FLOOR       ok
+  ...and that does not fail the run                          ok
+  3/3 2+/1- at +0.607 ns (Ascon lane, observed) -> SUB_FLOOR ok
+  at the floor, direction disagreement is UNUSABLE           ok
+  ...and that IS still a red run                             ok
+  well above the floor, disagreement is UNUSABLE             ok
+  a harness fault outranks the floor                         ok
+  no effect size behind a majority -> FAULT                  ok
+  fatal outranks the direction rule                          ok
+  a different lane over threshold each round -> neither fails ok
+  worst |t| is kept across rounds                            ok
+  the same lane over threshold in every round -> FAIL        ok
+  one lane over threshold in 2 of 3 rounds -> FAIL           ok
+  the observed FROST shape -> UNUSABLE, and still red        ok
+  4/4 alternating-sign trips -> UNUSABLE, not a leak, still red ok
+  only an info lane tripped -> early exit still allowed      ok
+  a strict lane tripped -> early exit refused                ok
+  a trip with no effect size is a fault, not a pass          ok
+  an info-only lane may trip without an effect size          ok
+  a quiet lane needs no effect size                          ok
+
+verdict self-check: PASS
+
+dudect percentile-cropping self-check
+
+  identical classes with a shared heavy tail stay under threshold ok
+  a bulk shift under a heavy tail is detected                    ok
+  ...with an order of magnitude of margin                        ok
+  ...and the reported effect size recovers the shift             ok
+  ...by a CROPPED rung                                           ok
+  ...and cropping beats the uncropped statistic                  ok
+  ...with the sign pointing at the faster class                  ok
+  a tail-only difference is still detected                       ok
+  ...and the UNCROPPED rung alone would find it                  ok
+  a cropped rung wins the statistic                              ok
+  ...with a small CROPPED effect size                            ok
+  ...and a large UNCROPPED one                                   ok
+  ...and the reported effect size is the larger                  ok
+  ...which is the uncropped difference                           ok
+  a budget at the floor yields no usable rung                    ok
+  ...so the winning rung is the uncropped one                    ok
+  ...and the reported effect size is the uncropped difference    ok
+  ...on a real statistic, not the failure sentinel               ok
+  ...and 0 is distinct from the did-not-run sentinel             ok
+  a budget above the floor does yield usable rungs               ok
+  a degenerate crop yields no statistic, not a huge one          ok
+  ...and never the failure sentinel                              ok
+  ...and no rung below the sample floor was used                 ok
+  overflowing the declared capacity fails closed                 ok
+  a context that measured nothing fails closed                   ok
+  an out-of-range class index fails closed                       ok
+    null calibration: E|t| = 1.7845  sd = 1.8619  worst = 4.1540  >= 5.0 in 0/2000
+  null E|t| matches the calibrated scale                         ok
+  null sd matches the calibrated scale                           ok
+  null replicates almost never reach the threshold               ok
+
+  percentile-cropping self-check: PASS
+
+timeout truncation self-check
+
+  lane completed before the alarm keeps its t                ok
+  lane measured after the alarm becomes a harness fault      ok
+  a poisoned context becomes a fault, not a sub-floor pass   ok
+  a healthy lane keeps its statistic and its effect size     ok
+  the fatal sentinel is a bounded band, not an open ray      ok
+  a truncated lane fails the run through the verdict rule    ok
+
+timeout truncation self-check: PASS
+
+round-budget self-check
+
+  100 s elapsed, 100 s round, 300 s budget -> fits           ok
+  200 s elapsed, 100 s round, 300 s budget -> boundary, fits ok
+  210 s elapsed, 100 s round, 300 s budget -> would overrun  ok
+  a budget with room to spare -> fits                        ok
+  no budget set -> never overruns                            ok
+  a negative budget is no budget                             ok
+  a round longer than the whole budget -> would overrun      ok
+
+round-budget self-check: PASS
+  FATAL: lane 'a' reports |t| = 41.7200 (>= 4.5000) with no effect size. t = delta/se, so this cannot be a measurement; the harness did not set delta_ns.
+  TIMEOUT: lane 'truncated-by-alarm' truncated or unmeasured after --timeout expired; recording a harness fault, not a verdict
+  FATAL: lane 'poisoned lane' produced no usable statistic (the context was poisoned: allocation failure, or more samples than its declared capacity). Refusing to report a verdict for it.

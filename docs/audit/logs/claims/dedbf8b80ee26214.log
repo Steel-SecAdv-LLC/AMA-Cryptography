@@ -1,0 +1,5 @@
+$ sed -n '/^def _write_signature_module/,/^def /p' ama_cryptography/_build_sign.py | grep -c "write_text("; sed -n '/^def _write_signature_module/,/^def /p' ama_cryptography/_build_sign.py | grep -c "os.replace("; grep -n 'dir=str(out_path.parent), prefix="._integrity_signature.", suffix=".tmp"' ama_cryptography/_build_sign.py
+# exit=0 duration=0.009s
+0
+1
+662:        dir=str(out_path.parent), prefix="._integrity_signature.", suffix=".tmp"

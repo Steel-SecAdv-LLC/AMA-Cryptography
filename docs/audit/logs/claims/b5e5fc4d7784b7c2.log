@@ -1,0 +1,4 @@
+$ grep -n 'ONE reused probe' tools/constant_time/dudect_crypto.c
+# exit=0 duration=0.004s
+310:    _Alignas(64) uint8_t probe[16]; /* ONE reused probe, fixed address */
+589:    /* ONE reused probe at a fixed address, rebuilt class-symmetrically every

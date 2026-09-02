@@ -1,0 +1,5 @@
+$ grep -n -A1 "if (!dudect_rounds_any_failure(&rounds))" tools/constant_time/dudect_harness.c; grep -n "majority of rounds" tests/c/dudect/dudect_rounds.h | head -1
+# exit=0 duration=0.007s
+509:        if (!dudect_rounds_any_failure(&rounds))
+510-            break;
+26: * the two readings: **a lane must exceed the threshold in a majority of rounds

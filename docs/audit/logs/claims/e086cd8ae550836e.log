@@ -1,0 +1,4 @@
+$ sed -n '288,340p' src/c/vendor/ed25519-donna/curve25519-donna-64bit.h | grep -n '} else {\|(uint64_t)in\[s + 0\]'
+# exit=0 duration=0.005s
+28:	} else {
+30:			((((uint64_t)in[s + 0])      ) | \

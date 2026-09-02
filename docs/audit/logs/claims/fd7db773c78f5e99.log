@@ -1,0 +1,10 @@
+$ ./build-release/bin/test_secure_free_scrub negative; echo neg_rc=$?; ./build-release/bin/test_secure_free_scrub; echo pos_rc=$?
+# exit=0 duration=0.008s
+pre-release sentinel hits: 2 (resident bytes scanned: 49152)
+post-plain-free sentinel hits: 2 (resident bytes scanned: 69632)
+PASS(negative): unscrubbed secret remains visible on the heap — inspector proven able to detect a scrub failure
+neg_rc=0
+pre-release sentinel hits: 2 (resident bytes scanned: 49152)
+post-ama_secure_free sentinel hits: 0 (resident bytes scanned: 69632)
+PASS: no sentinel bytes anywhere in anonymous rw memory after ama_secure_free
+pos_rc=0

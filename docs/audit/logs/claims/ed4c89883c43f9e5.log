@@ -1,0 +1,3 @@
+$ grep -cE 'at the floor, direction disagreement is UNUSABLE|well above the floor, disagreement is UNUSABLE|\.\.\.and that IS still a red run' tests/c/dudect/dudect_rounds.h
+# exit=0 duration=0.005s
+3

@@ -1,0 +1,3 @@
+$ /opt/ama-venv/bin/python -c "exec('import yaml\nn=0;J=[]\nfor wf,job in ((\".github/workflows/ci.yml\",\"test\"),(\".github/workflows/ci-build-test.yml\",\"python-package\")):\n m=yaml.safe_load(open(wf))[\"jobs\"][job][\"strategy\"][\"matrix\"]\n c=[(o,str(p)) for o in m.get(\"os\",[]) for p in m.get(\"python-version\",[])]+[(i[\"os\"],str(i[\"python-version\"])) for i in m.get(\"include\",[])]\n n+=len(c);J+=c\nprint(\"TOTAL\",n,\"DISTINCT_PAIRS\",len(set(J)))')"
+# exit=0 duration=0.153s
+TOTAL 35 DISTINCT_PAIRS 25

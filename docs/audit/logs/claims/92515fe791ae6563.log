@@ -1,0 +1,13 @@
+$ sed -n 576,586p tests/c/dudect/dudect_rounds.h
+# exit=0 duration=0.005s
+        shown++;
+        printf("  - %s: |t| reached %.4f in %d of %d round(s), but the per-class\n"
+               "    difference is %+.3f ns. A wall-clock t-test on shared hardware\n"
+               "    cannot separate that from data-operand-dependent execution in the\n"
+               "    CPU (Intel DOITM / ARM PSTATE.DIT). Where a deterministic\n"
+               "    instruction-count target covers this call, it measures the part\n"
+               "    of this range that changes the instruction sequence; a difference\n"
+               "    living only in operand-dependent latency is measured by NEITHER\n"
+               "    instrument. SUB-FLOOR means not adjudicable by this apparatus,\n"
+               "    not shown to be absent.\n",
+               lane->name, fabs(lane->worst_t), lane->rounds_failed, r->rounds_run,

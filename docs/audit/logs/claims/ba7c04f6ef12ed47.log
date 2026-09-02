@@ -1,0 +1,7 @@
+$ sed -n 1026,1030p ama_cryptography/secure_channel.py
+# exit=0 duration=0.004s
+        """
+        self._shared_secret = None
+        self._handshake_hash = None
+        self._state = ChannelState.CLOSED
+

@@ -1,0 +1,4 @@
+$ awk '/^#if defined\(_WIN32\)/{w=1} /^#else/{w=0} w && /pthread/' src/c/internal/ama_once.h | wc -l; which x86_64-w64-mingw32-gcc || echo NO_MINGW_TOOLCHAIN
+# exit=0 duration=0.007s
+0
+NO_MINGW_TOOLCHAIN

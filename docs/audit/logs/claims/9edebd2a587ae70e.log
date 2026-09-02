@@ -1,0 +1,3 @@
+$ grep -n '^static void dil_poly_uniform(' src/c/ama_dilithium.c
+# exit=0 duration=0.004s
+991:static void dil_poly_uniform(dil_poly *a, const uint8_t seed[DIL_SEEDBYTES],

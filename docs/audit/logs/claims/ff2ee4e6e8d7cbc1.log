@@ -1,0 +1,3 @@
+$ grep -c "ama_secure_memzero" src/c/neon/ama_aes_gcm_neon.c
+# exit=0 duration=0.004s
+12

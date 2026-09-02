@@ -1,0 +1,3 @@
+$ grep -n "markdown-linebreak-ext=md" .pre-commit-config.yaml
+# exit=0 duration=0.005s
+40:        args: ['--markdown-linebreak-ext=md']

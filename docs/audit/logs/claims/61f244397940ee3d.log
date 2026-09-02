@@ -1,0 +1,4 @@
+$ grep -n -A1 'the slot list the$' src/c/dispatch/ama_dispatch.c
+# exit=0 duration=0.005s
+389: * separately: the membership test below, and the slot list the
+390- * UNRECOGNISED diagnostic prints.  It must stay in step with

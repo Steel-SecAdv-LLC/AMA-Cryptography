@@ -1,0 +1,5 @@
+$ grep -n '# JUDGE FIRST, then ingest\|joins the calibration history AFTER the\|Calibration deliberately ingests every score' ama_cryptography/monitoring.py
+# exit=0 duration=0.005s
+1537:            # The observed score joins the calibration history AFTER the
+1539:            # judged against.  Calibration deliberately ingests every score
+2023:                    # JUDGE FIRST, then ingest — the ordering the point path

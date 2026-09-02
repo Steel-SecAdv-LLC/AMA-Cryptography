@@ -1,0 +1,3 @@
+$ git show f8873ae -- include/ama_cryptography.h src/c | grep -E '^[-+]' | grep -vE '^(\+\+\+|---)' | grep -vE '^[-+]\s*(\*|/\*|//)' | wc -l
+# exit=1 duration=0.008s
+0

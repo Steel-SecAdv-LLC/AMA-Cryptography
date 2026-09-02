@@ -1,0 +1,4 @@
+$ /opt/ama-venv/bin/python -c "exec('import yaml\nfor wf,job in ((\".github/workflows/ci.yml\",\"test\"),(\".github/workflows/ci-build-test.yml\",\"python-package\")):\n m=yaml.safe_load(open(wf))[\"jobs\"][job][\"strategy\"][\"matrix\"]\n c=[(o,str(p)) for o in m.get(\"os\",[]) for p in m.get(\"python-version\",[])]+[(i[\"os\"],str(i[\"python-version\"])) for i in m.get(\"include\",[])]\n print(job,\"jobs=\",len(c),\"os=\",sorted(set(o for o,_ in c)),\"arm_rows=\",[p for o,p in c if o==\"ubuntu-24.04-arm\"],\"windows=\",sum(o==\"windows-latest\" for o,_ in c),\"macos_latest=\",sum(o==\"macos-latest\" for o,_ in c))')"
+# exit=0 duration=0.176s
+test jobs= 15 os= ['ubuntu-24.04-arm', 'ubuntu-latest', 'windows-latest'] arm_rows= ['3.10', '3.11', '3.12', '3.13', '3.14'] windows= 5 macos_latest= 0
+python-package jobs= 20 os= ['macos-15-intel', 'macos-latest', 'ubuntu-latest', 'windows-latest'] arm_rows= [] windows= 5 macos_latest= 5

@@ -1,0 +1,4 @@
+$ grep -n 'linecoverage-report .mypy-coverage\|python tools/check_type_check_scope.py .mypy-coverage/coverage.json' .github/workflows/ci.yml
+# exit=0 duration=0.004s
+621:          --linecoverage-report .mypy-coverage \
+631:        python tools/check_type_check_scope.py .mypy-coverage/coverage.json

@@ -1,0 +1,4 @@
+$ grep -c "#define AMA_DILITHIUM_" wiki/C-API-Reference.md include/ama_cryptography.h
+# exit=1 duration=0.007s
+wiki/C-API-Reference.md:0
+include/ama_cryptography.h:0

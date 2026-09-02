@@ -1,0 +1,3 @@
+$ grep -cE '^\s*if \(class_idx' tools/constant_time/dudect_harness.c
+# exit=1 duration=0.004s
+0

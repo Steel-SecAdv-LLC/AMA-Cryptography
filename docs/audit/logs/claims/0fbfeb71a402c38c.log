@@ -1,0 +1,6 @@
+$ grep -nE "^def check_cmake_build_type|must say|is accepted here|likewise" tools/check_workflow_commands.py
+# exit=0 duration=0.004s
+837:def check_cmake_build_type(path: Path, document: Any, report: Report) -> None:
+862:    purpose" in CMake's own vocabulary, and is accepted here.  An explicit
+863:    ``-O`` inside ``CMAKE_C_FLAGS`` (what the sanitizer jobs pass) is likewise
+866:    So the rule is not "must be Release" — it is "must say".

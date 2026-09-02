@@ -1,0 +1,5 @@
+$ grep -n "30th record" ama_cryptography/monitoring.py
+# exit=0 duration=0.004s
+1562:        # (after the 30th recorded sample, matching the documented warmup).
+1826:        on the 30th record of each new operation name — so handing the live
+4078:        # key on its 30th record under the timing monitor's lock, and a

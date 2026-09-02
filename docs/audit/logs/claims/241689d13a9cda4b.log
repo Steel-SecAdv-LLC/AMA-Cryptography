@@ -1,0 +1,3 @@
+$ python -c "import tools.check_avx_scoping as g,re; print([f.name for f in g.ISA_FAMILIES if re.search(r'tzcnt|lzcnt|popcnt', f.pattern.pattern)])"
+# exit=0 duration=0.044s
+[]

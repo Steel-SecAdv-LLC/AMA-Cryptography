@@ -1,0 +1,4 @@
+$ grep -n '^_check_cmake_version()$\|^_SKIP_CYTHON_PREFLIGHT = ' setup.py
+# exit=0 duration=0.005s
+240:_check_cmake_version()
+242:_SKIP_CYTHON_PREFLIGHT = bool(os.getenv("AMA_NO_CYTHON")) or bool(os.getenv("AMA_NO_C_EXTENSIONS"))

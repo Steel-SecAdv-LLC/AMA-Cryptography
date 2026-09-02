@@ -1,0 +1,5 @@
+$ git show -s --format=%B a769af9 | grep -nE '1,552,881|5,413,012|1,577,424'
+# exit=0 duration=0.006s
+26:  dilithium_keygen  1,552,881 -> 1,557,464 Ir  (+4,583,  +0.295%)
+27:  dilithium_sign    5,413,012 -> 5,435,056 Ir  (+22,044, +0.407%)
+28:  dilithium_verify  1,577,424 -> 1,577,424 Ir  (-0.6 instructions)

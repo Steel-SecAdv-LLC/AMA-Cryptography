@@ -1,0 +1,5 @@
+$ grep -nE '^\s*_P\(r".*\(said\|stated' tools/check_verification_claim_honesty.py; echo rc=$?; grep -nF '_P(r"\btold readers\b", re.I)' tools/check_verification_claim_honesty.py; grep -nF 'used\s+to\s+(?:say|read|state|claim|list|record|document)' tools/check_verification_claim_honesty.py
+# exit=0 duration=0.009s
+rc=1
+326:    _P(r"\btold readers\b", re.I),
+327:    _P(r"\bused\s+to\s+(?:say|read|state|claim|list|record|document)\b", re.I),

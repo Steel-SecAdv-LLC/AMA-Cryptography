@@ -1,0 +1,3 @@
+$ git show 17aae5a^:tools/check_avx_scoping.py | grep -c "OK: every YMM/ZMM operand in the object is inside an AVX2/AVX-512 kernel"
+# exit=0 duration=0.006s
+1

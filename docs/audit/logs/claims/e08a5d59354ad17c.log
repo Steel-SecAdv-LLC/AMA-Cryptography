@@ -1,0 +1,3 @@
+$ python -c "import json; print([any(e['path']=='src/c/ama_dilithium.c' for e in json.load(open(f))['metadata']['floor_drift_acknowledged']) for f in ('benchmarks/baseline.json','benchmarks/arm-baseline.json')])"
+# exit=0 duration=0.033s
+[True, True]

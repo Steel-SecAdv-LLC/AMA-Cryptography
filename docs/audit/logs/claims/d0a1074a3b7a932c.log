@@ -1,0 +1,7 @@
+$ grep -n '@pytest.mark.requires_host_isa("x86")' tests/test_aesni_is_not_gated_on_avx2.py; grep -nE '^\s+"(x86|x86-64|aarch64)": _host_is' tests/conftest.py; grep -n "if predicate is not None and not predicate():" tests/conftest.py
+# exit=0 duration=0.008s
+567:@pytest.mark.requires_host_isa("x86")
+91:    "x86": _host_is_x86,
+92:    "x86-64": _host_is_x86_64,
+93:    "aarch64": _host_is_aarch64,
+108:            if predicate is not None and not predicate():

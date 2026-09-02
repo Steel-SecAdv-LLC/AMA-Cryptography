@@ -1,0 +1,3 @@
+$ python -c "from ama_cryptography._numeric import asmat; from ama_cryptography.equations import _dominant_eigenvector as d; print(d(asmat([[0.0,1.0],[-1.0,0.0]])))"
+# exit=0 duration=0.458s
+None

@@ -1,0 +1,4 @@
+$ grep -nE "CodeQL alert 635|raise AssertionError\(\"the pre-commit mypy hook is gone\"\)" tests/test_precommit_mypy_scope.py
+# exit=0 duration=0.005s
+51:    # return beside an implicit fall-through None (CodeQL alert 635).
+52:    raise AssertionError("the pre-commit mypy hook is gone")

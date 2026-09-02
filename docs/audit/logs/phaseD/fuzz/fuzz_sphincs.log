@@ -1,0 +1,20 @@
+Dictionary: 4 entries
+INFO: Running with entropic power schedule (0xFF, 100).
+INFO: Seed: 2125451195
+INFO: Loaded 1 modules   (22677 inline 8-bit counters): 22677 [0x560dd1943870, 0x560dd1949105), 
+INFO: Loaded 1 PC tables (22677 PCs): 22677 [0x560dd1949108,0x560dd19a1a58), 
+INFO:       19 files found in /tmp/tmp.C8jfhxMKsE/corpus/fuzz_sphincs
+INFO: seed corpus: files: 19 min: 2b max: 49937b total: 399325b rss: 34Mb
+Slowest unit: 35 s:
+artifact_prefix='/tmp/tmp.C8jfhxMKsE/artifacts/fuzz_sphincs/'; Test unit written to /tmp/tmp.C8jfhxMKsE/artifacts/fuzz_sphincs/slow-unit-de596e83bcc22c107810eaa40c94eaf9861166b4
+Base64: /wECAwsbHA==
+#8	pulse  cov: 1566 ft: 2013 corp: 3/22b exec/s: 0 rss: 41Mb
+#16	pulse  cov: 1568 ft: 2744 corp: 6/97Kb exec/s: 0 rss: 42Mb
+#20	INITED cov: 1571 ft: 2867 corp: 9/243Kb exec/s: 0 rss: 43Mb
+#20	DONE   cov: 1571 ft: 2867 corp: 9/243Kb lim: 49937 exec/s: 0 rss: 43Mb
+Done 20 runs in 72 second(s)
+stat::number_of_executed_units: 20
+stat::average_exec_per_sec:     0
+stat::new_units_added:          0
+stat::slowest_unit_time_sec:    35
+stat::peak_rss_mb:              43

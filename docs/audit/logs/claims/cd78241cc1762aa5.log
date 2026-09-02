@@ -1,0 +1,3 @@
+$ grep -n "IS a measured median on the runner class named in" benchmarks/README.md
+# exit=0 duration=0.004s
+14:| [`baseline.json`](baseline.json) | CI regression FLOORS. `baseline_value` IS a measured median on the runner class named in `metadata.runner_cpu_class` — not a discount of one — and `tolerance_percent` (45 on x86-64, 15/25 on aarch64) is the separate allowance. The pre-5.0.0 "65% of measured, then a 35-70% tolerance on top" convention compounded to a 34-94% blind spot and absorbed a 2.1x AES-GCM regression without firing; both baseline files now say so in their own `metadata.description`. | Re-measured on the canonical runner when primitives land/change |

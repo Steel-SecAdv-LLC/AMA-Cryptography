@@ -1,0 +1,3 @@
+$ awk '/^class SecureChannelResponder/{f=1} f' ama_cryptography/secure_channel.py | grep -c "self\._shared_secret"
+# exit=1 duration=0.004s
+0

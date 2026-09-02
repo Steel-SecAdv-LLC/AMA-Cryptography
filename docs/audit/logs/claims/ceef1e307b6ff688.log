@@ -1,0 +1,4 @@
+$ grep -rn "def test_the_repository_is_fully_covered" tests/; echo rc=$?; grep -n "This module used to run" tests/test_type_check_scope_gate.py
+# exit=0 duration=0.072s
+rc=1
+22:This module used to run ``mypy --strict`` over the whole tree itself and

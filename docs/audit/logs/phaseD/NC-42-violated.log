@@ -1,0 +1,7 @@
+Offline integrity (vendored corpus vs manifest.json):
+
+CORPUS PROBLEMS (2):
+  - aes_gcm_test.json: sha256 '8fea50b3a41fc8ce8e889cf1d21cb914c29d811759444788a49c65b4e4c5f031' on disk != manifest '985e5ecc172e181eaf49e89508b9470dcf478002eb7e8559c707eb42dc97dfe7'
+  - aes_gcm_test.json: bytes 213178 on disk != manifest 213177
+
+FAIL: vendored Wycheproof corpus did not verify.

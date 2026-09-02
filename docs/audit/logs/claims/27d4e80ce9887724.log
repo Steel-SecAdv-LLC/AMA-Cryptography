@@ -1,0 +1,4 @@
+$ grep -c 'in-tree RFC 3161 module' ama_cryptography/crypto_api.py; grep -n 'crypto_api.py' tools/check_suppression_hygiene.py | head -1
+# exit=0 duration=0.007s
+3
+412:    ``crypto_api.py`` guards ``from ama_cryptography.rfc3161_timestamp import

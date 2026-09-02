@@ -1,0 +1,3 @@
+$ grep -n "deliberately in scope" tools/check_c_secret_zeroization.py
+# exit=0 duration=0.005s
+44:are deliberately in scope — a test that bare-memsets a secret exercises the

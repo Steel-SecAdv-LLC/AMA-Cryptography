@@ -1,0 +1,3 @@
+$ grep -n 'getenv("AMA_DISPATCH_ONLY")' src/c/dispatch/ama_dispatch.c | head -1
+# exit=0 duration=0.006s
+2343:        const char *only = getenv("AMA_DISPATCH_ONLY");

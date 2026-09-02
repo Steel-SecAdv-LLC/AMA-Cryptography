@@ -1,0 +1,4 @@
+$ grep -n 'def test_every_shipped_baseline_name_has_a_benchmark_behind_it' tests/test_benchmark_baseline_infra.py && python -c "import sys; sys.path.insert(0,'benchmarks'); import json, benchmark_runner as br; run=set(br.BENCHMARK_FUNCTIONS)|set(br.PQC_BENCHMARK_FUNCTIONS); names=[set(json.load(open(f))['benchmarks'])|set(json.load(open(f))['pqc_benchmarks']) for f in ('benchmarks/baseline.json','benchmarks/arm-baseline.json')]; print(names[0]==names[1], len(names[0]), names[0]<=run)"
+# exit=0 duration=0.068s
+1595:    def test_every_shipped_baseline_name_has_a_benchmark_behind_it(self) -> None:
+True 19 True

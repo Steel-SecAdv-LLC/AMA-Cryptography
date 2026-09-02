@@ -1,0 +1,3 @@
+$ AMA_CI_REQUIRE_BACKENDS=1 python -c "import ama_cryptography; print(ama_cryptography.__version__)"
+# exit=0 duration=0.598s
+5.0.0

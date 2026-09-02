@@ -110,11 +110,12 @@ class TestTheShapesItMustNotCatch:
 class TestTheExemptionsAreHonest:
     """An exemption is a hole; each one here must still be load-bearing."""
 
-    def test_there_are_exactly_three(self) -> None:
+    def test_there_are_exactly_four(self) -> None:
         assert set(EXEMPT) == {
             "CHANGELOG.md",
             "tools/check_reference_integrity.py",
             "tests/test_reference_integrity_gate.py",
+            "docs/audit/PR394_CLAIMS.yaml",
         }, (
             "the exemption list changed — a new entry is a new place for an "
             "unresolvable citation to hide, and needs its own justification"

@@ -1,0 +1,6 @@
+$ grep -c -- '-- -Otarget' .github/workflows/static-analysis.yml; ls src/c/x86/ama_nistp_mont_mulx.c; grep -n 'overlength-strings' tools/check_compiler_warnings.py | head -2
+# exit=0 duration=0.011s
+2
+src/c/x86/ama_nistp_mont_mulx.c
+66:    ``-Woverlength-strings`` under clang.  One atomic ``asm()`` block:
+143:        # tree, where two identical -Woverlength-strings diagnostics merged

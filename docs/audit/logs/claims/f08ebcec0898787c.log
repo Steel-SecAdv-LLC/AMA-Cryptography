@@ -1,0 +1,3 @@
+$ grep -n "shifted quotient t lies in \[-10, 9\], and a - t\*q lies in \[0, q\]" src/c/ama_kyber.c
+# exit=0 duration=0.005s
+2448:     * shifted quotient t lies in [-10, 9], and a - t*q lies in [0, q] — all

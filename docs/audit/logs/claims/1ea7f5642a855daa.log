@@ -1,0 +1,3 @@
+$ grep -cE "^CRYPTO_OPS\s*=" benchmarks/generate_charts.py
+# exit=1 duration=0.006s
+0

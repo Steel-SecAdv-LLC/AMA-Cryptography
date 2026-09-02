@@ -1,0 +1,5 @@
+$ ls .github/workflows/security.yml .github/workflows/static-analysis.yml && grep -n '^`static-analysis.yml` runs cppcheck' ENHANCED_FEATURES.md | cut -c1-50
+# exit=0 duration=0.006s
+.github/workflows/security.yml
+.github/workflows/static-analysis.yml
+590:`static-analysis.yml` runs cppcheck, clang-tid

@@ -1,0 +1,3 @@
+$ grep -n "def test_the_interpreters_ssl_extension_is_read_correctly" tests/test_vendor_isolation_gate.py
+# exit=0 duration=0.005s
+279:    def test_the_interpreters_ssl_extension_is_read_correctly(self) -> None:

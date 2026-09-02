@@ -1,0 +1,16 @@
+FD-OWNERSHIP CHECK FAILED — unguarded os.fdopen call(s):
+
+  tools/nc_probe_fdopen.py:8: os.fdopen() is not inside a try/except(BaseException|Exception|OSError)/finally — if the call raises, the raw descriptor is never closed and leaks
+
+Wrap the call so the raw descriptor is closed when the hand-off fails, e.g.:
+    fd, name = tempfile.mkstemp(...)
+    try:
+        with os.fdopen(fd, 'wb') as fh:
+            ...
+    except BaseException:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        raise
+

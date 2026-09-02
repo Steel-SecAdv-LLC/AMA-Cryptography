@@ -1,0 +1,7 @@
+$ grep -n 'def is_retriable\|if attempt == total or not is_retriable(exc)' tools/http_fetch.py; grep -n 'def test_a_permanent_status_is_not_retried\|def test_the_final_attempt_is_unguarded\|def test_a_transient_status_is_retried' tests/test_wycheproof_fetch_retry.py
+# exit=0 duration=0.006s
+68:def is_retriable(exc: BaseException) -> bool:
+164:            if attempt == total or not is_retriable(exc):
+153:def test_the_final_attempt_is_unguarded(monkeypatch: pytest.MonkeyPatch) -> None:
+165:def test_a_permanent_status_is_not_retried(
+181:def test_a_transient_status_is_retried(

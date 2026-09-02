@@ -1,0 +1,3 @@
+$ awk '/static int budget_schedule_self_test/,/^}/' tests/c/test_dudect.c | grep -c '^        {"'
+# exit=0 duration=0.005s
+7

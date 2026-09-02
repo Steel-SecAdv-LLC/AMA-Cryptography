@@ -1,0 +1,7 @@
+src/c/ama_core.c:102:12: error: expected expression
+  102 |     return AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX;
+      |            ^
+<command line>:13:47: note: expanded from macro 'AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX'
+   13 | #define AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX \"\"
+      |                                               ^
+1 error generated.

@@ -1,0 +1,3 @@
+$ grep -n "requires_host_isa(token)" pyproject.toml
+# exit=0 duration=0.004s
+607:    "requires_host_isa(token): the test's subject is an instruction-set extension; on a host without it the CI backend-skip escalation in tests/conftest.py leaves the skip alone (tokens: x86, x86-64, aarch64)",

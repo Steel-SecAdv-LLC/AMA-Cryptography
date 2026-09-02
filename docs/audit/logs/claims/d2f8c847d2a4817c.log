@@ -1,0 +1,4 @@
+$ grep -n "def scan_for_formal_verification_claims\|def unqualified_formal_claims" tools/check_verification_claim_honesty.py
+# exit=0 duration=0.004s
+695:def unqualified_formal_claims(text: str) -> list[str]:
+770:def scan_for_formal_verification_claims(repo: Path = REPO) -> list[str]:

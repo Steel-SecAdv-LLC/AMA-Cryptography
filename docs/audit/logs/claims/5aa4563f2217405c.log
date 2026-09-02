@@ -1,0 +1,3 @@
+$ grep -n 'cppcheck is not installed (no' tests/test_suppression_hygiene_gate.py
+# exit=0 duration=0.004s
+370:            _pytest.skip("cppcheck is not installed (no `cppcheck` on PATH)")

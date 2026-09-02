@@ -1,0 +1,5 @@
+$ grep -n 'lib build-shared/lib/libama_cryptography.so\|lib build-arm/lib/libama_cryptography.so' .github/workflows/dudect.yml .github/workflows/arm-qemu.yml
+# exit=0 duration=0.005s
+.github/workflows/dudect.yml:950:            --lib build-shared/lib/libama_cryptography.so
+.github/workflows/dudect.yml:968:            --lib build-shared/lib/libama_cryptography.so
+.github/workflows/arm-qemu.yml:106:            --lib build-arm/lib/libama_cryptography.so

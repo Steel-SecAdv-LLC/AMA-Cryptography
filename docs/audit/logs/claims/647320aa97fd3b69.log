@@ -1,0 +1,3 @@
+$ grep -n 'Tracked files under `root` that are neither vectors nor allowlisted' tools/check_vector_provenance.py
+# exit=0 duration=0.005s
+189:    """Tracked files under `root` that are neither vectors nor allowlisted.

@@ -1,0 +1,3 @@
+$ python -c "from ama_cryptography.session import ReplayWindow; ReplayWindow(window_size=0)" 2>&1 | tail -1
+# exit=1 duration=0.503s
+ValueError: window_size must be >= 1, got 0

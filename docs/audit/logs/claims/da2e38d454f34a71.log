@@ -1,0 +1,7 @@
+$ grep -n 'Acquire::http::Timeout\|Acquire::https::Timeout\|Acquire::Retries' .github/scripts/apt-install.sh; grep -n 'def test_apt_carries_its_own_acquire_timeouts' tests/test_apt_retry_gate.py
+# exit=0 duration=0.005s
+70:# hanging forever.  They do not.  `Acquire::http::Timeout` bounds a single
+140:    -o Acquire::http::Timeout=20
+141:    -o Acquire::https::Timeout=20
+143:    -o Acquire::Retries=1
+326:def test_apt_carries_its_own_acquire_timeouts(tmp_path: Path) -> None:

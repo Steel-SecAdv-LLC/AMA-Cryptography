@@ -1,0 +1,4 @@
+$ sed -n '/^def run_full_package_create_benchmark/,/^def run_full_package_verify_benchmark/p' benchmarks/benchmark_runner.py | grep -n "return benchmark_operation\|benchmark_operation_best_of("
+# exit=0 duration=0.005s
+35:    # This used to be `benchmark_operation_best_of(..., rounds=5)` while
+52:    return benchmark_operation(operation, iterations, warmup=2)

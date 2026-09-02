@@ -1,0 +1,17 @@
+==5985== Memcheck, a memory error detector
+==5985== Copyright (C) 2002-2022, and GNU GPL'd, by Julian Seward et al.
+==5985== Using Valgrind-3.22.0 and LibVEX; rerun with -h for copyright info
+==5985== Command: /home/user/AMA-Cryptography/build-valgrind/bin/test_concurrent_init
+==5985== 
+Concurrent one-time-initialisation test (8 threads x 4 rounds)
+  Under -fsanitize=thread this is what makes the lane non-vacuous.
+PASS: 8 threads completed 4 rounds each with no error
+==5985== 
+==5985== HEAP SUMMARY:
+==5985==     in use at exit: 0 bytes in 0 blocks
+==5985==   total heap usage: 9 allocs, 9 frees, 6,400 bytes allocated
+==5985== 
+==5985== All heap blocks were freed -- no leaks are possible
+==5985== 
+==5985== For lists of detected and suppressed errors, rerun with: -s
+==5985== ERROR SUMMARY: 0 errors from 0 contexts (suppressed: 0 from 0)

@@ -1,0 +1,5 @@
+$ grep -n 'BASELINE NAMES NOTHING THIS RUNNER CAN RUN!' benchmarks/benchmark_runner.py && grep -n 'def test_a_baseline_naming_no_known_benchmark_is_fatal\|def test_it_is_fatal_without_the_strict_flag_too' tests/test_benchmark_baseline_infra.py
+# exit=0 duration=0.009s
+1697:        print("BASELINE NAMES NOTHING THIS RUNNER CAN RUN!")
+1496:    def test_a_baseline_naming_no_known_benchmark_is_fatal(
+1511:    def test_it_is_fatal_without_the_strict_flag_too(

@@ -1,0 +1,5 @@
+$ grep -nE "#if defined\(AMA_HAVE_NISTP_MONT_MULX_IMPL\)|#endif /\* AMA_HAVE_NISTP_MONT_MULX_IMPL \*/" src/c/ama_nistp.c
+# exit=0 duration=0.006s
+377:#if defined(AMA_HAVE_NISTP_MONT_MULX_IMPL)
+436:#endif /* AMA_HAVE_NISTP_MONT_MULX_IMPL */
+502:#if defined(AMA_HAVE_NISTP_MONT_MULX_IMPL)

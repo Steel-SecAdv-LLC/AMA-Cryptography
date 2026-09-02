@@ -1,0 +1,4 @@
+$ grep -n 'option(AMA_ENABLE_AVX512' CMakeLists.txt; grep -c AVX512 setup.py || true
+# exit=0 duration=0.006s
+92:option(AMA_ENABLE_AVX512 "Enable AVX-512 SHA3 4-way kernel (x86-64 only)" OFF)
+0

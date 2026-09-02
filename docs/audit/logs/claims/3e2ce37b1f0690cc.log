@@ -1,0 +1,3 @@
+$ grep -rl "pragma GCC diagnostic ignored" src/c include --include=*.c --include=*.h | grep -v vendor | wc -l
+# exit=0 duration=0.007s
+3

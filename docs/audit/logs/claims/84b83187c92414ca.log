@@ -1,0 +1,3 @@
+$ git show 17aae5a^:.github/workflows/dudect.yml | python -c "import sys,yaml;d=yaml.safe_load(sys.stdin);on=d.get('on') or d.get(True);ps=[p for e in ('push','pull_request') for p in (on[e].get('paths') or [])];print('CMakeLists.txt' in ps, 'tools/check_avx_scoping.py' in ps, 'tools/check_secret_division.py' in ps, 'tools/check_ghash_constant_time.py' in ps)"
+# exit=0 duration=0.092s
+False False True True

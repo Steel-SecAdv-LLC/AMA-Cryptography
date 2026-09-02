@@ -1,0 +1,3 @@
+$ grep -n 'view = memoryview(data).cast("B")' ama_cryptography/secure_memory.py
+# exit=0 duration=0.005s
+388:    view = memoryview(data).cast("B")

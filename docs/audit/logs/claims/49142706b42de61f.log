@@ -1,0 +1,5 @@
+$ python -c "import sys,json; sys.path.insert(0,'benchmarks'); import check_baseline_justification as g; print(g._check_validity_window('2dcef5c','HEAD')); [print(p, sorted(n for n in g._run_git('diff','--name-only', g._calibration_commit(json.load(open(p))['metadata']), '--', *g._FLOORED_CODE_PATHS).splitlines() if n and not g._drift_is_acknowledged(json.load(open(p))['metadata'], n))) for p in g.ALL_BASELINE_PATHS]"
+# exit=0 duration=0.134s
+[]
+benchmarks/baseline.json []
+benchmarks/arm-baseline.json []

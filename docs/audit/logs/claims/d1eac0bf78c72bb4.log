@@ -1,0 +1,8 @@
+$ grep -nA5 "results\[i\].delta_ns == 0.0" tests/c/dudect/dudect_rounds.h
+# exit=0 duration=0.004s
+310:            if (!results[i].is_info_only && results[i].delta_ns == 0.0) {
+311-                fprintf(stderr,
+312-                        "  FATAL: lane '%s' reports |t| = %.4f (>= %.4f) with no "
+313-                        "effect size. t = delta/se, so this cannot be a "
+314-                        "measurement; the harness did not set delta_ns.\n",
+315-                        results[i].name, results[i].t_value, r->threshold);

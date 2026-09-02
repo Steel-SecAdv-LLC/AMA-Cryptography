@@ -1,0 +1,6 @@
+$ for wf in arm-qemu:tools/check_secret_division.py baseline-guard:benchmarks/check_baseline_justification.py corpus-provenance:tools/check_vector_provenance.py integrity-anchor-check:CMakeLists.txt; do f=${wf%%:*}; n=${wf#*:}; git show 17aae5a^:.github/workflows/$f.yml | python -c "import sys,yaml;d=yaml.safe_load(sys.stdin);on=d.get('on') or d.get(True);ps=[p for e in ('push','pull_request') if isinstance(on.get(e),dict) for p in (on[e].get('paths') or [])];print('$f','$n' in ps)"; done
+# exit=0 duration=0.196s
+arm-qemu False
+baseline-guard False
+corpus-provenance False
+integrity-anchor-check False

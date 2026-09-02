@@ -1,0 +1,4 @@
+$ grep -rn 'no environment variable may buy execution' ama_cryptography/ | wc -l; grep -n 'if os.environ.get("AMA_BUILD_PIPELINE") != "1":' ama_cryptography/pqc_backends.py
+# exit=0 duration=0.027s
+0
+584:    if os.environ.get("AMA_BUILD_PIPELINE") != "1":

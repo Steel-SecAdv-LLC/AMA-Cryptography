@@ -1,0 +1,4 @@
+$ grep -n "AMA_FORCE_NO_ARM_CRYPTO=ON" .github/workflows/arm-qemu.yml; grep -n "^  arm-qemu-no-crypto-ext:" .github/workflows/arm-qemu.yml
+# exit=0 duration=0.007s
+145:            -DAMA_FORCE_NO_ARM_CRYPTO=ON \
+108:  arm-qemu-no-crypto-ext:

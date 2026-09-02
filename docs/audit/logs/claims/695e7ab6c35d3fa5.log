@@ -1,0 +1,6 @@
+$ grep -n '^from ama_cryptography._finalizer_health import\|from ama_cryptography.ed25519_binding import\|from ama_cryptography.dilithium_binding import' ama_cryptography/pqc_backends.py; grep -n '^class CryptoModuleError' ama_cryptography/exceptions.py
+# exit=0 duration=0.008s
+43:from ama_cryptography._finalizer_health import record_finalizer_error
+4997:        from ama_cryptography.ed25519_binding import (  # type: ignore[import-not-found, unused-ignore]  # optional Cython .so, cmake -DAMA_USE_NATIVE_PQC=ON (PQC-004)
+5012:        from ama_cryptography.dilithium_binding import (  # type: ignore[import-not-found, unused-ignore]  # optional Cython .so, cmake -DAMA_USE_NATIVE_PQC=ON (PQC-005)
+154:class CryptoModuleError(AmaCryptographyError, RuntimeError):

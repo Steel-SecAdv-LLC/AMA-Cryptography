@@ -1,0 +1,4 @@
+$ grep -c 'dudect_rounds_verdict_case("' tests/c/dudect/dudect_rounds.h; grep -cE '\+8.0 ns \(a mispredicted branch\) -> LEAK|\+500 ns \(early-exit memcmp\) -> LEAK|a harness fault outranks the floor|\+0.596 ns \(Ascon lane, observed\) -> SUB_FLOOR|-1.141 ns \(binding lane, observed\) -> SUB_FLOOR' tests/c/dudect/dudect_rounds.h
+# exit=0 duration=0.006s
+19
+5

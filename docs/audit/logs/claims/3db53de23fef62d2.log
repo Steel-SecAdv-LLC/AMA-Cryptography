@@ -1,0 +1,4 @@
+$ grep -n 'provenance = bench.get("provenance")\|working tree DIRTY at measurement' benchmarks/generate_dashboard.py
+# exit=0 duration=0.006s
+147:    provenance = bench.get("provenance")
+173:            + (" — working tree DIRTY at measurement" if dirty else "")

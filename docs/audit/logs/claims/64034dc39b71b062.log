@@ -1,0 +1,4 @@
+$ grep -n 'assert proc.returncode != 0, "an apt that never succeeded must fail the job"\|def test_helper_still_fails_when_the_package_is_unavailable' tests/test_apt_retry_gate.py
+# exit=0 duration=0.004s
+276:def test_helper_still_fails_when_the_package_is_unavailable(tmp_path: Path) -> None:
+418:    assert proc.returncode != 0, "an apt that never succeeded must fail the job"

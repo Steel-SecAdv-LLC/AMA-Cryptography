@@ -1,0 +1,3 @@
+$ grep -c 'native_secp256k1_pubkey_decompress' ama_cryptography/key_formats.py
+# exit=0 duration=0.004s
+3

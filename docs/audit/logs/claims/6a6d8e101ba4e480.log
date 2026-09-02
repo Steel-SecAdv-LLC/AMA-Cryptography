@@ -1,0 +1,3 @@
+$ git show --stat --format= 73321a5 | grep -c "src/c/ama_secp256k1.c\|include/ama_cryptography.h"
+# exit=0 duration=0.026s
+2

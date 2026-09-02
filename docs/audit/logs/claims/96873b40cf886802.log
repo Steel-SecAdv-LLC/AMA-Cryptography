@@ -1,0 +1,4 @@
+$ grep -n "SOVERSION \${PROJECT_VERSION_MAJOR}" CMakeLists.txt && readelf -d build-release/lib/libama_cryptography.so | grep SONAME
+# exit=0 duration=0.006s
+1019:        SOVERSION ${PROJECT_VERSION_MAJOR}
+ 0x000000000000000e (SONAME)             Library soname: [libama_cryptography.so.5]

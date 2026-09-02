@@ -1,0 +1,3 @@
+$ awk '/^class TestARunThatMeasuredNothingIsNotAPass/{f=1;next} f&&/^class /{exit} f&&/^    def test_/{n++} END{print n}' tests/test_benchmark_baseline_infra.py
+# exit=0 duration=0.004s
+9

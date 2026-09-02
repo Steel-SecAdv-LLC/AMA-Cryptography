@@ -1,0 +1,4 @@
+$ grep -n 'COMPARATOR_PACKAGE = "benchmarks"' tools/check_vendor_isolation.py; grep -ciE 'cryptography|pynacl|nacl' benchmarks/requirements-bench.txt
+# exit=0 duration=0.007s
+225:COMPARATOR_PACKAGE = "benchmarks"
+5

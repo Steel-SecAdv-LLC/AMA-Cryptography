@@ -1,0 +1,4 @@
+$ python -c "import json; [print(f, json.load(open(f))['metadata']['baseline_source_release'], json.load(open(f))['metadata']['applies_through_release'], 'calibration_evidence' in json.load(open(f))['metadata']) for f in ('benchmarks/baseline.json','benchmarks/arm-baseline.json')]"
+# exit=0 duration=0.050s
+benchmarks/baseline.json 4.0.0 5.0.0 True
+benchmarks/arm-baseline.json 4.0.0 5.0.0 True

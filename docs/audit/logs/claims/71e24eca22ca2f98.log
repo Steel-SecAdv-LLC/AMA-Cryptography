@@ -1,0 +1,4 @@
+$ grep -n 'base = (uintptr_t)ptr & ~mask;\|end  = ((uintptr_t)ptr + len + mask) & ~mask;' src/c/ama_secure_memory.c
+# exit=0 duration=0.005s
+79:            uintptr_t base = (uintptr_t)ptr & ~mask;
+80:            uintptr_t end  = ((uintptr_t)ptr + len + mask) & ~mask;

@@ -1,0 +1,4 @@
+$ grep -nE "^def test_(a_yaml_workflow_is_scanned_too|a_yaml_only_tree_is_not_vacuous)" tests/test_apt_retry_gate.py
+# exit=0 duration=0.004s
+89:def test_a_yaml_workflow_is_scanned_too(tmp_path: Path) -> None:
+112:def test_a_yaml_only_tree_is_not_vacuous(tmp_path: Path) -> None:

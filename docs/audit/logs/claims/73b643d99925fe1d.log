@@ -1,0 +1,3 @@
+$ grep -c "tests/test_constant_time.py" src/c/PROVENANCE.md
+# exit=1 duration=0.003s
+0

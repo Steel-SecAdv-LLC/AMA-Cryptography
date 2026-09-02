@@ -1,0 +1,4 @@
+$ awk '/if \(fail\) \{/,/return 77;/' tests/c/test_kyber_poly_equiv.c | grep -n 'return 1;\|return 77;'
+# exit=0 duration=0.006s
+3:        return 1;
+8:        return 77;

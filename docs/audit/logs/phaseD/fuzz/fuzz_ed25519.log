@@ -1,0 +1,39 @@
+Dictionary: 3 entries
+INFO: Running with entropic power schedule (0xFF, 100).
+INFO: Seed: 1355399259
+INFO: Loaded 1 modules   (24011 inline 8-bit counters): 24011 [0x5572292abbc0, 0x5572292b198b), 
+INFO: Loaded 1 PC tables (24011 PCs): 24011 [0x5572292b1990,0x55722930f640), 
+INFO:       67 files found in /tmp/tmp.C8jfhxMKsE/corpus/fuzz_ed25519
+INFO: seed corpus: files: 67 min: 1b max: 105b total: 4425b rss: 34Mb
+#68	INITED cov: 8521 ft: 22121 corp: 50/3487b exec/s: 0 rss: 44Mb
+#259	REDUCE cov: 8521 ft: 22121 corp: 50/3482b lim: 105 exec/s: 259 rss: 50Mb L: 99/105 MS: 1 EraseBytes-
+#349	REDUCE cov: 8521 ft: 22129 corp: 51/3584b lim: 105 exec/s: 174 rss: 52Mb L: 102/105 MS: 5 ShuffleBytes-CrossOver-InsertByte-InsertByte-InsertByte-
+#512	pulse  cov: 8521 ft: 22129 corp: 51/3584b lim: 105 exec/s: 256 rss: 55Mb
+#528	NEW    cov: 8521 ft: 22140 corp: 52/3685b lim: 105 exec/s: 264 rss: 55Mb L: 101/105 MS: 1 ChangeByte-
+#1024	pulse  cov: 8521 ft: 22140 corp: 52/3685b lim: 105 exec/s: 204 rss: 56Mb
+#1746	NEW    cov: 8521 ft: 22151 corp: 53/3802b lim: 117 exec/s: 194 rss: 56Mb L: 117/117 MS: 3 CMP-CopyPart-InsertRepeatedBytes- DE: "\376\377\377\377"-
+#2048	pulse  cov: 8521 ft: 22151 corp: 53/3802b lim: 117 exec/s: 186 rss: 57Mb
+#2928	REDUCE cov: 8521 ft: 22151 corp: 53/3801b lim: 123 exec/s: 183 rss: 57Mb L: 99/117 MS: 2 ShuffleBytes-EraseBytes-
+#3286	REDUCE cov: 8521 ft: 22151 corp: 53/3796b lim: 123 exec/s: 182 rss: 57Mb L: 44/117 MS: 3 EraseBytes-ChangeBit-InsertByte-
+#3375	REDUCE cov: 8521 ft: 22151 corp: 53/3793b lim: 123 exec/s: 187 rss: 57Mb L: 102/117 MS: 4 InsertRepeatedBytes-ShuffleBytes-EraseBytes-ChangeASCIIInt-
+#4066	NEW    cov: 8521 ft: 22156 corp: 54/3922b lim: 129 exec/s: 176 rss: 58Mb L: 129/129 MS: 1 InsertRepeatedBytes-
+#4096	pulse  cov: 8521 ft: 22156 corp: 54/3922b lim: 129 exec/s: 178 rss: 58Mb
+#4829	NEW    cov: 8521 ft: 22158 corp: 55/4057b lim: 136 exec/s: 178 rss: 58Mb L: 135/135 MS: 3 ShuffleBytes-ShuffleBytes-InsertRepeatedBytes-
+#5227	REDUCE cov: 8521 ft: 22158 corp: 55/4054b lim: 136 exec/s: 180 rss: 58Mb L: 114/135 MS: 3 ManualDict-CrossOver-CMP- DE: "\355\323\365\\\032c\022X"-"/\000\000\000"-
+#5484	REDUCE cov: 8521 ft: 22158 corp: 55/4049b lim: 136 exec/s: 176 rss: 58Mb L: 100/135 MS: 2 InsertByte-EraseBytes-
+#7024	NEW    cov: 8521 ft: 22196 corp: 56/4195b lim: 150 exec/s: 180 rss: 59Mb L: 146/146 MS: 5 ChangeByte-ManualDict-CrossOver-ManualDict-InsertRepeatedBytes- DE: "\355\323\365\\\032c\022X"-"\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000"-
+#8192	pulse  cov: 8521 ft: 22196 corp: 56/4195b lim: 157 exec/s: 182 rss: 59Mb
+#8554	NEW    cov: 8521 ft: 22212 corp: 57/4359b lim: 164 exec/s: 182 rss: 59Mb L: 164/164 MS: 5 ShuffleBytes-CMP-CrossOver-PersAutoDict-InsertRepeatedBytes- DE: "\001\000\000\026"-"\355\323\365\\\032c\022X"-
+#8704	REDUCE cov: 8521 ft: 22212 corp: 57/4358b lim: 164 exec/s: 181 rss: 59Mb L: 163/163 MS: 5 ChangeBinInt-EraseBytes-InsertRepeatedBytes-CrossOver-PersAutoDict- DE: "\376\377\377\377"-
+#11049	DONE   cov: 8521 ft: 22212 corp: 57/4358b lim: 185 exec/s: 181 rss: 60Mb
+###### Recommended dictionary. ######
+"\376\377\377\377" # Uses: 377
+"/\000\000\000" # Uses: 110
+"\001\000\000\026" # Uses: 53
+###### End of recommended dictionary. ######
+Done 11049 runs in 61 second(s)
+stat::number_of_executed_units: 11049
+stat::average_exec_per_sec:     181
+stat::new_units_added:          14
+stat::slowest_unit_time_sec:    0
+stat::peak_rss_mb:              60

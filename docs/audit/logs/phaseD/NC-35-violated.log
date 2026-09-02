@@ -1,0 +1,8 @@
+FAIL: release tag `v9.9.9` is not releasable:
+  - tag `v9.9.9` is a lightweight tag (points directly at a commit), not an annotated tag object.
+    A lightweight tag is a ref pointing directly at a commit: there is no tag object, so there is nowhere for a signature to live and nothing to repair after the fact. Re-create it with `git tag -s -f <tag> -m "..."` and force-push the ref.
+    If this ran in CI: confirm the tag ref was fetched with `git fetch --force origin refs/tags/<tag>:refs/tags/<tag>` first. actions/checkout writes a lightweight local ref at the tag's name, which reads as this same failure on a correctly annotated tag.
+
+This gate checks the tag's SHAPE only. It does not verify the signature —
+for that, run:
+  git -c gpg.ssh.allowedSignersFile=.github/allowed_signers verify-tag v9.9.9

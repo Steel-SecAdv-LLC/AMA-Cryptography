@@ -1,0 +1,3 @@
+$ grep -c "detect_stack_use_after_return=0" tests/c/test_pq_parser_stack.c
+# exit=0 duration=0.003s
+5

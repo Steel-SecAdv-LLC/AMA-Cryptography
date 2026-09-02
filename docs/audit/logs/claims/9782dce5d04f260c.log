@@ -1,0 +1,3 @@
+$ grep -n 'def _native_handle_aliases(node: ast.AST) -> set\[str\]:' tools/check_error_state_gating.py
+# exit=0 duration=0.005s
+272:def _native_handle_aliases(node: ast.AST) -> set[str]:

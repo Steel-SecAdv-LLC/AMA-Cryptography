@@ -1,0 +1,3 @@
+$ python -c "import sys;sys.path.insert(0,'.');from tools.check_vector_provenance import NON_VECTOR_ALLOWLIST as A;print(len(A))"
+# exit=0 duration=0.059s
+7

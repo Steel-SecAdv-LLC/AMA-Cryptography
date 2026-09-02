@@ -1,0 +1,31 @@
+
+Dynamic section at offset 0x4fbc8 contains 28 entries:
+  Tag        Type                         Name/Value
+ 0x0000000000000001 (NEEDED)             Shared library: [libc.so.6]
+ 0x0000000000000001 (NEEDED)             Shared library: [ld-linux-aarch64.so.1]
+ 0x000000000000000e (SONAME)             Library soname: [libama_cryptography.so.5]
+ 0x000000000000000c (INIT)               0x4870
+ 0x000000000000000d (FINI)               0x401a4
+ 0x0000000000000019 (INIT_ARRAY)         0x5f128
+ 0x000000000000001b (INIT_ARRAYSZ)       16 (bytes)
+ 0x000000000000001a (FINI_ARRAY)         0x5f138
+ 0x000000000000001c (FINI_ARRAYSZ)       8 (bytes)
+ 0x000000006ffffef5 (GNU_HASH)           0x228
+ 0x0000000000000005 (STRTAB)             0x24b8
+ 0x0000000000000006 (SYMTAB)             0xa00
+ 0x000000000000000a (STRSZ)              5864 (bytes)
+ 0x000000000000000b (SYMENT)             24 (bytes)
+ 0x0000000000000003 (PLTGOT)             0x5fdc8
+ 0x0000000000000002 (PLTRELSZ)           1008 (bytes)
+ 0x0000000000000014 (PLTREL)             RELA
+ 0x0000000000000017 (JMPREL)             0x4480
+ 0x0000000000000007 (RELA)               0x3e50
+ 0x0000000000000008 (RELASZ)             1584 (bytes)
+ 0x0000000000000009 (RELAENT)            24 (bytes)
+ 0x000000000000001e (FLAGS)              BIND_NOW
+ 0x000000006ffffffb (FLAGS_1)            Flags: NOW
+ 0x000000006ffffffe (VERNEED)            0x3de0
+ 0x000000006fffffff (VERNEEDNUM)         2
+ 0x000000006ffffff0 (VERSYM)             0x3ba0
+ 0x000000006ffffff9 (RELACOUNT)          59
+ 0x0000000000000000 (NULL)               0x0

@@ -1,0 +1,3 @@
+$ sed -n '/^### Verification pass, tenth/,/^### /p' CHANGELOG.md | grep -cE "^\*\*(CI-RED-0[0-9]|DEP-01) "
+# exit=0 duration=0.007s
+4

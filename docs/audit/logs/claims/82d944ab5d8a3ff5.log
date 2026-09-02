@@ -1,0 +1,4 @@
+$ grep -nE "os\.chmod\(tmp_name, _artefact_mode\(out_path\)\)|os\.replace\(tmp_name, out_path\)" ama_cryptography/_build_sign.py
+# exit=0 duration=0.005s
+674:        os.chmod(tmp_name, _artefact_mode(out_path))
+675:        os.replace(tmp_name, out_path)

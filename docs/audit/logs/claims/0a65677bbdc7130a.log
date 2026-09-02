@@ -1,0 +1,5 @@
+$ grep -nE "\-\-target (nistp-ecdsa|x25519)$" .github/workflows/dudect.yml; awk 'NR>=591 && NR<=969 && /^    if:/' .github/workflows/dudect.yml | wc -l
+# exit=0 duration=0.007s
+857:            --lib build/lib/libama_cryptography_test.a --target nistp-ecdsa
+866:            --lib build/lib/libama_cryptography_test.a --target x25519
+0

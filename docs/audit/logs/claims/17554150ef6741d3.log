@@ -1,0 +1,4 @@
+$ grep -n 'from tools import http_fetch\|http_fetch.fetch_bytes(' tools/build_keyformat_corpus.py
+# exit=0 duration=0.005s
+69:from tools import http_fetch  # noqa: E402 -- repo-root path insert above (FETCH-003)
+127:    raw = http_fetch.fetch_bytes(url, user_agent=_USER_AGENT, timeout=_HTTP_TIMEOUT)

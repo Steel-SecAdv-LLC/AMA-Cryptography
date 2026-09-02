@@ -1,0 +1,3 @@
+$ grep -n "int r\[2\] = { 1, 1 };" tests/c/test_ed25519_canonical_s.c
+# exit=0 duration=0.005s
+444:        int r[2] = { 1, 1 };

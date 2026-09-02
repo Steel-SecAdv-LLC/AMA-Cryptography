@@ -1,0 +1,3 @@
+$ grep -cE "^#(if defined\(_MSC_VER\)|ifdef _MSC_VER)" src/c/ama_cpuid.c
+# exit=0 duration=0.004s
+4

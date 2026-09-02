@@ -1,0 +1,6 @@
+NIST P-256 4-limb MULX/ADX Montgomery multiply equivalence
+=========================================================
+PASS: mod p, 16 boundary + 100000 random pairs agree
+PASS: mod n, 16 boundary + 100000 random pairs agree
+=========================================================
+All P-256 Montgomery MULX/ADX equivalence checks passed

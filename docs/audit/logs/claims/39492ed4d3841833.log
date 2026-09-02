@@ -1,0 +1,4 @@
+$ grep -cE '^def test_(every_script_the_workflow_runs_is_in_its_own_filter|a_cmake_configuring_workflow_lists_cmakelists|push_and_pull_request_filters_agree)' tests/test_workflow_path_filters.py; python -m pytest tests/test_workflow_path_filters.py --collect-only -q -p no:cacheprovider | tail -1
+# exit=0 duration=1.264s
+3
+19 tests collected in 0.46s

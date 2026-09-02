@@ -1,0 +1,3 @@
+$ grep -n '^uninitvar:src/c/ama_dilithium.c' .cppcheck-suppressions
+# exit=0 duration=0.004s
+54:uninitvar:src/c/ama_dilithium.c:2363

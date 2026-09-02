@@ -1,0 +1,6 @@
+$ grep -n '^mypy==' requirements-lock.txt; grep -n '"mypy==2.3.0"' .github/workflows/ci.yml; grep -n -A1 'mirrors-mypy' .pre-commit-config.yaml
+# exit=0 duration=0.009s
+42:mypy==2.3.0
+580:        pip install "black==26.5.1" "ruff==0.16.0" "mypy==2.3.0" \
+73:  - repo: https://github.com/pre-commit/mirrors-mypy
+74-    rev: v2.3.0

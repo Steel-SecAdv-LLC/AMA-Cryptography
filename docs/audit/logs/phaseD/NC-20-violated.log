@@ -1,0 +1,5 @@
+FAIL: 1 unresolvable citation(s):
+  - ARCHITECTURE.md:989: 'at line 42' — cites a source line number, which nothing can keep true; cite the identifier, marker or function instead
+
+Each names something a reader of this repository cannot open. State the
+fact directly, or cite a commit or INVARIANT-N.

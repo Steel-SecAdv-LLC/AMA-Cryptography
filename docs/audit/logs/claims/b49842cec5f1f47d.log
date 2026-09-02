@@ -1,0 +1,3 @@
+$ grep -n 'left support on 2025-05-09' tools/check_docker_pins.py
+# exit=0 duration=0.004s
+15:The second half is worse.  ``alpine:3.18`` left support on 2025-05-09 and the

@@ -1,0 +1,6 @@
+$ grep -n '"ls-files", "\*.py"\|tracked but never type-checked\|--linecoverage-report' tools/check_type_check_scope.py
+# exit=0 duration=0.004s
+29:``mypy --linecoverage-report`` writes a ``coverage.json`` whose ``lines`` map
+78:        ["git", "-C", str(root), "ls-files", "*.py"],
+124:                f"{rel}: tracked but never type-checked. Add it to the mypy "
+135:        help="path to coverage.json from `mypy --linecoverage-report <dir>`",

@@ -930,43 +930,66 @@ _ARITHMETIC_OPERATOR_RE = re.compile(r"[\w)\]]\s*[*/%+]\s*[\w(]")
 #: A single-quoted GitHub-expression string literal, `''` being the escape.
 _EXPRESSION_LITERAL_RE = re.compile(r"'(?:[^']|'')*'")
 
+#: A lone `=`: not the second half of `==`, `!=`, `<=` or `>=`, and not the
+#: first half of `==`.  The grammar has no assignment and no single-`=`
+#: comparison, so this is a parse failure of the same kind as arithmetic.
+_ASSIGNMENT_OPERATOR_RE = re.compile(r"(?<![=!<>])=(?!=)")
 
-def _iter_expression_strings(node: Any, trail: str = "") -> list[tuple[str, str]]:
-    """Every string in the document that contains a `${{ ... }}` expression."""
+#: Keys whose value GitHub evaluates as an expression with no `${{ }}` around
+#: it.  `if: steps.x.outcome == 'failure'` is an expression as much as
+#: `${{ steps.x.outcome == 'failure' }}` is, and fails the file's parse the
+#: same way when malformed.
+_BARE_EXPRESSION_KEYS = frozenset({"if"})
+
+
+def _iter_expression_bodies(node: Any, trail: str = "") -> list[tuple[str, str]]:
+    """Every expression body in the document, with where it was found.
+
+    Two shapes.  The inside of each ``${{ ... }}`` wherever a string carries
+    one, and the whole value of an ``if:`` key, which GitHub evaluates as an
+    expression with no delimiters at all.  The bare form was invisible to the
+    first version of this check — it looked only for ``${{`` — so an
+    ``if: steps.x.outcome = 'failure'`` in a job passed the gate while it
+    would have made every job in the file silently produce no check.  Found
+    by a negative control (docs/audit/PR394_NEGATIVE_CONTROLS.tsv, NC-29b).
+    """
     found: list[tuple[str, str]] = []
     if isinstance(node, dict):
         for key, value in node.items():
-            found.extend(_iter_expression_strings(value, f"{trail}.{key}" if trail else str(key)))
+            here = f"{trail}.{key}" if trail else str(key)
+            if key in _BARE_EXPRESSION_KEYS and isinstance(value, str) and "${{" not in value:
+                found.append((here, value))
+                continue
+            found.extend(_iter_expression_bodies(value, here))
     elif isinstance(node, list):
         for index, value in enumerate(node):
-            found.extend(_iter_expression_strings(value, f"{trail}[{index}]"))
+            found.extend(_iter_expression_bodies(value, f"{trail}[{index}]"))
     elif isinstance(node, str) and "${{" in node:
-        found.append((trail or "<root>", node))
+        for match in _ARITHMETIC_IN_EXPRESSION_RE.finditer(node):
+            found.append((trail or "<root>", match.group("body")))
     return found
 
 
 def check_expression_syntax(path: Path, document: Any, report: Report) -> None:
     """Reject expression forms GitHub's parser rejects.
 
-    Only arithmetic today, because that is the class that has actually shipped
-    here and because it is decidable without reimplementing the grammar. YAML
+    Arithmetic, because that is the class that has actually shipped here, and
+    a lone ``=``, because a negative control showed the gate accepting one
+    (NC-29b).  Both are decidable without reimplementing the grammar.  YAML
     parses the file fine — the operator is inside a string as far as YAML is
     concerned — so this cannot be caught by loading the document, which is why
     the existing YAML guard in :func:`sweep` did not see it.
     """
-    for location, text in _iter_expression_strings(document):
-        for match in _ARITHMETIC_IN_EXPRESSION_RE.finditer(text):
-            report.expressions_checked += 1
-            body = match.group("body")
-            # Blank single-quoted string literals first.  GitHub expressions
-            # quote with `'` only, and their CONTENTS are data: `'refs/heads/main'`
-            # contains a `/` between two word characters and would otherwise read
-            # as a division.  Replaced with spaces rather than removed so the
-            # reported text keeps its shape.
-            scannable = _EXPRESSION_LITERAL_RE.sub(lambda m: " " * len(m.group(0)), body)
-            operator = _ARITHMETIC_OPERATOR_RE.search(scannable)
-            if operator is None:
-                continue
+    for location, body in _iter_expression_bodies(document):
+        report.expressions_checked += 1
+        # Blank single-quoted string literals first.  GitHub expressions
+        # quote with `'` only, and their CONTENTS are data: `'refs/heads/main'`
+        # contains a `/` between two word characters and would otherwise read
+        # as a division.  Replaced with spaces rather than removed so the
+        # reported text keeps its shape.
+        scannable = _EXPRESSION_LITERAL_RE.sub(lambda m: " " * len(m.group(0)), body)
+        operator = _ARITHMETIC_OPERATOR_RE.search(scannable)
+        if operator is not None:
             report.findings.append(
                 Finding(
                     workflow=path.name,
@@ -981,6 +1004,20 @@ def check_expression_syntax(path: Path, document: Any, report: Report) -> None:
                         "carry the computed value in the matrix (matrix.include) or an env "
                         "var instead of computing it in the expression."
                     ),
+                )
+            )
+        if _ASSIGNMENT_OPERATOR_RE.search(scannable) is not None:
+            report.findings.append(
+                Finding(
+                    workflow=path.name,
+                    location=location,
+                    message=(
+                        f"expression `${{{{{body}}}}}` uses a lone `=`. GitHub Actions "
+                        f"expressions compare with `==` and `!=` only; this makes the "
+                        f"WHOLE FILE fail to parse, so every job in it silently produces "
+                        f"no check at all."
+                    ),
+                    remedy="write `==` (or `!=`) for the comparison.",
                 )
             )
 
@@ -1402,7 +1439,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         f"{report.release_steps_checked} release-publishing step(s), "
         f"{report.gated_binaries_checked} CMake-gated binary invocation(s), "
         f"{report.cmake_configures_checked} cmake configure(s), "
-        f"{report.expressions_checked} `${{{{ }}}}` expression(s), "
+        f"{report.expressions_checked} expression(s) (`${{{{ }}}}` and bare `if:`), "
         f"{report.pytest_steps_checked} pytest invocation(s), "
         f"{report.gate_required_jobs_checked} gate-required job(s)."
     )

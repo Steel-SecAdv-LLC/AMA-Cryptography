@@ -1,0 +1,3 @@
+$ grep -n -B2 'dil_polyveck_invntt(&w1prime, P->k)' src/c/ama_dilithium.c | grep -c dil_polyveck_reduce
+# exit=0 duration=0.005s
+1

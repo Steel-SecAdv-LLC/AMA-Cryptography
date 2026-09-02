@@ -1,0 +1,5 @@
+$ grep -nE "assert len\(DOCS\) > 20|assert len\(cited\) > 200|assert len\(TRACKED_BASENAMES\) > 400" tests/test_documented_source_paths_exist.py
+# exit=0 duration=0.005s
+171:    assert len(DOCS) > 20, f"only {len(DOCS)} markdown files found — the glob is wrong"
+179:    assert len(cited) > 200, (
+229:    assert len(TRACKED_BASENAMES) > 400, (

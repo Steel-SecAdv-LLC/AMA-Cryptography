@@ -1,0 +1,3 @@
+$ grep -n "Detection and wiring diverge in four ways" include/ama_dispatch.h
+# exit=0 duration=0.004s
+48: * Detection and wiring diverge in four ways, all of them by design:

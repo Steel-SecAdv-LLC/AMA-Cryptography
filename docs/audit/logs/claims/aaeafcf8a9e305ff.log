@@ -1,0 +1,4 @@
+$ grep -n "MAX_CONSECUTIVE_ROTATION_FAILURES: int = 6" ama_cryptography/adaptive_posture.py; grep -c '"rotation_suspended": (' ama_cryptography/adaptive_posture.py
+# exit=0 duration=0.006s
+773:    MAX_CONSECUTIVE_ROTATION_FAILURES: int = 6
+1

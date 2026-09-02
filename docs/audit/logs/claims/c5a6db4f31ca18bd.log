@@ -1,0 +1,3 @@
+$ grep -n "def test_the_candidate_order_matches_the_loader_branch_for_branch\|def test_every_platform_spelling_is_recognised\|def test_the_name_the_loader_opens_wins_over_a_versioned_sibling" tests/test_conftest_backend_skip_scoping.py | wc -l
+# exit=0 duration=0.006s
+3

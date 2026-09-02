@@ -1,0 +1,4 @@
+$ git show -s --format='%h %ad %s' --date=short 1b084ae 73321a5
+# exit=0 duration=0.005s
+1b084ae 2026-08-20 Pin the published test vectors by digest, since nothing would have noticed them changing
+73321a5 2026-08-20 Give secp256k1 a fixed-width signing entry point, so every constant-time target reaches zero

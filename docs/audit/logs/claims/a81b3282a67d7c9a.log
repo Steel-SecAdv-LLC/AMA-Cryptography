@@ -1,0 +1,5 @@
+$ grep -n "def _unevaluated_needs\|def _run_text\|def _gate_condition_text" tools/check_gate_coverage.py
+# exit=0 duration=0.004s
+145:def _run_text(job: dict[str, Any]) -> str:
+202:def _gate_condition_text(job: dict[str, Any]) -> str:
+242:def _unevaluated_needs(job: dict[str, Any]) -> list[str]:

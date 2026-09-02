@@ -1,0 +1,3 @@
+$ grep -n "threshold = max(self.threshold, ordered\[k\])" ama_cryptography/monitoring.py
+# exit=0 duration=0.005s
+1938:        threshold = max(self.threshold, ordered[k])

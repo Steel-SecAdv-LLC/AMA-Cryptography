@@ -1,0 +1,5 @@
+$ git log --format='%h %ci %s' -1 5a99189; git log --format='%h %ci %s' -1 267c16c; echo delta=$(( $(git log -1 --format=%ct 267c16c) - $(git log -1 --format=%ct 5a99189) ))
+# exit=0 duration=0.014s
+5a99189 2026-08-17 13:31:35 +0000 Restore upstream dudect percentile cropping with a median verdict over the rung ladder
+267c16c 2026-08-17 13:45:43 +0000 Revert the percentile-cropping harness change: CI falsified the drop-in design
+delta=848

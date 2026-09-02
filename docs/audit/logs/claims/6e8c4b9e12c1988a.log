@@ -1,0 +1,6 @@
+$ git show --stat --format=%h 496f80e | grep -E 'include/ama_cryptography.h|ama_testing_exports.h'; grep -c ama_ascon_permutation_for_test include/ama_cryptography.h src/c/internal/ama_testing_exports.h
+# exit=0 duration=0.013s
+ include/ama_cryptography.h           | 18 ---------
+ src/c/internal/ama_testing_exports.h | 22 +++++++++++
+include/ama_cryptography.h:0
+src/c/internal/ama_testing_exports.h:1

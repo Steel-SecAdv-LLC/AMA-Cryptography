@@ -1,0 +1,4 @@
+$ grep -n -B14 'dil_test_note_invntt_input(a);' src/c/ama_dilithium.c | grep -E 'static void dil_invntt_cached|ifdef AMA_TESTING_MODE'
+# exit=0 duration=0.006s
+428-static void dil_invntt_cached(int32_t a[DIL_N], const ama_dispatch_table_t *dt) {
+429-#ifdef AMA_TESTING_MODE

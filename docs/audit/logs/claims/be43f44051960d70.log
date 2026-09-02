@@ -1,0 +1,21 @@
+$ sed -n 308,326p tests/test_documented_c_prototypes_match_headers.py
+# exit=0 duration=0.003s
+            [
+                cc,
+                "-std=c11",
+                "-fsyntax-only",
+                "-Wall",
+                "-Wextra",
+                "-Werror",
+                # -isystem, not -I: it suppresses warnings that originate inside
+                # the header while still reporting the ones attributed to this
+                # probe's own redeclarations -- verified in both directions, the
+                # mutated ama_ed25519_keypair is rejected either way.  -Werror
+                # then covers exactly what this test checks, and a warning the
+                # header happens to emit under some compiler this repository
+                # does not otherwise build with cannot fail it.
+                "-isystem",
+                str(PUBLIC_INCLUDE),
+                str(src),
+            ],
+            capture_output=True,

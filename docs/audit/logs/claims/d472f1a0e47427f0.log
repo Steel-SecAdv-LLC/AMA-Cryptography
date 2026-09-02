@@ -1,0 +1,3 @@
+$ grep -cE "#include <intrin\.h>|#include <cpuid\.h>|_xgetbv\(0\)|__builtin_ia32_xgetbv\(0\)|__cpuid\(info, 1\)" src/c/ama_cpuid.c
+# exit=0 duration=0.005s
+8

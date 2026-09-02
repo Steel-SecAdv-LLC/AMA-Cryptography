@@ -1,0 +1,3 @@
+$ grep -n 'assert checked >= 2, f"the SONAME sweep found only {checked} literals"' tests/test_version_consistency.py
+# exit=0 duration=0.006s
+75:        assert checked >= 2, f"the SONAME sweep found only {checked} literals"

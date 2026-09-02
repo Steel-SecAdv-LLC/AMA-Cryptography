@@ -1,0 +1,20 @@
+Dictionary: 3 entries
+INFO: Running with entropic power schedule (0xFF, 100).
+INFO: Seed: 879293931
+INFO: Loaded 1 modules   (11349 inline 8-bit counters): 11349 [0x557e23fbcf90, 0x557e23fbfbe5), 
+INFO: Loaded 1 PC tables (11349 PCs): 11349 [0x557e23fbfbe8,0x557e23fec138), 
+INFO:       10 files found in /tmp/tmp.ZWjnv3SmFv/corpus/fuzz_x25519
+INFO: seed corpus: files: 10 min: 1b max: 65b total: 407b rss: 33Mb
+#11	INITED cov: 314 ft: 475 corp: 6/230b exec/s: 0 rss: 34Mb
+#4096	pulse  cov: 314 ft: 475 corp: 6/230b lim: 101 exec/s: 2048 rss: 39Mb
+#8192	pulse  cov: 314 ft: 475 corp: 6/230b lim: 145 exec/s: 2048 rss: 39Mb
+#16384	pulse  cov: 314 ft: 475 corp: 6/230b lim: 222 exec/s: 2048 rss: 40Mb
+#32768	pulse  cov: 314 ft: 475 corp: 6/230b lim: 385 exec/s: 1927 rss: 43Mb
+#65536	pulse  cov: 314 ft: 475 corp: 6/230b lim: 711 exec/s: 1927 rss: 47Mb
+#111956	DONE   cov: 314 ft: 475 corp: 6/230b lim: 1176 exec/s: 1835 rss: 53Mb
+Done 111956 runs in 61 second(s)
+stat::number_of_executed_units: 111956
+stat::average_exec_per_sec:     1835
+stat::new_units_added:          0
+stat::slowest_unit_time_sec:    0
+stat::peak_rss_mb:              53

@@ -1,0 +1,4 @@
+$ grep -n "One leading underscore is stripped" tools/check_vendor_isolation.py; grep -n "def test_an_imported_vendor_symbol_is_flagged" tests/test_vendor_isolation_gate.py | head -1
+# exit=0 duration=0.007s
+1213:    is spelled ``_EVP_DigestInit`` there.  One leading underscore is stripped
+652:    def test_an_imported_vendor_symbol_is_flagged(self, tmp_path: Path) -> None:

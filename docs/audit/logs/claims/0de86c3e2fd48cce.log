@@ -1,0 +1,3 @@
+$ ls -la /usr/lib/bfd-plugins/liblto_plugin.so
+# exit=0 duration=0.004s
+lrwxrwxrwx 1 root root 54 Jan 31  2024 /usr/lib/bfd-plugins/liblto_plugin.so -> ../../libexec/gcc/x86_64-linux-gnu/13/liblto_plugin.so

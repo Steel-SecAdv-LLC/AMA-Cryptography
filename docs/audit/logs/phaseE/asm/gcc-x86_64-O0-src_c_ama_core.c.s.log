@@ -1,0 +1,9 @@
+src/c/ama_core.c: In function 'ama_integrity_trust_anchor_pubkey_hex':
+<command-line>: error: stray '\' in program
+src/c/ama_core.c:102:12: note: in expansion of macro 'AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX'
+  102 |     return AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX;
+      |            ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: error: missing terminating " character
+src/c/ama_core.c:102:12: note: in expansion of macro 'AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX'
+  102 |     return AMA_INTEGRITY_TRUST_ANCHOR_PUBKEY_HEX;
+      |            ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

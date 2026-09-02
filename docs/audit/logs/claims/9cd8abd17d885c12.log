@@ -1,0 +1,3 @@
+$ grep -c "nothing is hand-entered" benchmarks/competitive.html
+# exit=1 duration=0.004s
+0

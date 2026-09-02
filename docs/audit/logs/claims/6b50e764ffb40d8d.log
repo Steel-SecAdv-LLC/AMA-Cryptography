@@ -1,0 +1,4 @@
+$ awk '/def detect_resonance/,/history_list = list\(self.timing_history\[operation\]\)/' ama_cryptography/monitoring.py | grep -n 'with self._lock:\|single C call under the GIL'
+# exit=0 duration=0.007s
+66:        # single C call under the GIL, so a concurrent append CANNOT land
+77:        with self._lock:

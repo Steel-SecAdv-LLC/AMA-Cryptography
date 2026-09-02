@@ -1,0 +1,3 @@
+$ grep -n 'if len(msg.ciphertext) > MAX_MESSAGE_SIZE:' ama_cryptography/secure_channel.py
+# exit=0 duration=0.005s
+721:            if len(msg.ciphertext) > MAX_MESSAGE_SIZE:

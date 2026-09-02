@@ -1,0 +1,3 @@
+$ grep -n -A3 '^static int32_t dil_freeze' src/c/ama_dilithium.c | grep -c 'dil_caddq(a)'
+# exit=0 duration=0.005s
+1

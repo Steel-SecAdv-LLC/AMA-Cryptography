@@ -1,0 +1,3 @@
+$ grep -c '^    "aes-gcm-neon",$\|^    "chacha20-neon",$\|^    "sha3-neon",$' src/c/dispatch/ama_dispatch.c
+# exit=0 duration=0.004s
+3

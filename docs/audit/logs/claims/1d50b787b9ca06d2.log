@@ -1,0 +1,3 @@
+$ python -c "import re;s=open('benchmarks/validation_suite.py').read();b=re.search(r'documented_claims: Dict\[str, Tuple\[float, str, float\]\] = \{(.*?)\n        \}',s,re.S).group(1);print(len(re.findall(r'^\s*\"([a-z0-9_]+)\":\s*\(',b,re.M)))"
+# exit=0 duration=0.038s
+18

@@ -1,0 +1,13 @@
+Inspected /tmp/nc-scratch-0z56igvm/nc-export.so
+  exported (defined) symbols : 1
+  ama_* ABI symbols          : 0
+  non-ama offenders          : 1
+
+EXPORT ALLOWLIST FAILED — 1 exported symbol(s) are not part of
+the ama_* ABI and are not linker-generated markers:
+  nc_leaked_symbol
+
+The shared library must export only AMA's own ama_* surface (audit B2).
+These are almost always the bundled ed25519-donna names — localise them
+via cmake/ama_exports.map; if a symbol is genuinely public, give it the
+ama_ prefix.

@@ -1,0 +1,3 @@
+ctypes ABI contract check FAILED — 1 problem(s):
+
+  - ama_cryptography/pqc_backends.py:1329: ama_dilithium_keypair argtypes ['ptr'] != header ['ptr', 'ptr'] (ama_cryptography.h:2889)

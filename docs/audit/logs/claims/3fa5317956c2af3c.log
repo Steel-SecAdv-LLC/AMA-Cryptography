@@ -1,0 +1,4 @@
+$ grep -rn "dudect_check(" tests tools src | grep -vE "^[^:]+:[0-9]+:\s*(\*|/\*|//)" | wc -l; grep -rn "define DUDECT_LEAKAGE_FOUND\|define DUDECT_NO_LEAKAGE_FOUND\|define DUDECT_NEED_MORE\|define DUDECT_ENOUGH_MEASUREMENTS" tests tools src | wc -l
+# exit=1 duration=0.490s
+0
+0

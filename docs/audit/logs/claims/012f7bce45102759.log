@@ -1,0 +1,10 @@
+$ grep -nB1 -A6 "^#: Miss-count threshold" tools/check_ghash_constant_time.py
+# exit=0 duration=0.004s
+1668-
+1669:#: Miss-count threshold.  Zero, and that is measured rather than aspirational:
+1670-#: across all eighteen targets at gcc 13 -O3 and clang 18 -O3, every
+1671-#: cross-class miss delta and every same-class noise floor is exactly 0.  (An
+1672-#: earlier revision of this note said "all ten targets" and cited ecdsa as
+1673-#: "the one target with a legitimate public-data spread ... 24 instructions
+1674-#: and 8 data references".  Both were stale: the inventory is eighteen, and
+1675-#: ecdsa's spread went to zero when the target moved to

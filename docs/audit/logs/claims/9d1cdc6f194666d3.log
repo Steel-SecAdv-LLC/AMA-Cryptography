@@ -1,0 +1,6 @@
+$ grep -n '^_LOW_X = 1\|def test_the_canonical_encoding_decompresses\|def test_the_non_canonical_twin_is_refused' tests/test_secp256k1_ecdsa_noncanonical_pubkey.py; python -c "p=2**256-2**32-977; print(pow(8,(p-1)//2,p)==1)"
+# exit=0 duration=0.030s
+127:_LOW_X = 1
+150:    def test_the_canonical_encoding_decompresses(self) -> None:
+158:    def test_the_non_canonical_twin_is_refused(self) -> None:
+True

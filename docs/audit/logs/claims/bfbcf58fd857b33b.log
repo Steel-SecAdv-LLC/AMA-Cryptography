@@ -1,0 +1,4 @@
+$ grep -nP '^\t@([A-Z_]+=\S+ )?(\$\(RUN\) (sphinx|pip_audit|build|cProfile)|\$\(PYTHON\) (setup\.py build_ext|benchmarks/benchmark_suite\.py|tools/check_bandit_severity\.py|tools/check_semgrep_severity\.py|-c "import pstats))' Makefile | wc -l; grep -nE "^\t@?(sphinx-build|pip-audit|python3)\b" Makefile; echo rc=$?
+# exit=0 duration=0.006s
+10
+rc=1

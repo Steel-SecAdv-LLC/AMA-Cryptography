@@ -1,0 +1,3 @@
+$ grep -n "ref_lane = J2 % lanes" src/c/ama_argon2.c
+# exit=0 duration=0.005s
+535:        ref_lane = J2 % lanes;

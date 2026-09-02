@@ -1,0 +1,3 @@
+$ grep -n "load-bearing TODAY" src/c/ama_sha3.c
+# exit=0 duration=0.004s
+1105:     * The guard is therefore load-bearing TODAY, not only insurance against a

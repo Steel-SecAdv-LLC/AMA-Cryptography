@@ -1,0 +1,3 @@
+$ diff <(git show 6a3f09e^:src/c/internal/ama_once.h | gcc -E -P -Iinclude -Isrc/c -Isrc/c/internal -x c - 2>/dev/null) <(git show 6a3f09e:src/c/internal/ama_once.h | gcc -E -P -Iinclude -Isrc/c -Isrc/c/internal -x c - 2>/dev/null) >/dev/null && echo IDENTICAL_ONCE
+# exit=0 duration=0.022s
+IDENTICAL_ONCE

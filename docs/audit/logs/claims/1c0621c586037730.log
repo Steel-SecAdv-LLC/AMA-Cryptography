@@ -1,0 +1,5 @@
+$ grep -n '^void ama_kyber_test_set_sample_initial_blocks\|blocks > KYBER_XOF_INITIAL_BLOCKS' src/c/ama_kyber.c; grep -n 'ama_kyber_test_set_sample_initial_blocks' src/c/internal/ama_testing_exports.h
+# exit=0 duration=0.016s
+384:void ama_kyber_test_set_sample_initial_blocks(unsigned int blocks) {
+386:        (blocks == 0u || blocks > KYBER_XOF_INITIAL_BLOCKS)
+108:void ama_kyber_test_set_sample_initial_blocks(unsigned int blocks);

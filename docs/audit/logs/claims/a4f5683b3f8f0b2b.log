@@ -1,0 +1,3 @@
+$ grep -n '^HeaderFilterRegex:' .clang-tidy
+# exit=0 duration=0.004s
+149:HeaderFilterRegex: '^(.*/)?(include/.*\.h|src/c/[^/]+\.h|src/c/(avx2|internal|neon|sve2)/[^/]+\.h)$'

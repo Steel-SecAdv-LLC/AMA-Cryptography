@@ -1,0 +1,137 @@
+=======================================================
+dudect Constant-Time Verification Suite
+AMA Cryptography
+=======================================================
+
+Methodology: Welch's t-test on execution times
+Threshold:   |t| < 5.0 (99.999% confidence)
+Measurements: 100000 per test, up to 3 rounds
+Timeout:     600 seconds (whole run)
+
+=== Round 1/3 ===
+
+--- Utility Functions ---
+  ama_consttime_memcmp                t = -173.4679  [OVER THRESHOLD]  (100000 measurements, rung 3, class0-class1 = -4.611 ns)
+  ama_consttime_swap                  t =  -1.5641  [within threshold]  (100000 measurements, rung 6, class0-class1 = +159.839 ns)
+  ama_secure_memzero                  t =  -2.1818  [within threshold]  (100000 measurements, rung 0, class0-class1 = -3.525 ns)
+  ama_consttime_lookup                t =  -1.4753  [within threshold]  (100000 measurements, rung 2, class0-class1 = -2.053 ns)
+  ama_consttime_copy                  t =  +1.5387  [within threshold]  (100000 measurements, rung 1, class0-class1 = -1.361 ns)
+
+--- Cryptographic Primitives ---
+  Ed25519 sign (key-independent)      t =  -1.3061  [within threshold]  (100000 measurements, rung 3, class0-class1 = +535.178 ns)
+  Ed25519 verify (vartime, info-only) t =  +4.7261  [within threshold]  (100000 measurements, rung 3, class0-class1 = +2025.973 ns)
+  ChaCha20-Poly1305 tag verify        t =  +2.3257  [within threshold]  (100000 measurements, rung 1, class0-class1 = -2.685 ns)
+  ChaCha20-Poly1305 tag verify (forgery position) t =  +1.7491  [within threshold]  (100000 measurements, rung 1, class0-class1 = +0.787 ns)
+  Ascon-AEAD128 tag verify (forgery position) t =  +2.1819  [within threshold]  (100000 measurements, rung 1, class0-class1 = -3.550 ns)
+  Ascon-AEAD128 encrypt (key-independent) t =  +1.4525  [within threshold]  (100000 measurements, rung 17, class0-class1 = -2.929 ns)
+  Ascon-Hash256 (input-independent)   t =  -1.1795  [within threshold]  (100000 measurements, rung 2, class0-class1 = -2.531 ns)
+  Argon2id legacy verify              t =  -2.2102  [within threshold]  (8192 measurements, rung 5, class0-class1 = +168.359 ns)
+  AES-GCM tag verify                  t =  +2.2444  [within threshold]  (100000 measurements, rung 13, class0-class1 = -1.520 ns)
+  AES-GCM tag verify (forgery position) t =  -1.6520  [within threshold]  (100000 measurements, rung 7, class0-class1 = +3.409 ns)
+  HKDF-SHA3-256 (IKM-independent)     t =  +1.6332  [within threshold]  (100000 measurements, rung 20, class0-class1 = +13.059 ns)
+  HMAC-SHA3-256 verify (compute+compare) t =  -2.2334  [within threshold]  (100000 measurements, rung 20, class0-class1 = -14.640 ns)
+  agent binding check (verdict-independent) t =  +1.0579  [within threshold]  (100000 measurements, rung 0, class0-class1 = +8.712 ns)
+
+--- Classical (key exchange) ---
+  X25519 scalarmult (path=fe64, scalar-independent) t =  +0.8044  [within threshold]  (100000 measurements, rung 10, class0-class1 = +26.594 ns)
+  X25519 scalarmult batch×4 (scalar-independent) t =  +2.3840  [within threshold]  (100000 measurements, rung 20, class0-class1 = +320.835 ns)
+
+--- Threshold Signature Building Blocks ---
+  FROST scalar_negate (0x00 vs 0xFF)  t =  -2.3614  [within threshold]  (100000 measurements, rung 12, class0-class1 = -0.224 ns)
+  FROST scalar_negate (0x00 vs mid-range) t =  -2.2872  [within threshold]  (100000 measurements, rung 1, class0-class1 = -1.478 ns)
+  secp256k1 scalar multiplication     t =  -1.1609  [within threshold]  (100000 measurements, rung 9, class0-class1 = -236.865 ns)
+  secp256k1 ECDSA sign (RFC 6979)     t =  -3.1755  [within threshold]  (100000 measurements, rung 1, class0-class1 = -11.911 ns)
+
+--- Post-Quantum Cryptography ---
+  Kyber-1024 decaps (CT reject)       t =  +1.5475  [within threshold]  (100000 measurements, rung 3, class0-class1 = +26.951 ns)
+  ML-DSA-65 sign (msg-independent)    t = -480.4945  [OVER THRESHOLD]  (100000 measurements, rung 2, class0-class1 = -38235.047 ns)
+  SLH-DSA-SHA2-256f sign (msg-independent) t =  -1.5520  [within threshold]  (256 measurements, rung 0, class0-class1 = -2221183.275 ns)
+    NOTE: UNCROPPED statistic — no cropped rung reached DUDECT_CROP_MIN_PER_CLASS (128) in both classes at 256 measurements, so this lane ran the raw Welch t.
+
+1 lane(s) over the threshold this round. Re-running: a real leak reproduces every round, noise moves.
+
+=== Round 2/3 ===
+
+--- Utility Functions ---
+  ama_consttime_memcmp                t = -328.4105  [OVER THRESHOLD]  (100000 measurements, rung 7, class0-class1 = -5.004 ns)
+  ama_consttime_swap                  t =  -1.7853  [within threshold]  (100000 measurements, rung 11, class0-class1 = +0.618 ns)
+  ama_secure_memzero                  t =  -1.2521  [within threshold]  (100000 measurements, rung 1, class0-class1 = -2.141 ns)
+  ama_consttime_lookup                t =  +1.6234  [within threshold]  (100000 measurements, rung 11, class0-class1 = +0.367 ns)
+  ama_consttime_copy                  t =  +1.8505  [within threshold]  (100000 measurements, rung 2, class0-class1 = +0.868 ns)
+
+--- Cryptographic Primitives ---
+  Ed25519 sign (key-independent)      t =  +1.6179  [within threshold]  (100000 measurements, rung 8, class0-class1 = +11.648 ns)
+  Ed25519 verify (vartime, info-only) t =  +1.3297  [within threshold]  (100000 measurements, rung 4, class0-class1 = -18.779 ns)
+  ChaCha20-Poly1305 tag verify        t =  -2.1158  [within threshold]  (100000 measurements, rung 19, class0-class1 = -5.899 ns)
+  ChaCha20-Poly1305 tag verify (forgery position) t =  +1.6607  [within threshold]  (100000 measurements, rung 19, class0-class1 = +1.129 ns)
+  Ascon-AEAD128 tag verify (forgery position) t =  -1.2048  [within threshold]  (100000 measurements, rung 7, class0-class1 = +1.615 ns)
+  Ascon-AEAD128 encrypt (key-independent) t =  -1.8782  [within threshold]  (100000 measurements, rung 12, class0-class1 = -0.695 ns)
+  Ascon-Hash256 (input-independent)   t =  +1.6190  [within threshold]  (100000 measurements, rung 18, class0-class1 = +1.896 ns)
+  Argon2id legacy verify              t =  +1.9184  [within threshold]  (8192 measurements, rung 2, class0-class1 = -41.393 ns)
+  AES-GCM tag verify                  t =  +2.4868  [within threshold]  (100000 measurements, rung 7, class0-class1 = +2.353 ns)
+  AES-GCM tag verify (forgery position) t =  -1.8000  [within threshold]  (100000 measurements, rung 0, class0-class1 = -8.866 ns)
+  HKDF-SHA3-256 (IKM-independent)     t =  +1.1274  [within threshold]  (100000 measurements, rung 7, class0-class1 = +0.736 ns)
+  HMAC-SHA3-256 verify (compute+compare) t =  -2.3770  [within threshold]  (100000 measurements, rung 1, class0-class1 = +4.911 ns)
+  agent binding check (verdict-independent) t =  +1.1996  [within threshold]  (100000 measurements, rung 7, class0-class1 = +1.937 ns)
+
+--- Classical (key exchange) ---
+  X25519 scalarmult (path=fe64, scalar-independent) t =  +2.8719  [within threshold]  (100000 measurements, rung 1, class0-class1 = -68.822 ns)
+  X25519 scalarmult batch×4 (scalar-independent) t =  -1.7538  [within threshold]  (100000 measurements, rung 3, class0-class1 = -1434.125 ns)
+
+--- Threshold Signature Building Blocks ---
+  FROST scalar_negate (0x00 vs 0xFF)  t =  +1.4471  [within threshold]  (100000 measurements, rung 6, class0-class1 = -16.952 ns)
+  FROST scalar_negate (0x00 vs mid-range) t =  -1.3510  [within threshold]  (100000 measurements, rung 8, class0-class1 = +1.663 ns)
+  secp256k1 scalar multiplication     t =  +1.7047  [within threshold]  (100000 measurements, rung 10, class0-class1 = +1090.917 ns)
+  secp256k1 ECDSA sign (RFC 6979)     t =  -3.8702  [within threshold]  (100000 measurements, rung 1, class0-class1 = -493.716 ns)
+
+--- Post-Quantum Cryptography ---
+  Kyber-1024 decaps (CT reject)       t =  -1.4568  [within threshold]  (100000 measurements, rung 14, class0-class1 = +2449.783 ns)
+  ML-DSA-65 sign (msg-independent)    t = +1042.8866  [OVER THRESHOLD]  (100000 measurements, rung 4, class0-class1 = +432382.300 ns)
+  SLH-DSA-SHA2-256f sign (msg-independent) t =  +0.5445  [within threshold]  (256 measurements, rung 0, class0-class1 = +5848230.935 ns)
+    NOTE: UNCROPPED statistic — no cropped rung reached DUDECT_CROP_MIN_PER_CLASS (128) in both classes at 256 measurements, so this lane ran the raw Welch t.
+
+BUDGET: 2 of up to 3 rounds completed in 462 s of the --timeout 600 s budget; another round takes about 273 s and would be cut short, so it was not started — truncated lanes would be recorded as harness faults and settle nothing. But a lane HAS tripped, and separating a leak from noise is exactly what the remaining rounds are for. Raise --timeout or lower --measurements so the full schedule fits.
+
+=======================================================
+Summary (2 rounds):
+
+  Function                              worst |t|     diff (ns)    rounds     Status
+  -----------------------------------  ----------  ------------  --------  ---------
+  ama_consttime_memcmp                  -328.4105        -5.004       2/2       FAIL
+  ama_consttime_swap                      -1.7853        +0.618       0/2       PASS
+  ama_secure_memzero                      -2.1818        -3.525       0/2       PASS
+  ama_consttime_lookup                    +1.6234        +0.367       0/2       PASS
+  ama_consttime_copy                      +1.8505        +0.868       0/2       PASS
+  Ed25519 sign                            +1.6179       +11.648       0/2       PASS
+  Ed25519 verify                          +4.7261     +2025.973       0/2       PASS
+  ChaCha20-Poly1305 tag verify            +2.3257        -2.685       0/2       PASS
+  ChaCha20-Poly1305 tag verify (forgery position)     +1.7491        +0.787       0/2       PASS
+  Ascon-AEAD128 tag verify                +2.1819        -3.550       0/2       PASS
+  Ascon-AEAD128 encrypt                   -1.8782        -0.695       0/2       PASS
+  Ascon-Hash256                           +1.6190        +1.896       0/2       PASS
+  Argon2id legacy verify                  -2.2102      +168.359       0/2       PASS
+  AES-GCM tag verify                      +2.4868        +2.353       0/2       PASS
+  AES-GCM tag verify (forgery position)     -1.8000        -8.866       0/2       PASS
+  HKDF-SHA3-256                           +1.6332       +13.059       0/2       PASS
+  HMAC-SHA3-256 verify                    -2.3770        +4.911       0/2       PASS
+  Agent binding check                     +1.1996        +1.937       0/2       PASS
+  X25519 scalarmult                       +2.8719       -68.822       0/2       PASS
+  X25519 scalarmult batch×4              +2.3840      +320.835       0/2       PASS
+  FROST scalar_negate (extremes)          -2.3614        -0.224       0/2       PASS
+  FROST scalar_negate (mid-range)         -2.2872        -1.478       0/2       PASS
+  secp256k1 scalar multiplication         +1.7047     +1090.917       0/2       PASS
+  secp256k1 ECDSA sign (RFC 6979)         -3.8702      -493.716       0/2       PASS
+  Kyber-1024 decaps                       +1.5475       +26.951       0/2       PASS
+  ML-DSA-65 sign                       +1042.8866   +432382.300  2/2 1+/1-       INFO
+  SLH-DSA-SHA2-256f sign                  -1.5520  -2221183.275       0/2       PASS
+
+=======================================================
+Overall: INCONCLUSIVE - the round schedule did not complete within --timeout 600 s.
+A lane was over the threshold and the rounds that would have shown whether
+it reproduces were never run, so this run neither reports a finding nor
+clears anything. It fails as a configuration fault. Give the run enough
+budget for 3 rounds, or lower --measurements.
+
+What was measured, for diagnosis only:
+  - ama_consttime_memcmp: |t| reached 328.4105 (threshold 5.0) in 2 of 2 round(s), consistently signed (0+/2-), per-class difference -5.004 ns (floor 2.0 ns)
+=======================================================

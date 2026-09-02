@@ -1,0 +1,4 @@
+$ grep -nA1 "if (lane->max_trip_delta_ns == 0.0)" tests/c/dudect/dudect_rounds.h
+# exit=0 duration=0.004s
+398:    if (lane->max_trip_delta_ns == 0.0)
+399-        return DUDECT_LANE_FAULT;

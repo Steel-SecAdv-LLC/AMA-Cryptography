@@ -1,0 +1,7 @@
+$ grep -n 'doubles from ..rotation_cooldown / 32.. and\|on the sixth failure\|rotation_suspended' ama_cryptography/adaptive_posture.py | head -4; grep -n 'assert summary\["rotation_suspended"\] is True' tests/test_adaptive_posture.py
+# exit=0 duration=0.008s
+762:    #: backoff ladder below doubles from ``rotation_cooldown / 32`` and
+763:    #: reaches exactly ``rotation_cooldown`` on the sixth failure: at the
+1124:                        "get_posture_summary()['rotation_suspended']; a suspended "
+1235:        ``rotation_suspended`` so the stopped state is readable rather than
+867:        assert summary["rotation_suspended"] is True

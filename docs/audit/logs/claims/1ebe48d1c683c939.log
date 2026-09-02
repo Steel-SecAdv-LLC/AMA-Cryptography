@@ -1,0 +1,4 @@
+$ grep -n "_RATIO_ACTIVATION_FLOOR_MULTIPLE: ClassVar\[int\] = 4\|floor = self._RATIO_ACTIVATION_FLOOR_MULTIPLE \* max(100, math.ceil(1.0 / alarm_budget))" ama_cryptography/monitoring.py
+# exit=0 duration=0.006s
+1888:    _RATIO_ACTIVATION_FLOOR_MULTIPLE: ClassVar[int] = 4
+1916:        floor = self._RATIO_ACTIVATION_FLOOR_MULTIPLE * max(100, math.ceil(1.0 / alarm_budget))

@@ -1,0 +1,5 @@
+$ grep -nE "trial < 512|over 512 keys|Decode and right-align" tests/c/test_secp256k1.c
+# exit=0 duration=0.004s
+467:        for (trial = 0; trial < 512 && ok; trial++) {
+504:            /* Minimal DER: 30 L 02 Lr <r> 02 Ls <s>. Decode and right-align
+541:        TEST_ASSERT(ok, "raw r||s equals the DER signature over 512 keys");

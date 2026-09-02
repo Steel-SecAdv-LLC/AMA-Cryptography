@@ -1,0 +1,4 @@
+$ grep -n -A1 "^_PIN_RE = re.compile(" tools/check_action_pins.py
+# exit=0 duration=0.004s
+63:_PIN_RE = re.compile(
+64-    r"uses:\s*(?P<action>[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+)@(?P<sha>[0-9a-f]{40})"

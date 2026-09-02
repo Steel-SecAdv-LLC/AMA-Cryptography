@@ -1,0 +1,3 @@
+$ grep -n "+6.4478 in 2 of 3 rounds" tools/constant_time/dudect_harness.c
+# exit=0 duration=0.006s
+440: * Observed: `Ascon-AEAD128 encrypt` reached +6.4478 in 2 of 3 rounds on a CI

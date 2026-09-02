@@ -1,0 +1,7 @@
+$ awk '/^ed25519_randombytes_unsafe\(void \*p, size_t len\) \{/,/^}/' src/c/ed25519_donna_shim.c
+# exit=0 duration=0.007s
+ed25519_randombytes_unsafe(void *p, size_t len) {
+    if (ama_randombytes((uint8_t *)p, len) != AMA_SUCCESS) {
+        abort();
+    }
+}

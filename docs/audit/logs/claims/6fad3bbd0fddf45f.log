@@ -1,0 +1,13 @@
+$ python tools/check_secret_division.py --lib build-arm/lib/libama_cryptography.so
+# exit=0 duration=0.364s
+symbol                              divides  operands
+ama_argon2id_core                         6  ALLOWLISTED
+dil_sign_internal                         1  ALLOWLISTED
+lms_verify_parsed                         5  ALLOWLISTED
+
+read 475 symbol(s), 59,988 instruction(s); 12 divide(s) in 3 symbol(s)
+  kyber_decapsulate_internal: 0 divide(s)
+  ama_kyber_decapsulate: 0 divide(s)
+  ama_kyber_encapsulate: 0 divide(s)
+
+OK: every divide instruction in the object is on a public operand.

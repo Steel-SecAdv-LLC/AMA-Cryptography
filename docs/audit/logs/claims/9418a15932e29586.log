@@ -1,0 +1,4 @@
+$ grep -c 'lanes\[n++\]' tools/constant_time/dudect_harness.c; grep -c 'lanes\[n++\]' tools/constant_time/dudect_crypto.c
+# exit=0 duration=0.007s
+5
+9

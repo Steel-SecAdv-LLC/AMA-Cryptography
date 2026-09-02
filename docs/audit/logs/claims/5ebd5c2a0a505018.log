@@ -1,0 +1,3 @@
+$ grep -c 'dispatch_info.kyber >= AMA_IMPL_NEON\|dispatch_info.dilithium >= AMA_IMPL_NEON\|dispatch_info.argon2 >= AMA_IMPL_NEON' src/c/dispatch/ama_dispatch.c
+# exit=0 duration=0.005s
+3

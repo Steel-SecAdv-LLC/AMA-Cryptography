@@ -1,0 +1,4 @@
+$ git show f8873ae -- .github/workflows/ci-build-test.yml | grep -c '^-.*is green'; grep -cE 'sdist.*is green|is green.*sdist' .github/workflows/ci-build-test.yml
+# exit=1 duration=0.008s
+1
+0

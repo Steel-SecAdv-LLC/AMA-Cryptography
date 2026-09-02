@@ -1,0 +1,3 @@
+$ /opt/ama-venv/bin/python -c "exec('import ast,subprocess\nfs=subprocess.check_output([\"git\",\"ls-files\",\"*.py\"]).decode().split();hits=[]\nfor f in fs:\n t=ast.parse(open(f,encoding=\"utf-8\").read());i=set();fr=set()\n for n in ast.walk(t):\n  if isinstance(n,ast.Import): i.update(a.name for a in n.names)\n  elif isinstance(n,ast.ImportFrom) and n.module and n.level==0: fr.add(n.module)\n hits+=[(f,m) for m in i&fr]\nprint(\"FILES\",len(fs),\"BOTH_WAYS\",len(hits),hits)')"
+# exit=0 duration=1.470s
+FILES 334 BOTH_WAYS 1 [('verification/v5-audit/refleak_soak.py', 'ama_cryptography')]

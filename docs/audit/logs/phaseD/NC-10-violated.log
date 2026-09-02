@@ -1,0 +1,4 @@
+FAIL  container base images (1 finding(s)):
+
+docker/Dockerfile:21: base image 'ubuntu:22.04' is pinned by tag only. A tag is a mutable pointer: the same line resolves to different bytes over time, so the build is not reproducible and an upstream account takeover reaches this image directly. Pin it as name:tag@sha256:<digest> (keep the tag for readability; Docker verifies the digest).
+

@@ -1,0 +1,10 @@
+$ python -c "from ama_cryptography.adaptive_posture import CryptoPostureController as C; f=C.ALGORITHM_FAMILIES; print(sorted(f), list(f['kem']))
+for name in ('AES_256_GCM','NOT_AN_ALGO'):
+    try: C(current_algorithm=name); print(name,'ACCEPTED')
+    except ValueError as e: print(name,'ValueError', 'AES_256_GCM' in str(e), 'INVARIANT-35' in str(e))
+C(current_algorithm='KYBER_1024'); print('KYBER_1024 ok')"
+# exit=0 duration=0.473s
+['kem', 'signature'] ['KYBER_1024', 'HYBRID_KEM']
+AES_256_GCM ValueError True True
+NOT_AN_ALGO ValueError True True
+KYBER_1024 ok

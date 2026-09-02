@@ -1,0 +1,4 @@
+$ git cat-file -t 496f80e; git show --stat --format= 496f80e -- CONSTANT_TIME_VERIFICATION.md | tail -1
+# exit=0 duration=0.011s
+commit
+ 1 file changed, 4 insertions(+)

@@ -1,0 +1,3 @@
+$ grep -n 'def test_the_rank_reconciliation_is_not_vacuous' tests/test_competitive_page.py
+# exit=0 duration=0.004s
+169:    def test_the_rank_reconciliation_is_not_vacuous(self, generator: ModuleType) -> None:

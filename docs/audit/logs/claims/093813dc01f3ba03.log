@@ -1,0 +1,4 @@
+$ sed -n '/def test_exception_still_zeros/,/def test_/p' tests/test_secure_memory.py | grep -cE "with pytest\.raises\(ValueError"; sed -n '/def test_exception_still_zeros/,/def test_/p' tests/test_secure_memory.py | grep -cE "^\s+except ValueError"
+# exit=1 duration=0.007s
+1
+0

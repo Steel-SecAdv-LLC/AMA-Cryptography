@@ -1,0 +1,11 @@
+$ ctest --test-dir build-release -R '^test_(secure_memory_dontdump|secure_free_scrub)$'
+# exit=0 duration=0.093s
+Test project /home/user/AMA-Cryptography/build-release
+    Start 3: test_secure_memory_dontdump
+1/2 Test #3: test_secure_memory_dontdump ......   Passed    0.00 sec
+    Start 4: test_secure_free_scrub
+2/2 Test #4: test_secure_free_scrub ...........   Passed    0.00 sec
+
+100% tests passed out of 2
+
+Total Test time (real) =   0.01 sec

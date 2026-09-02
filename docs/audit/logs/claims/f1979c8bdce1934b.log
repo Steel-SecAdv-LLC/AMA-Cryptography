@@ -1,0 +1,8 @@
+$ grep -n "499 errors in 44 files" CHANGELOG.md Makefile; grep -n "486 in 30" CHANGELOG.md Makefile
+# exit=0 duration=0.008s
+CHANGELOG.md:2129:reports 499 errors in 44 files where 2.3.0 reports 486 in 30 — and the entry and
+CHANGELOG.md:3356:over the scope `ci.yml` type-checks: **1.19.1 reports 499 errors in 44 files
+Makefile:135:# 499 errors in 44 files where 2.3.0 reports 486 in 30.  `make lint` therefore
+CHANGELOG.md:2129:reports 499 errors in 44 files where 2.3.0 reports 486 in 30 — and the entry and
+CHANGELOG.md:3357:where 2.3.0 reports 486 in 30**.  Over the narrow scope `make lint` actually
+Makefile:135:# 499 errors in 44 files where 2.3.0 reports 486 in 30.  `make lint` therefore

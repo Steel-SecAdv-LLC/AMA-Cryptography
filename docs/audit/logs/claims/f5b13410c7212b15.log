@@ -1,0 +1,4 @@
+$ grep -nE '^\s+"(ecdsa|nistp-ecdsa)": 0,' tools/check_ghash_constant_time.py
+# exit=0 duration=0.006s
+352:    "ecdsa": 0,
+362:    "nistp-ecdsa": 0,

@@ -1,0 +1,9 @@
+$ ctest --test-dir build-release -R '^test_ascon$' --output-on-failure
+# exit=0 duration=0.095s
+Test project /home/user/AMA-Cryptography/build-release
+    Start 29: test_ascon
+1/1 Test #29: test_ascon .......................   Passed    0.01 sec
+
+100% tests passed out of 1
+
+Total Test time (real) =   0.01 sec

@@ -1,0 +1,4 @@
+$ grep -n "1,100,410 instructions and takes ~96 us" tests/c/test_dudect.c; python -c "print(round(96100/5.63))"
+# exit=0 duration=0.032s
+2988:     * A decapsulation retires 1,100,410 instructions and takes ~96 us, so the
+17069

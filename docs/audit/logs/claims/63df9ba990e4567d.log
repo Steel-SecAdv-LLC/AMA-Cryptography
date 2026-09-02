@@ -1,0 +1,4 @@
+$ grep -n 'install_only "$bound" "$@"; then\|if attempt_install "$bound" "$@"; then' .github/scripts/apt-install.sh
+# exit=0 duration=0.004s
+231:if [ "$bound" -gt 0 ] && install_only "$bound" "$@"; then
+250:    if attempt_install "$bound" "$@"; then

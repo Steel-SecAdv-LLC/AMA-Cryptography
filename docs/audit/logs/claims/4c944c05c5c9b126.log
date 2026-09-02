@@ -1,0 +1,3 @@
+$ o=$(mktemp -d)/ct.o && gcc -O3 -DNDEBUG -fomit-frame-pointer -funroll-loops -Iinclude -Itests/c/dudect -DAMA_AES_CONSTTIME=ON -DAMA_USE_NATIVE_PQC -c src/c/ama_consttime.c -o "$o" && objdump -d "$o" --disassemble=ama_consttime_memcmp | grep -cE '^\s+[0-9a-f]+:\s+[0-9a-f ]+\s+j[a-z]+\s'
+# exit=0 duration=0.075s
+11

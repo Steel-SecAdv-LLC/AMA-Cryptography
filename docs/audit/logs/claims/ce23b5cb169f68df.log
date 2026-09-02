@@ -1,0 +1,4 @@
+$ grep -c "^@requires_helper_run" tests/test_choco_retry_gate.py; grep -cE "pwsh is None or not _POSIX_SHIM" tests/test_choco_retry_gate.py
+# exit=0 duration=0.006s
+5
+1

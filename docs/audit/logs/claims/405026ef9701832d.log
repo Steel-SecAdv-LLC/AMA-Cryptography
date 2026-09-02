@@ -1,0 +1,6 @@
+$ sed -n '830,842p' src/c/ama_x25519.c | grep -n 'AMA_DISPATCH_USE_X25519_AVX2=1\|count >= 4\|src/c/avx2/ama_x25519_avx2.c'; grep -n '^| X25519 (batch) | `ama_x25519_avx2.c`' ENHANCED_FEATURES.md | cut -c1-60
+# exit=0 duration=0.006s
+5: * `AMA_DISPATCH_USE_X25519_AVX2=1`) AND the batch contains at least
+6: * one full 4-lane chunk (count >= 4), those full chunks dispatch to
+7: * the AVX2 4-way Montgomery ladder kernel (`src/c/avx2/ama_x25519_avx2.c`)
+108:| X25519 (batch) | `ama_x25519_avx2.c` | 4-way Montgomer

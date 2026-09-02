@@ -1,0 +1,2 @@
+FAIL: 1 dudect class-staging violation(s):
+  - tests/c/test_dudect.c:179: 'if (class_idx' lets the class pick a branch or an address, after the class draw on line 173 and before the timer opens. Such a branch's direction is perfectly correlated with the class and its misprediction is paid inside the measured region: a fixed per-host bias that no threshold and no round count can tell apart from a real leak. Use dudect_stage_select(dst, class0, class1, n, class_idx), which reads both class inputs every iteration and merges them under a mask.

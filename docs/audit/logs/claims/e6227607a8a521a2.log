@@ -1,0 +1,8 @@
+$ grep -n -A4 '^_LOC_BUILD_REWRITTEN = frozenset' tools/check_documented_counts.py; grep -c '_LOC_BUILD_REWRITTEN' tools/check_documented_counts.py
+# exit=0 duration=0.010s
+350:_LOC_BUILD_REWRITTEN = frozenset(
+351-    {
+352-        "ama_cryptography/_integrity_signature.py",
+353-        "ama_cryptography/_integrity_digest.txt",
+354-    }
+3

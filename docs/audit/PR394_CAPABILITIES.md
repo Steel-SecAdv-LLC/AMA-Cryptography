@@ -89,9 +89,9 @@ equivalence cases, which run in the cross and AVX-512 lanes instead) — row A-2
 
 | ISA / platform | State on this host | Consequence | Ledger row |
 |---|---|---|---|
-| AVX2, AVX-512F/VL/BW/IFMA | **present** | the AVX2 kernels and the AVX-512 Keccak 4-way kernel execute natively | A-23 |
-| VAES, VPCLMULQDQ, GFNI | **present** | the AES-GCM VAES / VPCLMULQDQ kernel executes natively here. Session 1's host lacked both, and the PR description's release prerequisite 3 calls this silicon "Sapphire Rapids / Zen 4 class" hardware that must be reached for re-measurement; this session reaches it for functional, KAT, byte-identity and constant-time work. Whether a 4-vCPU KVM guest is a *canonical benchmark host* is a separate question that §10 adjudicates | A-23 |
-| SHA-NI | **present** | `ama_sha256_ni.c` executes natively | A-23 |
+| AVX2, AVX-512F/VL/BW/IFMA | **present** (both hosts) | the AVX2 kernels and the AVX-512 Keccak 4-way kernel execute natively | A-23, A-25 |
+| VAES, VPCLMULQDQ, GFNI | **present at Phase A, absent afterwards** | The VM was moved to a different CPU during this session: the Phase A probe (A-23, `phaseA/hw-flags.log`) lists `vaes vpclmulqdq gfni sha_ni`; the re-probe taken after the change (A-25, `phaseA/hw-flags-reprobe.log`) lists none of them and reports the model as "Intel(R) Xeon(R) Processor @ 2.80GHz". Every measurement whose ledger row is later than A-25's timestamp ran WITHOUT this silicon; in particular `test_aes_gcm_vaes_equiv` skips (row F-C-test_aes_gcm_vaes_equiv, exit 77, "dispatcher selected the AVX2 AES-NI reference") and no VAES-kernel result in this audit was produced after the change. The PR description's release prerequisite 3 ("Sapphire Rapids / Zen 4 silicon") is therefore reachable in this cloud environment but not stably: the §10 adjudication of the canonical-host benchmark treats it as reachable-but-unconfigured, with this row as the evidence that the same session saw both states. | A-23, A-25 |
+| SHA-NI | **present at Phase A, absent afterwards** | as above: `ama_sha256_ni.c` executed natively only before the host change | A-23, A-25 |
 | SVE / SVE2 silicon | absent | NEON and SVE2 run only under qemu-user (functional, not timing-faithful); dudect on SVE2 is impossible here | A-23 |
 | Windows, macOS | absent | those platform lanes are CI-only evidence | A-23 |
 | Real HSM | absent | SoftHSM2 only | A-16 |

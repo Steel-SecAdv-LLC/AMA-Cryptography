@@ -1,0 +1,3 @@
+$ python -c "import json;d=json.load(open('benchmarks/baseline.json'))['benchmarks'];print([(k,v['tolerance_percent']) for k,v in d.items() if 'secp256k1' in k])"
+# exit=0 duration=0.034s
+[('secp256k1_ecdsa_sign', 45), ('secp256k1_ecdsa_verify', 45)]

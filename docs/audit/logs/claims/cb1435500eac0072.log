@@ -1,0 +1,5 @@
+$ grep -c "85 native\|85 public native\|85 entry point\|85 gated" INVARIANTS.md README.md ARCHITECTURE.md
+# exit=1 duration=0.004s
+INVARIANTS.md:0
+README.md:0
+ARCHITECTURE.md:0

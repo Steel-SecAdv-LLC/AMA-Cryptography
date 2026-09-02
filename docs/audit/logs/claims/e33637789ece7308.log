@@ -1,0 +1,3 @@
+$ git show -s --format=%b 267c16c | grep -n "sentinel-range guard\|PSTATE.DIT"
+# exit=0 duration=0.006s
+27:sentinel-range guard.  PSTATE.DIT remains the other recorded follow-up.

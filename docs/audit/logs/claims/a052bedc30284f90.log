@@ -1,0 +1,4 @@
+$ grep -n -A1 'if dilithium_keypair is None:' benchmarks/benchmark_suite.py
+# exit=0 duration=0.004s
+235:        if dilithium_keypair is None:
+236-            raise RuntimeError(

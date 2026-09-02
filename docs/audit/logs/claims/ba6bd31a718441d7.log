@@ -1,0 +1,5 @@
+$ grep -n '^RUN := $(PYTHON) -m' Makefile; grep -cE '^\s*@?(mypy|black|ruff|pytest|bandit|pip-audit|semgrep|isort|flake8)( |$)' Makefile; grep -nE '^\s*@?(mypy|black|ruff|pytest|bandit|pip-audit|semgrep|isort|flake8)( |$)' Makefile
+# exit=0 duration=0.008s
+139:RUN := $(PYTHON) -m
+1
+242:	@semgrep --config .semgrep.yml ama_cryptography/ setup.py tools/ --json -o semgrep-report.json

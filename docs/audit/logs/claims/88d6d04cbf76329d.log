@@ -1,0 +1,3 @@
+$ git show 2739795~1:.github/copilot-instructions.md | grep -c "through INVARIANT-42"
+# exit=0 duration=0.006s
+1

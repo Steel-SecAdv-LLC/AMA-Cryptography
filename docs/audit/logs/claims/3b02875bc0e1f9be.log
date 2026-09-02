@@ -1,0 +1,3 @@
+$ grep -n "def test_tolerance_does_not_admit_a_different_warning" tests/test_compiler_warning_gate.py
+# exit=0 duration=0.004s
+348:    def test_tolerance_does_not_admit_a_different_warning(self, tmp_path: Path) -> None:

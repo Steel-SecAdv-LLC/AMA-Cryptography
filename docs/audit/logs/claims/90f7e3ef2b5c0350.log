@@ -1,0 +1,5 @@
+$ grep -nE "static AMA_ONCE_FLAG NISTP_COMB_ONCE|^static void nistp_comb_build\(|^static int nistp_load_point\(" src/c/ama_nistp.c
+# exit=0 duration=0.005s
+970:static AMA_ONCE_FLAG NISTP_COMB_ONCE[3] = {
+987:static void nistp_comb_build(nistp_comb *comb, const nistp_curve *c) {
+1254:static int nistp_load_point(uint64_t *x, uint64_t *y, const uint8_t *pub,

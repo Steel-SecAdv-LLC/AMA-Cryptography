@@ -1,0 +1,4 @@
+$ grep -n "from tests.conftest import native_library_path" tests/test_vendor_isolation_gate.py; grep -n "^def native_library_path" tests/conftest.py
+# exit=0 duration=0.007s
+36:from tests.conftest import native_library_path
+147:def native_library_path(directory: Path) -> Path | None:

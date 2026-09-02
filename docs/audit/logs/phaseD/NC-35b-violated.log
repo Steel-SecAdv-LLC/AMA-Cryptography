@@ -1,0 +1,7 @@
+FAIL: release tag `v9.9.8` is not releasable:
+  - annotated tag `v9.9.8` carries no signature block.
+    The tag object exists but carries no signature block. Re-create it with `git tag -s -f <tag> -m "..."` and force-push the ref. For the badge to read Verified on GitHub, the signing key must also be registered on the account under Settings -> SSH and GPG keys with type Signing Key.
+
+This gate checks the tag's SHAPE only. It does not verify the signature —
+for that, run:
+  git -c gpg.ssh.allowedSignersFile=.github/allowed_signers verify-tag v9.9.8

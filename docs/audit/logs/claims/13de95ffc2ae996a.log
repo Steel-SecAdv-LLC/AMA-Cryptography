@@ -1,0 +1,3 @@
+$ cut -d, -f1 verification/v5-audit/ledger.csv | tail -n +2 | sed 's/[^0-9].*//' | sort -un | wc -l
+# exit=0 duration=0.008s
+17

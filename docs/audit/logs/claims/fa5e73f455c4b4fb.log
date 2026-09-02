@@ -1,0 +1,6 @@
+$ grep -n '^FROM alpine:3.23' ENHANCED_FEATURES.md; grep -n '^FROM alpine:3.23@sha256:[0-9a-f]\{64\}' docker/Dockerfile.alpine | cut -c1-40; grep -c 'alpine:3.18' ENHANCED_FEATURES.md
+# exit=1 duration=0.008s
+494:FROM alpine:3.23
+27:FROM alpine:3.23@sha256:fd791d74b6891
+91:FROM alpine:3.23@sha256:fd791d74b6891
+0

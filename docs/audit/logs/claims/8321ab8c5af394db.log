@@ -1,0 +1,7 @@
+$ grep -nE "^static [a-z0-9_ ]*\b(sc_cond_sub_n|sc_mont_mul|sc_add|sc_negate|sc_cond_negate)\(" src/c/ama_secp256k1.c
+# exit=0 duration=0.006s
+1720:static void sc_cond_sub_n(secp256k1_sc *r, const uint64_t a[SC_LIMBS]) {
+1771:static void sc_mont_mul(secp256k1_sc *r, const secp256k1_sc *a, const secp256k1_sc *b) {
+1872:static void sc_add(secp256k1_sc *r, const secp256k1_sc *a, const secp256k1_sc *b) {
+1921:static void sc_negate(secp256k1_sc *r, const secp256k1_sc *a) {
+1961:static void sc_cond_negate(secp256k1_sc *r, const secp256k1_sc *a, uint64_t flag) {

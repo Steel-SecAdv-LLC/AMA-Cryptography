@@ -1,0 +1,4 @@
+$ grep -c "^def _binding_imports_permitted" ama_cryptography/pqc_backends.py; grep -nA40 "^def _binding_imports_permitted" ama_cryptography/pqc_backends.py | grep -c "return _native_lib is not None"
+# exit=0 duration=0.006s
+1
+1

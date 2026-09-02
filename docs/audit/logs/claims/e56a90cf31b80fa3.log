@@ -1,0 +1,3 @@
+$ grep -n "define DUDECT_CROP_MIN_PER_CLASS 128" tests/c/dudect/dudect_percentile.h
+# exit=0 duration=0.004s
+127:#define DUDECT_CROP_MIN_PER_CLASS 128

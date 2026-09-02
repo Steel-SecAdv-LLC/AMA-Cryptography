@@ -1,0 +1,4 @@
+$ grep -n '^EXEMPT: dict\[str, str\] = {}' tools/check_type_check_scope.py; grep -n 'assert gate.EXEMPT == {}' tests/test_type_check_scope_gate.py
+# exit=0 duration=0.006s
+66:EXEMPT: dict[str, str] = {}
+416:        assert gate.EXEMPT == {}

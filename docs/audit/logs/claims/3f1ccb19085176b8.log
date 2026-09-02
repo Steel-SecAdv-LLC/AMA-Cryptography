@@ -1,0 +1,4 @@
+$ grep -c 'pkg_dir.rglob("\*.py")' ama_cryptography/_build_sign.py ama_cryptography/_self_test.py
+# exit=0 duration=0.005s
+ama_cryptography/_build_sign.py:1
+ama_cryptography/_self_test.py:2

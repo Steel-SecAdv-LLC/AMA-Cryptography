@@ -1,0 +1,3 @@
+$ grep -c "PRIVATE bcrypt" CMakeLists.txt
+# exit=0 duration=0.004s
+3

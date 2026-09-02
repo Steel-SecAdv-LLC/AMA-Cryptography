@@ -1,0 +1,4 @@
+$ grep -n "def test_dependencies_match_the_platforms_own_tool\|def test_elf_undefined_symbols_match_nm" tests/test_vendor_isolation_gate.py
+# exit=0 duration=0.004s
+455:    def test_dependencies_match_the_platforms_own_tool(self) -> None:
+477:    def test_elf_undefined_symbols_match_nm(self) -> None:

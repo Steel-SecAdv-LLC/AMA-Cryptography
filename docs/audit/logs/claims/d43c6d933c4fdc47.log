@@ -1,0 +1,9 @@
+$ grep -n -A5 '^static inline uint32_t kyber_compress_d(uint32_t x_normalized, unsigned d) {' src/c/ama_kyber.c; grep -n '#define AMA_KYBER_COMPRESS_MAX_D 18u' src/c/ama_kyber.c
+# exit=0 duration=0.006s
+2807:static inline uint32_t kyber_compress_d(uint32_t x_normalized, unsigned d) {
+2808-    uint64_t n;
+2809-    uint32_t quotient;
+2810-
+2811-    if (d == 0u || d > AMA_KYBER_COMPRESS_MAX_D) {
+2812-        return AMA_KYBER_COMPRESS_REFUSED;
+2802:#define AMA_KYBER_COMPRESS_MAX_D 18u

@@ -1,0 +1,5 @@
+$ grep -n "^_C_SUITE_PAREN_RE = \|^_C_SUITE_BARE_RE = \|^def check_source_inventory_counts" tools/check_documented_counts.py
+# exit=0 duration=0.004s
+621:_C_SUITE_PAREN_RE = re.compile(r"(\d[\d,]*) C test suites \((\d[\d,]*) translation units\)")
+622:_C_SUITE_BARE_RE = re.compile(r"(\d[\d,]*) C test suites")
+886:def check_source_inventory_counts(repo: Path) -> list[str]:

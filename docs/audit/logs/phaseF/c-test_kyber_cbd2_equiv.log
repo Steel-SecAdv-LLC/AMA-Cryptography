@@ -1,0 +1,25 @@
+===========================================
+Dispatched CBD2 vs scalar CBD2 equivalence test
+===========================================
+
+  --- direct AVX2 symbol lane ---
+  PASS: direct AVX2: all-zero byte-identical to scalar
+  PASS: direct AVX2: all-0xFF byte-identical to scalar
+  PASS: direct AVX2 byte-identical across 64 random trials
+  --- dispatched-pointer lane ---
+  PASS: all-zero: dispatched CBD2 byte-identical to scalar
+  PASS: all-0xFF: dispatched CBD2 byte-identical to scalar
+  PASS: all-0xAA: dispatched CBD2 byte-identical to scalar
+  PASS: all-0x55: dispatched CBD2 byte-identical to scalar
+  PASS: random trial 0: dispatched CBD2 byte-identical to scalar
+  PASS: random trial 1: dispatched CBD2 byte-identical to scalar
+  PASS: random trial 2: dispatched CBD2 byte-identical to scalar
+  PASS: random trial 3: dispatched CBD2 byte-identical to scalar
+  PASS: random trial 4: dispatched CBD2 byte-identical to scalar
+  PASS: random trial 5: dispatched CBD2 byte-identical to scalar
+  PASS: random trial 6: dispatched CBD2 byte-identical to scalar
+  PASS: random trial 7: dispatched CBD2 byte-identical to scalar
+
+===========================================
+All CBD2 equivalence checks passed! (14 passed, 0 skipped)
+===========================================

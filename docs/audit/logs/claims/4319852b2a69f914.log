@@ -1,0 +1,4 @@
+$ grep -n "#define SHA3_CTX_CONSUMED ((size_t)200)\|#define SHAKE128_RATE 168" src/c/ama_sha3.c
+# exit=0 duration=0.006s
+114:#define SHA3_CTX_CONSUMED ((size_t)200)
+1000:#define SHAKE128_RATE 168

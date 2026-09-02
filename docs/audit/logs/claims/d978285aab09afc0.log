@@ -1,0 +1,5 @@
+$ grep -n -A2 '"ML-DSA-65 sign",' tests/c/test_dudect.c
+# exit=0 duration=0.005s
+3065:        "ML-DSA-65 sign",
+3066-        test_dilithium_sign(iterations), 1);
+3067-    /* SLH-DSA signing is dominated by SHAKE-based WOTS+/FORS/Merkle

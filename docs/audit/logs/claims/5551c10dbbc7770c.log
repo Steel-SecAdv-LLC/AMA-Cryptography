@@ -1,0 +1,3 @@
+$ grep -n "DETECTED capability tier per subsystem" include/ama_dispatch.h
+# exit=0 duration=0.004s
+32:/** DETECTED capability tier per subsystem, populated by ama_dispatch_init()

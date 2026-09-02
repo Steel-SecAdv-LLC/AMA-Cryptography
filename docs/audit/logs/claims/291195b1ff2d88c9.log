@@ -1,0 +1,6 @@
+$ grep -nE "PRECONDITION for adjudication|fabs\(lane->max_trip_delta_ns\) < DUDECT_MIN_EFFECT_NS|lane->trips_positive > 0 && lane->trips_negative > 0" tests/c/dudect/dudect_rounds.h
+# exit=0 duration=0.005s
+401:    /* The floor is a PRECONDITION for adjudication, not a tie-breaker, so it
+446:    if (fabs(lane->max_trip_delta_ns) < DUDECT_MIN_EFFECT_NS)
+449:    if (lane->trips_positive > 0 && lane->trips_negative > 0)
+593:        if (lane->trips_positive > 0 && lane->trips_negative > 0) {

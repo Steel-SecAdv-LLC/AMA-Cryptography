@@ -1,0 +1,3 @@
+$ grep -n '"nistp": ("FIPS 186-5", "NIST SP 800-56A")' tools/check_algorithm_registry.py
+# exit=0 duration=0.003s
+124:    "nistp": ("FIPS 186-5", "NIST SP 800-56A"),  # ECDSA and ECDH, two publications

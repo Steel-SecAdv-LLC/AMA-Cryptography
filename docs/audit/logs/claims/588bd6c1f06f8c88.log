@@ -1,0 +1,4 @@
+$ grep -n "check_keygen_pct" INVARIANTS.md
+# exit=0 duration=0.004s
+2459:(C-side PCT exists for ML-KEM only). `tools/check_keygen_pct.py` enforces this
+2481:`tools/check_keygen_pct.py` is the coverage half: it DISCOVERS every keygen

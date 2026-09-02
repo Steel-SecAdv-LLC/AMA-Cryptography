@@ -1,0 +1,3 @@
+$ grep -n "native library and binding extensions: NOT CHECKED" tools/verify_install_oob.py
+# exit=0 duration=0.004s
+1285:            "native library and binding extensions: NOT CHECKED — the artefact "

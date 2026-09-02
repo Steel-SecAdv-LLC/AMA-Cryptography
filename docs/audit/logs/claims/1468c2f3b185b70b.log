@@ -1,0 +1,5 @@
+$ grep -n '15m13s' .github/workflows/static-analysis.yml; ctest --test-dir build-release -N | grep -c test_sphincs_simd_equiv
+# exit=0 duration=0.088s
+498:    # 15m13s in, still actively running ctest inside `test_sphincs_simd_equiv`
+518:        # 15m13s inside test_sphincs_simd_equiv.  This project sets no default
+1

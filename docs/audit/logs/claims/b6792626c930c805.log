@@ -1,0 +1,3 @@
+$ grep -c 'Write-Error "choco is not on PATH' .github/scripts/choco-install.ps1
+# exit=0 duration=0.004s
+1

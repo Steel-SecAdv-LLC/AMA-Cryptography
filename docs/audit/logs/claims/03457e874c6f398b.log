@@ -1,0 +1,5 @@
+$ grep -n 'static int budget_would_overrun\|if (budget_would_overrun(elapsed_ns, round_ns, timeout_sec))\|schedule_incomplete = 1' tests/c/test_dudect.c
+# exit=0 duration=0.004s
+2631:static int budget_would_overrun(uint64_t elapsed_ns, uint64_t round_ns, int timeout_sec) {
+3235:            if (budget_would_overrun(elapsed_ns, round_ns, timeout_sec)) {
+3244:                schedule_incomplete = 1;

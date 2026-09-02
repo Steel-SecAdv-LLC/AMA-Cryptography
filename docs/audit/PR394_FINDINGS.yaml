@@ -1,0 +1,154 @@
+# Copyright (C) 2025-2026 Steel Security Advisors LLC
+# SPDX-License-Identifier: Apache-2.0
+# PR #394 readiness falsification — findings ledger (mandate §15).
+# One entry per finding.  `open` is not a permitted terminal state.
+# Every command is run from the repository root with /opt/ama-venv/bin
+# first on PATH; logs are retained under docs/audit/logs/.
+
+- id: FINDING-0001
+  severity: MAJOR
+  title: "The MSan and TSan lanes cannot complete on the current head: test_secure_free_scrub walks the sanitizer shadow through /proc/self/mem"
+  discovered_by: "tool (lane replication: build-msan ctest hung 1256 s; build-tsan ctest hung; CI run 33587115953 cancelled both jobs at their caps)"
+  evidence_before:
+    - "docs/audit/logs/findings/0001-before-msan-ctest.log"
+    - "docs/audit/logs/findings/0001-before-tsan-ctest.log"
+    - "GitHub run 33587115953 (workflow_dispatch of static-analysis.yml at 2cd50cb): jobs 100113472876 (MSan) and 100113473036 (TSan) conclusion=cancelled after 24 and 19 minutes; job 100118093319 Static Analysis Gate conclusion=failure"
+  failing_command: "timeout 600 ./build-msan/bin/test_secure_free_scrub"
+  failing_exit_code: 124
+  parent_sha: "ef0fcc8b0a8c1a8ed84a1d5cd7ab0cf3ed3a7c53"
+  fix_sha: "e7ddd98"
+  passing_command: "./build-msan/bin/test_secure_free_scrub && ./build-tsan/bin/test_secure_free_scrub"
+  passing_exit_code: 0
+  permanent_test: "tests/c/test_secure_free_scrub.c (ctest: test_secure_free_scrub, run by the MSan and TSan lanes of static-analysis.yml); docs/audit/logs/findings/0001-after2-build-msan-positive.log, 0001-after2-build-tsan-positive.log"
+  regression_risk: "The scan now reads only mincore-resident pages; a sentinel copy in a swapped-out page would be missed. CI runners have no swap; the negative mode (FINDING-0002) proves detection on every lane."
+  rubric_note: "Not BLOCKER: no security property is compromised and no published claim names the current head's sanitizer result; the PR description's 67/67 MSan/TSan figures are scoped to 7432e0d, before the test existed. MAJOR because a property (sanitizer-clean C suite) was unverified on the current head and the lanes that verify it could not finish."
+  status: closed
+
+- id: FINDING-0002
+  severity: MAJOR
+  title: "The scrub inspector's negative control was not a CTest case and, once registered, failed on AArch64: it passed on x86-64 only because glibc happened to carve the scanner's own FILE buffer away from the sentinel"
+  discovered_by: "negative control (registering the test's own 'negative' mode with CTest; arm-ctest and arm-nocrypto-ctest lanes)"
+  evidence_before:
+    - "docs/audit/logs/findings/0002-before-arm-ctest-negative-registered.log"
+    - "diagnostic: post-free tail bytes read back as a 0x21 chunk header plus arena fd/bk pointers (the fopen FILE carve), see the commit message of the fix"
+  failing_command: "qemu-aarch64-static -L /usr/aarch64-linux-gnu ./build-arm/bin/test_secure_free_scrub negative"
+  failing_exit_code: 1
+  parent_sha: "ef0fcc8b0a8c1a8ed84a1d5cd7ab0cf3ed3a7c53"
+  fix_sha: "e7ddd98"
+  passing_command: "qemu-aarch64-static -L /usr/aarch64-linux-gnu ./build-arm/bin/test_secure_free_scrub negative && ./build-release/bin/test_secure_free_scrub negative"
+  passing_exit_code: 0
+  permanent_test: "tests/c/CMakeLists.txt registers test_secure_free_scrub_negative (SKIP_RETURN_CODE 77) in every C lane; docs/audit/logs/findings/0001-after2-*-negative.log"
+  regression_risk: "None to shipped code (test-only). The scanner must stay allocation-free after the plain free; the negative case fails loudly if a future edit reintroduces an allocation that lands on the sentinel."
+  rubric_note: "§16 coincidence class: a control that held on one platform because of allocator placement, and was never executed as a CTest case anywhere."
+  status: closed
+
+- id: FINDING-0003
+  severity: MAJOR
+  title: "tools/check_keygen_pct.py (INVARIANT-41) blesses a keygen whose family dispatch lost one arm's pairwise test: AmaContext.keypair_generate would release untested ML-DSA, SLH-DSA and hybrid keypairs with the gate green"
+  discovered_by: "negative control NC-17 (docs/audit/negative_controls.py): the signature arm of _keypair_pairwise_test replaced by a no-op; the gate still exited 0 because the helper still called pairwise_test_kem in its other arm and so still counted as 'reaching a helper'"
+  evidence_before:
+    - "docs/audit/logs/findings/0003-before-keygen-pct.log (ledger FIND-0003-before: HEAD's gate against the mutated module, exit 0)"
+    - "docs/audit/ledger.tsv rows NC-17-v (first run: exit 0) and NC-17-c"
+  failing_command: "python <HEAD:tools/check_keygen_pct.py> --root <tree whose ama_cryptography/pqc_backends.py has the signature arm of _keypair_pairwise_test replaced by (lambda *a, **k: None)(...)>"
+  failing_exit_code: 0
+  parent_sha: "e7ddd98"
+  fix_sha: "(this audit commit) tools/check_keygen_pct.py: arms_without_pct() — every arm of an if/else or match in which a sibling arm runs a pairwise test must run one too or raise; a helper with a dark arm is not a delegating helper; the arm is named in the diagnostic"
+  passing_command: "python tools/check_keygen_pct.py --root <same mutated tree>  (exit 1, names pqc_backends.py:3426 _keypair_pairwise_test [conditional arm]); python tools/check_keygen_pct.py (clean tree, exit 0)"
+  passing_exit_code: 1
+  permanent_test: "tests/test_keygen_pct_gate.py::TestConditionalArms (six cases: delegated helper with a dark arm, entry point with a dark arm, raising arm accepted, match cases, earlier conditionals do not end the scan, CLI names the arm) and ::TestTheRealTree::test_a_missing_backend_fails_closed; docs/audit/logs/findings/0003-after-keygen-pct.log; docs/audit/logs/phaseD/NC-17-violated.log (exit 1) and NC-17-clean.log (exit 0)"
+  regression_risk: "The rule judges explicit arms only; an `if` with no `else` whose fall-through path releases the keypair untested is still not seen (stated in the gate's docstring and pinned by test_an_if_without_else_opens_no_comparison). Mutation round 1 of the gate (docs/audit/logs/phaseD/mutation/check_keygen_pct.round1.tsv): 47/55 killed; two survivors were real test gaps (the arm scan stopping early; the missing-backend path returning None) and are now pinned."
+  rubric_note: "MAJOR, not BLOCKER: the shipped tree is correctly wired (both arms run their test), so no untested keypair was ever released; the defect is that the control which enforces INVARIANT-41 could not fail on the one edit that matters most to it. Not MINOR: the control is the stated enforcement of a FIPS 140-3 §4.9.2-class requirement."
+  status: closed
+
+- id: FINDING-0004
+  severity: MINOR
+  title: "tools/check_workflow_commands.py: check_expression_syntax() never looked at bare `if:` conditions and had no rule for a lone `=`; a job condition that would make the whole workflow file fail to parse passed the gate"
+  discovered_by: "negative control NC-29b (docs/audit/negative_controls.py): ci.yml's first job-level `if: ... == ...` rewritten with a single `=`; the gate reported WORKFLOW COMMAND CHECK PASSED"
+  evidence_before:
+    - "docs/audit/logs/findings/0004-before-workflow-expr.log (ledger FIND-0004-before: HEAD's gate against the mutated workflow copy, exit 0)"
+    - "docs/audit/ledger.tsv rows NC-29b-v (first run: exit 0) and NC-29b-c"
+  failing_command: "python <HEAD:tools/check_workflow_commands.py> --workflows-dir <copy of .github/workflows whose ci.yml line 71 reads `if: steps.setup-python.outcome = 'failure'`>"
+  failing_exit_code: 0
+  parent_sha: "e7ddd98"
+  fix_sha: "(this audit commit) tools/check_workflow_commands.py: _iter_expression_bodies() yields the value of every `if:` key as an expression body alongside each `${{ }}` body, and _ASSIGNMENT_OPERATOR_RE rejects a `=` that is not part of `==`, `!=`, `<=`, `>=` (string literals blanked first, as for arithmetic)"
+  passing_command: "python tools/check_workflow_commands.py --workflows-dir <same mutated copy>  (exit 1); python tools/check_workflow_commands.py (clean tree: 84 runner labels ... 289 expressions, exit 0)"
+  passing_exit_code: 1
+  permanent_test: "tests/test_workflow_command_checks.py::TestExpressionSyntax::test_a_lone_equals_and_a_bare_if_are_rejected (4 shapes) and ::test_legitimate_bare_conditions_are_not_flagged (6 shapes, each counted); docs/audit/logs/findings/0004-after-workflow-expr.log; docs/audit/logs/phaseD/NC-29b-*.log and NC-29c-*.log (bare `if:` with arithmetic)"
+  regression_risk: "Every bare `if:` in the tree is now scanned (64 more expressions than before); a legitimate condition containing a lone `=` outside a string literal does not exist in GitHub's grammar, so no false positive class is introduced. The check still does not reimplement the grammar: an unknown function name or a stray `)` remains uncaught."
+  rubric_note: "MINOR: no security property depends on it, and the failure mode (a workflow file that GitHub refuses to parse) is loud on the next push rather than silent. It is a finding at all because the gate's own docstring names 'expression forms GitHub's parser rejects' as its scope and a negative control inside that scope could not make it fail."
+  status: closed
+
+- id: FINDING-0005
+  severity: MAJOR
+  title: "The 3R timing monitor had no detection-efficacy evidence, and when measured it detects isolated slow operations less often than a trailing-window z-score at the same false-positive rate"
+  discovered_by: "§10 row 7 measurement (docs/audit/sweeps/r3_efficacy.py, ledger D-3R-01): 4,000 real ML-DSA-65 sign timings, anomalies injected, ResonanceTimingMonitor defaults vs |z| > 3 over the previous 100 samples"
+  evidence_before:
+    - "README.md 'Note' under '3R Runtime Security Monitoring' before this commit: the framework is described and disclaimed, with no measured rate of any kind"
+    - "docs/audit/logs/phaseD/r3-efficacy.log and docs/audit/PR394_3R_EFFICACY.tsv: point anomalies at 10x median flagged 30% (baseline 80%) at FPR 1.4% (baseline 1.8%); at 1.5x, 5% (baseline 26%); bursts of 20 at 3x: 41% (baseline 15%); +10% step detected after 19 samples (baseline 47); +5% step after 182 (baseline 47)"
+  failing_command: "python docs/audit/sweeps/r3_efficacy.py --samples 4000 --repeats 5 --out docs/audit/PR394_3R_EFFICACY.tsv  (the measurement; the 'failure' is the README stating a detector without its measured rate)"
+  failing_exit_code: 0
+  parent_sha: "e7ddd98"
+  fix_sha: "(this audit commit) README.md: the 3R note now carries the measured rates and tells the reader to treat the timing monitor as a regime-change detector, not a per-operation one; tests/test_3r_efficacy_calibration.py pins the prose to the table"
+  passing_command: "python -m pytest tests/test_3r_efficacy_calibration.py -q --no-cov"
+  passing_exit_code: 0
+  permanent_test: "tests/test_3r_efficacy_calibration.py (3 tests: point rates, step delays, the table is a real measurement with 26 rows and its benign-trace header)"
+  regression_risk: "The measurement is one trace on one host under load (Valgrind and fuzz sweeps were running); the absolute rates will move on other hosts, and the test pins the README to whatever the committed table says, not to a floor. The detector's code is unchanged: this finding is closed by calibrating the claim, and the §10 adjudication records the argument for why the subsystem still ships (advisory, never blocking, and better than the baseline on regime shifts of 10% or more)."
+  rubric_note: "MAJOR under §10's own rule: the branch stated the absence of efficacy evidence and stopped there; honesty had substituted for the measurement. Not BLOCKER: no security property depends on the monitor (it never blocks, and README already disclaimed timing-attack detection)."
+  status: closed
+
+- id: FINDING-0006
+  severity: MINOR
+  title: "README's ACVP headline (1,215 / 1,215) names no denominator: the harness runs 1,215 of the pinned corpus and skips 5,789, an accounting stated only in the compliance attestation"
+  discovered_by: "Phase F acceptance run (ledger F-ACVP-01: nist_vectors/fetch_vectors.py at the pinned ACVP-Server ref, then run_vectors.py — Total vectors tested 1215, pass 1215, fail 0, Total skipped 4667; per-file MCT/other skips 1,122) against the mandate's question whether 1,215/1,215 is the complete corpus"
+  evidence_before:
+    - "README.md line 'NIST ACVP vector validation (1,215 vectors across 12 algorithm functions — 815 AFT + 400 SHA-3 MCT; see CSRC_ALIGN_REPORT.md)' before this commit: no skip count, no denominator"
+    - "docs/audit/logs/phaseF/acvp-run.log (per-algorithm Tested/Skipped/MCT-other columns; 12 files fetched; 6,608 tcIds counted in them)"
+    - "docs/compliance/ACVP_SELF_ATTESTATION.md '5,789 vectors were skipped total' (4,667 AFT-filtered + 1,122 non-AFT) — the accounting existed, one link away from the headline"
+  failing_command: "python -m pytest tests/test_acvp_claim_calibration.py -q --no-cov  (against the previous README sentence)"
+  failing_exit_code: 1
+  parent_sha: "e7ddd98"
+  fix_sha: "(this audit commit) README.md: the sentence now says the 1,215 is the in-scope subset and carries the 5,789 / 4,667 / 1,122 accounting with its named skip classes"
+  passing_command: "python -m pytest tests/test_acvp_claim_calibration.py -q --no-cov"
+  passing_exit_code: 0
+  permanent_test: "tests/test_acvp_claim_calibration.py (README totals equal the attestation's; the attestation's buckets add up)"
+  regression_risk: "None to code. The badge still reads 1215/1215; the sentence beside the badge's target now says what the denominator is."
+  rubric_note: "MINOR: the skips are scope, not failures (parameter sets the library does not ship, bit-oriented SHA-3 inputs, LDT/VOT groups), the run reproduced 1,215/1,215 here, and the accounting was already published in the linked attestation. A finding because the mandate's test — 'complete corpus, or a subset the harness could reach?' — has the answer 'a subset', and the headline did not say so."
+  status: closed
+
+- id: FINDING-0007
+  severity: MINOR
+  title: "139 figures quoted in dated CHANGELOG pass entries no longer hold at the release head, and nothing said the entries were a dated record rather than live claims"
+  discovered_by: "Phase B claim reproductions (docs/audit/run_claims.py over 1,815 extracted statements): every refuted statement traces to a dated CHANGELOG pass entry — counts of tests/files/lanes, line numbers, and measurements that later passes on this branch moved (e.g. 27 dudect lanes then, 29 now; 71 AArch64 ctest cases then, 77 now; tests/test_vendor_isolation_gate.py 72 cases then, 103 now)"
+  evidence_before:
+    - "docs/audit/PR394_CLAIMS.yaml: the 139 entries with action historical-superseded, each with its reproduction command, expected pattern and observed output; logs under docs/audit/logs/claims/"
+    - "CHANGELOG.md [5.0.0] before this commit: no statement that pass-entry figures are dated"
+  failing_command: "python -m pytest tests/test_changelog_dated_figures.py -q --no-cov  (against the previous CHANGELOG)"
+  failing_exit_code: 1
+  parent_sha: "e7ddd98"
+  fix_sha: "(this audit commit) CHANGELOG.md: a 'Dated figures are dated' label ahead of the first pass entry, naming the files the gates do read and the ledger that lists the superseded figures"
+  passing_command: "python -m pytest tests/test_changelog_dated_figures.py -q --no-cov"
+  passing_exit_code: 0
+  permanent_test: "tests/test_changelog_dated_figures.py"
+  regression_risk: "None to code. The label does not make a stale figure true; it stops a reader from taking it as current, and points at where the current numbers are."
+  rubric_note: "MINOR: no refuted statement is in README, ARCHITECTURE, INVARIANTS, SECURITY or a compliance document (all of those confirmed or unverifiable), and no gate reads a pass entry. Not a per-figure rewrite: correcting 139 dated sentences to today's numbers would make the record wrong about its own dates."
+  status: closed
+
+- id: FINDING-0008
+  severity: MINOR
+  title: "Every fuzz configure in fuzzing.yml built at -O0 to protect a frame pointer that was never at risk, costing 3.0x to 16.7x fuzzing depth per target"
+  discovered_by: "Phase D fuzz-depth measurement (docs/audit/sweeps/fuzz_depth.sh): every libFuzzer target run for 60 s with the workflow's own recipe (seed corpus, dictionary, -max_len from check_fuzz_input_reachability.py) at CI's Debug build, then at -O2 -g"
+  evidence_before:
+    - "docs/audit/PR394_FUZZ_DEPTH.tsv (CI's Debug build): fuzz_sphincs 20 executions in 60 s, fuzz_frost 515, fuzz_dilithium 1,748, fuzz_argon2 1,961"
+    - "docs/audit/PR394_FUZZ_DEPTH_O2G.tsv (-O2 -g, NDEBUG stripped, same corpora and limits): 116, 5,627, 7,167, 8,775 — 3.0x (fuzz_hkdf) to 16.7x (fuzz_ed25519) across the fifteen targets"
+    - "docs/audit/PR394_FUZZ_DEPTH_RWDI.tsv (RelWithDebInfo, i.e. -O2 -g -DNDEBUG): the same speedup, recorded to separate the optimisation effect from the assert() effect"
+    - "the workflow's stated reason, in fuzzing.yml: 'Release would append -fomit-frame-pointer after them and cost the stack traces a crash report is for'"
+  failing_command: "cmake -B build-fuzz-rel -DCMAKE_C_COMPILER=clang -DCMAKE_BUILD_TYPE=Release -DAMA_BUILD_FUZZ=ON ... && grep '^C_FLAGS' build-fuzz-rel/fuzz/CMakeFiles/fuzz_kyber.dir/flags.make"
+  failing_exit_code: 0
+  parent_sha: "e7ddd98"
+  fix_sha: "(this audit commit) .github/workflows/fuzzing.yml: all four fuzz configures at -DCMAKE_BUILD_TYPE=RelWithDebInfo with -DCMAKE_C_FLAGS_RELWITHDEBINFO='-O2 -g' (NDEBUG stripped so assert() stays live exactly as under Debug), and the comment replaced by the measurement"
+  passing_command: "grep -oE '\\-f(no-)?omit-frame-pointer|\\-DNDEBUG|\\-O[0-3]' build-fuzz-o2g/fuzz/CMakeFiles/fuzz_kyber.dir/flags.make"
+  passing_exit_code: 0
+  permanent_test: "The emitted flags are the proof and are quoted in the workflow comment: a Release fuzz configure's flags.make reads '... -fomit-frame-pointer -fno-omit-frame-pointer', the target's own FUZZ_FLAGS last, so the frame pointer survives at every build type; the new configure reads '-O2 -g' with no -DNDEBUG. tools/check_workflow_commands.py passes on the edited file."
+  regression_risk: "Optimised code gives coarser line attribution inside an ASan report than -O0, though the frame pointer (and therefore the stack) is unchanged. Nothing else differs: same sanitizers, same asserts, same corpora, same -max_len. If a future crash report is hard to read, the remedy is -O1, not -O0."
+  rubric_note: "MINOR: no security property was compromised and the fuzz lanes were green; what was lost is coverage per unit of CI time, on the four targets that most need it (sphincs at 20 executions per run was fuzzing its seed corpus and nothing else). It is a finding because the branch's stated reason for the choice is checkable and false."
+  status: closed

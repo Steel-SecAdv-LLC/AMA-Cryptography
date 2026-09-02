@@ -1,0 +1,7 @@
+$ grep -rn 'define DUDECT_CROPPED_T_THRESHOLD' --include=*.h --include=*.c tests tools src include | wc -l; grep -n 'define DUDECT_CROPPED_T_THRESHOLD 5.0' tests/c/dudect/dudect_percentile.h; grep -n 'T_THRESHOLD DUDECT_CROPPED_T_THRESHOLD' tools/constant_time/dudect_crypto.c tools/constant_time/dudect_harness.c tests/c/dudect/dudect.h
+# exit=0 duration=0.016s
+1
+120:#define DUDECT_CROPPED_T_THRESHOLD 5.0
+tools/constant_time/dudect_crypto.c:51:#define T_THRESHOLD DUDECT_CROPPED_T_THRESHOLD
+tools/constant_time/dudect_harness.c:49:#define T_THRESHOLD DUDECT_CROPPED_T_THRESHOLD
+tests/c/dudect/dudect.h:54:#define DUDECT_T_THRESHOLD DUDECT_CROPPED_T_THRESHOLD

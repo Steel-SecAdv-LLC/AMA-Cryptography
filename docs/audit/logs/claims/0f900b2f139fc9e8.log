@@ -1,0 +1,4 @@
+$ grep -rn "def _has_aes_ni" tests/; echo rc=$?; grep -nE "open\(.*/proc/cpuinfo" tests/test_aesni_is_not_gated_on_avx2.py; echo rc=$?
+# exit=0 duration=0.074s
+rc=1
+rc=1

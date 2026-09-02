@@ -1,0 +1,5 @@
+$ for s in kyber-ntt-neon dilithium-ntt-neon argon2-g-neon; do AMA_DISPATCH_ONLY=$s qemu-aarch64-static -L /usr/aarch64-linux-gnu ./build-arm/bin/test_kat >/dev/null 2>&1; echo "$s rc=$?"; done
+# exit=0 duration=55.655s
+kyber-ntt-neon rc=0
+dilithium-ntt-neon rc=0
+argon2-g-neon rc=0

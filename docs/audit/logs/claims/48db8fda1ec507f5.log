@@ -1,0 +1,3 @@
+$ grep -n "def test_the_candidate_directories_match_what_cmake_configures" tests/test_vendor_isolation_gate.py
+# exit=0 duration=0.007s
+353:    def test_the_candidate_directories_match_what_cmake_configures(self) -> None:

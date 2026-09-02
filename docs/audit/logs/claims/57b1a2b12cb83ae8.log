@@ -1,0 +1,4 @@
+$ git show --numstat --format= aa5f9bc -- src/c/ama_dilithium.c; git show aa5f9bc -- src/c/ama_dilithium.c | grep -cE '^\+.*dil_[a-z0-9_]*reduce\('
+# exit=0 duration=0.011s
+137	1	src/c/ama_dilithium.c
+3

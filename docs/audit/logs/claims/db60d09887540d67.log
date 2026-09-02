@@ -1,0 +1,20 @@
+$ grep -nE "^  [a-z0-9-]+:$|test_dudect (--self-test|--measurements)" .github/workflows/dudect.yml
+# exit=0 duration=0.004s
+40:  push:
+88:  schedule:
+111:  dudect-utility:
+170:          ./build/bin/test_dudect --self-test
+187:            ./build/bin/test_dudect --measurements "$MEASUREMENTS" --timeout 600
+189:  dudect-pqc:
+233:          ./build/bin/test_dudect --self-test
+240:            ./build/bin/test_dudect --measurements "$MEASUREMENTS" --timeout "$DUDECT_TIMEOUT"
+242:  dudect-legacy-harnesses:
+287:  dudect-x25519-avx2-batch:
+335:          ./build/bin/test_dudect --self-test
+341:            ./build/bin/test_dudect --measurements "$MEASUREMENTS" --timeout 600
+377:  dudect-simd-sweep:
+585:          ./build/bin/test_dudect --self-test
+589:            ./build/bin/test_dudect --measurements "$MEASUREMENTS" --timeout 900
+591:  ghash-scalar-invariance:
+970:  aead-verify-invariance:
+1021:  dudect-gate:

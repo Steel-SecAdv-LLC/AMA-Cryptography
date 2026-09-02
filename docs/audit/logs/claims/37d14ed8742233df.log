@@ -1,0 +1,14 @@
+$ python -c "import json;from collections import defaultdict;d=json.load(open('benchmarks/multi_library_results.json'));r=defaultdict(list);[r[x['primitive']].append((x['library'],x['ops_per_sec'])) for x in d['results']];[print(p,'AMA rank',[l for l,_ in sorted(v,key=lambda t:-t[1])].index('AMA')+1,'of',len(v),sorted(v,key=lambda t:-t[1])[:3]) for p,v in r.items()]"
+# exit=0 duration=0.038s
+SHA3-256 AMA rank 1 of 6 [('AMA', 6561.63), ('libgcrypt', 6517.05), ('OpenSSL', 5760.49)]
+HMAC-SHA3-256 AMA rank 1 of 4 [('AMA', 6590.1), ('libgcrypt', 6462.58), ('OpenSSL', 5657.78)]
+AES-256-GCM AMA rank 3 of 8 [('OpenSSL', 74825.71), ('libgcrypt', 62269.93), ('AMA', 47643.32)]
+ChaCha20-Poly1305 AMA rank 3 of 7 [('OpenSSL', 34973.8), ('libsodium', 22543.61), ('AMA', 14791.04)]
+Ascon-128 AEAD AMA rank 1 of 1 [('AMA', 5500.9)]
+Ed25519 sign AMA rank 1 of 6 [('AMA', 68178.72), ('libsodium', 49222.75), ('wolfSSL', 46890.83)]
+Ed25519 verify AMA rank 1 of 6 [('AMA', 21988.47), ('libsodium', 17525.57), ('wolfSSL', 15679.38)]
+X25519 scalar-mult AMA rank 3 of 5 [('OpenSSL', 26722.63), ('libsodium', 25315.45), ('AMA', 18266.09)]
+P-256 ECDSA sign AMA rank 3 of 4 [('OpenSSL', 37345.68), ('wolfSSL', 11835.06), ('AMA', 7243.14)]
+P-256 ECDSA verify AMA rank 3 of 4 [('OpenSSL', 13403.72), ('wolfSSL', 10718.34), ('AMA', 3933.14)]
+secp256k1 ECDSA sign AMA rank 1 of 3 [('AMA', 8806.38), ('Botan', 4969.82), ('OpenSSL', 2163.26)]
+secp256k1 ECDSA verify AMA rank 1 of 3 [('AMA', 3662.08), ('Botan', 3185.93), ('OpenSSL', 2477.29)]

@@ -1,0 +1,3 @@
+$ sed -n '/TO ASK WHAT IS ACTUALLY RUNNING/,/ABI policy/p' include/ama_dispatch.h | grep -c "ama_get_dispatch_table()\|ama_aes_gcm_active_backend()\|ama_dispatch_active_slot()"
+# exit=0 duration=0.005s
+3

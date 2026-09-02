@@ -1,0 +1,3 @@
+$ grep -n '"--require-trust-anchor",' ama_cryptography/_build_sign.py
+# exit=0 duration=0.005s
+725:        "--require-trust-anchor",

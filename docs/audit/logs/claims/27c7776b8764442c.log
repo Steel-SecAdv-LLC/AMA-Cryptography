@@ -1,0 +1,4 @@
+$ grep -n "hysteresis_band: float = 0.05\|decay_rate: float = 0.95" ama_cryptography/adaptive_posture.py
+# exit=0 duration=0.004s
+157:        decay_rate: float = 0.95,
+160:        hysteresis_band: float = 0.05,

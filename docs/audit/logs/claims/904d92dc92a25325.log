@@ -1,0 +1,5 @@
+$ grep -n 'normal and\|lognormal samples give E|t| within 3%\|E|t| = 1.60..1.62 from n = 2,000 to n = 50,000' tests/c/dudect/dudect_percentile.h
+# exit=0 duration=0.004s
+106: * The null is distribution-free to within the Monte-Carlo error (normal and
+107: * lognormal samples give E|t| within 3% of each other) and invariant in the
+108: * sample count (E|t| = 1.60..1.62 from n = 2,000 to n = 50,000), so one

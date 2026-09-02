@@ -1,0 +1,4 @@
+$ grep -rn "dudect_measurement_failed(" tests/c tools/constant_time
+# exit=0 duration=0.005s
+tests/c/test_dudect.c:92:    if (dudect_measurement_failed(ctx)) {
+tests/c/dudect/dudect.h:190:static inline int dudect_measurement_failed(dudect_ctx_t *ctx) {

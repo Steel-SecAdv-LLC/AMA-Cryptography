@@ -1,0 +1,7 @@
+$ grep -n -A1 "^class _Absorbing(Protocol):" ama_cryptography/_build_sign.py ama_cryptography/_self_test.py
+# exit=0 duration=0.005s
+ama_cryptography/_build_sign.py:104:class _Absorbing(Protocol):
+ama_cryptography/_build_sign.py-105-    """The only thing :func:`_absorb_entry` needs from a hash object.
+--
+ama_cryptography/_self_test.py:711:class _Absorbing(Protocol):
+ama_cryptography/_self_test.py-712-    """The only thing :func:`_absorb_entry` needs from a hash object.

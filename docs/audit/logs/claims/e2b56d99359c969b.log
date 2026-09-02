@@ -1,0 +1,6 @@
+$ sed -n '/^class TestAllThreeDigestMirrorsAgree/,/^class TestThePackageDigestIsAnInjectiveCommitment/p' tests/test_native_integrity.py | grep '    def test_'
+# exit=0 duration=0.005s
+    def test_the_format_tag_is_identical_in_all_three(self) -> None:
+    def test_entry_framing_is_identical_in_all_three(self) -> None:
+    def test_the_whole_digest_is_identical_on_a_staged_tree(self, tmp_path: Path) -> None:
+    def test_the_shipped_tree_verifies_out_of_band(self) -> None:

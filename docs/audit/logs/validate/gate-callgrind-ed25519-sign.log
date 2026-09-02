@@ -1,0 +1,18 @@
+[ed25519-sign] deterministic measurements by key class:
+  wiring: no dispatch table involved (scalar-only implementation)
+  cache geometry: I1=32768,8,64 D1=32768,8,64 LL=8388608,16,64
+  key              I refs          D refs       D1 misses      LLd misses
+  0x41         33,948,818       7,327,227           2,100           1,825
+  0x5a         33,948,818       7,327,227           2,100           1,825
+  0x6d         33,948,818       7,327,227           2,100           1,825
+  0x71         33,948,818       7,327,227           2,100           1,825
+  0x30         33,948,818       7,327,227           2,100           1,825
+  0x7e         33,948,818       7,327,227           2,100           1,825
+  0x21         33,948,818       7,327,227           2,100           1,825
+  0x35         33,948,818       7,327,227           2,100           1,825
+  floor                 0               0               0               0
+  drift                 0               0               0               0
+  worst                 0               0               0               0
+  limit                 0               0               0               0
+
+ED25519-SIGN CONSTANT-TIME CHECK PASSED — instruction count, data references and cache misses are all key-independent.

@@ -1,0 +1,3 @@
+$ grep -cE "^#(if|elif|else|endif).*_WIN32" src/c/dispatch/ama_dispatch.c
+# exit=0 duration=0.004s
+9

@@ -1,0 +1,3 @@
+$ grep -c "All crypto implemented in native C" THREAT_MODEL.md
+# exit=1 duration=0.005s
+0

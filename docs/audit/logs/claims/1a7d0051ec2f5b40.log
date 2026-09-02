@@ -1,0 +1,4 @@
+$ grep -c 'test_dudect --measurements' .github/workflows/dudect.yml; grep -n '^  [a-z0-9_-]*:$' .github/workflows/dudect.yml | wc -l
+# exit=0 duration=0.007s
+4
+12

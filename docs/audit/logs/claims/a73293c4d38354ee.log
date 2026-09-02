@@ -1,0 +1,7 @@
+$ python -c 'q=3329;M=330282857
+impl=lambda x,d:(((((x<<d)+q//2)*M)>>40))&((1<<d)-1)
+spec=lambda x,d:((((x<<d)+q//2)//q))&((1<<d)-1)
+mm={d:[x for x in range(q) if impl(x,d)!=spec(x,d)] for d in (18,19,30)}
+print("d18=%d d19=%d first19=%s d30=%d pairs=%d"%(len(mm[18]),len(mm[19]),mm[19][0] if mm[19] else None,len(mm[30]),q*18))'
+# exit=0 duration=0.036s
+d18=0 d19=4 first19=1862 d30=2791 pairs=59922

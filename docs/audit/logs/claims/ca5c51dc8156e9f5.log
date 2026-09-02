@@ -1,0 +1,4 @@
+$ sed -n '814,970p' .github/workflows/ci-build-test.yml | grep -ciE 'platforms:|qemu|trivy|grype|snyk|scan'; grep -n 'no `platforms:`, installs no QEMU, and invokes no scanning action' ENHANCED_FEATURES.md
+# exit=0 duration=0.006s
+0
+605:no `platforms:`, installs no QEMU, and invokes no scanning action.

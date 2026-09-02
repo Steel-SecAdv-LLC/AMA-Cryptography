@@ -1,0 +1,3 @@
+$ grep -n '"timing_baseline": self.timing.snapshot_baselines()' ama_cryptography/monitoring.py
+# exit=0 duration=0.005s
+4090:            "timing_baseline": self.timing.snapshot_baselines(),

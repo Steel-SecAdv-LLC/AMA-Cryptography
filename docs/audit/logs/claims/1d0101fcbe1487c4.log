@@ -1,0 +1,6 @@
+$ grep -n 'DETECTED capability tiers\|Detection and wiring diverge in four ways' include/ama_dispatch.h; grep -n 'dispatch_info.aes_gcm *= ' src/c/dispatch/ama_dispatch.c
+# exit=0 duration=0.007s
+48: * Detection and wiring diverge in four ways, all of them by design:
+286:/** Get the DETECTED capability tiers — not the wired kernels.
+1456:    dispatch_info.aes_gcm          = effective;
+1489:    dispatch_info.aes_gcm          = has_neon ? AMA_IMPL_NEON : AMA_IMPL_GENERIC;

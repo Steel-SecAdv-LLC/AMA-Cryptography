@@ -1,0 +1,3 @@
+$ S=/tmp/claude-0/-home-user-AMA-Cryptography/7da6a6a3-7996-5d8d-a052-37df782d45a9/scratchpad/cet; mkdir -p $S && echo 'int main(void){return 0;}' > $S/m.c && aarch64-linux-gnu-gcc -c $S/m.c -o $S/m_a64.o && readelf -nW $S/m_a64.o | grep -c 'AArch64 feature'
+# exit=1 duration=0.282s
+0

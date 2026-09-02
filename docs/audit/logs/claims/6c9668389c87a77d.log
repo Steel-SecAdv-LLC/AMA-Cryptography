@@ -1,0 +1,3 @@
+$ grep -c "test_ed25519_canonical_y.c" INVARIANTS.md
+# exit=1 duration=0.003s
+0

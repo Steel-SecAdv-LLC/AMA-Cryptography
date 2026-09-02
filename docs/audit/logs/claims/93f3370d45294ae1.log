@@ -1,0 +1,5 @@
+$ grep -c 'MSVC and MinGW-w64 alike, selected on `_WIN32` rather than `_MSC_VER`' ARCHITECTURE.md; grep -cE 'InitOnceExecuteOnce` \(MSVC\)|Windows \(MSVC\)\*\*' ARCHITECTURE.md INVARIANTS.md
+# exit=1 duration=0.006s
+1
+ARCHITECTURE.md:0
+INVARIANTS.md:0

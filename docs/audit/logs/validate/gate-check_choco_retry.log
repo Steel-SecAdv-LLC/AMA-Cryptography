@@ -1,0 +1,1 @@
+OK: 14 workflow(s); every Chocolatey install goes through .github/scripts/choco-install.ps1.

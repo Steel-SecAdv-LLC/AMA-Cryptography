@@ -1,0 +1,3 @@
+$ grep -n "style REFERENCE for new and edited C" .clang-format
+# exit=0 duration=0.005s
+8:# This file is a style REFERENCE for new and edited C, not a formatter you can

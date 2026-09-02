@@ -1,0 +1,3 @@
+$ grep -c "callgrind" benchmarks/baseline.json
+# exit=0 duration=0.004s
+2

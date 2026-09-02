@@ -1,0 +1,5 @@
+$ grep -n "RFC 8032" tests/c/test_ed25519.c | head -3
+# exit=0 duration=0.005s
+4: * Unit tests for Ed25519 implementation (RFC 8032)
+7: * - Key generation against RFC 8032 Test Vector 1
+8: * - Signature generation against RFC 8032 expected output

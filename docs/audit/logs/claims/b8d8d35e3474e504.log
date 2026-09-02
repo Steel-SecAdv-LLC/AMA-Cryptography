@@ -1,0 +1,5 @@
+$ grep -n 'if tsa_mode not in ("online", "mock", "disabled"):' ama_cryptography/crypto_api.py ama_cryptography/rfc3161_timestamp.py; sed -n 2486,2500p ama_cryptography/crypto_api.py | grep -c 'raise ValueError('
+# exit=0 duration=0.010s
+ama_cryptography/crypto_api.py:2486:    if tsa_mode not in ("online", "mock", "disabled"):
+ama_cryptography/rfc3161_timestamp.py:1174:    if tsa_mode not in ("online", "mock", "disabled"):
+1

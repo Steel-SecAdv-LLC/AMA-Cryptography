@@ -1,0 +1,5 @@
+$ grep -n 'session_id = secure_token_bytes(SESSION_ID_BYTES)' ama_cryptography/secure_channel.py; grep -n 'def secure_token_bytes\|health-tested CSPRNG draw' ama_cryptography/_module_state.py
+# exit=0 duration=0.007s
+1212:        session_id = secure_token_bytes(SESSION_ID_BYTES)
+10:health-tested CSPRNG draw.
+239:def secure_token_bytes(n: int = 32) -> bytes:

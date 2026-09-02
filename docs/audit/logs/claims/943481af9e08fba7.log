@@ -1,0 +1,6 @@
+$ grep -n -A3 "except _ArtefactSourceError as exc:" ama_cryptography/__init__.py
+# exit=0 duration=0.004s
+176:    except _ArtefactSourceError as exc:
+177-        # Present but not a file of literals any more.  Never a fallback: the
+178-        # one file every digest check trusts has stopped being what it claims.
+179-        raise ImportError(

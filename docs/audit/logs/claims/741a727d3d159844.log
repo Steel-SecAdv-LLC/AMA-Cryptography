@@ -1,0 +1,3 @@
+$ grep -n "did not raise at all" tests/test_artefact_cache_poisoning.py
+# exit=0 duration=0.005s
+446:                f"payload {payload!r} did not raise at all; "

@@ -1,0 +1,3 @@
+$ grep -n '_gershgorin_lower_bound(asmat(matrix))' tests/test_equations.py
+# exit=0 duration=0.004s
+352:        self.assertGreaterEqual(_gershgorin_lower_bound(asmat(matrix)), 0.0)

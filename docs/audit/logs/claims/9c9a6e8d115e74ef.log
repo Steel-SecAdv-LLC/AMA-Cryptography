@@ -1,0 +1,4 @@
+$ ls tests/test_secret_division_gate.py tests/test_key_formats.py
+# exit=0 duration=0.005s
+tests/test_key_formats.py
+tests/test_secret_division_gate.py

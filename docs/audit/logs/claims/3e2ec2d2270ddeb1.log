@@ -1,0 +1,4 @@
+$ git show 2dcef5c:tests/c/CMakeLists.txt | grep -c test_field_bench; grep -c test_field_bench tests/c/CMakeLists.txt
+# exit=0 duration=0.009s
+0
+1

@@ -1,0 +1,4 @@
+$ git show 6a22aa2^:tests/c/dudect/dudect.h | grep -c DUDECT_NUMBER_PERCENTILES; grep -c "define DUDECT_NUMBER_PERCENTILES" tests/c/dudect/dudect.h
+# exit=1 duration=0.008s
+2
+0

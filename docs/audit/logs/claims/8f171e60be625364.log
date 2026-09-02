@@ -1,0 +1,4 @@
+$ grep -c 'ama_secure_memzero(R, sizeof(R));\|ama_secure_memzero(Z, sizeof(Z));\|ama_secure_memzero(scratch, sizeof(scratch));' src/c/avx2/ama_argon2_avx2.c src/c/neon/ama_argon2_neon.c
+# exit=0 duration=0.008s
+src/c/avx2/ama_argon2_avx2.c:3
+src/c/neon/ama_argon2_neon.c:3

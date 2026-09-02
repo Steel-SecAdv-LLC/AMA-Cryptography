@@ -1,0 +1,3 @@
+$ grep -n 'Every cmake configure command in a run block, line continuations joined.' tools/check_workflow_commands.py
+# exit=0 duration=0.005s
+811:    """Every cmake configure command in a run block, line continuations joined.

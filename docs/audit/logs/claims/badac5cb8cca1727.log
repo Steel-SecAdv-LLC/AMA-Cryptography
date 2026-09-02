@@ -1,0 +1,4 @@
+$ grep -n 'set(CMAKE_C_STANDARD 11)\|set(CMAKE_C_EXTENSIONS OFF)' CMakeLists.txt
+# exit=0 duration=0.006s
+163:set(CMAKE_C_STANDARD 11)
+165:set(CMAKE_C_EXTENSIONS OFF)

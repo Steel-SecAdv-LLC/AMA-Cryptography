@@ -1,0 +1,9 @@
+$ python -c "import numpy as np
+from ama_cryptography.equations import enforce_sigma_quadratic_threshold as f, SIGMA_QUADRATIC_THRESHOLD as T
+r=np.random.default_rng(1);E=np.diag([2.0,0.5,0.1,-0.3]);v=0;md=0;mr=0
+for _ in range(500):
+    x=r.normal(size=4);ok,y=f(x,E,T);y=np.asarray(y,float)
+    if not ok: v+=1;md=max(md,abs(float(y@E@y)/float(y@y)-T));mr=max(mr,abs(np.linalg.norm(y)-np.linalg.norm(x))/np.linalg.norm(x))
+print('violated>0',v>0,'on_threshold_1e-14',md<1e-14,'norm_preserved_1e-14',mr<1e-14)"
+# exit=0 duration=0.928s
+violated>0 True on_threshold_1e-14 True norm_preserved_1e-14 True

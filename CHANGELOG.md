@@ -31,6 +31,74 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > Compare `[4.0.0]` below, which is dated because it *is* released: tag
 > `v4.0.0`, published 2026-08-02.
 
+> **Dated figures are dated.** Counts, line numbers and measurements quoted
+> inside a dated pass entry below describe the tree as it stood on that
+> entry's date; later passes on this branch moved many of them. They are a
+> record, not a live claim: no gate reads a pass entry as a current property,
+> and the current numbers live in the files the gates do read
+> (`docs/METRICS_REPORT.md`, `benchmarks/baseline.json`, the compliance
+> attestations). PR #394's readiness audit re-measured 1,815 such statements
+> at the release head and recorded, in `docs/audit/PR394_CLAIMS.yaml`, the
+> 139 whose figure no longer holds (FINDING-0007 there).
+
+### Maintenance pass, sixteenth (2026-09-02) — readiness falsification of the branch head: two sanitizer lanes that could not finish, three gates that could not fail, one detector measured against a baseline
+
+An operator-mandated attempt to break the proposition "if v5.0.0 were tagged
+from this head today, every claim the repository makes about itself is either
+independently reproducible or labelled unverified, and every shipped control
+can demonstrably fail".  Evidence ledger, retained logs, negative controls,
+mutation runs, sweeps, findings and the attestation are committed under
+`docs/audit/` (start at `docs/audit/PR394_ATTESTATION.md`).  Every behaviour
+change below is pinned by a test verified to fail against the unfixed code.
+
+- **The MSan and TSan lanes could not complete on the previous head.**
+  `tests/c/test_secure_free_scrub.c` walked every anonymous mapping through
+  `/proc/self/mem`; under a sanitizer the shadow regions make that tens of
+  terabytes, and both lanes hung to their caps (FINDING-0001).  The scan now
+  asks `mincore(2)` which pages are resident and reads only those, so it
+  finishes in seconds under every configuration.
+- **The scrub inspector's negative control was not a CTest case and, once
+  registered, failed on AArch64.**  It passed on x86-64 only because glibc
+  happened to carve the scanner's own `FILE` buffer away from the freed
+  sentinel (FINDING-0002).  The scanner is now allocation-free after the
+  plain `free()`, and `test_secure_free_scrub_negative` runs in every C lane.
+- **`tools/check_keygen_pct.py` (INVARIANT-41) blessed a keygen whose family
+  dispatch had lost one arm's pairwise test.**  Replacing the signature arm
+  of `AmaContext._keypair_pairwise_test` with a no-op left the gate green,
+  because the helper still called `pairwise_test_kem` in its other arm
+  (FINDING-0003).  Every arm of a conditional in which a sibling arm runs a
+  pairwise test must now run one or raise; the dark arm is named in the
+  diagnostic.  The gate's own tests also gained the two cases mutation
+  testing showed unpinned (an early-ending arm scan, a missing-backend path
+  returning `None`).
+- **`tools/check_workflow_commands.py` never looked at bare `if:` conditions
+  and had no rule for a lone `=`.**  A job condition that makes the whole
+  workflow file fail to parse passed the gate (FINDING-0004).  Bare `if:`
+  values are now scanned as expressions alongside `${{ }}` bodies, and a `=`
+  that is not part of `==`/`!=`/`<=`/`>=` is rejected.
+- **The 3R timing monitor's detection efficacy is now measured, and stated.**
+  Against a trailing-window z-score on 4,000 real ML-DSA-65 sign timings, the
+  monitor detects isolated 10x outliers 30 % of the time to the baseline's
+  80 % at a lower false-positive rate, and persistent +10 % shifts faster
+  (19 samples to 47).  README's 3R note carries the numbers and
+  `tests/test_3r_efficacy_calibration.py` pins the prose to the table
+  (FINDING-0005).
+- **`tools/check_dudect_class_staging.py` tests pin what mutation testing
+  found unpinned**: the CLI's exit code on a violation, reported line numbers
+  (statement start, block comments preserved), every unaligned destination
+  after an aligned one, Rule 2 on a `*_stage` buffer that is never staged
+  into, an empty harness list, and the clean report's file/lane counts.
+- **Type-check scope**: the audit's own drivers under `docs/audit/` were
+  caught by `tools/check_type_check_scope.py` as tracked-but-unchecked (the
+  gate working as designed) and are now in both CI mypy invocations.
+- **Audit artefacts.** `docs/audit/` holds the capability declaration with
+  the mid-session CPU change recorded, the ledger and every retained log, the
+  negative-control table (one row per gate, verdict column), mutation runs
+  and their survivor disposition, the full-set Valgrind and per-target fuzz
+  depth tables, the assembly division census at five optimisation levels
+  under three compilers, the fail-open sweep with per-site triage, the
+  acceptance-set runs, the §10 exception adjudication and the attestation.
+
 ### Maintenance pass, fifteenth (2026-08-31) — independent v5 pre-merge audit: core-dump protection made real, signer anchor demand un-dropped, four gate bypasses closed
 
 An operator-directed 21-item verification pass over the whole PR (evidence

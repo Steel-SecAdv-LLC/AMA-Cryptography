@@ -1,0 +1,66 @@
+==30664== Memcheck, a memory error detector
+==30664== Copyright (C) 2002-2022, and GNU GPL'd, by Julian Seward et al.
+==30664== Using Valgrind-3.22.0 and LibVEX; rerun with -h for copyright info
+==30664== Command: /home/user/AMA-Cryptography/build-valgrind/bin/test_sha3
+==30664== 
+===========================================
+SHA3-256 Test Suite
+===========================================
+
+✓ PASS: sha3_256: empty string should succeed
+✓ PASS: sha3_256: empty string hash matches NIST KAT
+✓ PASS: sha3_256: 'abc' should succeed
+✓ PASS: sha3_256: 'abc' hash matches NIST KAT
+✓ PASS: sha3_256: NULL output should return INVALID_PARAM
+✓ PASS: sha3_256: longer message should succeed
+✓ PASS: sha3_256: deterministic output
+✓ PASS: sha3_256: 136-byte (one block) should succeed
+✓ PASS: sha3_256: 137-byte (cross block) should succeed
+✓ PASS: shake128 inc_init should succeed
+✓ PASS: shake128 inc_absorb should succeed
+✓ PASS: shake128 inc_finalize should succeed
+✓ PASS: shake128 squeeze of 150 bytes should succeed
+✓ PASS: shake256 squeeze on a SHAKE128-positioned context must be refused
+✓ PASS: shake256 inc_init (capacity) should succeed
+✓ PASS: shake256 inc_absorb (capacity) should succeed
+✓ PASS: shake256 inc_finalize (capacity) should succeed
+✓ PASS: shake128 squeeze on a SHAKE256-finalized context must be refused, not emit the sponge's capacity bytes
+✓ PASS: shake256 inc_init (whole) should succeed
+✓ PASS: shake256 inc_absorb (whole) should succeed
+✓ PASS: shake256 inc_finalize (whole) should succeed
+✓ PASS: shake256 squeeze of 168 bytes should succeed
+✓ PASS: shake256 inc_init (split) should succeed
+✓ PASS: shake256 inc_absorb (split) should succeed
+✓ PASS: shake256 inc_finalize (split) should succeed
+✓ PASS: shake256 squeeze of exactly one block should succeed
+✓ PASS: shake256 squeeze resuming from position == rate must be accepted
+✓ PASS: split squeeze across the block boundary matches the single-call stream
+✓ PASS: shake128 inc_init (mixed) should succeed
+✓ PASS: shake128 absorb of 150 bytes should succeed
+✓ PASS: sha3_512_final on a SHAKE128-buffered context must be refused
+✓ PASS: sha3 init (consumed) should succeed
+✓ PASS: sha3 update (consumed) should succeed
+✓ PASS: sha3 final (consumed) should succeed
+✓ PASS: shake256 squeeze of a consumed sha3_final context must be refused
+✓ PASS: shake128 squeeze of a consumed sha3_final context must be refused
+✓ PASS: sha3-512 init (consumed) should succeed
+✓ PASS: sha3-512 update (consumed) should succeed
+✓ PASS: sha3-512 final (consumed) should succeed
+✓ PASS: shake128 squeeze of a consumed sha3_512_final context must be refused
+✓ PASS: re-init of a consumed context should succeed
+✓ PASS: update after re-init should succeed
+✓ PASS: final after re-init should succeed
+✓ PASS: SHA3-256("abc") after re-init matches the pre-consumption digest
+
+===========================================
+All SHA3-256 tests passed!
+===========================================
+==30664== 
+==30664== HEAP SUMMARY:
+==30664==     in use at exit: 0 bytes in 0 blocks
+==30664==   total heap usage: 1 allocs, 1 frees, 4,096 bytes allocated
+==30664== 
+==30664== All heap blocks were freed -- no leaks are possible
+==30664== 
+==30664== For lists of detected and suppressed errors, rerun with: -s
+==30664== ERROR SUMMARY: 0 errors from 0 contexts (suppressed: 0 from 0)

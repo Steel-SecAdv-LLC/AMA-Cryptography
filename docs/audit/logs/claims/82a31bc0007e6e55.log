@@ -1,0 +1,4 @@
+$ grep -n "_STAGE_CALL_DEST = re.compile(\|for m in _STAGE_CALL_DEST.finditer(stripped):" tools/check_dudect_class_staging.py
+# exit=0 duration=0.004s
+256:_STAGE_CALL_DEST = re.compile(
+330:    for m in _STAGE_CALL_DEST.finditer(stripped):

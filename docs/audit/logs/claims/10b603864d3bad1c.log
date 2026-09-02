@@ -1,0 +1,4 @@
+$ git show 7432e0d:ama_cryptography/_integrity_signature.py | grep -c 'INTEGRITY_BINDING_DIGESTS_HEX: dict\[str, str\] = {}'; python -c "import re;t=open('ama_cryptography/_integrity_signature.py').read();m=re.search(r'INTEGRITY_BINDING_DIGESTS_HEX[^{]*\{(.*?)\}',t,re.S);print(len(re.findall(r'\"[^\"]+\.so\"',m.group(1))))"
+# exit=0 duration=0.034s
+1
+6

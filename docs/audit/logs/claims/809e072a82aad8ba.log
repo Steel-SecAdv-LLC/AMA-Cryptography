@@ -1,0 +1,7 @@
+$ git show --stat --format=%s 868c354
+# exit=0 duration=0.007s
+Stop an apt hang in the MSan lane from failing the whole gate
+
+ .github/workflows/static-analysis.yml | 32 ++++++++++++++++++++++++++++++++
+ docs/METRICS_REPORT.md                |  8 ++++----
+ 2 files changed, 36 insertions(+), 4 deletions(-)

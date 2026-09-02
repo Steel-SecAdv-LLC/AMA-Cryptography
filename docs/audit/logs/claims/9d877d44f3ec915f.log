@@ -1,0 +1,5 @@
+$ grep -n "^_COMPOSITE_SAMPLED_ROUNDS = \|^_EXTRA_SAMPLED_ROUNDS = \|^_ROUNDS = " benchmarks/benchmark_runner.py
+# exit=0 duration=0.004s
+201:_ROUNDS = 3
+261:_EXTRA_SAMPLED_ROUNDS = 3
+267:_COMPOSITE_SAMPLED_ROUNDS = 5

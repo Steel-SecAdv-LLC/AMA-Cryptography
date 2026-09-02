@@ -1,0 +1,6 @@
+$ grep -cE '^\s*& "\$env:GITHUB_WORKSPACE/\.github/scripts/choco-install\.ps1"' .github/workflows/ci.yml .github/workflows/ci-build-test.yml; grep -hA1 'scripts/choco-install.ps1" `' .github/workflows/ci.yml .github/workflows/ci-build-test.yml | grep -oE "\-Package \S+" | sort | uniq -c
+# exit=0 duration=0.009s
+.github/workflows/ci.yml:2
+.github/workflows/ci-build-test.yml:2
+      2 -Package cmake
+      2 -Package softhsm.install

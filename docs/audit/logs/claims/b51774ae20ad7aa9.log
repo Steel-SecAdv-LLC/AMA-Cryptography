@@ -1,0 +1,3 @@
+$ grep -rnE '\*\(uint(64|32)_t \*\)\(in \+' src/c/vendor/ed25519-donna/ | grep -v 'AMA-PATCH'; echo rc=$?
+# exit=0 duration=0.006s
+rc=1

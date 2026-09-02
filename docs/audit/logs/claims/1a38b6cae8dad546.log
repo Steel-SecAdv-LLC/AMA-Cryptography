@@ -1,0 +1,3 @@
+$ python -c "from ama_cryptography.monitoring import VolumeSpikeDetector as V; v=V(operations=['a']); v.record('b','fp1'); print(v.filtered_operations)"
+# exit=0 duration=0.520s
+1

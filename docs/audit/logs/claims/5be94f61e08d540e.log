@@ -1,0 +1,3 @@
+$ python -c "import hashlib,re;b=open('tests/kat/ascon/ascon_aead128.kat','rb').read();a='bbbc34692fe05e5fda0a3b025585622ab3e3747495e5e3655b29aae8c2a4bd33';c=re.sub(rb'PT = \n',b'PT =\n',b);print(hashlib.sha256(b).hexdigest()==a, hashlib.sha256(c).hexdigest()==a, len(b), len(c))"
+# exit=0 duration=0.036s
+True False 260253 260220

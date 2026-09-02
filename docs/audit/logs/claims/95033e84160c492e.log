@@ -1,0 +1,4 @@
+$ grep -c "ama_randombytes" src/c/ama_platform_rand.h include/ama_cryptography.h
+# exit=0 duration=0.005s
+src/c/ama_platform_rand.h:1
+include/ama_cryptography.h:0

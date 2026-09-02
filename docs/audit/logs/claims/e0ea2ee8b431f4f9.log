@@ -1,0 +1,3 @@
+$ grep -n "self.alerts\[-10:\]" ama_cryptography/monitoring.py
+# exit=0 duration=0.004s
+4085:            recent_alerts = [dict(alert) for alert in self.alerts[-10:]]

@@ -1,0 +1,5 @@
+$ grep -n "from tools.check_suppression_hygiene import _SUPPRESSION_RE" tests/test_invariant_upgrades.py; grep -nF '(noqa|nosec|' tests/test_invariant_upgrades.py; echo rc=$?
+# exit=0 duration=0.006s
+363:        from tools.check_suppression_hygiene import _SUPPRESSION_RE
+712:        from tools.check_suppression_hygiene import _SUPPRESSION_RE, effective_suppressions
+rc=1

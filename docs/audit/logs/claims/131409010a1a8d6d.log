@@ -1,0 +1,3 @@
+$ sed -n 1,40p src/c/sve2/ama_sha3_sve2.c | grep -c "Uses SVE2 scalable vectors"
+# exit=1 duration=0.005s
+0

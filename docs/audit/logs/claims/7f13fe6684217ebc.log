@@ -1,0 +1,4 @@
+$ grep -c 'dudect_ctx_init(&ctx, "FROST scalar_negate' tests/c/test_dudect.c; grep -c 'dudect_ctx_init(&ctx, "Argon2id legacy verify"' tests/c/test_dudect.c
+# exit=0 duration=0.006s
+2
+1

@@ -1,0 +1,4 @@
+$ grep -n 'mid_start = (len(view) - third) // 2\|bytes(view\[mid_start : mid_start + third\])' ama_cryptography/monitoring.py
+# exit=0 duration=0.006s
+3277:        mid_start = (len(view) - third) // 2
+3281:            + bytes(view[mid_start : mid_start + third])

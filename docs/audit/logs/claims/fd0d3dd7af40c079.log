@@ -1,0 +1,3 @@
+$ grep -n 'test_concurrent_init is not registered' .github/workflows/static-analysis.yml
+# exit=0 duration=0.004s
+652:            echo "::error::test_concurrent_init is not registered — the TSan lane"

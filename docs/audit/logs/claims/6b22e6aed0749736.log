@@ -1,0 +1,3 @@
+$ grep -n '#define AMA_KYBER_1024_CIPHERTEXT_BYTES 1568' include/ama_cryptography.h
+# exit=0 duration=0.005s
+120:#define AMA_KYBER_1024_CIPHERTEXT_BYTES 1568

@@ -1,0 +1,4 @@
+$ grep -nE "a mispredicted branch is 7-10 ns, an L1 miss[\s\S]*" tests/c/dudect/dudect_rounds.h | head -2; grep -nE "one extra AES round ~4 ns|an early-exit memcmp hundreds" tests/c/dudect/dudect_rounds.h
+# exit=0 duration=0.007s
+416:     * instruction SEQUENCE — a mispredicted branch is 7-10 ns, an L1 miss
+417:     * 30-50 ns, one extra AES round ~4 ns, an early-exit memcmp hundreds —

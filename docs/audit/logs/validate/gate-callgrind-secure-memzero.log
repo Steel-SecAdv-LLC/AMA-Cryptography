@@ -1,0 +1,18 @@
+[secure-memzero] deterministic measurements by key class:
+  wiring: no dispatch table involved (scalar-only implementation)
+  cache geometry: I1=32768,8,64 D1=32768,8,64 LL=8388608,16,64
+  key              I refs          D refs       D1 misses      LLd misses
+  0x41         12,528,553       9,281,489           1,656           1,443
+  0x5a         12,528,553       9,281,489           1,656           1,443
+  0x6d         12,528,553       9,281,489           1,656           1,443
+  0x71         12,528,553       9,281,489           1,656           1,443
+  0x30         12,528,553       9,281,489           1,656           1,443
+  0x7e         12,528,553       9,281,489           1,656           1,443
+  0x21         12,528,553       9,281,489           1,656           1,443
+  0x35         12,528,553       9,281,489           1,656           1,443
+  floor                 0               0               0               0
+  drift                 0               0               0               0
+  worst                 0               0               0               0
+  limit                 0               0               0               0
+
+SECURE-MEMZERO CONSTANT-TIME CHECK PASSED — instruction count, data references and cache misses are all key-independent.

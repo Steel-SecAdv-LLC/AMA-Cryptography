@@ -1,0 +1,64 @@
+==6023== Memcheck, a memory error detector
+==6023== Copyright (C) 2002-2022, and GNU GPL'd, by Julian Seward et al.
+==6023== Using Valgrind-3.22.0 and LibVEX; rerun with -h for copyright info
+==6023== Command: /home/user/AMA-Cryptography/build-valgrind/bin/test_kyber_cpa
+==6023== 
+=== NTT Roundtrip Test ===
+  --- Poly mul test: [1,0,...] * [1,0,...] ---
+  NTT([1,0,...])[0..7]: 1 0 1 0 1 0 1 0
+  basemul[0..7]: 169 0 169 0 169 0 169 0
+  INVNTT(basemul)[0..7]: 1 0 0 0 0 0 0 0
+  Expected: [1, 0, 0, 0, ...]
+  --- Poly mul test: [1,0,...] * [0,1,0,...] ---
+  Result[0..7]: 0 1 0 0 0 0 0 0
+  Expected: [0, 1, 0, 0, ...]
+  --- polyvec_basemul_acc test ---
+  s^T*u[0..3]: 3 0 0 0 (expected: 3 0 0 0)
+  --- Trivial keygen/enc/dec test ---
+  u[0][0..3]: 2 0 0 0 (expected: 2 0 0 0)
+  v[0..3]: 2 0 0 0 (expected: 2 0 0 0)
+  s^T*u[0..3]: 2 0 0 0 (expected: 2 0 0 0)
+  v-s^T*u[0..3]: 0 0 0 0 (expected: 0 0 0 0)
+  --- Non-trivial poly mul test ---
+  NTT result[0..5]:   5 16 27 38 24 0
+  Naive result[0..5]: 5 16 27 38 24 0
+  Expected:           5 16 27 38 24 0
+  Poly mul match: YES
+  --- Large-coeff poly mul test ---
+  Large poly mul match: YES
+  --- Manual keygen with non-trivial values ---
+  Manual residual[0..7]: -1664 -1664 0 -1664 0 -1664 0 -1664
+  Expected ~1665/-1665 for 1-bits, ~0 for 0-bits
+  Manual CPA: PASS
+  --- Detailed keygen consistency ---
+    u[0][0..3]: 2242 3314 2083 2888
+    v-s^T*u[0..7]: -1663 -1663 0 1664 1 1663 -1 -1664
+    Keygen-based CPA: PASS (m_dec[0]=AB)
+  --- Keygen verification test ---
+    max |INVNTT(e_hat)| = 1241 (should be <= 2 for eta=2)
+    INVNTT(e_hat)[0][0..7]: -1044 1044 0 1241 0 1044 -1044 -1044
+  --- NTT->INVNTT roundtrip ---
+  NTT->INVNTT vs a*R: max_diff=0 (should be 0)
+  a[0..3]: 0 1 2 3
+  b[0..3]: 0 2285 1241 197 (after NTT->INVNTT)
+  Expected (a*R): 0 2285 1241 197
+NTT: PASS
+
+=== CPA Encrypt/Decrypt Test ===
+  --- Test 1: No-compression CPA roundtrip ---
+  Residual coeffs[0..7]: 1674 1709 3311 1706 33 1676 3307 1653
+  Expected: ~1665 for 1-bits, ~0 for 0-bits (0xAB=11010101)
+  No-compress CPA: PASS
+  --- Test 2: With-compression CPA roundtrip ---
+  Residual coeffs[0..7]: 1669 1751 3286 1780 120 1651 3286 1700
+  With-compress CPA: PASS
+CPA: PASS
+==6023== 
+==6023== HEAP SUMMARY:
+==6023==     in use at exit: 0 bytes in 0 blocks
+==6023==   total heap usage: 0 allocs, 0 frees, 0 bytes allocated
+==6023== 
+==6023== All heap blocks were freed -- no leaks are possible
+==6023== 
+==6023== For lists of detected and suppressed errors, rerun with: -s
+==6023== ERROR SUMMARY: 0 errors from 0 contexts (suppressed: 0 from 0)

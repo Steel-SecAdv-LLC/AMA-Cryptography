@@ -1,0 +1,5 @@
+$ git show 267c16c:tests/c/test_dudect.c | grep -n -A2 "static int is_fatal_result"
+# exit=0 duration=0.007s
+2076:static int is_fatal_result(double t) {
+2077-    return t >= DUDECT_FATAL_SENTINEL - 1.0;
+2078-}

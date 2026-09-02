@@ -1,0 +1,5 @@
+Compared 5195 Ed25519 verification case(s) across both backends.
+  donna: build-donna/lib/libama_cryptography.so
+  fe51 : build-fe51/lib/libama_cryptography.so
+
+ED25519 BACKEND DIFFERENTIAL PASSED — both backends agree on every case.

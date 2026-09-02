@@ -1,0 +1,3 @@
+$ grep -c "regression_results.json" wiki/Performance-Benchmarks.md
+# exit=1 duration=0.005s
+0

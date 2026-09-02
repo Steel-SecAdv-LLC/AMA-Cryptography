@@ -1,0 +1,3 @@
+$ grep -c "def _advance_alert_cursor\|self._advance_alert_cursor(new_alerts)" ama_cryptography/adaptive_posture.py
+# exit=0 duration=0.004s
+2

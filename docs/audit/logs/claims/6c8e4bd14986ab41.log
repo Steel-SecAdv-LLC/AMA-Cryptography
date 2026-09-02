@@ -1,0 +1,6 @@
+$ git show v4.0.0:src/c/ama_kyber.c | awk '/^static void kyber_gennoise/,/^}/' | grep -c 'ama_secure_memzero(buf, sizeof(buf))'; ctest --test-dir build-release -R 'test_kat$' 2>&1 | tail -3
+# exit=0 duration=0.844s
+0
+100% tests passed out of 1
+
+Total Test time (real) =   0.75 sec

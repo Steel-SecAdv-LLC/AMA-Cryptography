@@ -1,0 +1,10 @@
+$ grep -n 'to_bytes([48], "big")' ama_cryptography/_self_test.py
+# exit=0 duration=0.005s
+490:    out += len(binding_digests).to_bytes(4, "big")
+494:        out += len(name_bytes).to_bytes(4, "big")
+496:        out += len(digest).to_bytes(4, "big")
+742:    hasher.update(len(section).to_bytes(4, "big"))
+744:    hasher.update(len(name_bytes).to_bytes(4, "big"))
+746:    hasher.update(len(body).to_bytes(8, "big"))
+819:    hasher.update(len(py_files).to_bytes(4, "big"))
+829:    hasher.update(len(kat_files).to_bytes(4, "big"))

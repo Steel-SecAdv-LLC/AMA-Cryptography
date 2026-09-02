@@ -1,0 +1,3 @@
+$ grep -nF 's[31] ^= (uint8_t)(fe25519_isnegative(x) << 7);' src/c/ama_ed25519.c
+# exit=0 duration=0.004s
+244:    s[31] ^= (uint8_t)(fe25519_isnegative(x) << 7);

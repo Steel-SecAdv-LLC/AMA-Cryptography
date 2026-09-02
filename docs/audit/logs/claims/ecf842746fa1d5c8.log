@@ -1,0 +1,4 @@
+$ sed -n '/^def _expected_native_digest/,/^def /p' ama_cryptography/pqc_backends.py | grep -c "wrong answer"; sed -n '/^def _expected_native_digest/,/^def /p' ama_cryptography/pqc_backends.py | grep -c "_refuse_tampered_bindings_before_import"
+# exit=0 duration=0.010s
+0
+1

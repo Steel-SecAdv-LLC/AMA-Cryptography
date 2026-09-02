@@ -1,0 +1,3 @@
+$ grep -cE '\*\*Both\*\* signing callers bind' SECURITY.md
+# exit=0 duration=0.004s
+1

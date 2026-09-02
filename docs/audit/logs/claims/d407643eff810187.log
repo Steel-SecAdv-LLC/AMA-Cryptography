@@ -1,0 +1,4 @@
+$ git show -s --format=%B 47ce5ef | grep -nE '67 ns|101\.18 ns against 34\.05 ns'
+# exit=0 duration=0.005s
+16:SecureSession.close().  Were the helper ever on such a path, it costs 67 ns
+18:x86-64 CPython 3.11: 101.18 ns against 34.05 ns for a bytearray).

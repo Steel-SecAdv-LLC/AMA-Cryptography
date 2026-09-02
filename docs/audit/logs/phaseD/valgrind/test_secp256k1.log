@@ -1,0 +1,93 @@
+==577== Memcheck, a memory error detector
+==577== Copyright (C) 2002-2022, and GNU GPL'd, by Julian Seward et al.
+==577== Using Valgrind-3.22.0 and LibVEX; rerun with -h for copyright info
+==577== Command: /home/user/AMA-Cryptography/build-valgrind/bin/test_secp256k1
+==577== 
+===========================================
+secp256k1 Test Suite (SEC 2 §2.4.1)
+===========================================
+
+PASS: 1 * G succeeds
+PASS: 1 * G: x matches generator x
+PASS: 1 * G: y matches generator y
+PASS: 2 * G succeeds
+PASS: 2 * G: x matches published 2G_x
+PASS: 2 * G: y matches published 2G_y
+PASS: pubkey_from_privkey(1) succeeds
+PASS: pubkey_from_privkey(1): prefix is 0x02 (Gy is even)
+PASS: pubkey_from_privkey(1): x matches Gx
+PASS: pubkey_from_privkey(2) succeeds
+PASS: pubkey_from_privkey(2): prefix is 0x02 (2G_y is even)
+PASS: pubkey_from_privkey(2): x matches 2G_x
+PASS: cross-check: point_mul k*G
+PASS: cross-check: pubkey_from_privkey(k)
+PASS: cross-check: parity byte matches point_mul y
+PASS: cross-check: compressed x matches point_mul x
+PASS: cross-check: point_mul k*G
+PASS: cross-check: pubkey_from_privkey(k)
+PASS: cross-check: parity byte matches point_mul y
+PASS: cross-check: compressed x matches point_mul x
+PASS: cross-check: point_mul k*G
+PASS: cross-check: pubkey_from_privkey(k)
+PASS: cross-check: parity byte matches point_mul y
+PASS: cross-check: compressed x matches point_mul x
+PASS: cross-check: point_mul k*G
+PASS: cross-check: pubkey_from_privkey(k)
+PASS: cross-check: parity byte matches point_mul y
+PASS: cross-check: compressed x matches point_mul x
+PASS: cross-check: point_mul k*G
+PASS: cross-check: pubkey_from_privkey(k)
+PASS: cross-check: parity byte matches point_mul y
+PASS: cross-check: compressed x matches point_mul x
+PASS: zero privkey rejected by pubkey_from_privkey
+PASS: zero scalar rejected by point_mul
+PASS: off-curve point (Gy+1) rejected by point_mul
+PASS: canonical control (x=1, sqrt(8)) accepted by point_mul
+PASS: non-canonical x (p + 1) rejected by point_mul, not reduced
+PASS: NULL scalar rejected
+PASS: NULL privkey rejected
+PASS: NULL output buffer rejected
+PASS: ecdsa: derive pubkey 7*G
+PASS: ecdsa: sign succeeds
+PASS: ecdsa: signature length within DER bounds
+PASS: ecdsa: verify accepts the valid signature
+PASS: ecdsa: RFC 6979 signing is deterministic (identical bytes)
+PASS: ecdsa: Qx == p rejected
+PASS: ecdsa: Qx == p+1 rejected
+PASS: ecdsa: Qx == 2^256-1 rejected
+PASS: ecdsa: Qy == p rejected
+PASS: ecdsa: Qy == 2^256-1 rejected
+PASS: canonical: real Qx (< p) is canonical
+PASS: canonical: real Qy (< p) is canonical
+PASS: canonical: 0 is canonical
+PASS: canonical: p-1 is canonical (upper boundary)
+PASS: canonical: p is NOT canonical (lower rejection boundary)
+PASS: canonical: p+1 is NOT canonical
+PASS: canonical: 2^256-1 is NOT canonical
+PASS: joint: derive boundary Q = 5*G
+PASS: joint: Shamir == ladder on the boundary lattice
+PASS: joint: Shamir == ladder over 2000 random (u1,u2,Q)
+PASS: comb: d*G == ladder for all 256 single-bit scalars
+PASS: comb: d*G == ladder over 2000 random scalars
+PASS: raw r||s equals the DER signature over 512 keys
+PASS: the comparison saw DER signatures of at least two lengths
+PASS: raw signing rejects a NULL output buffer
+PASS: raw signing rejects a NULL digest
+PASS: raw signing rejects a NULL private key
+PASS: raw signing rejects the zero scalar
+PASS: a rejected raw signing zeroizes the output buffer
+PASS: raw signing rejects a NULL digest
+PASS: a NULL-digest rejection zeroizes the output buffer too
+
+===========================================
+All secp256k1 tests passed ✓
+===========================================
+==577== 
+==577== HEAP SUMMARY:
+==577==     in use at exit: 0 bytes in 0 blocks
+==577==   total heap usage: 1 allocs, 1 frees, 4,096 bytes allocated
+==577== 
+==577== All heap blocks were freed -- no leaks are possible
+==577== 
+==577== For lists of detected and suppressed errors, rerun with: -s
+==577== ERROR SUMMARY: 0 errors from 0 contexts (suppressed: 0 from 0)

@@ -1,0 +1,6 @@
+$ grep -n -i "openssl" CMakeLists.txt
+# exit=0 duration=0.004s
+869:    message(STATUS "Native PQC enabled: ML-DSA-65, Kyber-1024, SPHINCS+-256f (zero OpenSSL dependency)")
+967:# OpenSSL: deliberately NOT probed.  Every cryptographic operation is a
+969:# OPENSSL_FOUND, and a find_package() whose result feeds nothing is dead
+971:# downstream that passes -DOPENSSL_ROOT_DIR gets an unused-variable warning

@@ -1,0 +1,11 @@
+$ for c in 242ccd6 3a8a204 f9f4d44 d1fbdf2 6a22aa2 27337e5 2460adb 267c16c 5a99189; do git log --format='%h %ad %s' --date=short -1 $c; done
+# exit=0 duration=0.023s
+242ccd6 2026-08-17 Stop the warning gate matching clang's summary line; fix what it then found
+3a8a204 2026-08-17 Fix .clang-format so the toolchain this project pins can read it
+f9f4d44 2026-08-17 Refuse to re-measure LoC figures around a file that is not staged yet
+d1fbdf2 2026-08-17 Enforce vendor isolation by linkage and runtime, not by comment (INVARIANT-1)
+6a22aa2 2026-08-17 Give the dudect harnesses a statistic that can see a leak
+27337e5 2026-08-17 Widen the frozen warning gate to the shipped configurations, fix what it finds
+2460adb 2026-08-17 Fix the vendor-isolation gate's own platform blind spots
+267c16c 2026-08-17 Revert the percentile-cropping harness change: CI falsified the drop-in design
+5a99189 2026-08-17 Restore upstream dudect percentile cropping with a median verdict over the rung ladder

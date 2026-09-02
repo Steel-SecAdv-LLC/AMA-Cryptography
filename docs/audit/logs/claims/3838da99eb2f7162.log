@@ -1,0 +1,3 @@
+$ grep -cE 'def test_(the_rewritten_artefact_does_not_move_the_measured_table|the_exclusion_is_a_named_list_not_a_pattern)' tests/test_documented_counts_gate.py
+# exit=0 duration=0.004s
+2

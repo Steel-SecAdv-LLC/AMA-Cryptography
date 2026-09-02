@@ -1,0 +1,3 @@
+$ grep -c "_byte_length(data)" ama_cryptography/secure_memory.py
+# exit=0 duration=0.005s
+6

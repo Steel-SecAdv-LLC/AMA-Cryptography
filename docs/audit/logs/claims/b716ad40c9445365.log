@@ -1,0 +1,3 @@
+$ git cat-file -t 3b9889b
+# exit=0 duration=0.005s
+commit

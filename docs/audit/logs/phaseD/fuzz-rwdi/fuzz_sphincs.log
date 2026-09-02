@@ -1,0 +1,38 @@
+Dictionary: 4 entries
+INFO: Running with entropic power schedule (0xFF, 100).
+INFO: Seed: 3869381296
+INFO: Loaded 1 modules   (12706 inline 8-bit counters): 12706 [0x55e72c379ef8, 0x55e72c37d09a), 
+INFO: Loaded 1 PC tables (12706 PCs): 12706 [0x55e72c37d0a0,0x55e72c3aeac0), 
+INFO:       19 files found in /tmp/tmp.ZWjnv3SmFv/corpus/fuzz_sphincs
+INFO: seed corpus: files: 19 min: 2b max: 49937b total: 399325b rss: 33Mb
+#8	pulse  cov: 1119 ft: 1411 corp: 3/22b exec/s: 1 rss: 40Mb
+#16	pulse  cov: 1122 ft: 1953 corp: 6/97Kb exec/s: 2 rss: 41Mb
+#20	INITED cov: 1124 ft: 2025 corp: 10/292Kb exec/s: 2 rss: 42Mb
+#31	NEW    cov: 1124 ft: 2088 corp: 11/292Kb lim: 49937 exec/s: 3 rss: 43Mb L: 13/49937 MS: 1 ChangeBinInt-
+#32	pulse  cov: 1124 ft: 2088 corp: 11/292Kb lim: 49937 exec/s: 3 rss: 44Mb
+#56	NEW    cov: 1124 ft: 2094 corp: 12/341Kb lim: 49937 exec/s: 5 rss: 45Mb L: 49937/49937 MS: 1 ChangeBinInt-
+#62	NEW    cov: 1124 ft: 2096 corp: 13/341Kb lim: 49937 exec/s: 4 rss: 45Mb L: 43/49937 MS: 1 InsertRepeatedBytes-
+#63	NEW    cov: 1124 ft: 2097 corp: 14/341Kb lim: 49937 exec/s: 3 rss: 45Mb L: 20/49937 MS: 1 CopyPart-
+#64	pulse  cov: 1124 ft: 2097 corp: 14/341Kb lim: 49937 exec/s: 3 rss: 45Mb
+#65	NEW    cov: 1124 ft: 2147 corp: 15/389Kb lim: 49937 exec/s: 3 rss: 46Mb L: 49906/49937 MS: 2 InsertRepeatedBytes-InsertRepeatedBytes-
+#66	NEW    cov: 1124 ft: 2217 corp: 16/438Kb lim: 49937 exec/s: 3 rss: 46Mb L: 49857/49937 MS: 1 ChangeBinInt-
+#77	NEW    cov: 1124 ft: 2225 corp: 17/487Kb lim: 49937 exec/s: 4 rss: 46Mb L: 49937/49937 MS: 1 ChangeASCIIInt-
+#82	NEW    cov: 1124 ft: 2226 corp: 18/536Kb lim: 49937 exec/s: 4 rss: 47Mb L: 49925/49937 MS: 5 CMP-InsertRepeatedBytes-InsertRepeatedBytes-ManualDict-CMP- DE: "m\222\302\220\223\177\000\000"-"\000\000\000\000\000\000\000\000"-"\000\000\000\001"-
+#83	NEW    cov: 1124 ft: 2276 corp: 19/536Kb lim: 49937 exec/s: 4 rss: 47Mb L: 9/49937 MS: 1 EraseBytes-
+#84	NEW    cov: 1124 ft: 2294 corp: 20/536Kb lim: 49937 exec/s: 3 rss: 48Mb L: 13/49937 MS: 1 ChangeByte-
+#85	NEW    cov: 1124 ft: 2352 corp: 21/536Kb lim: 49937 exec/s: 3 rss: 48Mb L: 13/49937 MS: 1 ManualDict- DE: "\017"-
+#104	NEW    cov: 1124 ft: 2354 corp: 22/536Kb lim: 49937 exec/s: 2 rss: 49Mb L: 34/49937 MS: 4 ChangeBit-ManualDict-CrossOver-PersAutoDict- DE: "\000\000\000\000\000\000\000\000"-"\000\000\000\001"-
+#106	NEW    cov: 1124 ft: 2361 corp: 23/536Kb lim: 49937 exec/s: 2 rss: 49Mb L: 13/49937 MS: 2 PersAutoDict-ChangeByte- DE: "\000\000\000\001"-
+#108	NEW    cov: 1124 ft: 2369 corp: 24/536Kb lim: 49937 exec/s: 1 rss: 49Mb L: 167/49937 MS: 2 InsertRepeatedBytes-InsertRepeatedBytes-
+#116	NEW    cov: 1124 ft: 2370 corp: 25/536Kb lim: 49937 exec/s: 1 rss: 50Mb L: 10/49937 MS: 3 ChangeByte-ManualDict-ChangeByte- DE: "\000"-
+#116	DONE   cov: 1124 ft: 2370 corp: 25/536Kb lim: 49937 exec/s: 1 rss: 50Mb
+###### Recommended dictionary. ######
+"m\222\302\220\223\177\000\000" # Uses: 0
+"\000\000\000\001" # Uses: 3
+###### End of recommended dictionary. ######
+Done 116 runs in 69 second(s)
+stat::number_of_executed_units: 116
+stat::average_exec_per_sec:     1
+stat::new_units_added:          15
+stat::slowest_unit_time_sec:    0
+stat::peak_rss_mb:              50

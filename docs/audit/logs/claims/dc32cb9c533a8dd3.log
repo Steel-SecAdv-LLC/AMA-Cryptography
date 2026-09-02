@@ -1,0 +1,4 @@
+$ git show 17aae5a^:tests/test_avx_scoping_gate.py | sed -n 23,24p
+# exit=0 duration=0.006s
+import tools.check_avx_scoping as gate
+from tools.check_avx_scoping import inventory, is_kernel_symbol

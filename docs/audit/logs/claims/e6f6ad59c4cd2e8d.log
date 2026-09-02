@@ -1,0 +1,5 @@
+$ git diff --name-only 725f2f1..968d234 -- ama_cryptography/
+# exit=0 duration=0.005s
+ama_cryptography/_integrity_digest.txt
+ama_cryptography/_integrity_signature.py
+ama_cryptography/equations.py

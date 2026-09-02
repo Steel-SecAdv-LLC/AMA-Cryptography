@@ -1,0 +1,21 @@
+==6159== Memcheck, a memory error detector
+==6159== Copyright (C) 2002-2022, and GNU GPL'd, by Julian Seward et al.
+==6159== Using Valgrind-3.22.0 and LibVEX; rerun with -h for copyright info
+==6159== Command: /home/user/AMA-Cryptography/build-valgrind/bin/test_aes_gcm_neon_equiv
+==6159== 
+==================================================
+NEON AES-256-GCM vs generic-C reference equivalence
+==================================================
+
+  SKIP: NEON sources not compiled in (non-AArch64 build,
+        or AMA_ENABLE_NEON=OFF).  Generic C AES-GCM is
+        already covered by test_kat and ACVP.
+==6159== 
+==6159== HEAP SUMMARY:
+==6159==     in use at exit: 0 bytes in 0 blocks
+==6159==   total heap usage: 1 allocs, 1 frees, 4,096 bytes allocated
+==6159== 
+==6159== All heap blocks were freed -- no leaks are possible
+==6159== 
+==6159== For lists of detected and suppressed errors, rerun with: -s
+==6159== ERROR SUMMARY: 0 errors from 0 contexts (suppressed: 0 from 0)

@@ -1,0 +1,5 @@
+$ grep -c '"path": "src/c/internal/ama_once.h"' benchmarks/baseline.json benchmarks/arm-baseline.json; grep -A1 '"path": "src/c/internal/ama_once.h"' benchmarks/baseline.json | grep -c 'gcc -E -P'
+# exit=0 duration=0.008s
+benchmarks/baseline.json:1
+benchmarks/arm-baseline.json:1
+1

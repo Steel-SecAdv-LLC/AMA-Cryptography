@@ -1,0 +1,4 @@
+$ grep -nE 'compiler: \[gcc, clang\]|name: Strict Compiler Warnings \(AArch64 cross' .github/workflows/static-analysis.yml
+# exit=0 duration=0.004s
+237:        compiler: [gcc, clang]
+397:    name: Strict Compiler Warnings (AArch64 cross, NEON + SVE2)

@@ -1,0 +1,3 @@
+$ git show -s --format=%b 267c16c | grep -c "six lanes across three jobs"
+# exit=0 duration=0.005s
+1

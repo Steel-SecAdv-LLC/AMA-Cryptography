@@ -1,0 +1,3 @@
+$ python -c "import sys; sys.path.insert(0,'.'); import nist_vectors.fetch_vectors as f; print(len(f.ACVP_FETCH_LIST), f.ACVP_BASE)"
+# exit=0 duration=0.062s
+10 https://raw.githubusercontent.com/usnistgov/ACVP-Server/v1.1.0.42/gen-val/json-files

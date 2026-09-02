@@ -1,0 +1,5 @@
+$ grep -n 'Ed25519 signed-integrity hook.  Runs on EVERY build.' setup.py; grep -n -A1 'def has_ext_modules' setup.py
+# exit=0 duration=0.009s
+601:        # Ed25519 signed-integrity hook.  Runs on EVERY build.
+554:    def has_ext_modules(self) -> bool:
+555-        return True

@@ -1,0 +1,8 @@
+$ git show --stat --format=%s 6a22aa2 | grep -E 'Give the dudect|dudect_percentile|dudect_crypto|dudect_harness|test_dudect\.c'; grep -n '19 / 48\|48 / 48' tests/c/dudect/dudect_percentile.h
+# exit=0 duration=0.023s
+Give the dudect harnesses a statistic that can see a leak
+ tests/c/dudect/dudect_percentile.h   | 441 +++++++++++++++++++++++++++++++++++
+ tools/constant_time/dudect_crypto.c  | 112 +++++----
+ tools/constant_time/dudect_harness.c | 167 ++++++++-----
+20: *     raw Welch t (as shipped)         19 / 48                    0 / 48
+21: *     cropped (this header)            48 / 48                    0 / 48

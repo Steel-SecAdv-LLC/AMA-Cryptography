@@ -1,0 +1,4 @@
+$ awk '/def get_security_report/,/def _prune_alerts/' ama_cryptography/monitoring.py | grep -c '"dropped_operations"'; grep -n 'get_security_report`.  It is NOT in' ama_cryptography/monitoring.py
+# exit=0 duration=0.007s
+1
+1365:        #: :meth:`AmaCryptographyMonitor.get_security_report`.  It is NOT in

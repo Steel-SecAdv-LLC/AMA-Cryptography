@@ -1,0 +1,1 @@
+OK: 14 workflow(s); every apt call goes through .github/scripts/apt-install.sh.

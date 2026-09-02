@@ -1,0 +1,3 @@
+$ grep -n '^\s*doxygen docs/Doxyfile' .github/workflows/ci.yml
+# exit=0 duration=0.005s
+756:        doxygen docs/Doxyfile

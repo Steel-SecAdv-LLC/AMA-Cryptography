@@ -1,0 +1,4 @@
+$ grep -n "x86-64  → ON\|non-x86 → OFF" CMakeLists.txt
+# exit=0 duration=0.006s
+53:#  - x86-64  → ON  (donna's hand-tuned AVX2 field arithmetic + precomputed
+56:#  - non-x86 → OFF (donna's fast path is x86-64 assembly; on ARM and other

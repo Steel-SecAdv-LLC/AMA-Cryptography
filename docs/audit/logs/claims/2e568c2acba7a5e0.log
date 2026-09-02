@@ -1,0 +1,5 @@
+$ grep -n 'env\["AMA_DISPATCH_NO_AUTOTUNE"\] = "1"' tools/check_ghash_constant_time.py; python tools/check_ghash_constant_time.py --lib build-release/lib/libama_cryptography_test.a --target kyber-decaps | grep -E "wiring: \[AMA Dispatch\] keccak_f1600"
+# exit=0 duration=13.678s
+1717:    env["AMA_DISPATCH_NO_AUTOTUNE"] = "1"
+1837:    env["AMA_DISPATCH_NO_AUTOTUNE"] = "1"
+  wiring: [AMA Dispatch] keccak_f1600 -> SIMD

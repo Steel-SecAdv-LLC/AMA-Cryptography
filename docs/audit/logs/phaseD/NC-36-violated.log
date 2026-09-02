@@ -1,0 +1,10 @@
+Detected 1 baseline_value change(s) in benchmarks/baseline.json:
+  - ama_sha3_256_hash: 327222 -> 163611.0
+
+========================================================================
+FAIL: benchmark baseline JSON changes are missing required justification.
+========================================================================
+
+benchmarks/baseline.json: `ama_sha3_256_hash` moved 327222 -> 163611.0, last written by 9741ddb8, and neither that commit's message nor the PR body is a line-item justification for it -- one single text must name `ama_sha3_256_hash`, cite a measured number, AND identify the runner. Justification scattered across other commits on this branch does not count: the guard used to concatenate every commit message on the branch, which on a long branch made the requirement unfalsifiable.
+
+See benchmarks/check_baseline_justification.py for the full contract and docs/BENCHMARK_HISTORY.md for why this guard exists.

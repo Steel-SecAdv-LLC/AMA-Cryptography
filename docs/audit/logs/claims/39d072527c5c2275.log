@@ -1,0 +1,4 @@
+$ ls src/c/*.c | wc -l && grep -n 'Top-level `src/c/\*\.c` — 29 translation units' README.md
+# exit=0 duration=0.007s
+29
+270:Top-level `src/c/*.c` — 29 translation units:

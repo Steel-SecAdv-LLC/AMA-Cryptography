@@ -1,0 +1,4 @@
+$ grep -n 'all 65,536 int16 inputs land in \[0, %d\], congruent\|nine exact negative multiples of q' tests/c/test_kyber_poly_equiv.c
+# exit=0 duration=0.005s
+214:     * nine exact negative multiples of q from -3329 down to -29961. */
+221:        printf("  [ OK ] all 65,536 int16 inputs land in [0, %d], congruent, "

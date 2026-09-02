@@ -1,0 +1,5 @@
+$ python -c 'print(round((7.868-5.011)/7.868*100))'; grep -n '7.868\|5.011' ama_cryptography/monitoring.py
+# exit=0 duration=0.036s
+36
+1927:        # after 4,000 records each: 7.868 when computed under 0.002 and 5.011
+1928:        # under 0.05, and the 5.011 was served to the 0.002 caller — a bar 36%

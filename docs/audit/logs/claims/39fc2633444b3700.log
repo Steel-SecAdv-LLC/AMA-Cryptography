@@ -1,0 +1,4 @@
+$ grep -n "_LINEARITY_CEILING = \|timings\[1\] / max(timings\[0\], 1e-6)" tests/test_c_secret_zeroization_gate.py
+# exit=0 duration=0.004s
+716:            return timings[1] / max(timings[0], 1e-6)
+744:_LINEARITY_CEILING = 2.8

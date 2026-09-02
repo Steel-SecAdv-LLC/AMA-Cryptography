@@ -1,0 +1,3 @@
+$ grep -cE "ama_sha3_ctx_t|ama_shake256incctx" wiki/C-API-Reference.md
+# exit=1 duration=0.004s
+0

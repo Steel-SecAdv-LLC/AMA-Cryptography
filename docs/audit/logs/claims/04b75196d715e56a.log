@@ -1,0 +1,3 @@
+$ /opt/ama-venv/bin/python -c "exec('import re\nL=open(\"src/c/dispatch/ama_dispatch.c\",encoding=\"utf-8\").read().splitlines();st=[];o=[]\nfor i,l in enumerate(L,1):\n s=l.strip()\n if s.startswith(\"#if\"): st.append(s)\n elif s.startswith(\"#elif\"): st[-1]=\"ELIF:\"+s\n elif s.startswith(\"#else\"): st[-1]=\"ELSE:\"+st[-1]\n elif s.startswith(\"#endif\"): st.pop()\n if re.search(r\"ama_aes256_gcm_(en|de)crypt_neon\\\\b\",l) and not s.startswith((\"*\",\"/*\",\"//\")): o.append((i,any(\"AMA_HAVE_NEON_CRYPTO_EXT_IMPL\" in x and not x.startswith(\"ELSE:\") for x in st)))\nprint(\"REFS\",len(o),\"UNGUARDED\",[i for i,g in o if not g])')"
+# exit=0 duration=0.036s
+REFS 4 UNGUARDED []

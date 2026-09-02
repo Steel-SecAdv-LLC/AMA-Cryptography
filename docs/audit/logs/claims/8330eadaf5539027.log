@@ -1,0 +1,7 @@
+$ python -c "q=3329;v=((1<<26)+q//2)//q
+w=lambda x:((x+32768)&0xFFFF)-32768
+old=lambda a:w(a-w(((v*a)>>26)*q))
+new=lambda a:w(a-((v*a)>>26)*q)
+print('inputs 65536 mismatches',sum(old(a)!=new(a) for a in range(-32768,32768)))"
+# exit=0 duration=0.056s
+inputs 65536 mismatches 0

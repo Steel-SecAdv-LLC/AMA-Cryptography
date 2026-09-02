@@ -1,0 +1,5 @@
+X25519 fe51 vs fe64 byte-equivalence test
+  vectors:  1024
+  rng seed: 0x0000a17ebabe2026 (deterministic)
+
+PASS: 1024 / 1024 vectors byte-identical across fe51 and fe64.

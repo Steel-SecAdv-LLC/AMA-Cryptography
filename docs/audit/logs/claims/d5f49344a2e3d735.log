@@ -1,0 +1,4 @@
+$ grep -n "benchmark_c_raw --json" tools/generate_visuals.py
+# exit=0 duration=0.004s
+104:# Raw C medians (microseconds) from `build/bin/benchmark_c_raw --json`.
+109:# and rerunning `LD_LIBRARY_PATH=build/lib build/bin/benchmark_c_raw --json`.

@@ -1,0 +1,5 @@
+$ grep -nE "^def test_(an_edited_vector_fails|a_deleted_vector_fails|an_unpinned_new_vector_fails)" tests/test_vector_provenance_gate.py
+# exit=0 duration=0.005s
+152:def test_an_edited_vector_fails(
+178:def test_an_unpinned_new_vector_fails(
+251:def test_a_deleted_vector_fails(

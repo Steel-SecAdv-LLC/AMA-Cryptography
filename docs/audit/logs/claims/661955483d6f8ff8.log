@@ -1,0 +1,4 @@
+$ grep -n "confounds the class with the ciphertext's ADDRESS" tools/check_ghash_constant_time.py; grep -n "def test_a_cache_miss_delta_fails_with_the_instruction_count_unchanged" tests/test_ghash_constant_time_gate.py
+# exit=0 duration=0.006s
+1181: * and `ct_bad` for the other confounds the class with the ciphertext's ADDRESS:
+297:    def test_a_cache_miss_delta_fails_with_the_instruction_count_unchanged(

@@ -1,0 +1,4 @@
+$ /opt/ama-venv/bin/python -c "from tools.check_verification_claim_honesty import unqualified_formal_claims as u;print('MIXED',u('This is not a claim of formal verification; the AES core is formally verified.'));print('DENIAL',u('The AES core has not been formally verified.'))"
+# exit=0 duration=0.062s
+MIXED ['formally verified']
+DENIAL []

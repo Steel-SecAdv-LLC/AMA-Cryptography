@@ -1,0 +1,8 @@
+jose_cose.json: 4 records, source=RFC 8037, January 2017; RFC 8152, July 2017
+lamps_ml_kem.json: 16 records, source=draft-ietf-lamps-kyber-certificates-11, 22 July 2025
+rfc8410_okp.json: 3 records, source=RFC 8410, August 2018
+rfc8554_hss_lms.json: 6 records, source=RFC 8554, April 2019
+rfc9500_ec.json: 3 records, source=RFC 9500, December 2023
+rfc9881_ml_dsa.json: 15 records, source=RFC 9881, October 2025
+  PROBLEM: rfc8554_hss_lms.json: record 0 (Appendix F, Test Case 1): declares 162 bytes but carries 161
+FAIL: 1 problem(s)

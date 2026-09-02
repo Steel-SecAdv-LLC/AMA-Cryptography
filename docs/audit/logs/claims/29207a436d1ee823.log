@@ -1,0 +1,4 @@
+$ grep -rniE 'license-compliance|license_compliance|pip-licenses|licensecheck' .github/workflows tools/ | wc -l; grep -n 'license-compliance check in this repository' ENHANCED_FEATURES.md | cut -c1-60
+# exit=0 duration=0.020s
+0
+592:license-compliance check in this repository — the only
