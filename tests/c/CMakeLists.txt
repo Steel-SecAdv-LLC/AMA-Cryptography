@@ -24,9 +24,14 @@ set_tests_properties(test_secure_memory_dontdump PROPERTIES SKIP_RETURN_CODE 77)
 # Item-8 post-free scrub (2026-08 v5 audit): heap inspection via
 # /proc/self/mem proving ama_secure_free() leaves no copy of a planted
 # 32-byte sentinel key anywhere in anonymous rw memory.  Its negative mode
-# (plain free) is exercised by the audit harness, not by CTest.
+# (plain free, no scrub) PASSES only when the sentinel IS still found: it is
+# registered as a CTest case of its own so every lane proves the inspector
+# can see an unscrubbed secret before the clean run's "not found" counts.
 add_ama_test(test_secure_free_scrub test_secure_free_scrub.c)
 set_tests_properties(test_secure_free_scrub PROPERTIES SKIP_RETURN_CODE 77)
+add_test(NAME test_secure_free_scrub_negative
+         COMMAND test_secure_free_scrub negative)
+set_tests_properties(test_secure_free_scrub_negative PROPERTIES SKIP_RETURN_CODE 77)
 add_ama_test(test_aes_gcm_scalar_kat test_aes_gcm_scalar_kat.c)
 # Standalone SHA-512 (FIPS 180-4) byte-exact KAT over the exported
 # ama_ed25519_sha512 one-shot (the shipped FIPS 180-4 SHA-512 core shared by

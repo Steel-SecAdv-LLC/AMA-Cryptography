@@ -1,0 +1,7 @@
+pre-release sentinel hits: 2 (resident bytes scanned: 2428928)
+post-plain-free sentinel hits: 2 (resident bytes scanned: 3395584)
+PASS(negative): unscrubbed secret remains visible on the heap — inspector proven able to detect a scrub failure
+
+real	0m45.252s
+user	0m22.629s
+sys	0m22.493s

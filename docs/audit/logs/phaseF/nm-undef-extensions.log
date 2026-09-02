@@ -1,0 +1,40 @@
+== ama_cryptography/dilithium_binding.cpython-311-x86_64-linux-gnu.so
+ama_dilithium_keypair
+ama_dilithium_sign
+ama_dilithium_verify
+ama_secure_memzero
+strrchr@GLIBC_2.2.5
+== ama_cryptography/ed25519_binding.cpython-311-x86_64-linux-gnu.so
+ama_ed25519_batch_verify
+ama_ed25519_keypair
+ama_ed25519_sign
+ama_ed25519_verify
+ama_secure_memzero
+strrchr@GLIBC_2.2.5
+== ama_cryptography/hkdf_binding.cpython-311-x86_64-linux-gnu.so
+ama_hkdf
+ama_secure_memzero
+strrchr@GLIBC_2.2.5
+== ama_cryptography/hmac_binding.cpython-311-x86_64-linux-gnu.so
+ama_hmac_sha3_256
+strrchr@GLIBC_2.2.5
+== ama_cryptography/libama_cryptography.so
+fclose@GLIBC_2.2.5
+fdopen@GLIBC_2.2.5
+fgets@GLIBC_2.2.5
+fstat@GLIBC_2.33
+getenv@GLIBC_2.2.5
+getpid@GLIBC_2.2.5
+renameat@GLIBC_2.4
+strchr@GLIBC_2.2.5
+strrchr@GLIBC_2.2.5
+strtol@GLIBC_2.2.5
+strtoll@GLIBC_2.2.5
+unlinkat@GLIBC_2.4
+== ama_cryptography/math_engine.cpython-311-x86_64-linux-gnu.so
+pow
+sqrt
+strrchr@GLIBC_2.2.5
+== ama_cryptography/sha3_binding.cpython-311-x86_64-linux-gnu.so
+ama_sha3_256
+strrchr@GLIBC_2.2.5
