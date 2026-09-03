@@ -1,0 +1,18 @@
+In file included from /home/user/AMA-Cryptography/src/c/ama_ed25519.c:37:
+/home/user/AMA-Cryptography/src/c/fe51.h: In function ‘fe51_mul_121665’:
+/home/user/AMA-Cryptography/src/c/fe51.h:188:22: warning: ISO C does not support ‘__int128’ types [-Wpedantic]
+  188 |     typedef unsigned __int128 uint128_t;
+      |                      ^~~~~~~~
+/home/user/AMA-Cryptography/src/c/fe51.h: In function ‘fe51_mul’:
+/home/user/AMA-Cryptography/src/c/fe51.h:258:22: warning: ISO C does not support ‘__int128’ types [-Wpedantic]
+  258 |     typedef unsigned __int128 uint128_t;
+      |                      ^~~~~~~~
+/home/user/AMA-Cryptography/src/c/fe51.h: In function ‘fe51_sq’:
+/home/user/AMA-Cryptography/src/c/fe51.h:311:22: warning: ISO C does not support ‘__int128’ types [-Wpedantic]
+  311 |     typedef unsigned __int128 uint128_t;
+      |                      ^~~~~~~~
+Compared 5195 Ed25519 verification case(s) across both backends.
+  donna: build-donna/lib/libama_cryptography.so
+  fe51 : build-fe51/lib/libama_cryptography.so
+
+ED25519 BACKEND DIFFERENTIAL PASSED — both backends agree on every case.

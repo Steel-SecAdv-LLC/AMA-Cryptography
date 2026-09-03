@@ -528,6 +528,44 @@ CONTROLS: list[Control] = [
         "python tools/check_dudect_class_staging.py",
         "tests/test_dudect_staging_gate.py",
     ),
+    Control(
+        "NC-48",
+        "tools/check_fuzz_input_reachability.py",
+        "the fuzzing workflow hard-codes -max_len=4096 instead of deriving it from the harnesses",
+        "python3 - <<'EOF'\nfrom pathlib import Path\np=Path('.github/workflows/fuzzing.yml'); t=p.read_text()\nold='-max_len=\"$MAX_LEN\"'\nassert old in t; p.write_text(t.replace(old,'-max_len=4096',1))\nEOF",
+        "git checkout -- .github/workflows/fuzzing.yml",
+        "python tools/check_fuzz_input_reachability.py",
+        "python tools/check_fuzz_input_reachability.py",
+        "tests/test_fuzz_input_reachability_gate.py",
+    ),
+    Control(
+        "NC-49",
+        "tools/check_ed25519_backend_parity.py (INVARIANT-26 support)",
+        "the shipped donna batch defect mirrored onto fe51: at count >= 4 a non-canonical R is reported VALID by batch verify while single verify rejects it",
+        "python3 - <<'EOF'\nfrom pathlib import Path\np=Path('src/c/ama_ed25519.c'); t=p.read_text()\nold='        results[i] = (rc == AMA_SUCCESS) ? 1 : 0;\\n        if (!results[i]) {'\nnew=('        results[i] = (rc == AMA_SUCCESS) ? 1 : 0;\\n'\n     '        if (count >= 4 && !ama_ed25519_signature_r_is_canonical(entries[i].signature)) {\\n'\n     '            results[i] = 1;\\n'\n     '        }\\n'\n     '        if (!results[i]) {')\nassert old in t; p.write_text(t.replace(old,new,1))\nEOF\n"
+        + 'cmake -S . -B build-donna -DCMAKE_BUILD_TYPE=Release -DAMA_USE_NATIVE_PQC=ON -DAMA_BUILD_TESTS=ON -DAMA_ED25519_ASSEMBLY=ON >/dev/null && cmake --build build-donna -j"$(nproc)" --target ama_cryptography_shared >/dev/null'
+        + " && "
+        + 'cmake -S . -B build-fe51 -DCMAKE_BUILD_TYPE=Release -DAMA_USE_NATIVE_PQC=ON -DAMA_BUILD_TESTS=ON -DAMA_ED25519_ASSEMBLY=OFF >/dev/null && cmake --build build-fe51 -j"$(nproc)" --target ama_cryptography_shared >/dev/null',
+        "git checkout -- src/c/ama_ed25519.c",
+        "python tools/check_ed25519_backend_parity.py --donna build-donna/lib/libama_cryptography.so --fe51 build-fe51/lib/libama_cryptography.so",
+        'cmake -S . -B build-fe51 -DCMAKE_BUILD_TYPE=Release -DAMA_USE_NATIVE_PQC=ON -DAMA_BUILD_TESTS=ON -DAMA_ED25519_ASSEMBLY=OFF >/dev/null && cmake --build build-fe51 -j"$(nproc)" --target ama_cryptography_shared >/dev/null'
+        + " && "
+        + "python tools/check_ed25519_backend_parity.py --donna build-donna/lib/libama_cryptography.so --fe51 build-fe51/lib/libama_cryptography.so",
+        "tests/test_ed25519_backend_parity_gate.py",
+    ),
+    Control(
+        "NC-50",
+        "tools/check_ghash_constant_time.py (INVARIANT-6)",
+        "GHASH_STEP's branch-free masked accumulate is replaced by a branch on the secret-derived bit -- the transformation ama_ct_value_barrier_u64 exists to prevent",
+        "python3 - <<'EOF'\nfrom pathlib import Path\np=Path('src/c/ama_aes_gcm.c'); t=p.read_text()\nold=('        const uint64_t _m = ama_ct_value_barrier_u64((uint64_t)0 - (bit_expr)); \\\\\\n'\n     '        o_hi ^= v_hi & _m;                                                    \\\\\\n'\n     '        o_lo ^= v_lo & _m;                                                    \\\\\\n')\nnew='        if ((bit_expr)) { o_hi ^= v_hi; o_lo ^= v_lo; }                       \\\\\\n'\nassert old in t; p.write_text(t.replace(old,new,1))\nEOF\n"
+        + 'cmake -S . -B build-callgrind -DCMAKE_BUILD_TYPE=Release -DAMA_USE_NATIVE_PQC=ON -DAMA_BUILD_TESTS=ON -DAMA_ENABLE_LTO=OFF >/dev/null && cmake --build build-callgrind -j"$(nproc)" --target ama_cryptography_test >/dev/null',
+        "git checkout -- src/c/ama_aes_gcm.c",
+        "python tools/check_ghash_constant_time.py --lib build-callgrind/lib/libama_cryptography_test.a --target ghash",
+        'cmake -S . -B build-callgrind -DCMAKE_BUILD_TYPE=Release -DAMA_USE_NATIVE_PQC=ON -DAMA_BUILD_TESTS=ON -DAMA_ENABLE_LTO=OFF >/dev/null && cmake --build build-callgrind -j"$(nproc)" --target ama_cryptography_test >/dev/null'
+        + " && "
+        + "python tools/check_ghash_constant_time.py --lib build-callgrind/lib/libama_cryptography_test.a --target ghash",
+        "tests/test_ghash_constant_time_gate.py",
+    ),
 ]
 
 

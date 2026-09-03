@@ -113,7 +113,6 @@ from pathlib import Path
 from typing import Optional
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-TARGET = REPO_ROOT / "ama_cryptography" / "pqc_backends.py"
 
 #: The Cython binding modules.  Each is a public submodule
 #: (``ama_cryptography.ed25519_binding`` …) whose ``cy_*`` functions call the C

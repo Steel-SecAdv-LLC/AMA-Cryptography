@@ -25,26 +25,48 @@ jobs:
   test:
     name: Test ${{ matrix.os }} / Python ${{ matrix.python-version }}
     runs-on: ${{ matrix.os }}
-    # Windows gets 30, everything else keeps 20.  Measured on one run
-    # (33664217074, head da493ea), where `Test windows-latest / Python 3.14`
-    # was CANCELLED at 20.1 minutes with no test failure — 30 seconds into the
-    # examples step, having passed the whole suite — and took `CI Gate` red
-    # with it, exactly the "a cancelled dependency is not a success" shape the
-    # apt-retry gate below documents.  Its siblings in the same run:
+    # Windows gets 30, everything else keeps 20.  The budget is set by the
+    # spread between two runs of the SAME matrix entry, not by one overrun.
     #
-    #   windows 3.14  20.1 min (cancelled)   windows 3.13  14.2 min (success)
-    #   windows 3.12  14.3 min               windows 3.11  14.5 min
-    #   windows 3.10  14.6 min               ubuntu worst  14.7 min
+    # `Test windows-latest / Python 3.14`, per-step minutes, from the Actions
+    # API rather than from the summary line:
     #
-    # The overrun is SETUP, not tests: against 3.13 on the same runner image,
-    # 3.14 spends +1.3 min building the native library, +1.2 installing
-    # SoftHSM2, +1.2 installing PyKCS11 (no cp314 wheel, so it compiles from
-    # source) and +0.5 on dependencies — 4.2 minutes of overhead before pytest
-    # starts, which then runs 11.4 min against 3.13's 10.2.  So the cap was
-    # always a minute or two from cancelling a green Windows leg; what changed
-    # is that the suite now PASSES, so the job reaches the steps after it
-    # instead of exiting early on a failure.  A timeout is a resource budget,
-    # not a correctness threshold: nothing here is made easier to pass.
+    #   step                 33664217074   33672116191   3.13 in 33664217074
+    #                        (da493ea)     (990a248)     (same run, sibling)
+    #   build native C lib      1.95          0.58            0.62
+    #   install SoftHSM2        1.42          0.23            0.25
+    #   install PyKCS11         1.30          0.67            0.15
+    #   install deps            2.40          1.60            1.93
+    #   pytest                 11.38         10.92           10.18
+    #   TOTAL                  20.1          15.0            14.2
+    #                          CANCELLED     success         success
+    #
+    # Read the last two columns together.  On 33672116191 the 3.14 leg's C
+    # build and SoftHSM2 install land within two seconds of what 3.13 spent on
+    # them in the other run, so neither is a cp314 cost — both were runner
+    # variance, and an earlier revision of this comment attributed +1.3 and
+    # +1.2 minutes to the interpreter version on the strength of the slow run
+    # alone.  The one real version-specific cost is PyKCS11 at +31 s: there is
+    # no cp314 wheel and the Windows exclusion below sends pip to the 1.5.18
+    # sdist, so it compiles.  Measured in job 100388003250: `Building wheel for
+    # PyKCS11 (pyproject.toml)` ran 19:18:06.79 -> 19:18:28.31 = 21.5 s, and it
+    # rebuilds every run — setup-python's pip cache reported a hit on that same
+    # run, because that cache carries pip's HTTP downloads, not this PEP 517
+    # build product.  21.5 s is not worth adding a third-party cache action to
+    # the supply chain of a library that vendors its dependencies, so the cost
+    # is recorded here and accepted rather than optimised.
+    #
+    # So the same job, one commit apart with only this line changed between
+    # them, took 20.1 and then 15.0 minutes: a 34 % spread driven by the
+    # runner, on a job whose own content varies by well under a minute.  A
+    # 20-minute cap gives a 15.0-minute job 33 % headroom, and the slow run
+    # proves 33 % is not enough — it was cancelled 30 seconds into the examples
+    # step having already PASSED the whole suite, and took `CI Gate` red with
+    # it, exactly the "a cancelled dependency is not a success" shape the
+    # apt-retry gate below documents.  30 minutes is 100 % headroom over the
+    # measured job and 49 % over the worst observed run.  A timeout is a
+    # resource budget, not a correctness threshold: nothing here is made
+    # easier to pass, and a leg that genuinely hangs still fails.
     timeout-minutes: ${{ matrix.os == 'windows-latest' && 30 || 20 }}
     strategy:
       fail-fast: false

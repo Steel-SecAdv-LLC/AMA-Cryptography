@@ -21,17 +21,60 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[3]
-RUNS = REPO / "docs" / "audit" / "logs" / "phaseD" / "mutation"
+#: Where measurements live.  Phase D is the first pass; phase R is the
+#: re-measurement made after the survivors were read one by one (FINDING-0011).
+#: A target measured in both is reported from its LATEST round, with the
+#: earlier logs named in their own column so the improvement stays auditable
+#: and no measurement is quietly replaced.
+RUN_DIRS = (
+    REPO / "docs" / "audit" / "logs" / "phaseD" / "mutation",
+    REPO / "docs" / "audit" / "logs" / "phaseR" / "mutation",
+)
 OUT = REPO / "docs" / "audit" / "PR394_MUTATION.tsv"
+
+
+def _order(path: Path) -> tuple[int, float]:
+    """Sort key: which pass, then which round within it.
+
+    The convention, in both directories: a ``.roundN.tsv`` file is an EARLIER
+    round and the unsuffixed file is that pass's final measurement.  Sorting
+    the unsuffixed file first — as an earlier revision of this function did —
+    reported `check_keygen_pct.py` at its round-1 rate of 47/55 rather than
+    its final 51/55, and `check_dudect_class_staging.py` at 60/95 rather than
+    80/95: a summary that silently replaced two measurements with worse,
+    superseded ones.
+    """
+    phase = 1 if "phaseR" in path.parts else 0
+    match = re.search(r"\.round(\d+)\.tsv$", path.name)
+    return (phase, float(match.group(1)) if match else float("inf"))
+
+
+def _target_of(path: Path) -> str:
+    """The target a measurement file is about, from its own summary line."""
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.startswith("# target="):
+            return line.split("target=", 1)[1].split()[0]
+    return path.stem.split(".")[0]
+
+
+def _latest_per_target() -> dict[str, list[Path]]:
+    """Every measurement of each target, oldest first."""
+    seen: dict[str, list[Path]] = {}
+    for directory in RUN_DIRS:
+        for tsv in sorted(directory.glob("*.tsv")) if directory.is_dir() else []:
+            seen.setdefault(_target_of(tsv), []).append(tsv)
+    for paths in seen.values():
+        paths.sort(key=_order)
+    return seen
 
 
 def main() -> int:
     rows = [
-        "target\ttests\tmutants\tkilled\tsurvived\ttimeout\tkill_rate\tsurvivors_by_operator\tsurviving_logic_mutants\trun_log"
+        "target\ttests\tmutants\tkilled\tsurvived\ttimeout\tkill_rate\tsurvivors_by_operator\tsurviving_logic_mutants\trun_log\tearlier_rounds"
     ]
-    for tsv in sorted(RUNS.glob("*.tsv")):
-        if ".round" in tsv.name:
-            continue
+    for _target, history in sorted(_latest_per_target().items()):
+        tsv = history[-1]
+        earlier = ";".join(str(q.relative_to(REPO)) for q in history[:-1]) or "-"
         lines = tsv.read_text(encoding="utf-8").splitlines()
         summary = next((line for line in lines if line.startswith("# target=")), "")
         m = re.search(
@@ -66,7 +109,8 @@ def main() -> int:
                     rate,
                     ops or "-",
                     ";".join(logic) or "-",
-                    f"docs/audit/logs/phaseD/mutation/{tsv.name}",
+                    str(tsv.relative_to(REPO)),
+                    earlier,
                 ]
             )
         )

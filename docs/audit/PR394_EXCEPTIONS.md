@@ -107,21 +107,50 @@ test), `hash-artefacts` (base64 subjects — the attestation upload shape),
 `provenance`, and `sign` (sigstore bundle).  The last green dry run is run
 33338946996 at `32c3e0de` (2026-08-30).
 
-*Finding.* The workflow's own runbook names the file set whose change
-invalidates a recorded dry run (`setup.py`, `_build_sign.py`,
+*Finding, and its closure.* The workflow's own runbook names the file set
+whose change invalidates a recorded dry run (`setup.py`, `_build_sign.py`,
 `tools/resign_wheel.py`, `tools/wheel_smoke_test.py`,
 `tools/check_release_tag.py`, the workflow itself).  Three commits after
 `32c3e0de` touch that set (`17e5d79`, `ce4930f`, `c0e0135`), so the recorded
-dry run is stale for this head.  The attestation records the dry-run
-dispatch made at the attested head and its result; until that run is green
-the release prerequisite 4 of the PR description is open on the owner's
-side and closed on the workflow's.
+dry run was stale for this head.
+
+**A dry run was dispatched at the attested head and is green.**  Run
+[33716963848](https://github.com/Steel-SecAdv-LLC/AMA-Cryptography/actions/runs/33716963848),
+`workflow_dispatch` with `dry_run: true` on `steel/systempqc-maint1` at
+`990a248`, 2026-09-03 04:57:55Z → 05:11:55Z, conclusion **success**.
+Sixteen jobs: thirteen succeeded and three were skipped, and the three
+skipped are exactly the ones that publish —
+
+| Job | Result |
+|---|---|
+| Preflight (tag + version + SBOM coherence) | success |
+| Verify the integrity trust anchor pair | success |
+| Build sdist (install-from-source smoke test) | success |
+| cibuildwheel ubuntu-latest / ubuntu-24.04-arm / macos-15 / macos-15-intel / windows-latest | success (5) |
+| Hash artefacts for SLSA subject set | success |
+| Sigstore sign (wheels + sdist) | success |
+| SLSA v1 provenance — detect-env / generator / final | success (3) |
+| SLSA provenance — upload-assets | skipped |
+| **Publish to PyPI (Trusted Publishing)** | **skipped** |
+| **Create GitHub Release** | **skipped** |
+
+The two publishing jobs are structurally unreachable from a dispatch, not
+merely flag-gated: each requires `github.event_name == 'push'` **and**
+`startsWith(github.ref, 'refs/tags/v')`, and a `workflow_dispatch` on a
+branch satisfies neither whatever `dry_run` is set to.  That is why the
+dispatch was safe to make without the owner's credentials, and it is what
+the skipped rows above show.  So release prerequisite 4 of the PR
+description — "re-run of the release dry run", open because `setup.py` and
+`tools/wheel_smoke_test.py` changed after run 31988592972 — is **closed at
+this head**.
 
 *Residual risk.* The dry run cannot exercise the `publish-pypi` job's
 credential exchange; a Trusted Publishing misconfiguration would surface
-only at the real release.  *Closure.* A green dry run at the tagged
-commit, then the owner's publish.  *Owner action.* Dispatch (or accept the
-audit's dispatch of) the dry run at the merged head; publish.
+only at the real release.  It also does not re-run automatically: a commit
+after `990a248` touching the runbook's file set makes run 33716963848 stale
+in exactly the way it made 33338946996 stale.  *Closure.* This run, plus a
+re-dispatch at the tagged commit if that file set moves again, then the
+owner's publish.  *Owner action.* Publish under the `release` environment.
 
 ## 4. Canonical-host benchmark tables
 
@@ -131,7 +160,13 @@ audit's dispatch of) the dry run at the merged head; publish.
 `/proc/cpuinfo` during Phase A (ledger A-23, `phaseA/hw-flags.log`) and
 lost them when the VM was moved to a different CPU model later in the
 session (A-25, `phaseA/hw-flags-reprobe.log`; `PR394_CAPABILITIES.md`
-"Hardware present and absent").  GitHub's hosted x86-64 runners are
+"Hardware present and absent").  A third probe on the resumed session
+(ledger R-01, `phaseR/hw-flags-reprobe-3.log`, 2026-09-03 04:58Z) reports
+the same absence: `avx512f`, `avx512vl`, `avx512dq`, `avx512bw`, `aes` and
+`pclmulqdq` present; `vaes`, `vpclmulqdq`, `gfni`, `sha_ni` and
+`avx512ifma` absent.  Three observations, one with the silicon and two
+without: the pool can place the VM on it, and nothing in this session's
+control decides that it does.  GitHub's hosted x86-64 runners are
 Cascade-Lake class (the CI benchmark job records `avx512f` but no `vaes`),
 and the repository has no larger-runner or self-hosted configuration.  So
 the silicon is reachable in the cloud (this session sat on it) but not by

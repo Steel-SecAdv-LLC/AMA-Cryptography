@@ -61,9 +61,79 @@ Wycheproof, 1,215 ACVP) the re-measured number is the one used.
    the dry-run artefacts, which this audit could not download.
 2. A graded dudect injection series to put a number on the harness's
    detection floor (§1 row 4).
-3. The 176 surviving workflow-gate mutants read one by one; the `continue ->
-   break` class (27) is where a second offender in one file would go
-   unreported.
+3. ~~The 176 surviving workflow-gate mutants read one by one; the `continue
+   -> break` class (27) is where a second offender in one file would go
+   unreported.~~ **Done in the resumed session — see §6.** It was the right
+   thing to look at: reading them found a gate whose central predicate can be
+   inverted with nothing failing (FINDING-0011).
 4. Windows PKCS#11 (§10 row 5) — the lane this audit argued for and did not
    build.
 5. The 125 un-extracted claim chunks.
+6. Per-file coverage instrumentation to replace the coverage ledger's derived
+   execution evidence (§2 last row, and §6 below).
+
+## 6. The resumed session, and what reading the survivors cost this audit
+
+The repository owner asked, of this audit's own output, what is incomplete,
+mediocre or misleading — and whether it had worked for green check marks
+rather than for the engineering the marks stand for.  Four findings came out
+of taking that seriously, and three of them are about this audit rather than
+about the branch.
+
+| What the audit published | What it was | Where |
+|---|---|---|
+| "1,815 executed reproductions — confirmed 1,364" | 1,279 of the 1,815 commands read bytes at rest; 122 never ran; 638 behavioural claims were confirmed by finding a string. Re-typed: 500 confirmed, 864 text-only | FINDING-0009 |
+| "46 controls; could not be made to fail: 0" | true of the 46, silent about three gates that had no control — including a constant-time gate | FINDING-0010 |
+| "kill rate 60.9 % / 62.7 %" reported as a metric | a gate that cannot fail, measured and tabulated but not acted on: inverting `_is_native_lib_ref` leaves the FIPS 140-3 §4.9.2 gate green on the real tree | FINDING-0011 |
+| "+1.3 min building the native library, +1.2 SoftHSM2 … 4.2 minutes of overhead" | per-step data from the green run: 0.58 and 0.23 minutes, within two seconds of the 3.13 sibling. Two of the three attributions were runner variance | FINDING-0012 |
+
+Two smaller things worth naming, because both are the same shape as the
+findings above and neither is a finding:
+
+* **The first repair reproduced the flaw it was repairing.** Round one of the
+  workflow-gate tests parametrised over the gate's own data tables
+  (`@pytest.mark.parametrize("label", sorted(SUPPORTED_LABELS))`), which
+  tests a table against itself: delete an entry and the parametrisation
+  generates one case fewer, every case still passes, and the gate now rejects
+  a runner label the repository uses. Found by the round-one mutation
+  re-measurement, which is the only reason it is not still there. The tables
+  are now pinned to literals *and* exercised entry by entry.
+* **The classifier that produced the corrected claim numbers had two
+  over-crediting bugs**, both found by sampling its output rather than by
+  trusting it: a program named inside a `grep` pattern counted as an
+  invocation of that program, and a `python -c` that only opened a file and
+  regexed it counted as an execution. Both inflated `executed` — the bucket
+  whose inflation flatters the result. `tests/test_claims_classifier.py`
+  pins both.
+
+### The mutants that are still alive, and why each one is
+
+Mutation testing reports a survivor for two different reasons: a gap in the
+tests, and a mutant that cannot change behaviour.  Reporting a kill rate
+without separating them overstates the gap.  Every survivor left in the two
+re-measured gates was read; all of them are the second kind.
+
+| File | Line | Mutation | Why nothing can detect it |
+|---|---|---|---|
+| `check_workflow_commands.py` | 515 | `location.rsplit(".", 1)[-1]` → maxsplit 2 | `[-1]` is the same element for any maxsplit ≥ 1 |
+| `check_workflow_commands.py` | 871 | `if not isinstance(step, dict): continue` → `break` | unreachable: `_iter_steps` yields only mappings, so the branch never runs. Dead defensive code |
+| `check_workflow_commands.py` | 967 | `"${{" in node` → `"" in node` | the regex it guards, `\$\{\{(?P<body>[^}]*)\}\}`, requires `${{` itself; the guard is an optimisation, not a filter |
+| `check_workflow_commands.py` | 990 | `" " * len(m.group(0))` → `""` | `_ARITHMETIC_OPERATOR_RE` needs operand characters on both sides, and blanking only ever substitutes non-operand characters for non-operand characters. The comment claiming the substitution preserves "the reported text" was wrong — the reported text is `body` — and has been corrected to the real reason (the operator's offset still indexes `body`) |
+| `check_workflow_commands.py` | 1116 | `tokens[0].split("=", 1)[0]` → maxsplit 2 | `[0]` is the same element for any maxsplit ≥ 1 |
+| `check_workflow_commands.py` | 1126 | `rsplit("/", 1)[-1]` → maxsplit 2 | same as line 515 |
+| `check_workflow_commands.py` | 1118 | `break` → `continue` | not a survivor: the mutant loops forever and the driver's timeout catches it, which is a detection, reported in its own column |
+| `check_error_state_gating.py` | 670 | `line.split("#", 1)[0]` → maxsplit 2 | `[0]` is the same element for any maxsplit ≥ 1 |
+
+Two of these are worth acting on later and neither is a test gap: line 871 is
+dead code that should be deleted, and lines 515 / 1116 / 1126 / 670 are a
+recurring idiom (`split(sep, 1)` where the index makes the bound irrelevant)
+that reads as a constraint and is not one.
+
+*Answering the question directly:* yes, the volume of the original pass was
+weighted toward evidence that is cheap to produce and reads as thorough.
+Five findings in it changed how the code behaves (0001–0005, 0008); the rest
+of its bulk was ledger. What the resumed session added is smaller in volume
+and larger in consequence: 4 findings, 3 negative controls where there were
+none, 21 → 103 and 99 → 350 test cases on the two weakest gates, a 60.9 % →
+99.6 % measured kill rate on the one that enforces FIPS 140-3 §4.9.2, and a
+release dry run that closes one of the five release prerequisites.

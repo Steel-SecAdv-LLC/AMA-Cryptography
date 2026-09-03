@@ -41,6 +41,67 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > at the release head and recorded, in `docs/audit/PR394_CLAIMS.yaml`, the
 > 139 whose figure no longer holds (FINDING-0007 there).
 
+### Maintenance pass, seventeenth (2026-09-03) — the audit audited: a headline that overstated its evidence, three gates with no control, and a FIPS gate that passed with its predicate inverted
+
+The repository owner asked what in the sixteenth pass was incomplete, mediocre
+or misleading, and whether it had worked for green check marks rather than for
+the engineering they stand for.  Four findings came out of taking that
+seriously and three of them are about that audit rather than about the branch.
+Records are in `docs/audit/`; the withdrawal of the previous signed statement
+is `PR394_ATTESTATION.md` §5a.
+
+- **The claims ledger reported 1,364 confirmed reproductions when 864 of them
+  were a `grep`.**  Classified by what each reproduction actually did, 1,279
+  of the 1,815 commands read bytes at rest, 122 were never run, and 638 claims
+  typed `behavioural` were confirmed by finding a string in a file
+  (FINDING-0009).  Every claim now carries the `method` by which it was
+  observed and a `strength`; a behavioural or numeric claim confirmed by text
+  inspection alone is re-typed `text-only`, while provenance and negative
+  claims keep `confirmed` under text inspection because reading the bytes is
+  the claim.  The ratio is now 500 confirmed : 864 text-only : 139 refuted :
+  312 unverifiable, and `docs/audit/classify_claims.py` regenerates it.
+- **Three gates had no negative control, one of them a constant-time gate**,
+  while the tally line read "could not be made to fail: 0" against a
+  denominator the audit had chosen for itself (FINDING-0010).  All three now
+  have one: `check_ghash_constant_time.py` detects a 1,104-instruction
+  key-dependent spread when `GHASH_STEP`'s masked accumulate is replaced by a
+  branch on the secret-derived bit; `check_ed25519_backend_parity.py` reports
+  both the divergence and the batch/single inconsistency when the shipped
+  donna batch defect is mirrored onto fe51; `check_fuzz_input_reachability.py`
+  rejects a hard-coded `-max_len`.  Every gate in `tools/check_*.py` now has a
+  control that was made to fail and to pass clean.
+- **`tools/check_error_state_gating.py` (INVARIANT-39 / FIPS 140-3 §4.9.2)
+  passed with its native-handle predicate inverted.**  Reading the mutation
+  survivors one by one instead of binning them by operator found that
+  `_is_native_lib_ref`'s `==` can be flipped to `!=` with all 21 of the gate's
+  tests passing and the gate itself exiting 0 on the real tree — a gate that
+  cannot fail, measured in the previous pass and reported as a metric rather
+  than acted on as a defect (FINDING-0011).  Its test file went from 21 cases
+  to 103 and the workflow gate's from 99 to 350, pinning both gates' contracts
+  including every exit-code path of `main()`.  Measured kill rates: 60.9 % →
+  99.6 % (error-state, 227/228) and 62.7 % → 98.7 % (workflow, 466/473) over
+  four rounds, with every residual survivor read and recorded as an
+  equivalent mutant.  A dead `TARGET` constant
+  no reader used was removed from the error-state gate.
+- **The Windows timeout comment recorded a measurement that the green run
+  contradicts.**  It attributed 4.2 minutes of setup to CPython 3.14; per-step
+  data from the Actions API shows the 3.14 leg's C build and SoftHSM2 install
+  landing within two seconds of the 3.13 sibling's, so two of the three
+  attributions were runner variance (FINDING-0012).  The one real
+  version-specific cost is PyKCS11's 21.5-second cp314 wheel build, which
+  rebuilds every run because `setup-python`'s pip cache carries downloads and
+  not this PEP 517 build product.  The comment now carries both runs' per-step
+  table; the 30-minute cap is unchanged and is re-justified on the measured
+  34 % run-to-run spread rather than on one overrun.
+
+Also in this pass: the release dry run was dispatched at the branch head and
+is green (run 33716963848 — thirteen jobs succeeded, and the three that
+publish were correctly skipped, since both require a `v*` tag push and neither
+can be reached from a `workflow_dispatch`).  That closes release prerequisite
+4 of the pull request description.  A third CPU probe recorded that this
+session's host again lacks VAES and VPCLMULQDQ, which is the evidence behind
+the §10 row 4 adjudication.
+
 ### Maintenance pass, sixteenth (2026-09-02) — readiness falsification of the branch head: two sanitizer lanes that could not finish, three gates that could not fail, one detector measured against a baseline
 
 An operator-mandated attempt to break the proposition "if v5.0.0 were tagged

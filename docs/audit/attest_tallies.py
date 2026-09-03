@@ -43,13 +43,29 @@ def claims() -> str:
     data = yaml.safe_load(path.read_text(encoding="utf-8"))
     entries = data.get("claims", data) if isinstance(data, dict) else data
     by = collections.Counter(str(e.get("verdict", "?")) for e in entries)
+    method = collections.Counter(str(e.get("method", "unclassified")) for e in entries)
     refuted = [e for e in entries if e.get("verdict") == "refuted"]
     mapped = sum(1 for e in refuted if e.get("finding") or e.get("action"))
+    retyped = sum(1 for e in entries if e.get("verdict_before_retyping"))
+    ran = method.get("executed", 0) + method.get("artefact-probe", 0)
+    # The count reported first is the one a reader acts on, so it is the count
+    # of claims whose SUBJECT was observed — not the count of reproductions
+    # that exited zero.  `text-only` is the honest name for the rest: the
+    # quoted text is where the document says it is, and nothing more was seen.
     return (
-        f"- claims: {len(entries)} executed reproductions — confirmed {by.get('confirmed', 0)}, "
-        f"refuted {by.get('refuted', 0)}, unverifiable {by.get('unverifiable', 0)}"
-        f" (ratio {by.get('confirmed', 0)}:{by.get('refuted', 0)}:{by.get('unverifiable', 0)}); "
-        f"refuted claims carrying a finding or disposition: {mapped}/{len(refuted)}\n"
+        f"- claims: {len(entries)} reproductions, of which {ran} ran the subject "
+        f"({method.get('executed', 0)} executed it, "
+        f"{method.get('artefact-probe', 0)} probed the built object), "
+        f"{method.get('text-inspection', 0)} read text at rest and "
+        f"{method.get('not-executed', 0)} did not run here.\n"
+        f"- claim verdicts: confirmed {by.get('confirmed', 0)}, "
+        f"text-only {by.get('text-only', 0)}, refuted {by.get('refuted', 0)}, "
+        f"unverifiable {by.get('unverifiable', 0)}"
+        f" (ratio {by.get('confirmed', 0)}:{by.get('text-only', 0)}:"
+        f"{by.get('refuted', 0)}:{by.get('unverifiable', 0)}); "
+        f"refuted claims carrying a finding or disposition: {mapped}/{len(refuted)}; "
+        f"re-typed by docs/audit/classify_claims.py from an earlier, looser "
+        f"reading of `confirmed`: {retyped}\n"
     )
 
 

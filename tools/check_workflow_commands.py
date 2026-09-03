@@ -985,8 +985,8 @@ def check_expression_syntax(path: Path, document: Any, report: Report) -> None:
         # Blank single-quoted string literals first.  GitHub expressions
         # quote with `'` only, and their CONTENTS are data: `'refs/heads/main'`
         # contains a `/` between two word characters and would otherwise read
-        # as a division.  Replaced with spaces rather than removed so the
-        # reported text keeps its shape.
+        # as a division.  Spaces rather than deletion so the operator's offset
+        # still indexes `body`; detection is the same either way (measured).
         scannable = _EXPRESSION_LITERAL_RE.sub(lambda m: " " * len(m.group(0)), body)
         operator = _ARITHMETIC_OPERATOR_RE.search(scannable)
         if operator is not None:

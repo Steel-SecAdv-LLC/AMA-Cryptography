@@ -152,3 +152,80 @@
   regression_risk: "Optimised code gives coarser line attribution inside an ASan report than -O0, though the frame pointer (and therefore the stack) is unchanged. Nothing else differs: same sanitizers, same asserts, same corpora, same -max_len. If a future crash report is hard to read, the remedy is -O1, not -O0."
   rubric_note: "MINOR: no security property was compromised and the fuzz lanes were green; what was lost is coverage per unit of CI time, on the four targets that most need it (sphincs at 20 executions per run was fuzzing its seed corpus and nothing else). It is a finding because the branch's stated reason for the choice is checkable and false."
   status: closed
+
+- id: FINDING-0009
+  severity: MAJOR
+  title: "The claims ledger reported 1,364 confirmed reproductions when 864 of them were a grep: 70% of the ledger never ran its subject, and 638 claims typed `behavioural` were confirmed by finding a string"
+  discovered_by: "auditor, re-reading the ledger's own reproduction column after the repository owner asked what in this audit is misleading"
+  evidence_before:
+    - "docs/audit/PR394_CLAIMS.yaml at 990a248: 1,815 claims, verdicts 1364 confirmed : 139 refuted : 312 unverifiable, published in PR394_ATTESTATION.md as '1815 executed reproductions'"
+    - "classification of the reproduction column at that head: 1,279 of 1,815 commands are grep/sed/awk/git/ls (text at rest), 122 are `historical:<sha>` and were never run, 53 are cross-references to another table in this audit, and 355 execute anything at all"
+    - "cross-tabulated by claim kind: 677 of the 923 claims typed `behavioural` had a text-inspection reproduction, of which 638 were marked confirmed"
+  failing_command: "python docs/audit/classify_claims.py --report   (against the ledger as committed at 990a248)"
+  failing_exit_code: 0
+  parent_sha: "990a248"
+  fix_sha: "(this audit commit) docs/audit/classify_claims.py: every claim carries `method` (executed / artefact-probe / text-inspection / not-executed) and `strength` (reproduced / text-present / not-established); a behavioural or numeric claim confirmed by text inspection alone is re-typed `text-only`; provenance and negative claims keep `confirmed` under text inspection because reading the bytes IS the claim; `refuted` is never re-typed"
+  passing_command: "python docs/audit/classify_claims.py --report && python docs/audit/attest_tallies.py"
+  passing_exit_code: 0
+  permanent_test: "tests/test_claims_classifier.py — 35 cases: what counts as running the subject, the two over-crediting bugs found by sampling (a program named inside a grep pattern; a `python -c` that only reads files), the kind-aware re-typing rule in both directions, and a ledger-wide invariant that no behavioural or numeric claim is confirmed by text alone"
+  regression_risk: "The classifier reads shell text and can only be as good as its rule; two errors were found by sampling and each is now a test. It errs toward `text-inspection`, the conservative direction: a mistake there understates the audit rather than flattering it. Claims whose reproduction genuinely runs the subject through an unusual entry point may be under-credited."
+  rubric_note: "MAJOR: no shipped code is affected and no gate was involved, but the audit's own headline figure — the number a reader of the attestation trusts most — overstated its evidence by a factor of 2.7 (500 reproduced against 1,364 claimed). Not BLOCKER because the underlying observations are all retained and each claim's reproduction command was always printed beside its verdict, so the record was checkable; it was the summary that was not."
+  status: closed
+
+- id: FINDING-0010
+  severity: MAJOR
+  title: "Three gates had no negative control, one of them a constant-time gate, while the attestation reported 'could not be made to fail: 0' against a denominator the audit chose for itself"
+  discovered_by: "auditor, comparing tools/check_*.py against the gate column of PR394_NEGATIVE_CONTROLS.tsv"
+  evidence_before:
+    - "40 files match tools/check_*.py at 990a248; PR394_NEGATIVE_CONTROLS.tsv names 46 controls covering 37 of them"
+    - "uncovered: tools/check_ghash_constant_time.py (INVARIANT-6, scalar AES-GCM instruction-count invariance), tools/check_ed25519_backend_parity.py (INVARIANT-26 support, donna vs fe51 differential), tools/check_fuzz_input_reachability.py"
+    - "the mandate's Phase D says 'negative controls for every gate'; the attestation's tally line reads '46 controls; made to fail and pass clean: 46; could not be made to fail or not clean: 0', which is true of the 46 and says nothing about the three"
+  failing_command: "for g in tools/check_*.py; do grep -q $(basename $g) docs/audit/PR394_NEGATIVE_CONTROLS.tsv || echo UNCONTROLLED $g; done"
+  failing_exit_code: 0
+  parent_sha: "990a248"
+  fix_sha: "(this audit commit) docs/audit/negative_controls.py: NC-48, NC-49, NC-50"
+  passing_command: "python docs/audit/negative_controls.py --only NC-48,NC-49,NC-50"
+  passing_exit_code: 0
+  permanent_test: "tests/test_fuzz_input_reachability_gate.py, tests/test_ed25519_backend_parity_gate.py, tests/test_ghash_constant_time_gate.py; controls retained at docs/audit/logs/phaseD/NC-4{8,9}-*.log and NC-50-*.log, ledger rows NC-48-v/-c, NC-49-v/-c, NC-50-v/-c"
+  regression_risk: "NC-49 and NC-50 rebuild a C target before and after the plant, so they need build-fe51/build-donna and build-callgrind and take about 40 s together; they are not part of a pytest run. A gate added later still needs its control added by hand — the coverage check above is one command and is now recorded in the attestation."
+  rubric_note: "MAJOR: each of the three enforces a property the release claims (constant-time scalar GHASH under INVARIANT-6; two Ed25519 backends that cannot disagree; fuzz branches reachable under the lane's own -max_len), and none had ever been shown able to fail. All three do fail on a planted defect — the GHASH gate detects a 1,104-instruction key-dependent spread when GHASH_STEP's masked accumulate is replaced by a branch, and the parity gate reports both the divergence and the batch/single inconsistency when the shipped donna batch defect is mirrored onto fe51. Not BLOCKER: the shipped tree passes all three, so no defect went undetected; what was missing was the evidence that they could detect one."
+  status: closed
+
+- id: FINDING-0011
+  severity: MAJOR
+  title: "tools/check_error_state_gating.py (INVARIANT-39 / FIPS 140-3 4.9.2) passes with its native-handle predicate inverted: 21 of its own tests and the gate's own run on the real tree all report clean"
+  discovered_by: "reading the Phase D mutation survivors one by one instead of by operator class — the reading the §16 self-review listed as work a hostile reviewer would do next and this audit had not done"
+  evidence_before:
+    - "docs/audit/logs/phaseD/mutation/check_error_state_gating.tsv: 90 of 230 mutants survived (kill rate 60.9%)"
+    - "docs/audit/logs/phaseD/mutation/check_workflow_commands.tsv: 176 of 473 survived (62.7%)"
+    - "reproduced by hand: tools/check_error_state_gating.py:266 `return node.id == \"_native_lib\"` -> `!=` leaves `pytest tests/test_error_state_gating_tool.py` at 21 passed AND `python tools/check_error_state_gating.py` at exit 0 on the unmodified tree"
+  failing_command: "sed -i '266s/==/!=/' tools/check_error_state_gating.py && python -m pytest tests/test_error_state_gating_tool.py -q && python tools/check_error_state_gating.py"
+  failing_exit_code: 0
+  parent_sha: "990a248"
+  fix_sha: "(this audit commit) tests/test_error_state_gating_tool.py 21 -> 102 cases (the native-handle predicate, what binds a native symbol, which lines are a call, alias tracking, guard detection, module discovery, the audit's scan, the Cython binding scan, the docstring stripper, and main()'s exit code for each of its seven paths); tests/test_workflow_command_checks.py 99 -> 318 cases; tools/check_error_state_gating.py: the dead TARGET constant removed"
+  passing_command: "python docs/audit/sweeps/mutate.py --target tools/check_error_state_gating.py --tests tests/test_error_state_gating_tool.py --self-run --out docs/audit/logs/phaseR/mutation/check_error_state_gating.tsv"
+  passing_exit_code: 0
+  permanent_test: "tests/test_error_state_gating_tool.py (102 cases) and tests/test_workflow_command_checks.py (318 cases); measured kill rate after: error-state gate 227/228 = 99.6%, workflow gate 466/473 = 98.7% (docs/audit/logs/phaseR/mutation/, with every earlier round retained beside it). The residual survivors were read one by one and are equivalent mutants, tabulated in PR394_SELF_REVIEW.md §6"
+  regression_risk: "The one residual error-state survivor and six of the seven workflow-gate ones are equivalent mutants (`split(sep, 1)[0]` is `split(sep, 2)[0]`, an unreachable defensive branch, a guard whose regex already requires what it guards); the seventh loops forever and is detected by the driver's timeout. Reaching that took four rounds, and round three's hand-check of one survivor was itself wrong — it replaced both `and` operators on the line where the driver replaces one, so it 'verified' a kill the driver then reported as a survivor. The driver's measurement, not the hand-check, is what the numbers above rest on. The round-one workflow-gate tests contained the same self-referential flaw this audit exists to find — parametrising over a table tests the table against itself, so deleting an entry generated one case fewer and every case still passed — and the curated tables are now pinned to literals as well as exercised entry by entry."
+  rubric_note: "MAJOR, and the sharpest finding of the resumed session: a gate whose central predicate can be inverted with nothing failing is a gate that cannot fail, which is the exact defect class the mandate sent this audit to find, sitting in the audit's own measured output with a number beside it. Not BLOCKER because the shipped tree is correctly gated — all 94 public native entry points carry a guard — so no ungated surface ever shipped; the defect is in the detector, not the subject."
+  status: closed
+
+- id: FINDING-0012
+  severity: MINOR
+  title: "The Windows timeout comment attributed 4.2 minutes of setup to CPython 3.14 on the strength of one slow run; per-step data from the green run shows 1.5 minutes, and two of the three attributions were runner variance"
+  discovered_by: "auditor, pulling per-step timings from the Actions API for both runs instead of quoting the totals"
+  evidence_before:
+    - ".github/workflows/ci.yml at d1800bf: '3.14 spends +1.3 min building the native library, +1.2 installing SoftHSM2, +1.2 installing PyKCS11 ... 4.2 minutes of overhead'"
+    - "run 33664217074 (da493ea) job `Test windows-latest / Python 3.14`: C build 1.95 min, SoftHSM2 1.42, PyKCS11 1.30, deps 2.40, pytest 11.38, total 20.1 (cancelled)"
+    - "run 33672116191 (990a248) same matrix entry: C build 0.58, SoftHSM2 0.23, PyKCS11 0.67, deps 1.60, pytest 10.92, total 15.0 (success)"
+    - "3.13 in the SLOW run, for the version comparison the comment claimed to make: C build 0.62, SoftHSM2 0.25, PyKCS11 0.15, deps 1.93, pytest 10.18, total 14.2"
+  failing_command: "mcp:actions_get get_workflow_job 100388003250 and list_workflow_jobs 33664217074, per-step started_at/completed_at"
+  failing_exit_code: 0
+  parent_sha: "d1800bf"
+  fix_sha: "(this audit commit) .github/workflows/ci.yml: the comment replaced by the two-run per-step table, the false attributions withdrawn by name, and the 30-minute cap re-justified on the measured 34% run-to-run spread rather than on one overrun"
+  passing_command: "sed -n '28,70p' .github/workflows/ci.yml"
+  passing_exit_code: 0
+  permanent_test: "None: this is a record, not a behaviour. The table names its two run ids and its job id, so the next reader can re-derive it from the Actions API rather than from a summary line."
+  regression_risk: "None to code. The cap is unchanged at 30 minutes. Restoring 20 was considered and rejected on the same measurement: 20 gives a 15.0-minute job 33% headroom and the slow run proves 33% is not enough."
+  rubric_note: "MINOR: no gate, no security property, and the cap that resulted was the right one. It is a finding because a measurement written into the tree was wrong, and because the direction of the error flattered the fix — attributing a runner's bad day to a property of the code makes a threshold change look like an explanation. The one real version-specific cost, PyKCS11's 21.5 s cp314 wheel build, is now recorded with the log line that measured it, and was judged not worth a third-party cache action in a repository that vendors its dependencies."
+  status: closed
