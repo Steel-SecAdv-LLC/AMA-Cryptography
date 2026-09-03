@@ -12,7 +12,10 @@ on purpose-built input, plus the real tree.
 
 from __future__ import annotations
 
+import functools
 import itertools
+import time
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -744,6 +747,35 @@ _LINEARITY_ATTEMPTS = 3
 _LINEARITY_CEILING = 2.8
 
 
+def _floor_seconds(scan: Callable[[], object], rounds: int = _LINEARITY_ROUNDS) -> float:
+    """The fastest of ``rounds`` runs of ``scan``, in seconds.
+
+    The absolute-time bounds in :class:`TestPatternIsLinear` guard the case the
+    ratio test cannot: a pattern that has lost linearity outright does not land
+    just over a ratio ceiling, it hangs.  A single sample is the wrong estimator
+    for that bound, and measurement says so — on 2026-09-03 the macOS Intel lane
+    read 1.42 s for the 50k member chain and 1.12 s for the 100k ``a[b`` filler
+    against a 1 s ceiling (run 33726754289, job 100557362911), on a commit that
+    changed neither the pattern nor the helper, while the same two scans measure
+    11 ms and 26 ms on a quiet host: a 50-130x stall, not superlinear growth.
+
+    The floor is the right estimator for the same one-sided reason
+    :meth:`TestPatternIsLinear.test_growth_is_linear_not_merely_fast` gives:
+    contention can only ever make a scan look slower, so the minimum over
+    several runs is the estimate of the machine's actual cost.  The ceiling is
+    NOT widened — 1 second stays 1 second — and the discrimination is sharpened
+    rather than loosened, because a genuinely superlinear pattern is slow on
+    every round: the shapes this class was written for took 2 s, 5.5 s and
+    7.7 s per single scan, so their floor over seven rounds is still seconds.
+    """
+    best = float("inf")
+    for _ in range(rounds):
+        start = time.perf_counter()
+        scan()
+        best = min(best, time.perf_counter() - start)
+    return best
+
+
 class TestPatternIsLinear:
     r"""The scanner must not be the thing that hangs CI.
 
@@ -756,16 +788,12 @@ class TestPatternIsLinear:
     """
 
     def test_whitespace_run_does_not_blow_up(self) -> None:
-        import time
-
         # Enters `memset(` then fails: the worst case for a backtracking engine.
         pathological = "memset(" + " " * 200_000 + "x"
-        start = time.perf_counter()
-        gate._MEMSET_RE.search(pathological)
-        elapsed = time.perf_counter() - start
+        elapsed = _floor_seconds(lambda: gate._MEMSET_RE.search(pathological))
         assert elapsed < 1.0, (
-            f"matching 200k spaces took {elapsed:.2f}s — the pattern has "
-            f"regained polynomial backtracking"
+            f"matching 200k spaces took {elapsed:.2f}s at its floor — the "
+            f"pattern has regained polynomial backtracking"
         )
 
     def test_cast_group_whitespace_does_not_blow_up(self) -> None:
@@ -779,18 +807,18 @@ class TestPatternIsLinear:
         this class exists to prevent.  Both whitespace shapes are driven here
         because they backtrack through different quantifiers.
         """
-        import time
-
         for pathological in (
             "memset((void" + " \t" * 100_000 + "Y",
             "memset((a" + " " * 200_000 + "X",
         ):
-            start = time.perf_counter()
-            gate._MEMSET_RE.search(pathological)
-            elapsed = time.perf_counter() - start
+            # functools.partial rather than a defaulted lambda: the default
+            # binds the loop variable correctly but leaves the callable's type
+            # uninferable, and this file is checked under mypy --strict.
+            elapsed = _floor_seconds(functools.partial(gate._MEMSET_RE.search, pathological))
             assert elapsed < 1.0, (
                 f"a failing cast over {len(pathological)} chars took "
-                f"{elapsed:.2f}s — the cast group has regained backtracking"
+                f"{elapsed:.2f}s at its floor — the cast group has regained "
+                f"backtracking"
             )
 
     @pytest.mark.parametrize(
@@ -930,13 +958,9 @@ class TestPatternIsLinear:
             assert gate._MEMSET_RE.search(line), line
 
     def test_member_chain_does_not_blow_up(self) -> None:
-        import time
-
         pathological = "memset(" + "a->" * 50_000 + "!"
-        start = time.perf_counter()
-        gate._MEMSET_RE.search(pathological)
-        elapsed = time.perf_counter() - start
-        assert elapsed < 1.0, f"matching a 50k-link member chain took {elapsed:.2f}s"
+        elapsed = _floor_seconds(lambda: gate._MEMSET_RE.search(pathological))
+        assert elapsed < 1.0, f"matching a 50k-link member chain took {elapsed:.2f}s at its floor"
 
     def test_spacing_variants_still_match(self) -> None:
         """Linearity must not have cost the shapes the gate is for."""
@@ -962,15 +986,11 @@ class TestPatternIsLinear:
         for a ``]``, so 100,000 of them cost 5.5 s.  The helper is module-level
         and takes a plain string; nothing stops a caller handing it that.
         """
-        import time
-
         pathological = filler * 100_000
-        start = time.perf_counter()
-        gate._destination_name(pathological)
-        elapsed = time.perf_counter() - start
+        elapsed = _floor_seconds(lambda: gate._destination_name(pathological))
         assert elapsed < 1.0, (
-            f"extracting from 100k {filler!r} took {elapsed:.2f}s — the helper "
-            f"has regained superlinear behaviour"
+            f"extracting from 100k {filler!r} took {elapsed:.2f}s at its floor "
+            f"— the helper has regained superlinear behaviour"
         )
 
     @pytest.mark.parametrize(

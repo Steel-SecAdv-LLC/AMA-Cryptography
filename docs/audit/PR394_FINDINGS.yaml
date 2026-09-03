@@ -229,3 +229,23 @@
   regression_risk: "None to code. The cap is unchanged at 30 minutes. Restoring 20 was considered and rejected on the same measurement: 20 gives a 15.0-minute job 33% headroom and the slow run proves 33% is not enough."
   rubric_note: "MINOR: no gate, no security property, and the cap that resulted was the right one. It is a finding because a measurement written into the tree was wrong, and because the direction of the error flattered the fix — attributing a runner's bad day to a property of the code makes a threshold change look like an explanation. The one real version-specific cost, PyKCS11's 21.5 s cp314 wheel build, is now recorded with the log line that measured it, and was judged not worth a third-party cache action in a repository that vendors its dependencies."
   status: closed
+
+- id: FINDING-0013
+  severity: MINOR
+  title: "Four absolute-time bounds in the zeroization gate's linearity tests took a single sample, so a contended macOS runner failed them on a commit that changed neither the pattern nor the helper"
+  discovered_by: "CI on this branch: `Python 3.10 on macos-15-intel` failed at head eccf5f9, taking `Build and Test Gate` red with it"
+  evidence_before:
+    - "run 33726754289 job 100557362911 (head eccf5f9): `matching a 50k-link member chain took 1.42s` (assert 1.417 < 1.0) and `extracting from 100k 'a[b' took 1.12s` (assert 1.115 < 1.0), in a job whose suite took 19:56"
+    - "the same two scans measured on a quiet host, fastest of seven: 11.17 ms and 26.41 ms — a 50x to 130x stall, and a 34x margin against the 1 s ceiling"
+    - "the commit changed neither tools/check_c_secret_zeroization.py nor tests/test_c_secret_zeroization_gate.py; `git show --stat eccf5f9` names neither"
+    - "the file already argued the point against itself: TestPatternIsLinear::test_growth_is_linear_not_merely_fast's docstring says 'a wall-clock threshold passes a quadratic pattern on a fast runner and fails a linear one on a loaded shared runner — this file already carries two such thresholds'"
+  failing_command: "python -m pytest tests/test_c_secret_zeroization_gate.py -k does_not_blow_up  (on a contended runner)"
+  failing_exit_code: 1
+  parent_sha: "eccf5f9"
+  fix_sha: "(this commit) tests/test_c_secret_zeroization_gate.py: _floor_seconds() — every absolute-time bound is now the fastest of _LINEARITY_ROUNDS runs, the same one-sided-noise estimator the ratio test in the same class already uses and argues for"
+  passing_command: "python -m pytest tests/test_c_secret_zeroization_gate.py -q"
+  passing_exit_code: 0
+  permanent_test: "tests/test_c_secret_zeroization_gate.py::TestPatternIsLinear (137 cases in the file). Negative control executed: the pre-fix quadratic `_destination_name` (re.sub over unbalanced brackets) planted into tools/check_c_secret_zeroization.py still fails both floor-based cases — `[` and `a[b` — so the discrimination is intact."
+  regression_risk: "Seven scans instead of one costs about 180 ms per bound on a quiet host. The ceiling is unchanged at 1 second: this is not a widened threshold, it is a better estimator of the same quantity. A pattern slow enough to hang is slow on every round — the shapes this class was written for took 2 s, 5.5 s and 7.7 s per single scan, so their floor over seven rounds is still seconds, which the planted control confirms."
+  rubric_note: "MINOR: no shipped code, no security property, and the gate itself was never wrong — the test measuring it was. It is a finding because a red CI lane on a commit that touches neither the code under test nor its test is the shape that teaches people to re-run until green, and because the file had already diagnosed this exact defect in its own docstring and left two of the four instances standing."
+  status: closed

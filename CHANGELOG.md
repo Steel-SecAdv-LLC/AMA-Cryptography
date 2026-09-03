@@ -94,6 +94,18 @@ is `PR394_ATTESTATION.md` §5a.
   table; the 30-minute cap is unchanged and is re-justified on the measured
   34 % run-to-run spread rather than on one overrun.
 
+- **Four absolute-time bounds in the zeroization gate's linearity tests took a
+  single sample.**  A contended macOS Intel runner read 1.42 s and 1.12 s
+  against their 1-second ceiling on a commit that changed neither the pattern
+  nor the helper; the same two scans measure 11 ms and 26 ms on a quiet host
+  (FINDING-0013).  Each bound is now the fastest of seven runs — the same
+  one-sided-noise estimator the ratio test in the same class already used and
+  argued for, and which that class's own docstring had already identified as
+  the fix for "two such thresholds" it left standing.  The ceiling is
+  unchanged: this is a better estimator of the same quantity, not a wider one,
+  and the pre-fix quadratic `_destination_name` planted back in still fails
+  both floor-based cases.
+
 Also in this pass: the release dry run was dispatched at the branch head and
 is green (run 33716963848 — thirteen jobs succeeded, and the three that
 publish were correctly skipped, since both require a `v*` tag push and neither

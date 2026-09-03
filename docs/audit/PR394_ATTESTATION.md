@@ -17,7 +17,7 @@
     - tools/check_error_state_gating.py: 227/228 = 99.6% (1 survived: int-const=1; timeouts 0)
     - tools/check_keygen_pct.py: 51/55 = 92.7% (4 survived: int-const=2,str-const=2; timeouts 0)
     - tools/check_workflow_commands.py: 466/472 = 98.7% (6 survived: int-const=3,loop-jump=1,str-const=2; timeouts 1)
-- findings: 12 — MAJOR closed: 7, MINOR closed: 5
+- findings: 13 — MAJOR closed: 7, MINOR closed: 6
     - FINDING-0001 [MAJOR, closed]: The MSan and TSan lanes cannot complete on the current head: test_secure_free_scrub walks the sanitizer shadow through /proc/self/mem
     - FINDING-0002 [MAJOR, closed]: The scrub inspector's negative control was not a CTest case and, once registered, failed on AArch64: it passed on x86-64 only because glibc happened to carve the scanner's own FILE buffer away from the sentinel
     - FINDING-0003 [MAJOR, closed]: tools/check_keygen_pct.py (INVARIANT-41) blesses a keygen whose family dispatch lost one arm's pairwise test: AmaContext.keypair_generate would release untested ML-DSA, SLH-DSA and hybrid keypairs with the gate green
@@ -30,6 +30,7 @@
     - FINDING-0010 [MAJOR, closed]: Three gates had no negative control, one of them a constant-time gate, while the attestation reported 'could not be made to fail: 0' against a denominator the audit chose for itself
     - FINDING-0011 [MAJOR, closed]: tools/check_error_state_gating.py (INVARIANT-39 / FIPS 140-3 4.9.2) passes with its native-handle predicate inverted: 21 of its own tests and the gate's own run on the real tree all report clean
     - FINDING-0012 [MINOR, closed]: The Windows timeout comment attributed 4.2 minutes of setup to CPython 3.14 on the strength of one slow run; per-step data from the green run shows 1.5 minutes, and two of the three attributions were runner variance
+    - FINDING-0013 [MINOR, closed]: Four absolute-time bounds in the zeroization gate's linearity tests took a single sample, so a contended macOS runner failed them on a commit that changed neither the pattern nor the helper
 - validation rows (latest per id): 89; non-zero exits: 0
 
 <!-- TALLIES:END -->
