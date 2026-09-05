@@ -590,9 +590,7 @@ class TestSuppressionScanPrecision:
     def test_a_forbidden_directory_is_reported_regardless_of_justification(self) -> None:
         from tools.check_suppression_hygiene import check_source
 
-        violations = check_source(
-            "include/x.py", "import os  # nosec B404 -- reason (AB-001)\n"
-        )
+        violations = check_source("include/x.py", "import os  # nosec B404 -- reason (AB-001)\n")
         assert any("forbidden" in v for v in violations)
 
     def test_tools_is_actually_in_the_scanned_set(self) -> None:
