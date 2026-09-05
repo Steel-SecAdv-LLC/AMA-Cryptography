@@ -562,6 +562,30 @@
       {
         "path": "src/c/avx2/ama_argon2_avx2.c",
         "reason": "ama_argon2_g_avx2 gains three ama_secure_memzero calls (R[128] / Z[128] / scratch[16], ~2 KiB of password-derived block staging) at return (v5 audit item 15, INVARIANT-6/12; matches the identical scrub added to the NEON twin and the treatment ama_dilithium_avx2 already carries). Argon2 is NOT among the floored primitives in this baseline — benchmarks + pqc_benchmarks cover SHA3 / HMAC / Ed25519 / secp256k1 / HKDF / package / Dilithium / Kyber / AES-GCM / ChaCha20 / X25519, with no Argon2 row — so no floor measures this function and none is at risk."
+      },
+      {
+        "path": "include/ama_cpuid.h",
+        "reason": "Declaration-only removal: the AEAD backend-selection surface (ama_aead_backend_t, ama_select_aead, ama_aead_backend_name) had no caller anywhere in the tree — not in C, the ctypes layer, tests, fuzz harnesses or docs — and its definitions left src/c/ama_cpuid.c in the same edit. No floored primitive reached that code, so no measured path changed."
+      },
+      {
+        "path": "src/c/ama_sha256.h",
+        "reason": "Declaration-only removal: the ama_sha256_2 prototype, an AMA_API export with no caller in C, Python, tests or fuzz harnesses; its definition left src/c/ama_sha256.c in the same edit. The floored SHA-256 paths (ama_sha256, ama_hmac_sha256_2) are untouched."
+      },
+      {
+        "path": "src/c/vendor/ed25519-donna/test.c",
+        "reason": "Deleted: an upstream ed25519-donna test-driver file that no build input in this tree compiles and nothing #includes except the other three drivers; the shim's include closure (gcc -MM over src/c/ed25519_donna_shim.c) never reaches it, so no instruction in the donna backend changed."
+      },
+      {
+        "path": "src/c/vendor/ed25519-donna/test-internals.c",
+        "reason": "Deleted: an upstream ed25519-donna test-driver file that no build input in this tree compiles and nothing #includes except the other three drivers; the shim's include closure (gcc -MM over src/c/ed25519_donna_shim.c) never reaches it, so no instruction in the donna backend changed."
+      },
+      {
+        "path": "src/c/vendor/ed25519-donna/test-ticks.h",
+        "reason": "Deleted: an upstream ed25519-donna test-driver file that no build input in this tree compiles and nothing #includes except the other three drivers; the shim's include closure (gcc -MM over src/c/ed25519_donna_shim.c) never reaches it, so no instruction in the donna backend changed."
+      },
+      {
+        "path": "src/c/vendor/ed25519-donna/regression.h",
+        "reason": "Deleted: an upstream ed25519-donna test-driver file that no build input in this tree compiles and nothing #includes except the other three drivers; the shim's include closure (gcc -MM over src/c/ed25519_donna_shim.c) never reaches it, so no instruction in the donna backend changed."
       }
     ]
   },

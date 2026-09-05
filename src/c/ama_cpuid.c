@@ -18,7 +18,6 @@
  */
 
 #include "../include/ama_cpuid.h"
-#include <stdio.h>
 
 /* ============================================================================
  * Platform once-primitive abstraction (INVARIANT-15)
@@ -663,50 +662,3 @@ int ama_cpuid_has_arm_aes(void) { return 0; }
 
 #endif
 
-/* ============================================================================
- * AEAD Backend Selection (Runtime Dispatch)
- *
- * Thread safety: ama_select_aead_init() runs exactly once via the platform
- * once-primitive.  All shared state (selected_backend) is written inside the
- * init function and is fully visible to every thread after the once-call
- * returns — guaranteed by the memory ordering semantics of pthread_once /
- * InitOnceExecuteOnce.
- * ============================================================================ */
-
-static AMA_ONCE_FLAG dispatch_once = AMA_ONCE_FLAG_INIT;
-static ama_aead_backend_t selected_backend = AMA_AEAD_CHACHA20_POLY1305;
-
-static void ama_select_aead_init(void) {
-    if ((ama_has_aes_ni() && ama_has_pclmulqdq()) ||
-        (ama_has_arm_aes() && ama_has_arm_pmull())) {
-        selected_backend = AMA_AEAD_HW_AES_GCM;
-    } else {
-        /* No hardware AES — use ChaCha20-Poly1305 (constant-time by design).
-         * Never use software table-based AES-GCM on secret data at runtime. */
-        selected_backend = AMA_AEAD_CHACHA20_POLY1305;
-    }
-
-    /* Log selection once */
-    fprintf(stderr, "[AMA Cryptography] AEAD backend selected: %s (AES-NI=%d, PCLMULQDQ=%d, ARM-AES=%d, ARM-PMULL=%d)\n",
-            ama_aead_backend_name(selected_backend),
-            ama_has_aes_ni(), ama_has_pclmulqdq(),
-            ama_has_arm_aes(), ama_has_arm_pmull());
-}
-
-ama_aead_backend_t ama_select_aead(void) {
-    AMA_CALL_ONCE(dispatch_once, ama_select_aead_init);
-    return selected_backend;
-}
-
-const char *ama_aead_backend_name(ama_aead_backend_t backend) {
-    switch (backend) {
-        case AMA_AEAD_HW_AES_GCM:
-            return "Hardware AES-256-GCM (AES-NI/ARMv8-CE)";
-        case AMA_AEAD_CHACHA20_POLY1305:
-            return "ChaCha20-Poly1305 (constant-time)";
-        case AMA_AEAD_SW_AES_GCM:
-            return "Software AES-256-GCM (bitsliced constant-time)";
-        default:
-            return "Unknown";
-    }
-}

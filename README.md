@@ -263,7 +263,7 @@ NIST-standardized post-quantum algorithms:
 | Hybrid Ed25519 + ML-DSA-65 | N/A | Full | See `ama_cryptography.hybrid_combiner` (INVARIANT-19) |
 | Key formats — PKCS#8 / SPKI / PEM / JWK / COSE_Key | N/A | Full | 12 algorithms: Ed25519, X25519, P-256/-384/-521, secp256k1, ML-DSA-44/-65/-87, ML-KEM-512/-768/-1024. See [docs/KEY_FORMATS.md](docs/KEY_FORMATS.md) |
 
-> All PQC operations run through the native C library. No external PQC dependency (liboqs, pqcrypto) is present or required. Build with `cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build`. Set `AMA_REQUIRE_CONSTANT_TIME=true` in the process environment to enforce constant-time operation at import.
+> All PQC operations run through the native C library. No external PQC dependency (liboqs, pqcrypto) is present or required. Build with `cmake -B build -DAMA_USE_NATIVE_PQC=ON && cmake --build build`.
 
 ### C library inventory (v5.0.0)
 
@@ -1003,7 +1003,7 @@ The test suite includes:
 
 ![Test Suite Coverage](assets/test_coverage.png)
 
-*5,127 test functions across 215 Python test files plus 67 C test suites (70 translation units) covering core crypto and NIST KATs (including the new AVX-512 4-way Keccak KAT, fe51-vs-fe64 X25519 byte-equivalence, MULX+ADX equivalence, VAES AES-GCM equivalence, FROST threshold signing, Ed25519 Shamir verify and base-point comb equivalence, and Dilithium / Kyber sampling-equivalence pinning), PQC backends, key management, adaptive posture, hybrid combiner, memory security, fuzz harnesses, and performance/monitoring. See [docs/METRICS_REPORT.md](docs/METRICS_REPORT.md) for the authoritative count and reproduction command (`grep -rE "^\s*def test_" tests/ --include='*.py' | wc -l`).*
+*5,126 test functions across 215 Python test files plus 67 C test suites (69 translation units) covering core crypto and NIST KATs (including the new AVX-512 4-way Keccak KAT, fe51-vs-fe64 X25519 byte-equivalence, MULX+ADX equivalence, VAES AES-GCM equivalence, FROST threshold signing, Ed25519 Shamir verify and base-point comb equivalence, and Dilithium / Kyber sampling-equivalence pinning), PQC backends, key management, adaptive posture, hybrid combiner, memory security, fuzz harnesses, and performance/monitoring. See [docs/METRICS_REPORT.md](docs/METRICS_REPORT.md) for the authoritative count and reproduction command (`grep -rE "^\s*def test_" tests/ --include='*.py' | wc -l`).*
 
 </details>
 
@@ -1574,7 +1574,7 @@ AMA Cryptography v5.0.0 has **zero core cryptographic dependencies** — all cry
 
 **Optional dependency groups:**
 - `[math]`: numpy (≥ 1.24), Cython (≥ 3.2.8) — required only for the optional `math_engine` Cython extension
-- `[monitoring]`: numpy, scipy (3R engine)
+- `[monitoring]`: numpy (3R engine)
 - `[legacy]`: cryptography — used ONLY by tests/benchmarks for cross-checking; NOT a runtime fallback (INVARIANT-1 prohibits a PyCA dependency in the production path)
 - `[hsm]`: PyKCS11 ≥ 1.5.18 (HSM support)
 - `[docs]`: sphinx, sphinx-rtd-theme ≥ 3.1.0 (documentation build)
@@ -1628,7 +1628,7 @@ The human architect does not hold formal credentials in cryptography. The AI con
 
 - **Standards-based design:** Built on NIST FIPS 202/204, RFC 2104/5869/8032/3161—not custom cryptography
 - **Quantified claims:** All performance metrics are measured and reproducible (see [benchmarks/](benchmarks/))
-- **Rigorous testing:** 5,127 test functions across 215 Python files plus 67 C test suites, anchored in [docs/METRICS_REPORT.md](docs/METRICS_REPORT.md); CI includes security scanning, NIST ACVP validation (1,215/1,215 — 815 AFT + 400 SHA-3 MCT), and tiered benchmark-regression checks
+- **Rigorous testing:** 5,126 test functions across 215 Python files plus 67 C test suites, anchored in [docs/METRICS_REPORT.md](docs/METRICS_REPORT.md); CI includes security scanning, NIST ACVP validation (1,215/1,215 — 815 AFT + 400 SHA-3 MCT), and tiered benchmark-regression checks
 - **Regression detection:** Tiered benchmark tolerances calibrated for CI environments
 - **Transparent limitations:** Security analysis explicitly distinguishes self-assessed vs. audited claims
 - **Defense-in-depth:** Security bounded by weakest layer (~128-bit classical), not inflated aggregate claims

@@ -2209,17 +2209,6 @@ class ResonanceTimingMonitor:
         alpha = cls.RESONANCE_FALSE_ALARM_RATE
         return math.log(m / alpha)
 
-    def _prune_history(self, operation: str) -> None:
-        """
-        Limit memory usage by pruning old timing data.
-
-        Note:
-            This method is now a no-op as deque with maxlen handles
-            automatic pruning. Kept for backward compatibility.
-        """
-        # No-op: deque with maxlen handles automatic pruning
-        pass
-
 
 class RecursionPatternMonitor:
     """
@@ -3406,7 +3395,6 @@ class RefactoringAnalyzer:
         "pqc_backends.py",
         "adaptive_posture.py",
     ]
-    MONITOR_MODULE: ClassVar[str] = "ama_cryptography_monitor.py"
 
     def __init__(self) -> None:
         """Initialize analyzer with empty cache and integrity baselines."""

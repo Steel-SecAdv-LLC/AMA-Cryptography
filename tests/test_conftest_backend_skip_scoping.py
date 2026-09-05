@@ -681,10 +681,6 @@ def _decorator_names(node: ast.AST) -> set[str]:
     return names
 
 
-def _has_interop_marker(node: ast.AST) -> bool:
-    return "requires_interop_oracle" in _decorator_names(node)
-
-
 def _decorated_defs(
     tree: ast.AST,
 ) -> list[ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef]:

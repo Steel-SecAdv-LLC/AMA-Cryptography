@@ -85,12 +85,9 @@ math = [
     "Cython>=3.2.8",
 ]
 monitoring = [
-    # NumPy/SciPy for mathematical monitoring (equations, double_helix_engine)
+    # NumPy for mathematical monitoring (equations, double_helix_engine)
     # Install with: pip install "ama-cryptography[monitoring]"
-    # scipy floor is 1.11.0 to match the [dev] extra and requirements-dev.txt:
-    # scipy < 1.11 has no wheels for this project's Python 3.10+ floor.
     "numpy>=1.24.0,<3.0.0",
-    "scipy>=1.11.0",
 ]
 legacy = [
     # PyCA cryptography is NOT a runtime fallback — INVARIANT-1 prohibits a
@@ -170,9 +167,6 @@ docs = [
 dev = [
     "pytest>=9.1.1",
     "pytest-cov>=4.0.0",
-    "pytest-timeout>=2.1.0",
-    "pytest-benchmark>=4.0.0",
-    "pytest-xdist>=3.0.0",
     "hypothesis>=6.161.8",
     # Black 26.5.1 carries the GHSA-fc3w-v5rg-v7q6 fix and requires Python
     # 3.10+ — consistent with this project's requires-python >= 3.10 floor,
@@ -221,7 +215,6 @@ dev = [
     # posture both improve.
     "Cython>=3.2.8",
     "numpy>=1.24.0",
-    "scipy>=1.11.0",
     # Build and packaging — mirrors requirements-dev.txt's "Build and
     # packaging" block, which documents the two files as equivalent.  These
     # were missing here, so the documented developer setup (`make
@@ -438,13 +431,10 @@ show_error_codes = true
 [[tool.mypy.overrides]]
 module = [
     "hypothesis.*",
-    "scipy.*",
     "numpy.*",
-    "pytest_benchmark.*",
     "pytest.*",
     "pytest",
     "_pytest.*",
-    "rfc3161ng.*",
     "nacl.*",
     "Crypto.*",
     "PyKCS11.*",
@@ -581,10 +571,8 @@ python_classes = ["Test*"]
 python_functions = ["test_*"]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
-    "quantum: marks tests that require quantum-resistant libraries",
     "integration: marks integration tests",
     "fips: marks FIPS 140-3 self-test and compliance tests",
-    "smoke: marks smoke tests that verify no exception is raised",
     "requires_host_isa(token): the test's subject is an instruction-set extension; on a host without it the CI backend-skip escalation in tests/conftest.py leaves the skip alone (tokens: x86, x86-64, aarch64)",
     "requires_interop_oracle: the test cross-checks an AMA primitive against an external reference implementation (PyCA cryptography / PyNaCl / pycryptodome); under AMA_CI_REQUIRE_BACKENDS the require-backends lane installs those, so a skip means the oracle install broke and tests/conftest.py escalates it to a failure (audit M18)",
 ]

@@ -129,7 +129,6 @@ repos:
         # A hook whose findings CI cannot reproduce is one developers learn to
         # disbelieve, so the two environments are kept in step.
         additional_dependencies:
-          - types-requests
           - types-PyYAML==6.0.12.20260724
           - PyYAML==6.0.3
           - pytest==9.1.1

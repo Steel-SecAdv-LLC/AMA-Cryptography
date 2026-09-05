@@ -2477,14 +2477,12 @@ const char *dispatch_cache_path_sanitize_for_tests(const char *path) {
  * ============================================================================ */
 
 void ama_test_force_argon2_g_scalar(void);
-void ama_test_force_chacha20_block_x8_scalar(void);
 void ama_test_force_x25519_x4_scalar(void);
 void ama_test_force_aes_gcm_scalar(void);
 void ama_test_force_keccak_f1600_scalar(void);
 void ama_test_force_kyber_ntt_scalar(void);
 void ama_test_force_dilithium_ntt_scalar(void);
 void ama_test_restore_argon2_g_avx2(void);
-void ama_test_restore_chacha20_block_x8_avx2(void);
 void ama_test_restore_x25519_x4_avx2(void);
 void ama_test_restore_aes_gcm(void);
 void ama_test_restore_keccak_f1600(void);
@@ -2494,11 +2492,6 @@ void ama_test_restore_dilithium_ntt(void);
 void ama_test_force_argon2_g_scalar(void) {
     ama_dispatch_init();
     dispatch_table.argon2_g = NULL;
-}
-
-void ama_test_force_chacha20_block_x8_scalar(void) {
-    ama_dispatch_init();
-    dispatch_table.chacha20_block_x8 = NULL;
 }
 
 void ama_test_force_x25519_x4_scalar(void) {
@@ -2609,11 +2602,6 @@ void ama_test_force_x25519_x4_avx2(void) {
 void ama_test_restore_argon2_g_avx2(void) {
     ama_dispatch_init();
     dispatch_table.argon2_g = dispatch_table_post_init.argon2_g;
-}
-
-void ama_test_restore_chacha20_block_x8_avx2(void) {
-    ama_dispatch_init();
-    dispatch_table.chacha20_block_x8 = dispatch_table_post_init.chacha20_block_x8;
 }
 
 void ama_test_restore_x25519_x4_avx2(void) {

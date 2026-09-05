@@ -627,8 +627,6 @@ Suppressions are **absolutely forbidden** in the following locations regardless
 of justification:
 
 - `src/c/` (core cryptographic C primitives)
-- `ama_cryptography/_primitive` (if present)
-- `ama_cryptography/backend` (if present)
 - `include/ama_*.h` (C header files)
 
 **Enforcement:** CI scans the repository for suppression tokens and **must**

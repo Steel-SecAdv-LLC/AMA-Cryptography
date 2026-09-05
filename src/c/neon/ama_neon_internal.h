@@ -152,10 +152,8 @@ void ama_chacha20_block_x8_neon(const uint8_t key[32],
                                 uint8_t out[512]);
 
 /* ============================================================================
- * Argon2 BlaMka G function (and the BLAKE2b compression it is built on)
+ * Argon2 BlaMka G function
  * ============================================================================ */
-void ama_blake2b_compress_neon(uint64_t h[8], const uint64_t m[16],
-                               uint64_t t0, uint64_t t1, int is_final);
 void ama_argon2_g_neon(uint64_t out[128],
                        const uint64_t x[128],
                        const uint64_t y[128]);
@@ -172,26 +170,6 @@ void ama_sphincs_wots_chain_neon(uint8_t *out, const uint8_t *in,
                                  const uint8_t *pub_seed,
                                  uint32_t addr[8], size_t n);
 
-/* ============================================================================
- * Ed25519 field arithmetic (radix 2^51, two lanes at a time)
- *
- * The `fe51_neon` limb layout lives here rather than in the defining
- * translation unit so the prototypes below can name it.  No caller outside
- * src/c/neon/ama_ed25519_neon.c uses these today; they are the 2-way field
- * primitives a future NEON Ed25519 ladder would be built from.
- * ============================================================================ */
-typedef struct {
-    uint64_t v[5];
-} fe51_neon;
-
-void ama_fe51_add_x2_neon(fe51_neon r[2],
-                          const fe51_neon a[2],
-                          const fe51_neon b[2]);
-void ama_fe51_sub_x2_neon(fe51_neon r[2],
-                          const fe51_neon a[2],
-                          const fe51_neon b[2]);
-void ama_fe51_carry_x2_neon(fe51_neon r[2]);
-void ama_fe51_mul_neon(fe51_neon *r, const fe51_neon *a, const fe51_neon *b);
 
 #endif /* __aarch64__ || _M_ARM64 */
 

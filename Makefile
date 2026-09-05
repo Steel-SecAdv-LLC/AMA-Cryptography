@@ -78,7 +78,6 @@ test-examples: c
 benchmark: python
 	@echo "Running benchmarks..."
 	@$(PYTHON) benchmarks/benchmark_suite.py
-	@$(RUN) pytest tests/ --benchmark-only
 
 # Clean build artifacts
 clean:
@@ -162,7 +161,7 @@ lint:
 	@echo "✓ Lint passed"
 
 # Generate documentation
-# Requires: sphinx from requirements-dev.txt (pip install -r requirements-dev.txt)
+# Requires: sphinx (pip install -e ".[docs]")
 #
 # AMA_SPHINX_BUILD=1 lifts the INVARIANT-7 import guards in crypto_api.py /
 # key_management.py / legacy_compat.py so autodoc can introspect the modules

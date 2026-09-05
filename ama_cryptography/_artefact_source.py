@@ -112,10 +112,6 @@ class ArtefactFields:
         except KeyError as exc:  # pragma: no cover - mirrors module semantics
             raise AttributeError(name) from exc
 
-    def as_dict(self) -> Dict[str, Any]:
-        """A copy of the parsed literals, for callers that want the mapping."""
-        return dict(self._values)
-
 
 def artefact_path(package_dir: Optional[Path] = None) -> Path:
     """Where the artefact lives.  ``package_dir`` defaults to this package."""

@@ -1085,7 +1085,7 @@ Non-compliance with the fully-implemented standards above should be reported as 
 - [`CRYPTOGRAPHY.md`](CRYPTOGRAPHY.md) — Cryptographic algorithm overview
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — System architecture and invariants
 - [`CONSTANT_TIME_VERIFICATION.md`](CONSTANT_TIME_VERIFICATION.md) — Timing-side-channel validation
-- [`.github/INVARIANTS.md`](.github/INVARIANTS.md) — Library invariants (canonical)
+- [`INVARIANTS.md`](INVARIANTS.md) — Library invariants (canonical)
 
 ---
 

@@ -131,15 +131,6 @@ class SphincsUnavailableError(PQCUnavailableError):
     pass
 
 
-# Environment variable to require constant-time backends
-# Set AMA_REQUIRE_CONSTANT_TIME=true to refuse non-constant-time backends
-AMA_REQUIRE_CONSTANT_TIME = os.getenv("AMA_REQUIRE_CONSTANT_TIME", "").lower() in {
-    "1",
-    "true",
-    "yes",
-    "on",
-}
-
 # Backend detection — native C library only
 _DILITHIUM_AVAILABLE = False
 _KYBER_AVAILABLE = False
@@ -3107,14 +3098,6 @@ if os.environ.get("AMA_REQUIRE_CONSTANT_TIME"):
         "INVARIANT-7 (revised) enforces native-only operation unconditionally. "
         "This env var has no effect and should be removed from your configuration."
     )
-
-# Enforce constant-time requirement if AMA_REQUIRE_CONSTANT_TIME is set
-if AMA_REQUIRE_CONSTANT_TIME:
-    if not _DILITHIUM_AVAILABLE:
-        raise PQCUnavailableError(
-            "PQC_UNAVAILABLE: AMA_REQUIRE_CONSTANT_TIME is set but no "
-            "constant-time PQC backend is available. " + _INSTALL_HINT
-        )
 
 # Key sizes per NIST FIPS 203/204/205 specifications
 # ML-DSA-65 (Dilithium3)
@@ -6575,16 +6558,6 @@ def _ml_dsa_require_native() -> None:
     """INVARIANT-7: refuse rather than substitute anything."""
     if _native_lib is None or not _ML_DSA_NATIVE_AVAILABLE:
         raise PQCUnavailableError("ML-DSA native backend not available. " + _INSTALL_HINT)
-
-
-def ml_kem_sizes(ps: Union[int, str]) -> dict:
-    """Public-key / secret-key / ciphertext octet widths for an ML-KEM set."""
-    return dict(ML_KEM_SIZES[_ml_kem_id(ps)])
-
-
-def ml_dsa_sizes(ps: Union[int, str]) -> dict:
-    """Public-key / secret-key / signature octet widths for an ML-DSA set."""
-    return dict(ML_DSA_SIZES[_ml_dsa_id(ps)])
 
 
 # ---------------------------------------------------------------------------

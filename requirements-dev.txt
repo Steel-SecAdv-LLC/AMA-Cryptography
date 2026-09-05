@@ -14,14 +14,10 @@ Cython>=3.2.8
 numpy>=1.24.0
 
 # SciPy for the monitoring extension (1.11+ supports the 3.10+ floor).
-scipy>=1.11.0
 
 # Testing
 pytest>=9.1.1
 pytest-cov>=4.0.0
-pytest-timeout>=2.1.0
-pytest-benchmark>=4.0.0
-pytest-xdist>=3.0.0
 hypothesis>=6.161.8
 
 # Code Quality

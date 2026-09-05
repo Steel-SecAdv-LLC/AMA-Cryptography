@@ -366,35 +366,6 @@ int ama_has_arm_neon(void);
  */
 int ama_has_arm_sve2(void);
 
-/**
- * AEAD backend identifiers for runtime dispatch.
- */
-typedef enum {
-    AMA_AEAD_HW_AES_GCM = 0,      /**< Hardware-accelerated AES-256-GCM (AES-NI/ARMv8-CE) */
-    AMA_AEAD_CHACHA20_POLY1305 = 1, /**< ChaCha20-Poly1305 (constant-time by design) */
-    AMA_AEAD_SW_AES_GCM = 2         /**< Software AES-256-GCM (bitsliced constant-time) */
-} ama_aead_backend_t;
-
-/**
- * @brief Select the best available AEAD backend at runtime.
- *
- * Selection logic:
- *   - If AES-NI + PCLMULQDQ (x86) or AES + PMULL (ARM): AMA_AEAD_HW_AES_GCM
- *   - Otherwise: AMA_AEAD_CHACHA20_POLY1305 (constant-time by design)
- *
- * Never uses software table-based AES-GCM on secret data at runtime.
- * The bitsliced path remains as a compile-time option via AMA_AES_CONSTTIME.
- *
- * @return Selected AEAD backend identifier
- */
-ama_aead_backend_t ama_select_aead(void);
-
-/**
- * @brief Get human-readable name of the selected AEAD backend.
- * @param backend The backend identifier
- * @return Static string describing the backend
- */
-const char *ama_aead_backend_name(ama_aead_backend_t backend);
 
 #ifdef __cplusplus
 }

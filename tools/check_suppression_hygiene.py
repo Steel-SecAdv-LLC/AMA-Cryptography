@@ -124,8 +124,6 @@ _JUSTIFICATION_RE = re.compile(r"[\u2014\u2013]|--|#\s*\S")
 # Forbidden directories: suppressions are absolutely prohibited here
 _FORBIDDEN_DIRS: tuple[str, ...] = (
     "src/c/",
-    "ama_cryptography/_primitive",
-    "ama_cryptography/backend",
     "include/",
 )
 

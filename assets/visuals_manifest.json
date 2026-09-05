@@ -14,11 +14,11 @@
       "Key Management\n& Rotation": 265,
       "Memory Security\n& Fuzzing": 332,
       "Other": 2535,
-      "PQC Backends\n& Integration": 771,
+      "PQC Backends\n& Integration": 770,
       "Performance\n& Monitoring": 376
     },
     "n_files": 214,
-    "total_tests": 5125,
+    "total_tests": 5124,
     "uncategorised_files": [
       "test_3r_efficacy_calibration.py",
       "test_action_pin_checks.py",

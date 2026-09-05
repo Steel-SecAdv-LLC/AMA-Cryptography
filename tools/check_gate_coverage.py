@@ -295,16 +295,11 @@ def _is_always(job: dict[str, Any]) -> bool:
     return normalised.strip() == "always()"
 
 
-def check_workflow(path: Path) -> list[str]:
-    """Return a list of human-readable failures for one workflow file."""
-    return check_parsed(path.name, _load(path))
-
-
 def check_parsed(name: str, workflow: dict[Any, Any]) -> list[str]:
     """Check an already-parsed workflow document.
 
-    Split out from :func:`check_workflow` so the rules can be exercised
-    against synthetic documents without writing files.
+    Takes the parsed document so the rules can be exercised against
+    synthetic documents without writing files.
     """
     jobs: dict[str, Any] = workflow.get("jobs") or {}
     if not jobs:

@@ -83,24 +83,7 @@ _PKG_VERSION = _read_package_version()
 ASSETS_DIR = REPO_ROOT / "assets"
 ASSETS_DIR.mkdir(exist_ok=True)
 
-PHASE0_JSON = REPO_ROOT / "benchmarks" / "phase0_baseline_results.json"
 TESTS_DIR = REPO_ROOT / "tests"
-
-
-def _load_phase0_medians() -> dict[str, float]:
-    """Load median latencies (microseconds) from the checked-in
-    Python/ctypes-path benchmark snapshot.
-
-    Returns a dict keyed by the operation labels used inside
-    `phase0_baseline_results.json`. Charts that depend on these
-    numbers should call this loader rather than re-typing literals,
-    so the chart cannot drift out of sync with the JSON snapshot.
-    """
-    with open(PHASE0_JSON) as fh:
-        raw = json.load(fh)
-    return {name: entry["median_us"] for name, entry in raw.items()}
-
-
 # Raw C medians (microseconds) from `build/bin/benchmark_c_raw --json`.
 # This source is build-time-only — the harness binary and its JSON output
 # are not checked into the repository, so these literals are a snapshot

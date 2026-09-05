@@ -36,7 +36,6 @@ import shutil
 import subprocess
 import sys
 import textwrap
-import types
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -88,19 +87,6 @@ def _restore_classifier() -> Iterator[None]:
     yield
     st._INTEGRITY_FAILURE_KIND = saved_kind
     st._INTEGRITY_STRENGTH = saved_strength
-
-
-def _package() -> types.ModuleType:
-    """The ``ama_cryptography`` package object.
-
-    Resolved through ``sys.modules`` rather than a second ``import
-    ama_cryptography``: this module already imports the package in
-    ``from``-form (``from ama_cryptography import _self_test as st``), and
-    mixing the two import styles for one module is what CodeQL flagged as
-    alerts 624 and 625.  The entry is guaranteed present because importing
-    the ``_self_test`` submodule imports its package first.
-    """
-    return sys.modules["ama_cryptography"]
 
 
 def _install_artefact(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, **fields: Any) -> None:

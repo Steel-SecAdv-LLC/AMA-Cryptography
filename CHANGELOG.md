@@ -42,6 +42,108 @@ All notable changes to AMA Cryptography will be documented in this file. The for
 > was removed from this branch in the eighteenth pass below and remains in the
 > branch's commit history.
 
+### Maintenance pass, twentieth (2026-09-05) — dead code inside the tree, found by cross-reference rather than by directory
+
+The nineteenth pass removed whole directories on one test: not shipped, not
+imported, run by no workflow.  This pass applies the same test one level down —
+to symbols, files and configuration inside the directories that stay — through
+seven independent sweeps: C symbols against every caller including the ctypes
+layer; Python names by AST cross-reference and by vulture; tool scripts against
+every workflow, Makefile, hook and documented operator command; workflows and
+packaging against what actually runs; docs and assets against every link;
+tests against every fixture request.  Everything below had zero callers, zero
+build inputs or zero readers, and each removal was re-verified at its site
+before it left.  Forty-three code and configuration files change (+22 / −2,371 lines) and seven files are deleted; the rest of the diff is the two baseline ledgers, the metrics report, the re-rendered chart and this entry.  Nothing a document, a test or a user-facing extra
+still named as supported was removed without that name being corrected in the
+same edit.
+
+- **C (shipped library).**  Gone: the AEAD backend-selection block in
+  `src/c/ama_cpuid.c` and `include/ama_cpuid.h` (`ama_select_aead`,
+  `ama_aead_backend_name`, `ama_aead_backend_t`) — no caller anywhere, and it
+  wrote to `stderr` on first call; `ama_sha256_2`, an `AMA_API` export the
+  binding never bound (it binds `ama_hmac_sha256_2`); the
+  `ama_slhdsa_randombytes_hook` test seam (the KATs drive
+  `ama_sphincs_randombytes_hook`); the `chacha20_block_x8` force / restore
+  test hooks no C test calls; `ama_blake2b_compress_neon` (Argon2's NEON path
+  uses its own static G function); all of `src/c/neon/ama_ed25519_neon.c` and
+  its prototypes — four two-lane field primitives the header itself described
+  as what "a future NEON Ed25519 ladder would be built from", compiled into
+  every AArch64 build with no caller; two forward `typedef struct`
+  declarations in the public header for structs defined nowhere; the
+  `AMA_DISPATCH_DEBUG` Debug-config definition no source reads;
+  `tests/c/bench_ed25519.c`, in no CMake list; and the four upstream
+  ed25519-donna test-driver files (`test.c`, `test-internals.c`,
+  `test-ticks.h` and the 2.7 MB `regression.h`) that no build compiles and the
+  shim's include closure never reaches, which `graft src/c` had been shipping
+  in every sdist.  The x86-64 library rebuilt and ctest passed; the six
+  instruction-count invariance targets CI runs against the testing-mode
+  library pass on the result.
+- **Python (shipped package).**  Gone: `ml_kem_sizes` / `ml_dsa_sizes` (the
+  tests read the size tables directly), `ResonanceTimingMonitor._prune_history`
+  (a documented no-op), `RefactoringAnalyzer.MONITOR_MODULE`,
+  `ArtefactFields.as_dict`, two dead stores ahead of an unconditional import in
+  `crypto_api.py`, and the `AMA_REQUIRE_CONSTANT_TIME` gate: `pqc_backends.py`
+  warned that the variable "has no effect and should be removed" and then
+  enforced it three lines later, while README documented it as active.  The
+  warning is now true — the constant and the enforcement are gone, README no
+  longer advertises the variable, and the deprecation warning stays.
+- **Tools and tests.**  Gone: `_load_phase0_medians` in
+  `tools/generate_visuals.py` (its docstring said charts "should call this
+  loader"; none did), `check_workflow` in `tools/check_gate_coverage.py`,
+  `benchmarks/performance_comparison.py` (a demo nothing referenced), seven
+  `conftest.py` fixtures no test requests together with the two empty section
+  banners they left behind, four helper functions no test calls, the
+  `TestTSAIntegration` "test" whose only statement was an unconditional
+  `pytest.skip`, and the `quantum`, `smoke` and `performance` markers no test
+  carries.  The two forbidden-directory entries in INVARIANT-13's suppression
+  policy that named directories which do not exist
+  (`ama_cryptography/_primitive`, `ama_cryptography/backend`) leave
+  `INVARIANTS.md`, `tools/check_suppression_hygiene.py` and the test that
+  mirrored them; the checker's prefix match on `ama_cryptography/backend` would
+  also have caught any future `backend_*.py`.
+- **Dependencies and configuration.**  `pytest-xdist`, `pytest-timeout`,
+  `pytest-benchmark` and `scipy` leave the `[dev]` extra,
+  `requirements-dev.txt` and the lock, with their transitive pins `execnet` and
+  `py-cpuinfo`: nothing imported them, no pytest invocation used them, and
+  `make benchmark`'s `pytest --benchmark-only` line selected zero tests.
+  `scipy` also leaves the `[monitoring]` extra — `monitoring.py` reimplements
+  the one function it might have used and `tests/test_lazy_imports.py` already
+  proves the package imports with `scipy` absent — so README and the wiki now
+  say `numpy` alone.  Also gone: the `rfc3161ng.*`, `scipy.*` and
+  `pytest_benchmark.*` mypy overrides for modules nothing imports;
+  `types-requests` from the pre-commit mypy hook; the `/benchmark_suite.py`
+  CODEOWNERS line for a path that does not exist; the three named volumes in
+  `docker-compose.yml` no service mounts; twelve `.gitignore` rules for paths
+  nothing generates.  Fixed rather than removed: `benchmarks/Makefile` looked
+  for `libama_cryptography.a` while CMake emits `libama_cryptography_static.a`,
+  so its static-link branch could never fire; the Makefile's docs target cited
+  sphinx "from requirements-dev.txt", which does not list it; `SECURITY.md`
+  called the `.github/INVARIANTS.md` pointer stub "canonical" while the stub
+  says the opposite; `benchmarks/README.md` linked a wiki page that does not
+  exist; and three producer attributions in the documented-source-paths
+  allowlist named the wrong writer (`performance_results.json` is written by
+  `performance_suite.py`, `validation_summary.json` by the ACVP workflow).
+- **Ledger and measurements.**  The six changed floored files without an
+  existing acknowledgement (`include/ama_cpuid.h`, `src/c/ama_sha256.h`, the
+  four donna drivers) are acknowledged in both baseline JSONs with the reason
+  for each; no floor value moves.  The test-coverage chart and its manifest
+  are re-rendered for the one test removed.  `docs/METRICS_REPORT.md` is
+  re-measured (library 92,918 → 90,996 lines), and the live C-suite count in
+  the fifteenth pass entry reads 69 translation units.
+- **Examined and deliberately kept**, so nobody re-audits them: the eight
+  ed25519-donna SSE2 / 32-bit / custom-hash variant headers — unreachable under
+  the x86-64-only backend policy CMake hard-enforces, but they carry the
+  `AMA-PATCH` edits `src/c/PROVENANCE.md` records, so trimming them is a
+  provenance decision rather than a dead-code one; the three `ChannelState`
+  members no code path enters (a public enum); `release.yml`'s `dry_run`
+  input, which nothing reads because publishing is already tag-gated;
+  `LANGUAGES C CXX` in CMake, which ten workflow lanes pass `-DCMAKE_CXX_*`
+  for; the `develop` / `feature/**` / `fix/**` branch filters no live branch
+  matches; twenty groups of byte-identical test bodies across files; twelve
+  `if __name__ == "__main__"` blocks in test files; and the thirteen public
+  size constants in `include/ama_cryptography.h` no code reads, which are the
+  header's contract.
+
 ### Maintenance pass, nineteenth (2026-09-05) — the second audit workspace leaves the merge path, and the last three open scanner findings close
 
 The eighteenth pass removed `docs/audit/` on one test: not shipped, not imported
@@ -5876,7 +5978,7 @@ resolved here.  The ones that changed behaviour rather than prose:
 
 Documentation claims corrected against measurement rather than restated: the
 SoftHSM2 lane runs **one** real-token test (`test_full_lifecycle`), not 51; the
-C suite is 67 suite files / 70 translation units (65 / 68 when the twelfth pass measured it; the 2026-08-31 v5 pre-merge audit added `tests/c/test_secure_memory_dontdump.c` and `tests/c/test_secure_free_scrub.c`), not 58 / 61 (60 / 63 when that pass measured it, 62 / 65 after it; the eleventh debt-closure pass added `tests/c/test_ed25519_canonical_r.c` and `tests/c/test_ed25519_scalarmult_contract.c`, and registered `tests/c/test_field_bench.c`, which had existed unbuilt since #370, and the thirteenth added `tests/c/test_dilithium_invntt_bound.c`, `tests/c/test_concurrent_init.c` and `tests/c/test_ed25519_unaligned_input.c`); the gated
+C suite is 67 suite files / 69 translation units (65 / 68 when the twelfth pass measured it; the 2026-08-31 v5 pre-merge audit added `tests/c/test_secure_memory_dontdump.c` and `tests/c/test_secure_free_scrub.c`; the twentieth pass removed the never-built `tests/c/bench_ed25519.c`), not 58 / 61 (60 / 63 when that pass measured it, 62 / 65 after it; the eleventh debt-closure pass added `tests/c/test_ed25519_canonical_r.c` and `tests/c/test_ed25519_scalarmult_contract.c`, and registered `tests/c/test_field_bench.c`, which had existed unbuilt since #370, and the thirteenth added `tests/c/test_dilithium_invntt_bound.c`, `tests/c/test_concurrent_init.c` and `tests/c/test_ed25519_unaligned_input.c`); the gated
 surface is what `tools/check_error_state_gating.py` reports (89
 native plus 10 Cython entry points), replacing two documents that disagreed at
 80 and 81; the canonical-host performance tables understate 5.0.0 on the AEAD

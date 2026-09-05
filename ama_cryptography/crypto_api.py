@@ -92,6 +92,7 @@ from ama_cryptography.pqc_backends import (
     PQCStatus,
     PQCUnavailableError,
     SphincsUnavailableError,
+    _native_lib,
     dilithium_sign,
     dilithium_verify,
     generate_dilithium_keypair,
@@ -100,15 +101,6 @@ from ama_cryptography.pqc_backends import (
     get_pqc_backend_info,
     kyber_decapsulate,
     kyber_encapsulate,
-    sphincs_sign,
-    sphincs_verify,
-)
-
-_HMAC_NATIVE = False
-_HKDF_NATIVE = False
-
-from ama_cryptography.pqc_backends import (
-    _native_lib,
     native_ed25519_batch_verify,
     native_ed25519_keypair,
     native_ed25519_keypair_from_seed,
@@ -118,6 +110,8 @@ from ama_cryptography.pqc_backends import (
     native_hmac_sha3_256,
     native_sha3_256,
     native_sha256,
+    sphincs_sign,
+    sphincs_verify,
 )
 
 _HMAC_NATIVE = _HMAC_SHA3_256_NATIVE_AVAILABLE

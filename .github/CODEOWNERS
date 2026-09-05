@@ -44,7 +44,6 @@
 
 # Benchmark suite - performance regression detection
 /benchmarks/ @Steel-SecAdv-LLC
-/benchmark_suite.py @Steel-SecAdv-LLC
 
 # Benchmark regression baselines — highest review bar.
 # Silent adjustments to these values mask real regressions; see

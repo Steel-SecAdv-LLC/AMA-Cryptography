@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import os
 import platform
-import secrets
 import tempfile
 from collections.abc import Callable, Generator
 from datetime import timedelta
@@ -322,12 +321,6 @@ def master_seed() -> bytes:
 
 
 @pytest.fixture
-def random_seed() -> bytes:
-    """Provide a random 64-byte seed for tests requiring entropy."""
-    return secrets.token_bytes(64)
-
-
-@pytest.fixture
 def test_key_material() -> bytes:
     """Provide standard 32-byte key material for storage tests."""
     return b"test-key-material-32-bytes-long!"
@@ -395,89 +388,13 @@ def secure_storage(temp_storage_path: Path, test_password: str) -> Any:
 
 
 # =============================================================================
-# CRYPTOGRAPHIC API FIXTURES
-# =============================================================================
-
-
-# =============================================================================
-# PQC BACKEND FIXTURES
-# =============================================================================
-
-
-@pytest.fixture
-def pqc_backend_info() -> Any:
-    """Provide current PQC backend availability info."""
-    from ama_cryptography.pqc_backends import get_pqc_backend_info
-
-    return get_pqc_backend_info()
-
-
-@pytest.fixture
-def dilithium_available() -> Any:
-    """Check if Dilithium is available."""
-    from ama_cryptography.pqc_backends import DILITHIUM_AVAILABLE
-
-    return DILITHIUM_AVAILABLE
-
-
-@pytest.fixture
-def kyber_available() -> Any:
-    """Check if Kyber is available."""
-    from ama_cryptography.pqc_backends import KYBER_AVAILABLE
-
-    return KYBER_AVAILABLE
-
-
-@pytest.fixture
-def sphincs_available() -> Any:
-    """Check if SPHINCS+ is available."""
-    from ama_cryptography.pqc_backends import SPHINCS_AVAILABLE
-
-    return SPHINCS_AVAILABLE
-
-
-# =============================================================================
-# EQUATION ENGINE FIXTURES
-# =============================================================================
-
-
-@pytest.fixture
-def equation_engine() -> Any:
-    """Provide an AmaEquationEngine instance."""
-    from ama_cryptography.double_helix_engine import AmaEquationEngine
-
-    return AmaEquationEngine()
-
-
-@pytest.fixture
-def initial_state() -> Any:
-    """Provide an initial state vector for equation tests."""
-    from ama_cryptography._numeric import array
-
-    return array([1.0, 0.5, 0.25, 0.125, 0.0625])
-
-
-# =============================================================================
-# MONITOR FIXTURES
-# =============================================================================
-
-
-# =============================================================================
 # PYTEST CONFIGURATION
 # =============================================================================
 
 
 def pytest_configure(config: Any) -> None:
     """Configure custom pytest markers and deferred warning filters."""
-    config.addinivalue_line(
-        "markers", "slow: marks tests as slow (deselect with '-m \"not slow\"')"
-    )
-    config.addinivalue_line(
-        "markers", "quantum: marks tests that require quantum-resistant libraries"
-    )
-    config.addinivalue_line("markers", "integration: marks integration tests")
     config.addinivalue_line("markers", "security: marks security-related tests")
-    config.addinivalue_line("markers", "performance: marks performance-related tests")
 
     # Register the SecurityWarning filter via the ini mechanism rather than
     # a direct ``warnings.filterwarnings()`` call.  Pytest wraps every test

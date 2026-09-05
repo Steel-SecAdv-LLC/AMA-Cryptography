@@ -268,12 +268,3 @@ void ama_sha256(uint8_t *out, const uint8_t *in, size_t inlen) {
     ama_sha256_update(&ctx, in, inlen);
     ama_sha256_final(&ctx, out);
 }
-
-void ama_sha256_2(uint8_t *out, const uint8_t *in1, size_t in1len,
-                   const uint8_t *in2, size_t in2len) {
-    ama_sha256_ctx ctx;
-    ama_sha256_init(&ctx);
-    ama_sha256_update(&ctx, in1, in1len);
-    ama_sha256_update(&ctx, in2, in2len);
-    ama_sha256_final(&ctx, out);
-}

@@ -366,8 +366,6 @@ class TestSuppressionHygiene:
 
     _FORBIDDEN_DIRS = (
         "src/c/",
-        "ama_cryptography/_primitive",
-        "ama_cryptography/backend",
         "include/",
     )
 
@@ -414,7 +412,7 @@ class TestSuppressionHygiene:
         )
 
     def test_no_suppressions_in_forbidden_dirs(self) -> None:
-        """Suppressions absolutely forbidden in src/c/, _primitive, backend, include/.
+        """Suppressions absolutely forbidden in src/c/ and include/.
 
         This used to walk ``rglob("*.py")`` under each forbidden directory.
         ``src/c/`` and ``include/`` hold no Python, and the other two entries
@@ -593,7 +591,7 @@ class TestSuppressionScanPrecision:
         from tools.check_suppression_hygiene import check_source
 
         violations = check_source(
-            "ama_cryptography/backend/x.py", "import os  # nosec B404 -- reason (AB-001)\n"
+            "include/x.py", "import os  # nosec B404 -- reason (AB-001)\n"
         )
         assert any("forbidden" in v for v in violations)
 

@@ -90,13 +90,15 @@ _PATH_RE = re.compile(r"`((?:" + "|".join(SOURCE_DIRS) + r")/[A-Za-z0-9_./+-]+\.
 #: Paths a document names as the OUTPUT of a command, not as a tracked file.
 #: Each value is the command that produces it — the justification, not a label.
 RUN_PRODUCED = {
-    "benchmarks/performance_results.json": "written by benchmarks/benchmark_suite.py",
+    "benchmarks/performance_results.json": "written by benchmarks/performance_suite.py",
     "benchmarks/benchmark_c_raw_results.json": (
         "written by the raw-C harness; benchmarks/generate_charts.py reads it "
         "'when present' and falls back to checked-in anchors"
     ),
     "nist_vectors/results.json": "written by nist_vectors/run_vectors.py",
-    "nist_vectors/validation_summary.json": "written by nist_vectors/run_vectors.py",
+    "nist_vectors/validation_summary.json": (
+        "written by .github/workflows/acvp_validation.yml after run_vectors.py"
+    ),
     # A placeholder inside a quoted description of check_documented_counts.py's
     # own claim pattern (``  `tests/x.py` - N tests ``), not a file reference.
     "tests/x.py": "placeholder in a quoted description of the gate's claim pattern",
@@ -142,7 +144,7 @@ NOT_IN_TREE = {
     "BENCHMARKS.md": "run-produced: benchmarks/benchmark_suite.py --markdown default",
     "benchmark_results.json": "run-produced: benchmarks/benchmark_suite.py --json default",
     "results.json": "run-produced: nist_vectors/run_vectors.py",
-    "validation_summary.json": "run-produced: nist_vectors/run_vectors.py",
+    "validation_summary.json": "run-produced: .github/workflows/acvp_validation.yml",
     "internalProjection.json": "external: pulled from the upstream ACVP repository",
     "synchapi.h": "external: Windows SDK header, named for InitOnceExecuteOnce",
     "ama_sphincs.c": (

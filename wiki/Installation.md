@@ -117,7 +117,7 @@ The complete set of extras declared in `pyproject.toml`:
 # Cython + NumPy build/runtime support for the math layer
 pip install -e ".[math]"
 
-# Full monitoring stack (NumPy + SciPy for 3R engine)
+# Full monitoring stack (NumPy for 3R engine)
 pip install -e ".[monitoring]"
 
 # Legacy classical cryptography fallback

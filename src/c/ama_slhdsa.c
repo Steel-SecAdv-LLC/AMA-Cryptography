@@ -1001,16 +1001,7 @@ static int slh_ht_verify(const slhdsa_params_t *p, const uint8_t *msg,
  * Top-level keygen / sign / verify (parameter-driven, exposed C API)
  * ============================================================================ */
 
-#ifdef AMA_TESTING_MODE
-ama_error_t (*ama_slhdsa_randombytes_hook)(uint8_t *buf, size_t len) = NULL;
-#endif
-
 static ama_error_t slh_randombytes(uint8_t *buf, size_t len) {
-#ifdef AMA_TESTING_MODE
-    if (ama_slhdsa_randombytes_hook) {
-        return ama_slhdsa_randombytes_hook(buf, len);
-    }
-#endif
     return ama_randombytes(buf, len);
 }
 
@@ -1350,8 +1341,7 @@ AMA_API ama_error_t ama_slhdsa_sign_internal(ama_slhdsa_param_set_t ps,
 
 /* Deterministic-randomness hook for KAT testing (test-only), preserved from
  * the original ama_sphincs.c so tests/c/test_kat.c keeps linking and driving
- * the SPHINCS+ vectors deterministically. Kept distinct from
- * ama_slhdsa_randombytes_hook. */
+ * the SPHINCS+ vectors deterministically. */
 #ifdef AMA_TESTING_MODE
 ama_error_t (*ama_sphincs_randombytes_hook)(uint8_t *buf, size_t len) = NULL;
 #endif
